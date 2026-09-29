@@ -5,11 +5,10 @@ import { createTestWorkspace, type TestWorkspace } from './helpers';
 import {
   seedForkSource, SOURCE_ARTIFACTS, SPILLED_BYTES, INLINE_PAYLOAD_BYTES, type ForkConversation,
 } from './helpers/fork-conversation';
-import { reassemble } from './helpers/fork-stream';
+import { reassemble, sourceFrames } from './helpers/fork-stream';
 import {
-  FORK_ROW_SECTIONS, forkTransferFrames, type ForkFileFrame, type ForkFrame, type ForkRowFrame,
+  FORK_ROW_SECTIONS, type ForkChunksFrame, type ForkFrame, type ForkPageFrame, type ForkRowFrame,
 } from '../src/identity/fork-transfer';
-import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { SessionHistory } from '../src/session/history';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 
@@ -17,8 +16,12 @@ function isRowFrame(frame: ForkFrame): frame is ForkRowFrame {
   return 'rows' in frame;
 }
 
-function isFileFrame(frame: ForkFrame): frame is ForkFileFrame {
-  return frame.kind === 'file';
+function isChunksFrame(frame: ForkFrame): frame is ForkChunksFrame {
+  return frame.kind === 'chunks';
+}
+
+function isPageFrame(frame: ForkFrame): frame is ForkPageFrame {
+  return frame.kind === 'page';
 }
 
 async function seedChain(ws: TestWorkspace): Promise<ForkConversation> {
@@ -34,13 +37,9 @@ async function seedChain(ws: TestWorkspace): Promise<ForkConversation> {
   return chat;
 }
 
+/** The frames of a fork of `ws` at `untilMessageId`, as they cross to a target that holds nothing yet. */
 function framesFor(ws: TestWorkspace, frameBytes = 2048, untilMessageId = 'm3'): Promise<ForkFrame[]> {
-  return Array.fromAsync(forkTransferFrames({
-    // Entries and memberships are keyed on the conversation owner; any other handle snapshots the wrong transcript.
-    sql: ws.sql, actor: openWorkspaceMainActor(ws.sql), vfs: ws.forkSource,
-    artifactDirectory: SOURCE_ARTIFACTS,
-    untilMessageId, transferId: 'transfer', frameBytes,
-  }));
+  return sourceFrames(ws, untilMessageId, { artifactDirectory: SOURCE_ARTIFACTS, transferId: 'transfer', frameBytes });
 }
 
 function rowPayloadBytes(frame: ForkFrame): number {
@@ -68,8 +67,9 @@ function rowPayloadBytes(frame: ForkFrame): number {
     case 'contextMembers':
       return frame.rows.reduce((total, row) => total + bytes(row.entry_id) + bytes(row.message_id), 0);
     case 'begin':
-    case 'file':
-    case 'entries':
+    case 'soul':
+    case 'chunks':
+    case 'page':
     case 'commit':
       return 0;
   }
@@ -96,11 +96,16 @@ describe('forkTransferFrames source streamer', () => {
 
     expect(frames[0]?.kind).toBe('begin');
     expect(frames.at(-1)?.kind).toBe('commit');
-    expect(frames.map((frame) => frame.seq)).toEqual(frames.map((_, index) => index));
+    // One sequence number a frame taken; a page the target wanted chunks for gives its number to the next frame.
+    expect(frames.slice(1).every((frame, index) => {
+      const before = frames[index];
+
+      return before !== undefined && (frame.seq === before.seq + 1 || (before.kind === 'page' && frame.seq === before.seq));
+    })).toBe(true);
     const rowKinds = frames.filter(isRowFrame).map((frame) => frame.kind);
     expect(rowKinds).toEqual([...rowKinds].sort((a, b) => FORK_ROW_SECTIONS.indexOf(a) - FORK_ROW_SECTIONS.indexOf(b)));
     expect(frames.filter(isRowFrame).every((frame) => frame.rows.length > 0)).toBe(true);
-    const fileIndex = frames.findIndex(isFileFrame);
+    const fileIndex = frames.findIndex((frame) => frame.kind === 'soul' || frame.kind === 'page');
     const lastRowIndex = frames.length - 1 - [...frames].reverse().findIndex(isRowFrame);
     expect(fileIndex).toBeGreaterThan(lastRowIndex);
   });
@@ -122,11 +127,13 @@ describe('forkTransferFrames source streamer', () => {
       conversationEntries: carried.conversationEntries.length,
       conversationEntryParts: carried.conversationEntryParts.length,
       contextMembers: carried.contextMembers.length,
-      files: carried.files.length + carried.artifacts.length + carried.directories.length + carried.symlinks.length,
+      // SOUL.md, and one import a name under the home or a payload.
+      files: frames.filter((frame) => frame.kind === 'soul').length
+        + new Set(frames.filter(isPageFrame).map((frame) => JSON.stringify(frame.target))).size,
     });
   });
 
-  test('bounds every row batch and file range while sending an oversized row intact', async () => {
+  test('bounds every row batch and frame of chunks while sending an oversized row intact', async () => {
     const ws = createTestWorkspace();
     const chat = await seedChain(ws);
     // An unsplittable inline row crosses alone rather than being refused.
@@ -137,7 +144,10 @@ describe('forkTransferFrames source streamer', () => {
     const frames = await framesFor(ws, 2048, 'm4');
     const rowFrames = frames.filter(isRowFrame);
     expect(rowFrames.every((frame) => frame.rows.length === 1 || rowPayloadBytes(frame) <= 2048)).toBe(true);
-    expect(frames.filter(isFileFrame).every((frame) => frame.bytes.byteLength <= 2048)).toBe(true);
+    // At least one chunk a frame: a chunk past the budget crosses alone.
+    expect(frames.filter(isChunksFrame).every((frame) => frame.chunks.length === 1
+      || frame.chunks.reduce((total, chunk) => total + chunk.data.byteLength, 0) <= 2048)).toBe(true);
+    expect(reassemble(frames).files).toContainEqual({ path: 'memory/large.md', content: 'y'.repeat(1_000_000) });
 
     const huge = rowFrames.find((frame) => frame.kind === 'sessionMessages'
       && frame.rows.some((row) => row.content_json !== null && row.content_json.includes(inline)));
@@ -145,45 +155,58 @@ describe('forkTransferFrames source streamer', () => {
     expect(huge?.rows).toHaveLength(1);
   });
 
-  test('carries a spilled payload as a file frame relative to the artifact directory', async () => {
+  test('carries a spilled payload as an import relative to the artifact directory', async () => {
     const ws = createTestWorkspace();
     const chat = await seedChain(ws);
     const spilled = 'p'.repeat(SPILLED_BYTES);
     await chat.say({ id: 'm4', role: 'user', text: spilled });
 
     const frames = await framesFor(ws, 64 * 1024, 'm4');
-    const payloads = frames.filter(isFileFrame).filter((frame) => frame.artifact);
+    const payloads = [...new Set(frames.filter(isPageFrame).flatMap((frame) => (frame.target.in === 'artifacts' ? [frame.target.path] : [])))];
 
-    expect(payloads.length).toBeGreaterThan(0);
+    expect(payloads).toHaveLength(1);
     // Relative: the receiver re-roots paths under its own plane.
-    expect(payloads.every((frame) => !frame.path.startsWith('/'))).toBe(true);
-    const bytes = Bun.concatArrayBuffers(payloads.map((frame) => frame.bytes));
-    expect(JSON.parse(new TextDecoder().decode(bytes))).toEqual([{ partNo: 0, kind: 'text', streamOrder: 0, replyTo: null, value: { type: 'text', text: spilled } }]);
+    expect(payloads.every((path) => !path.startsWith('/'))).toBe(true);
+    const [carried] = reassemble(frames).artifacts;
+    expect(JSON.parse(carried?.content ?? '')).toEqual([{ partNo: 0, kind: 'text', streamOrder: 0, replyTo: null, value: { type: 'text', text: spilled } }]);
 
     const referenced = frames.filter(isRowFrame).flatMap(
       (frame) => (frame.kind === 'sessionMessages' ? frame.rows : []),
     ).flatMap((row) => (row.content_path === null ? [] : [row.content_path]));
 
-    expect(referenced).toContain(payloads[0]?.path);
+    expect(referenced).toContain(payloads[0]);
   });
 
-  test('ranges a file past one frame byte-exactly, digests its last range, and carries an empty file whole', async () => {
+  test('a file past one frame of chunks crosses in several, byte-exactly, and an empty file crosses', async () => {
     const ws = createTestWorkspace();
     await seedChain(ws);
-    await ws.vfs.writeFile('memory/ranged.md', 'abcdefghij'.repeat(100));
+    // Distinct bytes throughout, so no two chunks are one.
+    const ranged = Array.from({ length: 40_000 }, (_, index) => `line ${index}`).join('\n');
+    await ws.vfs.writeFile('memory/ranged.md', ranged);
     await ws.vfs.writeFile('memory/empty.md', '');
-    const frames = await framesFor(ws, 64);
-    const ranged = frames.filter(isFileFrame).filter((frame) => frame.path === 'memory/ranged.md');
-    expect(ranged.length).toBeGreaterThan(1);
-    const bytes = Bun.concatArrayBuffers(ranged.map((frame) => frame.bytes));
-    expect(new TextDecoder().decode(bytes)).toBe('abcdefghij'.repeat(100));
-    expect(ranged.at(-1)?.fileDigest).toBe(new Bun.CryptoHasher('sha256').update(bytes).digest('hex'));
+    const frames = await framesFor(ws, 64 * 1024);
 
-    const empty = frames.flatMap((frame) => (frame.kind === 'entries' ? frame.entries : []))
-      .filter((entry) => entry.path === 'memory/empty.md');
+    expect(frames.filter(isChunksFrame).length).toBeGreaterThan(1);
+    expect(reassemble(frames).files).toEqual(expect.arrayContaining([
+      { path: 'memory/ranged.md', content: ranged },
+      { path: 'memory/empty.md', content: '' },
+    ]));
+  });
 
-    expect(empty).toHaveLength(1);
-    expect(empty[0]?.kind === 'file' && empty[0].bytes.byteLength).toBe(0);
+  test('a chunk the target already holds never crosses again', async () => {
+    const ws = createTestWorkspace();
+    await seedChain(ws);
+    const shared = Array.from({ length: 20_000 }, (_, index) => `shared ${index}`).join('\n');
+    await ws.vfs.writeFile('memory/a.md', shared);
+    await ws.vfs.writeFile('notes/b.md', shared);
+    const frames = await framesFor(ws, 64 * 1024);
+    const crossed = frames.filter(isChunksFrame).flatMap((frame) => frame.chunks.map((chunk) => chunk.hash));
+
+    expect(new Set(crossed).size).toBe(crossed.length);
+    expect(reassemble(frames).files).toEqual(expect.arrayContaining([
+      { path: 'memory/a.md', content: shared },
+      { path: 'notes/b.md', content: shared },
+    ]));
   });
 
   test('a payload outside the artifact directory refuses the fork rather than carrying it', async () => {

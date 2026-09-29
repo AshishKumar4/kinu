@@ -6,7 +6,7 @@ import { workspaceAddressRefusal, workspaceSlug } from './naming';
 import { forkPointExists } from './conversation-store';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from './actor-handle';
-import type { ForkFileSource } from './fork-transfer';
+import type { ForkFileSource } from './fork';
 
 /** How a fork reaches the workspace it is creating. */
 export interface ForkTransport {

@@ -17,9 +17,8 @@ export interface ForkStaging {
   expectedSeq: number;
   sectionCursor: number;
   stream: string;
-  /** The file whose ranges are still arriving, and how many bytes the sink has taken. */
-  filePath: string | null;
-  fileBytes: number;
+  /** The import whose pages are still arriving, by destination. */
+  importing: string | null;
   /** What the source declared, checked against `staged` at the commit. */
   declared: ForkStagedCounts;
   published: boolean;
@@ -44,8 +43,7 @@ interface ForkStagingRow {
   expected_seq: number;
   section_cursor: number;
   stream: string;
-  file_path: string | null;
-  file_bytes: number;
+  import_path: string | null;
   want_agent_config: number;
   want_crafted_tools: number;
   want_memory_chunks: number;
@@ -73,7 +71,7 @@ export class ForkStagingState {
              staged_session_messages,
              staged_conversation_entries, staged_conversation_entry_parts, staged_context_members,
              (SELECT COUNT(*) FROM fork_staged_files) AS staged_files,
-             transfer_id, expected_seq, section_cursor, stream, file_path, file_bytes,
+             transfer_id, expected_seq, section_cursor, stream, import_path,
              want_agent_config, want_crafted_tools, want_memory_chunks,
              want_session_messages,
              want_conversation_entries, want_conversation_entry_parts, want_context_members,
@@ -103,8 +101,7 @@ export class ForkStagingState {
       expectedSeq: row.expected_seq,
       sectionCursor: row.section_cursor,
       stream: row.stream,
-      filePath: row.file_path,
-      fileBytes: row.file_bytes,
+      importing: row.import_path,
       declared: {
         agentConfig: row.want_agent_config,
         craftedTools: row.want_crafted_tools,
@@ -147,9 +144,9 @@ export class ForkStagingState {
       WHERE id = 1`;
   }
 
-  /** The file in flight, or null once its last range has been committed. */
-  file(path: string | null, bytes: number): void {
-    void this.sql`UPDATE fork_transfer SET file_path = ${path}, file_bytes = ${bytes} WHERE id = 1`;
+  /** The import in flight, or null once its last page has been imported. */
+  importing(dst: string | null): void {
+    void this.sql`UPDATE fork_transfer SET import_path = ${dst} WHERE id = 1`;
   }
 
   /** Add taken rows for every section in one statement (a column name cannot be bound). */

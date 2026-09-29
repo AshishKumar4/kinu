@@ -1,21 +1,23 @@
 /**
  * Workspace fork wire. One RPC argument is capped at 32 MiB (`do.facet.rpc_bytes`), so a fork crosses as
- * bounded frames; nothing is visible on the target until `commit`.
+ * bounded frames; the target is not a fork until `commit`. Files cross as Nimbus's export: pages of rows, and the
+ * chunks they name that the target does not hold.
  */
 
 import * as v from 'valibot';
-import { createHash } from 'node:crypto';
+import type { VfsExportChunk, VfsExportPage, VfsExportRow } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { SHELL_APPROVAL_AUTHORITY_KEYS } from '../config/store';
+import { KinuError } from '../obs/error';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import type { SqlExecutor } from '../types/primitives';
+import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import type { ActorHandle } from './actor-handle';
 import type { ForkFileSink } from './fork-sink';
-import { renderIssues } from '../utils/json';
+import { renderIssues, type JsonObject } from '../utils/json';
+import { compareCodeUnits } from '../utils/text';
 import { openWorkspaceMainActor } from './workspace-actors';
-import {
-  snapshotForkFiles, type ForkFileEntry, type ForkSnapshot, type ForkTreeEntry, type ForkTreeReader,
-} from './fork';
+import { FORK_PIN_PREFIX, forkCarries, type ForkFileSource, type ForkPinnedFiles } from './fork';
 import { SOUL_PATH } from './soul';
 import {
   forkArtifactPath,
@@ -47,8 +49,8 @@ import { ForkTargetWriter, type ForkResult } from './fork-writer';
 import type { ForkStaging, ForkStagingState } from './fork-staging';
 
 /** Fork transfer protocol version; a receiver refuses one it does not implement. Bump when an older
- *  receiver would misread the frame union. */
-export const FORK_TRANSFER_VERSION = 3;
+ *  receiver would misread the frame union. v4 carries files as Nimbus export pages and chunks. */
+export const FORK_TRANSFER_VERSION = 4;
 
 /** Payload bytes per frame: a quarter of `do.facet.rpc_bytes`, leaving headroom for clone metadata and envelope. */
 export const FORK_FRAME_BYTES = PLATFORM_CATALOG['do.facet.rpc_bytes'].limit.value / 4;
@@ -66,7 +68,7 @@ export const FORK_ROW_SECTIONS = [
 
 export type ForkRowSection = (typeof FORK_ROW_SECTIONS)[number];
 
-/** Per-section row counts and tree entries, declared by the source and checked at `commit`. */
+/** Per-section row counts, and the files (SOUL.md and each import), declared by the source and checked at `commit`. */
 const ForkSectionCountsSchema = v.object({
   agentConfig: v.number(),
   craftedTools: v.number(),
@@ -94,13 +96,48 @@ const ForkTreePathSchema = v.pipe(
     'a fork path is relative and has no empty, "." or ".." segment'),
 );
 
-const ForkWireEntrySchema = v.variant('kind', [
-  v.object({ kind: v.literal('file'), path: ForkTreePathSchema, mode: v.number(), mtimeMs: v.number(), bytes: v.instance(Uint8Array) }),
-  v.object({ kind: v.literal('directory'), path: ForkTreePathSchema, mode: v.number(), mtimeMs: v.number() }),
-  v.object({ kind: v.literal('symlink'), path: ForkTreePathSchema, target: v.string() }),
+/** A name directly under the home: one segment. */
+const ForkHomeNameSchema = v.pipe(
+  v.string(),
+  v.check((name) => name !== '' && name !== '.' && name !== '..' && !name.includes('/'), 'a home name is one path segment'),
+);
+
+/** Where an import lands: a tree under the home, or a payload the receiver re-roots into its own artifact directory. */
+const ForkImportTargetSchema = v.variant('in', [
+  v.object({ in: v.literal('home'), name: ForkHomeNameSchema }),
+  v.object({ in: v.literal('artifacts'), path: ForkTreePathSchema }),
 ]);
 
-export type ForkWireEntry = v.InferOutput<typeof ForkWireEntrySchema>;
+export type ForkImportTarget = v.InferOutput<typeof ForkImportTargetSchema>;
+
+/** Nimbus's export row, checked on the wire as every frame is; Nimbus checks it again as it imports. */
+const ForkExportRowSchema: v.GenericSchema<VfsExportRow> = v.object({
+  path: v.string(),
+  ino: v.number(),
+  kind: v.picklist(['file', 'directory', 'symlink']),
+  size: v.number(),
+  mode: v.number(),
+  uid: v.number(),
+  gid: v.number(),
+  defaultAcl: v.nullable(v.number()),
+  atime: v.number(),
+  mtime: v.number(),
+  contentKey: v.nullable(v.string()),
+  pieceOffset: v.number(),
+  manifest: v.boolean(),
+  pieces: v.array(v.tuple([v.string(), v.number()])),
+});
+
+const ForkExportPageSchema: v.GenericSchema<VfsExportPage> = v.object({
+  schema: v.number(),
+  root: v.string(),
+  nextIno: v.number(),
+  after: v.nullable(v.string()),
+  rows: v.array(ForkExportRowSchema),
+  next: v.nullable(v.string()),
+});
+
+const ForkExportChunkSchema: v.GenericSchema<VfsExportChunk> = v.object({ hash: v.string(), data: v.instance(Uint8Array) });
 
 /** One frame of one fork transfer; the canonical wire authority every type on both sides is inferred from. */
 const ForkFrameSchema = v.variant('kind', [
@@ -117,23 +154,12 @@ const ForkFrameSchema = v.variant('kind', [
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('conversationEntries'), rows: v.array(ForkConversationEntryRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('conversationEntryParts'), rows: v.array(ForkConversationEntryPartRowSchema) }),
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('contextMembers'), rows: v.array(ForkContextMemberRowSchema) }),
-  /** One byte range of SOUL.md, a payload, or a file too large for `entries`. Bytes, since only a byte
-   *  count bounds the RPC argument exactly. */
-  v.object({
-    ...FRAME_ENVELOPE,
-    kind: v.literal('file'),
-    path: ForkTreePathSchema,
-    offset: v.number(),
-    bytes: v.instance(Uint8Array),
-    last: v.boolean(),
-    /** SHA-256 of the whole file, so the target refuses a mis-reassembled file before writing it. */
-    fileDigest: v.optional(v.string()),
-    /** A payload file, `path` relative to its artifact directory; the receiver re-roots it. */
-    artifact: v.boolean(),
-    mode: v.number(),
-    mtimeMs: v.number(),
-  }),
-  v.object({ ...FRAME_ENVELOPE, kind: v.literal('entries'), entries: v.array(ForkWireEntrySchema) }),
+  /** SOUL.md whole: its protected write takes one argument. */
+  v.object({ ...FRAME_ENVELOPE, kind: v.literal('soul'), bytes: v.instance(Uint8Array) }),
+  /** Chunks a page names that the target lacked, stored ahead of that page. */
+  v.object({ ...FRAME_ENVELOPE, kind: v.literal('chunks'), target: ForkImportTargetSchema, chunks: v.array(ForkExportChunkSchema) }),
+  /** One page of one import. */
+  v.object({ ...FRAME_ENVELOPE, kind: v.literal('page'), target: ForkImportTargetSchema, page: ForkExportPageSchema }),
   /** Closes the transfer. `stream` is the rolling hash over every preceding frame's `digest`, so a
      *  dropped, reordered or substituted frame cannot reach a matching commit. */
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('commit'), stream: v.string() }),
@@ -143,9 +169,9 @@ export type ForkFrame = v.InferOutput<typeof ForkFrameSchema>;
 
 export type ForkBeginFrame = Extract<ForkFrame, { kind: 'begin' }>;
 
-export type ForkFileFrame = Extract<ForkFrame, { kind: 'file' }>;
+export type ForkChunksFrame = Extract<ForkFrame, { kind: 'chunks' }>;
 
-export type ForkEntriesFrame = Extract<ForkFrame, { kind: 'entries' }>;
+export type ForkPageFrame = Extract<ForkFrame, { kind: 'page' }>;
 
 export type ForkRowFrame = Extract<ForkFrame, { kind: ForkRowSection }>;
 
@@ -168,21 +194,56 @@ type UnsealedForkSectionFrame =
   Omit<Extract<UnsealedForkFrame, { kind: 'agentConfig' }>, 'kind' | 'rows'>
   & { kind: ForkRowSection; rows: ForkRowValue[] };
 
-/** Canonical preimage of one frame (all but its digest); file bytes are hashed as bytes, not JSON. */
+/** A page as JSON, every field the wire schema carries named. */
+function pageJson(page: VfsExportPage): JsonObject {
+  return {
+    schema: page.schema,
+    root: page.root,
+    nextIno: page.nextIno,
+    after: page.after,
+    next: page.next,
+    rows: page.rows.map((row) => ({
+      path: row.path,
+      ino: row.ino,
+      kind: row.kind,
+      size: row.size,
+      mode: row.mode,
+      uid: row.uid,
+      gid: row.gid,
+      defaultAcl: row.defaultAcl,
+      atime: row.atime,
+      mtime: row.mtime,
+      contentKey: row.contentKey,
+      pieceOffset: row.pieceOffset,
+      manifest: row.manifest,
+      pieces: row.pieces.map(([hash, size]) => [hash, size]),
+    })),
+  };
+}
+
+/**
+ * Canonical preimage of one frame (all but its digest). SOUL.md's bytes are hashed as bytes, not JSON; a chunk is
+ * named by the sha256 of its bytes, which the target's import re-hashes before storing it.
+ */
 type ForkFrameSealInput = (UnsealedForkFrame | UnsealedForkSectionFrame) & { digest?: string };
 
 function forkFramePreimage(frame: ForkFrameSealInput): string {
-  if (frame.kind === 'file') {
+  if (frame.kind === 'soul') {
     const { bytes, digest: _digest, ...meta } = frame;
 
     return `${stableStringify({ ...meta })}|${sha256Hex(bytes)}`;
   }
 
-  if (frame.kind === 'entries') {
-    const { entries, digest: _digest, ...meta } = frame;
-    const hashed = entries.map((entry) => entry.kind === 'file' ? { ...entry, bytes: sha256Hex(entry.bytes) } : entry);
+  if (frame.kind === 'chunks') {
+    const { chunks, digest: _digest, ...meta } = frame;
 
-    return stableStringify({ ...meta, entries: hashed });
+    return stableStringify({ ...meta, chunks: chunks.map((chunk) => chunk.hash) });
+  }
+
+  if (frame.kind === 'page') {
+    const { page, digest: _digest, ...meta } = frame;
+
+    return stableStringify({ ...meta, page: pageJson(page) });
   }
 
   const { digest: _digest, ...body } = frame;
@@ -203,11 +264,6 @@ export const FORK_STREAM_SEED = '';
 
 export function foldForkStream(previous: string, digest: string): string {
   return sha256Hex(`${previous}${digest}`);
-}
-
-/** Opened once per transfer. */
-export interface ForkFileSource {
-  open(): Promise<ForkTreeReader>;
 }
 
 export interface ForkTransferSource {
@@ -264,22 +320,6 @@ function conversationEntryPartPayloadBytes(row: ForkConversationEntryPartRow): n
 
 function contextMemberPayloadBytes(row: ForkContextMemberRow): number {
   return utf8Bytes(row.entry_id) + utf8Bytes(row.message_id);
-}
-
-function wireEntryPayloadBytes(entry: ForkWireEntry): number {
-  if (entry.kind === 'file') return utf8Bytes(entry.path) + entry.bytes.byteLength;
-
-  return utf8Bytes(entry.path) + (entry.kind === 'symlink' ? utf8Bytes(entry.target) : 0);
-}
-
-function wireEntry(snapshot: ForkSnapshot, entry: ForkTreeEntry): ForkWireEntry {
-  if (entry.kind === 'directory') return { kind: 'directory', path: entry.path, mode: entry.mode, mtimeMs: entry.mtimeMs };
-
-  if (entry.kind === 'symlink') return { kind: 'symlink', path: entry.path, target: entry.target };
-  // Copy: structured clone of a view carries its whole backing buffer.
-  const bytes = entry.size === 0 ? new Uint8Array(0) : snapshot.read(entry, 0, entry.size).slice();
-
-  return { kind: 'file', path: entry.path, mode: entry.mode, mtimeMs: entry.mtimeMs, bytes };
 }
 
 async function* configRows(sql: SqlExecutor): AsyncGenerator<ForkConfigRow> {
@@ -360,11 +400,46 @@ async function* contextMemberRows(plan: ForkConversationPlan): AsyncGenerator<Fo
   for (const member of plan.members) yield member;
 }
 
-/** Reads one source workspace into sealed, bounded fork frames. Rows have no snapshot isolation: later
- *  mutation makes the stream disagree with `begin.counts`, which the receiver refuses at commit. */
+/** What the target answered the frame just yielded, passed back into the stream. */
+export interface ForkFrameReply {
+  /** A page the target could not import yet: the chunks it holds neither staged nor stored. */
+  readonly want?: readonly string[];
+}
+
+/** One import the fork carries: where it lands, and the pinned path it is exported from. */
+interface ForkImport {
+  readonly target: ForkImportTarget;
+  readonly root: string;
+}
+
+/** A payload the cut's conversation references, each once, refused unless it is a file at the pin. */
+function carriedPayloads(pinned: ForkPinnedFiles, artifacts: readonly string[], artifactDirectory: string): ForkImport[] {
+  const carried = new Map<string, ForkImport>();
+
+  for (const relative of artifacts) {
+    if (carried.has(relative)) continue;
+    const root = forkArtifactPath(relative, artifactDirectory);
+
+    if (pinned.kind(root) !== 'file') {
+      throw new KinuError('missing', `fork cannot carry payload ${JSON.stringify(root)}: the conversation references it and it is not a file`);
+    }
+
+    carried.set(relative, { target: { in: 'artifacts', path: relative }, root });
+  }
+
+  return [...carried.values()];
+}
+
+/**
+ * Reads one source workspace into sealed, bounded fork frames. `next(reply)` passes back what the target answered the
+ * frame just yielded: a page naming chunks the target lacks comes back with them wanted, and the stream sends those
+ * and the page again, so a chunk the target already holds never crosses. Rows have no snapshot isolation: later
+ * mutation makes the stream disagree with `begin.counts`, which the receiver refuses at commit. Files are read from
+ * one pin of the source's store, released however the stream ends.
+ */
 export async function* forkTransferFrames(
   source: ForkTransferSource,
-): AsyncGenerator<ForkFrame> {
+): AsyncGenerator<ForkFrame, void, ForkFrameReply | undefined> {
   if (!Number.isFinite(source.frameBytes) || source.frameBytes <= 0) {
     throw new RangeError('fork frameBytes must be a positive finite number');
   }
@@ -376,181 +451,192 @@ export async function* forkTransferFrames(
     artifactDirectory: source.artifactDirectory,
   });
 
-  const snapshot = snapshotForkFiles(await source.vfs.open(), plan.artifacts.map((relative) => ({
-    relative, path: forkArtifactPath(relative, source.artifactDirectory),
-  })));
+  const pinned = await source.vfs.pin(`${FORK_PIN_PREFIX}${source.transferId}`);
 
-  const conversation = forkConversationCounts(source.sql, actorId, plan);
+  try {
+    const soulPath = `${WORKSPACE_ROOT}/${SOUL_PATH}`;
+    const soul = pinned.kind(soulPath) === 'file' ? pinned.readFile(soulPath) : null;
 
-  const counts: ForkSectionCounts = {
-    agentConfig: source.sql<{ key: string }>`SELECT key FROM actor_config WHERE actor_id = ${actorId}`
-      .filter((row) => !SHELL_APPROVAL_AUTHORITY_KEYS.includes(row.key)).length,
-    craftedTools: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM crafted_tools`[0]?.count ?? 0,
-    memoryChunks: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM memory_chunks`[0]?.count ?? 0,
-    ...conversation,
-    files: snapshot.entries.length,
-  };
+    if (soul !== null && soul.byteLength > source.frameBytes) {
+      throw new KinuError('bad_input', `SOUL.md is ${soul.byteLength} bytes, past the ${source.frameBytes} one fork frame carries; `
+        + 'its protected write takes the file whole');
+    }
 
-  const identity = source.sql<{ id: string; name: string }>`
-    SELECT id, name FROM workspace_identity LIMIT 1
-  `[0];
+    const imports: ForkImport[] = [
+      ...pinned.readdir(WORKSPACE_ROOT).filter(forkCarries).sort(compareCodeUnits)
+        .map((name): ForkImport => ({ target: { in: 'home', name }, root: `${WORKSPACE_ROOT}/${name}` })),
+      ...carriedPayloads(pinned, plan.artifacts, source.artifactDirectory),
+    ];
 
-  const head: v.InferOutput<typeof ForkSnapshotHeadSchema> = {
-    source: { workspaceId: identity?.id ?? '', workspaceName: identity?.name ?? '' },
-    cut: { messageId: plan.cut.entryId, createdAtMs: plan.cut.recordedAt },
-  };
+    const conversation = forkConversationCounts(source.sql, actorId, plan);
 
-  let seq = 0;
-  let stream = FORK_STREAM_SEED;
+    const counts: ForkSectionCounts = {
+      agentConfig: source.sql<{ key: string }>`SELECT key FROM actor_config WHERE actor_id = ${actorId}`
+        .filter((row) => !SHELL_APPROVAL_AUTHORITY_KEYS.includes(row.key)).length,
+      craftedTools: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM crafted_tools`[0]?.count ?? 0,
+      memoryChunks: source.sql<{ count: number }>`SELECT COUNT(*) AS count FROM memory_chunks`[0]?.count ?? 0,
+      ...conversation,
+      files: imports.length + (soul === null ? 0 : 1),
+    };
 
-  const seal = (body: ForkFrameBody | UnsealedForkSectionFrame): ForkFrame => {
-    const frame = sealForkFrame(body);
-    stream = foldForkStream(stream, frame.digest);
+    const identity = source.sql<{ id: string; name: string }>`
+      SELECT id, name FROM workspace_identity LIMIT 1
+    `[0];
 
-    return frame;
-  };
+    const head: v.InferOutput<typeof ForkSnapshotHeadSchema> = {
+      source: { workspaceId: identity?.id ?? '', workspaceName: identity?.name ?? '' },
+      cut: { messageId: plan.cut.entryId, createdAtMs: plan.cut.recordedAt },
+    };
 
-  yield seal({
-    version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
-    kind: 'begin', head, counts,
-  });
+    let seq = 0;
+    let stream = FORK_STREAM_SEED;
 
-  const yieldRows = async function* <T extends ForkRowValue>(
-    kind: ForkRowSection,
-    rows: AsyncIterable<T>,
-    payloadBytes: (row: T) => number,
-  ): AsyncGenerator<ForkFrame> {
-    const frame = (batched: T[]): ForkFrame => seal({
-      version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
-      kind, rows: batched,
-    });
+    const envelope = () => ({ version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq }) as const;
 
-    let batch: T[] = [];
-    let bytes = 0;
+    /** Yields one frame; the sequence and the rolling digest advance only past a frame the target took. */
+    const send = async function* (
+      body: ForkFrameBody | UnsealedForkSectionFrame,
+    ): AsyncGenerator<ForkFrame, ForkFrameReply | undefined, ForkFrameReply | undefined> {
+      const frame = sealForkFrame(body);
+      const reply = yield frame;
 
-    for await (const row of rows) {
-      const rowBytes = payloadBytes(row);
-
-      // A single row may exceed the frame budget; send it alone rather than reject it.
-      if (batch.length > 0 && bytes + rowBytes > source.frameBytes) {
-        yield frame(batch);
-        batch = [];
-        bytes = 0;
+      if (reply?.want === undefined) {
+        seq += 1;
+        stream = foldForkStream(stream, frame.digest);
       }
 
-      batch.push(row);
-      bytes += rowBytes;
+      return reply;
+    };
+
+    yield* send({ ...envelope(), kind: 'begin', head, counts });
+
+    const yieldRows = async function* <T extends ForkRowValue>(
+      kind: ForkRowSection,
+      rows: AsyncIterable<T>,
+      payloadBytes: (row: T) => number,
+    ): AsyncGenerator<ForkFrame, void, ForkFrameReply | undefined> {
+      let batch: T[] = [];
+      let bytes = 0;
+
+      for await (const row of rows) {
+        const rowBytes = payloadBytes(row);
+
+        // A single row may exceed the frame budget; send it alone rather than reject it.
+        if (batch.length > 0 && bytes + rowBytes > source.frameBytes) {
+          yield* send({ ...envelope(), kind, rows: batch });
+          batch = [];
+          bytes = 0;
+        }
+
+        batch.push(row);
+        bytes += rowBytes;
+      }
+
+      if (batch.length > 0) yield* send({ ...envelope(), kind, rows: batch });
+    };
+
+    for (const section of FORK_ROW_SECTIONS) {
+      switch (section) {
+        case 'agentConfig':
+          yield* yieldRows(section, configRows(source.sql), configPayloadBytes);
+          break;
+        case 'craftedTools':
+          yield* yieldRows(section, craftedToolRows(source.sql), craftedToolPayloadBytes);
+          break;
+        case 'memoryChunks':
+          yield* yieldRows(section, memoryChunkRows(source.sql), memoryChunkPayloadBytes);
+          break;
+        case 'sessionMessages':
+          yield* yieldRows(
+            section,
+            sessionMessageRows(source.sql, actorId, plan, source.artifactDirectory),
+            sessionMessagePayloadBytes,
+          );
+          break;
+        case 'conversationEntries':
+          yield* yieldRows(
+            section,
+            conversationEntryRows(source.sql, actorId, plan, source.artifactDirectory),
+            conversationEntryPayloadBytes,
+          );
+          break;
+        case 'conversationEntryParts':
+          yield* yieldRows(section, conversationEntryPartRows(source.sql, actorId, plan), conversationEntryPartPayloadBytes);
+          break;
+        case 'contextMembers':
+          yield* yieldRows(section, contextMemberRows(plan), contextMemberPayloadBytes);
+          break;
+      }
     }
 
-    if (batch.length > 0) yield frame(batch);
-  };
+    // Copy: structured clone of a view carries its whole backing buffer.
+    if (soul !== null) yield* send({ ...envelope(), kind: 'soul', bytes: soul.slice() });
 
-  for (const section of FORK_ROW_SECTIONS) {
-    switch (section) {
-      case 'agentConfig':
-        yield* yieldRows(section, configRows(source.sql), configPayloadBytes);
-        break;
-      case 'craftedTools':
-        yield* yieldRows(section, craftedToolRows(source.sql), craftedToolPayloadBytes);
-        break;
-      case 'memoryChunks':
-        yield* yieldRows(section, memoryChunkRows(source.sql), memoryChunkPayloadBytes);
-        break;
-      case 'sessionMessages':
-        yield* yieldRows(
-          section,
-          sessionMessageRows(source.sql, actorId, plan, source.artifactDirectory),
-          sessionMessagePayloadBytes,
-        );
-        break;
-      case 'conversationEntries':
-        yield* yieldRows(
-          section,
-          conversationEntryRows(source.sql, actorId, plan, source.artifactDirectory),
-          conversationEntryPayloadBytes,
-        );
-        break;
-      case 'conversationEntryParts':
-        yield* yieldRows(section, conversationEntryPartRows(source.sql, actorId, plan), conversationEntryPartPayloadBytes);
-        break;
-      case 'contextMembers':
-        yield* yieldRows(section, contextMemberRows(plan), contextMemberPayloadBytes);
-        break;
-    }
+    /** The chunks a page wants, a frame of them at a time. */
+    const chunkFrames = async function* (
+      target: ForkImportTarget, wanted: readonly string[],
+    ): AsyncGenerator<ForkFrame, void, ForkFrameReply | undefined> {
+      for (let rest = [...wanted]; rest.length > 0;) {
+        const out = pinned.exportChunks(rest, source.frameBytes);
+        // Copy: structured clone of a view carries its whole backing buffer.
+        const chunks = out.chunks.map((chunk) => ({ hash: chunk.hash, data: chunk.data.slice() }));
+
+        yield* send({ ...envelope(), kind: 'chunks', target, chunks });
+        rest = out.rest;
+      }
+    };
+
+    /**
+     * One import, a page at a time, each until the target takes it. A reset on the target can collect chunks it
+     * staged, so a page wants again what it lost; wanting exactly what it was just sent means it keeps none.
+     */
+    const importFrames = async function* ({ target, root }: ForkImport): AsyncGenerator<ForkFrame, void, ForkFrameReply | undefined> {
+      for (let after: string | null = null, more = true; more;) {
+        const page = pinned.exportPage(root, after);
+        let wanted = (yield* send({ ...envelope(), kind: 'page', target, page }))?.want;
+        let asked: string | null = null;
+
+        while (wanted !== undefined) {
+          const asking = [...wanted].sort(compareCodeUnits).join(',');
+
+          if (asking === asked) {
+            throw new Error(`the fork target wants the same ${wanted.length} chunk(s) of ${JSON.stringify(root)} it was just sent`);
+          }
+
+          asked = asking;
+          yield* chunkFrames(target, wanted);
+          wanted = (yield* send({ ...envelope(), kind: 'page', target, page }))?.want;
+        }
+
+        more = page.next !== null;
+        after = page.next;
+      }
+    };
+
+    for (const carried of imports) yield* importFrames(carried);
+
+    // O(1) on both halves; see {@link foldForkStream}.
+    yield* send({ ...envelope(), kind: 'commit', stream });
+  } finally {
+    await pinned.release();
   }
-
-  const fileFrames = function* (file: ForkFileEntry): Generator<ForkFrame> {
-    // Hashed as ranges are read, so the whole-file digest costs one range of state.
-    const fileHash = createHash('sha256');
-
-    for (let offset = 0; offset < file.size || (offset === 0 && file.size === 0); offset += source.frameBytes) {
-      const length = Math.min(source.frameBytes, file.size - offset);
-      // Copy: structured clone of a view carries its whole backing buffer.
-      const range = length === 0 ? new Uint8Array(0) : snapshot.read(file, offset, length).slice();
-
-      fileHash.update(range);
-      const last = offset + length >= file.size;
-
-      const frame = {
-        version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
-        kind: 'file', path: file.path, offset, bytes: range, artifact: file.artifact, mode: file.mode, mtimeMs: file.mtimeMs,
-      } as const;
-
-      yield seal(last ? { ...frame, last: true, fileDigest: fileHash.digest('hex') } : { ...frame, last: false });
-    }
-  };
-
-  let batch: ForkWireEntry[] = [];
-  let batchBytes = 0;
-
-  const entriesFrame = (): ForkFrame => {
-    const frame = seal({ version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++, kind: 'entries', entries: batch });
-    batch = [];
-    batchBytes = 0;
-
-    return frame;
-  };
-
-  for (const entry of snapshot.entries) {
-    // SOUL.md's protected write and a payload's re-rooting need their own frames.
-    if (entry.kind === 'file' && (entry.artifact || entry.path === SOUL_PATH || entry.size > source.frameBytes)) {
-      if (batch.length > 0) yield entriesFrame();
-      yield* fileFrames(entry);
-      continue;
-    }
-
-    const wire = wireEntry(snapshot, entry);
-    const bytes = wireEntryPayloadBytes(wire);
-
-    if (batch.length > 0 && batchBytes + bytes > source.frameBytes) yield entriesFrame();
-    batch.push(wire);
-    batchBytes += bytes;
-  }
-
-  if (batch.length > 0) yield entriesFrame();
-
-  // O(1) on both halves; see {@link foldForkStream}.
-  yield sealForkFrame({
-    version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
-    kind: 'commit', stream,
-  });
 }
 
 export type ForkFrameOutcome =
   | { status: 'staged' }
+  /** A page naming chunks the target holds neither staged nor stored: nothing was taken, send them and it again. */
+  | { status: 'want'; hashes: string[] }
   /** The transfer completed and the target is now a fork. */
   | { status: 'published'; result: ForkResult }
   /** A re-delivered frame for an already-published transfer, answered with the fork that landed. */
   | { status: 'settled'; result: ForkResult };
 
 /**
- * Receiver-side driver for one fork transfer. All transfer state lives in the target's
- * {@link ForkStagingState} row, since frames arrive on several DO activations; a mid-file range resumes.
- * `begin` resets and clears staging; any gap, reorder, foreign id or corrupt frame is refused.
+ * Receiver-side driver for one fork transfer. All transfer state lives in the target's {@link ForkStagingState} row,
+ * since frames arrive on several DO activations; an import resumes from Nimbus's own cursor. `begin` resets and
+ * removes what an abandoned transfer imported; any gap, reorder, foreign id or corrupt frame is refused.
  */
 export class ForkTransferReceiver {
-  /** Path this activation has opened on the sink, so it is opened once per activation. */
-  private opened: string | null = null;
   private readonly staging: ForkStagingState;
 
   constructor(
@@ -560,30 +646,11 @@ export class ForkTransferReceiver {
     this.staging = writer.staging;
   }
 
-  /** One frame, or a refusal. Every refusal removes the in-flight file's sibling temp. */
+  /** One frame, or a refusal. */
   async accept(wire: ForkFrameWire): Promise<ForkFrameOutcome> {
-    try {
-      return await this.acceptFrame(wire);
-    } catch (cause) {
-      try {
-        await this.abortOpenFile();
-      } catch (cleanup) {
-        throw new AggregateError(
-          [cause, cleanup],
-          'fork transfer refused a frame and could not remove the staged temp it left behind',
-          { cause },
-        );
-      }
-
-      throw cause;
-    }
-  }
-
-  private async acceptFrame(wire: ForkFrameWire): Promise<ForkFrameOutcome> {
     const frame = parseForkFrame(wire);
 
     if (frame.kind === 'begin') {
-      await this.abortOpenFile();
       await this.files.remove(this.staging.files());
       this.staging.dropFiles();
       // The write's reset first: the wire's cursor is declared onto a row that already belongs to this fork.
@@ -631,23 +698,47 @@ export class ForkTransferReceiver {
       return { status: 'published', result: await this.commit(staged, frame.stream) };
     }
 
-    const sectionCursor = await this.stage(staged, frame);
+    const taken = await this.stage(staged, frame);
+
+    if (taken.status === 'want') return taken;
 
     this.staging.advance({
       expectedSeq: frame.seq + 1,
-      sectionCursor,
+      sectionCursor: taken.sectionCursor,
       stream: foldForkStream(staged.stream, frame.digest),
     });
 
     return { status: 'staged' };
   }
 
-  private async stage(staged: ForkStaging, frame: Exclude<ForkFrame, { kind: 'begin' | 'commit' }>): Promise<number> {
-    if (frame.kind === 'file') return this.stageRange(staged, frame);
+  private async stage(
+    staged: ForkStaging, frame: Exclude<ForkFrame, { kind: 'begin' | 'commit' }>,
+  ): Promise<{ status: 'staged'; sectionCursor: number } | { status: 'want'; hashes: string[] }> {
+    if (frame.kind === 'soul') {
+      this.filesPhase(staged);
+      this.writer.stageSoul((await this.files.publishSoul(frame.bytes)).mission);
 
-    if (frame.kind === 'entries') return this.stageEntries(staged, frame);
+      return { status: 'staged', sectionCursor: FORK_ROW_SECTIONS.length };
+    }
 
-    return this.stageRows(staged, frame);
+    if (frame.kind === 'chunks') {
+      await this.files.importChunks(await this.open(staged, frame.target), frame.chunks);
+
+      return { status: 'staged', sectionCursor: FORK_ROW_SECTIONS.length };
+    }
+
+    if (frame.kind === 'page') {
+      const dst = await this.open(staged, frame.target);
+      const imported = await this.files.importPage(dst, frame.page);
+
+      if (imported.want.length > 0) return { status: 'want', hashes: imported.want };
+
+      if (imported.done) this.staging.importing(null);
+
+      return { status: 'staged', sectionCursor: FORK_ROW_SECTIONS.length };
+    }
+
+    return { status: 'staged', sectionCursor: this.stageRows(staged, frame) };
   }
 
   /** One batch of one section; a section the cursor has passed cannot come back. */
@@ -672,73 +763,44 @@ export class ForkTransferReceiver {
     return at;
   }
 
-  private async abortOpenFile(): Promise<void> {
-    const path = this.opened;
-
-    if (path === null) return;
-    this.opened = null;
-    this.staging.file(null, 0);
-    await this.files.abortFile(path);
+  /** Files come once the row sections are done, and one import at a time. */
+  private filesPhase(staged: ForkStaging): void {
+    if (staged.importing !== null) {
+      throw new Error(`fork transfer sent SOUL.md while the import at ${JSON.stringify(staged.importing)} was still incomplete`);
+    }
   }
 
   /**
-     * One byte range of one file. `offset` is checked against durably counted bytes; the count is stored after
-     * the sink takes the range so it stays re-deliverable. A completed file is verified from staging, then published.
-     */
-  private async stageRange(staged: ForkStaging, frame: ForkFileFrame): Promise<number> {
-    // Re-root a payload path into the target's own paths once, here.
-    const path = frame.artifact ? this.writer.artifactPath(frame.path) : frame.path;
-
-    if (staged.filePath !== null && staged.filePath !== path) {
-      throw new Error(`fork transfer began file ${JSON.stringify(path)} while ${JSON.stringify(staged.filePath)} was still incomplete`);
+   * The destination of one import frame, re-rooted into the target's own paths once, here. An import's first frame
+   * opens it, replacing what the target was born with there (its own `.nimbusrc`, say: the fork carries the
+   * source's), and records it, so `begin` removes it if this transfer is abandoned; no other may start until it is
+   * done. Replacing before recording keeps a frame re-delivered in between from replacing a started import.
+   */
+  private async open(staged: ForkStaging, target: ForkImportTarget): Promise<string> {
+    // SOUL.md publishes only through its protected write; the rest are the target's own to make.
+    if (target.in === 'home' && !forkCarries(target.name)) {
+      throw new Error(`fork transfer sent an import of ${JSON.stringify(target.name)}, a name under the home a fork does not carry`);
     }
 
-    if (frame.offset !== staged.fileBytes) {
-      throw new Error(`fork transfer range for ${JSON.stringify(path)} declares offset ${frame.offset} where ${staged.fileBytes} bytes have arrived`);
+    const dst = target.in === 'home' ? `${WORKSPACE_ROOT}/${target.name}` : this.writer.artifactPath(target.path);
+
+    if (staged.importing === dst) return dst;
+
+    if (staged.importing !== null) {
+      throw new Error(`fork transfer began the import at ${JSON.stringify(dst)} while ${JSON.stringify(staged.importing)} was still incomplete`);
     }
 
-    if (this.opened !== path) {
-      await this.files.beginFile(path, staged.filePath === path ? staged.fileBytes : 0);
-      this.opened = path;
+    await this.files.remove([dst]);
+    this.writer.stageImport(dst);
+    this.staging.importing(dst);
 
-      if (staged.filePath === null) this.staging.file(path, 0);
-    }
-
-    await this.files.writeRange(path, frame.offset, frame.bytes, frame.last);
-    const arrived = staged.fileBytes + frame.bytes.byteLength;
-
-    if (!frame.last) {
-      this.staging.file(path, arrived);
-
-      return FORK_ROW_SECTIONS.length;
-    }
-
-    const digest = await this.files.stagedDigest(path, arrived);
-
-    if (frame.fileDigest !== digest) throw new Error(`fork transfer file ${JSON.stringify(path)} does not match the digest the source declared`);
-    const committed = await this.files.commitFile(path, { mode: frame.mode, mtimeMs: frame.mtimeMs });
-    this.writer.stageCommittedFile(path, committed?.mission);
-    this.opened = null;
-    this.staging.file(null, 0);
-
-    return FORK_ROW_SECTIONS.length;
-  }
-
-  private async stageEntries(staged: ForkStaging, frame: ForkEntriesFrame): Promise<number> {
-    if (staged.filePath !== null) {
-      throw new Error(`fork transfer sent whole entries while ${JSON.stringify(staged.filePath)} was still incomplete`);
-    }
-
-    await this.files.place(frame.entries);
-    this.writer.stageCommittedEntries(frame.entries.map((entry) => entry.path));
-
-    return FORK_ROW_SECTIONS.length;
+    return dst;
   }
 
   /** Completeness then publication: declared counts must match what was taken, and the rolling digest must match. */
   private async commit(staged: ForkStaging, declared: string): Promise<ForkResult> {
-    if (staged.filePath !== null) {
-      throw new Error(`fork transfer committed while file ${JSON.stringify(staged.filePath)} was incomplete`);
+    if (staged.importing !== null) {
+      throw new Error(`fork transfer committed while the import at ${JSON.stringify(staged.importing)} was incomplete`);
     }
 
     const taken = this.writer.staged;

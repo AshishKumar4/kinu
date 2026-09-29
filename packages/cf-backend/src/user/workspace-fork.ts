@@ -1,5 +1,5 @@
 import { forkTransferFrames, nanoid, FORK_FRAME_BYTES } from '@kinu.run/core';
-import type { ForkFrame } from '@kinu.run/core';
+import type { ForkFrame, ForkFrameReply } from '@kinu.run/core';
 import type { SqlExecutor, ForkFileSource, ActorHandle } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
 import type { WorkspaceEntry } from './user-do';
@@ -19,8 +19,12 @@ export interface CloudForkRegistry {
 }
 
 export type ForkFrameAck =
-  | { ok: true; status: 'staged' }
-  | { ok: true; status: 'published'; agentId: string; capabilityHash: string | null; forkPointMs: number }
+  | ({ ok: true } & (
+    | { status: 'staged' }
+    /** A page the target could not import yet: send the chunks it lacks, then the page again. */
+    | { status: 'want'; hashes: string[] }
+    | { status: 'published'; agentId: string; capabilityHash: string | null; forkPointMs: number }
+  ))
   | { ok: false; reason: 'owned_by_another_user' };
 
 export interface CloudForkTarget {
@@ -69,13 +73,14 @@ export async function deliverCloudFork(input: {
 
   let landed: Extract<ForkFrameAck, { status: 'published' }> | null = null;
 
+  const frames = forkTransferFrames({ ...input.source, transferId: nanoid(), frameBytes: FORK_FRAME_BYTES });
+
   try {
-    for await (const frame of forkTransferFrames({
-      ...input.source,
-      transferId: nanoid(),
-      frameBytes: FORK_FRAME_BYTES,
-    })) {
-      const ack = await input.target.rawCopyFromFork(input.name, frame, input.ownerUserId);
+    // Each answer goes back into the stream: a page the target wants chunks for is followed by them and itself.
+    let reply: ForkFrameReply | undefined;
+
+    for (let next = await frames.next(); !next.done; next = await frames.next(reply)) {
+      const ack = await input.target.rawCopyFromFork(input.name, next.value, input.ownerUserId);
 
       if (!ack.ok) {
         const released = await input.registry.releaseWorkspaceReservation(
@@ -88,6 +93,8 @@ export async function deliverCloudFork(input: {
 
       if (ack.status === 'published') { landed = ack; break; }
 
+      reply = ack.status === 'want' ? { want: ack.hashes } : undefined;
+
       // false: the name was given to someone else; continuing would stream into a target not ours.
       const held = await input.registry.renewWorkspaceReservation(
         input.caller, input.name, registration.entry.createdAt,
@@ -95,7 +102,10 @@ export async function deliverCloudFork(input: {
 
       if (!held) throw new KinuError('unavailable', `the reservation for "${input.name}" is no longer held by this transfer`);
     }
-  } catch (cause) { return destroy({ cause }); }
+  } catch (cause) { return await destroy({ cause }); } finally {
+    // Releases the stream's pin on the source however the loop ended.
+    await frames.return(undefined);
+  }
 
   if (!landed) return destroy({ cause: new Error(`fork transfer to "${input.name}" ended before the target published it`) });
 

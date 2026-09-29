@@ -1,6 +1,7 @@
 /**
- * A hosted fork across two DOs, evicted at the row/file boundary and before commit. The wire's resumability and
- * idempotence are state surviving an activation's end, which only workerd's `abortAllDurableObjects` can produce.
+ * A hosted fork across two DOs, evicted at the row/file boundary, mid-way through an import's chunks, and before
+ * commit. The wire's resumability and idempotence are state surviving an activation's end, which only workerd's
+ * `abortAllDurableObjects` can produce.
  */
 import { env } from 'cloudflare:workers';
 import { abortAllDurableObjects } from 'cloudflare:test';
@@ -18,14 +19,14 @@ const target = (name: string) => env.FORK_TARGET.get(env.FORK_TARGET.idFromName(
 /** The fork point is this entry's time, so the published result names this exact millisecond. */
 const CUT_MS = PROBE_CUT_RECORDED_AT;
 
+const INHERITED = ['SOUL.md', 'memory/deep/proof.bin', 'memory/notes.md'];
+
 describe('a fork transfer interrupted by a real eviction', () => {
   it('resumes at the exact frame, stays invisible until the commit, and publishes once', async () => {
     const name = 'fork-eviction-proof';
     await source(name).seed();
-    const inherited = await source(name).sourceFiles();
-    expect(inherited.map((file) => file.path)).toEqual([
-      'SOUL.md', 'memory/deep/proof.bin', 'memory/notes.md',
-    ]);
+    const inherited = await source(name).files();
+    expect(inherited.map((file) => file.path)).toEqual(INHERITED);
 
     const rows = await source(name).deliver({ target: name, from: 0, stop: 'files' });
     expect(rows.refusal).toBeNull();
@@ -52,12 +53,11 @@ describe('a fork transfer interrupted by a real eviction', () => {
     // The cursor is the object's own SQLite, so the reset did not touch it.
     expect(await target(name).cursor()).toEqual(cursorBefore);
 
-    const files = await source(name).deliver({ target: name, from: rows.nextSeq, stop: 'commit' });
+    const files = await source(name).deliver({ target: name, from: rows.position, stop: 'commit' });
     expect(files.refusal).toBeNull();
-    // SOUL in its one protected frame, four ranges each for proof.bin and notes.md, and each directory
-    // in an entries frame after its contents.
-    expect(files.sent).toBe(11);
-    expect(files.staged).toBe(11);
+    // SOUL.md, then the one import (memory): its page is wanted first, then taken after its chunks.
+    expect(files.wanted).toBe(1);
+    expect(files.staged).toBe(files.sent - files.wanted);
 
     const beforeCommit = await target(name).state();
     expect(beforeCommit.files).toEqual(inherited);
@@ -66,13 +66,13 @@ describe('a fork transfer interrupted by a real eviction', () => {
     expect(beforeCommit.displayName).toBeNull();
     expect(beforeCommit.identity?.mission ?? '').toBe('');
     expect(await target(name).cursor()).toMatchObject({
-      expectedSeq: files.nextSeq, stream: files.stream, published: false,
+      expectedSeq: files.nextSeq, stream: files.stream, published: false, importing: null,
     });
 
-    const commitSeq = files.nextSeq;
+    const commitAt = files.position;
     await abortAllDurableObjects();
 
-    const commit = await source(name).deliver({ target: name, from: commitSeq, stop: 'end' });
+    const commit = await source(name).deliver({ target: name, from: commitAt, stop: 'end' });
     expect(commit.refusal).toBeNull();
     expect(commit.fork).toEqual({ forkPointMs: CUT_MS, messagesCopied: 3, craftedToolsCopied: 1 });
 
@@ -93,7 +93,7 @@ describe('a fork transfer interrupted by a real eviction', () => {
     expect(published.contextMembers).toBe(3);
     expect(published.files).toEqual(inherited);
 
-    const redrive = await source(name).deliver({ target: name, from: commitSeq - 1, stop: 'end' });
+    const redrive = await source(name).deliver({ target: name, from: commitAt - 1, stop: 'end' });
     expect(redrive.refusal).toBeNull();
     expect(redrive.settled).toBe(2);
     expect(redrive.fork).toEqual(commit.fork);
@@ -102,7 +102,7 @@ describe('a fork transfer interrupted by a real eviction', () => {
     await abortAllDurableObjects();
 
     // Answered from storage, not from a receiver still in memory.
-    const cold = await source(name).deliver({ target: name, from: commitSeq, stop: 'end' });
+    const cold = await source(name).deliver({ target: name, from: commitAt, stop: 'end' });
     expect(cold.refusal).toBeNull();
     expect(cold.settled).toBe(1);
     expect(cold.fork).toEqual(commit.fork);
@@ -120,7 +120,7 @@ describe('a fork transfer interrupted by a real eviction', () => {
 
     // Seal untouched: the receiver's per-frame digest is what refuses it.
     const corrupt = await source(name).deliver({
-      target: name, from: rows.nextSeq, stop: 'end', corrupt: 'frame',
+      target: name, from: rows.position, stop: 'end', corrupt: 'frame',
     });
 
     expect(corrupt.refusal).toMatch(
@@ -130,7 +130,7 @@ describe('a fork transfer interrupted by a real eviction', () => {
 
     // The cursor did not move, so the transfer can never reach a commit.
     expect(await target(name).cursor()).toEqual(cursor);
-    const after = await source(name).deliver({ target: name, from: rows.nextSeq + 1, stop: 'end' });
+    const after = await source(name).deliver({ target: name, from: rows.position + 1, stop: 'end' });
     expect(after.refusal).toMatch(
       new RegExp(`arrived where frame ${rows.nextSeq} was expected`),
     );
@@ -143,27 +143,23 @@ describe('a fork transfer interrupted by a real eviction', () => {
     expect(state.files).toEqual([]);
   });
 
-  it('resumes a file at the exact next offset when the activation ended mid-file', async () => {
-    const name = 'fork-midfile-proof';
+  it('resumes an import at its next chunks when the activation ended mid-way through them', async () => {
+    const name = 'fork-midimport-proof';
     await source(name).seed();
-    const inherited = await source(name).sourceFiles();
+    const inherited = await source(name).files();
     const rows = await source(name).deliver({ target: name, from: 0, stop: 'files' });
-    const range = await source(name).deliver({ target: name, from: rows.nextSeq, stop: 'range' });
-    expect(range.refusal).toBeNull();
+    const part = await source(name).deliver({ target: name, from: rows.position, stop: 'chunks' });
+    expect(part.refusal).toBeNull();
 
-    const cursor = await target(name).cursor();
-    expect(cursor).toMatchObject({ filePath: 'memory/deep/proof.bin', fileBytes: 64 });
+    expect(await target(name).cursor()).toMatchObject({ importing: '/home/main/memory' });
 
     await abortAllDurableObjects();
 
-    // The staged offset is a column: the resumed activation adopts the staging and writes the next byte.
-    const rest = await source(name).deliver({ target: name, from: range.nextSeq, stop: 'end' });
+    // A reset may collect what the import had staged; its page then wants it again, and the stream sends it.
+    const rest = await source(name).deliver({ target: name, from: part.position, stop: 'end' });
     expect(rest.refusal).toBeNull();
-    // Three more ranges of proof.bin, memory/deep, four of notes.md, memory, then the commit.
-    expect(rest.sent).toBe(10);
     expect(rest.fork).toEqual({ forkPointMs: CUT_MS, messagesCopied: 3, craftedToolsCopied: 1 });
 
-    // Digest computed by reading the staging back, since no activation saw every range.
     const published = await target(name).state();
     expect(published.files).toEqual(inherited);
     expect(published.lineage).toMatchObject({
@@ -173,31 +169,29 @@ describe('a fork transfer interrupted by a real eviction', () => {
     });
     expect(published.identity?.mission).toBe(PROBE_SOUL_MISSION);
 
-    const redrive = await source(name).deliver({ target: name, from: rows.nextSeq, stop: 'end' });
+    const redrive = await source(name).deliver({ target: name, from: rows.position, stop: 'end' });
     expect(redrive.refusal).toBeNull();
     expect(redrive.settled).toBe(redrive.sent);
     expect(redrive.fork).toEqual(rest.fork);
     expect(await target(name).state()).toEqual(published);
   });
 
-  it('refuses a range that was resealed around different bytes, at the digest read back from the staging', async () => {
-    const name = 'fork-reseal-proof';
+  it('refuses a chunk whose bytes were changed, at the import\'s re-hash', async () => {
+    const name = 'fork-rehash-proof';
     await source(name).seed();
     const rows = await source(name).deliver({ target: name, from: 0, stop: 'files' });
-    const range = await source(name).deliver({ target: name, from: rows.nextSeq, stop: 'range' });
-    expect(range.refusal).toBeNull();
+    const part = await source(name).deliver({ target: name, from: rows.position, stop: 'chunks' });
+    expect(part.refusal).toBeNull();
 
     await abortAllDurableObjects();
 
-    // Frame resealed so frame digest, offset and sequence agree: only the whole-file digest can see it.
-    const resealed = await source(name).deliver({
-      target: name, from: range.nextSeq, stop: 'end', corrupt: 'resealed',
+    // Its frame names each chunk by hash, so the frame digest agrees: only the re-hash can see it.
+    const changed = await source(name).deliver({
+      target: name, from: part.position, stop: 'end', corrupt: 'chunk',
     });
 
-    expect(resealed.refusal).toContain(
-      'fork transfer file "memory/deep/proof.bin" does not match the digest the source declared',
-    );
-    expect(resealed.fork).toBeNull();
+    expect(changed.refusal).toContain('does not hash to its name');
+    expect(changed.fork).toBeNull();
 
     const state = await target(name).state();
     expect(state.lineage).toBeNull();

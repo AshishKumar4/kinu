@@ -1,11 +1,8 @@
 /** The fork's lineage row and the files a fork inherits, which fork-transfer.ts streams. Spec: docs/WORKSPACES.md. */
 
-import { Effect } from 'effect';
-import { KinuError } from '../obs/error';
-import { settleSync } from '../obs/effect';
+import type { VfsExportChunk, VfsExportPage } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { isSystemManaged } from '../vfs/workspace-path';
 import type { SqlExecutor } from '../types/primitives';
-import { compareCodeUnits } from '../utils/text';
 import { SOUL_PATH } from './soul';
 
 export interface ForkLineageRow {
@@ -39,109 +36,39 @@ export function readForkLineage(sql: SqlExecutor): ForkLineageRow | null {
   };
 }
 
-export interface ForkTreeStat {
-  kind: 'file' | 'directory' | 'symlink';
-  size: number;
-  mode: number;
-  mtimeMs: number;
-}
+/** A fork's pin on its source's files is named `fork:<transfer id>`. */
+export const FORK_PIN_PREFIX = 'fork:';
 
-/** Synchronous, so one walk is one instant. `revision(path)` exceeds an earlier `revision()` iff the path changed since (Nimbus `SqliteVFS.revision`). */
-export interface ForkTreeReader {
-  lstat(path: string): ForkTreeStat | null;
+/**
+ * The source's files at one instant, a Nimbus snapshot pinned for one transfer. Paths are absolute store paths,
+ * read as the kernel, so no file's mode hides it from the copy.
+ */
+export interface ForkPinnedFiles {
+  /** The names directly under `path`. */
   readdir(path: string): string[];
-  readlink(path: string): string;
-  readRange(path: string, offset: number, length: number): Uint8Array;
-  revision(path?: string): number;
+  /** What `path` is, a symbolic link not followed; null when it is not there. */
+  kind(path: string): 'file' | 'directory' | 'symlink' | null;
+  readFile(path: string): Uint8Array;
+  /** One page of the subtree at `root` (a file root is one row), continuing after `after`. */
+  exportPage(root: string, after: string | null): VfsExportPage;
+  /** The bytes of chunks by hash, up to `maxBytes` (at least one chunk); `rest` is what did not fit. */
+  exportChunks(hashes: readonly string[], maxBytes: number): { chunks: VfsExportChunk[]; rest: string[] };
+  /** Drops the pin: the source's store keeps no history for it. */
+  release(): Promise<void>;
 }
 
-export type ForkTreeEntry =
-  /** `artifact`: `path` is relative to the artifact directory. */
-  | { kind: 'file'; path: string; size: number; mode: number; mtimeMs: number; artifact: boolean }
-  | { kind: 'directory'; path: string; mode: number; mtimeMs: number }
-  | { kind: 'symlink'; path: string; target: string };
-
-export type ForkFileEntry = Extract<ForkTreeEntry, { kind: 'file' }>;
-
-export interface ForkSnapshot {
-  /** SOUL.md, the tree (each directory after its contents), then payload files. */
-  readonly entries: readonly ForkTreeEntry[];
-  /** Throws if `file` changed since the snapshot. */
-  read(file: ForkFileEntry, offset: number, length: number): Uint8Array;
+/** Opened once per transfer. */
+export interface ForkFileSource {
+  pin(name: string): Promise<ForkPinnedFiles>;
 }
 
-/** Re-bootstrapped at v0 in the fork. */
-const NOT_CARRIED_AT_ROOT: ReadonlySet<string> = new Set(['scaffold']);
+/** Re-bootstrapped at v0 in the fork, or published through its own protected write. */
+const NOT_CARRIED: ReadonlySet<string> = new Set(['scaffold', SOUL_PATH]);
 
-/** What the Files tab shows, minus the scaffold, in one synchronous walk. */
-export function snapshotForkFiles(
-  tree: ForkTreeReader, artifacts: readonly { relative: string; path: string }[],
-): ForkSnapshot {
-  const clock = tree.revision();
-  const entries: ForkTreeEntry[] = [];
-  const soul = tree.lstat(SOUL_PATH);
-
-  if (soul?.kind === 'file') entries.push(fileEntry(SOUL_PATH, soul, false));
-
-  // Post-order: a directory's mode and mtime land after its contents.
-  const walk = (directory: string): Effect.Effect<void> => Effect.gen(function* () {
-    for (const name of tree.readdir(directory).sort(compareCodeUnits)) {
-      if (isSystemManaged(name) || (directory === '' && (NOT_CARRIED_AT_ROOT.has(name) || name === SOUL_PATH))) continue;
-      const path = directory === '' ? name : `${directory}/${name}`;
-      const stat = tree.lstat(path);
-
-      if (stat === null) return yield* Effect.die(new Error(`fork could not stat ${JSON.stringify(path)}, which its directory listed`));
-
-      if (stat.kind === 'directory') {
-        yield* walk(path);
-        entries.push({ kind: 'directory', path, mode: stat.mode, mtimeMs: stat.mtimeMs });
-      } else if (stat.kind === 'symlink') {
-        entries.push({ kind: 'symlink', path, target: tree.readlink(path) });
-      } else {
-        entries.push(fileEntry(path, stat, false));
-      }
-    }
-  });
-
-  const payloads = new Map<string, string>();
-
-  const carried = Effect.gen(function* () {
-    yield* walk('');
-
-    for (const artifact of artifacts) {
-      if (payloads.has(artifact.relative)) continue;
-      payloads.set(artifact.relative, artifact.path);
-      const stat = tree.lstat(artifact.path);
-
-      if (stat?.kind !== 'file') {
-        return yield* new KinuError('missing', `fork cannot carry payload ${JSON.stringify(artifact.path)}: the conversation references it and it is not a file`);
-      }
-
-      entries.push(fileEntry(artifact.relative, stat, true));
-    }
-  });
-
-  return settleSync(Effect.as(carried, {
-    entries,
-    read(file, offset, length) {
-      const at = file.artifact ? payloads.get(file.path) ?? file.path : file.path;
-      const bytes = tree.readRange(at, offset, length);
-
-      // Same synchronous step as the read: no write lands between them.
-      if (tree.revision(at) > clock) {
-        return settleSync(Effect.fail(new KinuError('unavailable', `${JSON.stringify(file.path)} changed while the fork was copying the workspace, `
-          + 'so the copy would not be one snapshot and no fork was created. Fork again once whatever is writing it has stopped.')));
-      }
-
-      if (bytes.byteLength !== length) {
-        return settleSync(Effect.die(new Error(`fork read ${bytes.byteLength} bytes of ${JSON.stringify(file.path)} where ${length} were asked for`)));
-      }
-
-      return bytes;
-    },
-  } satisfies ForkSnapshot));
-}
-
-function fileEntry(path: string, stat: ForkTreeStat, artifact: boolean): ForkFileEntry {
-  return { kind: 'file', path, size: stat.size, mode: stat.mode, mtimeMs: stat.mtimeMs, artifact };
+/**
+ * Whether a name directly under the home crosses as a tree of its own. The home's own platform directories (Nimbus's
+ * runtimes, Kinu's agent state) are the target's to make; the same names deeper in a project are the owner's data.
+ */
+export function forkCarries(name: string): boolean {
+  return !NOT_CARRIED.has(name) && !isSystemManaged(name);
 }

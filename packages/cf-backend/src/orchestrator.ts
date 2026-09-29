@@ -235,7 +235,7 @@ import { Effect } from 'effect';
 import { attempt, authoredRefusal, classify, diagnostics, KinuError, refusalOf, renderThrownChain, settle, toKinuError, type Refusal } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
-import { deliverCloudFork } from "./user/workspace-fork";
+import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
 import { agentEmailAddress } from "./email/inbound";
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn,
@@ -5235,7 +5235,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const fork = await forkWorkspace({
       sql: this.boundSql,
       actor: this.rt.actor,
-      // One snapshot of the workspace files, streamed through ranged reads: a fork holds one frame, never a whole file.
+      // One pin of the workspace files, exported a page and a frame of chunks at a time: a fork holds one frame.
       vfs: createWorkspaceForkSource(this.hostedWorkspace().bundle),
       artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
       sourceName: this.name,
@@ -5294,7 +5294,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Per-activation receiver cache (running hash, in-progress temp); transfer state lives in SQLite.
+   * Per-activation receiver cache; transfer state lives in SQLite.
    * Keyed by transfer id, which is per delivery, so a retry under a new id must rebuild it.
    */
   private forkReceiver: { transferId: string; receiver: ForkTransferReceiver } | null = null;
@@ -5311,7 +5311,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const receiver = new ForkTransferReceiver(
       writer,
-      createWorkspaceForkSink(this.hostedWorkspace().bundle, transferId),
+      createWorkspaceForkSink(this.hostedWorkspace().bundle),
     );
 
     this.forkReceiver = { transferId, receiver };
@@ -5325,11 +5325,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     forkName: string,
     frame: ForkFrame,
     ownerUserId: string,
-  ): Promise<
-    | { ok: true; status: 'staged' }
-    | { ok: true; status: 'published'; agentId: string; capabilityHash: string | null; forkPointMs: number }
-    | { ok: false; reason: 'owned_by_another_user' }
-  > {
+  ): Promise<ForkFrameAck> {
     if (!ownerUserId) throw new KinuError('bad_input', 'fork owner is required');
     const currentOwner = this.getOwnerUserId();
 
@@ -5351,23 +5347,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const receiver = this.#forkReceiverFor(forkName, frame.transferId, ownerUserId);
     const outcome = await receiver.accept(frame);
 
-    if (outcome.status === 'staged') return { ok: true, status: 'staged' };
-
-    // Copied approval rows key the source scope, so copied instruction files start unverified.
-    if (outcome.status === 'settled') {
-      return {
-        ok: true, status: 'published', agentId: this.ctx.id.toString(),
-        capabilityHash: await this.workspaceCapabilityHash(), forkPointMs: outcome.result.forkPointMs,
-      };
+    // Publication does this once; an already-settled transfer only answers with the fork that landed.
+    if (outcome.status === 'published') {
+      await this.ensureOwnedScaffold();
+      await this.resetWorkspaceBaseline();
     }
 
-    await this.ensureOwnedScaffold();
-    await this.resetWorkspaceBaseline();
-
-    return {
-      ok: true, status: 'published', agentId: this.ctx.id.toString(),
+    const accepted = outcome.status === 'staged' || outcome.status === 'want' ? outcome : {
+      status: 'published' as const, agentId: this.ctx.id.toString(),
       capabilityHash: await this.workspaceCapabilityHash(), forkPointMs: outcome.result.forkPointMs,
     };
+
+    return { ok: true, ...accepted };
   }
 
 
