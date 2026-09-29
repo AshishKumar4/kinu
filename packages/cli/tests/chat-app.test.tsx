@@ -806,7 +806,11 @@ test('/clear shows the emptied request\'s number, or none with the reason when i
     if (!local) throw new Error('the fixture is local');
 
     local.clearConversation = async () => {
-      if (ends === 'unmeasured') return new KinuError('unavailable', 'the profile catalog is unreachable');
+      if (ends === 'unmeasured') {
+        agent.emit({ type: 'broadcast', event: { type: 'context_fill' } });
+
+        return new KinuError('unavailable', 'the profile catalog is unreachable');
+      }
 
       agent.emit({ type: 'broadcast', event: { type: 'context_fill', contextTokens: 3_000, contextWindow: 200_000 } });
 

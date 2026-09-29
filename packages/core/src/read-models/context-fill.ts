@@ -13,12 +13,12 @@ export function contextFill(measures: ContextMeasures, catalogWindow: number | n
   const window = gate?.contextWindow ?? catalogWindow;
 
   if (gate !== null && (provider === null || newer(gate, provider))) {
-    return { tokens: gate.tokens, window: gate.contextWindow, source: 'gate', at: gate.at };
+    return gate.tokens === null ? null : { tokens: gate.tokens, window: gate.contextWindow, source: 'gate', at: gate.at };
   }
 
   return provider === null ? null : { tokens: provider.tokens, window, source: 'provider', at: provider.at };
 }
 
-function newer(a: ContextMeasureRow, b: ContextMeasureRow): boolean {
+function newer(a: Pick<ContextMeasureRow, 'at' | 'seq'>, b: Pick<ContextMeasureRow, 'at' | 'seq'>): boolean {
   return a.at === b.at ? a.seq > b.seq : a.at > b.at;
 }

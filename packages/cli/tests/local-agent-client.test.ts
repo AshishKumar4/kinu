@@ -163,7 +163,7 @@ function gateSizes(client: LocalAgentClient): number[] {
   const sizes: number[] = [];
 
   client.subscribe((event) => {
-    if (event.type === 'run-event' && event.event.type === 'context_admitted') sizes.push(event.event.tokens);
+    if (event.type === 'run-event' && event.event.type === 'context_admitted' && event.event.tokens !== null) sizes.push(event.event.tokens);
   });
 
   return sizes;
@@ -767,6 +767,29 @@ describe('LocalAgentClient', () => {
     expect(status.context?.source).toBe('gate');
     expect(status.context?.tokens).toBeLessThan(lastTurn);
     expect(unmeasured).toBeNull();
+  });
+
+  test('a /clear whose measure failed reads as unmeasured after a reload, not as the cleared conversation\'s number', async () => {
+    let unreachable = false;
+
+    const { client, home } = setup(fakeModel('noted'), async () => {
+      if (unreachable) throw new Error('the profile catalog is unreachable');
+
+      return null;
+    });
+
+    await client.connect();
+    await client.send('remember the word heron', { cwd: '/work' });
+    unreachable = true;
+    await client.localControls.clearConversation();
+    await client.close();
+
+    const reopened = openPersistentClient(home, fakeModel('noted'), { noTranscript: true });
+    await reopened.connect();
+    const status = await reopened.status();
+    await reopened.close();
+
+    expect(status.context).toBeNull();
   });
 
   test('/clear whose measure fails still clears, and returns why no number exists', async () => {

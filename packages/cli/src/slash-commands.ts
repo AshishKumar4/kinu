@@ -178,7 +178,7 @@ export function resolveCommandDraft(commands: readonly SlashCommandInfo[], draft
 }
 
 export type SlashOutcome =
-  | { kind: 'text'; text: string; cleared?: true; unmeasured?: true; copy?: string; workspaces?: true }
+  | { kind: 'text'; text: string; cleared?: true; copy?: string; workspaces?: true }
   | { kind: 'status'; status: AgentClientStatus }
   | { kind: 'changelog'; view: AgentChangelogView }
   | { kind: 'takes'; set: AlternateTakeSet }
@@ -494,10 +494,7 @@ async function clearCommand({ client, command }: SlashContext): Promise<SlashOut
   const unmeasured = await client.localControls.clearConversation();
   const text = 'A new conversation starts with the next message.';
 
-  // No true number exists: the header shows none rather than the cleared conversation's.
-  return unmeasured === null
-    ? { kind: 'text', text, cleared: true }
-    : { kind: 'text', text: `${text} Its size could not be measured: ${unmeasured.message}`, cleared: true, unmeasured: true };
+  return { kind: 'text', text: unmeasured === null ? text : `${text} Its size could not be measured: ${unmeasured.message}`, cleared: true };
 }
 
 async function copyCommand({ client }: SlashContext): Promise<SlashOutcome> {
