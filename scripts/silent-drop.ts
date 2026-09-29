@@ -50,9 +50,8 @@
  *   - A promise stored, returned, or collected into an array and never awaited.
  *     That is a type-level fact. `tsc` has it; oxlint's type-aware pass is not
  *     enabled in this repo, so `typescript/no-floating-promises` cannot run.
- *   - A wrapper FACTORY that drops `cause` (`throw makeVfsError(msg)`). Whether it
- *     chains is inside the factory, so a caller-side verdict would be a guess.
- *     `parent.ts`'s `makeVfsError` does chain.
+ *   - A wrapper factory that drops `cause`. Whether it chains is inside the
+ *     factory, so a caller-side verdict would be a guess.
  *   - Anything outside `readSources()`. Test code is out for the same reason
  *     `no-swallow`'s denominator excludes it: a swallow in a fixture is a fixture.
  *

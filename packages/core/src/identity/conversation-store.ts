@@ -39,18 +39,19 @@ export async function answersForDrainTurns(
   const answers = new Map<string, string>();
   const wanted = new Set(drainTurnIds);
 
+  // The newest window, oldest first: an index into it is not a position once older entries fall outside.
   const entries = transcript.entries();
 
-  for (const ask of [...entries].reverse()) {
-    if (answers.size === wanted.size) break;
+  for (let at = entries.length - 1; at >= 0 && answers.size < wanted.size; at--) {
+    const ask = entries[at];
 
-    if (ask.role !== 'user') continue;
+    if (ask?.role !== 'user') continue;
     const parsed = v.safeParse(DrainTurnMetadataSchema, await transcript.metadata(ask.id));
     const drainTurnId = parsed.success ? parsed.output.drainTurnId : undefined;
 
     if (drainTurnId === undefined || !wanted.has(drainTurnId) || answers.has(drainTurnId)) continue;
 
-    for (const reply of entries.slice(ask.position + 1).reverse()) {
+    for (const reply of entries.slice(at + 1).reverse()) {
       if (reply.role !== 'assistant' || reply.turnId !== ask.turnId) continue;
       const answer = await transcript.project(reply.id);
 

@@ -7,7 +7,7 @@ import * as v from 'valibot';
 import { raceAbort } from '@kinu.run/agent-utils';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
 import type { VFS } from '../types/primitives';
-import { isVfsError, makeVfsError, type VfsError } from '../vfs/errno';
+import { isVfsError, toVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { readExecSignal } from './signal';
 import { commandResult, existsTool } from './exec-result';
@@ -48,11 +48,14 @@ function parentCall<T>(path: string, operate: () => Promise<T>): Effect.Effect<T
     try: operate,
     catch: (error) => {
       const cause = error instanceof Error && 'cause' in error ? error.cause : error;
-      const code = isVfsError(cause) ? cause.code : 'EIO';
+      const normalized = toVfsError(cause, path);
+      const code = isVfsError(normalized) ? normalized.code : 'EIO';
       const message = renderThrownChain({ cause });
       const prefix = `${code}:`;
+      const suffix = `, '${path}'`;
+      const detail = message.startsWith(prefix) ? message.slice(prefix.length).trimStart() : message;
 
-      return makeVfsError(code, message.startsWith(prefix) ? message.slice(prefix.length).trimStart() : message, path);
+      return new VfsError(code, detail.endsWith(suffix) ? detail.slice(0, -suffix.length) : detail, path, { cause: error });
     },
   });
 }

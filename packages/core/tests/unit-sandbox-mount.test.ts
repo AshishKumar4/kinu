@@ -10,7 +10,7 @@ import { TurnContextBudget } from '../src/context-budget';
 import { createSandboxExecutor, WORKSPACE_BACKUP_DIR, type SandboxHandle } from '../src/execution/sandbox';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
-import { isVfsError } from '../src/vfs/errno';
+import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { standardMounts, withMountTable } from '../src/vfs/mounts';
 import { bytesToBase64 } from '../src/utils/base64';
 import type { VFS } from '../src/types/primitives';

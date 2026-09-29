@@ -5,37 +5,13 @@
 
 import * as fs from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import type { FileCheckpoints, FileReach, MountedVfs, VFS, VfsErrorCode } from '@kinu.run/core';
-import { ERRNO, LEGACY_WORKSPACE_ROOT, makeVfsError, SLATES_ROOT, WORKSPACE_ROOT } from '@kinu.run/core';
+import type { FileCheckpoints, FileReach, MountedVfs, VFS } from '@kinu.run/core';
+import { LEGACY_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from '@kinu.run/core';
+import { toVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { tolerateAsync } from '@kinu.run/core/obs';
-import * as v from 'valibot';
 
-const nodeErrorSchema = v.object({
-  code: v.optional(v.string()),
-  message: v.optional(v.string()),
-});
-
-function isVfsErrorCode(code: string): code is VfsErrorCode {
-  return code in ERRNO;
-}
-
-/** node:fs errno → core VfsError. Codes core does not model (EMFILE, ELOOP, …)
- *  pass through untranslated. */
-function nodeError(input: { error: unknown }): v.InferOutput<typeof nodeErrorSchema> | null {
-  const parsed = v.safeParse(nodeErrorSchema, input.error);
-
-  return parsed.success ? parsed.output : null;
-}
-
-function throwVfsError(input: { error: unknown; syscall: string; path: string }): never {
-  const error = nodeError(input);
-
-  if (error?.code && isVfsErrorCode(error.code)) {
-    const message = error.message ?? String(input.error);
-    throw makeVfsError(error.code, `${message}, ${input.syscall} '${input.path}'`, input.path);
-  }
-
-  throw input.error;
+function throwVfsError(input: { error: unknown; path: string }): never {
+  throw toVfsError(input.error, input.path);
 }
 
 function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefined): VFS {
@@ -51,7 +27,7 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
         return opts?.encoding === 'utf-8' || opts?.encoding === 'utf8'
           ? await fs.readFile(path, 'utf-8')
           : new Uint8Array(await fs.readFile(path));
-      } catch (error) { throwVfsError({ error, syscall: 'open', path }); }
+      } catch (error) { throwVfsError({ error, path }) }
     },
     async writeFile(path, data) {
       await snapshot(path, 'file write');
@@ -59,28 +35,28 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
       try {
         await fs.mkdir(dirname(path), { recursive: true });
         await fs.writeFile(path, data);
-      } catch (error) { throwVfsError({ error, syscall: 'open', path }); }
+      } catch (error) { throwVfsError({ error, path }) }
     },
     async readdir(path) {
       try { return await fs.readdir(path); }
-      catch (error) { throwVfsError({ error, syscall: 'scandir', path }); }
+      catch (error) { throwVfsError({ error, path }) }
     },
     async stat(path) {
       try {
         const s = await tolerateAsync(() => fs.stat(path), 'enoent');
 
         return s === undefined ? null : { size: s.size, mtimeMs: s.mtimeMs, isDir: s.isDirectory() };
-      } catch (error) { throwVfsError({ error, syscall: 'stat', path }); }
+      } catch (error) { throwVfsError({ error, path }) }
     },
     async unlink(path) {
       await snapshot(path, 'file delete');
 
       try { await fs.rm(path, { recursive: true, force: true }); }
-      catch (error) { throwVfsError({ error, syscall: 'unlink', path }); }
+      catch (error) { throwVfsError({ error, path }) }
     },
     async mkdir(path, opts) {
       try { await fs.mkdir(path, { recursive: opts?.recursive ?? false }); }
-      catch (error) { throwVfsError({ error, syscall: 'mkdir', path }); }
+      catch (error) { throwVfsError({ error, path }) }
     },
     async exists(path) {
       return await tolerateAsync(() => fs.stat(path), 'enoent') !== undefined;
@@ -105,7 +81,7 @@ function cwdPlaneLocator(cwd: string): (path: string) => { readonly hostPath: st
 
     if (mapped !== null && withinRoot(root, mapped)) return { hostPath: mapped, outside: false };
 
-    throw makeVfsError('EACCES', `path escapes the workspace directory ${root}: ${path}; name a file outside it by its absolute path`, path);
+    throw new VfsError('EACCES', `path escapes the workspace directory ${root}: ${path}; name a file outside it by its absolute path`, path);
   };
 }
 

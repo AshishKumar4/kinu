@@ -4,7 +4,7 @@ import { createMemoryVfs } from '@kinu.run/test-utils';
 import { withMountTable } from '../src/vfs/mounts';
 import { mossaicVfs, type MossaicClient } from '../src/vfs/mossaic-vfs';
 import { sharedDriveMount, SHARED_DRIVE_UNCLAIMED } from '../src/vfs/shared-drive';
-import { isVfsError, type VfsErrorCode } from '../src/vfs/errno';
+import { isVfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { FakeMossaicError, fakeMossaic, type FakeMossaic } from '@kinu.run/test-utils';
 
 const SHARED_ROOT = '/shared';
