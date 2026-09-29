@@ -10,6 +10,7 @@ import {
   textRenderOf, viewerKindOf,
 } from "@kinu.run/core";
 import { requestUrl } from '@kinu.run/core';
+import { VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 
 describe("sortDirEntries", () => {
   test("dirs before files, alphabetical within each group", () => {
@@ -641,7 +642,7 @@ describe("readExecutorFile bounds the preview before it reads", () => {
 });
 
 describe("getExecutorFiles isolates one child's failure", () => {
-  function makePoisonedDir(poisoned: string, code = "ENOENT") {
+  function makePoisonedDir(poisoned: string, code: VfsErrorCode = 'ENOENT') {
     const names = ["alpha", "beta.txt", poisoned];
 
     const files: VFS = {
@@ -650,7 +651,7 @@ describe("getExecutorFiles isolates one child's failure", () => {
       readdir: async () => names,
       stat: async (path) => {
         if (path === `/home/main/${poisoned}`) {
-          throw Object.assign(new Error(`${code}: the plane said so`), { code });
+          throw new VfsError(code, 'the plane said so', path);
         }
 
         if (path === "/home/main/alpha") return { size: 0, mtimeMs: 0, isDir: true };
@@ -681,7 +682,7 @@ describe("getExecutorFiles isolates one child's failure", () => {
 
   test("a child the plane REFUSED propagates — an outage is not a sizeless file", async () => {
     // A permission or I/O fault is an outage, not an entry with no metadata.
-    for (const code of ["EACCES", "EIO"]) {
+    for (const code of ['EACCES', 'EIO'] as const) {
       const out = await getExecutorFiles(makePoisonedDir("locked", code), "workspace", "/home/main");
       expect(out.entries).toBeUndefined();
       expect(out.error).toContain(code);

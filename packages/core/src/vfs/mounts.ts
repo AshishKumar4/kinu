@@ -8,7 +8,7 @@ import type { VFS, VfsEntryStat } from '../types/primitives';
 import type { FilesOwner } from '../safety/approval-gate';
 import { renderThrownChain } from '../obs/index';
 import { nanoid } from '../utils/nanoid';
-import { isVfsError, makeVfsError } from './errno';
+import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 
 export interface VfsMount {
 	readonly name: string;
@@ -65,7 +65,7 @@ export function standardMounts(provider: (name: string) => MountableProvider | u
 }
 
 function absentError(mount: VfsMount, path: string): Error {
-	return makeVfsError('ENXIO', `/${mount.name}: ${mount.absentReason()}`, path);
+	return new VfsError('ENXIO', `/${mount.name}: ${mount.absentReason()}`, path);
 }
 
 /** Native mutations the composite plane forwards where the routed tree has them. */
@@ -111,12 +111,10 @@ export async function readBoundedWithVfsOps(
 	if (native) return native.call(files, path, 0, limit);
 
 	if (size === null || size > limit) {
-		throw makeVfsError(
-			'EPERM',
+		throw new VfsError('EPERM',
 			`this file plane has no ranged read, so ${size === null ? 'a file of unknown size' : `${String(size)} bytes`}`
 			+ ` cannot be previewed within ${String(limit)}: download it instead`,
-			path,
-		);
+			path,);
 	}
 
 	const raw = await files.readFile(path);
@@ -185,7 +183,7 @@ export type TreeRemoval =
 export async function removeTreeWithVfsOps(files: VFS, path: string): Promise<TreeRemoval> {
 	const st = await files.stat(path);
 
-	if (!st) throw makeVfsError('ENOENT', 'no such file or directory', path);
+	if (!st) throw new VfsError('ENOENT', 'no such file or directory', path);
 
 	const pending: string[] = [path];
 	const order: string[] = [];
@@ -256,14 +254,12 @@ export interface CarrySide {
 export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promise<void> {
 	const sourceStat = await from.files.stat(from.path);
 
-	if (!sourceStat) throw makeVfsError('ENOENT', 'no such file or directory', from.path);
+	if (!sourceStat) throw new VfsError('ENOENT', 'no such file or directory', from.path);
 
 	if (sourceStat.isDir) {
-		throw makeVfsError(
-			'EPERM',
+		throw new VfsError('EPERM',
 			'a directory cannot be renamed here: this plane has no native rename, and only a file\'s bytes can be carried',
-			from.path,
-		);
+			from.path,);
 	}
 
 	const payload = await from.files.readFile(from.path);
@@ -276,7 +272,7 @@ export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promi
 	await to.files.writeFile(temp, payload);
 
 	if (!(await to.files.exists(temp))) {
-		throw makeVfsError('EIO', `the staged copy at ${temp} is not there after writing it`, from.path);
+		throw new VfsError('EIO', `the staged copy at ${temp} is not there after writing it`, from.path);
 	}
 
 	try {
@@ -289,7 +285,7 @@ export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promi
 
 			// The staged copy is the last witness, so the destination is confirmed before it goes.
 			if (!(await to.files.exists(to.path))) {
-				throw makeVfsError('EIO', `the copy at ${to.path} is not there after writing it`, to.path);
+				throw new VfsError('EIO', `the copy at ${to.path} is not there after writing it`, to.path);
 			}
 
 			await to.files.unlink(temp);
@@ -303,7 +299,7 @@ export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promi
 
 			if (await to.files.exists(temp)) await to.files.unlink(temp);
 		} catch (rollback) {
-			throw makeVfsError('EIO', `the rename failed (${renderThrownChain({ cause })}) and rollback failed (${renderThrownChain({ cause: rollback })})`, to.path);
+			throw new VfsError('EIO', `the rename failed (${renderThrownChain({ cause })}) and rollback failed (${renderThrownChain({ cause: rollback })})`, to.path, { cause: rollback });
 		}
 
 		throw cause;
@@ -381,11 +377,9 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 
 			if (segment === '..') {
 				if (segments.length === 0) {
-					throw makeVfsError(
-						'EPERM',
+					throw new VfsError('EPERM',
 						'a mounted path cannot traverse outside its mount point',
-						path,
-					);
+						path,);
 				}
 
 				segments.pop();
@@ -426,7 +420,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 		if (!('mount' in routed)) return op(base, path);
 
 		if (routed.native === '/') {
-			throw makeVfsError('EPERM', `a mount point cannot be ${operation}`, path);
+			throw new VfsError('EPERM', `a mount point cannot be ${operation}`, path);
 		}
 
 		const files = routed.mount.files();
@@ -446,7 +440,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 		},
 		readFileAtRevision(path, revision, range) {
 			return delegate(path, (files, native) => {
-				if (!files.readFileAtRevision) throw makeVfsError('ENOTSUP', 'this file plane does not retain file revisions', path);
+				if (!files.readFileAtRevision) throw new VfsError('ENOTSUP', 'this file plane does not retain file revisions', path);
 
 				return files.readFileAtRevision(native, revision, range);
 			});
@@ -465,11 +459,9 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 		writeFileIfRevision(path, data, expectedRevision) {
 			return mutate(path, 'written', (files, native) => {
 				if (!files.writeFileIfRevision) {
-					throw makeVfsError(
-						'ENOTSUP',
+					throw new VfsError('ENOTSUP',
 						'this file plane does not support revision-checked writes',
-						path,
-					);
+						path,);
 				}
 
 				return files.writeFileIfRevision(native, data, expectedRevision);
@@ -524,14 +516,14 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 			const to = routeOf(newPath);
 
 			if (('mount' in from && from.native === '/') || ('mount' in to && to.native === '/')) {
-				throw makeVfsError('EPERM', 'a mount point cannot be renamed', oldPath);
+				throw new VfsError('EPERM', 'a mount point cannot be renamed', oldPath);
 			}
 
 			if ('mount' in from && 'mount' in to) {
 				if (from.mount !== to.mount) {
 					filesForMount(from.mount, oldPath);
 					filesForMount(to.mount, newPath);
-					throw makeVfsError('EPERM', 'cannot rename across VFS mount boundaries', oldPath);
+					throw new VfsError('EPERM', 'cannot rename across VFS mount boundaries', oldPath);
 				}
 
 				const files = filesForMount(from.mount, oldPath);
@@ -548,12 +540,12 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 
 			if ('mount' in from) {
 				filesForMount(from.mount, oldPath);
-				throw makeVfsError('EPERM', 'cannot rename across VFS mount boundaries', oldPath);
+				throw new VfsError('EPERM', 'cannot rename across VFS mount boundaries', oldPath);
 			}
 
 			if ('mount' in to) {
 				filesForMount(to.mount, newPath);
-				throw makeVfsError('EPERM', 'cannot rename across VFS mount boundaries', oldPath);
+				throw new VfsError('EPERM', 'cannot rename across VFS mount boundaries', oldPath);
 			}
 
 			const native = nativeOps(base).rename;
@@ -561,10 +553,10 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 			if (native) return native.call(base, oldPath, newPath);
 			const st = await base.stat(oldPath);
 
-			if (!st) throw makeVfsError('ENOENT', 'no such file or directory', oldPath);
+			if (!st) throw new VfsError('ENOENT', 'no such file or directory', oldPath);
 
 			if (st.isDir) {
-				throw makeVfsError('EPERM', 'a directory cannot be renamed here: this route has no native rename, and only a file\'s bytes can be carried', oldPath);
+				throw new VfsError('EPERM', 'a directory cannot be renamed here: this route has no native rename, and only a file\'s bytes can be carried', oldPath);
 			}
 
 			await carryFileWithVfsOps(
@@ -582,11 +574,9 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 
 				// The partial-removal record rides the error; the failing entry keeps its code.
 				if (!removal.ok) {
-					throw makeVfsError(
-						isVfsError(removal.failed.cause) ? removal.failed.cause.code : 'EIO',
+					throw new VfsError(isVfsError(removal.failed.cause) ? removal.failed.cause.code : 'EIO',
 						partialTreeRemovalMessage(native, removal),
-						native,
-					);
+						native,);
 				}
 			});
 		},
@@ -596,7 +586,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 				const range = nativeOps(files).readRange;
 
 				// ENOTSUP, not EPERM: callers like the `file` scan fall back on this code.
-				if (!range) throw makeVfsError('ENOTSUP', 'this plane serves no ranged read', path);
+				if (!range) throw new VfsError('ENOTSUP', 'this plane serves no ranged read', path);
 
 				return range.call(files, native, offset, length);
 			});
@@ -638,7 +628,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 
 		// A mount with no readlink reports no link, so none is asked of it.
 		table.readlink = (path) => delegate(path, async (files, native) => {
-			if (!files.readlink) throw makeVfsError('ENOTSUP', 'this plane serves no readlink', path);
+			if (!files.readlink) throw new VfsError('ENOTSUP', 'this plane serves no readlink', path);
 
 			return files.readlink(native);
 		});

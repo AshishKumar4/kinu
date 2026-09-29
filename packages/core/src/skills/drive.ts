@@ -12,7 +12,7 @@ import * as v from 'valibot';
 import { classifyErrorCode, KinuError, renderThrownChain, type ErrorCode } from '../obs/error';
 import { settle, settleSync } from '../obs/effect';
 import { DRIVE_RESERVED_DIRS, DRIVE_SKILLS_DIR } from '../vfs/shared-drive';
-import { isVfsError, type VfsErrorCode } from '../vfs/errno';
+import { isVfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import type { MossaicVfs } from '../vfs/mossaic-vfs';
 import type { VfsListedEntry } from '../vfs/mounts';
 import { looksLikeZip, packZip, unpackZip, type ZipEntry } from '../utils/zip';
@@ -78,22 +78,23 @@ export const DriveUploadTargetSchema: v.GenericSchema<DriveUploadTarget> = v.var
   v.strictObject({ kind: v.literal('skill'), name: v.nullable(v.string()) }),
 ]);
 
-const VFS_FAILURE_CODES: Readonly<Record<VfsErrorCode, ErrorCode>> = {
+/** Drive's refusal vocabulary; adopting Nimbus's errno class does not change it. */
+const VFS_FAILURE_CODES: Partial<Record<VfsErrorCode, ErrorCode>> = {
   ENOENT: 'missing',
+  ENOTSUP: 'unsupported',
+  EROFS: 'denied',
   EEXIST: 'bad_input',
   EISDIR: 'bad_input',
   ENOTDIR: 'bad_input',
   ENOTEMPTY: 'bad_input',
-  EACCES: 'denied',
-  EPERM: 'denied',
-  ENOTSUP: 'unsupported',
   ENXIO: 'unavailable',
   EIO: 'io',
-  EROFS: 'denied',
+  EACCES: 'denied',
+  EPERM: 'denied',
 };
 
 export function driveFailure(input: { cause: unknown }): DriveFailure {
-  if (isVfsError(input.cause)) return { code: VFS_FAILURE_CODES[input.cause.code], error: input.cause.message };
+  if (isVfsError(input.cause)) return { code: VFS_FAILURE_CODES[input.cause.code] ?? 'io', error: input.cause.message };
   const code = classifyErrorCode(input);
 
   return { code: code ?? 'io', error: renderThrownChain(input) };
