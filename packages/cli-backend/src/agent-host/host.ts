@@ -77,7 +77,8 @@ import {
   readWorkspaceWork, type WorkspaceWork,
   isSubordinateOrigin, type SubordinateSeed,
 } from '@kinu.run/core';
-import { KinuError, attempt, diagnostics, refusalOf, settle, toKinuError, toWire, type Wire } from '@kinu.run/core/obs';
+import { Effect, Result } from 'effect';
+import { KinuError, attempt, diagnostics, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
 import {
   createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, shareLocalWorkspacePlane,
   buildLocalActorRuntime, cleanupFacetCwdScratch, writeTransaction,
@@ -274,8 +275,8 @@ export class LocalAgentHost {
 
   /** Session events stay live after an interactive client disconnects. */
   /** A task child's retire; a failure is the outcome. */
-  retireTaskChild(work: () => Promise<void>): Promise<Wire<void, KinuError>> {
-    return settle(toWire(attempt({ doing: 'retiring a task child after its answer', otherwise: 'io' }, work), (failure) => failure));
+  retireTaskChild(work: () => Promise<void>): Promise<Result.Result<void, KinuError>> {
+    return settle(Effect.result(attempt({ doing: 'retiring a task child after its answer', otherwise: 'io' }, work)));
   }
 
   subscribe(listener: AgentEventListener): () => void {
@@ -1447,7 +1448,7 @@ export class LocalAgentHost {
   /** A task agent's retire, off its turn and joined by close(). */
   private retireOffTurn(agent: string, work: () => Promise<void>): void {
     const pass: Promise<void> = this.retireTaskChild(work).then((outcome) => {
-      if (!outcome.ok) diagnostics.failure('host.task_child_release_failed', outcome.error, { agent });
+      if (Result.isFailure(outcome)) diagnostics.failure('host.task_child_release_failed', outcome.failure, { agent });
       this.answerPasses.delete(pass);
     });
 

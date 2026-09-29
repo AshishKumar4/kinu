@@ -1,6 +1,7 @@
 import { type DeferredApproval, type DeferredApprovalAnswer } from '@kinu.run/core';
 import { literalText } from '@kinu.run/core/tui';
-import { attempt, settle, toWire, type KinuError, type Wire } from '@kinu.run/core/obs';
+import { Effect, type Result } from 'effect';
+import { attempt, settle, type KinuError } from '@kinu.run/core/obs';
 import type { LocalSessionControls } from './agent-client';
 
 export const PARKED_USAGE = '/parked [approve|deny <id...|all> | always <id...>]';
@@ -65,8 +66,8 @@ function parkedNotice(actions: readonly DeferredApproval[], seen: ReadonlySet<st
 
 export function readParkedNotice(
   controls: Pick<LocalSessionControls, 'listDeferredApprovals'>, seen: Set<string>,
-): Promise<Wire<string | null, KinuError>> {
-  return settle(toWire(attempt(
+): Promise<Result.Result<string | null, KinuError>> {
+  return settle(Effect.result(attempt(
     { doing: 'reading the commands parked for your approval', otherwise: 'unavailable' },
     async () => {
       const actions = await controls.listDeferredApprovals();
@@ -77,5 +78,5 @@ export function readParkedNotice(
 
       return notice;
     },
-  ), (failure) => failure));
+  )));
 }

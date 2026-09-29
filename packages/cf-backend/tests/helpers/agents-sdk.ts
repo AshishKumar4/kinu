@@ -563,13 +563,15 @@ export function mockAgentsSdk(): void {
     ...workersModule,
     tracing: {
       enterSpan: <T>(name: string, fn: (span: NativeSpanStub) => T): T => {
-        const { attributes, close } = openNativeSpan(name);
+        const { attributes, exceptions, close, setAttributes } = openNativeSpan(name);
         let closesLater = false;
 
         try {
           const result = fn({
             isTraced: true,
             setAttribute: (key: string, value: string | number | boolean) => { attributes.set(key, value); },
+            setAttributes,
+            recordException: (failure) => { exceptions.push(failure); },
           });
 
           if (result instanceof Promise) {
@@ -590,11 +592,13 @@ export function mockAgentsSdk(): void {
         name: string,
         fn: (span: NativeSpanStub & { end(): void }) => T,
       ): T => {
-        const { attributes, close } = openNativeSpan(name);
+        const { attributes, exceptions, close, setAttributes } = openNativeSpan(name);
 
         return fn({
           isTraced: true,
           setAttribute: (key: string, value: string | number | boolean) => { attributes.set(key, value); },
+          setAttributes,
+          recordException: (failure) => { exceptions.push(failure); },
           end: close,
         });
       },
@@ -605,6 +609,8 @@ export function mockAgentsSdk(): void {
 interface NativeSpanStub {
   readonly isTraced: boolean;
   setAttribute(key: string, value: string | number | boolean): void;
+  setAttributes(values: Record<string, string | number | boolean>): void;
+  recordException(failure: { name: string; code: string }): void;
 }
 
 export interface NativeSpanRecord {
@@ -612,6 +618,7 @@ export interface NativeSpanRecord {
   /** Index in `nativeSpans` of the span this opened inside, or null at a root. */
   readonly parent: number | null;
   readonly attributes: ReadonlyMap<string, string | number | boolean>;
+  readonly exceptions: readonly { name: string; code: string }[];
 }
 
 const nativeSpans: NativeSpanRecord[] = [];
@@ -621,11 +628,16 @@ const openSpans: number[] = [];
 function openNativeSpan(name: string) {
   const index = nativeSpans.length;
   const attributes = new Map<string, string | number | boolean>();
-  nativeSpans.push({ name, parent: openSpans.at(-1) ?? null, attributes });
+  const exceptions: { name: string; code: string }[] = [];
+  nativeSpans.push({ name, parent: openSpans.at(-1) ?? null, attributes, exceptions });
   openSpans.push(index);
 
   return {
     attributes,
+    exceptions,
+    setAttributes: (values: Record<string, string | number | boolean>): void => {
+      for (const [key, value] of Object.entries(values)) attributes.set(key, value);
+    },
     close: () => {
       const top = openSpans.lastIndexOf(index);
 

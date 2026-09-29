@@ -107,7 +107,7 @@ export {
 export {
   answerParentRpc, createParentExecutor, createParentWorkspaceVfs,
   type ParentWorkspaceHandle, type ParentExecResult,
-  type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
+  type ParentRpcWrite,
 } from './parent';
 
 export { sandboxFiles } from './sandbox';

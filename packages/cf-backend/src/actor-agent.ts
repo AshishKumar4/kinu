@@ -134,7 +134,7 @@ import {
   type PlanEdit, type PlanReview, type ReviewAnnotation,
   type PlanReviewDecision, type PlanReviewResult, type SubmitPlanToolDeps,
   answerParentRpc,
-  type ParentRpcResult, type ParentExecResult,
+  type ParentExecResult,
   type ParentRpcWrite,
   type TeamToolDeps, type PeersToolDeps, type ReportToolDeps,
   type SubordinateRuntime, type TemporaryAgentPort,
@@ -3381,7 +3381,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** A fork reaches these through its `parent` executor. No `@callable`: only a worker-held
    * parent stub can reach them. */
-  async readWorkspaceFile(path: string): Promise<ParentRpcResult<Uint8Array>> {
+  async readWorkspaceFile(path: string): Promise<Uint8Array> {
     return answerParentRpc(path, async () => {
       const content = await this.rt.localVfs.readFile(path);
 
@@ -3389,7 +3389,7 @@ export abstract class ActorAgent extends Agent<Env> {
     });
   }
 
-  async writeWorkspaceFile(input: ParentRpcWrite): Promise<ParentRpcResult<null>> {
+  async writeWorkspaceFile(input: ParentRpcWrite): Promise<null> {
     return answerParentRpc(input.path, async () => {
       if (input.kind === 'file') await this.rt.localVfs.writeFile(input.path, input.data);
       else await this.rt.localVfs.mkdir(input.path, { recursive: input.recursive });
@@ -3398,15 +3398,15 @@ export abstract class ActorAgent extends Agent<Env> {
     });
   }
 
-  async listWorkspaceFiles(path: string): Promise<ParentRpcResult<string[]>> {
+  async listWorkspaceFiles(path: string): Promise<string[]> {
     return answerParentRpc(path, () => this.rt.localVfs.readdir(path));
   }
 
-  async statWorkspaceFile(path: string): Promise<ParentRpcResult<{ size: number; mtimeMs: number; isDir: boolean } | null>> {
+  async statWorkspaceFile(path: string): Promise<{ size: number; mtimeMs: number; isDir: boolean } | null> {
     return answerParentRpc(path, () => this.rt.localVfs.stat(path));
   }
 
-  async deleteWorkspaceFile(path: string): Promise<ParentRpcResult<null>> {
+  async deleteWorkspaceFile(path: string): Promise<null> {
     return answerParentRpc(path, async () => {
       await this.rt.localVfs.unlink(path);
 
@@ -3416,7 +3416,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Run a command in this workspace's shell for a fork: one round trip instead of one RPC per
    * file through an emulated shell. */
-  async execWorkspaceCommand(command: string): Promise<ParentRpcResult<ParentExecResult>> {
+  async execWorkspaceCommand(command: string): Promise<ParentExecResult> {
     return answerParentRpc('', async () => {
       const shell = this.rt.shell;
 

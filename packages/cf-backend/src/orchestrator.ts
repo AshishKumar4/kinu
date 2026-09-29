@@ -231,7 +231,8 @@ import {
   WorkspacePlanReferenceSchema,
 } from "@kinu.run/core";
 import type { CodemodeProvider, MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
-import { attempt, authoredRefusal, classify, diagnostics, KinuError, refusalOf, renderThrownChain, settle, toKinuError, toWire, type Refusal, type Wire } from "@kinu.run/core/obs";
+import { Effect } from 'effect';
+import { attempt, authoredRefusal, classify, diagnostics, KinuError, refusalOf, renderThrownChain, settle, toKinuError, type Refusal } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork } from "./user/workspace-fork";
@@ -1238,27 +1239,32 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return Number.isFinite(at) ? at : null;
   }
 
-  private async drainHostedReactions(now: number): Promise<void> {
-    for (const record of this.workspaceActors().list()) {
-      if (!isSubordinateOrigin(record.origin) || record.retiringAt !== null) continue;
-      const reference = actorReferenceOf(record);
-      const log = new EventLog(this.boundExec(), this.actorHost().bindStores(reference).handle);
-      const dueAt = log.nextPendingDrainAt(now);
+  private drainHostedReactions(now: number): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      for (const record of this.workspaceActors().list()) {
+        if (!isSubordinateOrigin(record.origin) || record.retiringAt !== null) continue;
+        const reference = actorReferenceOf(record);
+        const log = new EventLog(this.boundExec(), this.actorHost().bindStores(reference).handle);
+        const dueAt = log.nextPendingDrainAt(now);
 
-      if (dueAt === null || dueAt > now) continue;
+        if (dueAt === null || dueAt > now) continue;
 
-      const drained = await this.drainHostedActor(reference);
-
-      if (!drained.ok) diagnostics.failure('event.hosted_wake_drain_failed', drained.error, { workspace: this.name, actor: record.name });
-    }
+        yield* Effect.tryPromise({
+          try: () => this.drainHostedActor(reference),
+          catch: (cause) => authoredRefusal({ doing: 'draining a hired agent', cause }),
+        }).pipe(Effect.catch((failure) => Effect.sync(() => {
+          diagnostics.failure('event.hosted_wake_drain_failed', failure, { workspace: this.name, actor: record.name });
+        })));
+      }
+    });
   }
 
-  /** One hired agent's due reactions, drained; a failure is the outcome. */
-  drainHostedActor(reference: ActorReference): Promise<Wire<void, KinuError>> {
-    return settle(toWire(attempt({ doing: 'draining a hired agent\'s reactions this wake was armed for', otherwise: 'io' }, async () => {
+  /** One hired agent's due reactions; failure rejects with a classified error. */
+  drainHostedActor(reference: ActorReference): Promise<void> {
+    return settle(attempt({ doing: 'draining a hired agent\'s reactions this wake was armed for', otherwise: 'io' }, async () => {
       await (await this.actorHost().acquire(reference)).session.orchestrator.drainPendingEvents({ rethrow: true });
       this.releaseIdleHosted(reference);
-    }), (failure) => failure));
+    }));
   }
 
   private settledTaskAgent(record: WorkspaceActor): boolean {
@@ -3119,28 +3125,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       // `nextWakeAt` folds `nextPendingDrainAt`, so pending events owe a drain here (D6). The condition
       // uses the same reader and clock as the re-arm so the two cannot disagree about whether it was due.
-      await tick.span('alarm.event_drain', async (span) => {
+      await tick.span('alarm.event_drain', (span) => settle(Effect.gen({ self: this }, function* () {
         const dueAt = this.eventLog.nextPendingDrainAt(now);
         span.setAttribute('kinu.drain_due', dueAt !== null && dueAt <= now);
-        await this.drainHostedReactions(now);
+        yield* this.drainHostedReactions(now);
 
         if (dueAt === null || dueAt > now) return;
 
-        try {
-          // Rethrow so a selection failure fails this span; the re-arm below retries, since the fold still
-          // answers due.
-          await this.orch.drainPendingEvents({ rethrow: true });
-        } catch (err) {
-          const failure = toKinuError({
-            doing: 'draining the reactions this wake was armed for',
-            cause: err,
-            otherwise: 'io',
-          });
-
+        // Rethrow so a selection failure fails this span; the re-arm below retries, since the fold still
+        // answers due.
+        yield* attempt({ doing: 'draining the reactions this wake was armed for', otherwise: 'io' },
+          () => this.orch.drainPendingEvents({ rethrow: true })).pipe(Effect.catch((failure) => Effect.sync(() => {
           span.fail(failure);
           diagnostics.failure('event.wake_drain_failed', failure);
-        }
-      });
+        })));
+      })));
 
       await tick.span('alarm.evolution_answer', async (span) => {
         let failed = false;

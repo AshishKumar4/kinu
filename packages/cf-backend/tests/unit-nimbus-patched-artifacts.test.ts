@@ -309,11 +309,11 @@ describe('installed Nimbus dependency integrity', () => {
     // The root is the main agent's own directory, so its rm and its rewrite land.
     const removed = await agent.execWorkspaceCommand('rm -f /home/main/SOUL.md; echo "exit=$?"');
 
-    expect(removed.ok ? removed.value.stdout.trim() : removed.error.message).toBe('exit=0');
+    expect(removed.stdout.trim()).toBe('exit=0');
 
     const rewritten = await agent.execWorkspaceCommand('echo rewritten > /home/main/SOUL.md; echo "exit=$?"');
 
-    expect(rewritten.ok ? rewritten.value.stdout.trim() : rewritten.error.message).toBe('exit=0');
+    expect(rewritten.stdout.trim()).toBe('exit=0');
 
     // The next turn start reseals the file from the row: kernel 444, the owner's bytes.
     agent.harnessSupplyTurnModel(scriptedTurnModel({ doGenerate: () => ({
@@ -329,7 +329,7 @@ describe('installed Nimbus dependency integrity', () => {
     expect(doneFrames(sent)).toEqual([{ id: 'req-soul' }]);
     const kept = await agent.execWorkspaceCommand('cat /home/main/SOUL.md; stat -c %a /home/main/SOUL.md');
 
-    expect(kept.ok ? kept.value.stdout : kept.error.message).toBe(`${soul}444\n`);
+    expect(kept.stdout).toBe(`${soul}444\n`);
 
     // Neither the prompt's soul nor the status read ever sees the forged text.
     const status = await agent.getAgentStatus();

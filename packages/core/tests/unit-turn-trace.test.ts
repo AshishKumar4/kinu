@@ -14,7 +14,7 @@ import {
   type ProfileCatalog, type SubordinateHandoff, type SubordinateRosterEntry, type TeamToolDeps,
 } from '../src/index';
 import {
-  createAgentTracing, createRecordingTracer, SPAN_ATTR_ERROR,
+  createAgentTracing, createRecordingTracer,
 } from '../src/obs/index';
 import { analyticsDigest } from '../src/obs/analytics/privacy';
 
@@ -155,7 +155,7 @@ test('a turn records admitted, each step, tool run and delegation, and settled, 
     // The hosted actor, not the object's root, owns every span of its turn.
     expect(span.attributes.get('kinu.actor')).toBe(analyticsDigest(actor.handle.actorId));
     expect(span.attributes.get('kinu.actor_kind')).toBe('subordinate');
-    expect(span.attributes.has(SPAN_ATTR_ERROR)).toBe(false);
+    expect(span.exceptions).toEqual([]);
   }
 
   const values = spans.flatMap((span) => [...span.attributes.values()]).map(String);

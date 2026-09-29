@@ -9,7 +9,7 @@
 
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import type { ChatEvent } from '../chat';
 import type { CompactionTrigger } from '../extension';
 import { WORKSPACE_RUN_ID } from '../events/model-call';
@@ -18,7 +18,7 @@ import type { EventLog } from '../events/hub/log';
 import type { RunEventRecorder } from '../events/recorder';
 import type { RunEvent } from '../events/types';
 import type { CompletedTurn } from '../evolution/types';
-import { attempt, diagnostics, KinuError, renderThrownChain, settle as settleEffect, toKinuError, toWire, type Refusal } from '../obs/index';
+import { attempt, diagnostics, KinuError, renderThrownChain, settle as settleEffect, toKinuError, type Refusal } from '../obs/index';
 import { contextFill, type ContextFill } from '../read-models/context-fill';
 import { workModeForTurnMetadata } from '../prompting/surface';
 import { runOperationProfile } from '../profiles/operation';
@@ -617,12 +617,12 @@ export class ChatSession {
 
   /** A failed fold leaves the conversation as it was and arms nothing; a turn sent meanwhile waits. */
   compact(): Promise<void> {
-    const folded = (this.revision ?? Promise.resolve()).then(() => settleEffect(toWire(this.fold(), (failure) => failure)));
+    const folded = (this.revision ?? Promise.resolve()).then(() => settleEffect(Effect.result(this.fold())));
     const revision = folded.then(() => undefined);
     this.revision = revision;
     this.actorSession.orchestrator.track(revision.then(() => { if (this.revision === revision) this.revision = null; }), 'folding the conversation');
 
-    return folded.then((outcome) => settleEffect(outcome.ok ? Effect.void : Effect.fail(outcome.error)));
+    return folded.then((outcome) => settleEffect(Result.isSuccess(outcome) ? Effect.void : Effect.fail(outcome.failure)));
   }
 
   private fold(): Effect.Effect<void, KinuError> {
