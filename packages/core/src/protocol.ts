@@ -125,7 +125,7 @@ export interface PendingConsent {
 
 /** The Activity surface's payload. `latest.usage` and `latest.context` do not reconcile; unsourced values are null, never estimated. */
 export interface ActivitySnapshot {
-	/** Newest step with provider usage; null before the first measured step. */
+	/** Newest step reporting input tokens, supplying provider `fill` and its metadata even outside the telemetry sample. */
 	latest: {
 		at: number;
 		runId: string;

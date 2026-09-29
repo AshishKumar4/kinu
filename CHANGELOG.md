@@ -23,6 +23,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 ### Fixed
 
 - **A new hire in a fork cannot inherit another agent's private file access.** Fork imports remap workspace-local user and group IDs. Root-owned files stay root-owned; other files belong to the fork's main agent. Private source groups become root-only, not the group shared by every hire. File modes stay unchanged.
+- **Activity's context count keeps its own step's metadata.** A later step that reports output or cache usage but no input count no longer supplies the label, cache count or prompt breakdown for an earlier input measurement. The measured step stays paired with its count even after it leaves the telemetry sample.
 - **Background work a provider refuses for good stops retrying.** A turn's after-work (memory compression, naming the chat, prompt tuning and the like) whose model call is answered with a permanent refusal, such as a 404 from an AI Gateway route that no longer exists, ends after one attempt, shown once in the Activity log with the status the provider gave, and no longer wakes the workspace every minute to try again. The same goes for a request the provider refuses as malformed. Rate limits, timeouts, server errors and refusals you can fix yourself (an expired key, an empty balance, a denied permission) are still retried.
 
 ### Changed
