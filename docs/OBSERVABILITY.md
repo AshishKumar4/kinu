@@ -565,6 +565,8 @@ A function that can fail returns `Effect<A, KinuError>`; a file-plane function
 returns `Effect<A, VfsError>`. The file-plane class and `isVfsError` come from
 `@nimbus-sh/core/vfs/vfs-error.js`, the same class Nimbus commands recognize.
 Native filesystem errors are converted with its `toVfsError` at the host boundary.
+Shared presentation and the file tool use `renderErrorMessage` to keep Node's
+syscall/path punctuation. Nimbus's error object and its code, path and cause stay unchanged.
 A defect is anything else thrown or died; the runner is `obs/effect.ts`.
 
 | Function | What it does |

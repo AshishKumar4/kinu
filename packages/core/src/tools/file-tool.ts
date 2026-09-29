@@ -22,7 +22,7 @@ import { readFileHead, readFileText, scanFileWindow, type ScannedFile } from './
 import { TurnFileLedger, type FileEditOutcomeReason, type FileSeenNeed } from '../vfs/file-ledger';
 import { DEFAULT_TOOL_RESULT_MAX_CHARS, clampSerializedToolResult } from './clamp';
 import type { JsonObject, JsonValue } from '../utils/json';
-import { KinuError, renderThrownChain } from '../obs/index';
+import { KinuError, renderErrorMessage, renderThrownChain } from '../obs/index';
 import { permitInPlan, requireBuild } from '../execution/work-mode';
 import { uncheckpointedSentence } from '../execution/exec-result';
 import { RESIDENT_TEXT_MAX_BYTES } from '../vfs/mounts';
@@ -140,7 +140,7 @@ async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, p
     ? `: ${await vfsAddressingHint(vfs, 'the `file` tool\'s path')}`
     : '';
 
-  return { reason, error: `${err.message}${hint}` };
+  return { reason, error: `${renderErrorMessage(err)}${hint}` };
 }
 
 /** Shared by the native `file` tool and codemode's `workspace.writeFile`/`editFile`: one ledger, one refusal. */
