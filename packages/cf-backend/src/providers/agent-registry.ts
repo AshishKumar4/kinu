@@ -4,7 +4,7 @@ import {
   createProviderRegistry, createCodexProvider, createOpenAIProvider,
   createOpenRouterProvider, createOpenAICompatProvider, createAnthropicProvider, createClaudeProvider,
   createModelsDevCatalogSource,
-  type ProviderRegistry, type ProviderDeps, type ProviderEnv, type AuthResolver,
+  type ProviderRegistry, type ProviderDeps, type ProviderEnv, type AuthResolver, type AuthRequest,
   type ProviderWaitInfo,
   specProvider,
 } from '@kinu.run/core';
@@ -25,7 +25,7 @@ export interface UserCredentialClient extends CodexRelayHub {
   getAuthHeaders(
     caller: UserCaller,
     key: string,
-    opts?: { forceRefresh?: boolean },
+    opts?: AuthRequest,
   ): Promise<Record<string, string> | null>;
   listCredentials(caller: UserCaller): Promise<CredentialSummary[]>;
   getCredentialBaseURL(caller: UserCaller, key: string): Promise<string | null>;

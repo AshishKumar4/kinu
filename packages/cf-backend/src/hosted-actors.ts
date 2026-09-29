@@ -115,6 +115,8 @@ export interface HostedActorSeams {
   armWake(): void;
   rederiveWake(): void;
   temporary(actor: BoundActor): TemporaryAgentPort;
+  /** Inside the answer's transaction: the hirer's advisor answer is owed a delivery job. */
+  oweAdvice(actor: BoundActor): Promise<void>;
 }
 
 export function hostedDelegationBudget(
@@ -269,6 +271,7 @@ export async function relayHostedReport(
     }),
     announce: () => { seams.announce(hirer); },
     onAdmitted: () => { if (seams.host.hosted(parent)?.session.inFlight !== true) seams.scheduleDrain(hirer); },
+    evolutionAnswerStored: () => seams.oweAdvice(hirer),
     onEvolutionAnswer: () => { seams.rederiveWake(); },
     temporary: seams.temporary(hirer),
   }, { fromSubordinate: name, ...event }, Date.now());
@@ -373,7 +376,7 @@ export async function runHostedTask(
 
     if (chat?.observeStream !== undefined) inference.observeStream = chat.observeStream;
 
-    // The run bracket the local host writes via `ChatSession.processTurn`; `runHeadInference` bypasses
+    // The run bracket the local host writes via `ChatSession.runOpenedTurn`; `runHeadInference` bypasses
     // it (measured 2026-09-17 in the workerd pool: a hire's child ledger held only `step_finish`).
     // A thrown runner leaves the run open on purpose; the retry opens a new one.
     openTurnRun(actor.stores.eventRecorder, runId, {

@@ -156,6 +156,8 @@ function makeTeam() {
         }),
         release: async () => {},
         reclaim: () => null,
+        answered: () => [],
+        forget: () => {},
       },
       snapshot: () => [rosterEntry],
       list: async () => [rosterEntry],

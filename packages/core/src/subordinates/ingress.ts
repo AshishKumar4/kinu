@@ -53,7 +53,12 @@ export interface SubordinateIngressDeps {
   transaction<T>(body: () => T): T;
   announce(report: AdmittedSubordinateReport): void;
   onAdmitted(): void;
-  onEvolutionAnswer(): void;
+  /** Inside the transaction that stores an evolution helper's answer: a host with a durable job queue writes the
+   *  delivery job here, so the answer and its job land or vanish together; what it returns is awaited after the
+   *  commit (the queue's alarm re-arm). A host without one returns nothing: its stored answer is the owed delivery. */
+  evolutionAnswerStored(): Promise<void> | undefined;
+  /** After the answer is stored; a host with no durable job queue delivers the advisor's answer here. */
+  onEvolutionAnswer(): void | Promise<void>;
   temporary?: TemporaryAgentPort;
 }
 
@@ -85,11 +90,15 @@ export async function receiveSubordinateEvent(
       return { id: '', disposition: 'not_awaited' };
     }
 
-    deps.transaction(() => {
+    const queued = deps.transaction(() => {
       deps.roster.helpers.storeAnswer(input.fromSubordinate, input.status === 'blocked' ? 'blocked' : 'completed', answer);
       deps.roster.applyReport(input.fromSubordinate, input.status, input.origin, now);
+
+      return deps.evolutionAnswerStored();
     });
-    deps.onEvolutionAnswer();
+
+    await queued;
+    await deps.onEvolutionAnswer();
     deps.temporary?.release(input.fromSubordinate);
 
     return { id: '', disposition: 'admitted' };

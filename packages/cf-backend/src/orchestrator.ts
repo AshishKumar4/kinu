@@ -673,6 +673,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ),
       deferrals: () => this.deferralChannel(),
       refinementLane: () => async () => { await refinementPass(this.refinementDeps); },
+      advisorPort: (reference) => this.temporaryAgentPort(reference),
       chosenLoopOrigin: (record: WorkspaceActor) => this._chosenLoopOrigins.get(record.actorId) ?? null,
       chosenWriteObserver: (record: WorkspaceActor) => this._actorWriteObservers.get(record.actorId) ?? null,
     };
@@ -724,6 +725,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       armWake: () => { this.armDelegationWake(); },
       temporary: (actor) => this.temporaryAgentPort(actor.reference),
       rederiveWake: () => { this.armDurableWake(); },
+      oweAdvice: (actor) => this.advice.owe(actor.reference.actorId),
       register: async ({ creationId, loop }) => {
         const entry = await this.actorDirectory({
           action: 'register', creationId, name: explorationActorKey(creationId), origin: 'swarm', lifetime: 'task',
@@ -3103,6 +3105,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   // `(trigger_id, scheduled_fire_at)` makes a re-fire after eviction a no-op publish.
   // A wake is a separate invocation from whatever armed it; `tracing.invocation` revokes the handle
   // when this promise settles, so spans cannot cover both.
+  /** A hosted hirer's answers reach its own session; a retired hirer's went with it. */
+  protected override async deliverAdviceFor(actorId: string): Promise<boolean> {
+    if (actorId === this.actorHandle().actorId) return super.deliverAdviceFor(actorId);
+    const record = this.actorHost().describe(actorId);
+
+    if (record === null || record.retiringAt !== null || record.deletedAt !== null) return true;
+
+    return (await this.actorHost().acquire(actorReferenceOf(record))).session.deliverAdvisorAnswers();
+  }
+
   async _kinuTimerTick(): Promise<void> {
     const now = Date.now();
     await this.tracing.invocation('alarm', 'tick', async (tick) => {

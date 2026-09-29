@@ -31,7 +31,7 @@ import {
 } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError, type AgentTracing } from '@kinu.run/core/obs';
 import { createCFRuntime, type CFRuntime, type CFRuntimeHooks } from './runtime';
-import type { HostedNodeHome, LiveRead } from '@kinu.run/core';
+import type { HostedNodeHome, LiveRead, TemporaryAgentPort } from '@kinu.run/core';
 
 /** The root agents-SDK members a hosted actor's runtime borrows; projected from `Agent` so upstream drift fails to compile. */
 export type HostRootAgent = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber'>;
@@ -85,6 +85,8 @@ export interface WorkspaceHostSeams {
   /** The owner's needs-you queue: one per workspace. */
   deferrals(): DeferredApprovalChannel | undefined;
   refinementLane(bound: BoundActor & { readonly runtime: AgentRuntime }): () => Promise<void>;
+  /** The port a hosted actor hires its advisor through, as every hire goes; absent, none is reviewed. */
+  advisorPort?(reference: ActorReference): TemporaryAgentPort;
   /** The loop origin a creation site named for this actor, or null for the kind's default. */
   chosenLoopOrigin(record: WorkspaceActor): LoopOrigin | null;
   /**
@@ -329,6 +331,8 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
     },
 
     /** Releases the home and state subtree on destroy only; an archived actor keeps its files. */
+    advisorPort: (bound) => seams.advisorPort?.(bound.reference) ?? null,
+
     discardBytes: async (record: WorkspaceActor): Promise<void> => {
       if (record.origin !== 'system') await facetHomeReleaser(seams.homeHost())(hostedHomeName(record));
 

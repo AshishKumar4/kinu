@@ -1,20 +1,18 @@
-// The advisor: a second model reads a finished turn's record (no tools) and may say one thing about it.
-// Stateless: notes, LLM, delivery and recording arrive as arguments, so both backends share runAdvisorLane.
+// The advisor: an agent of its own reads a finished turn's record (no tools) and may say one thing about it.
+// Stateless: notes, delivery and recording arrive as arguments, so every reviewed actor shares deliverAdvisorReply.
 
 import * as v from 'valibot';
-import type { LLM } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
+import type { EvolutionLaneRequest } from '../identity/evolution-helpers';
 import type { AgentSignal, SendOutcome } from '../types/signals';
 import type { CompletedTurn, ToolCallRecord } from '../evolution/types';
 import { CompletedTurnSchema } from '../evolution/session-window';
 import { codemodeProgramOf, codemodeReaches } from '../tools/codemode-reach';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
-import { classifyErrorCode, diagnostics, tolerate, toKinuError, type ErrorCode } from '../obs/index';
-import { abortableSleep } from '../providers/pacing';
+import { tolerate } from '../obs/index';
 import { stableStringify } from '../safety/argument-digest';
 import { isJsonObject, type JsonObject, type JsonValue } from '../utils/json';
-import { recoveryBackoffMs } from '../utils/recovery-backoff';
 import { ADVISOR_SEVERITIES, isAdvisorSeverity, type AdvisorSeverity } from '../types/advisor';
 
 export {
@@ -333,22 +331,19 @@ export function parseAdvisorReply(raw: string): AdvisorNote | null {
   };
 }
 
-/** Attempts, never an elapsed deadline. */
-const ADVISOR_REVIEW_MAX_ATTEMPTS = 3;
+/** The preset the advisor is hired under (profiles/catalog.ts `SYSTEM_ROLE_DEFINITIONS`). */
+export const ADVISOR_ROLE_ID = 'advisor';
 
-/** Only these classified failures retry; an unclassified cause is definitive, never presumed transient. */
-const ADVISOR_TRANSIENT_CODES: readonly ErrorCode[] = ['unavailable', 'timeout', 'io'];
+const ADVISOR_LANE_PREFIX = 'advisor:';
 
-/** Null means no note; malformed output is recorded by the caller, not thrown: the turn already ended. */
-async function reviewCompletedTurn(deps: {
-  readonly llm: LLM;
-  readonly turn: CompletedTurn;
-  readonly reachable?: readonly string[];
-  readonly guidance?: string;
-}): Promise<AdvisorNote | null> {
-  const raw = await deps.llm.complete(buildAdvisorPrompt(deps.turn, deps.reachable ?? [], deps.guidance));
+/** The reviewed turn's lane on the reviewing actor's helper rows; the answer finds its turn by it. */
+export function advisorLane(turnId: string): EvolutionLaneRequest {
+  return { requestId: `${ADVISOR_LANE_PREFIX}${turnId}` };
+}
 
-  return parseAdvisorReply(raw);
+/** The turn an answered helper lane reviewed, or null for another lane's helper (a refiner). */
+export function advisedTurnOf(lane: EvolutionLaneRequest): string | null {
+  return lane.requestId.startsWith(ADVISOR_LANE_PREFIX) ? lane.requestId.slice(ADVISOR_LANE_PREFIX.length) : null;
 }
 
 /** A runtime-authored message says so (as {@link COMPLETION_GATE_HEADER}): the model only has the prose, and would
@@ -361,42 +356,35 @@ function advisorSignalText(note: AdvisorNote): string {
   return `${ADVISOR_HEADER}\n\n${ADVISOR_SEVERITY_LABEL[note.severity]}: ${note.note}`;
 }
 
-interface AdvisorLaneDeps {
-  readonly turn: CompletedTurn;
-  /** Routed, metered, and governed by the caller. */
-  readonly llm: LLM;
-  readonly minSeverity: AdvisorSeverity;
-  /** Normalised text of the notes already on the audit stream. */
-  readonly recent: readonly string[];
-  /** The completion gate has asked its question and not heard back. */
-  readonly gateOpen: boolean;
-  /** Empty when the caller cannot say. */
-  readonly reachable: readonly string[];
-  readonly guidance: string;
-  readonly send: (signal: AgentSignal) => Promise<SendOutcome>;
-  /** Turn id comes from the lane, not each backend: it joins the row to the conversation it graded. */
-  readonly record: (note: AdvisorNote, turnId: string | undefined) => void;
-  readonly actor?: ActorHandle;
-  readonly parent?: (signal: AgentSignal) => Promise<SendOutcome>;
-}
-
-/** Mirrors the lane's deps field for field so a recovered review judges the same turn; `recent` is snapshotted so
- *  dedupe uses the window the turn saw. Live seams (`llm`, `send`, `record`) and `gateOpen` are re-resolved. */
+/** What the advisor is hired on; recorded at the turn's end, so a replay reads the tool surface that turn had.
+ *  The note is judged when the answer arrives, against the floor and dedupe window of that moment. */
 export const AdvisorRecoverySnapshotSchema = v.object({
   turn: CompletedTurnSchema,
   reachable: v.array(v.string()),
-  minSeverity: v.picklist(ADVISOR_SEVERITIES),
-  recent: v.array(v.string()),
   model: v.optional(v.string()),
 });
 
 export type AdvisorRecoverySnapshot = v.InferOutput<typeof AdvisorRecoverySnapshotSchema>;
 
-/** The one turn-end policy every backend reaches through {@link reviewRecordedTurn}. Null when there was nothing to say. */
-async function runAdvisorLane(deps: AdvisorLaneDeps): Promise<AdvisorDisposition | null> {
-  const note = await reviewCompletedTurn({
-    llm: deps.llm, turn: deps.turn, reachable: deps.reachable, guidance: deps.guidance,
-  });
+/**
+ * The one turn-end policy every reviewed actor reaches: the advisor agent's reply, judged and delivered.
+ * Null when it said nothing readable.
+ */
+export async function deliverAdvisorReply(reply: string, deps: {
+  readonly turnId: string | undefined;
+  readonly minSeverity: AdvisorSeverity;
+  /** Normalised text of the notes already on the audit stream. */
+  readonly recent: readonly string[];
+  /** The completion gate has asked its question and not heard back. */
+  readonly gateOpen: boolean;
+  readonly send: (signal: AgentSignal) => Promise<SendOutcome>;
+  /** The turn id joins the row to the conversation it graded. */
+  readonly record: (note: AdvisorNote, turnId: string | undefined) => void;
+  /** A hired actor's: its blocker reaches its parent too, and its signal key names it. */
+  readonly actor?: ActorHandle;
+  readonly parent?: (signal: AgentSignal) => Promise<SendOutcome>;
+}): Promise<AdvisorDisposition | null> {
+  const note = parseAdvisorReply(reply);
 
   if (note === null) return null;
 
@@ -409,7 +397,7 @@ async function runAdvisorLane(deps: AdvisorLaneDeps): Promise<AdvisorDisposition
 
   if (verdict.disposition === 'drop') return 'drop';
   // Recorded first on both remaining paths: the row feeds the next turn's dedupe window.
-  deps.record(note, deps.turn.turnId);
+  deps.record(note, deps.turnId);
 
   if (verdict.disposition === 'changelog') return 'changelog';
 
@@ -421,10 +409,10 @@ async function runAdvisorLane(deps: AdvisorLaneDeps): Promise<AdvisorDisposition
   };
 
   // One note per turn, so a re-delivery collapses; no key without a durable id, since a fabricated one would collide.
-  const keyed: AgentSignal = deps.turn.turnId === undefined || deps.turn.turnId === ''
+  const keyed: AgentSignal = deps.turnId === undefined || deps.turnId === ''
     ? signal
     : { ...signal, idempotencyKey: deps.actor === undefined
-      ? `advisor:${deps.turn.turnId}` : `advisor:${deps.actor.actorId}:${deps.turn.turnId}` };
+      ? `advisor:${deps.turnId}` : `advisor:${deps.actor.actorId}:${deps.turnId}` };
 
   await deps.send(keyed);
 
@@ -433,58 +421,4 @@ async function runAdvisorLane(deps: AdvisorLaneDeps): Promise<AdvisorDisposition
   }
 
   return 'deliver';
-}
-
-/** The one review body the `advisor_review` terminal effect runs, first time and on replay. Governed off the turn's labels, not the mission active later.
- *  Transient failures retry up to {@link ADVISOR_REVIEW_MAX_ATTEMPTS}; exhausted or unclassified answers null. */
-export async function reviewRecordedTurn(deps: {
-  readonly snapshot: AdvisorRecoverySnapshot;
-  readonly llm: LLM | undefined;
-  readonly govern: (llm: LLM, labels: readonly string[]) => LLM;
-  readonly gateOpen: boolean;
-  readonly send: AdvisorLaneDeps['send'];
-  readonly record: AdvisorLaneDeps['record'];
-  /** Already admitted by the caller; the review lane reads no files. */
-  readonly guidance?: string;
-  readonly actor?: ActorHandle;
-  readonly parent?: AdvisorLaneDeps['parent'];
-}): Promise<AdvisorDisposition | null> {
-  const { snapshot, llm } = deps;
-
-  if (llm === undefined) return null;
-  const labels = snapshot.turn.missionLabels ?? [];
-  const governed = labels.length === 0 ? llm : deps.govern(llm, labels);
-
-  for (let attempt = 1; attempt <= ADVISOR_REVIEW_MAX_ATTEMPTS; attempt++) {
-    try {
-      return await runAdvisorLane({
-        turn: snapshot.turn,
-        llm: governed,
-        minSeverity: snapshot.minSeverity,
-        recent: snapshot.recent,
-        gateOpen: deps.gateOpen,
-        reachable: snapshot.reachable,
-        guidance: deps.guidance ?? '',
-        send: deps.send,
-        record: deps.record,
-        actor: deps.actor,
-        parent: deps.parent,
-      });
-    } catch (cause) {
-      const failure = toKinuError({ doing: 'reviewing the completed turn', cause, otherwise: 'unavailable' });
-
-      diagnostics.failure('advisor.review_failed', failure, { attempt });
-
-      // Retry reads the cause's own classification, not the `otherwise` fallback, so nothing unrecognised is guessed transient.
-      const classified = classifyErrorCode({ cause });
-
-      if (classified !== null && !ADVISOR_TRANSIENT_CODES.includes(classified)) throw failure;
-
-      if (classified === null) return null;
-
-      if (attempt < ADVISOR_REVIEW_MAX_ATTEMPTS) await abortableSleep(recoveryBackoffMs(attempt - 1));
-    }
-  }
-
-  return null;
 }

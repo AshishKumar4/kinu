@@ -12,7 +12,7 @@ import type { SpendSource } from '../events/model-call';
  * Producers a root builds unconditionally. `fast` is excluded: whether it
  * exists depends on the workspace's model (vendor smaller tier), not the backend.
  */
-export const CONFORMANCE_PRODUCERS = ['judge', 'advisor'] as const satisfies readonly SpendSource[];
+export const CONFORMANCE_PRODUCERS = ['judge'] as const satisfies readonly SpendSource[];
 
 export type ConformanceProducer = (typeof CONFORMANCE_PRODUCERS)[number];
 
@@ -403,8 +403,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': WIRED,
       cli: WIRED,
     },
-    // Whether it runs is a per-turn owner switch, not wiring.
-    advisor: EVERYWHERE,
   },
 };
 

@@ -6,7 +6,7 @@
  */
 import { expect, test } from 'bun:test';
 import { ADVISOR_HEADER } from '@kinu.run/core';
-import { catalogTurn, gatewayWorkspace, relayedReports, workspaceMainActor } from './helpers/actor-harness';
+import { catalogTurn, driveUntil, gatewayWorkspace, relayedReports, workspaceMainActor } from './helpers/actor-harness';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 
@@ -48,7 +48,7 @@ test("a delegated turn's tool call reaches the answer its caller gets", async ()
   expect(relayedReports(workspace.db)).toEqual(['Ran 1 tool call(s): file']);
 });
 
-test('a hosted subordinate is advised without adding a turn to either evolution window', async () => {
+test('a hosted subordinate hires its advisor, whose note opens its next turn, without adding to either evolution window', async () => {
   const note = 'The probe failed but the reply claimed success. Read the exit status.';
   const requests: string[] = [];
   const reviews: string[] = [];
@@ -73,23 +73,22 @@ test('a hosted subordinate is advised without adding a turn to either evolution 
 
   await catalogTurn(workspace.agent, 'Have someone check the probe.');
   root.config.setAdvisorEnabled(true);
-  const completedTurns = () => workspace.db.query('SELECT actor_id, turn FROM completed_turns').all();
+  // The root's own window grows with the turns the relays open; no hosted actor's ever does.
+  const hostedTurns = () => workspace.db.query<{ n: number }, [string]>('SELECT COUNT(*) AS n FROM completed_turns WHERE actor_id != ?').get(root.actorId)?.n ?? 0;
 
   const advisorNotes = () => workspace.db.query<{ actor_id: string; message: string }, []>(
     "SELECT actor_id, message FROM evolution_events WHERE type = 'advisor_note'",
   ).all();
 
-  const before = completedTurns();
-
-  await workspace.agent.terminalRetryPass();
+  // The hire's turn ends on its own answer; its advisor answers on a delegated turn of its own, whose note opens the hire's next.
+  await driveUntil(workspace, 'the advice reached the hire', () => requests.length >= 2);
   await joinHarnessFibers();
 
-  expect(relayedReports(workspace.db)).toEqual(['The probe succeeded.']);
-  expect(reviews).toHaveLength(2);
-  expect(requests).toHaveLength(2);
+  expect(relayedReports(workspace.db)[0]).toBe('The probe succeeded.');
+  expect(requests[0]).not.toContain(ADVISOR_HEADER);
   expect(requests[1]).toContain(ADVISOR_HEADER);
-  const notes = advisorNotes();
+  expect(reviews.length).toBeGreaterThanOrEqual(1);
+  const notes = advisorNotes().filter((row) => row.actor_id !== root.actorId);
   expect(notes.map((row) => row.message)).toEqual([note]);
-  expect(notes.map((row) => row.actor_id)).not.toContain(root.actorId);
-  expect(completedTurns()).toEqual(before);
+  expect(hostedTurns()).toBe(0);
 });

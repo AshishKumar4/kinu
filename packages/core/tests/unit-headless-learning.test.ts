@@ -1,7 +1,7 @@
 /** A headless actor learns only on the step clock; a positive control on the same turn shows the root would learn from it. */
 import { REAL_CLOCK } from '../src/types/clock';
 import { describe, expect, test } from 'bun:test';
-import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
+import { createTestRuntime, scriptedAdvisorPort, scriptedTurnModel } from '@kinu.run/test-utils';
 import type { LanguageModel } from 'ai';
 import { jsonSchema, tool } from 'ai';
 import { hostedSeatsOver } from './helpers-actor-host';
@@ -80,22 +80,14 @@ describe('a headless actor runs the step clock only', () => {
   const severities: readonly AdvisorSeverity[] = ['nit', 'concern', 'blocker'];
 
   for (const severity of severities) {
-    test(`${severity} advice reaches its actor; only blockers reach its parent`, async () => {
+    test(`${severity} advice answers after the turn ends and reaches its actor; only blockers reach its parent`, async () => {
       const { rt, testSql } = createTestRuntime();
       rt.actor.config.setAdvisorEnabled(true);
       rt.actor.config.setAdvisorMinSeverity('nit');
-      const prompts: string[] = [];
       const note = 'The failing parser probe was reported as successful. Check its exit status.';
-      rt.advisorLlm = {
-        async *stream() { yield ''; },
-        complete: async (prompt) => {
-          prompts.push(prompt);
-
-          return JSON.stringify({ note, severity, class: 'wrong-work' });
-        },
-      };
+      const advisor = scriptedAdvisorPort();
       await rt.storage.vfs.writeFile('ADVISOR.md', 'Watch parser outcomes.');
-      const seats = hostedSeatsOver({ rt, db: testSql.db, autoEvolve: true });
+      const seats = hostedSeatsOver({ rt, db: testSql.db, autoEvolve: true, advisorPort: advisor });
       const requests: string[] = [];
 
       const model = scriptedTurnModel({
@@ -109,9 +101,13 @@ describe('a headless actor runs the step clock only', () => {
         },
       });
 
+      const notesOf = (actorId: string) => rt.storage.sql<{ message: string }>`SELECT message FROM evolution_events
+        WHERE actor_id = ${actorId} AND type = 'advisor_note'`;
+
       for (const name of ['one', 'two']) {
         const seat = await seats.seat(name, 'agent');
         const before = windowRows(rt.storage.sql, rt.actor.actorId);
+        const asked = requests.length;
 
         const report = await runHeadInference(headInput(), {
           actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
@@ -119,31 +115,55 @@ describe('a headless actor runs the step clock only', () => {
           workspaceLayout: 'shared-workspace',
         });
 
+        // The run ended on its own answer: the advisor was hired, and nothing waited on it.
         expect(report.status).toBe('completed');
+        expect(requests).toHaveLength(asked + 1);
+        expect(notesOf(seat.actor.handle.actorId)).toEqual([]);
         expect(windowRows(rt.storage.sql, seat.actor.handle.actorId)).toBe(0);
         expect(windowRows(rt.storage.sql, rt.actor.actorId)).toBe(before);
 
-        const notes = rt.storage.sql<{ message: string }>`SELECT message FROM evolution_events
-          WHERE actor_id = ${seat.actor.handle.actorId} AND type = 'advisor_note'`;
-
-        expect(notes).toEqual([{ message: note }]);
+        // Its answer arrives through the ingress, which delivers what the actor holds.
+        advisor.answer(JSON.stringify({ note, severity, class: 'wrong-work' }));
+        await seat.actor.session.deliverAdvisorAnswers();
+        await seat.actor.session.deliverAdvisorAnswers();
+        expect(notesOf(seat.actor.handle.actorId)).toEqual([{ message: note }]);
       }
 
-      expect(requests).toHaveLength(4);
-      expect(requests[1]).toContain(ADVISOR_HEADER);
-      expect(requests[3]).toContain(note);
-      expect(prompts).toHaveLength(4);
-      expect(prompts.every((prompt) => prompt.includes('Watch parser outcomes.'))).toBe(true);
-      const parentAdvice = seats.enqueued.filter((turn) => turn.metadata?.kinuEvent === 'advisor');
-      expect(parentAdvice).toHaveLength(severity === 'blocker' ? 2 : 0);
+      expect(advisor.tasks.map((task) => [task.role, task.lane?.requestId.startsWith('advisor:')])).toEqual([['advisor', true], ['advisor', true]]);
+      expect(advisor.tasks.every((task) => task.task.includes('Watch parser outcomes.'))).toBe(true);
+      const advice = seats.enqueued.filter((turn) => turn.metadata?.kinuEvent === 'advisor');
+      const own = advice.filter((turn) => !(turn.text ?? '').includes('[Actor '));
+      const parents = advice.filter((turn) => (turn.text ?? '').includes('[Actor '));
+      // Each actor's note opens its own next turn, once.
+      expect(own).toHaveLength(2);
+      expect(own.every((turn) => (turn.text ?? '').includes(ADVISOR_HEADER) && (turn.text ?? '').includes(note))).toBe(true);
+      expect(parents).toHaveLength(severity === 'blocker' ? 2 : 0);
 
       if (severity === 'blocker') {
-        expect(parentAdvice.map((turn) => turn.idempotencyKey)).toHaveLength(2);
-        expect(new Set(parentAdvice.map((turn) => turn.idempotencyKey)).size).toBe(2);
-        expect(parentAdvice[0]?.text).toContain('[Actor one]');
+        expect(new Set(parents.map((turn) => turn.idempotencyKey)).size).toBe(2);
+        expect(parents[0]?.text).toContain('[Actor one]');
       }
     });
   }
+
+  test('a swarm node takes no input, so its turns hire no advisor', async () => {
+    const { rt, testSql } = createTestRuntime();
+    rt.actor.config.setAdvisorEnabled(true);
+    const advisor = scriptedAdvisorPort();
+    const seats = hostedSeatsOver({ rt, db: testSql.db, advisorPort: advisor });
+    const seat = await seats.seat('node', 'swarm');
+
+    const report = await runHeadInference(headInput(), {
+      actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
+      model: scriptedTurnModel({ doGenerate: async () => ({
+        content: [{ type: 'text', text: 'done' }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [],
+      }) }),
+      tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false, workspaceLayout: 'shared-workspace',
+    });
+
+    expect(report.status).toBe('completed');
+    expect(advisor.tasks).toEqual([]);
+  });
 
   test('a head turn enters no conversational timescale; the same evidence recorded by the root does', async () => {
     const { llm, reflections } = reflectingLlm();
