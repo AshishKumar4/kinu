@@ -818,7 +818,7 @@ describe('routing — every typed edit lands in the store that already owns it',
 
     const row = present(createRefinementStore(fx.rt.storage.sql, fx.rt.actor).get(opened.id), 'the refinement row');
     expect(row.routes.map((route) => [route.kind, route.disposition])).toEqual([['fact', 'applied'], ['skill', 'refused']]);
-    expect(routeFor(row.routes, 'skill').reason).toMatch(/mkdir '[^']*refinement/u);
+    expect(routeFor(row.routes, 'skill').reason).toContain('ENOTDIR');
     expect(fx.facts.recall('user.answer_length')?.value).toBe('one line');
     expect(row.stage).not.toBe('refused');
     expect(nextEvolutionAnswerAt(fx.rt.storage.sql, fx.rt.actor.actorId)).toBeNull();

@@ -6,7 +6,8 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createCLIRuntime, type CLIRuntime } from '../src/runtime';
 import * as v from 'valibot';
-import { isVfsError, type ExecutionRouter } from '@kinu.run/core';
+import { type ExecutionRouter } from '@kinu.run/core';
+import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { present, scratchDir, scratchPath } from '@kinu.run/test-utils';
 
 function freshRuntime(cwd?: string) {

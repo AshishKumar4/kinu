@@ -10,7 +10,7 @@ import type { ContextSelection } from '../src/session/context';
 import type { PendingContextProposal } from '../src/session/proposals';
 import { contextMount } from '../src/vfs/context-plane';
 import { withMountTable } from '../src/vfs/mounts';
-import { makeVfsError } from '../src/vfs/errno';
+import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { decodeModelMessageValues, encodeModelMessageValues } from '../src/session/message-codec';
 import { composePrepareStep, type StepContextPlane } from '../src/prompting/prepare-step';
 import type { StepPruneBudget } from '../src/prompting/step-prune';
@@ -41,7 +41,7 @@ function emptyTree(): VFS {
     async readFile(path, opts) {
       const text = files.get(path);
 
-      if (text === undefined) throw makeVfsError('ENOENT', 'no such file', path);
+      if (text === undefined) throw new VfsError('ENOENT', 'no such file', path);
 
       return opts?.encoding === undefined ? new TextEncoder().encode(text) : text;
     },
