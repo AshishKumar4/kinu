@@ -153,7 +153,12 @@ export function withClampedToolResult(
         ? { result: text.output, failures: outcome.failures }
         : clamped;
 
-      return taken === null || taken.images.length === 0 ? result : { output: result ?? null, images: taken.images };
+      if (taken === null || taken.images.length === 0) return result;
+
+      // An eval's failures stay at the top level, where `successfulToolOutcome` reads the program's census.
+      return outcome.failures === undefined
+        ? { output: result ?? null, images: taken.images }
+        : { output: result ?? null, images: taken.images, failures: outcome.failures };
     },
   };
 
