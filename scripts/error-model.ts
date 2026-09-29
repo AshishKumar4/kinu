@@ -65,7 +65,6 @@ export const DECLARED = new Map<string, Declaration>([
 /** Where an effect is run for a host that owns the call, permanently: not a bridge. */
 export const HOST_BOUNDARIES = new Map<string, string>([
   ['packages/core/src/execution/parent.ts', '`answerParentRpc` answers a fork over DO RPC and in the CLI: a platform-owned call'],
-  ['packages/core/src/vfs/shell-mounts.ts', 'a mounted plane answers Nimbus\'s own VFS calls, which must fail with Nimbus\'s `VfsError`: a Nimbus-owned call'],
 ]);
 
 const RUNNERS: readonly string[] = ['settle', 'settleSync'];

@@ -1,11 +1,14 @@
 // The agent's `file` tool reaches another machine's file through that machine's mount, `/pc/<name>/...`,
 // and names what it touched by the machine's reference, `<name>://...`, which a chat surface turns into a link.
 import { describe, expect, test } from 'bun:test';
-import { toolExecute } from '@kinu.run/test-utils';
+import { present, toolExecute } from '@kinu.run/test-utils';
 import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import type { DeviceFleetEntry, DeviceStatus } from '../src/execution/device-status';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { buildBuiltinTools } from '../src/tools/builtins';
+import { withApprovalGatedFiles } from '../src/execution/approval';
+import { createInlineExecutor } from '../src/tools/inline-executor';
+import type { ShellApprovalPolicy } from '../src/safety/approval-gate';
 import type { FileToolInput } from '../src/tools/file-tool';
 import type { JsonValue } from '../src/utils/json';
 import { standardMounts, withMountTable } from '../src/vfs/mounts';
@@ -48,7 +51,10 @@ function fleet(written: JsonValue): DeviceTransport & { readonly frames: Frame[]
   };
 }
 
-function fileToolOverTheFleet(written: JsonValue = { success: true }) {
+/** The owner answers every ask `allow`, as production's toolFiles gate reaches them. */
+const OWNER_ALLOWS: ShellApprovalPolicy = { mode: () => 'strict', granted: () => false, requestApproval: async () => 'allow' };
+
+function fileToolOverTheFleet(written: JsonValue = { success: true }, gated = false) {
   const transport = fleet(written);
   const { rt } = createTestRuntime();
   const router = new DefaultExecutionRouter();
@@ -59,14 +65,28 @@ function fileToolOverTheFleet(written: JsonValue = { success: true }) {
 
   const plane = withMountTable(rt.storage.vfs, standardMounts((name) => router.getProvider(name)));
 
+  const toolFiles = gated
+    ? withApprovalGatedFiles(plane, 'workspace', { userRoots: () => plane.userRoots(), locate: null, parksWrites: true }, OWNER_ALLOWS)
+    : plane;
+
   const tools = buildBuiltinTools({
-    rt: { ...rt, storage: { ...rt.storage, vfs: plane }, toolFiles: plane, executionRouter: router, deviceTransport: transport },
+    rt: { ...rt, storage: { ...rt.storage, vfs: plane }, toolFiles, executionRouter: router, deviceTransport: transport },
     history: storesFor(rt).history,
   });
 
   if (tools.file === undefined) throw new Error('No file tool');
+  const { memory, craftStore } = rt;
+  const shell = present(rt.shell, 'the workspace shell');
+  const workspace = createInlineExecutor({ vfs: toolFiles, files: plane, memory, craftStore, shell, filesOwner: 'agent' });
+  const writeFile = workspace.tools.writeFile;
 
-  return { transport, file: toolExecute<FileToolInput, JsonValue>(tools.file) };
+  if (writeFile === undefined) throw new Error('No workspace.writeFile');
+
+  return {
+    transport, file: toolExecute<FileToolInput, JsonValue>(tools.file),
+    readFile: (path: string) => workspace.tools.readFile?.execute(path),
+    writeFile: (path: string, content: string) => writeFile.execute(path, content),
+  };
 }
 
 describe('a file on another machine', () => {
@@ -103,5 +123,19 @@ describe('a file on another machine', () => {
     await file({ action: 'read', path: '/pc/ashish@studio/home/notes.md' });
     expect(await file({ action: 'edit', path: '/pc/ashish@studio/home/notes.md', edits: [{ old_text: 'kept', new_text: 'moved' }] }))
       .toMatchObject({ ok: true, undo });
+  });
+
+  test('an overwrite the owner approves still says undo cannot restore it, from the file tool and from codemode', async () => {
+    const why = 'it is the owner\'s home folder itself, too much to copy before every command';
+
+    const { file, readFile, writeFile } = fileToolOverTheFleet({ success: true, uncheckpointed: { dir: '/home', why } }, true);
+    const undo = `No checkpoint covers /home: ${why}, so undo cannot restore what this write changed there.`;
+
+    await file({ action: 'read', path: '/pc/ashish@studio/home/notes.md' });
+    expect(await file({ action: 'write', path: '/pc/ashish@studio/home/notes.md', content: 'moved here' }))
+      .toMatchObject({ ok: true, undo });
+
+    await readFile('/pc/ashish@studio/home/notes.md');
+    expect(await writeFile('/pc/ashish@studio/home/notes.md', 'moved again')).toContain(undo);
   });
 });

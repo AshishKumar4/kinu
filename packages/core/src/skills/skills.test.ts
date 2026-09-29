@@ -22,7 +22,7 @@ import type { VFS } from '../types/primitives';
 import { resolveTurnSkills, type TurnSkillSurface } from '../orchestrator/turn-surface';
 import { buildSystemPromptSync } from '../prompt';
 import { SHARED_SKILLS_DIR } from '../vfs/shared-drive';
-import { makeVfsError } from '../vfs/errno';
+import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import type { InstructionTrustResolver } from '../safety/instruction-trust';
 import { createRecordingLogger, setDiagnosticsSink } from '../obs/index';
 
@@ -641,7 +641,7 @@ describe('discoverSkills', () => {
     const listed = v.readdir;
 
     v.readdir = async (p) => {
-      if (p.startsWith('/shared')) throw makeVfsError('ENXIO', '/shared — the shared Drive mounts once the workspace has an owner', p);
+      if (p.startsWith('/shared')) throw new VfsError('ENXIO', '/shared — the shared Drive mounts once the workspace has an owner', p);
 
       return await listed(p);
     };
