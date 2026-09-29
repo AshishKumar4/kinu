@@ -56,7 +56,8 @@ interface Rig {
   readonly attachMachine: (answers: 'relay' | 'too-old', label?: string) => Promise<{ readonly deviceId: string; readonly close: () => Promise<void> }>;
 }
 
-async function rig(upstream: Upstream): Promise<Rig> {
+/** `beforeRelay` runs on the machine before it answers a relayed call. */
+async function rig(upstream: Upstream, beforeRelay?: (request: v.InferOutput<typeof RelayRequestSchema>) => Promise<void>): Promise<Rig> {
   const forwarded: Request[] = [];
   const relayed: Rig['relayed'] = [];
   const machines = new Map<string, 'relay' | 'too-old'>();
@@ -78,6 +79,7 @@ async function rig(upstream: Upstream): Promise<Rig> {
       if (machines.get(frame.device) === 'too-old') throw new Error(`unknown method: ${DEVICE_RELAY.method}`);
       const request = v.parse(RelayRequestSchema, frame.params[0]);
       relayed.push(request);
+      await beforeRelay?.(request);
       const answer = upstream(new Headers(request.headers).get('authorization'));
       await harness.sendDeviceHello({ type: DEVICE_RELAY.head, relay: frame.id, status: answer.status, headers: [['content-type', 'text/event-stream']] }, frame.device);
       await harness.sendDeviceHello({ type: DEVICE_RELAY.body, relay: frame.id, data: Buffer.from(answer.body).toString('base64') }, frame.device);
@@ -264,6 +266,32 @@ describe('Codex egress: the owner\'s machine first, the container when none is o
     expect({ old: sent.filter((token) => token === `Bearer ${ACCESS_1}`).length, rotated: sent.filter((token) => token === `Bearer ${ACCESS_2}`).length })
       .toEqual({ old: 2, rotated: 2 });
     expect(JSON.stringify(harness.deviceFrames)).not.toMatch(/refresh-[12]/);
+    await harness.joinFibers();
+    harness.close();
+  });
+
+  test('a turn refused on a token another turn already rotated takes the rotated one, and nothing refreshes twice', async () => {
+    const otherDone = Promise.withResolvers<void>();
+    let oldTokenCalls = 0;
+
+    // The second call to carry the old token is the other turn's first; it is answered only once the turn not held
+    // has rotated the token and finished, as a loaded machine can: its 401 then names a token the login no longer holds.
+    // A retry carries the rotated token, so it is never the call held, whatever order the machine sees them in.
+    const { harness, model, attachMachine } = await rig(recordedUpstream(ACCESS_2, 'fresh'), async (request) => {
+      if (new Headers(request.headers).get('authorization') !== `Bearer ${ACCESS_1}`) return;
+      oldTokenCalls += 1;
+
+      if (oldTokenCalls === 2) await otherDone.promise;
+    });
+
+    await attachMachine('relay');
+
+    // Only the turn not held can finish first, and its end releases the other.
+    const released = (turn: Promise<ChatEvent[]>) => turn.finally(() => { otherDone.resolve(); });
+    const [first, second] = await Promise.all([released(step(model, newTurn())), released(step(model, newTurn()))]);
+
+    expect([finished(first).text, finished(second).text]).toEqual(['fresh', 'fresh']);
+    expect(refreshes).toEqual(['refresh-1']);
     await harness.joinFibers();
     harness.close();
   });

@@ -86,11 +86,19 @@ export interface AuthResolution {
   credentialKey?: string;
 }
 
+/** `rejected`: the headers an upstream just refused. The resolver refreshes only while its login still yields them,
+ *  so a caller refused on a token another caller already rotated gets the rotated one, and nothing refreshes twice. */
+export interface AuthRequest {
+  readonly rejected?: Readonly<Record<string, string>>;
+}
+
 /** Returns null when no credential is configured for `key`. */
-export type AuthResolver = (
-  key: string,
-  opts?: { forceRefresh?: boolean },
-) => Promise<AuthResolution | null>;
+export type AuthResolver = (key: string, opts?: AuthRequest) => Promise<AuthResolution | null>;
+
+/** Whether `current`'s every header is what the upstream refused: the login is the one it refused. */
+export function refusedLogin(current: Readonly<Record<string, string>>, rejected: Readonly<Record<string, string>>): boolean {
+  return Object.entries(current).every(([name, value]) => rejected[name] === value);
+}
 
 /** One AI Gateway universal request, as the Workers AI binding accepts it. */
 export interface GatewayRunRequest {

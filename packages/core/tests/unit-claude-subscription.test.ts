@@ -93,8 +93,9 @@ function only(sent: readonly Sent[], index = 0): Sent {
   return request;
 }
 
-function deps(fetchFn: typeof fetch, logins: (AuthResolution | 'revoked')[], affinity?: string): ProviderDeps & { asked: (boolean | undefined)[] } {
-  const asked: (boolean | undefined)[] = [];
+/** `asked`: per call, the Authorization it named as refused, or null for a plain read. */
+function deps(fetchFn: typeof fetch, logins: (AuthResolution | 'revoked')[], affinity?: string): ProviderDeps & { asked: (string | null)[] } {
+  const asked: (string | null)[] = [];
 
   return {
     env: {},
@@ -103,7 +104,7 @@ function deps(fetchFn: typeof fetch, logins: (AuthResolution | 'revoked')[], aff
     ...(affinity !== undefined && { sessionAffinity: affinity }),
     async getAuth(key, opts) {
       expect(key).toBe(CLAUDE_CRED_KEY);
-      asked.push(opts?.forceRefresh);
+      asked.push(opts?.rejected?.Authorization ?? null);
       const next = logins.length > 1 ? logins.shift() : logins[0];
 
       if (next === 'revoked') throw new OAuthTokenError('codex', 'invalid_grant', 'refresh token revoked');
@@ -309,7 +310,7 @@ describe('the Claude subscription wire', () => {
       restore();
     }
 
-    expect(providerDeps.asked).toEqual([undefined, true]);
+    expect(providerDeps.asked).toEqual([null, 'Bearer sk-ant-oat01-stale']);
     expect(sent.map((request) => new Map(request.headers).get('Authorization'))).toEqual(['Bearer sk-ant-oat01-stale', 'Bearer sk-ant-oat01-fresh']);
     expect(recorded.emitted.filter((line) => line.event === 'provider.claude_login_refused').map((line) => line.code)).toEqual(['denied']);
   });
