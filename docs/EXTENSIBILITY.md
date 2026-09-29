@@ -348,9 +348,11 @@ truncates useful "when to use" guidance.
   echoes a token. Only the error-log path changes.
 - Refresh happens above the provider. Providers never see a
   `refresh_token`. The resolver owns refresh. On 401 a provider retries once
-  with `getAuth(key, { forceRefresh: true })`. UserDO makes the
-  refresh-or-preserve decision, so a transient 500 cannot wipe a live
-  credential.
+  with `getAuth(key, { rejected: headersItSent })`. The resolver refreshes only
+  while its stored login still yields those headers, so a call refused on a token
+  another call already rotated gets the rotated one and nothing refreshes twice.
+  UserDO makes the refresh-or-preserve decision, so a transient 500 cannot wipe
+  a live credential.
 - Per-user MCP auth. `/mcp/v1/<agentName>`
   (`packages/cf-backend/src/mcp-server.ts`) authenticates every request. External MCP
   clients send `Authorization: Bearer ptc_…`, verified by

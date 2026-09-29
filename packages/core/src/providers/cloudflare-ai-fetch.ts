@@ -78,7 +78,7 @@ export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof 
     let res = await send(resolved);
 
     if (res.status === 401) {
-      const refreshed = await opts.getAuth(opts.credKey, { forceRefresh: true });
+      const refreshed = await opts.getAuth(opts.credKey, { rejected: resolved.headers });
 
       if (refreshed?.baseURL) {
         resolved = refreshed;

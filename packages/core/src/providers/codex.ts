@@ -1,7 +1,7 @@
 // Codex via ChatGPT subscription (chatgpt.com/backend-api/codex/responses).
 import { createOpenAI } from '@ai-sdk/openai';
 import { APICallError, wrapLanguageModel, type LanguageModel } from 'ai';
-import type { AuthResolution, ModelProvider, ModelInfo, ModelInputModality } from './types';
+import type { AuthRequest, AuthResolution, ModelProvider, ModelInfo, ModelInputModality } from './types';
 import { MODEL_INPUT_MODALITIES } from './types';
 import { withRateLimitRetry } from './rate-limit-retry';
 import { authCacheKey, cloneModelInfos, positiveInteger, StaleModelList, statelessResponses } from './util';
@@ -138,7 +138,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
 
       const customFetch = asFetchFunction(async (input, init) => {
         // A dead login (resolver refusal, or 401 after forced refresh) gets the remedy on a 401 the SDK carries.
-        const resolveAuth = async (refresh?: { forceRefresh?: boolean }): Promise<AuthResolution | 'revoked' | null> => {
+        const resolveAuth = async (refresh?: AuthRequest): Promise<AuthResolution | 'revoked' | null> => {
           try {
             return await deps.getAuth(CODEX_CRED_KEY, refresh);
           } catch (cause) {
@@ -192,7 +192,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
         let res = await send(auth.headers);
 
         if (res.status === 401) {
-          const refreshed = await resolveAuth({ forceRefresh: true });
+          const refreshed = await resolveAuth({ rejected: auth.headers });
 
           if (refreshed === 'revoked') return refusedLoginResponse();
 

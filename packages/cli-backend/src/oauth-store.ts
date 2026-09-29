@@ -13,6 +13,8 @@ import {
   baseCredentialKey,
   codexCredentialToHeaders,
   credentialToHeaders,
+  refusedLogin,
+  type AuthRequest,
   type AuthResolution,
   type OAuthCredential,
   type SubscriptionIssuer,
@@ -74,7 +76,7 @@ export interface LocalOAuthStore {
   /** Every stored login's key, `@account` included. */
   keys(): string[];
   has(key: string): boolean;
-  getAuth(key: string, opts?: { forceRefresh?: boolean }): Promise<AuthResolution | null>;
+  getAuth(key: string, opts?: AuthRequest): Promise<AuthResolution | null>;
   save(key: string, credential: OAuthCredential): Promise<void>;
 }
 
@@ -95,13 +97,15 @@ export function createFileOAuthStore(configPath: string, opts: { fetch?: typeof 
       return Boolean(readCredential(configPath, key)?.accessToken);
     },
 
-    async getAuth(key: string, authOpts?: { forceRefresh?: boolean }): Promise<AuthResolution | null> {
+    async getAuth(key: string, authOpts?: AuthRequest): Promise<AuthResolution | null> {
       const issuer = issuerOf(key);
       const credential = readCredential(configPath, key);
 
       if (!credential?.accessToken) return null;
+      const rejected = authOpts?.rejected;
+      const refused = rejected !== undefined && refusedLogin(issuer.headers(credential), rejected);
 
-      if (!credential.refreshToken || !(authOpts?.forceRefresh === true || issuer.renewal.expiring(credential))) {
+      if (!credential.refreshToken || !(refused || issuer.renewal.expiring(credential))) {
         return { headers: issuer.headers(credential), credentialKey: key };
       }
 

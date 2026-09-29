@@ -115,7 +115,7 @@ export function proxyTargetAllowed(target: string, base: string, method: string)
 }
 
 /** Secret-free marker resolution, plus the base URL when known. No proxied
- *  `forceRefresh`: its users, the subscription logins, are refused by the proxy. */
+ *  refresh on a refusal: its users, the subscription logins, are refused by the proxy. */
 export function proxyAuthResolution(credKey: string, baseURL?: string | null): AuthResolution {
   const resolution: AuthResolution = { headers: { [PROXY_CRED_HEADER]: credKey } };
 

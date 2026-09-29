@@ -30,6 +30,7 @@ import {
   providerProxyForwardURL,
   proxyAuthResolution,
   reasoningEffortOptions,
+  type AuthRequest,
   type AuthResolution,
   type AuthResolver,
   type AgentModelEntry,
@@ -739,7 +740,7 @@ export function stripProvider(model: string, provider: string): string {
 interface LocalAuthStore {
   has(key: string): boolean;
   keys(): string[];
-  get(key: string, authOpts?: { forceRefresh?: boolean }): Promise<AuthResolution | null>;
+  get(key: string, authOpts?: AuthRequest): Promise<AuthResolution | null>;
 }
 
 interface OpenAICompatHeaders {
@@ -827,7 +828,7 @@ function buildAuthStore(
     keys(): string[] {
       return [...store.keys(), ...(oauthStore?.keys() ?? envCodex)];
     },
-    async get(key: string, authOpts?: { forceRefresh?: boolean }): Promise<AuthResolution | null> {
+    async get(key: string, authOpts?: AuthRequest): Promise<AuthResolution | null> {
       if (!isOAuthLoginKey(key)) return store.get(key) ?? null;
 
       if (oauthStore) return oauthStore.getAuth(key, authOpts);
