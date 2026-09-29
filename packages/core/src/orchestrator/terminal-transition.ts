@@ -155,7 +155,7 @@ export class TerminalTransitions {
     let run: TerminalSequenceRun;
 
     try {
-      run = await this.ledger.drive(this.sequenceId(transition));
+      run = await this.ledger.drive(this.sequenceId(transition), this.inFlight);
     } catch (err) {
       // Released, then re-armed: a held sequence is skipped by later sweeps, and owed rows need a wake.
       this.leave(transition);
@@ -237,7 +237,7 @@ export class TerminalTransitions {
 
   /** Every input comes off its row; {@link end} closes only if nothing is still owed. */
   async resume(transition: TerminalTransition): Promise<void> {
-    await this.ledger.replayOwed(this.sequenceId(transition));
+    await this.ledger.replayOwed(this.sequenceId(transition), this.inFlight);
     this.end(transition);
   }
 
