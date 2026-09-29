@@ -1752,7 +1752,7 @@ export const LADDER: readonly Gate[] = [
     inputs: CLIENT_BUILD,
   },
   {
-    run: 'bun test --timeout=0 tests/browser/chat-scroll.test.ts',
+    run: 'bun test --timeout=0 tests/browser/chat-scroll.test.ts tests/browser/chat-sparse-pages.test.ts',
     label: 'Chat infinite scroll',
     tier: 'ci',
     seconds: 34,
@@ -1768,7 +1768,8 @@ export const LADDER: readonly Gate[] = [
       + 'the prefetch re-arms on a view left pinned at the top edge. Also that the '
       + 'browser\'s own scroll anchoring is off, that each page is one request rather '
       + 'than a burst, that a FAILED page never renders "beginning of the '
-      + 'conversation", and that the walk and the socket do not draw one message twice.',
+      + 'conversation", and that the walk and the socket do not draw one message twice. '
+      + 'A failed sparse page keeps Retry visible at its gap and pauses until it is retried.',
     blind: 'everything about the SERVER half. The frame stubs `fetchPage`, so no rowid '
       + 'seek, no `limit + 1` over-read and no stale cursor is exercised here — those '
       + 'are unit-tested against the read model instead. Two hooks and one merge rule '

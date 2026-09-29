@@ -16,7 +16,7 @@ import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { useKinu, type WorkspaceNotice } from "@/hooks/use-kinu";
 import { useAutogrow } from "@/hooks/use-autogrow";
 import { useChatThread } from "@/hooks/use-chat-thread";
-import { HistoryReserve, useReservedScroll } from "@/hooks/use-history-reserve";
+import { HistoryReserve, historyBoundaryError, useReservedScroll } from "@/hooks/use-history-reserve";
 import { useConversationUiState, usePlanApprovedMode } from "@/hooks/use-conversation-ui-state";
 import { useSteerActions } from "@/hooks/use-steer-actions";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
@@ -541,11 +541,11 @@ function SubordinateChatColumn({
     <div className="@container relative flex flex-col flex-1 min-h-0" data-agent-pane={`${workspace}/agents/${subName}`}>
       <ErrorBoundary label="Agent chat">
         <div ref={messagesRef} className="flex-1 overflow-y-auto p-thread-column py-5 space-y-5">
-          <HistoryReserve range={reserves.top} rowPx={rowPx} />
+          <HistoryReserve range={reserves.top} rowPx={rowPx} history={history} />
           {thread.entries.length > 0 && (
             <HistoryBoundary
               loading={history.loading}
-              error={history.error}
+              error={historyBoundaryError(history)}
               exhausted={history.exhausted}
               onRetry={history.retry}
             />
@@ -553,7 +553,7 @@ function SubordinateChatColumn({
           <ConversationStartBoundary
             hasEntries={thread.entries.length > 0}
             streaming={live}
-            error={history.error}
+            error={historyBoundaryError(history)}
             exhausted={history.exhausted}
             onRetry={history.retry}
             pending={<ConversationSkeleton />}
@@ -566,7 +566,7 @@ function SubordinateChatColumn({
           />
           {thread.entries.map(({ message: msg, steers }, i) => (
             <Fragment key={msg.id}>
-              <HistoryReserve range={reserves.before.get(msg.id)} rowPx={rowPx} />
+              <HistoryReserve range={reserves.before.get(msg.id)} rowPx={rowPx} history={history} />
               <MessageView
                 message={msg}
                 steers={steers}
@@ -574,7 +574,7 @@ function SubordinateChatColumn({
               />
             </Fragment>
           ))}
-          <HistoryReserve range={reserves.tail} rowPx={rowPx} />
+          <HistoryReserve range={reserves.tail} rowPx={rowPx} history={history} />
           <ChatLiveTail tail={tail} />
           {thread.trailing.map((steer) => <SteerBubble key={steer.id} steer={steer} />)}
           {state.chatError && (
@@ -1084,16 +1084,16 @@ export default function WorkspacePage() {
               <ConversationStartBoundary
                 hasEntries={thread.entries.length > 0}
                 streaming={live}
-                error={history.error}
+                error={historyBoundaryError(history)}
                 exhausted={history.exhausted}
                 onRetry={history.retry}
                 pending={<ConversationSkeleton />}
                 empty={<EmptyConversation mission={as?.purpose ?? ""} />}
               />
-              <HistoryReserve range={reserves.top} rowPx={rowPx} />
+              <HistoryReserve range={reserves.top} rowPx={rowPx} history={history} />
               {thread.entries.length > 0 && (
                 <HistoryBoundary
-                  loading={history.loading} error={history.error}
+                  loading={history.loading} error={historyBoundaryError(history)}
                   exhausted={history.exhausted} onRetry={history.retry} />
               )}
               {thread.entries.map(({ message: msg, steers }, i) => {
@@ -1102,7 +1102,7 @@ export default function WorkspacePage() {
 
                 return (
                   <Fragment key={msg.id}>
-                    <HistoryReserve range={reserves.before.get(msg.id)} rowPx={rowPx} />
+                    <HistoryReserve range={reserves.before.get(msg.id)} rowPx={rowPx} history={history} />
                     <MessageView
                       message={msg}
                       steers={steers}
@@ -1120,7 +1120,7 @@ export default function WorkspacePage() {
                   </Fragment>
                 );
               })}
-              <HistoryReserve range={reserves.tail} rowPx={rowPx} />
+              <HistoryReserve range={reserves.tail} rowPx={rowPx} history={history} />
               <ChatLiveTail tail={mainTail} />
               {looseCards.map(({ card, turn }) => (
                 <ProgrammaticTurnCard key={card.id} turn={turn} text={card.text} state={card.state} />
