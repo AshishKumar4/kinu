@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
+import { afterEach, describe, expect, setSystemTime, spyOn, test } from 'bun:test';
 import * as v from 'valibot';
 import { fakeMossaic, git, gitEnv, initRepo, scratchDir } from '@kinu.run/test-utils';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -23,6 +23,7 @@ import { withMountTable } from '../src/vfs/mounts';
 import type { WorkspaceBundle } from '../src/vfs/nimbus-workspace';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
+import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 import { mossaicVfs } from '../src/vfs/mossaic-vfs';
 import { sharedDriveMount } from '../src/vfs/shared-drive';
 
@@ -479,6 +480,90 @@ describe('workspace diff lifecycle', () => {
     // Coarse but true: every line out, every line in.
     expect(file.removed).toBe(lines);
     expect(file.added).toBe(lines);
+  });
+
+  test('a failed snapshot publication preserves the prior diff and its Undo target', async () => {
+    const { rt, workspace } = createTestRuntime();
+    const baselines = await baselinesOf(rt, workspace);
+    await rt.storage.vfs.writeFile('notes.md', 'zero');
+    await resetWorkspaceBaseline(rt, baselines);
+    const first = await getWorkspaceDiff(rt, baselines);
+    await rt.storage.vfs.writeFile('notes.md', 'one');
+    await resetWorkspaceBaseline(rt, baselines);
+    await rt.storage.vfs.writeFile('notes.md', 'two');
+    const before = await getWorkspaceDiff(rt, baselines);
+    const failure = new Error('snapshot publication refused');
+    const snapshot = spyOn(baselines.store, 'snapshot').mockImplementationOnce(() => { throw failure; });
+
+    try {
+      await expect(resetWorkspaceBaseline(rt, baselines)).rejects.toBe(failure);
+    } finally {
+      snapshot.mockRestore();
+    }
+
+    expect(await getWorkspaceDiff(rt, baselines)).toEqual(before);
+    expect(await restoreWorkspaceBaseline(rt, baselines)).toMatchObject({ ok: true });
+    const restored = await getWorkspaceDiff(rt, baselines);
+    expect(restored.baseline).toBe(first.baseline);
+    expect(restored.files.map((file) => ({ path: file.path, text: file.lines.map((line) => line.text) })))
+      .toEqual([{ path: 'notes.md', text: ['zero', 'two'] }]);
+    expect(await restoreWorkspaceBaseline(rt, baselines)).toMatchObject({ ok: false });
+  });
+
+  test.each(['undo', 'review'] as const)('cleanup failure reports a published review and preserves the next %s', async (next) => {
+    const { rt, workspace } = createTestRuntime();
+    const baselines = await baselinesOf(rt, workspace);
+    const CLOCK = Date.parse('2026-09-28T12:00:00Z');
+    setSystemTime(new Date(CLOCK));
+    await rt.storage.vfs.writeFile('notes.md', 'zero');
+    await resetWorkspaceBaseline(rt, baselines);
+    const first = await getWorkspaceDiff(rt, baselines);
+    setSystemTime(new Date(CLOCK + 10));
+    const staleName = `diffs:${rt.actor.actorId}:${first.baseline}`;
+    await rt.storage.vfs.writeFile('notes.md', 'one');
+    await resetWorkspaceBaseline(rt, baselines);
+    const previous = await getWorkspaceDiff(rt, baselines);
+    await rt.storage.vfs.writeFile('notes.md', 'two');
+    const priorDiff = await getWorkspaceDiff(rt, baselines);
+    const log = createRecordingLogger();
+    const restoreLog = setDiagnosticsSink(log);
+    const failure = new Error('snapshot cleanup refused');
+    const drop = spyOn(baselines.store, 'dropSnapshotAsync').mockRejectedValueOnce(failure);
+    setSystemTime(new Date(CLOCK + 20));
+
+    try {
+      const result = await resetWorkspaceBaseline(rt, baselines);
+      expect(result).toMatchObject({ ok: true, cleanupFailures: [{ snapshot: staleName, code: 'io' }] });
+      expect(log.emitted).toContainEqual(expect.objectContaining({
+        event: 'workspace.review_cleanup_failed', code: 'io', fields: { snapshot: staleName },
+        cause: expect.stringContaining(failure.message),
+      }));
+    } finally {
+      drop.mockRestore();
+      restoreLog();
+    }
+
+    const published = await getWorkspaceDiff(rt, baselines);
+    expect(published.baseline).not.toBe(previous.baseline);
+    expect(published.files).toEqual([]);
+    expect(baselines.store.snapshots().some((snapshot) => snapshot.name === staleName)).toBe(true);
+
+    if (next === 'undo') {
+      expect(await restoreWorkspaceBaseline(rt, baselines)).toMatchObject({ ok: true });
+      expect(await getWorkspaceDiff(rt, baselines)).toEqual(priorDiff);
+      expect(await restoreWorkspaceBaseline(rt, baselines)).toMatchObject({ ok: false });
+    } else {
+      setSystemTime(new Date(CLOCK + 30));
+      await rt.storage.vfs.writeFile('notes.md', 'three');
+      expect(await resetWorkspaceBaseline(rt, baselines)).toMatchObject({ ok: true, cleanupFailures: [] });
+      const latest = await getWorkspaceDiff(rt, baselines);
+      const retained = baselines.store.snapshots().filter((snapshot) => snapshot.name.startsWith(`diffs:${rt.actor.actorId}:`));
+      expect(retained.map((snapshot) => snapshot.name).sort()).toEqual(
+        [published.baseline, latest.baseline].map((id) => `diffs:${rt.actor.actorId}:${id}`).sort(),
+      );
+      expect(await restoreWorkspaceBaseline(rt, baselines)).toMatchObject({ ok: true });
+      expect((await getWorkspaceDiff(rt, baselines)).baseline).toBe(published.baseline);
+    }
   });
 
   test('Mark reviewed can be undone once: the changes it cleared come back, measured from the earlier review', async () => {
