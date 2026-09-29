@@ -45,7 +45,7 @@
     "d3": "^7.9.0",
     "hono": "4.13.7",
     "jose": "^6.2.3",
-    "just-bash": "^3.0.1",
+    "just-bash": "^3.4.2",
     "modern-screenshot": "4.7.0",
     "oauth4webapi": "^3.8.6",
     "postal-mime": "^2.7.5",

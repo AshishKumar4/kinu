@@ -508,21 +508,9 @@ var REVIEWED_ADVISORIES = {
     reason: "transitive: express 5.2.1 <- @modelcontextprotocol/sdk. DoS when an invalid limit " + "silently disables size enforcement; this repository mounts no express app.",
     ids: [1123976]
   },
-  "brace-expansion": {
-    reason: "transitive: minimatch 10.2.5 <- @earendil-works/pi-coding-agent (dev, pinned " + "0.84.2), glob and just-bash. Expansion DoS driven by the glob pattern, which the dev " + "toolchain supplies to itself.",
-    ids: [1123898, 1130591, 1130734]
-  },
-  diff: {
-    reason: "transitive: @opentui/core pins 8.0.2 exactly and just-bash requires ^8.0.2. " + "parsePatch/applyPatch DoS on a crafted patch. The fix is 8.0.3, which @opentui's exact " + "pin blocks until it moves.",
-    ids: [1112706]
-  },
   "extract-zip": {
     reason: "TRANSITIVE: @cloudflare/puppeteer 1.4.0 (the slate-picture capture) pins @puppeteer/browsers " + "2.2.4, which requires it. The Worker imports the package's workers entry, " + "puppeteer-cloudflare.js, whose import graph reaches 116 files and never @puppeteer/browsers: only " + "the Node launchers (node/ChromeLauncher, FirefoxLauncher, ProductLauncher, PuppeteerNode) import " + "it, and nothing in this repository calls them. extract-zip's only use there is unpacking a " + "downloaded browser archive, which never happens in a Worker; worker-bundle-reach.test.ts fails " + "if either package enters the Worker bundle. No fixed release exists: 2.0.1 is its last publish.",
     ids: [1139346, 1193685]
-  },
-  "ip-address": {
-    reason: "transitive: express-rate-limit 8.5.2 <- @modelcontextprotocol/sdk. Leading-zero " + "octet and IPv4-mapped misclassification that can bypass an SSRF check \u2014 in the rate " + "limiter, which nothing here mounts.",
-    ids: [1130722, 1130723, 1130724]
   },
   nanoid: {
     reason: "transitive: postcss requires ^3.3.12 <- vite <- vitest. The non-secure generator " + "loops forever on a negative or zero size; postcss calls it with a fixed size. Build " + "and test only.",
