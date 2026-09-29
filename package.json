@@ -184,7 +184,7 @@
     "wrangler": "4.143.0"
   },
   "patchedDependencies": {
-    "@plannotator/ui@0.30.0": "patches/@plannotator%2Fui@0.30.0.patch",
+    "@plannotator/ui@0.46.1": "patches/@plannotator%2Fui@0.46.1.patch",
     "@cloudflare/sandbox@0.12.9": "patches/@cloudflare%2Fsandbox@0.12.9.patch",
     "@cloudflare/containers@0.3.7": "patches/@cloudflare%2Fcontainers@0.3.7.patch",
     "agents@0.24.0": "patches/agents@0.24.0.patch",
@@ -201,6 +201,7 @@
     "@cloudflare/containers": "0.3.7",
     "fast-uri": "^3.1.3",
     "hono": "4.13.7",
+    "lodash-es": "^4.18.1",
     "miniflare": {
       "undici": "7.29.1"
     }
