@@ -537,7 +537,7 @@ export function requireSandboxedExecutors(taskId: string, rt: AgentRuntime): voi
  * Pin the model this suite ANNOUNCED as the profile its routed lanes resolve.
  *
  * WHAT A ROUTED LANE NEEDS. Every model lane on a local runtime reads a turn
- * profile: `rt.judgeModel` / `rt.fastLlm` / `rt.advisorLlm` come from
+ * profile: `rt.judgeModel` / `rt.fastLlm` come from
  * `resolveRoutedLane` (core/src/runtime-builder.ts:115-121) and `rt.llm.complete`
  * routes `reflection` through `ensureProfile()` (cli-backend/src/runtime.ts:
  * 395-420). A runtime with no profile and no resolver leaves all three lanes

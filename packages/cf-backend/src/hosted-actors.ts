@@ -115,6 +115,8 @@ export interface HostedActorSeams {
   armWake(): void;
   rederiveWake(): void;
   temporary(actor: BoundActor): TemporaryAgentPort;
+  /** The hirer's held advisor answers reach its inbox. */
+  deliverAdvisorAnswers(actor: BoundActor): Promise<void>;
 }
 
 export function hostedDelegationBudget(
@@ -269,7 +271,10 @@ export async function relayHostedReport(
     }),
     announce: () => { seams.announce(hirer); },
     onAdmitted: () => { if (seams.host.hosted(parent)?.session.inFlight !== true) seams.scheduleDrain(hirer); },
-    onEvolutionAnswer: () => { seams.rederiveWake(); },
+    onEvolutionAnswer: async () => {
+      seams.rederiveWake();
+      await seams.deliverAdvisorAnswers(hirer);
+    },
     temporary: seams.temporary(hirer),
   }, { fromSubordinate: name, ...event }, Date.now());
 }

@@ -91,7 +91,6 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
       craftStore: origin.craftStore,
       get judgeModel() { return origin.judgeModel; },
       get fastLlm() { return origin.fastLlm; },
-      get advisorLlm() { return origin.advisorLlm; },
       executionRouter: router,
       shell,
       checkpoints: origin.checkpoints,

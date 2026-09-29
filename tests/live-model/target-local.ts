@@ -23,8 +23,8 @@
  *   `installPreTurnProfile` — `setProfileResolver` has exactly ONE caller in the
  *     product, `LocalAgentSession`'s constructor (`local-session.ts:625`), so a
  *     seam that returns the runtime without it hands back a workspace whose
- *     every routed model lane is dead: `rt.judgeModel` / `rt.fastLlm` /
- *     `rt.advisorLlm` all resolve undefined, their `?? rt.llm` fallback reaches
+ *     every routed model lane is dead: `rt.judgeModel` / `rt.fastLlm`
+ *     both resolve undefined, their `?? rt.llm` fallback reaches
  *     the reflection lane, and that throws. It cost 11 failures across three
  *     suites on 2026-08-24. Called from `provision` for exactly that reason —
  *     this is the seam's own obligation, not the caller's to remember.

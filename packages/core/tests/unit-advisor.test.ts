@@ -1,5 +1,5 @@
-/** The advisor's decision half: each suppression rule alone, and the lane
- *  against a fake reviewer, asserted on observable calls. */
+/** The advisor's decision half: each suppression rule alone, and the reply
+ *  delivery an advisor agent's answer takes, asserted on observable calls. */
 
 import { describe, test, expect } from 'bun:test';
 import { createMemoryVfs } from '@kinu.run/test-utils';
@@ -7,19 +7,16 @@ import { stepContextLimit } from '../src/context-window';
 import { CHARS_PER_TOKEN } from '../src/llm';
 import { advisorWorkspaceGuidance, renderInstructionOmission } from '../src/prompting/agents-md';
 import type { AdvisorWorkspace } from '../src/prompting/agents-md';
-import { KinuError } from '../src/obs/error';
-import { createRecordingLogger, setDiagnosticsSink, type RecordingLogger } from '../src/obs/index';
 import {
   ADVISOR_DEDUPE_WINDOW, ADVISOR_HEADER, ADVISOR_NOTE_MAX_CHARS,
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
   CONTENT_FREE_NOTES, DEFAULT_ADVISOR_MIN_SEVERITY,
   buildAdvisorPrompt, isAdvisorSeverity, isContentFree, isDuplicateNote,
-  judgeNote, normalizeNote, parseAdvisorReply, reviewRecordedTurn,
+  deliverAdvisorReply, judgeNote, normalizeNote, parseAdvisorReply,
   type AdvisorNote, type AdvisorSeverity,
 } from '../src/index';
 import type { AgentSignal } from '../src/types/signals';
 import type { CompletedTurn } from '../src/evolution/types';
-import type { LLM } from '../src/types/primitives';
 
 const aTurn = (over: Partial<CompletedTurn> = {}): CompletedTurn => ({
   userMessage: 'rotate the staging keys',
@@ -33,38 +30,27 @@ const aTurn = (over: Partial<CompletedTurn> = {}): CompletedTurn => ({
   ...over,
 });
 
-const saying = (raw: string): LLM => ({
-  async *stream() { yield ''; },
-  complete: async () => raw,
-});
-
 const NOTE: AdvisorNote = {
   note: 'the rotate command exited 1 and the reply says it worked',
   severity: 'concern',
   class: 'wrong-work',
 };
 
+/** The advisor agent's reply, judged and delivered as the reviewed actor does when it arrives. */
 async function lane(over: {
-  llm?: LLM | undefined;
+  reply?: string;
   minSeverity?: AdvisorSeverity;
   recent?: readonly string[];
   gateOpen?: boolean;
   turn?: CompletedTurn;
-  reachable?: readonly string[];
-  guidance?: string;
 } = {}) {
   const delivered: AgentSignal[] = [];
   const recorded: AdvisorNote[] = [];
 
-  const disposition = await reviewRecordedTurn({
-    snapshot: {
-      turn: over.turn ?? aTurn(),
-      reachable: [...(over.reachable ?? [])],
-      minSeverity: over.minSeverity ?? DEFAULT_ADVISOR_MIN_SEVERITY,
-      recent: [...(over.recent ?? [])],
-    },
-    llm: 'llm' in over ? over.llm : saying(JSON.stringify(NOTE)),
-    govern: (llm) => llm,
+  const disposition = await deliverAdvisorReply(over.reply ?? JSON.stringify(NOTE), {
+    turnId: (over.turn ?? aTurn()).turnId,
+    minSeverity: over.minSeverity ?? DEFAULT_ADVISOR_MIN_SEVERITY,
+    recent: [...(over.recent ?? [])],
     gateOpen: over.gateOpen ?? false,
     send: async (signal) => {
       delivered.push(signal);
@@ -72,7 +58,6 @@ async function lane(over: {
       return 'queued';
     },
     record: (note) => { recorded.push(note); },
-    guidance: over.guidance,
   });
 
   return { disposition, delivered, recorded };
@@ -86,7 +71,6 @@ describe('workspace advisor guidance', () => {
     const { vfs } = createMemoryVfs();
 
     if (content !== undefined) await vfs.writeFile('ADVISOR.md', content);
-    const prompts: string[] = [];
     const reads: string[] = [];
 
     const workspace: AdvisorWorkspace = {
@@ -107,23 +91,8 @@ describe('workspace advisor guidance', () => {
       limits: async () => limits,
     };
 
-    const guidance = await advisorWorkspaceGuidance(workspace);
-
-    await lane({
-      guidance,
-      llm: {
-        ...saying('{}'),
-        complete: async (prompt) => {
-          prompts.push(prompt);
-
-          return '{}';
-        },
-      },
-    });
-    expect(prompts).toHaveLength(1);
-    const prompt = prompts[0];
-
-    if (prompt === undefined) throw new Error('Advisor made no review call');
+    // The advisor's task, as the reviewed actor hires it.
+    const prompt = buildAdvisorPrompt(aTurn(), [], await advisorWorkspaceGuidance(workspace));
 
     return { prompt, reads };
   }
@@ -161,16 +130,12 @@ describe('the owner’s switch', () => {
     expect(DEFAULT_ADVISOR_MIN_SEVERITY).toBe('concern');
   });
 
-  test('a backend that wires no reviewer does nothing, whatever the switch says', async () => {
-    const run = await lane({ llm: undefined });
-    expect(run).toMatchObject({ disposition: null, delivered: [], recorded: [] });
-  });
 });
 
 describe('severity decides where a note goes', () => {
   test('below the floor it is a Changelog row and never a card', async () => {
     const run = await lane({
-      llm: saying(JSON.stringify({ note: 'the variable name is inconsistent', severity: 'nit', class: 'wrong-work' })),
+      reply: (JSON.stringify({ note: 'the variable name is inconsistent', severity: 'nit', class: 'wrong-work' })),
       minSeverity: 'concern',
     });
 
@@ -193,7 +158,7 @@ describe('severity decides where a note goes', () => {
 
   test('a lowered floor lets a nit through — the floor is the only gate on it', async () => {
     const run = await lane({
-      llm: saying(JSON.stringify({ note: 'the variable name is inconsistent', severity: 'nit', class: 'wrong-work' })),
+      reply: (JSON.stringify({ note: 'the variable name is inconsistent', severity: 'nit', class: 'wrong-work' })),
       minSeverity: 'nit',
     });
 
@@ -248,7 +213,7 @@ describe('the content-free rule', () => {
   });
 
   test('a content-free note is neither said nor stored', async () => {
-    const run = await lane({ llm: saying(JSON.stringify({ note: 'Stop.', severity: 'blocker', class: 'wrong-work' })) });
+    const run = await lane({ reply: (JSON.stringify({ note: 'Stop.', severity: 'blocker', class: 'wrong-work' })) });
     expect(run).toMatchObject({ disposition: 'drop', delivered: [], recorded: [] });
   });
 });
@@ -325,7 +290,7 @@ describe('what the model is allowed to answer', () => {
   });
 
   test('silence reaches nothing: no card, no row', async () => {
-    const run = await lane({ llm: saying('{}') });
+    const run = await lane({ reply: ('{}') });
     expect(run).toMatchObject({ disposition: null, delivered: [], recorded: [] });
   });
 
@@ -451,20 +416,8 @@ describe('the missed-capability class', () => {
     expect(prompt).not.toContain('swarm');
   });
 
-  test('the lane forwards what the backend observed', async () => {
-    let seen = '';
-
-    const capturing: LLM = {
-      async *stream() { yield ''; },
-      complete: async (prompt) => {
-        seen = prompt;
-
-        return '{}';
-      },
-    };
-
-    await lane({ llm: capturing, reachable: ['agents'] });
-    expect(seen).toContain('did not use: agents');
+  test('the task forwards what the backend observed', () => {
+    expect(buildAdvisorPrompt(aTurn(), ['agents'])).toContain('did not use: agents');
   });
 });
 
@@ -529,11 +482,11 @@ describe('the user-dissatisfaction class', () => {
 
   test('a quoted note still obeys the suppression rules', async () => {
     const quoted = { note: 'the user asked you to "write better commit messages"', severity: 'concern', class: 'dissatisfaction' } as const;
-    const first = await lane({ llm: saying(JSON.stringify(quoted)) });
+    const first = await lane({ reply: (JSON.stringify(quoted)) });
     expect(first.disposition).toBe('deliver');
 
     const again = await lane({
-      llm: saying(JSON.stringify(quoted)),
+      reply: (JSON.stringify(quoted)),
       recent: [normalizeNote(quoted.note)],
     });
 
@@ -555,232 +508,11 @@ describe('a turn with no durable id', () => {
   });
 });
 
-// Both backends review from one snapshot through one body; the turn's own
-// labels choose the reviewing client, never the mission active later.
+// Both backends deliver through one body; the gate is the caller's (see the completion-gate rule).
 
-describe('reviewRecordedTurn', () => {
-  const snapshot = (over: Partial<CompletedTurn> = {}) => ({
-    turn: aTurn(over), reachable: ['shell'], minSeverity: DEFAULT_ADVISOR_MIN_SEVERITY, recent: [],
-  });
-
-  test('a labelled turn is reviewed on the governed client; an unlabelled one on the bare client', async () => {
-    const governed: string[][] = [];
-    const bare = saying(JSON.stringify(NOTE));
-
-    const review = (labels: string[] | undefined) => reviewRecordedTurn({
-      snapshot: snapshot(labels === undefined ? {} : { missionLabels: labels }),
-      llm: bare,
-      govern: (llm, asked) => {
-        governed.push([...asked]);
-
-        return llm;
-      },
-      gateOpen: false,
-      send: async () => 'queued',
-      record: () => {},
-    });
-
-    expect(await review(['audit'])).toBe('deliver');
-    expect(await review(undefined)).toBe('deliver');
-    expect(await review([])).toBe('deliver');
-    expect(governed).toEqual([['audit']]);
-  });
-
-  test('the gate travels with the caller: open, the note is recorded and not spoken', async () => {
-    const delivered: AgentSignal[] = [];
-    const recorded: AdvisorNote[] = [];
-
-    const disposition = await reviewRecordedTurn({
-      snapshot: snapshot(),
-      llm: saying(JSON.stringify(NOTE)),
-      govern: (llm) => llm,
-      gateOpen: true,
-      send: async (signal) => {
-        delivered.push(signal);
-
-        return 'queued';
-      },
-      record: (note) => { recorded.push(note); },
-    });
-
-    expect(disposition).toBe('changelog');
-    expect(delivered).toEqual([]);
-    expect(recorded).toEqual([NOTE]);
-  });
-
-  test('a reviewer that is down is a turn with no advice; a defect in the review propagates', async () => {
-    const bug: LLM = { async *stream() { yield ''; }, complete: async () => { throw new KinuError('bad_input', 'prompt rejected'); } };
-    await expect(reviewRecordedTurn({
-      snapshot: snapshot(), llm: bug, govern: (llm) => llm, gateOpen: false,
-      send: async () => 'queued', record: () => {},
-    })).rejects.toMatchObject({ code: 'bad_input' });
-  });
-
-  test('a reviewer that throws is a turn with no advice, never a failed lane', async () => {
-    const throwing: LLM = { async *stream() { yield ''; }, complete: async () => { throw new Error('provider down'); } };
-    expect(await reviewRecordedTurn({
-      snapshot: snapshot(), llm: throwing, govern: (llm) => llm, gateOpen: false,
-      send: async () => 'queued', record: () => {},
-    })).toBeNull();
-    expect(await reviewRecordedTurn({
-      snapshot: snapshot(), llm: undefined, govern: (llm) => llm, gateOpen: false,
-      send: async () => 'queued', record: () => {},
-    })).toBeNull();
-  });
-
-});
-
-// Transient failures retry up to three attempts, each recorded on
-// `advisor.review_failed`; a definitive failure is recorded once and thrown.
-
-describe('advisor review retries', () => {
-  const snapshot = (over: Partial<CompletedTurn> = {}) => ({
-    turn: aTurn(over), reachable: ['shell'], minSeverity: DEFAULT_ADVISOR_MIN_SEVERITY, recent: [],
-  });
-
-  const attempts = (rec: RecordingLogger) => rec.emitted
-    .filter((line) => line.event === 'advisor.review_failed')
-    .map((line) => line.fields);
-
-  test('a reviewer that fails twice transiently then answers is heard, with both failures recorded', async () => {
-    let calls = 0;
-
-    const limited: LLM = {
-      async *stream() { yield ''; },
-      complete: async () => {
-        calls++;
-
-        // `toProviderError` maps 429 and 5xx to `unavailable`; retry keys on the code.
-        if (calls <= 2) throw new KinuError('unavailable', 'advisor model rate-limited (HTTP 429)');
-
-        return JSON.stringify(NOTE);
-      },
-    };
-
-    const rec = createRecordingLogger();
-    const restore = setDiagnosticsSink(rec);
-
-    try {
-      const delivered: AgentSignal[] = [];
-
-      const disposition = await reviewRecordedTurn({
-        snapshot: snapshot(), llm: limited, govern: (llm) => llm, gateOpen: false,
-        send: async (signal) => {
-          delivered.push(signal);
-
-          return 'queued';
-        },
-        record: () => {},
-      });
-
-      expect(disposition).toBe('deliver');
-      expect(delivered).toHaveLength(1);
-    } finally {
-      restore();
-    }
-
-    expect(calls).toBe(3);
-    expect(attempts(rec)).toEqual([{ attempt: 1 }, { attempt: 2 }]);
-  });
-
-  test('a definitive failure is recorded once and thrown, never retried', async () => {
-    let calls = 0;
-
-    const refusing: LLM = {
-      async *stream() { yield ''; },
-      complete: async () => {
-        calls++;
-
-        throw new KinuError('denied', 'advisor model credentials rejected');
-      },
-    };
-
-    const rec = createRecordingLogger();
-    const restore = setDiagnosticsSink(rec);
-
-    try {
-      await expect(reviewRecordedTurn({
-        snapshot: snapshot(), llm: refusing, govern: (llm) => llm, gateOpen: false,
-        send: async () => 'queued', record: () => {},
-      })).rejects.toMatchObject({ code: 'denied' });
-    } finally {
-      restore();
-    }
-
-    expect(calls).toBe(1);
-    // A definitive failure is rethrown after one attempt.
-    expect(attempts(rec)).toEqual([{ attempt: 1 }]);
-  });
-
-  test('three transient failures leave the turn unreviewed, with all three attempts recorded', async () => {
-    let calls = 0;
-
-    const down: LLM = {
-      async *stream() { yield ''; },
-      complete: async () => {
-        calls++;
-
-        throw new KinuError('unavailable', 'advisor model unreachable');
-      },
-    };
-
-    const rec = createRecordingLogger();
-    const restore = setDiagnosticsSink(rec);
-
-    try {
-      const delivered: AgentSignal[] = [];
-      const recorded: AdvisorNote[] = [];
-
-      const disposition = await reviewRecordedTurn({
-        snapshot: snapshot(), llm: down, govern: (llm) => llm, gateOpen: false,
-        send: async (signal) => {
-          delivered.push(signal);
-
-          return 'queued';
-        },
-        record: (note) => { recorded.push(note); },
-      });
-
-      expect(disposition).toBeNull();
-      expect(delivered).toEqual([]);
-      expect(recorded).toEqual([]);
-    } finally {
-      restore();
-    }
-
-    expect(calls).toBe(3);
-    expect(attempts(rec)).toEqual([{ attempt: 1 }, { attempt: 2 }, { attempt: 3 }]);
-  });
-  test('an unclassified failure is definitive: one attempt, one report, no advice', async () => {
-
-    let calls = 0;
-
-    const burning: LLM = {
-      async *stream() { yield ''; },
-      complete: async () => {
-        calls++;
-
-        // A bare Error has no code, so it is not guessed transient.
-        throw new Error('reviewer is on fire');
-      },
-    };
-
-    const rec = createRecordingLogger();
-    const restore = setDiagnosticsSink(rec);
-
-    try {
-      const disposition = await reviewRecordedTurn({
-        snapshot: snapshot(), llm: burning, govern: (llm) => llm, gateOpen: false,
-        send: async () => 'queued', record: () => {},
-      });
-
-      expect(disposition).toBeNull();
-    } finally {
-      restore();
-    }
-
-    expect(calls).toBe(1);
-    expect(attempts(rec)).toEqual([{ attempt: 1 }]);
+describe('deliverAdvisorReply', () => {
+  test('an unreadable reply is a turn with no advice', async () => {
+    expect(await lane({ reply: 'the reviewer wandered off' })).toMatchObject({ disposition: null, delivered: [], recorded: [] });
   });
 });
 

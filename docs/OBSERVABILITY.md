@@ -340,7 +340,7 @@ call's usage through the `ModelCallSink` the call was handed.
   route's source. It writes `model_call` through
   `LocalAgentSession.modelCallSink`.
 - Cloud uses `createProfileLaneLLM` (`cf-backend/src/runtime.ts`; the
-  `judgeModel`, `fastLlm` and `advisorLlm` lanes), which files the row through
+  `judgeModel` and `fastLlm` lanes), which files the row through
   `ActorAgent.reportModelCall`.
 - Every entry point in `model-invocation.ts` takes the spend it reports, so a
   call site cannot drop the sink. `.oxlintrc.json` refuses the AI SDK's

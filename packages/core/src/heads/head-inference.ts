@@ -481,30 +481,16 @@ interface CompletedTurnReview {
   outcome: ActorExecutionResult;
 }
 
-/** A review that fails is recorded and advises nothing: it must not end the work. */
-async function adviseCompletedTurn({ session, input, deps, lease, outcome }: CompletedTurnReview): Promise<ModelMessage[]> {
-  const advice: ModelMessage[] = [];
-
-  if (!session.orchestrator.improvementLanesOpen('completed', input.mode)) return advice;
+/** Hires the turn's advisor and returns: its note reaches this actor when it answers, after this turn. */
+async function adviseCompletedTurn({ session, input, deps, lease, outcome }: CompletedTurnReview): Promise<void> {
+  if (!session.orchestrator.improvementLanesOpen('completed', input.mode)) return;
 
   const turn = snapshotCompletedTurn(session.orchestrator.acc, {
     userMessage: input.task, assistantResponse: outcome.text,
     turnId: `${deps.runId}:${lease.turnId}`, sessionId: input.id, origin: 'programmatic',
   });
 
-  try {
-    await session.reviewTurn(session.advisorSnapshot(turn, Object.keys(deps.tools)), false, async (signal) => {
-      advice.push({ role: 'user', content: signal.text });
-
-      return 'queued';
-    });
-  } catch (cause) {
-    diagnostics.failure('advisor.lane_failed', toKinuError({
-      doing: 'reviewing the reporting actor turn', cause, otherwise: 'unavailable',
-    }), { actor: deps.actor.handle.name });
-  }
-
-  return advice;
+  await session.hireAdvisor(session.advisorSnapshot(turn, Object.keys(deps.tools)));
 }
 
 /** `kind` namespaces the canonical ids of the next turn's input. */
@@ -513,7 +499,7 @@ interface NextTurnInput {
   deps: HeadInferenceDeps;
   conversation: ModelMessage[];
   turnId: string;
-  kind: 'advice' | 'resume';
+  kind: 'resume';
   messages: readonly ModelMessage[];
 }
 
@@ -698,7 +684,6 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       );
 
       let turnFailed = false;
-      let advice: ModelMessage[] = [];
 
       try {
         if (index === 0 && deps.delegation) {
@@ -777,7 +762,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         // The runner's selected answer (chat.ts answerFromSteps), not `text`, which may be a synthesized stand-in.
         if (outcome.answer !== null) lastText = outcome.answer;
 
-        if (!turnFailed && !outcome.interrupted) advice = await adviseCompletedTurn({ session, input, deps, lease, outcome });
+        if (!turnFailed && !outcome.interrupted) await adviseCompletedTurn({ session, input, deps, lease, outcome });
 
         session.settleTurnClaim(lease, turnClaimOutcome(turnFailed, outcome.interrupted));
       } finally {
@@ -785,12 +770,6 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       }
 
       if (failure !== undefined || deps.isAborted()) break;
-
-      if (advice.length > 0) {
-        await appendNextTurnInput({ session, deps, conversation, turnId: `${turnId}#${index + 1}`, kind: 'advice', messages: advice });
-
-        continue;
-      }
 
       const resumed = await deps.resume?.();
 

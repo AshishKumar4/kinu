@@ -74,18 +74,25 @@ function textAnswer(answer: string, usage: LanguageModelV2Usage) {
   return { content: [{ type: 'text' as const, text: answer }], finishReason: 'stop' as const, usage, warnings: [] };
 }
 
-function streamingModel(answer: string, onCall?: (options: LanguageModelV2CallOptions) => void): TestLanguageModelV2 {
+/** The advisor's task names what it is: a review of one finished turn. */
+function isReview(options: LanguageModelV2CallOptions): boolean {
+  return JSON.stringify(options.prompt).includes('You are reviewing one finished turn');
+}
+
+/** `review`, when given, is what a hired advisor on the same model answers its task with. */
+function streamingModel(answer: string, onCall?: (options: LanguageModelV2CallOptions) => void, review?: string): TestLanguageModelV2 {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+  const answerTo = (options: LanguageModelV2CallOptions): string => (review !== undefined && isReview(options) ? review : answer);
 
   return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
-    doGenerate: async () => textAnswer(answer, usage),
+    doGenerate: async (options) => textAnswer(answerTo(options), usage),
     doStream: async (options) => {
       onCall?.(options);
 
       return {
-        stream: textStream(answer, usage),
+        stream: textStream(answerTo(options), usage),
         response: { headers: {} },
       };
     },
@@ -1157,27 +1164,24 @@ describe('LocalAgentHost', () => {
     await host.close();
   });
 
-  test('a subordinate turn gets advisor feedback while its evolution window stays empty', async () => {
+  test('a subordinate turn hires its advisor, and the note opens its next turn after the answer arrives', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
     const note = 'The probe failed but the reply claimed success. Check its exit status.';
     const requests: string[] = [];
 
-    const model = new TestLanguageModelV2({
-      provider: 'fake', modelId: 'fake-model',
-      doGenerate: async (options) => ({
-        content: [{ type: 'text', text: JSON.stringify(options.prompt).includes('You are reviewing one finished turn')
-          ? JSON.stringify({ note, severity: 'concern', class: 'wrong-work' }) : '{}' }],
-        finishReason: 'stop', usage: { inputTokens: 5, outputTokens: 7, totalTokens: 12 }, warnings: [],
-      }),
-      doStream: streamingModel('The probe succeeded.', (options) => { requests.push(JSON.stringify(options.prompt)); }).doStream,
-    });
+    // The advisor is a hired agent on the same model: its task is the review, its answer the note.
+    const model = streamingModel(
+      'The probe succeeded.',
+      (options) => { if (!isReview(options)) requests.push(JSON.stringify(options.prompt)); },
+      JSON.stringify({ note, severity: 'concern', class: 'wrong-work' }),
+    );
 
     const { host } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }], { advisor: true });
     const ended = Promise.withResolvers<void>();
     let turns = 0;
     host.subscribe((agent, event) => {
-      if (agent === 'root' || event.type !== 'turn-end') return;
+      if (agent === 'root' || agent.includes('ask-advisor') || event.type !== 'turn-end') return;
       turns++;
 
       if (turns === 2) ended.resolve();
@@ -1190,6 +1194,8 @@ describe('LocalAgentHost', () => {
     await ended.promise;
     await host.close();
     const actorId = childActorId(dbPath, child.name);
+    // Its first turn ended on its own answer; the note opened the second.
+    expect(requests[0]).not.toContain(note);
     expect(requests.some((prompt) => prompt.includes(note))).toBe(true);
     expect((await userMessages(dbPath, actorId)).some((message) => message.includes(note))).toBe(true);
     expect(evolutionRows(dbPath, actorId)).toEqual({ window: 0, outcomes: [], lessons: [] });
@@ -1201,6 +1207,10 @@ describe('LocalAgentHost', () => {
       ).all(actorId);
 
       expect(notes).toEqual([{ message: note }]);
+      // The reviewer is a background agent under the subordinate: view-only, no tab, one task.
+      expect(db.query<{ origin: string; tab: number; input: number; lifetime: string }, [string]>(
+        'SELECT origin, tab, input, lifetime FROM workspace_actors WHERE parent_actor_id = ?',
+      ).all(actorId)).toContainEqual({ origin: 'evolution', tab: 0, input: 0, lifetime: 'task' });
     } finally { db.close(); }
   });
 
@@ -1250,22 +1260,17 @@ describe('LocalAgentHost', () => {
     expect(hireChild.reflections()).toBe(0);
   });
 
-  test('a daemon-hosted swarm node keeps its advisor feedback on its own next turn', async () => {
+  test('a daemon-hosted swarm node takes no input, so its turn hires no advisor', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
+    const reviews: boolean[] = [];
 
-    const { host } = makeHost(state, streamingModel('The probe succeeded.'), [
+    const { host } = makeHost(state, streamingModel('The probe succeeded.', (options) => { reviews.push(isReview(options)); }), [
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ], { advisor: true });
 
     const session = await host.acquire('root');
     const seat = await session.hostNode({ nodeId: 'advised-node', rootId: 'swarm-run', depth: 1 });
-    const note = 'The probe exit status was not checked. Verify it before relying on the answer.';
-    seat.actor.runtime.advisorLlm = {
-      async *stream() { yield ''; },
-      complete: async () => JSON.stringify({ note, severity: 'concern', class: 'wrong-work' }),
-    };
-    const requests: string[] = [];
 
     const report = await runHeadInference({
       id: 'advised-node', rootId: 'swarm-run', parentId: null, depth: 1,
@@ -1273,15 +1278,14 @@ describe('LocalAgentHost', () => {
       mergeStrategy: 'synthesize', budget: { maxDepth: 0, spawnedAt: Date.now() }, loop: { kind: 'builtin' },
     }, {
       actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
-      model: streamingModel('The probe succeeded.', (options) => { requests.push(JSON.stringify(options.prompt)); }),
+      model: streamingModel('The probe succeeded.', (options) => { reviews.push(isReview(options)); }),
       clock: REAL_CLOCK, tools: {}, capture: new HeadCapture(), isAborted: () => false, workspaceLayout: 'shared-workspace',
     });
 
-    expect(report).toMatchObject({ status: 'completed', errorMessage: undefined });
-    expect(requests).toHaveLength(2);
-    expect(requests[1]).toContain(note);
-    expect(evolutionRows(dbPath, seat.actor.handle.actorId)).toEqual({ window: 0, outcomes: [], lessons: [] });
     await host.close();
+    expect(report).toMatchObject({ status: 'completed', errorMessage: undefined });
+    expect(reviews).toEqual([false]);
+    expect(evolutionRows(dbPath, seat.actor.handle.actorId)).toEqual({ window: 0, outcomes: [], lessons: [] });
   });
 
   /** A progress note sets the durable relay's "spoke this turn" bit, which must not suppress the terminal answer. */

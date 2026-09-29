@@ -672,6 +672,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ),
       deferrals: () => this.deferralChannel(),
       refinementLane: () => async () => { await refinementPass(this.refinementDeps); },
+      advisorPort: (reference) => this.temporaryAgentPort(reference),
       chosenLoopOrigin: (record: WorkspaceActor) => this._chosenLoopOrigins.get(record.actorId) ?? null,
       chosenWriteObserver: (record: WorkspaceActor) => this._actorWriteObservers.get(record.actorId) ?? null,
     };
@@ -723,6 +724,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       armWake: () => { this.armDelegationWake(); },
       temporary: (actor) => this.temporaryAgentPort(actor.reference),
       rederiveWake: () => { this.armDurableWake(); },
+      deliverAdvisorAnswers: async (actor) => {
+        const session = actor.record.parentActorId === null ? this.actorSession : (await this.actorHost().acquire(actor.reference)).session;
+        await session.deliverAdvisorAnswers();
+      },
       register: async ({ creationId, loop }) => {
         const entry = await this.actorDirectory({
           action: 'register', creationId, name: explorationActorKey(creationId), origin: 'swarm', lifetime: 'task',

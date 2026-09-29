@@ -53,7 +53,8 @@ export interface SubordinateIngressDeps {
   transaction<T>(body: () => T): T;
   announce(report: AdmittedSubordinateReport): void;
   onAdmitted(): void;
-  onEvolutionAnswer(): void;
+  /** After the answer is stored; the advisor's answer is delivered here, so the hirer awaits it. */
+  onEvolutionAnswer(): void | Promise<void>;
   temporary?: TemporaryAgentPort;
 }
 
@@ -89,7 +90,7 @@ export async function receiveSubordinateEvent(
       deps.roster.helpers.storeAnswer(input.fromSubordinate, input.status === 'blocked' ? 'blocked' : 'completed', answer);
       deps.roster.applyReport(input.fromSubordinate, input.status, input.origin, now);
     });
-    deps.onEvolutionAnswer();
+    await deps.onEvolutionAnswer();
     deps.temporary?.release(input.fromSubordinate);
 
     return { id: '', disposition: 'admitted' };

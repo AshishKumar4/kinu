@@ -523,7 +523,6 @@ export function createCFRuntime(
     memory, executor, llm, schedule, identity, craftStore,
     get judgeModel() { return profileLane('judge'); },
     get fastLlm() { return profileLane('fast'); },
-    get advisorLlm() { return profileLane('advisor'); },
     executionRouter,
     shell,
     localVfs: baseWorkspaceVfs,

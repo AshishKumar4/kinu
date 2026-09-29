@@ -10,9 +10,9 @@ import { REASONING_EFFORT_FOR_STAGE, REASONING_EFFORTS, type ReasoningEffort } f
 import type { NamedSwarmPreset } from '../strategy/swarm-presets';
 import { DEFAULT_PROVIDER_RETRIES, ROLE_ID_RE, isValidRoleId } from '../types/profile';
 import { TierIdSchema, tierIdsOf,
-  BUILTIN_PROFILE_CATALOG, deriveRoleLabel, effectiveRoleCatalog,
+  BUILTIN_PROFILE_CATALOG, SYSTEM_ROLE_DEFINITIONS, deriveRoleLabel, effectiveRoleCatalog,
   profileCatalogDigest, validateProfileCatalogEnvelope,
-  type ProfileAuthority, type ProfileCatalogEnvelope, type RoleId, type TierAssignment, type TierId,
+  type ProfileAuthority, type ProfileCatalogEnvelope, type RoleCatalog, type RoleId, type TierAssignment, type TierId,
 } from './catalog';
 import type { RunEventInput } from '../events/types';
 import { diagnostics, toKinuError } from '../obs/index';
@@ -285,7 +285,7 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
     specs.map((spec) => Object.freeze({ model: spec, reasoningEffort: effortFor(spec, wanted) })),
   );
 
-  const roles = effectiveRoleCatalog(envelope.catalog);
+  const roles: RoleCatalog = { ...effectiveRoleCatalog(envelope.catalog), ...SYSTEM_ROLE_DEFINITIONS };
 
   const role = roles[input.roleId];
 

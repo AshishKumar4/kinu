@@ -22,6 +22,7 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import type { BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host';
 import type { Identity } from '../src/types/primitives';
+import type { TemporaryAgentPort } from '../src/types/subordinates';
 
 /** The one role a fixture actor resolves under; no `allowedTools`, so it never narrows a suite's surface. */
 const TESTER: RoleDefinition = {
@@ -68,6 +69,8 @@ export function hostedSeatsOver(input: {
   readonly autoEvolve?: boolean;
   /** Spans every seat's turns. */
   readonly tracing?: AgentTracing;
+  /** The port every seat hires its advisor through; absent, no seat is reviewed. */
+  readonly advisorPort?: TemporaryAgentPort;
 }): HostedSeats {
   const { rt, db } = input;
   const runId = input.runId ?? 'run-hosted-fixture';
@@ -140,6 +143,7 @@ export function hostedSeatsOver(input: {
     orchestrationFor,
     // No run events published; a suite asserting context-edit audit rows binds its own.
     contextEvents: () => null,
+    advisorPort: () => input.advisorPort ?? null,
   });
 
   const seat = async (

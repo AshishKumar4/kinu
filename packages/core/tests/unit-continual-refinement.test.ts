@@ -154,6 +154,8 @@ function scriptedRefiner(answer: string | ((request: TemporaryRunRequest) => str
 
         return asked === undefined ? null : { state: 'answered', name: 'refiner-1', status: 'completed', answer: answerOf(asked) };
       },
+      answered: () => [],
+      forget: () => {},
     },
   };
 }
@@ -193,6 +195,8 @@ function deferredRefiner(...answers: readonly RefinementProposal[]) {
       reclaim: (): EvolutionHelperAnswer | null => answered === null
         ? null
         : { state: 'answered', name: 'refiner-1', status: 'completed', answer: proposalText(answered) },
+      answered: () => [],
+      forget: () => {},
     },
   };
 }
@@ -209,6 +213,8 @@ function answeringPort(answer: () => string): TemporaryAgentPort {
     },
     release: async () => {},
     reclaim: () => stored === null ? null : { state: 'answered', name: 'refiner', status: 'completed', answer: stored },
+    answered: () => [],
+    forget: () => {},
   };
 }
 
@@ -583,6 +589,8 @@ describe('the refiner — bounded references, prior history, strict typed answer
         start: async () => ({ reason: 'unavailable', error: 'no roster substrate here' }),
         release: async () => {},
         reclaim: () => null,
+        answered: () => [],
+        forget: () => {},
       },
     };
 

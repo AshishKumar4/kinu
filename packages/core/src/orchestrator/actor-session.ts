@@ -8,7 +8,8 @@ import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile
 import { promptCacheWarm, PromptCacheRouteSchema, type CachedRequest } from '../prompting/cache-breakpoints';
 import type { KinuExtension } from '../extension';
 import { ExtensionHost } from '../extension';
-import { KinuError, renderThrownChain, type TurnTrace, type TurnTracing } from '../obs/index';
+import { Effect } from 'effect';
+import { attempt, diagnostics, KinuError, renderThrownChain, settle, type TurnTrace, type TurnTracing } from '../obs/index';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from './agent-orchestrator';
 import { describeLandedSteers, type AcceptedSteer, type LandedSteerRow, type UserSteer } from './inbox';
 import { startActorTurn } from './actor-turn';
@@ -29,9 +30,10 @@ import type { VFS } from '../types/primitives';
 import type { AgentConfigStore } from '../config/store';
 import type { CompletedTurn } from '../evolution/types';
 import {
-  reviewRecordedTurn,
-  type AdvisorRecoverySnapshot, type AdvisorDisposition,
+  ADVISOR_ROLE_ID, advisedTurnOf, advisorLane, buildAdvisorPrompt, deliverAdvisorReply, type AdvisorRecoverySnapshot,
 } from '../advisor/review';
+import type { TemporaryAgentPort } from '../types/subordinates';
+import type { AnsweredEvolutionHelper } from '../identity/evolution-helpers';
 import { advisorWorkspaceGuidance } from '../prompting/agents-md';
 import { resolveModelRoute } from '../profiles/model-route';
 import { contextWindowForModel } from '../context-window';
@@ -61,6 +63,12 @@ export interface ActorSessionOptions {
   /** Optional: the revision rows are the durable record; no recorder means no event, never a fabricated one. */
   readonly events?: ContextEventRecorder | null;
   readonly advisor?: ActorAdvisorContext;
+  /** The port this actor hires its advisor through; null or absent, its turns are not reviewed. */
+  readonly advisorPort?: () => TemporaryAgentPort | null;
+  /** The profile's `input`: an actor that takes no input (a swarm node, an evolution agent) is not reviewed. */
+  readonly reviewed?: boolean;
+  /** The completion gate has asked and not heard back, when the host keeps one. */
+  readonly gateOpen?: () => boolean;
   readonly turns?: () => TurnTracing;
 }
 
@@ -254,47 +262,77 @@ export class ActorSession {
     return {
       turn: this.orchestrator.scopedTurn(turn),
       reachable: [...reachable],
-      recent: [...this.options.orchestration.engine.recentAdvisorNotes()],
-      minSeverity: (this.options.advisor?.config ?? this.runtime.actor.config).getAdvisorMinSeverity(),
       model: profile === null || !this.advisorEnabled ? undefined : resolveModelRoute('advisor', profile).model,
     };
   }
 
-  /** Off by default: the owner's switch and a wired reviewer model both decide. */
+  /** Off by default: the owner's switch, a reviewed profile and a port to hire the advisor through all decide. */
   get reviewsTurns(): boolean {
-    return this.runtime.advisorLlm !== undefined && this.advisorEnabled;
+    return this.options.reviewed !== false && this.advisorEnabled && (this.options.advisorPort?.() ?? null) !== null;
   }
 
-  /** Per-turn feedback never calls recordTurn or changes the learning window. */
-  async reviewTurn(
-    snapshot: AdvisorRecoverySnapshot,
-    gateOpen = false,
-    send: (signal: AgentSignal) => Promise<SendOutcome> = (signal) => this.orchestrator.inbox.send(signal),
-  ): Promise<AdvisorDisposition | null> {
-    const { engine, budget } = this.options.orchestration;
+  /**
+   * Hires the turn's advisor, an evolution agent under the advisor preset, and returns: its answer reaches
+   * {@link deliverAdvisorAnswers} through the ingress. Idempotent per turn, so a replay hires no second one.
+   */
+  async hireAdvisor(snapshot: AdvisorRecoverySnapshot): Promise<void> {
+    const port = this.options.advisorPort?.() ?? null;
     const turnId = snapshot.turn.turnId;
-    const llm = this.runtime.advisorLlm;
 
-    if (!this.advisorEnabled || llm === undefined || (turnId && engine.hasAdvisorNoteForTurn(turnId))) return null;
+    // No durable id, no lane to answer on.
+    if (!this.reviewsTurns || port === null || turnId === undefined || turnId === '') return;
+
+    if (this.options.orchestration.engine.hasAdvisorNoteForTurn(turnId) || port.reclaim(advisorLane(turnId)) !== null) return;
+
+    const task = buildAdvisorPrompt(snapshot.turn, snapshot.reachable, await this.advisorGuidance(snapshot));
+    const hired = await port.start({ role: ADVISOR_ROLE_ID, roleLabel: ADVISOR_ROLE_ID, task, mode: 'build', lane: advisorLane(turnId) });
+
+    if (!('status' in hired) || hired.status === 'failed') {
+      diagnostics.event('advisor.hire_failed', { turnId, reason: 'reason' in hired ? hired.reason ?? 'unknown' : 'unknown' });
+    }
+  }
+
+  /** Every advisor answer this actor holds, judged and delivered once; per-turn feedback never changes the learning window.
+   *  One answer that cannot be delivered is recorded and kept for the next pass, never a failed report. */
+  async deliverAdvisorAnswers(): Promise<void> {
+    const port = this.options.advisorPort?.() ?? null;
+
+    if (port === null) return;
+
+    for (const helper of port.answered()) {
+      const turnId = advisedTurnOf(helper.lane);
+
+      if (turnId !== null) await this.deliverAdvisorAnswer(port, helper, turnId);
+    }
+  }
+
+  deliverAdvisorAnswer(port: TemporaryAgentPort, helper: AnsweredEvolutionHelper, turnId: string): Promise<void> {
+    const { engine } = this.options.orchestration;
+    const config = this.options.advisor?.config ?? this.runtime.actor.config;
+
+    return settle(attempt({ doing: `delivering the advisor's review of turn ${turnId}`, otherwise: 'unavailable' }, async () => {
+      // Keyed on the turn, so a delivery cut before `forget` sends nothing twice.
+      if (helper.status === 'completed' && !engine.hasAdvisorNoteForTurn(turnId)) {
+        await deliverAdvisorReply(helper.answer, {
+          turnId,
+          minSeverity: config.getAdvisorMinSeverity(),
+          recent: [...engine.recentAdvisorNotes()],
+          gateOpen: this.options.gateOpen?.() ?? false,
+          send: (signal) => this.orchestrator.inbox.send(signal),
+          record: (note, id) => { engine.recordAdvisorNote(note, id); },
+          ...(this.options.advisor !== undefined && { actor: this.runtime.actor, parent: this.options.advisor.parent }),
+        });
+      }
+
+      port.forget(helper.name);
+    }).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('advisor.delivery_failed', failure, { turnId }); }))));
+  }
+
+  private async advisorGuidance(snapshot: AdvisorRecoverySnapshot): Promise<string> {
     const contextWindow = contextWindowForModel(snapshot.model ?? '').window;
+    const workspace = await this.options.advisor?.workspace() ?? this.runtime.agentStateVfs ?? this.runtime.storage.vfs;
 
-    const workspace = await this.options.advisor?.workspace()
-      ?? this.runtime.agentStateVfs ?? this.runtime.storage.vfs;
-
-    return reviewRecordedTurn({
-      snapshot,
-      actor: this.runtime.actor,
-      llm,
-      govern: (model, labels) => budget?.govern(model, labels) ?? model,
-      gateOpen,
-      guidance: await advisorWorkspaceGuidance({
-        vfs: workspace,
-        limits: async () => ({ contextWindow, modelOutputLimit: null }),
-      }),
-      send,
-      parent: this.options.advisor?.parent,
-      record: (note, id) => { engine.recordAdvisorNote(note, id); },
-    });
+    return await advisorWorkspaceGuidance({ vfs: workspace, limits: async () => ({ contextWindow, modelOutputLimit: null }) });
   }
 
   /** An active turn stages authored replacement; idle replacement commits immediately. */

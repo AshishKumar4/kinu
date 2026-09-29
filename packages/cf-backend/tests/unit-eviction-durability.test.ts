@@ -10,7 +10,7 @@ import {
 import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 import {
   catalogTurn, chatSessionTurns, GATEWAY_CATALOG, gatewayWorkspace, historyOver, jobsOver, orchestratorHarness,
-  reactivateOrchestratorHarness, workspaceMainActor,
+  driveUntil, reactivateOrchestratorHarness, workspaceMainActor,
   type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { answeringGateway, chatCompletion, stubAiBinding } from './helpers/platform-gateway';
@@ -176,7 +176,7 @@ describe('the post-turn lanes', () => {
     await agent.harnessJoinDetachedFibers();
   });
 
-  /** The review is its own detached terminal row: the snapshot is its input, so a fresh activation replays it. */
+  /** The advisor's hire is its own terminal row: the snapshot is its input, so a fresh activation replays it. */
   async function cutReview(): Promise<{ readonly harness: Harness; readonly calls: () => number; readonly restart: () => Promise<Harness> }> {
     let calls = 0;
 
@@ -205,6 +205,8 @@ describe('the post-turn lanes', () => {
       });
 
       await restarted.agent.terminalRetryPass();
+      // The review is the hired advisor's own delegated turn, which the wake drains.
+      await driveUntil(restarted, 'the replayed review settled', () => owedReview(restarted) === 0 && advisorsWorking(restarted) === 0);
       await joinHarnessFibers();
 
       return restarted;
@@ -220,7 +222,10 @@ describe('the post-turn lanes', () => {
 
   const notes = (harness: Harness): number => count(harness, "SELECT COUNT(*) AS n FROM evolution_events WHERE type = 'advisor_note'");
 
-  test('a review cut before it ran is replayed by the next activation and lands exactly one note', async () => {
+  const advisorsWorking = (harness: Harness): number =>
+    count(harness, "SELECT COUNT(*) AS n FROM actor_subordinates WHERE name LIKE 'ask-advisor-%' AND status = 'working'");
+
+  test('a hire cut before it ran is replayed by the next activation and lands exactly one note', async () => {
     const { harness, calls, restart } = await cutReview();
     expect(calls()).toBe(0);
     expect(owedReview(harness)).toBe(1);
@@ -235,7 +240,7 @@ describe('the post-turn lanes', () => {
       .toHaveLength(1);
   });
 
-  test('a review whose note had already landed is NOT re-run, so recovery cannot double it', async () => {
+  test('a turn whose note had already landed hires no advisor again, so recovery cannot double it', async () => {
     const { harness, calls, restart } = await cutReview();
     // The review recorded its note, then the isolate reset before the row settled.
     harness.db.run(`INSERT INTO evolution_events (actor_id, type, message, data)

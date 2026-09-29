@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-09-28",
-  "files": 2820,
-  "functions": 70003,
+  "measuredAt": "2026-09-29",
+  "files": 2838,
+  "functions": 70615,
   "ceiling": 87,
   "line": 29,
   "inventory": [
@@ -299,10 +299,6 @@
     },
     {
       "key": "packages/core/src/feedback/png.ts#sanitizePng",
-      "complexity": 29
-    },
-    {
-      "key": "packages/core/src/heads/head-inference.ts#runHeadInference",
       "complexity": 29
     },
     {
