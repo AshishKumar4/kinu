@@ -226,7 +226,7 @@ describe('E2E Lifecycle', () => {
       "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
     ).all().map(t => t.name);
 
-    expect(tables).toContain('inodes');
+    expect(tables).toContain('vfs_inodes');
     expect(tables).toContain('conversation_entries');
     expect(tables).toContain('search_nodes');
     const soul = await readSoul(rt.storage.vfs) ?? '';
