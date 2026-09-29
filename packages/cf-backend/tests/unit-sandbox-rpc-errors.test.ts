@@ -6,7 +6,8 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { newMessagePortRpcSession } from 'capnweb';
-import { createSandboxExecutor, isVfsError, sandboxFiles } from '@kinu.run/core';
+import { createSandboxExecutor, sandboxFiles } from '@kinu.run/core';
+import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import type { KinuSandbox } from '../src/kinu-sandbox';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 import { present } from '@kinu.run/test-utils';

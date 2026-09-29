@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { answerParentRpc, createParentExecutor, type ParentWorkspaceHandle } from '../src/execution/parent';
-import { makeVfsError } from '../src/vfs/errno';
+import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 
 function parentHandle(calls: string[]): ParentWorkspaceHandle {
   return {
@@ -79,7 +79,7 @@ describe('parent executor input validation', () => {
 
 describe('answerParentRpc: the one answer both hosts give a fork', () => {
   test('a VFS failure keeps its errno and path in the native error cause', async () => {
-    const cause = makeVfsError('EISDIR', 'is a directory', 'notes');
+    const cause = new VfsError('EISDIR', 'is a directory', 'notes');
 
     await expect(answerParentRpc('notes', () => Promise.reject(cause)))
       .rejects.toMatchObject({ _tag: 'KinuError', code: 'io', cause });

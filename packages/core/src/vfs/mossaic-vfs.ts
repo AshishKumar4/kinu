@@ -4,7 +4,7 @@
  */
 import * as v from 'valibot';
 import type { VFS, VfsEntryStat } from '../types/primitives';
-import { makeVfsError, type VfsErrorCode } from './errno';
+import { VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import type { VfsListedEntry, VfsNativeMutations, VfsNativeReads } from './mounts';
 
 export interface MossaicStat {
@@ -81,14 +81,14 @@ function translate(failure: { cause: unknown }, path: string): Error {
 
   if (parsed.success) {
     const detail = parsed.output.message.replace(/^[A-Z_]+:\s*/u, '');
-    const error = makeVfsError(CODE_MAP[parsed.output.code], `${detail || parsed.output.code} (shared drive)`, path);
+    const error = new VfsError(CODE_MAP[parsed.output.code], `${detail || parsed.output.code} (shared drive)`, path);
 
     return Object.assign(error, { cause: failure.cause });
   }
 
   const message = failure.cause instanceof Error ? failure.cause.message : 'the shared drive failed';
 
-  return Object.assign(makeVfsError('EIO', `${message} (shared drive)`, path), { cause: failure.cause });
+  return Object.assign(new VfsError('EIO', `${message} (shared drive)`, path), { cause: failure.cause });
 }
 
 async function guarded<T>(path: string, op: () => Promise<T>): Promise<T> {

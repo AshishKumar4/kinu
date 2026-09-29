@@ -1,7 +1,7 @@
 // The shapes product code uses; none may draw a diagnostic.
 import { Effect } from 'effect';
 import { attempt, KinuError, settle } from '../../../src/obs/index';
-import { makeVfsError } from '../../../src/vfs/errno';
+import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 
 declare const fetchText: () => Promise<string>;
 
@@ -19,4 +19,4 @@ export const composed = settle(Effect.gen(function* () {
 
 export const outcome = settle(Effect.result(Effect.succeed(1)));
 
-export const fileRefused = settle(Effect.fail(makeVfsError('EROFS', 'read-only file system', '/mnt/ro/a.txt')));
+export const fileRefused = settle(Effect.fail(new VfsError('EROFS', 'read-only file system', '/mnt/ro/a.txt')));

@@ -3,14 +3,11 @@
  * on Nimbus's namespace, answered for each principal by that principal's own table, so a shell process and the
  * file tool reach the same trees.
  */
-import { Effect } from 'effect';
 import type { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
 import type { Principal } from '@nimbus-sh/core/vfs/composite.js';
-import { VfsError as NimbusVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import type { VFS as NimbusVfs, VfsCred, VfsDirent, VfsFileType, VfsRemoval, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
-import { settle } from '../obs/effect';
 import type { VFS, VfsEntryStat, VfsLinkStat } from '../types/primitives';
-import { isVfsError, makeVfsError } from './errno';
 import {
   listWithVfsOps, removeTreeWithVfsOps, type MountedVfs, type VfsMount, type VfsNativeMutations, type VfsNativeReads,
 } from './mounts';
@@ -22,12 +19,6 @@ export interface ShellMounts {
   add(plane: MountedVfs): void;
 }
 
-/** Nimbus's commands recognise only its own `VfsError`, so a plane's refusal crosses with its code. */
-function lifted<T>(path: string, call: () => T | Promise<T>): Promise<T> {
-  return settle(Effect.promise(() => Promise.resolve(call())).pipe(Effect.catchDefect((defect) => Effect.die(
-    isVfsError(defect) ? new NimbusVfsError(defect.code, defect.message, path, { cause: defect }) : defect,
-  ))));
-}
 
 function typeOf(stat: VfsEntryStat | VfsLinkStat): VfsFileType {
   if ('isSymlink' in stat && stat.isSymlink) return 'symlink';
@@ -49,9 +40,7 @@ async function removeTree(files: VFS, path: string): Promise<VfsRemoval | undefi
   if (removal.ok) return undefined;
   const { path: at, cause } = removal.failed;
 
-  const error = isVfsError(cause)
-    ? new NimbusVfsError(cause.code, cause.message, at, { cause })
-    : new NimbusVfsError('EIO', String(cause), at, { cause });
+  const error = isVfsError(cause) ? cause : new VfsError('EIO', String(cause), at, { cause });
 
   return { removed: [...removal.removed], kept: [...removal.remaining], failures: [{ path: at, error }] };
 }
@@ -65,26 +54,26 @@ function nimbusBackend(mount: VfsMount, files: VFS, store: ProcessFiles['engine'
   const writeFileIfRevision = files.writeFileIfRevision?.bind(files);
   const readFileAtRevision = files.readFileAtRevision?.bind(files);
 
-  const writable = <T>(path: string, call: () => T | Promise<T>): Promise<T> => lifted(path, () => {
-    if (mount.readOnly === true) throw makeVfsError('EROFS', `/${mount.name} is read-only`, path);
+  const writable = async <T>(path: string, call: () => T | Promise<T>): Promise<T> => {
+    if (mount.readOnly === true) throw new VfsError('EROFS', `/${mount.name} is read-only`, path);
 
     return call();
-  });
+  };
 
   const backend: NimbusVfs = {
-    stat: (path, options) => lifted(path, async () => {
+    stat: async (path, options) => {
       const stat = options?.follow === false && lstat ? await lstat.call(files, path) : await files.stat(path);
 
       return stat === null ? null : statOf(stat);
-    }),
-    readFile: (path) => lifted(path, async () => bytesOf(await files.readFile(path))),
+    },
+    readFile: async (path) => bytesOf(await files.readFile(path)),
     writeFile: (path, data) => writable(path, () => files.writeFile(path, data)),
-    readdir: (path) => lifted(path, async () => (await listWithVfsOps(files, path)).flatMap(({ name, stat }): VfsDirent[] => {
+    readdir: async (path) => (await listWithVfsOps(files, path)).flatMap(({ name, stat }): VfsDirent[] => {
       if (stat === null) return [];
       const mapped = statOf(stat);
 
       return [{ name, type: mapped.type, stat: mapped }];
-    })),
+    }),
     mkdir: (path, options) => writable(path, () => files.mkdir(path, options?.recursive === true ? { recursive: true } : undefined)),
     unlink: (path) => writable(path, () => files.unlink(path)),
     removeRecursive: (path) => writable(path, async () => {
@@ -100,16 +89,16 @@ function nimbusBackend(mount: VfsMount, files: VFS, store: ProcessFiles['engine'
 
   if (rename) backend.rename = (from, to) => writable(from, () => rename.call(files, from, to));
 
-  if (readRange) backend.readRange = (path, offset, length) => lifted(path, () => readRange.call(files, path, offset, length));
+  if (readRange) backend.readRange = (path, offset, length) => readRange.call(files, path, offset, length);
 
-  if (readlink) backend.readlink = (path) => lifted(path, () => readlink.call(files, path));
+  if (readlink) backend.readlink = (path) => readlink.call(files, path);
 
   if (writeFileIfRevision) {
     backend.writeFileIfRevision = (path, data, expected) => writable(path, () => writeFileIfRevision.call(files, path, data, expected));
   }
 
   if (readFileAtRevision) {
-    backend.readFileAtRevision = (path, revision, range) => lifted(path, async () => bytesOf(await readFileAtRevision.call(files, path, revision, range)));
+    backend.readFileAtRevision = async (path, revision, range) => bytesOf(await readFileAtRevision.call(files, path, revision, range));
   }
 
   return backend;
