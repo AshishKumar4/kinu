@@ -3806,7 +3806,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * Rebuilds AI-SDK tools from MCP descriptors; cache invalidates on descriptor content hash, and a
    * failed read keeps the last good build. `execute` dispatches as the parent workspace's token.
    */
-  private async buildUserMcpTools(nativeTools: ToolSet, catalog: ModelCatalogRead): Promise<ToolSet> {
+  private async buildUserMcpTools(nativeTools: ToolSet, catalog: Promise<ModelCatalogRead>): Promise<ToolSet> {
     const userId = this.getOwnerUserId();
 
     if (!userId) return {};
@@ -3815,14 +3815,20 @@ export abstract class ActorAgent extends Agent<Env> {
     // token was issued, and a real read failure must not silently empty the surface.
     if (!this.workspaceCapabilityToken()) return {};
     const caller = await this.userCaller();
+    // Read beside the model's resolution; a failed read reaches the failure arm through `refresh`.
+    const surface = this.requireOwnerUserDO().userMcp_toolDescriptors(caller);
+    const [read] = await Promise.allSettled([catalog, surface]);
+
+    // An unresolved profile fails the turn in `readTurnInputs`.
+    if (read.status === 'rejected') return {};
 
     try {
       // Budget is the resolved model's step context limit minus this actor's own tool definitions, read
       // off the same `ModelCatalogSession` as compaction (`McpSurfaceBudget`).
       const tools = await this.mcpToolsCache.refresh(
-        () => this.requireOwnerUserDO().userMcp_toolDescriptors(caller),
+        () => surface,
         {
-          ...catalog.window(),
+          ...read.value.window(),
           nativeToolTokens: toolSurfaceTokens(nativeTools),
         },
       );
@@ -4085,7 +4091,7 @@ export abstract class ActorAgent extends Agent<Env> {
       chosen,
       // The remote catalog is admitted against the context budget left after the builtins.
       // A failed read answers no tools and the turn runs on builtins.
-      chosen.then(({ catalog: read }) => this.buildUserMcpTools(tools, read)),
+      this.buildUserMcpTools(tools, chosen.then(({ catalog: read }) => read)),
       // Authoritative hub check: the TTL-cached snapshot can lag a mid-session `kinu connect`.
       // On failure it records and answers the last snapshot.
       this.rt.deviceTransport.refreshStatus(),
