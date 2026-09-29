@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 // CraftStore conflict detection and upsert; see docs/EVOLUTION.md "CraftStore Lifecycle".
 
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -81,6 +82,7 @@ export async function upsertCraftedTool(
             updated_at = ${nowMs()}, score = ${candidate.score}, last_used_at = ${nowMs()}
         WHERE name = ${conflicting[0]}
       `;
+      markStoreChanged(rt.storage.sql);
     }
 
     return { accepted: true };

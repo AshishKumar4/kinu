@@ -1127,6 +1127,8 @@ export { ensureDir, vfsBasename, vfsDirname } from './utils/vfs-helpers';
 
 export { oneAtATime } from './utils/one-at-a-time';
 
+export { markStoreChanged, storeRevision } from '@kinu.run/agent-utils';
+
 export { ISOLATED_BUN_FLAGS, isolatedBunArgs } from './utils/bun-isolation';
 
 export { mossaicVfs, type MossaicClient, type MossaicVfs, type MossaicStat, type MossaicChild } from './vfs/mossaic-vfs';
@@ -2003,7 +2005,7 @@ export type { PendingAction, PendingActionKind, PendingActionInputs, PersonAsks 
 export { buildWorkspaceOverview, rosterBucket, rosterHeadline, rosterMatches, WorkspaceOverviewSchema } from './read-models/workspace-overview';
 
 export type {
-  RosterBucket, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewShare, WorkspaceOverviewSlate, WorkspaceStatus,
+  RosterBucket, WorkspaceHeadline, WorkspaceOverview, WorkspaceOverviewInputs, WorkspaceOverviewShare, WorkspaceOverviewSlate, WorkspaceStatus,
 } from './read-models/workspace-overview';
 
 export type {

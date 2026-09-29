@@ -1,4 +1,4 @@
-export type { SqlValue, SqlExecutor, SqlRow } from "./types";
+export type { SqlValue, SqlExecutor, SqlRow, SqlExec, SqlExecRow } from "./types";
 
 export type { CraftedTool } from "./codemode/builder";
 
@@ -9,5 +9,7 @@ export {
 } from "./stores/craft";
 
 export { readKvJson, writeKvJson, type KvStore } from "./stores/kv";
+
+export { markStoreChanged, storeRevision } from "./stores/changes";
 
 export { isAbortError, normalizePath, raceAbort, serialQueue } from "./core/utils";

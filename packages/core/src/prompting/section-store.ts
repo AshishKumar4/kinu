@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 /**
  * Evolved prompt sections: propose, trial, promote, as scaffolds are.
  * `buildSystemPromptSync` reads {@link activePromptSectionOverrides} once per
@@ -277,6 +278,7 @@ export function proposePromptSection(
       (actor_id, section_id, version, source, rationale, status, incumbent_bytes, written_at)
     VALUES (${actor.actorId}, ${section.id}, ${version}, ${source}, ${rationale}, 'pending',
             ${incumbentBytes}, ${nowMs()})`;
+  markStoreChanged(sql);
 
   return { ok: true, version };
 }
@@ -325,6 +327,7 @@ export function recordPromptSectionTrial(
       losses = losses + ${winner === 'current' ? 1 : 0},
       ties = ties + ${winner === 'tie' ? 1 : 0}
     WHERE actor_id = ${actor.actorId} AND section_id = ${args.sectionId} AND version = ${args.pendingVersion}`;
+  markStoreChanged(sql);
 }
 
 /** The scaffold's calibrated rule, unchanged: one policy for one question. */
@@ -366,6 +369,7 @@ export function applyPromptSectionDecision(
 
     void sql`UPDATE prompt_section_versions SET status = 'historical'
       WHERE actor_id = ${actor.actorId} AND section_id = ${pending.sectionId} AND status = 'current'`;
+    markStoreChanged(sql);
     void sql`UPDATE prompt_section_versions SET status = 'current', decided_at = ${nowMs()}
       WHERE actor_id = ${actor.actorId} AND section_id = ${pending.sectionId}
         AND version = ${pending.version}`;
@@ -376,6 +380,7 @@ export function applyPromptSectionDecision(
   void sql`UPDATE prompt_section_versions SET status = 'rolled_back', decided_at = ${nowMs()}
     WHERE actor_id = ${actor.actorId} AND section_id = ${pending.sectionId}
       AND version = ${pending.version}`;
+  markStoreChanged(sql);
 
   return { action: 'rollback' };
 }

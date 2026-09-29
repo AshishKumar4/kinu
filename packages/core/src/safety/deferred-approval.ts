@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 /**
  * Deferred approval: a gated action parks on the owner and the agent is told so. A queued action returns through
  * `denyResult`, so nothing unrun looks like a success; 'approved' is permission, not an effect, except a parked
@@ -150,6 +151,8 @@ export class DeferredApprovalStore {
         AND decided_at <= ${now - DENIAL_STANDING_MS}
       RETURNING id, command`;
 
+    if (swept.length > 0) markStoreChanged(this.sql);
+
     for (const { id } of swept) this.dropHits(id);
 
     return swept.map((row) => row.command);
@@ -171,6 +174,7 @@ export class DeferredApprovalStore {
         (actor_id, id, command, executor, reason, status, requested_at, decided_at)
       VALUES (${this.actorId}, ${action.id}, ${action.command}, ${action.executor}, ${action.reason},
         'queued', ${action.requestedAt}, NULL)`;
+    markStoreChanged(this.sql);
 
     for (const hit of hits) {
       void this.sql`INSERT OR IGNORE INTO deferred_approval_hits (actor_id, approval_id, rule, decision)
@@ -202,6 +206,7 @@ export class DeferredApprovalStore {
     const status = answer === 'always' ? 'approved' : answer;
     void this.sql`UPDATE deferred_approvals SET status=${status}, decided_at=${now}
       WHERE actor_id=${this.actorId} AND id=${id} AND status='queued'`;
+    markStoreChanged(this.sql);
 
     return this.get(id);
   }
@@ -215,6 +220,8 @@ export class DeferredApprovalStore {
       UPDATE deferred_approvals SET status='spent', spend_seq = spend_seq + 1
       WHERE actor_id = ${this.actorId} AND id = ${id} AND status = 'approved'
       RETURNING id, command, executor, reason, status, requested_at, decided_at, spend_seq`;
+
+    if (rows.length > 0) markStoreChanged(this.sql);
 
     const row = rows[0];
 
@@ -241,6 +248,8 @@ export class DeferredApprovalStore {
           WHERE actor_id = ${this.actorId} AND id = ${spent.approvalId}
             AND status='spent' AND spend_seq = ${spent.spend}
           RETURNING id`;
+
+    if (rows.length > 0) markStoreChanged(this.sql);
 
     if (outcome === 'spent') for (const { id } of rows) this.dropHits(id);
 

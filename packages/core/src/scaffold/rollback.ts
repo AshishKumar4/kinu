@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 /**
  * Scaffold rollback: repoint current to the target in one statement, then refresh the live view.
  *
@@ -34,6 +35,7 @@ export async function rollbackScaffold(
       WHERE actor_id = ${actorId}
         AND (version = ${version}
              OR (status = 'current' AND version != ${version}))`;
+  markStoreChanged(sql);
   await rt.identity.scaffold.write(target);
 
   return { ok: true };

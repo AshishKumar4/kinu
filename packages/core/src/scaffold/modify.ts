@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 /**
  * Scaffold modification — 4-gate validation pipeline.
  *
@@ -111,6 +112,7 @@ export async function modifyScaffold(
     VALUES (${actorId}, ${newVersion}, ${nowMs()}, ${rationale}, 'pending', ${baseVersion},
             ${parsePathologyTag(code)})
   `;
+  markStoreChanged(rt.storage.sql);
 
   await rt.memory.append(
     `memory/logs/${today()}.md`,
