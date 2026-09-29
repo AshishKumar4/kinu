@@ -60,6 +60,12 @@ export interface MaterializedContext {
   readonly rendered: readonly CarriedRender[];
 }
 
+/** The turn keeps the partition while this membership remains selected. */
+export interface MaterializedHistory extends MaterializedContext {
+  readonly selection: ContextSelection;
+  readonly members: readonly ContextEntry[];
+}
+
 /** What a step cut mid-stream had streamed: its text, and whether it had called a tool. */
 export interface CutStep {
   readonly text: string;
@@ -184,10 +190,12 @@ export class SessionHistory {
     });
   }
 
-  async materialize(): Promise<MaterializedContext & { readonly selection: ContextSelection }> {
-    const selection = this.context.selected() ?? this.context.initialize();
+  async materialize(kept: MaterializedHistory | null = null): Promise<MaterializedHistory> {
+    const { selection, entries: members } = this.context.snapshot();
 
-    return { selection, ...await this.partition(this.context.entries(selection)) };
+    if (kept?.members === members && kept.selection.contextId === selection.contextId && kept.selection.revision === selection.revision) return kept;
+
+    return { selection, members, ...await this.partition(members) };
   }
 
   private async partition(members: readonly ContextEntry[]): Promise<MaterializedContext> {
@@ -283,9 +291,10 @@ export class SessionHistory {
       WHERE m.actor_id=${actorId} AND m.context_id=${contextId} AND m.to_revision IS NULL AND r.turn_id=${turnId}`.map(row => row.entry_id));
   }
 
-  async stepBase(assertOwner: () => void, turnId: string | null = null, events: ContextEventRecorder | null = null): Promise<MaterializedContext & { readonly changed: boolean }> {
+  async stepBase(assertOwner: () => void, turnId: string | null = null, events: ContextEventRecorder | null = null, kept: MaterializedHistory | null = null): Promise<MaterializedHistory & { readonly changed: boolean }> {
     assertOwner();
-    const current = await this.materialize();
+    // Tools, steers and authored edits can advance the head between requests. Keep the partition, not a stale selection.
+    const current = await this.materialize(kept);
     const pending = this.proposals.pending(current.selection.contextId).at(-1);
 
     if (pending === undefined) return { ...current, changed: false };
@@ -317,8 +326,8 @@ export class SessionHistory {
 
     committed.publication?.publish();
 
-    if (committed.applied !== null) return { ...staged, changed: true };
-    const settled = await this.materialize();
+    if (committed.applied !== null) return { ...staged, selection: committed.applied, members: candidate, changed: true };
+    const settled = await this.materialize(current);
 
     return { ...settled, changed: false };
   }
@@ -399,24 +408,16 @@ export class SessionHistory {
         this.messages.insert(prepared, 'input', { ingressId: reference.messageId });
       }
 
-      this.activateInput(reference, input.turnId, assertOwner);
-      const selected = this.context.selected();
-
-      if (selected === null) throw new KinuError('missing', 'landed input has no context');
+      const selected = this.activateInput(reference, input.turnId, assertOwner);
       input.publish?.(selected);
     });
   }
-  activateInput(reference: MessageReference, turnId: string, assertOwner: () => void): void {
-    this.dependencies.transactionSync(() => {
-      this.dependencies.actor.assertCurrent();
-      assertOwner();
+  activateInput(reference: MessageReference, turnId: string, assertOwner: () => void): ContextSelection {
+    return this.context.commit(null, { cause: 'input', turnId, assertEpoch: assertOwner, mutate: entries => {
       const owned = this.dependencies.sql<{ entry_id: string }>`SELECT entry_id FROM context_memberships WHERE actor_id=${this.dependencies.actor.actorId} AND message_id=${reference.messageId} LIMIT 1`[0];
 
-      if (owned !== undefined) return;
-      const selected = this.context.selected() ?? this.context.initialize();
-      this.context.commit(selected, { cause: 'input', turnId, assertEpoch: assertOwner,
-        mutate: entries => [...entries, { ...reference, entryId: reference.messageId, position: entries.length }] });
-    });
+      return owned === undefined ? [...entries, { ...reference, entryId: reference.messageId, position: entries.length }] : entries;
+    } });
   }
 
   async append(input: {

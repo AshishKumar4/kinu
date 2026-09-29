@@ -196,6 +196,39 @@ test('a context reads what is stored: another reader\'s revision, and one writte
   }
 });
 
+test('a held turn context follows sealed output, an authored edit and a selected branch', async () => {
+  const s = setup();
+
+  const dependencies = { actor: s.rt.actor, sql: s.rt.storage.sql, transactionSync: <T>(write: () => T) => s.rt.storage.transactionSync(write),
+    files: async () => ({ vfs: s.rt.storage.vfs, artifactDirectory: '/actor' }) };
+
+  const history = new SessionHistory(dependencies);
+  const other = new SessionHistory(dependencies);
+  const assertOwner = () => s.rt.actor.assertCurrent();
+
+  try {
+    await history.append({ id: 'input', message: { role: 'user', content: 'instruction' }, origin: 'input', turnId: 'turn', assertOwner });
+    const opened = await history.materialize();
+    await other.recordRender({ role: 'user', content: 'runtime context' }, { before: null, replaces: false }, 'turn', assertOwner);
+    await other.append({ id: 'answer', message: { role: 'assistant', content: 'answer' }, origin: 'output', turnId: 'turn', assertOwner });
+    const afterOutput = await history.stepBase(assertOwner, 'turn', null, opened);
+    expect(afterOutput.messages).toEqual([{ role: 'user', content: 'instruction' }, { role: 'assistant', content: 'answer' }]);
+    expect(afterOutput.rendered).toEqual([{ message: { role: 'user', content: 'runtime context' }, before: afterOutput.messages[1], after: afterOutput.messages[0] }]);
+
+    await other.replaceHistory([{ role: 'user', content: 'edited instruction' }], { author: s.rt.actor.actorId, via: 'owner', turnId: null, stage: true, assertOwner });
+    const edited = await history.stepBase(assertOwner, 'turn', null, afterOutput);
+    expect(edited.changed).toBe(true);
+    expect(edited.messages).toEqual([{ role: 'user', content: 'edited instruction' }]);
+    expect(edited.rendered).toEqual([]);
+
+    const branch = other.context.fork(opened.selection);
+    other.context.select(edited.selection, branch, assertOwner);
+    const selected = await history.stepBase(assertOwner, 'turn', null, edited);
+    expect(selected.messages).toEqual([{ role: 'user', content: 'instruction' }]);
+    expect(selected.selection).toEqual(branch);
+  } finally { s.testSql.close(); }
+});
+
 test('VFS-backed image payloads fail explicitly after file corruption', async () => {
   const s = setup();
 

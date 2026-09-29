@@ -3963,7 +3963,7 @@ export abstract class ActorAgent extends Agent<Env> {
     openAnalyticsWindow(this.env);
 
     // The loop already placed the turn's input on the working history before handing it here.
-    const { messages: history } = await this.stores.history.materialize();
+    const history = this.actorSession.history;
     // Frozen so a background re-drive of a context:'inherit' hire carries the conversation
     // the caller actually had.
     this._turnOriginContext = Object.freeze(structuredClone([...history]));
