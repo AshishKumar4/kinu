@@ -1081,7 +1081,7 @@ export {
   type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,
   answerParentRpc, createParentExecutor, createParentWorkspaceVfs, sandboxFiles, nimbusSessionFiles, deviceFiles,
   type ParentWorkspaceHandle, type ParentExecResult, type DeviceFileConsent, type DeviceFileScope,
-  type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
+  type ParentRpcWrite,
 } from './execution/index';
 
 export {

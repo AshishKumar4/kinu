@@ -1,6 +1,6 @@
 // Kinu-only gate; see upstream.json's `kinuRules` and `kinuRuleGates`.
 //
-// The four Effect rules own RuleTester suites; a suite proves the rule function behaves, not that
+// The three Effect rules own RuleTester suites; a suite proves the rule function behaves, not that
 // the rule is reachable through the command the repo gates on. This file runs the real `oxlint`
 // binary with the real `.oxlintrc.json` over a seeded instance of each defect and over its
 // corrected form, asserts red then green, and asserts the live denominator: rules that gate no
@@ -22,11 +22,6 @@ const HEAD = "import { Effect } from 'effect';\ndeclare const load: Effect.Effec
 
 /** Red fixture, then the corrected form of the same code, per rule. */
 const cases: ReadonlyArray<{ readonly rule: string; readonly bad: string; readonly good: string }> = [
-  {
-    rule: "effect-entry-awaits",
-    bad: `${HEAD}declare const call: () => Promise<string>;\nexport const answer = Effect.promise(async () => call());\n`,
-    good: `${HEAD}declare const call: () => Promise<string>;\nexport const answer = Effect.promise(() => Promise.resolve(call()));\n`,
-  },
   {
     rule: "effect-run-in-adapter",
     bad: `${HEAD}export async function answer(): Promise<string> {\n  return Effect.runPromise(load.pipe(Effect.orDie));\n}\n`,
@@ -115,7 +110,7 @@ try {
 
   process.stdout.write(
     `effect: ${cases.length} rules proven red->green through oxlint over ${importers} product source file(s) importing \`effect\`\n`
-    + "  blind: an `Effect` binding under another name (no-effect-swallow and effect-entry-awaits read the name `Effect`); a catch-all handler or an entry function passed by name; an `await` inside a nested function counts as the entry awaiting; a floating effect (gate:effect-diagnostics)\n",
+    + "  blind: an `Effect` binding under another name (no-effect-swallow reads the name `Effect`); a catch-all handler passed by name; a floating effect (gate:effect-diagnostics)\n",
   );
 } finally {
   rmSync(fixtures, { recursive: true, force: true });

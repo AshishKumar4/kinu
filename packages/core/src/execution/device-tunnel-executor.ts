@@ -12,7 +12,7 @@ import { Effect } from 'effect';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { commandResult, uncheckpointedSentence, type CommandResult } from './exec-result';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
-import { settle, toWire } from '../obs/effect';
+import { settle } from '../obs/effect';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
 import {
   connectedDevices, deviceFleetAsk, deviceByName, freshDeviceToolchain,
@@ -374,10 +374,9 @@ export function createDeviceTunnelExecutor(
 
           const said = `Written ${content.length} bytes to ${path}`;
 
-          return await settle(Effect.map(toWire(written, refusalOf), (answer) => {
-            if (!answer.ok) return answer.error;
-
-            return answer.value ? `${said}\n${uncheckpointedSentence(answer.value.uncheckpointed, 'this write')}` : said;
+          return await settle(Effect.match(written, {
+            onFailure: refusalOf,
+            onSuccess: (answer) => answer ? `${said}\n${uncheckpointedSentence(answer.uncheckpointed, 'this write')}` : said,
           }));
         } catch (err) {
           if (isDeviceNotConnectedError({ cause: err })) return notConnected();

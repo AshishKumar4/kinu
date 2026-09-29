@@ -12,11 +12,8 @@ export function jsrpcStub<T extends object>(methods: T): T {
   return stub;
 }
 
-/**
- * A method as a caller in another object sees it: a thrown error arrives as a plain `Error` with `remote`, its name
- * prefixed to the message and nothing else kept. Measured under miniflare 5.20260903.0-alpha at compat 2025-12-01
- * (2026-09-26): a `KinuError('unavailable', 'refused by gate')` arrived as `KinuError[unavailable]: refused by gate`.
- */
+/** Native RPC at compat 2026-09-28 keeps an Error's name and own fields but loses its subclass.
+ * The workerd error-compatibility test exercises the real transport; this double serves bun suites. */
 export function acrossRpc<Args extends readonly JsonValue[], Result>(
   method: (...args: Args) => Promise<Result>,
 ): (...args: Args) => Promise<Result> {
@@ -24,9 +21,20 @@ export function acrossRpc<Args extends readonly JsonValue[], Result>(
     try {
       return await method(...args);
     } catch (thrown) {
-      const named = thrown instanceof Error && thrown.name !== 'Error' ? `${thrown.name}: ` : '';
+      const remote = new Error(thrown instanceof Error ? thrown.message : String(thrown));
 
-      throw Object.assign(new Error(`${named}${thrown instanceof Error ? thrown.message : String(thrown)}`), { remote: true });
+      if (thrown instanceof Error) {
+        for (const key of Object.getOwnPropertyNames(thrown)) {
+          if (key === 'stack') continue;
+          const descriptor = Object.getOwnPropertyDescriptor(thrown, key);
+
+          if (descriptor !== undefined) Object.defineProperty(remote, key, descriptor);
+        }
+
+        remote.name = thrown.name;
+      }
+
+      throw Object.assign(remote, { remote: true });
     }
   };
 }

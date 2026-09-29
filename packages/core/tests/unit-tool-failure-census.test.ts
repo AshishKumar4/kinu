@@ -6,6 +6,7 @@
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { toolExecute } from '@kinu.run/test-utils';
+import { makeVfsError } from '../src/vfs/errno';
 import {
   buildBuiltinTools, censusToolFailures, classifyToolFailure,
   toolFailureKey, FAILURE_WITHOUT_ERROR,
@@ -613,12 +614,12 @@ describe('each executor tool files its own failure in the right part', () => {
     // No reason of its own: `makeVfsError` carries the parent's errno, so ENOENT classifies as `missing`.
     const census = censusOf(await escalate(createParentExecutor({
       handle: {
-        read: async () => ({ ok: false, error: { code: 'ENOENT', message: 'no such file', path: '/p' } }),
-        write: async () => ({ ok: false, error: { code: 'ENOENT', message: 'no such file', path: '/p' } }),
-        list: async () => ({ ok: false, error: { code: 'ENOENT', message: 'no such file', path: '/p' } }),
-        stat: async () => ({ ok: false, error: { code: 'ENOENT', message: 'no such file', path: '/p' } }),
-        delete: async () => ({ ok: false, error: { code: 'ENOENT', message: 'no such file', path: '/p' } }),
-        exec: async () => ({ ok: false, error: { code: 'ENOENT', message: 'no such shell', path: '/p' } }),
+        read: async () => { throw makeVfsError('ENOENT', 'no such file', '/p'); },
+        write: async () => { throw makeVfsError('ENOENT', 'no such file', '/p'); },
+        list: async () => { throw makeVfsError('ENOENT', 'no such file', '/p'); },
+        stat: async () => { throw makeVfsError('ENOENT', 'no such file', '/p'); },
+        delete: async () => { throw makeVfsError('ENOENT', 'no such file', '/p'); },
+        exec: async () => { throw makeVfsError('ENOENT', 'no such shell', '/p'); },
       },
     })));
 
@@ -632,11 +633,11 @@ describe('each executor tool files its own failure in the right part', () => {
 
     const provider = createParentExecutor({
       handle: {
-        read: async () => ({ ok: true, value: new Uint8Array() }),
-        write: async () => ({ ok: true, value: null }),
-        list: async () => ({ ok: true, value: [] }),
-        stat: async () => ({ ok: true, value: null }),
-        delete: async () => ({ ok: true, value: null }),
+        read: async () => new Uint8Array(),
+        write: async () => null,
+        list: async () => [],
+        stat: async () => null,
+        delete: async () => null,
         exec: () => new Promise(() => { /* the parent never answers */ }),
       },
     });

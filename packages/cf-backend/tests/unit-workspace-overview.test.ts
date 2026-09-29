@@ -247,7 +247,7 @@ describe('the pushed tile', () => {
   test('a push the owner refuses arms no wake, and the next change pushes the tile', async () => {
     const { plane, overviews } = recordingOwner();
     // A revoked token, as the owner's object's refusal arrives across its RPC.
-    const denied = Object.assign(new Error('CapabilityDeniedError: Unrecognized workspace capability token.'), { remote: true });
+    const denied = Object.assign(new Error('Unrecognized workspace capability token.'), { name: 'CapabilityDeniedError', remote: true });
     const refusals = [denied];
     const { agent, db } = orchestratorHarness({ ...plane, refuseOverviews: refusals });
 

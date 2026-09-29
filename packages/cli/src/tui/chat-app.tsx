@@ -105,6 +105,7 @@ import {
   type TuiAgentSummary,
 } from './tui-shell';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { Result } from 'effect';
 import { readParkedNotice } from '../parked-actions';
 
 /** `local-peer` opens in place; `cloud-additional` runs server-side and is announced. */
@@ -417,8 +418,8 @@ function ChatScene({
       await previous;
       const read = await readParkedNotice(controls, parkedSeenRef.current);
 
-      if (!read.ok) addError({ cause: read.error });
-      else if (read.value !== null) addMessage({ role: 'system', content: read.value });
+      if (Result.isFailure(read)) addError({ cause: read.failure });
+      else if (read.success !== null) addMessage({ role: 'system', content: read.success });
     })();
   }, [addError, addMessage, client]);
 

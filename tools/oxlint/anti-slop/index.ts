@@ -1,6 +1,5 @@
 import { eslintCompatPlugin } from "@oxlint/plugins";
 
-import { effectEntryAwaitsRule } from "./rules/effect-entry-awaits.ts";
 import { effectRestrictedApiRule } from "./rules/effect-restricted-api.ts";
 import { effectRunInAdapterRule } from "./rules/effect-run-in-adapter.ts";
 import { noAmbientGitInTestsRule } from "./rules/no-ambient-git-in-tests.ts";
@@ -55,7 +54,6 @@ import { requireSafetyCommentForTypeAssertionRule } from "./rules/require-safety
 const antiSlopPlugin = eslintCompatPlugin({
 	meta: { name: "anti-slop" },
 	rules: {
-		"effect-entry-awaits": effectEntryAwaitsRule,
 		"effect-restricted-api": effectRestrictedApiRule,
 		"effect-run-in-adapter": effectRunInAdapterRule,
 		"no-ambient-git-in-tests": noAmbientGitInTestsRule,

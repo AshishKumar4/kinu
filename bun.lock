@@ -162,6 +162,7 @@
         "ai": "6.0.214",
         "chalk": "^5.6.2",
         "commander": "^14.0.3",
+        "effect": "4.0.0-rc.117",
         "react": "^19.2.5",
         "valibot": "^1.4.1",
         "web-tree-sitter": "0.25.10",
@@ -188,6 +189,7 @@
         "@nimbus-sh/runtime-bash": "5.2.37-2",
         "@nimbus-sh/runtime-cpython": "3.13.14",
         "ai": "6.0.214",
+        "effect": "4.0.0-rc.117",
         "valibot": "^1.4.1",
       },
       "devDependencies": {
