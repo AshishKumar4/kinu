@@ -21,7 +21,7 @@
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { availableParallelism, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import * as v from 'valibot';
 import { tolerate } from '@kinu.run/core/obs';
@@ -44,8 +44,9 @@ export const REPEATS = 6;
 /** Runs of a changed suite that drives Chrome. Each holds the box's one browser for as long as a UI row does. */
 export const BROWSER_REPEATS = 3;
 
-/** Suites that hold neither a browser nor a workers pool, repeated beside each other at once. */
-const PLAIN_AT_ONCE = 4;
+/** Runs of suites that hold neither a browser nor a workers pool, beside each other at once: a quarter of the box,
+ *  so the other lanes and the hook's own gates keep theirs. Each run is its own process with its own scratch home. */
+const PLAIN_AT_ONCE = Math.max(2, Math.floor(availableParallelism() / 4));
 
 /** The aggregator every anti-slop rule suite runs through: it imports each one, and no command names them. */
 const RULES_AGGREGATOR = `${ANTI_SLOP_RULES.slice(0, -1)}.test.ts`;
@@ -305,7 +306,11 @@ async function runOnce(plan: Extract<Plan, { kind: 'repeat' }>, run: number, scr
   };
 }
 
-/** Every planned suite, each run `plan.runs` times in a row, the suites beside each other within their lanes. */
+/**
+ * Every planned suite, `plan.runs` times. A plain suite's runs are separate jobs in its lane, so one slow file's six
+ * runs share the lane's slots instead of queueing behind each other (deploy.test.ts: 1281s in a row, 2026-09-28). The
+ * browser and pool lanes hold one shared resource, so their runs stay one at a time.
+ */
 export async function repeatAll(
   plans: readonly Extract<Plan, { kind: 'repeat' }>[],
   scratch: string,
@@ -313,12 +318,21 @@ export async function repeatAll(
   const lanes: Record<Lane, ReturnType<typeof slots>> = { browser: slots(1), pool: slots(1), plain: slots(PLAIN_AT_ONCE) };
   const results = new Map<string, readonly RunOutcome[]>();
 
-  await Promise.all(plans.map((plan) => lanes[plan.lane](async () => {
-    const outcomes: RunOutcome[] = [];
+  await Promise.all(plans.map(async (plan) => {
+    const runs = Array.from({ length: plan.runs }, (_, index) => index + 1);
 
-    for (let run = 1; run <= plan.runs; run += 1) outcomes.push(await runOnce(plan, run, scratch));
+    const outcomes = plan.lane === 'plain'
+      ? await Promise.all(runs.map((run) => lanes.plain(() => runOnce(plan, run, scratch))))
+      : await lanes[plan.lane](async () => {
+        const inOrder: RunOutcome[] = [];
+
+        for (const run of runs) inOrder.push(await runOnce(plan, run, scratch));
+
+        return inOrder;
+      });
+
     results.set(plan.file, outcomes);
-  })));
+  }));
 
   return results;
 }
@@ -331,7 +345,8 @@ const BLIND_SPOTS = [
   'a flake that a changed helper or product file puts into a suite this commit does not change: the nightly sweep '
     + '(`bun run sweep:flakes`, .github/workflows/flake-sweep.yml) repeats every suite the CI tier runs',
   'N runs sample N interleavings: greens raise confidence and prove nothing about absence',
-  'a suite never runs beside itself here, so a race between two copies of one suite is not provoked',
+  'a browser or pool suite never runs beside itself here, so a race between two copies of one is not provoked; a '
+    + 'plain suite\'s runs do run beside each other',
   'a file runs apart from its row\'s siblings, so a leak between them (a module mock, a global) is not provoked '
     + 'here; a row that runs its files in fresh globals (`--isolate`) cannot have one',
   'the working tree is run, not the staged content: the hook\'s own stated imprecision',
