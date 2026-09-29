@@ -355,13 +355,15 @@ export class ChatSession {
     return contextFill(this.eventRecorder.readContextMeasures(), catalogWindow);
   }
 
+  /** A frame with no tokens says no true number exists. */
   private broadcastContextFill(): void {
     const fill = contextFill(this.eventRecorder.readContextMeasures(), null);
 
-    if (fill === null) return;
     this.emit({
       type: 'broadcast',
-      event: { type: 'context_fill', contextTokens: fill.tokens, ...(fill.window !== null && { contextWindow: fill.window }) },
+      event: fill === null
+        ? { type: 'context_fill' }
+        : { type: 'context_fill', contextTokens: fill.tokens, ...(fill.window !== null && { contextWindow: fill.window }) },
     });
   }
 
@@ -622,7 +624,15 @@ export class ChatSession {
   measureCleared(): Promise<KinuError | null> {
     return this.revise(() => settleEffect(Effect.match(
       attemptInItsWords('unavailable', () => this.measureNextRequest({ counted: true, trigger: 'auto' })),
-      { onSuccess: () => null, onFailure: (failure) => failure },
+      {
+        onSuccess: () => null,
+        // Recorded, so every client and every reload reads no number rather than the cleared conversation's.
+        onFailure: (failure) => {
+          this.eventRecorder.emit(WORKSPACE_RUN_ID, { type: 'context_admitted', tokens: null, contextWindow: null });
+
+          return failure;
+        },
+      },
     )));
   }
 
