@@ -59,7 +59,8 @@ function buildComponents(components: WorkspaceComponents) {
   return buildRuntime({
     actor,
     workspaceIsMachine: false,
-    sql, execRaw, transactionSync, vfs, llm, executor, schedule, shell: workspace.shell,
+    // Birth runs no agent tool.
+    sql, execRaw, transactionSync, vfs, toolFiles: vfs, llm, executor, schedule, shell: workspace.shell,
     memory, craftStore,
   });
 }

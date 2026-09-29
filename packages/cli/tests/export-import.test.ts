@@ -37,8 +37,8 @@ function seedEntry(db: Database, id: string, text: string, position: number): vo
   const content = JSON.stringify([{ partNo: 0, kind: 'text', streamOrder: 0, replyTo: null, value: { type: 'text', text } }]);
   db.query(`INSERT INTO session_messages (actor_id, message_id, role, native_content_kind, origin, envelope_json, sealed_at, content_json)
     VALUES (?, ?, 'user', 'parts', 'input', '{}', ?, ?)`).run(ACTOR, id, 100 + position, content);
-  db.query(`INSERT INTO conversation_entries (actor_id, session_id, id, parent_id, role, recorded_at)
-    VALUES (?, 'default', ?, NULL, 'user', ?)`).run(ACTOR, id, 100 + position);
+  db.query(`INSERT INTO conversation_entries (actor_id, session_id, id, position, role, recorded_at)
+    VALUES (?, 'default', ?, ?, 'user', ?)`).run(ACTOR, id, position, 100 + position);
   db.query(`INSERT INTO conversation_entry_parts (actor_id, session_id, entry_id, position, message_id, part_no)
     VALUES (?, 'default', ?, 0, ?, 0)`).run(ACTOR, id, id);
 }

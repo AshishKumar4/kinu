@@ -223,7 +223,7 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
         ? countOf(
           db,
           `SELECT COUNT(DISTINCT session_id) AS c FROM conversation_entries
-           WHERE actor_id = ? AND session_id != 'mcts'`,
+           WHERE actor_id = ?`,
           actor.actorId,
         )
         : 0,
@@ -379,7 +379,7 @@ export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
         actor.actorId, window,
       ).map((row) => ({
         id: row.id,
-        kind: 'mcts',
+        kind: 'swarm',
         label: row.action,
         value: row.value,
         status: row.status,
@@ -400,8 +400,8 @@ export function listLocalMcts(name: string): SearchNode[] {
 
     return all<SearchNode>(
       db,
-      `SELECT id, parent_id, root_id, task, action, observation, code_used, visits, value, depth,
-              status, msg_id, created_at
+      `SELECT id, parent_id, root_id, task, action, observation, visits, value, depth,
+              status, created_at
        FROM search_nodes
        WHERE actor_id = ?
        ORDER BY depth, created_at`,
@@ -902,8 +902,11 @@ export interface LocalActorRow {
   readonly actorId: string;
   readonly name: string;
   readonly storageKey: string;
-  readonly kind: WorkspaceActor['kind'];
+  readonly origin: WorkspaceActor['origin'];
+  readonly tab: boolean;
+  readonly input: boolean;
   readonly lifetime: WorkspaceActor['lifetime'];
+  readonly evolves: boolean;
   readonly createdAt: number;
   readonly retired: boolean;
 }
@@ -935,8 +938,11 @@ export function listLocalActors(name: string, opts: { readonly retired?: boolean
       actorId: row.actorId,
       name: row.name,
       storageKey: row.storageKey,
-      kind: row.kind,
+      origin: row.origin,
+      tab: row.tab,
+      input: row.input,
       lifetime: row.lifetime,
+      evolves: row.evolves,
       createdAt: row.createdAt,
       retired: row.retiringAt !== null || row.deletedAt !== null,
     }));
@@ -982,7 +988,7 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
       conversationCount: tableExists(db, 'conversation_entries')
         ? countOf(db,
           `SELECT COUNT(DISTINCT session_id) AS c FROM conversation_entries
-           WHERE actor_id = ? AND session_id != 'mcts'`, actorId)
+           WHERE actor_id = ?`, actorId)
         : 0,
       model: config?.getModel() ?? null,
       reasoningEffort: config?.getReasoningEffort() ?? null,

@@ -160,16 +160,13 @@ const CODE_BY_ERROR_NAME = new Map<string, ErrorCode>([
 /** Refused by another object, a shape was our bad input. */
 const CODE_BY_REMOTE_NAME = new Map<string, ErrorCode>([...CODE_BY_ERROR_NAME, ['ValiError', 'bad_input'], ['ZodError', 'bad_input']]);
 
-/** A DO's RPC rethrows a custom error as a `remote` Error named in its message. */
+/** RPC preserves an error's name and own fields, not its subclass (compat 2026-09-28). */
 // As trustworthy as the thrower: a slate facet or codemode guest can forge the name. A label, never an authorization.
 function codeByName(caught: Error): ErrorCode | undefined {
-  const remote = 'remote' in caught && caught.remote === true && caught.name === 'Error';
-  const refusal = remote ? remoteRefusal(caught.message) : null;
+  const remote = 'remote' in caught && caught.remote === true;
+  const refusal = remote ? remoteRefusal(caught) : null;
 
-  if (refusal !== null) return refusal.code;
-  const named = remote ? /^([A-Z][A-Za-z]*Error): /u.exec(caught.message)?.[1] : undefined;
-
-  return named === undefined ? CODE_BY_ERROR_NAME.get(caught.name) : CODE_BY_REMOTE_NAME.get(named);
+  return refusal?.code ?? (remote ? CODE_BY_REMOTE_NAME : CODE_BY_ERROR_NAME).get(caught.name);
 }
 
 const CODE_BY_ERRNO = new Map<string, ErrorCode>([
@@ -244,19 +241,17 @@ export function toKinuError(
   return new KinuError(code, input.doing, { cause: input.cause });
 }
 
-const REMOTE_KINU_ERROR = /^KinuError\[([a-z_]+)\]: ([\s\S]*)$/u;
+/** Native RPC preserves these own fields; the receiving Error need not be a KinuError instance. */
+function remoteRefusal(error: Error): { code: ErrorCode; message: string } | null {
+  if (!('_tag' in error) || error._tag !== 'KinuError' || !('code' in error)) return null;
+  const known = v.safeParse(v.picklist(ERROR_CODES), error.code);
 
-/** A `KinuError` another object threw, as RPC delivers it; null for any other text. */
-function remoteRefusal(message: string): { code: ErrorCode; message: string } | null {
-  const [, code, text] = REMOTE_KINU_ERROR.exec(message) ?? [];
-  const known = v.safeParse(v.picklist(ERROR_CODES), code);
-
-  return known.success && text !== undefined ? { code: known.output, message: text } : null;
+  return known.success ? { code: known.output, message: error.message } : null;
 }
 
 function authoredMessage(link: Error): string | null {
   if (link instanceof KinuError) return link.message;
-  const remote = 'remote' in link && link.remote === true ? remoteRefusal(link.message) : null;
+  const remote = 'remote' in link && link.remote === true ? remoteRefusal(link) : null;
 
   return remote === null ? null : remote.message;
 }
@@ -266,7 +261,7 @@ export function authoredRefusal(input: { doing: string; cause: unknown }): KinuE
   const { cause } = input;
 
   if (cause instanceof KinuError) return cause;
-  const remote = cause instanceof Error && 'remote' in cause && cause.remote === true ? remoteRefusal(cause.message) : null;
+  const remote = cause instanceof Error && 'remote' in cause && cause.remote === true ? remoteRefusal(cause) : null;
 
   return remote === null ? toKinuError({ doing: input.doing, cause, otherwise: 'io' }) : new KinuError(remote.code, remote.message, { cause });
 }

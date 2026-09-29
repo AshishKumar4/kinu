@@ -40,11 +40,11 @@ test('a hosted turn cut off inside a claimed call makes it once and is told it m
   const first = gatewayWorkspace(gateway);
 
   const child = await first.agent.actorDirectory({
-    action: 'register', creationId: 'lead', name: 'lead', kind: 'subordinate', lifetime: 'durable',
+    action: 'register', creationId: 'lead', name: 'lead', origin: 'agent', lifetime: 'durable',
   });
 
   rosterOver(first.db).create({
-    name: 'lead', actorReference: child.reference, birth: null, deleteRequested: false, createdBy: 'orchestrator',
+    name: 'lead', actorReference: child.reference, birth: null, deleteRequested: false,
     status: 'working', currentTask: BRIEF, createdAt: Date.now(), dismissedAt: null, lifetime: 'durable', taskEventId: null,
   });
 

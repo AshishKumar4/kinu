@@ -238,8 +238,8 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     open();
     actor.database.run(
-      `INSERT INTO workspace_actors (actor_id, name, storage_key, kind, lifetime, created_at, creation_id)
-       VALUES ('main-actor', 'Atlas', 'agent:main', 'main', 'durable', 1, 'c1')`,
+      `INSERT INTO workspace_actors (actor_id, name, storage_key, origin, tab, input, lifetime, evolves, created_at, creation_id)
+       VALUES ('main-actor', 'Atlas', 'agent:main', 'system', 1, 1, 'durable', 1, 1, 'c1')`,
     );
     const first = open();
     // A soul last written before 2026-08-31: the agent's own, no row.

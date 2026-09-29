@@ -12,6 +12,8 @@ interface WorkspaceRpc extends Rpc.DurableObjectBranded {
   runTaskFromMcp(text: string): Promise<void>;
   /** `worker-heap/product.ts`'s probe RPC. */
   hostHeads(tag: string, count: number): Promise<void>;
+  /** `worker-heap/product.ts`'s probe RPC. */
+  delegatedRunners(): Promise<number>;
 }
 
 interface AccountRpc extends Rpc.DurableObjectBranded {
@@ -45,6 +47,10 @@ export class HeapDriver extends DurableObject<DriverEnv> {
   /** One root turn through the product's MCP entry, as a caller outside the page runs one. */
   async turn(workspace: string, text: string): Promise<void> {
     await this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).runTaskFromMcp(text);
+  }
+
+  async runners(workspace: string): Promise<number> {
+    return this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace)).delegatedRunners();
   }
 
   async heads(workspace: string, tag: string, count: number): Promise<void> {
@@ -107,8 +113,9 @@ export class ScriptedAI extends WorkerEntrypoint {
         const briefed = messages.some((message) => 'role' in message && (message.role === 'system' || message.role === 'user')
           && 'content' in message && JSON.stringify(message.content).includes('SUB-HELPER'));
 
-        // Nested: the helper's own hire, held on its first call while the helper and the root wait on it.
-        if (model.nest && briefed) {
+        // Nested: the helper's own hire, held on its first call while the helper and the root wait on it. First call
+        // only: the helper's own later steps carry the mission too, in the runtime context naming its hire.
+        if (model.nest && briefed && steps === 0) {
           await parkHelper();
 
           return new Response(`data: ${JSON.stringify({ response: 'done' })}\n\n${USAGE}data: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
@@ -182,7 +189,11 @@ export default {
 
       if (url.searchParams.has('released')) model.released = Number(url.searchParams.get('released'));
 
-      if (url.searchParams.has('holdHelper')) model.holdHelper = url.searchParams.get('holdHelper') === '1';
+      // Released here, not when the held call next polls: the next phase's wait must not read this one's park.
+      if (url.searchParams.has('holdHelper')) {
+        model.holdHelper = url.searchParams.get('holdHelper') === '1';
+        model.helperParked &&= model.holdHelper;
+      }
 
       if (url.searchParams.has('nest')) model.nest = url.searchParams.get('nest') === '1';
 
@@ -194,6 +205,8 @@ export default {
 
       return Response.json({ parked: model.parked, calls: model.calls, wide: [...model.wide], arrived: model.arrived, helpersAnswered: model.helpersAnswered, helperParked: model.helperParked });
     }
+
+    if (url.pathname === '/runners') return Response.json(await driver.runners(workspace));
 
     if (url.pathname === '/turn') await driver.turn(workspace, url.searchParams.get('text') ?? 'hello');
     else if (url.pathname === '/heads') await driver.heads(workspace, url.searchParams.get('tag') ?? 'head', Number(url.searchParams.get('count')));

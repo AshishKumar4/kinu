@@ -1,9 +1,9 @@
-import { DefaultExecutionRouter, agentArtifactDirectory, createAgentStores, contextMount, createInlineExecutor, createShellSession, shellCwd, observeWrites, skillsMount, withApprovalGatedShell, withMountTable, sharedDriveMount, SHARED_DRIVE_UNBOUND } from '@kinu.run/core';
+import { DefaultExecutionRouter, agentArtifactDirectory, createAgentStores, contextMount, createInlineExecutor, createShellSession, shellCwd, observeWrites, skillsMount, withApprovalGatedFiles, withApprovalGatedShell, withMountTable, sharedDriveMount, SHARED_DRIVE_UNBOUND } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import type { ActorHandle, AgentRuntime, NodeWorkspace, ShellApprovalPolicy, VFS, WriteObserver } from '@kinu.run/core';
 import type { WorkspaceBundle } from '@kinu.run/core/workspace';
 import type { CLIRuntime } from './runtime';
-import { requireLocalActorWorkspace } from './actor-identity';
+import { requireLocalActorWorkspace } from '@kinu.run/core';
 
 export interface LocalNodeRuntimeDeps {
   readonly workspace: WorkspaceBundle;
@@ -35,6 +35,7 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
     });
 
     let vfs = origin.storage.vfs;
+    let toolFiles = origin.toolFiles;
     let shell = origin.shell;
     let router = origin.executionRouter;
     let release: (() => void) | undefined;
@@ -59,7 +60,8 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
 
       release = deps.workspace.mountTable(mounted, node.cred);
       vfs = mounted;
-      ownRouter.register(createInlineExecutor({ ...deps.inline, sql: origin.storage.sql, memory: origin.memory, craftStore: origin.craftStore, vfs, shell, filesOwner: 'agent' }));
+      toolFiles = withApprovalGatedFiles(mounted, 'workspace', { userRoots: () => mounted.userRoots(), locate: null, parksWrites: false }, deps.approvalPolicy);
+      ownRouter.register(createInlineExecutor({ ...deps.inline, sql: origin.storage.sql, memory: origin.memory, craftStore: origin.craftStore, vfs: toolFiles, files: mounted, shell, filesOwner: 'agent' }));
 
       for (const info of origin.executionRouter?.listExecutors() ?? []) {
         if (info.name === 'workspace') continue;
@@ -72,12 +74,14 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
     } else {
       // Share the origin's plane but re-answer `/context` as the node's.
       vfs = withMountTable(vfs, [ownContext]);
+      toolFiles = withMountTable(toolFiles, [ownContext]);
     }
 
     return {
       actor,
       storage: { ...origin.storage, vfs },
       agentStateVfs: origin.agentStateVfs,
+      toolFiles,
       workspaceIsMachine: origin.workspaceIsMachine,
       memory: origin.memory,
       executor: origin.executor,
@@ -87,7 +91,6 @@ export function localNodeRuntime(deps: LocalNodeRuntimeDeps): (node: NodeWorkspa
       craftStore: origin.craftStore,
       get judgeModel() { return origin.judgeModel; },
       get fastLlm() { return origin.fastLlm; },
-      get advisorLlm() { return origin.advisorLlm; },
       executionRouter: router,
       shell,
       checkpoints: origin.checkpoints,

@@ -262,41 +262,44 @@ describe('the tissue answers the roster', () => {
 });
 
 describe('information moves along the tissue', () => {
-  test('working carries more traffic than idle, under one budget-scaled cap', () => {
-    // At the Canvas2D budget the cap clips traffic (98 of 101), so read the ratio at MESH.
-    const cap = Math.round(MESH_SEGMENTS / 24) + 1;
-    const idle = run(1729, 0, new Connectome({ seed: 1729, aspect: ASPECT, segments: MESH_SEGMENTS }));
-    let idleMean = 0;
-    let idlePeak = 0;
+  test('working carries more than twice the traffic of idle, read at the mesh budget the cap never clips', () => {
+    const traffic = (working: boolean): number => {
+      const connectome = new Connectome({ seed: 1729, aspect: ASPECT, segments: MESH_SEGMENTS });
 
-    for (let index = 0; index < 1800; index += 1) {
-      idle.step(DT);
-      const frame = idle.frame();
-      idleMean += frame.pulseCount;
-      idlePeak = Math.max(idlePeak, frame.pulseCount);
-    }
+      if (working) {
+        connectome.setActivity({ working: true, decisions: 0 });
+        stepSeconds(connectome, 3);
+      }
 
-    idleMean /= 1800;
+      let total = 0;
 
+      for (let index = 0; index < 1800; index += 1) {
+        connectome.step(DT);
+        total += connectome.frame().pulseCount;
+      }
+
+      return total / 1800;
+    };
+
+    const idle = traffic(false);
+
+    expect(idle).toBeGreaterThanOrEqual(12);
+    expect(traffic(true)).toBeGreaterThanOrEqual(idle * 2);
+  });
+
+  test('working traffic stays under the Canvas2D budget\'s cap', () => {
+    const cap = Math.round(CANVAS_SEGMENTS / 24) + 1;
     const working = run(1729, 0);
     working.setActivity({ working: true, decisions: 0 });
     stepSeconds(working, 3);
-    let workingMean = 0;
-    let workingPeak = 0;
+    let peak = 0;
 
     for (let index = 0; index < 1800; index += 1) {
       working.step(DT);
-      const frame = working.frame();
-      workingMean += frame.pulseCount;
-      workingPeak = Math.max(workingPeak, frame.pulseCount);
+      peak = Math.max(peak, working.frame().pulseCount);
     }
 
-    workingMean /= 1800;
-
-    expect(idleMean).toBeGreaterThanOrEqual(12);
-    expect(workingMean).toBeGreaterThanOrEqual(idleMean * 2);
-    expect(idlePeak).toBeLessThanOrEqual(cap);
-    expect(workingPeak).toBeLessThanOrEqual(cap);
+    expect(peak).toBeLessThanOrEqual(cap);
   });
 
   test('while working the light gathers in one corner', () => {

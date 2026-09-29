@@ -37,11 +37,12 @@ import {
   type CodemodeResult,
   BUILTIN_PROFILE_CATALOG,
   profileCatalogDigest,
-  DEFAULT_WORKERS_AI_MODEL_SPEC, WorkspaceActorDirectory, recoverSubordinateLifecycles,
+  DEFAULT_WORKERS_AI_MODEL_SPEC, recoverSubordinateLifecycles,
 } from '../src/index';
 import { dispatchAgentsAction, parseAgentsToolInput } from '../src/delegation/agents-tool';
 import { createMemoryVfs } from '@kinu.run/test-utils';
-import { makeSql, makeExecRaw, makeSqlExec, createTestActor } from './helpers';
+import { makeSql, makeExecRaw, makeSqlExec } from './helpers';
+import type { ActorReference } from '../src/identity/actor-handle';
 import { createTestActors, present } from '@kinu.run/test-utils';
 
 const TEST_MODEL = DEFAULT_WORKERS_AI_MODEL_SPEC;
@@ -121,15 +122,16 @@ interface Scene {
   call(input: AgentsToolInput, signal?: AbortSignal): Promise<object>;
   sandbox(): SandboxNamespace;
   files: VFS;
+  /** A registered task hire named `name`, for a roster row written directly. */
+  hired(name: string): ActorReference;
 }
 
 /** `actor_subordinates` is keyed by parent so one actor cannot touch another's child by name. */
-function makeRosterStore(): SubordinateRosterStore {
-  const db = new Database(':memory:');
-  const sql = makeSql(db);
-  const parent = createTestActors(sql, makeExecRaw(db)).main;
+/** The roster and the actor directory over one database: a hire's origin is read from its actor row. */
+function rosterWorld(db: Database) {
+  const actors = createTestActors(makeSql(db), makeExecRaw(db));
 
-  return new SubordinateRosterStore(makeSqlExec(db), parent);
+  return { roster: new SubordinateRosterStore(makeSqlExec(db), actors.main), directory: actors.directory };
 }
 
 function makeScene(options: {
@@ -140,7 +142,8 @@ function makeScene(options: {
   withoutTemporary?: boolean;
   originContext?: ModelMessage[];
 } = {}): Scene {
-  const roster = makeRosterStore();
+  const eventDb = new Database(':memory:');
+  const { roster, directory } = rosterWorld(eventDb);
   roster.ensureSchema();
   const { vfs: files } = createMemoryVfs();
   const calls: string[] = [];
@@ -148,11 +151,8 @@ function makeScene(options: {
   const assignments: Array<Parameters<SubordinateRuntime['assign']>[1]> = [];
   let sequence = 0;
   const wakes: number[] = [];
-  const eventDb = new Database(':memory:');
   const eventSql = makeSqlExec(eventDb);
   initEventsHubTables(eventSql);
-  createTestActor(makeSql(eventDb), makeExecRaw(eventDb), 'temporary-workspace', 'main');
-  const directory = new WorkspaceActorDirectory(makeSql(eventDb), { workspaceId: 'temporary-workspace', ownerUserId: '' });
   const log = new EventLog(eventSql, directory.main());
 
   const runtime: SubordinateRuntime = {
@@ -161,10 +161,10 @@ function makeScene(options: {
 
       if (options.fail === 'spawn') throw new Error('the facet substrate is unavailable');
 
-      return directory.apply(directory.main(), [], { action: 'register', name: input.name, creationId: input.creationId, kind: 'subordinate', lifetime: input.lifetime }).reference;
+      return directory.apply(directory.main(), [], { action: 'register', name: input.name, creationId: input.creationId, origin: input.origin, lifetime: input.lifetime }).reference;
     },
     async cancelBirth(input) {
-      const actor = directory.apply(directory.main(), [], { action: 'cancelCreation', name: input.name, creationId: input.creationId, kind: 'subordinate', lifetime: input.lifetime });
+      const actor = directory.apply(directory.main(), [], { action: 'cancelCreation', name: input.name, creationId: input.creationId, origin: input.origin, lifetime: input.lifetime });
 
       if (actor.state !== 'deleted') directory.apply(directory.main(), [], { action: 'release', name: input.name, reference: actor.reference });
 
@@ -243,6 +243,13 @@ function makeScene(options: {
     briefs,
     assignments,
     files,
+    hired: (name) => {
+      const live = directory.list().find((record) => record.name === name && record.deletedAt === null);
+
+      return live === undefined
+        ? directory.apply(directory.main(), [], { action: 'register', name, creationId: `fixture-${name}`, origin: 'agent', lifetime: 'task' }).reference
+        : { actorId: live.actorId, workspaceId: live.workspaceId, parentActorId: live.parentActorId };
+    },
     published: () => log.pending().filter((event) => event.variant === 'subordinate_report').length,
     lastReport: () => {
       const last = log.pending().filter((event) => event.variant === 'subordinate_report').at(-1);
@@ -258,6 +265,7 @@ function makeScene(options: {
       transaction: (body) => body(),
       announce: () => { /* the rail row is the record; see `published()` */ },
       onAdmitted: () => { wakes.push(1); },
+      evolutionAnswerStored: () => undefined,
       onEvolutionAnswer: () => undefined,
       temporary,
     }, {
@@ -592,7 +600,7 @@ describe('a task answer finds its row wherever its hire started', () => {
   // The turn-end relay reports `progress`; `temporaryRunSettles` must treat it as the answer.
   test('a turn_end answer with no waiter releases the row too, not just a terminal report', async () => {
     const scene = makeScene();
-    scene.roster.create({ name: TEMP_NAME, actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'working', currentTask: 'Audit the ledger.', createdAt: NOW, dismissedAt: null, lifetime: 'task', taskEventId: 'evt-1' });
+    scene.roster.create({ name: TEMP_NAME, actorReference: scene.hired(TEMP_NAME), birth: null, deleteRequested: false, status: 'working', currentTask: 'Audit the ledger.', createdAt: NOW, dismissedAt: null, lifetime: 'task', taskEventId: 'evt-1' });
 
     const delivered = await scene.report({
       status: 'progress', origin: 'turn_end', content: 'Totals reconcile.',
@@ -608,7 +616,7 @@ describe('a task answer finds its row wherever its hire started', () => {
 
   test('a mid-work report_tool progress note leaves the task row working', async () => {
     const scene = makeScene();
-    scene.roster.create({ name: TEMP_NAME, actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'working', currentTask: 'Audit the ledger.', createdAt: NOW, dismissedAt: null, lifetime: 'task', taskEventId: 'evt-1' });
+    scene.roster.create({ name: TEMP_NAME, actorReference: scene.hired(TEMP_NAME), birth: null, deleteRequested: false, status: 'working', currentTask: 'Audit the ledger.', createdAt: NOW, dismissedAt: null, lifetime: 'task', taskEventId: 'evt-1' });
     await scene.report({ status: 'progress', origin: 'report_tool', content: 'Reading March.' });
     expect(scene.roster.list()).toMatchObject([{
       name: TEMP_NAME, lifetime: 'task', status: 'working',

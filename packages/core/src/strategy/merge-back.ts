@@ -16,7 +16,8 @@ import { admitsPublication, type PublicationState } from './objective';
 import { textPayload } from '../vfs/observe';
 import type { VFS } from '../types/primitives';
 import { isVfsError } from '../vfs/errno';
-import { renderThrownChain } from '../obs/index';
+import { Effect } from 'effect';
+import { renderThrownChain, settle } from '../obs/index';
 
 export const MERGE_POLICIES = [
   'apply-winner', 'sequential-rebase', 'conflict-spawns-a-merge-node', 'synthesis',
@@ -25,8 +26,8 @@ export const MERGE_POLICIES = [
 export type MergePolicy = (typeof MERGE_POLICIES)[number];
 
 /** Total over {@link SwarmSettle} so a new value cannot fall through to `apply-winner`. */
-export function mergePolicyOf(settle: SwarmSettle): MergePolicy {
-  switch (settle) {
+export function mergePolicyOf(swarmSettle: SwarmSettle): MergePolicy {
+  switch (swarmSettle) {
     case 'best': return 'apply-winner';
     case 'archive': case 'front': return 'sequential-rebase';
     case 'merge': return 'synthesis';
@@ -312,99 +313,101 @@ function cycleFrom(
 }
 
 /** Apply a settled swarm's work under `policy`. Never throws: failures are reported refusals. */
-export async function mergeBack(
+export function mergeBack(
   input: MergeBackInput, deps: MergeBackDeps,
 ): Promise<MergeBackReport> {
-  const { policy, members } = input;
-  const outcomes: MergeOutcome[] = [];
-  /** Seeded with dependencies already merged at earlier barriers of this run. */
-  const settled = new Set(input.settled ?? []);
-  const applied = new Set<string>(settled);
-  /** Conflict detector state: which member last wrote a path, and what. */
-  const writtenBy = new Map<string, { nodeId: string; after: string | null }>();
-  let stoppedAt: string | null = null;
+  return settle(Effect.gen(function* () {
+    const { policy, members } = input;
+    const outcomes: MergeOutcome[] = [];
+    /** Seeded with dependencies already merged at earlier barriers of this run. */
+    const settled = new Set(input.settled ?? []);
+    const applied = new Set<string>(settled);
+    /** Conflict detector state: which member last wrote a path, and what. */
+    const writtenBy = new Map<string, { nodeId: string; after: string | null }>();
+    let stoppedAt: string | null = null;
 
-  /** The single emit site for `swarm.merge_settled`. */
-  const settle = (stopped: string | null, ordered: readonly string[]): MergeBackReport => {
-    deps.log.event('swarm.merge_settled', {
-      preset: deps.preset, policy, members: members.length,
-      applied: outcomes.filter((outcome) => outcome.kind === 'applied').length,
-      refused: outcomes.filter((outcome) => outcome.kind === 'refused').length,
-      merge_nodes: outcomes.filter((outcome) => outcome.kind === 'merge-node').length,
-      stopped_at: stopped ?? '',
-      order: ordered.join(','),
-    });
-
-    return { policy, outcomes, stoppedAt: stopped, order: ordered };
-  };
-
-  // `synthesis` applies nothing: the combination is the settle report itself.
-  if (policy === 'synthesis') return settle(null, []);
-
-  // Only `sequential-rebase` is reordered; the others apply the first member or none.
-  const order = policy === 'sequential-rebase'
-    ? dependencyOrder(members, settled)
-    : ({ kind: 'ordered', members } as const);
-
-  if (order.kind === 'cycle') {
-    outcomes.push({ kind: 'refused', nodeId: order.nodeId, refusal: order.refusal });
-    deps.log.event('swarm.merge_refused', {
-      preset: deps.preset, policy, node: order.nodeId,
-      cause: order.refusal.cause, reason: order.refusal.reason, error: order.refusal.error,
-    });
-
-    // No order means no apply: a prefix of an unorderable set is half a merge published.
-    return settle(order.nodeId, []);
-  }
-
-  const ordered = order.members.map((member) => member.nodeId);
-
-  for (const member of order.members) {
-    // Conflict must be checked before the gate, or the gate reports it as a stale verdict.
-    const conflict = conflictWith(member, writtenBy);
-
-    if (conflict) {
-      const outcome = await spawnMerge(member, conflict, deps, policy);
-      outcomes.push(outcome);
-      stoppedAt = member.nodeId;
-      break;
-    }
-
-    const refusal = await gate(member, { applied, rebasedAt: writtenBy, deps });
-
-    if (refusal) {
-      outcomes.push({ kind: 'refused', nodeId: member.nodeId, refusal });
-      deps.log.event('swarm.merge_refused', {
-        preset: deps.preset, policy, node: member.nodeId,
-        cause: refusal.cause, reason: refusal.reason, error: refusal.error,
+    /** The single emit site for `swarm.merge_settled`. */
+    const settledReport = (stopped: string | null, ordered: readonly string[]): MergeBackReport => {
+      deps.log.event('swarm.merge_settled', {
+        preset: deps.preset, policy, members: members.length,
+        applied: outcomes.filter((outcome) => outcome.kind === 'applied').length,
+        refused: outcomes.filter((outcome) => outcome.kind === 'refused').length,
+        merge_nodes: outcomes.filter((outcome) => outcome.kind === 'merge-node').length,
+        stopped_at: stopped ?? '',
+        order: ordered.join(','),
       });
 
-      // Under `sequential-rebase` a refusal skips the member; later dependents are caught by their own gate.
-      // Single-apply policies stop, or a loser would be applied as winner.
-      if (policy === 'sequential-rebase') continue;
-      stoppedAt = member.nodeId;
-      break;
+      return { policy, outcomes, stoppedAt: stopped, order: ordered };
+    };
+
+    // `synthesis` applies nothing: the combination is the settle report itself.
+    if (policy === 'synthesis') return settledReport(null, []);
+
+    // Only `sequential-rebase` is reordered; the others apply the first member or none.
+    const order = policy === 'sequential-rebase'
+      ? dependencyOrder(members, settled)
+      : ({ kind: 'ordered', members } as const);
+
+    if (order.kind === 'cycle') {
+      outcomes.push({ kind: 'refused', nodeId: order.nodeId, refusal: order.refusal });
+      deps.log.event('swarm.merge_refused', {
+        preset: deps.preset, policy, node: order.nodeId,
+        cause: order.refusal.cause, reason: order.refusal.reason, error: order.refusal.error,
+      });
+
+      // No order means no apply: a prefix of an unorderable set is half a merge published.
+      return settledReport(order.nodeId, []);
     }
 
-    const outcome = await applyOne(member, deps, policy);
-    outcomes.push(outcome);
+    const ordered = order.members.map((member) => member.nodeId);
 
-    if (outcome.kind !== 'applied') {
-      stoppedAt = member.nodeId;
-      break;
+    for (const member of order.members) {
+      // Conflict must be checked before the gate, or the gate reports it as a stale verdict.
+      const conflict = conflictWith(member, writtenBy);
+
+      if (conflict) {
+        const outcome = yield* Effect.promise(() => spawnMerge(member, conflict, deps, policy));
+        outcomes.push(outcome);
+        stoppedAt = member.nodeId;
+        break;
+      }
+
+      const refusal = yield* Effect.promise(() => gate(member, { applied, rebasedAt: writtenBy, deps }));
+
+      if (refusal) {
+        outcomes.push({ kind: 'refused', nodeId: member.nodeId, refusal });
+        deps.log.event('swarm.merge_refused', {
+          preset: deps.preset, policy, node: member.nodeId,
+          cause: refusal.cause, reason: refusal.reason, error: refusal.error,
+        });
+
+        // Under `sequential-rebase` a refusal skips the member; later dependents are caught by their own gate.
+        // Single-apply policies stop, or a loser would be applied as winner.
+        if (policy === 'sequential-rebase') continue;
+        stoppedAt = member.nodeId;
+        break;
+      }
+
+      const outcome = yield* applyOne(member, deps, policy);
+      outcomes.push(outcome);
+
+      if (outcome.kind !== 'applied') {
+        stoppedAt = member.nodeId;
+        break;
+      }
+
+      applied.add(member.nodeId);
+
+      for (const file of member.diff.files) {
+        writtenBy.set(file.path, { nodeId: member.nodeId, after: file.after });
+      }
+
+      // `apply-winner` applies exactly one member.
+      if (policy === 'apply-winner') break;
     }
 
-    applied.add(member.nodeId);
-
-    for (const file of member.diff.files) {
-      writtenBy.set(file.path, { nodeId: member.nodeId, after: file.after });
-    }
-
-    // `apply-winner` applies exactly one member.
-    if (policy === 'apply-winner') break;
-  }
-
-  return settle(stoppedAt, ordered);
+    return settledReport(stoppedAt, ordered);
+  }));
 }
 
 /** The settle gate in the specification's order, plus the substrate's preconditions. */
@@ -553,9 +556,9 @@ async function baseDrift(
 }
 
 /** Apply one member all-or-nothing; the bound is checked before the first write. */
-async function applyOne(
+function applyOne(
   member: MergeMember, deps: MergeBackDeps, policy: MergePolicy,
-): Promise<MergeOutcome> {
+): Effect.Effect<MergeOutcome> {
   const plan = planMemberApply(member.diff);
   const exceeded = memberApplyBound(plan);
 
@@ -574,10 +577,12 @@ async function applyOne(
       bound: exceeded.bound, actual: exceeded.actual, maximum: exceeded.maximum,
     });
 
-    return { kind: 'refused', nodeId: member.nodeId, refusal };
+    return Effect.succeed({ kind: 'refused', nodeId: member.nodeId, refusal });
   }
 
-  if (!deps.applyMember) {
+  const applyMember = deps.applyMember;
+
+  if (!applyMember) {
     const refusal = refuse('apply-unwired', 'unavailable',
       `node ${member.nodeId} fits one transaction but no atomic multi-file write is wired, and a `
       + 'per-file loop would tear this member into a committed prefix. Wire MemberApply to the '
@@ -588,33 +593,34 @@ async function applyOne(
       cause: refusal.cause, reason: refusal.reason, error: refusal.error,
     });
 
-    return { kind: 'refused', nodeId: member.nodeId, refusal };
+    return Effect.succeed({ kind: 'refused', nodeId: member.nodeId, refusal });
   }
 
-  try {
-    await deps.applyMember(member.diff.files);
-  } catch (err) {
-    const refusal = refuse('apply-failed', 'io',
-      `node ${member.nodeId}'s apply failed at the substrate: ${
-        renderThrownChain({ cause: err })
-      }. The transaction is all-or-nothing, so nothing of this member landed.`);
+  return Effect.tryPromise({ try: () => applyMember(member.diff.files), catch: (cause) => ({ cause }) }).pipe(Effect.match({
+    onFailure: (failed): MergeOutcome => {
+      const refusal = refuse('apply-failed', 'io',
+        `node ${member.nodeId}'s apply failed at the substrate: ${
+          renderThrownChain(failed)
+        }. The transaction is all-or-nothing, so nothing of this member landed.`);
 
-    deps.log.failure('swarm.merge_apply_failed',
-      new KinuError('io', refusal.error, { cause: err instanceof Error ? err : undefined }),
-      { preset: deps.preset, policy, node: member.nodeId, cause: refusal.cause });
+      deps.log.failure('swarm.merge_apply_failed',
+        new KinuError('io', refusal.error, { cause: failed.cause instanceof Error ? failed.cause : undefined }),
+        { preset: deps.preset, policy, node: member.nodeId, cause: refusal.cause });
 
-    return { kind: 'refused', nodeId: member.nodeId, refusal };
-  }
+      return { kind: 'refused', nodeId: member.nodeId, refusal };
+    },
+    onSuccess: (): MergeOutcome => {
+      deps.log.event('swarm.merge_applied', {
+        preset: deps.preset, policy, node: member.nodeId,
+        files: member.diff.files.length, bytes: plan.blobBytes,
+      });
 
-  deps.log.event('swarm.merge_applied', {
-    preset: deps.preset, policy, node: member.nodeId,
-    files: member.diff.files.length, bytes: plan.blobBytes,
-  });
-
-  return {
-    kind: 'applied', nodeId: member.nodeId,
-    files: member.diff.files.length, bytes: plan.blobBytes,
-  };
+      return {
+        kind: 'applied', nodeId: member.nodeId,
+        files: member.diff.files.length, bytes: plan.blobBytes,
+      };
+    },
+  }));
 }
 
 /** The earlier member this one disagrees with (different bytes, not mere overlap), or null. */
@@ -736,15 +742,14 @@ export function settleCarry(
 
 /** Missing is null; other read failures propagate, since unreadable is not absent. */
 export function originReader(vfs: VFS): (path: string) => Promise<string | null> {
-  return async (path) => {
-    try {
-      const payload = textPayload(await vfs.readFile(path, { encoding: 'utf8' }));
+  return (path) => settle(Effect.tryPromise({ try: () => vfs.readFile(path, { encoding: 'utf8' }), catch: (cause) => ({ cause }) }).pipe(
+    Effect.catch((failed) => (isVfsError(failed.cause) && failed.cause.code === 'ENOENT' ? Effect.succeed(null) : Effect.die(failed.cause))),
+    Effect.map((raw) => {
+      if (raw === null) return null;
+      const payload = textPayload(raw);
 
       // A binary path reads as absent, so rule 6 refuses rather than inventing a base.
       return payload.kind === 'text' ? payload.text : null;
-    } catch (err) {
-      if (isVfsError(err) && err.code === 'ENOENT') return null;
-      throw err;
-    }
-  };
+    }),
+  ));
 }

@@ -175,14 +175,17 @@ describe('the Workers AI utility bindings file unmeasured platform spend', () =>
     );
 
     try {
+      const unusedBrowser = { quickAction: async () => new Response('this test renders no page', { status: 500 }) };
+
       const converting = buildCfWebSearchProvider({
         AI: { toMarkdown: async () => [{ format: 'markdown', data: '# Title' }] },
+        BROWSER: unusedBrowser,
       }, () => undefined, report);
 
       expect((await converting.fetch('https://example.test/')).markdown).toContain('# Title');
       expect(producers()).toEqual({ platform: { calls: 1, unmeasured: 1, usage: {} } });
 
-      await buildCfWebSearchProvider({}, () => undefined, report).fetch('https://example.test/');
+      await buildCfWebSearchProvider({ BROWSER: unusedBrowser }, () => undefined, report).fetch('https://example.test/');
       expect(producers()).toEqual({ platform: { calls: 1, unmeasured: 1, usage: {} } });
     } finally {
       globalThis.fetch = realFetch;

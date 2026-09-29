@@ -3,11 +3,11 @@ import { RunEventRecorder, RunEventSchema, RUN_EVENT_LIMIT_MAX } from '../events
 import { getRunSummaries } from '../read-models/runs';
 import { getChatHistoryPage } from '../read-models/status';
 import type { SessionTranscriptReader } from '../session/transcript';
-import { pageSchema, SeekCursorSchema, type Page, type PageRequest } from '../session/page';
+import { pageSchema, positionPageSchema, PositionPageRequestSchema, SeekCursorSchema, type Page, type PageRequest } from '../session/page';
+import { ChatHistoryEntrySchema } from '../types/chat';
 import type { RunEvent } from '../events/types';
 import { ERROR_CODES, KinuError, refusalOf } from '../obs/error';
 import { UsageSchema } from '../usage';
-import { JsonObjectSchema } from '../utils/json';
 import { tableExists } from '../identity/schema';
 import type { SqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -45,17 +45,12 @@ export const SubordinateInspectionRequestSchema = v.variant('view', [
   v.strictObject({ ...WorkspacePlanReferenceSchema.entries, view: v.literal('plan') }),
   v.strictObject({ ...WorkspacePlanReferenceSchema.entries, view: v.literal('planTasks') }),
   v.strictObject({ path: PathSchema, view: v.literal('children'), page: PageRequestSchema, actor: ActorIdSchema }),
-  v.strictObject({ path: PathSchema, view: v.literal('history'), page: PageRequestSchema, actor: ActorIdSchema }),
+  v.strictObject({ path: PathSchema, view: v.literal('history'), page: PositionPageRequestSchema, actor: ActorIdSchema }),
   v.strictObject({ path: PathSchema, view: v.literal('runs'), page: PageRequestSchema, actor: ActorIdSchema }),
   v.strictObject({ path: PathSchema, view: v.literal('events'), runId: v.pipe(v.string(), v.nonEmpty()), query: EventQuerySchema, actor: ActorIdSchema }),
 ]);
 
 export type SubordinateInspectionRequest = v.InferOutput<typeof SubordinateInspectionRequestSchema>;
-
-const HistorySchema = v.object({
-  id: v.string(), role: v.picklist(['user', 'assistant', 'system']), content: v.string(),
-  createdAt: v.union([v.string(), v.number()]), metadata: v.optional(JsonObjectSchema),
-});
 
 const SummarySchema = v.object({
   runId: v.string(), eventCount: v.number(), startedAt: v.number(),
@@ -79,7 +74,7 @@ export const SubordinateInspectionResultSchema = v.variant('view', [
   v.object({ view: v.literal('plan'), path: PathSchema, plan: PlanReviewSchema }),
   v.object({ view: v.literal('planTasks'), path: PathSchema, tasks: v.array(AgentTaskTreeSchema) }),
   v.object({ view: v.literal('children'), path: PathSchema, page: pageSchema(ChildSchema) }),
-  v.object({ view: v.literal('history'), path: PathSchema, page: pageSchema(HistorySchema) }),
+  v.object({ view: v.literal('history'), path: PathSchema, page: positionPageSchema(ChatHistoryEntrySchema) }),
   v.object({ view: v.literal('runs'), path: PathSchema, page: pageSchema(SummarySchema) }),
   v.object({ view: v.literal('events'), path: PathSchema, runId: v.string(), page: EventPageSchema }),
   v.object({ reason: v.picklist(ERROR_CODES), error: v.string(), view: v.literal('missing'), path: PathSchema }),

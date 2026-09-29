@@ -1,4 +1,4 @@
-import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
+import { cloudflareTest } from '@cloudflare/vitest-plugin';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
@@ -6,7 +6,7 @@ export default defineConfig({
     cloudflareTest({
       main: './bench/worker.ts',
       miniflare: {
-        compatibilityDate: '2025-12-01',
+        compatibilityDate: '2026-09-28',
         compatibilityFlags: ['nodejs_compat'],
         bindings: {
           BENCH_TOKEN: 'test-token',

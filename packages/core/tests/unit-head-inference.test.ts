@@ -55,7 +55,7 @@ function headInput(overrides?: Partial<HeadInput>): HeadInput {
     inheritedContext: [{ id: 'm1', role: 'user', content: 'the prior user message', createdAt: 1 }],
     budget: { maxDepth: 2, spawnedAt: 2_000_000_000_000 },
     mergeStrategy: 'synthesize',
-    loop: defaultLoopOrigin('run'),
+    loop: defaultLoopOrigin('swarm'),
     ...overrides,
   };
 }
@@ -66,7 +66,7 @@ const deps = async (
   over?: Partial<HeadInferenceDeps>,
 ): Promise<HeadInferenceDeps> => {
   const { rt, testSql } = createTestRuntime();
-  const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('head-under-test', 'run');
+  const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('head-under-test', 'swarm');
 
   return {
     actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
@@ -205,7 +205,7 @@ describe('buildHeadAccumulatorTools', () => {
     // The head's own surface, as both backends build it.
     const tools = buildHeadToolSet({
       input, capture, rt, history: storesFor(rt).history, codemodeTool: undefined,
-      webSearch: { search: async (query) => ({ query, results: [], source: 'duckduckgo' }), fetch: async (url) => ({ url, retrievedAt: '', markdown: '' }) },
+      webSearch: { search: async (query) => ({ query, results: [], source: 'duckduckgo' }), fetch: async (url) => ({ url, retrievedAt: '', markdown: '' }), render: async (url) => ({ url, retrievedAt: '', markdown: '' }), screenshot: async (url) => ({ url, retrievedAt: '', bytes: new Uint8Array() }) },
       split: async () => { throw new Error('this head cannot split'); },
     });
 
@@ -226,8 +226,8 @@ describe('durable delegated turn opening', () => {
     test(`a fork's first working revision is its seed and survives reopening, empty=${empty}`, async () => {
       const { rt, testSql } = createTestRuntime();
       const seats = hostedSeatsOver({ rt, db: testSql.db });
-      const source = await seats.seat('fork-source', 'subordinate');
-      const fork = await seats.seat('walked-back-fork', 'subordinate');
+      const source = await seats.seat('fork-source', 'agent');
+      const fork = await seats.seat('walked-back-fork', 'agent');
 
       const original: ModelMessage[] = [
         { role: 'user', content: 'first question' },
@@ -249,7 +249,7 @@ describe('durable delegated turn opening', () => {
         expect((await fork.actor.stores.history.materialize()).messages).toEqual(seed);
         expect((await source.actor.stores.history.materialize()).messages).toEqual(original);
 
-        const reopened = await hostedSeatsOver({ rt, db: testSql.db }).seat('walked-back-fork', 'subordinate');
+        const reopened = await hostedSeatsOver({ rt, db: testSql.db }).seat('walked-back-fork', 'agent');
         await reopened.actor.session.restoreWorkingHistory();
         expect(reopened.actor.session.history).toEqual(seed);
         expect(reopened.actor.stores.history.context.revisions(selection.contextId)).toEqual(revisions);
@@ -261,7 +261,7 @@ describe('durable delegated turn opening', () => {
 
   test('the walk-back is one session method: head, selection, woven blocks and working history move together', async () => {
     const { rt, testSql } = createTestRuntime();
-    const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('walked-back', 'subordinate');
+    const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('walked-back', 'agent');
     const { session, stores } = seat.actor;
     const chat = stores.history.transcript(CHAT_SESSION_ID);
     const assertOwner = () => rt.actor.assertCurrent();
@@ -269,9 +269,9 @@ describe('durable delegated turn opening', () => {
     try {
       for (const [ask, answer, text] of [['ask-1', 'answer-1', 'one'], ['ask-2', 'answer-2', 'two']] as const) {
         const input = await stores.history.append({ id: ask, message: { role: 'user', content: text }, origin: 'input', turnId: ask, assertOwner });
-        chat.record({ ...await chat.prepareUser({ id: ask, turnId: ask, message: input }), parentId: undefined });
+        chat.record({ ...await chat.prepareUser({ id: ask, turnId: ask, message: input }) });
         await stores.history.append({ id: answer, message: { role: 'assistant', content: `${text} answered` }, origin: 'output', turnId: ask, assertOwner });
-        chat.appendAssistant(await chat.prepareAssistant({ id: answer, parentId: ask, turnId: ask, runId: ask, parts: [{ messageId: answer, partNo: 0 }], finalText: null }));
+        chat.appendAssistant(await chat.prepareAssistant({ id: answer, turnId: ask, runId: ask, parts: [{ messageId: answer, partNo: 0 }], finalText: null }));
       }
 
       await session.restoreWorkingHistory();
@@ -283,11 +283,11 @@ describe('durable delegated turn opening', () => {
       // The host's own idle condition is raised inside the same transaction: nothing moves.
       await expect(session.revertConversation(CHAT_SESSION_ID, 'ask-2', () => { throw new Error('a queued turn holds the loop'); }))
         .rejects.toThrow('a queued turn holds the loop');
-      expect(chat.ancestry().map((entry) => entry.id)).toEqual(['ask-1', 'answer-1', 'ask-2', 'answer-2']);
+      expect(chat.entries().map((entry) => entry.id)).toEqual(['ask-1', 'answer-1', 'ask-2', 'answer-2']);
       expect(session.dynamic.size).toBe(1);
 
       await session.revertConversation(CHAT_SESSION_ID, 'ask-2', () => {});
-      expect(chat.ancestry().map((entry) => entry.id)).toEqual(['ask-1', 'answer-1']);
+      expect(chat.entries().map((entry) => entry.id)).toEqual(['ask-1', 'answer-1']);
       expect(session.history.map((message) => message.content)).toEqual(['one', 'one answered']);
       expect((await stores.history.materialize()).messages.map((message) => message.content)).toEqual(['one', 'one answered']);
       expect(session.dynamic.size).toBe(0);
@@ -298,9 +298,9 @@ describe('durable delegated turn opening', () => {
 
   test('an explicitly empty working revision is authoritative, not a new birth', async () => {
     const { rt, testSql } = createTestRuntime();
-    const first = await hostedSeatsOver({ rt, db: testSql.db }).seat('empty-reader', 'subordinate');
+    const first = await hostedSeatsOver({ rt, db: testSql.db }).seat('empty-reader', 'agent');
     await first.actor.session.restoreHistory([]);
-    const restored = await hostedSeatsOver({ rt, db: testSql.db }).seat('empty-reader', 'subordinate');
+    const restored = await hostedSeatsOver({ rt, db: testSql.db }).seat('empty-reader', 'agent');
 
     try {
       await restored.actor.session.restoreWorkingHistory();
@@ -350,7 +350,7 @@ describe('durable delegated turn opening', () => {
         };
       } });
 
-      let seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('durable-reader', 'subordinate');
+      let seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('durable-reader', 'agent');
 
       const run = async (assignmentId: string) => runHeadInference(headInput(), {
         ...seat, model, tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
@@ -362,7 +362,7 @@ describe('durable delegated turn opening', () => {
       try {
         expect((await run('assignment-a')).status).toBe('completed');
 
-        if (cold) seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('durable-reader', 'subordinate');
+        if (cold) seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('durable-reader', 'agent');
         expect((await run('assignment-a')).status).toBe('completed');
         expect((await run('assignment-b')).status).toBe('completed');
 
@@ -381,7 +381,7 @@ describe('durable delegated turn opening', () => {
 
   test('a staged replacement survives delegation opening and cold restore without resurrecting the birth seed', async () => {
     const { rt, testSql } = createTestRuntime();
-    let seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('edited-reader', 'subordinate');
+    let seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('edited-reader', 'agent');
     const model = fakeHeadModel('Child answer.');
 
     const run = (assignmentId: string, edit: boolean) => runHeadInference(headInput(), {
@@ -399,7 +399,7 @@ describe('durable delegated turn opening', () => {
     try {
       expect((await run('assignment-a', false)).status).toBe('completed');
       expect((await run('assignment-b', true)).status).toBe('completed');
-      seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('edited-reader', 'subordinate');
+      seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('edited-reader', 'agent');
       expect((await run('assignment-c', false)).status).toBe('completed');
       expect(seat.actor.session.history).toEqual([
         { role: 'user', content: 'Edited working prefix.' },
@@ -528,14 +528,11 @@ async function seededTranscript(count: number, extra?: (history: SessionHistory)
     files: async () => ({ vfs, artifactDirectory: '/actor/.kinu/context' }),
   });
 
-  let parentId: string | null = null;
-
   for (let i = 0; i < count; i++) {
     await history.record(CHAT_SESSION_ID, {
-      id: `m${i}`, parentId, origin: i % 2 === 0 ? 'input' : 'output',
+      id: `m${i}`, origin: i % 2 === 0 ? 'input' : 'output',
       message: { role: i % 2 === 0 ? 'user' : 'assistant', content: `body ${i}` },
     });
-    parentId = `m${i}`;
   }
 
   await extra?.(history);
@@ -569,7 +566,7 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
   const bound = cap + 80;
 
   const seededStoredBody = async (content: string) => seededTranscript(0, async (history) => {
-    await history.record(CHAT_SESSION_ID, { id: 'r1', parentId: null, origin: 'output', message: { role: 'assistant', content } });
+    await history.record(CHAT_SESSION_ID, { id: 'r1', origin: 'output', message: { role: 'assistant', content } });
   });
 
   test('the transcript read caps each stored body as it builds the digest', async () => {
@@ -587,7 +584,7 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
 
   test('a body within budget passes through byte-identical', async () => {
     const seeded = await seededTranscript(0, async (history) => {
-      await history.record(CHAT_SESSION_ID, { id: 'r1', parentId: null, origin: 'input', message: { role: 'user', content: 'short body' } });
+      await history.record(CHAT_SESSION_ID, { id: 'r1', origin: 'input', message: { role: 'user', content: 'short body' } });
     });
 
     expect((await inheritedContextFromTranscript(seeded.transcript))[0].content).toBe('short body');
@@ -626,7 +623,7 @@ describe('inheritedContextFromTranscript — the canonical store, read once for 
 
     // Another session's row: neither inherited nor counted as omitted.
     const seeded = await seededTranscript(cap + 5, async (history) => {
-      await history.record('side', { id: 'other', parentId: null, origin: 'input', message: { role: 'user', content: 'elsewhere' } });
+      await history.record('side', { id: 'other', origin: 'input', message: { role: 'user', content: 'elsewhere' } });
     });
 
     const ctx = await inheritedContextFromTranscript(seeded.transcript);

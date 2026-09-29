@@ -1,19 +1,18 @@
-/** The MCTS tree a surface shows, scoped to one search root: `search_nodes` keeps every search's
+/** The swarm search tree a surface shows, scoped to one search root: `search_nodes` keeps every search's
  * settled tree. "Latest" is the tree with the newest node insert. */
 
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { NodeStatus, SearchNode } from '../types/mcts';
 
-/** A drawn tree's row: the node and its own score. */
 export type SearchTreeRow = SearchNode & { readonly own_score: number | null };
 
 export function readLatestSearchTree(sql: SqlExecutor, actor: ActorHandle): SearchTreeRow[] {
   actor.assertCurrent();
 
   return sql<SearchTreeRow>`
-    SELECT id, parent_id, root_id, task, action, observation, code_used,
-           visits, value, own_score, depth, status, msg_id, created_at
+    SELECT id, parent_id, root_id, task, action, observation,
+           visits, value, own_score, depth, status, created_at
     FROM search_node_scores
     WHERE actor_id = ${actor.actorId} AND root_id = (
       SELECT root_id FROM search_nodes WHERE actor_id = ${actor.actorId}
@@ -28,8 +27,8 @@ export function readSearchTree(sql: SqlExecutor, actor: ActorHandle, rootId: str
   actor.assertCurrent();
 
   return sql<SearchTreeRow>`
-    SELECT id, parent_id, root_id, task, action, observation, code_used,
-           visits, value, own_score, depth, status, msg_id, created_at
+    SELECT id, parent_id, root_id, task, action, observation,
+           visits, value, own_score, depth, status, created_at
     FROM search_node_scores WHERE actor_id = ${actor.actorId} AND root_id = ${rootId}
     ORDER BY depth, created_at`;
 }
@@ -48,8 +47,6 @@ export interface SearchNodeSummary {
 export interface SearchNodeDetail extends SearchNodeSummary {
   task: string;
   observation: string;
-  codeUsed: string | null;
-  msgId: string | null;
   /** Root first, this node last. */
   path: SearchNodeSummary[];
   /** Best first: value, then visits, then insertion order. */
@@ -66,8 +63,6 @@ interface DetailRow {
   action: string;
   task: string;
   observation: string;
-  code_used: string | null;
-  msg_id: string | null;
   created_at: number;
 }
 
@@ -82,7 +77,7 @@ const summarize = (node: DetailRow): SearchNodeSummary => ({
   createdAt: node.created_at,
 });
 
-/** One node, its ancestry and children (`kinu inspect mcts <id>` and the tree view's node pane).
+/** One node, its ancestry and children (`kinu swarm <name> <id>` and the tree view's node pane).
  * The ancestry walk guards against cycles: `parent_id` is a plain column. */
 export function readSearchNodeDetail(
   sql: SqlExecutor, actor: ActorHandle, nodeId: string,
@@ -91,7 +86,7 @@ export function readSearchNodeDetail(
 
   const readNode = (id: string): DetailRow | undefined => sql<DetailRow>`
     SELECT id, parent_id, depth, visits, value, status, action,
-           task, observation, code_used, msg_id, created_at
+           task, observation, created_at
     FROM search_nodes WHERE actor_id = ${actor.actorId} AND id = ${id} LIMIT 1`[0];
 
   const node = readNode(nodeId);
@@ -109,7 +104,7 @@ export function readSearchNodeDetail(
 
   const children = sql<DetailRow>`
     SELECT id, parent_id, depth, visits, value, status, action,
-           task, observation, code_used, msg_id, created_at
+           task, observation, created_at
     FROM search_nodes WHERE actor_id = ${actor.actorId} AND parent_id = ${nodeId}
     ORDER BY value DESC, visits DESC, created_at`;
 
@@ -117,8 +112,6 @@ export function readSearchNodeDetail(
     ...summarize(node),
     task: node.task,
     observation: node.observation,
-    codeUsed: node.code_used,
-    msgId: node.msg_id,
     path,
     children: children.map(summarize),
   };

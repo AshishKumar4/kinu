@@ -21,8 +21,10 @@ async function modelContext(agent: HarnessOrchestratorAgent): Promise<string> {
 describe('the orchestrator dynamic context reads its own planes', () => {
   test('a hired subordinate renders as a delegate in the block', async () => {
     const { agent, db } = orchestratorHarness();
+    const scout = await agent.actorDirectory({ action: 'register', creationId: 'c-scout', name: 'scout', origin: 'agent', lifetime: 'durable' });
+
     new SubordinateRosterStore(makeSqlExec(db), workspaceMainActor(db)).create({
-      name: 'scout', actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator',
+      name: 'scout', actorReference: scout.reference, birth: null, deleteRequested: false,
       status: 'working', currentTask: 'map the failure surface', createdAt: Date.now(), dismissedAt: null,
       lifetime: 'durable', taskEventId: null,
     });
@@ -41,7 +43,7 @@ describe('the orchestrator dynamic context reads its own planes', () => {
       executor: 'workspace',
       reason: formatApproval({ decision: 'gate', hits: [] }),
       requestedAt: Date.now(),
-    });
+    }, []);
 
     expect(parked.status).toBe('queued');
 

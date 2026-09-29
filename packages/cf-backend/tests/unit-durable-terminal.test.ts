@@ -224,7 +224,8 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
 
     const owed = effects(harness, 'u-head', 'a-head');
     expect(owed.map((row) => row.effect_key)).toEqual([
-      // No `branches` row: branches are claimed per branch id and this turn launched none.
+      // No `branches` row: branches are claimed per branch id and this turn launched none. No `advisor_review`
+      // row: the harness actor does not review turns.
       'v1:turn_end_extensions:a-head', 'v1:turn_record:a-head',
       'v1:event_drain:a-head', 'v1:improvement_lanes:a-head',
       'v1:sleep_time:a-head', 'v1:auto_title:a-head', 'v1:auto_gepa:a-head',
@@ -556,6 +557,28 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
  * Auto-continuations share the durable turn id, so claims are released only when no response can run.
  * `_inFlight` is clear after eviction; the surviving run row is the witness seeded here.
  */
+// Core's `creditedTurnId` decides; this pins that the orchestrator hands its verdict to the branch settle.
+describe('mid-turn captures are credited to the turn only when it answered', () => {
+  test('a completed turn credits its branch take set to its answer', async () => {
+    const harness = orchestratorHarness(undefined, { heads: headsAnswering({ status: 'completed', summary: 'the branch answer' }) });
+    await branchDuring(harness, 'u-credit', 'a-credit', 'try the other library');
+    await turns(harness).settle({ messageId: 'a-credit', text: 'the live answer' });
+    await joinHarnessFibers();
+
+    expect(harness.db.query('SELECT turn_id FROM alternate_takes').all()).toEqual([{ turn_id: 'a-credit' }]);
+  });
+
+  test('a turn that failed credits nothing: its branch is aborted and no take set is written', async () => {
+    const harness = orchestratorHarness(undefined, { heads: headsAnswering({ status: 'completed', summary: 'the branch answer' }) });
+    await branchDuring(harness, 'u-fail', 'a-fail', 'try the other library');
+    await turns(harness).settle({ messageId: 'a-fail', text: 'partial', status: 'error', error: 'the provider hung up' });
+    await joinHarnessFibers();
+
+    expect(takeSets(harness)).toBe(0);
+    expect(owedBranchEffects(harness, 'u-fail', 'a-fail')).toEqual([]);
+  });
+});
+
 describe('a turn releases its tool claims only when no response can still run', () => {
   /** A tool call claimed and unsettled: the state a still-executing turn leaves. */
   function claimTool(harness: Harness, turnId: string, callId: string): void {

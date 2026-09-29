@@ -3,7 +3,7 @@
  * number per file and mechanism that only goes down.
  *
  * The target (docs/OBSERVABILITY.md) is one failure type, `KinuError`, in the Effect channel, with
- * `settle` and `toWire` in `packages/core/src/obs/effect.ts` as the boundary. The migration slices
+ * `settle` in `packages/core/src/obs/effect.ts` as the boundary. The migration slices
  * remove what this counts, so each slice's commit shows its numbers falling and nothing grows while
  * they run:
  *
@@ -46,7 +46,7 @@ interface Declaration {
 export const DECLARED = new Map<string, Declaration>([
   ['packages/core/src/obs/effect.ts', {
     mechanisms: MECHANISMS,
-    reason: 'the one runner: `settle` rethrows the typed failure or the defect, and `toWire` writes the wire union',
+    reason: 'the one runner: `settle` rethrows the typed failure or the defect',
   }],
   ['packages/core/src/slates/content.ts', {
     mechanisms: ['throw'],
@@ -79,6 +79,8 @@ const isObsModule = (specifier: string): boolean =>
  * `return settle(…)` or `return settleSync(…)` with the runner imported from `obs`, inside an exported
  * function or a public class member. Each is removed when its callers' wave arrives; the migration
  * ends at zero. A runner returned anywhere else is a finding: a private helper must return the Effect.
+ * One more edge is platform-owned: a `transactionSync(() => …)` callback, where only a synchronous throw
+ * rolls the transaction back, so `settleSync(…)` as that callback's whole return is a bridge too.
  */
 export interface BridgeCensus {
   readonly bridges: string[];
@@ -94,6 +96,7 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
     if (file === 'packages/core/src/obs/effect.ts' || HOST_BOUNDARIES.has(file)) continue;
     const parsed = parse(file, text);
     const runners = new Set<string>();
+    const syncRunners = new Set<string>();
 
     walk(parsed.root, (node) => {
       const { raw } = node;
@@ -103,6 +106,8 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
       for (const specifier of raw.specifiers) {
         if (specifier.type === 'ImportSpecifier' && specifier.imported.type === 'Identifier' && RUNNERS.includes(specifier.imported.name)) {
           runners.add(specifier.local.name);
+
+          if (specifier.imported.name === 'settleSync') syncRunners.add(specifier.local.name);
         }
       }
     });
@@ -121,6 +126,12 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
 
       if (!returned) {
         findings.push(`${site}: a runner called mid-body; the effect is run once, at the edge, as its return`);
+
+        return;
+      }
+
+      if (syncRunners.has(raw.callee.name) && isTransactionCallback(holder.raw.type === 'ReturnStatement' ? holder : { parent: holder })) {
+        bridges.push(site);
 
         return;
       }
@@ -168,6 +179,21 @@ function bridgeOwner(statement: Pick<SyntaxNode, 'parent'>): SyntaxNode | null {
   }
 
   return owner.parent === undefined ? null : bridgeOwner(owner);
+}
+
+/** Whether the return belongs directly to a function passed as `transactionSync`'s argument. */
+function isTransactionCallback(statement: Pick<SyntaxNode, 'parent'>): boolean {
+  let node: SyntaxNode | undefined = statement.parent;
+
+  while (node !== undefined && !isFunctionLike(node)) node = node.parent;
+  const call = node?.parent;
+
+  if (node === undefined || call?.raw.type !== 'CallExpression' || !call.raw.arguments.some((argument) => argument === node.raw)) return false;
+  const { callee } = call.raw;
+
+  if (callee.type === 'Identifier') return callee.name === 'transactionSync';
+
+  return callee.type === 'MemberExpression' && !callee.computed && callee.property.type === 'Identifier' && callee.property.name === 'transactionSync';
 }
 
 const arrowBody = (raw: SyntaxNode['raw']): SyntaxNode['raw'] | null =>
@@ -384,7 +410,7 @@ if (import.meta.main) {
         found: `${String(now)}, ${was === undefined ? 'and the lock holds none for this file' : `locked at ${String(was)}`}`,
         silently: 'a second failure convention grows beside the one being migrated to, and the migration '
           + 'never finishes because each slice lands on a larger tree than it measured',
-        fix: 'fail with `KinuError` in an effect and cross the boundary with `settle` or `toWire` '
+        fix: 'fail with `KinuError` in an effect and cross the boundary with `settle` '
           + '(packages/core/src/obs/effect.ts); `--lock` never raises a number',
       }));
     }

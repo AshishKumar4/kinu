@@ -5,7 +5,7 @@ import { dirname, join, resolve } from 'node:path';
 import { subordinateAgentName } from '@kinu.run/core';
 import { scratchDir } from '@kinu.run/test-utils';
 import { cleanupFacetCwdScratch, createCLIRuntime, shareLocalWorkspacePlane, type CLIRuntime } from '../src/runtime';
-import { registerLocalActor } from '../src/actor-identity';
+import { registerLocalActor } from '@kinu.run/core';
 
 interface LocalRoot {
   readonly rt: CLIRuntime;
@@ -18,14 +18,14 @@ function rootRuntime(state: string, cwd?: string): LocalRoot {
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
 
-  return { rt: createCLIRuntime(db, { dbPath, llm: null, cwd, agentName: 'parent' }), db, dbPath };
+  return { rt: createCLIRuntime(db, { llm: null, cwd, agentName: 'parent' }), db, dbPath };
 }
 
 /** A child over its root's database: same handle, same file, its own actor row. */
 async function childRuntime(parent: CLIRuntime, root: LocalRoot, name: string): Promise<CLIRuntime> {
-  const binding = registerLocalActor(parent.actor, { name, creationId: crypto.randomUUID(), kind: 'subordinate', lifetime: 'durable' });
+  const binding = registerLocalActor(parent.actor, { name, creationId: crypto.randomUUID(), origin: 'agent', lifetime: 'durable' });
   const facet = subordinateAgentName(binding.storageKey);
-  const child = createCLIRuntime(root.db, { dbPath: root.dbPath, llm: null, cwd: parent.cwd, facet, actorBinding: binding });
+  const child = createCLIRuntime(root.db, { llm: null, cwd: parent.cwd, facet, actorBinding: binding });
 
   return shareLocalWorkspacePlane(child, parent, facet);
 }
@@ -77,7 +77,7 @@ describe('local actor file-plane identity', () => {
   test('hostile logical names are refused before a physical child is allocated', () => {
     const state = scratchDir('facet-plane-hostile');
     const root = rootRuntime(state);
-    const register = (name: string) => registerLocalActor(root.rt.actor, { name, creationId: crypto.randomUUID(), kind: 'subordinate', lifetime: 'durable' });
+    const register = (name: string) => registerLocalActor(root.rt.actor, { name, creationId: crypto.randomUUID(), origin: 'agent', lifetime: 'durable' });
     expect(() => register('../escape')).toThrow(expect.objectContaining({ code: 'bad_input' }));
     expect(() => register('a/b')).toThrow(expect.objectContaining({ code: 'bad_input' }));
     expect(existsSync(join(state, 'escape'))).toBe(false);

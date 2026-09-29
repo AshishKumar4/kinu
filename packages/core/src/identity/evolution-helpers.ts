@@ -10,6 +10,14 @@ export interface EvolutionLaneRequest {
 
 export type EvolutionAnswerStatus = 'completed' | 'blocked';
 
+/** An answered helper and the lane it answered. */
+export interface AnsweredEvolutionHelper {
+  readonly name: string;
+  readonly lane: EvolutionLaneRequest;
+  readonly status: EvolutionAnswerStatus;
+  readonly answer: string;
+}
+
 export type EvolutionHelperAnswer =
   | { readonly state: 'answered'; readonly name: string; readonly status: EvolutionAnswerStatus; readonly answer: string }
   | { readonly state: 'running'; readonly name: string };
@@ -32,6 +40,13 @@ const HelperRowSchema = v.object({
   name: v.string(),
   answer_status: v.nullable(v.picklist(['completed', 'blocked'])),
   answer: v.nullable(v.string()),
+});
+
+const AnsweredRowSchema = v.object({
+  name: v.string(),
+  lane_request_id: v.string(),
+  answer_status: v.picklist(['completed', 'blocked']),
+  answer: v.string(),
 });
 
 export class EvolutionHelperStore {
@@ -86,6 +101,19 @@ export class EvolutionHelperStore {
     if (row.answer_status === null || row.answer === null) return { state: 'running', name: row.name };
 
     return { state: 'answered', name: row.name, status: row.answer_status, answer: row.answer };
+  }
+
+  /** Answers still held for their lane, oldest first. */
+  answered(): readonly AnsweredEvolutionHelper[] {
+    this.actor.assertCurrent();
+
+    return this.sql.exec(
+      `SELECT name, lane_request_id, answer_status, answer FROM evolution_helpers
+       WHERE actor_id = ? AND answer_status IS NOT NULL ORDER BY created_at, name`,
+      this.actorId,
+    ).toArray().map((row) => v.parse(AnsweredRowSchema, row)).map((row) => ({
+      name: row.name, lane: { requestId: row.lane_request_id }, status: row.answer_status, answer: row.answer,
+    }));
   }
 
   remove(name: string): void {

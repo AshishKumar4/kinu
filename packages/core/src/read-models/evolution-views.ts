@@ -1,4 +1,4 @@
-/** Self-evolution surfaces: changelog, near-tied takes, curriculum proposals, each with its one action. */
+/** Self-evolution surfaces: changelog, alternate takes, curriculum proposals, each with its one action. */
 
 import type { AgentConfigStore } from '../config/store';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -17,7 +17,8 @@ import { getCurrentScaffoldVersion } from '../scaffold/shadow';
 import type { AgentInbox } from '../types/signals';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { SqlExecutor } from '../types/primitives';
-import { diagnostics, toKinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { diagnostics, settle, toKinuError } from '../obs/index';
 
 export interface EvolutionChangelogView {
   entries: ChangelogEntry[];
@@ -72,42 +73,43 @@ export interface TakePickDeps {
 
 /** A `turn_outcomes` row (source 'take_pick') plus convergence repoint. A differing pick queues a
  * continuation; riding the live turn's next step counts as delivered. */
-export async function pickAlternateTake(
+export function pickAlternateTake(
   deps: TakePickDeps,
   takeId: string,
   nodeId: string,
 ): Promise<TakePickOutcome> {
-  if (!takeId || !nodeId) {
-    throw new Error('pickAlternateTake requires takeId and nodeId');
-  }
+  return settle(Effect.gen(function* () {
+    if (!takeId || !nodeId) {
+      return yield* Effect.die(new Error('pickAlternateTake requires takeId and nodeId'));
+    }
 
-  const record = await recordTakePick(deps.sql, deps.actor, deps.history.transcript(CHAT_SESSION_ID), {
-    takeId, nodeId,
-    scaffoldVersion: getCurrentScaffoldVersion(deps.sql, deps.actor),
-  });
+    const record = yield* Effect.promise(() => recordTakePick(deps.sql, deps.actor, deps.history.transcript(CHAT_SESSION_ID), {
+      takeId, nodeId,
+      scaffoldVersion: getCurrentScaffoldVersion(deps.sql, deps.actor),
+    }));
 
-  try {
-    await deps.engine.applyTakePick(record.set.turnId, record.outcome);
-  } catch (err) {
-    diagnostics.failure(
-      'evolution.take_pick_corroboration_failed',
-      toKinuError({ doing: 'corroborate the lesson behind an alternate take', cause: err, otherwise: 'unavailable' }),
-      { takeId, nodeId },
-    );
-  }
+    yield* Effect.try({
+      try: () => deps.engine.applyTakePick(record.set.turnId, record.outcome),
+      catch: (cause) => toKinuError({ doing: 'corroborate the lesson behind an alternate take', cause, otherwise: 'unavailable' }),
+    }).pipe(Effect.catch((failure) => Effect.sync(() => {
+      diagnostics.failure('evolution.take_pick_corroboration_failed', failure, { takeId, nodeId });
+    })));
 
-  let continuationQueued = false;
+    let continuationQueued = false;
 
-  if (record.changedAnswer) {
-    const outcome = await deps.inbox.send({
-      kind: 'take_pick',
-      text: buildTakeContinuationPrompt(record.set, record.chosen),
-    });
+    if (record.changedAnswer) {
+      const outcome = yield* Effect.promise(() => deps.inbox.send({
+        kind: 'take_pick',
+        text: buildTakeContinuationPrompt(record.set, record.chosen),
+      }));
 
-    continuationQueued = outcome !== 'undelivered';
-  }
+      continuationQueued = outcome !== 'undelivered';
+    }
 
-  return { ...record, continuationQueued };
+    const picked: TakePickOutcome = { ...record, continuationQueued };
+
+    return picked;
+  }));
 }
 
 /** Runs on the cross-family judge where wired: the chat model grading its own tasks is self-enhancement bias. */

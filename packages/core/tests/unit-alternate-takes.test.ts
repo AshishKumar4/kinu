@@ -34,9 +34,9 @@ async function capturedSet(sql: ReturnType<typeof makeSql>, actor: ReturnType<ty
     task: 'the task', turnId: 'msg-9', sessionId: 'default',
     liveText: 'winning approach', branchText: 'alternative approach',
   });
-  await history.record(CHAT_SESSION_ID, { id: 'u-9', parentId: null, origin: 'input',
+  await history.record(CHAT_SESSION_ID, { id: 'u-9', origin: 'input',
     message: { role: 'user', content: 'please solve it' } });
-  await history.record(CHAT_SESSION_ID, { id: 'msg-9', parentId: 'u-9', origin: 'output',
+  await history.record(CHAT_SESSION_ID, { id: 'msg-9', origin: 'output',
     message: { role: 'assistant', content: 'I used the winning approach' } });
 
   const set = present(latestAlternateTakeSet(sql, actor), 'the latest take set');

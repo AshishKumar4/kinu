@@ -173,9 +173,15 @@ export function declareTerminalRoster(
       status: facts.status,
       turn: facts.scopedTurn,
       workMode: facts.workMode,
-      advisor: parts.advisor ?? null,
     },
   });
+
+  if (parts.advisor !== undefined) {
+    owed.push({
+      name: 'advisor_review', scope: messageId, lane: 'detached',
+      input: { status: facts.status, workMode: facts.workMode, advisor: parts.advisor },
+    });
+  }
 
   if (parts.parentReport) {
     owed.push({

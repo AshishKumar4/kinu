@@ -37,7 +37,7 @@ function commandsRun(events: readonly RunEvent[]): string[] {
  * oracle: the run the first activation opened is the run that closes, once;
  * the answer is the final step's; no tool ran twice.
  *
- * WHAT IS NOT OBSERVABLE HERE: the schedule rows themselves. `cf_agents_schedules`
+ * WHAT IS NOT OBSERVABLE HERE: the wake rows themselves. `cf_agents_jobs`
  * has no public read, so "a wake row existed while owed and none remains
  * after" is asserted through its consequence — a turn nothing but a wake could
  * have re-driven closed — and the rows are pinned in `unit-alarm-wake-chain`.

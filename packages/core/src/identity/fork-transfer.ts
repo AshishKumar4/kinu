@@ -249,7 +249,7 @@ function sessionMessagePayloadBytes(row: ForkSessionMessageRow): number {
 }
 
 function conversationEntryPayloadBytes(row: ForkConversationEntryRow): number {
-  return utf8Bytes(row.id) + (row.parent_id === null ? 0 : utf8Bytes(row.parent_id))
+  return utf8Bytes(row.id)
     + utf8Bytes(row.role)
     + (row.turn_id === null ? 0 : utf8Bytes(row.turn_id))
     + (row.run_id === null ? 0 : utf8Bytes(row.run_id))

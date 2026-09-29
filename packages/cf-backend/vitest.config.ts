@@ -8,7 +8,7 @@
 import { fileURLToPath } from 'node:url';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
+import { cloudflareTest } from '@cloudflare/vitest-plugin';
 import { buildSync, transform, type OutputFile } from 'esbuild';
 import { buildSlateVendor, slateVendor } from './slate-vendor';
 import { defineConfig, type Plugin } from 'vitest/config';
@@ -63,7 +63,7 @@ mkdirSync(dirname(slateVendorModulePath), { recursive: true });
 
 writeFileSync(slateVendorModulePath, `export default ${JSON.stringify(buildSlateVendor())};\n`);
 
-const workerCompatibility = { compatibilityDate: '2025-12-01', compatibilityFlags: ['nodejs_compat'] };
+const workerCompatibility = { compatibilityDate: '2026-09-28', compatibilityFlags: ['nodejs_compat'] };
 
 /** Probe bundles reach miniflare as an ES module entry plus compiled `.wasm`. */
 function probeModules(bundle: OutputFile[]): V4ModuleDefinition[] {
@@ -297,7 +297,7 @@ export default defineConfig({
       main: './tests/workerd/worker.ts',
       miniflare: {
         ...workerCompatibility,
-        // `useSQLite` mirrors `new_sqlite_classes` (wrangler.jsonc:100-115); without it `ctx.storage.sql`
+        // `useSQLite` mirrors `exports`' `storage: "sqlite"` (wrangler.jsonc); without it `ctx.storage.sql`
         // throws. `LOADER` mirrors `worker_loaders` for the real codemode executor.
         workerLoaders: { LOADER: {} },
         modulesRules: [{ type: 'CompiledWasm', include: ['**/*.wasm'] }],
@@ -532,6 +532,7 @@ export default defineConfig({
           FORK_TARGET: { className: 'ForkTargetProbeDO', useSQLite: true },
           STREAM_LIFECYCLE: { className: 'StreamLifecycleDO', useSQLite: true },
           FILES_EIO_PROBE: { className: 'FilesEioProbeDO', useSQLite: true },
+          PARKED_WRITES_PROBE: { className: 'ParkedWritesProbeDO', useSQLite: true },
           COMPLEXITY_PROBE: { className: 'ComplexityProbeDO', useSQLite: true },
           EFFECT_ATOMICITY_PROBE: { className: 'EffectAtomicityProbeDO', useSQLite: true },
           PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', scriptName: 'hosted-preview-probe', useSQLite: true },

@@ -1,5 +1,5 @@
 /**
- * MCTS SQL schemas: the one definition of search_nodes.
+ * The one definition of search_nodes.
  * `value` defaults to 0, not 0.5.
  * Formal spec: MCTS/Backpropagation.lean:initial_in_range (a fresh node starts in range).
  * Selection, pruning and convergence scope by `root_id`; `actor_id` is in the primary key
@@ -18,13 +18,11 @@ export function initSearchTables(execRaw: RawSqlExec): void {
       task             TEXT NOT NULL,
       action           TEXT NOT NULL DEFAULT '',
       observation      TEXT NOT NULL DEFAULT '',
-      code_used        TEXT,
       visits           INTEGER NOT NULL DEFAULT 0,
       value            REAL NOT NULL DEFAULT 0,
       depth            INTEGER NOT NULL DEFAULT 0,
       status           TEXT NOT NULL DEFAULT 'open'
                        CHECK(status IN ('open','terminal','failed','pruned')),
-      msg_id           TEXT,
       created_at       INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       PRIMARY KEY (actor_id, id)
     )

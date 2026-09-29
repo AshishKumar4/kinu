@@ -15,8 +15,6 @@ export {
   type TerminalTransition, type TerminalDisposition, type TerminalTransitionDeps,
 } from './orchestrator/terminal-transition';
 
-export { WakeArms } from './orchestrator/wake-arms';
-
 export {
   TerminalEffectLedger, initTerminalEffectTable, terminalEffect, overflowRetryTerminalEffect,
   outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
@@ -100,11 +98,11 @@ export {
 } from './identity/fork-sink';
 
 export {
-  forkPointExists, answersForDrainTurns, conversationCount, conversationTurnPair,
+  forkPointExists, answersForDrainTurns, conversationTurnPair,
   type ConversationTurnPair,
 } from './identity/conversation-store';
 
-export { CHAT_SESSION_ID, MCTS_SESSION_ID } from './session/transcript-schema';
+export { CHAT_SESSION_ID } from './session/transcript-schema';
 
 export {
   forkWorkspace, type ForkTransport, type ForkDriverDeps, type ForkOutcome,
@@ -397,7 +395,7 @@ export {
 
 export { toolPairingGaps } from './session/tool-pairing';
 
-export { STAGED_CONTEXT_DEFERRALS, type StagedContextDeferral, type ContextProposalClosure, type ContextEditEffect, type ContextEventRecorder, type ContextEditEvent } from './types/context-plane';
+export { type StagedContextDeferral, type ContextProposalClosure, type ContextEditEffect, type ContextEventRecorder, type ContextEditEvent } from './types/context-plane';
 
 export { SessionHistory, type SessionHistoryDependencies } from './session/history';
 
@@ -571,7 +569,11 @@ export { drainAssignments, type AdmittedAssignment, type DrainAssignmentsOptions
 
 export { inheritedAsModelMessage } from './heads/head-inference';
 
-export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
+export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, isSubordinateOrigin, whenActorTakesInput, type ActorOrigin, type ActorProfile, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
+
+export {
+  openLocalRootActor, localActorDirectory, adoptLocalActorHandle, bindLocalActorReference, registerLocalActor, openLocalActor, registerLocalNode, bindLocalActor, requireLocalActorWorkspace, retireLocalActor, cancelLocalCreation, recoverLocalActorRetirements, type LocalActorBinding, type LocalActorConfig,
+} from './state/local-actors';
 
 // open-38: one physical workspace SQLite for every logical actor.
 export {
@@ -653,7 +655,7 @@ export {
   type TemporaryRunRequest,
 } from './subordinates/temporary';
 
-export { DELEGATED_TURN_SLOTS, DelegatedTurnRunners, type DelegatedTurnRunnerDeps } from './subordinates/delegated-turns';
+export { DelegatedTurnRunners, type DelegatedTurnRunnerDeps } from './subordinates/delegated-turns';
 
 // The depth cap is derived per child, never stated by one.
 export {
@@ -863,7 +865,7 @@ export { collectDynamicContext, subordinateDelegatesOf } from './state/dynamic-c
 
 export type { DynamicContextInput } from './state/dynamic-context';
 
-// MCTS
+// Search-tree primitives the swarm runs on
 export { selectNode } from './mcts/uct';
 
 export { backpropagate } from './mcts/backpropagation';
@@ -894,7 +896,7 @@ export {
   initAlternateTakesTable,
   listAlternateTakeSets, latestAlternateTakeSet, recordTakePick,
   recordBranchTakeSet, buildTakeContinuationPrompt, takeEvidence, AlternateTakeCandidateSchema,
-  type AlternateTakeCandidate, type AlternateTakeSet, type AlternateTakeSource,
+  type AlternateTakeCandidate, type AlternateTakeSet,
   type TakePickRecord, type TakePickOutcome,
 } from './mcts/takes';
 
@@ -1029,7 +1031,7 @@ export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict'
 
 export {
   DefaultExecutionRouter,
-  withApprovalGatedShell, gateProviderExec, shellCwd, type ShellReach,
+  withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, shellCwd, type FileReach, type ShellReach,
   createSandboxExecutor, type SandboxHandle, isSandboxTransientError, SandboxPending,
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
@@ -1079,7 +1081,7 @@ export {
   type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,
   answerParentRpc, createParentExecutor, createParentWorkspaceVfs, sandboxFiles, nimbusSessionFiles, deviceFiles,
   type ParentWorkspaceHandle, type ParentExecResult, type DeviceFileConsent, type DeviceFileScope,
-  type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
+  type ParentRpcWrite,
 } from './execution/index';
 
 export {
@@ -1525,6 +1527,14 @@ export {
   type SecretPattern,
   type SecretFinding,
   type SecretSighting,
+  boundWriteOf,
+  performBoundWrite,
+  ParkedWriteFiles,
+  type ParkedWriteFileOps,
+  type ApprovalContent,
+  type BoundFileWrite,
+  type WriteSubject,
+  type ParkedWrites,
 } from './safety/index';
 
 export {
@@ -1565,7 +1575,7 @@ export type {
 export {
   DEFAULT_MERGE_STRATEGY,
   deriveChildBudget,
-  headStatusUnsettled, storedHeadReportStatus,
+  headStatusUnsettled, storedHeadReportStatus, OWNER_STOPPED, shownHeadStatus,
   initHeadsTables,
   HeadJournal, type HeadJournalRow, type LiveHeadRun, type AbandonedHeadRun,
   LiveHeadJournal, type AnnounceHeadActivity,
@@ -1637,8 +1647,9 @@ export {
 
 export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
 
+
 export {
-  ChatSession, turnInputMessage, partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal, type ChatSessionOptions, type ChatSessionPorts, type ComposedRequest, type ChatTransport, type ChatTurnInput,
+  ChatSession, turnInputMessage, type ChatSessionOptions, type ChatSessionPorts, type ComposedRequest, type ChatTransport, type ChatTurnInput,
   type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent, type SendOptions, type SendLandingWaiter,
 } from './orchestrator/chat-session';
 
@@ -1839,7 +1850,7 @@ export type { RunTimelineDeps, TimelineKind, TimelineSpan } from './read-models/
 export { boundedInt } from './utils/bounds';
 
 // The retry curve of every durable recovery lane; backends import it, never copy it.
-export { recoveryBackoffMs } from './utils/recovery-backoff';
+export { RECOVERY_BACKOFF_CEILING_MS, recoveryBackoffMs } from './utils/recovery-backoff';
 
 export { getRunEvents, getRunEventText, getRunSummaries, listRuns } from './read-models/runs';
 
@@ -1962,6 +1973,8 @@ export type {
 
 export { buildPendingActions, needsTheUser } from './read-models/pending-actions';
 
+export { reviewParkedWrite, type ParkedWriteReview } from './read-models/write-preview';
+
 export {
   listInstructionApprovals, readInstructionSource, openInstructionSource,
   previewInstruction, gatherApprovableInstructions,
@@ -1976,12 +1989,12 @@ export type {
 
 export { getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from './read-models/status';
 
-export { mapPage, pageSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
+export { mapPage, pageSchema, positionPageSchema, PositionCursorSchema, PositionPageRequestSchema, seekPage, SeekCursorSchema, StaleCursorError } from './session/page';
 
-export type { Page, PageRequest, SeekCursor } from './session/page';
+export type { Page, PageRequest, PositionCursor, PositionPageRequest, SeekCursor } from './session/page';
 
 export {
-  mergeTranscript, restoredRows, rowText, transcriptRole,
+  restoredRows, rowText, transcriptRole,
   PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY, authoredTurnMetadata, stampTurnAuthor, turnAuthor,
 } from './utils/ui-message';
 
@@ -2032,8 +2045,8 @@ export {
   DEFAULT_ADVISOR_MIN_SEVERITY,
   ADVISOR_DEDUPE_WINDOW,
   ADVISOR_HEADER,
-  ADVISOR_LANE_FIBER,
-  reviewRecordedTurn,
+  deliverAdvisorReply,
+  ADVISOR_ROLE_ID,
   AdvisorRecoverySnapshotSchema,
   buildAdvisorPrompt,
   isContentFree,
@@ -2104,7 +2117,7 @@ export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './
 export {
   type ActivitySnapshot, type ExecutorCommandResult, type ForkNode, type ForkNodeLifecycle,
   type MemoryEntry, type PendingConsent, type Rpc, type SubordinateActivityEvent,
-  type TabPresence, ownerFacingSubordinate,
+  type TabPresence, evolutionHelper, ownerFacingSubordinate,
 } from './protocol';
 
 export { resumeIndexFromLastEventId } from './protocol/run-events-cursor';
@@ -2210,7 +2223,7 @@ export {
 
 export { drawnText, threadLiveTail, toolCallRunning, type LiveTail } from './read-models/message-live-tail';
 
-export { messagesUpTo, turnRows, unreadRows } from './read-models/fork-count';
+export { messagesUpTo, turnRows } from './read-models/fork-count';
 
 export {
   turnLiveness, TURN_CLAIM_FRAME, TurnClaimFrameSchema, type TurnClaimState, type TurnLiveness,

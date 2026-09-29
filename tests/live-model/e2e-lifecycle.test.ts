@@ -5,7 +5,7 @@
  * calls `generateText` with a system prompt, a tool set and a threaded message
  * list — so what is proven here is that soul and memory reach the model, that
  * native tool calling round-trips, that a conversation accumulates, and that
- * evolution and MCTS run over the turns it produces. It is an INNER API by
+ * evolution runs over the turns it produces. It is an INNER API by
  * construction: it does not go through turn assembly, the reactor, backgrounding
  * wakes or the prompt cache, so a green run here is never a statement that the
  * shipped agent works.
@@ -45,7 +45,7 @@ import {
  * THIS SUITE IS THE IN-PROCESS LOOP, and it reads the target knob to say so.
  *
  * `chatTurn` below calls `generateText` over a `CLIRuntime` and drives
- * `EvolutionEngine` and `runMCTS` directly, so every assertion here is about the
+ * `EvolutionEngine` directly, so every assertion here is about the
  * inner API. A deployed workspace hands out no runtime, so this suite cannot
  * answer the cloud target's questions at all — and running it under
  * `KINU_EVAL_BACKEND=cloud` would report an in-process measurement inside a
@@ -150,9 +150,9 @@ async function chatTurn(turn: ChatTurn): Promise<ConversationTurn> {
   history.push(...result.response.messages);
   const responseText = collectStepText(result);
   const id = crypto.randomUUID();
-  await rt.stores.history.record('e2e', { id, parentId: null, message: { role: 'user', content: userMessage }, origin: 'input' });
+  await rt.stores.history.record('e2e', { id, message: { role: 'user', content: userMessage }, origin: 'input' });
   await rt.stores.history.record('e2e', {
-    id: crypto.randomUUID(), parentId: id, message: { role: 'assistant', content: responseText }, origin: 'output',
+    id: crypto.randomUUID(), message: { role: 'assistant', content: responseText }, origin: 'output',
   });
 
   return {

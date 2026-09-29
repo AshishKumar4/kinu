@@ -24,7 +24,7 @@ import * as v from 'valibot';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
 import { makeSql, makeExecRaw, makeWorkspaceSchemaSql, createCLIRuntime, type CLIRuntime } from '../src/runtime';
 import { createHeadRuntime, headSeatFactory, localTestActorHost } from './actor-fixture';
-import { openLocalActor } from '../src/actor-identity';
+import { openLocalActor } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
 
 // A head owns no store: its rows are actor-keyed in the parent's one database.
@@ -32,6 +32,8 @@ import { LocalAgentSession } from '../src/local-session';
 const stubWeb: WebSearchProvider = {
   search: async () => ({ query: '', results: [], source: 'duckduckgo' }),
   fetch: async () => ({ url: '', title: '', markdown: '', retrievedAt: '' }),
+  render: async () => ({ url: '', title: '', markdown: '', retrievedAt: '' }),
+  screenshot: async () => ({ url: '', retrievedAt: '', bytes: new Uint8Array() }),
 };
 
 /** A parent CLI runtime; `db` rides along because `localTestActorHost` needs the parent's own connection. */
@@ -62,7 +64,6 @@ function makeParent(cwd?: string): LocalParent {
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
   const config: Parameters<typeof createCLIRuntime>[1] = {
-    dbPath,
     llm: { name: 'x', baseURL: 'http://l', headers: {}, model: 'm' },
   };
 
@@ -156,7 +157,7 @@ const aHeadInput = (over?: Partial<HeadInput>): HeadInput => ({
   id: 'h1', rootId: 'r1', parentId: null, depth: 0, task: 't', rationale: 'r',
   inheritedContext: [], budget: { maxDepth: 2, spawnedAt: Date.now() },
   mergeStrategy: 'synthesize', ...over,
-  mode: over?.mode ?? 'build', loop: over?.loop ?? defaultLoopOrigin('run'),
+  mode: over?.mode ?? 'build', loop: over?.loop ?? defaultLoopOrigin('swarm'),
 });
 
 function fakeHeadsModel(capture?: (options: {

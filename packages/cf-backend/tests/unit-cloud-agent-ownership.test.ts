@@ -746,9 +746,12 @@ describe('cloud agent ownership safety', () => {
     const touchesFilesystem = (sql: string): boolean => /\bvfs_inodes\b/u.test(sql);
 
     test('an already-owned claim does not touch the Nimbus filesystem', async () => {
-      const { db } = orchestratorHarness();
+      const { db, started } = orchestratorHarness();
+      // The first activation's start runs on its own; it must not land inside the measured window.
+      await started;
       // A cold activation over the same rows: no latch of the last one survives.
       const cold = await reactivateOrchestratorHarness(db, undefined, { world: { freshScaffold: true } });
+      await cold.started;
 
       let owner: string | undefined;
       const statements = await statementsDuring(db, async () => { owner = (await cold.agent.claimOwner('harness-owner')).owner; });
@@ -767,7 +770,7 @@ describe('cloud agent ownership safety', () => {
 
       expect(owner).toBe('first-claim-user');
       expect(statements.filter(touchesFilesystem).length).toBeGreaterThan(0);
-      expect(await workspaceFiles(cold.agent).stat(actorScaffoldPath({ kind: 'main', storageKey: MAIN_AGENT }))).not.toBeNull();
+      expect(await workspaceFiles(cold.agent).stat(actorScaffoldPath({ origin: 'system', storageKey: MAIN_AGENT }))).not.toBeNull();
     });
   });
 

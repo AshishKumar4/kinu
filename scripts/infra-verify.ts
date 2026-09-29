@@ -59,7 +59,7 @@
  * or does not exist at all, while a Durable Object namespace, a container
  * application, a route and the Worker itself are created BY the deploy. Demanding
  * the second kind BEFORE the upload refuses the only command that could satisfy
- * it. A class new to `migrations` — `ControlPlaneDO` once — makes the
+ * it. A class new to `exports` — `ControlPlaneDO` once — makes the
  * pre-deploy gate refuse the deploy that would create the namespace and print
  * `bun run infra:provision` as the fix, a command that cannot create a Durable
  * Object namespace and is forbidden from trying.
@@ -118,7 +118,7 @@ export interface Row {
  *                exist either.
  *   bootstrap    the pre-deploy half of a deploy that is itself the provisioner
  *                of something newly declared — a Durable Object class added to
- *                `migrations`, a new container, a new route. Those are DEFERRED,
+ *                `exports`, a new container, a new route. Those are DEFERRED,
  *                because no command in this repository can create one and the
  *                only thing that does is the upload this phase gates. Reachable
  *                only by asking for it (`--phase=bootstrap`, or the variable
@@ -144,7 +144,7 @@ export type Phase = (typeof PHASES)[number];
 /** Resources THIS DEPLOY creates, from the manifest's own `origin` rather than a
  *  list of names here: `wrangler-deploy` is already the manifest's word for "the
  *  upload creates it, and provisioning must not". A name list would be correct
- *  until the next class lands in `migrations`, which is precisely the event this
+ *  until the next class lands in `exports`, which is precisely the event this
  *  distinction exists for. */
 const deployOwned = (origin: Row['origin']): boolean => origin === 'wrangler-deploy';
 
@@ -504,7 +504,7 @@ export interface Audit {
  * `bun run infra:provision` is the wrong line for a resource the manifest marks
  * `wrangler-deploy`: there is no wrangler verb that creates a Durable Object
  * namespace, and provisioning is explicitly forbidden from touching what the
- * upload owns. That is not hypothetical — a class new to `migrations` like
+ * upload owns. That is not hypothetical — a class new to `exports` like
  * `ControlPlaneDO` made this gate refuse the deploy, and a provisioning
  * command could never fix it. A fix line that cannot work is how a real red gets
  * bypassed instead of read.
@@ -518,12 +518,12 @@ function remedy(entry: Row, phase: Phase): string {
   if (phase === 'post-deploy') {
     return 'nothing is left to run: the upload carried the config that declares this and the '
       + 'account does not hold it. Read the `wrangler deploy` output above. A Durable Object '
-      + 'namespace needs a `migrations` entry naming its class, and a container, a route and a '
+      + 'namespace needs an `exports` entry naming its class, and a container, a route and a '
       + 'cron each need their own block. Provisioning can create none of them.';
   }
 
   return 'the deploy creates this one; `bun run infra:provision` neither can nor may. If THIS '
-    + 'deploy is the one that declares it — a class new to `migrations`, a new container or a new '
+    + 'deploy is the one that declares it — a class new to `exports`, a new container or a new '
     + 'route — say so: `bash scripts/deploy.sh --bootstrap` defers exactly this row '
     + 'before the upload and rejects it after, when the deploy has had its chance to create it.';
 }
@@ -584,7 +584,7 @@ export function audit(request: AuditRequest): Audit {
       && deployOwned(entry.origin)
       // THE ONE TOLERANCE, and the whole behavioural difference between the three
       // phases. `post-deploy` has none: the upload has run. `bootstrap` defers
-      // every deploy-owned absence, because a class new to `migrations` cannot
+      // every deploy-owned absence, because a class new to `exports` cannot
       // exist before the deploy that declares it. `full` defers one only while
       // the Worker itself is absent — the pre-first-deploy state, in which
       // nothing bound to a Worker could exist either.

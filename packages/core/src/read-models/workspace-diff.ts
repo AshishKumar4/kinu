@@ -16,11 +16,11 @@ import { shellQuote } from '../utils/shell';
 import { LEGACY_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
 
 /**
- * A side past one SQLite row, the bound a body had when the baseline stored it, is listed as large, without a body.
- * Nimbus's diff does not say whether it was the content or only the metadata that moved, so a large file whose mode
- * alone changed is listed too (ASK: `VfsDiffEntry` names a content change).
+ * A side past one SQLite row is listed as large, without a body (a write's preview too). Nimbus's diff does not say
+ * whether it was the content or only the metadata that moved, so a large file whose mode alone changed is listed too
+ * (ASK: `VfsDiffEntry` names a content change).
  */
-const BODY_MAX_BYTES = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value - 64;
+export const BODY_MAX_BYTES = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value - 64;
 
 /** Quarter of the facet RPC ceiling: the reply is UTF-16 in the isolate plus per-line overhead.
  *  Files past it are listed with +/- counts and no body. */

@@ -1,6 +1,8 @@
 /** Alternate takes: competing answers offered to the user, whose pick is recorded in turn_outcomes
  *  (source 'take_pick'). */
 
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -17,33 +19,20 @@ import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 /** One branch settlement's take set; set ids are fresh, so replays are caught by settlement key. */
 const BRANCH_SCOPE = 'branch_take';
 
-export type AlternateTakeSource = 'branch' | 'heads';
-
-export interface AlternateTakeCandidate {
-  nodeId: string;
-  text: string;
-  score: number;
-  visits: number;
-  depth: number;
-  /** Branch-sourced sets only: the live turn's answer or the branched redirect's. */
-  origin?: 'live' | 'branch';
-}
-
-export const AlternateTakeCandidateSchema: v.GenericSchema<AlternateTakeCandidate> = v.object({
+export const AlternateTakeCandidateSchema = v.object({
   nodeId: v.string(),
   text: v.string(),
-  score: v.number(),
-  visits: v.number(),
-  depth: v.number(),
-  origin: v.optional(v.picklist(['live', 'branch'])),
+  /** The live turn's answer or the branched redirect's. */
+  origin: v.picklist(['live', 'branch']),
 });
+
+export type AlternateTakeCandidate = v.InferOutput<typeof AlternateTakeCandidateSchema>;
 
 export interface AlternateTakeSet {
   id: string;
   turnId: string | null;
   sessionId: string | null;
   task: string;
-  source: AlternateTakeSource;
   winnerNodeId: string;
   chosenNodeId: string | null;
   candidates: AlternateTakeCandidate[];
@@ -68,7 +57,6 @@ export function initAlternateTakesTable(execRaw: RawSqlExec): void {
     turn_id TEXT,
     session_id TEXT,
     task TEXT NOT NULL,
-    source TEXT NOT NULL,
     winner_node_id TEXT NOT NULL,
     chosen_node_id TEXT,
     candidates TEXT NOT NULL,
@@ -121,17 +109,17 @@ export function recordBranchTakeSet(
   const id = `take-${nanoid()}`;
 
   const candidates: AlternateTakeCandidate[] = [
-    { nodeId: `${id}-live`, text: liveText, score: 0.5, visits: 1, depth: 0, origin: 'live' },
-    { nodeId: `${id}-branch`, text: branchText, score: 0.5, visits: 1, depth: 0, origin: 'branch' },
+    { nodeId: `${id}-live`, text: liveText, origin: 'live' },
+    { nodeId: `${id}-branch`, text: branchText, origin: 'branch' },
   ];
 
   const now = input.now ?? nowMs();
   void sql`INSERT INTO alternate_takes
-        (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id, candidates,
+        (actor_id, id, turn_id, session_id, task, winner_node_id, chosen_node_id, candidates,
          settlement_key, created_at)
       VALUES
         (${actor.actorId}, ${id}, ${input.turnId}, ${input.sessionId},
-         ${input.task.slice(0, 500)}, ${'branch'},
+         ${input.task.slice(0, 500)},
          ${candidates[0].nodeId}, ${null}, ${JSON.stringify(candidates)},
          ${settlementKey}, ${now})`;
 
@@ -139,26 +127,20 @@ export function recordBranchTakeSet(
 
   return {
     id, turnId: input.turnId, sessionId: input.sessionId, task: input.task.slice(0, 500),
-    source: 'branch', winnerNodeId: candidates[0].nodeId, chosenNodeId: null,
+    winnerNodeId: candidates[0].nodeId, chosenNodeId: null,
     candidates, createdAt: now,
   };
 }
 
 interface RawTakeRow {
   id: string; turn_id: string | null; session_id: string | null; task: string;
-  source: string | null;
   winner_node_id: string; chosen_node_id: string | null; candidates: string;
   created_at: number;
-}
-
-function readTakeSource(stored: string | null): AlternateTakeSource {
-  return stored === 'heads' ? 'heads' : 'branch';
 }
 
 function toTakeSet(r: RawTakeRow): AlternateTakeSet {
   return {
     id: r.id, turnId: r.turn_id, sessionId: r.session_id, task: r.task,
-    source: readTakeSource(r.source),
     winnerNodeId: r.winner_node_id, chosenNodeId: r.chosen_node_id,
     candidates: v.parse(v.array(AlternateTakeCandidateSchema), JSON.parse(r.candidates)),
     createdAt: r.created_at,
@@ -195,11 +177,11 @@ export async function recordTakePick(
   const row = sql<RawTakeRow>`SELECT * FROM alternate_takes
     WHERE actor_id = ${actor.actorId} AND id = ${input.takeId}`[0];
 
-  if (!row) throw new Error(`Unknown take set "${input.takeId}"`);
+  if (!row) return settle(Effect.die(new Error(`Unknown take set "${input.takeId}"`)));
   const set = toTakeSet(row);
   const chosen = set.candidates.find((c) => c.nodeId === input.nodeId);
 
-  if (!chosen) throw new Error(`Node "${input.nodeId}" is not a candidate of take set "${input.takeId}"`);
+  if (!chosen) return settle(Effect.die(new Error(`Node "${input.nodeId}" is not a candidate of take set "${input.takeId}"`)));
 
   const now = input.now ?? nowMs();
   const changedAnswer = chosen.nodeId !== set.winnerNodeId;
@@ -246,28 +228,15 @@ export async function recordTakePick(
 }
 
 export function takeEvidence(candidate: AlternateTakeCandidate): string {
-  if (candidate.origin === 'live') return "the live turn's answer";
-
-  if (candidate.origin === 'branch') return "the branched redirect's answer";
-
-  return `score ${candidate.score.toFixed(2)} · ${candidate.visits} visit${candidate.visits === 1 ? '' : 's'} · depth ${candidate.depth}`;
-}
-
-function takeFraming(source: AlternateTakeSource, task: string): string {
-  if (source === 'branch') {
-    return `While you answered, the user redirected with "${task}" and that redirect ran `
-      + `as a parallel branch. Comparing both answers, the user picked the branch's:`;
-  }
-
-  return `While exploring "${task}" you fanned out into parallel reasoning heads, `
-    + `and the user compared their findings and picked a different head's answer than the one you merged to:`;
+  return candidate.origin === 'live' ? "the live turn's answer" : "the branched redirect's answer";
 }
 
 export function buildTakeContinuationPrompt(set: AlternateTakeSet, chosen: AlternateTakeCandidate): string {
-  const framing = takeFraming(set.source, evidenceWindow(set.task, EVIDENCE_BUDGETS.taskEcho));
+  const task = evidenceWindow(set.task, EVIDENCE_BUDGETS.taskEcho);
 
   return (
-    `${framing}\n\n` +
+    `While you answered, the user redirected with "${task}" and that redirect ran `
+    + `as a parallel branch. Comparing both answers, the user picked the branch's:\n\n` +
     `${evidenceWindow(chosen.text, EVIDENCE_BUDGETS.takeChosen)}\n\n` +
     `Please continue with this approach: briefly acknowledge the switch, then carry the work forward from it.`
   );

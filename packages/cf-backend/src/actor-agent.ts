@@ -7,13 +7,14 @@ import {
   Agent, callable, getCurrentAgent,
   type AgentContext, type Connection, type ConnectionContext,
   type FiberRecoveryContext, type FiberRecoveryResult,
-  type Schedule, type WSMessage,
+  type WSMessage,
 } from "agents";
 import {
   TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle, readSessionTranscript,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
   type RunEventInput, type SubordinateInspectionAuthority, type SessionTranscriptReader,
+  isSubordinateOrigin,
 } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
@@ -61,12 +62,12 @@ import {
   queueTurnShadowTrial, runQueuedShadowTrials, createJsonJudge, type ScaffoldControl,
   refinementPass, type RefinementDeps,
   type CompletedTurn, type TurnContinuity, UNBOUNDED_STEPS,
-  reviewRecordedTurn,
-  type AdvisorRecoverySnapshot, type AdvisorDisposition,
-  advisorWorkspaceGuidance,
+  type AdvisorRecoverySnapshot,
   buildActorTools, buildBuiltinTools,
   buildMcpToolSet,
   type WebSearchProvider,
+  type BrowserSessions,
+  browserSessions,
   buildSystemPromptSync,
   type PromptIdentity,
   activePromptSectionOverrides,
@@ -121,7 +122,7 @@ import {
   wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
   readDeviceRequestChannel, type DeviceRequestChannel,
   cancelCurrentWork, getStoredModelSpec, setModel, getChatHistoryPage,
-  type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest,
+  type CancelWorkOutcome, type ChatHistoryPage, type Page, type PageRequest, PositionPageRequestSchema, type PositionPageRequest,
   type MctsSearchStore, readSearchTree, isSteerBranchRunId,
   EventLog,
   resolveTurnSkills, filterToolNamesBySkills,
@@ -131,7 +132,7 @@ import {
   type PlanEdit, type PlanReview, type ReviewAnnotation,
   type PlanReviewDecision, type PlanReviewResult, type SubmitPlanToolDeps,
   answerParentRpc,
-  type ParentRpcResult, type ParentExecResult,
+  type ParentExecResult,
   type ParentRpcWrite,
   type TeamToolDeps, type PeersToolDeps, type ReportToolDeps,
   type SubordinateRuntime, type TemporaryAgentPort,
@@ -162,7 +163,7 @@ import {
   resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices, createAgentConfigStore, type PinnedProfile,
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
-  agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
+  agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createSlateWebCodemodeProvider, createAgentsCodemodeProvider,
   resolveModelRoute, narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema,
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
@@ -196,7 +197,7 @@ import {
   terminalEffect, overflowRetryTerminalEffect, outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
   turnRecordTerminalEffect, eventDrainTerminalEffect, shadowTrialTerminalEffect,
   RunEndReasonSchema, WorkModeSchema,
-  CompletedTurnSchema, AdvisorRecoverySnapshotSchema,
+  AdvisorRecoverySnapshotSchema,
   type TerminalTransition, type TerminalEffectFault, type TerminalEffectTable,
 } from "@kinu.run/core";
 import { createCodemodeToolFactory, type CodemodeFactory } from "./codemode-tool";
@@ -225,7 +226,8 @@ import {
 } from "@kinu.run/core/analytics";
 import * as v from 'valibot';
 import { Hono, type Context } from 'hono';
-import { WakeArms } from '@kinu.run/core';
+import { AdviceJobs } from './advice-jobs';
+import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB, WakeJobs, type WakePace } from './wake-jobs';
 import { rawPath, rethrow } from './api/context';
 
 /** Named contract so the analytics writer and the actor agree which half is the provider. */
@@ -448,17 +450,6 @@ function actorAgentsActions(deps: ActorToolDeps): AgentsToolAction[] {
 /** The codemode tool whose script keeps issuing device execs even after its call has detached. */
 const CODEMODE_TOOL_TOOL = 'eval' satisfies BuiltinToolName;
 
-/** Schedule callback finishing a dead activation's terminal sequence. Public because
- * `Agent.schedule()` types its callback as `keyof this`, which excludes protected members. */
-export const TERMINAL_RETRY_CALLBACK = '_kinuTerminalRetryTick';
-
-/** A lap wake's streak, in its row so eviction keeps the pace. */
-export interface WakePace {
-  readonly laps: number;
-  /** Comma-joined arms last named; null outside a streak. */
-  readonly arms: string | null;
-}
-
 /** Ledgers that can owe work with no instant. */
 export interface UntimedArms {
   readonly openDrainLease?: boolean;
@@ -472,14 +463,6 @@ export interface UntimedArms {
   readonly unsettledClaims?: boolean;
   readonly admittedDelegations?: boolean;
   readonly chatLoop?: boolean;
-}
-
-const WakePaceSchema = v.object({ laps: v.pipe(v.number(), v.integer(), v.minValue(0)), arms: v.nullable(v.string()) });
-
-function wakePaceOf(row: Pick<Schedule<unknown>, 'payload'>): WakePace | null {
-  const parsed = v.safeParse(WakePaceSchema, row.payload);
-
-  return parsed.success ? parsed.output : null;
 }
 
 export interface ActorDynamicContextExtras {
@@ -510,7 +493,7 @@ function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider) {
 
   const providers: CodemodeProvider[] = [
     ...(runtime.executionRouter?.getProviders() ?? []),
-    createWebCodemodeProvider(webSearch),
+    createSlateWebCodemodeProvider(webSearch),
     createDbCodemodeProvider(actor.stores.appData),
     createTasksCodemodeProvider(actor.stores.taskList, actor.stores.config),
     createMemoryCodemodeProvider(() => ({
@@ -583,10 +566,13 @@ export abstract class ActorAgent extends Agent<Env> {
    * Null before claim. Kept out of actor_config and never readable via RPC. */
   protected workspaceCapabilityToken(): string | null {
     // The constructor owns the table, so a failure here is real, never "no token".
-    const rows = this.sql<{ token: string }>`SELECT token FROM workspace_capability LIMIT 1`;
+    this.capabilityToken ??= this.sql<{ token: string }>`SELECT token FROM workspace_capability LIMIT 1`[0]?.token || null;
 
-    return rows[0]?.token || null;
+    return this.capabilityToken;
   }
+
+  /** Read once: {@link installWorkspaceCapability} is the row's only writer, and a destroy ends the isolate. */
+  private capabilityToken: string | null | undefined;
 
   /** Hash of the held token, or null. Safe to share; lets the UserDO detect a mismatch. */
   protected async workspaceCapabilityHash(): Promise<string | null> {
@@ -601,6 +587,7 @@ export abstract class ActorAgent extends Agent<Env> {
     if (!token) throw new KinuError('denied', 'capability token required');
     void this.sql`INSERT INTO workspace_capability (id, token) VALUES (1, ${token})
              ON CONFLICT(id) DO UPDATE SET token = excluded.token`;
+    this.capabilityToken = token;
     this.invalidateModelCaches();
     // The first tile, so a workspace nobody opens still shows.
     this.overviewChanged();
@@ -968,7 +955,7 @@ export abstract class ActorAgent extends Agent<Env> {
     ownerUserId: string;
     model: string | null;
     depth: number | null;
-    kind: ActorDirectoryResult['kind'];
+    origin: ActorDirectoryResult['origin'];
     lifetime: ActorDirectoryResult['lifetime'];
     name: string;
     storageKey: string;
@@ -981,7 +968,7 @@ export abstract class ActorAgent extends Agent<Env> {
       if (!ownerUserId) throw new KinuError('missing', 'The workspace has no owner.');
       let depth: number | null = null;
 
-      if (child.kind === 'subordinate') {
+      if (isSubordinateOrigin(child.origin)) {
         const own = this.delegationBudget();
 
         if (delegationExhausted(own)) throw new KinuError('denied', 'The parent cannot create a subordinate below its delegation depth.');
@@ -990,7 +977,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
       return {
         parentWorkspace: this.workspaceName(), ownerUserId, model: this.config.getModel(),
-        depth, kind: child.kind, lifetime: child.lifetime, name: child.name, storageKey: child.storageKey, creationId: child.creationId,
+        depth, origin: child.origin, lifetime: child.lifetime, name: child.name, storageKey: child.storageKey, creationId: child.creationId,
       };
     } catch (cause) {
       return refusalOf(toKinuError({ doing: 'reading a registered child bootstrap', cause, otherwise: 'io' }));
@@ -1019,6 +1006,7 @@ export abstract class ActorAgent extends Agent<Env> {
         this.broadcastSubordinateEvent({ ...report, kind: 'report' });
       },
       onAdmitted: () => { this.orch.scheduleDrain(); },
+      evolutionAnswerStored: () => this.advice.owe(this.actorHandle().actorId),
       onEvolutionAnswer: () => { this.durableWakeOwner()?.(); },
       // A temporary child's answer belongs to the waiting `agents.ask` call, so the register gets
       // first refusal on the name through the port that parked the waiter.
@@ -1051,8 +1039,27 @@ export abstract class ActorAgent extends Agent<Env> {
   // The bare prototype must read as sound.
   protected storageRefusal?: StoragePredatesResetError;
 
+  /** Kinu's two durable wakes; see wake-jobs.ts. */
+  protected readonly wakes = new WakeJobs({
+    [KINU_TIMER_JOB]: () => this._kinuTimerTick(),
+    [TERMINAL_RETRY_JOB]: (pace) => this.terminalRetryPass(pace),
+  });
+
+  /** An advisor answer's delivery; see advice-jobs.ts. */
+  protected readonly advice = new AdviceJobs((actorId) => this.deliverAdviceFor(actorId));
+
+  /** The workspace timer's pass: every source a subclass folds into its next wake. */
+  abstract _kinuTimerTick(): Promise<void>;
+
+  /** This actor's held advisor answers; a subclass hosting other actors routes theirs. */
+  protected deliverAdviceFor(actorId: string): Promise<boolean> {
+    return actorId === this.actorHandle().actorId ? this.actorSession.deliverAdvisorAnswers() : Promise.resolve(true);
+  }
+
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
+    this.lifecycle.use(this.wakes);
+    this.lifecycle.use(this.advice);
     // Must precede any read or write of it; see initCapabilitySchema.
     this.initCapabilitySchema();
     // A Durable Object is a DIFFERENT ISOLATE from the Worker that routes to it,
@@ -1291,13 +1298,10 @@ export abstract class ActorAgent extends Agent<Env> {
       event_drain: eventDrainTerminalEffect(this.orch),
 
       improvement_lanes: terminalEffect({
-        input: v.object({
-          status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema,
-          advisor: JsonValueSchema,
-        }),
+        input: v.object({ status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema }),
         // Lanes read durable queues on re-entry (per-turn snapshots do not survive), and the verdict
         // uses the recorded mode so a fresh activation's default cannot open an unearned lane.
-        run: async ({ status, turn, workMode, advisor }) => {
+        run: async ({ status, workMode }) => {
           this.warmUserMcpInBackground();
 
           if (!this.orch.improvementLanesOpen(status, workMode)) {
@@ -1305,15 +1309,17 @@ export abstract class ActorAgent extends Agent<Env> {
           }
 
           this.settleEvolutionInBackground();
-          const snapshot = v.parse(AdvisorRecoverySnapshotSchema, advisor);
-          // Awaited to the lane's checkpoint, not its finish: `runFiber` awaits `keepAlive()` before its
-          // body, and a later turn's tool set must not bleed into this review.
-          await this.actorSession.startAdvisorLane({
-            turn: v.parse(CompletedTurnSchema, turn),
-            snapshot: advisor,
-            carry: (name, body) => this.runFiber(name, body),
-            review: async () => { await this.runAdvisorReview(snapshot); },
-          });
+
+          return { status: 'completed' };
+        },
+      }),
+
+      // The snapshot is the row's input, so a replay hires on the tool surface the turn had; the hire is
+      // keyed on the turn, so a replay hires no second advisor.
+      advisor_review: terminalEffect({
+        input: v.object({ status: RunEndReasonSchema, workMode: WorkModeSchema, advisor: AdvisorRecoverySnapshotSchema }),
+        run: async ({ status, workMode, advisor }) => {
+          if (this.orch.improvementLanesOpen(status, workMode)) await this.actorSession.hireAdvisor(advisor);
 
           return { status: 'completed' };
         },
@@ -1364,110 +1370,25 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.eventRecorder.openTurn()?.turn.turnId === turnId;
   }
 
-  private readonly runningWakeRows = new Set<string>();
-
-  private readonly wakeArms = new WakeArms();
-
   /** Set by the last maintenance pass. */
   protected maintenanceUnfinished = false;
 
-  /**
-   * Soonest-wins arm of one wake row per `callback`. A due row counts (it fires now) unless its tick is
-   * running, since the SDK deletes that one. Re-reads after its write so racers converge.
-   */
-  protected async armWakeRow(callback: keyof this & string, atMs: number, pace?: WakePace): Promise<string> {
-    return await this.wakeArms.arm(() => this.armWakeRowNow(callback, atMs, pace));
-  }
-
-  private async armWakeRowNow(callback: keyof this & string, atMs: number, pace?: WakePace): Promise<string> {
-    const nowSec = Math.floor(Date.now() / 1000);
-    // Round up: the SDK stores whole seconds, and waking early would re-arm and busy-spin the alarm.
-    const targetSec = Math.max(Math.ceil(atMs / 1000), nowSec + 1);
-
-    const armed = async (): Promise<{ id: string; time: number; pace: WakePace | null }[]> =>
-      (await this.listSchedules())
-        .filter((row) => row.callback === callback && !this.runningWakeRows.has(row.id))
-        .map((row) => ({ id: row.id, time: row.time, pace: wakePaceOf(row) }));
-
-    const earliest = <Row extends { id: string; time: number }>(rows: readonly Row[]): Row | undefined =>
-      rows.reduce<Row | undefined>((best, row) =>
-        best === undefined || row.time < best.time || (row.time === best.time && row.id < best.id) ? row : best, undefined);
-
-    const before = await armed();
-    const kept = earliest(before);
-
-    if (kept === undefined || kept.time > targetSec) await this.schedule(new Date(targetSec * 1000), callback);
-    const settled = await armed();
-    const keeper = earliest(settled);
-
-    if (keeper === undefined) throw new KinuError('io', `the ${callback} wake row vanished while it was armed`);
-
-    // A timed retry inherits the streak it replaces.
-    const carried = pace ?? [...before, ...settled].reduce<WakePace | null>(
-      (most, row) => row.pace !== null && (most === null || row.pace.laps > most.laps) ? row.pace : most, null);
-
-    if (carried !== null && JSON.stringify(carried) !== JSON.stringify(keeper.pace)) {
-      this.ctx.storage.sql.exec('UPDATE cf_agents_schedules SET payload = ? WHERE id = ?', JSON.stringify(carried), keeper.id);
-    }
-
-    // The keeper is never cancelled, so failure leaves extra wakes, never zero; errors propagate.
-    for (const row of settled) {
-      if (row.id !== keeper.id) await this.cancelSchedule(row.id);
-    }
-
-    return keeper.id;
-  }
-
-  protected async runWakeRow(own: Schedule<unknown>, body: () => Promise<void>): Promise<void> {
-    this.runningWakeRows.add(own.id);
-
-    try {
-      await body();
-    } finally {
-      this.runningWakeRows.delete(own.id);
-    }
-  }
-
-  /** Nothing owed: a turn's arms go. */
+  /** Nothing owed: a turn's arm goes. */
   private async restWhenIdle(): Promise<void> {
-    await this.wakeArms.release({
-      rows: async () => (await this.listSchedules())
-        .filter((row) => row.callback === TERMINAL_RETRY_CALLBACK && !this.runningWakeRows.has(row.id))
-        .map((row) => row.id),
-      idle: () => this._chatLoop?.pumping !== true && !this.owedWorkExists(),
-      cancel: async (id) => { await this.cancelSchedule(id); },
-      rearm: async () => { await this.scheduleTerminalRetry(Date.now()); },
-    });
+    if (this._chatLoop?.pumping !== true && !this.owedWorkExists()) await this.wakes.cancel(TERMINAL_RETRY_JOB);
   }
 
-  /** One soonest-wins row per actor; returns its id. */
-  protected scheduleTerminalRetry(atMs: number, pace?: WakePace): Promise<string> {
-    return this.armWakeRow(TERMINAL_RETRY_CALLBACK, atMs, pace);
+  /** One soonest-wins wake per actor. */
+  protected scheduleTerminalRetry(atMs: number, pace?: WakePace): Promise<void> {
+    return this.wakes.arm(TERMINAL_RETRY_JOB, atMs, pace);
   }
 
-  /**
-   * Public because `Agent.schedule()` types callbacks as `keyof this`. One pass per alarm: the SDK read
-   * every due row first, so a row this pass retired still arrives and runs nothing.
-   */
-  async _kinuTerminalRetryTick(_payload: WakePace | undefined, own: Schedule<unknown>): Promise<void> {
-    const nowSec = Math.floor(Date.now() / 1000);
-    const rows = (await this.listSchedules()).filter((row) => row.callback === TERMINAL_RETRY_CALLBACK);
-
-    if (!rows.some((row) => row.id === own.id)) return;
-
-    for (const row of rows) {
-      if (row.time <= nowSec && row.id !== own.id) await this.cancelSchedule(row.id);
-    }
-
-    await this.runWakeRow(own, () => this.terminalRetryPass(wakePaceOf(own) ?? undefined));
-  }
-
-  /** `prior`: the firing row's streak. */
+  /** `prior`: the firing job's streak. */
   async terminalRetryPass(prior: WakePace = { laps: 0, arms: null }): Promise<void> {
     // Arm first, drain second: the next-lap wake is durable before any pass runs, so a kill
     // inside this frame leaves a future row. A tick that finds nothing owed releases it at the end.
     const lapAt = Date.now() + recoveryBackoffMs(prior.laps + 1);
-    const armedRowId = await this.scheduleTerminalRetry(lapAt, { laps: prior.laps + 1, arms: prior.arms });
+    await this.scheduleTerminalRetry(lapAt, { laps: prior.laps + 1, arms: prior.arms });
 
     // Owed deliveries run every tick; unfinished maintenance re-arms at the shared capped backoff,
     // so a pass that keeps answering unfinished settles at the ceiling, not a one-second loop.
@@ -1493,7 +1414,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
       if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed);
     } else {
-      await this.cancelSchedule(armedRowId);
+      await this.wakes.cancel(TERMINAL_RETRY_JOB);
 
       if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed, { laps: 0, arms: null });
     }
@@ -1866,6 +1787,9 @@ export abstract class ActorAgent extends Agent<Env> {
       workspace: this.workspaceName(),
       events: this.stores.eventRecorder,
       orchestration: this.orchestrationDeps(),
+      advisorPort: () => this.temporaryAgentPort(),
+      // While the completion gate waits for its answer, the advisor records its note silently.
+      gateOpen: () => this._chatLoop?.completionGate.open ?? false,
       turns: () => this.tracing.turns({ id: this.actorHandle().actorId, kind: 'main' }),
     });
 
@@ -1929,10 +1853,10 @@ export abstract class ActorAgent extends Agent<Env> {
   private _chatTransport: ChatWireTransport | null = null;
   protected get chatTransport(): ChatWireTransport {
     this._chatTransport ??= new ChatWireTransport({
-      sql: this.boundSql,
+      resumes: true,
       broadcast: (message, exclude) => { this.broadcastToActor(null, message, exclude); },
       getConnection: (id) => this.getConnection(id),
-      history: (limit) => this.chatTranscript.history(undefined, limit),
+      history: (limit) => this.chatTranscript.history(limit),
       admitted: (id) => this.admittedSend(id),
       send: (input) => this.chatLoop.send({ text: input.text, files: input.files }, { id: input.id, mode: input.mode }),
       interrupt: () => {
@@ -2224,28 +2148,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return {
       turn,
       reachable: [...reachable],
-      minSeverity: this.config.getAdvisorMinSeverity(),
-      recent: [...this.engine.recentAdvisorNotes()],
     };
-  }
-
-  /**
-   * Shared body for the live lane and its recovery, so both review against the snapshot.
-   * The model, signal seam, and note store are re-resolved by whoever runs it.
-   */
-  private async runAdvisorReview(snapshot: AdvisorRecoverySnapshot): Promise<AdvisorDisposition | null> {
-    return reviewRecordedTurn({
-      snapshot,
-      llm: this.rt.advisorLlm,
-      guidance: await advisorWorkspaceGuidance({
-        vfs: this.rt.agentStateVfs ?? this.rt.storage.vfs,
-        limits: async () => this.modelCatalog.contextFor((await this.modelForSource('advisor')).spec),
-      }),
-      govern: (llm, labels) => this.budget.govern(llm, labels),
-      gateOpen: false,
-      send: (signal) => this.orch.inbox.send(signal),
-      record: (note, turnId) => { this.engine.recordAdvisorNote(note, turnId); },
-    });
   }
 
   /**
@@ -2470,7 +2373,7 @@ export abstract class ActorAgent extends Agent<Env> {
     this.broadcast(JSON.stringify({ type: 'head_activity', headId }));
     const rootId = this.headJournal.readHead(headId)?.root_id ?? headId;
 
-    if (!isSteerBranchRunId(rootId)) this.broadcastMctsProgress(rootId, 'head-activity');
+    if (!isSteerBranchRunId(rootId)) this.broadcastMctsProgress(rootId);
   }
 
   /** Broadcast only, no state: a missed frame is corrected by the `head_activity` sent when its
@@ -2666,7 +2569,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * Push one search's tree (search_nodes plus head journal), scoped by `rootId` since searches run
    * concurrently. `(isolateGen, pushSeq)` orders a root's frames across isolates.
    */
-  broadcastMctsProgress(rootId: string, phase: string, iteration?: number, budget?: number): void {
+  broadcastMctsProgress(rootId: string): void {
     try {
       const nodes = readSearchTree(this.boundSql, this.actorHandle(), rootId);
       const head = this.headJournal.readRun(rootId);
@@ -2679,15 +2582,14 @@ export abstract class ActorAgent extends Agent<Env> {
       const pushSeq = (this._mctsPushSeq.get(rootId) ?? 0) + 1;
       this._mctsPushSeq.set(rootId, pushSeq);
       this.broadcast(JSON.stringify({
-        type: 'mcts-progress', rootId, isolateGen: this.isolateGeneration, pushSeq, phase, iteration, budget,
-        nodeCount: nodes.length, nodes, head,
+        type: 'mcts-progress', rootId, isolateGen: this.isolateGeneration, pushSeq, nodes, head,
       }));
     } catch (err) {
       diagnostics.failure('mcts.progress_broadcast_failed', toKinuError({
-        doing: 'pushing an MCTS search tree to connected surfaces',
+        doing: 'pushing a swarm search tree to connected surfaces',
         cause: err,
         otherwise: 'io',
-      }), { rootId, phase });
+      }), { rootId });
     }
   }
 
@@ -2989,7 +2891,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return this._chatTranscript ??= this.stores.history.transcript(CHAT_SESSION_ID);
   }
 
-  /** Persisted once per activation; tracing and MCTS frames share it so neither advances the other. */
+  /** Persisted once per activation; tracing and swarm-progress frames share it so neither advances the other. */
   private _isolateGeneration: number | null = null;
   protected get isolateGeneration(): number {
     return (this._isolateGeneration ??= this.config.countIsolateGeneration());
@@ -3272,8 +3174,9 @@ export abstract class ActorAgent extends Agent<Env> {
     const executorNames = new Set(rt.executionRouter?.getProviders().map((provider) => provider.name) ?? []);
 
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress(this.workspaceName()), rt,
+      loader: this.env.LOADER, egress: codemodeEgress({ workspace: this.workspaceName(), actor: rt.actor.actorId }), rt,
       sql: rt.storage.sql, workspace: this.workspaceName(), webSearch: this.ownedModelServices.getWebSearchProvider(), reach,
+      browserSessions: this.browserSessionsFor(rt.actor.actorId),
       extraProviders: () => providers.filter((provider) => !executorNames.has(provider.name) && provider.name !== 'web'),
     });
 
@@ -3343,6 +3246,11 @@ export abstract class ActorAgent extends Agent<Env> {
     return [...this.baseCodemodeProviders(), createDbCodemodeProvider(this.stores.appData), ...this.extraCodemodeProviders()];
   }
 
+  /** The Chrome sessions `actorId` opened; the table lives on the workspace object every actor shares. */
+  protected browserSessionsFor(actorId: string): BrowserSessions {
+    return browserSessions({ db: this.ctx.storage.sql, binding: this.env.BROWSER, actorId });
+  }
+
   /**
    * Namespaces a slate binding may reach: the build-turn sandbox surfaces minus `tools`/`state`.
    * Read per call: executors attach and detach while this object lives.
@@ -3350,7 +3258,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected slateNamespaces(): CodemodeProvider[] {
     return [
       ...(this.rt.executionRouter?.getProviders() ?? []),
-      createWebCodemodeProvider(this.ownedModelServices.getWebSearchProvider()),
+      createSlateWebCodemodeProvider(this.ownedModelServices.getWebSearchProvider()),
       createAgentsCodemodeProvider(() => this.getAgentsToolDeps('build')),
       ...this.turnCodemodeProviders(),
     ];
@@ -3367,8 +3275,9 @@ export abstract class ActorAgent extends Agent<Env> {
     if (!this._codemodeFactories.has(key)) {
       this._codemodeFactories.set(key, createCodemodeToolFactory({
         loader: this.env.LOADER,
-        egress: codemodeEgress(this.workspaceName()),
+        egress: codemodeEgress({ workspace: this.workspaceName(), actor: this.rt.actor.actorId }),
         rt: this.rt,
+        browserSessions: this.browserSessionsFor(this.rt.actor.actorId),
         reach: narrowing,
         sql: this.boundSql,
         workspace: this.workspaceName(),
@@ -3456,7 +3365,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** A fork reaches these through its `parent` executor. No `@callable`: only a worker-held
    * parent stub can reach them. */
-  async readWorkspaceFile(path: string): Promise<ParentRpcResult<Uint8Array>> {
+  async readWorkspaceFile(path: string): Promise<Uint8Array> {
     return answerParentRpc(path, async () => {
       const content = await this.rt.localVfs.readFile(path);
 
@@ -3464,7 +3373,7 @@ export abstract class ActorAgent extends Agent<Env> {
     });
   }
 
-  async writeWorkspaceFile(input: ParentRpcWrite): Promise<ParentRpcResult<null>> {
+  async writeWorkspaceFile(input: ParentRpcWrite): Promise<null> {
     return answerParentRpc(input.path, async () => {
       if (input.kind === 'file') await this.rt.localVfs.writeFile(input.path, input.data);
       else await this.rt.localVfs.mkdir(input.path, { recursive: input.recursive });
@@ -3473,15 +3382,15 @@ export abstract class ActorAgent extends Agent<Env> {
     });
   }
 
-  async listWorkspaceFiles(path: string): Promise<ParentRpcResult<string[]>> {
+  async listWorkspaceFiles(path: string): Promise<string[]> {
     return answerParentRpc(path, () => this.rt.localVfs.readdir(path));
   }
 
-  async statWorkspaceFile(path: string): Promise<ParentRpcResult<{ size: number; mtimeMs: number; isDir: boolean } | null>> {
+  async statWorkspaceFile(path: string): Promise<{ size: number; mtimeMs: number; isDir: boolean } | null> {
     return answerParentRpc(path, () => this.rt.localVfs.stat(path));
   }
 
-  async deleteWorkspaceFile(path: string): Promise<ParentRpcResult<null>> {
+  async deleteWorkspaceFile(path: string): Promise<null> {
     return answerParentRpc(path, async () => {
       await this.rt.localVfs.unlink(path);
 
@@ -3491,7 +3400,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Run a command in this workspace's shell for a fork: one round trip instead of one RPC per
    * file through an emulated shell. */
-  async execWorkspaceCommand(command: string): Promise<ParentRpcResult<ParentExecResult>> {
+  async execWorkspaceCommand(command: string): Promise<ParentExecResult> {
     return answerParentRpc('', async () => {
       const shell = this.rt.shell;
 
@@ -3523,8 +3432,9 @@ export abstract class ActorAgent extends Agent<Env> {
    * The root's pane names none and reads this actor's conversation.
    */
   @callable()
-  async getChatHistoryPage(request?: PageRequest & { actor?: string }): Promise<ChatHistoryPage> {
-    const { actor, ...page } = request ?? {};
+  async getChatHistoryPage(request: PositionPageRequest & { actor?: string } = {}): Promise<ChatHistoryPage> {
+    // Strict: a dropped id cursor from an old client re-reads the newest page forever.
+    const { actor, ...page } = v.parse(v.strictObject({ ...PositionPageRequestSchema.entries, actor: v.optional(v.string()) }), request);
 
     return getChatHistoryPage(actor === undefined ? this.chatTranscript : this.subordinateChat(actor), page);
   }
@@ -3540,7 +3450,7 @@ export abstract class ActorAgent extends Agent<Env> {
     if (record === null) throw new KinuError('missing', 'The actor is not registered in this workspace.');
 
     for (let step: typeof record | null = record; step?.actorId !== this.actorHandle().actorId; step = directory.retained(step.parentActorId ?? '')) {
-      if (step === null || step.kind !== 'subordinate') throw new KinuError('denied', 'The actor id does not name a chat this workspace hosts.');
+      if (step === null || !isSubordinateOrigin(step.origin)) throw new KinuError('denied', 'The actor id does not name a chat this workspace hosts.');
     }
 
     if (record.retiringAt === null && record.deletedAt === null) return this.transcriptFor(directory.open(actorId));
@@ -4109,6 +4019,7 @@ export abstract class ActorAgent extends Agent<Env> {
     liveTurn.retries = composed.profile.retries;
     liveTurn.fallbacks = composed.profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
       spec: providers.normalizeSpecSync(spec),
+      accepts: this.modelCatalog.acceptedMedia(spec),
       bind: () => this.ownedModelServices.resolveModelWithEffort(spec, reasoningEffort),
     }));
 
@@ -4648,8 +4559,6 @@ export abstract class ActorAgent extends Agent<Env> {
     return {
       jobs: this.jobRunner,
       runDueSessionEvolution: () => this.orch.runDueSessionEvolution(),
-      hasAdvisorNoteForTurn: (turnId) => this.engine.hasAdvisorNoteForTurn(turnId),
-      reviewAdvisorSnapshot: (snapshot) => this.runAdvisorReview(snapshot),
       armOwedTerminalRecovery: () => this.terminal.armOwedRecovery(),
       deliverSignal: (signal) => this.orch.inbox.send(signal),
       redrive: (lane, checkpoint, body) => this.redriveRecoveredLane(lane, checkpoint, body),
@@ -4661,11 +4570,16 @@ export abstract class ActorAgent extends Agent<Env> {
     fiberRecoveryMaxAgeMs: FIBER_RECOVERY_MAX_AGE_MS,
   };
 
+  /** Set when this activation's fiber sweep ran to its end; later ticks skip it. */
+  private fiberSweepFinished = false;
+
   /**
    * Cleanup only; called from `onStart`, synchronous and bounded so safe in the init gate.
    * Failures are logged and dropped so activation still succeeds.
    */
-  protected sweepUnrecoverableFiberRows(): boolean {
+  protected sweepUnrecoverableFiberRows(activation: boolean): boolean {
+    // Once per activation: only a truncated or failed pass leaves rows for the wake's ticks.
+    if (this.fiberSweepFinished && !activation) return false;
     // A failed pass reports truncated so the caller arms the wake and retries.
     let truncated = true;
 
@@ -4681,6 +4595,7 @@ export abstract class ActorAgent extends Agent<Env> {
       }
 
       truncated = result.truncated;
+      this.fiberSweepFinished = !truncated;
     } catch (err) {
       diagnostics.failure('fiber.unrecoverable_sweep_failed', toKinuError({
         doing: 'dropping the interrupted-fiber rows the recovery budget refused',
@@ -4740,9 +4655,10 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** Every budgeted activation sweep; subclasses fold in their own. True if any pass filled its
-   *  budget (caller arms the wake). Synchronous so the init gate can run the same seam. */
-  protected maintenanceSweeps(): boolean {
-    return this.sweepUnrecoverableFiberRows();
+   *  budget (caller arms the wake). Synchronous so the init gate can run the same seam. `activation`:
+   *  the pass `onStart` runs, which sweeps the fiber table whatever a previous pass on this instance found. */
+  protected maintenanceSweeps(activation = false): boolean {
+    return this.sweepUnrecoverableFiberRows(activation);
   }
 
   /**

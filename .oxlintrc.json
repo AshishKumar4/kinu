@@ -66,7 +66,6 @@
     "anti-slop/no-bare-error-in-durable-object": "error",
     "anti-slop/no-ddl-in-catch": "error",
     "anti-slop/no-effect-swallow": "error",
-    "anti-slop/effect-entry-awaits": "error",
     "anti-slop/no-empty-catch": "error",
     "anti-slop/no-elapsed-work-deadline": "error",
     "anti-slop/no-known-value-widening": "error",
@@ -162,7 +161,6 @@
       "files": [
         "packages/core/src/providers/model-invocation.ts",
         "packages/core/src/chat.ts",
-        "packages/core/src/mcts/rollout.ts",
         "packages/cli/src/agent-create.ts"
       ],
       "rules": {

@@ -1,13 +1,13 @@
 /**
  * Every hosted non-root actor: hired subordinates and ask-by-role temporaries, and run actors (heads, swarm
- * nodes, steer and MCTS branches). Each is a `workspace_actors` row plus stores scoped over the root's one
+ * nodes and steer branches). Each is a `workspace_actors` row plus stores scoped over the root's one
  * `Storage`; a turn runs `runHeadInference` claimed on its actor's session (open-41), so a promotion landing
  * mid-run cannot take it over, and retirement is `host.retire`. `abort` is caller-requested only: no socket
  * close or eviction reaches it; an evicted run leaves an unsettled claim the root's activation resumes.
  * Not facets: `do.facet.cpu_shared` means hosted actors serialise as in one isolate.
  */
 
-import { INTERRUPTED_TURN, REAL_CLOCK, type HeadReport, type ObserveStream } from '@kinu.run/core';
+import { INTERRUPTED_TURN, REAL_CLOCK, type HeadReport, type ObserveStream, isSubordinateOrigin } from '@kinu.run/core';
 import type { LanguageModel, Tool, ToolSet } from 'ai';
 import {
   EventLog, HeadCapture, runHeadInference, titleActorFromMessage, spawnSeatedHead,
@@ -115,6 +115,8 @@ export interface HostedActorSeams {
   armWake(): void;
   rederiveWake(): void;
   temporary(actor: BoundActor): TemporaryAgentPort;
+  /** Inside the answer's transaction: the hirer's advisor answer is owed a delivery job. */
+  oweAdvice(actor: BoundActor): Promise<void>;
 }
 
 export function hostedDelegationBudget(
@@ -143,7 +145,7 @@ function delegatedHeadInput(
     inheritedContext: subordinateForkContext(task.inheritedContext),
     mergeStrategy: 'synthesize',
     budget: { maxDepth: 0, spawnedAt: Date.now() },
-    loop: defaultLoopOrigin('subordinate'),
+    loop: defaultLoopOrigin('agent'),
   };
 }
 
@@ -269,6 +271,7 @@ export async function relayHostedReport(
     }),
     announce: () => { seams.announce(hirer); },
     onAdmitted: () => { if (seams.host.hosted(parent)?.session.inFlight !== true) seams.scheduleDrain(hirer); },
+    evolutionAnswerStored: () => seams.oweAdvice(hirer),
     onEvolutionAnswer: () => { seams.rederiveWake(); },
     temporary: seams.temporary(hirer),
   }, { fromSubordinate: name, ...event }, Date.now());
@@ -373,7 +376,7 @@ export async function runHostedTask(
 
     if (chat?.observeStream !== undefined) inference.observeStream = chat.observeStream;
 
-    // The run bracket the local host writes via `ChatSession.processTurn`; `runHeadInference` bypasses
+    // The run bracket the local host writes via `ChatSession.runOpenedTurn`; `runHeadInference` bypasses
     // it (measured 2026-09-17 in the workerd pool: a hire's child ledger held only `step_finish`).
     // A thrown runner leaves the run open on purpose; the retry opens a new one.
     openTurnRun(actor.stores.eventRecorder, runId, {
@@ -481,7 +484,7 @@ export function hostedSubordinateRuntime(
     return refusal(action === 'register' && delegationExhausted(hostedDelegationBudget(seams, owner)),
       () => new KinuError('denied', 'This actor cannot create a subordinate below its delegation depth.'))
       .pipe(Effect.andThen(Effect.sync(() => seams.directory.apply(owner.reference, seams.directory.storagePath(owner.reference), {
-        action, name: input.name, creationId: input.creationId, kind: 'subordinate', lifetime: input.lifetime,
+        action, name: input.name, creationId: input.creationId, origin: input.origin, lifetime: input.lifetime,
       }).reference)));
   });
 
@@ -492,7 +495,7 @@ export function hostedSubordinateRuntime(
       action: 'resolve', name,
     });
 
-    return refusal(entry.kind !== 'subordinate', () => new KinuError('denied', 'The roster name does not identify a subordinate.'))
+    return refusal(!isSubordinateOrigin(entry.origin), () => new KinuError('denied', 'The roster name does not identify a subordinate.'))
       .pipe(Effect.as(entry.reference));
   });
 
@@ -721,7 +724,7 @@ export async function reclaimSettledExplorationActors(
   for (const reference of seams.host.list()) {
     const record = seams.host.describe(reference.actorId);
 
-    if (record === null || record.kind === 'main' || record.kind === 'subordinate') {
+    if (record === null || record.origin !== 'swarm') {
       retained += 1;
       continue;
     }

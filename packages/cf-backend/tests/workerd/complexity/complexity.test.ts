@@ -126,10 +126,22 @@ const turnStatements = new Map<number, OperationCost['tables']>();
  * statement; 1,514 once `WorkspaceActorDirectory` checked a handle once a synchronous run, in one statement; 1,024
  * once the directory remembered the actors it retired instead of re-reading their rows (1,515 before, at 41ffcb57b7);
  * 775 once the transcript frame read its ancestry and its messages in one statement each, not one or two an entry;
- * 776 at 1c0a48714e; 783 on Nimbus core 0.13.1, whose tree lives in SQL rather than an in-memory inode map, so the
- * turn's seven path lookups are seven vfs_inodes statements.
+ * 760 on the list transcript (c7d177a6d8); 681 once the sleep-time window read its entries' messages in one statement;
+ * 663 once the workspace capability token was read once, not per hub call; 615 once the tile's fold skipped the
+ * owed-work probes while a turn works, the only time it cannot show them; 600 once a sequence's terminal effects were
+ * claimed in one statement and the plan review was read only for an operator Build turn; 608 once the context gate
+ * recorded its measure (context-one-2); 593 once a step's partial lived in the stream buffer alone (no step_partial
+ * rows) and a flush checked the claim inside its own append; 593 again once an actor that reviews no turns owed no
+ * advisor_review row (187ce4182e); 699 on agents 0.24. Its Streams chunk log costs 165 statements a turn where 0.22's
+ * chunk table cost 54: a state read, a block-tail read and a block write per flush, 52 flushes, the SDK's own floor
+ * (CHUNK_BUFFER_SIZE 10, no option). Its job queue costs 33 where the schedule table cost 24: three alarm-deriving reads
+ * after every push or cancel. Rows written drop: replay 159 -> 59, wakes 6 -> 5. 534 once the tab's replay is the
+ * relay's own chunks for the turn in progress, held in memory: the SDK chunk log (165) goes, `stream_parts` is the
+ * answer's one durable copy; and once the fiber sweep, which asked `sqlite_master` for its table and ran on every
+ * tick, runs once an activation over the table the SDK's constructor made. Nimbus core 0.13.1 adds seven vfs_inodes
+ * path lookups because its tree lives in SQL instead of an in-memory inode map: 541.
  */
-const TURN_STATEMENTS = 783;
+const TURN_STATEMENTS = 541;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {

@@ -111,7 +111,6 @@ export interface ScaffoldRunResult {
   finalResult?: JsonValue;
 }
 
-/** Every event kind except native host chunks. */
 export type ScaffoldJsonEvent = Exclude<ScaffoldEvent, { type: 'chat_chunk' | 'model_chunk' | 'model_output' }>;
 
 /** A run result for crossing a process boundary; native chunks are only counted. */

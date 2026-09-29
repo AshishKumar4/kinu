@@ -13,6 +13,7 @@ import {
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE, WORKSPACE_ROOT } from '@kinu.run/core';
 import { EGRESS_FAILURE_HEADER } from './codemode-egress';
+import { BROWSER_CLIENT_MODULE, BROWSER_CLIENT_SOURCE } from './browser-prelude';
 
 type DynamicProviderInput = Parameters<DynamicWorkerExecutor['execute']>[1];
 
@@ -88,7 +89,7 @@ function programWorker(input: { readonly loader: WorkerLoader; readonly egress: 
     loader: input.loader,
     timeout: NO_TIMER_DEADLINE_MS,
     globalOutbound: input.egress,
-    modules: input.kinuNode ? { [KINU_NODE_MODULE_NAME]: KINU_NODE_MODULE_SOURCE } : {},
+    modules: input.kinuNode ? { [KINU_NODE_MODULE_NAME]: KINU_NODE_MODULE_SOURCE, [BROWSER_CLIENT_MODULE]: BROWSER_CLIENT_SOURCE } : {},
   });
 }
 

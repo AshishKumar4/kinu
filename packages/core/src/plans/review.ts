@@ -60,14 +60,15 @@ export function planReviewAwaitingDecision(
     || (review?.status === 'approved' && !review.handoffAccepted);
 }
 
+/** `active` is read only for an operator Build turn, the one case the review can hold. */
 export function workModeUnderReview(
   requested: WorkMode,
   metadata: JsonObject | undefined,
-  active: Pick<PlanReview, 'status' | 'handoffAccepted'> | null,
+  active: () => Pick<PlanReview, 'status' | 'handoffAccepted'> | null,
 ): WorkMode {
   if (requested !== 'build' || metadata?.kinuMode === 'build' || turnAuthor({ metadata }) !== 'operator') return requested;
 
-  return planReviewAwaitingDecision(active) ? 'plan' : requested;
+  return planReviewAwaitingDecision(active()) ? 'plan' : requested;
 }
 
 /** First non-empty line of the content, headings stripped. */

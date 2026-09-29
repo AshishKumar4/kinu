@@ -4,7 +4,7 @@
  */
 import * as v from 'valibot';
 import { bindActorHandle, type ActorHandle, type ActorIdentity } from '../identity/actor-handle';
-import type { WorkspaceActor } from '../identity/workspace-actors';
+import { isSubordinateOrigin, type WorkspaceActor } from '../identity/workspace-actors';
 import { AgentTaskTreeSchema, readPlanTasks, TaskListStore, type AgentTaskTree } from '../tools/task-store';
 import { PlanReviewSchema, PlanReviewStore, type PlanReview } from '../plans/review';
 import { tableExists } from '../identity/schema';
@@ -54,7 +54,7 @@ function conversationPath(row: WorkspaceActor, byId: ReadonlyMap<string, Workspa
   const names: string[] = [];
 
   for (let at: WorkspaceActor | undefined = row; at?.actorId !== rootId; at = byId.get(at.parentActorId ?? '')) {
-    if (at === undefined || at.kind !== 'subordinate') return null;
+    if (at === undefined || !isSubordinateOrigin(at.origin)) return null;
     names.unshift(at.name);
   }
 

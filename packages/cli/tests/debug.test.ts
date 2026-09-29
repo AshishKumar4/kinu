@@ -56,7 +56,7 @@ const GITHUB_SECRET = ['ghp', '_', 'c'.repeat(36)].join('');
 const PRIVATE_KEY = ['-----BEGIN ', 'PRIVATE KEY-----'].join('');
 
 /**
- * Two runs (one polls a job it backgrounded), two head-runs, and two MCTS searches whose older
+ * Two runs (one polls a job it backgrounded), two head-runs, and two swarm searches whose older
  * root sorts first by created_at, where an unscoped client buildTree() shows the wrong tree.
  */
 function seedInvestigationWorkspace(dbPath: string): void {
@@ -222,7 +222,7 @@ describe('kinu debug — local backend', () => {
     expect(r.stdout).toContain('polled job 1x after backgrounding');
     expect(r.stdout).toContain('Head/fork runs (3');
     expect(r.stdout).toContain('(1/2 settled)');
-    expect(r.stdout).toContain('MCTS searches (2');
+    expect(r.stdout).toContain('Swarm searches (2');
     expect(r.stdout).toContain('latest vs previous: 3 vs 1 nodes, depth 2 vs 0');
     // Iterations are the tree's own expansions (2 below the root), not a stored counter.
     expect(r.stdout).toContain('iter=2/10 (8 left)');

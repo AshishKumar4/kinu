@@ -2,10 +2,16 @@
 // and a revoked one is dropped: left in the store it keeps the provider advertised while every call 401s.
 import { describe, test, expect } from 'bun:test';
 import { createTestUserDO, testOwner } from './helpers/user-do';
+import { credentialToHeaders } from '@kinu.run/core';
 import { asFetchFunction } from '@kinu.run/core';
 import { requestUrl } from '@kinu.run/core';
 import { requestBodyText } from '@kinu.run/test-utils';
 import * as v from 'valibot';
+
+/** The headers a call sent with the login stored under `key` holding `accessToken`, which the upstream then refused. */
+function refusedWith(key: string, accessToken: string): Record<string, string> {
+  return credentialToHeaders(key, { kind: 'oauth', accessToken });
+}
 
 const CODEX_TOKEN_URL = 'https://auth.openai.com/oauth/token';
 
@@ -36,7 +42,7 @@ describe('UserDO Codex credential revocation', () => {
       });
       expect(await harness.userDO.listCredentials(owner)).toHaveLength(1);
 
-      await expect(harness.userDO.getAuthHeaders(owner, 'codex.oauth', { forceRefresh: true }))
+      await expect(harness.userDO.getAuthHeaders(owner, 'codex.oauth', { rejected: refusedWith('codex.oauth', 'dead-access') }))
         .resolves.toBeNull();
       expect(await harness.userDO.listCredentials(owner)).toHaveLength(0);
       harness.close();
@@ -56,7 +62,7 @@ describe('UserDO Codex credential revocation', () => {
         kind: 'oauth', accessToken: 'maybe-stale', refreshToken: 'rt-alive',
       });
 
-      const headers = await harness.userDO.getAuthHeaders(owner, 'codex.oauth', { forceRefresh: true });
+      const headers = await harness.userDO.getAuthHeaders(owner, 'codex.oauth', { rejected: refusedWith('codex.oauth', 'maybe-stale') });
       expect(headers?.Authorization).toBe('Bearer maybe-stale');
       expect(await harness.userDO.listCredentials(owner)).toHaveLength(1);
       harness.close();
@@ -85,7 +91,7 @@ describe('UserDO Codex credential of a named account', () => {
       await harness.userDO.setCredential(owner, 'codex.oauth', { kind: 'oauth', accessToken: 'main-access', refreshToken: 'rt-main' });
       await harness.userDO.setCredential(owner, 'codex.oauth@work', { kind: 'oauth', accessToken: 'stale-work', refreshToken: 'rt-work' });
 
-      const headers = await harness.userDO.getAuthHeaders(owner, 'codex.oauth@work', { forceRefresh: true });
+      const headers = await harness.userDO.getAuthHeaders(owner, 'codex.oauth@work', { rejected: refusedWith('codex.oauth@work', 'stale-work') });
       expect(headers?.Authorization).toBe('Bearer fresh-work');
 
       // The next read finds the rotated login stored under the account; a second refresh would reuse a spent token.
@@ -108,7 +114,7 @@ describe('UserDO Codex credential of a named account', () => {
       await harness.userDO.setCredential(owner, 'codex.oauth', { kind: 'oauth', accessToken: 'main-access', refreshToken: 'rt-main' });
       await harness.userDO.setCredential(owner, 'codex.oauth@work', { kind: 'oauth', accessToken: 'dead-work', refreshToken: 'rt-work' });
 
-      await expect(harness.userDO.getAuthHeaders(owner, 'codex.oauth@work', { forceRefresh: true })).resolves.toBeNull();
+      await expect(harness.userDO.getAuthHeaders(owner, 'codex.oauth@work', { rejected: refusedWith('codex.oauth@work', 'dead-work') })).resolves.toBeNull();
       expect((await harness.userDO.listCredentials(owner)).map((credential) => credential.key)).toEqual(['codex.oauth']);
       harness.close();
     } finally {
@@ -286,13 +292,15 @@ describe('UserDO subscription login renewed by two calls at once', () => {
       try {
         const harness = createTestUserDO({ cloudflareOAuthClientId: 'cf-client' });
         const owner = await testOwner();
-        await harness.userDO.setCredential(owner, login.key, { kind: 'oauth', accessToken: 'old', refreshToken: 'rt-1', ...login.stored });
+        const stored = { kind: 'oauth', accessToken: 'old', refreshToken: 'rt-1', ...login.stored } as const;
+        await harness.userDO.setCredential(owner, login.key, stored);
 
         // Both calls renew, as two whose requests the old token failed would.
-        const a = harness.userDO.getAuthHeaders(owner, login.key, { forceRefresh: true });
+        const rejected = credentialToHeaders(login.key, stored);
+        const a = harness.userDO.getAuthHeaders(owner, login.key, { rejected });
         await firstArrival.promise;
         holding = true;
-        const b = harness.userDO.getAuthHeaders(owner, login.key, { forceRefresh: true });
+        const b = harness.userDO.getAuthHeaders(owner, login.key, { rejected });
         await readHeld.promise;
 
         firstAnswer.resolve(Response.json({ access_token: FRESH, refresh_token: 'rt-2', expires_in: 3600 }));

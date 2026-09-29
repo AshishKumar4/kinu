@@ -60,6 +60,12 @@ export interface MaterializedContext {
   readonly rendered: readonly CarriedRender[];
 }
 
+/** What a step cut mid-stream had streamed: its text, and whether it had called a tool. */
+export interface CutStep {
+  readonly text: string;
+  readonly calledTools: boolean;
+}
+
 export class SessionHistory {
   readonly messages: SessionMessages;
   readonly context: SessionContext;
@@ -107,6 +113,33 @@ export class SessionHistory {
     }
   }
 
+  /** The outputs a run left open: its cut step's. A claim's {@link sealAbandoned} seals them, so they are named before it. */
+  openOutputs(runId: string): readonly string[] {
+    this.dependencies.actor.assertCurrent();
+
+    return this.dependencies.sql<{ message_id: string }>`SELECT m.message_id FROM session_messages m
+      JOIN actor_requests r ON r.actor_id=m.actor_id AND r.request_id=m.request_id
+      WHERE m.actor_id=${this.dependencies.actor.actorId} AND r.run_id=${runId} AND m.origin='output' AND m.sealed_at IS NULL
+      ORDER BY m.rowid`.map((row) => row.message_id);
+  }
+
+  /** Read from the stream buffer, or from the content a seal gave it: the same parts either way. Null when it streamed neither. */
+  async cutStep(outputs: readonly string[]): Promise<CutStep | null> {
+    const parts = await this.messages.materializePartsOf(outputs);
+    let text = '';
+    let calledTools = false;
+
+    for (const id of outputs) {
+      for (const part of parts.get(id) ?? []) {
+        if (part.kind === 'text') text += v.parse(v.string(), part.value.text);
+
+        if (part.kind === 'tool-call') calledTools = true;
+      }
+    }
+
+    return text === '' && !calledTools ? null : { text, calledTools };
+  }
+
   transcript(sessionId: string): SessionTranscript {
     return new SessionTranscript({ sql: this.dependencies.sql, actor: this.dependencies.actor, sessionId,
       messages: this.messages, payloads: this.messages.payloads,
@@ -127,7 +160,8 @@ export class SessionHistory {
     });
   }
 
-  /** Continue from before `entryId`: its nearest recorded ancestor's context branches; later entries leave the head. */
+  /** Continue from before `entryId`: the context of the nearest earlier entry that recorded one branches, and
+   *  `entryId` and everything after it is deleted. */
   revertTo(sessionId: string, entryId: string, assertIdle: () => void): ContextSelection {
     return this.dependencies.transactionSync(() => {
       this.dependencies.actor.assertCurrent();
@@ -136,20 +170,15 @@ export class SessionHistory {
       const entry = transcript.read(entryId);
 
       if (entry === null) throw new KinuError('missing', 'conversation entry does not exist');
-      let base: ContextSelection | null = null;
-
-      for (const ancestor of [...transcript.ancestry(entry.parentId)].reverse()) {
-        if (ancestor.context) { base = ancestor.context; break; }
-      }
-
+      const base = transcript.contextAt(entry.position - 1);
       const selected = this.context.selected() ?? this.context.initialize();
 
       for (const proposal of this.proposals.pending(selected.contextId)) this.proposals.close(proposal.proposal_id, 'history_rewritten');
       const target = this.context.fork(base);
       this.context.select(selected, target, assertIdle);
-      transcript.setHead(entry.parentId);
-      // The only backwards head move; recorded so it is distinguishable from lost rows.
-      diagnostics.event('session.transcript_head_moved', { session: sessionId, from: entryId, to: entry.parentId ?? '' });
+      transcript.truncate(entry.position);
+      // The only deletion short of a clear; recorded so it is distinguishable from lost rows.
+      diagnostics.event('session.transcript_rewound', { session: sessionId, from: entryId, position: entry.position });
 
       return target;
     });
@@ -410,14 +439,14 @@ export class SessionHistory {
   }
 
   /** One message and its transcript entry, outside working context: search trajectories, other non-chat sessions. */
-  async record(sessionId: string, input: { readonly id: string; readonly parentId: string | null; readonly message: ModelMessage; readonly origin: MessageOrigin; readonly metadata?: JsonObject }): Promise<MessageReference> {
+  async record(sessionId: string, input: { readonly id: string; readonly message: ModelMessage; readonly origin: MessageOrigin; readonly metadata?: JsonObject }): Promise<MessageReference> {
     const prepared = await this.messages.prepare(input.message, input.id);
     const metadata = input.metadata === undefined ? null : await this.messages.payloads.prepare(input.metadata);
     const transcript = this.transcript(sessionId);
 
     return this.dependencies.transactionSync(() => {
       const reference = this.messages.insert(prepared, input.origin);
-      transcript.record({ id: input.id, parentId: input.parentId, role: input.message.role, turnId: null, runId: null, metadata, context: null,
+      transcript.record({ id: input.id, role: input.message.role, turnId: null, runId: null, metadata, context: null,
         parts: prepared.content.parts.map(part => ({ messageId: reference.messageId, partNo: part.partNo })) });
 
       return reference;

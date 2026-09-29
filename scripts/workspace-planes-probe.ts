@@ -1,12 +1,11 @@
 import { Database } from 'bun:sqlite';
 import { explorationActorKey, facetHomeProvisioner, headAgentName, subordinateAgentName, type AgentRuntime } from '@kinu.run/core';
 import { createCLIRuntime } from '../packages/cli-backend/src/runtime';
-import { bindLocalActor, registerLocalActor, registerLocalNode } from '../packages/cli-backend/src/actor-identity';
+import { bindLocalActor, registerLocalActor, registerLocalNode } from '@kinu.run/core';
 
 const database = new Database(':memory:');
 
 const config = {
-  dbPath: database.filename,
   llm: { name: 'probe', baseURL: 'http://localhost:0', headers: {}, model: 'unused' },
   hostRoot: null,
 };
@@ -35,8 +34,8 @@ try {
     // (`agent-host/host.ts` hire, `buildLocalActorRuntime` head). No probe-only
     // shortcut, so what this prints is what a real actor of each kind gets.
     const node = registerLocalNode(runtime.actor, { nodeId: 'node-probe', rootId: 'node-probe', depth: 1 });
-    const head = bindLocalActor(sql, registerLocalActor(runtime.actor, { name: explorationActorKey('head-probe'), creationId: 'head-probe', kind: 'run', lifetime: 'task' }));
-    const subordinate = bindLocalActor(sql, registerLocalActor(runtime.actor, { name: 'sub-probe', creationId: 'sub-probe', kind: 'subordinate', lifetime: 'durable' }));
+    const head = bindLocalActor(sql, registerLocalActor(runtime.actor, { name: explorationActorKey('head-probe'), creationId: 'head-probe', origin: 'swarm', lifetime: 'task' }));
+    const subordinate = bindLocalActor(sql, registerLocalActor(runtime.actor, { name: 'sub-probe', creationId: 'sub-probe', origin: 'user', lifetime: 'durable' }));
 
     const identities = [
       { name: 'node', actor: node, workspace: await provision(headAgentName(node.storageKey)) },

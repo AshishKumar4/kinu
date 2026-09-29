@@ -14,8 +14,8 @@ import { makeSql } from '../../core/tests/helpers';
 
 import {
   createAgentTracing, createRecordingTracer, KinuError, renderCauseChain,
-  SPAN_ATTR_ERROR, SPAN_ATTR_INVOCATION, SPAN_ATTR_ISOLATE_GEN, SPAN_ATTR_SELF_PATH,
-  type AgentTracing, type RecordingTracer, type SpanAttributeValue, type TracedInvocation,
+  SPAN_ATTR_INVOCATION, SPAN_ATTR_ISOLATE_GEN, SPAN_ATTR_SELF_PATH,
+  type AgentTracing, type RecordingTracer, type TraceException, type TracedInvocation,
 } from '@kinu.run/core/obs';
 
 /** In `_kinuTimerTick` order, so a phase dropped from the method fails rather than shrinking the tree. */
@@ -207,9 +207,9 @@ describe('invocation handles are revoked, not merely discouraged', () => {
 describe('a span marks a failure and changes nothing about it', () => {
   const spanFor = () => {
     const tracer: RecordingTracer = createRecordingTracer();
-    const empty: ReadonlyMap<string, SpanAttributeValue> = new Map();
+    const empty: readonly TraceException[] = [];
 
-    return { tracer, attributes: () => tracer.opened[0]?.attributes ?? empty };
+    return { tracer, exceptions: () => tracer.opened[0]?.exceptions ?? empty };
   };
 
   test('a span opens and closes around real async work', async () => {
@@ -234,13 +234,13 @@ describe('a span marks a failure and changes nothing about it', () => {
     expect(span?.attributes.get(SPAN_ATTR_ISOLATE_GEN)).toBe(3);
     expect(span?.attributes.get('kinu.rows')).toBe(4);
     // A sibling next span is the only observable a scoped span has for "closed".
-    expect(span?.attributes.has(SPAN_ATTR_ERROR)).toBe(false);
+    expect(span?.exceptions).toEqual([]);
     tracer.span('after', { isolateGen: 3, selfPath: 'A:a' }, () => undefined);
     expect(tracer.opened[1]?.parent).toBeNull();
   });
 
   test('a synchronous throw is marked and propagates UNCHANGED', () => {
-    const { tracer, attributes } = spanFor();
+    const { tracer, exceptions } = spanFor();
     const thrown = new KinuError('io', 'writing the ledger', { cause: new Error('disk full') });
     const caught: Error[] = [];
 
@@ -255,11 +255,11 @@ describe('a span marks a failure and changes nothing about it', () => {
     expect(caught[0]).toBe(thrown);
     expect(caught[0]).toBeInstanceOf(KinuError);
     expect(renderCauseChain(thrown)).toBe('writing the ledger: disk full');
-    expect(attributes().get(SPAN_ATTR_ERROR)).toBe(true);
+    expect(exceptions()).toEqual([{ code: 'io', name: 'KinuError[io]' }]);
   });
 
   test('a rejection is marked and propagates UNCHANGED', async () => {
-    const { tracer, attributes } = spanFor();
+    const { tracer, exceptions } = spanFor();
     const thrown = new KinuError('timeout', 'awaiting the node', { cause: new Error('600s idle') });
     const rejected: Error[] = [];
 
@@ -275,7 +275,7 @@ describe('a span marks a failure and changes nothing about it', () => {
     }
 
     expect(rejected[0]).toBe(thrown);
-    expect(attributes().get(SPAN_ATTR_ERROR)).toBe(true);
+    expect(exceptions()).toEqual([{ code: 'timeout', name: 'KinuError[timeout]' }]);
   });
 
   test('no error text reaches a trace attribute, on either path', async () => {
@@ -300,13 +300,13 @@ describe('a span marks a failure and changes nothing about it', () => {
 
     for (const span of tracer.opened) {
       // The whole surface, not a named key: the message under any other name is the same leak.
-      expect([...span.attributes.values()].join(' ')).not.toContain(secret);
-      expect(span.attributes.get(SPAN_ATTR_ERROR)).toBe(true);
+      expect(JSON.stringify({ attributes: [...span.attributes], exceptions: span.exceptions })).not.toContain(secret);
+      expect(span.exceptions).toEqual([{ code: 'io', name: 'Error' }]);
     }
   });
 
   test('a tolerated failure marks the span without throwing', () => {
-    const { tracer, attributes } = spanFor();
+    const { tracer, exceptions } = spanFor();
 
     const answer = tracer.span('phase', { isolateGen: 1, selfPath: 'A:a' }, (span) => {
       span.fail(new Error('the reconcile is degraded but the tick continues'));
@@ -316,6 +316,6 @@ describe('a span marks a failure and changes nothing about it', () => {
 
     // The phase tolerates its failure, so the span says failed while the caller sees success.
     expect(answer).toBe('continued');
-    expect(attributes().get(SPAN_ATTR_ERROR)).toBe(true);
+    expect(exceptions()).toEqual([{ code: 'io', name: 'Error' }]);
   });
 });

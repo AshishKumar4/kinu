@@ -5,12 +5,14 @@
 
 import * as v from 'valibot';
 import { isAbortError, raceAbort } from '@kinu.run/agent-utils';
-import type { VFS, VfsEntryStat, VfsWriteReport } from '../types/primitives';
+import type { VFS, VfsEntryStat } from '../types/primitives';
 import type { VfsNativeReads } from '../vfs/mounts';
-import { makeVfsError } from '../vfs/errno';
+import { makeVfsError, vfsErrorFromText, type VfsError } from '../vfs/errno';
+import { Effect } from 'effect';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { commandResult, uncheckpointedSentence, type CommandResult } from './exec-result';
 import { KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
+import { settle } from '../obs/effect';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
 import {
   connectedDevices, deviceFleetAsk, deviceByName, freshDeviceToolchain,
@@ -25,6 +27,8 @@ import {
   nextDeviceRequestId,
 } from './device-tunnel';
 import { readDeviceOwnershipContext, readExecSignal } from './signal';
+import { approveFileAccess, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate';
+import { asBytes } from '../safety/bound-write';
 import { RESERVED_REFERENCE_ROOTS } from '../vfs/mounts';
 import {
   isJsonObject,
@@ -196,6 +200,7 @@ export function createDeviceTunnelExecutor(
   transport: DeviceTransport,
   /** Path-scope for the file view; omit only where the transport is already scoped. */
   consent: DeviceFileConsent = ALWAYS_CONSENTED,
+  policy: ShellApprovalPolicy = STRICT_NO_CHANNEL_POLICY,
 ): ExecutorProvider {
   const rpc: DeviceTransport['rpc'] = (method, params, opts) => transport.rpc(method, params, opts);
 
@@ -357,14 +362,22 @@ export function createDeviceTunnelExecutor(
         }
 
         try {
-          const target = filesForCall(transport, consent, readDeviceSelection({ context: args[2] }));
+          const target = resolveForCall(transport, readDeviceSelection({ context: args[2] }));
 
           if (target.kind === 'refusal') return target.refusal;
-          const view = target.view;
-          const report = await view.writeFileWithReport(path, content);
-          const written = `Written ${content.length} bytes to ${path}`;
+          const view = deviceFiles(transport, consent, target.deviceId);
 
-          return report ? `${written}\n${uncheckpointedSentence(report.uncheckpointed, 'this write')}` : written;
+          const written = Effect.andThen(
+            approveOverwrite(policy, transport, target.deviceId, { view, path, content }),
+            Effect.promise(() => view.writeFileWithReport(path, content)),
+          );
+
+          const said = `Written ${content.length} bytes to ${path}`;
+
+          return await settle(Effect.match(written, {
+            onFailure: refusalOf,
+            onSuccess: (answer) => answer ? `${said}\n${uncheckpointedSentence(answer.uncheckpointed, 'this write')}` : said,
+          }));
         } catch (err) {
           if (isDeviceNotConnectedError({ cause: err })) return notConnected();
 
@@ -490,10 +503,26 @@ declare namespace device {
   return provider;
 }
 
-/**
- * Resolves the machine a call is for. Named and held → id; named but not held → `unavailable`; unnamed with several
- * live → `bad_input`; otherwise the sole live id or none (hub resolves). The snapshot never gates the call itself.
- */
+/** Asks as a write onto `/pc` does, and parks under that path; a machine-relative path names no machine, so never parks. */
+function approveOverwrite(
+  policy: ShellApprovalPolicy, transport: DeviceTransport, deviceId: string | undefined,
+  write: { readonly view: DeviceVFS; readonly path: string; readonly content: string },
+): Effect.Effect<void, KinuError> {
+  const { view, path, content } = write;
+  const fleet = transport.status().devices;
+  const device = deviceId === undefined ? undefined : fleet?.find((entry) => entry.id === deviceId);
+  const mounted = device === undefined || !path.startsWith('/') ? null : `/pc/${deviceMountSegment(device, fleet)}${path}`;
+
+  return Effect.flatMap(Effect.promise(() => view.exists(path)), (exists) => (exists ? approveFileAccess(
+    { op: 'write', path: mounted ?? path, hostPath: mounted ?? path, reaches: 'user-mount', replaces: true }, 'device', policy, {
+      subject: async () => ({ path: mounted ?? path, current: asBytes(await view.readFile(path)), next: asBytes(content) }),
+      parks: mounted !== null,
+    },
+  ) : Effect.void));
+}
+
+/** Named and held → its id; named, not held → `unavailable`; unnamed among several live → `bad_input`; else the sole
+ *  live id or none. The snapshot never gates the call itself. */
 function resolveForCall(
   transport: DeviceTransport,
   named: string | undefined,
@@ -556,14 +585,20 @@ const AGENT_TMP_PATHS = ['/tmp', '/var/tmp'] as const;
 
 export type DeviceVFS = VFS & Required<Pick<VFS, 'writeFileWithReport'>> & Pick<ExecutorProvider, 'homeDir'> & Pick<VfsNativeReads, 'readRange'>;
 
-/**
- * The machine's filesystem in its own absolute paths. The daemon resolves root and path before the sink; this client
- * guard only rejects lexical escapes. `homeDir` comes from HELLO, never an `exec` (which needs the full tier).
- */
+/** The machine's files in its own absolute paths: the daemon resolves root and path, this guard only rejects lexical
+ *  escapes, and `homeDir` is HELLO's, never an `exec`'s. */
 export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConsent, deviceId?: string): DeviceVFS {
   // No id (one-machine account or undescribed fleet): send no key and let the hub resolve.
   const target: DeviceExecOptions | undefined = deviceId === undefined ? undefined : { deviceId };
   const trimmed = (path: string): string => (path.length > 1 ? path.replace(/\/+$/, '') : path);
+
+  /** A daemon refusal keeps its VFS code. */
+  const call = (method: string, params: JsonValue[], path: string): Effect.Effect<JsonValue | undefined, KinuError | VfsError> =>
+    Effect.tryPromise({
+      try: () => transport.rpc(method, params, target),
+      catch: (cause) => (cause instanceof Error ? vfsErrorFromText(cause.message, path) : null)
+        ?? deviceFailure({ doing: `${method} on the device`, cause }),
+    });
 
   const effectiveRoot = async (): Promise<string> => {
     const explicit = await consent.consentedRoot(deviceId);
@@ -624,16 +659,16 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     return text;
   };
 
-  const readChunked = async (path: string, root: string | null, offset: number, length: number | null): Promise<Uint8Array> => {
+  const readChunked = (path: string, root: string | null, offset: number, length: number | null) => Effect.gen(function* () {
     const chunks: Uint8Array[] = [];
     let total = 0;
 
     for (;;) {
       const asked = length === null ? DEVICE_READ_CHUNK_BYTES : Math.min(DEVICE_READ_CHUNK_BYTES, length - total);
-      const raw = await transport.rpc('readRange', [path, offset + total, asked, { root }], target);
+      const raw = yield* call('readRange', [path, offset + total, asked, { root }], path);
 
       if (raw === undefined || !isJsonObject(raw) || raw.encoding !== 'base64') {
-        throw makeVfsError('EIO', 'device returned an unreadable file range', path);
+        return yield* Effect.fail(makeVfsError('EIO', 'device returned an unreadable file range', path));
       }
 
       const chunk = base64ToBytes(v.parse(v.string(), raw.content));
@@ -653,59 +688,54 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     }
 
     return bytes;
-  };
+  });
 
-  const writeFileWithReport = async (path: string, data: string | Uint8Array): Promise<VfsWriteReport | null> => {
-    const root = await guard(path, 'open');
-    let result: JsonValue | undefined;
+  const guarded = (path: string, op: string) => Effect.promise(() => guard(path, op));
 
-    if (v.is(v.string(), data)) {
-      result = await transport.rpc('writeFile', [path, data, { root }], target);
-    } else {
-      const text = asLosslessText(data);
-      result = text !== null
-        ? await transport.rpc('writeFile', [path, text, { root }], target)
-        : await transport.rpc('writeFile', [path, bytesToBase64(data), { encoding: 'base64', root }], target);
-    }
+  const writeReported = (path: string, data: string | Uint8Array) => Effect.gen(function* () {
+    const root = yield* guarded(path, 'open');
+    const text = v.is(v.string(), data) ? data : asLosslessText(data);
+
+    const result = yield* text !== null
+      ? call('writeFile', [path, text, { root }], path)
+      : call('writeFile', [path, bytesToBase64(v.parse(v.instance(Uint8Array), data)), { encoding: 'base64', root }], path);
 
     const ok = result === 'ok'
       || (result !== undefined && isJsonObject(result) && result.success === true);
 
-    if (!ok) throw new Error(`writeFile failed on the device: ${JSON.stringify(result)}`);
+    if (!ok) return yield* Effect.fail(makeVfsError('EIO', `writeFile failed on the device: ${JSON.stringify(result)}`, path));
     const report = v.safeParse(WriteReportSchema, result);
 
     return report.success ? report.output : null;
-  };
+  });
 
   return {
     homeDir: openingDir,
-    async readFile(path, opts) {
-      const bytes = await readChunked(path, await guard(path, 'open'), 0, null);
+    readFile: (path, opts) => settle(Effect.gen(function* () {
+      const bytes = yield* readChunked(path, yield* guarded(path, 'open'), 0, null);
 
       return opts?.encoding === 'utf8' ? new TextDecoder().decode(bytes) : bytes;
-    },
+    })),
 
     async readRange(path, offset, length) {
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
         throw makeVfsError('EIO', 'range offset and length must be positive safe integers', path);
       }
 
-      return readChunked(path, await guard(path, 'open'), offset, length);
+      return settle(Effect.flatMap(guarded(path, 'open'), (root) => readChunked(path, root, offset, length)));
     },
 
-    async writeFile(path, data) {
-      await writeFileWithReport(path, data);
-    },
+    writeFile: (path, data) => settle(Effect.asVoid(writeReported(path, data))),
 
-    writeFileWithReport,
+    writeFileWithReport: (path, data) => settle(writeReported(path, data)),
 
-    async readdir(path) {
-      const root = await guard(path, 'scandir');
+    readdir: (path) => settle(Effect.gen(function* () {
+      const root = yield* guarded(path, 'scandir');
       const entries: JsonValue[] = [];
 
       for (let offset: number | null = 0; offset !== null;) {
-        const page: v.InferOutput<typeof DeviceListPageSchema> = v.parse(DeviceListPageSchema, await transport.rpc(
-          'listFiles', [path, { root, offset, limit: DEVICE_LIST_PAGE_ENTRIES }], target,
+        const page: v.InferOutput<typeof DeviceListPageSchema> = v.parse(DeviceListPageSchema, yield* call(
+          'listFiles', [path, { root, offset, limit: DEVICE_LIST_PAGE_ENTRIES }], path,
         ));
 
         if (Array.isArray(page)) {
@@ -726,29 +756,29 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
 
         return JSON.stringify(entry);
       });
-    },
+    })),
 
-    async stat(path) {
-      const root = await guard(path, 'stat');
+    stat: (path) => settle(Effect.gen(function* () {
+      const root = yield* guarded(path, 'stat');
 
-      return v.parse(DeviceStatSchema, await transport.rpc('statPath', [path, { root }], target));
-    },
+      return v.parse(DeviceStatSchema, yield* call('statPath', [path, { root }], path));
+    })),
 
-    async unlink(path) {
-      const root = await guard(path, 'unlink');
-      await transport.rpc('unlinkPath', [path, { root }], target);
-    },
+    unlink: (path) => settle(Effect.gen(function* () {
+      const root = yield* guarded(path, 'unlink');
+      yield* call('unlinkPath', [path, { root }], path);
+    })),
 
-    async mkdir(path, opts) {
-      const root = await guard(path, 'mkdir');
-      await transport.rpc('mkdirPath', [path, { root, recursive: opts?.recursive ?? false }], target);
-    },
+    mkdir: (path, opts) => settle(Effect.gen(function* () {
+      const root = yield* guarded(path, 'mkdir');
+      yield* call('mkdirPath', [path, { root, recursive: opts?.recursive ?? false }], path);
+    })),
 
-    async exists(path) {
-      const root = await guard(path, 'stat');
+    exists: (path) => settle(Effect.gen(function* () {
+      const root = yield* guarded(path, 'stat');
 
-      return v.parse(v.boolean(), await transport.rpc('exists', [path, { root }], target));
-    },
+      return v.parse(v.boolean(), yield* call('exists', [path, { root }], path));
+    })),
   };
 }
 

@@ -155,6 +155,8 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const stubWebSearch = {
       search: async (query: string) => ({ query, results: [], source: 'duckduckgo' as const }),
       fetch: async (url: string) => ({ url, retrievedAt: new Date().toISOString(), markdown: '' }),
+      render: async (url: string) => ({ url, retrievedAt: new Date().toISOString(), markdown: '' }),
+      screenshot: async (url: string) => ({ url, retrievedAt: new Date().toISOString(), bytes: new Uint8Array() }),
     };
 
     const stubHandoff = {
@@ -169,13 +171,13 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       create: async () => ({
         name: 's',
         displayName: 'S',
-        subordinate: { name: 's', displayName: 'S', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
+        subordinate: { name: 's', displayName: 'S', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       rename: async () => ({
         ok: true as const,
         name: 's',
         displayName: 'S',
-        subordinate: { name: 's', displayName: 'S', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
+        subordinate: { name: 's', displayName: 'S', role: 'researcher', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       recordTitle: async () => ({ ok: true as const, name: 's', displayName: 'S', applied: true }),
       spawn: async () => ({ name: 's', displayName: 'S' }),

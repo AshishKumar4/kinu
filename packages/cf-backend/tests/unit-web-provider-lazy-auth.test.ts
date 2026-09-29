@@ -39,11 +39,13 @@ function stubGlobalFetch(): FetchRecorder {
   return { authHeaders };
 }
 
+const unusedBrowser = { quickAction: async () => new Response('this suite renders no page', { status: 500 }) };
+
 describe('buildCfWebSearchProvider — lazy per-call getAuth', () => {
   test('a credential that lands after the first (pre-claim) search is picked up on the cached provider', async () => {
     stubGlobalFetch();
     let resolver: AuthResolver | undefined;
-    const provider = buildCfWebSearchProvider({}, () => resolver, unobservedSpend);
+    const provider = buildCfWebSearchProvider({ BROWSER: unusedBrowser }, () => resolver, unobservedSpend);
 
     const before = await provider.search('topic');
     expect(before.source).toBe('duckduckgo');
@@ -62,7 +64,7 @@ describe('buildCfWebSearchProvider — lazy per-call getAuth', () => {
     const resolver: AuthResolver = async (key) =>
       (key === 'tavily' ? { headers: { authorization: 'Bearer tvly-live' } } : null);
 
-    const provider = buildCfWebSearchProvider({}, () => resolver, unobservedSpend);
+    const provider = buildCfWebSearchProvider({ BROWSER: unusedBrowser }, () => resolver, unobservedSpend);
 
     await provider.search('one');
     await provider.search('two');

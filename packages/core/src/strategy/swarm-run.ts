@@ -89,7 +89,6 @@ export interface SwarmRunDeps {
   readonly originContext?: readonly ModelMessage[];
   /** Per-node home provisioner (*Isolation*). Absent: every node reports `shared-origin-plane`. */
   readonly provisionHome?: NodeWorkspaceProvisioner;
-  /** See {@link NodeAgentDeps.runtimeForWorkspace}. */
   readonly runtimeForWorkspace?: (workspace: NodeWorkspace, identity: NodeIdentity) => Promise<AgentRuntime>;
   readonly nodeCodemode?: NodeCodemode;
   readonly webSearch?: WebSearchProvider;
@@ -312,7 +311,7 @@ export async function runSwarm(
   let aborted = false;
   /**
    * Mission ledger for thought nodes (agent nodes guard and debit inside `runHeadInference`).
-   * The level is guarded, never the child, as in `mcts/engine.ts`.
+   * The level is guarded, never the child.
    */
   const mission = missionMeter(deps.mission);
   /** True when the ledger, not the expansion budget, ended the run, so `stop` says `budget`. */

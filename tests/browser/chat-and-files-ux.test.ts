@@ -1705,11 +1705,11 @@ describe('a hosted actor’s cards stay out of the workspace’s own chat', () =
 
 /**
  * KINU-071. The fixture mounts the exact ConversationStartBoundary used by both
- * WorkspacePage columns over the real paged-scroll hook. Its first page is held
+ * WorkspacePage columns over the real chat thread hook. Its first page is held
  * by a fixture promise, then rejects once; Retry returns status:end. This is a
  * browser test because the defect was which mutually-exclusive surface painted
  * during that interleaving. Blind spot: the agent socket is not involved; its
- * delivered-empty distinction is the startFrom("newest") input stated here.
+ * delivered-empty distinction is the `seeded` input stated here.
  */
 describe('an empty transcript waits for the history store to speak', () => {
   test('held → skeleton; failed → Retry; status:end → authoritative empty', async () => {
@@ -1881,6 +1881,8 @@ describe('the walk-back at the actual WorkspacePage boundary', () => {
  * iOS Safari zooms the page when a text field under 16px takes focus, and leaves it zoomed. On a touch phone every
  * text field, on the pages that carry one, must compute to at least 16px.
  */
+const PHONE = { width: 390, height: 844, isMobile: true, hasTouch: true } as const;
+
 describe('text fields on a touch phone', () => {
   test('every visible text field computes to at least 16px, so iOS does not zoom on focus', async () => {
     await withGallery(async ({ newPage, origin }) => {
@@ -1888,9 +1890,12 @@ describe('text fields on a touch phone', () => {
 
       for (const frame of ['workspacepage', 'home', 'files', 'usersettingsstate&section=providers']) {
         const page = await newPage();
-        await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+        await page.setViewport(PHONE);
         await page.goto(`${origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
         await page.waitForSelector('input, textarea');
+        // The load swaps the renderer, which once took the touch pointer after the page read it (0965, under load). The
+        // same viewport again sends touch emulation to the renderer now showing the page, and resolves once applied.
+        await page.setViewport({ ...PHONE });
 
         const measured = await page.$$eval(
           'input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="button"], [type="submit"]), textarea, select',
@@ -2000,7 +2005,7 @@ describe('file preview request generation at the actual FilesSurface boundary', 
 
 /**
  * KINU-060, remaining two authorities. The frames mount the shipped
- * usePagedScroll and WorkspaceRosterProvider; controls only hold/release their
+ * useChatThread and WorkspaceRosterProvider; controls only hold/release their
  * network transport. Clear/reset and local rename are public transitions, not
  * fixture copies of the generations they exercise.
  */

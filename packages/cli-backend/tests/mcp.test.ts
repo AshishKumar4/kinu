@@ -57,12 +57,10 @@ function capturingModel(sink: (toolNames: string[]) => void): LanguageModel {
 }
 
 function sessionWithModel(model: LanguageModel) {
-  // The declared path, not `:memory:`: `createCLIRuntime` refuses a mismatched path (`requireLocalDatabasePath`).
   const db = new Database(scratchPath('mcp', 'agent.db'), { create: true });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
   const rt = createCLIRuntime(db, {
-    dbPath: db.filename,
     llm: DUMMY_LLM,
   });
 

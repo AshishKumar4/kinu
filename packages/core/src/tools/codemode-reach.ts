@@ -8,7 +8,6 @@ import { namespacedCalls, parseCodemodeProgram } from '../safety/evolved-code';
 import type { JsonObject } from '../utils/json';
 import { TOOL_REACH, isBuiltinToolName } from './registry';
 
-/** The one tool a codemode program arrives as. */
 const CODEMODE_TOOL = 'eval';
 
 /** Same field `craft-cycle.ts` reads to score a crafted call. */

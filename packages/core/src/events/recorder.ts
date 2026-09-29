@@ -78,9 +78,6 @@ export const RunEventSchema = v.variant('type', [
     usage: v.optional(UsageSchema), usd: v.optional(v.number()),
     modelId: v.optional(v.string()), context: v.optional(ContextCompositionSchema),
     account: v.optional(CallAccountSchema), egress: v.optional(v.string()) }),
-  v.object({ ...BaseFields, type: v.literal('step_partial'), stepIndex: v.number(), text: v.string(),
-    toolCalls: v.array(v.object({ toolCallId: v.string(), toolName: v.string(), args: JsonValueSchema,
-      result: v.optional(v.string()), error: v.optional(v.string()) })) }),
   v.object({ ...BaseFields, type: v.literal('model_call'),
     source: v.picklist(SPEND_SOURCES), usage: v.optional(UsageSchema),
     usd: v.optional(v.number()),
@@ -626,13 +623,12 @@ export class RunEventRecorder {
     });
   }
 
-  /** The newest open turn with its completed steps and newest partial, found through `open_turns`. */
+  /** The newest open turn with its completed steps, found through `open_turns`. */
   openTurn(): {
     readonly runId: string;
     readonly turn: OpenTurnIdentity;
     readonly steps: ModelMessage[];
     readonly finishedSteps: number;
-    readonly partial: Extract<RunEvent, { type: 'step_partial' }> | null;
   } | null {
     this.actor.assertCurrent();
 
@@ -659,15 +655,7 @@ export class RunEventRecorder {
       SELECT COUNT(*) AS n FROM run_events
       WHERE actor_id = ${this.actorId} AND run_id = ${row.run_id} AND type = ${'step_finish' satisfies RunEventType}`[0]?.n ?? 0;
 
-    const partials = this.sql<{ payload: string }>`
-      SELECT payload FROM run_events
-      WHERE actor_id = ${this.actorId} AND run_id = ${row.run_id} AND type = ${'step_partial' satisfies RunEventType}
-      ORDER BY event_index DESC LIMIT 1`;
-
-    const newest = partials[0] === undefined ? null : parseStoredRunEvent(partials[0].payload);
-    const partial = newest !== null && newest.type === 'step_partial' && newest.stepIndex > finishedSteps ? newest : null;
-
-    return { runId: row.run_id, turn: start.turn, steps, finishedSteps, partial };
+    return { runId: row.run_id, turn: start.turn, steps, finishedSteps };
   }
 
   /** Filtered in SQL so `limit` is a real bound. Ties on `ts` break by rowid: `event_index`

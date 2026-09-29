@@ -117,6 +117,7 @@ test('the graph renders every binding with members, effects and risk text', () =
     members: [
       { member: 'search', effect: 'read', risk: NO_RISK },
       { member: 'fetch', effect: 'read', risk: NO_RISK },
+      { member: 'screenshot', effect: 'read', risk: NO_RISK },
     ],
   });
   expect(graph.bindings[5]).toEqual({
@@ -167,6 +168,7 @@ test('a cut grant is every read member plus exactly the approved mutations', () 
     { slate: 'issues', binding: 'TODO', member: 'list', effect: 'read' },
     { slate: 'issues', binding: 'NET', member: 'search', effect: 'read' },
     { slate: 'issues', binding: 'NET', member: 'fetch', effect: 'read' },
+    { slate: 'issues', binding: 'NET', member: 'screenshot', effect: 'read' },
     { slate: 'issues', binding: 'MODELS', member: 'getExecutors', effect: 'read' },
     { slate: 'digest', binding: 'DIGEST_FILES', member: 'readFile', effect: 'read' },
   ]);

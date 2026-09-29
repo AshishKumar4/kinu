@@ -9,13 +9,13 @@ import {
   type SqlExec, type SqlValue, type WriteObserver,
   DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ROOT,
 } from '@kinu.run/core';
-import { bindLocalActor, localActorDirectory, registerLocalActor, registerLocalNode, retireLocalActor } from '../src/actor-identity';
+import { bindLocalActor, localActorDirectory, registerLocalActor, registerLocalNode, retireLocalActor } from '@kinu.run/core';
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
 import type { HeadSeat } from '@kinu.run/core';
 
 /** A head's runtime over its parent's database; a head has no store of its own. */
 export async function createHeadRuntime(parent: CLIRuntime, id: string, observer?: WriteObserver) {
-  const binding = registerLocalActor(parent.actor, { name: explorationActorKey(id), creationId: id, kind: 'run', lifetime: 'task' });
+  const binding = registerLocalActor(parent.actor, { name: explorationActorKey(id), creationId: id, origin: 'swarm', lifetime: 'task' });
   // The per-kind runtime's release fence binds to the handle its binder issued, so bind once and pass it through.
   const handle = bindLocalActor(parent.storage.sql, binding);
 
@@ -50,7 +50,7 @@ export function localTestActorHost(
     directory,
     installedBuild: null,
     runtimeFor: (bound) => buildLocalActorRuntime(parent, bound, writes?.get(bound.reference.actorId)),
-    loopFor: (bound) => ({ origin: defaultLoopOrigin(bound.record.kind), parent }),
+    loopFor: (bound) => ({ origin: defaultLoopOrigin(bound.record.origin), parent }),
     orchestrationFor: (bound) => ({
       host: {
         broadcast: (event) => { broadcasts.push(event); },
@@ -77,7 +77,7 @@ export function headSeatFactory(
 ): (input: HeadInput, observer: WriteObserver) => Promise<HeadSeat> {
   return async (input, observer) => {
     const binding = registerLocalActor(parent.actor, {
-      name: explorationActorKey(input.id), creationId: input.id, kind: 'run', lifetime: 'task',
+      name: explorationActorKey(input.id), creationId: input.id, origin: 'swarm', lifetime: 'task',
     });
 
     const agentName = headAgentName(binding.storageKey);

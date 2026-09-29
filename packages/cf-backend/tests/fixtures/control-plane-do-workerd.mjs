@@ -13,7 +13,7 @@
  *      about workerd's `DurableObjectStub`. Against a fake, `stub.overview()` is a
  *      direct call and the distinction does not exist to get wrong.
  *   2. ROWS OUTLIVE THE OBJECT. `ctx.storage.sql` against a fake is a map in the
- *      test process. Against a Durable Object listed in `new_sqlite_classes` it is
+ *      test process. Against a Durable Object `exports` declares SQLite-backed it is
  *      a file that outlives the isolate — and that manifest line is the only thing
  *      making it one, which is why this fixture reads the line rather than
  *      restating it.
@@ -60,11 +60,7 @@ const WranglerSchema = v.object({
   durable_objects: v.object({
     bindings: v.array(v.object({ class_name: v.string(), name: v.string() })),
   }),
-  migrations: v.array(v.object({
-    tag: v.string(),
-    new_sqlite_classes: v.optional(v.array(v.string())),
-    new_classes: v.optional(v.array(v.string())),
-  })),
+  exports: v.record(v.string(), v.object({ type: v.string(), storage: v.optional(v.string()) })),
 });
 
 const wrangler = parseJsonc(
@@ -77,21 +73,12 @@ const binding = wrangler.durable_objects.bindings.find((entry) => entry.class_na
 
 assert.ok(binding, `wrangler.jsonc binds no Durable Object of class ${CLASS_NAME}`);
 
-const sqliteMigration = wrangler.migrations
-  .find((entry) => (entry.new_sqlite_classes ?? []).includes(CLASS_NAME));
-
-assert.ok(
-  sqliteMigration,
-  `${CLASS_NAME} is in no migration's new_sqlite_classes, so it is not SQLite-backed and `
-  + '`ctx.storage.sql` would not exist on it',
-);
-
-// The two arms are mutually exclusive in wrangler, and a class in `new_classes`
-// gets key-value storage instead. Stated because the whole persistence half of
-// this fixture rests on which list the class is in.
-assert.ok(
-  !wrangler.migrations.some((entry) => (entry.new_classes ?? []).includes(CLASS_NAME)),
-  `${CLASS_NAME} appears in new_classes as well as new_sqlite_classes`,
+// The whole persistence half of this fixture rests on the class being SQLite-backed: a `legacy-kv` class has
+// no `ctx.storage.sql`.
+assert.equal(
+  wrangler.exports[CLASS_NAME]?.storage,
+  'sqlite',
+  `wrangler.jsonc's exports declare ${CLASS_NAME} ${JSON.stringify(wrangler.exports[CLASS_NAME])}, not a SQLite class`,
 );
 
 /* ── 2. The bundle, and the layering it must not carry ───────────────────── */
@@ -181,7 +168,6 @@ const runtime = () => new Miniflare({
   workers: [{
     config: {
       name: 'control-plane',
-      type: 'worker',
       compatibilityDate: wrangler.compatibility_date,
       compatibilityFlags: wrangler.compatibility_flags,
       manifest: {
@@ -189,8 +175,7 @@ const runtime = () => new Miniflare({
         modulesRoot: '/',
         modules: { 'index.mjs': { type: 'esm', contents: workerScript } },
       },
-      // `storage: 'sqlite'` IS `new_sqlite_classes` — the assertion above is what
-      // ties this line to the manifest rather than to a preference.
+      // The manifest's own `exports` entry, which the assertion above read.
       exports: { [CLASS_NAME]: { type: 'durable-object', storage: 'sqlite' } },
       env: {
         [binding.name]: {
@@ -313,9 +298,9 @@ try {
     // The gate's own wording, so a rejection from anywhere else in the stack —
     // a missing method, a serialization failure, a thrown schema issue — cannot
     // be mistaken for a refusal.
-    assert.match(
-      outcome.message, /ControlDeniedError/,
-      `${entry.label}: rejected, but not by the capability gate: ${outcome.message}`,
+    assert.equal(
+      outcome.name, 'ControlDeniedError',
+      `${entry.label}: rejected, but not by the capability gate: ${outcome.name}: ${outcome.message}`,
     );
     assert.match(
       outcome.message, /requires the control plane's admin capability/,
@@ -330,15 +315,14 @@ try {
     });
   }
 
-  // What the platform did to the error class, measured rather than assumed. The
-  // gate's own header says the error "crosses the Worker→DO RPC boundary as its
-  // message", and this is where that claim is checked: the subclass does not
-  // survive, and the name survives only because workerd prefixes it into the
-  // message. Recorded in the result so the test can pin it.
+  // What the platform did to the error class, measured rather than assumed:
+  // `enhanced_error_serialization` (default from 2026-04-21) carries the error's
+  // own `name` across RPC, and the subclass still does not survive. Recorded in
+  // the result so the test can pin it.
   const sample = denials[3];
   findings.platform.rejectionName = sample.name;
   findings.platform.rejectionConstructor = sample.constructorName;
-  findings.platform.classSurvivesRpc = sample.name === 'ControlDeniedError';
+  findings.platform.classSurvivesRpc = sample.constructorName === 'ControlDeniedError';
   findings.platform.nameCarriedInMessage = sample.message.startsWith('ControlDeniedError:');
 
   /* ── 5. The writes ────────────────────────────────────────────────────── */
@@ -591,8 +575,6 @@ findings.platform.compatibilityDate = wrangler.compatibility_date;
 findings.platform.compatibilityFlags = wrangler.compatibility_flags;
 
 findings.platform.storage = 'sqlite';
-
-findings.platform.migrationTag = sqliteMigration.tag;
 
 findings.platform.bindingName = binding.name;
 

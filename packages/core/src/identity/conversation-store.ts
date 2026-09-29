@@ -14,25 +14,6 @@ export function forkPointExists(sql: SqlExecutor, actor: ActorHandle, messageId:
   return sql<{ id: string }>`SELECT id FROM conversation_entries WHERE actor_id=${actor.actorId} AND session_id=${CHAT_SESSION_ID} AND id=${messageId} LIMIT 1`.length > 0;
 }
 
-/** Head's ancestry only: rewound branches are not counted. */
-export function conversationCount(sql: SqlExecutor, actor: ActorHandle): number {
-  actor.assertCurrent();
-
-  return sql<{ c: number }>`WITH RECURSIVE head(id) AS (
-      SELECT CASE WHEN EXISTS(SELECT 1 FROM conversation_heads WHERE actor_id=${actor.actorId} AND session_id=${CHAT_SESSION_ID})
-        THEN (SELECT entry_id FROM conversation_heads WHERE actor_id=${actor.actorId} AND session_id=${CHAT_SESSION_ID})
-        ELSE (SELECT e.id FROM conversation_entries e WHERE e.actor_id=${actor.actorId} AND e.session_id=${CHAT_SESSION_ID}
-          AND NOT EXISTS(SELECT 1 FROM conversation_entries c WHERE c.actor_id=e.actor_id AND c.session_id=e.session_id AND c.parent_id=e.id)
-          ORDER BY e.rowid DESC LIMIT 1) END),
-    chain(id, parent_id) AS (
-      SELECT e.id, e.parent_id FROM conversation_entries e JOIN head ON e.id = head.id
-        WHERE e.actor_id=${actor.actorId} AND e.session_id=${CHAT_SESSION_ID}
-      UNION ALL
-      SELECT e.id, e.parent_id FROM chain CROSS JOIN conversation_entries e
-        ON e.actor_id=${actor.actorId} AND e.session_id=${CHAT_SESSION_ID} AND e.id = chain.parent_id)
-    SELECT COUNT(*) AS c FROM chain`[0]?.c ?? 0;
-}
-
 /** The user→assistant pair behind a completed turn. */
 export interface ConversationTurnPair {
   sessionId: string;
@@ -48,7 +29,7 @@ export interface ConversationTurnPair {
 const DrainTurnMetadataSchema = v.object({ drainTurnId: v.optional(v.string()) });
 
 /**
- * The durable answer to each drain turn: the assistant child of the user entry carrying `drainTurnId`.
+ * The durable answer to each drain turn: the newest nonempty assistant entry of the turn whose user entry carries `drainTurnId`.
  * Empty answers are omitted: replying with nothing would close a delivery the sender still awaits.
  */
 export async function answersForDrainTurns(
@@ -58,7 +39,9 @@ export async function answersForDrainTurns(
   const answers = new Map<string, string>();
   const wanted = new Set(drainTurnIds);
 
-  for (const ask of [...transcript.ancestry()].reverse()) {
+  const entries = transcript.entries();
+
+  for (const ask of [...entries].reverse()) {
     if (answers.size === wanted.size) break;
 
     if (ask.role !== 'user') continue;
@@ -67,11 +50,9 @@ export async function answersForDrainTurns(
 
     if (drainTurnId === undefined || !wanted.has(drainTurnId) || answers.has(drainTurnId)) continue;
 
-    for (const replyId of [...transcript.children(ask.id)].reverse()) {
-      const reply = transcript.read(replyId);
-
-      if (reply?.role !== 'assistant') continue;
-      const answer = await transcript.project(replyId);
+    for (const reply of entries.slice(ask.position + 1).reverse()) {
+      if (reply.role !== 'assistant' || reply.turnId !== ask.turnId) continue;
+      const answer = await transcript.project(reply.id);
 
       if (answer !== null && answer.content.trim().length > 0) { answers.set(drainTurnId, answer.content); break; }
     }
@@ -89,7 +70,7 @@ export async function conversationTurnPair(
 
   if (entry === null || entry.role !== 'assistant') return undefined;
 
-  const parent = entry.parentId === null ? null : transcript.read(entry.parentId);
+  const parent = transcript.at(entry.position - 1);
   const response = await transcript.project(entry.id);
   const request = parent === null ? null : await transcript.project(parent.id);
 

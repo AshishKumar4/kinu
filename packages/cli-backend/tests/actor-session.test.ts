@@ -40,7 +40,7 @@ function sessions() {
   initEventsHubTables(eventSql);
 
   const create = (name: string) => {
-    const handle = directory.create({ parent, name, kind: 'subordinate', lifetime: 'durable', creationId: 'admitted-' + name });
+    const handle = directory.create({ parent, name, origin: 'agent', lifetime: 'durable', creationId: 'admitted-' + name });
     const runtime: AgentRuntime = { ...rt, actor: handle, identity: { ...rt.identity, id: handle.actorId, name: handle.name } };
     const broadcasts: BroadcastEvent[] = [];
     const enqueued: ProgrammaticTurn[] = [];

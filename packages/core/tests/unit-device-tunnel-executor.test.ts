@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import type { DeviceStatus } from '../src/execution/device-status';
 import type { JsonValue } from '../src/utils/json';
+import type { ApprovalGrant } from '../src/safety/approval-gate';
 
 function staticTransport(status: DeviceStatus, rpc: DeviceTransport['rpc']): DeviceTransport {
   return { status: () => status, refreshStatus: async () => status, rpc };
@@ -214,7 +215,11 @@ describe('createDeviceTunnelExecutor', () => {
       throw new Error(`unexpected method ${method}`);
     });
 
-    const provider = createDeviceTunnelExecutor(t);
+    // The owner lets the agent replace files there; the write still asks the daemon whether it replaces one.
+    const provider = createDeviceTunnelExecutor(t, undefined, {
+      mode: () => 'strict', granted: (grant: ApprovalGrant) => grant.rule === 'overwrite-user-files',
+    });
+
     const path = '/tmp/a; echo PWNED';
 
     await provider.tools.readFile.execute(path);
@@ -224,6 +229,7 @@ describe('createDeviceTunnelExecutor', () => {
 
     expect(t.calls).toEqual([
       { method: 'readRange', params: [path, 0, 8 * 1024 * 1024, { root: null }] },
+      { method: 'exists', params: [path, { root: null }] },
       { method: 'writeFile', params: [path, 'hello', { root: null }] },
       { method: 'listFiles', params: [path, { root: null, offset: 0, limit: 10_000 }] },
       { method: 'exists', params: [path, { root: null }] },
@@ -231,8 +237,9 @@ describe('createDeviceTunnelExecutor', () => {
   });
 
   test('writeFile answers from the bytes it sent, whatever the daemon replies', async () => {
-    const bareOk = transport(() => 'ok');
-    const structured = transport(() => ({ success: true }));
+    // New files: nothing is replaced, so nothing is asked.
+    const bareOk = transport((method) => (method === 'exists' ? false : 'ok'));
+    const structured = transport((method) => (method === 'exists' ? false : { success: true }));
 
     const a = await createDeviceTunnelExecutor(bareOk).tools.writeFile.execute('/tmp/a', 'x');
     const b = await createDeviceTunnelExecutor(structured).tools.writeFile.execute('/tmp/b', 'yy');

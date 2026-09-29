@@ -88,7 +88,7 @@ interface OpenedSession { readonly db: Database; readonly rt: CLIRuntime }
 function openSession(name: string): OpenedSession {
   const db = new Database(scratchPath('turn-answer-row', `${name}.db`));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
 
   return { db, rt };
 }

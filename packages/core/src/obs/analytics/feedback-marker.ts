@@ -81,7 +81,7 @@ export function writeFeedbackMarker(env: AnalyticsEnv, marker: FeedbackMarker): 
 const ROUTE_FAMILIES = {
   '': 'home',
   workspace: 'workspace',
-  mcts: 'explore',
+  swarm: 'explore',
   // Workspace (`/settings/:agentId`) and account (`/user/settings`) settings share one bucket.
   settings: 'settings',
   user: 'settings',

@@ -910,7 +910,7 @@ export const PLATFORM_CATALOG = {
       + 'at roughly 2,200,000 bytes against workerd util/sqlite.c++:1362-1380. So the one lost '
       + 'claim that mattered is the one claim that is now over-evidenced, and nothing in Kinu '
       + 'needs the dossier. '
-      + 'The whole chat transcript, plan documents and MCTS search nodes persist as rows here. '
+      + 'The whole chat transcript, plan documents and swarm search nodes persist as rows here. '
       + 'The agents SDK truncates a chat message to its own ROW_MAX_BYTES guard beneath this, '
       + 'but can only shrink TEXT parts: file parts ride through verbatim as base64, at 4/3 '
       + 'of raw, which is what CLOUD_MAX_INLINE_ATTACHMENT_BYTES is derived from.',
@@ -1690,59 +1690,36 @@ export const PLATFORM_CATALOG = {
 
 
   'tracing.scoped_spans_only': {
-    subject:
-      'The native Workers tracer at our pin offers only SCOPED spans: tracing.enterSpan exists, '
-      + 'startActiveSpan does not, and a Span has no end()',
+    subject: 'Native spans are bound to their invocation, including manually ended spans',
     limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
-    provenance:
-      'local://observability-contract.md: ObservabilityLibraries two-DO probe, '
-      + 'wrangler 4.97.0 / workerd 1.20260601.1, compat 2025-12-01 + nodejs_compat',
-    date: '2026-08-17',
-    trigger: 'calling tracing.startActiveSpan, span.end(), span.setAttributes(), or reading ctx.tracing',
-    onBreach:
-      'a TypeError, because the member does not exist. Span.prototype is exactly '
-      + '["isTraced","setAttribute"], and ctx.tracing is undefined, only the module import works',
-    observable: [{ context: 'the call', message: 'TypeError: tracing.startActiveSpan is not a function' }],
-    firstPartySignal: true,
-    notes:
-      'startActiveSpan shipped 2026-07-28 and the workerd bundled with our wrangler predates it. '
-      + 'The consequence is architectural, not cosmetic: a span whose lifetime is a stream, a '
-      + 'hibernation cycle or an alarm CANNOT be held open, so any such trace has to be a '
-      + 'persisted link plus a fresh scoped span on resume: the same mechanism '
-      + 'websocket.hibernation_state already forces. `enterSpan` does survive a DO-to-DO RPC hop; '
-      + 'that half was confirmed in the same run.',
+    provenance: 'docs/OBSERVABILITY.md:245-248: PlatformRefresh RESULTS-2026-09-28.txt; workerd 1.20260926.1, compat 2026-09-28',
+    date: '2026-09-28',
+    trigger: 'opening a span in one invocation and ending it in a later invocation',
+    onBreach: 'the recorded span ends with its owning invocation, not when a later invocation calls end()',
+    observable: [],
+    firstPartySignal: false,
+    notes: 'enterSpan, startActiveSpan, startSpan, getActiveSpan, recordException and setAttributes exist. '
+      + 'A span ended two invocations later, about 2 seconds wall time, recorded 2-3 ms locally. '
+      + 'Long turns still need persisted correlation and fresh spans across invocation boundaries.',
   },
 
   'tracing.inert_locally': {
-    subject: 'Custom spans are inert under `wrangler dev --local`: isTraced is false for every span',
+    subject: 'Local tracing records span structure and outcomes, but not span attributes',
     limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
-    provenance:
-      'local://observability-contract.md: ObservabilityLibraries probe under '
-      + '`wrangler dev --local` (miniflare, no trace collector)',
-    date: '2026-08-17',
-    trigger:
-      'creating a custom span locally with observability.traces.enabled and NO tail_consumer '
-      + 'attached',
-    onBreach:
-      'nothing is recorded and nothing says so: the span is created, isTraced reads false, and '
-      + 'no tree is assembled',
+    provenance: 'docs/OBSERVABILITY.md:245-248: PlatformRefresh RESULTS-2026-09-28.txt; local collector on workerd 1.20260926.1',
+    date: '2026-09-28',
+    trigger: 'reading custom spans from the local collector',
+    onBreach: 'attributes are null; a local trace cannot prove production attribute propagation',
     observable: [],
     firstPartySignal: false,
-    notes:
-      'BOUNDS WHAT ANYONE CAN VERIFY ON A LAPTOP, but less than first thought: attaching a '
-      + 'tail_consumer flips every isTraced to TRUE locally, so a local run CAN prove a span is '
-      + 'being recorded. What it cannot prove is the tree\'s SHAPE: `tailStream`, which carries '
-      + 'spanOpen/spanClose, is typed but not dispatched by workerd 1.20260601.1 ("Handler does '
-      + 'not export a tail() function."), and the legacy tail TraceItem has no spans field. So '
-      + 'nesting and propagation are deployed-only evidence. One hazard learned by hanging a dev '
-      + 'server: a worker that is its OWN tail_consumer and makes an RPC inside the tail handler '
-      + 'is an infinite loop, because the RPC emits a trace event that re-invokes the handler.',
+    notes: 'Native span APIs are available locally. recordException({name,code}) recorded an error outcome '
+      + 'without a message. Attribute-level evidence still requires a deployed trace.',
   },
 
   'worker.v8_pointer_compression': {
@@ -1809,43 +1786,40 @@ export const PLATFORM_CATALOG = {
   },
 
   'do.facet.work_is_traced': {
-    subject: 'Work inside a facet IS traced: a span opened in a facet reports isTraced true',
+    subject: 'Class facets have RPC span edges; loader facets expose root-side calls and native tail logs, not work spans',
     limit: null,
     origin: 'platform',
     bounds: null,
     evidence: 'proven-by-probe',
-    provenance: 'local://observability-contract.md: ctx.facets.get spawn probe, isTraced true in the facet',
-    date: '2026-08-17',
-    trigger: 'opening a span inside a facet spawned via ctx.facets.get(name, () => ({ class }))',
-    onBreach: 'nothing: this is the capability, recorded because its absence was assumed',
+    provenance: 'docs/OBSERVABILITY.md:250-256: PlatformRefresh local class-facet result; Facets kinu-trace-probe-0928 and kinu-tail-probe-0928 deployed loader-facet report',
+    date: '2026-09-28',
+    trigger: 'tracing RPCs to a class facet versus a WorkerLoader facet',
+    onBreach: 'loader-facet work has no invocation span; root-side RPC spans alone do not show its execution',
     observable: [],
     firstPartySignal: false,
-    notes:
-      'Probed with the exact spawn shape Kinu uses, so heads, subordinates and MCTS branches '
-      + 'are NOT invisible to the native tracer, which makes the owner\'s repeated '
-      + '"I cannot see what the forks are doing" a wiring problem rather than a platform one. '
-      + 'One direction is still open and it is the direction that matters: whether ROOT to FACET '
-      + 'emits a subrequest edge. Facet-to-root goes through getServerByName and is a genuine '
-      + 'subrequest; root-to-facet is an in-container stub call that may not be, in which case '
-      + 'the tree carries every head-to-orchestrator edge and no orchestrator-to-head edge, and '
-      + 'fan-out is invisible in exactly the direction being investigated. Deployed probe, both '
-      + 'directions, before anything is built on the tree\'s shape.',
+    notes: 'Class-facet probes show facet_subrequest to jsrpc, and durable_object_subrequest to jsrpc on return. '
+      + 'Deployed loader facets showed root jsRpcSession to jsRpcCall in 10/10 traces with a missing session parent, '
+      + 'no facet-work spans and direct logs received in 0/12 observations. WorkerCode tails delivered logs in 9/9 calls '
+      + 'under the loader script after about 2 minutes. RPC throws appeared canceled with no tail exceptions. '
+      + 'Use native tails for loader-facet diagnostics; do not infer loader tracing from class-facet results. '
+      + 'The loader probes were deleted and retained no log files; these counts are the investigating lane report.',
   },
 
   'worker.script_bytes': {
-    subject: 'Deployed Worker size after gzip compression',
-    limit: { value: 10 * MB, unit: 'bytes' },
+    subject: 'Deployed Worker size, uncompressed',
+    limit: { value: 64 * MiB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'bundle',
     evidence: 'documented',
     provenance: `${CF_WORKER_LIMITS}#worker-size`,
-    date: DOCS_READ,
-    trigger: 'a bundle over 10 MB gzipped on Workers Paid (3 MB Free), or 64 MB uncompressed',
+    date: '2026-09-28',
+    trigger: 'a bundle over 64 MiB uncompressed (`Total Upload` in `wrangler deploy --dry-run`) on Free or Paid',
     onBreach: 'the deploy is rejected',
     observable: [],
     firstPartySignal: true,
     notes:
-      'Comfortable today and worth watching, because bundle size also charges against '
+      'There is no compressed limit; the dry-run prints gzip for reference only. Reading on '
+      + '2026-09-28: 21,347 KiB raw, 5,745 KiB gzip. Bundle size also charges against '
       + 'worker.startup_ms, which is the tighter of the two.',
   },
 
@@ -1989,8 +1963,26 @@ export const PLATFORM_CATALOG = {
     notes:
       "The VENDOR SDK's shipped default, not a Cloudflare runtime bound and not ours: filed "
       + 'under platform because Kinu cannot widen it per call. It is why "no deadline" work '
-      + 'rides the process lane (startProcess + waitForExit installs no timer) instead of a '
-      + 'bigger exec timeout: execution/sandbox.ts routes on exactly this entry.',
+      + 'rides the runtime\'s own ctx.container.exec, which has no timeout (Cloudflare Containers '
+      + '"Execute commands", read 2026-09-28), instead of a bigger exec timeout: '
+      + 'execution/sandbox.ts routes on exactly this entry.',
+  },
+
+  'browser.session.keep_alive_ms': {
+    subject: 'Longest a Browser Run Chrome session may sit idle, with no connection, before it closes',
+    limit: { value: 1_200_000, unit: 'ms' },
+    origin: 'platform',
+    bounds: 'duration',
+    evidence: 'proven-by-probe',
+    provenance: '/mnt/scratch/kinu/kinu-logs/browser/PROBES-2026-09-28.md#keepalive',
+    date: '2026-09-28',
+    trigger: 'acquire({ keepAlive }) above 1,200,000; or a session idle longer than the keepAlive it was acquired with',
+    onBreach: 'acquire is refused with 400; an idle session closes and getSession answers null',
+    observable: [{ context: 'env.BROWSER.acquire', message: 'BrowserBindingError: Too big: expected number to be <=1200000 (status=400, code=2000)' }],
+    firstPartySignal: true,
+    notes:
+      'Kitesurf takes no keep_alive at all ("Options not supported with browser=kitesurf: keep_alive"): its session '
+      + 'is created on connect and ends with the connection, so web/browser-sessions.ts records Chrome sessions only.',
   },
 } as const satisfies Readonly<Record<string, PlatformFact>>;
 

@@ -395,8 +395,7 @@ const report = settleReport({
   }),
 });
 
-// Progress lives in the tree this run wrote; resume readers derive from it. Do not also
-// write the row's MCTS checkpoint columns.
+// Progress lives in the tree this run wrote; resume readers derive from it.
 if (aborted) searchLedger.fail(rootId, ledgerEpoch, Date.now());
 else searchLedger.converge(rootId, ledgerEpoch, Date.now());
 

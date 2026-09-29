@@ -46,7 +46,7 @@ behaviour.
 
 The five `patchedDependencies` entries in the root `package.json` are
 `@plannotator%2Fui@0.30.0.patch`, `@cloudflare%2Fsandbox@0.12.8.patch`,
-`@cloudflare%2Fcontainers@0.3.7.patch`, `agents@0.22.0.patch` and
+`@cloudflare%2Fcontainers@0.3.7.patch`, `agents@0.24.0.patch` and
 `@cloudflare%2Fcodemode@0.5.1.patch`. The sandbox patch makes the SDK's
 handler-map assignments merge, so configuring a bucket mount cannot unbind an
 outbound handler the host installed (`KinuSandbox.outboundHandlers`,

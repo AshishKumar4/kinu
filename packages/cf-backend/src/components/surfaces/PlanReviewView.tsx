@@ -11,8 +11,8 @@ import {
   type ReviewAnnotation,
   type PlanReviewResult,
 } from "@kinu.run/core";
-import { Viewer } from "@plannotator/ui/components/Viewer";
-import { AnnotationPanel } from "@plannotator/ui/components/AnnotationPanel";
+import { Viewer } from "@/components/plan-review/Viewer";
+import { AnnotationPanel } from "@/components/plan-review/AnnotationPanel";
 import type { Annotation, Block, EditorMode } from "@plannotator/ui/types";
 import {
   exportAnnotations, extractFrontmatter, parseMarkdownToBlocks,

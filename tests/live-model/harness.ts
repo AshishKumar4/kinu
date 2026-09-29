@@ -23,7 +23,7 @@ import {
 } from '../../packages/core/src/index';
 import { renderThrownChain } from '../../packages/core/src/obs/index';
 import {
-  createDefaultWebSearchProvider, createWebCodemodeProvider,
+  createDefaultWebSearchProvider, restBrowserRunAccess, createWebCodemodeProvider,
 } from '../../packages/core/src/web/index';
 import type { CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { createNodeCodemodeToolFactory } from '../../packages/cli-backend/src/codemode-tool-factory';
@@ -115,7 +115,14 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
   const facts = createFactsStore(sql, rt.actor);
   const taskList = new TaskListStore(sql, rt.actor, <T>(write: () => T) => rt.storage.transactionSync(write));
   const config = rt.actor.config;
-  const webSearch = createDefaultWebSearchProvider({ fetch: globalThis.fetch.bind(globalThis) });
+
+  const webSearch = createDefaultWebSearchProvider({
+    fetch: globalThis.fetch.bind(globalThis), browser: restBrowserRunAccess({ env: process.env, fetch: globalThis.fetch.bind(globalThis) }),
+  });
+
+  // As the CLI session builds `web.*`: no browser session in this process.
+  const missing = 'Browser sessions run on the hosted backend; the CLI has rendered fetches and screenshots only';
+  const web = () => createWebCodemodeProvider({ provider: webSearch, vfs: rt.storage.vfs, sessions: { missing }, prelude: { missing } });
 
   // This builds a TOOL SURFACE — the tools, the action enum and the system
   // prompt — for arms that assert their shape. It holds no session, and local
@@ -130,7 +137,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
     model,
     reportModelCall: liveModelCallSink(sql, rt.actor),
     // A node's eval and web as the CLI session builds them.
-    nodeCodemode: (actor) => hostedCodemodeTool(actor, [createWebCodemodeProvider(webSearch)]),
+    nodeCodemode: (actor) => hostedCodemodeTool(actor, [web()]),
     webSearch,
     hostNode: () => Promise.reject(new Error(
       'this eval surface builds tools without a session, so it cannot seat a swarm node; '
@@ -147,7 +154,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
     codemode: createNodeCodemodeToolFactory({
       extraProviders: [
         createAgentsCodemodeProvider(() => agents),
-        createWebCodemodeProvider(webSearch),
+        web(),
         createMemoryCodemodeProvider(() => ({ memory: rt.memory, facts, sql, actor: rt.actor, transcriptFor: (sessionId) => rt.stores.history.transcript(sessionId) })),
         createTasksCodemodeProvider(taskList, config),
       ],
@@ -530,7 +537,7 @@ export function requireSandboxedExecutors(taskId: string, rt: AgentRuntime): voi
  * Pin the model this suite ANNOUNCED as the profile its routed lanes resolve.
  *
  * WHAT A ROUTED LANE NEEDS. Every model lane on a local runtime reads a turn
- * profile: `rt.judgeModel` / `rt.fastLlm` / `rt.advisorLlm` come from
+ * profile: `rt.judgeModel` / `rt.fastLlm` come from
  * `resolveRoutedLane` (core/src/runtime-builder.ts:115-121) and `rt.llm.complete`
  * routes `reflection` through `ensureProfile()` (cli-backend/src/runtime.ts:
  * 395-420). A runtime with no profile and no resolver leaves all three lanes

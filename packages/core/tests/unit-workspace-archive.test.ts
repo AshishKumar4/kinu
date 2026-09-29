@@ -69,7 +69,7 @@ function historyOver(ws: Workspace, actor: ActorHandle): SessionHistory {
 async function transcriptText(transcript: SessionTranscriptReader): Promise<string[]> {
   const text: string[] = [];
 
-  for (const entry of transcript.ancestry()) {
+  for (const entry of transcript.entries()) {
     const projected = await transcript.project(entry.id);
 
     if (projected === null) throw new Error(`conversation entry ${entry.id} disappeared while reading it back`);
@@ -89,7 +89,7 @@ async function seeded() {
 
   for (let i = 0; i < 5; i++) {
     await history.record(CHAT_SESSION_ID, {
-      id: `m${i}`, parentId: i === 0 ? null : `m${i - 1}`, origin: 'input',
+      id: `m${i}`, origin: 'input',
       message: { role: 'user', content: `hello sqlite ${i}` },
     });
   }
@@ -176,7 +176,7 @@ describe('workspace archive', () => {
 
     // A local archive carries no disposable trigger/state pair, so the next durable mutation stays valid.
     await history.record(CHAT_SESSION_ID, {
-      id: 'm5', parentId: 'm4', origin: 'input', message: { role: 'user', content: 'local post-import' },
+      id: 'm5', origin: 'input', message: { role: 'user', content: 'local post-import' },
     });
     const after = await new ConversationSearchStore(target.sql, restored, (sessionId) => history.transcript(sessionId)).search('post-import');
     expect(after.map((hit) => hit.messageId)).toEqual(['m5']);
@@ -410,10 +410,10 @@ const OWNER_TEXT = '# the owner wrote this\n';
     const cloudActor = createTestActor(source.sql, source.execRaw, 'cloud', 'cloud');
     const cloud = historyOver(source, cloudActor);
     await cloud.record(CHAT_SESSION_ID, {
-      id: 'u1', parentId: null, origin: 'input', message: { role: 'user', content: 'cloud question' },
+      id: 'u1', origin: 'input', message: { role: 'user', content: 'cloud question' },
     });
     await cloud.record(CHAT_SESSION_ID, {
-      id: 'a1', parentId: 'u1', origin: 'output', message: { role: 'assistant', content: 'cloud answer' },
+      id: 'a1', origin: 'output', message: { role: 'assistant', content: 'cloud answer' },
     });
     await new ConversationSearchStore(source.sql, openWorkspaceMainActor(source.sql), (sessionId) => cloud.transcript(sessionId)).search('cloud');
 
@@ -434,7 +434,7 @@ const OWNER_TEXT = '# the owner wrote this\n';
     const history = historyOver(target, landed);
     expect(await transcriptText(history.transcript(CHAT_SESSION_ID))).toEqual(['cloud question', 'cloud answer']);
     await history.record(CHAT_SESSION_ID, {
-      id: 'u2', parentId: 'a1', origin: 'input', message: { role: 'user', content: 'local continuation' },
+      id: 'u2', origin: 'input', message: { role: 'user', content: 'local continuation' },
     });
     const continued = await new ConversationSearchStore(target.sql, landed, (sessionId) => history.transcript(sessionId)).search('local continuation');
     expect(continued.map((hit) => hit.messageId)).toEqual(['u2']);
@@ -451,7 +451,7 @@ describe('the table set an export walks is pinned by its first page', () => {
 
     for (let i = 0; i < 5; i++) {
       await history.record(CHAT_SESSION_ID, {
-        id: `m${i}`, parentId: i === 0 ? null : `m${i - 1}`, origin: 'input',
+        id: `m${i}`, origin: 'input',
         message: { role: 'user', content: `page boundary ${i}` },
       });
     }
@@ -480,10 +480,10 @@ describe('the table set an export walks is pinned by its first page', () => {
     expect(pages.some((l) => l.includes('"table":"late_arrival"'))).toBe(false);
     expect(pages.some((l) => l.includes('"name":"late_arrival"'))).toBe(false);
 
-    // The total is exactly the seeded conversation: five messages, five entries, one head pointer.
+    // The total is exactly the seeded conversation: five messages and five entries.
     const target = fresh();
     const result = await restoreWorkspaceArchive(target.archive, pages);
-    expect(result.rows).toBe(16);
+    expect(result.rows).toBe(15);
   });
 
   test('a WITHOUT ROWID table pages stably under concurrent writes', async () => {

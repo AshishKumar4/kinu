@@ -5,8 +5,8 @@
  *
  * `proposePromptSection` gates, in order: rationale minimum; slot-contract
  * identity with the incumbent; misevolution checklist; size rule plus ceiling;
- * one pending per section. Promotion uses the scaffold's `decidePromotion` rule
- * and is not auto-wired; every promotion lands in the Evolution Changelog.
+ * one pending per section. Promotion uses the scaffold's `decidePromotion` rule;
+ * every promotion lands in the Evolution Changelog.
  */
 
 import * as v from 'valibot';
@@ -40,6 +40,7 @@ export interface PromptSectionVersion {
   /** The size rule's comparand, kept so the changelog can show the accepted trade. */
   readonly incumbentBytes: number;
   readonly writtenAt: number;
+  readonly decidedAt: number | null;
   /** Shadow trials run while this version was the pending candidate, scored against the incumbent. */
   readonly wins: number;
   readonly losses: number;
@@ -71,6 +72,7 @@ export function initPromptSectionTables(execRaw: RawSqlExec): void {
     wins            INTEGER NOT NULL DEFAULT 0,
     losses          INTEGER NOT NULL DEFAULT 0,
     ties            INTEGER NOT NULL DEFAULT 0,
+    decided_at      INTEGER,
     PRIMARY KEY (actor_id, section_id, version)
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_prompt_section_status
@@ -364,14 +366,14 @@ export function applyPromptSectionDecision(
 
     void sql`UPDATE prompt_section_versions SET status = 'historical'
       WHERE actor_id = ${actor.actorId} AND section_id = ${pending.sectionId} AND status = 'current'`;
-    void sql`UPDATE prompt_section_versions SET status = 'current'
+    void sql`UPDATE prompt_section_versions SET status = 'current', decided_at = ${nowMs()}
       WHERE actor_id = ${actor.actorId} AND section_id = ${pending.sectionId}
         AND version = ${pending.version}`;
 
     return { action: 'promote' };
   }
 
-  void sql`UPDATE prompt_section_versions SET status = 'rolled_back'
+  void sql`UPDATE prompt_section_versions SET status = 'rolled_back', decided_at = ${nowMs()}
     WHERE actor_id = ${actor.actorId} AND section_id = ${pending.sectionId}
       AND version = ${pending.version}`;
 
@@ -386,12 +388,12 @@ export function listPromptSectionVersions(
 
   const rows = sql<{
     section_id: string; version: number; source: string; rationale: string;
-    status: string; incumbent_bytes: number; written_at: number;
+    status: string; incumbent_bytes: number; written_at: number; decided_at: number | null;
     wins: number; losses: number; ties: number;
   }>`
-    SELECT section_id, version, source, rationale, status, incumbent_bytes, written_at, wins, losses, ties
+    SELECT section_id, version, source, rationale, status, incumbent_bytes, written_at, decided_at, wins, losses, ties
     FROM prompt_section_versions WHERE actor_id = ${actor.actorId}
-    ORDER BY written_at DESC LIMIT ${limit}`;
+    ORDER BY COALESCE(decided_at, written_at) DESC LIMIT ${limit}`;
 
   return rows.map((row) => ({
     sectionId: row.section_id,
@@ -401,6 +403,7 @@ export function listPromptSectionVersions(
     status: v.parse(PromptSectionStatusSchema, row.status),
     incumbentBytes: row.incumbent_bytes,
     writtenAt: row.written_at,
+    decidedAt: row.decided_at,
     wins: row.wins,
     losses: row.losses,
     ties: row.ties,

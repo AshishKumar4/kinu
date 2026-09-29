@@ -10,7 +10,7 @@ const WRITTEN = { ok: true, path: 'notes.txt', action: 'created' };
 test('a successful tool call records the value it returned, and a text tool records its text', async () => {
   const { rt, testSql } = createTestRuntime();
   const seats = hostedSeatsOver({ rt, db: testSql.db });
-  const { actor } = await seats.seat('record-prover', 'subordinate');
+  const { actor } = await seats.seat('record-prover', 'agent');
 
   const tools = {
     file: tool({ description: 'Write a file', inputSchema: jsonSchema({ type: 'object' }), execute: async () => WRITTEN }),
@@ -66,7 +66,7 @@ test('a successful tool call records the value it returned, and a text tool reco
 test('a narrated multi-step turn answers with its final step, whatever it streamed', async () => {
   const { rt, testSql } = createTestRuntime();
   const seats = hostedSeatsOver({ rt, db: testSql.db });
-  const { actor } = await seats.seat('answer-prover', 'subordinate');
+  const { actor } = await seats.seat('answer-prover', 'agent');
 
   const tools = {
     run: tool({ description: 'Run a command', inputSchema: jsonSchema({ type: 'object' }), execute: async () => 'ran' }),

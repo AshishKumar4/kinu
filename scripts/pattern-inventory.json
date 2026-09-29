@@ -246,14 +246,14 @@
       "decision": "lexical"
     },
     {
-      "file": "packages/cli-backend/tests/local-session.test.ts",
+      "file": "packages/cli-backend/tests/helpers/local-session.ts",
       "kind": "regex-literal",
       "owner": "isDynamicBlock",
       "sourceSha256": "62f212fe9fc82313e58907b96bb77282866a1583827865279400c256ade6646f",
       "decision": "lexical"
     },
     {
-      "file": "packages/cli-backend/tests/local-session.test.ts",
+      "file": "packages/cli-backend/tests/local-session-lifecycle.test.ts",
       "kind": "regex-literal",
       "owner": "<module>",
       "sourceSha256": "b5655ca420e00e99ffbc726891db4c7aa09b0578193baf902bbdc5ea8c9cc009",

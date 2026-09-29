@@ -133,7 +133,6 @@ const ActionEnumSchema = v.object({
   }),
 });
 
-/** The `action` enum in the JSON Schema a provider is sent. */
 export function observedActionEnum(sent: JSONSchema7 | undefined): Set<string> {
   const parsedAction = v.safeParse(ActionEnumSchema, sent);
 
@@ -142,13 +141,11 @@ export function observedActionEnum(sent: JSONSchema7 | undefined): Set<string> {
 
 /** Presence (`!== undefined`) is the contract; unset means the consumer's documented fallback. */
 export function wiredProducers(rt: {
-  judgeModel?: unknown; advisorLlm?: unknown;
+  judgeModel?: unknown;
 }): Set<string> {
   const wired = new Set<string>();
 
   if (rt.judgeModel !== undefined) wired.add('judge');
-
-  if (rt.advisorLlm !== undefined) wired.add('advisor');
 
   return wired;
 }

@@ -21,12 +21,16 @@ describe('the runs of a changed suite', () => {
     const counter = join(directory, 'runs');
 
     writeFileSync(join(directory, 'flaky.test.ts'), `import { expect, test } from 'bun:test';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 
-test('passes on odd runs and fails on even ones', () => {
-  const seen = existsSync(${JSON.stringify(counter)}) ? Number(readFileSync(${JSON.stringify(counter)}, 'utf8')) : 0;
+// Runs may be beside each other, so each claims its place atomically rather than reading a shared count.
+test('fails every second claim', () => {
+  let seen = 0;
 
-  writeFileSync(${JSON.stringify(counter)}, String(seen + 1));
+  while (true) {
+    try { mkdirSync(${JSON.stringify(counter)} + '-' + String(seen)); break; } catch { seen += 1; }
+  }
+
   expect(seen % 2).toBe(0);
 });
 `);
@@ -36,9 +40,35 @@ test('passes on odd runs and fails on even ones', () => {
     const results = await repeatAll(['flaky.test.ts', 'red.test.ts', 'green.test.ts'].map((name) => planted(directory, name)), directory);
     const flaky = verdictOf(results.get('flaky.test.ts') ?? []);
 
-    expect(flaky.kind === 'flaky' ? [...flaky.red] : flaky.kind).toEqual([2, 4, 6]);
+    // Which runs drew the odd claims depends on who started first; that three of six were red, each named, does not.
+    expect(flaky.kind === 'flaky' ? flaky.red.length : flaky.kind).toBe(3);
+    expect(flaky.kind === 'flaky' && [...flaky.red].every((run) => run >= 1 && run <= 6)).toBe(true);
     expect(verdictOf(results.get('red.test.ts') ?? []).kind).toBe('red');
     expect(verdictOf(results.get('green.test.ts') ?? []).kind).toBe('green');
+  });
+
+  test('a plain suite\'s runs run beside each other', async () => {
+    const directory = scratchDir('flake-gate-beside');
+    const started = join(directory, 'started');
+
+    // Green only once another run has started while this one runs. The other run is another process, so the planted
+    // suite polls the directory for it (no fake clock reaches across processes); the 20 s bound only ends a red run.
+    writeFileSync(join(directory, 'beside.test.ts'), `import { expect, test } from 'bun:test';
+import { mkdirSync, readdirSync } from 'node:fs';
+
+test('meets another run', async () => {
+  mkdirSync(${JSON.stringify(started)}, { recursive: true });
+  mkdirSync(${JSON.stringify(started)} + '/' + String(process.pid));
+  const until = Date.now() + 20_000;
+
+  while (readdirSync(${JSON.stringify(started)}).length < 2 && Date.now() < until) await Bun.sleep(50);
+  expect(readdirSync(${JSON.stringify(started)}).length).toBeGreaterThan(1);
+});
+`);
+
+    const results = await repeatAll([planted(directory, 'beside.test.ts')], directory);
+
+    expect(verdictOf(results.get('beside.test.ts') ?? []).kind).toBe('green');
   });
 
   test('a run that reports no test at all is red, the silent zero, and a suite that skipped every test is not green', () => {
@@ -128,7 +158,7 @@ describe('a moved test', () => {
   });
 });
 
-describe('the sweep', () => {
+describe('the nightly sweep', () => {
   test('a planted flake comes out flaky under the seeds it was red with, a steady red red, a crash broken', async () => {
     const directory = scratchDir('flake-sweep-planted');
     const counter = join(directory, 'runs');

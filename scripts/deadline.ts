@@ -83,9 +83,34 @@ export function leftoverLine(run: Pick<DeadlineRun, 'label'>, leftovers: readonl
     + `${leftovers.join('; ')} — a run ends what it starts; the fix is in whatever started them`;
 }
 
-/** Kill `pid` and describe it as `<pid> <command>`. */
-function end(pid: number): string {
-  const command = procFile(pid, 'cmdline') ?? '';
+/**
+ * How long a process caught inside its exec is given to finish it. The kernel installs the new image before it lays
+ * out the image's arguments and environment, and in between both read empty: measured 2026-09-26 under 24 CPU
+ * burners, the moment a shell that had backgrounded a child exited, 18 of 400 such children read an empty
+ * environment, in which no run's mark can be found, and 6 an empty command line. Read too early, the child was no
+ * leftover, and a run that piped its output then waited on it until it exited by itself.
+ */
+const EXEC_SETTLE_MS = 1_000;
+
+/** `/proc/<pid>/<name>` once the process's exec has laid it out: read again while it reads empty, for at most
+ *  {@link EXEC_SETTLE_MS}. Undefined once the process is gone, or, for `environ`, when the read is refused. */
+async function laidOut(pid: number, name: 'environ' | 'cmdline'): Promise<string | undefined> {
+  const until = performance.now() + EXEC_SETTLE_MS;
+
+  for (;;) {
+    // A process this user owns that holds a capability this one lacks refuses the environ read (the kernel's ptrace
+    // check): the user manager, which holds CAP_WAKE_ALARM, and its children between fork and exec. It is no run's.
+    const text = name === 'environ' ? tolerate(() => procFile(pid, name), 'eacces') : procFile(pid, name);
+
+    if (text !== '' || performance.now() >= until) return text;
+    await Bun.sleep(1);
+  }
+}
+
+/** Kill `pid` and describe it as `<pid> <command>`: as it was when ended, which, between its fork and its exec, is
+ *  the program it was forked from. */
+async function end(pid: number): Promise<string> {
+  const command = await laidOut(pid, 'cmdline') ?? '';
 
   tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch');
 
@@ -93,7 +118,7 @@ function end(pid: number): string {
 }
 
 /** End every live process whose environment carries `mark` as `KINU_RUN`; each as `<pid> <command>`. */
-export function endLeftovers(mark: string): string[] {
+export async function endLeftovers(mark: string): Promise<string[]> {
   // Off Linux there is no /proc: nothing can be read, so nothing is found.
   const since = processStartTicks(process.pid);
 
@@ -110,11 +135,9 @@ export function endLeftovers(mark: string): string[] {
     if (!Number.isSafeInteger(pid) || (processStartTicks(pid) ?? 0) < since) continue;
 
     if (statSync(`/proc/${name}/environ`, { throwIfNoEntry: false })?.uid !== uid) continue;
-    // A process this user owns that holds a capability this one lacks refuses the read (the kernel's ptrace check):
-    // the user manager, which holds CAP_WAKE_ALARM, and its children between fork and exec. It is no run's.
-    const environ = tolerate(() => procFile(pid, 'environ'), 'eacces');
+    const environ = await laidOut(pid, 'environ');
 
-    if (environ !== undefined && `\0${environ}`.includes(entry)) left.push(end(pid));
+    if (environ !== undefined && `\0${environ}`.includes(entry)) left.push(await end(pid));
   }
 
   return left;
@@ -125,14 +148,14 @@ export function endLeftovers(mark: string): string[] {
  * with an environment of its own (the pc-agent supervisors run under the sandbox's allow-list); while its parent
  * lives, the parent is what names it.
  */
-export function endChildren(parent: number): string[] {
+export async function endChildren(parent: number): Promise<string[]> {
   const left: string[] = [];
 
   for (const name of tolerate(() => readdirSync('/proc'), 'enoent') ?? []) {
     const stat = /^\d+$/u.test(name) ? procFile(name, 'stat') : undefined;
     const [state, ppid] = stat?.slice(stat.lastIndexOf(')') + 2).split(' ') ?? [];
 
-    if (Number(ppid) === parent && state !== 'Z') left.push(end(Number(name)));
+    if (Number(ppid) === parent && state !== 'Z') left.push(await end(Number(name)));
   }
 
   return left;
@@ -173,7 +196,7 @@ export async function runUnderDeadline(run: DeadlineRun): Promise<DeadlineOutcom
   const exitCode = await child.exited;
   clearTimeout(deadline);
   // Before the pipes are read: a leftover holding one would keep it open forever.
-  const leftovers = endLeftovers(mark);
+  const leftovers = await endLeftovers(mark);
   const seconds = (performance.now() - started) / 1000;
   const stdout = await pipedText(child.stdout);
   const stderr = await pipedText(child.stderr);

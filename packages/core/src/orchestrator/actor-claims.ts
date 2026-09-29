@@ -1,10 +1,9 @@
 import type { ModelMessage } from 'ai';
-import { Effect } from 'effect';
 import type { WorkMode } from '../types/turn';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { KinuError } from '../obs/error';
-import { diagnostics, settle, toKinuError } from '../obs/index';
+import { diagnostics, toKinuError } from '../obs/index';
 import { nowMs } from '../utils/date';
 import { RUN_END_REASONS } from './turn-lifecycle';
 import { initSessionContextTables } from '../session/schema';
@@ -20,9 +19,6 @@ const CLAIM_OUTCOMES = [...RUN_END_REASONS, 'indeterminate'] as const;
 const CLAIM_STATUSES = ['admitted', 'settled'] as const;
 
 const PROGRAM_KINDS = ['builtin', 'scaffold'] as const;
-
-/** A step that reset the workspace this many times on one build is not run again: the SDK's own strike count. */
-const POISON_RESETS = 3;
 
 export type ClaimOutcome = (typeof CLAIM_OUTCOMES)[number];
 
@@ -185,33 +181,6 @@ export class ActorClaimStore {
   settle(claim: ActorTurnClaim, outcome: ClaimOutcome): void {
     this.transactionSync(() => { this.assertLive(claim); void this.sql`UPDATE actor_turn_claims SET outcome=${outcome} WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`; });
     this.changed();
-  }
-
-  /** Epochs, newest first, that reached one step and got no further; stops at the first that did. */
-  private unfinishedResets(turnId: string, epoch: number): number {
-    this.actor.assertCurrent();
-
-    const steps = this.sql<{ epoch: number; steps: number }>`SELECT epoch, COUNT(step_index) AS steps FROM actor_requests
-      WHERE actor_id=${this.actorId} AND turn_id=${turnId} AND epoch<=${epoch} GROUP BY epoch ORDER BY epoch DESC`;
-
-    let count = 0;
-
-    for (const row of steps) {
-      if (row.steps !== 1) break;
-      count += 1;
-    }
-
-    return count;
-  }
-
-  /** Refuses a resumed turn whose step reset the workspace on each of its last runs, closing its claim once. */
-  closePoisoned(turnId: string, epoch: number): Promise<void> {
-    if (this.unfinishedResets(turnId, epoch) < POISON_RESETS - 1) return Promise.resolve();
-
-    return settle(Effect.sync(() => {
-      this.settleRecovered(turnId, epoch, 'error');
-      diagnostics.event('turn.poisoned', { turn: turnId, resets: POISON_RESETS });
-    }).pipe(Effect.andThen(Effect.fail(new KinuError('unavailable', `This step reset the workspace ${String(POISON_RESETS)} times, so it is not run again.`)))));
   }
 
   settleRecovered(turnId: string, epoch: number, outcome: ClaimOutcome): void {

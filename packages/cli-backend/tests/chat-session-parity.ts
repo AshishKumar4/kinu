@@ -271,7 +271,7 @@ async function durableRows(db: Database, norm: ParityNormalizer, transcript: Ses
 
     if (row === null) throw new Error('scripted transcript entry disappeared');
     actorMessages.push({ id: norm.text(row.id), sessionId: transcript.sessionId,
-      parentId: row.parentId === null ? null : norm.text(row.parentId),
+      position: row.position,
       role: row.role, content: row.content, metadata: row.metadata === undefined ? null : norm.json(row.metadata) });
   }
 
@@ -317,7 +317,7 @@ async function durableRows(db: Database, norm: ParityNormalizer, transcript: Ses
 export async function runParityScenario(interruptRecovery = false): Promise<ParitySnapshot> {
   const db = new Database(scratchPath('chat-session-parity', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
   const transcript = rt.stores.history.transcript('default');
 
   const eventsA: SessionEvent[] = [];

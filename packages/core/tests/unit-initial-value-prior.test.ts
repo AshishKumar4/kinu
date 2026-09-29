@@ -14,8 +14,8 @@ describe('BUG-1: the initial value prior', () => {
     initSearchTables(rt.storage.execRaw);
     insertSearchNode(rt.storage.sql, rt.actor, {
       nodeId: 'fresh', parentNodeId: null, rootId: 'r', task: 'ship the thing',
-      action: '', observation: 'some output', codeUsed: null, depth: 0, msgId: null,
-    });
+      action: '', observation: 'some output', depth: 0,
+  });
 
     const node = rt.storage.sql<{ value: number; visits: number }>`
       SELECT value, visits FROM search_nodes

@@ -12,7 +12,7 @@ import { useState, useCallback, useRef, useEffect, useMemo, type ReactNode } fro
 import { tierIdsOf,
   DEFAULT_ROLE_ID, nextReasoningEffort, offeredReasoningEfforts,
   effectiveRoleCatalog,
-  type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type ReasoningEffort, type SeekCursor,
+  type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type PositionCursor, type ReasoningEffort, type SeekCursor,
   type SubordinateChild, type TierId,
 } from '@kinu.run/core';
 import { TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, composerVisibleRows } from '@kinu.run/core/tui';
@@ -87,8 +87,8 @@ import { initialInputState, reduceInput, type InputEffect, type InputMachineEven
 import { agentDisplayLabel, clipText } from '@kinu.run/core/tui';
 import { createKeyDispatcher, openTuiKeyBindings } from './actions';
 import {
-  buildAgentHubEntries, HubOverlay, SubagentChatOverlay, subordinatesFromRoster, workFromWorkspace, answeredHelpers,
-  type TuiHubData, type TuiHubRow, type TuiHubView, type TuiSubagentChat,
+  buildAgentHubEntries, HubOverlay, SubagentChatOverlay, subordinatesFromRoster, workFromWorkspace, answeredHelpers, evolutionWork,
+  type TuiHubData, type TuiHubRow, type TuiWorkEntry, type TuiHubView, type TuiSubagentChat,
 } from './hubs';
 import { DEFAULT_TUI_THEME_SELECTION, useTuiTheme, type ThemeSelection } from './theme';
 import {
@@ -105,6 +105,7 @@ import {
   type TuiAgentSummary,
 } from './tui-shell';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { Result } from 'effect';
 import { readParkedNotice } from '../parked-actions';
 
 /** `local-peer` opens in place; `cloud-additional` runs server-side and is announced. */
@@ -417,8 +418,8 @@ function ChatScene({
       await previous;
       const read = await readParkedNotice(controls, parkedSeenRef.current);
 
-      if (!read.ok) addError({ cause: read.error });
-      else if (read.value !== null) addMessage({ role: 'system', content: read.value });
+      if (Result.isFailure(read)) addError({ cause: read.failure });
+      else if (read.success !== null) addMessage({ role: 'system', content: read.success });
     })();
   }, [addError, addMessage, client]);
 
@@ -2240,21 +2241,22 @@ async function loadHubData(client: AgentClient): Promise<TuiHubData> {
 
 async function readRoster(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'subordinatesError' | 'work' | 'workError' | 'helpers'>> {
   const [subordinates, work] = await Promise.allSettled([readSubordinates(client), client.workspaceWork()]);
+  const evolution = subordinates.status === 'fulfilled' ? subordinates.value.evolution : [];
 
   return {
     ...(subordinates.status === 'fulfilled'
-      ? subordinates.value
+      ? { subordinates: subordinates.value.subordinates, helpers: subordinates.value.helpers }
       : { subordinates: [], helpers: [], subordinatesError: `Subagents could not be read: ${renderThrownChain({ cause: subordinates.reason })}` }),
     ...(work.status === 'fulfilled'
-      ? { work: workFromWorkspace(work.value) }
-      : { work: [], workError: `Work could not be read: ${renderThrownChain({ cause: work.reason })}` }),
+      ? { work: [...workFromWorkspace(work.value), ...evolution] }
+      : { work: evolution, workError: `Work could not be read: ${renderThrownChain({ cause: work.reason })}` }),
   };
 }
 
 /** Pages arrive newest first. */
 async function readSubagentConversation(client: AgentClient, target: { path: string[]; actor?: string }): Promise<DisplayMessage[]> {
   const pages: DisplayMessage[][] = [];
-  let cursor: SeekCursor | undefined;
+  let cursor: PositionCursor | undefined;
 
   do {
     const result = await client.inspectSubordinate({ ...target, view: 'history', page: cursor === undefined ? {} : { cursor } });
@@ -2269,7 +2271,7 @@ async function readSubagentConversation(client: AgentClient, target: { path: str
   return pages.flat();
 }
 
-async function readSubordinates(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'helpers'>> {
+async function readSubordinates(client: AgentClient): Promise<Pick<TuiHubData, 'subordinates' | 'helpers'> & { evolution: TuiWorkEntry[] }> {
   const entries: SubordinateChild[] = [];
   let cursor: SeekCursor | undefined;
 
@@ -2285,7 +2287,7 @@ async function readSubordinates(client: AgentClient): Promise<Pick<TuiHubData, '
     ? [{ name: entry.name, actorId: entry.actorReference.actorId }]
     : []);
 
-  return { subordinates: subordinatesFromRoster(entries), helpers };
+  return { subordinates: subordinatesFromRoster(entries), helpers, evolution: evolutionWork(entries) };
 }
 
 

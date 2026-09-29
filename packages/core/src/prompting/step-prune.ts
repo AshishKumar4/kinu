@@ -150,7 +150,7 @@ function truncateResultPart(part: ToolResultPart): ToolResultPart {
   if (serialized.includes('...[truncated:')) return part;
   const marker = `...[truncated: full output was ${serialized.length} chars; re-run the tool if needed]`;
 
-  if (serialized.length <= PRUNED_OUTPUT_HEAD_CHARS + marker.length) return part;
+  if (serializedOutputLength(part) <= PRUNED_OUTPUT_HEAD_CHARS + marker.length) return part;
   const value = serialized.slice(0, PRUNED_OUTPUT_HEAD_CHARS) + marker;
   const isError = part.output.type === 'error-text' || part.output.type === 'error-json';
 
@@ -167,15 +167,18 @@ function serializeOutput(part: ToolResultPart): string | null {
     case 'json':
     case 'error-json':
       return safeStringify({ value: output.value });
+    // An image is never pruned into base64 text; `serializedOutputLength` prices it flat.
     case 'content':
-      return safeStringify({ value: output.value });
+      return output.value.map((item) => (item.type === 'text' ? item.text : `[${item.type}]`)).join('\n');
     case 'execution-denied':
       return null;
   }
 }
 
 function serializedOutputLength(part: ToolResultPart): number {
-  return serializeOutput(part)?.length ?? 0;
+  const media = part.output.type === 'content' ? part.output.value.filter((item) => item.type !== 'text').length : 0;
+
+  return (serializeOutput(part)?.length ?? 0) + media * ESTIMATED_MEDIA_CHARS;
 }
 
 /** Chars/4, the compaction engine's scale. Media is priced flat (providers charge by dimensions). */

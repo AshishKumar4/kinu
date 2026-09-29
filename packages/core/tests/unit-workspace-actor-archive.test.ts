@@ -69,7 +69,7 @@ async function seedActorState({ ws, actor, text, runId, version }: SeededActorSt
   });
 
   await history.record(CHAT_SESSION_ID, {
-    id: `m-${actor.actorId}`, parentId: null, origin: 'input', message: { role: 'user', content: text },
+    id: `m-${actor.actorId}`, origin: 'input', message: { role: 'user', content: text },
   });
   void ws.sql`INSERT INTO actor_turn_claims (
       actor_id, turn_id, run_id, epoch, work_mode, program_kind, program_version,
@@ -83,8 +83,8 @@ async function seedActorState({ ws, actor, text, runId, version }: SeededActorSt
 describe('a workspace snapshot covers every actor', () => {
   test('export and restore return every actor conversation, claim and loop pointer', async () => {
     const ws = workspace();
-    const hire = ws.directory.create({ parent: ws.main, name: 'alpha', creationId: 'c1', kind: 'subordinate', lifetime: 'durable' });
-    const head = ws.directory.create({ parent: ws.main, name: 'exp:head-1', creationId: 'c2', kind: 'run', lifetime: 'task' });
+    const hire = ws.directory.create({ parent: ws.main, name: 'alpha', creationId: 'c1', origin: 'agent', lifetime: 'durable' });
+    const head = ws.directory.create({ parent: ws.main, name: 'exp:head-1', creationId: 'c2', origin: 'swarm', lifetime: 'task' });
     await seedActorState({ ws, actor: ws.main, text: 'the main actor said this', runId: 'run-main', version: 4 });
     await seedActorState({ ws, actor: hire, text: 'alpha said this', runId: 'run-alpha', version: 1 });
     await seedActorState({ ws, actor: head, text: 'the head said this', runId: 'run-head', version: 7 });
@@ -120,7 +120,7 @@ describe('a workspace snapshot covers every actor', () => {
 
   test('a retained dismissal is still in the snapshot', async () => {
     const ws = workspace();
-    const gone = ws.directory.create({ parent: ws.main, name: 'beta', creationId: 'c3', kind: 'subordinate', lifetime: 'durable' });
+    const gone = ws.directory.create({ parent: ws.main, name: 'beta', creationId: 'c3', origin: 'agent', lifetime: 'durable' });
     await seedActorState({ ws, actor: ws.main, text: 'main', runId: 'run-main', version: 1 });
     await seedActorState({ ws, actor: gone, text: 'beta said this before it was dismissed', runId: 'run-beta', version: 2 });
     const reference = { actorId: gone.actorId, workspaceId: gone.workspaceId, parentActorId: gone.parentActorId };
@@ -138,7 +138,7 @@ describe('a workspace snapshot covers every actor', () => {
 
   test('an archive that lost one actor is refused even when its row total agrees', async () => {
     const ws = workspace();
-    const head = ws.directory.create({ parent: ws.main, name: 'exp:head-1', creationId: 'c4', kind: 'run', lifetime: 'task' });
+    const head = ws.directory.create({ parent: ws.main, name: 'exp:head-1', creationId: 'c4', origin: 'swarm', lifetime: 'task' });
     await seedActorState({ ws, actor: ws.main, text: 'main', runId: 'run-main', version: 1 });
     await seedActorState({ ws, actor: head, text: 'head', runId: 'run-head', version: 1 });
 

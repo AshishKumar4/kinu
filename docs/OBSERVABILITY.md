@@ -12,7 +12,7 @@ spend. `AGENTS.md` § Errors and Logs points here. The source of truth is
 | `Tracer` / `ScopedSpan`: the span interface | built | `obs/tracer.ts` |
 | `AgentTracing` / `TracedInvocation`: the scoping rules | built, wired at two invocation sites and every actor turn | `obs/agent-tracing.ts`, `cf-backend/src/obs/cf-tracer.ts` |
 | `ErrorCode` / `KinuError` / `toKinuError` | built; `KinuError` is an Effect `Data.TaggedError` since 2026-09-23 | `obs/error.ts` |
-| `attempt` / `settle` / `toWire`: the Effect boundary | built 2026-09-23; first caller `answerParentRpc`, the answer both hosts give a fork | `obs/effect.ts` |
+| `attempt` / `settle`: the Effect boundary | native RPC errors at compat 2026-09-28; local recovery uses Effect.result | `obs/effect.ts` |
 | `gate:error-model`: legacy failure mechanisms per file, shrink-only | built, locked 2026-09-23 | `scripts/error-model.ts` |
 | `gate:effect-diagnostics`: the pinned `@effect/tsgo` over every project that imports `effect` | built, with a planted floating effect as its red half | `scripts/effect-diagnostics.ts` |
 | `renderCauseChain` / `renderThrownChain`: the chain for an unnarrowed value | built; the count of chain-dropping copies it replaced is not measured | `obs/error.ts` |
@@ -220,7 +220,7 @@ settled), `agents.*` from `eval` code, and model calls outside a turn
 The Agents SDK's `wrapAISDK` (`agents/observability/ai`, agents 0.22.0) was
 evaluated for the model-call span and not adopted. It imports
 `cloudflare:workers`, so it cannot sit in the core loop the CLI also runs. Its
-spans bypass `Tracer`, so they would carry no actor and no `kinu.error`, and no
+spans bypass `Tracer`, so they would carry no actor or redacted exception classification, and no
 recording tracer can check them. When traced it also replaces every tool's
 `execute` and wraps the model with `wrapLanguageModel`, on every production
 turn.
@@ -232,25 +232,28 @@ opens a span afterwards (for a turn: begins a unit) throws
 isolate, so one span across both would claim time nothing measured. There is
 deliberately no `AsyncLocalStorage`: implicit context has no revocation point.
 
-### A span records one boolean about a failure
+### A span records classification, not error text
 
-The pattern comes from `~/cloudflare-os/packages/backend-utils/src/tracing.ts`,
-outside this repository:
+`cf-tracer.ts` uses native `enterSpan`, `setAttributes` and
+`recordException({ name, code })`. Both thrown failures and explicit `fail(error)`
+record this redacted object. Messages, causes and stacks never enter the trace
+exception record; `Logger.failure` owns diagnostic text. Exceptions propagate
+unchanged, and the tracer returns the original promise to preserve RPC pipelining.
+The recording tracer and alarm-tracing tests assert the same exception fields
+and check that a planted credential reaches neither attributes nor exceptions.
 
-1. Ambient context. `SpanOpenAttributes` makes attributes structural. Only its
-   type catches a missing call attribute.
-2. Tracing only. It never logs or changes state the caller can see.
-3. Unchanged exception, one marker. `SPAN_ATTR_ERROR` is `kinu.error`
-   (`obs/tracer.ts:105`), and is only ever `true`. Error text is unbounded and
-   may be sensitive. `Logger.failure` classifies and renders every `cause`.
-4. Promise lifetime. Mark before returning, or the span closes before an async
-   rejection arrives.
+PlatformRefresh measured these native methods on 2026-09-28 with workerd
+1.20260926.1. Manual spans remain invocation-bound: ending one two invocations
+later recorded 2-3 ms, not the roughly 2 seconds of wall time. The local collector
+exposes span structure and error outcomes but records attributes as null.
 
-Until 2026-08-19, `cf-tracer.ts` recorded `kinu.error_name` and
-`kinu.error_message`, so upstream messages bypassed `ReservedLogField`, and
-thrown failures marked nothing because only `fail()` wrote fields.
-`cf-backend/tests/unit-alarm-tracing.test.ts` pins both paths, including a
-planted credential that reaches no attribute.
+Class-facet RPC probes show a `facet_subrequest` parent for the facet's `jsrpc`.
+Loader facets differ: Facets' deployed probes found root-side RPC spans in 10/10
+traces, no facet-work spans, and direct logs in 0/12 calls. Native WorkerCode
+`tails` delivered logs in 9/9 calls after about two minutes, without spans; an RPC
+throw appeared canceled with an empty exceptions list. Those probes were deleted
+without retained logs; the counts are the investigating lane's report. Do not
+infer loader-facet tracing from the class-facet result.
 
 Never wrap a pipelined RPC stub in a span. Marking a rejection attaches a
 handler, which needs a real promise; on a stub it turns the pipelined call into
@@ -331,7 +334,7 @@ the model through `core/src/providers/model-invocation.ts`, which reports the
 call's usage through the `ModelCallSink` the call was handed.
 
 - `MODEL_ROUTE_POLICY` (`profiles/model-route.ts`) is the only `SpendSource`
-  table. `agent`, `head`, `mcts`, `swarm` and `slate` use the turn's tier.
+  table. `agent`, `head`, `swarm` and `slate` use the turn's tier.
   `scaffold`, `judge` and `advisor` use `deep`; `compaction`, `reflection` and
   `fast` use `fast`; `platform` and `warming` resolve no profile.
   `resolveModelRoute` is the only read path.
@@ -340,7 +343,7 @@ call's usage through the `ModelCallSink` the call was handed.
   route's source. It writes `model_call` through
   `LocalAgentSession.modelCallSink`.
 - Cloud uses `createProfileLaneLLM` (`cf-backend/src/runtime.ts`; the
-  `judgeModel`, `fastLlm` and `advisorLlm` lanes), which files the row through
+  `judgeModel` and `fastLlm` lanes), which files the row through
   `ActorAgent.reportModelCall`.
 - Every entry point in `model-invocation.ts` takes the spend it reports, so a
   call site cannot drop the sink. `.oxlintrc.json` refuses the AI SDK's
@@ -554,8 +557,8 @@ producer observed.
 ## The Effect channel
 
 Owner decision, 2026-09-23: every failure path moves to Effect 4's typed
-failure channel, one slice at a time, with `KinuError` as its only typed
-failure. `effect` is pinned exactly to 4.0.0-rc.117, because 4.0.0 is still a
+failure channel. `KinuError` classifies platform failures; `VfsError` retains
+file-plane errno codes. `effect` is pinned exactly to 4.0.0-rc.117, because 4.0.0 is still a
 release candidate.
 
 A function that can fail returns `Effect<A, KinuError>`; a file-plane function
@@ -568,7 +571,7 @@ boundary is `obs/effect.ts`:
 | --- | --- |
 | `attempt({ doing, otherwise }, run)` | A Promise-returning call as an effect. A rejection becomes `toKinuError`, so it keeps its cause and its class. |
 | `settle(effect, { signal, interrupted })` | The only runner. It resolves the value, or rejects with the `KinuError`, the `VfsError` or the defect unchanged. An abort interrupts the run and rejects with `cancelled`. |
-| `toWire(effect, encode)` | An outcome as a `Wire<T, F>` union, the value RPC can carry. |
+| `Effect.result(effect)` | A first-party result for local recovery paths; not an RPC envelope. |
 
 `settle` runs on a microtask scheduler. Effect's default scheduler yields to a
 macrotask every 2,048 steps and on every fork. Measured 2026-09-23 under workerd
@@ -577,15 +580,18 @@ a 5,000-step effect on the default scheduler let 20 of 20 concurrent RPCs into
 its Durable Object mid-run, in 5 runs of 5; on the microtask scheduler, 0.
 `cf-backend/tests/workerd/effect-atomicity.test.ts` holds both halves.
 
-Outcomes cross RPC as values because nothing else survives. A returned `Exit`
-fails structured clone (`DataCloneError`). A thrown `KinuError` arrives as a
-plain `Error` named in its message, with no `code`, at compatibility date
-2025-12-01, the date `wrangler.jsonc` sets; at 2026-04-21 its `name`, `code` and
-`cause` survive and `instanceof` still fails. Same probe, same date.
-`answerParentRpc` (`execution/parent.ts`) is the first caller: the Durable
-Object over RPC and the CLI in process both answer a fork's file and shell
-calls through it, so the parent's errno and cause chain reach the fork the same
-way from either host.
+RPC methods now return the successful value or throw `KinuError`. At compatibility
+date 2026-09-28, native serialization preserves `name`, `_tag`, `code` and `cause`,
+but not the subclass: callers classify own fields instead of relying on
+`instanceof KinuError` or parsing names out of messages. The real workerd case in
+`error-compatibility.test.ts` covers this boundary. `answerParentRpc` retains the
+parent's VFS error as the cause, and the file view reconstructs its errno contract.
+An Effect `Exit` still does not cross RPC: `settle` consumes it at the answering
+boundary. There is no Wire envelope or toWire encoder.
+
+At this date, late-adopted promise rejections are checked after the microtask
+checkpoint. The workerd case passes with the formerly rejected async wrapper;
+the compatibility-only `effect-entry-awaits` rule and its fixtures were removed.
 
 `JSON.stringify` of a `KinuError` writes `code`, `name`, `execution` and a
 subclass's own fields, as before the change. `Data.Error`'s own `toJSON` also

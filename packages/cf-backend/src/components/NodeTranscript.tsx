@@ -6,13 +6,13 @@ import {
   TreeStructureIcon, WarningCircleIcon,
 } from "@phosphor-icons/react";
 import type { HeadStep, NodeTranscriptView } from "@kinu.run/core";
-import { threadLiveTail, usageTotal, type TurnLiveness } from "@kinu.run/core";
+import { shownHeadStatus, threadLiveTail, usageTotal, type TurnLiveness } from "@kinu.run/core";
 import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { ChatLiveTail, MessageView } from "@/components/MessageView";
 import {
   deltaAsMessage, stepAsMessage, NO_HEAD_DELTAS, type HeadDelta, type HeadDeltas,
 } from "@kinu.run/core";
-import { DetailSection, EmptyState, HistoryBoundary, MarkdownContent, Metric, CodeBlock } from "@/components/surfaces/shared";
+import { DetailSection, EmptyState, HistoryBoundary, MarkdownContent, Metric } from "@/components/surfaces/shared";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { cleanNodeLabel, findForkNode } from "@kinu.run/core/swarm-view";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
@@ -34,14 +34,9 @@ export function statusDot(status: string): string {
 
   if (status === "completed" || status === "terminal") return "p-dot-success";
 
-  if (status === "errored" || status === "failed") return "p-dot-danger";
+  if (status === "errored" || status === "failed" || status === "aborted") return "p-dot-danger";
 
   return "p-dot-neutral";
-}
-
-/** An aborted head was stopped, by its owner or with its search; the Agents panel says the same. */
-function statusWord(status: string): string {
-  return status === "aborted" ? "stopped" : status;
 }
 
 const TASK_CLAMP = 240;
@@ -80,7 +75,7 @@ function SearchPath({ view, onSelect }: {
       <TreeStructureIcon size={11} className="p-text-3 shrink-0" />
       {view.path.map((crumb, index) => {
         const here = index === view.path.length - 1 || onSelect === undefined;
-        // An empty first-crumb label (always, for MCTS) falls back to its depth.
+        // An empty first-crumb label (a search root's always) falls back to its depth.
         const label = cleanNodeLabel(crumb.label, `depth ${crumb.depth}`);
 
         return (
@@ -109,7 +104,7 @@ function Outcome({ view }: { view: NodeTranscriptView }) {
           style={{ background: "var(--c-danger-tint)", borderLeftColor: "var(--c-danger)" }}>
           <div className="flex items-center gap-1.5 p-t-status uppercase tracking-normal p-danger">
             <WarningCircleIcon size={11} weight="fill" />
-            {view.status === "aborted" ? "Stopped" : "Failed"}
+            {shownHeadStatus(view.status, view.errorMessage) === "stopped" ? "Stopped" : "Failed"}
           </div>
           <div className="mt-1 p-row-text p-text-2 break-words">{view.errorMessage}</div>
         </div>
@@ -124,12 +119,6 @@ function Outcome({ view }: { view: NodeTranscriptView }) {
           <div className="mt-1 prose-chat p-text max-h-64 overflow-y-auto">
             <MarkdownContent content={view.answer} />
           </div>
-        </div>
-      )}
-      {view.codeUsed && (
-        <div className="shrink-0 border-b p-border px-4 py-2.5">
-          <div className="p-eyebrow">Code draft</div>
-          <div className="max-h-40 overflow-auto"><CodeBlock className="language-js">{view.codeUsed}</CodeBlock></div>
         </div>
       )}
     </>
@@ -224,8 +213,8 @@ export function TranscriptBody({ view, onSelect, older, onLoadOlder, pending }: 
   return (
     <div className="min-h-0 flex-1 flex flex-col">
       <div className="shrink-0 flex items-center gap-2 px-4 py-2 border-b p-border">
-        <span className={`size-1.5 rounded-full shrink-0 ${statusDot(view.status)} ${live ? "p-dot-pulse" : ""}`} />
-        <span className="p-t-status uppercase tracking-normal p-text-3 shrink-0">{statusWord(view.status)}</span>
+        <span className={`size-1.5 rounded-full shrink-0 ${statusDot(shownHeadStatus(view.status, view.errorMessage))} ${live ? "p-dot-pulse" : ""}`} />
+        <span className="p-t-status uppercase tracking-normal p-text-3 shrink-0">{shownHeadStatus(view.status, view.errorMessage)}</span>
         <div className="h-3 w-px bg-[var(--c-border)] shrink-0" />
         <SearchPath view={view} onSelect={onSelect} />
       </div>

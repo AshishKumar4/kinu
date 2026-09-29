@@ -30,6 +30,8 @@ export interface AgentRuntime {
   /** The agent's own state (SOUL.md, scaffold, memory, transcripts) when a shared file plane
    *  must not hold it. Absent when they coincide; readers use `agentStateVfs ?? storage.vfs`. */
   agentStateVfs?: VFS;
+  /** `storage.vfs` as the agent's own file tools reach it: gated past its own files. */
+  toolFiles: VFS;
   readonly workspaceIsMachine: boolean;
   memory: Memory;
   executor: Executor;
@@ -42,20 +44,15 @@ export interface AgentRuntime {
   /** Same-vendor cheap tier (`MODEL_ROUTE_POLICY.fast`) for mechanical work; readers fall back
    *  to `llm`. Never for user-visible generation or scaffold authoring. */
   fastLlm?: LLM;
-  /** Turn reviewer model; defaults cross-vendor. Absent means the advisor lane is inert, as the
-   *  conformance manifest declares per root. */
-  advisorLlm?: LLM;
   /** Named executor providers (workspace, nimbus, sandbox, device) for the codemode sandbox. */
   executionRouter?: ExecutionRouter;
-  /** Device-fleet transport (CF); its cached snapshot feeds the dynamic context's fleet roster.
-   *  Absent where the host is the only machine (CLI). */
+  /** Device-fleet transport (CF), feeding the dynamic context's fleet roster; absent in the CLI. */
   deviceTransport?: DeviceTransport;
   /** POSIX shell bound to the agent's VFS; absent degrades the `shell` tool to router-only. */
   shell?: Shell;
   /** Shadow-git checkpoints over real filesystems; absent means no /undo for that surface. */
   checkpoints?: FileCheckpoints;
-  /** Read live at exec time, so attaching takes effect on the next command. Backends without an
-   *  interactive surface (CF) never call it; 'strict' parks via the deferred-approval queue. */
+  /** Read at exec time, so attaching takes effect on the next command; CF never calls it. */
   setShellApprovalChannel?: (fn: RequestShellApproval | null) => void;
   /** Read lazily by the router, so native `file` and codemode `workspace.*` share one
    *  read-before-write history. */

@@ -322,8 +322,8 @@ describe("kinu exec (headless)", () => {
 
       // Pinned whole so an extra or missing row cannot pass while the turn looks complete.
       expect(ledger.map((e) => e.type)).toEqual([
-        "run_start", "turn_start", "profile_resolution", "context_admitted", "model_operation", "step_partial",
-        "step_finish", "model_operation", "turn_end", "run_end",
+        "run_start", "turn_start", "profile_resolution", "context_admitted", "model_operation", "step_finish",
+        "model_operation", "turn_end", "run_end",
       ]);
       expect(ledger.every((e) => e.runId.length > 0)).toBe(true);
       expect(new Set(ledger.map((e) => e.runId)).size).toBe(1);

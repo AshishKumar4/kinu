@@ -3,14 +3,14 @@
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import type { Database } from 'bun:sqlite';
-import { scratchPath } from '@kinu.run/test-utils';
+import { handClock, scratchPath, scriptedAdvisorPort, type ScriptedAdvisorPort } from '@kinu.run/test-utils';
 import type { SqlExecutor, SqlValue } from '@kinu.run/core';
 import {
-  TerminalEffectInterrupt, ADVISOR_LANE_FIBER,
+  TerminalEffectInterrupt,
   COMPLETION_GATE_EVENT, TERMINAL_EFFECT_RETRY_CEILING_MS,
   TERMINAL_TRANSITION_CALL_ID,
   listQueuedShadowTrials,
-  type Shell, type TerminalEffectFault,
+  type Shell, type TemporaryAgentPort, type TerminalEffectFault,
   type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
 import type { TestLanguageModelV2 } from './test-language-model';
@@ -20,8 +20,22 @@ import {
   armShadowTrials, openTerminalWorkspace, scriptedModel,
 } from './terminal-workspace';
 
+/** The advisor a workspace's sessions hire through; a session with no host has no port of its own. */
+const advisors = new WeakMap<CLIRuntime, TemporaryAgentPort>();
+
 /** `terminalEffectFault` is protected with no production setter, so the test subclasses, as the DO's harness does. */
 class ProbeSession extends LocalAgentSession {
+  private readonly probeRt: CLIRuntime;
+
+  constructor(opts: ConstructorParameters<typeof LocalAgentSession>[0]) {
+    super(opts);
+    this.probeRt = opts.rt;
+  }
+
+  protected override advisorPort(): TemporaryAgentPort | null {
+    return advisors.get(this.probeRt) ?? null;
+  }
+
   /** Cut once at this effect and phase; disarmed as it fires so the ledger's replay is not cut too. */
   cutAt(name: TerminalEffectName, phase: TerminalEffectPhase): void {
     const fault: TerminalEffectFault = (at, effect, scope) => {
@@ -379,42 +393,26 @@ describe('a killed CLI process is recovered by the next start', () => {
 describe('a recovery reads the record, not the session that finds it', () => {
   const NOTE = 'the staging cluster was never named';
 
-  /** The advisor switched on via the durable `actor_config` row; the reviewer's prompts are collected. */
-  function withAdvisor(rt: CLIRuntime): string[] {
-    const asked: string[] = [];
+  /** The advisor switched on via the durable `actor_config` row, hired through a port the test answers. */
+  function withAdvisor(rt: CLIRuntime): ScriptedAdvisorPort {
     rt.actor.config.setAdvisorEnabled(true);
-    rt.advisorLlm = {
-      stream: async function* () { yield ''; },
-      complete: async (prompt: string) => {
-        asked.push(prompt);
+    const advisor = scriptedAdvisorPort();
+    advisors.set(rt, advisor);
 
-        return JSON.stringify({ note: NOTE, severity: 'concern', class: 'wrong-work' });
-      },
-    };
-
-    return asked;
+    return advisor;
   }
 
-  /** An interrupted advisor lane checkpoint in `createSqlFiber`'s shape; `fibers` is keyed `(actor_id, id)`, so an
-   *  ownerless row could never be claimed. */
-  function stashAdvisorLane(rt: CLIRuntime, opts: { turnId: string; gateOpen: boolean }): void {
-    const snapshot = {
-      turn: {
-        userMessage: 'rotate the keys', assistantResponse: 'rotated the staging keys',
-        toolCalls: [], steps: 1, durationMs: 5, feedback: null, hadError: false,
-        turnId: opts.turnId,
-      },
-      reachable: [], minSeverity: 'concern', recent: [], gateOpen: opts.gateOpen,
-    };
-
-    void rt.storage.sql`INSERT INTO fibers (actor_id, id, name, snapshot, created_at)
-      VALUES (${rt.actor.actorId}, ${`fiber-${opts.turnId}`}, ${ADVISOR_LANE_FIBER},
-              ${JSON.stringify(snapshot)}, 1)`;
+  /** A turn cut at its owed hire: the row, snapshot included, is all a later process has. */
+  async function cutAtHire(opts: { rt: CLIRuntime; db: Database; phase: TerminalEffectPhase }): Promise<void> {
+    const { model } = scriptedModel('rotated the staging keys');
+    const cut = new ProbeSession({ rt: opts.rt, db: opts.db, model, onEvent: () => {} });
+    cut.cutAt('advisor_review', opts.phase);
+    await cut.send('rotate the keys', { id: crypto.randomUUID() });
+    await cut.settleBackgroundWork();
+    await cut.end();
   }
 
-  const advisorFibers = (rt: CLIRuntime) =>
-    rt.storage.sql<{ n: number }>`
-      SELECT count(*) AS n FROM fibers WHERE name = ${ADVISOR_LANE_FIBER}`[0]?.n ?? 0;
+  const owedReviews = (rt: CLIRuntime) => stillOwed(rt).filter((row) => row.effect_name === 'advisor_review').length;
 
   const notes = (rt: CLIRuntime) =>
     rt.storage.sql<{ message: string }>`
@@ -423,55 +421,101 @@ describe('a recovery reads the record, not the session that finds it', () => {
   const programmaticTurns = (events: SessionEvent[]) =>
     events.filter((e) => e.type === 'turn-start' && e.kind === 'programmatic').length;
 
-  test('an orphaned advisor review waits for the process that holds the driver lease', async () => {
+  test('an owed advisor hire waits for the process that holds the driver lease', async () => {
     const { db, rt } = workspace();
-    const asked = withAdvisor(rt);
-    stashAdvisorLane(rt, { turnId: 'turn-orphan', gateOpen: true });
-    const { model } = scriptedModel('unused');
+    const advisor = withAdvisor(rt);
+    await cutAtHire({ rt, db, phase: 'before' });
+    expect(advisor.tasks).toEqual([]);
+    const { model } = scriptedModel('acknowledged');
     const events: SessionEvent[] = [];
 
-    // Not the driver: each process finding this orphan would pay for its own review and append its own advice.
+    // Not the driver: each process finding this row would hire its own advisor.
     const rival = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
     rival.setDriverGate(() => ({ reason: 'unavailable', error: 'another process is driving' }));
     await rival.recoverBackgroundJobs();
     await rival.settleBackgroundWork();
 
-    expect(asked).toEqual([]);
-    expect(notes(rt)).toEqual([]);
-    // Kept: the row is the only thing that can bring the review back.
-    expect(advisorFibers(rt)).toBe(1);
+    expect(advisor.tasks).toEqual([]);
+    // Kept: the row is the only thing that can bring the hire back.
+    expect(owedReviews(rt)).toBe(1);
     await rival.end();
 
     const driver = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
+    driver.skipBackoff();
     await driver.recoverBackgroundJobs();
     await driver.settleBackgroundWork();
 
-    expect(asked).toHaveLength(1);
+    expect(advisor.tasks).toHaveLength(1);
+    expect(owedReviews(rt)).toBe(0);
+    expect(notes(rt)).toEqual([]);
+
+    // The answer arrives after the turn: the note lands once and opens one turn.
+    advisor.answer(JSON.stringify({ note: NOTE, severity: 'concern', class: 'wrong-work' }));
+    await driver.deliverAdvisorAnswers();
+    await driver.settleBackgroundWork();
+    await driver.deliverAdvisorAnswers();
     expect(notes(rt)).toEqual([NOTE]);
-    expect(advisorFibers(rt)).toBe(0);
+    expect(programmaticTurns(events)).toBe(1);
     await driver.end();
     db.close();
   });
 
-  test('a checkpointed review keeps the completion-gate verdict it was judged under', async () => {
-    for (const gateOpen of [true, false]) {
-      const { db, rt } = workspace();
-      const asked = withAdvisor(rt);
-      stashAdvisorLane(rt, { turnId: `turn-gate-${String(gateOpen)}`, gateOpen });
-      const { model } = scriptedModel('acknowledged');
-      const events: SessionEvent[] = [];
+  test('an advisor answer a death left undelivered is delivered once, at the next start', async () => {
+    const { db, rt } = workspace();
+    const advisor = withAdvisor(rt);
+    const { model } = scriptedModel('rotated the staging keys');
+    const first = new ProbeSession({ rt, db, model, onEvent: () => {} });
+    await first.send('rotate the keys', { id: crypto.randomUUID() });
+    await first.settleBackgroundWork();
+    // The answer is stored; the process dies before anything delivers it.
+    advisor.answer(JSON.stringify({ note: NOTE, severity: 'concern', class: 'wrong-work' }));
+    await first.end();
+    expect(notes(rt)).toEqual([]);
 
-      const driver = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
-      await driver.recoverBackgroundJobs();
-      await driver.settleBackgroundWork();
+    const events: SessionEvent[] = [];
+    const next = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
+    await next.recoverBackgroundJobs();
+    await next.settleBackgroundWork();
+    await next.recoverBackgroundJobs();
+    await next.settleBackgroundWork();
 
-      // Recorded either way (the dedupe window reads it); a fresh process reads the gate as closed unless the checkpoint carries it.
-      expect(asked.length).toBeGreaterThanOrEqual(1);
-      expect(notes(rt)).toEqual([NOTE]);
-      expect(programmaticTurns(events)).toBe(gateOpen ? 0 : 1);
-      await driver.end();
-      db.close();
-    }
+    expect(notes(rt)).toEqual([NOTE]);
+    expect(programmaticTurns(events)).toBe(1);
+    await next.end();
+    db.close();
+  });
+
+  test('a hire cut after it started is not hired again by the replay', async () => {
+    const { db, rt } = workspace();
+    const advisor = withAdvisor(rt);
+    await cutAtHire({ rt, db, phase: 'after' });
+    expect(advisor.tasks).toHaveLength(1);
+    expect(owedReviews(rt)).toBe(1);
+
+    const driver = new ProbeSession({ rt, db, model: scriptedModel('unused').model, onEvent: () => {} });
+    driver.skipBackoff();
+    await driver.recoverBackgroundJobs();
+    await driver.settleBackgroundWork();
+
+    expect(advisor.tasks).toHaveLength(1);
+    expect(owedReviews(rt)).toBe(0);
+    await driver.end();
+    db.close();
+  });
+
+  test('with the advisor off, a turn owes no review and hires none', async () => {
+    const { db, rt } = workspace();
+    const advisor = scriptedAdvisorPort();
+    advisors.set(rt, advisor);
+    const { model } = scriptedModel('done');
+    const session = new ProbeSession({ rt, db, model, onEvent: () => {} });
+    await session.send('rotate the keys', { id: crypto.randomUUID() });
+    await session.settleBackgroundWork();
+
+    expect(advisor.tasks).toEqual([]);
+    expect(owedReviews(rt)).toBe(0);
+    await session.end();
+    db.close();
   });
 
   test('a turn produced with auto-evolution ON is recorded by a recovery that has it off', async () => {
@@ -698,6 +742,29 @@ describe('a terminal close that fails leaves a way back', () => {
     await waitForClose(() => openTerminalClaims(rt) === 0);
     // Two attempts: the close's own, which threw, and the re-armed wake's.
     expect(settleAttempts).toBe(2);
+    await session.end();
+    db.close();
+  });
+});
+
+describe('a one-shot exit waits on the turn\'s own close', () => {
+  test('with no background job running, the wait announces none', async () => {
+    const { db, rt } = workspace();
+    const clock = handClock();
+    const titling = Promise.withResolvers<void>();
+    const titled = Promise.withResolvers<void>();
+    const { model } = scriptedModel('answered', { onGenerate: async () => { titling.resolve(); await titled.promise; } });
+    const events: SessionEvent[] = [];
+    const session = new ProbeSession({ rt, db, model, clock, onEvent: (e) => events.push(e) });
+
+    await session.send('write the migration', { id: crypto.randomUUID() });
+    await titling.promise;
+    const settling = session.settleBackgroundWork();
+    await clock.whenArmed(1);
+    titled.resolve();
+    await settling;
+
+    expect(events.filter((e) => e.type === 'background')).toEqual([]);
     await session.end();
     db.close();
   });

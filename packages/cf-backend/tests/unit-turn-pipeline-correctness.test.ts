@@ -11,7 +11,7 @@ import {
 import {
   declareShadowCandidate, hostedExplorationHarness, hostedMainActor, improvementLanesRan,
   orchestratorHarness, reactivateOrchestratorHarness,
-  chatSessionTurns, tapDiagnostics, until, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles,
+  chatSessionTurns, driveUntil, tapDiagnostics, until, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles,
   workspaceMainActor,
 } from './helpers/actor-harness';
 import { socketConnection } from './helpers/bindings';
@@ -340,7 +340,7 @@ describe('turn-pipeline correctness wiring', () => {
     const rootFiles = workspaceFiles(workspace.agent);
     await rootFiles.writeFile('/home/main/shared-proof.md', 'registered workspace bytes');
     const head = await hostedExplorationHarness(workspace, 'head-a1');
-    expect(head.actor.record.kind).toBe('run');
+    expect(head.actor.record.origin).toBe('swarm');
     const headFiles = head.actor.runtime.storage.vfs;
     expect(await headFiles.readFile('/home/main/shared-proof.md', { encoding: 'utf8' }))
       .toBe('registered workspace bytes');
@@ -529,8 +529,6 @@ describe('turn-pipeline correctness wiring', () => {
     expect(recorded[0].turn).toContain('partial');
   });
 
-  // Core's `creditedTurnId` decides; this pins that the orchestrator honours it. A completed plan
-  // turn is not an answer the captures competed against, so it purges them (as the CLI does).
   // `onStart`'s sweep re-pends every open lease, so the settle must close a lease for every drain
   // path, and only once the answer is durable.
   describe('a settled turn closes the delivery leases it answered, and only those', () => {
@@ -825,19 +823,30 @@ describe('improvement_lanes — one verdict gates the improvement lanes', () => 
     return harness;
   }
 
+  const advisors = (harness: ActorHarness<HarnessOrchestratorAgent>) => harness.db.query<{ origin: string; tab: number; input: number; lifetime: string }, []>(
+    "SELECT origin, tab, input, lifetime FROM workspace_actors WHERE name LIKE 'ask-advisor-%'",
+  ).all();
+
+  /** Notes once the lanes ran and every hired advisor's delegated turn has drained. */
   async function settled(harness: ActorHarness<HarnessOrchestratorAgent>, answer: ScriptedAnswer): Promise<number> {
     const { messageId } = await chatSessionTurns(harness.agent).settle(answer);
     await until(() => improvementLanesRan(harness.db, messageId), 'the improvement lanes ran');
 
-    return harness.db.query<{ n: number }, []>(
-      "SELECT COUNT(*) AS n FROM evolution_events WHERE type = 'advisor_note'",
-    ).get()?.n ?? 0;
+    if (advisors(harness).length > 0) await driveUntil(harness, 'the advisor answered', () => notes(harness) > 0);
+
+    return notes(harness);
   }
 
-  test('a completed build turn earns its review', async () => {
+  const notes = (harness: ActorHarness<HarnessOrchestratorAgent>): number => harness.db.query<{ n: number }, []>(
+    "SELECT COUNT(*) AS n FROM evolution_events WHERE type = 'advisor_note'",
+  ).get()?.n ?? 0;
+
+  test('a completed build turn earns its review, from an advisor agent of its own', async () => {
     const harness = advisorHarness();
     await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'deploy the api' }] });
     expect(await settled(harness, { messageId: 'a-build', text: 'deployed' })).toBe(1);
+    // The reviewer is a background agent, listed with the others: view-only, no tab, one task.
+    expect(advisors(harness)).toEqual([{ origin: 'evolution', tab: 0, input: 0, lifetime: 'task' }]);
   });
 
   test('a FAILED build turn feeds no lane', async () => {

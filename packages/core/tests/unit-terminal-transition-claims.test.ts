@@ -32,6 +32,8 @@ function ledger(opts: { readonly cutBeforeRecord?: boolean } = {}) {
       : null,
     scheduleRetry: async () => { await Promise.resolve(); },
     transaction: <T>(body: () => T): T => db.transaction(body)(),
+    turnIsLive: () => false,
+    settled: async () => {},
   });
 
   const claims = () => sql<{ turn_id: string; call_id: string; result_json: string | null }>`

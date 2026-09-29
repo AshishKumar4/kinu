@@ -11,7 +11,8 @@ import * as v from 'valibot';
 import { sha256Hex } from '../safety/argument-digest';
 import type { ExecOutcome } from '../execution/exec-result';
 import type { MeasurementContext } from './objective';
-import { diagnostics, renderThrownChain, toKinuError, tolerateAsync } from '../obs/index';
+import { Effect } from 'effect';
+import { diagnostics, renderThrownChain, settle, toKinuError, tolerateAsync } from '../obs/index';
 
 export const SOLUTION_FILE = 'solution.mjs';
 
@@ -244,52 +245,52 @@ async function removeOwnedFiles(ctx: MeasurementContext, files: readonly string[
  * The probe runs the measurement path (write a module, run `node`, read RESULT) and is
  * removed on every path; the agent's solution stays as found.
  */
-export async function preflightRatioHarness(ctx: MeasurementContext): Promise<string | null> {
+export function preflightRatioHarness(ctx: MeasurementContext): Promise<string | null> {
   verifications += 1;
   const probeFile = `${MEASURE_PREFIX}probe_${String(Date.now())}_${String(verifications)}.mjs`;
 
-  try {
-    await ctx.vfs.writeFile(probeFile, `console.log('RESULT ' + JSON.stringify({ ok: 1 }));\n`);
-  } catch (error) {
-    return `the workspace filesystem would not accept the harness file ${probeFile}: `
-      + renderThrownChain({ cause: error });
-  }
+  return settle(Effect.gen(function* () {
+    const unwritable = yield* step(() => ctx.vfs.writeFile(probeFile, `console.log('RESULT ' + JSON.stringify({ ok: 1 }));\n`)).pipe(Effect.match({
+      onSuccess: (): string | null => null,
+      onFailure: (failed) => `the workspace filesystem would not accept the harness file ${probeFile}: ${renderThrownChain(failed)}`,
+    }));
 
-  let result: string | null;
+    if (unwritable !== null) return unwritable;
 
-  try {
-    const run: ExecOutcome = await ctx.exec(`node ${probeFile}`);
-    const stdout = run.stdout ?? '';
+    const result = yield* step(() => ctx.exec(`node ${probeFile}`)).pipe(Effect.match({
+      onSuccess: (run: ExecOutcome): string | null => {
+        const stdout = run.stdout ?? '';
 
-    if (RESULT_LINE.test(stdout)) result = null;
-    else {
-      result = `\`node ${probeFile}\` printed no RESULT line (exit ${String(run.exitCode)}). `
-        + `stdout: ${stdout.slice(0, 400)} | stderr: ${(run.stderr ?? '').slice(0, 400)}`;
-    }
-  } catch (error) {
-    result = `\`node ${probeFile}\` could not be run in this workspace's shell: `
-      + renderThrownChain({ cause: error });
-  }
+        return RESULT_LINE.test(stdout)
+          ? null
+          : `\`node ${probeFile}\` printed no RESULT line (exit ${String(run.exitCode)}). `
+            + `stdout: ${stdout.slice(0, 400)} | stderr: ${(run.stderr ?? '').slice(0, 400)}`;
+      },
+      onFailure: (failed) => `\`node ${probeFile}\` could not be run in this workspace's shell: ${renderThrownChain(failed)}`,
+    }));
 
-  try {
-    await removeOwnedFiles(ctx, [probeFile]);
-  } catch (swept) {
-    if (result === null) throw swept;
-    diagnostics.failure(
-      'strategy.exec_ratio_cleanup_failed',
-      toKinuError({ doing: `remove owned preflight probe ${probeFile}`, cause: swept, otherwise: 'io' }),
-    );
-  }
+    yield* step(() => removeOwnedFiles(ctx, [probeFile])).pipe(Effect.catch((swept) => (result === null
+      ? Effect.die(swept.cause)
+      : Effect.sync(() => {
+        diagnostics.failure(
+          'strategy.exec_ratio_cleanup_failed',
+          toKinuError({ doing: `remove owned preflight probe ${probeFile}`, cause: swept.cause, otherwise: 'io' }),
+        );
+      }))));
 
-  return result;
+    return result;
+  }));
 }
+
+const step = <A>(run: () => Promise<A>): Effect.Effect<A, { readonly cause: unknown }> =>
+  Effect.tryPromise({ try: run, catch: (cause) => ({ cause }) });
 
 /**
  * Snapshot the solution under a fresh name, write the harness beside it, run, parse stdout.
  * Throws only when the harness could not run; a candidate failure returns as `failure`.
  * Both stamped modules are removed on every path.
  */
-export async function runRatioMeasurement(
+export function runRatioMeasurement(
   ctx: MeasurementContext, problem: RatioProblem,
 ): Promise<RatioMeasurement> {
   verifications += 1;
@@ -297,75 +298,69 @@ export async function runRatioMeasurement(
   const candidateFile = `${CANDIDATE_PREFIX}${stamp}.mjs`;
   const measureFile = `${MEASURE_PREFIX}${stamp}.mjs`;
 
-  try {
-    let submitted: string;
+  const measured = Effect.gen(function* () {
+    const submitted = yield* step(() => ctx.vfs.readFile(SOLUTION_FILE, { encoding: 'utf8' })).pipe(Effect.match({
+      onSuccess: (read) => (read instanceof Uint8Array ? new TextDecoder().decode(read) : read),
+      onFailure: (failed) => `throw new Error(${JSON.stringify(
+        `${SOLUTION_FILE} could not be read: ${renderThrownChain(failed)}`,
+      )});\n`,
+    }));
 
-    try {
-      const read = await ctx.vfs.readFile(SOLUTION_FILE, { encoding: 'utf8' });
-      submitted = read instanceof Uint8Array ? new TextDecoder().decode(read) : read;
-    } catch (error) {
-      submitted = `throw new Error(${JSON.stringify(
-        `${SOLUTION_FILE} could not be read: ${renderThrownChain({ cause: error })}`,
-      )});\n`;
-    }
-
-    await ctx.vfs.writeFile(candidateFile, submitted);
+    yield* Effect.promise(() => ctx.vfs.writeFile(candidateFile, submitted));
 
     const params = { ...problem.params, budgetMultiple: BUDGET_MULTIPLE, deadlineMs: DEADLINE_MS };
 
     const source = [
       `const P = ${JSON.stringify(params)};`,
       HARNESS_PROLOGUE,
-      `const refSolve = ${referenceAsExpression(problem.reference)};`,
+      `const refSolve = ${yield* referenceAsExpression(problem.reference)};`,
       `const cand = await loadSolve('./${candidateFile}');`,
       problem.body,
     ].join('\n');
 
-    await ctx.vfs.writeFile(measureFile, source);
+    yield* Effect.promise(() => ctx.vfs.writeFile(measureFile, source));
 
-    const run: ExecOutcome = await ctx.exec(`node ${measureFile}`);
+    const run: ExecOutcome = yield* Effect.promise(() => ctx.exec(`node ${measureFile}`));
     const stdout = run.stdout ?? '';
     const match = RESULT_LINE.exec(stdout);
 
     if (!match?.[1]) {
-      throw new Error(
+      return yield* Effect.die(new Error(
         `measurement harness produced no RESULT line (exit ${String(run.exitCode)}). `
         + `stdout: ${stdout.slice(0, 400)} | stderr: ${(run.stderr ?? '').slice(0, 400)}`,
-      );
+      ));
     }
 
-    const measured = parseMeasurement(match[1]);
-    await removeOwnedFiles(ctx, [candidateFile, measureFile]);
+    const measurement = yield* parseMeasurement(match[1]);
+    yield* Effect.promise(() => removeOwnedFiles(ctx, [candidateFile, measureFile]));
 
-    return measured;
-  } catch (primary) {
-    try {
-      await removeOwnedFiles(ctx, [candidateFile, measureFile]);
-    } catch (swept) {
+    return measurement;
+  });
+
+  return settle(measured.pipe(Effect.onError(() => step(() => removeOwnedFiles(ctx, [candidateFile, measureFile])).pipe(
+    Effect.catch((swept) => Effect.sync(() => {
       diagnostics.failure(
         'strategy.exec_ratio_cleanup_failed',
         toKinuError({
           doing: `remove owned measurement files ${candidateFile} and ${measureFile}`,
-          cause: swept,
+          cause: swept.cause,
           otherwise: 'io',
         }),
       );
-    }
-
-    throw primary;
-  }
+    })),
+  ))));
 }
 
 /**
  * The reference as a callable expression: drop the `export`, asserting the shape.
  * Reachable by in-process callers that bypass the `spec` schema.
  */
-function referenceAsExpression(reference: string): string {
+function referenceAsExpression(reference: string): Effect.Effect<string> {
   if (!reference.includes(REFERENCE_SOLVE_DECLARATION)) {
-    throw new Error('a RatioProblem reference must declare `export function solve(input, oracle)`');
+    return Effect.die(new Error('a RatioProblem reference must declare `export function solve(input, oracle)`'));
   }
 
-  return `(() => { ${reference.replace(REFERENCE_SOLVE_DECLARATION, 'function solve(')}\nreturn solve; })()`;
+  return Effect.succeed(`(() => { ${reference.replace(REFERENCE_SOLVE_DECLARATION, 'function solve(')}\nreturn solve; })()`);
 }
 
 /** The harness's RESULT line: untrusted stdout, so a non-finite number fails here. */
@@ -378,16 +373,12 @@ const MeasurementSchema = v.object({
   failure: v.nullable(v.pipe(v.string(), v.minLength(1))),
 });
 
-function parseMeasurement(json: string): RatioMeasurement {
-  const parsed = v.safeParse(MeasurementSchema, JSON.parse(json));
-
-  if (!parsed.success) {
-    throw new Error(
+function parseMeasurement(json: string): Effect.Effect<RatioMeasurement> {
+  return Effect.flatMap(Effect.sync(() => v.safeParse(MeasurementSchema, JSON.parse(json))), (parsed) => (parsed.success
+    ? Effect.succeed(parsed.output)
+    : Effect.die(new Error(
       'the measurement harness printed a RESULT this verifier cannot read, so no number it '
       + `produced can be trusted: ${parsed.issues.map((i) => `${i.path?.map((p) => String(p.key)).join('.') ?? '?'}: ${i.message}`).join('; ')}`
       + ` (line: ${json.slice(0, 200)})`,
-    );
-  }
-
-  return parsed.output;
+    ))));
 }

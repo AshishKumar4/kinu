@@ -10,24 +10,20 @@ import type { ProviderWaitInfo } from './types';
 import { DEFAULT_PROVIDER_RETRIES } from '../types/profile';
 
 /** Full-jitter backoff when a 429 lacks `Retry-After`; BASE and MAX are unmeasured. */
-const DEFAULT_BASE_DELAY_MS = 2_000;
+const BASE_DELAY_MS = 2_000;
 
-const DEFAULT_BACKOFF_FACTOR = 2;
+const BACKOFF_FACTOR = 2;
 
-const DEFAULT_MAX_DELAY_MS = 60_000;
+const MAX_DELAY_MS = 60_000;
 
 /** OMP's `maxRetryDelayMs` (oh-my-pi ai/src/types.ts:499). A longer Retry-After classifies the answer, not elapsed
  *  time: the account is spent until then. */
-const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;
+const MAX_RETRY_DELAY_MS = 60_000;
 
 /** This call's 429 retries; never sent upstream. */
 export const PROVIDER_RETRIES_HEADER = 'x-kinu-retries';
 
 export interface RateLimitRetryOptions {
-  baseDelayMs?: number;
-  backoffFactor?: number;
-  maxDelayMs?: number;
-  maxRetryDelayMs?: number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   now?: () => number;
   random?: () => number;
@@ -45,10 +41,6 @@ export function withRateLimitRetry(
   fetchImpl: typeof globalThis.fetch,
   opts: RateLimitRetryOptions = {},
 ): typeof globalThis.fetch {
-  const baseDelayMs = opts.baseDelayMs ?? DEFAULT_BASE_DELAY_MS;
-  const backoffFactor = opts.backoffFactor ?? DEFAULT_BACKOFF_FACTOR;
-  const maxDelayMs = opts.maxDelayMs ?? DEFAULT_MAX_DELAY_MS;
-  const maxRetryDelayMs = opts.maxRetryDelayMs ?? DEFAULT_MAX_RETRY_DELAY_MS;
   const sleep = opts.sleep ?? abortableSleep;
   const now = opts.now ?? Date.now;
   const random = opts.random ?? Math.random;
@@ -112,8 +104,8 @@ export function withRateLimitRetry(
     for (let attempt = 1; ; attempt++) {
       await pacer.admit(lane, signal, {
         onCooldown: (waitMs, untilMs, reason) => {
-          if (waitMs > maxRetryDelayMs) {
-            throw waitTooLong({ input, provider: opts.provider ?? host, untilMs, nowMs: now(), longestMs: maxRetryDelayMs, reason });
+          if (waitMs > MAX_RETRY_DELAY_MS) {
+            throw waitTooLong({ input, provider: opts.provider ?? host, untilMs, nowMs: now(), longestMs: MAX_RETRY_DELAY_MS, reason });
           }
 
           if (retries === 0) throw handedOver(null, waitMs);
@@ -133,20 +125,20 @@ export function withRateLimitRetry(
 
       const retryAfterMs = parseRetryAfter(response.headers.get('retry-after'), now());
 
-      if (retryAfterMs !== null && retryAfterMs > maxRetryDelayMs) {
+      if (retryAfterMs !== null && retryAfterMs > MAX_RETRY_DELAY_MS) {
         const reason = providerMessage({ body: limit.body });
         const untilMs = now() + retryAfterMs;
 
         pacer.declareWait(lane, retryAfterMs, reason);
 
         throw waitTooLong({
-          input, provider: opts.provider ?? host, untilMs, nowMs: now(), longestMs: maxRetryDelayMs, reason, status: limit.status, response,
+          input, provider: opts.provider ?? host, untilMs, nowMs: now(), longestMs: MAX_RETRY_DELAY_MS, reason, status: limit.status, response,
         });
       }
 
       const backoffCeilingMs = Math.min(
-        maxDelayMs,
-        baseDelayMs * backoffFactor ** Math.min(attempt - 1, 32),
+        MAX_DELAY_MS,
+        BASE_DELAY_MS * BACKOFF_FACTOR ** Math.min(attempt - 1, 32),
       );
 
       const waitMs = retryAfterMs ?? Math.floor(random() * backoffCeilingMs);

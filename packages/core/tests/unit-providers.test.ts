@@ -61,8 +61,7 @@ describe('ProviderRegistry', () => {
     const r = createProviderRegistry();
     r.register(fakeProvider('alpha', 'm1', true));
     const model = r.resolve('alpha/m1', baseDeps());
-    expect(model).toBeInstanceOf(MockLanguageModelV3);
-    expect(model).toHaveProperty('provider', 'alpha');
+    expect(model).toMatchObject({ provider: 'alpha', modelId: 'm1' });
   });
 
   test('resolve throws on unknown provider', () => {

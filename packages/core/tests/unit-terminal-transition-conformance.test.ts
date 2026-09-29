@@ -162,6 +162,8 @@ class Plane {
       },
       // A real transaction: both planes stand for processes that can die between statements.
       transaction: <T>(body: () => T): T => this.db.transaction(body)(),
+      turnIsLive: () => false,
+      settled: async () => {},
     });
 
     return this.live;
@@ -407,6 +409,8 @@ test('recorded terminal rosters with colliding identities belong only to their a
   const open = (actor: ActorHandle) => new TerminalTransitions({
     sql, actor, now: () => 0, scheduleRetry: async () => {},
     transaction: (body) => db.transaction(body)(),
+    turnIsLive: () => false,
+    settled: async () => {},
     effects: {
       turn_record: terminalEffect({
         input: EffectInputSchema,

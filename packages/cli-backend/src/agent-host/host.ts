@@ -75,11 +75,13 @@ import {
   type WorkspaceActor,
   type WorkspaceActorDirectory,
   readWorkspaceWork, type WorkspaceWork,
+  isSubordinateOrigin, type SubordinateSeed,
 } from '@kinu.run/core';
-import { KinuError, attempt, diagnostics, refusalOf, settle, toKinuError, toWire, type Wire } from '@kinu.run/core/obs';
+import { Effect, Result } from 'effect';
+import { KinuError, attempt, diagnostics, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
 import {
   createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, shareLocalWorkspacePlane,
-  buildLocalActorRuntime, cleanupFacetCwdScratch,
+  buildLocalActorRuntime, cleanupFacetCwdScratch, writeTransaction,
   type CLIRuntime,
 } from '../runtime';
 import type { CLIOpenConfig } from '../open';
@@ -87,7 +89,7 @@ import {
   bindLocalActor, bindLocalActorReference, localActorDirectory,
   adoptLocalActorHandle, cancelLocalCreation, openLocalActor, recoverLocalActorRetirements, registerLocalActor,
   requireLocalActorWorkspace, type LocalActorBinding,
-} from '../actor-identity';
+} from '@kinu.run/core';
 import { OS_LEASE_PROCESS } from './lease-process';
 import {
   DriverLeaseHold, REAL_CLOCK,
@@ -159,7 +161,6 @@ interface LocalTickResult {
  * per file, so a hold per entry would have siblings invalidate each other's tokens.
  */
 interface HostTree {
-  readonly dbPath: string;
   readonly db: Database;
   readonly host: ActorHost;
   /** The root's actor directory, held: `localActorDirectory` refuses a non-root handle. */
@@ -274,8 +275,8 @@ export class LocalAgentHost {
 
   /** Session events stay live after an interactive client disconnects. */
   /** A task child's retire; a failure is the outcome. */
-  retireTaskChild(work: () => Promise<void>): Promise<Wire<void, KinuError>> {
-    return settle(toWire(attempt({ doing: 'retiring a task child after its answer', otherwise: 'io' }, work), (failure) => failure));
+  retireTaskChild(work: () => Promise<void>): Promise<Result.Result<void, KinuError>> {
+    return settle(Effect.result(attempt({ doing: 'retiring a task child after its answer', otherwise: 'io' }, work)));
   }
 
   subscribe(listener: AgentEventListener): () => void {
@@ -432,7 +433,7 @@ export class LocalAgentHost {
 
     try {
       const ws = await this.opts.open(ref, db, dbPath);
-      const tree = this.createTree(ref, db, dbPath, ws);
+      const tree = this.createTree(ref, db, ws);
       this.trees.set(name, tree);
 
       try {
@@ -463,7 +464,6 @@ export class LocalAgentHost {
   private createTree(
     ref: HostedAgentRef,
     db: Database,
-    dbPath: string,
     ws: LocalHostedAgent,
   ): HostTree {
     const { directory } = localActorDirectory(ws.rt.actor);
@@ -477,13 +477,15 @@ export class LocalAgentHost {
       tracing: undefined,
       storage: {
         sql,
-        transactionSync: (write) => db.transaction(write)(),
+        transactionSync: (write) => writeTransaction(db, write),
         exec: (query, ...bindings) => hubSql.exec(query, ...bindings),
       },
       directory,
       // No build identity for the builtin loop: a `bun`-run checkout has no build stamp.
       installedBuild: null,
-      runtimeFor: (bound) => this.runtimeFor(runtimes, dbPath, db, bound),
+      // Its own entry's port; a seated swarm node has none, and takes no input to be reviewed on.
+      advisorPort: (bound) => this.byActor.get(bound.reference.actorId)?.temporary ?? null,
+      runtimeFor: (bound) => this.runtimeFor(runtimes, db, bound),
       filesFor: async (bound) => {
         if (!ws.rt.filesForActor) throw new KinuError('missing', 'workspace has no actor file-plane resolver');
 
@@ -496,12 +498,12 @@ export class LocalAgentHost {
         const named = parentEntry?.session.pendingLoopOrigin(bound.reference.actorId);
 
         return {
-          origin: named ?? defaultLoopOrigin(bound.record.kind),
+          origin: named ?? defaultLoopOrigin(bound.record.origin),
           parent: parentEntry === null ? null : parentEntry.ws.rt,
         };
       },
       orchestrationFor: (bound) => {
-        const ownsSession = bound.record.kind === 'main' || bound.record.kind === 'subordinate';
+        const ownsSession = bound.record.origin !== 'swarm';
         const clientId = ownsSession ? bound.reference.actorId : bound.reference.parentActorId;
 
         if (clientId === null) throw new KinuError('missing', 'A reporting actor has no session to publish through.');
@@ -528,7 +530,7 @@ export class LocalAgentHost {
     });
 
     return {
-      dbPath, db, host, directory, runtimes, orchestrations, driving: 0,
+      db, host, directory, runtimes, orchestrations, driving: 0,
       hold: new DriverLeaseHold({ sql, execRaw: makeExecRaw(db), proc: OS_LEASE_PROCESS }, this.driverKind),
     };
   }
@@ -539,7 +541,6 @@ export class LocalAgentHost {
    */
   private async runtimeFor(
     runtimes: Map<string, CLIRuntime>,
-    dbPath: string,
     db: Database,
     bound: BoundActor,
   ): Promise<AgentRuntime> {
@@ -554,7 +555,7 @@ export class LocalAgentHost {
 
     const parent = this.requireActorEntry(parentId);
 
-    if (bound.record.kind !== 'subordinate') {
+    if (!isSubordinateOrigin(bound.record.origin)) {
       // The observer the seater named, read off the parent entry's session: only the caller knows what
       // watches this seat.
       return await buildLocalActorRuntime(
@@ -568,7 +569,7 @@ export class LocalAgentHost {
     const openConfig = this.childOpenConfig(parent, binding);
 
     const built = createCLIRuntime(db, {
-      ...openConfig, dbPath, agentName: binding.name, actor: bound.handle,
+      ...openConfig, agentName: binding.name, actor: bound.handle,
     });
 
     const shared = await shareLocalWorkspacePlane(built, parent.ws.rt, openConfig.facet);
@@ -583,7 +584,7 @@ export class LocalAgentHost {
     ws: LocalHostedAgent,
     record: WorkspaceActor,
   ): Promise<void> {
-    const agentName = record.kind === 'run'
+    const agentName = record.origin === 'swarm'
       ? headAgentName(record.storageKey)
       : subordinateAgentName(record.storageKey);
 
@@ -846,7 +847,7 @@ export class LocalAgentHost {
 
   /** The parent's provider wiring, directory forced to the parent's ref: a child binds no other plane. */
   private childOpenConfig(parent: HostEntry, binding: LocalActorBinding): CLIOpenConfig & { facet: string } {
-    if (binding.kind !== 'subordinate') throw new KinuError('denied', 'The roster path is not a subordinate actor.');
+    if (!isSubordinateOrigin(binding.origin)) throw new KinuError('denied', 'The roster path is not a subordinate actor.');
 
     return { ...parent.ws.openConfig, cwd: parent.ref.cwd, facet: subordinateAgentName(binding.storageKey), actorBinding: binding };
   }
@@ -1053,7 +1054,7 @@ export class LocalAgentHost {
       vfs: parent.ws.rt.storage.vfs,
       // One transaction: core's replay fast path answers `already_held` off the dedupe key, so an
       // interruption between insert and roster update would leave the child `working` forever.
-      transaction: (body) => parent.tree.db.transaction(body)(),
+      transaction: (body) => writeTransaction(parent.tree.db, body),
       announce: (report: AdmittedSubordinateReport) => {
         const metadata: JsonObject = {
           kind: 'report',
@@ -1067,7 +1068,12 @@ export class LocalAgentHost {
         ));
       },
       onAdmitted: () => this.wake(parent, 'subordinate report'),
-      onEvolutionAnswer: () => this.answerWake(parent),
+      // No job queue here: the stored answer is the owed delivery, made below and, after a death, at the next start.
+      evolutionAnswerStored: () => undefined,
+      onEvolutionAnswer: async () => {
+        this.answerWake(parent);
+        await parent.session.deliverAdvisorAnswers();
+      },
       temporary: parent.temporary,
     }, {
       fromSubordinate: child.name,
@@ -1153,7 +1159,7 @@ export class LocalAgentHost {
         const parent = parentOf();
 
         return await this.retireCreation(parent, {
-          name: input.name, creationId: input.creationId, lifetime: input.lifetime,
+          name: input.name, creationId: input.creationId, lifetime: input.lifetime, origin: input.origin,
         });
       },
       assign: async (name, input) => {
@@ -1228,7 +1234,7 @@ export class LocalAgentHost {
   ): Promise<HostEntry> {
     if (this.closed) throw new Error('LocalAgentHost is closed.');
     const key = `${parent.key}/${input.name}`;
-    const binding = registerLocalActor(parent.ws.rt.actor, { name: input.name, creationId: input.creationId, kind: 'subordinate', lifetime: input.lifetime });
+    const binding = registerLocalActor(parent.ws.rt.actor, { name: input.name, creationId: input.creationId, origin: input.origin, lifetime: input.lifetime });
     const openingKey = `${parent.key}/${binding.storageKey}`;
     const pending = this.opening.get(openingKey);
 
@@ -1268,7 +1274,7 @@ export class LocalAgentHost {
     const sql = makeSql(tree.db);
 
     try {
-      tree.db.transaction(() => {
+      writeTransaction(tree.db, () => {
         // The child's own handle; stores below are scoped to it, so one database holds N descriptors.
         const actor = bindLocalActor(sql, binding);
         actor.config.setDisplayNameOrigin(input.displayName, input.nameOrigin);
@@ -1277,7 +1283,7 @@ export class LocalAgentHost {
         const inheritedModel = parent.config.getModel();
 
         if (inheritedModel) actor.config.setModel(inheritedModel);
-      })();
+      });
       const actor = await tree.host.acquire(binding.reference);
       const rt = tree.runtimes.get(binding.reference.actorId);
 
@@ -1374,11 +1380,11 @@ export class LocalAgentHost {
   /** Retire a creation cancelled before it ran, through the host like every retirement. */
   private async retireCreation(
     parent: HostEntry,
-    input: { name: string; creationId: string; lifetime: WorkspaceActor['lifetime'] },
+    input: { name: string; creationId: string; lifetime: WorkspaceActor['lifetime']; origin: SubordinateSeed['origin'] },
   ): Promise<ActorReference> {
     // `cancelCreation`, not register-then-destroy: it refuses a mismatched birth and never activates the row.
     const reference = cancelLocalCreation(parent.ws.rt.actor, {
-      name: input.name, creationId: input.creationId, kind: 'subordinate', lifetime: input.lifetime,
+      name: input.name, creationId: input.creationId, origin: input.origin, lifetime: input.lifetime,
     });
 
     await parent.tree.host.retire(parent.actor.reference, {
@@ -1407,7 +1413,7 @@ export class LocalAgentHost {
     const ownerMade = (actor: WorkspaceActor): boolean => {
       for (let step: WorkspaceActor | null = actor; step !== null && step.actorId !== entry.actor.reference.actorId;
         step = tree.directory.retained(step.parentActorId ?? '')) {
-        if (this.hirerRoster(tree, step)?.get(step.name)?.createdBy === 'user') return true;
+        if (step.origin === 'user') return true;
       }
 
       return false;
@@ -1449,7 +1455,7 @@ export class LocalAgentHost {
   /** A task agent's retire, off its turn and joined by close(). */
   private retireOffTurn(agent: string, work: () => Promise<void>): void {
     const pass: Promise<void> = this.retireTaskChild(work).then((outcome) => {
-      if (!outcome.ok) diagnostics.failure('host.task_child_release_failed', outcome.error, { agent });
+      if (Result.isFailure(outcome)) diagnostics.failure('host.task_child_release_failed', outcome.failure, { agent });
       this.answerPasses.delete(pass);
     });
 
@@ -1513,7 +1519,7 @@ export class LocalAgentHost {
     const { parentKey } = entry;
 
     if (parentKey === null) {
-      const hires = entry.tree.directory.list().filter((record) => record.kind === 'subordinate');
+      const hires = entry.tree.directory.list().filter((record) => isSubordinateOrigin(record.origin));
 
       for (const orphan of dismissOrphanedAssignments(makeSqlExec(entry.tree.db), new Set(hires.map((record) => record.actorId)))) {
         diagnostics.event('subordinate.assignment_orphaned', { agent: entry.key, actor: orphan.actorId, assignment: orphan.id });

@@ -1,19 +1,5 @@
-diff --git a/dist/agent-routing-CnkaHb-v.d.ts b/dist/agent-routing-CnkaHb-v.d.ts
-index 07ae3e535f77ae29689662228b381b2f03451524..64d1aa70026c06d734682bb321dda031ca081608 100644
---- a/dist/agent-routing-CnkaHb-v.d.ts
-+++ b/dist/agent-routing-CnkaHb-v.d.ts
-@@ -5398,6 +5398,9 @@ declare class Agent<
-    * @internal
-    */
-   private _cf_resolveSubAgent;
-+  /** Existing storage only. Does not bootstrap or recover the child. */
-+  getExistingSubAgent<T extends Agent>(cls: SubAgentClass<T>, name: string): Promise<SubAgentStub<T> | null>;
-+  private _existingSubAgentIdentity;
-   /**
-    * Forcefully abort a running sub-agent. The child stops executing
-    * immediately and will be restarted on next {@link subAgent} call.
 diff --git a/dist/chat/react.js b/dist/chat/react.js
-index 6698ed48841e17b1a5c8c59665188b1d8f2f0f03..e828fc19d4cd17c77ab9b9abb9b1095b3ff42467 100644
+index 6698ed4..e828fc1 100644
 --- a/dist/chat/react.js
 +++ b/dist/chat/react.js
 @@ -818,6 +818,10 @@ function useAgentChat(options) {
@@ -42,11 +28,11 @@ index 6698ed48841e17b1a5c8c59665188b1d8f2f0f03..e828fc19d4cd17c77ab9b9abb9b1095b
  		}
  		function onAgentOpen() {
  			socketIsOpen = true;
-diff --git a/dist/src-5W6JNKVb.js b/dist/src-5W6JNKVb.js
-index 8154429c7c282aac3cba5f62c49f21f48164b721..05232bc0bfd88481180bd7cb5c188750f0fc9168 100644
---- a/dist/src-5W6JNKVb.js
-+++ b/dist/src-5W6JNKVb.js
-@@ -2640,52 +2640,79 @@ var Agent = class Agent extends DurableObject {
+diff --git a/dist/src-BNU3ZiJM.js b/dist/src-BNU3ZiJM.js
+index 5f71fe6..8e815d9 100644
+--- a/dist/src-BNU3ZiJM.js
++++ b/dist/src-BNU3ZiJM.js
+@@ -3332,52 +3332,79 @@ var Agent = class Agent extends DurableObject {
  	async _checkRunFibers() {
  		if (this._runFiberRecoveryInProgress) return;
  		this._runFiberRecoveryInProgress = true;
@@ -166,7 +152,7 @@ index 8154429c7c282aac3cba5f62c49f21f48164b721..05232bc0bfd88481180bd7cb5c188750
              UPDATE cf_agents_fibers
              SET status = 'interrupted',
                  snapshot = ${row.snapshot},
-@@ -2693,78 +2720,100 @@ var Agent = class Agent extends DurableObject {
+@@ -3385,78 +3412,100 @@ var Agent = class Agent extends DurableObject {
              WHERE fiber_id = ${row.id}
                AND status IN ('pending', 'running')
            `;
@@ -331,60 +317,3 @@ index 8154429c7c282aac3cba5f62c49f21f48164b721..05232bc0bfd88481180bd7cb5c188750
  			}
  		} finally {
  			this._runFiberRecoveryInProgress = false;
-@@ -5312,26 +5361,42 @@ var Agent = class Agent extends DurableObject {
-       LIMIT 1
-     `[0] ?? null;
- 	}
--	async _cf_subAgentIdentity(className, name, childPath) {
-+	_existingSubAgentIdentity(className, name) {
- 		const row = this._subAgentRegistryRow(className, name);
--		if (row) {
--			if (row.identity_version === SUB_AGENT_IDENTITY_VERSION_PATH_V2 && typeof row.identity_name === "string") return {
--				version: SUB_AGENT_IDENTITY_VERSION_PATH_V2,
--				name: row.identity_name,
--				existing: true
--			};
--			return {
--				version: SUB_AGENT_IDENTITY_VERSION_LEGACY,
--				name,
--				existing: true
--			};
--		}
--		return {
-+		if (!row) return null;
-+		if (row.identity_version === SUB_AGENT_IDENTITY_VERSION_PATH_V2 && typeof row.identity_name === "string") return {
-+			version: SUB_AGENT_IDENTITY_VERSION_PATH_V2, name: row.identity_name, existing: true
-+		};
-+		return { version: SUB_AGENT_IDENTITY_VERSION_LEGACY, name, existing: true };
-+	}
-+	async _cf_subAgentIdentity(className, name, childPath) {
-+		return this._existingSubAgentIdentity(className, name) ?? {
- 			version: SUB_AGENT_IDENTITY_VERSION_PATH_V2,
- 			name: pathV2IdentityName(name, await sha256Hex(JSON.stringify(childPath))),
- 			existing: false
- 		};
- 	}
-+	/** Return registered facet storage without bootstrap or recovery.
-+	 * The caller must verify its retained application identity before reading. */
-+	async getExistingSubAgent(cls, name) {
-+		const className = cls.name;
-+		if (!this._existingSubAgentIdentity(className, name)) return null;
-+		const ctx = this.ctx;
-+		if (!ctx.facets || !ctx.exports) throw new Error("Facet storage is unavailable in this runtime.");
-+		const storedPath = await ctx.storage.get("cf_agents_parent_path");
-+		const isFacet = await ctx.storage.get("cf_agents_is_facet");
-+		if (isFacet && (!isValidParentPath(storedPath) || storedPath.length === 0)) throw new Error("The facet parent identity is missing.");
-+		const rootClassName = isValidParentPath(storedPath) && storedPath.length > 0 ? storedPath[0].className : this.constructor.name;
-+		const rootNs = ctx.exports[rootClassName];
-+		const Cls = ctx.exports[className];
-+		if (!Cls || !rootNs?.idFromName) throw new Error("The registered facet class or root namespace is unavailable.");
-+		if (!this._existingSubAgentIdentity(className, name)) return null;
-+		return ctx.facets.get(`${className}\0${name}`, () => {
-+			const identity = this._existingSubAgentIdentity(className, name);
-+			if (!identity) throw new Error("The facet was removed before storage lookup.");
-+			return { class: Cls, id: rootNs.idFromName(identity.name) };
-+		});
-+	}
- 	/** @internal */
- 	_forgetSubAgent(className, name) {
- 		this._ensureSubAgentRegistry();

@@ -12,11 +12,11 @@ import type { AgentRuntime } from '../types/agent-runtime';
 import type { SessionHistory } from '../session/history';
 import type { ExecutorProviderSurface } from '../execution/types';
 import {
-  BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription, WEB_TOOL_ACTIONS, keepBuiltins,
+  BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription, keepBuiltins,
 } from './registry';
 import { TaskListStore } from './task-store';
 import { clampToolResult, withClampedToolResult, type ClampToolResultOptions } from './clamp';
-import { oneOf, withCheckedInput, withCheckedInputs } from './tool-schema';
+import { withCheckedInput, withCheckedInputs } from './tool-schema';
 import { codemodeInputSchema } from './sandbox-contract';
 import { connectedDevices } from '../execution/device-status';
 import { deviceMountSegment } from '../execution/device-tunnel-executor';
@@ -35,7 +35,8 @@ import { commandResult, CommandResultSchema, type CommandResult } from '../execu
 import { TurnEscalationLedger } from '../execution/escalation';
 import { createMemoryDispatcher, memoryToolInputSchema } from './memory-tool';
 import { createTasksDispatcher, TasksToolInputSchema, type RoleSwitch } from './tasks-tool';
-import { type WebSearchProvider, type WebSearchResponse } from '../web/index';
+import type { WebSearchProvider } from '../web/index';
+import { createWebTool } from './web-tool';
 import { PlanEditSchema, type SubmitPlanToolDeps } from '../types/plans';
 import type { JsonValue } from '../utils/json';
 import { diagnostics, KinuError, toKinuError, type Logger } from '../obs/index';
@@ -64,8 +65,6 @@ export type CodemodeBuilder = (surface: CodemodeSurface) => ToolSet[string];
 export interface BuiltinToolDeps {
   workMode?: WorkMode;
   rt: AgentRuntime;
-  /** Filter cutoff override (default: DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection). */
-  minEffectiveScore?: number;
   /**
    * null: sandbox-side compilation (CF Worker Loader prelude). Omitted: no crafted executor.
    */
@@ -77,12 +76,6 @@ export interface BuiltinToolDeps {
   /** Enables remember/recall/forget and joins facts into the search RRF merge. */
   facts?: import('../memory/facts').FactsStore;
   history: SessionHistory;
-  /** Crafted-tool surfacing; 'relevant' injects FTS5 top-K plus frequently used recent tools. */
-  toolSurfacing?: {
-    mode: 'all' | 'relevant';
-    query?: string;
-    maxRelevant?: number;
-  };
   /** Wired only on subordinate actors. */
   report?: ReportToolDeps;
   webSearch?: WebSearchProvider;
@@ -112,37 +105,12 @@ export interface ReportToolDeps {
 }
 
 /** Crafted-tool map, read fresh each call; codegen only via `craftedToolExecute`. */
-function buildCraftedToolSetFromExecute(
-  rt: AgentRuntime,
-  factory: CraftedToolExecute,
-  minScore: number,
-  surfacing?: { mode: 'all' | 'relevant'; query?: string; maxRelevant?: number },
-) {
+function buildCraftedToolSetFromExecute(rt: AgentRuntime, factory: CraftedToolExecute) {
   const out: CraftedToolSet = {};
 
-  const list = selectInjectableCraftedTools(rt.craftStore, rt.storage.sql, minScore);
-
-  let relevantNames: Set<string> | null = null;
-
-  if (surfacing?.mode === 'relevant') {
-    const maxRelevant = surfacing.maxRelevant ?? 20;
-    const half = Math.max(5, Math.floor(maxRelevant / 2));
-    relevantNames = new Set();
-
-    // Unguarded on purpose: the schema guarantees these, and swallowing a failure would silently narrow the callable set.
-    if (surfacing.query && surfacing.query.length > 0) {
-      for (const hit of rt.craftStore.search(surfacing.query, half)) relevantNames.add(hit.name);
-    }
-
-    const top = rt.storage.sql<{ name: string }>`
-      SELECT name FROM crafted_tools
-      ORDER BY uses DESC, last_used_at DESC LIMIT ${maxRelevant}`;
-
-    for (const r of top) relevantNames.add(r.name);
-  }
+  const list = selectInjectableCraftedTools(rt.craftStore, rt.storage.sql, DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection);
 
   for (const t of list) {
-    if (relevantNames && !relevantNames.has(t.name)) continue;
     const description = t.description;
 
     try {
@@ -179,13 +147,6 @@ function memoizeCraftedExecute(factory: CraftedToolExecute): CraftedToolExecute 
     return execute;
   };
 }
-
-const WebToolInputSchema = z.object({
-  action: oneOf(WEB_TOOL_ACTIONS),
-  query: z.string().describe('For search.').optional(),
-  limit: z.number().describe('For search: max results (default 5, max 20).').optional(),
-  url: z.string().describe('For fetch: an absolute http(s) URL.').optional(),
-});
 
 const PlanEditsInputSchema = z.object({ edits: z.array(PlanEditSchema).min(1) });
 
@@ -257,7 +218,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   });
 
   tools.eval = withClampedToolResult(tools.eval, {
-    vfs: rt.storage.vfs, budget, producer: 'eval',
+    vfs: rt.storage.vfs, budget, producer: 'eval', images: true,
   });
 
   // No fallback chain: an unready runtime returns a structured error, never silently routes elsewhere.
@@ -355,7 +316,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   });
 
   tools.file = createFileTool({
-    vfs: rt.storage.vfs,
+    vfs: rt.toolFiles,
     ledger: deps.fileLedger ?? new TurnFileLedger(),
     budget,
     memory,
@@ -393,35 +354,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     execute: async (args) => runTasksAction(args),
   }));
 
-  const webSearch = deps.webSearch;
-
-  if (webSearch) {
-    tools.web = permitInPlan(tool({
-      description: BUILTIN_TOOL_DESCRIPTIONS.web,
-      inputSchema: WebToolInputSchema,
-      execute: async (args) => {
-        switch (args.action) {
-          case 'search': {
-            if (!args.query) throw new KinuError('bad_input', 'web.search requires `query`');
-            const res = await webSearch.search(args.query, args.limit !== undefined ? { limit: args.limit } : undefined);
-
-            return formatSearchResults(res);
-          }
-
-          case 'fetch': {
-            if (!args.url) throw new KinuError('bad_input', 'web.fetch requires `url`');
-            const res = await webSearch.fetch(args.url);
-            // The provenance header is inside the clamped text so a hostile title cannot buy room outside the cap.
-            const header = `# ${res.title ?? res.url}\nSource: ${res.url}\nRetrieved: ${res.retrievedAt}\n\n`;
-
-            return clampToolResult(header + res.markdown, {
-              vfs: rt.storage.vfs, budget, producer: 'web_fetch',
-            });
-          }
-        }
-      },
-    }));
-  }
+  if (deps.webSearch) tools.web = createWebTool({ provider: deps.webSearch, vfs: rt.storage.vfs, budget });
 
   if (deps.report) {
     const report = deps.report;
@@ -473,25 +406,6 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   return toolsInWorkMode(deps.workMode ?? 'build', withCheckedInputs(tools));
 }
 
-function formatSearchResults(res: WebSearchResponse): string {
-  if (res.results.length === 0) {
-    return `No web results for "${res.query}".`;
-  }
-
-  const lines: string[] = [];
-
-  if (res.answer) lines.push(`Answer: ${res.answer}`, '');
-
-  for (const r of res.results) {
-    const date = r.date ? ` (${r.date})` : '';
-    lines.push(`${r.position}. ${r.title}${date}\n   ${r.url}\n   ${r.snippet}`);
-  }
-
-  lines.push('', `[${res.results.length} results via ${res.source}]`);
-
-  return lines.join('\n');
-}
-
 function isExecutableToolEntry(
   input: { value: unknown },
 ): input is { value: ExecutableToolEntry } {
@@ -514,16 +428,11 @@ export function installCodemode(
     : undefined;
 
   const craftedTools = (): CraftedToolSet => craftedToolExecute
-    ? buildCraftedToolSetFromExecute(
-        rt,
-        craftedToolExecute,
-        deps.minEffectiveScore ?? DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection,
-        deps.toolSurfacing,
-      )
+    ? buildCraftedToolSetFromExecute(rt, craftedToolExecute)
     : {};
 
   const built = build({ native: toolsInWorkMode(deps.workMode ?? 'build', surface), craftedTools, providers: rt.executionRouter?.getProviders() ?? [] });
-  const clamp = { vfs: rt.storage.vfs, producer: 'eval' as const };
+  const clamp = { vfs: rt.storage.vfs, producer: 'eval' as const, images: true as const };
   surface.eval = withCheckedInput('eval', withClampedToolResult(
     built,
     deps.contextBudget ? { ...clamp, budget: deps.contextBudget } : clamp,

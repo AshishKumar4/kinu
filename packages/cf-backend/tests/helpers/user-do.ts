@@ -468,6 +468,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       },
     },
     abort: (reason: string): void => { aborts.push(reason); },
+    // The SDK's Lifecycle starts inside it; nothing else runs concurrently in a test.
+    blockConcurrencyWhile: <Result,>(fn: () => Promise<Result>): Promise<Result> => fn(),
     // Tag-filtered like the platform: `device:<id>` returns only that machine's socket.
     getWebSockets: (tag?: string) => {
       const all = [...(attached === null ? [] : [socket]), ...live.map((entry) => entry.ws), ...daemons.map((d) => d.ws)];

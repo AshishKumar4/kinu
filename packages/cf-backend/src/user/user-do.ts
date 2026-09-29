@@ -104,7 +104,7 @@ import {
   DeviceTerminalHub, terminalFromSocket,
   DeviceRequestLedger,
   type ClaimedDeviceRequest, type DeviceCancelOutcome,
-  credentialToHeaders,
+  credentialToHeaders, refusedLogin, type AuthRequest,
   validateCredential, validateCredentialKey, validateWorkspaceName,
   createCredentialCipher, isSealedCredential, type CredentialCipher,
   listEgressSecrets, putEgressSecret, resolveEgressInjection,
@@ -3685,7 +3685,7 @@ export class UserDO extends Agent<Env> {
     return null;
   }
 
-  async getAuthHeaders(caller: UserCaller, key: string, opts?: { forceRefresh?: boolean }): Promise<Record<string, string> | null> {
+  async getAuthHeaders(caller: UserCaller, key: string, opts?: AuthRequest): Promise<Record<string, string> | null> {
     await this.requireCredentialAccess(caller, key);
     validateCredentialKey(key);
     // `cloudflare.ai-gateway` is a derived view of the Cloudflare login: same bearer and refresh,
@@ -3698,11 +3698,13 @@ export class UserDO extends Agent<Env> {
     let cred: Credential = stored.cred;
 
     const issuer = subscriptionIssuer(storedKey);
+    // Refused on the login this store still holds; one another caller already rotated is served as it stands.
+    const refused = opts?.rejected !== undefined && refusedLogin(credentialToHeaders(storedKey, cred), opts.rejected);
 
     if (issuer !== null && cred.kind === 'oauth') {
       if (!cred.refreshToken) return null;
 
-      if (opts?.forceRefresh === true || issuer.expiring(cred)) {
+      if (refused || issuer.expiring(cred)) {
         const refreshed = await this.refreshSubscriptionLogin(storedKey, { cred, revision: stored.revision }, issuer);
 
         if (refreshed === 'revoked') return null;
@@ -3714,7 +3716,7 @@ export class UserDO extends Agent<Env> {
     }
 
     if (storedKey === CLOUDFLARE_OAUTH_CRED_KEY && cred.kind === 'oauth') {
-      const needRefresh = opts?.forceRefresh === true || isCloudflareCredentialExpiring(cred);
+      const needRefresh = refused || isCloudflareCredentialExpiring(cred);
 
       if (needRefresh) {
         if (!cred.refreshToken) return null;

@@ -2,14 +2,12 @@
  * Local actor identity: one SQLite file, N logical actors, each a `workspace_actors` row.
  * The directory re-validates on every handle touch, so a retired actor stops answering at once.
  */
-import { resolve } from 'node:path';
-import type { Database } from 'bun:sqlite';
-import {
-  WorkspaceActorDirectory, bindActorHandle, explorationActorKey,
-  type ActorHandle, type ActorReference, type CreateWorkspaceActor, type SqlExecutor,
-  type WorkspaceActor, type NodeIdentity,
-} from '@kinu.run/core';
-import { KinuError } from '@kinu.run/core/obs';
+import { WorkspaceActorDirectory, type CreateWorkspaceActor, type WorkspaceActor } from '../identity/workspace-actors';
+import { bindActorHandle, type ActorHandle, type ActorReference } from '../identity/actor-handle';
+import { explorationActorKey } from '../identity/actor-key';
+import type { SqlExecutor } from '../types/primitives';
+import type { NodeIdentity } from '../strategy/node-workspace';
+import { KinuError } from '../obs/error';
 
 interface LocalActorScope {
   readonly directory: WorkspaceActorDirectory;
@@ -21,7 +19,7 @@ export interface LocalActorBinding {
   readonly reference: ActorReference;
   readonly name: string;
   readonly storageKey: string;
-  readonly kind: WorkspaceActor['kind'];
+  readonly origin: WorkspaceActor['origin'];
   readonly createdAt: number;
 }
 
@@ -36,14 +34,6 @@ export type LocalActorConfig =
 const actors = new WeakMap<ActorHandle, LocalActorScope>();
 
 const bindings = new WeakMap<LocalActorBinding, LocalActorScope>();
-
-function databasePath(path: string): string {
-  return path === ':memory:' ? path : resolve(path);
-}
-
-export function requireLocalDatabasePath(db: Database, path: string): void {
-  if (databasePath(db.filename) !== databasePath(path)) throw new KinuError('denied', 'The runtime path does not match its database.');
-}
 
 /** Open only. Root birth registers the main actor before calling this function. */
 export function openLocalRootActor(sql: SqlExecutor): ActorHandle {
@@ -82,7 +72,7 @@ function bindScoped(scope: LocalActorScope, reference: ActorReference): LocalAct
   const path = scope.directory.storagePath(reference);
   const actor = scope.directory.validate(reference, path);
   const row = scope.directory.describe(actor);
-  const binding = Object.freeze({ reference: Object.freeze(reference), name: row.name, storageKey: row.storageKey, kind: row.kind, createdAt: row.createdAt });
+  const binding = Object.freeze({ reference: Object.freeze(reference), name: row.name, storageKey: row.storageKey, origin: row.origin, createdAt: row.createdAt });
   bindings.set(binding, { ...scope, path });
 
   return binding;
@@ -120,7 +110,7 @@ type LocalActorCreation = Omit<CreateWorkspaceActor, 'parent'>;
 
 export function registerLocalActor(parent: ActorHandle, input: LocalActorCreation): LocalActorBinding {
   const scope = scopeFor(parent);
-  const entry = scope.directory.apply(parent, scope.path, { action: 'register', creationId: input.creationId, name: input.name, kind: input.kind, lifetime: input.lifetime });
+  const entry = scope.directory.apply(parent, scope.path, { action: 'register', creationId: input.creationId, name: input.name, origin: input.origin, lifetime: input.lifetime });
 
   return bindChild(scope, entry.reference, input.name);
 }
@@ -137,7 +127,7 @@ export function openLocalActor(parent: ActorHandle, name: string): LocalActorBin
 /** The one caller wanting a handle without a binding; others use `registerLocalActor` + `bindLocalActor`. */
 export function registerLocalNode(parent: ActorHandle, node: NodeIdentity): ActorHandle {
   const scope = scopeFor(parent);
-  const entry = scope.directory.apply(parent, scope.path, { action: 'register', name: explorationActorKey(node.nodeId), creationId: node.nodeId, kind: 'run', lifetime: 'task' });
+  const entry = scope.directory.apply(parent, scope.path, { action: 'register', name: explorationActorKey(node.nodeId), creationId: node.nodeId, origin: 'swarm', lifetime: 'task' });
   const actor = scope.directory.open(entry.reference.actorId);
   actors.set(actor, { ...scope, path: scope.directory.storagePath(entry.reference) });
 

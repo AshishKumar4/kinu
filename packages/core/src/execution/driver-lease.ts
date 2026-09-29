@@ -75,8 +75,6 @@ interface DriverLeaseHolderRow extends DriverLeaseHolder {
   readonly token: string;
 }
 
-const CLAIM_ATTEMPTS = 4;
-
 /**
  * Compare-and-swap on the read token, decided by re-reading: the SQL seam returns no row count. A row that moved under
  * the write is decided again: a daemon releases and re-takes after every pass.
@@ -86,27 +84,16 @@ function acquireDriverLease(
   kind: DriverKind,
 ): DriverLeaseResult {
   initDriverLeaseTable(deps.execRaw);
-  let settled: DriverLeaseHolderRow | null = null;
 
-  for (let attempt = 0; attempt < CLAIM_ATTEMPTS; attempt++) {
+  for (;;) {
     const outcome = claimOnce(deps, kind);
 
-    if (!('moved' in outcome)) return outcome;
-    settled = outcome.moved;
+    if (outcome !== null) return outcome;
   }
-
-  const holder = settled ?? { pid: deps.proc.pid, kind };
-
-  return {
-    refused: refusalOf(new KinuError(
-      'unavailable',
-      `another ${holder.kind} driver (process ${String(holder.pid)}) kept claiming this conversation first`,
-    )),
-    holder: { pid: holder.pid, kind: holder.kind },
-  };
 }
 
-function claimOnce(deps: DriverLeaseDeps, kind: DriverKind): DriverLeaseResult | { readonly moved: DriverLeaseHolderRow | null } {
+/** Null when the row moved under the write. */
+function claimOnce(deps: DriverLeaseDeps, kind: DriverKind): DriverLeaseResult | null {
   const proc = deps.proc;
   const current = readRow(deps.sql);
   const token = crypto.randomUUID();
@@ -140,9 +127,7 @@ function claimOnce(deps: DriverLeaseDeps, kind: DriverKind): DriverLeaseResult |
       ON CONFLICT(id) DO NOTHING`;
   }
 
-  const settled = readRow(deps.sql);
-
-  return settled?.token === token ? { held: { token, kind, pid: proc.pid } } : { moved: settled };
+  return readRow(deps.sql)?.token === token ? { held: { token, kind, pid: proc.pid } } : null;
 }
 
 /** Check before every gated operation: a lease can be preempted between operations. */

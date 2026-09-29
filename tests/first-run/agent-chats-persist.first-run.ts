@@ -14,9 +14,9 @@
  * kept, not deleted". The second half is `conversation_heads`: `newestId()`
  * returned a stored head without asking whether it still named a row, so a head
  * that did not resolve took every read down an anonymous ancestry failure and
- * handed `record` a parent that re-roots the next message. Both are unit-tested
- * now (`packages/cf-backend/tests/unit-subordinates.test.ts`,
- * `packages/core/tests/unit-transcript-head.test.ts`), and neither unit can see
+ * handed `record` a parent that re-roots the next message. The first is unit-tested
+ * (`packages/cf-backend/tests/unit-subordinates.test.ts`); the second went with the head
+ * table when the chat became a list (cbadfe1b72). Neither unit can see
  * what a DEPLOYED workspace serves a browser that comes back to it.
  *
  * WHAT MAKES THIS ROW DIFFERENT from `agent-tab`. That row proves a tab the

@@ -6,7 +6,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { createTestRuntime, unobservedSpend } from '@kinu.run/test-utils';
+import { createTestRuntime, scriptedAdvisorPort, unobservedSpend } from '@kinu.run/test-utils';
 import { SwarmConfigSchema } from '../src/tools/swarm-input';
 import type { JsonValue } from '../src/utils/json';
 import {
@@ -274,19 +274,11 @@ describe('the context axis carries the inheritance question, at one spelling', (
 });
 
 describe('a tool-using node over a shared workspace is a runnable composition', () => {
-  test('the advisor reviews agent nodes, not the judge samples scoring those nodes', async () => {
+  test('a swarm node is scored by the judge, not reviewed: it takes no input a note could reach', async () => {
     const { rt, testSql } = createTestRuntime();
     rt.actor.config.setAdvisorEnabled(true);
-    let reviews = 0;
     let scores = 0;
-    rt.advisorLlm = {
-      async *stream() { yield ''; },
-      complete: async () => {
-        reviews++;
-
-        return JSON.stringify({ note: 'The result omitted the requested verification.', severity: 'nit', class: 'wrong-work' });
-      },
-    };
+    const advisor = scriptedAdvisorPort();
     rt.judgeModel = {
       async *stream() { yield ''; },
       complete: async () => { scores++;
@@ -300,7 +292,7 @@ describe('a tool-using node over a shared workspace is a runnable composition', 
 
     const result = await runSwarm({
       reportModelCall: unobservedSpend,
-      rt, hostNode: hostedSeatsOver({ rt, db: testSql.db, autoEvolve: true }).hostNode,
+      rt, hostNode: hostedSeatsOver({ rt, db: testSql.db, autoEvolve: true, advisorPort: advisor }).hostNode,
       mode: 'build',
       model: scriptedTurnModel({ doGenerate: async () => ({
         content: [{ type: 'text', text: 'A candidate solution.' }],
@@ -316,10 +308,8 @@ describe('a tool-using node over a shared workspace is a runnable composition', 
     if ('reason' in result) throw new Error(result.error);
     expect(result.report.expansions).toBe(3);
     expect(scores).toBe(6);
-    expect(reviews).toBe(3);
+    expect(advisor.tasks).toEqual([]);
     expect(rt.storage.sql`SELECT actor_id FROM completed_turns`).toEqual([]);
-    expect(rt.storage.sql<{ actor_id: string }>`SELECT actor_id FROM evolution_events WHERE type = 'advisor_note'`)
-      .toHaveLength(3);
   });
 
   test('a tool-using node run starts — no `unsupported` about a shared workspace', async () => {

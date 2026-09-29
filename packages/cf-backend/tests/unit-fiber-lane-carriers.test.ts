@@ -9,7 +9,7 @@ import {
   EVOLUTION_LANE_FIBER, MCP_WARM_LANE_FIBER,
   TERMINAL_LANE_FIBER, classifyRecoveredFiber, type FiberLaneTransports,
 } from '../src/fiber-recovery';
-import { ADVISOR_LANE_FIBER, BACKGROUND_FIBER_PREFIX, recoveryBackoffMs } from '@kinu.run/core';
+import { BACKGROUND_FIBER_PREFIX, recoveryBackoffMs } from '@kinu.run/core';
 
 /** Read from the module's own verdict rather than restated. */
 const LaneSnapshotSchema = v.object({ lane: v.string(), redrive: v.string() });
@@ -23,8 +23,6 @@ function recordingTransports() {
       recoverOrphans: () => Promise.resolve([]),
     },
     runDueSessionEvolution: () => Promise.resolve(),
-    hasAdvisorNoteForTurn: () => false,
-    reviewAdvisorSnapshot: () => Promise.resolve(null),
     armOwedTerminalRecovery: () => Promise.resolve(),
     deliverSignal: () => Promise.resolve('queued' as const),
     redrive: (lane) => { redriven.push(lane); },
@@ -51,28 +49,6 @@ describe('every recovered lane leaves a carrier, or drops on purpose', () => {
       expect(verdict.status).toBe('completed');
       expect(scene.redriven).toEqual([lane]);
     }
-  });
-
-  test('the advisor lane redrives an unreviewed turn and refuses to double a note', () => {
-    const snapshot: JsonValue = {
-      turn: {
-        userMessage: 'do the thing', assistantResponse: 'done', toolCalls: [],
-        steps: 1, durationMs: 5, feedback: null, hadError: false, turnId: 'turn-9',
-      },
-      reachable: [], minSeverity: 'concern', recent: [],
-    };
-
-    const fresh = recordingTransports();
-    expect(classifyRecoveredFiber(fresh.transports, fiber(ADVISOR_LANE_FIBER, snapshot)).status)
-      .toBe('completed');
-    expect(fresh.redriven).toEqual([ADVISOR_LANE_FIBER]);
-
-    const reviewed = recordingTransports();
-    reviewed.transports = { ...reviewed.transports, hasAdvisorNoteForTurn: () => true };
-    const verdict = classifyRecoveredFiber(reviewed.transports, fiber(ADVISOR_LANE_FIBER, snapshot));
-    // The work already landed; the note row is the durable evidence.
-    expect(verdict.status).toBe('completed');
-    expect(reviewed.redriven).toEqual([]);
   });
 
   test('the MCP warm lane drops on purpose: the next settled turn warms again', () => {

@@ -1,6 +1,7 @@
 /** The one cf-side construction of the shared web provider, so wiring cannot drift between actors. */
 
 import { createDefaultWebSearchProvider, type WebSearchProvider } from './provider';
+import { bindingQuickActions, type BrowserRunQuickActions } from './browser-run';
 import type { AuthResolver } from '../providers/types';
 import type { ModelCallSink } from '../events/model-call';
 import { workersAiHtmlToMarkdown, type WorkersAiMarkdown } from '../providers/model-invocation';
@@ -8,6 +9,7 @@ import { workersAiHtmlToMarkdown, type WorkersAiMarkdown } from '../providers/mo
 /** Structural so core compiles without the Worker's ambient `Env`. */
 interface WebProviderEnv {
   readonly AI?: WorkersAiMarkdown;
+  readonly BROWSER: BrowserRunQuickActions;
 }
 
 /**
@@ -26,6 +28,7 @@ export function buildCfWebSearchProvider(
 
       return auth ? auth(key, opts) : null;
     },
+    browser: { quickActions: bindingQuickActions(env.BROWSER) },
   };
 
   const htmlToMarkdown = workersAiHtmlToMarkdown(env, reportModelCall);

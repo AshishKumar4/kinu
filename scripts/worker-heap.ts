@@ -54,9 +54,9 @@ export const PER_HELPER_RETAINED_BOUND_BYTES = 250_000;
  *  SDK's record of the call's response messages, and the request JSON the retry wrapper keeps for a resend. */
 export const HELPER_TURN_LIVE_BOUND_BYTES = 3_600_000;
 
-/** Measured 2026-09-27 at {@link HELPERS}, a helper with 4 pages of 1 MB waiting on its own hire: 16.8 MB (twice) before
- *  4920df14d6, each page held as streamed and as decoded for the prompt; 12.8-13.4 MB over 4 runs after. At 0.2 MB
- *  pages the two overlapped in collector noise (1.5-2.2 against 2.3). */
+/** Measured 2026-09-29 at {@link HELPERS}, a helper with 4 pages of 1 MB whose turn ended waiting on its own hire, held:
+ *  8.1-8.8 MB over 8 runs on integration 36aa590761. Every figure before this row waited on its hire's runner read a
+ *  stale park (1-2 MB, before the tree started) or the helper's own next step (16-17 MB, mid-turn over its pages). */
 export const WAITING_PARENT_LIVE_BOUND_BYTES = 14_500_000;
 
 /** Measured 2026-09-27 at {@link LONG_TURN}, after the setup, step and heads above in the same isolate: 104-116 MB
@@ -370,6 +370,11 @@ export async function measure(): Promise<HeapMeasurement> {
 
       await long;
 
+      // A root turn returns once it has hired; its helpers' turns end with their runners, each after its release.
+      const noRunners = async (left: number): Promise<void> => {
+        while (v.parse(v.number(), JSON.parse(await ask('/runners?workspace=helpers'))) > left) await Bun.sleep(50);
+      };
+
       const HelperStateSchema = v.object({ calls: v.number(), helpersAnswered: v.number() });
 
       // Settled: every helper answered and no model call arrived for half a second.
@@ -402,15 +407,20 @@ export async function measure(): Promise<HeapMeasurement> {
       const helperTurnLive = await inspector.liveHeap() - settledHelpers;
       await ask('/model?holdHelper=0');
       await running;
+      await noRunners(0);
 
       // The helper, its pages written, hires one of its own, held on its first call: the helper and the root wait.
       await ask(`/model?answerBytes=${String(HELPERS.waitingPageBytes)}&hires=1&nest=1&holdHelper=1`);
       const nested = ask('/turn?workspace=helpers&text=HIRE-ROOT');
 
       while (!v.parse(v.object({ helperParked: v.boolean() }), JSON.parse(await ask('/model'))).helperParked) await Bun.sleep(50);
+
+      // Waiting: the helper's turn ended with its hire's answer owed, so the held hire's runner is the only one left.
+      await noRunners(1);
       const waitingParentLive = await inspector.liveHeap() - settledHelpers;
       await ask('/model?holdHelper=0');
       await nested;
+      await noRunners(0);
       await ask('/model?hires=0&nest=0');
 
       return { afterSetup, stepLive: during - idle, idleRetained: idle - setUp, headsRetained, perHelperRetained, helperTurnLive, waitingParentLive, longTurnPeak, longTurnGrowth: lastLive - firstLive, wide };

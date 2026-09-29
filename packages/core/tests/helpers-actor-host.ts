@@ -4,7 +4,7 @@ import type { Database } from 'bun:sqlite';
 import { makeSqlExec } from './helpers';
 import { KinuError } from '../src/obs/error';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
-import { WorkspaceActorDirectory, type WorkspaceActor } from '../src/identity/workspace-actors';
+import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { explorationActorKey } from '../src/identity/actor-key';
 import { createActorHost, type ActorHost, type BoundActor } from '../src/state/actor-host';
 import type { AgentTracing } from '../src/obs/agent-tracing';
@@ -22,6 +22,7 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import type { BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host';
 import type { Identity } from '../src/types/primitives';
+import type { TemporaryAgentPort } from '../src/types/subordinates';
 
 /** The one role a fixture actor resolves under; no `allowedTools`, so it never narrows a suite's surface. */
 const TESTER: RoleDefinition = {
@@ -51,7 +52,7 @@ export interface HostedSeats {
   readonly broadcasts: readonly BroadcastEvent[];
   readonly enqueued: readonly ProgrammaticTurn[];
   /** The seat one logical actor's turn runs on; idempotent per name, so a re-hosted node keeps its actor. */
-  seat(name: string, kind: Exclude<WorkspaceActor['kind'], 'main'>): Promise<HostedNodeSeat>;
+  seat(name: string, origin: 'agent' | 'swarm'): Promise<HostedNodeSeat>;
   /** `hostNode` over these seats: one actor per node id, all over the one database. */
   readonly hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
 }
@@ -68,6 +69,8 @@ export function hostedSeatsOver(input: {
   readonly autoEvolve?: boolean;
   /** Spans every seat's turns. */
   readonly tracing?: AgentTracing;
+  /** The port every seat hires its advisor through; absent, no seat is reviewed. */
+  readonly advisorPort?: TemporaryAgentPort;
 }): HostedSeats {
   const { rt, db } = input;
   const runId = input.runId ?? 'run-hosted-fixture';
@@ -140,11 +143,12 @@ export function hostedSeatsOver(input: {
     orchestrationFor,
     // No run events published; a suite asserting context-edit audit rows binds its own.
     contextEvents: () => null,
+    advisorPort: () => input.advisorPort ?? null,
   });
 
   const seat = async (
     name: string,
-    kind: Exclude<WorkspaceActor['kind'], 'main'>,
+    origin: 'agent' | 'swarm',
   ): Promise<HostedNodeSeat> => {
     const known = seats.get(name);
 
@@ -154,10 +158,10 @@ export function hostedSeatsOver(input: {
     // the caller's name, so re-seating a node is the same admitted creation.
     const handle = directory.create({
       parent,
-      name: kind === 'subordinate' ? name : explorationActorKey(name),
+      name: origin === 'agent' ? name : explorationActorKey(name),
       creationId: `creation-${name}`,
-      kind,
-      lifetime: kind === 'subordinate' ? 'durable' : 'task',
+      origin,
+      lifetime: origin === 'agent' ? 'durable' : 'task',
     });
 
     const actor = await host.acquire({
@@ -189,7 +193,7 @@ export function hostedSeatsOver(input: {
     broadcasts,
     enqueued,
     seat,
-    hostNode: (node) => seat(node.nodeId, 'run'),
+    hostNode: (node) => seat(node.nodeId, 'swarm'),
   };
 }
 

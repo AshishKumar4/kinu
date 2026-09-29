@@ -2,10 +2,12 @@
 
 ## Plannotator UI
 
-Kinu includes components from `@plannotator/ui` 0.30.0, part of
+Kinu includes components from `@plannotator/ui` 0.46.1, part of
 [Plannotator](https://github.com/backnotprop/plannotator), copyright 2025
-backnotprop. Kinu distributes those components under the MIT License. The
-required copyright notice and license text sit in
+backnotprop, and its plan viewer and annotation panel
+(`packages/cf-backend/src/components/plan-review/`) are derived from that
+package's 0.30.0 `Viewer` and `AnnotationPanel`. Kinu distributes both under
+the MIT License. The required copyright notice and license text sit in
 [`third_party/plannotator-LICENSE-MIT`](third_party/plannotator-LICENSE-MIT).
 
 ## Mossaic SDK

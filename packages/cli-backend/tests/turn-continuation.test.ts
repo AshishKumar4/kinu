@@ -107,7 +107,7 @@ function workspaceDb() {
   const db = new Database(scratchPath('turn-continuation', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
-  return { db, rt: createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM }) };
+  return { db, rt: createCLIRuntime(db, { llm: DUMMY_LLM }) };
 }
 
 /** One process's session answering each of `texts` in turn; `beforeNext` runs before every turn after the first. */
@@ -129,7 +129,7 @@ async function answered(
 async function userEntry(rt: CLIRuntime, text: string): Promise<string> {
   const transcript = rt.stores.history.transcript(CHAT_SESSION_ID);
 
-  for (const entry of transcript.ancestry()) {
+  for (const entry of transcript.entries()) {
     if (entry.role === 'user' && (await transcript.project(entry.id))?.content === text) return entry.id;
   }
 
@@ -140,7 +140,7 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
   test('the continuation seals the run it re-opened, so a third process re-opens nothing', async () => {
     const db = new Database(scratchPath('turn-continuation', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
 
     const eventsA: SessionEvent[] = [];
     const a = new LocalAgentSession({ rt, db, model: scriptedModel([parked('part-')]), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsA.push(event) });
@@ -175,7 +175,7 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
   test('a turn re-opened after its process died is counted once as resumed, with the steps it kept', async () => {
     const db = new Database(scratchPath('turn-continuation', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
     const logger = createRecordingLogger();
     const restore = setDiagnosticsSink(logger);
 
@@ -206,7 +206,7 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
   test('a re-opened turn keeps the person\u2019s request after this turn\u2019s runtime context on every step', async () => {
     const db = new Database(scratchPath('turn-continuation', 'agent.db'));
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+    const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
     await rt.storage.vfs.mkdir(`${WORKSPACE_SKILLS_DIR}/focused`, { recursive: true });
     await rt.storage.vfs.writeFile(workspaceSkillPath('focused'), '---\nname: focused\ndescription: a memory-only skill\nallowed_tools: [memory]\n---\nFocus on memory only.\n');
 
@@ -236,6 +236,67 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
     }
 
     await Promise.race([dying, Promise.resolve()]);
+    db.close();
+  });
+});
+
+/** Streams `lead`, then calls `memory`, then holds the step open until the process running it dies. */
+const parkedAfterCall = (lead: string, toolCallId: string): Step => (abortSignal) => new ReadableStream({
+  async start(controller) {
+    controller.enqueue({ type: 'stream-start', warnings: [] });
+    controller.enqueue({ type: 'text-start', id: '0' });
+    controller.enqueue({ type: 'text-delta', id: '0', delta: lead });
+    controller.enqueue({ type: 'text-end', id: '0' });
+    controller.enqueue({ type: 'tool-call', toolCallId, toolName: 'memory', input: '{}' });
+    await new Promise<void>((resolve) => { abortSignal?.addEventListener('abort', () => resolve(), { once: true }); });
+  },
+});
+
+/** A dead process's cut step, then a second process that re-opens and finishes it. */
+async function resumed(cut: Step, finish: Step): Promise<{ readonly db: Database; readonly stored: string | null; readonly streamed: readonly string[] }> {
+  const db = new Database(scratchPath('turn-continuation', 'agent.db'));
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+  const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
+
+  const eventsA: SessionEvent[] = [];
+  const a = new LocalAgentSession({ rt, db, model: scriptedModel([cut]), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsA.push(event) });
+  const dying = a.send('carry on', { id: crypto.randomUUID() });
+  await waitFor(() => eventsA.some((event) => event.type === 'text-delta'));
+
+  const eventsB: SessionEvent[] = [];
+  const b = new LocalAgentSession({ rt, db, model: scriptedModel([finish]), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsB.push(event) });
+  await waitFor(() => eventsB.some((event) => event.type === 'turn-end'));
+  await b.end();
+  await Promise.race([dying, Promise.resolve()]);
+
+  const transcript = rt.stores.history.transcript(CHAT_SESSION_ID);
+  const last = [...transcript.entries()].reverse().find((entry) => entry.role === 'assistant');
+  const stored = last === undefined ? null : (await transcript.project(last.id))?.content ?? null;
+
+  return { db, stored, streamed: eventsB.flatMap((event) => event.type === 'text-delta' ? [event.delta] : []) };
+}
+
+// 2026-09-28 (turn-sql, one buffer): the cut step's partial is read back from the stream buffer, not a run-event ledger.
+describe('A STEP CUT MID-STREAM — resumed from what it streamed', () => {
+  test('the text a dead process streamed heads the answer once, and is not streamed again', async () => {
+    const { db, stored, streamed } = await resumed(parked('part-'), answer('one'));
+
+    expect(stored).toBe('part-one');
+    expect(streamed.join('')).toBe('one');
+    db.close();
+  });
+
+  test('a step cut after it called a tool keeps its text with that step, not at the head of the answer', async () => {
+    const { db, stored } = await resumed(parkedAfterCall('lead-', 'cut-call'), answer('one'));
+
+    expect(stored).toBe('one');
+    db.close();
+  });
+
+  test('a streamed turn writes its progress to the stream buffer alone, not to the run-event log', async () => {
+    const { db } = await resumed(parked('part-'), answer('one'));
+
+    expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM run_events WHERE type = 'step_partial'").get()?.n).toBe(0);
     db.close();
   });
 });

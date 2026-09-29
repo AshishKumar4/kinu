@@ -5,7 +5,7 @@
 
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
-import { sameActorReference, testModel, type ModelTestResult } from '@kinu.run/core';
+import { sameActorReference, testModel, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
 import type { ActorHandle, JsonObject } from '@kinu.run/core';
 import { resolve } from 'node:path';
 import {
@@ -28,13 +28,13 @@ import type {
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
   DeferredApproval, DeferredApprovalAnswer,
-  AgentsSwarmDeps, AgentsToolDeps, TeamToolDeps, PeersToolDeps,
+  AgentsSwarmDeps, AgentsToolDeps, TeamToolDeps, PeersToolDeps, TemporaryAgentPort,
   MissingCapability, DynamicApproval,
   RunEvent, RunEventInput, RunEventQuery,
   BuiltinToolName,
   FileCheckpointListing, FileRestorePlan, FileRestoreResult,
   CheckpointAvailability,
-  WorkMode, JsonValue, SessionHistory,
+  WorkMode, SessionHistory,
 } from '@kinu.run/core';
 import { TierIdSchema,
   ActorSession, type ActorTurnLease, type ActorExecutionInput,
@@ -85,9 +85,7 @@ import { TierIdSchema,
   measureCompactionTrigger,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   AdvisorRecoverySnapshotSchema,
-  ADVISOR_LANE_FIBER, reviewRecordedTurn,
-  advisorWorkspaceGuidance,
-  createDefaultWebSearchProvider, createWebCodemodeProvider, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
+  createDefaultWebSearchProvider, createWebCodemodeProvider, restBrowserRunAccess, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
   createAgentsCodemodeProvider, createStateCodemodeProvider,
   type CodemodeProvider,
   agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider,
@@ -157,13 +155,13 @@ import { TierIdSchema,
 import {
   diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
 } from '@kinu.run/core/obs';
-import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from './runtime';
-import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, type LocalActorBinding } from './actor-identity';
+import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, writeTransaction, type CLIRuntime } from './runtime';
+import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, type LocalActorBinding } from '@kinu.run/core';
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
 import { createNodeCodemodeToolFactory } from './codemode-tool-factory';
 import { createCLIHeadRuntime, hostedCodemodeTool, type CLIHeadRuntimeDeps } from './head-runtime';
-import { detectOrphanedFibers, type OrphanedFiber } from '@kinu.run/core';
+import { detectOrphanedFibers } from '@kinu.run/core';
 import { connectMcpServers, type McpServerConfig } from './mcp';
 import type { LocalModelResolver } from './model-resolver';
 import {
@@ -285,15 +283,6 @@ export const LOCAL_MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
 /** bun:sqlite with a real `transaction`: approval migration and settled-turn commits need atomicity. */
 export type LocalSessionDb = Pick<Database, 'prepare' | 'transaction'>;
-
-/** Core's advisor recovery snapshot plus the completion gate's armed state, which is RAM-only
- *  here; recording it lets a replayed review reach the verdict the turn earned. */
-const RecordedAdvisorSchema = v.object({
-  ...AdvisorRecoverySnapshotSchema.entries,
-  gateOpen: v.boolean(),
-});
-
-type RecordedAdvisor = v.InferOutput<typeof RecordedAdvisorSchema>;
 
 /**
  * The answer a subordinate's turn owes its parent, installed by the owning host. A port, not a
@@ -424,7 +413,7 @@ export class LocalAgentSession {
   private readonly taskList: TaskListStore;
   private readonly jobRunner: BackgroundJobRunner;
   private readonly clock: Clock;
-  /** Durable MCTS checkpoint, so an interrupted think(mcts) resumes instead of losing its budget. */
+  /** Durable swarm checkpoint, so an interrupted swarm resumes instead of losing its budget. */
   private readonly mctsSearchStore: MctsSearchStore;
   private readonly factsStore: FactsStore;
   private readonly config: AgentConfigStore;
@@ -607,6 +596,9 @@ export class LocalAgentSession {
       installedBuild: null,
       events: this.eventRecorder,
       orchestration: orchestration.deps,
+      advisorPort: () => this.advisorPort(),
+      // The completion gate is RAM here: while it waits for its answer, the advisor records its note silently.
+      gateOpen: () => this.chat.completionGate.open,
     });
 
     this.compactionState = createCompactionStateStore(this.rt.storage.sql, this.rt.actor);
@@ -620,7 +612,7 @@ export class LocalAgentSession {
       eventRecorder: this.eventRecorder,
       compactionState: this.compactionState,
       // `rt.storage.sql` and `db` are the same connection.
-      transaction: (body) => this.db.transaction(body)(),
+      transaction: (body) => writeTransaction(this.db, body),
       transport: { deliver: (event) => { opts.onEvent(event); } },
       ports: {
         prepareTurn: (item, lease) => this.prepareTurn(item, lease),
@@ -702,6 +694,7 @@ export class LocalAgentSession {
         this.eventRecorder.emit(this.chat.currentRunId ?? WORKSPACE_RUN_ID, { type: 'approval_consumed', ...record });
       },
       announce: () => { this.host.broadcast({ type: 'pending_actions_changed' }); },
+      writes: null,
     });
 
     this.rt.setApprovalDeferrals?.(this.deferrals.channel);
@@ -1094,7 +1087,7 @@ export class LocalAgentSession {
     return this._headRuntime;
   }
 
-  /** Heads are grounded with the same executor and judge MCTS scores branches with. */
+  /** Heads are grounded with the same executor and judge the swarm scores nodes with. */
   private buildHeadGrounding(): HeadGrounding {
     if (this.rt.judgeModel) return {
       executor: this.rt.executor,
@@ -1107,7 +1100,7 @@ export class LocalAgentSession {
 
   /** Only `web.*`: a head forks its parent's resources, never its authority to delegate. */
   private headCodemodeExtras(): CodemodeProvider[] {
-    return [createWebCodemodeProvider(this.getWebSearchProvider())];
+    return [this.webNamespace()];
   }
 
   /** Skips a window outliving the session so consumed events never bind to a dead pump's turn. */
@@ -1143,7 +1136,7 @@ export class LocalAgentSession {
     input: string | { text: string; files: ReadonlyArray<PromptFile> },
     opts: Pick<SendOptions, 'tier' | 'id' | 'mode'>,
   ): Promise<SendLanding> {
-    return this.chat.send(input, opts);
+    return whenActorTakesInput(this.rt.storage.sql, this.rt.actor.actorId, () => this.chat.send(input, opts));
   }
 
   /** Run a mid-turn redirect as a budgeted head beside the live turn, settling into Alternate Takes
@@ -1341,14 +1334,18 @@ export class LocalAgentSession {
   /**
    * Await detached fibers until settled or `deadline`. Bounded because they may be servers that
    * never finish; anything still running is left running and recovered on the next start.
-   * Returns true when everything settled.
+   * Returns true when everything settled. Notices name jobs only; other fibers are the session's own closing work.
    */
   private async joinBackgroundFibers(deadline: number): Promise<boolean> {
     if (this.backgroundFibers.size === 0) return true;
-    this.emit({
-      type: 'background', event: 'bg_jobs_settling',
-      message: `${this.backgroundFibers.size} background job(s) still running. Waiting for their results.`,
-    });
+    const running = this.jobs.listRunning().items;
+
+    if (running.length > 0) {
+      this.emit({
+        type: 'background', event: 'bg_jobs_settling',
+        message: `${String(running.length)} background job(s) still running: ${jobRoster(running)}. Waiting for their results.`,
+      });
+    }
 
     while (this.backgroundFibers.size > 0) {
       const remaining = deadline - this.clock.now();
@@ -1370,16 +1367,13 @@ export class LocalAgentSession {
   private announceAbandonedJobs(): void {
     const interrupted = this.jobs.listRunning().items;
 
-    const roster = interrupted
-      .map((job) => `${job.id} (${job.kind}${job.label ? `: ${job.label}` : ''})`)
-      .join(', ');
+    if (interrupted.length === 0) return;
 
     const message =
-      `${this.backgroundFibers.size} background job(s) did not finish in time and were interrupted by this ` +
+      `${String(interrupted.length)} background job(s) did not finish in time and were interrupted by this ` +
       'exit. They are checkpointed, so this workspace resumes them the next time it starts, including ' +
       'unattended under the local scheduler daemon. A resumed job runs commands and writes files on ' +
-      `this machine. Cancel with: kinu jobs ${this.agentName()} cancel <id>.` +
-      (roster ? ` Interrupted: ${roster}.` : '');
+      `this machine. Cancel with: kinu jobs ${this.agentName()} cancel <id>. Interrupted: ${jobRoster(interrupted)}.`;
 
     this.emit({ type: 'background', event: 'bg_jobs_abandoned', message });
     diagnostics.failure('jobs.abandoned_at_exit', new KinuError('timeout', message), {
@@ -1415,14 +1409,8 @@ export class LocalAgentSession {
       verified: recovered.verified.length, refused: recovered.refused.length, failed: recovered.failed.length,
       unreadable: recovered.unreadable.length, active: recovered.active.length, stalled: recovered.stalled.length,
     });
-    const advisorOrphans: OrphanedFiber[] = [];
 
     for (const orphan of detectOrphanedFibers(this.rt.storage.sql, this.rt.actor)) {
-      if (orphan.name === ADVISOR_LANE_FIBER) {
-        advisorOrphans.push(orphan);
-        continue;
-      }
-
       if (orphan.name.startsWith('bg:')) await this.jobRunner.recover(orphan.snapshot);
       void this.rt.storage.sql`DELETE FROM fibers
         WHERE actor_id = ${this.rt.actor.actorId} AND id = ${orphan.id}`;
@@ -1443,6 +1431,8 @@ export class LocalAgentSession {
       }),
       logActivity: (event, detail) => this.emit({ type: 'background', event, message: detail ?? '' }),
     });
+    // An advisor that answered while this process was gone.
+    await this.actorSession.deliverAdvisorAnswers();
     const reviews = await this.actorSession.orchestrator.runDeferredTurnReviews();
 
     if (reviews.reviewed > 0 || reviews.refused.length > 0) {
@@ -1457,17 +1447,14 @@ export class LocalAgentSession {
       });
     }
 
-    await this.recoverTerminalTransitions(advisorOrphans);
+    await this.recoverTerminalTransitions();
   }
 
   /**
    * Finish owed terminal sequences under the driver lease: core's in-flight guard is process-local,
    * so two processes would run the same effects. No gate installed means no other driver.
-   * Advisor orphans first (each is a model call), then the terminal ledger.
    */
-  async recoverTerminalTransitions(
-    advisorOrphans: readonly OrphanedFiber[] = [],
-  ): Promise<void> {
+  async recoverTerminalTransitions(): Promise<void> {
     const refusal = this.driverGate?.();
 
     if (refusal) {
@@ -1476,37 +1463,9 @@ export class LocalAgentSession {
       return;
     }
 
-    for (const orphan of advisorOrphans) {
-      await this.recoverAdvisorLane(orphan.snapshot);
-      void this.rt.storage.sql`DELETE FROM fibers
-        WHERE actor_id = ${this.rt.actor.actorId} AND id = ${orphan.id}`;
-    }
-
     await this.terminal.resumeAll();
     // A replayed sequence can enqueue a turn; the advisor gate state travels in the row, not RAM.
     this.chat.pump();
-  }
-
-  /** Re-drive an interrupted advisor review from its snapshot (DO fiber recovery parity).
-   *  Idempotent on the note: its presence says whether the review already finished. */
-  private async recoverAdvisorLane(snapshot: JsonValue | null): Promise<void> {
-    const parsed = v.safeParse(RecordedAdvisorSchema, snapshot);
-
-    if (!parsed.success) {
-      diagnostics.failure('advisor.snapshot_unreadable', toKinuError({
-        doing: 'reading the turn an interrupted advisor review was about',
-        cause: new Error(parsed.issues.map((issue) => issue.message).join('; ')),
-        otherwise: 'unsupported',
-      }));
-
-      return;
-    }
-
-    const turnId = parsed.output.turn.turnId;
-
-    if (turnId !== undefined && this.engine.hasAdvisorNoteForTurn(turnId)) return;
-    // The gate verdict comes off the checkpoint; this process never armed the RAM gate.
-    await this.runAdvisorReview(parsed.output);
   }
 
   /** Re-drive an interrupted background job through core's shared resume gate over the raw surface,
@@ -1819,6 +1778,7 @@ export class LocalAgentSession {
       liveTurn.retries = profile.retries;
       liveTurn.fallbacks = profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
         spec: normalize(spec),
+        accepts: this.modelCatalog.acceptedMedia(spec),
         bind: () => {
           const { provider } = parseModelSpec(normalize(spec));
 
@@ -1866,9 +1826,6 @@ export class LocalAgentSession {
 
     const scoped = this.actorSession.orchestrator.scopedTurn(input.turn);
 
-    // Recorded, not re-read on replay: the tool surface, dedupe window and severity floor can change.
-    const advisor = this.actorSession.advisorSnapshot(scoped, input.reachableTools);
-
     const relay = this.parentRelay;
 
     const facts: TerminalTurnFacts = {
@@ -1895,15 +1852,11 @@ export class LocalAgentSession {
     if (input.overflowRetry) parts.overflowRetry = true;
 
     if (gated) parts.completionGate = { text: this.chat.completionGate.task };
-    // Every review input is recorded, matching the Durable Object's snapshot; the gate's armed state
-    // is RAM and a fresh process reads it closed.
-    parts.advisor = projectJsonValue({
-      value: {
-        ...advisor,
-        // Whether the gate will be waiting when the advisor speaks: `gated` for this turn, `open` for an earlier one.
-        gateOpen: gated || this.chat.completionGate.open,
-      },
-    });
+
+    // Recorded, not re-read on replay: the tool surface can change. Owed only when the actor reviews turns.
+    if (this.actorSession.reviewsTurns) {
+      parts.advisor = projectJsonValue({ value: this.actorSession.advisorSnapshot(scoped, input.reachableTools) });
+    }
 
     // Decided once: the plan re-reads the pending version, so a replay would score against the wrong candidate.
     const sampled = owesShadowTrial(facts) ? shadowTrialPlan(this.scaffoldControl, input.messageId) : null;
@@ -2001,25 +1954,18 @@ export class LocalAgentSession {
       turn_record: turnRecordTerminalEffect(this.actorSession.orchestrator),
       event_drain: eventDrainTerminalEffect(this.actorSession.orchestrator),
 
+      // The CLI's lanes run elsewhere (evolution on its own queue); the row keeps the roster whole.
       improvement_lanes: terminalEffect({
-        input: v.object({
-          status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema,
-          advisor: RecordedAdvisorSchema,
-        }),
-        // Verdict uses the recorded mode. Awaited to its checkpoint: before it nothing is on disk for
-        // `recoverAdvisorLane`, so "recoverable" and "row done" must coincide.
+        input: v.object({ status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema }),
+        run: () => ({ status: 'completed' }),
+      }),
+
+      // The snapshot is the row's input, so a replay hires on the tool surface the turn had; the hire is
+      // keyed on the turn, so a replay hires no second advisor.
+      advisor_review: terminalEffect({
+        input: v.object({ status: RunEndReasonSchema, workMode: WorkModeSchema, advisor: AdvisorRecoverySnapshotSchema }),
         run: async ({ status, workMode, advisor }) => {
-          if (!this.actorSession.orchestrator.improvementLanesOpen(status, workMode)) {
-
-            return { status: 'completed', detail: 'improvement lanes closed for this turn' };
-          }
-
-          await this.actorSession.startAdvisorLane({
-            turn: advisor.turn,
-            snapshot: projectJsonValue({ value: advisor }),
-            carry: (name, body) => this.trackFiber(name, body),
-            review: () => this.runAdvisorReview(advisor),
-          });
+          if (this.actorSession.orchestrator.improvementLanesOpen(status, workMode)) await this.actorSession.hireAdvisor(advisor);
 
           return { status: 'completed' };
         },
@@ -2068,7 +2014,7 @@ export class LocalAgentSession {
         now: () => Date.now() + this.terminalClockSkewMs,
         fault: () => this.terminalEffectFault,
         // A real transaction on the same connection, so an interruption leaves a suffix, never a prefix.
-        transaction: <T,>(body: () => T): T => this.db.transaction(body)(),
+        transaction: <T,>(body: () => T): T => writeTransaction(this.db, body),
         // A re-announced turn keeps its id, so two responses can share a `turnId`; without this a close
         // deleted the live claim.
         turnIsLive: (turnId) => this.chat.pumping && this.chat.currentTurnId === turnId,
@@ -2208,31 +2154,6 @@ export class LocalAgentSession {
     );
   }
 
-  /**
-   * The one review body the live lane and recovery run. `gateOpen` is local-only: while the completion
-   * gate waits, the advisor records its note silently. Governed off the turn's labels. Never throws.
-   */
-  private async runAdvisorReview(recorded: RecordedAdvisor): Promise<void> {
-    if (this.rt.actor.parentActorId !== null) {
-      await this.actorSession.reviewTurn(recorded, recorded.gateOpen);
-
-      return;
-    }
-
-    await reviewRecordedTurn({
-      snapshot: recorded,
-      llm: this.rt.advisorLlm,
-      guidance: await advisorWorkspaceGuidance({
-        vfs: this.rt.agentStateVfs ?? this.rt.storage.vfs,
-        limits: async () => this.modelCatalog.contextFor(resolveModelRoute('advisor', await this.routingProfile()).model),
-      }),
-      govern: (llm, labels) => this.budget.govern(llm, labels),
-      gateOpen: recorded.gateOpen,
-      send: (signal) => this.actorSession.orchestrator.inbox.send(signal),
-      record: (note, turnId) => { this.engine.recordAdvisorNote(note, turnId); },
-    });
-  }
-
   private agentName(): string {
     try {
       return this.rt.storage.sql<{ name: string }>`SELECT name FROM workspace_identity LIMIT 1`[0]?.name ?? 'local';
@@ -2268,12 +2189,22 @@ export class LocalAgentSession {
     const options: DefaultWebSearchProviderDeps = {
       fetch: globalThis.fetch,
       resolve: async (hostname) => (await lookup(hostname, { all: true, verbatim: true })).map((answer) => answer.address),
+      browser: restBrowserRunAccess({ env: process.env, fetch: globalThis.fetch }),
     };
 
     if (getAuth) options.getAuth = getAuth;
     this._webSearchProvider = createDefaultWebSearchProvider(options);
 
     return this._webSearchProvider;
+  }
+
+  /** `web.*` in eval. A program here runs in this process, which holds no Browser Run socket client. */
+  private webNamespace(): CodemodeProvider {
+    const missing = 'Browser sessions run on the hosted backend; the CLI has rendered fetches and screenshots only';
+
+    return createWebCodemodeProvider({
+      provider: this.getWebSearchProvider(), vfs: this.rt.storage.vfs, sessions: { missing }, prelude: { missing },
+    });
   }
 
   /** Skill bodies already in the turn's prompt, so a mid-turn steer adds only new ones. */
@@ -2558,7 +2489,7 @@ export class LocalAgentSession {
       }).deps,
       // A head inherits the parent's promoted program, making it a fork of this agent.
       loopFor: (bound) => ({
-        origin: this.loopOrigins.get(bound.reference.actorId) ?? defaultLoopOrigin(bound.record.kind),
+        origin: this.loopOrigins.get(bound.reference.actorId) ?? defaultLoopOrigin(bound.record.origin),
         parent: this.rt,
       }),
       contextEvents: (bound) => bound.stores.eventRecorder,
@@ -2624,6 +2555,19 @@ export class LocalAgentSession {
   /** Automatic turn-end relay for a subordinate, distinct from the model's own {@link reportDeps}. */
   private parentRelay: LocalParentRelay | null = null;
 
+  /** The advisor is hired as every temporary agent is: through the team's port, absent without a host. */
+  protected advisorPort(): TemporaryAgentPort | null {
+    return this.teamDeps?.temporary ?? null;
+  }
+
+  /**
+   * This actor's advisor answered: its note reaches the conversation. The CLI has no durable job queue, so the
+   * stored answer is the owed delivery itself: an answer a death left undelivered goes at the next start.
+   */
+  async deliverAdvisorAnswers(): Promise<void> {
+    await this.actorSession.deliverAdvisorAnswers();
+  }
+
   /** Installed after construction: roster and peer inbox need the session's broadcast. */
   setTeam(deps: TeamToolDeps): void {
     this.teamDeps = deps;
@@ -2657,7 +2601,7 @@ export class LocalAgentSession {
 
     if (!this.planReviewSurface()) return requested;
 
-    return workModeUnderReview(requested, authoredTurnMetadata(item), this.stores.planReviews.getActive(CHAT_SESSION_ID));
+    return workModeUnderReview(requested, authoredTurnMetadata(item), () => this.stores.planReviews.getActive(CHAT_SESSION_ID));
   }
 
   private agentsToolDeps(mode: WorkMode): AgentsToolDeps {
@@ -2827,7 +2771,7 @@ export class LocalAgentSession {
       createStateCodemodeProvider(this.rt.actor.programState),
       // Plan scoping follows the resolved table scope, read from the live invocation.
       createDbCodemodeProvider(this.stores.appData),
-      createWebCodemodeProvider(this.getWebSearchProvider()),
+      this.webNamespace(),
       // `this.taskList` is the same TaskListStore the dynamic-context snapshot reads.
       createMemoryCodemodeProvider(() => ({
         memory: this.rt.memory, facts: this.factsStore, sql: this.rt.storage.sql,
@@ -2910,7 +2854,7 @@ export class LocalAgentSession {
     readonly seat: HostedNodeSeat;
   }> {
     const binding = registerLocalActor(this.rt.actor, {
-      name: explorationActorKey(creationId), creationId, kind: 'run', lifetime: 'task',
+      name: explorationActorKey(creationId), creationId, origin: 'swarm', lifetime: 'task',
     });
 
     declare(binding.reference.actorId);
@@ -3059,6 +3003,10 @@ export class LocalAgentSession {
 }
 
 export { serializeContentForHeads } from '@kinu.run/core';
+
+function jobRoster(jobs: readonly BackgroundJob[]): string {
+  return jobs.map((job) => `${job.id} (${job.kind}${job.label ? `: ${job.label}` : ''})`).join(', ');
+}
 
 /** Resolve when `work` settles or `ms` elapses on `clock`; the timer is always disarmed. */
 async function raceDeadline(clock: Clock, work: Promise<unknown>, ms: number): Promise<void> {

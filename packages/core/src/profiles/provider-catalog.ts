@@ -13,7 +13,6 @@ export interface ProviderListing {
   readonly reasoningEfforts?: Readonly<Record<string, readonly ReasoningEffort[]>>;
 }
 
-/** A registry's menu as a listing. */
 export function providerListingOf(menu: ModelMenu): ProviderListing {
   const reasoningEfforts: Record<string, readonly ReasoningEffort[]> = {};
 

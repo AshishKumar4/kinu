@@ -88,13 +88,7 @@ function captureFetch(response: () => Response): FetchCapture {
 function execOnlyBox(): KinuSandbox {
   return Object.create({
     resolveReadiness: async () => ({ kind: 'restored' as const }),
-    startProcess: async () => ({
-      id: 'p1',
-      exitCode: 0,
-      waitForExit: async () => ({ exitCode: 0 }),
-      getStatus: async () => 'exited',
-    }),
-    getProcessLogs: async () => ({ stdout: 'done', stderr: '' }),
+    execUntimed: async () => ({ stdout: 'done', stderr: '', exitCode: 0 }),
   });
 }
 

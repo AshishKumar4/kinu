@@ -26,11 +26,36 @@ describe('openWorkspaceCLI', () => {
     db.close();
   });
 
-  // A Nimbus 0.12 store holding the user's file, under the genesis stamp of a build that made one. Nimbus 0.13 resets
-  // such a store on its first open, so the refusal must come before it: every table stays as it was.
+  test('opening waits out another process\'s write instead of failing on the lock', async () => {
+    const dir = scratchDir('open-locked');
+    const dbPath = join(dir, 'agent.db');
+    const made = new Database(dbPath);
+    await createWorkspace(made, { name: 'jarvis', purpose: 'Run the lab.', llm: DUMMY_LLM });
+    made.close();
+
+    // Another process (the daemon) is mid-write when this one opens the workspace.
+    const holder = Bun.spawn([process.execPath, '-e', `
+      const { Database } = require('bun:sqlite');
+      const daemon = new Database(${JSON.stringify(dbPath)});
+      daemon.exec('PRAGMA journal_mode = WAL');
+      daemon.exec('BEGIN IMMEDIATE');
+      console.log('held');
+      setTimeout(() => daemon.exec('COMMIT'), 300);
+    `], { stdout: 'pipe' });
+
+    const reader = holder.stdout.getReader();
+    await reader.read();
+    const db = new Database(dbPath);
+
+    expect((await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM })).info.purpose).toBe('Run the lab.');
+    db.close();
+    await holder.exited;
+  });
+
+  // Nimbus 0.13 resets a 0.12 store on first open: refusal must precede that open and preserve every old table.
   test.each([
     ['the build before this batch, under an older table schema', 0xaaad420],
-    ["a build with today's tables, before the Nimbus store format joined the genesis", 0x02ad81a],
+    ["a build with today's tables, before the Nimbus store format joined the genesis", 0x1286404],
   ])('a database made by %s is refused by name before any schema runs over it, its files untouched', async (_, stamp) => {
     const dir = scratchDir('open-older');
     const dbPath = join(dir, 'agent.db');

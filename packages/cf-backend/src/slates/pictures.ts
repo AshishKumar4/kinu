@@ -217,9 +217,11 @@ export interface PictureCapture {
 }
 
 /** Loaded on first capture, not at cold start. */
-export async function browserCamera(binding: BrowserWorker): Promise<Camera> {
+export async function browserCamera(binding: Pick<BrowserRun, 'fetch'>): Promise<Camera> {
   const { default: puppeteer } = await import('@cloudflare/puppeteer');
-  const browser = await puppeteer.launch(binding);
+  // Puppeteer types the binding's fetch as the global one, whose `preconnect` is a hint it never gives.
+  const worker: BrowserWorker = { fetch: Object.assign((input: RequestInfo | URL, init?: RequestInit) => binding.fetch(input, init), { preconnect: () => undefined }) };
+  const browser = await puppeteer.launch(worker);
 
   return { shoot: (url) => photograph(browser, url), close: () => browser.close() };
 }

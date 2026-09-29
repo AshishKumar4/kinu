@@ -22,7 +22,7 @@ import {
 } from '@kinu.run/core';
 import { scriptedTurnModel, scratchPath, toolExecute, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { createCLIRuntime, makeWorkspaceSchemaSql, type CLIRuntime } from '../src/runtime';
-import { openLocalActor, registerLocalNode } from '../src/actor-identity';
+import { openLocalActor, registerLocalNode } from '@kinu.run/core';
 import { nodeSeatFactory } from './actor-fixture';
 
 const DUMMY_LLM: LLMProviderConfig = {
@@ -62,7 +62,6 @@ function cliRuntime(label: string): CLIRuntime {
   initWorkspaceSchema(makeWorkspaceSchemaSql(database));
 
   return createCLIRuntime(database, {
-    dbPath: database.filename,
     llm: DUMMY_LLM,
   });
 }
@@ -226,7 +225,7 @@ describe('a node seat shares the origin plane on its own head row', () => {
     expect(rt.shell).toBeDefined();
     const seat = await nodeSeatFactory(rt)({ nodeId: 'seat-probe', rootId: 'seat-probe', depth: 1 });
     // A former-node actor's seat runs on the origin plane; the home comes later through provisionNodeHome.
-    expect(seat.actor.record.kind).toBe('run');
+    expect(seat.actor.record.origin).toBe('swarm');
     expect(seat.actor.handle.actorId).not.toBe(rt.actor.actorId);
     expect(seat.actor.runtime.shell).toBe(rt.shell);
     expect(nodeHomeName(rt, 'seat-probe')).toBe(headAgentName(seat.actor.handle.storageKey));

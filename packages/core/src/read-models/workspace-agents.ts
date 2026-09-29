@@ -1,12 +1,12 @@
 import type { SqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import type { WorkspaceActor } from '../identity/workspace-actors';
+import { isSubordinateOrigin, type WorkspaceActor } from '../identity/workspace-actors';
 import { tableExists } from '../identity/schema';
 import { SubordinateRosterStore, subordinateTitle } from '../subordinates/roster';
 import { ownerFacingSubordinate } from '../protocol';
 import { codenameFor } from '../identity/naming';
 import type { SubordinateRosterEntry } from '../delegation/agents-tool';
-import { headStatusUnsettled } from '../heads/types';
+import { headStatusUnsettled, shownHeadStatus } from '../heads/types';
 import { HeadJournal } from '../heads/journal';
 import type { HeadRunView } from '../heads/types';
 import { actorReadHandle } from './workspace-work';
@@ -38,9 +38,9 @@ export function agentActive(agent: Pick<PanelAgent, 'activity'>): boolean {
 const SWARM_RUNS = 20;
 
 function subordinateCategory(entry: SubordinateRosterEntry): AgentCategory {
-  if (entry.createdBy === 'user') return 'user';
+  if (entry.origin === 'user') return 'user';
 
-  return entry.createdBy === 'evolution' ? 'background' : 'hired';
+  return entry.origin === 'evolution' ? 'background' : 'hired';
 }
 
 /** Working: an open turn claim. */
@@ -52,13 +52,12 @@ function subordinateActivity(entry: SubordinateRosterEntry, inTurn: boolean): Ag
   return inTurn ? 'working' : 'idle';
 }
 
-function headActivity(status: string, runRunning: boolean): AgentActivity {
+function headActivity(status: string, errorMessage: string | null, runRunning: boolean): AgentActivity {
   if (headStatusUnsettled(status)) return runRunning ? 'working' : 'failed';
 
   if (status === 'completed') return 'done';
 
-  // Stopped by the owner or with its search, not failed.
-  return status === 'aborted' ? 'stopped' : 'failed';
+  return shownHeadStatus(status, errorMessage) === 'stopped' ? 'stopped' : 'failed';
 }
 
 /** Parents first: creation times tie. */
@@ -66,7 +65,7 @@ function treeOrder(rootId: string, actors: readonly WorkspaceActor[]): Workspace
   const children = new Map<string, WorkspaceActor[]>();
 
   for (const row of actors) {
-    if (row.kind !== 'subordinate' || row.deletedAt !== null || row.parentActorId === null) continue;
+    if (!isSubordinateOrigin(row.origin) || row.deletedAt !== null || row.parentActorId === null) continue;
     children.set(row.parentActorId, [...children.get(row.parentActorId) ?? [], row]);
   }
 
@@ -139,7 +138,7 @@ function rosterAgents({ sql, exec, root, actors, labels, paths, handleOf }: Walk
 function swarmAgents({ sql, root, actors, labels, paths, handleOf }: Walk): PanelAgent[] {
   const agents: PanelAgent[] = [];
 
-  for (const owner of [root, ...actors.filter((row) => row.kind === 'subordinate' && row.deletedAt === null).map(handleOf)]) {
+  for (const owner of [root, ...actors.filter((row) => isSubordinateOrigin(row.origin) && row.deletedAt === null).map(handleOf)]) {
     const ownerLabel = labels.get(owner.actorId) ?? owner.name;
     const ownerPath = paths.get(owner.actorId) ?? null;
 
@@ -153,7 +152,7 @@ function swarmAgents({ sql, root, actors, labels, paths, handleOf }: Walk): Pane
         nodeLabels.set(node.id, label);
 
         agents.push({
-          key: `${run.rootId}/${node.id}`, label, category: 'swarm', activity: headActivity(node.status, running),
+          key: `${run.rootId}/${node.id}`, label, category: 'swarm', activity: headActivity(node.status, node.errorMessage, running),
           parent: (node.parentId === null ? undefined : nodeLabels.get(node.parentId)) ?? ownerLabel,
           open: { kind: 'node', runId: run.rootId, nodeId: node.id, owner: ownerPath }, tab: false, input: false,
         });

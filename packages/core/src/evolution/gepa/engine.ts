@@ -4,6 +4,7 @@
  * Every metric call counts against `budget.maxMetricCalls`.
  */
 
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import { nanoid } from '../../utils/nanoid';
 import { nowMs } from '../../utils/date';
@@ -17,192 +18,177 @@ import {
   type EvalInstance, type GepaCandidate, type GepaConfig, type GepaConstraints,
   type GepaResult, type GepaIterationState, type GepaMetric,
 } from './types';
-import { diagnostics, renderThrownChain, toKinuError } from '../../obs/index';
+import { diagnostics, renderThrownChain, settle, toKinuError } from '../../obs/index';
 
 type ProposalOutcome =
   | { ok: true; source: string; operator: 'mutate' | 'merge'; parentSource?: string }
   | { ok: false; reason: string };
 
 
-export async function runGepa<I = unknown, E = unknown>(
+export function runGepa<I = unknown, E = unknown>(
   config: GepaConfig<I, E>,
 ): Promise<GepaResult> {
-  if (config.evalSet.length === 0) {
-    throw new Error('runGepa: evalSet must be non-empty');
-  }
+  return settle(Effect.gen(function* () {
+    if (config.evalSet.length === 0) {
+      return yield* Effect.die(new Error('runGepa: evalSet must be non-empty'));
+    }
 
-  const budget = { ...DEFAULT_GEPA_BUDGET, ...config.budget };
-  // Minibatches come from the train set; scoring and Pareto always run on the full evalSet.
-  const trainSet = config.trainSet && config.trainSet.length > 0 ? config.trainSet : config.evalSet;
+    const budget = { ...DEFAULT_GEPA_BUDGET, ...config.budget };
+    // Minibatches come from the train set; scoring and Pareto always run on the full evalSet.
+    const trainSet = config.trainSet && config.trainSet.length > 0 ? config.trainSet : config.evalSet;
 
-  if (budget.minibatchSize <= 0) {
-    throw new Error(`runGepa: minibatchSize must be positive; got ${budget.minibatchSize}`);
-  }
+    if (budget.minibatchSize <= 0) {
+      return yield* Effect.die(new Error(`runGepa: minibatchSize must be positive; got ${budget.minibatchSize}`));
+    }
 
-  // The train set is however many failures the ledger holds, so over-asking caps rather than throws.
-  const minibatchSize = Math.min(budget.minibatchSize, trainSet.length);
-  const random = config.random ?? Math.random;
-  const instanceIds = config.evalSet.map(i => i.id);
+    // The train set is however many failures the ledger holds, so over-asking caps rather than throws.
+    const minibatchSize = Math.min(budget.minibatchSize, trainSet.length);
+    const random = config.random ?? Math.random;
+    const instanceIds = config.evalSet.map(i => i.id);
 
-  let metricCallsUsed = 0;
-  const charge = (n: number) => { metricCallsUsed += n; };
+    let metricCallsUsed = 0;
+    const charge = (n: number) => { metricCallsUsed += n; };
 
-  const budgetLeft = () => budget.maxMetricCalls - metricCallsUsed;
+    const budgetLeft = () => budget.maxMetricCalls - metricCallsUsed;
 
-  const seed = await scoreCandidate({
-    source: config.seed, parentId: null, evalSet: config.evalSet, metric: config.metric,
-  });
+    const seed = yield* Effect.promise(() => scoreCandidate({
+      source: config.seed, parentId: null, evalSet: config.evalSet, metric: config.metric,
+    }));
 
-  charge(config.evalSet.length);
-  await config.onCandidate?.({ candidate: seed, iteration: 0 });
-  const pool: GepaCandidate[] = [seed];
-  const history: GepaCandidate[] = [seed];
+    charge(config.evalSet.length);
+    yield* Effect.promise(() => Promise.resolve(config.onCandidate?.({ candidate: seed, iteration: 0 })));
+    const pool: GepaCandidate[] = [seed];
+    const history: GepaCandidate[] = [seed];
 
-  let stopReason: GepaResult['stopReason'] = 'iterations_exhausted';
-  let mergeInvocations = 0;
-  const REJECTION_GIVE_UP = 5;
+    let stopReason: GepaResult['stopReason'] = 'iterations_exhausted';
+    let mergeInvocations = 0;
+    const REJECTION_GIVE_UP = 5;
 
-  async function proposeViaMutate(): Promise<ProposalOutcome> {
-    const parent =
-      config.parentSelection === 'best-aggregate'
-        ? bestAggregate(pool)
-        : sampleParentByWeight(pool, instanceIds, random);
+    const proposeViaMutate = (): Effect.Effect<ProposalOutcome> => Effect.gen(function* () {
+      const parent =
+        config.parentSelection === 'best-aggregate'
+          ? bestAggregate(pool)
+          : sampleParentByWeight(pool, instanceIds, random);
 
-    const minibatch = sampleWithoutReplacement(trainSet, minibatchSize, random);
-    // Measurement failures invalidate the run; only proposal-generation failures are recoverable rejections.
-    const rollout = await rolloutMinibatch(parent.source, minibatch, config.metric);
-    charge(rollout.metricCalls);
+      const minibatch = sampleWithoutReplacement(trainSet, minibatchSize, random);
+      // Measurement failures invalidate the run; only proposal-generation failures are recoverable rejections.
+      const rollout = yield* Effect.promise(() => rolloutMinibatch(parent.source, minibatch, config.metric));
+      charge(rollout.metricCalls);
 
-    try {
-      const m = await proposeMutation(
+      return yield* proposal(() => proposeMutation(
         { parent, minibatch, rollout, reflectionLm: config.reflectionLm },
         'scaffold source',
-      );
+      ), (m): ProposalOutcome => ({ ok: true, source: m.source, operator: 'mutate', parentSource: parent.source }), 'mutate_failed');
+    });
 
-      return {
-        ok: true, source: m.source, operator: 'mutate',
-        parentSource: parent.source,
-      };
-    } catch (err) {
-      return { ok: false, reason: `mutate_failed: ${renderThrownChain({ cause: err })}` };
-    }
-  }
+    /** Falls back to mutate when there is no complementary pair. */
+    const proposeViaMerge = (): Effect.Effect<ProposalOutcome> => {
+      const pair = findComplementaryPair(pool, instanceIds, random);
 
-  /** Falls back to mutate when there is no complementary pair. */
-  async function proposeViaMerge(): Promise<ProposalOutcome> {
-    const pair = findComplementaryPair(pool, instanceIds, random);
+      if (!pair) return proposeViaMutate();
 
-    if (!pair) return proposeViaMutate();
-
-    try {
-      const merged = await proposeMerge({
+      return proposal(() => proposeMerge({
         pair, evalSet: config.evalSet, reflectionLm: config.reflectionLm,
         artifactDescription: 'scaffold source',
-      });
+      }), (merged): ProposalOutcome => {
+        mergeInvocations++;
 
-      mergeInvocations++;
+        // Merge has no rollout cost.
+        return { ok: true, source: merged, operator: 'merge' };
+      }, 'merge_failed');
+    };
 
-      // Merge has no rollout cost.
-      return {
-        ok: true, source: merged, operator: 'merge',
-      };
-    } catch (err) {
-      return { ok: false, reason: `merge_failed: ${renderThrownChain({ cause: err })}` };
-    }
-  }
+    // Every rejection path goes through this so the give-up logic is uniform.
+    let consecutiveRejections = 0;
 
-  // Every rejection path goes through this so the give-up logic is uniform.
-  let consecutiveRejections = 0;
-
-  async function recordRejection(iter: number, reason: string): Promise<boolean> {
-    await emitIteration(config.onIteration, {
+    const recordRejection = (iter: number, reason: string): Effect.Effect<boolean> => Effect.map(emitIteration(config.onIteration, {
       iteration: iter, pool, paretoFront: computeParetoFront(pool, instanceIds).front,
       bestSoFar: bestAggregate(pool), metricCallsUsed, accepted: false,
       rejectionReason: reason,
-    });
+    }), () => ++consecutiveRejections >= REJECTION_GIVE_UP);
 
-    return ++consecutiveRejections >= REJECTION_GIVE_UP;
-  }
+    let iterationsRun = 0;
 
-  let iterationsRun = 0;
+    for (let iter = 0; iter < budget.maxIterations; iter++) {
+      // Worst case: minibatchSize (rollout) + evalSet (score).
+      if (budgetLeft() < minibatchSize + config.evalSet.length) {
+        stopReason = 'metric_budget_exhausted';
+        break;
+      }
 
-  for (let iter = 0; iter < budget.maxIterations; iter++) {
-    // Worst case: minibatchSize (rollout) + evalSet (score).
-    if (budgetLeft() < minibatchSize + config.evalSet.length) {
-      stopReason = 'metric_budget_exhausted';
-      break;
+      iterationsRun++;
+
+      const tryMerge =
+        budget.useMerge &&
+        mergeInvocations < budget.maxMergeInvocations &&
+        iter > 0 &&
+        iter % budget.mergeEveryN === 0;
+
+      const proposed = yield* (tryMerge ? proposeViaMerge() : proposeViaMutate());
+
+      if (!proposed.ok) {
+        if (yield* recordRejection(iter, proposed.reason)) { stopReason = 'no_improvement_possible'; break; }
+
+        continue;
+      }
+
+      if (proposed.operator === 'mutate' && proposed.source === proposed.parentSource) {
+        if (yield* recordRejection(iter, 'no_change')) { stopReason = 'no_improvement_possible'; break; }
+
+        continue;
+      }
+
+      if (pool.some(p => p.source === proposed.source)) {
+        if (yield* recordRejection(iter, 'duplicate_in_pool')) { stopReason = 'no_improvement_possible'; break; }
+
+        continue;
+      }
+
+      const constraintError = checkConstraints(proposed.source, config.constraints);
+
+      if (constraintError) {
+        if (yield* recordRejection(iter, `constraint: ${constraintError}`)) { stopReason = 'no_improvement_possible'; break; }
+
+        continue;
+      }
+
+      const cand = yield* Effect.promise(() => scoreCandidate({
+        source: proposed.source,
+        // Merge has two parents but the type carries one id.
+        parentId: proposed.operator === 'mutate' ? findCandidateBySource(pool, proposed.parentSource ?? '')?.id ?? null : null,
+        evalSet: config.evalSet, metric: config.metric,
+      }));
+
+      charge(config.evalSet.length);
+      yield* Effect.promise(() => Promise.resolve(config.onCandidate?.({ candidate: cand, iteration: iter + 1 })));
+
+      pool.push(cand);
+      history.push(cand);
+      consecutiveRejections = 0;
+
+      yield* emitIteration(config.onIteration, {
+        iteration: iter,
+        pool,
+        paretoFront: computeParetoFront(pool, instanceIds).front,
+        bestSoFar: bestAggregate(pool),
+        metricCallsUsed,
+        accepted: true,
+      });
     }
 
-    iterationsRun++;
+    const front = computeParetoFront(pool, instanceIds).front;
 
-    const tryMerge =
-      budget.useMerge &&
-      mergeInvocations < budget.maxMergeInvocations &&
-      iter > 0 &&
-      iter % budget.mergeEveryN === 0;
-
-    const proposal = tryMerge ? await proposeViaMerge() : await proposeViaMutate();
-
-    if (!proposal.ok) {
-      if (await recordRejection(iter, proposal.reason)) { stopReason = 'no_improvement_possible'; break; }
-
-      continue;
-    }
-
-    if (proposal.operator === 'mutate' && proposal.source === proposal.parentSource) {
-      if (await recordRejection(iter, 'no_change')) { stopReason = 'no_improvement_possible'; break; }
-
-      continue;
-    }
-
-    if (pool.some(p => p.source === proposal.source)) {
-      if (await recordRejection(iter, 'duplicate_in_pool')) { stopReason = 'no_improvement_possible'; break; }
-
-      continue;
-    }
-
-    const constraintError = checkConstraints(proposal.source, config.constraints);
-
-    if (constraintError) {
-      if (await recordRejection(iter, `constraint: ${constraintError}`)) { stopReason = 'no_improvement_possible'; break; }
-
-      continue;
-    }
-
-    const cand = await scoreCandidate({
-      source: proposal.source,
-      // Merge has two parents but the type carries one id.
-      parentId: proposal.operator === 'mutate' ? findCandidateBySource(pool, proposal.parentSource ?? '')?.id ?? null : null,
-      evalSet: config.evalSet, metric: config.metric,
-    });
-
-    charge(config.evalSet.length);
-    await config.onCandidate?.({ candidate: cand, iteration: iter + 1 });
-
-    pool.push(cand);
-    history.push(cand);
-    consecutiveRejections = 0;
-
-    await emitIteration(config.onIteration, {
-      iteration: iter,
-      pool,
-      paretoFront: computeParetoFront(pool, instanceIds).front,
-      bestSoFar: bestAggregate(pool),
+    const result: GepaResult = {
+      winner: bestAggregate(pool),
+      paretoFront: front,
+      history,
       metricCallsUsed,
-      accepted: true,
-    });
-  }
+      iterationsRun,
+      stopReason,
+    };
 
-  const front = computeParetoFront(pool, instanceIds).front;
-
-  return {
-    winner: bestAggregate(pool),
-    paretoFront: front,
-    history,
-    metricCallsUsed,
-    iterationsRun,
-    stopReason,
-  };
+    return result;
+  }));
 }
 
 async function scoreCandidate<I, E>(args: {
@@ -271,17 +257,23 @@ function findCandidateBySource(
   return pool.find(c => c.source === source);
 }
 
-async function emitIteration(
+function emitIteration(
   hook: GepaConfig['onIteration'],
   state: GepaIterationState,
-): Promise<void> {
-  if (!hook) return;
+): Effect.Effect<void> {
+  if (!hook) return Effect.void;
 
-  try { await hook(state); } catch (err) {
-    diagnostics.failure(
-      'gepa.iteration_hook_failed',
-      toKinuError({ doing: 'run the GEPA onIteration hook', cause: err, otherwise: 'io' }),
-      { iteration: state.iteration },
-    );
-  }
+  return Effect.tryPromise({
+    try: () => Promise.resolve(hook(state)),
+    catch: (cause) => toKinuError({ doing: 'run the GEPA onIteration hook', cause, otherwise: 'io' }),
+  }).pipe(Effect.catch((failure) => Effect.sync(() => {
+    diagnostics.failure('gepa.iteration_hook_failed', failure, { iteration: state.iteration });
+  })));
+}
+
+function proposal<A>(run: () => Promise<A>, accepted: (value: A) => ProposalOutcome, label: string): Effect.Effect<ProposalOutcome> {
+  return Effect.tryPromise({ try: run, catch: (cause) => ({ cause }) }).pipe(Effect.match({
+    onSuccess: accepted,
+    onFailure: (failed): ProposalOutcome => ({ ok: false, reason: `${label}: ${renderThrownChain(failed)}` }),
+  }));
 }

@@ -402,6 +402,10 @@ the tick's own clock, and the `fired > 0` branch is gone. A trigger firing is
 one way a row becomes drainable; every other ingress is another. The
 delegation queue is not folded here, for the mirror of the reason D3 gives,
 and no third chain exists.
+Amended 2026-09-28: the two chains are the `kinu-timer` and `terminal-retry`
+jobs on the Agents SDK's Lifecycle queue (0.23 dropped `cf_agents_schedules`),
+one row per id (`cf-backend/src/wake-jobs.ts`). The folds and the phases are
+unchanged.
 
 Measured the same day in the workerd pool, `cf-backend/tests/workerd/two-turn.test.ts`,
 "drains an external event that reached an idle object, on the wake its arrival

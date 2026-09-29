@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-09-28",
-  "files": 2815,
-  "functions": 69804,
+  "measuredAt": "2026-09-29",
+  "files": 2838,
+  "functions": 70615,
   "ceiling": 87,
   "line": 29,
   "inventory": [
@@ -154,7 +154,7 @@
       "complexity": 32
     },
     {
-      "key": "packages/cf-backend/src/pages/MCTSExplorer.tsx#ExplorerBody",
+      "key": "packages/cf-backend/src/pages/SwarmExplorer.tsx#ExplorerBody",
       "complexity": 32
     },
     {
@@ -266,10 +266,6 @@
       "complexity": 30
     },
     {
-      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply",
-      "complexity": 30
-    },
-    {
       "key": "scripts/fixtures/kinu-durability/worker.ts#fetch",
       "complexity": 30
     },
@@ -303,10 +299,6 @@
     },
     {
       "key": "packages/core/src/feedback/png.ts#sanitizePng",
-      "complexity": 29
-    },
-    {
-      "key": "packages/core/src/heads/head-inference.ts#runHeadInference",
       "complexity": 29
     },
     {

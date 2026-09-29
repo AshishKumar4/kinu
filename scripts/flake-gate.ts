@@ -21,14 +21,14 @@
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { availableParallelism, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import * as v from 'valibot';
 import { tolerate } from '@kinu.run/core/obs';
 import { stripGitContext } from '../packages/test-utils/src/git';
 import { runUnderDeadline } from './deadline';
 import { finding } from './gate-ratchet';
-import { GATE_DEADLINE_SECONDS, LADDER, TIERS, claims, gatesFor, narrowedTo, sharedBrowserModules, type Gate } from './ladder';
+import { GATE_DEADLINE_SECONDS, LADDER, TIERS, claims, narrowedTo, sharedBrowserModules, tierRun, type Gate } from './ladder';
 import { discoverArgv } from './python-suites';
 import { parseJUnit } from './skip-ratchet';
 import { parse, walk } from './syntax';
@@ -44,8 +44,9 @@ export const REPEATS = 6;
 /** Runs of a changed suite that drives Chrome. Each holds the box's one browser for as long as a UI row does. */
 export const BROWSER_REPEATS = 3;
 
-/** Suites that hold neither a browser nor a workers pool, repeated beside each other at once. */
-const PLAIN_AT_ONCE = 4;
+/** Runs of suites that hold neither a browser nor a workers pool, beside each other at once: a quarter of the box,
+ *  so the other lanes and the hook's own gates keep theirs. Each run is its own process with its own scratch home. */
+const PLAIN_AT_ONCE = Math.max(2, Math.floor(availableParallelism() / 4));
 
 /** The aggregator every anti-slop rule suite runs through: it imports each one, and no command names them. */
 const RULES_AGGREGATOR = `${ANTI_SLOP_RULES.slice(0, -1)}.test.ts`;
@@ -305,7 +306,11 @@ async function runOnce(plan: Extract<Plan, { kind: 'repeat' }>, run: number, scr
   };
 }
 
-/** Every planned suite, each run `plan.runs` times in a row, the suites beside each other within their lanes. */
+/**
+ * Every planned suite, `plan.runs` times. A plain suite's runs are separate jobs in its lane, so one slow file's six
+ * runs share the lane's slots instead of queueing behind each other (deploy.test.ts: 1281s in a row, 2026-09-28). The
+ * browser and pool lanes hold one shared resource, so their runs stay one at a time.
+ */
 export async function repeatAll(
   plans: readonly Extract<Plan, { kind: 'repeat' }>[],
   scratch: string,
@@ -313,12 +318,21 @@ export async function repeatAll(
   const lanes: Record<Lane, ReturnType<typeof slots>> = { browser: slots(1), pool: slots(1), plain: slots(PLAIN_AT_ONCE) };
   const results = new Map<string, readonly RunOutcome[]>();
 
-  await Promise.all(plans.map((plan) => lanes[plan.lane](async () => {
-    const outcomes: RunOutcome[] = [];
+  await Promise.all(plans.map(async (plan) => {
+    const runs = Array.from({ length: plan.runs }, (_, index) => index + 1);
 
-    for (let run = 1; run <= plan.runs; run += 1) outcomes.push(await runOnce(plan, run, scratch));
+    const outcomes = plan.lane === 'plain'
+      ? await Promise.all(runs.map((run) => lanes.plain(() => runOnce(plan, run, scratch))))
+      : await lanes[plan.lane](async () => {
+        const inOrder: RunOutcome[] = [];
+
+        for (const run of runs) inOrder.push(await runOnce(plan, run, scratch));
+
+        return inOrder;
+      });
+
     results.set(plan.file, outcomes);
-  })));
+  }));
 
   return results;
 }
@@ -328,10 +342,11 @@ export async function repeatAll(
 const BLIND_SPOTS = [
   'a merge repeats only the test files it changes itself: one it takes whole from a side was that side\'s own '
     + 'commits\' subject, and the sweep\'s',
-  'a flake that a changed helper or product file puts into a suite this commit does not change: the sweep, run on '
-    + 'demand with `bun run sweep:flakes`, repeats every suite the CI tier runs',
+  'a flake that a changed helper or product file puts into a suite this commit does not change: the nightly sweep '
+    + '(`bun run sweep:flakes`, .github/workflows/flake-sweep.yml) repeats every suite the CI tier runs',
   'N runs sample N interleavings: greens raise confidence and prove nothing about absence',
-  'a suite never runs beside itself here, so a race between two copies of one suite is not provoked',
+  'a browser or pool suite never runs beside itself here, so a race between two copies of one is not provoked; a '
+    + 'plain suite\'s runs do run beside each other',
   'a file runs apart from its row\'s siblings, so a leak between them (a module mock, a global) is not provoked '
     + 'here; a row that runs its files in fresh globals (`--isolate`) cannot have one',
   'the working tree is run, not the staged content: the hook\'s own stated imprecision',
@@ -354,7 +369,7 @@ function line(plan: Extract<Plan, { kind: 'repeat' }>, outcomes: readonly RunOut
   }
 }
 
-/* ── The sweep ────────────────────────────────────────────────────────── */
+/* ── The nightly sweep ────────────────────────────────────────────────── */
 
 /** Runs of each suite in the sweep: fewer than a commit's six, over every suite the CI tier runs. */
 export const SWEEP_RUNS = 3;
@@ -367,12 +382,12 @@ export interface SweepBatch {
 }
 
 /**
- * Every batch the sweep runs: each test file the CI tier claims, planned as the commit gate plans it, then its row's
- * files put back together under one command, so every suite runs beside its row's siblings. A Python suite runs its
- * directory's discovery.
+ * Every batch the sweep runs: each test file the CI tier runs claims, planned as the commit gate plans it, then its
+ * row's files put back together under one command, so every suite runs beside its row's siblings. A Python suite runs
+ * its directory's discovery. The rows are exactly `--tier=ci`'s, so a nightly runner hosts all of them.
  */
 export function sweepBatches(tracked: readonly string[]): SweepBatch[] {
-  const rows = gatesFor('ci');
+  const rows = tierRun('ci');
   const files = [...new Set(rows.flatMap((row) => claims(row.run, tracked)))];
   const batches = new Map<string, { row: Pick<Gate, 'label' | 'deadline'>; prefix: string[]; targets: Set<string>; lane: Lane }>();
 
@@ -489,17 +504,48 @@ export async function sweepRun(batch: SweepBatch, seed: number, scratch: string,
   };
 }
 
+/** One of `count` disjoint parts of the sweep, numbered from 1: the batches whose index is `part - 1` modulo `count`.
+ *  The parts together are the whole sweep, so each can run on a runner of its own. */
+export interface Shard {
+  readonly part: number;
+  readonly count: number;
+}
+
+/** `--shard=<part>/<count>` from `argv`, or undefined for the whole sweep. A malformed one throws. */
+export function shardFrom(argv: readonly string[]): Shard | undefined {
+  const word = argv.find((each) => each.startsWith('--shard='));
+
+  if (word === undefined) return undefined;
+  const [part, count] = word.slice('--shard='.length).split('/').map(Number);
+
+  if (part === undefined || count === undefined || !Number.isInteger(part) || !Number.isInteger(count) || part < 1 || part > count) {
+    throw new Error(`${word}: expected --shard=<part>/<count> with 1 <= part <= count`);
+  }
+
+  return { part, count };
+}
+
 /** The sweep: every batch, SWEEP_RUNS seeded runs each, one batch at a time so each runs on the load it would alone.
  *  `only` narrows it to the batches of one row, by label: a flake chased on demand. */
-async function sweep(only: string | undefined): Promise<number> {
+async function sweep(only: string | undefined, shard: Shard | undefined): Promise<number> {
   const tracked = trackedFiles();
-  const batches = sweepBatches(tracked).filter((batch) => only === undefined || batch.row.label === only);
+  const named = sweepBatches(tracked).filter((batch) => only === undefined || batch.row.label === only);
 
-  if (batches.length === 0) throw new Error(`no CI-tier row is labelled ${JSON.stringify(only)}`);
+  if (named.length === 0) throw new Error(`no CI-tier row is labelled ${JSON.stringify(only)}`);
+  const batches = named.filter((_batch, index) => shard === undefined || index % shard.count === shard.part - 1);
+
+  // A part of a narrowed sweep can be left with nothing: the other parts hold its row.
+  if (batches.length === 0) {
+    console.log(`flake-sweep: part ${String(shard?.part)} of ${String(shard?.count)} holds none of the ${String(named.length)} batch(es)`);
+
+    return 0;
+  }
+
   const ci = mainCiVerdict();
 
   console.log(`flake-sweep: main's CI: ${ci}`);
-  console.log(`flake-sweep: ${String(batches.length)} batch(es) from the CI tier, ${String(SWEEP_RUNS)} seeded run(s) each`);
+  console.log(`flake-sweep: ${String(batches.length)} batch(es) from the CI tier${shard === undefined ? '' : `, part ${String(shard.part)} of ${String(shard.count)}`}, `
+    + `${String(SWEEP_RUNS)} seeded run(s) each`);
 
   const scratch = mkdtempSync(join(tmpdir(), 'kinu-scratch-flake-sweep-'));
   const results: { batch: SweepBatch; runs: SweepRun[]; verdict: SweepVerdict }[] = [];
@@ -639,5 +685,5 @@ async function main(): Promise<number> {
 if (import.meta.main) {
   const only = process.argv.find((word) => word.startsWith('--only='))?.slice('--only='.length);
 
-  process.exit(await (process.argv.includes('--sweep') ? sweep(only) : main()));
+  process.exit(await (process.argv.includes('--sweep') ? sweep(only, shardFrom(process.argv)) : main()));
 }

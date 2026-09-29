@@ -9,7 +9,8 @@ import { REAL_CLOCK, type Clock } from '../types/clock';
 import { tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { oneOf } from '../tools/tool-schema';
-import { HEAD_BUILTIN_TOOLS } from '../heads/types';
+import { HEAD_BUILTIN_TOOLS, OWNER_STOPPED } from '../heads/types';
+import { stoppedByOwner } from './live-workers';
 import { HeadCapture, runHeadInference, withHeadCaptureRecording } from '../heads/head-inference';
 import type { PublishHeadStream, ReportHeadDelta } from '../heads/head-stream';
 import type { HeadInferenceDeps } from '../heads/head-inference';
@@ -28,7 +29,9 @@ import { readProposalCode } from '../execution/code-fence';
 import type { JsonValue } from '../utils/json';
 import { nodeWorkspace, isolationDisclosure } from './node-workspace';
 import { BRANCH_PROPOSAL_WIDTH, SWARM_CONTEXTS } from './swarm';
-import { renderCauseChain, toKinuError } from '../obs/error';
+import { Effect } from 'effect';
+import { renderCauseChain, toKinuError, type KinuError } from '../obs/error';
+import { settle } from '../obs/effect';
 import { abortCause } from '../utils/abort';
 import type { Logger } from '../obs/index';
 import type { Usage } from '../usage';
@@ -453,7 +456,11 @@ async function runNodeLoop(
     workspaceLayout: spec.isolation === 'private-home' ? 'private-scratch' : 'shared-workspace',
     capture,
     isAborted: () => deps.signal?.aborted ?? false,
-    abortReason: () => (deps.signal?.aborted ? 'the search was aborted' : null),
+    abortReason: () => {
+      if (stoppedByOwner(deps.signal)) return OWNER_STOPPED;
+
+      return deps.signal?.aborted ? 'the search was aborted' : null;
+    },
     framing: {
       system: nodeSystemPrompt({
         base: spec.base,
@@ -502,78 +509,79 @@ async function runNodeLoop(
  * (actor or runtime acquisition) throw, after journalling the node terminal so its `running` row
  * does not outlive it.
  */
-export async function runNodeAgent(
+export function runNodeAgent(
   input: NodeAgentInput,
   deps: NodeAgentDeps,
 ): Promise<NodeRun> {
-  const home = await nodeWorkspace(
-    { nodeId: input.nodeId, rootId: input.rootId, depth: input.depth },
-    deps.provisionHome,
-  );
+  return settle(Effect.gen(function* () {
+    const home = yield* Effect.promise(() => nodeWorkspace(
+      { nodeId: input.nodeId, rootId: input.rootId, depth: input.depth },
+      deps.provisionHome,
+    ));
 
-  const nodeBudget: HeadBudget = { maxDepth: 0, spawnedAt: Date.now() };
+    const nodeBudget: HeadBudget = { maxDepth: 0, spawnedAt: Date.now() };
 
-  const headInput: HeadInput = {
-    id: input.nodeId,
-    rootId: input.rootId,
-    parentId: input.parentId,
-    depth: input.depth,
-    task: input.task,
-    mode: input.mode,
-    rationale: input.rationale,
-    inheritedContext: [...input.inherited],
-    budget: nodeBudget,
-    // A label only; `ResolvedSwarm.settle` is the fact.
-    mergeStrategy: input.settle === 'best' ? 'best_of' : 'synthesize',
-    // A node states its loop pointer rather than inheriting the parent's.
-    loop: defaultLoopOrigin('run'),
-  };
+    const headInput: HeadInput = {
+      id: input.nodeId,
+      rootId: input.rootId,
+      parentId: input.parentId,
+      depth: input.depth,
+      task: input.task,
+      mode: input.mode,
+      rationale: input.rationale,
+      inheritedContext: [...input.inherited],
+      budget: nodeBudget,
+      // A label only; `ResolvedSwarm.settle` is the fact.
+      mergeStrategy: input.settle === 'best' ? 'best_of' : 'synthesize',
+      // A node states its loop pointer rather than inheriting the parent's.
+      loop: defaultLoopOrigin('swarm'),
+    };
 
-  // The row's copy of ledger and route (`cli-backend/head-runtime.ts` reads these). Assigned only
-  // when present so an unbudgeted/unrouted run carries no key.
-  if (deps.mission) Object.assign(headInput, { missionLabels: deps.mission.labels });
+    // The row's copy of ledger and route (`cli-backend/head-runtime.ts` reads these). Assigned only
+    // when present so an unbudgeted/unrouted run carries no key.
+    if (deps.mission) Object.assign(headInput, { missionLabels: deps.mission.labels });
 
-  if (input.modelSpec !== undefined) Object.assign(headInput, { model: input.modelSpec });
+    if (input.modelSpec !== undefined) Object.assign(headInput, { model: input.modelSpec });
 
-  deps.journal.insertSpawn(headInput);
+    deps.journal.insertSpawn(headInput);
 
-  const spec: NodeRunSpec = {
-    headInput,
-    base: input.base,
-    messages: input.messages,
-    isolation: home.isolation,
-    home: home.home,
-  };
+    const spec: NodeRunSpec = {
+      headInput,
+      base: input.base,
+      messages: input.messages,
+      isolation: home.isolation,
+      home: home.home,
+    };
 
-  // Whoever opened the row owes its terminal write. Actor acquisition failure is rethrown before
-  // the try; runtime failure is inside it because the row owes that verdict.
-  const seat = await deps.hostNode({ nodeId: input.nodeId, rootId: input.rootId, depth: input.depth });
-  let run: NodeLoopResult;
+    // Whoever opened the row owes its terminal write. Actor acquisition failure is rethrown before
+    // the try; runtime failure is inside it because the row owes that verdict.
+    const seat = yield* Effect.promise(() => deps.hostNode({ nodeId: input.nodeId, rootId: input.rootId, depth: input.depth }));
 
-  try {
-    // The loop runs as the node: only the backend can build the node's credentialed runtime.
-    const rt = deps.runtimeForWorkspace ? await deps.runtimeForWorkspace(home, input) : seat.actor.runtime;
-    run = await runNodeLoop(spec, nodeLoopDeps(input, deps, seat, rt));
-  } catch (cause) {
-    if (deps.signal?.aborted) {
-      // Cancelled while the runtime was being built; the signal is authoritative over the rejection.
-      const reason = renderCauseChain(toKinuError({
-        doing: `cancel node ${input.nodeId} of this search`, cause: abortCause(deps.signal), otherwise: 'cancelled',
-      }));
+    const run = yield* Effect.tryPromise({
+      try: async (): Promise<NodeLoopResult> => {
+        // The loop runs as the node: only the backend can build the node's credentialed runtime.
+        const rt = deps.runtimeForWorkspace ? await deps.runtimeForWorkspace(home, input) : seat.actor.runtime;
 
-      run = {
-        report: unreportedNode(input.nodeId, nodeBudget.spawnedAt, {
-          status: 'aborted',
-          summary: `Node ${input.nodeId} was cancelled before it reported: ${reason}`,
-          errorMessage: reason,
-        }),
-        reported: null, granted: null, produced: [],
-        languages: seat.actor.runtime.executor.languages,
-      };
-    } else {
-      const failure = toKinuError({
-        doing: `run node ${input.nodeId} of this search`, cause, otherwise: 'unavailable',
-      });
+        return await runNodeLoop(spec, nodeLoopDeps(input, deps, seat, rt));
+      },
+      catch: (cause) => toKinuError({ doing: `run node ${input.nodeId} of this search`, cause, otherwise: 'unavailable' }),
+    }).pipe(Effect.catch((failure): Effect.Effect<NodeLoopResult, KinuError> => {
+      if (deps.signal?.aborted) {
+        // Cancelled while the runtime was being built; the signal is authoritative over the rejection.
+        const reason = stoppedByOwner(deps.signal) ? OWNER_STOPPED : renderCauseChain(toKinuError({
+          doing: `cancel node ${input.nodeId} of this search`, cause: abortCause(deps.signal), otherwise: 'cancelled',
+        }));
+
+        return Effect.succeed({
+          report: unreportedNode(input.nodeId, nodeBudget.spawnedAt, {
+            status: 'aborted',
+            summary: `Node ${input.nodeId} was cancelled before it reported: ${reason}`,
+            errorMessage: reason,
+          }),
+          reported: null, granted: null, produced: [],
+          languages: seat.actor.runtime.executor.languages,
+        });
+      }
 
       const chain = renderCauseChain(failure);
       deps.journal.recordReport(unreportedNode(input.nodeId, nodeBudget.spawnedAt, {
@@ -581,28 +589,31 @@ export async function runNodeAgent(
         summary: `Node ${input.nodeId} produced no report: ${chain}`,
         errorMessage: chain,
       }));
-      throw failure;
-    }
-  }
 
-  deps.journal.recordReport(run.report);
-  deps.reportModelCall({ source: 'swarm', usage: run.report.usage });
+      return Effect.fail(failure);
+    }));
 
-  const read = readNodeReport({
-    report: run.report,
-    reported: run.reported,
-    languages: run.languages,
-  });
+    deps.journal.recordReport(run.report);
+    deps.reportModelCall({ source: 'swarm', usage: run.report.usage });
 
-  return {
-    report: run.report,
-    candidate: read.candidate,
-    granted: run.granted,
-    usage: run.report.usage,
-    isolation: home.isolation,
-    reportedItself: run.reported !== null,
-    produced: run.produced,
-  };
+    const read = readNodeReport({
+      report: run.report,
+      reported: run.reported,
+      languages: run.languages,
+    });
+
+    const ran: NodeRun = {
+      report: run.report,
+      candidate: read.candidate,
+      granted: run.granted,
+      usage: run.report.usage,
+      isolation: home.isolation,
+      reportedItself: run.reported !== null,
+      produced: run.produced,
+    };
+
+    return ran;
+  }));
 }
 
 /**

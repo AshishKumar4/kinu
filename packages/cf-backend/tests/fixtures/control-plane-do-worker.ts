@@ -1,6 +1,6 @@
 /**
  * Caller Worker for the real `ControlPlaneDO` under workerd: only workerd can show a refused call arriving as a rejection
- * over DO RPC and rows outliving the object (`new_sqlite_classes`). Steps are parsed, so a typo is a 400, not a rejection.
+ * over DO RPC and rows outliving the object (a SQLite class). Steps are parsed, so a typo is a 400, not a rejection.
  */
 import * as v from 'valibot';
 import { projectJsonValue, type JsonValue } from '@kinu.run/core';

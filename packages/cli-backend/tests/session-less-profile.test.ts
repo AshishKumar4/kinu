@@ -34,7 +34,7 @@ async function workspace(storedModel?: string): Promise<{ db: Database; dbPath: 
   const dir = scratchDir('sessionless');
   const dbPath = join(dir, 'agent.db');
   const db = new Database(dbPath);
-  const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM, agentName: 'jarvis' });
+  const rt = createCLIRuntime(db, { llm: DUMMY_LLM, agentName: 'jarvis' });
   // The owner's soul, as `writeWorkspaceSoul` records it; the next turn reseals the file from it.
   db.exec('CREATE TABLE IF NOT EXISTS workspace_soul (id INTEGER PRIMARY KEY CHECK (id = 1), markdown TEXT NOT NULL)');
   db.prepare('INSERT INTO workspace_soul (id, markdown) VALUES (1, ?)').run('# jarvis\n\n## Mission\n\nRun the lab.');
@@ -89,12 +89,10 @@ describe('a local runtime opened without a session', () => {
 
     await rt.judgeModel?.complete('grade this');
     await rt.fastLlm?.complete('classify this');
-    await rt.advisorLlm?.complete('advise on this');
 
     expect(seen.map((resolution) => [resolution.source, resolution.tier])).toEqual([
       ['judge', 'deep'],
       ['fast', 'fast'],
-      ['advisor', 'deep'],
     ]);
   });
 

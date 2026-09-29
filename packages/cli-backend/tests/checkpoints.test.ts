@@ -296,7 +296,6 @@ describe('checkpointed runtime shell', () => {
 
       // Checkpoint storage is global per agent name; a stable name would read stores from prior runs.
       const rt = createCLIRuntime(db, {
-        dbPath: db.filename,
         cwd: work,
         agentName: `ckpt-shell-test-${String(Date.now())}-${String(process.pid)}`,
         llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },

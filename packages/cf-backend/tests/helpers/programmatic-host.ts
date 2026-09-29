@@ -19,7 +19,7 @@ import * as v from 'valibot';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { NimbusSandboxHandle } from '@kinu.run/core';
 import type { WorkspaceHostTarget } from '../../src/workspace-host';
-import { workerContext } from './bindings';
+import { noEntrypoints, workerContext } from './bindings';
 
 export type DurableState = Map<string, unknown>;
 
@@ -209,12 +209,6 @@ export function durableObjectStorage(built: StandInFor<DurableObjectStorage>): D
   }, built);
 }
 
-/** The `ctx.exports` bag (not in workers-types): the supervisor entrypoint the fabric mints each facet's
- *  `env.SUPERVISOR` from. A script exporting none gives an object without it, which a host refuses to compose over. */
-export interface ActorObjectState<Exports = unknown> extends DurableObjectState {
-  readonly exports?: Exports;
-}
-
 /** The props the fabric mints a facet's supervisor binding with. */
 interface SupervisorProps {
   readonly doId: string;
@@ -269,8 +263,12 @@ const CtxExportsSchema = v.custom<CtxExports>(
 // entrypoint is refused on its own exports, never adopted as the isolate's.
 adoptCtxExports(v.parse(CtxExportsSchema, SCRIPT_EXPORTS));
 
+/** `ctx.exports` as a case binds it: the fabric's `SupervisorRPC` entrypoint, which `Cloudflare.GlobalProps` does not
+ *  declare. A script exporting none gives an object without it, which a host refuses to compose over. */
+type ObjectStateStandIn = Omit<StandInFor<DurableObjectState>, 'exports'> & { readonly exports?: object };
+
 /** A Durable Object's `ctx`, unbuilt members refusing by name; same assignment rule as {@link durableObjectStorage}. */
-export function actorObjectState(built: StandInFor<ActorObjectState>): ActorObjectState {
+export function actorObjectState(built: ObjectStateStandIn): DurableObjectState {
   const refuse = refusing('DurableObjectState');
   const facet = refusing('DurableObjectFacets');
   let autoResponse: WebSocketRequestResponsePair | null = null;
@@ -279,6 +277,7 @@ export function actorObjectState(built: StandInFor<ActorObjectState>): ActorObje
     // `undefined` on the platform too: no startup props bound, no container attached.
     props: undefined,
     container: undefined,
+    exports: noEntrypoints(),
     id: { toString: refuse('id.toString'), equals: refuse('id.equals') },
     storage: durableObjectStorage({}),
     facets: { get: facet('get'), abort: facet('abort'), delete: facet('delete'), clone: facet('clone') },

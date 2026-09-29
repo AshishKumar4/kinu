@@ -53,7 +53,7 @@
 # undoes a promotion whatever the tree holds.
 #
 # `--bootstrap` is for the deploy that DECLARES something only a deploy can
-# create — a Durable Object class new to `migrations`, a new container, a new
+# create — a Durable Object class new to `exports`, a new container, a new
 # route. It moves the pre-deploy infrastructure phase to `bootstrap`, which
 # defers exactly those and nothing else. It skips no verification: every
 # external prerequisite still refuses the deploy before the upload, and step 5
@@ -61,8 +61,8 @@
 # passed or not.
 #
 # `--reset` deletes every Durable Object class the Worker carries, with all its
-# storage, between the build and the upload, which then applies the migrations
-# from v1 (scripts/reset.ts). The Worker keeps its secrets and routes. The deploy
+# storage, between the build and the upload, which then creates every class
+# `exports` declares (scripts/reset.ts). The Worker keeps its secrets and routes. The deploy
 # record names what was deleted. On production it asks for a typed confirmation
 # before anything runs.
 #

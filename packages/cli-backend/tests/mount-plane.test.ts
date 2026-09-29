@@ -13,7 +13,6 @@ function freshRuntime(cwd?: string) {
   const db = new Database(scratchPath('mount-plane', 'agent.db'), { create: true });
 
   const config: Parameters<typeof createCLIRuntime>[1] = {
-    dbPath: db.filename,
     llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
   };
 

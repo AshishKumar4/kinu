@@ -5,6 +5,7 @@
  * `db_op` evidence is written in the same `transactionSync`; fan-out waits for commit.
  */
 
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import type { CodemodeProvider } from './sandbox-contract';
 import { TOOL_REACH } from './registry';
@@ -13,7 +14,8 @@ import type { RawSqlExec, SqlExecutor, SqlValue } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { DeferredRunEvent, RunEventRecorder } from '../events/recorder';
 import { KinuError, refusalOf, renderCauseChain } from '../obs/error';
-import { currentWorkMode, requireWorkModePermission } from '../execution/work-mode';
+import { settle, settleSync } from '../obs/effect';
+import { currentWorkMode, workModeRefusal } from '../execution/work-mode';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { APP_TABLE_SCOPES, type AppTableScope, type DbOpRecord } from '../types/app-store';
@@ -242,12 +244,10 @@ export function initAgentDataTables(execRaw: RawSqlExec): void {
 }
 
 /** Re-validates: the grammar admits no quote character. */
-function quoted(identifier: string): string {
-  if (!IDENTIFIER.test(identifier)) {
-    throw new KinuError('bad_input', `${identifier} is not a usable table or column name`);
-  }
-
-  return `"${identifier}"`;
+function quoted(identifier: string): Effect.Effect<string, KinuError> {
+  return IDENTIFIER.test(identifier)
+    ? Effect.succeed(`"${identifier}"`)
+    : Effect.fail(new KinuError('bad_input', `${identifier} is not a usable table or column name`));
 }
 
 /** Builds the tagged-template object for `SqlExecutor`; values can never land in the text. */
@@ -275,19 +275,26 @@ class Statement {
   }
 }
 
-function runStatement(sql: SqlExecutor, statement: Statement, doing: string): void {
-  execute<unknown>(sql, statement, doing);
+function runStatement(sql: SqlExecutor, statement: Statement, doing: string): Effect.Effect<void, KinuError> {
+  return Effect.asVoid(execute<unknown>(sql, statement, doing));
 }
 
-function execute<Row>(sql: SqlExecutor, statement: Statement, doing: string): Row[] {
-  try {
-    return statement.run<Row>(sql);
-  }
-  catch (cause) {
-    if (cause instanceof KinuError) throw cause;
-    const rendered = cause instanceof Error ? renderCauseChain(cause) : String(cause);
-    throw new KinuError(SQLITE_REJECTED_VALUE.test(rendered) ? 'bad_input' : 'io', `${doing}: ${rendered}`, { cause });
-  }
+function classified<A>(call: () => A): Effect.Effect<A, KinuError> {
+  return Effect.try({ try: call, catch: (cause) => ({ cause }) }).pipe(
+    Effect.catch((failed) => (failed.cause instanceof KinuError ? Effect.fail(failed.cause) : Effect.die(failed.cause))),
+  );
+}
+
+function execute<Row>(sql: SqlExecutor, statement: Statement, doing: string): Effect.Effect<Row[], KinuError> {
+  return Effect.try({
+    try: () => statement.run<Row>(sql),
+    catch: (cause) => {
+      if (cause instanceof KinuError) return cause;
+      const rendered = cause instanceof Error ? renderCauseChain(cause) : String(cause);
+
+      return new KinuError(SQLITE_REJECTED_VALUE.test(rendered) ? 'bad_input' : 'io', `${doing}: ${rendered}`, { cause });
+    },
+  });
 }
 
 interface CatalogRow {
@@ -360,60 +367,58 @@ const STORED = {
   json: v.string(),
 } satisfies Readonly<Record<AppColumnType, v.GenericSchema>>;
 
-function encodeValue(column: AppColumn, value: JsonValue, where: string): SqlValue {
+function encodeValue(column: AppColumn, value: JsonValue, where: string): Effect.Effect<SqlValue, KinuError> {
   if (value === null) {
-    if (column.notNull === true) {
-      throw new KinuError('bad_input', `${where}: column \`${column.name}\` is declared not null`);
-    }
-
-    return null;
+    return column.notNull === true
+      ? Effect.fail(new KinuError('bad_input', `${where}: column \`${column.name}\` is declared not null`))
+      : Effect.succeed(null);
   }
 
   const admitted = ADMITTED[column.type];
   const parsed = v.safeParse(admitted.schema, value);
 
   if (!parsed.success) {
-    throw new KinuError('bad_input', `${where}: column \`${column.name}\` is ${column.type} and takes ${admitted.takes}`);
+    return Effect.fail(new KinuError('bad_input', `${where}: column \`${column.name}\` is ${column.type} and takes ${admitted.takes}`));
   }
 
-  if (column.type === 'json') return JSON.stringify(parsed.output);
+  return Effect.sync((): SqlValue => {
+    if (column.type === 'json') return JSON.stringify(parsed.output);
 
-  if (column.type !== 'blob') return v.parse(SqlPrimitiveSchema, parsed.output);
-  const bytes = base64ToBytes(v.parse(v.string(), parsed.output));
-  // Copy: `bytes.buffer` may hold more than the decoded bytes.
-  const buffer = new ArrayBuffer(bytes.byteLength);
-  new Uint8Array(buffer).set(bytes);
+    if (column.type !== 'blob') return v.parse(SqlPrimitiveSchema, parsed.output);
+    const bytes = base64ToBytes(v.parse(v.string(), parsed.output));
+    // Copy: `bytes.buffer` may hold more than the decoded bytes.
+    const buffer = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(buffer).set(bytes);
 
-  return buffer;
+    return buffer;
+  });
 }
 
-function decodeValue(column: AppColumn, stored: StoredValue): JsonValue {
-  if (stored === null || stored === undefined) return null;
+function decodeValue(column: AppColumn, stored: StoredValue): Effect.Effect<JsonValue, KinuError> {
+  if (stored === null || stored === undefined) return Effect.succeed(null);
   const parsed = v.safeParse(STORED[column.type], stored);
 
   if (!parsed.success) {
-    throw new KinuError('io', `column \`${column.name}\` is declared ${column.type} and holds something it cannot`);
+    return Effect.fail(new KinuError('io', `column \`${column.name}\` is declared ${column.type} and holds something it cannot`));
   }
 
   switch (column.type) {
     case 'text':
-      return v.parse(v.string(), parsed.output);
+      return Effect.sync(() => v.parse(v.string(), parsed.output));
     case 'integer':
     case 'real':
-      return v.parse(v.number(), parsed.output);
-    case 'blob': {
-      const bytes = v.parse(v.union([v.instance(ArrayBuffer), v.instance(Uint8Array)]), parsed.output);
+      return Effect.sync(() => v.parse(v.number(), parsed.output));
+    case 'blob':
+      return Effect.sync(() => {
+        const bytes = v.parse(v.union([v.instance(ArrayBuffer), v.instance(Uint8Array)]), parsed.output);
 
-      return bytesToBase64(bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes);
-    }
-
+        return bytesToBase64(bytes instanceof ArrayBuffer ? new Uint8Array(bytes) : bytes);
+      });
     case 'json':
-      try {
-        return v.parse(JsonValueSchema, JSON.parse(v.parse(v.string(), parsed.output)));
-      }
-      catch (cause) {
-        throw new KinuError('io', `column \`${column.name}\` holds text that is not the JSON document it was stored as`, { cause });
-      }
+      return Effect.try({
+        try: () => v.parse(JsonValueSchema, JSON.parse(v.parse(v.string(), parsed.output))),
+        catch: (cause) => new KinuError('io', `column \`${column.name}\` holds text that is not the JSON document it was stored as`, { cause }),
+      });
   }
 }
 
@@ -422,74 +427,79 @@ interface AppliedOp {
   readonly scope: AppTableScope;
 }
 
-function createTableDdl(spec: AppTableSpec, physical: string): string {
-  const scoped = spec.scope === 'actor';
-  const columns: string[] = [];
+const quotedAll = (names: readonly string[]): Effect.Effect<string, KinuError> =>
+  Effect.map(Effect.forEach(names, quoted), (list) => list.join(', '));
 
-  if (scoped) columns.push(`${quoted(ACTOR_COLUMN)} TEXT NOT NULL`);
+function createTableDdl(spec: AppTableSpec, physical: string): Effect.Effect<string, KinuError> {
+  return Effect.gen(function* () {
+    const scoped = spec.scope === 'actor';
+    const columns: string[] = [];
 
-  for (const column of spec.columns) {
-    const notNull = column.notNull === true || column.primaryKey === true ? ' NOT NULL' : '';
-    columns.push(`${quoted(column.name)} ${SQLITE_TYPE[column.type]}${notNull}`);
-  }
+    if (scoped) columns.push(`${yield* quoted(ACTOR_COLUMN)} TEXT NOT NULL`);
 
-  const declaredKey = spec.columns.filter((column) => column.primaryKey === true).map((column) => column.name);
+    for (const column of spec.columns) {
+      const notNull = column.notNull === true || column.primaryKey === true ? ' NOT NULL' : '';
+      columns.push(`${yield* quoted(column.name)} ${SQLITE_TYPE[column.type]}${notNull}`);
+    }
 
-  if (declaredKey.length > 0) {
-    // Actor leads the key so agents sharing a logical key get separate rows.
-    columns.push(`PRIMARY KEY (${[...(scoped ? [ACTOR_COLUMN] : []), ...declaredKey].map(quoted).join(', ')})`);
-  }
+    const declaredKey = spec.columns.filter((column) => column.primaryKey === true).map((column) => column.name);
 
-  for (const column of spec.columns) {
-    if (column.unique !== true || column.primaryKey === true) continue;
-    // Scoped UNIQUE: a workspace-wide one would disclose other agents' private values.
-    columns.push(`UNIQUE (${[...(scoped ? [ACTOR_COLUMN] : []), column.name].map(quoted).join(', ')})`);
-  }
+    if (declaredKey.length > 0) {
+      // Actor leads the key so agents sharing a logical key get separate rows.
+      columns.push(`PRIMARY KEY (${yield* quotedAll([...(scoped ? [ACTOR_COLUMN] : []), ...declaredKey])})`);
+    }
 
-  return `CREATE TABLE IF NOT EXISTS ${quoted(physical)} (\n  ${columns.join(',\n  ')}\n)`;
+    for (const column of spec.columns) {
+      if (column.unique !== true || column.primaryKey === true) continue;
+      // Scoped UNIQUE: a workspace-wide one would disclose other agents' private values.
+      columns.push(`UNIQUE (${yield* quotedAll([...(scoped ? [ACTOR_COLUMN] : []), column.name])})`);
+    }
+
+    return `CREATE TABLE IF NOT EXISTS ${yield* quoted(physical)} (\n  ${columns.join(',\n  ')}\n)`;
+  });
 }
 
-function ownerIndexDdl(spec: AppTableSpec, physical: string): string | null {
-  if (spec.scope !== 'actor') return null;
+function ownerIndexDdl(spec: AppTableSpec, physical: string): Effect.Effect<string | null, KinuError> {
+  if (spec.scope !== 'actor') return Effect.succeed(null);
 
-  if (spec.columns.some((column) => column.primaryKey === true)) return null;
+  if (spec.columns.some((column) => column.primaryKey === true)) return Effect.succeed(null);
 
-  return `CREATE INDEX IF NOT EXISTS ${quoted(`idx_${physical}_owner`)} ON ${quoted(physical)} (${quoted(ACTOR_COLUMN)})`;
+  return Effect.gen(function* () {
+    return `CREATE INDEX IF NOT EXISTS ${yield* quoted(`idx_${physical}_owner`)} ON ${yield* quoted(physical)} (${yield* quoted(ACTOR_COLUMN)})`;
+  });
 }
 
 function parseInput<Schema extends v.GenericSchema>(
   schema: Schema,
   input: { readonly value: unknown; readonly where: string },
-): v.InferOutput<Schema> {
+): Effect.Effect<v.InferOutput<Schema>, KinuError> {
   const parsed = v.safeParse(schema, input.value);
 
-  if (parsed.success) return parsed.output;
+  if (parsed.success) return Effect.succeed(parsed.output);
   const issue = parsed.issues[0];
   const path = issue?.path?.map((segment) => String(segment.key)).join('.') ?? '';
-  throw new KinuError('bad_input', `${input.where}${path === '' ? '' : ` at \`${path}\``}: ${issue?.message ?? 'invalid argument'}`);
+
+  return Effect.fail(new KinuError('bad_input', `${input.where}${path === '' ? '' : ` at \`${path}\``}: ${issue?.message ?? 'invalid argument'}`));
 }
 
 export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
   const { sql, actor, transactionSync } = deps;
   const actorId = actor.actorId;
-  const catalog = quoted(AGENT_DATA_CATALOG);
+  const catalog = `"${AGENT_DATA_CATALOG}"`;
 
-  const authorize = (): void => {
-    actor.assertCurrent();
-  };
+  const authorized = (): Effect.Effect<void, KinuError> => classified(() => actor.assertCurrent());
 
-  const runDdl = (statement: string, doing: string): void => {
+  const runDdl = (statement: string, doing: string): Effect.Effect<void, KinuError> =>
     runStatement(sql, new Statement().text(statement), doing);
-  };
 
-  const catalogRow = (name: string): CatalogRow | undefined => execute<CatalogRow>(
+  const catalogRow = (name: string): Effect.Effect<CatalogRow | undefined, KinuError> => Effect.map(execute<CatalogRow>(
     sql,
     new Statement()
       .text(`SELECT name, scope, columns, created_by, created_at FROM ${catalog} WHERE name = `)
       .value(name)
       .text(' LIMIT 1'),
     'read the agent-data catalogue',
-  )[0];
+  ), (rows) => rows[0]);
 
   const recordOf = (row: CatalogRow): AppTableRecord => ({
     name: row.name,
@@ -499,58 +509,68 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
     createdAt: row.created_at,
   });
 
-  const resolve = (name: string): Resolved => {
-    authorize();
-    const logical = parseInput(TableNameSchema, { value: name, where: 'table name' });
-    const row = catalogRow(logical);
+  const resolve = (name: string): Effect.Effect<Resolved, KinuError> => Effect.gen(function* () {
+    yield* authorized();
+    const logical = yield* parseInput(TableNameSchema, { value: name, where: 'table name' });
+    const row = yield* catalogRow(logical);
 
     if (row === undefined) {
-      throw new KinuError('missing', `no table \`${logical}\`: declare it with db.createTable, or read db.listTables() to see what this workspace has`);
+      return yield* new KinuError('missing', `no table \`${logical}\`: declare it with db.createTable, or read db.listTables() to see what this workspace has`);
     }
 
     const record = recordOf(row);
 
-    return {
+    const resolved: Resolved = {
       record,
       physical: `${APP_TABLE_PREFIX}${record.name}`,
       columns: new Map(record.columns.map((column) => [column.name, column])),
     };
-  };
 
-  const columnOf = (resolved: Resolved, name: string, where: string): AppColumn => {
+    return resolved;
+  });
+
+  const columnOf = (resolved: Resolved, name: string, where: string): Effect.Effect<AppColumn, KinuError> => {
     const column = resolved.columns.get(name);
 
-    if (column === undefined) {
-      throw new KinuError('bad_input', `${where}: table \`${resolved.record.name}\` declares no column \`${name}\` (it has ${[...resolved.columns.keys()].join(', ')})`);
-    }
-
-    return column;
+    return column === undefined
+      ? Effect.fail(new KinuError('bad_input', `${where}: table \`${resolved.record.name}\` declares no column \`${name}\` (it has ${[...resolved.columns.keys()].join(', ')})`))
+      : Effect.succeed(column);
   };
 
   /** Plan permits actor-scoped writes (spec §9.1) but not workspace-scoped ones. */
-  const requirePermission = (scope: AppTableScope, operation: string): void => {
-    requireWorkModePermission(currentWorkMode(), scope === 'actor', operation);
+  const permitted = (planAllowed: boolean, operation: string): Effect.Effect<void, KinuError> => {
+    const refusal = workModeRefusal(currentWorkMode(), planAllowed, operation);
+
+    return refusal === null ? Effect.void : Effect.fail(new KinuError(refusal.reason, refusal.error));
   };
 
   /** Scope predicate from the bound handle, never an argument. Returns whether `WHERE` is still needed. */
-  const compileScope = (resolved: Resolved, statement: Statement): boolean => {
-    if (resolved.record.scope !== 'actor') return true;
-    statement.text(` WHERE ${quoted(ACTOR_COLUMN)} = `).value(actorId);
+  const compileScope = (resolved: Resolved, statement: Statement): Effect.Effect<boolean, KinuError> => {
+    if (resolved.record.scope !== 'actor') return Effect.succeed(true);
 
-    return false;
+    return Effect.map(quoted(ACTOR_COLUMN), (column) => {
+      statement.text(` WHERE ${column} = `).value(actorId);
+
+      return false;
+    });
   };
 
-  const compilePredicate = (column: AppColumn, predicate: AppPredicate, statement: Statement, where: string): void => {
-    const name = quoted(column.name);
+  const compilePredicate = (
+    column: AppColumn,
+    predicate: AppPredicate,
+    statement: Statement,
+    where: string,
+  ): Effect.Effect<void, KinuError> => Effect.gen(function* () {
+    const name = yield* quoted(column.name);
 
     if (!v.is(OperatorCarrierSchema, predicate)) {
-      const bare = parseInput(JsonValueSchema, { value: predicate, where: where });
-      statement.text(`${name} = `).value(encodeValue(column, bare, where));
+      const bare = yield* parseInput(JsonValueSchema, { value: predicate, where: where });
+      statement.text(`${name} = `).value(yield* encodeValue(column, bare, where));
 
       return;
     }
 
-    const operation = parseInput(PredicateOperationSchema, { value: predicate, where: where });
+    const operation = yield* parseInput(PredicateOperationSchema, { value: predicate, where: where });
 
     switch (operation.op) {
       case 'isNull':
@@ -570,7 +590,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
 
         for (const [index, value] of operation.values.entries()) {
           if (index > 0) statement.text(', ');
-          statement.value(encodeValue(column, value, where));
+          statement.value(yield* encodeValue(column, value, where));
         }
 
         statement.text(')');
@@ -580,10 +600,10 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
 
       case 'like':
         if (column.type !== 'text') {
-          throw new KinuError('bad_input', `${where}: \`like\` compares text, and column \`${column.name}\` is ${column.type}`);
+          return yield* new KinuError('bad_input', `${where}: \`like\` compares text, and column \`${column.name}\` is ${column.type}`);
         }
 
-        statement.text(`${name} LIKE `).value(encodeValue(column, operation.value, where)).text(` ESCAPE '\\'`);
+        statement.text(`${name} LIKE `).value(yield* encodeValue(column, operation.value, where)).text(` ESCAPE '\\'`);
 
         return;
       case '=':
@@ -592,43 +612,43 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
       case '<=':
       case '>':
       case '>=':
-        statement.text(`${name} ${operation.op} `).value(encodeValue(column, operation.value, where));
+        statement.text(`${name} ${operation.op} `).value(yield* encodeValue(column, operation.value, where));
 
         return;
     }
-  };
+  });
 
-  const compileWhere = (resolved: Resolved, where: AppWhere | undefined, statement: Statement, doing: string): void => {
-    let needsWhere = compileScope(resolved, statement);
+  const compileWhere = (resolved: Resolved, where: AppWhere | undefined, statement: Statement, doing: string): Effect.Effect<void, KinuError> => Effect.gen(function* () {
+    let needsWhere = yield* compileScope(resolved, statement);
 
     for (const [name, predicate] of Object.entries(where ?? {})) {
-      const column = columnOf(resolved, name, doing);
+      const column = yield* columnOf(resolved, name, doing);
       statement.text(needsWhere ? ' WHERE ' : ' AND ');
       needsWhere = false;
-      compilePredicate(column, predicate, statement, doing);
+      yield* compilePredicate(column, predicate, statement, doing);
     }
-  };
+  });
 
-  const readRows = (resolved: Resolved, query: AppSelect | undefined, doing: string): AppRow[] => {
+  const readRows = (resolved: Resolved, query: AppSelect | undefined, doing: string): Effect.Effect<AppRow[], KinuError> => Effect.gen(function* () {
     // Never `SELECT *`: injected `actor_id` must not be readable.
     const columns = query?.columns === undefined
       ? resolved.record.columns
-      : query.columns.map((name) => columnOf(resolved, name, doing));
+      : yield* Effect.forEach(query.columns, (name) => columnOf(resolved, name, doing));
 
     const statement = new Statement()
-      .text(`SELECT ${columns.map((column) => quoted(column.name)).join(', ')} FROM ${quoted(resolved.physical)}`);
+      .text(`SELECT ${yield* quotedAll(columns.map((column) => column.name))} FROM ${yield* quoted(resolved.physical)}`);
 
-    compileWhere(resolved, query?.where, statement, doing);
+    yield* compileWhere(resolved, query?.where, statement, doing);
     const orderBy = query?.orderBy ?? [];
 
     if (orderBy.length > 0) {
       statement.text(' ORDER BY ');
 
       for (const [index, term] of orderBy.entries()) {
-        const column = columnOf(resolved, term.column, doing);
+        const column = yield* columnOf(resolved, term.column, doing);
 
         if (index > 0) statement.text(', ');
-        statement.text(`${quoted(column.name)} ${term.dir === 'desc' ? 'DESC' : 'ASC'}`);
+        statement.text(`${yield* quoted(column.name)} ${term.dir === 'desc' ? 'DESC' : 'ASC'}`);
       }
     }
 
@@ -636,17 +656,19 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
 
     if (query?.offset !== undefined) statement.text(' OFFSET ').value(query.offset);
 
-    return execute<Record<string, StoredValue>>(sql, statement, doing).map((row) => {
+    const rows = yield* execute<Record<string, StoredValue>>(sql, statement, doing);
+
+    return yield* Effect.forEach(rows, (row) => Effect.gen(function* () {
       const decoded: AppRow = {};
 
-      for (const column of columns) decoded[column.name] = decodeValue(column, row[column.name]);
+      for (const column of columns) decoded[column.name] = yield* decodeValue(column, row[column.name]);
 
       return decoded;
-    });
-  };
+    }));
+  });
 
   /** One INSERT per consecutive run of same-signature rows; preserves rowid order. */
-  const insertRows = (resolved: Resolved, rows: readonly AppRow[], doing: string): number => {
+  const insertRows = (resolved: Resolved, rows: readonly AppRow[], doing: string): Effect.Effect<number, KinuError> => Effect.gen(function* () {
     const scoped = resolved.record.scope === 'actor';
     let written = 0;
     let index = 0;
@@ -656,23 +678,23 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
 
       if (first === undefined) break;
       const names = Object.keys(first);
-      const columns = names.map((name) => columnOf(resolved, name, doing));
+      const columns = yield* Effect.forEach(names, (name) => columnOf(resolved, name, doing));
 
       const absent = resolved.record.columns.find(
         (column) => column.notNull === true && !Object.hasOwn(first, column.name),
       );
 
       if (absent !== undefined) {
-        throw new KinuError('bad_input', `${doing}: column \`${absent.name}\` is declared not null and row ${index} omits it`);
+        return yield* new KinuError('bad_input', `${doing}: column \`${absent.name}\` is declared not null and row ${index} omits it`);
       }
 
       const signature = names.join('\u0000');
       const perRow = columns.length + (scoped ? 1 : 0);
       const maxTuples = Math.max(1, Math.floor(MAX_BINDINGS_PER_STATEMENT / Math.max(1, perRow)));
-      const heading = [...(scoped ? [quoted(ACTOR_COLUMN)] : []), ...columns.map((column) => quoted(column.name))];
+      const heading = yield* quotedAll([...(scoped ? [ACTOR_COLUMN] : []), ...columns.map((column) => column.name)]);
 
       const statement = new Statement()
-        .text(`INSERT INTO ${quoted(resolved.physical)} (${heading.join(', ')}) VALUES `);
+        .text(`INSERT INTO ${yield* quoted(resolved.physical)} (${heading}) VALUES `);
 
       let tuples = 0;
 
@@ -688,7 +710,7 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
           if (position > 0 || scoped) statement.text(', ');
           const value = row[column.name];
 
-          statement.value(encodeValue(column, value === undefined ? null : value, `${doing}: row ${index}`));
+          statement.value(yield* encodeValue(column, value === undefined ? null : value, `${doing}: row ${index}`));
         }
 
         statement.text(')');
@@ -698,207 +720,239 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
 
       // `RETURNING` carries the row count; `SqlExecutor` returns no change count.
       statement.text(' RETURNING 1');
-      written += execute<unknown>(sql, statement, doing).length;
+      written += (yield* execute<unknown>(sql, statement, doing)).length;
     }
 
     return written;
-  };
+  });
 
-  const applyOp = (op: AppOp, doing: string): AppliedOp => {
-    const resolved = resolve(op.table);
-    requirePermission(resolved.record.scope, `db.${op.op} on a ${resolved.record.scope}-scope table`);
+  const applyOp = (op: AppOp, doing: string): Effect.Effect<AppliedOp, KinuError> => Effect.gen(function* () {
+    const resolved = yield* resolve(op.table);
+    yield* permitted(resolved.record.scope === 'actor', `db.${op.op} on a ${resolved.record.scope}-scope table`);
 
     if (op.op === 'insert') {
-      return {
-        result: { op: 'insert', table: resolved.record.name, rowsAffected: insertRows(resolved, op.rows, doing) },
+      const inserted: AppliedOp = {
+        result: { op: 'insert', table: resolved.record.name, rowsAffected: yield* insertRows(resolved, op.rows, doing) },
         scope: resolved.record.scope,
       };
+
+      return inserted;
     }
 
     const statement = new Statement();
 
     if (op.op === 'update') {
-      statement.text(`UPDATE ${quoted(resolved.physical)} SET `);
+      statement.text(`UPDATE ${yield* quoted(resolved.physical)} SET `);
 
       for (const [position, [name, value]] of Object.entries(op.set).entries()) {
-        const column = columnOf(resolved, name, doing);
+        const column = yield* columnOf(resolved, name, doing);
 
         if (position > 0) statement.text(', ');
-        statement.text(`${quoted(column.name)} = `).value(encodeValue(column, value, doing));
+        statement.text(`${yield* quoted(column.name)} = `).value(yield* encodeValue(column, value, doing));
       }
     }
-    else statement.text(`DELETE FROM ${quoted(resolved.physical)}`);
-    compileWhere(resolved, op.where, statement, doing);
+    else statement.text(`DELETE FROM ${yield* quoted(resolved.physical)}`);
+    yield* compileWhere(resolved, op.where, statement, doing);
     statement.text(' RETURNING 1');
 
-    return {
-      result: { op: op.op, table: resolved.record.name, rowsAffected: execute<unknown>(sql, statement, doing).length },
+    const applied: AppliedOp = {
+      result: { op: op.op, table: resolved.record.name, rowsAffected: (yield* execute<unknown>(sql, statement, doing)).length },
       scope: resolved.record.scope,
     };
-  };
 
-  const commit = <T>(work: (record: (event: DbOpRecord) => void) => T): T => {
+    return applied;
+  });
+
+  const commit = <T>(work: (record: (event: DbOpRecord) => void) => Effect.Effect<T, KinuError>): Effect.Effect<T> => Effect.sync(() => {
     const pending: DeferredRunEvent[] = [];
     let runId: string | undefined;
 
     const result = transactionSync(() => {
       pending.length = 0;
 
-      return work((event) => {
+      return settleSync(work((event) => {
         runId ??= deps.runId();
         pending.push(deps.events().emitDeferred(runId, { type: 'db_op', ...event }));
-      });
+      }));
     });
 
     for (const deferred of pending) deferred.publish();
 
     return result;
-  };
+  });
 
-  return {
-    createTable(spec) {
-      authorize();
-      const declared = parseInput(TableSpecSchema, { value: spec, where: 'db.createTable(spec)' });
-      const physical = `${APP_TABLE_PREFIX}${declared.name}`;
-      const doing = `db.createTable(${declared.name})`;
-      const existing = catalogRow(declared.name);
+  const createdTable = (spec: AppTableSpec): Effect.Effect<AppTableRecord, KinuError> => Effect.gen(function* () {
+    yield* authorized();
+    const declared = yield* parseInput(TableSpecSchema, { value: spec, where: 'db.createTable(spec)' });
+    const physical = `${APP_TABLE_PREFIX}${declared.name}`;
+    const doing = `db.createTable(${declared.name})`;
+    const existing = yield* catalogRow(declared.name);
 
-      if (existing !== undefined) {
-        const record = recordOf(existing);
+    if (existing !== undefined) {
+      const record = recordOf(existing);
 
-        if (!sameDeclaration(record, declared)) {
-          throw new KinuError('denied', `table \`${declared.name}\` already exists as ${record.scope}-scope (${renderDeclaration(record)}) and re-declaring it does not migrate it; use another name`);
-        }
-
-        return commit(() => {
-          // Self-healing: a catalogued table must exist physically.
-          runDdl(createTableDdl(record, physical), doing);
-          const index = ownerIndexDdl(record, physical);
-
-          if (index !== null) runDdl(index, doing);
-
-          return record;
-        });
+      if (!sameDeclaration(record, declared)) {
+        return yield* new KinuError('denied', `table \`${declared.name}\` already exists as ${record.scope}-scope (${renderDeclaration(record)}) and re-declaring it does not migrate it; use another name`);
       }
 
-      requirePermission(declared.scope, `db.createTable of a ${declared.scope}-scope table`);
+      return yield* commit(() => Effect.gen(function* () {
+        // Self-healing: a catalogued table must exist physically.
+        yield* runDdl(yield* createTableDdl(record, physical), doing);
+        const index = yield* ownerIndexDdl(record, physical);
 
-      const tables = v.parse(
-        CountSchema,
-        execute<{ n: number }>(sql, new Statement().text(`SELECT COUNT(*) AS n FROM ${catalog}`), doing)[0]?.n ?? 0,
-      );
+        if (index !== null) yield* runDdl(index, doing);
 
-      if (tables >= MAX_TABLES) {
-        throw new KinuError('denied', `this workspace already holds ${tables} agent tables, which is the maximum; drop one before declaring another`);
-      }
+        return record;
+      }));
+    }
 
-      const claimed = execute<{ name: string }>(
+    yield* permitted(declared.scope === 'actor', `db.createTable of a ${declared.scope}-scope table`);
+
+    const counted = yield* execute<{ n: number }>(sql, new Statement().text(`SELECT COUNT(*) AS n FROM ${catalog}`), doing);
+    const tables = v.parse(CountSchema, counted[0]?.n ?? 0);
+
+    if (tables >= MAX_TABLES) {
+      return yield* new KinuError('denied', `this workspace already holds ${tables} agent tables, which is the maximum; drop one before declaring another`);
+    }
+
+    const claimed = yield* execute<{ name: string }>(
+      sql,
+      new Statement()
+        .text(`SELECT name FROM sqlite_master WHERE type IN ('table', 'view', 'index', 'trigger') AND name = `)
+        .value(physical),
+      doing,
+    );
+
+    if (claimed.length > 0) {
+      // Never adopt an uncatalogued physical object as agent data.
+      return yield* new KinuError('denied', `\`${physical}\` already exists in this database outside the agent-data catalogue, so it is not agent data and this will not adopt it as such`);
+    }
+
+    const record: AppTableRecord = { ...declared, createdBy: actorId, createdAt: Date.now() };
+
+    return yield* commit((record_) => Effect.gen(function* () {
+      yield* runDdl(yield* createTableDdl(record, physical), doing);
+      const index = yield* ownerIndexDdl(record, physical);
+
+      if (index !== null) yield* runDdl(index, doing);
+      yield* runStatement(
         sql,
         new Statement()
-          .text(`SELECT name FROM sqlite_master WHERE type IN ('table', 'view', 'index', 'trigger') AND name = `)
-          .value(physical),
+          .text(`INSERT INTO ${catalog} (name, scope, columns, created_by, created_at) VALUES (`)
+          .value(record.name).text(', ')
+          .value(record.scope).text(', ')
+          .value(JSON.stringify(record.columns)).text(', ')
+          .value(record.createdBy).text(', ')
+          .value(record.createdAt).text(')'),
+        doing,
+      );
+      record_({ op: 'createTable', table: record.name, scope: record.scope, rowsAffected: 0, batch: null });
+
+      return record;
+    }));
+  });
+
+  const droppedTable = (name: string): Effect.Effect<void, KinuError> => Effect.gen(function* () {
+    const resolved = yield* resolve(name);
+    const doing = `db.dropTable(${resolved.record.name})`;
+    // Build-only on either scope: dropping affects the whole workspace.
+    yield* permitted(false, doing);
+
+    if (resolved.record.createdBy !== actorId) {
+      return yield* new KinuError('denied', `table \`${resolved.record.name}\` was declared by another agent (${resolved.record.createdBy}); delete your own rows instead`);
+    }
+
+    if (resolved.record.scope === 'actor') {
+      const counted = yield* execute<{ n: number }>(
+        sql,
+        new Statement()
+          .text(`SELECT COUNT(*) AS n FROM ${yield* quoted(resolved.physical)} WHERE ${yield* quoted(ACTOR_COLUMN)} != `)
+          .value(actorId),
         doing,
       );
 
-      if (claimed.length > 0) {
-        // Never adopt an uncatalogued physical object as agent data.
-        throw new KinuError('denied', `\`${physical}\` already exists in this database outside the agent-data catalogue, so it is not agent data and this will not adopt it as such`);
+      const siblings = v.parse(CountSchema, counted[0]?.n ?? 0);
+
+      if (siblings > 0) {
+        return yield* new KinuError('denied', `\`${resolved.record.name}\` is ONE physical table and holds ${siblings} row(s) belonging to other agents; dropping it would delete their private rows, so it stays. Delete your own rows instead`);
       }
+    }
 
-      const record: AppTableRecord = { ...declared, createdBy: actorId, createdAt: Date.now() };
+    yield* commit((record) => Effect.gen(function* () {
+      yield* runDdl(`DROP TABLE IF EXISTS ${yield* quoted(resolved.physical)}`, doing);
+      yield* runStatement(
+        sql,
+        new Statement().text(`DELETE FROM ${catalog} WHERE name = `).value(resolved.record.name),
+        doing,
+      );
+      record({ op: 'dropTable', table: resolved.record.name, scope: resolved.record.scope, rowsAffected: 0, batch: null });
+    }));
+  });
 
-      return commit((record_) => {
-        runDdl(createTableDdl(record, physical), doing);
-        const index = ownerIndexDdl(record, physical);
+  const counted = (table: string, where: AppWhere | undefined): Effect.Effect<number, KinuError> => Effect.gen(function* () {
+    const doing = `db.count(${table})`;
+    const resolved = yield* resolve(table);
+    const statement = new Statement().text(`SELECT COUNT(*) AS n FROM ${yield* quoted(resolved.physical)}`);
+    yield* compileWhere(resolved, where, statement, doing);
+    const rows = yield* execute<{ n: number }>(sql, statement, doing);
 
-        if (index !== null) runDdl(index, doing);
-        runStatement(
-          sql,
-          new Statement()
-            .text(`INSERT INTO ${catalog} (name, scope, columns, created_by, created_at) VALUES (`)
-            .value(record.name).text(', ')
-            .value(record.scope).text(', ')
-            .value(JSON.stringify(record.columns)).text(', ')
-            .value(record.createdBy).text(', ')
-            .value(record.createdAt).text(')'),
-          doing,
-        );
-        record_({ op: 'createTable', table: record.name, scope: record.scope, rowsAffected: 0, batch: null });
+    return v.parse(CountSchema, rows[0]?.n ?? 0);
+  });
 
-        return record;
-      });
+  const batched = (ops: readonly AppOp[]): Effect.Effect<AppOpResult[], KinuError> => Effect.flatMap(authorized(), () => commit((record) => Effect.gen(function* () {
+    const results: AppOpResult[] = [];
+
+    for (const [index, op] of ops.entries()) {
+      const doing = `db.batch operation ${index} (${op.op} ${op.table})`;
+
+      // A refusal fails the batch, which rolls it back, evidence included.
+      const applied = yield* Effect.mapError(Effect.tap(applyOp(op, doing), (done) => classified(() => record({
+        op: done.result.op,
+        table: done.result.table,
+        scope: done.scope,
+        rowsAffected: done.result.rowsAffected,
+        batch: ops.length,
+      }))), (cause) => new AppBatchError(index, cause));
+
+      results.push(applied.result);
+    }
+
+    return results;
+  })));
+
+  return {
+    createTable(spec) {
+      return settleSync(createdTable(spec));
     },
 
     dropTable(name) {
-      const resolved = resolve(name);
-      const doing = `db.dropTable(${resolved.record.name})`;
-      // Build-only on either scope: dropping affects the whole workspace.
-      requireWorkModePermission(currentWorkMode(), false, doing);
-
-      if (resolved.record.createdBy !== actorId) {
-        throw new KinuError('denied', `table \`${resolved.record.name}\` was declared by another agent (${resolved.record.createdBy}); delete your own rows instead`);
-      }
-
-      if (resolved.record.scope === 'actor') {
-        const siblings = v.parse(CountSchema, execute<{ n: number }>(
-          sql,
-          new Statement()
-            .text(`SELECT COUNT(*) AS n FROM ${quoted(resolved.physical)} WHERE ${quoted(ACTOR_COLUMN)} != `)
-            .value(actorId),
-          doing,
-        )[0]?.n ?? 0);
-
-        if (siblings > 0) {
-          throw new KinuError('denied', `\`${resolved.record.name}\` is ONE physical table and holds ${siblings} row(s) belonging to other agents; dropping it would delete their private rows, so it stays. Delete your own rows instead`);
-        }
-      }
-
-      commit((record) => {
-        runDdl(`DROP TABLE IF EXISTS ${quoted(resolved.physical)}`, doing);
-        runStatement(
-          sql,
-          new Statement().text(`DELETE FROM ${catalog} WHERE name = `).value(resolved.record.name),
-          doing,
-        );
-        record({ op: 'dropTable', table: resolved.record.name, scope: resolved.record.scope, rowsAffected: 0, batch: null });
-      });
+      return settleSync(droppedTable(name));
     },
 
     listTables() {
-      authorize();
-
-      return execute<CatalogRow>(
+      return settleSync(Effect.flatMap(authorized(), () => Effect.map(execute<CatalogRow>(
         sql,
         new Statement().text(`SELECT name, scope, columns, created_by, created_at FROM ${catalog} ORDER BY created_at ASC, name ASC`),
         'db.listTables()',
-      ).map(recordOf);
+      ), (rows) => rows.map(recordOf))));
     },
 
     schema(name) {
-      return resolve(name).record;
+      return settleSync(Effect.map(resolve(name), (resolved) => resolved.record));
     },
 
     select(table, query) {
-      const doing = `db.select(${table})`;
-
-      return readRows(resolve(table), query, doing);
+      return settleSync(Effect.flatMap(resolve(table), (resolved) => readRows(resolved, query, `db.select(${table})`)));
     },
 
     count(table, where) {
-      const doing = `db.count(${table})`;
-      const resolved = resolve(table);
-      const statement = new Statement().text(`SELECT COUNT(*) AS n FROM ${quoted(resolved.physical)}`);
-      compileWhere(resolved, where, statement, doing);
-
-      return v.parse(CountSchema, execute<{ n: number }>(sql, statement, doing)[0]?.n ?? 0);
+      return settleSync(counted(table, where));
     },
 
     apply(op) {
-      authorize();
       const doing = `db.${op.op}(${op.table})`;
 
-      return commit((record) => {
-        const applied = applyOp(op, doing);
+      return settleSync(Effect.flatMap(authorized(), () => commit((record) => Effect.map(applyOp(op, doing), (applied) => {
         record({
           op: applied.result.op,
           table: applied.result.table,
@@ -908,37 +962,11 @@ export function createAppDataStore(deps: AppDataStoreDeps): AppDataStore {
         });
 
         return applied.result;
-      });
+      }))));
     },
 
     batch(ops) {
-      authorize();
-
-      return commit((record) => {
-        const results: AppOpResult[] = [];
-
-        for (const [index, op] of ops.entries()) {
-          const doing = `db.batch operation ${index} (${op.op} ${op.table})`;
-
-          try {
-            const applied = applyOp(op, doing);
-            record({
-              op: applied.result.op,
-              table: applied.result.table,
-              scope: applied.scope,
-              rowsAffected: applied.result.rowsAffected,
-              batch: ops.length,
-            });
-            results.push(applied.result);
-          }
-          catch (cause) {
-            // Rethrown: the throw rolls back the whole batch, evidence included.
-            throw cause instanceof KinuError ? new AppBatchError(index, cause) : cause;
-          }
-        }
-
-        return results;
-      });
+      return settleSync(batched(ops));
     },
   };
 }
@@ -994,95 +1022,91 @@ export function createDbCodemodeProvider(store: AppDataStore): CodemodeProvider 
       createTable: {
         planAllowed: true,
         description: 'Declare a table: db.createTable({ name, scope: "actor" | "workspace", columns }).',
-        execute: (...args) => branchableToolCall(async () => store.createTable(
+        execute: (...args) => branchableToolCall(() => settle(Effect.map(
           parseInput(TableSpecSchema, { value: args[0], where: 'db.createTable(spec)' }),
-        )),
+          (spec) => store.createTable(spec),
+        ))),
       },
       listTables: {
         planAllowed: true,
         description: 'List this workspace\'s tables with their scope and who declared each.',
-        execute: () => branchableToolCall(async () => [...store.listTables()]),
+        execute: () => branchableToolCall(() => settle(Effect.sync(() => [...store.listTables()]))),
       },
       schema: {
         planAllowed: true,
         description: 'Read one table\'s column declaration.',
-        execute: (...args) => branchableToolCall(async () => store.schema(
+        execute: (...args) => branchableToolCall(() => settle(Effect.map(
           parseInput(TableNameSchema, { value: args[0], where: 'db.schema(table)' }),
-        )),
+          (table) => store.schema(table),
+        ))),
       },
       select: {
         planAllowed: true,
         description: 'Read rows: db.select(table, { where?, columns?, orderBy?, limit?, offset? }).',
-        execute: (...args) => branchableToolCall(async () => store.select(
-          parseInput(TableNameSchema, { value: args[0], where: 'db.select(table, query?)' }),
-          args[1] === undefined ? undefined : parseInput(SelectSchema, { value: args[1], where: 'db.select(table, query?)' }),
-        )),
+        execute: (...args) => branchableToolCall(() => settle(Effect.gen(function* () {
+          const table = yield* parseInput(TableNameSchema, { value: args[0], where: 'db.select(table, query?)' });
+          const query = args[1] === undefined ? undefined : yield* parseInput(SelectSchema, { value: args[1], where: 'db.select(table, query?)' });
+
+          return store.select(table, query);
+        }))),
       },
       count: {
         planAllowed: true,
         description: 'Count matching rows: db.count(table, where?).',
-        execute: (...args) => branchableToolCall(async () => store.count(
-          parseInput(TableNameSchema, { value: args[0], where: 'db.count(table, where?)' }),
-          args[1] === undefined ? undefined : parseInput(WhereSchema, { value: args[1], where: 'db.count(table, where?)' }),
-        )),
+        execute: (...args) => branchableToolCall(() => settle(Effect.gen(function* () {
+          const table = yield* parseInput(TableNameSchema, { value: args[0], where: 'db.count(table, where?)' });
+          const where = args[1] === undefined ? undefined : yield* parseInput(WhereSchema, { value: args[1], where: 'db.count(table, where?)' });
+
+          return store.count(table, where);
+        }))),
       },
       insert: {
         planAllowed: true,
         description: 'Insert rows: db.insert(table, rows).',
-        execute: (...args) => branchableToolCall(async () => ({
-          rowsAffected: store.apply(parseInput(OpSchema, {
-            value: { op: 'insert', table: args[0], rows: args[1] },
-            where: 'db.insert(table, rows)',
-          })).rowsAffected,
-        })),
+        execute: (...args) => branchableToolCall(() => settle(Effect.map(parseInput(OpSchema, {
+          value: { op: 'insert', table: args[0], rows: args[1] },
+          where: 'db.insert(table, rows)',
+        }), (op) => ({ rowsAffected: store.apply(op).rowsAffected })))),
       },
       update: {
         planAllowed: true,
         description: 'Update matching rows: db.update(table, set, where).',
-        execute: (...args) => branchableToolCall(async () => ({
-          rowsAffected: store.apply(parseInput(OpSchema, {
-            value: { op: 'update', table: args[0], set: args[1], where: args[2] },
-            where: 'db.update(table, set, where)',
-          })).rowsAffected,
-        })),
+        execute: (...args) => branchableToolCall(() => settle(Effect.map(parseInput(OpSchema, {
+          value: { op: 'update', table: args[0], set: args[1], where: args[2] },
+          where: 'db.update(table, set, where)',
+        }), (op) => ({ rowsAffected: store.apply(op).rowsAffected })))),
       },
       // Not `delete`: codemode registers reserved words as `delete_`, breaking hosted calls
       // (see `cf-backend/tests/workerd/db-capability.test.ts`).
       deleteRows: {
         planAllowed: true,
         description: 'Delete matching rows: db.deleteRows(table, where).',
-        execute: (...args) => branchableToolCall(async () => ({
-          rowsAffected: store.apply(parseInput(OpSchema, {
-            value: { op: 'delete', table: args[0], where: args[1] },
-            where: 'db.deleteRows(table, where)',
-          })).rowsAffected,
-        })),
+        execute: (...args) => branchableToolCall(() => settle(Effect.map(parseInput(OpSchema, {
+          value: { op: 'delete', table: args[0], where: args[1] },
+          where: 'db.deleteRows(table, where)',
+        }), (op) => ({ rowsAffected: store.apply(op).rowsAffected })))),
       },
       batch: {
         planAllowed: true,
         description: 'Run several writes in one all-or-nothing transaction: db.batch(ops).',
-        execute: async (...args) => {
-          try {
-            return store.batch(parseInput(BatchSchema, { value: args[0], where: 'db.batch(ops)' }))
-              .map((result) => ({ rowsAffected: result.rowsAffected }));
-          }
-          catch (cause) {
-            // Not `branchableToolCall`: that helper cannot carry `failedIndex`.
-            if (cause instanceof AppBatchError) return { ...refusalOf(cause), failedIndex: cause.failedIndex };
-
-            if (cause instanceof KinuError) return refusalOf(cause);
-            throw cause;
-          }
-        },
+        // Not `branchableToolCall`: that helper cannot carry `failedIndex`.
+        execute: (...args) => settle(Effect.flatMap(parseInput(BatchSchema, { value: args[0], where: 'db.batch(ops)' }), (ops) => classified(
+          () => store.batch(ops).map((result) => ({ rowsAffected: result.rowsAffected })),
+        )).pipe(Effect.catch((refused) => Effect.succeed(refused instanceof AppBatchError
+          ? { ...refusalOf(refused), failedIndex: refused.failedIndex }
+          : refusalOf(refused))))),
       },
       dropTable: {
         planAllowed: false,
         description: 'Retire a table you declared, with its rows.',
-        execute: (...args) => branchableToolCall(async () => {
-          store.dropTable(parseInput(TableNameSchema, { value: args[0], where: 'db.dropTable(table)' }));
+        execute: (...args) => branchableToolCall(() => settle(Effect.map(
+          parseInput(TableNameSchema, { value: args[0], where: 'db.dropTable(table)' }),
+          (table) => {
+            store.dropTable(table);
 
-          return { ok: true };
-        }),
+            return { ok: true };
+          },
+        ))),
       },
     },
   };
