@@ -1432,7 +1432,7 @@ export class LocalAgentSession {
       logActivity: (event, detail) => this.emit({ type: 'background', event, message: detail ?? '' }),
     });
     // An advisor that answered while this process was gone.
-    await this.actorSession.deliverAdvisorAnswers();
+    await this.deliverAdvisorAnswers();
     const reviews = await this.actorSession.orchestrator.runDeferredTurnReviews();
 
     if (reviews.reviewed > 0 || reviews.refused.length > 0) {
@@ -2562,10 +2562,12 @@ export class LocalAgentSession {
 
   /**
    * This actor's advisor answered: its note reaches the conversation. The CLI has no durable job queue, so the
-   * stored answer is the owed delivery itself: an answer a death left undelivered goes at the next start.
+   * stored answer is the owed delivery itself: an answer a death left undelivered goes at the next start. A note is
+   * handed to the turn it opens, never awaited here; tracked, so an exit joins it.
    */
   async deliverAdvisorAnswers(): Promise<void> {
     await this.actorSession.deliverAdvisorAnswers();
+    this.tracked(() => this.actorSession.advisorDeliveries());
   }
 
   /** Installed after construction: roster and peer inbox need the session's broadcast. */

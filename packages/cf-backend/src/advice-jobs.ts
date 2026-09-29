@@ -8,14 +8,13 @@ import {
   LifecycleCapability, type DurableObjectCapability, type LifecycleJobContext, type LifecycleJobOutcome,
 } from 'agents/lifecycle';
 import { RECOVERY_BACKOFF_CEILING_MS } from '@kinu.run/core';
-import { attempt, diagnostics, KinuError, settle, toKinuError } from '@kinu.run/core/obs';
-import { Effect } from 'effect';
+import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 
 const ADVICE_JOB = 'advisor-answer';
 
 const AdvicePayloadSchema = v.object({ actorId: v.string() });
 
-/** Delivers every answer the hirer holds; false when one stayed undelivered. */
+/** Delivers every answer the hirer holds; false while one is still held (handed to its turn, or kept after a failure). */
 export type DeliverAdvice = (actorId: string) => Promise<boolean>;
 
 export class AdviceJobs extends LifecycleCapability {
@@ -36,12 +35,11 @@ export class AdviceJobs extends LifecycleCapability {
     if (job.fn !== ADVICE_JOB) return undefined;
     const { actorId } = v.parse(AdvicePayloadSchema, job.payload);
 
-    // Undelivered, the job fails, so the queue runs it again; the answer stays stored.
-    return settle(attempt({ doing: 'delivering an advisor answer', otherwise: 'unavailable' }, () => this.#deliver(actorId)).pipe(
-      Effect.flatMap((delivered) => (delivered
-        ? Effect.succeed(undefined)
-        : Effect.fail(new KinuError('unavailable', 'An advisor answer is still undelivered.')))),
-    ));
+    // Never waits on the turn a note opens: the alarm would hold across its inference. An answer still held brings
+    // the job back at the ceiling, a backstop for a death before its turn said it.
+    const settled = await this.#deliver(actorId);
+
+    return settled ? undefined : { rescheduleAt: Date.now() + RECOVERY_BACKOFF_CEILING_MS };
   }
 
   /** A delivery that failed every retry comes back later; the answer is still stored. */
