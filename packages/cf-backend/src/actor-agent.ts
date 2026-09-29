@@ -62,9 +62,7 @@ import {
   queueTurnShadowTrial, runQueuedShadowTrials, createJsonJudge, type ScaffoldControl,
   refinementPass, type RefinementDeps,
   type CompletedTurn, type TurnContinuity, UNBOUNDED_STEPS,
-  reviewRecordedTurn,
-  type AdvisorRecoverySnapshot, type AdvisorDisposition,
-  advisorWorkspaceGuidance,
+  type AdvisorRecoverySnapshot,
   buildActorTools, buildBuiltinTools,
   buildMcpToolSet,
   type WebSearchProvider,
@@ -228,6 +226,7 @@ import {
 } from "@kinu.run/core/analytics";
 import * as v from 'valibot';
 import { Hono, type Context } from 'hono';
+import { AdviceJobs } from './advice-jobs';
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB, WakeJobs, type WakePace } from './wake-jobs';
 import { rawPath, rethrow } from './api/context';
 
@@ -1007,6 +1006,7 @@ export abstract class ActorAgent extends Agent<Env> {
         this.broadcastSubordinateEvent({ ...report, kind: 'report' });
       },
       onAdmitted: () => { this.orch.scheduleDrain(); },
+      evolutionAnswerStored: () => this.advice.owe(this.actorHandle().actorId),
       onEvolutionAnswer: () => { this.durableWakeOwner()?.(); },
       // A temporary child's answer belongs to the waiting `agents.ask` call, so the register gets
       // first refusal on the name through the port that parked the waiter.
@@ -1045,12 +1045,21 @@ export abstract class ActorAgent extends Agent<Env> {
     [TERMINAL_RETRY_JOB]: (pace) => this.terminalRetryPass(pace),
   });
 
+  /** An advisor answer's delivery; see advice-jobs.ts. */
+  protected readonly advice = new AdviceJobs((actorId) => this.deliverAdviceFor(actorId));
+
   /** The workspace timer's pass: every source a subclass folds into its next wake. */
   abstract _kinuTimerTick(): Promise<void>;
+
+  /** This actor's held advisor answers; a subclass hosting other actors routes theirs. */
+  protected deliverAdviceFor(actorId: string): Promise<boolean> {
+    return actorId === this.actorHandle().actorId ? this.actorSession.deliverAdvisorAnswers() : Promise.resolve(true);
+  }
 
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
     this.lifecycle.use(this.wakes);
+    this.lifecycle.use(this.advice);
     // Must precede any read or write of it; see initCapabilitySchema.
     this.initCapabilitySchema();
     // A Durable Object is a DIFFERENT ISOLATE from the Worker that routes to it,
@@ -1305,19 +1314,12 @@ export abstract class ActorAgent extends Agent<Env> {
         },
       }),
 
-      // The snapshot is the row's input, so a replay reviews the tool surface the turn had, and a note
-      // already recorded for the turn is never reviewed again.
+      // The snapshot is the row's input, so a replay hires on the tool surface the turn had; the hire is
+      // keyed on the turn, so a replay hires no second advisor.
       advisor_review: terminalEffect({
         input: v.object({ status: RunEndReasonSchema, workMode: WorkModeSchema, advisor: AdvisorRecoverySnapshotSchema }),
         run: async ({ status, workMode, advisor }) => {
-          const turnId = advisor.turn.turnId;
-
-          if (!this.actorSession.reviewsTurns || !this.orch.improvementLanesOpen(status, workMode)
-            || (turnId !== undefined && this.engine.hasAdvisorNoteForTurn(turnId))) {
-            return { status: 'completed' };
-          }
-
-          await this.runAdvisorReview(advisor);
+          if (this.orch.improvementLanesOpen(status, workMode)) await this.actorSession.hireAdvisor(advisor);
 
           return { status: 'completed' };
         },
@@ -1785,6 +1787,9 @@ export abstract class ActorAgent extends Agent<Env> {
       workspace: this.workspaceName(),
       events: this.stores.eventRecorder,
       orchestration: this.orchestrationDeps(),
+      advisorPort: () => this.temporaryAgentPort(),
+      // While the completion gate waits for its answer, the advisor records its note silently.
+      gateOpen: () => this._chatLoop?.completionGate.open ?? false,
       turns: () => this.tracing.turns({ id: this.actorHandle().actorId, kind: 'main' }),
     });
 
@@ -2143,28 +2148,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return {
       turn,
       reachable: [...reachable],
-      minSeverity: this.config.getAdvisorMinSeverity(),
-      recent: [...this.engine.recentAdvisorNotes()],
     };
-  }
-
-  /**
-   * Shared body for the live lane and its recovery, so both review against the snapshot.
-   * The model, signal seam, and note store are re-resolved by whoever runs it.
-   */
-  private async runAdvisorReview(snapshot: AdvisorRecoverySnapshot): Promise<AdvisorDisposition | null> {
-    return reviewRecordedTurn({
-      snapshot,
-      llm: this.rt.advisorLlm,
-      guidance: await advisorWorkspaceGuidance({
-        vfs: this.rt.agentStateVfs ?? this.rt.storage.vfs,
-        limits: async () => this.modelCatalog.contextFor((await this.modelForSource('advisor')).spec),
-      }),
-      govern: (llm, labels) => this.budget.govern(llm, labels),
-      gateOpen: false,
-      send: (signal) => this.orch.inbox.send(signal),
-      record: (note, turnId) => { this.engine.recordAdvisorNote(note, turnId); },
-    });
   }
 
   /**

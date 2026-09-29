@@ -1,6 +1,6 @@
 {
-  "measuredAt": "2026-09-28",
-  "total": 184,
+  "measuredAt": "2026-09-29",
+  "total": 182,
   "files": {
     "packages/cf-backend/tests/helpers/actor-harness.ts": {
       "lap-poll": 1
@@ -91,8 +91,7 @@
       "sleep": 1
     },
     "packages/cli-backend/tests/local-session-turns.test.ts": {
-      "sleep": 3,
-      "clock-compare": 1
+      "sleep": 2
     },
     "packages/cli-backend/tests/loop-admission.test.ts": {
       "clock-compare": 1,

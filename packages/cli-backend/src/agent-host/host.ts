@@ -483,6 +483,8 @@ export class LocalAgentHost {
       directory,
       // No build identity for the builtin loop: a `bun`-run checkout has no build stamp.
       installedBuild: null,
+      // Its own entry's port; a seated swarm node has none, and takes no input to be reviewed on.
+      advisorPort: (bound) => this.byActor.get(bound.reference.actorId)?.temporary ?? null,
       runtimeFor: (bound) => this.runtimeFor(runtimes, db, bound),
       filesFor: async (bound) => {
         if (!ws.rt.filesForActor) throw new KinuError('missing', 'workspace has no actor file-plane resolver');
@@ -1066,7 +1068,12 @@ export class LocalAgentHost {
         ));
       },
       onAdmitted: () => this.wake(parent, 'subordinate report'),
-      onEvolutionAnswer: () => this.answerWake(parent),
+      // No job queue here: the stored answer is the owed delivery, made below and, after a death, at the next start.
+      evolutionAnswerStored: () => undefined,
+      onEvolutionAnswer: async () => {
+        this.answerWake(parent);
+        await parent.session.deliverAdvisorAnswers();
+      },
       temporary: parent.temporary,
     }, {
       fromSubordinate: child.name,

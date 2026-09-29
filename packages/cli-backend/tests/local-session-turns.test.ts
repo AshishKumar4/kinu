@@ -1,13 +1,13 @@
 // LocalAgentSession over the real CLI runtime and a fake model: a user turn end to end.
 import { describe, test, expect } from 'bun:test';
-import { present, scratchDir, scratchPath, scriptedTurnModel } from '@kinu.run/test-utils';
+import { present, scratchDir, scratchPath, scriptedAdvisorPort, scriptedTurnModel } from '@kinu.run/test-utils';
 import { Database } from 'bun:sqlite';
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type LanguageModel, type ModelMessage } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2Usage, LanguageModelV2StreamPart } from '@ai-sdk/provider';
-import type { VFS, VfsNativeReads } from '@kinu.run/core';
+import type { TemporaryAgentPort, VFS, VfsNativeReads } from '@kinu.run/core';
 import {
   initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, Inbox, backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID, type ModelInfo, type SqlExecutor, openWorkspaceMainActor, InstructionApprovalStore, instructionDigest, WORKSPACE_INSTRUCTIONS_HEADER, initWorkspaceSchema,
 } from '@kinu.run/core';
@@ -16,7 +16,7 @@ import { LocalAgentSession, serializeContentForHeads, type SessionEvent } from '
 import { type LocalModelResolver } from '../src/model-resolver';
 import { discoverAgentsMd } from '../src/agents-md';
 import {
-  resolverRest, namedSpec, textStream, type PromptMessage, fakeModel, historyCapturingModel, systemCapturingModel, workspaceRuntime, transcript, setup, setupWithResolver, waitFor, captureFailures, kinds, turnStarts, isDynamicBlock, isWorkspaceInstructions, writeFocusedSkill, messageText, DUMMY_LLM,
+  resolverRest, namedSpec, textStream, type PromptMessage, fakeModel, historyCapturingModel, systemCapturingModel, workspaceRuntime, transcript, setup, setupWithResolver, waitFor, kinds, turnStarts, isDynamicBlock, isWorkspaceInstructions, writeFocusedSkill, messageText, DUMMY_LLM,
 } from './helpers/local-session';
 
 test('parallel native calls retain their SDK identities after reverse completion', async () => {
@@ -931,73 +931,53 @@ describe('LocalAgentSession — mission-derived auto-titling', () => {
   });
 });
 
-describe('LocalAgentSession — the advisor lane joins the exit', () => {
-  function setupWithAdvisor(reply: () => Promise<string>) {
-    const { db, rt, session, events } = setup('rotated the staging keys');
-    rt.actor.config.setAdvisorEnabled(true);
-    rt.advisorLlm = { stream: async function* () { yield ''; }, complete: reply };
+/** A session whose advisor is hired through `advisor`; a session with no host has no port of its own. */
+class AdvisedSession extends LocalAgentSession {
+  advisor: TemporaryAgentPort | null = null;
 
-    return { db, rt, session, events };
+  protected override advisorPort(): TemporaryAgentPort | null {
+    return this.advisor;
+  }
+}
+
+describe('LocalAgentSession — the advisor is a hire, not a wait', () => {
+  function setupWithAdvisor(model?: LanguageModel) {
+    const { db, rt } = workspaceRuntime();
+    const session = new AdvisedSession({ rt, db, model: model ?? fakeModel('rotated the staging keys'), onEvent: () => {}, noAutoEvolve: true });
+    const advisor = scriptedAdvisorPort();
+
+    rt.actor.config.setAdvisorEnabled(true);
+    session.advisor = advisor;
+
+    return { db, session, advisor };
   }
 
   const notes = (db: Database) => db.query<{ message: string }, []>(
     `SELECT message FROM evolution_events WHERE type = 'advisor_note'`,
   ).all().map((row) => row.message);
 
-  const NOTE = 'the staging cluster was never named';
-  const nit = JSON.stringify({ note: NOTE, severity: 'nit', class: 'wrong-work' });
-
-  test('a review still in flight at end() lands its note before the database closes', async () => {
-    // A real open promise at end() is the property; a fake clock the session does not read would only move the race.
-    let reviewedAt = 0;
-
-    const { db, session } = setupWithAdvisor(async () => {
-      await Bun.sleep(50);
-      reviewedAt = performance.now();
-
-      return nit;
-    });
+  test('a turn hires its advisor on the advisor preset and the session ends without waiting for its answer', async () => {
+    const { db, session, advisor } = setupWithAdvisor();
 
     await session.send('rotate the keys', { id: crypto.randomUUID() });
-    expect(notes(db)).toEqual([]);
-
     await session.end();
-    const endedAt = performance.now();
 
-    // The advisor lane needs a durable fiber row in the set end() and settleBackgroundWork() join.
-    expect(notes(db)).toEqual([NOTE]);
-    expect(reviewedAt).toBeGreaterThan(0);
-    expect(endedAt).toBeGreaterThanOrEqual(reviewedAt);
-  });
-
-  test('a reviewer that throws is reported by name, and is never a failed exit', async () => {
-    const { db, session } = setupWithAdvisor(async () => { throw new Error('reviewer is on fire'); });
-
-    const failures = await captureFailures('advisor.review_failed', async () => {
-      await session.send('rotate the keys', { id: crypto.randomUUID() });
-      await session.end();
-    });
-
+    expect(advisor.tasks.map((task) => [task.role, task.mode])).toEqual([['advisor', 'build']]);
+    expect(advisor.tasks[0]?.task).toContain('You are reviewing one finished turn');
     expect(notes(db)).toEqual([]);
-    expect(failures).toHaveLength(1);
-    expect(failures[0]).toContain('reviewer is on fire');
   });
 
-  test('a FAILED build turn feeds no improvement lane', async () => {
+  test('a FAILED build turn hires no advisor', async () => {
     // A provider-killed turn requests no advice, per core's `improvementLanesOpen`, matching cf.
     const exploding = new TestLanguageModelV2({
       provider: 'fake', modelId: 'fake-model',
       doStream: async () => { throw new Error('upstream is on fire'); },
     });
 
-    const { db, rt, session } = setup('unused', exploding);
-    rt.actor.config.setAdvisorEnabled(true);
-    rt.advisorLlm = {
-      stream: async function* () { yield ''; },
-      complete: async () => JSON.stringify({ note: NOTE, severity: 'nit', class: 'wrong-work' }),
-    };
+    const { db, session, advisor } = setupWithAdvisor(exploding);
     await session.send('rotate the keys', { id: crypto.randomUUID() });
     await session.end();
+    expect(advisor.tasks).toEqual([]);
     expect(notes(db)).toEqual([]);
   });
 });

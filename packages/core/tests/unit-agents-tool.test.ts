@@ -173,6 +173,8 @@ const temporaryPortStub = {
   }),
   release: async () => {},
   reclaim: () => null,
+  answered: () => [],
+  forget: () => {},
 };
 
 function makeTeam(

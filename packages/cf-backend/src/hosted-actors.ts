@@ -115,6 +115,8 @@ export interface HostedActorSeams {
   armWake(): void;
   rederiveWake(): void;
   temporary(actor: BoundActor): TemporaryAgentPort;
+  /** Inside the answer's transaction: the hirer's advisor answer is owed a delivery job. */
+  oweAdvice(actor: BoundActor): Promise<void>;
 }
 
 export function hostedDelegationBudget(
@@ -269,6 +271,7 @@ export async function relayHostedReport(
     }),
     announce: () => { seams.announce(hirer); },
     onAdmitted: () => { if (seams.host.hosted(parent)?.session.inFlight !== true) seams.scheduleDrain(hirer); },
+    evolutionAnswerStored: () => seams.oweAdvice(hirer),
     onEvolutionAnswer: () => { seams.rederiveWake(); },
     temporary: seams.temporary(hirer),
   }, { fromSubordinate: name, ...event }, Date.now());

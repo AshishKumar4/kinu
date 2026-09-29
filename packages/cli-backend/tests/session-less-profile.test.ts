@@ -89,12 +89,10 @@ describe('a local runtime opened without a session', () => {
 
     await rt.judgeModel?.complete('grade this');
     await rt.fastLlm?.complete('classify this');
-    await rt.advisorLlm?.complete('advise on this');
 
     expect(seen.map((resolution) => [resolution.source, resolution.tier])).toEqual([
       ['judge', 'deep'],
       ['fast', 'fast'],
-      ['advisor', 'deep'],
     ]);
   });
 
