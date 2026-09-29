@@ -1935,13 +1935,11 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
       // Seeded through the workspace-file RPC, never the VFS.
       if (drive.seedFile !== undefined) {
-        const seeded = await target.writeWorkspaceFile({
+        await target.writeWorkspaceFile({
           kind: 'file',
           path: drive.seedFile.path,
           data: drive.seedFile.content,
         });
-
-        if (!seeded.ok) throw new Error(`two-turn probe: fixture seed failed for ${drive.seedFile.path}`);
       }
 
       restore = capture();

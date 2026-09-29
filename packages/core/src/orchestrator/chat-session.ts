@@ -9,7 +9,7 @@
 
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import type { ChatEvent } from '../chat';
 import type { CompactionTrigger } from '../extension';
 import { WORKSPACE_RUN_ID } from '../events/model-call';
@@ -18,7 +18,7 @@ import type { EventLog } from '../events/hub/log';
 import type { RunEventRecorder } from '../events/recorder';
 import type { RunEvent } from '../events/types';
 import type { CompletedTurn } from '../evolution/types';
-import { attempt, diagnostics, KinuError, renderThrownChain, settle as settleEffect, toKinuError, toWire, type Refusal } from '../obs/index';
+import { attempt, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle as settleEffect, toKinuError, type Refusal } from '../obs/index';
 import { contextFill, type ContextFill } from '../read-models/context-fill';
 import { workModeForTurnMetadata } from '../prompting/surface';
 import { runOperationProfile } from '../profiles/operation';
@@ -114,8 +114,8 @@ interface QueueItem {
   yieldsToUserMessage?: boolean;
   /** Re-opened under its own ids, its prior output re-entered ahead of the remaining calls. */
   continuation?: TurnContinuation;
-  /** Exactly once, and told whether the turn ran: a lease refusal must reach the producer, the only one who can put things back. */
-  settle: (refusal: Refusal | null, yielded?: boolean) => void;
+  /** Exactly once, and told whether the turn ran: a failure must reach the producer, the only one who can put things back. */
+  settle: (failure: KinuError | null, yielded?: boolean) => void;
 }
 
 interface TurnContinuation {
@@ -281,6 +281,13 @@ function refusedLanding(refusal: Refusal): KinuError {
   return new KinuError(refusal.reason, `${refusal.error}. Close that session, or send this from it.`);
 }
 
+interface OpenedTurn {
+  readonly event: string | undefined;
+  readonly mode: WorkMode;
+  readonly turnId: string;
+  readonly runId: string;
+}
+
 export class ChatSession {
   private readonly actorSession: ActorSession;
   private readonly sessionId: string;
@@ -395,8 +402,8 @@ export class ChatSession {
         turnId: input.steerIds?.[0] ?? crypto.randomUUID(),
         // Retired with this rerun's row in the same transaction.
         steerIds: input.steerIds,
-        settle: (refusal) => {
-          this.settleLandings(input.steerIds ?? [], refusal === null ? 'turn' : refusedLanding(refusal));
+        settle: (failure) => {
+          this.settleLandings(input.steerIds ?? [], failure ?? 'turn');
         },
       };
 
@@ -434,14 +441,14 @@ export class ChatSession {
       metadata: input.metadata,
       kind: 'programmatic',
       // The signal seam compensates on anything but 'queued'. 'yielded' is consumed: nothing is retried.
-      settle: (refusal, yielded) => {
+      settle: (failure, yielded) => {
         if (yielded === true) {
           resolve({ status: 'yielded' });
 
           return;
         }
 
-        resolve({ status: refusal ? 'skipped' : 'queued' });
+        resolve({ status: failure ? 'skipped' : 'queued' });
       },
     };
 
@@ -551,10 +558,10 @@ export class ChatSession {
     this.queue.push({
       text, files, metadata, kind: 'user',
       turnId, pendingSendId,
-      settle: (refusal) => {
-        // A refusal takes the reservation with it, or the words would be re-delivered after the caller was told no.
-        if (refusal) this.pendingSends.retire([pendingSendId]);
-        this.settleLandings([turnId], refusal === null ? 'turn' : refusedLanding(refusal));
+      settle: (failure) => {
+        // A failure takes the reservation with it, or the words would be re-delivered after the caller was told no.
+        if (failure) this.pendingSends.retire([pendingSendId]);
+        this.settleLandings([turnId], failure ?? 'turn');
       },
     });
     this.pump();
@@ -617,12 +624,12 @@ export class ChatSession {
 
   /** A failed fold leaves the conversation as it was and arms nothing; a turn sent meanwhile waits. */
   compact(): Promise<void> {
-    const folded = (this.revision ?? Promise.resolve()).then(() => settleEffect(toWire(this.fold(), (failure) => failure)));
+    const folded = (this.revision ?? Promise.resolve()).then(() => settleEffect(Effect.result(this.fold())));
     const revision = folded.then(() => undefined);
     this.revision = revision;
     this.actorSession.orchestrator.track(revision.then(() => { if (this.revision === revision) this.revision = null; }), 'folding the conversation');
 
-    return folded.then((outcome) => settleEffect(outcome.ok ? Effect.void : Effect.fail(outcome.error)));
+    return folded.then((outcome) => settleEffect(Result.isSuccess(outcome) ? Effect.void : Effect.fail(outcome.failure)));
   }
 
   private fold(): Effect.Effect<void, KinuError> {
@@ -742,7 +749,7 @@ export class ChatSession {
 
         if (refusal) {
           diagnostics.event('driver.turn_deferred', { kind: item.kind, reason: refusal.reason });
-          item.settle(refusal);
+          item.settle(refusedLanding(refusal));
           continue;
         }
 
@@ -767,18 +774,25 @@ export class ChatSession {
         }
 
         this.runningAnnouncement = item.idempotencyKey ?? null;
+        let failure: KinuError | null = null;
+
+        let opened: OpenedTurn | null = null;
 
         try {
-          await this.processTurn(item);
+          opened = await this.openTurn(item);
+          await this.runOpenedTurn(item, opened);
         } catch (err) {
           diagnostics.failure(
             'turn.processing_failed',
             toKinuError({ doing: 'processing a queued turn', cause: err, otherwise: 'io' }),
           );
+
+          // Nothing reached the caller before the open, so a failure there goes to it in its own words.
+          if (opened === null) failure = new KinuError(classifyErrorCode({ cause: err }) ?? 'io', renderThrownChain({ cause: err }), { cause: err });
         } finally {
           await this.flushEvents();
           this.runningAnnouncement = null;
-          item.settle(null);
+          item.settle(failure);
         }
       }
     } finally {
@@ -829,7 +843,8 @@ export class ChatSession {
   }
 
   /** A started turn always terminates: exactly one `turn-end` and a closed run, even when assembly throws. */
-  private async processTurn(item: QueueItem): Promise<void> {
+  /** Through the announced start. */
+  private async openTurn(item: QueueItem): Promise<OpenedTurn> {
     const parsedEvent = v.safeParse(v.string(), item.metadata?.kinuEvent);
     const event = parsedEvent.success ? parsedEvent.output : undefined;
     const mode = workModeForTurnMetadata(item.metadata);
@@ -855,23 +870,25 @@ export class ChatSession {
       carried: (item.steerIds ?? []).filter((id) => id !== this.turnId),
     });
 
+    return { event, mode, turnId: this.turnId, runId: this.runId };
+  }
+
+  private async runOpenedTurn(item: QueueItem, { event, mode, turnId, runId }: OpenedTurn): Promise<void> {
     const startedAt = Date.now();
     // A re-opened turn continues its run; only a new turn opens one.
 
     if (this.reopenedRunId === this.runId) this.reopenedRunId = null;
 
-    const lease = this.actorSession.beginTurn(
-      { runId: this.runId, turnId: this.turnId }, mode, startedAt, item.metadata,
-    );
+    const lease = this.actorSession.beginTurn({ runId, turnId }, mode, startedAt, item.metadata);
 
-    if (item.continuation === undefined) openTurnRun(this.eventRecorder, this.runId, {
+    if (item.continuation === undefined) openTurnRun(this.eventRecorder, runId, {
       agentId: lease.actorId,
       causedBy: event ?? 'chat',
       userMessage: item.text,
       turnIndex: this.actorSession.orchestrator.sessionTurnIndex,
       // Enough for the next process to re-open the same turn.
       turn: {
-        turnId: this.turnId, messageId: this.messageId, kind: item.kind, text: item.text,
+        turnId, messageId: this.messageId, kind: item.kind, text: item.text,
         ...(item.metadata !== undefined && { metadata: item.metadata }),
         ...(item.pendingSendId !== undefined && { pendingSendId: item.pendingSendId }),
         ...(item.steerIds !== undefined && { steerIds: item.steerIds }),
@@ -938,7 +955,7 @@ export class ChatSession {
     this.emit({ type: 'broadcast', event: { type: 'model_fallback', message: `${event.to} took over from ${event.from}: ${event.reason}` } });
   }
 
-  /** Everything here may throw; processTurn owns what that means. */
+  /** Everything here may throw; runOpenedTurn owns what that means. */
   private async runTurn(item: QueueItem, eventName: string | undefined, startedAt: number, lease: ActorTurnLease): Promise<void> {
     const input: ChatTurnInput = item;
 

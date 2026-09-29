@@ -39,7 +39,7 @@ export interface RuntimeComponents {
   schedule: Schedule;
   craftStore: CraftStore;
   memory: Memory;
-  /** Judge/fast/advisor lanes routed through MODEL_ROUTE_POLICY from the live turn profile. */
+  /** Judge/fast lanes routed through MODEL_ROUTE_POLICY from the live turn profile. */
   modelLanes?: ModelLaneComponents;
   executionRouter?: ExecutionRouter;
   /** Required by the `shell` tool's workspace fast path and the `eval` new-Function fallback. */
@@ -55,7 +55,6 @@ export interface RuntimeComponents {
 interface PinnedLanes {
   judge?: LLM;
   fast?: LLM;
-  advisor?: LLM;
 }
 
 export function buildRuntime(components: RuntimeComponents): AgentRuntime {
@@ -76,7 +75,6 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
   const routed = lanes ? {
     judge: createRoutedModelLane(components.actor, 'judge', lanes),
     fast: createRoutedModelLane(components.actor, 'fast', lanes),
-    advisor: createRoutedModelLane(components.actor, 'advisor', lanes),
   } : {};
 
   const pinned: PinnedLanes = {};
@@ -97,8 +95,6 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
     set judgeModel(model: LLM | undefined) { pinned.judge = model; },
     get fastLlm() { return pinned.fast ?? routed.fast; },
     set fastLlm(model: LLM | undefined) { pinned.fast = model; },
-    get advisorLlm() { return pinned.advisor ?? routed.advisor; },
-    set advisorLlm(model: LLM | undefined) { pinned.advisor = model; },
     executionRouter: components.executionRouter,
     shell: components.shell,
     checkpoints: components.checkpoints,

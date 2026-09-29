@@ -154,6 +154,8 @@ function scriptedRefiner(answer: string | ((request: TemporaryRunRequest) => str
 
         return asked === undefined ? null : { state: 'answered', name: 'refiner-1', status: 'completed', answer: answerOf(asked) };
       },
+      answered: () => [],
+      forget: () => {},
     },
   };
 }
@@ -193,6 +195,8 @@ function deferredRefiner(...answers: readonly RefinementProposal[]) {
       reclaim: (): EvolutionHelperAnswer | null => answered === null
         ? null
         : { state: 'answered', name: 'refiner-1', status: 'completed', answer: proposalText(answered) },
+      answered: () => [],
+      forget: () => {},
     },
   };
 }
@@ -209,6 +213,8 @@ function answeringPort(answer: () => string): TemporaryAgentPort {
     },
     release: async () => {},
     reclaim: () => stored === null ? null : { state: 'answered', name: 'refiner', status: 'completed', answer: stored },
+    answered: () => [],
+    forget: () => {},
   };
 }
 
@@ -583,6 +589,8 @@ describe('the refiner — bounded references, prior history, strict typed answer
         start: async () => ({ reason: 'unavailable', error: 'no roster substrate here' }),
         release: async () => {},
         reclaim: () => null,
+        answered: () => [],
+        forget: () => {},
       },
     };
 
@@ -2291,7 +2299,7 @@ function refinerRail(over?: { readonly db: Database; readonly workspaceId: strin
     reports: () => log.pending().filter((event) => event.variant === 'subordinate_report'),
     deliver: (temporary: TemporaryAgentPort, content: string) => receiveSubordinateEvent({
       log, roster, vfs: createMemoryVfs().vfs, transaction: (body) => body(),
-      announce: () => undefined, onAdmitted: () => undefined, onEvolutionAnswer: () => undefined, temporary,
+      announce: () => undefined, onAdmitted: () => undefined, evolutionAnswerStored: () => undefined, onEvolutionAnswer: () => undefined, temporary,
     }, {
       fromSubordinate: 'ask-refiner-a1b2c3', status: 'completed', content, origin: 'turn_end',
       sequenceId: 'refiner:turn-1', mode: 'plan',

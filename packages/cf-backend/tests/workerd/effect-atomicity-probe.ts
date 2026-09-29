@@ -1,10 +1,14 @@
 import { DurableObject } from 'cloudflare:workers';
 import { Effect } from 'effect';
-import { settle } from '@kinu.run/core/obs';
+import { KinuError, settle } from '@kinu.run/core/obs';
 
 /** Counts the events a Durable Object admits while one long effect runs inside another. */
 export class EffectAtomicityProbeDO extends DurableObject<Cloudflare.Env> {
   private delivered = 0;
+
+  refusal(): Promise<never> {
+    return settle(Effect.fail(new KinuError('unavailable', 'upstream refused', { cause: new TypeError('socket closed') })));
+  }
 
   async ping(): Promise<number> {
     this.delivered += 1;

@@ -218,6 +218,8 @@ export function createTemporaryAgentPort(deps: {
     },
 
     reclaim: (request) => deps.roster.helpers.answerFor(request),
+    answered: () => deps.roster.helpers.answered(),
+    forget: (name) => { deps.roster.helpers.remove(name); },
   };
 }
 

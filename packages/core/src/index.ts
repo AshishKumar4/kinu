@@ -1080,7 +1080,7 @@ export {
   type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,
   answerParentRpc, createParentExecutor, createParentWorkspaceVfs, sandboxFiles, nimbusSessionFiles, deviceFiles,
   type ParentWorkspaceHandle, type ParentExecResult, type DeviceFileConsent, type DeviceFileScope,
-  type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
+  type ParentRpcWrite,
 } from './execution/index';
 
 export {
@@ -2045,7 +2045,8 @@ export {
   DEFAULT_ADVISOR_MIN_SEVERITY,
   ADVISOR_DEDUPE_WINDOW,
   ADVISOR_HEADER,
-  reviewRecordedTurn,
+  deliverAdvisorReply,
+  ADVISOR_ROLE_ID,
   AdvisorRecoverySnapshotSchema,
   buildAdvisorPrompt,
   isContentFree,

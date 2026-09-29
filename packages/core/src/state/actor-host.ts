@@ -78,6 +78,8 @@ export interface ActorHostDeps {
   contextEvents(bound: BoundActor): ContextEventRecorder | null;
   /** Called after the rows are gone, so a failed reclaim leaves no half-removed readable actor. */
   discardBytes?(record: WorkspaceActor): Promise<void>;
+  /** The port a hosted actor hires its advisor through; absent, hosted turns are not reviewed. */
+  advisorPort?(bound: BoundActor): TemporaryAgentPort | null;
   readonly tracing: (() => AgentTracing) | undefined;
 }
 
@@ -234,6 +236,8 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
         turns: tracing && (() => tracing().turns(actor)),
         history: bound.stores.history,
         events: deps.contextEvents(bound),
+        advisorPort: () => deps.advisorPort?.(bound) ?? null,
+        reviewed: bound.record.input,
         advisor: reference.parentActorId === null ? undefined : {
           config: deps.directory.main().config,
           workspace: async () => {

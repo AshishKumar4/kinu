@@ -5,7 +5,7 @@ import type { WorkMode } from './turn';
 import type { RoleId } from './profile';
 import * as v from 'valibot';
 import type { SerializedMessage } from './heads';
-import type { EvolutionHelperAnswer, EvolutionLaneRequest } from '../identity/evolution-helpers';
+import type { AnsweredEvolutionHelper, EvolutionHelperAnswer, EvolutionLaneRequest } from '../identity/evolution-helpers';
 
 /**
  * The conversation a child is forked from. The `kind` tag stays because the value is persisted in
@@ -71,4 +71,8 @@ export interface TemporaryAgentPort {
   /** Called inside the child's turn, so it only schedules the retire. */
   release(name: string): void;
   reclaim(request: EvolutionLaneRequest): EvolutionHelperAnswer | null;
+  /** This hirer's helpers that answered and whose answer is not yet taken. */
+  answered(): readonly AnsweredEvolutionHelper[];
+  /** The answer was taken: its row goes. */
+  forget(name: string): void;
 }

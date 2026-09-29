@@ -8,7 +8,6 @@
   "upstreamTestRoot": "src/rules",
   "$kinuComment": "Rules authored here, not vendored: they encode Kinu policy and have no upstream counterpart. Named explicitly rather than inferred from `kinuOnly` so an upstream-tracked rule cannot be demoted out of byte comparison without appearing in this list. `kinuRuleGates` partitions them across the *.gate.test.ts files that prove each one red->green through the real oxlint binary; drift.test.ts asserts the partition is exact, so adding a rule without a gate fails. Both lists cover PLUGIN rules only. `typescript-escapes.gate.test.ts` is deliberately absent from them: it gates `.oxlintrc.json` policy for two oxlint BUILT-INS (typescript/no-explicit-any, typescript/ban-ts-comment), which have no rule file here to author or pin, and naming a built-in in kinuRules would claim authorship of upstream code and break the partition drift.test.ts asserts. It is listed under `vendored` as kinuOnly because every file in this directory must be declared.",
   "kinuRules": [
-    "effect-entry-awaits",
     "effect-restricted-api",
     "effect-run-in-adapter",
     "no-ambient-git-in-tests",
@@ -81,7 +80,6 @@
       "no-bare-error-in-durable-object"
     ],
     "effect.gate.test.ts": [
-      "effect-entry-awaits",
       "effect-restricted-api",
       "effect-run-in-adapter",
       "no-effect-swallow"
@@ -102,7 +100,7 @@
     },
     "index.ts": {
       "upstream": "9deed4cb455b9a6251001dc3a525d5b5e2c6ef989dd1c01e804c2edf0a697415",
-      "local": "c14b782bd3362f34b14ed37b9a8209f4b6ee32673f3b9739e9328d4ae6180870",
+      "local": "53a98b30b69b2c0009cabd2a58264c5651b7f673ff4867d80611708cd766cfb2",
       "reason": "Registers the Kinu-local rules declared in kinuRules beside the pinned upstream rules. Upstream has no counterpart for these policy rules."
     },
     "live-tree.gate.test.ts": {
@@ -142,12 +140,6 @@
       "kinuOnly": true
     },
     "rules.test.ts": {
-      "kinuOnly": true
-    },
-    "rules/effect-entry-awaits.test.ts": {
-      "kinuOnly": true
-    },
-    "rules/effect-entry-awaits.ts": {
       "kinuOnly": true
     },
     "rules/effect-restricted-api.test.ts": {

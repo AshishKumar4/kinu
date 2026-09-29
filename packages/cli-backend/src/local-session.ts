@@ -28,7 +28,7 @@ import type {
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
   DeferredApproval, DeferredApprovalAnswer,
-  AgentsSwarmDeps, AgentsToolDeps, TeamToolDeps, PeersToolDeps,
+  AgentsSwarmDeps, AgentsToolDeps, TeamToolDeps, PeersToolDeps, TemporaryAgentPort,
   MissingCapability, DynamicApproval,
   RunEvent, RunEventInput, RunEventQuery,
   BuiltinToolName,
@@ -85,8 +85,6 @@ import { TierIdSchema,
   measureCompactionTrigger,
   observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   AdvisorRecoverySnapshotSchema,
-  reviewRecordedTurn,
-  advisorWorkspaceGuidance,
   createDefaultWebSearchProvider, createWebCodemodeProvider, restBrowserRunAccess, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
   createAgentsCodemodeProvider, createStateCodemodeProvider,
   type CodemodeProvider,
@@ -285,15 +283,6 @@ export const LOCAL_MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
 /** bun:sqlite with a real `transaction`: approval migration and settled-turn commits need atomicity. */
 export type LocalSessionDb = Pick<Database, 'prepare' | 'transaction'>;
-
-/** Core's advisor recovery snapshot plus the completion gate's armed state, which is RAM-only
- *  here; recording it lets a replayed review reach the verdict the turn earned. */
-const RecordedAdvisorSchema = v.object({
-  ...AdvisorRecoverySnapshotSchema.entries,
-  gateOpen: v.boolean(),
-});
-
-type RecordedAdvisor = v.InferOutput<typeof RecordedAdvisorSchema>;
 
 /**
  * The answer a subordinate's turn owes its parent, installed by the owning host. A port, not a
@@ -608,6 +597,9 @@ export class LocalAgentSession {
       installedBuild: null,
       events: this.eventRecorder,
       orchestration: orchestration.deps,
+      advisorPort: () => this.advisorPort(),
+      // The completion gate is RAM here: while it waits for its answer, the advisor records its note silently.
+      gateOpen: () => this.chat.completionGate.open,
     });
 
     this.compactionState = createCompactionStateStore(this.rt.storage.sql, this.rt.actor);
@@ -1343,14 +1335,18 @@ export class LocalAgentSession {
   /**
    * Await detached fibers until settled or `deadline`. Bounded because they may be servers that
    * never finish; anything still running is left running and recovered on the next start.
-   * Returns true when everything settled.
+   * Returns true when everything settled. Notices name jobs only; other fibers are the session's own closing work.
    */
   private async joinBackgroundFibers(deadline: number): Promise<boolean> {
     if (this.backgroundFibers.size === 0) return true;
-    this.emit({
-      type: 'background', event: 'bg_jobs_settling',
-      message: `${this.backgroundFibers.size} background job(s) still running. Waiting for their results.`,
-    });
+    const running = this.jobs.listRunning().items;
+
+    if (running.length > 0) {
+      this.emit({
+        type: 'background', event: 'bg_jobs_settling',
+        message: `${String(running.length)} background job(s) still running: ${jobRoster(running)}. Waiting for their results.`,
+      });
+    }
 
     while (this.backgroundFibers.size > 0) {
       const remaining = deadline - this.clock.now();
@@ -1372,16 +1368,13 @@ export class LocalAgentSession {
   private announceAbandonedJobs(): void {
     const interrupted = this.jobs.listRunning().items;
 
-    const roster = interrupted
-      .map((job) => `${job.id} (${job.kind}${job.label ? `: ${job.label}` : ''})`)
-      .join(', ');
+    if (interrupted.length === 0) return;
 
     const message =
-      `${this.backgroundFibers.size} background job(s) did not finish in time and were interrupted by this ` +
+      `${String(interrupted.length)} background job(s) did not finish in time and were interrupted by this ` +
       'exit. They are checkpointed, so this workspace resumes them the next time it starts, including ' +
       'unattended under the local scheduler daemon. A resumed job runs commands and writes files on ' +
-      `this machine. Cancel with: kinu jobs ${this.agentName()} cancel <id>.` +
-      (roster ? ` Interrupted: ${roster}.` : '');
+      `this machine. Cancel with: kinu jobs ${this.agentName()} cancel <id>. Interrupted: ${jobRoster(interrupted)}.`;
 
     this.emit({ type: 'background', event: 'bg_jobs_abandoned', message });
     diagnostics.failure('jobs.abandoned_at_exit', new KinuError('timeout', message), {
@@ -1439,6 +1432,8 @@ export class LocalAgentSession {
       }),
       logActivity: (event, detail) => this.emit({ type: 'background', event, message: detail ?? '' }),
     });
+    // An advisor that answered while this process was gone.
+    await this.actorSession.deliverAdvisorAnswers();
     const reviews = await this.actorSession.orchestrator.runDeferredTurnReviews();
 
     if (reviews.reviewed > 0 || reviews.refused.length > 0) {
@@ -1859,17 +1854,9 @@ export class LocalAgentSession {
 
     if (gated) parts.completionGate = { text: this.chat.completionGate.task };
 
-    // Every review input is recorded, matching the Durable Object's snapshot; the gate's armed state
-    // is RAM and a fresh process reads it closed. Owed only when the actor reviews turns.
+    // Recorded, not re-read on replay: the tool surface can change. Owed only when the actor reviews turns.
     if (this.actorSession.reviewsTurns) {
-      parts.advisor = projectJsonValue({
-        value: {
-          // Recorded, not re-read on replay: the tool surface, dedupe window and severity floor can change.
-          ...this.actorSession.advisorSnapshot(scoped, input.reachableTools),
-          // Whether the gate will be waiting when the advisor speaks: `gated` for this turn, `open` for an earlier one.
-          gateOpen: gated || this.chat.completionGate.open,
-        },
-      });
+      parts.advisor = projectJsonValue({ value: this.actorSession.advisorSnapshot(scoped, input.reachableTools) });
     }
 
     // Decided once: the plan re-reads the pending version, so a replay would score against the wrong candidate.
@@ -1974,19 +1961,12 @@ export class LocalAgentSession {
         runSync: () => ({ status: 'completed' }),
       }),
 
-      // The snapshot is the row's input, gate verdict included (the gate is RAM-only here), so a replay
-      // reviews what the turn earned, and a note already recorded for the turn is never reviewed again.
+      // The snapshot is the row's input, so a replay hires on the tool surface the turn had; the hire is
+      // keyed on the turn, so a replay hires no second advisor.
       advisor_review: terminalEffect({
-        input: v.object({ status: RunEndReasonSchema, workMode: WorkModeSchema, advisor: RecordedAdvisorSchema }),
+        input: v.object({ status: RunEndReasonSchema, workMode: WorkModeSchema, advisor: AdvisorRecoverySnapshotSchema }),
         run: async ({ status, workMode, advisor }) => {
-          const turnId = advisor.turn.turnId;
-
-          if (!this.actorSession.reviewsTurns || !this.actorSession.orchestrator.improvementLanesOpen(status, workMode)
-            || (turnId !== undefined && this.engine.hasAdvisorNoteForTurn(turnId))) {
-            return { status: 'completed' };
-          }
-
-          await this.runAdvisorReview(advisor);
+          if (this.actorSession.orchestrator.improvementLanesOpen(status, workMode)) await this.actorSession.hireAdvisor(advisor);
 
           return { status: 'completed' };
         },
@@ -2173,31 +2153,6 @@ export class LocalAgentSession {
       (system, prompt) => this.localRouteLlm(resolution, system).complete(prompt),
       mission,
     );
-  }
-
-  /**
-   * The one review body the live lane and recovery run. `gateOpen` is local-only: while the completion
-   * gate waits, the advisor records its note silently. Governed off the turn's labels. Never throws.
-   */
-  private async runAdvisorReview(recorded: RecordedAdvisor): Promise<void> {
-    if (this.rt.actor.parentActorId !== null) {
-      await this.actorSession.reviewTurn(recorded, recorded.gateOpen);
-
-      return;
-    }
-
-    await reviewRecordedTurn({
-      snapshot: recorded,
-      llm: this.rt.advisorLlm,
-      guidance: await advisorWorkspaceGuidance({
-        vfs: this.rt.agentStateVfs ?? this.rt.storage.vfs,
-        limits: async () => this.modelCatalog.contextFor(resolveModelRoute('advisor', await this.routingProfile()).model),
-      }),
-      govern: (llm, labels) => this.budget.govern(llm, labels),
-      gateOpen: recorded.gateOpen,
-      send: (signal) => this.actorSession.orchestrator.inbox.send(signal),
-      record: (note, turnId) => { this.engine.recordAdvisorNote(note, turnId); },
-    });
   }
 
   private agentName(): string {
@@ -2600,6 +2555,19 @@ export class LocalAgentSession {
   private reportDeps: ReportToolDeps | null = null;
   /** Automatic turn-end relay for a subordinate, distinct from the model's own {@link reportDeps}. */
   private parentRelay: LocalParentRelay | null = null;
+
+  /** The advisor is hired as every temporary agent is: through the team's port, absent without a host. */
+  protected advisorPort(): TemporaryAgentPort | null {
+    return this.teamDeps?.temporary ?? null;
+  }
+
+  /**
+   * This actor's advisor answered: its note reaches the conversation. The CLI has no durable job queue, so the
+   * stored answer is the owed delivery itself: an answer a death left undelivered goes at the next start.
+   */
+  async deliverAdvisorAnswers(): Promise<void> {
+    await this.actorSession.deliverAdvisorAnswers();
+  }
 
   /** Installed after construction: roster and peer inbox need the session's broadcast. */
   setTeam(deps: TeamToolDeps): void {
@@ -3036,6 +3004,10 @@ export class LocalAgentSession {
 }
 
 export { serializeContentForHeads } from '@kinu.run/core';
+
+function jobRoster(jobs: readonly BackgroundJob[]): string {
+  return jobs.map((job) => `${job.id} (${job.kind}${job.label ? `: ${job.label}` : ''})`).join(', ');
+}
 
 /** Resolve when `work` settles or `ms` elapses on `clock`; the timer is always disarmed. */
 async function raceDeadline(clock: Clock, work: Promise<unknown>, ms: number): Promise<void> {

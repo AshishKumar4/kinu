@@ -3,7 +3,7 @@
  * number per file and mechanism that only goes down.
  *
  * The target (docs/OBSERVABILITY.md) is one failure type, `KinuError`, in the Effect channel, with
- * `settle` and `toWire` in `packages/core/src/obs/effect.ts` as the boundary. The migration slices
+ * `settle` in `packages/core/src/obs/effect.ts` as the boundary. The migration slices
  * remove what this counts, so each slice's commit shows its numbers falling and nothing grows while
  * they run:
  *
@@ -46,7 +46,7 @@ interface Declaration {
 export const DECLARED = new Map<string, Declaration>([
   ['packages/core/src/obs/effect.ts', {
     mechanisms: MECHANISMS,
-    reason: 'the one runner: `settle` rethrows the typed failure or the defect, and `toWire` writes the wire union',
+    reason: 'the one runner: `settle` rethrows the typed failure or the defect',
   }],
   ['packages/core/src/slates/content.ts', {
     mechanisms: ['throw'],
@@ -409,7 +409,7 @@ if (import.meta.main) {
         found: `${String(now)}, ${was === undefined ? 'and the lock holds none for this file' : `locked at ${String(was)}`}`,
         silently: 'a second failure convention grows beside the one being migrated to, and the migration '
           + 'never finishes because each slice lands on a larger tree than it measured',
-        fix: 'fail with `KinuError` in an effect and cross the boundary with `settle` or `toWire` '
+        fix: 'fail with `KinuError` in an effect and cross the boundary with `settle` '
           + '(packages/core/src/obs/effect.ts); `--lock` never raises a number',
       }));
     }

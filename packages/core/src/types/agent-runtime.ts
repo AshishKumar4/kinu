@@ -44,9 +44,6 @@ export interface AgentRuntime {
   /** Same-vendor cheap tier (`MODEL_ROUTE_POLICY.fast`) for mechanical work; readers fall back
    *  to `llm`. Never for user-visible generation or scaffold authoring. */
   fastLlm?: LLM;
-  /** Turn reviewer model; defaults cross-vendor. Absent means the advisor lane is inert, as the
-   *  conformance manifest declares per root. */
-  advisorLlm?: LLM;
   /** Named executor providers (workspace, nimbus, sandbox, device) for the codemode sandbox. */
   executionRouter?: ExecutionRouter;
   /** Device-fleet transport (CF), feeding the dynamic context's fleet roster; absent in the CLI. */

@@ -7,23 +7,14 @@ import * as v from 'valibot';
 import { raceAbort } from '@kinu.run/agent-utils';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
 import type { VFS } from '../types/primitives';
-import { isVfsError, makeVfsError, type VfsErrorCode } from '../vfs/errno';
+import { isVfsError, makeVfsError, type VfsError } from '../vfs/errno';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { readExecSignal } from './signal';
 import { commandResult, existsTool } from './exec-result';
-import { attempt, KinuError, refusalOf, renderThrownChain, settle, toWire, type Wire } from '../obs/index';
+import { Effect } from 'effect';
+import { attempt, KinuError, refusalOf, renderThrownChain, settle } from '../obs/index';
 
 type Stat = { size: number; mtimeMs: number; isDir: boolean } | null;
-
-/** A failure crossing the RPC boundary; `code` keeps the parent's errno. */
-export interface ParentRpcError {
-  code: VfsErrorCode;
-  /** Original Error.message, possibly `<code>: `-prefixed; the view canonicalizes it. */
-  message: string;
-  path: string;
-}
-
-export type ParentRpcResult<T> = Wire<T, ParentRpcError>;
 
 /** `write` is a closed command union covering file write and mkdir. */
 export type ParentRpcWrite =
@@ -38,32 +29,32 @@ export interface ParentExecResult {
 
 /** The parent workspace as a fork reaches it (DO RPC, or in-process in the CLI). */
 export interface ParentWorkspaceHandle {
-  read(path: string): Promise<ParentRpcResult<Uint8Array>>;
-  write(input: ParentRpcWrite): Promise<ParentRpcResult<null>>;
-  list(path: string): Promise<ParentRpcResult<string[]>>;
-  stat(path: string): Promise<ParentRpcResult<Stat>>;
-  delete(path: string): Promise<ParentRpcResult<null>>;
+  read(path: string): Promise<Uint8Array>;
+  write(input: ParentRpcWrite): Promise<null>;
+  list(path: string): Promise<string[]>;
+  stat(path: string): Promise<Stat>;
+  delete(path: string): Promise<null>;
   /** The parent's real workspace shell. */
-  exec(command: string): Promise<ParentRpcResult<ParentExecResult>>;
+  exec(command: string): Promise<ParentExecResult>;
 }
 
-export function answerParentRpc<T>(path: string, operate: () => Promise<T>): Promise<ParentRpcResult<T>> {
-  return settle(toWire(
-    attempt({ doing: `answering a fork's call on ${path}`, otherwise: 'io' }, operate),
-    ({ cause }) => ({ code: isVfsError(cause) ? cause.code : 'EIO', message: renderThrownChain({ cause }), path }),
-  ));
+export function answerParentRpc<T>(path: string, operate: () => Promise<T>): Promise<T> {
+  return settle(attempt({ doing: `answering a fork's call on ${path}`, otherwise: 'io' }, operate));
 }
 
-/** The failure a refused RPC becomes; the errno `code` is preserved, not reclassified. */
-function detail(error: ParentRpcError): string {
-  const prefix = `${error.code}:`;
+/** The RPC error's cause keeps the parent's errno; reconstruct the local VFS contract. */
+function parentCall<T>(path: string, operate: () => Promise<T>): Effect.Effect<T, VfsError> {
+  return Effect.tryPromise({
+    try: operate,
+    catch: (error) => {
+      const cause = error instanceof Error && 'cause' in error ? error.cause : error;
+      const code = isVfsError(cause) ? cause.code : 'EIO';
+      const message = renderThrownChain({ cause });
+      const prefix = `${code}:`;
 
-  return error.message.startsWith(prefix) ? error.message.slice(prefix.length).trimStart() : error.message;
-}
-
-function value<T>(result: ParentRpcResult<T>): T {
-  if (result.ok) return result.value;
-  throw makeVfsError(result.error.code, detail(result.error), result.error.path);
+      return makeVfsError(code, message.startsWith(prefix) ? message.slice(prefix.length).trimStart() : message, path);
+    },
+  });
 }
 
 const StringSchema = v.string();
@@ -80,19 +71,18 @@ function parseInput<TSchema extends v.GenericSchema>(
 /** A `VFS` over the parent workspace in the parent's own paths; never merged into this agent's `Storage.vfs`. */
 export function createParentWorkspaceVfs(handle: ParentWorkspaceHandle): VFS {
   return {
-    async readFile(path, opts) {
-      const content = value(await handle.read(path));
-
-      return opts?.encoding === 'utf8' ? new TextDecoder().decode(content) : content;
+    readFile(path, opts) {
+      return settle(Effect.map(parentCall(path, () => handle.read(path)), (content) =>
+        opts?.encoding === 'utf8' ? new TextDecoder().decode(content) : content));
     },
-    async writeFile(path, data) { value(await handle.write({ kind: 'file', path, data })); },
-    async readdir(path) { return value(await handle.list(path)); },
-    async stat(path) { return value(await handle.stat(path)); },
-    async unlink(path) { value(await handle.delete(path)); },
-    async mkdir(path, opts) {
-      value(await handle.write({ kind: 'directory', path, recursive: opts?.recursive ?? false }));
+    writeFile(path, data) { return settle(Effect.asVoid(parentCall(path, () => handle.write({ kind: 'file', path, data })))); },
+    readdir(path) { return settle(parentCall(path, () => handle.list(path))); },
+    stat(path) { return settle(parentCall(path, () => handle.stat(path))); },
+    unlink(path) { return settle(Effect.asVoid(parentCall(path, () => handle.delete(path)))); },
+    mkdir(path, opts) {
+      return settle(Effect.asVoid(parentCall(path, () => handle.write({ kind: 'directory', path, recursive: opts?.recursive ?? false }))));
     },
-    async exists(path) { return value(await handle.stat(path)) !== null; },
+    exists(path) { return settle(Effect.map(parentCall(path, () => handle.stat(path)), (stat) => stat !== null)); },
   };
 }
 
@@ -203,11 +193,11 @@ export function createParentExecutor(deps: {
 
           const signal = readExecSignal({ context: args[1] });
 
-          return commandResult(value(await raceAbort(
+          return commandResult(await raceAbort(
             () => deps.handle.exec(command),
             signal,
             'parent exec aborted: the command may still finish in the parent workspace',
-          )));
+          ));
         },
       },
     },

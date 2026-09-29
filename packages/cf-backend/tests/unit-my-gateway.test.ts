@@ -5,7 +5,7 @@ import { userCredentialSource } from './helpers/user-credentials';
 import { createTestUserDO, testOwner } from './helpers/user-do';
 import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
-import { asFetchFunction, parseJsonObject, type JsonValue, type OAuthCredential } from '@kinu.run/core';
+import { asFetchFunction, parseJsonObject, type JsonValue, type OAuthCredential, type AuthRequest } from '@kinu.run/core';
 import {
   CLOUDFLARE_AI_GATEWAY_CRED_KEY,
   CLOUDFLARE_OAUTH_CRED_KEY,
@@ -33,12 +33,12 @@ function gatewayStub(opts: {
     : null;
 
   return userCredentialSource({
-    getAuthHeaders: async (key: string, o?: { forceRefresh?: boolean }) => {
+    getAuthHeaders: async (key: string, o?: AuthRequest) => {
       if (key === 'cloudflare.oauth') return { authorization: `Bearer ${opts.token ?? 'cf-user'}` };
 
       if (key !== CLOUDFLARE_AI_GATEWAY_CRED_KEY) return null;
 
-      return headersFor(o?.forceRefresh ? (opts.freshToken ?? opts.token ?? 'cf-user') : (opts.token ?? 'cf-user'));
+      return headersFor(o?.rejected === undefined ? (opts.token ?? 'cf-user') : (opts.freshToken ?? opts.token ?? 'cf-user'));
     },
     listCredentials: async () => [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }],
     getCredentialBaseURL: async (key: string) =>

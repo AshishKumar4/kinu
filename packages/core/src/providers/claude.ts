@@ -382,9 +382,9 @@ interface SdkRequest {
   readonly signal: AbortSignal | null;
 }
 
-async function resolveLogin(deps: ProviderDeps, forceRefresh: boolean): Promise<AuthResolution | 'revoked' | null> {
+async function resolveLogin(deps: ProviderDeps, rejected: AuthResolution | null): Promise<AuthResolution | 'revoked' | null> {
   try {
-    return await deps.getAuth(CLAUDE_CRED_KEY, forceRefresh ? { forceRefresh } : undefined);
+    return await deps.getAuth(CLAUDE_CRED_KEY, rejected === null ? undefined : { rejected: rejected.headers });
   } catch (cause) {
     if (cause instanceof OAuthTokenError && cause.revoked) return 'revoked';
     throw cause;
@@ -483,7 +483,7 @@ async function sendAtAcceptedVersion(call: ClaudeCall, request: SdkRequest, auth
 }
 
 async function claudeCall(call: ClaudeCall, init: RequestInit): Promise<Response> {
-  const login = await resolveLogin(call.deps, false);
+  const login = await resolveLogin(call.deps, null);
 
   if (login === 'revoked') return deadLogin(call, 'the Claude login\'s refresh token was revoked');
 
@@ -507,7 +507,7 @@ async function claudeCall(call: ClaudeCall, init: RequestInit): Promise<Response
   const first = await sendAtAcceptedVersion(call, request, login);
 
   if (first.status !== 401) return withLocalToolNames(first);
-  const refreshed = await resolveLogin(call.deps, true);
+  const refreshed = await resolveLogin(call.deps, login);
 
   if (refreshed === 'revoked' || refreshed === null) return deadLogin(call, 'the Claude login was refused and could not be refreshed');
   const second = await sendAtAcceptedVersion(call, request, refreshed);

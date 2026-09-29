@@ -5,10 +5,12 @@ import researcher from "../prompts/role-researcher.md" with { type: 'text' };
 import planner from "../prompts/role-planner.md" with { type: 'text' };
 import auditor from "../prompts/role-auditor.md" with { type: 'text' };
 import designer from "../prompts/role-designer.md" with { type: 'text' };
+import advisor from "../prompts/role-advisor.md" with { type: 'text' };
 import * as v from 'valibot';
 import { definePromptSection } from '../prompting/template';
 
 import { NAMED_SWARM_PRESETS } from '../strategy/swarm-presets';
+import { MODEL_ROUTE_POLICY } from './model-route';
 import { REASONING_EFFORTS } from '../providers/effort';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../providers/workers-ai';
 import { isAccountName, isProviderScope } from '../credentials/accounts';
@@ -198,6 +200,22 @@ export const BUILTIN_ROLE_DEFINITIONS = {
     preset: 'ideate',
   },
 } as const satisfies Record<BuiltinRoleId, RoleDefinition>;
+
+/**
+ * Presets the runtime hires under and no agent or owner picks: not in the effective catalog, so no hire
+ * surface lists them, and a catalog role of the same id cannot replace them.
+ */
+export const SYSTEM_ROLE_DEFINITIONS = {
+  // The advisor lane's own tier, so the reviewer stays the model the owner set for the advisor. No tools.
+  advisor: {
+    description: 'Reviews one finished turn and says at most one thing about it.',
+    instructions: definePromptSection('role/advisor', '', advisor.trimEnd()).render({}),
+    tier: MODEL_ROUTE_POLICY.advisor.tier,
+    preset: 'audit',
+    allowedTools: [],
+    spawns: [],
+  },
+} as const satisfies Record<string, RoleDefinition>;
 
 export function effectiveRoleCatalog(catalog: ProfileCatalog): RoleCatalog {
   return Object.freeze({ ...BUILTIN_ROLE_DEFINITIONS, ...catalog.roles });

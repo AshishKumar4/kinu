@@ -4,6 +4,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { JsonObjectSchema, decodeJsonValue, parseJsonObject, type JsonObject, type JsonValue } from '@kinu.run/core';
@@ -204,6 +205,30 @@ describe("kinu exec — a one-shot run terminates", () => {
       await server.stop();
     }
   });
+  test('a turn that fails before it opens prints the failure as one JSON error line and exits non-zero', async () => {
+    const home = newHome();
+    const server = modelThatRuns('true');
+    const env = { KINU_BASE_URL: 'http://127.0.0.1:' + server.port, KINU_AUTH: 'Bearer mock', KINU_MODEL: 'mock-model' };
+
+    try {
+      expect((await runCli(['create', 'refusedflow', '--mode', 'local', '--purpose', 'early failure flow'], env, home, 120_000)).exitCode).toBe(0);
+      const db = new Database(join(home, 'refusedflow', 'agent.db'));
+      // The daemon `create` started writes this file too; wait out its write as the product does.
+      db.exec('PRAGMA busy_timeout = 30000');
+      db.exec("CREATE TRIGGER refuse_opening BEFORE INSERT ON session_messages BEGIN SELECT RAISE(ABORT, 'the transcript refuses this write'); END");
+      db.close();
+
+      const run = await runCli(['exec', '--workspace', 'refusedflow', '--json', 'Run the command'], env, home, 90_000);
+
+      expect(run.exitCode).not.toBe(0);
+      const errors = run.stdout.trim().split('\n').filter((line) => line !== '').map(parseJsonObject).filter((event) => event.type === 'error');
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.message).toContain('the transcript refuses this write');
+    } finally {
+      await server.stop();
+    }
+  });
+
   test('a native command failure carries class and observed exit in exec JSON', async () => {
     const home = newHome();
     const server = modelThatRuns('printf diagnostic; exit 7');

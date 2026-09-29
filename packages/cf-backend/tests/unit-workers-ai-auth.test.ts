@@ -5,7 +5,7 @@ import { userCredentialSource } from './helpers/user-credentials';
 import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 import { OAuthTokenError, refreshCloudflareCredential } from '@kinu.run/core';
-import { asFetchFunction, createChatModel, reasoningEffortOptions, type JsonObject } from '@kinu.run/core';
+import { asFetchFunction, createChatModel, reasoningEffortOptions, type JsonObject, type AuthRequest } from '@kinu.run/core';
 import * as v from 'valibot';
 import { createDirectWorkersAIFetch } from '@kinu.run/core';
 import { requestUrl } from '@kinu.run/core';
@@ -129,14 +129,14 @@ describe('Workers AI credential refresh', () => {
   });
 
   test('a mid-flight 401 forces one refresh and retries with the fresh token', async () => {
-    const authCalls: Array<boolean> = [];
+    const authCalls: Array<string | null> = [];
 
     const stub = userCredentialSource({
-      getAuthHeaders: async (key: string, opts?: { forceRefresh?: boolean }) => {
+      getAuthHeaders: async (key: string, opts?: AuthRequest) => {
         if (key !== 'cloudflare.oauth') return null;
-        authCalls.push(Boolean(opts?.forceRefresh));
+        authCalls.push(opts?.rejected?.authorization ?? null);
 
-        return { authorization: opts?.forceRefresh ? 'Bearer cf-fresh' : 'Bearer cf-stale' };
+        return { authorization: opts?.rejected === undefined ? 'Bearer cf-stale' : 'Bearer cf-fresh' };
       },
       listCredentials: async () => [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }],
       getCredentialBaseURL: async (key: string) => (key === 'cloudflare.oauth' ? ACCOUNT_BASE_URL : null),
@@ -168,7 +168,7 @@ describe('Workers AI credential refresh', () => {
 
     expect(result.text).toBe('ok');
     expect(wire).toEqual(['Bearer cf-stale', 'Bearer cf-fresh']);
-    expect(authCalls).toEqual([false, true]);
+    expect(authCalls).toEqual([null, 'Bearer cf-stale']);
   });
 
   test('a 401 that SURVIVES the refresh says what to do, not the word "Unauthorized"', async () => {

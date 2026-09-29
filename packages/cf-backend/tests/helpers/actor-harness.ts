@@ -602,11 +602,15 @@ export async function driveUntil(
 
     // The alarm the object armed for due work, fired as production fires it.
     if (workspace.agent.harnessTimerDue()) await workspace.agent._kinuTimerTick();
+
+    if (adviceDue(workspace.db)) await workspace.agent.alarm();
     await nextTurn();
 
     if (holds()) return;
 
-    if (!workspace.agent.harnessWorkRemains() && !workspace.agent.harnessTimerDue() && !harnessFibersRunning()) throw new Error(failure);
+    if (!workspace.agent.harnessWorkRemains() && !workspace.agent.harnessTimerDue() && !adviceDue(workspace.db) && !harnessFibersRunning()) {
+      throw new Error(failure);
+    }
 
     const suiteHeld = [
       ...workspace.agent.harnessUnansweredModelCalls().map((run) => `model call ${JSON.stringify(openingOf(run).slice(0, 80))}`),
@@ -1316,6 +1320,14 @@ export function makeCtx(db: Database, id = 'harness-actor', objectName = id): Ag
   // context, and actor schema initialization only calls the implemented SQL,
   // transaction, identity, alarm, and concurrency members above.
   return partialContext as AgentContext;
+}
+
+/** An advisor answer's delivery job is due (`src/advice-jobs.ts`), as the alarm would run it. */
+export function adviceDue(db: Database, now = Date.now()): boolean {
+  // The SDK creates its queue table on the first job operation; before it, nothing is due.
+  if (db.query("SELECT 1 FROM sqlite_master WHERE name = 'cf_agents_jobs'").get() === null) return false;
+
+  return db.query("SELECT 1 FROM cf_agents_jobs WHERE capability = 'kinu-advice' AND time <= ?").get(now) !== null;
 }
 
 /** Kinu's wakes as the Lifecycle queue holds them (`src/wake-jobs.ts`), soonest first. */

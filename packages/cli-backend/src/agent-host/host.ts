@@ -77,7 +77,8 @@ import {
   readWorkspaceWork, type WorkspaceWork,
   isSubordinateOrigin, type SubordinateSeed,
 } from '@kinu.run/core';
-import { KinuError, attempt, diagnostics, refusalOf, settle, toKinuError, toWire, type Wire } from '@kinu.run/core/obs';
+import { Effect, Result } from 'effect';
+import { KinuError, attempt, diagnostics, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
 import {
   createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, shareLocalWorkspacePlane,
   buildLocalActorRuntime, cleanupFacetCwdScratch, writeTransaction,
@@ -274,8 +275,8 @@ export class LocalAgentHost {
 
   /** Session events stay live after an interactive client disconnects. */
   /** A task child's retire; a failure is the outcome. */
-  retireTaskChild(work: () => Promise<void>): Promise<Wire<void, KinuError>> {
-    return settle(toWire(attempt({ doing: 'retiring a task child after its answer', otherwise: 'io' }, work), (failure) => failure));
+  retireTaskChild(work: () => Promise<void>): Promise<Result.Result<void, KinuError>> {
+    return settle(Effect.result(attempt({ doing: 'retiring a task child after its answer', otherwise: 'io' }, work)));
   }
 
   subscribe(listener: AgentEventListener): () => void {
@@ -482,6 +483,8 @@ export class LocalAgentHost {
       directory,
       // No build identity for the builtin loop: a `bun`-run checkout has no build stamp.
       installedBuild: null,
+      // Its own entry's port; a seated swarm node has none, and takes no input to be reviewed on.
+      advisorPort: (bound) => this.byActor.get(bound.reference.actorId)?.temporary ?? null,
       runtimeFor: (bound) => this.runtimeFor(runtimes, db, bound),
       filesFor: async (bound) => {
         if (!ws.rt.filesForActor) throw new KinuError('missing', 'workspace has no actor file-plane resolver');
@@ -1065,7 +1068,12 @@ export class LocalAgentHost {
         ));
       },
       onAdmitted: () => this.wake(parent, 'subordinate report'),
-      onEvolutionAnswer: () => this.answerWake(parent),
+      // No job queue here: the stored answer is the owed delivery, made below and, after a death, at the next start.
+      evolutionAnswerStored: () => undefined,
+      onEvolutionAnswer: async () => {
+        this.answerWake(parent);
+        await parent.session.deliverAdvisorAnswers();
+      },
       temporary: parent.temporary,
     }, {
       fromSubordinate: child.name,
@@ -1447,7 +1455,7 @@ export class LocalAgentHost {
   /** A task agent's retire, off its turn and joined by close(). */
   private retireOffTurn(agent: string, work: () => Promise<void>): void {
     const pass: Promise<void> = this.retireTaskChild(work).then((outcome) => {
-      if (!outcome.ok) diagnostics.failure('host.task_child_release_failed', outcome.error, { agent });
+      if (Result.isFailure(outcome)) diagnostics.failure('host.task_child_release_failed', outcome.failure, { agent });
       this.answerPasses.delete(pass);
     });
 

@@ -7,32 +7,32 @@ function parentHandle(calls: string[]): ParentWorkspaceHandle {
     read: async (path: string) => {
       calls.push(`read:${path}`);
 
-      return { ok: true, value: new TextEncoder().encode('hi') };
+      return new TextEncoder().encode('hi');
     },
     write: async (input) => {
       calls.push(`write:${input.kind}:${input.path}`);
 
-      return { ok: true, value: null };
+      return null;
     },
     list: async (path: string) => {
       calls.push(`list:${path}`);
 
-      return { ok: true, value: [] };
+      return [];
     },
     stat: async (path: string) => {
       calls.push(`stat:${path}`);
 
-      return { ok: true, value: null };
+      return null;
     },
     delete: async (path: string) => {
       calls.push(`delete:${path}`);
 
-      return { ok: true, value: null };
+      return null;
     },
     exec: async (command: string) => {
       calls.push(`exec:${command}`);
 
-      return { ok: true, value: { stdout: 'ok', stderr: '', exitCode: 0 } };
+      return { stdout: 'ok', stderr: '', exitCode: 0 };
     },
   };
 }
@@ -78,20 +78,21 @@ describe('parent executor input validation', () => {
 });
 
 describe('answerParentRpc: the one answer both hosts give a fork', () => {
-  test('a VFS failure keeps its errno, its path and the rendered cause chain', async () => {
-    const answer = await answerParentRpc('notes', () => Promise.reject(makeVfsError('EISDIR', 'is a directory', 'notes')));
+  test('a VFS failure keeps its errno and path in the native error cause', async () => {
+    const cause = makeVfsError('EISDIR', 'is a directory', 'notes');
 
-    expect(answer).toEqual({ ok: false, error: { code: 'EISDIR', message: 'EISDIR: is a directory', path: 'notes' } });
+    await expect(answerParentRpc('notes', () => Promise.reject(cause)))
+      .rejects.toMatchObject({ _tag: 'KinuError', code: 'io', cause });
   });
 
-  test('any other failure is EIO with its whole chain, not only its outermost message', async () => {
-    const failure = new Error('the shell refused', { cause: new Error('no such binary') });
-    const answer = await answerParentRpc('', () => Promise.reject(failure));
+  test('an unclassified failure retains its complete cause', async () => {
+    const cause = new Error('the shell refused', { cause: new Error('no such binary') });
 
-    expect(answer).toEqual({ ok: false, error: { code: 'EIO', message: 'the shell refused: no such binary', path: '' } });
+    await expect(answerParentRpc('', () => Promise.reject(cause)))
+      .rejects.toMatchObject({ _tag: 'KinuError', code: 'io', cause });
   });
 
   test('a success is the value', async () => {
-    expect(await answerParentRpc('a.txt', async () => new Uint8Array([104, 105]))).toEqual({ ok: true, value: new Uint8Array([104, 105]) });
+    expect(await answerParentRpc('a.txt', async () => new Uint8Array([104, 105]))).toEqual(new Uint8Array([104, 105]));
   });
 });

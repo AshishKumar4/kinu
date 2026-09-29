@@ -488,10 +488,12 @@ export class TerminalEffectLedger {
       ORDER BY e.key`;
   }
 
-  async drive(sequenceId: string): Promise<TerminalSequenceRun> {
+  /** `inFlight`: every sequence this process is running now, live; this one is counted in it either way. */
+  async drive(sequenceId: string, inFlight: ReadonlySet<string> = new Set()): Promise<TerminalSequenceRun> {
     const claimed = this.pending(sequenceId);
-    // Armed before the first attempt: an eviction in the inline pass must still leave a wake.
-    await this.armWake();
+    // Armed before the first attempt: an eviction in the inline pass must still leave a wake. Deferred for every
+    // sequence this process runs, so the live process is not woken into its own effects.
+    await this.armWake(new Set([...inFlight, sequenceId]));
 
     for (const row of claimed) {
       if (row.lane === 'inline') await this.attempt(sequenceId, row);
@@ -503,8 +505,8 @@ export class TerminalEffectLedger {
       .map(async (row) => await this.attempt(sequenceId, row));
 
     return {
-      // Re-armed from what is left once the sequence has run.
-      reported: Promise.all(detached).then(() => this.armWake()),
+      // Re-armed from what is left once the sequence has run: its own rows at their times, the others still deferred.
+      reported: Promise.all(detached).then(() => this.armWake(new Set([...inFlight].filter((id) => id !== sequenceId)))),
     };
   }
 
@@ -525,8 +527,8 @@ export class TerminalEffectLedger {
   }
 
   /** Every input comes off its row; not-yet-due rows are left for the armed wake. */
-  async replayOwed(sequenceId: string): Promise<void> {
-    const run = await this.drive(sequenceId);
+  async replayOwed(sequenceId: string, inFlight?: ReadonlySet<string>): Promise<void> {
+    const run = await this.drive(sequenceId, inFlight);
     await run.reported;
   }
 
@@ -754,8 +756,8 @@ export class TerminalEffectLedger {
         AND effect_key = ${key} AND status != 'completed'`;
   }
 
-  private async armWake(): Promise<void> {
-    const at = this.nextRetryAt();
+  private async armWake(inFlight?: ReadonlySet<string>): Promise<void> {
+    const at = this.nextRetryAt(inFlight);
 
     if (at !== null) await this.deps.scheduleRetry(at);
   }

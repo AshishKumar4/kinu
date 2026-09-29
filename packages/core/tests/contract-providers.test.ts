@@ -293,18 +293,18 @@ describe('Codex provider contract', () => {
     expect(body.input).toBe('hello');
   });
 
-  test('refreshes on 401 by calling getAuth with forceRefresh', async () => {
+  test('refreshes on 401 by naming the refused login to getAuth', async () => {
     let calls = 0;
-    let forceRefreshSeen = false;
+    const refusedNamed: string[] = [];
 
     const deps: ProviderDeps = {
       env: {},
       async getAuth(key, opts) {
         if (key !== CODEX_CRED_KEY) return null;
 
-        if (opts?.forceRefresh) forceRefreshSeen = true;
+        if (opts?.rejected !== undefined) refusedNamed.push(opts.rejected.Authorization ?? '');
 
-        return { headers: { Authorization: opts?.forceRefresh ? 'Bearer refreshed' : 'Bearer stale' } };
+        return { headers: { Authorization: opts?.rejected === undefined ? 'Bearer stale' : 'Bearer refreshed' } };
       },
       async hasCredential() { return true; },
       fetch: undefined,
@@ -328,7 +328,7 @@ describe('Codex provider contract', () => {
     const model = provider.createModel('gpt-5.5', deps);
     await call(model);
 
-    expect(forceRefreshSeen).toBe(true);
+    expect(refusedNamed).toEqual(['Bearer stale']);
     expect(mock.requests.length).toBeGreaterThanOrEqual(2);
     expect(mock.requests[1].headers['authorization']).toBe('Bearer refreshed');
   });
