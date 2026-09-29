@@ -11,7 +11,7 @@ import { JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue } fr
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { KinuError } from '../obs/error';
 import { FileRefusalError } from '../types/file-edits';
-import { makeVfsError } from './errno';
+import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import type { VfsMount, VfsNativeReads } from './mounts';
 import { toolPairingGaps } from '../session/tool-pairing';
 
@@ -44,9 +44,9 @@ const encoder = new TextEncoder();
 
 const token = (value: JsonValue): string => `context:${bytesToBase64(encoder.encode(JSON.stringify(value)))}`;
 
-const absent = (path: string): Error => makeVfsError('ENOENT', 'no such context path', path);
+const absent = (path: string): Error => new VfsError('ENOENT', 'no such context path', path);
 
-const readOnly = (path: string): Error => makeVfsError('EACCES', 'context evidence is immutable; edit working.jsonl instead', path);
+const readOnly = (path: string): Error => new VfsError('EACCES', 'context evidence is immutable; edit working.jsonl instead', path);
 
 function contextRevision(revision: VfsRevision): v.InferOutput<typeof RevisionSchema> {
   if (!v.is(v.string(), revision) || !revision.startsWith('context:')) throw new KinuError('bad_input', 'invalid context revision');
@@ -364,7 +364,7 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
         } };
     }
 
-    if (head === undefined || head === 'agents' || (head === 'requests' && third === undefined) || (head === 'revisions' && second === undefined) || (head === 'proposals' && second === undefined)) throw makeVfsError('EISDIR', 'context path is a directory', path);
+    if (head === undefined || head === 'agents' || (head === 'requests' && third === undefined) || (head === 'revisions' && second === undefined) || (head === 'proposals' && second === undefined)) throw new VfsError('EISDIR', 'context path is a directory', path);
 
     return null;
   };
@@ -544,7 +544,7 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
 
       if (found === null) throw absent(path);
 
-      if (found.kind === 'file') throw makeVfsError('ENOTDIR', 'context path is a file', path);
+      if (found.kind === 'file') throw new VfsError('ENOTDIR', 'context path is a file', path);
 
       return found.entries;
     },

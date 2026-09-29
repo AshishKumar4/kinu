@@ -9,26 +9,19 @@
 
 import type { Agent, AgentContext } from 'agents';
 import {
-  childContextResolver, createActorHost, defaultLoopOrigin,
-  EvolutionEngine, EventLog, MissionGovernor,
-  facetHomeProvisioner, facetHomeReleaser, isVfsError,
-  headAgentName, subordinateAgentName, parseActorKey,
-  actorStateRoot, actorScaffoldPath,
-  nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT,
-  type ActorHost, type ActorHostDeps, type ActorRetirement, type BoundActor,
-  type ActorHandle, type ActorReference, type AgentOrchestratorDeps, type AgentRuntime,
-  type BackendHost, type BroadcastEvent, type ContextEventRecorder,
-  type DeferredApprovalChannel, type EnqueueTurnResult,
-  type LoopOrigin, type ModelCallReport,
-  type ModelOperationSink, type ModelPricing, type NimbusSandboxHandle, type NodeHomeHost,
-  type NodeWorkspace,
-  type ProfileAuthorityInputs, type ProgrammaticTurn, type ResolvedTurnProfile,
-  type RunEventInput,
-  type SlateCallResult, type SlateOperation, type SqlExec, type SqlExecutor,
-  type SqlValue, type WorkMode,
-  type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver,
-  isSubordinateOrigin,
+  childContextResolver, createActorHost, defaultLoopOrigin, EvolutionEngine, EventLog, MissionGovernor,
+  facetHomeProvisioner, facetHomeReleaser, headAgentName, subordinateAgentName, parseActorKey, actorStateRoot,
+  actorScaffoldPath, nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT, type ActorHost,
+  type ActorHostDeps, type ActorRetirement, type BoundActor, type ActorHandle, type ActorReference,
+  type AgentOrchestratorDeps, type AgentRuntime, type BackendHost, type BroadcastEvent,
+  type ContextEventRecorder, type DeferredApprovalChannel, type EnqueueTurnResult, type LoopOrigin,
+  type ModelCallReport, type ModelOperationSink, type ModelPricing, type NimbusSandboxHandle,
+  type NodeHomeHost, type NodeWorkspace, type ProfileAuthorityInputs, type ProgrammaticTurn,
+  type ResolvedTurnProfile, type RunEventInput, type SlateCallResult, type SlateOperation, type SqlExec,
+  type SqlExecutor, type SqlValue, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory,
+  type WriteObserver, isSubordinateOrigin,
 } from '@kinu.run/core';
+import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { diagnostics, KinuError, toKinuError, type AgentTracing } from '@kinu.run/core/obs';
 import { createCFRuntime, type CFRuntime, type CFRuntimeHooks } from './runtime';
 import type { HostedNodeHome, LiveRead, TemporaryAgentPort } from '@kinu.run/core';
