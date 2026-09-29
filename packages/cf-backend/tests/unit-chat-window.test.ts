@@ -11,7 +11,7 @@ import type { UIMessage } from 'ai';
 import * as v from 'valibot';
 import { PositionCursorSchema, type ChatHistoryEntry, type ChatHistoryPage, type Rpc } from '@kinu.run/core';
 
-import { useChatThread } from '../src/hooks/use-chat-thread';
+import { useChatThread, type ChatThread } from '../src/hooks/use-chat-thread';
 
 function rows(...ids: string[]): UIMessage[] {
   return ids.map((id) => ({ id, role: 'user', parts: [{ type: 'text', text: id }] }));
@@ -106,34 +106,80 @@ describe('the older pages under a sliding window', () => {
   ): Promise<string[][]> {
     let at = 0;
     const stored = storeOf(() => stores[Math.min(at, stores.length - 1)] ?? []);
+    const pane = mountThread(stored);
+    const seen: string[][] = [];
+
+    for (const [index, frame] of frames.entries()) {
+      at = index;
+      await pane.render(frame);
+
+      if (reachEdge) await act(async () => { pane.thread().history.loadMore(); });
+      lastTranscript = pane.thread().transcript;
+      seen.push(lastTranscript.map((message) => message.id));
+    }
+
+    await pane.close();
+
+    return seen;
+  }
+
+  function mountThread(stored: Rpc) {
     const listens = { addEventListener() {}, removeEventListener() {} };
     const container: Element = Object.create(null, Object.getOwnPropertyDescriptors({ nodeType: 1, tagName: 'DIV', namespaceURI: null, ownerDocument: listens, ...listens }));
     const root = createRoot(container);
-    const seen: string[][] = [];
-    let shown: string[] = [];
-    let loadMore = (): void => {};
+    let current: ChatThread | undefined;
 
     function Pane({ frame }: { frame: readonly UIMessage[] }): null {
-      const thread = useChatThread({ rpc: stored, live: frame, seeded: true });
-      shown = thread.transcript.map((message) => message.id);
-      lastTranscript = thread.transcript;
-      loadMore = thread.history.loadMore;
+      current = useChatThread({ rpc: stored, live: frame, seeded: true });
 
       return null;
     }
 
-    for (const [index, frame] of frames.entries()) {
-      at = index;
-      await act(async () => { root.render(createElement(Pane, { frame })); });
+    return {
+      async render(frame: readonly UIMessage[]): Promise<void> {
+        await act(async () => { root.render(createElement(Pane, { frame })); });
+      },
+      thread(): ChatThread {
+        if (current === undefined) throw new Error('the pane has not rendered');
 
-      if (reachEdge) await act(async () => { loadMore(); });
-      seen.push(shown);
-    }
-
-    await act(async () => { root.unmount(); });
-
-    return seen;
+        return current;
+      },
+      async close(): Promise<void> {
+        await act(async () => { root.unmount(); });
+      },
+    };
   }
+
+  test('a steer stays before an unloaded gap until its own assistant page arrives', async () => {
+    const store: ChatHistoryEntry[] = Array.from({ length: 5000 }, (_, position) => ({
+      id: 'm' + String(position), position, role: 'assistant', content: 'reply ' + String(position), createdAt: 0,
+    }));
+
+    store[199] = { id: 'steer', position: 199, role: 'user', content: 'old redirect', createdAt: 0, metadata: { kinuSteer: true, kinuSteerAtStep: 1 } };
+    const pane = mountThread(storeOf(() => store));
+
+    const readAt = async (from: number): Promise<void> => {
+      await act(async () => { pane.thread().history.read({ start: from, end: 4800, from, urgent: true }); });
+    };
+
+    try {
+      await pane.render([]);
+      await act(async () => { pane.thread().history.loadMore(true); });
+      await readAt(0);
+      const sparse = pane.thread();
+      expect(sparse.reserves.before.get('m4800')).toEqual({ start: 200, end: 4800 });
+      expect(sparse.thread.entries.find(({ message }) => message.id === 'm4800')?.steers).toEqual([]);
+      expect(sparse.thread.entries.find(({ message }) => message.id === 'steer')?.message.parts).toEqual([{ type: 'text', text: 'old redirect' }]);
+
+      await readAt(200);
+      const filled = pane.thread().thread.entries;
+      expect(filled.find(({ message }) => message.id === 'm200')?.steers.map(({ id }) => id)).toEqual(['steer']);
+      expect(filled.some(({ message }) => message.id === 'steer')).toBe(false);
+      expect(filled.find(({ message }) => message.id === 'm4800')?.steers).toEqual([]);
+    } finally {
+      await pane.close();
+    }
+  });
 
   test('no older page loads until the reader reaches the top', async () => {
     const [first] = await shownThrough([rows('m41', 'm42')]);

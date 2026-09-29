@@ -22,6 +22,9 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Fork counts include unloaded chat history.** The fork dialog counts through a loaded message's stored position, so gaps between pages no longer make a fork promise fewer messages than it copies. Reaching the first page does not imply every page is loaded.
+- **A failed chat history page offers Retry where it failed.** Gaps between loaded pages now show their failure beside the missing history, including in agent chats. Scrolling leaves the failed read paused until Retry requests that same page.
+- **A redirect stays with its own turn when chat history has gaps.** Loading an old page and a recent page no longer places a mid-turn redirect inside an unrelated reply. The redirect stays at the edge of the old page until its reply loads.
 - **A new hire in a fork cannot inherit another agent's private file access.** Fork imports remap workspace-local user and group IDs. Root-owned files stay root-owned; other files belong to the fork's main agent. Private source groups become root-only, not the group shared by every hire. File modes stay unchanged.
 - **Background work a provider refuses for good stops retrying.** A turn's after-work (memory compression, naming the chat, prompt tuning and the like) whose model call is answered with a permanent refusal, such as a 404 from an AI Gateway route that no longer exists, ends after one attempt, shown once in the Activity log with the status the provider gave, and no longer wakes the workspace every minute to try again. The same goes for a request the provider refuses as malformed. Rate limits, timeouts, server errors and refusals you can fix yourself (an expired key, an empty balance, a denied permission) are still retried.
 

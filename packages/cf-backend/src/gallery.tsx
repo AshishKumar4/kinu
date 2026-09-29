@@ -1744,6 +1744,10 @@ function historyRow(index: number): ChatHistoryEntry {
   return { id, position: index, role: "assistant", content, createdAt };
 }
 
+function galleryReadFault(flag: string | undefined): void {
+  if (flag === "1") throw new Error("Network connection lost");
+}
+
 async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
   const request = v.parse(v.tuple([v.object({ cursor: v.optional(PositionCursorSchema), limit: v.number() })]), args);
   const { cursor, limit } = request[0];
@@ -1759,6 +1763,8 @@ async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
   if (HISTORY_HELD) window.addEventListener("gallery:release-page", () => { settled.resolve(); }, { once: true });
   else setTimeout(settled.resolve, HISTORY_LATENCY_MS);
   await settled.promise;
+
+  galleryReadFault(asks.historyFault);
 
   return from === 0 ? { status: "end", items } : { status: "more", items, next: { before: from } };
 }
@@ -1787,7 +1793,7 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     const state = document.documentElement.dataset;
     const reads = ["getExecutorFiles", "getWorkspaceSnapshot", "getMemoryContent"];
 
-    if (reads.includes(method) && state.workspaceFault === "1") throw new Error("Network connection lost");
+    if (reads.includes(method)) galleryReadFault(state.workspaceFault);
     const revision = state.workspaceRevision ?? "before";
 
     if (method === "getExecutorFiles") return rpcResult({ path: "/", entries: [
