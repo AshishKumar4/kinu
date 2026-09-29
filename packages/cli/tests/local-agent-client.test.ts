@@ -752,6 +752,43 @@ describe('LocalAgentClient', () => {
     expect(tokens).toBeLessThan(lastTurn);
   });
 
+  test('/clear returns once the emptied request is measured, so the number is already the new one', async () => {
+    const { client } = setup(fakeModel('findings '.repeat(600)));
+    await client.connect();
+    const turns = gateSizes(client);
+
+    for (let turn = 0; turn < 3; turn++) await client.send(`look into part ${String(turn)}`, { cwd: '/work' });
+
+    const lastTurn = turns.at(-1) ?? 0;
+    const unmeasured = await client.localControls.clearConversation();
+    const status = await client.status();
+    await client.close();
+
+    expect(status.context?.source).toBe('gate');
+    expect(status.context?.tokens).toBeLessThan(lastTurn);
+    expect(unmeasured).toBeNull();
+  });
+
+  test('/clear whose measure fails still clears, and returns why no number exists', async () => {
+    let unreachable = false;
+
+    const { client } = setup(fakeModel('noted'), async () => {
+      if (unreachable) throw new Error('the profile catalog is unreachable');
+
+      return null;
+    });
+
+    await client.connect();
+    await client.send('remember the word heron', { cwd: '/work' });
+    unreachable = true;
+    const unmeasured = await client.localControls.clearConversation();
+    const history = await client.history();
+    await client.close();
+
+    expect(unmeasured?.message).toContain('the profile catalog is unreachable');
+    expect(history).toEqual([]);
+  });
+
   test('a model switch records the gate\'s measure of the next request against the new model', async () => {
     const { client, home } = setup(fakeModel('noted'));
     await client.connect();

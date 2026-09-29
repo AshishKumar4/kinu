@@ -1011,6 +1011,11 @@ function ChatScene({
       case 'text':
         if (outcome.cleared) setMessages([]);
 
+        if (outcome.unmeasured) {
+          setLiveContext(null);
+          setStatus((current) => current === null ? current : { ...current, context: null });
+        }
+
         if (outcome.workspaces) {
           openWorkspaces();
 
