@@ -72,7 +72,6 @@ import {
   EvolutionEngine, initWorkspaceActorTable, WorkspaceActorDirectory, ChildActorOperationSchema, type ActorHandle, type ActorReference, type ChildActorOperation, type ActorDirectoryResult,
   readActivityLog,
   summarizeSteps,
-  usageReported,
   // Whole-workspace spend by producer; `summarizeSteps` covers only this agent's turns.
   workspaceSpend,
   initWorkspaceSchema,
@@ -4156,10 +4155,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const warms = this.eventRecorder.readRecentByType('model_call', windowLimit)
       .flatMap((e) => (e.type === 'model_call' && e.source === 'warming' ? [e] : []));
 
-    // An all-absent Usage is still a truthy object, so "the provider said
-    // something" is `usageReported` — never a presence check on the field.
-    const measured = steps.filter((e) => usageReported(e.usage ?? {}));
-    const newest = measured[measured.length - 1];
+    const measures = this.eventRecorder.readContextMeasures();
+    const newest = measures.provider?.step;
     const deviceId = newest?.egress?.startsWith('device ') === true ? newest.egress.slice('device '.length) : null;
 
     return {
@@ -4169,7 +4166,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           at: Date.parse(newest.timestamp) || Date.now(),
           runId: newest.runId,
           stepIndex: newest.stepIndex,
-          // Non-empty by construction: `measured` kept only reporting steps.
           usage: newest.usage ?? {},
           context: newest.context ?? null,
           modelId: newest.modelId ?? null,
@@ -4178,7 +4174,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // Null rather than a default: a share-of-window shown against a guessed
       // window would be a made-up percentage.
       contextWindow: this.modelCatalog.contextWindow() || null,
-      fill: this.contextFill(),
+      fill: contextFill(measures, this.modelCatalog.contextWindow() || null),
       // Every step in the window, reporting or not: `summarizeSteps` counts the
       // silent ones into `stepsWithoutUsage` so the totals carry their own
       // denominator instead of quietly under-counting.
