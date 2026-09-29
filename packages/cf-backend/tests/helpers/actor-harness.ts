@@ -11,7 +11,7 @@ import * as v from 'valibot';
 import { scriptedTurnModel, type ModelStreamPart, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
 import { convertArrayToReadableStream, MockLanguageModelV3 } from 'ai/test';
 import type { PreparedRequest, ScriptedAnswer, SettledTurn, TurnHarness } from './turn-harness';
-import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, SpendSource, BackendHost, ModelInfo, ModelPricing } from '@kinu.run/core';
+import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, SpendSource, BackendHost, ModelInfo } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { Refusal } from '@kinu.run/core/obs';
 import type { SessionTranscript, WorkspaceOverview } from '@kinu.run/core';
@@ -293,15 +293,15 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     readonly tiers?: Partial<TierAssignments>;
     readonly availableModels?: readonly string[];
   } | null = null;
-  /** Price these specs as the provider catalog would; any other spec asks the real catalog. */
-  harnessPriceModels(prices: Readonly<Record<string, ModelPricing>>): void {
-    this._harnessPrices = new Map(Object.entries(prices));
+  /** Answer these specs as the provider catalog would; any other spec asks the real catalog. */
+  harnessCatalogModels(entries: Readonly<Record<string, Omit<ModelInfo, 'id'>>>): void {
+    this._harnessCatalog = new Map(Object.entries(entries));
   }
-  private _harnessPrices = new Map<string, ModelPricing>();
+  private _harnessCatalog = new Map<string, Omit<ModelInfo, 'id'>>();
   protected override async catalogEntry(spec: string): Promise<ModelInfo | null> {
-    const cost = this._harnessPrices.get(spec);
+    const entry = this._harnessCatalog.get(spec);
 
-    return cost === undefined ? super.catalogEntry(spec) : { id: spec, cost };
+    return entry === undefined ? super.catalogEntry(spec) : { ...entry, id: spec };
   }
   /** A cold activation: the owner row persists in SQL, in-memory latches do not. */
   /** A further activation through the actor's own `onStart`. */

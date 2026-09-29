@@ -10,12 +10,12 @@ import {
 } from '@kinu.run/core';
 import {
   declareShadowCandidate, hostedExplorationHarness, hostedMainActor, improvementLanesRan,
-  orchestratorHarness, reactivateOrchestratorHarness,
+  orchestratorHarness, reactivateOrchestratorHarness, catalogTurn, gatewayWorkspace, GATEWAY_CATALOG,
   chatSessionTurns, tapDiagnostics, until, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles,
   workspaceMainActor,
 } from './helpers/actor-harness';
 import { socketConnection } from './helpers/bindings';
-import { answeringGateway, GATEWAY_MODEL } from './helpers/platform-gateway';
+import { answeringGateway, chatCompletion, GATEWAY_MODEL, stubAiBinding } from './helpers/platform-gateway';
 import type { ScriptedAnswer } from './helpers/turn-harness';
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import { createHeadRuntime } from '../src/head-runtime';
@@ -270,6 +270,32 @@ describe('turn-pipeline correctness wiring', () => {
     // The request's model is the memoized instance for the pinned spec.
     const request = v.safeParse(v.object({ model: v.unknown() }), config ?? {});
     expect(request.success && request.output.model).toBe(agent.getModel());
+  });
+
+  test('a model set mid-turn sizes the next request, not the one in flight', async () => {
+    // Each request resolves its model once; the turn in flight keeps the window it was composed with.
+    const other = 'ai-gateway/workers-ai/@cf/harness/other';
+    let switched: Promise<unknown> | null = null;
+
+    const harness = gatewayWorkspace(stubAiBinding((run) => {
+      switched ??= harness.agent.setModel(other);
+
+      return chatCompletion(run, 'Noted.');
+    }));
+
+    harness.agent.harnessInstallCatalog({ ...GATEWAY_CATALOG, availableModels: [GATEWAY_MODEL, other] });
+    harness.agent.harnessCatalogModels({ [GATEWAY_MODEL]: { contextWindow: 100_000 }, [other]: { contextWindow: 200_000 } });
+    await harness.agent.setModel(GATEWAY_MODEL);
+    await catalogTurn(harness.agent, 'Remember the word heron.');
+    await switched;
+    await catalogTurn(harness.agent, 'And the word egret.');
+
+    // The pin's own measure, then the two turns.
+    const windows = harness.db.query<{ window: number }, []>(
+      "SELECT json_extract(payload, '$.contextWindow') AS window FROM run_events WHERE type = 'context_admitted' ORDER BY rowid",
+    ).all();
+
+    expect(windows.map((row) => row.window)).toEqual([100_000, 100_000, 200_000]);
   });
 
   test("a hosted actor's snapshot reports the effective model and the tier source that chose it", async () => {

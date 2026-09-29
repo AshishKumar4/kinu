@@ -354,12 +354,14 @@ export interface CacheBreakpointPlan extends PromptCachePlan {
   messages: ModelMessage[];
 }
 
-export function promptCachePlan(input: PromptCachePlanInput): PromptCachePlan {
+/** The request's cache strategy, system, options and marked tail, for `runChat`. */
+export function applyCacheBreakpoints(input: CacheBreakpointInput): CacheBreakpointPlan {
   const strategy = resolvePromptCacheStrategy(input.providerId, input.modelId, input.retention);
 
-  const plan: PromptCachePlan = {
+  const plan: CacheBreakpointPlan = {
     strategy,
     system: cacheableSystem(input.system, strategy),
+    messages: markCacheTail(input.messages, strategy),
   };
 
   const providerOptions = promptCacheOptions(strategy, input.sessionKey);
@@ -367,14 +369,6 @@ export function promptCachePlan(input: PromptCachePlanInput): PromptCachePlan {
   if (providerOptions !== undefined) plan.providerOptions = providerOptions;
 
   return plan;
-}
-
-/** {@link promptCachePlan} plus the marked tail, for `runChat`. Think marks per step in
- *  `composePrepareStep` and calls `promptCachePlan` directly. */
-export function applyCacheBreakpoints(input: CacheBreakpointInput): CacheBreakpointPlan {
-  const plan = promptCachePlan(input);
-
-  return { ...plan, messages: markCacheTail(input.messages, plan.strategy) };
 }
 
 /**
