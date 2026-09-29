@@ -38,6 +38,7 @@ const FileWriteSuccessSchema = v.object({
   path: v.string(),
   bytes: v.number(),
   action: v.picklist(['created', 'replaced']),
+  undo: v.optional(v.string()),
 });
 
 function parseInput<TSchema extends v.GenericSchema>(
@@ -149,9 +150,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         const result = await branchableToolCall(() => currentFileDispatch()({ action: 'write', path: p, content: text }));
         const success = v.safeParse(FileWriteSuccessSchema, result);
 
-        return success.success
-          ? `Written ${success.output.bytes} bytes to ${success.output.path}`
-          : result;
+        if (!success.success) return result;
+        const written = `Written ${success.output.bytes} bytes to ${success.output.path}`;
+
+        return success.output.undo === undefined ? written : `${written}\n${success.output.undo}`;
       },
     },
 
