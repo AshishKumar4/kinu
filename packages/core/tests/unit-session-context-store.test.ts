@@ -56,7 +56,7 @@ test('an open message reads its accumulated text and a sealed one its content', 
     expect(await s.messages.materialize(entry)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'ab' }] });
 
     s.messages.streamAppend('answer', 0, 'cd');
-    s.messages.streamMetadata('answer', 0, await s.messages.prepareMetadata('answer', 0, { test: { partial: true } }));
+    s.messages.streamMetadata('answer', 0, await s.messages.prepareDescriptor({ type: 'text', providerOptions: { test: { partial: true } } }));
     expect(streamRows()).toBe(1);
     expect(await s.messages.materialize(entry)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'abcd', providerOptions: { test: { partial: true } } }] });
     s.messages.streamEnd('answer', 0);

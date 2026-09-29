@@ -1076,6 +1076,20 @@ holds one stream row per part while open and none once sealed" and
 reads its accumulated text and a sealed one its content" and "a message left
 open by a dead stream seals from what it accumulated at the next admission".
 
+2026-09-28 (`lane/t150-stream`): a live stream seals from the native descriptors
+and full text it holds, including replacement provider metadata. Buffered windows
+still flush before sealing; D23(5) and the epoch fence are unchanged. The seal
+receives the known envelope, and source binding uses the reconciled native parts
+instead of materializing the new row. Opening and sealing check their existing
+refusals in the write, not in a preceding read. The workerd complexity subject
+"orchestrator, a long turn after twenty long answers" measured 534 statements at
+`fa8bd6c4ae` and 523 after this change, with 286 rows written in both. Removed:
+five message-row reads (two open-parts reads, two seals, one source binding), two
+stream-parts reads, and four open-container/part pre-reads. All 51 stream appends
+remain; the working-context origin check and abandoned-stream recovery reads
+remain. The unchanged workerd chat-session parity fixture passes.
+A lone surrogate from a malformed provider stream now seals as streamed, not as bun's replacement characters; valid pairs remain byte-identical.
+
 D25. A wake proves a recycle only after the stop confirms (`b6a6ace00`,
 2026-09-04). The 2026-09-04 rerun (`kinu-devbox-bench-20260904142724`) saw
 candidate arms wake empty with "candidate control has no published head".
