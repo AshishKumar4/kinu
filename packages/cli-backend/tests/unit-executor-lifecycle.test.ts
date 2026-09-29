@@ -71,27 +71,38 @@ function runtimeShim() {
   };
 }
 
+/** End the grandchild whose pid a command wrote to `file`. */
+function endGrandchild(file: string): void {
+  process.kill(Number(readFileSync(file, 'utf8')), 'SIGKILL');
+}
+
 describe('the local executor settles on the command, not on its pipes', () => {
   test('a lane whose stdout pipe closes early settles with the command\'s own exit, not an EOF crash', async () => {
     const executor = createSandboxedExecutor();
+    // Each grandchild's pid, so the test ends what its commands started once the claim is checked.
+    const pids = join(scratchDir('executor-lifecycle-grandchild'), 'pid');
 
     // A grandchild keeps the inherited stdio after the command exits; a hang outlives bun's default test deadline and fails.
     expect(await executor.execute(
       'const child = Bun.spawn(["sleep", "30"], { stdout: "inherit", stderr: "inherit" });\n'
       + 'child.unref();\n'
+      + `await Bun.write(${JSON.stringify(pids)}, String(child.pid));\n`
       + '"answered"',
       [],
     )).toEqual({ result: 'answered' });
+    endGrandchild(pids);
 
     if (!executor.languages.includes('python')) return;
 
     expect(await executor.execute(
       'import subprocess\n'
-      + 'subprocess.Popen(["sleep", "30"])\n'
+      + 'child = subprocess.Popen(["sleep", "30"])\n'
+      + `open(${JSON.stringify(pids)}, "w").write(str(child.pid))\n`
       + 'print("answered")\n',
       [],
       { language: 'python' },
     )).toEqual({ result: 'answered' });
+    endGrandchild(pids);
 
     // Stdout ends while the command still runs, then it fails: its own exit code and stderr decide.
     expect(await executor.execute(

@@ -390,6 +390,21 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
+    run: 'bun run gate:cost-table',
+    label: 'Cost table covers the wave',
+    // COMMIT: a lane that changes a row's command is the one asked to measure it. Until 2026-09-29 only
+    // deploy.test.ts (ci) reached `deployPlan()`'s refusal, and b631df84cd's widened chat-scroll row reached the
+    // ci tier unmeasured. Measured 2026-09-29 on the 24-thread box at load 1.1: 1.05 s through the ladder's runner.
+    tier: 'commit',
+    seconds: 1.05,
+    catches: 'a row the deploy\'s concurrent wave schedules with no measured cost, a figure taken from a run that '
+      + 'failed, and a figure kept for a command that is no longer a gate: the three ways the wave admits a row '
+      + 'against a number nobody took for it.',
+    blind: 'whether a figure still describes its row: a command whose text stays while its work grows keeps its old '
+      + 'figure.',
+    inputs: { kind: 'derived' },
+  },
+  {
     run: 'bun run gate:set-equality',
     label: 'Measured set equals governed set',
     tier: 'commit',

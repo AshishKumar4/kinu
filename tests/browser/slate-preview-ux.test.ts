@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import { withGallery } from '../../scripts/gallery-harness';
-import type { Page } from 'puppeteer';
+import type { Frame, Page } from 'puppeteer';
 
 async function serveSlate(page: Page): Promise<void> {
   await page.setRequestInterception(true);
@@ -26,6 +27,19 @@ async function serveSlate(page: Page): Promise<void> {
       '</script>',
     ].join('') });
   });
+}
+
+/** What the slate page shows once its fetch has settled: the served text, or `blocked: <cause>`. It shows `pending`
+ *  until then, so reading it as soon as the element exists reads the fetch's race, not its answer. */
+async function servedText(frame: Frame): Promise<string> {
+  // One evaluation reads and returns the text, so no later call can land in a context the frame has since replaced.
+  const settled = await frame.waitForFunction(() => {
+    const text = document.querySelector('[data-slate-preview]')?.textContent ?? 'pending';
+
+    return text !== 'pending' && text;
+  });
+
+  return v.parse(v.string(), await settled.jsonValue());
 }
 
 /** Click the plan card whose header carries `label` — the list's own way of
@@ -86,9 +100,7 @@ describe('the Slate preview frame', () => {
         const frame = await frameElement.contentFrame();
 
         if (!frame) throw new Error('the Slate preview did not create an iframe context');
-        await frame.waitForSelector('[data-slate-preview]');
-        expect(await frame.$eval('[data-slate-preview]', (element) => element.textContent))
-          .toBe('served by the slate');
+        expect(await servedText(frame)).toBe('served by the slate');
         expect(await frame.evaluate(() => {
           try { return window.parent.document.title; }
           catch (cause) {
@@ -208,16 +220,16 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         await page.waitForFunction(() => document.querySelector('[data-work-plans]')?.textContent?.includes('Courier rollout'));
         expect(await page.$('[aria-label="Changes"]')).toBeNull();
 
-        for (const title of ['Dashboard', 'Sandbox app', 'Device app']) {
+        // Each tab frames its own origin, so the wait names the tab's iframe, not whichever the last tab left.
+        for (const [title, host] of [['Dashboard', 'gallery.preview'], ['Sandbox app', '8080-sandbox'], ['Device app', '3000-device']]) {
           await page.click(`[aria-label="${title}"]`);
-          const iframe = await page.waitForSelector('iframe');
+          const iframe = await page.waitForSelector(`iframe[src*="${host}"]`);
 
           if (!iframe) throw new Error('Preview missing');
           const frame = await iframe.contentFrame();
 
           if (!frame) throw new Error('Preview frame missing');
-          await frame.waitForSelector('[data-slate-preview]');
-          expect(await frame.$eval('[data-slate-preview]', el => el.textContent)).toBe('served by the slate');
+          expect(await servedText(frame)).toBe('served by the slate');
           expect(await iframe.isIntersectingViewport()).toBe(true);
         }
 
