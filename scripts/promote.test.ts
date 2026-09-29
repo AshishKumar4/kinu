@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { scratchDir } from '../packages/test-utils/src/scratch';
 import {
-  adoptDownloads, adoptTarball, artifactDigest, downloadsServed, imagesStagingNeverRan, planRollback, readDownloads, resetCrossed, verifyServing,
+  adoptDownloads, adoptTarball, artifactDigest, downloadsServed, imagesStagingNeverRan, planRollback, readDownloads, verifyServing,
   type Promotion, type Verified,
 } from './promote';
 import type { Reset } from './reset';
@@ -218,37 +218,34 @@ describe('a rollback', () => {
   const HISTORY = [promotion('v1'), promotion('v2'), promotion('v3')];
 
   test('returns to the build before the one serving, and withdraws the one it leaves', () => {
-    expect(planRollback(HISTORY, 'v3', 'now')).toEqual({ target: promotion('v2'), history: [promotion('v1'), promotion('v2'), withdrawn('v3', 'now')] });
+    expect(planRollback(HISTORY, 'v3', 'now', undefined)).toEqual({ target: promotion('v2'), history: [promotion('v1'), promotion('v2'), withdrawn('v3', 'now')] });
   });
 
   // A promotion red after its upload serves a version the history never took.
   test('from a version the history never took returns to the newest build', () => {
-    expect(planRollback(HISTORY, 'v4-red', 'now')).toEqual({ target: promotion('v3'), history: HISTORY });
+    expect(planRollback(HISTORY, 'v4-red', 'now', undefined)).toEqual({ target: promotion('v3'), history: HISTORY });
   });
 
   test('never returns to a build a rollback left, and walks back one build at a time', () => {
     const left = [promotion('v1'), withdrawn('v2', 'then'), promotion('v3')];
 
-    expect(planRollback(left, 'v3', 'now')?.target).toEqual(promotion('v1'));
-    expect(planRollback([...left, promotion('v4')], 'v4', 'now')?.target).toEqual(promotion('v3'));
-    expect(planRollback(HISTORY, 'v1', 'now')).toBeUndefined();
+    expect(planRollback(left, 'v3', 'now', undefined)).toMatchObject({ target: promotion('v1') });
+    expect(planRollback([...left, promotion('v4')], 'v4', 'now', undefined)).toMatchObject({ target: promotion('v3') });
+    expect(planRollback(HISTORY, 'v1', 'now', undefined)).toEqual({ refused: expect.stringContaining('holds no build older than version v1') });
   });
 
   const reset = (at: string): Reset => ({
     environment: 'production', worker: 'kinu', tag: `reset-${at}`, at, placeholderVersion: 'p', classes: [], applications: [],
   });
 
+  // Load-bearing: the platform serves a rollback across a reset, and every Durable Object call then throws.
   test('refuses by name to cross a reset a later promotion carries, or one a red promotion left unrecorded', () => {
     const wiped = { ...promotion('v3'), reset: reset('2026-09-27T00:00:00.000Z') };
-    const history = [promotion('v1'), promotion('v2'), wiped];
-    const plan = planRollback(history, 'v3', 'now');
 
-    expect(plan === undefined ? undefined : resetCrossed(plan.history, plan.target, undefined)?.tag).toBe('reset-2026-09-27T00:00:00.000Z');
-
-    const unrecorded = planRollback(HISTORY, 'v4-red', 'now');
-
-    expect(unrecorded === undefined ? undefined : resetCrossed(unrecorded.history, unrecorded.target, reset('2026-09-27T00:00:00.000Z'))?.tag)
-      .toBe('reset-2026-09-27T00:00:00.000Z');
-    expect(unrecorded === undefined ? 'none' : resetCrossed(unrecorded.history, unrecorded.target, reset('2026-09-25T00:00:00.000Z'))).toBeUndefined();
+    expect(planRollback([promotion('v1'), promotion('v2'), wiped], 'v3', 'now', undefined))
+      .toEqual({ refused: expect.stringContaining('reset-2026-09-27T00:00:00.000Z') });
+    expect(planRollback(HISTORY, 'v4-red', 'now', reset('2026-09-27T00:00:00.000Z')))
+      .toEqual({ refused: expect.stringContaining('reset-2026-09-27T00:00:00.000Z') });
+    expect(planRollback(HISTORY, 'v4-red', 'now', reset('2026-09-25T00:00:00.000Z'))).toMatchObject({ target: promotion('v3') });
   });
 });

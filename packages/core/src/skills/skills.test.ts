@@ -569,10 +569,22 @@ describe('unionAllowedTools', () => {
   });
 });
 
+/** Discovery with the parse failures an owner sees: the `skills.parse_failed` diagnostics it reports. */
+async function discoverReporting(vfs: SkillsVfs): Promise<{ found: Awaited<ReturnType<typeof discoverSkills>>; errors: string[] }> {
+  const log = createRecordingLogger();
+  const restore = setDiagnosticsSink(log);
+
+  try {
+    const found = await discoverSkills(vfs, { admissionTokens: ROOMY_TOKENS });
+
+    return { found, errors: log.emitted.filter((line) => line.event === 'skills.parse_failed').map((line) => line.cause ?? '') };
+  } finally {
+    restore();
+  }
+}
+
 describe('discoverSkills', () => {
   test('one precedence decides a name: a built-in is reserved, the workspace beats the Drive, a folder beats a flat file', async () => {
-    const errors: string[] = [];
-
     const v = memoryVfs({
       [`${WORKSPACE_SKILLS_DIR}/deploy.md`]: skillFile('deploy', 'workspace body'),
       [`${WORKSPACE_SKILLS_DIR}/lint.md`]: skillFile('lint', 'flat lint'),
@@ -584,7 +596,7 @@ describe('discoverSkills', () => {
       [`${SHARED_SKILLS_DIR}/notes.md`]: skillFile('notes', 'flat shared'),
     });
 
-    const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS, onParseError: (_f, e) => errors.push(e) });
+    const { found, errors } = await discoverReporting(v);
     const byName = new Map(found.skills.map(s => [s.name, s]));
 
     expect(byName.get('deploy')?.bodyRef).toMatchObject({ kind: 'file', path: `${WORKSPACE_SKILLS_DIR}/deploy.md` });
@@ -593,11 +605,13 @@ describe('discoverSkills', () => {
     expect(byName.get('review')?.source).toBe('shared');
     expect(byName.get('review')?.bodyRef).toMatchObject({ kind: 'file', path: `${SHARED_SKILLS_DIR}/review/SKILL.md` });
     expect(byName.get('notes')?.source).toBe('shared');
-    expect(errors.sort()).toEqual([
+    expect(errors).toHaveLength(3);
+
+    for (const reason of [
       `"deploy" is shadowed by ${WORKSPACE_SKILLS_DIR}/deploy.md`,
       `"lint" is shadowed by ${WORKSPACE_SKILLS_DIR}/lint/SKILL.md`,
       '"slates" is a built-in skill name and cannot be overridden by a file',
-    ]);
+    ]) expect(errors.some((error) => error.includes(reason))).toBe(true);
 
     // No losing body was opened.
     expect(v.calls.readFile).not.toContain(`${SHARED_SKILLS_DIR}/deploy/SKILL.md`);
@@ -661,18 +675,13 @@ describe('discoverSkills', () => {
     }
   });
 
-  test('skips malformed files via onParseError instead of throwing', async () => {
-    const errors: Array<{ path: string; err: string }> = [];
-
+  test('skips malformed files, reporting each, instead of throwing', async () => {
     const v = memoryVfs({
       [`${WORKSPACE_SKILLS_DIR}/good.md`]: skillFile('good', 'body'),
       [`${WORKSPACE_SKILLS_DIR}/bad.md`]: `not a valid skill file at all`,
     });
 
-    const found = await discoverSkills(v, {
-      admissionTokens: ROOMY_TOKENS,
-      onParseError: (path, err) => errors.push({ path, err }),
-    });
+    const { found, errors } = await discoverReporting(v);
 
     expect(found.skills.find(s => s.name === 'good')).toBeTruthy();
     expect(errors.length).toBeGreaterThan(0);
@@ -683,11 +692,7 @@ describe('discoverSkills', () => {
       [`${WORKSPACE_SKILLS_DIR}/wrong-filename.md`]: `---\nname: actual-name\ndescription: ok\n---\nbody`,
     });
 
-    const errors: string[] = [];
-
-    const found = await discoverSkills(v, {
-      admissionTokens: ROOMY_TOKENS, onParseError: (_p, e) => errors.push(e),
-    });
+    const { found, errors } = await discoverReporting(v);
 
     expect(found.skills.find(s => s.name === 'actual-name')).toBeFalsy();
     expect(errors.some(e => e.includes('does not match'))).toBe(true);
@@ -695,11 +700,7 @@ describe('discoverSkills', () => {
 
   test('an illegal filename stem is rejected without opening the file', async () => {
     const v = memoryVfs({ [`${WORKSPACE_SKILLS_DIR}/Not_A_Skill.md`]: skillFile('x', 'body') });
-    const errors: string[] = [];
-
-    const found = await discoverSkills(v, {
-      admissionTokens: ROOMY_TOKENS, onParseError: (_p, e) => errors.push(e),
-    });
+    const { found, errors } = await discoverReporting(v);
 
     expect(found.skills.every(s => s.source === 'builtin')).toBe(true);
     expect(errors.some(e => e.includes('filename stem'))).toBe(true);

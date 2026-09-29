@@ -39,6 +39,7 @@ import { DELEGATION_LANE_FIBER } from './fiber-recovery';
 import { SLATE_SHARE_PATH, slateShareUrl, viewerEntryUrl } from './slate-share-route';
 import { nimbusPreviewUrl, WORKSPACE_PREVIEW_PATH } from "./nimbus-route";
 import { SlateHost } from "./slates/host";
+import { initBrowserSessionTable, ownsBrowserSession } from "@kinu.run/core";
 import { browserCamera, initSlatePictureTable, SlatePictures, type PictureCapture } from "./slates/pictures";
 import type { BlueprintReading, ShareUser } from "@kinu.run/core/slates";
 import { ROOT_SLATE_CALLER, type SlateCaller } from "./slates/bindings";
@@ -540,7 +541,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private pictureCapture(): PictureCapture | null {
     const { BROWSER: browser, SLATE_PICTURES: bucket } = this.env;
 
-    if (browser === undefined || bucket === undefined) return null;
+    if (bucket === undefined) return null;
 
     return {
       workspace: this.name, bucket,
@@ -755,8 +756,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ),
       codemodeTool: (runtime, webSearch) => {
         const factory = createCodemodeToolFactory({
-          loader: this.env.LOADER, egress: codemodeEgress(this.workspaceName()), rt: runtime,
-          sql: this.boundSql, workspace: this.workspaceName(), webSearch,
+          loader: this.env.LOADER, egress: codemodeEgress({ workspace: this.workspaceName(), actor: runtime.actor.actorId }), rt: runtime,
+          sql: this.boundSql, workspace: this.workspaceName(), webSearch, browserSessions: this.browserSessionsFor(runtime.actor.actorId),
         });
 
         return (finished) => factory.toolFor(finished);
@@ -792,8 +793,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const webSearch = this.ownedModelServices.getWebSearchProvider();
 
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress(this.workspaceName()), rt: turn.runtime,
-      sql: this.boundSql, workspace: this.workspaceName(), webSearch,
+      loader: this.env.LOADER, egress: codemodeEgress({ workspace: this.workspaceName(), actor: turn.runtime.actor.actorId }), rt: turn.runtime,
+      sql: this.boundSql, workspace: this.workspaceName(), webSearch, browserSessions: this.browserSessionsFor(turn.runtime.actor.actorId),
       // A thunk, so it reads the `report` deps declared below rather than a construction-time copy.
       extraProviders: () => [createReportCodemodeProvider(() => report)],
     });
@@ -2289,7 +2290,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       overflowRetry: input.overflowRetry,
       outputContinuation: input.outputContinuation,
       taskReminder: input.taskReminder ?? undefined,
-      advisor: projectJsonValue({ value: this.advisorSnapshotFor(this.orch.scopedTurn(input.turn), input.reachableTools) }),
+      // Owed only when the actor reviews turns, as the lane it replaced was started only then.
+      advisor: this.actorSession.reviewsTurns
+        ? projectJsonValue({ value: this.advisorSnapshotFor(this.orch.scopedTurn(input.turn), input.reachableTools) })
+        : undefined,
       sleepTime: true,
       // The genesis turn owes the naming: the create stored a stand-in title, and no
       // other turn replaces one.
@@ -2958,6 +2962,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     initWorkspaceBaselineTable(execRaw);
     initChangeNotesTable(execRaw);
     initSlatePictureTable(execRaw);
+    initBrowserSessionTable(execRaw);
     initWorkspaceActorTable(execRaw);
 
     // Planes only this root carries (declared in core/conformance/manifest.ts).
@@ -4876,6 +4881,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       })),
       shares,
     });
+  }
+
+  /** Asked by `CodemodeEgress` before it pipes a program's socket to a browser session. Never `@callable`. */
+  ownsBrowserSession(actorId: string, sessionId: string): boolean {
+    return ownsBrowserSession(this.ctx.storage.sql, actorId, sessionId);
   }
 
   /** The owner's object ignores a repeat. */

@@ -235,13 +235,18 @@ describe('the README demo film', () => {
     readonly frames: readonly Frame[];
   }
 
+  /** A GIF's 16-bit fields are little-endian; workers-types 5 hides Node's `Buffer#readUInt16LE` from this project. */
+  function littleEndian16(bytes: Uint8Array, at: number): number {
+    return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint16(at, true);
+  }
+
   /** Bounded: `Buffer[at]` is undefined past the end, and undefined arithmetic can loop a skip forever. */
   function byteAt(gif: Buffer, at: number, what: string): number {
     if (at < 0 || at >= gif.byteLength) {
       throw new Error(`the film ends mid-${what} at ${String(at)}`);
     }
 
-    return gif.readUInt8(at);
+    return gif[at];
   }
 
   interface TakenBlock { readonly body: Buffer; readonly next: number }
@@ -260,14 +265,14 @@ describe('the README demo film', () => {
       throw new Error('not a GIF89a film');
     }
 
-    const width = gif.readUInt16LE(6);
-    const height = gif.readUInt16LE(8);
+    const width = littleEndian16(gif, 6);
+    const height = littleEndian16(gif, 8);
 
     if (width <= 0 || height <= 0) {
       throw new Error(`the film declares a ${String(width)}x${String(height)} canvas`);
     }
 
-    const packed = gif.readUInt8(10);
+    const packed = gif[10];
     const gctSize = (packed & 0x80) !== 0 ? 3 * (2 ** ((packed & 7) + 1)) : 0;
 
     if (13 + gctSize > gif.byteLength) throw new Error('the film ends mid-global colour table');
@@ -300,8 +305,8 @@ describe('the README demo film', () => {
         && byteAt(gif, at, 'loop sub-block') === 3) {
         const loopBlock = takeBlock(gif, at + 1, 3, 'loop sub-block');
 
-        if (loopBlock.body.readUInt8(0) === 1) {
-          loops = loopBlock.body.readUInt16LE(1);
+        if (loopBlock.body[0] === 1) {
+          loops = littleEndian16(loopBlock.body, 1);
         }
 
         at = loopBlock.next;
@@ -321,11 +326,11 @@ describe('the README demo film', () => {
 
       if (tag === 0x2c) {
         const descriptor = takeBlock(gif, at + 1, 9, 'image descriptor').body;
-        const localPacked = descriptor.readUInt8(8);
+        const localPacked = descriptor[8];
 
         frames.push({
-          x: descriptor.readUInt16LE(0), y: descriptor.readUInt16LE(2),
-          width: descriptor.readUInt16LE(4), height: descriptor.readUInt16LE(6),
+          x: littleEndian16(descriptor, 0), y: littleEndian16(descriptor, 2),
+          width: littleEndian16(descriptor, 4), height: littleEndian16(descriptor, 6),
           ...gce,
         });
         gce = { disposal: 0 };
@@ -350,7 +355,7 @@ describe('the README demo film', () => {
 
           const body = takeBlock(gif, at + 1, 4, 'graphic-control extension').body;
 
-          gce = { disposal: (body.readUInt8(0) >> 2) & 0x07 };
+          gce = { disposal: (body[0] >> 2) & 0x07 };
           at += 5;
 
           if (byteAt(gif, at, 'graphic-control terminator') !== 0) {

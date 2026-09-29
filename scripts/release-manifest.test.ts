@@ -62,8 +62,7 @@ describe('the manifest is the config', () => {
 
     expect(MANIFEST.bindings.filter((binding) => binding.kind === 'durable-object')
       .map((binding) => binding.resource).sort()).toEqual(classes);
-    expect(MANIFEST.migrations.flatMap((migration) => migration.newSqliteClasses).sort())
-      .toEqual((CONFIG.migrations ?? []).flatMap((migration) => migration.new_sqlite_classes ?? []).sort());
+    expect(MANIFEST.migrations.flatMap((migration) => migration.newSqliteClasses).sort()).toEqual(classes);
   });
 
   test('the Vectorize geometry is the embedder\'s, not a number retyped here', () => {

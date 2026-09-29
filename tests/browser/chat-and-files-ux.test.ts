@@ -1881,6 +1881,8 @@ describe('the walk-back at the actual WorkspacePage boundary', () => {
  * iOS Safari zooms the page when a text field under 16px takes focus, and leaves it zoomed. On a touch phone every
  * text field, on the pages that carry one, must compute to at least 16px.
  */
+const PHONE = { width: 390, height: 844, isMobile: true, hasTouch: true } as const;
+
 describe('text fields on a touch phone', () => {
   test('every visible text field computes to at least 16px, so iOS does not zoom on focus', async () => {
     await withGallery(async ({ newPage, origin }) => {
@@ -1888,9 +1890,12 @@ describe('text fields on a touch phone', () => {
 
       for (const frame of ['workspacepage', 'home', 'files', 'usersettingsstate&section=providers']) {
         const page = await newPage();
-        await page.setViewport({ width: 390, height: 844, isMobile: true, hasTouch: true });
+        await page.setViewport(PHONE);
         await page.goto(`${origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
         await page.waitForSelector('input, textarea');
+        // The load swaps the renderer, which once took the touch pointer after the page read it (0965, under load). The
+        // same viewport again sends touch emulation to the renderer now showing the page, and resolves once applied.
+        await page.setViewport({ ...PHONE });
 
         const measured = await page.$$eval(
           'input:not([type="checkbox"], [type="radio"], [type="range"], [type="file"], [type="color"], [type="button"], [type="submit"]), textarea, select',

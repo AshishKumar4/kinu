@@ -857,7 +857,7 @@ export class SlateHost {
   }
 
   private async boot(caller: SlateCaller, id: string, held: string): Promise<RunningSlate> {
-    const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress(this.deps.workspace);
+    const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ workspace: this.deps.workspace, actor: null });
 
     if (caller.workMode === 'build' && globalOutbound === null) {
       throw new KinuError('unsupported', 'Resident slate egress requires the shared outbound policy binding');

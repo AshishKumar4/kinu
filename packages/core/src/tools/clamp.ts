@@ -11,7 +11,8 @@ import { nanoid } from '../utils/nanoid';
 import { admissionBytes } from '../llm';
 import { headEnd, tailStart } from '../utils/text';
 import { SPILL_DIRS, type BulkProducer, type TurnContextBudget } from '../context-budget';
-import { assertJsonValue, parseJsonValue, type JsonValue } from '../utils/json';
+import { assertJsonValue, JsonValueSchema, parseJsonValue, type JsonValue } from '../utils/json';
+import { imageModelOutput, takeImages } from './image-results';
 import { diagnostics, renderThrownChain, settle, toKinuError, type KinuError } from '../obs/index';
 import { successfulToolOutcome } from './outcome';
 
@@ -32,6 +33,8 @@ export interface ClampToolResultOptions {
   vfs?: VFS;
   budget?: TurnContextBudget;
   producer?: BulkProducer;
+  /** Image data URLs in the output reach the model as images, outside the clamp (`image-results.ts`). */
+  images?: true;
 }
 
 type Offload = { readonly path: string } | { readonly failure: KinuError };
@@ -135,19 +138,26 @@ export function withClampedToolResult(
 
   if (!execute) return toolEntry;
 
-  return {
+  const clamping: ToolSet[string] = {
     ...toolEntry,
     execute: async (input, options) => {
-      const output = await execute(input, options);
+      const produced = await execute(input, options);
+      const json = opts.images === true ? v.safeParse(JsonValueSchema, produced) : null;
+      const taken = json?.success === true ? takeImages(json.output) : null;
+      const output = taken?.value ?? produced;
       const clamped = await clampSerializedToolResult({ output }, opts);
       const outcome = successfulToolOutcome(opts.producer ?? '', { output });
       const text = v.safeParse(v.string(), clamped);
 
-      return text.success && outcome.failures !== undefined
+      const result = text.success && outcome.failures !== undefined
         ? { result: text.output, failures: outcome.failures }
         : clamped;
+
+      return taken === null || taken.images.length === 0 ? result : { output: result ?? null, images: taken.images };
     },
   };
+
+  return opts.images === true ? { ...clamping, toModelOutput: imageModelOutput } : clamping;
 }
 
 /** Puts MCP tool results under the same budget as builtins. */

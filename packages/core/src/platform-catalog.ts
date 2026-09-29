@@ -1833,19 +1833,20 @@ export const PLATFORM_CATALOG = {
   },
 
   'worker.script_bytes': {
-    subject: 'Deployed Worker size after gzip compression',
-    limit: { value: 10 * MB, unit: 'bytes' },
+    subject: 'Deployed Worker size, uncompressed',
+    limit: { value: 64 * MiB, unit: 'bytes' },
     origin: 'platform',
     bounds: 'bundle',
     evidence: 'documented',
     provenance: `${CF_WORKER_LIMITS}#worker-size`,
-    date: DOCS_READ,
-    trigger: 'a bundle over 10 MB gzipped on Workers Paid (3 MB Free), or 64 MB uncompressed',
+    date: '2026-09-28',
+    trigger: 'a bundle over 64 MiB uncompressed (`Total Upload` in `wrangler deploy --dry-run`) on Free or Paid',
     onBreach: 'the deploy is rejected',
     observable: [],
     firstPartySignal: true,
     notes:
-      'Comfortable today and worth watching, because bundle size also charges against '
+      'There is no compressed limit; the dry-run prints gzip for reference only. Reading on '
+      + '2026-09-28: 21,347 KiB raw, 5,745 KiB gzip. Bundle size also charges against '
       + 'worker.startup_ms, which is the tighter of the two.',
   },
 
@@ -1992,6 +1993,23 @@ export const PLATFORM_CATALOG = {
       + 'rides the runtime\'s own ctx.container.exec, which has no timeout (Cloudflare Containers '
       + '"Execute commands", read 2026-09-28), instead of a bigger exec timeout: '
       + 'execution/sandbox.ts routes on exactly this entry.',
+  },
+
+  'browser.session.keep_alive_ms': {
+    subject: 'Longest a Browser Run Chrome session may sit idle, with no connection, before it closes',
+    limit: { value: 1_200_000, unit: 'ms' },
+    origin: 'platform',
+    bounds: 'duration',
+    evidence: 'proven-by-probe',
+    provenance: '/mnt/scratch/kinu/kinu-logs/browser/PROBES-2026-09-28.md#keepalive',
+    date: '2026-09-28',
+    trigger: 'acquire({ keepAlive }) above 1,200,000; or a session idle longer than the keepAlive it was acquired with',
+    onBreach: 'acquire is refused with 400; an idle session closes and getSession answers null',
+    observable: [{ context: 'env.BROWSER.acquire', message: 'BrowserBindingError: Too big: expected number to be <=1200000 (status=400, code=2000)' }],
+    firstPartySignal: true,
+    notes:
+      'Kitesurf takes no keep_alive at all ("Options not supported with browser=kitesurf: keep_alive"): its session '
+      + 'is created on connect and ends with the connection, so web/browser-sessions.ts records Chrome sessions only.',
   },
 } as const satisfies Readonly<Record<string, PlatformFact>>;
 

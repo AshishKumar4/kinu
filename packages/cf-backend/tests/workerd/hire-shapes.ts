@@ -46,7 +46,8 @@ export interface RosterRow {
 export interface ActorRow {
   readonly actorId: string;
   readonly name: string;
-  readonly kind: string;
+  /** Hired by another agent: every row but the workspace's main agent. */
+  readonly hired: boolean;
   readonly retiringAt: number | null;
   readonly deletedAt: number | null;
 }

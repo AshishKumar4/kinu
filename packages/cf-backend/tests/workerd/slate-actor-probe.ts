@@ -13,8 +13,14 @@ import { bindAgentSql } from '../../src/runtime';
 import { bindActorHandle, createDefaultWebSearchProvider, initCodemodeStateTable, toolsInWorkMode, inWorkMode, narrowToolSurface, slateToolReach, type WorkMode } from '@kinu.run/core';
 import { CodemodeEgress as ProductionEgress, codemodeEgress } from '../../src/codemode-egress';
 import { SlateHost } from '../../src/slates/host';
+import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
+import type { BrowserSessions } from '@kinu.run/core';
 import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
+
+const NO_BROWSER_RUN = { missing: 'this probe reaches no Browser Run' };
+
+const NO_BROWSERS: BrowserSessions = { open: async () => { throw new Error('this probe opens no browser'); }, list: async () => [], close: async () => {} };
 
 export class CodemodeEgress extends ProductionEgress {
   override async fetch(): Promise<Response> { return new Response('network allowed'); }
@@ -40,11 +46,13 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     };
 
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress('binding-probe'), sql, workspace: 'binding-probe',
-      webSearch: createDefaultWebSearchProvider({ fetch }), reach: slateToolReach(narrowToolSurface(undefined)),
+      loader: this.env.LOADER, egress: codemodeEgress({ workspace: 'binding-probe', actor: 'binding-probe' }), sql, workspace: 'binding-probe',
+      webSearch: createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER_RUN }), reach: slateToolReach(narrowToolSurface(undefined)),
+      browserSessions: NO_BROWSERS,
       rt: {
         actor: bindActorHandle(sql, { actorId: 'binding-probe', workspaceId: 'binding-probe', parentActorId: null, name: 'binding-probe', storageKey: 'binding-probe' }, () => {}),
         craftStore: { list: () => [crafted] },
+        storage: { vfs: createMemoryVfs().vfs },
       },
     });
 
@@ -95,9 +103,11 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     initCodemodeStateTable((statement) => { this.ctx.storage.sql.exec(statement); });
 
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress('mode-probe'), sql, workspace: 'mode-probe',
-      webSearch: createDefaultWebSearchProvider({ fetch }),
+      loader: this.env.LOADER, egress: codemodeEgress({ workspace: 'mode-probe', actor: 'mode-probe' }), sql, workspace: 'mode-probe',
+      webSearch: createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER_RUN }),
+      browserSessions: NO_BROWSERS,
       rt: {
+        storage: { vfs: createMemoryVfs().vfs },
         actor: bindActorHandle(sql, {
           actorId: 'mode-probe', workspaceId: 'mode-probe', parentActorId: null,
           name: 'mode-probe', storageKey: 'mode-probe',

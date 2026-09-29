@@ -205,7 +205,7 @@ describe('buildHeadAccumulatorTools', () => {
     // The head's own surface, as both backends build it.
     const tools = buildHeadToolSet({
       input, capture, rt, history: storesFor(rt).history, codemodeTool: undefined,
-      webSearch: { search: async (query) => ({ query, results: [], source: 'duckduckgo' }), fetch: async (url) => ({ url, retrievedAt: '', markdown: '' }) },
+      webSearch: { search: async (query) => ({ query, results: [], source: 'duckduckgo' }), fetch: async (url) => ({ url, retrievedAt: '', markdown: '' }), render: async (url) => ({ url, retrievedAt: '', markdown: '' }), screenshot: async (url) => ({ url, retrievedAt: '', bytes: new Uint8Array() }) },
       split: async () => { throw new Error('this head cannot split'); },
     });
 
