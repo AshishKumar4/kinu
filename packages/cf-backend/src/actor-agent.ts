@@ -201,7 +201,7 @@ import {
   type TerminalTransition, type TerminalEffectFault, type TerminalEffectTable,
 } from "@kinu.run/core";
 import { createCodemodeToolFactory, type CodemodeFactory } from "./codemode-tool";
-import { codemodeEgress } from "./codemode-egress";
+import { codemodeLauncher, type ProgramLaunch } from "./codemode-sandbox";
 import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
@@ -3168,6 +3168,12 @@ export abstract class ActorAgent extends Agent<Env> {
     return v.parse(JsonValueSchema, { text: answer.text, model: spec, tier: profile.tier.id, usage });
   }
 
+  protected codemodeLaunch(actor: string): (online: boolean) => ProgramLaunch {
+    const workspace = this.workspaceName();
+
+    return (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace, actor } : null });
+  }
+
   private async callSlateTool(input: {
     rt: HostedActor['runtime']; native: ToolSet; providers: CodemodeProvider[];
     reach: ToolSurfaceNarrowing; route: Extract<SlateBindingRoute, { kind: 'tool' }>; mode: WorkMode;
@@ -3176,7 +3182,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const executorNames = new Set(rt.executionRouter?.getProviders().map((provider) => provider.name) ?? []);
 
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress({ workspace: this.workspaceName(), actor: rt.actor.actorId }), rt,
+      launch: this.codemodeLaunch(rt.actor.actorId), rt,
       sql: rt.storage.sql, workspace: this.workspaceName(), webSearch: this.ownedModelServices.getWebSearchProvider(), reach,
       browserSessions: this.browserSessionsFor(rt.actor.actorId),
       extraProviders: () => providers.filter((provider) => !executorNames.has(provider.name) && provider.name !== 'web'),
@@ -3276,8 +3282,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (!this._codemodeFactories.has(key)) {
       this._codemodeFactories.set(key, createCodemodeToolFactory({
-        loader: this.env.LOADER,
-        egress: codemodeEgress({ workspace: this.workspaceName(), actor: this.rt.actor.actorId }),
+        launch: this.codemodeLaunch(this.rt.actor.actorId),
         rt: this.rt,
         browserSessions: this.browserSessionsFor(this.rt.actor.actorId),
         reach: narrowing,

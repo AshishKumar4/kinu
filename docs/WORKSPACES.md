@@ -224,6 +224,11 @@ A workspace holds the state. Agents are the actors that work inside it.
     workspace's durable subordinates. Swarm nodes are left off because they
     live only for the search that spawned them.
 
+  An export carries each hired agent's conversation and turn tables from
+  its own database as that agent's section (`agentArchiveSource` in
+  `packages/cf-backend/src/orchestrator.ts`, `readAgentArchivePage` in
+  `packages/core/src/identity/archive.ts`); `kinu import` refuses an archive
+  that lists an agent whose section is missing or short.
   A workspace fork is the owner's "Fork the workspace from here" on a
   message: the `forkAgent` callable runs `forkWorkspace`
   (`packages/core/src/identity/fork-driver.ts`) and the new workspace records

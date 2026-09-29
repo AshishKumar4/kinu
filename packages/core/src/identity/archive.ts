@@ -90,7 +90,15 @@ export interface ArchiveFilesCursor {
   files: number;
 }
 
-export type ArchiveCursor = ArchiveSqlCursor | ArchiveFilesCursor;
+/** Inside one agent's section: `inner` walks that agent's own database. */
+export interface ArchiveAgentsCursor {
+  phase: 'agents';
+  actor: string;
+  inner: ArchiveSqlCursor | null;
+  rows: number;
+}
+
+export type ArchiveCursor = ArchiveSqlCursor | ArchiveAgentsCursor | ArchiveFilesCursor;
 
 /** The only cursor wire schema: a copy's `v.object` would silently strip unknown keys such as `tables`. */
 export const ArchiveCursorSchema: v.GenericSchema<ArchiveCursor> = v.variant('phase', [
@@ -99,6 +107,18 @@ export const ArchiveCursorSchema: v.GenericSchema<ArchiveCursor> = v.variant('ph
     table: v.pipe(v.string(), v.nonEmpty()),
     tables: v.optional(v.array(v.pipe(v.string(), v.nonEmpty()))),
     after: v.nullable(v.union([v.pipe(v.number(), v.safeInteger()), v.string()])),
+    rows: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+  }),
+  v.object({
+    phase: v.literal('agents'),
+    actor: v.pipe(v.string(), v.nonEmpty()),
+    inner: v.nullable(v.object({
+      phase: v.literal('sql'),
+      table: v.pipe(v.string(), v.nonEmpty()),
+      tables: v.optional(v.array(v.pipe(v.string(), v.nonEmpty()))),
+      after: v.nullable(v.union([v.pipe(v.number(), v.safeInteger()), v.string()])),
+      rows: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+    })),
     rows: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
   }),
   v.object({
@@ -138,6 +158,22 @@ export interface ArchiveExportOptions {
   now?: number;
   /** Authoritative files outside `sql`; null declares a SQL-only workspace. */
   files?: ArchiveFileSource | null;
+  /** Agents whose rows live in databases of their own; absent when every actor's rows are in `sql`. */
+  agents?: ArchiveAgentSource | null;
+}
+
+/** One page of an agent's own rows: row records, then its section's close once `next` is null. */
+export interface ArchiveAgentPage {
+  lines: string[];
+  /** Row records among `lines`. */
+  rows: number;
+  next: ArchiveSqlCursor | null;
+}
+
+export interface ArchiveAgentSource {
+  /** Pinned by the first page, in the header: each one listed must close its section. */
+  list(): readonly string[];
+  page(actorId: string, cursor: ArchiveSqlCursor | null, maxBytes: number): Promise<ArchiveAgentPage>;
 }
 
 interface ArchiveHeader {
@@ -148,6 +184,8 @@ interface ArchiveHeader {
   exported_at: number;
   /** The schema genesis of the Kinu that wrote it; an archive under another is refused by name. */
   schema_genesis?: string;
+  /** Agents whose rows live in databases of their own; each must close its section, or the archive is refused. */
+  agents?: string[];
 }
 
 type SchemaKind = 'table' | 'index' | 'trigger' | 'view';
@@ -171,6 +209,15 @@ interface RowRecord {
   t: 'row';
   table: string;
   values: Record<string, EncodedSqlValue>;
+  /** Written from that agent's own database. */
+  agent?: string;
+}
+
+/** An agent's section is complete: every row its own database holds for it was written above. */
+interface AgentRecord {
+  t: 'agent';
+  actor: string;
+  rows: number;
 }
 
 interface FileRecord {
@@ -192,7 +239,7 @@ interface EndRecord {
   actors: number;
 }
 
-type ArchiveRecord = ArchiveHeader | SchemaRecord | RowRecord | FileRecord | DirectoryRecord | EndRecord;
+type ArchiveRecord = ArchiveHeader | SchemaRecord | RowRecord | AgentRecord | FileRecord | DirectoryRecord | EndRecord;
 
 const EncodedSqlValueSchema: v.GenericSchema<EncodedSqlValue> = v.union([
   v.string(), v.number(), v.boolean(), v.null(), v.object({ $b64: v.string() }),
@@ -206,6 +253,7 @@ const ArchiveRecordSchema: v.GenericSchema<ArchiveRecord> = v.variant('t', [
     source: v.picklist(['cloud', 'local']),
     exported_at: v.number(),
     schema_genesis: v.optional(v.string()),
+    agents: v.optional(v.array(v.string())),
   }),
   v.object({
     t: v.literal('schema'),
@@ -219,7 +267,9 @@ const ArchiveRecordSchema: v.GenericSchema<ArchiveRecord> = v.variant('t', [
     t: v.literal('row'),
     table: v.string(),
     values: v.record(v.string(), EncodedSqlValueSchema),
+    agent: v.optional(v.string()),
   }),
+  v.object({ t: v.literal('agent'), actor: v.string(), rows: v.number() }),
   v.object({ t: v.literal('file'), path: v.string(), data: v.string() }),
   v.object({ t: v.literal('directory'), path: v.string() }),
   v.object({ t: v.literal('end'), rows: v.number(), files: v.number(), actors: v.number() }),
@@ -370,38 +420,41 @@ function archiveEntries(source: ArchiveFileSource): Effect.Effect<ArchiveFileEnt
   });
 }
 
-/** Call with `cursor: null`, then each page's `next` until it is null. */
-export function readWorkspaceArchivePage(
-  sql: SqlExec,
-  opts: ArchiveExportOptions,
-): Promise<ArchivePage> {
-  return settle(Effect.gen(function* () {
-    const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
-    const schema = readSchema(sql);
-    const fileCursor = opts.cursor?.phase === 'files' ? opts.cursor : null;
-    const sqlCursor = opts.cursor?.phase === 'sql' ? opts.cursor : null;
-    const live = schema.filter((o) => o.dumpRows);
-    const pinned = sqlCursor?.tables ?? live.map((o) => o.name);
-    const dumpable = sqlCursor === null ? live : live.filter((o) => pinned.includes(o.name));
-    const page: PageLines = { lines: [], bytes: 0 };
-    const { lines } = page;
-    const emit = (record: ArchiveRecord): void => emitLine(page, record);
-    let index = fileCursor ? dumpable.length : 0;
-    let after: number | string | null = null;
-    let rows = opts.cursor?.rows ?? 0;
+interface PageSink {
+  readonly lines: string[];
+  bytes: number;
+}
 
-    if (sqlCursor) {
-      index = dumpable.findIndex((o) => o.name === sqlCursor.table);
+function emitLine(sink: PageSink, line: string): void {
+  sink.lines.push(line);
+  sink.bytes += line.length + 1;
+}
 
-      if (index < 0) {
-        return yield* Effect.die(new Error(`Cannot resume this export: table "${sqlCursor.table}" no longer exists.`));
-      }
+function emitTo(sink: PageSink, record: ArchiveRecord): void {
+  emitLine(sink, JSON.stringify(record));
+}
 
-      after = sqlCursor.after;
-    } else if (!fileCursor) {
-      emitPreamble(page, schema, opts);
-    }
+function cannotResume(why: string): Effect.Effect<never> {
+  return Effect.die(new Error(`Cannot resume this export: ${why}.`));
+}
 
+/** Where a table walk stands; `rows` counts every row written so far. */
+interface TableWalk {
+  index: number;
+  after: number | string | null;
+  rows: number;
+}
+
+/**
+ * Rows of `dumpable` from `walk` on, until the page is full (the table and anchor it stopped at) or every table
+ * is written (null). With `agent`, only that actor's rows, each marked as its section's.
+ */
+function dumpRows(
+  sql: SqlExec, dumpable: readonly SchemaObject[], walk: TableWalk,
+  page: { readonly sink: PageSink; readonly maxBytes: number; readonly agent?: string },
+): Effect.Effect<{ table: string; after: number | string } | null> {
+  return Effect.gen(function* () {
+    const { sink } = page;
     // Batch size adapts per table to the observed row cost.
     let emitted = 0;
     let emittedBytes = 0;
@@ -409,35 +462,40 @@ export function readWorkspaceArchivePage(
     const nextBatch = (): number => {
       if (emitted === 0) return FIRST_BATCH;
 
-      return Math.min(MAX_BATCH, Math.max(1, Math.ceil(maxBytes / (emittedBytes / emitted))));
+      return Math.min(MAX_BATCH, Math.max(1, Math.ceil(page.maxBytes / (emittedBytes / emitted))));
     };
 
-    while (index < dumpable.length) {
-      const table = dumpable[index];
+    while (walk.index < dumpable.length) {
+      const table = dumpable[walk.index];
       const size = nextBatch();
+      const scoped = page.agent === undefined ? [] : [page.agent];
       const rowidSelect = `SELECT rowid AS ${quoteIdent(ROWID_ALIAS)}, * FROM ${quoteIdent(table.name)}`;
       // WITHOUT ROWID resumes by row-value seek on the primary key; an offset would duplicate rows.
       const keyset = table.withoutRowid ? yield* withoutRowidKey(sql, table) : null;
+      const after = walk.after;
 
       const rawBatch = ((): readonly unknown[] => {
+        const where = (conditions: readonly string[]): string => (conditions.length === 0 ? '' : `WHERE ${conditions.join(' AND ')}`);
+        const mine = page.agent === undefined ? [] : ['actor_id = ?'];
+
         if (keyset === null) {
           return after === null
-            ? sql.exec(`${rowidSelect} ORDER BY rowid LIMIT ?`, size).toArray()
-            : sql.exec(`${rowidSelect} WHERE rowid > ? ORDER BY rowid LIMIT ?`, after, size).toArray();
+            ? sql.exec(`${rowidSelect} ${where(mine)} ORDER BY rowid LIMIT ?`, ...scoped, size).toArray()
+            : sql.exec(`${rowidSelect} ${where(['rowid > ?', ...mine])} ORDER BY rowid LIMIT ?`, after, ...scoped, size).toArray();
         }
 
         const cols = keyset.map(quoteIdent).join(', ');
 
         if (after === null) {
-          return sql.exec(`SELECT * FROM ${quoteIdent(table.name)} ORDER BY ${cols} LIMIT ?`, size).toArray();
+          return sql.exec(`SELECT * FROM ${quoteIdent(table.name)} ${where(mine)} ORDER BY ${cols} LIMIT ?`, ...scoped, size).toArray();
         }
 
         const anchor = v.parse(KeysetAnchorSchema, JSON.parse(v.parse(v.string(), after)));
 
         return sql.exec(
-          `SELECT * FROM ${quoteIdent(table.name)} WHERE (${cols}) > (${keyset.map(() => '?').join(', ')}) `
+          `SELECT * FROM ${quoteIdent(table.name)} ${where([`(${cols}) > (${keyset.map(() => '?').join(', ')})`, ...mine])} `
           + `ORDER BY ${cols} LIMIT ?`,
-          ...anchor, size,
+          ...anchor, ...scoped, size,
         ).toArray();
       })();
 
@@ -450,12 +508,12 @@ export function readWorkspaceArchivePage(
           if (column !== ROWID_ALIAS) values[column] = encodeValue(value);
         }
 
-        const before = page.bytes;
-        emit({ t: 'row', table: table.name, values });
-        rows++;
+        const before = sink.bytes;
+        emitTo(sink, { t: 'row', table: table.name, values, ...(page.agent !== undefined && { agent: page.agent }) });
+        walk.rows++;
         emitted++;
-        emittedBytes += page.bytes - before;
-        after = keyset === null
+        emittedBytes += sink.bytes - before;
+        walk.after = keyset === null
           ? v.parse(v.number(), row[ROWID_ALIAS])
           : JSON.stringify(keyset.map((name) => v.parse(
             KeysetValueSchema, row[name],
@@ -463,53 +521,125 @@ export function readWorkspaceArchivePage(
           )));
 
         // Per row, so one oversized row ends the page.
-        if (page.bytes >= maxBytes) {
-          return { lines, next: { phase: 'sql', table: table.name, after, rows, tables: pinned } };
-        }
+        if (sink.bytes >= page.maxBytes) return { table: table.name, after: walk.after };
       }
 
       if (batch.length < size) {
-        index++;
-        after = null;
+        walk.index++;
+        walk.after = null;
         emitted = 0;
         emittedBytes = 0;
       }
     }
 
-    const filed = yield* emitFiles(page, { source: opts.files, cursor: fileCursor, rows, maxBytes });
+    return null;
+  });
+}
 
-    if (!filed.done) return filed.page;
-    emit({ t: 'end', rows, files: filed.files, actors: countArchivedActors(sql) });
+/** Tables an agent's own database holds rows of that actor in; the roster copies are the workspace's. */
+function agentTables(sql: SqlExec): SchemaObject[] {
+  return readSchema(sql).filter((o) => o.dumpRows && o.name !== 'workspace_actors' && o.name !== 'workspace_identity'
+    && sql.exec(`PRAGMA table_info(${quoteIdent(o.name)})`).toArray().some((column) => v.parse(v.object({ name: v.string() }), column).name === 'actor_id'));
+}
 
-    return { lines, next: null };
+/**
+ * One page of an agent's own database, for its section of the workspace's archive: its rows, then (once `next`
+ * is null) the section's close. The one reader of an agent's own database for an export.
+ */
+export function readAgentArchivePage(sql: SqlExec, actorId: string, cursor: ArchiveSqlCursor | null, maxBytes: number): Promise<ArchiveAgentPage> {
+  return settle(Effect.gen(function* () {
+    const live = agentTables(sql);
+    const pinned = cursor?.tables ?? live.map((o) => o.name);
+    const dumpable = cursor === null ? live : live.filter((o) => pinned.includes(o.name));
+    const sink: PageSink = { lines: [], bytes: 0 };
+    const index = cursor === null ? 0 : dumpable.findIndex((o) => o.name === cursor.table);
+
+    if (index < 0) return yield* cannotResume(`table "${cursor?.table ?? ''}" no longer exists in an agent's database`);
+    const before = cursor?.rows ?? 0;
+    const walk: TableWalk = { index, after: cursor?.after ?? null, rows: before };
+    const stopped = yield* dumpRows(sql, dumpable, walk, { sink, maxBytes, agent: actorId });
+    const rows = walk.rows - before;
+
+    if (stopped !== null) {
+      return { lines: sink.lines, rows, next: { phase: 'sql', table: stopped.table, after: stopped.after, rows: walk.rows, tables: pinned } };
+    }
+
+    emitTo(sink, { t: 'agent', actor: actorId, rows: walk.rows });
+
+    return { lines: sink.lines, rows, next: null };
   }));
 }
 
-interface PageLines {
-  readonly lines: string[];
-  bytes: number;
+const SQL_RECORDS: ReadonlySet<ArchiveRecord['t']> = new Set(['schema', 'row', 'agent']);
+
+/** Inserts row records, and tallies each agent's against its section's close. */
+class ArchiveRowWriter {
+  private insert: { table: string; columns: string[]; agent: boolean; statement: string } | null = null;
+
+  private readonly carried = new Map<string, number>();
+
+  private readonly closed = new Map<string, number>();
+
+  constructor(private readonly sql: SqlExec) {}
+
+  write(record: RowRecord): void {
+    const columns = Object.keys(record.values);
+    const agent = record.agent !== undefined;
+    const held = this.insert;
+
+    if (held === null || held.table !== record.table || held.agent !== agent || held.columns.length !== columns.length) {
+      this.insert = {
+        table: record.table,
+        columns,
+        agent,
+        // An agent's database and the workspace may both hold one row (an effect claim either side made).
+        statement: `INSERT ${agent ? 'OR IGNORE ' : ''}INTO ${quoteIdent(record.table)} (${columns.map(quoteIdent).join(', ')})`
+          + ` VALUES (${columns.map(() => '?').join(', ')})`,
+      };
+    }
+
+    this.sql.exec(this.insert?.statement ?? '', ...columns.map((c) => decodeValue(record.values[c])));
+
+    if (record.agent !== undefined) this.carried.set(record.agent, (this.carried.get(record.agent) ?? 0) + 1);
+  }
+
+  close(record: AgentRecord): void {
+    this.closed.set(record.actor, record.rows);
+  }
+
+  /** Every agent the header lists has its whole section here. */
+  requireSections(agents: readonly string[]): Effect.Effect<void> {
+    const problem = agents.map((actor) => {
+      const declared = this.closed.get(actor);
+      const carried = this.carried.get(actor) ?? 0;
+
+      if (declared === undefined) return `it lists agent ${actor}, whose own database it does not carry`;
+
+      return declared === carried ? null : `agent ${actor}'s section declares ${declared} rows but carries ${carried}`;
+    }).find((found) => found !== null);
+
+    return problem === undefined ? Effect.void : Effect.die(new Error(`This archive is damaged: ${problem}.`));
+  }
 }
 
-function emitLine(page: PageLines, record: ArchiveRecord): void {
-  const line = JSON.stringify(record);
-  page.lines.push(line);
-  page.bytes += line.length + 1;
+interface PageState {
+  readonly sink: PageSink;
+  readonly walk: TableWalk;
 }
 
-function emitPreamble(page: PageLines, schema: readonly SchemaObject[], opts: ArchiveExportOptions): void {
-  const header: ArchiveHeader = {
+function emitHeader(sink: PageSink, schema: readonly SchemaObject[], opts: ArchiveExportOptions, agents: readonly string[]): void {
+  emitTo(sink, {
     t: 'header',
     kinu_workspace_archive: WORKSPACE_ARCHIVE_VERSION,
     workspace: opts.workspace,
     source: opts.source,
     exported_at: opts.now ?? Date.now(),
     schema_genesis: SCHEMA_GENESIS,
-  };
-
-  emitLine(page, header);
+    ...(agents.length > 0 && { agents: [...agents] }),
+  });
 
   for (const object of schema) {
-    emitLine(page, {
+    emitTo(sink, {
       t: 'schema',
       kind: object.kind,
       name: object.name,
@@ -520,40 +650,126 @@ function emitPreamble(page: PageLines, schema: readonly SchemaObject[], opts: Ar
   }
 }
 
-type FilesOutcome = { readonly done: true; readonly files: number } | { readonly done: false; readonly page: ArchivePage };
+/** The workspace's own rows, from the cursor on: the page's end if it filled, else null. */
+function sqlPhase(sql: SqlExec, live: readonly SchemaObject[], { sink, walk }: PageState, page: {
+  readonly cursor: ArchiveSqlCursor | null; readonly maxBytes: number;
+}): Effect.Effect<ArchivePage | null> {
+  return Effect.gen(function* () {
+    const pinned = page.cursor?.tables ?? live.map((o) => o.name);
+    const dumpable = page.cursor === null ? live : live.filter((o) => pinned.includes(o.name));
 
-interface FilesPhase {
-  readonly source: ArchiveFileSource | null | undefined;
-  readonly cursor: ArchiveFilesCursor | null;
-  readonly rows: number;
-  readonly maxBytes: number;
+    if (page.cursor !== null) {
+      walk.index = dumpable.findIndex((o) => o.name === page.cursor?.table);
+
+      if (walk.index < 0) return yield* cannotResume(`table "${page.cursor.table}" no longer exists`);
+      walk.after = page.cursor.after;
+    }
+
+    const stopped = yield* dumpRows(sql, dumpable, walk, { sink, maxBytes: page.maxBytes });
+
+    return stopped === null
+      ? null
+      : { lines: sink.lines, next: { phase: 'sql', table: stopped.table, after: stopped.after, rows: walk.rows, tables: pinned } };
+  });
 }
 
-function emitFiles(page: PageLines, phase: FilesPhase): Effect.Effect<FilesOutcome> {
+/** Each agent's own section, from the cursor on: the page's end if it filled, else null. */
+function agentsPhase(source: ArchiveAgentSource, agents: readonly string[], { sink, walk }: PageState, page: {
+  readonly cursor: ArchiveAgentsCursor | null; readonly maxBytes: number;
+}): Effect.Effect<ArchivePage | null> {
   return Effect.gen(function* () {
-    const { source, cursor, rows, maxBytes } = phase;
-    let files = cursor?.files ?? 0;
+    const from = page.cursor === null ? 0 : agents.indexOf(page.cursor.actor);
 
-    if (!source) {
-      return cursor ? yield* Effect.die(new Error('Cannot resume this export: its workspace file source is unavailable.')) : { done: true, files };
+    if (from < 0) return yield* cannotResume(`agent ${page.cursor?.actor ?? ''} is no longer listed`);
+
+    for (let at = from; at < agents.length; at++) {
+      const actor = agents[at];
+      const inner = at === from ? page.cursor?.inner ?? null : null;
+      const section = yield* Effect.promise(() => source.page(actor, inner, Math.max(1, page.maxBytes - sink.bytes)));
+
+      for (const line of section.lines) emitLine(sink, line);
+      walk.rows += section.rows;
+
+      if (section.next !== null) return { lines: sink.lines, next: { phase: 'agents', actor, inner: section.next, rows: walk.rows } };
+
+      if (sink.bytes >= page.maxBytes && at + 1 < agents.length) {
+        return { lines: sink.lines, next: { phase: 'agents', actor: agents[at + 1], inner: null, rows: walk.rows } };
+      }
     }
 
+    return null;
+  });
+}
+
+/** The workspace's files, from the cursor on: the page's end if it filled, else null. */
+function filesPhase(source: ArchiveFileSource, { sink, walk }: PageState, page: {
+  readonly cursor: ArchiveFilesCursor | null; readonly maxBytes: number; readonly count: { files: number };
+}): Effect.Effect<ArchivePage | null> {
+  return Effect.gen(function* () {
     for (const entry of yield* archiveEntries(source)) {
-      if (cursor && entry.path <= cursor.after) continue;
+      if (page.cursor && entry.path <= page.cursor.after) continue;
 
       if (entry.type === 'directory') {
-        emitLine(page, { t: 'directory', path: entry.path });
+        emitTo(sink, { t: 'directory', path: entry.path });
       } else {
-        emitLine(page, { t: 'file', path: entry.path, data: bytesToBase64(yield* Effect.promise(() => source.readFile(entry.path))) });
+        emitTo(sink, { t: 'file', path: entry.path, data: bytesToBase64(yield* Effect.promise(() => source.readFile(entry.path))) });
       }
 
-      files++;
+      page.count.files++;
 
-      if (page.bytes >= maxBytes) return { done: false, page: { lines: page.lines, next: { phase: 'files', after: entry.path, rows, files } } };
+      if (sink.bytes >= page.maxBytes) {
+        return { lines: sink.lines, next: { phase: 'files', after: entry.path, rows: walk.rows, files: page.count.files } };
+      }
     }
 
-    return { done: true, files };
+    return null;
   });
+}
+
+/** Call with `cursor: null`, then each page's `next` until it is null. */
+export function readWorkspaceArchivePage(
+  sql: SqlExec,
+  opts: ArchiveExportOptions,
+): Promise<ArchivePage> {
+  return settle(Effect.gen(function* () {
+    const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
+    const cursor = opts.cursor ?? null;
+    const schema = readSchema(sql);
+    const live = schema.filter((o) => o.dumpRows);
+    const agents = opts.agents?.list() ?? [];
+    const state: PageState = { sink: { lines: [], bytes: 0 }, walk: { index: 0, after: null, rows: cursor?.rows ?? 0 } };
+    const count = { files: cursor?.phase === 'files' ? cursor.files : 0 };
+
+    if (cursor === null) emitHeader(state.sink, schema, opts, agents);
+
+    if (cursor === null || cursor.phase === 'sql') {
+      const full = yield* sqlPhase(sql, live, state, { cursor, maxBytes });
+
+      if (full !== null) return full;
+    }
+
+    if (cursor?.phase !== 'files') {
+      if (opts.agents) {
+        const full = yield* agentsPhase(opts.agents, agents, state, { cursor: cursor?.phase === 'agents' ? cursor : null, maxBytes });
+
+        if (full !== null) return full;
+      } else if (cursor?.phase === 'agents') {
+        return yield* cannotResume('its agent source is unavailable');
+      }
+    }
+
+    if (opts.files) {
+      const full = yield* filesPhase(opts.files, state, { cursor: cursor?.phase === 'files' ? cursor : null, maxBytes, count });
+
+      if (full !== null) return full;
+    } else if (cursor?.phase === 'files') {
+      return yield* cannotResume('its workspace file source is unavailable');
+    }
+
+    emitTo(state.sink, { t: 'end', rows: state.walk.rows, files: count.files, actors: countArchivedActors(sql) });
+
+    return { lines: state.sink.lines, next: null };
+  }));
 }
 
 /** Whole archive in one call, for callers with no transport in between. */
@@ -634,7 +850,7 @@ export function restoreWorkspaceArchive(
     let fileRecords = 0;
     let files = 0;
     let fileTarget: ArchiveFileTarget | null = null;
-    let insert: { table: string; columns: string[]; statement: string } | null = null;
+    const writer = new ArchiveRowWriter(sql);
 
     const finishSql = (): void => {
       const pending = deferred.splice(0);
@@ -665,7 +881,7 @@ export function restoreWorkspaceArchive(
 
       if (end) return yield* Effect.die(new Error('This archive has records after its end marker.'));
 
-      if (fileRecords > 0 && (record.t === 'schema' || record.t === 'row')) {
+      if (fileRecords > 0 && SQL_RECORDS.has(record.t)) {
         return yield* Effect.die(new Error('This archive has SQL records after its workspace files.'));
       }
 
@@ -681,22 +897,13 @@ export function restoreWorkspaceArchive(
           }
 
           break;
-        case 'row': {
-          const columns = Object.keys(record.values);
-
-          if (!insert || insert.table !== record.table || insert.columns.length !== columns.length) {
-            insert = {
-              table: record.table,
-              columns,
-              statement: `INSERT INTO ${quoteIdent(record.table)} (${columns.map(quoteIdent).join(', ')})`
-                + ` VALUES (${columns.map(() => '?').join(', ')})`,
-            };
-          }
-
-          sql.exec(insert.statement, ...columns.map((c) => decodeValue(record.values[c])));
+        case 'row':
+          writer.write(record);
           rows++;
           break;
-        }
+        case 'agent':
+          writer.close(record);
+          break;
 
         case 'directory': {
           const path = yield* archivePath(record.path);
@@ -731,6 +938,7 @@ export function restoreWorkspaceArchive(
     }
 
     if (!header) return yield* Effect.die(new Error('This file is not a Kinu workspace archive (no header).'));
+    yield* writer.requireSections(header.agents ?? []);
     const restoredActors = yield* matchesEnd(sql, end, { rows, fileRecords });
 
     finishSql();

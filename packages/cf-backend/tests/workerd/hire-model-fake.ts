@@ -27,6 +27,11 @@ let rootSaw = Promise.withResolvers<void>();
 
 let childSpoke = Promise.withResolvers<void>();
 
+/** Children a durable lane hired before the last reset: a previous test's root, resumed late, must not signal this one. */
+const namesBeforeReset = new Set<string>();
+
+const namesSinceReset = new Set<string>();
+
 /** Resolved when the durable lane's `msg` call was authored. */
 let durableMsgSent = Promise.withResolvers<void>();
 
@@ -242,6 +247,10 @@ async function durableLane(body: OutboundBody, results: readonly string[]): Prom
   if (onReport(body)) return textBody(model, 'ROOT-NOTED');
   const name = mintedName(results);
 
+  if (name !== null && namesBeforeReset.has(name)) return textBody(model, 'ROOT-NOTED');
+
+  if (name !== null) namesSinceReset.add(name);
+
   if (name === null) {
     return toolCallBody(model, 'call_durable_1', 'agents', {
       action: 'hire',
@@ -347,6 +356,9 @@ async function hireControl(url: URL, request: Request): Promise<Response> {
     );
 
     log.length = 0;
+
+    for (const name of namesSinceReset) namesBeforeReset.add(name);
+    namesSinceReset.clear();
     rootSaw = Promise.withResolvers<void>();
     childSpoke = Promise.withResolvers<void>();
     childPark = Promise.withResolvers<void>();

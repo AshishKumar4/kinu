@@ -126,3 +126,5 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
     } finally { await unmediated.release(); }
   }
 }
+
+export { CodemodeLauncher } from '../../src/codemode-sandbox';

@@ -28,6 +28,7 @@ import type { ComplexityProbeDO } from './complexity/complexity-probe';
 import type { EffectAtomicityProbeDO } from './effect-atomicity-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
+import type { CodemodeLauncher } from '../../src/codemode-sandbox';
 import type { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
 import type { SlateBinding } from '../../src/slates/bindings';
 import type {
@@ -144,6 +145,7 @@ interface HireProbeRpc extends Rpc.DurableObjectBranded {
   stopChild(workspace: string): Promise<void>;
   dismissChild(workspace: string): Promise<string>;
   observe(workspace: string): Promise<HireObservation>;
+  archiveSections(workspace: string): Promise<import('./hire-shapes').ArchiveSections>;
 }
 
 interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
@@ -363,6 +365,7 @@ declare global {
       mainModule: {
         SlateBinding: typeof SlateBinding;
         CodemodeEgress: typeof CodemodeEgress;
+        CodemodeLauncher: typeof CodemodeLauncher;
         SlateChainProbe: typeof SlateChainProbe;
         default: ExportedHandler<Cloudflare.Env>;
       };

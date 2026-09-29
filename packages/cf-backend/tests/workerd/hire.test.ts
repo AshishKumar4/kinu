@@ -312,5 +312,11 @@ describe('hire', () => {
     // The message runs as its own turn, or steers the brief's when that one is still running: never more.
     expect(childTurns).toHaveLength(1);
     expect(childTurns[0]?.runs).toBeLessThanOrEqual(2);
+
+    const child = childTurns[0]?.actorId ?? '';
+    const archived = await probe(workspace).archiveSections(workspace);
+
+    expect(archived.listed).toContain(child);
+    expect(archived.sections[child]).toBeGreaterThan(0);
   });
 });

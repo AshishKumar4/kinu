@@ -55,6 +55,8 @@ export { CodexEgress } from "./egress/codex-egress";
 // Loopback egress for `eval` programs (codemode-egress.ts); absent, they have no network.
 export { CodemodeEgress } from "./codemode-egress";
 
+export { CodemodeLauncher } from "./codemode-sandbox";
+
 export { SlateBinding } from "./slates/bindings";
 
 // An agent's own isolate reaches its workspace through this entrypoint only (agent-facets.ts).

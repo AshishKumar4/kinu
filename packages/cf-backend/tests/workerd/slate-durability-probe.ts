@@ -18,7 +18,7 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { ownerCaller } from '@kinu.run/core';
 import { workspaceOwner } from '../../src/workspace-owner-rpc';
 import { createCodemodeToolFactory } from '../../src/codemode-tool';
-import { codemodeEgress } from '../../src/codemode-egress';
+import { codemodeLauncher } from '../../src/codemode-sandbox';
 import type { JsonValue } from '@kinu.run/core';
 import type {
   DurabilityReservation,
@@ -65,7 +65,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   /** One program through this workspace's production `eval` tool, in Build mode; its answer as JSON. */
   async runProgram(code: string): Promise<string> {
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress({ workspace: null, actor: null }), rt: this.rt, sql: this.rt.storage.sql,
+      launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: null, actor: null } : null }), rt: this.rt, sql: this.rt.storage.sql,
       workspace: this.name, webSearch: createDefaultWebSearchProvider({ fetch, browser: { missing: 'this probe reaches no Browser Run' } }),
       browserSessions: { open: async () => { throw new Error('this probe opens no browser'); }, list: async () => [], close: async () => {} },
     });
@@ -104,6 +104,8 @@ export { ObservedOrchestrator as OrchestratorAgent };
 // Exported as `src/server.ts` does: the hosted runtime refuses a worker whose `ctx.exports` lacks
 // it.
 export { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
+
+export { CodemodeLauncher } from '../../src/codemode-sandbox';
 
 /** `slateAs` is absent on purpose: `Rpc.Result` over its recursive `JsonValue` is TS2589; the probe
  *  reaches it through `workspaceOwner()`, as production's actor does. */

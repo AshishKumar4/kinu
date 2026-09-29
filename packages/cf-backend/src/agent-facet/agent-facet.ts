@@ -3,9 +3,9 @@ import { DurableObject } from 'cloudflare:workers';
 import { Nimbus, type NimbusSandbox, type NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import type { UIMessage } from 'ai';
 import {
-  decodeJsonValue,
-  type AgentOwnInspection, type ChatHistoryPage, type JsonValue, type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv,
-  type AnsweredEvolutionHelper, type SerializedMessage, type SubordinateInspectionResult,
+  decodeJsonValue, readAgentArchivePage,
+  type AgentOwnInspection, type AnsweredEvolutionHelper, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage, type JsonValue,
+  type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
 } from '@kinu.run/core';
 import { AgentDatabase } from './agent-database';
 import { queueAgentTask, type AgentWorkspace } from './agent-turn';
@@ -58,9 +58,10 @@ export interface AgentFacetCalls {
   inspect(snapshot: AgentSnapshot, request: AgentOwnInspection): Promise<SubordinateInspectionResult>;
   inheritedContext(snapshot: AgentSnapshot): Promise<SerializedMessage[]>;
   admitted(snapshot: AgentSnapshot, id: string): Promise<boolean>;
-  interrupt(snapshot: AgentSnapshot): Promise<void>;
+  interrupt(snapshot: AgentSnapshot, turnId: string): Promise<void>;
   clear(snapshot: AgentSnapshot): Promise<void>;
-  recover(snapshot: AgentSnapshot, answered: readonly string[]): Promise<AgentRecovery>;
+  recover(snapshot: AgentSnapshot): Promise<AgentRecovery>;
+  archivePage(snapshot: AgentSnapshot, cursor: ArchiveSqlCursor | null, maxBytes: number): Promise<ArchiveAgentPage>;
   deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean>;
 }
 
@@ -100,7 +101,6 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   async deliver(snapshot: AgentSnapshot, task: AgentTask): Promise<void> {
     const database = this.open(snapshot);
 
-    // Not awaited: the workspace holds no call open into this isolate.
     this.queue = queueAgentTask({ after: this.queue, database, workspace: this.env.WORKSPACE, providers: this.env, task });
   }
 
@@ -116,6 +116,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await this.open(snapshot).historyPage(page);
   }
 
+  async archivePage(snapshot: AgentSnapshot, cursor: ArchiveSqlCursor | null, maxBytes: number): Promise<ArchiveAgentPage> {
+    return readAgentArchivePage(this.ctx.storage.sql, this.open(snapshot).reference().actorId, cursor, maxBytes);
+  }
+
   async inspect(snapshot: AgentSnapshot, request: AgentOwnInspection): Promise<SubordinateInspectionResult> {
     return await this.open(snapshot).inspect(request);
   }
@@ -128,16 +132,16 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return this.open(snapshot).admitted(id);
   }
 
-  async interrupt(snapshot: AgentSnapshot): Promise<void> {
-    await this.open(snapshot).interrupt();
+  async interrupt(snapshot: AgentSnapshot, turnId: string): Promise<void> {
+    this.open(snapshot).interrupt(turnId);
   }
 
   async clear(snapshot: AgentSnapshot): Promise<void> {
     await this.open(snapshot).clear();
   }
 
-  async recover(snapshot: AgentSnapshot, answered: readonly string[]): Promise<AgentRecovery> {
-    return await this.open(snapshot).recover(new Set(answered));
+  async recover(snapshot: AgentSnapshot): Promise<AgentRecovery> {
+    return await this.open(snapshot).recover();
   }
 
   async deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean> {

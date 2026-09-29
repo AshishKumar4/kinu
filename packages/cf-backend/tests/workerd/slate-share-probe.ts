@@ -372,3 +372,5 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 }
 
 export default class SlateShareProbeWorker extends WorkerEntrypoint<Cloudflare.Env> {}
+
+export { CodemodeLauncher } from '../../src/codemode-sandbox';

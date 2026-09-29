@@ -1,8 +1,7 @@
 /**
- * The `eval` sandbox under workerd: DynamicWorkerExecutor over `env.LOADER` with `kinu-node.js` and the `tools` prelude.
+ * The `eval` sandbox under workerd: DynamicWorkerExecutor launched by `CodemodeLauncher`, with `kinu-node.js` and the `tools` prelude.
  * The loader, child isolate, `nodejs_compat` builtins and sandbox RPC hop are platform, so `bun test` cannot host this.
  */
-import { env } from 'cloudflare:test';
 import { describe, expect, test } from 'vitest';
 import * as v from 'valibot';
 import { admitCraftedSource, decodeJsonValue, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, craftedFailureFunctions, nativeToolFunctions, WORKSPACE_ROOT, type ToolOutcome, type JsonValue } from '@kinu.run/core';
@@ -10,8 +9,7 @@ import { KinuError } from '@kinu.run/core/obs';
 import { createCodeTool } from '@cloudflare/codemode/ai';
 import { generateText, stepCountIs, tool, jsonSchema } from 'ai';
 import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
-import { KinuSandboxExecutor, renderToolsPrelude } from '../../src/codemode-sandbox';
-import { codemodeEgress } from '../../src/codemode-egress';
+import { KinuSandboxExecutor, codemodeLauncher, renderToolsPrelude } from '../../src/codemode-sandbox';
 
 const files = new Map<string, string>([[`${WORKSPACE_ROOT}/notes.md`, 'hello from the workspace']]);
 
@@ -76,7 +74,7 @@ const stateProvider = {
 };
 
 describe('the eval sandbox under workerd', () => {
-  const executor = new KinuSandboxExecutor({ loader: env.LOADER, egress: null });
+  const executor = new KinuSandboxExecutor({ launch: codemodeLauncher({ kinuNode: true, egress: null }) });
 
   test('hosted codemode distinguishes returned data, handled refusal, and unhandled failure', async () => {
     const outcomes: ToolOutcome[] = [];
@@ -276,9 +274,7 @@ describe('the eval sandbox under workerd', () => {
     expect(String(offline.result)).toContain('threw: ');
 
     // The loopback stub `enable_ctx_exports` mints for the exported class.
-    const egress = codemodeEgress({ workspace: null, actor: null });
-    expect(egress).not.toBeNull();
-    const online = new KinuSandboxExecutor({ loader: env.LOADER, egress });
+    const online = new KinuSandboxExecutor({ launch: codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null } }) });
     const result = await online.execute(program, [toolsProvider([]), stateProvider, workspace]);
     // `.invalid` resolves for nobody: the network's own failure comes back via the marked 502, not a sandbox refusal.
     expect(String(offline.result)).toContain('not permitted to access the internet');
@@ -288,9 +284,7 @@ describe('the eval sandbox under workerd', () => {
 
   test('a program cannot reach cloud metadata, and is told why', async () => {
     // Refused by the shared classifier before any DNS lookup or socket, as shell and `web.fetch` refuse it.
-    const egress = codemodeEgress({ workspace: null, actor: null });
-    expect(egress).not.toBeNull();
-    const online = new KinuSandboxExecutor({ loader: env.LOADER, egress });
+    const online = new KinuSandboxExecutor({ launch: codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null } }) });
     const program = "// probe the metadata service\ntry { await fetch('http://169.254.169.254/latest/meta-data/'); return 'reached'; } catch (e) { return 'threw: ' + e.message; }";
 
     const result = await online.execute(program, [toolsProvider([]), stateProvider, workspace]);

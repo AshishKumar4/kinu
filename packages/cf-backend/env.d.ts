@@ -6,6 +6,7 @@ import type { MonitorDO } from "./src/monitor/monitor-do";
 import type { ControlPlaneDO } from "./src/control-plane/control-plane-do";
 import type { DeployRunDO } from "./src/deploy/deploy-do";
 import type { CodemodeEgress } from "./src/codemode-egress";
+import type { CodemodeLauncher } from "./src/codemode-sandbox";
 import type { AgentWorkspaceRPC } from "./src/agent-facets";
 import type { CodexEgress } from "./src/egress/codex-egress";
 import type { SlateBinding } from "./src/slates/bindings";
@@ -140,6 +141,7 @@ declare global {
       mainModule: {
         AgentWorkspaceRPC: typeof AgentWorkspaceRPC;
         CodemodeEgress: typeof CodemodeEgress;
+        CodemodeLauncher: typeof CodemodeLauncher;
         SlateBinding: typeof SlateBinding;
         default: ExportedHandler<Env>;
       };

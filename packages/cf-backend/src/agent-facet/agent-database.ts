@@ -54,6 +54,8 @@ export class AgentDatabase {
 
   private host: ActorHost | undefined;
 
+  private readonly stops = new Map<string, AbortController>();
+
   private lines: AgentActivity[] = [];
 
   takeActivity(): AgentActivity[] {
@@ -270,9 +272,8 @@ export class AgentDatabase {
     this.storage.transactionSync(() => rows.appendUser(prepared));
   }
 
-  async recover(answered: ReadonlySet<string>): Promise<AgentRecovery> {
+  async recover(): Promise<AgentRecovery> {
     const host = this.actorHost();
-    const epochs = new Map(host.resumable().map((turn) => [turn.claim.turnId, turn.claim.epoch]));
 
     const recovered = await recoverActorTurns({
       installedBuild: host.installedBuild,
@@ -285,21 +286,11 @@ export class AgentDatabase {
       },
     });
 
-    const owed: string[] = [];
-    const claims = host.bindStores(this.reference()).stores.claims;
-
-    for (const turnId of recovered.verified) {
-      const epoch = epochs.get(turnId);
-
-      if (answered.has(turnId) && epoch !== undefined) claims.settleRecovered(turnId, epoch, 'completed');
-      else owed.push(turnId);
-    }
-
     return {
-      owed,
       stalled: recovered.stalled.map((turn) => ({ turnId: turn.claim.turnId, runs: turn.claim.epoch, workMode: turn.claim.workMode })),
     };
   }
+
 
   async answer(completion: NonNullable<HeadReport['canonicalCompletion']>, metadata: JsonObject | null): Promise<void> {
     const transcript = this.transcript();
@@ -322,8 +313,19 @@ export class AgentDatabase {
     return this.readable().transcript.has(id);
   }
 
-  interrupt(): void {
-    this.actorHost().hosted(this.reference())?.session.interrupt();
+  interrupt(turnId: string): void {
+    this.stop(turnId).abort();
+  }
+
+  stop(turnId: string): AbortController {
+    const existing = this.stops.get(turnId);
+
+    if (existing !== undefined) return existing;
+    const created = new AbortController();
+
+    this.stops.set(turnId, created);
+
+    return created;
   }
 
   clear(): void {

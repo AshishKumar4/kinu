@@ -550,8 +550,8 @@ settles the report the hirer is owed. No call into the isolate is held open:
 `deliver` returns once the turn is queued there, and `finishTurn` answers
 back. `agent_open_turns` is the workspace's only record of a turn handed out
 and not heard end; an activation after a reset asks each agent it names to
-recover its own claims (answered turns settle, owed ones are queued again,
-stalled ones retire). The browser's socket stays in the workspace object; an
+recover its own claims (stalled turns retire; the rest re-pend because their
+rows stay leased until the turn ends). The browser's socket stays in the workspace object; an
 agent's stream reaches it as short `observe` calls. Main's turns stay in the
 workspace object.
 Measured 2026-09-28 on a throwaway Worker loading the shipped agent bundle
@@ -561,6 +561,21 @@ p90), its first chat read 41-44 ms p50 (the schema laid and the roster rows
 copied), a warm chat read 23-25 ms p50 from the workspace object. Idle heap
 with its stores open: 115 MB held on top of it lived, 118 MB reset only that
 isolate, so about 10-13 MB of its own 128.
+A failing agent does not break the workspace (2026-09-28, throwaway
+Worker, deleted). The SDK's docs say a broken facet breaks the whole actor.
+That did not hold for loader facets. A throw in a call, an uncaught error, a
+200 MB allocation and a 44 s CPU loop in one facet each touched only that
+facet: the throw and the CPU limit rejected the parent's call, and the
+allocation and the loop reset the facet's isolate. The parent kept its
+isolate, its hibernated socket and its alarm, and a sibling facet kept its
+isolate. Every agent facet is a direct child of the workspace object, so the
+tree is two levels deep.
+No request waits for a turn's end (2026-09-28): the delegation lane
+returns once the turn is delivered, and the turn's end, the agent's next
+queued turn and the lane's bookkeeping run in the request that carries the
+agent's `finishTurn`. A lane that awaited the end was cancelled by workerd as
+hung in 3 of 6 flake-gate runs of hire.test: a request waiting on a promise
+only another request settles has no I/O of its own.
 
 
 ## Deploy ladder

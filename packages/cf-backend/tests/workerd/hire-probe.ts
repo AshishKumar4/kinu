@@ -7,12 +7,12 @@
 import { Agent, getAgentByName, type AgentContext } from 'agents';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import * as v from 'valibot';
-import { actorReferenceOf, isSubordinateOrigin, ownerCaller } from '@kinu.run/core';
+import { actorReferenceOf, isSubordinateOrigin, ownerCaller, type ArchiveCursor } from '@kinu.run/core';
 import { diagnostics } from '@kinu.run/core/obs';
 import { sealRpcSurface, ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import type { UserDO } from '../../src/user/user-do';
-import { HIRE_CHILD_MODEL, REPORT_MARK, type ActorRow, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
+import { HIRE_CHILD_MODEL, REPORT_MARK, type ActorRow, type ArchiveSections, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
 
 export { UserDO } from '../../src/user/user-do';
 
@@ -21,6 +21,10 @@ export { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
 export { AgentWorkspaceRPC } from '../../src/agent-facets';
 
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
+
+const ArchiveLineSchema = v.looseObject({
+  t: v.string(), agents: v.optional(v.array(v.string())), actor: v.optional(v.string()), rows: v.optional(v.number()),
+});
 
 const ChatTextSchema = v.object({
   role: v.string(),
@@ -36,14 +40,11 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
     // `ActorAgent`'s constructor already sealed the surface with non-enumerable shadows over these reads;
     // deleting the shadow lets the wider seal below expose the prototype method.
-    for (const name of ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled']) {
-      Reflect.deleteProperty(this, name);
-    }
+    const reads = ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled', 'archiveSections'];
 
-    sealRpcSurface(this, [
-      ...ORCHESTRATOR_RPC_SURFACE,
-      'rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled',
-    ]);
+    for (const name of reads) Reflect.deleteProperty(this, name);
+
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, ...reads]);
   }
 
   /** Read, not assumed: child counts are "not this id", and a guessed literal would count the root's rows. */
@@ -129,6 +130,28 @@ export class HireOrchestrator extends ProductionOrchestrator {
     return counts;
   }
 
+  async archiveSections(): Promise<ArchiveSections> {
+    const listed: string[] = [];
+    const sections: Record<string, number> = {};
+    let cursor: ArchiveCursor | undefined;
+
+    do {
+      const page = await this.exportWorkspaceArchive(cursor);
+
+      for (const line of page.lines) {
+        const record = v.parse(ArchiveLineSchema, JSON.parse(line));
+
+        if (record.t === 'header') listed.push(...record.agents ?? []);
+
+        if (record.t === 'agent' && record.actor !== undefined && record.rows !== undefined) sections[record.actor] = record.rows;
+      }
+
+      cursor = page.next ?? undefined;
+    } while (cursor !== undefined);
+
+    return { listed, sections };
+  }
+
   /** The agent's chat as its pane reads it: the brief, and the answer its turn recorded. */
   async childTranscript(name: string): Promise<string[]> {
     const rows = this.probeState.storage.sql.exec<{ actor_id: string }>('SELECT actor_id FROM workspace_actors WHERE name = ?', name).toArray();
@@ -182,6 +205,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
   /** Every delegated turn ended and every task agent its answer retired: a hirer no longer waits on either. */
   async settled(): Promise<void> {
+    await this.agentTurns.idle();
     await this.delegatedTurns.idle();
     await this.settleBackgroundTasks();
   }
@@ -236,7 +260,7 @@ interface HireRunOptions {
 /** A `Pick` intersection: the full stub type instantiates too deeply to compile. */
 type HireTarget = Pick<ProductionOrchestrator, 'claimOwner' | 'setModel' | 'setSoul' | 'runTaskFromMcp' | 'dismissSubordinate'>
   & Pick<HireOrchestrator,
-    'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript' | 'wakeReturned' | 'wakeWhileRunning' | 'stopHosted' | 'settled'>;
+    'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript' | 'wakeReturned' | 'wakeWhileRunning' | 'stopHosted' | 'settled' | 'archiveSections'>;
 
 /** `durableObjects` installs `HireOrchestrator` under the `OrchestratorAgent` name, so every stub carries the fixture reads. */
 interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
@@ -347,6 +371,10 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
     const target = await this.target(workspace);
 
     await target.driveOwedWork();
+  }
+
+  async archiveSections(workspace: string): Promise<ArchiveSections> {
+    return await (await this.target(workspace)).archiveSections();
   }
 
   async observe(workspace: string): Promise<HireObservation> {

@@ -11,7 +11,7 @@ import {
   WorkspaceActorDirectory,
   type ActorHandle, type AppDataStore, type CodemodeProvider, type SqlExec, type SqlExecutor, type SqlValue,
 } from '@kinu.run/core';
-import { KinuSandboxExecutor } from '../../src/codemode-sandbox';
+import { KinuSandboxExecutor, codemodeLauncher } from '../../src/codemode-sandbox';
 
 interface ProbeActors {
   readonly main: ActorHandle;
@@ -88,7 +88,7 @@ export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
     const tool = createCodeTool({
       description: 'probe',
       tools: [provider],
-      executor: new KinuSandboxExecutor({ loader: this.env.LOADER, egress: null }),
+      executor: new KinuSandboxExecutor({ launch: codemodeLauncher({ kinuNode: true, egress: null }) }),
     });
 
     const execute = tool.execute;
@@ -156,3 +156,5 @@ export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
     }
   }
 }
+
+export { CodemodeLauncher } from '../../src/codemode-sandbox';

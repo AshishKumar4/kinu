@@ -70,3 +70,8 @@ export interface HireObservation {
   readonly reports: readonly string[];
   readonly transcript: readonly string[];
 }
+
+export interface ArchiveSections {
+  readonly listed: readonly string[];
+  readonly sections: Readonly<Record<string, number>>;
+}

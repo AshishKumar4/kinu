@@ -61,7 +61,6 @@ import {
   type HostedActorSeams, type HostedTaskProfile, type HostedTaskTurn,
 } from "./hosted-actors";
 import { createCodemodeToolFactory } from "./codemode-tool";
-import { codemodeEgress } from "./codemode-egress";
 import type { ReportToolDeps } from "@kinu.run/core";
 import type { ToolSet } from "ai";
 import {
@@ -92,7 +91,7 @@ import {
   feedbackToQuality,
   forkWorkspace, ForkTargetWriter, ForkTransferReceiver,
   type ForkTransport, type ForkFrame,
-  readWorkspaceArchivePage, type ArchiveCursor, type ArchivePage,
+  readWorkspaceArchivePage, type ArchiveAgentSource, type ArchiveCursor, type ArchivePage,
   nanoid, type HeadRunView,
   // Delegation runner shared with the local host: an assignment is a whole turn input
   // and no reactor may digest it.
@@ -239,7 +238,7 @@ import {
 } from "@kinu.run/core";
 import type { CodemodeProvider, MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { Effect } from 'effect';
-import { attempt, authoredRefusal, classify, diagnostics, KinuError, refusalOf, renderThrownChain, settle, settleSync, toKinuError, type Refusal } from "@kinu.run/core/obs";
+import { attempt, authoredRefusal, classify, diagnostics, KinuError, refusalOf, renderCauseChain, renderThrownChain, settle, settleSync, toKinuError, type Refusal } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork } from "./user/workspace-fork";
@@ -276,7 +275,6 @@ const LeasedRowSchema = v.object({ id: v.string() });
  * Row budget per sweep activation: each item is a full inference turn. A full pass
  * answers truncated and the wake drains the rest on the next frame.
  */
-const HOSTED_DELEGATION_DRAIN_BUDGET = 8;
 
 /** Tombstone scope marking a turn's sleep-time update applied; survives pruning of
  *  its `sleep_time_updates` row. */
@@ -598,6 +596,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * A non-root agent with a home: only such an agent has a credential and an isolate of its own. A retired one
    * is still here: its conversation stays readable until it is destroyed.
    */
+  private liveActor(actorId: string): boolean {
+    const record = this.actorDirectoryStore().retained(actorId);
+
+    return record !== null && record.retiringAt === null && record.deletedAt === null;
+  }
+
   agentOf(actorId: string): WorkspaceActor & { readonly homeName: string; readonly shellId: string } {
     const record = this.actorHost().describe(actorId);
     const placement = record === null ? null : hostedActorPlacement(record);
@@ -687,13 +691,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private _agentTurns: AgentTurns | null = null;
 
-  private get agentTurns(): AgentTurns {
+  protected get agentTurns(): AgentTurns {
     this._agentTurns ??= new AgentTurns({
       seams: () => this.hostedSeams(),
       deliver: async (reference, task) => { await (await this.agentCalls(reference.actorId)).deliver(this.agentSnapshot(reference.actorId), task); },
-      interrupt: async (reference) => { await (await this.agentCalls(reference.actorId)).interrupt(this.agentSnapshot(reference.actorId)); },
+      interrupt: async (reference, turnId) => { await (await this.agentCalls(reference.actorId)).interrupt(this.agentSnapshot(reference.actorId), turnId); },
       dynamic: (actor, profile, tools) => this.hostedActorDynamicContext(actor, profile, tools),
       pricing: (spec) => this.modelCatalog.pricing(spec),
+      live: (actorId) => this.liveActor(actorId),
     });
 
     return this._agentTurns;
@@ -735,7 +740,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return this.agentTurns.finish(actorId, turnId, end);
       },
-      failTurn: async (turnId, failure) => { this.agentTurns.fail(actorId, turnId, failure); },
+      failTurn: (turnId, failure) => this.agentTurns.fail(actorId, turnId, failure),
       getAuthHeaders: async (key, opts) => {
         const { stub, caller } = await credentials();
 
@@ -958,7 +963,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ),
       codemodeTool: (runtime, webSearch) => {
         const factory = createCodemodeToolFactory({
-          loader: this.env.LOADER, egress: codemodeEgress({ workspace: this.workspaceName(), actor: runtime.actor.actorId }), rt: runtime,
+          launch: this.codemodeLaunch(runtime.actor.actorId), rt: runtime,
           sql: this.boundSql, workspace: this.workspaceName(), webSearch, browserSessions: this.browserSessionsFor(runtime.actor.actorId),
         });
 
@@ -995,7 +1000,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const webSearch = this.ownedModelServices.getWebSearchProvider();
 
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress({ workspace: this.workspaceName(), actor: turn.runtime.actor.actorId }), rt: turn.runtime,
+      launch: this.codemodeLaunch(turn.runtime.actor.actorId), rt: turn.runtime,
       sql: this.boundSql, workspace: this.workspaceName(), webSearch, browserSessions: this.browserSessionsFor(turn.runtime.actor.actorId),
       // A thunk, so it reads the `report` deps declared below rather than a construction-time copy.
       extraProviders: () => [createReportCodemodeProvider(() => report)],
@@ -1497,6 +1502,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private async drainActorAssignments(record: WorkspaceActor): Promise<boolean> {
+    // One turn at a time; a Stop dismisses input still pending.
+    if (this.agentTurns.inFlight(record.actorId)) return false;
+
     const reference: ActorReference = {
       actorId: record.actorId, workspaceId: record.workspaceId, parentActorId: record.parentActorId,
     };
@@ -1505,55 +1513,52 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const log = new EventLog(this.boundExec(), this.actorHost().bindStores(reference).handle);
 
     const swept = await drainAssignments(log, {
-      now: Date.now(), budget: HOSTED_DELEGATION_DRAIN_BUDGET, staleMs: STALE_EVENT_DELIVERY_MS,
-      run: async (task) => {
+      now: Date.now(), budget: 1, staleMs: STALE_EVENT_DELIVERY_MS,
+      // Registered before any await: a Stop that arrives while the turn opens still reaches it.
+      run: (task) => {
         const room = this.chatRooms.hostedRoom(record.actorId);
-        const answerId = crypto.randomUUID();
-        const facet = await this.agentCalls(record.actorId);
-
-        // A hirer's delivery opens the chat as an event naming the hirer; a chat send wrote its own row.
-        if (task.messageId === undefined) {
-          await facet.openTurn(this.agentSnapshot(record.actorId), {
-            id: task.sequenceId, message: turnInputMessage({ text: task.body }),
-            metadata: delegatedTaskMetadata(this.hirerName(record), task.mode),
-          });
-        }
-
-        // Every delivery has its opening row now, so open panes are sent the transcript holding it.
-        await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: answerId, userTurn: true, carried: [] });
-
-        let closed = false;
-
-        const close = async (): Promise<void> => {
-          if (closed) return;
-          closed = true;
-          await room?.closeTurn();
-        };
-
         const openTurns = new AgentOpenTurns(this.boundSql);
         const opened = { actorId: record.actorId, turnId: task.sequenceId };
 
         openTurns.open(opened, Date.now());
 
-        try {
-          await this.agentTurns.run(reference, task, { sequenceId: task.sequenceId, body: task.body, mode: task.mode }, async (end) => {
+        return this.agentTurns.start(reference, task, { sequenceId: task.sequenceId, body: task.body, mode: task.mode }, {
+          begin: async () => {
+            // A hirer's delivery opens the chat as an event naming the hirer; a chat send wrote its own row.
+            if (task.messageId === undefined) {
+              await (await this.agentCalls(record.actorId)).openTurn(this.agentSnapshot(record.actorId), {
+                id: task.sequenceId, message: turnInputMessage({ text: task.body }),
+                metadata: delegatedTaskMetadata(this.hirerName(record), task.mode),
+              });
+            }
+
+            await room?.openTurn({ turnId: task.messageId ?? task.sequenceId, messageId: crypto.randomUUID(), userTurn: true, carried: [] });
+          },
+          ended: async (end) => {
             if (hostedTaskEnding(end) === 'errored') await room?.deliver({ type: 'error', message: end.errorMessage ?? end.summary });
 
-            await close();
-          });
-        } catch (cause) {
-          if (!closed) await room?.deliver({ type: 'error', message: renderThrownChain({ cause }) });
-          throw cause;
-        } finally {
-          openTurns.close(opened);
-          await close();
+            await room?.closeTurn();
+          },
+          failed: async (failure) => {
+            await room?.deliver({ type: 'error', message: renderCauseChain(failure) });
+            await room?.closeTurn();
+            diagnostics.failure('subordinate.delegated_turn_failed', failure, { workspace: this.name, actor: record.name });
+          },
+          after: async () => {
+            openTurns.close(opened);
 
-          // Released first: a drain armed on this session would fire against the release and keep its transcript
-          // until then. Mid-turn reports, a reset's re-run too, go to the durable wake, which reopens the agent.
-          this.releaseIdleHosted(reference);
+            if (!this.liveActor(record.actorId)) return;
+            log.markTurnCompleted(task.turnId);
 
-          if (!this.settledTaskAgent(record)) this.hostedSeams().scheduleDrain(this.actorHost().bindStores(reference));
-        }
+            // Released first: a drain armed on this session would fire against the release and keep its transcript
+            // until then. Mid-turn reports, a reset's re-run too, go to the durable wake, which reopens the agent.
+            this.releaseIdleHosted(reference);
+
+            if (!this.settledTaskAgent(record)) this.hostedSeams().scheduleDrain(this.actorHost().bindStores(reference));
+
+            this.delegatedTurns.start([record]);
+          },
+        });
       },
       onFailure: ({ cause }) => {
         diagnostics.failure('subordinate.delegated_turn_failed', toKinuError({
@@ -1605,7 +1610,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /**
    * The turns an earlier activation handed to agents' own isolates and never heard end. Each such agent recovers
-   * its own claims; its answered turns settle there, its owed turns go back to the queue, its stalled turns retire.
+   * its own claims and its stalled turns retire; the rest re-pend by their leases.
    */
   recoverAgentTurns(): Promise<void> {
     const open = new AgentOpenTurns(this.boundSql);
@@ -1620,14 +1625,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         if (record !== null && record.retiringAt === null && record.deletedAt === null) {
           const reference = actorReferenceOf(record);
-          const log = new EventLog(this.boundExec(), this.actorHost().bindStores(reference).handle);
-          const answered = turns.map((turn) => turn.turnId).filter((turnId) => log.isAnswered(turnId));
-          const recovered = await (await this.agentCalls(actorId)).recover(this.agentSnapshot(actorId), answered);
-
-          for (const turnId of recovered.owed) {
-            log.unbind(turnId);
-            diagnostics.event('subordinate.agent_turn_repended', { workspace: this.name, actor: record.name, assignment: turnId });
-          }
+          const recovered = await (await this.agentCalls(actorId)).recover(this.agentSnapshot(actorId));
 
           for (const turn of recovered.stalled) await retireStalledTask(this.hostedSeams(), await this.actorHost().acquire(reference), turn);
         }
@@ -2162,7 +2160,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       admitted: async (id) => await (await facet()).admitted(snapshot(), id),
       send: (input) => whenActorTakesInput(this.boundSql, actorId, () => sendNow(input)),
       interrupt: () => {
-        this.detachOwned(async () => { await (await facet()).interrupt(snapshot()); });
+        this.detachOwned(() => this.agentTurns.interrupt(actorId));
         this.stopSubtree(actorId);
       },
       clear: async () => { await (await facet()).clear(snapshot()); },
@@ -4173,7 +4171,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       source: 'cloud',
       cursor: parseArchiveCursor(cursor),
       files: workspaceArchiveFiles(workspace),
+      agents: this.agentArchiveSource(),
     });
+  }
+
+  private agentArchiveSource(): ArchiveAgentSource {
+    const agents = this.actorDirectoryStore().list({ retired: true })
+      .filter((record) => hostedActorPlacement(record).homeName !== null)
+      .map((record) => record.actorId);
+
+    return {
+      list: () => agents,
+      page: async (actorId, cursor, maxBytes) => await (await this.agentCalls(actorId)).archivePage(this.agentSnapshot(actorId), cursor, maxBytes),
+    };
   }
 
   /**
@@ -4204,6 +4214,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // once its storage is gone nothing knows which R2 objects were its.
       await sb.discardState();
       await sb.destroy();
+    }
+
+    // deleteAll misses facet storage.
+    if (this.storageRefusal === undefined && this.ctx.storage.sql.exec('SELECT 1 FROM workspace_identity').toArray().length > 0) {
+      for (const record of this.actorDirectoryStore().list({ retired: true })) {
+        if (hostedActorPlacement(record).homeName !== null) this.dropAgentFacet(record.storageKey);
+      }
     }
 
     // agents base: drops SDK tables, deleteAlarm, deleteAll (takes the filesystem), aborts the isolate.

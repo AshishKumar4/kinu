@@ -118,6 +118,7 @@ async function runTurn(
     appTitle: 'Kinu',
   });
 
+  const stop = database.stop(task.sequenceId).signal;
   const capture = new HeadCapture();
   const runId = crypto.randomUUID();
 
@@ -136,7 +137,8 @@ async function runTurn(
     framing: { system: prepared.framing.system, messages: prepared.framing.messages },
     capture,
     workspaceLayout: 'shared-workspace',
-    isAborted: () => false,
+    isAborted: () => stop.aborted,
+    signal: stop,
     profile: async ({ availableTools, workMode }) => {
       const resolved = await workspace.profile(task.sequenceId, availableTools, workMode);
 

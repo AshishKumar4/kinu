@@ -1,6 +1,6 @@
 /** The workspace half of an agent-isolate turn (D9). */
 import { asSchema, type ToolSet } from 'ai';
-import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
+import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { ActorReference, DynamicContext, HostedActor, ModelPricing, ResolvedTurnProfile, WorkMode } from '@kinu.run/core';
 import {
@@ -12,21 +12,29 @@ import type { AgentReview, AgentTask, AgentToolAnswer, AgentToolCall, AgentToolD
 export interface AgentTurnsDeps {
   seams(): HostedActorSeams;
   deliver(reference: ActorReference, task: AgentTask): Promise<void>;
-  interrupt(reference: ActorReference): Promise<void>;
+  interrupt(reference: ActorReference, turnId: string): Promise<void>;
   dynamic(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext;
   pricing(spec: string): ModelPricing | null;
+  live(actorId: string): boolean;
+}
+
+/** Each hook runs in the request that reaches it; none is awaited from another request (D9). */
+export interface AgentTurnHooks {
+  begin(): Promise<void>;
+  ended(end: AgentTurnEnd): Promise<void>;
+  failed(failure: KinuError): Promise<void>;
+  after(): Promise<void>;
 }
 
 interface PendingTurn {
   readonly reference: ActorReference;
   readonly request: HostedTaskRequest;
-  readonly ended: (end: AgentTurnEnd) => Promise<void>;
+  readonly task: AgentTask;
+  readonly hooks: AgentTurnHooks;
   prepared: PreparedHostedTask | null;
   profile?: ResolvedTurnProfile;
   over: boolean;
-  readonly settled: Promise<AgentTurnEnd>;
-  readonly resolve: (end: AgentTurnEnd) => void;
-  readonly reject: (cause: KinuError) => void;
+  readonly done: ReturnType<typeof Promise.withResolvers<void>>;
 }
 
 async function describe(tools: ToolSet): Promise<AgentToolDescriptor[]> {
@@ -42,21 +50,39 @@ export class AgentTurns {
 
   constructor(private readonly deps: AgentTurnsDeps) {}
 
-  async run(
-    reference: ActorReference, request: HostedTaskRequest, task: AgentTask, ended: (end: AgentTurnEnd) => Promise<void>,
-  ): Promise<AgentTurnEnd> {
-    const { promise, resolve, reject } = Promise.withResolvers<AgentTurnEnd>();
-    const pending: PendingTurn = { reference, request, ended, prepared: null, over: false, settled: promise, resolve, reject };
+  start(reference: ActorReference, request: HostedTaskRequest, task: AgentTask, hooks: AgentTurnHooks): Promise<void> {
+    const pending: PendingTurn = { reference, request, task, hooks, prepared: null, over: false, done: Promise.withResolvers<void>() };
 
     this.pending.set(request.sequenceId, pending);
 
-    try {
+    return settle(attempt({ doing: "handing a delegated turn to the agent's own isolate", otherwise: 'io' }, async () => {
+      await hooks.begin();
       await this.deps.deliver(reference, task);
+    }).pipe(Effect.catch((failure) => this.closing(pending, { failure }))));
+  }
 
-      return await pending.settled;
-    } finally {
-      this.pending.delete(request.sequenceId);
-    }
+  private closing(pending: PendingTurn, outcome: { readonly end: AgentTurnEnd } | { readonly failure: KinuError }): Effect.Effect<void> {
+    pending.over = true;
+
+    return attempt({ doing: 'settling a delegated turn the agent finished', otherwise: 'io' }, async () => {
+      if ('end' in outcome) {
+        await pending.hooks.ended(outcome.end);
+
+        if (!this.deps.live(pending.reference.actorId)) return;
+        await settleHostedTask(this.deps.seams(), this.prepared(pending), pending.request, outcome.end);
+      } else {
+        await pending.hooks.failed(outcome.failure);
+      }
+    }).pipe(
+      Effect.andThen(() => attempt({ doing: 'closing the books on a delegated turn', otherwise: 'io' }, () => pending.hooks.after())),
+      Effect.catch((failure) => Effect.sync(() => {
+        diagnostics.failure('subordinate.delegated_turn_settle_failed', failure, { actor: pending.reference.actorId });
+      })),
+      Effect.ensuring(Effect.sync(() => {
+        this.pending.delete(pending.request.sequenceId);
+        pending.done.resolve();
+      })),
+    );
   }
 
   private running(actorId: string): PendingTurn | null {
@@ -72,9 +98,18 @@ export class AgentTurns {
   }
 
   async settled(actorId: string): Promise<void> {
-    const open = [...this.pending.values()].filter((pending) => pending.reference.actorId === actorId);
+    await Promise.all([...this.pending.values()].filter((pending) => pending.reference.actorId === actorId)
+      .map((pending) => pending.done.promise));
+  }
 
-    await Promise.allSettled(open.map((pending) => pending.settled));
+  async idle(): Promise<void> {
+    while (this.pending.size > 0) await Promise.all([...this.pending.values()].map((pending) => pending.done.promise));
+  }
+
+  async interrupt(actorId: string): Promise<void> {
+    const pending = this.running(actorId);
+
+    if (pending !== null) await this.deps.interrupt(pending.reference, pending.request.sequenceId);
   }
 
   currentTurn(actorId: string): string | null {
@@ -86,13 +121,9 @@ export class AgentTurns {
 
     if (pending === null) return;
 
-    if (interrupt) {
-      await this.deps.interrupt(pending.reference);
+    if (interrupt) return await this.deps.interrupt(pending.reference, pending.request.sequenceId);
 
-      return;
-    }
-
-    await Promise.allSettled([pending.settled]);
+    return await settle(Effect.fail(new KinuError('denied', 'This actor holds a turn in flight; retire it once the turn settles.')));
   }
 
   turn(actorId: string, turnId: string): PendingTurn {
@@ -181,17 +212,10 @@ export class AgentTurns {
   }
 
   finish(actorId: string, turnId: string, end: AgentTurnEnd): Promise<void> {
-    const pending = this.turn(actorId, turnId);
-
-    pending.over = true;
-
-    return settle(attempt({ doing: 'settling a delegated turn the agent finished', otherwise: 'io' }, async () => {
-      await pending.ended(end);
-      await settleHostedTask(this.deps.seams(), this.prepared(pending), pending.request, end);
-    }).pipe(Effect.match({ onSuccess: () => { pending.resolve(end); }, onFailure: (failure) => { pending.reject(failure); } })));
+    return settle(this.closing(this.turn(actorId, turnId), { end }));
   }
 
-  fail(actorId: string, turnId: string, failure: string): void {
-    this.turn(actorId, turnId).reject(new KinuError('io', failure));
+  fail(actorId: string, turnId: string, failure: string): Promise<void> {
+    return settle(this.closing(this.turn(actorId, turnId), { failure: new KinuError('io', failure) }));
   }
 }

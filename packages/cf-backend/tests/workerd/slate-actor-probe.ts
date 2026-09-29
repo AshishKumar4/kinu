@@ -13,7 +13,8 @@ import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contr
 import { createCodemodeToolFactory } from '../../src/codemode-tool';
 import { bindAgentSql } from '../../src/runtime';
 import { bindActorHandle, createDefaultWebSearchProvider, initCodemodeStateTable, toolsInWorkMode, inWorkMode, narrowToolSurface, slateToolReach, type WorkMode } from '@kinu.run/core';
-import { CodemodeEgress as ProductionEgress, codemodeEgress } from '../../src/codemode-egress';
+import { CodemodeEgress as ProductionEgress } from '../../src/codemode-egress';
+import { codemodeLauncher } from '../../src/codemode-sandbox';
 import { SlateHost } from '../../src/slates/host';
 import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
 import type { BrowserSessions } from '@kinu.run/core';
@@ -50,7 +51,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     };
 
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress({ workspace: 'binding-probe', actor: 'binding-probe' }), sql, workspace: 'binding-probe',
+      launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: 'binding-probe', actor: 'binding-probe' } : null }), sql, workspace: 'binding-probe',
       webSearch: createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER_RUN }), reach: slateToolReach(narrowToolSurface(undefined)),
       browserSessions: NO_BROWSERS,
       rt: {
@@ -110,7 +111,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     initCodemodeStateTable((statement) => { this.ctx.storage.sql.exec(statement); });
 
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress({ workspace: 'mode-probe', actor: 'mode-probe' }), sql, workspace: 'mode-probe',
+      launch: (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace: 'mode-probe', actor: 'mode-probe' } : null }), sql, workspace: 'mode-probe',
       webSearch: createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER_RUN }),
       browserSessions: NO_BROWSERS,
       rt: {
@@ -143,3 +144,5 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     return { answer: JSON.stringify(answer ?? null), file: files.readFileString('/home/main/plan-data.txt') };
   }
 }
+
+export { CodemodeLauncher } from '../../src/codemode-sandbox';

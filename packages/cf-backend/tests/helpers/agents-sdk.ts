@@ -1,4 +1,5 @@
 import * as workersModule from 'cloudflare:workers';
+import type { CodemodeLauncher, CodemodeLauncherProps } from '../../src/codemode-sandbox';
 import { mock } from 'bun:test';
 import * as v from 'valibot';
 import type { AgentContext, Connection, ConnectionContext, FiberRecoveryContext, WSMessage } from 'agents';
@@ -109,6 +110,14 @@ export async function joinHarnessKeepAlives(agent: workersModule.DurableObject):
   const open = harnessKeepAlives.get(agent);
 
   while (open !== undefined && open.size > 0) await Promise.allSettled(open);
+}
+
+export function holdHarnessFiber(body: Promise<unknown>): void {
+  harnessFiberBodies.add(body);
+
+  const release = (): void => { harnessFiberBodies.delete(body); };
+
+  body.then(release, release);
 }
 
 /** Resolves when every `runFiber` body started so far has settled. */
@@ -580,6 +589,19 @@ export function mockAgentsSdk(): void {
   // Recording at `tracing.enterSpan` keeps everything above it production code.
   registerSynchronousMock('cloudflare:workers', () => ({
     ...workersModule,
+    // The shipped launcher over the in-process loader.
+    exports: {
+      ...workersModule.exports,
+      CodemodeLauncher: ({ props }: { props: CodemodeLauncherProps }) => ({
+        run: async (...args: Parameters<CodemodeLauncher['run']>) => {
+          const { CodemodeLauncher: Launcher } = await import('../../src/codemode-sandbox');
+          const { inProcessWorkerLoader } = await import('./worker-loader');
+          const { workerContext } = await import('./bindings');
+
+          return await new Launcher({ ...workerContext(), props }, { LOADER: Object.create(inProcessWorkerLoader()) }).run(...args);
+        },
+      }),
+    },
     tracing: {
       enterSpan: <T>(name: string, fn: (span: NativeSpanStub) => T): T => {
         const { attributes, exceptions, close, setAttributes } = openNativeSpan(name);

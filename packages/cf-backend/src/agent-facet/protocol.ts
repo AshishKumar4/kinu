@@ -89,6 +89,5 @@ export interface AgentTurnEnd {
 }
 
 export interface AgentRecovery {
-  readonly owed: readonly string[];
   readonly stalled: readonly { readonly turnId: string; readonly runs: number; readonly workMode: WorkMode }[];
 }

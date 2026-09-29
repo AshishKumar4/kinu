@@ -49,7 +49,7 @@ import {
   type SleepTimeUpdate,
   type EgressSecretBinding,
 } from '@kinu.run/core';
-import { HARNESS_AGENT, harnessFibersRunning, harnessHolds, joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
+import { HARNESS_AGENT, harnessFibersRunning, harnessHolds, holdHarnessFiber, joinHarnessFibers, mockAgentsSdk, seedOrphanFiberRow } from './agents-sdk';
 import { fleetPlaneForTest, fleetPointWritten, openAnalyticsWindowForTest, type FleetPoint } from './analytics-plane';
 import { inProcessWorkerLoader } from './worker-loader';
 import { agentDatabase, inProcessAgentFacets } from './agent-facets';
@@ -83,7 +83,15 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   private readonly harnessAgentFacets = inProcessAgentFacets(makeCtx);
 
   protected override async agentCalls(actorId: string): Promise<AgentFacetCalls> {
-    return await this.harnessAgentFacets.open(this.agentPlacement(actorId), await this.agentWorkspace(actorId));
+    const facet = await this.harnessAgentFacets.open(this.agentPlacement(actorId), await this.agentWorkspace(actorId));
+
+    // The turn runs on after the call; `joinHarnessFibers` waits for its end.
+    return Object.assign(Object.create(facet), {
+      deliver: async (...args: Parameters<AgentFacetCalls['deliver']>) => {
+        await facet.deliver(...args);
+        holdHarnessFiber(this.agentTurnSettled(actorReferenceOf(this.agentOf(actorId))));
+      },
+    });
   }
 
   /** Work the object detached, run to its end: a task agent's retirement follows its answer this way. */

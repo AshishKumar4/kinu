@@ -115,9 +115,9 @@ export {
 // Workspace archive: one backup format for both backends.
 export {
   WORKSPACE_ARCHIVE_EXTENSION,
-  archiveSqlFromDatabase, readWorkspaceArchivePage, restoreWorkspaceArchive, writeWorkspaceArchive,
+  archiveSqlFromDatabase, readAgentArchivePage, readWorkspaceArchivePage, type ArchiveAgentSource, restoreWorkspaceArchive, writeWorkspaceArchive,
   ArchiveCursorSchema,
-  type ArchiveCursor, type ArchiveSqlCursor, type ArchiveFilesCursor,
+  type ArchiveCursor, type ArchiveSqlCursor, type ArchiveAgentsCursor, type ArchiveFilesCursor, type ArchiveAgentPage,
   type ArchiveExportOptions, type ArchivePage,
   type ArchiveFileEntry, type ArchiveFileSource, type ArchiveFileTarget,
   type ArchiveRestoreOptions, type ArchiveRestoreResult,
