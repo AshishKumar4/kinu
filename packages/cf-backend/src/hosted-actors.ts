@@ -343,7 +343,7 @@ export function prepareHostedTask(
   }));
 }
 
-/** Only completion answers; abort is resumable; spent budget and throws are errors. */
+/** Only completion answers; abort resumes; the rest are errors. */
 const TASK_TURN_ENDING: Readonly<Record<HeadReport['status'], TaskTurnEnding>> = {
   completed: 'answered',
   aborted: 'interrupted',

@@ -347,7 +347,7 @@ theorem unmeasurable_does_not_discriminate :
   tell that this is the right statement rather than a weakening — the theorem is true
   OF THE PROPERTY without being harder to prove. -/
 
-/-- The six sealed publication surfaces. A write is a publication when it makes a
+/-- The five sealed publication surfaces. A write is a publication when it makes a
     candidate's artifact, or a value measured against the sealed objective,
     available to a run other than the one that produced it.
 
@@ -357,7 +357,7 @@ theorem unmeasurable_does_not_discriminate :
     enumeration is a specification violation. -/
 inductive Surface where
   /-- The leaderboard: `ExplorationRecord`, keyed by `objectiveId`. The narrowest
-      surface in the set: a seal over this one alone leaves the other five open. -/
+      surface in the set: a seal over this one alone leaves the other four open. -/
   | records
   /-- Cross-workspace, on the UserDO. The widest blast radius in the set, and the
       row the audit found. -/
@@ -450,9 +450,9 @@ structure RunState where
   pub : Publication
   /-- Whether the floor's guarantee is void for the rest of the run. -/
   floorSuspended : Bool
-  /-- **The whole publication egress**, surface and row. One field rather than six,
+  /-- **The whole publication egress**, surface and row. One field rather than five,
       because the theorem worth having is about the egress and not about any table:
-      a model that names one sink says nothing about the other five. -/
+      a model that names one sink says nothing about the other four. -/
   published : List (Surface × Row)
   /-- How many publications the seal refused. *The publication seal*'s disclosure
       obligation needs a COUNT, and a count nobody accumulates is a count nobody can

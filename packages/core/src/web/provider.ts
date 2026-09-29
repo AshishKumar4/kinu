@@ -474,6 +474,18 @@ export interface WebCodemodeDeps {
 
 const EngineSchema = v.optional(v.picklist(['kitesurf', 'chrome']));
 
+/** What the sandbox half of a browser member hands its host member when it fails (cf-backend `browser-prelude.ts`). */
+const SandboxRefusalSchema = v.object({ refused: v.string(), reason: v.picklist(['denied', 'unavailable']) });
+
+type SandboxRefusal = v.InferOutput<typeof SandboxRefusalSchema>;
+
+/** The first argument a browser member's host half received, as a sandbox refusal when it is one. */
+function sandboxRefusal(input: { readonly argument: unknown }): SandboxRefusal | undefined {
+  const parsed = v.safeParse(SandboxRefusalSchema, input.argument);
+
+  return parsed.success ? parsed.output : undefined;
+}
+
 const FetchOptionsSchema = v.object({ render: v.optional(v.boolean()), engine: EngineSchema });
 
 const ScreenshotOptionsSchema = v.object({ fullPage: v.optional(v.boolean()), engine: EngineSchema });
@@ -508,10 +520,17 @@ export function createWebCodemodeProvider(deps: WebCodemodeDeps): CodemodeProvid
     Effect.flatMap(sessions, (open) => attemptInItsWords('unavailable', () => run(open)))
   );
 
-  /** Where no prelude defines the member, a call reaches the host, which refuses it. */
-  const sandboxOnly = (member: string): Effect.Effect<never, KinuError> => Effect.fail(new KinuError('unsupported', deps.prelude !== undefined && 'missing' in deps.prelude
-    ? deps.prelude.missing
-    : `web.${member} runs only inside an eval program`));
+  /**
+   * Where no prelude defines the member, a call reaches the host, which refuses it. Where one does, its failure
+   * arrives here as a `SandboxRefusal`, so the program's census records it as it records a host member's.
+   */
+  const sandboxOnly = (member: string, refused: SandboxRefusal | undefined): Effect.Effect<never, KinuError> => {
+    if (refused !== undefined) return Effect.fail(new KinuError(refused.reason, `web.${member}: ${refused.refused}`));
+
+    return Effect.fail(new KinuError('unsupported', deps.prelude !== undefined && 'missing' in deps.prelude
+      ? deps.prelude.missing
+      : `web.${member} runs only inside an eval program`));
+  };
 
   const tools: CodemodeProvider['tools'] = {
     search: {
@@ -580,9 +599,9 @@ export function createWebCodemodeProvider(deps: WebCodemodeDeps): CodemodeProvid
       description: 'web.closeBrowser(id) -> null',
       execute: async (...args: unknown[]) => settle(Effect.as(withSessions((open) => open.close(codemodeText({ value: args[0], parameter: 'web.closeBrowser(id)' }))), null)),
     },
-    connectBrowser: { description: 'web.connectBrowser(id): puppeteer in the eval sandbox', execute: async () => settle(sandboxOnly('connectBrowser')) },
-    pageTools: { description: 'web.pageTools(page): WebMCP in the eval sandbox', execute: async () => settle(sandboxOnly('pageTools')) },
-    callPageTool: { description: 'web.callPageTool(page, name, input): WebMCP in the eval sandbox', execute: async () => settle(sandboxOnly('callPageTool')) },
+    connectBrowser: { description: 'web.connectBrowser(id): puppeteer in the eval sandbox', execute: async (...args: unknown[]) => settle(sandboxOnly('connectBrowser', sandboxRefusal({ argument: args[0] }))) },
+    pageTools: { description: 'web.pageTools(page): WebMCP in the eval sandbox', execute: async (...args: unknown[]) => settle(sandboxOnly('pageTools', sandboxRefusal({ argument: args[0] }))) },
+    callPageTool: { description: 'web.callPageTool(page, name, input): WebMCP in the eval sandbox', execute: async (...args: unknown[]) => settle(sandboxOnly('callPageTool', sandboxRefusal({ argument: args[0] }))) },
   };
 
   return deps.prelude !== undefined && 'source' in deps.prelude

@@ -50,7 +50,7 @@ export const RUN_MARK = 'KINU_RUN';
 /** What the hang detector and the leftover check cannot see, printed on a green tier. */
 export const DEADLINE_BLIND_SPOTS = [
   'HANG: a run that keeps writing and never ends is not killed; the bound is silence, not duration',
-  'LEFTOVERS: a process that rebuilt its environment without KINU_RUN (`env -i`, the device sandbox\'s allow-list) is not found',
+  'LEFTOVERS: a process that both rebuilt its environment without KINU_RUN (`env -i`, the device sandbox\'s allow-list) and started a session of its own is not found; one holding the output is cut off at the bound, not ended',
   'LEFTOVERS: outside Linux there is no /proc to read, so nothing is looked for',
 ] as const;
 
@@ -163,13 +163,27 @@ export async function endLeftovers(mark: string): Promise<string[]> {
  * lives, the parent is what names it.
  */
 export async function endChildren(parent: number): Promise<string[]> {
+  return await endWhere((fields) => Number(fields[1]) === parent);
+}
+
+/**
+ * End every live process of the session `leader` started; each as `<pid> <command>`. The run's own session holds
+ * what the environment check cannot see once its parent has gone: a child that dropped the mark (`env -i`).
+ */
+async function endSession(leader: number): Promise<string[]> {
+  return await endWhere((fields) => Number(fields[3]) === leader);
+}
+
+/** End every live process whose `/proc/<pid>/stat` fields after the command name (state, ppid, pgrp, session, …)
+ *  satisfy `matches`; each as `<pid> <command>`. */
+async function endWhere(matches: (fields: readonly string[]) => boolean): Promise<string[]> {
   const left: string[] = [];
 
   for (const name of tolerate(() => readdirSync('/proc'), 'enoent') ?? []) {
     const stat = /^\d+$/u.test(name) ? procFile(name, 'stat') : undefined;
-    const [state, ppid] = stat?.slice(stat.lastIndexOf(')') + 2).split(' ') ?? [];
+    const fields = stat?.slice(stat.lastIndexOf(')') + 2).split(' ') ?? [];
 
-    if (Number(ppid) === parent && state !== 'Z') left.push(await end(Number(name)));
+    if (fields[0] !== undefined && fields[0] !== 'Z' && matches(fields)) left.push(await end(Number(name)));
   }
 
   return left;
@@ -178,13 +192,18 @@ export async function endChildren(parent: number): Promise<string[]> {
 /** How often the watchdog asks how long the run has been silent. */
 const WATCH_MS = 250;
 
+/** Signals whose default ends this process; a run's session no longer hears the terminal, so each is passed on. */
+const PASSED_ON = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 } as const;
+
 /**
  * Run `argv` under the process-tree hang detector and report how it ended.
  *
  * The child's output is always piped, because output is how progress is seen: every chunk it writes restarts the
- * silence, and an inherited run has each chunk passed on to this process's own stream as it arrives. Asynchronous so
- * the watchdog is a timer beside a running child rather than a busy wait, and so the SIGKILL grace can run after the
- * SIGTERM.
+ * silence, and an inherited run has each chunk passed on to this process's own stream as it arrives. The child leads
+ * a session of its own, and the run is that session: a kill reaches its whole process group, and whatever of it is
+ * still alive after the child exits is a leftover, marked or not. The bound holds until the output pipes close, so a
+ * process that holds one open is ended by it too. Asynchronous so the watchdog is a timer beside a running child
+ * rather than a busy wait, and so the SIGKILL grace can run after the SIGTERM.
  */
 export async function runUnderDeadline(run: DeadlineRun): Promise<DeadlineOutcome> {
   const started = performance.now();
@@ -195,7 +214,23 @@ export async function runUnderDeadline(run: DeadlineRun): Promise<DeadlineOutcom
     cwd: run.cwd,
     stdout: 'pipe',
     stderr: 'pipe',
+    detached: true,
     env: { ...(run.env ?? process.env), [RUN_MARK]: mark },
+  });
+
+  const signalGroup = (signal: NodeJS.Signals): void => {
+    tolerate(() => process.kill(-child.pid, signal), 'esrch');
+  };
+
+  const passOn = Object.entries(PASSED_ON).map(([signal, code]) => {
+    const handler = (): void => {
+      signalGroup('SIGKILL');
+      process.exit(code);
+    };
+
+    process.once(signal, handler);
+
+    return () => process.off(signal, handler);
   });
 
   let lastOutput = started;
@@ -207,37 +242,59 @@ export async function runUnderDeadline(run: DeadlineRun): Promise<DeadlineOutcom
     lastOutput = now;
   };
 
-  const pump = async (stream: ReadableStream<Uint8Array>, onward: NodeJS.WriteStream): Promise<string> => {
+  const readers = [child.stdout.getReader(), child.stderr.getReader()] as const;
+
+  const pump = async (reader: ReadableStreamDefaultReader<Uint8Array>, onward: NodeJS.WriteStream): Promise<string> => {
     const decoder = new TextDecoder();
     let text = '';
 
-    for await (const chunk of stream) {
+    for (let read = await reader.read(); !read.done; read = await reader.read()) {
       heard();
 
-      if (stdio === 'inherit') onward.write(chunk);
-      else text += decoder.decode(chunk, { stream: true });
+      if (stdio === 'inherit') onward.write(read.value);
+      else text += decoder.decode(read.value, { stream: true });
     }
 
     return text + decoder.decode();
   };
 
-  const output = Promise.all([pump(child.stdout, process.stdout), pump(child.stderr, process.stderr)]);
+  const output = Promise.all([pump(readers[0], process.stdout), pump(readers[1], process.stderr)]);
   let killed = false;
+  // The leftover search waits out a process caught inside its exec, which is this runner's time, not the run's:
+  // the bound is not judged while it runs, and after it counts from its end.
+  let searching = false;
+  let searchedAt = 0;
+  // Resolved once the kill's grace has passed: a holder outside the group is then not waited for.
+  const graceOver = Promise.withResolvers<void>();
 
+  // Until the pipes close, not only until the child exits: a process holding one keeps the run open.
   const watchdog = setInterval(() => {
-    if (killed || performance.now() - lastOutput < run.seconds * 1000) return;
+    if (killed || searching || performance.now() - Math.max(lastOutput, searchedAt) < run.seconds * 1000) return;
     killed = true;
-    child.kill('SIGTERM');
-    setTimeout(() => { child.kill('SIGKILL'); }, KILL_AFTER_SECONDS * 1000).unref();
+    signalGroup('SIGTERM');
+    setTimeout(() => {
+      signalGroup('SIGKILL');
+      graceOver.resolve();
+    }, KILL_AFTER_SECONDS * 1000).unref();
   }, WATCH_MS);
 
   const exitCode = await child.exited;
-  clearInterval(watchdog);
-  longestSilence = Math.max(longestSilence, performance.now() - lastOutput);
-  // Before the pipes are drained: a leftover holding one would keep it open forever.
-  const leftovers = await endLeftovers(mark);
-  const seconds = (performance.now() - started) / 1000;
+  // Before the pipes are drained: a leftover holding one would keep it open forever. The session first: its
+  // members are known without reading an environment, and one that dropped the mark reads an empty one.
+  searching = true;
+  const found = [...await endSession(child.pid), ...await endLeftovers(mark)];
+  searching = false;
+  searchedAt = performance.now();
+  const leftovers = [...new Map(found.map((line) => [line.split(' ')[0], line])).values()];
+  const drained = await Promise.race([output.then(() => true), graceOver.promise.then(() => false)]);
+
+  if (!drained) await Promise.all(readers.map(async (reader) => { await reader.cancel(); }));
   const [stdout, stderr] = await output;
+  clearInterval(watchdog);
+
+  for (const release of passOn) release();
+  longestSilence = Math.max(longestSilence, performance.now() - lastOutput);
+  const seconds = (performance.now() - started) / 1000;
   const measured = { leftovers, seconds, longestSilence: longestSilence / 1000, stdout };
 
   if (killed) {

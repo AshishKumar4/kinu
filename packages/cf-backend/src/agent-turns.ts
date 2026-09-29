@@ -18,7 +18,6 @@ export interface AgentTurnsDeps {
   live(actorId: string): boolean;
 }
 
-/** Each hook runs in the request that reaches it; none is awaited from another request (D9). */
 export interface AgentTurnHooks {
   begin(): Promise<void>;
   ended(end: AgentTurnEnd): Promise<void>;

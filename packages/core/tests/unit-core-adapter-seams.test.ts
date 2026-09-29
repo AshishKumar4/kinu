@@ -277,6 +277,7 @@ function seamOrchestrator(opts?: { enabled?: boolean }) {
     recentAdvisorNotes: () => [],
     recordAdvisorNote: () => { throw new Error('This fixture runs no advisor'); },
     hasAdvisorNoteForTurn: () => false,
+    advisorNoteForTurn: () => null,
     sessionWindow: store,
     craftLedger: { names: () => [], observe: () => [] },
     reviewTurn: async (turn) => { recorded.push(turn); },

@@ -45,7 +45,7 @@ export function archiveSqlFromDatabase(db: AgentDatabase): SqlExec {
     exec(query, ...bindings) {
       // Canonical BLOBs are ArrayBuffers; bun:sqlite binds TypedArrays only.
       const bound = bindings.map((binding) => (binding instanceof ArrayBuffer ? new Uint8Array(binding) : binding));
-      const rows = db.prepare<NativeArchiveDatabaseRow>(query).all(...bound);
+      const rows = db.query<NativeArchiveDatabaseRow>(query).all(...bound);
 
       return {
         toArray: () => rows.map((row) => Object.fromEntries(
@@ -90,7 +90,6 @@ export interface ArchiveFilesCursor {
   files: number;
 }
 
-/** Inside one agent's section: `inner` walks that agent's own database. */
 export interface ArchiveAgentsCursor {
   phase: 'agents';
   actor: string;
@@ -165,13 +164,11 @@ export interface ArchiveExportOptions {
 /** One page of an agent's own rows: row records, then its section's close once `next` is null. */
 export interface ArchiveAgentPage {
   lines: string[];
-  /** Row records among `lines`. */
   rows: number;
   next: ArchiveSqlCursor | null;
 }
 
 export interface ArchiveAgentSource {
-  /** Pinned by the first page, in the header: each one listed must close its section. */
   list(): readonly string[];
   page(actorId: string, cursor: ArchiveSqlCursor | null, maxBytes: number): Promise<ArchiveAgentPage>;
 }
@@ -209,7 +206,6 @@ interface RowRecord {
   t: 'row';
   table: string;
   values: Record<string, EncodedSqlValue>;
-  /** Written from that agent's own database. */
   agent?: string;
 }
 
@@ -438,17 +434,13 @@ function cannotResume(why: string): Effect.Effect<never> {
   return Effect.die(new Error(`Cannot resume this export: ${why}.`));
 }
 
-/** Where a table walk stands; `rows` counts every row written so far. */
 interface TableWalk {
   index: number;
   after: number | string | null;
   rows: number;
 }
 
-/**
- * Rows of `dumpable` from `walk` on, until the page is full (the table and anchor it stopped at) or every table
- * is written (null). With `agent`, only that actor's rows, each marked as its section's.
- */
+/** Null once every table is written; with `agent`, only that actor's rows, marked as its section's. */
 function dumpRows(
   sql: SqlExec, dumpable: readonly SchemaObject[], walk: TableWalk,
   page: { readonly sink: PageSink; readonly maxBytes: number; readonly agent?: string },
@@ -542,10 +534,7 @@ function agentTables(sql: SqlExec): SchemaObject[] {
     && sql.exec(`PRAGMA table_info(${quoteIdent(o.name)})`).toArray().some((column) => v.parse(v.object({ name: v.string() }), column).name === 'actor_id'));
 }
 
-/**
- * One page of an agent's own database, for its section of the workspace's archive: its rows, then (once `next`
- * is null) the section's close. The one reader of an agent's own database for an export.
- */
+/** One page of an agent's section: its rows, then (once `next` is null) the section's close. */
 export function readAgentArchivePage(sql: SqlExec, actorId: string, cursor: ArchiveSqlCursor | null, maxBytes: number): Promise<ArchiveAgentPage> {
   return settle(Effect.gen(function* () {
     const live = agentTables(sql);
@@ -572,7 +561,6 @@ export function readAgentArchivePage(sql: SqlExec, actorId: string, cursor: Arch
 
 const SQL_RECORDS: ReadonlySet<ArchiveRecord['t']> = new Set(['schema', 'row', 'agent']);
 
-/** Inserts row records, and tallies each agent's against its section's close. */
 class ArchiveRowWriter {
   private insert: { table: string; columns: string[]; agent: boolean; statement: string } | null = null;
 
@@ -607,7 +595,6 @@ class ArchiveRowWriter {
     this.closed.set(record.actor, record.rows);
   }
 
-  /** Every agent the header lists has its whole section here. */
   requireSections(agents: readonly string[]): Effect.Effect<void> {
     const problem = agents.map((actor) => {
       const declared = this.closed.get(actor);
@@ -650,7 +637,6 @@ function emitHeader(sink: PageSink, schema: readonly SchemaObject[], opts: Archi
   }
 }
 
-/** The workspace's own rows, from the cursor on: the page's end if it filled, else null. */
 function sqlPhase(sql: SqlExec, live: readonly SchemaObject[], { sink, walk }: PageState, page: {
   readonly cursor: ArchiveSqlCursor | null; readonly maxBytes: number;
 }): Effect.Effect<ArchivePage | null> {
@@ -673,7 +659,6 @@ function sqlPhase(sql: SqlExec, live: readonly SchemaObject[], { sink, walk }: P
   });
 }
 
-/** Each agent's own section, from the cursor on: the page's end if it filled, else null. */
 function agentsPhase(source: ArchiveAgentSource, agents: readonly string[], { sink, walk }: PageState, page: {
   readonly cursor: ArchiveAgentsCursor | null; readonly maxBytes: number;
 }): Effect.Effect<ArchivePage | null> {
@@ -701,7 +686,6 @@ function agentsPhase(source: ArchiveAgentSource, agents: readonly string[], { si
   });
 }
 
-/** The workspace's files, from the cursor on: the page's end if it filled, else null. */
 function filesPhase(source: ArchiveFileSource, { sink, walk }: PageState, page: {
   readonly cursor: ArchiveFilesCursor | null; readonly maxBytes: number; readonly count: { files: number };
 }): Effect.Effect<ArchivePage | null> {

@@ -1,8 +1,4 @@
-/**
- * An actor's run-ledger sinks: each finished step and tool call is recorded against the actor's open run, read from
- * its claim ledger, so the recording survives an eviction. A hosted actor's host and an agent in its own isolate
- * (whose ledger is in its own database) build the same sinks.
- */
+/** An actor's run-ledger sinks, recorded against its open run as its claim ledger reads it. */
 import type { BoundActor } from '../state/actor-host';
 import type { RunEventInput } from '../events/types';
 import { diagnostics } from '../obs/log';
@@ -11,10 +7,7 @@ import { settleSync } from '../obs/effect';
 import { Effect } from 'effect';
 import type { TurnSinks } from './turn-accumulator';
 
-/**
- * The actor's newest unsettled claim, read from the ledger so it survives eviction.
- * No active run drops the event: a row keyed on '' would join to every actor.
- */
+/** No active run drops the event: a row keyed on '' joins every actor. */
 function activeRunOf(stores: BoundActor['stores']): string | null {
   return stores.claims.unsettled(1)[0]?.runId ?? null;
 }
@@ -31,7 +24,6 @@ export function runEventSinks(
   bound: Pick<BoundActor, 'stores' | 'handle'>,
   logActivity: (event: string, detail?: string) => void,
 ): TurnSinks {
-  // A failed recording is reported, never thrown: losing an event must not end the turn.
   const recorded = (input: HostedRunEvent) => Effect.try({
     try: () => {
       const runId = activeRunOf(bound.stores);

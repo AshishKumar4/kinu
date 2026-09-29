@@ -6,7 +6,7 @@ export { AgentOpenTurns, type AgentOpenTurn } from './subordinates/open-turns';
 
 export { runEventSinks } from './orchestrator/run-event-sinks';
 
-export { inspectSubordinateStorage, type AgentOwnInspection, type SubordinateInspectionAuthority, type SubordinateInspectionAccess } from './subordinates/inspection-path';
+export { inspectDescendant, inspectSubordinateStorage, type AgentOwnInspection, type SubordinateInspectionAuthority, type SubordinateInspectionAccess } from './subordinates/inspection-path';
 
 // Backend-neutral terminal-turn state machine: the DO and the CLI supply only effect bodies and a wake.
 export {
@@ -1887,7 +1887,7 @@ export {
 } from './read-models/workspace-diff';
 
 export type {
-  ExecutorDiffResult, WorkspaceBaselines, WorkspaceBaselineStore, WorkspaceDiffResult,
+  ExecutorDiffResult, WorkspaceBaselines, WorkspaceBaselineStore, WorkspaceDiffResult, WorkspaceReviewResult,
 } from './read-models/workspace-diff';
 
 export {
@@ -2048,7 +2048,8 @@ export {
   DEFAULT_ADVISOR_MIN_SEVERITY,
   ADVISOR_DEDUPE_WINDOW,
   ADVISOR_HEADER,
-  deliverAdvisorReply,
+  judgeAdvisorReply,
+  sayAdvisorNote,
   ADVISOR_ROLE_ID,
   AdvisorRecoverySnapshotSchema,
   buildAdvisorPrompt,

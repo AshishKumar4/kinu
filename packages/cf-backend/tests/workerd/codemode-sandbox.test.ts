@@ -10,6 +10,8 @@ import { createCodeTool } from '@cloudflare/codemode/ai';
 import { generateText, stepCountIs, tool, jsonSchema } from 'ai';
 import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
 import { KinuSandboxExecutor, codemodeLauncher, renderToolsPrelude } from '../../src/codemode-sandbox';
+import { BROWSER_PRELUDE } from '../../src/browser-prelude';
+import { createWebCodemodeProvider, type WebSearchProvider } from '@kinu.run/core';
 
 const files = new Map<string, string>([[`${WORKSPACE_ROOT}/notes.md`, 'hello from the workspace']]);
 
@@ -292,6 +294,31 @@ describe('the eval sandbox under workerd', () => {
     expect(String(result.result)).toContain('threw: fetch failed: ');
     expect(String(result.result)).toContain('blocked private/internal address');
     expect(String(result.result)).not.toContain('reached');
+  });
+
+  test("a browser member's sandbox-side refusal is recorded as the program's failure, as a host member's is", async () => {
+    const unused = async (): Promise<never> => { throw new Error('this program reaches no web provider'); };
+
+    const provider: WebSearchProvider = { search: unused, fetch: unused, render: unused, screenshot: unused };
+
+    const web = createWebCodemodeProvider({ provider, vfs: null, sessions: { missing: 'no sessions here' }, prelude: { source: BROWSER_PRELUDE } });
+    const fns = Object.fromEntries(Object.entries(web.tools).map(([name, entry]) => [name, (...args: unknown[]) => entry.execute(...args)]));
+    const online = new KinuSandboxExecutor({ launch: codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null } }) });
+
+    const ran = await withCodemodeProgram(() => online.execute(
+      "// reach a browser this agent did not open, then list tools on something that is no page\n"
+      + "const browser = await web.connectBrowser('not-mine'); const tools = await web.pageTools({}); return { browser, tools };",
+      [{ name: 'web', fns, prelude: web.prelude }],
+    ));
+
+    expect(ran.result).toMatchObject({
+      browser: { success: false, reason: 'denied', error: expect.stringContaining('is not one this agent opened') },
+      tools: { success: false, reason: 'unavailable' },
+    });
+    expect(successfulToolOutcome('eval', { output: ran })).toMatchObject({ success: true, failures: [
+      { tool: 'web', action: 'connectBrowser', reason: 'denied' },
+      { tool: 'web', action: 'pageTools', reason: 'unavailable' },
+    ] });
   });
 
   test('a bare native tool name is corrected toward tools.<name>', async () => {

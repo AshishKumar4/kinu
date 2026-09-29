@@ -124,6 +124,20 @@ describe('exhaustive model routing', () => {
   });
 });
 
+// Review P2 (d35c1060fe): the advisor, hired as an agent, took the workspace's chat pin (or the parent's, copied into
+// its own) and lost the fixed deep slot its lane had: a second opinion from the model under review.
+test('the advisor agent runs on the fixed deep slot, whatever the workspace or its own pane pins', () => {
+  const tiers = { fast: { model: '@cf/a/model-a' }, default: { model: '@cf/a/model-a' }, deep: { model: '@cf/b/model-b' } };
+  const account = envelope({ roles: { ...BUILTIN_PROFILE_CATALOG.roles }, tiers });
+
+  const pinned = resolveTurnProfile(baseInput({
+    envelope: account, roleId: 'advisor', availableTools: [], workspaceModel: '@cf/a/model-a', actorModel: '@cf/a/model-a',
+  }));
+
+  expect(pinned.tier).toMatchObject({ id: 'deep', model: '@cf/b/model-b' });
+  expect(resolveModelRoute('agent', pinned)?.model).toBe('@cf/b/model-b');
+});
+
 describe('resolver tier snapshot', () => {
   test('an account that never set a tier runs every role and every lane on GLM 5.3', () => {
     for (const roleId of ['task', 'researcher', 'planner', 'auditor', 'designer']) {

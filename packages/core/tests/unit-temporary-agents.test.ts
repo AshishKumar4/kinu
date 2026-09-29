@@ -425,6 +425,20 @@ describe('a task-lifetime hire returns at once and its answer arrives as a messa
     expect(taskAnswerIsLater({ roster: scene.roster, log: scene.log })).toBe(false);
   });
 
+  // Review P1 (d35c1060fe): a task hire's advisor, still reviewing its turn, held the hire's own answer, and an advisor
+  // that answers with nothing to say opens no later turn to carry it.
+  test('a task hirer\'s advisor still reviewing does not make its answer a later turn\'s', async () => {
+    const scene = makeScene();
+
+    const hired = await scene.temporary.start({
+      role: 'advisor', roleLabel: 'advisor', task: 'Review the turn.', mode: 'build', lane: { requestId: 'advisor:turn-1' },
+    });
+
+    expect(hired).toMatchObject({ status: 'working' });
+    expect(scene.roster.list()).toMatchObject([{ origin: 'evolution', status: 'working' }]);
+    expect(taskAnswerIsLater({ roster: scene.roster, log: scene.log })).toBe(false);
+  });
+
   // Review P1 (integration/0963): the durable-only guard was the waiter's, and it kept the owner from deleting one.
   test('the owner deletes a working task hire, and it leaves the roster', async () => {
     const scene = makeScene();

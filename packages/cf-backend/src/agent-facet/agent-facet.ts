@@ -1,4 +1,4 @@
-/** One hired agent in its own loader isolate (D9): its own SQLite, the workspace's tools, files and shell over RPC. */
+/** One hired agent in its own loader isolate (D9). */
 import { DurableObject } from 'cloudflare:workers';
 import { Nimbus, type NimbusSandbox, type NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import type { UIMessage } from 'ai';
@@ -145,6 +145,6 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   }
 
   async deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean> {
-    return await (await this.open(snapshot).acquire()).session.deliverAdvisorAnswer(helper, turnId);
+    return await (await this.open(snapshot).acquire()).session.sayAdvisorAnswer(helper, turnId);
   }
 }

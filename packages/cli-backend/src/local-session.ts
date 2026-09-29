@@ -282,7 +282,7 @@ type Writable<T> = { -readonly [Key in keyof T]: T[Key] };
 export const LOCAL_MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
 /** bun:sqlite with a real `transaction`: approval migration and settled-turn commits need atomicity. */
-export type LocalSessionDb = Pick<Database, 'prepare' | 'transaction'>;
+export type LocalSessionDb = Pick<Database, 'query' | 'transaction'>;
 
 /**
  * The answer a subordinate's turn owes its parent, installed by the owning host. A port, not a
@@ -1174,7 +1174,7 @@ export class LocalAgentSession {
     return this.chat.revertTo(entryId);
   }
 
-  clearConversation(): Promise<void> {
+  clearConversation(): Promise<KinuError | null> {
     return this.chat.clear();
   }
 
@@ -1432,7 +1432,7 @@ export class LocalAgentSession {
       logActivity: (event, detail) => this.emit({ type: 'background', event, message: detail ?? '' }),
     });
     // An advisor that answered while this process was gone.
-    await this.actorSession.deliverAdvisorAnswers();
+    await this.deliverAdvisorAnswers();
     const reviews = await this.actorSession.orchestrator.runDeferredTurnReviews();
 
     if (reviews.reviewed > 0 || reviews.refused.length > 0) {
@@ -2562,10 +2562,12 @@ export class LocalAgentSession {
 
   /**
    * This actor's advisor answered: its note reaches the conversation. The CLI has no durable job queue, so the
-   * stored answer is the owed delivery itself: an answer a death left undelivered goes at the next start.
+   * stored answer is the owed delivery itself: an answer a death left undelivered goes at the next start. A note is
+   * handed to the turn it opens, never awaited here; tracked, so an exit joins it.
    */
   async deliverAdvisorAnswers(): Promise<void> {
     await this.actorSession.deliverAdvisorAnswers();
+    this.tracked(() => this.actorSession.advisorDeliveries());
   }
 
   /** Installed after construction: roster and peer inbox need the session's broadcast. */

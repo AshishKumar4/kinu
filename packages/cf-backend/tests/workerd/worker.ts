@@ -126,16 +126,27 @@ export class NeighbourDO extends DurableObject<Cloudflare.Env> {
 
 /**
  * `do.block_concurrency.cancel_ms` / `do.init_gate.awaited_by`: partyserver runs `onStart()`
- * inside `blockConcurrencyWhile`. Name `stall:<ms>` picks the stall; `stall:0` is the shipped shape.
+ * inside `blockConcurrencyWhile`. Name `stall:<ms>` makes init await the stall; `stall:<ms>:detached`
+ * starts the same stall and awaits nothing, the shipped shape.
  */
 export class GatedDO extends DurableObject<Cloudflare.Env> {
+  /** Whether init ended while the stall it started was still pending. */
+  private initOutranStall = false;
+
   constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
     super(ctx, env);
-    const stallMs = Number.parseInt(ctx.id.name?.split(':')[1] ?? '', 10);
+    const [, ms, awaiting] = ctx.id.name?.split(':') ?? [];
+    const stallMs = Number.parseInt(ms ?? '', 10);
     ctx.waitUntil(ctx.blockConcurrencyWhile(async () => {
       try {
         if (Number.isFinite(stallMs) && stallMs > 0) {
-          await env.NEIGHBOUR.get(env.NEIGHBOUR.idFromName('busy')).beBusy(stallMs);
+          let settled = false;
+          const stall = env.NEIGHBOUR.get(env.NEIGHBOUR.idFromName('busy')).beBusy(stallMs).finally(() => { settled = true; });
+
+          if (awaiting === 'detached') ctx.waitUntil(stall);
+          else await stall;
+
+          this.initOutranStall = !settled;
         }
       } catch (cause) {
         console.error('initialization gate failed', cause);
@@ -146,6 +157,11 @@ export class GatedDO extends DurableObject<Cloudflare.Env> {
   /** No I/O of its own: whatever this costs is the gate. */
   ping(): number {
     return this.ctx.storage.sql.exec<{ v: number }>('SELECT 1 AS v').one().v;
+  }
+
+  /** The same read, with whether the init it waited for had ended before its stall settled. */
+  pingAfterInit() {
+    return { answer: this.ping(), initOutranStall: this.initOutranStall };
   }
 }
 

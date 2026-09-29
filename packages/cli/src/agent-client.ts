@@ -19,6 +19,7 @@ import type {
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import type { CliSession } from './session';
 import { isSteeredMessage, type AgentModelMenu } from '@kinu.run/core';
+import type { KinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 export type AgentClientMode = 'local' | 'cloud';
@@ -256,7 +257,8 @@ export interface LocalSessionControls {
   readInstructionApproval(path: string): Promise<InstructionSourceView | null>;
   approveInstruction(path: string, digest: string): Promise<AdmittedInstructionDecision>;
   revokeInstruction(path: string): Promise<AdmittedInstructionDecision>;
-  clearConversation(): Promise<void>;
+  /** Resolves with why the emptied request could not be measured, or null once its number is recorded. */
+  clearConversation(): Promise<KinuError | null>;
   compact(): Promise<void>;
 }
 

@@ -1,8 +1,4 @@
-/**
- * The delegated turns the workspace handed to an agent's own isolate and has not heard end. The agent's turn claim
- * is in the agent's own database, so this row is the workspace's only record that the agent may owe a recovery:
- * an activation after a reset wakes each agent named here, before any turn is delivered again.
- */
+/** Turns handed to an agent's own isolate with no end heard: after a reset, each agent named here is woken first. */
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 
 export function initAgentOpenTurnsTable(execRaw: RawSqlExec): void {

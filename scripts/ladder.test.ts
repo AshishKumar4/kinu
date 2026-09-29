@@ -25,7 +25,7 @@ import * as v from 'valibot';
 import {
   CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployPlan, gatesFor, liveTierTargets, packageScripts,
-  printPlan, runnableArgv, sharedBrowserModules, sharedOf, tierWave, trackedTestFiles, type WaveRow,
+  printPlan, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, type WaveRow,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
@@ -977,6 +977,18 @@ describe('the deadline wrapper reads only what its closure holds', () => {
 });
 
 describe('a tier runs its gates as a wave', () => {
+  // Review of d35c1060fe: the commit wave admitted the flake gate on its empty-index cost (0.34 s, 72 MiB) while a
+  // staged browser or workerd suite had it running up to six real suites beside the rest.
+  test('a gate whose work is the staged index runs alone after the wave, never in it', () => {
+    const schedule = tierSchedule(tierRun('commit'));
+    const byIndex = tierRun('commit').filter((gate) => gate.inputs.kind === 'live' && gate.sizedByIndex !== undefined);
+
+    expect(byIndex.map((gate) => gate.run)).toContain('bun scripts/flake-gate.ts');
+    expect(schedule.last).toEqual(byIndex);
+    expect(schedule.wave.filter((gate) => byIndex.includes(gate))).toEqual([]);
+    expect([...schedule.first, ...schedule.wave, ...schedule.last]).toHaveLength(tierRun('commit').length);
+  });
+
   const row = (threads: number, shared: WaveRow['shared'] = 'none', wall = 1): WaveRow => ({ threads, rssMb: 100, wall, shared });
 
   /** Runs the wave over `rows`, each gate a few microtask turns long, and records what ran beside what. */

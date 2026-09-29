@@ -264,6 +264,14 @@ A workspace holds the state. Agents are the actors that work inside it.
   Neither side holds the whole snapshot, and no workspace is too big: a bigger
   one is more frames.
 
+  File ownership belongs to the destination's identity domain, not to a number
+  reused from the source. Before import, UID 0 stays 0 and every other UID
+  becomes the fork's main actor (1000). GIDs 0 and 1000 stay; every other GID
+  becomes 0. Every hire belongs to group 1000, so mapping a private source group
+  there would grant every hire its permissions. Modes stay unchanged, and the
+  source UID registry does not cross. `workspace-planes.ts#forkPageOwnership`
+  applies this policy at the file sink.
+
   The transfer's state belongs to the target, not to whichever activation
   receives a frame. The next expected frame, the rolling digest of the frames
   so far, what each section staged, the mission the inherited SOUL.md carried,

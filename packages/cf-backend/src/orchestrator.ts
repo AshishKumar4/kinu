@@ -180,7 +180,7 @@ import {
   turnRequestIndex, turnRequestPage, type TurnRequestIndex, type TurnRequestPage, type AgentStores,
   LiveReadsNotice, readsMovedByFiles, readsWrittenBy, sameDeviceStatus, type LiveRead,
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
-  type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult,
+  type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes,
   type ChangeNotesResult, type NotedChanges, type ReviewAnnotation,
   diffLines, type DiffLine,
@@ -592,16 +592,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   private readonly agentCreds = new Map<string, Promise<VfsCred>>();
 
-  /**
-   * A non-root agent with a home: only such an agent has a credential and an isolate of its own. A retired one
-   * is still here: its conversation stays readable until it is destroyed.
-   */
   private liveActor(actorId: string): boolean {
     const record = this.actorDirectoryStore().retained(actorId);
 
     return record !== null && record.retiringAt === null && record.deletedAt === null;
   }
 
+  /** A non-root agent with a home, retired or not: its conversation stays readable until destroyed. */
   agentOf(actorId: string): WorkspaceActor & { readonly homeName: string; readonly shellId: string } {
     const record = this.actorHost().describe(actorId);
     const placement = record === null ? null : hostedActorPlacement(record);
@@ -4071,7 +4068,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable()
-  async resetWorkspaceBaseline(): Promise<{ ok: true; capturedAt: number }> {
+  async resetWorkspaceBaseline(): Promise<WorkspaceReviewResult> {
     try {
       return await resetWorkspaceBaseline(this.rt, await this.baselines());
     } finally {

@@ -12,7 +12,7 @@ import { diagnostics } from '@kinu.run/core/obs';
 import { sealRpcSurface, ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import type { UserDO } from '../../src/user/user-do';
-import { HIRE_CHILD_MODEL, REPORT_MARK, type ActorRow, type ArchiveSections, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
+import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, REPORT_MARK, type ActorRow, type ArchiveSections, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
 
 export { UserDO } from '../../src/user/user-do';
 
@@ -273,7 +273,7 @@ type OwnerTarget = Pick<UserDO,
 export class HireProbeRoot extends Agent<ProbeRootEnv> {
   /** Settles once the durable lane's `msg` call has returned its receipt, its admission written. */
   async msgSent(): Promise<void> {
-    await fetch('http://hire-control.invalid/hire/msg-sent');
+    await fetch(hireControlUrl(this.name, 'msg-sent'));
   }
 
   private target(workspace: string): Promise<HireTarget> {
@@ -285,7 +285,7 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   async setup(workspace: string, model: string, script: ChildScript): Promise<void> {
-    await fetch('http://hire-control.invalid/hire/reset', {
+    await fetch(hireControlUrl(workspace, 'reset'), {
       method: 'POST', body: JSON.stringify({ script }),
     });
 
@@ -299,7 +299,7 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
 
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
     await userDO.setCredential(caller, 'openai-compat.default', {
-      kind: 'openai-compat', baseURL: 'http://hire-models.invalid/v1', apiKey: 'hire-fixture-key',
+      kind: 'openai-compat', baseURL: hireModelsBaseUrl(workspace), apiKey: 'hire-fixture-key',
     });
     // Written through the account catalog's compare-and-swap: every tier slot is checked against the provider
     // listing at the turn boundary, so the default must name a spec this host offers.
@@ -316,18 +316,18 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
 
   /** Let a parked child finish its turn. */
   async releaseChild(): Promise<void> {
-    await fetch('http://hire-control.invalid/hire/release-child', { method: 'POST' });
+    await fetch(hireControlUrl(this.name, 'release-child'), { method: 'POST' });
   }
 
   /** Settles when the child's turn reached the model wire. */
   async childSpoke(): Promise<void> {
-    await fetch('http://hire-control.invalid/hire/child-spoke');
+    await fetch(hireControlUrl(this.name, 'child-spoke'));
   }
 
   /** Settles when the caller's own `agents` call resolved into its next model
    *  request — the caller observing its answer. */
   async callerObserved(): Promise<void> {
-    await fetch('http://hire-control.invalid/hire/root-saw');
+    await fetch(hireControlUrl(this.name, 'root-saw'));
   }
 
   async stopChild(workspace: string): Promise<void> {
@@ -384,7 +384,7 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
     const actors = await target.actorRows();
     const log = await target.logRows();
     const turns = await target.turnCounts();
-    const response = await fetch('http://hire-control.invalid/hire/log');
+    const response = await fetch(hireControlUrl(workspace, 'log'));
 
     const wire = v.parse(
       v.fallback(WireLogSchema, { calls: [] }),

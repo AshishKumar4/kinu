@@ -64,6 +64,17 @@ export async function inspectSubordinateStorage(
   const identity = v.parse(OwnerRowSchema, rows[0]);
 
   if (identity.name !== authority.workspace || identity.owner_user_id !== authority.owner) return missing();
+
+  return inspectDescendant(access, input);
+}
+
+/** The walk from `access.actor` down `path`, then to the named actor if any; the caller has already authorized it. */
+export async function inspectDescendant(
+  access: SubordinateInspectionAccess,
+  request: SubordinateInspectionRequest,
+): Promise<SubordinateInspectionResult> {
+  const input = v.parse(SubordinateInspectionRequestSchema, request);
+  const missing = (): SubordinateInspectionResult => missingSubordinateHistory(input.path);
   let target = access.actor;
 
   for (const name of input.path) {

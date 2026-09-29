@@ -1,4 +1,4 @@
-/** The workspace object's side of an agent in its own loader isolate (D9). */
+/** The workspace side of an agent's isolate (D9). */
 import { RpcTarget, WorkerEntrypoint, exports } from 'cloudflare:workers';
 import type { UIMessageChunk } from 'ai';
 import * as v from 'valibot';

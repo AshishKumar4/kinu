@@ -71,6 +71,16 @@ export interface HireObservation {
   readonly transcript: readonly string[];
 }
 
+/** The model endpoint a workspace's owner credential names; the path carries the workspace to its run. */
+export function hireModelsBaseUrl(workspace: string): string {
+  return `http://hire-models.invalid/w/${encodeURIComponent(workspace)}/v1`;
+}
+
+/** A workspace's control endpoint: its reset, gates and log. */
+export function hireControlUrl(workspace: string, op: string): string {
+  return `http://hire-control.invalid/hire/${encodeURIComponent(workspace)}/${op}`;
+}
+
 export interface ArchiveSections {
   readonly listed: readonly string[];
   readonly sections: Readonly<Record<string, number>>;

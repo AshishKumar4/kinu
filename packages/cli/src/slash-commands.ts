@@ -178,7 +178,7 @@ export function resolveCommandDraft(commands: readonly SlashCommandInfo[], draft
 }
 
 export type SlashOutcome =
-  | { kind: 'text'; text: string; cleared?: true; contextChanged?: true; copy?: string; workspaces?: true }
+  | { kind: 'text'; text: string; cleared?: true; copy?: string; workspaces?: true }
   | { kind: 'status'; status: AgentClientStatus }
   | { kind: 'changelog'; view: AgentChangelogView }
   | { kind: 'takes'; set: AlternateTakeSet }
@@ -491,9 +491,10 @@ function connectCommand({ client, command }: SlashContext): SlashOutcome {
 
 async function clearCommand({ client, command }: SlashContext): Promise<SlashOutcome> {
   if (!client.localControls) return { kind: 'unknown', command };
-  await client.localControls.clearConversation();
+  const unmeasured = await client.localControls.clearConversation();
+  const text = 'A new conversation starts with the next message.';
 
-  return { kind: 'text', text: 'A new conversation starts with the next message.', cleared: true, contextChanged: true };
+  return { kind: 'text', text: unmeasured === null ? text : `${text} Its size could not be measured: ${unmeasured.message}`, cleared: true };
 }
 
 async function copyCommand({ client }: SlashContext): Promise<SlashOutcome> {
@@ -526,7 +527,7 @@ async function compactCommand({ client, command }: SlashContext): Promise<SlashO
   if (!client.localControls) return { kind: 'unknown', command };
   await client.localControls.compact();
 
-  return { kind: 'text', text: 'Folded this conversation into a summary; its last exchanges stay as they were.', contextChanged: true };
+  return { kind: 'text', text: 'Folded this conversation into a summary; its last exchanges stay as they were.' };
 }
 
 function stopCommand({ client }: SlashContext): SlashOutcome {
