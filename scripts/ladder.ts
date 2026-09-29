@@ -530,11 +530,12 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:skip-ratchet',
     label: 'Declared skip ratchet',
-    // Push: a skip set is fully recoverable at push.
-    tier: 'push',
-    // Re-measured 2026-09-23 on the 24-thread box at load 5: 17.8/17.9/18.5 s; the
-    // vitest arm has grown since the 12 s of 2026-09-05. Too slow for commit.
-    seconds: 18,
+    // COMMIT, moved from push 2026-09-29, for gate:dead-code's reason: a lane commits and never pushes, so a push
+    // gate first ran at integration. It caught the live-model lifecycle still reading `inodes` after the Nimbus
+    // 0.13.1 adoption renamed the table, which that lane's own matrix had passed. Measured 2026-09-29 alone in
+    // kinu-deploy.slice: 16.7/28.5/29.0 s at load 7-10, 48-74 CPU-s, 4.6 GiB peak; 24.6 s inside the ci wave.
+    tier: 'commit',
+    seconds: 25,
     catches: 'a test that starts skipping, and a declared skip that has started running '
       + 'without the lock being tightened. Credential-free the live tier reports its skips '
       + 'and exits 0, and that exit code is all anyone reads — so the skipped set is locked '
