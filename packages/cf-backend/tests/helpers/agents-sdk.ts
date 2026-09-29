@@ -101,6 +101,16 @@ export function harnessFibersRunning(): boolean {
   return harnessFiberBodies.size > 0;
 }
 
+/** Work each object holds open through `keepAliveWhile`, as production keeps it alive for it (a drain debounce, say). */
+const harnessKeepAlives = new WeakMap<workersModule.DurableObject, Set<Promise<unknown>>>();
+
+/** Resolves when the work `agent` holds open through `keepAliveWhile` has settled. */
+export async function joinHarnessKeepAlives(agent: workersModule.DurableObject): Promise<void> {
+  const open = harnessKeepAlives.get(agent);
+
+  while (open !== undefined && open.size > 0) await Promise.allSettled(open);
+}
+
 /** Resolves when every `runFiber` body started so far has settled. */
 export async function joinHarnessFibers(): Promise<void> {
   while (harnessFiberBodies.size > 0) await Promise.all(harnessFiberBodies);
@@ -231,9 +241,18 @@ export function mockAgentsSdk(): void {
         return new Response('Not implemented', { status: 404 });
       }
 
-      /** Runs the body: production uses it for work that outlives its call (drain timer, genesis turn). */
+      /** Runs the body, held open for {@link joinHarnessKeepAlives}: production uses it for work that outlives its call. */
       async keepAliveWhile<Result>(fn: () => Promise<Result>): Promise<Result> {
-        return fn();
+        const work = fn();
+        const open = harnessKeepAlives.get(this) ?? new Set<Promise<unknown>>();
+        harnessKeepAlives.set(this, open);
+        open.add(work);
+
+        try {
+          return await work;
+        } finally {
+          open.delete(work);
+        }
       }
 
       /** A method, not an optional field: a field would shadow the subclass's prototype hook with `undefined`. */
