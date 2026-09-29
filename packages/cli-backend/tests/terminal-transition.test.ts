@@ -3,7 +3,7 @@
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import type { Database } from 'bun:sqlite';
-import { scratchPath } from '@kinu.run/test-utils';
+import { handClock, scratchPath } from '@kinu.run/test-utils';
 import type { SqlExecutor, SqlValue } from '@kinu.run/core';
 import {
   TerminalEffectInterrupt,
@@ -750,6 +750,29 @@ describe('a terminal close that fails leaves a way back', () => {
     await waitForClose(() => openTerminalClaims(rt) === 0);
     // Two attempts: the close's own, which threw, and the re-armed wake's.
     expect(settleAttempts).toBe(2);
+    await session.end();
+    db.close();
+  });
+});
+
+describe('a one-shot exit waits on the turn\'s own close', () => {
+  test('with no background job running, the wait announces none', async () => {
+    const { db, rt } = workspace();
+    const clock = handClock();
+    const titling = Promise.withResolvers<void>();
+    const titled = Promise.withResolvers<void>();
+    const { model } = scriptedModel('answered', { onGenerate: async () => { titling.resolve(); await titled.promise; } });
+    const events: SessionEvent[] = [];
+    const session = new ProbeSession({ rt, db, model, clock, onEvent: (e) => events.push(e) });
+
+    await session.send('write the migration', { id: crypto.randomUUID() });
+    await titling.promise;
+    const settling = session.settleBackgroundWork();
+    await clock.whenArmed(1);
+    titled.resolve();
+    await settling;
+
+    expect(events.filter((e) => e.type === 'background')).toEqual([]);
     await session.end();
     db.close();
   });

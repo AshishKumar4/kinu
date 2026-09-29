@@ -1343,14 +1343,18 @@ export class LocalAgentSession {
   /**
    * Await detached fibers until settled or `deadline`. Bounded because they may be servers that
    * never finish; anything still running is left running and recovered on the next start.
-   * Returns true when everything settled.
+   * Returns true when everything settled. Notices name jobs only; other fibers are the session's own closing work.
    */
   private async joinBackgroundFibers(deadline: number): Promise<boolean> {
     if (this.backgroundFibers.size === 0) return true;
-    this.emit({
-      type: 'background', event: 'bg_jobs_settling',
-      message: `${this.backgroundFibers.size} background job(s) still running. Waiting for their results.`,
-    });
+    const running = this.jobs.listRunning().items;
+
+    if (running.length > 0) {
+      this.emit({
+        type: 'background', event: 'bg_jobs_settling',
+        message: `${String(running.length)} background job(s) still running: ${jobRoster(running)}. Waiting for their results.`,
+      });
+    }
 
     while (this.backgroundFibers.size > 0) {
       const remaining = deadline - this.clock.now();
@@ -1372,16 +1376,13 @@ export class LocalAgentSession {
   private announceAbandonedJobs(): void {
     const interrupted = this.jobs.listRunning().items;
 
-    const roster = interrupted
-      .map((job) => `${job.id} (${job.kind}${job.label ? `: ${job.label}` : ''})`)
-      .join(', ');
+    if (interrupted.length === 0) return;
 
     const message =
-      `${this.backgroundFibers.size} background job(s) did not finish in time and were interrupted by this ` +
+      `${String(interrupted.length)} background job(s) did not finish in time and were interrupted by this ` +
       'exit. They are checkpointed, so this workspace resumes them the next time it starts, including ' +
       'unattended under the local scheduler daemon. A resumed job runs commands and writes files on ' +
-      `this machine. Cancel with: kinu jobs ${this.agentName()} cancel <id>.` +
-      (roster ? ` Interrupted: ${roster}.` : '');
+      `this machine. Cancel with: kinu jobs ${this.agentName()} cancel <id>. Interrupted: ${jobRoster(interrupted)}.`;
 
     this.emit({ type: 'background', event: 'bg_jobs_abandoned', message });
     diagnostics.failure('jobs.abandoned_at_exit', new KinuError('timeout', message), {
@@ -3036,6 +3037,10 @@ export class LocalAgentSession {
 }
 
 export { serializeContentForHeads } from '@kinu.run/core';
+
+function jobRoster(jobs: readonly BackgroundJob[]): string {
+  return jobs.map((job) => `${job.id} (${job.kind}${job.label ? `: ${job.label}` : ''})`).join(', ');
+}
 
 /** Resolve when `work` settles or `ms` elapses on `clock`; the timer is always disarmed. */
 async function raceDeadline(clock: Clock, work: Promise<unknown>, ms: number): Promise<void> {
