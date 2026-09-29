@@ -89,3 +89,22 @@ test('a middle history failure offers a visible Retry at its gap and waits for i
     await page.close();
   });
 });
+
+test('a fork counts the canonical rows through a message after an unloaded gap', async () => {
+  await withGallery(async (gallery) => {
+    const page = await openSparse(gallery);
+    await page.$eval(CHAT, (el) => {
+      const row = [...el.children].find((child) => child.textContent?.includes('Question 4900:'));
+      const fork = row?.querySelector<HTMLButtonElement>('button[title="Fork the workspace from here"]');
+
+      if (fork === null || fork === undefined) throw new Error('row 4900 has no Fork action');
+      row?.scrollIntoView({ block: 'center' });
+      fork.click();
+    });
+    await page.waitForSelector('[role="dialog"]');
+    const count = await page.$eval('[role="dialog"]', (el) => Number(/Conversation: the (\d+) /u.exec(el.textContent ?? '')?.[1]));
+    expect(count).toBe(4901);
+    console.log('sparse fork: row 4900 copies ' + String(count) + ' messages');
+    await page.close();
+  });
+});

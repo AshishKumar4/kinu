@@ -146,6 +146,7 @@ export interface HistoryPages {
   readonly segments: readonly HistorySegment[];
   readonly loading: boolean;
   readonly error: string | null;
+  /** The first row is loaded; there may still be gaps between loaded segments. */
   readonly exhausted: boolean;
   readonly busy: () => boolean;
   /** More rows when the reader is close or pages land back to back. */

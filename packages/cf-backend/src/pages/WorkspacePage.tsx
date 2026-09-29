@@ -751,7 +751,7 @@ export default function WorkspacePage() {
   const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   // `state.messages` is the SDK's newest window with streamed messages; older history pages from storage.
-  const { history, transcript, thread, reserves } = useChatThread({
+  const { history, transcript, thread, reserves, positions } = useChatThread({
     rpc: state.rpc, live: state.messages, seeded: state.transcriptSeeded, steerRuns: state.steerRuns,
     total: state.agentStatus?.messageCount,
   });
@@ -1264,7 +1264,7 @@ export default function WorkspacePage() {
       {forkFor && (
         <ForkModal
           sourceName={shownTitle}
-          messagesUpToHere={messagesUpTo(transcript, forkFor, state.agentStatus?.messageCount, { exhausted: history.exhausted, inFlight: turnRows(transcript, live) })}
+          messagesUpToHere={messagesUpTo(transcript, forkFor, state.agentStatus?.messageCount, { positions, inFlight: turnRows(transcript, live) })}
           onCancel={() => setForkFor(null)}
           onSubmit={async (name) => {
             try {

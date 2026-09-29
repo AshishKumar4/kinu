@@ -2,14 +2,22 @@ import type { UIMessage } from "ai";
 
 /** Stored rows up to `id`; a live turn's `inFlight` rows are unstored. */
 export function messagesUpTo(
-  shown: readonly UIMessage[], id: string, stored: number | undefined, walk: { readonly exhausted: boolean; readonly inFlight: number },
+  shown: readonly UIMessage[], id: string, stored: number | undefined,
+  history: { readonly positions: ReadonlyMap<string, number>; readonly inFlight: number },
 ): number {
-  const upTo = shown.findIndex((message) => message.id === id) + 1;
+  const position = history.positions.get(id);
 
-  if (walk.exhausted) return upTo;
-  const loaded = shown.length - walk.inFlight;
+  if (position !== undefined) return position + 1;
 
-  return Math.max(0, (stored ?? loaded) - loaded) + upTo;
+  // Unpaged live rows form a contiguous suffix; its canonical end is independent of earlier gaps.
+  let count = (stored ?? shown.length - history.inFlight) + history.inFlight;
+
+  for (let index = shown.length - 1; index >= 0; index--) {
+    if (shown[index]?.id === id) return count;
+    count -= 1;
+  }
+
+  return 0;
 }
 
 export function turnRows(shown: readonly UIMessage[], live: boolean): number {

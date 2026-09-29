@@ -22,6 +22,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Fork counts include unloaded chat history.** The fork dialog counts through a loaded message's stored position, so gaps between pages no longer make a fork promise fewer messages than it copies. Reaching the first page does not imply every page is loaded.
 - **A failed chat history page offers Retry where it failed.** Gaps between loaded pages now show their failure beside the missing history, including in agent chats. Scrolling leaves the failed read paused until Retry requests that same page.
 - **A redirect stays with its own turn when chat history has gaps.** Loading an old page and a recent page no longer places a mid-turn redirect inside an unrelated reply. The redirect stays at the edge of the old page until its reply loads.
 - **A new hire in a fork cannot inherit another agent's private file access.** Fork imports remap workspace-local user and group IDs. Root-owned files stay root-owned; other files belong to the fork's main agent. Private source groups become root-only, not the group shared by every hire. File modes stay unchanged.
