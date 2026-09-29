@@ -407,7 +407,7 @@ requirements:
       - No runtime precondition yet implements C2 against the measured baseline
       - The majority-vote witnesses hardcode the numbers of packages/core/tests/fixtures/majority-vote.ts rather than reading it
   PR-PUBLISH-001:
-    statement: From a sealed state no finite sequence of the run's own actions publishes to any member of the enumerated six-surface publication set, which is section 10.1 S7 as reachability over publication rather than over one table.
+    statement: From a sealed state no finite sequence of the run's own actions publishes to any member of the enumerated five-surface publication set, which is section 10.1 S7 as reachability over publication rather than over one table.
     status: proved-in-abstract-model
     theorems:
       - Kinu.Exploration.Publication.runOf_nil
@@ -434,7 +434,7 @@ requirements:
       - The step function is a single sequential fold, so two runs racing on one objective's seal are not modelled and this is the model's largest gap
       - No records-store DDL or write path exists yet for the postconditions to refine
       - A store-level conditional write on the seal is what would close the concurrent case and it is unspecified
-      - Five of the six enumerated surfaces have live writers that take no PublicationState at all, so where each gate sits is unwired even though the enumeration is now checked
+      - Four of the five enumerated surfaces (experience_library, craft, memory, scaffold_versions) have live writers that take no PublicationState at all; only records is gated, through admitCarry, so where the other gates sit is unwired even though the enumeration is now checked
       - The previous revision of this requirement was a true theorem about a false property: it quantified over records-store actions while experience_library was not one of them
   PR-PUBLISH-002:
     statement: A seal is keyed by the objective and the floor's digest, because an identity-keyed seal provably cannot tell a corrected floor from the breached one, so a re-derived floor publishes under its own key; retroactive publication additionally requires verifier-digest equality.

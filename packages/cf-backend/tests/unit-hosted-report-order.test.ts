@@ -4,8 +4,9 @@
  */
 import { expect, test } from 'bun:test';
 import { sqlOver } from '@kinu.run/test-utils';
-import { GATEWAY_CATALOG, driveUntil, gatewayWorkspace, hostedSubordinateHarness, reactivateOrchestratorHarness, wakeForDelegatedTask } from './helpers/actor-harness';
-import { abandonHarnessFibers, joinHarnessFibers } from './helpers/agents-sdk';
+import { GATEWAY_CATALOG, armedWakes, driveUntil, gatewayWorkspace, hostedSubordinateHarness, reactivateOrchestratorHarness, wakeForDelegatedTask } from './helpers/actor-harness';
+import { abandonHarnessFibers, joinHarnessFibers, joinHarnessKeepAlives } from './helpers/agents-sdk';
+import { KINU_TIMER_JOB } from '../src/wake-jobs';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 
 // A helper that hired durable then task: the durable hire's report must not wait on the helper while its task hire runs.
@@ -227,6 +228,9 @@ test("a report to an idle helper survives a reset before its drain: the durable 
 
   await wakeForDelegatedTask(first, middleId, 'Middle task.');
   await driveUntil(first, 'the durable hire never reported', () => pendingReports() > 0);
+  // The first activation's debounced drains run out before the reset, so none of them can take the report up later.
+  await joinHarnessKeepAlives(first.agent);
+  expect(pendingReports()).toBe(1);
   abandonHarnessFibers();
 
   const second = await reactivateOrchestratorHarness(first.db, undefined, {
@@ -234,8 +238,12 @@ test("a report to an idle helper survives a reset before its drain: the durable 
     beforeStart: (agent) => { agent.harnessInstallCatalog(GATEWAY_CATALOG); },
   });
 
-  // The wake the activation armed for owed work, fired as the alarm fires it.
-  await second.agent._kinuTimerTick();
+  // Still owed after the restart, and the only thing that will take it up is the durable wake the activation armed.
+  expect(pendingReports()).toBe(1);
+  expect(armedWakes(first.db).map((wake) => wake.id)).toContain(KINU_TIMER_JOB);
+  // Due now, and fired the way the platform fires it: through the SDK's alarm.
+  first.db.prepare('UPDATE cf_agents_jobs SET time = ? WHERE id = ?').run(Date.now() - 1, KINU_TIMER_JOB);
+  await second.agent.alarm();
   await joinHarnessFibers();
   expect(pendingReports()).toBe(0);
 
