@@ -174,17 +174,16 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
   private readonly wakeReturn = Promise.withResolvers<void>();
 
-  /** The platform's wake as the SDK dispatches it. It counts only once it returned with a child's turn still
-   *  claimed, so a wake that ran before the hire, or one that ran the child to its end, cannot satisfy it. */
-  override async _kinuTerminalRetryTick(...args: Parameters<ProductionOrchestrator['_kinuTerminalRetryTick']>): Promise<void> {
-    await super._kinuTerminalRetryTick(...args);
+  /** The platform's wake as the `terminal-retry` job dispatches it. It counts only once it returned with a child's
+   *  turn still claimed, so a wake that ran before the hire, or one that ran the child to its end, cannot satisfy it. */
+  override async terminalRetryPass(...args: Parameters<ProductionOrchestrator['terminalRetryPass']>): Promise<void> {
+    await super.terminalRetryPass(...args);
     this.countReturnedWake();
   }
 
   /** The wake's own pass, run in-request while a delegated turn is parked: it must return, not hold the turn. */
   async wakeWhileRunning(): Promise<void> {
     await this.terminalRetryPass();
-    this.countReturnedWake();
   }
 
   private countReturnedWake(): void {
@@ -218,7 +217,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
   }
 
   /**
-   * Runs the full wake `_kinuTerminalRetryTick` in-request (an in-flight request holds the input gate, so no alarm arrives).
+   * Runs the full `terminal-retry` wake pass in-request (an in-flight request holds the input gate, so no alarm arrives).
    * A narrower frame would report hangs the product does not have. The debounced reactor drain is driven separately.
    */
   async driveOwedWork(): Promise<void> {

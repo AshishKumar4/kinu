@@ -4,7 +4,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { Chat } from '@ai-sdk/react';
-import { DefaultChatTransport, type UIMessage, type UIMessageChunk } from 'ai';
+import { DefaultChatTransport, readUIMessageStream, type UIMessage, type UIMessageChunk } from 'ai';
 import * as v from 'valibot';
 import { AwaitedList, createTestSql } from '@kinu.run/test-utils';
 import { INTERRUPTED_TURN, type SendLanding, type SessionEvent } from '@kinu.run/core';
@@ -27,7 +27,7 @@ function isRefusal(landing: HarnessLanding): landing is HarnessRefusal {
 type HarnessLanding = SendLanding | HarnessRefusal | Promise<SendLanding> | readonly SendLanding[];
 
 function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<UIMessage[]>) {
-  const { sql, db } = createTestSql();
+  const { db } = createTestSql();
   const broadcasts: Array<{ frame: v.InferOutput<typeof FrameSchema>; exclude: string[] | undefined }> = [];
   const history: UIMessage[] = [];
   /** The ids the loop holds a reservation for: every send accepted mid-turn. */
@@ -53,7 +53,7 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
   };
 
   const wire: ChatWire = {
-    sql,
+    resumes: true,
     broadcast: (message, exclude) => {
       broadcasts.push({ frame: v.parse(FrameSchema, JSON.parse(message)), exclude });
 
@@ -82,12 +82,11 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
 
   const transport = new ChatWireTransport(wire);
 
-  const chunkRows = () => db.query<{ body: string }, []>('SELECT body FROM cf_ai_chat_stream_chunks ORDER BY chunk_index').all().map((row) => row.body);
 
   return {
     /** The object after an eviction: a fresh transport over the same database and sockets. */
     afterEviction: () => new ChatWireTransport(wire),
-    transport, broadcasts, history, reserved, sent: sent.items, taken: (count: number) => sent.until((items) => items.length >= count), connection, chunkRows, db,
+    transport, broadcasts, history, reserved, sent: sent.items, taken: (count: number) => sent.until((items) => items.length >= count), connection, db,
     interrupts: () => interrupts, clears: () => clears,
     responses: () => broadcasts.filter((b) => b.frame.type === 'cf_agent_use_chat_response').map((b) => b.frame),
     connectionFrames: (id: string): string[] => frames.get(id) ?? [],
@@ -342,7 +341,7 @@ describe('ChatWireTransport', () => {
     expect(h.sent.map((input) => input.id)).toEqual(['pending', 'new']);
   });
 
-  test("a turn's chunks are broadcast under its request, stored for resume, and accumulate into the answer", async () => {
+  test("a turn's chunks are broadcast under its request and accumulate into the answer", async () => {
     const h = openRequest();
     const conn = h.connection('c1');
     const { answered } = await h.open(conn, 'req-1', 'hello');
@@ -366,8 +365,6 @@ describe('ChatWireTransport', () => {
     ]);
     expect(JSON.parse(frames[0]?.body ?? '{}').messageId).toBe('msg-1');
     expect(frames[8]).toEqual({ type: 'cf_agent_use_chat_response', id: 'req-1', body: '', done: true });
-    // The SDK packs flushed chunks into segment rows, so the count is of segments.
-    expect(h.chunkRows().length).toBeGreaterThan(0);
     expect(h.broadcasts.at(-1)?.frame.type).toBe('cf_agent_chat_messages');
   });
 
@@ -498,7 +495,6 @@ describe('ChatWireTransport', () => {
     const { answered } = await h.open(first, 'req-1', 'hello');
     await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
     await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'par' }]), { index: 0 });
-    expect(h.chunkRows().length).toBeGreaterThan(0);
 
     const second = h.connection('c2');
     h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
@@ -519,9 +515,11 @@ describe('ChatWireTransport', () => {
    *  part it never saw open, so every part a joining tab continues must open in what it reads, before its deltas. */
   // 2026-09-26 (two-turn.test.ts red): a done frame for another request is never stored, so the replay on ack
   // cannot carry it; skipped for a joining tab, it was lost, and that tab's send waited on it for good.
-  // 2026-09-26 (chat-session-parity red): a tab that connects after an eviction is told to resume the stream the
-  // evicted turn left active. The resumed turn opens a new stream; the tab, still pending for the old one, missed all of it.
-  test('a tab told to resume a stream an eviction left behind hears the next stream whole', async () => {
+  // 2026-09-26 (chat-session-parity red): a tab that connects after an eviction was told to resume the stream the
+  // evicted turn left active; the resumed turn opened a new stream and the tab, pending for the old one, missed it.
+  // 2026-09-28: no relay outlives its object, so the tab is told nothing is resuming and reads the partial from the
+  // transcript frame; the loop's re-drive streams afresh.
+  test('a tab that connects after an eviction is told nothing resumes, and hears the re-driven stream whole', async () => {
     const h = harness();
     const first = h.connection('c1');
     await h.transport.onMessage(first, chatRequest('req-1', 'hello'));
@@ -531,8 +529,10 @@ describe('ChatWireTransport', () => {
     const revived = h.afterEviction();
     const second = h.connection('c2');
     await revived.onConnect(second);
+    await revived.onMessage(second, JSON.stringify({ type: 'cf_agent_stream_resume_request', probeId: 'p-1' }));
+    expect(h.connectionFrames('c2').map((frame) => v.parse(FrameSchema, JSON.parse(frame)).type))
+      .toEqual(['cf_agent_chat_messages', 'cf_agent_stream_resume_none']);
 
-    // The client this pins never acknowledges the old stream: its request is gone with the evicted object.
     await revived.deliver(turnStart('input-req-1', 'msg-2'));
     await revived.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 'text-0' }, { type: 'text-delta', id: 'text-0', delta: 'resumed' }]), { index: 0 });
 
@@ -541,12 +541,6 @@ describe('ChatWireTransport', () => {
       .map((frame) => v.parse(v.looseObject({ type: v.string() }), JSON.parse(frame.body ?? '')).type);
 
     expect(bodies).toEqual(['start', 'text-start', 'text-delta']);
-
-    // The resume it was told of settles: the old request ends for it before the new stream begins.
-    const oldEnds = h.received('c2').map((text) => v.parse(FrameSchema, JSON.parse(text)))
-      .filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.id === 'req-1' && frame.done === true);
-
-    expect(oldEnds).toHaveLength(1);
   });
 
   test('a tab still in its handshake that sends a message spliced into the live turn hears its landing', async () => {
@@ -671,5 +665,140 @@ describe('ChatWireTransport', () => {
     expect(h.clears()).toBe(1);
     expect(h.broadcasts.at(-1)).toEqual({ frame: { type: 'cf_agent_chat_clear' }, exclude: ['c1'] });
     expect(await h.transport.onMessage(conn, JSON.stringify({ type: 'rpc', id: 'x', method: 'getAgentStatus' }))).toBe(false);
+  });
+});
+
+const turnEnd = (text: string): SessionEvent => ({
+  type: 'turn-end', turn: { userMessage: text, assistantResponse: '', toolCalls: [], steps: 1, durationMs: 0, feedback: null, hadError: false, origin: 'user' },
+});
+
+/** A model stream the test feeds while the turn runs, so a tab can reconnect in the middle of it. A push settles
+ *  when the relay asks for the chunk after its last one: it has handled every chunk the push carried. */
+function liveChunks() {
+  const queued: UIMessageChunk[] = [];
+  let ended = false;
+  let arrived = Promise.withResolvers<void>();
+  let consumed: ReturnType<typeof Promise.withResolvers<void>> | null = null;
+
+  const stream = new ReadableStream<UIMessageChunk>({
+    async pull(controller) {
+      while (queued.length === 0 && !ended) {
+        consumed?.resolve();
+        arrived = Promise.withResolvers<void>();
+        await arrived.promise;
+      }
+
+      const next = queued.shift();
+
+      if (next === undefined) controller.close();
+      else controller.enqueue(next);
+    },
+  }, { highWaterMark: 0 });
+
+  const push = async (...parts: UIMessageChunk[]): Promise<void> => {
+    queued.push(...parts);
+    consumed = Promise.withResolvers<void>();
+    arrived.resolve();
+    await consumed.promise;
+  };
+
+  return { stream, push, end: () => { ended = true; arrived.resolve(); } };
+}
+
+/** What a tab's reader builds from the answer frames it was sent, in order, as `useAgentChat` feeds them to `ai`. */
+async function readAnswer(frames: readonly string[], requestId: string): Promise<UIMessage | undefined> {
+  const bodies = frames.map((text) => v.parse(FrameSchema, JSON.parse(text)))
+    .filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.id === requestId && frame.body !== undefined && frame.body !== '')
+    .map((frame) => v.parse(v.custom<UIMessageChunk>((value) => v.is(v.looseObject({ type: v.string() }), value)), JSON.parse(frame.body ?? '')));
+
+  let last: UIMessage | undefined;
+
+  for await (const message of readUIMessageStream({ stream: chunks(bodies), onError: (error) => { throw error; } })) last = message;
+
+  return last;
+}
+
+describe('a tab that reconnects mid-turn', () => {
+  test('stores nothing durable to resume from: the answer\'s one durable copy is the loop\'s', async () => {
+    const h = openRequest();
+    const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 't' },
+      ...Array.from({ length: 30 }, (_unused, index): UIMessageChunk => ({ type: 'text-delta', id: 't', delta: `w${String(index)} ` }))]), { index: 0 });
+
+    const sdkTables = h.db.query<{ name: string }, []>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND (name LIKE 'cf_agents_stream%' OR name = 'cf_agents_chat_progress' OR name LIKE 'cf_ai_chat_stream%')").all();
+
+    expect(sdkTables).toEqual([]);
+    await h.transport.deliver(turnEnd('hello'));
+    await h.land(answered);
+  });
+
+  test('reads the replay and then the live deltas, whole and once, from inside a flush window', async () => {
+    const h = openRequest();
+    const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    const live = liveChunks();
+    const observed = h.transport.observe(live.stream, { index: 0 });
+    const words = Array.from({ length: 25 }, (_unused, index) => `w${String(index)} `);
+    // 13 deltas: ten reach a flush point, three sit in the cadence window when the tab comes back.
+    await live.push({ type: 'start' }, { type: 'start-step' }, { type: 'text-start', id: 't' },
+      ...words.slice(0, 13).map((delta): UIMessageChunk => ({ type: 'text-delta', id: 't', delta })));
+
+    const second = h.connection('c2');
+    await h.transport.onConnect(second);
+    // Streamed between the tab being told and its ack: in its replay, never also live.
+    await live.push(...words.slice(13, 16).map((delta): UIMessageChunk => ({ type: 'text-delta', id: 't', delta })));
+    await h.transport.onMessage(second, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: 'req-1' }));
+    await live.push(...words.slice(16).map((delta): UIMessageChunk => ({ type: 'text-delta', id: 't', delta })),
+      { type: 'text-end', id: 't' }, { type: 'finish-step' }, { type: 'finish' });
+    live.end();
+    await observed;
+
+    const answer = await readAnswer(h.received('c2'), 'req-1');
+    expect(answer?.id).toBe('msg-1');
+    expect(answer?.parts.flatMap((part) => part.type === 'text' ? [part.text] : [])).toEqual([words.join('')]);
+    await h.transport.deliver(turnEnd('hello'));
+    await h.land(answered);
+  });
+
+  test('reads a tool call still streaming its input, then its live input, with no part it never saw open', async () => {
+    const h = openRequest();
+    const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    const live = liveChunks();
+    const observed = h.transport.observe(live.stream, { index: 0 });
+    await live.push({ type: 'start' }, { type: 'start-step' },
+      { type: 'tool-input-start', toolCallId: 'call-1', toolName: 'write' },
+      { type: 'tool-input-delta', toolCallId: 'call-1', inputTextDelta: '{"path":"a.t' });
+
+    const second = h.connection('c2');
+    await h.transport.onConnect(second);
+    await h.transport.onMessage(second, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: 'req-1' }));
+    await live.push({ type: 'tool-input-delta', toolCallId: 'call-1', inputTextDelta: 'xt"}' },
+      { type: 'tool-input-available', toolCallId: 'call-1', toolName: 'write', input: { path: 'a.txt' } },
+      { type: 'finish-step' }, { type: 'finish' });
+    live.end();
+    await observed;
+
+    const answer = await readAnswer(h.received('c2'), 'req-1');
+    expect(answer?.parts.filter((part) => part.type === 'tool-write')).toMatchObject([{ toolCallId: 'call-1', state: 'input-available', input: { path: 'a.txt' } }]);
+    await h.transport.deliver(turnEnd('hello'));
+    await h.land(answered);
+  });
+
+  test.each([['ends', false], ['is stopped', true]] as const)('once the turn %s, nothing is held to replay: a tab that asks hears nothing is resuming', async (_how, stopped) => {
+    const h = openRequest();
+    const { answered } = await h.open(h.connection('c1'), 'req-1', 'hello');
+    await h.transport.deliver(turnStart('input-req-1', 'msg-1'));
+    await h.transport.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'par' }]), { index: 0 });
+
+    if (stopped) await h.transport.deliver({ type: 'error', message: INTERRUPTED_TURN });
+    await h.transport.deliver(turnEnd('hello'));
+    await h.land(answered);
+
+    const late = h.connection('c2');
+    await h.transport.onMessage(late, JSON.stringify({ type: 'cf_agent_stream_resume_request', probeId: 'p-1' }));
+    expect(h.connectionFrames('c2').map((frame) => JSON.parse(frame))).toContainEqual({ type: 'cf_agent_stream_resume_none', reason: 'idle', probeId: 'p-1' });
   });
 });

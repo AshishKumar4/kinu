@@ -124,8 +124,8 @@ export class SessionStream {
   /** Writers run one at a time in arrival order, so two cannot reach one container's seal together. */
   private readonly exclusive = serialQueue();
   private readonly calls = new Map<string, { messageId: string; part: number }>();
-  /** Text reaches the row where a tab's replay store cuts it, so a resumed step and that replay agree on what survived;
-   *  a crash loses at most one cadence interval of text. */
+  /** Text reaches the row at the first content event, then every ten, and at each settled tool result; a crash
+   *  loses at most one cadence interval of text. */
   private readonly cadence = partialFlushCadence();
   private readonly claim: ClaimFence;
   private readonly durableCalls = new Map<string, DurableCall>();

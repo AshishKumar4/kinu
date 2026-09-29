@@ -45,7 +45,7 @@ describe('DurableObjectStorage alarms', () => {
     // Fixed wait: an absence cannot be polled; it must outlast the later alarm by a clear margin.
     await scheduler.wait(ARM_MS * 5);
 
-    // One alarm row per object is what makes `armTimer`'s soonest-wins dedup safe.
+    // One alarm slot per object is what lets the Lifecycle derive its alarm from the job queue alone.
     expect(await open('one-slot').report()).toMatchObject({ fires: 1, completed: true });
   });
 

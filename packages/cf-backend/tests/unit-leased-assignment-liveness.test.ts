@@ -10,9 +10,10 @@ import { admitSubordinateTask, EventLog } from '@kinu.run/core';
 import { AwaitedList } from '@kinu.run/test-utils';
 import { makeSqlExec } from '../../core/tests/helpers';
 import {
-  catalogTurn, GATEWAY_CATALOG, gatewayWorkspace, nextTurn, hostedSubordinateHarness, reactivateOrchestratorHarness, rosterOver, runDelegatedTask, until,
+  armedWakes, catalogTurn, GATEWAY_CATALOG, gatewayWorkspace, nextTurn, hostedSubordinateHarness, reactivateOrchestratorHarness, rosterOver, runDelegatedTask, until,
   wakeForDelegatedTask,
 } from './helpers/actor-harness';
+import { TERMINAL_RETRY_JOB } from '../src/wake-jobs';
 import { abandonHarnessFibers, joinHarnessFibers } from './helpers/agents-sdk';
 import {
   answeringGateway, chatCompletion, openingOf, requestOf, scriptedGateway, stubAiBinding, toolCallCompletion, type StubbedAiBinding,
@@ -40,7 +41,7 @@ test('an assignment leased by a dead activation runs after the next activation, 
   });
 
   await next.agent.accountSpend();
-  await until(() => workspace.db.query("SELECT 1 FROM cf_agents_schedules WHERE callback = '_kinuTerminalRetryTick'").get() !== null,
+  await until(() => armedWakes(workspace.db).some((wake) => wake.id === TERMINAL_RETRY_JOB),
     'the activation armed a wake for the leased assignment');
   await next.agent.terminalRetryPass();
   await joinHarnessFibers();

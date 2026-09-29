@@ -1856,8 +1856,8 @@ export const LADDER: readonly Gate[] = [
       + 'per-connection record in a socket ATTACHMENT, which the shared fake answers as '
       + '`null` unconditionally, so every bun test over it observes the failure state as '
       + 'green. And nothing had ever seen an ALARM fire: a second `setAlarm` replaces the '
-      + 'first rather than queueing, which is what makes `armTimer`\'s soonest-wins dedup a '
-      + 'collapse instead of a lost wake-up, and an uncaught throw out of `alarm()` is '
+      + 'first rather than queueing, which is what lets the Lifecycle derive one alarm from its '
+      + 'job queue instead of losing a wake-up, and an uncaught throw out of `alarm()` is '
       + 'redelivered until it succeeds, which is the backstop the SDK rethrows platform '
       + 'errors to reach. Each polarity carries its own control, so a green cannot come '
       + 'from a write that never happened.',

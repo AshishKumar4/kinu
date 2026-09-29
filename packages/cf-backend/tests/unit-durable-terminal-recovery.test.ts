@@ -6,16 +6,16 @@ import { describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
-  historyOver, ledgerOver, orchestratorHarness, until, workspaceMainActor,
+  armedWakes, historyOver, ledgerOver, orchestratorHarness, until, workspaceMainActor,
   type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
+import { TERMINAL_RETRY_JOB } from '../src/wake-jobs';
 import type { FiberRecoveryContext } from 'agents';
 import { CHAT_SESSION_ID } from '@kinu.run/core';
 import {
   sweepUnrecoverableFibers,
   FIBER_RECOVERY_MAX_AGE_MS,
-  SWEEP_MAX_ROWS,
   TERMINAL_LANE_FIBER,
   type FiberMetaRow,
   type FiberRowStore,
@@ -36,8 +36,9 @@ const installedRecoveryMethods = v.parse(InstalledRecoveryMethodsSchema, Install
 
 const installedCheckRunFibers = installedRecoveryMethods._checkRunFibers;
 
-// Dynamic: a static import would load the real SDK before the harness stand-in is installed.
-const { TERMINAL_RETRY_CALLBACK } = await import('../src/actor-agent');
+
+/** The row budget of the activation sweep and of the patched framework scan: 4096 rows, never a stopwatch. */
+const SWEEP_MAX_ROWS = 4096;
 
 const FiberRecoveryEventSchema = v.object({
   fiberId: v.string(),
@@ -106,9 +107,8 @@ function transitionState(harness: ActorHarness<HarnessOrchestratorAgent>, turnId
 /** Activation classifies owed work by arming the retry wake and dispatching nothing. */
 async function activateAndClassify(harness: ActorHarness<HarnessOrchestratorAgent>): Promise<void> {
   await harness.agent.activateActor();
-  await until(() => harness.db.query<{ n: number }, [string]>(
-    'SELECT COUNT(*) AS n FROM cf_agents_schedules WHERE callback = ?',
-  ).get(TERMINAL_RETRY_CALLBACK)?.n === 1, 'the activation armed the terminal retry wake');
+  await until(() => armedWakes(harness.db).some((wake) => wake.id === TERMINAL_RETRY_JOB),
+    'the activation armed the terminal retry wake');
 }
 
 /** Inside the sweep's grace, so the sweep leaves it alone and only the resume is under test. */
@@ -212,8 +212,7 @@ describe('an interrupted terminal fiber arms the durable wake rather than replay
     const harness = orchestratorHarness();
     const agent = harness.agent;
     expect(openTransition(harness, 'u-owed')).toBe('first');
-    expect((await agent.listSchedules()).map((row) => row.callback))
-      .not.toContain(TERMINAL_RETRY_CALLBACK);
+    expect(armedWakes(harness.db).map((wake) => wake.id)).not.toContain(TERMINAL_RETRY_JOB);
 
     const result = await agent.onFiberRecovered(interruptedTerminalFiber);
 
@@ -226,9 +225,8 @@ describe('an interrupted terminal fiber arms the durable wake rather than replay
     });
 
     await joinHarnessFibers();
-    // The ledger's own retry row: the carrier the stale-schedule sweep spares.
-    expect((await agent.listSchedules()).map((row) => row.callback))
-      .toContain(TERMINAL_RETRY_CALLBACK);
+    // The ledger's own retry wake.
+    expect(armedWakes(harness.db).map((wake) => wake.id)).toContain(TERMINAL_RETRY_JOB);
 
     // The claim join keeps the wake and the detached reconcile from both replaying one row.
     await agent.terminalRetryPass();
@@ -243,8 +241,7 @@ describe('an interrupted terminal fiber arms the durable wake rather than replay
     await agent.onFiberRecovered(interruptedTerminalFiber);
     await joinHarnessFibers();
 
-    expect((await agent.listSchedules()).map((row) => row.callback))
-      .not.toContain(TERMINAL_RETRY_CALLBACK);
+    expect(armedWakes(harness.db).map((wake) => wake.id)).not.toContain(TERMINAL_RETRY_JOB);
   });
 });
 
@@ -484,11 +481,6 @@ function scriptedFibers(
   const table = new Map(rows.map((row) => [row.id, row]));
 
   const store: FiberRowStore = {
-    present: () => {
-      asked.push('present');
-
-      return true;
-    },
     upperBoundary: () => {
       asked.push('upperBoundary');
       const live = [...table.values()];
@@ -525,7 +517,7 @@ const NOW = 1_700_000_000_000;
   const overAge = (ms: number) => NOW - FIBER_RECOVERY_MAX_AGE_MS - ms;
   const inBudget = (ms: number) => NOW - ms;
 
-  test('it asks only the four questions the port declares', () => {
+  test('it asks only the three questions the port declares', () => {
     const scene = scriptedFibers([
       { rowid: 1, id: 'old-1', created_at: overAge(1) },
       { rowid: 2, id: 'fresh-1', created_at: inBudget(1_000) },
@@ -534,7 +526,7 @@ const NOW = 1_700_000_000_000;
     sweepUnrecoverableFibers(scene.store, NOW);
 
     // No `FiberRowStore` member can return a snapshot, so the property rides the interface, not a query string.
-    expect(new Set(scene.asked)).toEqual(new Set(['present', 'upperBoundary', 'page', 'dropIfExpired']));
+    expect(new Set(scene.asked)).toEqual(new Set(['upperBoundary', 'page', 'dropIfExpired']));
     // The cutoff lives in the query: the fresh row is never paged.
     expect(scene.asked.filter((question) => question === 'dropIfExpired')).toHaveLength(1);
   });
@@ -651,7 +643,7 @@ const NOW = 1_700_000_000_000;
   });
 
   test('the PATCHED framework scan carries the same row budget, never a stopwatch', async () => {
-    // patches/agents@0.22.0.patch rewrites _checkRunFibers as Kinu code; its budget must match the sweep's.
+    // patches/agents@0.24.0.patch rewrites _checkRunFibers as Kinu code; its budget must match the sweep's.
     const scene = installedFiberRecoveryScene();
 
     try {

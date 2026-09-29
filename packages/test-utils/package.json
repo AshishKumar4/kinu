@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@kinu.run/core": "workspace:*",
-    "capnweb": "0.8.0",
+    "capnweb": "0.12.0",
     "effect": "4.0.0-rc.117"
   },
   "scripts": {
