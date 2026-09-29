@@ -25,7 +25,7 @@ import * as v from 'valibot';
 import {
   CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployPlan, gatesFor, liveTierTargets, packageScripts,
-  printPlan, runnableArgv, sharedBrowserModules, sharedOf, trackedTestFiles,
+  printPlan, runnableArgv, sharedBrowserModules, sharedOf, tierWave, trackedTestFiles, type WaveRow,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
@@ -973,5 +973,53 @@ describe('the deadline wrapper reads only what its closure holds', () => {
 
     expect(closure.corpus).toBe(false);
     expect(audit.undeclared).toEqual([]);
+  });
+});
+
+describe('a tier runs its gates as a wave', () => {
+  const row = (threads: number, shared: WaveRow['shared'] = 'none', wall = 1): WaveRow => ({ threads, rssMb: 100, wall, shared });
+
+  /** Runs the wave over `rows`, each gate a few microtask turns long, and records what ran beside what. */
+  async function waved(rows: readonly WaveRow[], stopAfter = Number.POSITIVE_INFINITY) {
+    const running = new Set<number>();
+    const beside: number[][] = [];
+    const started: number[] = [];
+
+    await tierWave(rows.map((entry, index) => ({ entry: index, row: entry })), async (index) => {
+      started.push(index);
+      running.add(index);
+      beside.push([...running].sort((left, right) => left - right));
+
+      for (let turn = 0; turn < 3; turn += 1) await Promise.resolve();
+      running.delete(index);
+    }, () => started.length >= stopAfter, { threads: 8, rssMb: 1_000 });
+
+    return { beside, started };
+  }
+
+  test('admits gates up to the thread cap and no further', async () => {
+    const { beside } = await waved([row(4), row(4), row(4), row(4)]);
+
+    expect(Math.max(...beside.map((set) => set.length))).toBe(2);
+    expect(beside.flat().length).toBeGreaterThan(4);
+  });
+
+  test('never runs two gates that hold the browser at once', async () => {
+    const { beside, started } = await waved([row(1, 'browser'), row(1, 'browser'), row(1), row(1, 'browser')]);
+
+    expect([...started].sort((left, right) => left - right)).toEqual([0, 1, 2, 3]);
+    expect(beside.every((set) => set.filter((index) => index !== 2).length <= 1)).toBe(true);
+  });
+
+  test('runs a gate with no measured cost alone', async () => {
+    const { beside } = await waved([row(1), row(Number.POSITIVE_INFINITY, 'none', 9), row(1)]);
+
+    expect(beside.filter((set) => set.includes(1))).toEqual([[1]]);
+  });
+
+  test('launches nothing more once a gate has failed', async () => {
+    const { started } = await waved([row(8), row(8), row(8)], 1);
+
+    expect(started).toEqual([0]);
   });
 });
