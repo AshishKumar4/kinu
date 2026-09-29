@@ -3120,6 +3120,25 @@ describe('the open agent tab, as the browser paints it', () => {
   });
 });
 
+/**
+ * 2026-09-29 (the ci run on 9dd2971ae4): this row hung for 480 s on a waitForSelector the tabs frame always
+ * satisfies, and passes alone. A renderer that dies mid-wait was the only way to that shape: puppeteer answers its
+ * crash with an `error` event and nothing else, so an unbounded wait on the page never ended. The wait now ends with it.
+ */
+test('a wait on a page whose renderer crashed ends with the crash, not silence', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.goto(`${origin}/gallery.html?frame=tabs`, { waitUntil: 'networkidle0' });
+    const cdp = await page.createCDPSession();
+    // Held, not handed to `expect` yet: bun's `.rejects` settles its promise before returning, and nothing has crashed.
+    const waiting = page.waitForSelector('[data-tab-strip="never-rendered"]');
+
+    // The session dies with the renderer, so its own answer never comes: the wait's end is what is awaited.
+    await Promise.race([cdp.send('Page.crash'), Promise.allSettled([waiting])]);
+    await expect(waiting).rejects.toThrow('the page crashed');
+  });
+});
+
 /** One Work section, as the browser drew it. */
 interface WorkSection {
   readonly title: string;

@@ -59,7 +59,6 @@ export { CodemodeLauncher } from "./codemode-sandbox";
 
 export { SlateBinding } from "./slates/bindings";
 
-// An agent's own isolate reaches its workspace through this entrypoint only (agent-facets.ts).
 export { AgentWorkspaceRPC } from "./agent-facets";
 
 // Required: the Sandbox DO builds outbound interception from

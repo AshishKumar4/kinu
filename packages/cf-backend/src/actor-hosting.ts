@@ -9,25 +9,19 @@
 
 import type { Agent, AgentContext } from 'agents';
 import {
-  childContextResolver, createActorHost, defaultLoopOrigin, runEventSinks,
-  EvolutionEngine, EventLog, MissionGovernor,
-  facetHomeProvisioner, facetHomeReleaser, isVfsError,
-  headAgentName, subordinateAgentName, parseActorKey,
-  actorStateRoot, actorScaffoldPath,
-  nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT,
-  type ActorHost, type ActorHostDeps, type ActorRetirement, type BoundActor,
-  type ActorHandle, type ActorReference, type AgentOrchestratorDeps, type AgentRuntime,
-  type BackendHost, type BroadcastEvent, type ContextEventRecorder,
-  type DeferredApprovalChannel, type EnqueueTurnResult,
-  type LoopOrigin, type ModelCallReport,
-  type ModelOperationSink, type ModelPricing, type NimbusSandboxHandle, type NodeHomeHost,
-  type NodeWorkspace,
-  type ProfileAuthorityInputs, type ProgrammaticTurn, type ResolvedTurnProfile,
-  type SlateCallResult, type SlateOperation, type SqlExec, type SqlExecutor,
-  type SqlValue, type WorkMode,
-  type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver,
-  isSubordinateOrigin,
+  childContextResolver, createActorHost, defaultLoopOrigin, runEventSinks, EvolutionEngine, EventLog, MissionGovernor,
+  facetHomeProvisioner, facetHomeReleaser, headAgentName, subordinateAgentName, parseActorKey, actorStateRoot,
+  actorScaffoldPath, nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT, type ActorHost,
+  type ActorHostDeps, type ActorRetirement, type BoundActor, type ActorHandle, type ActorReference,
+  type AgentOrchestratorDeps, type AgentRuntime, type BackendHost, type BroadcastEvent,
+  type ContextEventRecorder, type DeferredApprovalChannel, type EnqueueTurnResult, type LoopOrigin,
+  type ModelCallReport, type ModelOperationSink, type ModelPricing, type NimbusSandboxHandle,
+  type NodeHomeHost, type NodeWorkspace, type ProfileAuthorityInputs, type ProgrammaticTurn,
+  type ResolvedTurnProfile, type SlateCallResult, type SlateOperation, type SqlExec,
+  type SqlExecutor, type SqlValue, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory,
+  type WriteObserver, isSubordinateOrigin,
 } from '@kinu.run/core';
+import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { KinuError, settle, type AgentTracing } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import { createCFRuntime, type CFRuntime, type CFRuntimeHooks } from './runtime';
@@ -96,11 +90,11 @@ export interface WorkspaceHostSeams {
   chosenWriteObserver(record: WorkspaceActor): WriteObserver | null;
 }
 
-/** Where a hosted actor lives; the one reader of the fields that decide it. */
+/** Where a hosted actor lives: one reader. */
 export interface HostedActorPlacement {
   /** A swarm node's home is in `head-`. */
   readonly homeName: string | null;
-  /** Origin-prefixed so a head's and a subordinate's shell state cannot collide on one id. */
+  /** Origin-prefixed: a head's and a subordinate's differ. */
   readonly shellId: string;
 }
 

@@ -8,7 +8,9 @@ import type { VFS, Memory, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { CraftStore } from '../types/agent-runtime';
 import { appendMemoryNote } from '../memory/note';
-import { isVfsError, vfsAddressingHint, withVfsErrorHint } from '../vfs/errno';
+import { vfsAddressingHint } from '@kinu.run/agent-utils/vfs';
+import { withVfsErrorHint } from '../vfs/errno';
+import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { readExecSignal } from '../execution/signal';
 import { commandResult, existsTool } from '../execution/exec-result';
@@ -38,6 +40,7 @@ const FileWriteSuccessSchema = v.object({
   path: v.string(),
   bytes: v.number(),
   action: v.picklist(['created', 'replaced']),
+  undo: v.optional(v.string()),
 });
 
 function parseInput<TSchema extends v.GenericSchema>(
@@ -149,9 +152,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         const result = await branchableToolCall(() => currentFileDispatch()({ action: 'write', path: p, content: text }));
         const success = v.safeParse(FileWriteSuccessSchema, result);
 
-        return success.success
-          ? `Written ${success.output.bytes} bytes to ${success.output.path}`
-          : result;
+        if (!success.success) return result;
+        const written = `Written ${success.output.bytes} bytes to ${success.output.path}`;
+
+        return success.output.undo === undefined ? written : `${written}\n${success.output.undo}`;
       },
     },
 

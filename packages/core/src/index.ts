@@ -73,7 +73,9 @@ export type { ProfileProvenance, SwarmProfileSnapshot } from './profiles';
 
 export { DEFAULT_WORKERS_AI_MODEL_SPEC } from './providers/workers-ai';
 
-export { readForkLineage, type ForkLineageRow } from './identity/fork';
+export {
+  readForkLineage, FORK_PIN_PREFIX, type ForkLineageRow, type ForkFileSource, type ForkPinnedFiles,
+} from './identity/fork';
 
 export {
   type ForkSnapshotHead, type ForkMemoryChunkRow, type ForkCraftedToolRow, type ForkConfigRow,
@@ -90,16 +92,13 @@ export {
   FORK_TRANSFER_VERSION, FORK_FRAME_BYTES, FORK_ROW_SECTIONS, FORK_STREAM_SEED,
   ForkTransferReceiver, forkTransferFrames, sealForkFrame,
   foldForkStream,
-  type ForkFrame, type ForkBeginFrame, type ForkFileFrame, type ForkRowFrame,
-  type ForkRowSection, type ForkSectionCounts, type ForkFrameOutcome,
+  type ForkFrame, type ForkBeginFrame, type ForkChunksFrame, type ForkPageFrame, type ForkRowFrame,
+  type ForkRowSection, type ForkSectionCounts, type ForkFrameOutcome, type ForkFrameReply, type ForkImportTarget,
   type UnsealedForkFrame,
-  type ForkFileSource, type ForkTransferSource,
+  type ForkTransferSource,
 } from './identity/fork-transfer';
 
-export {
-  NativeSinkPlan,
-  type ForkFileSink, type ForkFileCommit, type ForkNativeFilePort,
-} from './identity/fork-sink';
+export type { ForkFileSink } from './identity/fork-sink';
 
 export {
   forkPointExists, answersForDrainTurns, conversationTurnPair,
@@ -1119,13 +1118,10 @@ export type {
 } from './vfs/nimbus-workspace';
 
 export {
-  settledWorkspaceSoul, writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles, workspaceArchiveTarget, archiveFileTree,
+  settledWorkspaceSoul, writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource,
+  workspaceArchiveFiles, workspaceArchiveTarget, archiveFileTree,
 } from './vfs/workspace-planes';
 
-export {
-  makeVfsError, isVfsError, ERRNO, withVfsErrorHint, vfsAddressingHint,
-  type VfsErrorCode,
-} from './vfs/errno';
 
 export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observe';
 

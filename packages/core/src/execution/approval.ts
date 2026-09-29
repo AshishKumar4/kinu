@@ -117,12 +117,18 @@ export function withApprovalGatedFiles(
     exists: (path) => vfs.exists(path),
   };
 
+  const reported = vfs.writeFileWithReport?.bind(vfs);
   const conditional = vfs.writeFileIfRevision?.bind(vfs);
   const atRevision = vfs.readFileAtRevision;
   const readRange = vfs.readRange?.bind(vfs);
   const readdirStats = vfs.readdirStats?.bind(vfs);
   const rename = vfs.rename?.bind(vfs);
   const removeRecursive = vfs.removeRecursive?.bind(vfs);
+
+  // A write the owner approves still carries what undo cannot restore.
+  if (reported) {
+    gated.writeFileWithReport = (path, data) => settle(Effect.andThen(approve('write', path, data), Effect.promise(() => reported(path, data))));
+  }
 
   if (conditional) {
     gated.writeFileIfRevision = (path, data, expected) => settle(Effect.andThen(approve('write', path, data), Effect.promise(() => conditional(path, data, expected))));

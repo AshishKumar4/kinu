@@ -237,51 +237,53 @@ A workspace holds the state. Agents are the actors that work inside it.
   when the fork is made, which can hold work from after that message: SOUL.md,
   memory and the project tree, with directories, symlinks, modes and mtimes.
   That is what the Files tab shows, minus the scaffold, which the fork
-  re-bootstraps at v0. `.nimbus` (installed runtimes) and `.kinu` (agent state)
-  stay behind, except the payload files the carried conversation references.
-  The files are one snapshot: `snapshotForkFiles`
-  (`packages/core/src/identity/fork.ts`) walks the tree in one synchronous step,
-  and each later read checks Nimbus's mutation clock, so a file that changes
-  before it is copied refuses the fork by name rather than landing a mix.
-  `forkTransferFrames` (`packages/core/src/identity/fork-transfer.ts`) streams
-  the copy as bounded frames and `ForkTransferReceiver` lands them;
-  `deliverCloudFork` (`packages/cf-backend/src/user/workspace-fork.ts`) is the
-  hosted entry point.
+  re-bootstraps at v0. The home's own `.nimbus` (installed runtimes) and `.kinu`
+  (agent state) stay behind, except the payload files the carried conversation
+  references; the same names deeper in a project are the owner's data and cross
+  with it. The files are one instant: the source pins its store as the Nimbus
+  snapshot `fork:<transfer id>` (`packages/core/src/vfs/workspace-planes.ts`),
+  exports from it, and drops it however the transfer ends; a source's first pin
+  in an activation drops any a crashed transfer left behind, since a fork runs
+  inside its source. `forkTransferFrames`
+  (`packages/core/src/identity/fork-transfer.ts`) streams the copy as bounded
+  frames and `ForkTransferReceiver` lands them; `deliverCloudFork`
+  (`packages/cf-backend/src/user/workspace-fork.ts`) is the hosted entry point.
 
   On the hosted path the source and the target are two Durable Objects. One
   serialized RPC argument is capped at 32 MiB (`do.facet.rpc_bytes`) and a
   workspace's history is not, so the snapshot crosses as frames: a `begin` that
-  declares what is coming, a bounded batch of rows of one section, a bounded
-  batch of whole small files, directories and symlinks (each directory after
-  its contents, so its mtime holds), a bounded byte range of one larger file,
-  and a `commit`
-  (`packages/core/src/identity/fork-transfer.ts#forkTransferFrames`). Each
-  frame is one `rawCopyFromFork` call straight to the target stub, and
-  `ForkTransferReceiver` stages it into the target's own storage. Neither side
-  holds the whole snapshot, and no workspace is too big: a bigger one is more
-  frames.
+  declares what is coming, a bounded batch of rows of one section, SOUL.md whole
+  for its protected write, then each file tree as a Nimbus import: one per name
+  directly under the home and one per payload, each a sequence of export pages
+  (bounded rows, a large file as manifest fragments) and the chunks they name,
+  and a `commit`. A page crosses first; the target imports it at once when it
+  holds every chunk the page names, or answers with the ones it lacks, which
+  cross next, a frame of chunks at a time, followed by the page again. Content
+  is addressed by sha256, so a chunk the target already holds never crosses
+  twice. Each frame is one `rawCopyFromFork` call straight to the target stub.
+  Neither side holds the whole snapshot, and no workspace is too big: a bigger
+  one is more frames.
 
   The transfer's state belongs to the target, not to whichever activation
   receives a frame. The next expected frame, the rolling digest of the frames
   so far, what each section staged, the mission the inherited SOUL.md carried,
-  the file whose ranges are still arriving and how many of its bytes landed,
-  and whether the fork published are all rows of the target's own
-  `fork_transfer` table
+  the import whose pages are still arriving, and whether the fork published are
+  all rows of the target's own `fork_transfer` table
   (`packages/core/src/identity/fork-staging.ts#ForkStagingState`). An isolate
-  reset between two frames resumes instead of failing, even in the middle of a
-  file: the next activation's sink adopts the staging at the counted offset,
-  and the whole-file digest is read back out of that staging one bounded range
-  at a time rather than folded in memory. No activation has to have seen every
-  range of a file to verify it.
+  reset between two frames resumes instead of failing: Nimbus's import keeps its
+  own cursor, a page replayed is harmless, and a chunk a reset collected is
+  wanted again. A fresh `begin` removes what an abandoned transfer imported, but
+  Nimbus keeps the abandoned import's job, so the new import into the same path
+  is refused and that fork fails; the one after it lands (Nimbus ask, 0.13).
 
   The target checks the protocol version, the transfer identity, the frame
   order, each frame's digest, the declared per-section counts and the rolling
-  digest. It publishes nothing until the commit. Until then there is no
-  lineage, fork marker, mission or display name, and the roster row is still
+  digest; Nimbus re-hashes every chunk and checks every row as it imports. It
+  publishes nothing until the commit. Until then there is no lineage, fork
+  marker, mission or display name, and the roster row is still
   `create_pending`, so no user route reaches the workspace. A frame delivered
   again after publication is answered with the fork that landed. A gap, a
-  reordering or a corrupt frame is refused, and a fresh `begin` restarts the
-  transfer.
+  reordering or a corrupt frame is refused.
 
 | Surface | Shape |
 |---|---|

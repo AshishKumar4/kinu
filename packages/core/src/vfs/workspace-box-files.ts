@@ -2,6 +2,7 @@ import { CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-cont
 import type { CredentialedVfs, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import type { NimbusSandboxHandle } from '../execution/nimbus';
 import { tolerate } from '../obs/index';
+import { atVfsPath } from './errno';
 
 /** ENOENT, by `code`, is absence; any other failure throws. */
 function absentAsNull<T>(read: () => T): T | null {
@@ -9,27 +10,16 @@ function absentAsNull<T>(read: () => T): T | null {
 }
 
 export function workspaceBoxFiles(open: () => Promise<SqliteVFS>, cred: VfsCred = CRED_SESSION_USER): NimbusSandboxHandle['files'] {
-  const view = async (): Promise<CredentialedVfs> => (await open()).as(cred);
+  // SqliteVFS itself still throws plain Error objects carrying errno; the file port exposes Nimbus's VfsError.
+  const operate = <T>(path: string, syscall: string, action: (files: CredentialedVfs) => T): Promise<T> =>
+    atVfsPath(path, syscall, async () => action((await open()).as(cred)));
 
   return {
     as: (agent) => workspaceBoxFiles(open, agent),
-    async read(path) {
-      const vfs = await view();
-
-      return absentAsNull(() => vfs.readFileString(path));
-    },
-    async readBytes(path) {
-      const vfs = await view();
-
-      return absentAsNull(() => vfs.readFile(path));
-    },
-    async readRange(path, offset, length) {
-      const vfs = await view();
-
-      return absentAsNull(() => vfs.readRange(path, offset, length));
-    },
-    async write(path, content) {
-      const vfs = await view();
+    read: (path) => operate(path, 'read', (vfs) => absentAsNull(() => vfs.readFileString(path))),
+    readBytes: (path) => operate(path, 'read', (vfs) => absentAsNull(() => vfs.readFile(path))),
+    readRange: (path, offset, length) => operate(path, 'read', (vfs) => absentAsNull(() => vfs.readRange(path, offset, length))),
+    write: (path, content) => operate(path, 'write', (vfs) => {
       const cut = path.lastIndexOf('/');
 
       if (cut > 0) {
@@ -39,40 +29,24 @@ export function workspaceBoxFiles(open: () => Promise<SqliteVFS>, cred: VfsCred 
       }
 
       vfs.writeFile(path, content);
-    },
-    async stat(path) {
-      const vfs = await view();
+    }),
+    stat: (path) => operate(path, 'stat', (vfs) => absentAsNull(() => {
+      const stat = vfs.stat(path);
 
-      return absentAsNull(() => {
-        const stat = vfs.stat(path);
+      return { type: stat.type, size: stat.size, mtime: stat.mtime };
+    })),
+    lstat: (path) => operate(path, 'lstat', (vfs) => absentAsNull(() => {
+      const stat = vfs.lstat(path);
 
-        return { type: stat.type, size: stat.size, mtime: stat.mtime };
-      });
-    },
-    async lstat(path) {
-      const vfs = await view();
-
-      return absentAsNull(() => {
-        const stat = vfs.lstat(path);
-
-        return { type: stat.type, size: stat.size, mtime: stat.mtime, mode: stat.mode };
-      });
-    },
-    async readlink(path) {
-      const vfs = await view();
-
-      return absentAsNull(() => vfs.readlink(path));
-    },
-    async rename(from, to) { (await view()).rename(from, to); },
-    async chmod(path, mode) { (await view()).chmod(path, mode); },
-    async list(path) {
-      return (await view()).readdir(path ?? '/').map((entry) => ({ name: entry.name, type: entry.type }));
-    },
-    async exists(path) { return (await view()).exists(path); },
-    async mkdir(path) { (await view()).mkdir(path, { recursive: true }); },
-    async delete(path, options) {
-      const vfs = await view();
-
+      return { type: stat.type, size: stat.size, mtime: stat.mtime, mode: stat.mode };
+    })),
+    readlink: (path) => operate(path, 'readlink', (vfs) => absentAsNull(() => vfs.readlink(path))),
+    rename: (from, to) => operate(from, 'rename', (vfs) => vfs.rename(from, to)),
+    chmod: (path, mode) => operate(path, 'chmod', (vfs) => vfs.chmod(path, mode)),
+    list: (path) => operate(path ?? '/', 'readdir', (vfs) => vfs.readdir(path ?? '/').map((entry) => ({ name: entry.name, type: entry.type }))),
+    exists: (path) => operate(path, 'stat', (vfs) => vfs.exists(path)),
+    mkdir: (path) => operate(path, 'mkdir', (vfs) => vfs.mkdir(path, { recursive: true })),
+    delete: (path, options) => operate(path, 'unlink', (vfs) => {
       if (options?.recursive) {
         vfs.removeRecursive(path);
 
@@ -87,6 +61,6 @@ export function workspaceBoxFiles(open: () => Promise<SqliteVFS>, cred: VfsCred 
       }
 
       vfs.unlink(path);
-    },
+    }),
   };
 }

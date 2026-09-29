@@ -241,7 +241,7 @@ import { Effect } from 'effect';
 import { attempt, authoredRefusal, classify, diagnostics, KinuError, refusalOf, renderCauseChain, renderThrownChain, settle, settleSync, toKinuError, type Refusal } from "@kinu.run/core/obs";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
-import { deliverCloudFork } from "./user/workspace-fork";
+import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
 import { agentEmailAddress } from "./email/inbound";
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn,
@@ -636,7 +636,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     this.agentCreds.set(record.actorId, provisioning);
 
-    // A failed provisioning is not kept: the agent's next call provisions again.
     return await settle(attempt({ doing: "provisioning an agent's credential", otherwise: 'io' }, () => provisioning).pipe(
       Effect.tapError(() => Effect.sync(() => {
         if (this.agentCreds.get(record.actorId) === provisioning) this.agentCreds.delete(record.actorId);
@@ -644,7 +643,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     ));
   }
 
-  /** The agent's own isolate. Named by the storage key, so its SQLite follows the agent across wakes. */
+  /** Named by the storage key, so its SQLite follows the agent. */
   protected async agentFacetOf<Facet extends AgentFacet = AgentFacet>(actorId: string): Promise<Fetcher<Facet>> {
     return await agentFacet<Facet>(this.ctx, this.env, this.agentPlacement(actorId));
   }
@@ -1051,7 +1050,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
 
     // `report` belongs only to a parent-driven turn; an owner chat with this actor must not carry it.
-    // Only a delegated turn (`prepareHostedTask`) builds this surface, so the gate is satisfied here.
     deps.report = report;
     const tools = withHeadCaptureRecording(buildActorTools(deps), turn.capture);
 
@@ -1502,7 +1500,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private async drainActorAssignments(record: WorkspaceActor): Promise<boolean> {
-    // One turn at a time; a Stop dismisses input still pending.
     if (this.agentTurns.inFlight(record.actorId)) return false;
 
     const reference: ActorReference = {
@@ -1524,7 +1521,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return this.agentTurns.start(reference, task, { sequenceId: task.sequenceId, body: task.body, mode: task.mode }, {
           begin: async () => {
-            // A hirer's delivery opens the chat as an event naming the hirer; a chat send wrote its own row.
             if (task.messageId === undefined) {
               await (await this.agentCalls(record.actorId)).openTurn(this.agentSnapshot(record.actorId), {
                 id: task.sequenceId, message: turnInputMessage({ text: task.body }),
@@ -5473,7 +5469,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const fork = await forkWorkspace({
       sql: this.boundSql,
       actor: this.rt.actor,
-      // One snapshot of the workspace files, streamed through ranged reads: a fork holds one frame, never a whole file.
+      // One pin of the workspace files, exported a page and a frame of chunks at a time: a fork holds one frame.
       vfs: createWorkspaceForkSource(this.hostedWorkspace().bundle),
       artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)),
       sourceName: this.name,
@@ -5532,7 +5528,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /**
-   * Per-activation receiver cache (running hash, in-progress temp); transfer state lives in SQLite.
+   * Per-activation receiver cache; transfer state lives in SQLite.
    * Keyed by transfer id, which is per delivery, so a retry under a new id must rebuild it.
    */
   private forkReceiver: { transferId: string; receiver: ForkTransferReceiver } | null = null;
@@ -5549,7 +5545,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     const receiver = new ForkTransferReceiver(
       writer,
-      createWorkspaceForkSink(this.hostedWorkspace().bundle, transferId),
+      createWorkspaceForkSink(this.hostedWorkspace().bundle),
     );
 
     this.forkReceiver = { transferId, receiver };
@@ -5563,11 +5559,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     forkName: string,
     frame: ForkFrame,
     ownerUserId: string,
-  ): Promise<
-    | { ok: true; status: 'staged' }
-    | { ok: true; status: 'published'; agentId: string; capabilityHash: string | null; forkPointMs: number }
-    | { ok: false; reason: 'owned_by_another_user' }
-  > {
+  ): Promise<ForkFrameAck> {
     if (!ownerUserId) throw new KinuError('bad_input', 'fork owner is required');
     const currentOwner = this.getOwnerUserId();
 
@@ -5589,23 +5581,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const receiver = this.#forkReceiverFor(forkName, frame.transferId, ownerUserId);
     const outcome = await receiver.accept(frame);
 
-    if (outcome.status === 'staged') return { ok: true, status: 'staged' };
-
-    // Copied approval rows key the source scope, so copied instruction files start unverified.
-    if (outcome.status === 'settled') {
-      return {
-        ok: true, status: 'published', agentId: this.ctx.id.toString(),
-        capabilityHash: await this.workspaceCapabilityHash(), forkPointMs: outcome.result.forkPointMs,
-      };
+    // Publication does this once; an already-settled transfer only answers with the fork that landed.
+    if (outcome.status === 'published') {
+      await this.ensureOwnedScaffold();
+      await this.resetWorkspaceBaseline();
     }
 
-    await this.ensureOwnedScaffold();
-    await this.resetWorkspaceBaseline();
-
-    return {
-      ok: true, status: 'published', agentId: this.ctx.id.toString(),
+    const accepted = outcome.status === 'staged' || outcome.status === 'want' ? outcome : {
+      status: 'published' as const, agentId: this.ctx.id.toString(),
       capabilityHash: await this.workspaceCapabilityHash(), forkPointMs: outcome.result.forkPointMs,
     };
+
+    return { ok: true, ...accepted };
   }
 
 

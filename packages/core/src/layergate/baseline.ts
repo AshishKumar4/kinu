@@ -48,7 +48,7 @@ export const LOCKED_BASELINE: Baseline = {
   'evolution-gate/promotion-regression-veto': '5ecb549b764ca1ae',
   'file-plane/anchor-must-be-unique': 'fa31be300c1ebb7c',
   'file-plane/batch-is-atomic-and-original-anchored': '0ab62c86e64807d5',
-  'file-plane/mount-routes-to-the-owning-machine': '345f0c54ce8d05ce',
+  'file-plane/mount-routes-to-the-owning-machine': '8aa483abe3f072c3',
   'file-plane/no-silent-truncation': '61a58517126d4258',
   'memory-retrieval/hybrid-degrades-to-lexical': '1ff8c0dcaefbe53c',
   'memory-retrieval/hybrid-merges-sources': '0bd04cc10a21c155',

@@ -1,5 +1,5 @@
 import { Cause, Effect, Exit, Fiber, Scheduler } from 'effect';
-import type { VfsError } from '../vfs/errno';
+import type { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { classifyErrorCode, KinuError, renderThrownChain, toKinuError, type ErrorCode } from './error';
 
 const WITHIN_ONE_EVENT = new Scheduler.MixedScheduler('sync');

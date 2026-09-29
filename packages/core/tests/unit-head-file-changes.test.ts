@@ -2,7 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import { observeWrites } from '../src/vfs/observe';
 import { HeadFileChanges } from '../src/heads/file-changes';
 import type { VFS } from '../src/types/primitives';
-import { makeVfsError } from '../src/vfs/errno';
+import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 
 /** In-memory VFS with a read counter. */
 function memVfs(seed: Record<string, string> = {}): VFS & { reads: number; files: Map<string, string> } {
@@ -15,7 +15,7 @@ function memVfs(seed: Record<string, string> = {}): VFS & { reads: number; files
       self.reads++;
       const v = files.get(path);
 
-      if (v === undefined) throw makeVfsError('ENOENT', `no such file or directory, open '${path}'`, path);
+      if (v === undefined) throw new VfsError('ENOENT', 'no such file or directory, open', path);
 
       return v;
     },
@@ -109,7 +109,7 @@ describe('HeadFileChanges — the review a parent gets', () => {
       readFile: async (path: string, opts?: { encoding?: string }) => {
         const found = bytes.get(path);
 
-        if (found === undefined) throw makeVfsError('ENOENT', `no such file or directory, open '${path}'`, path);
+        if (found === undefined) throw new VfsError('ENOENT', 'no such file or directory, open', path);
 
         return opts?.encoding === 'utf8' ? new TextDecoder().decode(found) : found;
       },
@@ -147,7 +147,7 @@ describe('HeadFileChanges — the review a parent gets', () => {
 
     const refusing = observeWrites({
       ...memVfs(),
-      async writeFile(_path: string, _data: string | Uint8Array) { throw makeVfsError('EROFS', 'read-only', 'x.ts'); },
+      async writeFile(_path: string, _data: string | Uint8Array) { throw new VfsError('EROFS', 'read-only', 'x.ts'); },
     }, changes);
 
     await expect(refusing.writeFile('x.ts', 'nope')).rejects.toThrow('EROFS: read-only');
@@ -167,7 +167,7 @@ describe('HeadFileChanges — the review a parent gets', () => {
       async readFile(path: string) {
         if (path !== 'build') return workspace.readFile(path);
         directoryReads += 1;
-        throw makeVfsError('EISDIR', `illegal operation on a directory, read '${path}'`, path);
+        throw new VfsError('EISDIR', 'illegal operation on a directory, read', path);
       },
     }, changes);
 
@@ -183,7 +183,7 @@ describe('HeadFileChanges — the review a parent gets', () => {
 
     const vfs = observeWrites({
       ...workspace,
-      async readFile(path: string) { throw makeVfsError('EACCES', `permission denied, open '${path}'`, path); },
+      async readFile(path: string) { throw new VfsError('EACCES', `permission denied, open '${path}'`, path); },
     }, changes);
 
     await vfs.writeFile('locked.ts', 'y\n');

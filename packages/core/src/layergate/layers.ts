@@ -10,7 +10,7 @@ import type { CraftLedger } from '../craft/in-episode';
 import { TurnContextBudget } from '../context-budget';
 import { TurnFileLedger } from '../vfs/file-ledger';
 import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS } from '../tools/registry';
-import { isVfsError } from '../vfs/errno';
+import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { DEFAULT_SHADOW_CONFIG } from '../scaffold/shadow';
 import { createNoopVectorStore, type VectorSearchHit, type VectorStore } from '../memory/vector-store';
 import type { BackendHost } from '../types/backend-host';
@@ -1473,7 +1473,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
               readFile: async (path: string) => {
                 const content = byPath.get(path);
 
-                if (content === undefined) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+                if (content === undefined) throw new VfsError('ENOENT', 'no such file', path);
 
                 return content;
               },
@@ -1486,18 +1486,24 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             };
           };
 
+          const sandboxAbsence = () => 'no Sandbox container bound';
+
           const mounted = s.withMountTable(tree({ '/notes.md': 'workspace' }), [
             { name: 'pc', files: () => tree({ '/home/dev/a.txt': 'from the device' }), absentReason: () => 'no device connected', filesOwner: 'user' },
-            { name: 'sandbox', files: () => null, absentReason: () => 'no Sandbox container bound', filesOwner: 'agent' },
+            { name: 'sandbox', files: () => null, absentReason: sandboxAbsence, filesOwner: 'agent' },
           ]);
 
-          let absentReaddir = 'served an absent mount';
+          const absentReaddir = await (async () => {
+            try {
+              await mounted.readdir('/sandbox');
 
-          try { await mounted.readdir('/sandbox'); } catch (caught) {
-            absentReaddir = isVfsError(caught)
-              ? `${caught.code}: ${caught.message}`
-              : `unclassified: ${String(caught)}`;
-          }
+              return { code: 'served an absent mount', path: null, explainsAbsence: false };
+            } catch (caught) {
+              return isVfsError(caught)
+                ? { code: caught.code, path: caught.path ?? null, explainsAbsence: caught.message.includes(sandboxAbsence()) }
+                : { code: 'unclassified', path: null, explainsAbsence: false };
+            }
+          })();
 
           return [
             ['mounted-read', await mounted.readFile('/pc/home/dev/a.txt', { encoding: 'utf8' })],

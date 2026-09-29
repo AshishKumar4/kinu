@@ -25,7 +25,7 @@ import {
 } from '../src/identity/inline-primitives';
 import type { WorkspaceBundle, WorkspaceVFS } from '../src/vfs/nimbus-workspace';
 import { createWorkspaceForkSource } from '../src/vfs/workspace-planes';
-import type { ForkFileSource } from '../src/identity/fork-transfer';
+import type { ForkFileSource } from '../src/identity/fork';
 import type { VfsNativeReads } from '../src/vfs/mounts';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { createAgentStores, type AgentStores } from '../src/state/agent-stores';

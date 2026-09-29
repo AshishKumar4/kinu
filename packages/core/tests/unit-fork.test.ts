@@ -3,14 +3,13 @@
 
 import { describe, test, expect } from 'bun:test';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { forkTransferFrames, readForkLineage, readSoul } from '../src/index';
+import { forkTransferFrames, readForkLineage, readSoul, type ForkFrameReply } from '../src/index';
 import { createTestWorkspace as fresh, type TestWorkspace } from './helpers';
 import {
   ForkConversation, readChain, readWorkingContext, seedForkSource, seedForkTarget,
   SOURCE_ARTIFACTS, SPILLED_BYTES, TARGET_ARTIFACTS,
 } from './helpers/fork-conversation';
-import { streamFork } from './helpers/fork-stream';
-import { snapshotForkFiles } from '../src/identity/fork';
+import { receiverFor, sourceFrames, streamFork } from './helpers/fork-stream';
 import { SHELL_APPROVAL_AUTHORITY_KEYS } from '../src/config/store';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
@@ -309,12 +308,15 @@ describe('a workspace fork', () => {
     source.writeFile(at('app/src/main.ts'), 'export const answer = 42;\n');
     source.utimes(at('app/src/main.ts'), mtime, mtime);
     source.writeFile(at('app/run.sh'), '#!/bin/sh\necho ran\n', { mode: 0o755 });
-    // Larger than a frame here, so it crosses as ranges rather than whole.
+    // Larger than a frame here: a chunk past the frame budget crosses alone.
     source.writeFile(at('app/data.bin'), binary);
     source.symlink('src/main.ts', at('app/entry.ts'));
     source.mkdir(at('app/empty'));
     source.mkdir(at('.nimbus/runtimes'), { recursive: true });
     source.writeFile(at('.nimbus/runtimes/installed'), 'platform state');
+    // The same names deeper in a project are the owner's: a cloned repository can hold them.
+    source.mkdir(at('app/.kinu'), { recursive: true });
+    source.writeFile(at('app/.kinu/notes.md'), 'a project\'s own');
 
     await forkInto(src, tgt, { untilMessageId: 'm1', frameBytes: 128 });
 
@@ -327,10 +329,13 @@ describe('a workspace fork', () => {
     expect(target.readlink(at('app/entry.ts'))).toBe('src/main.ts');
     expect(target.isDirectory(at('app/empty'))).toBe(true);
     expect(target.exists(at('.nimbus/runtimes/installed'))).toBe(false);
+    expect(target.readFileString(at('app/.kinu/notes.md'))).toBe('a project\'s own');
   });
 
-  test('a file written while the fork copies it refuses the fork and names the file', async () => {
+  test('a file written while the fork copies it lands as it was when the fork began, and the pin goes after', async () => {
     const src = fresh();
+    const tgt = fresh();
+    await seedForkTarget(tgt, { workspaceId: 'TGT' });
     const chat = await seedForkSource(src);
     await chat.say({ id: 'm1', role: 'user', text: 'hi' });
     await src.vfs.writeFile('notes.md', 'as the fork began');
@@ -340,11 +345,41 @@ describe('a workspace fork', () => {
       untilMessageId: 'm1', transferId: 'tx-moving', frameBytes: 1024,
     });
 
-    // The first frame is produced after the snapshot, so this write lands between snapshot and copy.
-    expect((await frames.next()).value?.kind).toBe('begin');
-    await src.vfs.writeFile('notes.md', 'written while the fork copied');
+    const receiver = receiverFor(tgt, { workspaceId: 'TGT', workspaceName: 'my-fork', artifactDirectory: TARGET_ARTIFACTS });
+    let reply: ForkFrameReply | undefined;
+    let written = false;
 
-    await expect(Array.fromAsync(frames)).rejects.toThrow(/"notes\.md" changed while the fork was copying/);
+    for (let next = await frames.next(); !next.done; next = await frames.next(reply)) {
+      // The first frame is produced after the pin, so this write lands between the pin and the copy.
+      if (!written) {
+        await src.vfs.writeFile('notes.md', 'written while the fork copied');
+        written = true;
+      }
+
+      const outcome = await receiver.accept(structuredClone(next.value));
+      reply = outcome.status === 'want' ? { want: outcome.hashes } : undefined;
+    }
+
+    expect(await tgt.vfs.readFile('notes.md', { encoding: 'utf8' })).toBe('as the fork began');
+    expect(await src.vfs.readFile('notes.md', { encoding: 'utf8' })).toBe('written while the fork copied');
+    expect((await src.bundle.session()).vfs.snapshots().map((pin) => pin.name)).not.toContain('fork:tx-moving');
+  });
+
+  test('a stream that ends early still drops its pin', async () => {
+    const src = fresh();
+    const chat = await seedForkSource(src);
+    await chat.say({ id: 'm1', role: 'user', text: 'hi' });
+    const pins = async () => (await src.bundle.session()).vfs.snapshots().map((pin) => pin.name);
+
+    const frames = forkTransferFrames({
+      sql: src.sql, actor: chat.actor, vfs: src.forkSource, artifactDirectory: SOURCE_ARTIFACTS,
+      untilMessageId: 'm1', transferId: 'tx-early', frameBytes: 1024,
+    });
+
+    expect((await frames.next()).value?.kind).toBe('begin');
+    expect(await pins()).toContain('fork:tx-early');
+    await frames.return(undefined);
+    expect(await pins()).not.toContain('fork:tx-early');
   });
 
   test('writes one fork_lineage row naming the source and the cut', async () => {
@@ -487,22 +522,31 @@ describe('a workspace fork', () => {
 });
 
 describe('the files a fork carries', () => {
-  test('SOUL.md first, the tree with each directory after its contents, then payloads once each', async () => {
+  test('SOUL.md first, then one import a name under the home in order, then each payload once', async () => {
     const ws = fresh();
-    await seedForkSource(ws);
+    const chat = await seedForkSource(ws, { memory: [] });
     await ws.vfs.writeFile('b/inner.md', 'inner');
     await ws.vfs.writeFile('a.md', 'top');
-    await ws.vfs.writeFile(`${SOURCE_ARTIFACTS}/aaa.json`, '{}');
-    await ws.vfs.writeFile(`${SOURCE_ARTIFACTS}/bbb.json`, '{}');
-    const payload = (relative: string) => ({ relative, path: `${SOURCE_ARTIFACTS}/${relative}` });
+    await chat.say({ id: 'm1', role: 'user', text: 'p'.repeat(SPILLED_BYTES) });
+    await chat.say({ id: 'm2', role: 'user', text: 'q'.repeat(SPILLED_BYTES) });
 
-    const snapshot = snapshotForkFiles(await ws.forkSource.open(), [payload('aaa.json'), payload('aaa.json'), payload('bbb.json')]);
-    const carried = snapshot.entries.map((entry) => `${entry.kind}:${entry.path}${'artifact' in entry && entry.artifact ? ' (payload)' : ''}`);
+    const frames = await sourceFrames(ws, 'm2');
 
-    const written = ['file:SOUL.md', 'file:a.md', 'file:b/inner.md', 'directory:b'];
+    const carried = [...new Set(frames.flatMap((frame) => {
+      if (frame.kind === 'soul') return ['SOUL.md'];
 
-    expect(carried.filter((entry) => written.includes(entry) || entry.endsWith('(payload)'))).toEqual([
-      'file:SOUL.md', 'file:a.md', 'file:b/inner.md', 'directory:b', 'file:aaa.json (payload)', 'file:bbb.json (payload)',
-    ]);
+      if (frame.kind !== 'page') return [];
+
+      return [frame.target.in === 'home' ? frame.target.name : `payload ${frame.target.path}`];
+    }))];
+
+    const payloads = carried.filter((name) => name.startsWith('payload '));
+
+    expect(carried[0]).toBe('SOUL.md');
+    expect(carried.filter((name) => ['a.md', 'b'].includes(name))).toEqual(['a.md', 'b']);
+    expect(carried.slice(-payloads.length)).toEqual(payloads);
+    expect(payloads).toHaveLength(2);
+    expect(carried).not.toContain('scaffold');
+    expect(carried).not.toContain('.kinu');
   });
 });

@@ -311,7 +311,7 @@ occurrences, 7 classes searched, 87 instances over 76 sites. The lock holds
 
 The count is a floor (`scripts/silent-drop.ts:46-57`). The script cannot
 resolve handlers passed by name, stored promises that are never awaited, or
-chaining inside a wrapper factory (`parent.ts`'s `makeVfsError` does chain). It
+chaining inside a wrapper factory. It
 skips everything outside `readSources()`, fixtures included.
 
 It ratchets because a gate that demanded zero over a non-zero population would
@@ -562,10 +562,10 @@ file-plane errno codes. `effect` is pinned exactly to 4.0.0-rc.117, because 4.0.
 release candidate.
 
 A function that can fail returns `Effect<A, KinuError>`; a file-plane function
-returns `Effect<A, VfsError>`, whose POSIX `code` callers switch on with
-`isVfsError`. A defect is anything
-else thrown or died; readers render it as reason `null`, as they do today. The
-boundary is `obs/effect.ts`:
+returns `Effect<A, VfsError>`. The file-plane class and `isVfsError` come from
+`@nimbus-sh/core/vfs/vfs-error.js`, the same class Nimbus commands recognize.
+Native filesystem errors are converted with its `toVfsError` at the host boundary.
+A defect is anything else thrown or died; the runner is `obs/effect.ts`.
 
 | Function | What it does |
 | --- | --- |
@@ -675,7 +675,7 @@ the same typed failures through the SDK.
 | `nimbus.ts` | An absent binding (`unavailable`, worth a retry) apart from a session handle with no such surface (`unsupported`, permanent). On the CF backend Nimbus is the workspace, so this covers every call. |
 | `device-tunnel-executor.ts` | No device attached (`unavailable`) apart from the device answering "no" (`io`). Without a code, a prose string in either case reaches no reader as a failure at all. |
 | `inline.ts` | `denied` for the misevolution veto, a gate refusing rather than a defect in the tool it protects, and `bad_input` for arguments that never described an operation. Its `exec` throws a shell failure with the chain intact. |
-| `parent.ts` | Nothing of its own. `makeVfsError` puts the parent's `code` on the error and `classifyErrorCode` reads errnos, so `ENOENT` arrives as `missing`, and everything both backends collapse into `EIO` arrives as the catch site's `otherwise`, which is `io` for every caller. The exception is `cancelled`: the abort signal races the RPC, so an aborted caller gets `cancelled` instead of losing that class on this tool. |
+| `parent.ts` | Nimbus's `VfsError` preserves the parent's errno. `classifyErrorCode` maps `ENOENT` to `missing` and `EIO` to `io`. Cancellation remains separate: the abort signal races the RPC, so an aborted caller receives `cancelled`. |
 
 `core/tests/unit-tool-failure-census.test.ts` pins four fixed defects:
 
