@@ -94,14 +94,27 @@ export class SessionContext {
       throw new KinuError('missing', 'context revision does not exist');
     }
 
-    const kept = this.heads.get(contextId);
-
-    if (head && kept?.revision === revision && this.holds(selection, kept)) return kept.entries;
-
     if (!head) {
       return Object.freeze(this.sql<MemberRow>`SELECT entry_id,position,message_id FROM context_memberships WHERE actor_id=${actorId} AND context_id=${contextId}
         AND from_revision<=${revision} AND (to_revision IS NULL OR to_revision>${revision}) ORDER BY position`.map(entryOf));
     }
+
+    return this.headEntries(selection);
+  }
+
+  /** Selection and membership from one synchronous read boundary; the selection already names the head. */
+  snapshot() {
+    const selection = this.selected() ?? this.initialize();
+
+    return { selection, entries: this.headEntries(selection) };
+  }
+
+  private headEntries(selection: ContextSelection): readonly ContextEntry[] {
+    const { contextId, revision } = selection;
+    const actorId = this.actor.actorId;
+    const kept = this.heads.get(contextId);
+
+    if (kept?.revision === revision && this.holds(selection, kept)) return kept.entries;
 
     const rows = this.sql<MemberRow & { from_revision: number }>`SELECT entry_id,position,message_id,from_revision FROM context_memberships
       WHERE actor_id=${actorId} AND context_id=${contextId} AND to_revision IS NULL ORDER BY position`;
@@ -117,32 +130,38 @@ export class SessionContext {
   private holds(selection: ContextSelection, kept: KeptHead): boolean {
     const actorId = this.actor.actorId;
 
-    const opened = this.sql<MemberRow>`SELECT entry_id,position,message_id FROM context_memberships
-      WHERE actor_id=${actorId} AND context_id=${selection.contextId} AND from_revision=${selection.revision}`;
+    const rows = this.sql<{ entry_id: string | null; position: number | null; message_id: string | null; last: number | null }>`SELECT m.entry_id,m.position,m.message_id,
+      (SELECT MAX(position) FROM context_memberships WHERE actor_id=${actorId} AND context_id=${selection.contextId} AND to_revision IS NULL) AS last
+      FROM (SELECT 1) LEFT JOIN context_memberships m
+        ON m.actor_id=${actorId} AND m.context_id=${selection.contextId} AND m.from_revision=${selection.revision}`;
 
-    if (openedKey(opened.map(entryOf)) !== kept.opened) return false;
+    const opened: ContextEntry[] = [];
 
-    const last = this.sql<{ last: number | null }>`SELECT MAX(position) AS last FROM context_memberships
-      WHERE actor_id=${actorId} AND context_id=${selection.contextId} AND to_revision IS NULL`[0]?.last ?? null;
+    for (const row of rows) {
+      if (row.entry_id !== null && row.position !== null && row.message_id !== null) opened.push({ entryId: row.entry_id, position: row.position, messageId: row.message_id });
+    }
 
-    return (last === null ? 0 : last + 1) === kept.entries.length;
+    const last = rows[0]?.last ?? null;
+
+    return (last === null ? 0 : last + 1) === kept.entries.length && openedKey(opened) === kept.opened;
   }
 
   conversationOf(members: readonly ContextEntry[]): ContextEntry[] {
     return members.filter(member => this.messages.originOf(member) !== 'render');
   }
 
-  /** The mutation callback publishes message rows under the same transaction as their membership. */
-  commit(expected: ContextSelection, request: ContextCommitRequest): ContextSelection {
+  /** The mutation callback publishes message rows under the same transaction as their membership.
+   *  Null `expected` prepares nothing asynchronously: it mutates the current selection. */
+  commit(expected: ContextSelection | null, request: ContextCommitRequest): ContextSelection {
     const { cause, turnId, mutate, assertEpoch, proposal } = request;
 
     return this.atomic(() => {
       this.actor.assertCurrent();
       assertEpoch();
-      const selected = this.selected();
+      const selected = this.selected() ?? (expected === null ? this.initialize() : null);
 
-      if (selected?.contextId !== expected.contextId || selected.revision !== expected.revision) throw new KinuError('denied', 'context changed during preparation');
-      const current = this.entries(expected);
+      if (selected === null || (expected !== null && (selected.contextId !== expected.contextId || selected.revision !== expected.revision))) throw new KinuError('denied', 'context changed during preparation');
+      const current = this.headEntries(selected);
       const next = mutate(current);
       const ids = new Set<string>();
       const prior = new Map(current.map(entry => [entry.entryId, entry]));
@@ -160,7 +179,7 @@ export class SessionContext {
       }
 
       // An empty authored edit is still recorded: an explicitly empty history is a statement.
-      return this.revise(expected, current, next, { author: proposal?.author ?? this.actor.actorId, cause, turnId, proposalId: proposal?.id ?? null,
+      return this.revise(selected, current, next, { author: proposal?.author ?? this.actor.actorId, cause, turnId, proposalId: proposal?.id ?? null,
         recordUnchanged: proposal !== undefined || cause === 'edit' });
     });
   }
@@ -174,7 +193,7 @@ export class SessionContext {
       this.actor.assertCurrent();
       request.assertEpoch();
       const selected = this.selected() ?? this.initialize();
-      const current = this.entries(selected);
+      const current = this.headEntries(selected);
       const kept = at.replaces ? this.conversationOf(current) : current;
       const anchor = kept.findIndex(entry => entry.entryId === at.before);
       const index = anchor < 0 ? kept.length : anchor;
@@ -193,7 +212,7 @@ export class SessionContext {
       const expected = head === null ? this.fork(null, contextId) : { contextId, revision: head };
       const next = messages.map((message, position) => ({ messageId: message.messageId, entryId: String(position), position }));
 
-      return this.revise(expected, this.entries(expected), next, { author: this.actor.actorId, cause: 'render', turnId: null, proposalId: null, recordUnchanged: false });
+      return this.revise(expected, this.headEntries(expected), next, { author: this.actor.actorId, cause: 'render', turnId: null, proposalId: null, recordUnchanged: false });
     });
   }
 
