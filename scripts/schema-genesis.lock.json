@@ -1333,6 +1333,9 @@
     "active INTEGER NOT NULL CHECK (active IN (0, 1))",
     "PRIMARY KEY (actor_id, generation, path)"
   ],
+  "vfs_state.schema@@nimbus-sh/core": [
+    "schema 3"
+  ],
   "webhook_rate_windows@packages/core/src/events/ingress/rate-limit.ts": [
     "trigger_id TEXT NOT NULL",
     "window_start INTEGER NOT NULL",

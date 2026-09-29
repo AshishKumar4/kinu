@@ -3,11 +3,11 @@
  * so the provisioner runs on the owning object. Proved against the real `NimbusWorkspace` and `rpcExec`.
  */
 import { describe, expect, test } from 'bun:test';
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { HostedRuntime } from '@nimbus-sh/worker/workspace-host';
-import type { SqlDatabase, SqlRow, SqlValue, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type { SqlDatabase, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { NimbusSandboxHandle, NodeHomeHost, NodeIdentity } from '@kinu.run/core';
 import {
   facetHomeProvisioner, facetHomeReleaser, nimbusSessionFiles, headAgentName, restoreAgentTmpConfinements,
@@ -21,26 +21,12 @@ import {
   rpcExec,
   type ProgrammaticHost,
 } from './helpers/programmatic-host';
+import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
 
 const ROOT: VfsCred = { uid: 0, gid: 0, groups: [0], umask: 0o022 };
 
 /** The session user every unnamed exec already runs as. */
 const ORIGIN: VfsCred = { uid: 1000, gid: 1000, groups: [1000], umask: 0o022 };
-
-function sqlBinding(value: SqlValue): SQLQueryBindings {
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-
-  if (ArrayBuffer.isView(value)) {
-    const bytes = new Uint8Array(value.byteLength);
-    const source = new DataView(value.buffer, value.byteOffset, value.byteLength);
-
-    for (let index = 0; index < bytes.length; index += 1) bytes[index] = source.getUint8(index);
-
-    return bytes;
-  }
-
-  return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
-}
 
 interface OwnerFixture {
   readonly workspace: NimbusWorkspace;
@@ -56,21 +42,11 @@ interface OwnerFixture {
 async function openOwner(): Promise<OwnerFixture> {
   const database = new Database(':memory:');
 
-  const sql: SqlDatabase = {
-    exec(query: string, ...bindings: SqlValue[]) {
-      const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
-      const bound = bindings.map(sqlBinding);
-
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
-      statement.run(...bound);
-
-      return [];
-    },
-  };
+  const { sql, transactions } = inlineWorkspaceStorage(database);
 
   const workspace = await NimbusWorkspace.create({
     sql,
-    transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
+    transactions,
     generation: 1,
     cwd: WORKSPACE_ROOT,
     env: { HOME: WORKSPACE_ROOT },

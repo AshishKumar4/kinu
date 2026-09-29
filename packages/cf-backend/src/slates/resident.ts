@@ -27,7 +27,7 @@ export interface ResidentSlateProcess extends SlateProcess {
 }
 
 export interface ResidentSlateDeps {
-  session: () => Promise<Pick<WorkspaceSession, 'vfs' | 'processes'>>;
+  session: () => Promise<Pick<WorkspaceSession, 'vfs' | 'processes' | 'filesystem'>>;
   /** Every resident spawn goes through its `spawnWorker` and every teardown through its `kill`. */
   facetManager: () => Promise<ComposedFacetManager>;
 }
@@ -400,7 +400,7 @@ export class ResidentSlateProcesses {
     let bundler = this.bundlers.get(bundlerKey);
 
     if (bundler === undefined) {
-      bundler = new EsbuildService(session.vfs.as(input.cred));
+      bundler = new EsbuildService(session.filesystem.namespaceFs(input.cred));
       this.bundlers.set(bundlerKey, bundler);
     }
 

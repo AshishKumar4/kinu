@@ -6,6 +6,7 @@ import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { newWebSocketRpcSession } from 'capnweb';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { seedBaseFilesystem } from '@nimbus-sh/core/workspace';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
@@ -51,6 +52,7 @@ const SLATE_ID = 'board';
 
 export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);
+  private readonly filesystem = new ProcessFiles(this.vfs);
   private readonly processes = new SessionProcessSupervisor();
   private readonly ports = new PortRegistry();
   private readonly host: SlateHost;
@@ -76,9 +78,9 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       execRaw: (ddl: string) => ctx.storage.sql.exec(ddl), sql, exec, transactionSync: (write) => ctx.storage.transactionSync(write),
     });
     initSlateLiveShareTables((ddl: string) => ctx.storage.sql.exec(ddl));
-    seedBaseFilesystem(this.vfs, ['home', 'etc']);
+    seedBaseFilesystem(this.vfs);
     // As the Kinu boot leaves every workspace: slates are the workspace's, not its main agent's.
-    settleWorkspaceSlates(this.vfs.as(CRED_KERNEL));
+    settleWorkspaceSlates(this.vfs.as(CRED_KERNEL), (path) => { this.vfs.registerSharedDirectory(path); });
     // Pids are generation-scoped per boot so a re-spawned process never gets a pid with a live append writer. The
     // probe hosts no Kinu workspace, so it keeps its own counter, one atomic statement per construction.
     ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS probe_generation (id INTEGER PRIMARY KEY, value INTEGER NOT NULL)');
@@ -88,11 +90,11 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
     ).one().value;
 
     this.processes.setPidBase(generation * PID_GEN_STRIDE);
-    const facets = probeFacetManager({ ctx, env, processes: this.processes, portRegistry: this.ports, vfs: this.vfs });
+    const facets = probeFacetManager({ ctx, env, processes: this.processes, portRegistry: this.ports, vfs: this.vfs, filesystem: this.filesystem });
 
     this.host = new SlateHost({
       ctx, workspace: ctx.id.name ?? ctx.id.toString(),
-      session: async () => ({ vfs: this.vfs, processes: this.processes }),
+      session: async () => ({ vfs: this.vfs, processes: this.processes, filesystem: this.filesystem }),
       facetManager: async () => facets,
       dispatch: async (_caller, route) => {
         if (route.kind !== 'namespace') throw new Error(`probe dispatch answers namespace only, got ${route.kind}`);

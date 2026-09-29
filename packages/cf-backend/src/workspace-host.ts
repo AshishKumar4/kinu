@@ -13,7 +13,7 @@ import type {
 } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError, type Refusal } from '@kinu.run/core/obs';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
-import { SUPERVISOR_OPS, type SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
+import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
 import type { MountedVfs, ObjectNamespace } from '@kinu.run/core';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -112,25 +112,14 @@ export interface WorkspaceTerminal {
   terminalClose(ws: TerminalSocket): void;
 }
 
-/** `op` arrives as wire data: any string a process in this workspace put on it. */
-export interface WireSupervisorEnvelope extends Omit<SupervisorOpEnvelope, 'op'> {
-  readonly op: string;
-}
-
-const SERVED_OPS: ReadonlySet<string> = new Set(SUPERVISOR_OPS);
-
-/** A runtime refusal: every `SupervisorOpName` is served, so only an off-the-wire name reaches it. */
-function servesOp(envelope: WireSupervisorEnvelope): envelope is SupervisorOpEnvelope {
-  return SERVED_OPS.has(envelope.op);
-}
-
 export interface HostedWorkspace {
   readonly bundle: WorkspaceBundle;
   /** A stateless view: the named shell's cwd and exported variables live in the runtime, keyed by `shellId`. */
   box(shellId: string): NimbusSandboxHandle;
   /** Answered by the hosted runtime (host ops need it), for every name this object is opened under; a
-     *  sibling is never a Kinu workspace, so nothing here claims an owner or writes a transcript. */
-  supervisorOp(envelope: WireSupervisorEnvelope): Promise<SupervisorOpResult>;
+     *  sibling is never a Kinu workspace, so nothing here claims an owner or writes a transcript. The envelope
+     *  is a hosted process's own data: Nimbus's dispatcher is the one place that refuses an op it does not serve. */
+  supervisorOp(envelope: SupervisorOpEnvelope): Promise<SupervisorOpResult>;
   /** The slate host's spawn/kill path and the one registrar of a resident's port. */
   facetManager(): Promise<ComposedFacetManager>;
   ports(): Promise<PortRegistry>;
@@ -348,13 +337,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
 
   return {
     bundle,
-    async supervisorOp(envelope: WireSupervisorEnvelope): Promise<SupervisorOpResult> {
-      if (!servesOp(envelope)) {
-        throw new KinuError('bad_input', `supervisor op: '${envelope.op}' names no operation this host serves`);
-      }
-
-      return (await runtime()).supervisorOp(envelope);
-    },
+    supervisorOp: async (envelope) => (await runtime()).supervisorOp(envelope),
     box: (shellId) => workspaceBox({
       runtime, ports: portRegistry, ctx: deps.ctx, files, shellId, previewUrl: deps.previewUrl, previewGates,
       mountTable: (plane, cred) => bundle.mountTable(plane, cred),

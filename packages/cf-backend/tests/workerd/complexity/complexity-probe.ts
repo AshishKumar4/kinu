@@ -13,10 +13,11 @@ import { SlateId } from '@agent-core/core/slates';
 import {
   ChangeSetCache, DynamicContextLedger, MAIN_AGENT, WORKSPACE_IDENTITY_DDL, WorkspaceActorDirectory,
   agentArtifactDirectory, agentHome, composePrepareStep, createAgentStores, getWorkspaceDiff, initActorClaimTables,
-  initAgentConfigTable, initCodemodeStateTable, initWorkspaceActorTable, initWorkspaceBaselineTable, initWorkspaceSchema,
-  classifyRunEnd, closeTurnRun, nimbusSessionFiles, openTurnRun, resetWorkspaceBaseline, standardMounts, withMountTable,
+  initAgentConfigTable, initCodemodeStateTable, initWorkspaceActorTable, initWorkspaceSchema,
+  classifyRunEnd, closeTurnRun, nimbusSessionFiles, openTurnRun, resetWorkspaceBaseline, settleWorkspaceSlates, standardMounts,
+  withMountTable,
   type ActorHandle, type AgentStores, type NimbusSandboxHandle, type SqlExecutor,
-  type SqlValue, type StepContextPlane, type StepPipeline, type VFS,
+  type SqlValue, type StepContextPlane, type StepPipeline, type VFS, type WorkspaceBaselines,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { SlateFiles, WorkspaceSlateContentStore, slateDirectory } from '@kinu.run/core/slates';
@@ -135,7 +136,12 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
 
   private workspace(): Promise<SqliteVFS> {
     this.opened ??= NimbusWorkspace.create({ sql: this.sql, transactions: { storage: this.ctx.storage } })
-      .then((workspace) => workspace.vfs);
+      .then((workspace) => {
+        // As a workspace boot leaves it: /slates the kernel's, shared with the workspace's agents.
+        settleWorkspaceSlates(workspace.vfs.as(CRED_KERNEL), (path) => { workspace.vfs.registerSharedDirectory(path); });
+
+        return workspace.vfs;
+      });
 
     return this.opened;
   }
@@ -294,27 +300,26 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     });
   }
 
+  /** The store the orchestrator's Diffs read, as the session user. */
+  private async baselines(): Promise<WorkspaceBaselines> {
+    return { store: await this.workspace(), cred: CRED_SESSION_USER };
+  }
+
   /** Subject: one Diffs read of a workspace of `files` files with one edited since its baseline. */
   async diffRead(files: number): Promise<OperationCost> {
     const actor = this.main();
     const vfs = this.agentFiles();
-
-    initWorkspaceBaselineTable(this.execRaw);
+    const baselines = await this.baselines();
 
     for (let index = 0; index < files; index += 1) await vfs.writeFile(filePath(index), fileText(index));
 
-    const runtime = {
-      storage: { vfs, sql: this.executor, execRaw: this.execRaw, transactionSync: <T,>(write: () => T): T => this.ctx.storage.transactionSync(write) },
-      actor,
-    };
-
-    await resetWorkspaceBaseline(runtime);
+    await resetWorkspaceBaseline({ actor }, baselines);
     const edited = Math.floor(files / 2);
 
     await vfs.writeFile(filePath(edited), fileText(edited, 1));
 
     return await this.meter.measure(async () => {
-      const diff = await getWorkspaceDiff(runtime);
+      const diff = await getWorkspaceDiff({ actor }, baselines);
 
       if (diff.files.length !== 1) throw new Error(`the Diffs read saw ${String(diff.files.length)} changed files, not the 1 edited`);
 
@@ -333,22 +338,17 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     const changes = new ChangeSetCache(() => {});
 
     (await this.workspace()).events.on((batch) => changes.touched(batch.flatMap((event) => (event.oldPath === undefined ? [event.path] : [event.path, event.oldPath]))));
-    initWorkspaceBaselineTable(this.execRaw);
+    const baselines = await this.baselines();
 
     for (let index = 0; index < files; index += 1) await vfs.writeFile(filePath(index), fileText(index));
 
-    const runtime = {
-      storage: { vfs, sql: this.executor, execRaw: this.execRaw, transactionSync: <T,>(write: () => T): T => this.ctx.storage.transactionSync(write) },
-      actor,
-    };
-
-    await resetWorkspaceBaseline(runtime);
+    await resetWorkspaceBaseline({ actor }, baselines);
     changes.moved();
     await vfs.writeFile(filePath(Math.floor(files / 2)), fileText(Math.floor(files / 2), 1));
-    const first = await changes.read(() => getWorkspaceDiff(runtime));
+    const first = await changes.read(() => getWorkspaceDiff({ actor }, baselines));
 
     return await this.meter.measure(async () => {
-      const again = await changes.read(() => getWorkspaceDiff(runtime));
+      const again = await changes.read(() => getWorkspaceDiff({ actor }, baselines));
 
       if (again.files.length !== 1 || first.files.length !== 1) throw new Error(`the poll saw ${String(again.files.length)} changed files, not the 1 edited`);
 

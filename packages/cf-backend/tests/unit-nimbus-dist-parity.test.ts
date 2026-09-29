@@ -3,17 +3,18 @@
  * would pass here and differ in production, so this suite loads `dist`.
  */
 import { test, expect } from 'bun:test';
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import type {
-  SqlDatabase,
-  SqlRow,
-  SqlValue,
-  TransactionHost,
-  VfsCred,
-} from '@nimbus-sh/core/runtime/os-contracts.js';
-// By path: Bun's exports condition would resolve `src`, not what a bundled Worker loads.
-import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
+
+// By file: every export, `./*.js` included, answers Bun's condition with `src`, which a bundled Worker never loads.
+const DIST = new URL(import.meta.resolve('@nimbus-sh/core/vfs/sqlite-vfs.js')).pathname
+  .replace(/\/src\/vfs\/sqlite-vfs\.ts$/u, '/dist/vfs/sqlite-vfs.js');
+
+if (!DIST.endsWith('/dist/vfs/sqlite-vfs.js')) throw new Error(`no dist build of SqliteVFS beside ${DIST}`);
+
+const { SqliteVFS }: typeof import('@nimbus-sh/core/vfs/sqlite-vfs.js') = await import(DIST);
 
 const ROOT: VfsCred = { uid: 0, gid: 0, groups: [0], umask: 0o022 };
 
@@ -21,41 +22,12 @@ const A: VfsCred = { uid: 2001, gid: 2001, groups: [2001], umask: 0o022 };
 
 const B: VfsCred = { uid: 2002, gid: 2002, groups: [2002], umask: 0o022 };
 
-function sqlBinding(value: SqlValue): SQLQueryBindings {
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-
-  if (ArrayBuffer.isView(value)) {
-    const bytes = new Uint8Array(value.byteLength);
-    const source = new DataView(value.buffer, value.byteOffset, value.byteLength);
-
-    for (let index = 0; index < bytes.length; index += 1) bytes[index] = source.getUint8(index);
-
-    return bytes;
-  }
-
-  return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
-}
-
 test('dist carries the per-credential /tmp, the list reverse-map, and confined chmod', () => {
   const database = new Database(':memory:');
 
-  const sql: SqlDatabase = {
-    exec(query: string, ...bindings: SqlValue[]) {
-      const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
-      const bound = bindings.map(sqlBinding);
+  const { sql, transactions } = inlineWorkspaceStorage(database);
 
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
-      statement.run(...bound);
-
-      return [];
-    },
-  };
-
-  const ctx: TransactionHost = {
-    storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() },
-  };
-
-  const vfs = new SqliteVFS(sql, ctx);
+  const vfs = new SqliteVFS(sql, transactions);
 
   const root = vfs.as(ROOT);
   root.mkdir('tmp', { recursive: true });
@@ -71,7 +43,7 @@ test('dist carries the per-credential /tmp, the list reverse-map, and confined c
   vfs.as(A).writeFile('/tmp/note.txt', 'A bytes');
   vfs.as(B).writeFile('/tmp/note.txt', 'B bytes');
 
-  const keys = [...sql.exec("SELECT path FROM inodes WHERE path LIKE 'tmp%'")]
+  const keys = [...sql.exec("SELECT path FROM vfs_inodes WHERE path LIKE 'tmp%'")]
     .map((row) => v.parse(v.string(), row.path)).sort();
 
   expect(keys).toContain('tmp/agent-a/note.txt');
@@ -91,7 +63,7 @@ test('dist carries the per-credential /tmp, the list reverse-map, and confined c
   vfs.as(A).rename('/tmp/note.txt', '/tmp/moved.txt');
   expect(vfs.as(A).readFileString('/tmp/moved.txt')).toBe('A bytes');
   expect(vfs.as(B).readFileString('/tmp/note.txt')).toBe('B bytes');
-  expect([...sql.exec("SELECT path FROM inodes WHERE path LIKE 'tmp/agent-a/%'")].map((row) => v.parse(v.string(), row.path)))
+  expect([...sql.exec("SELECT path FROM vfs_inodes WHERE path LIKE 'tmp/agent-a/%'")].map((row) => v.parse(v.string(), row.path)))
     .toEqual(['tmp/agent-a/moved.txt']);
 
   root.mkdir('home/agent-a', { recursive: true });
@@ -114,21 +86,9 @@ test('dist keeps file bytes coherent across an embedder transaction rollback', (
   const database = new Database(':memory:');
 
   try {
-    const sql: SqlDatabase = {
-      exec(query: string, ...bindings: SqlValue[]) {
-        const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
-        const bound = bindings.map(sqlBinding);
+    const { sql, transactions } = inlineWorkspaceStorage(database);
 
-        if (statement.columnNames.length > 0) return statement.all(...bound);
-        statement.run(...bound);
-
-        return [];
-      },
-    };
-
-    const vfs = new SqliteVFS(sql, {
-      storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() },
-    });
+    const vfs = new SqliteVFS(sql, transactions);
 
     const files = vfs.as(ROOT);
     const original = new TextEncoder().encode('committed source bytes');
@@ -151,6 +111,38 @@ test('dist keeps file bytes coherent across an embedder transaction rollback', (
       throw failure;
     })).toThrow(expect.objectContaining({ cause: failure }));
     expect(files.readFile('server.js')).toEqual(original);
+  } finally {
+    database.close();
+  }
+});
+
+// Fix 1 of ASK-core-0.13.1, shipped in core 0.13.1: rename rebuilt the live inode from the entry before the move, so
+// what was moved into a shared directory stayed its owner's alone.
+test('dist shares what is moved into a shared directory, in the engine that moved it', () => {
+  const database = new Database(':memory:');
+
+  try {
+    const { sql, transactions } = inlineWorkspaceStorage(database);
+
+    const vfs = new SqliteVFS(sql, transactions);
+
+    const root = vfs.as(ROOT);
+    const member: VfsCred = { ...A, groups: [A.gid, 1000] };
+    root.mkdir('shared');
+    root.chown('shared', 0, 1000);
+    root.chmod('shared', 0o2775);
+    root.setDefaultAcl('shared', 0o775);
+    vfs.registerSharedDirectory('shared');
+    root.mkdir('home/agent-a', { recursive: true });
+    root.chown('home/agent-a', A.uid, A.gid);
+    vfs.as(member).mkdir('home/agent-a/draft');
+    vfs.as(member).writeFile('home/agent-a/draft/app.js', 'moved in');
+
+    vfs.as(member).rename('home/agent-a/draft', 'shared/draft');
+
+    expect(root.stat('shared/draft/app.js')).toMatchObject({ gid: 1000 });
+    vfs.as({ ...B, groups: [B.gid, 1000] }).writeFile('shared/draft/app.js', 'the other member writes');
+    expect(root.readFileString('shared/draft/app.js')).toBe('the other member writes');
   } finally {
     database.close();
   }

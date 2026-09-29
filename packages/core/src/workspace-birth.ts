@@ -16,7 +16,6 @@ import { unpricedLedgerSink } from './events/model-call-event';
 import { initRunEventTables, RunEventRecorder } from './events/recorder';
 import { buildRuntime } from './runtime-builder';
 import { createSqlFiber } from './execution/fiber';
-import { initWorkspaceBaselineTable, resetWorkspaceBaseline } from './read-models/workspace-diff';
 import type { WorkspaceBundle } from './vfs/nimbus-workspace';
 import { writeWorkspaceSoul } from './vfs/workspace-planes';
 import type { ActorHandle } from './identity/actor-handle';
@@ -76,7 +75,6 @@ export async function createWorkspace(
   const { workspace, actor } = transactionSync(() => {
     initAllTables(execRaw, sql);
     execRaw(`PRAGMA user_version = ${String(SCHEMA_GENESIS_STAMP)}`);
-    initWorkspaceBaselineTable(execRaw);
     const bundle = createInlineWorkspace(db);
 
     const workspaceId = nanoid();
@@ -103,9 +101,5 @@ export async function createWorkspace(
   await workspace.vfs.mkdir('memory', { recursive: true });
   await workspace.vfs.writeFile('memory/MEMORY.md', `# ${heading}\n\nCreated: ${new Date().toISOString()}\n`);
 
-  const runtime = buildComponents({ db, sql, execRaw, transactionSync, workspace, actor, llm: config.llm });
-
-  await resetWorkspaceBaseline(runtime);
-
-  return runtime;
+  return buildComponents({ db, sql, execRaw, transactionSync, workspace, actor, llm: config.llm });
 }

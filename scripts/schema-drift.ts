@@ -53,8 +53,11 @@
  */
 
 import { createHash } from 'node:crypto';
+import { Database } from 'bun:sqlite';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import * as v from 'valibot';
+import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
 import { assertMeasured, finding } from './gate-ratchet';
 import type { CreateTableStmt, CreateViewStmt, Node as SqlNode } from 'sql-parser-cst';
 import { isProductSource, readMatching } from './sources';
@@ -513,6 +516,25 @@ export function lockUpdate(
   };
 }
 
+/**
+ * Nimbus's file store shares each workspace database with Kinu's tables, so its format is part of the genesis: a
+ * local database made under an older format is refused by name, where Nimbus would reset it on first open. The
+ * format is the schema number Nimbus writes into a store it creates; `@nimbus-sh/core` does not export it.
+ */
+export function nimbusStoreDdl(): TableDdl {
+  const database = new Database(':memory:');
+
+  try {
+    const { sql, transactions } = inlineWorkspaceStorage(database);
+    new SqliteVFS(sql, transactions);
+    const schema = v.parse(v.number(), database.query<{ schema: unknown }, []>('SELECT schema FROM vfs_state').get()?.schema);
+
+    return { table: 'vfs_state.schema', file: '@nimbus-sh/core', parts: [`schema ${String(schema)}`] };
+  } finally {
+    database.close();
+  }
+}
+
 export interface Survey {
   /** Files ENUMERATED. Every product source, so the corpus is the same set the
    *  other gates hold. */
@@ -522,6 +544,8 @@ export interface Survey {
   readonly runtimeNamed: number;
   readonly tables: readonly TableDdl[];
   readonly views: readonly TableDdl[];
+  /** The Nimbus store format, locked beside the tables. */
+  readonly store: TableDdl;
   readonly lock: GenesisLock;
   readonly violations: readonly Violation[];
   /** Locked tables and views no longer in the corpus. Retained on purpose — see header. */
@@ -540,7 +564,8 @@ export function survey(lock: GenesisLock = readGenesisLock()): Survey {
   const declared = [...sources].map(([file, source]) => ddlIn(file, source));
   const tables = declared.flatMap((file) => file.tables);
   const views = declared.flatMap((file) => file.views);
-  const present = new Set([...tables, ...views].map(({ table, file }) => lockKey(table, file)));
+  const store = nimbusStoreDdl();
+  const present = new Set([...tables, ...views, store].map(({ table, file }) => lockKey(table, file)));
 
   return {
     files: sources.size,
@@ -548,8 +573,9 @@ export function survey(lock: GenesisLock = readGenesisLock()): Survey {
     runtimeNamed: declared.reduce((sum, file) => sum + file.runtimeNamed, 0),
     tables,
     views,
+    store,
     lock,
-    violations: [...driftViolations(tables, lock), ...viewDriftViolations(views, lock)],
+    violations: [...driftViolations([...tables, store], lock), ...viewDriftViolations(views, lock)],
     retired: Object.keys(lock).filter((key) => !present.has(key)).sort(),
   };
 }
@@ -558,7 +584,8 @@ export function survey(lock: GenesisLock = readGenesisLock()): Survey {
  *  visible only in red output is invisible exactly when the tree is green. */
 export function blindSpots(state: Survey): string[] {
   return [
-    'reads DDL as SQLite\'s grammar, never a database: nothing here runs a statement or opens storage',
+    'reads Kinu\'s DDL as SQLite\'s grammar, never a database; the one store it opens is an empty in-memory '
+      + 'Nimbus store, for the format number Nimbus writes',
     'column ORDER is not compared, and a formatting-only edit to a definition reads as a change',
     'a column block a template GENERATES is compared by column name only; its types come from '
       + 'an object this reads the keys of',
@@ -602,7 +629,7 @@ if (import.meta.main) {
 
   if (locking) {
     const update = lockUpdate(
-      [...state.tables, ...state.views], state.lock, (entry) => genesisForNewTable(entry, state.lock),
+      [...state.tables, ...state.views, state.store], state.lock, (entry) => genesisForNewTable(entry, state.lock),
     );
 
     if (update.refused.length > 0) {

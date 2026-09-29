@@ -3,10 +3,10 @@
  * file plane (raw filesystem) and the shell (kernel mount table), so every claim asserts both planes.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
-import type { SqlDatabase, SqlRow, SqlValue, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { CRED_KERNEL, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import {
   programmaticHostOver,
@@ -14,6 +14,8 @@ import {
   rpcExec,
   type ProgrammaticHost,
 } from './helpers/programmatic-host';
+import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
+import { settleWorkspaceRoot } from '@kinu.run/core';
 
 const databases: Database[] = [];
 
@@ -29,21 +31,6 @@ const AGENT_A: VfsCred = { uid: 2001, gid: 2001, groups: [2001], umask: 0o022 };
 
 const AGENT_B: VfsCred = { uid: 2002, gid: 2002, groups: [2002], umask: 0o022 };
 
-function sqlBinding(value: SqlValue): SQLQueryBindings {
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-
-  if (ArrayBuffer.isView(value)) {
-    const bytes = new Uint8Array(value.byteLength);
-    const source = new DataView(value.buffer, value.byteOffset, value.byteLength);
-
-    for (let index = 0; index < bytes.length; index += 1) bytes[index] = source.getUint8(index);
-
-    return bytes;
-  }
-
-  return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
-}
-
 interface Fixture {
   readonly workspace: NimbusWorkspace;
   readonly host: ProgrammaticHost;
@@ -57,26 +44,19 @@ async function openFixture(): Promise<Fixture> {
   const database = new Database(':memory:');
   databases.push(database);
 
-  const sql: SqlDatabase = {
-    exec(query: string, ...bindings: SqlValue[]) {
-      const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
-      const bound = bindings.map(sqlBinding);
-
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
-      statement.run(...bound);
-
-      return [];
-    },
-  };
+  const { sql, transactions } = inlineWorkspaceStorage(database);
 
   const processes = new SessionProcessSupervisor();
 
   const workspace = await NimbusWorkspace.create({
     sql,
-    transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
+    transactions,
     generation: 1,
     processes,
   });
+
+  // As Kinu's boot leaves it: the workspace root, and its old name a link to it.
+  settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
 
   const host = programmaticHostOver(workspace).host;
 
@@ -85,7 +65,7 @@ async function openFixture(): Promise<Fixture> {
   return {
     workspace,
     host,
-    storageKeys: () => [...sql.exec("SELECT path FROM inodes WHERE path LIKE 'tmp%'")]
+    storageKeys: () => [...sql.exec("SELECT path FROM vfs_inodes WHERE path LIKE 'tmp%'")]
       .map((row) => v.parse(v.string(), row.path)).sort(),
     confine: (cred, name) => {
       // A per-agent chown is uid-0 only.

@@ -37,8 +37,8 @@ describe('v2 e2e: workspace executor via createInlineExecutor', () => {
     expect(provider.kind).toBe('workspace');
     expect(provider.capabilities.has('shell')).toBe(true);
 
-    await provider.tools.writeFile.execute('/a.txt', 'hello');
-    expect(await provider.tools.readFile.execute('/a.txt')).toBe('hello');
+    await provider.tools.writeFile.execute('a.txt', 'hello');
+    expect(await provider.tools.readFile.execute('a.txt')).toBe('hello');
     expect(await provider.tools.exec.execute('echo hi')).toBe('hi\n');
   });
 });

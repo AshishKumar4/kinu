@@ -85,9 +85,8 @@ const SUBJECTS: readonly Subject[] = [{
   sizes: [10, 1_000, 10_000],
   run: async (probe, size) => await probe.diffRead(size),
   rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
-  tables: { vfs_baseline_manifest: { rowsRead: 'O(n)' } },
-  why: 'a read compares the tree with the baseline manifest, which it reads whole; it reads the bytes of '
-    + 'only the files whose size or mtime moved (file_chunks, vfs_baseline_blob) and writes nothing',
+  why: 'the baseline is a Nimbus snapshot of the store, and a read pages its diff, which visits only the paths '
+    + 'written since the review; it reads the two sides of each of those and writes nothing',
 }, {
   name: 'workspace Diffs, a poll with nothing changed',
   unit: 'files in the workspace',
@@ -95,7 +94,7 @@ const SUBJECTS: readonly Subject[] = [{
   run: async (probe, size) => await probe.diffPoll(size),
   rows: { rowsRead: 'O(1)', rowsWritten: 'O(1)', statements: 'O(1)', rowsScanned: 'O(1)' },
   why: 'the change-set is held until a file event on a reviewed path or a review moves it, so a poll with '
-    + 'nothing changed reads neither the tree nor the manifest',
+    + 'nothing changed reads nothing of the store',
 }, {
   name: 'slate, eight new versions in a row',
   unit: 'versions already taken',
@@ -143,9 +142,10 @@ const turnStatements = new Map<number, OperationCost['tables']>();
  * approvals, shares, pictures, consents, plan review, scaffold settings) were held until their stores wrote (-80),
  * the opened history was reused for the request (-24), a request resolved its model spec once (-17), a step sealed
  * from the parts it held (-11), a synchronous terminal effect wrote its attempt with its outcome (-2), and no
- * terminal-retry wake was armed into a sequence this process runs (-5).
+ * terminal-retry wake was armed into a sequence this process runs (-5). Nimbus core 0.13.1 adds three vfs_inodes path
+ * lookups because its tree lives in SQL instead of an in-memory inode map: 398.
  */
-const TURN_STATEMENTS = 395;
+const TURN_STATEMENTS = 398;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {

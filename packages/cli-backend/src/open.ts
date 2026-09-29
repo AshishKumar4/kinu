@@ -1,6 +1,6 @@
 import type { LLMProviderConfig } from '@kinu.run/core';
 import {
-  initWorkspaceBaselineTable, initWorkspaceSchema, initActorStateSchema, readSoul, summarizeSoul,
+  initWorkspaceSchema, initActorStateSchema, readSoul, summarizeSoul,
   getCurrentScaffoldVersion, memoryBytes,
 } from '@kinu.run/core';
 import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, waitOnSharedWrites, type CLIRuntime } from './runtime';
@@ -61,7 +61,6 @@ export async function openWorkspaceCLI(
     identity = stored;
   }
 
-  initWorkspaceBaselineTable((ddl) => db.exec(ddl));
   const rt = createCLIRuntime(db, { ...config, agentName: identity.name });
 
   // SOUL belongs to the agent, not to the shared physical project directory.
