@@ -159,6 +159,10 @@
     "settled_at INTEGER",
     "PRIMARY KEY (actor_id, id)"
   ],
+  "browser_sessions@packages/core/src/web/browser-sessions.ts": [
+    "session_id TEXT PRIMARY KEY",
+    "actor_id TEXT NOT NULL"
+  ],
   "cache_warm@packages/core/src/providers/cache-warming.ts": [
     "actor_id TEXT PRIMARY KEY",
     "requests INTEGER NOT NULL",

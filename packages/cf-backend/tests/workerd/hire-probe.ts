@@ -60,12 +60,12 @@ export class HireOrchestrator extends ProductionOrchestrator {
   /** A settled task hire moves only the directory, not the roster, so child assertions state which plane they read. */
   async actorRows(): Promise<ActorRow[]> {
     const rows = this.probeState.storage.sql.exec<{
-      actor_id: string; name: string; kind: string; retiring_at: number | null; deleted_at: number | null;
-    }>(`SELECT actor_id, name, kind, retiring_at, deleted_at
+      actor_id: string; name: string; parent_actor_id: string | null; retiring_at: number | null; deleted_at: number | null;
+    }>(`SELECT actor_id, name, parent_actor_id, retiring_at, deleted_at
         FROM workspace_actors ORDER BY created_at`).toArray();
 
     return rows.map((row) => ({
-      actorId: row.actor_id, name: row.name, kind: row.kind,
+      actorId: row.actor_id, name: row.name, hired: row.parent_actor_id !== null,
       retiringAt: row.retiring_at, deletedAt: row.deleted_at,
     }));
   }
@@ -272,7 +272,7 @@ type OwnerTarget = Pick<UserDO,
   'registerWorkspace' | 'ensureWorkspaceCapability' | 'setCredential' | 'getProfileCatalog' | 'putProfileCatalog'>;
 
 export class HireProbeRoot extends Agent<ProbeRootEnv> {
-  /** Settles when the durable lane's `msg` call was authored. */
+  /** Settles once the durable lane's `msg` call has returned its receipt, its admission written. */
   async msgSent(): Promise<void> {
     await fetch('http://hire-control.invalid/hire/msg-sent');
   }

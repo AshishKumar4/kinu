@@ -32,6 +32,8 @@ import { LocalAgentSession } from '../src/local-session';
 const stubWeb: WebSearchProvider = {
   search: async () => ({ query: '', results: [], source: 'duckduckgo' }),
   fetch: async () => ({ url: '', title: '', markdown: '', retrievedAt: '' }),
+  render: async () => ({ url: '', title: '', markdown: '', retrievedAt: '' }),
+  screenshot: async () => ({ url: '', retrievedAt: '', bytes: new Uint8Array() }),
 };
 
 /** A parent CLI runtime; `db` rides along because `localTestActorHost` needs the parent's own connection. */

@@ -20,7 +20,8 @@ import {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from '../identity/effect-tombstones';
 import { nowMs } from '../utils/date';
-import { diagnostics, toKinuError, KinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { diagnostics, settle, toKinuError, KinuError } from '../obs/index';
 import { parseJsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
 import { checkMisevolution, recordMisevolutionVeto } from '../safety/misevolution';
@@ -500,61 +501,63 @@ export function decidePromotion(
  * a rollback (with `vetoReason`) when the on-disk pending fails misevolution
  * criteria. Callers must report `action`, not their request.
  */
-export async function applyPromotionDecision(
+export function applyPromotionDecision(
   rt: AgentRuntime,
   pending: PendingScaffold,
   decision: 'promote' | 'rollback',
   events: ScaffoldDecisionEvents,
 ): Promise<{ newCurrentVersion: number; action: 'promote' | 'rollback'; vetoReason?: string }> {
-  rt.actor.assertCurrent();
+  return settle(Effect.gen(function* () {
+    rt.actor.assertCurrent();
 
-  if (events.actorId !== rt.actor.actorId) throw new KinuError('denied', 'a scaffold decision requires its actor event recorder');
-  const sql = rt.storage.sql;
+    if (events.actorId !== rt.actor.actorId) return yield* new KinuError('denied', 'a scaffold decision requires its actor event recorder');
+    const sql = rt.storage.sql;
 
-  if (decision === 'promote') {
-    // Re-check misevolution against the version file bytes that will actually run.
-    const pendingCode = await readScaffoldVersion(rt, pending.version);
+    if (decision === 'promote') {
+      // Re-check misevolution against the version file bytes that will actually run.
+      const pendingCode = yield* Effect.promise(() => readScaffoldVersion(rt, pending.version));
 
-    if (pendingCode == null) {
-      throw new Error(`promote failed: no scaffold code found for v${pending.version}`);
+      if (pendingCode == null) {
+        return yield* Effect.die(new Error(`promote failed: no scaffold code found for v${pending.version}`));
+      }
+
+      const misevolution = checkMisevolution(pendingCode);
+
+      if (!misevolution.ok) {
+        recordMisevolutionVeto(sql, rt.actor, {
+          surface: 'scaffold', violation: misevolution,
+          detail: `promotion of v${pending.version} vetoed; rolled back instead`,
+        });
+        const result = yield* Effect.promise(() => applyPromotionDecision(rt, pending, 'rollback', events));
+
+        return { ...result, vetoReason: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };
+      }
+
+      // One actor-scoped statement retires the old current and promotes the pending, so no crash leaves zero or two current rows.
+      void sql`UPDATE scaffold_versions
+          SET status = CASE WHEN version = ${pending.version} THEN 'current' ELSE 'historical' END
+          WHERE actor_id = ${rt.actor.actorId}
+            AND (version = ${pending.version}
+                 OR (status = 'current' AND version != ${pending.version}))`;
+      yield* Effect.promise(() => rt.identity.scaffold.write(pendingCode));
+      yield* recordScaffoldDecision(events, { type: 'scaffold_promotion', fromVersion: pending.version - 1, toVersion: pending.version });
+
+      return { newCurrentVersion: pending.version, action: 'promote' };
     }
 
-    const misevolution = checkMisevolution(pendingCode);
+    void sql`UPDATE scaffold_versions SET status = 'rolled_back'
+        WHERE actor_id = ${rt.actor.actorId} AND version = ${pending.version}`;
+    const currentVersion = getCurrentScaffoldVersion(sql, rt.actor) ?? (pending.version - 1);
+    const currentCode = yield* Effect.promise(() => readScaffoldVersion(rt, currentVersion));
 
-    if (!misevolution.ok) {
-      recordMisevolutionVeto(sql, rt.actor, {
-        surface: 'scaffold', violation: misevolution,
-        detail: `promotion of v${pending.version} vetoed; rolled back instead`,
-      });
-      const result = await applyPromotionDecision(rt, pending, 'rollback', events);
-
-      return { ...result, vetoReason: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };
+    if (currentCode != null) {
+      yield* Effect.promise(() => rt.identity.scaffold.write(currentCode));
     }
 
-    // One actor-scoped statement retires the old current and promotes the pending, so no crash leaves zero or two current rows.
-    void sql`UPDATE scaffold_versions
-        SET status = CASE WHEN version = ${pending.version} THEN 'current' ELSE 'historical' END
-        WHERE actor_id = ${rt.actor.actorId}
-          AND (version = ${pending.version}
-               OR (status = 'current' AND version != ${pending.version}))`;
-    await rt.identity.scaffold.write(pendingCode);
-    recordScaffoldDecision(events, { type: 'scaffold_promotion', fromVersion: pending.version - 1, toVersion: pending.version });
+    yield* recordScaffoldDecision(events, { type: 'scaffold_rollback', fromVersion: pending.version, toVersion: currentVersion });
 
-    return { newCurrentVersion: pending.version, action: 'promote' };
-  }
-
-  void sql`UPDATE scaffold_versions SET status = 'rolled_back'
-      WHERE actor_id = ${rt.actor.actorId} AND version = ${pending.version}`;
-  const currentVersion = getCurrentScaffoldVersion(sql, rt.actor) ?? (pending.version - 1);
-  const currentCode = await readScaffoldVersion(rt, currentVersion);
-
-  if (currentCode != null) {
-    await rt.identity.scaffold.write(currentCode);
-  }
-
-  recordScaffoldDecision(events, { type: 'scaffold_rollback', fromVersion: pending.version, toVersion: currentVersion });
-
-  return { newCurrentVersion: currentVersion, action: 'rollback' };
+    return { newCurrentVersion: currentVersion, action: 'rollback' };
+  }));
 }
 
 /**
@@ -565,14 +568,11 @@ export async function applyPromotionDecision(
 function recordScaffoldDecision(
   events: ScaffoldDecisionEvents,
   event: { type: 'scaffold_promotion' | 'scaffold_rollback'; fromVersion: number; toVersion: number },
-): void {
-  try {
-    events.emit(WORKSPACE_RUN_ID, event);
-  } catch (err) {
-    diagnostics.failure('event.scaffold_decision_emit_failed', toKinuError({
-      doing: 'recording a scaffold promotion/rollback run event',
-      cause: err,
-      otherwise: 'io',
-    }), { action: event.type });
-  }
+): Effect.Effect<void> {
+  return Effect.try({
+    try: () => events.emit(WORKSPACE_RUN_ID, event),
+    catch: (cause) => toKinuError({ doing: 'recording a scaffold promotion/rollback run event', cause, otherwise: 'io' }),
+  }).pipe(Effect.catch((failure) => Effect.sync(() => {
+    diagnostics.failure('event.scaffold_decision_emit_failed', failure, { action: event.type });
+  })));
 }

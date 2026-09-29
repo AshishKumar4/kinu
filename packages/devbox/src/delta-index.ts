@@ -93,8 +93,8 @@ export function lookupDeltaIndex(ref: DeltaIndexRef, size: number, offset: numbe
     const left = page.subarray(48, 80).toString('hex');
     const right = page.subarray(80, 112).toString('hex');
 
-    if ((src !== 1 && src !== 2) || page.subarray(9, 16).some(byte => byte !== 0)
-      || page.subarray(112).some(byte => byte !== 0) || (src === 2 && d !== NULL_CHILD)
+    if ((src !== 1 && src !== 2) || page.subarray(9, 16).some((byte: number) => byte !== 0)
+      || page.subarray(112).some((byte: number) => byte !== 0) || (src === 2 && d !== NULL_CHILD)
       || (lo === mid) !== (left === NULL_CHILD) || (mid + 1 === hi) !== (right === NULL_CHILD)) {
       throw new Error('invalid delta index page');
     }

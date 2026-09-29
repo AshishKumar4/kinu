@@ -87,7 +87,7 @@ import { TierIdSchema,
   AdvisorRecoverySnapshotSchema,
   reviewRecordedTurn,
   advisorWorkspaceGuidance,
-  createDefaultWebSearchProvider, createWebCodemodeProvider, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
+  createDefaultWebSearchProvider, createWebCodemodeProvider, restBrowserRunAccess, REAL_CLOCK, type DefaultWebSearchProviderDeps, type Clock, type WebSearchProvider,
   createAgentsCodemodeProvider, createStateCodemodeProvider,
   type CodemodeProvider,
   agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider,
@@ -157,7 +157,7 @@ import { TierIdSchema,
 import {
   diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
 } from '@kinu.run/core/obs';
-import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from './runtime';
+import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, writeTransaction, type CLIRuntime } from './runtime';
 import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, type LocalActorBinding } from '@kinu.run/core';
 import { discoverAgentsMd } from './agents-md';
 import { createNodeCraftedExecute } from './craft-executor';
@@ -621,7 +621,7 @@ export class LocalAgentSession {
       eventRecorder: this.eventRecorder,
       compactionState: this.compactionState,
       // `rt.storage.sql` and `db` are the same connection.
-      transaction: (body) => this.db.transaction(body)(),
+      transaction: (body) => writeTransaction(this.db, body),
       transport: { deliver: (event) => { opts.onEvent(event); } },
       ports: {
         prepareTurn: (item, lease) => this.prepareTurn(item, lease),
@@ -1109,7 +1109,7 @@ export class LocalAgentSession {
 
   /** Only `web.*`: a head forks its parent's resources, never its authority to delegate. */
   private headCodemodeExtras(): CodemodeProvider[] {
-    return [createWebCodemodeProvider(this.getWebSearchProvider())];
+    return [this.webNamespace()];
   }
 
   /** Skips a window outliving the session so consumed events never bind to a dead pump's turn. */
@@ -1784,6 +1784,7 @@ export class LocalAgentSession {
       liveTurn.retries = profile.retries;
       liveTurn.fallbacks = profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
         spec: normalize(spec),
+        accepts: this.modelCatalog.acceptedMedia(spec),
         bind: () => {
           const { provider } = parseModelSpec(normalize(spec));
 
@@ -2034,7 +2035,7 @@ export class LocalAgentSession {
         now: () => Date.now() + this.terminalClockSkewMs,
         fault: () => this.terminalEffectFault,
         // A real transaction on the same connection, so an interruption leaves a suffix, never a prefix.
-        transaction: <T,>(body: () => T): T => this.db.transaction(body)(),
+        transaction: <T,>(body: () => T): T => writeTransaction(this.db, body),
         // A re-announced turn keeps its id, so two responses can share a `turnId`; without this a close
         // deleted the live claim.
         turnIsLive: (turnId) => this.chat.pumping && this.chat.currentTurnId === turnId,
@@ -2234,12 +2235,22 @@ export class LocalAgentSession {
     const options: DefaultWebSearchProviderDeps = {
       fetch: globalThis.fetch,
       resolve: async (hostname) => (await lookup(hostname, { all: true, verbatim: true })).map((answer) => answer.address),
+      browser: restBrowserRunAccess({ env: process.env, fetch: globalThis.fetch }),
     };
 
     if (getAuth) options.getAuth = getAuth;
     this._webSearchProvider = createDefaultWebSearchProvider(options);
 
     return this._webSearchProvider;
+  }
+
+  /** `web.*` in eval. A program here runs in this process, which holds no Browser Run socket client. */
+  private webNamespace(): CodemodeProvider {
+    const missing = 'Browser sessions run on the hosted backend; the CLI has rendered fetches and screenshots only';
+
+    return createWebCodemodeProvider({
+      provider: this.getWebSearchProvider(), vfs: this.rt.storage.vfs, sessions: { missing }, prelude: { missing },
+    });
   }
 
   /** Skill bodies already in the turn's prompt, so a mid-turn steer adds only new ones. */
@@ -2793,7 +2804,7 @@ export class LocalAgentSession {
       createStateCodemodeProvider(this.rt.actor.programState),
       // Plan scoping follows the resolved table scope, read from the live invocation.
       createDbCodemodeProvider(this.stores.appData),
-      createWebCodemodeProvider(this.getWebSearchProvider()),
+      this.webNamespace(),
       // `this.taskList` is the same TaskListStore the dynamic-context snapshot reads.
       createMemoryCodemodeProvider(() => ({
         memory: this.rt.memory, facts: this.factsStore, sql: this.rt.storage.sql,

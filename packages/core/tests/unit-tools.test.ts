@@ -155,6 +155,8 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const stubWebSearch = {
       search: async (query: string) => ({ query, results: [], source: 'duckduckgo' as const }),
       fetch: async (url: string) => ({ url, retrievedAt: new Date().toISOString(), markdown: '' }),
+      render: async (url: string) => ({ url, retrievedAt: new Date().toISOString(), markdown: '' }),
+      screenshot: async (url: string) => ({ url, retrievedAt: new Date().toISOString(), bytes: new Uint8Array() }),
     };
 
     const stubHandoff = {

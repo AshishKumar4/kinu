@@ -81,7 +81,7 @@ export async function adminControlToken(env: ControlSecretEnv): Promise<ControlC
   return { controlToken: await controlToken(env, ADMIN_LABEL) };
 }
 
-/** workerd erases the subclass across RPC, so the message is the whole contract. */
+/** workerd erases the subclass across RPC and keeps `name`, so a caller reads the name, never `instanceof`. */
 class ControlDeniedError extends Error {
   constructor(message: string) {
     super(message);

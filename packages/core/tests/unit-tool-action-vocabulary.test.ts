@@ -25,6 +25,8 @@ interface DispatchSurface {
 const noopWebSearch: WebSearchProvider = {
   search: async (query) => ({ query, results: [], source: 'duckduckgo' }),
   fetch: async (url) => ({ url, markdown: '', retrievedAt: '2026-01-01T00:00:00Z' }),
+  render: async (url) => ({ url, markdown: '', retrievedAt: '2026-01-01T00:00:00Z' }),
+  screenshot: async (url) => ({ url, retrievedAt: '2026-01-01T00:00:00Z', bytes: new Uint8Array() }),
 };
 
 const SURFACES: readonly DispatchSurface[] = [

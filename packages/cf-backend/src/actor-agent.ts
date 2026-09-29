@@ -68,6 +68,8 @@ import {
   buildActorTools, buildBuiltinTools,
   buildMcpToolSet,
   type WebSearchProvider,
+  type BrowserSessions,
+  browserSessions,
   buildSystemPromptSync,
   type PromptIdentity,
   activePromptSectionOverrides,
@@ -163,7 +165,7 @@ import {
   resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices, createAgentConfigStore, type PinnedProfile,
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
-  agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
+  agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createSlateWebCodemodeProvider, createAgentsCodemodeProvider,
   resolveModelRoute, narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema,
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
@@ -492,7 +494,7 @@ function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider) {
 
   const providers: CodemodeProvider[] = [
     ...(runtime.executionRouter?.getProviders() ?? []),
-    createWebCodemodeProvider(webSearch),
+    createSlateWebCodemodeProvider(webSearch),
     createDbCodemodeProvider(actor.stores.appData),
     createTasksCodemodeProvider(actor.stores.taskList, actor.stores.config),
     createMemoryCodemodeProvider(() => ({
@@ -3188,8 +3190,9 @@ export abstract class ActorAgent extends Agent<Env> {
     const executorNames = new Set(rt.executionRouter?.getProviders().map((provider) => provider.name) ?? []);
 
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress(this.workspaceName()), rt,
+      loader: this.env.LOADER, egress: codemodeEgress({ workspace: this.workspaceName(), actor: rt.actor.actorId }), rt,
       sql: rt.storage.sql, workspace: this.workspaceName(), webSearch: this.ownedModelServices.getWebSearchProvider(), reach,
+      browserSessions: this.browserSessionsFor(rt.actor.actorId),
       extraProviders: () => providers.filter((provider) => !executorNames.has(provider.name) && provider.name !== 'web'),
     });
 
@@ -3259,6 +3262,11 @@ export abstract class ActorAgent extends Agent<Env> {
     return [...this.baseCodemodeProviders(), createDbCodemodeProvider(this.stores.appData), ...this.extraCodemodeProviders()];
   }
 
+  /** The Chrome sessions `actorId` opened; the table lives on the workspace object every actor shares. */
+  protected browserSessionsFor(actorId: string): BrowserSessions {
+    return browserSessions({ db: this.ctx.storage.sql, binding: this.env.BROWSER, actorId });
+  }
+
   /**
    * Namespaces a slate binding may reach: the build-turn sandbox surfaces minus `tools`/`state`.
    * Read per call: executors attach and detach while this object lives.
@@ -3266,7 +3274,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected slateNamespaces(): CodemodeProvider[] {
     return [
       ...(this.rt.executionRouter?.getProviders() ?? []),
-      createWebCodemodeProvider(this.ownedModelServices.getWebSearchProvider()),
+      createSlateWebCodemodeProvider(this.ownedModelServices.getWebSearchProvider()),
       createAgentsCodemodeProvider(() => this.getAgentsToolDeps('build')),
       ...this.turnCodemodeProviders(),
     ];
@@ -3283,8 +3291,9 @@ export abstract class ActorAgent extends Agent<Env> {
     if (!this._codemodeFactories.has(key)) {
       this._codemodeFactories.set(key, createCodemodeToolFactory({
         loader: this.env.LOADER,
-        egress: codemodeEgress(this.workspaceName()),
+        egress: codemodeEgress({ workspace: this.workspaceName(), actor: this.rt.actor.actorId }),
         rt: this.rt,
+        browserSessions: this.browserSessionsFor(this.rt.actor.actorId),
         reach: narrowing,
         sql: this.boundSql,
         workspace: this.workspaceName(),
@@ -4026,6 +4035,7 @@ export abstract class ActorAgent extends Agent<Env> {
     liveTurn.retries = composed.profile.retries;
     liveTurn.fallbacks = composed.profile.tier.fallbacks.map(({ model: spec, reasoningEffort }) => ({
       spec: providers.normalizeSpecSync(spec),
+      accepts: this.modelCatalog.acceptedMedia(spec),
       bind: () => this.ownedModelServices.resolveModelWithEffort(spec, reasoningEffort),
     }));
 

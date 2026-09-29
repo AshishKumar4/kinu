@@ -2,10 +2,8 @@
 import { cutShareGrant, slateCapabilityGraph, type SlateBindingCatalog } from './capability-graph';
 import type { SlateLiveShareStore } from './live-shares';
 import type { ShareUser } from './shares';
-import * as v from 'valibot';
-import {
-  ViewerRequestRecordSchema,
-  type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility, type SlateCapabilityGraph, type ViewerRequestRecord,
+import type {
+  LiveShareCreated, LiveShareRecord, LiveShareVisibility, SlateCapabilityGraph, ViewerRequestRecord,
 } from './sharing';
 import { nanoid } from '../utils/nanoid';
 
@@ -64,6 +62,6 @@ export class WorkspaceLiveShares {
   }
 
   requests(share: string): ViewerRequestRecord[] {
-    return v.parse(v.array(ViewerRequestRecordSchema), this.deps.shares.requests(share));
+    return this.deps.shares.requests(share);
   }
 }
