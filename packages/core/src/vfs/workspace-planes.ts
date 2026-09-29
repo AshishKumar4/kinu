@@ -1,22 +1,18 @@
-/**
- * SOUL write, fork transfer halves, and archive walk. Fork staging is atomic because the
- * publishing rename and the transfer row share one SQLite `transactionSync`.
- */
+/** SOUL write, fork transfer halves (a pin of the source's store, imports into the target's), and archive walk. */
 
-import {
-  NativeSinkPlan, type ForkFileSink, type ForkNativeFilePort,
-} from '../identity/fork-sink';
-import type { ForkFileSource } from '../identity/fork-transfer';
-import type { ForkTreeReader } from '../identity/fork';
+import type { ForkFileSink } from '../identity/fork-sink';
+import { FORK_PIN_PREFIX, type ForkFileSource } from '../identity/fork';
 import type { ArchiveFileSource, ArchiveFileTarget } from '../identity/archive';
 import { SOUL_PATH, storeDurableSoulDb, summarizeSoul } from '../identity/soul';
 import { tolerate } from '../obs/index';
 import { resealWorkspaceSoul, sealWorkspaceSoul } from './agent-home';
 import { workspacePath, WORKSPACE_ROOT } from './workspace-path';
-import type { WorkspaceBundle } from './nimbus-workspace';
+import type { WorkspaceBundle, WorkspaceSession } from './nimbus-workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
-import type { CredentialedVfs, VfsStat } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import type { CredentialedVfs, SqliteVFS, VfsStat } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+
+type FileSessionSource = { session(): Promise<Pick<WorkspaceSession, 'vfs' | 'sql'>> };
 
 async function sessionPlane(bundle: WorkspaceBundle): Promise<CredentialedVfs> {
   return (await bundle.session()).vfs.as(CRED_SESSION_USER);
@@ -31,7 +27,7 @@ export async function settledWorkspaceSoul(bundle: WorkspaceBundle): Promise<str
 
 /** The owner's SOUL write, then sealed. */
 export async function writeWorkspaceSoul(
-  bundle: WorkspaceBundle, content: string | Uint8Array,
+  bundle: FileSessionSource, content: string | Uint8Array,
 ): Promise<void> {
   const session = await bundle.session();
   const kernel = session.vfs.as(CRED_KERNEL);
@@ -44,103 +40,96 @@ export async function writeWorkspaceSoul(
   storeDurableSoulDb(session.sql, content instanceof Uint8Array ? new TextDecoder().decode(content) : content);
 }
 
-function workspaceForkPort(bundle: WorkspaceBundle): ForkNativeFilePort {
-  // A fork lands on an empty tree, so staging creates parents first.
-  const ensureParent = async (path: string): Promise<void> => {
-    const resolved = workspacePath(path);
-    const cut = resolved.lastIndexOf('/');
+/**
+ * Where a fork lands in one store: Nimbus imports, each under a parent made if missing (a payload's directory may not
+ * exist on a fresh target), and SOUL.md through `publishSoul`, the owner's protected write.
+ */
+function forkSinkOver(
+  store: () => Promise<SqliteVFS>, publishSoul: (bytes: Uint8Array) => Promise<void>,
+): ForkFileSink {
+  const parentOf = async (dst: string): Promise<SqliteVFS> => {
+    const vfs = await store();
+    const parent = dst.slice(0, dst.lastIndexOf('/'));
+    const plane = vfs.as(CRED_SESSION_USER);
 
-    if (cut <= 0) return;
-    const parent = resolved.slice(0, cut);
-    const plane = await sessionPlane(bundle);
+    if (parent !== '' && !plane.exists(parent)) plane.mkdir(parent, { recursive: true });
 
-    if (!plane.exists(parent)) plane.mkdir(parent, { recursive: true });
+    return vfs;
   };
 
   return {
-    async truncate(path, size) {
-      await ensureParent(path);
-      (await sessionPlane(bundle)).truncate(workspacePath(path), size);
-    },
-    async writeRange(path, offset, bytes) {
-      await ensureParent(path);
-      (await sessionPlane(bundle)).writeRange(workspacePath(path), offset, bytes);
-    },
-    // Read back from staging: the activation that finishes a file may not have written its first range.
-    async readRange(path, offset, length) {
-      return (await sessionPlane(bundle)).readRange(workspacePath(path), offset, length);
-    },
-    async rename(from, to) {
-      // `SqliteVFS.rename` does not normalize paths itself, unlike sibling ops.
-      (await sessionPlane(bundle)).rename(
-        normalizeVfsPath(workspacePath(from)), normalizeVfsPath(workspacePath(to)),
-      );
-    },
-    async unlink(path) { (await sessionPlane(bundle)).unlink(workspacePath(path)); },
-    async writeFile(path, bytes) {
-      await ensureParent(path);
-      (await sessionPlane(bundle)).writeFile(workspacePath(path), bytes);
-    },
-    async mkdir(path) { (await sessionPlane(bundle)).mkdir(workspacePath(path), { recursive: true }); },
-    async symlink(target, path) {
-      await ensureParent(path);
-      const plane = await sessionPlane(bundle);
-      const at = workspacePath(path);
+    async importChunks(dst, chunks) { (await parentOf(dst)).importChunks(dst, chunks); },
+    async importPage(dst, page) {
+      const { want, done } = (await parentOf(dst)).importPage(dst, page);
 
-      if (lstatOrNull(plane, at)?.type === 'symlink') plane.unlink(at);
-      plane.symlink(target, at);
+      return { want, done };
     },
-    async stamp(path, meta) {
-      // Kernel: Nimbus refuses a session user's chmod adding group or other bits.
-      const kernel = (await bundle.session()).vfs.as(CRED_KERNEL);
-      const at = workspacePath(path);
-      kernel.chmod(at, meta.mode & 0o777);
-      kernel.utimes(at, meta.mtimeMs, meta.mtimeMs);
-    },
-    async remove(path) {
-      const plane = await sessionPlane(bundle);
-      const at = workspacePath(path);
-      const stat = lstatOrNull(plane, at);
-
-      if (stat === null) return;
-
-      if (stat.type === 'directory') plane.removeRecursive(at);
-      else plane.unlink(at);
-    },
-  };
-}
-
-export function createWorkspaceForkSink(bundle: WorkspaceBundle, transferId: string): ForkFileSink {
-  return new NativeSinkPlan(workspaceForkPort(bundle), transferId, {
-    // SOUL cannot publish by rename: that would skip the protected write's kernel ownership.
-    owns: (targetPath) => targetPath === SOUL_PATH,
-    async publish(_targetPath, bytes) {
-      await writeWorkspaceSoul(bundle, bytes);
+    async publishSoul(bytes) {
+      await publishSoul(bytes);
 
       return { mission: summarizeSoul(new TextDecoder().decode(bytes)) };
     },
-  });
+    async remove(paths) {
+      const plane = (await store()).as(CRED_SESSION_USER);
+
+      for (const path of paths) {
+        const at = workspacePath(path);
+        const stat = lstatOrNull(plane, at);
+
+        if (stat === null) continue;
+
+        if (stat.type === 'directory') plane.removeRecursive(at);
+        else plane.unlink(at);
+      }
+    },
+  };
 }
 
-/** Read as the kernel, so no file's mode hides it from the copy. */
-export function createWorkspaceForkSource(bundle: WorkspaceBundle): ForkFileSource {
+export function createWorkspaceForkSink(bundle: FileSessionSource): ForkFileSink {
+  return forkSinkOver(async () => (await bundle.session()).vfs, (bytes) => writeWorkspaceSoul(bundle, bytes));
+}
+
+/** Stores whose leftover pins this activation dropped: a fork runs inside its source, so none survives a restart. */
+const sweptForkPins = new WeakSet<SqliteVFS>();
+
+/**
+ * One store's files as a pinned instant, read as the kernel, so no file's mode hides it from the copy. The first pin
+ * an activation takes drops the ones an earlier activation left behind.
+ */
+function forkSourceOver(store: SqliteVFS): ForkFileSource {
   return {
-    async open(): Promise<ForkTreeReader> {
-      const session = await bundle.session();
-      const plane = session.vfs.as(CRED_KERNEL);
-      resealWorkspaceSoul(plane, session.sql);
+    async pin(name) {
+      if (!sweptForkPins.has(store)) {
+        sweptForkPins.add(store);
+
+        for (const leftover of store.snapshots()) {
+          if (leftover.name.startsWith(FORK_PIN_PREFIX)) await store.dropSnapshotAsync(leftover.name);
+        }
+      }
+
+      store.snapshot(name);
+      const at = store.at(name, CRED_KERNEL);
 
       return {
-        lstat(path) {
-          const stat = lstatOrNull(plane, workspacePath(path));
-
-          return stat === null ? null : { kind: stat.type, size: stat.size, mode: stat.mode & 0o777, mtimeMs: stat.mtime };
-        },
-        readdir: (path) => plane.readdir(workspacePath(path)).map((entry) => entry.name),
-        readlink: (path) => plane.readlink(workspacePath(path)),
-        readRange: (path, offset, length) => plane.readRangeUncached(workspacePath(path), offset, length),
-        revision: (path) => path === undefined ? plane.revision() : plane.revision(workspacePath(path)),
+        readdir: (path) => at.readdir(path).map((entry) => entry.name),
+        kind: (path) => lstatOrNull(at, path)?.type ?? null,
+        readFile: (path) => at.readFile(path),
+        exportPage: (root, after) => store.exportPage({ at: name, root, after }),
+        exportChunks: (hashes, maxBytes) => store.exportChunks(hashes, maxBytes),
+        release: async () => { await store.dropSnapshotAsync(name); },
       };
+    },
+  };
+}
+
+/** The workspace's files, SOUL.md resealed first so the pin holds the owner's. */
+export function createWorkspaceForkSource(bundle: FileSessionSource): ForkFileSource {
+  return {
+    async pin(name) {
+      const session = await bundle.session();
+      resealWorkspaceSoul(session.vfs.as(CRED_KERNEL), session.sql);
+
+      return forkSourceOver(session.vfs).pin(name);
     },
   };
 }

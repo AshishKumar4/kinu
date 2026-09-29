@@ -227,12 +227,11 @@ erDiagram
         TEXT transfer_id "The transfer these columns belong to"
         INTEGER expected_seq "The frame the receiver will accept next"
         TEXT stream "Rolling digest over the frames that arrived"
-        TEXT file_path "The file whose ranges are still arriving"
-        INTEGER file_bytes "How many of that file's bytes the staging holds"
+        TEXT import_path "The Nimbus import whose pages are still arriving"
         INTEGER published "1 once the commit published the fork"
     }
     fork_staged_files {
-        TEXT path PK "A file, directory or symlink this unpublished transfer already placed"
+        TEXT path PK "SOUL.md, or an import this unpublished transfer opened"
     }
 
     workspace_actors ||--o{ workspace_actors : "parent_actor_id"

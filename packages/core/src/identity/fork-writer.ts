@@ -230,19 +230,15 @@ export class ForkTargetWriter {
     this.staging.count({ contextMembers: rows.length });
   }
 
-  /** Record an inherited file a native sink already published. SOUL is excluded: its protected writer returns the mission. */
-  stageCommittedFile(path: string, mission?: string): void {
-    if (path === SOUL_PATH) {
-      if (mission === undefined) throw new Error('fork transfer committed SOUL.md without its protected write');
-      this.staging.mission(mission);
-    }
-
-    this.staging.addFile(path);
+  /** SOUL.md landed through its protected write, which returned the mission it carries. */
+  stageSoul(mission: string): void {
+    this.staging.mission(mission);
+    this.staging.addFile(SOUL_PATH);
   }
 
-  /** Record the whole tree entries a sink placed; SOUL never arrives this way (its sink refuses it). */
-  stageCommittedEntries(paths: readonly string[]): void {
-    for (const path of paths) this.staging.addFile(path);
+  /** An import opened at `dst`: one of the files the source declared, and what a replacement `begin` removes. */
+  stageImport(dst: string): void {
+    this.staging.addFile(dst);
   }
 
   /** How much has landed, read from the target, for the wire's completeness check. */

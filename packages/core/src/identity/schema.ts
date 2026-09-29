@@ -105,8 +105,7 @@ const FORK_TRANSFER_DDL = `CREATE TABLE IF NOT EXISTS fork_transfer (
     expected_seq                    INTEGER NOT NULL DEFAULT 0,
     section_cursor                  INTEGER NOT NULL DEFAULT 0,
     stream                          TEXT    NOT NULL DEFAULT '',
-    file_path                       TEXT,
-    file_bytes                      INTEGER NOT NULL DEFAULT 0,
+    import_path                     TEXT,
     want_agent_config               INTEGER NOT NULL DEFAULT 0,
     want_crafted_tools              INTEGER NOT NULL DEFAULT 0,
     want_memory_chunks              INTEGER NOT NULL DEFAULT 0,
@@ -118,7 +117,7 @@ const FORK_TRANSFER_DDL = `CREATE TABLE IF NOT EXISTS fork_transfer (
     published                       INTEGER NOT NULL DEFAULT 0
   )`;
 
-/** Files an unpublished transfer already published; a replacement `begin` removes exactly these. */
+/** What an unpublished transfer placed (SOUL.md and each import's destination); a replacement `begin` removes exactly these. */
 const FORK_STAGED_FILES_DDL = `CREATE TABLE IF NOT EXISTS fork_staged_files (
     path TEXT PRIMARY KEY
   )`;

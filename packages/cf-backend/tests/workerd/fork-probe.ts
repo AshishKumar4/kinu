@@ -1,25 +1,30 @@
 /**
- * A hosted fork across two real Durable Objects, evicted between frames: the receiver's cursor must
- * outlive an isolate reset, which bun cannot host. The probes run the production halves; only the SQL
- * bridge, file plane and (resumable) delivery driver are local.
+ * A hosted fork across two real Durable Objects, evicted between frames: the receiver's cursor and Nimbus's import
+ * must outlive an isolate reset, which bun cannot host. The probes run the production halves over real Nimbus stores
+ * (the fork's source pins and exports, the target imports); only the delivery driver is local, and it resumes by
+ * regenerating the stream with the answers the target gave it recorded.
  */
 import { DurableObject } from 'cloudflare:workers';
-import * as v from 'valibot';
 import {
   agentArtifactDirectory, agentHome, CHAT_SESSION_ID, MAIN_AGENT,
-  FORK_STREAM_SEED, ForkStagingState, ForkTargetWriter, ForkTransferReceiver, NativeSinkPlan, SOUL_PATH,
-  foldForkStream, forkTransferFrames, initWorkspaceSchema, readForkLineage, sealForkFrame,
-  SessionHistory, summarizeSoul, WorkspaceActorDirectory, openWorkspaceMainActor,
-  type ForkFileSource, type ForkFrame, type ForkLineageRow, type ForkNativeFilePort, type ForkResult,
-  type ForkStaging, type SqlExecutor, type SqlValue, type VFS, type VfsEntryStat,
+  FORK_STREAM_SEED, ForkStagingState, ForkTargetWriter, ForkTransferReceiver,
+  foldForkStream, createWorkspaceForkSink, createWorkspaceForkSource, writeWorkspaceSoul, forkTransferFrames, initWorkspaceSchema, nimbusSessionFiles,
+  readForkLineage, SessionHistory, summarizeSoul, WorkspaceActorDirectory, openWorkspaceMainActor,
+  type ForkFrame, type ForkFrameReply, type ForkLineageRow, type ForkResult, type ForkStaging, type SqlExecutor, type SqlValue,
 } from '@kinu.run/core';
+import { workspaceBoxFiles } from '@kinu.run/core/workspace';
+import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
+import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 
-/** Small on purpose: at production `FORK_FRAME_BYTES` each section fits one frame and the eviction boundaries vanish. */
+/** Small on purpose: every chunk crosses in a frame of its own, so a file's chunks are several frames. */
 const PROBE_FRAME_BYTES = 64;
 
 export const PROBE_CUT_MESSAGE_ID = 'm3';
 
-const PROBE_ARTIFACTS = agentArtifactDirectory(agentHome(MAIN_AGENT));
+const PROBE_HOME = agentHome(MAIN_AGENT);
+
+const PROBE_ARTIFACTS = agentArtifactDirectory(PROBE_HOME);
 
 /** Fixture restamp of the cut entry: the target publishes the cut entry's stamp as the fork point. */
 export const PROBE_CUT_RECORDED_AT = Date.parse('2026-01-01T00:00:03.000Z');
@@ -30,216 +35,20 @@ const SOUL_CONTENT = '# Mission\nProve a fork survives an eviction.\n';
 
 export const PROBE_SOUL_MISSION = summarizeSoul(SOUL_CONTENT);
 
-/** workerd's streaming digest; the ambient `Crypto` type does not declare it. */
-interface WorkerdDigestStream extends WritableStream<ArrayBufferView | ArrayBuffer> {
-  readonly digest: Promise<ArrayBuffer>;
-}
-
-declare const crypto: Crypto & {
-  DigestStream: new (algorithm: string) => WorkerdDigestStream;
-};
-
-/**
- * The probe's file plane: one durable BLOB row per written range, so no file is ever held whole.
- * Directories are implied by paths and nothing ever changes under a transfer, so its revision is 0.
- * Bind `bytes.slice().buffer`, not `bytes.buffer`: a payload is a view over a larger buffer.
- */
-class ProbeFilePlane implements VFS {
-  static readonly DDL = `CREATE TABLE IF NOT EXISTS probe_file_ranges (
-    path  TEXT    NOT NULL,
-    start INTEGER NOT NULL,
-    bytes BLOB    NOT NULL,
-    PRIMARY KEY (path, start)
-  )`;
-
-  constructor(private readonly ctx: DurableObjectState) {}
-
-  get native(): ForkNativeFilePort {
-    return {
-      truncate: async (path, size) => {
-        this.exec(`DELETE FROM probe_file_ranges WHERE path = ? AND start >= ?`, path, size);
-        this.exec(
-          `UPDATE probe_file_ranges SET bytes = substr(bytes, 1, ? - start)
-             WHERE path = ? AND start < ? AND start + length(bytes) > ?`,
-          size, path, size, size,
-        );
-      },
-      writeRange: async (path, offset, bytes) => {
-        this.exec(
-          `INSERT OR REPLACE INTO probe_file_ranges (path, start, bytes) VALUES (?, ?, ?)`,
-          path, offset, bytes.slice().buffer,
-        );
-      },
-      readRange: (path, offset, length) => this.readRange(path, offset, length),
-      rename: async (from, to) => {
-        this.ctx.storage.transactionSync(() => {
-          this.exec(`DELETE FROM probe_file_ranges WHERE path = ?`, to);
-          this.exec(`UPDATE probe_file_ranges SET path = ? WHERE path = ?`, to, from);
-        });
-      },
-      unlink: async (path) => { this.exec(`DELETE FROM probe_file_ranges WHERE path = ?`, path); },
-      writeFile: (path, bytes) => this.writeFile(path, bytes),
-      mkdir: async () => {},
-      symlink: async () => { throw new Error('the probe plane holds no symlinks'); },
-      stamp: async () => {},
-      remove: async (path) => { this.exec(`DELETE FROM probe_file_ranges WHERE path = ? OR path LIKE ?`, path, `${path}/%`); },
-    };
-  }
-
-  /** The source half: the same rows, read synchronously as one snapshot. */
-  get source(): ForkFileSource {
-    return {
-      open: async () => ({
-        lstat: (path) => {
-          const size = this.size(path);
-
-          if (size !== null) return { kind: 'file', size, mode: 0o644, mtimeMs: 0 };
-
-          return this.names(path).length === 0 ? null : { kind: 'directory', size: 0, mode: 0o755, mtimeMs: 0 };
-        },
-        readdir: (path) => this.names(path),
-        readlink: () => { throw new Error('the probe plane holds no symlinks'); },
-        readRange: (path, offset, length) => this.readRangeSync(path, offset, length),
-        revision: () => 0,
-      }),
-    };
-  }
-
-  async readRange(path: string, offset: number, length: number): Promise<Uint8Array> {
-    return this.readRangeSync(path, offset, length);
-  }
-
-  /** One byte range, clipped inside SQLite so a read never materializes more than the request. */
-  private readRangeSync(path: string, offset: number, length: number): Uint8Array {
-    const end = offset + length;
-    const out = new Uint8Array(length);
-    let filled = 0;
-
-    for (const row of this.exec(
-      `SELECT start, substr(bytes, max(1, ? - start + 1), ? - max(?, start)) AS bytes
-         FROM probe_file_ranges
-         WHERE path = ? AND start < ? AND start + length(bytes) > ?
-         ORDER BY start`,
-      offset, end, offset, path, end, offset,
-    )) {
-      if (!(row.bytes instanceof ArrayBuffer)) throw new Error('probe range read a non-BLOB');
-      const part = new Uint8Array(row.bytes);
-      out.set(part, Math.max(0, Number(row.start) - offset));
-      filled += part.byteLength;
-    }
-
-    return filled === length ? out : out.subarray(0, filled);
-  }
-
-  private size(path: string): number | null {
-    const raw = this.exec(
-      `SELECT max(start + length(bytes)) AS size FROM probe_file_ranges WHERE path = ?`, path,
-    )[0]?.size;
-
-    return raw === null || raw === undefined ? null : Number(raw);
-  }
-
-  /** Names directly under `path` ('' is the root). */
-  private names(path: string): string[] {
-    const prefix = path === '' ? '' : `${path}/`;
-    const names = new Set<string>();
-
-    for (const row of this.exec(
-      `SELECT DISTINCT path FROM probe_file_ranges WHERE path LIKE ? ORDER BY path`, `${prefix}%`,
-    )) {
-      const rest = v.parse(v.string(), row.path).slice(prefix.length);
-      const slash = rest.indexOf('/');
-      names.add(slash < 0 ? rest : rest.slice(0, slash));
-    }
-
-    return [...names];
-  }
-
-  async stat(path: string): Promise<VfsEntryStat | null> {
-    const size = this.size(path);
-
-    if (size !== null) return { size, mtimeMs: 0, isDir: false };
-
-    const holds = this.exec(
-      `SELECT 1 AS found FROM probe_file_ranges WHERE path LIKE ? LIMIT 1`, `${path}/%`,
-    );
-
-    return holds.length === 0 ? null : { size: 0, mtimeMs: 0, isDir: true };
-  }
-
-  async exists(path: string): Promise<boolean> {
-    return (await this.stat(path)) !== null;
-  }
-
-  async readdir(path: string): Promise<string[]> {
-    return this.names(path);
-  }
-
-  async mkdir(): Promise<void> {}
-
-  async writeFile(path: string, data: string | Uint8Array): Promise<void> {
-    const bytes = data instanceof Uint8Array ? data : new TextEncoder().encode(data);
-    this.ctx.storage.transactionSync(() => {
-      this.exec(`DELETE FROM probe_file_ranges WHERE path = ?`, path);
-      this.exec(
-        `INSERT INTO probe_file_ranges (path, start, bytes) VALUES (?, 0, ?)`, path, bytes.slice().buffer,
-      );
-    });
-  }
-
-  async readFile(path: string, opts?: { encoding?: string }): Promise<Uint8Array | string> {
-    const stat = await this.stat(path);
-
-    if (stat === null) throw new Error(`ENOENT: ${path}`);
-    const whole = await this.readRange(path, 0, stat.size);
-
-    return opts?.encoding === undefined ? whole : new TextDecoder().decode(whole);
-  }
-
-  async unlink(path: string): Promise<void> {
-    this.exec(`DELETE FROM probe_file_ranges WHERE path = ?`, path);
-  }
-
-  /** Every path with size and digest, folded a range at a time so verification never holds a file. */
-  async digests(): Promise<{ path: string; size: number; digest: string }[]> {
-    const out: { path: string; size: number; digest: string }[] = [];
-
-    for (const row of this.exec(
-      `SELECT DISTINCT path FROM probe_file_ranges ORDER BY path`,
-    )) {
-      const path = v.parse(v.string(), row.path);
-      const stat = await this.stat(path);
-
-      if (stat === null) continue;
-      const hash = new crypto.DigestStream('SHA-256');
-      const writer = hash.getWriter();
-
-      for (let offset = 0; offset < stat.size; offset += PROBE_FRAME_BYTES) {
-        await writer.write(
-          await this.readRange(path, offset, Math.min(PROBE_FRAME_BYTES, stat.size - offset)),
-        );
-      }
-
-      await writer.close();
-      const digest = Array.from(new Uint8Array(await hash.digest), (byte) => byte.toString(16).padStart(2, '0'));
-      out.push({ path, size: stat.size, digest: digest.join('') });
-    }
-
-    return out;
-  }
-
-  private exec(query: string, ...bindings: SqlStorageValue[]): Record<string, SqlStorageValue>[] {
-    return this.ctx.storage.sql.exec(query, ...bindings).toArray();
-  }
-}
+/** Several chunks of distinct bytes, so its import is a page and a run of chunk frames. */
+const PROOF_BYTES = 256 * 1024;
 
 /** A refusal is reported, not thrown: the production source catches it too (`deliverCloudFork`). */
 export interface ForkDeliveryReport {
   sent: number;
+  /** Frames of the stream this run went past, taken or answered: where the next run resumes. */
+  position: number;
+  /** The frame the target expects next. */
   nextSeq: number;
-  /** The source's own fold up to `nextSeq`; the target's stored digest must equal it. */
+  /** The source's own fold of the frames taken; the target's stored digest must equal it. */
   stream: string;
   staged: number;
+  wanted: number;
   settled: number;
   fork: ForkResult | null;
   refusal: string | null;
@@ -247,15 +56,16 @@ export interface ForkDeliveryReport {
 
 export type ForkDeliveryStop =
   | 'files'
-  /** Mid-file: the one boundary a transfer cannot resume from (the whole-file digest lives in the activation). */
-  | 'range'
+  /** Past the first frame of chunks of an import that needs several: mid-way through its bytes. */
+  | 'chunks'
   | 'commit'
   | 'end';
 
 export type ForkCorruption =
+  /** SOUL.md's or a page's content changed without resealing: the per-frame digest refuses it. */
   | 'frame'
-  /** Resealed, so only the whole-file digest at the last range can see it. */
-  | 'resealed';
+  /** A chunk's bytes changed; its frame names it by hash, so Nimbus's re-hash refuses it. */
+  | 'chunk';
 
 export interface ForkDeliveryRequest {
   target: string;
@@ -264,13 +74,22 @@ export interface ForkDeliveryRequest {
   corrupt?: ForkCorruption;
 }
 
+export interface ProbeFile {
+  path: string;
+  size: number;
+  digest: string;
+}
+
 abstract class ForkProbeDO extends DurableObject<Cloudflare.Env> {
   protected readonly sql: SqlExecutor = <Row,>(
     query: TemplateStringsArray, ...values: SqlValue[]
   ): Row[] => this.ctx.storage.sql.exec<Row & Record<string, SqlStorageValue>>(query.join('?'), ...values).toArray();
 
-  protected readonly plane = new ProbeFilePlane(this.ctx);
   private schemaReady = false;
+  private opened: Promise<NimbusWorkspace> | undefined;
+  protected readonly fileHost = {
+    session: async () => ({ vfs: (await this.session()).vfs, sql: this.ctx.storage.sql }),
+  };
 
   protected ensureSchema(): void {
     if (this.schemaReady) return;
@@ -280,8 +99,57 @@ abstract class ForkProbeDO extends DurableObject<Cloudflare.Env> {
       exec: this.ctx.storage.sql,
       transactionSync: (write) => this.ctx.storage.transactionSync(write),
     });
-    this.ctx.storage.sql.exec(ProbeFilePlane.DDL);
     this.schemaReady = true;
+  }
+
+  /** This object's Nimbus store, with the main agent's home as a workspace is born with it. */
+  protected session(): Promise<NimbusWorkspace> {
+    this.opened ??= NimbusWorkspace.create({ sql: this.ctx.storage.sql, transactions: { storage: this.ctx.storage } })
+      .then((workspace) => {
+        const kernel = workspace.vfs.as(CRED_KERNEL);
+
+        if (!kernel.exists(PROBE_HOME)) {
+          kernel.mkdir(PROBE_HOME, { recursive: true });
+          kernel.chown(PROBE_HOME, CRED_SESSION_USER.uid, CRED_SESSION_USER.gid);
+        }
+
+        return workspace;
+      });
+
+    return this.opened;
+  }
+
+  protected async store(): Promise<SqliteVFS> {
+    return (await this.session()).vfs;
+  }
+
+  protected async sealSoul(bytes: string | Uint8Array): Promise<void> {
+    await writeWorkspaceSoul(this.fileHost, bytes);
+  }
+
+  /** Every file under the home with its size and digest, in path order. */
+  async files(): Promise<ProbeFile[]> {
+    const kernel = (await this.store()).as(CRED_KERNEL);
+    const out: ProbeFile[] = [];
+
+    const walk = async (directory: string): Promise<void> => {
+      for (const entry of kernel.readdir(directory).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+        const path = `${directory}/${entry.name}`;
+
+        if (kernel.lstat(path).type === 'directory') {
+          await walk(path);
+          continue;
+        }
+
+        const bytes = kernel.readFile(path);
+        const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes.slice())), (byte) => byte.toString(16).padStart(2, '0'));
+        out.push({ path: path.slice(PROBE_HOME.length + 1), size: bytes.byteLength, digest: digest.join('') });
+      }
+    };
+
+    await walk(PROBE_HOME);
+
+    return out;
   }
 }
 
@@ -312,11 +180,17 @@ export class ForkSourceProbeDO extends ForkProbeDO {
                 ${`Chunk ${n} of the parent's memory index, wide enough to need its own frame.`})`;
     }
 
+    const files = nimbusSessionFiles({
+      files: workspaceBoxFiles(() => this.store()),
+      ready: async () => undefined,
+      exec: async () => { throw new Error('the fork probe runs no processes'); },
+    });
+
     const history = new SessionHistory({
       actor,
       sql: this.sql,
       transactionSync: <Result>(write: () => Result): Result => this.ctx.storage.transactionSync(write),
-      files: async () => ({ vfs: this.plane, artifactDirectory: PROBE_ARTIFACTS }),
+      files: async () => ({ vfs: files, artifactDirectory: PROBE_ARTIFACTS }),
     });
 
     const transcript = history.transcript(CHAT_SESSION_ID);
@@ -345,85 +219,117 @@ export class ForkSourceProbeDO extends ForkProbeDO {
         WHERE actor_id = ${actor.actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${turn.id}`;
     }
 
-    await this.plane.writeFile(SOUL_PATH, SOUL_CONTENT);
-    await this.plane.writeFile('memory/notes.md', 'Everything the parent learned. '.repeat(7));
-    await this.plane.writeFile('memory/deep/proof.bin', new Uint8Array(PROBE_FRAME_BYTES * 4).fill(0x7a));
+    await this.sealSoul(SOUL_CONTENT);
+    const user = (await this.store()).as(CRED_SESSION_USER);
+    user.mkdir(`${PROBE_HOME}/memory/deep`, { recursive: true });
+    user.writeFile(`${PROBE_HOME}/memory/notes.md`, 'Everything the parent learned. '.repeat(7));
+    // Distinct bytes throughout, so its content chunks are several and none repeats.
+    user.writeFile(`${PROBE_HOME}/memory/deep/proof.bin`, Uint8Array.from({ length: PROOF_BYTES }, (_, at) => (at * 2654435761) >>> 24));
     await this.ctx.storage.put('transferId', transferId);
   }
 
-  async sourceFiles(): Promise<{ path: string; size: number; digest: string }[]> {
-    this.ensureSchema();
-
-    return this.plane.digests();
-  }
-
-  /** Regenerates the stream from own rows each run (an interrupted activation lost its generator). */
+  /**
+   * Regenerates the stream each run (an interrupted activation lost its generator), replaying the answers the target
+   * gave the frames before `from`, so the regenerated frames are the ones it expects.
+   */
   async deliver(request: ForkDeliveryRequest): Promise<ForkDeliveryReport> {
     this.ensureSchema();
     const transferId = await this.ctx.storage.get<string>('transferId');
 
     if (transferId === undefined) throw new Error('fork source probe was not seeded');
     const target = this.env.FORK_TARGET.get(this.env.FORK_TARGET.idFromName(request.target));
+    const answers = (await this.ctx.storage.get<(string[] | null)[]>(`answers:${request.target}`)) ?? [];
 
     const report: ForkDeliveryReport = {
-      sent: 0, nextSeq: request.from, stream: FORK_STREAM_SEED,
-      staged: 0, settled: 0, fork: null, refusal: null,
+      sent: 0, position: request.from, nextSeq: 0, stream: FORK_STREAM_SEED,
+      staged: 0, wanted: 0, settled: 0, fork: null, refusal: null,
     };
 
+    const frames = forkTransferFrames({
+      sql: this.sql,
+      // Forking under any other actor would read an empty transcript and pass vacuously.
+      actor: openWorkspaceMainActor(this.sql),
+      vfs: createWorkspaceForkSource(this.fileHost),
+      artifactDirectory: PROBE_ARTIFACTS,
+      untilMessageId: PROBE_CUT_MESSAGE_ID,
+      transferId,
+      frameBytes: PROBE_FRAME_BYTES,
+    });
+
+    let reply: ForkFrameReply | undefined;
+    let chunkFrames = 0;
+
     try {
-      for await (const frame of forkTransferFrames({
-        sql: this.sql,
-        // Forking under any other actor would read an empty transcript and pass vacuously.
-        actor: openWorkspaceMainActor(this.sql),
-        vfs: this.plane.source,
-        artifactDirectory: PROBE_ARTIFACTS,
-        untilMessageId: PROBE_CUT_MESSAGE_ID,
-        transferId,
-        frameBytes: PROBE_FRAME_BYTES,
-      })) {
-        if (frame.seq < request.from) {
-          report.stream = foldForkStream(report.stream, frame.digest);
+      for (let next = await frames.next(), index = 0; !next.done; next = await frames.next(reply), index += 1) {
+        const frame = next.value;
+
+        if (index < request.from) {
+          const want = answers[index] ?? null;
+          reply = want === null ? undefined : { want };
+
+          if (want === null) taken(report, frame);
+
           continue;
         }
 
-        if (request.stop === 'files' && (frame.kind === 'file' || frame.kind === 'entries')) break;
+        if (request.stop === 'files' && (frame.kind === 'soul' || frame.kind === 'page' || frame.kind === 'chunks')) break;
 
         if (request.stop !== 'end' && frame.kind === 'commit') break;
 
-        const outcome = await target.accept(
-          frame.seq === request.from && request.corrupt !== undefined
-            ? corruptFrame(frame, request.corrupt)
-            : frame,
-        );
+        if (request.stop === 'chunks' && frame.kind === 'chunks' && chunkFrames === 1) break;
+
+        const outcome = await target.accept(index === request.from && request.corrupt !== undefined ? corruptFrame(frame, request.corrupt) : frame);
 
         report.sent += 1;
-        report.nextSeq = frame.seq + 1;
+        report.position = index + 1;
+        answers[index] = outcome.status === 'want' ? outcome.hashes : null;
+        await this.ctx.storage.put(`answers:${request.target}`, answers);
+        reply = outcome.status === 'want' ? { want: outcome.hashes } : undefined;
 
-        // The commit's own digest is not folded: it seals the value.
-        if (frame.kind !== 'commit') report.stream = foldForkStream(report.stream, frame.digest);
+        if (frame.kind === 'chunks') chunkFrames += 1;
+
+        if (outcome.status === 'want') {
+          report.wanted += 1;
+          continue;
+        }
+
+        taken(report, frame);
 
         if (outcome.status === 'staged') report.staged += 1;
         else {
           if (outcome.status === 'settled') report.settled += 1;
           report.fork = outcome.result;
         }
-
-        if (request.stop === 'range' && frame.kind === 'file' && !frame.last) break;
       }
     } catch (cause) {
       report.refusal = cause instanceof Error ? cause.message : String(cause);
+    } finally {
+      await frames.return(undefined);
     }
 
     return report;
   }
 }
 
-function corruptFrame(frame: ForkFrame, how: ForkCorruption): ForkFrame {
-  if (frame.kind !== 'file') throw new Error(`frame ${frame.seq} is a ${frame.kind} frame, not a file frame`);
-  const bytes = frame.bytes.slice();
-  bytes[0] = bytes[0] ^ 0xff;
+/** A frame the target took: the next it expects, and the fold (the commit's own digest seals the value, unfolded). */
+function taken(report: ForkDeliveryReport, frame: ForkFrame): void {
+  report.nextSeq = frame.seq + 1;
 
-  return how === 'frame' ? { ...frame, bytes } : sealForkFrame({ ...frame, bytes });
+  if (frame.kind !== 'commit') report.stream = foldForkStream(report.stream, frame.digest);
+}
+
+function corruptFrame(frame: ForkFrame, how: ForkCorruption): ForkFrame {
+  if (how === 'chunk') {
+    if (frame.kind !== 'chunks') throw new Error(`frame ${frame.seq} is a ${frame.kind} frame, not a frame of chunks`);
+
+    return { ...frame, chunks: frame.chunks.map((chunk) => ({ hash: chunk.hash, data: chunk.data.map((byte) => byte ^ 0xff) })) };
+  }
+
+  if (frame.kind === 'soul') return { ...frame, bytes: frame.bytes.map((byte) => byte ^ 0xff) };
+
+  if (frame.kind !== 'page') throw new Error(`frame ${frame.seq} is a ${frame.kind} frame, not SOUL.md or a page`);
+
+  return { ...frame, page: { ...frame.page, rows: frame.page.rows.map((row) => ({ ...row, mtime: row.mtime + 1 })) } };
 }
 
 export interface ForkTargetState {
@@ -437,16 +343,17 @@ export interface ForkTargetState {
   configRows: number;
   craftedTools: number;
   memoryChunks: number;
-  files: { path: string; size: number; digest: string }[];
+  files: ProbeFile[];
 }
 
 export class ForkTargetProbeDO extends ForkProbeDO {
-  /** Per-activation only, as in `rawCopyFromFork`: a file spanning frames is staged across calls. */
+  /** Per-activation only, as in `rawCopyFromFork`. */
   private receiver: ForkTransferReceiver | null = null;
 
   /** Driven as `rawCopyFromFork` does: identity row first, publication inside `transactionSync`. */
   async accept(frame: ForkFrame): Promise<
-    { status: 'staged' | 'settled' | 'published'; result: ForkResult | null }
+    | { status: 'staged' | 'settled' | 'published'; result: ForkResult | null }
+    | { status: 'want'; hashes: string[] }
   > {
     this.ensureSchema();
 
@@ -463,17 +370,11 @@ export class ForkTargetProbeDO extends ForkProbeDO {
         artifactDirectory: PROBE_ARTIFACTS,
         transaction: (rows) => this.ctx.storage.transactionSync(rows),
       }),
-      new NativeSinkPlan(this.plane.native, frame.transferId, {
-        // SOUL publishes through the protected write, not a staged-temp rename.
-        owns: (targetPath) => targetPath === SOUL_PATH,
-        publish: async (targetPath, bytes) => {
-          await this.plane.writeFile(targetPath, bytes);
-
-          return { mission: summarizeSoul(new TextDecoder().decode(bytes)) };
-        },
-      }),
+      createWorkspaceForkSink(this.fileHost),
     );
     const outcome = await this.receiver.accept(frame);
+
+    if (outcome.status === 'want') return outcome;
 
     return outcome.status === 'staged'
       ? { status: 'staged', result: null }
@@ -506,7 +407,7 @@ export class ForkTargetProbeDO extends ForkProbeDO {
       configRows: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM actor_config`),
       craftedTools: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM crafted_tools`),
       memoryChunks: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM memory_chunks`),
-      files: await this.plane.digests(),
+      files: await this.files(),
     };
   }
 }
