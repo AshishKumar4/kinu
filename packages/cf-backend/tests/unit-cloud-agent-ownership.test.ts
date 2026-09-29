@@ -33,6 +33,12 @@ const DEFAULT_ENVELOPE: ProfileCatalogEnvelope = {
   catalog: BUILTIN_PROFILE_CATALOG,
 };
 
+async function recordBaseline(calls: string[]) {
+  calls.push('baseline');
+
+  return { ok: true as const, capturedAt: 0, cleanupFailures: [] };
+}
+
 function registerWorkspaceStub(
   calls: string[],
   logged: (name: string, displayName?: string, from?: WorkspaceRegistrationSource) => string,
@@ -143,11 +149,7 @@ describe('cloud agent ownership safety', () => {
 
         return { ok: true, spec };
       },
-      async resetWorkspaceBaseline() {
-        calls.push('baseline');
-
-        return { ok: true as const, capturedAt: 0 };
-      },
+      resetWorkspaceBaseline: () => recordBaseline(calls),
       async beginGenesisTurn() {
         calls.push('genesis');
 
@@ -456,11 +458,7 @@ describe('cloud agent ownership safety', () => {
 
         return { soul, purpose: '' };
       },
-      async resetWorkspaceBaseline() {
-        calls.push('baseline');
-
-        return { ok: true as const, capturedAt: 0 };
-      },
+      resetWorkspaceBaseline: () => recordBaseline(calls),
       async setModel(spec: string) {
         calls.push('model');
 
@@ -612,11 +610,7 @@ describe('cloud agent ownership safety', () => {
 
         return { ok: true, spec };
       },
-      async resetWorkspaceBaseline() {
-        calls.push('baseline');
-
-        return { ok: true as const, capturedAt: 0 };
-      },
+      resetWorkspaceBaseline: () => recordBaseline(calls),
       // The DO's `workspaceGenesisSignal` declines a placeholder mission; the worker still calls it.
       async beginGenesisTurn() {
         calls.push('genesis');
@@ -917,7 +911,7 @@ describe('a create on an account whose registry predates the current build', () 
       async claimOwner(userId: string) { return { owner: userId, capabilityHash: null }; },
       async setInitialDisplayName(displayName: string, nameOrigin: NameOrigin) { return { displayName, nameOrigin }; },
       async setSoul(soul: string) { return { soul, purpose: '' }; },
-      async resetWorkspaceBaseline() { return { ok: true as const, capturedAt: 0 }; },
+      async resetWorkspaceBaseline() { return { ok: true as const, capturedAt: 0, cleanupFailures: [] }; },
       async setModel(spec: string) { return { ok: true, spec }; },
       async beginGenesisTurn() { return { started: true }; },
     });

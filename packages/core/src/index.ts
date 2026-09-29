@@ -1881,7 +1881,7 @@ export {
 } from './read-models/workspace-diff';
 
 export type {
-  ExecutorDiffResult, WorkspaceBaselines, WorkspaceBaselineStore, WorkspaceDiffResult,
+  ExecutorDiffResult, WorkspaceBaselines, WorkspaceBaselineStore, WorkspaceDiffResult, WorkspaceReviewResult,
 } from './read-models/workspace-diff';
 
 export {

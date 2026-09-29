@@ -174,7 +174,7 @@ import {
   turnRequestIndex, turnRequestPage, type TurnRequestIndex, type TurnRequestPage, type AgentStores,
   LiveReadsNotice, readsMovedByFiles, readsWrittenBy, sameDeviceStatus, type LiveRead,
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
-  type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult,
+  type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes,
   type ChangeNotesResult, type NotedChanges, type ReviewAnnotation,
   diffLines, type DiffLine,
@@ -3855,7 +3855,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable()
-  async resetWorkspaceBaseline(): Promise<{ ok: true; capturedAt: number }> {
+  async resetWorkspaceBaseline(): Promise<WorkspaceReviewResult> {
     try {
       return await resetWorkspaceBaseline(this.rt, await this.baselines());
     } finally {
