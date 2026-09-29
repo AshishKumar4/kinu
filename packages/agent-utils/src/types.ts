@@ -6,3 +6,11 @@ export interface SqlExecutor {
 }
 
 export type SqlRow<T> = T & Record<string, SqlValue>;
+
+export interface SqlExec {
+	readonly exec: (query: string, ...bindings: SqlValue[]) => {
+		toArray(): SqlExecRow[];
+	};
+}
+
+export type SqlExecRow = Record<string, SqlValue>;

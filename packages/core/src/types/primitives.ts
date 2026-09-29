@@ -1,28 +1,19 @@
 /** The portability layer: the agent core is written against these; backends satisfy them. */
 
-import type { SqlExecutor, SqlValue } from '@kinu.run/agent-utils';
+import type { SqlExecutor } from '@kinu.run/agent-utils';
 import * as v from 'valibot';
 import type { MemorySearchResult } from '@kinu.run/agent-utils/memory';
 import type { ToolSet as AiToolSet } from 'ai';
 import type { JsonObject, JsonValue } from '../utils/json';
 
-/** Tagged-template SQL; defined in agent-utils (bottom of the DAG). DDL goes through execRaw. */
-export type { SqlValue, SqlExecutor } from '@kinu.run/agent-utils';
+/** SQL primitives are defined in agent-utils (bottom of the DAG). DDL goes through execRaw. */
+export type { SqlValue, SqlExecutor, SqlExec, SqlExecRow } from '@kinu.run/agent-utils';
 
 import type { Refusal } from '../obs/error';
 
 export interface RawSqlExec {
   (ddl: string): void;
 }
-
-/** Positional-binding SQL for runtime-shaped queries; prefer {@link SqlExecutor} for literals. */
-export interface SqlExec {
-  readonly exec: (query: string, ...bindings: SqlValue[]) => {
-    toArray(): SqlExecRow[];
-  };
-}
-
-export type SqlExecRow = Record<string, SqlValue>;
 
 /** Native generations remain numbers; relational projections expose their persisted identity tuple. */
 export const VfsRevisionSchema = v.union([v.number(), v.string()]);

@@ -4,6 +4,7 @@
  * reverts dispatch to the real paths (scaffold rollback, fact forget).
  */
 
+import { markStoreChanged } from '@kinu.run/agent-utils';
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -668,6 +669,7 @@ function revertPromptSection(
 
   void sql`UPDATE prompt_section_versions SET status = 'rolled_back'
     WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId} AND version = ${version}`;
+  markStoreChanged(sql);
 
   if (!prev) return { ok: true, detail: `${sectionId} is back on its built-in wording` };
   void sql`UPDATE prompt_section_versions SET status = 'current'

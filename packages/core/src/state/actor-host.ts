@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 // Runtime objects for each logical actor of one workspace database; its rows live in the workspace because the
 // SQL port is synchronous. State, serialization and `actor_id`-keyed stores are per actor and re-validate the
 // handle. Release invalidates the fence; rows survive until `retire` with `destroy: true`. Recovery reads
@@ -446,6 +447,7 @@ function purgeActorRows(storage: Pick<Storage, 'sql' | 'transactionSync'> & SqlE
       storage.exec(`DELETE FROM "${table.replace(/"/g, '""')}" WHERE actor_id = ?`, actorId);
     }
   });
+  markStoreChanged(storage.sql);
 }
 
 // Read without a handle: a cold root reads these before it hosts anybody.

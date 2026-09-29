@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 /** GEPA run and candidate persistence; survives DO hibernation. */
 
 import * as v from 'valibot';
@@ -74,6 +75,7 @@ export function startGepaRun(
          winner_id, metric_calls, iterations)
         VALUES (${actor.actorId}, ${runId}, ${opts.target}, ${opts.targetRef ?? null}, ${startedAt},
                 ${null}, ${'running'}, ${null}, ${null}, ${0}, ${0})`;
+  markStoreChanged(sql);
 
   return runId;
 }
@@ -110,6 +112,7 @@ function updateGepaRunCounters(
   void sql`UPDATE gepa_runs SET metric_calls = ${args.metricCalls},
                             iterations   = ${args.iterations}
         WHERE actor_id = ${actor.actorId} AND run_id = ${args.runId}`;
+  markStoreChanged(sql);
 }
 
 export function finishGepaRun(
@@ -133,6 +136,7 @@ export function finishGepaRun(
             metric_calls = ${args.metricCalls},
             iterations   = ${args.iterations}
         WHERE actor_id = ${actor.actorId} AND run_id = ${args.runId}`;
+  markStoreChanged(sql);
 }
 
 /**

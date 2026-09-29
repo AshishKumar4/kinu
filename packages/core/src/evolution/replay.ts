@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 /**
  * Replay-eval harness: re-runs outcome-labeled turns against the current config and
  * scores the fresh response (accepted = regression guard; corrected/frustrated =
@@ -168,6 +169,7 @@ function recordedReplay(opts: RunReplayEvalOpts, results: ReplayInstanceResult[]
        ${summary.negativeCount}, ${summary.meanScore},
        ${summary.scaffoldVersion}, ${JSON.stringify(summary.results)},
        ${interval.lo}, ${interval.hi})`;
+  markStoreChanged(opts.sql);
 
   return summary;
 }

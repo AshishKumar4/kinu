@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 /** Workspace fork write and its accounting. The target DB must already be initialized (initWorkspaceSchema). */
 
 import type { SqlExecutor } from '../types/primitives';
@@ -113,6 +114,7 @@ export class ForkTargetWriter {
   clearStagedRows(): void {
     const actorId = this.actorId;
     void this.target`DELETE FROM crafted_tools`;
+    markStoreChanged(this.target);
     void this.target`DELETE FROM memory_chunks`;
     void this.target`DELETE FROM actor_config WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM fork_lineage`;
@@ -140,6 +142,7 @@ export class ForkTargetWriter {
         (name, description, code, created_at, updated_at)
         VALUES (${t.name}, ${t.description}, ${t.code}, ${t.created_at}, ${t.updated_at})
       `;
+      markStoreChanged(this.target);
     }
 
     this.staging.count({ craftedTools: rows.length });

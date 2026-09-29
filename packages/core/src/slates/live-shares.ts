@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 /** Live-share rows, separate from `slate_shares` (blueprints). `slate_viewer_requests` is the audit trail of what admission did. */
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExec } from '../types/primitives';
@@ -58,6 +59,7 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
       'INSERT INTO slate_live_shares (id, slate_id, visibility, handle, grant_json, created_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, NULL)',
       share.id, share.slate, share.visibility, share.handle, JSON.stringify(share.grant), createdAt,
     );
+    markStoreChanged(this.db);
 
     return {
       id: share.id, slate: share.slate, visibility: share.visibility, handle: share.handle,

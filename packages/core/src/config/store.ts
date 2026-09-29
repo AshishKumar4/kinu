@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 // AgentConfigStore: typed accessors over the `actor_config` key/value table.
 import { Effect } from 'effect';
 import { settleSync } from '../obs/effect';
@@ -192,11 +193,15 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     authorize();
     void sql`INSERT INTO actor_config (actor_id, key, value) VALUES (${actorId}, ${key}, ${value})
         ON CONFLICT(actor_id, key) DO UPDATE SET value = excluded.value`;
+
+    if (key === AGENT_CONFIG_KEYS.autoPromoteScaffold || key === AGENT_CONFIG_KEYS.changelogSeenAt) markStoreChanged(sql);
   };
 
   const remove = (key: string): void => {
     authorize();
     void sql`DELETE FROM actor_config WHERE actor_id = ${actorId} AND key = ${key}`;
+
+    if (key === AGENT_CONFIG_KEYS.autoPromoteScaffold || key === AGENT_CONFIG_KEYS.changelogSeenAt) markStoreChanged(sql);
   };
 
   const setValid = (key: string, value: string, valid: boolean, what: string): Effect.Effect<void> =>
