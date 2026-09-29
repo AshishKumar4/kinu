@@ -79,5 +79,8 @@ export function agentViewMount(state: VFS, scaffoldDir: string): VfsMount {
     mkdir: (path) => settle(readOnly(path)),
   };
 
-  return { name: AGENT_VIEW.slice(1), files: () => files, absentReason: () => 'the agent view is always mounted', filesOwner: 'agent', readOnly: true };
+  return {
+    name: AGENT_VIEW.slice(1), files: () => files, absentReason: () => 'the agent view is always mounted', filesOwner: 'agent', readOnly: true,
+    storeView: true,
+  };
 }

@@ -3,15 +3,16 @@
  * what it may write and what it is refused. Fail-closed is the half worth testing.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import * as v from 'valibot';
+import { Database } from 'bun:sqlite';
 import { Nimbus, type NimbusExecOptions } from '@nimbus-sh/sdk';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
-import type { SqlDatabase, SqlRow, SqlValue, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
+import { settleWorkspaceRoot } from '@kinu.run/core';
 import {
   programmaticHostOver,
   ensureProgrammaticReady,
-  rpcExec,
+  rpcExecStream,
   rpcProcessLogs,
   rpcStartProcess,
   type ProgrammaticExecOptions,
@@ -30,42 +31,15 @@ const SESSION_USER: VfsCred = { uid: 1000, gid: 1000, groups: [1000], umask: 0o0
 
 const AGENT_A: VfsCred = { uid: 2001, gid: 2001, groups: [2001], umask: 0o022 };
 
-function sqlBinding(value: SqlValue): SQLQueryBindings {
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-
-  if (ArrayBuffer.isView(value)) {
-    const bytes = new Uint8Array(value.byteLength);
-    const source = new DataView(value.buffer, value.byteOffset, value.byteLength);
-
-    for (let index = 0; index < bytes.length; index += 1) bytes[index] = source.getUint8(index);
-
-    return bytes;
-  }
-
-  return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
-}
-
 async function openWorkspace(): Promise<NimbusWorkspace> {
   const database = new Database(':memory:');
   databases.push(database);
 
-  const sql: SqlDatabase = {
-    exec(query: string, ...bindings: SqlValue[]) {
-      const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
-      const bound = bindings.map(sqlBinding);
+  const workspace = await NimbusWorkspace.create({ ...inlineWorkspaceStorage(database), generation: 1 });
+  // As Kinu's boot leaves it: the workspace root, and its old name a link to it.
+  settleWorkspaceRoot(workspace.vfs.as(ROOT));
 
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
-      statement.run(...bound);
-
-      return [];
-    },
-  };
-
-  return NimbusWorkspace.create({
-    sql,
-    transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
-    generation: 1,
-  });
+  return workspace;
 }
 
 function workerHost(workspace: NimbusWorkspace): ProgrammaticHost {
@@ -75,7 +49,7 @@ function workerHost(workspace: NimbusWorkspace): ProgrammaticHost {
 function sdkBox(host: ProgrammaticHost) {
   const stub = {
     _rpcReady: (options?: { preinstall?: string[] }) => ensureProgrammaticReady(host, options),
-    _rpcExec: (command: string, options?: ProgrammaticExecOptions) => rpcExec(host, command, options),
+    _rpcExecStream: (command: string, options?: ProgrammaticExecOptions) => rpcExecStream(host, command, options),
     _rpcStartProcess: (command: string, options?: ProgrammaticExecOptions) => (
       rpcStartProcess(host, command, options)
     ),

@@ -1928,7 +1928,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
 
   test('a live session turn gets the namespace, gated to what it actually wired', async () => {
     const { rt, session, events } = setup('done', codemodeModel(`
-      await workspace.writeFile('/workspace/probe/agents.json', JSON.stringify({
+      await workspace.writeFile('probe/agents.json', JSON.stringify({
         members: Object.keys(agents), swarm: typeof agents.swarm, hire: typeof agents.hire,
       }));
       return 'probed';
@@ -1936,7 +1936,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
 
     await session.send('what can you delegate to?', { id: crypto.randomUUID() });
     expect(events.some((e) => e.type === 'tool-result' && e.toolName === 'eval' && e.success)).toBe(true);
-    const probe = await rt.storage.vfs.readFile('/workspace/probe/agents.json', { encoding: 'utf8' });
+    const probe = await rt.storage.vfs.readFile('probe/agents.json', { encoding: 'utf8' });
     expect(JSON.parse(String(probe))).toEqual({
       members: ['swarm'], swarm: 'function', hire: 'undefined',
     });
@@ -1950,18 +1950,18 @@ describe('agents.* codemode namespace — node sandbox', () => {
     `;
 
     // Admitted: this session is the review surface (`submit_plan`, `decidePlanReview`).
-    const plan = setup('done', codemodeModel(probeCode('/workspace/probe/plan-tools.json')));
+    const plan = setup('done', codemodeModel(probeCode('probe/plan-tools.json')));
     await plan.session.send('research a plan', { id: crypto.randomUUID(), mode: 'plan' });
     expect(plan.events.filter((event) => event.type === 'tool-result' && event.toolName === 'eval'))
       .toMatchObject([{ success: false, reason: 'denied' }]);
-    expect(await plan.rt.storage.vfs.exists('/workspace/probe/plan-tools.json')).toBe(false);
+    expect(await plan.rt.storage.vfs.exists('probe/plan-tools.json')).toBe(false);
     await plan.session.end();
 
-    const build = setup('done', codemodeModel(probeCode('/workspace/probe/build-tools.json')));
+    const build = setup('done', codemodeModel(probeCode('probe/build-tools.json')));
     await build.session.send('implement the change', { id: crypto.randomUUID() });
 
     const buildProbe = JSON.parse(String(await build.rt.storage.vfs.readFile(
-      '/workspace/probe/build-tools.json',
+      'probe/build-tools.json',
       { encoding: 'utf8' },
     )));
 

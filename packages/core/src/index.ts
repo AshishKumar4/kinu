@@ -1881,11 +1881,12 @@ export type {
 } from './read-models/tool-failures';
 
 export {
-  CHANGES_MOVED_EVENT, ChangeSetCache, getExecutorDiff, getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
-  restoreWorkspaceBaseline,
+  CHANGES_MOVED_EVENT, ChangeSetCache, getExecutorDiff, getWorkspaceDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
 } from './read-models/workspace-diff';
 
-export type { ExecutorDiffResult, WorkspaceDiffResult } from './read-models/workspace-diff';
+export type {
+  ExecutorDiffResult, WorkspaceBaselines, WorkspaceBaselineStore, WorkspaceDiffResult,
+} from './read-models/workspace-diff';
 
 export {
   LIVE_READS, LiveReadsNotice, PAGE_KEEPALIVE, READS_CHANGED_EVENT, readsMovedByFiles, readsWrittenBy,

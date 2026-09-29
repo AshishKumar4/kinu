@@ -66,8 +66,15 @@ export function wrapDatabase(db: AgentDatabase) {
 }
 
 export function inlineWorkspaceStorage(db: AgentDatabase): Pick<WorkspaceOptions, 'sql' | 'transactions'> {
+  const exec = sqlExecOver(db);
+
+  const pragma = (name: 'page_count' | 'page_size'): number => (
+    v.parse(v.record(v.string(), v.number()), exec(`PRAGMA ${name}`)[0])[name] ?? 0
+  );
+
   return {
-    sql: { exec: sqlExecOver(db) },
+    // What free space is reckoned from, as DO storage.sql reports it.
+    sql: { exec, get databaseSize() { return pragma('page_count') * pragma('page_size'); } },
     transactions: { storage: { transactionSync: <T,>(callback: () => T): T => db.transaction(callback)() } },
   };
 }

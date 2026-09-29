@@ -136,12 +136,11 @@ if [ -n "$KINU_DEPLOY_SPAN_LOG" ]; then
   printf 'end\\t%s\\t%s\\n' "$(date +%s%N)" "$command_line" >> "$KINU_DEPLOY_SPAN_LOG"
 fi
 if [ "$KINU_DEPLOY_KILL" = "$command_line" ]; then
-  # SIGKILL the process the runner is waiting on: the timeout wrapper, which is
-  # this stub's parent. The gate then ends having published nothing about itself,
-  # which is the OOM-kill shape — the runner has to settle it from the child's
-  # fate alone.
-  kill -9 "$PPID"
-  sleep 30
+  # SIGKILL the process the runner is waiting on, which is this stub: the
+  # runner execs the gate's runner directly. The gate then ends having
+  # published nothing about itself, which is the OOM-kill shape — the runner
+  # has to settle it from the child's fate alone.
+  kill -9 "$$"
 fi
 if [ "$KINU_DEPLOY_FAIL" = "$command_line" ]; then
   exit 47
@@ -503,25 +502,15 @@ describe("deploy gate", () => {
   });
 
 
-  test("every gate has a process-tree deadline, from its row or the shared figure", () => {
-    const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
-    expect(source).toContain('timeout --signal=TERM --kill-after=5s "${GATE_DEADLINE[pick]}" bun scripts/ladder.ts --gate "${GATE_CMDS[pick]}"');
-    expect(GATE_DEADLINE_SECONDS).toBe(480);
-
+  test("a gate's own hang bound is a declaration with a reason, longer than the shared one", () => {
     for (const row of PLAN) {
       const gate = LADDER.find((candidate) => candidate.run === row.run);
 
-      if (gate?.deadline === undefined) {
-        expect(row.deadline, `${row.run} carries a deadline its row does not declare`).toBe(GATE_DEADLINE_SECONDS);
-        continue;
-      }
+      if (gate?.deadline === undefined) continue;
 
-      // A PER-GATE EXCEPTION IS A DECLARATION with a reason, longer than the
-      // shared wall: raising the shared figure would take the wall off every
-      // source gate at once.
-      expect(row.deadline).toBe(gate.deadline.seconds);
-      expect(gate.deadline.seconds, `${row.run} declares no longer than the shared deadline`).toBeGreaterThan(GATE_DEADLINE_SECONDS);
-      expect(gate.deadline.why.length, `${row.run} declares no reason for its own deadline`).toBeGreaterThan(80);
+      // Raising the shared figure would loosen the hang bound of every source gate at once.
+      expect(gate.deadline.seconds, `${row.run} declares no longer than the shared bound`).toBeGreaterThan(GATE_DEADLINE_SECONDS);
+      expect(gate.deadline.why.length, `${row.run} declares no reason for its own bound`).toBeGreaterThan(80);
     }
   });
 
@@ -555,15 +544,14 @@ describe("deploy gate", () => {
     // tab-separated fields, no quotes, and every command a plain argv.
     for (const line of PLAN_TEXT.split("\n")) {
       const fields = line.split("\t");
-      expect(fields).toHaveLength(7);
+      expect(fields).toHaveLength(6);
       const phases: readonly string[] = DEPLOY_PHASES;
       expect(phases).toContain(fields[0] ?? "");
       expect(Number(fields[2])).toBeGreaterThan(0);
       expect(Number(fields[3])).toBeGreaterThan(0);
-      expect(Number(fields[4])).toBeGreaterThan(0);
       const resources: readonly string[] = [...SHARED_RESOURCES, "none"];
-      expect(resources).toContain(fields[5] ?? "");
-      expect(fields[6]).not.toMatch(/['"]/u);
+      expect(resources).toContain(fields[4] ?? "");
+      expect(fields[5]).not.toMatch(/['"]/u);
     }
   });
 

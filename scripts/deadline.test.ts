@@ -27,6 +27,27 @@ describe('a run under a deadline', () => {
     expect(outcome.stderr).toContain(deadlineLine({ label: 'Hang fixture', seconds: 1 }, outcome.seconds));
   });
 
+  // ci-0965z: the CLI suite passed 484 tests in 476 s and was killed at its 480 s bound; it was slow, not hung.
+  test('a run that keeps writing outlives its bound and is not killed, whether its output is piped or passed on', async () => {
+    const writes = 'for (let at = 0; at < 10; at += 1) { console.log(`result ${String(at)}`); await Bun.sleep(300); }';
+
+    for (const stdio of ['pipe', 'inherit'] as const) {
+      const outcome = await runUnderDeadline({ argv: ['bun', '-e', writes], seconds: 1, label: 'writes', stdio });
+
+      expect(outcome).toMatchObject({ killed: false, exitCode: 0 });
+      expect(outcome.seconds).toBeGreaterThan(2);
+    }
+  });
+
+  test('a run that writes and then falls silent is killed its bound after its last output', async () => {
+    const stalls = 'for (let at = 0; at < 8; at += 1) { console.log(`result ${String(at)}`); await Bun.sleep(300); } await new Promise(() => {});';
+    const outcome = await runUnderDeadline({ argv: ['bun', '-e', stalls], seconds: 1, label: 'stalls', stdio: 'pipe' });
+
+    expect(outcome).toMatchObject({ killed: true, exitCode: DEADLINE_EXIT_CODE });
+    expect(outcome.stdout).toContain('result 7');
+    expect(outcome.seconds).toBeGreaterThan(3);
+  });
+
   test('a run that ends keeps its own exit code and is not reported as killed', async () => {
     const ok = await runUnderDeadline({ argv: ['bun', '-e', 'process.exit(0)'], seconds: 30, label: 'ends', stdio: 'pipe' });
     const failed = await runUnderDeadline({ argv: ['bun', '-e', 'process.exit(3)'], seconds: 30, label: 'fails', stdio: 'pipe' });

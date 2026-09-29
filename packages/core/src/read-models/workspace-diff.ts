@@ -1,23 +1,25 @@
 /**
- * Change-set read model: the workspace's own plane against a baseline manifest (`vfs_baseline_manifest`, bodies
- * by hash in `vfs_baseline_blob`); other executors by read-only git diff. Reads never mutate the baseline.
+ * Change-set read model: the workspace's own plane against a baseline, a Nimbus snapshot of the store taken at each
+ * review (the one before it kept for Undo); other executors by read-only git diff. A read never moves the baseline.
  */
 
+import type { CredentialedVfs, SnapshotInfo, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import type { VfsCred } from '@nimbus-sh/core/vfs/vfs.js';
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { RawSqlExec, VFS, VfsEntryStat, VfsLinkStat } from '../types/primitives';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { diffLines, fileDiff, parseGitDiff, type FileDiff, type FileStatus, type Omitted } from '../vfs/diff';
 import { nanoid } from '../utils/nanoid';
 import * as v from 'valibot';
 import { CommandResultSchema } from '../execution/exec-result';
-import { KinuError, renderThrownChain, tolerateAsync } from '../obs/index';
-import { sha256Hex } from '../safety/argument-digest';
+import { KinuError, renderThrownChain, tolerate } from '../obs/index';
 import { shellQuote } from '../utils/shell';
-import type { VfsMountRouting } from '../vfs/mounts';
 import { LEGACY_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
-import { unmovedSince } from '../vfs/unmoved';
 
-/** `do.sqlite.row_bytes` caps a body's row, which also holds its 64-hex key. */
+/**
+ * A side past one SQLite row is listed as large, without a body (a write's preview too). Nimbus's diff does not say
+ * whether it was the content or only the metadata that moved, so a large file whose mode alone changed is listed too
+ * (ASK: `VfsDiffEntry` names a content change).
+ */
 export const BODY_MAX_BYTES = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value - 64;
 
 /** Quarter of the facet RPC ceiling: the reply is UTF-16 in the isolate plus per-line overhead.
@@ -32,46 +34,22 @@ function reviewed(name: string): boolean {
   return !name.startsWith('.') && !DEPENDENCY_TREES.has(name);
 }
 
-const WORKING_DIRECTORY_NAMES = [WORKSPACE_ROOT, LEGACY_WORKSPACE_ROOT];
-
-const UNREVIEWED_PATHS: ReadonlySet<string> = new Set(WORKING_DIRECTORY_NAMES);
-
-/** Also a manifest row: a generation that holds it walked the plane root, so its slates are already at /slates. */
-const PLANE_ROOT = '/';
-
-/** Under the plane root the change-set reviews every agent's home and the slates, and nothing else (owner, 2026-09-25). */
+/** Under the store's root the change-set reviews every agent's home and the slates, and nothing else (owner, 2026-09-25). */
 const REVIEWED_UNDER_ROOT = ['home', SLATES_ROOT.slice(1)];
 
-/** How far below an executor's working directory the git view looks for repositories, as VS Code bounds its scan. */
+/** Where the change-set names a path relative to the working directory, as the shell starting there does. */
+const WORKING_DIRECTORY = `${WORKSPACE_ROOT.slice(1)}/`;
+
+/** The legacy home is a link to the working directory: its own entry, and anything under it, is never reviewed. */
+const LEGACY_HOME = LEGACY_WORKSPACE_ROOT.slice(1);
+
+/** Repository scan depth below an executor's working directory, as VS Code bounds its scan. */
 const REPOSITORY_SCAN_DEPTH = 3;
 
 /** Opens each record of the git view, at a line start. */
 const MARK = '\u0001';
 
 const HeadCommitSchema = v.pipe(v.string(), v.hexadecimal(), v.minLength(40), v.maxLength(64));
-
-/**
- * `hash` is a digest of a file's bytes, null past one row; a text file's body is stored once per hash, a binary file's
- * never. The one inactive generation a prune leaves is the one the active one replaced, for Undo.
- */
-export function initWorkspaceBaselineTable(execRaw: RawSqlExec): void {
-  execRaw(`CREATE TABLE IF NOT EXISTS vfs_baseline_manifest (
-    actor_id   TEXT NOT NULL,
-    generation TEXT NOT NULL,
-    path       TEXT NOT NULL,
-    size       INTEGER NOT NULL,
-    mtime_ms   INTEGER NOT NULL,
-    hash       TEXT,
-    active     INTEGER NOT NULL CHECK (active IN (0, 1)),
-    PRIMARY KEY (actor_id, generation, path)
-  )`);
-  execRaw(`CREATE INDEX IF NOT EXISTS idx_vfs_baseline_manifest_active
-    ON vfs_baseline_manifest(actor_id, active)`);
-  execRaw(`CREATE TABLE IF NOT EXISTS vfs_baseline_blob (
-    hash    TEXT PRIMARY KEY,
-    content TEXT NOT NULL
-  )`);
-}
 
 export interface WorkspaceDiffResult {
   files: FileDiff[];
@@ -91,180 +69,86 @@ export interface ExecutorDiffResult {
   error?: string;
 }
 
-/** The baseline read model reads the workspace's files and its own tables, as the actor it serves. */
-type WorkspaceBaselineRuntime = Pick<AgentRuntime, 'storage' | 'actor'>;
+/** What the change-set asks of the workspace store, Nimbus's SqliteVFS: its snapshots, and reads as one principal. */
+export type WorkspaceBaselineStore = Pick<SqliteVFS, 'snapshot' | 'snapshots' | 'dropSnapshotAsync' | 'diff' | 'at' | 'as'>;
 
-interface ManifestEntry {
-  readonly size: number;
-  readonly mtimeMs: number;
-  readonly hash: string | null;
+/** The store, and the principal the change-set reads it as: a file that principal may not read is absent. */
+export interface WorkspaceBaselines {
+  readonly store: WorkspaceBaselineStore;
+  readonly cred: VfsCred;
 }
 
-/**
- * Every file and symbolic link the change-set reviews, breadth-first so root files come first, by stat alone. A link
- * is an entry, never followed. The walk runs while turns write, so an entry can vanish between its directory's
- * listing and its own read: it is absent, as a snapshot of a file that is gone does not contain it.
- */
-async function walkWorkspaceFiles(
-  rt: WorkspaceBaselineRuntime,
-  visit: (path: string, stat: VfsEntryStat | VfsLinkStat) => void | Promise<void>,
-): Promise<void> {
-  const routed: VFS & Partial<Pick<VfsMountRouting, 'mountOf'>> = rt.storage.vfs;
-  const roots = ['', PLANE_ROOT];
-  const directories = [...roots];
+/** The baseline read model serves one actor's reviews. */
+type WorkspaceBaselineRuntime = Pick<AgentRuntime, 'actor'>;
 
-  for (let next = 0; next < directories.length; next++) {
-    const dir = directories[next];
-    const names = await namesIn(rt, dir, next >= roots.length);
-    const children: string[] = [];
-
-    for (const name of names ?? []) {
-      if (!reviewed(name)) continue;
-
-      if (dir === PLANE_ROOT && !REVIEWED_UNDER_ROOT.includes(name)) continue;
-      const full = dir === '' ? name : `${dir === PLANE_ROOT ? '' : dir}/${name}`;
-
-      if (UNREVIEWED_PATHS.has(full) || (routed.mountOf?.(full) ?? null) !== null) continue;
-      const st = await statOf(rt, full);
-
-      if (st === undefined || st === null) continue;
-
-      if (st.isDir && !isLink(st)) {
-        children.push(full);
-        continue;
-      }
-
-      await visit(full, st);
-    }
-
-    directories.push(...children);
-  }
+/** This actor's reviews are the snapshots named `diffs:<actor id>:<id>`. */
+function reviewPrefix(rt: WorkspaceBaselineRuntime): string {
+  return `diffs:${rt.actor.actorId}:`;
 }
 
-/** A read of an entry the walk listed: undefined when this actor may not read it, or it is gone since the listing. */
-async function whileThere<T>(read: () => Promise<T>): Promise<T | undefined> {
-  return tolerateAsync(() => tolerateAsync(read, 'enoent'), 'eacces');
-}
-
-/** A root's names, or a listed directory's, which is gone (undefined) when it vanished since its parent's listing. */
-async function namesIn(rt: WorkspaceBaselineRuntime, dir: string, listed: boolean): Promise<string[] | undefined> {
-  const read = () => rt.storage.vfs.readdir(dir);
-
-  try {
-    return (await (listed ? whileThere(read) : tolerateAsync(read, 'eacces')))?.sort();
-  } catch (error) {
-    throw new Error(`Workspace snapshot could not read directory ${JSON.stringify(dir || '.')}`, { cause: error });
-  }
-}
-
-/**
- * The entry itself, a symbolic link not followed: a link's target is files seen twice, or hidden ones, or its own
- * folder again. Null when the entry is gone since its directory was listed.
- */
-async function statOf(rt: WorkspaceBaselineRuntime, path: string): Promise<VfsLinkStat | VfsEntryStat | null | undefined> {
-  const { vfs } = rt.storage;
-
-  try {
-    return await tolerateAsync(() => (vfs.lstat === undefined ? vfs.stat(path) : vfs.lstat(path)), 'eacces');
-  } catch (error) {
-    throw new Error(`Workspace snapshot could not stat ${JSON.stringify(path)}`, { cause: error });
-  }
-}
-
-function isLink(st: VfsEntryStat | VfsLinkStat): boolean {
-  return 'isSymlink' in st && st.isSymlink;
-}
-
-/** A digest of a file's bytes, and the text a line diff shows unless the file is binary (NUL-bearing). */
-interface Contents {
-  readonly digest: string;
-  readonly text: string | null;
-}
-
-/** A link's contents are its target text, digested apart from a file holding the same text, so a swap is a change. */
-const LINK_DIGEST_PREFIX = new TextEncoder().encode('symlink\0');
-
-async function contentsOf(rt: WorkspaceBaselineRuntime, path: string, st: VfsEntryStat | VfsLinkStat): Promise<Contents | undefined> {
-  const { vfs } = rt.storage;
-  let content: string | Uint8Array | undefined;
-
-  try {
-    if (!isLink(st)) {
-      content = await whileThere(() => vfs.readFile(path));
-    } else if (vfs.readlink === undefined) {
-      throw new Error('this plane reports links but reads none');
-    } else {
-      const readlink = vfs.readlink.bind(vfs);
-      content = await whileThere(() => readlink(path));
-    }
-  } catch (error) {
-    throw new Error(`Workspace snapshot could not read ${JSON.stringify(path)}`, { cause: error });
-  }
-
-  if (content === undefined) return undefined;
-  const bytes = content instanceof Uint8Array ? content : new TextEncoder().encode(content);
-  const digested = isLink(st) ? new Uint8Array([...LINK_DIGEST_PREFIX, ...bytes]) : bytes;
-
-  return { digest: sha256Hex(digested), text: bytes.includes(0) ? null : new TextDecoder().decode(bytes) };
-}
-
-/** The '' marker row carries the capture time. */
-interface BaselineManifest {
-  readonly capturedAt: number;
-  readonly generation: string;
-  readonly entries: Map<string, ManifestEntry>;
-}
-
-/** Read in one query, so a diff never straddles a concurrent re-baseline. Null: this actor has no baseline yet. */
-function activeManifest(rt: WorkspaceBaselineRuntime): BaselineManifest | null {
+/** This actor's reviews, oldest first: the last is the baseline, the one before it Undo's target. */
+function reviews(rt: WorkspaceBaselineRuntime, store: WorkspaceBaselineStore): SnapshotInfo[] {
   rt.actor.assertCurrent();
+  const prefix = reviewPrefix(rt);
 
-  const rows = rt.storage.sql<{ generation: string; path: string; size: number; mtime_ms: number; hash: string | null }>`
-    SELECT generation, path, size, mtime_ms, hash FROM vfs_baseline_manifest
-    WHERE actor_id = ${rt.actor.actorId} AND active = 1`;
-
-  const entries = new Map<string, ManifestEntry>();
-  let marker: { readonly capturedAt: number; readonly generation: string } | null = null;
-  let planeWalked = false;
-
-  for (const row of rows) {
-    if (row.path === '') marker = { capturedAt: row.mtime_ms, generation: row.generation };
-    else if (row.path === PLANE_ROOT) planeWalked = true;
-    // A generation captured before hidden files were left out still lists them.
-    else if (row.path.split('/').every((name) => name === '' || reviewed(name))) entries.set(row.path, { size: row.size, mtimeMs: row.mtime_ms, hash: row.hash });
-  }
-
-  if (marker === null) return null;
-
-  return { ...marker, entries: planeWalked ? entries : slatesMovedToRoot(entries) };
+  return store.snapshots().filter((snapshot) => snapshot.name.startsWith(prefix));
 }
 
-function slatesMovedToRoot(entries: Map<string, ManifestEntry>): Map<string, ManifestEntry> {
-  const moved = new Map<string, ManifestEntry>();
+/**
+ * The change-set's name for a store path: under the working directory relative to it, any other reviewed path
+ * absolute. Null for a path it never reviews: outside the homes and the slates, hidden, or in a dependency tree.
+ */
+function reviewedPath(path: string): string | null {
+  const names = path.split('/');
 
-  for (const [path, entry] of entries) moved.set(path.startsWith('slates/') ? `${SLATES_ROOT}/${path.slice('slates/'.length)}` : path, entry);
+  if (!REVIEWED_UNDER_ROOT.includes(names[0] ?? '') || !names.every(reviewed)) return null;
 
-  return moved;
+  if (path === LEGACY_HOME || path.startsWith(`${LEGACY_HOME}/`) || !path.includes('/')) return null;
+
+  return path.startsWith(WORKING_DIRECTORY) ? path.slice(WORKING_DIRECTORY.length) : `/${path}`;
 }
 
-/** A file's text as `generation` holds it: null past one row, or for a binary file, which has no body. */
-function blobText(rt: WorkspaceBaselineRuntime, entry: ManifestEntry, generation: string): string | null {
-  if (entry.hash === null) return null;
-  const row = rt.storage.sql<{ content: string }>`SELECT content FROM vfs_baseline_blob WHERE hash = ${entry.hash} LIMIT 1`[0];
-
-  if (row !== undefined) return row.content;
-
-  const active = rt.storage.sql<{ active: number }>`SELECT active FROM vfs_baseline_manifest
-    WHERE actor_id = ${rt.actor.actorId} AND generation = ${generation} AND path = '' LIMIT 1`[0]?.active === 1;
-
-  // While its generation is active every text body is kept, so a missing one was binary. Otherwise a re-baseline
-  // landed mid-read, and assuming empty would report the file as added.
-  if (!active) throw new Error(`Workspace baseline changed while reading the change-set (body ${entry.hash})`);
-
-  return null;
+/** One side of a changed path: its bytes' text, null for a binary file or one past {@link BODY_MAX_BYTES}. */
+interface Side {
+  readonly bytes: Uint8Array | null;
+  readonly text: string | null;
+  readonly size: number;
 }
 
-/** Why a side of this size has no text: past one row, or binary. */
+/** A link's contents are its target text, told apart from a file holding the same text, so a swap is a change. */
+const LINK_TAG = new TextEncoder().encode('symlink\0');
+
+/**
+ * `path` as `files` holds it, a symbolic link not followed. Undefined for a directory, and when it is not there or this
+ * principal may not read it: a snapshot of a file that is gone does not contain it.
+ */
+function sideOf(files: CredentialedVfs, path: string): Side | undefined {
+  const read = (): Side | undefined => {
+    const { type, size } = files.lstat(path);
+
+    if (type === 'directory') return undefined;
+
+    if (type === 'symlink') {
+      const target = files.readlink(path);
+      const text = new TextEncoder().encode(target);
+
+      return { bytes: new Uint8Array([...LINK_TAG, ...text]), text: target, size: text.byteLength };
+    }
+
+    if (size > BODY_MAX_BYTES) return { bytes: null, text: null, size };
+    const bytes = files.readFile(path);
+
+    return { bytes, text: bytes.includes(0) ? null : new TextDecoder().decode(bytes), size };
+  };
+
+  return tolerate(() => tolerate(read, 'enoent'), 'eacces');
+}
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  return a.byteLength === b.byteLength && a.every((byte, i) => byte === b[i]);
+}
+
+/** Why a side of this size has no text: past {@link BODY_MAX_BYTES}, or binary. */
 function unread(size: number): Omitted {
   return size > BODY_MAX_BYTES ? 'large' : 'binary';
 }
@@ -276,11 +160,24 @@ interface Sides {
   readonly omitted: Omitted;
 }
 
-/** Cumulative change-set since the baseline. A file whose manifest row still holds by {@link unmovedSince} is never read. */
-export async function getWorkspaceDiff(rt: WorkspaceBaselineRuntime): Promise<WorkspaceDiffResult> {
+/** Take a review: a snapshot of the store, O(1) at any size. Keeps it and the one it replaced, for Undo. */
+async function capture(rt: WorkspaceBaselineRuntime, store: WorkspaceBaselineStore): Promise<SnapshotInfo> {
+  rt.actor.assertCurrent();
+  const taken = store.snapshot(`${reviewPrefix(rt)}${nanoid()}`);
+
+  // Older reviews pin the store's history for nothing.
+  for (const stale of reviews(rt, store).slice(0, -2)) await store.dropSnapshotAsync(stale.name);
+
+  return taken;
+}
+
+/** Cumulative change-set since the baseline: only the paths the store wrote since the review are examined. */
+export async function getWorkspaceDiff(rt: WorkspaceBaselineRuntime, baselines: WorkspaceBaselines): Promise<WorkspaceDiffResult> {
+  const { store, cred } = baselines;
   // Without a baseline, tracking starts now: the same capture a new workspace takes at creation.
-  const manifest = activeManifest(rt) ?? await capture(rt, null);
-  const baseline = manifest.entries;
+  const baseline = reviews(rt, store).at(-1) ?? await capture(rt, store);
+  const then = store.at(baseline.name, cred);
+  const now = store.as(cred);
   const files: FileDiff[] = [];
   let bodyChars = 0;
 
@@ -303,133 +200,57 @@ export async function getWorkspaceDiff(rt: WorkspaceBaselineRuntime): Promise<Wo
     files.push(fileDiff(path, status, d));
   };
 
-  await walkWorkspaceFiles(rt, async (path, st) => {
-    const base = baseline.get(path);
-    baseline.delete(path);
+  for (let after: string | undefined, more = true; more;) {
+    const page = store.diff(baseline.name, null, after === undefined ? {} : { after });
 
-    if (base !== undefined && unmovedSince(base, manifest.capturedAt, st)) return;
-    const now = st.size > BODY_MAX_BYTES ? null : await contentsOf(rt, path, st);
+    for (const entry of page.entries) {
+      const path = reviewedPath(entry.path);
 
-    if (now === undefined) return;
-    const after = now?.text ?? null;
+      if (path === null) continue;
+      // A side that is a directory is no file: a file replaced by a folder reads as removed.
+      const was = entry.change === 'added' ? undefined : sideOf(then, entry.path);
+      const is = entry.change === 'removed' ? undefined : sideOf(now, entry.path);
 
-    if (base === undefined) {
-      admit(path, 'added', { before: '', after, omitted: unread(st.size) });
+      if (was === undefined && is === undefined) continue;
 
-      return;
+      if (was === undefined) {
+        admit(path, 'added', { before: '', after: is?.text ?? null, omitted: unread(is?.size ?? 0) });
+      } else if (is === undefined) {
+        admit(path, 'removed', { before: was.text, after: '', omitted: unread(was.size) });
+      } else if (was.bytes === null || is.bytes === null || !sameBytes(was.bytes, is.bytes)) {
+        admit(path, 'changed', { before: was.text, after: is.text, omitted: unread(Math.max(was.size, is.size)) });
+      }
     }
 
-    if (now !== null && base.hash === now.digest) return;
-    admit(path, 'changed', { before: after === null ? null : blobText(rt, base, manifest.generation), after, omitted: unread(after === null ? st.size : base.size) });
-  });
-
-  // Whatever the baseline still holds was not found in the workspace.
-  for (const [path, base] of baseline) admit(path, 'removed', { before: blobText(rt, base, manifest.generation), after: '', omitted: unread(base.size) });
+    more = page.next !== null;
+    after = page.next ?? undefined;
+  }
 
   files.sort((a, b) => a.path.localeCompare(b.path));
 
-  return { files, trackedSince: manifest.capturedAt, baseline: manifest.generation };
+  // The review's own id: notes name the snapshot they were written on by its first characters.
+  return { files, trackedSince: baseline.createdAt, baseline: baseline.name.slice(reviewPrefix(rt).length) };
 }
 
-/** The generation the active one replaced, kept for Undo: every prune leaves it the only inactive one. A capture in
- *  flight is not it, because its '' marker is written last. */
-function replacedGeneration(rt: WorkspaceBaselineRuntime): string | null {
-  return rt.storage.sql<{ generation: string }>`SELECT generation FROM vfs_baseline_manifest
-    WHERE actor_id = ${rt.actor.actorId} AND active = 0 AND path = '' LIMIT 1`[0]?.generation ?? null;
-}
-
-/** Generations a capture is still writing: an overlapping review or Undo must not prune them mid-walk. */
-const capturing = new Set<string>();
-
-/** Drops every inactive generation but `kept` and those still being written, then the bodies nothing names. */
-function pruneBaselines(rt: WorkspaceBaselineRuntime, kept: string | null): void {
-  const writing = JSON.stringify([...capturing]);
-
-  void rt.storage.sql`DELETE FROM vfs_baseline_manifest WHERE actor_id = ${rt.actor.actorId} AND active = 0
-    AND generation IS NOT ${kept} AND generation NOT IN (SELECT value FROM json_each(${writing}))`;
-  void rt.storage.sql`DELETE FROM vfs_baseline_blob
-    WHERE hash NOT IN (SELECT hash FROM vfs_baseline_manifest WHERE hash IS NOT NULL)`;
-}
-
-/**
- * Mark the current workspace as the baseline. Rows go under an inactive generation, then one statement flips it
- * active, so no read sees a partial replacement. An unmoved file keeps its hash without being read.
- */
+/** Mark the workspace as it is now reviewed: every later read measures from here. */
 export async function resetWorkspaceBaseline(
-  rt: WorkspaceBaselineRuntime,
-): Promise<{ ok: true; files: number; capturedAt: number }> {
-  const taken = await capture(rt, activeManifest(rt));
+  rt: WorkspaceBaselineRuntime, baselines: WorkspaceBaselines,
+): Promise<{ ok: true; capturedAt: number }> {
+  const taken = await capture(rt, baselines.store);
 
-  return { ok: true, files: taken.entries.size, capturedAt: taken.capturedAt };
+  return { ok: true, capturedAt: taken.createdAt };
 }
 
-async function capture(rt: WorkspaceBaselineRuntime, held: BaselineManifest | null): Promise<BaselineManifest> {
-  const actorId = rt.actor.actorId;
-  const generation = nanoid();
-  const capturedAt = Date.now();
-  const entries = new Map<string, ManifestEntry>();
-  let flipped = false;
+/** Undoes the last Mark reviewed: the review it replaced is the baseline again. */
+export async function restoreWorkspaceBaseline(
+  rt: WorkspaceBaselineRuntime, baselines: WorkspaceBaselines,
+): Promise<{ ok: true; capturedAt: number } | { ok: false; error: string }> {
+  const [replaced, latest] = reviews(rt, baselines.store).slice(-2);
 
-  capturing.add(generation);
+  if (replaced === undefined || latest === undefined) return { ok: false, error: 'There is no earlier review to go back to.' };
+  await baselines.store.dropSnapshotAsync(latest.name);
 
-  try {
-    await walkWorkspaceFiles(rt, async (path, st) => {
-      const kept = held?.entries.get(path);
-      let entry: ManifestEntry = { size: st.size, mtimeMs: st.mtimeMs, hash: null };
-
-      if (kept !== undefined && held !== null && unmovedSince(kept, held.capturedAt, st)) {
-        entry = kept;
-      } else if (st.size <= BODY_MAX_BYTES) {
-        const contents = await contentsOf(rt, path, st);
-
-        if (contents === undefined) return;
-        const { digest, text } = contents;
-        entry = { ...entry, hash: digest };
-
-        if (text !== null) void rt.storage.sql`INSERT OR IGNORE INTO vfs_baseline_blob (hash, content) VALUES (${digest}, ${text})`;
-      }
-
-      void rt.storage.sql`INSERT INTO vfs_baseline_manifest (actor_id, generation, path, size, mtime_ms, hash, active)
-        VALUES (${actorId}, ${generation}, ${path}, ${entry.size}, ${entry.mtimeMs}, ${entry.hash}, ${0})`;
-      entries.set(path, entry);
-    });
-
-    // The marker makes an intentionally empty snapshot representable.
-    for (const marker of [PLANE_ROOT, '']) {
-      void rt.storage.sql`INSERT INTO vfs_baseline_manifest (actor_id, generation, path, size, mtime_ms, hash, active)
-        VALUES (${actorId}, ${generation}, ${marker}, ${0}, ${capturedAt}, ${null}, ${0})`;
-    }
-
-    void rt.storage.sql`UPDATE vfs_baseline_manifest
-      SET active = CASE WHEN generation = ${generation} THEN 1 ELSE 0 END
-      WHERE actor_id = ${actorId}`;
-    flipped = true;
-  } finally {
-    capturing.delete(generation);
-    // A failed partial write goes; the undo target is read now, because another review may have finished meanwhile.
-    pruneBaselines(rt, flipped ? held?.generation ?? null : replacedGeneration(rt));
-  }
-
-  return { capturedAt, generation, entries };
-}
-
-/** Undoes the last Mark reviewed: the generation it replaced is the baseline again. */
-export function restoreWorkspaceBaseline(rt: WorkspaceBaselineRuntime): { ok: true; capturedAt: number } | { ok: false; error: string } {
-  rt.actor.assertCurrent();
-  const actorId = rt.actor.actorId;
-
-  const replaced = replacedGeneration(rt);
-
-  const marker = replaced === null ? undefined : rt.storage.sql<{ mtime_ms: number }>`SELECT mtime_ms FROM vfs_baseline_manifest
-    WHERE actor_id = ${actorId} AND generation = ${replaced} AND path = '' LIMIT 1`[0];
-
-  if (replaced === null || marker === undefined) return { ok: false, error: 'There is no earlier review to go back to.' };
-  void rt.storage.sql`UPDATE vfs_baseline_manifest
-    SET active = CASE WHEN generation = ${replaced} THEN 1 ELSE 0 END
-    WHERE actor_id = ${actorId}`;
-  pruneBaselines(rt, null);
-
-  return { ok: true, capturedAt: marker.mtime_ms };
+  return { ok: true, capturedAt: replaced.createdAt };
 }
 
 /** One changed file of a repository: $1 the repository, $2 `tracked` or `untracked`, $3 the path from git's -z list. */
@@ -680,9 +501,12 @@ export class ChangeSetCache {
   }
 }
 
-export async function getExecutorDiff(rt: AgentRuntime, executorId: string, changes?: ChangeSetCache): Promise<ExecutorDiffResult> {
+/** An executor's change-set: the workspace's own, read by `workspace`, and any other executor's by git. */
+export async function getExecutorDiff(
+  rt: AgentRuntime, executorId: string, workspace: () => Promise<WorkspaceDiffResult>,
+): Promise<ExecutorDiffResult> {
   if (executorId === 'workspace') {
-    const r = await (changes === undefined ? getWorkspaceDiff(rt) : changes.read(() => getWorkspaceDiff(rt)));
+    const r = await workspace();
 
     return { files: r.files, mode: 'vfs-baseline', trackedSince: r.trackedSince, baseline: r.baseline };
   }

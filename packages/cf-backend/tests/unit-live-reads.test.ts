@@ -65,7 +65,8 @@ const MOVED_ELSEWHERE = new Map([
   ['workspace_identity', 'identity lookup'],
   ['conversation_entries', "the work mode follows the root's own turns, and every page re-reads at turn end"],
   ['run_events', 'the changelog reads only promotions and rollbacks, each written with its scaffold_versions row'],
-  ['file_chunks', 'workspace ports move with the port registry'],
+  ['vfs_inodes', 'Nimbus file rows: file events, not table writes, move the reads over workspace files'],
+  ['vfs_chunks', 'workspace ports move with the port registry'],
   ['nimbus_session_kv', 'workspace ports move with the port registry'],
 ]);
 

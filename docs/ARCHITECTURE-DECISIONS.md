@@ -872,6 +872,23 @@ esbuild's sync API one process per call. Blind: a process that rebuilt its
 environment and outlived its parent, anything off Linux, and
 `scripts/deploy.sh`'s rows, which run under coreutils `timeout`.
 
+L12. The hang detector is a silence bound, not a wall. Decided 2026-09-29;
+it amends L6's "the deadline stays the hang detector". `runUnderDeadline`
+kills a run once it has written nothing to stdout or stderr for the row's
+bound (480 s unless the row declares its own), and the deploy's rows run
+through it (`ladder.ts --gate`) instead of coreutils `timeout`, which closes
+L11's deploy blind spot. Measured: on integration/0965 fa8bd6c4ae the wall
+killed the CLI suite at 480 s after 484 tests had passed in 476 s (ci-0965z).
+Alone in `kinu-deploy.slice` the suite took 139 s and 173 s with its scratch
+in RAM, and 276 s, 315 s and 345 s on the scratch NVMe at load 8-27; at load
+35-73 it was killed at 480 s twice with nothing beside it. Its own CPU
+pressure stayed under 10 % while its IO pressure ran 10-24 %: the disk set
+its length, not a hang. Its longest wait between two test results was 74.5 s.
+The bound per row did not shrink, because a gate that prints only its verdict
+is silent for its whole run (`secret-scan`, 149 s at load 43). The ladder
+prints each row's longest silence beside its wall. Blind: a run that keeps
+writing and never ends.
+
 ## Open
 
 O1. A gate that pins a nonzero cache read on a representative multi-step turn

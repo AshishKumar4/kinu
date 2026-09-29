@@ -35,7 +35,7 @@ import { cpus } from 'node:os';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 import { plantedInputs, readCensusLock } from './census-plants';
-import { DEADLINE_EXIT_CODE, LEFTOVER_BLIND_SPOTS, runUnderDeadline } from './deadline';
+import { DEADLINE_BLIND_SPOTS, DEADLINE_EXIT_CODE, runUnderDeadline } from './deadline';
 import {
   CACHE_BLIND_SPOTS, defaultStoreDirectory, gateEnvironment, gateEnvNames, planGate, recordGreen, storeAt, toolVersions,
 } from './ladder-cache';
@@ -101,9 +101,9 @@ export const DEPLOY_PHASES = ['preflight', 'source', 'hammer', 'infra', 'post-pu
 
 export type DeployPhase = (typeof DEPLOY_PHASES)[number];
 
-/** The shared process-tree deadline for a gate that declares none, seconds.
- *  Calibrated against the slowest source gate; a live probe that needs more
- *  declares its own on its row with the reason. */
+/** The shared hang bound for a gate that declares none: seconds it may write nothing (scripts/deadline.ts). A gate
+ *  that prints only its verdict is silent for its whole run, so this stays at the slowest such gate's length; a
+ *  live probe that needs more declares its own on its row with the reason. */
 export const GATE_DEADLINE_SECONDS = 480;
 
 export type Tier = (typeof TIERS)[number];
@@ -159,7 +159,7 @@ export interface Gate {
    *  for a row that takes the resource some other way, and a declaration no
    *  derivation confirms is refused by the census in `ladder.test.ts`. */
   readonly shared?: SharedResource;
-  /** Seconds before the deploy runner kills the gate's process tree, where
+  /** Seconds the gate may write nothing before its process tree is killed, where
    *  the shared `GATE_DEADLINE_SECONDS` does not fit; with the reason. */
   readonly deadline?: { readonly seconds: number; readonly why: string };
   /** The cheapest tier that runs it. Every later tier runs it too. */
@@ -2478,7 +2478,6 @@ export interface PlanRow {
   readonly label: string;
   readonly threads: number;
   readonly rssMb: number;
-  readonly deadline: number;
   /** The resource the row holds whole, or `none`. The wave admits one row
    *  holding a resource at a time; see {@link SHARED_RESOURCES}. */
   readonly shared: SharedResource | 'none';
@@ -2528,7 +2527,6 @@ export function deployPlan(costs: CostTable = readCosts()): PlanRow[] {
       label: gate.label,
       threads: cost === undefined ? 1 : costThreads(cost, gate.seconds),
       rssMb: cost === undefined ? 1 : costRssMb(cost),
-      deadline: gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS,
       shared: sharedOf(gate, tracked, browsers) ?? 'none',
       run: gate.run,
     };
@@ -2630,14 +2628,14 @@ export async function tierWave<T>(
 }
 
 /** The plan as the runner reads it: one tab-separated line per row — phase,
- *  label, threads, resident MiB, deadline, shared resource, command. Tabs,
+ *  label, threads, resident MiB, shared resource, command. Tabs,
  *  because a command holds spaces and a label holds punctuation, and neither
  *  holds a tab; the command stays LAST, so a field added here cannot be eaten
  *  by the runner's `read` of it. */
 export function printPlan(rows: readonly PlanRow[]): string {
   return rows
     .map((row) => [
-      row.phase, row.label, String(row.threads), String(row.rssMb), String(row.deadline), row.shared, row.run,
+      row.phase, row.label, String(row.threads), String(row.rssMb), row.shared, row.run,
     ].join('\t'))
     .join('\n');
 }
@@ -3304,28 +3302,25 @@ if (import.meta.main) {
   }
 
   // The measured table as a reader sees it, heaviest first, with the two
-  // figures the wave admits against and the deadline each row's SOLO wall is
-  // measured against. A row near its own deadline alone is reported, never
-  // fixed by moving the deadline.
+  // figures the wave admits against.
   if (process.argv.includes('--costs')) {
     const plan = deployPlan();
     const costs = readCosts();
     const width = Math.max(...plan.map((row) => row.label.length));
     console.log(`${costs.measuredAt}  ${costs.machine}`);
-    console.log(`${'row'.padEnd(width)}  thr   MiB      wall      cpu   deadline`);
+    console.log(`${'row'.padEnd(width)}  thr   MiB      wall      cpu`);
 
     for (const row of [...plan].sort((left, right) => right.rssMb - left.rssMb)) {
       const cost = costs.rows[row.run];
 
       if (cost === undefined) {
-        console.log(`${row.label.padEnd(width)}    -     -         -        -   ${String(row.deadline).padStart(4)}s  unmeasured, runs alone`);
+        console.log(`${row.label.padEnd(width)}    -     -         -        -  unmeasured, runs alone`);
         continue;
       }
 
       console.log(
         `${row.label.padEnd(width)}  ${String(row.threads).padStart(3)}  ${String(row.rssMb).padStart(5)}  `
-        + `${cost.wallSeconds.toFixed(1).padStart(8)}s ${cost.cpuSeconds.toFixed(1).padStart(8)}s  ${String(row.deadline).padStart(4)}s`
-        + (cost.wallSeconds > row.deadline * 0.8 ? `  ⚠ ${(cost.wallSeconds / row.deadline * 100).toFixed(0)}% ALONE` : ''),
+        + `${cost.wallSeconds.toFixed(1).padStart(8)}s ${cost.cpuSeconds.toFixed(1).padStart(8)}s`,
       );
     }
 
@@ -3557,7 +3552,7 @@ if (import.meta.main) {
 
     if (!concurrent) console.log([header, ...lines].join('\n'));
 
-    // Under the row's own deadline: the one hang detector this tier has,
+    // Under the row's own silence bound: the one hang detector this tier has,
     // now that no test carries a clock. A row that hangs is killed and named
     // here instead of holding the hook — and `git push` — open forever.
     const outcome = await runUnderDeadline({
@@ -3571,7 +3566,7 @@ if (import.meta.main) {
     const { seconds } = outcome;
 
     if (outcome.exitCode === 0) {
-      console.log(`ok  ${gate.run}  (${seconds.toFixed(1)}s)`);
+      console.log(`ok  ${gate.run}  (${seconds.toFixed(1)}s, silent at most ${outcome.longestSilence.toFixed(1)}s)`);
 
       // Only a miss re-enumerates the tree: `recordGreen` re-derives the
       // closure from what is on disk NOW, and no other path reads it.
@@ -3591,7 +3586,7 @@ if (import.meta.main) {
       at: gate.run,
       invariant: gate.catches,
       found: outcome.exitCode === DEADLINE_EXIT_CODE
-        ? `the run hung and was killed at the row's ${String(gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS)}s deadline; its own output is immediately above`
+        ? `the run hung: it wrote nothing for the row's ${String(gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS)}s bound and was killed; its own output is immediately above`
         : ranRed(outcome.leftovers),
       silently: `every later tier assumes this held. What this gate does NOT cover: ${gate.blind}`,
       fix: `${gate.run}   # reproduce exactly this, nothing else`,
@@ -3633,7 +3628,7 @@ if (import.meta.main) {
     for (const spot of CACHE_BLIND_SPOTS) console.log(`  blind: ${spot}`);
   }
 
-  for (const spot of LEFTOVER_BLIND_SPOTS) console.log(`  blind: ${spot}`);
+  for (const spot of DEADLINE_BLIND_SPOTS) console.log(`  blind: ${spot}`);
 
   console.log(
     `\nladder --tier=${tier}: ok — ${measured}, ${((performance.now() - started) / 1000).toFixed(1)}s`,

@@ -25,9 +25,8 @@ import { readSessionTranscript, type SessionTranscriptReader } from '../src/sess
 import { PLATFORM_CATALOG } from '../src/platform-catalog';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { PositionPageRequestSchema, type PositionCursor } from '../src/session/page';
-import {
-  getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
-} from '../src/read-models/workspace-diff';
+import { getWorkspaceDiff, resetWorkspaceBaseline } from '../src/read-models/workspace-diff';
+import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { getExecutorFiles, readExecutorFile, writeExecutorFileOp } from '../src/read-models/files';
 import type { SqlExecutor, VFS } from '../src/types/primitives';
 import {
@@ -64,7 +63,7 @@ function transcriptOf(n: number): SeedRow[] {
 function chatStore(w: { db: Database; sql: SqlExecutor; actor: ActorHandle; vfs: VFS }) {
   const history = new SessionHistory({
     sql: w.sql, actor: w.actor, transactionSync: (write) => w.db.transaction(write)(),
-    files: async () => ({ vfs: w.vfs, artifactDirectory: '/actor/.kinu/context' }),
+    files: async () => ({ vfs: w.vfs, artifactDirectory: '/home/main/.kinu/context' }),
   });
 
   return { history, transcript: history.transcript(CHAT_SESSION_ID) };
@@ -485,21 +484,23 @@ describe('agent status', () => {
 
 describe('workspace change-set', () => {
   test('work completed before the first read remains visible against the birth baseline', async () => {
-    const { rt, db } = createTestRuntime();
-    initWorkspaceBaselineTable(rt.storage.execRaw);
-    await resetWorkspaceBaseline(rt);
+    const { rt, db, workspace: bundle } = createTestRuntime();
+    // The runtime writes its scaffold on its first file call, before the birth review.
+    await rt.storage.vfs.exists('scaffold/agent.js');
+    const baselines = { store: (await bundle.session()).vfs, cred: CRED_SESSION_USER };
+    await resetWorkspaceBaseline(rt, baselines);
     await rt.storage.vfs.writeFile('notes.md', 'one\n');
 
-    const first = await getWorkspaceDiff(rt);
+    const first = await getWorkspaceDiff(rt, baselines);
     expect(first.files.map((f) => [f.path, f.status, f.added])).toEqual([['notes.md', 'added', 2]]);
 
-    expect(await resetWorkspaceBaseline(rt)).toMatchObject({ ok: true });
+    expect(await resetWorkspaceBaseline(rt, baselines)).toMatchObject({ ok: true });
     await rt.storage.vfs.writeFile('notes.md', 'one\ntwo\n');
-    const after = await getWorkspaceDiff(rt);
+    const after = await getWorkspaceDiff(rt, baselines);
     expect(after.files.map((f) => [f.path, f.status, f.added])).toEqual([['notes.md', 'changed', 1]]);
 
-    expect(await resetWorkspaceBaseline(rt)).toMatchObject({ ok: true });
-    expect((await getWorkspaceDiff(rt)).files).toEqual([]);
+    expect(await resetWorkspaceBaseline(rt, baselines)).toMatchObject({ ok: true });
+    expect((await getWorkspaceDiff(rt, baselines)).files).toEqual([]);
     db.close();
   });
 });
@@ -516,10 +517,10 @@ describe('executor file plane', () => {
 
   test('workspace listings are typed, sized and directories-first', async () => {
     const { rt, db } = createTestRuntime();
-    await rt.storage.vfs.mkdir('/proj/sub', { recursive: true });
-    await rt.storage.vfs.writeFile('/proj/a.txt', 'aa');
+    await rt.storage.vfs.mkdir('/home/main/proj/sub', { recursive: true });
+    await rt.storage.vfs.writeFile('/home/main/proj/a.txt', 'aa');
 
-    const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/proj');
+    const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/home/main/proj');
     expect(listed.entries?.map((e) => [e.name, e.type])).toEqual([['sub', 'dir'], ['a.txt', 'file']]);
     expect(listed.entries?.find((e) => e.name === 'a.txt')?.size).toBe(2);
     db.close();
@@ -537,11 +538,11 @@ describe('executor file plane', () => {
 
   test('the directories the platform manages are not listed beside the work', async () => {
     const { rt, db } = createTestRuntime();
-    await rt.storage.vfs.mkdir('/proj/.nimbus/runtimes', { recursive: true });
-    await rt.storage.vfs.mkdir('/proj/.kinu/tool-output', { recursive: true });
-    await rt.storage.vfs.writeFile('/proj/hello.py', 'print(42)\n');
+    await rt.storage.vfs.mkdir('/home/main/proj/.nimbus/runtimes', { recursive: true });
+    await rt.storage.vfs.mkdir('/home/main/proj/.kinu/tool-output', { recursive: true });
+    await rt.storage.vfs.writeFile('/home/main/proj/hello.py', 'print(42)\n');
 
-    const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/proj');
+    const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/home/main/proj');
     expect(listed.entries?.map((e) => e.name)).toEqual(['hello.py']);
     db.close();
   });

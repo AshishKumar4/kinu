@@ -3,11 +3,11 @@
  * `SqliteVFS` rules, and `confinePrincipal` has no RPC (`@nimbus-sh/core/dist/vfs/sqlite-vfs.d.ts:302`).
  */
 import { afterEach, describe, expect, test } from 'bun:test';
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { HostedRuntime } from '@nimbus-sh/worker/workspace-host';
-import type { SqlDatabase, SqlRow, SqlValue, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
   facetHomeProvisioner, headAgentName,
   AGENT_HOME_MODE,
@@ -29,6 +29,7 @@ import {
   type ProgrammaticHost,
 } from './helpers/programmatic-host';
 import { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
+import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
 
 const databases: Database[] = [];
 
@@ -44,21 +45,6 @@ const ORIGIN: VfsCred = { uid: SESSION_UID, gid: SESSION_UID, groups: [SESSION_U
 /** A tree only the ORIGIN has: the read window a node must keep. */
 const ORIGIN_REPO = '/home/main/repo';
 
-function sqlBinding(value: SqlValue): SQLQueryBindings {
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-
-  if (ArrayBuffer.isView(value)) {
-    const bytes = new Uint8Array(value.byteLength);
-    const source = new DataView(value.buffer, value.byteOffset, value.byteLength);
-
-    for (let index = 0; index < bytes.length; index += 1) bytes[index] = source.getUint8(index);
-
-    return bytes;
-  }
-
-  return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
-}
-
 interface Fixture {
   readonly workspace: NimbusWorkspace;
   readonly host: ProgrammaticHost;
@@ -72,21 +58,11 @@ async function openFixture(): Promise<Fixture> {
   const database = new Database(':memory:');
   databases.push(database);
 
-  const sql: SqlDatabase = {
-    exec(query: string, ...bindings: SqlValue[]) {
-      const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
-      const bound = bindings.map(sqlBinding);
-
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
-      statement.run(...bound);
-
-      return [];
-    },
-  };
+  const { sql, transactions } = inlineWorkspaceStorage(database);
 
   const workspace = await NimbusWorkspace.create({
     sql,
-    transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
+    transactions,
     generation: 1,
   });
 
@@ -352,19 +328,6 @@ class RootExecNimbus {
   readonly calls: RootExecCall[] = [];
 }
 
-function hostedSql(database: Database): SqlDatabase {
-  return {
-    exec(query: string, ...bindings: SqlValue[]) {
-      const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
-
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bindings.map(sqlBinding));
-      statement.run(...bindings.map(sqlBinding));
-
-      return [];
-    },
-  };
-}
-
 /** Answers every command and records it; a refusal is scripted through {@link scriptedBox}. */
 function nimbusBox(nimbus: RootExecNimbus): NimbusSandboxHandle {
   return {
@@ -576,8 +539,7 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
   test('main and a node keep private temporary files after workspace reset', async () => {
     const database = new Database(':memory:');
     databases.push(database);
-    const sql = hostedSql(database);
-    const transactions = { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } };
+    const { sql, transactions } = inlineWorkspaceStorage(database);
     // One counter row bumped per open: the second workspace is the next generation of the same database.
     const first = createWorkspace({ sql, transactions, generation: workspaceGenerationStorage(sql) });
     const provision = facetHomeProvisioner(first.privileged().then((host) => ({ ...host, sql })));
@@ -600,11 +562,11 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
   test('its own writes pass, a sibling is refused, and the ORIGIN keeps its own identity', async () => {
     const database = new Database(':memory:');
     databases.push(database);
-    const sql = hostedSql(database);
+    const { sql, transactions } = inlineWorkspaceStorage(database);
 
     const workspace = createWorkspace({
       sql,
-      transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
+      transactions,
       generation: workspaceGenerationStorage(sql),
     });
 

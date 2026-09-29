@@ -140,8 +140,8 @@ describe('the ladder measures something', () => {
     expect([...phaseIndex].sort((a, b) => a - b)).toEqual(phaseIndex);
     // The printed form round-trips: what the runner reads is what was planned.
     const printed = printPlan(plan).split('\n').map((line) => line.split('\t'));
-    expect(printed.map((fields) => fields[6])).toEqual(plan.map((row) => row.run));
-    expect(printed.map((fields) => fields[5])).toEqual(plan.map((row) => row.shared));
+    expect(printed.map((fields) => fields[5])).toEqual(plan.map((row) => row.run));
+    expect(printed.map((fields) => fields[4])).toEqual(plan.map((row) => row.shared));
     expect(printed.map((fields) => fields[0])).toEqual(plan.map((row) => row.phase));
   });
 

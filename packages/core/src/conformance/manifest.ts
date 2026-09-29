@@ -246,20 +246,30 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     agent_data_tables: EVERYWHERE,
 
     kinu_workspace_generation: NIMBUS_BASE,
-    // The set NimbusWorkspace.destroy() drops; additions signal a storage contract change.
-    inodes: NIMBUS_BASE,
-    file_chunks: NIMBUS_BASE,
-    content_lifecycle: NIMBUS_BASE,
-    vfs_schema_migrations: NIMBUS_BASE,
-    // @nimbus-sh/core 0.11.0 tables.
+    // What @nimbus-sh/core 0.13.1 creates; additions signal a storage contract change.
+    // NimbusWorkspace.destroy() drops the vfs_* tables.
+    vfs_state: NIMBUS_BASE,
+    vfs_inodes: NIMBUS_BASE,
+    vfs_chunks: NIMBUS_BASE,
+    vfs_contents: NIMBUS_BASE,
+    vfs_content_chunks: NIMBUS_BASE,
+    vfs_inode_history: NIMBUS_BASE,
+    vfs_gc_queue: NIMBUS_BASE,
+    vfs_jobs: NIMBUS_BASE,
+    vfs_snapshots: NIMBUS_BASE,
+    vfs_tombstones: NIMBUS_BASE,
+    vfs_cold_trash: NIMBUS_BASE,
     vfs_append_receipts_v2: NIMBUS_BASE,
     vfs_append_writer_state_v2: NIMBUS_BASE,
     vfs_append_module_state_v2: NIMBUS_BASE,
     vfs_append_pid_revocations_v2: NIMBUS_BASE,
     vfs_append_acked_gaps_v2: NIMBUS_BASE,
+    // ...and keeps the nimbus_* tables: filesystem identity and the storage ledger.
     nimbus_filesystem_identity: NIMBUS_BASE,
     nimbus_filesystem_devices: NIMBUS_BASE,
-    vfs_ino_allocator: NIMBUS_BASE,
+    nimbus_storage_ledger: NIMBUS_BASE,
+    nimbus_storage_reservation: NIMBUS_BASE,
+    nimbus_facet_storage: NIMBUS_BASE,
     actor_subordinates: {
       'cf-orchestrator': WIRED,
       // SubordinateRosterStore creates it on first read.
@@ -295,8 +305,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': LAZY_ON_FIRST_USE('registerDurableWebhook'),
       cli: { absent: NO_LOCAL_INGRESS },
     },
-    vfs_baseline_manifest: EVERYWHERE,
-    vfs_baseline_blob: EVERYWHERE,
     change_notes: {
       'cf-orchestrator': WIRED,
       'cf-subordinate': WIRED,
