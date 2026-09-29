@@ -171,7 +171,7 @@ export function inspectionFiles(db: Database, cwd: string | null): Pick<VFS, 're
 const WORKSPACE_RUNTIMES: readonly RuntimePackage[] = [bashRuntime, cpythonRuntime];
 
 /** Positional-binding SQL; a Durable Object's `ctx.storage.sql` is this natively. */
-export function makeSqlExec(db: Pick<Database, 'prepare'>): SqlExec {
+export function makeSqlExec(db: Pick<Database, 'query'>): SqlExec {
   return sqlStorageOver(db);
 }
 

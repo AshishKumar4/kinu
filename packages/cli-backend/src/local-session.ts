@@ -282,7 +282,7 @@ type Writable<T> = { -readonly [Key in keyof T]: T[Key] };
 export const LOCAL_MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
 /** bun:sqlite with a real `transaction`: approval migration and settled-turn commits need atomicity. */
-export type LocalSessionDb = Pick<Database, 'prepare' | 'transaction'>;
+export type LocalSessionDb = Pick<Database, 'query' | 'transaction'>;
 
 /**
  * The answer a subordinate's turn owes its parent, installed by the owning host. A port, not a
