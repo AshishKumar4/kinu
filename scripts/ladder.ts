@@ -177,6 +177,10 @@ export interface Gate {
    *  reason a hash over the tree cannot stand for it. See
    *  `scripts/ladder-closure.ts`. */
   readonly inputs: Inputs;
+  /** Why no measured cost stands for the gate: its work is whatever the staged index holds, nothing on one commit
+   *  and six suites' worth on the next. A tier runs it alone after its wave ({@link tierSchedule}); a deploy runs
+   *  on a clean worktree, whose index holds nothing. */
+  readonly sizedByIndex?: string;
 }
 
 /** The environment names the by-name projections in `packages/test-utils`
@@ -1997,6 +2001,8 @@ export const LADDER: readonly Gate[] = [
     run: 'bun scripts/flake-gate.ts',
     label: 'Changed test files, repeated',
     tier: 'commit',
+    sizedByIndex: 'it repeats each staged test file as its own row runs it, browser and workerd suites included, and '
+      + 'plain suites up to six at once; its measured cost is the empty index\'s.',
     // 0.3 s when the commit changes no test file, as at push, in CI and at a deploy. A commit that changes one pays
     // for REPEATS runs of it (BROWSER_REPEATS for a browser suite), which is the gate's whole point.
     seconds: 0.3,
@@ -2574,6 +2580,16 @@ export function waveCaps() {
   if (!(rssMb > 0)) throw new Error('cannot read MemAvailable from /proc/meminfo, so the wave has no memory cap; set KINU_DEPLOY_RSS_MB');
 
   return { threads, rssMb };
+}
+
+/** How a tier runs its gates: the ones that declare a phase alone first, as the deploy's preflight does, then the
+ *  wave, then each gate whose work is the staged index alone. */
+export function tierSchedule<G extends Gate>(gates: readonly G[]) {
+  return {
+    first: gates.filter((gate) => gate.phase !== undefined),
+    wave: gates.filter((gate) => gate.phase === undefined && gate.sizedByIndex === undefined),
+    last: gates.filter((gate) => gate.phase === undefined && gate.sizedByIndex !== undefined),
+  };
 }
 
 /**
@@ -3595,18 +3611,24 @@ if (import.meta.main) {
   };
 
   if (concurrent) {
-    const alone = pending.filter((entry) => entry.gate.phase !== undefined);
-    const wave = pending.filter((entry) => entry.gate.phase === undefined);
+    const schedule = tierSchedule(pending.map((entry) => entry.gate));
+    const entriesOf = (part: readonly Gate[]) => pending.filter((entry) => part.includes(entry.gate));
 
-    for (const entry of alone) {
+    for (const entry of entriesOf(schedule.first)) {
       await runPending(entry);
 
       if (failed.length > 0) process.exit(1);
     }
 
-    await tierWave(wave.map((entry) => ({ entry, row: waveRow(entry.gate, tracked) })), runPending, () => failed.length > 0);
+    await tierWave(entriesOf(schedule.wave).map((entry) => ({ entry, row: waveRow(entry.gate, tracked) })), runPending, () => failed.length > 0);
 
     if (failed.length > 0) process.exit(1);
+
+    for (const entry of entriesOf(schedule.last)) {
+      await runPending(entry);
+
+      if (failed.length > 0) process.exit(1);
+    }
   } else {
     for (const entry of pending) {
       await runPending(entry);
