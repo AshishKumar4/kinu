@@ -1,4 +1,4 @@
-/** One hired agent in its own loader isolate (D9). */
+/** One non-main agent in its own loader isolate (D9). */
 import { DurableObject } from 'cloudflare:workers';
 import { Nimbus, type NimbusSandbox, type NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import type { UIMessage } from 'ai';
@@ -92,6 +92,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   private open(snapshot: AgentSnapshot): AgentDatabase {
     this.database ??= new AgentDatabase(this.ctx.storage, {
       agent: () => this.workspace(), state: () => this.state(), enqueueTurn: (input) => this.env.WORKSPACE.enqueueTurn(input),
+      memory: () => this.env.WORKSPACE.memory(), program: (...args) => this.env.WORKSPACE.program(...args),
     });
     this.database.adopt(snapshot);
 

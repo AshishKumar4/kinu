@@ -14,11 +14,12 @@ import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestra
 import type { UserDO } from '../../src/user/user-do';
 import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, REPORT_MARK, type ActorRow, type ArchiveSections, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
 
-export { UserDO } from '../../src/user/user-do';
+export * from '../../src/server';
 
-export { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
 
-export { AgentWorkspaceRPC } from '../../src/agent-facets';
+
+
+
 
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 

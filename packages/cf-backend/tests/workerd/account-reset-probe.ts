@@ -10,9 +10,10 @@ import { USER_DO_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import { UserDO, type UserProfile } from '../../src/user/user-do';
 
 // Bound under production names: `deleteAccount` reaches workspaces through `env.OrchestratorAgent`.
-export { UserDO } from '../../src/user/user-do';
+export * from '../../src/server';
 
-export { OrchestratorAgent } from '../../src/orchestrator';
+
+
 
 // A Worker module may export only handlers and classes, so fixture values stay module-private.
 const RESET_OWNER_ID = '0123456789abcdef0123456789abcdef';

@@ -4,6 +4,8 @@
  */
 import { env } from 'cloudflare:test';
 import { expect, it } from 'vitest';
+import * as v from 'valibot';
+import { CHILD_ANSWER } from './hire-shapes';
 
 it('an agent in its own isolate writes a file the workspace reads and cats', async () => {
   const probe = env.AGENT_FACET_PROBE.get(env.AGENT_FACET_PROBE.idFromName('agent-facet'));
@@ -15,4 +17,23 @@ it('an agent in its own isolate writes a file the workspace reads and cats', asy
   expect(seen.agentShell.stdout.split('\n')[1]).not.toBe('1000');
   expect(seen.mainRead).toBe('written by the agent');
   expect(seen.mainCat).toMatchObject({ exitCode: 0, stdout: 'written by the agent' });
+});
+
+const SwarmFacetSchema = v.object({
+  actorId: v.string(), home: v.string(), sameIsolate: v.boolean(), workspaceClaims: v.number(),
+  claims: v.array(v.object({ actorId: v.string(), turnId: v.string(), outcome: v.nullable(v.string()), programKind: v.string() })),
+  retired: v.boolean(), summary: v.string(), candidate: v.string(), reportedItself: v.boolean(),
+});
+
+it('a swarm node runs its inherited loop and keeps its completed claim in its own facet', async () => {
+  const probe = env.AGENT_FACET_PROBE.get(env.AGENT_FACET_PROBE.idFromName('swarm-facet'));
+  const seen = v.parse(SwarmFacetSchema, await new Response(await probe.swarmNode('swarm-facet-workspace')).json());
+
+  expect(seen.summary).toBe(CHILD_ANSWER);
+  expect(seen.sameIsolate).toBe(false);
+  expect(seen.workspaceClaims).toBe(0);
+  expect(seen.claims).toEqual([{ actorId: seen.actorId, turnId: 'facet-node', outcome: 'completed', programKind: 'scaffold' }]);
+  expect(seen.candidate).toBe(seen.home);
+  expect(seen.reportedItself).toBe(true);
+  expect(seen.retired).toBe(true);
 });

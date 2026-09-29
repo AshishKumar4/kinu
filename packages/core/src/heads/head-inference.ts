@@ -395,6 +395,7 @@ export interface HeadInferenceDeps {
   /** This actor's live per-step block; required so a backend states when a head renders nothing live. */
   dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
   model: LanguageModel;
+  modelSpec?: string;
   /** Accumulator tools plus the backend's scratch tools; the caller controls the surface. */
   tools: ToolSet;
   /** The prompt must name the same file plane the tools reach. */

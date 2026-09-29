@@ -29,7 +29,7 @@ import {
   whenActorTakesInput,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
-import { agentFacet, agentStateShellId, AgentWorkspaceHost, uiChunks, type AgentFacetPlacement } from "./agent-facets";
+import { agentFacet, agentStateShellId, AgentMemory, AgentWorkspaceHost, uiChunks, type AgentFacetPlacement } from "./agent-facets";
 import { providerBindingsOf } from "./providers/agent-registry";
 import { AgentTurns } from "./agent-turns";
 import type { AgentActivity, AgentSnapshot, StoredRow } from "./agent-facet/protocol";
@@ -689,6 +689,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   protected get agentTurns(): AgentTurns {
     this._agentTurns ??= new AgentTurns({
+      sql: this.boundSql,
       seams: () => this.hostedSeams(),
       deliver: async (reference, task) => { await (await this.agentCalls(reference.actorId)).deliver(this.agentSnapshot(reference.actorId), task); },
       interrupt: async (reference, turnId) => { await (await this.agentCalls(reference.actorId)).interrupt(this.agentSnapshot(reference.actorId), turnId); },
@@ -720,6 +721,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       // Its own named shell, never the agent's: the session user's identity must not reach the agent's commands.
       stateSession: async () => await this.hostedWorkspace().session({ shellId: agentStateShellId(this.liveAgentOf(actorId).storageKey) }),
+      memory: () => new AgentMemory(async () => (await this.actorHost().acquire(actorReferenceOf(this.liveAgentOf(actorId)))).runtime.memory),
+      program: (turnId, ...args) => this.agentTurns.program(actorId, turnId, ...args),
+      traceTurn: (turnId, event) => this.agentTurns.trace(actorId, turnId, event),
+      resume: (turnId) => this.agentTurns.resume(actorId, turnId),
+      guard: (turnId, ...args) => this.agentTurns.guard(actorId, turnId, ...args),
+      debit: (turnId, ...args) => this.agentTurns.debit(actorId, turnId, ...args),
       prepareTurn: (turnId) => this.agentTurns.prepare(actorId, turnId),
       profile: (turnId, availableTools, workMode) => this.agentTurns.profile(actorId, turnId, availableTools, workMode),
       advise: (review) => this.agentTurns.advise(actorId, review),
@@ -795,8 +802,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this._actorHost;
   }
 
-  /** A hosted actor's turn is running: a subordinate's in its own isolate, a head's or a node's here. Uses the
-   *  reference the host issued: a synthesized root reference makes `hosted()` refuse the liveness read. */
+  /** A synthesized root reference makes the host refuse this liveness read. */
   private hostedTurnInFlight(reference: ActorReference): boolean {
     return this.agentTurns.inFlight(reference.actorId) || this.actorHost().hosted(reference)?.session.inFlight === true;
   }
@@ -809,10 +815,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.agentTurns.currentTurn(reference.actorId) ?? super.currentTurnOf(reference);
   }
 
-  /**
-   * A subordinate's turn runs in its own isolate, so retiring it reaches there: the turn in flight is stopped
-   * (every retirement of a subordinate interrupts), and destroying it deletes its own database.
-   */
   private withAgentFacets(host: ActorHost): ActorHost {
     return {
       ...host,
@@ -908,6 +910,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       exec: this.boundExec(),
       directory: this.workspaceActors(),
       turnInFlight: (reference) => this.hostedTurnInFlight(reference),
+      infer: (reference, input, inference) => this.agentTurns.run(reference, input, inference),
       transaction: (body) => this.ctx.storage.transactionSync(body),
       roster: (actor) => new SubordinateRosterStore(this.watchedExec, actor.handle),
       vfs: () => this.rt.storage.vfs,
@@ -972,7 +975,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         if (labels.length === 0) return null;
 
-        // In-process: the ledger is this object's and a hosted head runs in this isolate.
         return {
           labels,
           port: {
@@ -1620,7 +1622,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           const reference = actorReferenceOf(record);
           const recovered = await (await this.agentCalls(actorId)).recover(this.agentSnapshot(actorId));
 
-          for (const turn of recovered.stalled) await retireStalledTask(this.hostedSeams(), await this.actorHost().acquire(reference), turn);
+          if (isSubordinateOrigin(record.origin)) {
+            for (const turn of recovered.stalled) await retireStalledTask(this.hostedSeams(), await this.actorHost().acquire(reference), turn);
+          }
         }
 
         for (const turn of turns) open.close(turn);
@@ -3322,8 +3326,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (record === null || record.retiringAt !== null || record.deletedAt !== null) return true;
     const { session } = await this.actorHost().acquire(actorReferenceOf(record));
-
-    if (!isSubordinateOrigin(record.origin)) return await session.deliverAdvisorAnswers();
 
     return await session.deliverAdvisorAnswers(async (helper, turnId) => await (await this.agentCalls(actorId)).deliverAdvice(this.agentSnapshot(actorId), helper, turnId));
   }

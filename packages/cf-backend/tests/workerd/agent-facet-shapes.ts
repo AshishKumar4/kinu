@@ -14,3 +14,22 @@ export interface OnePlaneObservation {
   /** The agent's isolate and the workspace object's are two isolates. */
   readonly sameIsolate: boolean;
 }
+
+export interface AgentFacetClaim {
+  readonly actorId: string;
+  readonly turnId: string;
+  readonly outcome: string | null;
+  readonly programKind: string;
+}
+
+export interface SwarmFacetObservation {
+  readonly actorId: string;
+  readonly home: string;
+  readonly sameIsolate: boolean;
+  readonly workspaceClaims: number;
+  readonly claims: readonly AgentFacetClaim[];
+  readonly retired: boolean;
+  readonly summary: string;
+  readonly candidate: string;
+  readonly reportedItself: boolean;
+}

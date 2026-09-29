@@ -966,7 +966,7 @@ export {
 
 // Shadow-mode rollout
 export {
-  runScaffold,
+  runScaffold, scaffoldProviders,
   scaffoldEventText,
   type ScaffoldRunOptions,
   type ScaffoldRunResult, type ScaffoldRunReport, type ScaffoldJsonEvent, scaffoldRunReport,
@@ -1095,7 +1095,7 @@ export {
 
 export { explainNativeToolReferenceError } from './tools/sandbox-errors';
 
-export { currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, requireBuild, requireWorkModePermission, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
+export { currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, hasPlanPermission, requireBuild, requireWorkModePermission, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
 
 // Client-safe only: the Nimbus workspace host is exported from
 // `@kinu.run/core/workspace` so a browser bundle cannot pull in the server runtime.

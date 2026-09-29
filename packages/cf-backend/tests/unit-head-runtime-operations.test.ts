@@ -58,6 +58,7 @@ const neverHost: HostedActorSeams = {
     get installedBuild(): never { throw new Error("mergeLLM read the host's build"); },
   },
   turnInFlight() { throw new Error("mergeLLM read an actor's turn"); },
+  infer() { throw new Error('mergeLLM ran an actor turn'); },
   register() { throw new Error('mergeLLM reached actor registration'); },
   watchWrites() { throw new Error("mergeLLM watched an actor's writes"); },
   profile() { throw new Error('mergeLLM resolved an exploration profile'); },

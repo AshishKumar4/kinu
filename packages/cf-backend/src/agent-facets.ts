@@ -2,10 +2,10 @@
 import { RpcTarget, WorkerEntrypoint, exports } from 'cloudflare:workers';
 import type { UIMessageChunk } from 'ai';
 import * as v from 'valibot';
-import type { AuthRequest, EnqueueTurnResult, JsonObject, ProgrammaticTurn, ObservedCall, ProviderEnv, WorkMode } from '@kinu.run/core';
+import type { AuthRequest, ProgrammaticTurn, ObservedCall, ProviderEnv, WorkMode, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
-import type { CredentialSummary } from './user/user-do';
-import type { AgentReview, AgentToolAnswer, AgentToolCall, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn } from './agent-facet/protocol';
+import type { AgentWorkspace } from './agent-facet/agent-turn';
+import type { AgentReview, AgentToolCall, AgentTrace, AgentTurnEnd } from './agent-facet/protocol';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { AgentFacet, AgentFacetEnv } from './agent-facet/agent-facet';
@@ -21,24 +21,20 @@ export interface AgentWorkspaceProps {
   readonly actorId: string;
 }
 
-export interface AgentWorkspaceAnswers {
+export interface AgentWorkspaceAnswers extends Omit<AgentWorkspace, 'session' | 'stateSession'> {
   session(): Promise<HostedSession>;
   stateSession(): Promise<HostedSession>;
-  prepareTurn(turnId: string): Promise<PreparedAgentTurn>;
-  profile(turnId: string, availableTools: readonly string[], workMode: WorkMode): Promise<AgentTurnProfile>;
-  advise(review: AgentReview): Promise<void>;
-  enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
-  executeTool(call: AgentToolCall): Promise<AgentToolAnswer>;
-  observe(lines: ReadableStream<Uint8Array>, call: ObservedCall): Promise<void>;
-  answerMetadata(turnId: string, narration: readonly string[]): Promise<JsonObject | null>;
-  finishTurn(turnId: string, end: AgentTurnEnd): Promise<void>;
-  failTurn(turnId: string, failure: string): Promise<void>;
-  getAuthHeaders(key: string, opts?: AuthRequest): Promise<Record<string, string> | null>;
-  getCredentialBaseURL(key: string): Promise<string | null>;
-  listCredentials(): Promise<CredentialSummary[]>;
-  codexRelayDevice(): Promise<{ readonly id: string; readonly label: string } | null>;
-  relayCodex(deviceId: string, callId: string, request: Request): Promise<Response>;
-  cancelCodexRelay(callId: string): Promise<void>;
+}
+
+export class AgentMemory extends RpcTarget implements Memory {
+  constructor(private readonly open: () => Promise<Memory>) { super(); }
+
+  async write(path: string, content: string) { await (await this.open()).write(path, content); }
+  async append(path: string, content: string) { await (await this.open()).append(path, content); }
+  async index(path: string) { await (await this.open()).index(path); }
+  async search(query: string, limit?: number) { return await (await this.open()).search(query, limit); }
+  async read(path: string) { return await (await this.open()).read(path); }
+  async tail(path: string, bytes: number) { return await (await this.open()).tail(path, bytes); }
 }
 
 export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswers {
@@ -48,6 +44,12 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
 
   session() { return this.answers.session(); }
   stateSession() { return this.answers.stateSession(); }
+  memory() { return this.answers.memory(); }
+  program(turnId: string, ...args: Parameters<Executor['execute']>) { return this.answers.program(turnId, ...args); }
+  traceTurn(turnId: string, event: AgentTrace) { return this.answers.traceTurn(turnId, event); }
+  resume(turnId: string) { return this.answers.resume(turnId); }
+  guard(turnId: string, ...args: Parameters<MissionBudgetPort['guard']>) { return this.answers.guard(turnId, ...args); }
+  debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>) { return this.answers.debit(turnId, ...args); }
   prepareTurn(turnId: string) { return this.answers.prepareTurn(turnId); }
   profile(turnId: string, availableTools: readonly string[], workMode: WorkMode) { return this.answers.profile(turnId, availableTools, workMode); }
   advise(review: AgentReview) { return this.answers.advise(review); }
@@ -74,6 +76,12 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
 
   session() { return this.host().session(); }
   stateSession() { return this.host().stateSession(); }
+  memory() { return this.host().memory(); }
+  program(turnId: string, ...args: Parameters<Executor['execute']>) { return this.host().program(turnId, ...args); }
+  traceTurn(turnId: string, event: AgentTrace) { return this.host().traceTurn(turnId, event); }
+  resume(turnId: string) { return this.host().resume(turnId); }
+  guard(turnId: string, ...args: Parameters<MissionBudgetPort['guard']>) { return this.host().guard(turnId, ...args); }
+  debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>) { return this.host().debit(turnId, ...args); }
   prepareTurn(turnId: string) { return this.host().prepareTurn(turnId); }
   profile(turnId: string, availableTools: readonly string[], workMode: WorkMode) { return this.host().profile(turnId, availableTools, workMode); }
   advise(review: AgentReview) { return this.host().advise(review); }

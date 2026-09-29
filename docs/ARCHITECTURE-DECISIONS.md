@@ -538,9 +538,9 @@ Heap was read as headroom: the largest held allocation that survived.
   in the workspace object and is reached one statement at a time would cost a
   loader-hosted turn 5-50 s.
 
-D9. A hosted subordinate's turn runs in its own loader isolate, and every tool
-it calls runs in the workspace object. Decided 2026-09-28 on D8. The isolate
-(`AgentFacet`, a facet named by the agent's storage key, loaded from the agent
+D9. A non-main agent's turn runs in its own loader isolate, and every tool
+it calls runs in the workspace object. Decided 2026-09-28 on D8, extended below.
+The isolate (`AgentFacet`, a facet named by the agent's storage key, loaded from the agent
 bundle under a loader id of its own) holds the model loop and the agent's own
 stores: conversation, turn claims, effect claims, run ledger. The workspace
 object keeps everything shared, prepares each turn (profile, prompt, tool
@@ -577,6 +577,18 @@ agent's `finishTurn`. A lane that awaited the end was cancelled by workerd as
 hung in 3 of 6 flake-gate runs of hire.test: a request waiting on a promise
 only another request settles has no I/O of its own.
 
+Extended 2026-09-29 to heads, swarm nodes and steer branches through the same
+`AgentTurns` and `AgentFacet` path. Their tools, captures, report/branch state,
+wake queues, mission ledgers and head journals remain in the workspace;
+the facet calls those callbacks over RPC. The selected inherited scaffold
+row travels to the facet, and its program uses the existing workspace executor
+with model callbacks in the facet. Background agents already enter through
+the delegated-task path. Toolless MCTS branches remain model calls, not agents.
+Measured in `tests/workerd/agent-facet.test.ts` on 2026-09-29: a swarm node in
+a different isolate ran an inherited scaffold, called its workspace shell
+and report tool, then left its completed claim only in the facet database.
+The claim remained readable after retirement. Task histories are retained
+until destruction; archive fan-out includes them.
 
 ## Deploy ladder
 

@@ -1,6 +1,6 @@
-/** What crosses between the workspace object and an agent's isolate: plain data, cloned per hop. */
+/** Plain turn data crossing between the workspace and an agent's isolate. */
 import type { JSONSchema7, ModelMessage } from 'ai';
-import type { CompletedTurn, DynamicContext, HeadCapture, HeadInput, JsonValue, ModelPricing, JsonObject, ProfileAuthorityInputs, ResolvedTurnProfile, WorkMode } from '@kinu.run/core';
+import type { CompletedTurn, DynamicContext, HeadCapture, HeadInput, HeadInferenceDeps, HeadReport, HeadStep, HeadStreamKind, JsonValue, ModelPricing, JsonObject, ProfileAuthorityInputs, ResolvedTurnProfile, WorkMode } from '@kinu.run/core';
 
 export type StoredRow = Readonly<Record<string, SqlStorageValue>>;
 
@@ -28,16 +28,25 @@ export interface AgentToolDescriptor {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: JSONSchema7;
+  readonly planAllowed: boolean;
 }
 
 export interface PreparedAgentTurn {
   readonly input: HeadInput;
-  readonly birthContext: readonly ModelMessage[];
+  readonly runId: string;
+  readonly birthContext?: readonly ModelMessage[];
   readonly model: string;
   readonly pricing: ModelPricing | null;
-  readonly framing: { readonly system: string; readonly messages: readonly ModelMessage[] };
+  readonly scaffold: StoredRow;
+  readonly languages: readonly [string, ...string[]];
+  readonly framing?: HeadInferenceDeps['framing'];
+  readonly workspaceLayout: HeadInferenceDeps['workspaceLayout'];
   readonly tools: readonly AgentToolDescriptor[];
   readonly dynamic: DynamicContext;
+  readonly missionLabels?: readonly string[];
+  readonly trace: boolean;
+  readonly resume: boolean;
+  readonly reportMessages: boolean;
 }
 
 export interface AgentTurnProfile {
@@ -80,12 +89,15 @@ export interface AgentToolAnswer {
   readonly dynamic: DynamicContext;
 }
 
-export interface AgentTurnEnd {
+export type AgentTrace =
+  | { readonly kind: 'step'; readonly sequence: number; readonly step: HeadStep }
+  | { readonly kind: HeadStreamKind; readonly delta: string };
+
+export interface AgentTurnEnd extends Omit<HeadReport, 'errorMessage'> {
   readonly activity: readonly AgentActivity[];
-  readonly status: 'completed' | 'aborted' | 'budget_exceeded' | 'errored';
-  readonly summary: string;
   readonly errorMessage: string | null;
   readonly narration: string;
+  readonly produced?: readonly ModelMessage[];
 }
 
 export interface AgentRecovery {

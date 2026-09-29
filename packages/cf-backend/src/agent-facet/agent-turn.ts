@@ -1,19 +1,26 @@
 /** One delegated turn in the agent's isolate: its model loop here, every tool call back in the workspace. */
-import { jsonSchema, tool, type ToolSet, type UIMessageChunk } from 'ai';
+import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessageChunk } from 'ai';
 import {
-  CHAT_SESSION_ID, HeadCapture, decodeJsonValue, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference,
-  type AuthRequest, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type HeadReport, type JsonObject, type ObservedCall, type ProviderEnv, type WorkMode,
+  CHAT_SESSION_ID, HeadCapture, decodeJsonValue, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan,
+  type AuthRequest, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type ObservedCall, type ProviderEnv, type WorkMode,
+  type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind,
 } from '@kinu.run/core';
 import { attempt, diagnostics, renderCauseChain, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import { createAgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
 import type { AgentDatabase } from './agent-database';
-import type { AgentReview, AgentTask, AgentToolAnswer, AgentToolCall, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn } from './protocol';
+import type { AgentReview, AgentTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn } from './protocol';
 
 export interface AgentWorkspace {
   session(): NimbusSessionSurface;
   stateSession(): NimbusSessionSurface;
+  memory(): Memory;
+  program(turnId: string, ...args: Parameters<Executor['execute']>): ReturnType<Executor['execute']>;
+  traceTurn(turnId: string, event: AgentTrace): Promise<void>;
+  resume(turnId: string): Promise<readonly ModelMessage[] | null>;
+  guard(turnId: string, ...args: Parameters<MissionBudgetPort['guard']>): ReturnType<MissionBudgetPort['guard']>;
+  debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>): Promise<void>;
   prepareTurn(turnId: string): Promise<PreparedAgentTurn>;
   profile(turnId: string, availableTools: readonly string[], workMode: WorkMode): Promise<AgentTurnProfile>;
   advise(review: AgentReview): Promise<void>;
@@ -29,6 +36,33 @@ export interface AgentWorkspace {
   codexRelayDevice(): ReturnType<UserCredentialClient['codexRelayDevice']>;
   relayCodex(deviceId: string, callId: string, request: Request): Promise<Response>;
   cancelCodexRelay(callId: string): Promise<void>;
+}
+
+class HeadTrace {
+  private readonly pending: Promise<void>[] = [];
+
+  constructor(private readonly workspace: AgentWorkspace, private readonly turnId: string) {}
+
+  send(kind: HeadStreamKind, delta: string): Promise<void> {
+    return settle(attempt({ doing: "relaying an agent's live head output", otherwise: 'io' },
+      () => this.workspace.traceTurn(this.turnId, { kind, delta })).pipe(Effect.catch((failure) => Effect.sync(() => {
+        diagnostics.failure('agent.head_output_failed', failure, { turn: this.turnId });
+      }))));
+  }
+
+  delta(kind: HeadStreamKind, delta: string): void {
+    this.pending.push(this.send(kind, delta));
+  }
+
+  async step(sequence: number, step: HeadStep): Promise<void> {
+    await this.flush();
+    await this.workspace.traceTurn(this.turnId, { kind: 'step', sequence, step });
+  }
+
+  async flush(): Promise<void> {
+    await Promise.all(this.pending);
+    this.pending.length = 0;
+  }
 }
 
 const AGENT_CALLER = { workspaceToken: '' };
@@ -57,29 +91,29 @@ function workspaceTools(
   prepared: PreparedAgentTurn,
   turn: { readonly id: string; readonly live: { dynamic: PreparedAgentTurn['dynamic'] }; readonly capture: HeadCapture; readonly database: AgentDatabase },
 ): ToolSet {
-  return Object.fromEntries(prepared.tools.map((descriptor) => [descriptor.name, tool({
-    description: descriptor.description,
-    inputSchema: jsonSchema(descriptor.inputSchema),
-    execute: async (input, { toolCallId }) => {
-      const answer = await workspace.executeTool({
-        activity: turn.database.takeActivity(), turnId: turn.id, callId: toolCallId, name: descriptor.name, input: decodeJsonValue({ value: input }),
-      });
+  return Object.fromEntries(prepared.tools.map((descriptor) => {
+    const entry = tool({
+      description: descriptor.description,
+      inputSchema: jsonSchema(descriptor.inputSchema),
+      execute: async (input, { toolCallId }) => {
+        const answer = await workspace.executeTool({
+          activity: turn.database.takeActivity(), turnId: turn.id, callId: toolCallId, name: descriptor.name, input: decodeJsonValue({ value: input }),
+        });
 
-      turn.live.dynamic = answer.dynamic;
-      turn.capture.evidence.push(...answer.captured.evidence);
-      turn.capture.decisions.push(...answer.captured.decisions);
-      turn.capture.artifacts.push(...answer.captured.artifacts);
-      turn.capture.toolCalls.push(...answer.captured.toolCalls);
-      turn.capture.childHeadIds.push(...answer.captured.childHeadIds);
+        turn.live.dynamic = answer.dynamic;
+        turn.capture.evidence.push(...answer.captured.evidence);
+        turn.capture.decisions.push(...answer.captured.decisions);
+        turn.capture.artifacts.push(...answer.captured.artifacts);
+        turn.capture.toolCalls.push(...answer.captured.toolCalls);
+        turn.capture.childHeadIds.push(...answer.captured.childHeadIds);
 
-      return answer.output;
-    },
-  })]));
+        return answer.output;
+      },
+    });
+
+    return [descriptor.name, descriptor.planAllowed ? permitInPlan(entry) : entry];
+  }));
 }
-
-const TURN_END: Readonly<Record<HeadReport['status'], AgentTurnEnd['status']>> = {
-  completed: 'completed', aborted: 'aborted', budget_exceeded: 'budget_exceeded', errored: 'errored',
-};
 
 export interface QueuedAgentTask {
   readonly after: Promise<void>;
@@ -108,7 +142,7 @@ async function runTurn(
 ): Promise<void> {
   const prepared = await workspace.prepareTurn(task.sequenceId);
 
-  database.price(prepared.model, prepared.pricing);
+  database.prepare(task.sequenceId, prepared);
   const actor = await database.acquire();
   const live = { dynamic: prepared.dynamic };
 
@@ -120,13 +154,12 @@ async function runTurn(
 
   const stop = database.stop(task.sequenceId).signal;
   const capture = new HeadCapture();
-  const runId = crypto.randomUUID();
+  const runId = prepared.runId;
 
   const inference: HeadInferenceDeps = {
     actor,
     runId,
     clock: REAL_CLOCK,
-    delegation: { assignmentId: task.sequenceId, birthContext: [...prepared.birthContext] },
     model: registry.resolveModel(prepared.model),
     tools: withEffectClaims(workspaceTools(workspace, prepared, { id: task.sequenceId, live, capture, database }), {
       actor: actor.handle,
@@ -134,9 +167,8 @@ async function runTurn(
       turnId: () => task.sequenceId,
       durable: (callId, signal) => actor.session.durableCall(callId, signal),
     }),
-    framing: { system: prepared.framing.system, messages: prepared.framing.messages },
     capture,
-    workspaceLayout: 'shared-workspace',
+    workspaceLayout: prepared.workspaceLayout,
     isAborted: () => stop.aborted,
     signal: stop,
     profile: async ({ availableTools, workMode }) => {
@@ -151,8 +183,32 @@ async function runTurn(
     observeStream: async (chunks, call) => { await workspace.observe(lines(chunks), call); },
   };
 
+  const trace = prepared.trace ? new HeadTrace(workspace, task.sequenceId) : null;
+  let produced: readonly ModelMessage[] | undefined;
+
+  if (prepared.birthContext !== undefined) inference.delegation = { assignmentId: task.sequenceId, birthContext: prepared.birthContext };
+
+  if (prepared.framing !== undefined) inference.framing = prepared.framing;
+
+  if (prepared.reportMessages) inference.reportMessages = (messages) => { produced = messages; };
+
+  if (prepared.resume) inference.resume = () => workspace.resume(task.sequenceId);
+
+  if (prepared.missionLabels !== undefined) inference.mission = {
+    labels: prepared.missionLabels,
+    port: {
+      guard: (...args) => workspace.guard(task.sequenceId, ...args),
+      debit: (...args) => workspace.debit(task.sequenceId, ...args),
+    },
+  };
+
+  if (trace !== null) {
+    inference.reportStep = (sequence, step) => trace.step(sequence, step);
+    inference.reportDelta = (kind, delta) => { trace.delta(kind, delta); };
+  }
+
   openTurnRun(actor.stores.eventRecorder, runId, {
-    agentId: actor.record.actorId, causedBy: 'subordinate_task', userMessage: task.body,
+    agentId: actor.record.actorId, causedBy: actor.record.origin === 'swarm' ? 'swarm' : 'subordinate_task', userMessage: task.body,
     turnIndex: actor.session.orchestrator.sessionTurnIndex,
   });
 
@@ -175,11 +231,12 @@ async function runTurn(
 
   if (completion !== undefined) await database.answer(completion, await workspace.answerMetadata(completion.turnId, narration));
 
+  await trace?.flush();
   await workspace.finishTurn(task.sequenceId, {
+    ...report,
     activity: database.takeActivity(),
-    status: TURN_END[report.status],
-    summary: report.summary,
     errorMessage: report.errorMessage ?? null,
     narration: narration.join('\n'),
+    ...(produced !== undefined && { produced }),
   });
 }

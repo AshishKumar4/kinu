@@ -498,7 +498,6 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
 
     return {
       spawnHead: async (input: HeadInput) => {
-        // The `exp:`-marked name `hostHead` registers; a head has no database of its own.
         await this.actorDirectory({ action: 'register', creationId: input.id, name: `exp:${input.id}`, origin: 'swarm', lifetime: 'task' });
 
         return {
@@ -781,14 +780,13 @@ export async function admittedTurnClaim(
   });
 }
 
-/** The stored chat conversation of an actor, oldest first, as a reload reads it. */
-/** A subordinate's own rows (its runs, claims, chat), as its turns wrote them in its own database. */
+/** A non-main agent's own runs, claims and conversation in its facet database. */
 export function agentSql(actorId: string): SqlExecutor {
   return sqlOver(agentDatabase(actorId));
 }
 
 /**
- * A subordinate's own conversation store, over its own database, once its facet copied its roster rows there (any
+ * An agent's own conversation store, over its own database, once its facet copied its roster rows there (any
  * read of its chat through the workspace does): to seed its chat, or to read it as its pane does.
  */
 export function agentHistory(harness: Pick<ActorHarness<HarnessOrchestratorAgent>, 'agent'>, actorId: string) {

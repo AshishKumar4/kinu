@@ -293,7 +293,7 @@ export async function runSwarm(
   }
 
   const nodeDeps = buildNodeDeps({
-    hostNode: deps.hostNode, model: nodeModel, journal, logger: log,
+    hostNode: deps.hostNode, model: nodeModel, modelSpec: nodeModelResult.spec, journal, logger: log,
     signal: deps.signal, clock: deps.clock, reportModelCall: deps.reportModelCall,
     mission: deps.mission,
     provisionHome: deps.provisionHome, runtimeForWorkspace: deps.runtimeForWorkspace,

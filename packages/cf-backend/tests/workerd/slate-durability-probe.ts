@@ -30,11 +30,11 @@ import type {
 
 // Re-exported under production names so the auxiliary worker binds the classes themselves: a
 // probe that retargets the class measures its own fixture (as in slate-actor-probe.ts).
-export { UserDO } from '../../src/user/user-do';
+export * from '../../src/server';
 
 // A build-mode resident refuses to boot without a `globalOutbound`: `CodemodeEgress` is that
 // loopback.
-export { SlateBinding } from '../../src/slates/bindings';
+
 
 export class CodemodeEgress extends WorkerEntrypoint {
   override async fetch(): Promise<Response> { return new Response('network allowed'); }
@@ -103,9 +103,9 @@ export { ObservedOrchestrator as OrchestratorAgent };
 
 // Exported as `src/server.ts` does: the hosted runtime refuses a worker whose `ctx.exports` lacks
 // it.
-export { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
 
-export { CodemodeLauncher } from '../../src/codemode-sandbox';
+
+
 
 /** `slateAs` is absent on purpose: `Rpc.Result` over its recursive `JsonValue` is TS2589; the probe
  *  reaches it through `workspaceOwner()`, as production's actor does. */

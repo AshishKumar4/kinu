@@ -549,8 +549,9 @@ export function resolveNodeModel(input: {
   readonly model: LanguageModel;
   readonly resolveModel: ((spec: string) => LanguageModel) | undefined;
   readonly runProfile: SwarmProfileSnapshot | null;
-}): { readonly model: LanguageModel } | Refusal {
+}): { readonly model: LanguageModel; readonly spec: string | undefined } | Refusal {
   let nodeModel = input.model;
+  let modelSpec: string | undefined;
 
   if (input.runProfile) {
     const spec = input.runProfile.profile.tier.model;
@@ -567,6 +568,7 @@ export function resolveNodeModel(input: {
 
     try {
       nodeModel = input.resolveModel(spec);
+      modelSpec = spec;
     } catch (error) {
       return refusalOf(new KinuError('unavailable',
         `this search is routed to the ${tier} tier, model ${JSON.stringify(spec)}, and this `
@@ -577,7 +579,7 @@ export function resolveNodeModel(input: {
     }
   }
 
-  return { model: nodeModel };
+  return { model: nodeModel, spec: modelSpec };
 }
 
 /**
@@ -796,6 +798,7 @@ export function buildNodeDeps(input: {
   /** Per node, never per run: see {@link NodeAgentDeps.hostNode}. */
   readonly hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
   readonly model: LanguageModel;
+  readonly modelSpec?: string;
   readonly journal: HeadJournal;
   readonly logger: Logger;
   readonly signal?: AbortSignal;
@@ -814,6 +817,8 @@ export function buildNodeDeps(input: {
     hostNode: deps.hostNode, model: deps.model, journal: deps.journal, logger: deps.logger,
     reportModelCall: deps.reportModelCall,
   };
+
+  if (deps.modelSpec !== undefined) nodeDeps.modelSpec = deps.modelSpec;
 
   if (deps.signal !== undefined) nodeDeps.signal = deps.signal;
 

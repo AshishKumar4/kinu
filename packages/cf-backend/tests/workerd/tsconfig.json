@@ -36,6 +36,7 @@
     "./hire-probe.ts",
     "./codex-egress-probe.ts",
     "./agent-facet-probe.ts",
-    "./agent-facet-probe-agent.ts"
+    "./agent-facet-probe-agent.ts",
+    "./slate-egress-probe.ts"
   ]
 }

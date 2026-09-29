@@ -176,6 +176,7 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
 
 interface AgentFacetProbeRpc extends Rpc.DurableObjectBranded {
   onePlane(workspace: string, agent: string): Promise<OnePlaneObservation>;
+  swarmNode(workspace: string): Promise<ReadableStream<Uint8Array>>;
 }
 
 interface AddressedNameProbeRpc extends Rpc.DurableObjectBranded {

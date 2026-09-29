@@ -47,6 +47,7 @@
     "tests/workerd/hire-probe.ts",
     "tests/workerd/codex-egress-probe.ts",
     "tests/workerd/agent-facet-probe.ts",
-    "tests/workerd/agent-facet-probe-agent.ts"
+    "tests/workerd/agent-facet-probe-agent.ts",
+    "tests/workerd/slate-egress-probe.ts"
   ]
 }

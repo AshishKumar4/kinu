@@ -8,12 +8,13 @@ import {
   type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
   type SessionTranscriptReader, type SubordinateInspectionResult, type ModelPricing, type SqlExecutor, type VFS,
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
-  type JsonObject, type NimbusSandboxHandle, type SqlValue,
+  type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue,
 } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import type { AgentActivity, AgentOpening, AgentRecovery, AgentSnapshot, StoredRow } from './protocol';
+import type { AgentActivity, AgentOpening, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow } from './protocol';
+import type { AgentWorkspace } from './agent-turn';
 
 const refused = (what: string) => Effect.fail(new KinuError('unsupported', `${what} runs in the workspace object, not in an agent's own isolate.`));
 
@@ -25,16 +26,17 @@ interface AgentRuntimeFiles {
 }
 
 /** Each copied table's key. An upsert: a replace deletes the row first, cascading through the agent's rows. */
-const COPIED_KEY = { workspace_identity: 'singleton', workspace_actors: 'actor_id' } as const;
+const COPIED_KEY = { workspace_identity: ['singleton'], workspace_actors: ['actor_id'], scaffold_versions: ['actor_id', 'version'] } as const;
 
 function upsertRow(storage: DurableObjectStorage, table: keyof typeof COPIED_KEY, row: StoredRow): void {
   const columns = Object.keys(row);
   const values: SqlValue[] = columns.map((column) => row[column] ?? null);
-  const updates = columns.filter((column) => column !== COPIED_KEY[table]).map((column) => `${column} = excluded.${column}`);
+  const key: readonly string[] = COPIED_KEY[table];
+  const updates = columns.filter((column) => !key.includes(column)).map((column) => `${column} = excluded.${column}`);
 
   storage.sql.exec(
     `INSERT INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})
-     ON CONFLICT(${COPIED_KEY[table]}) DO UPDATE SET ${updates.join(', ')}`,
+     ON CONFLICT(${key.join(', ')}) DO UPDATE SET ${updates.join(', ')}`,
     ...values,
   );
 }
@@ -67,6 +69,7 @@ export class AgentDatabase {
   }
 
   private priced: { readonly model: string; readonly pricing: ModelPricing | null } | null = null;
+  private execution: Executor | null = null;
 
   private readonly sql: SqlExecutor = <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] =>
     this.storage.sql.exec<Extract<T, Record<string, SqlStorageValue>>>(query.join('?'), ...values).toArray();
@@ -77,6 +80,8 @@ export class AgentDatabase {
       readonly agent: () => NimbusSandboxHandle;
       readonly state: () => NimbusSandboxHandle;
       readonly enqueueTurn: BackendHost['enqueueTurn'];
+      readonly program: AgentWorkspace['program'];
+      readonly memory: AgentWorkspace['memory'];
     },
   ) {
     initWorkspaceSchema({
@@ -169,6 +174,8 @@ export class AgentDatabase {
   }
 
   runtime(bound: BoundActor, files: AgentRuntimeFiles): AgentRuntime {
+    const execution = () => this.execution;
+
     return {
       actor: bound.handle,
       agentStateVfs: files.state(),
@@ -180,8 +187,14 @@ export class AgentDatabase {
         transactionSync: (write) => files.storage.transactionSync(write),
       },
       workspaceIsMachine: false,
-      get memory() { return settleSync(refused('Memory')); },
-      get executor() { return settleSync(refused('Code execution')); },
+      memory: this.workspace.memory(),
+      get executor() {
+        const current = execution();
+
+        if (current !== null) return current;
+
+        return settleSync(Effect.fail(new KinuError('missing', "The agent's program ran before its turn was prepared.")));
+      },
       get llm() { return settleSync(refused('The reflection model lane')); },
       get craftStore() { return settleSync(refused('Crafted tools')); },
       schedule: {
@@ -212,8 +225,14 @@ export class AgentDatabase {
     };
   }
 
-  price(model: string, pricing: ModelPricing | null): void {
-    this.priced = { model, pricing };
+  prepare(turnId: string, prepared: PreparedAgentTurn): void {
+    this.priced = { model: prepared.model, pricing: prepared.pricing };
+    this.execution = { languages: prepared.languages, execute: (...args) => this.workspace.program(turnId, ...args) };
+    this.storage.transactionSync(() => {
+      void this.sql`UPDATE scaffold_versions SET status = 'historical'
+        WHERE actor_id = ${this.reference().actorId} AND version != ${prepared.scaffold.version ?? null} AND status = 'current'`;
+      upsertRow(this.storage, 'scaffold_versions', prepared.scaffold);
+    });
   }
 
   async acquire(): Promise<HostedActor> {

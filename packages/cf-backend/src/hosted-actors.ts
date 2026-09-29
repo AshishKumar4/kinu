@@ -1,16 +1,9 @@
-/**
- * Every hosted non-root actor: hired subordinates and ask-by-role temporaries, and run actors (heads, swarm
- * nodes and steer branches). Each is a `workspace_actors` row plus stores scoped over the root's one
- * `Storage`; a turn runs `runHeadInference` claimed on its actor's session (open-41), so a promotion landing
- * mid-run cannot take it over, and retirement is `host.retire`. `abort` is caller-requested only: no socket
- * close or eviction reaches it; an evicted run leaves an unsettled claim the root's activation resumes.
- * Not facets: `do.facet.cpu_shared` means hosted actors serialise as in one isolate.
- */
+/** Shared tools and roster for non-main agents; their turns run in AgentFacet. */
 
 import { INTERRUPTED_TURN, type HeadReport, isSubordinateOrigin } from '@kinu.run/core';
 import type { LanguageModel, ModelMessage, Tool, ToolSet } from 'ai';
 import {
-  EventLog, HeadCapture, titleActorFromMessage, spawnSeatedHead,
+  EventLog, HeadCapture, titleActorFromMessage, spawnSeatedHead, buildHeadMessages, buildHeadSystemPrompt,
   admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus,
   receiveSubordinateEvent, subordinateRelaysTurnEnd, temporaryRunSettles,
   subordinateForkContext, type SubordinateInheritedContext,
@@ -20,7 +13,7 @@ import {
   registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted,
   type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor,
   type DelegationBudget,
-  type DynamicContext, type HeadId, type HeadInput, type HeadSplitRequest, type HeadSplitResult,
+  type DynamicContext, type HeadId, type HeadInput, type HeadInferenceDeps, type HeadSplitRequest, type HeadSplitResult,
   type HeadStep, type HostedActor, type HostedNodeSeat, type LoopOrigin, type MissionScope, type NodeIdentity,
   type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile,
   type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff,
@@ -73,6 +66,7 @@ export interface HostedActorSeams {
   readonly exec: SqlExec;
   readonly directory: WorkspaceActorDirectory;
   turnInFlight(reference: ActorReference): boolean;
+  infer(reference: ActorReference, input: HeadInput, inference: HeadInferenceDeps): Promise<HeadReport>;
   transaction<Result>(body: () => Result): Result;
   /** Scoped to the actor, so a subordinate manages only its own subtree. */
   roster(actor: BoundActor): SubordinateRosterStore;
@@ -298,48 +292,60 @@ export async function retireStalledTask(
   });
 }
 
-export interface HostedTaskRequest {
+export interface HostedTurnRequest {
   readonly body: string;
   readonly mode: WorkMode;
   readonly sequenceId: string;
   readonly inheritedContext?: SubordinateInheritedContext;
+  readonly run?: { readonly input: HeadInput; readonly inference: HeadInferenceDeps };
 }
 
-/**
- * One delegated turn's workspace half: the profile, the model the agent calls, and the tool surface the agent's
- * own isolate calls back into. Decided once: the claim, the tools and the prompt read the same resolution.
- */
-export interface PreparedHostedTask {
+export interface PreparedHostedTurn {
   readonly turn: HostedTaskTurn;
+  readonly model: string;
   readonly tools: ToolSet;
   readonly framing: AssignedTurnFraming;
   readonly birthContext: readonly ModelMessage[];
 }
 
-export function prepareHostedTask(
+export function prepareHostedTurn(
   seams: HostedActorSeams,
   reference: ActorReference,
-  task: HostedTaskRequest,
-): Promise<PreparedHostedTask> {
+  task: HostedTurnRequest,
+): Promise<PreparedHostedTurn> {
   return settle(Effect.gen(function* () {
-    const actor = yield* Effect.promise(() => seams.host.acquire(reference));
-    const runtime = yield* cfRuntimeOf(actor, 'a hosted subordinate');
-    const resolved = yield* Effect.promise(() => seams.profile({ actor, availableTools: [], workMode: task.mode }));
+    const run = task.run;
+    const actor = run?.inference.actor ?? (yield* Effect.promise(() => seams.host.acquire(reference)));
+    const runtime = yield* cfRuntimeOf(actor, 'a hosted agent');
 
-    yield* Effect.promise(() => seams.priceAs(actor, resolved.profile.tier.model));
-    const input = delegatedHeadInput(actor.record, task);
+    const resolved = yield* Effect.promise(() => run === undefined
+      ? seams.profile({ actor, availableTools: [], workMode: task.mode })
+      : run.inference.profile({ availableTools: [], workMode: task.mode }));
+
+    const input = run?.input ?? delegatedHeadInput(actor.record, task);
+    const model = run?.inference.modelSpec ?? input.model ?? resolved.profile.tier.model;
+
+    yield* Effect.promise(() => seams.priceAs(actor, model));
 
     const turn: HostedTaskTurn = {
       turnId: task.sequenceId, actor, runtime, reports: { spoke: false, settled: false }, input,
-      capture: new HeadCapture(),
-      model: seams.resolveModel(resolved.profile.tier.model),
+      capture: run?.inference.capture ?? new HeadCapture(),
+      model: run?.inference.model ?? seams.resolveModel(model),
       profile: resolved,
     };
 
-    // Without this framing the runner defaults to a fork's, telling a hire it is a parallel thread.
-    const profile = yield* Effect.promise(() => seams.taskProfile(turn));
+    const profile = run === undefined ? yield* Effect.promise(() => seams.taskProfile(turn)) : {
+      tools: run.inference.tools,
+      framing: run.inference.framing ?? {
+        system: buildHeadSystemPrompt(input, Object.keys(run.inference.tools), run.inference.workspaceLayout),
+        messages: buildHeadMessages(input),
+      },
+    };
 
-    return { turn, tools: profile.tools, framing: profile.framing, birthContext: input.inheritedContext.map(inheritedAsModelMessage) };
+    return {
+      turn, model, tools: profile.tools, framing: profile.framing,
+      birthContext: run === undefined ? input.inheritedContext.map(inheritedAsModelMessage) : [],
+    };
   }));
 }
 
@@ -371,8 +377,8 @@ export function hostedTaskEnding(end: HostedTaskEnd): TaskTurnEnding {
  */
 export function settleHostedTask(
   seams: HostedActorSeams,
-  prepared: PreparedHostedTask,
-  task: HostedTaskRequest,
+  prepared: PreparedHostedTurn,
+  task: HostedTurnRequest,
   end: HostedTaskEnd,
 ): Promise<SubordinateEventResult | null> {
   const { actor, reports } = prepared.turn;
@@ -540,7 +546,7 @@ async function retireExploration(
 ): Promise<void> {
   const live = seams.host.hosted(reference);
   const claim = live === null ? null : live.session.turnClaim;
-  const request: ActorRetirementRequest = { reference, name, keepHistory: false, interrupt: true };
+  const request: ActorRetirementRequest = { reference, name, keepHistory: true, interrupt: true };
 
   if (claim !== null) request.observed = { turnId: claim.turnId, epoch: claim.epoch };
   const retirement = actorRetirementFor(request);
@@ -638,6 +644,7 @@ async function runActorSeat(seams: HostedActorSeams, reference: ActorReference):
 
   return {
     actor,
+    infer: (input, inference) => seams.infer(reference, input, inference),
     runId: crypto.randomUUID(),
     profile: (request) => seams.profile({ actor, ...request }),
     dynamic: (profile, tools) => explorationDynamicContext(actor, profile, tools),

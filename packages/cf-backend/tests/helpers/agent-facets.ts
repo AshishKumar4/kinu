@@ -38,7 +38,7 @@ export function agentDatabase(storageKey: string): Database {
   const db = new Database(':memory:');
 
   databases.set(storageKey, db);
-  new AgentDatabase(contextOver(db, storageKey).storage, { agent: unreachable, state: unreachable, enqueueTurn: unreachable });
+  new AgentDatabase(contextOver(db, storageKey).storage, { agent: unreachable, state: unreachable, enqueueTurn: unreachable, memory: unreachable, program: unreachable });
 
   return db;
 }
@@ -61,6 +61,12 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
         WORKSPACE: {
           session,
           stateSession,
+          memory: () => host.memory(),
+          program: (...args) => host.program(...args),
+          traceTurn: (...args) => host.traceTurn(...args),
+          resume: (turnId) => host.resume(turnId),
+          guard: (...args) => host.guard(...args),
+          debit: (...args) => host.debit(...args),
           prepareTurn: (turnId) => host.prepareTurn(turnId),
           profile: (turnId, tools, mode) => host.profile(turnId, tools, mode),
           advise: (review) => host.advise(review),

@@ -13,9 +13,9 @@ import { initWorkspaceSchema, type SqlValue, type WorkMode } from '@kinu.run/cor
 import { ContentRef } from '@agent-core/core';
 import { processes } from '@nimbus-sh/fabric/workerd-facet-host.js';
 
-export { CodemodeEgress } from '../../src/codemode-egress';
+export * from '../../src/server';
 
-export { SlateBinding } from '../../src/slates/bindings';
+
 
 const source = `
 import { SlateObject } from "kinu:slate";
@@ -127,4 +127,4 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
   }
 }
 
-export { CodemodeLauncher } from '../../src/codemode-sandbox';
+

@@ -477,11 +477,9 @@ export default defineConfig({
         }, {
           name: 'agent-facet-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
           modules: probeModules(agentFacetProbe),
-          bindings: { CREDENTIAL_ENCRYPTION_KEY: 'YWdlbnQtZmFjZXQtcHJvYmUtY3JlZGVudGlhbC1rZXk=' },
-          serviceBindings: { ASSETS: agentAssets(agentFacetProbeBundle) },
-          outboundService: async (request) => {
-            throw new Error('Unmatched test egress is disabled: ' + request.url);
-          },
+          bindings: { WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'YWdlbnQtZmFjZXQtcHJvYmUtY3JlZGVudGlhbC1rZXk=' },
+          serviceBindings: { AI: { name: 'hire-probe', entrypoint: 'HireAI' }, ASSETS: agentAssets(agentFacetProbeBundle) },
+          outboundService: hireOutbound,
           durableObjects: {
             AGENT_FACET_PROBE: { className: 'AgentFacetProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
