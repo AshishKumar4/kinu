@@ -28,7 +28,7 @@ import {
   createCompletionLLM,
   ensembleReport,
   getChatHistoryPage, readSessionTranscript, CHAT_SESSION_ID,
-  missingSubordinateHistory, readSubordinateInspection, SubordinateInspectionRequestSchema,
+  missingSubordinateHistory, inspectDescendant, SubordinateInspectionRequestSchema,
   type SubordinateInspectionRequest, type SubordinateInspectionResult,
   getEvolutionChangelog,
   ingestOutcomeLabels,
@@ -483,22 +483,15 @@ export function inspectLocalSubordinate(name: string, request: SubordinateInspec
     const directory = actorDirectory(db);
 
     if (directory === null) return missingSubordinateHistory(input.path);
-    let target = directory.main();
-
-    for (const segment of input.path) {
-      const child = directory.resolveChild(target, segment);
-
-      if (child === null) return missingSubordinateHistory(input.path);
-      target = child;
-    }
-
     const sql = makeSql(db);
     const files = inspectionFiles(db, resolveAgentRef(name)?.cwd ?? null);
 
-    return readSubordinateInspection({
+    // The file is the owner's own, so the walk needs no owner check.
+    return inspectDescendant({
       sql,
       raw: makeSqlExec(db),
-      actor: target,
+      actor: directory.main(),
+      directory,
       transcriptFor: (actor) => readSessionTranscript(sql, actor, CHAT_SESSION_ID, () => Promise.resolve(files)),
     }, input);
   });
