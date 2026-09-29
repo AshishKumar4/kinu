@@ -1174,7 +1174,7 @@ export class LocalAgentSession {
     return this.chat.revertTo(entryId);
   }
 
-  clearConversation(): Promise<void> {
+  clearConversation(): Promise<KinuError | null> {
     return this.chat.clear();
   }
 
