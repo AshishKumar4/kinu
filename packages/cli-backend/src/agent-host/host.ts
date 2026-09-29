@@ -1067,6 +1067,8 @@ export class LocalAgentHost {
         ));
       },
       onAdmitted: () => this.wake(parent, 'subordinate report'),
+      // No job queue here: the stored answer is the owed delivery, made below and, after a death, at the next start.
+      evolutionAnswerStored: () => undefined,
       onEvolutionAnswer: async () => {
         this.answerWake(parent);
         await parent.session.deliverAdvisorAnswers();

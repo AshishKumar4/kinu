@@ -460,6 +460,31 @@ describe('a recovery reads the record, not the session that finds it', () => {
     db.close();
   });
 
+  test('an advisor answer a death left undelivered is delivered once, at the next start', async () => {
+    const { db, rt } = workspace();
+    const advisor = withAdvisor(rt);
+    const { model } = scriptedModel('rotated the staging keys');
+    const first = new ProbeSession({ rt, db, model, onEvent: () => {} });
+    await first.send('rotate the keys', { id: crypto.randomUUID() });
+    await first.settleBackgroundWork();
+    // The answer is stored; the process dies before anything delivers it.
+    advisor.answer(JSON.stringify({ note: NOTE, severity: 'concern', class: 'wrong-work' }));
+    await first.end();
+    expect(notes(rt)).toEqual([]);
+
+    const events: SessionEvent[] = [];
+    const next = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
+    await next.recoverBackgroundJobs();
+    await next.settleBackgroundWork();
+    await next.recoverBackgroundJobs();
+    await next.settleBackgroundWork();
+
+    expect(notes(rt)).toEqual([NOTE]);
+    expect(programmaticTurns(events)).toBe(1);
+    await next.end();
+    db.close();
+  });
+
   test('a hire cut after it started is not hired again by the replay', async () => {
     const { db, rt } = workspace();
     const advisor = withAdvisor(rt);

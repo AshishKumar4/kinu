@@ -4,13 +4,13 @@
  */
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import {
-  BACKGROUND_FIBER_PREFIX, CHAT_SESSION_ID, PendingSendStore, PROGRAMMATIC_MESSAGE_ID_PREFIX,
+  ActorSession, BACKGROUND_FIBER_PREFIX, CHAT_SESSION_ID, PendingSendStore, PROGRAMMATIC_MESSAGE_ID_PREFIX,
   TERMINAL_EFFECT_RETRY_CEILING_MS, type JsonValue,
 } from '@kinu.run/core';
 import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 import {
   catalogTurn, chatSessionTurns, GATEWAY_CATALOG, gatewayWorkspace, historyOver, jobsOver, orchestratorHarness,
-  driveUntil, reactivateOrchestratorHarness, workspaceMainActor,
+  adviceDue, driveUntil, reactivateOrchestratorHarness, workspaceMainActor,
   type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { answeringGateway, chatCompletion, stubAiBinding } from './helpers/platform-gateway';
@@ -205,8 +205,8 @@ describe('the post-turn lanes', () => {
       });
 
       await restarted.agent.terminalRetryPass();
-      // The review is the hired advisor's own delegated turn, which the wake drains.
-      await driveUntil(restarted, 'the replayed review settled', () => owedReview(restarted) === 0 && advisorsWorking(restarted) === 0);
+      // The review is the hired advisor's own delegated turn, which the wake drains; its answer's job delivers the note.
+      await driveUntil(restarted, 'the replayed review settled', () => owedReview(restarted) === 0 && advisorsWorking(restarted) === 0 && !adviceDue(restarted.db));
       await joinHarnessFibers();
 
       return restarted;
@@ -236,6 +236,37 @@ describe('the post-turn lanes', () => {
     expect(notes(restarted)).toBe(1);
     expect(owedReview(restarted)).toBe(0);
     // The signal is keyed on the turn so a re-delivery collapses onto the row it already opened.
+    expect((await programmaticTurns(restarted)).filter((turn) => turn.id.startsWith(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}advisor:`)))
+      .toHaveLength(1);
+  });
+
+  test('an advisor answer stored before a death is delivered once, by the next activation', async () => {
+    const { calls, restart } = await cutReview();
+    const deliver = Object.getOwnPropertyDescriptor(ActorSession.prototype, 'deliverAdvisorAnswers');
+
+    // The object dies after the ingress stored the answer and before its note is delivered.
+    Object.defineProperty(ActorSession.prototype, 'deliverAdvisorAnswers', {
+      configurable: true, value: () => Promise.reject(new Error('the object died')),
+    });
+
+    let died: Harness;
+
+    try {
+      died = await restart();
+    } finally {
+      if (deliver) Object.defineProperty(ActorSession.prototype, 'deliverAdvisorAnswers', deliver);
+    }
+
+    expect(calls()).toBe(1);
+    expect(notes(died)).toBe(0);
+    // The answer and the job that delivers it are both still on disk.
+    expect(count(died, "SELECT COUNT(*) AS n FROM evolution_helpers WHERE answer_status IS NOT NULL")).toBe(1);
+
+    const restarted = await restart();
+    await restart();
+
+    expect(calls()).toBe(1);
+    expect(notes(restarted)).toBe(1);
     expect((await programmaticTurns(restarted)).filter((turn) => turn.id.startsWith(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}advisor:`)))
       .toHaveLength(1);
   });

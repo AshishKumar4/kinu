@@ -2560,9 +2560,12 @@ export class LocalAgentSession {
     return this.teamDeps?.temporary ?? null;
   }
 
-  /** This actor's advisor answered: its note reaches the conversation. */
-  deliverAdvisorAnswers(): Promise<void> {
-    return this.actorSession.deliverAdvisorAnswers();
+  /**
+   * This actor's advisor answered: its note reaches the conversation. The CLI has no durable job queue, so the
+   * stored answer is the owed delivery itself: an answer a death left undelivered goes at the next start.
+   */
+  async deliverAdvisorAnswers(): Promise<void> {
+    await this.actorSession.deliverAdvisorAnswers();
   }
 
   /** Installed after construction: roster and peer inbox need the session's broadcast. */

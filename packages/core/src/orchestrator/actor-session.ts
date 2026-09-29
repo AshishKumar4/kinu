@@ -292,21 +292,26 @@ export class ActorSession {
     }
   }
 
-  /** Every advisor answer this actor holds, judged and delivered once; per-turn feedback never changes the learning window.
-   *  One answer that cannot be delivered is recorded and kept for the next pass, never a failed report. */
-  async deliverAdvisorAnswers(): Promise<void> {
+  /**
+   * Every advisor answer this actor holds, judged and delivered once; per-turn feedback never changes the learning window.
+   * An answer that cannot be delivered is recorded and kept; false tells a job queue to run this again.
+   */
+  async deliverAdvisorAnswers(): Promise<boolean> {
     const port = this.options.advisorPort?.() ?? null;
 
-    if (port === null) return;
+    if (port === null) return true;
+    let delivered = true;
 
     for (const helper of port.answered()) {
       const turnId = advisedTurnOf(helper.lane);
 
-      if (turnId !== null) await this.deliverAdvisorAnswer(port, helper, turnId);
+      if (turnId !== null && !await this.deliverAdvisorAnswer(port, helper, turnId)) delivered = false;
     }
+
+    return delivered;
   }
 
-  deliverAdvisorAnswer(port: TemporaryAgentPort, helper: AnsweredEvolutionHelper, turnId: string): Promise<void> {
+  deliverAdvisorAnswer(port: TemporaryAgentPort, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean> {
     const { engine } = this.options.orchestration;
     const config = this.options.advisor?.config ?? this.runtime.actor.config;
 
@@ -325,7 +330,13 @@ export class ActorSession {
       }
 
       port.forget(helper.name);
-    }).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('advisor.delivery_failed', failure, { turnId }); }))));
+
+      return true;
+    }).pipe(Effect.catch((failure) => Effect.sync(() => {
+      diagnostics.failure('advisor.delivery_failed', failure, { turnId });
+
+      return false;
+    }))));
   }
 
   private async advisorGuidance(snapshot: AdvisorRecoverySnapshot): Promise<string> {

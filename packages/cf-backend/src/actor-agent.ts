@@ -226,6 +226,7 @@ import {
 } from "@kinu.run/core/analytics";
 import * as v from 'valibot';
 import { Hono, type Context } from 'hono';
+import { AdviceJobs } from './advice-jobs';
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB, WakeJobs, type WakePace } from './wake-jobs';
 import { rawPath, rethrow } from './api/context';
 
@@ -1005,10 +1006,8 @@ export abstract class ActorAgent extends Agent<Env> {
         this.broadcastSubordinateEvent({ ...report, kind: 'report' });
       },
       onAdmitted: () => { this.orch.scheduleDrain(); },
-      onEvolutionAnswer: async () => {
-        this.durableWakeOwner()?.();
-        await this.actorSession.deliverAdvisorAnswers();
-      },
+      evolutionAnswerStored: () => this.advice.owe(this.actorHandle().actorId),
+      onEvolutionAnswer: () => { this.durableWakeOwner()?.(); },
       // A temporary child's answer belongs to the waiting `agents.ask` call, so the register gets
       // first refusal on the name through the port that parked the waiter.
       temporary: this.temporaryAgentPort(),
@@ -1046,12 +1045,21 @@ export abstract class ActorAgent extends Agent<Env> {
     [TERMINAL_RETRY_JOB]: (pace) => this.terminalRetryPass(pace),
   });
 
+  /** An advisor answer's delivery; see advice-jobs.ts. */
+  protected readonly advice = new AdviceJobs((actorId) => this.deliverAdviceFor(actorId));
+
   /** The workspace timer's pass: every source a subclass folds into its next wake. */
   abstract _kinuTimerTick(): Promise<void>;
+
+  /** This actor's held advisor answers; a subclass hosting other actors routes theirs. */
+  protected deliverAdviceFor(actorId: string): Promise<boolean> {
+    return actorId === this.actorHandle().actorId ? this.actorSession.deliverAdvisorAnswers() : Promise.resolve(true);
+  }
 
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
     this.lifecycle.use(this.wakes);
+    this.lifecycle.use(this.advice);
     // Must precede any read or write of it; see initCapabilitySchema.
     this.initCapabilitySchema();
     // A Durable Object is a DIFFERENT ISOLATE from the Worker that routes to it,

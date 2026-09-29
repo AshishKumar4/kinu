@@ -82,7 +82,7 @@ const neverHost: HostedActorSeams = {
   armWake() { throw new Error('mergeLLM armed a wake'); },
   temporary() { throw new Error('mergeLLM reached the task-hire port'); },
   rederiveWake() { throw new Error('mergeLLM re-derived the wake'); },
-  deliverAdvisorAnswers() { throw new Error('mergeLLM delivered advisor answers'); },
+  oweAdvice() { throw new Error('mergeLLM owed advisor advice'); },
 };
 
 function runtimeWith(text: string) {

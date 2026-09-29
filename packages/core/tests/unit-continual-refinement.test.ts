@@ -2299,7 +2299,7 @@ function refinerRail(over?: { readonly db: Database; readonly workspaceId: strin
     reports: () => log.pending().filter((event) => event.variant === 'subordinate_report'),
     deliver: (temporary: TemporaryAgentPort, content: string) => receiveSubordinateEvent({
       log, roster, vfs: createMemoryVfs().vfs, transaction: (body) => body(),
-      announce: () => undefined, onAdmitted: () => undefined, onEvolutionAnswer: () => undefined, temporary,
+      announce: () => undefined, onAdmitted: () => undefined, evolutionAnswerStored: () => undefined, onEvolutionAnswer: () => undefined, temporary,
     }, {
       fromSubordinate: 'ask-refiner-a1b2c3', status: 'completed', content, origin: 'turn_end',
       sequenceId: 'refiner:turn-1', mode: 'plan',
