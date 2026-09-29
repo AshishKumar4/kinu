@@ -886,8 +886,13 @@ pressure stayed under 10 % while its IO pressure ran 10-24 %: the disk set
 its length, not a hang. Its longest wait between two test results was 74.5 s.
 The bound per row did not shrink, because a gate that prints only its verdict
 is silent for its whole run (`secret-scan`, 149 s at load 43). The ladder
-prints each row's longest silence beside its wall. Blind: a run that keeps
-writing and never ends.
+prints each row's longest silence beside its wall. The run leads a session of
+its own: a kill reaches its process group, anything of that session alive
+after the child exits is a leftover whether or not it kept `KINU_RUN` (a
+review of d35c1060fe found `env -i` holding the pipes for an hour past the
+exit), and the bound holds until the pipes close. Blind: a run that keeps
+writing and never ends; a holder that left the session and dropped the mark
+is cut off at the bound, not ended.
 
 ## Open
 
