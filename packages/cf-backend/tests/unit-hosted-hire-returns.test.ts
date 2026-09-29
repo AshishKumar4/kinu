@@ -6,8 +6,9 @@
 import { expect, test } from 'bun:test';
 import { sqlOver } from '@kinu.run/test-utils';
 import { EventLog, actorConnectionTag, admitSubordinateTask } from '@kinu.run/core';
+import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { makeSqlExec } from '../../core/tests/helpers';
-import { asPane } from './helpers/agents-sdk';
+import { asPane, joinHarnessKeepAlives } from './helpers/agents-sdk';
 import { actorOver, catalogTurn, driveUntil, gatewayWorkspace, hostedSubordinateHarness, wakeForDelegatedTask } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 
@@ -23,6 +24,26 @@ function heldUntilAborted(run: RecordedGatewayRun): Promise<Response> {
   run.signal?.addEventListener('abort', () => { reject(run.signal?.reason); }, { once: true });
 
   return promise;
+}
+
+/** The middle hires one task agent, 'Leaf task.', whose call answers once `answered` settles; then relays it. */
+function leafHire(answered: Promise<void>, asked: () => void) {
+  return async (run: RecordedGatewayRun): Promise<Response> => {
+    const opening = openingOf(run);
+
+    if (opening.includes('Leaf task.')) {
+      asked();
+      await answered;
+
+      return chatCompletion(run, 'Leaf done.');
+    }
+
+    if (opening.includes('Leaf done.')) return chatCompletion(run, 'Middle relays Leaf done.');
+
+    return toolResults(run) === 0
+      ? toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', lifetime: 'task', mission: 'Leaf task.' } }, 'call_leaf')
+      : chatCompletion(run, 'Middle waits.');
+  };
 }
 
 async function helperWorkspace(respond: (run: RecordedGatewayRun) => Response | Promise<Response>) {
@@ -52,22 +73,7 @@ test("a helper's task hire returns at once, and the answer opens the helper's ne
   const release = Promise.withResolvers<void>();
   let leafAsked = false;
 
-  const { gateway, workspace, middleId, count, hired, retiring } = await helperWorkspace(async (run) => {
-    const opening = openingOf(run);
-
-    if (opening.includes('Leaf task.')) {
-      leafAsked = true;
-      await release.promise;
-
-      return chatCompletion(run, 'Leaf done.');
-    }
-
-    if (opening.includes('Leaf done.')) return chatCompletion(run, 'Middle relays Leaf done.');
-
-    return toolResults(run) === 0
-      ? toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', lifetime: 'task', mission: 'Leaf task.' } }, 'call_leaf')
-      : chatCompletion(run, 'Middle waits.');
-  });
+  const { gateway, workspace, middleId, count, hired, retiring } = await helperWorkspace(leafHire(release.promise, () => { leafAsked = true; }));
 
   await wakeForDelegatedTask(workspace, middleId, 'Middle task.');
   await driveUntil(workspace, 'the helper\'s turn never ended while its task hire worked', () => leafAsked && count(middleId, 'run_end') > 0);
@@ -81,6 +87,29 @@ test("a helper's task hire returns at once, and the answer opens the helper's ne
   // The task agent retires once its answer is held, keeping its history.
   const leaf = hired() ?? '';
   await driveUntil(workspace, 'the answered task agent never retired', () => retiring(leaf));
+});
+
+test("a helper whose turn ends with its hire still working is released, and no drain runs on the released session", async () => {
+  const release = Promise.withResolvers<void>();
+  let leafAsked = false;
+
+  const { workspace, middleId, count } = await helperWorkspace(leafHire(release.promise, () => { leafAsked = true; }));
+
+  const recording = createRecordingLogger();
+  const restore = setDiagnosticsSink(recording);
+
+  try {
+    await wakeForDelegatedTask(workspace, middleId, 'Middle task.');
+    await driveUntil(workspace, 'the helper\'s turn never ended while its task hire worked', () => leafAsked && count(middleId, 'run_end') > 0);
+    // A drain armed on the released session fires once its debounce ends, and fails against the release.
+    await joinHarnessKeepAlives(workspace.agent);
+    expect(recording.emitted.filter((line) => line.event === 'orchestrator.drain_select_failed')).toEqual([]);
+
+    release.resolve();
+    await driveUntil(workspace, 'the task agent\'s answer never opened the helper\'s next turn', () => count(middleId, 'run_end') >= 2);
+  } finally {
+    restore();
+  }
 });
 
 test("a durable hire whose turn fails delivers its failure to its hirer as a message", async () => {

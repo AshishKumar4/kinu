@@ -13,6 +13,8 @@ declare module 'kinu:product' {
   }
 
   export class OrchestratorAgent extends DurableObject {
+    /** Private in the source; the probe reads its size. */
+    protected readonly delegatedTurns: { readonly actorRunners: ReadonlyMap<string, Promise<void>> };
     protected hostedSeams(): {
       readonly host: {
         acquire(reference: ActorReference): Promise<HostedActor>;

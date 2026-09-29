@@ -90,7 +90,8 @@ test("a hire's slate edit is previewed on the hire's answer, and nowhere else", 
   const hireAnswers = (await storedChat(workspace, actorOver(workspace.db, hire.actor.handle.actorId))).filter((message) => message.role === 'assistant');
 
   expect(hireAnswers.map((message) => slatesChanged({ metadata: message.metadata }))).toEqual([['board']]);
-  expect(await workspace.agent.readWorkspaceFile('/slates/board/client.tsx')).toMatchObject({ ok: true });
+  expect(await workspace.agent.readWorkspaceFile('/slates/board/client.tsx'))
+    .toEqual(new TextEncoder().encode('export default () => null;'));
 
   const rootAnswers = (await storedChat(workspace)).filter((message) => message.role === 'assistant');
 
@@ -144,7 +145,8 @@ test('a slate the turn wrote and then removed is not previewed', async () => {
 
   if (tools.file === undefined) throw new Error('Build has no file tool');
   await toolExecute<JsonValue, JsonValue>(tools.file)({ action: 'write', path: '/slates/scratch/client.tsx', content: 'x' });
-  expect(await agent.execWorkspaceCommand('rm -rf /slates/scratch')).toMatchObject({ ok: true });
+  expect(await agent.execWorkspaceCommand('rm -rf /slates/scratch')).toMatchObject({ exitCode: 0 });
+  expect(await agent.statWorkspaceFile('/slates/scratch')).toBeNull();
   await turns.settle({ messageId: 'a-scratch', text: 'Dropped it.' });
 
   const answer = (await storedChat(harness)).filter((message) => message.role === 'assistant').at(-1);

@@ -1329,10 +1329,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         } finally {
           await room?.closeTurn();
 
-          // Mid-turn reports drain here, a reset's re-run too.
-          if (!this.settledTaskAgent(record)) this.hostedSeams().scheduleDrain(this.actorHost().bindStores(reference));
-
+          // Released first: a drain armed on this session would fire against the release and keep its transcript
+          // until then. Mid-turn reports, a reset's re-run too, go to the durable wake, which reopens the agent.
           this.releaseIdleHosted(reference);
+
+          if (!this.settledTaskAgent(record)) this.hostedSeams().scheduleDrain(this.actorHost().bindStores(reference));
         }
       },
       onFailure: ({ cause }) => {
