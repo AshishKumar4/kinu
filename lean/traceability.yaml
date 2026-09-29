@@ -36,7 +36,8 @@ requirements:
     tsRefs:
       - packages/core/src/orchestrator/chat-session.ts#ChatSession.enqueueTurn
       - packages/core/src/orchestrator/chat-session.ts#ChatSession.pump
-      - packages/core/src/orchestrator/chat-session.ts#ChatSession.processTurn
+      - packages/core/src/orchestrator/chat-session.ts#ChatSession.openTurn
+      - packages/core/src/orchestrator/chat-session.ts#ChatSession.runOpenedTurn
     remainingEvidence:
       - The Cloudflare TurnQueue implementation is external to this repository and has no model refinement test
       - The local queue keeps its pumping flag set across a full drain rather than clearing it after one modeled item
