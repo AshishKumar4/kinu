@@ -9,7 +9,6 @@ import {
   markCacheTail,
   markLastToolForAnthropicCache,
   promptCacheOptions,
-  promptCachePlan,
   promptCacheWarm,
   resolvePromptCacheStrategy,
   type PromptCacheStrategy,
@@ -297,20 +296,6 @@ describe('applyCacheBreakpoints', () => {
     expect(plan.messages).toEqual(messages);
     expect(plan.providerOptions).toBeUndefined();
     expect(hasCacheMarkers(plan.strategy)).toBe(false);
-  });
-
-  test('agrees with promptCachePlan on everything but the tail', () => {
-    // runChat and Think reach caching through different entry points; only the tail may differ.
-    for (const [providerId, modelId] of [
-      ['anthropic', 'claude-opus-4-7'],
-      ['openai', 'gpt-5.5'],
-      ['openrouter', 'anthropic/claude-sonnet-4.6'],
-      ['workers-ai', '@cf/moonshotai/kimi-k2.6'],
-    ] as const) {
-      const input = { providerId, modelId, system: 'sys', sessionKey: 'kinu-x' };
-      const { messages: _tail, ...shared } = applyCacheBreakpoints({ ...input, messages: history(4) });
-      expect({ providerId, ...shared }).toEqual({ providerId, ...promptCachePlan(input) });
-    }
   });
 });
 

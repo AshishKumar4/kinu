@@ -42,6 +42,7 @@ function ledgerOver(status: number) {
 
   const ledger = new TerminalEffectLedger({
     sql, actor, now: () => NOW,
+    transaction: (body) => db.transaction(body)(),
     effects: { sleep_time: terminalEffect({ input: v.object({}), run: answering(status) }) },
     scheduleRetry: async (at) => { wakes.push(at); },
   });
@@ -97,6 +98,7 @@ test('while this process runs a sequence, its backstop wake is armed but not due
 
   const ledger = new TerminalEffectLedger({
     sql, actor, now: () => NOW,
+    transaction: (body) => db.transaction(body)(),
     effects: { sleep_time: terminalEffect({ input: v.object({}), run: hold }) },
     scheduleRetry: async (at) => { wakes.push(at); },
   });
@@ -130,6 +132,7 @@ test('a second sequence driven while the first still runs arms no wake into the 
 
   const ledger = new TerminalEffectLedger({
     sql, actor, now: () => NOW,
+    transaction: (body) => db.transaction(body)(),
     effects: {
       sleep_time: terminalEffect({ input: v.object({}), run: failLater }),
       turn_record: terminalEffect({ input: v.object({}), run: () => Promise.resolve({ status: 'completed' as const }) }),

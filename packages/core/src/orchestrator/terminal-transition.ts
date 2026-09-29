@@ -39,7 +39,7 @@ export interface TerminalTransitionDeps {
   readonly now: () => number;
   /** Read per call, so a test can arm a cut after construction. */
   readonly fault?: () => TerminalEffectFault | null;
-  /** Claim and roster go through this. A process that can die between statements must supply a real transaction. */
+  /** Claim, roster and synchronous inline effects go through this; both backends supply a real transaction. */
   readonly transaction: <T>(body: () => T) => T;
   /** Gates the turn-wide tool-claim release: an auto-continuation may run tools before it has a terminal claim. */
   readonly turnIsLive: (turnId: string) => boolean;

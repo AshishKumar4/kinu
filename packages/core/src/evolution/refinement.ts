@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 // Continual refinement: the durable request row, its stage machine, and the debt that opens one.
 // The row records where each typed edit was routed; artifacts stay in their owners' stores.
 // Every `advance` is `WHERE stage = <from>`, so duplicate delivery is a no-op. Recovery is by
@@ -474,6 +475,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
         updated_at = ${patch.now ?? nowMs()}
       WHERE actor_id = ${actorId} AND id = ${id}
         AND stage = ${guard.stage} AND claim IS ${guard.claim}`;
+    markStoreChanged(sql);
 
     return true;
   };
@@ -499,6 +501,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
         VALUES (${actorId}, ${id}, ${input.trigger}, ${input.scope}, 'requested',
                 ${JSON.stringify([...input.turnIds])}, ${input.debtKey ?? null}, ${null}, '[]', '',
                 ${at}, ${at})`;
+      markStoreChanged(sql);
       const opened = one(id);
 
       if (!opened) {
@@ -560,6 +563,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
       void sql`UPDATE refinement_requests SET stage = 'planning', claim = ${token},
           updated_at = ${nowMs()}
         WHERE actor_id = ${actorId} AND id = ${id} AND stage = 'requested'`;
+      markStoreChanged(sql);
       const claimed = one(id);
 
       if (!claimed) {
@@ -605,6 +609,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
         void sql`UPDATE refinement_requests SET stage = 'requested', claim = NULL, updated_at = ${at}
           WHERE actor_id = ${actorId} AND id = ${row.id}
             AND stage = 'planning' AND claim IS ${row.claim}`;
+        markStoreChanged(sql);
       }
 
       return stale.length;

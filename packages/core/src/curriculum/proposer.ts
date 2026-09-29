@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 // Voyager-style curriculum (arXiv:2305.16291) plus an Absolute Zero (arXiv:2505.03335) learnability
 // filter: keep tasks at the "barely succeeds" sweet spot (success rate ~0.3–0.7).
 
@@ -188,6 +189,7 @@ export async function proposeNextTasks(opts: CurriculumProposerOpts): Promise<Pr
         (actor_id, id, task, rationale, predicted_success, targets_skills, proposed_at, status)
       VALUES (${opts.rt.actor.actorId}, ${p.id}, ${p.task}, ${p.rationale}, ${p.predictedSuccess},
               ${JSON.stringify(p.targetsSkills)}, ${p.proposedAt}, ${p.status})`;
+    markStoreChanged(opts.rt.storage.sql);
   }
 
   return proposals;
@@ -237,4 +239,5 @@ export function updateProposedTaskStatus(
 
   void rt.storage.sql`UPDATE proposed_tasks SET status = ${status}
     WHERE actor_id = ${rt.actor.actorId} AND id = ${id}`;
+  markStoreChanged(rt.storage.sql);
 }

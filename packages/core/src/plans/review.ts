@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 import * as v from 'valibot';
 import type { WorkMode } from '../types/turn';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
@@ -575,6 +576,7 @@ export class PlanReviewStore {
       ${this.actorId}, ${id}, ${sessionId}, ${revision}, ${content}, 'pending', '[]', NULL,
       0, 0, ${now}, ${now}
     )`;
+    markStoreChanged(this.sql);
 
     if (revising) {
       void this.sql`UPDATE plan_reviews SET status='superseded', updated_at=${now}
@@ -616,6 +618,7 @@ export class PlanReviewStore {
     const now = this.now();
     void this.sql`UPDATE plan_reviews SET annotations_json=${encoded}, updated_at=${now}
       WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND status='pending'`;
+    markStoreChanged(this.sql);
 
     return this.written(id, revision);
   }
@@ -660,6 +663,7 @@ export class PlanReviewStore {
     void this.sql`UPDATE plan_reviews
       SET status=${status}, feedback=${normalizedFeedback}, updated_at=${now}
       WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND status='pending'`;
+    markStoreChanged(this.sql);
 
     return this.written(id, revision);
   }
@@ -680,6 +684,7 @@ export class PlanReviewStore {
     const now = this.now();
     void this.sql`UPDATE plan_reviews SET status='dismissed', updated_at=${now}
       WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND status=${current.status}`;
+    markStoreChanged(this.sql);
 
     return this.written(id, revision);
   }
@@ -703,6 +708,7 @@ export class PlanReviewStore {
       const now = this.now();
       void this.sql`UPDATE plan_reviews SET handoff_accepted=1, updated_at=${now}
         WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND handoff_accepted=0`;
+      markStoreChanged(this.sql);
     }
 
     return this.written(id, revision);
@@ -723,6 +729,7 @@ export class PlanReviewStore {
     if (attempt > 0) return attempt;
     void this.sql`UPDATE plan_reviews SET handoff_attempt=1
       WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND handoff_attempt=0`;
+    markStoreChanged(this.sql);
 
     return 1;
   }

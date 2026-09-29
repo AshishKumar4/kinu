@@ -1,6 +1,7 @@
 // agent_facts: typed, keyed world-model store private to one actor; UPSERT by key, each fact with
 // confidence (0..1) and observation time. Experience imports copy facts in under `source: experience:<workspace>`.
 
+import { markStoreChanged } from '@kinu.run/agent-utils';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import * as v from 'valibot';
@@ -88,6 +89,7 @@ export function createFactsStore(sql: SqlExecutor, actor: ActorHandle): FactsSto
               confidence = ${conf},
               source = COALESCE(${src}, source)
             WHERE actor_id = ${actorId} AND key = ${canonical}`;
+        markStoreChanged(sql);
 
         return 'unchanged';
       }
@@ -101,6 +103,7 @@ export function createFactsStore(sql: SqlExecutor, actor: ActorHandle): FactsSto
           confidence       = excluded.confidence,
           source           = COALESCE(excluded.source, agent_facts.source),
           last_observed_at = excluded.last_observed_at`;
+      markStoreChanged(sql);
 
       return existing ? 'changed' : 'created';
     },
@@ -118,6 +121,7 @@ export function createFactsStore(sql: SqlExecutor, actor: ActorHandle): FactsSto
       authorize();
       const canonical = normalizeFactKey(key);
       void sql`DELETE FROM agent_facts WHERE actor_id = ${actorId} AND key = ${canonical}`;
+      markStoreChanged(sql);
     },
     recentTopK(k) {
       authorize();

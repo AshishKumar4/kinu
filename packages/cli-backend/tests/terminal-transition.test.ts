@@ -121,7 +121,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
     await next.end();
   });
 
-  // Both effects are keyed at their own boundary: "after" converges only because the key makes the replay a no-op.
+  // Both inline inserts commit with their disposition; a cut on either side leaves neither.
   const keyedInserts = [
     { effect: 'turn_record', observe: completedTurns },
     { effect: 'shadow_trial', observe: queuedTrials },
@@ -139,7 +139,9 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
         session.cutAt(effect, phase);
         await session.send('write the migration', { id: crypto.randomUUID() });
 
-        expect(observe(rt)).toBe(phase === 'after' ? 1 : 0);
+        expect(observe(rt)).toBe(0);
+        expect(rt.storage.sql`SELECT status, attempts FROM terminal_effects WHERE effect_name = ${effect}`)
+          .toEqual([{ status: 'pending', attempts: 0 }]);
         expect(state.titleCalls).toBe(0);
 
         const next = await restart({ rt, db, model, events });
@@ -302,7 +304,7 @@ test('a managed context edit reaches the local request and retained trial togeth
 describe('a killed CLI process is recovered by the next start', () => {
   /** Run the child to its kill point, and answer the marker it printed. */
   async function killAt(
-    dbPath: string, mode: 'before-settle' | 'inside-claim' | 'inside-title',
+    dbPath: string, mode: 'before-settle' | 'inside-claim' | 'inside-title' | 'after-record',
   ): Promise<string> {
     const child = Bun.spawn(
       ['bun', new URL('./terminal-death-probe.ts', import.meta.url).pathname, dbPath, mode],
@@ -364,6 +366,21 @@ describe('a killed CLI process is recovered by the next start', () => {
     db.close();
   });
 
+  test('a death after synchronous recording leaves neither its output nor an attempted row', async () => {
+    const dbPath = scratchPath('terminal-death-after-record', 'agent.db');
+    expect(await killAt(dbPath, 'after-record')).toBe('KILLED after-record');
+    const { db, rt } = openTerminalWorkspace(dbPath);
+    expect(completedTurns(rt)).toBe(0);
+    expect(rt.storage.sql`SELECT status, attempts FROM terminal_effects WHERE effect_name = 'turn_record'`)
+      .toEqual([{ status: 'pending', attempts: 0 }]);
+    const { model } = scriptedModel('recovered');
+    const next = await restart({ rt, db, model, events: [] });
+    expect(completedTurns(rt)).toBe(1);
+    expect(stillOwed(rt)).toEqual([]);
+    await next.end();
+    db.close();
+  });
+
   test('a death INSIDE the title body leaves a named workspace and pays for no second call', async () => {
     const dbPath = scratchPath('terminal-death-inside-title', 'agent.db');
     expect(await killAt(dbPath, 'inside-title')).toBe('KILLED inside-title');
@@ -372,6 +389,8 @@ describe('a killed CLI process is recovered by the next start', () => {
     // Cut between the body's two durable acts, an instant no before/after fault hook can produce.
     expect(displayName(rt)).toBe('refactor the parser');
     expect(stillOwed(rt).map((row) => row.effect_name)).toContain('auto_title');
+    expect(rt.storage.sql`SELECT attempts FROM terminal_effects WHERE effect_name = 'auto_title'`)
+      .toEqual([{ attempts: 1 }]);
 
     const { model, state } = scriptedModel('recovered');
     const events: SessionEvent[] = [];

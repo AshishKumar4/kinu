@@ -5,19 +5,75 @@
 import { sqlOver } from '@kinu.run/test-utils';
 import { describe, expect, setSystemTime, test } from 'bun:test';
 import {
-  RunEventRecorder, TURN_AUTHOR_METADATA_KEY, WORKSPACE_RUN_ID, DeferredApprovalStore, formatApproval, type WorkspaceOverview,
+  RunEventRecorder, TURN_AUTHOR_METADATA_KEY, WORKSPACE_RUN_ID, DeferredApprovalStore, DeviceConsentStore, createFactsStore, formatApproval, type WorkspaceOverview,
 } from '@kinu.run/core';
 import type { Database } from 'bun:sqlite';
 import { TERMINAL_RETRY_JOB } from '../src/wake-jobs';
+import { bindAgentSql } from '../src/runtime';
 import {
-  armedWakes, chatSessionTurns, fireSoonestWake, nextTurn, orchestratorHarness, hostedSubordinateHarness, seedMission, until, workspaceMainActor,
+  armedWakes, chatSessionTurns, fireSoonestWake, nextTurn, orchestratorHarness, hostedSubordinateHarness, seedMission, until, workspaceMainActor, workspaceFiles,
   type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
 
+/** The run header and idle owed-work probes remain live; only the tile's slow sections are held. */
+function slowReads(queries: readonly string[]): string[] {
+  return queries.filter((query) => /\b(?:FROM|JOIN)\s+(?:actor_config|agent_facts|crafted_tools|gepa_runs|prompt_section_versions|refinement_requests|replay_evals|scaffold_evaluations|scaffold_versions|turn_outcomes|deferred_approvals|proposed_tasks|plan_reviews|device_consent_requests|slate_pictures|slate_shares|slate_share_users|slate_live_shares|slate_live_share_users)\b/i.test(query)
+    || query.includes("'scaffold_promotion', 'scaffold_rollback'"));
+}
+
+async function finishPush(): Promise<void> {
+  for (let lap = 0; lap < 5; lap++) await nextTurn();
+}
+
 describe('the folded tile', () => {
+  test('purging a child removes its pending plan from a held tile', async () => {
+    const workspace = orchestratorHarness();
+    const { agent } = workspace;
+
+    const { actor } = await hostedSubordinateHarness(workspace, {
+      name: 'planner', displayName: 'Planner', nameOrigin: 'user', mission: 'prepare a plan',
+    });
+
+    const submitted = actor.stores.planReviews.submit('default', [{ start: 1, content: '# Repair the ledger' }]);
+    expect(submitted.ok).toBe(true);
+    expect((await agent.foldOverview()).decisionsWaiting).toBe(1);
+    await agent.actorDirectory({ action: 'retire', name: 'planner', reference: actor.reference });
+    expect((await agent.foldOverview()).decisionsWaiting).toBe(0);
+  });
+
+  test('a consent from an earlier activation expires even without a local timer', async () => {
+    const { agent } = orchestratorHarness();
+    const now = Date.now();
+    new DeviceConsentStore(bindAgentSql(agent)).insert({
+      consentId: 'cold-consent', deviceId: 'device', deviceLabel: 'Laptop', method: 'shell', command: 'git push',
+      createdAt: now, expiresAt: now + 1_000,
+    });
+    expect((await agent.foldOverview()).decisionsWaiting).toBe(1);
+
+    try {
+      setSystemTime(new Date(now + 1_001));
+      expect((await agent.foldOverview()).decisionsWaiting).toBe(0);
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test('slate titles and bindings follow authored files while the slow tile is held', async () => {
+    const { agent } = orchestratorHarness();
+    const files = workspaceFiles(agent);
+    await files.mkdir('/slates/board', { recursive: true });
+    await files.writeFile('/slates/board/package.json', JSON.stringify({ name: 'board', main: 'server.ts', slate: { title: 'First' } }));
+    expect((await agent.foldOverview()).slates).toEqual([{ id: 'board', title: 'First', picture: null, bindings: 0, visibility: null }]);
+    await files.writeFile('/slates/board/package.json', JSON.stringify({
+      name: 'board', main: 'server.ts', slate: { title: 'Renamed', bindings: { NOTES: { kind: 'memory' } } },
+    }));
+    expect((await agent.foldOverview()).slates).toEqual([{ id: 'board', title: 'Renamed', picture: null, bindings: 1, visibility: null }]);
+  });
+
+
   test('a quiet workspace reads as no decisions, idle, no run', async () => {
     const { agent } = orchestratorHarness();
 
@@ -159,6 +215,61 @@ describe('the pushed tile', () => {
 
     return { plane, overviews };
   }
+
+  test('an unrelated slow-store write mid-turn reaches the next push without re-reading an unchanged fold', async () => {
+    const { plane, overviews } = recordingOwner();
+    const { agent, db } = orchestratorHarness(plane);
+    await agent.declareTurnInFlight(true);
+    await until(() => overviews.at(-1)?.activity === 'working', 'the admitted turn is pushed');
+    await finishPush();
+    const facts = createFactsStore(bindAgentSql(agent), workspaceMainActor(db));
+    facts.upsert('preferred_language', 'French');
+    await agent.requestOverviewPush();
+    await until(() => overviews.at(-1)?.hasUpdates === true, 'the unrelated fact reaches the working tile');
+    expect(overviews.at(-1)?.activity).toBe('working');
+    await finishPush();
+    const queries = agent.harnessRecordQueries();
+    await agent.requestOverviewPush();
+    await finishPush();
+    expect(slowReads(queries)).toEqual([]);
+    await agent.declareTurnInFlight(false);
+  });
+
+  test('an unchanged push reads no slow overview source while activity and the run stay live', async () => {
+    const { plane, overviews } = recordingOwner();
+    const { agent } = orchestratorHarness(plane);
+    await agent.declareTurnInFlight(true);
+    await until(() => overviews.at(-1)?.activity === 'working', 'the admitted turn is pushed');
+    await finishPush();
+    const queries = agent.harnessRecordQueries();
+    await agent.requestOverviewPush();
+    await finishPush();
+    expect(slowReads(queries)).toEqual([]);
+    await agent.declareTurnInFlight(false);
+    await until(() => overviews.at(-1)?.activity === 'idle', 'the settled turn is pushed');
+    expect(overviews.at(-1)?.latestRun).toEqual({ status: 'completed', task: 'a live turn' });
+  });
+
+  test('a new caller of the approval store updates the tile without caller invalidation', async () => {
+    const { plane, overviews } = recordingOwner();
+    const { agent, db } = orchestratorHarness(plane);
+    await agent.declareTurnInFlight(true);
+    await until(() => overviews.at(-1)?.activity === 'working', 'the admitted turn is pushed');
+    await finishPush();
+    const approvals = new DeferredApprovalStore(bindAgentSql(agent), workspaceMainActor(db));
+    approvals.create({ id: 'new-writer', command: 'git push', executor: 'workspace', reason: 'owner approval', requestedAt: Date.now() }, []);
+    await agent.requestOverviewPush();
+    await until(() => overviews.at(-1)?.decisionsWaiting === 1, 'the store write reaches the tile');
+    approvals.decide('new-writer', 'denied', Date.now());
+    await agent.requestOverviewPush();
+    await until(() => overviews.at(-1)?.decisionsWaiting === 0, 'the store decision reaches the tile');
+    await finishPush();
+    const queries = agent.harnessRecordQueries();
+    await agent.requestOverviewPush();
+    await finishPush();
+    expect(slowReads(queries)).toEqual([]);
+    await agent.declareTurnInFlight(false);
+  });
 
   test('a change is pushed once, and a fold that changed nothing is not pushed again', async () => {
     const { plane, overviews } = recordingOwner();

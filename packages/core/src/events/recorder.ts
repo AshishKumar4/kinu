@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 /** Durable per-run event log; subscribers are notified synchronously after persisting. */
 
 import * as v from 'valibot';
@@ -374,6 +375,8 @@ export class RunEventRecorder {
     this.actor.assertCurrent();
     void this.sql`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
       VALUES (${this.actorId}, ${ev.runId}, ${ev.eventIndex}, ${ev.type}, ${JSON.stringify(ev)}, ${ev.timestamp})`;
+
+    if (ev.type === 'scaffold_promotion' || ev.type === 'scaffold_rollback') markStoreChanged(this.sql);
   }
 
   private noteOperatorRequest(start: Extract<RunEvent, { type: 'run_start' }>): void {

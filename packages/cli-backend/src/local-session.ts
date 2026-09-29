@@ -1957,7 +1957,7 @@ export class LocalAgentSession {
       // The CLI's lanes run elsewhere (evolution on its own queue); the row keeps the roster whole.
       improvement_lanes: terminalEffect({
         input: v.object({ status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema }),
-        run: () => ({ status: 'completed' }),
+        runSync: () => ({ status: 'completed' }),
       }),
 
       // The snapshot is the row's input, so a replay hires on the tool surface the turn had; the hire is

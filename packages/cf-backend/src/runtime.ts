@@ -92,8 +92,18 @@ interface AgentSqlSource {
   sql<T = unknown>(query: TemplateStringsArray, ...values: SqlValue[]): T[];
 }
 
+const boundSql = new WeakMap<AgentSqlSource, SqlExecutor>();
+
+/** The workspace's stores share one executor identity, including hosted actors' runtimes. */
 export function bindAgentSql(agent: AgentSqlSource): SqlExecutor {
-  return agent.sql.bind(agent);
+  let sql = boundSql.get(agent);
+
+  if (sql === undefined) {
+    sql = agent.sql.bind(agent);
+    boundSql.set(agent, sql);
+  }
+
+  return sql;
 }
 
 /** Which logical actor this runtime belongs to; one Durable Object hosts all of them. */

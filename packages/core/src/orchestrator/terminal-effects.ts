@@ -103,19 +103,25 @@ export type TerminalEffectOutcome =
   | { readonly status: 'owed'; readonly detail: string; readonly held?: boolean };
 
 /** Built through {@link terminalEffect} so each entry keeps its real input type without casts. */
-export interface TerminalEffect {
-  /** First attempt and replay alike, which is why the boundary must be idempotent or keyed. */
-  readonly run: (input: JsonValue, scope: string) => Promise<TerminalEffectOutcome>;
-}
+export type TerminalEffect =
+  | { readonly synchronous: true; readonly run: (input: JsonValue, scope: string) => TerminalEffectOutcome }
+  | { readonly synchronous: false; readonly run: (input: JsonValue, scope: string) => Promise<TerminalEffectOutcome> };
 
 /** Partial: an undeclared entry must not exist as a silently succeeding shell; its rows are blocked by name. */
 export type TerminalEffectTable = Readonly<Partial<Record<TerminalEffectName, TerminalEffect>>>;
 
 export function terminalEffect<I>(spec: {
   readonly input: v.GenericSchema<unknown, I>;
-  readonly run: (input: I, scope: string) => Promise<TerminalEffectOutcome> | TerminalEffectOutcome;
-}): TerminalEffect {
-  return { run: async (raw, scope) => await spec.run(v.parse(spec.input, raw), scope) };
+} & (
+  | {
+    /** No await: inline SQL and disposition commit together. Fire-and-forget work is outside this transaction and retry. */
+    readonly runSync: (input: I, scope: string) => TerminalEffectOutcome;
+  }
+  | { readonly run: (input: I, scope: string) => Promise<TerminalEffectOutcome> | TerminalEffectOutcome }
+)): TerminalEffect {
+  return 'runSync' in spec
+    ? { synchronous: true, run: (raw, scope) => spec.runSync(v.parse(spec.input, raw), scope) }
+    : { synchronous: false, run: async (raw, scope) => await spec.run(v.parse(spec.input, raw), scope) };
 }
 
 /** `announcementOnDisk` is the backend's durable answer; a queued turn is only RAM until it says yes. */
@@ -134,7 +140,7 @@ function owedTurnTerminalEffect<I>(queue: () => OwedTurnQueue, spec: {
 }): TerminalEffect {
   return terminalEffect({
     input: spec.input,
-    run: (input, scope) => {
+    runSync: (input, scope) => {
       // An unkeyed response has no replay to dedupe against: its turn is its own.
       const identity = spec.key(keyedScope(scope) ?? crypto.randomUUID());
       const loop = queue();
@@ -249,7 +255,7 @@ export function turnRecordTerminalEffect(
       continuity: TurnContinuitySchema, workMode: WorkModeSchema, recordedAt: v.number(),
       autoEvolve: v.boolean(),
     }),
-    run: ({ messageId, status, turn, continuity, workMode, recordedAt, autoEvolve }) => {
+    runSync: ({ messageId, status, turn, continuity, workMode, recordedAt, autoEvolve }) => {
       if (workMode === 'plan') {
         return { status: 'completed', detail: 'a plan turn records no evolution state' };
       }
@@ -293,7 +299,7 @@ export function shadowTrialTerminalEffect(
     input: v.object({
       turn: JsonValueSchema, trialContext: JsonValueSchema, pendingVersion: v.number(),
     }),
-    run: ({ turn, trialContext, pendingVersion }, scope) => {
+    runSync: ({ turn, trialContext, pendingVersion }, scope) => {
       const trialScope = keyedScope(scope);
 
       const queued = engine.queueShadowTrial(
@@ -426,6 +432,8 @@ export class TerminalEffectLedger {
     readonly actor: ActorHandle;
     readonly effects: TerminalEffectTable;
     readonly now: () => number;
+    /** Synchronous inline bodies and their disposition share one commit on both backends. */
+    readonly transaction: <T>(body: () => T) => T;
     /** Read per call: a test arms the fault after the ledger exists. */
     readonly fault?: () => TerminalEffectFault | null;
     /** Called after every pass that leaves anything owed; a past instant means due now. */
@@ -627,11 +635,11 @@ export class TerminalEffectLedger {
 
     if (row.nextAttemptAt > this.deps.now()) return;
     const attempts = row.attempts + 1;
-    // Armed before the side effect: an eviction mid-effect never writes a later schedule.
-    void this.deps.sql`UPDATE terminal_effects
-      SET attempts = ${attempts}, next_attempt_at = ${this.deps.now() + terminalEffectBackoffMs(attempts)}
-      WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
-        AND effect_key = ${row.key} AND status != 'completed'`;
+    const nextAttemptAt = this.deps.now() + terminalEffectBackoffMs(attempts);
+    const inline = row.lane === 'inline' && row.target.kind === 'runnable' && row.target.effect.synchronous;
+
+    // Any awaited body keeps its durable attempt before starting.
+    if (!inline) this.recordAttempt(sequenceId, row, nextAttemptAt);
 
     if (row.target.kind === 'blocked') {
       this.record(sequenceId, row.key, 'blocked');
@@ -646,13 +654,27 @@ export class TerminalEffectLedger {
 
     const { name, effect } = row.target;
     const fault = this.deps.fault?.() ?? null;
-    fault?.('before', name, row.scope);
     let outcome: TerminalEffectOutcome;
 
     try {
+      if (effect.synchronous && row.lane === 'inline') {
+        this.deps.transaction(() => {
+          fault?.('before', name, row.scope);
+          const result = effect.run(parseJsonValue(row.input), row.scope);
+          fault?.('after', name, row.scope);
+          this.recordInline(sequenceId, row, result, nextAttemptAt);
+        });
+
+        return;
+      }
+
+      fault?.('before', name, row.scope);
       outcome = await effect.run(parseJsonValue(row.input), row.scope);
     } catch (err) {
       if (err instanceof TerminalEffectInterrupt) throw err;
+
+      // A real synchronous failure rolled back its body, not its right to back off.
+      if (inline) this.recordAttempt(sequenceId, row, nextAttemptAt);
       diagnostics.failure('turn.terminal_effect_failed', toKinuError({
         doing: `running the ${name} effect a settled turn owed`,
         cause: err,
@@ -698,6 +720,27 @@ export class TerminalEffectLedger {
 
     void this.deps.sql`UPDATE terminal_effects
       SET status = 'completed'
+      WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
+        AND effect_key = ${row.key} AND status != 'completed'`;
+  }
+
+  /** A real backend transaction also makes bun:sqlite safe against process death between the body and disposition. */
+  private recordInline(sequenceId: string, row: PendingRow, outcome: TerminalEffectOutcome, nextAttemptAt: number): void {
+    const held = outcome.status === 'owed' && outcome.held === true;
+    const status = outcome.status === 'completed' ? 'completed' : 'pending';
+    const attempts = held ? row.attempts : row.attempts + 1;
+    const next = held ? this.deps.now() + TERMINAL_EFFECT_RETRY_BASE_MS : nextAttemptAt;
+    this.deps.actor.assertCurrent();
+    void this.deps.sql`UPDATE terminal_effects
+      SET status = ${status}, attempts = ${attempts}, next_attempt_at = ${next}
+      WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
+        AND effect_key = ${row.key} AND status != 'completed'`;
+  }
+
+  private recordAttempt(sequenceId: string, row: PendingRow, nextAttemptAt: number): void {
+    this.deps.actor.assertCurrent();
+    void this.deps.sql`UPDATE terminal_effects
+      SET attempts = ${row.attempts + 1}, next_attempt_at = ${nextAttemptAt}
       WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
         AND effect_key = ${row.key} AND status != 'completed'`;
   }

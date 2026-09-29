@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 import type { AgentRuntime } from './types/agent-runtime';
 import type { RawSqlExec, SqlExecutor, Storage } from './types/primitives';
 import type { LLMProviderConfig } from './llm';
@@ -94,6 +95,7 @@ export async function createWorkspace(
   await workspace.vfs.writeFile('scaffold/agent.js.v0', scaffoldSource);
   void sql`INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale)
     VALUES (${actor.actorId}, 0, ${nowMs()}, ${'initial bootstrap'})`;
+  markStoreChanged(sql);
   await workspace.vfs.writeFile('scaffold/agent.js', scaffoldSource);
 
   await workspace.vfs.mkdir('memory', { recursive: true });

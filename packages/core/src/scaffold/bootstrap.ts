@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 /**
  * Scaffold cold-start bootstrap and activation refresh. Fresh workspaces write
  * `.v0` source, then its row, then the live view; every run converges the live
@@ -44,6 +45,7 @@ function insertV0Row(rt: AgentRuntime): void {
     INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale)
     VALUES (${rt.actor.actorId}, 0, ${nowMs()}, ${V0_RATIONALE})
   `;
+  markStoreChanged(rt.storage.sql);
 }
 
 export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
@@ -125,6 +127,7 @@ export function seedActorLoop(
       INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale, status, parent_version)
       VALUES (${child.actor.actorId}, ${version}, ${nowMs()},
         ${`inherited from actor ${parent.actor.actorId} v${inherited.version}`}, 'current', ${inherited.version})`;
+    markStoreChanged(child.storage.sql);
     yield* Effect.promise(() => child.identity.scaffold.write(inherited.source));
 
     return { version };

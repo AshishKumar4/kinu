@@ -1,3 +1,4 @@
+import { storeRevision, type WorkspaceOverviewInputs } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
@@ -2201,7 +2202,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       craft_usage: terminalEffect({
         input: v.object({ messageId: v.string(), toolNames: v.array(v.string()) }),
-        run: ({ messageId, toolNames }) => {
+        runSync: ({ messageId, toolNames }) => {
           void this.sql`INSERT INTO turn_craft_usage (actor_id, message_id, tool_names)
                    VALUES (${this.actorHandle().actorId}, ${messageId}, ${JSON.stringify(toolNames)})
                    ON CONFLICT(actor_id, message_id) DO UPDATE SET tool_names = excluded.tool_names`;
@@ -4720,37 +4721,73 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return { recovered: 'requeued' };
   }
 
-  /** Reads `hosted`, never `acquire`. */
-  async foldOverview(): Promise<WorkspaceOverview> {
-    const [pendingConsents, activePlan, listing] = await Promise.all([
-      this.listPendingConsents(),
+  private slowOverview: {
+    readonly sqlRevision: number;
+    readonly slateRevision: number;
+    readonly expiresAt: number;
+    readonly inputs: Omit<WorkspaceOverviewInputs, 'working' | 'unfinished' | 'latestRun'>;
+  } | null = null;
+
+  private async overviewInputs(): Promise<Omit<WorkspaceOverviewInputs, 'working' | 'unfinished' | 'latestRun'>> {
+    const sqlRevision = storeRevision(this.boundSql);
+    const slateRevision = storeRevision(this.ctx.storage.sql);
+    const held = this.slowOverview;
+
+    if (held !== null && held.sqlRevision === sqlRevision && held.slateRevision === slateRevision && Date.now() < held.expiresAt) {
+      return held.inputs;
+    }
+
+    const pendingConsents = new DeviceConsentStore(this.boundSql).live(Date.now());
+
+    const [activePlan, listing] = await Promise.all([
       this.getActivePlanReview(),
       this.slates.list(ROOT_SLATE_CALLER),
     ]);
+
+    const pictures = this.pictures.digests();
+    const shares = await this.slates.shareCards(new Map(listing.slates.map((slate) => [slate.id, slate.title])));
+
+    const inputs = {
+      pendingActions: this.pendingActions(),
+      pendingConsents,
+      activePlan,
+      scaffoldAutoApply: this.config.getAutoPromoteScaffold(),
+      slates: listing.slates.map((slate) => ({
+        id: slate.id, title: slate.title, picture: pictures.get(slate.id) ?? null, bindings: slate.bindings.length,
+      })),
+      shares,
+    };
+
+    // A write during the awaits must be observed by this push, not only the next one.
+    if (storeRevision(this.boundSql) !== sqlRevision || storeRevision(this.ctx.storage.sql) !== slateRevision) {
+      return this.overviewInputs();
+    }
+
+    this.slowOverview = {
+      sqlRevision, slateRevision, inputs,
+      expiresAt: pendingConsents.reduce((at, consent) => Math.min(at, consent.expiresAt), Infinity),
+    };
+
+    return inputs;
+  }
+
+  /** Only slow source sections are held; every push folds the turn's current activity and run. */
+  async foldOverview(): Promise<WorkspaceOverview> {
+    const inputs = await this.overviewInputs();
 
     const hostedBusy = this.actorHost().list()
       .some((reference) => this.actorHost().hosted(reference)?.session.inFlight === true);
 
     const header = this.eventRecorder.latestRunHeader();
-    const pictures = this.pictures.digests();
-    const shares = await this.slates.shareCards(new Map(listing.slates.map((slate) => [slate.id, slate.title])));
-
     // A settled turn's leftovers still closing are its work, not a durable leftover.
     const working = this._inFlight || hostedBusy || this.terminalClosing;
 
     return buildWorkspaceOverview({
+      ...inputs,
       working,
       // Read only when idle: a working tile shows Working whatever is owed.
       unfinished: !working && (this.owedUntimedWork() || this.workOwedAt() !== null),
-      pendingActions: this.pendingActions(),
-      pendingConsents,
-      activePlan,
-      scaffoldAutoApply: this.config.getAutoPromoteScaffold(),
       latestRun: header === null ? null : { status: header.status, task: header.userMessage },
-      slates: listing.slates.map((slate) => ({
-        id: slate.id, title: slate.title, picture: pictures.get(slate.id) ?? null, bindings: slate.bindings.length,
-      })),
-      shares,
     });
   }
 

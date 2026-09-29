@@ -37,7 +37,7 @@ import type { AnsweredEvolutionHelper } from '../identity/evolution-helpers';
 import { advisorWorkspaceGuidance } from '../prompting/agents-md';
 import { resolveModelRoute } from '../profiles/model-route';
 import { contextWindowForModel } from '../context-window';
-import { SessionHistory } from '../session/history';
+import { SessionHistory, type MaterializedHistory } from '../session/history';
 import { SessionStream } from './session-stream';
 import { steerUserMessage } from './inbox';
 import { recordTurnResumed, sameBuildOf } from './turn-recovery-events';
@@ -130,6 +130,7 @@ interface ActiveTurn {
   readonly lease: ActorTurnLease;
   readonly abort: AbortController;
   phase: 'preparing' | 'running' | 'settling';
+  context: MaterializedHistory | null;
   profile: ResolvedTurnProfile | null;
   profileInputs: ProfileAuthorityInputs | null;
   /** Never cleared: a settled turn's claim still attributes its late work. */
@@ -416,9 +417,9 @@ export class ActorSession {
 
     const assertOwner = this.preparingTurnFence(lease, 'delegated input requires a preparing turn');
 
-    const current = await this.canonical.materialize();
+    const selected = this.canonical.context.selected() ?? this.canonical.context.initialize();
 
-    if (current.selection.revision === 0 && current.entries.length === 0 && this.canonical.proposals.pending(current.selection.contextId).length === 0) {
+    if (selected.revision === 0 && this.canonical.context.conversationOf(this.canonical.context.entries(selected)).length === 0 && this.canonical.proposals.pending(selected.contextId).length === 0) {
       const birth = await input.birthContext();
 
       if (birth.length > 0) await this.canonical.replaceHistory(birth, { author: this.actorId, via: 'runtime', turnId: null, stage: false, assertOwner });
@@ -430,6 +431,7 @@ export class ActorSession {
     }
 
     const opened = await this.canonical.materialize();
+    this.requireTurn(lease).context = opened;
     this.messages.splice(0, this.messages.length, ...opened.messages);
   }
 
@@ -443,10 +445,10 @@ export class ActorSession {
 
     const assertOwner = this.preparingTurnFence(lease, 'input must belong to a preparing turn');
 
-    const restored = await this.canonical.materialize();
+    const selected = this.canonical.context.selected() ?? this.canonical.context.initialize();
     const drainTurn = v.safeParse(v.string(), input.item.metadata?.drainTurnId);
 
-    if (restored.entries.length === 0 && restored.selection.revision === 0 && drainTurn.success && this.canonical.proposals.pending(restored.selection.contextId).length === 0) {
+    if (selected.revision === 0 && drainTurn.success && this.canonical.context.conversationOf(this.canonical.context.entries(selected)).length === 0 && this.canonical.proposals.pending(selected.contextId).length === 0) {
       for (const [index, message] of (await input.birthContext(drainTurn.output)).entries()) await this.canonical.append({ id: `${lease.turnId}:birth:${index}`, message, origin: 'input', turnId: lease.turnId, assertOwner });
     }
 
@@ -454,6 +456,7 @@ export class ActorSession {
     this.canonical.activateInput(acceptedInput, lease.turnId, assertOwner);
 
     const opened = await this.canonical.materialize();
+    this.requireTurn(lease).context = opened;
     this.messages.splice(0, this.messages.length, ...opened.messages);
   }
 
@@ -474,7 +477,7 @@ export class ActorSession {
     });
 
     this.active = {
-      lease, abort, phase: 'preparing', profile: null, profileInputs: null,
+      lease, abort, phase: 'preparing', context: null, profile: null, profileInputs: null,
       claim: null, claimSettled: false, trace: null, startedAt: 0, ended: null,
     };
     this.mode = mode;
@@ -591,7 +594,7 @@ export class ActorSession {
     try {
       active.phase = 'running';
       active.abort.signal.throwIfAborted();
-      const prepared = await this.prepareProgram(input.loopVersion, active.abort.signal);
+      const prepared = await this.prepareProgram(input.loopVersion, active);
       program = prepared.program;
       const claim = await this.admitClaim(lease, program, prepared.selection, input);
       active.claim = claim;
@@ -630,13 +633,14 @@ export class ActorSession {
     return this.turnResult(lease, active, tally, program);
   }
 
-  private async prepareProgram(version: number, signal: AbortSignal): Promise<{
+  private async prepareProgram(version: number, active: ActiveTurn): Promise<{
     readonly program: ActorTurnProgram;
     readonly selection: ContextSelection;
     readonly messages: readonly ModelMessage[];
   }> {
-    const program = await prepareActorProgram({ signal, runtime: this.runtime, mode: this.mode, version });
-    const admitted = await this.canonical.materialize();
+    const program = await prepareActorProgram({ signal: active.abort.signal, runtime: this.runtime, mode: this.mode, version });
+    const admitted = active.context ?? await this.canonical.materialize();
+    active.context = admitted;
     this.messages.splice(0, this.messages.length, ...admitted.messages);
 
     return { program, selection: admitted.selection, messages: admitted.messages };
@@ -726,7 +730,8 @@ export class ActorSession {
         dynamicContext: { ledger: this.dynamic, snapshot: () => input.dynamic(profile, tools), instructions: input.instructions },
         stepContext: {
           base: async () => {
-            const base = await this.canonical.stepBase(assertClaim, claim.turnId, this.options.events ?? null);
+            const base = await this.canonical.stepBase(assertClaim, claim.turnId, this.options.events ?? null, active.context);
+            active.context = base;
             this.messages.splice(0, this.messages.length, ...base.messages);
             stepEntries = base.entries;
 
@@ -808,7 +813,8 @@ export class ActorSession {
   private async settleOutput(active: ActiveTurn, stream: SessionStream | null): Promise<void> {
     if (active.claim === null) return;
     await stream?.settle();
-    const settled = await this.canonical.materialize();
+    const settled = await this.canonical.materialize(active.context);
+    active.context = settled;
     this.messages.splice(0, this.messages.length, ...settled.messages);
   }
 

@@ -138,10 +138,14 @@ const turnStatements = new Map<number, OperationCost['tables']>();
  * after every push or cancel. Rows written drop: replay 159 -> 59, wakes 6 -> 5. 534 once the tab's replay is the
  * relay's own chunks for the turn in progress, held in memory: the SDK chunk log (165) goes, `stream_parts` is the
  * answer's one durable copy; and once the fiber sweep, which asked `sqlite_master` for its table and ran on every
- * tick, runs once an activation over the table the SDK's constructor made. Nimbus core 0.13.1 adds seven vfs_inodes
- * path lookups because its tree lives in SQL instead of an in-memory inode map: 541.
+ * tick, runs once an activation over the table the SDK's constructor made. 395 once the tile's slow sections (changelog,
+ * approvals, shares, pictures, consents, plan review, scaffold settings) were held until their stores wrote (-80),
+ * the opened history was reused for the request (-24), a request resolved its model spec once (-17), a step sealed
+ * from the parts it held (-11), a synchronous terminal effect wrote its attempt with its outcome (-2), and no
+ * terminal-retry wake was armed into a sequence this process runs (-5). Nimbus core 0.13.1 adds seven vfs_inodes path
+ * lookups because its tree lives in SQL instead of an in-memory inode map: 402.
  */
-const TURN_STATEMENTS = 541;
+const TURN_STATEMENTS = 402;
 
 /** Every count the subject's declarations govern, one value per size. */
 function countersOf(subject: Subject, measured: readonly OperationCost[]): GrowthCounter[] {

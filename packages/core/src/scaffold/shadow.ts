@@ -11,6 +11,7 @@
  * idempotency or promotion gate.
  */
 
+import { markStoreChanged } from '@kinu.run/agent-utils';
 import { modelMessageSchema, type ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -444,6 +445,7 @@ export function recordShadowEvaluation(
             ${row.current_score}, ${row.pending_score},
             ${row.winner}, ${row.judge_rationale}, ${row.evaluated_at})
     ON CONFLICT(actor_id, id) DO NOTHING`;
+  markStoreChanged(sql);
 
   return row;
 }
@@ -539,6 +541,7 @@ export function applyPromotionDecision(
           WHERE actor_id = ${rt.actor.actorId}
             AND (version = ${pending.version}
                  OR (status = 'current' AND version != ${pending.version}))`;
+      markStoreChanged(sql);
       yield* Effect.promise(() => rt.identity.scaffold.write(pendingCode));
       yield* recordScaffoldDecision(events, { type: 'scaffold_promotion', fromVersion: pending.version - 1, toVersion: pending.version });
 
@@ -547,6 +550,7 @@ export function applyPromotionDecision(
 
     void sql`UPDATE scaffold_versions SET status = 'rolled_back'
         WHERE actor_id = ${rt.actor.actorId} AND version = ${pending.version}`;
+    markStoreChanged(sql);
     const currentVersion = getCurrentScaffoldVersion(sql, rt.actor) ?? (pending.version - 1);
     const currentCode = yield* Effect.promise(() => readScaffoldVersion(rt, currentVersion));
 

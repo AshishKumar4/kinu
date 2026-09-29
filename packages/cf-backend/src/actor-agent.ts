@@ -147,7 +147,7 @@ import {
   readSoul, bootstrapScaffold,
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
   accountDeps, parseModelSpec, catalogModelInfo, countRequestInputTokens,
-  ModelCatalogSession, resolveEffectiveModelSpec, type ModelInfo,
+  ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead, type ModelInfo,
   // Shared turn-context assembly: the same ordering runChat runs on the CLI
   measureCompactionTrigger,
   // AGENTS.md discovery, and the trust authority deciding whether discovered bytes earn system placement.
@@ -205,9 +205,7 @@ import { codemodeEgress } from "./codemode-egress";
 import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
-import {
-  promptCachePlan, markLastToolForAnthropicCache,
-} from "@kinu.run/core";
+import { markLastToolForAnthropicCache } from "@kinu.run/core";
 import type { CodemodeProvider, DeferredApprovalChannel, SlateBindingRoute, SlateCallResult, SlateOperation, SlateReadModel } from "@kinu.run/core";
 import { workspaceOwner } from "./workspace-owner-rpc";
 import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
@@ -252,6 +250,8 @@ interface TurnReads {
   readonly profileInputs: ProfileAuthorityInputs;
   readonly mcpTools: ToolSet;
   readonly identity: PromptIdentity;
+  /** The request's model, resolved once: every catalog read of the request sizes against it. */
+  readonly catalog: ModelCatalogRead;
 }
 
 interface TurnAssemblyInput {
@@ -296,7 +296,6 @@ interface ComposedTurn {
   readonly window: ResolvedModelWindow;
   readonly memoryTail: string | undefined;
   readonly countInputTokens: (request: CountableRequest) => Promise<InputTokenCount>;
-  readonly cacheOptions: ReturnType<typeof promptCachePlan>['providerOptions'];
   readonly reasoningOptions: ReturnType<typeof reasoningEffortOptions>;
   readonly promptModel: ReturnType<ActorAgent['promptModelContext']>;
 }
@@ -1301,7 +1300,7 @@ export abstract class ActorAgent extends Agent<Env> {
         input: v.object({ status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema }),
         // Lanes read durable queues on re-entry (per-turn snapshots do not survive), and the verdict
         // uses the recorded mode so a fresh activation's default cannot open an unearned lane.
-        run: async ({ status, workMode }) => {
+        runSync: ({ status, workMode }) => {
           this.warmUserMcpInBackground();
 
           if (!this.orch.improvementLanesOpen(status, workMode)) {
@@ -3804,7 +3803,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * Rebuilds AI-SDK tools from MCP descriptors; cache invalidates on descriptor content hash, and a
    * failed read keeps the last good build. `execute` dispatches as the parent workspace's token.
    */
-  private async buildUserMcpTools(nativeTools: ToolSet): Promise<ToolSet> {
+  private async buildUserMcpTools(nativeTools: ToolSet, catalog: ModelCatalogRead): Promise<ToolSet> {
     const userId = this.getOwnerUserId();
 
     if (!userId) return {};
@@ -3820,7 +3819,7 @@ export abstract class ActorAgent extends Agent<Env> {
       const tools = await this.mcpToolsCache.refresh(
         () => this.requireOwnerUserDO().userMcp_toolDescriptors(caller),
         {
-          ...this.modelCatalog.window(),
+          ...catalog.window(),
           nativeToolTokens: toolSurfaceTokens(nativeTools),
         },
       );
@@ -3947,7 +3946,7 @@ export abstract class ActorAgent extends Agent<Env> {
     openAnalyticsWindow(this.env);
 
     // The loop already placed the turn's input on the working history before handing it here.
-    const { messages: history } = await this.stores.history.materialize();
+    const history = this.actorSession.history;
     // Frozen so a background re-drive of a context:'inherit' hire carries the conversation
     // the caller actually had.
     this._turnOriginContext = Object.freeze(structuredClone([...history]));
@@ -4063,19 +4062,21 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (this._cachedSoulText === null) await this.refreshSoulText();
 
+    const catalog = this.modelCatalog.at(this.effectiveModelSpec());
+
     // Independent UserDO hops, run in parallel; each keeps its own failure arm.
     const [profileInputs, mcpTools, , identity] = await Promise.all([
       this.profileInputs(),
       // The remote catalog is admitted against the context budget left after the builtins.
       // A failed read answers no tools and the turn runs on builtins.
-      this.buildUserMcpTools(tools),
+      this.buildUserMcpTools(tools, catalog),
       // Authoritative hub check: the TTL-cached snapshot can lag a mid-session `kinu connect`.
       // On failure it records and answers the last snapshot.
       this.rt.deviceTransport.refreshStatus(),
       this.promptIdentity(),
     ]);
 
-    return { profileInputs, mcpTools, identity };
+    return { profileInputs, mcpTools, identity, catalog };
   }
 
   /** Runs after the turn is open (`orch.beginTurn`, the run row) and before the first model call. */
@@ -4098,7 +4099,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Effect-free: a measure between turns uses it. */
   private async composeTurn(input: TurnCompositionInput): Promise<ComposedTurn> {
-    const { profileInputs, mcpTools, identity } = input.reads;
+    const { profileInputs, mcpTools, identity, catalog } = input.reads;
     const activeRoleId = this.activeRoleLabel();
     const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
     // Deps-gated builtins (report) are advertised only when this actor class wires them; the
@@ -4114,7 +4115,7 @@ export abstract class ActorAgent extends Agent<Env> {
       userText: extractLastUserText(input.history),
       roleSkills,
       trust,
-      limits: this.modelCatalog.window(),
+      limits: catalog.window(),
     });
 
     if (activeSetForPrompt) activeTools = filterToolNamesBySkills(activeTools, activeSetForPrompt);
@@ -4140,15 +4141,17 @@ export abstract class ActorAgent extends Agent<Env> {
       ...codemodeCapabilitiesFor(turnCodemodeProviders),
     ];
 
+    const ownChoices = ownProfileChoices(this.config, profileInputs);
+
     const profile = resolveAgentTurnProfile({
       ...profileInputs,
-      activeRoleId: this.activeRoleLabel(),
+      activeRoleId,
       workMode: requestedWorkMode,
       availableTools,
       activeSkills: activeSetForPrompt?.active.map((skill) => skill.name) ?? [],
-      ...ownProfileChoices(this.config, profileInputs),
+      ...ownChoices,
       // Request tier, then the tier pinned at hire, then the role's own default.
-      explicitTier: readTurnTier(input.body) ?? this.config.getAssignedTier() ?? undefined,
+      explicitTier: readTurnTier(input.body) ?? ownChoices.explicitTier,
     });
 
     const operation = captureOperationProfile({
@@ -4183,7 +4186,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // base prompt.
     const agentsMd = await collectWorkspaceAgentsMd(
       this.rt.storage.vfs,
-      this.modelCatalog.window(),
+      catalog.window(),
       trust,
       this.rt.executionRouter?.getProvider('sandbox'),
     );
@@ -4223,7 +4226,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const rawMessages = input.cliCwd ? withCliCwdContext(input.history, input.cliCwd) : input.history;
     // Must be awaited before submission: synchronous catalog reads return static stand-in values
     // while the lookup is in flight (#20).
-    const [window] = await Promise.all([this.modelCatalog.resolved(), this.modelCatalog.warm(profile.tier.fallbacks.map((fallback) => fallback.model))]);
+    const [window] = await Promise.all([catalog.resolved(), this.modelCatalog.warm(profile.tier.fallbacks.map((fallback) => fallback.model))]);
     // The reflection loop assumes the model sees its latest MEMORY.md lessons in-turn; read once
     // here since it is the one dynamic-context input needing an await.
     const memoryTail = await readMemoryTail(this.rt.memory);
@@ -4249,18 +4252,6 @@ export abstract class ActorAgent extends Agent<Env> {
     const taskPlan: TaskPlanContext = Object.freeze({ sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: this.approvedTaskPlan(input.item) });
     const tools = withOperationProfile(withTaskPlan(toolsForInvocation(workMode, { ...modeTools, ...effectiveTools }), taskPlan), operation);
 
-    // Shares `promptCachePlan` with the other loop. Request cache routing rides
-    // TurnConfig.providerOptions; system/tail breakpoints ride beforeStep (TurnConfig.system is string).
-    const cachePlan = promptCachePlan({
-      providerId: model.provider,
-      modelId: model.id,
-      system: systemOverride,
-      sessionKey: this.ownedModelServices.affinityKey,
-      retention: this.config.getCacheRetention(),
-    });
-
-    const cacheOptions = cachePlan.providerOptions;
-
     const reasoningOptions = reasoningEffortOptions(
       profile.tier.reasoningEffort,
       tierModel.provider,
@@ -4269,7 +4260,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return {
       profile, profileInputs, system: systemOverride, model: languageModel, tools, activeTools: effectiveActiveTools, activeToolSurface,
       rawMessages, instructions, window, memoryTail, countInputTokens,
-      cacheOptions, reasoningOptions, promptModel: model, activeSkills: activeSetForPrompt ?? null, operation,
+      reasoningOptions, promptModel: model, activeSkills: activeSetForPrompt ?? null, operation,
     };
   }
 

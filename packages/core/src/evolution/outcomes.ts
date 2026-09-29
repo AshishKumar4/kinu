@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 /**
  * The one pipeline that grades a completed turn from what the user did next, and
  * the durable `turn_outcomes` ledger every downstream consumer reads. No second
@@ -424,6 +425,7 @@ export function recordTurnOutcome(
          ${input.followup === null || input.followup === undefined ? null : evidenceWindow(input.followup, EVIDENCE_BUDGETS.storedFollowup)},
          ${input.scaffoldVersion ?? null}, ${input.now ?? nowMs()},
          ${input.evidence === null || input.evidence === undefined ? null : evidenceWindow(input.evidence, EVIDENCE_BUDGETS.storedEvidence)})`;
+  markStoreChanged(sql);
 
   return id;
 }

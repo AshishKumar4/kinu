@@ -22,8 +22,10 @@ interface StreamPart {
   readonly number: number;
   readonly kind: string;
   opened: boolean;
-  /** Written at the part's next non-delta update, at the cadence's flush (text) or a full window (reasoning), or
-   *  dropped by the step's seal. */
+  /** Native descriptor and all text witnessed by this stream, independent of its durable windows. */
+  descriptor: JsonObject;
+  text: string;
+  /** Written at the part's next non-delta update, the cadence's flush (text), a full window (reasoning), or seal. */
   buffered: string;
   bufferedDeltas: number;
   bufferedBytes: number;
@@ -358,7 +360,7 @@ export class SessionStream {
     const existing = container.parts.get(key);
 
     if (existing !== undefined) return existing;
-    const part: StreamPart = { number: container.parts.size, kind, streamOrder: this.sourceOrder++, opened: false, buffered: '', bufferedDeltas: 0, bufferedBytes: 0, startMetadata: null };
+    const part: StreamPart = { number: container.parts.size, kind, streamOrder: this.sourceOrder++, opened: false, descriptor: { type: kind }, text: '', buffered: '', bufferedDeltas: 0, bufferedBytes: 0, startMetadata: null };
     container.parts.set(key, part);
 
     return part;
@@ -378,14 +380,19 @@ export class SessionStream {
     let opening: StreamPartInput | null = null;
     let replaced: SessionPayload | null = null;
 
-    if (part.opened) replaced = metadata === undefined ? null : await this.history.messages.prepareMetadata(container.id, part.number, metadata);
-    else {
-      const native: JsonObject = { ...descriptor };
+    let native = part.descriptor;
+
+    if (part.opened) {
+      if (metadata !== undefined) {
+        native = { ...native, providerOptions: metadata };
+        replaced = await this.history.messages.prepareDescriptor(native);
+      }
+    } else {
+      native = { ...descriptor };
       const options = metadata ?? part.startMetadata;
 
       if (options !== null && options !== undefined) native.providerOptions = options;
-      const prepared = await this.history.messages.prepareDescriptor(native);
-      opening = { partNo: part.number, kind, streamOrder: part.streamOrder, descriptor: prepared.descriptor };
+      opening = { partNo: part.number, kind, streamOrder: part.streamOrder, descriptor: await this.history.messages.prepareDescriptor(native) };
 
       if (text !== null) opening.text = text;
     }
@@ -402,6 +409,7 @@ export class SessionStream {
     if (container.reference !== null) this.fenced(write);
     else this.openContainer(container, write);
 
+    part.descriptor = native;
     part.opened = true;
 
     if (kind === 'tool-call' && callId.success) this.calls.set(callId.output, { messageId: container.id, part: part.number });
@@ -409,6 +417,7 @@ export class SessionStream {
 
   /** Plain deltas on an open text part join the window; anything else flushes it first. A trailing high surrogate is held back. */
   private window(part: StreamPart, delta: string | null, joins: boolean, end: boolean): string | null {
+    if (delta !== null) part.text += delta;
     let pending = delta;
 
     if (joins && pending !== null) {
@@ -458,7 +467,7 @@ export class SessionStream {
   }
 
   /** One revision per sealed model-facing message, in the same transaction under the epoch fence. */
-  private sealContainer(container: StreamContainer, content: PreparedContent, envelope?: JsonObject): void {
+  private sealContainer(container: StreamContainer, content: PreparedContent, envelope: JsonObject = {}): void {
     if (!container.working) {
       this.fenced(() => this.history.messages.seal(container.id, content, envelope));
       container.sealed = true;
@@ -494,20 +503,20 @@ export class SessionStream {
 
       // Settled before its step finished: what streamed is the record, with no source to bind.
       if (container.sealed) continue;
-      const parts = await this.reconcile(container, finalParts);
+      const parts = this.reconcile(container, finalParts);
       const sealed = await this.history.messages.prepareContent(parts);
 
       if (container.reference === null) this.openContainer(container);
       this.sealContainer(container, sealed, envelope);
-      await this.history.messages.bindSource(message, { messageId: container.id });
+      this.history.messages.bindSource(message, { messageId: container.id }, { ...envelope, role: message.role, content: parts.map(part => part.value) });
     }
 
     this.completedMessageCount = cumulative.length;
   }
 
   /** Paired by {@link partIdentity}: the final message decides order and content; a streamed part it omits is kept in place. Disagreement is {@link STREAM_DIVERGED}, never a throw. */
-  private async reconcile(container: StreamContainer, finalParts: readonly JsonObject[]): Promise<StoredPart[]> {
-    const streamed = container.reference === null ? [] : await this.openParts(container) ?? [];
+  private reconcile(container: StreamContainer, finalParts: readonly JsonObject[]): StoredPart[] {
+    const streamed = this.openParts(container);
     const witnessed = new Map<string, StoredPart>();
     const streamOrdinals = new Map<string, number>();
 
@@ -573,31 +582,33 @@ export class SessionStream {
     });
   }
 
-  /** In-memory windows are written first. Null once sealed. */
-  private async openParts(container: StreamContainer): Promise<readonly StoredPart[] | null> {
+  /** Flushes durable windows before building the seal input from the parts this stream opened. */
+  private openParts(container: StreamContainer): StoredPart[] {
+    const parts: StoredPart[] = [];
+
     for (const part of container.parts.values()) {
-      if (part.buffered.length === 0) continue;
-      const window = part.buffered;
-      part.buffered = '';
-      part.bufferedDeltas = 0;
-      part.bufferedBytes = 0;
-      this.history.atomic(() => this.history.messages.streamAppend(container.id, part.number, window, this.claim));
+      if (!part.opened) continue;
+
+      if (part.buffered.length > 0) {
+        const window = part.buffered;
+        part.buffered = '';
+        part.bufferedDeltas = 0;
+        part.bufferedBytes = 0;
+        this.history.atomic(() => this.history.messages.streamAppend(container.id, part.number, window, this.claim));
+      }
+
+      const value = { ...part.descriptor };
+
+      if (part.kind === 'text' || part.kind === 'reasoning' || part.text !== '') value.text = part.text;
+      parts.push({ partNo: part.number, kind: part.kind, streamOrder: part.streamOrder, replyTo: null, value });
     }
 
-    return this.history.messages.openParts(container.id);
+    return parts;
   }
 
   private async sealOpen(container: StreamContainer): Promise<void> {
     if (container.reference === null || container.sealed) return;
-    const parts = await this.openParts(container);
-
-    if (parts === null) {
-      container.sealed = true;
-
-      return;
-    }
-
-    this.sealContainer(container, await this.history.messages.prepareContent(parts));
+    this.sealContainer(container, await this.history.messages.prepareContent(this.openParts(container)));
   }
 
   settle(): Promise<void> {
