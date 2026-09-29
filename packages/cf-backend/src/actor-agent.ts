@@ -4055,7 +4055,10 @@ export abstract class ActorAgent extends Agent<Env> {
       }), { workspace: this.name });
     }
 
-    this.chatLoop.reviseContext({ counted: true });
+    const unmeasured = await this.chatLoop.measureCleared();
+
+    // The clear frame has no answer; the failure is recorded where the operator's diagnostics read it.
+    if (unmeasured !== null) diagnostics.failure('context.clear_measure_failed', unmeasured, { workspace: this.name });
   }
 
   /** Awaited ahead of `orch.beginTurn`: the turn is not in flight until these reads are back,

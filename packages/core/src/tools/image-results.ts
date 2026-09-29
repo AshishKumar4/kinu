@@ -1,7 +1,7 @@
 /**
- * Images a tool hands the model. A tool output `{ output, images }` reaches the model as its text and one image
- * part per image (AI SDK v6 `image-data`), which Anthropic Messages and OpenAI Responses carry inside a tool
- * result. Chat Completions has no image in a tool message; `providers/tool-result-images.ts` names the omission.
+ * Images a tool hands the model. A tool output `{ output, images }`, an eval's with its `failures` beside them,
+ * reaches the model as its text and one image part per image (AI SDK v6 `image-data`), which Anthropic Messages and
+ * OpenAI Responses carry inside a tool result; `providers/tool-result-images.ts` carries them on Chat Completions.
  */
 import type { ToolResultOutput } from '@ai-sdk/provider-utils';
 import * as v from 'valibot';

@@ -22,10 +22,12 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **A new hire in a fork cannot inherit another agent's private file access.** Fork imports remap workspace-local user and group IDs. Root-owned files stay root-owned; other files belong to the fork's main agent. Private source groups become root-only, not the group shared by every hire. File modes stay unchanged.
 - **Background work a provider refuses for good stops retrying.** A turn's after-work (memory compression, naming the chat, prompt tuning and the like) whose model call is answered with a permanent refusal, such as a 404 from an AI Gateway route that no longer exists, ends after one attempt, shown once in the Activity log with the status the provider gave, and no longer wakes the workspace every minute to try again. The same goes for a request the provider refuses as malformed. Rate limits, timeouts, server errors and refusals you can fix yourself (an expired key, an empty balance, a denied permission) are still retried.
 
 ### Changed
 
+- Mark reviewed succeeds once its snapshot is created. Failed removal of older snapshots is logged as `workspace.review_cleanup_failed` and returned in `cleanupFailures`; the next review retries every unreferenced snapshot. A snapshot-creation failure leaves the previous diff and Undo intact.
 - Filesystem failures use Nimbus's POSIX error class throughout Kinu's file planes and shell. Native filesystem and parent-RPC errors are converted at their boundaries; refusal categories stay unchanged. Error messages now use Nimbus's code and path formatting.
 - **A turn reuses the conversation it opened.** Turn preparation and program admission share the materialized history instead of reading it again. Request boundaries still check for landed steers, context edits and recovered output. On 2026-09-28, the workerd long-turn probe ran 510 SQL statements instead of 534, with 286 rows written in both runs; the unchanged conversation-parity fixture passed.
 - **Workspace roster tiles reuse unchanged slow sections.** The changelog, approvals, shares, pictures, consents, plan review and scaffold settings are read again only after their stores write; slate-file changes and consent expiry also refresh them. Every push still reads the current activity and latest run. The workerd production-turn probe measured 454 SQL statements instead of 534 on 2026-09-28, with rows written unchanged at 286.

@@ -35,3 +35,14 @@ test('native span exception recording preserves the original rejection', async (
     throw failure;
   })).rejects.toBe(failure);
 });
+
+test('native tracing preserves a pipelined RPC result by identity and keeps it callable', async () => {
+  const probe = env.EFFECT_ATOMICITY_PROBE.get(env.EFFECT_ATOMICITY_PROBE.idFromName('traced-pipeline'));
+  const pending = probe.pipelined();
+  const returned = createWorkersTracer().span('compat.pipeline', { isolateGen: 1, selfPath: 'root' }, () => pending);
+
+  expect(returned === pending).toBe(true);
+  expect(await returned.read()).toBe(7);
+  using resolved = await returned;
+  expect(await resolved.read()).toBe(7);
+});

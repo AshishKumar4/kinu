@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
+import { KinuError } from '@kinu.run/core/obs';
 import { scratchDir } from '@kinu.run/test-utils';
 
 import type { AgentClient, AgentClientStatus, AgentTranscriptMessage } from '../src/agent-client';
@@ -788,6 +789,44 @@ test('a reopened chat shows the recorded context number before any turn runs', a
   const screen = await mountChat(agent.client);
 
   await screen.waitFor('the recorded number', () => screen.frame().includes('ctx ~42k/200k'));
+});
+
+test('/clear shows the emptied request\'s number, or none with the reason when it could not be measured', async () => {
+  for (const ends of ['measured', 'unmeasured'] as const) {
+    const agent = fakeClient({
+      name: `clear-${ends}`,
+      status: async () => ({
+        name: `clear-${ends}`, purpose: 'p', model: 'openai/gpt-5.5', reasoningEffort: 'medium',
+        context: { tokens: 42_000, window: 200_000, source: 'provider', at: '2026-09-27T00:00:00.000Z' },
+      }),
+    });
+
+    const local = agent.client.localControls;
+
+    if (!local) throw new Error('the fixture is local');
+
+    local.clearConversation = async () => {
+      if (ends === 'unmeasured') return new KinuError('unavailable', 'the profile catalog is unreachable');
+
+      agent.emit({ type: 'broadcast', event: { type: 'context_fill', contextTokens: 3_000, contextWindow: 200_000 } });
+
+      return null;
+    };
+
+    const screen = await mountChat(agent.client);
+    await screen.waitFor('the cleared conversation\'s number', () => screen.frame().includes('ctx ~42k/200k'));
+
+    await screen.mockInput.typeText('/clear');
+    flushSync(() => screen.mockInput.pressEnter());
+    await screen.waitFor('the clear settled', () => screen.frame().includes('A new conversation starts'));
+
+    if (ends === 'measured') expect(screen.frame()).toContain('ctx ~3k/200k');
+    else {
+      expect(screen.frame()).toContain('ctx —/');
+      expect(screen.frame()).toContain('Its size could not be measured');
+      expect(screen.frame()).toContain('catalog is unreachable');
+    }
+  }
 });
 
 test('a turn waiting on a rate limit names the provider, not thinking', async () => {

@@ -62,7 +62,7 @@ function controls(input: {
     },
     approveInstruction: input.approve,
     revokeInstruction: async () => ({ ok: true, path: LATER.path, digest: '' }),
-    clearConversation: async () => {},
+    clearConversation: async () => null,
     compact: async () => {},
   };
 }

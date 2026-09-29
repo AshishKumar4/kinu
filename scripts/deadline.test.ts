@@ -76,6 +76,25 @@ describe('a run under a deadline', () => {
     expect(holdsMemory(process.pid, exited)).toBe(false);
   });
 
+  // Review of d35c1060fe: a child that drops the run's mark (`env -i`) and holds the output pipes kept the run open
+  // for its whole life after the shell exited, with no bound watching.
+  test('a process that drops the run\'s mark and holds its output is still the run\'s, and is ended', async () => {
+    const outcome = await runUnderDeadline({
+      argv: ['sh', '-c', 'env -i /bin/sleep 3600 & exit 0'], seconds: 1, label: 'unmarked', stdio: 'pipe',
+    });
+
+    expect(outcome.exitCode).not.toBe(0);
+    expect(outcome.leftovers.map((line) => line.replace(/^\d+ /u, ''))).toEqual(['/bin/sleep 3600']);
+  });
+
+  test('a holder that left the run\'s session and dropped its mark is cut off at the bound, not waited for', async () => {
+    const outcome = await runUnderDeadline({
+      argv: ['sh', '-c', 'setsid env -i /bin/sleep 30 & exit 0'], seconds: 1, label: 'escaped', stdio: 'pipe',
+    });
+
+    expect(outcome).toMatchObject({ killed: true, exitCode: DEADLINE_EXIT_CODE });
+  });
+
   test('a process the run ended before it exited is not a leftover', async () => {
     const outcome = await runUnderDeadline({ argv: ['sh', '-c', 'sleep 30 & kill $!; wait $!; exit 0'], seconds: 30, label: 'ends its own', stdio: 'pipe' });
 

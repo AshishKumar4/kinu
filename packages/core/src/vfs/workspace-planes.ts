@@ -10,7 +10,7 @@ import { workspacePath, WORKSPACE_ROOT } from './workspace-path';
 import type { WorkspaceBundle, WorkspaceSession } from './nimbus-workspace';
 import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
-import type { CredentialedVfs, SqliteVFS, VfsStat } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import type { CredentialedVfs, SqliteVFS, VfsExportPage, VfsStat } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 
 type FileSessionSource = { session(): Promise<Pick<WorkspaceSession, 'vfs' | 'sql'>> };
 
@@ -40,6 +40,28 @@ export async function writeWorkspaceSoul(
   storeDurableSoulDb(session.sql, content instanceof Uint8Array ? new TextDecoder().decode(content) : content);
 }
 
+/** Source principal numbers cannot cross without their registry. Keep root ownership; other files belong to
+ * the fork's main actor. Every hire is in group 1000, so a source-private group must become root-only, not shared.
+ * Stable root/shared groups and all mode bits stay intact. The source page remains reusable for other receivers. */
+function forkPageOwnership(page: VfsExportPage): VfsExportPage {
+  let imported = page;
+  let index = 0;
+
+  for (const row of page.rows) {
+    const uid = row.uid === CRED_KERNEL.uid ? CRED_KERNEL.uid : CRED_SESSION_USER.uid;
+    const gid = row.gid === CRED_SESSION_USER.gid ? CRED_SESSION_USER.gid : CRED_KERNEL.gid;
+
+    if (row.uid !== uid || row.gid !== gid) {
+      if (imported === page) imported = { ...page, rows: page.rows.slice() };
+      imported.rows[index] = { ...row, uid, gid };
+    }
+
+    index++;
+  }
+
+  return imported;
+}
+
 /**
  * Where a fork lands in one store: Nimbus imports, each under a parent made if missing (a payload's directory may not
  * exist on a fresh target), and SOUL.md through `publishSoul`, the owner's protected write.
@@ -60,7 +82,7 @@ function forkSinkOver(
   return {
     async importChunks(dst, chunks) { (await parentOf(dst)).importChunks(dst, chunks); },
     async importPage(dst, page) {
-      const { want, done } = (await parentOf(dst)).importPage(dst, page);
+      const { want, done } = (await parentOf(dst)).importPage(dst, forkPageOwnership(page));
 
       return { want, done };
     },

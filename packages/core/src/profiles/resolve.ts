@@ -324,17 +324,10 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
 
   let model = assignment.model;
 
-  if (input.workspaceModel !== undefined && input.workspaceModel !== null) {
-    requireAvailable(input.workspaceModel, tierFallbacks, tierId);
-    model = input.workspaceModel;
-    source = 'workspace';
-    replaced = null;
-  }
-
-  if (input.actorModel !== undefined && input.actorModel !== null) {
-    requireAvailable(input.actorModel, tierFallbacks, tierId);
-    model = input.actorModel;
-    source = 'actor';
+  for (const pin of modelPins(input)) {
+    requireAvailable(pin.model, tierFallbacks, tierId);
+    model = pin.model;
+    source = pin.source;
     replaced = null;
   }
 
@@ -392,6 +385,20 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
   const profileDigest = sha256Hex(stableStringify(v.parse(JsonValueSchema, resolved)));
 
   return Object.freeze({ ...resolved, digest: profileDigest });
+}
+
+/** The pins a turn's model takes, weakest first: the workspace's, then the actor's own. A runtime preset takes
+ *  none: the advisor's second opinion is not the model it reviews. */
+function modelPins(input: Pick<ResolveTurnProfileInput, 'roleId' | 'workspaceModel' | 'actorModel'>): readonly {
+  readonly model: string;
+  readonly source: 'workspace' | 'actor';
+}[] {
+  if (Object.hasOwn(SYSTEM_ROLE_DEFINITIONS, input.roleId)) return [];
+
+  return [
+    ...(input.workspaceModel === undefined || input.workspaceModel === null ? [] : [{ model: input.workspaceModel, source: 'workspace' as const }]),
+    ...(input.actorModel === undefined || input.actorModel === null ? [] : [{ model: input.actorModel, source: 'actor' as const }]),
+  ];
 }
 
 export function resolveAgentTurnProfile(
