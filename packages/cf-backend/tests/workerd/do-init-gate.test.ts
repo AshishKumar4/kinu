@@ -8,7 +8,8 @@ import { describe, expect, it } from 'vitest';
 
 const STALL_MS = 700;
 
-/** `ping()` is `SELECT 1`, so only the gate costs time; half the stall clears scheduling noise. */
+/** `ping()` is `SELECT 1`, so only the gate costs time; half the stall clears scheduling noise. A lower bound only:
+ *  load can only lengthen a gated read, never shorten it. */
 const ATTRIBUTABLE_MS = STALL_MS / 2;
 
 describe('Durable Object init gate', () => {
@@ -23,16 +24,12 @@ describe('Durable Object init gate', () => {
     expect(elapsed).toBeGreaterThanOrEqual(ATTRIBUTABLE_MS);
   });
 
-  // The control: only the awaited init work differs, so "slow" is not cold start or pool cost.
-  it('the shipped shape — init awaits nothing — answers the same read immediately', async () => {
-    const clean = env.GATED.get(env.GATED.idFromName('stall:0'));
+  // The control: the same stall starts, and only whether init awaits it differs. Asserted as an order, not a
+  // duration: a wall-clock bound here measured the machine (618 ms and 1534 ms against 350 under load).
+  it('the shipped shape — init awaits nothing — lets the read in before the stall it started settles', async () => {
+    const clean = env.GATED.get(env.GATED.idFromName(`stall:${STALL_MS}:detached`));
 
-    const startedAt = Date.now();
-    const answer = await clean.ping();
-    const elapsed = Date.now() - startedAt;
-
-    expect(answer).toBe(1);
-    expect(elapsed).toBeLessThan(ATTRIBUTABLE_MS);
+    expect(await clean.pingAfterInit()).toEqual({ answer: 1, initOutranStall: true });
   });
 
   it('the gate is held per object, so a second request behind it waits too', async () => {
