@@ -431,6 +431,7 @@ describe('two actors, one database: terminal_effects', () => {
 
     const ledger = new TerminalEffectLedger({
       sql: w.sql, actor: w.a, effects: {}, now: () => 1_000, scheduleRetry: async () => {},
+      transaction: (body) => w.db.transaction(body)(),
     });
 
     ledger.claim('turn-1', [
@@ -449,10 +450,12 @@ describe('two actors, one database: terminal_effects', () => {
     // Claim only: the roster write is synchronous, so no wake or effect body runs.
     const a = new TerminalEffectLedger({
       sql: w.sql, actor: w.a, effects: {}, now: () => 1_000, scheduleRetry: async () => {},
+      transaction: (body) => w.db.transaction(body)(),
     });
 
     const b = new TerminalEffectLedger({
       sql: w.sql, actor: w.b, effects: {}, now: () => 1_000, scheduleRetry: async () => {},
+      transaction: (body) => w.db.transaction(body)(),
     });
 
     const owed = [{ name: 'turn_record' as const, scope: '', input: null, lane: 'inline' as const }];

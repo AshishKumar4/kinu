@@ -2193,7 +2193,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
       craft_usage: terminalEffect({
         input: v.object({ messageId: v.string(), toolNames: v.array(v.string()) }),
-        run: ({ messageId, toolNames }) => {
+        runSync: ({ messageId, toolNames }) => {
           void this.sql`INSERT INTO turn_craft_usage (actor_id, message_id, tool_names)
                    VALUES (${this.actorHandle().actorId}, ${messageId}, ${JSON.stringify(toolNames)})
                    ON CONFLICT(actor_id, message_id) DO UPDATE SET tool_names = excluded.tool_names`;

@@ -182,6 +182,15 @@ export class TransactionDO extends DurableObject<Cloudflare.Env> {
     this.ctx.storage.transactionSync(() => { this.admitBody(id, failRoster); });
   }
 
+  admitNested(id: string, failOuter: boolean): void {
+    this.ensureSchema();
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.transactionSync(() => { this.admitBody(id, false); });
+
+      if (failOuter) throw new Error('outer transaction failed');
+    });
+  }
+
   /** The bun arm: same body, same failure, no atomicity. */
   runDirectly(id: string, failRoster: boolean): void {
     this.ensureSchema();

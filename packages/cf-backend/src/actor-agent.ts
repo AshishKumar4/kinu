@@ -1292,7 +1292,7 @@ export abstract class ActorAgent extends Agent<Env> {
         input: v.object({ status: RunEndReasonSchema, turn: JsonValueSchema, workMode: WorkModeSchema }),
         // Lanes read durable queues on re-entry (per-turn snapshots do not survive), and the verdict
         // uses the recorded mode so a fresh activation's default cannot open an unearned lane.
-        run: async ({ status, workMode }) => {
+        runSync: ({ status, workMode }) => {
           this.warmUserMcpInBackground();
 
           if (!this.orch.improvementLanesOpen(status, workMode)) {
