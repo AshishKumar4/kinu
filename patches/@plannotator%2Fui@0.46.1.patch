@@ -1,0 +1,118 @@
+diff --git a/hooks/useAnnotationHighlighter.ts b/hooks/useAnnotationHighlighter.ts
+index 5cabb60..bb0794d 100644
+--- a/hooks/useAnnotationHighlighter.ts
++++ b/hooks/useAnnotationHighlighter.ts
+@@ -10,7 +10,6 @@ import Highlighter from '@plannotator/web-highlighter';
+ import type { Annotation, EditorMode, ImageAttachment } from '../types';
+ import { AnnotationType } from '../types';
+ import type { QuickLabel } from '../utils/quickLabels';
+-import { getIdentity } from '../utils/identity';
+ import { transformPlainText } from '../utils/inlineTransforms';
+ 
+ // --- Exported state types ---
+@@ -642,6 +641,9 @@ export interface UseAnnotationHighlighterOptions {
+   selectedAnnotationId: string | null;
+   mode: EditorMode;
+   enabled?: boolean;
++  /** Whether owner gestures may create annotations. Restoration stays enabled
++   *  in read-only review so decided feedback remains anchored in the document. */
++  interactive?: boolean;
+   /** Opt-in: after a meta-based restore (`fromStore`), verify the painted text
+    *  matches the annotation's `originalText` (whitespace-normalized). On
+    *  mismatch the wrong highlight is removed and the text-search fallback
+@@ -712,6 +714,7 @@ export function useAnnotationHighlighter({
+   selectedAnnotationId,
+   mode,
+   enabled = true,
++  interactive = true,
+   verifyRestoredContent = false,
+   onRestoreMismatch,
+   onRestoreReport,
+@@ -959,7 +962,7 @@ export function useAnnotationHighlighter({
+       text,
+       originalText: source.text,
+       createdA: Date.now(),
+-      author: getIdentity(),
++      author: 'Owner',
+       startMeta: source.startMeta,
+       endMeta: source.endMeta,
+       images,
+@@ -1012,7 +1015,7 @@ export function useAnnotationHighlighter({
+       text,
+       originalText: source.text,
+       createdA: Date.now(),
+-      author: getIdentity(),
++      author: 'Owner',
+       images,
+       ...(mentions && mentions.length > 0 ? { mentions } : {}),
+       ...(isQuickLabel ? { isQuickLabel: true } : {}),
+@@ -1340,6 +1343,11 @@ export function useAnnotationHighlighter({
+ 
+     highlighter.on(Highlighter.event.CREATE, ({ sources, type }: { sources: any[]; type?: string }) => {
+       if (type === 'from-store') return;
++      if (!interactive) {
++        sources.forEach((source) => highlighter.remove(source.id));
++        window.getSelection()?.removeAllRanges();
++        return;
++      }
+       if (sources.length > 0) {
+         const source = sources[0];
+         const doms = highlighter.getDoms(source.id);
+@@ -1463,6 +1471,7 @@ export function useAnnotationHighlighter({
+     highlighter.run();
+ 
+     const handleMathMouseDown = (event: MouseEvent) => {
++      if (!interactive) return;
+       mouseDownMathRef.current = closestMathElement(event.target as Node, containerRef.current);
+       if (mouseDownMathRef.current) {
+         event.stopPropagation();
+@@ -1482,6 +1491,10 @@ export function useAnnotationHighlighter({
+       if (!mathElement) return;
+ 
+       const existingId = mathElement.dataset.bindId;
++      if (!interactive) {
++        if (existingId) onSelectAnnotationRef.current?.(existingId);
++        return;
++      }
+       const selectedText = selection?.toString().trim() ?? '';
+       if (!selectedText && existingId && modeRef.current !== 'redline') {
+         event.preventDefault();
+@@ -1551,7 +1564,7 @@ export function useAnnotationHighlighter({
+     // Mobile bridge
+     const isTouchPrimary = window.matchMedia('(pointer: coarse)').matches;
+     let selectionTimer: ReturnType<typeof setTimeout>;
+-    const handleSelectionChange = isTouchPrimary
++    const handleSelectionChange = isTouchPrimary && interactive
+       ? () => {
+           clearTimeout(selectionTimer);
+           selectionTimer = setTimeout(() => {
+@@ -1589,7 +1602,7 @@ export function useAnnotationHighlighter({
+       container.removeEventListener('touchend', handlePointerEndCapture, true);
+       highlighter.dispose();
+     };
+-  }, [clearPendingSelection, enabled]);
++  }, [clearPendingSelection, enabled, interactive]);
+ 
+   const highlightRange = useCallback((range: Range, modeOverride?: EditorMode) => {
+     const highlighter = highlighterRef.current;
+diff --git a/utils/upload.ts b/utils/upload.ts
+index 317d1cc..7586890 100644
+--- a/utils/upload.ts
++++ b/utils/upload.ts
+@@ -31,8 +31,14 @@ const defaultUploadTransport: UploadTransport = {
+     const formData = new FormData();
+     formData.append('file', file);
+     const res = await fetch('/api/upload', { method: 'POST', body: formData });
+-    const data = await res.json();
+-    return { path: data.path, originalName: data.originalName };
++    const data: unknown = await res.json();
++    if (!data || typeof data !== 'object') throw new Error('Invalid upload response');
++    const path = Reflect.get(data, 'path');
++    const originalName = Reflect.get(data, 'originalName');
++    if (typeof path !== 'string' || typeof originalName !== 'string') {
++      throw new Error('Invalid upload response');
++    }
++    return { path, originalName };
+   },
+ };
+ 
