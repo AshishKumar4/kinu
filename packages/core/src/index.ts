@@ -832,7 +832,6 @@ export {
   markCacheTail,
   markLastToolForAnthropicCache,
   promptCacheOptions,
-  promptCachePlan,
   promptCacheWarm,
   resolvePromptCacheStrategy,
   type CacheBreakpointInput,
@@ -1725,7 +1724,7 @@ export {
   renderFactsForTurn, type TurnSkillsConfig, type TurnSkillSurface,
 } from './orchestrator/turn-surface';
 
-export { ModelCatalogSession, resolveEffectiveModelSpec } from './orchestrator/model-catalog';
+export { ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead } from './orchestrator/model-catalog';
 
 export {
   serializeContentForHeads, narrowInheritedRole,

@@ -1,6 +1,7 @@
 /**
  * Cached catalog view per spec for both backends. Synchronous reads fall back to the static table;
- * {@link ModelCatalogSession.resolved} is the awaited read (#20).
+ * {@link ModelCatalogSession.resolved} is the awaited read (#20). A model request resolves its spec once
+ * and reads through {@link ModelCatalogSession.at}; the live reads resolve it per call.
  */
 
 import { contextWindowForModel, type ModelWindow, type ResolvedModelWindow } from '../context-window';
@@ -27,8 +28,19 @@ export function resolveEffectiveModelSpec(deps: {
   }
 }
 
+/** One spec's catalog reads, fixed when a model request is composed. */
+export interface ModelCatalogRead {
+  readonly spec: string;
+  /** The window pair every producer divides (`stepContextLimit`), read now. */
+  window(): ModelWindow;
+  /** Awaited before the provider is called, for decisions that refuse work. */
+  resolved(): Promise<ResolvedModelWindow>;
+}
+
+interface CachedEntry { spec: string; info: ModelInfo | null; lookup?: Promise<void> }
+
 export class ModelCatalogSession {
-  private cached: { spec: string; info: ModelInfo | null; lookup?: Promise<void> } | null = null;
+  private cached: CachedEntry | null = null;
   /** Catalog entries of a tier's fallbacks. */
   private readonly others = new Map<string, ModelInfo>();
 
@@ -40,50 +52,35 @@ export class ModelCatalogSession {
 
   /** Arms the lookup on first sight of a spec; reads never block. */
   info(): ModelInfo | null {
-    const spec = this.deps.effectiveSpec();
-
-    if (this.cached?.spec !== spec) {
-      this.cached = { spec, info: null };
-      this.cached.lookup = this.armLookup(spec);
-    }
-
-    return this.cached.info;
+    return this.armed(this.deps.effectiveSpec()).info;
   }
 
   contextWindow(): number {
-    return this.info()?.contextWindow ?? contextWindowForModel(this.deps.effectiveSpec()).window;
+    return this.windowOf(this.deps.effectiveSpec()).contextWindow;
   }
 
   /** False: the static table's stand-in, which a budget may spend and a refusal may not. */
   windowMeasured(): boolean {
-    return this.info()?.contextWindow !== undefined
-      || contextWindowForModel(this.deps.effectiveSpec()).measured;
+    return this.windowOf(this.deps.effectiveSpec()).windowMeasured;
   }
 
   /** Awaited before the provider is called, for decisions that refuse work. */
-  async resolved(): Promise<ResolvedModelWindow> {
-    // Awaits the cached promise, keeping one catalog round trip.
-    this.info();
-    await this.cached?.lookup;
+  resolved(): Promise<ResolvedModelWindow> {
+    return this.resolvedOf(this.deps.effectiveSpec());
+  }
 
-    return {
-      contextWindow: this.contextWindow(),
-      modelOutputLimit: this.modelOutputLimit(),
-      windowMeasured: this.windowMeasured(),
-    };
+  /** The reads of one request, on the spec it resolved once. */
+  at(spec: string): ModelCatalogRead {
+    return Object.freeze({
+      spec,
+      window: () => this.windowPairOf(spec),
+      resolved: () => this.resolvedOf(spec),
+    });
   }
 
   /** Await the selected operation's catalog, independent of the live chat cache. */
   async contextFor(spec: string): Promise<PromptModelContext & ResolvedModelWindow> {
-    const info = await this.lookup(spec);
-    const table = contextWindowForModel(spec);
-
-    return Object.freeze({
-      id: spec,
-      contextWindow: info?.contextWindow ?? table.window,
-      windowMeasured: info?.contextWindow !== undefined || table.measured,
-      modelOutputLimit: info?.modelOutputLimit ?? null,
-    });
+    return Object.freeze({ id: spec, ...ModelCatalogSession.windowFrom(spec, await this.lookup(spec)) });
   }
 
   /** Null rather than the whole window when nothing reported one: the reserve must not be invented (#20). */
@@ -93,12 +90,14 @@ export class ModelCatalogSession {
 
   /** The window pair every producer divides (`stepContextLimit`), read now. */
   window(): ModelWindow {
-    return { contextWindow: this.contextWindow(), modelOutputLimit: this.modelOutputLimit() };
+    return this.windowPairOf(this.deps.effectiveSpec());
   }
 
   /** Null until the catalog lands or when it prices nothing; another `spec` only once warmed. */
   pricing(spec?: string): ModelPricing | null {
-    if (spec === undefined || spec === this.deps.effectiveSpec()) return this.info()?.cost ?? null;
+    const own = this.deps.effectiveSpec();
+
+    if (spec === undefined || spec === own) return this.armed(own).info?.cost ?? null;
 
     return this.others.get(spec)?.cost ?? null;
   }
@@ -122,15 +121,52 @@ export class ModelCatalogSession {
 
   /** The turn's model, or another `spec` once warmed, as `pricing` reads it. */
   acceptedMedia(spec?: string): ReadonlySet<MediaModality> {
-    const own = spec === undefined || spec === this.deps.effectiveSpec();
-    const info = own ? this.info() : this.others.get(spec) ?? null;
+    const own = this.deps.effectiveSpec();
+    const named = spec ?? own;
+    const info = named === own ? this.armed(own).info : this.others.get(named) ?? null;
     // Only the provider segment is read (it selects the transport ceiling).
-    const [provider] = (own ? this.deps.effectiveSpec() : spec).trim().split('/');
+    const [provider] = named.trim().split('/');
 
     return acceptedMediaForModel({
       provider,
       catalogInputModalities: info?.inputModalities,
     });
+  }
+
+  private armed(spec: string): CachedEntry {
+    if (this.cached?.spec !== spec) {
+      this.cached = { spec, info: null };
+      this.cached.lookup = this.armLookup(spec);
+    }
+
+    return this.cached;
+  }
+
+  private windowOf(spec: string): ResolvedModelWindow {
+    return ModelCatalogSession.windowFrom(spec, this.armed(spec).info);
+  }
+
+  private windowPairOf(spec: string): ModelWindow {
+    const { contextWindow, modelOutputLimit } = this.windowOf(spec);
+
+    return { contextWindow, modelOutputLimit };
+  }
+
+  private async resolvedOf(spec: string): Promise<ResolvedModelWindow> {
+    // Awaits the cached promise, keeping one catalog round trip.
+    await this.armed(spec).lookup;
+
+    return this.windowOf(spec);
+  }
+
+  private static windowFrom(spec: string, info: ModelInfo | null): ResolvedModelWindow {
+    const table = contextWindowForModel(spec);
+
+    return {
+      contextWindow: info?.contextWindow ?? table.window,
+      modelOutputLimit: info?.modelOutputLimit ?? null,
+      windowMeasured: info?.contextWindow !== undefined || table.measured,
+    };
   }
 
   private async armLookup(spec: string): Promise<void> {
