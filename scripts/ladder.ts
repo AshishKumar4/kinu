@@ -1856,8 +1856,8 @@ export const LADDER: readonly Gate[] = [
       + 'per-connection record in a socket ATTACHMENT, which the shared fake answers as '
       + '`null` unconditionally, so every bun test over it observes the failure state as '
       + 'green. And nothing had ever seen an ALARM fire: a second `setAlarm` replaces the '
-      + 'first rather than queueing, which is what makes `armTimer`\'s soonest-wins dedup a '
-      + 'collapse instead of a lost wake-up, and an uncaught throw out of `alarm()` is '
+      + 'first rather than queueing, which is what lets the Lifecycle derive one alarm from its '
+      + 'job queue instead of losing a wake-up, and an uncaught throw out of `alarm()` is '
       + 'redelivered until it succeeds, which is the backstop the SDK rethrows platform '
       + 'errors to reach. Each polarity carries its own control, so a green cannot come '
       + 'from a write that never happened.',
@@ -2541,6 +2541,92 @@ export function deployPlan(costs: CostTable = readCosts()): PlanRow[] {
 
     return phase === 'source' ? inPhase.sort((left, right) => wall(right) - wall(left)) : inPhase;
   });
+}
+
+/** What the tier wave admits one gate against: its measured cost, as {@link deployPlan} reads it, and its lane. A
+ *  gate with no green measurement takes the whole box, so it runs with nothing beside it. */
+export interface WaveRow {
+  readonly threads: number;
+  readonly rssMb: number;
+  readonly wall: number;
+  readonly shared: SharedResource | 'none';
+}
+
+export function waveRow(gate: Gate, tracked: readonly string[], costs: CostTable = readCosts()): WaveRow {
+  const recorded = costs.rows[gate.run];
+  const cost = recorded?.exit === 0 ? recorded : undefined;
+
+  return {
+    threads: cost === undefined ? Number.POSITIVE_INFINITY : costThreads(cost, gate.seconds),
+    rssMb: cost === undefined ? Number.POSITIVE_INFINITY : costRssMb(cost),
+    wall: cost?.wallSeconds ?? 0,
+    shared: sharedOf(gate, tracked) ?? 'none',
+  };
+}
+
+/** The share of MemAvailable the wave may claim, as scripts/deploy.sh's GATE_RESERVE_PERCENT. */
+const WAVE_MEMORY_PERCENT = 75;
+
+/** The caps a wave admits under, read as scripts/deploy.sh reads them, with the same overrides. */
+export function waveCaps() {
+  const available = /^MemAvailable:\s+(\d+)/mu.exec(readFileSync('/proc/meminfo', 'utf8'))?.[1];
+  const threads = Number(process.env['KINU_DEPLOY_THREADS'] ?? cpus().length);
+  const rssMb = Number(process.env['KINU_DEPLOY_RSS_MB'] ?? Math.floor(Number(available ?? 0) / 1024 * WAVE_MEMORY_PERCENT / 100));
+
+  if (!(rssMb > 0)) throw new Error('cannot read MemAvailable from /proc/meminfo, so the wave has no memory cap; set KINU_DEPLOY_RSS_MB');
+
+  return { threads, rssMb };
+}
+
+/**
+ * Runs `work` for every row as the deploy's source wave admits gates: longest measured wall first, the first row
+ * whose cost fits what is left of both caps and whose shared resource is free, or the first row at all when nothing
+ * runs (an oversized row runs alone). Once `stopped` says so, nothing more launches and the running rows finish.
+ */
+export async function tierWave<T>(
+  rows: readonly { readonly entry: T; readonly row: WaveRow }[],
+  work: (entry: T) => Promise<void>,
+  stopped: () => boolean,
+  caps = waveCaps(),
+): Promise<void> {
+  const queue = [...rows].sort((left, right) => right.row.wall - left.row.wall);
+  const running = new Set<Promise<void>>();
+  const held = new Set<SharedResource>();
+  let threads = 0;
+  let rssMb = 0;
+
+  while (queue.length > 0 && !stopped()) {
+    const at = queue.findIndex(({ row }) => (row.shared === 'none' || !held.has(row.shared))
+      && (running.size === 0 || (threads + row.threads <= caps.threads && rssMb + row.rssMb <= caps.rssMb)));
+
+    if (at === -1) {
+      await Promise.race(running);
+      continue;
+    }
+
+    const [next] = queue.splice(at, 1);
+
+    if (next === undefined) break;
+    const { entry, row } = next;
+    const cost = { threads: Math.min(row.threads, caps.threads), rssMb: Math.min(row.rssMb, caps.rssMb) };
+
+    threads += cost.threads;
+    rssMb += cost.rssMb;
+
+    if (row.shared !== 'none') held.add(row.shared);
+
+    const done: Promise<void> = work(entry).finally(() => {
+      threads -= cost.threads;
+      rssMb -= cost.rssMb;
+
+      if (row.shared !== 'none') held.delete(row.shared);
+      running.delete(done);
+    });
+
+    running.add(done);
+  }
+
+  await Promise.all(running);
 }
 
 /** The plan as the runner reads it: one tab-separated line per row — phase,
@@ -3356,7 +3442,7 @@ if (import.meta.main) {
 
   if (tier === undefined || affectedFrom === '') {
     console.error(
-      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --gate <declared-command> | --affected=<ref> | --plan | --audit-closure [--tier=<tier> | --gate <declared-command>] | --matrix | --costs | --install-hooks`,
+      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] [--serial] | --gate <declared-command> | --affected=<ref> | --plan | --audit-closure [--tier=<tier> | --gate <declared-command>] | --matrix | --costs | --install-hooks`,
     );
     process.exit(2);
   }
@@ -3423,11 +3509,14 @@ if (import.meta.main) {
   const recorded: string[] = [];
   const notes = new Set<string>();
 
+  // A gate's cache lookup, its header, and what the run needs; hits are settled here, in order.
+  const pending: { readonly index: number; readonly gate: Gate; readonly plan: ReturnType<typeof planGate> | undefined; readonly closure: ReturnType<typeof deriveClosure> }[] = [];
+
   for (const [index, gate] of gates.entries()) {
-    console.log(`\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`);
     const plan = caching ? planGate({ run: gate.run, inputs: gate.inputs, repo, tools, store }) : undefined;
 
     if (plan?.kind === 'hit') {
+      console.log(`\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`);
       // deploy.sh reads the `skip  ` prefix to mark the gate's line cached.
       console.log(
         `skip  ${gate.run}  hit ${plan.key.slice(0, 12)}, proved green on ${plan.entry.revision} `
@@ -3437,21 +3526,36 @@ if (import.meta.main) {
       continue;
     }
 
+    pending.push({ index, gate, plan, closure: plan?.closure ?? deriveClosure(gate.run, gate.inputs, repo) });
+  }
+
+  // THE WAVE. With more than one gate to run, the tier admits them as the deploy's source wave does (the same
+  // measured costs, caps and one-at-a-time browser lane, `tierWave`), each gate's output printed whole when it ends;
+  // a gate that declares a phase runs alone first, as the deploy's preflight does. One gate, or `--serial`, runs
+  // in order with its output live, which is how `--gate` and deploy.sh read it.
+  const concurrent = pending.length > 1 && !process.argv.includes('--serial');
+  const failed: string[] = [];
+
+  const runPending = async (entry: (typeof pending)[number]): Promise<void> => {
+    const { index, gate, plan, closure } = entry;
+    const header = `\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`;
+    const lines: string[] = [];
+
     if (plan?.kind === 'uncacheable') {
-      console.log(`      never cached: ${plan.closure.why}`);
+      lines.push(`      never cached: ${plan.closure.why}`);
       uncached.push(`${gate.run} — ${plan.closure.why}`);
     } else if (plan?.kind === 'miss') {
-      console.log(
+      lines.push(
         `      miss ${plan.key.slice(0, 12)} (${String(plan.closure.files.length)} files in the closure, `
         + `${String(gateEnvNames(plan.closure).length)} environment names given)`,
       );
 
-      if (plan.unreadable !== undefined) console.log(`      the entry stored under this key proves nothing — ${plan.unreadable}`);
+      if (plan.unreadable !== undefined) lines.push(`      the entry stored under this key proves nothing — ${plan.unreadable}`);
 
       for (const note of plan.closure.notes) notes.add(`${gate.run}: ${note}`);
     }
 
-    const closure = plan?.closure ?? deriveClosure(gate.run, gate.inputs, repo);
+    if (!concurrent) console.log([header, ...lines].join('\n'));
 
     // Under the row's own deadline: the one hang detector this tier has,
     // now that no test carries a clock. A row that hangs is killed and named
@@ -3460,8 +3564,10 @@ if (import.meta.main) {
       argv: runnableArgv(gate.run, tracked), cwd: root,
       seconds: gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS, label: gate.label,
       env: closure.kind === 'derived' ? gateEnvironment(closure) : undefined,
+      stdio: concurrent ? 'pipe' : 'inherit',
     });
 
+    if (concurrent) console.log([header, ...lines, `${outcome.stdout}${outcome.stderr}`.trimEnd()].join('\n'));
     const { seconds } = outcome;
 
     if (outcome.exitCode === 0) {
@@ -3477,7 +3583,7 @@ if (import.meta.main) {
 
       if (proofRecorded) recorded.push(gate.run);
 
-      continue;
+      return;
     }
 
     console.error(`\nFAILED  ${gate.run}  after ${seconds.toFixed(1)}s\n`);
@@ -3490,7 +3596,28 @@ if (import.meta.main) {
       silently: `every later tier assumes this held. What this gate does NOT cover: ${gate.blind}`,
       fix: `${gate.run}   # reproduce exactly this, nothing else`,
     }));
-    process.exit(1);
+    failed.push(gate.run);
+  };
+
+  if (concurrent) {
+    const alone = pending.filter((entry) => entry.gate.phase !== undefined);
+    const wave = pending.filter((entry) => entry.gate.phase === undefined);
+
+    for (const entry of alone) {
+      await runPending(entry);
+
+      if (failed.length > 0) process.exit(1);
+    }
+
+    await tierWave(wave.map((entry) => ({ entry, row: waveRow(entry.gate, tracked) })), runPending, () => failed.length > 0);
+
+    if (failed.length > 0) process.exit(1);
+  } else {
+    for (const entry of pending) {
+      await runPending(entry);
+
+      if (failed.length > 0) process.exit(1);
+    }
   }
 
   if (caching) {

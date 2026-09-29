@@ -15,8 +15,6 @@ export {
   type TerminalTransition, type TerminalDisposition, type TerminalTransitionDeps,
 } from './orchestrator/terminal-transition';
 
-export { WakeArms } from './orchestrator/wake-arms';
-
 export {
   TerminalEffectLedger, initTerminalEffectTable, terminalEffect, overflowRetryTerminalEffect,
   outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
@@ -1649,7 +1647,6 @@ export {
 
 export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
 
-export { flushSignal, partialFlushCadence, type PartialFlushCadence, type PartialFlushSignal } from './orchestrator/flush-cadence';
 
 export {
   ChatSession, turnInputMessage, type ChatSessionOptions, type ChatSessionPorts, type ComposedRequest, type ChatTransport, type ChatTurnInput,
@@ -1853,7 +1850,7 @@ export type { RunTimelineDeps, TimelineKind, TimelineSpan } from './read-models/
 export { boundedInt } from './utils/bounds';
 
 // The retry curve of every durable recovery lane; backends import it, never copy it.
-export { recoveryBackoffMs } from './utils/recovery-backoff';
+export { RECOVERY_BACKOFF_CEILING_MS, recoveryBackoffMs } from './utils/recovery-backoff';
 
 export { getRunEvents, getRunEventText, getRunSummaries, listRuns } from './read-models/runs';
 

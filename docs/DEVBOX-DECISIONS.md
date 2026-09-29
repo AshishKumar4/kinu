@@ -950,6 +950,13 @@ whole cumulative step at that cadence are gone: a turn cut mid-step resumes from
 its open output in `stream_parts`. Reasoning keeps the 64-delta or 4 KB window.
 Pins: `packages/cli-backend/tests/turn-continuation.test.ts` "A STEP CUT
 MID-STREAM" and `packages/core/tests/unit-partial-flush-cadence.test.ts`.
+(6) 2026-09-28 (lane/agents-024): no tab replay store is left to agree with. A tab
+that reconnects mid-turn is replayed the chunks the chat transport relayed for the
+turn in progress, held in its memory and dropped at turn end; after an eviction it
+reads the partial from the transcript frame. The answer's one durable copy is
+`stream_parts`. The cadence stays: first content, every ten, each settled result.
+Pins: `packages/cf-backend/tests/unit-chat-transport.test.ts` "a tab that reconnects
+mid-turn".
 
 D23-N. Every instance of the host namespace answers `supervisorOp` with the
 hosted runtime (2026-09-21, this commit; the Nimbus upgrade to core 0.12.0,

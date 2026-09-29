@@ -89,7 +89,7 @@ export interface ContainerEgressEnv<Id> extends OwnerCapabilityEnv {
 
 /**
  * A resolver, not the namespace: production uses the SDK's `getAgentByName`, which awaits `__unsafe_ensureInitialized`
- * under its own retry (agents@0.22.0 agent-routing.js:176-183, read 2026-09-22).
+ * under its own retry (agents@0.24.0 agent-routing.js:176-183, read 2026-09-28).
  */
 export type ContainerEventResolver = (workspaceName: string) => Promise<ContainerEventClient>;
 

@@ -7,7 +7,7 @@ import {
   Agent, callable, getCurrentAgent,
   type AgentContext, type Connection, type ConnectionContext,
   type FiberRecoveryContext, type FiberRecoveryResult,
-  type Schedule, type WSMessage,
+  type WSMessage,
 } from "agents";
 import {
   TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice,
@@ -228,7 +228,7 @@ import {
 } from "@kinu.run/core/analytics";
 import * as v from 'valibot';
 import { Hono, type Context } from 'hono';
-import { WakeArms } from '@kinu.run/core';
+import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB, WakeJobs, type WakePace } from './wake-jobs';
 import { rawPath, rethrow } from './api/context';
 
 /** Named contract so the analytics writer and the actor agree which half is the provider. */
@@ -451,17 +451,6 @@ function actorAgentsActions(deps: ActorToolDeps): AgentsToolAction[] {
 /** The codemode tool whose script keeps issuing device execs even after its call has detached. */
 const CODEMODE_TOOL_TOOL = 'eval' satisfies BuiltinToolName;
 
-/** Schedule callback finishing a dead activation's terminal sequence. Public because
- * `Agent.schedule()` types its callback as `keyof this`, which excludes protected members. */
-export const TERMINAL_RETRY_CALLBACK = '_kinuTerminalRetryTick';
-
-/** A lap wake's streak, in its row so eviction keeps the pace. */
-export interface WakePace {
-  readonly laps: number;
-  /** Comma-joined arms last named; null outside a streak. */
-  readonly arms: string | null;
-}
-
 /** Ledgers that can owe work with no instant. */
 export interface UntimedArms {
   readonly openDrainLease?: boolean;
@@ -475,14 +464,6 @@ export interface UntimedArms {
   readonly unsettledClaims?: boolean;
   readonly admittedDelegations?: boolean;
   readonly chatLoop?: boolean;
-}
-
-const WakePaceSchema = v.object({ laps: v.pipe(v.number(), v.integer(), v.minValue(0)), arms: v.nullable(v.string()) });
-
-function wakePaceOf(row: Pick<Schedule<unknown>, 'payload'>): WakePace | null {
-  const parsed = v.safeParse(WakePaceSchema, row.payload);
-
-  return parsed.success ? parsed.output : null;
 }
 
 export interface ActorDynamicContextExtras {
@@ -1058,8 +1039,18 @@ export abstract class ActorAgent extends Agent<Env> {
   // The bare prototype must read as sound.
   protected storageRefusal?: StoragePredatesResetError;
 
+  /** Kinu's two durable wakes; see wake-jobs.ts. */
+  protected readonly wakes = new WakeJobs({
+    [KINU_TIMER_JOB]: () => this._kinuTimerTick(),
+    [TERMINAL_RETRY_JOB]: (pace) => this.terminalRetryPass(pace),
+  });
+
+  /** The workspace timer's pass: every source a subclass folds into its next wake. */
+  abstract _kinuTimerTick(): Promise<void>;
+
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
+    this.lifecycle.use(this.wakes);
     // Must precede any read or write of it; see initCapabilitySchema.
     this.initCapabilitySchema();
     // A Durable Object is a DIFFERENT ISOLATE from the Worker that routes to it,
@@ -1377,110 +1368,25 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.eventRecorder.openTurn()?.turn.turnId === turnId;
   }
 
-  private readonly runningWakeRows = new Set<string>();
-
-  private readonly wakeArms = new WakeArms();
-
   /** Set by the last maintenance pass. */
   protected maintenanceUnfinished = false;
 
-  /**
-   * Soonest-wins arm of one wake row per `callback`. A due row counts (it fires now) unless its tick is
-   * running, since the SDK deletes that one. Re-reads after its write so racers converge.
-   */
-  protected async armWakeRow(callback: keyof this & string, atMs: number, pace?: WakePace): Promise<string> {
-    return await this.wakeArms.arm(() => this.armWakeRowNow(callback, atMs, pace));
-  }
-
-  private async armWakeRowNow(callback: keyof this & string, atMs: number, pace?: WakePace): Promise<string> {
-    const nowSec = Math.floor(Date.now() / 1000);
-    // Round up: the SDK stores whole seconds, and waking early would re-arm and busy-spin the alarm.
-    const targetSec = Math.max(Math.ceil(atMs / 1000), nowSec + 1);
-
-    const armed = async (): Promise<{ id: string; time: number; pace: WakePace | null }[]> =>
-      (await this.listSchedules())
-        .filter((row) => row.callback === callback && !this.runningWakeRows.has(row.id))
-        .map((row) => ({ id: row.id, time: row.time, pace: wakePaceOf(row) }));
-
-    const earliest = <Row extends { id: string; time: number }>(rows: readonly Row[]): Row | undefined =>
-      rows.reduce<Row | undefined>((best, row) =>
-        best === undefined || row.time < best.time || (row.time === best.time && row.id < best.id) ? row : best, undefined);
-
-    const before = await armed();
-    const kept = earliest(before);
-
-    if (kept === undefined || kept.time > targetSec) await this.schedule(new Date(targetSec * 1000), callback);
-    const settled = await armed();
-    const keeper = earliest(settled);
-
-    if (keeper === undefined) throw new KinuError('io', `the ${callback} wake row vanished while it was armed`);
-
-    // A timed retry inherits the streak it replaces.
-    const carried = pace ?? [...before, ...settled].reduce<WakePace | null>(
-      (most, row) => row.pace !== null && (most === null || row.pace.laps > most.laps) ? row.pace : most, null);
-
-    if (carried !== null && JSON.stringify(carried) !== JSON.stringify(keeper.pace)) {
-      this.ctx.storage.sql.exec('UPDATE cf_agents_schedules SET payload = ? WHERE id = ?', JSON.stringify(carried), keeper.id);
-    }
-
-    // The keeper is never cancelled, so failure leaves extra wakes, never zero; errors propagate.
-    for (const row of settled) {
-      if (row.id !== keeper.id) await this.cancelSchedule(row.id);
-    }
-
-    return keeper.id;
-  }
-
-  protected async runWakeRow(own: Schedule<unknown>, body: () => Promise<void>): Promise<void> {
-    this.runningWakeRows.add(own.id);
-
-    try {
-      await body();
-    } finally {
-      this.runningWakeRows.delete(own.id);
-    }
-  }
-
-  /** Nothing owed: a turn's arms go. */
+  /** Nothing owed: a turn's arm goes. */
   private async restWhenIdle(): Promise<void> {
-    await this.wakeArms.release({
-      rows: async () => (await this.listSchedules())
-        .filter((row) => row.callback === TERMINAL_RETRY_CALLBACK && !this.runningWakeRows.has(row.id))
-        .map((row) => row.id),
-      idle: () => this._chatLoop?.pumping !== true && !this.owedWorkExists(),
-      cancel: async (id) => { await this.cancelSchedule(id); },
-      rearm: async () => { await this.scheduleTerminalRetry(Date.now()); },
-    });
+    if (this._chatLoop?.pumping !== true && !this.owedWorkExists()) await this.wakes.cancel(TERMINAL_RETRY_JOB);
   }
 
-  /** One soonest-wins row per actor; returns its id. */
-  protected scheduleTerminalRetry(atMs: number, pace?: WakePace): Promise<string> {
-    return this.armWakeRow(TERMINAL_RETRY_CALLBACK, atMs, pace);
+  /** One soonest-wins wake per actor. */
+  protected scheduleTerminalRetry(atMs: number, pace?: WakePace): Promise<void> {
+    return this.wakes.arm(TERMINAL_RETRY_JOB, atMs, pace);
   }
 
-  /**
-   * Public because `Agent.schedule()` types callbacks as `keyof this`. One pass per alarm: the SDK read
-   * every due row first, so a row this pass retired still arrives and runs nothing.
-   */
-  async _kinuTerminalRetryTick(_payload: WakePace | undefined, own: Schedule<unknown>): Promise<void> {
-    const nowSec = Math.floor(Date.now() / 1000);
-    const rows = (await this.listSchedules()).filter((row) => row.callback === TERMINAL_RETRY_CALLBACK);
-
-    if (!rows.some((row) => row.id === own.id)) return;
-
-    for (const row of rows) {
-      if (row.time <= nowSec && row.id !== own.id) await this.cancelSchedule(row.id);
-    }
-
-    await this.runWakeRow(own, () => this.terminalRetryPass(wakePaceOf(own) ?? undefined));
-  }
-
-  /** `prior`: the firing row's streak. */
+  /** `prior`: the firing job's streak. */
   async terminalRetryPass(prior: WakePace = { laps: 0, arms: null }): Promise<void> {
     // Arm first, drain second: the next-lap wake is durable before any pass runs, so a kill
     // inside this frame leaves a future row. A tick that finds nothing owed releases it at the end.
     const lapAt = Date.now() + recoveryBackoffMs(prior.laps + 1);
-    const armedRowId = await this.scheduleTerminalRetry(lapAt, { laps: prior.laps + 1, arms: prior.arms });
+    await this.scheduleTerminalRetry(lapAt, { laps: prior.laps + 1, arms: prior.arms });
 
     // Owed deliveries run every tick; unfinished maintenance re-arms at the shared capped backoff,
     // so a pass that keeps answering unfinished settles at the ceiling, not a one-second loop.
@@ -1506,7 +1412,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
       if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed);
     } else {
-      await this.cancelSchedule(armedRowId);
+      await this.wakes.cancel(TERMINAL_RETRY_JOB);
 
       if (nextOwed !== null) await this.scheduleTerminalRetry(nextOwed, { laps: 0, arms: null });
     }
@@ -1942,7 +1848,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private _chatTransport: ChatWireTransport | null = null;
   protected get chatTransport(): ChatWireTransport {
     this._chatTransport ??= new ChatWireTransport({
-      sql: this.boundSql,
+      resumes: true,
       broadcast: (message, exclude) => { this.broadcastToActor(null, message, exclude); },
       getConnection: (id) => this.getConnection(id),
       history: (limit) => this.chatTranscript.history(limit),
@@ -4680,11 +4586,16 @@ export abstract class ActorAgent extends Agent<Env> {
     fiberRecoveryMaxAgeMs: FIBER_RECOVERY_MAX_AGE_MS,
   };
 
+  /** Set when this activation's fiber sweep ran to its end; later ticks skip it. */
+  private fiberSweepFinished = false;
+
   /**
    * Cleanup only; called from `onStart`, synchronous and bounded so safe in the init gate.
    * Failures are logged and dropped so activation still succeeds.
    */
-  protected sweepUnrecoverableFiberRows(): boolean {
+  protected sweepUnrecoverableFiberRows(activation: boolean): boolean {
+    // Once per activation: only a truncated or failed pass leaves rows for the wake's ticks.
+    if (this.fiberSweepFinished && !activation) return false;
     // A failed pass reports truncated so the caller arms the wake and retries.
     let truncated = true;
 
@@ -4700,6 +4611,7 @@ export abstract class ActorAgent extends Agent<Env> {
       }
 
       truncated = result.truncated;
+      this.fiberSweepFinished = !truncated;
     } catch (err) {
       diagnostics.failure('fiber.unrecoverable_sweep_failed', toKinuError({
         doing: 'dropping the interrupted-fiber rows the recovery budget refused',
@@ -4759,9 +4671,10 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /** Every budgeted activation sweep; subclasses fold in their own. True if any pass filled its
-   *  budget (caller arms the wake). Synchronous so the init gate can run the same seam. */
-  protected maintenanceSweeps(): boolean {
-    return this.sweepUnrecoverableFiberRows();
+   *  budget (caller arms the wake). Synchronous so the init gate can run the same seam. `activation`:
+   *  the pass `onStart` runs, which sweeps the fiber table whatever a previous pass on this instance found. */
+  protected maintenanceSweeps(activation = false): boolean {
+    return this.sweepUnrecoverableFiberRows(activation);
   }
 
   /**

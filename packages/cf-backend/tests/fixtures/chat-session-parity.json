@@ -1917,19 +1917,7 @@
       },
       {
         "socket": "B",
-        "type": "cf_agent_stream_resuming",
-        "id": "PARITY-FOUR-TOOL"
-      },
-      {
-        "socket": "B",
-        "type": "cf_agent_stream_resuming",
-        "id": "PARITY-FOUR-TOOL"
-      },
-      {
-        "socket": "B",
-        "type": "cf_agent_use_chat_response",
-        "id": "PARITY-FOUR-TOOL",
-        "done": true
+        "type": "cf_agent_stream_resume_none"
       },
       {
         "socket": "B",

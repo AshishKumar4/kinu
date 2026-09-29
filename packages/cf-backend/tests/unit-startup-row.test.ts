@@ -8,7 +8,8 @@ const slot = (name: string): number => AGENT_METRICS_SCHEMA.blobs.findIndex((b) 
 
 test('each activation writes exactly one actor.startup row, under the workspace digest', async () => {
   // The harness activates the actor once as it builds it.
-  const { agent } = orchestratorHarness(undefined, undefined, fleetEnvForTest(makeEnv()));
+  const { agent, started } = orchestratorHarness(undefined, undefined, fleetEnvForTest(makeEnv()));
+  await started;
   const startups = () => agent.harnessFleetTurnRows().filter((row) => row.blobs?.[slot('event')] === 'actor.startup');
 
   expect(startups()).toHaveLength(1);

@@ -1,7 +1,6 @@
-/** The one flush cadence the stream buffer and the wire replay store use to make a partial answer durable. */
+/** The flush cadence the stream buffer uses to make a partial answer durable. */
 import { expect, test } from 'bun:test';
-import type { TextStreamPart, ToolSet, UIMessageChunk } from 'ai';
-import { flushSignal, partialFlushCadence, type PartialFlushSignal } from '@kinu.run/core';
+import { partialFlushCadence, type PartialFlushSignal } from '../src/orchestrator/flush-cadence';
 
 function decisions(signals: readonly PartialFlushSignal[], cadence = partialFlushCadence()): boolean[] {
   return signals.map((signal) => cadence.flushes(signal));
@@ -47,22 +46,4 @@ test('a step boundary makes the next content chunk flush again', () => {
 
 test('a settle with nothing before it still flushes', () => {
   expect(decisions(['settled'])).toEqual([true]);
-});
-
-// 2026-09-28 (turn-sql, one buffer): the stream buffer weighs model parts, a tab's replay store weighs the UI chunks
-// the SDK made of them. Weighed alike, the two flush at the same stream positions.
-test('every model stream part weighs what the UI chunk made of it weighs', () => {
-  const pairs: readonly (readonly [TextStreamPart<ToolSet>, UIMessageChunk, PartialFlushSignal])[] = [
-    [{ type: 'text-delta', id: 't', text: 'a' }, { type: 'text-delta', id: 't', delta: 'a' }, 'content'],
-    [{ type: 'reasoning-delta', id: 'r', text: 'a' }, { type: 'reasoning-delta', id: 'r', delta: 'a' }, 'content'],
-    [{ type: 'tool-call', toolCallId: 'c', toolName: 'file', input: {} }, { type: 'tool-input-available', toolCallId: 'c', toolName: 'file', input: {} }, 'content'],
-    [{ type: 'tool-result', toolCallId: 'c', toolName: 'file', input: {}, output: 'ok' }, { type: 'tool-output-available', toolCallId: 'c', output: 'ok' }, 'settled'],
-    [{ type: 'tool-error', toolCallId: 'c', toolName: 'file', input: {}, error: 'no' }, { type: 'tool-output-error', toolCallId: 'c', errorText: 'no' }, 'settled'],
-    [{ type: 'tool-output-denied', toolCallId: 'c', toolName: 'file' }, { type: 'tool-output-denied', toolCallId: 'c' }, 'settled'],
-    [{ type: 'text-start', id: 't' }, { type: 'text-start', id: 't' }, 'none'],
-    [{ type: 'text-end', id: 't' }, { type: 'text-end', id: 't' }, 'none'],
-    [{ type: 'start-step', request: {}, warnings: [] }, { type: 'start-step' }, 'none'],
-  ];
-
-  for (const [part, chunk, weight] of pairs) expect([part.type, flushSignal(part), flushSignal(chunk)]).toEqual([part.type, weight, weight]);
 });
