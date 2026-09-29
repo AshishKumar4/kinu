@@ -45,6 +45,7 @@ export {
   refusalOf,
   refusedInput,
   renderCauseChain,
+  renderErrorMessage,
   renderThrownChain,
   toKinuError,
   type ErrorCode,

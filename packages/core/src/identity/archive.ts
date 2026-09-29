@@ -45,7 +45,7 @@ export function archiveSqlFromDatabase(db: AgentDatabase): SqlExec {
     exec(query, ...bindings) {
       // Canonical BLOBs are ArrayBuffers; bun:sqlite binds TypedArrays only.
       const bound = bindings.map((binding) => (binding instanceof ArrayBuffer ? new Uint8Array(binding) : binding));
-      const rows = db.prepare<NativeArchiveDatabaseRow>(query).all(...bound);
+      const rows = db.query<NativeArchiveDatabaseRow>(query).all(...bound);
 
       return {
         toArray: () => rows.map((row) => Object.fromEntries(

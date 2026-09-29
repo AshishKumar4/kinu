@@ -11,15 +11,19 @@ export const BROWSER_CLIENT_MODULE = 'kinu-puppeteer.js';
 export const BROWSER_CLIENT_SOURCE = slateVendor.puppeteer;
 
 export const BROWSER_PRELUDE = String.raw`
-    // A failure is the declared Refusal, as every host member's is.
+    // A failure is handed to the host member of the same name, which records it in the program's census and answers
+    // the declared Refusal, as a host member's own failure is. Captured before the prelude defines the members.
+    const __kinuHostWeb = { connectBrowser: web.connectBrowser, pageTools: web.pageTools, callPageTool: web.callPageTool };
     const __kinuRefusing = (member, run) => async (...args) => {
+      const refusal = { reason: 'unavailable' };
+
       try {
-        return await run(...args);
+        return await run(refusal, ...args);
       } catch (cause) {
-        return { success: false, reason: null, error: 'web.' + member + ': ' + (cause instanceof Error ? cause.message : String(cause)) };
+        return __kinuHostWeb[member]({ refused: cause instanceof Error ? cause.message : String(cause), reason: refusal.reason });
       }
     };
-    web.connectBrowser = __kinuRefusing('connectBrowser', async (id) => {
+    web.connectBrowser = __kinuRefusing('connectBrowser', async (refusal, id) => {
       // Imported on first use: most programs never evaluate the 296 KB client.
       const { default: puppeteer } = await import('./${BROWSER_CLIENT_MODULE}');
       const gate = {
@@ -27,7 +31,10 @@ export const BROWSER_PRELUDE = String.raw`
           const answer = await globalThis.fetch(String(url).replace(/^https:\/\/[^/]+/, 'https://${BROWSER_GATE_HOST}'), init);
 
           // The gate refuses in words; without this puppeteer reports only a missing socket.
-          if (answer.webSocket === null) throw new Error(await answer.text());
+          if (answer.webSocket === null) {
+            if (answer.status === 403) refusal.reason = 'denied';
+            throw new Error(await answer.text());
+          }
 
           return answer;
         },
@@ -62,9 +69,9 @@ export const BROWSER_PRELUDE = String.raw`
 
       return state;
     };
-    web.pageTools = __kinuRefusing('pageTools', async (page) => [...(await __kinuWebMcpOf(page)).tools.values()]
+    web.pageTools = __kinuRefusing('pageTools', async (_refusal, page) => [...(await __kinuWebMcpOf(page)).tools.values()]
       .map(({ name, description, inputSchema }) => ({ name, description, inputSchema })));
-    web.callPageTool = __kinuRefusing('callPageTool', async (page, name, input) => {
+    web.callPageTool = __kinuRefusing('callPageTool', async (_refusal, page, name, input) => {
       const { cdp, tools, answerOf } = await __kinuWebMcpOf(page);
       const tool = tools.get(name);
 

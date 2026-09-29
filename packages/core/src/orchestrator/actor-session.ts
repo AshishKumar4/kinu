@@ -30,7 +30,8 @@ import type { VFS } from '../types/primitives';
 import type { AgentConfigStore } from '../config/store';
 import type { CompletedTurn } from '../evolution/types';
 import {
-  ADVISOR_ROLE_ID, advisedTurnOf, advisorLane, buildAdvisorPrompt, deliverAdvisorReply, type AdvisorRecoverySnapshot,
+  ADVISOR_ROLE_ID, advisedTurnOf, advisorLane, buildAdvisorPrompt, judgeAdvisorReply, sayAdvisorNote,
+  type AdvisorNote, type AdvisorRecoverySnapshot,
 } from '../advisor/review';
 import type { TemporaryAgentPort } from '../types/subordinates';
 import type { AnsweredEvolutionHelper } from '../identity/evolution-helpers';
@@ -293,51 +294,88 @@ export class ActorSession {
     }
   }
 
+  /** Notes handed to the conversation and not yet said, by the helper that answered them. */
+  private readonly delivering = new Map<string, Promise<void>>();
+
+  /** Settles once every note handed to the conversation is said, or failed and kept for the next pass. */
+  advisorDeliveries(): Promise<void> {
+    return Promise.allSettled(this.delivering.values()).then(() => undefined);
+  }
+
   /**
-   * Every advisor answer this actor holds, judged and delivered once; per-turn feedback never changes the learning window.
-   * An answer that cannot be delivered is recorded and kept; false tells a job queue to run this again.
+   * Every advisor answer this actor holds, judged once and said at most once; per-turn feedback never changes the
+   * learning window. A note to be said is handed to the conversation and not awaited: the turn it opens runs as long
+   * as it runs, and the answer is forgotten only once it is said. False while any answer is still held.
    */
   async deliverAdvisorAnswers(): Promise<boolean> {
     const port = this.options.advisorPort?.() ?? null;
 
     if (port === null) return true;
-    let delivered = true;
+    let settled = true;
 
     for (const helper of port.answered()) {
       const turnId = advisedTurnOf(helper.lane);
 
-      if (turnId !== null && !await this.deliverAdvisorAnswer(port, helper, turnId)) delivered = false;
+      if (turnId !== null && !await this.deliverAdvisorAnswer(port, helper, turnId)) settled = false;
     }
 
-    return delivered;
+    return settled;
   }
 
+  /** True once the answer is forgotten. */
   deliverAdvisorAnswer(port: TemporaryAgentPort, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean> {
-    const { engine } = this.options.orchestration;
-    const config = this.options.advisor?.config ?? this.runtime.actor.config;
+    if (this.delivering.has(helper.name)) return Promise.resolve(false);
 
-    return settle(attempt({ doing: `delivering the advisor's review of turn ${turnId}`, otherwise: 'unavailable' }, async () => {
-      // Keyed on the turn, so a delivery cut before `forget` sends nothing twice.
-      if (helper.status === 'completed' && !engine.hasAdvisorNoteForTurn(turnId)) {
-        await deliverAdvisorReply(helper.answer, {
-          turnId,
-          minSeverity: config.getAdvisorMinSeverity(),
-          recent: [...engine.recentAdvisorNotes()],
-          gateOpen: this.options.gateOpen?.() ?? false,
-          send: (signal) => this.orchestrator.inbox.send(signal),
-          record: (note, id) => { engine.recordAdvisorNote(note, id); },
-          ...(this.options.advisor !== undefined && { actor: this.runtime.actor, parent: this.options.advisor.parent }),
-        });
+    return settle(attempt({ doing: `judging the advisor's review of turn ${turnId}`, otherwise: 'unavailable' }, async () => {
+      const judged = helper.status === 'completed' ? this.judgedAdvice(helper.answer, turnId) : null;
+
+      if (judged === null || !judged.spoken) {
+        port.forget(helper.name);
+
+        return true;
       }
 
-      port.forget(helper.name);
+      this.delivering.set(helper.name, this.handOffAdvice(port, helper.name, judged.note, turnId)
+        .finally(() => { this.delivering.delete(helper.name); }));
 
-      return true;
+      return false;
     }).pipe(Effect.catch((failure) => Effect.sync(() => {
       diagnostics.failure('advisor.delivery_failed', failure, { turnId });
 
       return false;
     }))));
+  }
+
+  /** The note judged for the turn, recorded by its first judgement; a pass after a cut delivery reads it back. */
+  private judgedAdvice(answer: string, turnId: string): { readonly note: AdvisorNote; readonly spoken: boolean } | null {
+    const { engine } = this.options.orchestration;
+    const recorded = engine.advisorNoteForTurn(turnId);
+
+    if (recorded !== null) return recorded;
+
+    const judged = judgeAdvisorReply(answer, {
+      turnId,
+      minSeverity: (this.options.advisor?.config ?? this.runtime.actor.config).getAdvisorMinSeverity(),
+      recent: [...engine.recentAdvisorNotes()],
+      gateOpen: this.options.gateOpen?.() ?? false,
+      record: (note, id, spoken) => { engine.recordAdvisorNote(note, id, spoken); },
+    });
+
+    return judged === null || judged.disposition === 'drop' ? null : { note: judged.note, spoken: judged.disposition === 'deliver' };
+  }
+
+  /** Settles once the note is said and its answer forgotten, or failed and kept for the next pass. */
+  handOffAdvice(port: TemporaryAgentPort, name: string, note: AdvisorNote, turnId: string): Promise<void> {
+    return settle(attempt({ doing: `saying the advisor's note on turn ${turnId}`, otherwise: 'unavailable' }, async () => {
+      const sent = await sayAdvisorNote(note, {
+        turnId,
+        send: (signal) => this.orchestrator.inbox.send(signal),
+        ...(this.options.advisor !== undefined && { actor: this.runtime.actor, parent: this.options.advisor.parent }),
+      });
+
+      // A signal the host could not take stays owed for the next pass.
+      if (sent === 'queued' || sent === 'mid-turn') port.forget(name);
+    }).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('advisor.delivery_failed', failure, { turnId }); }))));
   }
 
   private async advisorGuidance(snapshot: AdvisorRecoverySnapshot): Promise<string> {

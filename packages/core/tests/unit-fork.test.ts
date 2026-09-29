@@ -13,6 +13,7 @@ import { receiverFor, sourceFrames, streamFork } from './helpers/fork-stream';
 import { SHELL_APPROVAL_AUTHORITY_KEYS } from '../src/config/store';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
+import { agentCred, agentIdentity, provisionAgentHome, subordinateAgentName } from '../src/vfs/agent-home';
 
 function forkInto(src: TestWorkspace, tgt: TestWorkspace, opts: {
   untilMessageId: string; targetWorkspaceId?: string; targetWorkspaceName?: string; now?: number; frameBytes?: number;
@@ -34,6 +35,74 @@ async function plane(ws: TestWorkspace) {
 const inherited = (ids: readonly string[]): string[] => ids.filter((id) => !id.startsWith('fork-marker-'));
 
 describe('a workspace fork', () => {
+  test('an unrelated hire cannot inherit access through a reused source uid', async () => {
+    const src = fresh();
+    const tgt = fresh();
+    const chat = await seedForkSource(src);
+    await chat.say({ id: 'm1', role: 'user', text: 'fork the workspace' });
+    const sourceSession = await src.bundle.session();
+    const sourceName = subordinateAgentName('source-owner');
+    const sourceOwner = agentIdentity(sourceSession.sql, sourceName);
+    const root = sourceSession.vfs.as(CRED_KERNEL);
+    provisionAgentHome(root, sourceName, sourceOwner);
+    const directory = `${WORKSPACE_ROOT}/shared`;
+    const secret = `${directory}/secret`;
+    root.mkdir(directory, { recursive: true });
+    root.chmod(directory, 0o777);
+    sourceSession.vfs.as(agentCred(sourceOwner)).writeFile(secret, 'inherited private bytes', { mode: 0o600 });
+
+    await forkInto(src, tgt, { untilMessageId: 'm1' });
+    const targetSession = await tgt.bundle.session();
+    const unrelatedName = subordinateAgentName('unrelated');
+    const unrelated = agentIdentity(targetSession.sql, unrelatedName);
+    provisionAgentHome(targetSession.vfs.as(CRED_KERNEL), unrelatedName, unrelated);
+    // The registry did not cross: the unrelated hire reuses the number, not the source principal's authority.
+    expect(unrelated.uid).toBe(sourceOwner.uid);
+    const stranger = targetSession.vfs.as(agentCred(unrelated));
+    expect(() => stranger.readFileString(secret)).toThrow(expect.objectContaining({ code: 'EACCES' }));
+    expect(() => stranger.writeFile(secret, 'stolen')).toThrow(expect.objectContaining({ code: 'EACCES' }));
+    const main = targetSession.vfs.as(CRED_SESSION_USER);
+    expect(main.readFileString(secret)).toBe('inherited private bytes');
+    main.writeFile(secret, 'the fork owner can edit');
+    expect(main.readFileString(secret)).toBe('the fork owner can edit');
+  });
+
+  test('a source-private group does not become the fork-wide shared group', async () => {
+    const src = fresh();
+    const tgt = fresh();
+    const chat = await seedForkSource(src);
+    await chat.say({ id: 'm1', role: 'user', text: 'fork the workspace' });
+    const sourceSession = await src.bundle.session();
+    const sourceGroup = agentIdentity(sourceSession.sql, subordinateAgentName('source-group'));
+    const root = sourceSession.vfs.as(CRED_KERNEL);
+    const directory = `${WORKSPACE_ROOT}/shared`;
+    const secret = `${directory}/group-secret`;
+    root.mkdir(directory, { recursive: true });
+    root.chmod(directory, 0o777);
+    root.writeFile(secret, 'private group bytes');
+    root.chown(secret, CRED_KERNEL.uid, sourceGroup.gid);
+    root.chmod(secret, 0o660);
+    const groupMember = sourceSession.vfs.as(agentCred(sourceGroup));
+    expect(groupMember.readFileString(secret)).toBe('private group bytes');
+    groupMember.writeFile(secret, 'written through the source group');
+
+    await forkInto(src, tgt, { untilMessageId: 'm1' });
+    const targetSession = await tgt.bundle.session();
+    const unrelated = agentIdentity(targetSession.sql, subordinateAgentName('unrelated'));
+    expect(unrelated.gid).toBe(sourceGroup.gid);
+
+    // Main must not acquire the kernel's ownership either. Every hire is also in the shared group 1000.
+    for (const cred of [CRED_SESSION_USER, agentCred(unrelated)]) {
+      const actor = targetSession.vfs.as(cred);
+      expect(() => actor.readFileString(secret)).toThrow(expect.objectContaining({ code: 'EACCES' }));
+      expect(() => actor.writeFile(secret, 'stolen')).toThrow(expect.objectContaining({ code: 'EACCES' }));
+    }
+
+    const targetRoot = targetSession.vfs.as(CRED_KERNEL);
+    expect(targetRoot.readFileString(secret)).toBe('written through the source group');
+    expect(targetRoot.stat(secret).mode & 0o7777).toBe(0o660);
+  });
+
   test('carries the cut point\'s ancestry and nothing past it', async () => {
     const src = fresh();
     const tgt = fresh();

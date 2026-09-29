@@ -219,6 +219,8 @@ export function systemCapturingModel(answer: string, sink: (system: string) => v
 /** Workspace database and runtime; the only place the bun:sqlite handle is widened to the factory's parameter. */
 export function workspaceRuntime() {
   const db = new Database(scratchPath('local-session', 'agent.db'));
+  // As openWorkspaceCLI opens one: WAL, not the rollback journal's fsyncs per commit.
+  db.exec('PRAGMA journal_mode = WAL');
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
 

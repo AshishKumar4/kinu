@@ -1,5 +1,5 @@
 // The advisor: an agent of its own reads a finished turn's record (no tools) and may say one thing about it.
-// Stateless: notes, delivery and recording arrive as arguments, so every reviewed actor shares deliverAdvisorReply.
+// Stateless: notes, delivery and recording arrive as arguments, so every reviewed actor shares judgeAdvisorReply.
 
 import * as v from 'valibot';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -62,6 +62,8 @@ export const AdvisorRowDataSchema = v.object({
   severity: v.picklist(ADVISOR_SEVERITIES),
   class: v.picklist(ADVISOR_NOTE_CLASSES),
   turnId: v.nullable(v.string()),
+  /** Said to the reviewed actor, not only written to the Changelog; a delivery cut short says it again. */
+  spoken: v.optional(v.boolean()),
 });
 
 export type AdvisorRowData = v.InferOutput<typeof AdvisorRowDataSchema>;
@@ -367,40 +369,40 @@ export const AdvisorRecoverySnapshotSchema = v.object({
 export type AdvisorRecoverySnapshot = v.InferOutput<typeof AdvisorRecoverySnapshotSchema>;
 
 /**
- * The one turn-end policy every reviewed actor reaches: the advisor agent's reply, judged and delivered.
- * Null when it said nothing readable.
+ * The one judgement every reviewed actor's advisor answer takes, recorded when kept: `changelog` is filed only,
+ * `deliver` is also to be said ({@link sayAdvisorNote}). Null when it said nothing readable.
  */
-export async function deliverAdvisorReply(reply: string, deps: {
+export function judgeAdvisorReply(reply: string, deps: {
   readonly turnId: string | undefined;
   readonly minSeverity: AdvisorSeverity;
   /** Normalised text of the notes already on the audit stream. */
   readonly recent: readonly string[];
   /** The completion gate has asked its question and not heard back. */
   readonly gateOpen: boolean;
-  readonly send: (signal: AgentSignal) => Promise<SendOutcome>;
-  /** The turn id joins the row to the conversation it graded. */
-  readonly record: (note: AdvisorNote, turnId: string | undefined) => void;
-  /** A hired actor's: its blocker reaches its parent too, and its signal key names it. */
-  readonly actor?: ActorHandle;
-  readonly parent?: (signal: AgentSignal) => Promise<SendOutcome>;
-}): Promise<AdvisorDisposition | null> {
+  /** The turn id joins the row to the conversation it graded; `spoken` when the note is said, not only filed. */
+  readonly record: (note: AdvisorNote, turnId: string | undefined, spoken: boolean) => void;
+}): { readonly note: AdvisorNote; readonly disposition: AdvisorDisposition } | null {
   const note = parseAdvisorReply(reply);
 
   if (note === null) return null;
+  const { disposition } = judgeNote({ note, minSeverity: deps.minSeverity, recent: deps.recent, gateOpen: deps.gateOpen });
 
-  const verdict = judgeNote({
-    note,
-    minSeverity: deps.minSeverity,
-    recent: deps.recent,
-    gateOpen: deps.gateOpen,
-  });
+  // Recorded before it is said: the row feeds the next turn's dedupe window.
+  if (disposition !== 'drop') deps.record(note, deps.turnId, disposition === 'deliver');
 
-  if (verdict.disposition === 'drop') return 'drop';
-  // Recorded first on both remaining paths: the row feeds the next turn's dedupe window.
-  deps.record(note, deps.turnId);
+  return { note, disposition };
+}
 
-  if (verdict.disposition === 'changelog') return 'changelog';
-
+/**
+ * A recorded note said to the reviewed actor, and a blocker to its parent too. Keyed on the turn, so a note said
+ * again after a cut delivery collapses onto the turn it already opened; no key without a durable id.
+ */
+export async function sayAdvisorNote(note: AdvisorNote, deps: {
+  readonly turnId: string | undefined;
+  readonly send: (signal: AgentSignal) => Promise<SendOutcome>;
+  readonly actor?: ActorHandle;
+  readonly parent?: (signal: AgentSignal) => Promise<SendOutcome>;
+}): Promise<SendOutcome> {
   const signal: AgentSignal = {
     kind: ADVISOR_SIGNAL_KIND,
     text: advisorSignalText(note),
@@ -408,17 +410,16 @@ export async function deliverAdvisorReply(reply: string, deps: {
     metadata: { [ADVISOR_SEVERITY_METADATA_KEY]: note.severity },
   };
 
-  // One note per turn, so a re-delivery collapses; no key without a durable id, since a fabricated one would collide.
   const keyed: AgentSignal = deps.turnId === undefined || deps.turnId === ''
     ? signal
     : { ...signal, idempotencyKey: deps.actor === undefined
       ? `advisor:${deps.turnId}` : `advisor:${deps.actor.actorId}:${deps.turnId}` };
 
-  await deps.send(keyed);
+  const sent = await deps.send(keyed);
 
   if (note.severity === 'blocker' && deps.actor !== undefined && deps.parent !== undefined) {
     await deps.parent({ ...keyed, text: `[Actor ${deps.actor.name}]\n${keyed.text}` });
   }
 
-  return 'deliver';
+  return sent;
 }

@@ -3,7 +3,7 @@
 `lean/` holds hand-written abstract models of selected agent, evolution,
 execution, exploration, MCTS, safety and storage behavior. Check them with
 `bash scripts/verify-lean.sh`. Plain `lake build` compiles the declarations and
-skips the audits that follow it. Seven requirements are also refined against
+skips the audits that follow it. Five requirements are also refined against
 the deployed TypeScript and SQLite on generated cases (see *Implementation
 correspondence*); the rest are proved of their model only.
 
@@ -156,7 +156,7 @@ over 3,264 files: 95 module citations, 43 theorem citations, 1 line citation.
 
 ## Implementation correspondence
 
-A proof covers its model. The refinement fixtures tie seven requirements to the
+A proof covers its model. Four refinement fixtures tie five requirements to the
 deployed code: `lean/Kinu/Refine/` evaluates the model's own definitions on
 generated inputs, and a test runs the deployed function on the same inputs:
 against real `bun:sqlite`, or, for the device view, on a real directory tree.
@@ -168,10 +168,13 @@ against real `bun:sqlite`, or, for the device view, on a real directory tree.
 | `credential-envelope.json` | `Credentials.openStored`, transparent cipher | `createCredentialCipher`, AES-GCM | `refinement-credentials.test.ts` | `PR-CRED-001` |
 | `device-view.json` | `DeviceView.frameView`, `Sandboxed.classify` | `viewFor` on a tree with real links | `refinement-device-view.test.js` | `PR-DEVICE-001` |
 
-Measured 2026-09-23: 980 cases pass. Each test went red on planted breaks in
-the deployed code: six in `uct.ts`, five in `takes.ts` and
+History, measured 2026-09-23 on that day's fixtures (the convergence fixture
+included, retired since with MCTS): 980 cases pass. Each test went red on planted
+breaks in the deployed code: six in `uct.ts`, five in `takes.ts` and
 `backpropagation.ts`, four in `records.ts` and `objective.ts`, three in
-`envelope.ts`, and six in `sandbox.js`. A fixture is a finite sample. It shows
+`envelope.ts`, and six in `sandbox.js`.
+
+A fixture is a finite sample. It shows
 agreement on its cases, not on every input. The SQLite fixtures run on
 `bun:sqlite`, not on a Durable Object's SQLite, and the device view runs as
 macOS's view, without the Linux mounts and the temp remap.

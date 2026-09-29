@@ -9,6 +9,8 @@ import {
   createDefaultWebSearchProvider,
   createWebCodemodeProvider,
   createSlateWebCodemodeProvider,
+  successfulToolOutcome,
+  withClampedToolResult,
   assertSafeUrl,
   isSafeUrl,
   UnsafeUrlError,
@@ -759,6 +761,20 @@ describe('web through Browser Run', () => {
         { type: 'text', text: expect.stringContaining('"shot":"[image 1]"') },
         { type: 'image-data', data: 'iVBORw0KGgo=', mediaType: 'image/png' },
       ],
+    });
+  });
+});
+
+describe('an eval that returns an image', () => {
+  test('keeps the failures its program recorded where the turn reads them', async () => {
+    const failure = { success: false as const, tool: 'web', action: 'fetch', reason: 'denied' as const, error: 'blocked private/internal address: 10.0.0.1' };
+    const program = { result: { shot: 'data:image/png;base64,iVBORw0KGgo=' }, logs: [], failures: [failure] };
+    const evalTool = withClampedToolResult(tool({ inputSchema: jsonSchema<{ code: string }>({ type: 'object' }), execute: async () => program }), { producer: 'eval', images: true });
+    const output = await toolExecute<{ code: string }, JsonValue>(evalTool)({ code: '' });
+
+    expect(successfulToolOutcome('eval', { output })).toEqual({ success: true, failures: [failure] });
+    expect(await evalTool.toModelOutput?.({ toolCallId: 'c1', input: { code: '' }, output })).toMatchObject({
+      type: 'content', value: [{ type: 'text' }, { type: 'image-data', data: 'iVBORw0KGgo=' }],
     });
   });
 });

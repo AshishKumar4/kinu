@@ -12,7 +12,7 @@ import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
   CONTENT_FREE_NOTES, DEFAULT_ADVISOR_MIN_SEVERITY,
   buildAdvisorPrompt, isAdvisorSeverity, isContentFree, isDuplicateNote,
-  deliverAdvisorReply, judgeNote, normalizeNote, parseAdvisorReply,
+  judgeAdvisorReply, judgeNote, normalizeNote, parseAdvisorReply, sayAdvisorNote,
   type AdvisorNote, type AdvisorSeverity,
 } from '../src/index';
 import type { AgentSignal } from '../src/types/signals';
@@ -47,18 +47,29 @@ async function lane(over: {
   const delivered: AgentSignal[] = [];
   const recorded: AdvisorNote[] = [];
 
-  const disposition = await deliverAdvisorReply(over.reply ?? JSON.stringify(NOTE), {
-    turnId: (over.turn ?? aTurn()).turnId,
+  const turnId = (over.turn ?? aTurn()).turnId;
+
+  const judged = judgeAdvisorReply(over.reply ?? JSON.stringify(NOTE), {
+    turnId,
     minSeverity: over.minSeverity ?? DEFAULT_ADVISOR_MIN_SEVERITY,
     recent: [...(over.recent ?? [])],
     gateOpen: over.gateOpen ?? false,
-    send: async (signal) => {
-      delivered.push(signal);
-
-      return 'queued';
-    },
     record: (note) => { recorded.push(note); },
   });
+
+  // Said only when judged to be: what every reviewed actor does with the verdict.
+  if (judged?.disposition === 'deliver') {
+    await sayAdvisorNote(judged.note, {
+      turnId,
+      send: async (signal) => {
+        delivered.push(signal);
+
+        return 'queued';
+      },
+    });
+  }
+
+  const disposition = judged === null ? null : judged.disposition;
 
   return { disposition, delivered, recorded };
 }
@@ -510,7 +521,7 @@ describe('a turn with no durable id', () => {
 
 // Both backends deliver through one body; the gate is the caller's (see the completion-gate rule).
 
-describe('deliverAdvisorReply', () => {
+describe('judgeAdvisorReply', () => {
   test('an unreadable reply is a turn with no advice', async () => {
     expect(await lane({ reply: 'the reviewer wandered off' })).toMatchObject({ disposition: null, delivered: [], recorded: [] });
   });
