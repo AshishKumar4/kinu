@@ -1,8 +1,8 @@
 /** The workspace object's side of an agent in its own loader isolate (D9). */
 import { RpcTarget, WorkerEntrypoint, exports } from 'cloudflare:workers';
-import type { ModelMessage, UIMessageChunk } from 'ai';
+import type { UIMessageChunk } from 'ai';
 import * as v from 'valibot';
-import type { JsonObject, ObservedCall, ProviderEnv, WorkMode } from '@kinu.run/core';
+import type { AuthRequest, EnqueueTurnResult, JsonObject, ProgrammaticTurn, ObservedCall, ProviderEnv, WorkMode } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { CredentialSummary } from './user/user-do';
 import type { AgentReview, AgentToolAnswer, AgentToolCall, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn } from './agent-facet/protocol';
@@ -26,13 +26,14 @@ export interface AgentWorkspaceAnswers {
   stateSession(): Promise<HostedSession>;
   prepareTurn(turnId: string): Promise<PreparedAgentTurn>;
   profile(turnId: string, availableTools: readonly string[], workMode: WorkMode): Promise<AgentTurnProfile>;
-  advise(review: AgentReview): Promise<ModelMessage[]>;
+  advise(review: AgentReview): Promise<void>;
+  enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
   executeTool(call: AgentToolCall): Promise<AgentToolAnswer>;
   observe(lines: ReadableStream<Uint8Array>, call: ObservedCall): Promise<void>;
   answerMetadata(turnId: string, narration: readonly string[]): Promise<JsonObject | null>;
   finishTurn(turnId: string, end: AgentTurnEnd): Promise<void>;
   failTurn(turnId: string, failure: string): Promise<void>;
-  getAuthHeaders(key: string, opts?: { forceRefresh?: boolean }): Promise<Record<string, string> | null>;
+  getAuthHeaders(key: string, opts?: AuthRequest): Promise<Record<string, string> | null>;
   getCredentialBaseURL(key: string): Promise<string | null>;
   listCredentials(): Promise<CredentialSummary[]>;
   codexRelayDevice(): Promise<{ readonly id: string; readonly label: string } | null>;
@@ -50,12 +51,13 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   prepareTurn(turnId: string) { return this.answers.prepareTurn(turnId); }
   profile(turnId: string, availableTools: readonly string[], workMode: WorkMode) { return this.answers.profile(turnId, availableTools, workMode); }
   advise(review: AgentReview) { return this.answers.advise(review); }
+  enqueueTurn(input: ProgrammaticTurn) { return this.answers.enqueueTurn(input); }
   executeTool(call: AgentToolCall) { return this.answers.executeTool(call); }
   observe(lines: ReadableStream<Uint8Array>, call: ObservedCall) { return this.answers.observe(lines, call); }
   answerMetadata(turnId: string, narration: readonly string[]) { return this.answers.answerMetadata(turnId, narration); }
   finishTurn(turnId: string, end: AgentTurnEnd) { return this.answers.finishTurn(turnId, end); }
   failTurn(turnId: string, failure: string) { return this.answers.failTurn(turnId, failure); }
-  getAuthHeaders(key: string, opts?: { forceRefresh?: boolean }) { return this.answers.getAuthHeaders(key, opts); }
+  getAuthHeaders(key: string, opts?: AuthRequest) { return this.answers.getAuthHeaders(key, opts); }
   getCredentialBaseURL(key: string) { return this.answers.getCredentialBaseURL(key); }
   listCredentials() { return this.answers.listCredentials(); }
   codexRelayDevice() { return this.answers.codexRelayDevice(); }
@@ -75,12 +77,13 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   prepareTurn(turnId: string) { return this.host().prepareTurn(turnId); }
   profile(turnId: string, availableTools: readonly string[], workMode: WorkMode) { return this.host().profile(turnId, availableTools, workMode); }
   advise(review: AgentReview) { return this.host().advise(review); }
+  enqueueTurn(input: ProgrammaticTurn) { return this.host().enqueueTurn(input); }
   executeTool(call: AgentToolCall) { return this.host().executeTool(call); }
   observe(lines: ReadableStream<Uint8Array>, call: ObservedCall) { return this.host().observe(lines, call); }
   answerMetadata(turnId: string, narration: readonly string[]) { return this.host().answerMetadata(turnId, narration); }
   finishTurn(turnId: string, end: AgentTurnEnd) { return this.host().finishTurn(turnId, end); }
   failTurn(turnId: string, failure: string) { return this.host().failTurn(turnId, failure); }
-  getAuthHeaders(key: string, opts?: { forceRefresh?: boolean }) { return this.host().getAuthHeaders(key, opts); }
+  getAuthHeaders(key: string, opts?: AuthRequest) { return this.host().getAuthHeaders(key, opts); }
   getCredentialBaseURL(key: string) { return this.host().getCredentialBaseURL(key); }
   listCredentials() { return this.host().listCredentials(); }
   codexRelayDevice() { return this.host().codexRelayDevice(); }

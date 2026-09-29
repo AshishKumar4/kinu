@@ -10,11 +10,11 @@ import type {
   StagedSkillResult,
   ReasoningEffort, TierId, Usage, RunEvent, JsonObject, ToolOutcome,
   AdmittedInstructionDecision,
-  InstructionSourceRow, InstructionSourceView, Page, PageRequest,
+  InstructionSourceRow, InstructionSourceView, Page, PageRequest, PositionCursor, PositionPageRequest,
   DeferredApproval, DeferredApprovalAnswer,
   PlanReview, ReviewAnnotation, PlanReviewDecision, PlanReviewResult, WorkMode,
   SubordinateInspectionRequest, SubordinateInspectionResult, ChatHistoryEntry, WorkspaceSpend, WorkspaceWork,
-  ModelTestResult,
+  ModelTestResult, ContextFill,
 } from '@kinu.run/core';
 import type { ShellApprovalHandler } from '@kinu.run/cli-backend';
 import type { CliSession } from './session';
@@ -81,13 +81,13 @@ export interface AgentClientStatus {
   scaffoldVersion?: number;
   messageCount?: number;
   searchNodeCount?: number;
-  taskCount?: number;
   memorySize?: number;
   dbSize?: number;
   toolCount?: number;
   autoEvolve?: boolean;
   roleId?: string;
   tierId?: string;
+  context?: ContextFill | null;
 }
 
 interface AgentToolDescription {
@@ -148,10 +148,10 @@ export interface AgentForkResult {
 /** A durable conversation, oldest first, over either backend's `getChatHistoryPage`. Never capped: a fork
  *  pivot past a cap would read as not found. */
 export async function readConversation(
-  page: (request: PageRequest) => Promise<Page<ChatHistoryEntry>>,
+  page: (request: PositionPageRequest) => Promise<Page<ChatHistoryEntry, PositionCursor>>,
 ): Promise<AgentTranscriptMessage[]> {
   const messages: AgentTranscriptMessage[] = [];
-  let request: PageRequest = {};
+  let request: PositionPageRequest = {};
 
   for (;;) {
     const read = await page(request);
@@ -257,7 +257,7 @@ export interface LocalSessionControls {
   approveInstruction(path: string, digest: string): Promise<AdmittedInstructionDecision>;
   revokeInstruction(path: string): Promise<AdmittedInstructionDecision>;
   clearConversation(): Promise<void>;
-  compactNow(): void;
+  compact(): Promise<void>;
 }
 
 /** The owner's half of Plan mode; both backends serve core's `PlanReviewStore`. */

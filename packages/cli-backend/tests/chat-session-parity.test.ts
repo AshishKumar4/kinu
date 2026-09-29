@@ -3,12 +3,12 @@ import * as v from 'valibot';
 import { runParityScenario } from './chat-session-parity';
 
 describe('ChatSession steering and recovery', () => {
-  test('steering preserves conversation ancestry and consumes pending sends across restart', async () => {
+  test('steering preserves conversation order and consumes pending sends across restart', async () => {
     const now = await runParityScenario();
     expect(now.landings).toEqual({ landingTwo: 'mid-turn', landingThree: 'cancelled', returned: ['three-steer'], landingFour: 'acknowledged', landingFive: 'turn' });
-    const rows = v.parse(v.array(v.object({ id: v.string(), parentId: v.nullable(v.string()), role: v.string(), content: v.string() })), now.afterTwo.actorMessages);
+    const rows = v.parse(v.array(v.object({ id: v.string(), position: v.number(), role: v.string(), content: v.string() })), now.afterTwo.actorMessages);
     expect(rows.map(row => row.content)).toEqual(['one', 'answer one', 'two', 'two-steer', 'answer two']);
-    expect(rows.map(row => row.parentId)).toEqual([null, ...rows.slice(0, -1).map(row => row.id)]);
+    expect(rows.map(row => row.position)).toEqual(rows.map((_, index) => index));
     expect(now.beforeRestart.pendingSteers).toHaveLength(2);
     expect(now.beforeRestart.pendingSteerFiles).toMatchObject([{ filename: 'note.txt', mediaType: 'text/plain', url: 'data:text/plain;base64,aGVsbG8=' }]);
     expect(now.end.pendingSteers).toEqual([]);
@@ -25,15 +25,15 @@ describe('ChatSession steering and recovery', () => {
   test('AN INTERRUPTED TURN CONTINUES: the restart re-opens the dead turn where it stopped', async () => {
     // The dead process's turn is re-opened under the same row and re-enters its produced tool call rather than rerunning:
     const now = await runParityScenario();
-    const rows = v.parse(v.array(v.object({ id: v.string(), parentId: v.nullable(v.string()), role: v.string(), content: v.string() })), now.end.actorMessages);
+    const rows = v.parse(v.array(v.object({ id: v.string(), position: v.number(), role: v.string(), content: v.string() })), now.end.actorMessages);
     const four = rows.filter((row) => row.role === 'user' && row.content === 'four');
     // …the opening row exists once, not once per process that ran it;
     expect(four).toHaveLength(1);
-    // …the steer acknowledged before the death lands under that same row and
-    //    the answer under the steer — one chain, one answer;
+    // …the steer acknowledged before the death lands right after that same row and
+    //    the answer right after the steer: one run, one answer;
     const steer = rows.find((row) => row.content === 'four-steer');
-    expect(steer?.parentId).toBe(four[0]?.id);
-    expect(rows.find((row) => row.role === 'assistant' && row.parentId === steer?.id)?.content).toBe('answer four again');
+    expect(steer?.position).toBe((four[0]?.position ?? -1) + 1);
+    expect(rows.find((row) => row.role === 'assistant' && row.position === (steer?.position ?? -1) + 1)?.content).toBe('answer four again');
     // …and the continuation's model call carries the dead process's tool call
     //    with the result the ledger holds, then the steer, and asks for
     //    exactly the remaining call: the tool is not run again and the

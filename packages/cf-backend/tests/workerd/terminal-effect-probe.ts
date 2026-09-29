@@ -20,7 +20,7 @@ import {
 
 /** Real `TERMINAL_EFFECT_NAMES`, all inline so a cut leaves an exact suffix (detached effects would make it a scheduling assertion). */
 export const PROBE_SEQUENCE = [
-  'takes', 'event_reply', 'turn_record', 'auto_title', 'auto_gepa',
+  'craft_usage', 'event_reply', 'turn_record', 'auto_title', 'auto_gepa',
 ] as const satisfies readonly TerminalEffectName[];
 
 /** Reports itself owed on its first execution, as an open reply channel does in production. */
@@ -155,6 +155,8 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
       now: () => Date.now() + this.clockSkewMs,
       fault: () => this.fault,
       transaction: (body) => this.ctx.storage.transactionSync(body),
+      turnIsLive: () => false,
+      settled: async () => {},
       // Arms before replaying: a one-shot alarm must not be consumed with the suffix uncarried.
       // Soonest wins: core arms again after the pass at a later instant, which would push the wake past a due row.
       scheduleRetry: async (atMs) => {

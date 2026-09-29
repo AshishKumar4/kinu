@@ -41,8 +41,17 @@ class VfsError extends Error {
   }
 }
 
+export type { VfsError };
+
 export function makeVfsError(code: VfsErrorCode, message: string, path: string): VfsError {
   return new VfsError(code, message, path);
+}
+
+/** Node's error text ("ENOENT: …") from a remote plane as the VFS error it names, or null. */
+export function vfsErrorFromText(message: string, path: string): VfsError | null {
+  const [, code, text] = /^(E[A-Z]+): (.*)$/su.exec(message) ?? [];
+
+  return code === undefined || text === undefined || !v.is(VfsErrorCodeSchema, code) ? null : new VfsError(code, text, path);
 }
 
 /** The same error with guidance appended to its message; code, errno and path are preserved. */

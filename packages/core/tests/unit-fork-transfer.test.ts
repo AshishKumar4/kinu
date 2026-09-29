@@ -86,7 +86,7 @@ async function source(opts: { files?: Array<{ path: string; content: string }>; 
     craftedTools: [{ name: 'helper', description: 'utility', code: 'async (x) => x' }],
   });
 
-  await chat.say({ id: 'm1', role: 'user', text: 'first', parentId: null });
+  await chat.say({ id: 'm1', role: 'user', text: 'first' });
   await chat.say({ id: 'm2', role: 'assistant', text: opts.spill ? 'p'.repeat(SPILLED_BYTES) : 'second' });
   await chat.say({ id: 'm3', role: 'user', text: 'third' });
 
@@ -268,8 +268,8 @@ describe('fork transfer receiver', () => {
     await deliver(receiverFor(native), await sourceFrames(src, 'm2'));
 
     const rowsOf = (ws: TestWorkspace) => ({
-      entries: ws.sql<{ id: string; parent_id: string | null; role: string }>`
-        SELECT id, parent_id, role FROM conversation_entries ORDER BY rowid`,
+      entries: ws.sql<{ id: string; position: number; role: string }>`
+        SELECT id, position, role FROM conversation_entries ORDER BY rowid`,
       entryParts: ws.sql<{ entry_id: string; message_id: string; part_no: number }>`
         SELECT entry_id, message_id, part_no FROM conversation_entry_parts ORDER BY entry_id, position`,
       messages: ws.sql<{ message_id: string; role: string; origin: string; sealed_at: number; envelope_json: string; content_json: string | null; content_digest: string | null }>`
@@ -632,7 +632,7 @@ describe('fork transfer receiver', () => {
 
     const src = fresh();
     const chat = await seedForkSource(src, { workspaceId: 'BIG', workspaceName: 'big', memory: [] });
-    await chat.say({ id: 'm1', role: 'user', text: 'only', parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: 'only' });
     const tgt = fresh();
     const writer = new ForkTargetWriter(tgt.sql, OWNER);
     const receiver = new ForkTransferReceiver(writer, sink);
@@ -847,7 +847,7 @@ describe('fork transfer receiver', () => {
     // Publication refuses a transfer that does not carry the head's cut entry.
     const cut = sealForkFrame({
       version: FORK_TRANSFER_VERSION, transferId, seq: 1, kind: 'conversationEntries',
-      rows: [{ id: 'm1', parent_id: null, role: 'user', turn_id: null, run_id: null, metadata_json: null, metadata_path: null, metadata_digest: null, recorded_at: 1 }],
+      rows: [{ id: 'm1', position: 0, role: 'user', turn_id: null, run_id: null, metadata_json: null, metadata_path: null, metadata_digest: null, recorded_at: 1 }],
     });
 
     const begin = sealForkFrame({
@@ -957,7 +957,7 @@ describe('fork transfer receiver', () => {
     const chunk = 'x'.repeat(900 * 1024);
 
     for (let index = 0; index < 100; index += 1) {
-      await chat.say({ id: `m${index}`, role: 'user', text: chunk, parentId: index === 0 ? null : undefined });
+      await chat.say({ id: `m${index}`, role: 'user', text: chunk });
     }
 
     await src.vfs.mkdir('memory', { recursive: true });

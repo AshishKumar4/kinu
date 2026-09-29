@@ -26,11 +26,12 @@ import {
   type SlateCallResult, type SlateOperation, type SqlExec, type SqlExecutor,
   type SqlValue, type WorkMode,
   type WorkspaceActor, type WorkspaceActorDirectory, type WriteObserver,
+  isSubordinateOrigin,
 } from '@kinu.run/core';
 import { KinuError, settle, type AgentTracing } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import { createCFRuntime, type CFRuntime, type CFRuntimeHooks } from './runtime';
-import type { HostedNodeHome, LiveRead } from '@kinu.run/core';
+import type { HostedNodeHome, LiveRead, TemporaryAgentPort } from '@kinu.run/core';
 
 /** The root agents-SDK members a hosted actor's runtime borrows; projected from `Agent` so upstream drift fails to compile. */
 export type HostRootAgent = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber'>;
@@ -84,6 +85,8 @@ export interface WorkspaceHostSeams {
   /** The owner's needs-you queue: one per workspace. */
   deferrals(): DeferredApprovalChannel | undefined;
   refinementLane(bound: BoundActor & { readonly runtime: AgentRuntime }): () => Promise<void>;
+  /** The port a hosted actor hires its advisor through, as every hire goes; absent, none is reviewed. */
+  advisorPort?(reference: ActorReference): TemporaryAgentPort;
   /** The loop origin a creation site named for this actor, or null for the kind's default. */
   chosenLoopOrigin(record: WorkspaceActor): LoopOrigin | null;
   /**
@@ -93,22 +96,23 @@ export interface WorkspaceHostSeams {
   chosenWriteObserver(record: WorkspaceActor): WriteObserver | null;
 }
 
-/** Where a hosted actor lives in the workspace. The one reader of the profile fields that decide it. */
+/** Where a hosted actor lives; the one reader of the fields that decide it. */
 export interface HostedActorPlacement {
-  /** A toolless run actor (an MCTS branch) has no home; a swarm node's home is in `head-`. */
+  /** A swarm node's home is in `head-`. */
   readonly homeName: string | null;
-  /** Kind-prefixed so a head's and a subordinate's shell state cannot collide on one id. */
+  /** Origin-prefixed so a head's and a subordinate's shell state cannot collide on one id. */
   readonly shellId: string;
 }
 
 export function hostedActorPlacement(record: WorkspaceActor): HostedActorPlacement {
-  if (record.kind === 'main') return { homeName: null, shellId: `agent:${record.name}` };
-  const shellId = `${record.kind}:${record.storageKey}`;
-
-  if (record.toolProfile !== 'full') return { homeName: null, shellId };
+  if (record.origin === 'system') return { homeName: null, shellId: `agent:${record.name}` };
   const id = parseActorKey(record.storageKey).id;
+  const subordinate = isSubordinateOrigin(record.origin);
 
-  return { homeName: record.kind === 'subordinate' ? subordinateAgentName(id) : headAgentName(id), shellId };
+  return {
+    homeName: subordinate ? subordinateAgentName(id) : headAgentName(id),
+    shellId: `${subordinate ? 'subordinate' : 'run'}:${record.storageKey}`,
+  };
 }
 
 /**
@@ -180,7 +184,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
       const box = seams.workspaceBox(hostedActorPlacement(bound.record).shellId);
 
       if (provisioning === null) {
-        if (bound.record.kind !== 'main') throw new KinuError('denied', 'Actor has no credentialed artifact home');
+        if (bound.record.origin !== 'system') throw new KinuError('denied', 'Actor has no credentialed artifact home');
 
         return { vfs: nimbusSessionFiles(box), artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)) };
       }
@@ -235,7 +239,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         actor: bound.handle,
         // Not this actor's name: a self-named child derives a second, empty filesystem.
         workspaceName: seams.workspaceName,
-        rootActor: bound.record.kind === 'main',
+        rootActor: bound.record.origin === 'system',
         ownerUserId: () => seams.ownerUserId(),
         shellId: hostedActorPlacement(bound.record).shellId,
         scaffoldPath: actorScaffoldPath(bound.record),
@@ -253,7 +257,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
      * parent must be live, else the guard refuses rather than silently starting builtin.
      */
     loopFor: async (bound) => {
-      const origin = seams.chosenLoopOrigin(bound.record) ?? defaultLoopOrigin(bound.record.kind);
+      const origin = seams.chosenLoopOrigin(bound.record) ?? defaultLoopOrigin(bound.record.origin);
 
       if (origin.kind !== 'inherit' || bound.record.parentActorId === null || host === null) {
         return { origin, parent: null };
@@ -294,7 +298,6 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         transaction: (body) => { seams.ctx.storage.transactionSync(body); },
         // Review model calls debit the mission the reviewed turn ran under.
         governor: budget,
-        reportModelCall: (report) => { seams.reportModelCall(report); },
       });
 
       const backendHost: BackendHost = {
@@ -318,6 +321,8 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
     },
 
     /** Releases the home and state subtree on destroy only; an archived actor keeps its files. */
+    advisorPort: (bound) => seams.advisorPort?.(bound.reference) ?? null,
+
     discardBytes: async (record: WorkspaceActor): Promise<void> => {
       const { homeName, shellId } = hostedActorPlacement(record);
 

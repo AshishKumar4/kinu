@@ -140,5 +140,5 @@
   <text class="xs" x="38" y="735">A message to a busy agent is queued; it does not make the sender wait for the running assignment to finish.</text>
   <rect x="24" y="747" width="852" height="48" rx="7" fill="var(--surface)" stroke="var(--rule)" stroke-dasharray="4 3"/>
   <text class="xs" x="38" y="766"><tspan font-weight="700" fill="var(--fg)">Tree search is action:swarm</tspan> — one call, with the preset's resolved search and scoring configuration.</text>
-  <text class="xs" x="38" y="782">The MCTS engine is unchanged — lifetime evolution and kinu evolve still call runMCTS; the agents tool never reaches it.</text>
+  <text class="xs" x="38" y="782">MCTS folded into swarm: swarm's tree search is the one search engine.</text>
 </svg>

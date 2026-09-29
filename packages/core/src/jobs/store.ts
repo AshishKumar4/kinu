@@ -5,7 +5,8 @@
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { WorkMode } from '../types/turn';
-import { renderThrownChain } from '../obs/index';
+import { Effect } from 'effect';
+import { renderThrownChain, settleSync } from '../obs/index';
 import type { ActiveRoster } from '../types/dynamic-context';
 import type { BackgroundJob, BackgroundJobStatus } from '../types/jobs';
 
@@ -52,10 +53,9 @@ function toJob(r: Row): BackgroundJob {
 
 /** Never throws. Stored whole: the wake promises the full result, and driveResume JSON.parses inputs. */
 export function serializeJobResult(input: { value: unknown }): string {
-  try { return JSON.stringify(input.value ?? null); }
-  catch (error) {
-    return `unserializable job result: ${renderThrownChain({ cause: error })}`;
-  }
+  return settleSync(Effect.try({ try: () => JSON.stringify(input.value ?? null), catch: (cause) => ({ cause }) }).pipe(
+    Effect.catch((failed) => Effect.succeed(`unserializable job result: ${renderThrownChain(failed)}`)),
+  ));
 }
 
 export function initBackgroundJobsTable(execRaw: RawSqlExec): void {

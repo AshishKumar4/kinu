@@ -35,7 +35,7 @@ import { cpus } from 'node:os';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 import { plantedInputs, readCensusLock } from './census-plants';
-import { DEADLINE_EXIT_CODE, LEFTOVER_BLIND_SPOTS, runUnderDeadline } from './deadline';
+import { DEADLINE_BLIND_SPOTS, DEADLINE_EXIT_CODE, runUnderDeadline } from './deadline';
 import {
   CACHE_BLIND_SPOTS, defaultStoreDirectory, gateEnvironment, gateEnvNames, planGate, recordGreen, storeAt, toolVersions,
 } from './ladder-cache';
@@ -101,9 +101,9 @@ export const DEPLOY_PHASES = ['preflight', 'source', 'hammer', 'infra', 'post-pu
 
 export type DeployPhase = (typeof DEPLOY_PHASES)[number];
 
-/** The shared process-tree deadline for a gate that declares none, seconds.
- *  Calibrated against the slowest source gate; a live probe that needs more
- *  declares its own on its row with the reason. */
+/** The shared hang bound for a gate that declares none: seconds it may write nothing (scripts/deadline.ts). A gate
+ *  that prints only its verdict is silent for its whole run, so this stays at the slowest such gate's length; a
+ *  live probe that needs more declares its own on its row with the reason. */
 export const GATE_DEADLINE_SECONDS = 480;
 
 export type Tier = (typeof TIERS)[number];
@@ -159,7 +159,7 @@ export interface Gate {
    *  for a row that takes the resource some other way, and a declaration no
    *  derivation confirms is refused by the census in `ladder.test.ts`. */
   readonly shared?: SharedResource;
-  /** Seconds before the deploy runner kills the gate's process tree, where
+  /** Seconds the gate may write nothing before its process tree is killed, where
    *  the shared `GATE_DEADLINE_SECONDS` does not fit; with the reason. */
   readonly deadline?: { readonly seconds: number; readonly why: string };
   /** The cheapest tier that runs it. Every later tier runs it too. */
@@ -365,20 +365,6 @@ export const LADDER: readonly Gate[] = [
       + 'leaves regardless and which the gate reports as a known residual '
       + 'rather than closing.',
     inputs: { kind: 'derived', imports: FORWARDER_CLASSES },
-  },
-  {
-    run: 'bun scripts/publication-egress.ts',
-    label: 'Publication egress classified',
-    tier: 'commit',
-    // Measured 2026-09-24 on the 24-thread box (load 15): 0.09 s.
-    seconds: 0.09,
-    catches: 'a write, value import or writing helper on the MCTS settle path (mcts/convergence.ts) '
-      + 'that nobody classified as a publication surface or a reasoned disclosure, so a sealed run '
-      + 'could publish through it; and a classification whose egress is gone.',
-    blind: 'what a classified import does in its own module, egress other than SQL tagged templates '
-      + 'and memory writes, SQL assembled at runtime, whether a writer asks admitsPublication, and '
-      + 'the rest of the settle path. The gate prints all five on its own green path.',
-    inputs: { kind: 'derived', reads: ['packages/core/src/mcts/convergence.ts'] },
   },
   {
     run: 'bun run gate:typecheck-coverage',
@@ -864,14 +850,16 @@ export const LADDER: readonly Gate[] = [
     catches: 'a test that waits on a duration instead of an end condition — a timer call '
       + '(`setTimeout`, `Bun.sleep`, `timers/promises`, `AbortSignal.timeout`), a comparison '
       + 'against `Date.now()`/`performance.now()` or a binding made from one, a per-test '
-      + 'duration handed to `test`/`describe`/a hook or to `setDefaultTimeout`, and a `{ timeout }` '
-      + 'handed to a puppeteer wait or a `child_process` call. Five deploy runs on 2026-09-15 '
+      + 'duration handed to `test`/`describe`/a hook or to `setDefaultTimeout`, a `{ timeout }` '
+      + 'handed to a puppeteer wait or a `child_process` call, and a wait bounded by a count of laps '
+      + '(`until()` over 1000 event-loop turns, a render polled 40 times). Five deploy runs on 2026-09-15 '
       + 'went red on five such tests that pass alone and lose the race under the deploy wave; '
       + 'the framework per-test clock is off everywhere (preload, every vitest config and '
       + '`--timeout=0` on every bun test row, pinned by the self-test) and this row\'s own '
       + 'deadline is the one hang detector. The sites found on the day it landed are in a '
       + 'shrink-only lock keyed by file and kind: a file outside the lock or a count above it '
-      + 'is red, and `--lock` refuses a higher total.',
+      + 'is red, and `--lock` refuses a higher total; a kind added later enters once, at its measured '
+      + 'sites, through `--new-kind`.',
     blind: 'a clock value reaching a comparison through a parameter or a return value; a timer '
       + 'wrapped by a module outside the test corpus and called by the wrapper\'s name; a '
       + 'duration handed as a bare positional number to a helper the gate does not know; '
@@ -939,7 +927,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived', reads: ['docs/CLI.md'] },
   },
   {
-    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/publication-egress.test.ts scripts/error-model.test.ts',
+    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/error-model.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
@@ -970,8 +958,6 @@ export const LADDER: readonly Gate[] = [
     // `comment-only.test.ts` and `bloat-budget.test.ts` join 2026-09-22: the red
     // and green proofs of the comment-edit checker and of the comment budget.
     // Measured solo: 0.45s for 9 tests, 0.13s for 3. The row stays 24s.
-    // `publication-egress.test.ts` joins 2026-09-24 with its gate, which left core's
-    // contract-publication-seal test. Measured solo: 0.11s for 8 tests. The row stays 24s.
     // `worker-bundle-reach.test.ts` joins 2026-09-25, beside the advisory gate's own
     // self-tests: it proves the condition REVIEWED_ADVISORIES accepts extract-zip on,
     // and shipped with e20573386 claimed by no tier. Measured solo: 0.8s for 3 tests.
@@ -1069,7 +1055,7 @@ export const LADDER: readonly Gate[] = [
       + 'naming its red runs, apart from a steady red and a steady green, and a run reporting no test is red. And '
       + 'a test file a commit could change that the gate could not repeat: every tracked suite is repeated through '
       + 'the row that runs it or named as measured elsewhere.',
-    blind: 'flakes rarer than one run in REPEATS, which the sweep is for (`bun run sweep:flakes`, on demand); '
+    blind: 'flakes rarer than one run in REPEATS, which the nightly sweep is for (`bun run sweep:flakes`); '
       + 'whether a row\'s narrowed argv still means what the row means beyond `claims()` crediting it with exactly '
       + 'the file.',
     inputs: AMBIENT_BY_NAME,
@@ -1419,7 +1405,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun test --timeout=0 ./tests/',
+    run: 'bun test --timeout=0 ./tests/live-model/ ./tests/first-run/',
     label: 'Live and first-run suites, credential-free',
     tier: 'ci',
     seconds: 1.3,
@@ -1434,7 +1420,8 @@ export const LADDER: readonly Gate[] = [
       + 'this entry came to advertise 27 tests and 23 skips against a measured 28 and '
       + '25. Note the path form: `bun test tests` silently matches NOTHING, and '
       + '`bun test tests/` also matches nothing — only `./tests/` selects them, which '
-      + 'is exactly the kind of silent zero this ladder asserts against.',
+      + 'is exactly the kind of silent zero this ladder asserts against. The two '
+      + 'directories are named, because `./tests/browser/` is the browser rows\' own.',
     blind: 'everything it skips, which is most of it — declared, not hidden. It also '
       + 'cannot see a suite whose code no longer compiles, because bun strips types; '
       + 'that is `gate:typecheck-coverage` plus `tsc -p tests`, and the absence of both '
@@ -1555,7 +1542,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 scripts/chat-and-files-ux.test.ts',
+    run: 'bun test --timeout=0 tests/browser/chat-and-files-ux.test.ts',
     label: 'UI gate self-tests: chat and files',
     tier: 'ci',
     // Measured 2026-09-18 alone on the 24-thread workstation under the wave's
@@ -1599,7 +1586,7 @@ export const LADDER: readonly Gate[] = [
     inputs: CLIENT_BUILD,
   },
   {
-    run: 'bun test --timeout=0 scripts/account-ux.test.ts scripts/drive-ux.test.ts scripts/slate-preview-ux.test.ts scripts/slate-sharing-ux.test.ts',
+    run: 'bun test --timeout=0 tests/browser/account-ux.test.ts tests/browser/drive-ux.test.ts tests/browser/slate-preview-ux.test.ts tests/browser/slate-sharing-ux.test.ts',
     label: 'UI gate self-tests: account, drive and slates',
     tier: 'ci',
     // Measured alone 2026-09-27: 144.69 s wall, 51.17 s CPU, 2525 MiB peak Pss, start load 1.98.
@@ -1611,10 +1598,10 @@ export const LADDER: readonly Gate[] = [
     inputs: CLIENT_BUILD,
   },
   {
-    run: 'bun test --timeout=0 --path-ignore-patterns=scripts/chat-and-files-ux.test.ts '
-      + '--path-ignore-patterns=scripts/account-ux.test.ts --path-ignore-patterns=scripts/drive-ux.test.ts '
-      + '--path-ignore-patterns=scripts/slate-preview-ux.test.ts --path-ignore-patterns=scripts/slate-sharing-ux.test.ts '
-      + 'scripts/*-ux.test.ts scripts/computed-style.test.ts',
+    run: 'bun test --timeout=0 --path-ignore-patterns=tests/browser/chat-and-files-ux.test.ts '
+      + '--path-ignore-patterns=tests/browser/account-ux.test.ts --path-ignore-patterns=tests/browser/drive-ux.test.ts '
+      + '--path-ignore-patterns=tests/browser/slate-preview-ux.test.ts --path-ignore-patterns=tests/browser/slate-sharing-ux.test.ts '
+      + 'tests/browser/*-ux.test.ts tests/browser/computed-style.test.ts',
     label: 'UI gate self-tests',
     tier: 'ci',
     // Measured alone 2026-09-27: 131.47 s wall, 47.64 s CPU, 2836 MiB peak Pss, start load 1.88.
@@ -1640,7 +1627,7 @@ export const LADDER: readonly Gate[] = [
       + 'complaint, all the same one", and in any of them an unmapped role token renders '
       + 'as Kumo\'s uncustomised brand colour instead of throwing. And the plan '
       + 'document AS A BROWSER LAYS IT OUT, which was authored and then run by '
-      + 'nothing: `scripts/plan-review-ux.test.ts` was untracked and claimed by no row '
+      + 'nothing: `tests/browser/plan-review-ux.test.ts` was untracked and claimed by no row '
       + 'while this same table was edited for three other new suites, so the headline '
       + 'UI change of its slice shipped with its acceptance evidence never executed. It '
       + 'measures the two refusals the header owes the document — a later h1 stays '
@@ -1677,7 +1664,7 @@ export const LADDER: readonly Gate[] = [
     inputs: CLIENT_BUILD,
   },
   {
-    run: 'bun test --timeout=0 scripts/public-pages.test.ts scripts/plan-demo-film.test.ts',
+    run: 'bun test --timeout=0 tests/browser/public-pages.test.ts scripts/plan-demo-film.test.ts',
     label: 'Public pages render',
     tier: 'ci',
     // Measured 2026-08-24 after the bug-fix drive and six-width clipping sweep: 51.28s.
@@ -1702,7 +1689,7 @@ export const LADDER: readonly Gate[] = [
     inputs: CLIENT_BUILD,
   },
   {
-    run: 'bun test --timeout=0 scripts/react-runtime-identity.test.ts',
+    run: 'bun test --timeout=0 tests/browser/react-runtime-identity.test.ts',
     label: 'React runtime identity',
     tier: 'ci',
     // Runs the real client build twice, then drives three routes in Chromium.
@@ -1738,7 +1725,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 scripts/swarm-tree-geometry.test.ts',
+    run: 'bun test --timeout=0 tests/browser/swarm-tree-geometry.test.ts',
     label: 'Swarm-tree geometry',
     tier: 'ci',
     seconds: 29,
@@ -1765,7 +1752,7 @@ export const LADDER: readonly Gate[] = [
     inputs: CLIENT_BUILD,
   },
   {
-    run: 'bun test --timeout=0 scripts/chat-scroll.test.ts',
+    run: 'bun test --timeout=0 tests/browser/chat-scroll.test.ts',
     label: 'Chat infinite scroll',
     tier: 'ci',
     seconds: 34,
@@ -1869,8 +1856,8 @@ export const LADDER: readonly Gate[] = [
       + 'per-connection record in a socket ATTACHMENT, which the shared fake answers as '
       + '`null` unconditionally, so every bun test over it observes the failure state as '
       + 'green. And nothing had ever seen an ALARM fire: a second `setAlarm` replaces the '
-      + 'first rather than queueing, which is what makes `armTimer`\'s soonest-wins dedup a '
-      + 'collapse instead of a lost wake-up, and an uncaught throw out of `alarm()` is '
+      + 'first rather than queueing, which is what lets the Lifecycle derive one alarm from its '
+      + 'job queue instead of losing a wake-up, and an uncaught throw out of `alarm()` is '
       + 'redelivered until it succeeds, which is the backstop the SDK rethrows platform '
       + 'errors to reach. Each polarity carries its own control, so a green cannot come '
       + 'from a write that never happened.',
@@ -2023,7 +2010,7 @@ export const LADDER: readonly Gate[] = [
       + 'some is a flake, named with the tests and runs that failed, and each red run\'s output is kept. No retry and '
       + 'no quarantine: a flake is fixed where it lives.',
     blind: 'a flake that a changed helper or product file puts into a suite the commit does not change, which the '
-      + 'sweep repeats on demand (`bun run sweep:flakes`); interleavings the runs never sampled; two copies of one '
+      + 'nightly sweep repeats (`bun run sweep:flakes`); interleavings the runs never sampled; two copies of one '
       + 'suite side by side; a suite whose runner needs a deployment or a model, which is named and left to its tier.',
     inputs: {
       kind: 'live',
@@ -2197,7 +2184,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'runs the elan/lake toolchain over the Lean tree, a compiler the key does not version and a shell entry the resolver does not read.' },
   },
   {
-    run: 'bun test --timeout=0 scripts/live-app-turns.test.ts',
+    run: 'bun test --timeout=0 tests/browser/live-app-turns.test.ts',
     label: 'Live app in a browser: a running turn',
     tier: 'deploy',
     // Measured 2026-09-26 alone in a quiet window: 133.0 s at load 2.9, its five scenarios 11-34 s each beside the dev server's boot.
@@ -2224,7 +2211,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
   },
   {
-    run: 'bun test --timeout=0 scripts/live-app-sleep.test.ts',
+    run: 'bun test --timeout=0 tests/browser/live-app-sleep.test.ts',
     label: 'Live app in a browser: a page that loses the turn',
     tier: 'deploy',
     // Measured 2026-09-26 alone in a quiet window: 133.1 s at load 3.7, its four scenarios 20-33 s each beside the dev server's boot.
@@ -2249,7 +2236,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
   },
   {
-    run: 'bun test --timeout=0 scripts/live-app-plans.test.ts',
+    run: 'bun test --timeout=0 tests/browser/live-app-plans.test.ts',
     label: 'Live app in a browser: a long chat and its plans',
     tier: 'deploy',
     // Measured 2026-09-26 alone in a quiet window: 167.9 s at load 2.7, its four scenarios 10-104 s each, chat-scroll the long one beside the dev server's boot.
@@ -2274,7 +2261,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
   },
   {
-    run: 'bun test --timeout=0 scripts/live-app-layout.test.ts',
+    run: 'bun test --timeout=0 tests/browser/live-app-layout.test.ts',
     label: 'Live app in a browser: the inspector column\'s layout',
     tier: 'deploy',
     // Measured 2026-09-26 alone in a quiet window: 120.3 s at load 3.1, its three scenarios 14-38 s each beside the dev server's boot.
@@ -2300,7 +2287,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
   },
   {
-    run: 'bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts',
+    run: 'bun scripts/with-dev-server.ts bun test --timeout=0 tests/browser/product-flows.test.ts',
     label: 'Product flows in a browser, on the local dev server',
     deadline: {
       seconds: 500,
@@ -2491,7 +2478,6 @@ export interface PlanRow {
   readonly label: string;
   readonly threads: number;
   readonly rssMb: number;
-  readonly deadline: number;
   /** The resource the row holds whole, or `none`. The wave admits one row
    *  holding a resource at a time; see {@link SHARED_RESOURCES}. */
   readonly shared: SharedResource | 'none';
@@ -2541,7 +2527,6 @@ export function deployPlan(costs: CostTable = readCosts()): PlanRow[] {
       label: gate.label,
       threads: cost === undefined ? 1 : costThreads(cost, gate.seconds),
       rssMb: cost === undefined ? 1 : costRssMb(cost),
-      deadline: gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS,
       shared: sharedOf(gate, tracked, browsers) ?? 'none',
       run: gate.run,
     };
@@ -2556,15 +2541,101 @@ export function deployPlan(costs: CostTable = readCosts()): PlanRow[] {
   });
 }
 
+/** What the tier wave admits one gate against: its measured cost, as {@link deployPlan} reads it, and its lane. A
+ *  gate with no green measurement takes the whole box, so it runs with nothing beside it. */
+export interface WaveRow {
+  readonly threads: number;
+  readonly rssMb: number;
+  readonly wall: number;
+  readonly shared: SharedResource | 'none';
+}
+
+export function waveRow(gate: Gate, tracked: readonly string[], costs: CostTable = readCosts()): WaveRow {
+  const recorded = costs.rows[gate.run];
+  const cost = recorded?.exit === 0 ? recorded : undefined;
+
+  return {
+    threads: cost === undefined ? Number.POSITIVE_INFINITY : costThreads(cost, gate.seconds),
+    rssMb: cost === undefined ? Number.POSITIVE_INFINITY : costRssMb(cost),
+    wall: cost?.wallSeconds ?? 0,
+    shared: sharedOf(gate, tracked) ?? 'none',
+  };
+}
+
+/** The share of MemAvailable the wave may claim, as scripts/deploy.sh's GATE_RESERVE_PERCENT. */
+const WAVE_MEMORY_PERCENT = 75;
+
+/** The caps a wave admits under, read as scripts/deploy.sh reads them, with the same overrides. */
+export function waveCaps() {
+  const available = /^MemAvailable:\s+(\d+)/mu.exec(readFileSync('/proc/meminfo', 'utf8'))?.[1];
+  const threads = Number(process.env['KINU_DEPLOY_THREADS'] ?? cpus().length);
+  const rssMb = Number(process.env['KINU_DEPLOY_RSS_MB'] ?? Math.floor(Number(available ?? 0) / 1024 * WAVE_MEMORY_PERCENT / 100));
+
+  if (!(rssMb > 0)) throw new Error('cannot read MemAvailable from /proc/meminfo, so the wave has no memory cap; set KINU_DEPLOY_RSS_MB');
+
+  return { threads, rssMb };
+}
+
+/**
+ * Runs `work` for every row as the deploy's source wave admits gates: longest measured wall first, the first row
+ * whose cost fits what is left of both caps and whose shared resource is free, or the first row at all when nothing
+ * runs (an oversized row runs alone). Once `stopped` says so, nothing more launches and the running rows finish.
+ */
+export async function tierWave<T>(
+  rows: readonly { readonly entry: T; readonly row: WaveRow }[],
+  work: (entry: T) => Promise<void>,
+  stopped: () => boolean,
+  caps = waveCaps(),
+): Promise<void> {
+  const queue = [...rows].sort((left, right) => right.row.wall - left.row.wall);
+  const running = new Set<Promise<void>>();
+  const held = new Set<SharedResource>();
+  let threads = 0;
+  let rssMb = 0;
+
+  while (queue.length > 0 && !stopped()) {
+    const at = queue.findIndex(({ row }) => (row.shared === 'none' || !held.has(row.shared))
+      && (running.size === 0 || (threads + row.threads <= caps.threads && rssMb + row.rssMb <= caps.rssMb)));
+
+    if (at === -1) {
+      await Promise.race(running);
+      continue;
+    }
+
+    const [next] = queue.splice(at, 1);
+
+    if (next === undefined) break;
+    const { entry, row } = next;
+    const cost = { threads: Math.min(row.threads, caps.threads), rssMb: Math.min(row.rssMb, caps.rssMb) };
+
+    threads += cost.threads;
+    rssMb += cost.rssMb;
+
+    if (row.shared !== 'none') held.add(row.shared);
+
+    const done: Promise<void> = work(entry).finally(() => {
+      threads -= cost.threads;
+      rssMb -= cost.rssMb;
+
+      if (row.shared !== 'none') held.delete(row.shared);
+      running.delete(done);
+    });
+
+    running.add(done);
+  }
+
+  await Promise.all(running);
+}
+
 /** The plan as the runner reads it: one tab-separated line per row — phase,
- *  label, threads, resident MiB, deadline, shared resource, command. Tabs,
+ *  label, threads, resident MiB, shared resource, command. Tabs,
  *  because a command holds spaces and a label holds punctuation, and neither
  *  holds a tab; the command stays LAST, so a field added here cannot be eaten
  *  by the runner's `read` of it. */
 export function printPlan(rows: readonly PlanRow[]): string {
   return rows
     .map((row) => [
-      row.phase, row.label, String(row.threads), String(row.rssMb), String(row.deadline), row.shared, row.run,
+      row.phase, row.label, String(row.threads), String(row.rssMb), row.shared, row.run,
     ].join('\t'))
     .join('\n');
 }
@@ -2659,7 +2730,7 @@ export function browserModules(sources: ReadonlyMap<string, string>): ReadonlySe
  *  2026-09-18 on this box, 2,484 files and 35 MB read in 49 ms, so the plan
  *  reads the whole tree rather than a directory somebody expected the
  *  harnesses to stay in — narrowed to `scripts/` it missed
- *  `tests/live/live-smoke.test.ts`, which launches puppeteer itself inside the
+ *  `tests/live-model/live-smoke.test.ts`, which launches puppeteer itself inside the
  *  `Live and first-run suites, credential-free` row. */
 let corpusBrowserModules: ReadonlySet<string> | null = null;
 
@@ -2762,16 +2833,16 @@ export const CI_EXEMPT = {
     + 'build, and pointing it at the previous one would report the last deploy\'s product under '
     + "this pull request's name. It also creates workspaces, links real machines and spends "
     + 'model calls on a shared account, none of which belongs on a pull request.',
-  'bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts':
+  'bun scripts/with-dev-server.ts bun test --timeout=0 tests/browser/product-flows.test.ts':
     'boots the same dev server the live-app row does, on the same `.dev.vars` credentials a '
     + 'pull request must not hold, and spends real model turns on the account through it.',
   'bash scripts/product-flows-tier.sh':
     'has nothing to run against at CI: its subject is the deployment that just went up, as the '
     + 'eval identity, whose secret no pull request holds.',
-  'bun test --timeout=0 scripts/live-app-turns.test.ts': LIVE_APP_AT_CI,
-  'bun test --timeout=0 scripts/live-app-sleep.test.ts': LIVE_APP_AT_CI,
-  'bun test --timeout=0 scripts/live-app-plans.test.ts': LIVE_APP_AT_CI,
-  'bun test --timeout=0 scripts/live-app-layout.test.ts': LIVE_APP_AT_CI,
+  'bun test --timeout=0 tests/browser/live-app-turns.test.ts': LIVE_APP_AT_CI,
+  'bun test --timeout=0 tests/browser/live-app-sleep.test.ts': LIVE_APP_AT_CI,
+  'bun test --timeout=0 tests/browser/live-app-plans.test.ts': LIVE_APP_AT_CI,
+  'bun test --timeout=0 tests/browser/live-app-layout.test.ts': LIVE_APP_AT_CI,
   'bun test --timeout=0 scripts/deadline-capability.test.ts':
     'needs a user systemd manager that grants a unit an ambient capability. The GitHub runner\'s starts the unit '
     + 'and loses it at once (run 36216870343, 2026-09-26: ActiveState inactive), so there the suite fails for '
@@ -2783,6 +2854,12 @@ export function gatesFor(tier: Tier): Gate[] {
   const upto = TIERS.indexOf(tier);
 
   return LADDER.filter((gate) => TIERS.indexOf(gate.tier) <= upto);
+}
+
+/** The gates `--tier=<tier>` runs: every gate at or below it, and below the deploy tier none of the written CI
+ *  exemptions, which CI cannot host. */
+export function tierRun(tier: Tier): Gate[] {
+  return gatesFor(tier).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT));
 }
 
 /** Every file changed since `ref`, committed or not, and every addition not yet tracked. */
@@ -3145,7 +3222,7 @@ function printMatrix(): void {
   console.log('');
 
   for (const tier of TIERS) {
-    const gates = gatesFor(tier).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT));
+    const gates = tierRun(tier);
     const cost = gates.reduce((sum, gate) => sum + gate.seconds, 0);
     const files = new Set(gates.flatMap((gate) => claims(gate.run, tracked)));
     console.log(
@@ -3225,28 +3302,25 @@ if (import.meta.main) {
   }
 
   // The measured table as a reader sees it, heaviest first, with the two
-  // figures the wave admits against and the deadline each row's SOLO wall is
-  // measured against. A row near its own deadline alone is reported, never
-  // fixed by moving the deadline.
+  // figures the wave admits against.
   if (process.argv.includes('--costs')) {
     const plan = deployPlan();
     const costs = readCosts();
     const width = Math.max(...plan.map((row) => row.label.length));
     console.log(`${costs.measuredAt}  ${costs.machine}`);
-    console.log(`${'row'.padEnd(width)}  thr   MiB      wall      cpu   deadline`);
+    console.log(`${'row'.padEnd(width)}  thr   MiB      wall      cpu`);
 
     for (const row of [...plan].sort((left, right) => right.rssMb - left.rssMb)) {
       const cost = costs.rows[row.run];
 
       if (cost === undefined) {
-        console.log(`${row.label.padEnd(width)}    -     -         -        -   ${String(row.deadline).padStart(4)}s  unmeasured, runs alone`);
+        console.log(`${row.label.padEnd(width)}    -     -         -        -  unmeasured, runs alone`);
         continue;
       }
 
       console.log(
         `${row.label.padEnd(width)}  ${String(row.threads).padStart(3)}  ${String(row.rssMb).padStart(5)}  `
-        + `${cost.wallSeconds.toFixed(1).padStart(8)}s ${cost.cpuSeconds.toFixed(1).padStart(8)}s  ${String(row.deadline).padStart(4)}s`
-        + (cost.wallSeconds > row.deadline * 0.8 ? `  ⚠ ${(cost.wallSeconds / row.deadline * 100).toFixed(0)}% ALONE` : ''),
+        + `${cost.wallSeconds.toFixed(1).padStart(8)}s ${cost.cpuSeconds.toFixed(1).padStart(8)}s`,
       );
     }
 
@@ -3301,7 +3375,7 @@ if (import.meta.main) {
     const tracked = trackedTestFiles();
 
     const gates = named === -1
-      ? gatesFor(tier).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT))
+      ? tierRun(tier)
       : LADDER.filter((gate) => gate.run === process.argv[named + 1]);
 
     if (gates.length === 0) {
@@ -3363,7 +3437,7 @@ if (import.meta.main) {
 
   if (tier === undefined || affectedFrom === '') {
     console.error(
-      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] | --gate <declared-command> | --affected=<ref> | --plan | --audit-closure [--tier=<tier> | --gate <declared-command>] | --matrix | --costs | --install-hooks`,
+      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] [--serial] | --gate <declared-command> | --affected=<ref> | --plan | --audit-closure [--tier=<tier> | --gate <declared-command>] | --matrix | --costs | --install-hooks`,
     );
     process.exit(2);
   }
@@ -3371,7 +3445,7 @@ if (import.meta.main) {
   const repo = repoAt(root, (run, files) => claims(run, files));
 
   const declared = selectedGate === undefined
-    ? gatesFor(tier).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT))
+    ? tierRun(tier)
     : [selectedGate];
 
   const gates = affectedFrom === undefined ? declared : affectedSince(affectedFrom, repo);
@@ -3430,11 +3504,14 @@ if (import.meta.main) {
   const recorded: string[] = [];
   const notes = new Set<string>();
 
+  // A gate's cache lookup, its header, and what the run needs; hits are settled here, in order.
+  const pending: { readonly index: number; readonly gate: Gate; readonly plan: ReturnType<typeof planGate> | undefined; readonly closure: ReturnType<typeof deriveClosure> }[] = [];
+
   for (const [index, gate] of gates.entries()) {
-    console.log(`\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`);
     const plan = caching ? planGate({ run: gate.run, inputs: gate.inputs, repo, tools, store }) : undefined;
 
     if (plan?.kind === 'hit') {
+      console.log(`\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`);
       // deploy.sh reads the `skip  ` prefix to mark the gate's line cached.
       console.log(
         `skip  ${gate.run}  hit ${plan.key.slice(0, 12)}, proved green on ${plan.entry.revision} `
@@ -3444,35 +3521,52 @@ if (import.meta.main) {
       continue;
     }
 
+    pending.push({ index, gate, plan, closure: plan?.closure ?? deriveClosure(gate.run, gate.inputs, repo) });
+  }
+
+  // THE WAVE. With more than one gate to run, the tier admits them as the deploy's source wave does (the same
+  // measured costs, caps and one-at-a-time browser lane, `tierWave`), each gate's output printed whole when it ends;
+  // a gate that declares a phase runs alone first, as the deploy's preflight does. One gate, or `--serial`, runs
+  // in order with its output live, which is how `--gate` and deploy.sh read it.
+  const concurrent = pending.length > 1 && !process.argv.includes('--serial');
+  const failed: string[] = [];
+
+  const runPending = async (entry: (typeof pending)[number]): Promise<void> => {
+    const { index, gate, plan, closure } = entry;
+    const header = `\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`;
+    const lines: string[] = [];
+
     if (plan?.kind === 'uncacheable') {
-      console.log(`      never cached: ${plan.closure.why}`);
+      lines.push(`      never cached: ${plan.closure.why}`);
       uncached.push(`${gate.run} — ${plan.closure.why}`);
     } else if (plan?.kind === 'miss') {
-      console.log(
+      lines.push(
         `      miss ${plan.key.slice(0, 12)} (${String(plan.closure.files.length)} files in the closure, `
         + `${String(gateEnvNames(plan.closure).length)} environment names given)`,
       );
 
-      if (plan.unreadable !== undefined) console.log(`      the entry stored under this key proves nothing — ${plan.unreadable}`);
+      if (plan.unreadable !== undefined) lines.push(`      the entry stored under this key proves nothing — ${plan.unreadable}`);
 
       for (const note of plan.closure.notes) notes.add(`${gate.run}: ${note}`);
     }
 
-    const closure = plan?.closure ?? deriveClosure(gate.run, gate.inputs, repo);
+    if (!concurrent) console.log([header, ...lines].join('\n'));
 
-    // Under the row's own deadline: the one hang detector this tier has,
+    // Under the row's own silence bound: the one hang detector this tier has,
     // now that no test carries a clock. A row that hangs is killed and named
     // here instead of holding the hook — and `git push` — open forever.
     const outcome = await runUnderDeadline({
       argv: runnableArgv(gate.run, tracked), cwd: root,
       seconds: gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS, label: gate.label,
       env: closure.kind === 'derived' ? gateEnvironment(closure) : undefined,
+      stdio: concurrent ? 'pipe' : 'inherit',
     });
 
+    if (concurrent) console.log([header, ...lines, `${outcome.stdout}${outcome.stderr}`.trimEnd()].join('\n'));
     const { seconds } = outcome;
 
     if (outcome.exitCode === 0) {
-      console.log(`ok  ${gate.run}  (${seconds.toFixed(1)}s)`);
+      console.log(`ok  ${gate.run}  (${seconds.toFixed(1)}s, silent at most ${outcome.longestSilence.toFixed(1)}s)`);
 
       // Only a miss re-enumerates the tree: `recordGreen` re-derives the
       // closure from what is on disk NOW, and no other path reads it.
@@ -3484,7 +3578,7 @@ if (import.meta.main) {
 
       if (proofRecorded) recorded.push(gate.run);
 
-      continue;
+      return;
     }
 
     console.error(`\nFAILED  ${gate.run}  after ${seconds.toFixed(1)}s\n`);
@@ -3492,12 +3586,33 @@ if (import.meta.main) {
       at: gate.run,
       invariant: gate.catches,
       found: outcome.exitCode === DEADLINE_EXIT_CODE
-        ? `the run hung and was killed at the row's ${String(gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS)}s deadline; its own output is immediately above`
+        ? `the run hung: it wrote nothing for the row's ${String(gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS)}s bound and was killed; its own output is immediately above`
         : ranRed(outcome.leftovers),
       silently: `every later tier assumes this held. What this gate does NOT cover: ${gate.blind}`,
       fix: `${gate.run}   # reproduce exactly this, nothing else`,
     }));
-    process.exit(1);
+    failed.push(gate.run);
+  };
+
+  if (concurrent) {
+    const alone = pending.filter((entry) => entry.gate.phase !== undefined);
+    const wave = pending.filter((entry) => entry.gate.phase === undefined);
+
+    for (const entry of alone) {
+      await runPending(entry);
+
+      if (failed.length > 0) process.exit(1);
+    }
+
+    await tierWave(wave.map((entry) => ({ entry, row: waveRow(entry.gate, tracked) })), runPending, () => failed.length > 0);
+
+    if (failed.length > 0) process.exit(1);
+  } else {
+    for (const entry of pending) {
+      await runPending(entry);
+
+      if (failed.length > 0) process.exit(1);
+    }
   }
 
   if (caching) {
@@ -3513,7 +3628,7 @@ if (import.meta.main) {
     for (const spot of CACHE_BLIND_SPOTS) console.log(`  blind: ${spot}`);
   }
 
-  for (const spot of LEFTOVER_BLIND_SPOTS) console.log(`  blind: ${spot}`);
+  for (const spot of DEADLINE_BLIND_SPOTS) console.log(`  blind: ${spot}`);
 
   console.log(
     `\nladder --tier=${tier}: ok — ${measured}, ${((performance.now() - started) / 1000).toFixed(1)}s`,

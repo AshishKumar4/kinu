@@ -77,7 +77,7 @@ export type SwarmPresetRow = SwarmPresetPoint;
 /**
  * `resolve(preset) → SwarmConfig` (*Presets*). No `custom` row: `config` is the override.
  * `novelty: 0.4` is Rainbow Teaming's τ=0.6 similarity ceiling converted to a distance floor.
- * `threshold: 0.8` is `craftExtractionThreshold`, the existing publication bar.
+ * `threshold: 0.8` is the middle of the pass band.
  */
 export const SWARM_PRESET_POINTS = {
   ideate: {

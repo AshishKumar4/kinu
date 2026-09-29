@@ -1,5 +1,5 @@
 /**
- * Recovery of interrupted durable lanes (`bg:<kind>`, `mcts`, `evolution:settle`, `advisor:review`, ...).
+ * Recovery of interrupted durable lanes (`bg:<kind>`, `mcts`, `evolution:settle`, ...).
  * Arms only classify and hand off to {@link FiberLaneTransports.redrive}: the scan runs inside the DO
  * init gate (`blockConcurrencyWhile`), and awaiting a lane there trips `do.block_concurrency.cancel_ms`,
  * resetting the object into a re-offer loop. `scripts/do-init-gate.ts` enforces this shape.
@@ -8,13 +8,11 @@ import * as v from 'valibot';
 import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 
 import {
-  BACKGROUND_FIBER_PREFIX, SEARCH_FIBER_NAME, BackgroundJobRunner, recoveryBackoffMs,
-  AdvisorRecoverySnapshotSchema, ADVISOR_LANE_FIBER, nanoid, projectJsonValue,
-  type AdvisorDisposition, type AdvisorRecoverySnapshot, type JsonValue,
+  BACKGROUND_FIBER_PREFIX, BackgroundJobRunner, recoveryBackoffMs,
+  projectJsonValue, type JsonValue,
   type SqlExecutor,
   JsonObjectSchema, type AgentSignal, type SendOutcome,
 } from '@kinu.run/core';
-import type { ActorHandle } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
 
 /** Kinu's value for the SDK's `fiberRecoveryMaxAgeMs` (the SDK default); the one place it lives. */
@@ -22,9 +20,9 @@ export const FIBER_RECOVERY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Max rows one activation sweep scans; matches the framework's own scan
- * (`patches/agents@0.22.0.patch`). Shared by every row-budgeted sweep here.
+ * (`patches/agents@0.24.0.patch`). Shared by every row-budgeted sweep here.
  */
-export const SWEEP_MAX_ROWS = 4096;
+const SWEEP_MAX_ROWS = 4096;
 
 /** One metadata row per read, so a read never holds more than one snapshot candidate. */
 const ONE_FIBER_ROW = 1;
@@ -39,9 +37,8 @@ const FiberMetaRowSchema = v.object({
 export type FiberMetaRow = v.InferOutput<typeof FiberMetaRowSchema>;
 
 /** Narrow port over `cf_agents_runs`: no method can return a snapshot blob. */
+/** Over `cf_agents_runs`, which the SDK's `Agent` constructor creates (agents 0.24 `_ensureSchema`). */
 export interface FiberRowStore {
-  /** The framework creates the table lazily, on the first `runFiber`. */
-  present(): boolean;
   /** `MAX(rowid)`, read once and then frozen by the caller. */
   upperBoundary(): number | null;
   /** Expired rows in `(after, through]`, oldest rowid first. The cutoff is in the query
@@ -54,8 +51,6 @@ export interface FiberRowStore {
 /** {@link FiberRowStore} over a Durable Object's own storage. */
 export function fiberRowStore(sql: SqlExecutor): FiberRowStore {
   return {
-    present: () => sql<{ name: string }>`
-      SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'cf_agents_runs'`.length > 0,
     upperBoundary: () => sql<{ boundary: number | null }>`
       SELECT MAX(rowid) AS boundary FROM cf_agents_runs`[0]?.boundary ?? null,
     page: (after, through, cutoff) => sql<unknown>`
@@ -89,8 +84,6 @@ export function sweepUnrecoverableFibers(
   const cutoff = now - FIBER_RECOVERY_MAX_AGE_MS;
   const nothing: FiberSweepResult = { dropped: 0, scanned: 0, truncated: false };
 
-  // No table means the actor never detached durable work: zero rows, not a failure.
-  if (!store.present()) return nothing;
   const boundary = store.upperBoundary();
 
   if (boundary === null) return nothing;
@@ -132,16 +125,6 @@ const FORK_NOTICE_LANE_FIBER = 'fork:notice';
 export interface FiberLaneTransports {
   readonly jobs: Pick<BackgroundJobRunner, 'recover' | 'recoverOrphans'>;
   readonly runDueSessionEvolution: () => Promise<void>;
-  /** Idempotency guard for the advisor lane; synchronous because it is decided inside the init gate. */
-  readonly hasAdvisorNoteForTurn: (turnId: string) => boolean;
-  /** The one review body both the live lane and its recovery run. */
-  readonly reviewAdvisorSnapshot: (
-    snapshot: AdvisorRecoverySnapshot,
-  ) => Promise<AdvisorDisposition | null>;
-  readonly sql: SqlExecutor;
-  /** Stamp for the notice row: one database holds every actor's evolution stream. */
-  readonly actor: ActorHandle;
-  readonly appendMemory: (path: string, text: string) => Promise<void>;
   /** Arm the terminal ledger's durable wake and replay nothing here (a replay may await SMTP). */
   readonly armOwedTerminalRecovery: () => Promise<void>;
   /** Fork-notice replay body. `undelivered` means the notice is still owed. */
@@ -172,10 +155,6 @@ export function classifyRecoveredFiber(
     if (ctx.name === EVOLUTION_LANE_FIBER) {
       return redriveLane(transports, ctx, { name: EVOLUTION_LANE_FIBER, redrive: 'session-evolution' }, () => transports.runDueSessionEvolution());
     }
-
-    if (ctx.name === ADVISOR_LANE_FIBER) return redriveAdvisorLane(transports, ctx);
-
-    if (ctx.name === SEARCH_FIBER_NAME) return recordInterruptedSearch(transports, ctx);
 
     if (ctx.name === MCP_WARM_LANE_FIBER) return recoverMcpWarmLane();
 
@@ -239,50 +218,6 @@ function redriveBackgroundJobLane(
   });
 
   return { status: 'completed', snapshot: { lane: ctx.name, redrive: 'background-job' } };
-}
-
-/**
- * Advisor lane: idempotent on the note, not the attempt. The guard runs before detaching, so a
- * review that already recorded its note is never re-run. A turn without a durable id re-runs.
- */
-function redriveAdvisorLane(
-  transports: FiberLaneTransports,
-  ctx: FiberRecoveryContext,
-): FiberRecoveryResult {
-  const checkpoint = fiberSnapshot(ctx);
-  const parsed = v.safeParse(AdvisorRecoverySnapshotSchema, checkpoint);
-
-  if (!parsed.success) {
-    return {
-      status: 'error',
-      error: 'the interrupted advisor review left no readable snapshot of the turn it was '
-        + `about: ${parsed.issues.map((issue) => issue.message).join('; ')}`,
-      snapshot: { lane: ADVISOR_LANE_FIBER, redrive: null },
-    };
-  }
-
-  const snapshot = parsed.output;
-  const turnId = snapshot.turn.turnId;
-
-  if (turnId !== undefined && transports.hasAdvisorNoteForTurn(turnId)) {
-    return {
-      status: 'completed',
-      snapshot: { lane: ADVISOR_LANE_FIBER, turnId, redrive: null, alreadyRecorded: true },
-    };
-  }
-
-  transports.redrive(ADVISOR_LANE_FIBER, checkpoint, async () => {
-    const disposition = await transports.reviewAdvisorSnapshot(snapshot);
-    diagnostics.event('fiber.advisor_lane_redriven', {
-      turnId: turnId ?? '(none)',
-      disposition: disposition ?? '(none)',
-    });
-  });
-
-  return {
-    status: 'completed',
-    snapshot: { lane: ADVISOR_LANE_FIBER, turnId: turnId ?? null, redrive: 'advisor-review' },
-  };
 }
 
 /** Replay a minted, unconfirmed notice; the checkpoint is the whole signal. */
@@ -352,34 +287,6 @@ export type RecoveredNotice = v.InferOutput<typeof RecoveredSignalSchema>;
  */
 function recoverMcpWarmLane(): FiberRecoveryResult {
   return { status: 'completed', snapshot: { lane: MCP_WARM_LANE_FIBER, reentered: false } };
-}
-
-/**
- * Search trees are durable and detached jobs re-drive themselves; this only tells the agent.
- * The audit row is local sync SQLite; the MEMORY.md write may cross to another DO, so it rides the carrier.
- */
-function recordInterruptedSearch(
-  transports: FiberLaneTransports,
-  ctx: FiberRecoveryContext,
-): FiberRecoveryResult {
-  const snapshot = fiberSnapshot(ctx);
-  // Stamped with the recovering actor: the column is NOT NULL and the stream is shared.
-  void transports.sql`INSERT INTO evolution_events (actor_id, id, type, message, data, created_at)
-    VALUES (${transports.actor.actorId}, ${nanoid()}, 'fiber_recovered',
-            ${`Fiber "${ctx.name}" recovered after interruption`},
-            ${JSON.stringify({ name: ctx.name, fiberId: ctx.id, snapshot, createdAt: ctx.createdAt })},
-            ${Date.now()})`;
-  transports.redrive(SEARCH_FIBER_NAME, snapshot, () => transports.appendMemory(
-    'memory/MEMORY.md',
-    `\n### Fiber recovery (${new Date().toISOString().split('T')[0]})\n`
-    + `Fiber "${ctx.name}" was interrupted (likely DO eviction) and recovered. `
-    + `Snapshot at interruption: ${JSON.stringify(snapshot).slice(0, 400)}\n`,
-  ));
-
-  return {
-    status: 'completed',
-    snapshot: { lane: SEARCH_FIBER_NAME, recorded: true, redrive: 'memory-note' },
-  };
 }
 
 /** Unknown lane: classified error, logged once, row released; never a MEMORY.md line. */

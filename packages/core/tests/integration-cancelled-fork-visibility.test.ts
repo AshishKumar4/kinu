@@ -59,7 +59,7 @@ function workspace() {
       task: `angle ${i}`, rationale: 'why', mode: 'build',
       inheritedContext: [], mergeStrategy: 'synthesize',
       budget: { maxDepth: 2, spawnedAt: now },
-      loop: defaultLoopOrigin('run'),
+      loop: defaultLoopOrigin('swarm'),
     });
   }
 
@@ -312,7 +312,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
       task: 'the continuation', rationale: 'why', mode: 'build',
       inheritedContext: [], mergeStrategy: 'synthesize',
       budget: { maxDepth: 2, spawnedAt: activationStart + 5 },
-      loop: defaultLoopOrigin('run'),
+      loop: defaultLoopOrigin('swarm'),
     });
 
     const agent = idleAgent();

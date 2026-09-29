@@ -4,8 +4,8 @@ import { Nimbus, type NimbusSandbox, type NimbusSessionSurface } from '@nimbus-s
 import type { UIMessage } from 'ai';
 import {
   decodeJsonValue,
-  type AgentOwnInspection, type ChatHistoryPage, type JsonValue, type NimbusSandboxHandle, type PageRequest, type ProviderEnv,
-  type SerializedMessage, type SubordinateInspectionResult,
+  type AgentOwnInspection, type ChatHistoryPage, type JsonValue, type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv,
+  type AnsweredEvolutionHelper, type SerializedMessage, type SubordinateInspectionResult,
 } from '@kinu.run/core';
 import { AgentDatabase } from './agent-database';
 import { queueAgentTask, type AgentWorkspace } from './agent-turn';
@@ -54,13 +54,14 @@ export interface AgentFacetCalls {
   deliver(snapshot: AgentSnapshot, task: AgentTask): Promise<void>;
   openTurn(snapshot: AgentSnapshot, opening: AgentOpening): Promise<void>;
   history(snapshot: AgentSnapshot, limit?: number): Promise<UIMessage[]>;
-  historyPage(snapshot: AgentSnapshot, page: PageRequest): Promise<ChatHistoryPage>;
+  historyPage(snapshot: AgentSnapshot, page: PositionPageRequest): Promise<ChatHistoryPage>;
   inspect(snapshot: AgentSnapshot, request: AgentOwnInspection): Promise<SubordinateInspectionResult>;
   inheritedContext(snapshot: AgentSnapshot): Promise<SerializedMessage[]>;
   admitted(snapshot: AgentSnapshot, id: string): Promise<boolean>;
   interrupt(snapshot: AgentSnapshot): Promise<void>;
   clear(snapshot: AgentSnapshot): Promise<void>;
   recover(snapshot: AgentSnapshot, answered: readonly string[]): Promise<AgentRecovery>;
+  deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean>;
 }
 
 export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFacetCalls {
@@ -88,7 +89,9 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
 
   private open(snapshot: AgentSnapshot): AgentDatabase {
-    this.database ??= new AgentDatabase(this.ctx.storage, { agent: () => this.workspace(), state: () => this.state() });
+    this.database ??= new AgentDatabase(this.ctx.storage, {
+      agent: () => this.workspace(), state: () => this.state(), enqueueTurn: (input) => this.env.WORKSPACE.enqueueTurn(input),
+    });
     this.database.adopt(snapshot);
 
     return this.database;
@@ -97,7 +100,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   async deliver(snapshot: AgentSnapshot, task: AgentTask): Promise<void> {
     const database = this.open(snapshot);
 
-    // Not awaited: the call returns once the turn is queued, so the workspace holds no call open into this isolate.
+    // Not awaited: the workspace holds no call open into this isolate.
     this.queue = queueAgentTask({ after: this.queue, database, workspace: this.env.WORKSPACE, providers: this.env, task });
   }
 
@@ -109,7 +112,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await this.open(snapshot).history(limit);
   }
 
-  async historyPage(snapshot: AgentSnapshot, page: PageRequest): Promise<ChatHistoryPage> {
+  async historyPage(snapshot: AgentSnapshot, page: PositionPageRequest): Promise<ChatHistoryPage> {
     return await this.open(snapshot).historyPage(page);
   }
 
@@ -135,5 +138,9 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async recover(snapshot: AgentSnapshot, answered: readonly string[]): Promise<AgentRecovery> {
     return await this.open(snapshot).recover(new Set(answered));
+  }
+
+  async deliverAdvice(snapshot: AgentSnapshot, helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean> {
+    return await (await this.open(snapshot).acquire()).session.deliverAdvisorAnswer(helper, turnId);
   }
 }

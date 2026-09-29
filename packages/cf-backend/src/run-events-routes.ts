@@ -41,8 +41,8 @@ const ALLOWED_TYPES = [
 
 export type RunEventsTarget = Pick<OrchestratorAgent, 'listRuns' | 'getRunEventText'>;
 
-/** A resolver, not the namespace binding: the SDK's `getAgentByName` (agents@0.22.0,
- *  `dist/agent-routing.js:176-183`, read 2026-09-22) awaits `__unsafe_ensureInitialized`. */
+/** A resolver, not the namespace binding: the SDK's `getAgentByName` (agents@0.24.0,
+ *  `dist/agent-routing.js:176-183`, read 2026-09-28) awaits `__unsafe_ensureInitialized`. */
 export type RunEventsResolver = (name: string) => Promise<RunEventsTarget>;
 
 function parseTypesParam(s: string | null): RunEventType[] | undefined {

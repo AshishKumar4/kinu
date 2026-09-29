@@ -131,7 +131,7 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
   const first = lastValue(resource);
 
   const fetchPage = useCallback(
-    async (cursor: SeekCursor | undefined) => v.parse(
+    async (cursor: SeekCursor) => v.parse(
       RunPageSchema, await rpc("getRunSummaries", [{ cursor, limit: RUN_HISTORY_PAGE }]),
     ),
     [rpc],
@@ -143,7 +143,7 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
     [first],
   );
 
-  const tail = usePagedScroll<v.InferOutput<typeof RunSummarySchema>>({ grows: "down", fetchPage, startFrom });
+  const tail = usePagedScroll<v.InferOutput<typeof RunSummarySchema>>({ fetchPage, startFrom });
 
   const runs = first === null ? null : [...first.items, ...tail.fetched];
   const exhausted = first !== null && (first.status === "end" || tail.exhausted);

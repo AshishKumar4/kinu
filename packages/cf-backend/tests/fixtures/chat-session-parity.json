@@ -10,7 +10,7 @@
     "assistantMessages": [
       {
         "id": "input-PARITY-ONE",
-        "parentId": null,
+        "position": 0,
         "role": "user",
         "content": {
           "id": "input-PARITY-ONE",
@@ -29,7 +29,7 @@
       },
       {
         "id": "<uuid#1>",
-        "parentId": "input-PARITY-ONE",
+        "position": 1,
         "role": "assistant",
         "content": {
           "id": "<uuid#1>",
@@ -48,7 +48,7 @@
       },
       {
         "id": "input-PARITY-TWO",
-        "parentId": "<uuid#1>",
+        "position": 2,
         "role": "user",
         "content": {
           "id": "input-PARITY-TWO",
@@ -67,7 +67,7 @@
       },
       {
         "id": "<uuid#2>",
-        "parentId": "input-PARITY-TWO",
+        "position": 3,
         "role": "assistant",
         "content": {
           "id": "<uuid#2>",
@@ -86,7 +86,7 @@
       },
       {
         "id": "input-PARITY-TWO-STEER",
-        "parentId": "<uuid#2>",
+        "position": 4,
         "role": "user",
         "content": {
           "id": "input-PARITY-TWO-STEER",
@@ -111,7 +111,7 @@
       },
       {
         "id": "<uuid#3>",
-        "parentId": "input-PARITY-TWO-STEER",
+        "position": 5,
         "role": "assistant",
         "content": {
           "id": "<uuid#3>",
@@ -317,7 +317,7 @@
     "assistantMessages": [
       {
         "id": "input-PARITY-ONE",
-        "parentId": null,
+        "position": 0,
         "role": "user",
         "content": {
           "id": "input-PARITY-ONE",
@@ -336,7 +336,7 @@
       },
       {
         "id": "<uuid#1>",
-        "parentId": "input-PARITY-ONE",
+        "position": 1,
         "role": "assistant",
         "content": {
           "id": "<uuid#1>",
@@ -355,7 +355,7 @@
       },
       {
         "id": "input-PARITY-TWO",
-        "parentId": "<uuid#1>",
+        "position": 2,
         "role": "user",
         "content": {
           "id": "input-PARITY-TWO",
@@ -374,7 +374,7 @@
       },
       {
         "id": "<uuid#2>",
-        "parentId": "input-PARITY-TWO",
+        "position": 3,
         "role": "assistant",
         "content": {
           "id": "<uuid#2>",
@@ -393,7 +393,7 @@
       },
       {
         "id": "input-PARITY-TWO-STEER",
-        "parentId": "<uuid#2>",
+        "position": 4,
         "role": "user",
         "content": {
           "id": "input-PARITY-TWO-STEER",
@@ -418,7 +418,7 @@
       },
       {
         "id": "<uuid#3>",
-        "parentId": "input-PARITY-TWO-STEER",
+        "position": 5,
         "role": "assistant",
         "content": {
           "id": "<uuid#3>",
@@ -437,7 +437,7 @@
       },
       {
         "id": "input-PARITY-THREE",
-        "parentId": "<uuid#3>",
+        "position": 6,
         "role": "user",
         "content": {
           "id": "input-PARITY-THREE",
@@ -456,7 +456,7 @@
       },
       {
         "id": "input-PARITY-FOUR-TOOL",
-        "parentId": "input-PARITY-THREE",
+        "position": 7,
         "role": "user",
         "content": {
           "id": "input-PARITY-FOUR-TOOL",
@@ -704,7 +704,7 @@
         "payload": {
           "type": "run_end",
           "reason": "aborted",
-          "eventIndex": 5,
+          "eventIndex": 6,
           "timestamp": "<clock>"
         }
       },
@@ -765,7 +765,7 @@
             "name": "main"
           },
           "reason": "tool-calls",
-          "eventIndex": 7,
+          "eventIndex": 6,
           "timestamp": "<clock>",
           "messages": [
             {
@@ -805,7 +805,7 @@
     "assistantMessages": [
       {
         "id": "input-PARITY-ONE",
-        "parentId": null,
+        "position": 0,
         "role": "user",
         "content": {
           "id": "input-PARITY-ONE",
@@ -824,7 +824,7 @@
       },
       {
         "id": "<uuid#1>",
-        "parentId": "input-PARITY-ONE",
+        "position": 1,
         "role": "assistant",
         "content": {
           "id": "<uuid#1>",
@@ -843,7 +843,7 @@
       },
       {
         "id": "input-PARITY-TWO",
-        "parentId": "<uuid#1>",
+        "position": 2,
         "role": "user",
         "content": {
           "id": "input-PARITY-TWO",
@@ -862,7 +862,7 @@
       },
       {
         "id": "<uuid#2>",
-        "parentId": "input-PARITY-TWO",
+        "position": 3,
         "role": "assistant",
         "content": {
           "id": "<uuid#2>",
@@ -881,7 +881,7 @@
       },
       {
         "id": "input-PARITY-TWO-STEER",
-        "parentId": "<uuid#2>",
+        "position": 4,
         "role": "user",
         "content": {
           "id": "input-PARITY-TWO-STEER",
@@ -906,7 +906,7 @@
       },
       {
         "id": "<uuid#3>",
-        "parentId": "input-PARITY-TWO-STEER",
+        "position": 5,
         "role": "assistant",
         "content": {
           "id": "<uuid#3>",
@@ -925,7 +925,7 @@
       },
       {
         "id": "input-PARITY-THREE",
-        "parentId": "<uuid#3>",
+        "position": 6,
         "role": "user",
         "content": {
           "id": "input-PARITY-THREE",
@@ -944,7 +944,7 @@
       },
       {
         "id": "input-PARITY-FOUR-TOOL",
-        "parentId": "input-PARITY-THREE",
+        "position": 7,
         "role": "user",
         "content": {
           "id": "input-PARITY-FOUR-TOOL",
@@ -963,7 +963,7 @@
       },
       {
         "id": "input-PARITY-FOUR-STEER",
-        "parentId": "input-PARITY-FOUR-TOOL",
+        "position": 8,
         "role": "user",
         "content": {
           "id": "input-PARITY-FOUR-STEER",
@@ -988,7 +988,7 @@
       },
       {
         "id": "<uuid#11>",
-        "parentId": "input-PARITY-FOUR-STEER",
+        "position": 9,
         "role": "assistant",
         "content": {
           "id": "<uuid#11>",
@@ -1023,7 +1023,7 @@
       },
       {
         "id": "input-PARITY-FIVE",
-        "parentId": "<uuid#11>",
+        "position": 10,
         "role": "user",
         "content": {
           "id": "input-PARITY-FIVE",
@@ -1042,7 +1042,7 @@
       },
       {
         "id": "<uuid#12>",
-        "parentId": "input-PARITY-FIVE",
+        "position": 11,
         "role": "assistant",
         "content": {
           "id": "<uuid#12>",
@@ -1270,7 +1270,7 @@
         "payload": {
           "type": "run_end",
           "reason": "aborted",
-          "eventIndex": 5,
+          "eventIndex": 6,
           "timestamp": "<clock>"
         }
       },
@@ -1331,7 +1331,7 @@
             "name": "main"
           },
           "reason": "tool-calls",
-          "eventIndex": 7,
+          "eventIndex": 6,
           "timestamp": "<clock>",
           "messages": [
             {
@@ -1376,7 +1376,7 @@
             "name": "main"
           },
           "reason": "stop",
-          "eventIndex": 11,
+          "eventIndex": 9,
           "timestamp": "<clock>",
           "messages": [
             {
@@ -1397,7 +1397,7 @@
         "payload": {
           "type": "run_end",
           "reason": "completed",
-          "eventIndex": 13,
+          "eventIndex": 11,
           "timestamp": "<clock>"
         }
       },
@@ -1469,7 +1469,7 @@
       },
       {
         "socket": "A",
-        "type": "reads_changed"
+        "type": "context_fill"
       },
       {
         "socket": "A",
@@ -1477,7 +1477,7 @@
       },
       {
         "socket": "A",
-        "type": "context_admitted"
+        "type": "context_fill"
       },
       {
         "socket": "A",
@@ -1488,10 +1488,6 @@
           "type": "start",
           "messageId": "<uuid#1>"
         }
-      },
-      {
-        "socket": "A",
-        "type": "reads_changed"
       },
       {
         "socket": "A",
@@ -1558,17 +1554,9 @@
       },
       {
         "socket": "A",
-        "type": "reads_changed"
-      },
-      {
-        "socket": "A",
         "type": "cf_agent_use_chat_response",
         "id": "PARITY-ONE",
         "done": true
-      },
-      {
-        "socket": "A",
-        "type": "reads_changed"
       },
       {
         "socket": "A",
@@ -1576,7 +1564,7 @@
       },
       {
         "socket": "A",
-        "type": "context_admitted"
+        "type": "context_fill"
       },
       {
         "socket": "A",
@@ -1587,10 +1575,6 @@
           "type": "start",
           "messageId": "<uuid#2>"
         }
-      },
-      {
-        "socket": "A",
-        "type": "reads_changed"
       },
       {
         "socket": "A",
@@ -1669,10 +1653,6 @@
       },
       {
         "socket": "A",
-        "type": "reads_changed"
-      },
-      {
-        "socket": "A",
         "type": "cf_agent_use_chat_response",
         "id": "PARITY-TWO",
         "done": true
@@ -1683,7 +1663,7 @@
       },
       {
         "socket": "A",
-        "type": "context_admitted"
+        "type": "context_fill"
       },
       {
         "socket": "A",
@@ -1694,10 +1674,6 @@
           "type": "start",
           "messageId": "<uuid#3>"
         }
-      },
-      {
-        "socket": "A",
-        "type": "reads_changed"
       },
       {
         "socket": "A",
@@ -1764,17 +1740,9 @@
       },
       {
         "socket": "A",
-        "type": "reads_changed"
-      },
-      {
-        "socket": "A",
         "type": "cf_agent_use_chat_response",
         "id": "PARITY-TWO-STEER",
         "done": true
-      },
-      {
-        "socket": "A",
-        "type": "reads_changed"
       },
       {
         "socket": "A",
@@ -1782,7 +1750,7 @@
       },
       {
         "socket": "A",
-        "type": "context_admitted"
+        "type": "context_fill"
       },
       {
         "socket": "A",
@@ -1793,10 +1761,6 @@
           "type": "start",
           "messageId": "<uuid#9>"
         }
-      },
-      {
-        "socket": "A",
-        "type": "reads_changed"
       },
       {
         "socket": "A",
@@ -1820,15 +1784,11 @@
       },
       {
         "socket": "A",
-        "type": "reads_changed"
-      },
-      {
-        "socket": "A",
         "type": "turn_claim"
       },
       {
         "socket": "A",
-        "type": "context_admitted"
+        "type": "context_fill"
       },
       {
         "socket": "A",
@@ -1839,10 +1799,6 @@
           "type": "start",
           "messageId": "<uuid#11>"
         }
-      },
-      {
-        "socket": "A",
-        "type": "reads_changed"
       },
       {
         "socket": "A",
@@ -1961,23 +1917,7 @@
       },
       {
         "socket": "B",
-        "type": "cf_agent_stream_resuming",
-        "id": "PARITY-FOUR-TOOL"
-      },
-      {
-        "socket": "B",
-        "type": "cf_agent_stream_resuming",
-        "id": "PARITY-FOUR-TOOL"
-      },
-      {
-        "socket": "B",
-        "type": "reads_changed"
-      },
-      {
-        "socket": "B",
-        "type": "cf_agent_use_chat_response",
-        "id": "PARITY-FOUR-TOOL",
-        "done": true
+        "type": "cf_agent_stream_resume_none"
       },
       {
         "socket": "B",
@@ -1985,7 +1925,7 @@
       },
       {
         "socket": "B",
-        "type": "context_admitted"
+        "type": "context_fill"
       },
       {
         "socket": "B",
@@ -2002,10 +1942,6 @@
         "type": "steer_status",
         "steerId": "input-PARITY-FOUR-STEER",
         "status": "landed"
-      },
-      {
-        "socket": "B",
-        "type": "reads_changed"
       },
       {
         "socket": "B",
@@ -2072,17 +2008,9 @@
       },
       {
         "socket": "B",
-        "type": "reads_changed"
-      },
-      {
-        "socket": "B",
         "type": "cf_agent_use_chat_response",
         "id": "<uuid#14>",
         "done": true
-      },
-      {
-        "socket": "B",
-        "type": "reads_changed"
       },
       {
         "socket": "B",
@@ -2090,7 +2018,7 @@
       },
       {
         "socket": "B",
-        "type": "context_admitted"
+        "type": "context_fill"
       },
       {
         "socket": "B",
@@ -2101,10 +2029,6 @@
           "type": "start",
           "messageId": "<uuid#12>"
         }
-      },
-      {
-        "socket": "B",
-        "type": "reads_changed"
       },
       {
         "socket": "B",
@@ -2171,17 +2095,9 @@
       },
       {
         "socket": "B",
-        "type": "reads_changed"
-      },
-      {
-        "socket": "B",
         "type": "cf_agent_use_chat_response",
         "id": "PARITY-FIVE",
         "done": true
-      },
-      {
-        "socket": "B",
-        "type": "reads_changed"
       }
     ],
     "syncs": {

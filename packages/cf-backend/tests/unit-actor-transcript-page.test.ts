@@ -4,14 +4,14 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { getChatHistoryPage, CHAT_SESSION_ID, type ActorHandle, type SessionHistory, type ChatHistoryEntry, type Page } from '@kinu.run/core';
+import { getChatHistoryPage, CHAT_SESSION_ID, type ActorHandle, type SessionHistory, type ChatHistoryPage } from '@kinu.run/core';
 import {
   agentHistory, historyOver, hostedExplorationHarness, hostedSubordinateHarness, orchestratorHarness, workspaceMainActor,
 } from './helpers/actor-harness';
 
 /** The root's public RPC, or the production read model over a hosted child's handle. */
 interface Root {
-  page(request?: { limit?: number; cursor?: { after: string }; actor?: string }): Promise<Page<ChatHistoryEntry>> | Page<ChatHistoryEntry>;
+  page(request?: { limit?: number; cursor?: { before: number }; actor?: string }): Promise<ChatHistoryPage> | ChatHistoryPage;
 }
 
 async function seed(actor: ActorHandle, history: SessionHistory, n: number, prefix = 'm'): Promise<string[]> {
@@ -32,10 +32,10 @@ async function seed(actor: ActorHandle, history: SessionHistory, n: number, pref
 /** Every page, oldest first, with the request count, so a walk that never advances is a hang. */
 async function walk(root: Root, limit: number): Promise<{ ids: string[]; pages: number }> {
   const ids: string[] = [];
-  let cursor: { after: string } | undefined;
+  let cursor: { before: number } | undefined;
 
   for (let pages = 1; pages <= 50; pages++) {
-    const page: Page<ChatHistoryEntry> = await root.page({ limit, cursor });
+    const page: ChatHistoryPage = await root.page({ limit, cursor });
     ids.unshift(...page.items.map((m) => m.id));
 
     if (page.status === 'end') return { ids, pages };
@@ -116,18 +116,6 @@ describe('a transcript longer than one window is reachable page by page', () => 
     expect(page.items).toEqual([]);
   });
 
-  /** An unknown cursor is refused, not answered with the newest page (which re-delivers history). */
-  test('a cursor from another conversation is refused rather than answered', async () => {
-    const workspace = orchestratorHarness();
-    const actor = workspaceMainActor(workspace.db);
-    const history = historyOver(workspace);
-    await seed(actor, history, 4);
-
-    await expect(getChatHistoryPage(history.transcript(CHAT_SESSION_ID), {
-      limit: 2, cursor: { after: 'not-in-this-store' },
-    })).rejects.toThrow(/no longer in it/);
-  });
-
   /**
    * A pane's walk through the RPC: an actor pane names its own actor id; the root's pane names none.
    * Id spaces are disjoint, so a leak shows in the assertion's message.
@@ -171,7 +159,7 @@ describe('a transcript longer than one window is reachable page by page', () => 
   test('a hosted actor with no chat pane is refused', async () => {
     const workspace = orchestratorHarness();
     await workspace.agent.activateActor();
-    const head = await hostedExplorationHarness(workspace, 'full', 'head-without-a-pane');
+    const head = await hostedExplorationHarness(workspace, 'head-without-a-pane');
 
     await expect(workspace.agent.getChatHistoryPage({ limit: 10, actor: head.actor.handle.actorId }))
       .rejects.toThrow(/does not name a chat/);

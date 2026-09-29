@@ -13,7 +13,7 @@ import { safeJsonParse, type JsonValue } from '../utils/json';
 import { boundedInt } from '../utils/bounds';
 
 export type TimelineKind =
-  | 'llm-turn' | 'tool-call' | 'runtime-exec' | 'mcts' | 'scaffold' | 'shadow-eval'
+  | 'llm-turn' | 'tool-call' | 'runtime-exec' | 'swarm' | 'scaffold' | 'shadow-eval'
   | 'craft' | 'reflection' | 'head-split' | 'head-merge' | 'gepa'
   | 'curriculum' | 'trigger' | 'event-ingress' | 'background' | 'error' | 'abort' | 'recovery' | 'other';
 
@@ -26,7 +26,7 @@ export interface TimelineSpan {
   elapsedMs?: number;
   /** Preserved structured payload (e.g. evolution_events.data). */
   data?: JsonValue;
-  source: 'shell' | 'evolution' | 'mcts' | 'background';
+  source: 'shell' | 'evolution' | 'swarm' | 'background';
   /** Node id, run-event id, root id… */
   refId?: string;
   rawType?: string;
@@ -43,8 +43,6 @@ export function classifyEvolutionType(type: string): TimelineKind {
   if (type === 'reflection') return 'reflection';
 
   if (type.startsWith('scaffold')) return 'scaffold';
-
-  if (type.startsWith('mcts')) return 'mcts';
 
   if (type === 'consolidation' || type === 'craft_discovered') return 'craft';
 
@@ -70,7 +68,6 @@ function turnUsageDetail(usage: Usage | undefined): string | undefined {
 
 /** Shown by name only; a new event type must be placed here or given a switch arm. */
 type DiagnosisOnlyEvent = Extract<RunEvent, { type:
-  | 'step_partial'
   | 'model_call'
   | 'provider_wait'
   | 'model_operation'
@@ -86,10 +83,10 @@ type DiagnosisOnlyEvent = Extract<RunEvent, { type:
   | 'approval_consumed'
   | 'execution_escalation'
   | 'budget_exhausted'
+  | 'context_admitted'
 }>;
 
 const DIAGNOSIS_ONLY_EVENTS: ReadonlySet<string> = new Set<DiagnosisOnlyEvent['type']>([
-  'step_partial',
   'model_call',
   'provider_wait',
   'model_operation',
@@ -105,6 +102,7 @@ const DIAGNOSIS_ONLY_EVENTS: ReadonlySet<string> = new Set<DiagnosisOnlyEvent['t
   'approval_consumed',
   'execution_escalation',
   'budget_exhausted',
+  'context_admitted',
 ]);
 
 function isDiagnosisOnly(e: RunEvent): e is DiagnosisOnlyEvent {
@@ -209,9 +207,9 @@ export function getRunTimeline(
 
   for (const n of nodes) {
     spans.push({
-      ts: n.created_at, kind: 'mcts', label: n.action || `node ${n.id.slice(0, 8)}`,
+      ts: n.created_at, kind: 'swarm', label: n.action || `node ${n.id.slice(0, 8)}`,
       detail: `value ${Number(n.value).toFixed(2)} · ${n.status}`,
-      source: 'mcts', refId: n.id,
+      source: 'swarm', refId: n.id,
     });
   }
 

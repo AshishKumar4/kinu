@@ -400,7 +400,7 @@ export interface HeadInferenceDeps {
   /** The prompt must name the same file plane the tools reach. */
   workspaceLayout: HeadWorkspaceLayout;
   capture: HeadCapture;
-  /** Polled at step boundaries; needed alongside {@link signal} because an RPC boundary carries a flag, not an AbortSignal. */
+  /** Polled at step boundaries: an RPC boundary carries a flag, not an AbortSignal. */
   isAborted: () => boolean;
   /** Given to the SDK so an abort cuts the step in flight; a polled flag never sees a hang. */
   signal?: AbortSignal;
@@ -412,7 +412,7 @@ export interface HeadInferenceDeps {
    * Omitted: the loop never asks, and an undeclared run must not touch the ledger.
    */
   mission?: MissionScope;
-  /** The head's durable per-step trace sink; omitted only for a hosted recursive sub-head, whose spawner's journal is unaddressable. */
+  /** The durable per-step trace; omitted only for a hosted recursive sub-head. */
   reportStep?: (seq: number, step: HeadStep) => Promise<void> | void;
   /** Live output while a step is produced: one call per provider delta, in order, never buffered. A cross-isolate transport must not await it. */
   reportDelta?: ReportHeadDelta;
@@ -430,11 +430,8 @@ export interface HeadInferenceDeps {
   /** The next turn's messages, or `null` to end the run; absent is one turn (every head). A node's turn may end
    *  with detached work running; only `null` makes the run terminal. */
   resume?: () => Promise<readonly ModelMessage[] | null>;
-  /**
-   * The advice a completed turn earns, reviewed where the advisor's state lives. Absent: this actor's own session
-   * reviews it. An agent in its own isolate supplies it, since the advisor's notes and ledger are the workspace's.
-   */
-  advise?: (turn: CompletedTurn, reachable: readonly string[], mode: WorkMode) => Promise<readonly ModelMessage[]>;
+  /** Hires a completed turn's advisor where the roster lives. Absent: this actor's own session hires it. */
+  advise?: (turn: CompletedTurn, reachable: readonly string[], mode: WorkMode) => Promise<void>;
 }
 
 /** Duck-typed structurally so it survives an SDK spec bump. */
@@ -487,33 +484,18 @@ interface CompletedTurnReview {
   outcome: ActorExecutionResult;
 }
 
-/** A review that fails is recorded and advises nothing: it must not end the work. */
-async function adviseCompletedTurn({ session, input, deps, lease, outcome }: CompletedTurnReview): Promise<ModelMessage[]> {
-  const advice: ModelMessage[] = [];
-
-  const turn = (): CompletedTurn => snapshotCompletedTurn(session.orchestrator.acc, {
+/** Hires the turn's advisor and returns: its note reaches this actor when it answers, after this turn. */
+async function adviseCompletedTurn({ session, input, deps, lease, outcome }: CompletedTurnReview): Promise<void> {
+  const turn = snapshotCompletedTurn(session.orchestrator.acc, {
     userMessage: input.task, assistantResponse: outcome.text,
     turnId: `${deps.runId}:${lease.turnId}`, sessionId: input.id, origin: 'programmatic',
   });
 
-  // Its failure is recorded where the review ran, which answers no advice.
-  if (deps.advise !== undefined) return [...await deps.advise(turn(), Object.keys(deps.tools), input.mode)];
+  if (deps.advise !== undefined) return await deps.advise(turn, Object.keys(deps.tools), input.mode);
 
-  if (!session.orchestrator.improvementLanesOpen('completed', input.mode)) return advice;
+  if (!session.orchestrator.improvementLanesOpen('completed', input.mode)) return;
 
-  try {
-    await session.reviewTurn(session.advisorSnapshot(turn(), Object.keys(deps.tools)), false, async (signal) => {
-      advice.push({ role: 'user', content: signal.text });
-
-      return 'queued';
-    });
-  } catch (cause) {
-    diagnostics.failure('advisor.lane_failed', toKinuError({
-      doing: 'reviewing the reporting actor turn', cause, otherwise: 'unavailable',
-    }), { actor: deps.actor.handle.name });
-  }
-
-  return advice;
+  await session.hireAdvisor(session.advisorSnapshot(turn, Object.keys(deps.tools)));
 }
 
 /** `kind` namespaces the canonical ids of the next turn's input. */
@@ -522,7 +504,7 @@ interface NextTurnInput {
   deps: HeadInferenceDeps;
   conversation: ModelMessage[];
   turnId: string;
-  kind: 'advice' | 'resume';
+  kind: 'resume';
   messages: readonly ModelMessage[];
 }
 
@@ -707,7 +689,6 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       );
 
       let turnFailed = false;
-      let advice: ModelMessage[] = [];
 
       try {
         if (index === 0 && deps.delegation) {
@@ -786,7 +767,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         // The runner's selected answer (chat.ts answerFromSteps), not `text`, which may be a synthesized stand-in.
         if (outcome.answer !== null) lastText = outcome.answer;
 
-        if (!turnFailed && !outcome.interrupted) advice = await adviseCompletedTurn({ session, input, deps, lease, outcome });
+        if (!turnFailed && !outcome.interrupted) await adviseCompletedTurn({ session, input, deps, lease, outcome });
 
         session.settleTurnClaim(lease, turnClaimOutcome(turnFailed, outcome.interrupted));
       } finally {
@@ -794,12 +775,6 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       }
 
       if (failure !== undefined || deps.isAborted()) break;
-
-      if (advice.length > 0) {
-        await appendNextTurnInput({ session, deps, conversation, turnId: `${turnId}#${index + 1}`, kind: 'advice', messages: advice });
-
-        continue;
-      }
 
       const resumed = await deps.resume?.();
 

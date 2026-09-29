@@ -1,16 +1,16 @@
 /**
  * Every hosted non-root actor: hired subordinates and ask-by-role temporaries, and run actors (heads, swarm
- * nodes, steer and MCTS branches). Each is a `workspace_actors` row plus stores scoped over the root's one
+ * nodes and steer branches). Each is a `workspace_actors` row plus stores scoped over the root's one
  * `Storage`; a turn runs `runHeadInference` claimed on its actor's session (open-41), so a promotion landing
  * mid-run cannot take it over, and retirement is `host.retire`. `abort` is caller-requested only: no socket
  * close or eviction reaches it; an evicted run leaves an unsettled claim the root's activation resumes.
  * Not facets: `do.facet.cpu_shared` means hosted actors serialise as in one isolate.
  */
 
-import { INTERRUPTED_TURN, REAL_CLOCK, type HeadReport } from '@kinu.run/core';
+import { INTERRUPTED_TURN, type HeadReport, isSubordinateOrigin } from '@kinu.run/core';
 import type { LanguageModel, ModelMessage, Tool, ToolSet } from 'ai';
 import {
-  EventLog, HeadCapture, runHeadInference, titleActorFromMessage, buildHeadToolSet,
+  EventLog, HeadCapture, titleActorFromMessage, spawnSeatedHead,
   admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus,
   receiveSubordinateEvent, subordinateRelaysTurnEnd, temporaryRunSettles,
   subordinateForkContext, type SubordinateInheritedContext,
@@ -19,12 +19,11 @@ import {
   storedHeadReportStatus, subordinateDelegatesOf,
   registeredParent, subordinateDescendants, actorReferenceOf, TEMPORARY_LIFETIME, terminalTaskReport, taskAnswerIsLater, defaultLoopOrigin, delegationBudgetOf, delegationExhausted,
   type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor,
-  type BranchExploration, type BranchHandle, type BranchReflection, type CraftedTool,
   type DelegationBudget,
-  type DynamicContext, type HeadId, type HeadInferenceDeps, type HeadInput, type HeadSplitRequest, type HeadSplitResult,
+  type DynamicContext, type HeadId, type HeadInput, type HeadSplitRequest, type HeadSplitResult,
   type HeadStep, type HostedActor, type HostedNodeSeat, type LoopOrigin, type MissionScope, type NodeIdentity,
-  type NodeWorkspace, type ProfileAuthorityInputs, type ReasoningEffort, type ReportHeadDelta, type ResolvedTurnProfile,
-  type SpawnedHead, type SqlExec, type SqlExecutor, type SubordinateEventResult, type SubordinateHandoff,
+  type NodeWorkspace, type ProfileAuthorityInputs, type ReportHeadDelta, type ResolvedTurnProfile,
+  type SpawnedHead, type SqlExec, type SubordinateEventResult, type SubordinateHandoff,
   type SubordinateLifetime, type SubordinateReportOrigin,
   type SubordinateReportHandoff,
   type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime,
@@ -70,7 +69,6 @@ export interface HostedTaskProfile {
 /** One workspace's host and directory, for every hosted kind. */
 export interface HostedActorSeams {
   readonly host: ActorHost;
-  readonly sql: SqlExecutor;
   /** Positional executor for the same database; the event log needs this port, not the tagged one. */
   readonly exec: SqlExec;
   readonly directory: WorkspaceActorDirectory;
@@ -117,6 +115,8 @@ export interface HostedActorSeams {
   armWake(): void;
   rederiveWake(): void;
   temporary(actor: BoundActor): TemporaryAgentPort;
+  /** Inside the answer's transaction: the hirer's advisor answer is owed a delivery job. */
+  oweAdvice(actor: BoundActor): Promise<void>;
 }
 
 export function hostedDelegationBudget(
@@ -145,7 +145,7 @@ function delegatedHeadInput(
     inheritedContext: subordinateForkContext(task.inheritedContext),
     mergeStrategy: 'synthesize',
     budget: { maxDepth: 0, spawnedAt: Date.now() },
-    loop: defaultLoopOrigin('subordinate'),
+    loop: defaultLoopOrigin('agent'),
   };
 }
 
@@ -271,6 +271,7 @@ export async function relayHostedReport(
     }),
     announce: () => { seams.announce(hirer); },
     onAdmitted: () => { if (!seams.turnInFlight(parent)) seams.scheduleDrain(hirer); },
+    evolutionAnswerStored: () => seams.oweAdvice(hirer),
     onEvolutionAnswer: () => { seams.rederiveWake(); },
     temporary: seams.temporary(hirer),
   }, { fromSubordinate: name, ...event }, Date.now());
@@ -438,7 +439,7 @@ export function hostedSubordinateRuntime(
     return refusal(action === 'register' && delegationExhausted(hostedDelegationBudget(seams, owner)),
       () => new KinuError('denied', 'This actor cannot create a subordinate below its delegation depth.'))
       .pipe(Effect.andThen(Effect.sync(() => seams.directory.apply(owner.reference, seams.directory.storagePath(owner.reference), {
-        action, name: input.name, creationId: input.creationId, kind: 'subordinate', lifetime: input.lifetime,
+        action, name: input.name, creationId: input.creationId, origin: input.origin, lifetime: input.lifetime,
       }).reference)));
   });
 
@@ -449,7 +450,7 @@ export function hostedSubordinateRuntime(
       action: 'resolve', name,
     });
 
-    return refusal(entry.kind !== 'subordinate', () => new KinuError('denied', 'The roster name does not identify a subordinate.'))
+    return refusal(!isSubordinateOrigin(entry.origin), () => new KinuError('denied', 'The roster name does not identify a subordinate.'))
       .pipe(Effect.as(entry.reference));
   });
 
@@ -511,10 +512,9 @@ export function reportSettlesRun(status: SubordinateReportStatus, origin: Subord
   return temporaryRunSettles({ status, origin });
 }
 
-/** Heads, swarm nodes and steer branches are full run actors; an MCTS branch is a toolless one. */
+/** Heads, swarm nodes and steer branches are run actors. */
 export interface ExplorationActorRequest {
   readonly creationId: string;
-  readonly toolProfile: 'full' | 'toolless';
   /** Absent lets `defaultLoopOrigin` stand (`inherit`). */
   readonly loop?: LoopOrigin;
 }
@@ -523,29 +523,6 @@ export interface ExplorationProfile {
   readonly profile: ResolvedTurnProfile;
   readonly inputs: ProfileAuthorityInputs;
 }
-
-export interface BranchCompletionRequest {
-  readonly actor: HostedActor;
-  readonly spec: string;
-  /** The route's own reasoning effort; spec and effort are one decision and travel together. */
-  readonly effort: ReasoningEffort | null;
-  readonly system?: string;
-  readonly user: string;
-}
-
-/** Supplied by the root because the provider registry and operation sink are its own. */
-export interface BranchRunnerDeps {
-  explorePrompt(input: {
-    readonly mode: WorkMode;
-    readonly context: string;
-    readonly craftedTools: CraftedTool[];
-    readonly languages: readonly [string, ...string[]];
-    readonly siblings: readonly string[];
-  }): { readonly system: string; readonly user: string };
-  reflectionPrompt(task: string, traces: string, outcome?: string): string;
-  complete(request: BranchCompletionRequest): Promise<BranchExploration>;
-}
-
 
 /** One run actor: registered (or re-found) under its creation id, retired when its run settles. */
 async function hostRunActor(seams: HostedActorSeams, request: ExplorationActorRequest): Promise<{
@@ -590,7 +567,7 @@ function explorationModelSpec(
 function runRoute(
   seams: HostedActorSeams,
   actor: HostedActor,
-  request: { readonly source: 'head' | 'swarm' | 'mcts'; readonly workMode: WorkMode; readonly what: string },
+  request: { readonly source: 'head' | 'swarm'; readonly workMode: WorkMode; readonly what: string },
 ): Effect.Effect<NonNullable<ReturnType<typeof resolveModelRoute>>, KinuError> {
   return Effect.promise(() => seams.profile({ actor, availableTools: [], workMode: request.workMode })).pipe(
     Effect.flatMap(({ profile }) => {
@@ -614,71 +591,56 @@ function explorationDynamicContext(actor: HostedActor, profile: ResolvedTurnProf
   });
 }
 
-/** A branching head, hosted. The actor is retired when `run()` settles. */
+/** A branching head, hosted on the one head runner. The actor is retired when `run()` settles. */
 export async function hostHead(seams: HostedActorSeams, input: HeadInput): Promise<SpawnedHead> {
-  const { reference, retire } = await hostRunActor(seams, { creationId: input.id, toolProfile: 'full', loop: input.loop });
-  /** The caller's explicit stop; a socket close or evicted isolate must leave this false. */
-  let stopped: string | null = null;
+  const { reference, retire } = await hostRunActor(seams, { creationId: input.id, loop: input.loop });
+
+  return spawnSeatedHead(input, {
+    // The watch is named before the acquire that builds the runtime over it; a later one sees no writes.
+    seat: async (_input, writes) => {
+      const unwatch = seams.watchWrites(reference, writes);
+      const seat = await runActorSeat(seams, reference);
+
+      return {
+        ...seat,
+        queue: (body) => seams.host.run(reference, body),
+        release: async () => {
+          unwatch();
+          await retire();
+        },
+      };
+    },
+    model: (head, seat) => settle(explorationModelSpec(seams, seat.actor, 'head', head.model).pipe(
+      Effect.tap((spec) => Effect.promise(() => seams.priceAs(seat.actor, spec))),
+      Effect.map((spec) => ({ model: seams.resolveModel(spec), spec })),
+    )),
+    codemodeTool: (seat) => settleSync(cfRuntimeOf(seat.actor, 'a hosted head').pipe(
+      Effect.map((runtime) => seams.codemodeTool(runtime, seams.webSearch())),
+    )),
+    webSearch: seams.webSearch(),
+    split: (seat, head) => settleSync(cfRuntimeOf(seat.actor, 'a hosted head').pipe(
+      Effect.map((runtime) => seams.split(seat.actor, runtime, head)),
+    )),
+    mission: (head, spec) => {
+      const mission = seams.mission(head);
+
+      return mission === null || spec === null ? mission
+        : { ...mission, port: { ...mission.port, debit: (tokens, opts) => mission.port.debit(tokens, { ...opts, spec }) } };
+    },
+    reportStep: (headId, seq, step) => seams.recordStep(headId, seq, step),
+    reportDelta: seams.publishDelta,
+  });
+}
+
+/** One run actor's turn seams, over its acquired actor. */
+async function runActorSeat(seams: HostedActorSeams, reference: ActorReference): Promise<HostedNodeSeat> {
+  const actor = await seams.host.acquire(reference);
 
   return {
-    id: input.id,
-    run: async (): Promise<HeadReport> => {
-      // Created before `host.run` because acquiring builds the runtime over the watched
-      // file view; a later capture would report no file changes.
-      const capture = new HeadCapture();
-      const unwatch = seams.watchWrites(reference, capture.files);
-
-      const runHead = async (actor: HostedActor, runtime: CFRuntime, spec: string): Promise<HeadReport> => {
-        const webSearch = seams.webSearch();
-        await seams.priceAs(actor, spec);
-
-        const deps: HeadInferenceDeps = {
-          actor,
-          runId: crypto.randomUUID(),
-          clock: REAL_CLOCK,
-          model: seams.resolveModel(spec),
-          tools: buildHeadToolSet({
-            input, capture, rt: runtime, history: actor.stores.history,
-            codemodeTool: seams.codemodeTool(runtime, webSearch),
-            webSearch,
-            split: seams.split(actor, runtime, input),
-          }),
-          capture,
-          workspaceLayout: 'shared-workspace',
-          isAborted: () => stopped !== null,
-          abortReason: () => stopped,
-          profile: (request) => seams.profile({ actor, ...request }),
-          dynamic: (profile, tools) => explorationDynamicContext(actor, profile, tools),
-          reportStep: (seq, step) => seams.recordStep(input.id, seq, step),
-          reportDelta: seams.publishDelta,
-        };
-
-        const mission = seams.mission(input);
-
-        if (mission !== null) {
-          deps.mission = { ...mission, port: { ...mission.port, debit: (tokens, opts) => mission.port.debit(tokens, { ...opts, spec }) } };
-        }
-
-        return await runHeadInference(input, deps);
-      };
-
-      try {
-        return await seams.host.run(reference, (actor) => settle(Effect.gen(function* () {
-          const runtime = yield* cfRuntimeOf(actor, 'a hosted head');
-          const spec = yield* explorationModelSpec(seams, actor, 'head', input.model);
-
-          return yield* Effect.promise(() => runHead(actor, runtime, spec));
-        })));
-      } finally {
-        unwatch();
-        await retire();
-      }
-    },
-    /** Explicit stop: records the reason and interrupts the live turn. Not reachable from a transport close. */
-    abort: async (reason: string): Promise<void> => {
-      stopped = reason;
-      seams.host.hosted(reference)?.session.interrupt();
-    },
+    actor,
+    runId: crypto.randomUUID(),
+    profile: (request) => seams.profile({ actor, ...request }),
+    dynamic: (profile, tools) => explorationDynamicContext(actor, profile, tools),
   };
 }
 
@@ -689,15 +651,7 @@ export async function hostHead(seams: HostedActorSeams, input: HeadInput): Promi
 export async function hostNodeSeat(
   seams: HostedActorSeams, node: NodeIdentity,
 ): Promise<HostedNodeSeat> {
-  const { reference } = await hostRunActor(seams, { creationId: node.nodeId, toolProfile: 'full' });
-  const actor = await seams.host.acquire(reference);
-
-  return {
-    actor,
-    runId: crypto.randomUUID(),
-    profile: (request) => seams.profile({ actor, ...request }),
-    dynamic: (profile, tools) => explorationDynamicContext(actor, profile, tools),
-  };
+  return await runActorSeat(seams, (await hostRunActor(seams, { creationId: node.nodeId })).reference);
 }
 
 /** A swarm node's `eval`, over the hosted actor the node runs as. */
@@ -725,7 +679,7 @@ export async function reclaimSettledExplorationActors(
   for (const reference of seams.host.list()) {
     const record = seams.host.describe(reference.actorId);
 
-    if (record === null || record.kind === 'main' || record.kind === 'subordinate') {
+    if (record === null || record.origin !== 'swarm') {
       retained += 1;
       continue;
     }
@@ -753,60 +707,4 @@ function parseExplorationId(storageKey: string, name: string): string {
   const marked = name.startsWith('exp:') ? name.slice(4) : name;
 
   return marked === '' ? storageKey : marked;
-}
-
-/**
- * An MCTS rollout branch: no ToolSet, no plane, no home. The durable trace is
- * `search_nodes.observation`. The engine releases it in the `finally` after every reflection.
- */
-export async function hostBranch(
-  seams: HostedActorSeams,
-  branchId: string,
-  deps: BranchRunnerDeps,
-): Promise<BranchHandle> {
-  const { reference, retire } = await hostRunActor(seams, { creationId: branchId, toolProfile: 'toolless' });
-  /** Held in memory for the reflection that may follow; the handle's life is the window. */
-  let trace = '';
-
-  return {
-    explore: (request) => seams.host.run(reference, (actor) => settle(Effect.gen(function* () {
-      const { priorHistory, craftedTools, languages, mode, siblings } = request;
-      const route = yield* runRoute(seams, actor, { source: 'mcts', workMode: mode, what: 'an MCTS branch' });
-
-      const { system, user } = deps.explorePrompt({
-        mode,
-        context: priorHistory.map((turn) => `${turn.role}: ${turn.content}`).join('\n\n'),
-        craftedTools, languages, siblings: siblings ?? [],
-      });
-
-      const answer = yield* Effect.promise(() => deps.complete({
-        actor, spec: route.model, effort: route.reasoningEffort, system, user,
-      }));
-
-      trace = answer.text;
-
-      return answer;
-    }))),
-    generateReflection: (task, outcome) => seams.host.run(reference, (actor) => settle(Effect.gen(function* () {
-      const route = yield* runRoute(seams, actor, { source: 'mcts', workMode: 'build', what: 'an MCTS reflection' });
-
-      const answer = yield* Effect.promise(() => deps.complete({
-        actor, spec: route.model, effort: route.reasoningEffort,
-        user: deps.reflectionPrompt(task, trace, outcome),
-      }));
-
-      return { text: answer.text, usage: answer.usage } satisfies BranchReflection;
-    }))),
-    release: retire,
-  };
-}
-
-/**
- * Stop one branch by id; ends at `retireExploration` like `release()`. `register` re-finds
- * (idempotent on the creation id). Wired beside `spawn` and never without it.
- */
-export async function abortHostedBranch(
-  seams: HostedActorSeams, branchId: string,
-): Promise<void> {
-  await (await hostRunActor(seams, { creationId: branchId, toolProfile: 'toolless' })).retire();
 }

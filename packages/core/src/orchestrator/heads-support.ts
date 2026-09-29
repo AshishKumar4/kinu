@@ -57,11 +57,11 @@ export function inheritedContextFromHistory(
   return [...inheritedContextOmissionNote(history.length, kept.length), ...kept];
 }
 
-/** Both backends hand a hire the same window: the newest entries of the leaf's ancestry. */
+/** Both backends hand a hire the same window: the chat's newest entries. */
 export async function inheritedContextFromTranscript(transcript: SessionTranscriptReader): Promise<SerializedMessage[]> {
   const kept: SerializedMessage[] = [];
 
-  for (const entry of transcript.ancestry(transcript.newestId(), INHERITED_CONTEXT_CAP)) {
+  for (const entry of transcript.entries(INHERITED_CONTEXT_CAP)) {
     const projected = await transcript.project(entry.id);
 
     if (projected !== null) kept.push({ id: entry.id, role: narrowInheritedRole(entry.role), content: evidenceWindow(projected.content, EVIDENCE_BUDGETS.inheritedMessage), createdAt: entry.recordedAt });

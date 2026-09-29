@@ -87,7 +87,7 @@ describe('a route whose object throws answers without the chain', () => {
 
   test('the object\'s own refusal still names what was wrong', async () => {
     const response = present(
-      await storeCredential(Object.assign(new Error('KinuError[bad_input]: openai.bearer requires an OAuth refresh token.'), { remote: true })), 'an answer',
+      await storeCredential(Object.assign(new Error('openai.bearer requires an OAuth refresh token.'), { name: 'KinuError[bad_input]', _tag: 'KinuError', code: 'bad_input', remote: true })), 'an answer',
     );
 
     expect(response.status).toBe(400);

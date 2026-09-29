@@ -137,18 +137,19 @@ describe('vendor-schema', () => {
     expect(findings[0]?.detail).toContain('no such column: e.missing');
   });
 
-  test('the installed vendors declare the pane store and the fiber runs, and the pane carries no actor column', () => {
+  test('the installed vendors declare the fiber runs and the job queue; the pane store is no longer theirs to create', () => {
     const { tables } = vendorTables();
 
-    expect(tables.has('assistant_messages')).toBe(true);
     expect(tables.has('cf_agents_runs')).toBe(true);
+    // agents 0.23 moved wakes onto the Lifecycle queue; Kinu's wakes are its rows (wake-jobs.ts).
     const db = new Database(':memory:');
 
-    db.run(tables.get('assistant_messages')?.ddl ?? '');
-    const columns = v.parse(v.array(ColumnSchema), db.query('PRAGMA table_info(assistant_messages)').all()).map((c) => c.name);
+    db.run(tables.get('cf_agents_jobs')?.ddl ?? '');
+    const columns = v.parse(v.array(ColumnSchema), db.query('PRAGMA table_info(cf_agents_jobs)').all()).map((c) => c.name);
 
     db.close();
-    expect(columns).toContain('id');
-    expect(columns).not.toContain('actor_id');
+    expect(columns).toEqual(expect.arrayContaining(['id', 'capability', 'fn', 'time', 'payload', 'running']));
+    // 0.23 lifted the legacy `assistant_*` tables into Sessions and stopped creating them.
+    expect(tables.has('assistant_messages')).toBe(false);
   });
 });

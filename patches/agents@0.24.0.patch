@@ -1,0 +1,319 @@
+diff --git a/dist/chat/react.js b/dist/chat/react.js
+index 6698ed4..e828fc1 100644
+--- a/dist/chat/react.js
++++ b/dist/chat/react.js
+@@ -818,6 +818,10 @@ function useAgentChat(options) {
+ 						if (!isEarlyToolContinuation) return;
+ 					}
+ 					if (!resumingToolContinuationRef.current) pendingReplayResumeRequestIdsRef.current.add(data.id);
++					const observedStream = streamStateRef.current;
++					const observedAnswerId = observedStream.status === "observing" && observedStream.streamId === data.id ? observedStream.accumulator.messageId : void 0;
++					const heldAnswerId = localResponseIds.get(data.id) ?? observedAnswerId;
++					if (heldAnswerId !== void 0 && customTransport.isAwaitingResume()) setMessages((currentMessages) => currentMessages.filter((message) => message.id !== heldAnswerId));
+ 					if (customTransport.handleStreamResuming(data)) return;
+ 					if (localRequestIdsRef.current.has(data.id)) return;
+ 					if (fallbackAckedResumeRequestIdsRef.current.has(data.id)) return;
+@@ -963,7 +967,14 @@ function useAgentChat(options) {
+ 			socketIsOpen = false;
+ 			sawClose = true;
+ 			fallbackAckedResumeRequestIds.clear();
++			const observedStream = streamStateRef.current;
+ 			if (!resume) clearFallbackObserver();
++			else if (observedStream.status === "observing") streamStateRef.current = transition(observedStream, {
++				type: "resume-fallback",
++				streamId: observedStream.streamId,
++				messageId: observedStream.accumulator.messageId
++			}).state;
++			restoreProtectedStreamingAssistant();
+ 		}
+ 		function onAgentOpen() {
+ 			socketIsOpen = true;
+diff --git a/dist/src-BNU3ZiJM.js b/dist/src-BNU3ZiJM.js
+index 5f71fe6..8e815d9 100644
+--- a/dist/src-BNU3ZiJM.js
++++ b/dist/src-BNU3ZiJM.js
+@@ -3332,52 +3332,79 @@ var Agent = class Agent extends DurableObject {
+ 	async _checkRunFibers() {
+ 		if (this._runFiberRecoveryInProgress) return;
+ 		this._runFiberRecoveryInProgress = true;
+-		const scanStartedAt = Date.now();
+-		const scanDeadlineMs = this._resolvedOptions.fiberRecoveryScanDeadlineMs;
+ 		const fiberRecoveryMaxAgeMs = this._resolvedOptions.fiberRecoveryMaxAgeMs;
+ 		let madeProgress = false;
+ 		try {
+-			const rows = this.sql`SELECT id, name, snapshot, created_at FROM cf_agents_runs`;
+-			for (const row of rows) {
+-				if (scanDeadlineMs > 0 && Date.now() - scanStartedAt > scanDeadlineMs) {
+-					this._emit("fiber:recovery:skipped", {
+-						fiberId: row.id,
+-						fiberName: row.name,
+-						reason: "scan_deadline_exceeded",
+-						elapsedMs: Date.now() - scanStartedAt
+-					});
+-					break;
+-				}
+-				if (this._runFiberActiveFibers.has(row.id)) continue;
+-				const snapshot = this._parseFiberRecoverySnapshot(row.id, row.snapshot);
+-				const ctx = {
+-					id: row.id,
+-					name: row.name,
+-					snapshot,
+-					createdAt: row.created_at,
+-					recoveryReason: "interrupted"
+-				};
+-				const managedRow = this._readFiber(row.id);
+-				this._emit("fiber:recovery:detected", {
+-					...this._fiberRecoveryPayload(ctx, managedRow),
+-					elapsedMs: Date.now() - row.created_at
+-				});
+-				this._emit("fiber:run:interrupted", {
+-					fiberId: row.id,
+-					fiberName: row.name,
+-					managed: managedRow !== null,
+-					recoveryReason: "interrupted",
+-					elapsedMs: Date.now() - row.created_at
+-				});
+-				if (managedRow) {
+-					if (this._isTerminalFiberStatus(managedRow.status)) {
+-						this.sql`DELETE FROM cf_agents_runs WHERE id = ${row.id}`;
++			const boundaryRow = this.sql`SELECT MAX(rowid) AS boundary FROM cf_agents_runs`;
++			const runBoundary = boundaryRow[0]?.boundary ?? null;
++			const RUN_SCAN_MAX_ROWS = 4096;
++			let runScanned = 0;
++			let runCursor = 0;
++			let scanning = runBoundary !== null;
++			while (scanning) {
++				const page = this.sql`SELECT rowid AS rowid, id, name, created_at FROM cf_agents_runs WHERE rowid > ${runCursor} AND rowid <= ${runBoundary} ORDER BY rowid ASC LIMIT 1`;
++				if (page.length === 0) break;
++				for (const meta of page) {
++					runCursor = meta.rowid;
++					runScanned++;
++					if (runScanned > RUN_SCAN_MAX_ROWS) {
++						this._emit("fiber:recovery:skipped", { fiberId: meta.id, fiberName: meta.name, reason: "scan_budget_exceeded", scannedRows: runScanned - 1 });
++						scanning = false;
++						break;
++					}
++					if (this._runFiberActiveFibers.has(meta.id)) continue;
++					const managedRow = this.sql`
++            SELECT fiber_id, idempotency_key, status, metadata_json
++            FROM cf_agents_fibers
++            WHERE fiber_id = ${meta.id}
++            LIMIT 1
++          `[0] ?? null;
++					if (managedRow && this._isTerminalFiberStatus(managedRow.status)) {
++						const ctx = { id: meta.id, name: meta.name, createdAt: meta.created_at, recoveryReason: "interrupted" };
++						this._emit("fiber:recovery:detected", {
++							...this._fiberRecoveryPayload(ctx, managedRow),
++							elapsedMs: Date.now() - meta.created_at
++						});
++						this._emit("fiber:run:interrupted", {
++							fiberId: meta.id,
++							fiberName: meta.name,
++							managed: true,
++							recoveryReason: "interrupted",
++							elapsedMs: Date.now() - meta.created_at
++						});
++						this.sql`DELETE FROM cf_agents_runs WHERE id = ${meta.id}`;
+ 						madeProgress = true;
+-						this._notifyManagedFiberTerminal(row.id);
++						const waiters = this._managedFiberTerminalWaiters.get(meta.id);
++						if (waiters) {
++							this._managedFiberTerminalWaiters.delete(meta.id);
++							for (const resolve of waiters) resolve();
++						}
+ 						continue;
+ 					}
+-					const completedAt = Date.now();
+-					this.sql`
++					if (!managedRow && fiberRecoveryMaxAgeMs > 0 && Date.now() - meta.created_at > fiberRecoveryMaxAgeMs) {
++						this._emit("fiber:recovery:skipped", { fiberId: meta.id, fiberName: meta.name, reason: "max_age_exceeded", elapsedMs: Date.now() - meta.created_at });
++						this.sql`DELETE FROM cf_agents_runs WHERE id = ${meta.id}`;
++						madeProgress = true; continue;
++					} // no snapshot for expired unmanaged
++					const loaded = this.sql`SELECT id, name, snapshot, created_at FROM cf_agents_runs WHERE id = ${meta.id}`;
++					const row = loaded[0];
++					if (!row) continue;
++					const snapshot = this._parseFiberRecoverySnapshot(row.id, row.snapshot);
++					const ctx = { id: row.id, name: row.name, snapshot, createdAt: row.created_at, recoveryReason: "interrupted" };
++					this._emit("fiber:recovery:detected", {
++						...this._fiberRecoveryPayload(ctx, managedRow),
++						elapsedMs: Date.now() - row.created_at
++					});
++					this._emit("fiber:run:interrupted", {
++						fiberId: row.id,
++						fiberName: row.name,
++						managed: managedRow !== null,
++						recoveryReason: "interrupted",
++						elapsedMs: Date.now() - row.created_at
++					});
++					if (managedRow) {
++						const completedAt = Date.now();
++						this.sql`
+             UPDATE cf_agents_fibers
+             SET status = 'interrupted',
+                 snapshot = ${row.snapshot},
+@@ -3385,78 +3412,100 @@ var Agent = class Agent extends DurableObject {
+             WHERE fiber_id = ${row.id}
+               AND status IN ('pending', 'running')
+           `;
+-					ctx.idempotencyKey = managedRow.idempotency_key ?? void 0;
+-					ctx.metadata = this._parseFiberJsonObject(managedRow.metadata_json);
+-					ctx.status = "interrupted";
+-				}
+-				const recovered = await this._runFiberRecoveryHook(ctx, managedRow);
+-				const tooOld = fiberRecoveryMaxAgeMs > 0 && Date.now() - row.created_at > fiberRecoveryMaxAgeMs;
+-				if (recovered || managedRow || tooOld) {
+-					if (!recovered && !managedRow && tooOld) this._emit("fiber:recovery:skipped", {
+-						fiberId: row.id,
+-						fiberName: row.name,
+-						reason: "max_age_exceeded",
+-						elapsedMs: Date.now() - row.created_at
+-					});
+-					this.sql`DELETE FROM cf_agents_runs WHERE id = ${row.id}`;
+-					madeProgress = true;
++						ctx.idempotencyKey = managedRow.idempotency_key ?? void 0;
++						ctx.metadata = this._parseFiberJsonObject(managedRow.metadata_json);
++						ctx.status = "interrupted";
++					}
++					const recovered = await this._runFiberRecoveryHook(ctx, managedRow);
++					const tooOld = fiberRecoveryMaxAgeMs > 0 && Date.now() - row.created_at > fiberRecoveryMaxAgeMs;
++					if (recovered || managedRow || tooOld) {
++						if (!recovered && !managedRow && tooOld) this._emit("fiber:recovery:skipped", {
++							fiberId: row.id,
++							fiberName: row.name,
++							reason: "max_age_exceeded",
++							elapsedMs: Date.now() - row.created_at
++						});
++						this.sql`DELETE FROM cf_agents_runs WHERE id = ${row.id}`;
++						madeProgress = true;
++					}
++					if (managedRow) this._notifyManagedFiberTerminal(row.id);
+ 				}
+-				if (managedRow) this._notifyManagedFiberTerminal(row.id);
+ 			}
+-			const ledgerOnlyRows = this.sql`
+-        SELECT f.fiber_id, f.idempotency_key, f.name, f.status, f.snapshot,
+-               f.metadata_json, f.error_message, f.created_at, f.started_at,
+-               f.completed_at
+-        FROM cf_agents_fibers f
+-        LEFT JOIN cf_agents_runs r ON r.id = f.fiber_id
+-        WHERE f.status IN ('pending', 'running')
+-          AND r.id IS NULL
+-      `;
+-			for (const row of ledgerOnlyRows) {
+-				if (scanDeadlineMs > 0 && Date.now() - scanStartedAt > scanDeadlineMs) {
+-					this._emit("fiber:recovery:skipped", {
+-						fiberId: row.fiber_id,
+-						fiberName: row.name,
+-						reason: "scan_deadline_exceeded",
+-						elapsedMs: Date.now() - scanStartedAt,
+-						managed: true
+-					});
+-					break;
+-				}
+-				if (this._runFiberActiveFibers.has(row.fiber_id)) continue;
+-				const snapshot = this._parseFiberRecoverySnapshot(row.fiber_id, row.snapshot);
+-				const completedAt = Date.now();
+-				this.sql`
++			const ledgerBoundaryRow = this.sql`SELECT MAX(rowid) AS boundary FROM cf_agents_fibers`;
++			const ledgerBoundary = ledgerBoundaryRow[0]?.boundary ?? null;
++			let ledgerScanned = 0;
++			let ledgerCursor = 0;
++			let ledgerScanning = ledgerBoundary !== null;
++			while (ledgerScanning) {
++				const page = this.sql`
++          SELECT f.rowid AS rowid, f.fiber_id, f.idempotency_key, f.name,
++                 f.status, f.metadata_json, f.created_at
++          FROM cf_agents_fibers f
++          LEFT JOIN cf_agents_runs r ON r.id = f.fiber_id
++          WHERE f.rowid > ${ledgerCursor} AND f.rowid <= ${ledgerBoundary}
++            AND f.status IN ('pending', 'running')
++            AND r.id IS NULL
++          ORDER BY f.rowid ASC LIMIT 1
++        `;
++				if (page.length === 0) break;
++				for (const meta of page) {
++					ledgerCursor = meta.rowid;
++					ledgerScanned++;
++					if (ledgerScanned > RUN_SCAN_MAX_ROWS) {
++						this._emit("fiber:recovery:skipped", {
++							fiberId: meta.fiber_id,
++							fiberName: meta.name,
++							reason: "scan_budget_exceeded",
++							scannedRows: ledgerScanned - 1,
++							managed: true
++						});
++						ledgerScanning = false;
++						break;
++					}
++					if (this._runFiberActiveFibers.has(meta.fiber_id)) continue;
++					const loaded = this.sql`
++          SELECT fiber_id, idempotency_key, name, status, snapshot, metadata_json,
++                 created_at
++          FROM cf_agents_fibers
++          WHERE fiber_id = ${meta.fiber_id}
++          LIMIT 1
++        `;
++					const row = loaded[0];
++					if (!row) continue;
++					const snapshot = this._parseFiberRecoverySnapshot(row.fiber_id, row.snapshot);
++					const completedAt = Date.now();
++					this.sql`
+           UPDATE cf_agents_fibers
+           SET status = 'interrupted',
+               completed_at = ${completedAt}
+           WHERE fiber_id = ${row.fiber_id}
+             AND status IN ('pending', 'running')
+         `;
+-				const ctx = {
+-					id: row.fiber_id,
+-					name: row.name,
+-					snapshot,
+-					createdAt: row.created_at,
+-					idempotencyKey: row.idempotency_key ?? void 0,
+-					metadata: this._parseFiberJsonObject(row.metadata_json),
+-					status: "interrupted",
+-					recoveryReason: "interrupted"
+-				};
+-				this._emit("fiber:recovery:detected", {
+-					...this._fiberRecoveryPayload(ctx, row),
+-					elapsedMs: Date.now() - row.created_at
+-				});
+-				this._emit("fiber:run:interrupted", {
+-					fiberId: row.fiber_id,
+-					fiberName: row.name,
+-					managed: true,
+-					recoveryReason: "interrupted",
+-					elapsedMs: Date.now() - row.created_at
+-				});
+-				await this._runFiberRecoveryHook(ctx, row);
+-				madeProgress = true;
+-				this._notifyManagedFiberTerminal(row.fiber_id);
++					const ctx = {
++						id: row.fiber_id,
++						name: row.name,
++						snapshot,
++						createdAt: row.created_at,
++						idempotencyKey: row.idempotency_key ?? void 0,
++						metadata: this._parseFiberJsonObject(row.metadata_json),
++						status: "interrupted",
++						recoveryReason: "interrupted"
++					};
++					this._emit("fiber:recovery:detected", {
++						...this._fiberRecoveryPayload(ctx, row),
++						elapsedMs: Date.now() - row.created_at
++					});
++					this._emit("fiber:run:interrupted", {
++						fiberId: row.fiber_id,
++						fiberName: row.name,
++						managed: true,
++						recoveryReason: "interrupted",
++						elapsedMs: Date.now() - row.created_at
++					});
++					await this._runFiberRecoveryHook(ctx, row);
++					madeProgress = true;
++					this._notifyManagedFiberTerminal(row.fiber_id);
++				}
+ 			}
+ 		} finally {
+ 			this._runFiberRecoveryInProgress = false;

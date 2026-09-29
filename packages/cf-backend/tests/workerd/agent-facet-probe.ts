@@ -34,7 +34,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
 
   async onePlane(name: string): Promise<OnePlaneObservation> {
     const directory = this.actorDirectoryStore();
-    const child = directory.create({ parent: directory.main(), name, creationId: name, kind: 'subordinate', lifetime: 'durable' });
+    const child = directory.create({ parent: directory.main(), name, creationId: name, origin: 'user', lifetime: 'durable' });
     const record = directory.describe(child);
     const homeName = hostedActorPlacement(record).homeName;
 

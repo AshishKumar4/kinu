@@ -87,8 +87,8 @@ const RECOVERY_CLASSIFIER = 'classifyRecoveredFiber';
  *     `streamTextReported` — the provider entry points this repo calls, so a
  *     hook that skips the lanes and reaches a model directly is refused by the
  *     same rule.
- *   • `runDueSessionEvolution`, `reviewCompletedTurn` — the cadence and advisor
- *     passes, each a model call behind one name.
+ *   • `runDueSessionEvolution`, `hireAdvisor` — the cadence pass, a model call behind
+ *     one name, and the advisor's hire, which starts an agent's turn.
  *   • `resumeAll`, `replayOwedAndRearm`, `owedDeliveryWork` — the delivery
  *     lanes: owed event replies are external mail and an interrupted terminal
  *     transition replays SMTP and model work. An activation CLASSIFIES and
@@ -103,7 +103,7 @@ const RECOVERY_CLASSIFIER = 'classifyRecoveredFiber';
 export const MODEL_SINKS: readonly string[] = [
   'suggestTitle', 'applyAutoTitle',
   'generateText', 'streamText', 'generateJson', 'generateReported', 'streamTextReported',
-  'runDueSessionEvolution', 'reviewCompletedTurn',
+  'runDueSessionEvolution', 'hireAdvisor',
   'resumeAll', 'replayOwedAndRearm', 'owedDeliveryWork',
 ];
 
@@ -124,7 +124,7 @@ function declaredDurableObjects(): string[] {
 }
 
 /** `durable_objects.bindings[].class_name`: the one place a class is bound, so
- *  the `migrations` block that names each class again is not read. */
+ *  the `exports` map that names each class again is not read. */
 const WranglerDurableObjects = v.object({
   durable_objects: v.object({ bindings: v.array(v.object({ class_name: v.string() })) }),
 });

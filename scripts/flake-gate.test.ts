@@ -1,11 +1,11 @@
 // The flake gate repeats the test files a commit changes and tells a flake from a failing test. Its red direction is a
 // planted flake, run through the gate's own runner.
 import { describe, expect, test } from 'bun:test';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { childEnv, scratchDir } from '@kinu.run/test-utils';
 import {
-  REPEATS, planFor, repeatAll, stagedTestFiles, sweepRun, sweepVerdict, verdictOf, type Plan, type RunOutcome,
+  REPEATS, movedUnchanged, planFor, repeatAll, stagedTestFiles, sweepRun, sweepVerdict, verdictOf, type Plan, type RunOutcome,
 } from './flake-gate';
 import { isFirstRunSuite, isPythonSuite, isRunnableSuite, trackedFiles } from './sources';
 import { writtenSkips } from './test-census';
@@ -21,12 +21,16 @@ describe('the runs of a changed suite', () => {
     const counter = join(directory, 'runs');
 
     writeFileSync(join(directory, 'flaky.test.ts'), `import { expect, test } from 'bun:test';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 
-test('passes on odd runs and fails on even ones', () => {
-  const seen = existsSync(${JSON.stringify(counter)}) ? Number(readFileSync(${JSON.stringify(counter)}, 'utf8')) : 0;
+// Runs may be beside each other, so each claims its place atomically rather than reading a shared count.
+test('fails every second claim', () => {
+  let seen = 0;
 
-  writeFileSync(${JSON.stringify(counter)}, String(seen + 1));
+  while (true) {
+    try { mkdirSync(${JSON.stringify(counter)} + '-' + String(seen)); break; } catch { seen += 1; }
+  }
+
   expect(seen % 2).toBe(0);
 });
 `);
@@ -36,9 +40,35 @@ test('passes on odd runs and fails on even ones', () => {
     const results = await repeatAll(['flaky.test.ts', 'red.test.ts', 'green.test.ts'].map((name) => planted(directory, name)), directory);
     const flaky = verdictOf(results.get('flaky.test.ts') ?? []);
 
-    expect(flaky.kind === 'flaky' ? [...flaky.red] : flaky.kind).toEqual([2, 4, 6]);
+    // Which runs drew the odd claims depends on who started first; that three of six were red, each named, does not.
+    expect(flaky.kind === 'flaky' ? flaky.red.length : flaky.kind).toBe(3);
+    expect(flaky.kind === 'flaky' && [...flaky.red].every((run) => run >= 1 && run <= 6)).toBe(true);
     expect(verdictOf(results.get('red.test.ts') ?? []).kind).toBe('red');
     expect(verdictOf(results.get('green.test.ts') ?? []).kind).toBe('green');
+  });
+
+  test('a plain suite\'s runs run beside each other', async () => {
+    const directory = scratchDir('flake-gate-beside');
+    const started = join(directory, 'started');
+
+    // Green only once another run has started while this one runs. The other run is another process, so the planted
+    // suite polls the directory for it (no fake clock reaches across processes); the 20 s bound only ends a red run.
+    writeFileSync(join(directory, 'beside.test.ts'), `import { expect, test } from 'bun:test';
+import { mkdirSync, readdirSync } from 'node:fs';
+
+test('meets another run', async () => {
+  mkdirSync(${JSON.stringify(started)}, { recursive: true });
+  mkdirSync(${JSON.stringify(started)} + '/' + String(process.pid));
+  const until = Date.now() + 20_000;
+
+  while (readdirSync(${JSON.stringify(started)}).length < 2 && Date.now() < until) await Bun.sleep(50);
+  expect(readdirSync(${JSON.stringify(started)}).length).toBeGreaterThan(1);
+});
+`);
+
+    const results = await repeatAll([planted(directory, 'beside.test.ts')], directory);
+
+    expect(verdictOf(results.get('beside.test.ts') ?? []).kind).toBe('green');
   });
 
   test('a run that reports no test at all is red, the silent zero, and a suite that skipped every test is not green', () => {
@@ -49,17 +79,23 @@ test('passes on odd runs and fails on even ones', () => {
   });
 });
 
+/** A scratch repository with its own environment: a hook's GIT_DIR and GIT_INDEX_FILE name the commit it gates. */
+function scratchRepository(name: string) {
+  const cwd = scratchDir(name);
+  const env = childEnv({ GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@example.com', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@example.com' });
+
+  const git = (...args: string[]): void => {
+    const run = Bun.spawnSync(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', ...args], { cwd, env, stderr: 'pipe' });
+
+    if (run.exitCode !== 0) throw new Error(`git ${args.join(' ')}: ${run.stderr.toString()}`);
+  };
+
+  return { cwd, env, git };
+}
+
 describe('the commit a hook gates', () => {
   test('a merge repeats the test files it changes itself, never one it takes whole from a side', () => {
-    const cwd = scratchDir('flake-gate-merge');
-    // Its own environment: a hook's GIT_DIR and GIT_INDEX_FILE name the commit the hook is gating.
-    const env = childEnv({ GIT_AUTHOR_NAME: 'a', GIT_AUTHOR_EMAIL: 'a@example.com', GIT_COMMITTER_NAME: 'a', GIT_COMMITTER_EMAIL: 'a@example.com' });
-
-    const git = (...args: string[]): void => {
-      const run = Bun.spawnSync(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false', ...args], { cwd, env, stderr: 'pipe' });
-
-      if (run.exitCode !== 0) throw new Error(`git ${args.join(' ')}: ${run.stderr.toString()}`);
-    };
+    const { cwd, env, git } = scratchRepository('flake-gate-merge');
 
     const write = (file: string, text: string): void => { writeFileSync(join(cwd, file), text); };
 
@@ -91,7 +127,38 @@ describe('the commit a hook gates', () => {
   });
 });
 
-describe('the sweep', () => {
+describe('a moved test', () => {
+  test('is repeated unless its only edits are rewritten import specifiers', () => {
+    const { cwd, env, git } = scratchRepository('flake-gate-move');
+
+    const suite = (helper: string, expected: string): string => [
+      `import { expect, test } from 'bun:test';`,
+      `import { answer } from '${helper}';`,
+      '',
+      `test('answers', () => { expect(answer()).toBe(${expected}); });`,
+      '',
+    ].join('\n');
+
+    mkdirSync(join(cwd, 'scripts'));
+    mkdirSync(join(cwd, 'tests', 'browser'), { recursive: true });
+    writeFileSync(join(cwd, 'scripts', 'a.test.ts'), suite('./helper', '42'));
+    writeFileSync(join(cwd, 'scripts', 'b.test.ts'), suite('./helper', '42'));
+    git('init', '-q', '-b', 'main');
+    git('add', '-A');
+    git('commit', '-q', '-m', 'base');
+
+    git('mv', 'scripts/a.test.ts', 'tests/browser/a.test.ts');
+    writeFileSync(join(cwd, 'tests', 'browser', 'a.test.ts'), suite('../../scripts/helper', '42'));
+    git('mv', 'scripts/b.test.ts', 'tests/browser/b.test.ts');
+    writeFileSync(join(cwd, 'tests', 'browser', 'b.test.ts'), suite('../../scripts/helper', '43'));
+    git('add', '-A');
+
+    expect([...movedUnchanged({ cwd, env })]).toEqual(['tests/browser/a.test.ts']);
+    expect(stagedTestFiles({ cwd, env })).toEqual(['tests/browser/b.test.ts']);
+  });
+});
+
+describe('the nightly sweep', () => {
   test('a planted flake comes out flaky under the seeds it was red with, a steady red red, a crash broken', async () => {
     const directory = scratchDir('flake-sweep-planted');
     const counter = join(directory, 'runs');

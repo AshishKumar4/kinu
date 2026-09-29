@@ -6,8 +6,8 @@ the workspace files and execution state. The same SQLite database holds the
 relational actor state. Each subsystem owns its tables and creates them
 idempotently. No shadow VFS or sync path runs between files and actor state.
 
-Only `OrchestratorAgent` holds actors. Every subordinate, head, swarm node, and
-MCTS branch is a logical actor, one `workspace_actors` row inside the
+Only `OrchestratorAgent` holds actors. Every subordinate, head and swarm node
+is a logical actor, one `workspace_actors` row inside the
 workspace's own SQLite (`packages/cf-backend/src/hosted-actors.ts`). None is a second object or a
 second database. The other Durable Object classes in `wrangler.jsonc` keep
 databases of their own. The one with user data is `UserDO`: it holds the
@@ -74,8 +74,11 @@ erDiagram
         TEXT actor_id PK "Actor ID"
         TEXT parent_actor_id FK "Parent actor"
         TEXT name "Actor name"
-        TEXT kind "main/subordinate/head/node/branch"
+        TEXT origin "system/user/agent/swarm/evolution"
+        INTEGER tab "Has a chat tab"
+        INTEGER input "Takes the owner's messages"
         TEXT lifetime "durable/task"
+        INTEGER evolves "Feeds the evolution window"
         INTEGER created_at "Epoch ms"
     }
     actor_config {
@@ -116,18 +119,13 @@ erDiagram
         TEXT id PK "Node ID (nanoid)"
         TEXT parent_id FK "Parent node"
         TEXT root_id "The search run this node belongs to"
-        TEXT task "MCTS task"
+        TEXT task "Swarm task"
         TEXT action "Approach taken"
         TEXT observation "Result"
-        TEXT code_used "Runnable source from exploration"
-        TEXT code_language "Executor language for code_used"
-        INTEGER depth "Tree depth"
         INTEGER visits "Backprop count (default 0)"
         REAL value "Running mean score (default 0)"
+        INTEGER depth "Tree depth"
         TEXT status "open/terminal/pruned/failed"
-        TEXT msg_id "Session message ID"
-        TEXT branch_agent_key "Branch actor key"
-        TEXT evaluation_json "Evaluation of the node"
         INTEGER created_at "Epoch ms"
     }
     evolution_events {
@@ -144,14 +142,6 @@ erDiagram
         TEXT status "current/pending/rolled_back/historical"
         INTEGER parent_version "DGM lineage, the version this branched from"
         TEXT pathology "The failure cell this version was written to fix"
-    }
-    task_history {
-        TEXT id PK "Random hex ID"
-        TEXT task "Task description"
-        INTEGER scaffold_version "Version used (default 0)"
-        TEXT outcome "success/error/timeout"
-        REAL score "Task score"
-        INTEGER created_at "Epoch ms"
     }
     fibers {
         TEXT id PK "Fiber ID"
@@ -182,9 +172,9 @@ erDiagram
     }
     conversation_entries {
         TEXT actor_id PK "Actor whose conversation this is"
-        TEXT session_id PK "Session ('default' chat, 'mcts' search)"
+        TEXT session_id PK "Session ('default' is the chat)"
         TEXT id PK "Entry ID"
-        TEXT parent_id "Parent entry. These edges are the session tree"
+        INTEGER position UK "Place in the chat from 0; the chat is a list"
         TEXT role "user/assistant/system/tool"
         TEXT turn_id "Turn that wrote the entry"
         TEXT run_id "Run that wrote the entry"
@@ -197,11 +187,6 @@ erDiagram
         INTEGER position PK "Order within the entry"
         TEXT message_id "Message whose part it shows"
         INTEGER part_no "Part of that message"
-    }
-    conversation_heads {
-        TEXT actor_id PK "Actor"
-        TEXT session_id PK "Session"
-        TEXT entry_id "The entry the next turn chains from"
     }
     conversation_fts {
         TEXT content "Derived FTS5 transcript index"
@@ -256,10 +241,8 @@ erDiagram
     session_messages ||--o{ stream_parts : "an open message's accumulating parts"
     conversation_entries ||--o{ conversation_entry_parts : "parts the entry shows"
     session_messages ||--o{ conversation_entry_parts : "message_id, part_no"
-    conversation_entries ||--o| conversation_heads : "one head per session"
     conversation_entries ||--o{ conversation_fts : "local transcript index"
     search_nodes ||--o{ search_nodes : "parent_id"
-    scaffold_versions ||--o{ task_history : "scaffold_version"
 ```
 
 ## Agent identity (SOUL.md)
@@ -285,29 +268,34 @@ agent's own database (`~/.kinu/<name>/agent.db`). There it holds the agent's
 state; the project directory is the workspace (see "Local and cloud construction").
 
 Nimbus owns those bytes and their tables. `core/src/conformance/manifest.ts`
-declares the exact set, which is what `NimbusWorkspace.destroy()` drops. An
-addition means the dependency changed its storage contract. At
-`@nimbus-sh/core` 0.12.0 the set is `inodes`, `file_chunks`,
-`content_lifecycle`, `vfs_schema_migrations`, `vfs_append_receipts_v2`,
-`vfs_append_writer_state_v2`, `vfs_append_module_state_v2`,
-`vfs_append_pid_revocations_v2`, `vfs_append_acked_gaps_v2`,
-`nimbus_filesystem_identity`, `nimbus_filesystem_devices`, and
-`vfs_ino_allocator`. Kinu adds its own `kinu_workspace_generation`. The
-manifest declares all of them present on every root (`cf-orchestrator`,
+declares the exact set; an addition means the dependency changed its storage
+contract. At `@nimbus-sh/core` 0.13.1 the set is `vfs_state`, `vfs_inodes`,
+`vfs_chunks`, `vfs_contents`, `vfs_content_chunks`, `vfs_inode_history`,
+`vfs_gc_queue`, `vfs_jobs`, `vfs_snapshots`, `vfs_tombstones`,
+`vfs_cold_trash`, the five `vfs_append_*_v2` tables, and
+`nimbus_filesystem_identity`, `nimbus_filesystem_devices`,
+`nimbus_storage_ledger`, `nimbus_storage_reservation` and
+`nimbus_facet_storage`. `NimbusWorkspace.destroy()` drops the `vfs_*` tables
+and keeps the `nimbus_*` ones. Kinu adds its own `kinu_workspace_generation`.
+The manifest declares all of them present on every root (`cf-orchestrator`,
 `cf-subordinate`, `cli`).
 
 Three properties follow:
 
-- Content addressing: `inodes(path, content_id)` points at
-  `file_chunks(content_id, chunk_id, data)`, with a `content_lifecycle` GC
-  table. A snapshot of the plane copies the small inode index and no blobs.
+- Content addressing: `vfs_inodes(path, content_id)` points at a
+  `vfs_contents` row, whose `vfs_content_chunks` rows name `vfs_chunks` rows,
+  unique by hash, so equal chunks are stored once; `vfs_gc_queue` collects
+  what nothing names. A snapshot of the plane is one `vfs_snapshots` row that
+  pins the history it names, whatever the tree's size; the Diffs baseline is
+  one (`diffs:<actor>:<id>`).
 - POSIX semantics: one filesystem, addressed the same way by
   `vfs.readFile('/etc/passwd')` and by `run "cat /etc/passwd"`. Relative paths
   resolve at `WORKSPACE_ROOT` (`/home/main`; `/home/user` links to it). Ownership is uid/gid/mode on
   inodes. That makes a swarm node's `/home/<node>` and its private `/tmp` an
   enforced boundary, not a convention (`core/src/vfs/agent-home.ts`).
-- Chunked blobs: `SqliteVFS` splits file content into `file_chunks` rows of
-  `CHUNK_SIZE` bytes, 65,536 as `@nimbus-sh/platform` declares it. Merge-back
+- Chunked blobs: `SqliteVFS` cuts file content into `vfs_chunks` rows of at
+  most `CHUNK_SIZE` bytes, 65,536 as `@nimbus-sh/platform` declares it (one
+  chunk up to that size, content-defined cuts above it). Merge-back
   sizes its write batches with the same constant, imported rather than
   restated (`core/src/strategy/merge-back.ts:60`).
 
@@ -388,14 +376,14 @@ relational store under `packages/core/src/session` (`SessionHistory`, built by
   segment, extended in place by windows of deltas, and seals once at the end of
   its step. The seal deletes the stream rows. A reader folds the stream rows of
   an open message and reads the content row of a sealed one.
-- The conversation: `conversation_entries` is the public chain (`id`,
-  `parent_id`, `role`, `turn_id`, `run_id`, `recorded_at`, and the working
+- The conversation: `conversation_entries` is the public chat, a list (`id`,
+  `position`, `role`, `turn_id`, `run_id`, `recorded_at`, and the working
   context the entry recorded), keyed by actor and session. `default` is the
-  chat. `mcts` holds lifetime-search trajectories and is never browsed as
   chat. `conversation_entry_parts` references the message parts each entry
-  displays. `conversation_heads` names the entry the next turn chains from. A
-  walk-back moves the head without deleting anything
-  (`SessionHistory.revertTo`). A fork carries the chain to the cut:
+  displays. An entry appends at the next position, so the newest position + 1
+  is the chat's length, and a page is one range read by position. A walk-back
+  deletes the entry it names and everything after it
+  (`SessionHistory.revertTo`). A fork carries the chat up to the cut:
   `ForkTargetWriter` (`identity/fork-writer.ts`) stages it, then publishes it in
   one transaction.
 
@@ -444,7 +432,8 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Refinement | `refinement_requests` | `core/src/evolution/refinement.ts` |
 | GEPA | `gepa_runs`, `gepa_candidates` | `core/src/evolution/gepa/persistence.ts` |
 | Branching heads | `head_runs`, `head_journal`, `head_evidence`, `head_steps`, `head_merge_results` | `core/src/heads/schema.ts` |
-| MCTS | `mcts_search_runs` (durable checkpoints), `alternate_takes` | `core/src/mcts/search-store.ts`, `takes.ts` |
+| Swarm search | `search_nodes`, `mcts_search_runs` (durable checkpoints) | `core/src/mcts/schemas.ts`, `search-store.ts` |
+| Alternate takes | `alternate_takes` (a settled `/branch` redirect) | `core/src/mcts/takes.ts` |
 | Swarm leaderboard | `exploration_records` (cumulative across runs) | `core/src/strategy/records.ts` |
 | Swarm node content | `swarm_node_records` (what a swarm re-entry reads) | `core/src/strategy/swarm-resume.ts` |
 | Scaffold shadow mode | `scaffold_evaluations`, `scaffold_trial_queue` | `core/src/scaffold/shadow.ts` |
@@ -468,7 +457,6 @@ These are created outside that pass, by the root that owns each:
 | Subsystem | Tables | Owner |
 |---|---|---|
 | Subordinate roster | `actor_subordinates` (every actor that can hire) | `core/src/subordinates/roster.ts` |
-| Workspace-diff baseline | `vfs_baseline` | `core/src/read-models/workspace-diff.ts`, called by each root's schema pass |
 | Orchestrator-local | `turn_feedback`, `sleep_time_updates`, `turn_craft_usage` | `cf-backend/src/orchestrator.ts`, inline |
 | Webhook ingress (cf only) | `webhook_rate_windows`, `webhook_replay_claims`, `webhook_secrets` | `core/src/events/ingress/webhook.ts` (`initWebhookIngressTables`), `rate-limit.ts`, `secrets.ts` |
 
@@ -509,7 +497,7 @@ The pass runs in this order:
 3. The slate tables.
 
 Then each root adds what only it carries. The orchestrator DO also runs
-`initWorkspaceBaselineTable`, `initWebhookIngressTables`,
+`initWebhookIngressTables`,
 `subordinateRoster.ensureSchema()`, and its inline turn tables. An in-memory
 flag makes the whole call run once per activation. No persistent schema
 version is tracked, because a cold activation always re-runs it.

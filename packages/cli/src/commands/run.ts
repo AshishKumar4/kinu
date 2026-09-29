@@ -389,7 +389,7 @@ async function runCloudRpcCommand(origin: string, token: string, name: string, c
 
     case 'timeline':
       return rpc('getRunTimeline', [{ limit: numberField(cmd, 'limit') ?? 100 }]);
-    case 'mcts': {
+    case 'swarm': {
       const nodeId = stringField(cmd, 'nodeId') ?? stringField(cmd, 'id');
 
       return nodeId ? rpc('getMctsNodeDetail', [nodeId]) : rpc('getMctsTree');
@@ -480,7 +480,7 @@ async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentCl
       }) });
     case 'timeline':
       return listLocalTimeline(name, numberField(cmd, 'limit') ?? 100);
-    case 'mcts': {
+    case 'swarm': {
       const nodeId = stringField(cmd, 'nodeId') ?? stringField(cmd, 'id');
 
       return decodeJsonValue({ value: nodeId ? getLocalMctsNode(name, nodeId) : listLocalMcts(name) });

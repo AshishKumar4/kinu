@@ -1,4 +1,3 @@
-// The single-driver lease, driven through `DriverLeaseHold`, its whole public surface.
 // The two-process race leg lives in `agent-host.test.ts` and `packages/cli/tests/driver-lease-surfaces.test.ts`.
 // No test waits: the lease carries no timestamp, and that is the property under test.
 import { scratchDir } from '../../test-utils/src/scratch';
@@ -10,6 +9,8 @@ import {
   DriverLeaseHold,
   type DriverKind,
   type LeaseProcess,
+  type SqlExecutor,
+  type SqlValue,
 } from '@kinu.run/core';
 import { makeExecRaw, makeSql } from '../src/runtime';
 import { leaseHolder } from './driver-lease-probe';
@@ -55,7 +56,6 @@ describe('the local driver lease', () => {
 
       if (!refusal) throw new Error('a daemon must not preempt a live interactive owner');
       expect(refusal.holder).toEqual({ pid: 201, kind: 'interactive' });
-      // `unavailable`, not `denied`: the driver is taken, not forbidden.
       expect(refusal.refused.reason).toBe('unavailable');
       expect(refusal.refused.error).toBe(
         'the interactive driver in process 201 is running this conversation; a daemon driver does not interrupt it',
@@ -80,6 +80,42 @@ describe('the local driver lease', () => {
       expect(daemon.held()).toBe(false);
     } finally {
       db.close();
+    }
+  });
+
+  test('an interactive driver takes it even when the daemon releases or re-takes it between its read and its write', () => {
+    // A daemon releases and re-takes after every pass; a user's claim raced that.
+    for (const move of ['released', 'retaken'] as const) {
+      const { db } = workspace();
+
+      try {
+        const alive = new Set([311, 312]);
+        const daemon = driver(db, 311, alive, 'daemon');
+        expect(daemon.acquire()).toBeNull();
+        const base = makeSql(db);
+        let interleaved = false;
+
+        const sql: SqlExecutor = <T,>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] => {
+          const rows = base<T>(strings, ...values);
+
+          if (!interleaved && strings.join('?').startsWith('SELECT pid, token, kind FROM driver_lease')) {
+            interleaved = true;
+            daemon.release();
+
+            if (move === 'retaken') expect(daemon.acquire()).toBeNull();
+          }
+
+          return rows;
+        };
+
+        const user = new DriverLeaseHold({ sql, execRaw: makeExecRaw(db), proc: { pid: 312, isAlive: (other) => alive.has(other) } }, 'interactive');
+
+        expect(user.acquire()).toBeNull();
+        expect(leaseHolder(db)).toEqual({ pid: 312, kind: 'interactive' });
+        expect(daemon.held()).toBe(false);
+      } finally {
+        db.close();
+      }
     }
   });
 

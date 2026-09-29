@@ -91,12 +91,10 @@ const WorkerSchema = v.object({
     image: v.string(),
     max_instances: v.optional(v.number()),
   }))),
-  migrations: v.optional(v.array(v.object({
-    tag: v.string(),
-    new_sqlite_classes: v.optional(v.array(v.string())),
-    new_classes: v.optional(v.array(v.string())),
-    deleted_classes: v.optional(v.array(v.string())),
-  }))),
+  exports: v.optional(v.record(v.string(), v.union([
+    v.object({ type: v.literal('durable-object'), state: v.optional(v.literal('created')), storage: v.literal('sqlite') }),
+    v.object({ type: v.literal('durable-object'), state: v.literal('deleted') }),
+  ]))),
   triggers: v.optional(v.object({ crons: v.array(v.string()) })),
   vars: v.optional(v.record(v.string(), v.string())),
   send_email: v.optional(v.array(v.object({ name: v.string() }))),
@@ -173,9 +171,9 @@ function environmentConfig(config: v.InferOutput<typeof WranglerConfigSchema>, e
     throw new Error(`${WRANGLER_CONFIG} env.staging names no routes of its own, so it would inherit production's`);
   }
 
-  const { name, account_id: accountId, compatibility_date: compatibilityDate, assets, migrations, triggers } = production;
+  const { name, account_id: accountId, compatibility_date: compatibilityDate, assets, exports, triggers } = production;
 
-  const inherited = Object.fromEntries(Object.entries({ account_id: accountId, compatibility_date: compatibilityDate, assets, migrations, triggers })
+  const inherited = Object.fromEntries(Object.entries({ account_id: accountId, compatibility_date: compatibilityDate, assets, exports, triggers })
     .filter(([, value]) => value !== undefined));
 
   return named({ ...inherited, name: `${name ?? 'worker'}-staging`, ...staging });
@@ -245,7 +243,6 @@ export interface Resource {
 export interface InfraWorker {
   readonly workerName: string;
   readonly vars: ReadonlyMap<string, string>;
-  readonly migrationTags: readonly string[];
   /** Every binding name the Worker declares, whatever its kind. */
   readonly bindings: readonly string[];
   /** Every route PATTERN the Worker claims, verbatim. Carried on the
@@ -897,7 +894,6 @@ function workerRow(config: DeployedConfig): InfraWorker {
   return {
     workerName: config.name ?? 'worker',
     vars: new Map(Object.entries(config.vars ?? {})),
-    migrationTags: (config.migrations ?? []).map((m) => m.tag),
     bindings,
     routes: (config.routes ?? []).map((route) => route.pattern),
     images: new Map((config.containers ?? []).map((container) => [container.class_name, container.image])),
@@ -1250,6 +1246,11 @@ function draftsFor(
   }
 
   return drafts;
+}
+
+/** The classes `exports` keeps: every entry but a `deleted` tombstone. */
+export function liveClasses(exports: DeployedConfig['exports']): readonly string[] {
+  return Object.entries(exports ?? {}).flatMap(([name, entry]) => (entry.state === 'deleted' ? [] : [name]));
 }
 
 /** What wrangler.jsonc deploys for `environment`, read as Wrangler reads it. */

@@ -33,6 +33,7 @@ export {
   type RunEventQuery,
   type BoundedRunEventQuery,
   type StoredRunEvent,
+  type ContextMeasures,
 } from './recorder';
 
 export {

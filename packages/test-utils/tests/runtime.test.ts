@@ -23,7 +23,6 @@ describe('createTestRuntime refuses work it does not perform', () => {
     ['a delayed callback', () => rt.schedule.after(10, async () => {}), 'opts.schedule'],
     ['a durable fiber', async () => { await rt.schedule.fiber('work', async () => 'done'); }, 'opts.schedule'],
     ['a scaffold write', () => rt.identity.scaffold.write('export default {}'), 'scaffold surface'],
-    ['a branch exploration', async () => { await rt.spawnBranch('try another angle'); }, 'spawns branches'],
   ];
 
   for (const [capability, ask, option] of unsupported) {

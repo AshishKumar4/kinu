@@ -1,6 +1,6 @@
 import type { Browser, BrowserWorker } from '@cloudflare/puppeteer';
 import * as v from 'valibot';
-import { sha256Hex, type RawSqlExec, type SqlExec } from '@kinu.run/core';
+import { markStoreChanged, sha256Hex, type RawSqlExec, type SqlExec } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import { PREVIEW_CAPABILITY_HANDLE_LENGTH } from '../workspace-host';
 
@@ -81,6 +81,7 @@ export class SlatePictures {
 
   private stored(slate: string, digest: string): void {
     this.db.exec(`UPDATE slate_pictures SET digest = ?, due_at = NULL, due_since = NULL, attempts = 0 WHERE slate = ?`, digest, slate);
+    markStoreChanged(this.db);
   }
 
   private failed(picture: DuePicture, now: number): void {
@@ -108,6 +109,7 @@ export class SlatePictures {
     try {
       if (bucket !== undefined) await deletePictures(bucket, picturePrefix(workspace, slate));
       this.db.exec(`DELETE FROM slate_pictures WHERE slate = ?`, slate);
+      markStoreChanged(this.db);
     } catch (cause) {
       this.db.exec(
         `UPDATE slate_pictures SET due_at = ? + ? * (1 << MIN(attempts, 7)), due_since = NULL, attempts = attempts + 1 WHERE slate = ?`,
@@ -217,9 +219,11 @@ export interface PictureCapture {
 }
 
 /** Loaded on first capture, not at cold start. */
-export async function browserCamera(binding: BrowserWorker): Promise<Camera> {
+export async function browserCamera(binding: Pick<BrowserRun, 'fetch'>): Promise<Camera> {
   const { default: puppeteer } = await import('@cloudflare/puppeteer');
-  const browser = await puppeteer.launch(binding);
+  // Puppeteer types the binding's fetch as the global one, whose `preconnect` is a hint it never gives.
+  const worker: BrowserWorker = { fetch: Object.assign((input: RequestInfo | URL, init?: RequestInit) => binding.fetch(input, init), { preconnect: () => undefined }) };
+  const browser = await puppeteer.launch(worker);
 
   return { shoot: (url) => photograph(browser, url), close: () => browser.close() };
 }

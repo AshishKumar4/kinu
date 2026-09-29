@@ -2,12 +2,12 @@ diff --git a/packages/core/src/tools/clamp.ts b/packages/core/src/tools/clamp.ts
 index b115761e1..8b7f58070 100644
 --- a/packages/core/src/tools/clamp.ts
 +++ b/packages/core/src/tools/clamp.ts
-@@ -50,7 +50,7 @@ async function offload(vfs: VFS, text: string): Promise<Offload> {
-   }
- 
-   // Relative on purpose: a leading slash would name the filesystem root.
--  return { path };
-+  return { path: `/${path}` };
+@@ -53,7 +53,7 @@ function offload(vfs: VFS, text: string): Effect.Effect<Offload> {
+       return { failure };
+     },
+     // Relative on purpose: a leading slash would name the filesystem root.
+-    onSuccess: (): Offload => ({ path }),
++    onSuccess: (): Offload => ({ path: `/${path}` }),
+   }));
  }
  
- /** Charged against the same cap as the output it replaces. */

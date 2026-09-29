@@ -1,13 +1,13 @@
 import type { LLMProviderConfig } from '@kinu.run/core';
 import {
-  initWorkspaceBaselineTable, initWorkspaceSchema, initActorStateSchema, readSoul, summarizeSoul,
+  initWorkspaceSchema, initActorStateSchema, readSoul, summarizeSoul,
   getCurrentScaffoldVersion, memoryBytes,
 } from '@kinu.run/core';
-import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from './runtime';
+import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql, waitOnSharedWrites, type CLIRuntime } from './runtime';
 import type { LocalProviderCredentials } from './model-resolver';
 import type { LocalOAuthStore } from './oauth-store';
 import type { Database } from 'bun:sqlite';
-import type { LocalActorConfig } from './actor-identity';
+import type { LocalActorConfig } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { requireSchemaGenesis } from './schema-genesis';
 
@@ -18,7 +18,6 @@ export interface WorkspaceInfo {
   soul: string;
   scaffoldVersion: number;
   searchNodeCount: number;
-  taskCount: number;
   memorySize: number;
   createdAt: number;
 }
@@ -29,7 +28,6 @@ interface CLIOpenOptions {
   providerCredentials?: LocalProviderCredentials;
   oauthStore?: LocalOAuthStore;
   oauthConfigPath?: string;
-  /** See CLIRuntimeConfig.cwd. */
   cwd?: string | null;
   checkpointKeep?: number;
 }
@@ -38,12 +36,12 @@ export type CLIOpenConfig = CLIOpenOptions & LocalActorConfig;
 
 interface OpenedWorkspaceIdentity { readonly id: string; readonly name: string; readonly created_at: number }
 
-/** Open an existing workspace with the full CLI backend runtime. */
 export async function openWorkspaceCLI(
   db: Database,
   dbPath: string,
   config: CLIOpenConfig,
 ): Promise<{ rt: CLIRuntime; info: WorkspaceInfo }> {
+  waitOnSharedWrites(db);
   const sql = makeSql(db);
   // Set on open, not at creation: `kinu create` publishes the file with no sidecars,
   // and a WAL database is unreadable without its `-shm`.
@@ -63,8 +61,7 @@ export async function openWorkspaceCLI(
     identity = stored;
   }
 
-  initWorkspaceBaselineTable((ddl) => db.exec(ddl));
-  const rt = createCLIRuntime(db, { ...config, dbPath, agentName: identity.name });
+  const rt = createCLIRuntime(db, { ...config, agentName: identity.name });
 
   // SOUL belongs to the agent, not to the shared physical project directory.
   const soul = await (rt.ownerSoul?.() ?? readSoul(rt.agentStateVfs ?? rt.storage.vfs));
@@ -78,9 +75,6 @@ export async function openWorkspaceCLI(
   const searchNodeCount = sql<{ c: number }>`
     SELECT COUNT(*) as c FROM search_nodes WHERE actor_id = ${rt.actor.actorId}`[0]?.c ?? 0;
 
-  const taskCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM task_history
-    WHERE actor_id = ${rt.actor.actorId}`[0]?.c ?? 0;
-
   const memorySize = await memoryBytes(rt.agentStateVfs ?? rt.storage.vfs);
 
   return {
@@ -92,7 +86,6 @@ export async function openWorkspaceCLI(
       soul,
       scaffoldVersion,
       searchNodeCount,
-      taskCount,
       memorySize,
       createdAt: identity.created_at,
     },

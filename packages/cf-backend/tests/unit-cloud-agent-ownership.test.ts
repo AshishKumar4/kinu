@@ -146,7 +146,7 @@ describe('cloud agent ownership safety', () => {
       async resetWorkspaceBaseline() {
         calls.push('baseline');
 
-        return { ok: true as const, files: 0 };
+        return { ok: true as const, capturedAt: 0 };
       },
       async beginGenesisTurn() {
         calls.push('genesis');
@@ -459,7 +459,7 @@ describe('cloud agent ownership safety', () => {
       async resetWorkspaceBaseline() {
         calls.push('baseline');
 
-        return { ok: true as const, files: 0 };
+        return { ok: true as const, capturedAt: 0 };
       },
       async setModel(spec: string) {
         calls.push('model');
@@ -615,7 +615,7 @@ describe('cloud agent ownership safety', () => {
       async resetWorkspaceBaseline() {
         calls.push('baseline');
 
-        return { ok: true as const, files: 0 };
+        return { ok: true as const, capturedAt: 0 };
       },
       // The DO's `workspaceGenesisSignal` declines a placeholder mission; the worker still calls it.
       async beginGenesisTurn() {
@@ -743,12 +743,15 @@ describe('cloud agent ownership safety', () => {
     }
 
     /** A statement against the Nimbus filesystem's own inode table. */
-    const touchesFilesystem = (sql: string): boolean => /\binodes\b/u.test(sql);
+    const touchesFilesystem = (sql: string): boolean => /\bvfs_inodes\b/u.test(sql);
 
     test('an already-owned claim does not touch the Nimbus filesystem', async () => {
-      const { db } = orchestratorHarness();
+      const { db, started } = orchestratorHarness();
+      // The first activation's start runs on its own; it must not land inside the measured window.
+      await started;
       // A cold activation over the same rows: no latch of the last one survives.
       const cold = await reactivateOrchestratorHarness(db, undefined, { world: { freshScaffold: true } });
+      await cold.started;
 
       let owner: string | undefined;
       const statements = await statementsDuring(db, async () => { owner = (await cold.agent.claimOwner('harness-owner')).owner; });
@@ -767,7 +770,7 @@ describe('cloud agent ownership safety', () => {
 
       expect(owner).toBe('first-claim-user');
       expect(statements.filter(touchesFilesystem).length).toBeGreaterThan(0);
-      expect(await workspaceFiles(cold.agent).stat(actorScaffoldPath({ kind: 'main', storageKey: MAIN_AGENT }))).not.toBeNull();
+      expect(await workspaceFiles(cold.agent).stat(actorScaffoldPath({ origin: 'system', storageKey: MAIN_AGENT }))).not.toBeNull();
     });
   });
 
@@ -914,7 +917,7 @@ describe('a create on an account whose registry predates the current build', () 
       async claimOwner(userId: string) { return { owner: userId, capabilityHash: null }; },
       async setInitialDisplayName(displayName: string, nameOrigin: NameOrigin) { return { displayName, nameOrigin }; },
       async setSoul(soul: string) { return { soul, purpose: '' }; },
-      async resetWorkspaceBaseline() { return { ok: true as const, files: 0 }; },
+      async resetWorkspaceBaseline() { return { ok: true as const, capturedAt: 0 }; },
       async setModel(spec: string) { return { ok: true, spec }; },
       async beginGenesisTurn() { return { started: true }; },
     });

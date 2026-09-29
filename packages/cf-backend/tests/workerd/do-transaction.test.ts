@@ -1,6 +1,7 @@
 /**
  * `ctx.storage.transactionSync`, executed. Defends: the admit + roster write (`actor-agent.ts`) and
  * a fork's publication committing partially; under bun the body runs directly, so only workerd can tell.
+ * Nested commit/rollback measured in workerd on 2026-09-28: the inner commit remains part of the outer transaction.
  */
 import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
@@ -35,6 +36,16 @@ describe('DurableObjectStorage.transactionSync', () => {
     await subject.admitAtomically('ev-1', false);
 
     expect(await subject.admitted()).toEqual({ events: 1, rosterStatus: 'idle' });
+  });
+
+  it('an outer rollback also undoes a committed nested transaction', async () => {
+    const failed = open('nested-fail');
+    await expect(() => failed.admitNested('ev-1', true)).rejects.toThrow(/outer transaction failed/);
+    expect(await failed.admitted()).toEqual({ events: 0, rosterStatus: 'working' });
+
+    const committed = open('nested-ok');
+    await committed.admitNested('ev-1', false);
+    expect(await committed.admitted()).toEqual({ events: 1, rosterStatus: 'idle' });
   });
 
   it('an async body commits before it fails, which is why the seam is synchronous', async () => {

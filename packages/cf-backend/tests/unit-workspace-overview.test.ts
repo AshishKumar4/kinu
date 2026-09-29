@@ -5,17 +5,75 @@
 import { sqlOver } from '@kinu.run/test-utils';
 import { describe, expect, setSystemTime, test } from 'bun:test';
 import {
-  RunEventRecorder, TURN_AUTHOR_METADATA_KEY, WORKSPACE_RUN_ID, DeferredApprovalStore, formatApproval, type WorkspaceOverview,
+  RunEventRecorder, TURN_AUTHOR_METADATA_KEY, WORKSPACE_RUN_ID, DeferredApprovalStore, DeviceConsentStore, createFactsStore, formatApproval, type WorkspaceOverview,
 } from '@kinu.run/core';
+import type { Database } from 'bun:sqlite';
+import { TERMINAL_RETRY_JOB } from '../src/wake-jobs';
+import { bindAgentSql } from '../src/runtime';
 import {
-  chatSessionTurns, nextTurn, orchestratorHarness, hostedSubordinateHarness, seedMission, until, workspaceMainActor,
+  armedWakes, chatSessionTurns, fireSoonestWake, nextTurn, orchestratorHarness, hostedSubordinateHarness, seedMission, until, workspaceMainActor, workspaceFiles,
   type RecordedUserPlaneCalls,
 } from './helpers/actor-harness';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
 
+/** The run header and idle owed-work probes remain live; only the tile's slow sections are held. */
+function slowReads(queries: readonly string[]): string[] {
+  return queries.filter((query) => /\b(?:FROM|JOIN)\s+(?:actor_config|agent_facts|crafted_tools|gepa_runs|prompt_section_versions|refinement_requests|replay_evals|scaffold_evaluations|scaffold_versions|turn_outcomes|deferred_approvals|proposed_tasks|plan_reviews|device_consent_requests|slate_pictures|slate_shares|slate_share_users|slate_live_shares|slate_live_share_users)\b/i.test(query)
+    || query.includes("'scaffold_promotion', 'scaffold_rollback'"));
+}
+
+async function finishPush(): Promise<void> {
+  for (let lap = 0; lap < 5; lap++) await nextTurn();
+}
+
 describe('the folded tile', () => {
+  test('purging a child removes its pending plan from a held tile', async () => {
+    const workspace = orchestratorHarness();
+    const { agent } = workspace;
+
+    const { actor } = await hostedSubordinateHarness(workspace, {
+      name: 'planner', displayName: 'Planner', nameOrigin: 'user', mission: 'prepare a plan',
+    });
+
+    const submitted = actor.stores.planReviews.submit('default', [{ start: 1, content: '# Repair the ledger' }]);
+    expect(submitted.ok).toBe(true);
+    expect((await agent.foldOverview()).decisionsWaiting).toBe(1);
+    await agent.actorDirectory({ action: 'retire', name: 'planner', reference: actor.reference });
+    expect((await agent.foldOverview()).decisionsWaiting).toBe(0);
+  });
+
+  test('a consent from an earlier activation expires even without a local timer', async () => {
+    const { agent } = orchestratorHarness();
+    const now = Date.now();
+    new DeviceConsentStore(bindAgentSql(agent)).insert({
+      consentId: 'cold-consent', deviceId: 'device', deviceLabel: 'Laptop', method: 'shell', command: 'git push',
+      createdAt: now, expiresAt: now + 1_000,
+    });
+    expect((await agent.foldOverview()).decisionsWaiting).toBe(1);
+
+    try {
+      setSystemTime(new Date(now + 1_001));
+      expect((await agent.foldOverview()).decisionsWaiting).toBe(0);
+    } finally {
+      setSystemTime();
+    }
+  });
+
+  test('slate titles and bindings follow authored files while the slow tile is held', async () => {
+    const { agent } = orchestratorHarness();
+    const files = workspaceFiles(agent);
+    await files.mkdir('/slates/board', { recursive: true });
+    await files.writeFile('/slates/board/package.json', JSON.stringify({ name: 'board', main: 'server.ts', slate: { title: 'First' } }));
+    expect((await agent.foldOverview()).slates).toEqual([{ id: 'board', title: 'First', picture: null, bindings: 0, visibility: null }]);
+    await files.writeFile('/slates/board/package.json', JSON.stringify({
+      name: 'board', main: 'server.ts', slate: { title: 'Renamed', bindings: { NOTES: { kind: 'memory' } } },
+    }));
+    expect((await agent.foldOverview()).slates).toEqual([{ id: 'board', title: 'Renamed', picture: null, bindings: 1, visibility: null }]);
+  });
+
+
   test('a quiet workspace reads as no decisions, idle, no run', async () => {
     const { agent } = orchestratorHarness();
 
@@ -40,7 +98,7 @@ describe('the folded tile', () => {
       executor: 'workspace',
       reason: formatApproval({ decision: 'gate', hits: [] }),
       requestedAt: Date.now(),
-    });
+    }, []);
 
     expect(parked.status).toBe('queued');
     const overview = await agent.foldOverview();
@@ -144,9 +202,9 @@ describe("the card line is the person's own words", () => {
   });
 });
 
-/** The owed-work wake rows armed now. */
-async function retryWakes(agent: ReturnType<typeof orchestratorHarness>['agent']) {
-  return (await agent.listSchedules()).filter((row) => row.callback === '_kinuTerminalRetryTick');
+/** The instants the owed-work wake is armed for. */
+function retryWakes(db: Database): number[] {
+  return armedWakes(db).filter((wake) => wake.id === TERMINAL_RETRY_JOB).map((wake) => wake.time);
 }
 
 describe('the pushed tile', () => {
@@ -157,6 +215,61 @@ describe('the pushed tile', () => {
 
     return { plane, overviews };
   }
+
+  test('an unrelated slow-store write mid-turn reaches the next push without re-reading an unchanged fold', async () => {
+    const { plane, overviews } = recordingOwner();
+    const { agent, db } = orchestratorHarness(plane);
+    await agent.declareTurnInFlight(true);
+    await until(() => overviews.at(-1)?.activity === 'working', 'the admitted turn is pushed');
+    await finishPush();
+    const facts = createFactsStore(bindAgentSql(agent), workspaceMainActor(db));
+    facts.upsert('preferred_language', 'French');
+    await agent.requestOverviewPush();
+    await until(() => overviews.at(-1)?.hasUpdates === true, 'the unrelated fact reaches the working tile');
+    expect(overviews.at(-1)?.activity).toBe('working');
+    await finishPush();
+    const queries = agent.harnessRecordQueries();
+    await agent.requestOverviewPush();
+    await finishPush();
+    expect(slowReads(queries)).toEqual([]);
+    await agent.declareTurnInFlight(false);
+  });
+
+  test('an unchanged push reads no slow overview source while activity and the run stay live', async () => {
+    const { plane, overviews } = recordingOwner();
+    const { agent } = orchestratorHarness(plane);
+    await agent.declareTurnInFlight(true);
+    await until(() => overviews.at(-1)?.activity === 'working', 'the admitted turn is pushed');
+    await finishPush();
+    const queries = agent.harnessRecordQueries();
+    await agent.requestOverviewPush();
+    await finishPush();
+    expect(slowReads(queries)).toEqual([]);
+    await agent.declareTurnInFlight(false);
+    await until(() => overviews.at(-1)?.activity === 'idle', 'the settled turn is pushed');
+    expect(overviews.at(-1)?.latestRun).toEqual({ status: 'completed', task: 'a live turn' });
+  });
+
+  test('a new caller of the approval store updates the tile without caller invalidation', async () => {
+    const { plane, overviews } = recordingOwner();
+    const { agent, db } = orchestratorHarness(plane);
+    await agent.declareTurnInFlight(true);
+    await until(() => overviews.at(-1)?.activity === 'working', 'the admitted turn is pushed');
+    await finishPush();
+    const approvals = new DeferredApprovalStore(bindAgentSql(agent), workspaceMainActor(db));
+    approvals.create({ id: 'new-writer', command: 'git push', executor: 'workspace', reason: 'owner approval', requestedAt: Date.now() }, []);
+    await agent.requestOverviewPush();
+    await until(() => overviews.at(-1)?.decisionsWaiting === 1, 'the store write reaches the tile');
+    approvals.decide('new-writer', 'denied', Date.now());
+    await agent.requestOverviewPush();
+    await until(() => overviews.at(-1)?.decisionsWaiting === 0, 'the store decision reaches the tile');
+    await finishPush();
+    const queries = agent.harnessRecordQueries();
+    await agent.requestOverviewPush();
+    await finishPush();
+    expect(slowReads(queries)).toEqual([]);
+    await agent.declareTurnInFlight(false);
+  });
 
   test('a change is pushed once, and a fold that changed nothing is not pushed again', async () => {
     const { plane, overviews } = recordingOwner();
@@ -189,21 +302,21 @@ describe('the pushed tile', () => {
 
   test('a refused push is owed: a wake carries its retry, a tick before it is due waits, and the tick once due lands it', async () => {
     const { plane, overviews } = recordingOwner();
-    const { agent } = orchestratorHarness({ ...plane, refuseOverviews: [new Error('the owner object is unavailable')] });
-    const retryArmed = async (): Promise<boolean> => (await retryWakes(agent)).length > 0;
+    const { agent, db } = orchestratorHarness({ ...plane, refuseOverviews: [new Error('the owner object is unavailable')] });
+    const retryArmed = (): boolean => retryWakes(db).length > 0;
 
     try {
-      expect(await retryArmed()).toBe(false);
+      expect(retryArmed()).toBe(false);
       await agent.installWorkspaceCapability('workspace-capability-token');
 
-      for (let lap = 0; lap < 100 && !await retryArmed(); lap++) await nextTurn();
-      expect(await retryArmed()).toBe(true);
+      await until(retryArmed, 'the refused push armed its retry');
+      expect(retryArmed()).toBe(true);
 
       await agent.terminalRetryPass();
 
       for (let lap = 0; lap < 20; lap++) await nextTurn();
       expect(overviews).toEqual([]);
-      expect(await retryArmed()).toBe(true);
+      expect(retryArmed()).toBe(true);
 
       setSystemTime(new Date(Date.now() + 10 * 60_000));
       await agent.terminalRetryPass();
@@ -219,22 +332,21 @@ describe('the pushed tile', () => {
     const { plane, overviews } = recordingOwner();
     const hold = Promise.withResolvers<void>();
     const owner = { ...plane, refuseOverviews: [new Error('the owner object is unavailable')], holdOverviews: Promise.resolve() };
-    const { agent } = orchestratorHarness(owner);
+    const { agent, db } = orchestratorHarness(owner);
 
     try {
       await agent.installWorkspaceCapability('workspace-capability-token');
 
-      for (let lap = 0; lap < 100 && (await retryWakes(agent)).length === 0; lap++) await nextTurn();
+      await until(() => retryWakes(db).length > 0, 'the refused push armed its retry');
       owner.holdOverviews = hold.promise;
       setSystemTime(new Date(Date.now() + 10 * 60_000));
       // The due retry starts its push, which the owner's object holds.
       await agent.terminalRetryPass();
 
-      // The next tick, as the runtime runs it: the row that fired is gone.
-      for (const row of await retryWakes(agent)) await agent.cancelSchedule(row.id);
-      await agent.terminalRetryPass();
-      const [next] = await retryWakes(agent);
-      expect((next?.time ?? 0) * 1000).toBeGreaterThanOrEqual(Date.now() + 3_000);
+      // The next tick, as the runtime delivers it.
+      await fireSoonestWake(agent, db);
+      const [next] = retryWakes(db);
+      expect(next ?? 0).toBeGreaterThanOrEqual(Date.now() + 3_000);
 
       hold.resolve();
       await until(() => overviews.length === 1, 'the held push lands');
@@ -246,15 +358,15 @@ describe('the pushed tile', () => {
   test('a push the owner refuses arms no wake, and the next change pushes the tile', async () => {
     const { plane, overviews } = recordingOwner();
     // A revoked token, as the owner's object's refusal arrives across its RPC.
-    const denied = Object.assign(new Error('CapabilityDeniedError: Unrecognized workspace capability token.'), { remote: true });
+    const denied = Object.assign(new Error('Unrecognized workspace capability token.'), { name: 'CapabilityDeniedError', remote: true });
     const refusals = [denied];
-    const { agent } = orchestratorHarness({ ...plane, refuseOverviews: refusals });
+    const { agent, db } = orchestratorHarness({ ...plane, refuseOverviews: refusals });
 
     await agent.installWorkspaceCapability('workspace-capability-token');
     await until(() => refusals.length === 0, 'the push is refused');
 
     for (let lap = 0; lap < 20; lap++) await nextTurn();
-    expect(await retryWakes(agent)).toEqual([]);
+    expect(retryWakes(db)).toEqual([]);
     expect(overviews).toEqual([]);
 
     await agent.requestOverviewPush();

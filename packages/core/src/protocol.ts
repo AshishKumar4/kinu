@@ -1,5 +1,6 @@
 import type { ActivityLogEntry } from './identity/activity-log';
 import type { ContextComposition } from './context-meter';
+import type { ContextFill } from './read-models/context-fill';
 import type { HeadReportStatus, HeadUnsettledStatus } from './heads/types';
 import type { StepTelemetry } from './events/step-stats';
 import type { Usage } from './usage';
@@ -26,7 +27,6 @@ export interface ForkNode {
 	children: ForkNode[];
 	task?: string;
 	observation?: string;
-	codeUsed?: string | null;
 	createdAt?: number;
 	/** The head journal's recorded word, shown to the reader; absent for a search node. */
 	lifecycle?: ForkNodeLifecycle;
@@ -62,7 +62,7 @@ export interface SubordinateRosterEntry {
 	displayName: string;
 	role: string;
 	nameOrigin: "user" | "auto";
-	createdBy: "orchestrator" | "user" | "evolution";
+	origin: "user" | "agent" | "evolution";
 	lifetime: "durable" | "task";
 	status: SubordinateStatus;
 	currentTask: string | null;
@@ -71,8 +71,12 @@ export interface SubordinateRosterEntry {
 }
 
 /** Evolution and one-question helpers get no tab or list row. */
-export function ownerFacingSubordinate(entry: Pick<SubordinateRosterEntry, "createdBy" | "lifetime">): boolean {
-	return entry.createdBy !== "evolution" && entry.lifetime === "durable";
+export function ownerFacingSubordinate(entry: Pick<SubordinateRosterEntry, "origin" | "lifetime">): boolean {
+	return !evolutionHelper(entry) && entry.lifetime === "durable";
+}
+
+export function evolutionHelper(entry: Pick<SubordinateRosterEntry, "origin">): boolean {
+	return entry.origin === "evolution";
 }
 
 /** A task assignment or report mirrored into the main chat as a linked card. */
@@ -136,6 +140,7 @@ export interface ActivitySnapshot {
 	} | null;
 	/** Resolved model's context window; null when the catalog has not answered. */
 	contextWindow: number | null;
+	fill: ContextFill | null;
 	/** The orchestrator's own `step_finish` turns only; workspace-wide totals are `spend`. */
 	telemetry: StepTelemetry;
 	/** All accounted model calls, by producer and by mission; `spend.missions` comes from `mission_budget`, the enforced ledger. */

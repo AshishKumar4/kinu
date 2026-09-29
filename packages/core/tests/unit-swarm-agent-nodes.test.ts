@@ -469,13 +469,11 @@ describe('the run a reader gets back', () => {
     const ledger = new MctsSearchStore(rt.storage.sql, rt.actor).list(10);
     expect(ledger).toHaveLength(1);
     expect(ledger[0]).toMatchObject({
-      engine: 'swarm',
       status: 'converged',
       // A swarm's budget unit is one child.
       iteration: result.report.expansions,
       budget: 2 - result.report.expansions,
     });
-    // Still-running swarm rows vs `findResumable`: see unit-mcts-resume.test.ts.
   });
 });
 

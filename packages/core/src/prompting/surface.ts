@@ -16,7 +16,7 @@ import * as v from 'valibot';
 import type { TurnReason, WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 
-export type PromptBackend = 'cf' | 'cli-local' | 'cli-cloud';
+export type PromptBackend = 'cf' | 'cli-local' | 'cli-vfs';
 
 const TurnMetadataSchema = v.object({
   kinuMode: v.optional(v.unknown()),

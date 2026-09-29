@@ -161,7 +161,6 @@
       "files": [
         "packages/core/src/providers/model-invocation.ts",
         "packages/core/src/chat.ts",
-        "packages/core/src/mcts/rollout.ts",
         "packages/cli/src/agent-create.ts"
       ],
       "rules": {

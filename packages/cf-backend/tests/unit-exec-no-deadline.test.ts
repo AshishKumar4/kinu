@@ -1,5 +1,5 @@
 // Defends: detached work killed by `Command timeout after 60000ms` (owner screenshot). The SDK's
-// plain `exec` is bounded (`sandbox.exec.request_ceiling_ms`), so untimed exec takes the process lane;
+// plain `exec` is bounded (`sandbox.exec.request_ceiling_ms`), so untimed exec takes the runtime's own exec;
 // codemode's default deadline killed `eval` programs awaiting long host tool calls.
 import { describe, test, expect } from "bun:test";
 import type { KinuSandbox } from "../src/kinu-sandbox";
@@ -8,14 +8,6 @@ import { adaptCloudflareSandbox } from "../src/sandbox-exec-lane";
 import { createRuntimeExecutor, KinuSandboxExecutor } from "../src/codemode-sandbox";
 import { inProcessWorkerLoader } from "./helpers/worker-loader";
 
-interface ProcessDouble {
-  id: string;
-  exitCode?: number;
-  status: string;
-  waitForExit: () => Promise<{ exitCode: number }>;
-  getStatus: () => Promise<string>;
-}
-
 interface BoxCalls {
   exec: Array<{ command: string; timeout?: number }>;
   started: Array<{ command: string; cwd?: string }>;
@@ -23,35 +15,18 @@ interface BoxCalls {
 }
 
 /**
- * `waitsBeforeExit`: log-stream idle-outs while the process is alive. `holdsUntilKilled`: only the
- * kill yields an exit code, so a cancellation reported before `exited` flips is observable.
+ * `holdsUntilKilled`: only the kill ends the command, so a cancellation reported before `exited` flips is
+ * observable. `finishesFirst`: the command has already exited when the kill arrives.
  */
 function fakeBox(input: {
-  waitsBeforeExit?: number;
   exitCode?: number;
   holdsUntilKilled?: boolean;
+  finishesFirst?: boolean;
   killFails?: boolean;
 } = {}) {
   const calls: BoxCalls = { exec: [], started: [], killed: [] };
-  let interruptions = input.waitsBeforeExit ?? 0;
-  const held = Promise.withResolvers<{ exitCode: number }>();
+  const held = Promise.withResolvers<{ stdout: string; stderr: string; exitCode: number }>();
   let exited = false;
-
-  const proc: ProcessDouble = {
-    id: "proc-1",
-    status: "running",
-    waitForExit: async () => {
-      if (interruptions > 0) {
-        interruptions -= 1;
-        throw new Error("Stream idle timeout after 300000ms");
-      }
-
-      if (input.holdsUntilKilled === true) return await held.promise;
-
-      return { exitCode: input.exitCode ?? 0 };
-    },
-    getStatus: async () => "running",
-  };
 
   const box = {
     resolveReadiness: async () => ({ kind: 'restored' as const }),
@@ -63,25 +38,32 @@ function fakeBox(input: {
 
       return { stdout: "bounded", exitCode: 0 };
     },
-    startProcess: async (command: string, opts?: { cwd?: string }) => {
+    execUntimed: async (command: string, opts: { cwd?: string; execId: string }) => {
       const call: BoxCalls["started"][number] = { command };
 
-      if (opts?.cwd !== undefined) call.cwd = opts.cwd;
+      if (opts.cwd !== undefined) call.cwd = opts.cwd;
       calls.started.push(call);
 
-      return proc;
-    },
-    getProcess: async () => proc,
-    getProcessLogs: async () => ({ stdout: "epoch 40/40 done\n", stderr: "" }),
-    killProcess: async (id: string) => {
-      calls.killed.push(id);
+      if (input.holdsUntilKilled === true) return await held.promise;
+      exited = true;
 
-      if (input.killFails === true) {
-        throw new Error(`container refused to kill ${id}: no such process`);
+      return { stdout: "epoch 40/40 done\n", stderr: "", exitCode: input.exitCode ?? 0 };
+    },
+    killUntimed: async (execId: string) => {
+      calls.killed.push(execId);
+
+      if (input.killFails === true) throw new Error(`the container refused to end process 41: ${execId}`);
+
+      if (input.finishesFirst === true) {
+        held.resolve({ stdout: "done before the kill\n", stderr: "", exitCode: 0 });
+
+        return false;
       }
 
       exited = true;
-      held.resolve({ exitCode: 137 });
+      held.resolve({ stdout: "", stderr: "", exitCode: 143 });
+
+      return true;
     },
     readFile: async () => ({ content: "" }),
     writeFile: async () => undefined,
@@ -114,7 +96,7 @@ function fakeBox(input: {
 const TRAINING = "python3 train.py --epochs 40 2>&1 | tee /workspace/train.log";
 
 describe("adaptCloudflareSandbox — which lane a command gets", () => {
-  test("no timeout asked for → the process lane, and the SDK's bounded exec is untouched", async () => {
+  test("no timeout asked for → the runtime's exec, and the SDK's bounded exec is untouched", async () => {
     const box = fakeBox();
 
     const res = await box.handle.exec(TRAINING, { cwd: "/workspace" });
@@ -136,24 +118,13 @@ describe("adaptCloudflareSandbox — which lane a command gets", () => {
     expect(res.stdout).toBe("bounded");
   });
 
-  test("a silent process outlives the log stream's idle window instead of failing", async () => {
-    // Nothing was killed, so the adapter looks again; only the process's own exit ends the wait.
-    const box = fakeBox({ waitsBeforeExit: 3, exitCode: 0 });
-
-    const res = await box.handle.exec("bash quiet-build.sh", { cwd: "/workspace" });
-
-    expect(res.exitCode).toBe(0);
-    expect(res.stdout).toContain("epoch 40/40 done");
-    expect(box.calls.started).toHaveLength(1);
-  });
-
   test("a non-zero exit is reported as itself, not as a transport failure", async () => {
     const box = fakeBox({ exitCode: 137 });
 
     expect((await box.handle.exec("bash oom.sh", {})).exitCode).toBe(137);
   });
 
-  test("the process lane defaults to the durable work directory", async () => {
+  test("the untimed lane defaults to the durable work directory", async () => {
     const box = fakeBox();
 
     await box.handle.exec("ls", {});
@@ -207,9 +178,9 @@ describe("adaptCloudflareSandbox — cancellation reaches the process", () => {
 
     await expect(pending).rejects.toMatchObject({
       name: "AbortError",
-      message: expect.stringContaining("container process proc-1 was killed"),
+      message: expect.stringContaining("its container process tree was ended"),
     });
-    expect(box.calls.killed).toEqual(["proc-1"]);
+    expect(box.calls.killed).toHaveLength(1);
     expect(box.hasExited()).toBe(true);
   });
 
@@ -220,7 +191,7 @@ describe("adaptCloudflareSandbox — cancellation reaches the process", () => {
 
     await expect(box.handle.exec("bash forever.sh", { signal: controller.signal }))
       .rejects.toMatchObject({ name: "AbortError" });
-    expect(box.calls.killed).toEqual(["proc-1"]);
+    expect(box.calls.killed).toHaveLength(1);
   });
 
   test("a kill that FAILS is reported as itself, never as a cancellation", async () => {
@@ -231,8 +202,18 @@ describe("adaptCloudflareSandbox — cancellation reaches the process", () => {
     const pending = box.handle.exec("bash forever.sh", { signal: controller.signal });
     controller.abort();
 
-    await expect(pending).rejects.toThrow(/refused to kill proc-1/);
+    await expect(pending).rejects.toThrow(/refused to end process 41/);
     expect(box.hasExited()).toBe(false);
+  });
+
+  test("a command that finished before the kill reached it is returned as finished", async () => {
+    const box = fakeBox({ holdsUntilKilled: true, finishesFirst: true });
+    const controller = new AbortController();
+
+    const pending = box.handle.exec("bash short.sh", { signal: controller.signal });
+    controller.abort();
+
+    await expect(pending).resolves.toMatchObject({ exitCode: 0, stdout: "done before the kill\n" });
   });
 
   test("no signal, no kill", async () => {

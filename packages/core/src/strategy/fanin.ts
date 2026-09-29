@@ -5,8 +5,9 @@
  * its edge (disclosed as `prunedParents`); an unlanded member keeps its dependent behind it.
  */
 import type { ModelMessage } from 'ai';
+import { Effect } from 'effect';
 import {
-  KinuError, refusalOf, renderThrownChain, type Logger,
+  KinuError, refusalOf, renderThrownChain, settle, type Logger,
 } from '../obs/index';
 import { nanoid } from '../utils/nanoid';
 import type { VFS } from '../types/primitives';
@@ -146,9 +147,9 @@ export async function reportedMember(input: {
  * members: looping writes would be a torn apply.
  */
 export function singlePathApply(vfs: VFS): MemberApply {
-  return async (files) => {
+  return (files) => settle(Effect.gen(function* () {
     if (files.length > 1) {
-      throw new KinuError('unsupported',
+      return yield* new KinuError('unsupported',
         `this workspace can apply one path atomically and this member has ${
           String(files.length)
         }. A per-file loop would publish a committed prefix if a later file failed, so it is `
@@ -156,10 +157,11 @@ export function singlePathApply(vfs: VFS): MemberApply {
     }
 
     for (const file of files) {
-      if (file.after === null) await vfs.unlink(file.path);
-      else await vfs.writeFile(file.path, file.after);
+      const after = file.after;
+
+      yield* Effect.promise(() => (after === null ? vfs.unlink(file.path) : vfs.writeFile(file.path, after)));
     }
-  };
+  }));
 }
 
 export function createLevelFanIn<N extends FanInNode, V extends { readonly id: string }>(

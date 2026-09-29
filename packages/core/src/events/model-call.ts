@@ -17,7 +17,6 @@ export const SPEND_SOURCES = [
   'fast',
   'reflection',
   'head',
-  'mcts',
   'swarm',
   'platform',
   'advisor',
@@ -37,7 +36,6 @@ export const SPEND_SOURCE_LABEL = {
   fast: 'Fast tier',
   reflection: 'Evolution',
   head: 'Exploration heads',
-  mcts: 'MCTS rollouts',
   swarm: 'Swarm expansions',
   platform: 'Platform AI',
   advisor: 'Advisor',
@@ -54,10 +52,8 @@ export const SPEND_SOURCE_DETAIL = {
   fast: 'the mechanical tier: outcome classification, extraction, titles, summaries',
   reflection: 'the evolution engine\'s own reasoning, and GEPA',
   head: 'exploration heads, one loop per fork',
-  mcts: 'rollout branches and their reflections',
   swarm: 'the expansion candidates of a configured search, and the measurements that '
-    + 'score them: distinct from `mcts` because a swarm names its own axes and is '
-    + 'scored by the objective\'s verifier rather than by a judge',
+    + 'score them by the objective\'s verifier',
   platform: 'Workers AI utility bindings: memory embeddings and HTML->markdown '
     + 'repair. Neither returns a usage field of any kind, so these are counted '
     + 'and never measured, which is what the coverage fraction below is made of',

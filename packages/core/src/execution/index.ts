@@ -31,7 +31,7 @@ export {
 
 export { DefaultExecutionRouter } from './router';
 
-export { withApprovalGatedShell, gateProviderExec, shellCwd, type ShellReach } from './approval';
+export { withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, shellCwd, type FileReach, type ShellReach } from './approval';
 
 export {
   createSandboxExecutor, type SandboxHandle, isSandboxTransientError, SandboxPending,
@@ -107,7 +107,7 @@ export {
 export {
   answerParentRpc, createParentExecutor, createParentWorkspaceVfs,
   type ParentWorkspaceHandle, type ParentExecResult,
-  type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
+  type ParentRpcWrite,
 } from './parent';
 
 export { sandboxFiles } from './sandbox';

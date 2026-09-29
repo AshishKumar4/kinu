@@ -53,7 +53,7 @@
 # undoes a promotion whatever the tree holds.
 #
 # `--bootstrap` is for the deploy that DECLARES something only a deploy can
-# create — a Durable Object class new to `migrations`, a new container, a new
+# create — a Durable Object class new to `exports`, a new container, a new
 # route. It moves the pre-deploy infrastructure phase to `bootstrap`, which
 # defers exactly those and nothing else. It skips no verification: every
 # external prerequisite still refuses the deploy before the upload, and step 5
@@ -61,8 +61,8 @@
 # passed or not.
 #
 # `--reset` deletes every Durable Object class the Worker carries, with all its
-# storage, between the build and the upload, which then applies the migrations
-# from v1 (scripts/reset.ts). The Worker keeps its secrets and routes. The deploy
+# storage, between the build and the upload, which then creates every class
+# `exports` declares (scripts/reset.ts). The Worker keeps its secrets and routes. The deploy
 # record names what was deleted. On production it asks for a typed confirmation
 # before anything runs.
 #
@@ -253,7 +253,7 @@ fi
 #
 # WHAT RUNS IS READ, NOT WRITTEN HERE. `bun scripts/ladder.ts --plan` prints
 # every deploy-tier gate as one tab-separated line — phase, label, measured
-# threads, measured resident MiB, deadline, command — in the order the phases
+# threads, measured resident MiB, shared resource, command — in the order the phases
 # run. This script loads that once and `run_phase <name>` schedules the phase's
 # gates concurrently under the machine cap, then waits: a barrier. Until
 # 2026-09-15 this file held a second copy of every row (the command lines, a
@@ -268,14 +268,13 @@ fi
 #
 # Every gate is a plain argv of words — the plan carries no quotes — and
 # `flush_gates` splits it on whitespace; bash expands a glob word against the
-# tree, which is how the UI row's `scripts/*-ux.test.ts` reaches its family.
+# tree, which is how the UI row's `tests/browser/*-ux.test.ts` reaches its family.
 # Its `--path-ignore-patterns=<suite>` word holds no glob character, so bash
 # passes it through and bun subtracts the suite that is a row of its own.
 PLAN_PHASE=()
 PLAN_LABEL=()
 PLAN_THREADS=()
 PLAN_RSS=()
-PLAN_DEADLINE=()
 PLAN_SHARED=()
 PLAN_CMD=()
 
@@ -285,14 +284,13 @@ load_plan() {
     echo -e "${RED}❌ the ladder printed no plan; nothing is scheduled without one.${NC}"
     exit 1
   }
-  local phase label threads rss deadline shared cmd
-  while IFS=$'\t' read -r phase label threads rss deadline shared cmd; do
+  local phase label threads rss shared cmd
+  while IFS=$'\t' read -r phase label threads rss shared cmd; do
     [ -n "$cmd" ] || continue
     PLAN_PHASE+=("$phase")
     PLAN_LABEL+=("$label")
     PLAN_THREADS+=("$threads")
     PLAN_RSS+=("$rss")
-    PLAN_DEADLINE+=("$deadline")
     PLAN_SHARED+=("$shared")
     PLAN_CMD+=("$cmd")
   done <<< "$plan"
@@ -307,19 +305,17 @@ GATE_LABELS=()
 GATE_CMDS=()
 GATE_THREADS=()
 GATE_RSS=()
-GATE_DEADLINE=()
 GATE_SHARED=()
 
 run_phase() {
   local wanted="$1" index
-  GATE_LABELS=(); GATE_CMDS=(); GATE_THREADS=(); GATE_RSS=(); GATE_DEADLINE=(); GATE_SHARED=()
+  GATE_LABELS=(); GATE_CMDS=(); GATE_THREADS=(); GATE_RSS=(); GATE_SHARED=()
   for ((index = 0; index < ${#PLAN_CMD[@]}; index++)); do
     if [ "${PLAN_PHASE[index]}" != "$wanted" ]; then continue; fi
     GATE_LABELS+=("${PLAN_LABEL[index]}")
     GATE_CMDS+=("${PLAN_CMD[index]}")
     GATE_THREADS+=("${PLAN_THREADS[index]}")
     GATE_RSS+=("${PLAN_RSS[index]}")
-    GATE_DEADLINE+=("${PLAN_DEADLINE[index]}")
     GATE_SHARED+=("${PLAN_SHARED[index]}")
   done
   if [ "${#GATE_CMDS[@]}" -eq 0 ]; then
@@ -410,8 +406,8 @@ gate_rss_cap() {
 # the status files, the atomic-rename dance, the liveness probe and the poll in
 # one move.
 #
-# A gate killed by a signal therefore settles as 128+signal, a gate past the
-# deadline as `timeout`'s 124, and a gate whose command does not exist as 127.
+# A gate killed by a signal therefore settles as 128+signal, a gate its hang
+# detector ended as 124, and a gate whose command does not exist as 127.
 # None of those can be read as a pass, and none depends on the gate cooperating.
 #
 # On the first failure it stops LAUNCHING and lets the running gates finish. That
@@ -514,19 +510,18 @@ flush_gates() {
       load=$((load + GATE_THREADS[pick]))
       held=$((held + GATE_RSS[pick]))
       if [ "${GATE_SHARED[pick]}" != "none" ]; then resource_held["${GATE_SHARED[pick]}"]="$pick"; fi
-      # `timeout` signals the gate's process group and escalates after five
-      # seconds. That kills the gate command tree, and no more: a child that
-      # calls setsid (a detached dev server, a daemonized browser helper)
-      # leaves the group and can outlive the kill — headless browsers and
-      # workerd accumulated exactly that way across repeated walls until this
-      # box ran out of memory on 2026-08-25. The box carries swap now; if
-      # orphan accumulation returns, the fix is cgroup scopes at the suite
-      # layer, not a longer deadline.
+      # `ladder.ts --gate` runs the row under its hang detector: killed once
+      # it has written nothing for the row's bound (scripts/deadline.ts). Not
+      # a `timeout` on wall time here, which killed the CLI suite at 480 s
+      # after 484 tests had passed in 476 s (ci-0965z): slow is not hung. A
+      # child that calls setsid (a detached dev server, a daemonized browser
+      # helper) leaves the gate's process group; the run's KINU_RUN mark is
+      # what finds and ends it after the gate exits.
       #
-      # `exec` so the tracked pid IS `timeout`: one process fewer per gate, and
-      # the status `wait` reports below is the gate's own, not a wrapper's.
+      # `exec` so the tracked pid IS the gate's runner: one process fewer per
+      # gate, and the status `wait` reports below is the gate's own.
       (
-        exec timeout --signal=TERM --kill-after=5s "${GATE_DEADLINE[pick]}" bun scripts/ladder.ts --gate "${GATE_CMDS[pick]}" > "$dir/$pick.log" 2>&1
+        exec bun scripts/ladder.ts --gate "${GATE_CMDS[pick]}" > "$dir/$pick.log" 2>&1
       ) &
       gate_of_pid[$!]=$pick
       started[pick]=$SECONDS
@@ -613,7 +608,11 @@ echo "Account:      $CLOUDFLARE_ACCOUNT_ID"
 echo "Build sha:    $KINU_SHA"
 # The tiers' scripted model answers only this bearer (Step 4a); without it every
 # post-publish tier would fail after the upload, so it is asked for before any.
-if [ "$KINU_GATES_ONLY" != "1" ] && [ -z "${KINU_SCRIPTED_MODEL_KEY:-}" ]; then
+# Trimmed here, once: the Worker's secret and the key the tiers store are both
+# this exported value, so whitespace in a key file cannot split them.
+KINU_SCRIPTED_MODEL_KEY="$(printf '%s' "${KINU_SCRIPTED_MODEL_KEY:-}" | tr -d '[:space:]')"
+export KINU_SCRIPTED_MODEL_KEY
+if [ "$KINU_GATES_ONLY" != "1" ] && [ -z "$KINU_SCRIPTED_MODEL_KEY" ]; then
   echo -e "${RED}KINU_SCRIPTED_MODEL_KEY is not set: the tiers' scripted model answers only that bearer. Nothing was deployed.${NC}"
   exit 1
 fi

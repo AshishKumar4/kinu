@@ -65,8 +65,9 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   /** One program through this workspace's production `eval` tool, in Build mode; its answer as JSON. */
   async runProgram(code: string): Promise<string> {
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress(null), rt: this.rt, sql: this.rt.storage.sql,
-      workspace: this.name, webSearch: createDefaultWebSearchProvider({ fetch }),
+      loader: this.env.LOADER, egress: codemodeEgress({ workspace: null, actor: null }), rt: this.rt, sql: this.rt.storage.sql,
+      workspace: this.name, webSearch: createDefaultWebSearchProvider({ fetch, browser: { missing: 'this probe reaches no Browser Run' } }),
+      browserSessions: { open: async () => { throw new Error('this probe opens no browser'); }, list: async () => [], close: async () => {} },
     });
 
     const execute = toolsInWorkMode('build', { eval: factory.toolFor({}) }).eval?.execute;
@@ -77,12 +78,22 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   }
 
   /**
-   * What the next activation starts from when the platform evicts this one but keeps its facets: the
-   * hosted workspace and the slate host are built again, while `ctx.facets` still holds the running
-   * application. Neither is destroyed, since destroying would end the facets, which is not what the
-   * platform does.
+   * What the next activation starts from when the platform evicts this one but keeps its facets: a new
+   * `ctx` over the same storage and facets, so state kept per activation (Nimbus keys its own on `ctx`)
+   * starts empty, and the hosted workspace and slate host built again, while `ctx.facets` still holds
+   * the running application. Neither is destroyed, since destroying would end the facets, which is not
+   * what the platform does.
    */
   forgetActivation(): void {
+    const ended = this.ctx;
+
+    this.ctx = new Proxy(ended, {
+      get: (target, key: keyof typeof ended) => {
+        const value = target[key];
+
+        return value instanceof Function ? value.bind(target) : value;
+      },
+    });
     Reflect.set(this, '_workspace', undefined);
     Reflect.set(this, '_slates', undefined);
   }

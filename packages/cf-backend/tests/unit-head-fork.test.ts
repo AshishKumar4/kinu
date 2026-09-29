@@ -33,14 +33,8 @@ setSandboxSdk({
 
     return {
       resolveReadiness: async () => ({ kind: 'restored' as const }),
-      // A command with no deadline takes the process lane; `exec` is the SDK's bounded lane and not what the handle reaches.
-      startProcess: async () => ({
-        id: 'p1',
-        exitCode: 0,
-        waitForExit: async () => ({ exitCode: 0 }),
-        getStatus: async () => 'exited',
-      }),
-      getProcessLogs: async () => ({ stdout: '', stderr: '' }),
+      // A command with no deadline takes the untimed lane; `exec` is the SDK's bounded lane and not what the handle reaches.
+      execUntimed: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
       exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
       readFile: async () => ({ content: '', exitCode: 0 }),
       writeFile: async () => ({ exitCode: 0 }),
@@ -75,12 +69,10 @@ async function hostedHead(files: Record<string, string> = {}, id = 'head-1', use
   workspace.agent.harnessDeclareEnv({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
 
   for (const [path, content] of Object.entries(files)) {
-    const written = await workspace.agent.writeWorkspaceFile({ kind: 'file', path, data: content });
-
-    if (!written.ok) throw new Error(`the fixture could not seed ${path}`);
+    await workspace.agent.writeWorkspaceFile({ kind: 'file', path, data: content });
   }
 
-  const head = await hostedExplorationHarness(workspace, 'full', id);
+  const head = await hostedExplorationHarness(workspace, id);
   const rt = head.actor.runtime;
 
   if (!isCFRuntime(rt)) throw new Error('the hosted head did not receive a CF runtime');
@@ -185,11 +177,11 @@ describe('a head forks its parent workspace', () => {
     expect(await plane.tools.readFile.execute('/home/main/repo/parser.ts')).toBe('one\ntwo\n');
     await rt.storage.vfs.writeFile(`${home}/notes.md`, 'visible');
     expect(await workspace.agent.readWorkspaceFile(`${home}/notes.md`))
-      .toMatchObject({ ok: true });
+      .toEqual(new TextEncoder().encode('visible'));
     await expect(rt.storage.vfs.writeFile('/home/main/repo/parser.ts', 'one\ntwo\nthree\n'))
       .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
     expect(await workspace.agent.readWorkspaceFile('/home/main/repo/parser.ts'))
-      .toMatchObject({ ok: true, value: new TextEncoder().encode('one\ntwo\n') });
+      .toEqual(new TextEncoder().encode('one\ntwo\n'));
   });
 
   /** `listTools` reads quality columns on `crafted_tools`, so a head without that table fails its first call. */

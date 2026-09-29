@@ -1,6 +1,6 @@
 /** Chat-error surface (the "UI shows nothing on error frames" P0): which frames become the error card
  *  and whether a card is a replay. The card as drawn is proved in the browser tier
- *  (`scripts/chat-and-files-ux.test.ts`, live versus replayed headings). */
+ *  (`tests/browser/chat-and-files-ux.test.ts`, live versus replayed headings). */
 
 import { describe, expect, test } from 'bun:test';
 import { terminalChatError } from '@kinu.run/core';

@@ -5,6 +5,7 @@ import {
   CODEX_CRED_KEY,
   CODEX_TOKEN_URL,
   asFetchFunction,
+  credentialToHeaders,
 } from '@kinu.run/core';
 import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 import {
@@ -25,6 +26,11 @@ import {
 import { sha256Hex } from '@kinu.run/core';
 import { requestUrl } from '@kinu.run/core';
 import { socketConnection } from './helpers/bindings';
+
+/** The headers a call sent with the login stored under `key` holding `accessToken`, which the upstream then refused. */
+function refusedWith(key: string, accessToken: string): Record<string, string> {
+  return credentialToHeaders(key, { kind: 'oauth', accessToken });
+}
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
@@ -201,7 +207,7 @@ describe('a credential the owner moved while a provider was answering', () => {
       { access_token: 'access-rotated', refresh_token: 'refresh-rotated', expires_in: 3600 },
     );
 
-    const headers = await harness.userDO.getAuthHeaders(owner, CODEX_CRED_KEY, { forceRefresh: true });
+    const headers = await harness.userDO.getAuthHeaders(owner, CODEX_CRED_KEY, { rejected: refusedWith(CODEX_CRED_KEY, 'access-original') });
 
     // The owner disconnected mid-flight, so the reply is dropped rather than written back.
     expect(headers).toBeNull();
@@ -221,7 +227,7 @@ describe('a credential the owner moved while a provider was answering', () => {
       { access_token: 'access-rotated', refresh_token: 'refresh-rotated', expires_in: 3600 },
     );
 
-    const headers = await harness.userDO.getAuthHeaders(owner, CODEX_CRED_KEY, { forceRefresh: true });
+    const headers = await harness.userDO.getAuthHeaders(owner, CODEX_CRED_KEY, { rejected: refusedWith(CODEX_CRED_KEY, 'access-original') });
 
     expect(headers).toMatchObject({ Authorization: 'Bearer access-from-owner' });
     expect(JSON.stringify(headers)).not.toContain('access-rotated');
@@ -243,7 +249,7 @@ describe('a credential the owner moved while a provider was answering', () => {
       });
     });
 
-    await harness.userDO.getAuthHeaders(owner, CODEX_CRED_KEY, { forceRefresh: true });
+    await harness.userDO.getAuthHeaders(owner, CODEX_CRED_KEY, { rejected: refusedWith(CODEX_CRED_KEY, 'access-original') });
 
     // `invalid_grant` retires only the credential it was refused for. Read via status: a second refresh
     // against this stub would be a legitimate rejection of the now-current credential.

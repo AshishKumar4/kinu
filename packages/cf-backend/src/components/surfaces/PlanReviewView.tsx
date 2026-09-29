@@ -11,8 +11,8 @@ import {
   type ReviewAnnotation,
   type PlanReviewResult,
 } from "@kinu.run/core";
-import { Viewer } from "@plannotator/ui/components/Viewer";
-import { AnnotationPanel } from "@plannotator/ui/components/AnnotationPanel";
+import { Viewer } from "@/components/plan-review/Viewer";
+import { AnnotationPanel } from "@/components/plan-review/AnnotationPanel";
 import type { Annotation, Block, EditorMode } from "@plannotator/ui/types";
 import {
   exportAnnotations, extractFrontmatter, parseMarkdownToBlocks,
@@ -23,6 +23,7 @@ import { renderThrownChain } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { annotationType } from "./annotation-type";
 import { copyLabel, useCopy, type CopyStatus } from "@/hooks/use-copy";
+import { usePlanDecision } from "@/hooks/use-plan-decision";
 
 const COPY_ICON = {
   idle: CopyIcon,
@@ -195,7 +196,6 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
   const [selected, setSelected] = useState<string | null>(null);
   const [mode, setMode] = useState<EditorMode>("comment");
   const [saving, setSaving] = useState(false);
-  const [decisionBusy, setDecisionBusy] = useState<"request" | "approve" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
   const { status: copyStatus, copy } = useCopy();
@@ -203,7 +203,6 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
   const planRevision = plan?.revision ?? null;
   const planKey = planId === null || planRevision === null ? null : `${planId}:${planRevision}`;
   const activePlanKey = useRef(planKey);
-  const decisionInFlight = useRef(false);
   activePlanKey.current = planKey;
 
   const annotationSaves = useMemo(() => createPlanAnnotationSaveQueue<Annotation>(async (next) => {
@@ -235,8 +234,6 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
     setSelected(null);
     setPanelOpen(false);
     setSaving(false);
-    decisionInFlight.current = false;
-    setDecisionBusy(null);
     setError(null);
   }, [plan?.id, plan?.revision]);
 
@@ -289,8 +286,18 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
     return saved;
   }, [annotationSaves, planKey, readOnly]);
 
+  const { busy: decisionBusy, inFlight: decisionInFlight, decide } = usePlanDecision({
+    plan,
+    editable,
+    handoffPending,
+    rpc,
+    save: () => save(annotations),
+    feedback: () => exportAnnotations(blocks, annotations, [], "Plan Feedback", "plan"),
+    onError: setError,
+  });
+
   const changeAnnotations = useCallback(async (next: Annotation[]) => {
-    if (decisionInFlight.current) return;
+    if (decisionInFlight()) return;
     // Decided after the handler so a superseded revision does not read as a failed save.
     let thrown: { readonly cause: unknown } | undefined;
 
@@ -305,56 +312,22 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
 
       if (annotationSaves.pending() === 0) setSaving(false);
     }
-  }, [annotationSaves, planKey, save]);
+  }, [annotationSaves, decisionInFlight, planKey, save]);
 
   const addAnnotation = useCallback((annotation: Annotation) => {
-    if (decisionInFlight.current) return;
+    if (decisionInFlight()) return;
     const next = [...annotations, annotation];
     setSelected(annotation.id);
     setPanelOpen(true);
 
     return changeAnnotations(next);
-  }, [annotations, changeAnnotations]);
+  }, [annotations, changeAnnotations, decisionInFlight]);
 
   const selectAnnotation = useCallback((id: string | null) => {
     setSelected(id);
 
     if (id !== null) setPanelOpen(true);
   }, []);
-
-  const decide = useCallback(async (decision: "request_changes" | "approve") => {
-    if (!plan || (!editable && !handoffPending) || decisionInFlight.current) return;
-    decisionInFlight.current = true;
-    setDecisionBusy(decision === "approve" ? "approve" : "request");
-    setError(null);
-
-    try {
-      if (editable) {
-        const saved = await save(annotations);
-
-        if (!saved) return;
-      }
-
-      const feedback = editable && decision === "request_changes"
-        ? exportAnnotations(blocks, annotations, [], "Plan Feedback", "plan")
-        : undefined;
-
-      const result = await rpc<PlanReviewResult & { queued?: boolean; queueError?: string }>(
-        "decidePlanReview", [plan.id, plan.revision, decision, feedback],
-      );
-
-      if (!result.ok) throw new Error(result.error);
-
-      if (result.queued === false) {
-        setError(`Decision saved, but the next turn could not start${result.queueError ? `: ${result.queueError}` : "."}`);
-      }
-    } catch (cause) {
-      setError(renderThrownChain({ cause: cause }));
-    } finally {
-      decisionInFlight.current = false;
-      setDecisionBusy(null);
-    }
-  }, [annotations, blocks, editable, handoffPending, plan, rpc, save]);
 
   if (!plan) {
     return (

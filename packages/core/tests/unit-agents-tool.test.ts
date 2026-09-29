@@ -140,7 +140,7 @@ function actionDescription(input: { value: unknown }): string {
   }), input.value).jsonSchema.properties.action.description;
 }
 
-const rosterEntry: SubordinateRosterEntry = { name: 'researcher', actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'idle', currentTask: null, createdAt: 1000, dismissedAt: null, lifetime: 'durable', taskEventId: null };
+const rosterEntry: SubordinateRosterEntry = { name: 'researcher', actorReference: null, birth: null, deleteRequested: false, origin: 'agent', status: 'idle', currentTask: null, createdAt: 1000, dismissedAt: null, lifetime: 'durable', taskEventId: null };
 
 interface HandoffEcho {
   action: string;
@@ -173,6 +173,8 @@ const temporaryPortStub = {
   }),
   release: async () => {},
   reclaim: () => null,
+  answered: () => [],
+  forget: () => {},
 };
 
 function makeTeam(
@@ -188,7 +190,7 @@ function makeTeam(
     create: async (input) => ({
       name: input.name ?? 'researcher',
       displayName: 'Researcher',
-      subordinate: { name: input.name ?? 'researcher', displayName: 'Researcher', role: input.role ?? 'task', actorReference: null, birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
+      subordinate: { name: input.name ?? 'researcher', displayName: 'Researcher', role: input.role ?? 'task', actorReference: null, birth: null, deleteRequested: false, origin: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
     }),
     rename: async (input) => {
       calls.push({ action: 'rename', input });
@@ -901,7 +903,7 @@ describe('agents tool — peer workspace actions', () => {
 // names what it dropped. It is also the detach gate (orchestrator/background-tools.ts).
 
 describe('agents tool — resuming a stored delegation row', () => {
-  /** `diagnostics` writes JSON lines to console.error with no injection seam; see unit-mcts-resume.test.ts. */
+  /** `diagnostics` writes JSON lines to console.error with no injection seam. */
   function captureEvents<Result>(run: () => Result) {
     const original = console.error;
     const lines: string[] = [];

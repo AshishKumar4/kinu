@@ -61,7 +61,7 @@ const workspace = createWorkspace({
 
 // `createWorkspace` returns over a workspace that is still opening; the first
 // call is what awaits the boot, so time it separately from the probes.
-await workspace.stats();
+await workspace.session();
 
 console.log(`runtimes supplied: ${runtimes.length}   open: ${(performance.now() - opened).toFixed(0)}ms\n`);
 

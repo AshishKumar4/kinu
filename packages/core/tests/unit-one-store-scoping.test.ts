@@ -6,6 +6,8 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import { createMemoryVfs, createScriptedLLM, testActorHandle } from '@kinu.run/test-utils';
 import { makeExecRaw, makeSql, makeSqlExec } from './helpers';
 import type { ActorHandle } from '../src/identity/actor-handle';
@@ -25,10 +27,6 @@ import {
   initGepaTables, startGepaRun, persistGepaCandidate, listGepaRuns, loadGepaCandidates,
 } from '../src/evolution/gepa/persistence';
 import { initActorTables } from '../src/state/workspace-schema';
-import { initSessionContextTables } from '../src/session/schema';
-import { initSessionTranscriptTables } from '../src/session/transcript-schema';
-import { SessionHistory } from '../src/session/history';
-import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from '../src/identity/effect-tombstones';
@@ -52,10 +50,8 @@ import {
 import { PROMPT_SECTIONS } from '../src/prompting/section-templates';
 import {
   initAlternateTakesTable, recordBranchTakeSet, listAlternateTakeSets,
-  latestAlternateTakeSet, claimAlternateTakesForTurn, unclaimedAlternateTakeIds,
-  purgeUnclaimedAlternateTakes, recordTakePick,
+  latestAlternateTakeSet,
 } from '../src/mcts/takes';
-import { initSearchTables } from '../src/mcts/schemas';
 import {
   initExplorationRecordsTable, recordExploration, recordsFor, bestInCell, describeObjective,
   recordHandleOf, objectiveIdOf, verifierDigestOf,
@@ -68,15 +64,16 @@ import {
   initImportedExperienceTable, stageImport, listImportedExperience, bindPendingImports,
 } from '../src/experience/imports';
 import { MissionBudgetLedger, listMissionSpend } from '../src/mission-budget';
+import { initWorkspaceActorTable } from '../src/identity/workspace-actors';
 import { SubordinateRosterStore } from '../src/subordinates/roster';
 import { readSubordinateLiveStatus } from '../src/subordinates/support';
 import { initEventsHubTables } from '../src/events/hub/schema';
 import { EventLog } from '../src/events/hub/log';
 import { ReplyChannelStore } from '../src/events/hub/reply-channel';
 import { TriggerRegistry } from '../src/events/hub/triggers';
-import {
-  initWorkspaceBaselineTable, resetWorkspaceBaseline, getWorkspaceDiff,
-} from '../src/read-models/workspace-diff';
+import { resetWorkspaceBaseline, getWorkspaceDiff } from '../src/read-models/workspace-diff';
+import { inlineWorkspaceStorage } from '../src/identity/inline-primitives';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 
 interface World {
   readonly db: Database;
@@ -116,6 +113,7 @@ function runtimeFor(w: World, actor: ActorHandle, vfs: VFS = createMemoryVfs().v
   return {
     workspaceIsMachine: false,
     actor,
+    toolFiles: vfs,
     storage: {
       vfs,
       sql: w.sql,
@@ -148,12 +146,6 @@ function runtimeFor(w: World, actor: ActorHandle, vfs: VFS = createMemoryVfs().v
       create: () => {}, update: () => {}, list: () => [], get: () => undefined,
       delete: () => {}, search: () => [],
     },
-    spawnBranch: async () => ({
-      explore: async () => ({ text: '' }),
-      generateReflection: async () => ({ text: '' }),
-      release: async () => {},
-    }),
-    abortBranch: async () => {},
     executionRouter: {
       register: () => {}, unregister: () => {}, listExecutors: () => [],
       getProvider: () => undefined, getProviders: () => [],
@@ -434,6 +426,25 @@ describe('two actors, one database: fibers, evolution_events, executor_output, a
 });
 
 describe('two actors, one database: terminal_effects', () => {
+  // 2026-09-28: the claim became one statement, which cannot see its own inserts; the first of a repeat wins, as before.
+  test('a sequence that names one effect twice claims it once, with the first input', () => {
+    const w = world();
+    initTerminalEffectTable(w.execRaw);
+
+    const ledger = new TerminalEffectLedger({
+      sql: w.sql, actor: w.a, effects: {}, now: () => 1_000, scheduleRetry: async () => {},
+      transaction: (body) => w.db.transaction(body)(),
+    });
+
+    ledger.claim('turn-1', [
+      { name: 'turn_record', scope: '', input: 'first', lane: 'inline' },
+      { name: 'turn_record', scope: '', input: 'second', lane: 'inline' },
+    ]);
+
+    expect(w.sql<{ input_json: string; seq: number }>`SELECT input_json, seq FROM terminal_effects`).toEqual([{ input_json: '"first"', seq: 0 }]);
+    w.close();
+  });
+
   test('one sequence id is a separate suffix for each actor', async () => {
     const w = world();
     initTerminalEffectTable(w.execRaw);
@@ -441,10 +452,12 @@ describe('two actors, one database: terminal_effects', () => {
     // Claim only: the roster write is synchronous, so no wake or effect body runs.
     const a = new TerminalEffectLedger({
       sql: w.sql, actor: w.a, effects: {}, now: () => 1_000, scheduleRetry: async () => {},
+      transaction: (body) => w.db.transaction(body)(),
     });
 
     const b = new TerminalEffectLedger({
       sql: w.sql, actor: w.b, effects: {}, now: () => 1_000, scheduleRetry: async () => {},
+      transaction: (body) => w.db.transaction(body)(),
     });
 
     const owed = [{ name: 'turn_record' as const, scope: '', input: null, lane: 'inline' as const }];
@@ -498,8 +511,8 @@ describe('two actors, one database: deferred_approvals', () => {
       reason: 'destructive', requestedAt: 1,
     };
 
-    a.create(action);
-    b.create(action);
+    a.create(action, []);
+    b.create(action, []);
     expect(w.count('deferred_approvals')).toBe(2);
 
     expect(a.decide('appr-1', 'approved', 5)?.status).toBe('approved');
@@ -658,87 +671,6 @@ describe('two actors, one database: alternate_takes and search_nodes', () => {
     w.close();
   });
 
-  test('an unclaimed purge and a claim each stop at the owner', () => {
-    const w = world();
-    initTurnOutcomeTables(w.execRaw);
-    initAlternateTakesTable(w.execRaw);
-
-    for (const [actor, mark] of [[w.a, 'a'], [w.b, 'b']] as const) {
-      void w.sql`INSERT INTO alternate_takes
-          (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id,
-           candidates, created_at)
-        VALUES (${actor.actorId}, ${'take-1'}, ${null}, ${null}, ${mark}, ${'mcts'},
-                ${'n-1'}, ${null}, ${'[]'}, 10)`;
-    }
-
-    expect(unclaimedAlternateTakeIds(w.sql, w.a)).toEqual(['take-1']);
-
-    expect(claimAlternateTakesForTurn(w.sql, w.a, {
-      turnId: 'turn-1', sessionId: 'default', startedAt: 5,
-    })).toBe(1);
-    expect(unclaimedAlternateTakeIds(w.sql, w.a)).toEqual([]);
-    expect(unclaimedAlternateTakeIds(w.sql, w.b)).toEqual(['take-1']);
-
-    purgeUnclaimedAlternateTakes(w.sql, w.b);
-    expect(w.count('alternate_takes')).toBe(1);
-    expect(listAlternateTakeSets(w.sql, w.a)).toHaveLength(1);
-    w.close();
-  });
-
-  test('a pick re-points the picker\'s search nodes and not the sibling\'s', async () => {
-    const w = world();
-    initTurnOutcomeTables(w.execRaw);
-    initAlternateTakesTable(w.execRaw);
-    initSearchTables(w.execRaw);
-    // `recordTakePick` quotes the conversation pair, so transcript tables must exist.
-    initActorTables(w.execRaw, w.sql);
-    initSessionContextTables(w.execRaw);
-    initSessionTranscriptTables(w.execRaw);
-
-    const transcript = new SessionHistory({
-      sql: w.sql, actor: w.a, transactionSync: write => w.db.transaction(write)(),
-      files: async () => ({ vfs: createMemoryVfs().vfs, artifactDirectory: '/actor/.kinu/context' }),
-    }).transcript(CHAT_SESSION_ID);
-
-    const candidates = JSON.stringify([
-      { nodeId: 'n-1', text: 'winner', score: 0.6, visits: 2, depth: 1 },
-      { nodeId: 'n-2', text: 'rival', score: 0.59, visits: 2, depth: 1 },
-    ]);
-
-    for (const actor of [w.a, w.b]) {
-      for (const nodeId of ['n-1', 'n-2']) {
-        void w.sql`INSERT INTO search_nodes
-            (actor_id, id, parent_id, root_id, task, action, observation, visits, value, depth, status)
-          VALUES (${actor.actorId}, ${nodeId}, ${null}, ${'root-1'}, ${'t'}, ${''}, ${''},
-                  2, 0.6, 1, ${'terminal'})`;
-      }
-
-      void w.sql`INSERT INTO alternate_takes
-          (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id,
-           candidates, created_at)
-        VALUES (${actor.actorId}, ${'take-1'}, ${'turn-1'}, ${'default'}, ${'t'}, ${'mcts'},
-                ${'n-1'}, ${null}, ${candidates}, 1)`;
-    }
-
-    expect(w.count('search_nodes')).toBe(4);
-
-    const record = await recordTakePick(w.sql, w.a, transcript, { takeId: 'take-1', nodeId: 'n-2', now: 2 });
-    expect(record.changedAnswer).toBe(true);
-
-    const status = (actor: ActorHandle, nodeId: string): string | undefined =>
-      w.sql<{ status: string }>`SELECT status FROM search_nodes
-        WHERE actor_id = ${actor.actorId} AND id = ${nodeId}`[0]?.status;
-
-    expect(status(w.a, 'n-1')).toBe('pruned');
-    expect(status(w.a, 'n-2')).toBe('terminal');
-    // B's identically-named nodes never moved.
-    expect(status(w.b, 'n-1')).toBe('terminal');
-    expect(status(w.b, 'n-2')).toBe('terminal');
-    // The pick's ledger row is A's alone.
-    expect(listTurnOutcomes(w.sql, w.a, { outcomes: ['corrected'] })).toHaveLength(1);
-    expect(listTurnOutcomes(w.sql, w.b, { outcomes: ['corrected'] })).toHaveLength(0);
-    w.close();
-  });
 });
 
 describe('two actors, one database: exploration_records', () => {
@@ -858,14 +790,18 @@ describe('two actors, one database: mission_budget', () => {
 describe('two actors, one database: actor_subordinates', () => {
   test('two parents each hire a "reviewer" and neither can dismiss the other\'s', () => {
     const w = world();
+    // A roster row reads its hire's origin from the actor directory, so the table exists.
+    initWorkspaceActorTable(w.execRaw);
     const a = new SubordinateRosterStore(w.exec, w.a);
     const b = new SubordinateRosterStore(w.exec, w.b);
     a.ensureSchema();
     b.ensureSchema();
 
+    // Unborn: the seed says who asked for the hire.
     const entry = {
-      name: 'reviewer', actorReference: null, birth: null, deleteRequested: false,
-      createdBy: 'orchestrator' as const, status: 'idle' as const, currentTask: null,
+      name: 'reviewer', actorReference: null, deleteRequested: false,
+      birth: { creationId: 'c-reviewer', seed: { name: 'reviewer', displayName: 'Reviewer', nameOrigin: 'user' as const, role: 'reviewer', mission: 'review', lifetime: 'durable' as const, origin: 'agent' as const }, assignment: null },
+      status: 'idle' as const, currentTask: null,
       createdAt: 1, dismissedAt: null, lifetime: 'durable' as const, taskEventId: null,
     };
 
@@ -983,32 +919,27 @@ describe('two actors, one database: triggers', () => {
   });
 });
 
-describe('two actors, one database: vfs_baseline_manifest', () => {
-  test('one actor re-baselining does not deactivate the other\'s generation', async () => {
+describe('two actors, one store: the Diffs reviews', () => {
+  test("one actor's reviews never move or drop the other's baseline", async () => {
     const w = world();
-    initWorkspaceBaselineTable(w.execRaw);
-    // Empty plane on purpose: the generation flip is one statement over the whole table.
-    const vfs = createMemoryVfs().vfs;
-    const rtA = runtimeFor(w, w.a, vfs);
-    const rtB = runtimeFor(w, w.b, vfs);
+    const workspace = await NimbusWorkspace.create({ ...inlineWorkspaceStorage(w.db), generation: 1, cwd: WORKSPACE_ROOT });
+    const kernel = workspace.vfs.as(CRED_KERNEL);
+    kernel.mkdir(WORKSPACE_ROOT, { recursive: true });
+    kernel.chown(WORKSPACE_ROOT, CRED_SESSION_USER.uid, CRED_SESSION_USER.gid);
 
-    await resetWorkspaceBaseline(rtA);
+    const baselines = { store: workspace.vfs, cred: CRED_SESSION_USER };
 
-    const activeA = w.sql<{ generation: string }>`SELECT generation FROM vfs_baseline_manifest
-      WHERE actor_id = ${w.a.actorId} AND active = 1 LIMIT 1`[0]?.generation;
+    const listed = async (actor: ActorHandle): Promise<string[]> =>
+      (await getWorkspaceDiff({ actor }, baselines)).files.map((file) => `${file.status} ${file.path}`);
 
-    if (activeA === undefined) throw new Error('A captured a baseline generation');
+    await resetWorkspaceBaseline({ actor: w.a }, baselines);
+    workspace.vfs.as(CRED_SESSION_USER).writeFile(`${WORKSPACE_ROOT}/notes.md`, 'one\n');
 
-    // Without the owner on the flip, B would deactivate A's baseline.
-    await resetWorkspaceBaseline(rtB);
+    // Past B's own retention: each review prunes B's older ones, never A's.
+    for (let review = 0; review < 3; review++) await resetWorkspaceBaseline({ actor: w.b }, baselines);
 
-    const stillActiveA = w.sql<{ generation: string }>`SELECT generation FROM vfs_baseline_manifest
-      WHERE actor_id = ${w.a.actorId} AND active = 1 LIMIT 1`[0]?.generation;
-
-    expect(stillActiveA).toBe(activeA);
-
-    expect((await getWorkspaceDiff(rtA)).files).toHaveLength(0);
-    expect((await getWorkspaceDiff(rtB)).files).toHaveLength(0);
+    expect(await listed(w.a)).toEqual(['added notes.md']);
+    expect(await listed(w.b)).toEqual([]);
     w.close();
   });
 });
@@ -1064,7 +995,7 @@ describe('a handle whose validation throws is refused before the statement runs'
       })],
       ['deferred_approvals', () => approvals.create({
         id: 'appr-1', command: 'c', executor: 'e', reason: 'r', requestedAt: 1,
-      })],
+      }, [])],
       ['instruction_approvals', () => new InstructionApprovalStore(
         w.sql, w.revocable, 'scope',
       ).approve('SKILL.md', 'digest')],

@@ -3,6 +3,8 @@ import { JsonObjectSchema } from '../utils/json';
 
 export const ChatHistoryEntrySchema = v.object({
   id: v.pipe(v.string(), v.nonEmpty()),
+  /** Its place in the chat: the rows above it number exactly this. */
+  position: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
   role: v.picklist(['user', 'assistant', 'system']),
   content: v.string(),
   createdAt: v.union([v.string(), v.number()]),

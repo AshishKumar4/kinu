@@ -5,16 +5,24 @@
 import { Agent } from 'agents';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import type { CraftedTool } from '@kinu.run/core';
-import { craftedToolDeclarations, DynamicContextLedger } from '@kinu.run/core';
+import { craftedToolDeclarations, DynamicContextLedger, settleWorkspaceRoot, settleWorkspaceSlates } from '@kinu.run/core';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
-import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
+import { seedBaseFilesystem } from '@nimbus-sh/core/workspace';
+import { CRED_KERNEL, CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { createCodemodeToolFactory } from '../../src/codemode-tool';
 import { bindAgentSql } from '../../src/runtime';
 import { bindActorHandle, createDefaultWebSearchProvider, initCodemodeStateTable, toolsInWorkMode, inWorkMode, narrowToolSurface, slateToolReach, type WorkMode } from '@kinu.run/core';
 import { CodemodeEgress as ProductionEgress, codemodeEgress } from '../../src/codemode-egress';
 import { SlateHost } from '../../src/slates/host';
+import { createMemoryVfs } from '@kinu.run/test-utils/vfs';
+import type { BrowserSessions } from '@kinu.run/core';
 import { ROOT_SLATE_CALLER } from '../../src/slates/bindings';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
+
+const NO_BROWSER_RUN = { missing: 'this probe reaches no Browser Run' };
+
+const NO_BROWSERS: BrowserSessions = { open: async () => { throw new Error('this probe opens no browser'); }, list: async () => [], close: async () => {} };
 
 export class CodemodeEgress extends ProductionEgress {
   override async fetch(): Promise<Response> { return new Response('network allowed'); }
@@ -25,6 +33,8 @@ type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 export class SlateActorProbeRoot extends Agent<ProbeEnv> {
   async craftedSlate(): Promise<string> {
     const vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);
+    // As the Kinu boot leaves every workspace: /slates is the kernel's, shared with the workspace's agents.
+    settleWorkspaceSlates(vfs.as(CRED_KERNEL), (path) => { vfs.registerSharedDirectory(path); });
     const files = vfs.as(CRED_SESSION_USER);
     files.mkdir('/slates/crafted', { recursive: true });
     files.writeFile('/slates/crafted/package.json', JSON.stringify({
@@ -40,17 +50,19 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     };
 
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress('binding-probe'), sql, workspace: 'binding-probe',
-      webSearch: createDefaultWebSearchProvider({ fetch }), reach: slateToolReach(narrowToolSurface(undefined)),
+      loader: this.env.LOADER, egress: codemodeEgress({ workspace: 'binding-probe', actor: 'binding-probe' }), sql, workspace: 'binding-probe',
+      webSearch: createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER_RUN }), reach: slateToolReach(narrowToolSurface(undefined)),
+      browserSessions: NO_BROWSERS,
       rt: {
         actor: bindActorHandle(sql, { actorId: 'binding-probe', workspaceId: 'binding-probe', parentActorId: null, name: 'binding-probe', storageKey: 'binding-probe' }, () => {}),
         craftStore: { list: () => [crafted] },
+        storage: { vfs: createMemoryVfs().vfs },
       },
     });
 
     const host = new SlateHost({
       ctx: this.ctx, workspace: 'binding-probe',
-      session: async () => ({ vfs, processes: new SessionProcessSupervisor() }),
+      session: async () => ({ vfs, processes: new SessionProcessSupervisor(), filesystem: new ProcessFiles(vfs) }),
       facetManager: async () => { throw new Error('binding probe does not boot a process'); },
       apps: {
         ensure: async () => { throw new Error('binding probe does not boot a process'); },
@@ -86,8 +98,11 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
   }
 
   async code(mode: WorkMode, code: string): Promise<{ answer: string; file: string }> {
-    const files = new SqliteVFS(this.ctx.storage.sql, this.ctx).as(CRED_SESSION_USER);
-    files.mkdir('/home/main', { recursive: true });
+    const vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);
+    // As a workspace boot leaves it: Nimbus's base tree, and the workspace root the session user owns.
+    seedBaseFilesystem(vfs);
+    settleWorkspaceRoot(vfs.as(CRED_KERNEL));
+    const files = vfs.as(CRED_SESSION_USER);
 
     if (!files.exists('/home/main/plan-data.txt')) files.writeFile('/home/main/plan-data.txt', 'original');
     const sql = bindAgentSql(this);
@@ -95,9 +110,11 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     initCodemodeStateTable((statement) => { this.ctx.storage.sql.exec(statement); });
 
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress('mode-probe'), sql, workspace: 'mode-probe',
-      webSearch: createDefaultWebSearchProvider({ fetch }),
+      loader: this.env.LOADER, egress: codemodeEgress({ workspace: 'mode-probe', actor: 'mode-probe' }), sql, workspace: 'mode-probe',
+      webSearch: createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER_RUN }),
+      browserSessions: NO_BROWSERS,
       rt: {
+        storage: { vfs: createMemoryVfs().vfs },
         actor: bindActorHandle(sql, {
           actorId: 'mode-probe', workspaceId: 'mode-probe', parentActorId: null,
           name: 'mode-probe', storageKey: 'mode-probe',

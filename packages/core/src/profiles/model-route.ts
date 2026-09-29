@@ -11,10 +11,9 @@ export type ModelRoutePolicy =
   | { readonly kind: 'fixed'; readonly tier: TierId }
   | { readonly kind: 'platform' };
 
-const MODEL_ROUTE_POLICY = {
+export const MODEL_ROUTE_POLICY = {
   agent: { kind: 'invocation' },
   head: { kind: 'invocation' },
-  mcts: { kind: 'invocation' },
   swarm: { kind: 'invocation' },
   slate: { kind: 'invocation' },
   scaffold: { kind: 'fixed', tier: 'deep' },

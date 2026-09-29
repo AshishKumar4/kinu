@@ -6,7 +6,7 @@
  *   no follow-up can grade records no outcome, never an inferred `accepted`.
  * 2 Session: reflect when a closed window carries negative signal. The every-N-turns
  *   cadence lives only in AgentOrchestrator over the durable window (session-window.ts).
- * 3 Lifetime: craft consolidation and MCTS exploration. Replay eval is on demand only.
+ * 3 Lifetime: craft consolidation. Replay eval is on demand only.
  */
 
 import type { ShadowTrialPlan, ShadowTrialQueueOutcome } from './types';
@@ -15,7 +15,6 @@ import * as v from 'valibot';
 
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { LLM } from '../types/primitives';
-import type { SessionWriter } from '../mcts/record-node';
 import type {
   CompletedTurn,
   CompletedSession,
@@ -25,7 +24,7 @@ import type {
 } from './types';
 import { DEFAULT_EVOLUTION_CONFIG } from './types';
 import { extractJsonObject, jsonObjectOnlyInstruction, stripMarkdownFences } from '../providers/structured';
-import { renderThrownChain, tolerate } from '../obs/index';
+import { tolerate } from '../obs/index';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { upsertCraftedTool } from '../craft/conflict';
 import { periodicCraftConsolidation } from '../craft/consolidation';
@@ -33,7 +32,6 @@ import { updateCraftScores } from '../craft/ema';
 import { createCraftLedger, type CraftLedger } from '../craft/in-episode';
 import { recordRecoveryFinding, recoveryFindingText, type RecoveryFinding } from './recovery';
 import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
-import { ownerMissionOf, soulReadsSql } from '../identity/soul';
 import { conversationTurnPair } from '../identity/conversation-store';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import {
@@ -87,11 +85,8 @@ const GeneralizedToolSchema = v.object({
   code: v.optional(v.string()),
 });
 
-import { runMCTS } from '../mcts/engine';
-import { createDurableMctsSession } from '../orchestrator/mcts-session';
 import type { SessionHistory } from '../session/history';
 import type { AgentConfigStore } from '../config/store';
-import type { WorkspaceActor } from '../identity/workspace-actors';
 import { diagnostics, toKinuError, KinuError } from '../obs/index';
 
 /** The version a proposal branches from and the variants it may cite. */
@@ -249,18 +244,18 @@ export class EvolutionEngine {
   private recoveryPending = true;
 
   constructor(
-    rt: AgentRuntime, history: SessionHistory, config: Partial<EvolutionConfig> & Pick<EvolutionConfig, 'reportModelCall'>,
+    rt: AgentRuntime, history: SessionHistory, config: Partial<EvolutionConfig> = {},
   ) {
     this.rt = rt;
     this.history = history;
     this.config = { ...DEFAULT_EVOLUTION_CONFIG, ...config };
     rt.actor.assertCurrent();
 
-    const actor = rt.storage.sql<Pick<WorkspaceActor, 'kind'>>`
-      SELECT kind FROM workspace_actors WHERE actor_id = ${rt.actor.actorId}`[0];
+    const actor = rt.storage.sql<{ evolves: number }>`
+      SELECT evolves FROM workspace_actors WHERE actor_id = ${rt.actor.actorId}`[0];
 
     if (actor === undefined) throw new KinuError('missing', 'the evolution actor has no membership record');
-    this.recordsTurns = this.config.enabled && actor.kind === 'main';
+    this.recordsTurns = this.config.enabled && actor.evolves === 1;
     // Opened on first use: an engine with evolution off never scores a crafted tool, and an agent in its own
     // isolate has no crafted-tool store (they are the workspace's).
     let ledger: CraftLedger | undefined;
@@ -368,7 +363,7 @@ export class EvolutionEngine {
   }
 
   /**
-     * Idempotency guard for a re-entered advisor lane: the note row is the only
+     * Idempotency guard for a replayed `advisor_review` effect: the note row is the only
      * durable evidence that the review completed.
      */
   hasAdvisorNoteForTurn(turnId: string): boolean {
@@ -929,56 +924,11 @@ export class EvolutionEngine {
     });
   }
 
-  /** Full MCTS evolution cycle; automatic every N windows, or via `kinu evolve`. */
-  async onLifetimeEvolution(session?: SessionWriter): Promise<void> {
-    const rt = this.rt;
-
-    const purpose = ownerMissionOf(soulReadsSql(rt.storage.sql)) ?? 'be a helpful assistant';
-
-    this.emit({
-      type: 'mcts_started',
-      message: `Starting evolution cycle (budget=${this.config.lifetimeMCTSBudget})...`,
-    });
-
-    // No replay eval here: GEPA's seed scoring already re-executes the same ledger,
-    // and no decision reads the replay curve. It stays available via `runReplayEval`.
-
+  /** Lifetime cycle, automatic every N windows. No replay eval here: GEPA's seed scoring already
+   *  re-executes the same ledger, and no decision reads the replay curve. */
+  async onLifetimeEvolution(): Promise<void> {
     await periodicCraftConsolidation(this.rt);
     this.emit({ type: 'consolidation', message: 'CraftStore consolidation complete' });
-
-    // Default to the durable writer: a resumed search needs the branch ancestry.
-    const writer = session ?? createDurableMctsSession(this.history);
-
-    const task = `Given my purpose: "${purpose}", identify one specific improvement ` +
-      `to be more effective. Consider: new tools, knowledge gaps, workflow improvements.`;
-
-    try {
-      // The iteration budget stays the lifetime cadence cap, not mcts_iterations.
-      const overrides = this.agentConfig.getMctsOverrides();
-
-      const result = await runMCTS(this.rt, writer, task, {
-        budget: this.config.lifetimeMCTSBudget,
-        branches: overrides.branches ?? this.config.lifetimeMCTSBranches,
-        maxDepth: overrides.maxDepth,
-        explorationWeight: overrides.explorationWeight,
-        judgeSamples: overrides.judgeSamples,
-        maxEvalLLMCalls: overrides.maxEvalLLMCalls,
-        onProgress: this.config.onMctsProgress,
-        reportModelCall: this.config.reportModelCall,
-      });
-
-      this.emit({
-        type: 'mcts_complete',
-        message: `Evolution ${result.converged ? 'converged' : 'explored'} (score: ${result.winnerValue.toFixed(2)})`,
-        data: result,
-      });
-    } catch (err) {
-      const message = renderThrownChain({ cause: err });
-      this.emit({
-        type: 'mcts_complete',
-        message: `Evolution failed: ${message}`,
-      });
-    }
   }
 
   /**

@@ -29,7 +29,7 @@ for (const withTail of [true, false]) {
   test(`the claim names ${withTail ? 'the history and the unapproved instructions' : 'the history alone when there are none'}`, async () => {
     const { rt, testSql } = createTestRuntime();
     const seats = hostedSeatsOver({ rt, db: testSql.db });
-    const { actor } = await seats.seat('claim-prover', 'subordinate');
+    const { actor } = await seats.seat('claim-prover', 'agent');
 
     const catalog = { roles: { reader: { description: 'Read', instructions: 'Read.',
       tier: 'default', preset: 'ideate', allowedTools: [] } }, tiers: { default: { model: 'test-model' } } } satisfies ProfileCatalog;

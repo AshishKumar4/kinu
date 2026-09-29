@@ -1,6 +1,7 @@
 import * as v from 'valibot';
 import { DurableObject, WorkerEntrypoint, exports } from 'cloudflare:workers';
 import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import { ProcessFiles } from '@nimbus-sh/core/runtime/process-files.js';
 import { CRED_KERNEL, CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
@@ -71,12 +72,13 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
   private readonly vfs = new SqliteVFS(this.ctx.storage.sql, this.ctx);
   private readonly processes = new SessionProcessSupervisor();
   private readonly ports = new PortRegistry();
+  private readonly filesystem = new ProcessFiles(this.vfs);
   private readonly facets = probeFacetManager({
-    ctx: this.ctx, env: this.env, processes: this.processes, portRegistry: this.ports, vfs: this.vfs,
+    ctx: this.ctx, env: this.env, processes: this.processes, portRegistry: this.ports, vfs: this.vfs, filesystem: this.filesystem,
   });
 
   private readonly resident = new ResidentSlateProcesses({
-    session: async () => ({ vfs: this.vfs, processes: this.processes }),
+    session: async () => ({ vfs: this.vfs, processes: this.processes, filesystem: this.filesystem }),
     facetManager: async () => this.facets,
   });
 
@@ -142,7 +144,7 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
 
     const boot = {
       key: crypto.randomUUID(), owner, root, app, cred,
-      globalOutbound: codemodeEgress(null),
+      globalOutbound: codemodeEgress({ workspace: null, actor: null }),
       project: parseSlateProject(project),
     };
 

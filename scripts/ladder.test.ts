@@ -25,7 +25,7 @@ import * as v from 'valibot';
 import {
   CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployPlan, gatesFor, liveTierTargets, packageScripts,
-  printPlan, runnableArgv, sharedBrowserModules, sharedOf, trackedTestFiles,
+  printPlan, runnableArgv, sharedBrowserModules, sharedOf, tierWave, trackedTestFiles, type WaveRow,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
@@ -93,11 +93,11 @@ const AFTER_CI_SUITES = {
   'evals/tasks/order-book.eval.ts': 'bun run evals',
   'evals/tasks/request-logs.eval.ts': 'bun run evals',
   'scripts/deadline-capability.test.ts': 'bun test --timeout=0 scripts/deadline-capability.test.ts',
-  'scripts/live-app-layout.test.ts': 'bun test --timeout=0 scripts/live-app-layout.test.ts',
-  'scripts/live-app-plans.test.ts': 'bun test --timeout=0 scripts/live-app-plans.test.ts',
-  'scripts/live-app-sleep.test.ts': 'bun test --timeout=0 scripts/live-app-sleep.test.ts',
-  'scripts/live-app-turns.test.ts': 'bun test --timeout=0 scripts/live-app-turns.test.ts',
-  'scripts/product-flows.test.ts': 'bun scripts/with-dev-server.ts bun test --timeout=0 scripts/product-flows.test.ts',
+  'tests/browser/live-app-layout.test.ts': 'bun test --timeout=0 tests/browser/live-app-layout.test.ts',
+  'tests/browser/live-app-plans.test.ts': 'bun test --timeout=0 tests/browser/live-app-plans.test.ts',
+  'tests/browser/live-app-sleep.test.ts': 'bun test --timeout=0 tests/browser/live-app-sleep.test.ts',
+  'tests/browser/live-app-turns.test.ts': 'bun test --timeout=0 tests/browser/live-app-turns.test.ts',
+  'tests/browser/product-flows.test.ts': 'bun scripts/with-dev-server.ts bun test --timeout=0 tests/browser/product-flows.test.ts',
 } satisfies Record<string, string>;
 
 /**
@@ -140,8 +140,8 @@ describe('the ladder measures something', () => {
     expect([...phaseIndex].sort((a, b) => a - b)).toEqual(phaseIndex);
     // The printed form round-trips: what the runner reads is what was planned.
     const printed = printPlan(plan).split('\n').map((line) => line.split('\t'));
-    expect(printed.map((fields) => fields[6])).toEqual(plan.map((row) => row.run));
-    expect(printed.map((fields) => fields[5])).toEqual(plan.map((row) => row.shared));
+    expect(printed.map((fields) => fields[5])).toEqual(plan.map((row) => row.run));
+    expect(printed.map((fields) => fields[4])).toEqual(plan.map((row) => row.shared));
     expect(printed.map((fields) => fields[0])).toEqual(plan.map((row) => row.phase));
   });
 
@@ -291,7 +291,7 @@ describe('the ladder measures something', () => {
     expect(reaching.size).toBeGreaterThan(30);
     expect(corpus.has(censusFile)).toBeTrue();
 
-    for (const file of ['scripts/computed-style.test.ts', 'scripts/provider-wait-ux.test.ts', 'tests/live/live-smoke.test.ts']) {
+    for (const file of ['tests/browser/computed-style.test.ts', 'tests/browser/provider-wait-ux.test.ts', 'tests/live-model/live-smoke.test.ts']) {
       expect(reaching.has(file), `${file} drives a browser and the closure does not reach it`).toBeTrue();
     }
 
@@ -453,11 +453,11 @@ describe('the ladder measures something', () => {
     // five files. Cross-checked rather than tautological: `claims()` resolves
     // COMMAND TEXT, while `isBunDiscoverableSuite` is a FILENAME rule.
     const bunSuitesUnderTests = tracked
-      .filter((file) => file.startsWith('tests/') && isBunDiscoverableSuite(file))
+      .filter((file) => file.startsWith('tests/') && !file.startsWith('tests/browser/') && isBunDiscoverableSuite(file))
       .sort();
 
     expect(bunSuitesUnderTests.length).toBeGreaterThan(0);
-    expect(claims('bun test ./tests/', tracked).sort()).toEqual(bunSuitesUnderTests);
+    expect(claims('bun test ./tests/live-model/ ./tests/first-run/', tracked).sort()).toEqual(bunSuitesUnderTests);
 
     // The other half of the partition: every runnable suite no `bun test` can
     // select is an eval task, and `bun run evals` claims exactly those.
@@ -468,7 +468,7 @@ describe('the ladder measures something', () => {
     expect(claims('bun run evals', tracked).sort()).toEqual(evalTasks);
     // The live tier's claim is the bun argv its script runs by default.
     expect(claims('bun run test:live', tracked).sort())
-      .toEqual(bunSuitesUnderTests.filter((file) => file.startsWith('tests/live/')));
+      .toEqual(bunSuitesUnderTests.filter((file) => file.startsWith('tests/live-model/')));
     // The glob and named-file forms are proved over a FIXTURE tree below
     // (`claims() resolves a glob against whatever tree it is given`), never by
     // naming the live repo's files: this held a thirteen-entry list of bench
@@ -505,7 +505,7 @@ describe('the ladder measures something', () => {
     expect(uiRows.every((files) => files.length > 0)).toBe(true);
     expect(new Set(uiRows.flat()).size).toBe(uiRows.flat().length);
     expect(uiRows.flat().sort()).toEqual(
-      [...claims('bun test scripts/*-ux.test.ts', tracked), 'scripts/computed-style.test.ts'].sort(),
+      [...claims('bun test tests/browser/*-ux.test.ts', tracked), 'tests/browser/computed-style.test.ts'].sort(),
     );
     // `--cwd` silently loads a different bunfig, so it claims nothing on
     // purpose — a gate spelled that way fails as an orphan instead of passing.
@@ -780,8 +780,8 @@ describe('every test file is claimed by some runner', () => {
     // read from the script, so a rename moves both.
     const script = readFileSync(resolve(root, LIVE_TIER_SCRIPT), 'utf8');
 
-    expect(liveTierTargets(script)).toEqual(['./tests/live/']);
-    expect(SKIP_RATCHET_TARGETS).toContain('./tests/');
+    expect(liveTierTargets(script)).toEqual(['./tests/live-model/']);
+    expect(SKIP_RATCHET_TARGETS).toContain('./tests/live-model/');
     expect(script).toContain('RATCHET_ARGS=(--junit "$JUNIT" --target "${TARGETS[0]}")');
   });
 
@@ -973,5 +973,53 @@ describe('the deadline wrapper reads only what its closure holds', () => {
 
     expect(closure.corpus).toBe(false);
     expect(audit.undeclared).toEqual([]);
+  });
+});
+
+describe('a tier runs its gates as a wave', () => {
+  const row = (threads: number, shared: WaveRow['shared'] = 'none', wall = 1): WaveRow => ({ threads, rssMb: 100, wall, shared });
+
+  /** Runs the wave over `rows`, each gate a few microtask turns long, and records what ran beside what. */
+  async function waved(rows: readonly WaveRow[], stopAfter = Number.POSITIVE_INFINITY) {
+    const running = new Set<number>();
+    const beside: number[][] = [];
+    const started: number[] = [];
+
+    await tierWave(rows.map((entry, index) => ({ entry: index, row: entry })), async (index) => {
+      started.push(index);
+      running.add(index);
+      beside.push([...running].sort((left, right) => left - right));
+
+      for (let turn = 0; turn < 3; turn += 1) await Promise.resolve();
+      running.delete(index);
+    }, () => started.length >= stopAfter, { threads: 8, rssMb: 1_000 });
+
+    return { beside, started };
+  }
+
+  test('admits gates up to the thread cap and no further', async () => {
+    const { beside } = await waved([row(4), row(4), row(4), row(4)]);
+
+    expect(Math.max(...beside.map((set) => set.length))).toBe(2);
+    expect(beside.flat().length).toBeGreaterThan(4);
+  });
+
+  test('never runs two gates that hold the browser at once', async () => {
+    const { beside, started } = await waved([row(1, 'browser'), row(1, 'browser'), row(1), row(1, 'browser')]);
+
+    expect([...started].sort((left, right) => left - right)).toEqual([0, 1, 2, 3]);
+    expect(beside.every((set) => set.filter((index) => index !== 2).length <= 1)).toBe(true);
+  });
+
+  test('runs a gate with no measured cost alone', async () => {
+    const { beside } = await waved([row(1), row(Number.POSITIVE_INFINITY, 'none', 9), row(1)]);
+
+    expect(beside.filter((set) => set.includes(1))).toEqual([[1]]);
+  });
+
+  test('launches nothing more once a gate has failed', async () => {
+    const { started } = await waved([row(8), row(8), row(8)], 1);
+
+    expect(started).toEqual([0]);
   });
 });

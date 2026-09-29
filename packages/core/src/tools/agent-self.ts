@@ -18,7 +18,8 @@ import type { TrustLevel } from '../events/hub/types';
 import { nanoid } from '../utils/nanoid';
 import { TOOL_REACH } from './registry';
 import { decodeJsonValue, JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
-import { KinuError } from '../obs/index';
+import { Effect } from 'effect';
+import { KinuError, settle } from '../obs/index';
 
 type CurriculumStatus = (typeof PROPOSED_TASK_STATUSES)[number];
 
@@ -139,12 +140,14 @@ const ScheduleOptionsSchema = v.object({
   budget_label: v.optional(v.string()),
 });
 
-function argument<T>(schema: v.GenericSchema<unknown, T>, input: { value: unknown }, refusal: string): T {
+function argument<T>(schema: v.GenericSchema<unknown, T>, input: { value: unknown }, refusal: string): Effect.Effect<T, KinuError> {
   const parsed = v.safeParse(schema, input.value);
 
-  if (!parsed.success) throw new KinuError('bad_input', refusal);
+  return parsed.success ? Effect.succeed(parsed.output) : Effect.fail(new KinuError('bad_input', refusal));
+}
 
-  return parsed.output;
+function withArgument<T, R>(parsed: Effect.Effect<T, KinuError>, call: (value: T) => R | Promise<R>): Effect.Effect<R, KinuError> {
+  return Effect.flatMap(parsed, (value) => Effect.promise(() => Promise.resolve(call(value))));
 }
 
 export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
@@ -155,54 +158,55 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
     tools: {
       proposeCurriculum: {
         description: 'Propose N self-curriculum tasks (Voyager-style) for your own improvement; returns the proposals.',
-        execute: async (...args: unknown[]) => {
-          const count = argument(OptionalNumberSchema, { value: args[0] }, 'agent.proposeCurriculum: count must be a number when given');
-
-          return await host.proposeCurriculumTasks(count);
-        },
+        execute: (...args: unknown[]) => settle(withArgument(
+          argument(OptionalNumberSchema, { value: args[0] }, 'agent.proposeCurriculum: count must be a number when given'),
+          (count) => host.proposeCurriculumTasks(count),
+        )),
       },
       listCurriculum: {
         description: 'List your proposed curriculum tasks, optionally filtered by status (pending/accepted/rejected/completed).',
-        execute: async (...args: unknown[]) => {
-          const status = argument(OptionalCurriculumStatusSchema, { value: args[0] }, 'agent.listCurriculum: invalid status');
-
-          return await host.listCurriculumTasks(status);
-        },
+        execute: (...args: unknown[]) => settle(withArgument(
+          argument(OptionalCurriculumStatusSchema, { value: args[0] }, 'agent.listCurriculum: invalid status'),
+          (status) => host.listCurriculumTasks(status),
+        )),
       },
       acceptCurriculumTask: {
         description: 'Accept a proposed curriculum task by id so it becomes runnable.',
-        execute: async (...args: unknown[]) => {
-          return await host.setCurriculumTaskStatus(argument(NonEmptyStringSchema, { value: args[0] }, 'agent.acceptCurriculumTask: id must be a non-empty string'), 'accepted');
-        },
+        execute: (...args: unknown[]) => settle(withArgument(
+          argument(NonEmptyStringSchema, { value: args[0] }, 'agent.acceptCurriculumTask: id must be a non-empty string'),
+          (id) => host.setCurriculumTaskStatus(id, 'accepted'),
+        )),
       },
       proposeScaffold: {
         description: 'Propose a new version of your own agentic-loop scaffold. Routed through the 4-gate validation + misevolution gate + shadow evaluation; only goes live after winning the promotion gate. rationale at least 50 chars; code must export async function* run(rt, task) and use the host.* bridge. Optional baseVersion branches from an archived variant.',
-        execute: async (...args: unknown[]) => {
+        execute: (...args: unknown[]) => {
           const [rationale, code, baseVersion] = args;
-          const rationaleText = argument(NonEmptyStringSchema, { value: rationale }, 'agent.proposeScaffold: rationale must be a non-empty string');
-          const codeText = argument(NonEmptyStringSchema, { value: code }, 'agent.proposeScaffold: code must be a non-empty string');
-          const base = argument(OptionalBaseVersionSchema, { value: baseVersion }, 'agent.proposeScaffold: baseVersion must be a non-negative integer when given');
 
-          return await host.proposeScaffold(rationaleText, codeText, base);
+          return settle(withArgument(Effect.all([
+            argument(NonEmptyStringSchema, { value: rationale }, 'agent.proposeScaffold: rationale must be a non-empty string'),
+            argument(NonEmptyStringSchema, { value: code }, 'agent.proposeScaffold: code must be a non-empty string'),
+            argument(OptionalBaseVersionSchema, { value: baseVersion }, 'agent.proposeScaffold: baseVersion must be a non-negative integer when given'),
+          ]), ([rationaleText, codeText, base]) => host.proposeScaffold(rationaleText, codeText, base)));
         },
       },
       scaffoldVersions: {
         description: 'Read-only scaffold archive: versions with status, lineage (parent_version) and shadow-eval record: the stepping stones proposeScaffold can branch from.',
-        execute: async (...args: unknown[]) => {
-          return await host.listScaffoldVersions(argument(OptionalNumberSchema, { value: args[0] }, 'agent.scaffoldVersions: limit must be a number when given'));
-        },
+        execute: (...args: unknown[]) => settle(withArgument(
+          argument(OptionalNumberSchema, { value: args[0] }, 'agent.scaffoldVersions: limit must be a number when given'),
+          (limit) => host.listScaffoldVersions(limit),
+        )),
       },
       schedule: {
         description: 'Schedule a future autonomous turn: { cron } recurring OR { atMs } one-shot (epoch ms), with optional label/payload. The reactor wakes you when it fires. Optional budget_usd / budget_tokens give the whole schedule a cumulative host-enforced spend cap covering every turn it wakes and everything those turns spawn.',
-        execute: async (...args: unknown[]) => {
-          const opts = argument(ScheduleOptionsSchema, { value: args[0] ?? {} }, 'agent.schedule: invalid schedule options');
+        execute: (...args: unknown[]) => settle(Effect.gen(function* () {
+          const opts = yield* argument(ScheduleOptionsSchema, { value: args[0] ?? {} }, 'agent.schedule: invalid schedule options');
           const { cron, atMs } = opts;
 
-          if (!cron && atMs === undefined) throw new KinuError('bad_input', 'agent.schedule: provide { cron } or { atMs }');
+          if (!cron && atMs === undefined) return yield* new KinuError('bad_input', 'agent.schedule: provide { cron } or { atMs }');
 
-          if (cron && nextCronFire(cron, Date.now()) === null) throw new KinuError('bad_input', `agent.schedule: unsupported cron expression: ${cron}`);
+          if (cron && nextCronFire(cron, Date.now()) === null) return yield* new KinuError('bad_input', `agent.schedule: unsupported cron expression: ${cron}`);
 
-          if (atMs !== undefined && atMs <= Date.now()) throw new KinuError('bad_input', 'agent.schedule: atMs must be in the future');
+          if (atMs !== undefined && atMs <= Date.now()) return yield* new KinuError('bad_input', 'agent.schedule: atMs must be in the future');
           // Declared before the trigger so the first fire carries the label; a named label re-enters its row.
           const limits = readMissionLimits(opts);
 
@@ -214,40 +218,44 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
 
           const budget = limits && missionLabel ? host.budget.declare(missionLabel, limits) : undefined;
 
-          const result: TimerTrigger & { budget?: JsonValue } = await host.createTimerTrigger({
-              cron, atMs, missionLabel,
-              label: opts.label,
-              payload: opts.payload,
-            });
+          const result: TimerTrigger & { budget?: JsonValue } = yield* Effect.promise(() => host.createTimerTrigger({
+            cron, atMs, missionLabel,
+            label: opts.label,
+            payload: opts.payload,
+          }));
 
           if (budget) result.budget = decodeJsonValue({ value: budget });
 
           return result;
-        },
+        })),
       },
       budget: {
         description: 'Read a mission budget: pass a label, or omit to read whatever the current turn spends against. Returns [] when this run is uncapped (the default).',
-        execute: async (...args: unknown[]) => {
-          return host.budget.snapshot(argument(v.optional(v.string()), { value: args[0] }, 'agent.budget: label must be a string when given'));
-        },
+        execute: (...args: unknown[]) => settle(withArgument(
+          argument(v.optional(v.string()), { value: args[0] }, 'agent.budget: label must be a string when given'),
+          (label) => host.budget.snapshot(label),
+        )),
       },
       cancelSchedule: {
         description: 'Cancel a previously-scheduled trigger by id (idempotent).',
-        execute: async (...args: unknown[]) => {
-          return await host.cancelTrigger(argument(NonEmptyStringSchema, { value: args[0] }, 'agent.cancelSchedule: id must be a non-empty string'), 'self');
-        },
+        execute: (...args: unknown[]) => settle(withArgument(
+          argument(NonEmptyStringSchema, { value: args[0] }, 'agent.cancelSchedule: id must be a non-empty string'),
+          (id) => host.cancelTrigger(id, 'self'),
+        )),
       },
       jobResult: {
         description: BACKGROUND_DESCRIPTION,
-        execute: async (...args: unknown[]) => {
-          return formatJobRead(await host.jobResult(argument(NonEmptyStringSchema, { value: args[0] }, 'agent.jobResult: jobId must be a non-empty string')));
-        },
+        execute: (...args: unknown[]) => settle(withArgument(
+          argument(NonEmptyStringSchema, { value: args[0] }, 'agent.jobResult: jobId must be a non-empty string'),
+          async (jobId) => formatJobRead(await host.jobResult(jobId)),
+        )),
       },
       backgroundJobs: {
         description: 'List your recent background jobs (newest first) with their status.',
-        execute: async (...args: unknown[]) => {
-          return await host.listBackgroundJobs(argument(OptionalNumberSchema, { value: args[0] }, 'agent.backgroundJobs: limit must be a number when given'));
-        },
+        execute: (...args: unknown[]) => settle(withArgument(
+          argument(OptionalNumberSchema, { value: args[0] }, 'agent.backgroundJobs: limit must be a number when given'),
+          (limit) => host.listBackgroundJobs(limit),
+        )),
       },
       compactNow: {
         description: 'Fold the conversation now: arm the compaction ladder so your NEXT turn is assembled from a fresh handoff checkpoint instead of waiting for the token trigger. Use it at a phase boundary. The folded range is archived verbatim and listed in the checkpoint\'s Compaction Archive manifest, so nothing is lost.',
@@ -259,9 +267,10 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
       },
       replayEvals: {
         description: 'Read your replay-eval loss curve (newest first): past outcome-labeled turns re-run against the current config, scored against how they originally landed. Each entry carries the 95% confidence interval on its mean score: a move inside the interval is noise, not progress.',
-        execute: async (...args: unknown[]) => {
-          return await host.getReplayEvals(argument(OptionalNumberSchema, { value: args[0] }, 'agent.replayEvals: limit must be a number when given'));
-        },
+        execute: (...args: unknown[]) => settle(withArgument(
+          argument(OptionalNumberSchema, { value: args[0] }, 'agent.replayEvals: limit must be a number when given'),
+          (limit) => host.getReplayEvals(limit),
+        )),
       },
     },
   };

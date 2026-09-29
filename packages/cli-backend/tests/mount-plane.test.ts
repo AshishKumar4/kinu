@@ -13,7 +13,6 @@ function freshRuntime(cwd?: string) {
   const db = new Database(scratchPath('mount-plane', 'agent.db'), { create: true });
 
   const config: Parameters<typeof createCLIRuntime>[1] = {
-    dbPath: db.filename,
     llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
   };
 
@@ -65,10 +64,20 @@ describe('the local backend file plane', () => {
       }
     }
 
+    // Nothing but the store answers at /sandbox: a write there meets what any top-level path meets, `/` being root's.
     const unbound = freshRuntime().storage.vfs;
 
-    await unbound.writeFile('/sandbox/notes.md', 'a folder of the workspace');
-    expect(await unbound.readFile('/sandbox/notes.md', { encoding: 'utf8' })).toBe('a folder of the workspace');
+    const writing = async (path: string) => {
+      try {
+        await unbound.writeFile(path, 'a folder of the workspace');
+
+        return 'written';
+      } catch (caught) {
+        return isVfsError(caught) ? caught.code : 'unclassified';
+      }
+    };
+
+    expect([await writing('/sandbox/notes.md'), await writing('/elsewhere/notes.md')]).toEqual(['EACCES', 'EACCES']);
   });
 
   test('the workspace tree stays canonical: host paths name nothing in it', async () => {

@@ -44,7 +44,7 @@ graph TB
     end
 
     Orch["orchestrator<br/>the workspace's default agent"] --> WS
-    Subs["subordinates · heads · swarm nodes · MCTS branches<br/>logical actors hosted on the ONE workspace SQLite (core/src/state/actor-host.ts)<br/>shared workspace file plane, actor-scoped rows + shell + scaffold"] -.->|assigned-work reports · findings merge back| Orch
+    Subs["subordinates · heads · swarm nodes<br/>logical actors hosted on the ONE workspace SQLite (core/src/state/actor-host.ts)<br/>shared workspace file plane, actor-scoped rows + shell + scaffold"] -.->|assigned-work reports · findings merge back| Orch
     Peers["peers<br/>the owner's other workspaces"] -.->|peer transport| Orch
 ```
 
@@ -73,7 +73,7 @@ graph TB
     A["Agent&lt;Env&gt;: agents SDK"]
     AA["ActorAgent (abstract)<br/>cf-backend/src/actor-agent.ts<br/>runtime · BackendHost · AgentOrchestrator<br/>ExtensionHost · ChatSession ports"]
     O["OrchestratorAgent<br/>agents: swarm · hire · msg · list · dismiss<br/>codemode: release · agent"]
-    H["Hosted actors (no class)<br/>subordinate · task hire · head · node · branch<br/>logical rows in workspace_actors, one ActorHost"]
+    H["Hosted actors (no class)<br/>subordinate · task hire · head · node<br/>logical rows in workspace_actors, one ActorHost"]
     OMS["OwnedModelServices<br/>owner-scoped provider · model<br/>affinity · web search"]
 
     A --> AA
@@ -108,7 +108,7 @@ not a native tool: it is an orchestrator-only codemode provider, left out of the
 Plan-mode set. `submit_plan` exists only on an owner turn in Plan mode.
 
 Non-root actors are logical rows, not classes. A durable hire, a
-`lifetime:'task'` hire, a branching head, a swarm node, and an MCTS branch are
+`lifetime:'task'` hire, a branching head and a swarm node are
 rows in `workspace_actors`. The workspace's one `ActorHost` acquires each as a
 `HostedActor` with its own runtime objects (session, stores, queue, abort,
 roles, loop pointer) under the root's lifecycle. A subordinate runs delegated
@@ -118,9 +118,7 @@ plus the `report` lane that settles the `agents.hire` that gave it the work. It
 gets no peer transport, so it cannot leave its subtree. A head runs the same
 runner with the head tool surface (`record_evidence`, `record_decision`, and
 `split_subheads` while depth remains). A swarm node runs a `NodeRunSpec` through
-the same runner. An MCTS branch makes one bare model call per
-`explore`/`generateReflection` through the seat's profile route, with no tools.
-There is no second object and no second database. Hosting buys lifecycle
+the same runner. There is no second object and no second database. Hosting buys lifecycle
 (acquire, fence, retire), not a second storage boundary. Heads and swarm nodes
 share the workspace files, processes, and ports. No seed RPC crosses an object
 boundary: registration is a directory write, and acquisition binds stores.
@@ -129,12 +127,12 @@ exhausted).
 
 Actor addresses keep the two families apart inside one roster
 (`packages/core/src/identity/actor-key.ts`). A subordinate's storage key is its
-roster slug. A head, swarm node, or branch registers under an `exp:`-prefixed
+roster slug. A head or swarm node registers under an `exp:`-prefixed
 key (`explorationActorKey`), which a slug cannot carry, so a hire and a
 generated worker id never collide. Journals and handles keep the plain id.
 
 No actor owns a database. Every logical actor of a workspace (the orchestrator,
-its hires, its heads, its swarm nodes, and its MCTS branches) is bound by one
+its hires, its heads and its swarm nodes) is bound by one
 `ActorHost` (`packages/core/src/state/actor-host.ts`) over the workspace
 object's own SQLite. `actor_id` leads the primary key of every table that holds
 an actor's state, so a SQL-only snapshot of the workspace object is the
@@ -422,7 +420,7 @@ Neither kind attests who is calling; a sibling DO sharing `env` can derive the
 owner capability too. What the boundary buys: the tool surface, which an
 injected prompt can steer, reaches the UserDO only through code presenting a
 workspace token, so a forgotten tool check still leaves the call attenuated.
-Logical actors (subordinates, heads, MCTS branches) present their parent's
+Logical actors (subordinates, heads, swarm nodes) present their parent's
 token and hold no identity of their own. Enforcement lives where the secrets
 are.
 
@@ -440,15 +438,14 @@ The other three belong to the `EvolutionEngine`
   the CraftStore.
 - Session level: `onSessionReflection()` consolidates patterns and can call
   `maybeEvolveScaffold()` to propose a new `agent.js`.
-- Lifetime: `onLifetimeEvolution()` runs replay eval, craft consolidation, and
-  a full `runMCTS()`.
+- Lifetime: `onLifetimeEvolution()` runs craft consolidation.
 
 Hosted actors tick the step clock only: they record no turn into the evolution
 window.
 
-MCTS branch rewards are execution-grounded on both backends. One scorer
+Swarm node rewards are execution-grounded on both backends. One scorer
 (`packages/core/src/mcts/evaluation.ts`) lets the execution outcome dominate the
-judge for hosted branches and CLI child-process branches alike. Checks run
+judge. Checks run
 before a scaffold mutation takes effect: the misevolution gate
 (`safety/misevolution.ts`) rejects harmful edits by fixed criteria, the
 shadow veto (`scaffold/shadow.ts`, `maxRegressions: 1`, `minDecisiveTrials: 5`,
@@ -457,20 +454,20 @@ Monte-Carlo-derived) rejects regressions, and the DGM-style archive
 re-branching by clade-metaproductivity (what a lineage went on to produce).
 Every self-modification surfaces as a human-readable card through the evolution
 changelog (`evolution/changelog.ts`). See [EVOLUTION.md](./EVOLUTION.md) and
-[MCTS.md](./MCTS.md).
+[EXPLORATION.md](./EXPLORATION.md).
 
 ## Package structure
 
 ```mermaid
 graph TB
     subgraph pkgs["packages/"]
-        Core["core/<br/>ChatSession + runChat + ExtensionHost, workspace filesystem,<br/>ExecutionRouter, swarm engine, MCTS, EvolutionEngine,<br/>CraftStore, scaffold, eight builtin tools, EventLog"]
+        Core["core/<br/>ChatSession + runChat + ExtensionHost, workspace filesystem,<br/>ExecutionRouter, swarm engine, EvolutionEngine,<br/>CraftStore, scaffold, eight builtin tools, EventLog"]
         CF["cf-backend/<br/>ActorAgent → OrchestratorAgent (one DO class),<br/>hosted actors over one SQLite, UserDO, React UI"]
         Utils["agent-utils/<br/>stores, VFS types"]
         AC["agent-core/<br/>vendored runtime (dist); slate record types"]
         Compact["compaction/<br/>@better-compact/core ladder + Kinu codec"]
         Devbox["devbox/<br/>@kinu.run/devbox: an ephemeral container<br/>presented as a machine that stays<br/>(snapshot-chain · supervision · ports)"]
-        CLI["cli/<br/>kinu create/chat/exec/evolve/…"]
+        CLI["cli/<br/>kinu create/chat/exec/…"]
         CLIB["cli-backend/<br/>LocalAgentSession, bun:sqlite,<br/>subprocess sandbox, child_process branches"]
         PC["pc-agent/<br/>reverse-WS device daemon → device.*"]
         TU["test-utils/<br/>shared test fakes + fixtures"]
@@ -517,7 +514,6 @@ local process. Both drive the same core `ChatSession`.
 | Executor | codemode over the Worker Loader (`KinuSandboxExecutor`) | Bun subprocess sandbox, in-process fallback |
 | LLM | Workers AI binding or AI Gateway | AI Gateway via AI SDK |
 | Swarm nodes | Hosted `node` actors acquired from the one `ActorHost`, seated per run | `LocalAgentSession` node runtime with a credentialed home when the local VFS supports principals |
-| MCTS branches | Hosted `branch` actors: one model call per `explore`/`generateReflection` | `child_process.fork` (`packages/cli-backend/src/branch-process.ts`) |
 | Subordinates | Hosted `subordinate` actors (`host.acquire` + `host.run`, report lane) | `LocalAgentSession` per agent, held by `LocalAgentHost` |
 
 The full contract and the three extension points (`ModelProvider`,
@@ -582,7 +578,7 @@ Reasoning effort is set by the user. `/effort` in chat or
 option: `reasoningEffort` for Workers AI, OpenAI-shaped providers, and
 OpenRouter, and `effort` for Anthropic (levels Anthropic does not take are not
 sent). Internal stages take theirs from `REASONING_EFFORT_FOR_STAGE`, sized to
-the work: reflection and MCTS rollouts take `low`, and scaffold mutation takes
+the work: reflection and memory compression take `low`, and scaffold mutation takes
 `high`.
 
 ## Storage and formal models
@@ -594,7 +590,7 @@ settings, a Drive save of `SOUL.md`). Prompts read the row; the file is a kernel
 444 view, compared and resealed from the row at every boot and turn start, so a
 file the main agent swaps (it owns the root) never reaches a prompt. It enters the
 prompt as one `<soul>` block no text inside can close. The actor SQLite owns relational
-state: plans, messages, memory and craft indexes, MCTS, search records,
+state: plans, messages, memory and craft indexes, swarm search records,
 evolution, and event logs. Schema and boundaries are in
 [STORAGE.md](./STORAGE.md). The vendored filesystem is in
 [NIMBUS-INTEGRATION.md](./NIMBUS-INTEGRATION.md).

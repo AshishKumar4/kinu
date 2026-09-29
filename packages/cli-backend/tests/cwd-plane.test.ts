@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import { basename, dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import * as v from 'valibot';
-import type { AgentRuntime, LLMProviderConfig, WriteEvent, WriteObserver } from '@kinu.run/core';
+import type { AgentRuntime, DeferredApprovalChannel, LLMProviderConfig, ShellApprovalOutcome, WriteEvent, WriteObserver } from '@kinu.run/core';
 import {
   buildBuiltinTools, discoverSkills, initWorkspaceSchema, isVfsError, reviewCommand, SLATES_ROOT, WORKSPACE_ROOT, subordinateAgentName,
 } from '@kinu.run/core';
@@ -17,14 +17,13 @@ import {
   type CLIRuntime,
 } from '../src/runtime';
 import { createHeadRuntime } from './actor-fixture';
-import { registerLocalActor } from '../src/actor-identity';
+import { registerLocalActor } from '@kinu.run/core';
 import { openWorkspaceCLI } from '../src/open';
-import { BRANCH_CREDENTIAL_ENV } from '../src/branch-process';
 import { PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV } from '../src/model-resolver';
 
 /** Every name the harness reads a credential from, as the declaring modules name them. */
 const HARNESS_CREDENTIAL_NAMES: readonly string[] = [
-  ...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV, ...BRANCH_CREDENTIAL_ENV,
+  ...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV,
 ];
 
 const DevicePlanSchema = v.object({ env: v.record(v.string(), v.string()) });
@@ -50,7 +49,7 @@ function agentRuntime(state: string, name: string, cwd?: string): LocalAgent {
   mkdirSync(dirname(dbPath), { recursive: true });
 
   const config: Parameters<typeof createCLIRuntime>[1] = {
-    dbPath, llm: DUMMY_LLM, agentName: name,
+    llm: DUMMY_LLM, agentName: name,
   };
 
   if (cwd !== undefined) config.cwd = cwd;
@@ -136,11 +135,11 @@ describe('peers over one directory', () => {
   test('a subordinate writes into the shared directory and keeps its own actor-scoped stores', async () => {
     const { state, project } = roots('cwd-plane-subordinate');
     const parent = agentRuntime(state, 'parent', project);
-    const binding = registerLocalActor(parent.actor, { name: 'child', creationId: 'child-birth', kind: 'subordinate', lifetime: 'durable' });
+    const binding = registerLocalActor(parent.actor, { name: 'child', creationId: 'child-birth', origin: 'agent', lifetime: 'durable' });
     const physicalName = subordinateAgentName(binding.storageKey);
 
     const child = await shareLocalWorkspacePlane(
-      createCLIRuntime(parent.db, { dbPath: parent.dbPath, llm: null, cwd: project, facet: physicalName, actorBinding: binding }),
+      createCLIRuntime(parent.db, { llm: null, cwd: project, facet: physicalName, actorBinding: binding }),
       parent, physicalName,
     );
 
@@ -228,7 +227,7 @@ describe('addressing the bound directory', () => {
     expect(existsSync(join(project, '..', 'outside.txt'))).toBe(false);
   });
 
-  test('a path that leaves the directory is refused, and writes nothing', async () => {
+  test('a path that climbs out by `..`, relative or through the plane\'s own root, is refused, and writes nothing', async () => {
     const { state, project } = roots('cwd-plane-escape');
     const outside = join(project, '..', 'outside.txt');
     const rt = agentRuntime(state, 'solo', project);
@@ -237,13 +236,108 @@ describe('addressing the bound directory', () => {
     expect(await refusalOf(() => rt.storage.vfs.writeFile('/workspace/../outside.txt', 'escaped'))).toBe('EACCES');
     expect(await refusalOf(() => rt.storage.vfs.writeFile('../outside.txt', 'escaped'))).toBe('EACCES');
     expect(await refusalOf(() => rt.storage.vfs.writeFile(`${WORKSPACE_ROOT}/../outside.txt`, 'escaped'))).toBe('EACCES');
-    expect(await refusalOf(() => rt.storage.vfs.readFile('/etc/hostname'))).toBe('EACCES');
     expect(await refusalOf(() => rt.storage.vfs.mkdir('/workspace/../sneaky', { recursive: true }))).toBe('EACCES');
 
     expect(existsSync(outside)).toBe(false);
     expect(existsSync(join(project, '..', 'sneaky'))).toBe(false);
-    expect(await refusalOf(() => rt.storage.vfs.exists('/etc/hostname'))).toBe('EACCES');
-    expect(await refusalOf(() => rt.storage.vfs.stat('/etc/hostname'))).toBe('EACCES');
+  });
+
+  /** The agent's `file` tool and codemode's `workspace.writeFile`, with a user who answers `answer`. */
+  function agentTools(rt: CLIRuntime, answer: () => ShellApprovalOutcome | null) {
+    const asked: string[] = [];
+
+    rt.setShellApprovalChannel?.(async (request) => {
+      asked.push(request.command);
+
+      return answer();
+    });
+
+    const file = toolExecute(present(buildBuiltinTools({ rt, workMode: 'build', history: rt.stores.history }).file, 'the file tool'));
+    const writeFile = present(rt.executionRouter?.getProvider('workspace'), 'the workspace executor').tools.writeFile;
+
+    return { file, writeFile: (path: string, content: string) => present(writeFile, 'workspace.writeFile').execute(path, content), asked };
+  }
+
+  test('the agent reads outside the directory unasked; its change there waits for the user, and runs once allowed', async () => {
+    const { state, project } = roots('cwd-plane-outside');
+    const beside = dirname(project);
+    const notes = join(beside, 'notes.txt');
+    writeFileSync(notes, 'beside the project\n');
+    const rt = agentRuntime(state, 'solo', project);
+    let answer: ShellApprovalOutcome = 'deny';
+    const { file, writeFile, asked } = agentTools(rt, () => answer);
+
+    expect(await file({ action: 'read', path: notes })).toEqual(expect.stringContaining('beside the project'));
+    expect(asked).toEqual([]);
+
+    const created = join(beside, 'created.txt');
+    await expect(file({ action: 'write', path: created, content: 'unasked' })).rejects.toMatchObject({ code: 'denied' });
+    expect(await writeFile(join(beside, 'codemode.txt'), 'unasked')).toMatchObject({ error: expect.stringContaining('write-outside-directory') });
+    // A new directory outside is itself a change; the one a write lands in already exists.
+    await expect(file({ action: 'write', path: join(beside, 'fresh', 'a.txt'), content: 'unasked' })).rejects.toMatchObject({ code: 'denied' });
+    expect(asked).toEqual([`file write ${created}`, `file write ${join(beside, 'codemode.txt')}`, `file mkdir ${join(beside, 'fresh')}`]);
+    expect([existsSync(created), existsSync(join(beside, 'codemode.txt')), existsSync(join(beside, 'fresh'))]).toEqual([false, false, false]);
+
+    answer = 'allow';
+    expect(await file({ action: 'write', path: created, content: 'approved' })).toMatchObject({ ok: true });
+    expect(readFileSync(created, 'utf8')).toBe('approved');
+    expect(await file({ action: 'write', path: join(project, 'inside.txt'), content: 'own' })).toMatchObject({ ok: true });
+    expect(asked).toHaveLength(4);
+  });
+
+  test('with nobody to ask, the agent\'s change outside the directory is refused, never parked, while a shell command parks', async () => {
+    const { state, project } = roots('cwd-plane-outside-unattended');
+    const created = join(dirname(project), 'created.txt');
+    const rt = agentRuntime(state, 'solo', project);
+    const { file } = agentTools(rt, () => null);
+    const parked: string[] = [];
+
+    const deferrals: DeferredApprovalChannel = {
+      park: async (request) => {
+        parked.push(request.command);
+
+        return { run: false, reason: 'unavailable', message: `NOT RUN — queued: ${request.command}` };
+      },
+      settle: async () => {},
+    };
+
+    rt.setApprovalDeferrals?.(deferrals);
+
+    await expect(file({ action: 'write', path: created, content: 'unattended' })).rejects.toMatchObject({ code: 'unavailable' });
+    expect((await present(rt.shell, 'the placed shell').exec('rm -rf build')).stderr).toContain('NOT RUN — queued');
+
+    expect(parked).toEqual(['rm -rf build']);
+    expect(existsSync(created)).toBe(false);
+  });
+
+  test('a standing deny_all refuses the agent\'s change there, and nobody is asked', async () => {
+    const { state, project } = roots('cwd-plane-outside-deny');
+    const notes = join(dirname(project), 'notes.txt');
+    writeFileSync(notes, 'kept\n');
+    const rt = agentRuntime(state, `outside-deny-${basename(dirname(state))}`, project);
+    rt.actor.config.setShellApprovalMode('deny_all');
+    const { file, asked } = agentTools(rt, () => 'allow');
+
+    await file({ action: 'read', path: notes });
+    await expect(file({ action: 'write', path: notes, content: 'replaced' })).rejects.toMatchObject({ code: 'denied' });
+    expect(asked).toEqual([]);
+    expect(readFileSync(notes, 'utf8')).toBe('kept\n');
+  });
+
+  test('a file that looks like a secret is read under the shell\'s rule for `cat`', async () => {
+    const { state, project } = roots('cwd-plane-secret-read');
+    writeFileSync(join(project, '.env'), 'TOKEN=planted\n');
+    writeFileSync(join(project, 'README.md'), '# the project\n');
+    const rt = agentRuntime(state, 'solo', project);
+    const { file } = agentTools(rt, () => null);
+    rt.actor.config.setShellApprovalMode('deny_all');
+
+    expect((await present(rt.shell, 'the placed shell').exec('cat .env')).exitCode).not.toBe(0);
+    await expect(file({ action: 'read', path: '.env' })).rejects.toMatchObject({ code: 'denied' });
+    expect(await file({ action: 'read', path: 'README.md' })).toEqual(expect.stringContaining('# the project'));
+
+    rt.actor.config.setShellApprovalMode('strict');
+    expect(await file({ action: 'read', path: '.env' })).toEqual(expect.stringContaining('TOKEN=planted'));
   });
 
   test('a directory whose own name contains dots is not mistaken for an escape', async () => {
@@ -377,7 +471,6 @@ describe('the shell over the bound directory', () => {
   test('what a command may have changed is snapshotted, and the snapshot names that directory', async () => {
     const { state, project } = roots('cwd-plane-checkpoints');
     writeFileSync(join(project, 'before.txt'), 'the state to restore\n');
-    // Checkpoint storage is global per agent name; a stable name would read stores from prior runs.
     const rt = agentRuntime(state, `checkpointer-${basename(dirname(state))}`, project);
     rt.actor.config.setShellApprovalMode('allow_all');
     const checkpoints = rt.checkpoints;
@@ -436,6 +529,29 @@ describe('what an opened workspace puts where', () => {
     expect(await agentState.exists('SOUL.md')).toBe(true);
     expect(await agentState.exists('memory/MEMORY.md')).toBe(true);
     expect(await agentState.exists('scaffold/agent.js')).toBe(true);
+  });
+});
+
+describe('the agent\'s own state in a placed workspace', () => {
+  test('memory, SOUL.md and the scaffold read at /agent, and nothing writes through it', async () => {
+    const { state, project } = roots('cwd-plane-agent-view');
+    const { rt } = await openedWorkspace(state, 'jarvis', project);
+    await rt.memory.append('memory/MEMORY.md', '\nlearned something\n');
+    await rt.identity.scaffold.write('// evolved\n');
+    const soul = String(await present(rt.agentStateVfs, 'the agent state plane').readFile('SOUL.md', { encoding: 'utf8' }));
+
+    expect([...await rt.storage.vfs.readdir('/agent')].sort()).toEqual(['SOUL.md', 'memory', 'scaffold']);
+    expect(await readText(rt, '/agent/SOUL.md')).toBe(soul);
+    expect(await readText(rt, '/agent/memory/MEMORY.md')).toContain('learned something');
+    expect(await readText(rt, '/agent/scaffold/agent.js')).toBe('// evolved\n');
+    expect(await rt.storage.vfs.exists('/agent/workspace.db')).toBe(false);
+
+    expect(await refusalOf(() => rt.storage.vfs.writeFile('/agent/memory/MEMORY.md', 'forged'))).toBe('EROFS');
+    expect(await refusalOf(() => rt.storage.vfs.writeFile('/agent/SOUL.md', 'forged'))).toBe('EROFS');
+    expect(await refusalOf(() => rt.storage.vfs.unlink('/agent/scaffold/agent.js'))).toBe('EROFS');
+    expect(await refusalOf(() => rt.storage.vfs.mkdir('/agent/memory/more', { recursive: true }))).toBe('EROFS');
+    expect(await readText(rt, '/agent/SOUL.md')).toBe(soul);
+    expect(readdirSync(project)).toEqual([]);
   });
 });
 

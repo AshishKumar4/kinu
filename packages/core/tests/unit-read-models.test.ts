@@ -1,6 +1,7 @@
 /** Read models through public entry points over real storage, asserting the shapes surfaces
  *  consume. */
 
+import * as v from 'valibot';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { jsonSchema, tool, type ToolSet } from 'ai';
@@ -18,16 +19,14 @@ import { RunEventRecorder, initRunEventTables } from '../src/events/recorder';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { getRunTimeline } from '../src/read-models/timeline';
 import { getRunEvents, getRunSummaries, listRuns } from '../src/read-models/runs';
-import { getAgentStatus, getChatHistoryPage, getToolList } from '../src/read-models/status';
+import { getAgentStatus, getChatHistoryPage, getToolList, type ChatHistoryPage } from '../src/read-models/status';
 import { SessionHistory } from '../src/session/history';
 import { readSessionTranscript, type SessionTranscriptReader } from '../src/session/transcript';
 import { PLATFORM_CATALOG } from '../src/platform-catalog';
-import type { ChatHistoryEntry } from '../src/types/chat';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
-import { StaleCursorError, type Page, type SeekCursor } from '../src/session/page';
-import {
-  getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
-} from '../src/read-models/workspace-diff';
+import { PositionPageRequestSchema, type PositionCursor } from '../src/session/page';
+import { getWorkspaceDiff, resetWorkspaceBaseline } from '../src/read-models/workspace-diff';
+import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { getExecutorFiles, readExecutorFile, writeExecutorFileOp } from '../src/read-models/files';
 import type { SqlExecutor, VFS } from '../src/types/primitives';
 import {
@@ -35,7 +34,7 @@ import {
   listBackgroundJobs, retryBackgroundJob, type BackgroundJobControl,
 } from '../src/read-models/background-jobs';
 import {
-  getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getShellApprovalMode,
+  getAlwaysActiveSkills, getEvolutionConfig, getShellApprovalMode,
   setAlwaysActiveSkills, setEvolutionConfig, setModel, setReasoningEffort, setShellApprovalMode,
 } from '../src/read-models/config-plane';
 import { getEvolutionChangelog, markChangelogSeen } from '../src/read-models/evolution-views';
@@ -64,29 +63,26 @@ function transcriptOf(n: number): SeedRow[] {
 function chatStore(w: { db: Database; sql: SqlExecutor; actor: ActorHandle; vfs: VFS }) {
   const history = new SessionHistory({
     sql: w.sql, actor: w.actor, transactionSync: (write) => w.db.transaction(write)(),
-    files: async () => ({ vfs: w.vfs, artifactDirectory: '/actor/.kinu/context' }),
+    files: async () => ({ vfs: w.vfs, artifactDirectory: '/home/main/.kinu/context' }),
   });
 
   return { history, transcript: history.transcript(CHAT_SESSION_ID) };
 }
 
-/** Each entry is the child of the one before it, as a real turn writes. */
-async function seedTranscript(history: SessionHistory, rows: readonly SeedRow[], after: string | null = null): Promise<void> {
-  let parentId = after;
-
+/** Appended in order, as a real turn writes. */
+async function seedTranscript(history: SessionHistory, rows: readonly SeedRow[]): Promise<void> {
   for (const row of rows) {
     await history.record(CHAT_SESSION_ID, {
-      id: row.id, parentId, message: { role: row.role, content: row.content },
+      id: row.id, message: { role: row.role, content: row.content },
       origin: row.role === 'user' ? 'input' : 'output',
     });
-    parentId = row.id;
   }
 }
 
 /** Every page, oldest first: the only way to observe pages join without overlap. */
 async function walkTranscript(transcript: SessionTranscriptReader, limit: number): Promise<string[]> {
   const ids: string[] = [];
-  let cursor: SeekCursor | undefined;
+  let cursor: PositionCursor | undefined;
 
   for (;;) {
     const page = await getChatHistoryPage(transcript, { limit, cursor });
@@ -226,7 +222,7 @@ describe('run timeline', () => {
 
     const spans = getRunTimeline({ sql, actor, events, jobs, currentRunId: 'r1' });
 
-    expect(spans.map((s) => s.source)).toEqual(['shell', 'evolution', 'mcts', 'background']);
+    expect(spans.map((s) => s.source)).toEqual(['shell', 'evolution', 'swarm', 'background']);
     expect(spans.map((s) => s.ts)).toEqual([...spans].sort((a, b) => a.ts - b.ts).map((s) => s.ts));
     // text_delta is the stream's own noise — never a span.
     expect(spans.some((s) => s.rawType === 'text_delta')).toBe(false);
@@ -314,22 +310,20 @@ describe('agent status', () => {
     const w = workspace();
     const { history, transcript } = chatStore(w);
     await history.record(CHAT_SESSION_ID, {
-      id: 'a', parentId: null, origin: 'input',
+      id: 'a', origin: 'input',
       message: { role: 'user', content: [{ type: 'text', text: 'hel' }, { type: 'text', text: 'lo' }] },
     });
     await history.record(CHAT_SESSION_ID, {
-      id: 'b', parentId: 'a', origin: 'output',
+      id: 'b', origin: 'output',
       message: { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'probe', output: { type: 'text', value: 'not a chat role' } }] },
     });
 
     const recorded = transcript.read('a');
 
     if (recorded === null) throw new Error('the seeded user entry must be in the transcript');
-    // The tool row is walked but not shown: a reader sizing unread history counts both.
     expect(await getChatHistoryPage(transcript)).toEqual({
       status: 'end',
-      items: [{ id: 'a', role: 'user', content: 'hello', createdAt: recorded.recordedAt }],
-      walked: 2,
+      items: [{ id: 'a', position: 0, role: 'user', content: 'hello', createdAt: recorded.recordedAt }],
     });
     w.db.close();
   });
@@ -353,33 +347,38 @@ describe('agent status', () => {
 
     if (recorded === null) throw new Error('the harness notice must be in the transcript');
     expect((await getChatHistoryPage(transcript)).items).toEqual([{
-      id, role: 'system',
+      id, position: 0, role: 'system',
       content: '9 head(s) across 1 fork run(s)…', createdAt: recorded.recordedAt,
       metadata: { kinuEvent: 'fork_interrupted', heads: 9 },
     }]);
     w.db.close();
   });
 
-  // 2026-09-26: a chat reserves the height of what it has not read, sized from the stored count; a page says how
-  // many entries it spanned, tool rows included, and never counts the row it only peeked to know there is more.
-  test('a page reports the entries it spanned, up to its oldest shown row', async () => {
+  // Owner 2026-09-28: a scrollbar drag lands on any position and reads it in one round trip, and the rows above
+  // the oldest one read are exactly its position.
+  test('a page carries each entry\'s position, and a cursor naming a position reads that stretch directly', async () => {
     const w = workspace();
     const { history, transcript } = chatStore(w);
-    const toolRow = { role: 'tool' as const, content: [{ type: 'tool-result' as const, toolCallId: 'c', toolName: 'probe', output: { type: 'text' as const, value: 'x' } }] };
+    await seedTranscript(history, transcriptOf(10));
 
-    await history.record(CHAT_SESSION_ID, { id: 'u1', parentId: null, origin: 'input', message: { role: 'user', content: 'one' } });
-    await history.record(CHAT_SESSION_ID, { id: 't1', parentId: 'u1', origin: 'output', message: toolRow });
-    await history.record(CHAT_SESSION_ID, { id: 'a1', parentId: 't1', origin: 'output', message: { role: 'assistant', content: 'two' } });
-    await history.record(CHAT_SESSION_ID, { id: 't2', parentId: 'a1', origin: 'output', message: toolRow });
-    await history.record(CHAT_SESSION_ID, { id: 'u2', parentId: 't2', origin: 'input', message: { role: 'user', content: 'three' } });
+    const newest = await getChatHistoryPage(transcript, { limit: 3 });
 
-    // Newest first: u2, t2, a1 (the page's two rows), then the peeked t1, u1.
-    const page = await getChatHistoryPage(transcript, { limit: 2 });
+    expect(newest).toMatchObject({ status: 'more', next: { before: 7 } });
+    expect(newest.items.map((m) => [m.id, m.position])).toEqual([['m8', 7], ['m9', 8], ['m10', 9]]);
 
-    expect(page).toMatchObject({ status: 'more', walked: 3 });
-    expect(page.items.map((entry) => entry.id)).toEqual(['a1', 'u2']);
-    expect(await getChatHistoryPage(transcript, { limit: 9 })).toMatchObject({ status: 'end', walked: 5 });
+    const top = await getChatHistoryPage(transcript, { limit: 3, cursor: { before: 3 } });
+
+    expect(top.status).toBe('end');
+    expect(top.items.map((m) => [m.id, m.position])).toEqual([['m1', 0], ['m2', 1], ['m3', 2]]);
+    expect((await getChatHistoryPage(transcript, { limit: 2, cursor: { before: 6 } })).items.map((m) => m.position)).toEqual([4, 5]);
     w.db.close();
+  });
+
+  // 2026-09-28: cursors became positions; an id cursor dropped silently would re-read the newest page forever.
+  test('a page request naming an id cursor is refused, not read as no cursor', () => {
+    expect(v.safeParse(PositionPageRequestSchema, { limit: 2, cursor: { after: 'm3' } }).success).toBe(false);
+    expect(v.safeParse(PositionPageRequestSchema, { limit: 2, after: 'm3' }).success).toBe(false);
+    expect(v.parse(PositionPageRequestSchema, { limit: 2, cursor: { before: 3 } })).toEqual({ limit: 2, cursor: { before: 3 } });
   });
 
   /** A bare `LIMIT` cannot tell truncated from complete; an exactly-consumed page is the case the
@@ -390,7 +389,7 @@ describe('agent status', () => {
     await seedTranscript(history, transcriptOf(4));
 
     expect((await getChatHistoryPage(transcript, { limit: 9 })).status).toBe('end');
-    expect(await getChatHistoryPage(transcript, { limit: 2 })).toMatchObject({ status: 'more', next: { after: 'm3' } });
+    expect(await getChatHistoryPage(transcript, { limit: 2 })).toMatchObject({ status: 'more', next: { before: 2 } });
     expect((await getChatHistoryPage(transcript, { limit: 4 })).status).toBe('end');
     w.db.close();
   });
@@ -408,7 +407,7 @@ describe('agent status', () => {
     if (first.status !== 'more') throw new Error('unreachable');
     expect(first.items.map((m) => m.id)).toEqual(['m7', 'm8', 'm9', 'm10']);
 
-    await seedTranscript(history, [{ id: 'm11', role: 'assistant', content: 'live arrival' }], 'm10');
+    await seedTranscript(history, [{ id: 'm11', role: 'assistant', content: 'live arrival' }]);
 
     const second = await getChatHistoryPage(transcript, { limit: 4, cursor: first.next });
     expect(second.items.map((m) => m.id)).toEqual(['m3', 'm4', 'm5', 'm6']);
@@ -434,19 +433,6 @@ describe('agent status', () => {
     w.db.close();
   });
 
-  /** A cursor whose anchor is gone must not answer "no rows", the exhaustion answer. */
-  test('a cursor whose anchor has vanished is refused, not reported as exhausted', async () => {
-    const w = workspace();
-    const { history, transcript } = chatStore(w);
-    await seedTranscript(history, transcriptOf(3));
-
-    await expect(getChatHistoryPage(transcript, { cursor: { after: 'never-existed' } }))
-      .rejects.toThrow(StaleCursorError);
-    await expect(getChatHistoryPage(transcript, { cursor: { after: 'never-existed' } }))
-      .rejects.toThrow(/no longer in it/);
-    w.db.close();
-  });
-
   /** A dismissed actor's pane has no file plane: spilled entries say unavailable, the page reads whole. */
   test('a reader with no file plane pages a spilled entry as unavailable, in its place', async () => {
     const w = workspace();
@@ -459,7 +445,7 @@ describe('agent status', () => {
       { id: 'm3', role: 'user', content: 'after' },
     ]);
 
-    const shown = (page: Page<ChatHistoryEntry>) =>
+    const shown = (page: ChatHistoryPage) =>
       page.items.map(({ id, content, unavailable }) => ({ id, content: content.length, unavailable }));
 
     expect(shown(await getChatHistoryPage(transcript))).toEqual([
@@ -498,21 +484,23 @@ describe('agent status', () => {
 
 describe('workspace change-set', () => {
   test('work completed before the first read remains visible against the birth baseline', async () => {
-    const { rt, db } = createTestRuntime();
-    initWorkspaceBaselineTable(rt.storage.execRaw);
-    await resetWorkspaceBaseline(rt);
+    const { rt, db, workspace: bundle } = createTestRuntime();
+    // The runtime writes its scaffold on its first file call, before the birth review.
+    await rt.storage.vfs.exists('scaffold/agent.js');
+    const baselines = { store: (await bundle.session()).vfs, cred: CRED_SESSION_USER };
+    await resetWorkspaceBaseline(rt, baselines);
     await rt.storage.vfs.writeFile('notes.md', 'one\n');
 
-    const first = await getWorkspaceDiff(rt);
+    const first = await getWorkspaceDiff(rt, baselines);
     expect(first.files.map((f) => [f.path, f.status, f.added])).toEqual([['notes.md', 'added', 2]]);
 
-    expect(await resetWorkspaceBaseline(rt)).toMatchObject({ ok: true });
+    expect(await resetWorkspaceBaseline(rt, baselines)).toMatchObject({ ok: true });
     await rt.storage.vfs.writeFile('notes.md', 'one\ntwo\n');
-    const after = await getWorkspaceDiff(rt);
+    const after = await getWorkspaceDiff(rt, baselines);
     expect(after.files.map((f) => [f.path, f.status, f.added])).toEqual([['notes.md', 'changed', 1]]);
 
-    expect(await resetWorkspaceBaseline(rt)).toMatchObject({ ok: true });
-    expect((await getWorkspaceDiff(rt)).files).toEqual([]);
+    expect(await resetWorkspaceBaseline(rt, baselines)).toMatchObject({ ok: true });
+    expect((await getWorkspaceDiff(rt, baselines)).files).toEqual([]);
     db.close();
   });
 });
@@ -529,10 +517,10 @@ describe('executor file plane', () => {
 
   test('workspace listings are typed, sized and directories-first', async () => {
     const { rt, db } = createTestRuntime();
-    await rt.storage.vfs.mkdir('/proj/sub', { recursive: true });
-    await rt.storage.vfs.writeFile('/proj/a.txt', 'aa');
+    await rt.storage.vfs.mkdir('/home/main/proj/sub', { recursive: true });
+    await rt.storage.vfs.writeFile('/home/main/proj/a.txt', 'aa');
 
-    const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/proj');
+    const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/home/main/proj');
     expect(listed.entries?.map((e) => [e.name, e.type])).toEqual([['sub', 'dir'], ['a.txt', 'file']]);
     expect(listed.entries?.find((e) => e.name === 'a.txt')?.size).toBe(2);
     db.close();
@@ -550,11 +538,11 @@ describe('executor file plane', () => {
 
   test('the directories the platform manages are not listed beside the work', async () => {
     const { rt, db } = createTestRuntime();
-    await rt.storage.vfs.mkdir('/proj/.nimbus/runtimes', { recursive: true });
-    await rt.storage.vfs.mkdir('/proj/.kinu/tool-output', { recursive: true });
-    await rt.storage.vfs.writeFile('/proj/hello.py', 'print(42)\n');
+    await rt.storage.vfs.mkdir('/home/main/proj/.nimbus/runtimes', { recursive: true });
+    await rt.storage.vfs.mkdir('/home/main/proj/.kinu/tool-output', { recursive: true });
+    await rt.storage.vfs.writeFile('/home/main/proj/hello.py', 'print(42)\n');
 
-    const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/proj');
+    const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/home/main/proj');
     expect(listed.entries?.map((e) => e.name)).toEqual(['hello.py']);
     db.close();
   });
@@ -789,14 +777,6 @@ describe('config plane', () => {
     expect(setAlwaysActiveSkills(config, ['review', 'debugging'])).toEqual({ ok: true, names: ['review', 'debugging'] });
     expect(getAlwaysActiveSkills(config)).toEqual({ names: ['review', 'debugging'] });
     expect(setAlwaysActiveSkills(config, [])).toEqual({ ok: true, names: [] });
-    db.close();
-  });
-
-  test('the MCTS view is stored overrides over engine defaults', () => {
-    const { db, config } = workspace();
-    const defaults = getMctsConfig(config);
-    config.setMctsOverrides({ budget: 3 });
-    expect(getMctsConfig(config)).toEqual({ ...defaults, maxIterations: 3 });
     db.close();
   });
 

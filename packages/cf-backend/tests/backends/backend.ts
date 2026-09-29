@@ -84,6 +84,8 @@ export interface SharedBackend {
   /** Snapshot `dir` into the store this backend's checkpoint methods read, as a turn's first
    *  mutation there does: the owner's device for cf, this machine for the CLI. */
   readonly snapshot: (dir: string, turn: CheckpointTurnMeta) => Promise<void>;
+  /** Ends what opening the backend started, so no work it tracks outlives the case. */
+  readonly end?: () => Promise<void>;
 }
 
 /** The cf Durable Object, in process over bun:sqlite, owned by a real UserDO whose one device is the
@@ -192,7 +194,7 @@ function scriptedResolver(): LocalModelResolver {
 function cli(): SharedBackend {
   const db = new Database(scratchPath('shared-backend', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  const rt = createCLIRuntime(db, { dbPath: db.filename, llm: NO_ENDPOINT });
+  const rt = createCLIRuntime(db, { llm: NO_ENDPOINT });
   const checkpoints = createHostCheckpoints({ agent: WORKSPACE, base: scratchPath('shared-backend-checkpoints', 'store') });
   rt.checkpoints = checkpoints;
   const modelResolver = scriptedResolver();
@@ -203,6 +205,7 @@ function cli(): SharedBackend {
 
   return {
     name: 'cli',
+    end: () => session.end(),
     sql: rt.storage.sql,
     actor: rt.actor,
     files: rt.storage.vfs,

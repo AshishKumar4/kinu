@@ -1,4 +1,4 @@
-import { AnnotationPanel } from "@plannotator/ui/components/AnnotationPanel";
+import { AnnotationPanel } from "@/components/plan-review/AnnotationPanel";
 import { inNoteOrder, type ReviewAnnotation } from "@kinu.run/core";
 import { panelNote, placeLabel, useNotes } from "./notes";
 

@@ -1,12 +1,13 @@
 /**
- * The shell's `kernel.vfs.as(cred)` view implements `CredentialedVfs`'s type probes. Defends: `touch` on an
+ * The shell's `filesystem.namespaceFs(cred)` view implements `CredentialedVfs`'s type probes. Defends: `touch` on an
  * existing file died with `targetVfs.isDirectory is not a function` (unix-commands.ts:3123).
  */
 import { afterEach, describe, expect, test } from 'bun:test';
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import * as v from 'valibot';
+import { Database } from 'bun:sqlite';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
-import type { SqlDatabase, SqlRow, SqlValue, VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { CRED_KERNEL, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { inlineWorkspaceStorage } from '@kinu.run/core/identity';
+import { settleWorkspaceRoot } from '@kinu.run/core';
 
 const databases: Database[] = [];
 
@@ -20,42 +21,22 @@ const SESSION_USER: VfsCred = { uid: 1000, gid: 1000, groups: [1000], umask: 0o0
 
 const OTHER: VfsCred = { uid: 2001, gid: 2001, groups: [2001], umask: 0o022 };
 
-function sqlBinding(value: SqlValue): SQLQueryBindings {
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
-
-  if (ArrayBuffer.isView(value)) {
-    const bytes = new Uint8Array(value.byteLength);
-    const source = new DataView(value.buffer, value.byteOffset, value.byteLength);
-
-    for (let index = 0; index < bytes.length; index += 1) bytes[index] = source.getUint8(index);
-
-    return bytes;
-  }
-
-  return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
-}
-
 async function openWorkspace(): Promise<NimbusWorkspace> {
   const database = new Database(':memory:');
   databases.push(database);
 
-  const sql: SqlDatabase = {
-    exec(query: string, ...bindings: SqlValue[]) {
-      const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
-      const bound = bindings.map(sqlBinding);
+  const { sql, transactions } = inlineWorkspaceStorage(database);
 
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
-      statement.run(...bound);
-
-      return [];
-    },
-  };
-
-  return NimbusWorkspace.create({
+  const workspace = await NimbusWorkspace.create({
     sql,
-    transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
+    transactions,
     generation: 1,
   });
+
+  // As Kinu's boot leaves it: the workspace root, and its old name a link to it.
+  settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
+
+  return workspace;
 }
 
 describe('the shell filesystem view answers the type probes its callers make', () => {
@@ -67,7 +48,7 @@ describe('the shell filesystem view answers the type probes its callers make', (
 
     expect(result.stderr).not.toContain('isDirectory');
     expect(result.exitCode).toBe(0);
-    expect(await workspace.fs.readFile('/home/main/keepme.txt')).toBe('important bytes');
+    expect(await workspace.fs.readFileString('/home/main/keepme.txt')).toBe('important bytes');
   });
 
   test('touch under /tmp too — a mounted path resolves through a provider', async () => {
@@ -75,20 +56,20 @@ describe('the shell filesystem view answers the type probes its callers make', (
     await workspace.fs.writeFile('/tmp/keepme.txt', 'scratch bytes');
 
     expect(await workspace.exec('touch /tmp/keepme.txt')).toMatchObject({ exitCode: 0 });
-    expect(await workspace.fs.readFile('/tmp/keepme.txt')).toBe('scratch bytes');
+    expect(await workspace.fs.readFileString('/tmp/keepme.txt')).toBe('scratch bytes');
   });
 
   test('touch still creates a file that does not exist', async () => {
     const workspace = await openWorkspace();
 
     expect(await workspace.exec('touch /home/main/fresh.txt')).toMatchObject({ exitCode: 0 });
-    expect(await workspace.fs.readFile('/home/main/fresh.txt')).toBe('');
+    expect(await workspace.fs.readFileString('/home/main/fresh.txt')).toBe('');
   });
 
   test('the probes are mount-aware and answer false for what is absent', async () => {
     const workspace = await openWorkspace();
     await workspace.fs.writeFile('/home/main/f.txt', 'x');
-    const view = workspace.kernel.vfs.as(SESSION_USER);
+    const view = workspace.filesystem.namespaceFs(SESSION_USER);
 
     expect(view.isDirectory('/home/main')).toBe(true);
     expect(view.isFile('/home/main')).toBe(false);
@@ -108,10 +89,10 @@ describe('the shell filesystem view answers the type probes its callers make', (
     root.chmod('home/main/private', 0o700);
     root.writeFile('home/main/private/secret.txt', 'session bytes');
 
-    const stranger = workspace.kernel.vfs.as(OTHER);
+    const stranger = workspace.filesystem.namespaceFs(OTHER);
 
     // Traverse-x is missing for OTHER: EACCES, never a false a caller would read as a structural miss.
     expect(() => stranger.isFile('/home/main/private/secret.txt')).toThrow(/EACCES/);
-    expect(workspace.kernel.vfs.as(SESSION_USER).isFile('/home/main/private/secret.txt')).toBe(true);
+    expect(workspace.filesystem.namespaceFs(SESSION_USER).isFile('/home/main/private/secret.txt')).toBe(true);
   });
 });

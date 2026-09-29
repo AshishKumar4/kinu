@@ -1,8 +1,8 @@
 /** One delegated turn in the agent's isolate: its model loop here, every tool call back in the workspace. */
-import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessageChunk } from 'ai';
+import { jsonSchema, tool, type ToolSet, type UIMessageChunk } from 'ai';
 import {
   CHAT_SESSION_ID, HeadCapture, decodeJsonValue, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference,
-  type HeadInferenceDeps, type HeadReport, type JsonObject, type ObservedCall, type ProviderEnv, type WorkMode,
+  type AuthRequest, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type HeadReport, type JsonObject, type ObservedCall, type ProviderEnv, type WorkMode,
 } from '@kinu.run/core';
 import { attempt, diagnostics, renderCauseChain, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
@@ -16,13 +16,14 @@ export interface AgentWorkspace {
   stateSession(): NimbusSessionSurface;
   prepareTurn(turnId: string): Promise<PreparedAgentTurn>;
   profile(turnId: string, availableTools: readonly string[], workMode: WorkMode): Promise<AgentTurnProfile>;
-  advise(review: AgentReview): Promise<ModelMessage[]>;
+  advise(review: AgentReview): Promise<void>;
+  enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
   executeTool(call: AgentToolCall): Promise<AgentToolAnswer>;
   observe(lines: ReadableStream<Uint8Array>, call: ObservedCall): Promise<void>;
   answerMetadata(turnId: string, narration: readonly string[]): Promise<JsonObject | null>;
   finishTurn(turnId: string, end: AgentTurnEnd): Promise<void>;
   failTurn(turnId: string, failure: string): Promise<void>;
-  getAuthHeaders(key: string, opts?: { forceRefresh?: boolean }): Promise<Record<string, string> | null>;
+  getAuthHeaders(key: string, opts?: AuthRequest): Promise<Record<string, string> | null>;
   getCredentialBaseURL(key: string): Promise<string | null>;
   listCredentials(): ReturnType<UserCredentialClient['listCredentials']>;
   codexRelayDevice(): ReturnType<UserCredentialClient['codexRelayDevice']>;

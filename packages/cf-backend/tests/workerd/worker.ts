@@ -21,6 +21,9 @@ export { DbCapabilityProbeDO } from './db-capability-probe';
 
 export { FilesEioProbeDO } from './files-eio-probe';
 
+// A large parked write through Nimbus's staged writeFile: only the platform resets an object over one turn's bytes.
+export { ParkedWritesProbeDO } from './parked-writes-probe';
+
 export { ComplexityProbeDO } from './complexity/complexity-probe';
 
 export { SlateProcessProbeDO, SlateChainProbe } from './slate-process-probe';
@@ -70,7 +73,7 @@ export class StreamLifecycleDO extends DurableObject<Cloudflare.Env> {
   }
 }
 
-/** Same key as `armTimer` in orchestrator.ts. */
+/** A probe-local key: the timer this object arms for itself. */
 const ARMED = 'kinu_timer_armed_at';
 
 /**
@@ -177,6 +180,15 @@ export class TransactionDO extends DurableObject<Cloudflare.Env> {
   admitAtomically(id: string, failRoster: boolean): void {
     this.ensureSchema();
     this.ctx.storage.transactionSync(() => { this.admitBody(id, failRoster); });
+  }
+
+  admitNested(id: string, failOuter: boolean): void {
+    this.ensureSchema();
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.transactionSync(() => { this.admitBody(id, false); });
+
+      if (failOuter) throw new Error('outer transaction failed');
+    });
   }
 
   /** The bun arm: same body, same failure, no atomicity. */
@@ -298,8 +310,8 @@ export interface AlarmReport {
 }
 
 /**
- * `armTimer`'s soonest-wins dedup is only correct if a second `setAlarm` replaces the first,
- * and the SDK rethrows transient failures to rely on the runtime's alarm retry.
+ * The Lifecycle's alarm, derived from its job queue, is only correct if a second `setAlarm` replaces the first,
+ * and the SDK rethrows platform failures to rely on the runtime's alarm retry.
  */
 export class AlarmDO extends DurableObject<Cloudflare.Env> {
   async arm(delayMs: number): Promise<void> {

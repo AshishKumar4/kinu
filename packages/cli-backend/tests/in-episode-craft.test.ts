@@ -55,12 +55,11 @@ function scriptedEpisode(blocks: readonly string[]): LanguageModel {
 }
 
 function episode(blocks: readonly string[]) {
-  // The declared path, not `:memory:`: `createCLIRuntime` refuses a mismatched path (`requireLocalDatabasePath`).
   const db = new Database(scratchPath('in-episode-craft', 'agent.db'), { create: true });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
   const rt = createCLIRuntime(db, {
-    dbPath: db.filename, llm: DUMMY_LLM,
+    llm: DUMMY_LLM,
   });
 
   const events: SessionEvent[] = [];
@@ -167,7 +166,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
       initWorkspaceSchema(makeWorkspaceSchemaSql(dbOff));
 
       const rt = createCLIRuntime(dbOff, {
-        dbPath: dbOff.filename, llm: DUMMY_LLM,
+        llm: DUMMY_LLM,
       });
 
       const evs: SessionEvent[] = [];

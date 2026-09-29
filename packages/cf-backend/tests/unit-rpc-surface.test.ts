@@ -279,7 +279,7 @@ function installedAgentsSources(): string[] {
     .map((file) => readFileSync(join(AGENTS_DIST, file), 'utf8'));
 }
 
-/** `_cf_` names the SDK invokes on a receiver other than `this` (or a same-file `const x = this` alias). */
+/** `_cf_` names the SDK invokes on a receiver other than `this` (or a same-file `const x = this` alias, or a capability's host). */
 function crossStubFacetNames(sources: readonly string[]): string[] {
   const names = new Set<string>();
 
@@ -294,7 +294,8 @@ function crossStubFacetNames(sources: readonly string[]): string[] {
         const receiver = line.slice(0, match.index).trim();
         const token = receiver.slice(receiver.search(/[\w$)\]]+$/));
 
-        if (/(^|[^\w$])this$/.test(receiver) || selfAliases.has(token)) continue;
+        // A capability's private `#host` (0.23+ `dynamic-agents`) is the object it is installed on, in-process.
+        if (/(^|[^\w$])this$/.test(receiver) || receiver.endsWith('_classPrivateFieldGet2(_host, this)') || selfAliases.has(token)) continue;
         names.add(name);
       }
     }

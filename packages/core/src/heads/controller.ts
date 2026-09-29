@@ -38,7 +38,7 @@ export type MergeLLMFn = (
   responseSchema: typeof MergeOutputSchema,
 ) => Promise<MergeOutput>;
 
-/** Optional grounding seam: the same grounded evaluator and median ensemble as MCTS (mcts/evaluation.ts). Omitted: n=1 merge, neutral head scores. */
+/** Optional grounding seam: the same grounded evaluator and median ensemble as the swarm (mcts/evaluation.ts). Omitted: n=1 merge, neutral head scores. */
 export interface HeadGrounding {
   readonly executor: Executor;
   /** Judges when no cross-model judge is set. */
@@ -196,7 +196,7 @@ export class HeadController {
         allowedTools: h.allowedTools,
         mergeStrategy: strategy,
         // A fork explores under the loop it forks from, via the per-kind default.
-        loop: defaultLoopOrigin('run'),
+        loop: defaultLoopOrigin('swarm'),
         ...forkMission(opts.missionLabels),
       };
 
@@ -321,7 +321,7 @@ export class HeadController {
     mode: WorkMode,
   ): Promise<readonly HeadScore[]> {
     const g = mode === 'plan' ? undefined : this.runtime.grounding;
-    // Heads reuse the MCTS judge knobs and inherit its clamp; a realised size below the request is
+    // Heads reuse the `DEFAULT_CONFIG.mcts` judge knobs and inherit its clamp; a realised size below the request is
     // disclosed once per size, as the engine does.
     const judgeSamplesRequested = g?.judgeSamples ?? DEFAULT_CONFIG.mcts.judgeSamples;
     const reportedClampedEnsembles = new Set<number>();

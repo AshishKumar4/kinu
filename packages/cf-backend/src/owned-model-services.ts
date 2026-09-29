@@ -8,7 +8,7 @@ import {
   type ProviderEnv, type WorkersAIBinding,
 } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
-import { buildCfWebSearchProvider } from '@kinu.run/core';
+import { buildCfWebSearchProvider, type BrowserRunQuickActions } from '@kinu.run/core';
 import {
   createAgentProviderRegistry,
   type AgentProviderRegistry, type UserCredentialClient,
@@ -27,6 +27,7 @@ export interface OwnedAiBinding extends WorkersAIBinding {
 
 export interface OwnedModelEnv<Id> extends ProviderEnv {
   AI?: OwnedAiBinding;
+  BROWSER: BrowserRunQuickActions;
   CodexEgress?: CodexEgressNamespace;
   UserDO: ObjectNamespace<Id, UserCredentialClient>;
 }

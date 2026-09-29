@@ -4,7 +4,7 @@ import * as v from 'valibot';
 import { ERROR_CODES, KinuError, refusalOf, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 import { FILE_REFUSAL_REASONS } from '../types/file-edits';
-import type { VFS } from '../types/primitives';
+import type { Uncheckpointed, VFS } from '../types/primitives';
 import type { ExecutorTool, PreviewRouteCheck } from './types';
 
 const RefusalSchema = v.object({
@@ -22,6 +22,7 @@ export interface ExecOutcome {
   readonly stderr?: string;
   readonly exitCode?: number;
   readonly refusal?: Refusal;
+  readonly uncheckpointed?: Uncheckpointed;
 }
 
 const STDOUT_LABEL = '--- stdout ---';
@@ -65,6 +66,18 @@ export function exposedPortText(url: string, port: number, route: PreviewRouteCh
 }
 
 export function formatExecResult(result: ExecOutcome): string {
+  const output = formatOutput(result);
+
+  return result.uncheckpointed === undefined || result.refusal !== undefined
+    ? output
+    : `${output}\n${uncheckpointedSentence(result.uncheckpointed, 'this command')}`;
+}
+
+export function uncheckpointedSentence(uncheckpointed: Uncheckpointed, change: string): string {
+  return `No checkpoint covers ${uncheckpointed.dir}: ${uncheckpointed.why}, so undo cannot restore what ${change} changed there.`;
+}
+
+function formatOutput(result: ExecOutcome): string {
   if (result.refusal !== undefined) return JSON.stringify(result.refusal);
   const stdout = result.stdout ?? '';
   const stderr = result.stderr ?? '';

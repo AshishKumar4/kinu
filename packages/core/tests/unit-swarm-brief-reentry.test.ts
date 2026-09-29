@@ -72,8 +72,8 @@ describe('a node keeps its assigned question across re-entry', () => {
     const ledger = new MctsSearchStore(sql, rt.actor);
     const journal = new HeadJournal(sql, rt.actor);
     ledger.begin({
-      rootId: 'root', task: TASK, engine: 'swarm', rootMsgId: null,
-      config: { budget: 6, branches: 2, mode: 'build', maxDepth: 3 }, budget: 6, now: 1,
+      rootId: 'root', task: TASK,
+      config: { budget: 6, branches: 2, mode: 'build', maxDepth: 3 }, now: 1,
     });
     void sql`INSERT INTO search_nodes (actor_id, id, root_id, task, observation)
       VALUES (${rt.actor.actorId}, 'root', 'root', ${TASK}, '')`;
@@ -85,7 +85,7 @@ describe('a node keeps its assigned question across re-entry', () => {
         id: `child-${index}`, rootId: 'root', parentId: 'parent', depth: 2,
         task: brief.task, rationale: brief.prompt, mode: 'build', inheritedContext: [],
         budget: { maxDepth: 1, spawnedAt: 2 }, mergeStrategy: 'synthesize',
-        loop: defaultLoopOrigin('run'),
+        loop: defaultLoopOrigin('swarm'),
       });
     }
 

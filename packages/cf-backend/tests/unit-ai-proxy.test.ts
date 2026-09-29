@@ -12,7 +12,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from '@kinu.run/core';
-import type { AccessTokenScope, UserCaller } from '@kinu.run/core';
+import type { AccessTokenScope, AuthRequest, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 import { requestUrl } from '@kinu.run/core';
 import { requestBodyText } from '@kinu.run/test-utils';
@@ -93,9 +93,9 @@ function setupEnv(opts: {
       };
     },
     async getAuthHeaders(
-      _caller: UserCaller, key: string, o?: { forceRefresh?: boolean },
+      _caller: UserCaller, key: string, o?: AuthRequest,
     ): Promise<Record<string, string> | null> {
-      const bearer = o?.forceRefresh ? (opts.freshToken ?? token) : token;
+      const bearer = o?.rejected === undefined ? token : (opts.freshToken ?? token);
 
       if (key === 'cloudflare.oauth') return { authorization: `Bearer ${bearer}` };
 

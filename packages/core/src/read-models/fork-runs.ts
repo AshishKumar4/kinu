@@ -254,7 +254,7 @@ function queryTreeHalves(
 }
 
 /** The run's name: the root label its engine wrote, else derived from the task. Shared with the
- *  branch transcript breadcrumb (`mcts/engine.ts` records the root with `action: ''`). */
+ *  branch transcript breadcrumb (a search records its root with `action: ''`). */
 export function runName(rootLabel: string | null, task: string): string {
   const given = rootLabel?.trim();
 
@@ -286,8 +286,6 @@ function searchStatus(tree: TreeHalf): ForkRunStatus {
   if (tree.ledgerStatus === 'failed') return 'failed';
 
   if (tree.ledgerStatus === 'converged') return 'completed';
-
-  if (tree.ledgerStatus === 'no_acceptable_candidate') return 'failed';
 
   if (tree.terminal > 0) return 'completed';
 

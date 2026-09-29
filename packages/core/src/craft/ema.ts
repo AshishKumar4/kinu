@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 /**
  * Quality lives on the crafted_tools row, so a tool never exists without its score.
  * Formal spec: Evolution/FullCraftLifecycle.lean — ema_bounded, ema_nonneg
@@ -64,5 +65,6 @@ export function updateCraftScores(
     void sql`UPDATE crafted_tools
         SET score = (1 - ${alpha}) * score + ${alpha} * ${outcome}, uses = uses + 1, last_used_at = ${now}
         WHERE name = ${name}`;
+    markStoreChanged(sql);
   }
 }

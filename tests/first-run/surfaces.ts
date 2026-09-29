@@ -52,7 +52,7 @@ export const STRIP_ROWS = {
   Files: ['files-outside-tree', 'drive', 'every-tool'],
   Swarms: ['exploration'],
   Agent: ['snapshot-after-turn', 'every-tool'],
-  Environment: ['sandbox-mount-write', 'device-link'],
+  Environment: ['sandbox-mount-write', 'sandbox-exec-output', 'device-link'],
   Activity: ['every-tool', 'codemode-craft'],
   slate: ['slate', 'public-share', 'share-capability-cut', 'blueprint-fork'],
   preview: ['preview-address', 'slate'],

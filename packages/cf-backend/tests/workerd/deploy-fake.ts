@@ -114,7 +114,7 @@ function releaseBody(size: number): string {
   for (let made = 0; made < size;) {
     const random = Math.min(BLOCK_CHARS, size - made);
 
-    pieces.push(randomBytes(Math.ceil(random / 2)).toString('hex').slice(0, random));
+    pieces.push(Array.from(randomBytes(Math.ceil(random / 2)), (byte) => byte.toString(16).padStart(2, '0')).join('').slice(0, random));
     made += random;
 
     if (made >= size) break;

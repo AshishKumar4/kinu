@@ -7,7 +7,7 @@
 import { Agent, getAgentByName, type AgentContext } from 'agents';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import * as v from 'valibot';
-import { actorReferenceOf, ownerCaller } from '@kinu.run/core';
+import { actorReferenceOf, isSubordinateOrigin, ownerCaller } from '@kinu.run/core';
 import { diagnostics } from '@kinu.run/core/obs';
 import { sealRpcSurface, ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
@@ -49,7 +49,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
   /** Read, not assumed: child counts are "not this id", and a guessed literal would count the root's rows. */
   async rootActorId(): Promise<string> {
     const rows = this.probeState.storage.sql.exec<{ actor_id: string }>(
-      `SELECT actor_id FROM workspace_actors WHERE kind = 'main' LIMIT 1`).toArray();
+      `SELECT actor_id FROM workspace_actors WHERE origin = 'system' LIMIT 1`).toArray();
 
     return rows[0]?.actor_id ?? '';
   }
@@ -69,12 +69,12 @@ export class HireOrchestrator extends ProductionOrchestrator {
   /** A settled task hire moves only the directory, not the roster, so child assertions state which plane they read. */
   async actorRows(): Promise<ActorRow[]> {
     const rows = this.probeState.storage.sql.exec<{
-      actor_id: string; name: string; kind: string; retiring_at: number | null; deleted_at: number | null;
-    }>(`SELECT actor_id, name, kind, retiring_at, deleted_at
+      actor_id: string; name: string; parent_actor_id: string | null; retiring_at: number | null; deleted_at: number | null;
+    }>(`SELECT actor_id, name, parent_actor_id, retiring_at, deleted_at
         FROM workspace_actors ORDER BY created_at`).toArray();
 
     return rows.map((row) => ({
-      actorId: row.actor_id, name: row.name, kind: row.kind,
+      actorId: row.actor_id, name: row.name, hired: row.parent_actor_id !== null,
       retiringAt: row.retiring_at, deletedAt: row.deleted_at,
     }));
   }
@@ -118,7 +118,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
        WHERE type = 'run_start' GROUP BY actor_id`).toArray().map((row) => ({ actorId: row.actor_id, runs: row.runs }));
 
     const subordinates = this.probeState.storage.sql.exec<{ actor_id: string }>(
-      `SELECT actor_id FROM workspace_actors WHERE kind = 'subordinate'`).toArray();
+      `SELECT actor_id FROM workspace_actors WHERE origin IN ('user', 'agent', 'evolution')`).toArray();
 
     for (const { actor_id: actorId } of subordinates) {
       const seen = await (await this.agentFacetOf(actorId)).inspect(this.agentSnapshot(actorId), { path: [], view: 'runs', page: { limit: 100 } });
@@ -149,23 +149,22 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
   private readonly wakeReturn = Promise.withResolvers<void>();
 
-  /** The platform's wake as the SDK dispatches it. It counts only once it returned with a child's turn still
-   *  claimed, so a wake that ran before the hire, or one that ran the child to its end, cannot satisfy it. */
-  override async _kinuTerminalRetryTick(...args: Parameters<ProductionOrchestrator['_kinuTerminalRetryTick']>): Promise<void> {
-    await super._kinuTerminalRetryTick(...args);
+  /** The platform's wake as the `terminal-retry` job dispatches it. It counts only once it returned with a child's
+   *  turn still claimed, so a wake that ran before the hire, or one that ran the child to its end, cannot satisfy it. */
+  override async terminalRetryPass(...args: Parameters<ProductionOrchestrator['terminalRetryPass']>): Promise<void> {
+    await super.terminalRetryPass(...args);
     this.countReturnedWake();
   }
 
   /** The wake's own pass, run in-request while a delegated turn is parked: it must return, not hold the turn. */
   async wakeWhileRunning(): Promise<void> {
     await this.terminalRetryPass();
-    this.countReturnedWake();
   }
 
   private countReturnedWake(): void {
     // A subordinate's turn claim is in its own database; the workspace knows which of its turns are running.
     const inFlight = this.actorDirectoryStore().list()
-      .filter((record) => record.kind === 'subordinate' && this.currentTurnOf(actorReferenceOf(record)) !== null).length;
+      .filter((record) => isSubordinateOrigin(record.origin) && this.currentTurnOf(actorReferenceOf(record)) !== null).length;
 
     diagnostics.event('probe.wake_returned', { delegatedTurnsInFlight: inFlight });
 
@@ -193,7 +192,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
   }
 
   /**
-   * Runs the full wake `_kinuTerminalRetryTick` in-request (an in-flight request holds the input gate, so no alarm arrives).
+   * Runs the full `terminal-retry` wake pass in-request (an in-flight request holds the input gate, so no alarm arrives).
    * A narrower frame would report hangs the product does not have. The debounced reactor drain is driven separately.
    */
   async driveOwedWork(): Promise<void> {
@@ -248,7 +247,7 @@ type OwnerTarget = Pick<UserDO,
   'registerWorkspace' | 'ensureWorkspaceCapability' | 'setCredential' | 'getProfileCatalog' | 'putProfileCatalog'>;
 
 export class HireProbeRoot extends Agent<ProbeRootEnv> {
-  /** Settles when the durable lane's `msg` call was authored. */
+  /** Settles once the durable lane's `msg` call has returned its receipt, its admission written. */
   async msgSent(): Promise<void> {
     await fetch('http://hire-control.invalid/hire/msg-sent');
   }

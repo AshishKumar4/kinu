@@ -4,7 +4,8 @@ import { CloudflareApiError } from './cloudflare';
 import { FACT_ADDRESS } from './context';
 import type { DeployContext, DeployFacts } from './context';
 import type { DeployStep } from './steps';
-import { renderThrownChain } from '../obs/index';
+import { Effect } from 'effect';
+import { renderThrownChain, settle } from '../obs/index';
 
 export type DeployStepState = 'pending' | 'running' | 'done' | 'failed';
 
@@ -61,67 +62,74 @@ export interface DeployRunOutcome {
 }
 
 /** Stops at the first refusal: later steps bind what earlier ones create. */
-export async function runDeployPlan(
+export function runDeployPlan(
   plan: readonly DeployStep[],
   context: DeployContext,
   ledger: DeployLedger,
   onProgress: DeployProgressSink,
 ): Promise<DeployRunOutcome> {
-  await ledger.seed(plan.map((step, seq) => ({ id: step.id, seq, title: step.title })));
+  return settle(Effect.gen(function* () {
+    yield* Effect.promise(() => ledger.seed(plan.map((step, seq) => ({ id: step.id, seq, title: step.title }))));
 
-  const before = await ledger.rows();
-  const known = new Map(before.map((row) => [row.id, row]));
+    const before = yield* Effect.promise(() => ledger.rows());
+    const known = new Map(before.map((row) => [row.id, row]));
 
-  for (const step of plan) {
-    const row = known.get(step.id);
+    for (const step of plan) {
+      const row = known.get(step.id);
 
-    if (row?.state === 'done') {
-      for (const [key, value] of Object.entries(row.facts)) context.facts.set(key, value);
-      continue;
+      if (row?.state === 'done') {
+        for (const [key, value] of Object.entries(row.facts)) context.facts.set(key, value);
+        continue;
+      }
+
+      const attempt = (row?.attempt ?? 0) + 1;
+
+      yield* Effect.promise(() => ledger.started(step.id, attempt));
+      onProgress({ kind: 'step-started', id: step.id, attempt });
+
+      const recorded: Record<string, string> = {};
+
+      const facts: DeployFacts = {
+        get: (key: string) => context.facts.get(key),
+        set: (key: string, value: string) => {
+          recorded[key] = value;
+          context.facts.set(key, value);
+        },
+      };
+
+      const outcome = yield* stepOutcome(step, {
+        ...context,
+        facts,
+        note: (message: string) => {
+          onProgress({ kind: 'step-note', id: step.id, note: message });
+          ledger.noted(step.id, message);
+        },
+      });
+
+      if (outcome.failure !== null) {
+        const failure = outcome.failure;
+        yield* Effect.promise(() => ledger.failed(step.id, failure));
+        onProgress({ kind: 'step-failed', id: step.id, failure });
+
+        const failed: DeployRunOutcome = { state: 'failed', failedAt: step.id, rows: yield* Effect.promise(() => ledger.rows()) };
+
+        return failed;
+      }
+
+      yield* Effect.promise(() => ledger.settled(step.id, outcome.detail, recorded));
+      onProgress({ kind: 'step-done', id: step.id, detail: outcome.detail });
     }
 
-    const attempt = (row?.attempt ?? 0) + 1;
+    const rows = yield* Effect.promise(() => ledger.rows());
 
-    await ledger.started(step.id, attempt);
-    onProgress({ kind: 'step-started', id: step.id, attempt });
+    const address = factsFrom(rows).get(FACT_ADDRESS) ?? '';
 
-    const recorded: Record<string, string> = {};
+    onProgress({ kind: 'run-done', address });
 
-    const facts: DeployFacts = {
-      get: (key: string) => context.facts.get(key),
-      set: (key: string, value: string) => {
-        recorded[key] = value;
-        context.facts.set(key, value);
-      },
-    };
+    const done: DeployRunOutcome = { state: 'done', failedAt: null, rows };
 
-    const outcome = await settle(step, {
-      ...context,
-      facts,
-      note: (message: string) => {
-        onProgress({ kind: 'step-note', id: step.id, note: message });
-        ledger.noted(step.id, message);
-      },
-    });
-
-    if (outcome.failure !== null) {
-      await ledger.failed(step.id, outcome.failure);
-      onProgress({ kind: 'step-failed', id: step.id, failure: outcome.failure });
-
-      return { state: 'failed', failedAt: step.id, rows: await ledger.rows() };
-    }
-
-    await ledger.settled(step.id, outcome.detail, recorded);
-    onProgress({ kind: 'step-done', id: step.id, detail: outcome.detail });
-  }
-
-  const rows = await ledger.rows();
-
-  const address = factsFrom(rows).get(FACT_ADDRESS) ?? '';
-
-  onProgress({ kind: 'run-done', address });
-
-  return { state: 'done', failedAt: null, rows };
+    return done;
+  }));
 }
 
 interface StepOutcome {
@@ -129,16 +137,13 @@ interface StepOutcome {
   readonly failure: DeployStepFailure | null;
 }
 
-async function settle(step: DeployStep, context: DeployContext): Promise<StepOutcome> {
-  try {
-    return { detail: await step.run(context), failure: null };
-  } catch (caught) {
-    if (caught instanceof CloudflareApiError) {
-      return { detail: '', failure: { detail: caught.detail, code: caught.code, status: caught.status } };
-    }
-
-    return { detail: '', failure: { detail: renderThrownChain({ cause: caught }), code: 0, status: 0 } };
-  }
+function stepOutcome(step: DeployStep, context: DeployContext): Effect.Effect<StepOutcome> {
+  return Effect.tryPromise({ try: () => step.run(context), catch: (cause) => ({ cause }) }).pipe(Effect.match({
+    onSuccess: (detail): StepOutcome => ({ detail, failure: null }),
+    onFailure: (failed): StepOutcome => (failed.cause instanceof CloudflareApiError
+      ? { detail: '', failure: { detail: failed.cause.detail, code: failed.cause.code, status: failed.cause.status } }
+      : { detail: '', failure: { detail: renderThrownChain(failed), code: 0, status: 0 } }),
+  }));
 }
 
 export function factsFrom(rows: readonly DeployStepRow[]): DeployFacts {

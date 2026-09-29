@@ -320,6 +320,7 @@ const ORCHESTRATOR_METHODS = [
   'viewerEntryUrl',
   // Never `@callable`: reachable only by a Durable Object stub in this Worker.
   'requestOverviewPush',
+  'ownsBrowserSession',
   'supervisorOp',
   'agentWorkspace',
   'workspaceTitle',

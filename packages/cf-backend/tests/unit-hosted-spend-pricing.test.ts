@@ -15,9 +15,9 @@ const FAST_MODEL = 'ai-gateway/workers-ai/@cf/harness/fast';
 const MISSION = 'List the parser\'s hot paths.';
 
 /** A token costs $10 on the root's model and $1 on the fast tier's. */
-const PRICES = {
-  [GATEWAY_MODEL]: { input: 10_000_000, output: 10_000_000 },
-  [FAST_MODEL]: { input: 1_000_000, output: 1_000_000 },
+const CATALOG = {
+  [GATEWAY_MODEL]: { cost: { input: 10_000_000, output: 10_000_000 } },
+  [FAST_MODEL]: { cost: { input: 1_000_000, output: 1_000_000 } },
 };
 
 const QueryModelSchema = v.looseObject({ model: v.string() });
@@ -45,14 +45,14 @@ test('a researcher hire\'s steps are priced at its fast tier\'s rate, not the ro
     availableModels: [GATEWAY_MODEL, FAST_MODEL],
   });
 
-  workspace.agent.harnessPriceModels(PRICES);
+  workspace.agent.harnessCatalogModels(CATALOG);
   await catalogTurn(workspace.agent, 'Have a researcher profile the parser.');
   await workspace.agent.terminalRetryPass();
   await joinHarnessFibers();
 
   const root = workspaceMainActor(workspace.db);
 
-  const hire = workspace.db.query<{ actor_id: string }, []>("SELECT actor_id FROM workspace_actors WHERE kind = 'subordinate'").get();
+  const hire = workspace.db.query<{ actor_id: string }, []>("SELECT actor_id FROM workspace_actors WHERE origin = 'agent'").get();
 
   if (hire === null) throw new Error('the root hired no one');
 

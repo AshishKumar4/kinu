@@ -1,7 +1,9 @@
 // Client for `/api/deploy/*`, shared by the page and `kinu deploy cloudflare`.
 // The run key is never in a URL (history and invocation logs record URLs).
+import { Effect } from 'effect';
 import * as v from 'valibot';
-import { JsonValueSchema, type JsonValue } from '../utils/json';
+import { settle } from '../obs/index';
+import { jsonText } from '../utils/json';
 import {
   DeployOptionsSchema, DeploySnapshotSchema, DeployTicketSchema,
   type DeployOptions, type DeploySnapshot,
@@ -53,12 +55,12 @@ export interface DeployDoor {
 }
 
 export function deployOptions(origin: string, fetchImpl: typeof fetch = fetch): Promise<DeployOptions> {
-  return read(DeployOptionsSchema, new URL(`${DEPLOY_API}/options`, origin).href, {}, fetchImpl);
+  return settle(read(DeployOptionsSchema, new URL(`${DEPLOY_API}/options`, origin).href, {}, fetchImpl));
 }
 
 /** The key is returned once and is not recoverable. */
 export function mintRun(origin: string, fetchImpl: typeof fetch = fetch): Promise<DeployRunTicket> {
-  return read(DeployTicketSchema, new URL(`${DEPLOY_API}/runs`, origin).href, { method: 'POST' }, fetchImpl);
+  return settle(read(DeployTicketSchema, new URL(`${DEPLOY_API}/runs`, origin).href, { method: 'POST' }, fetchImpl));
 }
 
 export function deployDoor(run: DeployRunAddress, fetchImpl: typeof fetch = fetch): DeployDoor {
@@ -68,7 +70,7 @@ export function deployDoor(run: DeployRunAddress, fetchImpl: typeof fetch = fetc
 
   const bearer = { authorization: `Bearer ${run.runKey}` };
 
-  function get<Schema extends v.GenericSchema>(schema: Schema, tail: string): Promise<v.InferOutput<Schema>> {
+  function get<Schema extends v.GenericSchema>(schema: Schema, tail: string): Effect.Effect<v.InferOutput<Schema>> {
     return read(schema, at(tail), { headers: bearer }, fetchImpl);
   }
 
@@ -76,7 +78,7 @@ export function deployDoor(run: DeployRunAddress, fetchImpl: typeof fetch = fetc
     schema: Schema,
     tail: string,
     body?: DeployTokenPair | DeployProviderKey | DeployInputs,
-  ): Promise<v.InferOutput<Schema>> {
+  ): Effect.Effect<v.InferOutput<Schema>> {
     return read(schema, at(tail), {
       method: 'POST',
       headers: body === undefined ? bearer : { ...bearer, 'content-type': 'application/json' },
@@ -85,20 +87,15 @@ export function deployDoor(run: DeployRunAddress, fetchImpl: typeof fetch = fetc
   }
 
   return {
-    snapshot: () => get(DeploySnapshotSchema, ''),
-    accounts: () => get(ChoicesSchema, '/accounts'),
-    zones: () => get(ChoicesSchema, '/zones'),
-    async holdToken(token: DeployTokenPair): Promise<void> {
-      await post(AuthorizedSchema, '/token', token);
-    },
-    async holdProviderKey(name: string, value: string): Promise<string> {
-      return (await post(HeldSchema, '/keys', { name, value })).held;
-    },
-    start: (inputs: DeployInputs) => post(DeploySnapshotSchema, '/start', inputs),
-    retry: (stepId: string) => post(DeploySnapshotSchema, `/retry/${encodeURIComponent(stepId)}`),
-    async authorize(): Promise<string> {
-      return (await post(HandoffSchema, '/authorize')).location;
-    },
+    snapshot: () => settle(get(DeploySnapshotSchema, '')),
+    accounts: () => settle(get(ChoicesSchema, '/accounts')),
+    zones: () => settle(get(ChoicesSchema, '/zones')),
+    holdToken: (token: DeployTokenPair): Promise<void> => settle(Effect.asVoid(post(AuthorizedSchema, '/token', token))),
+    holdProviderKey: (name: string, value: string): Promise<string> =>
+      settle(Effect.map(post(HeldSchema, '/keys', { name, value }), (answer) => answer.held)),
+    start: (inputs: DeployInputs) => settle(post(DeploySnapshotSchema, '/start', inputs)),
+    retry: (stepId: string) => settle(post(DeploySnapshotSchema, `/retry/${encodeURIComponent(stepId)}`)),
+    authorize: (): Promise<string> => settle(Effect.map(post(HandoffSchema, '/authorize'), (answer) => answer.location)),
     socketUrl(): string {
       const url = new URL(at('/socket'));
 
@@ -110,30 +107,26 @@ export function deployDoor(run: DeployRunAddress, fetchImpl: typeof fetch = fetc
   };
 }
 
-async function read<Schema extends v.GenericSchema>(
+function read<Schema extends v.GenericSchema>(
   schema: Schema,
   url: string,
   init: RequestInit,
   fetchImpl: typeof fetch,
-): Promise<v.InferOutput<Schema>> {
-  const response = await fetchImpl(url, init);
-  const text = await response.text();
+): Effect.Effect<v.InferOutput<Schema>> {
+  return Effect.gen(function* () {
+    const response = yield* Effect.promise(() => fetchImpl(url, init));
+    const text = yield* Effect.promise(() => response.text());
 
-  if (!response.ok) {
-    const said = v.safeParse(ErrorBody, jsonOf(url, text));
+    if (!response.ok) {
+      const said = v.safeParse(ErrorBody, yield* jsonText(text, `${url} did not answer JSON`));
 
-    throw new Error(said.success && said.output.error !== undefined
-      ? said.output.error
-      : `${url} answered HTTP ${String(response.status)}`);
-  }
+      return yield* Effect.die(new Error(said.success && said.output.error !== undefined
+        ? said.output.error
+        : `${url} answered HTTP ${String(response.status)}`));
+    }
 
-  return v.parse(schema, jsonOf(url, text));
-}
+    const body = yield* jsonText(text, `${url} did not answer JSON`);
 
-function jsonOf(url: string, text: string): JsonValue {
-  try {
-    return v.parse(JsonValueSchema, JSON.parse(text));
-  } catch (cause) {
-    throw new Error(`${url} did not answer JSON`, { cause });
-  }
+    return v.parse(schema, body);
+  });
 }

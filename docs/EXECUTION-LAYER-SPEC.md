@@ -294,8 +294,9 @@ A cold container costs about 2.8s, a warm call 0.22s, both measured on
 2026-08-17 (`1ff86316` cold, `1d1b2489` warm). The cold figure is also in
 `core/src/execution/sandbox.ts`; the warm one survives only here. An escalated
 command has no elapsed deadline. An absent `SandboxHandle.exec` `timeout`
-means no deadline and uses the process lane, not SDK `exec`
-(`core/src/execution/sandbox.ts`). The wait is bounded instead: the call
+means no deadline and uses the container runtime's own `exec`
+(`Devbox.execUntimed`), not SDK `exec` (`core/src/execution/sandbox.ts`;
+DEVBOX-DECISIONS D37). The wait is bounded instead: the call
 backgrounds after 30s interactive or 300s one-shot (`BACKGROUND_POLICY`,
 `core/src/types/jobs.ts`) while the work continues. A lane deadline would
 silently outrank those detach windows, so there is none.
@@ -355,10 +356,10 @@ boundary. A Slate adds no separate approval policy.
 The Environment surface shows one native tree per provider, with raw `files`
 where supplied; it never merges them. The agent sees those same trees through
 `/pc` and `/sandbox`. The Outputs Diff reader is read-only. A Git workspace
-uses Git data without touching its index; a non-Git workspace compares against
-the re-markable snapshot baseline in `vfs_baseline`, captured at workspace
-birth (`core/src/read-models/workspace-diff.ts`). A read never advances that
-baseline.
+uses Git data without touching its index; the workspace compares against a
+Nimbus snapshot of its store taken at each review, `diffs:<actor>:<id>`, whose
+diff visits only the paths written since (`core/src/read-models/workspace-diff.ts`).
+A read never advances that baseline; the review before it is kept for Undo.
 
 Preview discovery asks `workspace`, `sandbox` and `device` for ports
 (`cf-backend/src/hooks/use-kinu.ts`). A transport failure keeps the last
@@ -388,9 +389,8 @@ added by `buildBuiltinTools`) and `release` is codemode-only (`TOOL_REACH`).
 A job's wake carries `kinuMode: job.workMode` (`core/src/jobs/runner.ts`), and
 `workModeForTurnMetadata` (`core/src/prompting/surface.ts`) reads it, so a
 wake cannot weaken Plan to build. Plan heads and subordinates report research
-to their parent. Both engines set `executionPolicy` to `judge-only` in Plan
-mode, spending no executor call (`core/src/mcts/engine.ts`,
-`core/src/strategy/swarm-scoring.ts`).
+to their parent. Swarm sets `executionPolicy` to `judge-only` in Plan
+mode, spending no executor call (`core/src/strategy/swarm-scoring.ts`).
 
 To add a provider: implement one `ExecutorProvider` at the external boundary.
 Declare only measured capabilities and use `unmeasuredCapabilities` for the

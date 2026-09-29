@@ -7,10 +7,11 @@ import { chunkMarkdown, initMemoryChunkTables } from '@kinu.run/agent-utils/memo
 import { CraftStore as AgentUtilsCraftStore } from '@kinu.run/agent-utils/stores';
 import type { CraftStore } from '../types/agent-runtime';
 import type {
-  Executor, Memory, RawSqlExec, SqlExec, SqlExecutor, SqlValue, Storage, VFS,
+  ExecuteResult, Executor, Memory, RawSqlExec, SqlExec, SqlExecutor, SqlValue, Storage, VFS,
 } from '../types/primitives';
 import { decodeJsonValue } from '../utils/json';
-import { renderThrownChain } from '../obs/index';
+import { Effect } from 'effect';
+import { renderThrownChain, settle } from '../obs/index';
 import * as v from 'valibot';
 
 export interface AgentDatabase {
@@ -65,8 +66,15 @@ export function wrapDatabase(db: AgentDatabase) {
 }
 
 export function inlineWorkspaceStorage(db: AgentDatabase): Pick<WorkspaceOptions, 'sql' | 'transactions'> {
+  const exec = sqlExecOver(db);
+
+  const pragma = (name: 'page_count' | 'page_size'): number => (
+    v.parse(v.record(v.string(), v.number()), exec(`PRAGMA ${name}`)[0])[name] ?? 0
+  );
+
   return {
-    sql: { exec: sqlExecOver(db) },
+    // What free space is reckoned from, as DO storage.sql reports it.
+    sql: { exec, get databaseSize() { return pragma('page_count') * pragma('page_size'); } },
     transactions: { storage: { transactionSync: <T,>(callback: () => T): T => db.transaction(callback)() } },
   };
 }
@@ -132,20 +140,16 @@ export function createInlineCraftStore(db: AgentDatabase): CraftStore {
 export function createInlineExecutor(): Executor {
   return {
     languages: ['javascript'],
-    async execute(code) {
-      try {
-        const fn = new Function(`return (async () => { ${code} })()`);
-        const result: unknown = await fn();
+    execute(code) {
+      return settle(Effect.tryPromise({
+        try: async (): Promise<ExecuteResult> => {
+          const fn = new Function(`return (async () => { ${code} })()`);
+          const result: unknown = await fn();
 
-        return {
-          result: result === undefined ? '(no return value)' : decodeJsonValue({ value: result }),
-        };
-      } catch (error) {
-        return {
-          result: undefined,
-          error: renderThrownChain({ cause: error }),
-        };
-      }
+          return { result: result === undefined ? '(no return value)' : decodeJsonValue({ value: result }) };
+        },
+        catch: (cause) => ({ cause }),
+      }).pipe(Effect.catch((failed) => Effect.succeed<ExecuteResult>({ result: undefined, error: renderThrownChain(failed) }))));
     },
   };
 }

@@ -4,7 +4,7 @@
  */
 
 import type {
-  AgentRuntime, ActorHandle, BranchHandle,
+  AgentRuntime, ActorHandle,
   VFS as CoreVFS, LLM, Schedule, Identity,
   SqlExecutor, SqlValue, RawSqlExec,
   FiberCtx, ExecutionRouter,
@@ -22,7 +22,7 @@ import {
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
   withMountTable, standardMounts, contextMount, skillsMount,
   sharedDriveMount, SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND, type MossaicVfs,
-  withApprovalGatedShell, createInheritedApprovalPolicy, holdsGrant,
+  withApprovalGatedShell, withApprovalGatedFiles, createInheritedApprovalPolicy, holdsGrant,
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
   type EgressSecretBinding,
   createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
@@ -42,7 +42,7 @@ import { mountActorFiles } from './workspace-host';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
-import { diagnostics, KinuError, toKinuError } from "@kinu.run/core/obs";
+import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { kinuEgressParams } from "./egress/configure";
 import { driveBound, tenantDrive } from "./drive/tenant";
 import { adaptCloudflareSandbox, openSandbox } from "./sandbox-exec-lane";
@@ -92,8 +92,18 @@ interface AgentSqlSource {
   sql<T = unknown>(query: TemplateStringsArray, ...values: SqlValue[]): T[];
 }
 
+const boundSql = new WeakMap<AgentSqlSource, SqlExecutor>();
+
+/** The workspace's stores share one executor identity, including hosted actors' runtimes. */
 export function bindAgentSql(agent: AgentSqlSource): SqlExecutor {
-  return agent.sql.bind(agent);
+  let sql = boundSql.get(agent);
+
+  if (sql === undefined) {
+    sql = agent.sql.bind(agent);
+    boundSql.set(agent, sql);
+  }
+
+  return sql;
 }
 
 /** Which logical actor this runtime belongs to; one Durable Object hosts all of them. */
@@ -202,8 +212,8 @@ export function isCFRuntime(runtime: AgentRuntime): runtime is CFRuntime {
 }
 
 export interface CFRuntimeHooks {
-  /** A thunk read at exec time: resolving during construction would re-enter the caller's lazy runtime
-     *  getter. Undefined (head, subordinate) means no queue, so 'strict' refuses. */
+  /** Read at exec time, as resolving during construction re-enters the runtime getter. Undefined (head,
+     *  subordinate): no queue, so 'strict' refuses. */
   deferrals?: () => DeferredApprovalChannel | undefined;
   slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
   workspaceObserver?: WriteObserver;
@@ -223,11 +233,6 @@ export interface CFRuntimeHooks {
     /** Null until the `context_edit` run-event variant exists; not a stub. */
     events(): ContextEventRecorder | null;
     readonly children: ChildContextResolver;
-  };
-  /** Omitted leaves `spawnBranch`/`abortBranch` refusing, since `AgentRuntime` requires them. */
-  branches?: {
-    spawn(branchId: string): Promise<BranchHandle>;
-    abort(branchId: string): Promise<void>;
   };
 }
 
@@ -367,6 +372,11 @@ export function createCFRuntime(
 
   const agentFileVfs = withMountTable(observedWorkspaceVfs, mounts);
   const unmount = mountActorFiles(workspaceBox, agentFileVfs, { rootActor: actor.rootActor, cred: hooks.workspaceExecution?.cred });
+
+  const toolFiles = withApprovalGatedFiles(agentFileVfs, 'workspace', {
+    userRoots: () => agentFileVfs.userRoots(), locate: null, parksWrites: true,
+  }, approvalPolicy);
+
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
     shellSession,
@@ -374,7 +384,7 @@ export function createCFRuntime(
     runtimeCatalog: env.NIMBUS_RUNTIME_CACHE !== undefined,
     inboundNetwork: nimbusPreviewConfigured(env),
     inline: {
-      vfs: agentFileVfs, memory, craftStore, shell,
+      vfs: toolFiles, files: agentFileVfs, memory, craftStore, shell,
       sql,
       ledger: () => access.acc?.().files,
       budget: () => access.acc?.().context,
@@ -511,20 +521,18 @@ export function createCFRuntime(
         });
       }
     },
-  }));
+  }, approvalPolicy));
 
   const runtime: CFRuntime = {
     actor: actor.actor,
     storage: { vfs: agentFileVfs, sql, execRaw, transactionSync: write => access.ctx.storage.transactionSync(write) },
     agentStateVfs: originVfs,
+    toolFiles,
     workspaceIsMachine: false,
     startupWork,
     memory, executor, llm, schedule, identity, craftStore,
     get judgeModel() { return profileLane('judge'); },
     get fastLlm() { return profileLane('fast'); },
-    get advisorLlm() { return profileLane('advisor'); },
-    spawnBranch: (branchId) => requireBranches(hooks).spawn(branchId),
-    abortBranch: (branchId) => requireBranches(hooks).abort(branchId),
     executionRouter,
     shell,
     localVfs: baseWorkspaceVfs,
@@ -662,15 +670,5 @@ function createIdentity(
     // `.vN` files are canonical; reads resolve pointer-first so a stale live view is healed.
     scaffold: createScaffoldSurface({ vfs, sql, actor, path: scaffoldPath }),
   };
-}
-
-function requireBranches(hooks: CFRuntimeHooks): NonNullable<CFRuntimeHooks['branches']> {
-  const branches = hooks.branches;
-
-  if (!branches) {
-    throw new KinuError('missing', 'This actor runtime was built without a branch host, so it cannot run MCTS rollouts.');
-  }
-
-  return branches;
 }
 

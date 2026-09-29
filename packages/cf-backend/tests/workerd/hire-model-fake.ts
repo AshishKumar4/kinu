@@ -255,9 +255,6 @@ async function durableLane(body: OutboundBody, results: readonly string[]): Prom
   const sent = results.some((result) => result.includes('"status":"delivered"'));
 
   if (!sent) {
-    // Resolve before authoring: the suite reads the child's log while the call is in flight.
-    durableMsgSent.resolve();
-
     return toolCallBody(model, 'call_durable_2', 'agents', {
       action: 'msg',
       agent: name,
@@ -265,6 +262,8 @@ async function durableLane(body: OutboundBody, results: readonly string[]): Prom
     });
   }
 
+  // The receipt means the message's row is written; the caller's turn is still open while this call waits.
+  durableMsgSent.resolve();
   await childAskedTwice.promise;
   rootSaw.resolve();
 

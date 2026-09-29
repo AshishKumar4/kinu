@@ -33,7 +33,7 @@ function begin(transferId: string): ForkFrame {
 function cut(transferId: string, seq: number): ForkFrame {
   return sealForkFrame({
     version: FORK_TRANSFER_VERSION, transferId, seq, kind: 'conversationEntries',
-    rows: [{ id: 'm1', parent_id: null, role: 'user', turn_id: null, run_id: null, metadata_json: null, metadata_path: null, metadata_digest: null, recorded_at: 1 }],
+    rows: [{ id: 'm1', position: 0, role: 'user', turn_id: null, run_id: null, metadata_json: null, metadata_path: null, metadata_digest: null, recorded_at: 1 }],
   });
 }
 

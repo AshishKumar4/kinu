@@ -1,7 +1,7 @@
 import type { ToolSet } from 'ai';
 import { REFUSAL_TYPE } from '../types/tool-outcome';
 
-/** Canonical built-in tool names, reach, and descriptions. Renaming one breaks prompts, UI, and MCTS scoring. */
+/** Canonical built-in tool names, reach, and descriptions. Renaming one breaks prompts and UI. */
 
 // Reach is not permission: an actor gets reach ∩ the deps its backend wires (conformance/manifest.ts).
 // A capability owns its codemode namespace when `codemode` equals its own key; *-codemode.ts factories rely on that.
@@ -222,7 +222,9 @@ export function memoryActionsFor(hasFacts: boolean): readonly MemoryToolAction[]
   return hasFacts ? [...MEMORY_NOTE_ACTIONS, ...MEMORY_FACT_ACTIONS] : MEMORY_NOTE_ACTIONS;
 }
 
-export const WEB_TOOL_ACTIONS = ['search', 'fetch'] as const;
+export const WEB_TOOL_ACTIONS = ['search', 'fetch', 'screenshot'] as const;
+
+export type WebToolAction = (typeof WEB_TOOL_ACTIONS)[number];
 
 export const FILE_TOOL_ACTIONS = ['read', 'write', 'edit', 'list', 'stat', 'search'] as const;
 
@@ -303,10 +305,13 @@ export const BUILTIN_TOOL_SPECS = {
   },
   web: {
     name: 'web',
-    summary: 'Search the web, or fetch one URL as markdown.',
+    summary: 'Search the web, fetch one URL as markdown, or take a screenshot of it.',
     notes: [
       'Private and internal addresses are blocked.',
       'A fetched page too long to return is saved to the workspace, and the result names the file.',
+      'A plain fetch reads the page as the server sends it; `render: true` loads it in a browser first, for a page its scripts build.',
+      "Rendering and screenshots use the light Kitesurf browser; `engine: 'chrome'` gets through some bot-checked and rate-limited sites. Where Browser Run is not reachable they refuse, naming what is missing.",
+      'A screenshot is saved under `screenshots/` and shown to you.',
     ],
     example: "web({action:'search', query:'durable objects sqlite storage limits'})",
   },
@@ -335,7 +340,6 @@ export const BUILTIN_TOOL_DESCRIPTIONS = {
   report: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.report),
 } satisfies Record<BuiltinToolName, string>;
 
-/** Which substrate runs the program. */
 export type SandboxSubstrate = 'hosted' | 'local';
 
 const SANDBOX_RUNS = {

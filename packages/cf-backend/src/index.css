@@ -3,10 +3,8 @@
    uses, and its components render half-styled (e.g. the combobox's clear
    button, positioned with `right-5`, lands on top of the input's text). */
 @source "../../../node_modules/@cloudflare/kumo/dist/**/*.{js,jsx,ts,tsx}";
-/* Plannotator ships source. Scan the reachable plan-review surface without
-   loading its global theme pack or unrelated editor/server UI. */
-@source "../../../node_modules/@plannotator/ui/components/Viewer.tsx";
-@source "../../../node_modules/@plannotator/ui/components/AnnotationPanel.tsx";
+/* Plannotator ships source. Scan the two components the Changes notes still take from it, without
+   loading its global theme pack or unrelated editor/server UI; plan review's own Viewer and panel are Kinu's. */
 @source "../../../node_modules/@plannotator/ui/components/AnnotationToolbar.tsx";
 @source "../../../node_modules/@plannotator/ui/components/CommentPopover.tsx";
 @import "tailwindcss";

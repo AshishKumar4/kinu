@@ -1,3 +1,4 @@
+import { markStoreChanged } from "./changes";
 import type { SqlExecutor, SqlRow } from "../types";
 import type { CraftedTool } from "../codemode/builder";
 import { fillToCapacity, relaxFtsQuery, sanitizeFtsQuery } from "../memory/query";
@@ -73,6 +74,7 @@ export class CraftStore {
 			INSERT INTO crafted_tools (name, description, code, created_at, updated_at)
 			VALUES (${input.name}, ${input.description}, ${input.code}, ${now}, ${now})
 		`;
+		markStoreChanged(this.sql);
 	}
 
 	update(name: string, patch: { description?: string; code?: string }): void {
@@ -83,10 +85,12 @@ export class CraftStore {
 				updated_at = ${Date.now()}
 			WHERE name = ${name}
 		`;
+		markStoreChanged(this.sql);
 	}
 
 	delete(name: string): void {
 		void this.sql`DELETE FROM crafted_tools WHERE name = ${name}`;
+		markStoreChanged(this.sql);
 	}
 
 	get(name: string): CraftedTool | undefined {

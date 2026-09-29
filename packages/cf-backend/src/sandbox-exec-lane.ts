@@ -1,10 +1,10 @@
 /**
  * `KinuSandbox` presented as core's `SandboxHandle`. No `timeout` means no work deadline, so such
- * commands run on the process lane (plain `exec` is bounded by the container and the request path),
+ * commands run on the runtime's own exec (plain `exec` is bounded by the container and the request path),
  * and an abort kills the process, not just the wait. See `SandboxHandle.exec`.
  */
 
-import { getSandbox, type Process, type SandboxOptions } from "@cloudflare/sandbox";
+import { getSandbox, type SandboxOptions } from "@cloudflare/sandbox";
 import { decodeJsonValue, SANDBOX_TRANSPORT, SandboxPending, WORKSPACE_BACKUP_DIR, type SandboxHandle } from "@kinu.run/core";
 import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import type { KinuSandbox } from "./kinu-sandbox";
@@ -70,33 +70,10 @@ async function jsonResultOrVoid<Result>(result: Promise<Result>) {
   return value === undefined ? undefined : decodeJsonValue({ value });
 }
 
-/** `waitForExit`'s log stream idles out on a silent live process, so look again until it exits. */
-async function observeExit(handle: KinuSandbox, started: Process): Promise<number> {
-  let exitCode = started.exitCode;
-
-  while (exitCode === undefined) {
-    try {
-      exitCode = (await started.waitForExit()).exitCode;
-    } catch (cause) {
-      const status = await started.getStatus();
-
-      if (status === "starting" || status === "running") continue;
-      const settled = await handle.getProcess(started.id);
-
-      if (settled?.exitCode === undefined) {
-        throw new Error(`sandbox process ${started.id} ended without an exit code`, { cause });
-      }
-
-      exitCode = settled.exitCode;
-    }
-  }
-
-  return exitCode;
-}
-
 /**
- * No work deadline: a background process awaited to exit. An abort kills it by id and waits for the
- * exit code; a failed kill is reported, never `cancelled`, since the process is still running.
+ * No work deadline: the command on the container runtime's own exec (`Devbox.execUntimed`), which returns its
+ * output whole. An abort ends its process tree and reports once it is gone; a refused kill is reported as itself,
+ * since the process is still running, and a command that finished first is returned as finished.
  */
 async function execWithoutDeadline(
   handle: KinuSandbox,
@@ -104,35 +81,28 @@ async function execWithoutDeadline(
   cwd?: string,
   signal?: AbortSignal,
 ) {
-  const started = await handle.startProcess(command, { cwd: cwd ?? WORKSPACE_BACKUP_DIR });
-  const observed = observeExit(handle, started);
-  let cancelling = false;
-  // Settles only on abort: resolved means killed, rejected means still running. A turn's signal is
-  // shared; each exec kills only its own process.
-  const { promise: killed, resolve, reject } = Promise.withResolvers<void>();
+  const execId = crypto.randomUUID();
+  const ran = handle.execUntimed(command, { cwd: cwd ?? WORKSPACE_BACKUP_DIR, execId });
+  // Set only on abort: true means this call ended the process tree, false that the command had already exited.
+  let verdict: Promise<boolean> | undefined;
+  const { promise: killRefused, reject } = Promise.withResolvers<never>();
 
   const kill = (): void => {
-    cancelling = true;
-    void handle.killProcess(started.id).then(resolve, reject);
+    verdict = handle.killUntimed(execId);
+    verdict.catch(reject);
   };
 
   if (signal?.aborted === true) kill();
   else signal?.addEventListener("abort", kill, { once: true });
 
   try {
-    const exitCode = await Promise.race([observed, killed.then(() => observed)]);
+    const result = await Promise.race([ran, killRefused]);
 
-    // The race resolves only through `observed`, so the process is gone.
-    if (cancelling) {
-      throw new DOMException(
-        `sandbox exec cancelled: container process ${started.id} was killed`,
-        "AbortError",
-      );
+    if (verdict !== undefined && await verdict) {
+      throw new DOMException(`sandbox exec cancelled: its container process tree was ended (exec ${execId})`, "AbortError");
     }
 
-    const logs = await handle.getProcessLogs(started.id);
-
-    return { stdout: logs.stdout, stderr: logs.stderr, exitCode };
+    return result;
   } finally {
     signal?.removeEventListener("abort", kill);
   }
@@ -169,7 +139,7 @@ export function adaptCloudflareSandbox(
 
   const onContainer = async <T>(run: () => Promise<T>): Promise<T> => {
     await configured();
-    // Readiness arrives as data: a thrown refusal's name does not survive the DO RPC.
+    // Readiness arrives as data: a thrown refusal's class does not survive the DO RPC.
     const readiness = await handle.resolveReadiness();
 
     if (readiness.kind === 'pending') throw new SandboxPending(readiness.reason);
@@ -190,7 +160,7 @@ export function adaptCloudflareSandbox(
 
   return {
     ensureReady: () => onContainer(() => Promise.resolve()),
-    // Absent timeout: the process lane, the only lane an abort can kill.
+    // Absent timeout: the runtime's exec, the only lane an abort can kill.
     exec: (command, opts) => onContainer(() => (opts?.timeout === undefined
       ? execWithoutDeadline(handle, command, opts?.cwd, opts?.signal)
       : handle.exec(command, opts))),

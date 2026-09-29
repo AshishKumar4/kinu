@@ -5,7 +5,7 @@
 
 import * as fs from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import type { FileCheckpoints, VFS, VfsErrorCode } from '@kinu.run/core';
+import type { FileCheckpoints, FileReach, MountedVfs, VFS, VfsErrorCode } from '@kinu.run/core';
 import { ERRNO, LEGACY_WORKSPACE_ROOT, makeVfsError, SLATES_ROOT, WORKSPACE_ROOT } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -88,31 +88,43 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
   };
 }
 
-/**
- * The working directory as the workspace file plane; agent state stays in
- * `agentStateVfs`. Accepts relative paths, plane-root aliases (`/workspace`,
- * `/home/main`, `/`, and `/slates` for its `slates/`) and real absolute paths inside
- * the tree; anything else is EACCES. A lexical guard against path confusion, not a sandbox.
- */
-export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | undefined): VFS {
+/** Relative paths and aliases (`/workspace`, `/home/main`, `/`, `/slates`) stay in the tree, or EACCES; any other
+ *  absolute path is that host path. Not a sandbox. */
+function cwdPlaneLocator(cwd: string): (path: string) => { readonly hostPath: string; readonly outside: boolean } {
   const root = resolve(cwd);
-  const host = createHostMountVFS(root, checkpoints);
 
-  const hostPath = (path: string): string => {
+  return (path) => {
     const direct = isAbsolute(path) ? resolve(path) : resolve(root, path || '.');
 
     // A real path inside the directory wins over every alias.
-    if (withinRoot(root, direct)) return direct;
+    if (withinRoot(root, direct)) return { hostPath: direct, outside: false };
     const inner = isAbsolute(path) ? planeRootRelative(path) : null;
 
-    if (inner !== null) {
-      const mapped = resolve(root, inner || '.');
+    if (inner === null && isAbsolute(path)) return { hostPath: direct, outside: true };
+    const mapped = inner === null ? null : resolve(root, inner || '.');
 
-      if (withinRoot(root, mapped)) return mapped;
-    }
+    if (mapped !== null && withinRoot(root, mapped)) return { hostPath: mapped, outside: false };
 
-    throw makeVfsError('EACCES', `path escapes the workspace directory ${root}: ${path}`, path);
+    throw makeVfsError('EACCES', `path escapes the workspace directory ${root}: ${path}; name a file outside it by its absolute path`, path);
   };
+}
+
+/** The file gate's reach: `cwd` under `table`'s mounts, or the in-SQLite plane (null). */
+export function directoryFileReach(cwd: string | null, table: MountedVfs | null): FileReach {
+  const userRoots = () => table?.userRoots() ?? [];
+
+  if (cwd === null) return { userRoots, locate: null, parksWrites: false };
+  const locate = cwdPlaneLocator(cwd);
+
+  // A mounted path is its mount's; the CLI asks, so nothing parks.
+  return { userRoots, locate: (path) => ((table?.mountOf(path) ?? null) === null ? locate(path) : { hostPath: path, outside: false }), parksWrites: false };
+}
+
+/** The working directory as the file plane ({@link cwdPlaneLocator}). */
+export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | undefined): VFS {
+  const host = createHostMountVFS(resolve(cwd), checkpoints);
+  const locate = cwdPlaneLocator(cwd);
+  const hostPath = (path: string): string => locate(path).hostPath;
 
   return {
     readFile: (path, opts) => host.readFile(hostPath(path), opts),

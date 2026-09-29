@@ -2,17 +2,19 @@
  * Eviction recovery through a real `OrchestratorAgent`: the alarm's housekeeping pass hands a left-behind fiber row to `onFiberRecovered`.
  * Defends: recovery that never releases its row and re-enters on every boot. Vendor half: `tests/workerd/do-eviction-recovery.test.ts`.
  */
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import {
-  BACKGROUND_FIBER_PREFIX, CHAT_SESSION_ID, PendingSendStore, PROGRAMMATIC_MESSAGE_ID_PREFIX, SEARCH_FIBER_NAME,
-  type AdvisorRecoverySnapshot, type JsonValue,
+  ActorSession, BACKGROUND_FIBER_PREFIX, CHAT_SESSION_ID, PendingSendStore, PROGRAMMATIC_MESSAGE_ID_PREFIX,
+  TERMINAL_EFFECT_RETRY_CEILING_MS, type JsonValue,
 } from '@kinu.run/core';
 import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 import {
-  catalogTurn, chatSessionTurns, gatewayWorkspace, historyOver, jobsOver, orchestratorHarness, workspaceMainActor,
+  catalogTurn, chatSessionTurns, GATEWAY_CATALOG, gatewayWorkspace, historyOver, jobsOver, orchestratorHarness,
+  adviceDue, driveUntil, reactivateOrchestratorHarness, workspaceMainActor,
   type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { answeringGateway, chatCompletion, stubAiBinding } from './helpers/platform-gateway';
+import { joinHarnessFibers } from './helpers/agents-sdk';
 import { makeSql } from '../../core/tests/helpers';
 import {
   SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
@@ -22,8 +24,10 @@ import { INCIDENT_STAGES } from '../../devbox/src/lifecycle';
 
 type Harness = ActorHarness<HarnessOrchestratorAgent>;
 
+afterEach(() => { setSystemTime(); });
+
 function interrupted(
-  name: string, snapshot: JsonValue | AdvisorRecoverySnapshot,
+  name: string, snapshot: JsonValue,
 ): FiberRecoveryContext {
   return {
     id: `fiber-${name}`,
@@ -58,51 +62,11 @@ async function programmaticTurns(harness: Harness): Promise<{ id: string; text: 
     }));
 }
 
-function advisorSnapshot(turnId: string): AdvisorRecoverySnapshot {
-  return {
-    turn: {
-      userMessage: 'run the migration',
-      assistantResponse: 'ran it',
-      toolCalls: [{ name: 'shell', args: { command: 'migrate' } }],
-      steps: 2,
-      durationMs: 1_200,
-      feedback: null,
-      hadError: false,
-      turnId,
-    },
-    reachable: ['shell', 'read'],
-    minSeverity: 'nit',
-    recent: [],
-  };
-}
-
 const ADVISOR_REPLY = JSON.stringify({
   note: 'The migration ran before the suite. Confirm a backup exists.',
   severity: 'blocker',
   class: 'wrong-work',
 });
-
-interface HeldAdvisor {
-  readonly harness: Harness;
-  readonly entered: Promise<void>;
-  readonly release: () => void;
-}
-
-/** The workspace's models answer through the gateway, parked until `release`, so "the re-drive is detached" is
- *  assertable rather than raced. The first call is the review's. */
-function heldAdvisor(): HeldAdvisor {
-  const arrived = Promise.withResolvers<void>();
-  const held = Promise.withResolvers<void>();
-
-  const gateway = stubAiBinding(async (run) => {
-    arrived.resolve();
-    await held.promise;
-
-    return chatCompletion(run, ADVISOR_REPLY);
-  });
-
-  return { harness: gatewayWorkspace(gateway), entered: arrived.promise, release: () => { held.resolve(); } };
-}
 
 interface Recovering {
   readonly result: Promise<FiberRecoveryResult>;
@@ -212,88 +176,113 @@ describe('the post-turn lanes', () => {
     await agent.harnessJoinDetachedFibers();
   });
 
-  /** The review is a model call, so the hook classifies and the carrier reviews; an in-gate review queues every fetch behind `blockConcurrencyWhile`. */
-  test('the advisor review runs DETACHED and still lands exactly one note', async () => {
-    const advisor = heldAdvisor();
-    const { harness } = advisor;
-    const agent = harness.agent;
+  /** The advisor's hire is its own terminal row: the snapshot is its input, so a fresh activation replays it. */
+  async function cutReview(): Promise<{ readonly harness: Harness; readonly calls: () => number; readonly restart: () => Promise<Harness> }> {
+    let calls = 0;
 
-    const recovery = recovering(agent, interrupted('advisor:review', advisorSnapshot('turn-42')));
+    const gateway = stubAiBinding(async (run) => {
+      const asked = JSON.stringify(run);
 
-    await advisor.entered;
-    expect(recovery.answered()).toBe(true);
-    expect(agent.harnessNotesForTurn('turn-42')).toBe(0);
-    // Completed, not a terminal error: the eviction was not a verdict on the review.
-    expect(await recovery.result).toMatchObject({
-      status: 'completed',
-      snapshot: { turnId: 'turn-42', redrive: 'advisor-review' },
+      // This turn's review only: a delivered note opens a follow-up turn, which owes its own.
+      if (asked.includes('You are reviewing one finished turn') && asked.includes('run the migration')) calls += 1;
+
+      return chatCompletion(run, ADVISOR_REPLY);
     });
-    expect(agent.harnessOpenFiberRows().map((row) => row.name)).toEqual(['advisor:review']);
 
-    advisor.release();
-    await agent.harnessJoinDetachedFibers();
+    const harness = gatewayWorkspace(gateway, { cut: ['advisor_review', 'before'] });
+    workspaceMainActor(harness.db).config.setAdvisorEnabled(true);
+    await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'run the migration' }] });
+    await chatSessionTurns(harness.agent).settle({ messageId: 'turn-42', text: 'ran it' });
+    await joinHarnessFibers();
 
+    // A fresh activation over the same rows, past any backoff, running the alarm's pass.
+    const restart = async (): Promise<Harness> => {
+      setSystemTime(new Date(Date.now() + TERMINAL_EFFECT_RETRY_CEILING_MS));
+
+      const restarted = await reactivateOrchestratorHarness(harness.db, undefined, {
+        world: { aiGateway: gateway },
+        beforeStart: (agent) => { agent.harnessInstallCatalog(GATEWAY_CATALOG); },
+      });
+
+      await restarted.agent.terminalRetryPass();
+      // The review is the hired advisor's own delegated turn, which the wake drains; its answer's job delivers the note.
+      await driveUntil(restarted, 'the replayed review settled', () => owedReview(restarted) === 0 && advisorsWorking(restarted) === 0 && !adviceDue(restarted.db));
+      await joinHarnessFibers();
+
+      return restarted;
+    };
+
+    return { harness, calls: () => calls, restart };
+  }
+
+  const count = (harness: Harness, query: string): number => harness.db.query<{ n: number }, []>(query).get()?.n ?? 0;
+
+  const owedReview = (harness: Harness): number =>
+    count(harness, "SELECT COUNT(*) AS n FROM terminal_effects WHERE effect_name = 'advisor_review' AND status != 'completed'");
+
+  const notes = (harness: Harness): number => count(harness, "SELECT COUNT(*) AS n FROM evolution_events WHERE type = 'advisor_note'");
+
+  const advisorsWorking = (harness: Harness): number =>
+    count(harness, "SELECT COUNT(*) AS n FROM actor_subordinates WHERE name LIKE 'ask-advisor-%' AND status = 'working'");
+
+  test('a hire cut before it ran is replayed by the next activation and lands exactly one note', async () => {
+    const { harness, calls, restart } = await cutReview();
+    expect(calls()).toBe(0);
+    expect(owedReview(harness)).toBe(1);
+
+    const restarted = await restart();
+
+    expect(calls()).toBe(1);
+    expect(notes(restarted)).toBe(1);
+    expect(owedReview(restarted)).toBe(0);
     // The signal is keyed on the turn so a re-delivery collapses onto the row it already opened.
-    expect(agent.harnessNotesForTurn('turn-42')).toBe(1);
-    expect((await programmaticTurns(harness)).map((turn) => turn.id))
-      .toEqual([`${PROGRAMMATIC_MESSAGE_ID_PREFIX}advisor:turn-42`]);
-    expect(agent.harnessOpenFiberRows()).toEqual([]);
+    expect((await programmaticTurns(restarted)).filter((turn) => turn.id.startsWith(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}advisor:`)))
+      .toHaveLength(1);
   });
 
-  test('a review that had already landed is NOT re-run, so recovery cannot double it', async () => {
-    const advisor = heldAdvisor();
-    const { harness } = advisor;
-    const agent = harness.agent;
-    advisor.release();
+  test('an advisor answer stored before a death is delivered once, by the next activation', async () => {
+    const { calls, restart } = await cutReview();
+    const deliver = Object.getOwnPropertyDescriptor(ActorSession.prototype, 'deliverAdvisorAnswers');
 
-    // The note was recorded before eviction; re-running would write a second note and speak it twice.
-    await recover(agent, interrupted('advisor:review', advisorSnapshot('turn-42')));
-    await agent.harnessJoinDetachedFibers();
-    const again = await recover(agent, interrupted('advisor:review', advisorSnapshot('turn-42')));
-
-    expect(again).toMatchObject({
-      status: 'completed',
-      snapshot: { turnId: 'turn-42', redrive: null, alreadyRecorded: true },
-    });
-    // The guard is synchronous and runs before any carrier, so the refused re-drive leaves no second fiber row.
-    expect(agent.harnessOpenFiberRows()).toEqual([]);
-    expect(agent.harnessNotesForTurn('turn-42')).toBe(1);
-    expect((await programmaticTurns(harness)).map((turn) => turn.id))
-      .toEqual([`${PROGRAMMATIC_MESSAGE_ID_PREFIX}advisor:turn-42`]);
-  });
-
-  test('a snapshot that will not parse is terminal, because there is no turn to review', async () => {
-    const { agent } = orchestratorHarness();
-
-    const result = await recover(agent, interrupted('advisor:review', {
-      lane: 'advisor:review', turnId: 'turn-42',
-    }));
-
-    expect(result.status).toBe('error');
-    expect(result).toMatchObject({ snapshot: { redrive: null } });
-  });
-
-  test('an interrupted search is recorded for the next turn rather than re-run', async () => {
-    const harness = orchestratorHarness();
-    const agent = harness.agent;
-
-    const result = await recover(agent, interrupted(SEARCH_FIBER_NAME, { budget: 3 }));
-
-    expect(result).toEqual({
-      status: 'completed', snapshot: { lane: 'mcts', recorded: true, redrive: 'memory-note' },
+    // The object dies after the ingress stored the answer and before its note is delivered.
+    Object.defineProperty(ActorSession.prototype, 'deliverAdvisorAnswers', {
+      configurable: true, value: () => Promise.reject(new Error('the object died')),
     });
 
-    // The audit row lands in this object's SQLite; the MEMORY.md line goes through the workspace filesystem
-    // (another Durable Object when hosted), so it rides the carrier.
-    const events = harness.db.prepare<{ type: string; message: string }, []>(
-      "SELECT type, message FROM evolution_events WHERE type = 'fiber_recovered'",
-    ).all();
+    let died: Harness;
 
-    expect(events).toHaveLength(1);
-    expect(events[0].message).toContain('mcts');
+    try {
+      died = await restart();
+    } finally {
+      if (deliver) Object.defineProperty(ActorSession.prototype, 'deliverAdvisorAnswers', deliver);
+    }
 
-    await agent.harnessJoinDetachedFibers();
-    expect(await agent.getMemoryContent()).toContain('Fiber "mcts" was interrupted');
+    expect(calls()).toBe(1);
+    expect(notes(died)).toBe(0);
+    // The answer and the job that delivers it are both still on disk.
+    expect(count(died, "SELECT COUNT(*) AS n FROM evolution_helpers WHERE answer_status IS NOT NULL")).toBe(1);
+
+    const restarted = await restart();
+    await restart();
+
+    expect(calls()).toBe(1);
+    expect(notes(restarted)).toBe(1);
+    expect((await programmaticTurns(restarted)).filter((turn) => turn.id.startsWith(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}advisor:`)))
+      .toHaveLength(1);
+  });
+
+  test('a turn whose note had already landed hires no advisor again, so recovery cannot double it', async () => {
+    const { harness, calls, restart } = await cutReview();
+    // The review recorded its note, then the isolate reset before the row settled.
+    harness.db.run(`INSERT INTO evolution_events (actor_id, type, message, data)
+      SELECT actor_id, 'advisor_note', 'already said', json_object('turnId', json_extract(input_json, '$.advisor.turn.turnId'))
+      FROM terminal_effects WHERE effect_name = 'advisor_review'`);
+
+    const restarted = await restart();
+
+    expect(calls()).toBe(0);
+    expect(notes(restarted)).toBe(1);
+    expect(owedReview(restarted)).toBe(0);
   });
 });
 

@@ -364,6 +364,108 @@ describe('source_text', () => {
     `)).toEqual(['expect(<source text>).toContain']);
   });
 
+  test('RED: a walker handed a product root through its parameters, and a loop over roots held in an array', () => {
+    // unit-broadcast-wiring's shape: `sourceFiles(root)` walks `join(REPO, root)`, the walk reads through its own
+    // parameter, and no single literal names a product path.
+    expect(found('source_text', `
+      import { readdirSync, readFileSync } from 'node:fs';
+      import { join, resolve } from 'node:path';
+      const REPO = resolve(import.meta.dir, '../../..');
+      function sourceFiles(root) {
+        const out = [];
+        const walk = (dir) => { for (const entry of readdirSync(dir)) out.push(join(dir, entry)); };
+        walk(join(REPO, root));
+        return out;
+      }
+      test('every producer has a reader', () => {
+        expect(sourceFiles('packages/probe/src').map((file) => readFileSync(file, 'utf8'))).toHaveLength(1);
+      });
+    `)).toEqual(['reads a source file', 'expect(<source text>).toHaveLength']);
+
+    expect(found('source_text', `
+      import { readdirSync } from 'node:fs';
+      import { join } from 'node:path';
+      const ROOTS = [join(import.meta.dir, '..', 'src')];
+      test('each root lists its modules', () => {
+        for (const dir of ROOTS) expect(readdirSync(dir)).toContain('budget.ts');
+      });
+    `)).toEqual(['reads a source file']);
+  });
+
+  test('SILENT: a parameter of the same name, handed a directory the test made', () => {
+    expect(found('source_text', `
+      import { readdirSync } from 'node:fs';
+      import { scratchDir } from '@kinu.run/test-utils';
+      import { join } from 'node:path';
+      const productList = (dir) => readdirSync(dir);
+      const scratchList = (dir) => readdirSync(dir);
+      test('only one of them reads the module tree', () => {
+        expect(productList(join(import.meta.dir, '..', 'src'))).toContain('budget.ts');
+        expect(scratchList(scratchDir('probe'))).toEqual([]);
+      });
+    `)).toEqual(['reads a source file', 'expect(<source text>).toContain']);
+  });
+
+  test('reduce binds the source element, not its scratch accumulator', () => {
+    const imports = `import { readdirSync } from 'node:fs';
+      import { scratchDir } from '@kinu.run/test-utils';
+      import { join } from 'node:path';
+      const ROOTS = [join(import.meta.dir, '..', 'src')];`;
+
+    expect(found('source_text', `${imports}
+      test('walks product roots', () => {
+        ROOTS.reduce((files, dir) => files.concat(readdirSync(dir)), []);
+      });
+    `)).toEqual(['reads a source file']);
+    expect(found('source_text', `${imports}
+      test('keeps scratch contents', () => {
+        ROOTS.reduce((scratch, dir) => { readdirSync(scratch); return scratch; }, scratchDir('probe'));
+      });
+    `)).toEqual([]);
+  });
+
+  test('a destructured parameter does not shift a later product-path argument', () => {
+    expect(found('source_text', `
+      import { readdirSync } from 'node:fs';
+      import { join } from 'node:path';
+      const list = ({ recursive }, dir) => readdirSync(dir, { recursive });
+      test('lists product modules', () => {
+        expect(list({ recursive: true }, join(import.meta.dir, '..', 'src'))).toContain('budget.ts');
+      });
+    `)).toEqual(['reads a source file', 'expect(<source text>).toContain']);
+  });
+
+  test('a destructured scratch parameter shadows an outer product root', () => {
+    expect(found('source_text', `
+      import { readdirSync } from 'node:fs';
+      import { scratchDir } from '@kinu.run/test-utils';
+      import { join } from 'node:path';
+      const root = join(import.meta.dir, '..', 'src');
+      const list = ({ root }) => readdirSync(root);
+      test('an empty scratch directory', () => {
+        expect(list({ root: scratchDir('probe') })).toEqual([]);
+      });
+    `)).toEqual([]);
+  });
+
+  test('same-named arrays in separate tests keep their own path bindings', () => {
+    const findings = found('source_text', `
+      import { readdirSync } from 'node:fs';
+      import { scratchDir } from '@kinu.run/test-utils';
+      import { join } from 'node:path';
+      test('product roots', () => {
+        const roots = [join(import.meta.dir, '..', 'src')];
+        roots.forEach((dir) => readdirSync(dir));
+      });
+      test('scratch roots', () => {
+        const roots = [scratchDir('probe')];
+        roots.forEach((dir) => readdirSync(dir));
+      });
+    `);
+
+    expect(findings).toEqual(['reads a source file']);
+  });
+
   test('SILENT: a workspace file read inside the system under test', () => {
     // `vfs.readFile('src/main.ts')` reads a file in the workspace under test,
     // not this repository's source.

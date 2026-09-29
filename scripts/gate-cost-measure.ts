@@ -17,8 +17,7 @@
  *     whatever else the box is doing.
  *   - CPU seconds: getrusage(RUSAGE_CHILDREN) through `/usr/bin/time -v`, which
  *     counts children that came and went between two samples, with the
- *     sampler's own running total as the floor — a row killed at its deadline
- *     takes `time` with it and leaves no report.
+ *     sampler's own running total as the floor where the report is missing.
  *   - achieved parallelism: Δ(utime+stime+cutime+cstime) over a window wide
  *     enough that the 10 ms tick does not read as threads.
  *
@@ -38,9 +37,9 @@
  * to one blind spot on purpose; killability and cost are different questions,
  * and memory a detached child holds is memory the box does not have.
  *
- * THE ROW RUNS EXACTLY AS THE WAVE RUNS IT: same `timeout --signal=TERM
- * --kill-after=5s` wrapper, same argv-splitting `bash -c`, same per-row
- * deadline. A measurement taken under a different runner measures the runner.
+ * THE ROW RUNS EXACTLY AS THE WAVE RUNS IT: through `ladder.ts --gate`, under
+ * the same hang detector, uncached. A measurement taken under a different
+ * runner measures the runner.
  *
  * This is a TOOL, not a gate: no ladder row runs it, nothing imports it, and it
  * imports the ladder rather than the other way round. That direction is what
@@ -54,13 +53,12 @@ import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, readdirSync
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { tolerate } from '@kinu.run/core/obs';
-import { KILL_AFTER_SECONDS } from './deadline';
 import { procFile } from './process-owner';
 import {
   COST_TABLE, KINU_WORK, QUIET_LOAD, type RowCost, costRssMb, costThreads, holdsCheckoutResource, machineName, readCosts, writeCosts,
 } from './gate-cost';
 import {
-  GATE_DEADLINE_SECONDS, LADDER, SHARED_POOL, gatesFor, packageScripts, sharedOf, trackedTestFiles,
+  LADDER, SHARED_POOL, gatesFor, packageScripts, sharedOf, trackedTestFiles,
 } from './ladder';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -96,8 +94,8 @@ const CPU_WINDOW_SECONDS = 0.25;
 /** How the figures were taken, stored beside them: a measurement whose method
  *  is not written down cannot be repeated, and a figure nobody can repeat is
  *  the declared number this replaced. */
-const COST_METHOD = 'each row alone under `setsid timeout --signal=TERM --kill-after=5s <deadline> '
-  + '/usr/bin/time -v bash -c <run>`; the row\'s whole process tree — its session plus every '
+const COST_METHOD = 'each row alone under `setsid /usr/bin/time -v bun scripts/ladder.ts --gate <run> '
+  + '--no-cache`; the row\'s whole process tree — its session plus every '
   + 'descendant by ppid, so a setsid\'d dev server or browser counts — sampled every '
   + `${String(BURST_SAMPLE_SECONDS)}s for its first ${String(BURST_SECONDS)}s and every `
   + `${String(SAMPLE_SECONDS)}s after — summed proportional set (Pss, /proc/<pid>/smaps_rollup) for `
@@ -328,8 +326,6 @@ function contention(own: number): Contention | undefined {
 interface MeasureRequest {
   /** The row's command, exactly as the plan carries it. */
   readonly run: string;
-  /** The row's own deadline, seconds: the same hang detector the wave uses. */
-  readonly deadline: number;
   /** Where the row's own output goes, so a failed measurement is readable. */
   readonly logPath: string;
   readonly rusagePath: string;
@@ -358,9 +354,8 @@ async function measureRow(request: MeasureRequest): Promise<RowCost> {
   try {
     child = Bun.spawn([
       'setsid',
-      'timeout', '--signal=TERM', `--kill-after=${String(KILL_AFTER_SECONDS)}s`, String(request.deadline),
       '/usr/bin/time', '-v', '-o', request.rusagePath,
-      'bash', '-c', request.run,
+      'bun', 'scripts/ladder.ts', '--gate', request.run, '--no-cache',
     ], { cwd: root, stdout: log, stderr: log });
   } finally {
     closeSync(log);
@@ -418,10 +413,9 @@ async function measureRow(request: MeasureRequest): Promise<RowCost> {
   await loop;
   const wallSeconds = (performance.now() - started) / 1000;
   // TWO SOURCES FOR ONE FIGURE, and the larger wins. `/usr/bin/time` reports
-  // getrusage, which counts children the sampler never saw — but a row killed at
-  // its deadline kills `time` with it and the report is empty or absent, and a
-  // zero there would admit a row that burned 480 s of CPU as a free one. The
-  // sampler's own running total covers exactly that case.
+  // getrusage, which counts children the sampler never saw — but a report that
+  // is empty or absent would admit a row that burned minutes of CPU as a free
+  // one. The sampler's own running total covers exactly that case.
   const report = tolerate(() => readFileSync(request.rusagePath, 'utf8'), 'enoent') ?? '';
   const cpuSeconds = Math.max(rusageCpuSeconds(report), sampledTicks / request.ticksPerSecond);
 
@@ -495,8 +489,6 @@ if (import.meta.main) {
   console.log(`measuring ${String(rows.length)} row(s) alone on ${machine}, MemAvailable ${String(memAvailableMb())} MiB`);
 
   for (const [index, gate] of rows.entries()) {
-    const deadline = gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS;
-
     // WAIT ON THE CONDITION, NOT A CLOCK, and wait differently for the two
     // conditions.
     //
@@ -541,7 +533,6 @@ if (import.meta.main) {
 
     const cost = await measureRow({
       run: gate.run,
-      deadline,
       logPath: join(scratch, `${String(index)}.log`),
       ticksPerSecond,
       rusagePath: join(scratch, `${String(index)}.rusage`),
@@ -562,8 +553,7 @@ if (import.meta.main) {
       `${String(index + 1).padStart(2)}/${String(rows.length)}  ${cost.wallSeconds.toFixed(1).padStart(7)}s wall  `
       + `${cost.cpuSeconds.toFixed(1).padStart(7)}s cpu  ${String(costThreads(cost, gate.seconds)).padStart(3)} thr `
       + `(${String(cost.peakRunnable)} runnable, ${cost.peakCpuThreads.toFixed(1)} achieved)  `
-      + `${String(costRssMb(cost)).padStart(6)} MiB  exit ${String(cost.exit)}  load ${cost.loadAtStart.toFixed(1)}  ${gate.label}`
-      + (cost.wallSeconds > deadline * 0.8 ? `  ⚠ ${(cost.wallSeconds / deadline * 100).toFixed(0)}% of its ${String(deadline)}s deadline ALONE` : ''),
+      + `${String(costRssMb(cost)).padStart(6)} MiB  exit ${String(cost.exit)}  load ${cost.loadAtStart.toFixed(1)}  ${gate.label}`,
     );
   }
 

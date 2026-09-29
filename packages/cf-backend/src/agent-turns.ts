@@ -1,6 +1,6 @@
 /** The workspace half of an agent-isolate turn (D9). */
-import { asSchema, type ModelMessage, type ToolSet } from 'ai';
-import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
+import { asSchema, type ToolSet } from 'ai';
+import { attempt, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { ActorReference, DynamicContext, HostedActor, ModelPricing, ResolvedTurnProfile, WorkMode } from '@kinu.run/core';
 import {
@@ -141,27 +141,14 @@ export class AgentTurns {
     return { ...resolved, dynamic: this.dynamic(pending) };
   }
 
-  advise(actorId: string, { turnId, turn, reachable, mode }: AgentReview): Promise<ModelMessage[]> {
+  async advise(actorId: string, { turnId, turn, reachable, mode }: AgentReview): Promise<void> {
     const { session } = this.prepared(this.turn(actorId, turnId)).turn.actor;
-    const advice: ModelMessage[] = [];
 
-    if (!session.orchestrator.improvementLanesOpen('completed', mode)) return Promise.resolve(advice);
+    if (!session.orchestrator.improvementLanesOpen('completed', mode)) return;
 
-    return settle(attempt({ doing: 'reviewing the reporting actor turn', otherwise: 'unavailable' }, () => session.reviewTurn(
-      session.advisorSnapshot(turn, reachable), false, async (signal) => {
-        advice.push({ role: 'user', content: signal.text });
-
-        return 'queued';
-      },
-    )).pipe(Effect.match({
-      onSuccess: () => advice,
-      onFailure: (failure) => {
-        diagnostics.failure('advisor.review_relay_failed', failure, { actor: actorId });
-
-        return advice;
-      },
-    })));
+    await session.hireAdvisor(session.advisorSnapshot(turn, reachable));
   }
+
 
 
   async execute(actorId: string, { turnId, callId, name, input }: AgentToolCall): Promise<AgentToolAnswer> {

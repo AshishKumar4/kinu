@@ -12,7 +12,6 @@ function freshVfs() {
   const db = new Database(scratchPath('vfs-blob', 'agent.db'), { create: true });
 
   const rt = createCLIRuntime(db, {
-    dbPath: db.filename,
     llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
   });
 

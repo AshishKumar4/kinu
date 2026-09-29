@@ -1,5 +1,6 @@
 /** Shared chat engine for server and CLI; returns the full ModelMessage array, tool calls and results included. */
 
+import { withToolResultImages } from './providers/tool-result-images';
 import {
   NoOutputGeneratedError,
   streamText,
@@ -24,7 +25,7 @@ import { DEFAULT_CACHE_RETENTION, type CacheRetention } from './providers/types'
 import { TurnContextMeter, type ContextComposition } from './context-meter';
 import { composePrepareStep, type StepContextPlane, type StepDynamicContext } from './prompting/prepare-step';
 import type { MissionGovernor } from './mission-budget';
-import type { AttachmentPolicy } from './prompting/attachment-sanitizer';
+import { sanitizeAttachmentsForModel, type AttachmentPolicy, type MediaModality } from './prompting/attachment-sanitizer';
 import { assembleTurnMessages } from './orchestrator/turn-context';
 import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls';
 import type { LostToolCall } from './tools/effect-claim';
@@ -65,7 +66,6 @@ export type ChatEvent =
   | {
     type: 'step-finish'; stepIndex: number; responseMessages: readonly ModelMessage[]; usage?: Usage;
     finishReason?: string;
-    /** Read off the SDK step here: its fields are prototype getters a spread would drop. */
     text?: string;
     toolCalls?: ReadonlyArray<{ toolName: string }>;
     toolResults?: ReadonlyArray<unknown>;
@@ -100,6 +100,8 @@ export type ObserveStream = (chunks: ReadableStream<UIMessageChunk>, call: Obser
 
 export interface ChatFallback {
   readonly spec: string;
+  /** The media this model takes, so a tool result's image reaches it or leaves a note (`tool-result-images.ts`). */
+  readonly accepts: ReadonlySet<MediaModality>;
   readonly bind: () => {
     readonly model: LanguageModel;
     readonly provider: string;
@@ -610,22 +612,26 @@ function* admittedEvent(tokens: number | undefined, contextWindow: number): Gene
   if (tokens !== undefined) yield { type: 'context-admitted', tokens, contextWindow };
 }
 
-export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
+/** Every medium some model of the chain takes. */
+function chainMedia(primary: ReadonlySet<MediaModality>, fallbacks: readonly ChatFallback[]): ReadonlySet<MediaModality> {
+  return new Set([primary, ...fallbacks.map((fallback) => fallback.accepts)].flatMap((accepts) => [...accepts]));
+}
+
+async function admitRequest(opts: ChatOptions) {
   const extensions = opts.extensions;
 
   // Extension tools never shadow a caller tool of the same name.
   const tools = traceTools(opts.trace, extensions ? { ...extensions.tools(), ...opts.tools } : opts.tools);
   assertToolsSupportedByModel(opts.modelContext, Object.keys(tools));
-
-  let stepCount = 0;
   const window = turnWindow(opts);
-  const { contextWindow, modelOutputLimit } = window;
+  const { contextWindow } = window;
 
   // Shared turn-context assembly (orchestrator/turn-context.ts); cf's beforeTurn runs the same function.
   const assembly: Parameters<typeof assembleTurnMessages>[0] = {
     system: opts.system,
     history: opts.history,
-    attachments: opts.attachments,
+    // What any model in the chain takes survives assembly; each attempt narrows it to its own model's media.
+    attachments: opts.attachments && { ...opts.attachments, accepts: chainMedia(opts.attachments.accepts, opts.fallbacks ?? []) },
     extensions,
     sessionKey: opts.cache?.sessionKey ?? '',
     contextWindow,
@@ -653,9 +659,25 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   // Blocks born at the turn's first step ride right before its input, so the request stays the last user-role
   // content.
-  const { messages: turnMessages, turnStart, admittedTokens } = await assembleTurnMessages({
+  const admitted = await assembleTurnMessages({
     ...assembly, history: initialContext?.messages ?? assembly.history, turnStart: initialContext?.turnStart,
   });
+
+  return { extensions, tools, window, assembly, primary, stepContext, initialContext, admitted };
+}
+
+/** Only the transform's own fold may call a model. */
+export async function measureTurnRequest(opts: ChatOptions): Promise<{ readonly tokens: number; readonly contextWindow: number } | null> {
+  const { admitted, window } = await admitRequest({ ...opts, stepContext: undefined });
+
+  return admitted.admittedTokens === undefined ? null : { tokens: admitted.admittedTokens, contextWindow: window.contextWindow };
+}
+
+export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
+  let stepCount = 0;
+  const { extensions, tools, window, assembly, primary, stepContext, initialContext, admitted } = await admitRequest(opts);
+  const { contextWindow, modelOutputLimit } = window;
+  const { messages: turnMessages, turnStart, admittedTokens } = admitted;
 
   yield* admittedEvent(admittedTokens, contextWindow);
 
@@ -689,9 +711,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const cache = turnCachePlan(opts, turnMessages);
   const rollTail = hasCacheMarkers(cache.strategy);
 
+  /** The model each attempt calls, with the media it takes: the turn's for the primary, its own for a fallback. */
   let current = {
     ...primary,
     model: opts.model,
+    accepts: opts.attachments?.accepts,
     providerOptions: mergeProviderOptions(cache.providerOptions, opts.providerOptions),
   };
 
@@ -729,6 +753,15 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   /** One provider call; a continuation or fallback is another. `stepOffset` keeps the turn's step numbers, by which
    *  prompting/step-injections.ts places steers. */
+  /** The request as this attempt's model takes it: narrowed only where the chain took more than the model does. */
+  const narrowedFor = async (request: readonly ModelMessage[]): Promise<ModelMessage[]> => {
+    const policy = assembly.attachments;
+
+    if (policy === undefined || current.accepts === undefined || current.accepts.size === policy.accepts.size) return [...request];
+
+    return sanitizeAttachmentsForModel(request, { ...policy, accepts: current.accepts });
+  };
+
   const callModel = async function* (
     request: readonly ModelMessage[],
     stepOffset: number,
@@ -764,10 +797,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     const call = new ProviderCall(servingFallback);
 
     const result = streamText({
-      model: current.model,
+      model: current.accepts === undefined ? current.model : withToolResultImages(current.model, current.accepts),
       system: cache.system,
       maxRetries: route.callRetries,
-      messages: [...request],
+      messages: await narrowedFor(request),
       tools: withToolSchemaDialect(tools, toolSchemaDialect(dialectSpec(current))),
       ...offeredTools,
       stopWhen: [opts.stopWhen ?? UNBOUNDED_STEPS, () => call.stepFailure !== null],
@@ -894,7 +927,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const takeOver = (next: ChatFallback): void => {
     const bound = next.bind();
 
-    current = { ...bound, spec: next.spec, providerOptions: mergeProviderOptions(cache.providerOptions, bound.providerOptions) };
+    current = { ...bound, spec: next.spec, accepts: next.accepts, providerOptions: mergeProviderOptions(cache.providerOptions, bound.providerOptions) };
     servingFallback = next.spec;
     route.tried.push(next.spec);
   };

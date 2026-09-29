@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createTestSql } from '@kinu.run/test-utils';
 import { WORKSPACE_IDENTITY_DDL } from '../src/identity/schema';
-import { initWorkspaceActorTable, WorkspaceActorDirectory } from '../src/identity/workspace-actors';
+import { initWorkspaceActorTable, WorkspaceActorDirectory, whenActorTakesInput } from '../src/identity/workspace-actors';
 import { initAgentConfigTable } from '../src/config/store';
 import { initCodemodeStateTable } from '../src/identity/program-state';
 
@@ -20,8 +20,8 @@ describe('one workspace actor directory', () => {
   test('main and two actors keep colliding config and program keys separate in one SQLite', () => {
     const { directory } = workspace('workspace', 'owner');
     const main = directory.createMain({ name: 'main' });
-    const left = directory.create({ parent: main, name: 'left', kind: 'subordinate', lifetime: 'durable', creationId: crypto.randomUUID() });
-    const right = directory.create({ parent: main, name: 'right', kind: 'subordinate', lifetime: 'task', creationId: crypto.randomUUID() });
+    const left = directory.create({ parent: main, name: 'left', origin: 'agent', lifetime: 'durable', creationId: crypto.randomUUID() });
+    const right = directory.create({ parent: main, name: 'right', origin: 'agent', lifetime: 'task', creationId: crypto.randomUUID() });
     main.config.setModel('model/main'); left.config.setModel('model/left'); right.config.setModel('model/right');
     main.programState.set('key', { value: 'main' }); left.programState.set('key', { value: 'left' }); right.programState.set('key', { value: 'right' });
     expect([main.config.getModel(), left.config.getModel(), right.config.getModel()]).toEqual(['model/main', 'model/left', 'model/right']);
@@ -37,10 +37,10 @@ describe('one workspace actor directory', () => {
   test('same child name under two parents resolves to distinct actors', () => {
     const { directory } = workspace('workspace', 'owner');
     const main = directory.createMain({ name: 'main' });
-    const left = directory.create({ parent: main, name: 'left', kind: 'subordinate', lifetime: 'durable', creationId: crypto.randomUUID() });
-    const right = directory.create({ parent: main, name: 'right', kind: 'subordinate', lifetime: 'durable', creationId: crypto.randomUUID() });
-    const a = directory.create({ parent: left, name: 'researcher', kind: 'subordinate', lifetime: 'task', creationId: crypto.randomUUID() });
-    const b = directory.create({ parent: right, name: 'researcher', kind: 'subordinate', lifetime: 'task', creationId: crypto.randomUUID() });
+    const left = directory.create({ parent: main, name: 'left', origin: 'agent', lifetime: 'durable', creationId: crypto.randomUUID() });
+    const right = directory.create({ parent: main, name: 'right', origin: 'agent', lifetime: 'durable', creationId: crypto.randomUUID() });
+    const a = directory.create({ parent: left, name: 'researcher', origin: 'agent', lifetime: 'task', creationId: crypto.randomUUID() });
+    const b = directory.create({ parent: right, name: 'researcher', origin: 'agent', lifetime: 'task', creationId: crypto.randomUUID() });
     expect(directory.resolveChild(left, 'researcher')?.actorId).toBe(a.actorId);
     expect(directory.resolveChild(right, 'researcher')?.actorId).toBe(b.actorId);
     expect(a.actorId).not.toBe(b.actorId);
@@ -59,24 +59,24 @@ describe('one workspace actor directory', () => {
   test('retirement survives a wake and holds the alias until deletion completes', () => {
     const { directory, sql } = workspace('workspace', 'owner');
     const main = directory.createMain({ name: 'main' });
-    const { reference } = directory.apply(main, [], { action: 'register', name: 'researcher', kind: 'subordinate', lifetime: 'durable', creationId: crypto.randomUUID() });
+    const { reference } = directory.apply(main, [], { action: 'register', name: 'researcher', origin: 'agent', lifetime: 'durable', creationId: crypto.randomUUID() });
     const old = directory.open(reference.actorId);
     const config = old.config;
     const state = old.programState;
     config.setModel('model/old');
     state.set('key', 'old');
-    expect(() => directory.create({ parent: main, name: 'researcher', kind: 'subordinate', lifetime: 'durable', creationId: crypto.randomUUID() })).toThrow(expect.objectContaining({ code: 'denied' }));
+    expect(() => directory.create({ parent: main, name: 'researcher', origin: 'agent', lifetime: 'durable', creationId: crypto.randomUUID() })).toThrow(expect.objectContaining({ code: 'denied' }));
     directory.apply(main, [], { action: 'retire', name: 'researcher', reference });
     const cold = new WorkspaceActorDirectory(sql, { workspaceId: 'workspace', ownerUserId: 'owner' });
     const pending = cold.retirements()[0];
 
     if (!pending) throw new Error('The interrupted deletion was lost.');
-    expect(() => cold.create({ parent: cold.main(), name: 'researcher', kind: 'subordinate', lifetime: 'durable', creationId: crypto.randomUUID() })).toThrow(expect.objectContaining({ code: 'denied' }));
+    expect(() => cold.create({ parent: cold.main(), name: 'researcher', origin: 'agent', lifetime: 'durable', creationId: crypto.randomUUID() })).toThrow(expect.objectContaining({ code: 'denied' }));
     expect(() => config.setModel('model/replay')).toThrow(expect.objectContaining({ code: 'missing' }));
     expect(() => state.set('key', 'replay')).toThrow(expect.objectContaining({ code: 'missing' }));
     expect(cold.apply(pending.caller, pending.parentPath, { action: 'retire', name: pending.name, reference: pending.reference }).state).toBe('retiring');
     cold.apply(pending.caller, pending.parentPath, { action: 'release', name: pending.name, reference: pending.reference });
-    const replacement = cold.create({ parent: cold.main(), name: 'researcher', kind: 'subordinate', lifetime: 'durable', creationId: crypto.randomUUID() });
+    const replacement = cold.create({ parent: cold.main(), name: 'researcher', origin: 'agent', lifetime: 'durable', creationId: crypto.randomUUID() });
     expect(replacement.actorId).not.toBe(reference.actorId);
     expect(replacement.config.getModel()).toBeNull();
     expect(replacement.programState.get('key')).toBeNull();
@@ -90,10 +90,10 @@ describe('one workspace actor directory', () => {
   test('a parent cannot bind or retire a sibling actor through a forged path', () => {
     const { directory } = workspace('workspace', 'owner');
     const main = directory.createMain({ name: 'main' });
-    const left = directory.create({ parent: main, name: 'left', kind: 'subordinate', lifetime: 'durable', creationId: crypto.randomUUID() });
-    const right = directory.create({ parent: main, name: 'right', kind: 'subordinate', lifetime: 'durable', creationId: crypto.randomUUID() });
-    const child = directory.apply(right, directory.storagePath(right), { action: 'register', name: 'researcher', kind: 'subordinate', lifetime: 'task', creationId: crypto.randomUUID() });
-    expect(() => directory.apply(left, directory.storagePath(right), { action: 'register', name: 'intruder', kind: 'subordinate', lifetime: 'durable', creationId: crypto.randomUUID() })).toThrow(expect.objectContaining({ code: 'denied' }));
+    const left = directory.create({ parent: main, name: 'left', origin: 'agent', lifetime: 'durable', creationId: crypto.randomUUID() });
+    const right = directory.create({ parent: main, name: 'right', origin: 'agent', lifetime: 'durable', creationId: crypto.randomUUID() });
+    const child = directory.apply(right, directory.storagePath(right), { action: 'register', name: 'researcher', origin: 'agent', lifetime: 'task', creationId: crypto.randomUUID() });
+    expect(() => directory.apply(left, directory.storagePath(right), { action: 'register', name: 'intruder', origin: 'agent', lifetime: 'durable', creationId: crypto.randomUUID() })).toThrow(expect.objectContaining({ code: 'denied' }));
 
     const byTheWrongParent = (action: 'validate' | 'retire') =>
       expect(() => directory.apply(left, directory.storagePath(left), { action, name: 'researcher', reference: child.reference }))
@@ -108,30 +108,30 @@ describe('one workspace actor directory', () => {
   test('a cold retry reopens its admission and a retired admission cannot claim its replacement', () => {
     const { directory, sql } = workspace('workspace', 'owner');
     const main = directory.createMain({ name: 'main' });
-    const first = directory.apply(main, [], { action: 'register', creationId: 'admission-one', name: 'researcher', kind: 'subordinate', lifetime: 'durable' });
+    const first = directory.apply(main, [], { action: 'register', creationId: 'admission-one', name: 'researcher', origin: 'agent', lifetime: 'durable' });
     directory.open(first.reference.actorId).config.setModel('saved-model');
     const cold = new WorkspaceActorDirectory(sql, { workspaceId: 'workspace', ownerUserId: 'owner' });
-    const retried = cold.apply(cold.main(), [], { action: 'register', creationId: 'admission-one', name: 'researcher', kind: 'subordinate', lifetime: 'durable' });
+    const retried = cold.apply(cold.main(), [], { action: 'register', creationId: 'admission-one', name: 'researcher', origin: 'agent', lifetime: 'durable' });
     expect(retried.reference.actorId).toBe(first.reference.actorId);
     expect(cold.open(retried.reference.actorId).config.getModel()).toBe('saved-model');
 
     const reRegister = (name: string, code: string) =>
-      expect(() => cold.apply(cold.main(), [], { action: 'register', creationId: 'admission-one', name, kind: 'subordinate', lifetime: 'durable' }))
+      expect(() => cold.apply(cold.main(), [], { action: 'register', creationId: 'admission-one', name, origin: 'agent', lifetime: 'durable' }))
         .toThrow(expect.objectContaining({ code }));
 
     reRegister('other', 'denied');
     cold.apply(cold.main(), [], { action: 'retire', name: 'researcher', reference: first.reference });
     cold.apply(cold.main(), [], { action: 'release', name: 'researcher', reference: first.reference });
-    const replacement = cold.apply(cold.main(), [], { action: 'register', creationId: 'admission-two', name: 'researcher', kind: 'subordinate', lifetime: 'durable' });
+    const replacement = cold.apply(cold.main(), [], { action: 'register', creationId: 'admission-two', name: 'researcher', origin: 'agent', lifetime: 'durable' });
     reRegister('researcher', 'missing');
     expect(cold.resolveChild(cold.main(), 'researcher')?.actorId).toBe(replacement.reference.actorId);
   });
   test('cancelling before registration rejects the late creator without touching a replacement', () => {
     const { directory } = workspace('workspace', 'owner');
     const main = directory.createMain({ name: 'main' });
-    const cancelled = directory.apply(main, [], { action: 'cancelCreation', creationId: 'old-admission', name: 'reader', kind: 'subordinate', lifetime: 'task' });
-    const replacement = directory.apply(main, [], { action: 'register', creationId: 'new-admission', name: 'reader', kind: 'subordinate', lifetime: 'task' });
-    expect(() => directory.apply(main, [], { action: 'register', creationId: 'old-admission', name: 'reader', kind: 'subordinate', lifetime: 'task' })).toThrow(expect.objectContaining({ code: 'missing' }));
+    const cancelled = directory.apply(main, [], { action: 'cancelCreation', creationId: 'old-admission', name: 'reader', origin: 'agent', lifetime: 'task' });
+    const replacement = directory.apply(main, [], { action: 'register', creationId: 'new-admission', name: 'reader', origin: 'agent', lifetime: 'task' });
+    expect(() => directory.apply(main, [], { action: 'register', creationId: 'old-admission', name: 'reader', origin: 'agent', lifetime: 'task' })).toThrow(expect.objectContaining({ code: 'missing' }));
     expect(cancelled.storageKey).not.toBe(replacement.storageKey);
     expect(directory.storageEntry(main, cancelled.storageKey)?.state).toBe('deleted');
     expect(directory.apply(main, [], { action: 'validate', name: 'reader', reference: replacement.reference }).state).toBe('active');
@@ -143,7 +143,7 @@ describe('one workspace actor directory', () => {
     const current = workspace('same-physical-address', 'owner');
     const replacement = current.directory.createMain({ name: 'main' });
     expect(replacement.actorId).not.toBe(previous.actorId);
-    expect(() => current.directory.apply(previous, [], { action: 'register', creationId: 'late-parent-call', name: 'reader', kind: 'subordinate', lifetime: 'durable' })).toThrow(expect.objectContaining({ code: 'missing' }));
+    expect(() => current.directory.apply(previous, [], { action: 'register', creationId: 'late-parent-call', name: 'reader', origin: 'agent', lifetime: 'durable' })).toThrow(expect.objectContaining({ code: 'missing' }));
     expect(current.directory.resolveChild(replacement, 'reader')).toBeNull();
   });
 
@@ -155,40 +155,83 @@ describe('one workspace actor directory', () => {
     expect(sql<{ n: number }>`SELECT COUNT(*) AS n FROM workspace_identity`[0]?.n).toBe(1);
   });
 
-  test.each(['node', 'head', 'branch'])('an actor of kind %s cannot be stored or registered', (kind) => {
+  test.each(['node', 'head', 'run', 'subordinate'])('an actor of origin %s cannot be stored or registered', (origin) => {
     const { directory, sql } = workspace('workspace', 'owner');
     const main = directory.createMain({ name: 'main' });
     const actorId = crypto.randomUUID();
 
-    expect(() => sql`INSERT INTO workspace_actors (actor_id, parent_actor_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id)
-      VALUES (${actorId}, ${main.actorId}, ${`exp:${kind}`}, ${actorId}, ${kind}, 'full', 'task', ${Date.now()}, 'c-old')`).toThrow('CHECK constraint failed');
-    expect(() => directory.apply(main, [], JSON.parse(JSON.stringify({ action: 'register', creationId: 'c-new', name: `exp:${kind}-new`, kind, lifetime: 'task' }))))
+    expect(() => sql`INSERT INTO workspace_actors (actor_id, parent_actor_id, name, storage_key, origin, tab, input, lifetime, evolves, created_at, creation_id)
+      VALUES (${actorId}, ${main.actorId}, ${`exp:${origin}`}, ${actorId}, ${origin}, 0, 0, 'task', 0, ${Date.now()}, 'c-old')`).toThrow('CHECK constraint failed');
+    expect(() => directory.apply(main, [], JSON.parse(JSON.stringify({ action: 'register', creationId: 'c-new', name: `exp:${origin}-new`, origin, lifetime: 'task' }))))
       .toThrow(expect.objectContaining({ code: 'bad_input' }));
   });
 
-  test('a toolless run actor is only a run, and creates no child', () => {
+  test.each([
+    { case: 'a swarm worker that takes input', origin: 'swarm', tab: 0, input: 1, lifetime: 'task', evolves: 0 },
+    { case: 'a background agent with durable life', origin: 'evolution', tab: 0, input: 0, lifetime: 'durable', evolves: 0 },
+    { case: 'an agent-made hire with a tab', origin: 'agent', tab: 1, input: 1, lifetime: 'durable', evolves: 0 },
+    { case: 'a hire that feeds evolution', origin: 'user', tab: 1, input: 1, lifetime: 'durable', evolves: 1 },
+    { case: 'a view-only hire', origin: 'user', tab: 1, input: 0, lifetime: 'durable', evolves: 0 },
+  ])('the table refuses $case', (row) => {
+    const { directory, sql } = workspace('workspace', 'owner');
+    const main = directory.createMain({ name: 'main' });
+    const actorId = crypto.randomUUID();
+
+    expect(() => sql`INSERT INTO workspace_actors (actor_id, parent_actor_id, name, storage_key, origin, tab, input, lifetime, evolves, created_at, creation_id)
+      VALUES (${actorId}, ${main.actorId}, 'x', ${actorId}, ${row.origin}, ${row.tab}, ${row.input}, ${row.lifetime}, ${row.evolves}, ${Date.now()}, 'c-bad')`).toThrow('CHECK constraint failed');
+  });
+
+  test('a view-only agent refuses a message and never runs the send; a hire takes it', async () => {
+    const { directory, sql } = workspace('workspace', 'owner');
+    const main = directory.createMain({ name: 'main' });
+    const background = directory.create({ parent: main, name: 'ask-refiner-a1', creationId: 'c-bg', origin: 'evolution', lifetime: 'task' });
+    const hire = directory.create({ parent: main, name: 'reader', creationId: 'c-hire', origin: 'user', lifetime: 'durable' });
+    const sent: string[] = [];
+
+    const send = (actorId: string) => whenActorTakesInput(sql, actorId, () => {
+      sent.push(actorId);
+
+      return Promise.resolve('turn');
+    });
+
+    await expect(send(background.actorId)).rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('view-only') });
+    await expect(send(hire.actorId)).resolves.toBe('turn');
+    expect(sent).toEqual([hire.actorId]);
+  });
+
+  test('each origin is stored as its preset: main feeds evolution, swarm and background agents are view-only task agents', () => {
     const { directory } = workspace('workspace', 'owner');
     const main = directory.createMain({ name: 'main' });
 
-    expect(() => directory.apply(main, [], { action: 'register', creationId: 'c-hire', name: 'reader', kind: 'subordinate', toolProfile: 'toolless', lifetime: 'durable' }))
+    const profile = (origin: 'user' | 'agent' | 'swarm' | 'evolution', lifetime: 'durable' | 'task') => {
+      const name = origin === 'swarm' ? `exp:${origin}-${lifetime}` : `${origin}-${lifetime}`;
+
+      const row = directory.describe(directory.create({ parent: main, name, creationId: name, origin, lifetime }));
+
+      return { origin: row.origin, tab: row.tab, input: row.input, lifetime: row.lifetime, evolves: row.evolves };
+    };
+
+    expect(directory.describe(main)).toMatchObject({ origin: 'system', tab: true, input: true, lifetime: 'durable', evolves: true });
+    expect(profile('user', 'durable')).toEqual({ origin: 'user', tab: true, input: true, lifetime: 'durable', evolves: false });
+    expect(profile('agent', 'task')).toEqual({ origin: 'agent', tab: false, input: true, lifetime: 'task', evolves: false });
+    expect(profile('swarm', 'task')).toEqual({ origin: 'swarm', tab: false, input: false, lifetime: 'task', evolves: false });
+    expect(profile('evolution', 'task')).toEqual({ origin: 'evolution', tab: false, input: false, lifetime: 'task', evolves: false });
+  });
+
+  test('a run actor creates only run actors, and a subordinate names no tool profile', () => {
+    const { directory } = workspace('workspace', 'owner');
+    const main = directory.createMain({ name: 'main' });
+
+    expect(() => directory.apply(main, [], JSON.parse(JSON.stringify({ action: 'register', creationId: 'c-hire', name: 'reader', origin: 'agent', toolProfile: 'toolless', lifetime: 'durable' }))))
       .toThrow(expect.objectContaining({ code: 'bad_input' }));
 
-    const branch = directory.apply(main, [], { action: 'register', creationId: 'c-branch', name: 'exp:branch-1', kind: 'run', toolProfile: 'toolless', lifetime: 'task' });
-    const head = directory.apply(main, [], { action: 'register', creationId: 'c-head', name: 'exp:head-1', kind: 'run', lifetime: 'task' });
-
-    expect([branch.toolProfile, head.toolProfile]).toEqual(['toolless', 'full']);
-    const caller = directory.open(branch.reference.actorId);
-
-    expect(() => directory.apply(caller, directory.storagePath(branch.reference), { action: 'register', creationId: 'c-child', name: 'exp:child-1', kind: 'run', lifetime: 'task' }))
-      .toThrow(expect.objectContaining({ code: 'denied' }));
-    // A full run actor creates only full run actors.
+    const head = directory.apply(main, [], { action: 'register', creationId: 'c-head', name: 'exp:head-1', origin: 'swarm', lifetime: 'task' });
     const headCaller = directory.open(head.reference.actorId);
     const headPath = directory.storagePath(head.reference);
 
-    expect(() => directory.apply(headCaller, headPath, { action: 'register', creationId: 'c-hire2', name: 'reader', kind: 'subordinate', lifetime: 'durable' }))
+    expect(() => directory.apply(headCaller, headPath, { action: 'register', creationId: 'c-hire2', name: 'reader', origin: 'agent', lifetime: 'durable' }))
       .toThrow(expect.objectContaining({ code: 'denied' }));
-    expect(() => directory.apply(headCaller, headPath, { action: 'register', creationId: 'c-branch2', name: 'exp:branch-2', kind: 'run', toolProfile: 'toolless', lifetime: 'task' }))
-      .toThrow(expect.objectContaining({ code: 'denied' }));
-    expect(directory.apply(headCaller, headPath, { action: 'register', creationId: 'c-head2', name: 'exp:head-2', kind: 'run', lifetime: 'task' }).toolProfile).toBe('full');
+    expect(directory.apply(headCaller, headPath, { action: 'register', creationId: 'c-head2', name: 'exp:head-2', origin: 'swarm', lifetime: 'task' }).origin).toBe('swarm');
   });
+
 });

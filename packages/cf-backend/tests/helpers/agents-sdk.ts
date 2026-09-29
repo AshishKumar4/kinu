@@ -2,6 +2,7 @@ import * as workersModule from 'cloudflare:workers';
 import { mock } from 'bun:test';
 import * as v from 'valibot';
 import type { AgentContext, Connection, ConnectionContext, FiberRecoveryContext, WSMessage } from 'agents';
+import { Lifecycle } from 'agents/lifecycle';
 import { parseJsonValue, type JsonObject, type JsonValue, type SqlValue } from '@kinu.run/core';
 import type { McpCredentialTransport } from '../../src/user/mcp';
 import type { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -18,8 +19,6 @@ function registerSynchronousMock(id: string, factory: ModuleMockFactory): void {
 
 /** Fiber ids, monotonic per process so a test can read them in creation order. */
 let harnessFiberSeq = 0;
-
-let harnessScheduleSeq = 0;
 
 /** Fibers running in this process; the interrupted scan skips them, as `_runFiberActiveFibers` does. */
 const harnessActiveFibers = new Set<string>();
@@ -55,16 +54,6 @@ const MANAGED_ROW_SCHEMA = v.object({
   status: v.string(),
   created_at: v.number(),
 });
-
-const SCHEDULE_ROW_SCHEMA = v.object({
-  id: v.string(),
-  callback: v.string(),
-  payload: v.nullable(v.string()),
-  type: v.string(),
-  time: v.number(),
-});
-
-export type HarnessScheduleRow = Omit<v.InferOutput<typeof SCHEDULE_ROW_SCHEMA>, 'payload'> & { payload: JsonValue };
 
 /** `undefined` is the legacy `void` return the SDK still accepts. */
 type FiberRecoveryOutcome = { status: string } | undefined;
@@ -110,6 +99,16 @@ export async function asPane<T>(tags: readonly string[], call: () => Promise<T>)
 
 export function harnessFibersRunning(): boolean {
   return harnessFiberBodies.size > 0;
+}
+
+/** Work each object holds open through `keepAliveWhile`, as production keeps it alive for it (a drain debounce, say). */
+const harnessKeepAlives = new WeakMap<workersModule.DurableObject, Set<Promise<unknown>>>();
+
+/** Resolves when the work `agent` holds open through `keepAliveWhile` has settled. */
+export async function joinHarnessKeepAlives(agent: workersModule.DurableObject): Promise<void> {
+  const open = harnessKeepAlives.get(agent);
+
+  while (open !== undefined && open.size > 0) await Promise.allSettled(open);
 }
 
 /** Resolves when every `runFiber` body started so far has settled. */
@@ -186,52 +185,6 @@ function facetOnlyStub(lookup: string, cls: { name: string }, name: string) {
 /** Marks the stub's Agent: a class built on the real `agents` runs fibers no harness join can see. */
 export const HARNESS_AGENT = Symbol('kinu.test.harness-agent');
 
-/** The services a capability `use` installs; the SDK's `bindLifecycleCapability`. */
-const lifecycleServices = new WeakMap<HarnessCapability, { ready(): Promise<void> }>();
-
-/** A lifecycle capability, as `use` receives one. */
-interface HarnessCapability { readonly capabilityId: string }
-
-/** What the lifecycle starts: the Agent's own `onStart`, a no-op on the base. */
-interface HarnessLifecycleHost { onStart(): void | Promise<void> }
-
-/** The SDK's start (`agents/dist/durable-object-lifecycle-D6nNQJJd.js:824-851`, `:775-778`): one `onStart` per
- *  start, a throw leaves it unstarted, `ready()` returns at once mid-start. */
-class HarnessLifecycle {
-  #status: 'zero' | 'starting' | 'started' = 'zero';
-  #starting: Promise<void> | null = null;
-  readonly #host: HarnessLifecycleHost;
-  constructor(host: HarnessLifecycleHost) {
-    this.#host = host;
-  }
-  use(capability: HarnessCapability): this {
-    lifecycleServices.set(capability, {
-      ready: () => (this.#status === 'zero' ? this.start() : Promise.resolve()),
-    });
-
-    return this;
-  }
-  start(): Promise<void> {
-    if (this.#status === 'started') return Promise.resolve();
-
-    if (this.#starting !== null) return this.#starting;
-    this.#status = 'starting';
-    this.#starting = (async () => {
-      try {
-        await this.#host.onStart();
-        this.#status = 'started';
-      } catch (error) {
-        this.#status = 'zero';
-        throw error;
-      } finally {
-        this.#starting = null;
-      }
-    })();
-
-    return this.#starting;
-  }
-}
-
 /**
  * Stub the Agent SDK: the real `agents` dist imports workerd-only `cloudflare:*` modules.
  * bun keeps one mock per specifier (first registration wins); call before importing the module under test.
@@ -239,33 +192,36 @@ class HarnessLifecycle {
 export function mockAgentsSdk(): void {
   registerSynchronousMock('agents', () => ({
     /** Also the real base for DO classes a test instantiates directly (UserDO), hence the ctx/env assignment. */
-    Agent: class {
+    Agent: class extends workersModule.DurableObject<Env> {
       readonly [HARNESS_AGENT] = true;
-      readonly ctx: AgentContext | undefined;
-      readonly env: Env | undefined;
       /** The vendor base builds the one manager in its constructor (`agents/dist/src-5W6JNKVb.js:821`);
        *  since cloudflare/agents#1897 that is the only way a manager reaches storage. */
       readonly mcp = new FakeMCPClientManager();
-      readonly lifecycle = new HarnessLifecycle(this);
+      #lifecycle: Lifecycle | undefined;
+      /** The SDK's own Lifecycle: capability services, the start and the job queue are not approximated. */
+      get lifecycle(): Lifecycle {
+        this.#lifecycle ??= new Lifecycle(this);
+
+        return this.#lifecycle;
+      }
       /** The SDK base's default: nothing to start. */
       onStart(): void | Promise<void> {}
-      /** The SDK's alarm runs due schedule rows; workerd's is `tests/workerd/do-alarm.test.ts`. */
-      async alarm(): Promise<void> {}
+      /** Drives due jobs as `Agent.alarm()` does; the platform alarm is workerd's (`tests/workerd/do-alarm.test.ts`). */
+      async alarm(): Promise<void> {
+        await this.lifecycle.alarm();
+      }
       /** `callable` below records nothing, so no method reads as callable. */
       getCallableMethods(): Map<string, object> {
         return new Map();
       }
-      constructor(ctx?: AgentContext, env?: Env) {
-        this.ctx = ctx;
-        this.env = env;
-
-        if (ctx) {
-          Object.defineProperty(this, 'name', {
-            configurable: true,
-            value: ctx.id.name ?? ctx.id.toString(),
-          });
-          this._ensureSchema();
-        }
+      constructor(ctx: AgentContext, env: Env) {
+        super(ctx, env);
+        Object.defineProperty(this, 'name', {
+          configurable: true,
+          value: ctx.id.name ?? ctx.id.toString(),
+        });
+        // The SDK's constructor creates its fiber tables (`_ensureSchema`); the actor's sweep relies on it.
+        this.#fiberTables();
       }
       /** A prototype method, as the vendor's is (`agents/dist/src-5W6JNKVb.js:574`), so a subclass override runs. */
       sql(strings: TemplateStringsArray, ...values: SqlValue[]) {
@@ -278,29 +234,6 @@ export function mockAgentsSdk(): void {
 
         return this.ctx.storage.sql.exec(query, ...values).toArray();
       }
-      /**
-       * Mirrors the vendor's constructor-time migration (schedules table only): the actor activation
-       * sweep (`orchestrator.ts`) runs before any schedule helper, so a lazy table fails `no such table`.
-       */
-      protected _ensureSchema(): void {
-        this.ctx?.storage.sql.exec(`CREATE TABLE IF NOT EXISTS cf_agents_schedules (
-          id TEXT PRIMARY KEY NOT NULL DEFAULT (randomblob(9)),
-          callback TEXT,
-          payload TEXT,
-          type TEXT NOT NULL CHECK(type IN ('scheduled', 'delayed', 'cron', 'interval')),
-          time INTEGER,
-          delayInSeconds INTEGER,
-          cron TEXT,
-          intervalSeconds INTEGER,
-          running INTEGER DEFAULT 0,
-          created_at INTEGER DEFAULT (unixepoch()),
-          execution_started_at INTEGER,
-          retry_options TEXT,
-          owner_path TEXT,
-          owner_path_key TEXT
-        )`);
-      }
-
       onConnect(_connection: Connection, _ctx: ConnectionContext): void {}
       onMessage(_connection: Connection, _message: WSMessage): void {}
       onClose(_connection: Connection, _code: number, _reason: string, _wasClean: boolean): void {}
@@ -308,64 +241,18 @@ export function mockAgentsSdk(): void {
         return new Response('Not implemented', { status: 404 });
       }
 
-      /** Runs the body: production uses it for work that outlives its call (drain timer, genesis turn). */
+      /** Runs the body, held open for {@link joinHarnessKeepAlives}: production uses it for work that outlives its call. */
       async keepAliveWhile<Result>(fn: () => Promise<Result>): Promise<Result> {
-        return fn();
-      }
+        const work = fn();
+        const open = harnessKeepAlives.get(this) ?? new Set<Promise<unknown>>();
+        harnessKeepAlives.set(this, open);
+        open.add(work);
 
-      /**
-       * `cf_agents_schedules` copied, not approximated: the timer chain is decided by which rows exist.
-       * The alarm itself is workerd's (`tests/workerd/do-alarm.test.ts`).
-       */
-      async schedule(when: Date | number, callback: string, payload?: JsonValue): Promise<{
-        id: string; callback: string; payload: JsonValue; type: string; time: number;
-      }> {
-        const row = {
-          id: `sched-${String(++harnessScheduleSeq)}`,
-          callback,
-          payload: payload ?? null,
-          type: when instanceof Date ? 'scheduled' : 'delayed',
-          time: Math.floor((when instanceof Date ? when.getTime() : Date.now() + when * 1000) / 1000),
-        };
-
-        this.#scheduleTable().exec(
-          `INSERT INTO cf_agents_schedules (id, callback, payload, type, time)
-           VALUES (?, ?, ?, ?, ?)`,
-          row.id, row.callback, JSON.stringify(row.payload), row.type, row.time,
-        );
-
-        return row;
-      }
-
-      async listSchedules(): Promise<HarnessScheduleRow[]> {
-        return this.#scheduleTable()
-          .exec(`SELECT id, callback, payload, type, time FROM cf_agents_schedules ORDER BY time`)
-          .toArray()
-          .map((raw) => {
-            const row = v.parse(SCHEDULE_ROW_SCHEMA, raw);
-
-            // The SDK returns the payload parsed; the harness stores the JSON string.
-            const payload: JsonValue = row.payload === null
-              ? null
-              : parseJsonValue(row.payload);
-
-            return { ...row, payload };
-          });
-      }
-
-      async cancelSchedule(id: string): Promise<boolean> {
-        return this.#scheduleTable()
-          .exec(`DELETE FROM cf_agents_schedules WHERE id = ? RETURNING id`, id)
-          .toArray().length > 0;
-      }
-
-      /** The table is created by `_ensureSchema` at construction, never by a schedule call. */
-      #scheduleTable(): SqlStorage {
-        const sql = this.ctx?.storage.sql;
-
-        if (!sql) throw new Error('harness Agent: schedules need a ctx');
-
-        return sql;
+        try {
+          return await work;
+        } finally {
+          open.delete(work);
+        }
       }
 
       /** A method, not an optional field: a field would shadow the subclass's prototype hook with `undefined`. */
@@ -578,15 +465,6 @@ export function mockAgentsSdk(): void {
 
         return facetOnlyStub('subAgent', cls, name);
       }
-      /** Never inserts: the real SDK returns `null` when `_existingSubAgentIdentity` finds no row,
-       *  so reading a retained path cannot mint the child. */
-      async getExistingSubAgent(cls: { name: string }, name: string): Promise<object | null> {
-        await Promise.resolve();
-
-        if (!this.hasSubAgent(cls.name, name)) return null;
-
-        return facetOnlyStub('getExistingSubAgent', cls, name);
-      }
       listSubAgents(cls: { name: string }): Array<{ className: string; name: string; createdAt: number }> {
         return this.#subAgentRegistry().exec(
           `SELECT class, name, created_at FROM cf_agents_sub_agents
@@ -671,21 +549,6 @@ export function mockAgentsSdk(): void {
   // UserDO imports these at module load; the double records the manager's writable state
   // (server rows, live connections), a second truth beside `user_mcp_servers`.
   registerSynchronousMock('agents/mcp/client', () => ({ MCPClientManager: FakeMCPClientManager }));
-  registerSynchronousMock('agents/lifecycle', () => ({
-    LifecycleCapability: class {
-      readonly capabilityId: string;
-      constructor(capabilityId: string) {
-        this.capabilityId = capabilityId;
-      }
-      get lifecycle(): { ready(): Promise<void> } {
-        const services = lifecycleServices.get(this);
-
-        if (services === undefined) throw new Error('a lifecycle capability must be installed with Lifecycle.use() before use');
-
-        return services;
-      }
-    },
-  }));
   // `connectToServer` reads `authUrl` (queued by `queueMcpAuthUrl`) and `clientId` off the provider.
   registerSynchronousMock('agents/mcp/do-oauth-client-provider', () => ({
     DurableObjectOAuthClientProvider: class {
@@ -719,13 +582,15 @@ export function mockAgentsSdk(): void {
     ...workersModule,
     tracing: {
       enterSpan: <T>(name: string, fn: (span: NativeSpanStub) => T): T => {
-        const { attributes, close } = openNativeSpan(name);
+        const { attributes, exceptions, close, setAttributes } = openNativeSpan(name);
         let closesLater = false;
 
         try {
           const result = fn({
             isTraced: true,
             setAttribute: (key: string, value: string | number | boolean) => { attributes.set(key, value); },
+            setAttributes,
+            recordException: (failure) => { exceptions.push(failure); },
           });
 
           if (result instanceof Promise) {
@@ -746,11 +611,13 @@ export function mockAgentsSdk(): void {
         name: string,
         fn: (span: NativeSpanStub & { end(): void }) => T,
       ): T => {
-        const { attributes, close } = openNativeSpan(name);
+        const { attributes, exceptions, close, setAttributes } = openNativeSpan(name);
 
         return fn({
           isTraced: true,
           setAttribute: (key: string, value: string | number | boolean) => { attributes.set(key, value); },
+          setAttributes,
+          recordException: (failure) => { exceptions.push(failure); },
           end: close,
         });
       },
@@ -761,6 +628,8 @@ export function mockAgentsSdk(): void {
 interface NativeSpanStub {
   readonly isTraced: boolean;
   setAttribute(key: string, value: string | number | boolean): void;
+  setAttributes(values: Record<string, string | number | boolean>): void;
+  recordException(failure: { name: string; code: string }): void;
 }
 
 export interface NativeSpanRecord {
@@ -768,6 +637,7 @@ export interface NativeSpanRecord {
   /** Index in `nativeSpans` of the span this opened inside, or null at a root. */
   readonly parent: number | null;
   readonly attributes: ReadonlyMap<string, string | number | boolean>;
+  readonly exceptions: readonly { name: string; code: string }[];
 }
 
 const nativeSpans: NativeSpanRecord[] = [];
@@ -777,11 +647,16 @@ const openSpans: number[] = [];
 function openNativeSpan(name: string) {
   const index = nativeSpans.length;
   const attributes = new Map<string, string | number | boolean>();
-  nativeSpans.push({ name, parent: openSpans.at(-1) ?? null, attributes });
+  const exceptions: { name: string; code: string }[] = [];
+  nativeSpans.push({ name, parent: openSpans.at(-1) ?? null, attributes, exceptions });
   openSpans.push(index);
 
   return {
     attributes,
+    exceptions,
+    setAttributes: (values: Record<string, string | number | boolean>): void => {
+      for (const [key, value] of Object.entries(values)) attributes.set(key, value);
+    },
     close: () => {
       const top = openSpans.lastIndexOf(index);
 

@@ -7,6 +7,7 @@
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import * as v from 'valibot';
+import { KINU_TIMER_JOB } from '../../src/wake-jobs';
 import {
   CallRecordSchema,
   DiagnosticFailureSchema,
@@ -236,8 +237,8 @@ describe('two real turns over the HTTP model seam', () => {
     const wake = await root.reactorWake(workspace, owner, 'REACTOR-WAKE');
 
     // The arrival armed the chain: no Kinu timer before it, one once its detached arm landed.
-    expect(wake.armedBefore).not.toContain('_kinuTimerTick');
-    expect(wake.armedAfter).toContain('_kinuTimerTick');
+    expect(wake.armedBefore).not.toContain(KINU_TIMER_JOB);
+    expect(wake.armedAfter).toContain(KINU_TIMER_JOB);
 
     // Pending at the eviction, which dropped scheduleDrain's debounce: a debounce that beat it would
     // green this on the wrong evidence.

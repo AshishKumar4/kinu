@@ -10,7 +10,7 @@ import type { TuiHubData } from '../src/tui/hubs';
 import { asFetchFunction, codenameFor } from '@kinu.run/core';
 
 import { TURN, cleanupChats, fakeClient, mountChat, type FixtureWorkspace } from './helpers/chat-app-fixture';
-import { executeSlashCommand } from '../src/slash-commands';
+import { commandsForClient, executeSlashCommand } from '../src/slash-commands';
 import { createMemoryTuiPreferenceStore } from './helpers/tui-preferences';
 import { SelectRenderable, TextareaRenderable } from '@opentui/core';
 import { flushSync } from '@opentui/react';
@@ -745,11 +745,49 @@ test('the header shows the size the gate measured the last request at, not the s
   await screen.waitFor('an unmeasured context', () => screen.frame().includes('ctx —/'));
 
   agent.emit({ type: 'turn-start', kind: 'user', text: 'long' });
-  agent.emit({ type: 'broadcast', event: { type: 'context_admitted', requestTokens: 1_500, contextWindow: 200_000 } });
+  agent.emit({ type: 'broadcast', event: { type: 'context_fill', contextTokens: 1_500, contextWindow: 200_000 } });
   agent.emit({ type: 'text-delta', delta: 'word '.repeat(40_000) });
   agent.emit({ type: 'turn-end', turn: TURN });
 
   await screen.waitFor('the measured size', () => screen.frame().includes('ctx ~1.5k/200k'));
+});
+
+test('/compact shows its progress while the fold runs, and a failed fold says why', async () => {
+  for (const ends of ['folded', 'failed'] as const) {
+    const fold = Promise.withResolvers<void>();
+    const agent = fakeClient({ name: `compact-${ends}` });
+    const local = agent.client.localControls;
+
+    if (!local) throw new Error('the fixture is local');
+    local.compact = () => fold.promise;
+    const working = commandsForClient(agent.client).find((command) => command.name === '/compact')?.working ?? '';
+    const screen = await mountChat(agent.client);
+
+    await screen.mockInput.typeText('/compact');
+    flushSync(() => screen.mockInput.pressEnter());
+    await screen.waitFor('the fold in progress', () => screen.frame().includes(working));
+
+    if (ends === 'folded') fold.resolve();
+    else fold.reject(new Error('the summarizer is out of credit'));
+
+    await screen.waitFor('the fold settled', () => !screen.frame().includes(working));
+
+    if (ends === 'failed') expect(screen.frame()).toContain('the summarizer is out of credit');
+  }
+});
+
+test('a reopened chat shows the recorded context number before any turn runs', async () => {
+  const agent = fakeClient({
+    name: 'recorded',
+    status: async () => ({
+      name: 'recorded', purpose: 'p', model: 'openai/gpt-5.5', reasoningEffort: 'medium',
+      context: { tokens: 42_000, window: 200_000, source: 'provider', at: '2026-09-27T00:00:00.000Z' },
+    }),
+  });
+
+  const screen = await mountChat(agent.client);
+
+  await screen.waitFor('the recorded number', () => screen.frame().includes('ctx ~42k/200k'));
 });
 
 test('a turn waiting on a rate limit names the provider, not thinking', async () => {
@@ -926,11 +964,11 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
       actorReference: null,
       birth: {
         creationId: 'birth-scout',
-        seed: { name: 'scout', displayName: 'Scout', nameOrigin: 'user', role: 'task', tier: 'default', mission: 'Survey the logs', lifetime: 'durable' },
+        seed: { name: 'scout', displayName: 'Scout', nameOrigin: 'user', role: 'task', tier: 'default', mission: 'Survey the logs', lifetime: 'durable', origin: 'user' },
         assignment: null,
       },
       deleteRequested: false,
-      createdBy: 'orchestrator',
+      origin: 'agent',
       status: 'working',
       currentTask: 'Survey the logs',
       createdAt: 1,
@@ -948,7 +986,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     };
 
     const helper: SubordinateChild = { ...scout, name: 'busy-mill-01', displayName: 'Busy Mill', nameOrigin: 'auto', birth: null, currentTask: null };
-    const refiner: SubordinateChild = { ...helper, name: 'ask-refiner-fb0gr9', displayName: 'Quiet Ash', createdBy: 'evolution', lifetime: 'task' };
+    const refiner: SubordinateChild = { ...helper, name: 'ask-refiner-fb0gr9', displayName: 'Quiet Ash', origin: 'evolution', lifetime: 'task' };
     const asked: SubordinateChild = { ...helper, name: 'ask-reviewer-a1', displayName: 'reviewing', lifetime: 'task' };
 
     const main = fakeClient({
@@ -964,8 +1002,8 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
           page: {
             status: 'end',
             items: [
-              { id: 'h1', role: 'user', content: 'Look through app.log for errors', createdAt: 1 },
-              { id: 'h2', role: 'assistant', content: 'Found 3 errors in app.log', createdAt: 2 },
+              { id: 'h1', position: 0, role: 'user', content: 'Look through app.log for errors', createdAt: 1 },
+              { id: 'h2', position: 1, role: 'assistant', content: 'Found 3 errors in app.log', createdAt: 2 },
             ],
           },
         };
@@ -977,9 +1015,8 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     await screen.waitFor('the hired subagent in the hub', () => screen.frame().includes('Scout · agent · task/default'));
     expect(screen.frame()).toContain('Survey the logs');
     expect(screen.frame()).not.toContain('retired-helper');
-    // Internal helpers are not listed at all, by title or by slug.
 
-    for (const shown of ['Quiet Ash', 'ask-refiner-fb0gr9', 'reviewing', 'ask-reviewer-a1']) expect(screen.frame()).not.toContain(shown);
+    for (const shown of ['reviewing', 'ask-reviewer-a1', 'Quiet Ash · agent']) expect(screen.frame()).not.toContain(shown);
     expect(screen.frame()).toContain('Busy Mill · agent');
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressArrow('down');
@@ -998,7 +1035,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     const reviewer: SubordinateChild = {
       name: 'ask-reviewer-a1', displayName: 'reviewing', nameOrigin: 'auto', role: 'task',
       actorReference: { actorId: 'actor-reviewer', workspaceId: 'ws', parentActorId: 'actor-main' }, birth: null, deleteRequested: false,
-      createdBy: 'orchestrator', status: 'dismissed', currentTask: null, createdAt: 1, dismissedAt: 2, lifetime: 'task', taskEventId: null,
+      origin: 'agent', status: 'dismissed', currentTask: null, createdAt: 1, dismissedAt: 2, lifetime: 'task', taskEventId: null,
     };
 
     const main = fakeClient({
@@ -1013,7 +1050,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
         if (request.view !== 'history') return missingSubordinateHistory(request.path);
         reads.push(request);
 
-        return { view: 'history', path: request.path, page: { status: 'end', items: [{ id: 'h1', role: 'assistant', content: 'The review found nothing', createdAt: 1 }] } };
+        return { view: 'history', path: request.path, page: { status: 'end', items: [{ id: 'h1', position: 0, role: 'assistant', content: 'The review found nothing', createdAt: 1 }] } };
       },
     });
 
@@ -1048,7 +1085,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
         reads.push(request);
 
         return request.actor === 'actor-refiner'
-          ? { view: 'history', path: request.path, page: { status: 'end', items: [{ id: 'h1', role: 'assistant', content: 'Two edits proposed', createdAt: 1 }] } }
+          ? { view: 'history', path: request.path, page: { status: 'end', items: [{ id: 'h1', position: 0, role: 'assistant', content: 'Two edits proposed', createdAt: 1 }] } }
           : missingSubordinateHistory(request.path);
       },
     });
@@ -1060,6 +1097,40 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
     await screen.waitFor('the kept conversation', () => screen.frame().includes('Two edits proposed'));
+    expect(reads).toEqual([{ path: [], actor: 'actor-refiner', view: 'history', page: {} }]);
+    screen.mockInput.pressEscape();
+  });
+
+  test('an evolution helper is a Work row in the Agent Hub, and Enter opens its kept chat by id', async () => {
+    const reads: unknown[] = [];
+
+    const refiner: SubordinateChild = {
+      name: 'ask-refiner-fb0gr9', displayName: 'Quiet Ash', nameOrigin: 'auto', role: 'task',
+      actorReference: { actorId: 'actor-refiner', workspaceId: 'ws', parentActorId: null }, birth: null, deleteRequested: false, origin: 'evolution',
+      status: 'dismissed', currentTask: null, createdAt: 1, dismissedAt: 2, lifetime: 'task', taskEventId: null,
+    };
+
+    const main = fakeClient({
+      name: 'checkout',
+      inspectSubordinate: async (request) => {
+        if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [refiner] } };
+
+        if (request.view !== 'history') return missingSubordinateHistory(request.path);
+        reads.push(request);
+
+        return request.actor === 'actor-refiner'
+          ? { view: 'history', path: request.path, page: { status: 'end', items: [{ id: 'h1', position: 0, role: 'assistant', content: 'One wording change proposed', createdAt: 1 }] } }
+          : missingSubordinateHistory(request.path);
+      },
+    });
+
+    const screen = await mountChat(main.client, { hubData: HUB_FIXTURE });
+    screen.mockInput.pressKey('a', { meta: true });
+    await screen.waitFor('the refiner in Work', () => screen.frame().includes('Quiet Ash'));
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressArrow('down');
+    screen.mockInput.pressEnter();
+    await screen.waitFor('the kept conversation', () => screen.frame().includes('One wording change proposed'));
     expect(reads).toEqual([{ path: [], actor: 'actor-refiner', view: 'history', page: {} }]);
     screen.mockInput.pressEscape();
   });
@@ -1087,7 +1158,7 @@ test('a turn waiting on a rate limit names the provider, not thinking', async ()
         return {
           view: 'history',
           path: request.path,
-          page: { status: 'end', items: [{ id: 'h1', role: 'assistant', content: 'Two edits proposed for the turn-ending section', createdAt: 1 }] },
+          page: { status: 'end', items: [{ id: 'h1', position: 0, role: 'assistant', content: 'Two edits proposed for the turn-ending section', createdAt: 1 }] },
         };
       },
     });

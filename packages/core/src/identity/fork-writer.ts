@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 /** Workspace fork write and its accounting. The target DB must already be initialized (initWorkspaceSchema). */
 
 import type { SqlExecutor } from '../types/primitives';
@@ -61,7 +62,8 @@ export interface ForkStagedCounts {
 interface ForkMarker {
   readonly actorId: string;
   readonly markerId: string;
-  readonly parentId: string;
+  /** Just after the cut: the marker is the fork's newest entry. */
+  readonly position: number;
   readonly text: string;
   readonly recordedAt: number;
 }
@@ -106,19 +108,17 @@ export class ForkTargetWriter {
   }
 
   /**
-     * Delete every row this write owns so a retry self-heals; children first, entry-parent edges released first.
+     * Delete every row this write owns so a retry self-heals; children first.
      * `workspace_identity` is kept: a hosted target's file namespace derives from its owner row.
      */
   clearStagedRows(): void {
     const actorId = this.actorId;
     void this.target`DELETE FROM crafted_tools`;
+    markStoreChanged(this.target);
     void this.target`DELETE FROM memory_chunks`;
     void this.target`DELETE FROM actor_config WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM fork_lineage`;
-    void this.target`DELETE FROM conversation_heads WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM conversation_entry_parts WHERE actor_id = ${actorId}`;
-    // Release parent edges first; one DELETE may remove a parent before its child.
-    void this.target`UPDATE conversation_entries SET parent_id = ${null} WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM conversation_entries WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM context_memberships WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM actor_context_selection WHERE actor_id = ${actorId}`;
@@ -142,6 +142,7 @@ export class ForkTargetWriter {
         (name, description, code, created_at, updated_at)
         VALUES (${t.name}, ${t.description}, ${t.code}, ${t.created_at}, ${t.updated_at})
       `;
+      markStoreChanged(this.target);
     }
 
     this.staging.count({ craftedTools: rows.length });
@@ -178,16 +179,16 @@ export class ForkTargetWriter {
     this.staging.count({ sessionMessages: rows.length });
   }
 
-  /** The public chain, root first; context columns stay null until publication. */
+  /** The public chat, oldest first; context columns stay null until publication. */
   stageConversationEntries(rows: readonly ForkConversationEntryRow[]): void {
     const actorId = this.actorId;
 
     for (const row of rows) {
       void this.target`
         INSERT INTO conversation_entries
-        (actor_id, session_id, id, parent_id, role, turn_id, run_id,
+        (actor_id, session_id, id, position, role, turn_id, run_id,
          metadata_json, metadata_path, metadata_digest, recorded_at, context_id, context_revision)
-        VALUES (${actorId}, ${CHAT_SESSION_ID}, ${row.id}, ${row.parent_id}, ${row.role},
+        VALUES (${actorId}, ${CHAT_SESSION_ID}, ${row.id}, ${row.position}, ${row.role},
                 ${row.turn_id}, ${row.run_id}, ${row.metadata_json},
                 ${row.metadata_path === null ? null : this.artifactPath(row.metadata_path)},
                 ${row.metadata_digest}, ${row.recorded_at}, ${null}, ${null})
@@ -285,10 +286,10 @@ export class ForkTargetWriter {
     const actorId = this.actorId;
 
     // A target without the cut entry got an incomplete transfer; refuse before the first write.
-    const cut = this.target<{ id: string }>`
-      SELECT id FROM conversation_entries
+    const cut = this.target<{ position: number }>`
+      SELECT position FROM conversation_entries
       WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${head.cut.messageId}
-    `[0]?.id;
+    `[0]?.position;
 
     if (cut === undefined) {
       throw new KinuError('missing', `fork publication has no cut entry ${JSON.stringify(head.cut.messageId)} in the transferred chain`);
@@ -334,7 +335,7 @@ export class ForkTargetWriter {
       WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${head.cut.messageId}
     `;
 
-    // Fork marker: a system entry on the cut point; a chain node only, deliberately not a context member.
+    // Fork marker: a system entry just after the cut; a chat entry only, deliberately not a context member.
     const syntheticText =
       `You were forked from workspace "${head.source.workspaceName}" at message ${head.cut.messageId} on `
       + `${new Date(this.now).toISOString()}. The conversation above happened before the fork. Your files are a copy `
@@ -344,9 +345,8 @@ export class ForkTargetWriter {
 
     const markerId = `fork-marker-${this.opts.workspaceId.slice(0, 8)}-${this.now}`;
     this.writeForkMarker({
-      actorId, markerId, parentId: cut, text: syntheticText, recordedAt: forkPointMs + 1,
+      actorId, markerId, position: cut + 1, text: syntheticText, recordedAt: forkPointMs + 1,
     });
-    void this.target`INSERT INTO conversation_heads (actor_id, session_id, entry_id) VALUES (${actorId}, ${CHAT_SESSION_ID}, ${markerId})`;
 
     // Staged files are the fork's now. The transfer row stays to answer re-delivered frames until the next `begin`.
     this.staging.dropFiles();
@@ -358,7 +358,7 @@ export class ForkTargetWriter {
   /** The marker as canonical rows, written via SQL because publication is synchronous;
      *  its text is small enough to be an inline payload. */
   private writeForkMarker(marker: ForkMarker): void {
-    const { actorId, markerId, parentId, text, recordedAt } = marker;
+    const { actorId, markerId, position, text, recordedAt } = marker;
 
     const content = JSON.stringify([{ partNo: 0, kind: 'text', streamOrder: 0, replyTo: null, value: { type: 'text', text } }]);
     void this.target`
@@ -371,9 +371,9 @@ export class ForkTargetWriter {
 
     void this.target`
       INSERT INTO conversation_entries
-      (actor_id, session_id, id, parent_id, role, turn_id, run_id,
+      (actor_id, session_id, id, position, role, turn_id, run_id,
        metadata_json, metadata_path, metadata_digest, recorded_at, context_id, context_revision)
-      VALUES (${actorId}, ${CHAT_SESSION_ID}, ${markerId}, ${parentId}, ${'system'}, ${null}, ${null},
+      VALUES (${actorId}, ${CHAT_SESSION_ID}, ${markerId}, ${position}, ${'system'}, ${null}, ${null},
               ${null}, ${null}, ${null}, ${recordedAt}, ${null}, ${null})
     `;
 

@@ -33,11 +33,7 @@ const WORKSPACE_GID = SESSION_UID;
 
 const SHARED_DIRECTORY_MODE = 0o2775;
 
-function sharedMode(mode: number, directory: boolean): number {
-  const shared = (mode & 0o7707) | ((mode & 0o700) >> 3);
-
-  return directory ? shared | 0o2000 : shared;
-}
+const SHARED_DEFAULT_ACL = 0o775;
 
 /**
  * The first character excludes `-` so no home reads as a CLI flag; derived
@@ -315,10 +311,13 @@ function writeUnverifiedNote(sql: SqlDatabase): void {
   }
 }
 
-export type SlatesMoveVfs = RootMoveVfs & Pick<CredentialedVfs, 'mkdir' | 'lstat'>;
+export type SlatesMoveVfs = RootMoveVfs & Pick<CredentialedVfs, 'mkdir' | 'lstat' | 'getDefaultAcl' | 'setDefaultAcl'>;
 
-/** Kernel-owned, group-shared, setgid; the old root's slates move in once. */
-export function settleWorkspaceSlates(kernel: SlatesMoveVfs): void {
+/**
+ * Kernel-owned, group-shared, setgid, and registered with Nimbus as a shared directory (`register`: once per
+ * engine boot, from trusted host init); the old root's slates move in once, after, so they are shared too.
+ */
+export function settleWorkspaceSlates(kernel: SlatesMoveVfs, register: (path: string) => void): void {
   if (kernel.isSymlink(SLATES_ROOT)) {
     kernel.unlink(SLATES_ROOT);
   } else if (kernel.exists(SLATES_ROOT) && !kernel.isDirectory(SLATES_ROOT)) {
@@ -327,14 +326,24 @@ export function settleWorkspaceSlates(kernel: SlatesMoveVfs): void {
   }
 
   if (!kernel.exists(SLATES_ROOT)) kernel.mkdir(SLATES_ROOT);
+
   const root = kernel.stat(SLATES_ROOT);
 
-  if (root.uid !== 0 || root.gid !== WORKSPACE_GID || (root.mode & 0o7777) !== SHARED_DIRECTORY_MODE) {
+  // What Nimbus asks of a shared directory before it registers one: root's, setgid, and a default ACL
+  // (`setfacl -d -m g::rwx`) that lets the group write what a member makes there.
+  const shared = root.uid === 0 && root.gid === WORKSPACE_GID && (root.mode & 0o7777) === SHARED_DIRECTORY_MODE
+    && kernel.getDefaultAcl(SLATES_ROOT) === SHARED_DEFAULT_ACL;
+
+  if (!shared) {
     kernel.chown(SLATES_ROOT, 0, WORKSPACE_GID);
     kernel.chmod(SLATES_ROOT, SHARED_DIRECTORY_MODE);
-
-    for (const { name } of kernel.readdir(SLATES_ROOT)) share(kernel, `${SLATES_ROOT}/${name}`);
+    kernel.setDefaultAcl(SLATES_ROOT, SHARED_DEFAULT_ACL);
   }
+
+  register(SLATES_ROOT);
+
+  // Registered, a chmod applies the sharing rule: what was made here while /slates was not shared joins it.
+  if (!shared) for (const { name } of kernel.readdir(SLATES_ROOT)) reshare(kernel, `${SLATES_ROOT}/${name}`);
 
   const legacy = `${WORKSPACE_ROOT}/slates`;
 
@@ -354,14 +363,13 @@ function freePath(kernel: SlatesMoveVfs, base: string): string {
   }
 }
 
-function share(kernel: SlatesMoveVfs, path: string): void {
+function reshare(kernel: SlatesMoveVfs, path: string): void {
   const stat = kernel.lstat(path);
 
   if (stat.type === 'symlink') return;
-  kernel.chown(path, null, WORKSPACE_GID);
-  kernel.chmod(path, sharedMode(stat.mode & 0o7777, stat.type === 'directory'));
+  kernel.chmod(path, stat.mode & 0o7777);
 
-  if (stat.type === 'directory') for (const { name } of kernel.readdir(path)) share(kernel, `${path}/${name}`);
+  if (stat.type === 'directory') for (const { name } of kernel.readdir(path)) reshare(kernel, `${path}/${name}`);
 }
 
 function moveMissing(kernel: RootMoveVfs, from: string, to: string): void {

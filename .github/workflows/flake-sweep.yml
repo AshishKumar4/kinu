@@ -1,0 +1,71 @@
+name: Flake sweep
+
+# A test that passes and fails on one tree is a flake, and one run of each suite, which is all a tier gives it, cannot
+# show one. Each night this repeats every suite the CI tier runs three times under --randomize with a recorded seed,
+# its row's files together (scripts/flake-gate.ts --sweep). A flaky or red test turns the run red, with the seeds, the
+# failures and each red run's output in the uploaded report. Nothing here retries or quarantines: a flake is fixed at
+# its root. The changed files of a commit are repeated at commit instead, by the commit tier's flake gate.
+
+permissions:
+  contents: read
+  # The report opens with main's latest CI verdict, read through `gh run list`.
+  actions: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: 'One row, by its ladder label; empty sweeps them all'
+        required: false
+        default: ''
+  schedule:
+    - cron: '30 7 * * *'
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    # Measured 2026-09-26 on the 24-thread development box, the swept rows' walls add up to 29 minutes a pass, 86 for
+    # the three; four parts on four-core runners, one part of it each, fit two hours.
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The CI tier's suites run on a full clone in ci.yml; the sweep runs them the same way.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Sweep
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ONLY: ${{ inputs.only }}
+          PART: ${{ matrix.part }}
+        run: bun run sweep:flakes --shard="$PART/4" ${ONLY:+"--only=$ONLY"}
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flake-sweep-${{ github.run_id }}-part-${{ matrix.part }}
+          path: bench-artifacts/flake-sweep/
+          if-no-files-found: ignore
+          retention-days: 30

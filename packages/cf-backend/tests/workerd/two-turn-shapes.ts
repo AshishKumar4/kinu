@@ -254,7 +254,7 @@ export type ParityFrame = v.InferOutput<typeof ParityFrameSchema>;
 /** Raw rows of the root at one point of the parity script; the test normalizes them. */
 export const ParityRowsSchema = v.object({
   assistantMessages: v.array(v.object({
-    id: v.string(), parentId: v.nullable(v.string()), role: v.string(), content: v.string(),
+    id: v.string(), position: v.number(), role: v.string(), content: v.string(),
   })),
   pendingSteers: v.array(PendingSteerSchema),
   pendingSteerFiles: v.array(PendingSteerFileSchema),
@@ -301,7 +301,7 @@ export type ParityCompleted = v.InferOutput<typeof ParityCompletedSchema>;
 export const WAKE_MARKER = 'KINU_SETTLED_AFTER_DETACH';
 
 /** Where the interactive turn is held while its detached job settles. */
-export const WakeHoldPlacementSchema = v.picklist(['reply', 'settle']);
+export const WakeHoldPlacementSchema = v.picklist(['start', 'reply', 'settle']);
 
 export type WakeHoldPlacement = v.InferOutput<typeof WakeHoldPlacementSchema>;
 

@@ -56,7 +56,7 @@ test('an open message reads its accumulated text and a sealed one its content', 
     expect(await s.messages.materialize(entry)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'ab' }] });
 
     s.messages.streamAppend('answer', 0, 'cd');
-    s.messages.streamMetadata('answer', 0, await s.messages.prepareMetadata('answer', 0, { test: { partial: true } }));
+    s.messages.streamMetadata('answer', 0, await s.messages.prepareDescriptor({ type: 'text', providerOptions: { test: { partial: true } } }));
     expect(streamRows()).toBe(1);
     expect(await s.messages.materialize(entry)).toEqual({ role: 'assistant', content: [{ type: 'text', text: 'abcd', providerOptions: { test: { partial: true } } }] });
     s.messages.streamEnd('answer', 0);
@@ -196,6 +196,39 @@ test('a context reads what is stored: another reader\'s revision, and one writte
   }
 });
 
+test('a held turn context follows sealed output, an authored edit and a selected branch', async () => {
+  const s = setup();
+
+  const dependencies = { actor: s.rt.actor, sql: s.rt.storage.sql, transactionSync: <T>(write: () => T) => s.rt.storage.transactionSync(write),
+    files: async () => ({ vfs: s.rt.storage.vfs, artifactDirectory: '/actor' }) };
+
+  const history = new SessionHistory(dependencies);
+  const other = new SessionHistory(dependencies);
+  const assertOwner = () => s.rt.actor.assertCurrent();
+
+  try {
+    await history.append({ id: 'input', message: { role: 'user', content: 'instruction' }, origin: 'input', turnId: 'turn', assertOwner });
+    const opened = await history.materialize();
+    await other.recordRender({ role: 'user', content: 'runtime context' }, { before: null, replaces: false }, 'turn', assertOwner);
+    await other.append({ id: 'answer', message: { role: 'assistant', content: 'answer' }, origin: 'output', turnId: 'turn', assertOwner });
+    const afterOutput = await history.stepBase(assertOwner, 'turn', null, opened);
+    expect(afterOutput.messages).toEqual([{ role: 'user', content: 'instruction' }, { role: 'assistant', content: 'answer' }]);
+    expect(afterOutput.rendered).toEqual([{ message: { role: 'user', content: 'runtime context' }, before: afterOutput.messages[1], after: afterOutput.messages[0] }]);
+
+    await other.replaceHistory([{ role: 'user', content: 'edited instruction' }], { author: s.rt.actor.actorId, via: 'owner', turnId: null, stage: true, assertOwner });
+    const edited = await history.stepBase(assertOwner, 'turn', null, afterOutput);
+    expect(edited.changed).toBe(true);
+    expect(edited.messages).toEqual([{ role: 'user', content: 'edited instruction' }]);
+    expect(edited.rendered).toEqual([]);
+
+    const branch = other.context.fork(opened.selection);
+    other.context.select(edited.selection, branch, assertOwner);
+    const selected = await history.stepBase(assertOwner, 'turn', null, edited);
+    expect(selected.messages).toEqual([{ role: 'user', content: 'instruction' }]);
+    expect(selected.selection).toEqual(branch);
+  } finally { s.testSql.close(); }
+});
+
 test('VFS-backed image payloads fail explicitly after file corruption', async () => {
   const s = setup();
 
@@ -330,7 +363,7 @@ test('read-only transcript authorization is checked again after payload access',
   } finally { s.testSql.close(); }
 });
 
-test('canonical transcript pages follow the head ancestry and stay session-scoped', async () => {
+test('canonical transcript pages follow position order and stay session-scoped', async () => {
   const s = setup();
 
   try {
@@ -338,27 +371,25 @@ test('canonical transcript pages follow the head ancestry and stay session-scope
     const writer = new SessionTranscript({ sql: s.rt.storage.sql, actor: s.rt.actor, sessionId: 'default', messages: s.messages, payloads: s.payloads, atomic: write => s.rt.storage.transactionSync(write), selection: () => s.context.selected() });
     const other = new SessionTranscript({ sql: s.rt.storage.sql, actor: s.rt.actor, sessionId: 'mcts', messages: s.messages, payloads: s.payloads, atomic: write => s.rt.storage.transactionSync(write), selection: () => s.context.selected() });
 
-    for (const [id, transcript, parentId] of [['root', writer, null], ['left', writer, 'root'], ['foreign', other, null], ['right', writer, 'root']] as const) {
+    for (const [id, transcript] of [['root', writer], ['left', writer], ['foreign', other], ['right', writer]] as const) {
       const prepared = await s.messages.prepare({ role: 'user', content: id }, id);
       const reference = s.messages.insert(prepared, 'input');
-      transcript.appendUser(await transcript.prepareUser({ id, parentId, turnId: id, message: reference }));
+      transcript.appendUser(await transcript.prepareUser({ id, turnId: id, message: reference }));
     }
 
-    const first = await getChatHistoryPage(writer, { limit: 1 });
-    expect(first.items.map(item => item.content)).toEqual(['right']);
+    const first = await getChatHistoryPage(writer, { limit: 2 });
+    expect(first.items.map(item => [item.content, item.position])).toEqual([['left', 1], ['right', 2]]);
 
     if (first.status !== 'more') throw new Error('expected another page');
-    const last = await getChatHistoryPage(writer, { limit: 1, cursor: first.next });
+    const last = await getChatHistoryPage(writer, { limit: 2, cursor: first.next });
     expect(last.items.map(item => item.content)).toEqual(['root']);
     expect(last.status).toBe('end');
-    await expect(getChatHistoryPage(writer, { cursor: { after: 'foreign' } })).rejects.toThrow();
-    expect(writer.count()).toBe(2);
-    writer.setHead('left');
-    expect((await getChatHistoryPage(writer, {})).items.map(item => item.content)).toEqual(['root', 'left']);
+    expect(writer.count()).toBe(3);
+    expect(other.count()).toBe(1);
   } finally { s.testSql.close(); }
 });
 
-test('reverting to an entry continues from its parent on the context recorded there', async () => {
+test('reverting to an entry deletes it and continues on the context recorded before it', async () => {
   const { rt, testSql } = createTestRuntime();
 
   try {
@@ -371,9 +402,9 @@ test('reverting to an entry continues from its parent on the context recorded th
 
     for (const [ask, answer, text] of turns) {
       const input = await history.append({ id: ask, message: { role: 'user', content: text }, origin: 'input', turnId: ask, assertOwner });
-      chat.record({ ...await chat.prepareUser({ id: ask, turnId: ask, message: input }), parentId: undefined });
+      chat.record({ ...await chat.prepareUser({ id: ask, turnId: ask, message: input }) });
       const output = await history.append({ id: answer, message: { role: 'assistant', content: `${text} answered` }, origin: 'output', turnId: ask, assertOwner });
-      chat.appendAssistant(await chat.prepareAssistant({ id: answer, parentId: ask, turnId: ask, runId: ask, parts: [{ messageId: output.messageId, partNo: 0 }], finalText: null }));
+      chat.appendAssistant(await chat.prepareAssistant({ id: answer, turnId: ask, runId: ask, parts: [{ messageId: output.messageId, partNo: 0 }], finalText: null }));
     }
 
     const before = history.context.selected();
@@ -383,15 +414,15 @@ test('reverting to an entry continues from its parent on the context recorded th
     expect(reverted).not.toEqual(before);
     expect(history.context.selected()).toEqual(reverted);
     expect((await history.materialize()).messages.map(message => message.content)).toEqual(['one', 'one answered', 'two', 'two answered']);
-    expect(chat.ancestry().map(entry => entry.id)).toEqual(['ask-1', 'answer-1', 'ask-2', 'answer-2']);
-    expect(chat.read('ask-3')).not.toBeNull();
+    expect(chat.entries().map(entry => entry.id)).toEqual(['ask-1', 'answer-1', 'ask-2', 'answer-2']);
+    expect(chat.read('ask-3')).toBeNull();
 
     const fourth = await history.append({ id: 'ask-4', message: { role: 'user', content: 'four' }, origin: 'input', turnId: 'ask-4', assertOwner });
-    chat.record({ ...await chat.prepareUser({ id: 'ask-4', turnId: 'ask-4', message: fourth }), parentId: undefined });
-    expect(chat.ancestry().map(entry => entry.id)).toEqual(['ask-1', 'answer-1', 'ask-2', 'answer-2', 'ask-4']);
+    chat.record({ ...await chat.prepareUser({ id: 'ask-4', turnId: 'ask-4', message: fourth }) });
+    expect(chat.entries().map(entry => entry.id)).toEqual(['ask-1', 'answer-1', 'ask-2', 'answer-2', 'ask-4']);
     expect(history.revertTo('default', 'ask-1', () => {})).toMatchObject({ revision: 0 });
     expect((await history.materialize()).messages).toEqual([]);
-    expect(chat.ancestry()).toEqual([]);
+    expect(chat.entries()).toEqual([]);
     expect(() => history.revertTo('default', 'ask-2', () => { throw new Error('turn is active'); })).toThrow('turn is active');
   } finally { testSql.close(); }
 });
@@ -407,7 +438,7 @@ test('drain recovery returns the newest nonempty canonical answer across sibling
 
     for (const [id, text] of [['older', 'old answer'], ['latest', 'latest answer'], ['empty', '  ']] as const) {
       s.messages.insert(await s.messages.prepare({ role: 'assistant', content: text }, id), 'output');
-      transcript.appendAssistant(await transcript.prepareAssistant({ id, parentId: 'ask', turnId: 'turn', runId: 'run', parts: [{ messageId: id, partNo: 0 }], finalText: null }));
+      transcript.appendAssistant(await transcript.prepareAssistant({ id, turnId: 'turn', runId: 'run', parts: [{ messageId: id, partNo: 0 }], finalText: null }));
     }
 
     expect(await answersForDrainTurns(transcript, ['drain', 'unanswered'])).toEqual(new Map([['drain', 'latest answer']]));
@@ -427,7 +458,7 @@ async function settledAnswer(s: ReturnType<typeof setup>, parts: JsonObject[], a
   const finalText = answer === null ? streamed[lastText] ?? null
     : { messageId: s.messages.insert(await s.messages.prepare({ role: 'assistant', content: answer }, 'display'), 'render').messageId, partNo: 0 };
 
-  transcript.appendAssistant(await transcript.prepareAssistant({ id: 'answer', parentId: 'ask', turnId: 'turn', runId: 'run', parts: streamed, finalText }));
+  transcript.appendAssistant(await transcript.prepareAssistant({ id: 'answer', turnId: 'turn', runId: 'run', parts: streamed, finalText }));
   const drawn = (await transcript.message('answer'))?.parts ?? [];
 
   return { transcript, drawn: drawn.map(part => part.type === 'text' ? part.text : part.type) };

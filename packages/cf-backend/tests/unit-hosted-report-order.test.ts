@@ -10,8 +10,7 @@ import {
 import { abandonHarnessFibers, joinHarnessFibers } from './helpers/agents-sdk';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 
-// One turn slot (DELEGATED_TURN_SLOTS): a helper waiting on its task hire frees the slot; its durable hire must not
-// then hold that slot while its report queues behind the waiting helper, or the task hire never runs.
+// A helper that hired durable then task: the durable hire's report must not wait on the helper while its task hire runs.
 test("a helper waiting on its task hire gets its answer, then takes up the report its durable hire made meanwhile", async () => {
   const workspace = gatewayWorkspace(stubAiBinding((run) => {
     const { messages } = requestOf(run);
@@ -51,8 +50,8 @@ test("a helper waiting on its task hire gets its answer, then takes up the repor
   expect(turns()).toBe(2);
 });
 
-// One turn slot: a helper that holds it and asks its durable hire anything that waits on that hire's queue must free
-// the slot, or the hire, waiting inside its own task hire, never gets its task helper run.
+// A helper that asks its durable hire anything that waits on that hire's queue must not block the hire, which waits
+// inside its own task hire.
 const ASKS = {
   msg: (agent: string) => ({ action: 'msg', agent, message: 'Also note this.' }),
   assign: (agent: string) => ({ action: 'hire', agent, message: 'Another task.' }),
@@ -121,7 +120,7 @@ for (const { verb, args, notes } of CASES) {
     const durable = sql<{ name: string }>`SELECT name FROM actor_subordinates WHERE actor_id = ${middleId} AND lifetime = 'durable'`[0]?.name;
 
     if (durable === undefined) throw new Error('the helper hired no durable agent');
-    // Queued for the slot before the leaf is: the durable hire still holds it, parked.
+    // Queued while the durable hire's turn is still parked.
     await wakeForDelegatedTask(workspace, middleId, `Second: ${durable}`);
     release.resolve();
 

@@ -31,7 +31,6 @@ export interface DriverLeaseHolder {
   readonly kind: DriverKind;
 }
 
-/** This process's pid and a liveness check for other pids; injected for tests. */
 export interface LeaseProcess {
   readonly pid: number;
   isAlive(pid: number): boolean;
@@ -76,13 +75,26 @@ interface DriverLeaseHolderRow extends DriverLeaseHolder {
   readonly token: string;
 }
 
-/** Compare-and-swap on the read token, decided by re-reading: the SQL seam returns no row count. */
+/**
+ * Compare-and-swap on the read token, decided by re-reading: the SQL seam returns no row count. A row that moved under
+ * the write is decided again: a daemon releases and re-takes after every pass.
+ */
 function acquireDriverLease(
   deps: DriverLeaseDeps,
   kind: DriverKind,
 ): DriverLeaseResult {
-  const proc = deps.proc;
   initDriverLeaseTable(deps.execRaw);
+
+  for (;;) {
+    const outcome = claimOnce(deps, kind);
+
+    if (outcome !== null) return outcome;
+  }
+}
+
+/** Null when the row moved under the write. */
+function claimOnce(deps: DriverLeaseDeps, kind: DriverKind): DriverLeaseResult | null {
+  const proc = deps.proc;
   const current = readRow(deps.sql);
   const token = crypto.randomUUID();
 
@@ -115,21 +127,7 @@ function acquireDriverLease(
       ON CONFLICT(id) DO NOTHING`;
   }
 
-  const settled = readRow(deps.sql);
-
-  if (settled?.token === token) {
-    return { held: { token, kind, pid: proc.pid } };
-  }
-
-  const holder = settled ?? { pid: proc.pid, kind, token };
-
-  return {
-    refused: refusalOf(new KinuError(
-      'unavailable',
-      `another ${holder.kind} driver (process ${String(holder.pid)}) claimed this conversation first`,
-    )),
-    holder: { pid: holder.pid, kind: holder.kind },
-  };
+  return readRow(deps.sql)?.token === token ? { held: { token, kind, pid: proc.pid } } : null;
 }
 
 /** Check before every gated operation: a lease can be preempted between operations. */

@@ -114,7 +114,6 @@ function revisionEntries(history: SessionHistory, selection: ContextSelection | 
     ? history.context.entries(selection) : history.proposals.previewAt(stagedProposalId, selection));
 }
 
-/** Tool-pairing view of a message, or undefined when it carries no tool parts. */
 const pairingView = (message: JsonObject): PairingView | undefined =>
   (message.role === 'assistant' || message.role === 'tool') && !v.is(v.string(), message.content) ? v.parse(PairingView, message) : undefined;
 
@@ -577,5 +576,5 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
 export function contextMount(deps: ContextMountDeps): VfsMount {
   const files = contextFiles(deps);
 
-  return { name: 'context', files: () => files, absentReason: () => 'actor context is unavailable', filesOwner: 'agent' };
+  return { name: 'context', files: () => files, absentReason: () => 'actor context is unavailable', filesOwner: 'agent', storeView: true };
 }

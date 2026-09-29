@@ -35,6 +35,13 @@ export interface PreparedMessage {
   readonly content: PreparedContent;
 }
 
+/** The claim a write belongs to, and the check that throws once it is no longer current. */
+export interface ClaimFence {
+  readonly turnId: string;
+  readonly epoch: number;
+  readonly assert: () => void;
+}
+
 export interface StreamPartInput {
   readonly partNo: number;
   readonly kind: string;
@@ -123,14 +130,10 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
   /** Sealed rows never change, so each is read once per reader. */
   private sealed = new Map<string, SealedMessage>();
 
-  /** For a row proven to encode as `source`: its text is the streamed string, one copy, not two. */
-  protected shareText(reference: MessageReference, source: ModelMessage): void {
-    const cached = this.sealed.get(reference.messageId);
-    const shared = cached === undefined ? undefined : decodeModelMessageValues([encodeModelMessage(source)])[0];
-
-    if (cached === undefined || shared === undefined) return;
-    freezeTree({ value: shared });
-    this.sealed.set(reference.messageId, { message: shared, origin: cached.origin });
+  /** The caller has just read or committed this immutable message. */
+  protected cache(reference: MessageReference, message: ModelMessage, origin: MessageOrigin): void {
+    freezeTree({ value: message });
+    this.sealed.set(reference.messageId, { message, origin });
   }
 
   constructor(protected readonly sql: SqlExecutor, protected readonly actor: A, readonly payloads: P) {}
@@ -244,8 +247,7 @@ export class SessionMessageReader<A extends ActorReadAuthority = ActorReadAuthor
     if (decoded === undefined) throw new KinuError('io', 'session message failed to materialize');
 
     if (row.sealed_at === null) return decoded;
-    freezeTree({ value: decoded });
-    this.sealed.set(reference.messageId, { message: decoded, origin: row.origin });
+    this.cache(reference, decoded, row.origin);
 
     return decoded;
   }
@@ -291,18 +293,15 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
     return this.sources.get(message) ?? null;
   }
 
-  /** The row must contain the message; it may hold more (streamed parts `SessionStream` reconciled). */
-  async bindSource(message: ModelMessage, reference: MessageReference): Promise<void> {
-    const recorded = await this.materialize(reference);
+  /** The stream has committed these native parts; they may include parts its final message omitted. */
+  bindSource(message: ModelMessage, reference: MessageReference, native: JsonObject): void {
+    this.actor.assertCurrent();
+    const recorded = decodeModelMessageValues([native])[0];
 
-    if (!carries(recorded, message)) throw new KinuError('io', 'native output differs from its recorded content');
+    if (recorded === undefined || !carries(recorded, message)) throw new KinuError('io', 'native output differs from its recorded content');
+    this.cache(reference, recorded, 'output');
     this.sources.set(message, reference);
-
-    if (JSON.stringify(encodeModelMessage(recorded)) === JSON.stringify(encodeModelMessage(message))) {
-      this.shareText(reference, message);
-      const shared = await super.materialize(reference);
-      this.sources.set(shared, reference);
-    }
+    this.sources.set(recorded, reference);
   }
 
   /** Frozen, so it cannot drift from the committed row it names. */
@@ -382,60 +381,55 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
 
   open(role: 'assistant' | 'tool', id: string, origin: MessageOrigin, stream: StreamedMessage = {}): MessageReference {
     this.actor.assertCurrent();
-    this.assertUnrecorded(id);
-    void this.sql`INSERT INTO session_messages(actor_id,message_id,role,native_content_kind,origin,request_id,output_slot,ingress_id,envelope_json)
-      VALUES(${this.actor.actorId},${id},${role},'parts',${origin},${stream.requestId ?? null},${stream.slot ?? null},${null},${JSON.stringify(stream.envelope ?? {})})`;
+
+    const opened = this.sql<{ message_id: string }>`INSERT INTO session_messages(actor_id,message_id,role,native_content_kind,origin,request_id,output_slot,ingress_id,envelope_json)
+      VALUES(${this.actor.actorId},${id},${role},'parts',${origin},${stream.requestId ?? null},${stream.slot ?? null},${null},${JSON.stringify(stream.envelope ?? {})})
+      ON CONFLICT(actor_id,message_id) DO NOTHING RETURNING message_id`;
+
+    if (opened.length === 0) throw new KinuError('denied', 'message identity is already recorded');
 
     return { messageId: id };
   }
 
-  private assertOpen(messageId: string): void {
-    const row = this.sql<{ sealed_at: number | null }>`SELECT sealed_at FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id=${messageId}`[0];
-
-    if (row === undefined || row.sealed_at !== null) throw new KinuError('denied', 'message is missing or sealed');
-  }
-
-  async prepareDescriptor(native: JsonObject): Promise<{ readonly descriptor: SessionPayload; readonly text: string | undefined }> {
-    const { text, ...rest } = native;
+  async prepareDescriptor(native: JsonObject): Promise<SessionPayload> {
+    const { text: _text, ...rest } = native;
     const descriptor = rest.type === 'image' || rest.type === 'file' ? await this.payloads.externalizeMedia(rest) : rest;
-
-    return { descriptor: await this.payloads.prepare(descriptor), text: v.is(v.string(), text) ? text : undefined };
-  }
-
-  async prepareMetadata(messageId: string, partNo: number, providerOptions: JsonObject | undefined): Promise<SessionPayload> {
-    this.actor.assertCurrent();
-
-    const row = this.sql<StreamPartRow>`SELECT part_no,segment,kind,stream_order,descriptor_json,descriptor_path,descriptor_digest,text FROM stream_parts
-      WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND part_no=${partNo} AND segment=0`[0];
-
-    if (row === undefined) throw new KinuError('denied', 'stream part is missing or sealed');
-    const descriptor = descriptorObject(await this.payloads.read(payloadOf(row.descriptor_json, row.descriptor_path, row.descriptor_digest)));
-    delete descriptor.providerOptions;
-
-    if (providerOptions !== undefined) descriptor.providerOptions = providerOptions;
 
     return this.payloads.prepare(descriptor);
   }
 
   streamOpenPart(messageId: string, part: StreamPartInput): void {
     this.actor.assertCurrent();
-    this.assertOpen(messageId);
-    void this.sql`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,kind,stream_order,descriptor_json,descriptor_path,descriptor_digest,text,ended)
-      VALUES(${this.actor.actorId},${messageId},${part.partNo},0,${part.kind},${part.streamOrder},${part.descriptor.json},${part.descriptor.path},${part.descriptor.digest},'',0)`;
+
+    const opened = this.sql<{ part_no: number }>`INSERT INTO stream_parts(actor_id,message_id,part_no,segment,kind,stream_order,descriptor_json,descriptor_path,descriptor_digest,text,ended)
+      SELECT ${this.actor.actorId},${messageId},${part.partNo},0,${part.kind},${part.streamOrder},${part.descriptor.json},${part.descriptor.path},${part.descriptor.digest},'',0
+      FROM session_messages WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND sealed_at IS NULL RETURNING part_no`;
+
+    if (opened.length === 0) throw new KinuError('denied', 'message is missing or sealed');
 
     if (part.text !== undefined && part.text !== '') this.streamAppend(messageId, part.partNo, part.text);
   }
 
-  streamAppend(messageId: string, partNo: number, text: string): void {
+  /** With a `fence`, the append checks the turn's claim in its own statement; without one, the caller has. */
+  streamAppend(messageId: string, partNo: number, text: string, fence: ClaimFence | null = null): void {
     this.actor.assertCurrent();
     const actorId = this.actor.actorId;
 
     for (const piece of segmented(text)) {
-      const extended = this.sql<{ segment: number }>`UPDATE stream_parts SET text = text || ${piece}
-        WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0 AND length(text) + ${piece.length} <= ${STREAM_SEGMENT_CHARS}
-        AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo}) RETURNING segment`;
+      // Two statements, not one with an optional clause: a store without claims has no claim table to name.
+      const extended = fence === null
+        ? this.sql<{ segment: number }>`UPDATE stream_parts SET text = text || ${piece}
+          WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0 AND length(text) + ${piece.length} <= ${STREAM_SEGMENT_CHARS}
+          AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo}) RETURNING segment`
+        : this.sql<{ segment: number }>`UPDATE stream_parts SET text = text || ${piece}
+          WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} AND ended=0 AND length(text) + ${piece.length} <= ${STREAM_SEGMENT_CHARS}
+          AND segment=(SELECT MAX(segment) FROM stream_parts WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo})
+          AND EXISTS (SELECT 1 FROM actor_turn_claims c WHERE c.actor_id=${actorId} AND c.turn_id=${fence.turnId} AND c.epoch=${fence.epoch} AND c.outcome IS NULL)
+          RETURNING segment`;
 
       if (extended.length > 0) continue;
+      // A stale claim is refused here, not by a new segment.
+      fence?.assert();
 
       const last = this.sql<{ segment: number; ended: number; kind: string; stream_order: number }>`SELECT segment,ended,kind,stream_order FROM stream_parts
         WHERE actor_id=${actorId} AND message_id=${messageId} AND part_no=${partNo} ORDER BY segment DESC LIMIT 1`[0];
@@ -468,13 +462,18 @@ export class SessionMessages extends SessionMessageReader<ActorHandle, SessionPa
   }
 
   seal(messageId: string, content: PreparedContent, envelope?: JsonObject): void {
-    const row = this.row(messageId);
-
-    if (row.sealed_at !== null) throw new KinuError('denied', 'message is already sealed');
+    this.actor.assertCurrent();
     const { payload } = content;
-    const envelopeJson = envelope === undefined ? row.envelope_json : JSON.stringify(envelope);
-    void this.sql`UPDATE session_messages SET sealed_at=${Date.now()},content_json=${payload.json},content_path=${payload.path},content_digest=${payload.digest},envelope_json=${envelopeJson}
-      WHERE actor_id=${this.actor.actorId} AND message_id=${messageId}`;
+    const envelopeJson = envelope === undefined ? this.row(messageId).envelope_json : JSON.stringify(envelope);
+
+    const sealed = this.sql<{ message_id: string }>`UPDATE session_messages SET sealed_at=${Date.now()},content_json=${payload.json},content_path=${payload.path},content_digest=${payload.digest},envelope_json=${envelopeJson}
+      WHERE actor_id=${this.actor.actorId} AND message_id=${messageId} AND sealed_at IS NULL RETURNING message_id`;
+
+    if (sealed.length === 0) {
+      this.row(messageId);
+      throw new KinuError('denied', 'message is already sealed');
+    }
+
     void this.sql`DELETE FROM stream_parts WHERE actor_id=${this.actor.actorId} AND message_id=${messageId}`;
   }
 

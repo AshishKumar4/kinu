@@ -1,5 +1,5 @@
 /**
- * MCTS backpropagation: full ancestor walk via WITH RECURSIVE CTE. Reference: docs/MCTS.md "Backpropagation".
+ * Search-tree backpropagation: full ancestor walk via WITH RECURSIVE CTE.
  * Formal spec: MCTS/Backpropagation.lean — backprop_preserves_ids
  * SQL SET clauses read pre-update row values, so the running mean is correct across the whole chain.
  */

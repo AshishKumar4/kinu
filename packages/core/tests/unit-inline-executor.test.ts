@@ -2,6 +2,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
+import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { createTestRuntime } from './helpers';
 import { createInlineExecutor, type InlineExecutorDeps } from '../src/tools/inline-executor';
 import { DefaultExecutionRouter } from '../src/execution/router';
@@ -232,7 +233,7 @@ describe('workspace provider (InlineExecutor)', () => {
 /** workspace.writeFile over the real file plane: every path shape must survive the parent mkdir. */
 describe('workspace.writeFile over the workspace filesystem — what both backends register', () => {
   function buildPlane() {
-    const { rt } = createTestRuntime();
+    const { rt, workspace } = createTestRuntime();
     const dirs: string[] = [];
 
     const sandbox = {
@@ -250,7 +251,7 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
       sql: rt.storage.sql,
     });
 
-    return { vfs, exec, sandbox };
+    return { vfs, exec, sandbox, workspace };
   }
 
   test('a deep path creates its parents and round-trips', async () => {
@@ -285,7 +286,11 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
   });
 
   test('another environment is not addressable from here at all', async () => {
-    const { exec, sandbox } = buildPlane();
+    const { exec, sandbox, workspace } = buildPlane();
+    // `/` is root's: a top-level directory is the kernel's to make and hand over, as a boot does.
+    const { root } = await workspace.privileged();
+    root.mkdir('sandbox');
+    root.chown('sandbox', CRED_SESSION_USER.uid, CRED_SESSION_USER.gid);
     // "/sandbox/app.ts" is an ordinary local file: no path silently means two places.
     expect(await exec.tools.writeFile.execute('/sandbox/app.ts', 'top')).toContain('Written');
     expect(sandbox.files.size).toBe(0);
@@ -449,9 +454,9 @@ describe('workspace.* VFS errors carry the addressing correction', () => {
 
   test('a successful call is untouched by the guidance wrapper', async () => {
     const exec = buildPlane();
-    await exec.tools.writeFile.execute('/notes/a.md', 'hello');
-    expect(await exec.tools.readFile.execute('/notes/a.md')).toBe('hello');
-    expect(await exec.tools.exists.execute('/notes/a.md')).toBe(true);
+    await exec.tools.writeFile.execute('notes/a.md', 'hello');
+    expect(await exec.tools.readFile.execute('notes/a.md')).toBe('hello');
+    expect(await exec.tools.exists.execute('notes/a.md')).toBe(true);
   });
 
   test('a non-VFS failure is not dressed up as an addressing problem', async () => {

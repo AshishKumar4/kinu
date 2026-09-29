@@ -44,7 +44,6 @@ export interface SkillsDiscovery {
 export interface DiscoverOpts {
   /** The turn's skills allocation in tokens; a larger file is never opened. */
   admissionTokens: number;
-  onParseError?: (file: string, error: string) => void;
 }
 
 /** The file a skill name loads from; `folder` is set for a `<name>/SKILL.md` folder. */
@@ -161,11 +160,11 @@ export async function discoverSkills(
   vfs: SkillsVfs,
   opts: DiscoverOpts,
 ): Promise<SkillsDiscovery> {
-  const onErr = opts.onParseError ?? ((file, err) => diagnostics.failure(
+  const onErr = (file: string, err: string): void => diagnostics.failure(
     'skills.parse_failed',
     toKinuError({ doing: 'parse a skill file', cause: err, otherwise: 'bad_input' }),
     { file },
-  ));
+  );
 
   const byName = new Map<string, DiscoveredSkill>();
 
@@ -263,7 +262,6 @@ export async function readSkillFile(
     : readTextFile(vfs, ref.path, admissionBytes(admissionTokens));
 }
 
-/** Where the workspace writes its own skill of this name. */
 export function workspaceSkillPath(name: string): string {
   return `${WORKSPACE_SKILLS_DIR}/${name}/${SKILL_FOLDER_FILE}`;
 }

@@ -18,6 +18,7 @@ import {
   type AgentsToolAction,
 } from '../tools/registry';
 import { SwarmConfigSchema, SwarmModelsSchema, SwarmNodeAssignmentsSchema, SwarmObjectiveSchema } from '../tools/swarm-input';
+import { nearestField } from '../tools/field-names';
 import {
   PEER_REPLY_TOPIC,
   type PeerAskOutcome, type PeerReplyOutcome, type PeerSendOutcome,
@@ -57,7 +58,6 @@ import {
 import type { NodeIdentity, NodeWorkspace, NodeWorkspaceProvisioner } from '../strategy/node-workspace';
 import type { HostedNodeSeat, NodeCodemode } from '../strategy/node-agent';
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { CostModel } from '../mcts/cost';
 import type { WorkMode } from '../types/turn';
 import { nanoid } from '../utils/nanoid';
 import {
@@ -102,8 +102,8 @@ export interface SubordinateRosterEntry {
   actorReference: ActorReference | null;
   birth: SubordinateBirth | null;
   deleteRequested: boolean;
-  /** `evolution`: an evolution lane's helper. */
-  createdBy: 'orchestrator' | 'user' | 'evolution';
+  /** Its actor's origin; `evolution` is an evolution lane's helper. */
+  origin: 'user' | 'agent' | 'evolution';
   status: SubordinateStatus;
   currentTask: string | null;
   createdAt: number;
@@ -260,8 +260,6 @@ export interface AgentsSwarmDeps {
   resolveModel?: (spec: string) => LanguageModel;
   /** Caller conversation at dispatch, frozen into the search ledger so `context:'inherit'` survives re-drive. */
   originContext?: () => readonly ModelMessage[];
-  /** Pricing for projected-spend gates; absent, the gate blends and says so. */
-  costModel?: () => CostModel;
   /** Host-owned async provisioner for one node's private home, resolved per swarm call.
    *  Absent: no credentialed home, and nodes report the shared plane. */
   provisionNodeHome?: () => NodeWorkspaceProvisioner;
@@ -273,6 +271,8 @@ export interface AgentsSwarmDeps {
   /** The *Inherited context* compaction ladder (`SwarmRunDeps.compactShared`); absent, an over-window
    *  parent inherits verbatim and the provider refuses. */
   compactShared?: SwarmRunDeps['compactShared'];
+  /** The workspace's running workers, so the owner can stop one. */
+  workers?: SwarmRunDeps['workers'];
 }
 
 /** Inputs for role/tier/preset precedence, wired under {@link AgentsToolDeps.profile}. */
@@ -598,7 +598,6 @@ function msgInputVariants(deps: AgentsToolDeps): readonly AgentsActionInputVaria
   return variants;
 }
 
-/** Fields one action reads under this actor's transports. */
 export function agentsActionFieldsFor(
   deps: AgentsToolDeps,
   action: AgentsToolAction,
@@ -660,56 +659,6 @@ const AGENTS_INPUT_FIELDS: readonly string[] = Object.keys(AgentsInputEntries)
 
 function actionReads(action: AgentsToolAction, field: string): boolean {
   return fieldsOf(action).some((declared) => declared === field);
-}
-
-const MAX_FIELD_EDIT_DISTANCE = 2;
-
-/** Normalizes naming convention so `budgetUsd`, `budget-usd` and `Budget USD` reach `budget_usd`. */
-const FIELD_NAME_SEPARATORS = /[^a-z0-9]/gi;
-
-/** Levenshtein distance, abandoned once a row exceeds `limit`; returns `limit + 1` for "too far". */
-function editDistance(a: string, b: string, limit: number): number {
-  if (Math.abs(a.length - b.length) > limit) return limit + 1;
-  const row = Array.from({ length: b.length + 1 }, (_, j) => j);
-
-  for (let i = 1; i <= a.length; i += 1) {
-    let diagonal = row[0];
-    row[0] = i;
-    let best = i;
-
-    for (let j = 1; j <= b.length; j += 1) {
-      const substitute = diagonal + (a[i - 1] === b[j - 1] ? 0 : 1);
-      diagonal = row[j];
-      const next = Math.min(substitute, row[j] + 1, row[j - 1] + 1);
-      row[j] = next;
-
-      if (next < best) best = next;
-    }
-
-    if (best > limit) return limit + 1;
-  }
-
-  return row[b.length];
-}
-
-/** The field `name` was probably meant to be (convention, then one or two edits), or undefined. */
-function nearestField(name: string, candidates: readonly string[]): string | undefined {
-  const target = name.replace(FIELD_NAME_SEPARATORS, '').toLowerCase();
-  let nearest: string | undefined;
-  let shortest = MAX_FIELD_EDIT_DISTANCE + 1;
-
-  for (const candidate of candidates) {
-    const collapsed = candidate.replace(FIELD_NAME_SEPARATORS, '').toLowerCase();
-    const distance = editDistance(target, collapsed, MAX_FIELD_EDIT_DISTANCE);
-
-    if (distance >= shortest) continue;
-    nearest = candidate;
-    shortest = distance;
-
-    if (distance === 0) break;
-  }
-
-  return nearest;
 }
 
 const FieldNamesSchema = v.record(v.string(), v.unknown());
@@ -1087,6 +1036,7 @@ async function runSwarmAction({ deps, input, mode, toolOptions, budget }: SwarmA
     runtimeForWorkspace,
     // The *Inherited context* barrier; absent stays absent (the seam's loud failure).
     compactShared: swarm.compactShared,
+    workers: swarm.workers,
     redrive,
   };
 

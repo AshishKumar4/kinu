@@ -22,7 +22,7 @@ import {
   type RecordingLogger,
 } from '@kinu.run/core/obs';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
-import { TERMINAL_RETRY_CALLBACK } from '../../src/actor-agent';
+import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB } from '../../src/wake-jobs';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import { SqlMeter, type OperationCost } from './sql-meter';
 import type {
@@ -88,9 +88,9 @@ function meterInPlace(sql: SqlStorage) {
   return { meter, unmetered };
 }
 
-const ScheduleRowsSchema = v.array(v.looseObject({ id: v.string(), callback: v.string() }));
+const JobRowsSchema = v.array(v.looseObject({ id: v.string(), capability: v.string() }));
 
-/** What still runs in the object, by name, and its schedule rows as read now. */
+/** What still runs in the object, by name, and its queued jobs as read now. */
 export interface SettleState {
   readonly busy: readonly string[];
   readonly schedules: string;
@@ -175,10 +175,10 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     const alarm = await this.actorState.storage.getAlarm();
 
     if (alarm !== null && alarm <= Date.now()) busy.push('an alarm due');
-    const schedules = v.parse(ScheduleRowsSchema, this.unmetered('SELECT * FROM cf_agents_schedules ORDER BY id').toArray());
+    const schedules = this.jobRows();
     // A held retry row is recovery still under way: its next lap fires on the clock, not on anything the measured
     // operation does (2026-09-26: one fired inside the window in some runs and not others).
-    const retrying = schedules.filter((row) => row.callback === TERMINAL_RETRY_CALLBACK).length;
+    const retrying = schedules.filter((row) => row.id === TERMINAL_RETRY_JOB).length;
 
     if (retrying > 0) busy.push(`${String(retrying)} terminal retry row(s)`);
 
@@ -207,10 +207,10 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     if (this.countedTranscript !== transcript) {
       const history = transcript.history.bind(transcript);
 
-      transcript.history = async (leafId, limit) => {
+      transcript.history = async (limit) => {
         if (this.historyReads !== null) this.historyReads += 1;
 
-        return await history(leafId, limit);
+        return await history(limit);
       };
 
       this.countedTranscript = transcript;
@@ -220,15 +220,18 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   }
 
   /** Parks a turn-end extension over `/wake/wait`, holding the settle window open
-   *  (between the answer's commit and the pump's next item). */
+   *  (between the answer's commit and the pump's next item), and a turn's start; a measure has no history. */
   private _settleHoldInstalled = false;
   private installSettleHold(): void {
     if (this._settleHoldInstalled) return;
     this._settleHoldInstalled = true;
     this.extensions.register({
       name: 'probe.settle-hold',
+      onTurnStart: async ({ history }) => {
+        if (history.length > 0) await fetch('http://probe-control.invalid/wake/wait?at=start');
+      },
       onTurnEnd: async () => {
-        await fetch('http://probe-control.invalid/wake/wait');
+        await fetch('http://probe-control.invalid/wake/wait?at=settle');
       },
     });
   }
@@ -289,7 +292,7 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   private async assistantTexts(): Promise<string[]> {
     const texts: string[] = [];
 
-    for (const entry of this.chatTranscript.ancestry()) {
+    for (const entry of this.chatTranscript.entries()) {
       if (entry.role !== 'assistant') continue;
       const projected = await this.chatTranscript.project(entry.id);
 
@@ -302,10 +305,10 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   private async conversationRows(): Promise<ParityRows['assistantMessages']> {
     const rows: ParityRows['assistantMessages'] = [];
 
-    for (const entry of this.chatTranscript.ancestry()) {
+    for (const entry of this.chatTranscript.entries()) {
       const message = await this.chatTranscript.message(entry.id);
 
-      if (message !== null) rows.push({ id: entry.id, parentId: entry.parentId, role: entry.role, content: JSON.stringify(message) });
+      if (message !== null) rows.push({ id: entry.id, position: entry.position, role: entry.role, content: JSON.stringify(message) });
     }
 
     return rows;
@@ -427,17 +430,28 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
   async receivePeerThenEvict(msg: PeerMessage): Promise<void> {
     await this.ctx.blockConcurrencyWhile(async () => {
       this.host.setTimer = () => undefined;
-      const armedBefore = (await this.listSchedules()).map((row) => row.callback);
+      const armedBefore = this.armedWakes();
       const admitted = await this.receivePeerMessage(msg);
 
       if (!admitted.admitted) throw new Error(`reactor-wake probe peer input refused: ${admitted.reason}`);
       await this.settleBackgroundTasks();
       await this.ctx.storage.sync();
-      const armedAfter = (await this.listSchedules()).map((row) => row.callback);
+      const armedAfter = this.armedWakes();
       const evictedWith = (await this.agentLogEvents()).filter((row) => row.variant === 'peer_agent');
 
       this.ctx.abort(`${REACTOR_EVICTION}${JSON.stringify({ armedBefore, armedAfter, evictedWith })}`);
     });
+  }
+
+  /** The Lifecycle queue's rows; the SDK creates its table on the first job, before which nothing is queued. */
+  private jobRows(): v.InferOutput<typeof JobRowsSchema> {
+    if (this.unmetered("SELECT 1 FROM sqlite_master WHERE name = 'cf_agents_jobs'").toArray().length === 0) return [];
+
+    return v.parse(JobRowsSchema, this.unmetered('SELECT * FROM cf_agents_jobs ORDER BY id').toArray());
+  }
+
+  private armedWakes(): string[] {
+    return this.jobRows().filter((row) => row.capability === 'kinu-wakes').map((row) => row.id);
   }
 
   /** Settled by the first `_kinuTimerTick` this activation finishes, whoever delivered it. */
@@ -1133,8 +1147,10 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
   private async sendChatFrame(
     target: QueueTarget, workspace: string, text: string,
-    file?: { filename: string; mediaType: string; url: string },
+    opts: { file?: { filename: string; mediaType: string; url: string }; afterTrace?: () => Promise<void> } = {},
   ): Promise<{ wire: string; landed: string | null }> {
+    const { file, afterTrace } = opts;
+
     const response = await target.fetch(new Request(`https://probe/agents/orchestrator-agent/${workspace}`, {
       headers: { Upgrade: 'websocket' },
     }));
@@ -1187,6 +1203,8 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         await new Promise<void>((resolve) => setTimeout(resolve, 20));
       }
 
+      await afterTrace?.();
+
       // A busy-routed frame can close before the socket echoes it, so bound the wait.
       const landedValue = await Promise.race([
         landed.promise,
@@ -1219,7 +1237,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     // Sent after the fake reports the held call: sent earlier, B can land inside it and the
     // reset has no reservation to keep.
     await fetch('http://probe-control.invalid/queue/arrived');
-    const bWire = (await this.sendChatFrame(target, workspace, 'QUEUE-B', attach)).wire;
+    const bWire = (await this.sendChatFrame(target, workspace, 'QUEUE-B', { file: attach })).wire;
     const cWire = (await this.sendChatFrame(target, workspace, 'QUEUE-C')).wire;
 
     const steers = await target.pendingSteers();
@@ -1551,7 +1569,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     }));
 
     // Bound before the eviction, or no Kinu timer armed: no tick of this arrival is left to join.
-    if (evicted.evictedWith.some((row) => row.turnId !== null) || !evicted.armedAfter.includes('_kinuTimerTick')) {
+    if (evicted.evictedWith.some((row) => row.turnId !== null) || !evicted.armedAfter.includes(KINU_TIMER_JOB)) {
       return { ...evicted, drained: [], causes: [] };
     }
 
@@ -1752,11 +1770,16 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
     const recording = createRecordingLogger();
     setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
+    // Genesis parks before its first step, so the prompt steers into it without a race.
+    await fetch('http://probe-control.invalid/wake/hold', { method: 'POST', body: JSON.stringify({ where: 'start' }) });
     const genesis = await target.beginGenesisTurn();
 
     if (!genesis.started) throw new Error('first-gen probe genesis did not start');
+    await fetch('http://probe-control.invalid/wake/arrived');
 
-    const { landed } = await this.sendChatFrame(target, workspace, 'FIRST-PROMPT');
+    const { landed } = await this.sendChatFrame(target, workspace, 'FIRST-PROMPT', {
+      afterTrace: async () => { await fetch('http://probe-control.invalid/wake/release', { method: 'POST' }); },
+    });
 
     // Wait on the call and the turn's close so the landed row and retired steer are both observable.
     const began = Date.now();
@@ -1912,13 +1935,11 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
 
       // Seeded through the workspace-file RPC, never the VFS.
       if (drive.seedFile !== undefined) {
-        const seeded = await target.writeWorkspaceFile({
+        await target.writeWorkspaceFile({
           kind: 'file',
           path: drive.seedFile.path,
           data: drive.seedFile.content,
         });
-
-        if (!seeded.ok) throw new Error(`two-turn probe: fixture seed failed for ${drive.seedFile.path}`);
       }
 
       restore = capture();

@@ -3,6 +3,16 @@
  * One scoped method: a span outliving an invocation is stranded by eviction, hibernation or
  * `do.isolate.reset_silent`.
  */
+import { classifyErrorCode, type ErrorCode } from './error';
+
+export interface TraceException {
+  readonly name: string;
+  readonly code: ErrorCode;
+}
+
+export function traceException(input: { cause: unknown }): TraceException {
+  return { name: input.cause instanceof Error ? input.cause.name : 'Error', code: classifyErrorCode(input) ?? 'io' };
+}
 
 /** Workers' native `Span.setAttribute` accepts scalars only. */
 export type SpanAttributeValue = string | number | boolean;
@@ -24,10 +34,7 @@ export interface ScopedSpan {
   /** Not a health signal: a trace consumer may drop every event while this is true. */
   readonly isTraced: boolean;
   setAttribute(key: string, value: SpanAttributeValue): void;
-  /**
-   * Marks a failure that was not thrown. Records only a boolean; the error text belongs in
-   * `Logger.failure`.
-   */
+  /** Records classification only; error text belongs in Logger.failure. */
   fail(error: Error): void;
 }
 
@@ -43,9 +50,6 @@ export const SPAN_ATTR_ISOLATE_GEN = 'kinu.isolate_gen';
 
 export const SPAN_ATTR_SELF_PATH = 'kinu.self_path';
 
-/** Set to `true` only; absent means the span did not fail. */
-export const SPAN_ATTR_ERROR = 'kinu.error';
-
 /** Renders `Agent.selfPath` (root-first) to one attribute, since span attributes cannot hold arrays. */
 export function renderSelfPath(path: ReadonlyArray<{ className: string; name: string }>): string {
   if (path.length === 0) return 'root';
@@ -59,8 +63,8 @@ export interface RecordedSpan {
   readonly selfPath: string;
   /** Index in `opened` of the enclosing span, or null at a root. */
   readonly parent: number | null;
-  /** All attributes, including `kinu.error` on failure, mirroring the real tracer. */
   readonly attributes: ReadonlyMap<string, SpanAttributeValue>;
+  readonly exceptions: readonly TraceException[];
   readonly openAcrossAwait: boolean;
 }
 
@@ -83,6 +87,7 @@ export function createRecordingTracer(): RecordingTracer {
         [SPAN_ATTR_SELF_PATH, attributes.selfPath],
       ]);
 
+      const exceptions: TraceException[] = [];
       const index = opened.length;
 
       const entry = {
@@ -91,6 +96,7 @@ export function createRecordingTracer(): RecordingTracer {
         selfPath: attributes.selfPath,
         parent: stack.at(-1) ?? null,
         attributes: captured,
+        exceptions,
         openAcrossAwait: false,
       };
 
@@ -101,8 +107,8 @@ export function createRecordingTracer(): RecordingTracer {
         setAttribute(key: string, value: SpanAttributeValue): void {
           captured.set(key, value);
         },
-        fail(): void {
-          captured.set(SPAN_ATTR_ERROR, true);
+        fail(error): void {
+          exceptions.push(traceException({ cause: error }));
         },
       };
 
@@ -114,7 +120,7 @@ export function createRecordingTracer(): RecordingTracer {
         if (top >= 0) stack.splice(top, 1);
       };
 
-      const failed = (): void => { captured.set(SPAN_ATTR_ERROR, true); };
+      const failed = (...rejection: [unknown]): void => { exceptions.push(traceException({ cause: rejection[0] })); };
 
       let closesLater = false;
 
@@ -126,12 +132,12 @@ export function createRecordingTracer(): RecordingTracer {
           closesLater = true;
           entry.openAcrossAwait = true;
           // `then(ok, err)`, not `finally`: `finally` would derive an unhandled rejection.
-          void result.then(close, () => { failed(); close(); });
+          void result.then(close, (...rejection: [unknown]) => { failed(...rejection); close(); });
         }
 
         return result;
       } catch (error) {
-        failed();
+        failed(error);
         throw error;
       } finally {
         if (!closesLater) close();

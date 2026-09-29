@@ -183,16 +183,6 @@ describe('Inbox — the user kind, accepted', () => {
       { role: 'user', content: 'still pending' },
     ]);
   });
-
-  test('restorePending throws once this turn started draining — two authorities would duplicate', async () => {
-    const { inbox } = setup({ turnInFlight: true });
-    inbox.beginTurn(false);
-    await inbox.send(steer('s1', 'first'));
-    await inbox.prepareStep(step(0, HISTORY));
-
-    expect(() => inbox.restorePending([{ id: 's2', text: 'late restore' }]))
-      .toThrow('cannot restore pending steers after this turn started draining');
-  });
 });
 
 describe('Inbox — the user kind, landing in the step', () => {

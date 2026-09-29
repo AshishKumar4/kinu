@@ -13,7 +13,7 @@
  * that wait in test code, so the only exits left are the condition and the
  * process's own end (child exit, stream EOF, socket close, a settled promise).
  *
- * Four kinds, each structural:
+ * Five kinds, each structural:
  *
  *   sleep           a timer call: `setTimeout`, `setInterval`, `Bun.sleep`,
  *                   `Bun.sleepSync`, any binding imported from `timers` or
@@ -39,6 +39,23 @@
  *                   where the ladder already kills a gate — at its deploy
  *                   deadline — and names the gate, rather than as a red on
  *                   whichever test lost the race.
+ *   lap-poll        a wait bounded by a COUNT instead of a duration: a loop
+ *                   whose test compares a counter with a number (a literal, a
+ *                   binding this file sets to one, a parameter defaulting to
+ *                   one), that awaits in its body, and that ends early on a
+ *                   condition (a second clause in its test, or a `break` or
+ *                   `return` in its body). `until(holds, what)` over 1000
+ *                   event-loop laps and a theme read polled 40 times with a
+ *                   25 ms sleep are the two this tree had: under load the laps
+ *                   run out before the event lands, and the loop reports a
+ *                   state it gave up on. Not a wait, and not this kind: a
+ *                   fixed repetition with no early exit (`for (let i = 0; i <
+ *                   3; i++) await send(i)`); a capped loop that hands the
+ *                   subject data each lap (`step(orch, s)`), which runs it;
+ *                   and a loop that advances the clock the subject was handed
+ *                   (`setSystemTime`, `vi.advanceTimersByTime`), which is the
+ *                   repair for a wait. A lap is a timer, a promise made on the
+ *                   spot, or a call handing nothing but callbacks.
  *   timeout-option  a duration handed to a wait written outside the corpus: a
  *                   `{ timeout }` option, other than the literal 0, on a
  *                   puppeteer wait or navigation method (`page.waitForSelector`,
@@ -82,7 +99,7 @@ import {
   identifierCalleeName, identifierText, literalText, parse, walk, type SyntaxNode,
 } from './syntax';
 
-export const CLOCK_KINDS = ['sleep', 'clock-compare', 'test-timeout', 'timeout-option'] as const;
+export const CLOCK_KINDS = ['sleep', 'clock-compare', 'test-timeout', 'timeout-option', 'lap-poll'] as const;
 
 export type ClockKind = (typeof CLOCK_KINDS)[number];
 
@@ -353,10 +370,162 @@ function callKind(
   return args.filter(carriesTimeout).map((argument) => [argument, 'timeout-option'] as const);
 }
 
+/** Names this file fixes to a number: `const LAPS = 40`, and a parameter defaulting to one (`laps = 1000`). A `let`
+ *  set to one is a counter, the other side of the comparison. */
+function numberBindings(root: SyntaxNode): ReadonlySet<string> {
+  const names = new Set<string>();
+
+  const bind = (pair: SyntaxNode): void => {
+    const [target, value] = pair.children;
+
+    if (target?.raw.type === 'Identifier' && value !== undefined && literalNumber(value) !== undefined) names.add(target.raw.name);
+  };
+
+  walk(root, (node) => {
+    const { raw } = node;
+
+    if (raw.type === 'AssignmentPattern') bind(node);
+
+    if (raw.type === 'VariableDeclaration' && raw.kind === 'const') {
+      for (const declarator of node.children) bind(declarator);
+    }
+  });
+
+  return names;
+}
+
+/** Whether `node` is a number: a numeric literal, or a name bound to one. */
+function isNumber(node: SyntaxNode, numbers: ReadonlySet<string>): boolean {
+  return literalNumber(node) !== undefined || (node.raw.type === 'Identifier' && numbers.has(node.raw.name));
+}
+
+/** Whether a loop test holds a counter bounded by a number: `lap < 1000`, `attempt < LAPS`, `laps-- > 0`. */
+function countBounded(test: SyntaxNode, numbers: ReadonlySet<string>): boolean {
+  let bounded = false;
+
+  walk(test, (node) => {
+    const { raw } = node;
+
+    if (raw.type !== 'BinaryExpression' || !Object.hasOwn(COMPARISONS, raw.operator)) return;
+    const [left, right] = node.children;
+
+    if (left !== undefined && right !== undefined && (isNumber(left, numbers) !== isNumber(right, numbers))) bounded = true;
+  });
+
+  return bounded;
+}
+
+/** The nodes of a loop's own body, not of a function nested in it: an await or an exit there is the function's. */
+function ownNodes(node: SyntaxNode, visit: (inner: SyntaxNode) => void): void {
+  for (const child of node.children) {
+    const { type } = child.raw;
+
+    if (type === 'FunctionDeclaration' || type === 'FunctionExpression' || type === 'ArrowFunctionExpression') continue;
+    visit(child);
+    ownNodes(child, visit);
+  }
+}
+
+/** Whether an awaited expression only lets time or other work pass, or reads a state: a timer, a promise made on
+ *  the spot, or a call handing nothing but callbacks (`nextTurn()`, `read()`, `page.evaluate(() => …)`). A call
+ *  handing the subject data (`step(orch, s)`, `backfill(store, 1)`) drives it, and a capped loop of those is a run
+ *  of the subject, not a wait. */
+function isLap(awaited: SyntaxNode | undefined, timers: ReadonlySet<string>, clocks: ReadonlySet<string>): boolean {
+  if (awaited === undefined) return false;
+  const { raw } = awaited;
+
+  if (raw.type === 'NewExpression') return true;
+
+  if (raw.type !== 'CallExpression') return false;
+  const path = calleePath(awaited);
+
+  if (path === 'Promise.resolve' || callKind(awaited, timers, clocks).some(([, kind]) => kind === 'sleep')) return true;
+  const handed = argumentsOf(awaited);
+
+  return handed.every((argument) => argument.raw.type === 'ArrowFunctionExpression' || argument.raw.type === 'FunctionExpression');
+}
+
+/** `vi.` calls that move a fake clock the test holds. */
+const CLOCK_ADVANCES = {
+  'vi.setSystemTime': true, 'vi.advanceTimersByTime': true, 'vi.advanceTimersToNextTimer': true, 'vi.runAllTimers': true,
+} satisfies Record<string, true>;
+
+/** Names this file imports `setSystemTime` under, from `bun:test`. */
+function clockSetters(root: SyntaxNode): ReadonlySet<string> {
+  const names = new Set<string>();
+
+  for (const statement of root.children) {
+    const { raw } = statement;
+
+    if (raw.type !== 'ImportDeclaration' || raw.source.value !== 'bun:test') continue;
+
+    for (const specifier of raw.specifiers) {
+      if (specifier.type !== 'ImportSpecifier') continue;
+      const { imported } = specifier;
+
+      if ((imported.type === 'Identifier' ? imported.name : imported.value) === 'setSystemTime') names.add(specifier.local.name);
+    }
+  }
+
+  return names;
+}
+
+/** What a lap-poll is judged against: the file's numbers, timers, clock bindings and clock setters. */
+interface LapScope {
+  readonly numbers: ReadonlySet<string>;
+  readonly timers: ReadonlySet<string>;
+  readonly clocks: ReadonlySet<string>;
+  readonly setters: ReadonlySet<string>;
+}
+
+/** Whether a loop moves the clock its subject was handed: a run the test drives, which is the repair for a wait. */
+function advancesClock(loop: SyntaxNode, setters: ReadonlySet<string>): boolean {
+  let advances = false;
+
+  ownNodes(loop, (inner) => {
+    const name = identifierCalleeName(inner);
+    const path = calleePath(inner);
+
+    if ((name !== undefined && setters.has(name)) || (path !== undefined && Object.hasOwn(CLOCK_ADVANCES, path))) advances = true;
+  });
+
+  return advances;
+}
+
+/** Whether a loop is a lap-capped poll: counted, ending early on a condition, awaiting only laps, and moving no
+ *  clock the test holds. */
+function isLapPoll(loop: SyntaxNode, scope: LapScope): boolean {
+  const { numbers, timers, clocks } = scope;
+  const { raw } = loop;
+
+  if (raw.type !== 'ForStatement' && raw.type !== 'WhileStatement' && raw.type !== 'DoWhileStatement') return false;
+  const test = loop.children.find((child) => child.raw === raw.test);
+
+  if (test === undefined || !countBounded(test, numbers)) return false;
+  const awaited: SyntaxNode[] = [];
+  let exits = test.raw.type === 'LogicalExpression' && test.raw.operator === '&&';
+
+  ownNodes(loop, (inner) => {
+    const { type } = inner.raw;
+
+    if (type === 'AwaitExpression' && inner.children[0] !== undefined) awaited.push(inner.children[0]);
+
+    if (type === 'IfStatement') {
+      ownNodes(inner, (branch) => {
+        if (branch.raw.type === 'BreakStatement' || branch.raw.type === 'ReturnStatement') exits = true;
+      });
+    }
+  });
+
+  return exits && awaited.length > 0 && awaited.every((each) => isLap(each, timers, clocks))
+    && !advancesClock(loop, scope.setters);
+}
+
 export function auditFile(file: string, text: string): readonly ClockSite[] {
   const { root, lineAt } = parse(file, text);
   const timers = timerImports(root);
   const clocks = clockBindings(root);
+  const laps: LapScope = { numbers: numberBindings(root), timers, clocks, setters: clockSetters(root) };
   const sites: ClockSite[] = [];
 
   const add = (node: SyntaxNode, kind: ClockKind): void => {
@@ -374,6 +543,12 @@ export function auditFile(file: string, text: string): readonly ClockSite[] {
 
     if (raw.type === 'CallExpression') {
       for (const [at, kind] of callKind(node, timers, clocks)) add(at, kind);
+
+      return;
+    }
+
+    if (isLapPoll(node, laps)) {
+      add(node, 'lap-poll');
 
       return;
     }
@@ -412,6 +587,12 @@ const DESCRIBED: Readonly<Record<ClockKind, Omit<Finding, 'at' | 'found'>>> = {
       + 'ladder kills a hung gate at its deadline',
     silently: 'a raised timeout hides the wait it was raised for and still loses under the next load',
     fix: 'drop the argument; make the test end on its condition',
+  },
+  'lap-poll': {
+    invariant: 'a wait ends on its condition or on the process\'s own end, never after a count of laps',
+    silently: 'under load the laps run out before the event lands, and the loop reports a state it gave up on',
+    fix: 'await the event the condition waits for: the promise, the stored row, the emitted frame; the row\'s '
+      + 'deadline is the hang detector',
   },
   'timeout-option': {
     invariant: 'no wait outside the corpus is handed a duration from a test',
@@ -532,6 +713,32 @@ export function writeShrinkingLock(next: ClockLock, path = LOCK): void {
   writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`);
 }
 
+/** The one way a lock grows: a kind this gate newly claims, recorded once at the sites it finds, in the commit
+ *  that adds the kind. Refused for a kind the lock already holds, and refused when any other kind's count moves in
+ *  the same run, so the record admits exactly the new kind's measured debt and launders nothing beside it. */
+export function writeNewKindLock(next: ClockLock, kind: ClockKind, path = LOCK): void {
+  const previous = readLock(path);
+  const held = (lock: ClockLock, file: string, each: string): number => lock.files[file]?.[each] ?? 0;
+  const kinds = (lock: ClockLock): Set<string> => new Set(Object.values(lock.files).flatMap((counts) => Object.keys(counts)));
+
+  if (kinds(previous).has(kind)) {
+    throw new Error(`test-clocks --new-kind=${kind}: the lock already holds ${kind}; it only shrinks now`);
+  }
+
+  const files = new Set([...Object.keys(previous.files), ...Object.keys(next.files)]);
+
+  const moved = [...files].flatMap((file) => [...new Set([...Object.keys(previous.files[file] ?? {}), ...Object.keys(next.files[file] ?? {})])]
+    .filter((each) => each !== kind && held(previous, file, each) !== held(next, file, each))
+    .map((each) => `${file} [${each}]: ${String(held(previous, file, each))} -> ${String(held(next, file, each))}`));
+
+  if (moved.length > 0) {
+    throw new Error(`test-clocks --new-kind=${kind}: another kind's count moved in the same run: ${moved.join(', ')}; `
+      + 'record a pay-down with --lock first, then the new kind alone');
+  }
+
+  writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`);
+}
+
 /** Test helpers that live outside a `tests/` directory and carry no test
  *  suffix, but are read where they are written the way a `tests/helpers/`
  *  file is: the browser harness the ux suites drive Chrome through. */
@@ -560,6 +767,21 @@ async function main(): Promise<number> {
   ]);
 
   const current = tally(sites, new Date().toISOString().slice(0, 10));
+
+  const newKind = process.argv.find((word) => word.startsWith('--new-kind='))?.slice('--new-kind='.length);
+
+  if (newKind !== undefined) {
+    const kind = CLOCK_KINDS.find((claimed) => claimed === newKind);
+
+    if (kind === undefined) throw new Error(`--new-kind=${newKind}: not a kind this gate claims (${CLOCK_KINDS.join(', ')})`);
+    writeNewKindLock(current, kind);
+    const recorded = sites.filter((site) => site.kind === kind);
+    console.log(`test-clocks: recorded ${String(recorded.length)} ${kind} site(s), the kind's measured debt — ${measured}`);
+
+    for (const site of recorded) console.log(`  ${site.file}:${String(site.line)}  ${site.text}`);
+
+    return 0;
+  }
 
   if (process.argv.includes('--lock')) {
     writeShrinkingLock(current);

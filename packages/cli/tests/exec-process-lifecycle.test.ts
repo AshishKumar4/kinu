@@ -4,11 +4,11 @@
  */
 
 import { readFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
 import { JsonObjectSchema, decodeJsonValue, parseJsonObject, type JsonObject, type JsonValue } from '@kinu.run/core';
-import { tolerate } from '@kinu.run/core/obs';
-import { present, scratchDir } from '@kinu.run/test-utils';
+import { killAndAwaitExit, present, recordedIn, scratchDir } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 const repoRoot = resolve(import.meta.dir, "../../..");
@@ -27,18 +27,14 @@ function newProjectDir(): string {
 /** Pid file of the writer {@link heartbeatCommand} backgrounds, so cleanup can stop it. */
 const HEARTBEAT_PID = 'heartbeat.pid';
 
-afterEach(() => {
+// Leftover processes write into the directory until they exit.
+afterEach(async () => {
   for (const home of homes.splice(0)) {
-    // Stop leftover processes before removing the directory they write into.
     for (const pidfile of ['daemon.pid', HEARTBEAT_PID]) {
-      const recorded = tolerate(() => readFileSync(join(home, pidfile), "utf-8"), 'enoent');
+      const recorded = recordedIn(join(home, pidfile));
 
-      if (recorded === undefined) continue;
-      const pid = parseInt(recorded.trim(), 10);
-
-      if (Number.isInteger(pid) && pid > 1) tolerate(() => process.kill(pid, "SIGTERM"), 'esrch');
+      if (recorded !== null) await killAndAwaitExit(recorded);
     }
-
   }
 });
 
@@ -209,6 +205,30 @@ describe("kinu exec — a one-shot run terminates", () => {
       await server.stop();
     }
   });
+  test('a turn that fails before it opens prints the failure as one JSON error line and exits non-zero', async () => {
+    const home = newHome();
+    const server = modelThatRuns('true');
+    const env = { KINU_BASE_URL: 'http://127.0.0.1:' + server.port, KINU_AUTH: 'Bearer mock', KINU_MODEL: 'mock-model' };
+
+    try {
+      expect((await runCli(['create', 'refusedflow', '--mode', 'local', '--purpose', 'early failure flow'], env, home, 120_000)).exitCode).toBe(0);
+      const db = new Database(join(home, 'refusedflow', 'agent.db'));
+      // The daemon `create` started writes this file too; wait out its write as the product does.
+      db.exec('PRAGMA busy_timeout = 30000');
+      db.exec("CREATE TRIGGER refuse_opening BEFORE INSERT ON session_messages BEGIN SELECT RAISE(ABORT, 'the transcript refuses this write'); END");
+      db.close();
+
+      const run = await runCli(['exec', '--workspace', 'refusedflow', '--json', 'Run the command'], env, home, 90_000);
+
+      expect(run.exitCode).not.toBe(0);
+      const errors = run.stdout.trim().split('\n').filter((line) => line !== '').map(parseJsonObject).filter((event) => event.type === 'error');
+      expect(errors).toHaveLength(1);
+      expect(errors[0]?.message).toContain('the transcript refuses this write');
+    } finally {
+      await server.stop();
+    }
+  });
+
   test('a native command failure carries class and observed exit in exec JSON', async () => {
     const home = newHome();
     const server = modelThatRuns('printf diagnostic; exit 7');

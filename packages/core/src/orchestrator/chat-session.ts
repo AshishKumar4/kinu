@@ -9,15 +9,20 @@
 
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
+import { Effect, Result } from 'effect';
 import type { ChatEvent } from '../chat';
+import type { CompactionTrigger } from '../extension';
+import { WORKSPACE_RUN_ID } from '../events/model-call';
 import { runWorkModeInvocation } from '../execution/work-mode';
 import type { EventLog } from '../events/hub/log';
 import type { RunEventRecorder } from '../events/recorder';
-import type { PartialToolCall, RunEvent } from '../events/types';
+import type { RunEvent } from '../events/types';
 import type { CompletedTurn } from '../evolution/types';
-import { diagnostics, KinuError, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
+import { attempt, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle as settleEffect, toKinuError, type Refusal } from '../obs/index';
+import { contextFill, type ContextFill } from '../read-models/context-fill';
 import { workModeForTurnMetadata } from '../prompting/surface';
 import { runOperationProfile } from '../profiles/operation';
+import type { ResolvedTurnProfile } from '../profiles';
 import type { CacheWarmingLane } from '../providers/cache-warming';
 import { DEFAULT_CACHE_RETENTION } from '../providers/types';
 import type { ToolOutcome } from '../tools/outcome';
@@ -30,7 +35,7 @@ import type { SendLanding, SettledSignals } from '../types/signals';
 import type { WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 import { authoredTurnMetadata, PROGRAMMATIC_MESSAGE_ID_PREFIX } from '../utils/ui-message';
-import { CLEAR_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor-session';
+import { CLEAR_NEEDS_IDLE, COMPACT_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor-session';
 import type { ActorSession, ActorTurnLease, ActorExecutionInput, ActorExecutionResult } from './actor-session';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
 import type { LandedSteerRow, PendingSendRow, PendingSendStore, UserSteer } from './inbox';
@@ -42,6 +47,7 @@ import {
   type CompactionTriggerState, type RunEndClassification, type RunEndFacts, type RunEndReason,
 } from './turn-lifecycle';
 import { answerParts, type SessionTranscript, type PreparedConversationEntry } from '../session/transcript';
+import type { CutStep } from '../session/history';
 import { RECOVERY_BACKOFF_CEILING_MS } from '../utils/recovery-backoff';
 import type { MessageReference } from '../session/messages';
 import type { ContextSelection } from '../session/context';
@@ -53,39 +59,6 @@ import type { TaskListStore } from '../tools/task-store';
 import { inheritedAsModelMessage } from '../heads/head-inference';
 
 type ToolCallArguments = Extract<ChatEvent, { type: 'tool-call' }>['args'];
-
-/** One cadence for the step ledger and a backend's wire replay store, so they agree on what survived. */
-const PARTIAL_FLUSH_EVERY = 10;
-
-export type PartialFlushSignal = 'content' | 'settled' | 'none';
-
-/** First content chunk flushes, then every {@link PARTIAL_FLUSH_EVERY}, and a settled tool result at once; a step boundary resets. */
-export interface PartialFlushCadence {
-  flushes(signal: PartialFlushSignal): boolean;
-  reset(): void;
-}
-
-export function partialFlushCadence(): PartialFlushCadence {
-  let sinceFlush = 0;
-  let flushedContent = false;
-
-  return {
-    flushes: (signal) => {
-      if (signal === 'none') return false;
-      sinceFlush += 1;
-
-      if (signal !== 'settled' && flushedContent && sinceFlush < PARTIAL_FLUSH_EVERY) return false;
-      sinceFlush = 0;
-      flushedContent = true;
-
-      return true;
-    },
-    reset: () => {
-      sinceFlush = 0;
-      flushedContent = false;
-    },
-  };
-}
 
 /** None: reclamation runs under the single-driver lease, so every open lease is a dead process's. */
 const NO_STRANDED_DELIVERY_GRACE = 0;
@@ -141,8 +114,8 @@ interface QueueItem {
   yieldsToUserMessage?: boolean;
   /** Re-opened under its own ids, its prior output re-entered ahead of the remaining calls. */
   continuation?: TurnContinuation;
-  /** Exactly once, and told whether the turn ran: a lease refusal must reach the producer, the only one who can put things back. */
-  settle: (refusal: Refusal | null, yielded?: boolean) => void;
+  /** Exactly once, and told whether the turn ran: a failure must reach the producer, the only one who can put things back. */
+  settle: (failure: KinuError | null, yielded?: boolean) => void;
 }
 
 interface TurnContinuation {
@@ -151,7 +124,8 @@ interface TurnContinuation {
   readonly messageId: string;
   readonly steps: readonly ModelMessage[];
   readonly finishedSteps: number;
-  readonly partial: { readonly text: string; readonly toolCalls: readonly PartialToolCall[] } | null;
+  /** The outputs the cut step left open, named before a claim seals them. */
+  readonly openOutputs: readonly string[];
 }
 
 
@@ -168,12 +142,10 @@ export function turnInputMessage(item: Pick<ChatTurnInput, 'text' | 'files'>): M
 
 /** The cut step's text heads the answer only when that step was the answer; narration-step text stays with its step. */
 function continuedAnswer(
-  continuation: TurnContinuation | undefined,
+  partial: CutStep | null,
   execution: Pick<ActorExecutionResult, 'text' | 'steps' | 'interrupted'>,
 ): string {
-  const partial = continuation?.partial;
-
-  if (partial === undefined || partial === null || partial.toolCalls.length > 0) return execution.text;
+  if (partial === null || partial.calledTools) return execution.text;
 
   return execution.interrupted || execution.steps <= 1 ? partial.text + execution.text : execution.text;
 }
@@ -214,7 +186,6 @@ export interface OwedTerminalEffectsInput {
   /** Decided before the commit; null when none is owed. */
   readonly owedReport: OwedReport | null;
   readonly completed: boolean;
-  readonly startedAt: number;
   readonly trialContext: readonly ModelMessage[];
   /** A cold replay has no live toolset to ask. */
   readonly reachableTools: readonly string[];
@@ -223,7 +194,6 @@ export interface OwedTerminalEffectsInput {
   readonly answeredDeliveries: ReadonlySet<string>;
   /** At most one continuation is owed. */
   readonly outputContinuation: boolean;
-  /** Null when the decision said none. */
   readonly taskReminder: { readonly text: string } | null;
 }
 
@@ -235,10 +205,17 @@ async function answerMetadata(
   return Object.keys(metadata).length === 0 ? null : metadata;
 }
 
+export interface ComposedRequest {
+  readonly execution: Omit<ActorExecutionInput, 'task'>;
+  readonly profile: ResolvedTurnProfile;
+}
+
 /** Each port is asked per call, never captured. */
 export interface ChatSessionPorts {
   /** Runs after the opening row and run are durable; a throw ends the turn as an error with one `turn-end`. */
   prepareTurn(item: ChatTurnInput, lease: ActorTurnLease): Promise<PreparedTurn>;
+  /** Never consumes an armed compaction. */
+  composeRequest(): Promise<ComposedRequest>;
   owedTerminalEffects(input: OwedTerminalEffectsInput): OwedEffect[];
   answerMetadata?(turnId: string, texts: () => Promise<readonly string[]>): Promise<JsonObject | null>;
   /** The report this ending owes its caller; narration is read only if the report carries it. */
@@ -256,7 +233,6 @@ export interface ChatSessionPorts {
   taskList(): TaskListStore;
   /** A reminder fired behind such work would race its wake. */
   hasPendingAsyncWake(): boolean;
-  /** `steerSkillsBlock`. */
   steerSkills(text: string): Promise<string | null>;
   /** A backend with no review surface refuses a plan turn at admission. */
   planTurnRefusal(): string | null;
@@ -270,7 +246,6 @@ export interface ChatSessionOptions {
   readonly actorSession: ActorSession;
   readonly sessionId: string;
   readonly transcript: SessionTranscript;
-  /** Core's PendingSendStore, bound to the session's own actor id. */
   readonly pendingSends: PendingSendStore;
   readonly eventLog: EventLog;
   readonly eventRecorder: RunEventRecorder;
@@ -306,6 +281,13 @@ function refusedLanding(refusal: Refusal): KinuError {
   return new KinuError(refusal.reason, `${refusal.error}. Close that session, or send this from it.`);
 }
 
+interface OpenedTurn {
+  readonly event: string | undefined;
+  readonly mode: WorkMode;
+  readonly turnId: string;
+  readonly runId: string;
+}
+
 export class ChatSession {
   private readonly actorSession: ActorSession;
   private readonly sessionId: string;
@@ -314,6 +296,8 @@ export class ChatSession {
   /** Settled where the fate is decided, never at admission. A send admitted via `admit` has no entry: its fate goes out as steer_status. */
   private readonly landings = new Map<string, SendLandingWaiter>();
   private readonly eventLog: EventLog;
+  private revision: Promise<void> | null = null;
+  private readonly unobserveMeasures: () => void;
   private readonly eventRecorder: RunEventRecorder;
   private readonly compactionState: CompactionTriggerState;
   private readonly transaction: <T>(body: () => T) => T;
@@ -330,7 +314,6 @@ export class ChatSession {
   private messageId = '';
   /** Armed only by a one-shot task turn (completion-gate.ts). */
   readonly completionGate = new CompletionGate();
-  /** core tasks/reminder.ts. */
   private readonly taskReminders = new TaskReminders();
   /** Drained by a single serialized pump so turns never interleave. */
   private readonly queue: QueueItem[] = [];
@@ -363,9 +346,28 @@ export class ChatSession {
     });
     this.restoreOpenTurn();
     this.restorePendingSends();
+    this.unobserveMeasures = this.eventRecorder.observe((event) => {
+      if (event.type === 'context_admitted' || (event.type === 'step_finish' && event.usage?.input !== undefined)) this.broadcastContextFill();
+    });
+  }
+
+  contextFill(catalogWindow: number | null): ContextFill | null {
+    return contextFill(this.eventRecorder.readContextMeasures(), catalogWindow);
+  }
+
+  private broadcastContextFill(): void {
+    const fill = contextFill(this.eventRecorder.readContextMeasures(), null);
+
+    if (fill === null) return;
+    this.emit({
+      type: 'broadcast',
+      event: { type: 'context_fill', contextTokens: fill.tokens, ...(fill.window !== null && { contextWindow: fill.window }) },
+    });
   }
 
   get pumpPromise(): Promise<void> | null { return this.activePump; }
+  /** Settles once no measure or fold is pending. */
+  get revised(): Promise<void> { return this.revision ?? Promise.resolve(); }
   get pumping(): boolean { return this.pumpActive; }
   get currentRunId(): string | null { return this.runId; }
   /** Open on purpose, so the wake reconcile must not seal them. */
@@ -374,7 +376,10 @@ export class ChatSession {
   }
   get currentTurnId(): string | null { return this.turnId; }
   /** The owner's teardown calls this first. */
-  close(): void { this.ended = true; }
+  close(): void {
+    this.ended = true;
+    this.unobserveMeasures();
+  }
   get closed(): boolean { return this.ended; }
 
   /**
@@ -397,8 +402,8 @@ export class ChatSession {
         turnId: input.steerIds?.[0] ?? crypto.randomUUID(),
         // Retired with this rerun's row in the same transaction.
         steerIds: input.steerIds,
-        settle: (refusal) => {
-          this.settleLandings(input.steerIds ?? [], refusal === null ? 'turn' : refusedLanding(refusal));
+        settle: (failure) => {
+          this.settleLandings(input.steerIds ?? [], failure ?? 'turn');
         },
       };
 
@@ -436,14 +441,14 @@ export class ChatSession {
       metadata: input.metadata,
       kind: 'programmatic',
       // The signal seam compensates on anything but 'queued'. 'yielded' is consumed: nothing is retried.
-      settle: (refusal, yielded) => {
+      settle: (failure, yielded) => {
         if (yielded === true) {
           resolve({ status: 'yielded' });
 
           return;
         }
 
-        resolve({ status: refusal ? 'skipped' : 'queued' });
+        resolve({ status: failure ? 'skipped' : 'queued' });
       },
     };
 
@@ -553,10 +558,10 @@ export class ChatSession {
     this.queue.push({
       text, files, metadata, kind: 'user',
       turnId, pendingSendId,
-      settle: (refusal) => {
-        // A refusal takes the reservation with it, or the words would be re-delivered after the caller was told no.
-        if (refusal) this.pendingSends.retire([pendingSendId]);
-        this.settleLandings([turnId], refusal === null ? 'turn' : refusedLanding(refusal));
+      settle: (failure) => {
+        // A failure takes the reservation with it, or the words would be re-delivered after the caller was told no.
+        if (failure) this.pendingSends.retire([pendingSendId]);
+        this.settleLandings([turnId], failure ?? 'turn');
       },
     });
     this.pump();
@@ -608,6 +613,55 @@ export class ChatSession {
     await this.actorSession.clearConversation(this.sessionId, () => {
       if (this.turnInFlight()) throw new KinuError('denied', CLEAR_NEEDS_IDLE);
     });
+    this.reviseContext({ counted: true });
+  }
+
+  reviseContext(options: { readonly counted: boolean }): void {
+    const measuring = (this.revision ?? Promise.resolve()).then(() => this.measureContextRevision(options));
+    this.revision = measuring;
+    this.actorSession.orchestrator.track(measuring.then(() => { if (this.revision === measuring) this.revision = null; }), 'measuring the revised context');
+  }
+
+  /** A failed fold leaves the conversation as it was and arms nothing; a turn sent meanwhile waits. */
+  compact(): Promise<void> {
+    const folded = (this.revision ?? Promise.resolve()).then(() => settleEffect(Effect.result(this.fold())));
+    const revision = folded.then(() => undefined);
+    this.revision = revision;
+    this.actorSession.orchestrator.track(revision.then(() => { if (this.revision === revision) this.revision = null; }), 'folding the conversation');
+
+    return folded.then((outcome) => settleEffect(Result.isSuccess(outcome) ? Effect.void : Effect.fail(outcome.failure)));
+  }
+
+  private fold(): Effect.Effect<void, KinuError> {
+    return this.pumpActive || this.queue.length > 0
+      ? Effect.fail(new KinuError('denied', COMPACT_NEEDS_IDLE))
+      : attempt(
+        { doing: 'folding the conversation into a summary', otherwise: 'unavailable' },
+        () => this.measureNextRequest({ counted: true, trigger: 'user' }),
+      );
+  }
+
+  /** Uncounted, on an empty conversation, so it folds nothing. */
+  measureSessionStart(): void {
+    const { provider, gate } = this.eventRecorder.readContextMeasures();
+
+    if (provider === null && gate === null && this.actorSession.history.length === 0) this.reviseContext({ counted: false });
+  }
+
+  measureContextRevision(options: { readonly counted: boolean }): Promise<void> {
+    return settleEffect(this.pumpActive || this.queue.length > 0 ? Effect.void : attempt(
+      { doing: 'measuring the next request after the context changed', otherwise: 'unavailable' },
+      () => this.measureNextRequest({ ...options, trigger: 'auto' }),
+    ).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('context.revision_measure_failed', failure); }))));
+  }
+
+  private async measureNextRequest(options: { readonly counted: boolean; readonly trigger: CompactionTrigger }): Promise<void> {
+    const { execution, profile } = await this.ports.composeRequest();
+    const { countInputTokens, ...uncounted } = execution.chat;
+    const counted = options.counted && countInputTokens !== undefined ? { ...uncounted, countInputTokens } : uncounted;
+    const measured = await this.actorSession.measureNextRequest({ ...execution, chat: { ...counted, transformTrigger: options.trigger } }, profile);
+
+    if (measured !== null) this.eventRecorder.emit(WORKSPACE_RUN_ID, { type: 'context_admitted', ...measured });
   }
 
   /** Bypasses the debounce, for a batch tick that ends the session right after. Interactive sessions keep the debounced path. */
@@ -687,13 +741,15 @@ export class ChatSession {
       let item: QueueItem | undefined;
 
       while ((item = this.queue.shift())) {
+        // So the turn's own measure is the newer.
+        await this.revision;
         // Checked per item, immediately before the turn runs. A refusal settles the item, so its producer
         // compensates.
         const refusal = this.ports.driverGate();
 
         if (refusal) {
           diagnostics.event('driver.turn_deferred', { kind: item.kind, reason: refusal.reason });
-          item.settle(refusal);
+          item.settle(refusedLanding(refusal));
           continue;
         }
 
@@ -718,18 +774,25 @@ export class ChatSession {
         }
 
         this.runningAnnouncement = item.idempotencyKey ?? null;
+        let failure: KinuError | null = null;
+
+        let opened: OpenedTurn | null = null;
 
         try {
-          await this.processTurn(item);
+          opened = await this.openTurn(item);
+          await this.runOpenedTurn(item, opened);
         } catch (err) {
           diagnostics.failure(
             'turn.processing_failed',
             toKinuError({ doing: 'processing a queued turn', cause: err, otherwise: 'io' }),
           );
+
+          // Nothing reached the caller before the open, so a failure there goes to it in its own words.
+          if (opened === null) failure = new KinuError(classifyErrorCode({ cause: err }) ?? 'io', renderThrownChain({ cause: err }), { cause: err });
         } finally {
           await this.flushEvents();
           this.runningAnnouncement = null;
-          item.settle(null);
+          item.settle(failure);
         }
       }
     } finally {
@@ -780,7 +843,8 @@ export class ChatSession {
   }
 
   /** A started turn always terminates: exactly one `turn-end` and a closed run, even when assembly throws. */
-  private async processTurn(item: QueueItem): Promise<void> {
+  /** Through the announced start. */
+  private async openTurn(item: QueueItem): Promise<OpenedTurn> {
     const parsedEvent = v.safeParse(v.string(), item.metadata?.kinuEvent);
     const event = parsedEvent.success ? parsedEvent.output : undefined;
     const mode = workModeForTurnMetadata(item.metadata);
@@ -806,23 +870,25 @@ export class ChatSession {
       carried: (item.steerIds ?? []).filter((id) => id !== this.turnId),
     });
 
+    return { event, mode, turnId: this.turnId, runId: this.runId };
+  }
+
+  private async runOpenedTurn(item: QueueItem, { event, mode, turnId, runId }: OpenedTurn): Promise<void> {
     const startedAt = Date.now();
     // A re-opened turn continues its run; only a new turn opens one.
 
     if (this.reopenedRunId === this.runId) this.reopenedRunId = null;
 
-    const lease = this.actorSession.beginTurn(
-      { runId: this.runId, turnId: this.turnId }, mode, startedAt, item.metadata,
-    );
+    const lease = this.actorSession.beginTurn({ runId, turnId }, mode, startedAt, item.metadata);
 
-    if (item.continuation === undefined) openTurnRun(this.eventRecorder, this.runId, {
+    if (item.continuation === undefined) openTurnRun(this.eventRecorder, runId, {
       agentId: lease.actorId,
       causedBy: event ?? 'chat',
       userMessage: item.text,
       turnIndex: this.actorSession.orchestrator.sessionTurnIndex,
       // Enough for the next process to re-open the same turn.
       turn: {
-        turnId: this.turnId, messageId: this.messageId, kind: item.kind, text: item.text,
+        turnId, messageId: this.messageId, kind: item.kind, text: item.text,
         ...(item.metadata !== undefined && { metadata: item.metadata }),
         ...(item.pendingSendId !== undefined && { pendingSendId: item.pendingSendId }),
         ...(item.steerIds !== undefined && { steerIds: item.steerIds }),
@@ -889,59 +955,7 @@ export class ChatSession {
     this.emit({ type: 'broadcast', event: { type: 'model_fallback', message: `${event.to} took over from ${event.from}: ${event.reason}` } });
   }
 
-  /** Everything here may throw; processTurn owns what that means. */
-  /** `step_finish` supersedes it; indices count from the steps a continuation already carries. */
-  private partialLedger(continuation: TurnContinuation | undefined) {
-    let stepIndex = (continuation?.steps.length ?? 0) + 1;
-    let text = '';
-    let toolCalls: PartialToolCall[] = [];
-    const cadence = partialFlushCadence();
-
-    const flush = (signal: PartialFlushSignal): void => {
-      if (!cadence.flushes(signal) || this.runId === null) return;
-      this.eventRecorder.emit(this.runId, { type: 'step_partial', stepIndex, text, toolCalls });
-    };
-
-    return {
-      observe: (event: ChatEvent) => {
-        switch (event.type) {
-          case 'text-delta':
-            text += event.delta;
-            flush('content');
-
-            return;
-          case 'tool-call':
-            toolCalls = [...toolCalls, { toolCallId: event.toolCallId, toolName: event.toolName, args: event.args }];
-            flush('content');
-
-            return;
-          case 'tool-result':
-            toolCalls = toolCalls.map((call) => call.toolCallId === event.toolCallId
-              ? { ...call, ...(event.success ? { result: event.result } : { error: event.error ?? event.result }) }
-              : call);
-            flush('settled');
-            // Any tool result is progress on the last reminder.
-            this.taskReminders.noteToolResult();
-
-            return;
-          case 'step-finish':
-            stepIndex += 1;
-            text = '';
-            toolCalls = [];
-            cadence.reset();
-
-            return;
-          case 'reasoning-delta':
-          case 'model-fallback':
-          case 'context-admitted':
-          case 'done':
-          case 'error':
-            return;
-        }
-      },
-    };
-  }
-
+  /** Everything here may throw; runOpenedTurn owns what that means. */
   private async runTurn(item: QueueItem, eventName: string | undefined, startedAt: number, lease: ActorTurnLease): Promise<void> {
     const input: ChatTurnInput = item;
 
@@ -953,9 +967,9 @@ export class ChatSession {
 
     const prepared = await this.ports.prepareTurn(input, lease);
 
-    const partial = this.partialLedger(item.continuation);
+    const partial = item.continuation === undefined ? null : await this.actorSession.canonical.cutStep(item.continuation.openOutputs);
     /** A Stop before any output leaves the operator's row alone. */
-    let streamed = item.continuation?.partial !== null && item.continuation?.partial !== undefined;
+    let streamed = partial !== null;
 
     // Before this turn's request voids the lane.
     const lastRequestAt = this.actorSession.lastRequestAt();
@@ -970,15 +984,17 @@ export class ChatSession {
       cacheKeptAliveUntil,
       ...(item.continuation !== undefined && {
         resumedSteps: item.continuation.finishedSteps,
-        resumedMidStep: item.continuation.partial !== null,
+        resumedMidStep: partial !== null,
       }),
     }, (event) => {
-      partial.observe(event);
+      // Any tool result is progress on the last reminder.
+      if (event.type === 'tool-result') this.taskReminders.noteToolResult();
 
       if (event.type === 'model-fallback') this.recordModelFallback(event);
 
-      if (event.type === 'context-admitted') {
-        this.emit({ type: 'broadcast', event: { type: 'context_admitted', requestTokens: event.tokens, contextWindow: event.contextWindow } });
+      // Durable beside the turn's steps: a reload reads it and never measures.
+      if (event.type === 'context-admitted' && this.runId !== null) {
+        this.eventRecorder.emit(this.runId, { type: 'context_admitted', tokens: event.tokens, contextWindow: event.contextWindow });
       }
 
       if (event.type === 'text-delta' || event.type === 'tool-call') streamed = true;
@@ -987,7 +1003,7 @@ export class ChatSession {
         || event.type === 'error') return this.emit(event);
     });
 
-    const fullText = continuedAnswer(item.continuation, execution);
+    const fullText = continuedAnswer(partial, execution);
     const interrupted = execution.interrupted;
     let runError: string | null = null;
     let overflowRetry = false;
@@ -1021,8 +1037,7 @@ export class ChatSession {
     const metadata = await answerMetadata(this.ports, lease.turnId, () => this.transcript.narration(answerParts(execution.outputPartReferences, finalText)), end.reason);
 
     const preparedAssistant = streamed || !interrupted ? await this.transcript.prepareAssistant({
-      id: this.messageId, parentId: this.actorSession.landedSteers.at(-1)?.id ?? lease.turnId,
-      turnId: lease.turnId, runId: lease.runId, parts: execution.outputPartReferences, finalText,
+      id: this.messageId, turnId: lease.turnId, runId: lease.runId, parts: execution.outputPartReferences, finalText,
       ...(metadata !== null && { metadata }),
     }) : null;
 
@@ -1199,7 +1214,6 @@ export class ChatSession {
         owedReport: input.owedReport,
         completed: runError === null,
         taskReminder,
-        startedAt: input.startedAt,
         trialContext: input.trialContext,
         answeredDeliveries: this.answeredDeliveries(item),
         outputContinuation,
@@ -1243,15 +1257,14 @@ export class ChatSession {
 
   // The pending-send ledger: a send is a row before the client hears it.
 
-  /** Landed rows and spent reservations in one transaction; rows chain from the opening message. */
+  /** Landed rows and spent reservations in one transaction; rows follow the opening message. */
   private async prepareLandedSteers(rows: readonly LandedSteerRow[], reference: MessageReference): Promise<(context: ContextSelection) => void> {
     const turnId = this.turnId;
     const runId = this.runId;
 
     if (turnId === null || runId === null) throw new KinuError('denied', 'steer publication requires an active turn');
     const opening = this.openingRow;
-    const parentId = this.actorSession.landedSteers.at(-1)?.id ?? turnId;
-    const prepared = await this.transcript.prepareSteers({ rows, reference, turnId, runId, parentId });
+    const prepared = await this.transcript.prepareSteers({ rows, reference, turnId, runId });
 
     return context => {
       if (opening !== null && this.actorSession.landedSteers.length === 0) this.transcript.appendUser(opening);
@@ -1281,7 +1294,8 @@ export class ChatSession {
     const open = this.eventRecorder.openTurn();
 
     if (open === null) return;
-    const { runId, turn, steps, finishedSteps, partial } = open;
+    const { runId, turn, steps, finishedSteps } = open;
+    const openOutputs = this.actorSession.canonical.openOutputs(runId);
 
     const item: QueueItem = {
       text: turn.text,
@@ -1296,7 +1310,7 @@ export class ChatSession {
         messageId: turn.messageId,
         steps,
         finishedSteps,
-        partial: partial === null ? null : { text: partial.text, toolCalls: partial.toolCalls },
+        openOutputs,
       },
       settle: () => {},
     };
@@ -1310,7 +1324,7 @@ export class ChatSession {
     this.emit({
       type: 'background', event: 'turn_reopened',
       message: `continuing the turn the last process left: ${String(steps.length)} step${steps.length === 1 ? '' : 's'} kept`
-        + (partial === null ? '' : `, resuming mid-step ${String(partial.stepIndex)}`),
+        + (openOutputs.length === 0 ? '' : `, resuming mid-step ${String(finishedSteps + 1)}`),
     });
 
     queueMicrotask(() => {
@@ -1397,12 +1411,5 @@ interface PromptInputParts {
 function normalizePromptInput(
   input: string | { text: string; files: ReadonlyArray<PromptFile> },
 ): PromptInputParts {
-  const text = v.safeParse(v.string(), input);
-
-  if (text.success) return { text: text.output };
-
-  return v.parse(v.object({
-    text: v.string(),
-    files: v.array(v.object({ filename: v.string(), mediaType: v.string(), url: v.string() })),
-  }), input);
+  return v.is(v.string(), input) ? { text: input } : input;
 }

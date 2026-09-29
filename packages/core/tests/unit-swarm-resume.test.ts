@@ -1,7 +1,7 @@
 /**
  * A swarm killed mid-flight is re-entered by the real job-resume path, not started again.
  * An eviction keeps storage and loses the isolate: attempt one freezes on a never-settling call;
- * attempt two shares only the database and workspace. Spec: docs/EXPLORATION.md, docs/MCTS.md.
+ * attempt two shares only the database and workspace. Spec: docs/EXPLORATION.md.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -52,23 +52,16 @@ function ledgerOnly() {
 
 function beganSwarm(store: MctsSearchStore, rootId: string, at: number): void {
   store.begin({
-    rootId, task: TASK, engine: 'swarm', rootMsgId: null,
-    config: { budget: 4, branches: 2, mode: 'build', maxDepth: 2 }, budget: 4, now: at,
+    rootId, task: TASK,
+    config: { budget: 4, branches: 2, mode: 'build', maxDepth: 2 }, now: at,
   });
 }
 
 describe('the swarm-scoped resume lookup, and what it does about a collision', () => {
-  test('returns every running row for the task, newest first, and no other engine\'s', () => {
+  test('returns every running row for the task, newest first', () => {
     const store = ledgerOnly();
     beganSwarm(store, 'older', 1_000);
     beganSwarm(store, 'newer', 2_000);
-    // Differs only in engine: without the discriminator a judged search's checkpoint reaches the swarm runner.
-    store.begin({
-      rootId: 'mcts-row', task: TASK, engine: 'mcts', rootMsgId: 'm1',
-      config: { budget: 4, branches: 2, mode: 'build' }, budget: 4, now: 3_000,
-    });
-    expect(store.findResumable(TASK, 'build')?.rootId).toBe('mcts-row');
-
     expect(store.findRunningSwarms(TASK).map((row) => row.rootId)).toEqual(['newer', 'older']);
   });
 
@@ -105,15 +98,12 @@ describe('the swarm-scoped resume lookup, and what it does about a collision', (
     store.begin({
       rootId: 'context-root',
       task: TASK,
-      engine: 'swarm',
-      rootMsgId: null,
       config: {
         budget: 1,
         branches: 1,
         mode: 'build',
         originContext: [{ role: 'user', content: 'frozen caller context' }],
       },
-      budget: 1,
       now: 1_000,
     });
 
@@ -137,8 +127,8 @@ describe('swarm progress reads the durable tree, not the row', () => {
     const actor = createTestActorsOver(db).main;
     const ledger = new MctsSearchStore(sql, actor);
     ledger.begin({
-      rootId: 'mid-level', task: TASK, engine: 'swarm', rootMsgId: null,
-      config: { budget: 6, branches: 3, mode: 'build', maxDepth: 2 }, budget: 6, now: 1_000,
+      rootId: 'mid-level', task: TASK,
+      config: { budget: 6, branches: 3, mode: 'build', maxDepth: 2 }, now: 1_000,
     });
     void sql`INSERT INTO search_nodes (actor_id, id, root_id, task, observation)
       VALUES (${actor.actorId}, 'mid-level', 'mid-level', ${TASK}, 'root')`;
@@ -161,18 +151,11 @@ describe('swarm progress reads the durable tree, not the row', () => {
     const { sql, ledger, actor } = treeAndLedger();
     expand(sql, actor, [['c1', 'mid-level'], ['c2', 'mid-level'], ['c3', 'mid-level']], 1);
 
-    // No reader uses the row's integer columns; they still hold what `begin` wrote.
     expect(ledger.findRunningSwarms(TASK)).toEqual([
       { rootId: 'mid-level', iteration: 3, budget: 3, epoch: 0 },
     ]);
     expect(ledger.get('mid-level')).toMatchObject({ iteration: 3, budget: 3 });
     expect(ledger.list(10)[0]).toMatchObject({ iteration: 3, budget: 3 });
-
-    const cols = sql<{ iteration: number; budget: number }>`
-      SELECT iteration, budget FROM mcts_search_runs
-      WHERE actor_id = ${actor.actorId} AND root_id = 'mid-level'`[0];
-
-    expect(cols).toEqual({ iteration: 0, budget: 6 });
   });
 
   test('after re-entry the same readers count what the new attempt added', () => {
@@ -194,12 +177,12 @@ describe('swarm progress reads the durable tree, not the row', () => {
 
     ledger.touch('mid-level', 0, 5_000);
 
-    const row = sql<{ updated_at: number; status: string; iteration: number; budget: number; epoch: number }>`
-      SELECT updated_at, status, iteration, budget, epoch FROM mcts_search_runs
+    const row = sql<{ updated_at: number; status: string; epoch: number }>`
+      SELECT updated_at, status, epoch FROM mcts_search_runs
       WHERE actor_id = ${actor.actorId} AND root_id = 'mid-level'`[0];
 
     expect(row?.updated_at).toBe(5_000);
-    expect(row).toMatchObject({ status: 'running', iteration: 0, budget: 6, epoch: 0 });
+    expect(row).toMatchObject({ status: 'running', epoch: 0 });
 
     ledger.touch('mid-level', 7, 6_000);
     expect(sql<{ updated_at: number }>`
@@ -836,7 +819,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
         )`[0]?.n)
       .toBe(0);
 
-    const rows = ledger.list(10).filter((row) => row.engine === 'swarm');
+    const rows = ledger.list(10);
     expect(rows.map((row) => row.rootId)).toEqual([rootId]);
     expect(rows[0]).toMatchObject({ status: 'converged', epoch: 1, iteration: 4 });
 
@@ -883,7 +866,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     expect(jobs.get(jobId)?.status).toBe('completed');
     expect(notified).toEqual(['completed']);
     expect(treeOf(sql)).toHaveLength(tree.length);
-    expect(ledger.list(10).filter((row) => row.engine === 'swarm')).toHaveLength(1);
+    expect(ledger.list(10)).toHaveLength(1);
   });
 });
 
@@ -981,7 +964,7 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
       .toEqual([...spawnedIds].sort());
     expect(new Set(tree.map((node) => node.root_id))).toEqual(new Set([rootId]));
 
-    expect(ledger.list(10).filter((row) => row.engine === 'swarm').map((row) => row.rootId))
+    expect(ledger.list(10).map((row) => row.rootId))
       .toEqual([rootId]);
     expect(ledger.get(rootId)).toMatchObject({ epoch: 1, iteration: FLAT_SEARCH.branches });
 
@@ -1081,7 +1064,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     const tree = treeOf(sql);
     expect(new Set(tree.map((node) => node.root_id))).toEqual(new Set([rootId]));
     expect(tree.filter((node) => node.depth === 2)).toHaveLength(2);
-    expect(ledger.list(10).filter((row) => row.engine === 'swarm').map((row) => row.rootId))
+    expect(ledger.list(10).map((row) => row.rootId))
       .toEqual([rootId]);
 
     // The frozen nodes stop counting as running even though the run continues.
@@ -1432,7 +1415,7 @@ describe('a second search over a task already running is refused', () => {
                                              WHERE actor_id = ${rt.actor.actorId}
                                              ORDER BY id`.map((r) => r.id);
 
-    expect(ledger.list(10).filter((row) => row.engine === 'swarm').map((row) => row.rootId))
+    expect(ledger.list(10).map((row) => row.rootId))
       .toEqual(['root-in-flight']);
     expect(ledger.get('root-in-flight')).toMatchObject({ status: 'running', epoch: 0 });
 
@@ -1490,5 +1473,62 @@ describe('harvested witness verdict', () => {
     const harvest = harvestSwarm({ sql, ledger, actor }, TASK);
     expect(harvest?.witnessFound).toBe(true);
     expect(harvest?.candidates[0]?.witnessFound).toBe(true);
+  });
+});
+
+describe('the swarm ledger row', () => {
+  function realisedOf(store: MctsSearchStore, sql: SqlExecutor, actor: ActorHandle) {
+    beganSwarm(store, 'r1', 1_000);
+
+    return () => sql<{ judge_samples_realised: number | null }>`
+      SELECT judge_samples_realised FROM mcts_search_runs
+      WHERE actor_id = ${actor.actorId} AND root_id = 'r1'`[0]?.judge_samples_realised ?? null;
+  }
+
+  function fresh() {
+    const db = new Database(':memory:');
+    initSearchTables(makeExecRaw(db));
+    initMctsSearchTable(makeExecRaw(db));
+    const actor = createTestActorsOver(db).main;
+
+    return { sql: makeSql(db), actor, store: new MctsSearchStore(makeSql(db), actor) };
+  }
+
+  test('keeps the SMALLEST observed judge ensemble, in either arrival order, and NULL until one is seen', () => {
+    // Both orders, because a last-write-wins fold passes one and fails the other.
+    for (const order of [[2, 5, 9], [9, 5, 2]]) {
+      const { sql, actor, store } = fresh();
+      const realised = realisedOf(store, sql, actor);
+      expect(realised()).toBeNull();
+
+      for (const seen of order) store.observeJudgeEnsemble('r1', seen);
+      expect(realised()).toBe(2);
+    }
+  });
+
+  test('an observation for a root with no ledger row resurrects nothing', () => {
+    const { sql, actor, store } = fresh();
+    const realised = realisedOf(store, sql, actor);
+    store.observeJudgeEnsemble('some-other-root', 3);
+    expect(realised()).toBeNull();
+    expect(store.get('some-other-root')).toBeNull();
+  });
+
+  test('a row whose config will not parse, or carries no budget, refuses instead of resuming', () => {
+    const { sql, actor, store } = fresh();
+    void sql`INSERT INTO mcts_search_runs (actor_id, root_id, task, config_json, created_at, updated_at)
+      VALUES (${actor.actorId}, 'r1', ${TASK}, '{', 1000, 1000)`;
+    expect(() => store.findRunningSwarms(TASK)).toThrow('its ledger config_json will not parse');
+
+    void sql`UPDATE mcts_search_runs SET config_json = '{"branches":3}' WHERE actor_id = ${actor.actorId}`;
+    expect(() => store.findRunningSwarms(TASK)).toThrow('carries no budget');
+  });
+
+  test('a repeated begin on a live root throws and leaves the row as it was', () => {
+    const { store } = fresh();
+    beganSwarm(store, 'r1', 1_000);
+    store.reclaim('r1');
+    expect(() => beganSwarm(store, 'r1', 2_000)).toThrow();
+    expect(store.get('r1')).toMatchObject({ status: 'running', epoch: 1 });
   });
 });

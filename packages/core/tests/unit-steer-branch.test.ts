@@ -4,7 +4,7 @@ import { createTestActor, createTestWorkspace } from './helpers';
 import { SessionHistory } from '../src/session/history';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import {
-  recordBranchTakeSet, claimAlternateTakesForTurn,
+  recordBranchTakeSet,
   latestAlternateTakeSet, listAlternateTakeSets, recordTakePick, buildTakeContinuationPrompt,
 } from '../src/mcts/takes';
 import { HeadJournal } from '../src/heads/journal';
@@ -229,16 +229,12 @@ describe('settleBranchIntoTakes — honest settle into ONE takes pipeline', () =
     expect(outcome.ok).toBe(true);
 
     const set = present(latestAlternateTakeSet(sql, actor), 'the latest alternate-take set');
-    expect(set).toMatchObject({ source: 'branch', turnId: 'turn-9', sessionId: 'default', task: 'use approach B instead' });
+    expect(set).toMatchObject({ turnId: 'turn-9', sessionId: 'default', task: 'use approach B instead' });
     expect(set.candidates).toHaveLength(2);
     expect(set.candidates[0]).toMatchObject({ text: 'A-style answer', origin: 'live' });
     expect(set.candidates[1]).toMatchObject({ text: 'B-style answer', origin: 'branch' });
     expect(set.winnerNodeId).toBe(set.candidates[0].nodeId);
     expect(set.chosenNodeId).toBeNull();
-
-    // Already claimed — the turn-end claim sweep finds nothing unclaimed.
-    expect(claimAlternateTakesForTurn(sql, actor, { turnId: 'other', sessionId: 'default', startedAt: 0 })).toBe(0);
-    expect(present(latestAlternateTakeSet(sql, actor), 'the latest alternate-take set').turnId).toBe('turn-9');
   });
 
   test('an errored branch writes NO takes set and surfaces the failure reason', () => {

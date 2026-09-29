@@ -1,28 +1,19 @@
 /** The portability layer: the agent core is written against these; backends satisfy them. */
 
-import type { SqlExecutor, SqlValue } from '@kinu.run/agent-utils';
+import type { SqlExecutor } from '@kinu.run/agent-utils';
 import * as v from 'valibot';
 import type { MemorySearchResult } from '@kinu.run/agent-utils/memory';
 import type { ToolSet as AiToolSet } from 'ai';
 import type { JsonObject, JsonValue } from '../utils/json';
 
-/** Tagged-template SQL; defined in agent-utils (bottom of the DAG). DDL goes through execRaw. */
-export type { SqlValue, SqlExecutor } from '@kinu.run/agent-utils';
+/** SQL primitives are defined in agent-utils (bottom of the DAG). DDL goes through execRaw. */
+export type { SqlValue, SqlExecutor, SqlExec, SqlExecRow } from '@kinu.run/agent-utils';
 
 import type { Refusal } from '../obs/error';
 
 export interface RawSqlExec {
   (ddl: string): void;
 }
-
-/** Positional-binding SQL for runtime-shaped queries; prefer {@link SqlExecutor} for literals. */
-export interface SqlExec {
-  readonly exec: (query: string, ...bindings: SqlValue[]) => {
-    toArray(): SqlExecRow[];
-  };
-}
-
-export type SqlExecRow = Record<string, SqlValue>;
 
 /** Native generations remain numbers; relational projections expose their persisted identity tuple. */
 export const VfsRevisionSchema = v.union([v.number(), v.string()]);
@@ -35,6 +26,15 @@ export interface VfsEntryStat {
   isDir: boolean;
   /** Never derived from size/mtime: a same-size/same-mtime peer write is still a new value. */
   revision?: VfsRevision;
+}
+
+export interface Uncheckpointed {
+  readonly dir: string;
+  readonly why: string;
+}
+
+export interface VfsWriteReport {
+  readonly uncheckpointed: Uncheckpointed;
 }
 
 export interface VfsLinkStat extends VfsEntryStat {
@@ -53,6 +53,7 @@ export interface VFS {
   /** Exact immutable version or refusal; never substitutes the current file. */
   readFileAtRevision?: (path: string, revision: VfsRevision, range?: { offset: number; length: number }) => Promise<Uint8Array | string>;
   writeFile(path: string, data: string | Uint8Array): Promise<void>;
+  writeFileWithReport?(path: string, data: string | Uint8Array): Promise<VfsWriteReport | null>;
   readdir(path: string): Promise<string[]>;
   stat(path: string): Promise<VfsEntryStat | null>;
   /** The entry itself, a symbolic link not followed; absent on a plane that cannot tell a link from its target. */

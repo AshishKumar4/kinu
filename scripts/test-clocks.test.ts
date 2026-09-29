@@ -16,7 +16,7 @@ import { join } from 'node:path';
 
 import { LADDER } from './ladder';
 import {
-  auditCorpus, auditFile, CLOCK_KINDS, readClockCorpus, readLock, reconcileLock, tally, writeShrinkingLock,
+  auditCorpus, auditFile, CLOCK_KINDS, readClockCorpus, readLock, reconcileLock, tally, writeNewKindLock, writeShrinkingLock,
   type ClockKind, type ClockSite,
 } from './test-clocks';
 import { scratchDir } from '@kinu.run/test-utils';
@@ -152,6 +152,28 @@ describe('test-clocks gate', () => {
       const paidDown = tally([site('packages/core/tests/a.test.ts', 'sleep')], '2026-09-16');
       writeShrinkingLock(paidDown, path);
       expect(readLock(path)).toEqual(paidDown);
+    });
+
+    test('--new-kind records a kind\'s measured debt once, and nothing beside it', () => {
+      const path = join(scratchDir('test-clocks-new-kind'), 'test-clocks.lock.json');
+      writeShrinkingLock(locked, path);
+      const polls = [site('packages/core/tests/a.test.ts', 'lap-poll', 9), site('packages/core/tests/d.test.ts', 'lap-poll')];
+
+      const moved = tally([
+        site('packages/core/tests/a.test.ts', 'sleep'), site('packages/core/tests/b.test.ts', 'clock-compare'), ...polls,
+      ], '2026-09-26');
+
+      expect(() => writeNewKindLock(moved, 'lap-poll', path))
+        .toThrow('another kind\'s count moved in the same run: packages/core/tests/a.test.ts [sleep]: 2 -> 1');
+
+      const recorded = tally([
+        site('packages/core/tests/a.test.ts', 'sleep'), site('packages/core/tests/a.test.ts', 'sleep', 2),
+        site('packages/core/tests/b.test.ts', 'clock-compare'), ...polls,
+      ], '2026-09-26');
+
+      writeNewKindLock(recorded, 'lap-poll', path);
+      expect(readLock(path)).toEqual(recorded);
+      expect(() => writeNewKindLock(recorded, 'lap-poll', path)).toThrow('the lock already holds lap-poll');
     });
 
     test('--lock refuses an equal total that moved a site, per file and kind', () => {

@@ -3,7 +3,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Subprocess } from 'bun';
 import { afterAll, afterEach, describe, expect, test } from 'bun:test';
-import { scratchDir } from '@kinu.run/test-utils';
+import { killAndAwaitExit, recordedIn, scratchDir } from '@kinu.run/test-utils';
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
@@ -34,17 +34,11 @@ const mintedHomes: string[] = [];
 
 const daemons: Subprocess[] = [];
 
-const ownedPids: number[] = [];
-
 const alive = (pid: number) => tolerate(() => {
   process.kill(pid, 0);
 
   return true;
 }, 'esrch') === true;
-
-async function waitForPidExit(pid: number): Promise<void> {
-  await until(() => !alive(pid) || null, `pid ${pid} to exit`);
-}
 
 afterAll(() => {
   // Every daemon this suite caused must be dead before the shared scratch release removes the tree.
@@ -55,23 +49,17 @@ afterAll(() => {
 });
 
 afterEach(async () => {
-  // After a handover only the pidfile names the owning daemon.
-  for (const home of homes.splice(0)) {
-    const pidPath = join(home, 'pc-agent.pid');
-
-    if (existsSync(pidPath)) {
-      const pid = Number(readFileSync(pidPath, 'utf-8').trim());
-
-      if (alive(pid)) ownedPids.push(pid);
-    }
+  // Each daemon writes into its home until it exits.
+  for (const proc of daemons.splice(0)) {
+    proc.kill('SIGKILL');
+    await proc.exited;
   }
 
-  for (const proc of daemons.splice(0)) tolerate(() => proc.kill('SIGTERM'), 'esrch');
+  // After a handover only the pidfile names the owning daemon.
+  for (const home of homes.splice(0)) {
+    const daemon = recordedIn(join(home, 'pc-agent.pid'));
 
-  for (const pid of ownedPids.splice(0)) {
-    tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
-    // SIGTERM is a request: wait for the exit, or the release meets a live process still writing.
-    await waitForPidExit(pid);
+    if (daemon !== null) await killAndAwaitExit(daemon);
   }
 
   await Promise.all(hubs.splice(0).map((started) => started.close()));
@@ -112,7 +100,6 @@ function startDaemon(home: string, extraEnv: Record<string, string> = {}) {
   });
 
   daemons.push(proc);
-  ownedPids.push(proc.pid);
 
   return {
     proc,
@@ -158,7 +145,6 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     expect(newPid).not.toBe(oldPid);
     expect(alive(newPid)).toBe(true);
     expect(alive(oldPid)).toBe(false);
-    ownedPids.push(newPid);
 
     expect(installed(home, 'pc-agent.js')).toBe(NEW_DAEMON);
     expect(installed(home, 'pc-agent.js.prev')).toBe(DAEMON_FILES['pc-agent.js']);

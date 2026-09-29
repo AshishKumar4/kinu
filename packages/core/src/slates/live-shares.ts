@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 /** Live-share rows, separate from `slate_shares` (blueprints). `slate_viewer_requests` is the audit trail of what admission did. */
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExec } from '../types/primitives';
@@ -7,7 +8,7 @@ import { settleSync } from '../obs/effect';
 import { ShareStore, type ShareTable } from './shares';
 import { LiveShareVisibilitySchema } from './live-share-visibility';
 import {
-  ShareGrantSchema, ViewerCallSchema,
+  ShareGrantSchema, ViewerCallSchema, ViewerRequestRecordSchema,
   type LiveShareRecord, type ShareGrant, type ViewerCall, type ViewerRequestRecord,
 } from './sharing';
 
@@ -31,10 +32,8 @@ const LiveShareRow = v.object({
   handle: v.string(), grant_json: v.string(), created_at: v.number(), revoked_at: v.nullable(v.number()),
 });
 
-const RequestRow = v.object({
-  id: v.number(), share_id: v.string(), viewer: v.string(), slate_id: v.string(), path: v.string(),
-  calls: v.string(), outcome: v.string(), created_at: v.number(), settled_at: v.nullable(v.number()),
-});
+/** A stored request decodes straight into the record: `calls` is the one column stored as JSON text. */
+const RequestRow = v.object({ ...ViewerRequestRecordSchema.entries, calls: v.pipe(v.string(), v.parseJson(), v.array(ViewerCallSchema)) });
 
 const LIVE_SHARES: ShareTable<v.InferOutput<typeof LiveShareRow>, LiveShareRecord> = {
   shares: 'slate_live_shares',
@@ -60,6 +59,7 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
       'INSERT INTO slate_live_shares (id, slate_id, visibility, handle, grant_json, created_at, revoked_at) VALUES (?, ?, ?, ?, ?, ?, NULL)',
       share.id, share.slate, share.visibility, share.handle, JSON.stringify(share.grant), createdAt,
     );
+    markStoreChanged(this.db);
 
     return {
       id: share.id, slate: share.slate, visibility: share.visibility, handle: share.handle,
@@ -112,16 +112,10 @@ export class SlateLiveShareStore extends ShareStore<v.InferOutput<typeof LiveSha
   }
 
   requests(share: string): ViewerRequestRecord[] {
-    return this.db.exec(`SELECT r.*, s.slate_id FROM slate_viewer_requests r JOIN slate_live_shares s ON s.id = r.share_id
+    return this.db.exec(`SELECT r.id, r.share_id AS share, r.viewer, s.slate_id AS slate, r.path, r.calls, r.outcome,
+      r.created_at AS createdAt, r.settled_at AS settledAt
+      FROM slate_viewer_requests r JOIN slate_live_shares s ON s.id = r.share_id
       WHERE r.share_id = ? ORDER BY r.id DESC`, share)
-      .toArray().map((row) => this.request(v.parse(RequestRow, row)));
-  }
-
-  private request(row: v.InferOutput<typeof RequestRow>): ViewerRequestRecord {
-    return {
-      id: row.id, share: row.share_id, viewer: row.viewer, slate: row.slate_id, path: row.path,
-      calls: v.parse(v.array(ViewerCallSchema), JSON.parse(row.calls)),
-      outcome: row.outcome, createdAt: row.created_at, settledAt: row.settled_at,
-    };
+      .toArray().map((row) => v.parse(RequestRow, row));
   }
 }

@@ -154,6 +154,8 @@ function scriptedRefiner(answer: string | ((request: TemporaryRunRequest) => str
 
         return asked === undefined ? null : { state: 'answered', name: 'refiner-1', status: 'completed', answer: answerOf(asked) };
       },
+      answered: () => [],
+      forget: () => {},
     },
   };
 }
@@ -193,6 +195,8 @@ function deferredRefiner(...answers: readonly RefinementProposal[]) {
       reclaim: (): EvolutionHelperAnswer | null => answered === null
         ? null
         : { state: 'answered', name: 'refiner-1', status: 'completed', answer: proposalText(answered) },
+      answered: () => [],
+      forget: () => {},
     },
   };
 }
@@ -209,6 +213,8 @@ function answeringPort(answer: () => string): TemporaryAgentPort {
     },
     release: async () => {},
     reclaim: () => stored === null ? null : { state: 'answered', name: 'refiner', status: 'completed', answer: stored },
+    answered: () => [],
+    forget: () => {},
   };
 }
 
@@ -583,6 +589,8 @@ describe('the refiner — bounded references, prior history, strict typed answer
         start: async () => ({ reason: 'unavailable', error: 'no roster substrate here' }),
         release: async () => {},
         reclaim: () => null,
+        answered: () => [],
+        forget: () => {},
       },
     };
 
@@ -1293,7 +1301,7 @@ describe('two passes at once — the claim, and what recovery may not revoke', (
     expect(store.get(opened.id)?.stage).toBe('planning');
 
     // The real recovery caller: an engine built after the nudge started.
-    const recovery = new EvolutionEngine(fx.rt, fx.stores.history, { reportModelCall: unobservedSpend, enabled: false });
+    const recovery = new EvolutionEngine(fx.rt, fx.stores.history, { enabled: false });
     // It recovered its empty review queue and left the live claim alone.
     expect(recovery.sessionWindow.countQueuedReviews()).toBe(0);
     expect(store.get(opened.id)?.stage).toBe('planning');
@@ -2263,7 +2271,7 @@ function refinerRail(over?: { readonly db: Database; readonly workspaceId: strin
   const handoff: SubordinateHandoff = { eventId: 'evt-refine', delivery: 'starts_now', phase: { busy: false, lastActivityAt: null, workingOn: null } };
 
   const runtime: SubordinateRuntime = {
-    spawn: async (input) => directory.apply(root, [], { action: 'register', name: input.name, creationId: input.creationId, kind: 'subordinate', lifetime: input.lifetime }).reference,
+    spawn: async (input) => directory.apply(root, [], { action: 'register', name: input.name, creationId: input.creationId, origin: input.origin, lifetime: input.lifetime }).reference,
     cancelBirth: async () => { throw new Error('no birth is cancelled here'); },
     assign: async () => handoff,
     status: async () => ({ lastActivity: null, recentSteps: [] }),
@@ -2291,7 +2299,7 @@ function refinerRail(over?: { readonly db: Database; readonly workspaceId: strin
     reports: () => log.pending().filter((event) => event.variant === 'subordinate_report'),
     deliver: (temporary: TemporaryAgentPort, content: string) => receiveSubordinateEvent({
       log, roster, vfs: createMemoryVfs().vfs, transaction: (body) => body(),
-      announce: () => undefined, onAdmitted: () => undefined, onEvolutionAnswer: () => undefined, temporary,
+      announce: () => undefined, onAdmitted: () => undefined, evolutionAnswerStored: () => undefined, onEvolutionAnswer: () => undefined, temporary,
     }, {
       fromSubordinate: 'ask-refiner-a1b2c3', status: 'completed', content, origin: 'turn_end',
       sequenceId: 'refiner:turn-1', mode: 'plan',
@@ -2315,7 +2323,7 @@ describe('a refiner answer returns to the lane, never to the root', () => {
     seedGradedTurns(fx.rt, 3);
     const rail = refinerRail();
     const opened = await startRefiner(fx, rail);
-    expect(rail.roster.get(rail.helper)?.createdBy).toBe('evolution');
+    expect(rail.roster.get(rail.helper)?.origin).toBe('evolution');
 
     let asks = 0;
     const resumed = rail.port();

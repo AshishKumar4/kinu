@@ -1,10 +1,8 @@
 import type { ModelMessage } from 'ai';
 
-import type { MCTSProgressEvent } from '../types/mcts';
 import type { Usage } from '../usage';
 import type { JsonObject, JsonValue } from '../utils/json';
 import type { MissionGovernor } from '../mission-budget';
-import type { ModelCallSink } from '../events/model-call';
 import type { ToolOutcome } from '../tools/outcome';
 
 export interface ToolCallRecord {
@@ -47,7 +45,7 @@ export interface CompletedSession {
 }
 
 export interface EvolutionEvent {
-  type: 'reflection' | 'craft_discovered' | 'scaffold_proposed' | 'consolidation' | 'mcts_started' | 'mcts_complete' | 'turn_complete' | 'replay_eval' | 'changelog_digest' | 'experience_import' | 'advisor_note';
+  type: 'reflection' | 'craft_discovered' | 'scaffold_proposed' | 'consolidation' | 'turn_complete' | 'replay_eval' | 'changelog_digest' | 'experience_import' | 'advisor_note';
   message: string;
   data?: unknown;
 }
@@ -83,9 +81,6 @@ export interface EvolutionConfig {
      *  inside a Durable Object; other backends must supply a real transaction. */
   transaction?: (body: () => void) => void;
   lifetimeEvolutionInterval: number;
-  lifetimeMCTSBudget: number;
-  lifetimeMCTSBranches: number;
-  onMctsProgress?: (event: MCTSProgressEvent) => void;
   /** Re-run a task against the current config. Absent = periodic replay eval is skipped. */
   replayTaskRunner?: (task: string) => Promise<string>;
   shadowTrialQueue?: (turn: ShadowTrialTurn, plan: ShadowTrialPlan) => ShadowTrialQueueOutcome;
@@ -93,13 +88,9 @@ export interface EvolutionConfig {
   shadowTrialRunner?: () => Promise<ShadowTrialDrain>;
   /** Reached only for turns carrying {@link CompletedTurn.missionLabels}. Absent = every review is ungoverned. */
   governor?: MissionGovernor;
-  /** Bills the lifetime search's branch calls; the engine reports each from the usage its branch returns. */
-  reportModelCall: ModelCallSink;
 }
 
-export const DEFAULT_EVOLUTION_CONFIG: Omit<EvolutionConfig, 'reportModelCall'> = {
+export const DEFAULT_EVOLUTION_CONFIG: EvolutionConfig = {
   enabled: true,
   lifetimeEvolutionInterval: 5,
-  lifetimeMCTSBudget: 2,
-  lifetimeMCTSBranches: 2,
 };

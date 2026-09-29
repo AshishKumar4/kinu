@@ -26,6 +26,7 @@ function createScaffoldTestRuntime(llm: LLM) {
   const rt: AgentRuntime = {
     workspaceIsMachine: false,
     actor,
+    toolFiles: vfs,
     storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },
     memory: createMemoryMemory(db, vfs),
     executor: createMockExecutor(),
@@ -42,8 +43,6 @@ function createScaffoldTestRuntime(llm: LLM) {
       },
     },
     craftStore: createMemoryCraftStore(db),
-    spawnBranch: async () => ({ explore: async () => ({ text: '' }), generateReflection: async () => ({ text: '' }), release: async () => {} }),
-    abortBranch: async () => {},
   };
 
   return { rt };

@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/core';
 import { exports } from 'cloudflare:workers';
 import { WorkspaceId } from '@agent-core/core';
 import { SlateId, SlateVersionId } from '@agent-core/core/slates';
@@ -857,7 +858,7 @@ export class SlateHost {
   }
 
   private async boot(caller: SlateCaller, id: string, held: string): Promise<RunningSlate> {
-    const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress(this.deps.workspace);
+    const globalOutbound = caller.workMode === 'plan' ? null : codemodeEgress({ workspace: this.deps.workspace, actor: null });
 
     if (caller.workMode === 'build' && globalOutbound === null) {
       throw new KinuError('unsupported', 'Resident slate egress requires the shared outbound policy binding');
@@ -939,6 +940,8 @@ export class SlateHost {
     }
 
     for (const id of ids) this.revisions.set(id, (this.revisions.get(id) ?? 0) + 1);
+
+    if (ids.size > 0) markStoreChanged(this.deps.ctx.storage.sql);
 
     return [...ids];
   }

@@ -16,6 +16,8 @@ const SubordinateSeedSchema = v.strictObject({
   tier: v.optional(TierIdSchema),
   mission: v.pipe(v.string(), v.nonEmpty()),
   lifetime: v.picklist(['durable', 'task']),
+  /** Who asked for it: the owner, an agent, or an evolution lane. */
+  origin: v.picklist(['user', 'agent', 'evolution']),
 });
 
 export type SubordinateSeed = v.InferOutput<typeof SubordinateSeedSchema>;

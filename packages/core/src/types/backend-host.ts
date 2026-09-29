@@ -28,7 +28,7 @@ export interface BroadcastEvent {
   readonly headId?: string;
   /** `plan_updated`: the review as it now stands. */
   readonly plan?: PlanReview;
-  readonly requestTokens?: number;
+  readonly contextTokens?: number;
   readonly contextWindow?: number;
 }
 

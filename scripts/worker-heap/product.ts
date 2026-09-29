@@ -12,8 +12,14 @@ export { default } from 'kinu:product';
 export class OrchestratorAgent extends Product {
   constructor(...args: ConstructorParameters<typeof Product>) {
     super(...args);
-    // The product sealed its RPC surface with an own property over every unlisted name; this one is the probe's.
+    // The product sealed its RPC surface with an own property over every unlisted name; these are the probe's.
     Reflect.deleteProperty(this, 'hostHeads');
+    Reflect.deleteProperty(this, 'delegatedRunners');
+  }
+
+  /** Hired agents with a delegated turn runner: one ends only after its turn's release has run. */
+  async delegatedRunners(): Promise<number> {
+    return this.delegatedTurns.actorRunners.size;
   }
 
   /** Registers and acquires `count` heads, then releases each: what a swarm's settled nodes leave behind. */
@@ -22,7 +28,7 @@ export class OrchestratorAgent extends Product {
     const references = [];
 
     for (let at = 0; at < count; at++) {
-      const reference = await seams.register({ creationId: `${tag}-${String(at)}`, toolProfile: 'full' });
+      const reference = await seams.register({ creationId: `${tag}-${String(at)}` });
       await seams.host.acquire(reference);
       references.push(reference);
     }

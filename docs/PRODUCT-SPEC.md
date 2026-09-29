@@ -277,11 +277,11 @@ This is the source inventory for the reviewed revision. It is not a proposed sch
 
 | Family | Current records | Physical owner and significance |
 |---|---|---|
-| Conversation | `session_messages`, `stream_parts`, `conversation_entries`, `conversation_entry_parts`, `conversation_heads`, and the context tables (`actor_contexts`, `context_revisions`, `context_memberships`, `actor_context_selection`, `context_proposals`) | The canonical conversation store (`packages/core/src/session`), one per actor, in the workspace's one SQLite on both backends. The agents SDK's `assistant_messages` is the vendor's own table; Kinu neither writes nor reads it, and serves the SDK's message seed from the canonical entries. |
+| Conversation | `session_messages`, `stream_parts`, `conversation_entries`, `conversation_entry_parts`, and the context tables (`actor_contexts`, `context_revisions`, `context_memberships`, `actor_context_selection`, `context_proposals`) | The canonical conversation store (`packages/core/src/session`), one per actor, in the workspace's one SQLite on both backends. The agents SDK stopped creating `assistant_messages` in 0.23 (its Sessions capability lifts it, and Kinu installs no Sessions); Kinu serves the SDK's message seed from the canonical entries. |
 | Search | `conversation_fts`, `conversation_fts_state` | Derived from `conversation_entries` by rowid; it is not another authoritative conversation. |
 | Optional SDK session/context | `assistant_sessions`, context-block and search tables | SDK facilities. Their existence in the package does not prove Kinu uses them for every actor. |
-| Stream replay | `cf_ai_chat_stream_chunks`, `cf_ai_chat_stream_metadata` | Actor-local reconnect buffers. Cleaning a replay buffer is not deletion of canonical messages. |
-| SDK lifecycle | `cf_agents_state`, queues, schedules, workflows, runs and fibers | SDK-owned runtime state in the workspace database, with root coordination where the SDK requires it. |
+| Stream replay | none durable | A tab that reconnects mid-turn is replayed the chunks the chat transport relayed for the turn in progress, held in memory until the turn ends. The one durable copy of an answer in progress is `stream_parts`. |
+| SDK lifecycle | `cf_agents_state`, the job queue (`cf_agents_jobs`, which holds Kinu's two wakes), workflows, runs and fibers | SDK-owned runtime state in the workspace database, with root coordination where the SDK requires it. |
 | Kinu identity/roster | `workspace_identity`, `workspace_actors`, `actor_config`, `actor_subordinates` | Root directory or actor-scoped rows. The parent roster is distinct from the child identity. Capability-bearing records are protected state. |
 | Program state | `actor_program_state`; `db` tables (`app_*`, catalogued in `agent_data_tables`) | `actor_program_state` is actor-private JSON key/value state behind `state.*`. `db` tables are agent-declared structured data at actor or workspace scope (§9.1). |
 | Admitted work/effects | `pending_steers`, `actor_turn_claims`, `run_events`, `background_jobs`, `tool_effect_claims`, `terminal_effects`, `effect_tombstones` | The actor's durable work, mode, outcome and recovery records. They must not become ordinary editable prompt text. |
@@ -289,7 +289,7 @@ This is the source inventory for the reviewed revision. It is not a proposed sch
 | Scaffold/learning | `scaffold_versions`, regression fixtures, trials, evaluations, completed turns, evolution events, outcomes, lessons, labels and GEPA records | Actor-local version pointers and learning evidence. Source bytes and execution evidence have different owners. |
 | Exploration | `search_nodes`, `mcts_search_runs`, `swarm_node_records`, exploration records, head runs/journal/evidence/steps/merge results | Search/controller-owned durable results. Head, node and branch traces and model-operation outboxes are additional records; a search vertex is not a conversation. |
 | Memory/tasks/permissions | Memory chunks/FTS, `agent_facts`, `agent_tasks`, plan reviews and instruction approvals | The scope supplied by the actor/root adapter. An instruction's approval is not equivalent to permission to write its file. |
-| Nimbus file storage | `inodes`, `file_chunks`, content lifecycle and append receipt/writer/revocation records | Root Nimbus SQLite VFS. These tables store files; they do not automatically project arbitrary conversation tables as files. |
+| Nimbus file storage | `vfs_inodes`, `vfs_contents`, `vfs_content_chunks`, `vfs_chunks`, their GC, history and snapshot tables, append receipt/writer/revocation records, and the `nimbus_*` identity and storage-ledger tables | Root Nimbus SQLite VFS. These tables store files; they do not automatically project arbitrary conversation tables as files. |
 
 The main implementations are `orchestrator/chat-session.ts` (the `ChatSession` both backends drive), `identity/conversation-store.ts`, `config/conversation.ts`, `subordinates/roster.ts`, `events/recorder.ts`, `scaffold/surface.ts`, `prompting/volatile-context.ts`, the compaction stores, and the pinned Agents SDK. The private source map records individual symbols and paths.
 
@@ -478,7 +478,7 @@ Kinu improves tools, instructions, working context and loop versions through obs
 5. Which actor/owner authority permitted activation.
 6. Which later outcome supports or contradicts the claimed benefit.
 
-Tool fitness updates, turn lessons, session reflection and lifetime search are different operations. Having them does not prove they improve task success.
+Tool fitness updates, turn lessons, session reflection and craft consolidation are different operations. Having them does not prove they improve task success.
 
 Model agreement is never labelled human ground truth. The recovered approval for ensemble calibration was: a human reference pass, blind model second opinions, measured agreement and confusion, then recurring automation with a human audit. A transcript corpus alone does not replace the human reference.
 
@@ -916,7 +916,7 @@ The document is maintained through source-grounded review. It creates no prose-s
 - [TOOLS.md](TOOLS.md): tool, delegation and owner-inspection surfaces.
 - [EXECUTION-LAYER-SPEC.md](EXECUTION-LAYER-SPEC.md): execution environments and result contracts.
 - [CONTEXT-BUDGET.md](CONTEXT-BUDGET.md): context preparation and measurement.
-- [EXPLORATION.md](EXPLORATION.md), [MCTS.md](MCTS.md): configured exploration and journals.
+- [EXPLORATION.md](EXPLORATION.md): configured exploration and journals.
 - [EVOLUTION.md](EVOLUTION.md), [CRAFT-ARCHITECTURE.md](CRAFT-ARCHITECTURE.md): learning, trials and tool versions.
 - [LIVE-UI.md](LIVE-UI.md): authored slates and adoption boundaries.
 - [USER-GUIDE.md](USER-GUIDE.md), [CLI.md](CLI.md), [CONFIG.md](CONFIG.md): user entry points and configuration.

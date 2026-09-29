@@ -49,7 +49,7 @@ interface PrepareStepResumption {
 /** 'force': overflow recovery; 'user': /compact. */
 export type CompactionTrigger = 'auto' | 'force' | 'user';
 
-export type ArmedCompaction = Exclude<CompactionTrigger, 'auto'>;
+export type ArmedCompaction = 'force';
 
 export interface TransformContext {
   /** The agent/DO name on cf, the session key on cli. */
@@ -193,19 +193,19 @@ export class ExtensionHost {
     return rewritten ? current : undefined;
   }
 
-  /** Fail-open: a throwing hook is recorded and skipped, except cancellation and oom, which propagate. */
+  /** Fail-open, except cancellation, oom and a `strict` hook the owner asked for (/compact), which propagate. */
   private async guardHook<T>(
     hook: string,
     extension: string,
     run: () => T | Promise<T>,
-    signal?: AbortSignal,
+    guard: { readonly signal?: AbortSignal | undefined; readonly strict?: boolean } = {},
   ): Promise<T | undefined> {
     try {
-      return await untilAborted(Promise.resolve(run()), signal);
+      return await untilAborted(Promise.resolve(run()), guard.signal);
     } catch (err) {
       const failure = toKinuError({ doing: `run an extension ${hook} hook`, cause: err, otherwise: 'io' });
 
-      if (failure.code === 'cancelled' || failure.code === 'oom') throw failure;
+      if (failure.code === 'cancelled' || failure.code === 'oom' || guard.strict === true) throw failure;
       diagnostics.failure('extension.hook_failed', failure, { extension, hook });
 
       return undefined;
@@ -223,7 +223,7 @@ export class ExtensionHost {
         'transformContext',
         ext.name,
         () => ext.transformContext?.({ ...ctx, messages: current }),
-        ctx.abortSignal,
+        { signal: ctx.abortSignal, strict: ctx.trigger === 'user' },
       );
 
       if (next) {

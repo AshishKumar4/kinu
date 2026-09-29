@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 /**
  * Device binding, asked once per (workspace, device), plus the registry of prompts awaiting an answer.
  * Consent answers who; the device's Sandbox switch answers what. An unanswered prompt is neither answer.
@@ -147,6 +148,7 @@ export class DeviceConsentStore {
   /** Only caller is the card's own timer; a same-tick answer already won the row through `take`. */
   remove(consentId: string): void {
     void this.sql`DELETE FROM device_consent_requests WHERE consent_id = ${consentId}`;
+    markStoreChanged(this.sql);
   }
 
   /** Callers mint the id first, so the row exists under the key the announce names. */
@@ -156,6 +158,7 @@ export class DeviceConsentStore {
       (consent_id, device_id, device_label, method, command, workspace_name, created_at, expires_at)
       VALUES (${row.consentId}, ${row.deviceId}, ${row.deviceLabel}, ${row.method},
         ${row.command}, ${row.workspaceName ?? null}, ${row.createdAt}, ${row.expiresAt})`;
+    markStoreChanged(this.sql);
   }
 
   /** Null when nothing by that id is waiting. One row means one settle. */
@@ -165,6 +168,8 @@ export class DeviceConsentStore {
       WHERE consent_id = ${consentId} AND expires_at > ${now}
       RETURNING consent_id, device_id, device_label, method, command,
                 workspace_name, created_at, expires_at`;
+
+    if (rows.length > 0) markStoreChanged(this.sql);
 
     return rows[0] ? toPending(rows[0]) : null;
   }

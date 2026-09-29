@@ -19,7 +19,7 @@ function answer(): ScriptedTurnResult {
 test('a sweep between a turn\'s answer and its claim settle leaves the claim to that turn', async () => {
   const { rt, testSql } = createTestRuntime();
   const seats = hostedSeatsOver({ rt, db: testSql.db });
-  const { actor } = await seats.seat('settling-child', 'subordinate');
+  const { actor } = await seats.seat('settling-child', 'agent');
 
   const catalog = { roles: { reader: { description: 'Read', instructions: 'Read.',
     tier: 'default', preset: 'ideate', allowedTools: [] } }, tiers: { default: { model: 'test-model' } } } satisfies ProfileCatalog;

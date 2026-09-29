@@ -5,10 +5,12 @@
  */
 import { expect, test } from 'bun:test';
 import { sqlOver } from '@kinu.run/test-utils';
-import { actorConnectionTag } from '@kinu.run/core';
-import { asPane } from './helpers/agents-sdk';
+import { EventLog, actorConnectionTag, admitSubordinateTask } from '@kinu.run/core';
+import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { makeSqlExec } from '../../core/tests/helpers';
+import { asPane, joinHarnessKeepAlives } from './helpers/agents-sdk';
 import {
-  agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedSubordinateHarness, wakeForDelegatedTask,
+  actorOver, agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedSubordinateHarness, wakeForDelegatedTask,
 } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 
@@ -24,6 +26,26 @@ function heldUntilAborted(run: RecordedGatewayRun): Promise<Response> {
   run.signal?.addEventListener('abort', () => { reject(run.signal?.reason); }, { once: true });
 
   return promise;
+}
+
+/** The middle hires one task agent, 'Leaf task.', whose call answers once `answered` settles; then relays it. */
+function leafHire(answered: Promise<void>, asked: () => void) {
+  return async (run: RecordedGatewayRun): Promise<Response> => {
+    const opening = openingOf(run);
+
+    if (opening.includes('Leaf task.')) {
+      asked();
+      await answered;
+
+      return chatCompletion(run, 'Leaf done.');
+    }
+
+    if (opening.includes('Leaf done.')) return chatCompletion(run, 'Middle relays Leaf done.');
+
+    return toolResults(run) === 0
+      ? toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', lifetime: 'task', mission: 'Leaf task.' } }, 'call_leaf')
+      : chatCompletion(run, 'Middle waits.');
+  };
 }
 
 async function helperWorkspace(respond: (run: RecordedGatewayRun) => Response | Promise<Response>) {
@@ -54,22 +76,7 @@ test("a helper's task hire returns at once, and the answer opens the helper's ne
   const release = Promise.withResolvers<void>();
   let leafAsked = false;
 
-  const { gateway, workspace, middleId, count, hired, retiring } = await helperWorkspace(async (run) => {
-    const opening = openingOf(run);
-
-    if (opening.includes('Leaf task.')) {
-      leafAsked = true;
-      await release.promise;
-
-      return chatCompletion(run, 'Leaf done.');
-    }
-
-    if (opening.includes('Leaf done.')) return chatCompletion(run, 'Middle relays Leaf done.');
-
-    return toolResults(run) === 0
-      ? toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', lifetime: 'task', mission: 'Leaf task.' } }, 'call_leaf')
-      : chatCompletion(run, 'Middle waits.');
-  });
+  const { gateway, workspace, middleId, count, hired, retiring } = await helperWorkspace(leafHire(release.promise, () => { leafAsked = true; }));
 
   await wakeForDelegatedTask(workspace, middleId, 'Middle task.');
   await driveUntil(workspace, 'the helper\'s turn never ended while its task hire worked', () => leafAsked && count(middleId, 'run_end') > 0);
@@ -83,6 +90,29 @@ test("a helper's task hire returns at once, and the answer opens the helper's ne
   // The task agent retires once its answer is held, keeping its history.
   const leaf = hired() ?? '';
   await driveUntil(workspace, 'the answered task agent never retired', () => retiring(leaf));
+});
+
+test("a helper whose turn ends with its hire still working is released, and no drain runs on the released session", async () => {
+  const release = Promise.withResolvers<void>();
+  let leafAsked = false;
+
+  const { workspace, middleId, count } = await helperWorkspace(leafHire(release.promise, () => { leafAsked = true; }));
+
+  const recording = createRecordingLogger();
+  const restore = setDiagnosticsSink(recording);
+
+  try {
+    await wakeForDelegatedTask(workspace, middleId, 'Middle task.');
+    await driveUntil(workspace, 'the helper\'s turn never ended while its task hire worked', () => leafAsked && count(middleId, 'run_end') > 0);
+    // A drain armed on the released session fires once its debounce ends, and fails against the release.
+    await joinHarnessKeepAlives(workspace.agent);
+    expect(recording.emitted.filter((line) => line.event === 'orchestrator.drain_select_failed')).toEqual([]);
+
+    release.resolve();
+    await driveUntil(workspace, 'the task agent\'s answer never opened the helper\'s next turn', () => count(middleId, 'run_end') >= 2);
+  } finally {
+    restore();
+  }
 });
 
 test("a durable hire whose turn fails delivers its failure to its hirer as a message", async () => {
@@ -167,7 +197,7 @@ test("a task agent does not settle while more input is queued for it: its answer
 
   await driveUntil(workspace, 'the task helper never started', () => gateway.runs.some((run) => openingOf(run).includes('Helper brief.')));
   await turn;
-  const helperId = sql<{ id: string }>`SELECT actor_id AS id FROM workspace_actors WHERE kind = 'subordinate'`[0]?.id ?? '';
+  const helperId = sql<{ id: string }>`SELECT actor_id AS id FROM workspace_actors WHERE origin IN ('user','agent','evolution')`[0]?.id ?? '';
   // More input queues for the helper while its first turn is still out.
   await wakeForDelegatedTask(workspace, helperId, 'Queued note.');
   release.resolve();
@@ -288,4 +318,72 @@ test("a Stop discards the input already queued for a descendant it interrupts", 
   await workspace.agent.cancelCurrentWork();
 
   await expect(driveUntil(workspace, 'the queued input never ran', () => queuedAsked)).rejects.toThrow('the queued input never ran');
+});
+
+// Owner, 2026-09-26: no limit on helper turns. Two hired agents' admitted turns run at once, neither queued behind the other.
+test("two hired agents' admitted turns run at once", async () => {
+  const running = new Set<string>();
+  let together = false;
+  const release = Promise.withResolvers<void>();
+
+  const { workspace, middleId } = await helperWorkspace(async (run) => {
+    const opening = openingOf(run);
+    const which = ['First brief.', 'Second brief.'].find((brief) => opening.includes(brief));
+
+    if (which === undefined) return chatCompletion(run, 'ok');
+    running.add(which);
+    together ||= running.size === 2;
+    await release.promise;
+
+    return chatCompletion(run, `${which} done`);
+  });
+
+  const other = await hostedSubordinateHarness(workspace, {
+    name: 'other', displayName: 'Other', nameOrigin: 'user', mission: 'coordinate too',
+  });
+
+  await wakeForDelegatedTask(workspace, middleId, 'First brief.');
+  await wakeForDelegatedTask(workspace, other.actor.handle.actorId, 'Second brief.');
+  await driveUntil(workspace, 'the two turns never ran at once', () => together);
+  release.resolve();
+});
+
+// A Stop between two turns an agent has admitted: the second, already read by the agent's runner, does not run.
+test("a Stop skips a turn the stopped agent's runner had already picked up", async () => {
+  let secondRan = false;
+  let firstHeld = false;
+
+  const { workspace, middleId } = await helperWorkspace((run) => {
+    const opening = openingOf(run);
+
+    if (opening.includes('Second queued.')) {
+      secondRan = true;
+
+      return chatCompletion(run, 'second ran');
+    }
+
+    if (opening.includes('First queued.')) {
+      firstHeld = true;
+
+      return heldUntilAborted(run);
+    }
+
+    return chatCompletion(run, 'ok');
+  });
+
+  const sql = sqlOver(workspace.db);
+  const parent = sql<{ id: string }>`SELECT actor_id AS id FROM workspace_actors WHERE actor_id = ${middleId}`[0]?.id ?? '';
+
+  // Both admitted before the runner reads the queue, so one pass holds both.
+  const child = actorOver(workspace.db, parent);
+  admitSubordinateTask(new EventLog(makeSqlExec(workspace.db), child), {
+    fromWorkspace: child.workspaceId, kind: 'task', body: 'First queued.', mode: 'build', now: Date.now(),
+  });
+  await wakeForDelegatedTask(workspace, parent, 'Second queued.');
+  await driveUntil(workspace, 'the first turn never started', () => firstHeld);
+
+  // The helper is below the root: the root's Stop reaches it.
+  await workspace.agent.cancelCurrentWork();
+
+  await expect(driveUntil(workspace, 'the second turn never ran', () => secondRan)).rejects.toThrow('the second turn never ran');
 });

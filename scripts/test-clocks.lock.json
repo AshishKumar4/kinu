@@ -1,7 +1,10 @@
 {
-  "measuredAt": "2026-09-28",
-  "total": 172,
+  "measuredAt": "2026-09-29",
+  "total": 182,
   "files": {
+    "packages/cf-backend/tests/helpers/actor-harness.ts": {
+      "lap-poll": 1
+    },
     "packages/cf-backend/tests/helpers/kv.ts": {
       "clock-compare": 1
     },
@@ -20,11 +23,21 @@
     "packages/cf-backend/tests/unit-diff.test.ts": {
       "clock-compare": 2
     },
+    "packages/cf-backend/tests/unit-direct-workers-ai-stream.test.ts": {
+      "lap-poll": 1
+    },
     "packages/cf-backend/tests/unit-pc-agent-exec.test.ts": {
       "clock-compare": 1,
       "sleep": 1
     },
+    "packages/cf-backend/tests/unit-peer-team.test.ts": {
+      "lap-poll": 1
+    },
+    "packages/cf-backend/tests/unit-stalled-delegation.test.ts": {
+      "lap-poll": 1
+    },
     "packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts": {
+      "lap-poll": 1,
       "sleep": 1
     },
     "packages/cf-backend/tests/workerd/do-alarm.test.ts": {
@@ -58,12 +71,6 @@
     "packages/cf-backend/tests/workerd/worker.ts": {
       "sleep": 3
     },
-    "packages/cli-backend/tests/branch-rpc.test.ts": {
-      "sleep": 2
-    },
-    "packages/cli-backend/tests/branch-worker.test.ts": {
-      "sleep": 1
-    },
     "packages/cli-backend/tests/chat-session-parity.ts": {
       "clock-compare": 1,
       "sleep": 1
@@ -74,9 +81,17 @@
     "packages/cli-backend/tests/fixtures/echo-mcp-server.mjs": {
       "sleep": 1
     },
-    "packages/cli-backend/tests/local-session.test.ts": {
-      "sleep": 8,
-      "clock-compare": 1
+    "packages/cli-backend/tests/helpers/local-session.ts": {
+      "sleep": 1
+    },
+    "packages/cli-backend/tests/local-session-lifecycle.test.ts": {
+      "sleep": 3
+    },
+    "packages/cli-backend/tests/local-session-steering.test.ts": {
+      "sleep": 1
+    },
+    "packages/cli-backend/tests/local-session-turns.test.ts": {
+      "sleep": 2
     },
     "packages/cli-backend/tests/loop-admission.test.ts": {
       "clock-compare": 1,
@@ -140,22 +155,30 @@
       "sleep": 1
     },
     "packages/cli/tests/tui-messages.test.tsx": {
+      "lap-poll": 2,
       "sleep": 2
     },
     "packages/cli/tests/tui-product-hubs.test.tsx": {
+      "lap-poll": 1,
       "sleep": 1
     },
     "packages/cli/tests/tui-product-onboarding.test.tsx": {
-      "sleep": 2
+      "sleep": 2,
+      "lap-poll": 1
     },
     "packages/cli/tests/tui-product-shell.test.tsx": {
       "sleep": 3
     },
     "packages/cli/tests/tui-product.test.tsx": {
+      "lap-poll": 2,
       "sleep": 2
     },
     "packages/cli/tests/tui-theme.test.tsx": {
+      "lap-poll": 2,
       "sleep": 2
+    },
+    "packages/core/tests/unit-fork-run-identity.test.ts": {
+      "lap-poll": 1
     },
     "packages/devbox/tests/decisions.test.ts": {
       "sleep": 2
@@ -185,13 +208,14 @@
     "scripts/bench.test.ts": {
       "sleep": 2
     },
-    "scripts/computed-style.test.ts": {
-      "sleep": 1
-    },
     "scripts/devbox-e2e.test.ts": {
       "clock-compare": 1
     },
-    "scripts/public-pages.test.ts": {
+    "tests/browser/computed-style.test.ts": {
+      "lap-poll": 1,
+      "sleep": 1
+    },
+    "tests/browser/public-pages.test.ts": {
       "sleep": 4
     },
     "tests/first-run/background-settle.first-run.ts": {

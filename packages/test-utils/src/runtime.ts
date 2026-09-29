@@ -62,6 +62,8 @@ export function unobservedSearchSeams(): Pick<AgentsSwarmDeps, 'reportModelCall'
     webSearch: {
       search: async () => refuse('a web search', 'webSearch'),
       fetch: async () => refuse('a web fetch', 'webSearch'),
+      render: async () => refuse('a rendered fetch', 'webSearch'),
+      screenshot: async () => refuse('a screenshot', 'webSearch'),
     },
   };
 }
@@ -135,6 +137,8 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
   const rt: AgentRuntime = {
     actor,
     workspaceIsMachine: false,
+    // A test plane holds nothing of the user's.
+    get toolFiles() { return rt.storage.vfs; },
     storage: {
       vfs: workspace.vfs,
       sql: testSql.sql,
@@ -147,8 +151,6 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
     schedule: opts.schedule ?? noSchedule(),
     identity: { id: workspaceId, name: 'test', scaffold: noScaffold() },
     craftStore: opts.craftStore ?? emptyCraftStore(),
-    spawnBranch: async () => refuse('a branch exploration', 'a runtime that spawns branches'),
-    abortBranch: async () => refuse('a branch abort', 'a runtime that spawns branches'),
     executionRouter: opts.executionRouter ?? new DefaultExecutionRouter(),
   };
 

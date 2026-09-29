@@ -4,7 +4,7 @@ import {
   createProviderRegistry, createCodexProvider, createOpenAIProvider,
   createOpenRouterProvider, createOpenAICompatProvider, createAnthropicProvider, createClaudeProvider,
   createModelsDevCatalogSource,
-  type ProviderRegistry, type ProviderDeps, type ProviderEnv, type AuthResolver,
+  type ProviderRegistry, type ProviderDeps, type ProviderEnv, type AuthResolver, type AuthRequest,
   type ProviderWaitInfo,
   specProvider,
 } from '@kinu.run/core';
@@ -25,7 +25,7 @@ export interface UserCredentialClient extends CodexRelayHub {
   getAuthHeaders(
     caller: UserCaller,
     key: string,
-    opts?: { forceRefresh?: boolean },
+    opts?: AuthRequest,
   ): Promise<Record<string, string> | null>;
   listCredentials(caller: UserCaller): Promise<CredentialSummary[]>;
   getCredentialBaseURL(caller: UserCaller, key: string): Promise<string | null>;
@@ -96,13 +96,13 @@ export function providerBindingsOf(env: ProviderEnv): ProviderEnv {
 export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProviderRegistry {
   const registry = createProviderRegistry();
 
-  let developmentBinding: DirectAiBinding | undefined;
+  let deploymentBinding: DirectAiBinding | undefined;
 
   if (opts.env.WORKERS_AI_VIA_BINDING === 'on' && opts.env.AI && isDirectAiBinding(opts.env.AI)) {
-    developmentBinding = opts.env.AI;
+    deploymentBinding = opts.env.AI;
   }
 
-  registry.register(createWorkersAIProvider({ sessionAffinity: opts.sessionAffinity }, developmentBinding));
+  registry.register(createWorkersAIProvider({ sessionAffinity: opts.sessionAffinity }, deploymentBinding));
   registry.register(createMyGatewayProvider());
   registry.register(createAIGatewayProvider());
 

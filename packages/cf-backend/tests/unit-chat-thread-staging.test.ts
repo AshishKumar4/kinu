@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { createElement, useState } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import {
-  EMPTY_TRANSCRIPT_FOLD, buildTranscript, extendTranscript, mergeTranscript,
+  EMPTY_TRANSCRIPT_FOLD, buildTranscript, extendTranscript,
   restoredRows, sealTranscript,
   type ChatHistoryEntry, type InlineSteer, type Transcript,
 } from '@kinu.run/core';
@@ -39,6 +39,7 @@ interface WalkCost {
 function storedRow(meter: Meter, index: number): ChatHistoryEntry {
   return {
     id: `stored-${String(index)}`,
+    position: index,
     role: 'assistant',
     createdAt: index,
     get content(): string {
@@ -82,7 +83,7 @@ function wholeListPerToken(): WalkCost {
   const older = storedConversation(stored);
 
   for (const window of tokenTicks(live)) {
-    buildTranscript(mergeTranscript(older, window), NO_STEERS);
+    buildTranscript([...restoredRows(older), ...window], NO_STEERS);
   }
 
   return { stored: stored.reads, live: live.reads };
@@ -175,7 +176,7 @@ function threadOverTicks(windows: readonly (readonly UIMessage[])[]): RenderedTi
 
 describe('the chat pane performs the staged derivation (KINU-072)', () => {
   test('with no older rows the live list is handed back uncopied', () => {
-    // `mergeTranscript` always spreads a new array, so `transcript === live` fails there.
+    // A merge that always spreads a new array fails `transcript === live` here.
     const windows = tokenTicks({ reads: 0 }, RENDER_TICKS);
     const { transcripts } = threadOverTicks(windows);
     expect(transcripts).toHaveLength(RENDER_TICKS);

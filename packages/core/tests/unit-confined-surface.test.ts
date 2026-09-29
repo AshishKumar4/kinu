@@ -53,6 +53,8 @@ function contentFor(step: SurfaceStep): LanguageModelV3Content[] {
 const stubWeb: WebSearchProvider = {
   search: async (query: string) => ({ query, results: [], source: 'duckduckgo' as const }),
   fetch: async (url: string) => ({ url, retrievedAt: '', markdown: '' }),
+  render: async (url: string) => ({ url, retrievedAt: '', markdown: '' }),
+  screenshot: async (url: string) => ({ url, retrievedAt: '', bytes: new Uint8Array() }),
 };
 
 function headInput(overrides?: Partial<HeadInput>): HeadInput {
@@ -63,7 +65,7 @@ function headInput(overrides?: Partial<HeadInput>): HeadInput {
     inheritedContext: [],
     budget: { maxDepth: 0, spawnedAt: 2_000_000_000_000 },
     mergeStrategy: 'synthesize',
-    loop: defaultLoopOrigin('run'),
+    loop: defaultLoopOrigin('swarm'),
     ...overrides,
   };
 }

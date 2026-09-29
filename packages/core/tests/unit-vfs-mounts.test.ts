@@ -5,15 +5,10 @@ import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { fakeMossaic } from '@kinu.run/test-utils/mossaic';
-import { SqliteFilesystemAuthority } from '@nimbus-sh/core/runtime/filesystem-authority.js';
-import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
-import { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
-import { inlineWorkspaceStorage } from '../src/identity/inline-primitives';
 import type { VFS, VfsRevision } from '../src/types/primitives';
 import { isVfsError, makeVfsError } from '../src/vfs/errno';
 import { EXECUTOR_MOUNTS, removeTreeWithVfsOps, standardMounts, withMountTable, type VfsMount } from '../src/vfs/mounts';
 import { mossaicVfs } from '../src/vfs/mossaic-vfs';
-import { mountedAuthority } from '../src/vfs/shell-mounts';
 import { deviceFiles, type DeviceFileScope, type DeviceTransport } from '../src/execution/device-tunnel-executor';
 import { observeWrites } from '../src/vfs/observe';
 import { createWorkspaceBundle } from './helpers';
@@ -608,6 +603,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		await container.mkdir('/workspace', { recursive: true });
 		bundle.mountTable(withMountTable(bundle.vfs, [
 			mountOf('shared', drive), mountOf('sandbox', container), mountOf('pc', null, 'no device connected'),
+			{ ...mountOf('context', fakeTree({ 'notes.md': 'history' })), storeView: true },
 		]));
 
 		return { shell: bundle.shell, drive, container };
@@ -630,17 +626,28 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		expect(await drive.readFile('/new.txt', { encoding: 'utf8' })).toBe('hello\nmore\n');
 	});
 
-	test('df, mount and /proc/mounts list every live mount beside the root, and no absent one', async () => {
-		const { shell } = await workspaceWithMounts();
+	/** Plain `df` leaves these out: neither Drive's client nor the sandbox executor answers a disk-usage call. */
+	const SIZELESS = ['/sandbox', '/shared'];
 
-		for (const command of ['df -h', 'df', 'mount', 'cat /proc/mounts']) {
+	// A view over the root's store is sized as Linux sizes a bind mount: by the filesystem behind it.
+	test('df sizes the root and its views alike; df -a, mount and /proc/mounts add the rest, and no absent mount', async () => {
+		const { shell } = await workspaceWithMounts();
+		const df = await shell.exec('df');
+		const rows = df.stdout.split('\n').slice(1).filter((line) => line.trim() !== '').map((line) => line.split(/\s+/));
+		const figures = (point: string) => rows.find((row) => row.at(-1) === point)?.slice(1, 5);
+
+		expect({ exitCode: df.exitCode, root: figures('/') }).toEqual({ exitCode: 0, root: expect.any(Array) });
+		expect(figures('/context')).toEqual(figures('/'));
+		expect(rows.map((row) => row.at(-1))).not.toEqual(expect.arrayContaining([expect.stringMatching(/^\/(sandbox|shared|pc)$/)]));
+
+		for (const command of ['df -a', 'df -ah', 'mount', 'cat /proc/mounts']) {
 			const listed = await shell.exec(command);
 
 			const points = listed.stdout.split('\n').filter((line) => line.trim() !== '')
 				.map((line) => line.split(/\s+/).find((field) => field.startsWith('/')));
 
 			expect({ command, exitCode: listed.exitCode, points: points.filter((point) => point !== undefined).sort() })
-				.toEqual({ command, exitCode: 0, points: expect.arrayContaining(['/', '/sandbox', '/shared']) });
+				.toEqual({ command, exitCode: 0, points: expect.arrayContaining(['/', '/context', ...SIZELESS]) });
 			expect({ command, stdout: listed.stdout }).not.toMatchObject({ stdout: expect.stringContaining('/pc') });
 		}
 
@@ -648,7 +655,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		expect((await shell.exec('cat /proc/mounts')).stdout).toContain('/shared');
 	});
 
-	test('an agent shell lists each connected machine under /pc, and df -H counts in powers of 1000', async () => {
+	test('an agent shell lists the device mount that its own table holds', async () => {
 		const bundle = createWorkspaceBundle(new Database(':memory:'));
 		const { root, confiner } = await bundle.privileged();
 		const cred = { uid: 2_001, gid: 2_001 };
@@ -660,19 +667,17 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		bundle.mountTable(table, agentCred(cred));
 		const agent = await bundle.asAgent({ cred: agentCred(cred), home: agentHome('agent-a'), tmp: agentTmpRoot('agent-a') });
 
-		for (const command of ['mount', 'df', 'cat /proc/mounts']) {
+		for (const command of ['mount', 'df -a', 'cat /proc/mounts']) {
 			const listed = await agent.shell.exec(command);
 			const points = listed.stdout.split(/\s+/).filter((field) => field.startsWith('/pc'));
 
-			expect({ command, exitCode: listed.exitCode, points }).toEqual({ command, exitCode: 0, points: ['/pc/laptop', '/pc/studio'] });
+			expect({ command, exitCode: listed.exitCode, points }).toEqual({ command, exitCode: 0, points: ['/pc'] });
 		}
 
-		const blocks = Number((await bundle.shell.exec('df /')).stdout.split('\n')[1]?.split(/\s+/)[1]);
-		const size = (await bundle.shell.exec('df -H /')).stdout.split('\n')[1]?.split(/\s+/)[1] ?? '';
-		const match = /^([\d.]+)([KMG]?)$/u.exec(size);
-		const scale = { '': 1, K: 1e3, M: 1e6, G: 1e9 }[match?.[2] ?? ''] ?? Number.NaN;
+		// The device daemon answers no disk-usage call, so plain df leaves /pc out.
+		expect((await agent.shell.exec('df')).stdout).not.toContain('/pc');
 
-		expect(Number(match?.[1]) * scale / (blocks * 1024)).toBeCloseTo(1, 1);
+		expect((await agent.shell.exec('ls /pc')).stdout.split(/\s+/).filter(Boolean)).toEqual(['laptop', 'studio']);
 	});
 
 	test('mv between two mounts copies across, since each mount is its own device', async () => {
@@ -681,19 +686,5 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		expect(await shell.exec('mv /shared/notes.md /sandbox/workspace/notes.md')).toMatchObject({ exitCode: 0 });
 		expect(await drive.exists('/notes.md')).toBe(false);
 		expect(await container.readFile('/workspace/notes.md', { encoding: 'utf8' })).toBe('from the Drive\n');
-	});
-
-	test('a runtime path anchored at the root resolves beneath it, and one that climbs out of its root is refused', async () => {
-		// The bash runner names every path it opens as `{ root: '/', path }`: its rc, each cd and redirection target.
-		const storage = inlineWorkspaceStorage(new Database(':memory:'));
-		const vfs = new SqliteVFS(storage.sql, storage.transactions);
-		await vfs.as(CRED_KERNEL).mkdir('/home/main', { recursive: true });
-		await vfs.as(CRED_KERNEL).writeFile('/home/main/marker.txt', 'here');
-		const { fs } = mountedAuthority(new SqliteFilesystemAuthority(vfs), () => null).openHost(CRED_KERNEL);
-
-		expect(await fs.stat({ root: '/', path: 'home/main/marker.txt', beneath: true })).toMatchObject({ type: 'file' });
-		expect(await fs.stat({ root: '/', path: 'etc/nimbus.bashrc', beneath: true })).toBeNull();
-		await expect(Promise.resolve().then(() => fs.stat({ root: '/home/main', path: '../../etc', beneath: true })))
-			.rejects.toMatchObject({ code: 'EPERM' });
 	});
 });

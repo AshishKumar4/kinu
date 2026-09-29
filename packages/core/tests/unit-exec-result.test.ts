@@ -161,4 +161,18 @@ describe('the surfaces the model reads', () => {
     const out = await device.tools.exec?.execute('pytest');
     expect(out).toMatchObject({ reason: 'io', error: expect.stringContaining('test_add - assert 3 == 4') });
   });
+
+  test('a device command no checkpoint covered says undo cannot restore it, beside its output', async () => {
+    const why = 'the owner\'s home folder itself, too much to copy before every command';
+
+    const device = createDeviceTunnelExecutor({
+      rpc: async () => ({ stdout: 'wrote notes.txt\n', stderr: '', exitCode: 0, uncheckpointed: { dir: '/home/owner', why } }),
+      status: () => ({ connected: true, registered: true, toolchain: null }),
+      refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
+    });
+
+    expect(await device.tools.exec?.execute('echo hi > notes.txt')).toBe(
+      `wrote notes.txt\n\nNo checkpoint covers /home/owner: ${why}, so undo cannot restore what this command changed there.`,
+    );
+  });
 });

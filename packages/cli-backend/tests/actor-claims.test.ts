@@ -4,11 +4,11 @@ import { createHash } from 'node:crypto';
 import { jsonSchema, tool } from 'ai';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
-import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
+import { scriptedTurnModel } from '@kinu.run/test-utils';
 import {
   ActorSession, EvolutionEngine, WorkspaceActorDirectory, createAgentStores, profileCatalogDigest,
   resolveTurnProfile, verifyClaimedProgram, readVersionedScaffoldSource, sha256Hex,
-  contextMount, withMountTable, createFileDispatcher, TurnContextBudget,
+  contextMount, withMountTable, createFileDispatcher, TurnContextBudget, WORKSPACE_ROOT,
 } from '@kinu.run/core';
 import type {
   ActorHandle, AgentRuntime, AgentStores, ChatEvent, FileToolInput, ProfileAuthorityInputs,
@@ -66,15 +66,15 @@ async function workspace(): Promise<{ bind: (name: string) => Bound; rt: AgentRu
 
   const bind = (name: string): Bound => {
     const handle = directory.create({
-      parent, name, kind: 'subordinate', lifetime: 'durable', creationId: 'claimed-' + name,
+      parent, name, origin: 'agent', lifetime: 'durable', creationId: 'claimed-' + name,
     });
 
     const runtime: AgentRuntime = { ...rt, actor: handle, identity: { ...rt.identity, id: handle.actorId, name: handle.name } };
-    const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync, async () => ({ vfs: runtime.storage.vfs, artifactDirectory: '/actors/' + handle.actorId }));
+    const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync, async () => ({ vfs: runtime.storage.vfs, artifactDirectory: `${WORKSPACE_ROOT}/actors/${handle.actorId}` }));
 
     const actor: ActorSession = new ActorSession({ history: stores.history, runtime, claims: stores.claims, installedBuild: null,
     orchestration: {
-      engine: new EvolutionEngine(runtime, stores.history, { reportModelCall: unobservedSpend, enabled: false }), eventLog: new EventLog(eventSql, handle),
+      engine: new EvolutionEngine(runtime, stores.history, { enabled: false }), eventLog: new EventLog(eventSql, handle),
       host: {
         broadcast: () => {},
         enqueueTurn: async () => { throw new Error('this fixture must not enqueue another turn'); },
@@ -216,7 +216,7 @@ test('a cold reader recovers the claimed program identity and the exact context 
     ] },
   });
 
-  const cold = createAgentStores(() => left.runtime.storage.sql, () => left.handle, left.runtime.storage.transactionSync, async () => ({ vfs: left.runtime.storage.vfs, artifactDirectory: '/actors/' + left.handle.actorId }));
+  const cold = createAgentStores(() => left.runtime.storage.sql, () => left.handle, left.runtime.storage.transactionSync, async () => ({ vfs: left.runtime.storage.vfs, artifactDirectory: `${WORKSPACE_ROOT}/actors/${left.handle.actorId}` }));
 
   const claim = cold.claims.read('turn-cold');
   expect(claim).toMatchObject({ turnId: 'turn-cold', epoch: 1, status: 'settled', outcome: 'completed' });

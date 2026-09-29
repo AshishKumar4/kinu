@@ -40,7 +40,7 @@ import {
 import { buildOutcomeEvalSplit } from './eval-split';
 import {
   describeSplitDegeneracy, renderOutcomeCriterion, FRESH_RESPONSE_RULE,
-  type OutcomeEvalExpectation, type OutcomeScoringRule,
+  type OutcomeEvalExpectation, type OutcomeEvalSplit, type OutcomeScoringRule,
 } from './outcomes';
 import { runScaffoldGepa } from './gepa/scaffold-bridge';
 import {
@@ -55,7 +55,10 @@ import type { PromptSection } from '../prompting/template';
 import {
   finishGepaRun, lastGepaRunPerTarget, makePersistingHooks, startGepaRun,
 } from './gepa/persistence';
-import { MetricScoreSchema, type EvalInstance, type MetricOutcome, type ReflectionLM } from './gepa/types';
+import {
+  MetricScoreSchema, type EvalInstance, type GepaConfig, type GepaMetric, type GepaResult, type MetricOutcome,
+  type ReflectionLM,
+} from './gepa/types';
 import { scoreInterval, type ScoreInterval } from '../utils/stats';
 import { nanoid } from '../utils/nanoid';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
@@ -474,20 +477,24 @@ export interface GepaOptimizationResult {
 }
 
 /**
- * GEPA (Genetic-Pareto) pass over the scaffold. Draws a disjoint train/val split
- * from the outcome ledger: older negatives train reflection; held-out newest
- * negatives plus accepted guards select the winner. A strictly better winner goes
- * to modifyScaffold and the normal shadow-eval pipeline. Budget from
- * `gepa_eval_budget` unless `evalSize` overrides it.
+ * GEPA on a disjoint train/val split of the outcome ledger: older negatives train reflection; held-out newest
+ * negatives plus accepted guards select the winner. Budget from `gepa_eval_budget` unless `evalSize` overrides it.
  */
-export async function runScaffoldGepaOptimization(
+async function gepaPass<R extends { readonly gepa: GepaResult | null }, O extends { selectionWarning?: string }>(
   control: ScaffoldControl,
-  opts?: { maxIterations?: number; evalSize?: number; maxMetricCalls?: number },
-): Promise<GepaOptimizationResult> {
-  const evalSize = clampGepaEvalBudget(opts?.evalSize ?? control.config.getGepaEvalBudget());
-
+  opts: { maxIterations?: number; evalSize?: number; maxMetricCalls?: number },
+  target: {
+    readonly run: { target: 'scaffold' } | { target: 'prompt_section'; targetRef: string };
+    readonly metric: GepaMetric<string, OutcomeEvalExpectation>;
+    readonly gepa: (config: Pick<
+      GepaConfig<string, OutcomeEvalExpectation>,
+      'evalSet' | 'trainSet' | 'metric' | 'reflectionLm' | 'budget' | 'onCandidate' | 'onIteration'
+    >) => Promise<R>;
+    readonly output: (result: R, runId: string, split: OutcomeEvalSplit) => O;
+  },
+): Promise<O | Pick<GepaOptimizationResult, 'ok' | 'error' | 'runId'>> {
+  const evalSize = clampGepaEvalBudget(opts.evalSize ?? control.config.getGepaEvalBudget());
   const split = await buildOutcomeEvalSplit(control.sql, control.rt.actor, controlTranscript(control), evalSize);
-  const { train: trainSet, val: evalSet } = split;
 
   // Without a failure there is nothing to select on but judge noise, and an empty
   // train set would hand val back to reflection.
@@ -496,23 +503,71 @@ export async function runScaffoldGepaOptimization(
   }
 
   const budget = {
-    maxIterations: Math.max(1, Math.min(opts?.maxIterations ?? 4, 20)),
+    maxIterations: Math.max(1, Math.min(opts.maxIterations ?? 4, 20)),
     // Seed scoring plus one minibatch and one full scoring per iteration.
-    maxMetricCalls: Math.max(10, Math.min(opts?.maxMetricCalls ?? 120, 400)),
+    maxMetricCalls: Math.max(10, Math.min(opts.maxMetricCalls ?? 120, 400)),
     // The paper's 3; the engine caps it at the train set size.
     minibatchSize: 3,
   };
 
-  const model = await control.model();
+  const reflectionLm = reflectionLmFor(control, await control.model());
+  const runId = startGepaRun(control.sql, control.rt.actor, target.run);
+  const persist = makePersistingHooks({ sql: control.sql, actor: control.rt.actor, runId });
+  let metricCalls = 0;
+  let iterations = 0;
+  let result: R;
 
+  try {
+    result = await target.gepa({
+      evalSet: split.val, trainSet: split.train, budget, reflectionLm,
+      metric: (candidate, instance) => {
+        metricCalls++;
+
+        return target.metric(candidate, instance);
+      },
+      onCandidate: persist.onCandidate,
+      onIteration: (state) => {
+        iterations = state.iteration + 1;
+
+        return persist.onIteration(state);
+      },
+    });
+  } catch (err) {
+    finishGepaRun(control.sql, control.rt.actor, {
+      runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls, iterations,
+    });
+
+    return { ok: false, error: renderThrownChain({ cause: err }), runId };
+  }
+
+  const { gepa } = result;
+
+  finishGepaRun(control.sql, control.rt.actor, {
+    runId,
+    status: 'completed',
+    stopReason: gepa?.stopReason ?? 'no_improvement_possible',
+    winnerId: gepa?.winner.id ?? null,
+    metricCalls: gepa?.metricCallsUsed ?? 0,
+    iterations: gepa?.iterationsRun ?? 0,
+  });
+
+  const output = target.output(result, runId, split);
+
+  if (split.degeneracy) output.selectionWarning = describeSplitDegeneracy(split.degeneracy);
+
+  return output;
+}
+
+/** A strictly better winner goes to modifyScaffold and the normal shadow-eval pipeline. */
+export async function runScaffoldGepaOptimization(
+  control: ScaffoldControl,
+  opts?: { maxIterations?: number; evalSize?: number; maxMetricCalls?: number },
+): Promise<GepaOptimizationResult> {
   // Accepted turns are regression checks against the approved response; negatives
   // score on whether the candidate addresses the complaint.
-  let metricCalls = 0;
-
   const metric = async (
     candidate: string, instance: EvalInstance<string, OutcomeEvalExpectation>,
   ): Promise<MetricOutcome> => {
-    metricCalls++;
     let output: string;
 
     try {
@@ -532,64 +587,23 @@ export async function runScaffoldGepaOptimization(
     );
   };
 
-  const reflectionLm = reflectionLmFor(control, model);
-
-  const runId = startGepaRun(control.sql, control.rt.actor, { target: 'scaffold' });
-  const persist = makePersistingHooks({ sql: control.sql, actor: control.rt.actor, runId });
-  let iterations = 0;
-  let result;
-
-  try {
-    result = await runScaffoldGepa({
-      rt: control.rt,
-      evalSet,
-      trainSet,
-      metric,
-      reflectionLm,
-      budget,
-      onCandidate: persist.onCandidate,
-      onIteration: state => {
-        iterations = state.iteration + 1;
-
-        return persist.onIteration(state);
-      },
-    });
-  } catch (err) {
-    const message = renderThrownChain({ cause: err });
-    finishGepaRun(control.sql, control.rt.actor, {
-      runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls, iterations,
-    });
-
-    return { ok: false, error: message, runId };
-  }
-
-  finishGepaRun(control.sql, control.rt.actor, {
-    runId,
-    status: 'completed',
-    stopReason: result.gepa.stopReason,
-    winnerId: result.gepa.winner.id,
-    metricCalls: result.gepa.metricCallsUsed,
-    iterations: result.gepa.iterationsRun,
+  return gepaPass(control, opts ?? {}, {
+    run: { target: 'scaffold' }, metric,
+    gepa: ({ evalSet, trainSet, metric: counted, reflectionLm, budget, onCandidate, onIteration }) => runScaffoldGepa({
+      rt: control.rt, evalSet, trainSet, metric: counted, reflectionLm, budget, onCandidate, onIteration,
+    }),
+    output: (result, runId, split): GepaOptimizationResult => ({
+      ok: true,
+      runId,
+      proposed: result.proposed,
+      pendingVersion: result.pendingVersion,
+      skipReason: result.skipReason,
+      bestScore: result.winnerScore,
+      seedScore: result.seedScore,
+      iterations: result.gepa.iterationsRun,
+      selection: { heldOutNegatives: split.heldOutNegatives, guards: split.val.length - split.heldOutNegatives },
+    }),
   });
-
-  const output: GepaOptimizationResult = {
-    ok: true,
-    runId,
-    proposed: result.proposed,
-    pendingVersion: result.pendingVersion,
-    skipReason: result.skipReason,
-    bestScore: result.winnerScore,
-    seedScore: result.seedScore,
-    iterations: result.gepa.iterationsRun,
-    selection: {
-      heldOutNegatives: split.heldOutNegatives,
-      guards: evalSet.length - split.heldOutNegatives,
-    },
-  };
-
-  if (split.degeneracy) output.selectionWarning = describeSplitDegeneracy(split.degeneracy);
-
-  return output;
 }
 
 const SECTION_WORDING_RULE: OutcomeScoringRule = {
@@ -645,91 +659,32 @@ async function runPromptSectionGepaOptimization(
   control: ScaffoldControl,
   opts: { sectionId: string; maxIterations?: number; evalSize?: number; maxMetricCalls?: number },
 ): Promise<PromptSectionOptimizationResult> {
-  const evalSize = clampGepaEvalBudget(opts.evalSize ?? control.config.getGepaEvalBudget());
-  const split = await buildOutcomeEvalSplit(control.sql, control.rt.actor, controlTranscript(control), evalSize);
+  return gepaPass(control, opts, {
+    run: { target: 'prompt_section', targetRef: opts.sectionId },
+    metric: sectionMetric(control, opts.sectionId),
+    gepa: ({ evalSet, trainSet, metric, reflectionLm, budget, onCandidate, onIteration }) => runSectionGepa({
+      sql: control.sql, actor: control.rt.actor, sectionId: opts.sectionId,
+      evalSet, trainSet, metric, reflectionLm, budget, onCandidate, onIteration,
+    }),
+    output: (result, runId): PromptSectionOptimizationResult => {
+      const { gepa } = result;
+      const seedBytes = Buffer.byteLength(gepa?.history[0]?.source ?? '', 'utf8');
 
-  if (split.degeneracy === 'no_labeled_turns' || split.degeneracy === 'no_negatives') {
-    return { ok: false, error: describeSplitDegeneracy(split.degeneracy) };
-  }
-
-  const budget = {
-    maxIterations: Math.max(1, Math.min(opts.maxIterations ?? 4, 20)),
-    // A section metric call is one judge call, not a rollout plus judge.
-    maxMetricCalls: Math.max(10, Math.min(opts.maxMetricCalls ?? 120, 400)),
-    minibatchSize: 3,
-  };
-
-  const reflectionLm = reflectionLmFor(control, await control.model());
-
-  const runId = startGepaRun(control.sql, control.rt.actor, {
-    target: 'prompt_section', targetRef: opts.sectionId,
+      return {
+        ok: true,
+        runId,
+        sectionId: result.sectionId,
+        proposed: result.proposed,
+        pendingVersion: result.pendingVersion,
+        skipReason: result.skipReason,
+        bestScore: result.winnerScore,
+        incumbentScore: result.incumbentScore,
+        iterations: gepa?.iterationsRun ?? 0,
+        byteDelta: Buffer.byteLength(gepa?.winner.source ?? '', 'utf8') - seedBytes,
+        ...(result.proposeError && { refusal: result.proposeError.error }),
+      };
+    },
   });
-
-  const persist = makePersistingHooks({ sql: control.sql, actor: control.rt.actor, runId });
-  const metric = sectionMetric(control, opts.sectionId);
-  let metricCalls = 0;
-  let iterations = 0;
-  let result;
-
-  try {
-    result = await runSectionGepa({
-      sql: control.sql,
-      actor: control.rt.actor,
-      sectionId: opts.sectionId,
-      evalSet: split.val,
-      trainSet: split.train,
-      metric: (candidate, instance) => {
-        metricCalls++;
-
-        return metric(candidate, instance);
-      },
-      reflectionLm,
-      budget,
-      onCandidate: persist.onCandidate,
-      onIteration: state => {
-        iterations = state.iteration + 1;
-
-        return persist.onIteration(state);
-      },
-    });
-  } catch (err) {
-    finishGepaRun(control.sql, control.rt.actor, {
-      runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls, iterations,
-    });
-
-    return { ok: false, error: renderThrownChain({ cause: err }), runId };
-  }
-
-  const gepa = result.gepa;
-  finishGepaRun(control.sql, control.rt.actor, {
-    runId,
-    status: 'completed',
-    stopReason: gepa?.stopReason ?? 'no_improvement_possible',
-    winnerId: gepa?.winner.id ?? null,
-    metricCalls: gepa?.metricCallsUsed ?? 0,
-    iterations: gepa?.iterationsRun ?? 0,
-  });
-
-  const seedBytes = Buffer.byteLength(gepa?.history[0]?.source ?? '', 'utf8');
-
-  const output: PromptSectionOptimizationResult = {
-    ok: true,
-    runId,
-    sectionId: result.sectionId,
-    proposed: result.proposed,
-    pendingVersion: result.pendingVersion,
-    skipReason: result.skipReason,
-    bestScore: result.winnerScore,
-    incumbentScore: result.incumbentScore,
-    iterations: gepa?.iterationsRun ?? 0,
-    byteDelta: Buffer.byteLength(gepa?.winner.source ?? '', 'utf8') - seedBytes,
-  };
-
-  if (result.proposeError) output.refusal = result.proposeError.error;
-
-  if (split.degeneracy) output.selectionWarning = describeSplitDegeneracy(split.degeneracy);
-
-  return output;
 }
 
 export interface PromptSectionTrialResult {

@@ -59,7 +59,6 @@ export interface CompactionExtensionDeps {
   /** Serves both summary kinds; failures degrade to deterministic previews. */
   summarize: (prompt: string, signal?: AbortSignal) => Promise<string>;
   ephemeral: EphemeralContextPlane;
-  /** Defaults to the light preset. */
   profile?: CompactionProfile;
   /** Ledger-reset signal: reset on 'planned' and 'invalidated', keep on 'replayed'. */
   onOutcome?: (event: CompactionOutcomeEvent) => void;
@@ -89,7 +88,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
   const summaryScheduler = createSummaryScheduler(deps.ports.logger);
 
   /** Per-turn summarizer: a cancelled turn cancels only its own calls and its abort is not a summary failure. */
-  const summarizerFor = (signal: AbortSignal | undefined): Summarizer => ({
+  const summarizerFor = (signal: AbortSignal | undefined, failure: AbortController | null): Summarizer => ({
     async complete(job) {
       try {
         return await deps.summarize(job.prompt, signal);
@@ -100,6 +99,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
           rangeEndMessageId: job.rangeEndMessageId,
           error: renderThrownChain({ cause: err }),
         });
+        failure?.abort(err);
 
         return null;
       }
@@ -130,6 +130,11 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
     providerReportedTokens: reportedTokens,
     citablePath: (sessionKey, rangeHash) => deps.ports.transcripts.citablePath(sessionKey, rangeHash),
   });
+
+  /** An owner's fold replays up to the ladder's trigger. */
+  const savedPlan = (ctx: TransformContext, plan: BoundaryContextPlan): PlanSnapshot => (ctx.trigger === 'user'
+    ? { ...toPlanSnapshot(plan), triggerTokens: Math.floor(ctx.contextWindow * profile.triggerPercent / 100) }
+    : toPlanSnapshot(plan));
 
   /**
    * First rung, above every ladder stage: under measured pressure, drop superseded `<dynamic_context>`
@@ -174,10 +179,8 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
     }
 
     await writeTranscript(plan, { transcripts: deps.ports.transcripts, logger: deps.ports.logger, codec: kinuCodec });
-    const transformed = transformTurns(turns, plan.rawTailStartIndex, plan, kinuSpec);
-    await deps.ports.plans.save(ctx.sessionKey, toPlanSnapshot(plan));
 
-    return { outcome: 'planned', turns: transformed, plan };
+    return { outcome: 'planned', turns: transformTurns(turns, plan.rawTailStartIndex, plan, kinuSpec), plan };
   }
 
   /** Replace a last-resort preview prefix summary with an LLM handoff summary and rebuild. Skipped when
@@ -212,7 +215,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
     try {
       body = await deps.summarize(prompt, ctx.abortSignal);
     } catch (err) {
-      if (ctx.abortSignal?.aborted) throw err;
+      if (ctx.abortSignal?.aborted || ctx.trigger === 'user') throw err;
       deps.ports.logger.warn('Compaction prefix-summary call failed; keeping deterministic summary', {
         error: renderThrownChain({ cause: err }),
       });
@@ -236,7 +239,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
     if (!upgraded) return null;
     // Same range ⇒ same rangeHash ⇒ transcript already persisted at the same path.
     const transformed = transformTurns(turns, upgraded.rawTailStartIndex, upgraded, kinuSpec);
-    await deps.ports.plans.save(ctx.sessionKey, toPlanSnapshot(upgraded));
+    await deps.ports.plans.save(ctx.sessionKey, savedPlan(ctx, upgraded));
 
     return { outcome: 'planned', turns: transformed, plan: upgraded };
   }
@@ -271,13 +274,18 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       const prior = cached && cached.sessionId === ctx.sessionKey ? cached : null;
       let rollingSummaryAttempted = false;
 
-      const summarizer = summarizerFor(ctx.abortSignal);
+      // The owner's fold fails whole.
+      const failure = new AbortController();
+      const strict = ctx.trigger === 'user';
+      const signal = strict ? AbortSignal.any([failure.signal, ...(ctx.abortSignal ? [ctx.abortSignal] : [])]) : ctx.abortSignal;
+      const summarizer = summarizerFor(signal, strict ? failure : null);
 
       const summarize = async (jobs: BoundarySummaryJob[]): Promise<Record<string, string>> => {
         rollingSummaryAttempted ||= jobs.some((job) => job.key.startsWith('prefix-summary:'));
         const summaries = await runJobs(ctx.sessionKey, jobs, summarizer);
         // The engine swallows thrown summary calls; an abort mid-batch surfaces here.
         ctx.abortSignal?.throwIfAborted();
+        failure.signal.throwIfAborted();
 
         return summaries;
       };
@@ -310,17 +318,24 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
         return undefined;
       }
 
-      const applied =
+      const upgraded =
         processed.outcome === 'planned'
-          ? ((await upgradePrefixSummary({
+          ? await upgradePrefixSummary({
               turns,
               plan: processed.plan,
               prior,
               ctx,
               reportedTokens,
               rollingSummaryAttempted,
-            })) ?? processed)
-          : processed;
+            })
+          : null;
+
+      const applied = upgraded ?? processed;
+
+      // The engine and an upgrade save theirs.
+      if (upgraded === null && ctx.trigger !== 'auto' && processed.outcome === 'planned') {
+        await deps.ports.plans.save(ctx.sessionKey, savedPlan(ctx, processed.plan));
+      }
 
       ctx.abortSignal?.throwIfAborted();
 

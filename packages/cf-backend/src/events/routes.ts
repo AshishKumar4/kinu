@@ -63,7 +63,7 @@ export type HubTarget = Pick<OrchestratorAgent,
 
 /**
  * A resolver, not the binding: the SDK's `getAgentByName` awaits `__unsafe_ensureInitialized` (runs `onStart`) under its
- * own retry (agents@0.22.0 `dist/agent-routing.js:176-183`, read 2026-09-22). Injectable for tests.
+ * own retry (agents@0.24.0 `dist/agent-routing.js:176-183`, read 2026-09-28). Injectable for tests.
  */
 export type HubResolver = (name: string) => Promise<HubTarget>;
 

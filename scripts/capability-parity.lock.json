@@ -1,6 +1,4 @@
 [
-  "asymmetry HeadInferenceDeps.advise#absent-in-cli",
-  "asymmetry HeadInferenceDeps.observeStream#absent-in-cli",
   "movable packages/cf-backend/src/agent-facet/agent-database.ts",
   "movable packages/cf-backend/src/agent-facet/protocol.ts"
 ]

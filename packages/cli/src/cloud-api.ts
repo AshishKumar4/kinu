@@ -102,6 +102,9 @@ export const CloudAgentStatusSchema = v.object({
   createdAt: v.number(), scaffoldVersion: v.number(), searchNodeCount: v.number(),
   messageCount: v.number(), model: v.optional(v.nullable(v.string())), reasoningEffort: v.optional(v.nullable(ReasoningEffortSchema)),
   roleId: v.optional(v.string()), tierId: v.optional(v.string()),
+  context: v.optional(v.nullable(v.object({
+    tokens: v.number(), window: v.nullable(v.number()), source: v.picklist(['provider', 'gate']), at: v.string(),
+  }))),
 });
 
 export type CloudAgentStatus = v.InferOutput<typeof CloudAgentStatusSchema>;

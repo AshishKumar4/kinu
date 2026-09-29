@@ -5,7 +5,7 @@ import {
   actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
   initWorkspaceSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, actorReadHandle, readSessionTranscript, readSubordinateInspection,
   getChatHistoryPage, inheritedContextFromTranscript,
-  type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PageRequest, type SerializedMessage,
+  type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
   type SessionTranscriptReader, type SubordinateInspectionResult, type ModelPricing, type SqlExecutor, type VFS,
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
   type JsonObject, type NimbusSandboxHandle, type SqlValue,
@@ -24,8 +24,7 @@ interface AgentRuntimeFiles {
   readonly storage: Pick<DurableObjectStorage, 'sql' | 'transactionSync'>;
 }
 
-/** The column each copied table is keyed by. An upsert, never a replace: a replace deletes the row first, which
- *  would cascade through every row keyed to the agent. */
+/** Each copied table's key. An upsert: a replace deletes the row first, cascading through the agent's rows. */
 const COPIED_KEY = { workspace_identity: 'singleton', workspace_actors: 'actor_id' } as const;
 
 function upsertRow(storage: DurableObjectStorage, table: keyof typeof COPIED_KEY, row: StoredRow): void {
@@ -72,7 +71,11 @@ export class AgentDatabase {
 
   constructor(
     private readonly storage: DurableObjectStorage,
-    private readonly workspace: { readonly agent: () => NimbusSandboxHandle; readonly state: () => NimbusSandboxHandle },
+    private readonly workspace: {
+      readonly agent: () => NimbusSandboxHandle;
+      readonly state: () => NimbusSandboxHandle;
+      readonly enqueueTurn: BackendHost['enqueueTurn'];
+    },
   ) {
     initWorkspaceSchema({
       execRaw: (ddl) => { storage.sql.exec(ddl); },
@@ -143,7 +146,7 @@ export class AgentDatabase {
       workspace: snapshot.workspaceName,
       runtimeFor: (bound) => this.runtime(bound, files),
       filesFor: async () => ({ vfs: files.agent(), artifactDirectory: snapshot.artifactDirectory }),
-      loopFor: (bound) => ({ origin: defaultLoopOrigin(bound.record.kind), parent: null }),
+      loopFor: (bound) => ({ origin: defaultLoopOrigin(bound.record.origin), parent: null }),
       orchestrationFor: (bound) => ({
         host: this.backendHost(),
         budget: new MissionGovernor({
@@ -155,7 +158,6 @@ export class AgentDatabase {
         engine: new EvolutionEngine(bound.runtime, bound.stores.history, {
           enabled: false,
           transaction: (body) => { storage.transactionSync(body); },
-          reportModelCall: () => undefined,
         }),
         eventLog: new EventLog({ exec: (query, ...bindings) => storage.sql.exec(query, ...bindings) }, bound.handle),
       }),
@@ -168,6 +170,7 @@ export class AgentDatabase {
     return {
       actor: bound.handle,
       agentStateVfs: files.state(),
+      toolFiles: files.agent(),
       storage: {
         vfs: files.agent(),
         sql: files.sql,
@@ -189,15 +192,13 @@ export class AgentDatabase {
         name: bound.handle.name,
         scaffold: createScaffoldSurface({ vfs: files.state(), sql: files.sql, actor: bound.handle, path: actorScaffoldPath(bound.record) }),
       },
-      spawnBranch: () => settle(refused('An MCTS branch')),
-      abortBranch: () => settle(refused('An MCTS branch')),
     };
   }
 
   backendHost(): BackendHost {
     return {
       broadcast: () => undefined,
-      enqueueTurn: () => settle(refused('A programmatic turn')),
+      enqueueTurn: (input) => this.workspace.enqueueTurn(input),
       turnInFlight: () => false,
       closed: () => false,
       setTimer: (fn, ms) => {
@@ -245,7 +246,7 @@ export class AgentDatabase {
     }, request);
   }
 
-  async historyPage(page: PageRequest): Promise<ChatHistoryPage> {
+  async historyPage(page: PositionPageRequest): Promise<ChatHistoryPage> {
     return await getChatHistoryPage(this.readable().transcript, page);
   }
 
@@ -302,12 +303,11 @@ export class AgentDatabase {
 
   async answer(completion: NonNullable<HeadReport['canonicalCompletion']>, metadata: JsonObject | null): Promise<void> {
     const transcript = this.transcript();
-    const parentId = transcript.newestId();
 
-    if (parentId === null) return;
+    if (transcript.newestId() === null) return;
 
     const entry = await transcript.prepareAssistant({
-      id: crypto.randomUUID(), parentId, turnId: completion.turnId, runId: completion.runId, parts: completion.outputPartReferences,
+      id: crypto.randomUUID(), turnId: completion.turnId, runId: completion.runId, parts: completion.outputPartReferences,
       finalText: completion.finalTextReference, ...(metadata !== null && { metadata }),
     });
 
@@ -315,7 +315,7 @@ export class AgentDatabase {
   }
 
   async history(limit?: number): Promise<UIMessage[]> {
-    return await this.readable().transcript.history(undefined, limit);
+    return await this.readable().transcript.history(limit);
   }
 
   admitted(id: string): boolean {

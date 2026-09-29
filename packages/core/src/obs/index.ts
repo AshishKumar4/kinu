@@ -22,7 +22,8 @@ export {
 export {
   createRecordingTracer,
   renderSelfPath,
-  SPAN_ATTR_ERROR,
+  traceException,
+  type TraceException,
   SPAN_ATTR_ISOLATE_GEN,
   SPAN_ATTR_SELF_PATH,
   type RecordedSpan,
@@ -50,7 +51,7 @@ export {
   type Refusal,
 } from './error';
 
-export { attempt, settle, settleSync, toWire, type Wire } from './effect';
+export { attempt, attemptInItsWords, settle, settleSync } from './effect';
 
 export {
   createCompositeLogger,

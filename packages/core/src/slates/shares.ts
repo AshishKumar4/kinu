@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 /** A blueprint exists exactly while its row stands unrevoked; every read asks this table again (S6). */
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExec } from '../types/primitives';
@@ -78,6 +79,7 @@ export class ShareStore<Row extends { id: string }, Rec extends { revokedAt: num
       if (share.revokedAt !== null) return Effect.succeed(share);
       const revokedAt = this.now();
       this.db.exec(`UPDATE ${this.table.shares} SET revoked_at = ? WHERE id = ?`, revokedAt, id);
+      markStoreChanged(this.db);
 
       return Effect.succeed({ ...share, revokedAt });
     }));
@@ -92,6 +94,7 @@ export class ShareStore<Row extends { id: string }, Rec extends { revokedAt: num
         `INSERT INTO ${this.table.users} (share_id, user_id, email, created_at) VALUES (?, ?, ?, ?) ON CONFLICT (share_id, user_id) DO NOTHING`,
         id, user.userId, user.email, createdAt,
       );
+      markStoreChanged(this.db);
     }
 
     return { ...share, users: this.users([id]).filter((row) => row.share_id === id).map((row) => row.email) };
@@ -146,6 +149,7 @@ export class SlateShareStore extends ShareStore<v.InferOutput<typeof ShareRow>, 
       'INSERT INTO slate_shares (id, slate_id, publication_id, included_paths, created_at, revoked_at) VALUES (?, ?, ?, ?, ?, NULL)',
       share.id, share.slate, share.publication, JSON.stringify(share.included), createdAt,
     );
+    markStoreChanged(this.db);
 
     return { id: share.id, slate: share.slate, publication: share.publication, included: [...share.included], createdAt, revokedAt: null, users: [] };
   }

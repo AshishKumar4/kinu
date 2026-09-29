@@ -1,6 +1,7 @@
 // The shapes product code uses; none may draw a diagnostic.
 import { Effect } from 'effect';
-import { attempt, KinuError, refusalOf, settle, toWire } from '../../../src/obs/index';
+import { attempt, KinuError, settle } from '../../../src/obs/index';
+import { makeVfsError } from '../../../src/vfs/errno';
 
 declare const fetchText: () => Promise<string>;
 
@@ -16,4 +17,6 @@ export const composed = settle(Effect.gen(function* () {
   return text;
 }));
 
-export const wired = settle(toWire(Effect.succeed(1), refusalOf));
+export const outcome = settle(Effect.result(Effect.succeed(1)));
+
+export const fileRefused = settle(Effect.fail(makeVfsError('EROFS', 'read-only file system', '/mnt/ro/a.txt')));

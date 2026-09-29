@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 import type { AgentRuntime } from './types/agent-runtime';
 import type { RawSqlExec, SqlExecutor, Storage } from './types/primitives';
 import type { LLMProviderConfig } from './llm';
@@ -15,7 +16,6 @@ import { unpricedLedgerSink } from './events/model-call-event';
 import { initRunEventTables, RunEventRecorder } from './events/recorder';
 import { buildRuntime } from './runtime-builder';
 import { createSqlFiber } from './execution/fiber';
-import { initWorkspaceBaselineTable, resetWorkspaceBaseline } from './read-models/workspace-diff';
 import type { WorkspaceBundle } from './vfs/nimbus-workspace';
 import { writeWorkspaceSoul } from './vfs/workspace-planes';
 import type { ActorHandle } from './identity/actor-handle';
@@ -60,19 +60,9 @@ function buildComponents(components: WorkspaceComponents) {
   return buildRuntime({
     actor,
     workspaceIsMachine: false,
-    sql, execRaw, transactionSync, vfs, llm, executor, schedule, shell: workspace.shell,
+    // Birth runs no agent tool.
+    sql, execRaw, transactionSync, vfs, toolFiles: vfs, llm, executor, schedule, shell: workspace.shell,
     memory, craftStore,
-    // Birth-only runtime: a fake exploration result would be indistinguishable from a real one,
-    // so fail loudly; running surfaces use createCLIRuntime's real spawner.
-    spawnBranch: () => {
-      throw new Error(
-        'createWorkspace\'s birth runtime does not implement spawnBranch: it is for creating a '
-        + 'workspace, not for running one. Open the workspace with openWorkspaceCLI (which builds '
-        + 'createCLIRuntime) to get a real branch spawner. Returning a stub result here would be '
-        + 'indistinguishable from a real exploration to every consumer.',
-      );
-    },
-    abortBranch: async () => {},
   });
 }
 
@@ -85,7 +75,6 @@ export async function createWorkspace(
   const { workspace, actor } = transactionSync(() => {
     initAllTables(execRaw, sql);
     execRaw(`PRAGMA user_version = ${String(SCHEMA_GENESIS_STAMP)}`);
-    initWorkspaceBaselineTable(execRaw);
     const bundle = createInlineWorkspace(db);
 
     const workspaceId = nanoid();
@@ -106,14 +95,11 @@ export async function createWorkspace(
   await workspace.vfs.writeFile('scaffold/agent.js.v0', scaffoldSource);
   void sql`INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale)
     VALUES (${actor.actorId}, 0, ${nowMs()}, ${'initial bootstrap'})`;
+  markStoreChanged(sql);
   await workspace.vfs.writeFile('scaffold/agent.js', scaffoldSource);
 
   await workspace.vfs.mkdir('memory', { recursive: true });
   await workspace.vfs.writeFile('memory/MEMORY.md', `# ${heading}\n\nCreated: ${new Date().toISOString()}\n`);
 
-  const runtime = buildComponents({ db, sql, execRaw, transactionSync, workspace, actor, llm: config.llm });
-
-  await resetWorkspaceBaseline(runtime);
-
-  return runtime;
+  return buildComponents({ db, sql, execRaw, transactionSync, workspace, actor, llm: config.llm });
 }

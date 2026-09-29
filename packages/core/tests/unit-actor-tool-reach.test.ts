@@ -7,7 +7,7 @@ import { profileCatalogDigest, resolveTurnProfile, type ProfileCatalog } from '.
 test('a bound role governs provider tools, actual execution and the dynamic reader after revocation', async () => {
   const { rt, testSql } = createTestRuntime();
   const seats = hostedSeatsOver({ rt, db: testSql.db });
-  const { actor } = await seats.seat('reach-prover', 'subordinate');
+  const { actor } = await seats.seat('reach-prover', 'agent');
   let executions = 0;
 
   const tools = {

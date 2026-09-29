@@ -371,10 +371,6 @@ inductive Surface where
       looks up — an INPUT TO FUTURE INFERENCE, so a sealed run's suspect winner
       keeps steering later turns. -/
   | memory
-  /-- An egress into a different subsystem's control loop: the agent-info task stat
-      and scaffold error-rate monitoring, so a laundered score can move a scaffold
-      decision. -/
-  | taskHistory
   /-- Reachable when the artifact a run is optimising IS a prompt or scaffold.
       Enumerated before it is reachable, which is the only kind of surface that does
       not have to be discovered. -/
@@ -383,15 +379,15 @@ inductive Surface where
 
 /-- The enumeration, as data. -/
 def allSurfaces : List Surface :=
-  [.records, .experienceLibrary, .craft, .memory, .taskHistory, .scaffoldVersions]
+  [.records, .experienceLibrary, .craft, .memory, .scaffoldVersions]
 
 /-- **The enumeration is total.** The Lean counterpart of
-    `contract-publication-seal.test.ts`'s set equality: a seventh constructor makes
+    `contract-publication-seal.test.ts`'s set equality: a sixth constructor makes
     this fail, so `allSurfaces` cannot silently fall behind `Surface`. -/
 theorem surface_enumeration_is_total (sfc : Surface) : sfc ∈ allSurfaces := by
   cases sfc <;> simp [allSurfaces]
 
-theorem surface_enumeration_has_six : allSurfaces.length = 6 := by decide
+theorem surface_enumeration_has_five : allSurfaces.length = 5 := by decide
 
 /-! ## The run's state, and the two disjoint action alphabets -/
 

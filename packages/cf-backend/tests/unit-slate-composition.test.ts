@@ -3,7 +3,7 @@ import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
   DEFAULT_WORKERS_AI_MODEL_SPEC, agentCred, agentHome, agentIdentity, subordinateAgentName, nativeToolFunctions,
-  openWorkspaceMainActor, RunEventRecorder, WORKSPACE_RUN_ID,
+  openWorkspaceMainActor, RunEventRecorder, SESSION_UID, WORKSPACE_RUN_ID,
   type JsonValue, type SlateCallResult,
 } from '@kinu.run/core';
 import { sqlOver } from '@kinu.run/test-utils';
@@ -170,9 +170,9 @@ test('a lazy boot after activation failure still broadcasts Slate edits once', a
   const actor = orchestratorHarness();
   const broadcasts: string[] = [];
   Reflect.set(actor.agent, 'broadcast', (payload: string) => { broadcasts.push(payload); });
-  actor.db.exec('CREATE TABLE inodes (blocked INTEGER)');
+  actor.db.exec('CREATE TABLE vfs_state (blocked INTEGER)');
   await expect(actor.agent.listSlates()).rejects.toThrow();
-  actor.db.exec('DROP TABLE inodes');
+  actor.db.exec('DROP TABLE vfs_state');
   expect(await actor.agent.listSlates()).toEqual({ slates: [], problems: [] });
   const vfs = workspaceFiles(actor.agent);
   await vfs.mkdir('/slates/recovered', { recursive: true });
@@ -316,10 +316,10 @@ test('a hosted actor cannot restore source that its own filesystem authority can
   const current = 'export default { fetch() { return new Response("second"); } };';
   await files.writeFile(path, current);
 
-  // A file in the shared slates the root kept to itself. Permission bits are VFS state a host stamps as uid 0 over
-  // the stored rows; the next activation reads them from storage.
+  // A file in the shared slates the root kept to itself: a group the child is not in. Permission bits are VFS state a
+  // host stamps as uid 0 over the stored rows; the next activation reads them from storage.
   const { root } = await createWorkspaceBundle(parent.db).privileged();
-  root.chmod(path, 0o644);
+  root.chown(path, SESSION_UID, 0);
   const reopened = await reactivateOrchestratorHarness(parent.db);
 
   const child = await hostedSubordinateHarness(reopened, {
@@ -510,9 +510,10 @@ test('source capture does not retain a previous caller supplementary group', asy
 
   // Permission bits are VFS state a host stamps as uid 0 over the stored rows, never agent-chosen;
   // the next activation reads them from storage.
+  // A chmod in /slates gives an entry back the directory's group, so the group is stamped last.
   const { root } = await createWorkspaceBundle(parent.db).privileged();
-  root.chown('/slates/group-source/server.ts', 0, 3000);
   root.chmod('/slates/group-source/server.ts', 0o640);
+  root.chown('/slates/group-source/server.ts', 0, 3000);
   const reopened = await reactivateOrchestratorHarness(parent.db);
   const grouped: SlateCaller = { workMode: 'build', path: [], cred: { uid: 1000, gid: 1000, groups: [3000], umask: 0o022 } };
   const ungrouped: SlateCaller = { workMode: 'build', path: [], cred: { uid: 1000, gid: 1000, groups: [], umask: 0o022 } };

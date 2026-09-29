@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 /** Durable per-run event log; subscribers are notified synchronously after persisting. */
 
 import * as v from 'valibot';
@@ -78,9 +79,6 @@ export const RunEventSchema = v.variant('type', [
     usage: v.optional(UsageSchema), usd: v.optional(v.number()),
     modelId: v.optional(v.string()), context: v.optional(ContextCompositionSchema),
     account: v.optional(CallAccountSchema), egress: v.optional(v.string()) }),
-  v.object({ ...BaseFields, type: v.literal('step_partial'), stepIndex: v.number(), text: v.string(),
-    toolCalls: v.array(v.object({ toolCallId: v.string(), toolName: v.string(), args: JsonValueSchema,
-      result: v.optional(v.string()), error: v.optional(v.string()) })) }),
   v.object({ ...BaseFields, type: v.literal('model_call'),
     source: v.picklist(SPEND_SOURCES), usage: v.optional(UsageSchema),
     usd: v.optional(v.number()),
@@ -97,6 +95,7 @@ export const RunEventSchema = v.variant('type', [
     status: v.optional(v.number()),
     source: v.picklist(['header', 'backoff', 'cooldown']) }),
   v.object({ ...BaseFields, type: v.literal('model_fallback'), from: v.string(), to: v.string(), reason: v.string() }),
+  v.object({ ...BaseFields, type: v.literal('context_admitted'), tokens: v.number(), contextWindow: v.number() }),
   v.object({ ...BaseFields, type: v.literal('head_split'), rootId: v.string(),
     headIds: v.array(v.string()), rationale: v.string() }),
   v.object({ ...BaseFields, type: v.literal('head_merge'), rootId: v.string(),
@@ -192,6 +191,18 @@ export interface BoundedRunEventQuery extends RunEventQuery {
 
 const RUN_EVENT_LIMIT_DEFAULT = 200;
 
+/** `seq` orders two rows written in one millisecond. */
+export interface ContextMeasureRow {
+  readonly tokens: number;
+  readonly at: string;
+  readonly seq: number;
+}
+
+export interface ContextMeasures {
+  readonly provider: ContextMeasureRow | null;
+  readonly gate: (ContextMeasureRow & { readonly contextWindow: number }) | null;
+}
+
 /** Ceiling for untrusted callers only; in-object folds (e.g. `getRunSummaries`) state their own
  *  window, since a narrowed window would be a truncated denominator. */
 export const RUN_EVENT_LIMIT_MAX = 500;
@@ -218,7 +229,6 @@ export interface RunListEntry {
 
 export type RunEventListener = (event: RunEvent) => void;
 
-/** See {@link RunEventRecorder.emitDeferred}. */
 export interface DeferredRunEvent {
   readonly event: RunEvent;
   /** Call once, after the caller's transaction commits. */
@@ -365,6 +375,8 @@ export class RunEventRecorder {
     this.actor.assertCurrent();
     void this.sql`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
       VALUES (${this.actorId}, ${ev.runId}, ${ev.eventIndex}, ${ev.type}, ${JSON.stringify(ev)}, ${ev.timestamp})`;
+
+    if (ev.type === 'scaffold_promotion' || ev.type === 'scaffold_rollback') markStoreChanged(this.sql);
   }
 
   private noteOperatorRequest(start: Extract<RunEvent, { type: 'run_start' }>): void {
@@ -614,13 +626,12 @@ export class RunEventRecorder {
     });
   }
 
-  /** The newest open turn with its completed steps and newest partial, found through `open_turns`. */
+  /** The newest open turn with its completed steps, found through `open_turns`. */
   openTurn(): {
     readonly runId: string;
     readonly turn: OpenTurnIdentity;
     readonly steps: ModelMessage[];
     readonly finishedSteps: number;
-    readonly partial: Extract<RunEvent, { type: 'step_partial' }> | null;
   } | null {
     this.actor.assertCurrent();
 
@@ -647,15 +658,7 @@ export class RunEventRecorder {
       SELECT COUNT(*) AS n FROM run_events
       WHERE actor_id = ${this.actorId} AND run_id = ${row.run_id} AND type = ${'step_finish' satisfies RunEventType}`[0]?.n ?? 0;
 
-    const partials = this.sql<{ payload: string }>`
-      SELECT payload FROM run_events
-      WHERE actor_id = ${this.actorId} AND run_id = ${row.run_id} AND type = ${'step_partial' satisfies RunEventType}
-      ORDER BY event_index DESC LIMIT 1`;
-
-    const newest = partials[0] === undefined ? null : parseStoredRunEvent(partials[0].payload);
-    const partial = newest !== null && newest.type === 'step_partial' && newest.stepIndex > finishedSteps ? newest : null;
-
-    return { runId: row.run_id, turn: start.turn, steps, finishedSteps, partial };
+    return { runId: row.run_id, turn: start.turn, steps, finishedSteps };
   }
 
   /** Filtered in SQL so `limit` is a real bound. Ties on `ts` break by rowid: `event_index`
@@ -671,6 +674,25 @@ export class RunEventRecorder {
       LIMIT ${capped}`;
 
     return rows.map((r) => parseStoredRunEvent(r.payload)).reverse();
+  }
+
+  readContextMeasures(): ContextMeasures {
+    this.actor.assertCurrent();
+
+    const provider = this.sql<{ tokens: number; ts: string; seq: number }>`
+      SELECT json_extract(payload, '$.usage.input') AS tokens, ts, rowid AS seq FROM run_events
+      WHERE actor_id = ${this.actorId} AND type = 'step_finish' AND json_extract(payload, '$.usage.input') IS NOT NULL
+      ORDER BY ts DESC, rowid DESC LIMIT 1`[0];
+
+    const gate = this.sql<{ tokens: number; contextWindow: number; ts: string; seq: number }>`
+      SELECT json_extract(payload, '$.tokens') AS tokens, json_extract(payload, '$.contextWindow') AS contextWindow, ts, rowid AS seq
+      FROM run_events WHERE actor_id = ${this.actorId} AND type = 'context_admitted'
+      ORDER BY ts DESC, rowid DESC LIMIT 1`[0];
+
+    return {
+      provider: provider === undefined ? null : { tokens: provider.tokens, at: provider.ts, seq: provider.seq },
+      gate: gate === undefined ? null : { tokens: gate.tokens, contextWindow: gate.contextWindow, at: gate.ts, seq: gate.seq },
+    };
   }
 
   /**

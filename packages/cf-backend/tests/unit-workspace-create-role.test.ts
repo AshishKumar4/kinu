@@ -77,7 +77,7 @@ async function postCreate(
     async claimOwner(userId: string) { return { owner: userId, capabilityHash: null }; },
     async setInitialDisplayName(displayName: string, nameOrigin: NameOrigin) { return { displayName, nameOrigin }; },
     async setSoul(soul: string) { return { soul, purpose: '' }; },
-    async resetWorkspaceBaseline() { return { ok: true as const, files: 0 }; },
+    async resetWorkspaceBaseline() { return { ok: true as const, capturedAt: 0 }; },
     async setModel(spec: string) {
       calls.push(`model:${spec}`);
 

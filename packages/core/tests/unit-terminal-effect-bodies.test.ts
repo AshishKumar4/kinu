@@ -5,12 +5,11 @@ import { Database } from 'bun:sqlite';
 
 import {
   TERMINAL_EFFECT_RETRY_BASE_MS, TerminalEffectLedger, initTerminalEffectTable, shadowTrialTerminalEffect,
-  takesTerminalEffect, terminalEffect, turnRecordTerminalEffect,
+  terminalEffect, turnRecordTerminalEffect, TerminalEffectInterrupt,
 } from '../src/orchestrator/terminal-effects';
-import { initAlternateTakesTable, latestAlternateTakeSet, unclaimedAlternateTakeIds } from '../src/mcts/takes';
 import { projectJsonValue, type CompletedTurn } from '../src/index';
 import { makeSql, makeExecRaw } from './helpers';
-import { createTestActors, testActorHandle } from '@kinu.run/test-utils';
+import { testActorHandle } from '@kinu.run/test-utils';
 
 const TURN: CompletedTurn = {
   userMessage: 'name the parser', assistantResponse: 'the parser is sound',
@@ -90,40 +89,9 @@ describe('turnRecordTerminalEffect', () => {
   });
 });
 
-describe('takesTerminalEffect', () => {
-  test('a credited turn claims the takes it competed against; an uncredited one purges them', async () => {
-    const db = new Database(':memory:');
-    const sql = makeSql(db);
-    const execRaw = makeExecRaw(db);
-    initAlternateTakesTable(execRaw);
-    const actor = createTestActors(sql, execRaw).main;
-
-    const seed = (id: string) => sql`INSERT INTO alternate_takes
-      (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id, candidates, created_at)
-      VALUES (${actor.actorId}, ${id}, ${null}, ${null}, ${'pick'}, ${'mcts'}, ${'a'}, ${null},
-              ${JSON.stringify([{ nodeId: 'a', text: 'A', score: 0.9, visits: 1, depth: 1 }, { nodeId: 'b', text: 'B', score: 0.8, visits: 1, depth: 1 }])},
-              ${1})`;
-
-    const effect = takesTerminalEffect({ sql, actor, sessionId: 's' });
-
-    seed('take-first');
-    expect(unclaimedAlternateTakeIds(sql, actor)).toEqual(['take-first']);
-    expect(await effect.run({ credited: 'msg-1', startedAt: 0, takeIds: ['take-first'] }, 'msg-1'))
-      .toEqual({ status: 'completed' });
-    expect(latestAlternateTakeSet(sql, actor)?.turnId).toBe('msg-1');
-    expect(unclaimedAlternateTakeIds(sql, actor)).toEqual([]);
-
-    seed('take-second');
-    expect(await effect.run({ credited: null, startedAt: 0, takeIds: ['take-second'] }, 'msg-2'))
-      .toEqual({ status: 'completed' });
-    expect(unclaimedAlternateTakeIds(sql, actor)).toEqual([]);
-    expect(latestAlternateTakeSet(sql, actor)?.id).toBe('take-first');
-  });
-});
-
 describe('a held owed outcome', () => {
   // `held` is a look, not a failed attempt: no attempt counted, re-arm at the base delay.
-  test('keeps the attempt count and the base delay across repeated looks', async () => {
+  test.each(['inline', 'detached'] as const)('%s keeps the attempt count and the base delay across repeated looks', async (lane) => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
     initTerminalEffectTable(makeExecRaw(db));
@@ -131,12 +99,12 @@ describe('a held owed outcome', () => {
     const looks = { held: 0, failing: 0 };
 
     const effects = {
-      branches: terminalEffect({ input: v.object({}), run: () => {
+      branches: terminalEffect({ input: v.object({}), runSync: () => {
         looks.held += 1;
 
         return { status: 'owed', held: true, detail: 'carrier live' };
       } }),
-      takes: terminalEffect({ input: v.object({}), run: () => {
+      craft_usage: terminalEffect({ input: v.object({}), runSync: () => {
         looks.failing += 1;
 
         return { status: 'owed', detail: 'undelivered' };
@@ -145,6 +113,7 @@ describe('a held owed outcome', () => {
 
     const ledger = new TerminalEffectLedger({
       sql, actor: testActorHandle(sql, { actorId: 'actor-a' }), effects, now: () => now,
+      transaction: (body) => db.transaction(body)(),
       scheduleRetry: async () => {},
     });
 
@@ -152,21 +121,118 @@ describe('a held owed outcome', () => {
       SELECT attempts, next_attempt_at FROM terminal_effects WHERE effect_name = ${key}`[0];
 
     const run = await ledger.run('seq', [
-      { name: 'branches', scope: '', input: {}, lane: 'detached' },
-      { name: 'takes', scope: '', input: {}, lane: 'detached' },
+      { name: 'branches', scope: '', input: {}, lane },
+      { name: 'craft_usage', scope: '', input: {}, lane },
     ]);
 
     await run.reported;
 
     for (const step of [1, 2, 3]) {
-      now = row('takes')?.next_attempt_at ?? now;
+      now = row('craft_usage')?.next_attempt_at ?? now;
       await ledger.replayOwed('seq');
       expect(looks).toEqual({ held: step + 1, failing: step + 1 });
       expect(row('branches')).toEqual({ attempts: 0, next_attempt_at: now + TERMINAL_EFFECT_RETRY_BASE_MS });
-      expect(row('takes')?.attempts).toBe(step + 1);
+      expect(row('craft_usage')?.attempts).toBe(step + 1);
     }
 
-    expect(row('takes')?.next_attempt_at).toBeGreaterThan(now + TERMINAL_EFFECT_RETRY_BASE_MS);
+    expect(row('craft_usage')?.next_attempt_at).toBeGreaterThan(now + TERMINAL_EFFECT_RETRY_BASE_MS);
+    db.close();
+  });
+});
+
+describe('an interrupted attempt keeps only committed work', () => {
+  for (const phase of ['before', 'after'] as const) {
+    test(`a synchronous ${phase} cut rolls back its nested body and attempt together`, async () => {
+      const db = new Database(':memory:');
+      const sql = makeSql(db);
+      const transaction = <T>(body: () => T): T => db.transaction(body)();
+      initTerminalEffectTable(makeExecRaw(db));
+      db.exec('CREATE TABLE effect_output (answer TEXT NOT NULL)');
+      let cutting = true;
+
+      const deps = {
+        sql, actor: testActorHandle(sql, { actorId: 'actor-a' }), now: () => 1_000,
+        transaction,
+        scheduleRetry: async () => {},
+        fault: () => cutting ? (at: string) => {
+          if (at === phase) throw new TerminalEffectInterrupt(phase, 'turn_record', '');
+        } : null,
+        effects: { turn_record: terminalEffect({ input: v.object({}), runSync: () => transaction(() => {
+          void sql`INSERT INTO effect_output (answer) VALUES ('kept')`;
+
+          return { status: 'completed' };
+        }) }) },
+      };
+
+      const ledger = new TerminalEffectLedger(deps);
+      ledger.claim('seq', [{ name: 'turn_record', scope: '', input: {}, lane: 'inline' }]);
+
+      await expect(ledger.drive('seq')).rejects.toBeInstanceOf(TerminalEffectInterrupt);
+      expect(sql`SELECT answer FROM effect_output`).toEqual([]);
+      expect(sql`SELECT status, attempts, next_attempt_at FROM terminal_effects`)
+        .toEqual([{ status: 'pending', attempts: 0, next_attempt_at: 1_000 }]);
+      cutting = false;
+      await ledger.replayOwed('seq');
+      expect(sql`SELECT answer FROM effect_output`).toEqual([{ answer: 'kept' }]);
+      expect(sql`SELECT status, attempts FROM terminal_effects`).toEqual([{ status: 'completed', attempts: 1 }]);
+      db.close();
+    });
+  }
+
+  test('a synchronous failure rolls back its body, but keeps the growing backoff', async () => {
+    const db = new Database(':memory:');
+    const sql = makeSql(db);
+    initTerminalEffectTable(makeExecRaw(db));
+    db.exec('CREATE TABLE effect_output (answer TEXT NOT NULL)');
+    let now = 1_000;
+
+    const deps = {
+      sql, actor: testActorHandle(sql, { actorId: 'actor-a' }), now: () => now,
+      transaction: <T>(body: () => T): T => db.transaction(body)(),
+      scheduleRetry: async () => {},
+      effects: { turn_record: terminalEffect({ input: v.object({}), runSync: () => {
+        void sql`INSERT INTO effect_output (answer) VALUES ('partial')`;
+        throw new Error('the recorder failed');
+      } }) },
+    };
+
+    const ledger = new TerminalEffectLedger(deps);
+    await (await ledger.run('seq', [{ name: 'turn_record', scope: '', input: {}, lane: 'inline' }])).reported;
+    now += TERMINAL_EFFECT_RETRY_BASE_MS;
+    await ledger.replayOwed('seq');
+
+    expect(sql`SELECT status, attempts, next_attempt_at FROM terminal_effects`)
+      .toEqual([{ status: 'pending', attempts: 2, next_attempt_at: now + 2 * TERMINAL_EFFECT_RETRY_BASE_MS }]);
+    expect(sql`SELECT answer FROM effect_output`).toEqual([]);
+    db.close();
+  });
+
+  test('an asynchronous interruption retains the attempt recorded before the body', async () => {
+    const db = new Database(':memory:');
+    const sql = makeSql(db);
+    initTerminalEffectTable(makeExecRaw(db));
+    const paused = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+
+    const deps = {
+      sql, actor: testActorHandle(sql, { actorId: 'actor-a' }), now: () => 1_000,
+      transaction: <T>(body: () => T): T => db.transaction(body)(),
+      scheduleRetry: async () => {},
+      effects: { auto_title: terminalEffect({ input: v.object({}), run: async () => {
+        paused.resolve();
+        await release.promise;
+        throw new TerminalEffectInterrupt('after', 'auto_title', '');
+      } }) },
+    };
+
+    const ledger = new TerminalEffectLedger(deps);
+    const running = ledger.run('seq', [{ name: 'auto_title', scope: '', input: {}, lane: 'inline' }]);
+    await paused.promise;
+    expect(sql`SELECT status, attempts, next_attempt_at FROM terminal_effects`)
+      .toEqual([{ status: 'pending', attempts: 1, next_attempt_at: 1_000 + TERMINAL_EFFECT_RETRY_BASE_MS }]);
+    release.resolve();
+    await expect(running).rejects.toBeInstanceOf(TerminalEffectInterrupt);
+    expect(sql`SELECT status, attempts FROM terminal_effects`).toEqual([{ status: 'pending', attempts: 1 }]);
     db.close();
   });
 });

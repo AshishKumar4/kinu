@@ -1,11 +1,8 @@
 import { Cause, Effect, Exit, Fiber, Scheduler } from 'effect';
-import { KinuError, toKinuError, type ErrorCode, type Refusal } from './error';
+import type { VfsError } from '../vfs/errno';
+import { classifyErrorCode, KinuError, renderThrownChain, toKinuError, type ErrorCode } from './error';
 
 const WITHIN_ONE_EVENT = new Scheduler.MixedScheduler('sync');
-
-export type Wire<T, F = Refusal> =
-  | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly error: F };
 
 export function attempt<A>(
   input: { readonly doing: string; readonly otherwise: ErrorCode },
@@ -14,12 +11,20 @@ export function attempt<A>(
   return Effect.tryPromise({ try: run, catch: (cause) => toKinuError({ ...input, cause }) });
 }
 
+/** {@link attempt} for a callee whose refusal is already worded for its reader: its message is kept, not replaced. */
+export function attemptInItsWords<A>(otherwise: ErrorCode, run: () => PromiseLike<A>): Effect.Effect<A, KinuError> {
+  return Effect.tryPromise({
+    try: run,
+    catch: (cause) => (cause instanceof KinuError ? cause : new KinuError(classifyErrorCode({ cause }) ?? otherwise, renderThrownChain({ cause }), { cause })),
+  });
+}
+
 interface SettleOptions {
   readonly signal?: AbortSignal;
   readonly interrupted?: string;
 }
 
-function fail(cause: Cause.Cause<KinuError>, options?: SettleOptions): never {
+function fail(cause: Cause.Cause<KinuError | VfsError>, options?: SettleOptions): never {
   if (!Cause.hasInterruptsOnly(cause)) throw Cause.squash(cause);
 
   const signal = options?.signal;
@@ -31,7 +36,7 @@ function fail(cause: Cause.Cause<KinuError>, options?: SettleOptions): never {
   );
 }
 
-export async function settle<A>(effect: Effect.Effect<A, KinuError>, options?: SettleOptions): Promise<A> {
+export async function settle<A>(effect: Effect.Effect<A, KinuError | VfsError>, options?: SettleOptions): Promise<A> {
   const exit = await Effect.runPromiseExit(effect, { scheduler: WITHIN_ONE_EVENT, signal: options?.signal });
 
   if (Exit.isSuccess(exit)) return exit.value;
@@ -39,7 +44,7 @@ export async function settle<A>(effect: Effect.Effect<A, KinuError>, options?: S
   return fail(exit.cause, options);
 }
 
-export function settleSync<A>(effect: Effect.Effect<A, KinuError>, options?: Pick<SettleOptions, 'interrupted'>): A {
+export function settleSync<A>(effect: Effect.Effect<A, KinuError | VfsError>, options?: Pick<SettleOptions, 'interrupted'>): A {
   const exit = Effect.runSyncExit(effect);
 
   if (Exit.isSuccess(exit)) return exit.value;
@@ -48,14 +53,4 @@ export function settleSync<A>(effect: Effect.Effect<A, KinuError>, options?: Pic
   if (Cause.isAsyncFiberError(defect)) Effect.runFork(Fiber.interrupt(defect.fiber));
 
   return fail(exit.cause, options);
-}
-
-export function toWire<A, F>(
-  effect: Effect.Effect<A, KinuError>,
-  encode: (failure: KinuError) => F,
-): Effect.Effect<Wire<A, F>> {
-  return Effect.match(effect, {
-    onSuccess: (value): Wire<A, F> => ({ ok: true, value }),
-    onFailure: (failure): Wire<A, F> => ({ ok: false, error: encode(failure) }),
-  });
 }

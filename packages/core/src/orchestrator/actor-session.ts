@@ -1,6 +1,6 @@
 import type { ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
-import { INTERRUPTED_TURN, type ChatEvent, type ChatOptions } from '../chat';
+import { INTERRUPTED_TURN, measureTurnRequest, type ChatEvent, type ChatOptions } from '../chat';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ResolvedTurnProfile, ProfileAuthorityInputs } from '../profiles';
 import type { WorkMode } from '../types/turn';
@@ -8,7 +8,8 @@ import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile
 import { promptCacheWarm, PromptCacheRouteSchema, type CachedRequest } from '../prompting/cache-breakpoints';
 import type { KinuExtension } from '../extension';
 import { ExtensionHost } from '../extension';
-import { KinuError, renderThrownChain, type TurnTrace, type TurnTracing } from '../obs/index';
+import { Effect } from 'effect';
+import { attempt, diagnostics, KinuError, renderThrownChain, settle, type TurnTrace, type TurnTracing } from '../obs/index';
 import { AgentOrchestrator, type AgentOrchestratorDeps } from './agent-orchestrator';
 import { describeLandedSteers, type AcceptedSteer, type LandedSteerRow, type UserSteer } from './inbox';
 import { startActorTurn } from './actor-turn';
@@ -29,13 +30,14 @@ import type { VFS } from '../types/primitives';
 import type { AgentConfigStore } from '../config/store';
 import type { CompletedTurn } from '../evolution/types';
 import {
-  reviewRecordedTurn, startAdvisorLane,
-  type AdvisorLaneStart, type AdvisorRecoverySnapshot, type AdvisorDisposition,
+  ADVISOR_ROLE_ID, advisedTurnOf, advisorLane, buildAdvisorPrompt, deliverAdvisorReply, type AdvisorRecoverySnapshot,
 } from '../advisor/review';
+import type { TemporaryAgentPort } from '../types/subordinates';
+import type { AnsweredEvolutionHelper } from '../identity/evolution-helpers';
 import { advisorWorkspaceGuidance } from '../prompting/agents-md';
 import { resolveModelRoute } from '../profiles/model-route';
 import { contextWindowForModel } from '../context-window';
-import { SessionHistory } from '../session/history';
+import { SessionHistory, type MaterializedHistory } from '../session/history';
 import { SessionStream } from './session-stream';
 import { steerUserMessage } from './inbox';
 import { recordTurnResumed, sameBuildOf } from './turn-recovery-events';
@@ -61,6 +63,12 @@ export interface ActorSessionOptions {
   /** Optional: the revision rows are the durable record; no recorder means no event, never a fabricated one. */
   readonly events?: ContextEventRecorder | null;
   readonly advisor?: ActorAdvisorContext;
+  /** The port this actor hires its advisor through; null or absent, its turns are not reviewed. */
+  readonly advisorPort?: () => TemporaryAgentPort | null;
+  /** The profile's `input`: an actor that takes no input (a swarm node, an evolution agent) is not reviewed. */
+  readonly reviewed?: boolean;
+  /** The completion gate has asked and not heard back, when the host keeps one. */
+  readonly gateOpen?: () => boolean;
   readonly turns?: () => TurnTracing;
 }
 
@@ -84,7 +92,6 @@ export interface ActorExecutionInput {
   /** Re-checked before each model call, for kinds whose liveness is owned elsewhere (heads, swarm nodes). */
   readonly assertActive?: () => void;
   readonly scaffoldStreamOptions?: ScaffoldBridgeOpts['streamOptions'];
-  /** A warming lane's cover. */
   readonly cacheKeptAliveUntil?: number | null;
   /** Steps a resumed turn keeps from its dead activation's run. */
   readonly resumedSteps?: number;
@@ -123,6 +130,7 @@ interface ActiveTurn {
   readonly lease: ActorTurnLease;
   readonly abort: AbortController;
   phase: 'preparing' | 'running' | 'settling';
+  context: MaterializedHistory | null;
   profile: ResolvedTurnProfile | null;
   profileInputs: ProfileAuthorityInputs | null;
   /** Never cleared: a settled turn's claim still attributes its late work. */
@@ -150,6 +158,8 @@ function newTurnTally(): TurnTally {
 export const REVERT_NEEDS_IDLE = 'Stop the turn that is running before you revert the conversation.';
 
 export const CLEAR_NEEDS_IDLE = 'Stop the turn that is running before you start a new conversation.';
+
+export const COMPACT_NEEDS_IDLE = 'Stop the turn that is running before you compact the conversation.';
 
 /** An actor's mutable execution state, apart from its host, which keeps admission, queueing and settlement and
  *  may share immutable catalogs, never this context, orchestrator or abort. */
@@ -253,48 +263,91 @@ export class ActorSession {
     return {
       turn: this.orchestrator.scopedTurn(turn),
       reachable: [...reachable],
-      recent: [...this.options.orchestration.engine.recentAdvisorNotes()],
-      minSeverity: (this.options.advisor?.config ?? this.runtime.actor.config).getAdvisorMinSeverity(),
       model: profile === null || !this.advisorEnabled ? undefined : resolveModelRoute('advisor', profile).model,
     };
   }
 
-  startAdvisorLane(lane: AdvisorLaneStart): Promise<void> {
-    if (this.runtime.advisorLlm === undefined || !this.advisorEnabled) return Promise.resolve();
-
-    return startAdvisorLane({ sql: this.runtime.storage.sql, actor: this.runtime.actor }, lane);
+  /** Off by default: the owner's switch, a reviewed profile and a port to hire the advisor through all decide. */
+  get reviewsTurns(): boolean {
+    return this.options.reviewed !== false && this.advisorEnabled && (this.options.advisorPort?.() ?? null) !== null;
   }
 
-  /** Per-turn feedback never calls recordTurn or changes the learning window. */
-  async reviewTurn(
-    snapshot: AdvisorRecoverySnapshot,
-    gateOpen = false,
-    send: (signal: AgentSignal) => Promise<SendOutcome> = (signal) => this.orchestrator.inbox.send(signal),
-  ): Promise<AdvisorDisposition | null> {
-    const { engine, budget } = this.options.orchestration;
+  /**
+   * Hires the turn's advisor, an evolution agent under the advisor preset, and returns: its answer reaches
+   * {@link deliverAdvisorAnswers} through the ingress. Idempotent per turn, so a replay hires no second one.
+   */
+  async hireAdvisor(snapshot: AdvisorRecoverySnapshot): Promise<void> {
+    const port = this.options.advisorPort?.() ?? null;
     const turnId = snapshot.turn.turnId;
-    const llm = this.runtime.advisorLlm;
 
-    if (!this.advisorEnabled || llm === undefined || (turnId && engine.hasAdvisorNoteForTurn(turnId))) return null;
+    // No durable id, no lane to answer on.
+    if (!this.reviewsTurns || port === null || turnId === undefined || turnId === '') return;
+
+    if (this.options.orchestration.engine.hasAdvisorNoteForTurn(turnId) || port.reclaim(advisorLane(turnId)) !== null) return;
+
+    const task = buildAdvisorPrompt(snapshot.turn, snapshot.reachable, await this.advisorGuidance(snapshot));
+    const hired = await port.start({ role: ADVISOR_ROLE_ID, roleLabel: ADVISOR_ROLE_ID, task, mode: 'build', lane: advisorLane(turnId) });
+
+    if (!('status' in hired) || hired.status === 'failed') {
+      diagnostics.event('advisor.hire_failed', { turnId, reason: 'reason' in hired ? hired.reason ?? 'unknown' : 'unknown' });
+    }
+  }
+
+  /**
+   * Every advisor answer this actor holds, judged and delivered once; per-turn feedback never changes the learning window.
+   * An answer that cannot be delivered is recorded and kept; false tells a job queue to run this again.
+   */
+  async deliverAdvisorAnswers(
+    deliver: (helper: AnsweredEvolutionHelper, turnId: string) => Promise<boolean> = (helper, turnId) => this.deliverAdvisorAnswer(helper, turnId),
+  ): Promise<boolean> {
+    const port = this.options.advisorPort?.() ?? null;
+
+    if (port === null) return true;
+    let delivered = true;
+
+    for (const helper of port.answered()) {
+      const turnId = advisedTurnOf(helper.lane);
+
+      if (turnId === null) continue;
+
+      if (await deliver(helper, turnId)) port.forget(helper.name);
+      else delivered = false;
+    }
+
+    return delivered;
+  }
+
+  deliverAdvisorAnswer(helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean> {
+    const { engine } = this.options.orchestration;
+    const config = this.options.advisor?.config ?? this.runtime.actor.config;
+
+    return settle(attempt({ doing: `delivering the advisor's review of turn ${turnId}`, otherwise: 'unavailable' }, async () => {
+      // Keyed on the turn, so a delivery cut before `forget` sends nothing twice.
+      if (helper.status === 'completed' && !engine.hasAdvisorNoteForTurn(turnId)) {
+        await deliverAdvisorReply(helper.answer, {
+          turnId,
+          minSeverity: config.getAdvisorMinSeverity(),
+          recent: [...engine.recentAdvisorNotes()],
+          gateOpen: this.options.gateOpen?.() ?? false,
+          send: (signal) => this.orchestrator.inbox.send(signal),
+          record: (note, id) => { engine.recordAdvisorNote(note, id); },
+          ...(this.options.advisor !== undefined && { actor: this.runtime.actor, parent: this.options.advisor.parent }),
+        });
+      }
+
+      return true;
+    }).pipe(Effect.catch((failure) => Effect.sync(() => {
+      diagnostics.failure('advisor.delivery_failed', failure, { turnId });
+
+      return false;
+    }))));
+  }
+
+  private async advisorGuidance(snapshot: AdvisorRecoverySnapshot): Promise<string> {
     const contextWindow = contextWindowForModel(snapshot.model ?? '').window;
+    const workspace = await this.options.advisor?.workspace() ?? this.runtime.agentStateVfs ?? this.runtime.storage.vfs;
 
-    const workspace = await this.options.advisor?.workspace()
-      ?? this.runtime.agentStateVfs ?? this.runtime.storage.vfs;
-
-    return reviewRecordedTurn({
-      snapshot,
-      actor: this.runtime.actor,
-      llm,
-      govern: (model, labels) => budget?.govern(model, labels) ?? model,
-      gateOpen,
-      guidance: await advisorWorkspaceGuidance({
-        vfs: workspace,
-        limits: async () => ({ contextWindow, modelOutputLimit: null }),
-      }),
-      send,
-      parent: this.options.advisor?.parent,
-      record: (note, id) => { engine.recordAdvisorNote(note, id); },
-    });
+    return await advisorWorkspaceGuidance({ vfs: workspace, limits: async () => ({ contextWindow, modelOutputLimit: null }) });
   }
 
   /** An active turn stages authored replacement; idle replacement commits immediately. */
@@ -367,9 +420,9 @@ export class ActorSession {
 
     const assertOwner = this.preparingTurnFence(lease, 'delegated input requires a preparing turn');
 
-    const current = await this.canonical.materialize();
+    const selected = this.canonical.context.selected() ?? this.canonical.context.initialize();
 
-    if (current.selection.revision === 0 && current.entries.length === 0 && this.canonical.proposals.pending(current.selection.contextId).length === 0) {
+    if (selected.revision === 0 && this.canonical.context.conversationOf(this.canonical.context.entries(selected)).length === 0 && this.canonical.proposals.pending(selected.contextId).length === 0) {
       const birth = await input.birthContext();
 
       if (birth.length > 0) await this.canonical.replaceHistory(birth, { author: this.actorId, via: 'runtime', turnId: null, stage: false, assertOwner });
@@ -381,6 +434,7 @@ export class ActorSession {
     }
 
     const opened = await this.canonical.materialize();
+    this.requireTurn(lease).context = opened;
     this.messages.splice(0, this.messages.length, ...opened.messages);
   }
 
@@ -394,10 +448,10 @@ export class ActorSession {
 
     const assertOwner = this.preparingTurnFence(lease, 'input must belong to a preparing turn');
 
-    const restored = await this.canonical.materialize();
+    const selected = this.canonical.context.selected() ?? this.canonical.context.initialize();
     const drainTurn = v.safeParse(v.string(), input.item.metadata?.drainTurnId);
 
-    if (restored.entries.length === 0 && restored.selection.revision === 0 && drainTurn.success && this.canonical.proposals.pending(restored.selection.contextId).length === 0) {
+    if (selected.revision === 0 && drainTurn.success && this.canonical.context.conversationOf(this.canonical.context.entries(selected)).length === 0 && this.canonical.proposals.pending(selected.contextId).length === 0) {
       for (const [index, message] of (await input.birthContext(drainTurn.output)).entries()) await this.canonical.append({ id: `${lease.turnId}:birth:${index}`, message, origin: 'input', turnId: lease.turnId, assertOwner });
     }
 
@@ -405,6 +459,7 @@ export class ActorSession {
     this.canonical.activateInput(acceptedInput, lease.turnId, assertOwner);
 
     const opened = await this.canonical.materialize();
+    this.requireTurn(lease).context = opened;
     this.messages.splice(0, this.messages.length, ...opened.messages);
   }
 
@@ -425,7 +480,7 @@ export class ActorSession {
     });
 
     this.active = {
-      lease, abort, phase: 'preparing', profile: null, profileInputs: null,
+      lease, abort, phase: 'preparing', context: null, profile: null, profileInputs: null,
       claim: null, claimSettled: false, trace: null, startedAt: 0, ended: null,
     };
     this.mode = mode;
@@ -542,7 +597,7 @@ export class ActorSession {
     try {
       active.phase = 'running';
       active.abort.signal.throwIfAborted();
-      const prepared = await this.prepareProgram(input.loopVersion, active.abort.signal);
+      const prepared = await this.prepareProgram(input.loopVersion, active);
       program = prepared.program;
       const claim = await this.admitClaim(lease, program, prepared.selection, input);
       active.claim = claim;
@@ -581,13 +636,14 @@ export class ActorSession {
     return this.turnResult(lease, active, tally, program);
   }
 
-  private async prepareProgram(version: number, signal: AbortSignal): Promise<{
+  private async prepareProgram(version: number, active: ActiveTurn): Promise<{
     readonly program: ActorTurnProgram;
     readonly selection: ContextSelection;
     readonly messages: readonly ModelMessage[];
   }> {
-    const program = await prepareActorProgram({ signal, runtime: this.runtime, mode: this.mode, version });
-    const admitted = await this.canonical.materialize();
+    const program = await prepareActorProgram({ signal: active.abort.signal, runtime: this.runtime, mode: this.mode, version });
+    const admitted = active.context ?? await this.canonical.materialize();
+    active.context = admitted;
     this.messages.splice(0, this.messages.length, ...admitted.messages);
 
     return { program, selection: admitted.selection, messages: admitted.messages };
@@ -621,6 +677,31 @@ export class ActorSession {
     return claim;
   }
 
+  private turnToolset(input: Omit<ActorExecutionInput, 'task'>, profile: ResolvedTurnProfile) {
+    const allowedTools = new Set(profile.allowedTools);
+    const tools = Object.fromEntries(Object.entries(input.chat.tools ?? {}).filter(([name]) => allowedTools.has(name)));
+    const extensions = new ExtensionHost();
+
+    for (const extension of input.extensions) extensions.register(extension);
+    extensions.register(this.orchestrator.turnExtension);
+
+    return { tools, extensions };
+  }
+
+  /** Null mid-turn: that turn measures its own. */
+  async measureNextRequest(
+    input: Omit<ActorExecutionInput, 'task'>, profile: ResolvedTurnProfile,
+  ): Promise<{ readonly tokens: number; readonly contextWindow: number } | null> {
+    if (this.inFlight) return null;
+    const { tools, extensions } = this.turnToolset(input, profile);
+    const { messages } = await this.canonical.materialize();
+
+    return measureTurnRequest({
+      ...input.chat, tools, history: messages, extensions,
+      dynamicContext: { ledger: this.dynamic, snapshot: () => input.dynamic(profile, tools), instructions: input.instructions },
+    });
+  }
+
   private turnEvents(turn: {
     readonly lease: ActorTurnLease;
     readonly active: ActiveTurn;
@@ -632,12 +713,7 @@ export class ActorSession {
     readonly tally: TurnTally;
   }): AsyncIterable<ChatEvent> {
     const { lease, active, profile, input, program, claim, stream, tally } = turn;
-    const allowedTools = new Set(profile.allowedTools);
-    const tools = Object.fromEntries(Object.entries(input.chat.tools ?? {}).filter(([name]) => allowedTools.has(name)));
-    const extensions = new ExtensionHost();
-
-    for (const extension of input.extensions) extensions.register(extension);
-    extensions.register(this.orchestrator.turnExtension);
+    const { tools, extensions } = this.turnToolset(input, profile);
     // Activation names the input's entry after its message; an edit keeps the entry.
     const turnInput = this.canonical.admittedInput(claim.turnId);
     const assertClaim = () => this.canonical.assertEpoch(claim.turnId, claim.epoch);
@@ -657,7 +733,8 @@ export class ActorSession {
         dynamicContext: { ledger: this.dynamic, snapshot: () => input.dynamic(profile, tools), instructions: input.instructions },
         stepContext: {
           base: async () => {
-            const base = await this.canonical.stepBase(assertClaim, claim.turnId, this.options.events ?? null);
+            const base = await this.canonical.stepBase(assertClaim, claim.turnId, this.options.events ?? null, active.context);
+            active.context = base;
             this.messages.splice(0, this.messages.length, ...base.messages);
             stepEntries = base.entries;
 
@@ -739,7 +816,8 @@ export class ActorSession {
   private async settleOutput(active: ActiveTurn, stream: SessionStream | null): Promise<void> {
     if (active.claim === null) return;
     await stream?.settle();
-    const settled = await this.canonical.materialize();
+    const settled = await this.canonical.materialize(active.context);
+    active.context = settled;
     this.messages.splice(0, this.messages.length, ...settled.messages);
   }
 

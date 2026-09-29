@@ -23,8 +23,6 @@ describe('classifyEvolutionType', () => {
     expect(classifyEvolutionType('turn_complete')).toBe('llm-turn');
     expect(classifyEvolutionType('reflection')).toBe('reflection');
     expect(classifyEvolutionType('scaffold_proposed')).toBe('scaffold');
-    expect(classifyEvolutionType('mcts_started')).toBe('mcts');
-    expect(classifyEvolutionType('mcts_complete')).toBe('mcts');
     expect(classifyEvolutionType('consolidation')).toBe('craft');
     expect(classifyEvolutionType('craft_discovered')).toBe('craft');
     expect(classifyEvolutionType('fiber_recovered')).toBe('recovery');

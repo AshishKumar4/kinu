@@ -9,7 +9,7 @@ import { hostedSubordinateHarness, orchestratorHarness, type ActorHarness, type 
 /** An agent the owner adds takes the workspace's mission, which the soul states. */
 const SOUL = '# Kinu\n\n## Mission\n\nBuild the thing.\n';
 
-const DIRECTORY = { ok: true, value: expect.objectContaining({ isDir: true }) };
+const DIRECTORY = { isDir: true };
 
 /** An agent the owner added, as the browser adds one, and the home name its directory row gives it. */
 async function addedAgent(): Promise<{ parent: ActorHarness<HarnessOrchestratorAgent>; name: string; agentName: string }> {
@@ -18,7 +18,7 @@ async function addedAgent(): Promise<{ parent: ActorHarness<HarnessOrchestratorA
   const { name } = await parent.agent.createSubordinateAgent();
 
   const row = parent.db.query<{ storage_key: string }, [string]>(
-    "SELECT storage_key FROM workspace_actors WHERE name = ? AND kind = 'subordinate'",
+    "SELECT storage_key FROM workspace_actors WHERE name = ? AND origin IN ('user', 'agent', 'evolution')",
   ).get(name);
 
   if (row === null) throw new Error(`no directory row names ${name}`);
@@ -40,7 +40,7 @@ describe('a hosted subordinate runs as its own home', () => {
     const agentName = subordinateAgentName(child.actor.handle.storageKey);
 
     const home = await parent.agent.statWorkspaceFile(agentHome(agentName));
-    expect(home).toMatchObject({ ok: true, value: expect.objectContaining({ isDir: true }) });
+    expect(home).toMatchObject(DIRECTORY);
     const shell = child.actor.runtime.shell;
 
     if (!shell) throw new Error('a hosted subordinate runtime carries a shell');
@@ -51,7 +51,7 @@ describe('a hosted subordinate runs as its own home', () => {
     await expect(child.actor.runtime.storage.vfs.writeFile('/home/main/theirs.md', 'x'))
       .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
     expect((await shell.exec('echo s > /tmp/x')).exitCode).toBe(0);
-    expect(await parent.agent.statWorkspaceFile('/tmp/x')).toMatchObject({ ok: true, value: null });
+    expect(await parent.agent.statWorkspaceFile('/tmp/x')).toBeNull();
   });
 
   test('an archive keeps the home', async () => {
@@ -69,7 +69,7 @@ describe('a hosted subordinate runs as its own home', () => {
 
     await parent.agent.dismissSubordinate(name, false);
 
-    expect(await parent.agent.statWorkspaceFile(agentHome(agentName))).toMatchObject({ ok: true, value: null });
-    expect(await parent.agent.statWorkspaceFile(agentTmpRoot(agentName))).toMatchObject({ ok: true, value: null });
+    expect(await parent.agent.statWorkspaceFile(agentHome(agentName))).toBeNull();
+    expect(await parent.agent.statWorkspaceFile(agentTmpRoot(agentName))).toBeNull();
   });
 });

@@ -145,7 +145,7 @@ export function useExplorationCanvas({
   const first = lastValue(resource);
 
   const fetchPage = useCallback(
-    (cursor: SeekCursor | undefined) =>
+    (cursor: SeekCursor) =>
       rpc<Page<ExplorationCanvasRun>>("getExplorationCanvas", [{ cursor, limit: FORK_RUN_LIMIT }]),
     [rpc],
   );
@@ -156,7 +156,7 @@ export function useExplorationCanvas({
     [first],
   );
 
-  const tail = usePagedScroll<ExplorationCanvasRun>({ grows: "down", fetchPage, startFrom });
+  const tail = usePagedScroll<ExplorationCanvasRun>({ fetchPage, startFrom });
 
   /** Live page 1 can push rows down over ones the pager holds; dedupe by fork id, first wins. */
   const entries = useMemo(() => {

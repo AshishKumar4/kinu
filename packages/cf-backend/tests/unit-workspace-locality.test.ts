@@ -123,9 +123,9 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     const tables = actor.tables();
 
-    // The namespace `NimbusWorkspace.destroy()` drops and the conformance manifest declares for this root.
+    // Nimbus's file tables, as the conformance manifest declares them for this root.
     for (const table of [
-      'inodes', 'file_chunks', 'content_lifecycle', 'vfs_schema_migrations',
+      'vfs_state', 'vfs_inodes', 'vfs_contents', 'vfs_content_chunks', 'vfs_chunks', 'nimbus_storage_ledger',
       'kinu_workspace_generation',
     ]) {
       expect(tables).toContain(table);
@@ -238,8 +238,8 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     open();
     actor.database.run(
-      `INSERT INTO workspace_actors (actor_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id)
-       VALUES ('main-actor', 'Atlas', 'agent:main', 'main', 'full', 'durable', 1, 'c1')`,
+      `INSERT INTO workspace_actors (actor_id, name, storage_key, origin, tab, input, lifetime, evolves, created_at, creation_id)
+       VALUES ('main-actor', 'Atlas', 'agent:main', 'system', 1, 1, 'durable', 1, 1, 'c1')`,
     );
     const first = open();
     // A soul last written before 2026-08-31: the agent's own, no row.
@@ -447,8 +447,8 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     await store.indexFile('memory/MEMORY.md', '# Notes\n\nthe indexed bytes\n');
 
     const tables = actor.tables();
-    expect(tables).toContain('inodes');
-    expect(tables).toContain('file_chunks');
+    expect(tables).toContain('vfs_inodes');
+    expect(tables).toContain('vfs_chunks');
     expect(tables).toContain('memory_chunks');
     expect(store.search('indexed bytes', 5)).not.toHaveLength(0);
     expect(await workspace.bundle.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' }))
@@ -467,11 +467,11 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     actor.ctx.storage.sql.exec('CREATE TABLE actor_rows (id INTEGER PRIMARY KEY)');
     actor.ctx.storage.sql.exec('INSERT INTO actor_rows (id) VALUES (1)');
     await workspace.bundle.vfs.writeFile('doomed.txt', 'bytes');
-    expect(actor.tables()).toContain('inodes');
+    expect(actor.tables()).toContain('vfs_inodes');
 
     await workspace.destroy();
 
-    expect(actor.tables()).not.toContain('inodes');
+    expect(actor.tables()).not.toContain('vfs_inodes');
     expect(actor.tables()).toContain('actor_rows');
   });
 

@@ -20,6 +20,8 @@ export interface VfsMount {
 	readonly filesOwner: FilesOwner;
 	/** Refuses every write: nothing through it is harmed. */
 	readonly readOnly?: true;
+	/** A view over the workspace's own store: `df` gives it the store's figures, as Linux does a bind mount. */
+	readonly storeView?: true;
 }
 
 export const EXECUTOR_MOUNTS = {
@@ -321,7 +323,8 @@ function siblingPath(path: string, purpose: string, nonce: string): string {
 export interface VfsMountRouting {
 	mountOf(path: string): string | null;
 	mountPoints(): readonly string[];
-	liveMounts(): readonly { readonly name: string; readonly readOnly: boolean; readonly files: VFS }[];
+	/** Every mount, connected or not: each is a mount point on the workspace shell's namespace. */
+	mounts(): readonly VfsMount[];
 	/** The user's writable mount roots, connected or not. */
 	userRoots(): readonly string[];
 }
@@ -436,11 +439,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 	const table: MountedVfs = {
 		mountOf: (path) => mountNamed(path)?.name ?? null,
 		mountPoints,
-		liveMounts: () => [...byName.values()].flatMap((m) => {
-			const files = m.files();
-
-			return files === null ? [] : [{ name: m.name, readOnly: m.readOnly === true, files }];
-		}),
+		mounts: () => [...byName.values()],
 		userRoots: () => userRoots,
 		readFile(path, opts) {
 			return delegate(path, (files, native) => files.readFile(native, opts));
@@ -454,6 +453,14 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 		},
 		writeFile(path, data) {
 			return mutate(path, 'written', (files, native) => files.writeFile(native, data));
+		},
+		writeFileWithReport(path, data) {
+			return mutate(path, 'written', async (files, native) => {
+				if (files.writeFileWithReport) return files.writeFileWithReport(native, data);
+				await files.writeFile(native, data);
+
+				return null;
+			});
 		},
 		writeFileIfRevision(path, data, expectedRevision) {
 			return mutate(path, 'written', (files, native) => {

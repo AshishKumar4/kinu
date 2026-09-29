@@ -1,3 +1,4 @@
+import { markStoreChanged } from '@kinu.run/agent-utils';
 // Runtime objects for each logical actor of one workspace database; its rows live in the workspace because the
 // SQL port is synchronous. State, serialization and `actor_id`-keyed stores are per actor and re-validate the
 // handle. Release invalidates the fence; rows survive until `retire` with `destroy: true`. Recovery reads
@@ -14,7 +15,7 @@ import type { SessionFilePlane } from '../session/payload';
 import type { PreparedRequest } from '../session/requests';
 import { actorReferenceOf, sameActorReference, type ActorHandle, type ActorReference } from '../identity/actor-handle';
 import { createAgentStores, type AgentStores } from './agent-stores';
-import type { WorkspaceActor, WorkspaceActorDirectory } from '../identity/workspace-actors';
+import { tracedActorKind, type WorkspaceActor, type WorkspaceActorDirectory } from '../identity/workspace-actors';
 import type { ActorContextStores, ChildContextResolver } from '../vfs/context-plane';
 import type { ContextEventRecorder } from '../types/context-plane';
 import type { TemporaryAgentPort } from '../types/subordinates';
@@ -77,6 +78,8 @@ export interface ActorHostDeps {
   contextEvents(bound: BoundActor): ContextEventRecorder | null;
   /** Called after the rows are gone, so a failed reclaim leaves no half-removed readable actor. */
   discardBytes?(record: WorkspaceActor): Promise<void>;
+  /** The port a hosted actor hires its advisor through; absent, hosted turns are not reviewed. */
+  advisorPort?(bound: BoundActor): TemporaryAgentPort | null;
   readonly tracing: (() => AgentTracing) | undefined;
 }
 
@@ -197,7 +200,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
 
     if (tracing !== undefined) {
       stores.claims.observeRecovered((claim) => {
-        tracing().turns({ id: record.actorId, kind: record.kind }).recovered(claim, claim.outcome);
+        tracing().turns({ id: record.actorId, kind: tracedActorKind(record.origin) }).recovered(claim, claim.outcome);
       });
     }
 
@@ -225,7 +228,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       const orchestration = await deps.orchestrationFor({ ...bound, runtime });
 
       const tracing = deps.tracing;
-      const actor = { id: bound.record.actorId, kind: bound.record.kind };
+      const actor = { id: bound.record.actorId, kind: tracedActorKind(bound.record.origin) };
 
       const session = new ActorSession({
         runtime, orchestration, claims: bound.stores.claims, installedBuild: deps.installedBuild,
@@ -233,6 +236,8 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
         turns: tracing && (() => tracing().turns(actor)),
         history: bound.stores.history,
         events: deps.contextEvents(bound),
+        advisorPort: () => deps.advisorPort?.(bound) ?? null,
+        reviewed: bound.record.input,
         advisor: reference.parentActorId === null ? undefined : {
           config: deps.directory.main().config,
           workspace: async () => {
@@ -446,6 +451,7 @@ function purgeActorRows(storage: Pick<Storage, 'sql' | 'transactionSync'> & SqlE
       storage.exec(`DELETE FROM "${table.replace(/"/g, '""')}" WHERE actor_id = ?`, actorId);
     }
   });
+  markStoreChanged(storage.sql);
 }
 
 // Read without a handle: a cold root reads these before it hosts anybody.
@@ -552,7 +558,6 @@ export async function recoverActorTurns(
       readonly session: Pick<ActorSession, 'turnOpen'>;
     }>;
   },
-  limit?: number,
 ): Promise<{
   readonly verified: readonly string[];
   readonly refused: readonly string[];
@@ -568,7 +573,7 @@ export async function recoverActorTurns(
   const active: string[] = [];
   const stalled: ResumableActorTurn[] = [];
 
-  for (const turn of host.resumable(limit)) {
+  for (const turn of host.resumable()) {
     try {
       const actor = await host.acquire(turn.reference);
 

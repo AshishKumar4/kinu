@@ -13,6 +13,23 @@ export interface SeekCursor {
   readonly after: string;
 }
 
+/** A cursor into an ordered list: the page ends just before this position, so any stretch is one indexed read. */
+export interface PositionCursor {
+  readonly before: number;
+}
+
+export const PositionCursorSchema: v.GenericSchema<PositionCursor> = v.object({
+  before: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+});
+
+/** Strict, so a caller still sending an id cursor is refused rather than re-read the newest page forever. */
+export const PositionPageRequestSchema = v.strictObject({
+  cursor: v.optional(PositionCursorSchema),
+  limit: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(200))),
+});
+
+export type PositionPageRequest = v.InferOutput<typeof PositionPageRequestSchema>;
+
 /** Reads needing more extend this rather than respelling the pair. */
 export interface PageRequest {
   /** Omitted asks for the first page; otherwise the previous page's `next`. */
@@ -29,13 +46,24 @@ export const SeekCursorSchema: v.GenericSchema<SeekCursor> = v.object({
   after: v.pipe(v.string(), v.nonEmpty()),
 });
 
-export function pageSchema<Input, Item = Input>(
+function pageVariant<Input, Item, Cursor>(
   item: v.GenericSchema<Input, Item>,
-): v.GenericSchema<Page<Input>, Page<Item>> {
+  cursor: v.GenericSchema<Cursor>,
+): v.GenericSchema<Page<Input, Cursor>, Page<Item, Cursor>> {
   return v.variant('status', [
-    v.object({ status: v.literal('more'), items: v.array(item), next: SeekCursorSchema }),
+    v.object({ status: v.literal('more'), items: v.array(item), next: cursor }),
     v.object({ status: v.literal('end'), items: v.array(item) }),
   ]);
+}
+
+export function pageSchema<Input, Item = Input>(item: v.GenericSchema<Input, Item>): v.GenericSchema<Page<Input>, Page<Item>> {
+  return pageVariant(item, SeekCursorSchema);
+}
+
+export function positionPageSchema<Input, Item = Input>(
+  item: v.GenericSchema<Input, Item>,
+): v.GenericSchema<Page<Input, PositionCursor>, Page<Item, PositionCursor>> {
+  return pageVariant(item, PositionCursorSchema);
 }
 
 /** `fetched` MUST be `limit + 1` rows in traversal order: the extra row is the evidence that more exist. */
@@ -51,10 +79,10 @@ export function seekPage<Item>(
 }
 
 /** `project` maps the whole array: the chat reverses it, and the exploration canvas resolves a page in one batched read. */
-export function mapPage<In, Out>(
-  page: Page<In>,
+export function mapPage<In, Out, Cursor = SeekCursor>(
+  page: Page<In, Cursor>,
   project: (items: readonly In[]) => Out[],
-): Page<Out> {
+): Page<Out, Cursor> {
   const items = project(page.items);
 
   return page.status === 'more' ? { status: 'more', items, next: page.next } : { status: 'end', items };

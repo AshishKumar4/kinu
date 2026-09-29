@@ -44,8 +44,8 @@ if (!('WebSocketRequestResponsePair' in globalThis)) {
 // is ended first, so it holds no memory and writes into no released scratch.
 // Under `--parallel` this runs per file; without it, once for the run. The
 // run's own check (`scripts/deadline.ts`) finds what outlived its parent.
-afterAll(() => {
-  const left = endChildren(process.pid);
+afterAll(async () => {
+  const left = await endChildren(process.pid);
 
   release();
 
@@ -117,10 +117,10 @@ Bun.plugin({
         WorkflowEvent: class WorkflowEvent {},
         RpcTarget: class RpcTarget {},
         exports: {},
-        // `enterSpan` deliberately ABSENT: cf-tracer feature-detects it and
-        // takes its scoped-fallback path, the same behaviour the workerd
-        // tracing-fallback test pins for a runtime without native spans.
-        tracing: {},
+        tracing: {
+          enterSpan: <T>(_name: string, fn: (span: { readonly isTraced: boolean; setAttributes(values: Readonly<Record<string, string | number | boolean>>): void; recordException(failure: { name: string; code: string }): void }) => T): T =>
+            fn({ isTraced: false, setAttributes() {}, recordException() {} }),
+        },
         // Reading platform env under bun is a test reaching for state that
         // does not exist here; failing by name beats an undefined that
         // reads as "unbound".

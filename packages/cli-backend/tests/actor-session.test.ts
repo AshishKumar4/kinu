@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
 import type { ModelMessage, ToolSet } from 'ai';
-import { scriptedTurnModel, unobservedSpend } from '@kinu.run/test-utils';
+import { scriptedTurnModel } from '@kinu.run/test-utils';
 import {
   ActorSession, EvolutionEngine, WorkspaceActorDirectory, profileCatalogDigest,
-  resolveTurnProfile, requireBuild, createAgentStores,
+  resolveTurnProfile, requireBuild, createAgentStores, WORKSPACE_ROOT,
 } from '@kinu.run/core';
 import type {
   AgentRuntime, BroadcastEvent, ChatEvent, ProfileAuthorityInputs, ProgrammaticTurn, WorkMode,
@@ -40,14 +40,14 @@ function sessions() {
   initEventsHubTables(eventSql);
 
   const create = (name: string) => {
-    const handle = directory.create({ parent, name, kind: 'subordinate', lifetime: 'durable', creationId: 'admitted-' + name });
+    const handle = directory.create({ parent, name, origin: 'agent', lifetime: 'durable', creationId: 'admitted-' + name });
     const runtime: AgentRuntime = { ...rt, actor: handle, identity: { ...rt.identity, id: handle.actorId, name: handle.name } };
     const broadcasts: BroadcastEvent[] = [];
     const enqueued: ProgrammaticTurn[] = [];
-    const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync, async () => ({ vfs: runtime.storage.vfs, artifactDirectory: '/actors/' + handle.actorId }));
+    const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync, async () => ({ vfs: runtime.storage.vfs, artifactDirectory: `${WORKSPACE_ROOT}/actors/${handle.actorId}` }));
 
     const actor: ActorSession = new ActorSession({ history: stores.history, runtime, claims: stores.claims, installedBuild: null, orchestration: {
-      engine: new EvolutionEngine(runtime, stores.history, { reportModelCall: unobservedSpend, enabled: false }), eventLog: new EventLog(eventSql, handle),
+      engine: new EvolutionEngine(runtime, stores.history, { enabled: false }), eventLog: new EventLog(eventSql, handle),
       host: {
         broadcast: event => { broadcasts.push(event); },
     

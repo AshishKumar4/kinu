@@ -3,31 +3,19 @@
  * returns, so each lane must hand its work to `transports.redrive` or be a deliberate, documented drop.
  */
 import { describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import type { ActorHandle, JsonValue } from '@kinu.run/core';
-import { createTestActorsOver } from '@kinu.run/test-utils';
+import type { JsonValue } from '@kinu.run/core';
 import {
   EVOLUTION_LANE_FIBER, MCP_WARM_LANE_FIBER,
   TERMINAL_LANE_FIBER, classifyRecoveredFiber, type FiberLaneTransports,
 } from '../src/fiber-recovery';
-import { ADVISOR_LANE_FIBER, BACKGROUND_FIBER_PREFIX, SEARCH_FIBER_NAME, recoveryBackoffMs } from '@kinu.run/core';
+import { BACKGROUND_FIBER_PREFIX, recoveryBackoffMs } from '@kinu.run/core';
 
 /** Read from the module's own verdict rather than restated. */
 const LaneSnapshotSchema = v.object({ lane: v.string(), redrive: v.string() });
 
 function recordingTransports() {
   const redriven: string[] = [];
-  const writes: unknown[][] = [];
-  const state = { auditRows: 0 };
-  const actor: ActorHandle = createTestActorsOver(new Database(':memory:')).main;
-
-  const sql: FiberLaneTransports['sql'] = <T>(_strings: TemplateStringsArray, ...values: unknown[]): T[] => {
-    state.auditRows += 1;
-    writes.push(values);
-
-    return [];
-  };
 
   const transports: FiberLaneTransports = {
     jobs: {
@@ -35,22 +23,12 @@ function recordingTransports() {
       recoverOrphans: () => Promise.resolve([]),
     },
     runDueSessionEvolution: () => Promise.resolve(),
-    hasAdvisorNoteForTurn: () => false,
-    reviewAdvisorSnapshot: () => Promise.resolve(null),
-    sql,
-    actor,
-    appendMemory: () => Promise.resolve(),
     armOwedTerminalRecovery: () => Promise.resolve(),
     deliverSignal: () => Promise.resolve('queued' as const),
     redrive: (lane) => { redriven.push(lane); },
   };
 
-  return {
-    transports,
-    redriven,
-    writes,
-    get auditRows() { return state.auditRows; },
-  };
+  return { transports, redriven };
 }
 
 function fiber(name: string, snapshot: JsonValue = null): Parameters<typeof classifyRecoveredFiber>[1] {
@@ -58,12 +36,11 @@ function fiber(name: string, snapshot: JsonValue = null): Parameters<typeof clas
 }
 
 describe('every recovered lane leaves a carrier, or drops on purpose', () => {
-  test('the four work-bearing lanes hand their work to the redrive seam', () => {
+  test('the three work-bearing lanes hand their work to the redrive seam', () => {
     const cases: readonly [string, string][] = [
       [`${BACKGROUND_FIBER_PREFIX}job-1`, `${BACKGROUND_FIBER_PREFIX}job-1`],
       [EVOLUTION_LANE_FIBER, EVOLUTION_LANE_FIBER],
       [TERMINAL_LANE_FIBER, TERMINAL_LANE_FIBER],
-      [SEARCH_FIBER_NAME, SEARCH_FIBER_NAME],
     ];
 
     for (const [name, lane] of cases) {
@@ -72,36 +49,6 @@ describe('every recovered lane leaves a carrier, or drops on purpose', () => {
       expect(verdict.status).toBe('completed');
       expect(scene.redriven).toEqual([lane]);
     }
-  });
-
-  test('the advisor lane redrives an unreviewed turn and refuses to double a note', () => {
-    const snapshot: JsonValue = {
-      turn: {
-        userMessage: 'do the thing', assistantResponse: 'done', toolCalls: [],
-        steps: 1, durationMs: 5, feedback: null, hadError: false, turnId: 'turn-9',
-      },
-      reachable: [], minSeverity: 'concern', recent: [],
-    };
-
-    const fresh = recordingTransports();
-    expect(classifyRecoveredFiber(fresh.transports, fiber(ADVISOR_LANE_FIBER, snapshot)).status)
-      .toBe('completed');
-    expect(fresh.redriven).toEqual([ADVISOR_LANE_FIBER]);
-
-    const reviewed = recordingTransports();
-    reviewed.transports = { ...reviewed.transports, hasAdvisorNoteForTurn: () => true };
-    const verdict = classifyRecoveredFiber(reviewed.transports, fiber(ADVISOR_LANE_FIBER, snapshot));
-    // The work already landed; the note row is the durable evidence.
-    expect(verdict.status).toBe('completed');
-    expect(reviewed.redriven).toEqual([]);
-  });
-
-  test('the search lane writes its audit row synchronously beside the carrier', () => {
-    const scene = recordingTransports();
-    classifyRecoveredFiber(scene.transports, fiber(SEARCH_FIBER_NAME, { iteration: 3 }));
-    expect(scene.auditRows).toBe(1);
-    expect(scene.redriven).toEqual([SEARCH_FIBER_NAME]);
-    expect(scene.writes[0]?.[0]).toBe(scene.transports.actor.actorId);
   });
 
   test('the MCP warm lane drops on purpose: the next settled turn warms again', () => {

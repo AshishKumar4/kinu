@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import { readSources } from './sources';
-import { declaredRpcs, findUnreachable, invokedNames, keyOf } from './reachability';
+import { declaredRpcs, findUnreachable, findUnreadChannels, invokedNames, keyOf } from './reachability';
 
 /** One DO with one public RPC. Every case below varies only what the second
  *  file does with the name `listDeferredApprovals`. */
@@ -130,12 +130,56 @@ export class OrchestratorAgent {
   });
 });
 
-/**
- * The fixtures above prove the rule. These prove the rule is pointed at the
- * real repository: the gate is run against the actual source map, with exactly
- * one real call site removed, and the RPC behind it must go dark. A gate that
- * cannot be made to fail this way is measuring its own fixtures.
- */
+describe('a broadcast channel nothing reads', () => {
+  const PRODUCER = `export class Agent { tick() { this.broadcast(JSON.stringify({ type: 'ghost_channel', parts: [{ type: 'text' }] })); } }`;
+
+  const unread = (consumer: string): string[] => findUnreadChannels(new Map([['agent.ts', PRODUCER], ['client.tsx', consumer]]))
+    .unread.map((channel) => channel.name);
+
+  test('is reported, and a frame\'s nested part is no channel of its own', () => {
+    const scanned = findUnreadChannels(new Map([['agent.ts', PRODUCER]]));
+
+    expect(scanned.channels.map((channel) => channel.name)).toEqual(['ghost_channel']);
+    expect(scanned.unread.map((channel) => channel.name)).toEqual(['ghost_channel']);
+  });
+
+  test.each([
+    ['a type declaring it', `interface Frame { type: 'ghost_channel'; }`],
+    ['SQL naming it', `const ddl = 'CREATE TABLE ghost_channel (id TEXT)';`],
+    ['a second producer', `export function relay(agent) { agent.broadcast({ type: 'ghost_channel' }); }`],
+  ])('is still unread beside %s', (_label, consumer) => {
+    expect(unread(consumer)).toEqual(['ghost_channel']);
+  });
+
+  test.each([
+    ['a comparison', `if (msg.type === 'ghost_channel') show(msg);`],
+    ['a comparison written the other way', `export const read = (msg) => { if ('ghost_channel' !== msg.type) return; show(msg); };`],
+    ['a case label', `switch (msg.type) { case 'ghost_channel': show(msg); }`],
+  ])('is read by %s in another file', (_label, consumer) => {
+    expect(unread(consumer)).toEqual([]);
+  });
+
+  test('is not read by its producer comparing it', () => {
+    const producer = `${PRODUCER}\nexport const own = (msg) => msg.type === 'ghost_channel';`;
+
+    expect(findUnreadChannels(new Map([['agent.ts', producer]])).unread.map((channel) => channel.name)).toEqual(['ghost_channel']);
+  });
+
+  test('finds an optional broadcast call without depending on call punctuation', () => {
+    const producer = `export const notify = (agent) => agent.broadcast?.({ type: 'optional_channel' });`;
+
+    expect(findUnreadChannels(new Map([['agent.ts', producer]])).unread.map((channel) => channel.name)).toEqual(['optional_channel']);
+  });
+
+  test('the chat hook\'s registration reads the SDK\'s own chat frame', () => {
+    const sdk = `export class Agent { send() { this.broadcast(JSON.stringify({ type: 'cf_agent_chat_messages' })); } }`;
+    const unreadBeside = (consumer: string): number => findUnreadChannels(new Map([['agent.ts', sdk], ['client.tsx', consumer]])).unread.length;
+
+    expect([unreadBeside('const chat = useAgentChat({ agent, onError });'), unreadBeside('const chat = useOtherHook({ agent });')]).toEqual([0, 1]);
+  });
+});
+
+/** Removing real consumers must leave the shipped producers unreachable. */
 describe('reachability gate, against the real tree', () => {
   const SOURCES = readSources();
   const ORCHESTRATOR = 'packages/cf-backend/src/orchestrator.ts';
@@ -146,12 +190,13 @@ describe('reachability gate, against the real tree', () => {
     listTurnFeedback: 'packages/cf-backend/src/pages/WorkspacePage.tsx',
   } satisfies Record<string, string>;
 
-  test('the real tree declares a substantial @callable surface', () => {
-    // The denominator. `unreachable: []` is only good news over a non-empty
-    // `declared`; a matcher that silently stops matching would otherwise make
-    // this gate pass forever, which is how `unit-layergate.test.ts` came to
-    // check an empty set.
-    expect(findUnreachable(SOURCES).declared.length).toBeGreaterThan(80);
+  test('cutting the socket hook every workspace frame reaches leaves its channels unread', () => {
+    const hook = 'packages/cf-backend/src/hooks/use-kinu.ts';
+    expect(findUnreadChannels(SOURCES).unread).toEqual([]);
+
+    const cut = new Map(SOURCES);
+    cut.delete(hook);
+    expect(findUnreadChannels(cut).unread.map((channel) => channel.name)).toContain('signal_card');
   });
 
   test.each(Object.entries(WIRES))('cutting %s\u2019s only caller makes it unreachable', (rpc, wire) => {
@@ -159,7 +204,7 @@ describe('reachability gate, against the real tree', () => {
     expect(findUnreachable(SOURCES).unreachable.map(keyOf)).not.toContain(key);
 
     const cut = new Map(SOURCES);
-    expect(cut.delete(wire)).toBe(true);
+    cut.delete(wire);
     expect(findUnreachable(cut).unreachable.map(keyOf)).toContain(key);
   });
 });

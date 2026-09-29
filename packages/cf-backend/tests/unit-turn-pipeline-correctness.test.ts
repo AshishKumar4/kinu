@@ -6,20 +6,21 @@ import {
 import {
   MergeOutputSchema, listQueuedShadowTrials, DEFAULT_WORKERS_AI_MODEL_SPEC, DYNAMIC_CONTEXT_OPEN_TAG,
   type ReasoningEffort, type ResolvedTurnProfile,
+  LiveWorkers,
 } from '@kinu.run/core';
 import {
   declareShadowCandidate, hostedExplorationHarness, hostedMainActor, improvementLanesRan,
-  orchestratorHarness, reactivateOrchestratorHarness,
-  chatSessionTurns, tapDiagnostics, until, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles,
+  orchestratorHarness, reactivateOrchestratorHarness, catalogTurn, gatewayWorkspace, GATEWAY_CATALOG,
+  chatSessionTurns, driveUntil, tapDiagnostics, until, type ActorHarness, type HarnessOrchestratorAgent, workspaceFiles,
   workspaceMainActor,
 } from './helpers/actor-harness';
 import { socketConnection } from './helpers/bindings';
-import { answeringGateway, GATEWAY_MODEL } from './helpers/platform-gateway';
+import { answeringGateway, chatCompletion, GATEWAY_MODEL, stubAiBinding } from './helpers/platform-gateway';
 import type { ScriptedAnswer } from './helpers/turn-harness';
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import { createHeadRuntime } from '../src/head-runtime';
 import type { HostedActorSeams } from '../src/hosted-actors';
-import type { ModelMessage, ToolSet, UIMessage } from 'ai';
+import type { ModelMessage, ToolSet } from 'ai';
 import { jsonSchema, streamText, tool } from 'ai';
 import * as v from 'valibot';
 
@@ -271,6 +272,32 @@ describe('turn-pipeline correctness wiring', () => {
     expect(request.success && request.output.model).toBe(agent.getModel());
   });
 
+  test('a model set mid-turn sizes the next request, not the one in flight', async () => {
+    // Each request resolves its model once; the turn in flight keeps the window it was composed with.
+    const other = 'ai-gateway/workers-ai/@cf/harness/other';
+    let switched: Promise<unknown> | null = null;
+
+    const harness = gatewayWorkspace(stubAiBinding((run) => {
+      switched ??= harness.agent.setModel(other);
+
+      return chatCompletion(run, 'Noted.');
+    }));
+
+    harness.agent.harnessInstallCatalog({ ...GATEWAY_CATALOG, availableModels: [GATEWAY_MODEL, other] });
+    harness.agent.harnessCatalogModels({ [GATEWAY_MODEL]: { contextWindow: 100_000 }, [other]: { contextWindow: 200_000 } });
+    await harness.agent.setModel(GATEWAY_MODEL);
+    await catalogTurn(harness.agent, 'Remember the word heron.');
+    await switched;
+    await catalogTurn(harness.agent, 'And the word egret.');
+
+    // The pin's own measure, then the two turns.
+    const windows = harness.db.query<{ window: number }, []>(
+      "SELECT json_extract(payload, '$.contextWindow') AS window FROM run_events WHERE type = 'context_admitted' ORDER BY rowid",
+    ).all();
+
+    expect(windows.map((row) => row.window)).toEqual([100_000, 100_000, 200_000]);
+  });
+
   test("a hosted actor's snapshot reports the effective model and the tier source that chose it", async () => {
     // Defends: the snapshot reported the child's own (never-set) config pin, and (measured 2026-09-18) a
     // workspace pinned to one model answered an added agent's pane on another. The snapshot and the
@@ -338,8 +365,8 @@ describe('turn-pipeline correctness wiring', () => {
     await hostedMainActor(workspace);
     const rootFiles = workspaceFiles(workspace.agent);
     await rootFiles.writeFile('/home/main/shared-proof.md', 'registered workspace bytes');
-    const head = await hostedExplorationHarness(workspace, 'full', 'head-a1');
-    expect(head.actor.record.kind).toBe('run');
+    const head = await hostedExplorationHarness(workspace, 'head-a1');
+    expect(head.actor.record.origin).toBe('swarm');
     const headFiles = head.actor.runtime.storage.vfs;
     expect(await headFiles.readFile('/home/main/shared-proof.md', { encoding: 'utf8' }))
       .toBe('registered workspace bytes');
@@ -441,6 +468,7 @@ describe('turn-pipeline correctness wiring', () => {
 
     const runtime = createHeadRuntime({
       host: noExplorationHost,
+      workers: new LiveWorkers(),
       models: {
         resolveModelWithEffort: (spec, effort) => {
           asked.push({ spec, effort });
@@ -525,54 +553,6 @@ describe('turn-pipeline correctness wiring', () => {
 
     expect(recorded, 'an aborted turn left no evidence row').toHaveLength(1);
     expect(recorded[0].turn).toContain('partial');
-  });
-
-  // Core's `creditedTurnId` decides; this pins that the orchestrator honours it. A completed plan
-  // turn is not an answer the captures competed against, so it purges them (as the CLI does).
-  describe('mid-turn captures are credited to the turn only when it answered', () => {
-    /** Seeds one unclaimed take set inside the turn's window, under this actor (claim and purge are `actor_id`-scoped). */
-    function settleOneTurn(mode: 'plan' | 'build'): ActorHarness<HarnessOrchestratorAgent> {
-      const harness = orchestratorHarness();
-      harness.db.prepare(
-        `INSERT INTO alternate_takes
-           (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id,
-            candidates, created_at)
-         VALUES (?, 'take-1', NULL, NULL, 'pick a strategy', 'mcts', 'win', NULL, ?, ?)`,
-      ).run(
-        workspaceMainActor(harness.db).actorId,
-        JSON.stringify([
-          { nodeId: 'win', text: 'go with approach A', score: 0.9, visits: 3, depth: 1 },
-          { nodeId: 'alt', text: 'go with approach B', score: 0.86, visits: 2, depth: 1 },
-        ]),
-        Date.now() + 1_000,
-      );
-
-      // The roster reads the composer's mode off the driving message.
-      harness.agent.harnessDrivingUserMessage(`${mode} this`, { kinuMode: mode });
-
-      return harness;
-    }
-
-    const settled: UIMessage = {
-      id: 'a-1', role: 'assistant', parts: [{ type: 'text', text: 'the answer' }],
-    };
-
-    test('a completed build turn claims them', async () => {
-      const harness = settleOneTurn('build');
-      await chatSessionTurns(harness.agent).settle({ messageId: settled.id, parts: settled.parts, requestId: 'req-build' });
-      expect(harness.db.query('SELECT turn_id, session_id FROM alternate_takes').get())
-        .toMatchObject({ turn_id: 'a-1', session_id: 'default' });
-    });
-
-    test('a completed PLAN turn purges them', async () => {
-      const harness = settleOneTurn('plan');
-      // Positive control for the absence below: the seeded row did land.
-      expect(harness.db.query('SELECT COUNT(*) AS n FROM alternate_takes').get())
-        .toMatchObject({ n: 1 });
-      await chatSessionTurns(harness.agent).settle({ messageId: settled.id, parts: settled.parts, requestId: 'req-plan' });
-      expect(harness.db.query('SELECT COUNT(*) AS n FROM alternate_takes').get())
-        .toMatchObject({ n: 0 });
-    });
   });
 
   // `onStart`'s sweep re-pends every open lease, so the settle must close a lease for every drain
@@ -869,19 +849,30 @@ describe('improvement_lanes — one verdict gates the improvement lanes', () => 
     return harness;
   }
 
+  const advisors = (harness: ActorHarness<HarnessOrchestratorAgent>) => harness.db.query<{ origin: string; tab: number; input: number; lifetime: string }, []>(
+    "SELECT origin, tab, input, lifetime FROM workspace_actors WHERE name LIKE 'ask-advisor-%'",
+  ).all();
+
+  /** Notes once the lanes ran and every hired advisor's delegated turn has drained. */
   async function settled(harness: ActorHarness<HarnessOrchestratorAgent>, answer: ScriptedAnswer): Promise<number> {
     const { messageId } = await chatSessionTurns(harness.agent).settle(answer);
     await until(() => improvementLanesRan(harness.db, messageId), 'the improvement lanes ran');
 
-    return harness.db.query<{ n: number }, []>(
-      "SELECT COUNT(*) AS n FROM evolution_events WHERE type = 'advisor_note'",
-    ).get()?.n ?? 0;
+    if (advisors(harness).length > 0) await driveUntil(harness, 'the advisor answered', () => notes(harness) > 0);
+
+    return notes(harness);
   }
 
-  test('a completed build turn earns its review', async () => {
+  const notes = (harness: ActorHarness<HarnessOrchestratorAgent>): number => harness.db.query<{ n: number }, []>(
+    "SELECT COUNT(*) AS n FROM evolution_events WHERE type = 'advisor_note'",
+  ).get()?.n ?? 0;
+
+  test('a completed build turn earns its review, from an advisor agent of its own', async () => {
     const harness = advisorHarness();
     await chatSessionTurns(harness.agent).prepare({ messages: [{ role: 'user', content: 'deploy the api' }] });
     expect(await settled(harness, { messageId: 'a-build', text: 'deployed' })).toBe(1);
+    // The reviewer is a background agent, listed with the others: view-only, no tab, one task.
+    expect(advisors(harness)).toEqual([{ origin: 'evolution', tab: 0, input: 0, lifetime: 'task' }]);
   });
 
   test('a FAILED build turn feeds no lane', async () => {

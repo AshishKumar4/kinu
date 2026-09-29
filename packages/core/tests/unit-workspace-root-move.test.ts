@@ -5,41 +5,20 @@
  * Slates are the workspace's, at `/slates`, where every agent makes and changes them; they move there too.
  */
 import { describe, expect, test } from 'bun:test';
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import * as v from 'valibot';
-import { CRED_KERNEL, CRED_SESSION_USER, type SqlDatabase, type SqlRow, type SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
+import { Database } from 'bun:sqlite';
+import { CRED_KERNEL, CRED_SESSION_USER, type SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import {
   SESSION_UID, agentCred, agentIdentity, provisionAgentHome, settleWorkspaceRoot, subordinateAgentName, type RootMoveVfs,
 } from '../src/vfs/agent-home';
 import { createWorkspace, workspaceGenerationStorage } from '../src/vfs/nimbus-workspace';
+import { inlineWorkspaceStorage } from '../src/identity/inline-primitives';
 
 const SOUL = 'I keep this workspace small and proven.\n';
 
-function workspaceSql(database: Database): SqlDatabase {
-  const binding = (value: SqlValue): SQLQueryBindings => {
-    if (value instanceof ArrayBuffer) return new Uint8Array(value);
+const workspaceSql = (database: Database): SqlDatabase => inlineWorkspaceStorage(database).sql;
 
-    if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-
-    return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
-  };
-
-  return {
-    exec(query: string, ...bindings: SqlValue[]) {
-      const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
-
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bindings.map(binding));
-      statement.run(...bindings.map(binding));
-
-      return [];
-    },
-  };
-}
-
-function transactions(database: Database) {
-  return { storage: { transactionSync: <T,>(write: () => T): T => database.transaction(write)() } };
-}
+const transactions = (database: Database) => inlineWorkspaceStorage(database).transactions;
 
 /** The substrate alone, as every workspace ran before the move: its tree lives under `/home/user`. */
 async function substrate(database: Database) {

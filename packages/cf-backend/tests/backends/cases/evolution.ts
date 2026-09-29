@@ -77,7 +77,7 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
 
       if (set === null) throw new Error('two different answers make a take set');
       expect(await surface.latestAlternateTakes()).toMatchObject({
-        id: set.id, source: 'branch', winnerNodeId: `${set.id}-live`, chosenNodeId: null,
+        id: set.id, winnerNodeId: `${set.id}-live`, chosenNodeId: null,
         candidates: [{ text: 'Call it Aurora.', origin: 'live' }, { text: 'Call it Borealis.', origin: 'branch' }],
       });
 

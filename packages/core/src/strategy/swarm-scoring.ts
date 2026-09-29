@@ -224,7 +224,7 @@ async function judgeChild(input: {
     trajectory: input.answer,
     siblings: input.siblings,
     siblingsProducedCode: input.siblingsProducedCode,
-    // Plan mode never invokes the executor, so evaluation is judge-only (as in `mcts/engine.ts`).
+    // Plan mode never invokes the executor, so evaluation is judge-only.
     executionPolicy: input.mode === 'plan' ? ('judge-only' as const) : ('grounded' as const),
     executor: rt.executor,
     explorer: rt.llm,
@@ -396,9 +396,9 @@ export async function scoreExpansion(input: ScoreExpansionInput): Promise<Refusa
     },
   });
   insertSearchNode(sql, rt.actor, {
-    nodeId: expansion.id, parentNodeId: expansion.parentId, parentMsgId: null, rootId,
+    nodeId: expansion.id, parentNodeId: expansion.parentId, rootId,
     task: resolved.task, action: '', observation: expansion.artifact,
-    codeUsed: null, depth: expansion.depth, msgId: null,
+    depth: expansion.depth,
   });
   nodes.set(expansion.id, {
     id: expansion.id, parentId: expansion.parentId, depth: expansion.depth,

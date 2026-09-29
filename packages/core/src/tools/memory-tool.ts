@@ -1,5 +1,6 @@
 /** Durable memory surface: prose notes, keyed facts, and past transcript recall. Also backs `memory.*` in eval. */
 import type { Memory, MemorySearchResult, SqlExecutor } from '../types/primitives';
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import { z } from 'zod';
 import { oneOf } from './tool-schema';
@@ -13,7 +14,7 @@ import { ConversationSearchStore } from '../memory/conversation-search';
 import type { SessionTranscriptReader } from '../session/transcript';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
 import { memoryActionsFor, type MEMORY_FACT_ACTIONS } from './registry';
-import { KinuError, toKinuError, renderThrownChain } from '../obs/index';
+import { KinuError, settle, toKinuError, renderThrownChain } from '../obs/index';
 
 const FactKeySchema = v.pipe(v.string(), v.nonEmpty());
 
@@ -125,57 +126,52 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
   // Mode: around_message_id -> scroll, query -> search, neither -> browse.
   const conversationSearch = new ConversationSearchStore(deps.sql, deps.actor, deps.transcriptFor);
 
-  const runConversationsAction = async (args: MemoryToolInput): Promise<JsonValue> => {
-    try {
-      if (args.around_message_id) {
-        const view = await conversationSearch.scroll(args.around_message_id, args.window ?? 5, args.max_chars);
+  const runConversationsAction = (args: MemoryToolInput): Effect.Effect<JsonValue, KinuError> => Effect.gen(function* () {
+    const around = args.around_message_id;
 
-        if (!view) throw new KinuError('missing', 'no message with id ' + args.around_message_id);
+    if (around) {
+      const view = yield* guardedSearch(() => conversationSearch.scroll(around, args.window ?? 5, args.max_chars));
 
-        return decodeJsonValue({ value: { mode: 'scroll', ...view } });
-      }
+      if (!view) return yield* new KinuError('missing', 'no message with id ' + around);
 
-      if (args.query?.trim()) {
-        const hits = await conversationSearch.search(args.query, args.limit ?? 5);
-
-        return decodeJsonValue({ value: {
-          mode: 'search', query: args.query, hits,
-          hint: hits.length > 0
-            ? 'Pass a hit\'s messageId as around_message_id to read the surrounding window.'
-            : 'No matches. Multi-word queries require all terms; try fewer or different keywords.',
-        } });
-      }
-
-      return decodeJsonValue({
-        value: { mode: 'browse', conversations: await conversationSearch.browse(args.limit ?? 10) },
-      });
-    } catch (err) {
-      if (err instanceof KinuError) throw err;
-      const failure = toKinuError({ doing: 'conversation search unavailable', cause: err, otherwise: 'unavailable' });
-      failure.message = renderThrownChain({ cause: failure });
-      throw failure;
+      return yield* guardedSearch(() => decodeJsonValue({ value: { mode: 'scroll', ...view } }));
     }
-  };
+
+    const query = args.query;
+
+    if (query?.trim()) {
+      const hits = yield* guardedSearch(() => conversationSearch.search(query, args.limit ?? 5));
+
+      return yield* guardedSearch(() => decodeJsonValue({ value: {
+        mode: 'search', query, hits,
+        hint: hits.length > 0
+          ? 'Pass a hit\'s messageId as around_message_id to read the surrounding window.'
+          : 'No matches. Multi-word queries require all terms; try fewer or different keywords.',
+      } }));
+    }
+
+    const conversations = yield* guardedSearch(() => conversationSearch.browse(args.limit ?? 10));
+
+    return yield* guardedSearch(() => decodeJsonValue({ value: { mode: 'browse', conversations } }));
+  });
 
   const runFactAction = (
     action: (typeof MEMORY_FACT_ACTIONS)[number],
     args: MemoryToolInput,
-  ): JsonValue => {
-    if (!facts) throw new KinuError('unsupported', 'the keyed-fact actions are not available on this runtime');
+  ): Effect.Effect<JsonValue, KinuError> => Effect.gen(function* () {
+    if (!facts) return yield* new KinuError('unsupported', 'the keyed-fact actions are not available on this runtime');
     const key = v.safeParse(FactKeySchema, args.key);
 
-    if (!key.success) {
-      throw new KinuError('bad_input', 'key must be a non-empty string');
-    }
+    if (!key.success) return yield* new KinuError('bad_input', 'key must be a non-empty string');
 
     // Answers must echo the store's normalized spelling of the key.
     const storedKey = normalizeFactKey(key.output);
 
     if (action === 'remember') {
-      let value: JsonValue;
-
-      try { value = decodeJsonValue({ value: args.value }); }
-      catch (error) { throw new KinuError('bad_input', 'value not JSON-serializable', { cause: error }); }
+      const value = yield* Effect.try({
+        try: () => decodeJsonValue({ value: args.value }),
+        catch: (cause) => new KinuError('bad_input', 'value not JSON-serializable', { cause }),
+      });
 
       facts.upsert(storedKey, value, { confidence: args.confidence });
 
@@ -197,18 +193,26 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
     facts.forget(storedKey);
 
     return { ok: true, key: storedKey, existed };
-  };
+  });
 
-  return async (args: MemoryToolInput): Promise<JsonValue> => {
+  const dispatch = (args: MemoryToolInput): Effect.Effect<JsonValue, KinuError> => {
     switch (args.action) {
-      case 'save':
-        if (!args.content) throw new KinuError('bad_input', 'memory.save requires `content`.');
+      case 'save': {
+        const content = args.content;
 
-        return appendMemoryNote(memory, args.content, { by: deps.actor.name });
-      case 'search':
-        if (!args.query) throw new KinuError('bad_input', 'memory.search requires `query`.');
+        return content
+          ? Effect.promise(() => appendMemoryNote(memory, content, { by: deps.actor.name }))
+          : Effect.fail(new KinuError('bad_input', 'memory.save requires `content`.'));
+      }
 
-        return searchMemory(args.query);
+      case 'search': {
+        const query = args.query;
+
+        return query
+          ? Effect.promise(() => searchMemory(query))
+          : Effect.fail(new KinuError('bad_input', 'memory.search requires `query`.'));
+      }
+
       case 'conversations':
         return runConversationsAction(args);
       case 'remember':
@@ -217,4 +221,19 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
         return runFactAction(args.action, args);
     }
   };
+
+  return (args: MemoryToolInput): Promise<JsonValue> => settle(dispatch(args));
+}
+
+function guardedSearch<A>(run: () => A | Promise<A>): Effect.Effect<A, KinuError> {
+  return Effect.tryPromise({
+    try: () => Promise.resolve(run()),
+    catch: (cause) => {
+      if (cause instanceof KinuError) return cause;
+      const failure = toKinuError({ doing: 'conversation search unavailable', cause, otherwise: 'unavailable' });
+      failure.message = renderThrownChain({ cause: failure });
+
+      return failure;
+    },
+  });
 }

@@ -20,7 +20,7 @@ async function seedSource(src: TestWorkspace): Promise<ForkConversation> {
     craftedTools: [{ name: 'helper', description: 'utility', code: 'async (x) => x + 1' }],
   });
 
-  await chat.say({ id: 'm1', role: 'user', text: 'hello', parentId: null });
+  await chat.say({ id: 'm1', role: 'user', text: 'hello' });
   await chat.say({ id: 'm2', role: 'assistant', text: 'hi there' });
   // Past the cut below, and so never carried.
   await chat.say({ id: 'm3', role: 'user', text: 'post-fork-point' });
@@ -69,7 +69,7 @@ describe('fork pipeline (end-to-end)', () => {
     expect(config.get('display_name')).toBe('my-fork');
   });
 
-  test('the marker the round trip lands is parented on the cut and names the source', async () => {
+  test('the marker the round trip lands follows the cut and names the source', async () => {
     const src = fresh();
     const tgt = fresh();
     await seedForkTarget(tgt, { workspaceId: 'FORK-DO-ID' });
@@ -77,11 +77,11 @@ describe('fork pipeline (end-to-end)', () => {
 
     const landed = await streamFork(src, tgt, TARGET, { untilMessageId: 'm2' });
 
-    const marker = tgt.sql<{ id: string; parent_id: string | null; recorded_at: number }>`
-      SELECT id, parent_id, recorded_at FROM conversation_entries WHERE role = 'system'`;
+    const marker = tgt.sql<{ id: string; position: number; recorded_at: number }>`
+      SELECT id, position, recorded_at FROM conversation_entries WHERE role = 'system'`;
 
     expect(marker).toHaveLength(1);
-    expect(marker[0]?.parent_id).toBe('m2');
+    expect(marker[0]?.position).toBe(2);
     expect(marker[0]?.recorded_at).toBe(landed.forkPointMs + 1);
     const chain = await readChain(tgt);
     expect(chain.text[chain.text.length - 1]).toContain('forked from workspace');
@@ -92,7 +92,7 @@ describe('fork pipeline (end-to-end)', () => {
     const src = fresh();
     const tgt = fresh();
     const chat = await seedForkSource(src, { workspaceId: 'S', workspaceName: 's', memory: [] });
-    await chat.say({ id: 'm1', role: 'user', text: 'hi', parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: 'hi' });
 
     await expect(streamFork(src, tgt, {
       workspaceId: 'F', workspaceName: 'empty-fork', artifactDirectory: TARGET_ARTIFACTS, now: 7000,
@@ -108,7 +108,7 @@ describe('fork pipeline (end-to-end)', () => {
     await seedForkTarget(tgt, { workspaceId: 'FORK-DO-ID' });
     const chat = await seedForkSource(src, { workspaceId: 'SRC-1', workspaceName: 'source-agent' });
     const spilled = 's'.repeat(SPILLED_BYTES);
-    await chat.say({ id: 'm1', role: 'user', text: spilled, parentId: null });
+    await chat.say({ id: 'm1', role: 'user', text: spilled });
 
     const frames = await sourceFrames(src, 'm1');
     const { artifacts } = reassemble(frames);

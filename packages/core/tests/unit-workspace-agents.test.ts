@@ -13,6 +13,7 @@ import { SubordinateRosterStore } from '../src/subordinates/roster';
 import { actorReferenceOf, type ActorHandle } from '../src/identity/actor-handle';
 import type { SubordinateRosterEntry } from '../src/delegation/agents-tool';
 import { agentActive, readWorkspaceAgents, type PanelAgent } from '../src/read-models/workspace-agents';
+import { OWNER_STOPPED } from '../src/heads/types';
 
 function workspace() {
   const db = new Database(':memory:');
@@ -28,11 +29,12 @@ function workspace() {
   new SubordinateRosterStore(exec, actors.main).ensureSchema();
 
   const hire = (parent: ActorHandle, name: string, entry: Partial<SubordinateRosterEntry>): ActorHandle => {
-    const child = actors.directory.create({ parent, name, kind: 'subordinate', lifetime: 'durable', creationId: name });
+    const { origin = 'agent', lifetime = 'durable', ...rest } = entry;
+    const child = actors.directory.create({ parent, name, origin, lifetime, creationId: name });
 
     new SubordinateRosterStore(exec, parent).create({
-      name, actorReference: actorReferenceOf(child), birth: null, deleteRequested: false, createdBy: 'orchestrator',
-      status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null, ...entry,
+      name, actorReference: actorReferenceOf(child), birth: null, deleteRequested: false,
+      status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime, taskEventId: null, ...rest,
     });
 
     return child;
@@ -57,9 +59,9 @@ const row = ({ label, category, activity, parent, tab, input, open }: PanelAgent
 describe('the Agents panel lists every agent in the workspace', () => {
   test('the owner\'s own, one an agent hired, and a background helper, each placed as the design says', () => {
     const { db, main, hire, read, openTurn } = workspace();
-    const alice = hire(main, 'alice', { createdBy: 'user' });
+    const alice = hire(main, 'alice', { origin: 'user' });
     openTurn(hire(alice, 'scout-1', {}));
-    hire(main, 'refiner-1', { createdBy: 'evolution', lifetime: 'task' });
+    hire(main, 'refiner-1', { origin: 'evolution', lifetime: 'task' });
     openTurn(hire(main, 'lookup-1', { lifetime: 'task' }));
     db.query('UPDATE workspace_actors SET created_at = 0 WHERE name = ?').run('scout-1');
 
@@ -91,9 +93,27 @@ describe('the Agents panel lists every agent in the workspace', () => {
     expect(read().filter(agentActive).map((agent) => agent.label)).toEqual(['Try the PEG parser']);
   });
 
+  test('only a worker its owner stopped reads stopped; one cut off with its search or that errored reads failed', () => {
+    const { db, main, read } = workspace();
+    db.query('INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES (?, ?, ?, ?)').run(main.actorId, 'run-1', 'compare two parsers', 10);
+
+    const head = db.query(`INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, error_message, spawned_at, merge_strategy)
+      VALUES (?, ?, NULL, 'run-1', 0, ?, 'r', ?, ?, ?, 'synthesize')`);
+
+    head.run(main.actorId, 'h-a', 'Try the PEG parser', 'aborted', OWNER_STOPPED, 11);
+    head.run(main.actorId, 'h-b', 'Try the Pratt parser', 'aborted', 'the search was aborted', 12);
+    head.run(main.actorId, 'h-c', 'Try a hand-written parser', 'errored', 'the model refused', 13);
+
+    expect(read().filter((agent) => agent.category === 'swarm').map((agent) => [agent.label, agent.activity])).toEqual([
+      ['Try the PEG parser', 'stopped'],
+      ['Try the Pratt parser', 'failed'],
+      ['Try a hand-written parser', 'failed'],
+    ]);
+  });
+
   test('an agent is working while it holds an open turn, whatever its roster row last said', () => {
     const { db, main, hire, read, openTurn } = workspace();
-    const chatting = hire(main, 'chatting', { createdBy: 'user', status: 'idle' });
+    const chatting = hire(main, 'chatting', { origin: 'user', status: 'idle' });
     openTurn(chatting);
 
     expect(read().find((agent) => agent.label === 'chatting')?.activity).toBe('working');

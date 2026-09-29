@@ -46,7 +46,7 @@ def Direction.flip : Direction → Direction
 
 /-- `packages/core/src/strategy/objective.ts#isBetter`. STRICTLY better: a tie does not displace, because a
     tie carries no signal and `ORDER BY value DESC` over equal values is row
-    order (`packages/core/src/mcts/convergence.ts#converge` is the live precedent). -/
+    order. -/
 def isBetter (cand inc : Int) : Direction → Bool
   | .minimise => cand < inc
   | .maximise => inc < cand

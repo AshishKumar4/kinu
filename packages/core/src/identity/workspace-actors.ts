@@ -1,5 +1,7 @@
+import { Effect } from 'effect';
 import * as v from 'valibot';
 import { KinuError } from '../obs/error';
+import { settle } from '../obs/effect';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { ActorReferenceSchema, bindActorHandle, type ActorHandle, type ActorReference } from './actor-handle';
 import { tableExists } from './schema';
@@ -10,19 +12,54 @@ export interface WorkspaceActorAuthority {
   readonly ownerUserId: string | null;
 }
 
-/** A run actor lives one run; a toolless one has no tools or home. */
-const TOOL_PROFILES = ['full', 'toolless'] as const;
+/** Who made an agent, which decides its preset: `system` is main, `swarm` a swarm worker, `evolution` a background agent. */
+const ACTOR_ORIGINS = ['system', 'user', 'agent', 'swarm', 'evolution'] as const;
 
-export interface WorkspaceActor {
+export type ActorOrigin = (typeof ACTOR_ORIGINS)[number];
+
+/** What an agent is, stored on its row; its preset is the default for its origin, and the table's CHECKs hold it. */
+export interface ActorProfile {
+  readonly origin: ActorOrigin;
+  /** A chat tab on the nav bar. */
+  readonly tab: boolean;
+  /** The owner may send it messages; false is view-only. */
+  readonly input: boolean;
+  readonly lifetime: 'durable' | 'task';
+  /** Its turns feed the evolution window. */
+  readonly evolves: boolean;
+}
+
+/** A hired agent: a chat of its own, reached by name through the roster. */
+export function isSubordinateOrigin(origin: ActorOrigin): origin is 'user' | 'agent' | 'evolution' {
+  return origin === 'user' || origin === 'agent' || origin === 'evolution';
+}
+
+/** The preset for a child made with `origin`; only an agent-made hire chooses its lifetime. */
+function actorPreset(origin: Exclude<ActorOrigin, 'system'>, lifetime: ActorProfile['lifetime']): ActorProfile {
+  switch (origin) {
+    case 'user': return { origin, tab: true, input: true, lifetime: 'durable', evolves: false };
+    case 'agent': return { origin, tab: false, input: true, lifetime, evolves: false };
+    case 'swarm':
+    case 'evolution': return { origin, tab: false, input: false, lifetime: 'task', evolves: false };
+  }
+}
+
+/** The `kinu.actor_kind` span value, unchanged from before origins, so traces and dashboards keep their keys. */
+export function tracedActorKind(origin: ActorOrigin): 'main' | 'subordinate' | 'run' {
+  if (origin === 'system') return 'main';
+
+  return origin === 'swarm' ? 'run' : 'subordinate';
+}
+
+const MAIN_PROFILE: ActorProfile = { origin: 'system', tab: true, input: true, lifetime: 'durable', evolves: true };
+
+export interface WorkspaceActor extends ActorProfile {
   readonly actorId: string;
   readonly workspaceId: string;
   readonly parentActorId: string | null;
   readonly name: string;
   readonly storageKey: string;
-  readonly kind: 'main' | 'subordinate' | 'run';
-  readonly toolProfile: (typeof TOOL_PROFILES)[number];
   readonly creationId: string;
-  readonly lifetime: 'durable' | 'task';
   readonly createdAt: number;
   readonly retiringAt: number | null;
   readonly deletedAt: number | null;
@@ -32,21 +69,15 @@ export interface CreateWorkspaceActor {
   readonly parent: ActorHandle;
   readonly name: string;
   readonly creationId: string;
-  readonly kind: Exclude<WorkspaceActor['kind'], 'main'>;
-  readonly toolProfile?: WorkspaceActor['toolProfile'];
+  readonly origin: Exclude<ActorOrigin, 'system'>;
   readonly lifetime: WorkspaceActor['lifetime'];
 }
 
 const CreationFields = { creationId: v.pipe(v.string(), v.nonEmpty()), name: v.pipe(v.string(), v.nonEmpty()), lifetime: v.picklist(['durable', 'task']) };
 
-const CreatedKinds = [
-  { kind: v.literal('subordinate'), toolProfile: v.optional(v.literal('full')) },
-  { kind: v.literal('run'), toolProfile: v.optional(v.picklist(TOOL_PROFILES)) },
-] as const;
-
 export const ChildActorOperationSchema = v.union([
-  ...CreatedKinds.map((created) => v.strictObject({ action: v.literal('register'), ...CreationFields, ...created })),
-  ...CreatedKinds.map((created) => v.strictObject({ action: v.literal('cancelCreation'), ...CreationFields, ...created })),
+  v.strictObject({ action: v.literal('register'), ...CreationFields, origin: v.picklist(['user', 'agent', 'swarm', 'evolution']) }),
+  v.strictObject({ action: v.literal('cancelCreation'), ...CreationFields, origin: v.picklist(['user', 'agent', 'swarm', 'evolution']) }),
   v.strictObject({ action: v.literal('resolve'), name: v.pipe(v.string(), v.nonEmpty()) }),
   v.strictObject({ action: v.literal('resolveStorage'), storageKey: v.pipe(v.string(), v.nonEmpty()) }),
   v.strictObject({ action: v.literal('resolveCreation'), creationId: v.pipe(v.string(), v.nonEmpty()) }),
@@ -58,8 +89,7 @@ export type ChildActorOperation = v.InferOutput<typeof ChildActorOperationSchema
 export interface ActorDirectoryResult {
   readonly reference: ActorReference;
   readonly state: 'active' | 'retiring' | 'deleted';
-  readonly kind: WorkspaceActor['kind'];
-  readonly toolProfile: WorkspaceActor['toolProfile'];
+  readonly origin: ActorOrigin;
   readonly lifetime: WorkspaceActor['lifetime'];
   readonly creationId: string;
   readonly createdAt: number;
@@ -73,20 +103,25 @@ export function initWorkspaceActorTable(execRaw: RawSqlExec): void {
     parent_actor_id TEXT REFERENCES workspace_actors(actor_id),
     name TEXT NOT NULL,
     storage_key TEXT NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('main','subordinate','run')),
-    tool_profile TEXT NOT NULL CHECK (tool_profile IN ('full','toolless')),
+    origin TEXT NOT NULL CHECK (origin IN ('system','user','agent','swarm','evolution')),
+    tab INTEGER NOT NULL CHECK (tab IN (0,1)),
+    input INTEGER NOT NULL CHECK (input IN (0,1)),
     lifetime TEXT NOT NULL CHECK (lifetime IN ('durable','task')),
+    evolves INTEGER NOT NULL CHECK (evolves IN (0,1)),
     created_at INTEGER NOT NULL,
     creation_id TEXT NOT NULL,
     retiring_at INTEGER,
     deleted_at INTEGER,
     UNIQUE (parent_actor_id, creation_id),
     UNIQUE (parent_actor_id, storage_key),
-    CHECK ((kind = 'main' AND parent_actor_id IS NULL) OR (kind != 'main' AND parent_actor_id IS NOT NULL)),
-    CHECK (kind = 'run' OR tool_profile = 'full')
+    CHECK ((origin = 'system') = (parent_actor_id IS NULL)),
+    CHECK (evolves = 0 OR origin = 'system'),
+    CHECK (tab = 0 OR origin IN ('system','user')),
+    CHECK (origin NOT IN ('swarm','evolution') OR (input = 0 AND lifetime = 'task')),
+    CHECK (origin IN ('swarm','evolution') OR input = 1)
   )`);
   execRaw(`CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_actors_main
-    ON workspace_actors(kind) WHERE kind = 'main'`);
+    ON workspace_actors(origin) WHERE origin = 'system'`);
   execRaw(`CREATE UNIQUE INDEX IF NOT EXISTS idx_workspace_actors_names
     ON workspace_actors(parent_actor_id, name) WHERE deleted_at IS NULL`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_workspace_actors_parent
@@ -99,10 +134,16 @@ function requiredIdentity(value: string): string {
   return value;
 }
 
-function mayCreate(owner: WorkspaceActor, child: { readonly kind: WorkspaceActor['kind']; readonly toolProfile?: WorkspaceActor['toolProfile'] }): boolean {
-  if (owner.kind !== 'run') return true;
+function mayCreate(owner: WorkspaceActor, child: { readonly origin: ActorOrigin }): boolean {
+  return owner.origin !== 'swarm' || child.origin === 'swarm';
+}
 
-  return owner.toolProfile === 'full' && child.kind === 'run' && child.toolProfile !== 'toolless';
+/** Booleans as SQLite stores them. */
+type StoredActorRow = Omit<WorkspaceActor, 'workspaceId' | 'tab' | 'input' | 'evolves'> & { tab: number; input: number; evolves: number };
+
+function sameProfile(row: ActorProfile, profile: ActorProfile): boolean {
+  return row.origin === profile.origin && row.tab === profile.tab && row.input === profile.input
+    && row.lifetime === profile.lifetime && row.evolves === profile.evolves;
 }
 
 /** Deletion outranks retirement. */
@@ -134,11 +175,11 @@ export class WorkspaceActorDirectory {
 
   /** The row in any lifecycle state, or null. Issues no handle, so reading a retained actor cannot start it. */
   retained(actorId: string): WorkspaceActor | null {
-    const row = this.sql<Omit<WorkspaceActor, 'workspaceId'>>`SELECT actor_id AS actorId,
-      parent_actor_id AS parentActorId, name, storage_key AS storageKey, kind, tool_profile AS toolProfile, lifetime, created_at AS createdAt, creation_id AS creationId, retiring_at AS retiringAt, deleted_at AS deletedAt
+    const row = this.sql<StoredActorRow>`SELECT actor_id AS actorId,
+      parent_actor_id AS parentActorId, name, storage_key AS storageKey, origin, tab, input, lifetime, evolves, created_at AS createdAt, creation_id AS creationId, retiring_at AS retiringAt, deleted_at AS deletedAt
       FROM workspace_actors WHERE actor_id = ${actorId}`[0];
 
-    return row === undefined ? null : { ...row, workspaceId: this.authority.workspaceId };
+    return row === undefined ? null : this.actorOf(row);
   }
 
   /** `also` runs after the directory's own checks and can only refuse further, never authorise. */
@@ -172,15 +213,19 @@ export class WorkspaceActorDirectory {
 
   /** Oldest first, main included. */
   list(options?: { readonly retired?: boolean }): readonly WorkspaceActor[] {
-    return this.sql<Omit<WorkspaceActor, 'workspaceId'>>`SELECT actor_id AS actorId,
-      parent_actor_id AS parentActorId, name, storage_key AS storageKey, kind, tool_profile AS toolProfile, lifetime, created_at AS createdAt, creation_id AS creationId, retiring_at AS retiringAt, deleted_at AS deletedAt
+    return this.sql<StoredActorRow>`SELECT actor_id AS actorId,
+      parent_actor_id AS parentActorId, name, storage_key AS storageKey, origin, tab, input, lifetime, evolves, created_at AS createdAt, creation_id AS creationId, retiring_at AS retiringAt, deleted_at AS deletedAt
       FROM workspace_actors WHERE ${options?.retired === true ? 1 : 0} = 1 OR (deleted_at IS NULL AND retiring_at IS NULL)
-      ORDER BY created_at, actor_id`.map((row) => ({ ...row, workspaceId: this.authority.workspaceId }));
+      ORDER BY created_at, actor_id`.map((row) => this.actorOf(row));
+  }
+
+  private actorOf(row: StoredActorRow): WorkspaceActor {
+    return { ...row, tab: row.tab === 1, input: row.input === 1, evolves: row.evolves === 1, workspaceId: this.authority.workspaceId };
   }
 
   main(): ActorHandle {
     const row = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
-      WHERE kind = 'main' AND deleted_at IS NULL`[0];
+      WHERE origin = 'system' AND deleted_at IS NULL`[0];
 
     if (!row) throw new KinuError('missing', 'The workspace has no registered main actor.');
 
@@ -191,7 +236,7 @@ export class WorkspaceActorDirectory {
     const name = requiredIdentity(input.name);
 
     const current = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
-      WHERE kind = 'main'`[0];
+      WHERE origin = 'system'`[0];
 
     if (current) {
       const row = this.retained(current.actor_id);
@@ -202,8 +247,7 @@ export class WorkspaceActorDirectory {
     }
 
     const actorId = crypto.randomUUID();
-    void this.sql`INSERT INTO workspace_actors (actor_id, parent_actor_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id)
-      VALUES (${actorId}, NULL, ${name}, ${name}, 'main', 'full', 'durable', ${Date.now()}, ${this.authority.workspaceId})`;
+    this.insert({ actorId, parentActorId: null, name, storageKey: name, profile: MAIN_PROFILE, creationId: this.authority.workspaceId, ended: null });
     const row = this.retained(actorId);
 
     if (!row) throw new KinuError('io', 'The main actor was not recorded.');
@@ -216,7 +260,7 @@ export class WorkspaceActorDirectory {
     const creationId = requiredIdentity(input.creationId);
     const name = requiredIdentity(input.name);
 
-    if (input.kind === 'subordinate') requireSubordinateActorName(name);
+    if (input.origin !== 'swarm') requireSubordinateActorName(name);
     else if (!isExplorationActorKey(name)) throw new KinuError('bad_input', 'Exploration actor names must use the exploration address space.');
 
     const prior = this.sql<{ actor_id: string }>`SELECT actor_id FROM workspace_actors
@@ -227,15 +271,14 @@ export class WorkspaceActorDirectory {
 
       if (!existing || existing.retiringAt !== null || existing.deletedAt !== null) throw new KinuError('missing', 'The admitted actor creation is retired.');
 
-      if (existing.name !== name || existing.kind !== input.kind || existing.toolProfile !== (input.toolProfile ?? 'full') || existing.lifetime !== input.lifetime) throw new KinuError('denied', 'The admitted actor creation cannot change its name, kind or lifetime.');
+      if (existing.name !== name || !sameProfile(existing, actorPreset(input.origin, input.lifetime))) throw new KinuError('denied', 'The admitted actor creation cannot change its name or profile.');
 
       return this.issue(existing);
     }
 
     if (this.childRow(parent.actorId, name)) throw new KinuError('denied', 'The sibling name already exists.');
     const actorId = crypto.randomUUID();
-    void this.sql`INSERT INTO workspace_actors (actor_id, parent_actor_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id)
-      VALUES (${actorId}, ${parent.actorId}, ${name}, ${actorId}, ${input.kind}, ${input.toolProfile ?? 'full'}, ${input.lifetime}, ${Date.now()}, ${creationId})`;
+    this.insert({ actorId, parentActorId: parent.actorId, name, storageKey: actorId, profile: actorPreset(input.origin, input.lifetime), creationId, ended: null });
     const row = this.retained(actorId);
 
     if (!row) throw new KinuError('io', 'The child actor was not recorded.');
@@ -299,7 +342,7 @@ export class WorkspaceActorDirectory {
 
       if (!row) throw new KinuError('missing', 'The actor creation record disappeared.');
 
-      if (row.name !== input.name || row.kind !== input.kind || row.toolProfile !== (input.toolProfile ?? 'full') || row.lifetime !== input.lifetime) throw new KinuError('denied', 'The cancellation does not match the admitted creation.');
+      if (row.name !== input.name || !sameProfile(row, actorPreset(input.origin, input.lifetime))) throw new KinuError('denied', 'The cancellation does not match the admitted creation.');
 
       if (row.retiringAt === null && row.deletedAt === null) this.transitionRetirement(row.actorId, 'retire');
       const updated = this.retained(row.actorId);
@@ -310,15 +353,31 @@ export class WorkspaceActorDirectory {
     }
 
     const actorId = crypto.randomUUID();
-    const now = Date.now();
-    void this.sql`INSERT INTO workspace_actors (actor_id, parent_actor_id, name, storage_key, kind, tool_profile, lifetime, created_at, creation_id, retiring_at, deleted_at)
-      VALUES (${actorId}, ${parent.actorId}, ${input.name}, ${actorId}, ${input.kind}, ${input.toolProfile ?? 'full'}, ${input.lifetime}, ${now}, ${input.creationId}, ${now}, ${now})`;
+
+    this.insert({
+      actorId, parentActorId: parent.actorId, name: input.name, storageKey: actorId,
+      profile: actorPreset(input.origin, input.lifetime), creationId: input.creationId, ended: Date.now(),
+    });
     const row = this.retained(actorId);
 
     if (!row) throw new KinuError('io', 'The cancelled creation was not recorded.');
 
     return row;
   }
+  /** `ended` stamps a creation that is retired and released as it is recorded. */
+  private insert(row: {
+    readonly actorId: string; readonly parentActorId: string | null; readonly name: string; readonly storageKey: string;
+    readonly profile: ActorProfile; readonly creationId: string; readonly ended: number | null;
+  }): void {
+    const { profile } = row;
+
+    void this.sql`INSERT INTO workspace_actors
+      (actor_id, parent_actor_id, name, storage_key, origin, tab, input, lifetime, evolves, created_at, creation_id, retiring_at, deleted_at)
+      VALUES (${row.actorId}, ${row.parentActorId}, ${row.name}, ${row.storageKey}, ${profile.origin}, ${profile.tab ? 1 : 0},
+        ${profile.input ? 1 : 0}, ${profile.lifetime}, ${profile.evolves ? 1 : 0}, ${row.ended ?? Date.now()}, ${row.creationId},
+        ${row.ended}, ${row.ended})`;
+  }
+
   apply(caller: ActorReference, path: readonly string[], operation: ChildActorOperation): ActorDirectoryResult {
     const parent = this.validate(caller, path);
     const parsed = v.safeParse(ChildActorOperationSchema, operation);
@@ -331,12 +390,10 @@ export class WorkspaceActorDirectory {
       const owner = this.describe(parent);
 
       if (!mayCreate(owner, input)) {
-        throw new KinuError('denied', 'This actor kind cannot create the requested child kind.');
+        throw new KinuError('denied', 'This agent cannot create the requested kind of child.');
       }
 
-      if (input.kind !== 'subordinate' && input.lifetime !== 'task') throw new KinuError('bad_input', 'Exploration actors have task lifetime.');
-
-      const creation = { parent, name: input.name, kind: input.kind, toolProfile: input.toolProfile, lifetime: input.lifetime, creationId: input.creationId };
+      const creation = { parent, name: input.name, origin: input.origin, lifetime: input.lifetime, creationId: input.creationId };
       child = input.action === 'register' ? this.describe(this.create(creation)) : this.cancelCreation(creation);
     } else if (input.action === 'resolve') {
       const existing = this.childRow(parent.actorId, input.name);
@@ -390,7 +447,7 @@ export class WorkspaceActorDirectory {
     return {
       reference: { actorId: child.actorId, workspaceId: child.workspaceId, parentActorId: child.parentActorId },
       state: actorState(child),
-      kind: child.kind, toolProfile: child.toolProfile, lifetime: child.lifetime, creationId: child.creationId, createdAt: child.createdAt, name: child.name, storageKey: child.storageKey,
+      origin: child.origin, lifetime: child.lifetime, creationId: child.creationId, createdAt: child.createdAt, name: child.name, storageKey: child.storageKey,
     };
   }
 
@@ -451,7 +508,7 @@ export function subordinateDescendants(actors: readonly WorkspaceActor[], actorI
 
   const visit = (parentId: string): void => {
     for (const actor of actors) {
-      if (actor.kind !== 'subordinate' || actor.parentActorId !== parentId) continue;
+      if (!isSubordinateOrigin(actor.origin) || actor.parentActorId !== parentId) continue;
       visit(actor.actorId);
       below.push(actor);
     }
@@ -467,10 +524,19 @@ export function actorStateRoot(storageKey: string): string {
 }
 
 /** In core so both backends agree: on the shared plane the path is all that separates actors' programs. */
-export function actorScaffoldPath(record: Pick<WorkspaceActor, 'kind' | 'storageKey'>): string {
-  if (record.kind === 'main') return 'scaffold/agent.js';
+export function actorScaffoldPath(record: Pick<WorkspaceActor, 'origin' | 'storageKey'>): string {
+  if (record.origin === 'system') return 'scaffold/agent.js';
 
   return `${actorStateRoot(record.storageKey)}/scaffold/agent.js`;
+}
+
+/** Runs `send` only if the owner may message `actorId`: a view-only agent's `input` is off. */
+export function whenActorTakesInput<Result>(sql: SqlExecutor, actorId: string, send: () => Promise<Result>): Promise<Result> {
+  const input = sql<{ input: number }>`SELECT input FROM workspace_actors WHERE actor_id = ${actorId}`[0]?.input;
+
+  return settle(input === 0
+    ? Effect.fail(new KinuError('denied', 'This agent is view-only: it takes no messages. You can watch it or stop it.'))
+    : Effect.promise(send));
 }
 
 /** Local database access is already owner-authorized. This read never registers an actor. */

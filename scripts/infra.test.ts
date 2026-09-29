@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import { scratchDir } from '../packages/test-utils/src/scratch';
 import {
   CONTROL_PLANE_ACCESS_PATHS, type InfraWorker, type Infrastructure, type Resource, SUPPLY,
-  UNCAPTURED, UNOBSERVABLE, claimedHosts, deriveInfrastructure, envFields, environmentFrom, readSites,
+  UNCAPTURED, UNOBSERVABLE, claimedHosts, deployedConfig, deriveInfrastructure, envFields, environmentFrom, liveClasses, readSites,
   requiredIn, supplyCensus, vectorizeGeometry,
 } from './infra-manifest';
 import {
@@ -807,7 +807,7 @@ describe('the phases differ in exactly one tolerance, and only one direction', (
 
     const post = at('post-deploy', rows).findings.join('\n');
     expect(post).not.toContain('infra:provision —');
-    expect(post).toContain('migrations');
+    expect(post).toContain('exports');
 
     // The instruction is still there for a resource provisioning really does
     // create, which is what keeps the check above from passing vacuously.
@@ -967,7 +967,7 @@ describe('staging is the one named environment, read the way Wrangler reads it',
       account_id: 'acct',
       routes: [{ pattern: 'kinu.run', custom_domain: true }],
       triggers: { crons: ['*/15 * * * *'] },
-      migrations: [{ tag: 'v1', new_sqlite_classes: ['Agent'] }],
+      exports: { Agent: { type: 'durable-object', storage: 'sqlite' } },
       vars: { MODE: 'production' },
       r2_buckets: [{ binding: 'BACKUPS', bucket_name: 'kinu-backups' }],
       env,
@@ -983,13 +983,14 @@ describe('staging is the one named environment, read the way Wrangler reads it',
   };
 
   test('staging deploys its own name, bindings, vars and routes, and inherits the rest', () => {
-    const derived = deriveInfrastructure('staging', config({ staging }));
+    const path = config({ staging });
+    const derived = deriveInfrastructure('staging', path);
     const ids = derived.resources.map((resource) => resource.id);
 
     expect(derived.worker.workerName).toBe('kinu-staging');
     expect(derived.worker.vars.get('MODE')).toBe('staging');
     expect(derived.worker.routes).toEqual(['staging.example']);
-    expect(derived.worker.migrationTags).toEqual(['v1']);
+    expect(liveClasses(deployedConfig('staging', path).exports)).toEqual(['Agent']);
     expect(ids).toContain('r2.kinu-backups-staging');
     expect(ids).not.toContain('r2.kinu-backups');
     expect(ids).toContain('cron.kinu-staging */15 * * * *');

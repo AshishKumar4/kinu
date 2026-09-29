@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import * as v from 'valibot';
 import { AgentClient } from 'agents/client';
-import { JsonValueSchema, RunEventSchema, pageSchema, workspaceSlug, type AgentRpcMethod, type JsonValue, type RunEvent, type SeekCursor } from '@kinu.run/core';
+import { JsonValueSchema, RunEventSchema, pageSchema, positionPageSchema, workspaceSlug, type AgentRpcMethod, type JsonValue, type PositionCursor, type RunEvent, type SeekCursor } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
 import { compareRunEventOrder } from '@kinu.run/test-utils';
 import {
@@ -20,7 +20,7 @@ const Health = v.object({ build: v.object({ sha: v.string() }) });
 
 const RunPage = pageSchema(v.object({ runId: v.string() }));
 
-const HistoryPage = pageSchema(v.object({ role: v.string(), content: v.string() }));
+const HistoryPage = positionPageSchema(v.object({ role: v.string(), content: v.string() }));
 
 const RunEvents = v.array(RunEventSchema);
 
@@ -147,10 +147,10 @@ export class OperatorFirstRunSession implements FirstRunSession {
 
   async history(): Promise<readonly { role: string; text: string }[]> {
     const history: { role: string; text: string }[] = [];
-    let cursor: SeekCursor | null = null;
+    let cursor: PositionCursor | null = null;
 
     for (;;) {
-      const page: v.InferOutput<typeof HistoryPage> = v.parse(HistoryPage, await this.rpc('getChatHistoryPage', [cursor === null ? {} : { cursor: { after: cursor.after } }]));
+      const page: v.InferOutput<typeof HistoryPage> = v.parse(HistoryPage, await this.rpc('getChatHistoryPage', [cursor === null ? {} : { cursor: { before: cursor.before } }]));
       history.unshift(...page.items.map(entry => ({ role: entry.role, text: entry.content })));
 
       if (page.status === 'end') return history;

@@ -1,6 +1,6 @@
-/** The one flush cadence the step ledger and the wire replay store use to make a partial answer durable. */
+/** The flush cadence the stream buffer uses to make a partial answer durable. */
 import { expect, test } from 'bun:test';
-import { partialFlushCadence, type PartialFlushSignal } from '@kinu.run/core';
+import { partialFlushCadence, type PartialFlushSignal } from '../src/orchestrator/flush-cadence';
 
 function decisions(signals: readonly PartialFlushSignal[], cadence = partialFlushCadence()): boolean[] {
   return signals.map((signal) => cadence.flushes(signal));

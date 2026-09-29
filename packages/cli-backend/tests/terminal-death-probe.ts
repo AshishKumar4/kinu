@@ -1,13 +1,13 @@
 /**
  * The CLI process a terminal-transition test kills: it SIGKILLs itself at a named durable instant
- * (`before-settle`, `inside-claim`, `inside-title`), so no teardown runs.
+ * (`before-settle`, `inside-claim`, `inside-title`, `after-record`), so no teardown runs.
  * Run as `bun <this file> <dbPath> <mode>`; the stdout marker proves the kill point was reached.
  */
-import type { SqlExecutor, SqlValue } from '@kinu.run/core';
+import type { SqlExecutor, SqlValue, TerminalEffectFault } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
-import { armShadowTrials, captureTakes, openTerminalWorkspace, scriptedModel } from './terminal-workspace';
+import { armShadowTrials, openTerminalWorkspace, scriptedModel } from './terminal-workspace';
 
-const MODES = ['before-settle', 'inside-claim', 'inside-title'] as const;
+const MODES = ['before-settle', 'inside-claim', 'inside-title', 'after-record'] as const;
 
 const [dbPath, rawMode] = process.argv.slice(2);
 
@@ -28,8 +28,6 @@ function die(at: string): never {
 const { db, rt } = openTerminalWorkspace(dbPath);
 
 await armShadowTrials(rt);
-
-captureTakes(rt, 'root-child');
 
 if (mode === 'inside-claim') {
   // The roster's first row, inside the commit holding the outer claim; installed before the session is built.
@@ -53,7 +51,13 @@ const modelOptions = mode === 'inside-title'
 
 const { model } = scriptedModel('the parser is fixed', modelOptions);
 
-const session = new LocalAgentSession({
+class KillSession extends LocalAgentSession {
+  protected override terminalEffectFault: TerminalEffectFault = (phase, name) => {
+    if (mode === 'after-record' && phase === 'after' && name === 'turn_record') die('after-record');
+  };
+}
+
+const session = new KillSession({
   rt,
   db,
   model,
