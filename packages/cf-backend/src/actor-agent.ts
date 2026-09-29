@@ -161,6 +161,7 @@ import {
   JsonObjectSchema, JsonValueSchema, changeRoleAsOwner,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
   resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices, createAgentConfigStore, type PinnedProfile,
+  type ResolveAgentTurnProfileInput,
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
   agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createSlateWebCodemodeProvider, createAgentsCodemodeProvider,
@@ -252,14 +253,16 @@ interface TurnReads {
   readonly identity: PromptIdentity;
   /** The request's model, resolved once: every catalog read of the request sizes against it. */
   readonly catalog: ModelCatalogRead;
+  /** What picked that model; the turn's profile resolves from the same choices. */
+  readonly choices: TierChoices;
 }
+
+type TierChoices = Pick<ResolveAgentTurnProfileInput, 'activeRoleId' | 'explicitTier' | 'workspaceModel' | 'explicitEffort' | 'inheritedEffort'>;
 
 interface TurnAssemblyInput {
   readonly history: readonly ModelMessage[];
   /** The actor's raw tool surface for the requested work mode. */
   readonly tools: ToolSet;
-  /** The CLI's cwd and the tier ride on this body. */
-  readonly body: JsonObject;
   readonly reads: TurnReads;
 }
 
@@ -3931,9 +3934,9 @@ export abstract class ActorAgent extends Agent<Env> {
     // The chat view, not the raw surface: a slow `run` must detach into a background job whose
     // settle wakes a turn, and that wrap lives here.
     const tools = this.getTools();
-    const reads = await this.readTurnInputs(tools);
-    this._executorsUsedThisTurn.clear();
     const body = item.metadata ?? {};
+    const reads = await this.readTurnInputs(tools, body);
+    this._executorsUsedThisTurn.clear();
     this._cliCwd = readCliCwd(body);
     this._turnContinuity = readTurnContinuity(body);
     // Read where the turn opens: the recorded turn carries it so a recovering host's engine
@@ -3950,7 +3953,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // Frozen so a background re-drive of a context:'inherit' hire carries the conversation
     // the caller actually had.
     this._turnOriginContext = Object.freeze(structuredClone([...history]));
-    const assembled = await this.assembleTurn({ history, tools, body, reads });
+    const assembled = await this.assembleTurn({ history, tools, reads });
     this._turnDurableLength = assembled.rawMessages.length;
     // Bound exactly once before execution; the CLI adapter binds it at the same point.
     this.actorSession.bindProfile(lease, assembled.profile, assembled.profileInputs);
@@ -3971,11 +3974,11 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private async composeNextRequest(): Promise<ComposedRequest> {
     const tools = this.getTools();
-    const reads = await this.readTurnInputs(tools);
+    const reads = await this.readTurnInputs(tools, {});
     const { messages: history } = await this.stores.history.materialize();
 
     const composed = await this.composeTurn({
-      history, tools, body: {}, reads, requestedWorkMode: await this.preparedWorkMode(), cliCwd: this._cliCwd, item: null,
+      history, tools, reads, requestedWorkMode: await this.preparedWorkMode(), cliCwd: this._cliCwd, item: null,
     });
 
     return { execution: await this.executionFor(composed), profile: composed.profile };
@@ -4057,26 +4060,36 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Awaited ahead of `orch.beginTurn`: the turn is not in flight until these reads are back,
    * so a send during a cold workspace's bootstrap is routed as not-in-flight. */
-  private async readTurnInputs(tools: ToolSet): Promise<TurnReads> {
+  private async readTurnInputs(tools: ToolSet, body: JsonObject): Promise<TurnReads> {
     await this.ensureOwnedScaffold();
 
     if (this._cachedSoulText === null) await this.refreshSoulText();
 
-    const catalog = this.modelCatalog.at(this.effectiveModelSpec());
+    const inputs = this.profileInputs();
+
+    // The model the turn's profile will choose: its tier depends on the role, tier and pins, never on the tools, so
+    // every catalog read of the request sizes against the model that serves it.
+    const chosen = inputs.then((profileInputs) => {
+      const choices = this.tierChoices(profileInputs, body);
+      const { model } = resolveAgentTurnProfile({ ...profileInputs, ...choices, workMode: 'build', availableTools: [], activeSkills: [] }).tier;
+
+      return { choices, catalog: this.modelCatalog.at(this.providerRegistry().normalizeSpecSync(model)) };
+    });
 
     // Independent UserDO hops, run in parallel; each keeps its own failure arm.
-    const [profileInputs, mcpTools, , identity] = await Promise.all([
-      this.profileInputs(),
+    const [profileInputs, { choices, catalog }, mcpTools, , identity] = await Promise.all([
+      inputs,
+      chosen,
       // The remote catalog is admitted against the context budget left after the builtins.
       // A failed read answers no tools and the turn runs on builtins.
-      this.buildUserMcpTools(tools, catalog),
+      chosen.then(({ catalog: read }) => this.buildUserMcpTools(tools, read)),
       // Authoritative hub check: the TTL-cached snapshot can lag a mid-session `kinu connect`.
       // On failure it records and answers the last snapshot.
       this.rt.deviceTransport.refreshStatus(),
       this.promptIdentity(),
     ]);
 
-    return { profileInputs, mcpTools, identity, catalog };
+    return { profileInputs, mcpTools, identity, catalog, choices };
   }
 
   /** Runs after the turn is open (`orch.beginTurn`, the run row) and before the first model call. */
@@ -4097,10 +4110,18 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.ownedModelServices.resolveModel(spec);
   }
 
+  /** What picks the turn's tier and model: the role, the request's tier, then the actor's own pins. */
+  private tierChoices(profileInputs: ProfileAuthorityInputs, body: JsonObject): TierChoices {
+    const ownChoices = ownProfileChoices(this.config, profileInputs);
+
+    // Request tier, then the tier pinned at hire, then the role's own default.
+    return { activeRoleId: this.activeRoleLabel(), ...ownChoices, explicitTier: readTurnTier(body) ?? ownChoices.explicitTier };
+  }
+
   /** Effect-free: a measure between turns uses it. */
   private async composeTurn(input: TurnCompositionInput): Promise<ComposedTurn> {
-    const { profileInputs, mcpTools, identity, catalog } = input.reads;
-    const activeRoleId = this.activeRoleLabel();
+    const { profileInputs, mcpTools, identity, catalog, choices } = input.reads;
+    const { activeRoleId } = choices;
     const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
     // Deps-gated builtins (report) are advertised only when this actor class wires them; the
     // agents ladder renders only actions this profile supports, then the active skills' union.
@@ -4141,17 +4162,12 @@ export abstract class ActorAgent extends Agent<Env> {
       ...codemodeCapabilitiesFor(turnCodemodeProviders),
     ];
 
-    const ownChoices = ownProfileChoices(this.config, profileInputs);
-
     const profile = resolveAgentTurnProfile({
       ...profileInputs,
-      activeRoleId,
+      ...choices,
       workMode: requestedWorkMode,
       availableTools,
       activeSkills: activeSetForPrompt?.active.map((skill) => skill.name) ?? [],
-      ...ownChoices,
-      // Request tier, then the tier pinned at hire, then the role's own default.
-      explicitTier: readTurnTier(input.body) ?? ownChoices.explicitTier,
     });
 
     const operation = captureOperationProfile({
