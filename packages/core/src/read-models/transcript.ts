@@ -66,14 +66,14 @@ export const EMPTY_TRANSCRIPT_FOLD: TranscriptFold = {
   entries: [], pending: [], steerRowIds: new Set(),
 };
 
-/** Extend a fold with the next run of messages. Pure: `fold` is not mutated. */
+/** Extend a fold with the next run; an unloaded gap closes pending steers before it. Pure: no mutation. */
 export function extendTranscript(
-  fold: TranscriptFold, messages: readonly UIMessage[],
+  fold: TranscriptFold, messages: readonly UIMessage[], contiguous = true,
 ): TranscriptFold {
-  if (messages.length === 0) return fold;
-  const entries = [...fold.entries];
+  if (messages.length === 0 && (contiguous || fold.pending.length === 0)) return fold;
+  const entries = [...(contiguous ? fold.entries : sealTranscript(fold).entries)];
   const steerRowIds = new Set(fold.steerRowIds);
-  let pending = [...fold.pending];
+  let pending = contiguous ? [...fold.pending] : [];
 
   for (const message of messages) {
     const step = message.role === 'user' ? steerRowStep({ metadata: message.metadata }) : null;
