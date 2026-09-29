@@ -42,6 +42,7 @@ function ledgerOver(status: number) {
 
   const ledger = new TerminalEffectLedger({
     sql, actor, now: () => NOW,
+    transaction: (body) => db.transaction(body)(),
     effects: { sleep_time: terminalEffect({ input: v.object({}), run: answering(status) }) },
     scheduleRetry: async (at) => { wakes.push(at); },
   });

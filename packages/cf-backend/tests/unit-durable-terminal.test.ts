@@ -207,6 +207,37 @@ describe('an owed follow-up turn is a durable terminal effect', () => {
     // One retry turn: the replay that found it on disk queued no second.
     expect((await harness.agent.listRuns()).items).toHaveLength(2);
   });
+
+  test('a rolled-back owed-turn effect reuses the follow-up still queued in RAM', async () => {
+    const harness = cutAt('overflow_retry', 'after');
+    await turns(harness).openInFlight('u-queue-cut');
+    let replay: Promise<void> | null = null;
+
+    const restore = tapDiagnostics({
+      event: () => {},
+      failure: (event) => {
+        if (event === 'turn.finalization_failed' && replay === null) replay = harness.agent.terminalRetryPass();
+      },
+    });
+
+    try {
+      await expect(turns(harness).settle({ messageId: 'a-queue-cut', status: 'error', error: OVERFLOW_ERROR }))
+        .rejects.toThrow(/terminal effect overflow_retry:/u);
+
+      if (replay === null) throw new Error('the cut did not start the public recovery pass');
+      await replay;
+
+      const retry = sqlOver(harness.db)<{ scope: string }>`SELECT scope FROM terminal_effects
+        WHERE effect_name = 'overflow_retry'`[0];
+
+      if (retry === undefined) throw new Error('the queued retry lost its owed row');
+      const transcript = historyOver(harness).transcript(CHAT_SESSION_ID);
+      expect(transcript.has(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}overflow-retry:${retry.scope}`)).toBe(true);
+      expect((await harness.agent.listRuns()).items).toHaveLength(2);
+    } finally {
+      restore();
+    }
+  });
 });
 
 /**
@@ -237,17 +268,15 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     ]);
   });
 
-  /**
-   * Post-emit and pre-emit cuts are indistinguishable, so the boundary is idempotent and replayed;
-   * the window append is keyed on the turn, so it stays one row.
-   */
-  test('an announcing effect cut after its side effect is replayed, never doubled', async () => {
+  test('a synchronous recording cut before disposition rolls back and replays once', async () => {
     const harness = cutAt('turn_record', 'after');
     turns(harness).open('u-spine');
 
     await expect(turns(harness).settle({ messageId: 'a-spine' }))
       .rejects.toThrow('terminal effect turn_record:a-spine interrupted after its side effect');
-    expect(windowedTurns(harness)).toBe(1);
+    expect(windowedTurns(harness)).toBe(0);
+    expect(effects(harness, 'u-spine', 'a-spine').find((row) => row.effect_key === 'v1:turn_record:a-spine'))
+      .toMatchObject({ status: 'pending', attempts: 0 });
 
     const restarted = await recover(harness);
 
@@ -326,8 +355,8 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     expect(disposition(harness, 'u-owed-gate', 'a-owed-gate')).toBe('resumed');
   });
 
-  /** `turn_record` writes the window row and its review in one insert, so each cut leaves exactly one review. */
-  test('a cut around the turn recording leaves exactly one owed review', async () => {
+  /** Recording and its review commit with the disposition, or recovery writes them together. */
+  test('a cut around the turn recording recovers exactly one owed review', async () => {
     const before = cutAt('turn_record', 'before');
     turns(before).open('u-rev-b');
     await expect(turns(before).settle({ messageId: 'a-rev-b' })).rejects.toThrow('terminal effect turn_record:a-rev-b interrupted before its side effect');
@@ -338,7 +367,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     const after = cutAt('turn_record', 'after');
     turns(after).open('u-rev-a');
     await expect(turns(after).settle({ messageId: 'a-rev-a' })).rejects.toThrow('terminal effect turn_record:a-rev-a interrupted after its side effect');
-    expect(owedReviews(after)).toBe(1);
+    expect(owedReviews(after)).toBe(0);
     await recover(after);
     // The insert is idempotent on the turn's own id.
     expect(owedReviews(after)).toBe(1);
