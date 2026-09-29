@@ -214,6 +214,22 @@ describe('answersForDrainTurns — what a recovery finishes a reply with', () =>
     expect(answers).toEqual(new Map([['drain-1', 'the job finished']]));
   });
 
+  test('an answer is found when the transcript is longer than the window entries() reads', async () => {
+    const s = setup();
+
+    // 9,998 older entries, then the ask and its answer: 10,000 in all, and one more pushes the oldest out.
+    for (let at = 0; at < 4_999; at++) {
+      await drainAsk(s, `old-ask-${String(at)}`, `old-${String(at)}`);
+      await drainAnswer(s, `old-answer-${String(at)}`, `old-${String(at)}`, 'old');
+    }
+
+    await drainAsk(s, 'ask-1', 'drain-1');
+    await drainAnswer(s, 'answer-1', 'drain-1', 'the job finished');
+    await drainAsk(s, 'ask-later', 'drain-later');
+
+    expect(await answersForDrainTurns(s.transcript, ['drain-1'])).toEqual(new Map([['drain-1', 'the job finished']]));
+  });
+
   test('an empty answer is absent rather than delivered as nothing', async () => {
     const s = setup();
     await drainAsk(s, 'ask-1', 'drain-1');
