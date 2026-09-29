@@ -412,14 +412,43 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
       const page = await browser.newPage();
       const waitForSelector = page.waitForSelector.bind(page);
       const waitForFunction = page.waitForFunction.bind(page);
+      const goto = page.goto.bind(page);
+      // Puppeteer answers a renderer crash with an `error` event and nothing else: a wait with no timeout on the dead
+      // page never ends. Every unbounded wait is ended by it, so a crash fails the test by name instead of going silent.
+      let crash: Error | null = null;
+      const onCrash = new Set<(cause: Error) => void>();
+
+      page.once('error', (cause) => {
+        crash = new Error(`the page crashed on ${page.url()}`, { cause });
+        process.stderr.write(`gallery-harness: ${crash.message}\n`);
+
+        for (const end of onCrash) end(crash);
+      });
+
+      const untilCrash = async <Result>(work: Promise<Result>): Promise<Result> => {
+        if (crash !== null) throw crash;
+        const ended = Promise.withResolvers<never>();
+
+        onCrash.add(ended.reject);
+
+        try {
+          return await Promise.race([work, ended.promise]);
+        } finally {
+          onCrash.delete(ended.reject);
+        }
+      };
 
       page.setDefaultTimeout(0);
       page.setDefaultNavigationTimeout(0);
-      page.waitForSelector = async (selector, waitOptions) => recorded(`${selector} on ${page.url()}`, () => waitForSelector(selector, waitOptions));
+      page.waitForSelector = async (selector, waitOptions) => recorded(
+        `${selector} on ${page.url()}`,
+        () => untilCrash(waitForSelector(selector, waitOptions)),
+      );
       page.waitForFunction = async (condition, waitOptions, ...args) => recorded(
         `${String(condition).replace(/\s+/gu, ' ')} on ${page.url()}`,
-        () => waitForFunction(condition, waitOptions, ...args),
+        () => untilCrash(waitForFunction(condition, waitOptions, ...args)),
       );
+      page.goto = async (url, gotoOptions) => recorded(`load of ${url}`, () => untilCrash(goto(url, gotoOptions)));
 
       return page;
     };
