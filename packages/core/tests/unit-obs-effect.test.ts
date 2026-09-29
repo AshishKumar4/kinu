@@ -9,7 +9,7 @@ import { describe, expect, test } from 'bun:test';
 import { inspect } from 'node:util';
 import { Effect } from 'effect';
 import { attempt, KinuError, settle, settleSync } from '../src/obs/index';
-import { isVfsError, makeVfsError, type VfsError } from '../src/vfs/errno';
+import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 
 describe('settle', () => {
   test('resolves the success value', async () => {
@@ -43,7 +43,7 @@ describe('settle', () => {
 
 describe('a VFS failure on the channel', () => {
   /** A file plane read in Effect form: its failure is a VfsError, which callers switch on by `code`. */
-  const readOnlyWrite = (path: string): Effect.Effect<never, VfsError> => Effect.fail(makeVfsError('EROFS', 'read-only file system', path));
+  const readOnlyWrite = (path: string): Effect.Effect<never, VfsError> => Effect.fail(new VfsError('EROFS', 'read-only file system', path));
 
   const expectErofs = (failed: { readonly thrown: unknown }): void => {
     expect(isVfsError(failed.thrown)).toBe(true);

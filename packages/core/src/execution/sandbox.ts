@@ -7,7 +7,7 @@ import { readExecSignal } from './signal';
 import { commandResult, exposedPortText, type CommandResult } from './exec-result';
 import { diagnostics, KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import type { VFS } from '../types/primitives';
-import { isVfsError, makeVfsError, type VfsErrorCode } from '../vfs/errno';
+import { isVfsError, VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import type { VfsNativeReads } from '../vfs/mounts';
 import { shellQuote } from '../utils/shell';
 import { vfsDirname } from '../utils/vfs-helpers';
@@ -722,7 +722,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
 
       if (code === null) throw cause;
 
-      const error = makeVfsError(code, `${cause.message} (on '${path}')`, path);
+      const error = new VfsError(code, `${cause.message} (on '${path}')`, path);
       error.cause = cause;
 
       throw error;
@@ -734,7 +734,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
       const r = await serving(path, () => handle.readFile(path));
 
       if (r.exitCode != null && r.exitCode !== 0) {
-        throw makeVfsError('ENOENT', `no such file or directory, open '${path}' (exit ${r.exitCode})`, path);
+        throw new VfsError('ENOENT', `no such file or directory, open '${path}' (exit ${r.exitCode})`, path);
       }
 
       if (r.encoding === 'base64') {
@@ -751,7 +751,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
     /** Bounded window via `dd` + base64; the SDK's `readFile` has no offset/length. Bounds validated before use. */
     async readRange(path, offset, length) {
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
-        throw makeVfsError('EIO', 'range offset and length must be positive safe integers', path);
+        throw new VfsError('EIO', 'range offset and length must be positive safe integers', path);
       }
 
       const r = await handle.exec(
@@ -759,7 +759,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
       );
 
       if ((r.exitCode ?? 0) !== 0) {
-        throw makeVfsError('EIO', `${(r.stderr ?? r.output ?? '').trim() || 'range read failed'}, open '${path}'`, path);
+        throw new VfsError('EIO', `${(r.stderr ?? r.output ?? '').trim() || 'range read failed'}, open '${path}'`, path);
       }
 
       return base64ToBytes(r.stdout ?? r.output ?? '');
@@ -813,7 +813,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
       const r = await handle.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(path)}`);
 
       if ((r.exitCode ?? 0) !== 0) {
-        throw makeVfsError('EIO', `${(r.stderr ?? r.output ?? '').trim() || 'operation failed'}, mkdir '${path}'`, path);
+        throw new VfsError('EIO', `${(r.stderr ?? r.output ?? '').trim() || 'operation failed'}, mkdir '${path}'`, path);
       }
     },
 

@@ -9,7 +9,7 @@ import { settle } from '../obs/index';
 import { Fnv1a64 } from '../utils/fnv1a';
 import type { VFS, VfsRevision } from '../types/primitives';
 import type { VfsNativeReads } from '../vfs/mounts';
-import { isVfsError, makeVfsError } from '../vfs/errno';
+import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { RESIDENT_TEXT_MAX_BYTES } from '../vfs/mounts';
 import { BOM, type SliceWindow } from './file-edit';
 import { FileRefusalError } from '../types/file-edits';
@@ -33,7 +33,7 @@ export function readFileText(vfs: VFS, path: string, revision?: VfsRevision): Pr
 function fileText(vfs: VFS, path: string, revision?: VfsRevision): Effect.Effect<string> {
   const historical = vfs.readFileAtRevision;
 
-  if (revision !== undefined && !historical) return Effect.die(makeVfsError('ENOTSUP', 'this file plane does not retain file revisions', path));
+  if (revision !== undefined && !historical) return Effect.die(new VfsError('ENOTSUP', 'this file plane does not retain file revisions', path));
 
   return Effect.map(Effect.promise(() => (revision !== undefined && historical
     ? historical.call(vfs, path, revision)
@@ -173,7 +173,7 @@ function feedRanges(
  * (`vfs/mounts.ts`). The stat admits the read; over-budget results are still refused after it.
  */
 function unrangedText(vfs: VFS, path: string, size: number | null): Effect.Effect<string> {
-  const refuse = (what: string): Effect.Effect<never> => Effect.die(makeVfsError('EPERM',
+  const refuse = (what: string): Effect.Effect<never> => Effect.die(new VfsError('EPERM',
     `this file plane has no ranged read, so ${what} cannot be read within `
     + `${String(RESIDENT_TEXT_MAX_BYTES)}: read or slice it with workspace.readFile inside eval`,
     path));
@@ -181,7 +181,7 @@ function unrangedText(vfs: VFS, path: string, size: number | null): Effect.Effec
   return Effect.gen(function* () {
     if (size === null) {
       // An unstattable path is usually missing; do not answer it with a ranged-read error.
-      if (!(yield* Effect.promise(() => vfs.exists(path)))) return yield* Effect.die(makeVfsError('ENOENT', `no such file, open '${path}'`, path));
+      if (!(yield* Effect.promise(() => vfs.exists(path)))) return yield* Effect.die(new VfsError('ENOENT', 'no such file, open', path));
 
       return yield* refuse('a file of unknown size');
     }

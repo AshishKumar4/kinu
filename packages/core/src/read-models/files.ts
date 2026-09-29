@@ -9,7 +9,7 @@ import {
   readBoundedWithVfsOps, partialTreeRemovalMessage, removeTreeWithVfsOps,
   type VfsNativeMutations,
 } from '../vfs/mounts';
-import { isVfsError } from '../vfs/errno';
+import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { inlineFileType } from './file-types';
 import { isSystemManaged } from '../vfs/workspace-path';
 import type { VFS, VfsRevision } from '../types/primitives';

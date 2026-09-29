@@ -298,6 +298,34 @@ describe('turn-pipeline correctness wiring', () => {
     expect(windows.map((row) => row.window)).toEqual([100_000, 100_000, 200_000]);
   });
 
+  // 2026-09-29 (review of d35c1060fe): the request's catalog was bound to the workspace default before the turn's
+  // profile chose its tier, so a turn on a smaller or larger tier model was admitted against the default's window.
+  test("a turn on a tier's own model is admitted against that model's window", async () => {
+    const deep = 'ai-gateway/workers-ai/@cf/harness/deep';
+    const served: string[] = [];
+
+    const harness = gatewayWorkspace(stubAiBinding((run) => {
+      served.push(JSON.stringify(run.query));
+
+      return chatCompletion(run, 'Noted.');
+    }));
+
+    harness.agent.harnessInstallCatalog({
+      ...GATEWAY_CATALOG, tiers: { ...GATEWAY_CATALOG.tiers, default: { model: GATEWAY_MODEL }, deep: { model: deep } },
+      availableModels: [GATEWAY_MODEL, deep],
+    });
+    harness.agent.harnessCatalogModels({ [GATEWAY_MODEL]: { contextWindow: 1_000_000 }, [deep]: { contextWindow: 128_000 } });
+    workspaceMainActor(harness.db).config.setAssignedTier('deep');
+    await catalogTurn(harness.agent, 'Remember the word heron.');
+
+    const windows = harness.db.query<{ window: number }, []>(
+      "SELECT json_extract(payload, '$.contextWindow') AS window FROM run_events WHERE type = 'context_admitted' ORDER BY rowid",
+    ).all();
+
+    expect(served.at(-1)).toContain('@cf/harness/deep');
+    expect(windows.at(-1)?.window).toBe(128_000);
+  });
+
   test("a hosted actor's snapshot reports the effective model and the tier source that chose it", async () => {
     // Defends: the snapshot reported the child's own (never-set) config pin, and (measured 2026-09-18) a
     // workspace pinned to one model answered an added agent's pane on another. The snapshot and the

@@ -7,7 +7,8 @@ import * as v from 'valibot';
 import { isAbortError, raceAbort } from '@kinu.run/agent-utils';
 import type { VFS, VfsEntryStat } from '../types/primitives';
 import type { VfsNativeReads } from '../vfs/mounts';
-import { makeVfsError, vfsErrorFromText, type VfsError } from '../vfs/errno';
+import { vfsErrorFromText } from '../vfs/errno';
+import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { Effect } from 'effect';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import { commandResult, uncheckpointedSentence, type CommandResult } from './exec-result';
@@ -604,10 +605,10 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     const explicit = await consent.consentedRoot(deviceId);
 
     if (explicit) return trimmed(explicit);
-    throw makeVfsError(
+    throw new VfsError(
       'EACCES',
       'this device reported no consented directory, so the base tier reaches nothing on it: '
-      + 'run `kinu connect` on the machine, in the directory this workspace should see',
+        + 'run `kinu connect` on the machine, in the directory this workspace should see',
       '/',
     );
   };
@@ -620,7 +621,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     const home = await consent.deviceHome(deviceId);
 
     if (home) return trimmed(home);
-    throw makeVfsError('EACCES', 'this device reported neither a consented directory nor a home', '/');
+    throw new VfsError('EACCES', 'this device reported neither a consented directory nor a home', '/');
   };
 
   const guard = async (path: string, op: string): Promise<string | null> => {
@@ -633,11 +634,11 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
 
     // A device that named no directory threw above rather than widening to `/`.
     if (!(path === root || path.startsWith(`${root}/`))) {
-      throw makeVfsError(
+      throw new VfsError(
         'EACCES',
         `'${path}' is outside the consented device directory '${root}': the agent sees the folder the owner `
-        + `consented${scope === 'sandboxed' ? ' and its own /tmp' : ''}, and nothing else. `
-        + `Ask the owner to consent that directory, ${op} '${path}'`,
+          + `consented${scope === 'sandboxed' ? ' and its own /tmp' : ''}, and nothing else. `
+          + `Ask the owner to consent that directory, ${op} '${path}'`,
         path,
       );
     }
@@ -668,7 +669,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
       const raw = yield* call('readRange', [path, offset + total, asked, { root }], path);
 
       if (raw === undefined || !isJsonObject(raw) || raw.encoding !== 'base64') {
-        return yield* Effect.fail(makeVfsError('EIO', 'device returned an unreadable file range', path));
+        return yield* Effect.fail(new VfsError('EIO', 'device returned an unreadable file range', path));
       }
 
       const chunk = base64ToBytes(v.parse(v.string(), raw.content));
@@ -703,7 +704,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     const ok = result === 'ok'
       || (result !== undefined && isJsonObject(result) && result.success === true);
 
-    if (!ok) return yield* Effect.fail(makeVfsError('EIO', `writeFile failed on the device: ${JSON.stringify(result)}`, path));
+    if (!ok) return yield* Effect.fail(new VfsError('EIO', `writeFile failed on the device: ${JSON.stringify(result)}`, path));
     const report = v.safeParse(WriteReportSchema, result);
 
     return report.success ? report.output : null;
@@ -719,7 +720,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
 
     async readRange(path, offset, length) {
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
-        throw makeVfsError('EIO', 'range offset and length must be positive safe integers', path);
+        throw new VfsError('EIO', 'range offset and length must be positive safe integers', path);
       }
 
       return settle(Effect.flatMap(guarded(path, 'open'), (root) => readChunked(path, root, offset, length)));
@@ -802,7 +803,7 @@ function noSuchDevice(fleet: readonly DeviceFleetEntry[] | undefined, first: str
     ? `several machines are connected: each is mounted at /pc/<name>: ${segments}`
     : `no connected machine is named "${first}": connected: ${segments}`;
 
-  return makeVfsError('ENXIO', reason, `/pc${first === '' ? '' : `/${first}`}`);
+  return new VfsError('ENXIO', reason, `/pc${first === '' ? '' : `/${first}`}`);
 }
 
 interface DeviceRoute {

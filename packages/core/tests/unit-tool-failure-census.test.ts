@@ -6,7 +6,7 @@
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { toolExecute } from '@kinu.run/test-utils';
-import { makeVfsError } from '../src/vfs/errno';
+import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import {
   buildBuiltinTools, censusToolFailures, classifyToolFailure,
   toolFailureKey, FAILURE_WITHOUT_ERROR,
@@ -611,15 +611,15 @@ describe('each executor tool files its own failure in the right part', () => {
   });
 
   test('parent: the errno the parent raised is the class, and it is not re-guessed', async () => {
-    // No reason of its own: `makeVfsError` carries the parent's errno, so ENOENT classifies as `missing`.
+    // The parent's errno remains ENOENT, which classifies as missing.
     const census = censusOf(await escalate(createParentExecutor({
       handle: {
-        read: async () => { throw makeVfsError('ENOENT', 'no such file', '/p'); },
-        write: async () => { throw makeVfsError('ENOENT', 'no such file', '/p'); },
-        list: async () => { throw makeVfsError('ENOENT', 'no such file', '/p'); },
-        stat: async () => { throw makeVfsError('ENOENT', 'no such file', '/p'); },
-        delete: async () => { throw makeVfsError('ENOENT', 'no such file', '/p'); },
-        exec: async () => { throw makeVfsError('ENOENT', 'no such shell', '/p'); },
+        read: async () => { throw new VfsError('ENOENT', 'no such file', '/p'); },
+        write: async () => { throw new VfsError('ENOENT', 'no such file', '/p'); },
+        list: async () => { throw new VfsError('ENOENT', 'no such file', '/p'); },
+        stat: async () => { throw new VfsError('ENOENT', 'no such file', '/p'); },
+        delete: async () => { throw new VfsError('ENOENT', 'no such file', '/p'); },
+        exec: async () => { throw new VfsError('ENOENT', 'no such shell', '/p'); },
       },
     })));
 

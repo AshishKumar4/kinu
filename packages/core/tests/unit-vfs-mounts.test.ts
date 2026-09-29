@@ -6,7 +6,7 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { fakeMossaic } from '@kinu.run/test-utils/mossaic';
 import type { VFS, VfsRevision } from '../src/types/primitives';
-import { isVfsError, makeVfsError } from '../src/vfs/errno';
+import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { EXECUTOR_MOUNTS, removeTreeWithVfsOps, standardMounts, withMountTable, type VfsMount } from '../src/vfs/mounts';
 import { mossaicVfs } from '../src/vfs/mossaic-vfs';
 import { deviceFiles, type DeviceFileScope, type DeviceTransport } from '../src/execution/device-tunnel-executor';
@@ -29,13 +29,13 @@ function fakeTree(entries: Record<string, string>): VFS {
 		readFile: async (path) => {
 			const content = files.get(path);
 
-			if (content === undefined) throw makeVfsError('ENOENT', 'no such file or directory', path);
+			if (content === undefined) throw new VfsError('ENOENT', 'no such file or directory', path);
 
 			return content;
 		},
 		writeFile: async (path, data) => { files.set(path, data instanceof Uint8Array ? new TextDecoder().decode(data) : data); },
 		readdir: async (path) => {
-			if (path !== '/' && !dirs.has(path)) throw makeVfsError('ENOENT', 'no such directory', path);
+			if (path !== '/' && !dirs.has(path)) throw new VfsError('ENOENT', 'no such directory', path);
 			const names = new Set<string>();
 			const prefix = path === '/' ? '/' : `${path}/`;
 
@@ -508,7 +508,7 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 			calls += 1;
 
 			if (calls === 3) {
-				throw Object.assign(new Error(`EACCES: ${path} is held open`), { code: 'EACCES' });
+				throw new VfsError('EACCES', 'held open', path);
 			}
 
 			return realUnlink(path);
@@ -537,7 +537,7 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 
 		device.unlink = async (path) => {
 			if (path === '/home/dev/build/deep') {
-				throw Object.assign(new Error(`EACCES: ${path} is held open`), { code: 'EACCES' });
+				throw new VfsError('EACCES', 'held open', path);
 			}
 
 			return realUnlink(path);
