@@ -368,8 +368,6 @@ export class ChatSession {
   }
 
   get pumpPromise(): Promise<void> | null { return this.activePump; }
-  /** Settles once no measure or fold is pending. */
-  get revised(): Promise<void> { return this.revision ?? Promise.resolve(); }
   get pumping(): boolean { return this.pumpActive; }
   get currentRunId(): string | null { return this.runId; }
   /** Open on purpose, so the wake reconcile must not seal them. */
@@ -485,9 +483,10 @@ export class ChatSession {
     return this.transcript.has(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}${identity}`);
   }
 
-  /** Settling has no next step. A queued, unopened user turn counts: a message behind it rides its first step. */
+  /** Settling has no next step. A queued, unopened user turn or genesis offer counts: a message behind it rides its
+   *  first step, so an offer is consumed only by a message that arrived before it. */
   turnInFlight(): boolean {
-    return this.actorSession.inFlight || this.queue.some((item) => item.kind === 'user');
+    return this.actorSession.inFlight || this.queue.some((item) => item.kind === 'user' || item.yieldsToUserMessage === true);
   }
 
   /** Send; resolves where it landed (`'mid-turn'` or `'turn'`), never guessed at admission, and rejects if it did not land. */
@@ -768,9 +767,13 @@ export class ChatSession {
     try {
       let item: QueueItem | undefined;
 
-      while ((item = this.queue.shift())) {
-        // So the turn's own measure is the newer.
+      for (;;) {
+        // Before the item leaves the queue, so it still counts as in flight to a message sent meanwhile; and so the
+        // turn's own measure is the newer.
         await this.revision;
+        item = this.queue.shift();
+
+        if (item === undefined) break;
         // Checked per item, immediately before the turn runs. A refusal settles the item, so its producer
         // compensates.
         const refusal = this.ports.driverGate();

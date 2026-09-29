@@ -132,6 +132,14 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     else await chatSessionTurns(this).settle({ messageId: 'a live turn', text: 'done' });
   }
   get harnessChatLoop(): ChatSession { return this.chatLoop; }
+  private profileHold: { readonly reached: () => void; readonly release: Promise<void> } | null = null;
+  /** The next profile read (a measure's or a turn's composition) waits for `release`; resolves once it is waiting. */
+  harnessHoldNextProfile(release: Promise<void>): Promise<void> {
+    const reached = Promise.withResolvers<void>();
+    this.profileHold = { reached: reached.resolve, release };
+
+    return reached.promise;
+  }
   /** The `reads_changed` flushes this object owes; a test runs them where production's macrotask would end. */
   readonly harnessOwedLiveReads: (() => void)[] = [];
   protected override deferLiveReads(flush: () => void): void { this.harnessOwedLiveReads.push(flush); }
@@ -250,6 +258,14 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   private _providerRevision = HARNESS_PROVIDER_SNAPSHOT.revision;
 
   protected override async profileInputs() {
+    const hold = this.profileHold;
+    this.profileHold = null;
+
+    if (hold !== null) {
+      hold.reached();
+      await hold.release;
+    }
+
     const overlay = this._catalogOverlay;
     const revision = this._providerRevision;
 
