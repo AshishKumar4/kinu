@@ -51,6 +51,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes bubblewrap
+          # Ubuntu 24.04's AppArmor userns restriction refused bwrap after install
+          # in CI 36673378254 (2026-09-30); the sandboxed suite needs namespaces.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
