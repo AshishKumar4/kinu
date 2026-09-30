@@ -17,7 +17,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
-  DEFAULT_RUNS, HAMMER_SUITE, artifactPath, measuredFiles, reportedCounts, spawnContention,
+  BURNER, DEFAULT_RUNS, HAMMER_SUITE, artifactPath, failingTests, hammerOnce, measuredFiles, reportedCounts,
 } from './hammer';
 import { claims, LADDER } from './ladder';
 import { trackedFiles } from './sources';
@@ -85,6 +85,13 @@ describe('what a run REPORTED, read from bun\'s own output', () => {
     expect(reportedCounts(FAILING_OUTPUT)).toEqual({ passed: 2698, failed: 1 });
   });
 
+  test('a failing test is named with the file whose heading it follows', () => {
+    // What a run's line prints on a red run, so the name has to be the test bun failed and no other.
+    expect(failingTests(FAILING_OUTPUT))
+      .toEqual(['packages/cf-backend/tests/unit-zz-flake.test.ts > intermittently failing fixture > passes the first time']);
+    expect(failingTests(REAL_OUTPUT)).toEqual([]);
+  });
+
   test('a governed file absent from the measured set is visible in both directions', () => {
     // The comparison the gate makes per run, over the two real shapes. A
     // governed file that reported nothing (it stopped being selected, or it
@@ -122,19 +129,43 @@ describe('the governed set is the ladder\'s, not the gate\'s own', () => {
   });
 });
 
-describe('contention is real, bounded, and released', () => {
-  test('the burners run and stop being ours when the handle is dropped', () => {
-    // A gate claiming to measure under load while spawning nothing would read
-    // green over the ordinary tier's conditions. Two burners for a moment, so
-    // the assertion is about the mechanism rather than about the box.
-    const burners = spawnContention(2, 2_000);
-    expect(burners.length).toBe(2);
+describe('contention ends with the gate however the gate ends', () => {
+  // A SIGKILLed gate runs no cleanup of its own, and the kernel closing its pipes is all a burner then sees: the end
+  // of its stdin. A burner that ended only when killed would spin on after the gate.
+  test('a burner exits when its stdin ends', async () => {
+    const burner = Bun.spawn([...BURNER], { stdin: 'pipe', stdout: 'inherit', stderr: 'inherit' });
 
-    for (const burner of burners) burner.kill();
+    await burner.stdin.end();
 
-    // The spin is SELF-BOUNDED as well as killed, so a SIGKILLed gate cannot
-    // leave a machine at 100% forever; killing twice is safe.
-    for (const burner of burners) burner.kill();
+    expect(await burner.exited).toBe(0);
+  });
+});
+
+describe('a run is ended by its silence, never by its length', () => {
+  // SLOW IS NOT HUNG. 2026-09-30: five of six runs under load were killed at a per-run wall deadline with not one
+  // failing test between them (2,460 to 3,616 of 3,624 passed); the run allowed to finish passed all 3,624. These
+  // runs are real processes on the real clock the hang detector reads, which no fake timer in this process drives.
+  test('a run that writes throughout is not killed for outlasting its bound', async () => {
+    const run = await hammerOnce(1, {
+      argv: [process.execPath, '-e', 'for (let line = 0; line < 25; line += 1) { console.log(line); await Bun.sleep(100); }'],
+      seconds: 1,
+      label: 'a slow run that writes',
+    });
+
+    expect(run.killed).toBe(false);
+    expect(run.exit).toBe(0);
+    expect(run.seconds).toBeGreaterThan(2);
+  });
+
+  test('a run that writes nothing for its bound is ended', async () => {
+    const run = await hammerOnce(1, {
+      argv: [process.execPath, '-e', 'console.log("started"); await Bun.sleep(30_000);'],
+      seconds: 1,
+      label: 'a silent run',
+    });
+
+    expect(run.killed).toBe(true);
+    expect(run.seconds).toBeLessThan(15);
   });
 });
 
