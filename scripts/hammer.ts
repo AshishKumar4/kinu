@@ -70,9 +70,10 @@ export const HAMMER_SUITE = hammerRow.run;
  *  absence, and the green path says so. */
 export const DEFAULT_RUNS = 6;
 
-/** The whole gate's own wall-clock budget, in milliseconds. Under deploy.sh
- *  every gate is wrapped in `timeout 480`, so a hammer that could outlive that
- *  would be killed by the runner with no artifact written — the per-run
+/** The whole gate's own wall-clock budget, in milliseconds. The ladder runs
+ *  every gate under its row's silence bound, 480 s here (scripts/deadline.ts),
+ *  and the hammer writes nothing until its runs end, so a hammer that could
+ *  outlive that would be killed with no artifact written — the per-run
  *  deadline below is derived from this so the gate reports its own overrun
  *  instead of being reported dead. */
 const BUDGET_MS = 440_000;
