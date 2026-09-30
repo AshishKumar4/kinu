@@ -6,72 +6,84 @@
 
 import { describe, expect, test } from 'bun:test';
 import { constants } from 'node:os';
-import { readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, watch } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
-import { scratchDir } from '@kinu.run/test-utils';
+import { awaitExit, runToExit, scratchDir } from '@kinu.run/test-utils';
 import { tolerate } from '@kinu.run/core/obs';
 import { createHostShell } from '../src/runtime';
+import { shellQuote } from '@kinu.run/core';
 
 const FloodReportSchema = v.object({ grew: v.number(), exitCode: v.number(), stdout: v.string() });
 
-/** Each test that backgrounds `sleep 20` ends it: the sleep outlives the shell by design, as a backgrounded server
- *  should, and a run ends what it starts. SIGKILL takes effect at once, so nothing is left running. */
-function endBackgrounded(stdout: string): void {
+async function endBackgrounded(stdout: string): Promise<void> {
   const pid = Number(/started (\d+)/u.exec(stdout)?.[1]);
 
-  if (Number.isInteger(pid) && pid > 0) tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch');
+  expect(pid).toBeGreaterThan(0);
+  expect((await runToExit(['kill', '-0', String(pid)])).exitCode).toBe(0);
+  tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch');
+  await awaitExit(pid);
+}
+
+async function pipeGate(): Promise<{ home: string; fifo: string; resident: string }> {
+  const home = scratchDir('host-shell');
+  const fifo = join(home, 'release');
+  const made = await runToExit(['mkfifo', fifo]);
+
+  if (made.exitCode !== 0) throw new Error(made.stderr);
+
+  return { home, fifo, resident: 'sh -c ' + shellQuote('read released < ' + shellQuote(fifo)) + ' & echo started $!' };
 }
 
 describe('createHostShell', () => {
-  test('aborts long-running commands through AbortSignal', async () => {
+  test('aborts a running command through AbortSignal', async () => {
     const shell = createHostShell(process.cwd());
     const controller = new AbortController();
-    const started = Date.now();
-    const command = shell.exec('sleep 5; echo done', { signal: controller.signal });
+    const gate = await pipeGate();
+    const readyFile = join(gate.home, 'ready');
+    const entered = Promise.withResolvers<void>();
+    const observer = watch(gate.home, () => { if (existsSync(readyFile)) entered.resolve(); });
+    observer.once('error', entered.reject);
+    const command = shell.exec('printf ready > ' + shellQuote(readyFile) + '; read released < ' + shellQuote(gate.fifo) + '; echo done', { signal: controller.signal });
 
-    setTimeout(() => controller.abort(new Error('stop requested')), 100);
-    const result = await command;
-
-    expect(Date.now() - started).toBeLessThan(2_000);
-    expect(result.stdout).not.toContain('done');
-    expect(result.stderr).toContain('Command aborted.');
-    expect(result.exitCode).toBe(130);
+    try {
+      await Promise.race([entered.promise, command.then(() => { if (!controller.signal.aborted) throw new Error('the command exited before the abort'); })]);
+      controller.abort(new Error('stop requested'));
+      const result = await command;
+      expect(result.stdout).not.toContain('done');
+      expect(result.stderr).toContain('Command aborted.');
+      expect(result.exitCode).toBe(130);
+    } finally {
+      observer.close();
+    }
   });
 
-  test('returns when the COMMAND finishes, not when a backgrounded child does', async () => {
-    // `sleep 20 &` inherits the stdout pipe; the call must return when `sh` exits, not when the pipe closes.
+  test('returns when the command finishes while its child still holds stdout', async () => {
     const shell = createHostShell(process.cwd());
-    const started = Date.now();
-    const result = await shell.exec('sleep 20 & echo started $!');
-    const elapsed = Date.now() - started;
+    const gate = await pipeGate();
+    const result = await shell.exec(gate.resident);
 
-    endBackgrounded(result.stdout);
+    await endBackgrounded(result.stdout);
     expect(result.stdout).toContain('started');
     expect(result.exitCode).toBe(0);
-    // Generous against the correct ~50ms, still far under the broken ~20s.
-    expect(elapsed).toBeLessThan(3_000);
   });
 
   test('a backgrounded child does not keep the host process alive', async () => {
-    // Even after `exec` returns, an un-unref'd child or open pipe would keep a one-shot `kinu exec` from exiting.
+    const gate = await pipeGate();
+
     const script = `
       import { createHostShell } from ${JSON.stringify(new URL('../src/runtime.js', import.meta.url).pathname)};
       const shell = createHostShell(process.cwd());
-      const { stdout } = await shell.exec('sleep 20 & echo started $!');
+      const { stdout } = await shell.exec(${JSON.stringify(gate.resident)});
       process.stdout.write(stdout);
-      // Nothing else keeps this process alive. If it lingers, the shell does.
     `;
 
-    const started = Date.now();
     const proc = Bun.spawn(['bun', '-e', script], { stdout: 'pipe', stderr: 'pipe' });
     const exitCode = await proc.exited;
-    const elapsed = Date.now() - started;
 
-    endBackgrounded(await new Response(proc.stdout).text());
+    await endBackgrounded(await new Response(proc.stdout).text());
     expect(await new Response(proc.stderr).text()).toBe('');
     expect(exitCode).toBe(0);
-    expect(elapsed).toBeLessThan(10_000);
   });
 
   test('output written before the command exits is not truncated by the early return', async () => {

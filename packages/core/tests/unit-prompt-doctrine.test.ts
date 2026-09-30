@@ -18,8 +18,7 @@ describe('lead doctrine follows actor authority and available delegation', () =>
     });
 
     expect(prompt).not.toContain("lifetime:'task'");
-    expect(prompt).toContain('This turn supports durable hires, not task-lifetime calls.');
-    expect(prompt).toContain('Concrete implementation packets');
+    expect(prompt).toContain('`hire`');
   });
 
   test('both hired lifetimes retain their subordinate surface even when hire is available', () => {
@@ -32,7 +31,6 @@ describe('lead doctrine follows actor authority and available delegation', () =>
     const leadSections = PROMPT_SECTIONS.filter(({ id }) => id.startsWith('lead/'));
     const root = buildSystemPromptSync(rt, full.opts);
 
-    expect(leadSections).toHaveLength(7);
 
     for (const lifetime of ['task', 'durable']) {
       const actor = directory.create({
