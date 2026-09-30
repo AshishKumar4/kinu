@@ -1114,6 +1114,12 @@ page showing that the app script failed to load while the root holds nothing,
 and ends naming the failed requests. The live-app harness reloads a page once
 when only net::ERR_NETWORK_CHANGED failed it, because a deploy host's containers
 are not the run's. The gallery reloads nothing: the change was this tier's own.
+The same wait also ends when an error nothing caught ended the page's render
+and the root holds nothing, naming the error. Added 2026-09-30: in CI run
+36754331407 the landing page threw `useAgentsNav requires AgentsNavProvider`
+outside every boundary, and its wait for the h1 was killed after 480 s silent,
+841 s into the row. An uncaught error beside a drawn page stays a fault the
+harness reports, not a dead end.
 
 L15. The product flows run only against a real Workers deployment: staging,
 after each deploy's publish. Decided 2026-09-30, on the owner's direction.

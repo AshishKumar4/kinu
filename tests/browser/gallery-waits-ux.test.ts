@@ -211,6 +211,35 @@ test('a wait on a page whose app script never ran ends at once by the request th
 });
 
 /**
+ * 2026-09-30 (CI run 36754331407 on 375de3678): the landing page threw `useAgentsNav requires AgentsNavProvider` while
+ * rendering, outside every boundary, and React left the root empty; the wait for its h1 sat until the row's 480 s bound.
+ * An uncaught error while the root holds nothing is a dead end, as a failed app script is, so the wait ends at once.
+ */
+test('a wait on a page whose render threw with nothing drawn ends at once by the error, not in silence', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+
+    // The planted render error: React creates the page's h1 while it renders, and that call throws.
+    await page.evaluateOnNewDocument(() => {
+      const create = document.createElement.bind(document);
+
+      Object.defineProperty(document, 'createElement', {
+        value: (tag: string, options?: ElementCreationOptions): HTMLElement => {
+          if (tag.toLowerCase() === 'h1') throw new Error('planted render error');
+
+          return create(tag, options);
+        },
+      });
+    });
+    await page.goto(`${origin}/landing.html`, { waitUntil: 'load' });
+
+    await expect(page.waitForSelector('h1')).rejects.toThrow(`waiting for h1 on ${origin}/landing.html, the page showed `
+      + 'an uncaught error, Uncaught Error: planted render error, with nothing drawn, which leaves the page blank');
+    await page.close();
+  });
+});
+
+/**
  * A frame whose page chunk never loads (a rejected dynamic import) threw outside every boundary, and React emptied
  * the root: the blank app the CI stuck report found. Under the app's own boundary it says what broke.
  */
