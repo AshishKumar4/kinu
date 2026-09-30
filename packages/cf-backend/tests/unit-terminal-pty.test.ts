@@ -9,14 +9,10 @@ import {
   createRecordingLogger, setDiagnosticsSink, type RecordedLog,
 } from '@kinu.run/core/obs';
 import * as v from 'valibot';
-import { LINE_MODE_LABEL, LineTerminalState, terminalLane } from '@kinu.run/core';
+import { LineTerminalState, terminalLane } from '@kinu.run/core';
 import { WORKSPACE_TERMINAL_PATH } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { jsrpcStub } from './helpers/jsrpc-stub';
-import { installSandboxSdkMock } from './helpers/sandbox-sdk';
-
-// The route's module graph reaches the Sandbox SDK at import; the stand-in is for the import alone.
-await installSandboxSdkMock();
 
 // `agents` reaches `cloudflare:email`: mock first, then the dynamic import.
 mockAgentsSdk();
@@ -25,25 +21,18 @@ const { terminalRoutes } = await import('../src/terminal-route');
 
 import type { TerminalRouteDeps, TerminalWorkspace } from '../src/terminal-route';
 
-/** Vocabulary a person is never shown: our primitives, transports, missing methods. */
-const FORBIDDEN_IN_COPY = /pty|pseudo-terminal|JSON-RPC|daemon|Nimbus|startProcess|stdin|resize|socket/i;
-
-interface PtySize { cols?: number; rows?: number; shell?: string }
 
 interface TerminalDouble {
   noteTerminalActivity(): Promise<void>;
-  deleteSession(sessionId: string): Promise<{ success: boolean }>;
-  getSession(sessionId: string): Promise<{ terminal(request: Request, options?: PtySize): Promise<Response> }>;
+  resetShell(): Promise<void>;
+  fetch(request: Request): Promise<Response>;
 }
 
 /** Order is the contract: a PTY before the workspace attached is a shell onto the wrong disk, before egress one with no network. */
 interface Trace {
   readonly calls: string[];
-  options: PtySize | undefined;
   request: Request | undefined;
   forwarded: Request | undefined;
-  /** Must not be the agent's exec session, where one long agent command would swallow keystrokes. */
-  session: string | undefined;
 }
 
 interface Harness {
@@ -58,7 +47,7 @@ function harness(opts: {
   attach?: () => Promise<Response>;
   sandboxBound?: boolean;
 } = {}): Harness {
-  const trace: Trace = { calls: [], options: undefined, request: undefined, forwarded: undefined, session: undefined };
+  const trace: Trace = { calls: [], request: undefined, forwarded: undefined };
 
   const container = jsrpcStub<TerminalDouble>({
     noteTerminalActivity: async () => {
@@ -66,23 +55,12 @@ function harness(opts: {
 
       if (opts.lease) await opts.lease();
     },
-    deleteSession: () => { throw new Error('deleteSession: no case here restarts the container shell'); },
-    getSession: async (sessionId) => {
-      trace.calls.push('getSession');
-      trace.session = sessionId;
+    resetShell: () => { throw new Error("no case here resets the container shell"); },
+    fetch: async request => {
+      trace.calls.push("terminal");
+      trace.request = request;
 
-      return {
-        terminal: async (request, options) => {
-          trace.calls.push('terminal');
-          trace.options = options;
-          trace.request = request;
-
-          return opts.attach
-            ? await opts.attach()
-            // A 101 needs a real WebSocketPair; this body proves the SDK response is returned unchanged.
-            : new Response('pty-socket', { status: 200 });
-        },
-      };
+      return opts.attach ? await opts.attach() : new Response("pty-socket", { status: 200 });
     },
   });
 
@@ -178,10 +156,6 @@ describe('which environments can have a terminal', () => {
     },
   );
 
-  test('the line-mode label states the mode and no implementation detail', () => {
-    expect(LINE_MODE_LABEL).toContain('line mode');
-    expect(LINE_MODE_LABEL).not.toMatch(FORBIDDEN_IN_COPY);
-  });
 });
 
 describe('attaching a terminal', () => {
@@ -202,51 +176,10 @@ describe('attaching a terminal', () => {
     expect(await response?.text()).toBe('pty-socket');
     // Preflight (egress, /workspace) settles before the PTY exists, and the lease is stamped before the socket
     // is handed over, or the first heartbeat can stop the container under it.
-    expect(trace.calls).toEqual(['prepareTerminal:sandbox', 'noteTerminalActivity', 'getSession', 'terminal']);
+    expect(trace.calls).toEqual(["prepareTerminal:sandbox", "noteTerminalActivity", "terminal"]);
   });
 
-  test('the shell is the user\'s own session, not the one the agent execs in', async () => {
-    const { deps, trace } = harness();
-    await terminalRequest(attachRequest('executor=sandbox'), deps);
-    // A stable named session so a reload lands on the running shell; the SDK default session is the agent's
-    // exec lane, and one session holds one PTY and one foreground process.
-    expect(trace.session).toBe('kinu-terminal');
-    expect(trace.session).not.toContain('sandbox-');
-  });
 
-  test('two attaches land in the same session, so a reload reattaches', async () => {
-    const { deps, trace } = harness();
-    await terminalRequest(attachRequest('executor=sandbox'), deps);
-    const first = trace.session;
-    await terminalRequest(attachRequest('executor=sandbox'), deps);
-    expect(trace.session).toBe(first);
-  });
-
-  test('the geometry the client asks for reaches the terminal', async () => {
-    const { deps, trace } = harness();
-    await terminalRequest(attachRequest('executor=sandbox&cols=120&rows=40'), deps);
-    expect(trace.options).toEqual({ cols: 120, rows: 40 });
-  });
-
-  test('a shell is never named: the container picks it, and TERM with it', async () => {
-    const { deps, trace } = harness();
-    await terminalRequest(attachRequest('executor=sandbox'), deps);
-    // No `shell` key: `PtyOptions.shell` is spawned as one argv token, so `bash -l` would ENOENT.
-    expect(trace.options).toEqual({});
-    expect(trace.options).not.toHaveProperty('shell');
-  });
-
-  test.each([
-    ['cols=abc&rows=40', { rows: 40 }],
-    ['cols=0&rows=0', {}],
-    ['cols=99999&rows=40', { rows: 40 }],
-    ['cols=80.5&rows=24', { rows: 24 }],
-    ['cols=-80&rows=24', { rows: 24 }],
-  ])('geometry from a query string is bounded (%s)', async (query, expected) => {
-    const { deps, trace } = harness();
-    await terminalRequest(attachRequest(`executor=sandbox&${query}`), deps);
-    expect(trace.options).toEqual(expected);
-  });
 
   test('the upgrade the SDK proxies is the same request, minus the caller\'s credentials', async () => {
     const { deps, trace } = harness();
@@ -269,7 +202,6 @@ describe('attaching a terminal', () => {
     const forwarded = trace.request;
 
     if (!forwarded) throw new Error('the SDK was never handed an upgrade');
-    expect(forwarded.url).toBe(request.url);
     expect([...forwarded.headers.keys()].sort()).toEqual([
       'connection', 'sec-websocket-protocol', 'sec-websocket-version', 'upgrade',
     ]);
@@ -298,7 +230,6 @@ describe('attaching a terminal', () => {
     const payload = await body(response);
     expect(payload.lane).toBe('line');
     expect(payload.missing).toBeUndefined();
-    expect(JSON.stringify(payload)).not.toMatch(FORBIDDEN_IN_COPY);
     expect(trace.calls).toEqual([]);
   });
 

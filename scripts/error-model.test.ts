@@ -68,6 +68,24 @@ test('a new file starts at zero: one throw in it is red', () => {
   expect(lower(BASELINE, fresh, '2026-09-24').lock).toBeUndefined();
 });
 
+test('a stray throw in the standalone devbox library is red and cannot grow its lock', () => {
+  const file = 'packages/devbox/src/stray.ts';
+  const sites = measure(new Map([[file, 'export function run() { throw new Error("not in the channel"); }']]));
+  expect(judge(sites, lockOf({})).over).toEqual([{ key: file + '#throw', was: undefined, now: 1 }]);
+  expect(lower(lockOf({}), sites, '2026-09-29').lock).toBeUndefined();
+});
+
+test('the library runner cannot execute in a private helper', () => {
+  const file = 'packages/devbox/src/runner.ts';
+
+  const source = `import { settle } from "./errors";
+export class Box { #private() { return settle(program); } read() { return settle(program); } }`;
+
+  const sites = bridgeSites(new Map([[file, source]]));
+  expect(sites.bridges).toEqual([file + ':2']);
+  expect(sites.findings).toEqual([file + ':2: a runner returned outside an exported function or public member']);
+});
+
 test('a removed site is green with a stale row, and --lock lowers the number', () => {
   const cut = measured(LEGACY.replace('.catch(() => ({ ok: false }))', ''));
   const verdict = judge(cut, BASELINE);

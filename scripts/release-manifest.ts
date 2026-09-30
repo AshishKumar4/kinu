@@ -48,7 +48,6 @@ export const CHANNEL_ORIGIN = 'https://kinu.run';
  */
 export const VAR_POLICY = {
   AI_GATEWAY_URL: 'derived',
-  SANDBOX_TRANSPORT: 'carried',
   PREVIEW_HOST_SUFFIX: 'derived',
   CLI_PUBLIC_ORIGIN: 'derived',
   CLI_APPROVAL_ORIGIN: 'derived',

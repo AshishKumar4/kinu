@@ -75,7 +75,7 @@ describe('a direct Container is admitted only with all three proofs', () => {
 
   test('(c) the loaded class exposes exactly the classified surface, and a base class on it is red', () => {
     expect({ parent: SURFACE.parentIsDurableObject, methods: [...SURFACE.methods].sort() })
-      .toEqual({ parent: true, methods: ['alarm', 'cancel', 'constructor', 'forward'] });
+      .toEqual({ parent: true, methods: ['cancel', 'constructor', 'forward'] });
 
     class DurableObject {}
 
@@ -98,35 +98,32 @@ describe('a direct Container is admitted only with all three proofs', () => {
     expect(surfaceReasons(surfaceOf(Accessor, DurableObject)).join('\n')).toContain('exposes `boot`');
   });
 
-  test('(c) the private box declares only its three fields and never leaves the class', () => {
+  test('(c) native container capabilities cannot escape or accept caller-selected programs', () => {
     const text = live().fileText;
 
     const cases: ReadonlyArray<readonly [string, string]> = [
-      ['its box declares `entrypoint`', text.replace("  enableInternet = true;\n}", "  enableInternet = true;\n\n  entrypoint = ['sh', '-c', 'id'];\n}")],
-      ['its box declares `envVars`', text.replace("  enableInternet = true;\n}", "  enableInternet = true;\n\n  envVars = { NODE_OPTIONS: '--require /tmp/x' };\n}")],
-      ['its box declares `start`', text.replace("  enableInternet = true;\n}", "  enableInternet = true;\n\n  override async start() { await super.start({ entrypoint: ['sh'] }); }\n}")],
-      ['exports its box', text.replace('class EgressBox extends', 'export class EgressBox extends')],
-      ['uses its box other than', text.replace('  cancel(callId: string): void {', '  box() { return this.#box; }\n\n  cancel(callId: string): void {')],
-      ['uses its box other than', text.replace("fetch: async (signal) => box.containerFetch(", "fetch: async (signal) => box['containerFetch'](")],
-      ['uses its box other than', text.replace('    this.#calls.cancel(callId);', '    this.#calls.cancel(callId);\n    void this.#box.ctx;')],
-      ['uses its box other than', text.replace('    this.#calls.cancel(callId);', "    void this.#box.start({ entrypoint: ['sh'] });")],
-      ['carries a decorator', text.replace('export class CodexEgress', '@withRun\nexport class CodexEgress')],
-      ['declares a getter `boot`', text.replace('  cancel(callId: string): void {', '  get boot() {\n    const box = this.#box;\n\n    return (options: object) => box.start(options);\n  }\n\n  cancel(callId: string): void {')],
-      ['declares a setter `port`', text.replace('  cancel(callId: string): void {', '  set port(value: number) { void value; }\n\n  cancel(callId: string): void {')],
-      ['captures `this` or the box', text.replace('    this.#calls.cancel(callId);', '    this.#calls.cancel(callId);\n    const later = () => this.#box;\n    void later;')],
-      ['uses its box other than', text.replace('box.startAndWaitForPorts(box.defaultPort, { abort: signal })', "box.startAndWaitForPorts(box.defaultPort, { abort: signal }, { entrypoint: ['sh'] })")],
-      ['uses its box other than', text.replace('box.startAndWaitForPorts(box.defaultPort, { abort: signal })', "box.startAndWaitForPorts(box.defaultPort, { abort: signal, entrypoint: ['sh'] })")],
-      ['uses its box other than', text.replace("box.containerFetch(new Request('http://codex-egress/forward', {", "box.containerFetch(request, 22, new Request('http://codex-egress/forward', {")],
-      ['uses its box other than', text.replace('    await this.#box.alarm(alarmInfo);', "    await this.#box.alarm({ retryCount: 0, isRetry: false });")],
-      ['captures `this` or the box', text.replace('  readonly #calls = new EgressCalls();', '  readonly #calls = { run: async (_id: string, work: { start: () => Promise<void> }) => { void work; return new Response(); } };')],
-      ['captures `this` or the box', text.replace("import { codexEgressAllowed, EgressCalls } from '@kinu.run/core';", "import { codexEgressAllowed } from '@kinu.run/core';\nclass EgressCalls { async run(_id: string, work: object) { void work; return new Response(); } cancel(_id: string) {} }")],
+      ['start command override', text.replace('container.start({ enableInternet: true })', "container.start({ enableInternet: true, entrypoint: ['sh'] })")],
+      ['startup environment', text.replace('container.start({ enableInternet: true })', "container.start({ enableInternet: true, env: { NODE_OPTIONS: request.url } })")],
+      ['caller-selected command', text.replace("['node', '-e', PORT_READY]", "['node', '-e', request.url]")],
+      ['caller-selected readiness arguments', text.replace("['node', '-e', PORT_READY]", "['node', '-e', PORT_READY, request.url]")],
+      ['exec environment', text.replace('{ signal })).output()', '{ signal, env: { NODE_OPTIONS: request.url } })).output()')],
+      ['foreign port', text.replace('container.getTcpPort(8080)', 'container.getTcpPort(22)')],
+      ['returned native capability', text.replace('    const container = this.ctx.container;', '    const container = this.ctx.container; return container;')],
+      ['returned alias', text.replace('    const container = this.ctx.container;', '    const container = this.ctx.container; const alias = container; return alias;')],
+      ['computed capability access', text.replace('container.getTcpPort(8080)', "container['getTcpPort'](8080)")],
+      ['caller-selected forward address', text.replace("new Request('http://codex-egress/forward',", 'new Request(request.url,')],
+      ['decorator', text.replace('export class CodexEgress', '@withRun\nexport class CodexEgress')],
+      ['getter capability', text.replace('  cancel(callId: string): void {', '  get container() { return this.ctx.container; }\n  cancel(callId: string): void {')],
+      ['setter capability', text.replace('  cancel(callId: string): void {', '  set container(value: Container) { void value; }\n  cancel(callId: string): void {')],
+      ['escaping closure', text.replace('    this.#calls.cancel(callId);', '    const later = () => this.ctx.container; return later;')],
+      ['unowned call lifetime', text.replace('  readonly #calls = new EgressCalls();', '  readonly #calls = { run: async (_id: string, work: object) => { void work; return new Response(); }, cancel() {} };')],
+      ['shadowed call owner', text.replace("import { codexEgressAllowed, EgressCalls } from '@kinu.run/core';", "import { codexEgressAllowed } from '@kinu.run/core';\nclass EgressCalls { async run(_id: string, work: object) { void work; return new Response(); } cancel(_id: string) {} }")],
     ];
 
-    for (const [reason, planted] of cases) {
-      expect({ reason, changed: planted !== text }).toEqual({ reason, changed: true });
-      const found = auditForwarder({ ...live(), fileText: planted }).join('\n');
-
-      expect({ reason, found: found.includes(reason) }).toEqual({ reason, found: true });
+    for (const [risk, source] of cases) {
+      expect({ risk, changed: source !== text }).toEqual({ risk, changed: true });
+      expect({ risk, admitted: auditForwarder({ ...live(), fileText: source }).length === 0 }).toEqual({ risk, admitted: false });
     }
   });
+
 });

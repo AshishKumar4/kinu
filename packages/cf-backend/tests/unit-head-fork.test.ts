@@ -3,10 +3,11 @@
  * Defends: a head getting an empty filesystem on its own facet storage and reporting "found nothing".
  */
 
-import { afterAll, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from "bun:test";
 import { CRAFT_NEUTRAL_PRIOR, agentHome, agentTmpRoot, headAgentName, parseActorKey, type AgentRuntime } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
-import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
+import { unreachableObjects } from "./helpers/bindings";
+import type { KinuSandbox } from "../src/kinu-sandbox";
 import type { RecordedUserPlaneCalls } from './helpers/actor-harness';
 import type { KinuEgressParams } from '../src/egress/outbound';
 import type { CFRuntime } from '../src/runtime';
@@ -24,11 +25,7 @@ let restoresPerformed = 0;
 
 const configuredEgress: KinuEgressParams[] = [];
 
-// Reset in `afterAll`, so a later file meets the real SDK.
-await installSandboxSdkMock();
-
-setSandboxSdk({
-  getSandbox: (_ns: NonNullable<Env['Sandbox']>, id: string) => {
+const sandboxFor = (id: string) => {
     requestedSandboxId = id;
 
     return {
@@ -48,13 +45,12 @@ setSandboxSdk({
       // A hosted actor rides the configuration its root installed; a head configuring the container would be a defect.
       configureEgress: async (params: KinuEgressParams) => { configuredEgress.push(params); },
     };
-  },
-});
+};
 
-afterAll(() => { setSandboxSdk(null); });
+const sandboxes = Object.assign(unreachableObjects<KinuSandbox>("Sandbox"), { getByName: sandboxFor });
 
 // Must follow the sandbox double: both helpers' module graphs reach the sandbox SDK.
-const { hostedExplorationHarness, orchestratorHarness } = await import('./helpers/actor-harness');
+const { hostedExplorationHarness, orchestratorHarness } = await import("./helpers/actor-harness");
 
 const { TEST_CREDENTIAL_ENCRYPTION_KEY } = await import('./helpers/user-do');
 
@@ -66,7 +62,7 @@ function isCFRuntime(runtime: AgentRuntime): runtime is CFRuntime {
 /** The workspace has a container, so the head's runtime registers a sandbox executor over it. */
 async function hostedHead(files: Record<string, string> = {}, id = 'head-1', userPlane?: RecordedUserPlaneCalls) {
   const workspace = orchestratorHarness(userPlane, { container: true });
-  workspace.agent.harnessDeclareEnv({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
+  workspace.agent.harnessDeclareEnv({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY, Sandbox: sandboxes });
 
   for (const [path, content] of Object.entries(files)) {
     await workspace.agent.writeWorkspaceFile({ kind: 'file', path, data: content });
@@ -165,7 +161,7 @@ describe('a head forks its parent workspace', () => {
 
     if (!handle) throw new Error('a hosted head runtime rides the workspace container');
     // An empty vault here would be memoized for the handle's life.
-    await expect(handle.exec('true')).rejects.toBe(unreadable);
+    await expect(handle.exec('true')).rejects.toMatchObject({ _tag: 'KinuError', cause: unreadable });
     expect(configuredEgress).toEqual([]);
   });
 

@@ -1,5 +1,4 @@
-// Quiesce decides on the lease as it stood; a caller admitted during the final checkpoint
-// runs on the container the stop would kill, so the stop must re-check callers (D18).
+// Explicit quiesce fences new work and drains commands that already own an admission.
 import { describe, expect, test } from 'bun:test';
 
 import { chainBox } from './support/chain-box';
@@ -13,8 +12,8 @@ async function attachedWithWork() {
   return arm;
 }
 
-describe('a caller arriving during the final checkpoint holds the stop', () => {
-  test('the checkpoint stays committed, the stop is refused and the container keeps running', async () => {
+describe('quiesce joins concurrent stop requests behind admitted work', () => {
+  test('both stops wait for the command and share its final commit', async () => {
     const { box, container } = await attachedWithWork();
     // The command is parked inside the container so it is still executing through the final
     // checkpoint; an immediate answer would make this the idle case below.
@@ -23,16 +22,18 @@ describe('a caller arriving during the final checkpoint holds the stop', () => {
     const command = box.exec('true');
     await parked.reached;
 
-    const outcome = await box.quiesce();
+    const first = box.quiesce();
+    const second = box.quiesce();
+    expect((await box.resolveReadiness()).kind).toBe('pending');
     parked.release();
-
     expect((await command).exitCode).toBe(0);
-    expect(outcome).toMatchObject({ kind: 'failed', reason: expect.stringMatching(/^the stop is refused: /) });
-    expect(outcome.bytes).toEqual(expect.any(Number));
-    expect(container.running.running).toBe(true);
+    const [one, two] = await Promise.all([first, second]);
+    expect(one.kind).toBe('committed');
+    expect(two).toEqual(one);
+    expect(container.running.running).toBe(false);
   });
 
-  test('the same stop with nobody arriving stops the container, so the hold above is not vacuous', async () => {
+  test('an idle stop commits without renewing its own interaction lease', async () => {
     const { box, container } = await attachedWithWork();
     const stampedBefore = (await box.devboxState()).lastInteractionAt;
 

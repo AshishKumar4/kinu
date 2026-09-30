@@ -1,18 +1,21 @@
-// The sole substitution of `@cloudflare/sandbox`: a faithful container stand-in for Devbox tests. It reaches this
-// harness's own instance of the class and nothing else in the process (see the registration below).
-import { mock } from 'bun:test';
-import * as sandboxSdk from '@cloudflare/sandbox';
+// Native platform boundary. Real rc Files/S3Mounts clients execute against the shim model.
+import { NativeShim } from './native-shim';
+import { processResult } from './native-process';
+import { Devbox } from '../../src/devbox';
+
+export { Devbox };
 
 import { createHash } from 'node:crypto';
-import * as v from 'valibot';
 
 import { snapshotChainStorage } from '../../src/snapshot-chain';
 import { DEVBOX_RUNTIME_DIR, type StoredValue } from '../../src/storage';
 import {
-  DEVBOX_SYNC_HANDLER, DEVBOX_SYNC_HOST, containerChainPorts, decodeSyncConfig, parseCheckpointKind, syncCaller,
+  DEVBOX_SYNC_HOST, containerChainPorts, decodeSyncConfig, parseCheckpointKind, syncCaller,
   syncWorker, type SyncAnswer,
 } from '../../src/sync';
-import { sessionShellOutput, sessionShellRefusal } from './session-shell';
+import { shellSyntaxError } from "./container-shell";
+import * as v from 'valibot';
+import type { ExecResult } from '../../src/contracts';
 
 /** Models `@cloudflare/sandbox` errors: `code` is a getter on an unexported `SandboxError` class,
  *  not an own property; a plain-field stand-in would pass checks the shipped SDK fails. */
@@ -83,23 +86,8 @@ export interface FileOperation {
 }
 
 
-/** The SDK's schedule table, shared by SDK `schedule()`/`listSchedules()` and the sweep via
- *  `ctx.storage.sql`; one copy keyed by storage so no two fakes can disagree about a row. */
-const scheduleTables = new WeakMap<DurableObjectStorage, { callback: string; time: number }[]>();
+const alarmTimes = new WeakMap<DurableObjectStorage, { at: number | null; scheduled: string[] }>();
 
-export function scheduleTableOf(
-  storage: DurableObjectStorage,
-): { callback: string; time: number }[] {
-  const held = scheduleTables.get(storage);
-
-  if (held !== undefined) return held;
-  // The fake registers its table when it builds the handle, so an absent table is fresh, not
-  // missing: a box on storage this module did not make holds no rows.
-  const fresh: { callback: string; time: number }[] = [];
-  scheduleTables.set(storage, fresh);
-
-  return fresh;
-}
 
 /** Unmodelled platform members throw by name: a stand-in that answered would answer wrongly,
  *  and an absent one would surface elsewhere as a missing property. */
@@ -120,14 +108,21 @@ export interface FakeStorage {
   failListOn(prefix: string, error: Error | undefined): void;
 }
 
+/** The object's one alarm and the schedule rows that armed it. */
+interface AlarmModel {
+  at: number | null;
+  readonly scheduled: string[];
+}
+
 /** Durable Object storage double: a Map honouring the runtime contract for the four ops used.
  *  `get` resolves undefined when absent, `delete` reports whether a row existed, `list` by prefix. */
 export function fakeStorage(): FakeStorage {
   const rows = new Map<string, StoredValue>();
-  const schedules: { callback: string; time: number }[] = [];
   const gates: Record<string, Gate | undefined> = {};
+  const alarm: AlarmModel = { at: null, scheduled: [] };
   const faults: Record<string, Error | undefined> = {};
   const listFaults = new Map<string, Error>();
+  let kvCursor = 0;
   /** A transaction refuses to commit a key another writer moved meanwhile: the runtime
    *  isolates concurrent transactions, so the second committer fails instead of overwriting. */
   const keyVersions = new Map<string, number>();
@@ -145,7 +140,8 @@ export function fakeStorage(): FakeStorage {
   // the class can call. Each operation here returns what the runtime contract
   // says it returns.
   const handle = {
-    get: async (key: string): Promise<StoredValue> => {
+    get: async (key: string | string[]): Promise<StoredValue | Map<string, StoredValue>> => {
+      if (Array.isArray(key)) return new Map(key.filter(item => rows.has(item)).map(item => [item, rows.get(item)]));
       const held = gates[key];
 
       if (held !== undefined) {
@@ -156,24 +152,23 @@ export function fakeStorage(): FakeStorage {
 
       return rows.get(key);
     },
-    put: (key: string, value: StoredValue): Promise<void> => {
-      const fault = takeWriteFault(key);
+    put: async (key: string | Record<string, StoredValue>, value?: StoredValue): Promise<void> => {
+      for (const [name, stored] of v.is(v.string(), key) ? [[key, value] as const] : Object.entries(key)) {
+        const fault = takeWriteFault(name);
 
-      if (fault !== undefined) {
-        return Promise.reject(fault);
+        if (fault !== undefined) throw fault;
+        rows.set(name, stored);
+        keyVersions.set(name, (keyVersions.get(name) ?? -1) + 1);
+      }
+    },
+    delete: async (keys: string | string[]): Promise<boolean | number> => {
+      let removed = 0;
+
+      for (const key of Array.isArray(keys) ? keys : [keys]) {
+        if (rows.delete(key)) { removed++; keyVersions.set(key, (keyVersions.get(key) ?? -1) + 1); }
       }
 
-      rows.set(key, value);
-      keyVersions.set(key, (keyVersions.get(key) ?? -1) + 1);
-
-      return Promise.resolve();
-    },
-    delete: (key: string): Promise<boolean> => {
-      const existed = rows.delete(key);
-
-      if (existed) keyVersions.set(key, (keyVersions.get(key) ?? -1) + 1);
-
-      return Promise.resolve(existed);
+      return Array.isArray(keys) ? removed : removed !== 0;
     },
     // Writes are buffered and land only when the closure settles, none if it throws: a
     // write-through fake could not hold the atomicity the head CAS rests on.
@@ -237,18 +232,46 @@ export function fakeStorage(): FakeStorage {
 
       return result;
     },
-    // Models only the one SQLite statement the class issues; anything else refuses by name,
-    // since a fake answering an unmodelled statement would answer it wrongly (`session-shell.ts`).
-    sql: {
-      exec: (query: string) => {
-        if (!query.includes('FROM container_schedules')) {
-          throw new Error(`the fake Durable Object SQLite was asked an unmodelled statement: ${query}`);
-        }
+    kv: {
+      get: (key: string) => rows.get(key),
+      put: (key: string, value: StoredValue) => {
+        const fault = takeWriteFault(key);
 
-        const distinct = [...new Set(schedules.map((row) => row.callback))];
+        if (fault !== undefined) throw fault;
+        rows.set(key, value);
+        keyVersions.set(key, (keyVersions.get(key) ?? -1) + 1);
 
-        return { toArray: () => distinct.map((callback) => ({ callback })) };
+        if (key.startsWith('devbox:schedule:')) alarm.scheduled.push(key.slice('devbox:schedule:'.length));
       },
+      delete: (key: string) => {
+        const deleted = rows.delete(key);
+
+        if (deleted) keyVersions.set(key, (keyVersions.get(key) ?? -1) + 1);
+
+        return deleted;
+      },
+      list: ({ prefix = "" } = {}): IterableIterator<[string, StoredValue]> => {
+        const cursor = ++kvCursor;
+        const entries = [...rows].filter(([key]) => key.startsWith(prefix)).values();
+
+        return {
+          [Symbol.iterator]() { return this; },
+          next() {
+            if (cursor !== kvCursor) throw new Error("kv.list() iterator was invalidated by another list");
+
+            return entries.next();
+          },
+        };
+      },
+    },
+    setAlarm: async (at: number | Date) => { alarm.at = Number(at); },
+    getAlarm: async () => alarm.at,
+    deleteAlarm: async () => { alarm.at = null; },
+    sql: {
+      exec: (query: string) => unreached("sql: " + query),
+      get databaseSize() { return unreached("sql.databaseSize"); },
+      get Cursor() { return unreached("sql.Cursor"); },
+      get Statement() { return unreached("sql.Statement"); },
     },
     list: (options: { prefix: string }): Promise<Map<string, StoredValue>> => {
       const failure = listFaults.get(options.prefix);
@@ -257,9 +280,28 @@ export function fakeStorage(): FakeStorage {
 
       return Promise.resolve(new Map([...rows].filter(([key]) => key.startsWith(options.prefix))));
     },
+    deleteAll: () => unreached('storage.deleteAll'),
+    sync: () => unreached('storage.sync'),
+    transactionSync: <T>(run: () => T): T => {
+      const before = new Map(rows);
+      const versions = new Map(keyVersions);
+
+      try { return run(); }
+      catch (cause) {
+        rows.clear(); keyVersions.clear();
+
+        for (const [key, value] of before) rows.set(key, value);
+
+        for (const [key, value] of versions) keyVersions.set(key, value);
+        throw cause;
+      }
+    },
+    getCurrentBookmark: () => unreached('storage.getCurrentBookmark'),
+    getBookmarkForTime: () => unreached('storage.getBookmarkForTime'),
+    onNextSessionRestoreBookmark: () => unreached('storage.onNextSessionRestoreBookmark'),
   } as DurableObjectStorage;
 
-  scheduleTables.set(handle, schedules);
+  alarmTimes.set(handle, alarm);
 
   return {
     rows,
@@ -279,9 +321,6 @@ const IMAGE_DIRECTORIES = ['/', '/workspace', '/tmp', '/var/tmp'] as const;
 /** Faults are queues and gates are one-shot: the modelled defects exist only across two calls,
  *  so the fake must let one attempt differ from the next. */
 export class FakeSandbox {
-  /** The instance the last `new Devbox(…)` built; `Devbox` extends this class, so the box IS
-   *  its container and a test reaches the container through it. */
-  static last: FakeSandbox | undefined;
 
   /** Same object the Durable Object state hands the class as `ctx.container`, so a test that
    *  stops the container and the class reading `running` cannot disagree. */
@@ -292,9 +331,7 @@ export class FakeSandbox {
   readonly kills: string[] = [];
   readonly execs: string[] = [];
   readonly exposures: { port: number; token: string | undefined; name: string | undefined }[] = [];
-  readonly schedules: string[] = [];
-  /** The SDK's schedule table, shared with the Durable Object's SQLite: see {@link scheduleTableOf}. */
-  readonly scheduleRows: { callback: string; time: number }[];
+  get schedules(): string[] { return alarmTimes.get(this.ctx.storage)?.scheduled ?? []; }
   /** Configured probe answers for services on a started container, retained
    *  with the other fault controls; this is not a live process registry. */
   readonly listening = new Set<number>();
@@ -313,11 +350,6 @@ export class FakeSandbox {
   syncHost: ((body: string) => Promise<SyncAnswer>) | undefined = undefined;
   /** s3fs runs under exactly these options; an option absent here is s3fs's own default. */
   readonly s3fsOptionsByMount = new Map<string, readonly string[]>();
-  /** The SDK default session starts with `cwd: "/workspace"` (the mount point) and `unmountBucket`
-   *  runs in it without its own cwd; a shell standing on the mount holds it, so unmount can EBUSY. */
-  /** Each session shell's directory: `/workspace` at start, a command's `cwd` while it runs, a bare
-   *  `cd` after (0.12.9 container server). */
-  readonly sessionCwds = new Map<string, string>([['default', '/workspace']]);
   /** A fresh container holds only the image's dirs; `/var/tmp/devbox` is made by whatever runs
    *  first. Commands earn dirs by `mkdir -p`; a cwd absent here refuses chdir, as the container does. */
   readonly directories = new Set<string>(IMAGE_DIRECTORIES);
@@ -356,10 +388,9 @@ export class FakeSandbox {
   destroys = 0;
   bootId: string | undefined;
   containerStarts = 0;
-  /** Each run of the start hook the SDK's start block makes (D26): one per wake of a box. */
-  startHooks = 0;
   readonly startWaitOptions: unknown[] = [];
   readonly files = new Map<string, string>();
+  readonly fileFaults = new Map<string, { readonly errno: number; readonly message: string }>();
   /** Recorded by the box's own `fuse-overlayfs` command and reported via `cat /proc/mounts`,
    *  which `isOverlayMounted` reads; termination clears them with the local filesystem (P1). */
   readonly overlayMounts = new Set<string>();
@@ -385,75 +416,16 @@ export class FakeSandbox {
    *  operation that arrives during the restore until the hook settles. */
   initGate: Promise<void> | undefined;
 
-  constructor(readonly ctx: DurableObjectState) {
-    FakeSandbox.last = this;
-    this.scheduleRows = scheduleTableOf(ctx.storage);
-  }
+  constructor(readonly ctx: DurableObjectState) {}
 
-  /** Mirrors the SDK's delete-by-callback (`container.js:1492-1494`); the class's sweep
-   *  of unreachable rows goes through it. */
-  deleteSchedules(callback: string): void {
-    for (let index = this.scheduleRows.length - 1; index >= 0; index -= 1) {
-      if (this.scheduleRows[index]?.callback === callback) this.scheduleRows.splice(index, 1);
-    }
-  }
-
-  onStart(): Promise<void> {
-    return Promise.resolve();
-  }
   /** A missing `cwd` is refused: the session shell chdirs first, so the command never runs. */
-  #chdir(cwd: string | undefined): { stdout: string; stderr: string; exitCode: number } | null {
+  #chdir(cwd: string | undefined): ExecResult | null {
     if (cwd === undefined || this.directories.has(cwd)) return null;
     this.sequence.push(`chdirRefused:${cwd}`);
 
     return { stdout: '', stderr: `Failed to change directory to '${cwd}'`, exitCode: 1 };
   }
 
-  /** The SDK's `exec`: the command runs in a session shell and its output comes back through the
-   *  container server's line reader (`sessionShellOutput`), unlike a program's own shell. */
-  async #execInSession(
-    session: string,
-    command: string,
-    options?: { readonly cwd?: string },
-  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    const reading = this.stateReadGate;
-
-    if (reading !== undefined) {
-      this.stateReadGate = undefined;
-      reading.enter();
-      await reading.promise;
-    }
-
-    // The SDK starts a stopped container before a command reaches it, through the one start both
-    // transports share (0.12.9), so a subclass's `startAndWaitForPorts` decides.
-    if (!this.running.running) await this.startAndWaitForPorts({ ports: this.defaultPort });
-
-    const refusedChdir = this.#chdir(options?.cwd);
-
-    if (refusedChdir !== null) return refusedChdir;
-    const resting = this.sessionCwds.get(session) ?? '/workspace';
-    const moved = options?.cwd === undefined ? /^cd '([^']*)'$/.exec(command)?.[1] : undefined;
-
-    if (moved !== undefined) {
-      const refusedMove = this.#chdir(moved);
-
-      if (refusedMove !== null) return refusedMove;
-      this.sessionCwds.set(session, moved);
-      this.sequence.push(`cd:${session}:${moved}`);
-
-      return { stdout: '', stderr: '', exitCode: 0 };
-    }
-
-    this.sessionCwds.set(session, options?.cwd ?? resting);
-
-    try {
-      const { stdout, stderr, exitCode } = await this.#execIn(command, options);
-
-      return { stdout: sessionShellOutput(stdout), stderr: sessionShellOutput(stderr), exitCode };
-    } finally {
-      this.sessionCwds.set(session, resting);
-    }
-  }
 
   /** `mkdir -p` creates what it names: how a container earns the directories
    *  later commands are allowed to stand in. */
@@ -465,7 +437,7 @@ export class FakeSandbox {
 
   /** Removes each quoted path's subtree so a retired reply cannot be read by the next attempt
    *  on the same fixed result path; `rm -rf` of an absent path still succeeds. */
-  #execRemoval(command: string): { stdout: string; stderr: string; exitCode: number } | null {
+  #execRemoval(command: string): ExecResult | null {
     const removed = /^rm -r?f '([^']+)'$/.exec(command);
 
     if (removed === null && !command.startsWith('rm -rf ')) return null;
@@ -483,35 +455,89 @@ export class FakeSandbox {
 
   /** The holder release as a container with no process on the mount answers it. Matched on the
    *  `/proc/$pid/fd` scan, not the command prefix, which an ancestor walk changes. */
-  #execHolderRelease(command: string): { stdout: string; stderr: string; exitCode: number } | null {
+  #execHolderRelease(command: string): ExecResult | null {
     return command.includes('/proc/$pid/fd') ? { stdout: 'none', stderr: '', exitCode: 0 } : null;
+  }
+  #hydrateLayer(source: string, mountPoint: string): void {
+    const relative = source.startsWith('/backups/') ? source.slice('/backups/'.length) : undefined;
+
+    const bytes = relative === undefined ? this.stagedArchives.get(source)
+      : this.chainStore?.objects.get(this.chainStore.root + '/' + relative);
+
+    if (bytes === undefined) return;
+    const archive = new TextDecoder().decode(bytes);
+    const rootEnd = archive.indexOf('\0');
+
+    if (rootEnd < 0) return;
+    const root = archive.slice(0, rootEnd) + '/';
+    let at = rootEnd + 1;
+
+    while (at < archive.length) {
+      const nameEnd = archive.indexOf('\0', at);
+      const sizeEnd = archive.indexOf('\0', nameEnd + 1);
+
+      if (nameEnd < 0 || sizeEnd < 0) throw new Error('the modeled archive has an incomplete file header');
+      const name = archive.slice(at, nameEnd);
+      const size = Number(archive.slice(nameEnd + 1, sizeEnd));
+
+      if (!Number.isInteger(size) || size < 0 || !name.startsWith(root)) throw new Error('the modeled archive has an invalid file header');
+      at = sizeEnd + 1;
+      this.files.set(mountPoint + '/' + name.slice(root.length), archive.slice(at, at + size));
+      at += size;
+    }
+  }
+
+  #unmountWorkdir(path: string): ExecResult {
+    for (const process of this.processes.values()) {
+      if (process.status !== 'running' && process.status !== 'starting') continue;
+
+      for (let at = this.starts.length - 1; at >= 0; at--) {
+        const start = this.starts[at];
+
+        if (start?.processId !== process.id) continue;
+
+        if (start.cwd === path || start.cwd?.startsWith(path + '/') === true) {
+          return { stdout: '', stderr: 'fusermount3: failed to unmount ' + path + ': Device or resource busy', exitCode: 1 };
+        }
+
+        break;
+      }
+    }
+
+    for (const file of this.files.keys()) if (file.startsWith(path + '/')) this.files.delete(file);
+    this.overlayMounts.delete(path);
+    this.layerMounts.delete(path);
+    this.#layerSources.delete(path);
+    this.s3fsMounts.delete(path);
+
+    return { stdout: '', stderr: '', exitCode: 0 };
+  }
+  #mountOverlay(command: string): ExecResult {
+    const target = quotedSegments(command).at(-1);
+
+    if (target !== undefined) {
+      this.overlayMounts.add(target);
+      const lowers = /lowerdir='([^']+)'/.exec(command)?.[1]?.split(':').reverse() ?? [];
+      const upper = /upperdir='([^']+)'/.exec(command)?.[1];
+
+      if (upper !== undefined) lowers.push(upper);
+
+      for (const layer of lowers) {
+        for (const [path, content] of Array.from(this.files)) if (path.startsWith(layer + '/')) this.files.set(target + path.slice(layer.length), content);
+      }
+    }
+
+    return { stdout: '', stderr: '', exitCode: 0 };
   }
 
   /** Answers snapshot-chain commands as the container does; matched on the binary each runs,
    *  the one part of the template the strategy's builders own. Null for any other command. */
-  #execChainCommand(command: string): { stdout: string; stderr: string; exitCode: number } | null {
+  #execChainCommand(command: string): ExecResult | null {
     const unmount = /\/usr\/bin\/fusermount3 -u '([^']+)'/.exec(command)?.[1];
 
-    if (unmount !== undefined) {
-      const mounted = this.overlayMounts.has(unmount) || this.layerMounts.has(unmount) || this.s3fsMounts.has(unmount);
+    if (unmount !== undefined) return this.#unmountWorkdir(unmount);
 
-      if (mounted && this.#mountIsBusy(unmount)) return { stdout: '', stderr: `fusermount3: failed to unmount ${unmount}: Device or resource busy`, exitCode: 1 };
-      this.overlayMounts.delete(unmount);
-      this.layerMounts.delete(unmount);
-      this.#layerSources.delete(unmount);
-      this.s3fsMounts.delete(unmount);
-
-      return { stdout: '', stderr: '', exitCode: 0 };
-    }
-
-    if (command.includes('/usr/bin/fuse-overlayfs')) {
-      const quoted = quotedSegments(command);
-      const target = quoted.at(-1);
-
-      if (target !== undefined) this.overlayMounts.add(target);
-
-      return { stdout: '', stderr: '', exitCode: 0 };
-    }
+    if (command.includes('/usr/bin/fuse-overlayfs')) return this.#mountOverlay(command);
 
     if (command.includes('/usr/local/bin/devbox-squashfuse')) {
       const quoted = quotedSegments(command.slice(command.indexOf('/usr/local/bin/devbox-squashfuse')));
@@ -519,7 +545,10 @@ export class FakeSandbox {
 
       if (mountPoint !== undefined) this.layerMounts.add(mountPoint);
 
-      if (mountPoint !== undefined && source !== undefined) this.#layerSources.set(mountPoint, source);
+      if (mountPoint !== undefined && source !== undefined) {
+        this.#layerSources.set(mountPoint, source);
+        this.#hydrateLayer(source, mountPoint);
+      }
 
       return { stdout: '', stderr: '', exitCode: 0 };
     }
@@ -627,7 +656,7 @@ export class FakeSandbox {
 
     if (bytes === undefined) return { stdout: '2 ', stderr: `no archive at ${archivePath}`, exitCode: 0 };
 
-    const key = `${store.root}/${relative}`;
+    const key = decodeURIComponent(relative);
     store.attempts?.push({ operation: 'put', key, bytes: bytes.byteLength });
     store.objects.set(key, bytes.slice());
 
@@ -665,16 +694,16 @@ export class FakeSandbox {
   async exec(
     command: string,
     options?: { readonly cwd?: string },
-  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    return await this.#execInSession('default', command, options);
+  ): Promise<ExecResult> {
+    return await this.#execIn(command, options);
   }
 
   /** A command in no session shell, as the image's program runs its own. */
   async #execIn(
     command: string,
     options?: { readonly cwd?: string },
-  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    const refused = sessionShellRefusal(command);
+  ): Promise<ExecResult> {
+    const refused = shellSyntaxError(command);
 
     if (refused !== undefined) {
       this.sequence.push(`sessionKilled:${command.split(' ')[0]}`);
@@ -767,7 +796,7 @@ export class FakeSandbox {
 
   /** The box's own programs and probes, answered from this container's state with the bytes bash
    *  writes; the session path hands them back as the container server does. Null for any other. */
-  async #execBoxProgram(command: string): Promise<{ stdout: string; stderr: string; exitCode: number } | null> {
+  async #execBoxProgram(command: string): Promise<ExecResult | null> {
     if (command === 'cat /tmp/devbox-boot-id 2>/dev/null || true') return { stdout: this.bootId ?? '', stderr: '', exitCode: 0 };
 
     if (command.startsWith('# devbox-beat-v1\n')) {
@@ -799,7 +828,7 @@ export class FakeSandbox {
 
   /** The flush as the image's program takes it: the same chain checkpoint, run on this container's
    *  own shell, asking the box through `devboxSync` for what the container cannot reach (D30). */
-  async #flushSync(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  async #flushSync(command: string): Promise<ExecResult> {
     const flush = /DEVBOX_SYNC_CONFIG=(\S+) bun \S+ flush (\w+)/.exec(command);
 
     if (flush === null) return { stdout: '', stderr: `unparsed flush: ${command}`, exitCode: 2 };
@@ -810,7 +839,7 @@ export class FakeSandbox {
 
     const transport = async (body: string): Promise<{ status: number; text: string }> => {
       // `.internal` resolves nowhere: without the box's binding the request never leaves the container.
-      if (this.outboundHosts.get(DEVBOX_SYNC_HOST) !== DEVBOX_SYNC_HANDLER) throw new Error('Unable to connect. Is the computer able to access the url?');
+      if (!this.outboundHosts.has(DEVBOX_SYNC_HOST)) throw new Error('Unable to connect. Is the computer able to access the url?');
       const answer = await host(body);
 
       return { status: answer.status, text: answer.body };
@@ -826,16 +855,6 @@ export class FakeSandbox {
     return { stdout: JSON.stringify(await worker.run(parseCheckpointKind(flush[2]))), stderr: '', exitCode: 0 };
   }
 
-  /** A named session runs its commands in its own shell. */
-  async getSession(id: string): Promise<{ readonly id: string; exec: FakeSandbox['exec'] }> {
-    return await Promise.resolve({ id, exec: async (command, options) => await this.#execInSession(id, command, options) });
-  }
-
-  async setOutboundByHost(host: string, method: string): Promise<void> {
-    this.outboundHosts.set(host, method);
-
-    await Promise.resolve();
-  }
 
   async mountBucket(
     _binding: string, mountPath: string, options?: { readonly s3fsOptions?: readonly string[] },
@@ -850,44 +869,10 @@ export class FakeSandbox {
     this.mountCalls.push(`unmount:${mountPath}`);
     this.sequence.push(`unmount:${mountPath}`);
 
-    // Models the SDK: `fusermount -u` runs in the default session (cwd `/workspace`), and a
-    // shell standing on a mount holds it, so unmount is refused even with no live holder.
-    if (this.#mountIsBusy(mountPath)) {
-      throw new Error(
-        `fusermount -u failed (exit 1): fusermount: failed to unmount ${mountPath}: `
-        + 'Device or resource busy',
-      );
-    }
 
     this.s3fsMounts.delete(mountPath);
   }
 
-  #mountIsBusy(path: string): boolean {
-    return [...this.sessionCwds.values()].some((cwd) => cwd === path || cwd.startsWith(`${path}/`));
-  }
-
-  async renameFile(oldPath: string, newPath: string, sessionId?: string): Promise<FileOperation> {
-    return this.#recordFileOperation('rename', oldPath, newPath, sessionId);
-  }
-
-  async moveFile(sourcePath: string, destinationPath: string, sessionId?: string): Promise<FileOperation> {
-    return this.#recordFileOperation('move', sourcePath, destinationPath, sessionId);
-  }
-
-  #recordFileOperation(
-    operation: FileOperation['operation'],
-    from: string,
-    to: string,
-    sessionId: string | undefined,
-  ): FileOperation {
-    const request = { operation, from, to, sessionId };
-    this.fileOperations.push(request);
-    const failure = this.fileOperationFailures[operation].shift();
-
-    if (failure !== undefined) throw failure;
-
-    return request;
-  }
 
   async startProcess(
     command: string,
@@ -945,6 +930,14 @@ export class FakeSandbox {
     }
 
     return { success: true, path, timestamp: new Date().toISOString() };
+  }
+
+  async deleteFile(path: string): Promise<void> {
+    for (const key of this.files.keys()) if (key === path || key.startsWith(path + '/')) this.files.delete(key);
+
+    for (const key of this.directories) if (key === path || key.startsWith(path + '/')) this.directories.delete(key);
+    this.stagedArchives.delete(path);
+    this.changeVersion++;
   }
 
   /** Models the SDK's retained change state: a held version matches until a write moves it;
@@ -1013,10 +1006,10 @@ export class FakeSandbox {
       });
 
     const encoded = new TextEncoder();
-    const parts: Uint8Array[] = [];
+    const parts: Uint8Array[] = [encoded.encode(sourceDir.replace(/\/$/, '') + '\0')];
 
     for (const [entry, content] of entries) {
-      parts.push(encoded.encode(`${entry} ${String(content.length)} `), encoded.encode(content));
+      parts.push(encoded.encode(`${entry}\0${String(content.length)}\0`), encoded.encode(content));
     }
 
     const total = parts.reduce((sum, part) => sum + part.byteLength, 0);
@@ -1055,17 +1048,6 @@ export class FakeSandbox {
     return Promise.resolve();
   }
 
-  async exposePort(port: number, options: { token?: string; name?: string }): Promise<void> {
-    const held = this.exposeGate;
-
-    if (held !== undefined) {
-      this.exposeGate = undefined;
-      held.enter();
-      await held.promise;
-    }
-
-    this.exposures.push({ port, token: options.token, name: options.name });
-  }
 
   destroy(): Promise<void> {
     this.destroys += 1;
@@ -1090,11 +1072,8 @@ export class FakeSandbox {
     this.layerMounts.clear();
     this.#layerSources.clear();
     this.s3fsMounts.clear();
-    this.sessionCwds.clear();
-    this.sessionCwds.set('default', '/workspace');
     this.changeVersion = 0;
   }
-
   /** Starting a running container is a health probe, not a new instance: it adds no start,
    *  but the ask is still recorded and an injected fault still fires. */
   async start(...args: unknown[]): Promise<void> {
@@ -1124,78 +1103,10 @@ export class FakeSandbox {
     this.startFaultAfterRunning = undefined;
 
     if (fault !== undefined) throw fault;
-    const beforeHook = this.containerHookGate;
 
-    if (beforeHook !== undefined) {
-      this.containerHookGate = undefined;
-      beforeHook.enter();
-      await beforeHook.promise;
-    }
-
-    // The patched SDK runs the hook inside its start block, which holds the input gate until the
-    // hook settles (D26); the hook's own container calls answer on a connection opened inside it.
-    this.startHooks += 1;
-    const hook = this.onStart();
-    this.initGate = Promise.allSettled([hook]).then(() => undefined);
-
-    try {
-      await hook;
-    } finally {
-      this.initGate = undefined;
-    }
+    return;
   }
 
-  /** Proves the control listener or a requested app port before opening onStart (D1);
-   *  only app listeners depend on restored workloads. */
-  async startAndWaitForPorts(...args: unknown[]): Promise<void> {
-    // The rest parameter is the one `unknown` this file allows; decode SDK port shapes here.
-    const single = v.safeParse(v.number(), args[0]);
-    const list = v.safeParse(v.array(v.number()), args[0]);
-
-    const options = v.safeParse(v.object({
-      ports: v.union([v.number(), v.array(v.number())]),
-      cancellationOptions: v.optional(v.object({
-        instanceGetTimeoutMS: v.optional(v.number()),
-        waitInterval: v.optional(v.number()),
-        abort: v.optional(v.instance(AbortSignal)),
-      })),
-    }), args[0]);
-
-    const askedPorts = (): readonly number[] => {
-      if (single.success) return [single.output];
-
-      if (list.success) return list.output;
-
-      if (!options.success) return [];
-      const { ports } = options.output;
-
-      return Array.isArray(ports) ? ports : [ports];
-    };
-
-    const wanted = askedPorts();
-
-    // Port 3000 is the Sandbox control listener, not a restored application.
-    const dark = wanted.filter((port) => port !== this.defaultPort && !this.listening.has(port));
-
-    if (dark.length > 0) {
-      const wasRunning = this.running.running;
-      this.running.running = true;
-
-      if (!wasRunning) this.containerStarts += 1;
-      throw new Error(
-        `port ${dark.join(', ')} never answered: admission waits for the instance, and per-port proofs live inside the restore`,
-      );
-    }
-
-    const cancellation = options.success ? options.output.cancellationOptions : undefined;
-    const interval = cancellation?.waitInterval ?? 100;
-    await FakeSandbox.prototype.start.call(this, undefined, {
-      portToCheck: this.defaultPort,
-      retries: Math.ceil((cancellation?.instanceGetTimeoutMS ?? 30_000) / interval),
-      waitInterval: interval,
-      signal: cancellation?.abort,
-    });
-  }
 
   stops = 0;
 
@@ -1212,79 +1123,141 @@ export class FakeSandbox {
     return Promise.resolve();
   }
 
-  /** Each renewal of the SDK's activity timeout: a heartbeat that stops renewing lets `sleepAfter` end the
-   *  SDK alarm chain, and with it every scheduled callback. */
   activityRenewals = 0;
+  readonly shim = new NativeShim(this);
+  owner: { alarm(): Promise<void>; onStop(): Promise<void> } | undefined;
+  nativeExec: Container['exec'] | undefined;
+  /** The model's start behind the platform's synchronous `start`; a failure surfaces at the next exec. */
+  #opening: Promise<PromiseSettledResult<void>[]> | undefined;
+  #pid = 10;
+  #ended = Promise.withResolvers<void>();
 
-  renewActivityTimeout(): void {
-    this.activityRenewals += 1;
+  get scheduleRows(): { callback: string; time: number }[] {
+    return [...this.ctx.storage.kv.list<number>({ prefix: 'devbox:schedule:' })]
+      .map(([key, at]) => ({ callback: key.slice('devbox:schedule:'.length), time: at / 1000 }));
+  }
+  async seedSchedule(callback: string, time: number): Promise<void> {
+    this.ctx.storage.kv.put("devbox:schedule:" + callback, time * 1000);
+    await this.ctx.storage.setAlarm(Math.min(this.alarmAt ?? Infinity, time * 1000));
+  }
+  get alarmAt(): number | null { return alarmTimes.get(this.ctx.storage)?.at ?? null; }
+  async alarm(): Promise<void> { await this.owner?.alarm(); }
+  clearSchedules(callback?: string): void {
+    for (const [key] of this.ctx.storage.kv.list({ prefix: "devbox:schedule:" })) {
+      if (callback === undefined || key === "devbox:schedule:" + callback) this.ctx.storage.kv.delete(key);
+    }
+  }
+  handle(): Container {
+    const running = () => this.running.running;
+
+    return {
+      get running() { return running(); },
+      get images() { return {}; },
+      start: options => {
+        this.#ended = Promise.withResolvers<void>();
+        this.#opening = Promise.allSettled([this.start(options)]);
+      },
+      monitor: () => this.#ended.promise,
+      destroy: async () => { await this.destroy(); this.#ended.resolve(); },
+      signal: () => { void this.stop().then(this.#ended.resolve, this.#ended.reject); },
+      getTcpPort: port => ({
+        fetch: async () => new Response('', { status: this.listening.has(port) ? 200 : 503 }),
+        connect: () => unreached('port.connect'),
+      }),
+      setInactivityTimeout: async () => { this.activityRenewals++; },
+      interceptOutboundHttp: async (host) => { this.outboundHosts.set(host, host); },
+      interceptAllOutboundHttp: async () => { this.outboundHosts.set(DEVBOX_SYNC_HOST, DEVBOX_SYNC_HOST); },
+      interceptOutboundHttps: async () => undefined,
+      snapshotContainer: () => unreached('container.snapshotContainer'),
+      inspect: () => unreached('container.inspect'),
+      exec: (args, options) => this.#native(args, options),
+    };
   }
 
-  /** The SDK base without keepAlive (`Sandbox.onActivityExpired` over `Container.onActivityExpired`, 0.12.9):
-   *  a running container is stopped. The class never enables keepAlive, and this fake has no `setKeepAlive`. */
-  async onActivityExpired(): Promise<void> {
-    if (this.running.running) await this.stop();
+  /** What the platform does before a native exec runs: the start it is behind, then the running check. */
+  async #admitNative(options: ContainerExecOptions): Promise<void> {
+    const [opened] = await this.#opening ?? [];
+
+    this.#opening = undefined;
+
+    if (opened?.status === 'rejected') throw opened.reason;
+    const held = this.stateReadGate;
+
+    if (held !== undefined) { this.stateReadGate = undefined; held.enter(); await held.promise; }
+
+    if (!this.running.running) throw new Error('native exec cannot run in a stopped container');
+
+    if (options.signal?.aborted) throw options.signal.reason;
   }
 
-  listSchedules(callback?: string): Promise<readonly { time: number }[]> {
-    return Promise.resolve(
-      this.scheduleRows
-        .filter(row => callback === undefined || row.callback === callback)
-        .map(({ time }) => ({ time })),
-    );
-  }
+  async #native(args: string[], options: ContainerExecOptions = {}): Promise<ExecProcess> {
+    await this.#admitNative(options);
 
-  /** Also moves the object's alarm a second out, as the SDK's `scheduleNextAlarm` does for every row. */
-  schedule(delaySeconds: number, callback: string): Promise<void> {
-    this.schedules.push(callback);
-    this.scheduleRows.push({ callback, time: Date.now() / 1000 + delaySeconds });
-    this.alarmAt = Date.now() + 1000;
+    if (this.nativeExec !== undefined && (args[0] === "bash" || args[3] === "kill-tree")) return this.nativeExec(args, options);
 
-    return Promise.resolve();
-  }
+    if (args[0] === '/usr/local/bin/sandbox-shim') return this.shim.exec(args);
+    const pid = this.#pid++;
 
-  /** The object's one platform alarm, in ms, as the SDK leaves it after a pass; `null` once the
-   *  SDK deleted it, and then the platform never wakes the object on its own again. */
-  alarmAt: number | null = null;
+    // The restore deadline's process ends only when it is killed: a test that needs the deadline to
+    // fall hands the box a hand clock rather than waiting out a duration.
+    if (args[0] === '/bin/sleep') {
+      let release: () => void = () => undefined;
+      const done = new Promise<ExecResult>(resolve => { release = () => resolve({ stdout: '', stderr: '', exitCode: 0 }); });
 
-  /** What a scheduled callback threw: the SDK logs it and deletes the row all the same. */
-  readonly alarmCallbackErrors: unknown[] = [];
-
-  /** One pass of `Container.alarm` (containers 0.3.7, `container.js:1541-1629`): each due row's
-   *  callback runs, then its row goes; a row naming no member stays. A stopped container then keeps
-   *  an alarm only for a row still owed, and a running one always keeps one, at most 3 min out. */
-  async alarm(): Promise<void> {
-    for (const row of this.scheduleRows.slice()) {
-      if (row.time > Date.now() / 1000) continue;
-      const callback = this.#member(row.callback);
-
-      if (callback === undefined) continue;
-
-      try {
-        await callback();
-      } catch (error) {
-        this.alarmCallbackErrors.push(error);
-      }
-
-      const at = this.scheduleRows.indexOf(row);
-
-      if (at !== -1) this.scheduleRows.splice(at, 1);
+      return processResult(done, pid, () => { release(); });
     }
 
-    const owed = this.scheduleRows.length === 0 ? null : Math.min(...this.scheduleRows.map((row) => row.time * 1000));
-    this.alarmAt = this.running.running ? Math.min(owed ?? Number.POSITIVE_INFINITY, Date.now() + 180_000) : owed;
-  }
+    if (args[0] === '/bin/true') {
+      const hookGate = this.containerHookGate;
 
-  /** The SDK calls a row's callback by name (`this[row.callback]`), a member of any class above. */
-  #member(name: string): (() => Promise<void>) | undefined {
-    for (let owner: object | null = Object.getPrototypeOf(this); owner !== null; owner = Object.getPrototypeOf(owner)) {
-      const method = v.safeParse(v.function(), Object.getOwnPropertyDescriptor(owner, name)?.value);
+      if (hookGate !== undefined) { this.containerHookGate = undefined; hookGate.enter(); await hookGate.promise; }
 
-      if (method.success) return async () => { await method.output.call(this); };
+      return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
     }
 
-    return undefined;
+    if (args[3] === 'devbox-process') {
+      const id = (args[4] ?? '').split('/').at(-1) ?? '';
+      const row = await this.startProcess(args.at(-1) ?? '', { cwd: options.cwd, processId: id });
+      this.files.set(`${args[4]}/pid`, String(row.pid));
+
+      return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), row.pid);
+    }
+
+    if (args[3] === 'devbox-status') return this.#nativeProcessStatus(args.slice(4), pid);
+
+    if (args[3] === 'devbox-kill') {
+      const id = (args[4] ?? '').split('/').at(-1) ?? '';
+      const row = this.processes.get(id);
+
+      if (this.files.has(`${args[4]}/process.json`) && (row?.status === 'running' || row?.status === 'starting')) await this.killProcess(id);
+
+      return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
+    }
+
+    const command = args[2] ?? '';
+
+    return processResult(this.#execIn(command, { cwd: options.cwd }), pid);
   }
+  async #nativeProcessStatus(dirs: string[], pid: number): Promise<ExecProcess> {
+    const lines: string[] = [];
+
+    for (const dir of dirs) {
+      const id = dir.split('/').at(-1) ?? '';
+      const row = await this.getProcess(id);
+      const record = this.files.get(`${dir}/process.json`);
+
+      if (record === undefined) continue;
+      let state = `exit ${row?.status === 'completed' ? 0 : 1}`;
+
+      if (row === null) state = 'lost';
+      else if (row.status === 'running') state = `running ${row.pid}`;
+      else if (row.status === 'starting') state = 'starting';
+      lines.push(state, record);
+    }
+
+    return processResult(Promise.resolve({ stdout: lines.length ? lines.join('\n') + '\n' : '', stderr: '', exitCode: 0 }), pid);
+  }
+
 }
 
 // A real timer on purpose: the probe loop and the stop-transition wait are under test,
@@ -1301,35 +1274,6 @@ Object.defineProperty(globalThis, 'scheduler', {
   },
 });
 
-/** This harness's own instance of the class module. The query is Bun's form for evaluating `devbox.ts` again, apart
- *  from the instance every other importer in the process shares (the product's `@kinu.run/devbox` included). */
-const HARNESS_INSTANCE = '../../src/devbox.ts?harness';
-
-// The class extends the SDK's `Sandbox`, and here its base is `FakeSandbox`. `mock.module` is process-wide with no
-// undo, and bun runs every file of one `bun test` in one process and one module registry. Registered for good, the
-// fake reached every later importer of the SDK, which lost every export but `Sandbox` (a later suite's `getSandbox`
-// import failed to link), and a process that had loaded `@kinu.run/devbox` first handed this harness a class built
-// on the real SDK. So the fake base is registered around exactly one import, this harness's own instance, beside
-// every export the SDK has, and the exports the process had are put back whether that import loads or throws.
-const exported = { ...sandboxSdk };
-
-async function harnessInstance(): Promise<typeof import('../../src/devbox')> {
-  await mock.module('@cloudflare/sandbox', () => ({ ...exported, Sandbox: FakeSandbox }));
-
-  try {
-    return await import(HARNESS_INSTANCE);
-  } finally {
-    await mock.module('@cloudflare/sandbox', () => exported);
-  }
-}
-
-const instance = await harnessInstance();
-
-if (Object.getPrototypeOf(instance.Devbox) !== FakeSandbox) {
-  throw new Error(`the harness's Devbox is not built on FakeSandbox: ${HARNESS_INSTANCE} was an instance already evaluated against another \`Sandbox\``);
-}
-
-export const { Devbox } = instance;
 
 /** Derived from the class's constructor signature: the Workers types parameterise it,
  *  and a second spelling here would be a second opinion on the platform. */
@@ -1340,6 +1284,7 @@ export interface BoxStateParts {
   readonly id: string;
   readonly container?: { running: boolean };
   readonly blockConcurrencyWhile: <T>(closure: () => Promise<T>) => Promise<T>;
+  readonly sync?: (body: string) => Promise<SyncAnswer>;
 }
 
 /** The whole `DurableObjectState`: the SDK `Sandbox` constructor takes the full handle.
@@ -1350,6 +1295,20 @@ export function boxState(parts: BoxStateParts): BoxState {
     storage: parts.storage,
     container: parts.container === undefined ? undefined : containerHandle(parts.container),
     blockConcurrencyWhile: parts.blockConcurrencyWhile,
+    exports: {
+      DevboxStoreGateway: () => ({ fetch: async () => unreached('store gateway network'), connect: () => unreached('store gateway TCP') }),
+      DevboxOutbound: () => ({ fetch: async () => unreached('outbound network'), connect: () => unreached('outbound TCP') }),
+      DevboxSyncGateway: () => ({
+        fetch: async (input: RequestInfo | URL) => {
+          if (parts.sync === undefined) return unreached('unbound sync host');
+          const request = input instanceof Request ? input : new Request(input.toString());
+          const reply = await parts.sync(await request.text());
+
+          return new Response(reply.body, { status: reply.status });
+        },
+        connect: () => unreached('sync host TCP'),
+      }),
+    },
     props: {},
     waitUntil: () => unreached('state.waitUntil'),
     get facets(): DurableObjectFacets { return unreached('state.facets'); },
@@ -1370,6 +1329,7 @@ export function boxState(parts: BoxStateParts): BoxState {
 export function containerHandle(flag: { running: boolean }, exec?: Container['exec']): Container {
   return {
     get running(): boolean { return flag.running; },
+    get images() { return {}; },
     start: () => unreached('container.start'),
     monitor: () => unreached('container.monitor'),
     destroy: () => unreached('container.destroy'),
@@ -1379,7 +1339,7 @@ export function containerHandle(flag: { running: boolean }, exec?: Container['ex
     interceptOutboundHttp: () => unreached('container.interceptOutboundHttp'),
     interceptAllOutboundHttp: () => unreached('container.interceptAllOutboundHttp'),
     interceptOutboundHttps: () => unreached('container.interceptOutboundHttps'),
-    snapshotDirectory: () => unreached('container.snapshotDirectory'),
+    inspect: () => unreached('container.inspect'),
     snapshotContainer: () => unreached('container.snapshotContainer'),
     exec: exec ?? (() => unreached('container.exec')),
   };
@@ -1410,6 +1370,8 @@ export interface Harness<Box> {
 /** The box side of the container's sync: its outbound handler's target (D30). */
 interface SyncServing {
   devboxSync(body: string): Promise<SyncAnswer>;
+  alarm(): Promise<void>;
+  onStop(): Promise<void>;
 }
 
 export function harness<Box extends SyncServing>(
@@ -1420,27 +1382,28 @@ export function harness<Box extends SyncServing>(
   const storage = fakeStorage();
 
   const state = boxState({
-    storage: storage.handle,
-    id,
-    // Deliberately grants no exclusion: the closure just runs, so a test can park inside it
-    // and prove the conditional write refuses when the row changed under it.
-    blockConcurrencyWhile: async <T>(closure: () => Promise<T>): Promise<T> => await closure(),
+    storage: storage.handle, id,
+    sync: body => container.syncHost === undefined ? Promise.reject(new Error('unbound sync')) : container.syncHost(body),
+    blockConcurrencyWhile: <T>(closure: () => Promise<T>): Promise<T> => {
+      const previous = container.initGate;
+      const completed = Promise.withResolvers<void>();
+      const held = previous === undefined ? completed.promise : Promise.all([previous, completed.promise]).then(() => undefined);
+      container.initGate = held;
+      const clear = () => { if (container.initGate === held) container.initGate = undefined; };
+
+      void held.then(clear, clear);
+
+      return closure().finally(completed.resolve);
+    },
   });
 
-  const box = new Box(state, {});
-  const container = FakeSandbox.last;
-
-  if (container === undefined) {
-    throw new Error('the substituted Sandbox base class did not run its constructor');
-  }
-
-  container.syncHost = async (body) => await box.devboxSync(body);
-
-  // Set after construction because the class reads `ctx.container` only at call
-  // time, and the fake owns the flag it flips on stop and destroy.
-  state.container = containerHandle(container.running, exec);
-
+  const container = new FakeSandbox(state);
   container.running.running = false;
+  state.container = container.handle();
+  container.nativeExec = exec;
+  const box = new Box(state, {});
+  container.owner = box;
+  container.syncHost = body => box.devboxSync(body);
 
   return { box, container, rows: storage.rows, storage };
 }

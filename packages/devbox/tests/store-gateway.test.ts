@@ -1,0 +1,106 @@
+import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { createHash, randomBytes } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { Miniflare } from 'miniflare';
+import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
+import { disposeMiniflare } from './support/miniflare-settle';
+
+// The gateway runs on workerd's own R2 binding: the S3 semantics it serves are the binding's.
+const PREFIX = 'boxes/owner/backups/';
+
+const HOST = 's3-route-1.sandbox.internal';
+
+const store = 'http://' + HOST + '/WORKSPACES/';
+
+let runtime: Miniflare;
+
+let root: string;
+
+beforeAll(async () => {
+  root = mkdtempSync(join(tmpdir(), DEVBOX_SCRATCH_PREFIX));
+  const entry = join(root, 'gateway.ts');
+  writeFileSync(entry, `
+    import { serveStore, storeSource } from ${JSON.stringify(new URL('../src/store-gateway.ts', import.meta.url).pathname)};
+    import { settle } from ${JSON.stringify(new URL('../src/errors.ts', import.meta.url).pathname)};
+    export default { async fetch(request, env) {
+      const props = request.headers.get('x-test-deny') !== null
+        ? { protocolVersion: 1, mode: 'deny', routeId: 'route-1' }
+        : { protocolVersion: 1, mode: 'active', routeId: 'route-1', source: storeSource('WORKSPACES'), keyPrefix: ${JSON.stringify(PREFIX)},
+            access: request.headers.get('x-test-read-only') === null ? 'read-write' : 'read-only' };
+      const url = new URL(request.url);
+      const target = new Request('http://' + (request.headers.get('x-test-host') ?? ${JSON.stringify(HOST)}) + url.pathname + url.search, request);
+      return await settle(serveStore(target, props, (name) => name === 'WORKSPACES' ? env.WORKSPACES : undefined));
+    } };
+  `);
+  const build = await Bun.build({ entrypoints: [entry], target: 'node', external: ['node:*', 'cloudflare:*'] });
+
+  if (!build.success || build.outputs[0] === undefined) throw new Error(build.logs.map(String).join('\n'));
+  runtime = new Miniflare({ workers: [{ config: {
+    name: 'store-gateway', compatibilityDate: '2026-09-28', compatibilityFlags: ['nodejs_compat'],
+    manifest: { mainModule: 'index.mjs', modulesRoot: '/', modules: { 'index.mjs': { type: 'esm', contents: await build.outputs[0].text() } } },
+    env: { WORKSPACES: { type: 'r2', name: 'WORKSPACES' } },
+  } }] });
+});
+
+afterAll(async () => {
+  await disposeMiniflare(runtime);
+  rmSync(root, { recursive: true, force: true });
+});
+
+type Answer = Awaited<ReturnType<Miniflare['dispatchFetch']>>;
+
+async function send(path: string, init: { method?: string; body?: Uint8Array; headers?: Record<string, string> } = {}): Promise<Answer> {
+  const headers = { ...init.headers };
+
+  if (init.body !== undefined) headers['content-length'] = String(init.body.byteLength);
+
+  return await runtime.dispatchFetch(store + path, { method: init.method ?? 'GET', body: init.body, headers });
+}
+
+const sha = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
+
+test('a store route serves its own box\'s objects from the binding: written, read whole and by range, listed, deleted', async () => {
+  const bytes = new Uint8Array(randomBytes(1_000_003));
+  expect((await send(PREFIX + 'base-1.sqsh', { method: 'PUT', body: bytes })).status).toBe(200);
+
+  const head = await send(PREFIX + 'base-1.sqsh', { method: 'HEAD' });
+  expect({ status: head.status, length: head.headers.get('content-length') }).toEqual({ status: 200, length: '1000003' });
+  expect(sha(new Uint8Array(await (await send(PREFIX + 'base-1.sqsh')).arrayBuffer()))).toBe(sha(bytes));
+
+  for (const [range, from, to] of [['bytes=4096-12287', 4096, 12288], ['bytes=999000-', 999_000, 1_000_003], ['bytes=-7', 999_996, 1_000_003]] as const) {
+    const part = await send(PREFIX + 'base-1.sqsh', { headers: { range } });
+    expect({ status: part.status, contentRange: part.headers.get('content-range'), bytes: sha(new Uint8Array(await part.arrayBuffer())) })
+      .toEqual({ status: 206, contentRange: `bytes ${from}-${to - 1}/1000003`, bytes: sha(bytes.slice(from, to)) });
+  }
+
+  const listed = await (await send(`?prefix=${encodeURIComponent(PREFIX)}&delimiter=%2F&max-keys=1000`)).text();
+  expect(listed).toContain(`<Key>${PREFIX}base-1.sqsh</Key>`);
+  expect(listed).toContain('<Size>1000003</Size>');
+
+  expect((await send(PREFIX + 'base-1.sqsh', { method: 'DELETE' })).status).toBe(204);
+  expect((await send(PREFIX + 'base-1.sqsh', { method: 'HEAD' })).status).toBe(404);
+});
+
+test('a route answers nothing outside the bucket, prefix, host and access S3Mounts recorded for it', async () => {
+  const body = new Uint8Array([1, 2, 3]);
+
+  const refusals = {
+    otherPrefix: await send('boxes/another/backups/x', { method: 'PUT', body }),
+    otherListing: await send('?prefix=boxes/another/'),
+    otherBucket: await runtime.dispatchFetch('http://' + HOST + '/BACKUP_BUCKET/' + PREFIX + 'x'),
+    otherHost: await send(PREFIX + 'x', { headers: { 'x-test-host': 's3-route-2.sandbox.internal' } }),
+    revoked: await send(PREFIX + 'x', { headers: { 'x-test-deny': '1' } }),
+    readOnly: await send(PREFIX + 'x', { method: 'PUT', body, headers: { 'x-test-read-only': '1' } }),
+    serverCopy: await send(PREFIX + 'x', { method: 'PUT', body, headers: { 'x-amz-copy-source': `/WORKSPACES/${PREFIX}y` } }),
+    listParts: await send(PREFIX + 'x?uploadId=abc'),
+    acl: await send(PREFIX + 'x?acl'),
+  };
+
+  expect(Object.fromEntries(Object.entries(refusals).map(([name, response]) => [name, response.status]))).toEqual({
+    otherPrefix: 403, otherListing: 403, otherBucket: 403, otherHost: 403, revoked: 403, readOnly: 403,
+    serverCopy: 501, listParts: 501, acl: 501,
+  });
+  expect((await send(PREFIX + 'x', { method: 'HEAD' })).status).toBe(404);
+});

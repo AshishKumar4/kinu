@@ -41,16 +41,14 @@
  * outlives its run is inert rather than an open exec endpoint.
  */
 
-import { ContainerProxy } from '@cloudflare/sandbox';
-import { DurableObject } from 'cloudflare:workers';
+import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
 import * as v from 'valibot';
 
-import type { ExecOptions } from '@cloudflare/sandbox';
+import type { DevboxExecOptions } from "../src/contracts";
 
 import {
   Devbox,
   describeThrown,
-  devboxSyncHandlers,
   parseDevboxStrategyName,
   type CheckpointKind,
   type CheckpointOutcome,
@@ -74,7 +72,11 @@ import {
 import { storePrefixOf, strategyIsDeployed } from './strategy-dispatch';
 import { stopContainer } from './container-stop';
 import type { PublicationOperation, PublicationWindow } from './publication-meter';
+import { settle } from '../src/errors';
+import { serveStore, type StoreGatewayProps } from '../src/store-gateway';
 import { meterPublicationBucket, observePublicationRequest, type PublicationFinish } from './publication-transport';
+
+export { DevboxSyncGateway, DevboxOutbound } from "../src/index";
 
 interface BenchEnv {
   BACKUP_BUCKET: R2Bucket;
@@ -102,10 +104,8 @@ interface BenchEnv {
 // count has to be complete. Two facts make it easy to get wrong, both
 // measured the hard way on a deployed run:
 //
-//   The s3fs traffic does NOT go through the Durable Object's binding. It is
-//   intercepted egress, resolved out of the ContainerProxy entrypoint's env by
-//   binding name. So the proxy's env is the only seam that sees every call, and
-//   wrapping the Durable Object's env alone counts almost nothing.
+//   The s3fs traffic bypasses the Durable Object binding. CountingStoreGateway
+//   meters the container's requests; counting only the owner's binding misses it.
 //
 //   `uploadPart` and `complete` are calls on the handle that
 //   `createMultipartUpload` RETURNED, not on the bucket. A wrapper that stops at
@@ -440,36 +440,26 @@ export class BenchOpCounter extends DurableObject<BenchEnv> {
 }
 
 /**
- * The SDK builds its interception fetchers from `ctx.exports.ContainerProxy`, so
- * this class has to be exported under that exact name. Its env is wrapped, which
- * puts s3fs traffic on the meter. Request settlement flushes the proxy isolate;
+ * S3Mounts builds each store route's gateway from `ctx.exports.DevboxStoreGateway`, so this class is
+ * exported under that name. It serves the store from the counting binding, which puts s3fs traffic
+ * and the container's publication on the meter. Request settlement flushes this isolate's batch;
  * /ops cannot drain a different isolate's under-threshold batch.
  */
-class CountingContainerProxy extends ContainerProxy {
-  readonly #benchEnv: BenchEnv;
-
-  constructor(ctx: ExecutionContext, env: BenchEnv) {
-    // The counting binding is installed HERE, in the constructor, because the
-    // egress handler resolves the bucket out of this entrypoint's env by
-    // binding name. Wrapping the Durable Object's env instead counts almost
-    // nothing: the s3fs traffic never passes through it.
-    super(ctx, { ...env, BACKUP_BUCKET: countingBucket(env.BACKUP_BUCKET, env) });
-    this.#benchEnv = env;
-    flushEnv = env;
-  }
-
+class CountingStoreGateway extends WorkerEntrypoint<BenchEnv, StoreGatewayProps> {
   override async fetch(request: Request): Promise<Response> {
-    if (new URL(request.url).hostname !== 'r2.internal') return await super.fetch(request);
+    flushEnv = this.env;
+    const bucket = countingBucket(this.env.BACKUP_BUCKET, this.env);
 
     try {
-      return await observePublicationRequest(request, async (forwarded) => await super.fetch(forwarded));
+      return await observePublicationRequest(request, async (forwarded) =>
+        await settle(serveStore(forwarded, this.ctx.props, (name) => name === 'BACKUP_BUCKET' ? bucket : undefined)));
     } finally {
-      await flushOps(this.#benchEnv);
+      await flushOps(this.env);
     }
   }
 }
 
-export { CountingContainerProxy as ContainerProxy };
+export { CountingStoreGateway as DevboxStoreGateway };
 
 // ── the async operation protocol ────────────────────────────────────────────
 //
@@ -559,17 +549,8 @@ type BenchOperationPayload = v.InferOutput<typeof OperationPayloadSchema>;
 // migration and the container binding name.
 
 class BenchBox extends Devbox<BenchEnv> {
-  /**
-   * Bind this isolate's flush target.
-   *
-   * MEASURED DEFECT THIS REPAIRS. `store` below counts every write into MODULE
-   * state, and module state is per isolate. `flushEnv` was set only by
-   * `CountingContainerProxy`'s constructor, which is a different entrypoint, so
-   * in the Durable Object's isolate it was `undefined` — `maybeFlush` returned
-   * early, the tally was never pushed, and `GET /ops` drained whichever isolate
-   * served the request. A full run therefore reported thousands of megabytes PUT
-   * against class A = 0 on every arm, which prices half a gigabyte at $0.00.
-   */
+  /** Each entrypoint can run in a different isolate; its local counter must bind
+   *  its own flush target or those observations never reach the durable total. */
   constructor(...args: ConstructorParameters<typeof Devbox<BenchEnv>>) {
     super(...args);
     // args[1] is the env the base binds; taking it from the tuple keeps this
@@ -689,11 +670,7 @@ class BenchBox extends Devbox<BenchEnv> {
 
     await this.ctx.storage.put(operationKey(token), row);
     await this.ctx.storage.put(operationIdKey(request.op), token);
-    await this.schedule(
-      OPERATION_DELAY_SECONDS,
-      request.operation === 'checkpoint' ? 'benchCheckpointOperation' : 'benchStopOperation',
-      { token },
-    );
+    await this.armAlarm("bench.operation:" + token, OPERATION_DELAY_SECONDS);
 
     return row;
   }
@@ -704,15 +681,10 @@ class BenchBox extends Devbox<BenchEnv> {
     return await this.ctx.storage.get<BenchOperationRow>(operationKey(token));
   }
 
-  /** Public because `Container.schedule` calls back by name. The payload is the
-   *  one this class wrote when it armed the row; the alarm loop round-trips it
-   *  through JSON, and `#runBenchOperation` re-parses it for that reason. */
-  async benchCheckpointOperation(payload: BenchOperationPayload): Promise<void> {
-    await this.#runBenchOperation(payload, async (row) => await this.checkpointNow(row.kind));
-  }
-
-  async benchStopOperation(payload: BenchOperationPayload): Promise<void> {
-    await this.#runBenchOperation(payload, async () => await this.quiesce());
+  protected override async dispatchAlarm(callback: string): Promise<void> {
+    if (!callback.startsWith("bench.operation:")) return super.dispatchAlarm(callback);
+    const token = callback.slice("bench.operation:".length);
+    await this.#runBenchOperation({ token }, row => row.operation === "checkpoint" ? this.checkpointNow(row.kind) : this.quiesce());
   }
 
   /**
@@ -802,7 +774,7 @@ class BenchBox extends Devbox<BenchEnv> {
   }
 
   protected override get store(): DevboxStore {
-    return { binding: 'BACKUP_BUCKET', bucket: countingBucket(this.env.BACKUP_BUCKET, this.env) };
+    return { binding: "BACKUP_BUCKET", bucket: countingBucket(this.env.BACKUP_BUCKET, this.env) };
   }
 
   /** Local `wrangler dev` has no outbound interception, so the chain cannot
@@ -853,11 +825,6 @@ export class SnapshotChainBox extends BenchBox {
   }
 }
 
-SnapshotChainBox.outboundHandlers = devboxSyncHandlers((env: BenchEnv) => {
-  if (env.SnapshotChainBox === undefined) throw new Error('this deployment binds no SnapshotChainBox');
-
-  return env.SnapshotChainBox;
-});
 
 // ── the driver API ──────────────────────────────────────────────────────────
 
@@ -1125,9 +1092,7 @@ export default {
           // phases has been measured dying at a hard per-exec ceiling around six
           // minutes, with no option raising it, so a slow arm that batches its
           // phases reports nothing at all.
-          const options: ExecOptions = {};
-
-          if (input.cwd !== undefined) options.cwd = input.cwd;
+          const options: DevboxExecOptions = { cwd: input.cwd };
           const result = await box.exec(input.command ?? 'true', options);
 
           return json({ payload: {

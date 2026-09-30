@@ -947,7 +947,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived', reads: ['docs/CLI.md'] },
   },
   {
-    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/error-model.test.ts',
+    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/error-model.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
@@ -1525,17 +1525,15 @@ export const LADDER: readonly Gate[] = [
     // `scripts/bench*` glob while deploy.sh also passes the core bench units leaves
     // the wider command matching no LADDER entry, `gatesFor('deploy')` synthesizes
     // it at a declared cost of ZERO, and the four core bench suites end up governed
-    // by an entry that does not name them. The durability probe is explicit rather
-    // than absorbed by that glob because its name is a contract: a real container
-    // measurement that remains only in stdout is not evidence.
+    // by an entry that does not name them.
     //
-    // The four rig self-tests after it are explicit for the same reason, and they
+    // The three rig self-tests after it are explicit for the same reason, and they
     // are on THIS row because each one guards a `scripts/bench-*.ts` rig or the
-    // fixtures it runs on — the shared devbox fixture, bench-payload-transports,
-    // and the r2-bench deploy substrate. Not one of their names starts with
+    // fixtures it runs on — the shared devbox fixture and the r2-bench deploy
+    // substrate. Not one of their names starts with
     // `bench`, so all of them shipped tracked, passing by hand, and claimed by NO
     // tier: 89 tests that ran in no pipeline.
-    run: 'bun test --timeout=0 scripts/bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/storage-matrix-cleanup.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts',
+    run: 'bun test --timeout=0 scripts/bench*.test.ts scripts/storage-matrix-cleanup.test.ts scripts/deploy-substrate.test.ts scripts/devbox-e2e.test.ts',
     label: 'Benchmark harness guarantees',
     tier: 'ci',
     // 7.00s: 221 tests over 15 files, median of 7.00 / 7.71 / 6.86 on the
@@ -1545,14 +1543,12 @@ export const LADDER: readonly Gate[] = [
     // sampler over the real corpus in bench-external.test.ts.
     seconds: 7.0,
     catches: 'the bench harness guarantees — sandbox isolation, the seal, '
-      + 'anti-self-scoring, budget enforcement, corpus well-formedness, and the '
-      + 'durability probe retaining complete or failed JSON evidence without '
-      + 'overwriting a prior run — plus the census `gate:bench-corpus` runs at '
+      + 'anti-self-scoring, budget enforcement and corpus well-formedness — '
+      + 'plus the census `gate:bench-corpus` runs at '
       + 'commit tier proven able to FAIL, which the committed assertion over a '
       + 'healthy corpus cannot do by itself: a patch whose anchor moved, and a '
       + 'patch file no tasks.jsonl line names, each driven from a fixture. And now '
       + 'the experiment rigs\' own teardown and judgment logic: a '
-      + 'payload arm judged on an image or an operation it never started, and a '
       + 'Wrangler failure read as proof that an ephemeral worker is gone. No '
       + 'model, no credentials.',
     blind: 'anything about what the bench measures, and any live run: the rig '

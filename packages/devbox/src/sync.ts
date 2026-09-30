@@ -1,11 +1,11 @@
 /** In-container sync (D30): the image's `sync.js` checkpoints on the container's own disk and
  *  egress, and asks its box only for the record, the binding and the store mount. */
 import * as v from 'valibot';
+import { DevboxError, chainAdvanced, devboxFailure } from './errors';
 import { describeThrown as describe } from './lifecycle';
 import { shellPath } from './chunked-delta';
 import {
   CHAIN_STORE_MOUNT,
-  ChainRecordAdvanced,
   baseObjectKey,
   deltaObjectKey,
   normalizeChainState,
@@ -28,11 +28,6 @@ import {
 
 /** Resolves nowhere publicly: a lapse in interception fails to connect. */
 export const DEVBOX_SYNC_HOST = 'devbox.internal';
-
-export const DEVBOX_SYNC_HANDLER = 'devboxSync';
-
-/** Not the default session: the store mount the flush asks for runs there. */
-export const DEVBOX_SYNC_SESSION = 'devbox-sync';
 
 export const DEVBOX_SYNC_PROGRAM = '/usr/local/lib/devbox/sync.js';
 
@@ -57,7 +52,7 @@ function encodeSyncConfig(config: SyncConfig): string {
 }
 
 export function decodeSyncConfig(encoded: string | undefined): SyncConfig {
-  if (encoded === undefined || encoded === '') throw new Error('DEVBOX_SYNC_CONFIG is not set: only the box starts this program');
+  if (encoded === undefined || encoded === '') throw new DevboxError("io", 'DEVBOX_SYNC_CONFIG is not set: only the box starts this program');
 
   return v.parse(SyncConfigSchema, JSON.parse(Buffer.from(encoded, 'base64').toString('utf8')));
 }
@@ -151,8 +146,10 @@ export async function serveSync(host: SyncHost, body: string): Promise<SyncAnswe
   try {
     return answer({ ok: true, value: await dispatch(host.ports, envelope.request) });
   } catch (error) {
-    if (error instanceof ChainRecordAdvanced) {
-      return answer({ ok: false, error: 'advanced', expectedRev: error.expectedRev, storedRev: error.storedRev });
+    const advanced = devboxFailure({ cause: error });
+
+    if (advanced?.code === 'chain-advanced') {
+      return answer({ ok: false, error: 'advanced', expectedRev: advanced.expectedRev ?? null, storedRev: advanced.storedRev ?? null });
     }
 
     return answer({ ok: false, error: 'refused', reason: describe({ cause: error }) });
@@ -163,7 +160,7 @@ async function dispatch(ports: SnapshotChainPorts, request: ReceivedRequest): Pr
   const root = ports.storeRoot();
 
   const inRoot = (key: string): string => {
-    if (!key.startsWith(`${root}/`)) throw new Error(`${key} is outside this box's store prefix ${root}`);
+    if (!key.startsWith(`${root}/`)) throw new DevboxError("io", `${key} is outside this box's store prefix ${root}`);
 
     return key;
   };
@@ -175,7 +172,7 @@ async function dispatch(ports: SnapshotChainPorts, request: ReceivedRequest): Pr
     case 'writeState': {
       const next = normalizeChainState(request.state);
 
-      if (next === null) throw new Error('the proposed chain record does not parse');
+      if (next === null) throw new DevboxError("io", 'the proposed chain record does not parse');
       await assertLayersHeld(ports, root, next);
       await ports.writeState(next, request.expectedRev);
 
@@ -183,13 +180,13 @@ async function dispatch(ports: SnapshotChainPorts, request: ReceivedRequest): Pr
     }
 
     case 'checkChanges':
-      if (request.dir !== DEVBOX_WORKDIR) throw new Error(`only ${DEVBOX_WORKDIR} is tracked, not ${request.dir}`);
+      if (request.dir !== DEVBOX_WORKDIR) throw new DevboxError("io", `only ${DEVBOX_WORKDIR} is tracked, not ${request.dir}`);
 
       return await ports.checkChanges(request.dir, request.since ?? undefined);
 
     case 'mountStore':
     case 'unmountStore':
-      if (request.at !== CHAIN_STORE_MOUNT) throw new Error(`the store mounts only at ${CHAIN_STORE_MOUNT}, not ${request.at}`);
+      if (request.at !== CHAIN_STORE_MOUNT) throw new DevboxError("io", `the store mounts only at ${CHAIN_STORE_MOUNT}, not ${request.at}`);
       await (request.op === 'mountStore' ? ports.mountStore(request.at) : ports.unmountStore(request.at));
 
       return null;
@@ -205,7 +202,7 @@ async function dispatch(ports: SnapshotChainPorts, request: ReceivedRequest): Pr
 }
 
 async function assertLayersHeld(ports: SnapshotChainPorts, root: string, next: ChainState): Promise<void> {
-  if (next.mode !== 'chain') throw new Error('the container proposes chain records only');
+  if (next.mode !== 'chain') throw new DevboxError("io", 'the container proposes chain records only');
   const stored = await ports.readState();
 
   const named = [
@@ -222,7 +219,7 @@ async function assertLayersHeld(ports: SnapshotChainPorts, root: string, next: C
     const held = await ports.objectFacts(layer.key);
 
     if (held?.bytes !== layer.bytes) {
-      throw new Error(`the proposed record names ${layer.key} at ${String(layer.bytes)} bytes and the store holds ${held === undefined ? 'no such object' : `${String(held.bytes)} bytes`}`);
+      throw new DevboxError("io", `the proposed record names ${layer.key} at ${String(layer.bytes)} bytes and the store holds ${held === undefined ? 'no such object' : `${String(held.bytes)} bytes`}`);
     }
   }
 }
@@ -240,14 +237,14 @@ export function syncCaller(transport: SyncTransport, generation: () => Promise<s
     try {
       reply = v.parse(ReplySchema, JSON.parse(sent.text));
     } catch (error) {
-      throw new Error(`the box answered ${request.op} with ${String(sent.status)}: ${sent.text.slice(0, 300)}`, { cause: error });
+      throw new DevboxError("io", `the box answered ${request.op} with ${String(sent.status)}: ${sent.text.slice(0, 300)}`, { cause: error });
     }
 
     if (reply.ok) return reply.value;
 
-    if (reply.error === 'advanced') throw new ChainRecordAdvanced(reply.expectedRev, reply.storedRev);
+    if (reply.error === 'advanced') throw chainAdvanced(reply.expectedRev, reply.storedRev);
 
-    throw new Error(`the box refused ${request.op}: ${reply.reason}`);
+    throw new DevboxError("io", `the box refused ${request.op}: ${reply.reason}`);
   };
 }
 
@@ -262,7 +259,7 @@ interface SyncIo {
  *  box nothing; a refused write forgets it. */
 export function containerChainPorts(config: SyncConfig, io: SyncIo): SnapshotChainPorts {
   const refuse = async (what: string): Promise<never> => {
-    throw new Error(`${what} is the box's, not the container's`);
+    throw new DevboxError("io", `${what} is the box's, not the container's`);
   };
 
   let known: { readonly state: ChainState | null } | undefined;
@@ -316,7 +313,7 @@ export function containerChainPorts(config: SyncConfig, io: SyncIo): SnapshotCha
     countEntries: async (dir) => {
       const counted = await io.exec(countEntriesCommand(dir));
 
-      if (counted.exitCode !== 0) throw new Error(`counting ${dir} failed: ${counted.stderr.trim()}`);
+      if (counted.exitCode !== 0) throw new DevboxError("io", `counting ${dir} failed: ${counted.stderr.trim()}`);
 
       return Number(counted.stdout.trim());
     },

@@ -17,10 +17,22 @@ import { TEST_DIRECTORY, TEST_SUFFIX } from "./no-ambient-git-in-tests.ts";
  * or a CLI entry point runs its effect through `settle` like everything else.
  */
 
-/** Each surface's one adapter, with what it runs. */
-export const EFFECT_ADAPTERS: Readonly<Record<string, string>> = {
-  "packages/core/src/obs/effect.ts": "the server runner: `settle`, on a microtask scheduler",
-};
+export const FAILURE_SURFACES = {
+  core: { prefix: 'packages/core/', type: 'KinuError', adapter: 'packages/core/src/obs/effect.ts',
+    modules: ['@kinu.run/core', '@kinu.run/core/obs'], relativeModules: ['obs', 'obs/effect', 'obs/index'] },
+  devbox: { prefix: 'packages/devbox/', type: 'DevboxError', adapter: 'packages/devbox/src/errors.ts',
+    modules: ['@kinu.run/devbox'], relativeModules: ['errors'] },
+} as const;
+
+export function failureSurface(file: string) {
+  return file.startsWith(FAILURE_SURFACES.devbox.prefix) || file.includes('/' + FAILURE_SURFACES.devbox.prefix)
+    ? FAILURE_SURFACES.devbox : FAILURE_SURFACES.core;
+}
+
+/** Each library owns one microtask-scheduled runner and one failure type. */
+export const EFFECT_ADAPTERS: Readonly<Record<string, string>> = Object.fromEntries(
+  Object.values(FAILURE_SURFACES).map(surface => [surface.adapter, surface.type + ' boundary on a microtask scheduler']),
+);
 
 export function isEffectRunScope(filename: string): boolean {
   const normalized = filename.replaceAll("\\", "/");

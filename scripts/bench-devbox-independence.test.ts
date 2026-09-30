@@ -5,7 +5,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import * as v from 'valibot';
-import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
+import { DEVBOX_SCRATCH_PREFIX } from '../packages/devbox/tests/support/scratch';
+import { isParseable, isTestFile, trackedFiles } from './sources';
 
 /** Only the manifest fields this test reads, parsed rather than asserted: a manifest on disk
  *  is input. */
@@ -23,7 +24,7 @@ function manifest(path: string): v.InferOutput<typeof ManifestSchema> {
   return parsed.output;
 }
 
-const PACKAGE_DIR = join(import.meta.dir, '..');
+const PACKAGE_DIR = join(import.meta.dir, '..', 'packages', 'devbox');
 
 /** Read from the sibling manifest, not hardcoded: after a rename, a guard checking a stale
  *  name passes silently. */
@@ -60,8 +61,8 @@ function declaredEntries(): readonly string[] {
   const production = (knip.knip.workspaces[relative(REPOSITORY, PACKAGE_DIR)]?.entry ?? [])
     .filter((entry) => entry.endsWith('!')).map((entry) => entry.slice(0, -1));
 
-  const workers = [join(PACKAGE_DIR, 'bench', 'wrangler.jsonc'), join(PACKAGE_DIR, 'bench', 'wrangler.probe.jsonc')]
-    .map((config) => join('bench', v.parse(WorkerConfig, Bun.JSONC.parse(readFileSync(config, 'utf8'))).main));
+  const workers = trackedFiles().filter(path => /^packages\/devbox\/bench\/wrangler[^/]*\.jsonc$/.test(path))
+    .map(config => join("bench", v.parse(WorkerConfig, Bun.JSONC.parse(readFileSync(join(REPOSITORY, config), "utf8"))).main));
 
   return [...new Set([...exported, ...production, ...workers].map((entry) => join(PACKAGE_DIR, entry)))].sort();
 }
@@ -71,9 +72,8 @@ function declaredEntries(): readonly string[] {
  * (`bench/c3-result.ts`, `bench/seeded.ts`) is reached by no declared entry, and it still must not import the core.
  */
 function everyModule(): readonly string[] {
-  return [...new Bun.Glob('**/*.{ts,tsx}').scanSync({ cwd: PACKAGE_DIR })]
-    .filter((path) => !/\.(test|spec)\.tsx?$/u.test(path) && !path.startsWith('tests/') && !path.includes('node_modules/'))
-    .map((path) => join(PACKAGE_DIR, path));
+  return trackedFiles().filter(path => path.startsWith('packages/devbox/') && isParseable(path) && !isTestFile(path))
+    .map(path => join(REPOSITORY, path));
 }
 
 describe('package independence', () => {

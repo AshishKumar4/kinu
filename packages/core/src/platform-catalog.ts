@@ -126,32 +126,6 @@ export const PLATFORM_CATALOG = {
     ],
   },
 
-  'sandbox.route_client.restore_bytes': {
-    subject:
-      'Largest workspace archive the deprecated route-based sandbox client restores in one '
-      + 'WebSocket write',
-    limit: { value: 11 * MiB, unit: 'bytes' },
-    origin: 'platform',
-    bounds: 'wire',
-    evidence: 'proven-by-probe',
-    provenance: 'packages/cf-backend/src/runtime.ts:540-556 (restore ladder, deployed sandbox, owner account)',
-    date: '2026-08-17',
-    trigger: 'a single-write restore payload above 11 MiB through the http/websocket compatibility client',
-    onBreach: 'the socket closes 1011 and /workspace is left empty',
-    observable: [
-      { context: 'the failed restore', message: 'WebSocket closed: 1011 Container WebSocket error' },
-    ],
-    firstPartySignal: true,
-    measurements: [
-      { scenario: 'largest single-write restore that lands', value: 11 * MiB, unit: 'bytes' },
-      { scenario: 'smallest single-write restore that fails', value: 12 * MiB, unit: 'bytes' },
-    ],
-    notes:
-      'The ceiling is base64 expansion against a 16 MiB frame: 12 MiB x 4/3 is exactly 16 MiB. '
-      + 'The rpc transport streams the same restores and every probed size lands, which is half '
-      + 'the reason SANDBOX_TRANSPORT is rpc; Cloudflare deprecated the route-based client on '
-      + '2026-06-09. Re-measure on the route client before ever citing a higher figure.',
-  },
 
   'container.instance.disk': {
     subject: 'Disk allocated to each Kinu sandbox container',
@@ -1946,26 +1920,6 @@ export const PLATFORM_CATALOG = {
       + 'do.block_concurrency.cancel_ms and do.cpu_ms_per_invocation, which makes it easy to '
       + 'mistake for a platform number. A workspace command hitting exactly 30 s could be any '
       + 'of the three, and only the observable tells them apart.',
-  },
-
-  'sandbox.exec.request_ceiling_ms': {
-    subject: "The Sandbox SDK's ceiling on one non-streaming container request, exec included",
-    limit: { value: 120_000, unit: 'ms' },
-    origin: 'platform',
-    bounds: 'duration',
-    evidence: 'proven-by-source',
-    provenance: 'node_modules/@cloudflare/sandbox/dist/sandbox-D0rNqxlr.js:961 DEFAULT_REQUEST_TIMEOUT_MS, @cloudflare/sandbox 0.12.9',
-    date: '2026-09-23',
-    trigger: 'one exec-style request still unanswered 120 s after dispatch',
-    onBreach: 'the SDK HTTP client abandons the request; the container-side command may keep running',
-    observable: [{ context: 'the caller', message: 'Request failed' }],
-    firstPartySignal: true,
-    notes:
-      "The VENDOR SDK's shipped default, not a Cloudflare runtime bound and not ours: filed "
-      + 'under platform because Kinu cannot widen it per call. It is why "no deadline" work '
-      + 'rides the runtime\'s own ctx.container.exec, which has no timeout (Cloudflare Containers '
-      + '"Execute commands", read 2026-09-28), instead of a bigger exec timeout: '
-      + 'execution/sandbox.ts routes on exactly this entry.',
   },
 
   'browser.session.keep_alive_ms': {

@@ -18,7 +18,8 @@ function devboxScratchDir(label: string): string {
 
 // Import from the defining modules, not the barrel: it pulls in `cloudflare:workers` via
 // Sandbox, absent outside a Worker. Platform-free reachability is the property tested.
-import { DEVBOX_WORKDIR, parseDevboxStrategyName } from '../src/storage';
+import { parseDevboxStrategyName } from "../src/storage";
+import { startOverrun } from '../src/errors';
 import {
   DEFAULT_DEVBOX_POLICY,
   describeThrown,
@@ -28,11 +29,9 @@ import {
   incidentRetryDelayMs,
   parseWorkdirHolders,
   releaseWorkdirHoldersCommand,
-  needsArming,
   PORT_TOKEN_ALPHABET,
   admissionStep,
   classifyRecovery,
-  ContainerStartOverrun,
   openStartBudget,
   racedRestoreSteps,
   runRestoreStep,
@@ -47,7 +46,7 @@ import {
   type RecoveryStage,
   type SupervisedProcessSpec,
 } from '../src/lifecycle';
-import { requireSessionShellAccepts, sessionShellRefusal } from './support/session-shell';
+import { requireShellAccepts } from "./support/container-shell";
 import {
   baseObjectKey,
   chainStoreRoot,
@@ -226,6 +225,8 @@ const coded = (code: string, message = 'the container said so'): Coded =>
 
 describe('classifying a lifecycle failure — the SDK\'s own codes, never its prose', () => {
   const table: readonly [string, RecoveryClass][] = [
+    ['ENOSPC', 'exhausted'],
+    ['EACCES', 'permanent'],
     ['NO_SPACE', 'exhausted'],
     ['FILE_TOO_LARGE', 'exhausted'],
     ['TOO_MANY_FILES', 'exhausted'],
@@ -247,7 +248,7 @@ describe('classifying a lifecycle failure — the SDK\'s own codes, never its pr
   }
 
   test('an overrun is its own class, read from the type and not from the sentence', () => {
-    expect(classifyRecovery({ cause: new ContainerStartOverrun('Devbox.attach', 25_000) }))
+    expect(classifyRecovery({ cause: startOverrun('Devbox.attach', 25_000) }))
       .toBe('abandoned');
   });
 
@@ -263,7 +264,7 @@ describe('classifying a lifecycle failure — the SDK\'s own codes, never its pr
 
   test('an outer classified failure wins over an inner one', () => {
     const wrapped = new Error('abandoned', {
-      cause: new ContainerStartOverrun('Devbox.attach', 1),
+      cause: startOverrun('Devbox.attach', 1),
     });
 
     expect(classifyRecovery({ cause: wrapped })).toBe('abandoned');
@@ -483,40 +484,6 @@ describe('incident retry schedule', () => {
   });
 });
 
-describe('arming must ignore the row being dispatched', () => {
-  // The container SDK deletes a fired row after its callback returns, so the firing row
-  // is still in the table during the callback and must not count as a pending successor.
-  const NOW = 1_700_000_000;
-
-  test('the firing row does not count, so a successor is still armed', () => {
-    expect(needsArming([{ time: NOW }], NOW, true)).toBe(true);
-    expect(needsArming([{ time: NOW - 30 }], NOW, true)).toBe(true);
-  });
-
-  test('a genuine future row does count, so a restart does not double the period', () => {
-    expect(needsArming([{ time: NOW + 1 }], NOW, true)).toBe(false);
-    expect(needsArming([{ time: NOW + 3_600 }], NOW, true)).toBe(false);
-  });
-
-  test('no rows at all needs arming', () => {
-    expect(needsArming([], NOW, true)).toBe(true);
-    expect(needsArming([], NOW, false)).toBe(true);
-  });
-
-  test('the firing row alongside a future row does not suppress the future one', () => {
-    expect(needsArming([{ time: NOW }, { time: NOW + 60 }], NOW, true)).toBe(false);
-  });
-
-  test('a caller that is not dispatching counts a due row as pending work', () => {
-    // Each arm moves the platform alarm later, so re-arming a due row on every state read
-    // would keep deferring its delivery (D14).
-    expect(needsArming([{ time: NOW }], NOW, false)).toBe(false);
-    expect(needsArming([{ time: NOW - 30 }], NOW, false)).toBe(false);
-    expect(needsArming([{ time: NOW + 1 }], NOW, false)).toBe(false);
-  });
-
-});
-
 describe('an incident is written off only when the host says it LANDED', () => {
   interface Ledger {
     readonly rows: Map<string, IncidentRow>;
@@ -717,9 +684,8 @@ describe('the attach budget', () => {
     expect(late).toEqual([]);
   });
 
-  test('the budget rejects with the overrun TYPE, which is what the taxonomy reads', async () => {
-    // Abandoned work is still running in the container, so recovery replaces the identity.
-    // That choice reads the thrown class, not the message, so the class is the contract.
+  test('the budget rejects with the overrun code used by recovery', async () => {
+    // Abandoned work can still mutate the container, so recovery must replace its identity.
     let overrun: { readonly cause: unknown } | undefined;
 
     try {
@@ -728,61 +694,24 @@ describe('the attach budget', () => {
       overrun = { cause: error };
     }
 
-    expect(overrun?.cause).toBeInstanceOf(ContainerStartOverrun);
+    expect(overrun?.cause).toMatchObject({ code: 'start-overrun' });
     expect(classifyRecovery(overrun ?? { cause: undefined })).toBe('abandoned');
     expect(recoveryStep({ owned: true, failure: 'abandoned', stage: undefined }))
       .toEqual({ action: 'replace', stage: 'replace' });
   });
 });
 
-// Every command runs in the SDK's one persistent session shell, so a syntax error ends it.
-// Every fake exec seam runs `support/session-shell.ts` first, so a bad template fails here.
 describe('a composed container command is one a POSIX shell will run', () => {
-  test('the holder-release command parses, and says nothing that ends the shell', () => {
-    const command = releaseWorkdirHoldersCommand(DEVBOX_WORKDIR);
-    requireSessionShellAccepts(command);
-    // A top-level `exit` ends the persistent session too; this command answers its empty scan
-    // with `else`.
-    expect(command).not.toMatch(/(?:^|[\s;&|(])exit(?:\s+\d+)?\s*(?:$|[;&|)])/);
-    // The wait is read off the command the container runs: a TERM flush window before the KILL.
-    expect(command).toContain('sleep 5');
-  });
 
   test('a work directory holding a quote is still one shell word', () => {
     // `'` closes the quoted literal, so the escape must reopen it; only a real parse proves it.
-    requireSessionShellAccepts(releaseWorkdirHoldersCommand("/work'dir"));
+    requireShellAccepts(releaseWorkdirHoldersCommand("/work'dir"));
   });
 
   test('the listener probe parses too', () => {
-    requireSessionShellAccepts(healthProbeCommand(8080));
+    requireShellAccepts(healthProbeCommand(8080));
   });
 
-  // A top-level `set -e` persists in the SDK's one bash session, so any later failing command
-  // ends it (D18); the model is checked against a real bash fed the way the SDK feeds it.
-  test('a top-level set -e is refused as a session death; a subshell-scoped one is accepted', () => {
-    const unscoped = ['# devbox-namespace-v2', 'set -e', 'mkdir -p /tmp/x'].join('\n');
-    const scoped = ['# devbox-namespace-v2', '(', 'set -e', 'mkdir -p /tmp/x', ')'].join('\n');
-
-    const refusal = sessionShellRefusal(unscoped);
-
-    expect(refusal?.name).toBe('SessionTerminatedError');
-    expect(refusal?.message).toContain('exit code: 1');
-    expect(sessionShellRefusal(scoped)).toBeUndefined();
-    expect(sessionShellRefusal(['(', 'set -o errexit', 'true', ')'].join('\n'))).toBeUndefined();
-    expect(sessionShellRefusal('set -o errexit\ntrue')?.name).toBe('SessionTerminatedError');
-
-    const session = (batch: string) => spawnSync('bash', ['--norc'], {
-      input: `${batch}\nfalse\nprintf 'session=alive\\n'\n`, encoding: 'utf8',
-    });
-
-    const dead = session(unscoped);
-    const alive = session(scoped);
-
-    expect(dead.stdout).not.toContain('session=alive');
-    expect(dead.status).toBe(1);
-    expect(alive.stdout).toContain('session=alive');
-    expect(alive.status).toBe(0);
-  });
 
   test('the scan\'s own answers are read back: names, and the word for none', () => {
     // Real output, measured against a live holder on Linux: one ` pid:comm` token per holder,
@@ -812,24 +741,25 @@ sh "$script"
 printf 'ALIVE %s' "$$"
 wait $stranger
 status=$?
+wait $cwd
+cwdstatus=$?
 if kill -0 $cwd 2>/dev/null; then alive=yes; else alive=no; fi
 pids=$(ls /proc | grep -cE '^[0-9]+$')
-printf '\\nPIDS stranger=%s cwd=%s session=%s status=%s cwdalive=%s pidsInScan=%s\\n' \\
-  "$stranger" "$cwd" "$$" "$status" "$alive" "$pids"
+printf '\\nPIDS stranger=%s cwd=%s session=%s status=%s cwdstatus=%s cwdalive=%s pidsInScan=%s\\n' \
+  "$stranger" "$cwd" "$$" "$status" "$cwdstatus" "$alive" "$pids"
 `;
 
   /** Runs the real command in its own pid namespace, as production runs in the container's:
    *  the scan walks every pid twice, and namespace exit reaps everything the scenario starts. */
   test.skipIf(process.platform !== 'linux')(
-    'a stranger is signalled and unnamed; a cwd holder and the scan\'s own session are named',
+    'fd and cwd holders are signalled; the scan ancestor survives and remains named',
     () => {
       const dir = devboxScratchDir('devbox-workdir-holders');
       const script = join(dir, 'release.sh');
       writeFileSync(script, releaseWorkdirHoldersCommand(dir));
       const scenario = join(dir, 'holders.sh');
       writeFileSync(scenario, HOLDER_SCENARIO);
-      // pid 1 stands in for the container server the scan excludes, so it must not host the scan;
-      // it waits on the session as a child because a pid namespace ends with its pid 1.
+      // PID 1 is the container init; the namespace ends with it, so it waits on the scan as a child.
       const init = join(dir, 'init.sh');
       writeFileSync(init, 'inner=$1; shift; sh "$inner" "$@"\n');
       const ready = { stranger: `${dir}-ready-stranger`, cwd: `${dir}-ready-cwd` };
@@ -853,28 +783,24 @@ printf '\\nPIDS stranger=%s cwd=%s session=%s status=%s cwdalive=%s pidsInScan=%
         // `unshare`, refused namespace, or the bound above firing).
         commandRan: ran.error === undefined ? 'yes' : ran.error.message,
         sessionSurvived: ran.stdout.includes('ALIVE'),
-        strangerSignalled: ran.stderr.includes('signalling:'),
         strangerStillNamed: named(reported('stranger')),
         strangerSignal: Number(reported('status')) - 128,
         cwdHolderNamed: named(reported('cwd')),
         cwdHolderSurvived: reported('cwdalive'),
-        cwdHolderExplained: ran.stderr.includes('cwd-only holders'),
+        cwdHolderSignal: Number(reported('cwdstatus')) - 128,
         ancestorNamed: named(reported('session')),
-        ancestorExplained: ran.stderr.includes("this session's own"),
         // The scan is scoped to a container-sized process table, which is the
         // whole reason its two walks fit inside one bounded stop.
         pidsInScan: Number(reported('pidsInScan')) < 32,
       }).toEqual({
         commandRan: 'yes',
         sessionSurvived: true,
-        strangerSignalled: true,
         strangerStillNamed: false,
         strangerSignal: 15,
-        cwdHolderNamed: true,
-        cwdHolderSurvived: 'yes',
-        cwdHolderExplained: true,
+        cwdHolderNamed: false,
+        cwdHolderSurvived: 'no',
+        cwdHolderSignal: 15,
         ancestorNamed: true,
-        ancestorExplained: true,
         pidsInScan: true,
       });
       rmSync(dir, { recursive: true, force: true });

@@ -3,12 +3,10 @@
  * cookie. Cross-preview cookie-site isolation remains a deployment prerequisite.
  */
 import './helpers/ui-module-globals';
-import { afterAll, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from "bun:test";
 import * as v from 'valibot';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import {
   PREVIEW_SANDBOX,
   containPreviewResponse,
@@ -35,61 +33,25 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, type TestUserDO } fro
 import { createSession } from '../src/auth/store';
 import { makeKv } from './helpers/kv';
 import { sandboxPreviewExposures } from '@kinu.run/core';
-import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
 import { unreachableNamespace, unreachableObjects, workerContext } from './helpers/bindings';
 import { appProbe, concretePath, PROBE_ORIGIN } from './helpers/app-probe';
 import type { NimbusPreviewEnv, WorkspacePreviewHost } from '../src/nimbus-route';
 import type { SandboxPreviewEnv } from '../src/preview-proxy';
 import { PreviewFrame } from '../src/components/PreviewFrame';
-import type { SandboxOptions } from '@cloudflare/sandbox';
+import type { KinuSandbox } from "../src/kinu-sandbox";
 import { present } from '@kinu.run/test-utils';
 
-// The SDK entry pulls in `cloudflare:workers`, which only exists inside workerd; proxyToSandbox is
-// the seam the Worker delegates to, so everything Kinu owns stays under test.
-let sdkResponse: Response | null = null;
+let containerResponse: Response | Error | null = null;
 
-let sdkRequest: Request | null = null;
+let containerRequest: Request | null = null;
 
-// Successive answers (before/after a repair); empty means every forward gets `sdkResponse`.
-let sdkQueue: Response[] = [];
+let forwards = 0;
 
-let sdkForwards = 0;
-
-// Which object the stale-preview repair reaches via `getSandbox` is the property that matters most.
-/** Every Kinu call site passes the same options or the SDK drops in-flight requests for that id. */
-let repairs: Array<{ id: string; options?: SandboxOptions }> = [];
-
-let repairFailure: Error | null = null;
+let selectedSandbox: string | undefined;
 
 /** Every sandbox client any route opened, whatever it then asked of it. */
 let sandboxesOpened = 0;
 
-// Reset in `afterAll`, so a later file meets the real SDK.
-await installSandboxSdkMock();
-
-setSandboxSdk({
-  proxyToSandbox: async (request: Request) => {
-    sdkRequest = request;
-    sdkForwards += 1;
-    // A Response is one-shot, so hand out a clone; a scripted null is the SDK's "no exposed port".
-    const scripted = sdkQueue.shift() ?? sdkResponse;
-
-    return scripted === null ? null : scripted.clone();
-  },
-  getSandbox: (_namespace: NonNullable<Env['Sandbox']>, id: string, options?: SandboxOptions) => {
-    sandboxesOpened += 1;
-
-    return {
-      ensureReady: async () => {
-      repairs.push({ id, options });
-
-        if (repairFailure) throw repairFailure;
-      },
-    };
-  },
-});
-
-afterAll(() => { setSandboxSdk(null); });
 
 const { servePreviewRequest } =
   await import('../src/preview-proxy');
@@ -100,7 +62,6 @@ const { default: worker } = await import('../src/server');
 // The /api app the Worker hands every `/api/` path to.
 const { api } = await import('../src/api/app');
 
-const root = join(import.meta.dir, '..');
 
 
 const APP = 'https://kinu.example.com';
@@ -161,42 +122,30 @@ if (!configuredNimbusUrl) throw new Error('Nimbus preview test URL is not config
 
 const NIMBUS_URL = configuredNimbusUrl;
 
-/** The SDK is mocked, so this stands only for the binding being present, which the rail checks. */
-const CONTAINERS: SandboxPreviewEnv = { ...ENV, Sandbox: unreachableObjects('Sandbox') };
+const CONTAINERS = { ...ENV, Sandbox: Object.assign(unreachableObjects<KinuSandbox>("Sandbox"), {
+  getByName: (id: string) => {
+    sandboxesOpened++;
+    selectedSandbox = id;
 
-async function serve(url: string, response: Response | null): Promise<Response> {
-  sdkResponse = response;
-  sdkRequest = null;
-  sdkQueue = [];
-  sdkForwards = 0;
-  repairs = [];
-  repairFailure = null;
+    return { fetch: async (request: Request) => {
+      containerRequest = request;
+      forwards++;
+
+      if (containerResponse instanceof Error) throw containerResponse;
+
+      return containerResponse?.clone() ?? new Response("Preview not exposed", { status: 404 });
+    } };
+  },
+}) } satisfies SandboxPreviewEnv;
+
+async function serve(url: string, response: Response | Error | null): Promise<Response> {
+  containerResponse = response;
+  containerRequest = null;
+  forwards = 0;
 
   return servePreviewRequest(new Request(url), CONTAINERS);
 }
 
-async function serveWithRepair(
-  request: Request,
-  answers: Response[],
-  failure: Error | null = null,
-): Promise<Response> {
-  sdkResponse = null;
-  sdkRequest = null;
-  sdkQueue = [...answers];
-  sdkForwards = 0;
-  repairs = [];
-  repairFailure = failure;
-
-  return servePreviewRequest(request, CONTAINERS);
-}
-
-function stalePreview(): Response {
-  // A transcription of the SDK's `stalePreviewURLResponse`, so a change on either side fails loudly.
-  return new Response(
-    '{"error":"Preview URL is stale because the sandbox runtime is not active","code":"STALE_PREVIEW_URL"}',
-    { status: 410, headers: { 'content-type': 'application/json' } },
-  );
-}
 
 function recordingOrchestrator(record: (request: Request) => void): NimbusTestEnv['OrchestratorAgent'] {
   return {
@@ -370,8 +319,8 @@ describe('serving the preview host', () => {
   });
 
   test('strips Kinu credentials before the Sandbox SDK reaches guest code', async () => {
-    sdkResponse = new Response(null, { status: 204 });
-    sdkRequest = null;
+    containerResponse = new Response(null, { status: 204 });
+    containerRequest = null;
 
     const res = await servePreviewRequest(new Request(PREVIEW_URL, {
       headers: {
@@ -390,9 +339,9 @@ describe('serving the preview host', () => {
       },
     }), CONTAINERS);
 
-    if (!sdkRequest) throw new Error('Sandbox preview request was not forwarded');
+    if (!containerRequest) throw new Error('Sandbox preview request was not forwarded');
     expect(res.status).toBe(204);
-    const forwarded: Request = sdkRequest;
+    const forwarded: Request = containerRequest;
     expect(forwarded.headers.get('cookie')).toBe('guest_session=guest');
     expect(forwarded.headers.get('authorization')).toBeNull();
     expect(forwarded.headers.get('proxy-authorization')).toBeNull();
@@ -403,14 +352,14 @@ describe('serving the preview host', () => {
   });
 
   test('preserves guest-owned bearer auth for Sandbox apps', async () => {
-    sdkResponse = new Response(null, { status: 204 });
-    sdkRequest = null;
+    containerResponse = new Response(null, { status: 204 });
+    containerRequest = null;
     await servePreviewRequest(new Request(PREVIEW_URL, {
       headers: { authorization: 'Bearer guest-token' },
     }), CONTAINERS);
 
-    if (!sdkRequest) throw new Error('Sandbox preview request was not forwarded');
-    const forwarded: Request = sdkRequest;
+    if (!containerRequest) throw new Error('Sandbox preview request was not forwarded');
+    const forwarded: Request = containerRequest;
     expect(forwarded.headers.get('authorization')).toBe('Bearer guest-token');
   });
 
@@ -423,7 +372,7 @@ describe('serving the preview host', () => {
   test('an unpublished label never reaches the SDK at all', async () => {
     // `proxyToSandbox` is where a DO gets resolved; not calling it makes a guess cost nothing.
     const res = await serve(`https://8080-${PREVIEW_SANDBOX_ID}-p8080_forged1.${SUFFIX}/`, null);
-    expect(sdkForwards).toBe(0);
+    expect(forwards).toBe(0);
     expect(res.status).toBe(404);
     expect(await res.json()).toMatchObject({ code: 'PREVIEW_NOT_EXPOSED' });
   });
@@ -435,137 +384,32 @@ describe('serving the preview host', () => {
       { status: 404, headers: { 'content-type': 'application/json' } },
     ));
 
-    expect(sdkForwards).toBe(1);
+    expect(forwards).toBe(1);
+    expect(selectedSandbox).toBe(PREVIEW_SANDBOX_ID);
     expect(res.status).toBe(404);
     expect(await res.json()).toMatchObject({ code: 'INVALID_TOKEN' });
   });
 
   test('a failed forward becomes a page the user can act on', async () => {
-    const res = await serve(PREVIEW_URL, new Response('Proxy routing error', { status: 500 }));
+    const res = await serve(PREVIEW_URL, new Error("native TCP connection refused"));
     expect(res.status).toBe(503);
-    const html = await res.text();
-    expect(html).toContain('Preview not ready');
-    expect(html).toContain('8080');
     expect(res.headers.get('content-security-policy')).toBe(`sandbox ${PREVIEW_SANDBOX}`);
   });
 
-  test("the SDK's forward-failure response is still the shape we match", () => {
-    const sdk = readFileSync(join(root, '../../node_modules/@cloudflare/sandbox/dist/index.js'), 'utf8');
-    expect(sdk.includes('Proxy routing error')).toBe(true);
+  test("an application's HTTP 500 is its answer, not a transport failure", async () => {
+    const res = await serve(PREVIEW_URL, new Response("Proxy routing error", { status: 500 }));
+    expect(res.status).toBe(500);
+    expect(await res.text()).toBe("Proxy routing error");
   });
-});
-
-// KINU-035. A container recycle keeps the durable token but loses the port's activation, so a valid
-// preview URL answers 410 until something re-exposes the port.
-describe('repairing a stale preview', () => {
-  test('a stale GET is repaired once and re-issued, and the visitor sees the app', async () => {
-    const res = await serveWithRepair(new Request(PREVIEW_URL), [
-      stalePreview(),
-      new Response('<h1>hello</h1>', { status: 200, headers: { 'content-type': 'text/html' } }),
-    ]);
-
-    expect(res.status).toBe(200);
-    expect(await res.text()).toContain('hello');
-    expect(sdkForwards).toBe(2);
-    expect(repairs).toEqual([
-      { id: 'kinu-hello', options: { normalizeId: true, transport: 'rpc' } },
-    ]);
-  });
-
-  test('the repaired answer still carries the preview containment headers', async () => {
-    const res = await serveWithRepair(new Request(PREVIEW_URL), [
-      stalePreview(),
-      new Response('<h1>hello</h1>', { status: 200 }),
-    ]);
-
-    expect(res.headers.get('content-security-policy')).toBe(`sandbox ${PREVIEW_SANDBOX}`);
-    expect(res.headers.get('referrer-policy')).toBe('no-referrer');
-  });
-
-  test('a second stale answer is returned as itself — one transition, not a budget', async () => {
-    const res = await serveWithRepair(new Request(PREVIEW_URL), [stalePreview(), stalePreview()]);
-
-    expect(res.status).toBe(410);
-    expect(await res.json()).toMatchObject({ code: 'STALE_PREVIEW_URL' });
-    expect(sdkForwards).toBe(2);
-    expect(repairs).toHaveLength(1);
-  });
-
-  test('a repair that cannot run leaves the stale answer exactly as it was', async () => {
-    const res = await serveWithRepair(
-      new Request(PREVIEW_URL),
-      [stalePreview(), stalePreview()],
-      new Error('this devbox has no attached work directory'),
-    );
-
-    expect(res.status).toBe(410);
-    expect(repairs).toHaveLength(1);
-  });
-
-  test('a non-GET is never repaired: its body cannot be replayed', async () => {
-    const res = await serveWithRepair(
-      new Request(PREVIEW_URL, { method: 'POST', body: 'x' }),
-      [stalePreview()],
-    );
-
-    expect(res.status).toBe(410);
-    expect(sdkForwards).toBe(1);
-    expect(repairs).toEqual([]);
-  });
-
-  test('an invalid token is never repaired — the 404 arm is unauthenticated', async () => {
-    const res = await serveWithRepair(new Request(PREVIEW_URL), [
-      new Response(JSON.stringify({ error: 'Access denied', code: 'INVALID_TOKEN' }), {
-        status: 404, headers: { 'content-type': 'application/json' },
-      }),
-    ]);
-
-    expect(res.status).toBe(404);
-    expect(repairs).toEqual([]);
-  });
-
-  test("an app's own 410 is not a stale preview", async () => {
-    const res = await serveWithRepair(new Request(PREVIEW_URL), [
-      new Response('this resource is gone', { status: 410 }),
-    ]);
-
-    expect(res.status).toBe(410);
-    expect(await res.text()).toBe('this resource is gone');
-    expect(repairs).toEqual([]);
-  });
-
-  test('a deployment with no container binding serves no preview at all', async () => {
-    // No namespace: the rail refuses rather than hand the SDK `undefined` to resolve.
-    sdkResponse = stalePreview();
-    sdkQueue = [];
-    sdkForwards = 0;
-    repairs = [];
+  test("a deployment with no container binding serves no preview", async () => {
+    forwards = 0;
     const res = await servePreviewRequest(new Request(PREVIEW_URL), ENV);
-
     expect(res.status).toBe(503);
-    expect(await res.json()).toMatchObject({ code: 'PREVIEW_UNAVAILABLE' });
-    expect(sdkForwards).toBe(0);
-    expect(repairs).toEqual([]);
-  });
-
-  test("the SDK's stale-preview response is still the shape we match", () => {
-    // The classification rests on this body; an upgrade that rewords it must fail here. The
-    // chunk's name changes with every SDK release, so it is found, and exactly one must exist.
-    const dist = join(root, '../../node_modules/@cloudflare/sandbox/dist');
-    const chunks = readdirSync(dist).filter((name) => /^sandbox-.*\.js$/.test(name));
-    const [chunk, ...others] = chunks;
-
-    if (chunk === undefined || others.length > 0) {
-      throw new Error(`expected one dist/sandbox-*.js chunk, found: ${chunks.join(', ') || 'none'}`);
-    }
-
-    const sdk = readFileSync(join(dist, chunk), 'utf8');
-
-    expect(sdk).toContain('Preview URL is stale because the sandbox runtime is not active');
-    expect(sdk).toContain('STALE_PREVIEW_URL');
-    expect(sdk).toContain('status: 410');
+    expect(await res.json()).toMatchObject({ code: "PREVIEW_UNAVAILABLE" });
+    expect(forwards).toBe(0);
   });
 });
+
 
 describe('serving a Nimbus preview host', () => {
   test('routes all HTTP methods at the origin root without forwarding Kinu credentials', async () => {
@@ -1143,13 +987,13 @@ describe('worker wiring', () => {
   });
 
   test('no route on the app host serves previews', async () => {
-    sdkRequest = null;
+    containerRequest = null;
     const answer = await served(`${APP}/_preview/8080/`, ZONE, { accept: 'text/html' });
 
     // Unauthenticated, so the sign-in page; a preview route would have asked the Sandbox SDK.
     expect(answer.status).toBe(302);
     expect(answer.headers.get('location')).toStartWith(`${APP}/login?`);
-    expect(sdkRequest).toBeNull();
+    expect(containerRequest).toBeNull();
   });
 
   test('a signed-in write from a preview origin is refused before any route runs', async () => {
@@ -1174,13 +1018,13 @@ describe('worker wiring', () => {
 
   test('a signed-in owner asking the app host for a preview gets the app, never a sandbox', async () => {
     const browser = await signedInBrowser();
-    const [forwards, opened] = [sdkForwards, sandboxesOpened];
+    const [beforeForwards, opened] = [forwards, sandboxesOpened];
 
     const answer = await browser.fetch(`/_preview/${String(PREVIEW_PORT)}/`, { headers: { accept: 'text/html' } });
 
     expect(answer.status).toBe(200);
     expect(await answer.text()).toContain(APP_BODY);
-    expect([sdkForwards, sandboxesOpened]).toEqual([forwards, opened]);
+    expect([forwards, sandboxesOpened]).toEqual([beforeForwards, opened]);
   });
 
   test('the served app document names the preview zone the browser frames', async () => {

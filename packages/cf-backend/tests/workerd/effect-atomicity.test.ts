@@ -15,7 +15,7 @@ const STEPS = 200_000;
 
 const CONCURRENT = 20;
 
-async function admittedDuring(runner: 'settle' | 'default', name: string): Promise<number> {
+async function admittedDuring(runner: 'settle' | 'devbox' | 'default', name: string): Promise<number> {
   const probe = env.EFFECT_ATOMICITY_PROBE.get(env.EFFECT_ATOMICITY_PROBE.idFromName(name));
 
   return probe.interleaved(runner, STEPS, CONCURRENT);
@@ -28,5 +28,9 @@ describe('an effect inside a Durable Object event', () => {
 
   it('under settle, admits none', async () => {
     expect(await admittedDuring('settle', 'effect-atomicity-settle')).toBe(0);
+  });
+
+  it('under the standalone Devbox runner, admits none', async () => {
+    expect(await admittedDuring('devbox', 'effect-atomicity-devbox')).toBe(0);
   });
 });

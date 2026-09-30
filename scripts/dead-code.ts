@@ -648,13 +648,6 @@ export const DEPENDENCY_REASONS = {
     'the same redundant duplicate: packages/core/src/providers/openai.ts:8 and '
     + 'packages/cli-backend/src/opencode-provider.ts:17 import it through the root pin, '
     + 'and no cf-backend file imports it.',
-  'packages/devbox/package.json#@cloudflare/containers (unused-dependency)':
-    'declared HERE and imported from cf-backend — packages/cf-backend/src/egress/'
-    + 'outbound.ts:53 type-imports it while cf-backend declares nothing, so this '
-    + 'declaration is what hoisting resolves that import against. devbox itself never '
-    + 'imports it (its chain is KinuSandbox -> Devbox -> Sandbox from @cloudflare/sandbox), '
-    + 'and the root override pinning 0.3.7 hangs off @cloudflare/sandbox\'s own ^0.3.5 '
-    + 'edge, enforced by scripts/nested-container-resolution.test.ts:573.',
 } satisfies Record<string, string>;
 
 /** The recorded reason for one dependency row, or `undefined` when the row is

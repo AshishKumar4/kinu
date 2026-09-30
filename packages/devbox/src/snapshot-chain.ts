@@ -1,8 +1,9 @@
 /** Snapshot chain: immutable squashfs base plus one cumulative delta at a fresh UUID key.
  *  Attach reads no payload bytes (D2); CAS publishes the pointer before cleanup (D7). */
 
-import type { BackupOptions, DirectoryBackup } from '@cloudflare/sandbox';
+import type { BackupOptions, DirectoryBackup } from './contracts';
 import * as v from 'valibot';
+import { DevboxError, containerChanged, devboxFailure, layerUnreadable } from './errors';
 
 import {
   CHAIN_SERVED_WORDS,
@@ -15,7 +16,6 @@ import {
   type DeltaFileHashes,
   type DeltaManifest,
   DeltaManifestSchema,
-  DeltaNamespaceProbeFailed,
   type DeltaProbeEntry,
   buildDeltaAttachOps,
   buildDeltaStageOps,
@@ -133,23 +133,11 @@ process.stdout.write(size + ' ' + etag);
  *  no byte of it can become shell syntax. */
 const PUBLISH_SCRIPT_B64 = btoa(PUBLISH_SCRIPT);
 
-class ContainerChangedDuringAttach extends Error {
-  constructor() {
-    super('the container generation changed while snapshot-chain attached its lower layers');
-    this.name = 'ContainerChangedDuringAttach';
-  }
-}
+
 
 /** Only a generation's own archive failing to mount or read; the caller may fall back to an
  *  older generation. Other attach failures say nothing about its bytes and never cost a promotion. */
-class LayerUnreadable extends Error {
-  constructor(layer: string, generation: string, thrown: { readonly cause: unknown }) {
-    super(`the ${layer} layer of generation ${generation} could not be read`, {
-      cause: thrown.cause,
-    });
-    this.name = 'LayerUnreadable';
-  }
-}
+
 
 /** Extraction-path archive lifetime only; never put a lifecycle rule on the chain prefix:
  *  it deletes by upload age and the once-written base would vanish from an active box. */
@@ -235,10 +223,8 @@ function isChainId(id: string): boolean {
 
 function assertChainId(id: string): string {
   if (!isChainId(id)) {
-    throw new Error(
-      `chain id ${JSON.stringify(id.slice(0, 64))} is not a UUID; refusing to build `
-      + 'storage keys from it',
-    );
+    throw new DevboxError("io", `chain id ${JSON.stringify(id.slice(0, 64))} is not a UUID; refusing to build `
+    + 'storage keys from it', );
   }
 
   return id;
@@ -250,11 +236,19 @@ export function chainStoreRoot(boxPrefix: string): string {
   return `${boxPrefix}/backups`;
 }
 
-/** `r2EgressHandler` prepends the mount's prefix, so a key outside it has no URL (D15). */
-export function storeObjectUrl(root: string, binding: string, key: string): string {
-  if (!key.startsWith(`${root}/`)) throw new Error(`storeObjectUrl: ${key} is outside this box's store prefix ${root}`);
+/** The host S3Mounts gives a route: `routeHost` in @cloudflare/sandbox 1.0.0-rc.1 (index.mjs:1502). */
+export function storeRouteHost(routeId: string): string {
+  return `s3-${routeId}.sandbox.internal`;
+}
 
-  return `http://r2.internal/${binding}/${key.slice(root.length + 1)}`;
+/** The route the container's publisher PUTs through; S3Mounts names its own routes at random. */
+export const STORE_PUBLISH_ROUTE = 'devbox-publish';
+
+/** The store gateway grants access only within this box's prefix (D41). */
+export function storeObjectUrl(root: string, bucket: string, key: string): string {
+  if (!key.startsWith(`${root}/`)) throw new DevboxError("io", `storeObjectUrl: ${key} is outside this box's store prefix ${root}`);
+
+  return `http://${storeRouteHost(STORE_PUBLISH_ROUTE)}/${encodeURIComponent(bucket)}/${key.split('/').map(encodeURIComponent).join('/')}`;
 }
 
 /** Beside the upper, whose contents are all archived; on ephemeral disk (P1), so a replaced disk
@@ -276,10 +270,8 @@ export function seedStampPorts(exec: SnapshotChainPorts['exec']): Pick<SnapshotC
       );
 
       if (written.exitCode !== 0) {
-        throw new Error(
-          `the seed stamp could not be written at ${CHAIN_SEED_STAMP_PATH}: `
-          + `${written.stderr.trim() || written.stdout.trim() || `exit ${written.exitCode}`}`,
-        );
+        throw new DevboxError("io", `the seed stamp could not be written at ${CHAIN_SEED_STAMP_PATH}: `
+        + `${written.stderr.trim() || written.stdout.trim() || `exit ${written.exitCode}`}`, );
       }
     },
   };
@@ -520,17 +512,7 @@ function shouldCheckpoint(
   return now - lastCheckpointAt >= minIntervalMs;
 }
 
-export class ChainRecordAdvanced extends Error {
-  readonly expectedRev: number | null;
-  readonly storedRev: number | null;
 
-  constructor(expectedRev: number | null, storedRev: number | null) {
-    super(`another writer advanced the chain record to rev ${storedRev ?? 'none'} after this one read rev ${expectedRev ?? 'none'}`);
-    this.name = 'ChainRecordAdvanced';
-    this.expectedRev = expectedRev;
-    this.storedRev = storedRev;
-  }
-}
 
 /** The adapter decides nothing: each entry maps to one public Sandbox SDK primitive,
  *  one object-store binding call, or the box's own durable storage. */
@@ -582,10 +564,9 @@ export interface SnapshotChainPorts {
   writeSeedStamp(stamp: string): Promise<void>;
   /** Entry count of the work directory. The extraction-mode postcondition. */
   countEntries(dir: string): Promise<number>;
-  /** Extraction-mode attach, through the SDK's own local-store path. */
-  restoreExtract(backup: DirectoryBackup): Promise<{ success: boolean }>;
-  /** Extraction-mode checkpoint: the SDK archives a whole tree and moves it
-   *  through the binding. LOCAL DEVELOPMENT ONLY. */
+  /** Local extraction rejects when its archive cannot be restored. */
+  restoreExtract(backup: DirectoryBackup): Promise<void>;
+  /** Local-development checkpoint archives the whole tree through the binding. */
   createExtractSnapshot(options: BackupOptions): Promise<DirectoryBackup>;
   /** Properties, not methods: the failure-stamp deps carry both by reference. */
   now: () => number;
@@ -679,7 +660,7 @@ function chainShell(exec: ContainerExec, root: string) {
     const result = await exec(command);
 
     if (result.exitCode !== 0) {
-      throw new Error(`${doing} failed (${result.exitCode}): ${result.stderr || result.stdout}`);
+      throw new DevboxError("io", `${doing} failed (${result.exitCode}): ${result.stderr || result.stdout}`);
     }
 
     return result.stdout;
@@ -782,19 +763,15 @@ function chainShell(exec: ContainerExec, root: string) {
       const [code, size] = result.stdout.trim().split(/\s+/);
 
       if (code !== '0') {
-        throw new Error(
-          `staging the exclude list or building the squashfs failed (${code ?? '?'}): `
-          + `${result.stderr.trim() || 'no output'}`,
-        );
+        throw new DevboxError("io", `staging the exclude list or building the squashfs failed (${code ?? '?'}): `
+        + `${result.stderr.trim() || 'no output'}`, );
       }
 
       const bytes = Number(size);
 
       if (!Number.isFinite(bytes) || bytes <= 0) {
-        throw new Error(
-          `mksquashfs reported success but ${archivePath} is ${size ?? 'absent'}: `
-          + `${result.stderr.trim() || 'the archiver left no diagnostics'}`,
-        );
+        throw new DevboxError("io", `mksquashfs reported success but ${archivePath} is ${size ?? 'absent'}: `
+        + `${result.stderr.trim() || 'the archiver left no diagnostics'}`, );
       }
 
       return bytes;
@@ -805,20 +782,16 @@ function chainShell(exec: ContainerExec, root: string) {
       const [code, size, etag] = result.stdout.trim().split(/\s+/);
 
       if (code !== '0') {
-        throw new Error(
-          `publishing ${archivePath} to ${objectUrl} failed (${code ?? '?'}): `
-          + `${result.stderr.trim() || 'no output'}`,
-        );
+        throw new DevboxError("io", `publishing ${archivePath} to ${objectUrl} failed (${code ?? '?'}): `
+        + `${result.stderr.trim() || 'no output'}`, );
       }
 
       const bytes = Number(size);
 
       if (!Number.isFinite(bytes) || bytes <= 0) {
-        throw new Error(
-          `the store reports ${objectUrl} as ${size ?? 'absent'} after a publication `
-          + `that reported success${etag === undefined ? '' : ` (etag ${etag})`}: `
-          + `${result.stderr.trim() || 'no diagnostics'}`,
-        );
+        throw new DevboxError("io", `the store reports ${objectUrl} as ${size ?? 'absent'} after a publication `
+        + `that reported success${etag === undefined ? '' : ` (etag ${etag})`}: `
+        + `${result.stderr.trim() || 'no diagnostics'}`, );
       }
 
       return bytes;
@@ -948,23 +921,13 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   };
 
   const attachExtract = async (generation: ChainGeneration): Promise<AttachOutcome> => {
-    const result = await ports.restoreExtract({
+    await ports.restoreExtract({
       id: generation.base.id, dir: DEVBOX_WORKDIR, localBucket: true,
     });
 
-    // An archive that will not extract is this generation's own failure, so
-    // it travels as one: an older generation may still start.
-    if (!result.success) {
-      throw new LayerUnreadable('extraction', generation.base.id, {
-        cause: new Error(`extraction of ${DEVBOX_WORKDIR} reported failure.`),
-      });
-    }
-
     if ((await ports.countEntries(DEVBOX_WORKDIR)) === 0) {
-      throw new LayerUnreadable('extraction', generation.base.id, {
-        cause: new Error(
-          `extraction of ${DEVBOX_WORKDIR} reported success, but the directory is empty.`,
-        ),
+      throw layerUnreadable('extraction', generation.base.id, {
+        cause: new DevboxError("io", `extraction of ${DEVBOX_WORKDIR} reported success, but the directory is empty.`, ),
       });
     }
 
@@ -1031,10 +994,10 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       }
     }
 
-    if (refusedVersion) await layerFailed('delta', { cause: new Error('unsupported delta manifest version; reset deployment required') });
+    if (refusedVersion) await layerFailed('delta', { cause: new DevboxError("io", 'unsupported delta manifest version; reset deployment required') });
 
     if (manifest === null && generation.deltaFormat === 'chunked') {
-      await layerFailed('delta', { cause: new Error('the record names a chunked delta whose mount serves no manifest') });
+      await layerFailed('delta', { cause: new DevboxError("io", 'the record names a chunked delta whose mount serves no manifest') });
     }
 
     if (manifest === null) return null;
@@ -1049,7 +1012,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       if (file.kind !== 'chunked' || indexes.has(file.over.index)) continue;
       const result = await ports.exec(`# devbox-index-v2\nbase64 ${shellPath(`${deltaLayer}/.devbox-delta/${file.over.index}`)}`);
 
-      if (result.exitCode !== 0) throw new Error(`delta index could not be read: ${result.stderr}`);
+      if (result.exitCode !== 0) throw new DevboxError("io", `delta index could not be read: ${result.stderr}`);
       const bytes = Buffer.from(result.stdout.trim(), 'base64');
       readDeltaIndex(file.over, file.s, bytes);
       indexes.set(file.over.index, bytes);
@@ -1071,17 +1034,14 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     try {
       standing = await mountStoreOnce();
     } catch (error) {
-      throw new Error(
-        `chain ${generation.base.id} is stored as lazy layers and its store subtree could not `
-        + `be mounted here: ${describe({ cause: error })}`,
-        { cause: error },
-      );
+      throw new DevboxError("io", `chain ${generation.base.id} is stored as lazy layers and its store subtree could not `
+      + `be mounted here: ${describe({ cause: error })}`, { cause: error },);
     }
 
     const mountedGeneration = await ports.containerGeneration?.();
 
     if (containerReplaced(containerGeneration, mountedGeneration)) {
-      throw new ContainerChangedDuringAttach();
+      throw containerChanged();
     }
 
     /** An unmountable or unreadable layer fails this generation, unless the container was
@@ -1093,10 +1053,10 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       const failedGeneration = await ports.containerGeneration?.();
 
       if (containerReplaced(mountedGeneration, failedGeneration)) {
-        throw new ContainerChangedDuringAttach();
+        throw containerChanged();
       }
 
-      throw new LayerUnreadable(layer, generation.base.id, thrown);
+      throw layerUnreadable(layer, generation.base.id, thrown);
     };
 
     const mountedBase = mountedLayerPath(CHAIN_STORE_MOUNT, root, baseObjectKey(root, generation.base.id));
@@ -1104,14 +1064,12 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
 
     if (!visible.ready) {
       if (containerReplaced(mountedGeneration, await ports.containerGeneration?.())) {
-        throw new ContainerChangedDuringAttach();
+        throw containerChanged();
       }
 
-      throw new Error(
-        `chain ${generation.base.id} store mount does not expose ${mountedBase} after `
-        + `${LAYER_VISIBILITY_PROBES} probes; ${CHAIN_STORE_MOUNT} holds: `
-        + `${visible.holds.length === 0 ? '(nothing)' : visible.holds}`,
-      );
+      throw new DevboxError("io", `chain ${generation.base.id} store mount does not expose ${mountedBase} after `
+      + `${LAYER_VISIBILITY_PROBES} probes; ${CHAIN_STORE_MOUNT} holds: `
+      + `${visible.holds.length === 0 ? '(nothing)' : visible.holds}`, );
     }
 
     // The layer mounts from the stored object; a delta the record names was already adopted by
@@ -1197,7 +1155,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       assertComposedMounts({ mounts: completedMounts, token: blockToken, baseSource: mountedBase, deltaSource, deltaLayer });
     }
 
-    if (containerReplaced(mountedGeneration, await ports.containerGeneration?.())) throw new ContainerChangedDuringAttach();
+    if (containerReplaced(mountedGeneration, await ports.containerGeneration?.())) throw containerChanged();
     // The store mount stays: squashfuse reads each layer through it while the overlay serves
     // the work directory, so a release is refused EBUSY; publication writes through it too.
 
@@ -1232,7 +1190,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       || findMount(mounts, CHAIN_STORE_MOUNT) === undefined
       || base?.source !== baseSource || !base.fstype.includes('squashfuse')
       || delta?.source !== deltaSource || !delta.fstype.includes('squashfuse')) {
-      throw new Error('composed lower mounts or generation do not match; readiness refused');
+      throw new DevboxError("io", 'composed lower mounts or generation do not match; readiness refused');
     }
   };
 
@@ -1240,7 +1198,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const block = findMount(mounts, blockLower);
 
     if (block === undefined) {
-      if (state?.deltaFormat === 'chunked' && deltaLayerServed(mounts, state.base.id)) throw new Error('incomplete composed mounts; readiness refused');
+      if (state?.deltaFormat === 'chunked' && deltaLayerServed(mounts, state.base.id)) throw new DevboxError("io", 'incomplete composed mounts; readiness refused');
 
       return;
     }
@@ -1248,7 +1206,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const [prefix, baseId = '', deltaId = '', runtime] = block.source.split(':');
 
     if (prefix !== 'devbox-block' || !isChainId(baseId) || !isChainId(deltaId)
-      || runtime !== ((await ports.containerGeneration?.()) ?? 'unobserved')) throw new Error('composed mount generation mismatch');
+      || runtime !== ((await ports.containerGeneration?.()) ?? 'unobserved')) throw new DevboxError("io", 'composed mount generation mismatch');
     assertComposedMounts({
       mounts,
       token: `${baseId}:${deltaId}:${runtime}`,
@@ -1263,7 +1221,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       try {
         return await attachChainOnce(generation);
       } catch (error) {
-        if (!(error instanceof ContainerChangedDuringAttach)) throw error;
+        if (devboxFailure({ cause: error })?.code !== 'container-changed') throw error;
         ports.log(
           `container changed while chain ${generation.base.id} attached; `
           + 'retrying on its replacement',
@@ -1296,17 +1254,13 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
    *  an existence probe for the upper directory. */
   const assertOverlayLanded = async (what: string): Promise<void> => {
     if (!isOverlayMounted(await shell.readMounts(), DEVBOX_WORKDIR)) {
-      throw new Error(
-        `attach of ${DEVBOX_WORKDIR} for ${what} reported success, but ${DEVBOX_WORKDIR} `
-        + 'is not an overlay mount.',
-      );
+      throw new DevboxError("io", `attach of ${DEVBOX_WORKDIR} for ${what} reported success, but ${DEVBOX_WORKDIR} `
+      + 'is not an overlay mount.', );
     }
 
     if (!(await shell.pathExists(upperDir))) {
-      throw new Error(
-        `attach of ${DEVBOX_WORKDIR} for ${what} produced an overlay whose upper directory `
-        + `${upperDir} does not exist, so nothing the caller writes could be checkpointed.`,
-      );
+      throw new DevboxError("io", `attach of ${DEVBOX_WORKDIR} for ${what} produced an overlay whose upper directory `
+      + `${upperDir} does not exist, so nothing the caller writes could be checkpointed.`, );
     }
   };
 
@@ -1340,7 +1294,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
 
       return { served, generation };
     } catch (error) {
-      if (!(error instanceof LayerUnreadable)) throw error;
+      if (devboxFailure({ cause: error })?.code !== 'layer-unreadable') throw error;
 
       return { refusal: describe({ cause: error }) };
     }
@@ -1378,11 +1332,9 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // The persisted mode is the contract: an `extract` record on a deployed box means a silent
     // fallback, and serving it would hide that twice.
     if (state.mode === 'extract' && !ports.allowExtraction()) {
-      throw new Error(
-        `chain ${state.base.id} was archived by extraction, which is not permitted here. `
-        + 'That record can only have come from a host that allowed it, so this box is '
-        + 'refusing rather than serving a work directory whose changes are never archived.',
-      );
+      throw new DevboxError("io", `chain ${state.base.id} was archived by extraction, which is not permitted here. `
+      + 'That record can only have come from a host that allowed it, so this box is '
+      + 'refusing rather than serving a work directory whose changes are never archived.', );
     }
 
     const current = await serve(state.mode, state);
@@ -1394,11 +1346,9 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
 
     if (state.fallback === undefined) {
-      throw new Error(
-        `Cannot attach ${DEVBOX_WORKDIR} from chain ${state.base.id}: ${current.refusal}. The `
-        + 'record names no earlier generation to fall back to, so this box is refusing to '
-        + 'start rather than serve an empty work directory. Nothing has been deleted.',
-      );
+      throw new DevboxError("io", `Cannot attach ${DEVBOX_WORKDIR} from chain ${state.base.id}: ${current.refusal}. The `
+      + 'record names no earlier generation to fall back to, so this box is refusing to '
+      + 'start rather than serve an empty work directory. Nothing has been deleted.', );
     }
 
     const reason = `chain ${state.base.id} was refused at attach: ${current.refusal}`;
@@ -1419,11 +1369,9 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const fallback = await serve(promoted.mode, promoted);
 
     if (!('served' in fallback)) {
-      throw new Error(
-        `Cannot attach ${DEVBOX_WORKDIR}: ${reason}, and the fallback generation `
-        + `${promoted.base.id} cannot be served either: ${fallback.refusal}. Refusing to `
-        + 'start, and deleting neither generation.',
-      );
+      throw new DevboxError("io", `Cannot attach ${DEVBOX_WORKDIR}: ${reason}, and the fallback generation `
+      + `${promoted.base.id} cannot be served either: ${fallback.refusal}. Refusing to `
+      + 'start, and deleting neither generation.', );
     }
 
     await recordProven(promoted, fallback.generation);
@@ -1486,17 +1434,13 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     }
 
     if (landed === undefined) {
-      throw new Error(
-        `the container published ${key} to ${objectUrl} and the store holds no `
-        + 'such object, so nothing has been recorded.',
-      );
+      throw new DevboxError("io", `the container published ${key} to ${objectUrl} and the store holds no `
+      + 'such object, so nothing has been recorded.', );
     }
 
     if (landed.bytes !== published) {
-      throw new Error(
-        `the store holds ${landed.bytes} bytes for ${key} where the container uploaded `
-        + `${published}. Refusing to record a layer whose upload did not carry every byte.`,
-      );
+      throw new DevboxError("io", `the store holds ${landed.bytes} bytes for ${key} where the container uploaded `
+      + `${published}. Refusing to record a layer whose upload did not carry every byte.`, );
     }
 
     return landed;
@@ -1531,7 +1475,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       const result = await ports.exec(opsBatchCommand(header, ops.slice(at, at + DELTA_OPS_PER_COMMAND)));
 
       if (result.exitCode !== 0) {
-        throw new Error(`${doing} failed in batch ${at / DELTA_OPS_PER_COMMAND + 1} (${result.exitCode}): ${result.stderr || result.stdout}`);
+        throw new DevboxError("io", `${doing} failed in batch ${at / DELTA_OPS_PER_COMMAND + 1} (${result.exitCode}): ${result.stderr || result.stdout}`);
       }
     }
   };
@@ -1540,7 +1484,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
    *  The package is one squashfs, so each checkpoint publishes exactly one object (D4). */
   const stageChunkedDelta = async (chainId: string, deltaId: string, storeHeld: boolean, retained?: DeltaManifest): Promise<DeltaPublication> => {
     const fallback = (reason: DeltaFallback['reason'], detail: string) => {
-      if (retained !== undefined) throw new Error(`refusing to lose the retained delta: ${reason}: ${detail}`);
+      if (retained !== undefined) throw new DevboxError("io", `refusing to lose the retained delta: ${reason}: ${detail}`);
       ports.log(JSON.stringify({ event: 'devbox.checkpoint.delta.fallback', chainId, deltaId, reason, detail }));
 
       return { kind: 'whole-upper', fallback: { reason, detail } } satisfies DeltaPublication;
@@ -1560,7 +1504,9 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     try {
       upperProbe = parseDeltaProbe(observed.stdout);
     } catch (error) {
-      if (error instanceof DeltaNamespaceProbeFailed) throw new Error(`${error.message}: ${observed.stderr}`, { cause: error });
+      const namespace = devboxFailure({ cause: error });
+
+      if (namespace?.code === 'delta-namespace') throw new DevboxError('io', `${namespace.message}: ${observed.stderr}`, { cause: error });
 
       return fallback('upper-probe-failed', `the upper probe did not answer: ${describe({ cause: error })}`);
     }
@@ -1683,7 +1629,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const stored = await ports.objectFacts(baseObjectKey(root, backup.id));
 
     if (stored === undefined || stored.bytes <= 0) {
-      throw new Error(`archive ${backup.id} is not sound: the object is missing or empty`);
+      throw new DevboxError("io", `archive ${backup.id} is not sound: the object is missing or empty`);
     }
 
     const storedBytes = stored.bytes;
@@ -1784,7 +1730,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       ports.log(JSON.stringify({ event: 'devbox.checkpoint.reseat.exit', chainId, ms: Date.now() - startedAt }));
     } catch (error) {
       ports.log(JSON.stringify({ event: 'devbox.checkpoint.reseat.failed', chainId, ms: Date.now() - startedAt, reason: describe({ cause: error }) }));
-      throw new Error(`${DEVBOX_WORKDIR} base ${chainId} is committed, but reseating it failed: ${describe({ cause: error })}`, { cause: error });
+      throw new DevboxError("io", `${DEVBOX_WORKDIR} base ${chainId} is committed, but reseating it failed: ${describe({ cause: error })}`, { cause: error });
     }
   };
 
@@ -1819,11 +1765,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
         storeHeld = true;
       } catch (error) {
         if (!ports.allowExtraction()) {
-          throw new Error(
-            'this box cannot serve a lazy layer chain and extraction is not permitted here, '
-            + `so nothing has been archived: ${describe({ cause: error })}`,
-            { cause: error },
-          );
+          throw new DevboxError("io", 'this box cannot serve a lazy layer chain and extraction is not permitted here, '
+          + `so nothing has been archived: ${describe({ cause: error })}`, { cause: error },);
         }
 
         ports.log(
@@ -1849,10 +1792,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       // The mount line proves an overlay exists, so a changed set exists at all; the upper is
       // the path this strategy passed ({@link isOverlayMounted}).
       if (!isOverlayMounted(await shell.readMounts(), DEVBOX_WORKDIR)) {
-        throw new Error(
-          `${DEVBOX_WORKDIR} is not an overlay mount, so there is no changed set to archive. `
-          + 'Refusing to checkpoint rather than silently archiving the whole tree.',
-        );
+        throw new DevboxError("io", `${DEVBOX_WORKDIR} is not an overlay mount, so there is no changed set to archive. `
+        + 'Refusing to checkpoint rather than silently archiving the whole tree.', );
       }
 
       // Delta and base share `archiveExcludes()` so `shouldRebase` compares commensurable sizes;
@@ -1861,10 +1802,10 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
 
       const retained = mounted && previous.deltaFormat === 'chunked'
         ? await readSidecarManifest(deltaLayerMountPoint(chainId), previous, async (_layer, thrown) => {
-          throw new Error('retained delta is unreadable', thrown);
+          throw new DevboxError("io", 'retained delta is unreadable', thrown);
         }) : null;
 
-      if (deltaId === undefined) throw new Error('delta publication has no identity');
+      if (deltaId === undefined) throw new DevboxError("io", 'delta publication has no identity');
       const chunked = await stageChunkedDelta(chainId, deltaId, storeHeld, retained ?? undefined);
 
       if (chunked.kind === 'chunked') {
@@ -1936,7 +1877,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     thrown: { readonly cause: unknown },
   ): Promise<CheckpointOutcome> => await recordCheckpointFailure(
     stamps,
-    thrown.cause instanceof ChainRecordAdvanced ? await ports.readState() : state,
+    devboxFailure(thrown)?.code === 'chain-advanced' ? await ports.readState() : state,
     describe(thrown),
   );
 
