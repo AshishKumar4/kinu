@@ -95,7 +95,8 @@ function restoredStoreRoute(files: Pick<Files, 'readFile'>, source: S3MountReque
     const registered = marker.output.configuration;
     const sameEndpoint = yield* attemptSync('mount-marker', () => new URL(registered.source.endpoint).href === new URL(source.endpoint).href, 'S3Mounts marker endpoint not understood');
 
-    if (!sameEndpoint || registered.source.region !== source.region || registered.source.bucket !== source.bucket || registered.keyPrefix !== prefix) {
+    // A mount made at a key prefix (before D46) sends full keys, which a rooted route would prefix twice.
+    if (!sameEndpoint || registered.source.region !== source.region || registered.source.bucket !== source.bucket || registered.keyPrefix !== undefined) {
       return yield* Effect.fail(new DevboxError('mount-marker', 'S3Mounts marker registration does not match this devbox store'));
     }
 
@@ -180,7 +181,9 @@ export class ContainerRoutes {
       const mounts = yield* this.#mounts();
       // A failed attempt can leave a marker behind, so the next unmount must run.
       this.#unmarked = false;
-      yield* attempt('io', () => mounts.mount({ mountPath: path, source, keyPrefix: this.host.prefix, access: 'read-write',
+      // No key prefix: s3fs mounts the bucket root and skips checking a prefix it would mount (D46);
+      // the route `#gateway` builds roots every key at this box's prefix instead.
+      yield* attempt('io', () => mounts.mount({ mountPath: path, source, access: 'read-write',
         s3fsOptions: { connect_timeout: 10, readwrite_timeout: 30, retries: 3 } }));
     }));
   }
@@ -193,10 +196,15 @@ export class ContainerRoutes {
     }));
   }
 
+  /** Every store route this box builds, S3Mounts' included, is rooted at the box's prefix, which
+   *  comes from here and never from what the guest wrote (D46). */
   #gateway(): Effect.Effect<S3GatewayBinding, DevboxError> {
     const gateway = this.host.bindings.DevboxStoreGateway;
 
-    return gateway === undefined ? Effect.fail(new DevboxError('configuration', 'export DevboxStoreGateway from the Worker')) : Effect.succeed(gateway);
+    if (gateway === undefined) return Effect.fail(new DevboxError('configuration', 'export DevboxStoreGateway from the Worker'));
+    const root = this.host.prefix;
+
+    return Effect.succeed(({ props }) => gateway({ props: props.mode === 'deny' ? props : { ...props, keyPrefix: root } }));
   }
 
   #mounts(): Effect.Effect<S3Mounts, DevboxError> {

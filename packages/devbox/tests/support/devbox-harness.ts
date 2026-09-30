@@ -656,7 +656,7 @@ export class FakeSandbox {
 
     if (bytes === undefined) return { stdout: '2 ', stderr: `no archive at ${archivePath}`, exitCode: 0 };
 
-    const key = decodeURIComponent(relative);
+    const key = `${store.root}/${decodeURIComponent(relative)}`;
     store.attempts?.push({ operation: 'put', key, bytes: bytes.byteLength });
     store.objects.set(key, bytes.slice());
 

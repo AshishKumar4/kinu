@@ -1963,8 +1963,8 @@ trips, 0.27 s (`sbs09300603nidbg`). 0.12.9 mounted the bucket root
 SDK always sets `compat_dir` (`RESERVED_S3FS_OPTIONS`, `index.mjs:1872`),
 so s3fs looks each directory up with up to four requests during the attach
 (`sbs09300609nitl`); 0.12.9's mount did not set it. Rooting the prefix in
-`DevboxStoreGateway` would let the mount take the bucket root and drop the
-three checks; it changes what the gateway trusts, so it is not done here.
+`DevboxStoreGateway` lets the mount take the bucket root and drop the three
+checks; D46 does it.
 The mount also registered its route by reinstalling both catch-alls one
 after the other, 168 to 171 ms; installing them together took 174 to
 235 ms (`sbs09300634nafix`), so the platform serializes them. D45 removes
@@ -1988,6 +1988,49 @@ keeps stat entries 900 s. Medians across runs cannot show a 0.1 s change:
 single runs of one image differ by up to 0.8 s in the store mount phase
 (1,388 and 2,190 ms, `sbs09300519nafter`, `sbs09300525nafterb`), so the
 change is shown by the call it removes.
+
+D46. Each store route is rooted at its box's prefix, and s3fs mounts the
+bucket root (2026-09-30). S3Mounts mounted `bucket:/prefix`, and the shim
+returned only after s3fs had checked that prefix with three store round trips
+(D44). 0.12.9's Worker rooted its mount instead, and so does
+`DevboxStoreGateway` now. `ContainerRoutes.#gateway` builds every store
+route, S3Mounts' included, with the box's prefix as its root, and the mount
+names no key prefix. The gateway prefixes each key the guest names and strips
+the root from what it lists. The boundary is where it was: the root comes
+from the object, never from the guest, as the prefix did.
+
+A root must end in `/`, since `boxes/box-1` would reach `boxes/box-10/…`
+through `0/…`. A key must be a plain path: no leading `/` and no empty, `.` or
+`..` segment once percent-decoded. URL parsing resolves literal and
+percent-encoded dot segments before the gateway sees the path, so they arrive
+as another bucket and are refused. A `/` the guest encodes survives parsing
+and the gateway refuses it. A listing's prefix and marker follow the same
+rules, and whatever continuation token the guest hands back, only keys under
+the root leave. The one non-plain key answered is `/`, the mount root's own
+directory object, which s3fs asks for when it mounts: 404, since no key with
+an empty segment is ever written. Red then green: `tests/store-gateway.test.ts`
+(`bench-artifacts/native-migration/rooted-gateway-red.log`, `-green.log`):
+dot segments, encoded slashes and dots, absolute keys, the sibling `box-10`
+beside `box-1`, and list, delete and continuation across the boundary.
+`tests/mount-route.test.ts` refuses a marker from a prefix mount: its s3fs
+sends full keys, which a rooted route would prefix twice, so such a container
+is not routed after an eviction. The publisher's URLs, and the image's
+`sync.js` that builds them in the container, name keys under the root. The
+image is `sha256:649439b5…`, with unchanged binaries.
+
+Measured as D45's pair was, both at once with the internet disabled, 10
+wakes each (`sbs09300654npbefore` on `915cfd2d87`, `sbs09300654nrafter`): the
+store mount phase median fell from 1,754 ms (1,689 to 2,382) to 1,474 ms
+(1,369 to 1,599, one wake at 3,671). The store is mounted 1,587 ms after the
+restore opens, against 1,876. Each wake makes 19 to 20 store requests against
+21 to 22. The mount's four (the prefix listing, HEADs of the prefix and its
+`_$folder$` twin, and a delimited listing) became two: the root listing and
+the root's directory object, which that run answered with a 400 and no R2
+call (now a 404). The rooted run's store answered slower, HEAD median 136
+against 109 ms (each run has its own bucket), which covers its later
+segments. Its attach took 2,574 against 2,316 ms over about 14 serial
+requests, and its restore 6,526 against 6,374 ms. The wake as the caller sees
+it took 10,206 against 10,717 ms.
 
 ## Measurement contract for a strategy comparison
 

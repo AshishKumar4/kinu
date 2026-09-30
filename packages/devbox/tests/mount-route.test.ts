@@ -63,3 +63,15 @@ test('a guest marker cannot widen the store route to another box\'s prefix', asy
 
   expect(error.message).toContain('does not match this devbox store');
 });
+
+test('a marker from a mount made at the box prefix is refused: its s3fs sends keys a rooted route would prefix twice', async () => {
+  const error = await refused({
+    protocolVersion: 1, routeId: 'owned-route', mountPath: '/backups',
+    configuration: {
+      source: { type: 's3', endpoint: source.endpoint, region: source.region, bucket: source.bucket },
+      keyPrefix: prefix, access: 'read-write',
+    },
+  });
+
+  expect(error.message).toContain('does not match this devbox store');
+});
