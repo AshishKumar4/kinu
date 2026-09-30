@@ -19,11 +19,24 @@ const pty = require('./pty.js');
 
 const update = require('./update.js');
 
+/** May be absent: an older daemon's updater lands only the siblings it knew. A literal specifier, so the
+ *  ladder's walker follows it. */
+function loadChatgpt() {
+  try {
+    return require('./chatgpt.js');
+  } catch (err) {
+    if (err?.code === 'MODULE_NOT_FOUND' && String(err.message).includes('chatgpt.js')) return null;
+    throw err;
+  }
+}
+
+const chatgpt = loadChatgpt();
+
 const { runToExit } = update;
 
-/** The names this daemon requires beside itself — the three requires above
+/** The names this daemon requires beside itself — the four requires above
  *  — for the updater to land a newer set of. */
-const DAEMON_SIBLINGS = ['sandbox.js', 'pty.js', 'update.js'];
+const DAEMON_SIBLINGS = ['sandbox.js', 'pty.js', 'update.js', 'chatgpt.js'];
 
 const HOME_SETTING = process.env.KINU_HOME?.trim() ?? '';
 
@@ -34,6 +47,10 @@ const DEVICE_HOME = path.resolve(HOME_SETTING === '' ? path.join(os.homedir(), '
  *  it before the successor connects); what this process reports is what it
  *  loaded. */
 const RUNNING_VERSION = update.readVersionStamp(DEVICE_HOME);
+
+/** What HELLO reports. Missing a sibling, this is not quite the stamped build, so the hub's answer is an
+ *  UPDATE to it, whose landing brings the sibling (the selftest still prints the stamp). */
+const REPORTED_VERSION = RUNNING_VERSION !== null && chatgpt === null ? `${RUNNING_VERSION}.incomplete` : RUNNING_VERSION;
 
 const CONFIG_PATH = path.join(DEVICE_HOME, 'device.json');
 
@@ -172,17 +189,19 @@ const PTY_FRAMES = new Set([PTY_INPUT_FRAME, PTY_RESIZE_FRAME, PTY_CLOSE_FRAME])
 const PTY_BACKLOG_MAX_BYTES = 256 * 1024;
 
 /**
- * The Codex relay. chatgpt.com refuses Kinu's cloud network, so while this
- * machine is online the hub asks it to make each Codex call instead. One call
- * is one correlated RPC that answers when the body ends; the head and each
- * body chunk go back as uncorrelated frames naming the call, so an answer
- * streams as chatgpt.com sends it. The names and the allow-list mirror core's
- * DEVICE_RELAY (execution/device-relay.ts) and codexEgressAllowed
- * (providers/codex.ts); cf-backend's pc-agent test holds them equal.
+ * The provider relay: the hub asks this machine to make a model call for the
+ * owner's web session. One call is one correlated RPC that answers when the
+ * body ends; the head and each body chunk go back as uncorrelated frames
+ * naming the call, so an answer streams as the provider sends it. The names
+ * and the allow-list mirror core's DEVICE_RELAY (execution/device-relay.ts),
+ * codexEgressAllowed (providers/codex.ts) and chatgptEgressAllowed
+ * (providers/chatgpt.ts); cf-backend's pc-agent test holds them equal.
  *
- * The call carries the owner's access token in its headers. It lives in this
- * request's memory only: nothing here logs a header or a body, and nothing is
- * written to disk.
+ * Two hosts. chatgpt.com refuses Kinu's cloud network, so a Codex call comes
+ * with the owner's access token in its headers; it lives in this request's
+ * memory only. api.openai.com is the ChatGPT plan, and its token is this
+ * machine's own sign-in (chatgpt.js), attached here and never sent to the hub.
+ * Nothing here logs a header or a body.
  */
 const RELAY_METHOD = 'codexRelay';
 
@@ -192,9 +211,20 @@ const RELAY_BODY_FRAME = 'RELAY_BODY';
 
 const RELAY_CANCEL_FRAME = 'RELAY_CANCEL';
 
-const RELAY_HOST = 'chatgpt.com';
+const CHATGPT_HOST = 'api.openai.com';
 
-const RELAY_ROUTES = Object.freeze(['GET /backend-api/codex/models', 'POST /backend-api/codex/responses', 'GET /backend-api/wham/usage']);
+const RELAY_ROUTES = Object.freeze({
+  'chatgpt.com': Object.freeze(['GET /backend-api/codex/models', 'POST /backend-api/codex/responses', 'GET /backend-api/wham/usage']),
+  [CHATGPT_HOST]: Object.freeze(['GET /v1/models', 'POST /v1/responses']),
+});
+
+/** The hub's calls on this machine's ChatGPT sign-in, core's DEVICE_CHATGPT. */
+const CHATGPT_METHODS = Object.freeze({ status: 'chatgptStatus', signIn: 'chatgptSignIn', signOut: 'chatgptSignOut' });
+
+/** The error code of the answer a relayed ChatGPT call gets when this machine holds no usable sign-in. */
+const CHATGPT_SIGNED_OUT = 'chatgpt_signed_out';
+
+const chatgptSession = chatgpt?.createDeviceSession({ home: DEVICE_HOME }) ?? null;
 
 /** Hop-by-hop headers, plus the ones a relay must not carry from the cloud side. */
 const RELAY_DROPPED_HEADERS = new Set([
@@ -2306,11 +2336,14 @@ function execCommand(msg, ws, ctx) {
 function relayRefusal(method, url) {
   const target = URL.parse(String(url ?? ''));
 
-  if (target === null || target.protocol !== 'https:' || target.hostname !== RELAY_HOST || target.port !== '' || target.username !== '' || target.password !== '') {
-    return `the Codex relay does not reach ${String(url)}`;
+  if (target === null || !Object.hasOwn(RELAY_ROUTES, target.hostname)) return `the provider relay does not reach ${String(url)}`;
+  const routes = RELAY_ROUTES[target.hostname];
+
+  if (target.protocol !== 'https:' || target.port !== '' || target.username !== '' || target.password !== '') {
+    return `the provider relay does not reach ${String(url)}`;
   }
 
-  return RELAY_ROUTES.includes(`${method} ${target.pathname}`) ? null : `the Codex relay does not carry ${method} ${target.pathname}`;
+  return routes.includes(`${method} ${target.pathname}`) ? null : `the provider relay does not carry ${method} ${target.pathname}`;
 }
 
 function relayHeaders(pairs) {
@@ -2326,6 +2359,42 @@ function relayHeaders(pairs) {
   return headers;
 }
 
+/** The answer a relayed ChatGPT call gets when this machine holds no usable sign-in, shaped as the
+ *  provider's own refusals are, so the hub reads one kind of answer. */
+function chatgptSignedOut() {
+  const body = JSON.stringify({ error: { code: CHATGPT_SIGNED_OUT, message: `${os.hostname()} holds no ChatGPT sign-in with plan usage` } });
+
+  return new Response(body, { status: 401, headers: { 'content-type': 'application/json' } });
+}
+
+/** One upstream call. A ChatGPT call carries this machine's token, and a 401 gets one rotation and
+ *  one resend: the token is this machine's, so its refresh is too. */
+async function fetchRelayed(request, target, signal) {
+  const headers = relayHeaders(Array.isArray(request.headers) ? request.headers : []);
+
+  const send = () => fetch(request.url, {
+    method: request.method, headers, body: request.method === 'POST' ? request.body : undefined, redirect: 'manual', signal,
+  });
+
+  if (target.hostname !== CHATGPT_HOST) return send();
+
+  if (chatgptSession === null) return chatgptSignedOut();
+  const token = await chatgptSession.bearer();
+
+  if (token === null) return chatgptSignedOut();
+  headers.set('authorization', `Bearer ${token}`);
+  const first = await send();
+
+  if (first.status !== 401) return first;
+  await first.body?.cancel();
+  const rotated = await chatgptSession.bearer(token);
+
+  if (rotated === null) return chatgptSignedOut();
+  headers.set('authorization', `Bearer ${rotated}`);
+
+  return send();
+}
+
 /** Fetch one allow-listed call and stream its answer back as frames; resolves with the byte count. */
 async function relayCall(ws, id, request) {
   const refused = relayRefusal(request?.method, request?.url);
@@ -2333,17 +2402,12 @@ async function relayCall(ws, id, request) {
   if (refused !== null) throw new Error(refused);
 
   if (relays.has(id)) throw new Error(`relay ${id} is already in flight`);
+  const target = new URL(request.url);
   const abort = new AbortController();
   relays.set(id, abort);
 
   try {
-    const upstream = await fetch(request.url, {
-      method: request.method,
-      headers: relayHeaders(Array.isArray(request.headers) ? request.headers : []),
-      body: request.method === 'POST' ? request.body : undefined,
-      redirect: 'manual',
-      signal: abort.signal,
-    });
+    const upstream = await fetchRelayed(request, target, abort.signal);
 
     // The runtime already decoded the body, so its encoding no longer describes the bytes sent on.
     const headers = [...upstream.headers].filter(([name]) => !RELAY_DROPPED_HEADERS.has(name) && name !== 'content-encoding');
@@ -2361,7 +2425,7 @@ async function relayCall(ws, id, request) {
     return { bytes };
   } catch (err) {
     if (abort.signal.aborted) throw new Error(`relay ${id} was stopped by the caller`, { cause: err });
-    throw new Error(`chatgpt.com could not be reached from this machine: ${errorDetail(err)}`, { cause: err });
+    throw new Error(`${target.hostname} could not be reached from this machine: ${errorDetail(err)}`, { cause: err });
   } finally {
     relays.delete(id);
   }
@@ -2380,11 +2444,15 @@ function handleUncorrelatedFrame(msg, ctx) {
   handlePtyFrame(msg, ctx);
 }
 
-/** Methods past the file and command set: the Codex relay, else the answer an older hub's newer frame gets. */
+/** Methods past the file and command set: the provider relay and this machine's ChatGPT sign-in, else
+ *  the answer an older hub's newer frame gets. */
 function answerLaterMethod(msg, ws) {
   const { id, method, params } = msg;
 
   if (method === RELAY_METHOD) rpcWhenSettled(ws, id, relayCall(ws, id, params[0]));
+  else if (chatgptSession !== null && method === CHATGPT_METHODS.status) rpc(ws, id, chatgptSession.status());
+  else if (chatgptSession !== null && method === CHATGPT_METHODS.signIn) rpcWhenSettled(ws, id, chatgptSession.signIn());
+  else if (chatgptSession !== null && method === CHATGPT_METHODS.signOut) rpcWhenSettled(ws, id, chatgptSession.signOut());
   else rpc(ws, id, null, 'unknown method: ' + method);
 }
 
@@ -3175,7 +3243,7 @@ async function main() {
           // hub would never push that version again). Absent when no stamp
           // existed at start: the hub then pushes nothing, as it does for
           // every daemon before this field.
-          version: RUNNING_VERSION ?? undefined,
+          version: REPORTED_VERSION ?? undefined,
           updateCheck: !update.updateOptedOut(DEVICE_HOME),
           // What this machine PROVED at startup, in the hub's words: the hub
           // decides the tier and needs one term for what the machine can
@@ -3284,9 +3352,10 @@ module.exports = {
   RELAY_HEAD_FRAME,
   RELAY_BODY_FRAME,
   RELAY_CANCEL_FRAME,
-  RELAY_HOST,
   RELAY_ROUTES,
   relayRefusal,
+  CHATGPT_METHODS,
+  CHATGPT_SIGNED_OUT,
   SESSION_COMMAND,
   createInFlight,
   INFLIGHT_ROOT,

@@ -53,7 +53,7 @@ test('Esc on a setup question answers it, and kinu keeps running', async () => {
       { send: DOWN },
       { wait: '› ○ Claude subscription', timeout: 10 },
       { send: DOWN },
-      { wait: '› ○ Codex', timeout: 10 },
+      { wait: '› ○ ChatGPT', timeout: 10 },
       { send: DOWN },
       { wait: '› ○ OpenAI ·', timeout: 10 },
       { send: '\r' },

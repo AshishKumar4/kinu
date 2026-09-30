@@ -1106,7 +1106,7 @@ describe('CLI TUI layout', () => {
 
     const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome };
 
-    for (const name of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CODEX_ACCESS_TOKEN', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'KINU_TOKEN']) {
+    for (const name of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'KINU_TOKEN']) {
       delete env[name];
     }
 
@@ -1189,7 +1189,6 @@ function workspaceTitle(name: string): string {
 const INHERITED_CREDENTIALS = [
   'ANTHROPIC_API_KEY',
   'CLAUDE_CODE_OAUTH_TOKEN',
-  'CODEX_ACCESS_TOKEN',
   'OPENAI_API_KEY',
   'OPENROUTER_API_KEY',
   'KINU_TOKEN',

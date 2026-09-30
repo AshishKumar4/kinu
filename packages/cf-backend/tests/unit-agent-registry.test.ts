@@ -60,7 +60,7 @@ describe('AgentProviderRegistry composition', () => {
     }
   });
 
-  test('registers all 9 providers in preference order', () => {
+  test('registers all 10 providers in preference order', () => {
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: fakeUserDOStub(),
@@ -68,7 +68,7 @@ describe('AgentProviderRegistry composition', () => {
 
     const ids = reg.registry.list().map(p => p.id);
     expect(ids).toEqual([
-      'workers-ai', 'my-gateway', 'ai-gateway', 'codex', 'claude', 'openai',
+      'workers-ai', 'my-gateway', 'ai-gateway', 'chatgpt', 'codex', 'claude', 'openai',
       'anthropic', 'openrouter', 'openai-compat',
     ]);
   });

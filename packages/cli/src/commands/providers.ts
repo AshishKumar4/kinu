@@ -1,5 +1,5 @@
 import { deleteCloudCredential, listCloudCredentials } from '../cloud-api';
-import { API_KEY_PROVIDERS, bumpProviderRevision, resolveCloudSession, updateConfigFile, type KinuConfig } from '../config';
+import { API_KEY_PROVIDERS, bumpProviderRevision, loadConfigFile, resolveCloudSession, updateConfigFile, type KinuConfig } from '../config';
 import { readDefaultAccounts, readDefaultTier } from '../profiles';
 import { updateDefaultAccount } from '../default-model';
 import { ACCENT, DIM, OK, WARN } from '../display';
@@ -8,13 +8,14 @@ import { canonicalProviderName, connectOptions, connectProviderOnConsole } from 
 import * as v from 'valibot';
 import { MAIN_ACCOUNT, accountCredentialKey, catalogCredKey, isAccountName } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
+import { registrationOf, revokeSession } from '../../../pc-agent/src/chatgpt.js';
 
 type ProviderAction = 'list' | 'connect' | 'disconnect' | 'default';
 
 const ProviderNameSchema = v.picklist([
   'cloudflare',
   'claude',
-  'codex',
+  'chatgpt',
   'openai',
   'openrouter',
   'anthropic',
@@ -64,7 +65,7 @@ export async function providersCommand(
   }
 
   if (!provider) {
-    throw new Error(`Choose a provider to ${action}: cloudflare, claude, codex, openai, openrouter, anthropic, openai-compatible, or opencode.`);
+    throw new Error(`Choose a provider to ${action}: cloudflare, claude, chatgpt, openai, openrouter, anthropic, openai-compatible, or opencode.`);
   }
 
   if (action === 'disconnect') {
@@ -110,7 +111,7 @@ function specProviderId(name: string): string {
   const canonical = canonicalProviderName(name);
 
   if (canonical === 'openai-compatible' || canonical === 'opencode' || canonical === 'cloudflare') {
-    throw new Error(`${canonical} holds one account: accounts are for openai, openrouter, anthropic, codex, claude and API keys connected in the web app.`);
+    throw new Error(`${canonical} holds one account: accounts are for openai, openrouter, anthropic, chatgpt, claude and API keys connected in the web app.`);
   }
 
   return canonical;
@@ -134,6 +135,8 @@ async function disconnectAccount(provider: ProviderName, account: string): Promi
   console.log('');
   let removed = false;
 
+  if (provider === 'chatgpt') await revokeChatGpt(account);
+
   await updateConfigFile((config) => {
     const accounts = config.providers?.[provider]?.accounts;
     removed = accounts?.[account] !== undefined;
@@ -141,9 +144,9 @@ async function disconnectAccount(provider: ProviderName, account: string): Promi
   });
 
   if (removed) console.log(`${OK('✓')} Removed the ${ACCENT(`${provider} ${account}`)} account from this machine.`);
-  const cloud = provider === 'codex' || provider === 'claude' ? null : resolveCloudSession();
+  const cloud = provider === 'chatgpt' || provider === 'claude' ? null : resolveCloudSession();
 
-  if (cloud && provider !== 'codex' && provider !== 'claude') {
+  if (cloud && provider !== 'chatgpt' && provider !== 'claude') {
     const credKey = accountCredentialKey(API_KEY_PROVIDERS[provider], account);
 
     if ((await listCloudCredentials(cloud.origin, cloud.token)).some((c) => c.key === credKey)) {
@@ -164,11 +167,46 @@ async function forgetDefaultAccount(provider: string, account: string): Promise<
   console.log(`${WARN('!')} ${account} was the default ${provider} account; ${provider} models now run on main, or its only account.`);
 }
 
+/** Revokes at OpenAI, then forgets the tokens whatever it answered. */
+async function revokeChatGpt(account: string): Promise<void> {
+  const stored = loadConfigFile().providers?.chatgpt;
+  const login = account === MAIN_ACCOUNT ? stored : stored?.accounts?.[account];
+  const registration = registrationOf(login?.metadata);
+
+  if (login?.refreshToken === undefined || registration === null) return;
+  const { unconfirmed } = await revokeSession({ clientId: registration.clientId, refreshToken: login.refreshToken });
+
+  if (unconfirmed === null) {
+    console.log(`${OK('✓')} OpenAI revoked this machine's ChatGPT sign-in.`);
+
+    return;
+  }
+
+  console.log(`${WARN('!')} OpenAI did not confirm the revocation (${unconfirmed}).`);
+  console.log(DIM('  Disconnect Kinu under Apps in ChatGPT settings to be sure.'));
+}
+
+/** Keeps the client ID for the next sign-in. */
+function forgetChatGptTokens(providers: NonNullable<KinuConfig['providers']>): boolean {
+  const entry = providers.chatgpt;
+
+  if (entry === undefined || (entry.accessToken === undefined && entry.refreshToken === undefined)) return false;
+  const registration = registrationOf(entry.metadata);
+
+  if (registration === null) return deleteMain(providers, 'chatgpt');
+  const kept: NonNullable<typeof providers.chatgpt> = { metadata: { ...registration } };
+
+  if (entry.accounts !== undefined) kept.accounts = entry.accounts;
+  providers.chatgpt = kept;
+
+  return true;
+}
+
 /** Env vars listed here keep supplying the credential after the file entry is gone. */
 const LOCAL_CREDENTIALS = new Map<ProviderName, LocalCredential>([
-  ['codex', {
-    clear: (p) => deleteMain(p, 'codex'),
-    envVars: ['CODEX_ACCESS_TOKEN'],
+  ['chatgpt', {
+    clear: forgetChatGptTokens,
+    envVars: [],
   }],
   ['claude', {
     clear: (p) => deleteMain(p, 'claude'),
@@ -206,7 +244,7 @@ function deleteKey(
   return true;
 }
 
-function deleteMain(providers: NonNullable<KinuConfig['providers']>, key: 'codex' | 'claude' | 'openai' | 'anthropic' | 'openrouter'): boolean {
+function deleteMain(providers: NonNullable<KinuConfig['providers']>, key: 'chatgpt' | 'claude' | 'openai' | 'anthropic' | 'openrouter'): boolean {
   const entry = providers[key];
 
   if (entry?.accounts === undefined || Object.keys(entry.accounts).length === 0) return deleteKey(providers, key);
@@ -219,7 +257,7 @@ function deleteMain(providers: NonNullable<KinuConfig['providers']>, key: 'codex
 
 /** A default left on a disconnected provider fails every unpinned turn. */
 const MODEL_SPEC_PREFIXES = new Map<ProviderName, readonly string[]>([
-  ['codex', ['codex/']],
+  ['chatgpt', ['chatgpt/']],
   ['openai', ['openai/']],
   ['anthropic', ['anthropic/']],
   ['openrouter', ['openrouter/']],
@@ -255,6 +293,7 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
 
   if (!credential) throw new Error(`No local credential for ${provider}.`);
 
+  if (provider === 'chatgpt') await revokeChatGpt(MAIN_ACCOUNT);
   let removed = false;
   await updateConfigFile((config) => {
     if (config.providers) removed = credential.clear(config.providers);
@@ -334,7 +373,7 @@ function normalizeProvider(value: string): ProviderName {
   const provider = maybeProvider(value);
 
   if (!provider) {
-    throw new Error('Provider must be cloudflare, claude, codex, openai, openrouter, anthropic, openai-compatible, or opencode.');
+    throw new Error('Provider must be cloudflare, claude, chatgpt, openai, openrouter, anthropic, openai-compatible, or opencode.');
   }
 
   return provider;

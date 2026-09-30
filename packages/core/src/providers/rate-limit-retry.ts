@@ -181,7 +181,7 @@ async function rateLimitOf(response: Response): Promise<{ status: number; body: 
 
   const detail = [response.statusText, response.headers.get('x-error-code') ?? '', body].join(' ');
 
-  return /overload(?:ed|ing)?|\bcapacity\b|\btoo many requests\b|\brate[ _-]?limit/i.test(detail) ? { status, body } : null;
+  return /overload(?:ed|ing)?|\bcapacity\b|\btoo many requests\b|\brate[ _-]?limit|subscription_sharing_(?:usage|user)_unavailable/i.test(detail) ? { status, body } : null;
 }
 
 const ExhaustedAllowanceCodeSchema = v.picklist([

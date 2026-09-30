@@ -72,6 +72,11 @@ export const UNTYPECHECKED_TESTS = {
     runner: 'bun test packages/pc-agent/',
     reason: 'The package is plain JavaScript. `check` syntax-checks its source with node --check.',
   },
+  'packages/pc-agent/tests/chatgpt.test.js': {
+    kind: 'JavaScript test',
+    runner: 'bun test packages/pc-agent/',
+    reason: 'The package is plain JavaScript. `check` syntax-checks its source with node --check.',
+  },
 } as const satisfies Readonly<Record<string, TestException>>;
 
 /** The tracked files a test runner selects, repo-relative. */

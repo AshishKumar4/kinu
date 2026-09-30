@@ -87,8 +87,8 @@ export function sealRpcSurface(instance: RpcSurfaceSubject, surface: readonly st
 
 /** The RPC counterpart of the `requireTier` gate: every entry gates itself on a `UserCaller`. */
 const USER_DO_METHODS = [
-  'cancelCodexRelay',
-  'codexRelayDevice',
+  'cancelModelRelay',
+  'chatgptPlan',
   'completeOnboarding',
   'deleteAccount',
   'deleteCredential',
@@ -139,7 +139,8 @@ const USER_DO_METHODS = [
   'registerBrowserSession',
   'registerDevice',
   'registerWorkspace',
-  'relayCodex',
+  'relayDevice',
+  'relayModelCall',
   'releaseWorkspaceReservation',
   'removeWorkspace',
   'renameDevice',
@@ -164,6 +165,8 @@ const USER_DO_METHODS = [
   'setDeviceTier',
   'setDisplayName',
   'setWorkspaceDisplayName',
+  'signOutChatGpt',
+  'startChatGptSignIn',
   'startClaudeSignIn',
   'startCodexDeviceFlow',
   'touchWorkspace',

@@ -73,7 +73,7 @@ export function buildProgram(): Command {
     .helpGroup(ACCOUNT)
     .description('Sign in to Kinu and pick a model provider for local workspaces')
     .option('--origin <url>', 'Kinu app origin')
-    .option('--provider <name>', 'Provider: workers-ai, codex, openai, openrouter, anthropic, openai-compatible, opencode, skip')
+    .option('--provider <name>', 'Provider: workers-ai, chatgpt, openai, openrouter, anthropic, openai-compatible, opencode, skip')
     .option(`${MODEL_OPTION_FLAG} <id>`, 'Default model for the selected provider')
     .option('--local-model', 'Set up a model provider for local workspaces')
     .option('--local', 'Keep the provider key on this machine instead of your Kinu account')
@@ -479,7 +479,7 @@ export function buildProgram(): Command {
 
 /** One real invocation for each command, by the words a user types after `kinu`. */
 const COMMAND_EXAMPLES: ReadonlyArray<readonly [string, string]> = [
-  ['setup', 'kinu setup --provider codex'],
+  ['setup', 'kinu setup --provider chatgpt'],
   ['provider', 'kinu provider connect openrouter'],
   ['auth', 'kinu auth'],
   ['whoami', 'kinu whoami'],

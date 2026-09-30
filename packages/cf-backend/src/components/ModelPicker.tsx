@@ -13,6 +13,7 @@ import {
 } from "../lib/user-api";
 import { badgeCapabilities, groupModelMenu, modelMatchesQuery } from "./model-picker-options";
 import { BrandMark, providerBrand } from "./ui/BrandMark";
+import { ChatGptPlanUsage } from "./account/ChatGptConnect";
 import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import * as v from 'valibot';
 
@@ -228,6 +229,7 @@ export function ModelPicker({
         />
       )}
       {selectedTest}
+      {listed !== '' && parseModelSpec(listed).provider === 'chatgpt' && <ChatGptPlanUsage />}
     </>
   );
 }

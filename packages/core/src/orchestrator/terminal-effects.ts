@@ -59,7 +59,7 @@ export const TERMINAL_EFFECT_RETRY_CEILING_MS = 600_000;
 const LASTING_REFUSALS: ReadonlySet<ErrorCode> = new Set(['missing', 'bad_input']);
 
 /** Only the owner can fix these, so the row parks with no wake (T1). */
-const OWNER_FIXABLE_REFUSALS: ReadonlySet<ErrorCode> = new Set(['denied']);
+const OWNER_FIXABLE_REFUSALS: ReadonlySet<ErrorCode> = new Set(['denied', 'budget']);
 
 /** The owner reads an abandoned effect in the Activity log, by what it was doing. */
 const EFFECT_ACTIVITY: Partial<Record<TerminalEffectName, string>> = {

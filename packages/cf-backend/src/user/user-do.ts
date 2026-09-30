@@ -35,7 +35,8 @@ import {
   DEVICE_PTY_EXIT,
   DEVICE_PTY_MAX_AXIS,
   NO_DEVICE_CONNECTED, SEVERAL_DEVICES_CONNECTED,
-  codexEgressAllowed,
+  codexEgressAllowed, chatgptEgressAllowed, DEVICE_CHATGPT, DeviceChatGptStatusSchema,
+  type DeviceChatGptStatus, type RelayedProvider,
   isDeviceUnknownMethodError,
   isWorkspaceName,
   ORCHESTRATOR_AGENT_SLUG,
@@ -552,6 +553,12 @@ export interface CodexStatus {
   accountId: string | null;
   expiresAt: number | null;
   startedFlow: { userCode: string; portalURL: string; pollIntervalSec: number } | null;
+}
+
+/** The machine that holds, or would hold, the ChatGPT sign-in, and what it says. */
+export interface ChatGptPlanStatus {
+  readonly device: { readonly id: string; readonly label: string } | null;
+  readonly status: DeviceChatGptStatus | null;
 }
 
 export interface ConnectedProvider {
@@ -2558,29 +2565,88 @@ export class UserDO extends Agent<Env> {
     return result === undefined ? undefined : JSON.stringify(result);
   }
 
-  async codexRelayDevice(caller: UserCaller): Promise<{ readonly id: string; readonly label: string } | null> {
-    await this.requireCredentialAccess(caller, CODEX_CRED_KEY);
-    const deviceId = this._devices.relayDevice();
+  /** The machine carrying `provider` for a web session: for Codex the first daemon with the relay, for the
+   *  ChatGPT plan the first holding its own sign-in with plan usage. */
+  async relayDevice(caller: UserCaller, provider: RelayedProvider): Promise<{ readonly id: string; readonly label: string } | null> {
+    await this.requireTier(caller, 'credentials.model');
 
-    return deviceId === null || !this.isActiveDevice(deviceId) ? null : { id: deviceId, label: this.deviceLabel(deviceId) };
+    if (provider === 'codex') {
+      const deviceId = this._devices.relayDevice();
+
+      return deviceId === null || !this.isActiveDevice(deviceId) ? null : { id: deviceId, label: this.deviceLabel(deviceId) };
+    }
+
+    const signedIn = (await this.chatgptSignIns()).find(({ status }) => status?.signedIn === true);
+
+    return signedIn === undefined ? null : { id: signedIn.id, label: signedIn.label };
   }
 
-  async relayCodex(caller: UserCaller, deviceId: string, callId: string, request: Request): Promise<Response> {
-    await this.requireCredentialAccess(caller, CODEX_CRED_KEY);
-    const allowed = codexEgressAllowed({ method: request.method, url: request.url });
+  async relayModelCall(caller: UserCaller, deviceId: string, callId: string, request: Request): Promise<Response> {
+    await this.requireTier(caller, 'credentials.model');
+    const target = { method: request.method, url: request.url };
+    const allowed = codexEgressAllowed(target) || chatgptEgressAllowed(target);
     const body = allowed && request.body !== null ? await request.text() : null;
 
     // No await from here to the send.
-    if (!allowed) return settle(Effect.fail(new KinuError('denied', `the Codex relay does not carry ${request.method} ${new URL(request.url).pathname}`)));
+    if (!allowed) return settle(Effect.fail(new KinuError('denied', `the provider relay does not carry ${request.method} ${new URL(request.url).pathname}`)));
 
     if (!this.isActiveDevice(deviceId)) return settle(Effect.fail(new KinuError('unavailable', NO_DEVICE_CONNECTED)));
 
     return settle(Effect.promise(() => this._devices.relay(deviceId, callId, { method: request.method, url: request.url, headers: [...request.headers], body })));
   }
 
-  async cancelCodexRelay(caller: UserCaller, callId: string): Promise<void> {
-    await this.requireCredentialAccess(caller, CODEX_CRED_KEY);
+  async cancelModelRelay(caller: UserCaller, callId: string): Promise<void> {
+    await this.requireTier(caller, 'credentials.model');
     this._devices.cancelRelay(callId);
+  }
+
+  /** Null from a daemon without a ChatGPT sign-in. */
+  private async chatgptSignIns(): Promise<Array<{ readonly id: string; readonly label: string; readonly status: DeviceChatGptStatus | null }>> {
+    const live = this._devices.connectedDeviceIds().filter((id) => this.isActiveDevice(id));
+
+    return Promise.all(live.map(async (id) => {
+      const answer = v.safeParse(DeviceChatGptStatusSchema, await this._devices.chatgpt(id, DEVICE_CHATGPT.status));
+
+      return { id, label: this.deviceLabel(id), status: answer.success ? answer.output : null };
+    }));
+  }
+
+  /** The machine the ChatGPT plan signs in on: one already signed in, else the first that can sign in. */
+  private async chatgptMachine(): Promise<{ readonly id: string; readonly label: string; readonly status: DeviceChatGptStatus } | null> {
+    const machines = (await this.chatgptSignIns()).flatMap((machine) => (machine.status === null ? [] : [{ ...machine, status: machine.status }]));
+
+    return machines.find((machine) => machine.status.signedIn) ?? machines[0] ?? null;
+  }
+
+  async chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
+    await this.requireTier(caller, 'credentials.model');
+    const machine = await this.chatgptMachine();
+
+    return machine === null ? { device: null, status: null } : { device: { id: machine.id, label: machine.label }, status: machine.status };
+  }
+
+  /** Starts Sign in with ChatGPT on the owner's machine; the browser that opens the URL must run there. */
+  async startChatGptSignIn(caller: UserCaller): Promise<{ readonly authorizeUrl: string; readonly device: { readonly id: string; readonly label: string } }> {
+    await this.requireTier(caller, 'device.manage');
+    const machine = await this.chatgptMachine();
+
+    if (machine === null) return settle(Effect.fail(new KinuError('unavailable', 'No connected machine can sign in with ChatGPT; its daemon needs this Kinu release')));
+    const started = v.safeParse(v.object({ authorizeUrl: v.string() }), await this._devices.chatgpt(machine.id, DEVICE_CHATGPT.signIn));
+
+    if (!started.success) return settle(Effect.fail(new KinuError('io', `${machine.label} answered the ChatGPT sign-in without a URL`)));
+
+    return { authorizeUrl: started.output.authorizeUrl, device: { id: machine.id, label: machine.label } };
+  }
+
+  /** Signs the machine out: OpenAI revokes the session, the machine forgets the tokens and keeps the registration. */
+  async signOutChatGpt(caller: UserCaller): Promise<{ readonly unconfirmed: string | null }> {
+    await this.requireTier(caller, 'device.manage');
+    const machine = await this.chatgptMachine();
+
+    if (machine === null) return { unconfirmed: null };
+    const answer = v.safeParse(v.object({ unconfirmed: v.nullable(v.string()) }), await this._devices.chatgpt(machine.id, DEVICE_CHATGPT.signOut));
+
+    return answer.success ? answer.output : { unconfirmed: `${machine.label} did not say whether OpenAI revoked the sign-in` };
   }
 
   /** `agentHome` is empty only under the raw tier. */

@@ -77,7 +77,7 @@ async function runSetupPreflight(ctx: SetupPreflightContext): Promise<'handled' 
     if (ctx.cloudReady) {
       console.log(`${OK('✓')} Kinu account ready.`);
       console.log(DIM('Cloud workspaces run on Workers AI in your Cloudflare account, if you granted AI permissions at sign-in.'));
-      console.log(DIM('To use your ChatGPT Codex subscription in local workspaces, run kinu provider connect codex.'));
+      console.log(DIM('To use your ChatGPT plan in local workspaces, run kinu provider connect chatgpt.'));
     } else {
       console.log(`${WARN('!')} Not signed in to Kinu.`);
       console.log(DIM(`Run kinu auth${ctx.opts.origin ? ` --origin ${ctx.opts.origin}` : ''} when you are ready.`));
@@ -175,7 +175,7 @@ export async function setupCommand(opts: {
 async function chooseProvider(cloudReady: boolean): Promise<string> {
   console.log(DIM('Model provider for local workspaces:'));
   console.log(`  ${ACCENT('1')} Cloudflare Workers AI through your Kinu account ${DIM('(recommended)')}`);
-  console.log(`  ${ACCENT('2')} ChatGPT Codex subscription`);
+  console.log(`  ${ACCENT('2')} ChatGPT plan (Continue with ChatGPT)`);
   console.log(`  ${ACCENT('3')} OpenAI API key`);
   console.log(`  ${ACCENT('4')} OpenRouter`);
   console.log(`  ${ACCENT('5')} Anthropic`);
@@ -209,7 +209,8 @@ export function canonicalProviderName(value: string): string {
       return 'claude';
     case 'chatgpt':
     case 'chatgpt-codex':
-      return 'codex';
+    case 'codex':
+      return 'chatgpt';
     case 'compat':
     case 'ollama':
       return 'openai-compatible';
@@ -218,13 +219,13 @@ export function canonicalProviderName(value: string): string {
   }
 }
 
-function normalizeProvider(value: string): 'workers-ai' | 'claude' | 'codex' | 'openai' | 'openrouter' | 'anthropic' | 'openai-compatible' | 'opencode' | 'skip' {
+function normalizeProvider(value: string): 'workers-ai' | 'claude' | 'chatgpt' | 'openai' | 'openrouter' | 'anthropic' | 'openai-compatible' | 'opencode' | 'skip' {
   const v = value.trim().toLowerCase();
 
   // Menu positions on the --provider flag, pinned by setup-default-provider.test.ts.
   if (v === '1') return 'workers-ai';
 
-  if (v === '2') return 'codex';
+  if (v === '2') return 'chatgpt';
 
   if (v === '3') return 'openai';
 
@@ -242,13 +243,13 @@ function normalizeProvider(value: string): 'workers-ai' | 'claude' | 'codex' | '
   switch (canonicalProviderName(value)) {
     case 'cloudflare': return 'workers-ai';
     case 'claude': return 'claude';
-    case 'codex': return 'codex';
+    case 'chatgpt': return 'chatgpt';
     case 'openai': return 'openai';
     case 'openrouter': return 'openrouter';
     case 'anthropic': return 'anthropic';
     case 'openai-compatible': return 'openai-compatible';
     case 'opencode': return 'opencode';
     default:
-      throw new Error('Provider must be workers-ai, codex, openai, openrouter, anthropic, openai-compatible, opencode, or skip.');
+      throw new Error('Provider must be workers-ai, chatgpt, openai, openrouter, anthropic, openai-compatible, opencode, or skip.');
   }
 }

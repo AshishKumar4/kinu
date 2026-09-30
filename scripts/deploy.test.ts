@@ -1347,7 +1347,7 @@ describe("CLI distribution artifacts", () => {
       expect(entries.has("kinu/cli.js"), `${platform} artifact carries no cli.js`).toBe(true);
 
       // The daemon and its stamp, for a daemon updating itself from this archive.
-      for (const name of ["pc-agent.js", "sandbox.js", "pty.js", "update.js", "pc-agent.version"]) {
+      for (const name of ["pc-agent.js", "sandbox.js", "pty.js", "update.js", "chatgpt.js", "pc-agent.version"]) {
         expect(entries.has(`kinu/pc-agent/${name}`), `${platform} artifact carries no pc-agent/${name}`).toBe(true);
       }
 

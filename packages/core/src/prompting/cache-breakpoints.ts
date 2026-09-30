@@ -73,6 +73,9 @@ export function resolvePromptCacheStrategy(
     case 'claude':
       return { kind: 'anthropic', ttl: '1h' };
 
+    case 'chatgpt':
+      return { kind: 'openai-cache-key' };
+
     case 'openai':
     case 'codex': {
       const strategy: Extract<PromptCacheStrategy, { kind: 'openai-cache-key' }> = { kind: 'openai-cache-key' };
