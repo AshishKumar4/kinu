@@ -172,7 +172,8 @@ function agentBundle(assets: Fetcher): Effect.Effect<Response, KinuError> {
       return response.ok && type.includes('javascript')
         ? Effect.succeed(response)
         : Effect.fail(new KinuError(
-          'unavailable', `The agent bundle is missing from this deployment (${AGENT_BUNDLE_PATH} answered ${response.status} ${type}).`,
+          'unavailable', `The agent bundle is missing from this deployment (${AGENT_BUNDLE_PATH} answered ${response.status} ${type}). `
+            + 'Under `vite dev` the ASSETS binding serves only HTML, so agent turns need a deployed Worker.',
         ));
     }));
 }
