@@ -1,3 +1,4 @@
+import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: a user turn end to end.
 import { describe, test, expect } from 'bun:test';
 import { present, scratchDir, scratchPath, scriptedAdvisorPort, scriptedTurnModel } from '@kinu.run/test-utils';
@@ -7,7 +8,7 @@ import { join } from 'node:path';
 import { type LanguageModel, type ModelMessage } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import type { LanguageModelV2Usage, LanguageModelV2StreamPart } from '@ai-sdk/provider';
-import type { TemporaryAgentPort, VFS, VfsNativeReads } from '@kinu.run/core';
+import type { TemporaryAgentPort } from '@kinu.run/core';
 import {
   initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, Inbox, backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage, CHAT_SESSION_ID, type ModelInfo, type SqlExecutor, openWorkspaceMainActor, InstructionApprovalStore, instructionDigest, WORKSPACE_INSTRUCTIONS_HEADER, initWorkspaceSchema,
 } from '@kinu.run/core';
@@ -21,11 +22,11 @@ import {
 
 test('parallel native calls retain their SDK identities after reverse completion', async () => {
   const { db, rt } = workspaceRuntime();
-  await rt.storage.vfs.writeFile('identical.txt', 'same result');
+  await writeText(rt.storage.vfs, 'identical.txt', 'same result');
   rt.actor.config.setDisplayNameOrigin('Identity pin', 'user');
   const first = Promise.withResolvers<void>();
-  const plane: VFS & Partial<VfsNativeReads> = rt.toolFiles;
-  const readRange = plane.readRange;
+  const plane: VFS = rt.toolFiles;
+  const readRange = plane.readRange?.bind(plane);
 
   if (readRange === undefined) throw new Error('the workspace file plane reads by range');
   let reads = 0;

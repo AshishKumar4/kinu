@@ -1,3 +1,4 @@
+import { exists, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // createCLIHeadRuntime: a head forks the parent's host executor and files, with a private durable scratch.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -539,7 +540,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     const dir = scratchDir('head-runtime-cwd');
     writeFileSync(join(dir, 'hello.txt'), 'from the real machine');
     const parent = makeParent();
-    await parent.storage.vfs.writeFile('hello.txt', 'from the parent workspace');
+    await writeText(parent.storage.vfs, 'hello.txt', 'from the parent workspace');
     const rt = await createHeadRuntime(parent, 'h');
 
     const parentExec = present(routerOf(rt).getProvider('parent'), 'the parent executor');
@@ -549,9 +550,9 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
 
     expect(routerOf(rt).getProvider('device')).toBeUndefined();
 
-    await rt.storage.vfs.writeFile(`/home/head-${rt.actor.storageKey}/scratch.txt`, 'head-only');
+    await writeText(rt.storage.vfs, `/home/head-${rt.actor.storageKey}/scratch.txt`, 'head-only');
     expect(existsSync(join(dir, 'scratch.txt'))).toBe(false);
-    expect(await parent.storage.vfs.exists('scratch.txt')).toBe(false);
+    expect(await exists(parent.storage.vfs, 'scratch.txt')).toBe(false);
     expect(rt.storage.sql).toBe(parent.storage.sql);
     expect(rt.actor.actorId).not.toBe(parent.actor.actorId);
   });

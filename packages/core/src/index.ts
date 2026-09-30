@@ -1115,7 +1115,7 @@ export {
 
 export type {
   WorkspaceAgent, WorkspaceAgentPlane, WorkspaceBundle, WorkspaceOptions,
-  WorkspaceSession, WorkspaceVFS,
+  WorkspaceSession,
 } from './vfs/nimbus-workspace';
 
 export {
@@ -1154,7 +1154,7 @@ export {
   withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS, RESERVED_REFERENCE_ROOTS,
   readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps,
   type VfsMount, type MountableProvider, type MountedVfs,
-  type VfsNativeMutations, type VfsNativeReads, type VfsListedEntry,
+  type VfsListedEntry,
 } from './vfs/mounts';
 
 // File checkpoints
@@ -1222,7 +1222,7 @@ export {
 
 export {
   JsonValueSchema, JsonObjectSchema, JsonArraySchema,
-  parseJsonValue, parseJsonObject, parseJsonArray, safeJsonParse, decodeJsonValue, projectJsonValue, nonEmptyString,
+  parseJsonValue, parseJsonObject, parseJsonArray, safeJsonParse, decodeJsonValue, jsonResultOrVoid, projectJsonValue, nonEmptyString,
   type JsonPrimitive, type JsonObject, type JsonValue,
 } from './utils/json';
 
@@ -1755,7 +1755,7 @@ export type {
   SkillHeader, ParsedSkill, DiscoveredSkill, ActiveSkill, SkillBodyRef,
   SkillsIndex, SkillSource, ActiveSkillSet, ActivationReason,
   SkillParseResult,
-  SkillsVfs, DiscoverOpts, SkillsDiscovery, UnreadSkillFile, SkillFileRefusal,
+  DiscoverOpts, SkillsDiscovery, UnreadSkillFile, SkillFileRefusal,
   LoadActiveSkillsOpts, ActivatedSkill,
 } from './skills/index';
 

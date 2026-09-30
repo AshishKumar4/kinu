@@ -1,3 +1,4 @@
+import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Restorable tool-result compression: oversize results are clamped to head + tail after the full output is saved to the VFS.
  * The marker is priced inside the cap; framing producers compose the whole string before clamping.
@@ -6,7 +7,7 @@
 import type { ToolSet } from 'ai';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import type { VFS } from '../types/primitives';
+
 import { nanoid } from '../utils/nanoid';
 import { admissionBytes } from '../llm';
 import { headEnd, tailStart } from '../utils/text';
@@ -46,7 +47,7 @@ function offload(vfs: VFS, text: string): Effect.Effect<Offload> {
   return Effect.tryPromise({
     try: async () => {
       await vfs.mkdir(TOOL_OUTPUT_DIR, { recursive: true });
-      await vfs.writeFile(path, text);
+      await writeText(vfs, path, text);
     },
     catch: (cause) => toKinuError({ doing: 'saving the full tool result to the workspace', cause, otherwise: 'io' }),
   }).pipe(Effect.match({

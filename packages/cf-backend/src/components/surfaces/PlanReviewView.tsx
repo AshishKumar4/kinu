@@ -373,15 +373,11 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
               <div id="plan-document-title" data-plan-title className="p-display p-text mt-2 text-2xl leading-tight sm:text-3xl">
                 <Viewer
                   blocks={titleBlocks}
-                  markdown={plan.content}
                   annotations={titleAnnotations}
                   onAddAnnotation={addAnnotation}
                   onSelectAnnotation={selectAnnotation}
                   selectedAnnotationId={selected}
                   mode={mode}
-                  stickyActions={false}
-                  gridEnabled={false}
-                  maxWidth={null}
                   readOnly={!editable || decisionBusy !== null}
                 />
               </div>
@@ -454,16 +450,12 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
           <div data-plan-document className="plan-review-document mx-auto">
             <Viewer
               blocks={documentBlocks}
-              markdown={plan.content}
               frontmatter={frontmatter}
               annotations={documentAnnotations}
               onAddAnnotation={addAnnotation}
               onSelectAnnotation={selectAnnotation}
               selectedAnnotationId={selected}
               mode={mode}
-              stickyActions={false}
-              gridEnabled={false}
-              maxWidth={null}
               readOnly={!editable || decisionBusy !== null}
             />
           </div>

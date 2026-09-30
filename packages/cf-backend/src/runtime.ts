@@ -1,24 +1,14 @@
+import type { VFS as CoreVFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * CF runtime adapter: bridges the Agents DO context to core's AgentRuntime. One Durable Object per
  * workspace; VFS, shell, memory and craft stores all live in the owning actor's `ctx.storage.sql`.
  */
 
-import type {
-  AgentRuntime, ActorHandle,
-  VFS as CoreVFS, LLM, Schedule, Identity,
-  SqlExecutor, SqlValue, RawSqlExec,
-  FiberCtx, ExecutionRouter,
-  TurnAccumulator,
-  DeferredApprovalChannel,
-  WriteObserver,
-  ModelCallSink, ResolvedTurnProfile, GenerateRequest,
-  SlateCallResult, SlateOperation,
-  ChildContextResolver, ContextTree,
-} from "@kinu.run/core";
+import type { AgentRuntime, ActorHandle, LLM, Schedule, Identity, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, TurnAccumulator, DeferredApprovalChannel, WriteObserver, ModelCallSink, ResolvedTurnProfile, GenerateRequest, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
 import {
   nimbusSessionFiles, nimbusSessionShell, shellCwd, createShellSession,
   observeWrites,
-  type WorkspaceVFS,
+
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
   withMountTable, standardMounts, contextMount, skillsMount,
   sharedDriveMount, SHARED_DRIVE_UNCLAIMED, SHARED_DRIVE_UNBOUND, type MossaicVfs,
@@ -198,7 +188,7 @@ function userCredentialSourceFor(env: Env, actor: ActorRuntimeIdentity): UserCre
 
 export type CFRuntime = AgentRuntime & {
   /** Also what the parent-file RPC serves a fork, so a fork reads exactly its parent's bytes. */
-  localVfs: WorkspaceVFS;
+  localVfs: ReturnType<typeof nimbusSessionFiles>;
   /** `refreshStatus()` is awaited at turn start. */
   deviceTransport: DeviceTransport;
   vectorStore: import("@kinu.run/core").VectorStore;
@@ -391,9 +381,9 @@ export function createCFRuntime(
   const sandboxId = sandboxIdForWorkspace(actor.workspaceName);
   let sandboxHandle: SandboxHandle | null = null;
 
-  if (env.Sandbox) {
+  if (env.KinuDevbox) {
     try {
-      const sdk = env.Sandbox.getByName(sandboxId);
+      const sdk = env.KinuDevbox.getByName(sandboxId);
 
       // Egress is configured before the container runs anything, not in `onStart` (too late); until then
       // the container has no network, so it fails closed. Only the owning workspace configures.

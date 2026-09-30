@@ -1,6 +1,7 @@
+import { exists, readText, type VFS, type VfsDirent, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Skills behaviour through the public surface. There is no `skills` tool: CRUD is
- * ordinary VFS operations. The in-memory SkillsVfs records every call, so "no body
+ * ordinary VFS operations. The in-memory plane records every call, so "no body
  * was read" is observed, not claimed.
  */
 
@@ -15,10 +16,10 @@ import {
   admitSkillsIndex, admitActiveSkills,
   renderActiveSkillsSection, renderSkillsIndexSection, unionAllowedTools, toolAllowedBySkills,
   WORKSPACE_SKILLS_DIR, skillViewPath, skillsMount, workspaceSkillIndexLine,
-  type SkillsVfs, type ActiveSkill, type DiscoveredSkill,
+  type ActiveSkill, type DiscoveredSkill,
 } from './index';
 import { withMountTable } from '../vfs/mounts';
-import type { VFS } from '../types/primitives';
+
 import { resolveTurnSkills, type TurnSkillSurface } from '../orchestrator/turn-surface';
 import { buildSystemPromptSync } from '../prompt';
 import { SHARED_SKILLS_DIR } from '../vfs/shared-drive';
@@ -29,8 +30,7 @@ import { createRecordingLogger, setDiagnosticsSink } from '../obs/index';
 /** The `readFile` list proves whether a body was fetched. */
 interface VfsCalls { readFile: string[]; stat: string[]; readdir: string[] }
 
-/** `readdir` is a required field so a test that swaps the lister holds the one it replaced. */
-interface MemoryVfs extends SkillsVfs { calls: VfsCalls; readdir: (path: string) => Promise<string[]> }
+interface MemoryVfs extends VFS { calls: VfsCalls; readdir: (path: string) => Promise<VfsDirent[]> }
 
 function memoryVfs(
   initial: Record<string, string> = {},
@@ -41,17 +41,16 @@ function memoryVfs(
 
   return {
     calls,
-    async exists(p) { return files.has(p); },
     async readFile(p) {
       calls.readFile.push(p);
       const v = files.get(p);
 
       if (v === undefined) throw new Error(`ENOENT: ${p}`);
 
-      return v;
+      return new TextEncoder().encode(v);
     },
     async writeFile(p, data) {
-      files.set(p, data instanceof Uint8Array ? new TextDecoder().decode(data) : data);
+      files.set(p, new TextDecoder().decode(data));
     },
     async stat(p) {
       calls.stat.push(p);
@@ -59,7 +58,7 @@ function memoryVfs(
 
       if (v === undefined) return null;
 
-      return { size: opts.sizes?.[p] ?? v.length, mtimeMs: 0, isDir: false };
+      return { size: opts.sizes?.[p] ?? new TextEncoder().encode(v).byteLength, mtimeMs: 0, type: 'file' };
     },
     async readdir(p) {
       calls.readdir.push(p);
@@ -74,7 +73,7 @@ function memoryVfs(
         if (!out.includes(head)) out.push(head);
       }
 
-      return opts.entryOrder ? opts.entryOrder(out) : out;
+      return (opts.entryOrder ? opts.entryOrder(out) : out).map((name) => ({ name, type: files.has(`${prefix}${name}`) ? 'file' : 'directory' }));
     },
     async unlink(p) { files.delete(p); },
     async mkdir() { /* no-op for memory fs */ },
@@ -570,7 +569,7 @@ describe('unionAllowedTools', () => {
 });
 
 /** Discovery with the parse failures an owner sees: the `skills.parse_failed` diagnostics it reports. */
-async function discoverReporting(vfs: SkillsVfs): Promise<{ found: Awaited<ReturnType<typeof discoverSkills>>; errors: string[] }> {
+async function discoverReporting(vfs: VFS): Promise<{ found: Awaited<ReturnType<typeof discoverSkills>>; errors: string[] }> {
   const log = createRecordingLogger();
   const restore = setDiagnosticsSink(log);
 
@@ -769,25 +768,6 @@ describe('discoverSkills', () => {
     expect(v.calls.readFile).not.toContain(path);
     // The small one beside it was read normally.
     expect(v.calls.readFile).toContain(`${WORKSPACE_SKILLS_DIR}/minnow.md`);
-  });
-
-  // KINU-047: without stat, the read is bounded by the same byte ceiling and admitted truncated.
-  test('a stat-less plane reads bounded: an oversized file is admitted truncated to the ceiling', async () => {
-    const admissionTokens = 100; // ceiling: 400 chars
-    const ceiling = admissionTokens * 4;
-    const body = 'B'.repeat(ceiling * 4);
-    const path = `${WORKSPACE_SKILLS_DIR}/whale.md`;
-
-    const v = memoryVfs({ [path]: skillFile('whale', body) });
-    delete v.stat; // a file view with no size answer
-
-    const found = await discoverSkills(v, { admissionTokens });
-
-    expect(v.calls.readFile).toContain(path);
-    const whale = found.skills.find((s) => s.name === 'whale');
-    expect(whale).toBeTruthy();
-    expect(whale?.bodyRef).toMatchObject({ kind: 'file', path });
-    expect(whale?.bodyRef.kind === 'file' && whale.bodyRef.chars).toBeLessThanOrEqual(ceiling);
   });
 
   // KINU-050: a huge directory admits only as many headers as the budget carries, in sorted order.
@@ -1037,20 +1017,21 @@ describe('skills admission', () => {
     const restore = setDiagnosticsSink(log);
 
     try {
-      const vfs: SkillsVfs = {
-        async exists() { return true; },
+      const vfs: VFS = {
         async readFile(p) {
           if (p === `${WORKSPACE_SKILLS_DIR}/bad-read.md`) throw new Error('boom-read');
 
-          return skillFile(p.includes('good') ? 'good' : 'bad-stat', 'hello body');
+          return new TextEncoder().encode(skillFile(p.includes('good') ? 'good' : 'bad-stat', 'hello body'));
         },
         async writeFile() {},
         async stat(p) {
           if (p === `${WORKSPACE_SKILLS_DIR}/bad-stat.md`) throw new Error('boom-stat');
 
-          return { size: 60, mtimeMs: 0, isDir: false };
+          return { size: 60, mtimeMs: 0, type: 'file' };
         },
         async readdir() { return []; },
+        async unlink() {},
+        async mkdir() {},
       };
 
       const activated = ['bad-stat', 'bad-read', 'good'].map((name) => ({
@@ -1079,11 +1060,10 @@ function skillsPlane(files: Record<string, string>): VFS {
   const tree = memoryVfs(files);
 
   const base: VFS = {
-    readFile: (path, opts) => tree.readFile(path, opts),
+    readFile: (path) => tree.readFile(path),
     writeFile: (path, data) => tree.writeFile(path, data),
     readdir: (path) => tree.readdir(path),
     stat: async (path) => (await tree.stat?.(path)) ?? null,
-    exists: (path) => tree.exists(path),
     unlink: async (path) => { await tree.unlink?.(path); },
     mkdir: async () => {},
   };
@@ -1105,22 +1085,22 @@ describe('the /skills view', () => {
   test('lists one folder per loadable name and serves each from the root the precedence picks', async () => {
     const plane = skillsPlane(files);
 
-    expect(await plane.readdir('/')).toContain('skills');
-    expect(await plane.readdir('/skills')).toEqual(['audit-implementation', 'deploy', 'review', 'slates']);
+    expect((await plane.readdir('/')).map(({ name }) => name)).toContain('skills');
+    expect((await plane.readdir('/skills')).map(({ name }) => name)).toEqual(['audit-implementation', 'deploy', 'review', 'slates']);
     // A built-in outranks the workspace file that claims its name.
-    expect(await plane.readFile(skillViewPath('slates'), { encoding: 'utf8' })).toBe(BUILTIN_SKILL_FILES.slates);
-    expect(await plane.readFile(skillViewPath('deploy'), { encoding: 'utf8' })).toBe(files[`${WORKSPACE_SKILLS_DIR}/deploy/SKILL.md`]);
-    expect(await plane.readFile('/skills/deploy/scripts/run.sh', { encoding: 'utf8' })).toBe('echo deploy');
-    expect(await plane.readFile(skillViewPath('review'), { encoding: 'utf8' })).toBe(files[`${SHARED_SKILLS_DIR}/review.md`]);
-    expect(await plane.readdir('/skills/review')).toEqual(['SKILL.md']);
+    expect(await readText(plane, skillViewPath('slates'))).toBe(BUILTIN_SKILL_FILES.slates);
+    expect(await readText(plane, skillViewPath('deploy'))).toBe(files[`${WORKSPACE_SKILLS_DIR}/deploy/SKILL.md`]);
+    expect(await readText(plane, '/skills/deploy/scripts/run.sh')).toBe('echo deploy');
+    expect(await readText(plane, skillViewPath('review'))).toBe(files[`${SHARED_SKILLS_DIR}/review.md`]);
+    expect((await plane.readdir('/skills/review')).map(({ name }) => name)).toEqual(['SKILL.md']);
   });
 
   test('a skill written a moment ago is already there, and a name no root holds is absent by its full path', async () => {
     const plane = skillsPlane(files);
-    await plane.writeFile(`${WORKSPACE_SKILLS_DIR}/fresh/SKILL.md`, skillFile('fresh', 'new'));
+    await writeText(plane, `${WORKSPACE_SKILLS_DIR}/fresh/SKILL.md`, skillFile('fresh', 'new'));
 
-    expect(await plane.readFile(skillViewPath('fresh'), { encoding: 'utf8' })).toBe(skillFile('fresh', 'new'));
-    expect(await plane.exists(skillViewPath('nope'))).toBe(false);
+    expect(await readText(plane, skillViewPath('fresh'))).toBe(skillFile('fresh', 'new'));
+    expect(await exists(plane, skillViewPath('nope'))).toBe(false);
     await expect(plane.readFile(skillViewPath('nope'))).rejects.toThrow("'/skills/nope/SKILL.md'");
   });
 
@@ -1128,15 +1108,15 @@ describe('the /skills view', () => {
     const plane = skillsPlane(files);
 
     for (const write of [
-      () => plane.writeFile(skillViewPath('deploy'), 'replaced'),
-      () => plane.writeFile(skillViewPath('slates'), 'replaced'),
+      () => writeText(plane, skillViewPath('deploy'), 'replaced'),
+      () => writeText(plane, skillViewPath('slates'), 'replaced'),
       () => plane.unlink(skillViewPath('review')),
     ]) {
       await expect(write()).rejects.toMatchObject({ code: 'EROFS' });
       await expect(write()).rejects.toThrow(`${WORKSPACE_SKILLS_DIR}/<name>/SKILL.md`);
     }
 
-    expect(await plane.readFile(skillViewPath('deploy'), { encoding: 'utf8' })).toBe(files[`${WORKSPACE_SKILLS_DIR}/deploy/SKILL.md`]);
+    expect(await readText(plane, skillViewPath('deploy'))).toBe(files[`${WORKSPACE_SKILLS_DIR}/deploy/SKILL.md`]);
   });
 });
 

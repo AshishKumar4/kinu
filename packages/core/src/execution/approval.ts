@@ -1,3 +1,4 @@
+import { exists as nimbusExists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Approval gating where a command reaches a shell (the workspace `Shell`, each provider's shell tools on register)
  *  and where the agent's tools reach a file. */
 
@@ -9,8 +10,7 @@ import { asBytes, currentBytes } from '../safety/bound-write';
 import * as v from 'valibot';
 import { answeredRefusal, CommandResultSchema } from './exec-result';
 import type { ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types';
-import type { Shell, ShellExecOptions, ShellExecResult, VFS } from '../types/primitives';
-import type { VfsNativeMutations, VfsNativeReads } from '../vfs/mounts';
+import type { CheckpointFiles, Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
 import { requireBuild } from './work-mode';
 import { refusalOf, type KinuError } from '../obs/error';
 import { Effect } from 'effect';
@@ -84,13 +84,13 @@ type Approve = (op: FileAccess['op'], path: string, bytes?: string | Uint8Array)
 
 /** A change past the agent's own files is asked; a secret-looking read follows `cat`'s rule. */
 export function withApprovalGatedFiles(
-  vfs: VFS & Partial<VfsNativeMutations & VfsNativeReads>, executor: string, reach: FileReach, policy: ShellApprovalPolicy,
-): VFS {
+  vfs: VFS & CheckpointFiles, executor: string, reach: FileReach, policy: ShellApprovalPolicy,
+): VFS & CheckpointFiles {
   const approve: Approve = (op, path, bytes) => Effect.gen(function* () {
     const onUser = onUserRoots(path, reach.userRoots());
     const at = onUser ? undefined : reach.locate?.(path);
     const hostPath = at?.hostPath ?? path;
-    const replaces = onUser && op === 'write' && (yield* Effect.promise(() => vfs.exists(path)));
+    const replaces = onUser && op === 'write' && (yield* Effect.promise(async () => nimbusExists(vfs, path)));
     let reaches: FileAccess['reaches'] = at?.outside === true ? 'outside-directory' : 'own';
 
     if (onUser) reaches = 'user-mount';
@@ -103,53 +103,50 @@ export function withApprovalGatedFiles(
     yield* approveFileAccess({ op, path, hostPath, reaches, replaces }, executor, policy, write);
   });
 
-  const gated: VFS & Partial<VfsNativeMutations & VfsNativeReads> = {
-    readFile: (path, opts) => settle(Effect.andThen(approve('read', path), Effect.promise(() => vfs.readFile(path, opts)))),
-    writeFile: (path, data) => settle(Effect.andThen(approve('write', path, data), Effect.promise(() => vfs.writeFile(path, data)))),
+  const gated: VFS & CheckpointFiles = {
+    readFile: (path) => settle(Effect.andThen(approve('read', path), Effect.promise(async () => vfs.readFile(path)))),
+    writeFile: (path, data) => settle(Effect.andThen(approve('write', path, data), Effect.promise(async () => vfs.writeFile(path, data)))),
     readdir: (path) => vfs.readdir(path),
-    stat: (path) => vfs.stat(path),
-    unlink: (path) => settle(Effect.andThen(approve('delete', path), Effect.promise(() => vfs.unlink(path)))),
+    stat: (path, options) => vfs.stat(path, options),
+    unlink: (path) => settle(Effect.andThen(approve('delete', path), Effect.promise(async () => vfs.unlink(path)))),
     // An existing one changes nothing; the file tool makes each write's parent.
     mkdir: (path, opts) => settle(Effect.andThen(
-      Effect.flatMap(Effect.promise(() => vfs.exists(path)), (exists) => (exists ? Effect.void : approve('mkdir', path))),
-      Effect.promise(() => vfs.mkdir(path, opts)),
+      Effect.flatMap(Effect.promise(async () => nimbusExists(vfs, path)), (exists) => (exists ? Effect.void : approve('mkdir', path))),
+      Effect.promise(async () => vfs.mkdir(path, opts)),
     )),
-    exists: (path) => vfs.exists(path),
   };
 
   const reported = vfs.writeFileWithReport?.bind(vfs);
   const conditional = vfs.writeFileIfRevision?.bind(vfs);
-  const atRevision = vfs.readFileAtRevision;
+  const atRevision = vfs.readFileAtRevision?.bind(vfs);
   const readRange = vfs.readRange?.bind(vfs);
-  const readdirStats = vfs.readdirStats?.bind(vfs);
   const rename = vfs.rename?.bind(vfs);
   const removeRecursive = vfs.removeRecursive?.bind(vfs);
 
   // A write the owner approves still carries what undo cannot restore.
   if (reported) {
-    gated.writeFileWithReport = (path, data) => settle(Effect.andThen(approve('write', path, data), Effect.promise(() => reported(path, data))));
+    gated.writeFileWithReport = (path, data) => settle(Effect.andThen(approve('write', path, data), Effect.promise(async () => reported(path, data))));
   }
 
   if (conditional) {
-    gated.writeFileIfRevision = (path, data, expected) => settle(Effect.andThen(approve('write', path, data), Effect.promise(() => conditional(path, data, expected))));
+    gated.writeFileIfRevision = (path, data, expected) => settle(Effect.andThen(approve('write', path, data), Effect.promise(async () => conditional(path, data, expected))));
   }
 
   if (atRevision) {
-    gated.readFileAtRevision = (path, revision, range) => settle(Effect.andThen(approve('read', path), Effect.promise(() => atRevision(path, revision, range))));
+    gated.readFileAtRevision = (path, revision, range) => settle(Effect.andThen(approve('read', path), Effect.promise(async () => atRevision(path, revision, range))));
   }
 
   if (readRange) {
-    gated.readRange = (path, offset, length) => settle(Effect.andThen(approve('read', path), Effect.promise(() => readRange(path, offset, length))));
+    gated.readRange = (path, offset, length) => settle(Effect.andThen(approve('read', path), Effect.promise(async () => readRange(path, offset, length))));
   }
 
-  if (readdirStats) gated.readdirStats = readdirStats;
 
   if (rename) {
-    gated.rename = (from, to) => settle(Effect.andThen(Effect.andThen(approve('delete', from), approve('write', to)), Effect.promise(() => rename(from, to))));
+    gated.rename = (from, to) => settle(Effect.andThen(Effect.andThen(approve('delete', from), approve('write', to)), Effect.promise(async () => rename(from, to))));
   }
 
   if (removeRecursive) {
-    gated.removeRecursive = (path) => settle(Effect.andThen(approve('delete', path), Effect.promise(() => removeRecursive(path))));
+    gated.removeRecursive = (path) => settle(Effect.andThen(approve('delete', path), Effect.promise(async () => removeRecursive(path))));
   }
 
   return gated;

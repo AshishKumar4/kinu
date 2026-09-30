@@ -1,3 +1,4 @@
+import type { VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Shared by the drive and its viewer: the plane's name, the one write path, and which pane a path
  * opens in. A tested contract: HTML is untrusted markup, and a clipped read must not be written back.
@@ -6,7 +7,7 @@ import * as v from "valibot";
 import { inlineFileType } from './file-types';
 import type { DirEntry } from './files';
 import { tolerate } from '../obs/index';
-import { VfsRevisionSchema, type VfsRevision } from '../types/primitives';
+import { VfsRevisionSchema } from '../types/primitives';
 
 /** The composite plane (workspace tree plus mount table); the drive always browses through it. */
 export const PLANE = "workspace";

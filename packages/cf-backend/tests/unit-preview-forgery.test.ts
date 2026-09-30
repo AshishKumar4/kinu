@@ -45,7 +45,7 @@ function probe(): SandboxProbe {
     CLI_PUBLIC_ORIGIN: APP,
     PREVIEW_HOST_SUFFIX: SUFFIX,
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    Sandbox: {
+    KinuDevbox: {
       getByName(name: string) {
         resolved.push(name);
 

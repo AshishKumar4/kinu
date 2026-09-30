@@ -49,9 +49,9 @@ export interface TerminalRouteDeps {
 export function terminalRouteDeps(env: Env): TerminalRouteDeps {
   return {
     resolveWorkspace: (name) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name),
-    resolveSandbox: (name) => env.Sandbox === undefined
+    resolveSandbox: (name) => env.KinuDevbox === undefined
       ? null
-      : env.Sandbox.getByName(sandboxIdForWorkspace(name)),
+      : env.KinuDevbox.getByName(sandboxIdForWorkspace(name)),
     UserDO: env.UserDO,
   };
 }

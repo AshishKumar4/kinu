@@ -28,7 +28,7 @@ describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator
   });
 
   test('every non-orchestrator DO namespace is foreign (→ rejected)', () => {
-    for (const slug of ['user-d-o', 'exploration-agent', 'kinu-sandbox', 'nimbus-preview', 'anything']) {
+    for (const slug of ['user-d-o', 'exploration-agent', 'kinu-devbox', 'nimbus-preview', 'anything']) {
       expect(isForeignAgentNamespacePath(`/agents/${slug}/some-name`)).toBe(true);
     }
   });

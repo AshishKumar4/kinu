@@ -1,3 +1,4 @@
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** workspace.* provider (InlineExecutor): listTools shape, case-preserving upserting createTool. */
 
 import { describe, test, expect } from 'bun:test';
@@ -258,12 +259,12 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
     const { vfs, exec } = buildPlane();
     const result = await exec.tools.writeFile.execute('notes/deep/todo.md', 'from codemode');
     expect(result).toContain('Written');
-    expect(await vfs.readFile('notes/deep/todo.md', { encoding: 'utf8' })).toBe('from codemode');
+    expect(await readText(vfs, 'notes/deep/todo.md')).toBe('from codemode');
   });
 
   test('an existing file cannot be overwritten before workspace.readFile shows it', async () => {
     const { vfs, exec } = buildPlane();
-    await vfs.writeFile('victim.txt', 'keep me');
+    await writeText(vfs, 'victim.txt', 'keep me');
 
     // Callers branch on `reason`, and the declared codemode type promises it.
     expect(await exec.tools.writeFile.execute('victim.txt', 'destroyed blind')).toEqual({
@@ -271,18 +272,18 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
       error: expect.stringContaining('has not been read here yet'),
       reason: 'unread',
     });
-    expect(await vfs.readFile('victim.txt', { encoding: 'utf8' })).toBe('keep me');
+    expect(await readText(vfs, 'victim.txt')).toBe('keep me');
 
     await exec.tools.readFile.execute('victim.txt');
     expect(await exec.tools.writeFile.execute('victim.txt', 'replacement')).toContain('Written');
-    expect(await vfs.readFile('victim.txt', { encoding: 'utf8' })).toBe('replacement');
+    expect(await readText(vfs, 'victim.txt')).toBe('replacement');
   });
 
   test('relative and absolute name the same file — one namespace, no prefixes', async () => {
     const { vfs, exec } = buildPlane();
     await exec.tools.writeFile.execute('src/main.ts', 'a');
-    expect(await vfs.readFile('src/main.ts', { encoding: 'utf8' })).toBe('a');
-    expect(await vfs.readFile('/home/main/src/main.ts', { encoding: 'utf8' })).toBe('a');
+    expect(await readText(vfs, 'src/main.ts')).toBe('a');
+    expect(await readText(vfs, '/home/main/src/main.ts')).toBe('a');
   });
 
   test('another environment is not addressable from here at all', async () => {
@@ -301,7 +302,7 @@ describe('workspace.writeFile over the workspace filesystem — what both backen
 describe('workspace.editFile — the same gate the native `file` tool enforces', () => {
   test('refuses to edit a file never read or written in this scope', async () => {
     const { rt } = createTestRuntime();
-    await rt.storage.vfs.writeFile('blind.md', 'original');
+    await writeText(rt.storage.vfs, 'blind.md', 'original');
     const exec = buildExec(rt);
 
     const result = v.parse(ErrorResultSchema, await exec.tools.editFile.execute('blind.md', [
@@ -309,12 +310,12 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
     ]));
 
     expect(result.error).toContain('has not been read here yet');
-    expect(await rt.storage.vfs.readFile('blind.md', { encoding: 'utf8' })).toBe('original');
+    expect(await readText(rt.storage.vfs, 'blind.md')).toBe('original');
   });
 
   test('readFile then editFile: the read counts, the edit lands', async () => {
     const { rt } = createTestRuntime();
-    await rt.storage.vfs.writeFile('notes.md', 'Hello world');
+    await writeText(rt.storage.vfs, 'notes.md', 'Hello world');
     const exec = buildExec(rt);
     await exec.tools.readFile.execute('notes.md');
 
@@ -323,7 +324,7 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
     ]));
 
     expect(result.ok).toBe(true);
-    expect(await rt.storage.vfs.readFile('notes.md', { encoding: 'utf8' })).toBe('Hello kinu');
+    expect(await readText(rt.storage.vfs, 'notes.md')).toBe('Hello kinu');
   });
 
   test('writeFile then editFile in the same script: the write counts as having read it', async () => {
@@ -336,7 +337,7 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
     ]));
 
     expect(result.ok).toBe(true);
-    expect(await rt.storage.vfs.readFile('fresh.md', { encoding: 'utf8' })).toBe('v2 content');
+    expect(await readText(rt.storage.vfs, 'fresh.md')).toBe('v2 content');
   });
 
   test('refuses a non-unique old_text, touching nothing', async () => {
@@ -351,12 +352,12 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
     // Naming anchor, count and file lets the model widen the anchor on retry.
     expect(result.error).toContain('appears 2 times in dup.md');
     expect(result.error).toContain('ambiguous');
-    expect(await rt.storage.vfs.readFile('dup.md', { encoding: 'utf8' })).toBe('foo\nfoo\n');
+    expect(await readText(rt.storage.vfs, 'dup.md')).toBe('foo\nfoo\n');
   });
 
   test('a shared ledger thunk makes workspace.readFile and the native `file` tool see the SAME read state', async () => {
     const { rt } = createTestRuntime();
-    await rt.storage.vfs.writeFile('shared.md', 'shared content');
+    await writeText(rt.storage.vfs, 'shared.md', 'shared content');
     const ledger = new TurnFileLedger();
 
     const exec = createInlineExecutor({
@@ -377,13 +378,13 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
     }));
 
     expect(result.ok).toBe(true);
-    expect(await rt.storage.vfs.readFile('shared.md', { encoding: 'utf8' })).toBe('REPLACED content');
+    expect(await readText(rt.storage.vfs, 'shared.md')).toBe('REPLACED content');
   });
 
   test('without a shared ledger, workspace.* and the native `file` tool have INDEPENDENT read state', async () => {
     // Without `ledger`, workspace.* has a private ledger that does not satisfy the native gate.
     const { rt } = createTestRuntime();
-    await rt.storage.vfs.writeFile('unshared.md', 'content');
+    await writeText(rt.storage.vfs, 'unshared.md', 'content');
     const exec = buildExec(rt);
     await exec.tools.readFile.execute('unshared.md');
     const fileTool = createFileTool({ vfs: rt.storage.vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory: rt.memory });

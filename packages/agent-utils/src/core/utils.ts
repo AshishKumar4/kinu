@@ -1,4 +1,4 @@
-import type { ReadWriteVFS } from "../vfs/types";
+
 
 export function isAbortError<Failure>(err: Failure): err is Failure & Error {
 	return err instanceof Error && err.name === "AbortError";
@@ -103,10 +103,3 @@ export function normalizePath(path: string): string {
 	return resolved.join("/");
 }
 
-export async function readVfsText(vfs: ReadWriteVFS, path: string): Promise<string> {
-	const result = await vfs.readFile(path, { encoding: "utf8" });
-
-	if (result instanceof Uint8Array) throw new Error(`Expected text content for ${path}, got binary data`);
-
-	return result;
-}

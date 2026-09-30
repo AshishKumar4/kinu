@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * A hosted subordinate gets a home on its workspace, runs as it, and gives it back on a wipe
  * (kept on an archive), all through the production seams.
@@ -9,7 +10,7 @@ import { hostedSubordinateHarness, orchestratorHarness, type ActorHarness, type 
 /** An agent the owner adds takes the workspace's mission, which the soul states. */
 const SOUL = '# Kinu\n\n## Mission\n\nBuild the thing.\n';
 
-const DIRECTORY = { isDir: true };
+const DIRECTORY = { type: 'directory' };
 
 /** An agent the owner added, as the browser adds one, and the home name its directory row gives it. */
 async function addedAgent(): Promise<{ parent: ActorHarness<HarnessOrchestratorAgent>; name: string; agentName: string }> {
@@ -47,8 +48,8 @@ describe('a hosted subordinate runs as its own home', () => {
     const identity = await shell.exec('printf "%s %s" "$HOME" "$TMPDIR"');
     expect(identity.exitCode).toBe(0);
     expect(identity.stdout.split(' ')).toEqual([agentHome(agentName), agentTmpRoot(agentName)]);
-    await child.actor.runtime.storage.vfs.writeFile(`${agentHome(agentName)}/notes.md`, 'mine');
-    await expect(child.actor.runtime.storage.vfs.writeFile('/home/main/theirs.md', 'x'))
+    await writeText(child.actor.runtime.storage.vfs, `${agentHome(agentName)}/notes.md`, 'mine');
+    await expect(writeText(child.actor.runtime.storage.vfs, '/home/main/theirs.md', 'x'))
       .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
     expect((await shell.exec('echo s > /tmp/x')).exitCode).toBe(0);
     expect(await parent.agent.statWorkspaceFile('/tmp/x')).toBeNull();

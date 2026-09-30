@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * `runSwarmAction` is the only production constructor of `SwarmRunDeps`, so a fork parent past the
  * compaction threshold must arrive compacted through it. The compactor is a spy: this pins wiring only.
@@ -110,7 +111,7 @@ function forkCall(branches: number) {
 describe('compactShared wiring through runSwarmAction', () => {
   test('context:inherit carries the caller conversation through the agents tool bridge', async () => {
     const { rt, db } = createTestRuntime();
-    await rt.storage.vfs.writeFile(SOLUTION_FILE, REFERENCE);
+    await writeText(rt.storage.vfs, SOLUTION_FILE, REFERENCE);
     const prompts: TurnPrompt[] = [];
     const origin = [{ role: 'user' as const, content: 'ORIGIN-CONTEXT-MARKER' }];
 
@@ -131,7 +132,7 @@ describe('compactShared wiring through runSwarmAction', () => {
 
   test('an inheriting parent past the threshold reaches its child compacted, not verbatim', async () => {
     const { rt, db } = createTestRuntime();
-    await rt.storage.vfs.writeFile(SOLUTION_FILE, REFERENCE);
+    await writeText(rt.storage.vfs, SOLUTION_FILE, REFERENCE);
     const prompts: TurnPrompt[] = [];
     const compacted: ReadonlyArray<ModelMessage>[] = [];
 
@@ -162,7 +163,7 @@ describe('compactShared wiring through runSwarmAction', () => {
 
   test('siblings of one branch point share the one compacted prefix, byte-identical', async () => {
     const { rt, db } = createTestRuntime();
-    await rt.storage.vfs.writeFile(SOLUTION_FILE, REFERENCE);
+    await writeText(rt.storage.vfs, SOLUTION_FILE, REFERENCE);
     const prompts: TurnPrompt[] = [];
     let compactions = 0;
 
@@ -198,7 +199,7 @@ describe('compactShared wiring through runSwarmAction', () => {
   // KINU-048: admission measures the request as sent, so it sees the compacted prefix.
   test('a child over the estimate gate on the verbatim prefix is admitted on the compacted one', async () => {
     const { rt, db } = createTestRuntime();
-    await rt.storage.vfs.writeFile(SOLUTION_FILE, REFERENCE);
+    await writeText(rt.storage.vfs, SOLUTION_FILE, REFERENCE);
     const prompts: TurnPrompt[] = [];
     let sawMassInBarrier = 0;
 

@@ -1,3 +1,4 @@
+import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** The workspace toolchain, asserted through shell exit codes: an unregistered runtime is still `command not found`. */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -68,7 +69,7 @@ describe('workspace runtime provisioning', () => {
 
   test('bash starts where the shell stands, runs the coreutils, and carries pipes and redirections', async () => {
     const workspace = open(dbPath());
-    await workspace.vfs.writeFile('marker.txt', 'here\n');
+    await writeText(workspace.vfs, 'marker.txt', 'here\n');
 
     // The command rides in the compared object, so a failure names the one that failed.
     const ran = async (command: string, stdout: string) => expect({ command, ...(await workspace.shell.exec(command)) })
@@ -81,7 +82,7 @@ describe('workspace runtime provisioning', () => {
     await ran('bash -c "printf \'b\\na\\n\' | sort"', 'a\nb\n');
     await ran('bash -c "echo gone > /dev/null && echo kept"', 'kept\n');
     await ran('bash -c "echo made > out.txt"', '');
-    expect(await workspace.vfs.readFile('out.txt', { encoding: 'utf8' })).toBe('made\n');
+    expect(await readText(workspace.vfs, 'out.txt')).toBe('made\n');
     await ran('mkdir -p d && cd d && bash -c pwd', '/home/main/d\n');
   });
 
@@ -91,17 +92,17 @@ describe('workspace runtime provisioning', () => {
     expect(await workspace.shell.exec('npm --version')).toMatchObject({ exitCode: 0, stdout: '10.0.0\n' });
     expect(await workspace.shell.exec('npx --version')).toMatchObject({ exitCode: 0, stdout: '10.0.0\n' });
     expect(await workspace.shell.exec('npm init -y')).toMatchObject({ exitCode: 0 });
-    expect(await workspace.vfs.exists('package.json')).toBe(true);
+    expect(await exists(workspace.vfs, 'package.json')).toBe(true);
   });
 
   test('nothing is installed until a provisioned command is invoked', async () => {
     const workspace = open(dbPath());
 
     // Present before any command runs: provisioning happens on the workspace-open path.
-    expect(await workspace.vfs.exists('/home/main/.nimbus/runtimes')).toBe(false);
+    expect(await exists(workspace.vfs, '/home/main/.nimbus/runtimes')).toBe(false);
     expect(await workspace.shell.exec('python3 --version')).toMatchObject({ exitCode: 0 });
-    expect(await workspace.vfs.exists('/home/main/.nimbus/runtimes/cpython/3.13.14/manifest.json')).toBe(true);
-    expect(await workspace.vfs.exists('/home/main/.nimbus/runtimes/bash')).toBe(false);
+    expect(await exists(workspace.vfs, '/home/main/.nimbus/runtimes/cpython/3.13.14/manifest.json')).toBe(true);
+    expect(await exists(workspace.vfs, '/home/main/.nimbus/runtimes/bash')).toBe(false);
   });
 
   test('a runtime a previous session installed survives a reopen', async () => {

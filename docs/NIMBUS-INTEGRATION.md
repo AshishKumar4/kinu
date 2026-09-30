@@ -44,18 +44,14 @@ streams a package off the registry") and
 `packages/cf-backend/tests/workerd/nimbus-git-npm.test.ts` hold the registry
 behaviour.
 
-The five `patchedDependencies` entries in the root `package.json` are
-`@plannotator%2Fui@0.30.0.patch`, `@cloudflare%2Fsandbox@0.12.8.patch`,
-`@cloudflare%2Fcontainers@0.3.7.patch`, `agents@0.24.0.patch` and
-`@cloudflare%2Fcodemode@0.5.1.patch`. The sandbox patch makes the SDK's
-handler-map assignments merge, so configuring a bucket mount cannot unbind an
-outbound handler the host installed (`KinuSandbox.outboundHandlers`,
-`cf-backend/src/kinu-sandbox.ts`). The codemode patch adds the `./normalize`
+The three `patchedDependencies` entries in the root `package.json` are
+`@plannotator%2Fui@0.46.1.patch`, `agents@0.24.0.patch` and
+`@cloudflare%2Fcodemode@0.5.2.patch`. The codemode patch adds the `./normalize`
 subpath export and the `dist/normalize.js` behind it, which
 `cli-backend/src/executor.ts` and `cli-backend/src/codemode-tool-factory.ts`
 import as `normalizeCode`. `bun run gate:patch-parity`
 (`scripts/patch-parity.ts`) reads `patchedDependencies` out of the root
-`package.json`, so it governs all five. Its header narrates the
+`package.json`, so it governs all three. Its header narrates the
 `@nimbus-sh/core` patch incident, because that incident is why the gate exists.
 
 The sixth file in `patches/`, `upstream-codemode-normalize.patch`, is not a

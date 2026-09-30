@@ -1,3 +1,4 @@
+import { exists, readText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Hosted Drive rules: listing, uploads, marking and adding skills. Paths are
  * tenant-relative (`/skills` is `/shared/skills` on every workspace plane).
@@ -14,7 +15,7 @@ import { settle, settleSync } from '../obs/effect';
 import { DRIVE_RESERVED_DIRS, DRIVE_SKILLS_DIR } from '../vfs/shared-drive';
 import { isVfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import type { MossaicVfs } from '../vfs/mossaic-vfs';
-import type { VfsListedEntry } from '../vfs/mounts';
+import { listWithVfsOps, type VfsListedEntry } from '../vfs/mounts';
 import { looksLikeZip, packZip, unpackZip, type ZipEntry } from '../utils/zip';
 import { vfsBasename } from '../utils/vfs-helpers';
 import { SKILL_FOLDER_FILE } from './types';
@@ -150,9 +151,9 @@ async function skillFolderProblem(drive: MossaicVfs, folder: string, name = vfsB
   if (problem !== null) return `folder name ${problem}`;
   const file = `${folder}/${SKILL_FOLDER_FILE}`;
 
-  if (!await drive.exists(file)) return `no ${SKILL_FOLDER_FILE} in ${folder}`;
-  const text = await drive.readFile(file, { encoding: 'utf8' });
-  const parsed = parseSkillFile(text instanceof Uint8Array ? new TextDecoder().decode(text) : text, 'shared', name);
+  if (!await exists(drive, file)) return `no ${SKILL_FOLDER_FILE} in ${folder}`;
+  const text = await readText(drive, file);
+  const parsed = parseSkillFile(text, 'shared', name);
 
   if (!parsed.ok) return parsed.error;
 
@@ -162,7 +163,7 @@ async function skillFolderProblem(drive: MossaicVfs, folder: string, name = vfsB
 }
 
 function linkTarget(drive: MossaicVfs, path: string): Effect.Effect<string | undefined> {
-  return Effect.tryPromise({ try: () => drive.readlink(path), catch: (cause) => ({ cause }) }).pipe(
+  return Effect.tryPromise({ try: async () => drive.readlink(path), catch: (cause) => ({ cause }) }).pipe(
     Effect.catch((failed) => (isVfsError(failed.cause) && (failed.cause.code === 'EIO' || failed.cause.code === 'ENOENT')
       ? Effect.succeed(undefined)
       : Effect.die(failed.cause))),
@@ -171,7 +172,7 @@ function linkTarget(drive: MossaicVfs, path: string): Effect.Effect<string | und
 
 /** A reserved folder lists as empty until something lands, never absent. */
 function reservedTolerant(drive: MossaicVfs, path: string): Effect.Effect<VfsListedEntry[]> {
-  return Effect.tryPromise({ try: () => drive.readdirStats(path), catch: (cause) => ({ cause }) }).pipe(
+  return Effect.tryPromise({ try: async () => listWithVfsOps(drive, path), catch: (cause) => ({ cause }) }).pipe(
     Effect.catch((failed) => (isReservedDrivePath(path) && isVfsError(failed.cause) && failed.cause.code === 'ENOENT'
       ? Effect.succeed<VfsListedEntry[]>([])
       : Effect.die(failed.cause))),
@@ -191,15 +192,15 @@ export function listDrive(drive: MossaicVfs, rawPath: string): Promise<DriveList
       for (const reserved of DRIVE_RESERVED_DIRS) {
         const name = reserved.slice(1);
 
-        if (!listed.some((entry) => entry.name === name)) listed.push({ name, stat: { size: 0, mtimeMs: 0, isDir: true } });
+        if (!listed.some((entry) => entry.name === name)) listed.push({ name, stat: { size: 0, mtimeMs: 0, type: 'directory' } });
       }
     }
 
     for (const { name, stat } of listed) {
       const full = path === '/' ? `/${name}` : `${path}/${name}`;
-      // `readdirStats` follows links; the kind comes from whether `readlink` answers.
+      // A link's target answers its kind independently of the listed metadata.
       const target = yield* linkTarget(drive, full);
-      const isDir = stat?.isDir ?? false;
+      const isDir = stat?.type === 'directory';
 
       const skillProblem = yield* Effect.promise(() => listedSkillProblem(drive, { path: full, name, isDir, target }));
       const kind = listedKind(isDir, target);
@@ -266,8 +267,8 @@ export function makeDriveFolder(drive: MossaicVfs, rawPath: string): Promise<voi
 
     if (path === '/') return yield* new KinuError('bad_input', 'the root already exists');
 
-    if (yield* Effect.promise(() => drive.exists(path))) return yield* new KinuError('bad_input', `${path} already exists`);
-    yield* Effect.promise(() => drive.mkdir(path, { recursive: true }));
+    if (yield* Effect.promise(() => exists(drive, path))) return yield* new KinuError('bad_input', `${path} already exists`);
+    yield* Effect.promise(async () => drive.mkdir(path, { recursive: true }));
   }));
 }
 
@@ -283,11 +284,11 @@ export function renameDriveEntry(drive: MossaicVfs, rawFrom: string, rawTo: stri
 
     if (to === from || to.startsWith(`${from}/`)) return yield* new KinuError('bad_input', `cannot move ${from} into itself`);
 
-    if (yield* Effect.promise(() => drive.exists(to))) return yield* new KinuError('bad_input', `${to} already exists`);
+    if (yield* Effect.promise(() => exists(drive, to))) return yield* new KinuError('bad_input', `${to} already exists`);
     const parent = parentOf(to);
 
-    if (parent !== '/' && !(yield* Effect.promise(() => drive.stat(parent)))?.isDir) return yield* new KinuError('missing', `${parent} is not a folder`);
-    yield* Effect.promise(() => drive.rename(from, to));
+    if (parent !== '/' && (yield* Effect.promise(async () => drive.stat(parent)))?.type !== 'directory') return yield* new KinuError('missing', `${parent} is not a folder`);
+    yield* Effect.promise(async () => drive.rename(from, to));
   }));
 }
 
@@ -298,12 +299,12 @@ export function deleteDriveEntry(drive: MossaicVfs, rawPath: string): Promise<vo
 
     if (isReservedDrivePath(path)) return yield* reservedRefusal(path);
 
-    if ((yield* linkTarget(drive, path)) !== undefined) return yield* Effect.promise(() => drive.unlink(path));
-    const stat = yield* Effect.promise(() => drive.stat(path));
+    if ((yield* linkTarget(drive, path)) !== undefined) return yield* Effect.promise(async () => drive.unlink(path));
+    const stat = yield* Effect.promise(async () => drive.stat(path));
 
     if (stat === null) return yield* new KinuError('missing', `no such entry: ${path}`);
 
-    yield* Effect.promise(() => (stat.isDir ? drive.removeRecursive(path) : drive.unlink(path)));
+    yield* Effect.promise(async () => ((stat.type === 'directory') ? drive.removeRecursive(path) : drive.unlink(path)));
   }));
 }
 
@@ -328,9 +329,9 @@ export function markAsSkill(drive: MossaicVfs, rawPath: string): Promise<MarkedS
     if (folder.startsWith(`${DRIVE_SKILLS_DIR}/`)) return { name, linked: folder };
     const linked = `${DRIVE_SKILLS_DIR}/${name}`;
 
-    if (yield* Effect.promise(() => drive.exists(linked))) return yield* skillTaken(name, linked);
-    yield* Effect.promise(() => drive.mkdir(DRIVE_SKILLS_DIR, { recursive: true }));
-    yield* Effect.promise(() => drive.symlink(folder, linked));
+    if (yield* Effect.promise(() => exists(drive, linked))) return yield* skillTaken(name, linked);
+    yield* Effect.promise(async () => drive.mkdir(DRIVE_SKILLS_DIR, { recursive: true }));
+    yield* Effect.promise(async () => drive.symlink(folder, linked));
 
     const marked: MarkedSkill = { name, linked };
 
@@ -344,14 +345,14 @@ function skillTaken(name: string, at: string): KinuError {
 
 function putDriveFiles(drive: MossaicVfs, folder: string, files: readonly ZipEntry[]): Effect.Effect<void, KinuError> {
   return Effect.gen(function* () {
-    yield* Effect.promise(() => drive.mkdir(folder, { recursive: true }));
+    yield* Effect.promise(async () => drive.mkdir(folder, { recursive: true }));
 
     for (const file of files) {
       const relative = yield* drivePath(`/${file.path}`);
       const parent = parentOf(relative);
 
-      if (parent !== '/') yield* Effect.promise(() => drive.mkdir(`${folder}${parent}`, { recursive: true }));
-      yield* Effect.promise(() => drive.writeFile(`${folder}${relative}`, file.bytes));
+      if (parent !== '/') yield* Effect.promise(async () => drive.mkdir(`${folder}${parent}`, { recursive: true }));
+      yield* Effect.promise(async () => drive.writeFile(`${folder}${relative}`, file.bytes));
     }
   });
 }
@@ -382,7 +383,7 @@ function skillAdded(drive: MossaicVfs, files: readonly ZipEntry[], fallbackName:
     const name = parsed.skill.name;
     const folder = `${DRIVE_SKILLS_DIR}/${name}`;
 
-    if (yield* Effect.promise(() => drive.exists(folder))) return yield* skillTaken(name, folder);
+    if (yield* Effect.promise(() => exists(drive, folder))) return yield* skillTaken(name, folder);
     yield* putDriveFiles(drive, folder, files
       .filter((file) => file.path.startsWith(root))
       .map((file) => ({ path: file.path.slice(root.length), bytes: file.bytes })));
@@ -407,8 +408,8 @@ export function receiveDriveUpload(drive: MossaicVfs, target: DriveUploadTarget,
         if (isReservedDrivePath(path)) return yield* reservedRefusal(path);
         const parent = parentOf(path);
 
-        if (parent !== '/') yield* Effect.promise(() => drive.mkdir(parent, { recursive: true }));
-        yield* Effect.promise(() => drive.writeFile(path, bytes));
+        if (parent !== '/') yield* Effect.promise(async () => drive.mkdir(parent, { recursive: true }));
+        yield* Effect.promise(async () => drive.writeFile(path, bytes));
 
         return received;
       }
@@ -437,15 +438,15 @@ export function packDriveFolder(drive: MossaicVfs, rawPath: string, limit: numbe
     let total = 0;
 
     const walk = (dir: string, prefix: string): Effect.Effect<void, KinuError> => Effect.gen(function* () {
-      for (const { name, stat } of yield* Effect.promise(() => drive.readdirStats(dir))) {
+      for (const { name, stat } of yield* Effect.promise(() => listWithVfsOps(drive, dir))) {
         const full = dir === '/' ? `/${name}` : `${dir}/${name}`;
 
-        if (stat?.isDir === true) {
+        if (stat?.type === 'directory') {
           yield* walk(full, `${prefix}${name}/`);
           continue;
         }
 
-        const raw = yield* Effect.promise(() => drive.readFile(full));
+        const raw = yield* Effect.promise(async () => drive.readFile(full));
         const bytes = raw instanceof Uint8Array ? raw : new TextEncoder().encode(raw);
         total += bytes.byteLength;
 

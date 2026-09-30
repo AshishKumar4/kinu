@@ -12,8 +12,8 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
-  WRANGLER_FAILED, awaitApplicationRollout, containerAppIds, delay, deleteContainerApps,
-  describeThrown, runWrangler, type ApplicationRollout,
+  WRANGLER_FAILED, containerAppIds, delay, deleteContainerApps,
+  describeThrown, runWrangler,
 } from './fixtures/r2-bench/deploy-substrate';
 import * as v from 'valibot';
 import {
@@ -162,7 +162,8 @@ const FixtureConfigSchema = v.looseObject({
   })),
   containers: v.array(v.looseObject({
     class_name: v.string(),
-    image: v.string(),
+    scheduling_policy: v.literal('durable_object'),
+    images: v.object({ devbox: v.object({ image: v.string() }) }),
   })),
   r2_buckets: v.array(v.looseObject({
     bucket_name: v.string(),
@@ -225,7 +226,7 @@ export function fixtureConfigForArms(
       .filter((migration) => migration.new_sqlite_classes.length > 0),
     containers: config.containers
       .filter((container) => deployedClasses.includes(container.class_name))
-      .map((container) => ({ ...container, image: SANDBOX_IMAGE })),
+      .map((container) => ({ ...container, images: { devbox: { image: SANDBOX_IMAGE } } })),
     r2_buckets: config.r2_buckets.map((bucket) => bucket.bucket_name === 'kinu-devbox-bench'
       ? { ...bucket, bucket_name: names.bucket }
       : bucket),
@@ -827,7 +828,6 @@ interface DeployedFixture {
   readonly workerVersion: string;
   /** The container application's rollout, waited out here so no cold attach
    *  contains it. One application per arm (`ArmFixture.containerApps`). */
-  readonly rollouts: readonly ApplicationRollout[];
   readonly stop: () => readonly string[];
 }
 
@@ -836,14 +836,13 @@ interface DeployedFixture {
 export async function deployFixture(
   token: string,
   fixture: ArmFixture,
-  boot: { readonly productionSync?: boolean } = {},
+  boot: { readonly productionSync?: boolean; readonly size?: string } = {},
 ): Promise<DeployedFixture> {
   const output = wrangler([
     'deploy', '--config', fixture.configPath, '--var', `BENCH_TOKEN:${token}`,
     ...(boot.productionSync === true ? ['--var', 'BENCH_PRODUCTION_SYNC:1'] : []),
+    ...(boot.size === undefined ? [] : ['--var', `BENCH_SIZE:${boot.size}`]),
   ]);
-
-  const deployedAt = Date.now();
 
   const origin = /https:\/\/[a-z0-9.-]+\.workers\.dev/.exec(output)?.[0];
 
@@ -895,16 +894,11 @@ export async function deployFixture(
     await delay(3_000);
   }
 
-  const rollouts: ApplicationRollout[] = [];
-
-  for (const application of fixture.containerApps) {
-    rollouts.push(await awaitApplicationRollout({ repoRoot: REPO_ROOT, application, log, since: deployedAt }));
-  }
-
+  // No rollout to wait out: under the durable_object scheduling policy an instance exists only once a
+  // box starts one (D50).
   return {
     fixture: { origin, token },
     workerVersion,
-    rollouts,
     stop: () => deleteFixtureResources(fixture),
   };
 }
@@ -2071,7 +2065,6 @@ interface ArmLaneState {
   stop: (() => readonly string[]) | null;
   workerStopped: boolean;
   workerVersion: string;
-  rollouts: readonly ApplicationRollout[];
   /** Why this arm never reached its measured pipeline, if it did not. */
   refusal: string | null;
 }
@@ -2086,7 +2079,6 @@ export function armLanes(runId: string, fixtures: FixtureResources): ArmLaneStat
     stop: null,
     workerStopped: false,
     workerVersion: '',
-    rollouts: [],
     refusal: null,
   }));
 }

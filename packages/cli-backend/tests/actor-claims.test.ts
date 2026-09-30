@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Admission contract against the real runner: claim, per-step context revision, and stale/foreign refusals.
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
@@ -48,8 +49,8 @@ async function workspace(): Promise<{ bind: (name: string) => Bound; rt: AgentRu
   rt.executor = createSandboxedExecutor();
   const files = rt.agentStateVfs ?? rt.storage.vfs;
   await files.mkdir('scaffold', { recursive: true });
-  await files.writeFile(rt.identity.scaffold.path + '.v1', V1);
-  await files.writeFile(rt.identity.scaffold.path + '.v2', V2);
+  await writeText(files, rt.identity.scaffold.path + '.v1', V1);
+  await writeText(files, rt.identity.scaffold.path + '.v2', V2);
 
   const owner = rt.storage.sql<{ owner_user_id: string }>`
     SELECT owner_user_id FROM workspace_identity WHERE id = ${rt.actor.workspaceId}`[0];
@@ -191,7 +192,7 @@ test('a source change after admission cannot alter the bytes the turn consumed',
 
   expect(result.failure).toBeNull();
   expect(result.text).toBe('v1 answer');
-  await files.writeFile(rt.identity.scaffold.path + '.v1', V2);
+  await writeText(files, rt.identity.scaffold.path + '.v1', V2);
   const claim = left.stores.claims.read('turn-src');
   expect(claim?.program.digest).toBe(createHash('sha256').update(V1).digest('hex'));
 
@@ -460,7 +461,7 @@ test('a versioned context edit refuses a replaced target and preserves its histo
 
   await selectedInput(left, [{ role: 'user', content: 'peer replacement' }]);
 
-  expect(await files.readFileAtRevision(path, revision)).toBe(original);
+  expect(await files.readFileAtRevision(path, revision)).toEqual(original);
   await expect(file({ action: 'edit', path, edits: [{ old_text: 'original premise', new_text: 'lost update' }] }))
     .rejects.toMatchObject({ verdict: 'stale' });
   expect((await left.stores.history.materialize()).messages).toEqual([{ role: 'user', content: 'peer replacement' }]);
@@ -504,8 +505,7 @@ test('historical context reads preserve byte ranges and cannot cross actor bound
   const revision = (await files.stat(path))?.revision;
 
   if (revision === undefined || files.readFileAtRevision === undefined) throw new Error('context must expose immutable revisions');
-  const original = v.parse(v.string(), await files.readFileAtRevision(path, revision));
-  const bytes = new TextEncoder().encode(original);
+  const bytes = await files.readFileAtRevision(path, revision);
   expect(await files.readFileAtRevision(path, revision, { offset: bytes.length - 12, length: 9 })).toEqual(bytes.slice(-12, -3));
   await expect(files.readFileAtRevision('/context/agents/right/working.jsonl', revision)).rejects.toMatchObject({ code: 'denied' });
 });

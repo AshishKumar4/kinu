@@ -1,11 +1,12 @@
 import type { SqlExecutor } from "../types";
-import type { ReadWriteVFS } from "../vfs/types";
-import { readVfsText } from "../core/utils";
+import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { chunkMarkdown } from "./chunker";
 import { fillToCapacity, relaxFtsQuery, sanitizeFtsQuery } from "./query";
 import type { MemorySearchResult } from "./query";
 
 const SNIPPET_MAX_CHARS = 700;
+
+const utf8 = new TextEncoder();
 
 interface FtsRow { id: string; path: string; start_line: number; end_line: number; text: string; rank: number }
 
@@ -47,21 +48,21 @@ export function initMemoryChunkTables(sql: SqlExecutor): void {
 }
 
 export class MemoryStore {
-	constructor(private readonly vfs: ReadWriteVFS, private readonly sql: SqlExecutor) {}
+	constructor(private readonly vfs: Pick<VFS, 'readFile' | 'writeFile'>, private readonly sql: SqlExecutor) {}
 
 	ensureSchema(): void {
 		initMemoryChunkTables(this.sql);
 	}
 
 	async writeFile(path: string, content: string): Promise<void> {
-		await this.vfs.writeFile(path, content);
+		await this.vfs.writeFile(path, utf8.encode(content));
 	}
 
 	async appendToFile(path: string, content: string): Promise<void> {
 		let existing = "";
 
 		try {
-			existing = await readVfsText(this.vfs, path);
+			existing = await readText(this.vfs, path);
 		} catch (err) {
 			// Only a missing file starts fresh; overwriting on other errors destroys notes.
 			if (!isMissingFileError(err)) throw err;
@@ -72,7 +73,7 @@ export class MemoryStore {
 
 	async readFile(path: string): Promise<string | null> {
 		try {
-			return await readVfsText(this.vfs, path);
+			return await readText(this.vfs, path);
 		} catch (err) {
 			// Only a missing file is absence; null would read as a legitimately empty file.
 			if (!isMissingFileError(err)) throw err;

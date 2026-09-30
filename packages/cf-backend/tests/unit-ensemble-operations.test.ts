@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Every ensemble judge call writes a durable start/end operation pair beside its `model_call` row. */
 
 import { describe, expect, test } from 'bun:test';
@@ -67,8 +68,7 @@ describe('runOutcomeEnsemble — the judges write their operation lifecycle', ()
     const first = await agent.runOutcomeEnsemble([...JUDGES]);
     expect(first.run?.judged.map((row) => row.stored)).toEqual([3, 3]);
     declareShadowCandidate(harness.db);
-    await workspaceFiles(agent).writeFile(`${actorScaffoldPath({ origin: 'system', storageKey: MAIN_AGENT })}.v1`,
-      'async function* run(rt, task) { yield { type: "chunk", data: "candidate" }; }');
+    await writeText(workspaceFiles(agent), `${actorScaffoldPath({ origin: 'system', storageKey: MAIN_AGENT })}.v1`, 'async function* run(rt, task) { yield { type: "chunk", data: "candidate" }; }');
     expect(await agent.applyScaffoldDecision('promote')).toMatchObject({ ok: true, action: 'promote' });
 
     const later = [3, 4, 5].map((index) => recordTurnOutcome(sql, actor, {

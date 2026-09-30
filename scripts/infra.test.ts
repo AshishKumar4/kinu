@@ -12,8 +12,9 @@
  * bucket. That needs an account and is what `bun run gate:infra` is for.
  */
 
-import { describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
 import { writeFileSync } from 'node:fs';
+import * as v from 'valibot';
 import { join } from 'node:path';
 import { scratchDir } from '../packages/test-utils/src/scratch';
 import {
@@ -29,6 +30,7 @@ import {
   type AuditRequest, type Phase, type Row, PHASES, audit, environmentOf, observedRow, phaseFrom, supplyDrift,
   supplyRows, supplySummary, unobservableDrift,
 } from './infra-verify';
+import { deleteR2Prefix, deletedByRest } from './cloudflare-rest';
 import { confirmationPhrase, partition } from './infra-teardown';
 import { POLL_SECONDS, settle, type SettleClock } from './edge-settled';
 import { plan, putSecret, type SecretIo } from './infra-provision';
@@ -75,7 +77,7 @@ describe('the inventory is derived from the manifest, not written beside it', ()
     expect(ids).toContain('custom-domain.kinu.run');
     expect(ids).toContain('wildcard-dns.*.kinu.run');
     expect(ids).toContain('email-routing.kinu.run');
-    expect(ids).toContain('durable-object.kinu:KinuSandbox');
+    expect(ids).toContain('durable-object.kinu:KinuDevbox');
     expect(authStore().binding).toBe('AUTH_KV');
     expect(new Set(ids).size).toBe(ids.length);
   });
@@ -593,16 +595,16 @@ describe('a container namespace is bound to the application the deploy names, or
     .map((resource) => resource.name);
 
   test('each application is named as wrangler names it: the top-level Worker, the class, the environment', () => {
-    expect(named(infrastructure, 'container')).toEqual(['kinu-kinusandbox', 'kinu-codexegress']);
-    expect(named(staging, 'container')).toEqual(['kinu-kinusandbox-staging', 'kinu-codexegress-staging']);
+    expect(named(infrastructure, 'container')).toEqual(['kinu-kinudevbox', 'kinu-codexegress']);
+    expect(named(staging, 'container')).toEqual(['kinu-kinudevbox-staging', 'kinu-codexegress-staging']);
     expect(named(staging, 'container-namespace')).toEqual(named(staging, 'container'));
   });
 
   test('an application of another name holding the namespace blocks the deploy, in every phase', () => {
-    const observed = namespaceBinding(STRAY.namespace, 'kinu-kinusandbox-staging', [STRAY]);
-    const resource = staging.resources.find((each) => each.id === 'container-namespace.kinu-kinusandbox-staging');
+    const observed = namespaceBinding(STRAY.namespace, 'kinu-kinudevbox-staging', [STRAY]);
+    const resource = staging.resources.find((each) => each.id === 'container-namespace.kinu-kinudevbox-staging');
 
-    if (resource === undefined) throw new Error('staging declares no namespace row for KinuSandbox');
+    if (resource === undefined) throw new Error('staging declares no namespace row for KinuDevbox');
 
     expect(observed.state === 'absent' ? observed.detail : observed.state).toContain(`${STRAY.name} (${STRAY.id})`);
 
@@ -616,7 +618,7 @@ describe('a container namespace is bound to the application the deploy names, or
   test('an application of the deploy\'s name bound to another namespace, or to one before any is live, blocks it', () => {
     // A Worker deleted and recreated, or a class migrated, leaves the name bound to a namespace that no longer serves
     // the class; wrangler refuses to move it.
-    const OLD = { id: 'b0000000-0000-4000-8000-000000000001', name: 'kinu-kinusandbox-staging', namespace: 'old-namespace' };
+    const OLD = { id: 'b0000000-0000-4000-8000-000000000001', name: 'kinu-kinudevbox-staging', namespace: 'old-namespace' };
 
     for (const live of [STRAY.namespace, undefined]) {
       const observed = namespaceBinding(live, OLD.name, [OLD]);
@@ -627,9 +629,9 @@ describe('a container namespace is bound to the application the deploy names, or
 
   test('the named application, or none, is a namespace the deploy proceeds from', () => {
     expect(namespaceBinding(STRAY.namespace, STRAY.name, [STRAY]).state).toBe('present');
-    expect(namespaceBinding(STRAY.namespace, 'kinu-kinusandbox-staging', [{ ...STRAY, namespace: 'another' }]).state)
+    expect(namespaceBinding(STRAY.namespace, 'kinu-kinudevbox-staging', [{ ...STRAY, namespace: 'another' }]).state)
       .toBe('present');
-    expect(namespaceBinding(undefined, 'kinu-kinusandbox-staging', [STRAY]).state).toBe('present');
+    expect(namespaceBinding(undefined, 'kinu-kinudevbox-staging', [STRAY]).state).toBe('present');
   });
 });
 
@@ -1177,5 +1179,63 @@ describe('the deployment\'s names are waited for until each answers over verifie
 
     expect(Object.fromEntries(unsettled)).toEqual({ [wildcard.id]: refused });
     expect(clock.elapsed()).toBeLessThanOrEqual(60 * 1000);
+  });
+});
+
+/**
+ * What the reset deletes that wrangler cannot (`scripts/cloudflare-rest.ts`), against the R2 object API as the account
+ * answered it on 2026-09-30: a page of keys with a cursor while truncated, no `result_info` on the last page, and a
+ * bulk DELETE that answers each key it removed.
+ */
+describe('the Cloudflare REST calls wrangler cannot make', () => {
+  const objects = new Set(['boxes/a/backups/1/base', 'boxes/a/backups/1/delta', 'boxes/b/x', 'releases/keep.json']);
+  const deletes: string[][] = [];
+  let dropOnDelete: string | undefined;
+
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      if (request.headers.get('authorization') !== 'Bearer t') return new Response('no', { status: 403 });
+      const url = new URL(request.url);
+
+      if (request.method === 'GET') {
+        const prefix = url.searchParams.get('prefix') ?? '';
+        const matching = [...objects].filter((key) => key.startsWith(prefix)).sort();
+
+        const result = matching.slice(0, 2).map((key) => ({ key }));
+
+        return matching.length > 2
+          ? Response.json({ success: true, errors: [], messages: [], result, result_info: { cursor: 'next', is_truncated: true } })
+          : Response.json({ success: true, errors: [], messages: [], result });
+      }
+
+      const keys = v.parse(v.array(v.string()), await request.json());
+      const removed = keys.filter((key) => key !== dropOnDelete);
+      deletes.push(keys);
+
+      for (const key of removed) objects.delete(key);
+
+      return Response.json({ success: true, errors: [], messages: [], result: removed.map((key) => ({ key })) });
+    },
+  });
+
+  afterAll(async () => { await server.stop(true); });
+
+  const prefix = { accountId: 'acct', bucket: 'store', prefix: 'boxes/', api: `http://127.0.0.1:${String(server.port)}`, token: 't' };
+
+  test('only a 32-hex application id is deleted through the REST API', () => {
+    expect([deletedByRest('12578b1d379a4c1fb861e8b7b80bf21b'), deletedByRest('a03086a8-4134-4503-a7f6-52c3b8a0d1df')]).toEqual([true, false]);
+  });
+
+  test('every object under the prefix is deleted, a page at a time, and nothing outside it', async () => {
+    expect({ deleted: await deleteR2Prefix(prefix), left: [...objects], calls: deletes.length })
+      .toEqual({ deleted: 3, left: ['releases/keep.json'], calls: 2 });
+  });
+
+  test('a key the delete does not answer fails the reset rather than reading as gone', async () => {
+    objects.add('boxes/c/y');
+    dropOnDelete = 'boxes/c/y';
+
+    await expect(deleteR2Prefix(prefix)).rejects.toThrow('DELETE store left 1 of 1 keys, first boxes/c/y');
   });
 });

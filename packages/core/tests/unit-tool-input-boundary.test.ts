@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // Defends: a model's tool call is checked against the tool's one schema before the tool runs, and a refusal reaches the
 // durable outcome as `bad_input`. Before, the SDK was handed an unvalidated JSON literal and every tool re-parsed alone.
 import { describe, expect, test } from 'bun:test';
@@ -11,7 +12,7 @@ import { createTasksCodemodeProvider } from '../src/tools/tasks-codemode';
 import { createReportCodemodeProvider } from '../src/delegation/report-codemode';
 import { buildBuiltinTools, type ReportToolDeps } from '../src/tools/builtins';
 import { initAllTables, initTaskListTable, TaskListStore } from '../src/index';
-import type { VFS } from '../src/types/primitives';
+
 import type { JsonObject, JsonValue } from '../src/utils/json';
 import type { FactsStore } from '../src/memory/facts';
 import type { PlanEdit, SubmitPlanToolDeps } from '../src/types/plans';

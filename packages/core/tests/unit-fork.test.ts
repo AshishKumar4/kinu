@@ -1,3 +1,4 @@
+import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** A fork over two in-memory bun:sqlite handles, seeded through the production schema, filesystem and
  *  session writers, and carried by the production frame stream into the production receiver. */
 
@@ -355,12 +356,12 @@ describe('a workspace fork', () => {
     const chat = await seedForkSource(src, { memory: [{ path: 'memory/MEMORY.md', text: 'remembered' }] });
     await chat.say({ id: 'm1', role: 'user', text: 'hi' });
     await src.vfs.mkdir('scaffold', { recursive: true });
-    await src.vfs.writeFile('scaffold/agent.js', '// scaffold source');
+    await writeText(src.vfs, 'scaffold/agent.js', '// scaffold source');
 
     await forkInto(src, tgt, { untilMessageId: 'm1' });
 
-    expect(await tgt.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' })).toBe('remembered');
-    expect(await tgt.vfs.exists('scaffold/agent.js')).toBe(false);
+    expect(await readText(tgt.vfs, 'memory/MEMORY.md')).toBe('remembered');
+    expect(await exists(tgt.vfs, 'scaffold/agent.js')).toBe(false);
   });
 
   test('carries the project tree as it stands: files, directories, modes, mtimes and symlinks', async () => {
@@ -407,7 +408,7 @@ describe('a workspace fork', () => {
     await seedForkTarget(tgt, { workspaceId: 'TGT' });
     const chat = await seedForkSource(src);
     await chat.say({ id: 'm1', role: 'user', text: 'hi' });
-    await src.vfs.writeFile('notes.md', 'as the fork began');
+    await writeText(src.vfs, 'notes.md', 'as the fork began');
 
     const frames = forkTransferFrames({
       sql: src.sql, actor: chat.actor, vfs: src.forkSource, artifactDirectory: SOURCE_ARTIFACTS,
@@ -421,7 +422,7 @@ describe('a workspace fork', () => {
     for (let next = await frames.next(); !next.done; next = await frames.next(reply)) {
       // The first frame is produced after the pin, so this write lands between the pin and the copy.
       if (!written) {
-        await src.vfs.writeFile('notes.md', 'written while the fork copied');
+        await writeText(src.vfs, 'notes.md', 'written while the fork copied');
         written = true;
       }
 
@@ -429,8 +430,8 @@ describe('a workspace fork', () => {
       reply = outcome.status === 'want' ? { want: outcome.hashes } : undefined;
     }
 
-    expect(await tgt.vfs.readFile('notes.md', { encoding: 'utf8' })).toBe('as the fork began');
-    expect(await src.vfs.readFile('notes.md', { encoding: 'utf8' })).toBe('written while the fork copied');
+    expect(await readText(tgt.vfs, 'notes.md')).toBe('as the fork began');
+    expect(await readText(src.vfs, 'notes.md')).toBe('written while the fork copied');
     expect((await src.bundle.session()).vfs.snapshots().map((pin) => pin.name)).not.toContain('fork:tx-moving');
   });
 
@@ -594,8 +595,8 @@ describe('the files a fork carries', () => {
   test('SOUL.md first, then one import a name under the home in order, then each payload once', async () => {
     const ws = fresh();
     const chat = await seedForkSource(ws, { memory: [] });
-    await ws.vfs.writeFile('b/inner.md', 'inner');
-    await ws.vfs.writeFile('a.md', 'top');
+    await writeText(ws.vfs, 'b/inner.md', 'inner');
+    await writeText(ws.vfs, 'a.md', 'top');
     await chat.say({ id: 'm1', role: 'user', text: 'p'.repeat(SPILLED_BYTES) });
     await chat.say({ id: 'm2', role: 'user', text: 'q'.repeat(SPILLED_BYTES) });
 

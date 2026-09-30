@@ -1,3 +1,4 @@
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * A facet's `/tmp` is private only if `confinePrincipal` ran on the owner's own `SqliteVFS`; the method has no RPC,
  * so the provisioner runs on the owning object. Proved against the real `NimbusWorkspace` and `rpcExec`.
@@ -136,9 +137,9 @@ describe('a hosted node hardcoding /tmp stays private', () => {
       const asB = nimbusSessionFiles(sessionBoxFor(f, b), b);
 
       // Includes the stage-and-rename commit, which resolves through the same rewrite.
-      await asA.writeFile('/tmp/y', 'from a');
+      await writeText(asA, '/tmp/y', 'from a');
 
-      expect(await asA.readFile('/tmp/y', { encoding: 'utf8' })).toBe('from a');
+      expect(await readText(asA, '/tmp/y')).toBe('from a');
       // Absent for the sibling is ENOENT and stat null: a boundary reads as empty space, never a refusal.
       await expect(asB.readFile('/tmp/y')).rejects.toThrow(expect.objectContaining({ code: 'ENOENT' }));
       expect(await asB.stat('/tmp/y')).toBeNull();
@@ -262,10 +263,10 @@ describe('one box answers both surfaces with the same bytes', () => {
       // A relative shell path and its `/home/main` spelling name the same file; root paths are per-surface.
       expect(await rpcExec(f.host, 'echo live-bytes > tree-probe.md', {}))
         .toMatchObject({ exitCode: 0 });
-      expect(await files.readFile('tree-probe.md', { encoding: 'utf8' })).toBe('live-bytes\n');
-      expect(await files.readFile('/home/main/tree-probe.md', { encoding: 'utf8' })).toBe('live-bytes\n');
+      expect(await readText(files, 'tree-probe.md')).toBe('live-bytes\n');
+      expect(await readText(files, '/home/main/tree-probe.md')).toBe('live-bytes\n');
 
-      await files.writeFile('tree-probe-2.md', 'file-plane bytes\n');
+      await writeText(files, 'tree-probe-2.md', 'file-plane bytes\n');
       expect(await rpcExec(f.host, 'cat tree-probe-2.md', {}))
         .toMatchObject({ exitCode: 0, stdout: 'file-plane bytes\n' });
       expect(await rpcExec(f.host, 'cat /home/main/tree-probe-2.md', {}))

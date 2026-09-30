@@ -48,13 +48,13 @@ async function refused(marker?: GuestMarker, arrange?: (container: FakeSandbox) 
 }
 
 test('an unknown SDK marker protocol refuses without replacing the container', async () => {
-  expect((await refused({ protocolVersion: 2 })).message).toBe('S3Mounts marker protocol 2 not understood');
+  expect((await refused({ protocolVersion: 2 })).message).toBe('S3Mount marker protocol 2 not understood');
 });
 
 test('a store path mounted without an SDK marker refuses by name rather than rebuilding with an empty route table', async () => {
   const error = await refused(undefined, (container) => { container.s3fsMounts.add('/backups'); });
 
-  expect(error.message).toContain('S3Mounts marker missing for /backups, which is unmanaged');
+  expect(error.message).toContain('S3Mount marker missing for /backups, which is unmanaged');
 });
 
 test('a guest marker cannot widen the store route to another box\'s prefix', async () => {
@@ -81,7 +81,7 @@ test('a marker from a mount made at the box prefix is refused: its s3fs sends ke
   expect(error.message).toContain('does not match this devbox store');
 });
 
-/** The marker exactly as sandbox-shim rc.1 writes it for a root mount (`s3_mount/model.rs:41-92`): no
+/** The marker exactly as sandbox-shim 1.0.0 writes it for a root mount (`s3_mount/model.rs:41-92`): no
  *  `keyPrefix`, since `skip_serializing_if` drops an absent one, and each s3fs option's value or `null`. */
 function rootMountMarker(routeId: string) {
   return {
@@ -173,7 +173,7 @@ test('a marker this box cannot route refuses once, terminally, and arms no retry
   chain.container.files.set(markerPath, JSON.stringify({ protocolVersion: 2 }));
   const startupRows = (): number => chain.container.scheduleRows.filter(row => row.callback === 'devboxStartup').length;
   const successor = chain.evict();
-  const reason = '[permanent -> refuse] S3Mounts marker protocol 2 not understood';
+  const reason = '[permanent -> refuse] S3Mount marker protocol 2 not understood';
 
   const refusal = {
     readiness: expect.stringContaining(`this devbox has no attached work directory: ${reason}.`),

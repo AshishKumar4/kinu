@@ -1,3 +1,4 @@
+import { exists as nimbusExists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * CLI smoke test over the production workspace schema via `createTestRuntime`;
  * hand-written DDL would test a shape production never has.
@@ -13,8 +14,8 @@ describe('CLI smoke test', () => {
   test('6 primitives are available and functional', async () => {
     const { rt } = createTestRuntime({ llmResponses: LLM_RESPONSES });
 
-    await rt.storage.vfs.writeFile('test/hello.txt', 'world');
-    const content = await rt.storage.vfs.readFile('test/hello.txt', { encoding: 'utf8' });
+    await writeText(rt.storage.vfs, 'test/hello.txt', 'world');
+    const content = await readText(rt.storage.vfs, 'test/hello.txt');
     expect(content).toBe('world');
 
     await rt.memory.write('memory/test.md', 'test content for searching');
@@ -44,7 +45,7 @@ describe('CLI smoke test', () => {
   test('bootstrap creates scaffold on cold start', async () => {
     const { rt } = createTestRuntime({ llmResponses: LLM_RESPONSES });
 
-    if (await rt.storage.vfs.exists('scaffold/agent.js')) {
+    if (await nimbusExists(rt.storage.vfs, 'scaffold/agent.js')) {
       await rt.storage.vfs.unlink('scaffold/agent.js');
     }
 

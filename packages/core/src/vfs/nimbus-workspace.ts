@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The Nimbus workspace: one durable POSIX filesystem plus shell over the host's SQLite,
  * sharing its transactions. `vfs` and `shell` address the same paths.
@@ -24,7 +25,7 @@ import {
 } from './agent-home';
 import { registerNpm, workspaceCommandNotFound } from './workspace-runtimes';
 import * as v from 'valibot';
-import type { VFS, VfsLinkStat, Shell, ShellExecOptions } from '../types/primitives';
+import type { Shell, ShellExecOptions } from '../types/primitives';
 import { WORKSPACE_ROOT, workspacePath } from './workspace-path';
 import { diagnostics, KinuError, tolerate, toKinuError } from '../obs/index';
 import { atVfsPath } from './errno';
@@ -53,37 +54,7 @@ function shellExecOptions(input: { value: unknown }): ShellExecOptions | undefin
   return options.success ? options.output : undefined;
 }
 
-export interface WorkspaceVFS extends VFS {
-  lstat(path: string): Promise<VfsLinkStat | null>;
-  readlink(path: string): Promise<string>;
-  removeRecursive(path: string): Promise<void>;
-  rename(oldPath: string, newPath: string): Promise<void>;
-  /** Reads only the chunk rows covering the window; for callers that must not hold a whole file. */
-  readRange(path: string, offset: number, length: number): Promise<Uint8Array>;
-}
-
-interface VendorFiles {
-  readText(path: string): string | Promise<string>;
-  readBytes(path: string): Uint8Array | Promise<Uint8Array>;
-  writeFile(path: string, data: string | Uint8Array): void | Promise<void>;
-  readdir(path: string): readonly { readonly name: string }[] | Promise<readonly { readonly name: string }[]>;
-  /** Null when nothing is there; `follow: false` is lstat. */
-  stat(path: string, follow: boolean): VendorStat | null | Promise<VendorStat | null>;
-  readlink(path: string): string | Promise<string>;
-  remove(path: string, recursive: boolean): void | Promise<void>;
-  mkdir(path: string, opts?: { recursive?: boolean }): void | Promise<void>;
-  exists(path: string): boolean | Promise<boolean>;
-  rename(from: string, to: string): void | Promise<void>;
-  readRange(path: string, offset: number, length: number): Uint8Array | Promise<Uint8Array>;
-}
-
-interface VendorStat {
-  readonly size: number;
-  readonly mtimeMs: number;
-  readonly type: string;
-}
-
-function workspaceFiles(vendor: VendorFiles): WorkspaceVFS {
+function workspaceFiles(vendor: WorkspaceBundle['vfs']): WorkspaceBundle['vfs'] {
   const at = <T>(path: string, syscall: string, call: (absolute: string) => T | Promise<T>): Promise<T> => {
     const absolute = workspacePath(path);
 
@@ -91,48 +62,37 @@ function workspaceFiles(vendor: VendorFiles): WorkspaceVFS {
   };
 
   return {
-    readFile: (path, opts) => at(path, 'open', (absolute) => opts?.encoding === 'utf8' ? vendor.readText(absolute) : vendor.readBytes(absolute)),
+    readFile: (path) => at(path, 'open', (absolute) => vendor.readFile(absolute)),
     // Creating a file makes no parents, so the directories come first, as the same credential.
     writeFile: (path, data) => at(path, 'open', async (absolute) => {
       await vendor.mkdir(absolute.slice(0, absolute.lastIndexOf('/')) || '/', { recursive: true });
 
       return vendor.writeFile(absolute, data);
     }),
-    readdir: async (path) => (await at(path, 'scandir', (absolute) => vendor.readdir(absolute))).map((entry) => entry.name),
-    async stat(path) {
-      const st = await at(path, 'stat', (absolute) => vendor.stat(absolute, true));
-
-      return st === null ? null : { size: st.size, mtimeMs: st.mtimeMs, isDir: st.type === 'directory' };
-    },
-    async lstat(path) {
-      const st = await at(path, 'lstat', (absolute) => vendor.stat(absolute, false));
-
-      return st === null ? null : { size: st.size, mtimeMs: st.mtimeMs, isDir: st.type === 'directory', isSymlink: st.type === 'symlink' };
-    },
+    readdir: (path) => at(path, 'scandir', (absolute) => vendor.readdir(absolute)),
+    stat: (path, options) => at(path, options?.follow === false ? 'lstat' : 'stat', (absolute) => vendor.stat(absolute, options)),
     readlink: (path) => at(path, 'readlink', (absolute) => vendor.readlink(absolute)),
-    unlink: (path) => at(path, 'unlink', (absolute) => vendor.remove(absolute, false)),
+    unlink: (path) => at(path, 'unlink', (absolute) => vendor.unlink(absolute)),
     mkdir: (path, opts) => at(path, 'mkdir', (absolute) => vendor.mkdir(absolute, opts)),
-    exists: (path) => at(path, 'access', (absolute) => vendor.exists(absolute)),
-    removeRecursive: (path) => at(path, 'rm', (absolute) => vendor.remove(absolute, true)),
+    removeRecursive: (path) => at(path, 'rm', (absolute) => vendor.removeRecursive(absolute)),
     rename: (oldPath, newPath) => at(oldPath, 'rename', (absolute) => vendor.rename(absolute, workspacePath(newPath))),
     readRange: (path, offset, length) => at(path, 'read', (absolute) => vendor.readRange(absolute, offset, length)),
   };
 }
 
 /** The session user's view, the shell process's own, so every write passes the lease check a command's does. */
-function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceVFS {
+function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceBundle['vfs'] {
   const fs = async (): Promise<NimbusWorkspace['fs']> => (await open()).fs;
 
   return workspaceFiles({
-    readText: async (path) => (await fs()).readFileString(path),
-    readBytes: async (path) => (await fs()).readFile(path),
+    readFile: async (path) => (await fs()).readFile(path),
     writeFile: async (path, data) => (await fs()).writeFile(path, data),
     readdir: async (path) => (await fs()).readdir(path),
-    stat: async (path, follow) => (await fs()).stat(path, { follow }),
+    stat: async (path, options) => (await fs()).stat(path, options),
     readlink: async (path) => (await fs()).readlink(path),
-    remove: async (path, recursive) => (await fs()).remove(path, { recursive }),
+    unlink: async (path) => (await fs()).remove(path),
+    removeRecursive: async (path) => (await fs()).remove(path, { recursive: true }),
     mkdir: async (path, opts) => (await fs()).mkdir(path, opts),
-    exists: async (path) => (await fs()).exists(path),
     rename: async (from, to) => (await fs()).rename(from, to),
     readRange: async (path, offset, length) => (await fs()).readRange(path, offset, length),
   });
@@ -162,7 +122,7 @@ function workspaceShell(open: () => Promise<NimbusWorkspace>): Shell {
 
 /** One agent's credentialed view of the same rows, on both the file and shell planes. */
 export interface WorkspaceAgentPlane {
-  readonly vfs: WorkspaceVFS;
+  readonly vfs: WorkspaceBundle['vfs'];
   readonly shell: Shell;
 }
 
@@ -174,21 +134,20 @@ export interface WorkspaceAgent {
 }
 
 /** The same `SqliteVFS`, credentialed as the agent; never the workspace `.fs`, which is pinned to the session user. */
-function agentVfs(vfs: CredentialedVfs): WorkspaceVFS {
+function agentVfs(vfs: CredentialedVfs): WorkspaceBundle['vfs'] {
   return workspaceFiles({
-    readText: (path) => vfs.readFileString(path),
-    readBytes: (path) => vfs.readFile(path),
+    readFile: (path) => vfs.readFile(path),
     writeFile: (path, data) => vfs.writeFile(path, data),
     readdir: (path) => vfs.readdir(path),
-    stat: (path, follow) => {
-      const st = tolerate(() => (follow ? vfs.stat(path) : vfs.lstat(path)), 'enoent');
+    stat: (path, options) => {
+      const st = tolerate(() => (options?.follow === false ? vfs.lstat(path) : vfs.stat(path)), 'enoent');
 
       return st === undefined ? null : { size: st.size, mtimeMs: st.mtime, type: st.type };
     },
     readlink: (path) => vfs.readlink(path),
-    remove: (path, recursive) => { if (recursive) vfs.removeRecursive(path); else vfs.unlink(path); },
+    unlink: (path) => vfs.unlink(path),
+    removeRecursive: (path) => { vfs.removeRecursive(path); },
     mkdir: (path, opts) => vfs.mkdir(path, opts),
-    exists: (path) => vfs.exists(path),
     rename: (from, to) => vfs.rename(from, to),
     readRange: (path, offset, length) => vfs.readRange(path, offset, length),
   });
@@ -221,7 +180,7 @@ export interface WorkspaceSession {
 }
 
 export interface WorkspaceBundle {
-  vfs: WorkspaceVFS;
+  vfs: VFS & Required<Pick<VFS, 'readRange' | 'readlink' | 'rename' | 'removeRecursive'>>;
   shell: Shell;
   privileged(): Promise<WorkspacePrivileged>;
   /** Cached per uid and idempotent: a shell holds state (`cd`, exports). */

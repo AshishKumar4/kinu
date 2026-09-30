@@ -1,16 +1,7 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Composes a backend's raw primitives into a full AgentRuntime. */
 
-import type {
-  SqlExecutor,
-  RawSqlExec,
-  VFS,
-  Memory,
-  Identity,
-  LLM,
-  Executor,
-  Schedule,
-  Shell,
-} from './types/primitives';
+import type { SqlExecutor, RawSqlExec, Memory, Identity, LLM, Executor, Schedule, Shell } from './types/primitives';
 import type { AgentRuntime, CraftStore, RequestShellApproval } from './types/agent-runtime';
 import type { ExecutionRouter } from './execution/types';
 import type { FileCheckpoints } from './checkpoints/types';

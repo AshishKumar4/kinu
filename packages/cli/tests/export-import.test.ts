@@ -1,3 +1,4 @@
+import { exists, readText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * `kinu export` / `kinu import` end to end: a cloud workspace exported over the paged
  * RPC restores through the same `kinu import` as a local export.
@@ -132,9 +133,9 @@ describe('kinu export / import', () => {
 
     try {
       const { vfs } = createInlineWorkspace(db);
-      expect(await vfs.readFile('docs/note.txt', { encoding: 'utf8' })).toBe('project bytes outside SQLite');
+      expect(await readText(vfs, 'docs/note.txt')).toBe('project bytes outside SQLite');
       expect(await vfs.readFile('bytes.bin')).toEqual(bytes);
-      expect(await vfs.exists('empty')).toBe(true);
+      expect(await exists(vfs, 'empty')).toBe(true);
     } finally {
       db.close();
     }

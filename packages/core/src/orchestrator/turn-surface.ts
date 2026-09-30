@@ -1,10 +1,11 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Per-turn skill resolution, tool-surface restriction and facts block, shared by both backends. */
 
 import type { ToolSet } from 'ai';
 import {
   resolveActiveSkills, extractExplicitInvocations, admitSkillsIndex, admitActiveSkills,
 } from '../skills/loader';
-import { discoverSkills, BUILTIN_SKILL_HEADERS, type SkillsVfs } from '../skills/discover';
+import { discoverSkills, BUILTIN_SKILL_HEADERS } from '../skills/discover';
 import { unionAllowedTools, toolAllowedBySkills, trustedActiveSkills, renderActiveSkillsSection } from '../skills/render';
 import type { ActiveSkillSet, SkillsIndex } from '../skills/types';
 import type { InstructionTrustResolver } from '../types/instruction-trust';
@@ -27,7 +28,7 @@ export interface TurnSkillSurface {
  * (same derivation as cf-backend/src/user/mcp.ts). Never fails the turn: falls back to built-ins.
  */
 export async function resolveTurnSkills(opts: {
-  vfs: SkillsVfs;
+  vfs: VFS;
   config: TurnSkillsConfig;
   userText: string;
   limits: ModelWindow;
@@ -76,7 +77,7 @@ const STEER_SKILLS_HEADING = 'The message above activates these skills; they app
 
 async function admitTurnSkills(
   opts: {
-    vfs: SkillsVfs;
+    vfs: VFS;
     config: TurnSkillsConfig;
     userText: string;
     trust: InstructionTrustResolver;

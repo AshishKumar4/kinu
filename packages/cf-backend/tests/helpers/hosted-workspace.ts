@@ -12,7 +12,7 @@ import { sqlOver } from '@kinu.run/test-utils';
 import { createAgentTracing, createRecordingTracer } from '@kinu.run/core/obs';
 import { makeExecRaw, makeSqlExec } from '../../../core/tests/helpers';
 import { makeCtx, makeEnv } from './actor-harness';
-import { createWorkspaceActorHost, type WorkspaceHostSeams } from '../../src/actor-hosting';
+import { createWorkspaceActorHost, HostedActorHomes, type WorkspaceHostSeams } from '../../src/actor-hosting';
 import { createHostedWorkspace } from '../../src/workspace-host';
 
 const opened: Database[] = [];
@@ -92,6 +92,9 @@ export async function hostedWorkspace(
   let rootRuntime: AgentRuntime | null = null;
 
   const seams: WorkspaceHostSeams = {
+    homes: new HostedActorHomes({
+      directory, homeHost: () => seams.homeHost(),
+    }),
     env,
     ctx,
     agent: {

@@ -36,7 +36,6 @@ export interface AgentTurnHooks {
 interface PendingTurn {
   readonly reference: ActorReference;
   readonly request: HostedTurnRequest;
-  readonly task: AgentTurnTask;
   readonly hooks: AgentTurnHooks;
   prepared: PreparedHostedTurn | null;
   profile?: ResolvedTurnProfile;
@@ -63,23 +62,22 @@ export class AgentTurns {
 
   constructor(private readonly deps: AgentTurnsDeps) {}
 
-  start(reference: ActorReference, request: HostedTurnRequest, task: AgentTurnTask, hooks: AgentTurnHooks): Promise<void> {
+  start(reference: ActorReference, request: HostedTurnRequest, hooks: AgentTurnHooks): Promise<void> {
     const pending: PendingTurn = {
-      reference, request, task, hooks, prepared: null, delivered: false, over: false, done: Promise.withResolvers<void>(),
+      reference, request, hooks, prepared: null, delivered: false, over: false, done: Promise.withResolvers<void>(),
     };
 
     this.pending.set(request.sequenceId, pending);
 
     return settle(attempt({ doing: "handing a delegated turn to the agent's own isolate", otherwise: 'io' }, async () => {
       await hooks.begin();
-      await this.deps.deliver(reference, task);
+      await this.deps.deliver(reference, { sequenceId: request.sequenceId, body: request.body, mode: request.mode });
       pending.delivered = true;
     }).pipe(Effect.catch((failure) => this.closing(pending, { failure }))));
   }
 
   async run(reference: ActorReference, input: HeadInput, inference: HeadInferenceDeps): Promise<HeadReport> {
     const result = Promise.withResolvers<Effect.Effect<HeadReport, KinuError>>();
-    const task = { sequenceId: input.id, body: input.task, mode: input.mode };
     const opened = { actorId: reference.actorId, turnId: input.id };
     const ledger = new AgentOpenTurns(this.deps.sql);
     const interruptions: Promise<void>[] = [];
@@ -92,7 +90,7 @@ export class AgentTurns {
       ledger.close(opened);
     };
 
-    await this.start(reference, { ...task, run: { input, inference } }, task, {
+    await this.start(reference, { sequenceId: input.id, body: input.task, mode: input.mode, run: { input, inference } }, {
       begin: async () => { ledger.open(opened, Date.now()); },
       ended: async ({ activity: _activity, narration: _narration, produced, errorMessage, ...report }) => {
         result.resolve(attempt({ doing: 'receiving an isolated swarm turn', otherwise: 'io' }, async (): Promise<HeadReport> => {
@@ -237,7 +235,7 @@ export class AgentTurns {
   }
 
   private mode(pending: PendingTurn): WorkMode {
-    return pending.task.mode === 'plan' ? 'plan' : pending.profile?.workMode ?? pending.task.mode;
+    return pending.request.mode === 'plan' ? 'plan' : pending.profile?.workMode ?? pending.request.mode;
   }
 
   private dynamic(pending: PendingTurn): DynamicContext {

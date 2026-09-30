@@ -215,16 +215,23 @@ const DEAD_END = `(() => {
  *  the row's deadline, whose SIGTERM runs the hold below, so the run ends naming the wait and not only the row. */
 const openWaits = new Set<{ readonly what: string }>();
 
+/** Each live frame ledger's account of the traffic since its restart, printed with the open waits it may hold. */
+const liveLedgers = new Set<() => string>();
+
 let dropWaitsHold: (() => void) | null = null;
 
-/** `wait`, logged by what it waits for when it opens and when it is reached, and named while it is open. */
-async function named<Value>(what: string, wait: () => Promise<Value>): Promise<Value> {
+/** `wait`, logged by what it waits for when it opens and when it is reached, and named while it is open. A step
+ *  that is not a wait on a page (a create through the API, a navigation) is named through it too, so a slow run's
+ *  log accounts for every second, not only the page waits. */
+export async function named<Value>(what: string, wait: () => Promise<Value>): Promise<Value> {
   const open = { what };
   const started = performance.now();
 
   openWaits.add(open);
   dropWaitsHold ??= holdForRelease('the open waits', () => {
     process.stderr.write(`ended while waiting for ${[...openWaits].map((pending) => pending.what).join('; ')}\n`);
+
+    for (const account of liveLedgers) process.stderr.write(`  the page's traffic since its ledger's last restart: ${account()}\n`);
   });
   process.stderr.write(`  waiting for ${what}\n`);
 
@@ -355,7 +362,10 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
 
   await cdp.send('Network.enable');
 
-  const asked = new Map<string, string>();
+  /** An ask is keyed by its socket and its id: ids restart per socket, so two sockets or two loads reuse them. */
+  interface Ask { readonly socket: string; readonly method: string }
+
+  const asked = new Map<string, Ask>();
   const answered = new Set<string>();
   const arrived = new Set<string>();
   let closed = false;
@@ -385,12 +395,26 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
     return promise;
   };
 
-  cdp.on('Network.webSocketFrameSent', (event: { response?: { payloadData?: string } }) => {
+  /** Each socket's path by CDP request id, and what the page sent over each since the restart. */
+  const socketPaths = new Map<string, string>();
+  const framesSent = new Map<string, number>();
+  const requests = new Map<string, number>();
+
+  const pathOf = (url: string | undefined): string => new URL(url ?? 'ws://unknown/').pathname;
+  const tally = (into: Map<string, number>, key: string): void => { into.set(key, (into.get(key) ?? 0) + 1); };
+
+  cdp.on('Network.webSocketCreated', (event: { requestId: string; url?: string }) => { socketPaths.set(event.requestId, pathOf(event.url)); });
+  cdp.on('Network.requestWillBeSent', (event: { request?: { url?: string } }) => { tally(requests, pathOf(event.request?.url)); });
+  cdp.on('Network.webSocketFrameSent', (event: { requestId: string; response?: { payloadData?: string } }) => {
     const sent = frame(event.response?.payloadData);
 
-    if (sent?.type === 'rpc' && sent.id !== undefined && sent.method !== undefined) asked.set(sent.id, sent.method);
+    tally(framesSent, socketPaths.get(event.requestId) ?? event.requestId);
+
+    if (sent?.type === 'rpc' && sent.id !== undefined && sent.method !== undefined) {
+      asked.set(`${event.requestId} ${sent.id}`, { socket: event.requestId, method: sent.method });
+    }
   });
-  cdp.on('Network.webSocketFrameReceived', (event: { response?: { payloadData?: string } }) => {
+  cdp.on('Network.webSocketFrameReceived', (event: { requestId: string; response?: { payloadData?: string } }) => {
     const received = frame(event.response?.payloadData);
 
     if (received === null) return;
@@ -399,22 +423,51 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
 
     // A streamed answer's chunks carry `done: false`; only its last frame, or
     // a plain answer, ends the ask.
-    if (received.type === 'rpc' && received.id !== undefined && received.done !== false) answered.add(received.id);
+    if (received.type === 'rpc' && received.id !== undefined && received.done !== false) answered.add(`${event.requestId} ${received.id}`);
+    check();
+  });
+  // A socket that closed will answer nothing more: its open asks are retired, as the page's own client rejects them.
+  cdp.on('Network.webSocketClosed', (event: { requestId: string }) => {
+    for (const [key, ask] of asked) if (ask.socket === event.requestId && !answered.has(key)) asked.delete(key);
+
     check();
   });
 
+  /** What the page asked and sent since the restart: each method's count and the asks still unanswered with their
+   *  socket, the frames sent per socket, and the requests sent per path. */
+  const account = (): string => {
+    const counts = new Map<string, number>();
+
+    for (const ask of asked.values()) tally(counts, ask.method);
+
+    const counted = (from: Map<string, number>): string => [...from].sort((a, b) => b[1] - a[1]).slice(0, 12)
+      .map(([name, times]) => `${name} ×${String(times)}`).join(', ') || 'none';
+
+    const open = [...asked].filter(([key]) => !answered.has(key))
+      .map(([key, ask]) => `${ask.method} #${key.split(' ')[1] ?? ''} on ${socketPaths.get(ask.socket) ?? ask.socket}`);
+
+    return `rpc: ${counted(counts)}; unanswered: ${open.join(', ') || 'none'}; frames sent: ${counted(framesSent)}; requests: ${counted(requests)}`;
+  };
+
+  liveLedgers.add(account);
+
   return {
-    quietAfter: (...methods) => wait(() => methods.every((method) => [...asked].some(([id, name]) => name === method && answered.has(id)))
-      && [...asked.keys()].every((id) => answered.has(id))),
-    quiet: () => [...asked.keys()].every((id) => answered.has(id)),
+    quietAfter: (...methods) => wait(() => methods.every((method) => [...asked].some(([key, ask]) => ask.method === method && answered.has(key)))
+      && [...asked.keys()].every((key) => answered.has(key))),
+    quiet: () => [...asked.keys()].every((key) => answered.has(key)),
     received: (type) => wait(() => arrived.has(type)),
     turnClosed: () => wait(() => closed),
     restart() {
       asked.clear();
       answered.clear();
       arrived.clear();
+      framesSent.clear();
+      requests.clear();
     },
-    stop: async () => { await cdp.detach(); },
+    stop: async () => {
+      liveLedgers.delete(account);
+      await cdp.detach();
+    },
   };
 }
 

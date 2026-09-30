@@ -1225,18 +1225,6 @@ body > .annotation-toolbar {
   backdrop-filter: none;
 }
 
-/* Copy belongs in the document header. The viewer keeps its global-comment
-   control here because that action owns Plannotator's internal popover. */
-.plan-review-document [data-print-region="article"] > [data-print-hide] > button:last-child {
-  display: none;
-}
-
-/* Read-only leaves the strip its one HIDDEN copy button, so `:empty` never
-   matched: the strip stayed a zero-height flex box still spending its margin
-   above the first block. One remaining child is exactly the read-only case. */
-.plan-review-document [data-print-region="article"] > [data-print-hide]:has(> button:only-child) {
-  display: none;
-}
 
 .plan-review-document [data-block-id] a {
   color: var(--c-accent-fg);

@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { expect, test } from 'bun:test';
 import { REAL_CLOCK } from '@kinu.run/core';
 import { createHash } from 'node:crypto';
@@ -35,8 +36,8 @@ async function fixture() {
   rt.executor = createSandboxedExecutor();
   const files = rt.agentStateVfs ?? rt.storage.vfs;
   await files.mkdir('scaffold', { recursive: true });
-  await files.writeFile(rt.identity.scaffold.path + '.v1', OLD);
-  await files.writeFile(rt.identity.scaffold.path + '.v2', NEW);
+  await writeText(files, rt.identity.scaffold.path + '.v1', OLD);
+  await writeText(files, rt.identity.scaffold.path + '.v2', NEW);
 
   const chatModel = scriptedTurnModel({ doGenerate: () => ({
     content: [{ type: 'text', text: 'builtin answer' }],
@@ -69,7 +70,7 @@ test('an admitted version keeps its actual bytes across live-alias and later ver
   Reflect.set(admitted.program, 'source', NEW);
   expect(admitted.program).toEqual({ kind: 'scaffold', version: 1, source: OLD,
     digest: createHash('sha256').update(OLD).digest('hex') });
-  await files.writeFile(rt.identity.scaffold.path + '.v1', NEW);
+  await writeText(files, rt.identity.scaffold.path + '.v1', NEW);
   expect(await text(admitted.events)).toBe('version one');
   const next = await admitActorTurn({ runtime: rt, mode: 'build', task: 'go', loopVersion: 2, chat });
   expect(await text(next.events)).toBe('version two');
@@ -85,7 +86,7 @@ test('an actor Build turn does not inherit another actor\'s ambient Plan mode', 
 
 test('Plan uses the builtin loop without reading or evaluating a promoted initializer', async () => {
   const { rt, files, chat } = await fixture();
-  await files.writeFile(rt.identity.scaffold.path + '.v1', 'throw new Error("promoted initializer ran");');
+  await writeText(files, rt.identity.scaffold.path + '.v1', 'throw new Error("promoted initializer ran");');
   const admitted = await admitActorTurn({ runtime: rt, mode: 'plan', task: 'go', loopVersion: 1, chat });
   expect(admitted.program).toEqual({ kind: 'builtin', version: 0 });
   expect(await text(admitted.events)).toBe('builtin answer');
@@ -96,8 +97,8 @@ test('cancellation while the selected source is being read prevents a later prog
   const reading = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const readFile = files.readFile.bind(files);
-  files.readFile = async (path, options) => {
-    const bytes = await readFile(path, options);
+  files.readFile = async (path) => {
+    const bytes = await readFile(path);
     reading.resolve();
     await release.promise;
 
@@ -140,7 +141,7 @@ test('the real head caller executes its selected program and retains its produce
 test('separate model calls inside a selected head program share its real mission budget', async () => {
   const { rt, files, chat, chatModel } = await fixture();
   rt.identity.scaffold.version = async () => 1;
-  await files.writeFile(rt.identity.scaffold.path + '.v1', 'async function run() { await host.llmStream({ system: "sys", messages: [{ role: "user", content: "first" }] }); await host.llmStream({ system: "sys", messages: [{ role: "user", content: "second" }] }); }');
+  await writeText(files, rt.identity.scaffold.path + '.v1', 'async function run() { await host.llmStream({ system: "sys", messages: [{ role: "user", content: "first" }] }); await host.llmStream({ system: "sys", messages: [{ role: "user", content: "second" }] }); }');
   const governor = new MissionGovernor({ actor: rt.actor, storage: rt.storage });
   governor.declare('head-budget', { tokens: 1 }, {});
   const mission = localMissionScope(governor, ['head-budget']);
@@ -166,8 +167,8 @@ test('cancelling one actor interrupts its cooperative tool without cancelling th
   const first = await fixture();
   const second = await fixture();
   const source = 'async function run() { await host.emit({ type: "text_delta", text: await host.callTool("hold", {}) }); }';
-  await first.files.writeFile(first.rt.identity.scaffold.path + '.v1', source);
-  await second.files.writeFile(second.rt.identity.scaffold.path + '.v1', source);
+  await writeText(first.files, first.rt.identity.scaffold.path + '.v1', source);
+  await writeText(second.files, second.rt.identity.scaffold.path + '.v1', source);
   const firstStarted = Promise.withResolvers<void>();
   const secondStarted = Promise.withResolvers<void>();
   const releaseSecond = Promise.withResolvers<string>();
@@ -221,7 +222,7 @@ test('cancelling one actor interrupts its cooperative tool without cancelling th
 
 test('the selected loop cancels its cooperative model request with the actor', async () => {
   const { rt, files, chat } = await fixture();
-  await files.writeFile(rt.identity.scaffold.path + '.v1', 'async function run() { await host.llmStream({ system: "sys", messages: [{ role: "user", content: "wait" }] }); }');
+  await writeText(files, rt.identity.scaffold.path + '.v1', 'async function run() { await host.llmStream({ system: "sys", messages: [{ role: "user", content: "wait" }] }); }');
   const started = Promise.withResolvers<void>();
   const request = Promise.withResolvers<never>();
   let providerStopped = false;

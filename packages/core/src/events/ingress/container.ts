@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Producer for `sandbox_cb` events from inside the agent's container, via an intercepted virtual
  * host. The workspace comes from backend config and trust is captured at runtime handoff, never
@@ -13,7 +14,7 @@ import type { EventLog } from '../hub/log';
 import { IngressRejectedError, type IngressDescriptor, type TrustLevel } from '../hub/types';
 import { spillEventContent } from '../hub/content-spill';
 import { EVENT_BRIEF_MAX_CHARS } from '../hub/visibility';
-import type { VFS } from '../../types/primitives';
+
 import type { JsonValue } from '../../utils/json';
 
 const MAX_COMMAND_CHARS = 4_000;
