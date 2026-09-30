@@ -898,6 +898,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // a chat and a head identically; branches under an unresolved profile are unreproducible.
       resolveProfile: (input) => this.hostedActorProfile(input),
       reportModelCall: (report) => { this.reportModelCall(report); },
+      refusals: (actor) => this.refusalNoticesFor(actor),
       liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
       modelOperations: this.modelOperations,
       pricing: (spec) => this.modelCatalog.pricing(spec),

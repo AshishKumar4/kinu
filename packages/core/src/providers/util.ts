@@ -290,6 +290,8 @@ function spentAllowance(failure: { readonly cause: unknown }): boolean {
   return false;
 }
 
+export const OWNER_FIXABLE_REFUSALS: ReadonlySet<ErrorCode> = new Set(['denied', 'budget']);
+
 export function providerRefusalCode(failure: { readonly cause: unknown }): ErrorCode | null {
   if (spentAllowance(failure)) return 'budget';
   const status = providerStatusOf(failure);

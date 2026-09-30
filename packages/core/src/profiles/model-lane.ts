@@ -1,14 +1,16 @@
 import type { ActorReference } from '../identity/actor-handle';
 import { Effect } from 'effect';
 import { diagnostics, KinuError, settle, toKinuError } from '../obs/index';
-import { FallbackRoute, type CallFailure } from '../providers/fallback-route';
+import { accountOf, MAIN_ACCOUNT } from '../credentials/accounts';
+import { credentialOrUnknown, FallbackRoute, type CallFailure } from '../providers/fallback-route';
 import type { ReasoningEffort } from '../providers/effort';
-import { describeProviderError, providerRefusalCode, toProviderError } from '../providers/util';
+import { formatModelSpec, parseModelSpec } from '../providers/types';
+import { describeProviderError, OWNER_FIXABLE_REFUSALS, providerRefusalCode, toProviderError } from '../providers/util';
 import type { LLM } from '../types/primitives';
 import type { ResolvedTurnProfile } from './resolve';
 import { resolveModelRoute, type ModelRouteResolution, type ProfileRoutedSource } from './model-route';
 import { currentOperationProfile, operationProfileStream, resolveOperationProfile, runOperationProfile } from './operation';
-import type { TierRefusals } from './tier-refusals';
+import type { TierRefusal, TierRefusals } from './tier-refusals';
 
 export interface RouteCallComponents {
   llm(resolution: ModelRouteResolution): LLM;
@@ -25,6 +27,18 @@ interface ChainEntry {
   readonly reasoningEffort: ReasoningEffort | null;
 }
 
+function asCalled(spec: string, credentialOf: RouteCallComponents['credentialOf']): Effect.Effect<string> {
+  const parsed = parseModelSpec(spec);
+
+  if (credentialOf === undefined || parsed.account !== undefined) return Effect.succeed(spec);
+
+  return credentialOrUnknown(credentialOf, spec).pipe(Effect.map((key) => {
+    const account = key === null ? MAIN_ACCOUNT : accountOf(key);
+
+    return account === MAIN_ACCOUNT ? spec : formatModelSpec({ ...parsed, account });
+  }));
+}
+
 /** The route's model, then its configured chain, as a turn walks it. */
 export async function completeOnRoute(route: ModelRouteResolution, lane: RouteCallComponents, prompt: string): Promise<string> {
   const chain = new FallbackRoute<ChainEntry>({
@@ -37,6 +51,10 @@ export async function completeOnRoute(route: ModelRouteResolution, lane: RouteCa
 
   if (cooled !== undefined) chain.tried.push(cooled.spec);
 
+  const refused: { readonly spec: string; readonly cause: unknown }[] = [];
+  const notices = lane.refusals;
+  const since = notices?.changes() ?? 0;
+
   const call = (serving: ChainEntry): Effect.Effect<string, KinuError> => Effect.tryPromise({
     try: () => lane.llm({ ...route, model: serving.spec, reasoningEffort: serving.reasoningEffort }).complete(prompt),
     catch: (cause) => toProviderError({ doing: `calling the ${route.tier} tier`, cause, provider: serving.spec }),
@@ -44,12 +62,21 @@ export async function completeOnRoute(route: ModelRouteResolution, lane: RouteCa
     Effect.tap(() => Effect.sync(() => { lane.refusals?.answered(route.tier); })),
     Effect.catch((error) => Effect.gen(function* () {
       const failure: CallFailure = { cause: error.cause, streamed: false, error };
+      const code = providerRefusalCode({ cause: error });
+      const ownerMustFix = code !== null && OWNER_FIXABLE_REFUSALS.has(code);
+
+      if (ownerMustFix) refused.push({ spec: serving.spec, cause: error.cause });
+
       const next = yield* Effect.promise(() => chain.next(serving.spec, failure));
 
       if (next === undefined) {
-        const refused = providerRefusalCode({ cause: error });
+        if (ownerMustFix && notices !== undefined) {
+          const refusals: TierRefusal[] = yield* Effect.all(refused.map(({ spec, cause }) => asCalled(spec, lane.credentialOf).pipe(
+            Effect.map((model) => ({ model, cause })),
+          )));
 
-        if (refused === 'denied' || refused === 'budget') lane.refusals?.refused({ tier: route.tier, model: route.model, cause: error.cause });
+          notices.refused({ tier: route.tier, since, refusals });
+        }
 
         const exhausted = chain.exhausted(failure);
 
