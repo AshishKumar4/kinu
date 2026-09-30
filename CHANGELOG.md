@@ -34,6 +34,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- Release CI fixtures record the opaque ladder row the deploy passes to its gate runner, rather than expanding it again in a locale-dependent shell. The device sandbox's GPU observer accepts a machine with no GPU nodes while still checking every node present.
 - The built-Worker heap probe uses the deployment's asset directory and native Workers AI transport. Its parked call receives SSE headers before waiting for tokens; the measured pre-header request cost is recorded separately, with all heap bounds unchanged.
 - CLI distribution tests generate their own release signing key in a throwaway home. CI needs no deployment key.
 - Swarm heads, nodes and steer branches now run their model loops in the same isolated agent facets as hired and background agents. Their turn state stays in each facet's database; tools, search state and the file plane stay in the workspace. Retired task histories remain available to export until their parent is deleted.

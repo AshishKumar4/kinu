@@ -2,12 +2,12 @@ import { beforeAll, describe, expect, test } from "bun:test";
 import { statSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { cpus, tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { childEnv, scratchDir } from "@kinu.run/test-utils";
 import { parseReleaseManifest } from "@kinu.run/core/deploy";
 import { generateReleaseSigningKey } from "../packages/core/src/http/release-signing";
 import {
-  DEPLOY_PHASES, GATE_DEADLINE_SECONDS, LADDER, PATH_IGNORE_FLAG, SHARED_RESOURCES, claims, deployPlan,
+  DEPLOY_PHASES, GATE_DEADLINE_SECONDS, LADDER, SHARED_RESOURCES, deployPlan,
   printPlan,
 } from "./ladder";
 import { costRssMb, costThreads, readCosts } from "./gate-cost";
@@ -21,30 +21,14 @@ import { BUILTIN_TUI_THEMES, createThemeRegistry, DEFAULT_TUI_THEME_SELECTION } 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 
 
-/** The plan the runner consumes, and the same plan expanded the way bash
- *  expands it inside the fixture: every glob word replaced by the files
- *  `claims()` resolves it to, which is the set the ladder credits the gate
- *  with. One derivation drives the files the fixture writes, the plan the
- *  fixture's `bun` stub prints, and every expected command line below, so no
- *  list here can drift from the ladder. */
-const tracked = trackedFiles();
-
+/** The runner passes each plan command unchanged to `ladder.ts --gate`; argv and globs resolve inside the ladder. */
 const PLAN = deployPlan();
 
 const PLAN_TEXT = printPlan(PLAN);
 
-function expandGlobs(run: string): string {
-  if (!run.includes("*")) return run;
-  const words = run.split(" ");
-  const files = claims(run, tracked);
-
-  return [...words.filter((word) => !word.includes("/") || word.startsWith(PATH_IGNORE_FLAG)), ...files].join(" ");
-}
-
-const GLOB_EXPANDED_FILES = [...new Set(PLAN.filter((row) => row.run.includes("*")).flatMap((row) => claims(row.run, tracked)))];
 
 /** Every pre-publish gate in plan order, as the fixture's event log spells it. */
-const REQUIRED_GATES: readonly string[] = PLAN.filter((row) => row.phase !== "post-publish").map((row) => expandGlobs(row.run));
+const REQUIRED_GATES: readonly string[] = PLAN.filter((row) => row.phase !== "post-publish").map((row) => row.run);
 
 /** The gates that run AFTER the upload. The fixture's build stub exits
  *  non-zero on purpose, so no run here reaches them; what is asserted about
@@ -58,7 +42,7 @@ const PRE_PUBLISH_WAVES: readonly (readonly string[])[] = DEPLOY_PHASES
 
 /** The commands one phase of the plan runs, as the deploy expands them. */
 function phaseGates(phase: string): string[] {
-  return PLAN.filter((row) => row.phase === phase).map((row) => expandGlobs(row.run));
+  return PLAN.filter((row) => row.phase === phase).map((row) => row.run);
 }
 
 /** A staging deploy's own step before its build: HEAD's record on staging withdrawn (scripts/promote.ts). */
@@ -113,9 +97,7 @@ if [ "$command_line" = "bun scripts/ladder.ts --plan" ]; then
   exit 0
 fi
 if [ "$1" = "scripts/ladder.ts" ] && [ "$2" = "--gate" ]; then
-  gate="$3"
-  set -- $gate
-  command_line="$*"
+  command_line="$3"
 fi
 printf '%s\\n' "$command_line" >> "$KINU_DEPLOY_GATE_LOG"
 # WHAT THE INFRASTRUCTURE GATE ACTUALLY SAW. The phase travels in the
@@ -261,11 +243,6 @@ function runDeploy({
   const planFile = join(fixture, "plan.tsv");
   writeFileSync(planFile, `${PLAN_TEXT}\n`);
 
-  for (const relativePath of GLOB_EXPANDED_FILES) {
-    const path = join(fixture, relativePath);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, "");
-  }
 
   executable(
     join(fixture, "scripts", "deploy.sh"),
@@ -701,7 +678,7 @@ describe("deploy gate", () => {
   // 2026-09-18) this reports twelve overlapping browser-row pairs.
   test("two rows holding the browser never overlap, and the rest of the wave still does", () => {
     const run = runDeploy({ spans: true });
-    const sharedRuns = PLAN.filter((row) => row.shared === "browser").map((row) => expandGlobs(row.run));
+    const sharedRuns = PLAN.filter((row) => row.shared === "browser").map((row) => row.run);
 
     expect(sharedRuns.length, "no row holds the browser; the derivation stopped deriving").toBeGreaterThan(1);
     const shared = run.spans.filter((span) => sharedRuns.includes(span.run));
