@@ -43,12 +43,15 @@ function openRuns(events: readonly RunEvent[]): string[] {
   return events.filter((event) => event.type === 'run_start' && !ended.has(event.runId)).map((event) => event.runId);
 }
 
+/** What one poll of {@link settle} saw: whether the workspace was busy, and the ledger it read. */
+export type SettlePoll = (busy: boolean, events: readonly RunEvent[]) => void;
+
 /**
  * Wait until the workspace has nothing left to do for this turn: no run open, no background job
  * running, no helper working, seen on two polls in a row. A background job's completion wakes the
  * agent in a run of its own, and that run answers the prompt too.
  */
-export async function settle(session: KinuPublicSession, timeline?: TrialTimeline): Promise<void> {
+export async function settle(session: KinuPublicSession, polled?: SettlePoll): Promise<void> {
   let quiet = 0;
   let dropped = 0;
 
@@ -62,7 +65,7 @@ export async function settle(session: KinuPublicSession, timeline?: TrialTimelin
         || helpers.some((helper) => helper.status === 'working');
 
       dropped = 0;
-      timeline?.mark('poll', { busy });
+      polled?.(busy, events);
     } catch (error) {
       // An eviction closes the socket under the polls in flight, and the next poll redials. Three
       // failed polls in a row is a deployment that is not answering, and fails the trial as that.
@@ -98,7 +101,11 @@ function outcomeOf(events: readonly RunEvent[], before: ReadonlySet<string>): Ev
   return { status: memoryReset(message) ? 'reset' : 'error', message: redact(message) };
 }
 
-async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: TrialTimeline): Promise<EvalTurnResult> {
+/**
+ * One turn: its seeded files, the prompt, the wait until the workspace settles, and the checks. `stepped` hears how
+ * many steps the turn's runs have recorded while it settles: a stream that dropped shows no more, and the ledger does.
+ */
+async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: TrialTimeline, stepped: (steps: number) => void): Promise<EvalTurnResult> {
   await timeline.span('seed', async () => {
     for (const file of turn.seed ?? []) await session.writeFile(file.path, file.content);
   });
@@ -116,7 +123,10 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
     lost = error instanceof Error ? error : new Error(renderThrownChain({ cause: error }));
   }
 
-  await timeline.span('settle', () => settle(session, timeline));
+  await timeline.span('settle', () => settle(session, (busy, events) => {
+    timeline.mark('poll', { busy });
+    stepped(events.filter((event) => event.type === 'step_finish' && !before.has(event.runId)).length);
+  }));
   const turnWallMs = Date.now() - startedAt;
   const [events, history] = await timeline.span('read', () => Promise.all([session.runEvents(), session.history()]));
 
@@ -242,7 +252,9 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
           timeline.mark('turn', { index });
           say(`turn ${String(turnNumber)} of ${String(task.turns.length)} sent`);
 
-          const result = await runTurn(opened, turn, timeline);
+          const result = await runTurn(opened, turn, timeline, (recorded) => {
+            if (recorded > steps) say(`turn ${String(turnNumber)}, step ${String(steps = recorded)}, off the ledger`);
+          });
 
           say(`turn ${String(turnNumber)} ${result.outcome.status} in ${String(Math.round(result.turnWallMs / 1000))}s, `
             + `${String(result.checks.filter((check) => check.pass).length)} of ${String(result.checks.length)} checks passed`);
