@@ -9,7 +9,7 @@ import {
 import {
   liveMcpTransport, queueMcpAuthUrl, recordedMcpServers, resetRecordedMcp, seedSdkMcpServer,
 } from './helpers/agents-sdk';
-import { auth } from '@modelcontextprotocol/sdk/client/auth.js';
+import { auth } from '@modelcontextprotocol/client';
 import { requestBodyText } from '@kinu.run/test-utils';
 import { durableObjectStorage } from './helpers/programmatic-host';
 
