@@ -6,7 +6,7 @@ import { storeRevision, type WorkspaceOverviewInputs } from '@kinu.run/core';
 
 import { callable, type AgentContext, type Connection, type ConnectionContext } from "agents";
 import { ORCHESTRATOR_RPC_SURFACE, ORCHESTRATOR_STARTED_RPC, sealRpcSurface } from "./rpc-surface";
-import { ActivationGate, startBeforeRpc } from "./activation-gate";
+import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from "./activation-gate";
 import { KINU_TIMER_JOB } from "./wake-jobs";
 import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
@@ -418,6 +418,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const gate = new ActivationGate();
     this.lifecycle.use(gate);
     startBeforeRpc(this, ORCHESTRATOR_STARTED_RPC, () => (this.nimbusSibling ? Promise.resolve() : gate.ready()));
+    reportSocketCallFailures(this);
   }
 
   /** A Nimbus sibling (docs/NIMBUS-INTEGRATION.md); no workspace name holds `:`. */
@@ -5393,7 +5394,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable() async setProviderAccount(provider: string, account: string | null, actor?: string) {
-    return setProviderAccount(actor === undefined ? this.config : this.hostedChild(actor).child.stores.config, provider, account);
+    const set = setProviderAccount(actor === undefined ? this.config : this.hostedChild(actor).child.stores.config, provider, account);
+
+    await this.modelSettingsChanged();
+
+    return set;
   }
 
   /** A hosted actor's own model pin, over the workspace's for its turns. */

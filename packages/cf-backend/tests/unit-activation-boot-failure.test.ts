@@ -24,3 +24,21 @@ test('a boot that fails fails the activation with its cause, and the next activa
   for (const write of ['INSERT', 'UPDATE']) db.exec(`DROP TRIGGER unreachable_${write}`);
   await expect(agent.lifecycle.start()).resolves.toBeUndefined();
 });
+
+// ironwood-cairn-6dbcb8de, 2026-09-29 18:04-18:18Z: the box's once-a-minute question started a resting workspace each
+// time, booting its files and arming the wake that retried its owed effects. What it reads is this activation's own
+// runs, which an object that did not start has none of.
+test('the box asking whether its container is in use does not start the workspace', async () => {
+  const { db } = orchestratorHarness();
+
+  for (const write of ['INSERT', 'UPDATE']) {
+    db.exec(`CREATE TRIGGER unreachable_${write} BEFORE ${write} ON kinu_workspace_generation
+      BEGIN SELECT RAISE(ABORT, 'the file store is unreachable'); END`);
+  }
+
+  const { agent, started } = await reactivateOrchestratorHarness(db);
+
+  await expect(started).rejects.toThrow('the file store is unreachable');
+  await expect(agent.sandboxInUse()).resolves.toBe(false);
+});
+

@@ -369,13 +369,12 @@ function toolBody(body: OutboundBody, callId: string, narration?: string): Respo
   return sseResponse(chunks);
 }
 
-/** The parity model: a `TOOL` line opens a `file` call, then `echo:part-one ` (parked on `partial`)
- *  and `part-two` for the continuation; other lines echo, parked on `first`. */
+/** The parity model: a `TOOL` line opens a `file` call, then answers `echo:part-one part-two` (parked after its first
+ *  half on `partial`; a continuation writes the whole answer again); other lines echo, parked on `first`. */
 async function parityBody(body: OutboundBody): Promise<Response> {
   const messages = body.messages ?? [];
   const users = messages.filter((m) => m.role === 'user').map((m) => textOf(m.content));
   const text = users.filter((u) => !u.startsWith('<')).at(-1) ?? '';
-  const trailingAssistant = messages.at(-1)?.role === 'assistant' ? textOf(messages.at(-1)?.content ?? '') : '';
   const encoder = new TextEncoder();
 
   const parkedResponse = (before: readonly string[], after: readonly string[], gate: HeldGate): Response => new Response(
@@ -393,10 +392,6 @@ async function parityBody(body: OutboundBody): Promise<Response> {
   );
 
   if (text.includes('TOOL')) {
-    if (trailingAssistant.startsWith('echo:part-one')) {
-      return sseResponse([sseChunk({ content: 'part-two' }), sseChunk({ role: 'assistant' }, 'stop'), sseDone()]);
-    }
-
     if (messages.some((m) => m.role === 'tool')) {
       const tail = [sseChunk({ content: 'part-two' }), sseChunk({ role: 'assistant' }, 'stop'), sseDone()];
 

@@ -82,9 +82,10 @@ describe('the device sandbox, as the kernel enforces it', () => {
     if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     // Planted rather than assumed: asserting that ~/.ssh cannot be read proves
     // nothing on a box that has no ~/.ssh.
-    const planted = path.join(os.homedir(), '.kinu-sandbox-planted-secret');
+    const ownerHome = scratchDir('sandbox-owner');
+    const planted = path.join(ownerHome, '.kinu-sandbox-planted-secret');
     fs.writeFileSync(planted, 'owner-private-material', { mode: 0o600 });
-    const run = runSandboxed(`cat ${JSON.stringify(planted)} 2>&1; echo ---; ls -a "$HOME" | tr '\\n' ' '`);
+    const run = runSandboxed(`cat ${JSON.stringify(planted)} 2>&1; echo ---; ls -a "$HOME" | tr '\n' ' '`, { home: ownerHome });
 
     try {
       expect(run.stdout).not.toContain('owner-private-material');
@@ -105,9 +106,10 @@ describe('the device sandbox, as the kernel enforces it', () => {
     // This is the difference the switch makes, and the reason it defaults on.
     // Reverting the home swap instead proves nothing: bwrap cannot create a
     // mountpoint under the read-only root, so the command simply fails.
-    const planted = path.join(os.homedir(), '.kinu-sandbox-planted-secret');
+    const ownerHome = scratchDir('sandbox-owner');
+    const planted = path.join(ownerHome, '.kinu-sandbox-planted-secret');
     fs.writeFileSync(planted, 'owner-private-material', { mode: 0o600 });
-    const run = runSandboxed(`cat ${JSON.stringify(planted)} 2>&1`, { tier: 'raw' });
+    const run = runSandboxed(`cat ${JSON.stringify(planted)} 2>&1`, { tier: 'raw', home: ownerHome });
 
     try {
       expect(run.stdout).toContain('owner-private-material');
@@ -174,7 +176,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
   test('the GPU nodes this machine has are inside, and bash-only syntax runs', async () => {
     if (!LINUX || (await sandbox.probe()).status !== sandbox.SANDBOX_STATUS.OK) return;
     const nodes = sandbox.gpuNodes();
-    const run = runSandboxed('set -o pipefail; [[ 1 == 1 ]] && ls -d /dev/nvidia* /dev/dri 2>/dev/null | tr "\\n" " "');
+    const run = runSandboxed('set -o pipefail; shopt -s nullglob; for node in /dev/nvidia* /dev/dri; do if [[ -e $node ]]; then printf "%s\\n" "$node"; fi; done');
 
     expect(run.status).toBe(0);
 

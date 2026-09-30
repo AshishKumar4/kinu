@@ -8,6 +8,8 @@ export { EvictionProbeDO, WitnessDO } from './eviction-probe';
 
 export { FiberRecoveryProbeAgent } from './agent-fiber-recovery-probe';
 
+export { SocketCallProbeAgent } from './socket-call-probe';
+
 export { SpendProbeDO } from './spend-probe';
 
 export { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';

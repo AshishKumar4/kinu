@@ -1,10 +1,10 @@
 import { createServer } from 'node:http';
 import * as v from 'valibot';
-import type { RemoteProxyConnectionString } from 'miniflare';
+import type { RemoteProxyConnectionString, Response as MiniflareResponse } from 'miniflare';
 
 const ProxyUrlSchema = v.custom<RemoteProxyConnectionString>((value) => v.is(v.instance(URL), value));
 
-export async function workersAiBinding(answer: (request: Request) => Promise<Response>) {
+export async function workersAiBinding(answer: (request: Request) => Promise<Response | MiniflareResponse>) {
   const server = createServer((incoming, outgoing) => {
     const controller = new AbortController();
 

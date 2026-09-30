@@ -18,12 +18,23 @@ export function storeSource(binding: string): S3MountRequest['source'] {
   };
 }
 
-/** One request against one route's bucket. */
+/** One request against one route's bucket. `root` is the box's prefix, which every key the guest
+ *  names is a path under (D46). */
 interface StoreCall {
   readonly request: Request;
   readonly url: URL;
   readonly bucket: R2Bucket;
   readonly name: string;
+  readonly root: string;
+}
+
+/** A path under the root: no leading `/`, no empty, `.` or `..` segment, once percent-decoded. The
+ *  root is prefixed literally, so no path reaches outside it; one that reads as if it could is refused.
+ *  A trailing `/` names a directory object. */
+function isPlainPath(path: string): boolean {
+  if (path === '') return true;
+
+  return (path.endsWith('/') ? path.slice(0, -1) : path).split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
 }
 
 const NS = 'xmlns="http://s3.amazonaws.com/doc/2006-03-01/"';
@@ -74,37 +85,45 @@ async function withSizedBody<A>(request: Request, length: number, write: (body: 
   return written;
 }
 
-function serveList({ request, url, bucket, name }: StoreCall, prefix: string): Effect.Effect<Response, DevboxError> {
+function serveList({ request, url, bucket, name, root }: StoreCall): Effect.Effect<Response, DevboxError> {
   return Effect.gen(function* () {
     const query = url.searchParams;
     const v2 = query.get('list-type') === '2';
     const within = query.get('prefix') ?? '';
+    const after = query.get(v2 ? 'start-after' : 'marker') ?? undefined;
 
-    if (!within.startsWith(prefix)) return refused(request, 403, 'AccessDenied', 'the listing is outside this store prefix');
+    if (!isPlainPath(within) || (after !== undefined && !isPlainPath(after))) {
+      return refused(request, 400, 'InvalidArgument', 'a listing names paths under this store only');
+    }
+
     const asked = Number(query.get('max-keys') ?? 1000);
 
     if (!Number.isSafeInteger(asked) || asked < 1) return refused(request, 400, 'InvalidArgument', 'max-keys must be a positive integer');
     const limit = Math.min(asked, 1000);
     const delimiter = query.get('delimiter') ?? '';
     const cursor = v2 ? query.get('continuation-token') ?? undefined : undefined;
-    const after = query.get(v2 ? 'start-after' : 'marker') ?? undefined;
 
     const listed = yield* attempt('io', () => bucket.list({
-      prefix: within, delimiter: delimiter === '' ? undefined : delimiter, limit, cursor, startAfter: cursor === undefined ? after : undefined,
+      prefix: root + within, delimiter: delimiter === '' ? undefined : delimiter, limit, cursor,
+      startAfter: cursor === undefined && after !== undefined ? root + after : undefined,
     }), `listing ${within}`);
 
-    const keys = listed.objects.map((o) => `<Contents><Key>${escapeXml(o.key)}</Key><LastModified>${o.uploaded.toISOString()}</LastModified>`
+    // A continuation token is the guest's to send: whatever it resumes, only keys under the root leave.
+    const objects = listed.objects.filter((o) => o.key.startsWith(root));
+    const delimited = listed.delimitedPrefixes.filter((p) => p.startsWith(root));
+
+    const keys = objects.map((o) => `<Contents><Key>${escapeXml(o.key.slice(root.length))}</Key><LastModified>${o.uploaded.toISOString()}</LastModified>`
       + `<ETag>${escapeXml(o.httpEtag)}</ETag><Size>${o.size}</Size><StorageClass>STANDARD</StorageClass></Contents>`);
 
-    const prefixes = listed.delimitedPrefixes.map((p) => `<CommonPrefixes><Prefix>${escapeXml(p)}</Prefix></CommonPrefixes>`);
+    const prefixes = delimited.map((p) => `<CommonPrefixes><Prefix>${escapeXml(p.slice(root.length))}</Prefix></CommonPrefixes>`);
     let next = '';
 
     if (listed.truncated && v2) next = `<NextContinuationToken>${escapeXml(listed.cursor)}</NextContinuationToken>`;
 
     if (listed.truncated && !v2) {
-      const last = [listed.objects.at(-1)?.key ?? '', listed.delimitedPrefixes.at(-1) ?? ''].sort().at(-1) ?? '';
+      const last = [objects.at(-1)?.key ?? '', delimited.at(-1) ?? ''].sort().at(-1) ?? '';
 
-      next = `<NextMarker>${escapeXml(last)}</NextMarker>`;
+      next = `<NextMarker>${escapeXml(last.slice(root.length))}</NextMarker>`;
     }
 
     const page = v2 ? `<KeyCount>${keys.length + prefixes.length}</KeyCount>` : `<Marker>${escapeXml(after ?? '')}</Marker>`;
@@ -115,21 +134,22 @@ function serveList({ request, url, bucket, name }: StoreCall, prefix: string): E
   });
 }
 
-function serveMultipart({ request, url, bucket, name }: StoreCall, key: string): Effect.Effect<Response, DevboxError> {
+function serveMultipart({ request, url, bucket, name, root }: StoreCall, key: string): Effect.Effect<Response, DevboxError> {
   return Effect.gen(function* () {
+    const stored = root + key;
     const query = url.searchParams;
     const uploadId = query.get('uploadId');
     const partNumber = Number(query.get('partNumber'));
 
     if (request.method === 'POST' && query.has('uploads') && uploadId === null) {
-      const upload = yield* attempt('io', () => bucket.createMultipartUpload(key, { httpMetadata: request.headers }), `opening an upload of ${key}`);
+      const upload = yield* attempt('io', () => bucket.createMultipartUpload(stored, { httpMetadata: request.headers }), `opening an upload of ${key}`);
 
       return xml(`<InitiateMultipartUploadResult ${NS}><Bucket>${escapeXml(name)}</Bucket><Key>${escapeXml(key)}</Key>`
         + `<UploadId>${escapeXml(upload.uploadId)}</UploadId></InitiateMultipartUploadResult>`);
     }
 
     if (uploadId === null || uploadId === '') return refused(request, 501, 'NotImplemented', `this store serves no ${request.method} ?uploads`);
-    const upload = bucket.resumeMultipartUpload(key, uploadId);
+    const upload = bucket.resumeMultipartUpload(stored, uploadId);
 
     if (request.method === 'PUT' && Number.isSafeInteger(partNumber) && partNumber >= 1) {
       const length = Number(request.headers.get('content-length') ?? Number.NaN);
@@ -164,18 +184,20 @@ function serveMultipart({ request, url, bucket, name }: StoreCall, key: string):
   });
 }
 
-function serveObject({ request, bucket }: StoreCall, key: string): Effect.Effect<Response, DevboxError> {
+function serveObject({ request, bucket, root }: StoreCall, key: string): Effect.Effect<Response, DevboxError> {
   return Effect.gen(function* () {
+    const stored = root + key;
+
     switch (request.method) {
       case 'HEAD': {
-        const head = yield* attempt('io', () => bucket.head(key), `reading ${key}`);
+        const head = yield* attempt('io', () => bucket.head(stored), `reading ${key}`);
 
         return head === null ? new Response(null, { status: 404 }) : new Response(null, { headers: objectHeaders(head) });
       }
 
       case 'GET': {
         const range = requestedRange(request.headers.get('range'));
-        const body = yield* attempt('io', () => bucket.get(key, range === undefined ? {} : { range }), `reading ${key}`);
+        const body = yield* attempt('io', () => bucket.get(stored, range === undefined ? {} : { range }), `reading ${key}`);
 
         if (body === null) return s3Error(404, 'NoSuchKey', `${key} does not exist`);
         const headers = objectHeaders(body);
@@ -195,13 +217,13 @@ function serveObject({ request, bucket }: StoreCall, key: string): Effect.Effect
         const length = Number(request.headers.get('content-length') ?? Number.NaN);
 
         if (!Number.isSafeInteger(length) || length < 0) return refused(request, 411, 'MissingContentLength', 'a put needs its content-length');
-        const put = yield* attempt('io', () => withSizedBody(request, length, (body) => bucket.put(key, body, { httpMetadata: request.headers })), `writing ${key}`);
+        const put = yield* attempt('io', () => withSizedBody(request, length, (body) => bucket.put(stored, body, { httpMetadata: request.headers })), `writing ${key}`);
 
         return new Response(null, { headers: { etag: put.httpEtag } });
       }
 
       case 'DELETE':
-        yield* attempt('io', () => bucket.delete(key), `deleting ${key}`);
+        yield* attempt('io', () => bucket.delete(stored), `deleting ${key}`);
 
         return new Response(null, { status: 204 });
       default:
@@ -210,8 +232,9 @@ function serveObject({ request, bucket }: StoreCall, key: string): Effect.Effect
   });
 }
 
-/** Holds each route to the bucket, prefix and access S3Mounts recorded for it; a guest chooses only
- *  the path, so it reaches no other binding and no other box's keys. */
+/** Holds each route to the bucket and access S3Mounts recorded for it, rooted at the box's prefix
+ *  Devbox set on it: a key the guest names is a path under that root (D46), as 0.12.9's Worker
+ *  rooted its mount, so it reaches no other binding and no other box's keys. */
 export function serveStore(request: Request, props: StoreGatewayProps, bucketOf: (name: string) => R2Bucket | undefined): Effect.Effect<Response, DevboxError> {
   return Effect.gen(function* () {
     if (props.mode === 'deny') return refused(request, 403, 'AccessDenied', 'this store route has been revoked');
@@ -223,6 +246,13 @@ export function serveStore(request: Request, props: StoreGatewayProps, bucketOf:
       return refused(request, 501, 'NotImplemented', 'aws-chunked bodies are not served');
     }
 
+    const root = props.keyPrefix ?? '';
+
+    // A root is whole segments: `boxes/box-1` would reach `boxes/box-10/…` through the path `0/…`.
+    if (!root.endsWith('/') || !isPlainPath(root)) {
+      return yield* Effect.fail(new DevboxError('configuration', `a store route's root must be a path ending in /, not ${JSON.stringify(root)}`));
+    }
+
     const [, bucketPart = '', ...keyParts] = url.pathname.split('/');
     const [name, key] = yield* attemptSync('invalid-input', () => [decodeURIComponent(bucketPart), decodeURIComponent(keyParts.join('/'))]);
 
@@ -230,8 +260,13 @@ export function serveStore(request: Request, props: StoreGatewayProps, bucketOf:
     const bucket = bucketOf(name);
 
     if (bucket === undefined) return yield* Effect.fail(new DevboxError('configuration', `the store's R2 binding ${name} is not configured`));
-    const call: StoreCall = { request, url, bucket, name };
-    const prefix = props.keyPrefix ?? '';
+
+    // s3fs asks for the mount root's own directory object when it mounts the bucket root; no key under
+    // the root is ever written with an empty segment, so it does not exist.
+    if (key === '/' && (request.method === 'HEAD' || request.method === 'GET') && url.searchParams.size === 0) return s3Error(404, 'NoSuchKey', 'the store root is not an object');
+
+    if (!isPlainPath(key)) return refused(request, 400, 'InvalidArgument', 'a key names a path under this store only');
+    const call: StoreCall = { request, url, bucket, name, root };
     const query = url.searchParams;
 
     if (key === '') {
@@ -241,10 +276,8 @@ export function serveStore(request: Request, props: StoreGatewayProps, bucketOf:
 
       if (query.has('location')) return xml(`<LocationConstraint ${NS}/>`);
 
-      return yield* serveList(call, prefix);
+      return yield* serveList(call);
     }
-
-    if (key !== prefix.slice(0, -1) && !key.startsWith(prefix)) return refused(request, 403, 'AccessDenied', 'the key is outside this store prefix');
 
     if (props.access === 'read-only' && request.method !== 'GET' && request.method !== 'HEAD') {
       return refused(request, 403, 'AccessDenied', 'this store mount is read-only');

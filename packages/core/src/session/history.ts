@@ -66,12 +66,6 @@ export interface MaterializedHistory extends MaterializedContext {
   readonly members: readonly ContextEntry[];
 }
 
-/** What a step cut mid-stream had streamed: its text, and whether it had called a tool. */
-export interface CutStep {
-  readonly text: string;
-  readonly calledTools: boolean;
-}
-
 export class SessionHistory {
   readonly messages: SessionMessages;
   readonly context: SessionContext;
@@ -119,6 +113,19 @@ export class SessionHistory {
     }
   }
 
+  /** A text-only cut step is sealed empty and leaves the context, so the model writes it again whole (Chat loop C1). */
+  async retract(outputs: readonly string[], assertOwner: () => void): Promise<void> {
+    const cut = new Set(outputs);
+    const empty = await this.messages.prepareContent([]);
+    const selected = this.context.selected() ?? this.context.initialize();
+
+    this.context.commit(selected, { cause: 'edit', turnId: null, assertEpoch: assertOwner, mutate: (entries) => {
+      for (const id of outputs) this.messages.seal(id, empty);
+
+      return entries.filter((entry) => !cut.has(entry.messageId)).map((entry, position) => ({ ...entry, position }));
+    } });
+  }
+
   /** The outputs a run left open: its cut step's. A claim's {@link sealAbandoned} seals them, so they are named before it. */
   openOutputs(runId: string): readonly string[] {
     this.dependencies.actor.assertCurrent();
@@ -129,21 +136,14 @@ export class SessionHistory {
       ORDER BY m.rowid`.map((row) => row.message_id);
   }
 
-  /** Read from the stream buffer, or from the content a seal gave it: the same parts either way. Null when it streamed neither. */
-  async cutStep(outputs: readonly string[]): Promise<CutStep | null> {
-    const parts = await this.messages.materializePartsOf(outputs);
-    let text = '';
-    let calledTools = false;
+  /** What a step cut mid-stream had streamed, read from the stream buffer or the content a seal gave it: `tools` once it
+   *  called one, else `text`; null when it streamed neither. */
+  async cutStep(outputs: readonly string[]): Promise<'text' | 'tools' | null> {
+    const parts = [...(await this.messages.materializePartsOf(outputs)).values()].flat();
 
-    for (const id of outputs) {
-      for (const part of parts.get(id) ?? []) {
-        if (part.kind === 'text') text += v.parse(v.string(), part.value.text);
+    if (parts.some((part) => part.kind === 'tool-call')) return 'tools';
 
-        if (part.kind === 'tool-call') calledTools = true;
-      }
-    }
-
-    return text === '' && !calledTools ? null : { text, calledTools };
+    return parts.some((part) => part.kind === 'text' && v.parse(v.string(), part.value.text) !== '') ? 'text' : null;
   }
 
   transcript(sessionId: string): SessionTranscript {
