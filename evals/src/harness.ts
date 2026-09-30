@@ -165,11 +165,10 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
  * thrown over the verdict the trial's checks gave.
  */
 async function closeWorkspace(session: KinuPublicSession, task: EvalTask, errors: HarnessError[], timeline: TrialTimeline): Promise<{
-  events: RunEvent[]; costUsd: number | undefined; workspace: WorkspaceEvidence | { unread: string };
+  events: RunEvent[]; costUsd: number | undefined; workspace: WorkspaceEvidence;
 }> {
   let events: RunEvent[] = [];
   let costUsd: number | undefined;
-  let workspace: WorkspaceEvidence | { unread: string };
 
   try {
     events = [...await timeline.span('ledger', () => session.runEvents())];
@@ -178,11 +177,7 @@ async function closeWorkspace(session: KinuPublicSession, task: EvalTask, errors
     errors.push({ name: 'InfraError', message: `the trial's ledger could not be read: ${renderThrownChain({ cause: error })}` });
   }
 
-  try {
-    workspace = await timeline.span('evidence', () => gatherEvidence(session, task.evidence));
-  } catch (error) {
-    workspace = { unread: renderThrownChain({ cause: error }) };
-  }
+  const workspace = await timeline.span('evidence', () => gatherEvidence(session, task.evidence));
 
   try {
     await timeline.span('teardown', () => session.teardown());
@@ -280,7 +275,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       timeline.mark('close');
 
       const { events, costUsd, workspace } = session === undefined
-        ? { events: [], costUsd: undefined, workspace: { unread: 'no workspace was opened' } }
+        ? { events: [], costUsd: undefined, workspace: { files: new Map(), slates: null, data: [], unread: ['no workspace was opened'] } }
         : await closeWorkspace(session, task, errors, timeline);
 
       try {
