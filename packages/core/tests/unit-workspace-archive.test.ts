@@ -8,6 +8,7 @@ import {
   archiveSqlFromDatabase,
   initActorClaimTables,
   initAllTables,
+  readAgentArchivePage,
   readWorkspaceArchivePage,
   restoreWorkspaceArchive,
   writeWorkspaceArchive,
@@ -15,6 +16,7 @@ import {
   CHAT_SESSION_ID,
   SessionHistory,
   type ActorHandle,
+  type ArchiveAgentSource,
   type ArchiveCursor,
   type SessionTranscriptReader,
   type SqlValue,
@@ -438,6 +440,98 @@ const OWNER_TEXT = '# the owner wrote this\n';
     });
     const continued = await new ConversationSearchStore(target.sql, landed, (sessionId) => history.transcript(sessionId)).search('local continuation');
     expect(continued.map((hit) => hit.messageId)).toEqual(['u2']);
+  });
+});
+
+/** A workspace whose one agent keeps its conversation in a database of its own, as a hired agent's isolate does. */
+async function withAgentDatabase() {
+  const source = await seeded();
+  const own = fresh();
+
+  initSchema(own);
+
+  for (const table of ['workspace_identity', 'workspace_actors']) {
+    const ddl = v.parse(v.object({ sql: v.string() }), source.db.query(`SELECT sql FROM sqlite_master WHERE name = ?`).get(table));
+
+    own.db.exec(ddl.sql.replace(/^CREATE TABLE (?!IF NOT EXISTS)/i, 'CREATE TABLE IF NOT EXISTS '));
+
+    for (const row of v.parse(v.array(v.record(v.string(), v.union([v.string(), v.number(), v.null()]))), source.db.query(`SELECT * FROM ${table}`).all())) {
+      const columns = Object.keys(row);
+
+      own.db.query(`INSERT OR REPLACE INTO ${table} (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`)
+        .run(...columns.map((column) => row[column] ?? null));
+    }
+  }
+
+  const agent = openWorkspaceMainActor(own.sql);
+  const history = historyOver(own, agent);
+
+  // Its conversation is its own database's alone, as a hired agent's is.
+  source.db.query('DELETE FROM conversation_entries WHERE actor_id = ?').run(agent.actorId);
+
+  for (let i = 0; i < 12; i++) {
+    await history.record(CHAT_SESSION_ID, {
+      id: `a${i}`, origin: 'input',
+      message: { role: 'user', content: `said in the agent's own database ${i} ${'x'.repeat(400)}` },
+    });
+  }
+
+  const agents: ArchiveAgentSource = {
+    list: () => [agent.actorId],
+    page: async (actorId, cursor, maxBytes) => readAgentArchivePage(own.archive, actorId, cursor, maxBytes),
+  };
+
+  return { source, agent, agents };
+}
+
+async function pagedExport(archive: SqlExec, agents: ArchiveAgentSource, maxBytes: number): Promise<string[]> {
+  const lines: string[] = [];
+  let cursor: ArchiveCursor | null = null;
+
+  do {
+    const page = await readWorkspaceArchivePage(archive, { workspace: 'scout', source: 'cloud', cursor, maxBytes, agents });
+
+    lines.push(...page.lines);
+    cursor = page.next;
+  } while (cursor !== null);
+
+  return lines;
+}
+
+describe('an agent whose rows live in its own database', () => {
+  test('a paged export carries its whole section, resumed inside it, and restores its rows', async () => {
+    const { source, agent, agents } = await withAgentDatabase();
+    const lines = await pagedExport(source.archive, agents, 1024);
+    const target = fresh();
+
+    await restoreWorkspaceArchive(target.archive, lines);
+
+    const said = target.db.query(`SELECT COUNT(*) AS n FROM conversation_entries WHERE actor_id = ? AND id LIKE 'a%'`).get(agent.actorId);
+
+    expect(said).toEqual({ n: 12 });
+    expect(lines.filter((line) => line.includes('"t":"agent"'))).toHaveLength(1);
+  });
+
+  test('an archive that lost an agent\'s database is refused, naming the agent', async () => {
+    const { source, agent, agents } = await withAgentDatabase();
+    const lines = await pagedExport(source.archive, agents, 1024);
+    const withoutIt = lines.filter((line) => !line.includes(`"agent":"${agent.actorId}"`) && !line.includes('"t":"agent"'));
+
+    await expect(restoreWorkspaceArchive(fresh().archive, withoutIt)).rejects.toThrow(`agent ${agent.actorId}, whose own database`);
+  });
+
+  test('an agent section that lost a row is refused, though the archive\'s row total is rewritten to match', async () => {
+    const { source, agent, agents } = await withAgentDatabase();
+    const lines = await pagedExport(source.archive, agents, 1024);
+    const dropped = lines.findIndex((line) => line.includes(`"agent":"${agent.actorId}"`));
+
+    const damaged = lines.filter((_, index) => index !== dropped).map((line) => {
+      const end = v.safeParse(v.looseObject({ t: v.literal('end'), rows: v.number() }), JSON.parse(line));
+
+      return end.success ? JSON.stringify({ ...end.output, rows: end.output.rows - 1 }) : line;
+    });
+
+    await expect(restoreWorkspaceArchive(fresh().archive, damaged)).rejects.toThrow(/section declares \d+ rows but carries/);
   });
 });
 

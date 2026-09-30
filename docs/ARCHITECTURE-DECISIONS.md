@@ -368,7 +368,7 @@ turn. The local host already did this: an assignment is admitted there as
 the child's own chat turn, and `ChatSession.processTurn` calls `openTurnRun`
 (`caused_by: subordinate_task`). The cloud runner drives `runHeadInference`
 directly, which never enters that queue, so it wrote no bracket. Decided
-2026-09-17: the stricter side wins, and `runHostedTask` opens and closes the
+2026-09-17: the stricter side wins, and the delegated turn opens and closes the
 run with the same cause and the same input text. Measured the same day in the
 workerd pool. Before, a hired child's ledger held `step_finish` alone (one run
 id, no `run_start`, no `run_end`), so `getRunSummaries` answered
@@ -490,15 +490,26 @@ Heap was read as headroom: the largest held allocation that survived.
   1.0 MB gzip): cold start 360 ms p50 (273-460, n=6) one at a time; ten started
   at once took 4.1-6.5 s together. Idle about 13-18 MB: 110 MB lived, 115 MB
   reset. `stat` round trip 7 ms p50, 10 ms p90.
-- The platform caps one incoming request at 10 concurrent dynamic-worker
-  invocations ("Dynamic worker concurrency limit exceeded: each request may
-  have up to 10"). The eleventh is refused at once, not queued: 15 of 25
-  parallel calls failed. Three concurrent requests to one object ran 10 each.
-  A call that returns while its facet keeps working (`ctx.waitUntil`) frees its
-  slot: after 10 such calls, 10 concurrent calls and 25 new isolates one after
-  another in the same request all succeeded, and the 10 background tasks
-  finished (20 s and 60 s waits, 10 of 10 each). Starting 25 of them at once
-  still hit the cap, since a slot is held through the cold start.
+- The platform lets one object hold in-flight calls into at most 10 distinct
+  dynamic workers; the error text says "per request" ("Dynamic worker
+  concurrency limit exceeded: each request may have up to 10"), but the count
+  is the object's. The eleventh is refused at once, not queued: 15 of 25
+  parallel calls failed. Three concurrent requests to one object ran 10 calls
+  each only because they reused the same 10 loader ids. A call that returns
+  while its facet keeps working (`ctx.waitUntil`) frees its slot: after 10 such
+  calls, 10 concurrent calls and 25 new isolates one after another in the same
+  request all succeeded, and the 10 background tasks finished (20 s and 60 s
+  waits, 10 of 10 each). Starting 25 of them at once still hit the cap, since a
+  slot is held through the cold start.
+- An open WebSocket routed through the parent into a loader facet holds a slot
+  for its whole life, with `accept()` and with the hibernation API alike
+  (2026-09-28): 10 of 12 sockets opened, and while they stayed open another
+  request could start no new facet (2 of 2 and 10 of 10 refused) though the
+  socket-holding facets still answered; after they closed, 10 new facets
+  answered. So a browser's socket stays in the workspace object.
+- A facet's calls into the parent take no slot (2026-09-28): with the parent
+  holding 10 facet calls in flight, those facets made 50 calls back into it,
+  all answered in 8-58 ms; 20 facets' background loops made 400 of 400.
 - Background work does not keep the parent alive. Three 150 s background waits
   in loader facets, with no request reaching the parent meanwhile: 0 of 3
   finished, and the parent's next call was a cold start (952 ms). The same
@@ -527,6 +538,57 @@ Heap was read as headroom: the largest held allocation that survived.
   in the workspace object and is reached one statement at a time would cost a
   loader-hosted turn 5-50 s.
 
+D9. A non-main agent's turn runs in its own loader isolate, and every tool
+it calls runs in the workspace object. Decided 2026-09-28 on D8, extended below.
+The isolate (`AgentFacet`, a facet named by the agent's storage key, loaded from the agent
+bundle under a loader id of its own) holds the model loop and the agent's own
+stores: conversation, turn claims, effect claims, run ledger. The workspace
+object keeps everything shared, prepares each turn (profile, prompt, tool
+surface), runs each tool call through `AgentWorkspaceRPC.executeTool` with the
+same code a root tool runs, reviews the finished turn with its advisor, and
+settles the report the hirer is owed. No call into the isolate is held open:
+`deliver` returns once the turn is queued there, and `finishTurn` answers
+back. `agent_open_turns` is the workspace's only record of a turn handed out
+and not heard end; an activation after a reset asks each agent it names to
+recover its own claims (stalled turns retire; the rest re-pend because their
+rows stay leased until the turn ends). The browser's socket stays in the workspace object; an
+agent's stream reaches it as short `observe` calls. Main's turns stay in the
+workspace object.
+Measured 2026-09-28 on a throwaway Worker loading the shipped agent bundle
+(2.16 MB minified, 0.62 MB gzip; core, `ai` and the Nimbus SDK), deleted
+after the run: first call into a new agent 305 ms p50 (n=9, 329-416 ms at
+p90), its first chat read 41-44 ms p50 (the schema laid and the roster rows
+copied), a warm chat read 23-25 ms p50 from the workspace object. Idle heap
+with its stores open: 115 MB held on top of it lived, 118 MB reset only that
+isolate, so about 10-13 MB of its own 128.
+A failing agent does not break the workspace (2026-09-28, throwaway
+Worker, deleted). The SDK's docs say a broken facet breaks the whole actor.
+That did not hold for loader facets. A throw in a call, an uncaught error, a
+200 MB allocation and a 44 s CPU loop in one facet each touched only that
+facet: the throw and the CPU limit rejected the parent's call, and the
+allocation and the loop reset the facet's isolate. The parent kept its
+isolate, its hibernated socket and its alarm, and a sibling facet kept its
+isolate. Every agent facet is a direct child of the workspace object, so the
+tree is two levels deep.
+No request waits for a turn's end (2026-09-28): the delegation lane
+returns once the turn is delivered, and the turn's end, the agent's next
+queued turn and the lane's bookkeeping run in the request that carries the
+agent's `finishTurn`. A lane that awaited the end was cancelled by workerd as
+hung in 3 of 6 flake-gate runs of hire.test: a request waiting on a promise
+only another request settles has no I/O of its own.
+
+Extended 2026-09-29 to heads, swarm nodes and steer branches through the same
+`AgentTurns` and `AgentFacet` path. Their tools, captures, report/branch state,
+wake queues, mission ledgers and head journals remain in the workspace;
+the facet calls those callbacks over RPC. The selected inherited scaffold
+row travels to the facet, and its program uses the existing workspace executor
+with model callbacks in the facet. Background agents already enter through
+the delegated-task path. Toolless MCTS branches remain model calls, not agents.
+Measured in `tests/workerd/agent-facet.test.ts` on 2026-09-29: a swarm node in
+a different isolate ran an inherited scaffold, called its workspace shell
+and report tool, then left its completed claim only in the facet database.
+The claim remained readable after retirement. Task histories are retained
+until destruction; archive fan-out includes them.
 
 ## Deploy ladder
 

@@ -1,18 +1,23 @@
 # Data model
 
-A hosted workspace has one durable authority: its `OrchestratorAgent` Durable
-Object. Nimbus runs as a library over that object's `ctx.storage.sql` and owns
-the workspace files and execution state. The same SQLite database holds the
-relational actor state. Each subsystem owns its tables and creates them
-idempotently. No shadow VFS or sync path runs between files and actor state.
+A hosted workspace has one shared authority: its `OrchestratorAgent` Durable
+Object. Nimbus runs over that object's `ctx.storage.sql` and owns the workspace
+files and execution state. The workspace also keeps the roster, main's state,
+shared ledgers and tool execution. No shadow VFS or file sync path runs between
+agents.
 
-Only `OrchestratorAgent` holds actors. Every subordinate, head and swarm node
-is a logical actor, one `workspace_actors` row inside the
-workspace's own SQLite (`packages/cf-backend/src/hosted-actors.ts`). None is a second object or a
-second database. The other Durable Object classes in `wrangler.jsonc` keep
-databases of their own. The one with user data is `UserDO`: it holds the
-per-user `user_*` and `device_*` tables and the owner's `experience_library`.
-Those tables belong to the user, not to any workspace.
+Every non-main agent has an `AgentFacet` in a Worker Loader isolate, with its
+own SQLite for conversations, turn and effect claims, and run events. Hired,
+swarm and background agents use the same class and turn runner; their roster
+rows remain in `workspace_actors` in the workspace database. A selected
+scaffold row is handed to the facet before its turn, while the program's bytes
+remain on the shared agent-state file plane. Export visits each retained
+agent's database, including retired task agents. Only destruction wipes a
+facet's storage.
+
+Other Durable Objects in `wrangler.jsonc` keep databases of their own.
+`UserDO` holds the per-user `user_*` and `device_*` tables and the owner's
+`experience_library`; those belong to the user, not to a workspace.
 
 Three stores sit outside actor SQLite:
 

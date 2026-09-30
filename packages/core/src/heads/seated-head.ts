@@ -59,7 +59,9 @@ export function spawnSeatedHead(input: HeadInput, deps: SeatedHeadDeps): Spawned
 
     if (mission !== null) inference.mission = mission;
 
-    return await runHeadInference(input, inference);
+    if (spec !== null) inference.modelSpec = spec;
+
+    return await (seat.infer ?? runHeadInference)(input, inference);
   };
 
   return {

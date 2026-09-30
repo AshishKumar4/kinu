@@ -6,7 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import { getChatHistoryPage, CHAT_SESSION_ID, type ActorHandle, type SessionHistory, type ChatHistoryPage } from '@kinu.run/core';
 import {
-  historyOver, hostedExplorationHarness, hostedSubordinateHarness, orchestratorHarness, workspaceMainActor,
+  agentHistory, historyOver, hostedExplorationHarness, hostedSubordinateHarness, orchestratorHarness, workspaceMainActor,
 } from './helpers/actor-harness';
 
 /** The root's public RPC, or the production read model over a hosted child's handle. */
@@ -133,7 +133,10 @@ describe('a transcript longer than one window is reachable page by page', () => 
     await workspace.agent.activateActor();
     const actor = workspaceMainActor(workspace.db);
     await seed(actor, historyOver(workspace), 4, 'root');
-    const seeded = await seed(child.actor.handle, child.actor.stores.history, 25);
+    // The child's chat is in its own database, which its first read through the workspace opens.
+    await workspace.agent.getChatHistoryPage({ actor: child.actor.handle.actorId, limit: 1 });
+    const own = agentHistory(workspace, child.actor.handle.actorId);
+    const seeded = await seed(own.actor, own.history, 25);
 
     const walked = await walk({
       page: (request) => workspace.agent.getChatHistoryPage({ ...request, actor: child.actor.handle.actorId }),

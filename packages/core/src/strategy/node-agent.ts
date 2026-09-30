@@ -132,6 +132,7 @@ export interface NodeAgentDeps {
    */
   hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
   model: LanguageModel;
+  modelSpec?: string;
   /** A transcript is a read model over the node's journal (*The journal read model*). */
   journal: HeadJournal;
   logger: Logger;
@@ -163,6 +164,7 @@ export type NodeCodemode = (actor: HostedActor) => (finished: ToolSet) => ToolSe
 /** One node's own actor and its per-turn seams; returned by {@link NodeAgentDeps.hostNode} because each is per actor. */
 export interface HostedNodeSeat {
   readonly actor: HostedActor;
+  readonly infer?: typeof runHeadInference;
   /** The activation's run id; every turn this node admits is claimed under it. */
   readonly runId: string;
   /** Same role and tier narrowing an actor's chat turn resolves. */
@@ -178,6 +180,7 @@ export interface NodeLoopDeps {
    * `actor.runtime` and claimed turns on `actor.session`.
    */
   actor: HostedActor;
+  infer?: typeof runHeadInference;
   runId: string;
   profile: (input: { readonly availableTools: readonly string[]; readonly workMode: WorkMode })
     => Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
@@ -489,7 +492,7 @@ async function runNodeLoop(
   if (deps.signal !== undefined) inference.signal = deps.signal;
 
   try {
-    const report = await runHeadInference(spec.headInput, inference);
+    const report = await (deps.infer ?? runHeadInference)(spec.headInput, inference);
 
     return {
       report,
@@ -655,6 +658,8 @@ function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps, seat: HostedNo
   };
 
   if (deps.signal !== undefined) loop.signal = deps.signal;
+
+  if (seat.infer !== undefined) loop.infer = seat.infer;
   const publish = deps.publishHeadStream;
 
   if (publish !== undefined) {

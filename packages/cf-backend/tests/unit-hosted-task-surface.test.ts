@@ -52,7 +52,7 @@ test('a hired subordinate saves and searches memory and lists its roster in its 
   expect(results[2]).toContain('subordinates');
 });
 
-/** Defends: `runHostedTask` falling to the runner's default head prompt instead of the agent prompt that names a hire. */
+/** Defends: a delegated turn falling to the runner's default head prompt instead of the agent prompt that names a hire. */
 test('a hired subordinate is framed as a hire, not as a head', async () => {
   const gateway = scriptedGateway([]);
   const workspace = gatewayWorkspace(gateway);

@@ -10,7 +10,7 @@ import { admitSubordinateTask, EventLog } from '@kinu.run/core';
 import { AwaitedList } from '@kinu.run/test-utils';
 import { makeSqlExec } from '../../core/tests/helpers';
 import {
-  armedWakes, catalogTurn, GATEWAY_CATALOG, gatewayWorkspace, nextTurn, hostedSubordinateHarness, reactivateOrchestratorHarness, rosterOver, runDelegatedTask, until,
+  agentSql, armedWakes, catalogTurn, GATEWAY_CATALOG, gatewayWorkspace, hostedSubordinateHarness, nextTurn, reactivateOrchestratorHarness, rosterOver, runDelegatedTask, until,
   wakeForDelegatedTask,
 } from './helpers/actor-harness';
 import { TERMINAL_RETRY_JOB } from '../src/wake-jobs';
@@ -142,7 +142,9 @@ test('a turn cut off after its report-tool answer, mid-turn, is not run again an
   await nextActivation(workspace, gateway);
 
   expect(asked(gateway) - first).toBe(0);
-  expect(workspace.db.query(`SELECT outcome IS NOT NULL AS settled FROM actor_turn_claims WHERE actor_id = ?`).all(actorId)).toEqual([{ settled: 1 }]);
+  // The hire's turn claim is in its own database.
+  expect(agentSql(actorId)<{ settled: number }>`
+    SELECT outcome IS NOT NULL AS settled FROM actor_turn_claims WHERE actor_id = ${actorId}`).toEqual([{ settled: 1 }]);
 });
 
 test('an evolution helper whose answer was stored for its lane is not run again after a reset', async () => {

@@ -70,6 +70,12 @@ const NIMBUS_BASE = {
 
 const LAZY_ON_FIRST_USE = (what: string): CapabilityStatus => ({ lazy: `created on first use by ${what}, not at boot` });
 
+const NAMED_SHELL_STATE = {
+  'cf-orchestrator': LAZY_ON_FIRST_USE("a named shell's first command"),
+  'cf-subordinate': LAZY_ON_FIRST_USE("a named shell's first command"),
+  cli: LAZY_ON_FIRST_USE("a named shell's first command"),
+} satisfies RootStatuses;
+
 const NO_LOCAL_INGRESS = 'a local workspace has no inbound HTTP transport, and `kinu triggers <name> webhook` refuses a local target';
 
 export const BACKEND_CONFORMANCE: ConformanceManifest = {
@@ -113,6 +119,8 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     workspace_soul: EVERYWHERE,
     // The workspace's actor directory; subordinates read the root's roster.
     workspace_actors: EVERYWHERE,
+    // Delegated turns handed to an agent's own isolate; created with the workspace schema everywhere.
+    agent_open_turns: EVERYWHERE,
     crafted_tools: EVERYWHERE,
     search_nodes: EVERYWHERE,
     fibers: EVERYWHERE,
@@ -267,6 +275,11 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // ...and keeps the nimbus_* tables: filesystem identity and the storage ledger.
     nimbus_filesystem_identity: NIMBUS_BASE,
     nimbus_filesystem_devices: NIMBUS_BASE,
+    // Nimbus's named-shell state: created by the first command a named shell runs, which a subordinate's own
+    // isolate does through the workspace's session surface.
+    nimbus_session_kv: NAMED_SHELL_STATE,
+    nimbus_terminal_scrollback: NAMED_SHELL_STATE,
+    nimbus_kernel_mounts: NAMED_SHELL_STATE,
     nimbus_storage_ledger: NIMBUS_BASE,
     nimbus_storage_reservation: NIMBUS_BASE,
     nimbus_facet_storage: NIMBUS_BASE,

@@ -32,7 +32,7 @@ interface HireRun {
   readonly childSpoke: PromiseWithResolvers<void>;
   /** Resolved when the durable lane's `msg` call was authored. */
   readonly durableMsgSent: PromiseWithResolvers<void>;
-  /** Resolved when the child's model has been asked for both durable turns. `runHostedTask` writes
+  /** Resolved when the child's model has been asked for both durable turns. A delegated turn writes
    *  `run_start` before calling the model, so the second request means both runs are open. */
   readonly childAskedTwice: PromiseWithResolvers<void>;
   readonly childPark: PromiseWithResolvers<void>;
