@@ -21,7 +21,7 @@ A workspace holds the state. Agents are the actors that work inside it.
 │                device.*    the user's own machine  (connect + consent)   │
 │                parent.*    a hosted head's view of its hiring workspace  │
 │   state      conversations · SOUL.md · memory · scaffold · craft store · │
-│              evolution ledgers · triggers · release changes              │
+│              evolution ledgers · triggers                                │
 │                                                                          │
 │   ┌───────────────────────────────────────────────────────────────────┐  │
 │   │  AGENTS  (actors)                                                 │  │

@@ -1,3 +1,4 @@
+import { seedTranscriptEntry } from '@kinu.run/test-utils';
 /**
  * What a fresh activation does with an interrupted drain lease or fiber; every case drives a real restart.
  * The fiber sweep's oracle is the reads it issues, not which rows survive. Terminal ledger: unit-durable-terminal.test.ts.
@@ -86,11 +87,11 @@ async function persistedDrainTurn(
   answer: string | null,
 ): Promise<void> {
   const history = historyOver(harness);
-  await history.record(CHAT_SESSION_ID, { id: `u-${drainTurnId}`, origin: 'input',
+  await seedTranscriptEntry(history, CHAT_SESSION_ID, { id: `u-${drainTurnId}`, origin: 'input',
     message: { role: 'user', content: '1 event arrived while you were idle.' }, metadata: { kinuEvent: 'event_drain', drainTurnId } });
 
   if (answer === null) return;
-  await history.record(CHAT_SESSION_ID, { id: `a-${drainTurnId}`, origin: 'output',
+  await seedTranscriptEntry(history, CHAT_SESSION_ID, { id: `a-${drainTurnId}`, origin: 'output',
     message: { role: 'assistant', content: answer } });
 }
 

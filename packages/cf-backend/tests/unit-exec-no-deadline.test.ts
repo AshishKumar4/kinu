@@ -262,7 +262,7 @@ describe("a program awaiting a host call past a minute still gets its answer", (
   });
 
   test("in the eval sandbox", async () => {
-    expect(await reportAfterAMinute((loader) => (code, providers) => new KinuSandboxExecutor({ launch: launcherOver(loader, true) }).execute(code, providers)))
+    expect(await reportAfterAMinute((loader) => (code, providers) => new KinuSandboxExecutor(launcherOver(loader, true)).execute(code, providers)))
       .toEqual({ result: "banana", logs: [] });
   });
 });

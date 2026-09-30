@@ -44,17 +44,7 @@ streams a package off the registry") and
 `packages/cf-backend/tests/workerd/nimbus-git-npm.test.ts` hold the registry
 behaviour.
 
-The three `patchedDependencies` entries in the root `package.json` are
-`@plannotator%2Fui@0.46.1.patch`, `agents@0.24.0.patch` and
-`@cloudflare%2Fcodemode@0.5.2.patch`. The codemode patch adds the `./normalize`
-subpath export and the `dist/normalize.js` behind it, which
-`cli-backend/src/executor.ts` and `cli-backend/src/codemode-tool-factory.ts`
-import as `normalizeCode`. `bun run gate:patch-parity`
-(`scripts/patch-parity.ts`) reads `patchedDependencies` out of the root
-`package.json`, so it governs all three. Its header narrates the
-`@nimbus-sh/core` patch incident, because that incident is why the gate exists.
-
-The sixth file in `patches/`, `upstream-codemode-normalize.patch`, is not a
+The file in `patches/`, `upstream-codemode-normalize.patch`, is not a
 `patchedDependencies` entry, so bun never applies it and `gate:patch-parity`
 does not govern it. It patches the codemode repository's own
 `packages/codemode/` sources: the upstream proposal behind the export the

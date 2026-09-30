@@ -40,7 +40,6 @@ const AGENT_NAME_HINT = 'Kinu';
 /** Only the port of the loopback redirect may vary between sign-ins. */
 const CALLBACK_PATH = '/auth/callback';
 
-const USAGE_URL = 'https://chatgpt.com/settings/usage';
 
 /** This machine's `ext_agent_host_id`, shared by the CLI and the daemon: one host per machine. */
 const HOST_ID_FILE = 'chatgpt-host-id';
@@ -204,7 +203,6 @@ function tokensOf(answer, now, grantedWhenAbsent) {
     ...(answer.refreshToken !== undefined && { refreshToken: answer.refreshToken }),
     ...(answer.expiresIn !== undefined && { expiresAt: now + answer.expiresIn * 1000 }),
     scopes: scopesOf(answer.scope, grantedWhenAbsent),
-    savedAt: new Date(now).toISOString(),
   };
 }
 
@@ -370,7 +368,7 @@ async function beginSignIn({
       throw new SiwcError('the browser signed in to a different ChatGPT account than the one this sign-in renews');
     }
 
-    const record = { issuer: ISSUER, subject: identity.subject, email: identity.email, clientId: issued, idToken: answer.idToken, ...tokensOf(answer, at, SCOPES) };
+    const record = { issuer: ISSUER, subject: identity.subject, email: identity.email, clientId: issued, ...tokensOf(answer, at, SCOPES) };
 
     if (planEnabled(record)) return { outcome: 'signed-in', registered: registering, record };
 
@@ -467,12 +465,10 @@ function readRecord(file) {
     subject: stringOf(json?.subject),
     email: stringOf(json?.email) ?? null,
     clientId: stringOf(json?.clientId),
-    idToken: stringOf(json?.idToken),
     accessToken: stringOf(json?.accessToken),
     refreshToken: stringOf(json?.refreshToken),
     expiresAt: numberOf(json?.expiresAt),
     scopes: stringsOf(json?.scopes),
-    savedAt: stringOf(json?.savedAt),
   };
 }
 
@@ -719,7 +715,6 @@ module.exports = {
   DYNAMIC_AGENT_CLIENT,
   AGENT_NAME_HINT,
   CALLBACK_PATH,
-  USAGE_URL,
   DEVICE_RECORD_FILE,
   UNUSABLE_REFRESH_CODES,
   SiwcError,

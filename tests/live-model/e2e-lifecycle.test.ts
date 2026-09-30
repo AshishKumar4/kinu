@@ -36,10 +36,8 @@ import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import type { CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { buildEvalAgentSurface, createStepToolCallLog } from './harness';
 import { provisionLocalTarget, type LocalTarget } from './target-local';
-import {
-  EVAL_BACKEND_ENV, liveChatModel, liveModelTarget,
-  recordLiveModelSpend, reportLiveModelSpend, resolveEvalBackend, UNCONFIGURED_LLM,
-} from '@kinu.run/test-utils';
+import { seedTranscriptEntry, EVAL_BACKEND_ENV, liveChatModel, liveModelTarget,
+recordLiveModelSpend, reportLiveModelSpend, resolveEvalBackend, UNCONFIGURED_LLM, } from '@kinu.run/test-utils';
 
 /**
  * THIS SUITE IS THE IN-PROCESS LOOP, and it reads the target knob to say so.
@@ -150,8 +148,8 @@ async function chatTurn(turn: ChatTurn): Promise<ConversationTurn> {
   history.push(...result.response.messages);
   const responseText = collectStepText(result);
   const id = crypto.randomUUID();
-  await rt.stores.history.record('e2e', { id, message: { role: 'user', content: userMessage }, origin: 'input' });
-  await rt.stores.history.record('e2e', {
+  await seedTranscriptEntry(rt.stores.history, 'e2e', { id, message: { role: 'user', content: userMessage }, origin: 'input' });
+  await seedTranscriptEntry(rt.stores.history, 'e2e', {
     id: crypto.randomUUID(), message: { role: 'assistant', content: responseText }, origin: 'output',
   });
 

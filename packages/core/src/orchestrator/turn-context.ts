@@ -12,7 +12,7 @@ import type { LostToolCall } from '../tools/effect-claim';
 import { stepContextLimit, type ResolvedModelWindow } from '../context-window';
 import { turnInputStart } from '../prompting/volatile-context';
 import type { CountableRequest, InputTokenCount } from '../providers/input-tokens';
-import type { ArmedCompaction, CompactionTrigger, ExtensionHost } from '../extension';
+import type { CompactionTrigger, ExtensionHost } from '../extension';
 import { KinuError, diagnostics } from '../obs/index';
 import { ADMISSION_REFUSAL_MARK } from '../turn-failure';
 import { estimateTokens } from '../llm';
@@ -71,7 +71,7 @@ function refuseOversizedRequest(tokens: number, limit: number): KinuError {
 /** Structural: the concrete store lives in @kinu.run/compaction, which depends on core. */
 export interface CompactionTriggerReader {
   loadPromptTokens(sessionKey: string, historyLength: number): number | null;
-  takeArmedCompaction(sessionKey: string): ArmedCompaction | null;
+  takeArmedCompaction(sessionKey: string): boolean;
 }
 
 export interface MeasuredCompactionTrigger {
@@ -89,7 +89,7 @@ export function measureCompactionTrigger(
   const lastPromptTokens = state.loadPromptTokens(sessionKey, durableLength);
 
   const measured: MeasuredCompactionTrigger = {
-    trigger: state.takeArmedCompaction(sessionKey) ?? 'auto',
+    trigger: state.takeArmedCompaction(sessionKey) ? 'force' : 'auto',
   };
 
   if (lastPromptTokens !== null) measured.providerReportedTokens = lastPromptTokens;

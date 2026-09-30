@@ -2,7 +2,7 @@
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers';
 import { ConversationSearchStore, invalidateConversationSearchIndex } from '../src/index';
-import { present } from '@kinu.run/test-utils';
+import { seedTranscriptEntry, present } from '@kinu.run/test-utils';
 
 function setup() {
   const { rt, stores } = createTestRuntime();
@@ -11,7 +11,7 @@ function setup() {
 
   const record = async (sessionId: string, role: 'user' | 'assistant', text: string): Promise<string> => {
     const id = `entry-${++seq}`;
-    await stores.history.record(sessionId, {
+    await seedTranscriptEntry(stores.history, sessionId, {
       id, message: { role, content: text },
       origin: role === 'user' ? 'input' : 'output',
     });

@@ -96,12 +96,6 @@ import {
  *  attempt, and `#armStartup` early-returns on a pinned attempt, so nothing re-arms. */
 const CONTAINER_STOP_ATTEMPTS = 50;
 
-export interface UntimedResult {
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly exitCode: number;
-}
-
 interface UntimedExecution {
   cancelled: boolean;
   started?: Promise<ExecProcess>;
@@ -1661,7 +1655,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /** No deadline; the SDK's process lane lost output (D37). */
-  execUntimed(command: string, options: { readonly cwd?: string; readonly execId: string }): Promise<UntimedResult> {
+  execUntimed(command: string, options: { readonly cwd?: string; readonly execId: string }): Promise<ExecResult> {
     const pending: UntimedExecution = { cancelled: false };
     this.#untimed.set(options.execId, pending);
 

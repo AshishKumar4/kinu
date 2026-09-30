@@ -43,7 +43,7 @@ export { readActivityLog, writeActivityLog, type ActivityLogEntry } from './iden
 export { ChatHistoryEntrySchema } from './types/chat';
 
 // Every composition root calls this and nothing else (tests/contract-workspace-schema.test.ts).
-export { initActorTables, initAllTables, initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
+export { initAllTables, initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
 
 export { resetGuardedExec, StoragePredatesResetError } from './state/store-reset';
 
@@ -384,7 +384,6 @@ export {
   type PrepareStepContext,
   type TransformContext,
   type CompactionTrigger,
-  type ArmedCompaction,
 } from './extension';
 
 export {

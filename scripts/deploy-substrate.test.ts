@@ -3,8 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   WRANGLER_FAILED,
   containerAppIds,
-  containerApplicationName,
-  deleteFixtureWorker,
+
   wranglerProvesAbsence,
   type WranglerOptions,
 } from './fixtures/r2-bench/deploy-substrate';
@@ -47,33 +46,7 @@ describe('ephemeral container application listings', () => {
   });
 });
 
-describe('container application naming', () => {
-  test('names derive from the bound DO class', () => {
-    expect(containerApplicationName('kinu-probe-a', 'FuseProbeBox'))
-      .toBe('kinu-probe-a-fuseprobebox');
-    expect(containerApplicationName('kinu-probe-b', 'PayloadBenchSandbox'))
-      .toBe('kinu-probe-b-payloadbenchsandbox');
-  });
-});
-
-describe('ephemeral Worker deletion', () => {
-  test('an already-deleted Worker passes only from explicit absence', () => {
-    const outputs = [
-      `${WRANGLER_FAILED}: config route failed`,
-      `${WRANGLER_FAILED}: This Worker does not exist on your account. [code: 10007]`,
-    ];
-
-    const wrangle = (
-      _repoRoot: string,
-      _args: readonly string[],
-      _options?: WranglerOptions,
-    ): string => outputs.shift() ?? `${WRANGLER_FAILED}: no response`;
-
-    expect(deleteFixtureWorker({
-      repoRoot: '/repo', configPath: '/tmp/config', workerName: 'worker', log: () => {}, wrangle,
-    })).toBe(true);
-  });
-
+describe('Worker absence', () => {
   test('authentication and network failures never prove Worker absence', () => {
     expect(wranglerProvesAbsence(`${WRANGLER_FAILED}: Authentication error`)).toBe(false);
     expect(wranglerProvesAbsence(`${WRANGLER_FAILED}: network timeout`)).toBe(false);

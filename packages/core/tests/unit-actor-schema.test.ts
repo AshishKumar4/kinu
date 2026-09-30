@@ -1,9 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  initActorTables, initAllTables, initScaffoldTables, initSearchTables,
+  initActorStateSchema, initAllTables, initScaffoldTables, initSearchTables,
 } from '../src/index';
-import { makeSql, makeExecRaw } from './helpers';
+import { makeSql, makeExecRaw, makeSqlExec } from './helpers';
+import { wrapDatabase } from '../src/identity/inline-primitives';
+
+function actorState(db: Database): void {
+  initActorStateSchema({ ...wrapDatabase(db), exec: makeSqlExec(db) });
+}
 
 function tableNames(db: Database): string[] {
   return db.query<{ name: string }, []>(
@@ -19,7 +24,7 @@ describe('actor schema', () => {
   test('initializes actor-local state without workspace identity or fork lineage', () => {
     const db = new Database(':memory:');
 
-    initActorTables((ddl) => db.exec(ddl), makeSql(db));
+    actorState(db);
 
     const tables = tableNames(db);
 
@@ -43,9 +48,9 @@ describe('actor schema', () => {
 
   test('scaffold_versions carries the columns the scaffold code reads, however it was created', () => {
     // One DDL behind every entry point: a drifting copy in the unified initializer loses columns.
-    for (const init of [initAllTables, initActorTables]) {
+    for (const init of [(db: Database) => initAllTables(makeExecRaw(db), makeSql(db)), actorState]) {
       const db = new Database(':memory:');
-      init((ddl) => db.exec(ddl), makeSql(db));
+      init(db);
       expect(columnNames(db, 'scaffold_versions')).toEqual(
         ['actor_id', 'version', 'written_at', 'rationale', 'status', 'parent_version', 'pathology'],
       );
@@ -63,9 +68,9 @@ describe('actor schema', () => {
   });
 
   test('search_nodes carries the columns its readers select, however it was created', () => {
-    for (const init of [initAllTables, initActorTables]) {
+    for (const init of [(db: Database) => initAllTables(makeExecRaw(db), makeSql(db)), actorState]) {
       const db = new Database(':memory:');
-      init((ddl) => db.exec(ddl), makeSql(db));
+      init(db);
       const columns = columnNames(db, 'search_nodes');
 
       expect(columns).toContain('root_id');
