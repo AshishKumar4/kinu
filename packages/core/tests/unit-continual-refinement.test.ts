@@ -1,3 +1,4 @@
+import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Continual refinement end to end over the real owners. Asserts: an LLM proposal
  * never moves live behaviour by itself; writes land only in existing stores; a crash
@@ -402,16 +403,16 @@ const OTHER_OWNER_PROPOSAL = everyOwnerProposal(
 async function readSkill(rt: AgentRuntime, path: string): Promise<string | null> {
   const vfs = rt.agentStateVfs ?? rt.storage.vfs;
 
-  if (!await vfs.exists(path)) return null;
-  const read = await vfs.readFile(path, { encoding: 'utf8' });
+  if (!await exists(vfs, path)) return null;
+  const read = await readText(vfs, path);
 
-  return read instanceof Uint8Array ? new TextDecoder().decode(read) : read;
+  return read;
 }
 
 async function writeSkill(rt: AgentRuntime, path: string, source: string): Promise<void> {
   const vfs = rt.agentStateVfs ?? rt.storage.vfs;
   await vfs.mkdir(vfsDirname(path), { recursive: true });
-  await vfs.writeFile(path, source);
+  await writeText(vfs, path, source);
 }
 
 /** What the prompt would see: `discoverSkills` over the skill roots. */
@@ -536,7 +537,7 @@ describe('the refiner — bounded references, prior history, strict typed answer
     const fx = fixture();
     seedGradedTurns(fx.rt, 3);
     await fx.rt.storage.vfs.mkdir('memory', { recursive: true });
-    await fx.rt.storage.vfs.writeFile('memory/MEMORY.md', '# memory\n');
+    await writeText(fx.rt.storage.vfs, 'memory/MEMORY.md', '# memory\n');
 
     const { port, requests } = scriptedRefiner(proposalText({
       scope: 'workspace', summary: 'none', edits: [],
@@ -553,8 +554,8 @@ describe('the refiner — bounded references, prior history, strict typed answer
     const withAgentsMd = fixture();
     seedGradedTurns(withAgentsMd.rt, 3);
     await withAgentsMd.rt.storage.vfs.mkdir('memory', { recursive: true });
-    await withAgentsMd.rt.storage.vfs.writeFile('memory/MEMORY.md', '# memory\n');
-    await withAgentsMd.rt.storage.vfs.writeFile('AGENTS.md', '# project\n');
+    await writeText(withAgentsMd.rt.storage.vfs, 'memory/MEMORY.md', '# memory\n');
+    await writeText(withAgentsMd.rt.storage.vfs, 'AGENTS.md', '# project\n');
     const second = scriptedRefiner(proposalText({ scope: 'workspace', summary: 'none', edits: [] }));
     const secondDeps = withAgentsMd.deps(second.port);
     await requestRefinement(secondDeps, { trigger: 'explicit', scope: 'workspace' });
@@ -812,7 +813,7 @@ describe('routing — every typed edit lands in the store that already owns it',
     const opened = await requestRefinement(deps, { trigger: 'explicit', scope: 'workspace' });
     const root = refinementStagingPath(opened.id, 'brevity').split('/').slice(0, -2).join('/');
     await fx.rt.storage.vfs.mkdir(root.split('/').slice(0, -1).join('/'), { recursive: true });
-    await fx.rt.storage.vfs.writeFile(root, 'a regular file where the staging folder goes');
+    await writeText(fx.rt.storage.vfs, root, 'a regular file where the staging folder goes');
 
     await advanceRefinementLane(deps);
 
@@ -2097,13 +2098,13 @@ describe('promotion never half-lands — the read-back is what allows the unlink
   ): () => void {
     const vfs = rt.agentStateVfs ?? rt.storage.vfs;
     const real = vfs.writeFile.bind(vfs);
-    vfs.writeFile = async (written: string, data: string | Uint8Array) => {
+    vfs.writeFile = async (written: string, data: Uint8Array) => {
       if (written !== path) return real(written, data);
 
       if (mode === 'throw') throw new Error('disk full');
 
       // A torn write.
-      return real(written, `${data instanceof Uint8Array ? '' : data}\ntruncated`);
+      return real(written, new TextEncoder().encode('\ntruncated'));
     };
 
     return () => { vfs.writeFile = real; };

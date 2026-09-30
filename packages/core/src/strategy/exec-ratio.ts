@@ -1,3 +1,4 @@
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * `exec-ratio`: the metered-oracle measurement substrate. Reports the raw count of
  * metered oracle calls a candidate spent, against a reference measured on the same
@@ -236,7 +237,7 @@ export const REFERENCE_SOLVE_DECLARATION = 'export function solve(';
  */
 async function removeOwnedFiles(ctx: MeasurementContext, files: readonly string[]): Promise<void> {
   for (const file of files) {
-    await tolerateAsync(() => ctx.vfs.unlink(file), 'enoent');
+    await tolerateAsync(async () => ctx.vfs.unlink(file), 'enoent');
   }
 }
 
@@ -250,7 +251,7 @@ export function preflightRatioHarness(ctx: MeasurementContext): Promise<string |
   const probeFile = `${MEASURE_PREFIX}probe_${String(Date.now())}_${String(verifications)}.mjs`;
 
   return settle(Effect.gen(function* () {
-    const unwritable = yield* step(() => ctx.vfs.writeFile(probeFile, `console.log('RESULT ' + JSON.stringify({ ok: 1 }));\n`)).pipe(Effect.match({
+    const unwritable = yield* step(() => writeText(ctx.vfs, probeFile, `console.log('RESULT ' + JSON.stringify({ ok: 1 }));\n`)).pipe(Effect.match({
       onSuccess: (): string | null => null,
       onFailure: (failed) => `the workspace filesystem would not accept the harness file ${probeFile}: ${renderThrownChain(failed)}`,
     }));
@@ -299,14 +300,14 @@ export function runRatioMeasurement(
   const measureFile = `${MEASURE_PREFIX}${stamp}.mjs`;
 
   const measured = Effect.gen(function* () {
-    const submitted = yield* step(() => ctx.vfs.readFile(SOLUTION_FILE, { encoding: 'utf8' })).pipe(Effect.match({
-      onSuccess: (read) => (read instanceof Uint8Array ? new TextDecoder().decode(read) : read),
+    const submitted = yield* step(() => readText(ctx.vfs, SOLUTION_FILE)).pipe(Effect.match({
+      onSuccess: (read) => read,
       onFailure: (failed) => `throw new Error(${JSON.stringify(
         `${SOLUTION_FILE} could not be read: ${renderThrownChain(failed)}`,
       )});\n`,
     }));
 
-    yield* Effect.promise(() => ctx.vfs.writeFile(candidateFile, submitted));
+    yield* Effect.promise(() => writeText(ctx.vfs, candidateFile, submitted));
 
     const params = { ...problem.params, budgetMultiple: BUDGET_MULTIPLE, deadlineMs: DEADLINE_MS };
 
@@ -318,7 +319,7 @@ export function runRatioMeasurement(
       problem.body,
     ].join('\n');
 
-    yield* Effect.promise(() => ctx.vfs.writeFile(measureFile, source));
+    yield* Effect.promise(() => writeText(ctx.vfs, measureFile, source));
 
     const run: ExecOutcome = yield* Effect.promise(() => ctx.exec(`node ${measureFile}`));
     const stdout = run.stdout ?? '';

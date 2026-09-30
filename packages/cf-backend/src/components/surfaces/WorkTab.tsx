@@ -580,7 +580,7 @@ function ParkedWriteChange({ id, rpc }: { id: string; rpc: Rpc }) {
 }
 
 function ParkedWriteDiff({ id, rpc }: { id: string; rpc: Rpc }) {
-  const load = useCallback(() => rpc<ParkedWriteReview | null>("reviewParkedWrite", [id]), [rpc, id]);
+  const load = useCallback(() => rpc<ParkedWriteReview>("reviewParkedWrite", [id]), [rpc, id]);
   const { resource, reload } = useAsyncResource(load);
   const review = lastValue(resource);
 

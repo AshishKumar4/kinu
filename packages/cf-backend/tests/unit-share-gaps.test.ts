@@ -1,3 +1,4 @@
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Share-gaps rules end to end through the edge route: rate bound, consent page, fork flag, and revoking either kind.
  * Same harness as `unit-slate-live-shares.test.ts`; the per-share daily spend bound pauses a running slate's
@@ -32,14 +33,14 @@ const VIEWER_ID = 'fedcba9876543210fedcba9876543210';
 
 async function authorIssuesSlate(files: AgentRuntime['storage']['vfs']) {
   await files.mkdir('/slates/issues', { recursive: true });
-  await files.writeFile('/slates/issues/package.json', JSON.stringify({
+  await writeText(files, '/slates/issues/package.json', JSON.stringify({
     name: 'issues', description: 'Triage the open issues', main: 'src/server.ts',
     slate: { title: 'Issue triage', bindings: {
       GITHUB: { kind: 'mcp', server: 'connection-id', tools: ['read_issue', 'create_issue'] },
       FILES: { kind: 'namespace', namespace: 'workspace', members: ['readFile', 'writeFile'] },
     } },
   }));
-  await files.writeFile('/slates/issues/src/server.ts', 'export default {};');
+  await writeText(files, '/slates/issues/src/server.ts', 'export default {};');
 }
 
 const post = (path: string, body: Record<string, string | boolean | readonly string[] | undefined>) => new Request(`https://app.test${path}`, {
@@ -269,8 +270,8 @@ test('D1: a live share forks for who it names, refuses who it does not, honors f
   const viewerFiles = workspaceFiles(world.viewer.agent);
   const landed = '/slates/' + result.slate;
 
-  const admittedTree = JSON.stringify(await viewerFiles.readFile(landed + '/package.json', { encoding: 'utf8' }))
-    + JSON.stringify(await viewerFiles.readFile(landed + '/src/server.ts', { encoding: 'utf8' }));
+  const admittedTree = JSON.stringify(await readText(viewerFiles, landed + '/package.json'))
+    + JSON.stringify(await readText(viewerFiles, landed + '/src/server.ts'));
 
   for (const secret of [mcpHeader, providerKey, 'issues-owner']) expect(admittedTree).not.toContain(secret);
 

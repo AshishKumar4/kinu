@@ -1,3 +1,4 @@
+import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The fan-in at the level barrier (`expand:'aggregate'`): the level's parents are
  * offered to merge-back as members in dependency order (*Merge-back*). A parent with
@@ -10,7 +11,7 @@ import {
   KinuError, refusalOf, renderThrownChain, settle, type Logger,
 } from '../obs/index';
 import { nanoid } from '../utils/nanoid';
-import type { VFS } from '../types/primitives';
+
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
 import type { SwarmBudget } from './swarm-budget';
@@ -159,7 +160,7 @@ export function singlePathApply(vfs: VFS): MemberApply {
     for (const file of files) {
       const after = file.after;
 
-      yield* Effect.promise(() => (after === null ? vfs.unlink(file.path) : vfs.writeFile(file.path, after)));
+      yield* Effect.promise(async () => (after === null ? vfs.unlink(file.path) : writeText(vfs, file.path, after)));
     }
   }));
 }

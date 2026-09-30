@@ -1,10 +1,11 @@
+import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Engine ports over Kinu's shared storage primitives. Transcripts live at
  * `.kinu/compaction/<sessionKey>/<rangeHash>.md` in the agent's own file plane, readable by its file tools.
  */
 
 
-import { SPILL_DIRS, type ActorHandle, type SqlExecutor, type VFS } from '@kinu.run/core';
+import { SPILL_DIRS, type ActorHandle, type SqlExecutor } from '@kinu.run/core';
 import type { PlanSnapshot, PlanStore, TranscriptStore } from '@better-compact/core';
 import type { ArchiveIndexStore, ArchiveRange } from './manifest';
 import * as v from 'valibot';
@@ -41,7 +42,7 @@ export function createVfsTranscriptStore(getVfs: () => VFS): VfsTranscriptStore 
         if (!msg.includes('exist')) throw err;
       }
 
-      await vfs.writeFile(relativePath, content);
+      await writeText(vfs, relativePath, content);
 
       return { absolutePath: relativePath };
     },

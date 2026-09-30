@@ -2,7 +2,7 @@
 // native process before reporting cancellation; codemode has no implicit work deadline.
 import { describe, test, expect } from "bun:test";
 import { createSandboxExecutor } from "@kinu.run/core";
-import type { KinuSandbox } from "../src/kinu-sandbox";
+import type { KinuDevbox } from "../src/kinu-devbox";
 import { adaptCloudflareSandbox } from "../src/sandbox-exec-lane";
 // codemode reaches `cloudflare:workers` at load; the preload's boundary stub serves it.
 import { CodemodeLauncher, createRuntimeExecutor, KinuSandboxExecutor } from "../src/codemode-sandbox";
@@ -72,8 +72,8 @@ function fakeBox(input: {
     notePortRemoved: async () => undefined,
   };
 
-  // `KinuSandbox` is a DO class a test cannot construct; only the members above are reachable.
-  const sdk: KinuSandbox = Object.create(box);
+  // `KinuDevbox` is a DO class a test cannot construct; only the members above are reachable.
+  const sdk: KinuDevbox = Object.create(box);
 
   // No-op egress preflight: tested in unit-egress-interception.test.ts.
   return {
@@ -110,7 +110,7 @@ describe("adaptCloudflareSandbox — a pending readiness refuses before dispatch
  
     const calls: BoxCalls = { started: [], killed: [] };
 
-    const box: KinuSandbox = Object.create({
+    const box: KinuDevbox = Object.create({
       resolveReadiness: async () => ({ kind: 'pending' as const, reason }),
       execUntimed: async (command: string) => { calls.started.push({ command }); },
     });
@@ -123,7 +123,7 @@ describe("adaptCloudflareSandbox — a pending readiness refuses before dispatch
     expect(calls).toEqual({ started: [], killed: [] });
 
     // The refusal is the pending kind, not a blanket gate failure.
-    const ready: KinuSandbox = Object.create({
+    const ready: KinuDevbox = Object.create({
       resolveReadiness: async () => ({ kind: 'restored' as const }),
       execUntimed: async () => ({ stdout: 'ok', stderr: '', exitCode: 0 }),
     });

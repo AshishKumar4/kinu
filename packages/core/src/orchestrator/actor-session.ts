@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import type { ModelMessage, ToolSet } from 'ai';
 import * as v from 'valibot';
 import { INTERRUPTED_TURN, measureTurnRequest, type ChatEvent, type ChatOptions } from '../chat';
@@ -26,7 +27,7 @@ import type { ScaffoldBridgeOpts } from './scaffold-host';
 import type { ModelCallSpend } from '../events/model-call';
 import type { AgentSignal, SendOutcome } from '../types/signals';
 import { USER_MESSAGE_SIGNAL_KIND } from '../types/signals';
-import type { VFS } from '../types/primitives';
+
 import type { AgentConfigStore } from '../config/store';
 import type { CompletedTurn } from '../evolution/types';
 import {

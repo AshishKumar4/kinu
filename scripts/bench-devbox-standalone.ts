@@ -26,7 +26,7 @@ import {
   sourceRevision,
 } from './bench-devbox-fixture';
 import {
-  WRANGLER_FAILED, awaitApplicationRollout, containerAppIds, delay, describeThrown, publishTeardown,
+  WRANGLER_FAILED, containerAppIds, delay, describeThrown, publishTeardown,
   runTeardownOnce, runWrangler,
 } from './fixtures/r2-bench/deploy-substrate';
 import { R2_OPERATION_NAMES as R2_OP_VOCABULARY } from '../packages/devbox/bench/r2-operations';
@@ -38,7 +38,7 @@ const REPO = join(import.meta.dir, '..');
 
 const EXAMPLE_DIR = join(REPO, 'packages/devbox/example');
 
-/** A cold attach on a fresh application includes its rollout; ten minutes without one is a stalled box. */
+/** Ten minutes without an attach is a stalled box. */
 const ATTACH_WAIT_MS = 600_000;
 
 const log = (line: string): void => { process.stderr.write(`[standalone] ${line}\n`); };
@@ -286,13 +286,11 @@ async function main(): Promise<number> {
 
     writeFileSync(config, template);
     runWrangler(REPO, ['r2', 'bucket', 'create', worker]);
-    const deployedAt = Date.now();
     const output = runWrangler(REPO, ['deploy', '--config', config, '--var', `EXAMPLE_TOKEN:${token}`]);
     const origin = /https:\/\/[a-z0-9.-]+\.workers\.dev/.exec(output)?.[0];
     workerVersion = /Current Version ID:\s*([0-9a-f-]{8,})/i.exec(output)?.[1] ?? null;
 
     if (origin === undefined || output.startsWith(WRANGLER_FAILED)) throw new Error(`the deploy printed no origin: ${output.slice(-1500)}`);
-    await awaitApplicationRollout({ repoRoot: REPO, application, log, since: deployedAt });
 
     for (let polls = 0; (await fetch(`${origin}/health`, { headers: { authorization: `Bearer ${token}` } })).status !== 200; polls += 1) {
       if (polls > 60) throw new Error(`${origin} never accepted this run's token`);

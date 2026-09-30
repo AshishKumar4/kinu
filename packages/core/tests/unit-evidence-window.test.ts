@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // The evolution loop's evidence budget: the end of a long turn must reach the judge.
 import type { ChatEvent } from '../src/chat';
 import { describe, test, expect } from 'bun:test';
@@ -76,7 +77,7 @@ describe('the readers can see the end of a long turn', () => {
       VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'initial', 'current')`;
     void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
       VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'alternative', 'pending')`;
-    await rt.storage.vfs.writeFile('scaffold/agent.js.v1', 'async function* run() {}');
+    await writeText(rt.storage.vfs, 'scaffold/agent.js.v1', 'async function* run() {}');
 
     const prompts: string[] = [];
 
@@ -121,7 +122,7 @@ describe('the readers can see the end of a long turn', () => {
       VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'initial', 'current')`;
     void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
       VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'alternative', 'pending')`;
-    await rt.storage.vfs.writeFile('scaffold/agent.js.v1', 'async function* run() {}');
+    await writeText(rt.storage.vfs, 'scaffold/agent.js.v1', 'async function* run() {}');
 
     const prompts: string[] = [];
     const currentOutput = trajectory(200_000, `CURRENT-${ending}`);

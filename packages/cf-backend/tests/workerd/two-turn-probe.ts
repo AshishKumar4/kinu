@@ -1939,7 +1939,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
         await target.writeWorkspaceFile({
           kind: 'file',
           path: drive.seedFile.path,
-          data: drive.seedFile.content,
+          data: new TextEncoder().encode(drive.seedFile.content),
         });
       }
 

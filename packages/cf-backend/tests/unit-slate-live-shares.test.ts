@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Live slate shares through `orchestratorHarness` and a real owner UserDO: the graph from the catalog and the
  * grant on the share row. A viewer's calls need the running slate that carries its invocation, so they are
@@ -25,7 +26,7 @@ function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, 
  *  slate the PEER app hop walks into (which hops back, proving the cycle guard). */
 async function authorIssuesSlate(files: AgentRuntime['storage']['vfs']) {
   await files.mkdir('/slates/issues', { recursive: true });
-  await files.writeFile('/slates/issues/package.json', JSON.stringify({
+  await writeText(files, '/slates/issues/package.json', JSON.stringify({
     name: 'issues', description: 'Triage the open issues', main: 'src/server.ts',
     slate: { title: 'Issue triage', bindings: {
       GITHUB: { kind: 'mcp', server: 'connection-id', tools: ['read_issue', 'create_issue'] },
@@ -35,16 +36,16 @@ async function authorIssuesSlate(files: AgentRuntime['storage']['vfs']) {
       PEER: { kind: 'app', id: 'digest' },
     } },
   }));
-  await files.writeFile('/slates/issues/src/server.ts', 'export default {};');
+  await writeText(files, '/slates/issues/src/server.ts', 'export default {};');
   await files.mkdir('/slates/digest', { recursive: true });
-  await files.writeFile('/slates/digest/package.json', JSON.stringify({
+  await writeText(files, '/slates/digest/package.json', JSON.stringify({
     name: 'digest', main: 'server.ts',
     slate: { title: 'Digest', bindings: {
       DIGEST_FILES: { kind: 'namespace', namespace: 'workspace', members: ['readFile'] },
       BACK: { kind: 'app', id: 'issues' },
     } },
   }));
-  await files.writeFile('/slates/digest/server.ts', 'export default {};');
+  await writeText(files, '/slates/digest/server.ts', 'export default {};');
 }
 
 interface World {
@@ -154,7 +155,7 @@ test('S1: agent-control and eval bindings surface as problems and admit no membe
 
   try {
     const files = workspaceFiles(world.owner.agent);
-    await files.writeFile('/slates/issues/package.json', JSON.stringify({
+    await writeText(files, '/slates/issues/package.json', JSON.stringify({
       name: 'issues', main: 'src/server.ts',
       slate: { title: 'Issue triage', bindings: {
         CONTROL: { kind: 'namespace', namespace: 'agents' },

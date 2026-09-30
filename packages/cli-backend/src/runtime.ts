@@ -1,3 +1,4 @@
+import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Local CLI runtime factory. Two file planes: agent state always lives in the
  * Nimbus filesystem over SQLite; the workspace plane (`file`, `shell`, `eval`,
@@ -9,9 +10,7 @@ import type {
   AgentRuntime, ActorHandle, ActorReference, LLM, ModelRouteResolution,
   ResolvedTurnProfile, Shell, ShellExecResult, OutputSpill, SpillOutcome,
 } from '@kinu.run/core';
-import type {
-  Schedule, Memory, VFS, VfsNativeReads, SqlExec, SqlExecutor, RawSqlExec, WorkspaceSchemaSql,
-} from '@kinu.run/core';
+import type { Schedule, Memory, SqlExec, SqlExecutor, RawSqlExec, WorkspaceSchemaSql } from '@kinu.run/core';
 import type { DeferredApprovalChannel, FilesOwner, RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
 import { spawn } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, rmSync, chmodSync, writeSync } from 'node:fs';
@@ -174,7 +173,7 @@ export function inspectionFiles(db: Database, cwd: string | null): Pick<VFS, 're
   const storage = inlineWorkspaceStorage(db);
   const vfs = new SqliteVFS(storage.sql, storage.transactions).as(CRED_KERNEL);
 
-  return { readFile: (path, opts) => Promise.resolve(opts?.encoding === undefined ? vfs.readFile(path) : vfs.readFileString(path)) };
+  return { readFile: (path) => vfs.readFile(path) };
 }
 
 /**
@@ -195,15 +194,15 @@ export function makeWorkspaceSchemaSql(db: LocalDb): WorkspaceSchemaSql {
 }
 
 /** The tail reads via the plane's stat + ranged read, which MemoryStore's seam lacks. */
-function adaptMemory(store: MemoryStore, vfs: VFS & Pick<VfsNativeReads, 'readRange'>): Memory {
+function adaptMemory(store: MemoryStore, vfs: VFS & Required<Pick<VFS, 'readRange'>>): Memory {
   return {
     write: (path, content) => store.writeFile(path, content),
     append: (path, content) => store.appendToFile(path, content),
     async index(path) {
-      const raw = await tolerateAsync(() => vfs.readFile(path, { encoding: 'utf8' }), 'enoent');
+      const raw = await tolerateAsync(() => readText(vfs, path), 'enoent');
 
       if (raw === undefined) return;
-      await store.indexFile(path, raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw);
+      await store.indexFile(path, raw);
     },
     search(query, limit = 10) {
       return Promise.resolve(store.search(query, limit));
@@ -702,19 +701,15 @@ async function buildCLIHeadRuntime(
   const parentVfs = parent.storage.vfs;
 
   const parentHandle: ParentWorkspaceHandle = {
-    read: (path) => answerParentRpc(path, async () => {
-      const content = await parentVfs.readFile(path);
-
-      return content instanceof Uint8Array ? content : new TextEncoder().encode(content);
-    }),
+    read: (path) => answerParentRpc(path, async () => parentVfs.readFile(path)),
     write: (input: ParentRpcWrite) => answerParentRpc(input.path, async () => {
       if (input.kind === 'file') await parentVfs.writeFile(input.path, input.data);
       else await parentVfs.mkdir(input.path, { recursive: input.recursive });
 
       return null;
     }),
-    list: (path) => answerParentRpc(path, () => parentVfs.readdir(path)),
-    stat: (path) => answerParentRpc(path, () => parentVfs.stat(path)),
+    list: (path) => answerParentRpc(path, async () => parentVfs.readdir(path)),
+    stat: (path, options) => answerParentRpc(path, async () => parentVfs.stat(path, options)),
     delete: (path) => answerParentRpc(path, async () => {
       await parentVfs.unlink(path);
 

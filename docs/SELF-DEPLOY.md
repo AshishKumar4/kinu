@@ -106,7 +106,7 @@ straight to disk.
    first client creation confirms each is selectable.
 2. **Account and plan.** The lean deployment runs on the free plan. R2 needs
    a payment method on file. The sandbox needs Workers Paid and is off by
-   default: with it off, the upload leaves out the `KinuSandbox` binding, and
+   default: with it off, the upload leaves out the `KinuDevbox` binding, and
    it never sends the container. No other subscription is needed. Not built:
    the flow does not read the account's plan or R2 billing state, and the
    page has no sandbox switch and no plan link.

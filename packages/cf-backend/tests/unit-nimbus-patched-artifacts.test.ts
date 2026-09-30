@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { Connection } from 'agents';
@@ -160,7 +161,7 @@ describe('installed Nimbus dependency integrity', () => {
         exec: async () => { throw new Error('the plane runs no commands'); },
       });
 
-      await plane.writeFile(`${LEGACY_WORKSPACE_ROOT}/slates/a/package.json`, '{}');
+      await writeText(plane, `${LEGACY_WORKSPACE_ROOT}/slates/a/package.json`, '{}');
 
       expect(workspace.vfs.as(CRED_SESSION_USER).readFileString(`${WORKSPACE_ROOT}/slates/a/package.json`)).toBe('{}');
       db.close();

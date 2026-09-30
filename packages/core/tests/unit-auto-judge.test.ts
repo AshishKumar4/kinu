@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import {
   runAutoShadowEval,
@@ -54,10 +55,7 @@ async function setup(): Promise<ReturnType<typeof createTestRuntime>['rt']> {
     VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'initial', 'current')`;
   void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
     VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'alternative', 'pending')`;
-  await rt.storage.vfs.writeFile(
-    'scaffold/agent.js.v1',
-    'async function* run(rt, task) { yield { type: "chunk", data: "pending: " + task }; }',
-  );
+  await writeText(rt.storage.vfs, 'scaffold/agent.js.v1', 'async function* run(rt, task) { yield { type: "chunk", data: "pending: " + task }; }');
   await rt.identity.scaffold.write(
     'async function* run(rt, task) { yield { type: "chunk", data: "current: " + task }; }',
   );
@@ -193,10 +191,7 @@ describe('runAutoShadowEval', () => {
       VALUES (${rt.actor.actorId}, 2, ${Date.now()}, 'second attempt', 'rolled_back')`;
     void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
       VALUES (${rt.actor.actorId}, 3, ${Date.now()}, 'third attempt', 'pending')`;
-    await rt.storage.vfs.writeFile(
-      'scaffold/agent.js.v3',
-      'async function* run(rt, task) { yield { type: "chunk", data: "v3: " + task }; }',
-    );
+    await writeText(rt.storage.vfs, 'scaffold/agent.js.v3', 'async function* run(rt, task) { yield { type: "chunk", data: "v3: " + task }; }');
 
     const result = await runAutoShadowEval({
       events: new RunEventRecorder(rt.storage.sql, rt.actor),

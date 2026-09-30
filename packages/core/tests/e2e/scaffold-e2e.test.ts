@@ -1,3 +1,4 @@
+import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Scaffold evolution with a real LLM. Needs AI_GATEWAY_BASE_URL and AI_GATEWAY_AUTH; skips otherwise. */
 
 import { describe, test, expect } from 'bun:test';
@@ -35,9 +36,9 @@ function createScaffoldTestRuntime(llm: LLM) {
       id: 'scaffold-test', name: 'scaffold-test',
       scaffold: {
         path: 'scaffold/agent.js',
-        exists: () => vfs.exists('scaffold/agent.js'),
-        read: async () => v.parse(v.string(), await vfs.readFile('scaffold/agent.js', { encoding: 'utf8' })),
-        write: (code) => vfs.writeFile('scaffold/agent.js', code),
+        exists: () => exists(vfs, 'scaffold/agent.js'),
+        read: async () => v.parse(v.string(), await readText(vfs, 'scaffold/agent.js')),
+        write: (code) => writeText(vfs, 'scaffold/agent.js', code),
         version: async () => (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v
           FROM scaffold_versions WHERE actor_id = ${actor.actorId}`)[0]?.v ?? 0,
       },
@@ -80,9 +81,7 @@ describe.skipIf(!isE2EConfigured())('E2E scaffold evolution', () => {
       expect(result.error).toBeUndefined();
       expect(await rt.identity.scaffold.version()).toBe(version);
 
-      const pending = await rt.storage.vfs.readFile(
-        `${rt.identity.scaffold.path}.v${String(version)}`, { encoding: 'utf8' },
-      );
+      const pending = await readText(rt.storage.vfs, `${rt.identity.scaffold.path}.v${String(version)}`);
 
       expect(pending).toBe(generated);
       expect(pending).not.toBe(INITIAL_SCAFFOLD_SOURCE);
@@ -121,9 +120,7 @@ describe.skipIf(!isE2EConfigured())('E2E scaffold evolution', () => {
 
     // Gate 4 writes the proposal to the versioned path, so the live file does not move (modify.ts).
     expect(await rt.identity.scaffold.read()).toBe(INITIAL_SCAFFOLD_SOURCE);
-    expect(await rt.storage.vfs.readFile(
-      `${rt.identity.scaffold.path}.v1`, { encoding: 'utf8' },
-    )).toBe(validCode);
+    expect(await readText(rt.storage.vfs, `${rt.identity.scaffold.path}.v1`)).toBe(validCode);
 
     const rbResult = await rollbackScaffold(rt, 0);
     expect(rbResult.ok).toBe(true);

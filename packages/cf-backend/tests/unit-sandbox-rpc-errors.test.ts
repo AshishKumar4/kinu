@@ -2,11 +2,11 @@
 import { expect, test } from 'bun:test';
 import { createSandboxExecutor, sandboxFiles } from '@kinu.run/core';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import type { KinuSandbox } from '../src/kinu-sandbox';
+import type { KinuDevbox } from '../src/kinu-devbox';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 
 function filesRefusing(cause: Error) {
-  const box: KinuSandbox = Object.create({
+  const box: KinuDevbox = Object.create({
     resolveReadiness: async () => ({ kind: 'restored' as const }),
     readFile: async () => { throw cause; },
   });
@@ -49,7 +49,7 @@ test('a non-file failure is not classified from its message', async () => {
 test('a transient failure on the way to the box is retried by the executor', async () => {
   let calls = 0;
 
-  const box: KinuSandbox = Object.create({
+  const box: KinuDevbox = Object.create({
     resolveReadiness: async () => ({ kind: 'restored' as const }),
     readFile: async () => {
       calls += 1;
@@ -71,7 +71,7 @@ test('the sandbox file view reads exact bytes through the adapter', async () => 
   const png = new Uint8Array([0x89, 0x50, 0x00, 0xff, 0xfe]);
   const asked: unknown[] = [];
 
-  const box: KinuSandbox = Object.create({
+  const box: KinuDevbox = Object.create({
     resolveReadiness: async () => ({ kind: 'restored' as const }),
     // As `Devbox.readFile` answers: the bytes only when asked for base64.
     readFile: async (_path: string, opts?: { encoding?: 'utf-8' | 'base64' }) => {

@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * A provider or host error settles the node row with its cause, and a flat run returns every
  * candidate with its reason. Elapsed silence is not a failure: the turn loop has no watchdog.
@@ -340,7 +341,7 @@ async function runWith(
 ): Promise<SwarmRunResult> {
   const { rt, db } = createTestRuntime();
   await rt.storage.vfs.mkdir('candidate', { recursive: true });
-  await rt.storage.vfs.writeFile(REFERENCE_PATH, REFERENCE);
+  await writeText(rt.storage.vfs, REFERENCE_PATH, REFERENCE);
   const logger = createRecordingLogger();
 
   const result = await runSwarm(

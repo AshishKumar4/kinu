@@ -1,3 +1,4 @@
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
@@ -1071,7 +1072,7 @@ describe('oversize subordinate reports stay reachable', () => {
     expect(path).toBe(eventContentPath(content));
 
     if (!path) throw new Error('expected spilled report path');
-    expect(await vfs.readFile(path)).toBe(content);
+    expect(await readText(vfs, path)).toBe(content);
 
     expect(renderForLLM(event).brief).toEndWith(`: full report: ${path}`);
     const batch = buildDrainBatch([event]);
@@ -1155,7 +1156,7 @@ describe('the parent ingress, in the order it runs', () => {
     }, 11);
 
     expect(result.disposition).toBe('admitted');
-    expect(await scene.files.get(spilled)).toBe(content);
+    expect(scene.files.get(spilled)).toEqual(new TextEncoder().encode(content));
     const event = scene.log.pending({ variant: 'subordinate_report' })[0];
     expect(reportPayload(event).content_path).toBe(spilled);
     expect(scene.seen).toEqual(['transaction', 'announce', 'drain']);

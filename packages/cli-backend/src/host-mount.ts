@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The host filesystem as a file plane, via node:fs. Writes snapshot into the
  * bound shell's shadow-git checkpoints, so /undo covers them.
@@ -5,7 +6,7 @@
 
 import * as fs from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
-import type { FileCheckpoints, FileReach, MountedVfs, VFS } from '@kinu.run/core';
+import type { FileCheckpoints, FileReach, MountedVfs } from '@kinu.run/core';
 import { LEGACY_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from '@kinu.run/core';
 import { toVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { tolerateAsync } from '@kinu.run/core/obs';
@@ -22,11 +23,9 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
   };
 
   return {
-    async readFile(path, opts) {
+    async readFile(path) {
       try {
-        return opts?.encoding === 'utf-8' || opts?.encoding === 'utf8'
-          ? await fs.readFile(path, 'utf-8')
-          : new Uint8Array(await fs.readFile(path));
+        return new Uint8Array(await fs.readFile(path));
       } catch (error) { throwVfsError({ error, path }) }
     },
     async writeFile(path, data) {
@@ -38,14 +37,23 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
       } catch (error) { throwVfsError({ error, path }) }
     },
     async readdir(path) {
-      try { return await fs.readdir(path); }
+      try {
+        return (await fs.readdir(path, { withFileTypes: true })).map((entry) => {
+          if (entry.isSymbolicLink()) return { name: entry.name, type: 'symlink' as const };
+
+          return { name: entry.name, type: entry.isDirectory() ? 'directory' as const : 'file' as const };
+        });
+      }
       catch (error) { throwVfsError({ error, path }) }
     },
-    async stat(path) {
+    async stat(path, options) {
       try {
-        const s = await tolerateAsync(() => fs.stat(path), 'enoent');
+        const stat = await tolerateAsync(() => options?.follow === false ? fs.lstat(path) : fs.stat(path), 'enoent');
 
-        return s === undefined ? null : { size: s.size, mtimeMs: s.mtimeMs, isDir: s.isDirectory() };
+        if (stat === undefined) return null;
+        const type = stat.isSymbolicLink() ? 'symlink' as const : 'file' as const;
+
+        return { size: stat.size, mtimeMs: stat.mtimeMs, type: stat.isDirectory() ? 'directory' : type };
       } catch (error) { throwVfsError({ error, path }) }
     },
     async unlink(path) {
@@ -57,9 +65,6 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
     async mkdir(path, opts) {
       try { await fs.mkdir(path, { recursive: opts?.recursive ?? false }); }
       catch (error) { throwVfsError({ error, path }) }
-    },
-    async exists(path) {
-      return await tolerateAsync(() => fs.stat(path), 'enoent') !== undefined;
     },
   };
 }
@@ -103,13 +108,12 @@ export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | un
   const hostPath = (path: string): string => locate(path).hostPath;
 
   return {
-    readFile: (path, opts) => host.readFile(hostPath(path), opts),
+    readFile: (path) => host.readFile(hostPath(path)),
     writeFile: (path, data) => host.writeFile(hostPath(path), data),
     readdir: (path) => host.readdir(hostPath(path)),
-    stat: (path) => host.stat(hostPath(path)),
+    stat: (path, options) => host.stat(hostPath(path), options),
     unlink: (path) => host.unlink(hostPath(path)),
     mkdir: (path, opts) => host.mkdir(hostPath(path), opts),
-    exists: (path) => host.exists(hostPath(path)),
   };
 }
 

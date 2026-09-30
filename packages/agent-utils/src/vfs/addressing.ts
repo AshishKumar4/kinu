@@ -1,13 +1,15 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+
 /** Correction for a model that addressed the agent file plane as the machine filesystem; roots are read live. */
 
 export async function vfsAddressingHint(
-	vfs: { readdir(path: string): Promise<string[]> },
+	vfs: Pick<VFS, 'readdir'>,
 	subject: string,
 ): Promise<string> {
 	let roots = "";
 
 	try {
-		roots = (await vfs.readdir("/")).join(", ");
+		roots = (await vfs.readdir('/')).map(({ name }) => name).join(', ');
 	} catch (error) {
 		// Built while reporting a failed lookup, so it must not throw; an unlistable root is stated.
 		roots = `unlistable (${error instanceof Error ? error.message : String(error)})`;

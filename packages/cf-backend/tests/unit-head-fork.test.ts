@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Heads are forks of their parent workspace: they read the shared tree directly and write only their own subtree.
  * Defends: a head getting an empty filesystem on its own facet storage and reporting "found nothing".
@@ -7,7 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { CRAFT_NEUTRAL_PRIOR, agentHome, agentTmpRoot, headAgentName, parseActorKey, type AgentRuntime } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { unreachableObjects } from "./helpers/bindings";
-import type { KinuSandbox } from "../src/kinu-sandbox";
+import type { KinuDevbox } from "../src/kinu-devbox";
 import type { RecordedUserPlaneCalls } from './helpers/actor-harness';
 import type { KinuEgressParams } from '../src/egress/outbound';
 import type { CFRuntime } from '../src/runtime';
@@ -47,7 +48,7 @@ const sandboxFor = (id: string) => {
     };
 };
 
-const sandboxes = Object.assign(unreachableObjects<KinuSandbox>("Sandbox"), { getByName: sandboxFor });
+const sandboxes = Object.assign(unreachableObjects<KinuDevbox>("KinuDevbox"), { getByName: sandboxFor });
 
 // Must follow the sandbox double: both helpers' module graphs reach the sandbox SDK.
 const { hostedExplorationHarness, orchestratorHarness } = await import("./helpers/actor-harness");
@@ -62,10 +63,10 @@ function isCFRuntime(runtime: AgentRuntime): runtime is CFRuntime {
 /** The workspace has a container, so the head's runtime registers a sandbox executor over it. */
 async function hostedHead(files: Record<string, string> = {}, id = 'head-1', userPlane?: RecordedUserPlaneCalls) {
   const workspace = orchestratorHarness(userPlane, { container: true });
-  workspace.agent.harnessDeclareEnv({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY, Sandbox: sandboxes });
+  workspace.agent.harnessDeclareEnv({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY, KinuDevbox: sandboxes });
 
   for (const [path, content] of Object.entries(files)) {
-    await workspace.agent.writeWorkspaceFile({ kind: 'file', path, data: content });
+    await workspace.agent.writeWorkspaceFile({ kind: 'file', path, data: new TextEncoder().encode(content) });
   }
 
   const head = await hostedExplorationHarness(workspace, id);
@@ -171,10 +172,10 @@ describe('a head forks its parent workspace', () => {
     const plane = workspacePlane(rt);
 
     expect(await plane.tools.readFile.execute('/home/main/repo/parser.ts')).toBe('one\ntwo\n');
-    await rt.storage.vfs.writeFile(`${home}/notes.md`, 'visible');
+    await writeText(rt.storage.vfs, `${home}/notes.md`, 'visible');
     expect(await workspace.agent.readWorkspaceFile(`${home}/notes.md`))
       .toEqual(new TextEncoder().encode('visible'));
-    await expect(rt.storage.vfs.writeFile('/home/main/repo/parser.ts', 'one\ntwo\nthree\n'))
+    await expect(writeText(rt.storage.vfs, '/home/main/repo/parser.ts', 'one\ntwo\nthree\n'))
       .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
     expect(await workspace.agent.readWorkspaceFile('/home/main/repo/parser.ts'))
       .toEqual(new TextEncoder().encode('one\ntwo\n'));

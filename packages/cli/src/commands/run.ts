@@ -71,7 +71,7 @@ export async function runCommand(name: string, promptParts: string[], opts: Agen
     headless: false,
   });
 
-  exitOneShot(failed);
+  await exitOneShot(failed);
 }
 
 export interface ExecOptions extends Omit<AgentClientFlags, 'noAutoEvolve'> {
@@ -104,14 +104,17 @@ export async function execCommand(promptParts: string[], opts: ExecOptions): Pro
     headless: true,
   });
 
-  exitOneShot(failed);
+  await exitOneShot(failed);
 }
 
 /**
- * Exit rather than return: the shell keeps handles on background children (servers, VMs), which would hold the process open.
- * Each child runs in its own process group, so it outlives this exit.
+ * Exit rather than return: a background server or VM would hold the process open; each has its own process group,
+ * so it outlives this exit. Output drains first: `process.exit` drops what a pipe hasn't taken.
  */
-function exitOneShot(failed: boolean): never {
+async function exitOneShot(failed: boolean): Promise<never> {
+  await Promise.all([process.stdout, process.stderr].map((stream) => new Promise<void>((drained) => {
+    stream.write('', () => drained());
+  })));
   process.exit(failed ? 1 : 0);
 }
 

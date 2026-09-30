@@ -1,3 +1,4 @@
+import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Drive skill rules: no silent same-name replacement, no non-skill links, reserved folders stay put. */
 import { describe, expect, test } from 'bun:test';
 import { mossaicVfs } from '../src/vfs/mossaic-vfs';
@@ -37,7 +38,7 @@ describe('listing', () => {
     expect((await listDrive(drive, '/')).entries.map((entry) => [entry.name, entry.kind, entry.skillProblem]))
       .toEqual([['skills', 'folder', '/skills is a reserved Drive folder']]);
     expect(await listDrive(drive, DRIVE_SKILLS_DIR)).toEqual({ path: DRIVE_SKILLS_DIR, entries: [] });
-    await drive.writeFile('/notes/readme.md', 'x');
+    await writeText(drive, '/notes/readme.md', 'x');
     expect((await listDrive(drive, '/notes')).entries).toEqual([{ name: 'readme.md', kind: 'file', size: 1, mtimeMs: expect.any(Number), skill: false }]);
     expect((await listDrive(drive, '/')).entries.find((entry) => entry.name === 'notes')).toMatchObject({ kind: 'folder', skill: false, skillProblem: 'no SKILL.md in /notes' });
   });
@@ -47,12 +48,12 @@ describe('mark as skill', () => {
   test('a skill folder elsewhere on the Drive is linked under /skills; the folder stays put', async () => {
     const drive = tenant();
 
-    await drive.writeFile('/projects/ops/deploy/SKILL.md', SKILL('deploy'));
-    await drive.writeFile('/projects/ops/deploy/scripts/run.sh', 'echo');
+    await writeText(drive, '/projects/ops/deploy/SKILL.md', SKILL('deploy'));
+    await writeText(drive, '/projects/ops/deploy/scripts/run.sh', 'echo');
 
     expect(await markAsSkill(drive, '/projects/ops/deploy')).toEqual({ name: 'deploy', linked: `${DRIVE_SKILLS_DIR}/deploy` });
     expect(await drive.readlink(`${DRIVE_SKILLS_DIR}/deploy`)).toBe('/projects/ops/deploy');
-    expect(await drive.exists('/projects/ops/deploy/SKILL.md')).toBe(true);
+    expect(await exists(drive, '/projects/ops/deploy/SKILL.md')).toBe(true);
 
     const listed = await listDrive(drive, DRIVE_SKILLS_DIR);
 
@@ -62,7 +63,7 @@ describe('mark as skill', () => {
   test('a folder already under /skills is a skill by position', async () => {
     const drive = tenant();
 
-    await drive.writeFile(`${DRIVE_SKILLS_DIR}/review/SKILL.md`, SKILL('review'));
+    await writeText(drive, `${DRIVE_SKILLS_DIR}/review/SKILL.md`, SKILL('review'));
     expect(await markAsSkill(drive, `${DRIVE_SKILLS_DIR}/review`)).toEqual({ name: 'review', linked: `${DRIVE_SKILLS_DIR}/review` });
     expect((await listDrive(drive, DRIVE_SKILLS_DIR)).entries[0]).toMatchObject({ name: 'review', kind: 'folder', skill: true });
   });
@@ -70,18 +71,18 @@ describe('mark as skill', () => {
   test('a folder that is not a skill, a reserved folder, and a taken name are each refused with the reason', async () => {
     const drive = tenant();
 
-    await drive.writeFile('/notes/readme.md', 'not a skill');
+    await writeText(drive, '/notes/readme.md', 'not a skill');
     await expect(markAsSkill(drive, '/notes')).rejects.toThrow('no SKILL.md');
-    await drive.writeFile('/Bad Name/SKILL.md', SKILL('bad'));
+    await writeText(drive, '/Bad Name/SKILL.md', SKILL('bad'));
     await expect(markAsSkill(drive, '/Bad Name')).rejects.toThrow('folder name must be kebab-case');
-    await drive.writeFile('/mismatch/SKILL.md', SKILL('other'));
+    await writeText(drive, '/mismatch/SKILL.md', SKILL('other'));
     await expect(markAsSkill(drive, '/mismatch')).rejects.toThrow('does not match front-matter name');
     await expect(markAsSkill(drive, DRIVE_SKILLS_DIR)).rejects.toThrow('reserved');
 
-    await drive.writeFile(`${DRIVE_SKILLS_DIR}/deploy/SKILL.md`, SKILL('deploy'));
-    await drive.writeFile('/elsewhere/deploy/SKILL.md', SKILL('deploy'));
+    await writeText(drive, `${DRIVE_SKILLS_DIR}/deploy/SKILL.md`, SKILL('deploy'));
+    await writeText(drive, '/elsewhere/deploy/SKILL.md', SKILL('deploy'));
     await expect(markAsSkill(drive, '/elsewhere/deploy')).rejects.toThrow('already exists');
-    expect(await drive.readFile(`${DRIVE_SKILLS_DIR}/deploy/SKILL.md`, { encoding: 'utf8' })).toBe(SKILL('deploy'));
+    expect(await readText(drive, `${DRIVE_SKILLS_DIR}/deploy/SKILL.md`)).toBe(SKILL('deploy'));
   });
 });
 
@@ -91,7 +92,7 @@ describe('add skill', () => {
 
     expect(await addSkill(drive, [{ path: 'SKILL.md', bytes: bytes(SKILL('triage')) }], null))
       .toEqual({ name: 'triage', linked: `${DRIVE_SKILLS_DIR}/triage` });
-    expect(await drive.readFile(`${DRIVE_SKILLS_DIR}/triage/SKILL.md`, { encoding: 'utf8' })).toBe(SKILL('triage'));
+    expect(await readText(drive, `${DRIVE_SKILLS_DIR}/triage/SKILL.md`)).toBe(SKILL('triage'));
   });
 
   test('an uploaded folder is rooted at its SKILL.md and keeps its files', async () => {
@@ -105,9 +106,9 @@ describe('add skill', () => {
     ];
 
     expect(await addSkill(drive, files, 'deploy')).toEqual({ name: 'deploy', linked: `${DRIVE_SKILLS_DIR}/deploy` });
-    expect(await drive.readFile(`${DRIVE_SKILLS_DIR}/deploy/scripts/run.sh`, { encoding: 'utf8' })).toBe('echo run');
-    expect(await drive.exists(`${DRIVE_SKILLS_DIR}/deploy/reference/notes.md`)).toBe(true);
-    expect(await drive.exists(`${DRIVE_SKILLS_DIR}/__MACOSX/junk`)).toBe(false);
+    expect(await readText(drive, `${DRIVE_SKILLS_DIR}/deploy/scripts/run.sh`)).toBe('echo run');
+    expect(await exists(drive, `${DRIVE_SKILLS_DIR}/deploy/reference/notes.md`)).toBe(true);
+    expect(await exists(drive, `${DRIVE_SKILLS_DIR}/__MACOSX/junk`)).toBe(false);
   });
 
   test('no SKILL.md, a bad front matter, and a taken name are refused', async () => {
@@ -154,20 +155,20 @@ describe('uploads', () => {
     const drive = tenant();
 
     expect(await receiveDriveUpload(drive, { kind: 'file', path: '/docs/a/b.txt' }, bytes('hello'))).toEqual({ ok: true });
-    expect(await drive.readFile('/docs/a/b.txt', { encoding: 'utf8' })).toBe('hello');
+    expect(await readText(drive, '/docs/a/b.txt')).toBe('hello');
 
     const archive = packZip([{ path: 'x/y.txt', bytes: bytes('y') }, { path: 'z.txt', bytes: bytes('z') }]);
 
     expect(await receiveDriveUpload(drive, { kind: 'zip', folder: '/unpacked' }, archive)).toEqual({ ok: true });
-    expect(await drive.readFile('/unpacked/x/y.txt', { encoding: 'utf8' })).toBe('y');
-    expect(await drive.readFile('/unpacked/z.txt', { encoding: 'utf8' })).toBe('z');
+    expect(await readText(drive, '/unpacked/x/y.txt')).toBe('y');
+    expect(await readText(drive, '/unpacked/z.txt')).toBe('z');
     await expect(receiveDriveUpload(drive, { kind: 'zip', folder: '/unpacked' }, bytes('plain'))).rejects.toThrow('not a zip');
 
     const skillZip = packZip([{ path: 'deploy/SKILL.md', bytes: bytes(SKILL('deploy')) }, { path: 'deploy/run.sh', bytes: bytes('r') }]);
 
     expect(await receiveDriveUpload(drive, { kind: 'skill', name: null }, skillZip))
       .toEqual({ ok: true, skill: { name: 'deploy', linked: `${DRIVE_SKILLS_DIR}/deploy` } });
-    expect(await drive.exists(`${DRIVE_SKILLS_DIR}/deploy/run.sh`)).toBe(true);
+    expect(await exists(drive, `${DRIVE_SKILLS_DIR}/deploy/run.sh`)).toBe(true);
     expect(await receiveDriveUpload(drive, { kind: 'skill', name: null }, bytes(SKILL('pasted'))))
       .toEqual({ ok: true, skill: { name: 'pasted', linked: `${DRIVE_SKILLS_DIR}/pasted` } });
     await expect(receiveDriveUpload(drive, { kind: 'file', path: DRIVE_SKILLS_DIR }, bytes('x'))).rejects.toThrow('reserved');
@@ -180,13 +181,13 @@ describe('folders, renames, deletes', () => {
 
     await makeDriveFolder(drive, '/projects');
     await expect(makeDriveFolder(drive, '/projects')).rejects.toThrow('already exists');
-    await drive.writeFile('/projects/a.txt', 'a');
-    await drive.writeFile('/projects/sub/b.txt', 'b');
+    await writeText(drive, '/projects/a.txt', 'a');
+    await writeText(drive, '/projects/sub/b.txt', 'b');
     await renameDriveEntry(drive, '/projects', '/work');
-    expect(await drive.readFile('/work/sub/b.txt', { encoding: 'utf8' })).toBe('b');
+    expect(await readText(drive, '/work/sub/b.txt')).toBe('b');
     await expect(renameDriveEntry(drive, DRIVE_SKILLS_DIR, '/elsewhere')).rejects.toThrow('reserved');
     await expect(renameDriveEntry(drive, '/work', '/work/inside')).rejects.toThrow('into itself');
-    await drive.writeFile('/taken.txt', 't');
+    await writeText(drive, '/taken.txt', 't');
     await expect(renameDriveEntry(drive, '/work/a.txt', '/taken.txt')).rejects.toThrow('already exists');
     await expect(renameDriveEntry(drive, '/work/a.txt', '/nowhere/a.txt')).rejects.toThrow('not a folder');
 
@@ -195,12 +196,12 @@ describe('folders, renames, deletes', () => {
     expect(archive.map((entry) => entry.path).sort()).toEqual(['a.txt', 'sub/b.txt']);
     await expect(packDriveFolder(drive, '/work', 1)).rejects.toThrow('transfer limit');
 
-    await drive.writeFile(`${DRIVE_SKILLS_DIR}/deploy/SKILL.md`, SKILL('deploy'));
+    await writeText(drive, `${DRIVE_SKILLS_DIR}/deploy/SKILL.md`, SKILL('deploy'));
     await drive.symlink('/work', '/link');
     await deleteDriveEntry(drive, '/link');
-    expect(await drive.exists('/work/a.txt')).toBe(true);
+    expect(await exists(drive, '/work/a.txt')).toBe(true);
     await deleteDriveEntry(drive, '/work');
-    expect(await drive.exists('/work/sub/b.txt')).toBe(false);
+    expect(await exists(drive, '/work/sub/b.txt')).toBe(false);
     await expect(deleteDriveEntry(drive, DRIVE_SKILLS_DIR)).rejects.toThrow('reserved');
     await expect(deleteDriveEntry(drive, '/gone')).rejects.toThrow('no such entry');
     expect(driveFailure({ cause: new Error('x') }).code).toBe('io');

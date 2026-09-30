@@ -18,7 +18,7 @@ function refusePreview(code: string, error: string, status: number): Response {
 
 /** A deployment can omit container previews entirely. */
 export interface SandboxPreviewEnv extends PreviewSuffixEnv {
-  Sandbox?: { getByName(name: string): { fetch(request: Request): Promise<Response> } };
+  KinuDevbox?: { getByName(name: string): { fetch(request: Request): Promise<Response> } };
   AUTH_KV?: KvStore;
 }
 
@@ -33,7 +33,7 @@ export async function servePreviewRequest(request: Request, env: SandboxPreviewE
   }
 
   // Fail closed.
-  if (!env.AUTH_KV || !env.Sandbox) {
+  if (!env.AUTH_KV || !env.KinuDevbox) {
     return refusePreview('PREVIEW_UNAVAILABLE', 'Preview routing is unavailable.', 503);
   }
 
@@ -52,7 +52,7 @@ export async function servePreviewRequest(request: Request, env: SandboxPreviewE
     const forwarded = new URL(request.url);
     forwarded.pathname = `/_devbox/preview/${label.port}/${encodeURIComponent(label.token)}${forwarded.pathname}`;
 
-    const response = await env.Sandbox.getByName(label.sandboxId).fetch(new Request(forwarded, new Request(request, {
+    const response = await env.KinuDevbox.getByName(label.sandboxId).fetch(new Request(forwarded, new Request(request, {
       headers: sanitizePreviewRequestHeaders(request.headers),
     })));
 

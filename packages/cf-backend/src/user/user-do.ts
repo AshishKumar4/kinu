@@ -4524,7 +4524,7 @@ export class UserDO extends Agent<Env> {
       if (stat === null) throw new KinuError('missing', `no such entry: ${clean}`);
       const leaf = clean === '/' ? 'drive' : clean.slice(clean.lastIndexOf('/') + 1);
 
-      if (stat.isDir) {
+      if ((stat.type === 'directory')) {
         const bytes = await packDriveFolder(drive, clean, FILE_TRANSFER_MAX_BYTES);
         this.driveDownloads.set(transferId, { path: clean, bytes });
 

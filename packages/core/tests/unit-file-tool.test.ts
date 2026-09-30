@@ -1,3 +1,4 @@
+import type { VFS, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /** The `file` tool: exact-match editor, honest read, read-before-write gate. Asserts the model-facing contract. */
 
 import { describe, expect, test } from 'bun:test';
@@ -12,7 +13,7 @@ import { SPILL_DIRS, TurnContextBudget } from '../src/context-budget';
 import { JsonObjectSchema } from '../src/utils/json';
 import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { RESIDENT_TEXT_MAX_BYTES } from '../src/vfs/mounts';
-import type { Memory, VFS, VfsEntryStat } from '../src/types/primitives';
+import type { Memory } from '../src/types/primitives';
 import { fnv1a64 } from '../src/utils/fnv1a';
 import { DEFAULT_TOOL_RESULT_MAX_CHARS } from '../src/tools/clamp';
 import type { JsonValue } from '../src/utils/json';
@@ -409,7 +410,7 @@ describe('TurnFileLedger', () => {
  * Plane with a ranged read like every production plane. `perRead` caps bytes per `readRange` so small
  * fixtures cross chunk and multi-byte boundaries; `wholeReads` records every unbounded `readFile`.
  */
-function memoryVfs(seed: Record<string, string> = {}, opts: { perRead?: number; revisions?: boolean } = {}) {
+function memoryVfs(seed: Record<string, string> = {}, opts: { perRead?: number; revisions?: boolean } = {}): VFS & Required<Pick<VFS, 'readRange'>> & { files: Map<string, string>; wholeReads: string[]; write(path: string, content: string): void } {
   const files = new Map(Object.entries(seed));
   // Starts with a revision so a later write bumps it to a new value.
   const revisions = new Map(Object.keys(seed).map((path) => [path, 1]));
@@ -440,17 +441,17 @@ function memoryVfs(seed: Record<string, string> = {}, opts: { perRead?: number; 
 
       if (content === undefined) throw new VfsError('ENOENT', 'no such file, open', path);
 
-      return content;
+      return encoder.encode(content);
     },
     readRange: async (path: string, offset: number, length: number) => bytesOf(path)
       .subarray(offset, offset + Math.min(length, opts.perRead ?? length)),
-    async writeFile(path: string, data: string | Uint8Array) { write(path, String(data)); },
-    async readdir() { return ['local']; },
-    async stat(path: string): Promise<VfsEntryStat | null> {
+    async writeFile(path: string, data: Uint8Array) { write(path, new TextDecoder('utf-8', { ignoreBOM: true }).decode(data)); },
+    async readdir() { return [{ name: 'local', type: 'directory' }]; },
+    async stat(path: string): Promise<VfsStat | null> {
       const content = files.get(path);
 
       if (content === undefined) return null;
-      const stat: VfsEntryStat = { size: encoder.encode(content).byteLength, mtimeMs: 0, isDir: false };
+      const stat: VfsStat = { size: encoder.encode(content).byteLength, mtimeMs: 0, type: 'file' };
 
       if (opts.revisions) stat.revision = revisions.get(path) ?? 1;
 
@@ -459,7 +460,6 @@ function memoryVfs(seed: Record<string, string> = {}, opts: { perRead?: number; 
     },
     async unlink(path: string) { files.delete(path); },
     async mkdir() {},
-    async exists(path: string) { return files.has(path); },
   };
 }
 
@@ -624,7 +624,7 @@ describe('file tool', () => {
   test('a file that reads back as bytes is decoded, not thrown out of the tool', async () => {
     // Only an unranged plane is asked for a whole file, so bytes-for-utf8 must be survivable there.
     const bytes = new TextEncoder().encode('hello\n');
-    const { readRange: _ranged, ...unranged } = memoryVfs({ 'a.bin': 'hello\n' });
+    const unranged = { ...memoryVfs({ 'a.bin': 'hello\n' }), readRange: undefined };
     const { call } = toolFor({ ...unranged, readFile: async () => bytes });
     expect(await call({ action: 'read', path: 'a.bin' })).toBe('hello\n');
   });
@@ -826,11 +826,11 @@ describe('a `file` read never makes the file resident', () => {
   });
 
   test('a plane with no ranged read serves a small file and refuses a large one rather than fetching it', async () => {
-    const { readRange: _small, ...small } = memoryVfs({ 'f.txt': 'alpha\nbeta\n' });
+    const small = { ...memoryVfs({ 'f.txt': 'alpha\nbeta\n' }), readRange: undefined };
     expect(await toolFor(small).call({ action: 'read', path: 'f.txt' })).toBe('alpha\nbeta\n');
     expect(small.wholeReads).toEqual(['f.txt']);
 
-    const { readRange: _big, ...big } = memoryVfs({ 'f.txt': 'x'.repeat(RESIDENT_TEXT_MAX_BYTES + 1) });
+    const big = { ...memoryVfs({ 'f.txt': 'x'.repeat(RESIDENT_TEXT_MAX_BYTES + 1) }), readRange: undefined };
     const refused = toolFor(big).call({ action: 'read', path: 'f.txt' });
     await expect(refused).rejects.toMatchObject({ code: 'denied' });
     await expect(refused).rejects.toThrow('no ranged read');
@@ -840,9 +840,9 @@ describe('a `file` read never makes the file resident', () => {
 
   /** Unranged plane with an honest stat and a dishonest read: the file grew in between. */
   const racingVfs = (grown: string) => {
-    const { readRange: _none, ...unranged } = memoryVfs({ 'f.txt': 'small\n' });
+    const unranged = { ...memoryVfs({ 'f.txt': 'small\n' }), readRange: undefined };
 
-    return { ...unranged, async readFile() { return grown; } };
+    return { ...unranged, async readFile() { return new TextEncoder().encode(grown); } };
   };
 
   test('a file that grew between the stat and the read is refused, not carried', async () => {
@@ -870,9 +870,22 @@ describe('a `file` read never makes the file resident', () => {
   });
 
   test('a path that is not there is reported missing even by a plane that cannot stat it', async () => {
-    const { readRange: _none, ...unranged } = memoryVfs();
+    const unranged = { ...memoryVfs(), readRange: undefined };
     await expect(toolFor(unranged).call({ action: 'read', path: 'gone.txt' }))
       .rejects.toMatchObject({ code: 'missing' });
+  });
+
+  test('an absent stat refuses reads and searches as missing before a ranged read', async () => {
+    const vfs = memoryVfs();
+    let ranges = 0;
+    vfs.readRange = async () => { ranges += 1; throw new VfsError('EIO', 'the reader is unavailable'); };
+
+    const { call } = toolFor(vfs);
+
+    await expect(call({ action: 'read', path: 'absent/file' })).rejects.toMatchObject({ code: 'missing' });
+    await expect(call({ action: 'search', path: 'absent/file', query: 'needle' })).rejects.toMatchObject({ code: 'missing' });
+    expect(ranges).toBe(0);
+    expect(vfs.wholeReads).toEqual([]);
   });
 });
 
@@ -985,7 +998,7 @@ describe('a `file` failure is attributable from the durable row alone', () => {
 describe('a bulk read is bounded where it is produced', () => {
   /** The `list` answer for a declared directory, read back from the spill when the context cap replaced it. */
   const listed = async (entries: readonly string[]): Promise<Record<string, JsonValue>> => {
-    const vfs = { ...memoryVfs(), async readdir() { return [...entries]; } };
+    const vfs = { ...memoryVfs(), async readdir() { return entries.map((name) => ({ name, type: 'file' as const })); } };
     const { call } = toolFor(vfs);
     const result = await call({ action: 'list', path: '/d' });
     const clamped = v.safeParse(v.string(), result);

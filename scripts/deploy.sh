@@ -13,7 +13,7 @@
 # uploaded" and "the product works".
 #
 # Deploys the cf-backend Worker (`kinu-staging`, or `kinu` under `--promote`)
-# with the @cloudflare/sandbox Sandbox DO + Container binding and the
+# with the KinuDevbox Durable Object and its container, and the
 # local-device executor routes. Pipeline: strict repository gates → vite build
 # → CLI source archive → wrangler deploy → smoke test → post-deploy tiers → the
 # record. Promotion: the record → vite build → staging's downloads → wrangler
@@ -874,14 +874,13 @@ fi
 
 KINU_VERSION="$(grep -oE 'Version ID:[[:space:]]*[a-f0-9-]+' "$KINU_DEPLOY_LOG" | head -1 | awk '{print $NF}')"
 
-# Verify wrangler echoed the Sandbox binding (proves @cloudflare/sandbox is wired).
-# Binding name is "Sandbox" (capital S) — the SDK hardcodes env.Sandbox lookup.
-if grep -qE 'KinuSandbox' "$KINU_DEPLOY_LOG"; then
-  echo -e "${GREEN}✅ Kinu bound Sandbox (KinuSandbox DO + Container)${NC}"
+# Verify wrangler echoed the workspace container's binding.
+if grep -qE 'KinuDevbox' "$KINU_DEPLOY_LOG"; then
+  echo -e "${GREEN}✅ Kinu bound KinuDevbox (Durable Object + container)${NC}"
 else
-  echo -e "${RED}❌ wrangler output did not mention the Sandbox binding${NC}"
+  echo -e "${RED}❌ wrangler output did not mention the KinuDevbox binding${NC}"
   echo "   Check that packages/cf-backend/wrangler.jsonc includes:"
-  echo "     { \"class_name\": \"KinuSandbox\", \"name\": \"Sandbox\" }"
+  echo "     { \"class_name\": \"KinuDevbox\", \"name\": \"KinuDevbox\" }"
   echo "   and a \"containers\" block."
   exit 1
 fi

@@ -1,3 +1,4 @@
+import { exists, readText, type Awaitable, type VFS, type VfsRevision, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // The workspace mount table: /pc and /sandbox extend one view (#36/#142/#143); an absent mount
 // is stated as absent, and device consent is still enforced on mounted paths. The workspace shell
 // serves the same table (#22).
@@ -5,7 +6,7 @@ import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { fakeMossaic } from '@kinu.run/test-utils/mossaic';
-import type { VFS, VfsRevision } from '../src/types/primitives';
+
 import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { EXECUTOR_MOUNTS, removeTreeWithVfsOps, standardMounts, withMountTable, type VfsMount } from '../src/vfs/mounts';
 import { mossaicVfs } from '../src/vfs/mossaic-vfs';
@@ -14,7 +15,7 @@ import { observeWrites } from '../src/vfs/observe';
 import { createWorkspaceBundle } from './helpers';
 import { agentCred, agentHome, agentTmpRoot, confineAgentTmp, provisionAgentHome } from '../src/vfs/agent-home';
 
-/** readdir returns entry names and stat distinguishes dirs; a miss throws the VfsError the real backends throw. */
+/** Dirents and stats distinguish directories; a miss throws the VfsError the real backends throw. */
 function fakeTree(entries: Record<string, string>): VFS {
 	const files = new Map<string, string>(Object.entries(entries));
 	const dirs = new Set<string>();
@@ -31,7 +32,7 @@ function fakeTree(entries: Record<string, string>): VFS {
 
 			if (content === undefined) throw new VfsError('ENOENT', 'no such file or directory', path);
 
-			return content;
+			return new TextEncoder().encode(content);
 		},
 		writeFile: async (path, data) => { files.set(path, data instanceof Uint8Array ? new TextDecoder().decode(data) : data); },
 		readdir: async (path) => {
@@ -44,18 +45,17 @@ function fakeTree(entries: Record<string, string>): VFS {
 				names.add(key.slice(prefix.length).split('/')[0]);
 			}
 
-			return [...names];
+			return [...names].map((name) => ({ name, type: dirs.has(`${prefix}${name}`) ? 'directory' : 'file' }));
 		},
 		stat: async (path) => {
 			const content = files.get(path);
 
-			if (content !== undefined) return { size: content.length, mtimeMs: 0, isDir: false };
+			if (content !== undefined) return { size: new TextEncoder().encode(content).byteLength, mtimeMs: 0, type: 'file' };
 
-			return dirs.has(path) ? { size: 0, mtimeMs: 0, isDir: true } : null;
+			return dirs.has(path) ? { size: 0, mtimeMs: 0, type: 'directory' } : null;
 		},
 		unlink: async (path) => { files.delete(path); dirs.delete(path); },
 		mkdir: async (path) => { dirs.add(path); },
-		exists: async (path) => files.has(path) || dirs.has(path),
 	};
 }
 
@@ -72,17 +72,17 @@ describe('the workspace plane mount table', () => {
 
 		const mounted = withMountTable(fakeTree({ 'notes.md': 'workspace' }), [mountOf('pc', device)]);
 
-		expect((await mounted.readdir('/pc/home/dev')).sort()).toEqual(['report.txt', 'src']);
-		expect(await mounted.readdir('/pc/home/dev/src')).toEqual(['app.ts']);
-		expect((await mounted.stat('/pc/home/dev/src'))?.isDir).toBe(true);
-		expect((await mounted.stat('/pc/home/dev/report.txt'))?.isDir).toBe(false);
+		expect(((await mounted.readdir('/pc/home/dev')).map(({ name }) => name)).sort()).toEqual(['report.txt', 'src']);
+		expect((await mounted.readdir('/pc/home/dev/src')).map(({ name }) => name)).toEqual(['app.ts']);
+		expect((await mounted.stat('/pc/home/dev/src'))?.type).toBe('directory');
+		expect((await mounted.stat('/pc/home/dev/report.txt'))?.type).toBe('file');
 	});
 
 	test('/sandbox lists the container tree', async () => {
 		const container = fakeTree({ '/workspace/build.log': 'ok' });
 		const mounted = withMountTable(fakeTree({}), [mountOf('sandbox', container)]);
 
-		expect(await mounted.readdir('/sandbox/workspace')).toEqual(['build.log']);
+		expect((await mounted.readdir('/sandbox/workspace')).map(({ name }) => name)).toEqual(['build.log']);
 	});
 
 	test('reads and writes under a live mount cross to the owning machine', async () => {
@@ -90,9 +90,9 @@ describe('the workspace plane mount table', () => {
 		const base = fakeTree({});
 		const mounted = withMountTable(base, [mountOf('pc', device)]);
 
-		expect(await mounted.readFile('/pc/home/dev/notes.txt', { encoding: 'utf8' })).toBe('native bytes');
-		await mounted.writeFile('/pc/home/dev/out.txt', 'written through the plane');
-		expect(await device.readFile('/home/dev/out.txt', { encoding: 'utf8' })).toBe('written through the plane');
+		expect(await readText(mounted, '/pc/home/dev/notes.txt')).toBe('native bytes');
+		await writeText(mounted, '/pc/home/dev/out.txt', 'written through the plane');
+		expect(await readText(device, '/home/dev/out.txt')).toBe('written through the plane');
 	});
 
 	test('routes mkdir, stat, exists, unlink, and revision writes through a live mount', async () => {
@@ -112,9 +112,9 @@ describe('the workspace plane mount table', () => {
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', device)]);
 
 		await mounted.mkdir('/pc/home/dev/build', { recursive: true });
-		expect(await mounted.stat('/pc/home/dev/build')).toMatchObject({ isDir: true });
-		await mounted.writeFile('/pc/home/dev/build/output.txt', 'built');
-		expect(await mounted.exists('/pc/home/dev/build/output.txt')).toBe(true);
+		expect(await mounted.stat('/pc/home/dev/build')).toMatchObject({ type: 'directory' });
+		await writeText(mounted, '/pc/home/dev/build/output.txt', 'built');
+		expect(await exists(mounted, '/pc/home/dev/build/output.txt')).toBe(true);
 
 		const conditional = mounted.writeFileIfRevision?.bind(mounted);
 
@@ -127,7 +127,7 @@ describe('the workspace plane mount table', () => {
 		expect(revisionWrites).toEqual([['/home/dev/build/revision.txt', 4]]);
 
 		await mounted.unlink('/pc/home/dev/remove.txt');
-		expect(await mounted.exists('/pc/home/dev/remove.txt')).toBe(false);
+		expect(await exists(mounted, '/pc/home/dev/remove.txt')).toBe(false);
 	});
 	test('classifies unsupported conditional writes on base and mounted trees', async () => {
 		const base = fakeTree({ '/workspace/base.txt': 'base before' });
@@ -153,7 +153,7 @@ describe('the workspace plane mount table', () => {
 			expect(error.code).toBe('ENOTSUP');
 			expect(error.errno).toBe(-95);
 			expect(error.path).toBe(path);
-			expect(await mounted.readFile(path, { encoding: 'utf8' })).toBe(before);
+			expect(await readText(mounted, path)).toBe(before);
 		}
 	});
 
@@ -162,10 +162,10 @@ describe('the workspace plane mount table', () => {
 			mountOf('pc', null, 'no device connected'),
 		]);
 
-		const refused: Array<Promise<unknown>> = [
-			mounted.readdir('/pc'),
+		const refused: Array<Awaitable<unknown>> = [
+			Promise.resolve(mounted.readdir('/pc')).then(entries => entries.map(({ name }) => name)),
 			mounted.readFile('/pc/x'),
-			mounted.writeFile('/pc/x', 'data'),
+			writeText(mounted, '/pc/x', 'data'),
 			mounted.unlink('/pc/x'),
 			mounted.mkdir('/pc/x'),
 		];
@@ -185,8 +185,8 @@ describe('the workspace plane mount table', () => {
 		if (conditional === undefined) throw new Error('the mounted VFS must expose conditional writes');
 		await expect(conditional('/pc/x', new Uint8Array(), 1)).rejects.toMatchObject({ code: 'ENXIO' });
 
-		expect(await mounted.stat('/pc')).toBeNull();
-		expect(await mounted.exists('/pc/x')).toBe(false);
+		await expect(mounted.stat('/pc')).rejects.toMatchObject({ code: 'ENXIO' });
+		await expect(exists(mounted, '/pc/x')).rejects.toMatchObject({ code: 'ENXIO' });
 	});
 
 	test('device consent and revocation still govern reads under /pc', async () => {
@@ -227,7 +227,7 @@ describe('the workspace plane mount table', () => {
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', view)]);
 		const spill = '/pc/tmp/kinu-tool-output/device-rpc-1.stdout.log';
 
-		expect(await mounted.readFile('/pc/home/dev/notes.txt', { encoding: 'utf8' })).toBe('consented');
+		expect(await readText(mounted, '/pc/home/dev/notes.txt')).toBe('consented');
 		await expect(mounted.readFile('/pc/etc/secrets.key')).rejects.toMatchObject({
 			code: 'EACCES',
 			path: '/etc/secrets.key',
@@ -237,11 +237,11 @@ describe('the workspace plane mount table', () => {
 		// Sandboxed, the daemon maps /tmp to the agent's own temp directory, where a long command's
 		// whole output is saved, so the view reaches it too; nothing else outside the folder.
 		scope = 'sandboxed';
-		expect(await mounted.readFile(spill, { encoding: 'utf8' })).toBe('spilled');
+		expect(await readText(mounted, spill)).toBe('spilled');
 		await expect(mounted.readFile('/pc/etc/secrets.key')).rejects.toThrow(/outside the consented device directory/);
 
 		scope = 'unconfined';
-		expect(await mounted.readFile('/pc/etc/secrets.key', { encoding: 'utf8' })).toBe('outside');
+		expect(await readText(mounted, '/pc/etc/secrets.key')).toBe('outside');
 
 		scope = 'root';
 		await expect(mounted.readFile('/pc/etc/secrets.key')).rejects.toThrow(
@@ -257,17 +257,17 @@ describe('the workspace plane mount table', () => {
 			mountOf('sandbox', null, 'no Sandbox container bound'),
 		]);
 
-		expect(await mounted.readdir('/')).toEqual(expect.arrayContaining(['notes.md', 'memory', 'pc']));
-		expect(await mounted.readdir('/')).not.toContain('sandbox');
+		expect((await mounted.readdir('/')).map(({ name }) => name)).toEqual(expect.arrayContaining(['notes.md', 'memory', 'pc']));
+		expect((await mounted.readdir('/')).map(({ name }) => name)).not.toContain('sandbox');
 		// Snapshots, index services and the real shell use the base plane; none enumerate a VFS-only mount.
-		expect(await mounted.readdir('')).not.toContain('pc');
-		expect(await base.readdir('/')).not.toContain('pc');
+		expect((await mounted.readdir('')).map(({ name }) => name)).not.toContain('pc');
+		expect((await base.readdir('/')).map(({ name }) => name)).not.toContain('pc');
 		expect(await base.stat('/pc')).toBeNull();
 
-		await mounted.writeFile('workspace-file.txt', 'canonical');
-		expect(await mounted.readFile('workspace-file.txt', { encoding: 'utf8' })).toBe('canonical');
+		await writeText(mounted, 'workspace-file.txt', 'canonical');
+		expect(await readText(mounted, 'workspace-file.txt')).toBe('canonical');
 		// Mounts are reserved names, not a rewrite of host paths into the tree.
-		expect(await mounted.exists('/etc/secrets.key')).toBe(false);
+		expect(await exists(mounted, '/etc/secrets.key')).toBe(false);
 	});
 
 	test('only a whole first segment routes: /pcs/x and relative pc/x stay in the workspace', async () => {
@@ -281,7 +281,7 @@ describe('the workspace plane mount table', () => {
 		}
 
 		expect(pcsOutcome).not.toBe('ENXIO');
-		expect(await mounted.readFile('pc/ordinary.txt', { encoding: 'utf8' })).toBe('workspace file');
+		expect(await readText(mounted, 'pc/ordinary.txt')).toBe('workspace file');
 	});
 
 	test('requires each mount name to occupy one unique root segment', () => {
@@ -308,7 +308,7 @@ describe('the workspace plane mount table', () => {
 			code: 'EPERM',
 			path: '/pc/../workspace-only.txt',
 		});
-		expect(await base.readFile('/workspace-only.txt', { encoding: 'utf8' })).toBe('workspace bytes');
+		expect(await readText(base, '/workspace-only.txt')).toBe('workspace bytes');
 	});
 
 	test('standardMounts gate per environment kind', async () => {
@@ -326,10 +326,10 @@ describe('the workspace plane mount table', () => {
 		const mounted = withMountTable(fakeTree({}), mounts);
 
 		// A device tunnel is a presence: unavailable means absent.
-		await expect(mounted.readdir('/pc')).rejects.toMatchObject({ code: 'ENXIO' });
-		await expect(mounted.readdir('/pc')).rejects.toThrow('/pc: no device connected');
+		await expect(Promise.resolve(mounted.readdir('/pc')).then(entries => entries.map(({ name }) => name))).rejects.toMatchObject({ code: 'ENXIO' });
+		await expect(Promise.resolve(mounted.readdir('/pc')).then(entries => entries.map(({ name }) => name))).rejects.toThrow('/pc: no device connected');
 		// A container is a binding: it provisions on first touch.
-		expect(await mounted.readFile('/sandbox/workspace/b.txt', { encoding: 'utf8' })).toBe('y');
+		expect(await readText(mounted, '/sandbox/workspace/b.txt')).toBe('y');
 		expect(EXECUTOR_MOUNTS.device).toBe('/pc');
 		expect(EXECUTOR_MOUNTS.sandbox).toBe('/sandbox');
 	});
@@ -343,10 +343,10 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 
 		const native = {
 			...base,
-			readFile: async (path: string, opts?: { encoding?: string }) => {
+			readFile: async (path: string) => {
 				bytesRead += 1;
 
-				return base.readFile(path, opts);
+				return base.readFile(path);
 			},
 			rename: async (oldPath: string, newPath: string) => { renames.push([oldPath, newPath]); },
 		};
@@ -364,10 +364,10 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 
 		const native = {
 			...base,
-			readFile: async (path: string, opts?: { encoding?: string }) => {
+			readFile: async (path: string) => {
 				bytesRead += 1;
 
-				return base.readFile(path, opts);
+				return base.readFile(path);
 			},
 			rename: async (oldPath: string, newPath: string) => { renames.push([oldPath, newPath]); },
 		};
@@ -385,7 +385,7 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', device)]);
 
 		await mounted.rename('/pc/home/dev/notes.txt', '/pc/home/dev/renamed.txt');
-		expect(await device.readFile('/home/dev/renamed.txt', { encoding: 'utf8' })).toBe('from the machine');
+		expect(await readText(device, '/home/dev/renamed.txt')).toBe('from the machine');
 	});
 	test('a base-plane directory refuses the fallback carry before anything is written or deleted', async () => {
 		const base = fakeTree({ '/src/app.ts': 'export {};' });
@@ -398,11 +398,11 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		if (!isVfsError(error)) throw new Error(`expected a classified refusal, got ${String(error)}`);
 		expect(error.code).toBe('EPERM');
 		expect(error.path).toBe('/src');
-		expect(await base.stat('/src')).toMatchObject({ isDir: true });
-		expect(await base.exists('/src/app.ts')).toBe(true);
-		expect(await base.exists('/moved')).toBe(false);
-		expect(await base.exists('/.moved.kinu-carry')).toBe(false);
-		expect(await base.readFile('/src/app.ts', { encoding: 'utf8' })).toBe('export {};');
+		expect(await base.stat('/src')).toMatchObject({ type: 'directory' });
+		expect(await exists(base, '/src/app.ts')).toBe(true);
+		expect(await exists(base, '/moved')).toBe(false);
+		expect(await exists(base, '/.moved.kinu-carry')).toBe(false);
+		expect(await readText(base, '/src/app.ts')).toBe('export {};');
 	});
 
 	test('an absent directory source refuses the carry with ENOENT, and the destination keeps its bytes', async () => {
@@ -411,7 +411,7 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 
 		await expect(mounted.rename('/pc/home/dev/ghost.txt', '/pc/home/dev/keeper.txt'))
 			.rejects.toMatchObject({ code: 'ENOENT' });
-		expect(await device.readFile('/home/dev/keeper.txt', { encoding: 'utf8' })).toBe('untouched');
+		expect(await readText(device, '/home/dev/keeper.txt')).toBe('untouched');
 	});
 
 
@@ -424,8 +424,8 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 			code: 'EPERM',
 			path: '/report.txt',
 		});
-		expect(await base.readFile('/report.txt', { encoding: 'utf8' })).toBe('workspace copy');
-		expect(await device.readFile('/home/dev/report.txt', { encoding: 'utf8' })).toBe('device copy');
+		expect(await readText(base, '/report.txt')).toBe('workspace copy');
+		expect(await readText(device, '/home/dev/report.txt')).toBe('device copy');
 	});
 
 	test('a rename between two mounted trees also refuses before either tree changes', async () => {
@@ -441,8 +441,8 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 			'/pc/home/dev/report.txt',
 			'/sandbox/workspace/report.txt',
 		)).rejects.toMatchObject({ code: 'EPERM' });
-		expect(await pc.readFile('/home/dev/report.txt', { encoding: 'utf8' })).toBe('device copy');
-		expect(await sandbox.readFile('/workspace/report.txt', { encoding: 'utf8' })).toBe('container copy');
+		expect(await readText(pc, '/home/dev/report.txt')).toBe('device copy');
+		expect(await readText(sandbox, '/workspace/report.txt')).toBe('container copy');
 	});
 
 	test('a directory refuses to rename where only bytes could carry it, and the tree survives the refusal', async () => {
@@ -457,11 +457,11 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		expect(error.code).toBe('EPERM');
 		// The plane's path, not the router's mount-prefixed one.
 		expect(error.path).toBe('/home/dev/src');
-		expect(await device.stat('/home/dev/src')).toMatchObject({ isDir: true });
-		expect(await device.exists('/home/dev/src/app.ts')).toBe(true);
-		expect(await device.exists('/home/dev/moved')).toBe(false);
-		expect(await device.exists('/home/dev/.moved.kinu-carry')).toBe(false);
-		expect(await device.readFile('/home/dev/src/app.ts', { encoding: 'utf8' })).toBe('export {};');
+		expect(await device.stat('/home/dev/src')).toMatchObject({ type: 'directory' });
+		expect(await exists(device, '/home/dev/src/app.ts')).toBe(true);
+		expect(await exists(device, '/home/dev/moved')).toBe(false);
+		expect(await exists(device, '/home/dev/.moved.kinu-carry')).toBe(false);
+		expect(await readText(device, '/home/dev/src/app.ts')).toBe('export {};');
 	});
 
 	test('a mount point is part of this plane and cannot be mutated', async () => {
@@ -469,7 +469,7 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 
 		await expect(mounted.rename('/pc', '/device')).rejects.toMatchObject({ code: 'EPERM' });
 		await expect(mounted.removeRecursive('/pc')).rejects.toMatchObject({ code: 'EPERM' });
-		await expect(mounted.writeFile('/pc', 'x')).rejects.toMatchObject({ code: 'EPERM' });
+		await expect(writeText(mounted, '/pc', 'x')).rejects.toMatchObject({ code: 'EPERM' });
 		await expect(mounted.unlink('/pc')).rejects.toMatchObject({ code: 'EPERM' });
 		await expect(mounted.mkdir('/pc')).rejects.toMatchObject({ code: 'EPERM' });
 	});
@@ -489,9 +489,9 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', device)]);
 
 		await mounted.removeRecursive('/pc/home/dev/build');
-		expect(await device.exists('/home/dev/build/out.js')).toBe(false);
-		expect(await device.exists('/home/dev/build/deep/two.js')).toBe(false);
-		expect(await device.exists('/home/dev/build')).toBe(false);
+		expect(await exists(device, '/home/dev/build/out.js')).toBe(false);
+		expect(await exists(device, '/home/dev/build/deep/two.js')).toBe(false);
+		expect(await exists(device, '/home/dev/build')).toBe(false);
 	});
 
 	test('a mid-tree unlink failure stops the pass and reports both halves', async () => {
@@ -521,10 +521,10 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		expect(removal.removed).toEqual(['/build/deep/two.js', '/build/deep']);
 		expect(removal.remaining).toEqual(['/build/out.js', '/build']);
 		expect(removal.failed.path).toBe('/build/out.js');
-		expect(await base.exists('/build/deep/two.js')).toBe(false);
-		expect(await base.exists('/build/deep')).toBe(false);
-		expect(await base.exists('/build/out.js')).toBe(true);
-		expect(await base.exists('/build')).toBe(true);
+		expect(await exists(base, '/build/deep/two.js')).toBe(false);
+		expect(await exists(base, '/build/deep')).toBe(false);
+		expect(await exists(base, '/build/out.js')).toBe(true);
+		expect(await exists(base, '/build')).toBe(true);
 	});
 
 	test('a mounted tree removal that stops partway throws naming both halves', async () => {
@@ -555,9 +555,9 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		expect(error.message).toContain('/home/dev/build/deep/two.js');
 		expect(error.message).toContain('/home/dev/build/out.js');
 		expect(error.message).toContain('still present');
-		expect(await device.exists('/home/dev/build/deep/two.js')).toBe(false);
-		expect(await device.exists('/home/dev/build/deep')).toBe(true);
-		expect(await device.exists('/home/dev/build/out.js')).toBe(true);
+		expect(await exists(device, '/home/dev/build/deep/two.js')).toBe(false);
+		expect(await exists(device, '/home/dev/build/deep')).toBe(true);
+		expect(await exists(device, '/home/dev/build/out.js')).toBe(true);
 	});
 
 	test('removeTreeWithVfsOps names an absent path instead of quietly succeeding', async () => {
@@ -583,13 +583,9 @@ describe('a live mount point is a directory of this plane', () => {
 		const blindRoot = { ...container, stat: async (path: string) => path === '/' ? null : container.stat(path) };
 		const mounted = withMountTable(fakeTree({}), [mountOf('sandbox', blindRoot)]);
 
-		expect(await mounted.stat('/sandbox')).toMatchObject({ isDir: true });
+		expect(await mounted.stat('/sandbox')).toMatchObject({ type: 'directory' });
 	});
 
-	test('an absent mount still stats as nothing', async () => {
-		const mounted = withMountTable(fakeTree({}), [mountOf('pc', null, 'no device connected')]);
-		expect(await mounted.stat('/pc')).toBeNull();
-	});
 });
 
 describe('the workspace shell serves the same mount table (#22)', () => {
@@ -599,7 +595,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		const store = fakeMossaic();
 		const drive = mossaicVfs(store.tenant('owner'));
 		const container = mossaicVfs(store.tenant('container'));
-		await drive.writeFile('/notes.md', 'from the Drive\n');
+		await writeText(drive, '/notes.md', 'from the Drive\n');
 		await container.mkdir('/workspace', { recursive: true });
 		bundle.mountTable(withMountTable(bundle.vfs, [
 			mountOf('shared', drive), mountOf('sandbox', container), mountOf('pc', null, 'no device connected'),
@@ -623,7 +619,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 
 		expect(await shell.exec('cd /shared && pwd && ls')).toMatchObject({ stdout: '/shared\nnotes.md\n', exitCode: 0 });
 		expect(await shell.exec('echo hello > /shared/new.txt && echo more >> /shared/new.txt')).toMatchObject({ exitCode: 0 });
-		expect(await drive.readFile('/new.txt', { encoding: 'utf8' })).toBe('hello\nmore\n');
+		expect(await readText(drive, '/new.txt')).toBe('hello\nmore\n');
 	});
 
 	/** Plain `df` leaves these out: neither Drive's client nor the sandbox executor answers a disk-usage call. */
@@ -684,7 +680,7 @@ describe('the workspace shell serves the same mount table (#22)', () => {
 		const { shell, drive, container } = await workspaceWithMounts();
 
 		expect(await shell.exec('mv /shared/notes.md /sandbox/workspace/notes.md')).toMatchObject({ exitCode: 0 });
-		expect(await drive.exists('/notes.md')).toBe(false);
-		expect(await container.readFile('/workspace/notes.md', { encoding: 'utf8' })).toBe('from the Drive\n');
+		expect(await exists(drive, '/notes.md')).toBe(false);
+		expect(await readText(container, '/workspace/notes.md')).toBe('from the Drive\n');
 	});
 });

@@ -1,3 +1,4 @@
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
@@ -358,8 +359,8 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     expect(second.ok).toBe(false);
     expect(second.stage).toBe(3);
     // v1's versioned code is intact (not clobbered by the refused proposal).
-    const v1 = await rt.storage.vfs.readFile('scaffold/agent.js.v1', { encoding: 'utf8' });
-    const v1Text = v1 instanceof Uint8Array ? new TextDecoder().decode(v1) : v1;
+    const v1 = await readText(rt.storage.vfs, 'scaffold/agent.js.v1');
+    const v1Text = v1;
     expect(v1Text).toContain('v1');
   });
 

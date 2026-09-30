@@ -40,9 +40,7 @@ export function TerminalPane({ workspace, executor, outputs, onExecute }: Termin
 
   if (lane.mode === "shell") return <WorkspaceTerminal workspace={workspace} executor={executor} />;
 
-  return executor === "device"
-    ? <DeviceTerminal workspace={workspace} executor={executor} />
-    : <PtyTerminal workspace={workspace} executor={executor} />;
+  return <PtyTerminal workspace={workspace} executor={executor} />;
 }
 
 
@@ -122,7 +120,13 @@ function useTerminalPalette(termRef: RefObject<Terminal | null>, theme: Theme): 
   }, [termRef, theme]);
 }
 
+/**
+ * One PTY pane for the device and the native container: bytes each way, the first geometry in the query, `resize`
+ * frames out. The device speaks `ready`/`exit`/`error` frames and is connected at `ready`; the native PTY sends bytes
+ * only, is connected at open, and needs the keepalive and a restart the device does not.
+ */
 function PtyTerminal({ workspace, executor }: { workspace: string; executor: string }) {
+  const device = executor === "device";
   const theme = useTheme();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -140,49 +144,75 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
     const { term, dispose: disposeChrome } = mountPtyTerminal(host, theme.mode, copyOperation, setFailure);
     termRef.current = term;
 
-    setState('connecting');
+    setState("connecting");
     setFailure(null);
-    const origin = window.location.origin.replace(/^http/, 'ws');
+    // The scheme must be explicit: a relative URL resolves to http(s): and the constructor rejects it.
+    const origin = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
 
     const socket = new WebSocket(`${origin}/api/workspaces/${encodeURIComponent(workspace)}/terminal`
       + `?executor=${encodeURIComponent(executor)}&cols=${term.cols}&rows=${term.rows}`);
 
-    socket.binaryType = 'arraybuffer';
-    let current = true;
+    socket.binaryType = "arraybuffer";
 
-    socket.addEventListener('open', () => { if (current) setState('connected'); });
-    // The native PTY sends terminal bytes only; the query carries its first geometry.
-    socket.addEventListener('message', event => {
-      if (current && event.data instanceof ArrayBuffer) term.write(new Uint8Array(event.data));
-    });
-    socket.addEventListener('close', event => {
-      if (!current) return;
-      setState('disconnected');
+    socket.onopen = () => { if (!device) setState("connected"); };
 
-      if (event.code !== 1000 && event.code !== 1001) setFailure(event.reason || `terminal closed (${event.code})`);
-    });
-    socket.addEventListener('error', () => { if (current) { setState('error'); setFailure('terminal connection failed'); } });
-    const input = inputFrames(term, socket);
+    socket.onmessage = (event) => {
+      if (event.data instanceof ArrayBuffer) {
+        term.write(new Uint8Array(event.data));
+
+        return;
+      }
+
+      if (!device || event.data instanceof Blob) return;
+      // A non-JSON frame is the one tolerated failure; anything else propagates.
+      const parsed = v.safeParse(DeviceTerminalMessageSchema, tolerate(() => JSON.parse(String(event.data)), "malformed-input"));
+
+      if (!parsed.success) return;
+      const message = parsed.output;
+
+      switch (message.type) {
+        case "ready":
+          setState("connected");
+          term.focus();
+          break;
+        case "exit":
+          setState("disconnected");
+          setFailure(`the shell exited (code ${message.exitCode})`);
+          break;
+        case "error":
+          setState("disconnected");
+          setFailure(message.error);
+          break;
+      }
+    };
+
+    socket.onclose = (event) => {
+      setState("disconnected");
+
+      if (!device && event.code !== 1000 && event.code !== 1001) setFailure(event.reason || `terminal closed (${event.code})`);
+    };
+
+    socket.onerror = () => {
+      setState(device ? "disconnected" : "error");
+      setFailure(device ? "the connection dropped" : "terminal connection failed");
+    };
+
     const binary = term.onBinary(data => { if (socket.readyState === WebSocket.OPEN) socket.send(Uint8Array.from(data, byte => byte.charCodeAt(0))); });
-    const geometry = resizeFrames(term, socket);
+
+    const release = releaseSocketPane({
+      socket, subscriptions: [inputFrames(term, socket), resizeFrames(term, socket), binary], disposeChrome, copyOperation, termRef,
+    });
 
     return () => {
-      current = false;
-      copyOperation.current = null;
       keepaliveOperations.current.clear();
-      input.dispose();
-      binary.dispose();
-      geometry.dispose();
-      socket.close(1000, 'pane closed');
-      disposeChrome();
-      termRef.current = null;
+      release();
     };
-  }, [workspace, executor, connection]);
+  }, [workspace, executor, device, connection]);
 
   useTerminalPalette(termRef, theme);
 
   useEffect(() => {
-    if (state !== "connected") return;
+    if (device || state !== "connected") return;
 
     const beat = setInterval(() => {
       const keepaliveKey = crypto.randomUUID();
@@ -217,7 +247,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
       clearInterval(beat);
       keepaliveOperations.current.clear();
     };
-  }, [state, workspace, executor]);
+  }, [device, state, workspace, executor]);
 
   // An exited shell leaves a dead PTY handed to every later attach, so restart must be reachable from the pane.
   const restart = async () => {
@@ -246,21 +276,27 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
         <span>·</span>
         <span>{state === "connected" ? "interactive shell" : state}</span>
         {failure !== null && <span className="p-danger truncate" title={failure}>{failure}</span>}
-        <button type="button" onClick={async () => {
-          try {
-            await restart();
-          } catch (cause) {
-            setFailure(renderThrownChain({ cause }));
-          }
-        }}
-          className="ml-auto shrink-0 underline decoration-dotted hover:p-text-2 cursor-pointer"
-          title="Destroy this shell and open a new one. Use this after a shell exits.">
-          restart shell
-        </button>
-        {/* Job control is unavailable: the PTY shell is not a session leader, so ⌃C only reaches full-screen programs. */}
-        <span className="shrink-0" title="⌃C reaches a full-screen program. Suspend, fg and bg do not work here.">
-          ⇧⌃C copies · no job control
-        </span>
+        {device ? (
+          <span className="ml-auto shrink-0" title="⌃C interrupts the foreground program.">⇧⌃C copies</span>
+        ) : (
+          <>
+            <button type="button" onClick={async () => {
+              try {
+                await restart();
+              } catch (cause) {
+                setFailure(renderThrownChain({ cause }));
+              }
+            }}
+              className="ml-auto shrink-0 underline decoration-dotted hover:p-text-2 cursor-pointer"
+              title="Destroy this shell and open a new one. Use this after a shell exits.">
+              restart shell
+            </button>
+            {/* Job control is unavailable: the PTY shell is not a session leader, so ⌃C only reaches full-screen programs. */}
+            <span className="shrink-0" title="⌃C reaches a full-screen program. Suspend, fg and bg do not work here.">
+              ⇧⌃C copies · no job control
+            </span>
+          </>
+        )}
       </div>
       <div ref={hostRef} className="p-bg flex-1 min-h-0 rounded-lg border p-border overflow-hidden" />
     </div>
@@ -299,7 +335,7 @@ function releaseSocketPane(pane: {
     socket.onerror = null;
 
     for (const subscription of pane.subscriptions) subscription?.dispose();
-    socket.close();
+    socket.close(1000, "pane closed");
     pane.disposeChrome();
     pane.termRef.current = null;
   };
@@ -312,102 +348,6 @@ const DeviceTerminalMessageSchema = v.variant("type", [
   v.object({ type: v.literal("exit"), exitCode: v.number() }),
   v.object({ type: v.literal("error"), error: v.string() }),
 ]);
-
-function DeviceTerminal({ workspace, executor }: { workspace: string; executor: string }) {
-  const theme = useTheme();
-  const hostRef = useRef<HTMLDivElement | null>(null);
-  const termRef = useRef<Terminal | null>(null);
-  const copyOperation = useRef<TerminalOperation | null>(null);
-  const [state, setState] = useState<PtyState>("connecting");
-  const [failure, setFailure] = useState<string | null>(null);
-
-  useEffect(() => {
-    const host = hostRef.current;
-
-    if (!host) return;
-    setState("connecting");
-    setFailure(null);
-
-    const { term, dispose: disposeChrome } = mountPtyTerminal(host, theme.mode, copyOperation, setFailure);
-    termRef.current = term;
-
-    // The scheme must be explicit: a relative URL resolves to http(s): and the constructor rejects it.
-    const origin = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
-
-    const socket = new WebSocket(
-      `${origin}/api/workspaces/${encodeURIComponent(workspace)}/terminal`
-      + `?executor=${encodeURIComponent(executor)}&cols=${term.cols}&rows=${term.rows}`,
-    );
-
-    // Bytes rather than Blob, so output goes straight into xterm.
-    socket.binaryType = "arraybuffer";
-    let dataSubscription: IDisposable | null = null;
-    let resizeSubscription: IDisposable | null = null;
-
-    socket.onopen = () => {
-      dataSubscription = inputFrames(term, socket);
-      resizeSubscription = resizeFrames(term, socket);
-    };
-
-    socket.onmessage = (event) => {
-      if (event.data instanceof ArrayBuffer) {
-        term.write(new Uint8Array(event.data));
-
-        return;
-      }
-
-      if (event.data instanceof Blob) return;
-      // A non-JSON frame is the one tolerated failure; anything else propagates.
-      const parsed = v.safeParse(DeviceTerminalMessageSchema, tolerate(() => JSON.parse(String(event.data)), "malformed-input"));
-
-      if (!parsed.success) return;
-      const message = parsed.output;
-
-      switch (message.type) {
-        case "ready":
-          setState("connected");
-          term.focus();
-          break;
-        case "exit":
-          setState("disconnected");
-          setFailure(`the shell exited (code ${message.exitCode})`);
-          break;
-        case "error":
-          setState("disconnected");
-          setFailure(message.error);
-          break;
-      }
-    };
-
-    socket.onclose = () => setState("disconnected");
-    socket.onerror = () => {
-      setState("disconnected");
-      setFailure("the connection dropped");
-    };
-
-    return releaseSocketPane({
-      socket, subscriptions: [dataSubscription, resizeSubscription], disposeChrome, copyOperation, termRef,
-    });
-  }, [workspace, executor]);
-
-  useTerminalPalette(termRef, theme);
-
-  return (
-    <div className="w-full h-full flex flex-col">
-      <div className="flex items-center gap-2 px-3 py-1 shrink-0 p-meta p-text-3">
-        <span className="font-mono">{executor}</span>
-        <span>·</span>
-        <span>{state === "connected" ? "interactive shell" : state}</span>
-        {failure !== null && <span className="p-danger truncate" title={failure}>{failure}</span>}
-        <span className="ml-auto shrink-0" title="⌃C interrupts the foreground program.">
-          ⇧⌃C copies
-        </span>
-      </div>
-      <div ref={hostRef} className="p-bg flex-1 min-h-0 rounded-lg border p-border overflow-hidden" />
-    </div>
-  );
-}
-
 
 /** `ready` arrives after the runtime replayed scrollback, so a reload lands on the same screen. */
 function WorkspaceTerminal({ workspace, executor }: { workspace: string; executor: string }) {

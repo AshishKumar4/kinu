@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * A swarm killed mid-flight is re-entered by the real job-resume path, not started again.
  * An eviction keeps storage and loses the isolate: attempt one freezes on a never-settling call;
@@ -657,7 +658,7 @@ async function workspace(): Promise<{
 }> {
   const { rt, db } = createTestRuntime();
   await rt.storage.vfs.mkdir('candidate', { recursive: true });
-  await rt.storage.vfs.writeFile(REFERENCE_PATH, `// a nested loop over every pair\n${REFERENCE}`);
+  await writeText(rt.storage.vfs, REFERENCE_PATH, `// a nested loop over every pair\n${REFERENCE}`);
 
   return { rt, db, activation: () => hostedSeatsOver({ rt, db }).hostNode };
 }

@@ -1,14 +1,11 @@
+import type { VFS, VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 // Files route transfer contract: byte-exact chunking, the 413 before any large allocation,
 // counted (not announced) request bytes, and a streamed response.
 import { describe, expect, test } from "bun:test";
 import { serveFamily } from './helpers/api';
 import * as v from "valibot";
 import type { FilesRouteAgent } from "../src/files-routes";
-import type {
-  ExecutorFileDownload as ExecutorFileDownloadInstance,
-  ExecutorFileUpload as ExecutorFileUploadInstance,
-  VFS, VfsRevision,
-} from "@kinu.run/core";
+import type { ExecutorFileDownload as ExecutorFileDownloadInstance, ExecutorFileUpload as ExecutorFileUploadInstance } from "@kinu.run/core";
 // The route imports the agents SDK, whose `cloudflare:*` imports crash bun's loader: mock, then
 // import dynamically.
 import { mockAgentsSdk } from "./helpers/agents-sdk";
@@ -69,15 +66,14 @@ function makeAgent({ supportsConditionalWrites = true }: { supportsConditionalWr
       const previous = revisions.get(path) ?? 0;
       revisions.set(path, v.is(v.number(), previous) ? previous + 1 : previous + ':next');
     },
-    readdir: async (): Promise<string[]> => [],
+    readdir: async () => [],
     stat: async (path: string) => {
       const data = files.get(path);
 
-      return data ? { size: data.byteLength, mtimeMs: 0, isDir: false } : null;
+      return data ? { size: data.byteLength, mtimeMs: 0, type: 'file' } : null;
     },
     unlink: async (path: string) => { files.delete(path); },
     mkdir: async () => undefined,
-    exists: async (path: string) => files.has(path),
   };
 
   if (supportsConditionalWrites) {

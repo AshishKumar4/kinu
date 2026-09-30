@@ -1,3 +1,4 @@
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Tool-side contract of the unified `agents` tool; transports are covered in cf-backend tests.
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime, toolExecute, scriptedTurnModel, unobservedSearchSeams } from '@kinu.run/test-utils';
@@ -536,7 +537,7 @@ describe('agents tool — subordinate actions', () => {
     const { rt } = createTestRuntime();
     const path = '/home/main/project.txt';
     await rt.storage.vfs.mkdir('/home/main', { recursive: true });
-    await rt.storage.vfs.writeFile(path, 'original');
+    await writeText(rt.storage.vfs, path, 'original');
     const team = makeTeam();
 
     const childTransport: TeamToolDeps = {
@@ -566,11 +567,11 @@ describe('agents tool — subordinate actions', () => {
     const parent = agentsTool({ mode: 'build', team: childTransport, profile: () => testProfile() });
     const planned = await inWorkMode('plan', () => parent.execute({ action: 'hire', lifetime: 'task', role: 'researcher', mission: 'Inspect' }));
     expect(planned).toMatchObject({ status: 'working', answer: expect.stringContaining('denied') });
-    expect(await rt.storage.vfs.readFile(path, { encoding: 'utf8' })).toBe('original');
+    expect(await readText(rt.storage.vfs, path)).toBe('original');
     await expect(inWorkMode('plan', () => parent.execute({ action: 'hire', role: 'researcher', mission: 'Create a permanent worker' })))
       .rejects.toMatchObject({ code: 'denied' });
     await parent.execute({ action: 'hire', lifetime: 'task', role: 'researcher', mission: 'Implement' });
-    expect(await rt.storage.vfs.readFile(path, { encoding: 'utf8' })).toBe('changed');
+    expect(await readText(rt.storage.vfs, path)).toBe('changed');
   });
 
   test('hire forwards role/mission (+ optional agent name/tier) to team.spawn', async () => {

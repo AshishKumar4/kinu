@@ -1,21 +1,9 @@
+import { type Awaitable, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Test helpers: in-memory SQLite via bun:sqlite, mock LLM, mock Executor. */
 
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import type {
-  SqlExecutor,
-  SqlExec,
-  RawSqlExec,
-  Memory,
-  Executor,
-  LLM,
-  Schedule,
-  Identity,
-  FiberCtx,
-  ExecuteResult,
-  ResolvedProvider,
-  VFS,
-} from '../src/types/primitives';
+import type { SqlExecutor, SqlExec, RawSqlExec, Memory, Executor, LLM, Schedule, Identity, FiberCtx, ExecuteResult, ResolvedProvider } from '../src/types/primitives';
 import type { AgentRuntime, CraftStore } from '../src/types/agent-runtime';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { JsonValueSchema, type JsonValue } from '../src/utils/json';
@@ -23,11 +11,10 @@ import { JsonValueSchema, type JsonValue } from '../src/utils/json';
 import {
   createInlineMemory, createInlineWorkspace, sqlStorageOver, wrapDatabase,
 } from '../src/identity/inline-primitives';
-import type { WorkspaceBundle, WorkspaceVFS } from '../src/vfs/nimbus-workspace';
+import type { WorkspaceBundle } from '../src/vfs/nimbus-workspace';
 import { createWorkspaceForkSource } from '../src/vfs/workspace-planes';
 import type { ForkFileSource } from '../src/identity/fork';
 import { ConversationSearchStore, type ConversationRecall } from '../src/memory/conversation-search';
-import type { VfsNativeReads } from '../src/vfs/mounts';
 import { initActorStateSchema, initWorkspaceSchema } from '../src/state/workspace-schema';
 import { createAgentStores, type AgentStores } from '../src/state/agent-stores';
 import { CraftStore as AgentUtilsCraftStore } from '@kinu.run/agent-utils/stores';
@@ -53,7 +40,7 @@ export interface TestWorkspace {
   readonly sql: SqlExecutor;
   readonly execRaw: RawSqlExec;
   /** The embedded Nimbus plane. */
-  readonly vfs: WorkspaceVFS;
+  readonly vfs: WorkspaceBundle['vfs'];
   readonly bundle: WorkspaceBundle;
   /** The same plane as a fork reads it: one synchronous snapshot, so a write through `vfs` is seen. */
   readonly forkSource: ForkFileSource;
@@ -82,7 +69,7 @@ export function makeSqlExec(db: Database): SqlExec {
 }
 
 /** The production workspace filesystem (Nimbus) over the test database. */
-export function createMemoryVFS(db: Database): WorkspaceVFS {
+export function createMemoryVFS(db: Database): WorkspaceBundle['vfs'] {
   return createWorkspaceBundle(db).vfs;
 }
 
@@ -90,10 +77,10 @@ export function createMemoryVFS(db: Database): WorkspaceVFS {
  * `vfs` with every call ordered after the fixture's seed. `seed` is a thunk run on the first VFS call:
  * an eager seed outlives a test that closes its database. A seed failure rejects the first call.
  */
-function afterSeed(vfs: WorkspaceVFS, seed: () => Promise<void>): VFS & Pick<VfsNativeReads, 'readRange'> {
+function afterSeed(vfs: WorkspaceBundle['vfs'], seed: () => Promise<void>): VFS & Required<Pick<VFS, 'readRange'>> {
   let seeded: Promise<void> | null = null;
 
-  const chain = <A extends unknown[], R>(fn: (...args: A) => Promise<R>) =>
+  const chain = <A extends unknown[], R>(fn: (...args: A) => Awaitable<R>) =>
     async (...args: A): Promise<R> => {
       seeded ??= seed();
       await seeded;
@@ -102,16 +89,16 @@ function afterSeed(vfs: WorkspaceVFS, seed: () => Promise<void>): VFS & Pick<Vfs
     };
 
   return {
-    readFile: chain((p: string, o?: { encoding?: string }) => vfs.readFile(p, o)),
+    readFile: chain((p: string) => vfs.readFile(p)),
     readRange: chain((p: string, offset: number, length: number) => vfs.readRange(p, offset, length)),
-    writeFile: chain((p: string, d: string | Uint8Array) => vfs.writeFile(p, d)),
+    writeFile: chain((p: string, d: Uint8Array) => vfs.writeFile(p, d)),
     readdir: chain((p: string) => vfs.readdir(p)),
-    stat: chain((p: string) => vfs.stat(p)),
-    lstat: chain((p: string) => vfs.lstat(p)),
+    stat: chain((p: string, options?: { follow?: boolean }) => vfs.stat(p, options)),
+
     readlink: chain((p: string) => vfs.readlink(p)),
     unlink: chain((p: string) => vfs.unlink(p)),
     mkdir: chain((p: string, o?: { recursive?: boolean }) => vfs.mkdir(p, o)),
-    exists: chain((p: string) => vfs.exists(p)),
+
   };
 }
 
@@ -121,7 +108,7 @@ export function createWorkspaceBundle(db: Database) {
 }
 
 /** The same inline Memory the local CLI builds, over the shared `memory_chunks` DDL. */
-export function createMemoryMemory(db: Database, vfs: VFS & Pick<VfsNativeReads, 'readRange'>): Memory {
+export function createMemoryMemory(db: Database, vfs: VFS & Required<Pick<VFS, 'readRange'>>): Memory {
   return createInlineMemory(db, vfs);
 }
 
@@ -232,15 +219,17 @@ export function createTestRuntime(opts?: {
   const workspace = createWorkspaceBundle(db);
 
   // `afterSeed` runs the scaffold seed on the first VFS call and orders later calls behind it.
-  const { readRange, ...vfs } = afterSeed(workspace.vfs, () =>
-    workspace.vfs.mkdir('scaffold', { recursive: true })
-      .then(() => workspace.vfs.writeFile('scaffold/agent.js', 'initial')));
+  const seededFiles = afterSeed(workspace.vfs, () =>
+    Promise.resolve(workspace.vfs.mkdir('scaffold', { recursive: true }))
+      .then(() => writeText(workspace.vfs, 'scaffold/agent.js', 'initial')));
+
+  const vfs: VFS = { ...seededFiles };
+  delete vfs.readRange;
 
   // Production schema first: a helper's own copy of an actor-scoped table would win `IF NOT EXISTS`.
   initWorkspaceSchema({ execRaw, sql, exec: makeSqlExec(db), transactionSync });
   const actor = createTestActor(sql, execRaw, 'test-agent-id', 'test-agent');
-  // The memory's tail reads through the plane's ranged read; `storage.vfs` stays the seven base methods.
-  const memory = createMemoryMemory(db, { ...vfs, readRange });
+  const memory = createMemoryMemory(db, seededFiles);
   const craftStore = createMemoryCraftStore(db);
   const llm = createMockLLM(opts?.llmResponses);
   const executor = createMockExecutor();

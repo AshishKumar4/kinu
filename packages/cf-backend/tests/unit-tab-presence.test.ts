@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Gated right-pane tabs appear only with content (`surfaceHasContent`). The panel's first landing picks a tab
  * with content, and after that the selected tab stays where the reader put it (`landedSurface`). The rendered
@@ -250,7 +251,7 @@ describe('the presence read over real ledgers', () => {
     // Saved through the workspace's file plane, in the dated-note shape the save primitive writes.
     const files = workspaceFiles(agent);
     await files.mkdir('memory', { recursive: true });
-    await files.writeFile('memory/MEMORY.md', '\n### Note (2026-09-23)\nthe checkout coupons need a kind\n');
+    await writeText(files, 'memory/MEMORY.md', '\n### Note (2026-09-23)\nthe checkout coupons need a kind\n');
 
     expect((await agent.getWorkspaceTabPresence()).work).toBe(true);
   });

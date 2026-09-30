@@ -6,9 +6,8 @@
 
 import { createWorkspace, workspaceBoxFiles, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import type { RuntimeSource, SupervisorOpResult, WorkspaceBundle } from '@kinu.run/core/workspace';
-import { decodeJsonValue } from '@kinu.run/core';
+import { jsonResultOrVoid } from '@kinu.run/core';
 import type {
-  JsonValue,
   NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult, PreviewRouteCheck, WorkspacePreviewUrl,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, toKinuError, type Refusal } from '@kinu.run/core/obs';
@@ -449,12 +448,6 @@ class ObservedPortRegistry extends PortRegistry {
   }
 }
 
-async function json(result: Promise<unknown>): Promise<JsonValue | undefined> {
-  const value = await result;
-
-  return value === undefined ? undefined : decodeJsonValue({ value });
-}
-
 function workspaceBox(deps: {
   runtime: () => Promise<HostedRuntime>;
   ports: PortRegistry;
@@ -478,16 +471,14 @@ function workspaceBox(deps: {
       await (await runtime()).runCode(code, { ...options, shellId }),
     files: deps.files,
     runtimes: {
-      ensure: async (specs, options) => await json(
-        (await runtime()).ensureRuntimes(Array.isArray(specs) ? [...specs] : [specs], options),
-      ),
-      install: async (spec, options) => await json((await runtime()).installRuntime(spec, options)),
-      list: async () => await json((await runtime()).listRuntimes()),
+      ensure: async (specs, options) => await jsonResultOrVoid((await runtime()).ensureRuntimes(Array.isArray(specs) ? [...specs] : [specs], options)),
+      install: async (spec, options) => await jsonResultOrVoid((await runtime()).installRuntime(spec, options)),
+      list: async () => await jsonResultOrVoid((await runtime()).listRuntimes()),
     },
     processes: {
-      list: async () => await json((await runtime()).listProcesses()),
-      kill: async (pid) => await json((await runtime()).killProcess(pid)),
-      logs: async (pid, options) => await json((await runtime()).processLogs(pid, options)),
+      list: async () => await jsonResultOrVoid((await runtime()).listProcesses()),
+      kill: async (pid) => await jsonResultOrVoid((await runtime()).killProcess(pid)),
+      logs: async (pid, options) => await jsonResultOrVoid((await runtime()).processLogs(pid, options)),
     },
     ports: {
       expose: async (port) => {

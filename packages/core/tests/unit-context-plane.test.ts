@@ -1,3 +1,4 @@
+import { exists, readText as nimbusReadText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** `/context` through the real composite plane, stores, and `file` dispatcher; assertions are on observed bytes and rows. */
 
 import { expect, test } from 'bun:test';
@@ -20,7 +21,7 @@ import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
 import type { ActorContextStores, ChildContextResolver, ContextFileHeader } from '../src/vfs/context-plane';
 import type { ContextEditEvent } from '../src/types/context-plane';
-import type { SqlExecutor, SqlValue, VFS } from '../src/types/primitives';
+import type { SqlExecutor, SqlValue } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import { JsonValueSchema, type JsonValue } from '../src/utils/json';
 
@@ -38,26 +39,25 @@ function emptyTree(): VFS {
   const files = new Map<string, string>();
 
   return {
-    async readFile(path, opts) {
+    async readFile(path) {
       const text = files.get(path);
 
       if (text === undefined) throw new VfsError('ENOENT', 'no such file', path);
 
-      return opts?.encoding === undefined ? new TextEncoder().encode(text) : text;
+      return new TextEncoder().encode(text);
     },
     async writeFile(path, data) {
       const asText = v.safeParse(v.string(), data);
       files.set(path, asText.success ? asText.output : new TextDecoder().decode(v.parse(v.instance(Uint8Array), data)));
     },
-    async readdir() { return [...files.keys()]; },
+    async readdir() { return [...files.keys()].map((name) => ({ name, type: 'file' as const })); },
     async stat(path) {
       const text = files.get(path);
 
-      return text === undefined ? null : { size: text.length, mtimeMs: 1, isDir: false };
+      return text === undefined ? null : { size: new TextEncoder().encode(text).byteLength, mtimeMs: 1, type: 'file' };
     },
     async unlink(path) { files.delete(path); },
     async mkdir() { /* the workspace tree accepts directories */ },
-    async exists(path) { return files.has(path); },
   };
 }
 
@@ -178,7 +178,7 @@ function fileTool(vfs: VFS): (input: {
 }
 
 async function readText(vfs: VFS, path: string): Promise<string> {
-  const raw = await vfs.readFile(path, { encoding: 'utf8' });
+  const raw = await nimbusReadText(vfs, path);
   const text = v.safeParse(v.string(), raw);
 
   return text.success ? text.output : new TextDecoder().decode(v.parse(v.instance(Uint8Array), raw));
@@ -225,7 +225,7 @@ test('a fresh actor serves an empty working history at revision 0, and an edit o
   expect(servedMessages(before)).toEqual([]);
 
   const edited: ModelMessage[] = [{ role: 'user', content: 'seeded before the first turn' }];
-  await vfs.writeFile('/context/working.jsonl', appended(before, edited));
+  await writeText(vfs, '/context/working.jsonl', appended(before, edited));
 
   const after = await readText(vfs, '/context/working.jsonl');
   expect(servedMessages(after)).toEqual(edited);
@@ -242,10 +242,10 @@ test('two edits from the same read: the second is refused stale and the first su
   await hydrate(actor, [{ role: 'user', content: 'original' }]);
 
   const served = await readText(vfs, '/context/working.jsonl');
-  await vfs.writeFile('/context/working.jsonl', served.replace('original', 'first edit'));
+  await writeText(vfs, '/context/working.jsonl', served.replace('original', 'first edit'));
 
   // A second editor that read before the first wrote.
-  await expect(vfs.writeFile('/context/working.jsonl', served.replace('original', 'second edit')))
+  await expect(writeText(vfs, '/context/working.jsonl', served.replace('original', 'second edit')))
     .rejects.toMatchObject({ verdict: 'stale' });
 
   expect(await stagedMessages(actor)).toEqual([{ role: 'user', content: 'first edit' }]);
@@ -266,7 +266,7 @@ test('a header naming another actor is refused, and the caller cannot retarget b
     .replace(actor.handle.actorId, other.handle.actorId)
     .replace('mine', 'written through the wrong plane');
 
-  await expect(vfs.writeFile('/context/working.jsonl', retargeted))
+  await expect(writeText(vfs, '/context/working.jsonl', retargeted))
     .rejects.toMatchObject({ code: 'denied' });
 
   expect(await committed(actor)).toEqual([{ role: 'user', content: 'mine' }]);
@@ -284,7 +284,7 @@ test('a working history that severs a tool call from its result is refused befor
   const served = await readText(vfs, '/context/working.jsonl');
 
   // A severed tool call is the only new line.
-  await expect(vfs.writeFile('/context/working.jsonl', appended(served, [
+  await expect(writeText(vfs, '/context/working.jsonl', appended(served, [
     { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c9', toolName: 'probe', input: {} }] },
   ]))).rejects.toMatchObject({ code: 'bad_input' });
 
@@ -301,21 +301,21 @@ test('evidence under /context is readable and not writable, and the plane invent
   const claim = await admitOn(actor, { runId: 'run-1', turnId: 'turn-1' });
   await actor.claims.consume(claim, { index: 0, messages: [{ role: 'user', content: 'q' }] });
 
-  const listing = await vfs.readdir('/context');
+  const listing = (await vfs.readdir('/context')).map(({ name }) => name);
   expect(listing).toContain('working.jsonl');
   expect(listing).toContain('claim.json');
   expect(listing).toContain('requests');
 
-  expect(await vfs.readdir('/context/requests')).toEqual(['turn-1']);
-  expect(await vfs.readdir('/context/requests/turn-1')).toEqual(['1-0.json', '1-1.json']);
+  expect((await vfs.readdir('/context/requests')).map(({ name }) => name)).toEqual(['turn-1']);
+  expect((await vfs.readdir('/context/requests/turn-1')).map(({ name }) => name)).toEqual(['1-0.json', '1-1.json']);
   const request = JSON.parse(await readText(vfs, '/context/requests/turn-1/1-1.json'));
   expect(request).toMatchObject({ request: { turnId: 'turn-1', step: 0, source: { revision: claim.workingRevision } } });
 
-  await expect(vfs.writeFile('/context/claim.json', '{}')).rejects.toMatchObject({ code: 'EACCES' });
-  await expect(vfs.writeFile('/context/requests/turn-1/1-1.json', '{}')).rejects.toMatchObject({ code: 'EACCES' });
+  await expect(writeText(vfs, '/context/claim.json', '{}')).rejects.toMatchObject({ code: 'EACCES' });
+  await expect(writeText(vfs, '/context/requests/turn-1/1-1.json', '{}')).rejects.toMatchObject({ code: 'EACCES' });
   await expect(vfs.unlink('/context/working.jsonl')).rejects.toMatchObject({ code: 'EACCES' });
   await expect(vfs.mkdir('/context/whatever')).rejects.toMatchObject({ code: 'EACCES' });
-  expect(await vfs.exists('/context/nothing-here.json')).toBe(false);
+  expect(await exists(vfs, '/context/nothing-here.json')).toBe(false);
   ws.close();
 });
 
@@ -328,7 +328,7 @@ test('a rollback is a new revision written from a retained one, and the audit it
   const first = await readText(vfs, '/context/working.jsonl');
 
   // Activated, so the regret is a committed revision.
-  await vfs.writeFile('/context/working.jsonl', first.replace('the good history', 'a regrettable edit'));
+  await writeText(vfs, '/context/working.jsonl', first.replace('the good history', 'a regrettable edit'));
   await actor.history.stepBase(() => { actor.handle.assertCurrent(); });
   expect(await committed(actor)).toEqual([{ role: 'user', content: 'a regrettable edit' }]);
 
@@ -339,7 +339,7 @@ test('a rollback is a new revision written from a retained one, and the audit it
   expect(prior.context).toMatchObject({ revision: good, cause: 'edit' });
   const regret = await readText(vfs, '/context/working.jsonl');
 
-  await vfs.writeFile('/context/working.jsonl', [
+  await writeText(vfs, '/context/working.jsonl', [
     regret.split('\n', 1)[0] ?? '',
     ...prior.entries.map((entry) => JSON.stringify({ new: true, message: entry.message })),
   ].join('\n') + '\n');
@@ -370,19 +370,18 @@ test('an authorized parent edits a child through the child\'s own store; a sibli
 
   const vfs = planeFor(parent, resolver);
 
-  expect(await vfs.readdir('/context/agents')).toEqual(['agent:child']);
+  expect((await vfs.readdir('/context/agents')).map(({ name }) => name)).toEqual(['agent:child']);
   const seen = await readText(vfs, '/context/agents/agent:child/working.jsonl');
   expect(servedHeader(seen).actor).toBe(child.handle.actorId);
   expect(servedMessages(seen)).toEqual([{ role: 'user', content: 'child history' }]);
 
-  await vfs.writeFile('/context/agents/agent:child/working.jsonl',
-    seen.replace('child history', 'parent corrected this'));
+  await writeText(vfs, '/context/agents/agent:child/working.jsonl', seen.replace('child history', 'parent corrected this'));
   expect(staged(child)).toMatchObject({ author: parent.handle.actorId, via: 'owner' });
   expect(await stagedMessages(child)).toEqual([{ role: 'user', content: 'parent corrected this' }]);
 
   await expect(readText(vfs, '/context/agents/agent:stranger/working.jsonl'))
     .rejects.toMatchObject({ code: 'ENOENT' });
-  await expect(vfs.writeFile('/context/agents/agent:stranger/working.jsonl', 'x'))
+  await expect(writeText(vfs, '/context/agents/agent:stranger/working.jsonl', 'x'))
     .rejects.toMatchObject({ code: 'ENOENT' });
   expect(staged(stranger)).toBeNull();
   ws.close();
@@ -410,7 +409,7 @@ test('a retired actor stops authorising context reads and writes at its own hand
 
   live = false;
   await expect(readText(vfs, '/context/working.jsonl')).rejects.toThrow();
-  await expect(vfs.writeFile('/context/working.jsonl', served.replace('while live', 'after retirement')))
+  await expect(writeText(vfs, '/context/working.jsonl', served.replace('while live', 'after retirement')))
     .rejects.toThrow();
 
   live = true;
@@ -473,7 +472,7 @@ test('binary and tool-result parts survive a read/write round trip through the f
   const stored = reference.message.content[1].data.$sessionAttachment;
   expect(v.parse(v.instance(Uint8Array), await ws.files.readFile(stored.path))).toEqual(attachment);
 
-  await vfs.writeFile('/context/working.jsonl', `${text}${JSON.stringify({ new: true, message: { role: 'user', content: 'and then' } })}\n`);
+  await writeText(vfs, '/context/working.jsonl', `${text}${JSON.stringify({ new: true, message: { role: 'user', content: 'and then' } })}\n`);
   const roundTripped = await stagedMessages(actor);
   const parts = Array.isArray(roundTripped[0]?.content) ? roundTripped[0].content : [];
   const attached = parts.find((part) => part.type === 'file');
@@ -558,7 +557,7 @@ test('a landed edit preserves the recorded tail exactly, with a woven block and 
 
   // Authored before the tail is recorded, so the landing carries a tail its author never saw.
   const served = await readText(vfs, '/context/working.jsonl');
-  await vfs.writeFile('/context/working.jsonl', served.replace('original question', 'corrected question'));
+  await writeText(vfs, '/context/working.jsonl', served.replace('original question', 'corrected question'));
 
   for (const [index, message] of tail.entries()) {
     await actor.history.append({ id: `tail-${index}`, message, origin: 'output', turnId: 'turn-coord', assertOwner });
@@ -665,7 +664,7 @@ test('an edit mid-exchange is deferred with its reason, then lands at the next s
   const assertOwner = () => { actor.handle.assertCurrent(); };
 
   const served = await readText(vfs, '/context/working.jsonl');
-  await vfs.writeFile('/context/working.jsonl', served.replace('"ask"', '"edited ask"'));
+  await writeText(vfs, '/context/working.jsonl', served.replace('"ask"', '"edited ask"'));
 
   // A pending tool call defers the edit.
   const call: ModelMessage = { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c2', toolName: 'probe', input: {} }] };
@@ -710,8 +709,7 @@ test('an edit authored between turns is consumed by the next turn with the new i
   const served = await readText(vfs, '/context/working.jsonl');
   expect(servedHeader(served).effectiveAt).toBe('turn');
   expect(servedMessages(served)).toHaveLength(2);
-  await vfs.writeFile('/context/working.jsonl',
-    served.replace('first question', 'first question, corrected'));
+  await writeText(vfs, '/context/working.jsonl', served.replace('first question', 'first question, corrected'));
 
   const landed = await actor.history.stepBase(assertOwner, null, null);
   expect(landed.changed).toBe(true);
@@ -743,8 +741,7 @@ test('a cold reader with no live turn can read and edit the working history it w
   const seen = await readText(coldVfs, '/context/working.jsonl');
   expect(servedMessages(seen)).toEqual([{ role: 'user', content: 'before the crash' }]);
   expect(servedHeader(seen).revision).toBe(1);
-  await coldVfs.writeFile('/context/working.jsonl',
-    seen.replace('before the crash', 'recovered and corrected'));
+  await writeText(coldVfs, '/context/working.jsonl', seen.replace('before the crash', 'recovered and corrected'));
   expect(staged(cold)).toMatchObject({ base_revision: 1, via: 'file' });
   ws.close();
 });
@@ -770,7 +767,7 @@ test('an edit emits its authoring and its activation, and a refused edit emits n
   const claim = await admitOn(actor, { runId: 'run-ev', turnId: 'turn-ev' });
 
   const served = await readText(vfs, '/context/working.jsonl');
-  await vfs.writeFile('/context/working.jsonl', served.replace('"ask"', '"edited ask"'));
+  await writeText(vfs, '/context/working.jsonl', served.replace('"ask"', '"edited ask"'));
   expect(emitted).toHaveLength(1);
   expect(emitted[0]).toMatchObject({ runId: 'run-ev', event: {
     type: 'context_edit', revision: 1, baseRevision: 1, messageCount: 1,
@@ -778,7 +775,7 @@ test('an edit emits its authoring and its activation, and a refused edit emits n
     turnId: 'turn-ev', stepIndex: null,
   } });
 
-  await expect(vfs.writeFile('/context/working.jsonl', served.replace('"ask"', '"from a stale read"')))
+  await expect(writeText(vfs, '/context/working.jsonl', served.replace('"ask"', '"from a stale read"')))
     .rejects.toMatchObject({ verdict: 'stale' });
   expect(emitted).toHaveLength(1);
 

@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Every per-actor table not covered by `unit-actor-private-stores.test.ts`, with two
  * actor handles over one `SqlExecutor` (a database per actor would pass vacuously).
@@ -12,7 +13,7 @@ import { createMemoryVfs, createScriptedLLM, testActorHandle } from '@kinu.run/t
 import { makeExecRaw, makeSql, makeSqlExec } from './helpers';
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { AgentRuntime } from '../src/types/agent-runtime';
-import type { RawSqlExec, SqlExec, SqlExecutor, VFS } from '../src/types/primitives';
+import type { RawSqlExec, SqlExec, SqlExecutor } from '../src/types/primitives';
 
 import {
   initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, recordedTurnVerdict,

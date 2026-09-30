@@ -1,11 +1,9 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // Chunked file transfer behind the files route: no chunk approaches the catalogued RPC payload ceiling,
 // and no caller-supplied offset or length is trusted.
 import { describe, expect, test } from "bun:test";
 import { present } from "@kinu.run/test-utils";
-import {
-  ExecutorFileDownload, ExecutorFileUpload, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES,
-  deleteExecutorPathOp, renameExecutorPathOp, statExecutorFile, writeExecutorFileOp, type VFS,
-} from "@kinu.run/core";
+import { ExecutorFileDownload, ExecutorFileUpload, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, deleteExecutorPathOp, renameExecutorPathOp, statExecutorFile, writeExecutorFileOp } from "@kinu.run/core";
 
 const MiB = 1024 * 1024;
 
@@ -42,11 +40,10 @@ function makePlane(seed: Record<string, Uint8Array> = {}) {
     stat: async (path) => {
       const data = files.get(path);
 
-      return data ? { size: data.byteLength, mtimeMs: 0, isDir: false } : null;
+      return data ? { size: data.byteLength, mtimeMs: 0, type: 'file' } : null;
     },
     unlink: async (path) => { files.delete(path); },
     mkdir: async () => undefined,
-    exists: async (path) => files.has(path),
   };
 
   const router = {

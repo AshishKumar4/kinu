@@ -1,14 +1,15 @@
+import { exists, type Awaitable, type VFS, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Reads a file's text without making it resident. Every byte is still hashed: the read ledger keys on
  * the whole-content fingerprint, so an edit cannot land against lines changed outside the read window.
  */
 
 import { Effect } from 'effect';
-import * as v from 'valibot';
+
 import { settle } from '../obs/index';
 import { Fnv1a64 } from '../utils/fnv1a';
-import type { VFS, VfsRevision } from '../types/primitives';
-import type { VfsNativeReads } from '../vfs/mounts';
+
+
 import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { RESIDENT_TEXT_MAX_BYTES } from '../vfs/mounts';
 import { BOM, type SliceWindow } from './file-edit';
@@ -31,23 +32,17 @@ export function readFileText(vfs: VFS, path: string, revision?: VfsRevision): Pr
 }
 
 function fileText(vfs: VFS, path: string, revision?: VfsRevision): Effect.Effect<string> {
-  const historical = vfs.readFileAtRevision;
+  const historical = vfs.readFileAtRevision?.bind(vfs);
 
   if (revision !== undefined && !historical) return Effect.die(new VfsError('ENOTSUP', 'this file plane does not retain file revisions', path));
 
-  return Effect.map(Effect.promise(() => (revision !== undefined && historical
+  return Effect.map(Effect.promise(async () => (revision !== undefined && historical
     ? historical.call(vfs, path, revision)
-    : vfs.readFile(path, { encoding: 'utf8' }))), (raw) => {
-    const text = v.safeParse(v.string(), raw);
-
-    return text.success
-      ? text.output
-      : new TextDecoder('utf-8', { ignoreBOM: true }).decode(v.parse(v.instance(Uint8Array), raw));
-  });
+    : vfs.readFile(path))), (bytes) => new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes));
 }
 
-function rangedChunk(read: () => Promise<Uint8Array>, first: boolean): Effect.Effect<Uint8Array | null> {
-  return Effect.tryPromise({ try: read, catch: (cause) => ({ cause }) }).pipe(
+function rangedChunk(read: () => Awaitable<Uint8Array>, first: boolean): Effect.Effect<Uint8Array | null> {
+  return Effect.tryPromise({ try: async () => read(), catch: (cause) => ({ cause }) }).pipe(
     Effect.catch((failed) => (first && isVfsError(failed.cause) && failed.cause.code === 'ENOTSUP'
       ? Effect.succeed(null)
       : Effect.die(failed.cause))),
@@ -67,10 +62,11 @@ export interface FileHead {
  */
 export function readFileHead(vfs: VFS, path: string, maxBytes: number): Promise<FileHead> {
   return settle(Effect.gen(function* () {
-    const stat = yield* Effect.promise(() => vfs.stat(path));
-    const total = stat?.size ?? null;
-    const probed: VFS & Partial<VfsNativeReads> = vfs;
-    const ranged = probed.readRange;
+    const stat = yield* Effect.promise(async () => vfs.stat(path));
+
+    if (stat === null) return yield* Effect.die(new VfsError('ENOENT', 'no such file or directory, open', path));
+    const total = stat.size;
+    const ranged = vfs.readRange?.bind(vfs);
 
     const whole = (text: string): FileHead => ({ text, bytes: new TextEncoder().encode(text).byteLength, total });
 
@@ -106,29 +102,25 @@ export async function scanFileWindow(
   return settle(Effect.gen(function* () {
     const scan = beginScan(opts);
     // A chunked scan is not atomic: re-stat after when the plane has a revision. Size and mtime do not detect rewrites.
-    const before = yield* Effect.promise(() => vfs.stat(path));
+    const before = yield* Effect.promise(async () => vfs.stat(path));
+
+    if (before === null) return yield* Effect.die(new VfsError('ENOENT', 'no such file or directory, open', path));
     const revision = before?.revision;
-    const historical = vfs.readFileAtRevision;
+    const historical = vfs.readFileAtRevision?.bind(vfs);
 
     if (revision !== undefined && historical !== undefined) {
-      const pinned = yield* feedRanges(scan, vfs, async (file, offset, length) => {
-        const result = await historical.call(vfs, file, revision, { offset, length });
-
-        return v.is(v.string(), result) ? new TextEncoder().encode(result) : result;
-      }, path);
+      const pinned = yield* feedRanges(scan, vfs, (file, offset, length) => historical.call(vfs, file, revision, { offset, length }), path);
 
       if (pinned) return scan.done(revision);
     }
 
-    // Widening assignment, not a cast: the optional member has exactly this signature where present.
-    const probed: VFS & Partial<VfsNativeReads> = vfs;
-    const ranged = probed.readRange;
+    const ranged = vfs.readRange?.bind(vfs);
 
     if (!ranged || !(yield* feedRanges(scan, vfs, ranged, path))) {
       scan.feed(yield* unrangedText(vfs, path, before?.size ?? null));
     }
 
-    const after = before?.revision === undefined ? undefined : (yield* Effect.promise(() => vfs.stat(path)))?.revision;
+    const after = before?.revision === undefined ? undefined : (yield* Effect.promise(async () => vfs.stat(path)))?.revision;
 
     if (before?.revision !== undefined && after !== before.revision) {
       return yield* Effect.die(new FileRefusalError('stale',
@@ -144,7 +136,7 @@ export async function scanFileWindow(
 function feedRanges(
   scan: { feed(text: string): void },
   vfs: VFS,
-  ranged: VfsNativeReads['readRange'],
+  ranged: NonNullable<VFS['readRange']>,
   path: string,
 ): Effect.Effect<boolean> {
   return Effect.gen(function* () {
@@ -181,7 +173,7 @@ function unrangedText(vfs: VFS, path: string, size: number | null): Effect.Effec
   return Effect.gen(function* () {
     if (size === null) {
       // An unstattable path is usually missing; do not answer it with a ranged-read error.
-      if (!(yield* Effect.promise(() => vfs.exists(path)))) return yield* Effect.die(new VfsError('ENOENT', 'no such file, open', path));
+      if (!(yield* Effect.promise(() => exists(vfs, path)))) return yield* Effect.die(new VfsError('ENOENT', 'no such file, open', path));
 
       return yield* refuse('a file of unknown size');
     }

@@ -1,3 +1,4 @@
+import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * AGENTS.md rendering. Backends feed files ordered root-most → nearest; the
  * nearest wins on conflict. Files are admitted on metadata before any read,
@@ -5,7 +6,7 @@
  * with its size so the model can open it.
  */
 
-import type { VFS } from '../types/primitives';
+
 import type { ExecutorProvider } from '../execution/types';
 import { admissionBytes } from '../llm';
 import { stepContextLimit, type ModelWindow } from '../context-window';
@@ -163,7 +164,7 @@ export async function collectWorkspaceAgentsMd(
 
   for (const { plane, stat } of sized) {
     // Size zero is not absence: sandbox stat may report 0 (execution/sandbox.ts fallback). Zero fits, so the file is read.
-    if (!stat || stat.isDir) continue;
+    if (!stat || (stat.type === 'directory')) continue;
     found.push({ plane, ref: { path: plane.label, bytes: stat.size } });
   }
 
@@ -172,8 +173,8 @@ export async function collectWorkspaceAgentsMd(
 
   const read = await Promise.all(
     found.filter((entry) => admit.has(entry.ref)).map(async ({ plane, ref }) => {
-      const raw = await plane.files.readFile(plane.path, { encoding: 'utf8' });
-      const text = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
+      const raw = await readText(plane.files, plane.path);
+      const text = raw;
 
       // Keyed on the label: an approval for the workspace file does not cover the sandbox copy.
       return { path: ref.path, content: text, trust: trust(ref.path, text) };
@@ -197,12 +198,12 @@ export async function advisorWorkspaceGuidance(workspace: AdvisorWorkspace | und
   const path = 'ADVISOR.md';
   const stat = await workspace.vfs.stat(path);
 
-  if (stat === null || stat.isDir) return '';
+  if (stat === null || (stat.type === 'directory')) return '';
   const admission = admitAgentsMd([{ path, bytes: stat.size }], await workspace.limits());
 
   if (admission.referenced.length > 0) return renderInstructionOmission(admission.referenced, path);
-  const raw = await workspace.vfs.readFile(path, { encoding: 'utf8' });
-  const text = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
+  const raw = await readText(workspace.vfs, path);
+  const text = raw;
 
   return text.trim();
 }

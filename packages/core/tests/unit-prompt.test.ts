@@ -1,3 +1,5 @@
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool, type ModelMessage, type ToolSet } from 'ai';
 import {
@@ -849,7 +851,7 @@ describe('buildSystemPromptSync', () => {
       for (const phase of roleId === 'task' ? [0, 1, 2] : [0, 1]) {
         const mode = phase === 2 ? 'build' : 'plan';
         const path = `/mode-${subject.actor.name}-${roleId}-${phase}.txt`;
-        await subject.storage.vfs.writeFile(path, 'original');
+        await writeText(subject.storage.vfs, path, 'original');
         const file = buildBuiltinTools({ rt: subject, conversations: conversationsFor(subject) }).file;
 
         if (!file) throw new Error('missing file tool');
@@ -903,7 +905,7 @@ describe('buildSystemPromptSync', () => {
         const facts = request?.prompt.filter((message) => message.role === 'user' && JSON.stringify(message).includes('<dynamic_context')).at(-1);
         expect(JSON.stringify(facts)).toContain(`Mode: ${mode}; submit_plan: ${phase === 0 ? 'available' : 'unavailable'}.`);
         expect(JSON.stringify(facts)).not.toContain('Do not change project files');
-        expect(await subject.storage.vfs.readFile(path), JSON.stringify(model.doStreamCalls[2]?.prompt.filter((message) => message.role === 'tool')))
+        expect(await readText(subject.storage.vfs, path), JSON.stringify(model.doStreamCalls[2]?.prompt.filter((message) => message.role === 'tool')))
           .toBe(mode === 'build' ? 'changed' : 'original');
       }
     };

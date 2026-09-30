@@ -1,3 +1,4 @@
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Byte fidelity under bun:sqlite: the store binds BLOBs the Cloudflare-DO way (ArrayBuffer) while bun:sqlite binds
 // TypedArrays only and returns Uint8Array. Guards the runtime's coercion on both sides.
 import { describe, test, expect } from 'bun:test';
@@ -21,8 +22,8 @@ function freshVfs() {
 describe('workspace filesystem byte round-trip (bun:sqlite)', () => {
   test('utf8 text (incl. multibyte) round-trips', async () => {
     const vfs = freshVfs();
-    await vfs.writeFile('a.md', 'hello — world 🚀 ✦');
-    expect(await vfs.readFile('a.md', { encoding: 'utf8' })).toBe('hello — world 🚀 ✦');
+    await writeText(vfs, 'a.md', 'hello — world 🚀 ✦');
+    expect(await readText(vfs, 'a.md')).toBe('hello — world 🚀 ✦');
   });
 
   test('binary bytes round-trip exactly', async () => {
@@ -36,16 +37,16 @@ describe('workspace filesystem byte round-trip (bun:sqlite)', () => {
   test('large content spanning multiple chunks round-trips', async () => {
     const vfs = freshVfs();
     const big = 'x'.repeat(200_000) + 'END';
-    await vfs.writeFile('big.txt', big);
-    expect(await vfs.readFile('big.txt', { encoding: 'utf8' })).toBe(big);
+    await writeText(vfs, 'big.txt', big);
+    expect(await readText(vfs, 'big.txt')).toBe(big);
   });
 
   test('recursive mkdir + readdir lists written files', async () => {
     const vfs = freshVfs();
     await vfs.mkdir('skills', { recursive: true });
-    await vfs.writeFile('skills/one.md', 'a');
-    await vfs.writeFile('skills/two.md', 'b');
-    expect((await vfs.readdir('skills')).sort()).toEqual(['one.md', 'two.md']);
+    await writeText(vfs, 'skills/one.md', 'a');
+    await writeText(vfs, 'skills/two.md', 'b');
+    expect(((await vfs.readdir('skills')).map(({ name }) => name)).sort()).toEqual(['one.md', 'two.md']);
   });
 });
 

@@ -20,7 +20,7 @@ import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-s
 import { DESKTOP, withLiveApp, createWorkspace, listWorkspaces, type LiveApp } from './live-app-harness';
 import {
   CHAT_COMPOSER_LIVE, INSPECTOR_SHUT_PX, INSPECTOR_WIDTH, OPEN_NAMES, recordDeadEnds,
-  countRpc, frameLedger, openInspector, painted, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter,
+  countRpc, frameLedger, named, openInspector, painted, pressUntil, recordRenderTasks, rendered, sendInChat, settled, settledAfter,
   until, waitOn, type ControlAttempt, type RpcCounter,
 } from './product-flows';
 import { rowVerdicts, type RowVerdicts } from './row-verdicts';
@@ -63,7 +63,7 @@ async function openWorkspace(newPage: LiveApp['newPage'], origin: string, worksp
 
   // 'load', not 'networkidle0': the app holds its event socket open from
   // first paint, so there is never a zero-connection window to wait for.
-  await page.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' });
+  await named('the workspace page to load', () => page.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' }));
   await until(page, 'the workspace page', `document.querySelector('textarea') !== null`);
 
   return page;
@@ -823,13 +823,18 @@ const ANSWER_BLOCKS = `[...document.querySelectorAll('#chat .prose-chat, #chat [
 
 /** A workspace's page that records its sockets and queued render work, once its first turn has ended. */
 async function openRecorded(newPage: LiveApp['newPage'], origin: string, workspace: string): Promise<Page> {
-  const page = await newPage();
+  const page = await named('a new recorded tab', async () => {
+    const opened = await newPage();
 
-  await page.setViewport(DESKTOP);
-  await recordDeadEnds(page);
-  await page.evaluateOnNewDocument(RECORD_SOCKETS);
-  await recordRenderTasks(page);
-  await page.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' });
+    await opened.setViewport(DESKTOP);
+    await recordDeadEnds(opened);
+    await opened.evaluateOnNewDocument(RECORD_SOCKETS);
+    await recordRenderTasks(opened);
+
+    return opened;
+  });
+
+  await named('the workspace page to load', () => page.goto(`${origin}/workspace/${workspace}`, { waitUntil: 'load' }));
   await until(page, 'the workspace page', `document.querySelector('textarea') !== null`);
   await until(page, "the workspace's first turn to end", FIRST_TURN_ENDED);
   await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
@@ -868,8 +873,8 @@ async function answerAfterReplay(page: Page): Promise<string[]> {
  *  reconnects and the server has replayed the turn from its start. The turn's steps each say what they do and call
  *  a tool, then it waits on a held model call, so it is still running through the drop and the replay. */
 async function measureReconnect(newPage: LiveApp['newPage'], origin: string, held: HeldCall): Promise<ReconnectVerdict> {
-  const workspace = await createWorkspace(
-    origin, { name: `live-row-reconnect-${RUN_ID}`, purpose: 'reconnect probe', model: SCRIPTED_MODEL_SPEC });
+  const workspace = await named('the reconnect workspace to be created', () => createWorkspace(
+    origin, { name: `live-row-reconnect-${RUN_ID}`, purpose: 'reconnect probe', model: SCRIPTED_MODEL_SPEC }));
 
   const page = await openRecorded(newPage, origin, workspace);
 
@@ -878,12 +883,12 @@ async function measureReconnect(newPage: LiveApp['newPage'], origin: string, hel
     const before = await answerMidTurn(page);
     const after = await answerAfterReplay(page);
 
-    await shoot(page, 'reconnect-replayed');
+    await named('the replayed page\'s screenshot', () => shoot(page, 'reconnect-replayed'));
 
     return { before, after };
   } finally {
     held.release();
-    await page.close();
+    await named('the reconnect tab to close', () => page.close());
   }
 }
 

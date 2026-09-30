@@ -83,9 +83,10 @@ describe('listInstructionApprovals — metadata only', () => {
 describe('gatherApprovableInstructions — what the owner is allowed to not know about', () => {
   const emptySkills = {
     readdir: async () => [],
-    readFile: async () => '',
+    readFile: async () => new Uint8Array(),
     stat: async () => null,
-    exists: async () => false,
+    mkdir: async () => undefined,
+    unlink: async () => undefined,
     writeFile: async () => undefined,
   };
 

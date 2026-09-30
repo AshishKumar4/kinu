@@ -1,7 +1,8 @@
+import type { VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 /** Raw bytes cross in FILE_CHUNK_BYTES chunks: a whole file as one RPC argument hits `do.facet.rpc_bytes`. */
 
 import { Hono } from 'hono';
-import { FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, pumpUploadChunks, VfsRevisionSchema, type ExecutorWriteResult, type VfsRevision } from "@kinu.run/core";
+import { FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, pumpUploadChunks, VfsRevisionSchema, type ExecutorWriteResult } from "@kinu.run/core";
 import * as v from 'valibot';
 import type { ExecutorFileChunkRead, ExecutorFileChunkWrite } from "./orchestrator";
 import { diagnostics, KinuError, toKinuError } from "@kinu.run/core/obs";

@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import type { ChatEvent } from '../src/chat';
 /** Shadow context parity: a delegating pending's full-context output reaches the judge verbatim. */
 
@@ -32,7 +33,7 @@ async function setup(): Promise<AgentRuntime> {
     VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'bootstrap', 'current')`;
   void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
     VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'delegating pending', 'pending')`;
-  await rt.storage.vfs.writeFile('scaffold/agent.js.v1', DELEGATING_PENDING);
+  await writeText(rt.storage.vfs, 'scaffold/agent.js.v1', DELEGATING_PENDING);
   await rt.identity.scaffold.write('async function* run(rt, task) { yield { type: "chunk", data: "v0" }; }');
 
   return rt;

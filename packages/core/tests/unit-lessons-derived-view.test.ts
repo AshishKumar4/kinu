@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Lessons live only in the ledger, so wiping MEMORY.md hides nothing; observations
 // are append-only and readers resolve one effective verdict per turn by source
 // precedence, keeping the classifier row the calibration set labels by id.
@@ -49,7 +50,7 @@ describe('S5 — the corroborated lessons view survives a MEMORY.md reset', () =
     const lessonText = lessons[0].text;
 
     // Wipe the memory file plane, as a workspace reset does.
-    await rt.storage.vfs.writeFile('memory/MEMORY.md', '');
+    await writeText(rt.storage.vfs, 'memory/MEMORY.md', '');
 
     // 1. The prompt view still carries the lesson.
     expect(renderRecentLessons(rt.storage.sql, rt.actor)).toContain(lessonText);

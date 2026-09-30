@@ -111,6 +111,6 @@ describe('a device file of any size crosses the tunnel', () => {
 
     for (const name of names) writeFileSync(join(dir, name), '');
 
-    expect([...await files.readdir(dir)].sort()).toEqual(names);
+    expect((await files.readdir(dir)).map(({ name }) => name).sort()).toEqual(names);
   });
 });

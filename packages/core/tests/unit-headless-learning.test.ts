@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** A headless actor learns only on the step clock; a positive control on the same turn shows the root would learn from it. */
 import { REAL_CLOCK } from '../src/types/clock';
 import { describe, expect, test } from 'bun:test';
@@ -86,7 +87,7 @@ describe('a headless actor runs the step clock only', () => {
       rt.actor.config.setAdvisorMinSeverity('nit');
       const note = 'The failing parser probe was reported as successful. Check its exit status.';
       const advisor = scriptedAdvisorPort();
-      await rt.storage.vfs.writeFile('ADVISOR.md', 'Watch parser outcomes.');
+      await writeText(rt.storage.vfs, 'ADVISOR.md', 'Watch parser outcomes.');
       const seats = hostedSeatsOver({ rt, db: testSql.db, autoEvolve: true, advisorPort: advisor });
       const requests: string[] = [];
 

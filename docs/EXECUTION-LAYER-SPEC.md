@@ -9,6 +9,14 @@
 
 Kinu has one workspace file plane. Nimbus holds it as a library over the owning Durable Object's own `ctx.storage.sql` on Cloudflare. On the CLI the workspace is the directory the agent was placed in, and Nimbus over `bun:sqlite` holds the agent's own state (docs/STORAGE.md, "Local and cloud construction"). The `file` tool, default `shell`, `Storage.vfs`, and `workspace.*` all address the same paths and bytes.
 
+All planes use Nimbus's `VFS`, `VfsStat`, `VfsDirent` and `VfsRevision`
+(`@nimbus-sh/core/vfs/vfs.js`). File bodies are bytes; text is decoded or
+encoded through Nimbus's helpers. A listing returns dirents.
+`stat(path, { follow: false })` inspects the entry without following a link.
+A missing path or parent returns null; denied or unavailable storage still
+throws. The file tool reports a missing path as missing, without trying a
+ranged read that would turn that absence into an I/O failure.
+
 | Namespace | Registered by | Filesystem relationship |
 |---|---|---|
 | `workspace` | both backends. Cloudflare registers `createNimbusWorkspaceExecutor`; the CLI registers `createInlineExecutor` | the canonical workspace |
@@ -59,7 +67,7 @@ an unnamed call (`DeviceSocketHub.connectedDeviceId`,
 
 This doc gives no line numbers for `packages/devbox/**`,
 `core/src/execution/**`, and
-`cf-backend/src/{runtime,kinu-sandbox,sandbox-lifecycle}.ts`: those files
+`cf-backend/src/{runtime,kinu-devbox,sandbox-lifecycle}.ts`: those files
 churn, and a line number rots on the next insertion above it.
 
 ## Provider contract
@@ -168,8 +176,8 @@ relay has no plan-review surface: it refuses Plan turns
 (`planTurnRefusal`, `cli-backend/src/local-session.ts`) and is never handed
 `submit_plan`. It never exposes a partial Plan toolset.
 
-`sandbox` is hosted-only Linux, implemented by `KinuSandbox`
-(`cf-backend/src/kinu-sandbox.ts`), a `Devbox` from `@kinu.run/devbox`. It is
+`sandbox` is hosted-only Linux, implemented by `KinuDevbox`
+(`cf-backend/src/kinu-devbox.ts`), a `Devbox` from `@kinu.run/devbox`. It is
 spot capacity: the platform can recycle it and return a blank disk. Devbox
 (`devbox/src/devbox.ts`) keeps startup cheap, attaches storage and processes
 before `ensureReady()` returns, records a failure before delivery, and retries
@@ -196,7 +204,7 @@ is durable. `packages/devbox/README.md` specifies the chain;
 `devbox/src/durability/contracts.ts` holds the shapes the durability
 instruments validate against.
 
-`KinuSandbox` names `BACKUP_BUCKET` and `PREVIEW_HOST_SUFFIX`, supplies
+`KinuDevbox` names `BACKUP_BUCKET` and `PREVIEW_HOST_SUFFIX`, supplies
 `sandboxInUse` and `acceptSandboxLifecycleFailure` through the
 root-agent stub, and installs egress interception. `enableInternet` false plus
 `interceptHttps` true means only HTTP/S and DNS leave, through the
