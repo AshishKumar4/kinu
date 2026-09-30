@@ -22,6 +22,9 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **A hired agent acts with the authority its turn resolved to.** A planner hired from a Build turn stays in Plan: the workspace, which runs every tool the agent calls, now enforces the resolved mode, and the turn's record says Plan.
+- **A turn survives its agent's isolate resetting on its own.** While a hired agent's turn is out, each workspace wake asks its isolate whether it still holds the turn; a reset one is recovered and re-run the way a workspace reset re-runs it, instead of holding its hirer until an unrelated reset.
+- **A hired agent's Codex and account routing match main's.** Its Codex calls with no connected machine go out through the owner's egress container, and it authenticates with the provider account the owner selected.
 - **Agent isolates use the deployment's compatibility settings.** The build reads Wrangler's resolved date and flags and serves them beside the agent bundle; native error fields survive on the deployment date without a second refusal transport. Workers AI fixtures use the real platform binding and fetch cancellation rather than RPC signal serialization.
 - **A hired agent whose isolate cannot load reports failure to its hirer.** The report names the agent and the load error instead of leaving its caller waiting forever.
 - **Fork counts include unloaded chat history.** The fork dialog counts through a loaded message's stored position, so gaps between pages no longer make a fork promise fewer messages than it copies. Reaching the first page does not imply every page is loaded.

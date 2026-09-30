@@ -65,6 +65,8 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   relayDevice(provider: RelayedProvider) { return this.answers.relayDevice(provider); }
   relayModelCall(deviceId: string, callId: string, request: Request) { return this.answers.relayModelCall(deviceId, callId, request); }
   cancelModelRelay(callId: string) { return this.answers.cancelModelRelay(callId); }
+  forwardCodex(callId: string, request: Request) { return this.answers.forwardCodex(callId, request); }
+  cancelCodex(callId: string) { return this.answers.cancelCodex(callId); }
 }
 
 export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps> {
@@ -97,6 +99,8 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   relayDevice(provider: RelayedProvider) { return this.host().relayDevice(provider); }
   relayModelCall(deviceId: string, callId: string, request: Request) { return this.host().relayModelCall(deviceId, callId, request); }
   cancelModelRelay(callId: string) { return this.host().cancelModelRelay(callId); }
+  forwardCodex(callId: string, request: Request) { return this.host().forwardCodex(callId, request); }
+  cancelCodex(callId: string) { return this.host().cancelCodex(callId); }
 }
 
 const UIChunkSchema = v.custom<UIMessageChunk>((value) => v.is(v.looseObject({ type: v.string() }), value), 'a UI message chunk');

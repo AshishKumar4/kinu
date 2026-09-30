@@ -9,6 +9,7 @@ import { attempt, diagnostics, renderCauseChain, settle } from '@kinu.run/core/o
 import { Effect } from 'effect';
 import type { NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import { createAgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
+import { codexContainerFetch } from '../egress/codex-egress-route';
 import type { AgentDatabase } from './agent-database';
 import type { AgentReview, AgentTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn } from './protocol';
 
@@ -36,6 +37,8 @@ export interface AgentWorkspace {
   relayDevice(provider: RelayedProvider): ReturnType<UserCredentialClient['relayDevice']>;
   relayModelCall(deviceId: string, callId: string, request: Request): Promise<Response>;
   cancelModelRelay(callId: string): Promise<void>;
+  forwardCodex(callId: string, request: Request): Promise<Response>;
+  cancelCodex(callId: string): Promise<void>;
 }
 
 class HeadTrace {
@@ -115,6 +118,11 @@ function workspaceTools(
   }));
 }
 
+interface LiveTurn {
+  dynamic: PreparedAgentTurn['dynamic'];
+  inputs?: AgentTurnProfile['inputs'];
+}
+
 export interface QueuedAgentTask {
   readonly after: Promise<void>;
   readonly database: AgentDatabase;
@@ -144,11 +152,14 @@ async function runTurn(
 
   database.prepare(task.sequenceId, prepared);
   const actor = await database.acquire();
-  const live = { dynamic: prepared.dynamic };
+  const live: LiveTurn = { dynamic: prepared.dynamic };
 
   const registry = createAgentProviderRegistry({
     env: providers,
     userDO: { stub: brokeredCredentials(workspace), caller: AGENT_CALLER },
+    accountFor: (provider) => actor.stores.config.getProviderAccounts()[provider] ?? prepared.accounts[provider]
+      ?? live.inputs?.envelope.catalog.accounts?.[provider],
+    codexContainer: codexContainerFetch({ forward: (callId, request) => workspace.forwardCodex(callId, request), cancel: (callId) => workspace.cancelCodex(callId) }),
     appTitle: 'Kinu',
   });
 
@@ -175,6 +186,7 @@ async function runTurn(
       const resolved = await workspace.profile(task.sequenceId, availableTools, workMode);
 
       live.dynamic = resolved.dynamic;
+      live.inputs = resolved.inputs;
 
       return resolved;
     },
@@ -217,7 +229,7 @@ async function runTurn(
   closeTurnRun(actor.stores.eventRecorder, runId, {
     turnIndex: actor.session.orchestrator.sessionTurnIndex,
     usage: report.usage,
-    workMode: task.mode,
+    workMode: actor.session.workMode,
     ...classifyRunEnd({
       completed: report.status === 'completed',
       interrupted: report.status === 'aborted',

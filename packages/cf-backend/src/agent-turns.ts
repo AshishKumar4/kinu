@@ -18,8 +18,10 @@ export interface AgentTurnsDeps {
   seams(): HostedActorSeams;
   deliver(reference: ActorReference, task: AgentTask): Promise<void>;
   interrupt(reference: ActorReference, turnId: string): Promise<void>;
+  holds(reference: ActorReference, turnId: string): Promise<boolean>;
   dynamic(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext;
   pricing(spec: string): ModelPricing | null;
+  accounts(): Readonly<Record<string, string>>;
   live(actorId: string): boolean;
 }
 
@@ -28,6 +30,7 @@ export interface AgentTurnHooks {
   ended(end: AgentTurnEnd): Promise<void>;
   failed(failure: KinuError): Promise<void>;
   after(): Promise<void>;
+  lost(): Promise<void>;
 }
 
 interface PendingTurn {
@@ -37,6 +40,7 @@ interface PendingTurn {
   readonly hooks: AgentTurnHooks;
   prepared: PreparedHostedTurn | null;
   profile?: ResolvedTurnProfile;
+  delivered: boolean;
   over: boolean;
   readonly done: ReturnType<typeof Promise.withResolvers<void>>;
 }
@@ -56,13 +60,16 @@ export class AgentTurns {
   constructor(private readonly deps: AgentTurnsDeps) {}
 
   start(reference: ActorReference, request: HostedTurnRequest, task: AgentTask, hooks: AgentTurnHooks): Promise<void> {
-    const pending: PendingTurn = { reference, request, task, hooks, prepared: null, over: false, done: Promise.withResolvers<void>() };
+    const pending: PendingTurn = {
+      reference, request, task, hooks, prepared: null, delivered: false, over: false, done: Promise.withResolvers<void>(),
+    };
 
     this.pending.set(request.sequenceId, pending);
 
     return settle(attempt({ doing: "handing a delegated turn to the agent's own isolate", otherwise: 'io' }, async () => {
       await hooks.begin();
       await this.deps.deliver(reference, task);
+      pending.delivered = true;
     }).pipe(Effect.catch((failure) => this.closing(pending, { failure }))));
   }
 
@@ -75,6 +82,11 @@ export class AgentTurns {
     const interrupt = () => { interruptions.push(this.interruptRun(reference, input.id)); };
 
     inference.signal?.addEventListener('abort', interrupt, { once: true });
+
+    const after = async () => {
+      inference.signal?.removeEventListener('abort', interrupt);
+      ledger.close(opened);
+    };
 
     await this.start(reference, { ...task, run: { input, inference } }, task, {
       begin: async () => { ledger.open(opened, Date.now()); },
@@ -91,9 +103,10 @@ export class AgentTurns {
         }));
       },
       failed: async (failure) => { result.resolve(Effect.fail(failure)); },
-      after: async () => {
-        inference.signal?.removeEventListener('abort', interrupt);
-        ledger.close(opened);
+      after,
+      lost: async () => {
+        result.resolve(Effect.fail(new KinuError('io', "The agent's isolate reset before its turn ended.")));
+        await after();
       },
     });
 
@@ -112,28 +125,56 @@ export class AgentTurns {
       }))));
   }
 
-  private closing(pending: PendingTurn, outcome: { readonly end: AgentTurnEnd } | { readonly failure: KinuError }): Effect.Effect<void> {
+  reconcile(): Promise<void> {
+    return settle(Effect.forEach(this.pending.values(), (pending) => (pending.over || !pending.delivered ? Effect.void : attempt(
+      { doing: "asking an agent's isolate for the turn it holds", otherwise: 'io' },
+      () => this.deps.holds(pending.reference, pending.request.sequenceId),
+    ).pipe(
+      Effect.catch((failure) => Effect.sync(() => {
+        diagnostics.failure('agent.holds_unanswered', failure, { actor: pending.reference.actorId });
+
+        return true;
+      })),
+      Effect.flatMap((held) => (held || pending.over ? Effect.void : this.closing(pending, { lost: true }))),
+    )), { discard: true }));
+  }
+
+  private closing(
+    pending: PendingTurn, outcome: { readonly end: AgentTurnEnd } | { readonly failure: KinuError } | { readonly lost: true },
+  ): Effect.Effect<void> {
     pending.over = true;
 
-    return attempt({ doing: 'settling a delegated turn the agent finished', otherwise: 'io' }, async () => {
-      if ('end' in outcome) {
-        await pending.hooks.ended(outcome.end);
+    const settling = 'lost' in outcome
+      ? attempt({ doing: "recovering a turn an agent's isolate lost", otherwise: 'io' }, () => {
+        diagnostics.event('agent.turn_lost', { actor: pending.reference.actorId, turn: pending.request.sequenceId });
 
-        if (!this.deps.live(pending.reference.actorId) || pending.request.run !== undefined) return;
-        await settleHostedTask(this.deps.seams(), this.prepared(pending), pending.request, outcome.end);
-      } else {
-        await pending.hooks.failed(outcome.failure);
-      }
-    }).pipe(
-      Effect.andThen(() => attempt({ doing: 'closing the books on a delegated turn', otherwise: 'io' }, () => pending.hooks.after())),
+        return pending.hooks.lost();
+      })
+      : attempt({ doing: 'settling a delegated turn the agent finished', otherwise: 'io' }, async () => {
+        if ('end' in outcome) {
+          await pending.hooks.ended(outcome.end);
+
+          if (!this.deps.live(pending.reference.actorId) || pending.request.run !== undefined) return;
+          await settleHostedTask(this.deps.seams(), this.prepared(pending), pending.request, outcome.end);
+        } else {
+          await pending.hooks.failed(outcome.failure);
+        }
+      }).pipe(Effect.andThen(() => attempt({ doing: 'closing the books on a delegated turn', otherwise: 'io' }, () => pending.hooks.after())));
+
+    return settling.pipe(
       Effect.catch((failure) => Effect.sync(() => {
         diagnostics.failure('subordinate.delegated_turn_settle_failed', failure, { actor: pending.reference.actorId });
       })),
-      Effect.ensuring(Effect.sync(() => {
-        this.pending.delete(pending.request.sequenceId);
-        pending.done.resolve();
-      })),
+      Effect.ensuring(this.release(pending)),
     );
+  }
+
+  /** A re-driven lost turn reuses its id. */
+  private release(pending: PendingTurn): Effect.Effect<void> {
+    return Effect.sync(() => {
+      if (this.pending.get(pending.request.sequenceId) === pending) this.pending.delete(pending.request.sequenceId);
+      pending.done.resolve();
+    });
   }
 
   private running(actorId: string): PendingTurn | null {
@@ -191,6 +232,10 @@ export class AgentTurns {
     return settleSync(Effect.fail(new KinuError('denied', 'The agent called a tool before its turn was prepared.')));
   }
 
+  private mode(pending: PendingTurn): WorkMode {
+    return pending.task.mode === 'plan' ? 'plan' : pending.profile?.workMode ?? pending.task.mode;
+  }
+
   private dynamic(pending: PendingTurn): DynamicContext {
     const { turn, tools } = this.prepared(pending);
     const active = pending.profile ?? turn.profile.profile;
@@ -219,6 +264,7 @@ export class AgentTurns {
       ...(run === undefined && { birthContext: prepared.birthContext }),
       model: prepared.model,
       pricing: this.deps.pricing(prepared.model),
+      accounts: this.deps.accounts(),
       scaffold,
       languages: actor.runtime.executor.languages,
       framing: prepared.framing,
@@ -283,7 +329,7 @@ export class AgentTurns {
     const signal = pending.request.run?.inference.signal;
     const control = signal === undefined ? {} : { signal };
 
-    return await actor.runtime.executor.execute(code, [...supplied, ...scaffoldProviders(actor.runtime, control, pending.task.mode)], opts);
+    return await actor.runtime.executor.execute(code, [...supplied, ...scaffoldProviders(actor.runtime, control, this.mode(pending))], opts);
   }
   async execute(actorId: string, { turnId, callId, name, input }: AgentToolCall): Promise<AgentToolAnswer> {
     const pending = this.turn(actorId, turnId);
@@ -299,7 +345,7 @@ export class AgentTurns {
       toolCalls: capture.toolCalls.length, childHeadIds: capture.childHeadIds.length,
     };
 
-    const output = await runWorkModeInvocation(pending.task.mode, () => execute(input, { toolCallId: callId, messages: [] }));
+    const output = await runWorkModeInvocation(this.mode(pending), () => execute(input, { toolCallId: callId, messages: [] }));
 
     return {
       output,

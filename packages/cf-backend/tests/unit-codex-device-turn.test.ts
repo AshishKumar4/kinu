@@ -4,7 +4,9 @@ import { afterEach, beforeEach, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { CODEX_CRED_KEY, DEVICE_RELAY, EgressCalls, asFetchFunction, requestUrl, type JsonValue } from '@kinu.run/core';
 import { createTestUserDO, provisionTestWorkspace, testOwner, type DeviceFrame, type TestUserDO } from './helpers/user-do';
-import { catalogTurn, makeEnv, orchestratorHarness, sideLane } from './helpers/actor-harness';
+import {
+  agentSql, catalogTurn, driveUntil, hostedSubordinateHarness, makeEnv, orchestratorHarness, sideLane, wakeForDelegatedTask,
+} from './helpers/actor-harness';
 import type { CodexEgressNamespace } from '../src/egress/codex-egress-route';
 
 const OWNER_USER_ID = 'fedcba9876543210fedcba9876543210';
@@ -151,6 +153,23 @@ test('the Activity tab names the route of the newest Codex step: the machine by 
   const asked = user.deviceFrames.length;
   expect((await actor.agent.getActivitySnapshot()).latest?.route).toEqual({ kind: 'device', id: deviceId, name: 'desk' });
   expect(user.deviceFrames.slice(asked).map((frame) => frame.method)).toEqual([]);
+  await user.joinFibers();
+  user.close();
+});
+
+test("a hired agent's Codex call from its own isolate goes out through the owner's egress container", async () => {
+  const { user, actor, forwarded } = await codexWorkspace();
+  const hire = await hostedSubordinateHarness(actor, { name: 'coder', displayName: 'Coder', nameOrigin: 'user', mission: 'code' });
+  const hireId = hire.actor.handle.actorId;
+
+  const ended = (): string[] => agentSql(hireId)<{ payload: string }>`
+    SELECT payload FROM run_events WHERE actor_id = ${hireId} AND type = 'run_end'`.map((row) => row.payload);
+
+  await wakeForDelegatedTask(actor, hireId, 'Write the thing.');
+  await driveUntil(actor, "the hire's turn never ended", () => ended().length > 0);
+
+  expect(forwarded.filter((url) => url.endsWith('/codex/responses'))).toHaveLength(1);
+  expect(ended().join('')).not.toContain('unexpected network call');
   await user.joinFibers();
   user.close();
 });
