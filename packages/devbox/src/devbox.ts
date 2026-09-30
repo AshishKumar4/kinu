@@ -467,7 +467,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     // No await separates teardown admission from the platform start. Native exec never starts one.
     const wasRunning = container.running;
 
-    if (!wasRunning) container.start({ enableInternet: this.enableInternet });
+    if (!wasRunning) {
+      container.start({ enableInternet: this.enableInternet });
+      this.#routes().started();
+    }
+
     const cancel = new AbortController();
 
     const run = (async () => {

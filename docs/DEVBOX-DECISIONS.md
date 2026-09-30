@@ -1890,9 +1890,12 @@ reaching the gateway: 1.3 to 1.6 s in 6 of 7 mounts and 0.2 s in one. The
 route install is two RPCs of 5 to 10 ms, the shim's stdin handshake arrives
 in under 10 ms, and DNS and a second s3fs start on the same container take 5
 to 21 ms (`sbs09300347n`, `sbs09300350n`, `sbs09300356n`). No Worker runs in
-the gap, so the time is spent in the container before s3fs sends; the old
-shape's mount call also waited 0.8 s for its first request. The caller's
-wake is not slower because the native container starts sooner.
+the gap; D44 finds it in the platform's first DNS answer, which only a
+container with the internet enabled waits for. Every run in this table had
+the internet enabled, the bench default; Kinu's containers do not, and D44
+compares the two shapes that way. The old shape's mount call also waited
+0.8 s for its first request. The caller's wake is not slower because the
+native container starts sooner.
 
 D26's check. Its probe is the SDK start block, which the native owner does
 not have. The same probe shape on `ctx.container` (2026-09-28,
@@ -1908,6 +1911,83 @@ with the `workspace` runtime (`scripts/canary-script.ts:50`) and nothing in
 `cf-backend` starts the devbox unasked, so its three numbers cannot tell the
 shapes apart. It also needs a whole product deployment. Its baseline is the
 staging run of 2026-09-26 (`kinu-logs/onstart/DESIGN.md`).
+D44. D43's slower store mount is the platform's first DNS answer, which
+only a container with the internet enabled waits for (2026-09-30). The
+bench runs its box with the internet enabled; `KinuSandbox` does not.
+
+With the internet enabled, the gap between the route's registration and
+s3fs's first request is name resolution. s3fs's own log on three wakes
+(`sbs09300459n`): its first request reaches `url_to_host` 4 ms after s3fs
+starts, and curl reports the route host resolved 1,013, 1,033 and 1,051 ms
+later; the connection then takes 2 ms. strace of the same lookup at the
+instant the shim starts s3fs (`sbs09300506n`): one `sendmmsg` of the A and
+AAAA queries, no retransmission, answers after 1,019 and 1,048 ms (11 ms on
+one boot of three). Every later lookup takes 4 to 8 ms, fresh names
+included. None of it is ours: before that query the container has sent
+nothing (`/proc/net/snmp6` all zero), afterwards one neighbour solicitation
+went out and one advertisement came back (`sbs09300510n`), and a 100 ms
+neighbour retransmit timer changes nothing, 1,031 to 1,058 ms
+(`sbs09300515na`). Installing a host route or reinstalling the catch-all
+router in a running container leaves the next lookup at 9 to 24 ms
+(`sbs09300539nr`); DNS over TCP is not answered (`sbs09300534nc`).
+
+An overlap was tried and not kept. An image that sends one lookup when it
+boots moved the wait 0.23 to 0.28 s earlier (`sbs09300515nb`), since the
+first query cannot leave before the container boots. Paired runs, 12 wakes
+on each image at once, internet enabled: store mount phase median 2,035
+against 1,823 ms (`sbs09300543nwbefore`, `sbs09300542nwafter`). Internet
+disabled, 8 wakes each: 1,910 against 1,963 ms (`sbs09300552nibefore`,
+`sbs09300552niafter`). It buys nothing where Kinu runs. Answering route
+hosts from `/etc/hosts` with the platform's interception address
+(`fd00::119:1`, `11.9.0.1`) would remove the wait, but no Cloudflare
+document names that address; that is not done.
+
+With the internet disabled there is no such wait: the first lookup at the
+instant the shim starts s3fs takes 12 to 26 ms (`sbs09300559nidns`), and
+s3fs resolves the route host in 3 to 11 ms (`sbs09300603nidbg`). Both shapes
+that way at the same time, 8 wakes each (`interceptHttps` too on the old
+one, as its `KinuSandbox` set): the store is mounted at a median 2,014 ms
+after the restore opens on native against 1,844 ms on the old shape; the
+restore takes 6,254 against 5,796 ms; the wake as the caller sees it
+10,824 against 10,649 ms (`sbs09300614nknew`, `sbs09300614okold`). A second
+native run: 1,922, 6,108 and 9,682 ms (`sbs09300625nkbefore`). By phase
+stamp medians, native starts its container sooner (119 against 302 ms) and
+takes longer from the boot id to the store mount (1,548 against 1,277 ms)
+and from the mount to the base attach (2,217 against 1,846 ms).
+
+Both longer segments come from the SDK's mount. S3Mounts mounts
+`bucket:/prefix`, and the shim returns only after s3fs has checked that
+prefix: a HEAD, a HEAD of its `_$folder$` twin and a LIST, three store round
+trips, 0.27 s (`sbs09300603nidbg`). 0.12.9 mounted the bucket root
+(`s3fs BACKUP_BUCKET /backups`) and scoped the prefix in its Worker. And the
+SDK always sets `compat_dir` (`RESERVED_S3FS_OPTIONS`, `index.mjs:1872`),
+so s3fs looks each directory up with up to four requests during the attach
+(`sbs09300609nitl`); 0.12.9's mount did not set it. Rooting the prefix in
+`DevboxStoreGateway` would let the mount take the bucket root and drop the
+three checks; it changes what the gateway trusts, so it is not done here.
+The mount also registered its route by reinstalling both catch-alls one
+after the other, 168 to 171 ms; installing them together took 174 to
+235 ms (`sbs09300634nafix`), so the platform serializes them. D45 removes
+the one cost that was Devbox's own.
+
+D45. A container its box started is not unmounted before its first store
+mount (2026-09-30). The chain unmounts the store before every mount because
+the shim treats a marker with the same configuration as a live mount, so a
+marker left by a mount whose s3fs died must go first. A container that
+`#startNative` has just started has a new `/run` and no marker, and the
+unmount was a shim exec of 108 to 113 ms on every wake (`sbs09300609nitl`).
+`ContainerRoutes.started()` records the start; any mount attempt clears the
+record, so a remount in the same container still unmounts first. Live, every
+wake of a started container skipped it (`sbs09300634nafix`, 5 wakes). Red and
+green: `tests/store-mount-bounds.test.ts`, "a container this box started
+holds no marker" (`bench-artifacts/native-migration/mount-fix-red.log`,
+`-green.log`). Not kept, because measured to buy nothing: installing the two
+catch-alls together, above, and setting s3fs's miss cache and a 60 s stat
+cache as 0.12.9 did, since s3fs 1.93 enables the miss cache by default and
+keeps stat entries 900 s. Medians across runs cannot show a 0.1 s change:
+single runs of one image differ by up to 0.8 s in the store mount phase
+(1,388 and 2,190 ms, `sbs09300519nafter`, `sbs09300525nafterb`), so the
+change is shown by the call it removes.
 
 ## Measurement contract for a strategy comparison
 
