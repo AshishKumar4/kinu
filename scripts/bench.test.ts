@@ -1,3 +1,4 @@
+import { addAbortListener } from 'node:events';
 // Credential-free verification of the bench runner: the isolation, seal, and
 // anti-self-scoring guarantees, plus corpus validation. Runs no model and needs
 // no provider — CI can gate on all of it.
@@ -905,7 +906,7 @@ describe('budgetSignal — the compute envelope is enforced, not advertised', ()
     const budget = budgetSignal({ wallClockMs: 30, maxTokens: 1000 });
     expect(budget.timedOut()).toBe(false);
     expect(budget.signal.aborted).toBe(false);
-    await new Promise((r) => setTimeout(r, 80));
+    await new Promise<void>((resolve) => { addAbortListener(budget.signal, () => resolve()); });
     expect(budget.timedOut()).toBe(true);
     expect(budget.signal.aborted).toBe(true);
     budget.done();
@@ -913,7 +914,6 @@ describe('budgetSignal — the compute envelope is enforced, not advertised', ()
 
   test('a solver that finishes in time is never marked as breaching', async () => {
     const budget = budgetSignal({ wallClockMs: 5000, maxTokens: 1000 });
-    await new Promise((r) => setTimeout(r, 10));
     budget.done();
     expect(budget.timedOut()).toBe(false);
     expect(budget.signal.aborted).toBe(false);

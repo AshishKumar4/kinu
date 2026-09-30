@@ -309,6 +309,8 @@ Wait for the effect being asserted. A theme control waits for the applied mode, 
 
 Escape has a decoder stage before rendering. The keyboard fixture awaits its native key event, then proves that focus returns by typing into the visible composer; visual idle alone does not prove the input was decoded.
 
+Local session predicates subscribe to the event array produced by that session. Housekeeping and outcome review are joined through `settleBackgroundWork()` or `end()` before inspecting their stored effects; a frontend event is not proof that private fiber pruning finished. MCP cancellation uses a held stdio tool plus an entry acknowledgement. Checkpoint lanes use parked operations to prove join and queue order. Domain expiry arithmetic uses a controlled clock, and undated machine-speed cutoffs are not resource contracts.
+
 ## Flakes
 
 A test that passes and fails on one tree is a flake. A row runs each suite once, so only a repeat can show one.

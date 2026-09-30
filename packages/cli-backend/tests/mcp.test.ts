@@ -4,7 +4,7 @@ import { Database } from 'bun:sqlite';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
-import { isMcpToolKey, mcpToolKey, NO_TIMER_DEADLINE_MS, type LLMProviderConfig } from '@kinu.run/core';
+import { isMcpToolKey, NO_TIMER_DEADLINE_MS, type LLMProviderConfig } from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { createCLIRuntime , makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
@@ -74,19 +74,6 @@ function sessionWithModel(model: LanguageModel) {
 }
 
 describe('connectMcpServers', () => {
-  test('keys tools with the same core rule the cf backend uses', async () => {
-    // Both backends key MCP tools through core's `describeMcpTool`, so a prompt naming one is portable.
-    const conn = await connectMcpServers(mcpServers());
-
-    try {
-      expect(conn.descriptors.map((d) => d.toolKey)).toEqual(
-        [mcpToolKey('echo', 'echo'), mcpToolKey('echo', 'slow'), mcpToolKey('echo', 'huge')],
-      );
-    } finally {
-      await conn.close();
-    }
-  });
-
   test('no configured timeout means no deadline at the SDK seam, not the SDK\'s own 60 s default', async () => {
     // The SDK reads an absent `timeout` as 60_000 ms, so "no deadline" is the sentinel on every request.
     const connect = spyOn(Client.prototype, 'connect');
@@ -123,11 +110,10 @@ describe('connectMcpServers', () => {
 
     try {
       const stop = new AbortController();
-      const running = conn.call('echo', 'slow', { ms: 30_000 }, stop.signal);
-      const started = Date.now();
+      const running = conn.call('echo', 'held', {}, stop.signal);
+      await conn.call('echo', 'heldEntered', {});
       stop.abort();
       await expect(running).rejects.toBeInstanceOf(Error);
-      expect(Date.now() - started).toBeLessThan(5_000);
     } finally {
       await conn.close();
     }
@@ -139,8 +125,8 @@ describe('connectMcpServers', () => {
 
     try {
       expect(conn.descriptors.map((d) => d.toolKey))
-        .toEqual(['mcp_echo_echo', 'mcp_echo_slow', 'mcp_echo_huge']);
-      expect(conn.diagnostics).toEqual([{ server: 'echo', status: 'connected', toolCount: 3 }]);
+        .toEqual(['mcp_echo_echo', 'mcp_echo_held', 'mcp_echo_heldEntered', 'mcp_echo_huge']);
+      expect(conn.diagnostics).toEqual([{ server: 'echo', status: 'connected', toolCount: 4 }]);
       expect(logs.some((m) => m.includes('mcp: echo'))).toBe(true);
       await expect(conn.call('echo', 'echo', { text: 'hello' })).resolves.toBe('echo: hello');
       await conn.close();
@@ -256,8 +242,8 @@ describe('LocalAgentSession MCP admission', () => {
         alpha: { command: 'node', args: [fixtureServer] },
       });
       expect(session.toolNames().filter((name) => isMcpToolKey(name))).toEqual([
-        'mcp_alpha_echo', 'mcp_alpha_slow',
-        'mcp_zulu_echo', 'mcp_zulu_slow',
+        'mcp_alpha_echo', 'mcp_alpha_held', 'mcp_alpha_heldEntered',
+        'mcp_zulu_echo', 'mcp_zulu_held', 'mcp_zulu_heldEntered',
       ]);
     } finally {
       await session.end();

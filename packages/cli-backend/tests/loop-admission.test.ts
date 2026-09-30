@@ -1,3 +1,4 @@
+import { recordSessionEvent, waitFor } from './helpers/local-session';
 /**
  * A send reaching the loop while the slot is held is admitted by the loop's durable re-drive (turn-close recheck,
  * wake-time ledger drain), with both one-shot kicks dead. Red if the re-drive is removed.
@@ -76,16 +77,6 @@ class DroppedTimerSession extends LocalAgentSession {
   override setTimer(): void {}
 }
 
-async function waitFor(pred: () => boolean, what: string): Promise<void> {
-  const until = Date.now() + 5000;
-
-  while (!pred()) {
-    if (Date.now() > until) throw new Error(`waitFor: ${what}`);
-    const tick = Promise.withResolvers<void>();
-    setTimeout(tick.resolve, 5);
-    await tick.promise;
-  }
-}
 
 function openDb(name: string): Database {
   const db = new Database(scratchPath('loop-admission', `${name}.db`));
@@ -107,10 +98,10 @@ describe('the loop admits a send queued while the slot is held, with every one-s
     const gate = Promise.withResolvers<void>();
     const asked: string[] = [];
     const events: SessionEvent[] = [];
-    const session = new DroppedTimerSession({ rt, db, model: holdingModel(gate.promise, asked), noAutoEvolve: true, onEvent: (event) => events.push(event) });
+    const session = new DroppedTimerSession({ rt, db, model: holdingModel(gate.promise, asked), noAutoEvolve: true, onEvent: (event) => recordSessionEvent(events, event) });
 
     const userTurn = session.send('hold the slot', { id: crypto.randomUUID() });
-    await waitFor(() => events.some((event) => event.type === 'text-delta'), 'the held turn never reached its model call');
+    await waitFor(events, () => events.some((event) => event.type === 'text-delta'));
 
     const wake = session.enqueueTurn({
       text: WAKE_TEXT,
@@ -124,7 +115,7 @@ describe('the loop admits a send queued while the slot is held, with every one-s
     await userTurn;
 
     await expect(wake).resolves.toEqual({ status: 'queued' });
-    await waitFor(() => events.filter((event) => event.type === 'turn-end').length === 2, 'the woken turn never closed');
+    await waitFor(events, () => events.filter((event) => event.type === 'turn-end').length === 2);
     expect(asked).toEqual(['hold the slot', WAKE_TEXT]);
     expect(events.filter((event) => event.type === 'turn-start').map((event) => event.kind)).toEqual(['user', 'programmatic']);
     expect(runs(db).map((row) => row.type)).toEqual(['run_start', 'run_end', 'run_start', 'run_end']);
@@ -157,9 +148,9 @@ describe('the loop admits a send queued while the slot is held, with every one-s
     gate.resolve();
     const asked: string[] = [];
     const events: SessionEvent[] = [];
-    const session = new DroppedTimerSession({ rt, db, model: holdingModel(gate.promise, asked), noAutoEvolve: true, onEvent: (event) => events.push(event) });
+    const session = new DroppedTimerSession({ rt, db, model: holdingModel(gate.promise, asked), noAutoEvolve: true, onEvent: (event) => recordSessionEvent(events, event) });
     await session.flushPendingDrains();
-    await waitFor(() => events.some((event) => event.type === 'turn-end'), 'the retried wake never closed a turn');
+    await waitFor(events, () => events.some((event) => event.type === 'turn-end'));
 
     expect(asked).toHaveLength(1);
     expect(asked[0]).toContain(WAKE_TEXT);

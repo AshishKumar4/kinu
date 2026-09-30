@@ -1,4 +1,5 @@
 import { expect } from 'bun:test';
+import { EventEmitter, once } from 'node:events';
 import { createTestActorsOver, createTestSql, readTranscriptRows, scratchPath, type HandClock, type TranscriptRow } from '@kinu.run/test-utils';
 import { MissionGovernor } from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
@@ -245,7 +246,7 @@ export function setup(answer = 'hello there', model?: LanguageModel, extra?: Par
   const events: SessionEvent[] = [];
 
   const session = new LocalAgentSession({
-    rt, db, model: model ?? fakeModel(answer), onEvent: (e) => events.push(e), noAutoEvolve: true,
+    rt, db, model: model ?? fakeModel(answer), onEvent: (event) => recordSessionEvent(events, event), noAutoEvolve: true,
     ...extra,
   });
 
@@ -441,21 +442,41 @@ export function setupWithResolver(
 
   const session = new LocalAgentSession({
     rt, db, model: fakeModel('fallback'), modelResolver: resolver,
-    onEvent: (event) => events.push(event), noAutoEvolve: true,
+    onEvent: (event) => recordSessionEvent(events, event), noAutoEvolve: true,
     ...extra,
   });
 
   return { db, rt, session, events };
 }
 
-/** Waits for the state, however long a starved machine takes to reach it; a state never reached is the runner's hang. */
-export async function waitFor(pred: () => boolean): Promise<void> {
-  while (!pred()) await new Promise<void>((r) => setTimeout(r, 2));
+const eventSignals = new WeakMap<readonly SessionEvent[], EventEmitter>();
+
+function changesFor(events: readonly SessionEvent[]): EventEmitter {
+  let changes = eventSignals.get(events);
+
+  if (!changes) {
+    changes = new EventEmitter();
+    eventSignals.set(events, changes);
+  }
+
+  return changes;
+}
+
+export function recordSessionEvent(events: SessionEvent[], event: SessionEvent): void {
+  events.push(event);
+  const changes = changesFor(events);
+  queueMicrotask(() => changes.emit('changed'));
+}
+
+export async function waitFor(events: readonly SessionEvent[], pred: () => boolean): Promise<void> {
+  const changes = changesFor(events);
+
+  while (!pred()) await once(changes, 'changed');
 }
 
 /** The session has begun waiting on its background fibers; the grace, if any, is armed by now. */
 export function joining(events: readonly SessionEvent[]): Promise<void> {
-  return waitFor(() => events.some((e) => e.type === 'background' && e.event === 'bg_jobs_settling'));
+  return waitFor(events, () => events.some((e) => e.type === 'background' && e.event === 'bg_jobs_settling'));
 }
 
 /** The grace armed on `clock` holds through its last millisecond and fires on it. */

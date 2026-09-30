@@ -15,9 +15,7 @@ import { createCLIRuntime, makeExecRaw, makeSql, makeWorkspaceSchemaSql, type CL
 import { LocalAgentSession, serializeContentForHeads, type SessionEvent } from '../src/local-session';
 import { type LocalModelResolver } from '../src/model-resolver';
 import { discoverAgentsMd } from '../src/agents-md';
-import {
-  resolverRest, namedSpec, textStream, type PromptMessage, fakeModel, historyCapturingModel, systemCapturingModel, workspaceRuntime, transcript, setup, setupWithResolver, waitFor, kinds, turnStarts, isDynamicBlock, isWorkspaceInstructions, writeFocusedSkill, messageText, DUMMY_LLM,
-} from './helpers/local-session';
+import { recordSessionEvent, resolverRest, namedSpec, textStream, type PromptMessage, fakeModel, historyCapturingModel, systemCapturingModel, workspaceRuntime, transcript, setup, setupWithResolver, waitFor, kinds, turnStarts, isDynamicBlock, isWorkspaceInstructions, writeFocusedSkill, messageText, DUMMY_LLM, } from './helpers/local-session';
 
 test('parallel native calls retain their SDK identities after reverse completion', async () => {
   const { db, rt } = workspaceRuntime();
@@ -53,7 +51,7 @@ test('parallel native calls retain their SDK identities after reverse completion
   const events: SessionEvent[] = [];
 
   const session = new LocalAgentSession({ rt, db, model, noAutoEvolve: true, onEvent: (event) => {
-    events.push(event);
+    recordSessionEvent(events, event);
 
     if (event.type === 'tool-result' && event.toolCallId === 'call-B') first.resolve();
   } });
@@ -194,7 +192,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     // Sent sequentially: a second send mid-turn rides that turn; the next turn must still run after a persist failure.
     await session.send('first', { id: crypto.randomUUID() });
     await session.send('second', { id: crypto.randomUUID() });
-    await waitFor(() => turnStarts(events).length === 2);
+    await waitFor(events, () => turnStarts(events).length === 2);
 
     const errors = events.filter((event): event is Extract<SessionEvent, { type: 'error' }> => event.type === 'error');
     const turns = events.filter((event): event is Extract<SessionEvent, { type: 'turn-end' }> => event.type === 'turn-end');
@@ -433,7 +431,7 @@ describe('LocalAgentSession.send — a user turn', () => {
       rt,
       db,
       model: historyCapturingModel('next answer', (messages) => { observed = messages; }),
-      onEvent: (e) => events.push(e),
+      onEvent: (e) => recordSessionEvent(events, e),
       noAutoEvolve: true,
     });
 
@@ -556,7 +554,7 @@ describe('LocalAgentSession — the walk-back', () => {
 
     if (first === undefined) throw new Error('the fixture recorded no user entry');
     const held = session.send('second ask', { id: crypto.randomUUID() });
-    await waitFor(() => events.filter((event) => event.type === 'turn-start').length === 2);
+    await waitFor(events, () => events.filter((event) => event.type === 'turn-start').length === 2);
 
     await expect(session.revertConversation(first.id)).rejects.toThrow(/Stop the turn that is running/);
 
@@ -684,7 +682,7 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
     const userDone = session.send('do it', { id: crypto.randomUUID() });
     await session.enqueueTurn({ text: 'job xyz finished', metadata: { kinuEvent: 'background_job', jobId: 'bgjob-1' } });
     await userDone;
-    await waitFor(() => events.filter((e) => e.type === 'turn-end').length === 2);
+    await waitFor(events, () => events.filter((e) => e.type === 'turn-end').length === 2);
 
     const starts = turnStarts(events);
     expect(starts.map((s) => s.kind)).toEqual(['user', 'programmatic']);
@@ -764,7 +762,7 @@ describe('LocalAgentSession — overflow recovery (context_length turn failures)
   test('a context_length failure arms force-compaction and enqueues ONE retry that resumes the work', async () => {
     const { db, session, events } = setup('unused', overflowingModel(1));
     await session.send('build the thing', { id: crypto.randomUUID() });
-    await waitFor(() => events.filter((e) => e.type === 'turn-end').length === 2);
+    await waitFor(events, () => events.filter((e) => e.type === 'turn-end').length === 2);
 
     expect(events.some((e) => e.type === 'error')).toBe(true);
     const starts = turnStarts(events);
@@ -790,8 +788,8 @@ describe('LocalAgentSession — overflow recovery (context_length turn failures)
   test('a retry turn that fails again never enqueues a third turn (never loops)', async () => {
     const { session, events } = setup('unused', overflowingModel(Number.POSITIVE_INFINITY));
     await session.send('build the thing', { id: crypto.randomUUID() });
-    await waitFor(() => events.filter((e) => e.type === 'turn-end').length === 2);
-    await new Promise((r) => setTimeout(r, 25));
+    await waitFor(events, () => events.filter((e) => e.type === 'turn-end').length === 2);
+    await session.settleBackgroundWork();
     expect(turnStarts(events)).toHaveLength(2);
     expect(events.filter((e) => e.type === 'error')).toHaveLength(2);
   });
@@ -812,7 +810,7 @@ describe('LocalAgentSession — overflow recovery (context_length turn failures)
 
     const { db, session, events } = setup('unused', model);
     await session.send('build the thing', { id: crypto.randomUUID() });
-    await new Promise((r) => setTimeout(r, 25));
+    await session.settleBackgroundWork();
     expect(turnStarts(events)).toHaveLength(1);
     expect(calls).toBe(1);
 
