@@ -10,6 +10,7 @@ import { unheld } from './redact';
 import type { HarnessRun } from './results';
 import type { KinuPublicSession } from './session';
 import type { EvalTask } from './task';
+import type { TimelineEntry } from './timeline';
 import { renderTrial } from './trajectories';
 import { SlateAnswerSchema } from './verifier';
 
@@ -85,8 +86,8 @@ function kept(bytes: Uint8Array): string | Uint8Array {
 
 /**
  * Write one trial's evidence into `directory`: `transcript.md` (rendered, and scrubbed, as a reviewer
- * reads a report), `ledger.jsonl`, and, when the workspace could be read, `files/`, `slates.json` and
- * `data.json`; when it could not, `workspace.txt` says why. Everything but the transcript is kept as
+ * reads a report), `ledger.jsonl`, `timeline.jsonl`, and, when the workspace could be read, `files/`,
+ * `slates.json` and `data.json`; when it could not, `workspace.txt` says why. Everything but the transcript is kept as
  * the deployment answered, less the run's own credential: a pattern scrub would rewrite the code a
  * reader came for, and this directory stays on the machine that ran the trial.
  */
@@ -95,10 +96,12 @@ export function writeEvidence(directory: string, trial: {
   readonly verdict: { status: 'passed' | 'failed'; durationMs: number };
   readonly events: readonly RunEvent[];
   readonly workspace: WorkspaceEvidence | { readonly unread: string };
+  readonly timeline: readonly TimelineEntry[];
 }): void {
   mkdirSync(directory, { recursive: true });
   writeFileSync(join(directory, 'transcript.md'), `${renderTrial(trial.run, trial.verdict)}\n`);
   writeFileSync(join(directory, 'ledger.jsonl'), trial.events.map((event) => `${unheld(JSON.stringify(event))}\n`).join(''));
+  writeFileSync(join(directory, 'timeline.jsonl'), trial.timeline.map((entry) => `${JSON.stringify(entry)}\n`).join(''));
 
   if ('unread' in trial.workspace) {
     writeFileSync(join(directory, 'workspace.txt'), `The workspace could not be read before teardown: ${unheld(trial.workspace.unread)}\n`);

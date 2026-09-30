@@ -65,7 +65,7 @@ describe('a trial\'s evidence', () => {
 
     const directory = join(scratchDir('eval-evidence'), 'trial-2');
 
-    writeEvidence(directory, { run: RUN, verdict: { status: 'failed', durationMs: 60_000 }, events: [], workspace: gathered });
+    writeEvidence(directory, { run: RUN, verdict: { status: 'failed', durationMs: 60_000 }, events: [], workspace: gathered, timeline: [] });
 
     expect(readFileSync(join(directory, 'files/slates/exchange/server.ts'), 'utf8')).toBe('export class Slate {}\n');
     expect(readFileSync(join(directory, 'files/home/main/SOUL.md'), 'utf8')).toBe('Fernhill Bakery.');
@@ -86,7 +86,7 @@ describe('a trial\'s evidence', () => {
     writeEvidence(directory, {
       run: RUN, verdict: { status: 'failed', durationMs: 1 },
       events: [{ runId: 'run-1', eventIndex: 1, timestamp: '2026-09-26T00:00:00.000Z', type: 'run_start', agentId: 'root' }],
-      workspace: { unread: 'listSlates did not answer' },
+      workspace: { unread: 'listSlates did not answer' }, timeline: [],
     });
 
     expect(readFileSync(join(directory, 'workspace.txt'), 'utf8')).toContain('listSlates did not answer');

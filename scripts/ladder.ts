@@ -1485,12 +1485,13 @@ export const LADDER: readonly Gate[] = [
     run: 'bun run evals',
     label: 'Eval suite',
     tier: 'evals',
-    // FIRST SIZING from the 2026-09-24 pilot on kinu.run: a trial took 12 to 26
-    // minutes on the product model, three at once, so ten trials of one task are
-    // four waves of about 26 minutes and the four tasks run one after another:
-    // 4 x 4 x 26 min is about 25,000s. Re-sized from the first baseline's
-    // per-task wall time, which `evals/scripts/validate.ts` prints.
-    seconds: 25_000,
+    // MEASURED 2026-09-30 on kinu.run serving 2f660875cc: the four tasks' 40 trials, all
+    // at once on Muse Spark, took 717s (kinu-logs/evals-fast/prod-muse-40), with no
+    // provider wait. One trial there crash-looped on isolate memory resets until its
+    // workspace was deleted at 686s; the slowest one that ended by itself took 561s.
+    // The 25,000s this replaces was four tasks one after another, three trials at a
+    // time, on GLM-5.3, whose trials took 26 to 66 minutes in the 2026-09-24 pilot.
+    seconds: 717,
     catches: 'a regression in what the DEPLOYED product does for a user, task by task. Each '
       + 'file in evals/tasks is one multi-turn task on a fresh eval-service workspace, and every '
       + 'turn is checked black-box: the checker calls the slate the agent built over the slate '

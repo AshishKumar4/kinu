@@ -41,9 +41,8 @@ async function sweep(target: EvalTarget): Promise<void> {
 
 /**
  * Register one task as model x arm x trial cases. Trials run concurrently, each on its own
- * workspace, so a task takes as long as its slowest trial. A run holds trials `firstTrial` onward,
- * so one task's trials can be split across jobs. A missing identity or a bad matrix fails here, at
- * collection, before any inference. Every trial's evidence goes under one directory per run, retained
+ * workspace, so a task takes as long as its slowest trial. A missing identity or a bad matrix fails
+ * here, at collection, before any inference. Every trial's evidence goes under one directory per run, retained
  * beside every other family's runs (`resolveArtifactRoot`), never under a swept root.
  */
 export function defineTaskEval(task: EvalTask): void {
@@ -62,7 +61,7 @@ export function defineTaskEval(task: EvalTask): void {
 
     for (const model of matrix.models) {
       for (const arm of matrix.arms) {
-        for (let trial = matrix.firstTrial; trial < matrix.firstTrial + matrix.trials; trial += 1) {
+        for (let trial = 1; trial <= matrix.trials; trial += 1) {
           // Concurrent cases use the context's expect: the judge records its score on the current test.
           it.concurrent(`${model} | ${arm} | trial ${String(trial)}`, async ({ run, expect }) => {
             const result = await run({ model, arm, trial });

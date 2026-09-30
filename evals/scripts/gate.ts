@@ -167,9 +167,7 @@ async function main(): Promise<number> {
   process.stdout.write(`evals: ${target.origin} serves ${sha}; ${String(reports.size)} of ${String(tasks.length)} tasks reused, `
     + `${String(pending.length)} run now, ${String(matrix.trials)} trials each, all at once\n`);
 
-  const env = {
-    KINU_EVAL_TRIALS: String(matrix.trials), KINU_EVAL_CONCURRENCY: String(matrix.trials), KINU_EVAL_COMMIT: commit, BENCH_ARTIFACTS: run,
-  };
+  const env = { KINU_EVAL_TRIALS: String(matrix.trials), KINU_EVAL_COMMIT: commit, BENCH_ARTIFACTS: run };
 
   await Promise.all(pending.map(async (task) => {
     const out = join(run, task.replace(/\.eval\.ts$/u, '.json'));
