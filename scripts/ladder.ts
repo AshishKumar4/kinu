@@ -1487,7 +1487,9 @@ export const LADDER: readonly Gate[] = [
     tier: 'evals',
     // MEASURED 2026-09-30 on kinu.run serving 2f660875cc: the four tasks' 40 trials, all
     // at once on Muse Spark, took 717s (kinu-logs/evals-fast/prod-muse-40), with no
-    // provider wait. One trial there crash-looped on isolate memory resets until its
+    // provider wait. It is a floor, not the suite's runtime: a trial stops at its first
+    // failed turn, and memory resets cut many short, so 20 of 40 trials ran every turn
+    // and 95 of 140 turns ran. One trial crash-looped on those resets until its
     // workspace was deleted at 686s; the slowest one that ended by itself took 561s.
     // The 25,000s this replaces was four tasks one after another, three trials at a
     // time, on GLM-5.3, whose trials took 26 to 66 minutes in the 2026-09-24 pilot.

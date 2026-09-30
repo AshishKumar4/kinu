@@ -237,7 +237,7 @@ jobs:
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          args=(--candidate artifacts/candidate/results.json --out artifacts/comparison)
+          args=(--candidate artifacts/candidate/results.json --out artifacts/comparison --trials "$EVAL_TRIALS")
           if [[ -f artifacts/baseline/results.json ]]; then args+=(--baseline artifacts/baseline/results.json); fi
           bun evals/scripts/compare.ts "${args[@]}"
           bun evals/scripts/trajectories.ts artifacts/candidate/results.json artifacts/comparison/trajectories.md
@@ -256,6 +256,40 @@ jobs:
           path: artifacts/comparison
           if-no-files-found: error
           retention-days: 30
+
+  # What a promote reads: it finds this job by its name, `Verdict`, and requires it completed with success. It
+  # succeeds only when the report is a complete baseline, a baseline was compared with it, and no cohort regressed
+  # (evalGateVerdict, written by compare.ts); anything else fails it, saying why.
+  verdict:
+    name: Verdict
+    needs: [plan, evals, compare]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Download the comparison
+        if: needs.compare.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: kinu-evals-comparison
+          path: artifacts/comparison
+
+      - name: Stand or fall on the comparison
+        env:
+          EVALS: ${{ needs.evals.result }}
+          COMPARE: ${{ needs.compare.result }}
+        run: |
+          if [[ "$COMPARE" != success ]]; then
+            echo "::error::No verdict: the eval job ended $EVALS and the comparison $COMPARE, so no report was compared"
+            exit 1
+          fi
+          reason=$(jq -r .reason artifacts/comparison/verdict.json)
+          echo "$reason" | tee -a "$GITHUB_STEP_SUMMARY"
+          if [[ "$(jq -r .pass artifacts/comparison/verdict.json)" != true ]]; then
+            echo "::error::$reason"
+            exit 1
+          fi
 
   diagnose:
     name: Why the evals failed

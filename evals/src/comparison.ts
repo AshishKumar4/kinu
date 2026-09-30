@@ -1,4 +1,5 @@
 import { basename } from 'node:path';
+import { renderThrownChain } from '@kinu.run/core/obs';
 import { redact } from './redact';
 import { parseResults, trials, type Assertion } from './results';
 import { HARNESS_ERRORS } from './task';
@@ -259,6 +260,17 @@ export function validateEvalResults(text: string, expectedTrials: number): { tas
   });
 }
 
+/** Why `text` cannot be a baseline of `expectedTrials` trials a cohort (`validateEvalResults`), or null when it can. */
+export function whyNotABaseline(text: string, expectedTrials: number): string | null {
+  try {
+    validateEvalResults(text, expectedTrials);
+
+    return null;
+  } catch (error) {
+    return renderThrownChain({ cause: error });
+  }
+}
+
 /** The natural log of `count` choose `chosen`, as a sum of logs so large counts do not overflow. */
 function logChoose(count: number, chosen: number): number {
   let sum = 0;
@@ -471,6 +483,26 @@ function verdictReason(comparison: EvalComparison, shared: Shared): string {
       ...rises.length > 0 ? [`Rose: ${rises.join(', ')}.`] : [],
     ].join(' ');
   }
+}
+
+/** Whether a run stands as its build's eval verdict, and the sentence that says why. */
+export type EvalGateVerdict = { pass: boolean; reason: string };
+
+/**
+ * Whether a run stands as its build's eval verdict, the question a promote asks: its report is a complete baseline, a
+ * baseline was compared with it, and no cohort regressed. Otherwise the reason it cannot stand. `incomplete` is why
+ * the report is not a complete baseline (`validateEvalResults`), or null when it is.
+ */
+export function evalGateVerdict(comparison: EvalComparison, incomplete: string | null): EvalGateVerdict {
+  if (incomplete !== null) return { pass: false, reason: `The report is not a complete baseline: ${incomplete}` };
+
+  if (comparison.baseline === null) {
+    return { pass: false, reason: 'No baseline: no complete report of an earlier build this one descends from is stored, so nothing was compared.' };
+  }
+
+  const said = `${VERDICT[comparison.verdict]}. ${verdictReason(comparison, sharedBy(comparison.rows))}`;
+
+  return { pass: comparison.verdict === 'unchanged' || comparison.verdict === 'improved', reason: said };
 }
 
 /** Which changed product files the evals exercise; nothing to say without a baseline. */
