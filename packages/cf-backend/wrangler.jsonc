@@ -60,7 +60,8 @@
   // the key absent makes that unreachable rather than merely discouraged.
   "observability": {
     "logs": { "enabled": true, "head_sampling_rate": 1 },
-    "traces": { "enabled": true, "head_sampling_rate": 1 }
+    "traces": { "enabled": true, "head_sampling_rate": 1 },
+    "issues": { "enabled": true }
   },
   "worker_loaders": [{ "binding": "LOADER" }],
   // Main site served by the custom domain. Workspace and Sandbox previews get an

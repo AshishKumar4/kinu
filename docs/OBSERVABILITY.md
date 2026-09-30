@@ -12,7 +12,7 @@ spend. `AGENTS.md` § Errors and Logs points here. The source of truth is
 | `Tracer` / `ScopedSpan`: the span interface | built | `obs/tracer.ts` |
 | `AgentTracing` / `TracedInvocation`: the scoping rules | built, wired at two invocation sites and every actor turn | `obs/agent-tracing.ts`, `cf-backend/src/obs/cf-tracer.ts` |
 | `ErrorCode` / `KinuError` / `toKinuError` | built; `KinuError` is an Effect `Data.TaggedError` since 2026-09-23 | `obs/error.ts` |
-| `attempt` / `settle`: the Effect boundary | native RPC errors at compat 2026-09-28; local recovery uses Effect.result | `obs/effect.ts` |
+| `attempt` / `settle`: the Effect boundary | native RPC errors at compat 2026-09-30; local recovery uses Effect.result | `obs/effect.ts` |
 | `gate:error-model`: legacy failure mechanisms per file, shrink-only | built, locked 2026-09-23 | `scripts/error-model.ts` |
 | `gate:effect-diagnostics`: the pinned `@effect/tsgo` over every project that imports `effect` | built, with a planted floating effect as its red half | `scripts/effect-diagnostics.ts` |
 | `renderCauseChain` / `renderThrownChain`: the chain for an unnarrowed value | built; the count of chain-dropping copies it replaced is not measured | `obs/error.ts` |
@@ -109,6 +109,14 @@ That keeps a deploy from closing an incident before the new version has run.
 fleet. Eval and user workspaces share `fleet.wake_loop`, because the digest
 cannot tell them apart. The alert names the worst workspace's digest, and
 `scripts/prod-logs.ts wakes` names the workspace.
+
+## Workers Issues
+
+The canonical `wrangler.jsonc` enables `observability.issues.enabled`; staging inherits it. Cloudflare's [Issues docs](https://developers.cloudflare.com/workers/observability/issues/), read 2026-09-30, say it groups uncaught exceptions, failed invocations, `5xx` responses and error logs from the same Worker into issues. This needs no SDK. Kinu's grouped-issue results are unmeasured until this setting is deployed. No automation target is configured here.
+
+`monitor/incidents.ts` stays: its records are synthetic and fleet probe outcomes, threshold streaks, one alert per open incident and one recovery email. Those are not the exception/HTTP/error-log events Issues groups, and the platform docs do not promise that alert lifecycle. Enabling Issues therefore deletes none of that ledger.
+
+The custom-span API review also leaves the tracer unchanged. `createWorkersTracer` already uses native `enterSpan` and `recordException({ name, code })`. Scoped work keeps its active parent and original pipelined RPC promise; no raw error, message or stack reaches a span. `startSpan` never becomes active, so replacing `enterSpan` would lose nesting. `getActiveSpan` does not replace the backend-independent scoping/revocation or classification boundary. Native JS RPC session spans need no app wrapper; their Worker → DO → loader-facet trace is a deployment measurement, not inferred from the local class-facet probe below.
 
 ## Reading one turn as the model received it
 
