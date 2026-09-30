@@ -624,6 +624,8 @@ describe("deploy gate", () => {
     const browserRows = PLAN.filter((row) => row.shared === "browser").map((row) => row.run);
 
     for (const row of PLAN) {
+      // A live probe against the deployment has no measured cost to admit it by, as above.
+      if (row.phase === "post-publish") continue;
       const opensChrome = browserRows.includes(row.run);
       const multiWorker = row.run.includes("--parallel=") || row.run === "bun run test:core" || row.run === "bun run test:cli";
 
@@ -678,7 +680,8 @@ describe("deploy gate", () => {
   // 2026-09-18) this reports twelve overlapping browser-row pairs.
   test("two rows holding the browser never overlap, and the rest of the wave still does", () => {
     const run = runDeploy({ spans: true });
-    const sharedRuns = PLAN.filter((row) => row.shared === "browser").map((row) => row.run);
+    // The fixture's build stub fails on purpose, so the post-publish wave and its browser row never run here.
+    const sharedRuns = PLAN.filter((row) => row.shared === "browser" && row.phase !== "post-publish").map((row) => row.run);
 
     expect(sharedRuns.length, "no row holds the browser; the derivation stopped deriving").toBeGreaterThan(1);
     const shared = run.spans.filter((span) => sharedRuns.includes(span.run));

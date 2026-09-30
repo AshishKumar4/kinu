@@ -16,8 +16,9 @@ export interface RowVerdicts {
   readonly broken: () => Readonly<Record<string, string>>;
 }
 
-/** `unrun` says why no row ran at all (the suite's own setup failed), or null. */
-export function rowVerdicts(suite: string, unrun: () => string | null): RowVerdicts {
+/** `unrun` says why no row ran at all (the suite's own setup failed), or null. `evidence`, when given, names where
+ *  more of a broken row's account is kept (the live-app rows' dev-server log), and is asked once per break. */
+export function rowVerdicts(suite: string, unrun: () => string | null, evidence?: () => string | null): RowVerdicts {
   const broke = new Map<string, string>();
 
   return {
@@ -29,7 +30,9 @@ export function rowVerdicts(suite: string, unrun: () => string | null): RowVerdi
       try {
         return await measure();
       } catch (cause) {
-        broke.set(row, renderThrownChain({ cause }));
+        const kept = evidence?.() ?? null;
+
+        broke.set(row, kept === null ? renderThrownChain({ cause }) : `${renderThrownChain({ cause })} (${kept})`);
         process.stderr.write(`${suite}: ${row} broke: ${broke.get(row) ?? ''}\n`);
 
         return null;

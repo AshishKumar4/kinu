@@ -2225,8 +2225,7 @@ export const LADDER: readonly Gate[] = [
       + '`gate:first-run` after the publish. No pixel is compared, so a legible-but-ugly '
       + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
       + 'the right one. The deployed build\'s browser rows are the product flows\' '
-      + '(`scripts/product-flows.ts`), which run against this dev server and against the '
-      + 'deployment alike.',
+      + '(`scripts/product-flows.ts`), which run against the deployment alone.',
     inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
   },
   {
@@ -2250,8 +2249,7 @@ export const LADDER: readonly Gate[] = [
       + '`gate:first-run` after the publish. No pixel is compared, so a legible-but-ugly '
       + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
       + 'the right one. The deployed build\'s browser rows are the product flows\' '
-      + '(`scripts/product-flows.ts`), which run against this dev server and against the '
-      + 'deployment alike.',
+      + '(`scripts/product-flows.ts`), which run against the deployment alone.',
     inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
   },
   {
@@ -2275,8 +2273,7 @@ export const LADDER: readonly Gate[] = [
       + '`gate:first-run` after the publish. No pixel is compared, so a legible-but-ugly '
       + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
       + 'the right one. The deployed build\'s browser rows are the product flows\' '
-      + '(`scripts/product-flows.ts`), which run against this dev server and against the '
-      + 'deployment alike.',
+      + '(`scripts/product-flows.ts`), which run against the deployment alone.',
     inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
   },
   {
@@ -2287,11 +2284,11 @@ export const LADDER: readonly Gate[] = [
     // One of the four files the live-app rows split into when one file outran its 480 s deadline alone.
     seconds: 120,
     catches: 'the shipped workspace page as it runs: this row boots the product itself — `vite dev` in cf-backend, which is workerd with real Durable Objects behind the real client — and drives it in Chrome at 1440x900, where the inspector column, its separator and the rail lane exist. No gallery row can: the gallery serves a FROZEN pre-built bundle with fixtures answering `/api/*`. '
-      + 'Its rows: the Work surface keeps its DOM node AND its scroll offset across a chat-tab switch with zero '
-      + 'workspace-scoped reads re-sent in either direction and the new tab\'s own actor socket answering its pane; '
-      + 'the tab strip\'s rule continuous to the column\'s right edge with the active underline on it and the chat '
-      + 'rule on the same line, in dark and in light; and a column the reader collapsed reopening through the '
-      + 'product\'s own control, found by role and accessible name, and the rail collapsing.',
+      + 'Its rows: the tab strip\'s rule continuous to the column\'s right edge with the active underline on it '
+      + 'and the chat rule on the same line, in dark and in light; and a column the reader collapsed reopening '
+      + 'through the product\'s own control, found by role and accessible name, and the rail collapsing. The '
+      + 'right panel\'s state across a switch to a new agent\'s tab runs in the product flows on the deployment: '
+      + 'that tab\'s pane needs its agent facet, which `vite dev` never loads.',
     blind: 'one workspace, one viewport, one model. The rows drive 1440x900 in two themes on '
       + 'the workspace route: every other route, width and theme is the gallery rows\' subject '
       + 'and unmeasured here. The model is a local scripted SSE server, so the content is '
@@ -2301,35 +2298,8 @@ export const LADDER: readonly Gate[] = [
       + '`gate:first-run` after the publish. No pixel is compared, so a legible-but-ugly '
       + 'regression passes, and the geometry rows read boxes rather than whether the layout is '
       + 'the right one. The deployed build\'s browser rows are the product flows\' '
-      + '(`scripts/product-flows.ts`), which run against this dev server and against the '
-      + 'deployment alike.',
+      + '(`scripts/product-flows.ts`), which run against the deployment alone.',
     inputs: { kind: 'live', why: 'boots `vite dev` — workerd with real Durable Objects — on an ephemeral port and drives Chrome against it, with this box\'s own `.dev.vars` credentials in process env; a hash over the tracked tree stands for none of the three.' },
-  },
-  {
-    run: 'bun scripts/with-dev-server.ts bun test --timeout=0 tests/browser/product-flows.test.ts',
-    label: 'Product flows in a browser, on the local dev server',
-    deadline: {
-      seconds: 500,
-      why: 'nine rows on the flows\' scripted model: 166s on 2026-09-25, the dev server\'s boot '
-        + 'included. About three times the wall.',
-    },
-    tier: 'deploy',
-    // 166s on 2026-09-25 (load 1.5 at start): the dev server's boot, then nine
-    // rows on the scripted model, agent-return the longest at 31s.
-    seconds: 166,
-    catches: 'a flow a person runs in the page that breaks while every API, socket and '
-      + 'fixture-backed browser gate stays green: the owner\'s #13, where every agent a '
-      + 'workspace held was present over the API and the reloaded page showed none of them. '
-      + 'Each row drives real Chrome through the product\'s own controls against `vite dev` '
-      + '(the real Worker and Durable Objects, no fixtures) and asserts only what the page '
-      + 'shows. The rows are the same file the deployment runs after the publish, here on the '
-      + 'product tiers\' scripted model (`tierModel`), so a flow red here is red before it ships.',
-    blind: 'what `vite dev` is not: the production isolate, the edge and its preview zone (a '
-      + 'slate\'s frame loads through vite-preview-zone.ts on loopback), the deployed assets and '
-      + 'the real identity, which are the post-publish row\'s. One viewport, one theme. The '
-      + 'model is a script, so a row tests what the product does with a known answer and never '
-      + 'what a real model writes; the deployment\'s run of the same rows is on its real model.',
-    inputs: { kind: 'live', why: 'boots `vite dev` on an ephemeral port with this box\'s `.dev.vars` credentials and drives Chrome against it, on a local scripted model; a hash over the tracked tree stands for none of them.' },
   },
   {
     run: 'bun run gate:infra',
@@ -2445,18 +2415,25 @@ export const LADDER: readonly Gate[] = [
       + 'torn down by the row that made them, and it attaches no machine, so it stands outside '
       + 'the device fleet the first-run tier counts.',
     tier: 'deploy',
-    // 47s to 51s against staging 7dd73e1ac9 on 2026-09-27, three runs, 18/18 each.
+    // 47s to 51s against staging 7dd73e1ac9 on 2026-09-27, three runs, 18/18 each, before the panel and
+    // stamped rows moved here from the live-app files (2026-09-30), which took 14-38 s each there.
     seconds: 51,
-    catches: 'a flow a person runs in the page that breaks on the DEPLOYED build: the same rows '
-      + 'the pre-publish run drives against `vite dev`, in real Chrome against the deployment '
-      + 'as the `scripted` eval account on the scripted model, asserting only what the page shows. The first-run tier reads '
-      + 'the deployment over its API and socket and the eval suite drives the model, so '
-      + 'neither loads the page a person loads; #13 was an API-green workspace whose reloaded '
-      + 'page showed no agents.',
+    catches: 'a flow a person runs in the page that breaks on the DEPLOYED build, in real Chrome '
+      + 'against the deployment as the `scripted` eval account on the scripted model, asserting '
+      + 'only what the page shows. Among them, every flow through an agent other than Main: one made '
+      + 'with \'+\' is there on return, the right panel keeps its state across a switch to its tab, '
+      + 'and each pane keeps its own transcript. This is the one run of the product flows: only a real Worker '
+      + 'deployment runs the whole product. Under `vite dev` the plugin\'s ASSETS serves only '
+      + 'HTML, so no agent facet loads (found 2026-09-30), and a Worker that implements Durable '
+      + 'Objects gets no version preview URL, so staging is that deployment. A red here '
+      + 'fails the deploy before staging\'s record is written, so production can never take '
+      + 'the build. The first-run tier reads the deployment over its API and socket and the '
+      + 'eval suite drives the model, so neither loads the page a person loads; #13 was an '
+      + 'API-green workspace whose reloaded page showed no agents.',
     blind: 'a flow no row drives, and the look of the page: rows read presence and text, never '
-      + 'pixels. It reports on a build that is already serving, so a red here is a red users '
-      + 'have now. The model is scripted, so whether a real model makes the calls a row names is '
-      + 'the evals\' question, not this tier\'s.',
+      + 'pixels. It reports on a build already serving on staging, so a red is found after the '
+      + 'upload, not before it. The model is scripted, so whether a real model makes the calls a '
+      + 'row names is the evals\' question, not this tier\'s.',
     inputs: { kind: 'live', why: 'drives the DEPLOYED build in real Chrome as the `scripted` eval account and the scripted model\'s Worker.' },
   },
 ];
@@ -2791,9 +2768,8 @@ export const LIVE_TIER_SCRIPT = 'scripts/live-tier.sh';
 /** The eval suite's vitest config, as `bun run evals` names it. */
 export const EVALS_CONFIG = 'evals/vitest.config.ts';
 
-/** The wrapper that boots the local dev server and runs a command against it,
- *  as a gate spells it. */
-export const DEV_SERVER_WRAPPER = 'scripts/with-dev-server.ts';
+/** The deployment's product-flows tier, as its gate spells it. */
+export const PRODUCT_FLOWS_TIER_SCRIPT = 'scripts/product-flows-tier.sh';
 
 /** `bun --bun vitest run --config evals/vitest.config.ts …`: the eval suite's runner, as `bun run evals` spells it. */
 function runsEvalSuite(words: readonly string[]): boolean {
@@ -2815,6 +2791,14 @@ export function liveTierTargets(source = readFileSync(resolve(root, LIVE_TIER_SC
   }
 
   return [];
+}
+
+/** The `bun test` command `scripts/product-flows-tier.sh` ends by exec-ing, read out of the script for the reason
+ *  {@link liveTierTargets} reads its own: the suite that tier runs against the deployment is the one it claims. */
+export function productFlowsTierCommand(source = readFileSync(resolve(root, PRODUCT_FLOWS_TIER_SCRIPT), 'utf8')): string {
+  const line = source.split('\n').map((text) => text.trim()).find((text) => text.startsWith('exec bun test '));
+
+  return line === undefined ? '' : line.slice('exec '.length);
 }
 
 /**
@@ -2862,9 +2846,6 @@ export const CI_EXEMPT = {
     + 'build, and pointing it at the previous one would report the last deploy\'s product under '
     + "this pull request's name. It also creates workspaces, links real machines and spends "
     + 'model calls on a shared account, none of which belongs on a pull request.',
-  'bun scripts/with-dev-server.ts bun test --timeout=0 tests/browser/product-flows.test.ts':
-    'boots the same dev server the live-app row does, on the same `.dev.vars` credentials a '
-    + 'pull request must not hold, and spends real model turns on the account through it.',
   'bash scripts/product-flows-tier.sh':
     'has nothing to run against at CI: its subject is the deployment that just went up, as the '
     + 'eval identity, whose secret no pull request holds.',
@@ -2998,15 +2979,10 @@ export const PATH_IGNORE_FLAG = '--path-ignore-patterns';
 export function claims(command: string, tracked: readonly string[]): string[] {
   const words = command.split(/\s+/).filter((word) => word.length > 0);
 
-  // The deadline wrapper and the dev-server wrapper each run the command that
-  // follows them and claim nothing of their own, so the claim is the wrapped
-  // command's.
+  // The deadline wrapper runs the command that follows it and claims nothing of
+  // its own, so the claim is the wrapped command's.
   if (words[0] === 'bun' && words[1] === 'scripts/ladder.ts' && words[2] === '--run') {
     return claims(words.slice(3).join(' '), tracked);
-  }
-
-  if (words[0] === 'bun' && words[1] === DEV_SERVER_WRAPPER) {
-    return claims(words.slice(2).join(' '), tracked);
   }
 
   if (words[0] === 'bun' && words[1] === 'run') {
@@ -3034,6 +3010,9 @@ export function claims(command: string, tracked: readonly string[]): string[] {
   if (words[0] === 'bash' && words[1] === LIVE_TIER_SCRIPT) {
     return claims(['bun', 'test', ...liveTierTargets()].join(' '), tracked);
   }
+
+  // The PRODUCT FLOWS on the deployment: the suite its script execs, parsed likewise.
+  if (words[0] === 'bash' && words[1] === PRODUCT_FLOWS_TIER_SCRIPT) return claims(productFlowsTierCommand(), tracked);
 
   // The EVAL SUITE: vitest over the task files, which are exactly the runnable
   // suites no `bun test` can select. The config's `include` is the enforcing half.
@@ -3145,12 +3124,6 @@ function narrowWords(words: readonly string[], file: string, tracked: readonly s
   const [first, second] = words;
 
   if (first === 'bun' && second === 'scripts/ladder.ts' && words[2] === '--run') return narrowWords(words.slice(3), file, tracked);
-
-  if (first === 'bun' && second === DEV_SERVER_WRAPPER) {
-    const inner = narrowWords(words.slice(2), file, tracked);
-
-    return inner === undefined ? undefined : ['bun', DEV_SERVER_WRAPPER, ...inner];
-  }
 
   if (first === 'bun' && second === 'run') {
     const part = (packageScripts()[words[2] ?? ''] ?? '').split('&&').map((text) => text.trim())

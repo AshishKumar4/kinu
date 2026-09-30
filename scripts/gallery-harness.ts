@@ -31,7 +31,7 @@ import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
 import { releaseScratch, scratchDir, SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
 import { declaredSettings } from './browser-declarations';
 import { SILENCE_NOTICE_ENV } from './deadline';
-import { explained, FAILED_APP_SCRIPT, recordScriptFailures } from './script-failures';
+import { BLANK_PAGE, explained, recordScriptFailures } from './script-failures';
 import { launchTestChrome } from './test-chrome';
 
 const REPO = join(import.meta.dir, '..');
@@ -216,12 +216,6 @@ interface OpenWait {
 }
 
 const pendingWaits = new Set<OpenWait>();
-
-/** In the page: the dead end no wait on this document can get past, or null. The app script failed to load (a module
- *  it imports failed to fetch, so it never ran) and the root holds nothing, so the page draws nothing. 2026-09-30, CI
- *  run 36742984678: a build beside the row changed the host's network, Chrome failed the tabs frame's queued modules
- *  with net::ERR_NETWORK_CHANGED, and the wait sat on the empty root until the row's bound. */
-const BLANK_APP = `document.querySelectorAll('#root *').length === 0 ? ${FAILED_APP_SCRIPT} : null`;
 
 /** `wait`, with `condition` recorded while it is open. */
 async function recorded<T>(open: Omit<OpenWait, 'reported' | 'asking'>, wait: () => Promise<T>): Promise<T> {
@@ -558,12 +552,16 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
         }
       };
 
-      // A wait on a document that shows BLANK_APP ends at once, by the script requests that failed, and not at the
-      // row's bound. A navigation is not raced: the document it leaves may be the blank one.
+      // A wait on a document that shows BLANK_PAGE ends at once, by what left it blank, and not at the row's bound:
+      // an empty root is a dead end once the app script failed to load (a module it imports failed to fetch, so it
+      // never ran) or an error nothing caught ended its render. 2026-09-30: in CI run 36742984678 a build beside the
+      // row changed the host's network and Chrome failed the tabs frame's queued modules, and in run 36754331407 the
+      // landing page's render threw; each wait sat on the empty root until the row's bound. A navigation is not raced:
+      // the document it leaves may be the blank one.
       const unlessBlank = async <Result>(condition: string, work: Promise<Result>): Promise<Result> => {
         const settled = new AbortController();
 
-        const blank = waitForFunction(BLANK_APP, { polling: 100, signal: settled.signal }).then(async (handle) => {
+        const blank = waitForFunction(BLANK_PAGE, { polling: 100, signal: settled.signal }).then(async (handle) => {
           const reason = new Error(`waiting for ${condition}, the page showed ${await explained(page, String(await handle.jsonValue()))}`);
 
           process.stderr.write(`gallery-harness: ${reason.message}\n`);
