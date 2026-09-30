@@ -8,11 +8,9 @@ export const SURFACES = ["Work", "Changes", "Files", "Swarms", "Agent", "Environ
 
 export const ACTIVITY_SURFACE = "Activity";
 
-export const AGENTS_SURFACE = "Agents";
-
 export type SlateSurfaceKind = `${typeof SLATE_PREFIX}${string}`;
 
-export type SurfaceKind = (typeof SURFACES)[number] | typeof ACTIVITY_SURFACE | typeof AGENTS_SURFACE | SlateSurfaceKind | `preview:${string}`;
+export type SurfaceKind = (typeof SURFACES)[number] | typeof ACTIVITY_SURFACE | SlateSurfaceKind | `preview:${string}`;
 
 export interface SurfaceContent {
 	tabPresence: TabPresence | undefined;
