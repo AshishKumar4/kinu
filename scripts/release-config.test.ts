@@ -146,10 +146,18 @@ function isImmutableImageReference(reference: string): boolean {
   return !name.slice(name.lastIndexOf('/') + 1).includes(':');
 }
 
+/** One container: an application-wide image (the `default` scheduling policy), or the named images an
+ *  object starts by name (`durable_object`). */
+const ContainerSchema = v.union([
+  v.object({ class_name: v.string(), image: v.string() }),
+  v.object({ class_name: v.string(), scheduling_policy: v.literal('durable_object'), images: v.record(v.string(), v.object({ image: v.string() })) }),
+]);
+
+const imagesOf = (container: v.InferOutput<typeof ContainerSchema>): string[] =>
+  'images' in container ? Object.values(container.images).map((entry) => entry.image) : [container.image];
+
 /** A container host's config, narrowed to the images it runs. */
-const ContainerHostSchema = v.object({
-  containers: v.array(v.object({ class_name: v.string(), image: v.string() })),
-});
+const ContainerHostSchema = v.object({ containers: v.array(ContainerSchema) });
 
 /** Only the keys this file reads. A narrow schema rather than the manifest's
  *  full one: a shape that admitted more would start answering other questions,
@@ -158,10 +166,7 @@ const ContainerHostSchema = v.object({
 const WranglerSchema = v.object({
   compatibility_date: v.string(),
   upload_source_maps: v.optional(v.boolean()),
-  containers: v.optional(v.array(v.object({
-    class_name: v.string(),
-    image: v.string(),
-  }))),
+  containers: v.optional(v.array(ContainerSchema)),
   assets: v.object({ run_worker_first: v.union([v.boolean(), v.array(v.string())]) }),
   vars: v.object({ PREVIEW_HOST_SUFFIX: v.string(), CLI_PUBLIC_ORIGIN: v.string() }),
   kv_namespaces: v.array(v.object({ binding: v.string() })),
@@ -197,9 +202,12 @@ describe('the sandbox container image is pinned', () => {
     expect(containers.map((container) => container.class_name).sort(), 'the Worker declares other containers than the record')
       .toEqual([...PINNED_IMAGES.keys()].sort());
 
-    for (const { class_name: className, image } of containers) {
-      expect(isImmutableImageReference(image), 'the Worker runs a re-pointable image').toBe(true);
-      expect(image, 'the Worker runs an image the release record does not declare').toBe(PINNED_IMAGES.get(className) ?? `no pin for ${className}`);
+    for (const container of containers) {
+      for (const image of imagesOf(container)) {
+        expect(isImmutableImageReference(image), 'the Worker runs a re-pointable image').toBe(true);
+        expect(image, 'the Worker runs an image the release record does not declare')
+          .toBe(PINNED_IMAGES.get(container.class_name) ?? `no pin for ${container.class_name}`);
+      }
     }
   });
 
@@ -703,7 +711,7 @@ describe('the block-lower image is built from this tree', () => {
       // The Codex forwarder beside it is held by the pin test above.
       const sandboxes = config.containers.filter((container) => container.class_name !== 'CodexEgress');
 
-      expect(sandboxes.map((container) => container.image), host).toEqual(sandboxes.map(() => PINNED_IMAGE));
+      expect(sandboxes.flatMap(imagesOf), host).toEqual(sandboxes.map(() => PINNED_IMAGE));
     }
   });
 });

@@ -651,7 +651,7 @@ export const doc = "class AlsoFake extends Devbox";`],
 describe('native egress constraints — red in every governed direction', () => {
   const sources = readInterceptionSources();
   const base = 'packages/devbox/src/devbox.ts';
-  const kinu = 'packages/cf-backend/src/kinu-sandbox.ts';
+  const kinu = 'packages/cf-backend/src/kinu-devbox.ts';
   const router = 'packages/devbox/src/gateway.ts';
   const vault = 'packages/cf-backend/src/egress/outbound.ts';
   const worker = 'packages/cf-backend/src/server.ts';
@@ -668,7 +668,7 @@ describe('native egress constraints — red in every governed direction', () => 
   }
 
   test('the actual private and public hosts retain their declared network policies', () => {
-    expect(auditInterception(sources, ['KinuSandbox']).violations).toEqual([]);
+    expect(auditInterception(sources, ['KinuDevbox']).violations).toEqual([]);
     expect(auditInterception(sources, generic, true).violations).toEqual([]);
     expect(nativeRoutingReasons(sources, entry)).toEqual([]);
   });
@@ -676,7 +676,7 @@ describe('native egress constraints — red in every governed direction', () => 
   test('giving Kinu raw internet or dropping its override is refused', () => {
     for (const replacement of ['enableInternet = true;', '']) {
       const mutated = changed(kinu, 'enableInternet = false;', replacement);
-      expect(auditInterception(mutated, ['KinuSandbox']).violations.map(issue => issue.owner)).toEqual(['KinuSandbox']);
+      expect(auditInterception(mutated, ['KinuDevbox']).violations.map(issue => issue.owner)).toEqual(['KinuDevbox']);
     }
   });
 
@@ -691,7 +691,7 @@ describe('native egress constraints — red in every governed direction', () => 
   });
 
   const paths = [
-    [base, 'container.start({ enableInternet: this.enableInternet })', 'container.start({ enableInternet: true })', 'declared internet policy'],
+    [base, 'container.start({ image, instance: instanceOf(size), enableInternet: this.enableInternet })', 'container.start({ image, instance: instanceOf(size), enableInternet: true })', 'declared internet policy'],
     [router, '.interceptAllOutboundHttp(router)', '.removedHttpRoute(router)', 'HTTP has no total'],
     [router, ".interceptOutboundHttps('*', router)", ".interceptOutboundHttps('api.example.com', router)", 'HTTPS has no total'],
     [base, 'internet: this.enableInternet', 'internet: true', 'router does not receive'],

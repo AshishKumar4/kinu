@@ -167,7 +167,7 @@ test('a listing continues only inside its root, whatever token or marker it is h
   await send('chain/x', { method: 'DELETE' });
 });
 
-test('a route answers nothing outside the bucket, host and access S3Mounts recorded for it', async () => {
+test('a route answers nothing outside the bucket, host and access S3Mount recorded for it', async () => {
   const body = new Uint8Array([1, 2, 3]);
 
   const refusals = {

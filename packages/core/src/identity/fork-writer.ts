@@ -236,29 +236,6 @@ export class ForkTargetWriter {
     this.staging.addFile(SOUL_PATH);
   }
 
-  /** An import opened at `dst`: one of the files the source declared, and what a replacement `begin` removes. */
-  stageImport(dst: string): void {
-    this.staging.addFile(dst);
-  }
-
-  /** How much has landed, read from the target, for the wire's completeness check. */
-  get staged(): ForkStagedCounts {
-    return this.staging.read()?.staged ?? {
-      agentConfig: 0, craftedTools: 0, memoryChunks: 0,
-      sessionMessages: 0, conversationEntries: 0, conversationEntryParts: 0, contextMembers: 0,
-      files: 0,
-    };
-  }
-
-  /** The fork already published, if any; answers a re-delivered frame on any activation. */
-  get published(): ForkResult | null {
-    const staged = this.staging.read();
-
-    return staged === null || !staged.published || staged.head === null
-      ? null
-      : forkResultOf(staged.head, staged.staged);
-  }
-
   async publish(): Promise<ForkResult> {
     if (!this.opts.transaction) return this.publishRows();
     let result: ForkResult | null = null;
@@ -417,7 +394,7 @@ export class ForkTargetWriter {
 }
 
 /** One transfer's result from stored state; returned at publication and for every re-delivered frame. */
-function forkResultOf(head: ForkSnapshotHead, counts: ForkStagedCounts): ForkResult {
+export function forkResultOf(head: ForkSnapshotHead, counts: ForkStagedCounts): ForkResult {
   return {
     forkPointMs: head.cut.createdAtMs,
     messagesCopied: counts.conversationEntries,

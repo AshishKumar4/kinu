@@ -30,7 +30,6 @@ export function resolveEffectiveModelSpec(deps: {
 
 /** One spec's catalog reads, fixed when a model request is composed. */
 export interface ModelCatalogRead {
-  readonly spec: string;
   /** The window pair every producer divides (`stepContextLimit`), read now. */
   window(): ModelWindow;
   /** Awaited before the provider is called, for decisions that refuse work. */
@@ -59,11 +58,6 @@ export class ModelCatalogSession {
     return this.windowOf(this.deps.effectiveSpec()).contextWindow;
   }
 
-  /** False: the static table's stand-in, which a budget may spend and a refusal may not. */
-  windowMeasured(): boolean {
-    return this.windowOf(this.deps.effectiveSpec()).windowMeasured;
-  }
-
   /** Awaited before the provider is called, for decisions that refuse work. */
   resolved(): Promise<ResolvedModelWindow> {
     return this.resolvedOf(this.deps.effectiveSpec());
@@ -72,7 +66,6 @@ export class ModelCatalogSession {
   /** The reads of one request, on the spec it resolved once. */
   at(spec: string): ModelCatalogRead {
     return Object.freeze({
-      spec,
       window: () => this.windowPairOf(spec),
       resolved: () => this.resolvedOf(spec),
     });
@@ -81,11 +74,6 @@ export class ModelCatalogSession {
   /** Await the selected operation's catalog, independent of the live chat cache. */
   async contextFor(spec: string): Promise<PromptModelContext & ResolvedModelWindow> {
     return Object.freeze({ id: spec, ...ModelCatalogSession.windowFrom(spec, await this.lookup(spec)) });
-  }
-
-  /** Null rather than the whole window when nothing reported one: the reserve must not be invented (#20). */
-  modelOutputLimit(): number | null {
-    return this.info()?.modelOutputLimit ?? null;
   }
 
   /** The window pair every producer divides (`stepContextLimit`), read now. */

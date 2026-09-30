@@ -126,11 +126,11 @@ describe('ModelCatalogSession.modelOutputLimit', () => {
     session.info();
     await Promise.resolve();
 
-    expect(session.modelOutputLimit()).toBe(128_000);
+    expect(session.window().modelOutputLimit).toBe(128_000);
 
     const limits = {
       contextWindow: session.contextWindow(),
-      modelOutputLimit: session.modelOutputLimit(),
+      modelOutputLimit: session.window().modelOutputLimit,
     };
 
     expect(outputReserveTokens(limits)).toBe(128_000);
@@ -148,9 +148,9 @@ describe('ModelCatalogSession.modelOutputLimit', () => {
     await Promise.resolve();
 
     expect(session.contextWindow()).toBe(262_144);
-    expect(session.modelOutputLimit()).toBeNull();
+    expect(session.window().modelOutputLimit).toBeNull();
     expect(outputReserveTokens({
-      contextWindow: session.contextWindow(), modelOutputLimit: session.modelOutputLimit(),
+      contextWindow: session.contextWindow(), modelOutputLimit: session.window().modelOutputLimit,
     })).toBe(0);
   });
 
@@ -163,9 +163,9 @@ describe('ModelCatalogSession.modelOutputLimit', () => {
     session.info();
     await Promise.resolve();
 
-    expect(session.modelOutputLimit()).toBeNull();
+    expect(session.window().modelOutputLimit).toBeNull();
     expect(stepContextLimit({
-      contextWindow: session.contextWindow(), modelOutputLimit: session.modelOutputLimit(),
+      contextWindow: session.contextWindow(), modelOutputLimit: session.window().modelOutputLimit,
     })).toBe(262_144);
   });
 
@@ -179,7 +179,6 @@ describe('ModelCatalogSession.modelOutputLimit', () => {
     });
 
     expect(session.contextWindow()).toBe(128_000);
-    expect(session.windowMeasured()).toBe(false);
     landed.resolve({ id: 'some/unlisted-model', contextWindow: 1_048_576, modelOutputLimit: 131_072 });
 
     expect(await session.resolved()).toEqual({

@@ -1,6 +1,8 @@
 /**
  * A reset: every Durable Object class a deployment carries deleted with its storage, the Worker keeping its secrets
- * and routes. The procedure and why each step is there: docs/DEPLOYMENT.md, § Wrangler bindings.
+ * and routes, then what those objects left outside their storage: their container applications, and the devbox
+ * chains in the store bucket, which only a box's own state could name. The procedure and why each step is there:
+ * docs/DEPLOYMENT.md, § Wrangler bindings.
  *
  *   bun scripts/reset.ts plan <environment>           what a reset deletes, read from wrangler.jsonc
  *   bun scripts/reset.ts wipe <environment> <record>  delete it, recorded in <record> and the releases bucket;
@@ -12,6 +14,7 @@ import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { evalSessionPath } from '@kinu.run/test-utils';
+import { deleteApplicationByRest, deleteR2Prefix, deletedByRest } from './cloudflare-rest';
 import { containerApplications, deployment, why, wrangler } from './infra-cloudflare';
 import { type DeployedConfig, INFRA_ENVIRONMENTS, type InfraEnvironment, deployedConfig, liveClasses } from './infra-manifest';
 
@@ -24,6 +27,8 @@ export const ResetSchema = v.object({
   placeholderVersion: v.string(),
   classes: v.array(v.object({ className: v.string(), namespace: v.string() })),
   applications: v.array(v.object({ name: v.string(), id: v.string() })),
+  /** Absent where the environment binds no devbox store, and in the records of resets before 2026-09-30. */
+  chains: v.optional(v.object({ bucket: v.string(), prefix: v.string(), objects: v.number() })),
 });
 
 export type Reset = v.InferOutput<typeof ResetSchema>;
@@ -42,6 +47,12 @@ export default {
   },
 };
 `;
+
+/** The store binding `KinuDevbox` keeps its chains in (`packages/cf-backend/src/kinu-devbox.ts`, `store`). */
+const DEVBOX_STORE_BINDING = 'BACKUP_BUCKET';
+
+/** Where every box's chain lives in that bucket: `boxes/<box>/…` (devbox `chainStoreRoot`). */
+const CHAIN_PREFIX = 'boxes/';
 
 /** Edge rollout takes about two minutes, as in the deploy's smoke test. */
 const HEALTH_ATTEMPTS = 8;
@@ -76,6 +87,33 @@ function plan(environment: InfraEnvironment) {
   return { config, classes: liveClasses(config.exports) };
 }
 
+/** Each one is named as it goes. */
+function deleteApplications(accountId: string, applications: readonly { readonly name: string; readonly id: string }[]): void {
+  for (const application of applications) {
+    if (deletedByRest(application.id)) {
+      const deleted = deleteApplicationByRest(accountId, application.id);
+
+      if (!deleted.ok) throw new Error(deleted.reason);
+    } else {
+      run(['containers', 'delete', application.id]);
+    }
+
+    console.log(`reset: deleted container application ${application.name} (${application.id})`);
+  }
+}
+
+/** Every chain object in the devbox store, or undefined where the environment binds none. */
+async function deleteChains(config: DeployedConfig): Promise<Reset['chains']> {
+  const store = config.r2_buckets?.find((entry) => entry.binding === DEVBOX_STORE_BINDING)?.bucket_name;
+
+  if (store === undefined) return undefined;
+  const objects = await deleteR2Prefix({ accountId: config.account_id ?? '', bucket: store, prefix: CHAIN_PREFIX });
+
+  console.log(`reset: deleted ${String(objects)} chain objects under ${store}/${CHAIN_PREFIX}`);
+
+  return { bucket: store, prefix: CHAIN_PREFIX, objects };
+}
+
 async function wipe(environment: InfraEnvironment, recordFile: string, scratch: string): Promise<Reset> {
   const { config, classes } = plan(environment);
   const worker = config.name ?? '';
@@ -90,11 +128,15 @@ async function wipe(environment: InfraEnvironment, recordFile: string, scratch: 
   const bound = new Map(live.bindings.flatMap((binding) => (binding.type === 'durable_object_namespace' && binding.target !== undefined
     && binding.namespace !== undefined ? [[binding.target, binding.namespace] as const] : [])));
 
-  // A class the Worker does not carry fails the delete as non-existent; one it carries and the list misses survives.
-  if ([...bound.keys()].sort().join() !== [...classes].sort().join()) {
-    throw new Error(`wrangler.jsonc carries ${classes.join(', ')}; version ${live.versionId} of ${worker} binds `
-      + `${[...bound.keys()].join(', ') || 'no class, as a reset placeholder does: deploy without --reset'}`);
+  // The placeholder deletes what the live version binds: a class it does not carry fails the delete as non-existent,
+  // and one it carries and the list misses survives. wrangler.jsonc may name others, which the next deploy creates,
+  // or retire one, which is deleted here.
+  if (bound.size === 0) {
+    throw new Error(`version ${live.versionId} of ${worker} binds no class, as a reset placeholder does: deploy without --reset`);
   }
+
+  const retired = [...bound.keys()].filter((name) => !classes.includes(name));
+  const added = classes.filter((name) => !bound.has(name));
 
   const applications = containerApplications();
 
@@ -116,7 +158,7 @@ async function wipe(environment: InfraEnvironment, recordFile: string, scratch: 
     compatibility_date: config.compatibility_date,
     workers_dev: false,
     routes: config.routes,
-    exports: Object.fromEntries(classes.map((name) => [name, { type: 'durable-object', state: 'deleted' }])),
+    exports: Object.fromEntries([...bound.keys()].map((name) => [name, { type: 'durable-object', state: 'deleted' }])),
   }));
   const deployed = run(['deploy', '-c', placeholder, '--message', `kinu ${environment} ${tag}`]);
   const placeholderVersion = /Version ID:\s*([0-9a-f-]{36})/u.exec(deployed)?.[1] ?? '';
@@ -126,13 +168,11 @@ async function wipe(environment: InfraEnvironment, recordFile: string, scratch: 
     throw new Error(`the placeholder uploaded as '${placeholderVersion}', and ${worker} does not serve it without Durable Objects`);
   }
 
-  console.log(`reset: ${worker} serves placeholder ${placeholderVersion} under ${tag}; deleted ${[...bound].map(([name, namespace]) => `${name} (${namespace})`).join(', ')}`);
+  console.log(`reset: ${worker} serves placeholder ${placeholderVersion} under ${tag}; deleted ${[...bound].map(([name, namespace]) => `${name} (${namespace})`).join(', ')}`
+    + `${retired.length === 0 ? '' : `; retired ${retired.join(', ')}`}${added.length === 0 ? '' : `; the deploy creates ${added.join(', ')}`}`);
 
-  // After the placeholder, so a refused upload leaves every application in place; each one is named as it goes.
-  for (const application of doomed) {
-    run(['containers', 'delete', application.id]);
-    console.log(`reset: deleted container application ${application.name} (${application.id})`);
-  }
+  // After the placeholder, so a refused upload leaves every application in place.
+  deleteApplications(config.account_id ?? '', doomed);
 
   const reset: Reset = {
     environment,
@@ -143,6 +183,11 @@ async function wipe(environment: InfraEnvironment, recordFile: string, scratch: 
     classes: [...bound].map(([className, namespace]) => ({ className, namespace })),
     applications: doomed.map(({ name, id }) => ({ name, id })),
   };
+
+  // Last, once no box is left to write one.
+  const chains = await deleteChains(config);
+
+  if (chains !== undefined) reset.chains = chains;
 
   writeFileSync(recordFile, JSON.stringify(reset));
 
@@ -182,7 +227,11 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
   if (known && command === 'plan' && recordFile === undefined) {
     const { config, classes } = plan(environment);
 
-    console.log(`${config.name ?? ''}: ${classes.join(', ')}; container applications ${(config.containers ?? []).map((container) => container.name).join(', ')}`);
+    const store = config.r2_buckets?.find((entry) => entry.binding === DEVBOX_STORE_BINDING)?.bucket_name;
+
+    console.log(`${config.name ?? ''}: the classes the live version binds, of which wrangler.jsonc carries ${classes.join(', ')}; `
+      + `container applications ${(config.containers ?? []).map((container) => container.name).join(', ')}, and those bound to the deleted namespaces`
+      + `${store === undefined ? '' : `; every object under ${store}/${CHAIN_PREFIX}`}`);
 
     return 0;
   }

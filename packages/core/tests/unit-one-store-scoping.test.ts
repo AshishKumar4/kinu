@@ -27,7 +27,7 @@ import { initRefinementTables, createRefinementStore } from '../src/evolution/re
 import {
   initGepaTables, startGepaRun, persistGepaCandidate, listGepaRuns, loadGepaCandidates,
 } from '../src/evolution/gepa/persistence';
-import { initActorTables } from '../src/state/workspace-schema';
+import { initActorStateSchema } from '../src/state/workspace-schema';
 import {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from '../src/identity/effect-tombstones';
@@ -394,7 +394,7 @@ describe('two actors, one database: gepa_runs and gepa_candidates', () => {
 describe('two actors, one database: fibers, evolution_events, executor_output, activity_log', () => {
   test('each log row belongs to the actor that wrote it', () => {
     const w = world();
-    initActorTables(w.execRaw, w.sql);
+    initActorStateSchema({ execRaw: w.execRaw, sql: w.sql, exec: w.exec, transactionSync: write => w.db.transaction(write)() });
 
     for (const [actor, mark] of [[w.a, 'a'], [w.b, 'b']] as const) {
       const id = actor.actorId;

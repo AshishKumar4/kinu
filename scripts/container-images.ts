@@ -34,7 +34,7 @@ const SANDBOX = v.parse(SandboxArtifact, JSON.parse(readFileSync(join(import.met
 const REGISTRY = 'registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1';
 
 export const CONTAINER_IMAGES = {
-  KinuSandbox: {
+  KinuDevbox: {
     repository: SANDBOX.image.slice(0, SANDBOX.image.lastIndexOf('@')),
     digest: SANDBOX.digest,
     source: BLOCK_LOWER,

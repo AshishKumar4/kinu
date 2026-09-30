@@ -5,6 +5,7 @@
  * packages/cf-backend/tests/unit-failure-marks.test.ts.
  */
 import { expect, test } from 'bun:test';
+import type { ServerWebSocket } from 'bun';
 import type { Browser, Page } from 'puppeteer';
 import { join } from 'node:path';
 import * as v from 'valibot';
@@ -226,25 +227,8 @@ test('a wait on a page that never goes quiet, ended from outside, names what the
  * row restarted its ledger, reloaded the page, and waited 480 s on an ask the unloaded page's socket never answered.
  */
 test('an ask whose socket closed unanswered does not hold the wait, and an id another socket reuses is its own', async () => {
-  // Answers `getWorkspaceSnapshot` at once and closes on anything else without answering, as an unloading page's
-  // socket ends with its last ask open.
-  const server = Bun.serve({
-    port: 0,
-    hostname: '127.0.0.1',
-    fetch(request, bun) {
-      if (bun.upgrade(request)) return undefined;
-
-      return new Response('<main></main>', { headers: { 'content-type': 'text/html' } });
-    },
-    websocket: {
-      message(socket, raw) {
-        const ask = v.parse(v.object({ id: v.string(), method: v.string() }), JSON.parse(String(raw)));
-
-        if (ask.method === 'getWorkspaceSnapshot') socket.send(JSON.stringify({ type: 'rpc', id: ask.id, done: true, result: {} }));
-        else socket.close();
-      },
-    },
-  });
+  // Closes on anything but a snapshot without answering, as an unloading page's socket ends with its last ask open.
+  const { server } = snapshotServer('close');
 
   try {
     await withBrowser(async (browser) => {
@@ -266,6 +250,77 @@ test('an ask whose socket closed unanswered does not hold the wait, and an id an
         await ask('7', 'listTurnFeedback');
         await ask('1', 'getWorkspaceSnapshot');
       }, `ws://127.0.0.1:${String(server.port)}/`);
+
+      await settledAfter(page, ledger, 'getWorkspaceSnapshot');
+      await ledger.stop();
+    });
+  } finally {
+    await server.stop(true);
+  }
+});
+
+/**
+ * A socket server that answers only `getWorkspaceSnapshot`. Any other ask is left open: its socket is closed at once
+ * (`close`), or kept and listed in `held` for the test to close.
+ */
+function snapshotServer(unanswered: 'close' | 'hold') {
+  const held: ServerWebSocket[] = [];
+
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch(request, bun) {
+      if (bun.upgrade(request)) return undefined;
+
+      return new Response('<main></main>', { headers: { 'content-type': 'text/html' } });
+    },
+    websocket: {
+      message(socket, raw) {
+        const ask = v.parse(v.object({ id: v.string(), method: v.string() }), JSON.parse(String(raw)));
+
+        if (ask.method === 'getWorkspaceSnapshot') socket.send(JSON.stringify({ type: 'rpc', id: ask.id, done: true, result: {} }));
+        else if (unanswered === 'close') socket.close();
+        else held.push(socket);
+      },
+    },
+  });
+
+  return { server, held };
+}
+
+/** Two live sockets reuse one RPC id: the answer on one says nothing about the ask still open on the other. */
+test('the same RPC id asked on two live sockets stays open until its own socket answers or closes', async () => {
+  const { server, held } = snapshotServer('hold');
+
+  try {
+    await withBrowser(async (browser) => {
+      const page = await blankPage(browser);
+      await page.goto(`http://127.0.0.1:${String(server.port)}/`);
+      const ledger = await frameLedger(page);
+
+      // The held socket asks first, the answered one second, both as id 5.
+      await page.evaluate(async (url) => {
+        const ask = (method: string, answered: boolean) => new Promise<void>((resolve) => {
+          const socket = new WebSocket(url);
+
+          socket.onopen = () => {
+            socket.send(JSON.stringify({ type: 'rpc', id: '5', method }));
+
+            if (!answered) resolve();
+          };
+
+          socket.onmessage = () => { resolve(); };
+        });
+
+        await ask('listTurnFeedback', false);
+        await ask('getWorkspaceSnapshot', true);
+      }, `ws://127.0.0.1:${String(server.port)}/`);
+
+      // The ledger has heard the one answer, so what it says now is about the other ask.
+      await ledger.received('rpc');
+      expect(ledger.quiet()).toBe(false);
+
+      for (const socket of held) socket.close();
 
       await settledAfter(page, ledger, 'getWorkspaceSnapshot');
       await ledger.stop();

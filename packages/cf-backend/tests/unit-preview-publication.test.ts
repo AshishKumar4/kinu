@@ -14,7 +14,7 @@ import type { KvStore } from '@kinu.run/agent-utils';
 import {
   createRecordingLogger, setDiagnosticsSink, type RecordedLog,
 } from '@kinu.run/core/obs';
-import type { KinuSandbox } from '../src/kinu-sandbox';
+import type { KinuDevbox } from '../src/kinu-devbox';
 
 const SUFFIX = 'previews.example';
 
@@ -42,7 +42,7 @@ interface PortBox {
   readonly exposed: number[];
   readonly revoked: number[];
   readonly removed: number[];
-  readonly box: KinuSandbox;
+  readonly box: KinuDevbox;
 }
 
 /** Answers the four port methods only; `exposePort` returns the minted URL, like the SDK. */
@@ -52,7 +52,7 @@ function portBox(options: { token?: string; failRevoke?: boolean } = {}): PortBo
   const removed: number[] = [];
   const token = options.token ?? TOKEN;
 
-  const box: KinuSandbox = Object.create({
+  const box: KinuDevbox = Object.create({
     resolveReadiness: async () => ({ kind: 'restored' as const }),
     exposePort: async (port: number, opts: { hostname: string }) => {
       exposed.push(port);
@@ -80,7 +80,7 @@ function portBox(options: { token?: string; failRevoke?: boolean } = {}): PortBo
 }
 
 /** `writer` is built when the object woke; pass one in when it must predate a revocation. */
-function lane(kv: FakeKv | null, box: KinuSandbox, writer?: SandboxPreviewExposures) {
+function lane(kv: FakeKv | null, box: KinuDevbox, writer?: SandboxPreviewExposures) {
   return adaptCloudflareSandbox(
     box,
     async () => {},
@@ -105,7 +105,7 @@ describe('exposing a port publishes the preview the edge will be asked about', (
 
   test('a URL the container no longer serves is reported not reached, naming the gate', async () => {
     const { box } = portBox();
-    const stale: KinuSandbox = Object.create(box, { getExposedPorts: { value: async () => [] } });
+    const stale: KinuDevbox = Object.create(box, { getExposedPorts: { value: async () => [] } });
 
     const result = await lane(makeKv(), stale).exposePort(PORT, { hostname: SUFFIX });
 
@@ -141,7 +141,7 @@ describe('exposing a port publishes the preview the edge will be asked about', (
   test('a minted URL the deployment cannot parse is a failure, not a silent link', async () => {
     const kv = makeKv();
 
-    const box: KinuSandbox = Object.create({
+    const box: KinuDevbox = Object.create({
       resolveReadiness: async () => ({ kind: 'restored' as const }),
       exposePort: async () => ({ url: 'https://preview.elsewhere.example/8080', port: PORT }),
     });

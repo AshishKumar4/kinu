@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { lstatSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { present, requestBodyText, scratchDir } from '@kinu.run/test-utils';
+import { present, scratchDir } from '@kinu.run/test-utils';
 import { withConfigLock } from '../src/config-lock';
 import { createFileOAuthStore, signOutChatGptLogin } from '../src/oauth-store';
 import { asFetchFunction, CHATGPT_CRED_KEY, CLAUDE_CRED_KEY, JsonObjectSchema, OAuthTokenError } from '@kinu.run/core';
@@ -36,7 +36,7 @@ describe('createFileOAuthStore', () => {
 
     const store = createFileOAuthStore(configPath, {
       fetch: asFetchFunction(async (input, init) => {
-        calls.push([input instanceof Request ? input.url : input.toString(), await requestBodyText(input, init)]);
+        calls.push([input instanceof Request ? input.url : input.toString(), await new Request(input, init).text()]);
 
         return Response.json({ access_token: 'at-new', refresh_token: 'refresh-new', expires_in: 3600 });
       }),
@@ -116,7 +116,7 @@ describe('createFileOAuthStore', () => {
 
     const store = createFileOAuthStore(configPath, {
       fetch: asFetchFunction(async (input, init) => {
-        submitted.push(await requestBodyText(input, init));
+        submitted.push(await new Request(input, init).text());
 
         return Response.json({ access_token: 'at-new', refresh_token: 'refresh-new', expires_in: 3600 });
       }),
@@ -153,7 +153,7 @@ describe('createFileOAuthStore', () => {
     const revoked: string[] = [];
 
     const fetch = asFetchFunction(async (input, init) => {
-      const form = new URLSearchParams(await requestBodyText(input, init));
+      const form = new URLSearchParams(await new Request(input, init).text());
 
       if (form.get('grant_type') !== 'refresh_token') {
         revoked.push(form.get('token') ?? '');
@@ -191,7 +191,7 @@ describe('createFileOAuthStore', () => {
     const revoked: string[] = [];
 
     const fetch = asFetchFunction(async (input, init) => {
-      revoked.push(new URLSearchParams(await requestBodyText(input, init)).get('client_id') ?? '');
+      revoked.push(new URLSearchParams(await new Request(input, init).text()).get('client_id') ?? '');
 
       return new Response(null, { status: 200 });
     });
@@ -279,7 +279,7 @@ describe('createFileOAuthStore', () => {
 
     const store = createFileOAuthStore(configPath, {
       fetch: asFetchFunction(async (input, init) => {
-        refreshedWith.push(await requestBodyText(input, init));
+        refreshedWith.push(await new Request(input, init).text());
 
         return Response.json({ access_token: 'at-work-2', refresh_token: 'refresh-work-2', expires_in: 3600 });
       }),
@@ -327,7 +327,7 @@ describe('createFileOAuthStore', () => {
 
     const store = createFileOAuthStore(configPath, {
       fetch: asFetchFunction(async (input, init) => {
-        sent.push([input instanceof Request ? input.url : input.toString(), [...new Headers(init?.headers)], await requestBodyText(input, init)]);
+        sent.push([input instanceof Request ? input.url : input.toString(), [...new Headers(init?.headers)], await new Request(input, init).text()]);
 
         return Response.json({ access_token: 'sk-ant-oat01-new', refresh_token: 'rt-new', expires_in: 28_800, organization: { uuid: 'org-2' } });
       }),

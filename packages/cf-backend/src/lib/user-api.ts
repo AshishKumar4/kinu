@@ -15,6 +15,8 @@ import {
 import { tolerateAsync } from '@kinu.run/core/obs';
 import { DEFAULT_CALL_TIMEOUT_MS } from 'agents/client';
 import * as v from 'valibot';
+import type { BoxSize } from '@kinu.run/devbox/sizes';
+import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from '../sandbox-size';
 
 export type UserProfile = NonNullable<v.InferOutput<typeof UserProfileSchema>>;
 
@@ -339,6 +341,13 @@ export const updateProfileCatalog = (
   api(ProfileCatalogEnvelopeSchema, 'PUT', '/profile-catalog', { catalog, expectedVersion });
 
 export const listAvailableModels = (): Promise<ModelMenu> => api(ModelMenuSchema, 'GET', '/models');
+
+const SANDBOX_SIZE_PATH = `/config/${SANDBOX_SIZE_CONFIG_KEY}`;
+
+export const getAccountSandboxSize = async (): Promise<BoxSize | null> =>
+  accountSandboxSize((await api(v.object({ key: v.string(), value: v.nullable(v.string()) }), 'GET', SANDBOX_SIZE_PATH)).value);
+
+export const setAccountSandboxSize = (size: BoxSize) => api(OkSchema, 'PUT', SANDBOX_SIZE_PATH, { value: size });
 
 export type { ModelTestResult };
 

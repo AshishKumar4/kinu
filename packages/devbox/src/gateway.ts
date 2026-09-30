@@ -1,6 +1,6 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { createHash } from 'node:crypto';
-import { SandboxFileError, S3Mounts, type Files, type S3MountRequest, type S3GatewayBinding } from '@cloudflare/sandbox';
+import { SandboxFileError, S3Mount, type Files, type S3MountRequest, type S3GatewayBinding } from '@cloudflare/sandbox';
 import * as v from 'valibot';
 import { Effect, Result } from 'effect';
 import { DevboxError, attempt, attemptSync, settle } from './errors';
@@ -42,7 +42,7 @@ export interface OutboundPolicy {
 export interface OutboundProps extends OutboundPolicy { readonly internet: boolean; }
 
 /** Exact routes precede the host policy. Native interception registration order cannot express
- *  that when S3Mounts adds or replaces a route after the catch-all (D38). */
+ *  that when S3Mount adds or replaces a route after the catch-all (D38). */
 export class DevboxOutbound extends WorkerEntrypoint<{}, OutboundProps> {
   override fetch(request: Request): Promise<Response> {
     return settle(Effect.gen({ self: this }, function* () {
@@ -55,7 +55,7 @@ export class DevboxOutbound extends WorkerEntrypoint<{}, OutboundProps> {
   }
 }
 
-// @cloudflare/sandbox 1.0.0-rc.1, sandbox-tools/s3_mount/marker_store.rs:100-112.
+// @cloudflare/sandbox 1.0.0, sandbox-tools/s3_mount/marker_store.rs:100-104.
 // This reads the SDK's authoritative file, never a mirrored registration. D40 and the upstream
 // ask record this internal-format coupling; replace this read when the SDK exposes registrations.
 const SDK_STORE_MARKER = '/run/sandbox/s3-mounts/markers/'
@@ -75,7 +75,7 @@ const Marker = v.object({
 /** The SDK's two views of what the container holds at the store path. */
 interface StorePath {
   readonly files: Pick<Files, 'readFile'>;
-  readonly mounts: Pick<S3Mounts, 'inspect'>;
+  readonly mounts: Pick<S3Mount, 'inspect'>;
 }
 
 /** `undefined`: nothing is mounted at the store path, so there is no route to rebuild and the chain's
@@ -91,37 +91,37 @@ function restoredStoreRoute(at: StorePath, source: S3MountRequest['source'], pre
       if (!SandboxFileError.is(cause)) return yield* Effect.fail(read.failure);
 
       if (cause.code !== 'ENOENT') {
-        return yield* Effect.fail(new DevboxError('mount-marker', 'S3Mounts marker could not be read for ' + CHAIN_STORE_MOUNT + '; routing cannot be rebuilt', { cause }));
+        return yield* Effect.fail(new DevboxError('mount-marker', 'S3Mount marker could not be read for ' + CHAIN_STORE_MOUNT + '; routing cannot be rebuilt', { cause }));
       }
 
       // Without a marker the SDK's own inspection says whether anything is mounted there.
-      const inspected = yield* attempt('io', () => at.mounts.inspect(CHAIN_STORE_MOUNT), 'S3Mounts could not inspect ' + CHAIN_STORE_MOUNT);
+      const inspected = yield* attempt('io', () => at.mounts.inspect(CHAIN_STORE_MOUNT), 'S3Mount could not inspect ' + CHAIN_STORE_MOUNT);
 
       if (inspected.attachment.status === 'absent') return undefined;
 
-      return yield* Effect.fail(new DevboxError('mount-marker', 'S3Mounts marker missing for ' + CHAIN_STORE_MOUNT + ', which is ' + inspected.attachment.status + '; routing cannot be rebuilt', { cause }));
+      return yield* Effect.fail(new DevboxError('mount-marker', 'S3Mount marker missing for ' + CHAIN_STORE_MOUNT + ', which is ' + inspected.attachment.status + '; routing cannot be rebuilt', { cause }));
     }
 
-    const text = yield* attempt('io', () => read.success.text(), 'S3Mounts marker could not be read');
+    const text = yield* attempt('io', () => read.success.text(), 'S3Mount marker could not be read');
     const json = v.safeParse(v.pipe(v.string(), v.parseJson()), text);
 
-    if (!json.success) return yield* Effect.fail(new DevboxError('mount-marker', 'S3Mounts marker JSON not understood'));
+    if (!json.success) return yield* Effect.fail(new DevboxError('mount-marker', 'S3Mount marker JSON not understood'));
     const value = json.output;
     const version = v.safeParse(v.object({ protocolVersion: v.unknown() }), value);
 
     if (!version.success || version.output.protocolVersion !== 1) {
-      return yield* Effect.fail(new DevboxError('mount-marker', 'S3Mounts marker protocol ' + String(version.success ? version.output.protocolVersion : 'missing') + ' not understood'));
+      return yield* Effect.fail(new DevboxError('mount-marker', 'S3Mount marker protocol ' + String(version.success ? version.output.protocolVersion : 'missing') + ' not understood'));
     }
 
     const marker = v.safeParse(Marker, value);
 
-    if (!marker.success) return yield* Effect.fail(new DevboxError('mount-marker', 'S3Mounts marker registration not understood for ' + CHAIN_STORE_MOUNT));
+    if (!marker.success) return yield* Effect.fail(new DevboxError('mount-marker', 'S3Mount marker registration not understood for ' + CHAIN_STORE_MOUNT));
     const registered = marker.output.configuration;
-    const sameEndpoint = yield* attemptSync('mount-marker', () => new URL(registered.source.endpoint).href === new URL(source.endpoint).href, 'S3Mounts marker endpoint not understood');
+    const sameEndpoint = yield* attemptSync('mount-marker', () => new URL(registered.source.endpoint).href === new URL(source.endpoint).href, 'S3Mount marker endpoint not understood');
 
     // A mount made at a key prefix (before D46) sends full keys, which a rooted route would prefix twice.
     if (!sameEndpoint || registered.source.region !== source.region || registered.source.bucket !== source.bucket || registered.keyPrefix !== undefined) {
-      return yield* Effect.fail(new DevboxError('mount-marker', 'S3Mounts marker registration does not match this devbox store'));
+      return yield* Effect.fail(new DevboxError('mount-marker', 'S3Mount marker registration does not match this devbox store'));
     }
 
     return {
@@ -149,9 +149,9 @@ export class ContainerRoutes {
   #routes: Record<string, Fetcher> = {};
   #fallback: Fetcher | undefined;
   #source: S3MountRequest['source'] | undefined;
-  #mountClient: S3Mounts | undefined;
+  #mountClient: S3Mount | undefined;
   /** The container was started by this object and no mount has been tried in it since, so it holds
-   *  no S3Mounts marker for an unmount to clear (D45). */
+   *  no S3Mount marker for an unmount to clear (D45). */
   #unmarked = false;
 
   constructor(readonly host: RouteHost) {}
@@ -221,7 +221,7 @@ export class ContainerRoutes {
     }));
   }
 
-  /** Every store route this box builds, S3Mounts' included, is rooted at the box's prefix, which
+  /** Every store route this box builds, S3Mount's included, is rooted at the box's prefix, which
    *  comes from here and never from what the guest wrote (D46). */
   #gateway(): Effect.Effect<S3GatewayBinding, DevboxError> {
     const gateway = this.host.bindings.DevboxStoreGateway;
@@ -232,8 +232,8 @@ export class ContainerRoutes {
     return Effect.succeed(({ props }) => gateway({ props: props.mode === 'deny' ? props : { ...props, keyPrefix: root } }));
   }
 
-  #mounts(): Effect.Effect<S3Mounts, DevboxError> {
-    return this.#gateway().pipe(Effect.map((gateway) => this.#mountClient ??= new S3Mounts({
+  #mounts(): Effect.Effect<S3Mount, DevboxError> {
+    return this.#gateway().pipe(Effect.map((gateway) => this.#mountClient ??= new S3Mount({
       exec: (args, options) => this.host.container.exec(args, options),
       interceptOutboundHttp: (host, handler) => this.register(host, handler),
     }, gateway)));

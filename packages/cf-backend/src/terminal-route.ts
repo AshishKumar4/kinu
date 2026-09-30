@@ -18,8 +18,6 @@ import type { FamilyEnv } from "./api/context";
 import { LITERAL_WORKSPACE, type WorkspaceVariables } from "./api/workspace";
 
 
-type PtyOptions = { cols: number; rows: number };
-
 const DEVICE_EXECUTOR = "device";
 
 const WORKSPACE_EXECUTOR = "workspace";
@@ -49,9 +47,9 @@ export interface TerminalRouteDeps {
 export function terminalRouteDeps(env: Env): TerminalRouteDeps {
   return {
     resolveWorkspace: (name) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name),
-    resolveSandbox: (name) => env.Sandbox === undefined
+    resolveSandbox: (name) => env.KinuDevbox === undefined
       ? null
-      : env.Sandbox.getByName(sandboxIdForWorkspace(name)),
+      : env.KinuDevbox.getByName(sandboxIdForWorkspace(name)),
     UserDO: env.UserDO,
   };
 }
@@ -258,10 +256,6 @@ async function sandboxCommand(
   }
 }
 
-function ptySize(url: URL): PtyOptions {
-  return paneWindow(url);
-}
-
 /**
  * Same preflight as exec (up, /workspace attached, egress installed), under the attach's diagnostic
  * scope. Not fenced by cancellation: the start is shared and idempotent.
@@ -310,7 +304,7 @@ async function sandboxAttach(sandbox: TerminalSandbox, call: TerminalCall, ctx: 
     await sandbox.noteTerminalActivity();
     const url = new URL(request.url);
     url.pathname = "/_devbox/terminal";
-    const size = ptySize(call.url);
+    const size = paneWindow(call.url);
     url.searchParams.set("cols", String(size.cols));
     url.searchParams.set("rows", String(size.rows));
     const upgrade = sandbox.fetch(new Request(url.toString(), ptyUpgradeRequest(request)));

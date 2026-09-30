@@ -30,7 +30,7 @@ const BUILD = {
 
 // A container's code is its image, and each environment names its images in its own section of wrangler.jsonc.
 test('production may run only the container images staging ran', () => {
-  const staging = new Map([['KinuSandbox', 'sandbox@sha256:aaa'], ['CodexEgress', 'egress@sha256:bbb']]);
+  const staging = new Map([['KinuDevbox', 'sandbox@sha256:aaa'], ['CodexEgress', 'egress@sha256:bbb']]);
 
   expect(imagesStagingNeverRan(new Map(staging), staging)).toEqual([]);
   expect(imagesStagingNeverRan(new Map([...staging, ['CodexEgress', 'egress@sha256:ccc']]), staging)).toEqual(['CodexEgress (egress@sha256:ccc)']);

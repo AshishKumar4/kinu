@@ -66,6 +66,9 @@ export const AGENT_RPC_ACCESS = {
   latestAlternateTakes: 'interactive',
   listFileCheckpoints: 'interactive',
   listMounts: 'interactive',
+  getSandboxSize: 'interactive',
+  // Restarts a running sandbox, ending its commands: the owner's call.
+  resizeSandbox: 'interactive',
   planFileRestore: 'interactive',
   clearBackgroundJobs: 'interactive',
   createTimerTrigger: 'interactive',

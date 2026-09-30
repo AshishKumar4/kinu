@@ -715,6 +715,11 @@ fakes do not have that contract; the hire and surface fixtures now use the
 native binding backed by local HTTP. A refused facet load is reported by
 name to the hirer instead of leaving it waiting indefinitely.
 
+The obsolete seven-axis ergonomics study in `scripts/axis-ergonomics/` was
+removed by `37a8d6c10` on 2026-09-30. Restore it from
+`98f64cde610869efc60ff072ff89e866bb5fd116` to replay that historical surface,
+not the six-axis swarm contract.
+
 ## Deploy ladder
 
 L1. The deploy wave is scheduled by a thread budget, not a gate count. Each
@@ -1103,6 +1108,7 @@ resource credits. The runner reads Bash's running-job set, waits cached
 completions by pid, and restricts `wait -n` to the tracked wave. If every child
 finishes between that read and the wait, a tracked pid still yields its cached
 status. No new process, timer, timeout or resource budget governs a gate.
+Superseded by L16: the Bash wave is gone.
 
 L14. A test's `docker build` runs its steps on the host's network, and a
 gallery wait on a page whose app script never ran ends at once. Decided
@@ -1152,6 +1158,39 @@ record is written, so `promote.ts` refuses the build. The cost is that such a
 red is found after the upload, on a build already serving on staging. The
 live-app rows that stay on `vite dev` drive Main alone, and a row that breaks
 names the file (`kinu-logs/dev-server/`) holding its server's output.
+
+L16. One wave runner schedules every gate: the ladder's `tierWave`. Decided
+2026-09-30, from a cleanup review. deploy.sh carried a second scheduler in
+Bash (`run_phase`/`flush_gates`, its caps and its queue, about 360 lines) that
+repeated what the CI tier's wave already did over the same cost table:
+admission by measured threads and resident set under the box's caps, one
+browser row at a time, and no new launch after the first red. Two schedulers
+over one table can disagree, and each carried its own reaping defects (L13).
+Now `run_phase <phase>` is `bun scripts/ladder.ts --deploy-phase=<phase>`,
+which runs the plan's rows of that phase through `tierWave` and returns when
+every row it launched has ended, which is the phase barrier. `--all` keeps
+launching after a red, and a red phase still ends the deploy before the next
+one, the build or any publish. The ladder prints each row's output whole when
+it ends and names every failed row at the end. The plan's TSV (`--plan`), its
+parser, the gate log directory, the quote check and the Bash 5.1 guard went
+with the Bash wave. deploy.test.ts now proves the boundary deploy.sh owns (the
+phases in order, the options it passes, the stop on a red phase) against a
+stub ladder, and ladder.test.ts proves the admission.
+
+L17. The hammer bounds each run by its silence, as every gate is bounded, and
+never by a wall deadline. Decided 2026-09-30. Each run had 440 s
+divided by the run count, 73.3 s, a budget sized to fit a wall `timeout` the
+deploy runner once wrapped every gate in. The cf-backend suite's contended runs
+had grown from 44.6-60.1 s on 2026-09-26 to 71 s. Alone on the box, five of six
+runs were killed at 73.3 s with 2,460 to 3,616 of 3,624 tests passed and not
+one failing, and the run allowed to finish passed all 3,624 in 71.1 s. That
+wall deadline read slow as hung. Now each run goes through `runUnderDeadline`
+with the suite row's silence bound. Its processes are ended and named when it
+leaves any. It prints one line as it ends (pass, fail, seconds and the failing
+tests), so the gate's own row bound holds a hung hammer. Its burners are
+spawned per run and end with it. Each also exits when its pipe from the gate
+closes, so none outlives a SIGKILLed gate. No budget or run length replaces the
+73.3 s.
 
 ## Providers
 

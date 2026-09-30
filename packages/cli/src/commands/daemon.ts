@@ -14,7 +14,6 @@ import {
 import {
   AGENT_HOME,
   agentDbPath,
-  CONFIG_PATH,
   createOAuthStore,
   ensureAgentHome,
   listLocalRefsAllProjects,
@@ -331,7 +330,6 @@ async function openDaemonAgent(
     llm: llmConfig,
     providerCredentials: resolveProviderCredentials(),
     oauthStore: createOAuthStore(),
-    oauthConfigPath: CONFIG_PATH,
     // The ref's stored directory, never process.cwd(): a daemon serves every project.
     cwd: ref.cwd,
   };

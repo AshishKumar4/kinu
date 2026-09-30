@@ -104,9 +104,10 @@ export const WORKSPACE_EXECUTOR_LINE = definePromptSection(
   workspaceExecutorLine.trimEnd(),
 );
 
+/** Sized from the host's table, which the sandbox executor reports; the current size is volatile, so absent. */
 export const SANDBOX_EXECUTOR_LINE = definePromptSection(
   "executors/sandbox",
-  "",
+  "{{#if sized}}{{defaultSize}}{{sizes}}{{/if}}",
   sandboxExecutorLine.trimEnd(),
 );
 

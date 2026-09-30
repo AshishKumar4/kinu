@@ -45,7 +45,7 @@ import {
   type ForkMemoryChunkRow,
   type ForkSessionMessageRow,
 } from './fork-rows';
-import { ForkTargetWriter, type ForkResult } from './fork-writer';
+import { ForkTargetWriter, forkResultOf, type ForkResult } from './fork-writer';
 import type { ForkStaging, ForkStagingState } from './fork-staging';
 
 /** Fork transfer protocol version; a receiver refuses one it does not implement. Bump when an older
@@ -680,11 +680,9 @@ export class ForkTransferReceiver {
       );
     }
 
-    const landed = this.writer.published;
-
-    if (landed !== null) {
+    if (staged.published && staged.head !== null) {
       // Already landed: answer a re-delivered frame with the fork.
-      return { status: 'settled', result: landed };
+      return { status: 'settled', result: forkResultOf(staged.head, staged.staged) };
     }
 
     if (frame.seq !== staged.expectedSeq) {
@@ -791,7 +789,7 @@ export class ForkTransferReceiver {
     }
 
     await this.files.remove([dst]);
-    this.writer.stageImport(dst);
+    this.staging.addFile(dst);
     this.staging.importing(dst);
 
     return dst;
@@ -803,7 +801,7 @@ export class ForkTransferReceiver {
       throw new Error(`fork transfer committed while the import at ${JSON.stringify(staged.importing)} was incomplete`);
     }
 
-    const taken = this.writer.staged;
+    const taken = staged.staged;
 
     const shortfall = [
       ['agentConfig', staged.declared.agentConfig, taken.agentConfig],

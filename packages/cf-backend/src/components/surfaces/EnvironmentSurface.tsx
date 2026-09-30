@@ -18,6 +18,7 @@ import type { ExecutorOutput } from "@/hooks/use-kinu";
 import { TerminalPane } from "@/components/TerminalPane";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { LoadFailure } from "@/components/ui/LoadFailure";
+import { SandboxSizeRow } from "@/components/SandboxSize";
 
 export interface EnvironmentSurfaceProps {
   rpc: Rpc;
@@ -108,6 +109,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
             {mounts.map((m) => (
               <EnvironmentCard
                 key={m.name}
+                rpc={rpc}
                 mount={m}
                 exec={execByName.get(m.name)}
                 active={selectedName === m.name}
@@ -185,7 +187,8 @@ function SelectedEnvironmentPane({ mount, exec, workspace, executorOutputs, onEx
   );
 }
 
-function EnvironmentCard({ mount, exec, active, onSelect, onOpenFiles, onConnectDevice }: {
+function EnvironmentCard({ rpc, mount, exec, active, onSelect, onOpenFiles, onConnectDevice }: {
+  rpc: Rpc;
   mount: MountInfo;
   exec: ExecutorInfo | undefined;
   active: boolean;
@@ -222,6 +225,7 @@ function EnvironmentCard({ mount, exec, active, onSelect, onOpenFiles, onConnect
       <div data-env-mount className="p-meta p-text-3">
         {filesRoot ?? "no files here"}
       </div>
+      {executor === "sandbox" && <SandboxSizeRow rpc={rpc} />}
       <div className="flex items-center gap-1 pt-0.5" onClick={(e) => e.stopPropagation()}>
         {mount.live && filesRoot !== null && (
           <button

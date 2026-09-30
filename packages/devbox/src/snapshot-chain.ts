@@ -139,10 +139,6 @@ const PUBLISH_SCRIPT_B64 = btoa(PUBLISH_SCRIPT);
  *  older generation. Other attach failures say nothing about its bytes and never cost a promotion. */
 
 
-/** Extraction-path archive lifetime only; never put a lifecycle rule on the chain prefix:
- *  it deletes by upload age and the once-written base would vanish from an active box. */
-const EXTRACT_TTL_SECONDS = 30 * 24 * 60 * 60;
-
 /** Excluded trees must be regenerable from kept lockfiles; never exclude a lockfile or `.git`,
  *  which holds unpushed commits and refs (a linked worktree's `.git` is a file). */
 export const CHAIN_EXCLUDES = [
@@ -236,12 +232,12 @@ export function chainStoreRoot(boxPrefix: string): string {
   return `${boxPrefix}/backups`;
 }
 
-/** The host S3Mounts gives a route: `routeHost` in @cloudflare/sandbox 1.0.0-rc.1 (index.mjs:1502). */
+/** The host S3Mount gives a route: `routeHost` in @cloudflare/sandbox 1.0.0 (index.mjs:1520). */
 export function storeRouteHost(routeId: string): string {
   return `s3-${routeId}.sandbox.internal`;
 }
 
-/** The route the container's publisher PUTs through; S3Mounts names its own routes at random. */
+/** The route the container's publisher PUTs through; S3Mount names its own routes at random. */
 export const STORE_PUBLISH_ROUTE = 'devbox-publish';
 
 /** The store gateway roots each route at this box's prefix, so the URL names the key under it (D46). */
@@ -400,9 +396,8 @@ export interface ChainState extends ChainGeneration {
   readonly rev: number;
   /** Epoch ms the last tick's checkpoint completed: the interval gate's clock ({@link tickClock}). */
   readonly at: number;
-  /** Advanced only on a successful checkpoint or an unchanged report, never after an unarchived
-   *  change: the next tick would believe it was already saved. */
-  readonly changeVersion: string | undefined;
+  /** Extraction's last archived filesystem version; overlays compare upperMark instead. */
+  readonly changeVersion?: string;
   /** The upper's fingerprint at the last successful commit; the skip gate
    *  compares against it. */
   readonly upperMark: string | undefined;
@@ -573,22 +568,6 @@ export interface SnapshotChainPorts {
   log: (message: string) => void;
 }
 
-/** TTL lives only here: the SDK enforces it at restore on archives its backup API wrote.
- *  Excludes are the caller's, passed raw: the SDK normalises them like `normalizeArchiveExclude`. */
-export function chainBackupOptions(
-  localBucket: boolean,
-  excludes: readonly string[],
-): BackupOptions {
-  return {
-    dir: DEVBOX_WORKDIR,
-    localBucket,
-    gitignore: true,
-    excludes: [...excludes],
-    ttl: EXTRACT_TTL_SECONDS,
-    // zstd: every byte is paid on upload and again on every attach.
-    compression: { format: 'zstd' },
-  };
-}
 
 /** The overlay's writable upper: the whole changed set since the base. */
 const upperDir = `${DEVBOX_RUNTIME_DIR}/upper`;
@@ -921,9 +900,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   };
 
   const attachExtract = async (generation: ChainGeneration): Promise<AttachOutcome> => {
-    await ports.restoreExtract({
-      id: generation.base.id, dir: DEVBOX_WORKDIR, localBucket: true,
-    });
+    await ports.restoreExtract({ id: generation.base.id, dir: DEVBOX_WORKDIR });
 
     if ((await ports.countEntries(DEVBOX_WORKDIR)) === 0) {
       throw layerUnreadable('extraction', generation.base.id, {
@@ -1618,13 +1595,20 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
 
   const commitExtract = async (
     previous: ChainState | null,
-    version: string,
     kind: CheckpointKind,
+    reportedVersion?: string,
   ): Promise<CheckpointOutcome> => {
-    // LOCAL DEVELOPMENT ONLY: the SDK archives the whole tree.
-    const backup = await ports.createExtractSnapshot(
-      chainBackupOptions(true, ports.archiveExcludes()),
-    );
+    let version = reportedVersion;
+
+    if (version === undefined) {
+      const checked = await changed(previous);
+
+      if ('kind' in checked) return checked;
+      version = checked.version;
+    }
+
+    // LOCAL DEVELOPMENT ONLY: archive the whole tree.
+    const backup = await ports.createExtractSnapshot({ dir: DEVBOX_WORKDIR, excludes: ports.archiveExcludes() });
 
     const stored = await ports.objectFacts(baseObjectKey(root, backup.id));
 
@@ -1748,8 +1732,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
    *  the old generation is deleted only after the new record is durable. */
   const commitChain = async (
     previous: ChainState | null,
-    version: string,
     { rebasing = false, upperMark, kind }: ChainCommitOptions,
+    extractVersion?: string,
   ): Promise<CheckpointOutcome> => {
     const first = previous === null;
     const fresh = first || rebasing;
@@ -1774,7 +1758,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
           + `box archives whole trees from here: ${describe({ cause: error })}`,
         );
 
-        return await commitExtract(previous, version, kind);
+        return await commitExtract(previous, kind, extractVersion);
       }
     }
 
@@ -1828,7 +1812,6 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       deltaFormat: fresh ? undefined : deltaFormat,
       deltaFallback,
       at: tickClock(previous, kind, ports.now()),
-      changeVersion: version,
       upperMark,
       // A rebase supersedes a generation; a delta commit stays inside its generation and
       // moves neither role.
@@ -1881,6 +1864,14 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     describe(thrown),
   );
 
+  const changed = async (state: ChainState | null): Promise<{ status: ChangeStatus; version: string } | CheckpointOutcome> => {
+    try {
+      return await ports.checkChanges(DEVBOX_WORKDIR, state?.changeVersion);
+    } catch (error) {
+      return await recordCheckpointFailure(stamps, state, `checkChanges failed: ${describe({ cause: error })}`);
+    }
+  };
+
   const checkpoint = async (kind: CheckpointKind): Promise<CheckpointOutcome> => {
     const idle = { reason: undefined, bytes: undefined, movedBytes: 0 };
 
@@ -1906,18 +1897,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       );
     }
 
-    // Asked only after the local gates: `checkChanges` is the host's call (D30).
-    const changed = async (): Promise<{ status: ChangeStatus; version: string } | CheckpointOutcome> => {
-      try {
-        return await ports.checkChanges(DEVBOX_WORKDIR, state?.changeVersion);
-      } catch (error) {
-        return await recordCheckpointFailure(stamps, state, `checkChanges failed: ${describe({ cause: error })}`);
-      }
-    };
-
     if (overlayMounted) {
-      // `checkChanges` with no `since` answers `unchanged` while it sets a baseline, so skip on the
-      // upper's fingerprint; an unreadable (empty) one never matches, so it commits.
+      // The upper's fingerprint is the change gate; an unreadable (empty) one never matches.
       const mark = gate.fingerprint;
 
       if (mark !== '' && mark === state?.upperMark) {
@@ -1935,12 +1916,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
         return { kind: 'skipped', ...idle, reason: 'within the minimum checkpoint interval' };
       }
 
-      const checked = await changed();
-
-      if ('kind' in checked) return checked;
-
       try {
-        return await commitChain(state, checked.version, {
+        return await commitChain(state, {
           rebasing: rebaseOnCommit(state, procMounts, kind),
           upperMark: mark,
           kind,
@@ -1950,7 +1927,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       }
     }
 
-    const checked = await changed();
+    const checked = await changed(state);
 
     if ('kind' in checked) return checked;
     const { status: change, version } = checked;
@@ -1986,9 +1963,9 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     try {
       // A box attaches the way it was checkpointed, so the mode comes from
       // the record; commitChain decides it for a box with no record.
-      if (state?.mode === 'extract') return await commitExtract(state, version, kind);
+      if (state?.mode === 'extract') return await commitExtract(state, kind, version);
 
-      return await commitChain(state, version, { rebasing: shouldRebase(state, kind), kind });
+      return await commitChain(state, { rebasing: shouldRebase(state, kind), kind }, version);
     } catch (error) {
       return await commitFailed(state, { cause: error });
     }

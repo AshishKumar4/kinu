@@ -14,7 +14,7 @@ import type { BackendHost } from '../src/types/backend-host';
 import type { Schedule } from '../src/types/primitives';
 import { createTestWorkspace, createWorkspaceBundle, makeSql, makeSqlExec } from './helpers';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
-import { createTestActors } from '@kinu.run/test-utils';
+import { seedTranscriptEntry, createTestActors } from '@kinu.run/test-utils';
 
 const JOB = 'bgjob-y2vlvl1wbli9gan6sh78a';
 
@@ -157,7 +157,7 @@ describe('a settled background job announces itself once, and not as the owner',
     const { runner } = activation(ws.db);
     await runner.wake(JOB);
     const owner = chatStore(ws.db);
-    await owner.history.record(CHAT_SESSION_ID, {
+    await seedTranscriptEntry(owner.history, CHAT_SESSION_ID, {
       id: 'typed-1', origin: 'input',
       message: { role: 'user', content: 'find me a domain' },
     });

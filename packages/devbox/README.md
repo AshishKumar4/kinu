@@ -12,8 +12,16 @@ change the package. The block-layer design is in
 [docs/DEVBOX-BLOCK-LAYER.md](../../docs/DEVBOX-BLOCK-LAYER.md).
 
 Devbox extends the platform's `DurableObject` and owns `ctx.container`.
-It uses `Files` and `S3Mounts` from `@cloudflare/sandbox` 1.0.0-rc.1, not the
-old Sandbox or Containers classes.
+It uses `Files` and `S3Mount` from `@cloudflare/sandbox` 1.0.0, not the
+old Sandbox or Containers classes. The host's container runs on the
+`durable_object` scheduling policy: each start names the image (`devbox` in the
+container's `images` map) and the instance size the box records (D50).
+
+A box starts at its own choice of size (`resize`), else the default its host
+stored (`useDefaultSize`), else the class's `defaultSize`. `resize` restarts
+a running container at a new size and `resize(null)` drops the choice;
+`useDefaultSize` only records, so a running container keeps its size until it
+next starts.
 
 `example/worker.ts` is the complete standalone host: its class supplies an
 R2 binding and its Durable Object binding name. The Worker exports
@@ -31,7 +39,10 @@ that when it attaches.
 1. Start calls the native container API and proves admission with
    `container.exec(['/bin/true'])`. A refusal records an incident and arms
    the `devboxStartup` row. A caller asking meanwhile receives the
-   platform's refusal.
+   platform's refusal. A refusal the recovery ladder classes terminal is
+   recorded with the start's image, size and internet setting; until one of
+   them changes or a caller asks with `start()` or `attachNow()`, requests
+   get that refusal and nothing starts or is filed again (D52).
 2. Devbox installs outbound routing, then enters its own
    `blockConcurrencyWhile` restore block. It adopts an already-restored
    instance or restores files, supervised processes and port exposures under
@@ -357,10 +368,10 @@ the Effect channel; `settle` in `src/errors.ts` is the one runner.
 Kinu turns it into its own `KinuError` in one adapter,
 `packages/cf-backend/src/sandbox-exec-lane.ts`.
 
-`example/worker.ts` uses Devbox with no Kinu code. Kinu's `KinuSandbox`
-(`packages/cf-backend/src/kinu-sandbox.ts`) adds product egress, previews and
+`example/worker.ts` uses Devbox with no Kinu code. Kinu's `KinuDevbox`
+(`packages/cf-backend/src/kinu-devbox.ts`) adds product egress, previews and
 incident delivery. Generic Devbox classes allow public networking;
-`KinuSandbox` starts with raw internet disabled and routes HTTP and HTTPS
+`KinuDevbox` starts with raw internet disabled and routes HTTP and HTTPS
 through the vault. Native routing uses exact-host gateway capabilities
 before that fallback; `scripts/egress-interception.ts` checks both policies.
 `bun scripts/bench-devbox-standalone.ts` deploys the example on its own Worker,
