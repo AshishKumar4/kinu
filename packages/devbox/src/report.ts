@@ -4,6 +4,7 @@ import type { IncidentTotals } from './incidents';
 import type { IncidentStage, PortExposureSpec, QuiesceAction, SupervisedProcessSpec } from './lifecycle';
 import type { Restoration } from './restoration';
 import type { ChainState } from './snapshot-chain';
+import type { BoxSize } from './sizes';
 import type { AttachOutcome, DevboxStrategyName } from './storage';
 
 /** `delivered` separates a failure the host already saw from one it never did. */
@@ -65,6 +66,8 @@ export interface DevboxReport {
   readonly bootId: string | undefined;
   /** Platform replacements of this box's container: a fact about the platform, not a failure. */
   readonly replacedCount: number;
+  readonly size: BoxSize;
+  readonly runningSize: BoxSize | undefined;
   readonly supervised: readonly SupervisedProcessSpec[];
   readonly ports: readonly PortExposureSpec[];
   readonly incidents: Readonly<IncidentTotals>;

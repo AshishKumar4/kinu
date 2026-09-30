@@ -1,6 +1,6 @@
 // Generated from wrangler.jsonc bindings.
 import type { OrchestratorAgent } from "./src/orchestrator";
-import type { KinuSandbox } from "./src/kinu-sandbox";
+import type { KinuDevbox } from "./src/kinu-devbox";
 import type { UserDO } from "./src/user/user-do";
 import type { MonitorDO } from "./src/monitor/monitor-do";
 import type { ControlPlaneDO } from "./src/control-plane/control-plane-do";
@@ -36,7 +36,7 @@ declare global {
      *  CREDENTIAL_ENCRYPTION_KEY (control-plane/admin-caller.ts). */
     ControlPlaneDO: DurableObjectNamespace<ControlPlaneDO>;
     /** Native workspace container owner. */
-    Sandbox: DurableObjectNamespace<KinuSandbox>;
+    KinuDevbox: DurableObjectNamespace<KinuDevbox>;
     CodexEgress: DurableObjectNamespace<CodexEgress>;
     /** One guided self-deployment per run (docs/SELF-DEPLOY.md § The Cloudflare door). */
     DeployRunDO: DurableObjectNamespace<DeployRunDO>;

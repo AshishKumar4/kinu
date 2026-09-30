@@ -201,11 +201,11 @@ adapters over it.
 
 | Package | What it holds | On its own |
 |---|---|---|
-| `devbox/` | Container lifecycle, activity leases, supervised processes, ports, and snapshot-chain storage with the block layer | Yes, as a standalone SDK over `@cloudflare/sandbox`. It depends on no other package here |
+| `devbox/` | Container lifecycle, activity leases, supervised processes, ports, and snapshot-chain storage with the block layer | Yes, as a standalone SDK over the platform's `ctx.container` and `@cloudflare/sandbox` 1.0. It depends on no other package here |
 | `agent-utils/` | MemoryStore and CraftStore over FTS5, shared VFS types, path addressing | Yes, as small libraries |
 | `compaction/` | The default context transformer: the better-compact ladder and its codec | Yes |
 | `agent-core/` | The vendored agent-core runtime that slates run on, digest-pinned to its upstream | Private |
-| `cf-backend/` | Cloudflare Workers: the workspace Durable Object and its logical actors, KinuSandbox, UserDO, the React UI | This is the deployment |
+| `cf-backend/` | Cloudflare Workers: the workspace Durable Object and its logical actors, KinuDevbox, UserDO, the React UI | This is the deployment |
 | `cli/` | The `kinu` commands | Yes, this is the CLI |
 | `cli-backend/` | Local runtime over `bun:sqlite`, subprocess sandbox, child-process branches | Behind the CLI |
 | `pc-agent/` | The device agent that lends your machine to a workspace | Yes |

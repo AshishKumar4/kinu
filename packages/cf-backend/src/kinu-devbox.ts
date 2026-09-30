@@ -38,7 +38,7 @@ type SandboxRootClient = Pick<
   "acceptSandboxLifecycleFailure" | "sandboxInUse" | "sandboxStopped" | "sandboxRestore"
 >;
 
-export class KinuSandbox extends Devbox<Env> {
+export class KinuDevbox extends Devbox<Env> {
   readonly #nativeExports: KinuState['exports'];
   constructor(ctx: KinuState, env: Env) {
     super(ctx, env);
@@ -57,7 +57,7 @@ export class KinuSandbox extends Devbox<Env> {
     return bucket === undefined ? undefined : { binding: 'BACKUP_BUCKET', bucket };
   }
 
-  protected override get namespaceBinding(): string { return 'Sandbox'; }
+  protected override get namespaceBinding(): string { return 'KinuDevbox'; }
 
   protected override get previewName(): string {
     const workspaceName = this.ctx.storage.kv.get<string>(WORKSPACE_NAME_KEY);

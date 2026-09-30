@@ -1,4 +1,4 @@
-// Native platform boundary. Real rc Files/S3Mounts clients execute against the shim model.
+// Native platform boundary. Real Files/S3Mount clients execute against the shim model.
 import { NativeShim } from './native-shim';
 import { processResult } from './native-process';
 import { Devbox } from '../../src/devbox';
@@ -50,6 +50,8 @@ export function gate(): Gate {
     release: () => { held.resolve(); },
   };
 }
+
+export const HARNESS_IMAGE = 'registry.cloudflare.com/test/kinu-devbox@sha256:0000';
 
 /** The process manager's scripts, named by their `$0` (`src/processes.ts`). */
 const PROCESS_SCRIPTS = new Set(['devbox-process', 'devbox-unlaunch', 'devbox-status', 'devbox-kill']);
@@ -392,6 +394,8 @@ export class FakeSandbox {
   bootId: string | undefined;
   containerStarts = 0;
   readonly startWaitOptions: unknown[] = [];
+  /** Each platform start's options (D50). */
+  readonly startOptions: (ContainerStartupOptions | undefined)[] = [];
   readonly files = new Map<string, string>();
   /** Files whose bytes are not UTF-8 text, which `files` cannot hold; the SDK's file reads serve them as bytes. */
   readonly binaryFiles = new Map<string, Uint8Array>();
@@ -1162,8 +1166,12 @@ export class FakeSandbox {
 
     return {
       get running() { return running(); },
-      get images() { return {}; },
+      get images() { return { devbox: HARNESS_IMAGE }; },
       start: options => {
+        this.startOptions.push(options);
+
+        // As the platform does without an image.
+        if (options?.image === '') throw new TypeError('ctx.container.start(): image must not be empty');
         this.#ended = Promise.withResolvers<void>();
         this.#opening = Promise.allSettled([this.start(options)]);
       },

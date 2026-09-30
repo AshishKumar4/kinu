@@ -2643,7 +2643,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** A sandbox that died mid-restore sends no settle. */
   private recheckSandboxRestore(): void {
-    const namespace = this.env.Sandbox;
+    const namespace = this.env.KinuDevbox;
 
     if (namespace === undefined) return;
 
@@ -4274,8 +4274,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ).revokeAll();
     }
 
-    if (this.env.Sandbox) {
-      const sb = this.env.Sandbox.getByName(sandboxIdForWorkspace(this.name));
+    if (this.env.KinuDevbox) {
+      const sb = this.env.KinuDevbox.getByName(sandboxIdForWorkspace(this.name));
 
       // Before destroy(): the container object owns its /workspace snapshot, and
       // once its storage is gone nothing knows which R2 objects were its.

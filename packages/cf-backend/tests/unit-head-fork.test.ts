@@ -8,7 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { CRAFT_NEUTRAL_PRIOR, agentHome, agentTmpRoot, headAgentName, parseActorKey, type AgentRuntime } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { unreachableObjects } from "./helpers/bindings";
-import type { KinuSandbox } from "../src/kinu-sandbox";
+import type { KinuDevbox } from "../src/kinu-devbox";
 import type { RecordedUserPlaneCalls } from './helpers/actor-harness';
 import type { KinuEgressParams } from '../src/egress/outbound';
 import type { CFRuntime } from '../src/runtime';
@@ -48,7 +48,7 @@ const sandboxFor = (id: string) => {
     };
 };
 
-const sandboxes = Object.assign(unreachableObjects<KinuSandbox>("Sandbox"), { getByName: sandboxFor });
+const sandboxes = Object.assign(unreachableObjects<KinuDevbox>("KinuDevbox"), { getByName: sandboxFor });
 
 // Must follow the sandbox double: both helpers' module graphs reach the sandbox SDK.
 const { hostedExplorationHarness, orchestratorHarness } = await import("./helpers/actor-harness");
@@ -63,7 +63,7 @@ function isCFRuntime(runtime: AgentRuntime): runtime is CFRuntime {
 /** The workspace has a container, so the head's runtime registers a sandbox executor over it. */
 async function hostedHead(files: Record<string, string> = {}, id = 'head-1', userPlane?: RecordedUserPlaneCalls) {
   const workspace = orchestratorHarness(userPlane, { container: true });
-  workspace.agent.harnessDeclareEnv({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY, Sandbox: sandboxes });
+  workspace.agent.harnessDeclareEnv({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY, KinuDevbox: sandboxes });
 
   for (const [path, content] of Object.entries(files)) {
     await workspace.agent.writeWorkspaceFile({ kind: 'file', path, data: new TextEncoder().encode(content) });

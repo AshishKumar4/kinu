@@ -1,9 +1,9 @@
 {
-  "date": "2026-09-29",
-  "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:649439b506fef5e66b0b9b67d69e9bb9c1b034b37470a9f1ab81ac5fac4093ac",
-  "digest": "sha256:649439b506fef5e66b0b9b67d69e9bb9c1b034b37470a9f1ab81ac5fac4093ac",
-  "sandboxVersion": "1.0.0-rc.1",
-  "sandbox": "docker.io/cloudflare/sandbox@sha256:28d138a6a1c84c1d48953f630e840775ab2b803070ded7a1f977ff50721f45b7",
+  "date": "2026-09-30",
+  "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:5db34cc1d2de799253ddb98644e6697183fd9bcb9600ab4b2dbfd367cf311814",
+  "digest": "sha256:5db34cc1d2de799253ddb98644e6697183fd9bcb9600ab4b2dbfd367cf311814",
+  "sandboxVersion": "1.0.0",
+  "sandbox": "docker.io/cloudflare/sandbox@sha256:5bc187515bad0d9d486a4f1476f7d8ad39fe97c57965f044e4b0a0dcc93eac06",
   "rust": "docker.io/library/rust@sha256:4fec02de605563c297c78a31064c8335bc004fa2b0bf406b1b99441da64e2d2d",
   "squashfuse": {
     "url": "https://github.com/vasi/squashfuse/releases/download/0.1.103/squashfuse-0.1.103.tar.gz",
@@ -13,12 +13,12 @@
   "binaries": {
     "devbox-block-lower": "ad76e1563916b158ba9f43a73bb784937fdb669893c84bac6bd86ffe79e41b9c",
     "devbox-squashfuse": "2c9f758b480621826d0d40d832512998b74c672fb5e7daaa6205d1e0b030df18",
-    "sandbox-shim": "b7ead47cafbb84a56e7619faa680e6523fa5d410abefd8f46582f7ff64dfd569",
+    "sandbox-shim": "a2973893e48d9b80c4ea9d763affdb5ea0135c94ed467716c8e3a57add032d97",
     "sync.js": "3ee07a6f5a21b7cdbe8fc926eec408b08bfd55648e0abe5fbe25f3716c21d741"
   },
   "files": {
     "Cargo.toml": "e1a269141da13953785f1fbaa6a18edb10cf644fdc9a710858ac02f31e426f83",
-    "Dockerfile": "e7eec954515a364f31d788897addf67d7cc376a2606a47db89dfe414a84283f3",
+    "Dockerfile": "bab6548a89b58c2e953637d01a8cf4b2557e685d40441b85609ef852a03752de",
     "Cargo.lock": "42b0f84a3a09ad9cca1e51c35fb750d6fff123ce5c27f99996ced24c98d22109",
     "src/index.rs": "c4f632c9f0cfcbc54d84194814bdf1d5cfcba5fa170f2599c06e2f02f349c130",
     "src/main.rs": "e0a36a9ea41001530591292e13d679f5e28467f104300d348f9a48dbef880da7",

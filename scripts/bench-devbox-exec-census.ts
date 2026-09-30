@@ -111,7 +111,7 @@ async function run(): Promise<void> {
   const worker = option('worker') ?? 'kinu';
   const to = option('until') === undefined ? Date.now() : Date.parse(option('until') ?? '');
   const window = { from: to - durationMs(option('since') ?? '6h'), to };
-  const app = option('app') ?? `${worker}-kinusandbox`;
+  const app = option('app') ?? `${worker}-kinudevbox`;
 
   const execs = await events(token, window, [
     { key: '$metadata.service', operation: 'eq', value: worker, type: 'string' },

@@ -80,8 +80,8 @@ export interface SandboxHandle {
 }
 
 const NOT_CONFIGURED =
-  'Sandbox executor not configured. Add the @cloudflare/sandbox binding ' +
-  'and Container to wrangler.jsonc (see docs/EXECUTION-LAYER-SPEC.md).';
+  'Sandbox executor not configured. Add the KinuDevbox binding ' +
+  'and its container to wrangler.jsonc (see docs/EXECUTION-LAYER-SPEC.md).';
 
 const PREVIEWS_NOT_CONFIGURED =
   'Sandbox previews are off: PREVIEW_HOST_SUFFIX is unset, so there is no zone to mint preview ' +

@@ -236,12 +236,12 @@ export function chainStoreRoot(boxPrefix: string): string {
   return `${boxPrefix}/backups`;
 }
 
-/** The host S3Mounts gives a route: `routeHost` in @cloudflare/sandbox 1.0.0-rc.1 (index.mjs:1502). */
+/** The host S3Mount gives a route: `routeHost` in @cloudflare/sandbox 1.0.0 (index.mjs:1520). */
 export function storeRouteHost(routeId: string): string {
   return `s3-${routeId}.sandbox.internal`;
 }
 
-/** The route the container's publisher PUTs through; S3Mounts names its own routes at random. */
+/** The route the container's publisher PUTs through; S3Mount names its own routes at random. */
 export const STORE_PUBLISH_ROUTE = 'devbox-publish';
 
 /** The store gateway roots each route at this box's prefix, so the URL names the key under it (D46). */

@@ -214,7 +214,6 @@ async function main(): Promise<number> {
     lane.stop = deployed.stop;
     lane.live = deployed.fixture;
     lane.workerVersion = deployed.workerVersion;
-    lane.rollouts = deployed.rollouts;
     result = await measure(deployed.fixture, lane.box, option('samples', 10), option('large-mb', 64));
   } catch (cause) {
     failure = describeThrown({ cause });
