@@ -32,6 +32,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- The built-Worker heap probe loads the deployment's asset directory through Miniflare's native asset binding, so hired agents load the same isolate bundle that ships.
 - CLI distribution tests generate their own release signing key in a throwaway home. CI needs no deployment key.
 - Swarm heads, nodes and steer branches now run their model loops in the same isolated agent facets as hired and background agents. Their turn state stays in each facet's database; tools, search state and the file plane stay in the workspace. Retired task histories remain available to export until their parent is deleted.
 - Workerd product probes share the production Worker's entrypoint exports, so eval and scaffold programs can reach `CodemodeLauncher` rather than leaving background turns hung.
