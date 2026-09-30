@@ -6,16 +6,23 @@ import { SidebarRail } from "./SidebarRail";
 import { FeedbackButton } from "./FeedbackButton";
 import { KinuLogo } from "./ui/KinuLogo";
 import { WorkspaceRosterProvider } from "@/hooks/use-workspace-roster";
+import { AgentsNavProvider, useAgentsNav } from "@/hooks/use-agents-nav";
 import { AppBackground } from "./AppBackground";
 
 /** The root isolates its stacking so the negative-z canvas paints above its ground and under in-flow children. */
 
 export default function Layout() {
+  return <AgentsNavProvider><Shell /></AgentsNavProvider>;
+}
+
+function Shell() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
+  const { entries } = useAgentsNav();
 
   useEffect(() => { setDrawerOpen(false); }, [location]);
+  useEffect(() => { if (entries > 0 && !window.matchMedia("(min-width: 768px)").matches) setDrawerOpen(true); }, [entries]);
 
   return (
     <WorkspaceRosterProvider>
@@ -51,7 +58,7 @@ export default function Layout() {
       {drawerOpen && (
         <div className="fixed inset-0 z-50 animate-fade-in md:hidden">
           <div className="p-scrim absolute inset-0" onClick={() => setDrawerOpen(false)} aria-hidden="true" />
-          <aside className="absolute inset-y-0 left-0 w-72 max-w-[85vw] p-sidebar border-r p-border p-shadow-overlay">
+          <aside data-drawer className="absolute inset-y-0 left-0 w-72 max-w-[85vw] p-sidebar border-r p-border p-shadow-overlay">
             <Sidebar />
           </aside>
         </div>

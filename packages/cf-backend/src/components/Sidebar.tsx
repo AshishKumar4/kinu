@@ -18,6 +18,7 @@ import { isPlaceholderWorkspaceTitle, shortAge, workspaceDisplayTitle } from "@k
 import { Modal } from "./ui/Modal";
 import * as v from "valibot";
 import { renderCauseChain, renderThrownChain } from "@kinu.run/core/obs";
+import { SidebarAgents } from "./SidebarAgents";
 import { navActive, navRowCls, PRIMARY_NAV } from "./nav";
 import { composing } from "@/components/ui/form";
 
@@ -213,8 +214,9 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
 
   const activeAgents = agentId ? activity[agentId]?.agents : undefined;
 
+
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="group/side flex h-full min-h-0 flex-col">
       <div className="flex items-center justify-between gap-2.5 pl-5 pr-3 pt-[18px] pb-2">
         <Link to="/" className="flex items-center" aria-label="Kinu home">
           <KinuLogo />
@@ -250,7 +252,8 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
       <nav aria-label="Primary" className="px-2 pt-1 space-y-1">
         {PRIMARY_NAV.map((item) => <PrimaryNavRow key={item.to} {...item} />)}
       </nav>
-      <div className="flex-1 overflow-y-auto pt-2 pb-3">
+      <SidebarAgents workspace={agentId} />
+      <div className="flex-1 overflow-y-auto pt-2 pb-3 group-has-[[data-sidebar-agents]]/side:hidden">
         <div className="px-5 pb-2 pt-4 p-eyebrow">
           Workspaces{workspaceTotal > workspaces.length ? ` · ${workspaces.length}/${workspaceTotal}` : ""}
         </div>
