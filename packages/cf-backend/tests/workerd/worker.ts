@@ -28,8 +28,10 @@ export { ComplexityProbeDO } from './complexity/complexity-probe';
 
 export { SlateProcessProbeDO, SlateChainProbe } from './slate-process-probe';
 
-// Exported exactly as `src/server.ts` does, for the `exports` loopback under our compatibility date.
+// Runner clients import these DO types: a server star export would pull production Env into their compiler.
 export { CodemodeEgress } from '../../src/codemode-egress';
+
+export { CodemodeLauncher } from '../../src/codemode-sandbox';
 
 // Readiness refusal as data: it cannot ride an error class over RPC.
 export { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
@@ -528,3 +530,5 @@ export class CacheWarmProbeDO extends DurableObject<Cloudflare.Env> {
     };
   }
 }
+
+

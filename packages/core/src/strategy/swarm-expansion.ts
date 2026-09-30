@@ -502,7 +502,7 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
     mode,
     settle: resolved.settle,
     // A live model cannot cross an isolate boundary; the spec lands on `HeadInput.model`.
-    modelSpec: routed?.spec,
+    modelSpec: routed?.spec ?? nodeDeps.modelSpec,
     // *Build-time exclusion*: depth gates the build; the budget stays a runtime refusal
         // inside the arbiter.
     arbitrate: isTreeAdvance(resolved.config.advance.kind) && atDepth + 1 <= maxDepth

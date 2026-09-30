@@ -164,6 +164,14 @@ export const COMPACT_NEEDS_IDLE = 'Stop the turn that is running before you comp
 
 /** An actor's mutable execution state, apart from its host, which keeps admission, queueing and settlement and
  *  may share immutable catalogs, never this context, orchestrator or abort. */
+function deliveryFailed(turnId: string): (failure: KinuError) => Effect.Effect<boolean> {
+  return (failure) => Effect.sync(() => {
+    diagnostics.failure('advisor.delivery_failed', failure, { turnId });
+
+    return false;
+  });
+}
+
 export class ActorSession {
   readonly actorId: string;
   readonly runtime: AgentRuntime;
@@ -305,9 +313,10 @@ export class ActorSession {
   /**
    * Every advisor answer this actor holds, judged once and said at most once; per-turn feedback never changes the
    * learning window. A note to be said is handed to the conversation and not awaited: the turn it opens runs as long
-   * as it runs, and the answer is forgotten only once it is said. False while any answer is still held.
+   * as it runs, and the answer is forgotten only once it is said. False while any answer is still held. `deliver`
+   * says it where the actor's notes live, true once said: an agent in its own isolate says it there.
    */
-  async deliverAdvisorAnswers(): Promise<boolean> {
+  async deliverAdvisorAnswers(deliver?: (helper: AnsweredEvolutionHelper, turnId: string) => Promise<boolean>): Promise<boolean> {
     const port = this.options.advisorPort?.() ?? null;
 
     if (port === null) return true;
@@ -316,7 +325,15 @@ export class ActorSession {
     for (const helper of port.answered()) {
       const turnId = advisedTurnOf(helper.lane);
 
-      if (turnId !== null && !await this.deliverAdvisorAnswer(port, helper, turnId)) settled = false;
+      if (turnId === null) continue;
+
+      if (deliver === undefined) {
+        if (!await this.deliverAdvisorAnswer(port, helper, turnId)) settled = false;
+      } else if (await deliver(helper, turnId)) {
+        port.forget(helper.name);
+      } else {
+        settled = false;
+      }
     }
 
     return settled;
@@ -339,11 +356,7 @@ export class ActorSession {
         .finally(() => { this.delivering.delete(helper.name); }));
 
       return false;
-    }).pipe(Effect.catch((failure) => Effect.sync(() => {
-      diagnostics.failure('advisor.delivery_failed', failure, { turnId });
-
-      return false;
-    }))));
+    }).pipe(Effect.catch(deliveryFailed(turnId))));
   }
 
   /** The note judged for the turn, recorded by its first judgement; a pass after a cut delivery reads it back. */
@@ -366,6 +379,17 @@ export class ActorSession {
 
   /** Settles once the note is said and its answer forgotten, or failed and kept for the next pass. */
   handOffAdvice(port: TemporaryAgentPort, name: string, note: AdvisorNote, turnId: string): Promise<void> {
+    return this.sayAdvice(note, turnId).then((said) => { if (said) port.forget(name); });
+  }
+
+  /** The answer judged and, if it speaks, said here; true once nothing of it is owed. */
+  async sayAdvisorAnswer(helper: AnsweredEvolutionHelper, turnId: string): Promise<boolean> {
+    const judged = helper.status === 'completed' ? this.judgedAdvice(helper.answer, turnId) : null;
+
+    return judged === null || !judged.spoken || await this.sayAdvice(judged.note, turnId);
+  }
+
+  sayAdvice(note: AdvisorNote, turnId: string): Promise<boolean> {
     return settle(attempt({ doing: `saying the advisor's note on turn ${turnId}`, otherwise: 'unavailable' }, async () => {
       const sent = await sayAdvisorNote(note, {
         turnId,
@@ -374,8 +398,8 @@ export class ActorSession {
       });
 
       // A signal the host could not take stays owed for the next pass.
-      if (sent === 'queued' || sent === 'mid-turn') port.forget(name);
-    }).pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('advisor.delivery_failed', failure, { turnId }); }))));
+      return sent === 'queued' || sent === 'mid-turn';
+    }).pipe(Effect.catch(deliveryFailed(turnId))));
   }
 
   private async advisorGuidance(snapshot: AdvisorRecoverySnapshot): Promise<string> {

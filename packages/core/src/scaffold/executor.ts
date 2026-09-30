@@ -470,7 +470,7 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
   const wrapperCode = buildScaffoldWrapperCode(code, task);
 
   const exec: Executor = rt.executor;
-  const providers = assembleProviders(rt, hostProvider, opts, mode);
+  const providers = [hostProvider, ...scaffoldProviders(rt, opts, mode)];
 
   for (const provider of providers) {
     for (const [name, invoke] of Object.entries(provider.fns)) provider.fns[name] = bindTaskPlan(invoke);
@@ -546,15 +546,12 @@ return __result;
 `;
 }
 
-function assembleProviders(
+export function scaffoldProviders(
   rt: AgentRuntime,
-  hostProvider: { name: string; fns: SandboxFunctions; types?: string },
   control: ScaffoldRunControl,
   mode: WorkMode,
 ): Array<{ name: string; fns: SandboxFunctions; types?: string }> {
-  const out: Array<{ name: string; fns: SandboxFunctions; types?: string }> = [
-    hostProvider,
-  ];
+  const out: Array<{ name: string; fns: SandboxFunctions; types?: string }> = [];
 
   const routerProviders = rt.executionRouter?.getProviders() ?? [];
 

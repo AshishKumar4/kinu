@@ -2,7 +2,11 @@ export { initFiberTable, tableExists } from './identity/schema';
 
 export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult, type SubordinateChild } from './subordinates/inspection';
 
-export { inspectDescendant, inspectSubordinateStorage, type SubordinateInspectionAuthority, type SubordinateInspectionAccess } from './subordinates/inspection-path';
+export { AgentOpenTurns, type AgentOpenTurn } from './subordinates/open-turns';
+
+export { runEventSinks } from './orchestrator/run-event-sinks';
+
+export { inspectDescendant, inspectSubordinateStorage, type AgentOwnInspection, type SubordinateInspectionAuthority, type SubordinateInspectionAccess } from './subordinates/inspection-path';
 
 // Backend-neutral terminal-turn state machine: the DO and the CLI supply only effect bodies and a wake.
 export {
@@ -110,9 +114,9 @@ export {
 // Workspace archive: one backup format for both backends.
 export {
   WORKSPACE_ARCHIVE_EXTENSION,
-  archiveSqlFromDatabase, readWorkspaceArchivePage, restoreWorkspaceArchive, writeWorkspaceArchive,
+  archiveSqlFromDatabase, readAgentArchivePage, readWorkspaceArchivePage, type ArchiveAgentSource, restoreWorkspaceArchive, writeWorkspaceArchive,
   ArchiveCursorSchema,
-  type ArchiveCursor, type ArchiveSqlCursor, type ArchiveFilesCursor,
+  type ArchiveCursor, type ArchiveSqlCursor, type ArchiveAgentsCursor, type ArchiveFilesCursor, type ArchiveAgentPage,
   type ArchiveExportOptions, type ArchivePage,
   type ArchiveFileEntry, type ArchiveFileSource, type ArchiveFileTarget,
   type ArchiveRestoreOptions, type ArchiveRestoreResult,
@@ -570,6 +574,8 @@ export { inheritedAsModelMessage } from './heads/head-inference';
 
 export { initWorkspaceActorTable, WorkspaceActorDirectory, subordinateDescendants, isSubordinateOrigin, whenActorTakesInput, type ActorOrigin, type ActorProfile, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
 
+export type { AnsweredEvolutionHelper } from './identity/evolution-helpers';
+
 export {
   openLocalRootActor, localActorDirectory, adoptLocalActorHandle, bindLocalActorReference, registerLocalActor, openLocalActor, registerLocalNode, bindLocalActor, requireLocalActorWorkspace, retireLocalActor, cancelLocalCreation, recoverLocalActorRetirements, type LocalActorBinding, type LocalActorConfig,
 } from './state/local-actors';
@@ -717,6 +723,8 @@ export {
 } from './tools/tool-call-summary';
 
 export { ToolOutcomeSchema, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, type ToolOutcome } from './tools/outcome';
+
+export type { BindingFailure } from './types/tool-outcome';
 
 export { repairToolCall } from './tools/repair-tool-call';
 
@@ -960,7 +968,7 @@ export {
 
 // Shadow-mode rollout
 export {
-  runScaffold,
+  runScaffold, scaffoldProviders,
   scaffoldEventText,
   type ScaffoldRunOptions,
   type ScaffoldRunResult, type ScaffoldRunReport, type ScaffoldJsonEvent, scaffoldRunReport,
@@ -1089,7 +1097,7 @@ export {
 
 export { explainNativeToolReferenceError } from './tools/sandbox-errors';
 
-export { currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, requireBuild, requireWorkModePermission, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
+export { currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, hasPlanPermission, requireBuild, requireWorkModePermission, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
 
 // Client-safe only: the Nimbus workspace host is exported from
 // `@kinu.run/core/workspace` so a browser bundle cannot pull in the server runtime.

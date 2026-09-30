@@ -31,7 +31,8 @@ export interface DrainAssignmentsOptions {
   readonly budget: number;
   /** How long a bound-but-unfinished delivery waits before it counts as stale. */
   readonly staleMs: number;
-  /** Run one assignment as one turn. Resolving means the turn happened. */
+  /** Run or hand off one assignment; it completes the row (`log.markTurnCompleted(task.turnId)`) once the turn
+   *  has happened, so a lease still held at a reset re-pends. */
   run(task: AdmittedAssignment): Promise<void>;
   /** Called per failed run, at failure time, with the thrown value. */
   onFailure(thrown: { readonly cause: unknown }): void;
@@ -73,7 +74,6 @@ export async function drainAssignments(
         inheritedContext: event.payload.inherited_context,
         messageId: event.payload.message_id,
       });
-      log.markTurnCompleted(turnId);
     } catch (cause) {
       opts.onFailure({ cause });
     }

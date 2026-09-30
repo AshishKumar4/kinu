@@ -36,6 +36,7 @@ import type { ActorTurnClaim, ClaimOutcome } from '../orchestrator/actor-claims'
 import type { ActorExecutionResult, ActorSession, ActorTurnLease } from '../orchestrator/actor-session';
 import type { MessageReference, MessagePartReference } from '../session/messages';
 import { snapshotCompletedTurn } from '../orchestrator/turn-lifecycle';
+import type { CompletedTurn } from '../evolution/types';
 
 /** A head's mutable findings; the backend's tools mutate the same instance runHeadInference reads. */
 export class HeadCapture {
@@ -394,6 +395,7 @@ export interface HeadInferenceDeps {
   /** This actor's live per-step block; required so a backend states when a head renders nothing live. */
   dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
   model: LanguageModel;
+  modelSpec?: string;
   /** Accumulator tools plus the backend's scratch tools; the caller controls the surface. */
   tools: ToolSet;
   /** The prompt must name the same file plane the tools reach. */
@@ -429,6 +431,8 @@ export interface HeadInferenceDeps {
   /** The next turn's messages, or `null` to end the run; absent is one turn (every head). A node's turn may end
    *  with detached work running; only `null` makes the run terminal. */
   resume?: () => Promise<readonly ModelMessage[] | null>;
+  /** Hires a completed turn's advisor where the roster lives. Absent: this actor's own session hires it. */
+  advise?: (turn: CompletedTurn, reachable: readonly string[], mode: WorkMode) => Promise<void>;
 }
 
 /** Duck-typed structurally so it survives an SDK spec bump. */
@@ -483,12 +487,14 @@ interface CompletedTurnReview {
 
 /** Hires the turn's advisor and returns: its note reaches this actor when it answers, after this turn. */
 async function adviseCompletedTurn({ session, input, deps, lease, outcome }: CompletedTurnReview): Promise<void> {
-  if (!session.orchestrator.improvementLanesOpen('completed', input.mode)) return;
-
   const turn = snapshotCompletedTurn(session.orchestrator.acc, {
     userMessage: input.task, assistantResponse: outcome.text,
     turnId: `${deps.runId}:${lease.turnId}`, sessionId: input.id, origin: 'programmatic',
   });
+
+  if (deps.advise !== undefined) return await deps.advise(turn, Object.keys(deps.tools), input.mode);
+
+  if (!session.orchestrator.improvementLanesOpen('completed', input.mode)) return;
 
   await session.hireAdvisor(session.advisorSnapshot(turn, Object.keys(deps.tools)));
 }

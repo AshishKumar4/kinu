@@ -85,3 +85,8 @@ export function hireModelsBaseUrl(workspace: string): string {
 export function hireControlUrl(workspace: string, op: string): string {
   return `http://hire-control.invalid/hire/${encodeURIComponent(workspace)}/${op}`;
 }
+
+export interface ArchiveSections {
+  readonly listed: readonly string[];
+  readonly sections: Readonly<Record<string, number>>;
+}

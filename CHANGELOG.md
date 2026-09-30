@@ -22,6 +22,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **A hired agent keeps typed tool refusals across its isolate boundary.** Reaching the delegation depth cap now gives the helper the same structured refusal as a local turn, so it can answer and relay that answer back to the root instead of losing it to an untyped RPC exception.
 - **Fork counts include unloaded chat history.** The fork dialog counts through a loaded message's stored position, so gaps between pages no longer make a fork promise fewer messages than it copies. Reaching the first page does not imply every page is loaded.
 - **A failed chat history page offers Retry where it failed.** Gaps between loaded pages now show their failure beside the missing history, including in agent chats. Scrolling leaves the failed read paused until Retry requests that same page.
 - **A redirect stays with its own turn when chat history has gaps.** Loading an old page and a recent page no longer places a mid-turn redirect inside an unrelated reply. The redirect stays at the edge of the old page until its reply loads.
@@ -31,6 +32,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- Swarm heads, nodes and steer branches now run their model loops in the same isolated agent facets as hired and background agents. Their turn state stays in each facet's database; tools, search state and the file plane stay in the workspace. Retired task histories remain available to export until their parent is deleted.
+- Workerd product probes share the production Worker's entrypoint exports, so eval and scaffold programs can reach `CodemodeLauncher` rather than leaving background turns hung.
 - Mark reviewed succeeds once its snapshot is created. Failed removal of older snapshots is logged as `workspace.review_cleanup_failed` and returned in `cleanupFailures`; the next review retries every unreferenced snapshot. A snapshot-creation failure leaves the previous diff and Undo intact.
 - Filesystem failures use Nimbus's POSIX error class throughout Kinu's file planes and shell. Native filesystem and parent-RPC errors are converted at their boundaries; refusal categories stay unchanged. Presented messages keep Node's syscall/path punctuation.
 - **A turn reuses the conversation it opened.** Turn preparation and program admission share the materialized history instead of reading it again. Request boundaries still check for landed steers, context edits and recovered output. On 2026-09-28, the workerd long-turn probe ran 510 SQL statements instead of 534, with 286 rows written in both runs; the unchanged conversation-parity fixture passed.

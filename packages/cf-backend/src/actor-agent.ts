@@ -11,9 +11,9 @@ import {
 } from "agents";
 import {
   TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice,
-  actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle, readSessionTranscript,
+  actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
-  type RunEventInput, type SubordinateInspectionAuthority, type SessionTranscriptReader,
+  type RunEventInput, type SubordinateInspectionAuthority, type AgentOwnInspection,
   isSubordinateOrigin,
 } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
@@ -202,7 +202,7 @@ import {
   type TerminalTransition, type TerminalEffectFault, type TerminalEffectTable,
 } from "@kinu.run/core";
 import { createCodemodeToolFactory, type CodemodeFactory } from "./codemode-tool";
-import { codemodeEgress } from "./codemode-egress";
+import { codemodeLauncher, type ProgramLaunch } from "./codemode-sandbox";
 import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
@@ -895,6 +895,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
   protected stopSubtree(_actorId: string): void {}
 
+  protected async agentTurnSettled(_actor: ActorReference): Promise<void> {}
+
   protected temporaryAgentPort(reference: ActorReference = actorReferenceOf(this.actorHandle())): TemporaryAgentPort {
     return this.actorHost().temporary(reference, (bound) => {
       const seams = this.hostedSeams();
@@ -905,6 +907,7 @@ export abstract class ActorAgent extends Agent<Env> {
         roster, runtime: hostedSubordinateRuntime(seams, () => bound), now: () => Date.now(), createName: mintSubordinateName,
         afterTurn: (child, work) => {
           this.detachOwned(async () => {
+            await this.agentTurnSettled(child);
             await this.actorHost().run(child, () => Promise.resolve());
             await work();
           });
@@ -1859,7 +1862,7 @@ export abstract class ActorAgent extends Agent<Env> {
       broadcast: (message, exclude) => { this.broadcastToActor(null, message, exclude); },
       getConnection: (id) => this.getConnection(id),
       history: (limit) => this.chatTranscript.history(limit),
-      admitted: (id) => this.admittedSend(id),
+      admitted: async (id) => this.admittedSend(id),
       send: (input) => this.chatLoop.send({ text: input.text, files: input.files }, { id: input.id, mode: input.mode }),
       interrupt: () => {
         this.chatLoop.interrupt();
@@ -3168,6 +3171,12 @@ export abstract class ActorAgent extends Agent<Env> {
     return v.parse(JsonValueSchema, { text: answer.text, model: spec, tier: profile.tier.id, usage });
   }
 
+  protected codemodeLaunch(actor: string): (online: boolean) => ProgramLaunch {
+    const workspace = this.workspaceName();
+
+    return (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace, actor } : null });
+  }
+
   private async callSlateTool(input: {
     rt: HostedActor['runtime']; native: ToolSet; providers: CodemodeProvider[];
     reach: ToolSurfaceNarrowing; route: Extract<SlateBindingRoute, { kind: 'tool' }>; mode: WorkMode;
@@ -3176,7 +3185,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const executorNames = new Set(rt.executionRouter?.getProviders().map((provider) => provider.name) ?? []);
 
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress({ workspace: this.workspaceName(), actor: rt.actor.actorId }), rt,
+      launch: this.codemodeLaunch(rt.actor.actorId), rt,
       sql: rt.storage.sql, workspace: this.workspaceName(), webSearch: this.ownedModelServices.getWebSearchProvider(), reach,
       browserSessions: this.browserSessionsFor(rt.actor.actorId),
       extraProviders: () => providers.filter((provider) => !executorNames.has(provider.name) && provider.name !== 'web'),
@@ -3276,8 +3285,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (!this._codemodeFactories.has(key)) {
       this._codemodeFactories.set(key, createCodemodeToolFactory({
-        loader: this.env.LOADER,
-        egress: codemodeEgress({ workspace: this.workspaceName(), actor: this.rt.actor.actorId }),
+        launch: this.codemodeLaunch(this.rt.actor.actorId),
         rt: this.rt,
         browserSessions: this.browserSessionsFor(this.rt.actor.actorId),
         reach: narrowing,
@@ -3426,8 +3434,11 @@ export abstract class ActorAgent extends Agent<Env> {
       sql: this.boundSql, raw: this.ctx.storage.sql,
       actor: this.actorHandle(), directory: this.actorDirectoryStore(),
       transcriptFor: (actor) => this.transcriptFor(actor),
+      ownRows: (actor, own) => this.agentInspection(actor.actorId, own),
     }, request, authority);
   }
+
+  protected abstract agentInspection(actorId: string, request: AgentOwnInspection): Promise<SubordinateInspectionResult>;
 
   /**
    * One page of one chat: the caller's own by default, or the subordinate a pane names by actor id.
@@ -3438,14 +3449,13 @@ export abstract class ActorAgent extends Agent<Env> {
     // Strict: a dropped id cursor from an old client re-reads the newest page forever.
     const { actor, ...page } = v.parse(v.strictObject({ ...PositionPageRequestSchema.entries, actor: v.optional(v.string()) }), request);
 
-    return getChatHistoryPage(actor === undefined ? this.chatTranscript : this.subordinateChat(actor), page);
+    if (actor === undefined) return getChatHistoryPage(this.chatTranscript, page);
+    this.requireSubordinateChat(actor);
+
+    return await this.agentHistoryPage(actor, page);
   }
 
-  /**
-   * The chat behind a pane's actor id; the directory refuses ids it never issued or outside this actor's subordinates.
-   * A retired actor is unbound, so it reads via the presence-fenced handle with no file plane.
-   */
-  private subordinateChat(actorId: string): SessionTranscriptReader {
+  private requireSubordinateChat(actorId: string): void {
     const directory = this.actorDirectoryStore();
     const record = directory.retained(actorId);
 
@@ -3454,11 +3464,9 @@ export abstract class ActorAgent extends Agent<Env> {
     for (let step: typeof record | null = record; step?.actorId !== this.actorHandle().actorId; step = directory.retained(step.parentActorId ?? '')) {
       if (step === null || !isSubordinateOrigin(step.origin)) throw new KinuError('denied', 'The actor id does not name a chat this workspace hosts.');
     }
-
-    if (record.retiringAt === null && record.deletedAt === null) return this.transcriptFor(directory.open(actorId));
-
-    return readSessionTranscript(this.boundSql, actorReadHandle(this.boundSql, record), CHAT_SESSION_ID, null);
   }
+
+  protected abstract agentHistoryPage(actorId: string, page: PositionPageRequest): Promise<ChatHistoryPage>;
 
   /** Used to preselect a menu entry; the model list comes from /api/user/models (user-scoped). */
   @callable()

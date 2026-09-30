@@ -13,7 +13,8 @@ import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestra
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import type { ChatAnswers, SeedAnswer } from './store-reset-shapes';
 
-export { UserDO } from '../../src/user/user-do';
+export * from '../../src/server';
+
 
 /** `session_messages` as a 2026-09-21 build created it (5682c7907), before its envelope and sealed content columns. */
 const PRE_RESET_SESSION_MESSAGES = `CREATE TABLE IF NOT EXISTS session_messages (

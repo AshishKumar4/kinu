@@ -16,6 +16,7 @@ import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { ChatAnswers, SeedAnswer } from './store-reset-shapes';
 import type { AddressedAnswers } from './addressed-name-shapes';
+import type { OnePlaneObservation } from './agent-facet-shapes';
 import type { AttributedLine } from './attribution-shapes';
 import type {
   DeployFakeRefusal, DeployFakeServedBuild, DeployFakeStall, DeployFakeState, DeployFakeWeight,
@@ -27,6 +28,7 @@ import type { ComplexityProbeDO } from './complexity/complexity-probe';
 import type { EffectAtomicityProbeDO } from './effect-atomicity-probe';
 import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
+import type { CodemodeLauncher } from '../../src/codemode-sandbox';
 import type { DevboxNotReadyProbeDO } from './devbox-not-ready-probe';
 import type { SlateBinding } from '../../src/slates/bindings';
 import type {
@@ -143,6 +145,7 @@ interface HireProbeRpc extends Rpc.DurableObjectBranded {
   stopChild(workspace: string): Promise<void>;
   dismissChild(workspace: string): Promise<string>;
   observe(workspace: string): Promise<HireObservation>;
+  archiveSections(workspace: string): Promise<import('./hire-shapes').ArchiveSections>;
 }
 
 interface SlateProcessProbeRpc extends Rpc.DurableObjectBranded {
@@ -169,6 +172,11 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
   hashes(): Promise<Record<'ws-alpha' | 'ws-beta', string | null>>;
   reset(): Promise<{ ok: true; workspaces: number }>;
   freshProfile(): Promise<{ email: string; displayName: string | null; onboardedAt: number | null; workspaceCount: number } | null>;
+}
+
+interface AgentFacetProbeRpc extends Rpc.DurableObjectBranded {
+  onePlane(workspace: string, agent: string): Promise<OnePlaneObservation>;
+  swarmNode(workspace: string): Promise<ReadableStream<Uint8Array>>;
 }
 
 interface AddressedNameProbeRpc extends Rpc.DurableObjectBranded {
@@ -337,6 +345,7 @@ declare global {
       ACCOUNT_RESET_PROBE: DurableObjectNamespace<AccountResetProbeRpc>;
       STORE_RESET_PROBE: DurableObjectNamespace<StoreResetProbeRpc>;
       ADDRESSED_NAME_PROBE: DurableObjectNamespace<AddressedNameProbeRpc>;
+      AGENT_FACET_PROBE: DurableObjectNamespace<AgentFacetProbeRpc>;
       ATTRIBUTION_PROBE: DurableObjectNamespace<AttributionProbeRpc>;
       SEALED_ORCHESTRATOR: DurableObjectNamespace<SealedOrchestratorRpc>;
   // Readiness refusal must serialise over Workers RPC as data, not a thrown class name; not a sandbox stub.
@@ -357,6 +366,7 @@ declare global {
       mainModule: {
         SlateBinding: typeof SlateBinding;
         CodemodeEgress: typeof CodemodeEgress;
+        CodemodeLauncher: typeof CodemodeLauncher;
         SlateChainProbe: typeof SlateChainProbe;
         default: ExportedHandler<Cloudflare.Env>;
       };

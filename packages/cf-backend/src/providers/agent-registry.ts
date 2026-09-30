@@ -89,6 +89,10 @@ export function createUserDOAuthResolver(source: UserCredentialSource | null): A
   };
 }
 
+export function providerBindingsOf(env: ProviderEnv): ProviderEnv {
+  return { AI: env.AI, AI_GATEWAY_URL: env.AI_GATEWAY_URL, WORKERS_AI_VIA_BINDING: env.WORKERS_AI_VIA_BINDING };
+}
+
 export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProviderRegistry {
   const registry = createProviderRegistry();
 
