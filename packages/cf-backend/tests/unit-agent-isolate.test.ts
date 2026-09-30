@@ -222,3 +222,27 @@ test("a hired agent's working context is read and edited where its conversation 
 
   expect(gateway.runs.some((run) => openingOf(run).includes('Second task.') && JSON.stringify(requestOf(run).messages).includes('INJECTED-NOTE'))).toBe(true);
 });
+
+test("a child's client snapshot counts its own chat inputs and answers", async () => {
+  const gateway = stubAiBinding((run) => openingOf(run).includes('Counter task.') || toolOutputs(run) !== '[]'
+    ? chatCompletion(run, 'Done.')
+    : toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', lifetime: 'durable', mission: 'Counter task.' } }, 'call_counter'));
+
+  const workspace = gatewayWorkspace(gateway);
+
+  await catalogTurn(workspace.agent, 'Hire a counter.');
+  const child = workspace.db.query<{ actorId: string; name: string }, []>("SELECT actor_id AS actorId, name FROM workspace_actors WHERE origin = 'agent'").get();
+
+  if (child === null) throw new Error('the child was not registered');
+  const actorId = child.actorId;
+
+  await driveUntil(workspace, 'the child never completed its answer', () => agentSql(actorId)<{ n: number }>`
+    SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${actorId} AND type = 'run_end'`[0]?.n === 1);
+
+  expect((await workspace.agent.getActorSnapshot(child.name)).messageCount).toBe(2);
+  await wakeForDelegatedTask(workspace, actorId, 'Second task.');
+  await driveUntil(workspace, 'the child never completed its second answer', () => agentSql(actorId)<{ n: number }>`
+    SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${actorId} AND type = 'run_end'`[0]?.n === 2);
+
+  expect((await workspace.agent.getActorSnapshot(child.name)).messageCount).toBe(4);
+});

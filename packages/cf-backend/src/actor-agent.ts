@@ -2691,38 +2691,29 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.stores.config;
   }
 
-  /** Same shared swarm-deps factory the CLI wires; rebuilt with the toolset (getRawTools). */
-  private getAgentsToolDeps(workMode: WorkMode): AgentsToolDeps {
-    const actorDeps = this.actorToolDeps();
-    // Seat factory is asked per node: node deps are shallow-copied per child, so one shared actor
-    // would give a whole wave one claim ledger and loop pointer.
+  protected swarmDeps(rt: AgentsSwarmDeps['rt'], model: LanguageModel, originContext?: AgentsSwarmDeps['originContext'], compactShared?: AgentsSwarmDeps['compactShared']): AgentsSwarmDeps {
     const seams = this.hostedSeams();
 
-    // The one production construction site of `AgentsSwarmDeps` on this backend; the CLI's
-    // `buildAgentsSwarmDeps` is its twin.
-    const swarm: AgentsSwarmDeps = {
-      rt: this.rt,
-      model: this.getModel(),
+    return {
+      rt, model, originContext, compactShared,
       reportModelCall: (report) => { this.reportModelCall(report); },
       nodeCodemode: (actor) => nodeCodemodeTool(seams, actor),
       webSearch: seams.webSearch(),
-      originContext: () => this._turnOriginContext,
-      resolveModel: (spec: string) => this.ownedModelServices.resolveModel(spec),
-      // Resolved per node when the wave reaches it, not captured with the deps.
+      resolveModel: (spec) => this.ownedModelServices.resolveModel(spec),
       hostNode: (node) => hostNodeSeat(seams, node),
-      /**
-       * Reports the node's private home so its isolation disclosure is true (absent, nodes are told
-       * `shared-origin-plane`). The seat call is idempotent and keys the home on the actor's storage key.
-       */
       provisionNodeHome: () => async (node) => seams.nodeHome((await hostNodeSeat(seams, node)).actor),
       runtimeForNodeWorkspace: null,
       workers: this.liveWorkers,
-      // In-isolate nodes publish directly; hosted nodes publish over their own RPC and leave this unread.
       reportNodeDelta: () => (frame) => { this.publishHeadStreamFrame(frame); },
-      // Durable half of liveness, on the same listener `headJournal` announces through, so every
-      // writer of a search's journal announces to open surfaces.
       announceHeadActivity: () => (headId) => { this.announceHeadActivity(headId); },
-      compactShared: createSharedPrefixCompactor({
+    };
+  }
+
+  /** Same shared swarm-deps factory the CLI wires; rebuilt with the toolset (getRawTools). */
+  private getAgentsToolDeps(workMode: WorkMode): AgentsToolDeps {
+    const actorDeps = this.actorToolDeps();
+
+    const swarm = this.swarmDeps(this.rt, this.getModel(), () => this._turnOriginContext, createSharedPrefixCompactor({
         ports: {
           transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
           plans: this.compactionState.plans,
@@ -2735,8 +2726,7 @@ export abstract class ActorAgent extends Agent<Env> {
         }),
         // Explicitly the light preset, matching every other production compaction path.
         profile: COMPACTION_PRESETS.light,
-      }),
-    };
+      }));
 
     const deps: AgentsToolDeps = {
       mode: workMode,
