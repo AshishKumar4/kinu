@@ -71,6 +71,7 @@ function inertEngine(): AgentOrchestratorDeps['engine'] {
     recentAdvisorNotes: () => [],
     recordAdvisorNote: () => { throw new Error('This fixture runs no advisor'); },
     hasAdvisorNoteForTurn: () => false,
+    advisorNoteForTurn: () => null,
     sessionWindow: store,
     craftLedger: { names: () => [], observe: () => [] },
     reviewTurn: async () => {},

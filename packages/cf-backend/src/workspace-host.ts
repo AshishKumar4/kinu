@@ -17,7 +17,7 @@ import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
 import type { MountedVfs, ObjectNamespace } from '@kinu.run/core';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { ComposedFacetManager, HostedRuntime, HostedRuntimeOptions, HostedRuntimeTask, WorkerRecipe } from '@nimbus-sh/worker/workspace-host';
+import type { ComposedFacetManager, HostedRuntime, HostedRuntimeOptions, HostedRuntimeTask, HostedSession, HostedSessionScope, WorkerRecipe } from '@nimbus-sh/worker/workspace-host';
 import { clearPortCapability, readPortReservation, readPortReservationByOwner, releasePortReservation } from '@nimbus-sh/worker/port-capability';
 import type { DurableApps } from '@kinu.run/core/slates';
 import * as v from 'valibot';
@@ -120,6 +120,8 @@ export interface HostedWorkspace {
      *  sibling is never a Kinu workspace, so nothing here claims an owner or writes a transcript. The envelope
      *  is a hosted process's own data: Nimbus's dispatcher is the one place that refuses an op it does not serve. */
   supervisorOp(envelope: SupervisorOpEnvelope): Promise<SupervisorOpResult>;
+  /** The SDK session one agent's own isolate drives. */
+  session(scope: HostedSessionScope): Promise<HostedSession>;
   /** The slate host's spawn/kill path and the one registrar of a resident's port. */
   facetManager(): Promise<ComposedFacetManager>;
   ports(): Promise<PortRegistry>;
@@ -338,6 +340,7 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
   return {
     bundle,
     supervisorOp: async (envelope) => (await runtime()).supervisorOp(envelope),
+    session: async (scope) => (await runtime()).session(scope),
     box: (shellId) => workspaceBox({
       runtime, ports: portRegistry, ctx: deps.ctx, files, shellId, previewUrl: deps.previewUrl, previewGates,
       mountTable: (plane, cred) => bundle.mountTable(plane, cred),

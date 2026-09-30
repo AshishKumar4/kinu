@@ -15,7 +15,7 @@ import type { SwarmCarrySetting, SwarmSettle } from './swarm';
 import { admitsPublication, type PublicationState } from './objective';
 import { textPayload } from '../vfs/observe';
 import type { VFS } from '../types/primitives';
-import { isVfsError } from '../vfs/errno';
+import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { Effect } from 'effect';
 import { renderThrownChain, settle } from '../obs/index';
 

@@ -17,9 +17,10 @@ import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestra
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import type { AttributedLine } from './attribution-shapes';
 
-export { UserDO } from '../../src/user/user-do';
+export * from '../../src/server';
 
-export { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
+
+
 
 const PROBE_OWNER_ID = '0123456789abcdef0123456789abcdef';
 

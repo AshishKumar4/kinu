@@ -1011,6 +1011,7 @@ function ChatScene({
       case 'text':
         if (outcome.cleared) setMessages([]);
 
+
         if (outcome.workspaces) {
           openWorkspaces();
 
@@ -1344,10 +1345,12 @@ function ChatScene({
   }, [addMessage, dispatchInput, hintAlternateTakes, runInputEffects, sealSegment, sealThinking, setTurnPhase, stream]);
 
   const handleBroadcast = useCallback((event: Extract<AgentClientEvent, { type: 'broadcast' }>) => {
-    const measured = contextNumberOf(event.event);
-
-    if (measured !== null) {
+    if (event.event.type === 'context_fill') {
+      const measured = contextNumberOf(event.event);
       setLiveContext(measured);
+
+      // No true number: the recorded one is the cleared conversation's too.
+      if (measured === null) setStatus((current) => current === null ? current : { ...current, context: null });
 
       return;
     }

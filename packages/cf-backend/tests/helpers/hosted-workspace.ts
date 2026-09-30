@@ -1,4 +1,4 @@
-/** One `bun:sqlite` database, one production `ActorHost`, every actor acquired from it (open-38); `databasesOpened()` is the witness. */
+/** In-process host for scaffold selection; actor-harness exercises facet turns. */
 
 import { Database } from 'bun:sqlite';
 import {
@@ -6,7 +6,7 @@ import {
   initWorkspaceSchema, profileCatalogDigest, resolveTurnProfile,
   WorkspaceActorDirectory, actorReferenceOf,
   type ActorHost, type ActorReference, type AgentRuntime, type HostedActor, type LoopOrigin,
-  type ProfileAuthorityInputs, type SqlExec, type SqlExecutor,
+  type ProfileAuthorityInputs, type SqlExecutor,
 } from '@kinu.run/core';
 import { sqlOver } from '@kinu.run/test-utils';
 import { createAgentTracing, createRecordingTracer } from '@kinu.run/core/obs';
@@ -15,12 +15,7 @@ import { makeCtx, makeEnv } from './actor-harness';
 import { createWorkspaceActorHost, type WorkspaceHostSeams } from '../../src/actor-hosting';
 import { createHostedWorkspace } from '../../src/workspace-host';
 
-/** Every `Database` opened, in order; its length turns "one database" into a measurement. */
 const opened: Database[] = [];
-
-export function databasesOpened(): readonly Database[] {
-  return opened;
-}
 
 export function resetDatabases(): void {
   for (const db of opened) db.close();
@@ -31,13 +26,10 @@ export function resetDatabases(): void {
 export interface HostedWorkspaceFixture {
   readonly db: Database;
   readonly sql: SqlExecutor;
-  /** Positional executor for the archive reader, which composes its own statements. */
-  readonly exec: SqlExec;
   readonly host: ActorHost;
   readonly directory: WorkspaceActorDirectory;
   readonly main: ActorReference;
   hire(parent: ActorReference, name: string, origin: 'agent' | 'swarm', loop?: LoopOrigin): Promise<HostedActor>;
-  tables(): readonly string[];
 }
 
 /** Fixed authority inputs, so digest assertions never depend on a model choice. */
@@ -160,7 +152,7 @@ export async function hostedWorkspace(
   rootRuntime = (await host.acquire(main)).runtime;
 
   return {
-    db, sql, exec, host, directory, main,
+    db, sql, host, directory, main,
     hire: async (parent, name, origin, loop) => {
       const parentHandle = directory.open(parent.actorId);
 
@@ -173,8 +165,5 @@ export async function hostedWorkspace(
 
       return await host.acquire(actorReferenceOf(handle));
     },
-    tables: () => db.query<{ name: string }, []>(
-      `SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`,
-    ).all().map((row) => row.name),
   };
 }

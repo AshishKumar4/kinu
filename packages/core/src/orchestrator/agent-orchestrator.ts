@@ -62,6 +62,7 @@ export interface AgentOrchestratorDeps {
     | 'recentAdvisorNotes'
     | 'recordAdvisorNote'
     | 'hasAdvisorNoteForTurn'
+    | 'advisorNoteForTurn'
   >;
   eventLog: EventLog;
   sinks?: TurnSinks;

@@ -30,6 +30,14 @@ export interface SubordinateInspectionAccess {
   /** Membership authority: which actors exist, and whose children they are. */
   readonly directory: WorkspaceActorDirectory;
   readonly transcriptFor: (actor: ActorHandle) => SessionTranscriptReader;
+  /** Answers an agent's chat and run views from its own database; absent: every view reads `sql`. */
+  readonly ownRows?: (actor: ActorHandle, request: AgentOwnInspection) => Promise<SubordinateInspectionResult>;
+}
+
+export type AgentOwnInspection = Extract<SubordinateInspectionRequest, { readonly view: 'history' | 'runs' | 'events' }>;
+
+function ownView(request: SubordinateInspectionRequest): request is AgentOwnInspection {
+  return request.view === 'history' || request.view === 'runs' || request.view === 'events';
 }
 
 const OwnerRowSchema = v.object({ name: v.string(), owner_user_id: v.nullable(v.string()) });
@@ -52,6 +60,17 @@ export async function inspectSubordinateStorage(
   const identity = v.parse(OwnerRowSchema, rows[0]);
 
   if (identity.name !== authority.workspace || identity.owner_user_id !== authority.owner) return missing();
+
+  return inspectDescendant(access, input);
+}
+
+/** The walk from `access.actor` down `path`, then to the named actor if any; the caller has already authorized it. */
+export async function inspectDescendant(
+  access: SubordinateInspectionAccess,
+  request: SubordinateInspectionRequest,
+): Promise<SubordinateInspectionResult> {
+  const input = v.parse(SubordinateInspectionRequestSchema, request);
+  const missing = (): SubordinateInspectionResult => missingSubordinateHistory(input.path);
   let target = access.actor;
 
   for (const name of input.path) {
@@ -64,8 +83,14 @@ export async function inspectSubordinateStorage(
   if ('actor' in input && input.actor !== undefined) {
     const kept = retainedDescendant(access, target, input.actor);
 
-    return kept === null ? missing() : readSubordinateInspection({ sql: access.sql, raw: access.raw, actor: kept.actor, transcriptFor: () => kept.transcript }, input);
+    if (kept === null) return missing();
+
+    if (access.ownRows !== undefined && ownView(input)) return await access.ownRows(kept.actor, input);
+
+    return readSubordinateInspection({ sql: access.sql, raw: access.raw, actor: kept.actor, transcriptFor: () => kept.transcript }, input);
   }
+
+  if (access.ownRows !== undefined && ownView(input) && target.parentActorId !== null) return await access.ownRows(target, input);
 
   return readSubordinateInspection({ sql: access.sql, raw: access.raw, actor: target, transcriptFor: access.transcriptFor }, input);
 }

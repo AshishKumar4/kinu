@@ -12,10 +12,7 @@ import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestra
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import type { AddressedAnswers } from './addressed-name-shapes';
 
-export { UserDO } from '../../src/user/user-do';
-
-// Exported as `src/server.ts` does: the hosted runtime refuses a worker whose `ctx.exports` lacks it.
-export { SupervisorRPC } from '@nimbus-sh/worker/workspace-host';
+export * from '../../src/server';
 
 const PROBE_OWNER_ID = 'fedcba9876543210fedcba9876543210';
 

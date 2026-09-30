@@ -7,7 +7,7 @@
 
 import * as v from 'valibot';
 import {
-  CHILD_ANSWER, HIRE_CHILD_MODEL, HIRE_DURABLE_MODEL, HIRE_MISSION, HIRE_ROOT_MODEL, NEST_MISSION, NEST_RELAY, REPORT_MARK,
+  CHAIN_BOTTOM, CHILD_ANSWER, HIRE_CHILD_MODEL, HIRE_DURABLE_MODEL, HIRE_MISSION, HIRE_ROOT_MODEL, NEST_MISSION, NEST_RELAY, REPORT_MARK,
   type ChildScript,
 } from './hire-shapes';
 
@@ -20,25 +20,49 @@ export interface HireCall {
   readonly lastUser: string;
 }
 
-const log: HireCall[] = [];
+/**
+ * One workspace's script and gates. Keyed by the workspace its requests name (`hireModelsBaseUrl` in hire-shapes.ts), never shared:
+ * a late request from one test's workspace cannot open another test's gate (2026-09-29: the Dismiss case's re-driven
+ * root answered after the next case reset a shared fake and opened its `rootSaw`).
+ */
+interface HireRun {
+  readonly log: HireCall[];
+  /** Resolved when the root's turn opens on its hire's settling report; one waiter per arm. */
+  readonly rootSaw: PromiseWithResolvers<void>;
+  readonly childSpoke: PromiseWithResolvers<void>;
+  /** Resolved when the durable lane's `msg` call was authored. */
+  readonly durableMsgSent: PromiseWithResolvers<void>;
+  /** Resolved when the child's model has been asked for both durable turns. A delegated turn writes
+   *  `run_start` before calling the model, so the second request means both runs are open. */
+  readonly childAskedTwice: PromiseWithResolvers<void>;
+  readonly childPark: PromiseWithResolvers<void>;
+  childCalls: number;
+  childScript: ChildScript;
+}
 
-/** Resolved when the root's turn opens on its hire's settling report; one waiter per arm. */
-let rootSaw = Promise.withResolvers<void>();
+const runs = new Map<string, HireRun>();
 
-let childSpoke = Promise.withResolvers<void>();
+function freshRun(script: ChildScript): HireRun {
+  return {
+    log: [],
+    rootSaw: Promise.withResolvers<void>(),
+    childSpoke: Promise.withResolvers<void>(),
+    durableMsgSent: Promise.withResolvers<void>(),
+    childAskedTwice: Promise.withResolvers<void>(),
+    childPark: Promise.withResolvers<void>(),
+    childCalls: 0,
+    childScript: script,
+  };
+}
 
-/** Resolved when the durable lane's `msg` call was authored. */
-let durableMsgSent = Promise.withResolvers<void>();
+function runOf(workspace: string): HireRun {
+  const run = runs.get(workspace) ?? freshRun('answer');
 
-/** Resolved when the child's model has been asked for both durable turns. `runHostedTask` writes
- *  `run_start` before calling the model, so the second request means both runs are open. */
-let childAskedTwice = Promise.withResolvers<void>();
+  runs.set(workspace, run);
 
-let childCalls = 0;
+  return run;
+}
 
-let childScript: ChildScript = 'answer';
-
-let childPark = Promise.withResolvers<void>();
 
 const ContentPartSchema = v.looseObject({
   text: v.optional(v.unknown()),
@@ -215,11 +239,11 @@ function mintedName(results: readonly string[]): string | null {
 /** Keyed on the conversation, not a counter: an interrupted turn re-enters with the same history,
  *  and a counter would author a second hire where the product resumed one. A hire returns at once; the answer is
  *  a later turn opened on its report. */
-function rootLane(body: OutboundBody, results: readonly string[]): Response {
+function rootLane(run: HireRun, body: OutboundBody, results: readonly string[]): Response {
   const model = body.model ?? HIRE_ROOT_MODEL;
 
   if (onReport(body)) {
-    rootSaw.resolve();
+    run.rootSaw.resolve();
 
     return textBody(model, 'ROOT-GOT-ANSWER');
   }
@@ -229,14 +253,14 @@ function rootLane(body: OutboundBody, results: readonly string[]): Response {
   return toolCallBody(model, 'call_hire_1', 'agents', {
     action: 'hire',
     // `nest-park`'s middle helper is durable: the owner dismisses it while it waits on its own task hire.
-    lifetime: childScript === 'nest-park' ? 'durable' : 'task',
+    lifetime: run.childScript === 'nest-park' ? 'durable' : 'task',
     role: 'auditor',
-    mission: childScript === 'answer' || childScript === 'throw' || childScript === 'park' ? HIRE_MISSION : NEST_MISSION,
+    mission: run.childScript === 'answer' || run.childScript === 'throw' || run.childScript === 'park' ? HIRE_MISSION : NEST_MISSION,
   });
 }
 
 /** Hire a durable child, message it once, wait until it works on both; keyed on history like `rootLane`. */
-async function durableLane(body: OutboundBody, results: readonly string[]): Promise<Response> {
+async function durableLane(run: HireRun, body: OutboundBody, results: readonly string[]): Promise<Response> {
   const model = body.model ?? HIRE_DURABLE_MODEL;
 
   if (onReport(body)) return textBody(model, 'ROOT-NOTED');
@@ -247,7 +271,7 @@ async function durableLane(body: OutboundBody, results: readonly string[]): Prom
       action: 'hire',
       lifetime: 'durable',
       role: 'auditor',
-      mission: childScript === 'chain' ? NEST_MISSION : HIRE_MISSION,
+      mission: run.childScript === 'chain' ? NEST_MISSION : HIRE_MISSION,
     });
   }
 
@@ -263,21 +287,24 @@ async function durableLane(body: OutboundBody, results: readonly string[]): Prom
   }
 
   // The receipt means the message's row is written; the caller's turn is still open while this call waits.
-  durableMsgSent.resolve();
-  await childAskedTwice.promise;
-  rootSaw.resolve();
+  run.durableMsgSent.resolve();
+  await run.childAskedTwice.promise;
+  run.rootSaw.resolve();
 
   return textBody(model, `ROOT-SAW-DURABLE ${name}`);
 }
 
 /** The child's closing prose is the report a task-lifetime child relays; under `nest` it first hires its own, and
  *  relays that hire's answer from the turn the answer opens. */
-async function childLane(body: OutboundBody, results: readonly string[]): Promise<Response> {
+async function childLane(run: HireRun, body: OutboundBody, results: readonly string[]): Promise<Response> {
   const model = body.model ?? HIRE_CHILD_MODEL;
 
   // `chain`: every helper hires one of its own, to the depth cap; the others nest one level.
-  if (childScript !== 'answer' && childScript !== 'throw' && childScript !== 'park' && allUsers(body).includes(NEST_MISSION)) {
+  if (run.childScript !== 'answer' && run.childScript !== 'throw' && run.childScript !== 'park' && allUsers(body).includes(NEST_MISSION)) {
     if (onReport(body)) return textBody(model, `${NEST_RELAY} ${lastUser(body)}`.slice(0, 600));
+
+    // At the depth cap `hire` is not among this helper's actions: it is the bottom of the chain, so it answers.
+    if (results.some((result) => result.includes('"reason":"unsupported"') && result.includes('hire'))) return textBody(model, CHAIN_BOTTOM);
 
     if (results.length !== 0) return textBody(model, 'HELPER-WAITS');
 
@@ -285,29 +312,29 @@ async function childLane(body: OutboundBody, results: readonly string[]): Promis
       action: 'hire',
       lifetime: 'task',
       role: 'auditor',
-      mission: childScript === 'chain' ? NEST_MISSION : HIRE_MISSION,
+      mission: run.childScript === 'chain' ? NEST_MISSION : HIRE_MISSION,
     });
   }
 
-  childCalls += 1;
-  childSpoke.resolve();
+  run.childCalls += 1;
+  run.childSpoke.resolve();
 
-  if (childCalls >= 2) childAskedTwice.resolve();
+  if (run.childCalls >= 2) run.childAskedTwice.resolve();
 
   // 'park' is consumed by the call that parks; the recovery re-run must be answered,
   // or the hang is the fake's own doing.
-  if (childScript === 'park' || childScript === 'nest-park') {
-    childScript = childScript === 'park' ? 'answer' : 'nest';
+  if (run.childScript === 'park' || run.childScript === 'nest-park') {
+    run.childScript = run.childScript === 'park' ? 'answer' : 'nest';
 
-    await childPark.promise;
+    await run.childPark.promise;
   }
 
   // A progress note first: it reaches a hirer that is waiting on this very child.
-  if (childScript === 'nest-progress' && results.length === 0) {
+  if (run.childScript === 'nest-progress' && results.length === 0) {
     return toolCallBody(model, 'call_progress_1', 'report', { status: 'progress', content: 'halfway' });
   }
 
-  if (childScript === 'throw') {
+  if (run.childScript === 'throw') {
     return new Response(JSON.stringify({ error: { message: 'hire-child model refuses this turn' } }), { status: 500 });
   }
 
@@ -337,8 +364,13 @@ function modelsBody(): Response {
   });
 }
 
+const ControlPathSchema = v.tuple([v.literal(''), v.literal('hire'), v.pipe(v.string(), v.minLength(1)), v.string()]);
+
 async function hireControl(url: URL, request: Request): Promise<Response> {
-  if (url.pathname === '/hire/reset' && request.method === 'POST') {
+  const [, , encoded, op] = v.parse(ControlPathSchema, url.pathname.split('/'));
+  const workspace = decodeURIComponent(encoded);
+
+  if (op === 'reset' && request.method === 'POST') {
     const raw = await request.text();
 
     const spec = v.parse(
@@ -346,49 +378,46 @@ async function hireControl(url: URL, request: Request): Promise<Response> {
       raw === '' ? {} : JSON.parse(raw),
     );
 
-    log.length = 0;
-    rootSaw = Promise.withResolvers<void>();
-    childSpoke = Promise.withResolvers<void>();
-    childPark = Promise.withResolvers<void>();
-    durableMsgSent = Promise.withResolvers<void>();
-    childAskedTwice = Promise.withResolvers<void>();
-    childCalls = 0;
-    childScript = spec.script ?? 'answer';
+    runs.set(workspace, freshRun(spec.script ?? 'answer'));
 
     return Response.json({ ok: true });
   }
 
-  if (url.pathname === '/hire/release-child' && request.method === 'POST') {
-    childPark.resolve();
+  const run = runOf(workspace);
+
+  if (op === 'release-child' && request.method === 'POST') {
+    run.childPark.resolve();
 
     return Response.json({ ok: true });
   }
 
   // Settles when a caller's `agents` call resolved into its next model request.
-  if (url.pathname === '/hire/root-saw' && request.method === 'GET') {
-    await rootSaw.promise;
+  if (op === 'root-saw' && request.method === 'GET') {
+    await run.rootSaw.promise;
 
     return Response.json({ ok: true });
   }
 
-  if (url.pathname === '/hire/child-spoke' && request.method === 'GET') {
-    await childSpoke.promise;
+  if (op === 'child-spoke' && request.method === 'GET') {
+    await run.childSpoke.promise;
 
     return Response.json({ ok: true });
   }
 
-  if (url.pathname === '/hire/msg-sent' && request.method === 'GET') {
-    await durableMsgSent.promise;
+  if (op === 'msg-sent' && request.method === 'GET') {
+    await run.durableMsgSent.promise;
 
     return Response.json({ ok: true });
   }
 
-  if (url.pathname === '/hire/log' && request.method === 'GET') {
-    return Response.json({ calls: [...log] });
+  if (op === 'log' && request.method === 'GET') {
+    return Response.json({ calls: [...run.log] });
   }
 
   throw new Error(`hire-control: unhandled ${request.method} ${url.pathname}`);
 }
+
+const ModelsPathSchema = v.tuple([v.literal(''), v.literal('w'), v.pipe(v.string(), v.minLength(1)), v.literal('v1')]);
 
 export async function hireOutbound(request: Request): Promise<Response> {
   const url = new URL(request.url);
@@ -401,16 +430,22 @@ export async function hireOutbound(request: Request): Promise<Response> {
     throw new Error(`hire-models: unexpected host ${url.hostname}`);
   }
 
-  if (url.pathname === '/v1/models') return modelsBody();
+  // `/w/<workspace>/v1/...`: the workspace whose run answers.
+  const segments = url.pathname.split('/');
+  const [, , encoded] = v.parse(ModelsPathSchema, segments.slice(0, 4));
+  const run = runOf(decodeURIComponent(encoded));
+  const endpoint = `/${segments.slice(4).join('/')}`;
 
-  if (url.pathname !== '/v1/chat/completions') {
+  if (endpoint === '/models') return modelsBody();
+
+  if (endpoint !== '/chat/completions') {
     throw new Error(`hire-models: unhandled ${request.method} ${url.pathname}`);
   }
 
   const body = v.parse(OutboundBodySchema, JSON.parse(await request.text()));
   const results = toolResults(body);
 
-  log.push({
+  run.log.push({
     model: body.model ?? '',
     stream: body.stream ?? false,
     tools: toolNames(body),
@@ -422,9 +457,9 @@ export async function hireOutbound(request: Request): Promise<Response> {
   if (body.stream !== true) return auxLane(body);
 
   // The child's lane: `report` is deps-gated (core's `DEPS_GATED_TOOLS`), so only a hired actor carries it.
-  if (toolNames(body).includes('report')) return await childLane(body, results);
+  if (toolNames(body).includes('report')) return await childLane(run, body, results);
 
-  if (body.model === HIRE_DURABLE_MODEL) return await durableLane(body, results);
+  if (body.model === HIRE_DURABLE_MODEL) return await durableLane(run, body, results);
 
-  return rootLane(body, results);
+  return rootLane(run, body, results);
 }

@@ -136,15 +136,15 @@ A workspace holds the state. Agents are the actors that work inside it.
     candidate. A registered verifier scores measured searches, ideation returns
     unranked candidates, and judged searches use a model ensemble.
 
-    Hosted swarm nodes run over the canonical workspace with their own shell
-    state and scaffold. Each is a logical actor of the workspace, acquired from
-    the one `ActorHost` (`packages/core/src/state/actor-host.ts`) and stored as
-    an actor of kind `head`: its rows sit in the workspace's own SQLite under
-    its `actor_id`, its shell id is `head:<storage-key>`, and its scaffold lives
-    at `.kinu/agents/<storage-key>/scaffold/agent.js` in the shared agent-state
-    plane (`actorScaffoldPath`, `packages/core/src/identity/workspace-actors.ts`).
-    MCTS rollouts are actors of kind `branch` on the same database and acquire
-    no runtime beyond it.
+    Hosted swarm nodes, heads and steer branches run their model loops in
+    `AgentFacet`, each with its own loader isolate and turn database. The
+    workspace keeps the search state, journal, branch arbiter, wake queues and
+    tools. Each actor has its own shell state and scaffold on the canonical
+    file plane. Its `origin` is `swarm`, its shell id is
+    `run:<storage-key>`, and its scaffold lives at
+    `.kinu/agents/<storage-key>/scaffold/agent.js` (`actorScaffoldPath` in
+    `packages/core/src/identity/workspace-actors.ts`). Toolless MCTS branches
+    are model calls, not roster entries or extra facets.
 
     Actor isolation has one contract and one applier. `agentHomeLayout` in
     `packages/core/src/vfs/agent-home.ts` gives an actor its home at `0o755`
@@ -153,10 +153,9 @@ A workspace holds the state. Agents are the actors that work inside it.
     provision homes through `facetHomeProvisioner` over the three host-owned
     members from `WorkspaceBundle.privileged()`: the local runtime in its own
     process, and the hosted workspace in-isolate on the orchestrator that owns
-    it, with no extra hop. A subordinate is provisioned at hire and released on
-    a wipe. A head provisions itself when it runs, and its spawner releases it
-    at settle. A swarm node is provisioned by its search through
-    `AgentsSwarmDeps.provisionNodeHome` and released by the same search. The
+    it. Each facet reaches files and shell through `Nimbus.fromSession` over
+    that workspace. Retirement keeps the home and history; destruction releases
+    them. A swarm's home is provisioned through `AgentsSwarmDeps.provisionNodeHome`.
     `/tmp` rewrites are rebuilt from the homes on disk every time the
     filesystem opens (`restoreAgentTmpConfinements`), so an eviction never
     leaves an actor with a home and a shared `/tmp`.
@@ -224,6 +223,11 @@ A workspace holds the state. Agents are the actors that work inside it.
     workspace's durable subordinates. Swarm nodes are left off because they
     live only for the search that spawned them.
 
+  An export carries every retained non-main agent's conversation and turn tables,
+  including retired swarm and background agents, as that agent's database section (`agentArchiveSource` in
+  `packages/cf-backend/src/orchestrator.ts`, `readAgentArchivePage` in
+  `packages/core/src/identity/archive.ts`); `kinu import` refuses an archive
+  that lists an agent whose section is missing or short.
   A workspace fork is the owner's "Fork the workspace from here" on a
   message: the `forkAgent` callable runs `forkWorkspace`
   (`packages/core/src/identity/fork-driver.ts`) and the new workspace records
@@ -258,6 +262,14 @@ A workspace holds the state. Agents are the actors that work inside it.
   twice. Each frame is one `rawCopyFromFork` call straight to the target stub.
   Neither side holds the whole snapshot, and no workspace is too big: a bigger
   one is more frames.
+
+  File ownership belongs to the destination's identity domain, not to a number
+  reused from the source. Before import, UID 0 stays 0 and every other UID
+  becomes the fork's main actor (1000). GIDs 0 and 1000 stay; every other GID
+  becomes 0. Every hire belongs to group 1000, so mapping a private source group
+  there would grant every hire its permissions. Modes stay unchanged, and the
+  source UID registry does not cross. `workspace-planes.ts#forkPageOwnership`
+  applies this policy at the file sink.
 
   The transfer's state belongs to the target, not to whichever activation
   receives a frame. The next expected frame, the rolling digest of the frames

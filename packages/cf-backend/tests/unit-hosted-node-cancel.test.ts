@@ -5,7 +5,7 @@
  * and the owner cancels the search's job.
  */
 import { describe, expect, test } from 'bun:test';
-import { catalogTurn, gatewayWorkspace } from './helpers/actor-harness';
+import { agentSql, catalogTurn, gatewayWorkspace } from './helpers/actor-harness';
 import {
   chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun,
 } from './helpers/platform-gateway';
@@ -32,7 +32,7 @@ function searching(node: (run: RecordedGatewayRun) => Response | Promise<Respons
 interface ActorRow { readonly actor_id: string; readonly parent_actor_id: string | null; readonly origin: string; readonly creation_id: string }
 
 describe('cancelling a search reaches its hosted nodes', () => {
-  test('a node runs as its own hosted actor under the workspace loop', async () => {
+  test('a node keeps its turn in its own facet under the workspace loop', async () => {
     const { agent, db } = gatewayWorkspace(searching((run) => chatCompletion(run, 'Cache the token table.')));
 
     await catalogTurn(agent, ASK);
@@ -42,7 +42,10 @@ describe('cancelling a search reaches its hosted nodes', () => {
     const main = actors.find((actor) => actor.origin === 'system');
     const node = db.query<{ id: string }, []>('SELECT id FROM head_journal').get();
     const seat = actors.find((actor) => actor.creation_id === node?.id);
-    const claims = db.query<{ actor_id: string; outcome: string }, []>('SELECT actor_id, outcome FROM actor_turn_claims').all();
+
+    if (seat === undefined) throw new Error('the search registered no node actor');
+    const claims = agentSql(seat.actor_id)<{ actor_id: string; outcome: string }>`SELECT actor_id, outcome FROM actor_turn_claims`;
+    expect(db.query<{ n: number }, [string]>('SELECT COUNT(*) AS n FROM actor_turn_claims WHERE actor_id = ?').get(seat.actor_id)?.n).toBe(0);
 
     // The run is bridged onto this actor's session, so the seating (origin, parent, own claim) is load-bearing.
     expect(seat).toMatchObject({ origin: 'swarm', parent_actor_id: main?.actor_id });
@@ -80,8 +83,8 @@ describe('cancelling a search reaches its hosted nodes', () => {
     const seat = db.query<{ actor_id: string }, [string]>('SELECT actor_id FROM workspace_actors WHERE creation_id = ?')
       .get(node?.id ?? '');
 
-    const claims = db.query<{ outcome: string }, [string]>('SELECT outcome FROM actor_turn_claims WHERE actor_id = ?')
-      .all(seat?.actor_id ?? '');
+    if (seat === null) throw new Error('the cancelled node has no registered actor');
+    const claims = agentSql(seat.actor_id)<{ outcome: string }>`SELECT outcome FROM actor_turn_claims`;
 
     expect(node?.status).toBe('aborted');
     expect(claims.map((claim) => claim.outcome)).toEqual(['aborted']);

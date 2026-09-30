@@ -6,7 +6,7 @@
  */
 import { expect, test } from 'bun:test';
 import { ADVISOR_HEADER } from '@kinu.run/core';
-import { catalogTurn, driveUntil, gatewayWorkspace, relayedReports, workspaceMainActor } from './helpers/actor-harness';
+import { agentSql, catalogTurn, driveUntil, gatewayWorkspace, relayedReports, workspaceMainActor } from './helpers/actor-harness';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 
@@ -18,11 +18,11 @@ function forTheHire(run: RecordedGatewayRun): boolean {
 }
 
 /** The main actor's model: hire `agent` for the mission, then say so. */
-function hiring(run: RecordedGatewayRun, agent: string): Response {
+function hiring(run: RecordedGatewayRun, agent: string | undefined, lifetime?: 'task'): Response {
   const step = requestOf(run).messages.filter((message) => message.role === 'tool').length;
 
   return step === 0
-    ? toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', agent, mission: MISSION } }, 'hire_0')
+    ? toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', mission: MISSION, ...(agent !== undefined && { agent }), ...(lifetime && { lifetime }) } }, 'hire_0')
     : chatCompletion(run, 'Handed off.');
 }
 
@@ -76,9 +76,10 @@ test('a hosted subordinate hires its advisor, whose note opens its next turn, wi
   // The root's own window grows with the turns the relays open; no hosted actor's ever does.
   const hostedTurns = () => workspace.db.query<{ n: number }, [string]>('SELECT COUNT(*) AS n FROM completed_turns WHERE actor_id != ?').get(root.actorId)?.n ?? 0;
 
-  const advisorNotes = () => workspace.db.query<{ actor_id: string; message: string }, []>(
-    "SELECT actor_id, message FROM evolution_events WHERE type = 'advisor_note'",
-  ).all();
+  // The hire's notes and window are in its own database.
+  const hire = () => workspace.db.query<{ actor_id: string }, []>("SELECT actor_id FROM workspace_actors WHERE name = 'advised'").get()?.actor_id ?? '';
+  const advisorNotes = () => agentSql(hire())<{ actor_id: string; message: string }>`SELECT actor_id, message FROM evolution_events WHERE type = 'advisor_note'`;
+  const ownTurns = () => agentSql(hire())<{ n: number }>`SELECT COUNT(*) AS n FROM completed_turns`[0]?.n ?? 0;
 
   // The hire's turn ends on its own answer; its advisor answers on a delegated turn of its own, whose note opens the hire's next.
   await driveUntil(workspace, 'the advice reached the hire', () => requests.length >= 2);
@@ -91,4 +92,25 @@ test('a hosted subordinate hires its advisor, whose note opens its next turn, wi
   const notes = advisorNotes().filter((row) => row.actor_id !== root.actorId);
   expect(notes.map((row) => row.message)).toEqual([note]);
   expect(hostedTurns()).toBe(0);
+  expect(ownTurns()).toBe(0);
+});
+
+// Review P1 (d35c1060fe): the task hire's advisor, still reviewing, held the hire's answer back, and an advisor with
+// nothing to say opens no later turn, so the answer never reached the hirer.
+test('a task hire whose advisor has nothing to say still answers its hirer', async () => {
+  const gateway = stubAiBinding((run) => {
+    if (JSON.stringify(requestOf(run).messages).includes('You are reviewing one finished turn')) return chatCompletion(run, '{}');
+
+    if (!forTheHire(run)) return hiring(run, undefined, 'task');
+
+    return chatCompletion(run, 'The probe succeeded.');
+  });
+
+  const workspace = gatewayWorkspace(gateway);
+
+  await catalogTurn(workspace.agent, 'Have someone check the probe.');
+  workspaceMainActor(workspace.db).config.setAdvisorEnabled(true);
+
+  await driveUntil(workspace, 'the task hire answered its hirer', () => relayedReports(workspace.db).length > 0);
+  expect(relayedReports(workspace.db)).toEqual(['The probe succeeded.']);
 });

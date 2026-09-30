@@ -1,6 +1,7 @@
 // The native file boundary carries POSIX errno in Error.cause, which survives JSRPC.
 import { expect, test } from 'bun:test';
-import { createSandboxExecutor, isVfsError, sandboxFiles } from '@kinu.run/core';
+import { createSandboxExecutor, sandboxFiles } from '@kinu.run/core';
+import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import type { KinuSandbox } from '../src/kinu-sandbox';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 

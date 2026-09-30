@@ -36,6 +36,8 @@ const { resolveProvider } = await import('@cloudflare/codemode/ai');
 
 const { createCodemodeToolFactory } = await import('../src/codemode-tool');
 
+type ProgramLaunch = import('../src/codemode-sandbox').ProgramLaunch;
+
 const SearchResultSchema = v.object({
   caps: v.object({
     branches: v.object({ value: v.number(), origin: v.string() }),
@@ -44,11 +46,8 @@ const SearchResultSchema = v.object({
   report: v.object({ expansions: v.number(), tokens: v.nullable(v.number()) }),
 });
 
-function workerLoader(): WorkerLoader {
-  return {
-    get() { throw new Error('test loader is not executed'); },
-    load() { throw new Error('test loader is not executed'); },
-  };
+function unlaunched(): ProgramLaunch {
+  return { run() { throw new Error('test program is not launched'); } };
 }
 
 function webSearchProvider(): WebSearchProvider {
@@ -73,8 +72,7 @@ function buildCodemode(agents?: () => AgentsToolDeps) {
   initCraftedToolsTables(testSql.sql);
 
   const options = {
-    loader: workerLoader(),
-    egress: null,
+    launch: unlaunched,
     rt,
     sql: testSql.sql,
     workspace: 'test-workspace',
@@ -207,7 +205,7 @@ describe('the eval docstring the model receives', () => {
     initCraftedToolsTables(testSql.sql);
 
     const built = createCodemodeToolFactory({
-      loader: workerLoader(), egress: null, rt, sql: testSql.sql, workspace: 'test-workspace', webSearch: webSearchProvider(), browserSessions: noBrowsers,
+      launch: unlaunched, rt, sql: testSql.sql, workspace: 'test-workspace', webSearch: webSearchProvider(), browserSessions: noBrowsers,
       extraProviders: () => [{ name: 'probe', tools: {}, types, positionalArgs: true }],
     }).toolFor({});
 

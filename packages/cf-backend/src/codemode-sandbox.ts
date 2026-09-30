@@ -12,7 +12,8 @@ import {
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE, WORKSPACE_ROOT } from '@kinu.run/core';
-import { EGRESS_FAILURE_HEADER } from './codemode-egress';
+import { WorkerEntrypoint, exports } from 'cloudflare:workers';
+import { EGRESS_FAILURE_HEADER, codemodeEgress, type CodemodeEgressProps } from './codemode-egress';
 import { BROWSER_CLIENT_MODULE, BROWSER_CLIENT_SOURCE } from './browser-prelude';
 
 type DynamicProviderInput = Parameters<DynamicWorkerExecutor['execute']>[1];
@@ -76,10 +77,32 @@ function attributeProviders(providers: ResolvedProvider[]): ResolvedProvider[] {
   });
 }
 
+type ProgramResult = Awaited<ReturnType<DynamicWorkerExecutor['execute']>>;
+
+export interface ProgramLaunch {
+  run(source: string, providers: ResolvedProvider[]): Promise<ProgramResult>;
+}
+
+export interface CodemodeLauncherProps {
+  readonly kinuNode: boolean;
+  readonly egress: CodemodeEgressProps | null;
+}
+
+/** Launches in a request of its own, so no program holds a workspace slot (D10). */
+export class CodemodeLauncher extends WorkerEntrypoint<{ readonly LOADER: WorkerLoader }, CodemodeLauncherProps> {
+  async run(source: string, providers: ResolvedProvider[]): Promise<ProgramResult> {
+    const { kinuNode, egress } = this.ctx.props;
+
+    return await programWorker({ loader: this.env.LOADER, egress: egress === null ? null : codemodeEgress(egress), kinuNode }).execute(source, providers);
+  }
+}
+
+export function codemodeLauncher(props: CodemodeLauncherProps): ProgramLaunch {
+  return { run: (source, providers) => exports.CodemodeLauncher({ props }).run(source, providers) };
+}
+
 export interface KinuSandboxExecutorOptions {
-  readonly loader: WorkerLoader;
-  /** The loopback Fetcher outbound requests ride; null keeps the sandbox offline. */
-  readonly egress: Fetcher | null;
+  readonly launch: ProgramLaunch;
 }
 
 /** No work deadline, where codemode's default is 60 s: a node agent's whole scaffold loop is one program, bounded
@@ -94,10 +117,10 @@ function programWorker(input: { readonly loader: WorkerLoader; readonly egress: 
 }
 
 export class KinuSandboxExecutor {
-  readonly #inner: DynamicWorkerExecutor;
+  readonly #inner: ProgramLaunch;
 
   constructor(options: KinuSandboxExecutorOptions) {
-    this.#inner = programWorker({ loader: options.loader, egress: options.egress, kinuNode: true });
+    this.#inner = options.launch;
   }
 
   async execute(code: string, providers: DynamicProviderInput) {
@@ -110,7 +133,7 @@ export class KinuSandboxExecutor {
       // as a result so the shared completion mapper retains its classification.
       const callable = normalizeCode(code);
       const source = `async () => { try { return await (${callable})(); } catch (cause) { if (cause && cause.success === false && typeof cause.error === 'string') return cause; throw cause; } }`;
-      const result = await this.#inner.execute(source, attributeProviders(providerArr));
+      const result = await this.#inner.run(source, attributeProviders(providerArr));
 
       // DWE returns sandbox-internal failures as strings; only the native-tool ReferenceError is
       // rewritten into the correction.
@@ -125,9 +148,7 @@ export class KinuSandboxExecutor {
 }
 
 /** `rt.executor`: heads, swarm scoring, mcts and craft run programs through it. */
-export function createRuntimeExecutor(loader: WorkerLoader): Executor {
-  const dwe = programWorker({ loader, egress: null, kinuNode: false });
-
+export function createRuntimeExecutor(launch: ProgramLaunch): Executor {
   return {
     languages: ['javascript'],
     async execute(code: string, providers: HostProvider[]): Promise<ExecuteResult> {
@@ -144,7 +165,7 @@ export function createRuntimeExecutor(loader: WorkerLoader): Executor {
           ])),
         }));
 
-        const res = await dwe.execute(code, bridged);
+        const res = await launch.run(code, bridged);
         const result = res.result === undefined ? undefined : decodeJsonValue({ value: res.result });
         const output: ExecuteResult = { result };
 

@@ -4,13 +4,13 @@
  */
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import {
-  ActorSession, BACKGROUND_FIBER_PREFIX, CHAT_SESSION_ID, PendingSendStore, PROGRAMMATIC_MESSAGE_ID_PREFIX,
+  ActorSession, ADVISOR_HEADER, BACKGROUND_FIBER_PREFIX, CHAT_SESSION_ID, PendingSendStore, PROGRAMMATIC_MESSAGE_ID_PREFIX,
   TERMINAL_EFFECT_RETRY_CEILING_MS, type JsonValue,
 } from '@kinu.run/core';
 import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 import {
   catalogTurn, chatSessionTurns, GATEWAY_CATALOG, gatewayWorkspace, historyOver, jobsOver, orchestratorHarness,
-  adviceDue, driveUntil, reactivateOrchestratorHarness, workspaceMainActor,
+  adviceDue, driveUntil, reactivateOrchestratorHarness, until, workspaceMainActor,
   type ActorHarness, type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 import { answeringGateway, chatCompletion, stubAiBinding } from './helpers/platform-gateway';
@@ -283,6 +283,45 @@ describe('the post-turn lanes', () => {
     expect(calls()).toBe(0);
     expect(notes(restarted)).toBe(1);
     expect(owedReview(restarted)).toBe(0);
+  });
+});
+
+// Review P1 (d35c1060fe): the answer job awaited the note's delivery, and a note sent to an idle actor settles only
+// when the whole turn it opens does, so the alarm held across that turn's inference and a long one met the wall.
+describe('an advisor answer handed to a turn', () => {
+  test('the alarm returns while the turn the note opened still runs; the answer is kept until it is said', async () => {
+    const gateway = stubAiBinding((run) => chatCompletion(run, ADVISOR_REPLY));
+    const harness = gatewayWorkspace(gateway);
+    const turns = chatSessionTurns(harness.agent);
+    workspaceMainActor(harness.db).config.setAdvisorEnabled(true);
+    await turns.prepare({ messages: [{ role: 'user', content: 'run the migration' }] });
+    await turns.settle({ messageId: 'turn-42', text: 'ran it' });
+
+    const answers = (): number => harness.db.query<{ n: number }, []>(
+      'SELECT COUNT(*) AS n FROM evolution_helpers WHERE answer_status IS NOT NULL',
+    ).get()?.n ?? 0;
+
+    // The note opens a turn on the idle actor, and that turn parks on its model call; the wake drives the advisor's
+    // own turn, then the answer's job, which hands the note to that turn.
+    let noteAsked = false;
+    let drove = false;
+
+    const noteTurn = turns.park().then((request) => {
+      noteAsked = true;
+
+      return request;
+    });
+
+    const driving = driveUntil(harness, 'the note opened its turn', () => noteAsked).then(() => { drove = true; });
+
+    expect(JSON.stringify((await noteTurn).messages)).toContain(ADVISOR_HEADER);
+    await until(() => drove, "the alarm returned while the note's turn runs");
+    await driving;
+    expect(answers()).toBe(1);
+
+    await turns.settle({ messageId: 'note-answer', text: 'Checked the backup.' });
+    await until(() => answers() === 0, 'the said note released its answer');
+    expect(harness.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM evolution_events WHERE type = 'advisor_note'").get()?.n).toBe(1);
   });
 });
 

@@ -4,7 +4,8 @@ import { describe, test, expect } from "bun:test";
 import type { KinuSandbox } from "../src/kinu-sandbox";
 import { adaptCloudflareSandbox } from "../src/sandbox-exec-lane";
 // codemode reaches `cloudflare:workers` at load; the preload's boundary stub serves it.
-import { createRuntimeExecutor, KinuSandboxExecutor } from "../src/codemode-sandbox";
+import { CodemodeLauncher, createRuntimeExecutor, KinuSandboxExecutor } from "../src/codemode-sandbox";
+import { workerContext } from "./helpers/bindings";
 import { inProcessWorkerLoader } from "./helpers/worker-loader";
 
 interface BoxCalls {
@@ -234,14 +235,18 @@ async function reportAfterAMinute(build: (loader: WorkerLoader) => RunProgram): 
 // 2026-09-24, the first-run tier on 24ea8520b: all five swarm nodes died together, "errored after 0 step(s) in
 // 60157 ms: run agent <id> to a report: Execution timed out". codemode races each program against its `timeout`
 // (default 60 s), and a node agent's whole scaffold loop runs as one program through `rt.executor`.
+function launcherOver(loader: WorkerLoader, kinuNode: boolean): CodemodeLauncher {
+  return new CodemodeLauncher({ ...workerContext(), props: { kinuNode, egress: null } }, { LOADER: loader });
+}
+
 describe("a program awaiting a host call past a minute still gets its answer", () => {
   test("in the runtime's executor, where a node agent's scaffold loop runs", async () => {
-    expect(await reportAfterAMinute((loader) => (code, providers) => createRuntimeExecutor(loader).execute(code, providers)))
+    expect(await reportAfterAMinute((loader) => (code, providers) => createRuntimeExecutor(launcherOver(loader, false)).execute(code, providers)))
       .toEqual({ result: "banana", logs: [] });
   });
 
   test("in the eval sandbox", async () => {
-    expect(await reportAfterAMinute((loader) => (code, providers) => new KinuSandboxExecutor({ loader, egress: null }).execute(code, providers)))
+    expect(await reportAfterAMinute((loader) => (code, providers) => new KinuSandboxExecutor({ launch: launcherOver(loader, true) }).execute(code, providers)))
       .toEqual({ result: "banana", logs: [] });
   });
 });

@@ -10,7 +10,7 @@ import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
 import { withCheckedInput } from '../src/tools/tool-schema';
 import { SPILL_DIRS, TurnContextBudget } from '../src/context-budget';
 import { JsonObjectSchema } from '../src/utils/json';
-import { makeVfsError } from '../src/vfs/errno';
+import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { RESIDENT_TEXT_MAX_BYTES } from '../src/vfs/mounts';
 import type { Memory, VFS, VfsEntryStat } from '../src/types/primitives';
 import { fnv1a64 } from '../src/utils/fnv1a';
@@ -425,7 +425,7 @@ function memoryVfs(seed: Record<string, string> = {}, opts: { perRead?: number; 
   const bytesOf = (path: string): Uint8Array => {
     const content = files.get(path);
 
-    if (content === undefined) throw makeVfsError('ENOENT', `no such file, open '${path}'`, path);
+    if (content === undefined) throw new VfsError('ENOENT', 'no such file, open', path);
 
     return encoder.encode(content);
   };
@@ -438,7 +438,7 @@ function memoryVfs(seed: Record<string, string> = {}, opts: { perRead?: number; 
       wholeReads.push(path);
       const content = files.get(path);
 
-      if (content === undefined) throw makeVfsError('ENOENT', `no such file, open '${path}'`, path);
+      if (content === undefined) throw new VfsError('ENOENT', 'no such file, open', path);
 
       return content;
     },
@@ -816,7 +816,7 @@ describe('a `file` read never makes the file resident', () => {
 
     const denying = {
       ...plane,
-      async readRange(path: string) { throw makeVfsError('EACCES', `permission denied, open '${path}'`, path); },
+      async readRange(path: string) { throw new VfsError('EACCES', `permission denied, open '${path}'`, path); },
     };
 
     const { call } = toolFor(denying);

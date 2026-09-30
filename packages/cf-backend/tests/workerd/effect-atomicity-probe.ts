@@ -1,11 +1,21 @@
-import { DurableObject } from 'cloudflare:workers';
+import { DurableObject, RpcTarget } from 'cloudflare:workers';
 import { Effect } from 'effect';
 import { KinuError, settle } from '@kinu.run/core/obs';
 import { DevboxError, settle as settleDevbox } from '../../../devbox/src/errors';
 
+class PipelinedValue extends RpcTarget {
+  read(): number {
+    return 7;
+  }
+}
+
 /** Counts the events a Durable Object admits while one long effect runs inside another. */
 export class EffectAtomicityProbeDO extends DurableObject<Cloudflare.Env> {
   private delivered = 0;
+
+  pipelined(): PipelinedValue {
+    return new PipelinedValue();
+  }
 
   refusal(): Promise<never> {
     return settle(Effect.fail(new KinuError('unavailable', 'upstream refused', { cause: new TypeError('socket closed') })));

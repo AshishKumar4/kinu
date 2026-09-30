@@ -4,8 +4,11 @@
  */
 import { expect, test } from 'bun:test';
 import { sqlOver } from '@kinu.run/test-utils';
-import { GATEWAY_CATALOG, driveUntil, gatewayWorkspace, hostedSubordinateHarness, reactivateOrchestratorHarness, wakeForDelegatedTask } from './helpers/actor-harness';
-import { abandonHarnessFibers, joinHarnessFibers } from './helpers/agents-sdk';
+import {
+  agentSql, armedWakes, driveUntil, GATEWAY_CATALOG, gatewayWorkspace, hostedSubordinateHarness, reactivateOrchestratorHarness, wakeForDelegatedTask,
+} from './helpers/actor-harness';
+import { abandonHarnessFibers, joinHarnessFibers, joinHarnessKeepAlives } from './helpers/agents-sdk';
+import { KINU_TIMER_JOB } from '../src/wake-jobs';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 
 // A helper that hired durable then task: the durable hire's report must not wait on the helper while its task hire runs.
@@ -32,7 +35,8 @@ test("a helper waiting on its task hire gets its answer, then takes up the repor
     name: 'middle', displayName: 'Middle', nameOrigin: 'user', mission: 'coordinate',
   });
 
-  const middleDone = (): boolean => (sqlOver(workspace.db)<{ n: number }>`
+  // The helper's runs are in its own database.
+  const middleDone = (): boolean => (agentSql(middle.actor.handle.actorId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${middle.actor.handle.actorId} AND type = 'run_end'`[0]?.n ?? 0) > 0;
 
   await wakeForDelegatedTask(workspace, middle.actor.handle.actorId, 'Middle task.');
@@ -40,7 +44,7 @@ test("a helper waiting on its task hire gets its answer, then takes up the repor
   await driveUntil(workspace, 'the helper\'s turn never ended', middleDone);
 
   // The durable hire reported while the helper waited: the helper takes it up in a turn of its own.
-  const turns = (): number => sqlOver(workspace.db)<{ n: number }>`
+  const turns = (): number => agentSql(middle.actor.handle.actorId)<{ n: number }>`
     SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${middle.actor.handle.actorId} AND type = 'run_start'`[0]?.n ?? 0;
 
   await driveUntil(workspace, 'the helper never took up the report in a turn of its own', () => turns() >= 2);
@@ -108,7 +112,7 @@ for (const { verb, args, notes } of CASES) {
 
     const sql = sqlOver(workspace.db);
     const middleId = middle.actor.handle.actorId;
-    const turnsEnded = (): number => sql<{ n: number }>`SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${middleId} AND type = 'run_end'`[0]?.n ?? 0;
+    const turnsEnded = (): number => agentSql(middleId)<{ n: number }>`SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${middleId} AND type = 'run_end'`[0]?.n ?? 0;
 
     await wakeForDelegatedTask(workspace, middleId, 'Middle task.');
 
@@ -227,6 +231,9 @@ test("a report to an idle helper survives a reset before its drain: the durable 
 
   await wakeForDelegatedTask(first, middleId, 'Middle task.');
   await driveUntil(first, 'the durable hire never reported', () => pendingReports() > 0);
+  // The first activation's debounced drains run out before the reset, so none of them can take the report up later.
+  await joinHarnessKeepAlives(first.agent);
+  expect(pendingReports()).toBe(1);
   abandonHarnessFibers();
 
   const second = await reactivateOrchestratorHarness(first.db, undefined, {
@@ -234,8 +241,12 @@ test("a report to an idle helper survives a reset before its drain: the durable 
     beforeStart: (agent) => { agent.harnessInstallCatalog(GATEWAY_CATALOG); },
   });
 
-  // The wake the activation armed for owed work, fired as the alarm fires it.
-  await second.agent._kinuTimerTick();
+  // Still owed after the restart, and the only thing that will take it up is the durable wake the activation armed.
+  expect(pendingReports()).toBe(1);
+  expect(armedWakes(first.db).map((wake) => wake.id)).toContain(KINU_TIMER_JOB);
+  // Due now, and fired the way the platform fires it: through the SDK's alarm.
+  first.db.prepare('UPDATE cf_agents_jobs SET time = ? WHERE id = ?').run(Date.now() - 1, KINU_TIMER_JOB);
+  await second.agent.alarm();
   await joinHarnessFibers();
   expect(pendingReports()).toBe(0);
 

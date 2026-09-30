@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-09-30",
+  "measuredAt": "2026-09-29",
   "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
   "method": "each row alone under `setsid /usr/bin/time -v bun scripts/ladder.ts --gate <run> --no-cache`; the row's whole process tree — its session plus every descendant by ppid, so a setsid'd dev server or browser counts — sampled every 0.05s for its first 3s and every 0.25s after — summed proportional set (Pss, /proc/<pid>/smaps_rollup) for memory, tasks in state R for parallel demand, Δ(utime+stime+cutime+cstime) over at least 0.25s for parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN)",
   "rows": {
@@ -542,17 +542,6 @@
       "loadAtStart": 2.84,
       "exit": 0
     },
-    "bun test --timeout=0 tests/browser/chat-scroll.test.ts": {
-      "wallSeconds": 21.18,
-      "cpuSeconds": 12.69,
-      "peakRssMb": 2343.68,
-      "peakRunnable": 7,
-      "peakCpuThreads": 7.65,
-      "meanThreads": 0.6,
-      "samples": 114,
-      "loadAtStart": 2.66,
-      "exit": 0
-    },
     "bun run layergate": {
       "wallSeconds": 0.22,
       "cpuSeconds": 0.27,
@@ -980,6 +969,28 @@
       "meanThreads": 1.6,
       "samples": 29,
       "loadAtStart": 8.38,
+      "exit": 0
+    },
+    "bun test --timeout=0 tests/browser/chat-scroll.test.ts tests/browser/chat-sparse-pages.test.ts": {
+      "wallSeconds": 50.44,
+      "cpuSeconds": 35.91,
+      "peakRssMb": 2830.21,
+      "peakRunnable": 25,
+      "peakCpuThreads": 6.83,
+      "meanThreads": 0.71,
+      "samples": 226,
+      "loadAtStart": 1.84,
+      "exit": 0
+    },
+    "bun run gate:cost-table": {
+      "wallSeconds": 1.05,
+      "cpuSeconds": 1.81,
+      "peakRssMb": 329.5,
+      "peakRunnable": 16,
+      "peakCpuThreads": 2.11,
+      "meanThreads": 1.72,
+      "samples": 18,
+      "loadAtStart": 1.06,
       "exit": 0
     },
     "bun test --timeout=0 scripts/bench*.test.ts scripts/storage-matrix-cleanup.test.ts scripts/deploy-substrate.test.ts scripts/devbox-e2e.test.ts": {

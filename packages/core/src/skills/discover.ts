@@ -10,7 +10,7 @@ import { parseSkillFile, skillNameProblem } from './parse';
 import { BUILTIN_SKILLS } from './builtins';
 
 import { SHARED_SKILLS_DIR } from '../vfs/shared-drive';
-import { isVfsError } from '../vfs/errno';
+import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import {
   SKILL_FOLDER_FILE, WORKSPACE_SKILLS_DIR, workspaceSkillIndexLine,
   type DiscoveredSkill, type ParsedSkill, type SkillBodyRef,

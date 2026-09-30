@@ -1,6 +1,6 @@
 /** The owner reads a turn's requests as the model received them, rebuilt from what the turn stored. */
 import { describe, expect, test } from 'bun:test';
-import { ActorClaimStore, JsonValueSchema, type JsonValue } from '@kinu.run/core';
+import { ActorClaimStore, JsonValueSchema, measureContext, RunEventRecorder, type JsonValue } from '@kinu.run/core';
 import * as v from 'valibot';
 import { makeSql } from '../../core/tests/helpers';
 import {
@@ -73,6 +73,28 @@ function canonicalFromWire(message: v.InferOutput<typeof WireMessageSchema>): Ca
 }
 
 describe('the context number a page reads back', () => {
+  test('a later output-only step cannot relabel the measured input or supply its cache count', async () => {
+    const harness = gatewayWorkspace(answeringGateway('Noted.'));
+    const recorder = new RunEventRecorder(makeSql(harness.db), workspaceMainActor(harness.db));
+    const context = measureContext({ messages: [{ role: 'user', content: 'first prompt' }] });
+    recorder.emit('measured-turn', { type: 'context_admitted', tokens: 80, contextWindow: 1_000 });
+    recorder.emit('measured-turn', {
+      type: 'step_finish', stepIndex: 1, usage: { input: 100 }, context, modelId: 'first-model', egress: 'relay',
+    });
+    recorder.emit('measured-turn', {
+      type: 'step_finish', stepIndex: 2, usage: { output: 5, cacheRead: 200 }, modelId: 'second-model',
+    });
+
+    // The measured step has left the telemetry sample, but still supplies the context number.
+    const snapshot = await harness.agent.getActivitySnapshot({ steps: 1 });
+    expect(snapshot.fill).toMatchObject({ tokens: 100, window: 1_000, source: 'provider' });
+    expect(snapshot.latest).toMatchObject({
+      runId: 'measured-turn', stepIndex: 1, usage: { input: 100 }, context, modelId: 'first-model', route: { kind: 'container' },
+    });
+    expect(snapshot.latest?.usage.cacheRead).toBeUndefined();
+    expect(snapshot.telemetry.tokens).toMatchObject({ output: 5, cacheRead: 200 });
+  });
+
   test('the web snapshot and the status read show the prompt size the last step reported', async () => {
     const harness = gatewayWorkspace(answeringGateway('Noted.'));
     expect((await harness.agent.getActivitySnapshot()).fill).toBeNull();

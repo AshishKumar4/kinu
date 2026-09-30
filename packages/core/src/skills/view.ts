@@ -2,7 +2,7 @@
 
 import type { VFS, VfsEntryStat } from '../types/primitives';
 import type { VfsMount } from '../vfs/mounts';
-import { makeVfsError } from '../vfs/errno';
+import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { SHARED_SKILLS_DIR } from '../vfs/shared-drive';
 import { BUILTIN_SKILL_FILES } from './builtins';
 import { compareSkillNames, listSkillFiles, resolveSkillFile, type SkillFile } from './discover';
@@ -17,14 +17,12 @@ type Located =
 /** `plane` is the agent's whole file plane, read per call. */
 export function skillsMount(plane: () => VFS): VfsMount {
   const encoder = new TextEncoder();
-  const absent = (path: string) => makeVfsError('ENOENT', `no such file or directory, '${SKILLS_VIEW}${path}'`, `${SKILLS_VIEW}${path}`);
+  const absent = (path: string) => new VfsError('ENOENT', 'no such file or directory', `${SKILLS_VIEW}${path}`);
 
-  const readOnly = (path: string) => makeVfsError(
-    'EROFS',
-    `${SKILLS_VIEW} is a read-only view of every skill; write one at ${WORKSPACE_SKILLS_DIR}/<name>/${SKILL_FOLDER_FILE}, `
-      + `or under ${SHARED_SKILLS_DIR} for the owner's Drive`,
-    `${SKILLS_VIEW}${path}`,
-  );
+  const readOnly = (path: string) => new VfsError('EROFS',
+  `${SKILLS_VIEW} is a read-only view of every skill; write one at ${WORKSPACE_SKILLS_DIR}/<name>/${SKILL_FOLDER_FILE}, `
+    + `or under ${SHARED_SKILLS_DIR} for the owner's Drive`,
+  `${SKILLS_VIEW}${path}`,);
 
   /** The skill a path names and the rest of the path; null for the root or an unknown name. */
   const locate = async (path: string): Promise<Located | null> => {

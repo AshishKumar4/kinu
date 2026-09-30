@@ -7,16 +7,30 @@
 import { Agent, getAgentByName, type AgentContext } from 'agents';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import * as v from 'valibot';
-import { ownerCaller } from '@kinu.run/core';
+import { actorReferenceOf, isSubordinateOrigin, ownerCaller, type ArchiveCursor } from '@kinu.run/core';
 import { diagnostics } from '@kinu.run/core/obs';
 import { sealRpcSurface, ORCHESTRATOR_RPC_SURFACE } from '../../src/rpc-surface';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import type { UserDO } from '../../src/user/user-do';
-import { HIRE_CHILD_MODEL, REPORT_MARK, type ActorRow, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
+import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, REPORT_MARK, type ActorRow, type ArchiveSections, type ChildScript, type HireObservation, type LogRow, type RosterRow, type TurnCount } from './hire-shapes';
 
-export { UserDO } from '../../src/user/user-do';
+export * from '../../src/server';
+
+
+
+
+
 
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
+
+const ArchiveLineSchema = v.looseObject({
+  t: v.string(), agents: v.optional(v.array(v.string())), actor: v.optional(v.string()), rows: v.optional(v.number()),
+});
+
+const ChatTextSchema = v.object({
+  role: v.string(),
+  parts: v.array(v.looseObject({ type: v.string(), text: v.optional(v.string()) })),
+});
 
 export class HireOrchestrator extends ProductionOrchestrator {
   private readonly probeState: AgentContext;
@@ -27,14 +41,11 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
     // `ActorAgent`'s constructor already sealed the surface with non-enumerable shadows over these reads;
     // deleting the shadow lets the wider seal below expose the prototype method.
-    for (const name of ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled']) {
-      Reflect.deleteProperty(this, name);
-    }
+    const reads = ['rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled', 'archiveSections'];
 
-    sealRpcSurface(this, [
-      ...ORCHESTRATOR_RPC_SURFACE,
-      'rosterRows', 'actorRows', 'logRows', 'turnCounts', 'driveOwedWork', 'rootActorId', 'childTranscript', 'wakeReturned', 'wakeWhileRunning', 'stopHosted', 'settled',
-    ]);
+    for (const name of reads) Reflect.deleteProperty(this, name);
+
+    sealRpcSurface(this, [...ORCHESTRATOR_RPC_SURFACE, ...reads]);
   }
 
   /** Read, not assumed: child counts are "not this id", and a guessed literal would count the root's rows. */
@@ -102,75 +113,63 @@ export class HireOrchestrator extends ProductionOrchestrator {
     });
   }
 
+  /** Runs started per actor: the root's in this object, each subordinate's in its own database. */
   async turnCounts(): Promise<TurnCount[]> {
-    const rows = this.probeState.storage.sql.exec<{ actor_id: string; runs: number }>(
+    const counts: TurnCount[] = this.probeState.storage.sql.exec<{ actor_id: string; runs: number }>(
       `SELECT actor_id, COUNT(DISTINCT run_id) AS runs FROM run_events
-       WHERE type = 'run_start' GROUP BY actor_id`).toArray();
+       WHERE type = 'run_start' GROUP BY actor_id`).toArray().map((row) => ({ actorId: row.actor_id, runs: row.runs }));
 
-    return rows.map((row) => ({ actorId: row.actor_id, runs: row.runs }));
+    const subordinates = this.probeState.storage.sql.exec<{ actor_id: string }>(
+      `SELECT actor_id FROM workspace_actors WHERE origin IN ('user', 'agent', 'evolution')`).toArray();
+
+    for (const { actor_id: actorId } of subordinates) {
+      const seen = await (await this.agentFacetOf(actorId)).inspect(this.agentSnapshot(actorId), { path: [], view: 'runs', page: { limit: 100 } });
+
+      if (seen.view === 'runs' && seen.page.items.length > 0) counts.push({ actorId, runs: seen.page.items.length });
+    }
+
+    return counts;
   }
 
-  /** A delegated turn's durable record is its own `run_events` (`run_start` brief, `step_finish` messages) and the
-   *  stream buffer its open step writes; the transcript store is never written by a delegated turn. */
-  async childTranscript(name: string): Promise<string[]> {
-    const rows = this.probeState.storage.sql.exec<{ run_id: string; type: string; payload: string }>(
-      `SELECT e.run_id AS run_id, e.type AS type, e.payload AS payload
-       FROM run_events e
-       JOIN workspace_actors a ON a.actor_id = e.actor_id
-       WHERE a.name = ? AND e.type IN ('run_start', 'step_finish')
-       ORDER BY e.rowid`, name).toArray();
+  async archiveSections(): Promise<ArchiveSections> {
+    const listed: string[] = [];
+    const sections: Record<string, number> = {};
+    let cursor: ArchiveCursor | undefined;
 
-    const lines: string[] = [];
+    do {
+      const page = await this.exportWorkspaceArchive(cursor);
 
-    for (const row of rows) {
-      const payload = v.parse(
-        v.fallback(v.looseObject({
-          userMessage: v.optional(v.unknown()),
-          messages: v.optional(v.array(v.unknown())),
-        }), {}),
-        JSON.parse(row.payload),
-      );
+      for (const line of page.lines) {
+        const record = v.parse(ArchiveLineSchema, JSON.parse(line));
 
-      if (row.type === 'run_start' && v.is(v.string(), payload.userMessage)) {
-        lines.push(`user: ${payload.userMessage}`);
+        if (record.t === 'header') listed.push(...record.agents ?? []);
+
+        if (record.t === 'agent' && record.actor !== undefined && record.rows !== undefined) sections[record.actor] = record.rows;
       }
 
-      if (row.type !== 'step_finish') continue;
+      cursor = page.next ?? undefined;
+    } while (cursor !== undefined);
 
-      for (const message of payload.messages ?? []) {
-        const parsed = v.safeParse(v.looseObject({
-          role: v.optional(v.string()),
-          content: v.optional(v.union([
-            v.string(),
-            v.array(v.looseObject({ type: v.string(), text: v.optional(v.string()) })),
-          ])),
-        }), message);
+    return { listed, sections };
+  }
 
-        if (!parsed.success || parsed.output.role !== 'assistant') continue;
+  /** The agent's chat as its pane reads it: the brief, and the answer its turn recorded. */
+  async childTranscript(name: string): Promise<string[]> {
+    const rows = this.probeState.storage.sql.exec<{ actor_id: string }>('SELECT actor_id FROM workspace_actors WHERE name = ?', name).toArray();
+    const lines: string[] = [];
 
-        const content = parsed.output.content;
+    // The chat lives in the agent's own database; read it as its pane does.
+    for (const { actor_id: actorId } of rows) {
+      const messages = await (await this.agentFacetOf(actorId)).history(this.agentSnapshot(actorId));
 
-        const text = v.is(v.string(), content)
-          ? content
-          : (content ?? []).map((part) => part.text ?? '').join('');
-
-        if (text !== '') lines.push(`assistant: ${text}`);
+      for (const message of v.parse(v.array(ChatTextSchema), messages)) {
+        for (const part of message.parts) if (part.type === 'text' && part.text !== undefined) lines.push(`${message.role}: ${part.text}`);
       }
     }
 
-    const open = this.probeState.storage.sql.exec<{ text: string }>(
-      `SELECT group_concat(p.text, '') AS text FROM (
-         SELECT p.text, m.rowid AS message_row FROM stream_parts p
-         JOIN session_messages m ON m.actor_id = p.actor_id AND m.message_id = p.message_id
-         JOIN workspace_actors a ON a.actor_id = p.actor_id
-         WHERE a.name = ? AND p.kind = 'text' AND m.sealed_at IS NULL
-         ORDER BY m.rowid, p.part_no, p.segment) p
-       GROUP BY p.message_row`, name).toArray();
-
-    for (const row of open) lines.push(`assistant: ${row.text}`);
-
     return lines;
   }
+
 
   private readonly wakeReturn = Promise.withResolvers<void>();
 
@@ -187,9 +186,9 @@ export class HireOrchestrator extends ProductionOrchestrator {
   }
 
   private countReturnedWake(): void {
-    const inFlight = this.probeState.storage.sql.exec<{ n: number }>(
-      `SELECT COUNT(*) AS n FROM actor_turn_claims c JOIN workspace_actors a ON a.actor_id = c.actor_id
-       WHERE a.origin IN ('user','agent','evolution') AND c.outcome IS NULL`).one().n;
+    // A subordinate's turn claim is in its own database; the workspace knows which of its turns are running.
+    const inFlight = this.actorDirectoryStore().list()
+      .filter((record) => isSubordinateOrigin(record.origin) && this.currentTurnOf(actorReferenceOf(record)) !== null).length;
 
     diagnostics.event('probe.wake_returned', { delegatedTurnsInFlight: inFlight });
 
@@ -207,6 +206,7 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
   /** Every delegated turn ended and every task agent its answer retired: a hirer no longer waits on either. */
   async settled(): Promise<void> {
+    await this.agentTurns.idle();
     await this.delegatedTurns.idle();
     await this.settleBackgroundTasks();
   }
@@ -249,7 +249,9 @@ export class HireAI extends WorkerEntrypoint {
 }
 
 const WireLogSchema = v.looseObject({
-  calls: v.array(v.looseObject({ toolResults: v.optional(v.array(v.unknown())), lastUser: v.optional(v.string()) })),
+  calls: v.array(v.looseObject({
+    toolResults: v.optional(v.array(v.unknown())), lastUser: v.optional(v.string()), tools: v.optional(v.array(v.string())),
+  })),
 });
 
 interface HireRunOptions {
@@ -261,7 +263,7 @@ interface HireRunOptions {
 /** A `Pick` intersection: the full stub type instantiates too deeply to compile. */
 type HireTarget = Pick<ProductionOrchestrator, 'claimOwner' | 'setModel' | 'setSoul' | 'runTaskFromMcp' | 'dismissSubordinate'>
   & Pick<HireOrchestrator,
-    'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript' | 'wakeReturned' | 'wakeWhileRunning' | 'stopHosted' | 'settled'>;
+    'rosterRows' | 'actorRows' | 'logRows' | 'turnCounts' | 'driveOwedWork' | 'rootActorId' | 'childTranscript' | 'wakeReturned' | 'wakeWhileRunning' | 'stopHosted' | 'settled' | 'archiveSections'>;
 
 /** `durableObjects` installs `HireOrchestrator` under the `OrchestratorAgent` name, so every stub carries the fixture reads. */
 interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
@@ -274,7 +276,7 @@ type OwnerTarget = Pick<UserDO,
 export class HireProbeRoot extends Agent<ProbeRootEnv> {
   /** Settles once the durable lane's `msg` call has returned its receipt, its admission written. */
   async msgSent(): Promise<void> {
-    await fetch('http://hire-control.invalid/hire/msg-sent');
+    await fetch(hireControlUrl(this.name, 'msg-sent'));
   }
 
   private target(workspace: string): Promise<HireTarget> {
@@ -286,7 +288,7 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
   }
 
   async setup(workspace: string, model: string, script: ChildScript): Promise<void> {
-    await fetch('http://hire-control.invalid/hire/reset', {
+    await fetch(hireControlUrl(workspace, 'reset'), {
       method: 'POST', body: JSON.stringify({ script }),
     });
 
@@ -300,7 +302,7 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
 
     await userDO.ensureWorkspaceCapability(workspace, claim.capabilityHash);
     await userDO.setCredential(caller, 'openai-compat.default', {
-      kind: 'openai-compat', baseURL: 'http://hire-models.invalid/v1', apiKey: 'hire-fixture-key',
+      kind: 'openai-compat', baseURL: hireModelsBaseUrl(workspace), apiKey: 'hire-fixture-key',
     });
     // Written through the account catalog's compare-and-swap: every tier slot is checked against the provider
     // listing at the turn boundary, so the default must name a spec this host offers.
@@ -317,18 +319,18 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
 
   /** Let a parked child finish its turn. */
   async releaseChild(): Promise<void> {
-    await fetch('http://hire-control.invalid/hire/release-child', { method: 'POST' });
+    await fetch(hireControlUrl(this.name, 'release-child'), { method: 'POST' });
   }
 
   /** Settles when the child's turn reached the model wire. */
   async childSpoke(): Promise<void> {
-    await fetch('http://hire-control.invalid/hire/child-spoke');
+    await fetch(hireControlUrl(this.name, 'child-spoke'));
   }
 
   /** Settles when the caller's own `agents` call resolved into its next model
    *  request — the caller observing its answer. */
   async callerObserved(): Promise<void> {
-    await fetch('http://hire-control.invalid/hire/root-saw');
+    await fetch(hireControlUrl(this.name, 'root-saw'));
   }
 
   async stopChild(workspace: string): Promise<void> {
@@ -374,6 +376,10 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
     await target.driveOwedWork();
   }
 
+  async archiveSections(workspace: string): Promise<ArchiveSections> {
+    return await (await this.target(workspace)).archiveSections();
+  }
+
   async observe(workspace: string): Promise<HireObservation> {
     const target = await this.target(workspace);
     const rootActorId = await target.rootActorId();
@@ -381,7 +387,7 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
     const actors = await target.actorRows();
     const log = await target.logRows();
     const turns = await target.turnCounts();
-    const response = await fetch('http://hire-control.invalid/hire/log');
+    const response = await fetch(hireControlUrl(workspace, 'log'));
 
     const wire = v.parse(
       v.fallback(WireLogSchema, { calls: [] }),
@@ -390,19 +396,23 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
 
     const toolResults: string[] = [];
     const reports: string[] = [];
+    const rootReports: string[] = [];
 
     for (const call of wire.calls) {
       for (const result of call.toolResults ?? []) {
         if (v.is(v.string(), result)) toolResults.push(result);
       }
 
-      if (call.lastUser?.includes(REPORT_MARK) === true) reports.push(call.lastUser);
+      if (call.lastUser?.includes(REPORT_MARK) !== true) continue;
+      reports.push(call.lastUser);
+
+      if (call.tools?.includes('report') !== true) rootReports.push(call.lastUser);
     }
 
     const transcript: string[] = [];
 
     for (const row of roster) transcript.push(...await target.childTranscript(row.name));
 
-    return { rootActorId, roster, actors, log, turns, toolResults, reports, transcript };
+    return { rootActorId, roster, actors, log, turns, toolResults, reports, rootReports, transcript };
   }
 }

@@ -11,9 +11,9 @@ import {
 } from "agents";
 import {
   TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice,
-  actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle, readSessionTranscript,
+  actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
-  type RunEventInput, type SubordinateInspectionAuthority, type SessionTranscriptReader,
+  type RunEventInput, type SubordinateInspectionAuthority, type AgentOwnInspection,
   isSubordinateOrigin,
 } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
@@ -161,6 +161,7 @@ import {
   JsonObjectSchema, JsonValueSchema, changeRoleAsOwner,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
   resolveAgentTurnProfile, resolveRoutingProfile, parentReasoningEffort, ownProfileChoices, createAgentConfigStore, type PinnedProfile,
+  type ResolveAgentTurnProfileInput,
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
   agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createSlateWebCodemodeProvider, createAgentsCodemodeProvider,
@@ -201,7 +202,7 @@ import {
   type TerminalTransition, type TerminalEffectFault, type TerminalEffectTable,
 } from "@kinu.run/core";
 import { createCodemodeToolFactory, type CodemodeFactory } from "./codemode-tool";
-import { codemodeEgress } from "./codemode-egress";
+import { codemodeLauncher, type ProgramLaunch } from "./codemode-sandbox";
 import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
@@ -252,14 +253,16 @@ interface TurnReads {
   readonly identity: PromptIdentity;
   /** The request's model, resolved once: every catalog read of the request sizes against it. */
   readonly catalog: ModelCatalogRead;
+  /** What picked that model; the turn's profile resolves from the same choices. */
+  readonly choices: TierChoices;
 }
+
+type TierChoices = Pick<ResolveAgentTurnProfileInput, 'activeRoleId' | 'explicitTier' | 'workspaceModel' | 'explicitEffort' | 'inheritedEffort'>;
 
 interface TurnAssemblyInput {
   readonly history: readonly ModelMessage[];
   /** The actor's raw tool surface for the requested work mode. */
   readonly tools: ToolSet;
-  /** The CLI's cwd and the tier ride on this body. */
-  readonly body: JsonObject;
   readonly reads: TurnReads;
 }
 
@@ -892,6 +895,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
   protected stopSubtree(_actorId: string): void {}
 
+  protected async agentTurnSettled(_actor: ActorReference): Promise<void> {}
+
   protected temporaryAgentPort(reference: ActorReference = actorReferenceOf(this.actorHandle())): TemporaryAgentPort {
     return this.actorHost().temporary(reference, (bound) => {
       const seams = this.hostedSeams();
@@ -902,6 +907,7 @@ export abstract class ActorAgent extends Agent<Env> {
         roster, runtime: hostedSubordinateRuntime(seams, () => bound), now: () => Date.now(), createName: mintSubordinateName,
         afterTurn: (child, work) => {
           this.detachOwned(async () => {
+            await this.agentTurnSettled(child);
             await this.actorHost().run(child, () => Promise.resolve());
             await work();
           });
@@ -1856,7 +1862,7 @@ export abstract class ActorAgent extends Agent<Env> {
       broadcast: (message, exclude) => { this.broadcastToActor(null, message, exclude); },
       getConnection: (id) => this.getConnection(id),
       history: (limit) => this.chatTranscript.history(limit),
-      admitted: (id) => this.admittedSend(id),
+      admitted: async (id) => this.admittedSend(id),
       send: (input) => this.chatLoop.send({ text: input.text, files: input.files }, { id: input.id, mode: input.mode }),
       interrupt: () => {
         this.chatLoop.interrupt();
@@ -3165,6 +3171,12 @@ export abstract class ActorAgent extends Agent<Env> {
     return v.parse(JsonValueSchema, { text: answer.text, model: spec, tier: profile.tier.id, usage });
   }
 
+  protected codemodeLaunch(actor: string): (online: boolean) => ProgramLaunch {
+    const workspace = this.workspaceName();
+
+    return (online) => codemodeLauncher({ kinuNode: true, egress: online ? { workspace, actor } : null });
+  }
+
   private async callSlateTool(input: {
     rt: HostedActor['runtime']; native: ToolSet; providers: CodemodeProvider[];
     reach: ToolSurfaceNarrowing; route: Extract<SlateBindingRoute, { kind: 'tool' }>; mode: WorkMode;
@@ -3173,7 +3185,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const executorNames = new Set(rt.executionRouter?.getProviders().map((provider) => provider.name) ?? []);
 
     const factory = createCodemodeToolFactory({
-      loader: this.env.LOADER, egress: codemodeEgress({ workspace: this.workspaceName(), actor: rt.actor.actorId }), rt,
+      launch: this.codemodeLaunch(rt.actor.actorId), rt,
       sql: rt.storage.sql, workspace: this.workspaceName(), webSearch: this.ownedModelServices.getWebSearchProvider(), reach,
       browserSessions: this.browserSessionsFor(rt.actor.actorId),
       extraProviders: () => providers.filter((provider) => !executorNames.has(provider.name) && provider.name !== 'web'),
@@ -3273,8 +3285,7 @@ export abstract class ActorAgent extends Agent<Env> {
 
     if (!this._codemodeFactories.has(key)) {
       this._codemodeFactories.set(key, createCodemodeToolFactory({
-        loader: this.env.LOADER,
-        egress: codemodeEgress({ workspace: this.workspaceName(), actor: this.rt.actor.actorId }),
+        launch: this.codemodeLaunch(this.rt.actor.actorId),
         rt: this.rt,
         browserSessions: this.browserSessionsFor(this.rt.actor.actorId),
         reach: narrowing,
@@ -3423,8 +3434,11 @@ export abstract class ActorAgent extends Agent<Env> {
       sql: this.boundSql, raw: this.ctx.storage.sql,
       actor: this.actorHandle(), directory: this.actorDirectoryStore(),
       transcriptFor: (actor) => this.transcriptFor(actor),
+      ownRows: (actor, own) => this.agentInspection(actor.actorId, own),
     }, request, authority);
   }
+
+  protected abstract agentInspection(actorId: string, request: AgentOwnInspection): Promise<SubordinateInspectionResult>;
 
   /**
    * One page of one chat: the caller's own by default, or the subordinate a pane names by actor id.
@@ -3435,14 +3449,13 @@ export abstract class ActorAgent extends Agent<Env> {
     // Strict: a dropped id cursor from an old client re-reads the newest page forever.
     const { actor, ...page } = v.parse(v.strictObject({ ...PositionPageRequestSchema.entries, actor: v.optional(v.string()) }), request);
 
-    return getChatHistoryPage(actor === undefined ? this.chatTranscript : this.subordinateChat(actor), page);
+    if (actor === undefined) return getChatHistoryPage(this.chatTranscript, page);
+    this.requireSubordinateChat(actor);
+
+    return await this.agentHistoryPage(actor, page);
   }
 
-  /**
-   * The chat behind a pane's actor id; the directory refuses ids it never issued or outside this actor's subordinates.
-   * A retired actor is unbound, so it reads via the presence-fenced handle with no file plane.
-   */
-  private subordinateChat(actorId: string): SessionTranscriptReader {
+  private requireSubordinateChat(actorId: string): void {
     const directory = this.actorDirectoryStore();
     const record = directory.retained(actorId);
 
@@ -3451,11 +3464,9 @@ export abstract class ActorAgent extends Agent<Env> {
     for (let step: typeof record | null = record; step?.actorId !== this.actorHandle().actorId; step = directory.retained(step.parentActorId ?? '')) {
       if (step === null || !isSubordinateOrigin(step.origin)) throw new KinuError('denied', 'The actor id does not name a chat this workspace hosts.');
     }
-
-    if (record.retiringAt === null && record.deletedAt === null) return this.transcriptFor(directory.open(actorId));
-
-    return readSessionTranscript(this.boundSql, actorReadHandle(this.boundSql, record), CHAT_SESSION_ID, null);
   }
+
+  protected abstract agentHistoryPage(actorId: string, page: PositionPageRequest): Promise<ChatHistoryPage>;
 
   /** Used to preselect a menu entry; the model list comes from /api/user/models (user-scoped). */
   @callable()
@@ -3803,7 +3814,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * Rebuilds AI-SDK tools from MCP descriptors; cache invalidates on descriptor content hash, and a
    * failed read keeps the last good build. `execute` dispatches as the parent workspace's token.
    */
-  private async buildUserMcpTools(nativeTools: ToolSet, catalog: ModelCatalogRead): Promise<ToolSet> {
+  private async buildUserMcpTools(nativeTools: ToolSet, catalog: Promise<ModelCatalogRead>): Promise<ToolSet> {
     const userId = this.getOwnerUserId();
 
     if (!userId) return {};
@@ -3812,14 +3823,20 @@ export abstract class ActorAgent extends Agent<Env> {
     // token was issued, and a real read failure must not silently empty the surface.
     if (!this.workspaceCapabilityToken()) return {};
     const caller = await this.userCaller();
+    // Read beside the model's resolution; a failed read reaches the failure arm through `refresh`.
+    const surface = this.requireOwnerUserDO().userMcp_toolDescriptors(caller);
+    const [read] = await Promise.allSettled([catalog, surface]);
+
+    // An unresolved profile fails the turn in `readTurnInputs`.
+    if (read.status === 'rejected') return {};
 
     try {
       // Budget is the resolved model's step context limit minus this actor's own tool definitions, read
       // off the same `ModelCatalogSession` as compaction (`McpSurfaceBudget`).
       const tools = await this.mcpToolsCache.refresh(
-        () => this.requireOwnerUserDO().userMcp_toolDescriptors(caller),
+        () => surface,
         {
-          ...catalog.window(),
+          ...read.value.window(),
           nativeToolTokens: toolSurfaceTokens(nativeTools),
         },
       );
@@ -3931,9 +3948,9 @@ export abstract class ActorAgent extends Agent<Env> {
     // The chat view, not the raw surface: a slow `run` must detach into a background job whose
     // settle wakes a turn, and that wrap lives here.
     const tools = this.getTools();
-    const reads = await this.readTurnInputs(tools);
-    this._executorsUsedThisTurn.clear();
     const body = item.metadata ?? {};
+    const reads = await this.readTurnInputs(tools, body);
+    this._executorsUsedThisTurn.clear();
     this._cliCwd = readCliCwd(body);
     this._turnContinuity = readTurnContinuity(body);
     // Read where the turn opens: the recorded turn carries it so a recovering host's engine
@@ -3950,7 +3967,7 @@ export abstract class ActorAgent extends Agent<Env> {
     // Frozen so a background re-drive of a context:'inherit' hire carries the conversation
     // the caller actually had.
     this._turnOriginContext = Object.freeze(structuredClone([...history]));
-    const assembled = await this.assembleTurn({ history, tools, body, reads });
+    const assembled = await this.assembleTurn({ history, tools, reads });
     this._turnDurableLength = assembled.rawMessages.length;
     // Bound exactly once before execution; the CLI adapter binds it at the same point.
     this.actorSession.bindProfile(lease, assembled.profile, assembled.profileInputs);
@@ -3971,11 +3988,11 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private async composeNextRequest(): Promise<ComposedRequest> {
     const tools = this.getTools();
-    const reads = await this.readTurnInputs(tools);
+    const reads = await this.readTurnInputs(tools, {});
     const { messages: history } = await this.stores.history.materialize();
 
     const composed = await this.composeTurn({
-      history, tools, body: {}, reads, requestedWorkMode: await this.preparedWorkMode(), cliCwd: this._cliCwd, item: null,
+      history, tools, reads, requestedWorkMode: await this.preparedWorkMode(), cliCwd: this._cliCwd, item: null,
     });
 
     return { execution: await this.executionFor(composed), profile: composed.profile };
@@ -4052,31 +4069,44 @@ export abstract class ActorAgent extends Agent<Env> {
       }), { workspace: this.name });
     }
 
-    this.chatLoop.reviseContext({ counted: true });
+    const unmeasured = await this.chatLoop.measureCleared();
+
+    // The clear frame has no answer; the failure is recorded where the operator's diagnostics read it.
+    if (unmeasured !== null) diagnostics.failure('context.clear_measure_failed', unmeasured, { workspace: this.name });
   }
 
   /** Awaited ahead of `orch.beginTurn`: the turn is not in flight until these reads are back,
    * so a send during a cold workspace's bootstrap is routed as not-in-flight. */
-  private async readTurnInputs(tools: ToolSet): Promise<TurnReads> {
+  private async readTurnInputs(tools: ToolSet, body: JsonObject): Promise<TurnReads> {
     await this.ensureOwnedScaffold();
 
     if (this._cachedSoulText === null) await this.refreshSoulText();
 
-    const catalog = this.modelCatalog.at(this.effectiveModelSpec());
+    const inputs = this.profileInputs();
+
+    // The model the turn's profile will choose: its tier depends on the role, tier and pins, never on the tools, so
+    // every catalog read of the request sizes against the model that serves it.
+    const chosen = inputs.then((profileInputs) => {
+      const choices = this.tierChoices(profileInputs, body);
+      const { model } = resolveAgentTurnProfile({ ...profileInputs, ...choices, workMode: 'build', availableTools: [], activeSkills: [] }).tier;
+
+      return { choices, catalog: this.modelCatalog.at(this.providerRegistry().normalizeSpecSync(model)) };
+    });
 
     // Independent UserDO hops, run in parallel; each keeps its own failure arm.
-    const [profileInputs, mcpTools, , identity] = await Promise.all([
-      this.profileInputs(),
+    const [profileInputs, { choices, catalog }, mcpTools, , identity] = await Promise.all([
+      inputs,
+      chosen,
       // The remote catalog is admitted against the context budget left after the builtins.
       // A failed read answers no tools and the turn runs on builtins.
-      this.buildUserMcpTools(tools, catalog),
+      this.buildUserMcpTools(tools, chosen.then(({ catalog: read }) => read)),
       // Authoritative hub check: the TTL-cached snapshot can lag a mid-session `kinu connect`.
       // On failure it records and answers the last snapshot.
       this.rt.deviceTransport.refreshStatus(),
       this.promptIdentity(),
     ]);
 
-    return { profileInputs, mcpTools, identity, catalog };
+    return { profileInputs, mcpTools, identity, catalog, choices };
   }
 
   /** Runs after the turn is open (`orch.beginTurn`, the run row) and before the first model call. */
@@ -4097,10 +4127,18 @@ export abstract class ActorAgent extends Agent<Env> {
     return this.ownedModelServices.resolveModel(spec);
   }
 
+  /** What picks the turn's tier and model: the role, the request's tier, then the actor's own pins. */
+  private tierChoices(profileInputs: ProfileAuthorityInputs, body: JsonObject): TierChoices {
+    const ownChoices = ownProfileChoices(this.config, profileInputs);
+
+    // Request tier, then the tier pinned at hire, then the role's own default.
+    return { activeRoleId: this.activeRoleLabel(), ...ownChoices, explicitTier: readTurnTier(body) ?? ownChoices.explicitTier };
+  }
+
   /** Effect-free: a measure between turns uses it. */
   private async composeTurn(input: TurnCompositionInput): Promise<ComposedTurn> {
-    const { profileInputs, mcpTools, identity, catalog } = input.reads;
-    const activeRoleId = this.activeRoleLabel();
+    const { profileInputs, mcpTools, identity, catalog, choices } = input.reads;
+    const { activeRoleId } = choices;
     const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
     // Deps-gated builtins (report) are advertised only when this actor class wires them; the
     // agents ladder renders only actions this profile supports, then the active skills' union.
@@ -4141,17 +4179,12 @@ export abstract class ActorAgent extends Agent<Env> {
       ...codemodeCapabilitiesFor(turnCodemodeProviders),
     ];
 
-    const ownChoices = ownProfileChoices(this.config, profileInputs);
-
     const profile = resolveAgentTurnProfile({
       ...profileInputs,
-      activeRoleId,
+      ...choices,
       workMode: requestedWorkMode,
       availableTools,
       activeSkills: activeSetForPrompt?.active.map((skill) => skill.name) ?? [],
-      ...ownChoices,
-      // Request tier, then the tier pinned at hire, then the role's own default.
-      explicitTier: readTurnTier(input.body) ?? ownChoices.explicitTier,
     });
 
     const operation = captureOperationProfile({

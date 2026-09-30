@@ -18,7 +18,7 @@ import type { EventLog } from '../events/hub/log';
 import type { RunEventRecorder } from '../events/recorder';
 import type { RunEvent } from '../events/types';
 import type { CompletedTurn } from '../evolution/types';
-import { attempt, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle as settleEffect, toKinuError, type Refusal } from '../obs/index';
+import { attempt, attemptInItsWords, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle as settleEffect, toKinuError, type Refusal } from '../obs/index';
 import { contextFill, type ContextFill } from '../read-models/context-fill';
 import { workModeForTurnMetadata } from '../prompting/surface';
 import { runOperationProfile } from '../profiles/operation';
@@ -355,19 +355,19 @@ export class ChatSession {
     return contextFill(this.eventRecorder.readContextMeasures(), catalogWindow);
   }
 
+  /** A frame with no tokens says no true number exists. */
   private broadcastContextFill(): void {
     const fill = contextFill(this.eventRecorder.readContextMeasures(), null);
 
-    if (fill === null) return;
     this.emit({
       type: 'broadcast',
-      event: { type: 'context_fill', contextTokens: fill.tokens, ...(fill.window !== null && { contextWindow: fill.window }) },
+      event: fill === null
+        ? { type: 'context_fill' }
+        : { type: 'context_fill', contextTokens: fill.tokens, ...(fill.window !== null && { contextWindow: fill.window }) },
     });
   }
 
   get pumpPromise(): Promise<void> | null { return this.activePump; }
-  /** Settles once no measure or fold is pending. */
-  get revised(): Promise<void> { return this.revision ?? Promise.resolve(); }
   get pumping(): boolean { return this.pumpActive; }
   get currentRunId(): string | null { return this.runId; }
   /** Open on purpose, so the wake reconcile must not seal them. */
@@ -483,9 +483,10 @@ export class ChatSession {
     return this.transcript.has(`${PROGRAMMATIC_MESSAGE_ID_PREFIX}${identity}`);
   }
 
-  /** Settling has no next step. A queued, unopened user turn counts: a message behind it rides its first step. */
+  /** Settling has no next step. A queued, unopened user turn or genesis offer counts: a message behind it rides its
+   *  first step, so an offer is consumed only by a message that arrived before it. */
   turnInFlight(): boolean {
-    return this.actorSession.inFlight || this.queue.some((item) => item.kind === 'user');
+    return this.actorSession.inFlight || this.queue.some((item) => item.kind === 'user' || item.yieldsToUserMessage === true);
   }
 
   /** Send; resolves where it landed (`'mid-turn'` or `'turn'`), never guessed at admission, and rejects if it did not land. */
@@ -609,27 +610,53 @@ export class ChatSession {
     await this.flushEvents();
   }
 
-  async clear(): Promise<void> {
+  /** Resolves once the emptied request is measured, with why not if the measure failed; the clear itself stands. */
+  async clear(): Promise<KinuError | null> {
     await this.actorSession.clearConversation(this.sessionId, () => {
       if (this.turnInFlight()) throw new KinuError('denied', CLEAR_NEEDS_IDLE);
     });
-    this.reviseContext({ counted: true });
+
+    return this.measureCleared();
+  }
+
+  /** Every client's number after a clear comes from here: the gate's measure of the emptied request. */
+  measureCleared(): Promise<KinuError | null> {
+    return this.revise(() => settleEffect(Effect.match(
+      attemptInItsWords('unavailable', () => this.measureNextRequest({ counted: true, trigger: 'auto' })),
+      {
+        onSuccess: () => null,
+        // Recorded, so every client and every reload reads no number rather than the cleared conversation's.
+        onFailure: (failure) => {
+          this.eventRecorder.emit(WORKSPACE_RUN_ID, { type: 'context_admitted', tokens: null, contextWindow: null });
+
+          return failure;
+        },
+      },
+    )));
   }
 
   reviseContext(options: { readonly counted: boolean }): void {
-    const measuring = (this.revision ?? Promise.resolve()).then(() => this.measureContextRevision(options));
-    this.revision = measuring;
-    this.actorSession.orchestrator.track(measuring.then(() => { if (this.revision === measuring) this.revision = null; }), 'measuring the revised context');
+    this.actorSession.orchestrator.track(this.revise(() => this.measureContextRevision(options)), 'measuring the revised context');
   }
 
   /** A failed fold leaves the conversation as it was and arms nothing; a turn sent meanwhile waits. */
   compact(): Promise<void> {
-    const folded = (this.revision ?? Promise.resolve()).then(() => settleEffect(Effect.result(this.fold())));
-    const revision = folded.then(() => undefined);
-    this.revision = revision;
-    this.actorSession.orchestrator.track(revision.then(() => { if (this.revision === revision) this.revision = null; }), 'folding the conversation');
+    return this.revise(() => settleEffect(Effect.result(this.fold())))
+      .then((outcome) => settleEffect(Result.isSuccess(outcome) ? Effect.void : Effect.fail(outcome.failure)));
+  }
 
-    return folded.then((outcome) => settleEffect(Result.isSuccess(outcome) ? Effect.void : Effect.fail(outcome.failure)));
+  /** One revision at a time; a turn waits for the one in flight, so its own measure is the newer. `run` settles its own
+   *  failure, so the revision a turn awaits never rejects. */
+  private revise<T>(run: () => Promise<T>): Promise<T> {
+    const ran = (this.revision ?? Promise.resolve()).then(run);
+    const revision = ran.then(() => undefined);
+    this.revision = revision;
+
+    return ran.then((value) => {
+      if (this.revision === revision) this.revision = null;
+
+      return value;
+    });
   }
 
   private fold(): Effect.Effect<void, KinuError> {
@@ -740,9 +767,13 @@ export class ChatSession {
     try {
       let item: QueueItem | undefined;
 
-      while ((item = this.queue.shift())) {
-        // So the turn's own measure is the newer.
+      for (;;) {
+        // Before the item leaves the queue, so it still counts as in flight to a message sent meanwhile; and so the
+        // turn's own measure is the newer.
         await this.revision;
+        item = this.queue.shift();
+
+        if (item === undefined) break;
         // Checked per item, immediately before the turn runs. A refusal settles the item, so its producer
         // compensates.
         const refusal = this.ports.driverGate();

@@ -4,6 +4,7 @@
  */
 
 import type { CredentialedVfs, SnapshotInfo, SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import { Effect } from 'effect';
 import type { VfsCred } from '@nimbus-sh/core/vfs/vfs.js';
 import type { AgentRuntime } from '../types/agent-runtime';
 import { PLATFORM_CATALOG } from '../platform-catalog';
@@ -11,7 +12,7 @@ import { diffLines, fileDiff, parseGitDiff, type FileDiff, type FileStatus, type
 import { nanoid } from '../utils/nanoid';
 import * as v from 'valibot';
 import { CommandResultSchema } from '../execution/exec-result';
-import { KinuError, renderThrownChain, tolerate } from '../obs/index';
+import { attempt, diagnostics, KinuError, renderThrownChain, settle, tolerate, type ErrorCode } from '../obs/index';
 import { shellQuote } from '../utils/shell';
 import { LEGACY_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
 
@@ -160,15 +161,11 @@ interface Sides {
   readonly omitted: Omitted;
 }
 
-/** Take a review: a snapshot of the store, O(1) at any size. Keeps it and the one it replaced, for Undo. */
+/** O(1) review publication. */
 async function capture(rt: WorkspaceBaselineRuntime, store: WorkspaceBaselineStore): Promise<SnapshotInfo> {
   rt.actor.assertCurrent();
-  const taken = store.snapshot(`${reviewPrefix(rt)}${nanoid()}`);
 
-  // Older reviews pin the store's history for nothing.
-  for (const stale of reviews(rt, store).slice(0, -2)) await store.dropSnapshotAsync(stale.name);
-
-  return taken;
+  return store.snapshot(`${reviewPrefix(rt)}${nanoid()}`);
 }
 
 /** Cumulative change-set since the baseline: only the paths the store wrote since the review are examined. */
@@ -232,22 +229,52 @@ export async function getWorkspaceDiff(rt: WorkspaceBaselineRuntime, baselines: 
   return { files, trackedSince: baseline.createdAt, baseline: baseline.name.slice(reviewPrefix(rt).length) };
 }
 
-/** Mark the workspace as it is now reviewed: every later read measures from here. */
-export async function resetWorkspaceBaseline(
-  rt: WorkspaceBaselineRuntime, baselines: WorkspaceBaselines,
-): Promise<{ ok: true; capturedAt: number }> {
-  const taken = await capture(rt, baselines.store);
+export interface WorkspaceReviewResult {
+  readonly ok: true;
+  readonly capturedAt: number;
+  readonly cleanupFailures: readonly { snapshot: string; code: ErrorCode }[];
+}
 
-  return { ok: true, capturedAt: taken.createdAt };
+/** Published reviews report cleanup failures; the next review retries them. */
+export function resetWorkspaceBaseline(
+  rt: WorkspaceBaselineRuntime, baselines: WorkspaceBaselines,
+): Promise<WorkspaceReviewResult> {
+  return settle(Effect.gen(function* () {
+    const taken = yield* Effect.promise(() => capture(rt, baselines.store));
+
+    // Older reviews pin the store's history for nothing.
+    const cleanup = yield* Effect.forEach(reviews(rt, baselines.store).slice(0, -2), (stale) => attempt(
+      { doing: 'collecting an unreferenced workspace review snapshot', otherwise: 'io' },
+      () => baselines.store.dropSnapshotAsync(stale.name),
+    ).pipe(Effect.match({
+      onSuccess: () => null,
+      onFailure: (failure) => {
+        diagnostics.failure('workspace.review_cleanup_failed', failure, { snapshot: stale.name });
+
+        return { snapshot: stale.name, code: failure.code };
+      },
+    })));
+
+    const result: WorkspaceReviewResult = {
+      ok: true, capturedAt: taken.createdAt, cleanupFailures: cleanup.filter((failed) => failed !== null),
+    };
+
+    return result;
+  }));
 }
 
 /** Undoes the last Mark reviewed: the review it replaced is the baseline again. */
 export async function restoreWorkspaceBaseline(
   rt: WorkspaceBaselineRuntime, baselines: WorkspaceBaselines,
 ): Promise<{ ok: true; capturedAt: number } | { ok: false; error: string }> {
-  const [replaced, latest] = reviews(rt, baselines.store).slice(-2);
+  const retained = reviews(rt, baselines.store);
+  const [replaced, latest] = retained.slice(-2);
 
   if (replaced === undefined || latest === undefined) return { ok: false, error: 'There is no earlier review to go back to.' };
+
+  // Prune leftovers first, or Undo could expose another obsolete review.
+  for (const stale of retained.slice(0, -2)) await baselines.store.dropSnapshotAsync(stale.name);
+
   await baselines.store.dropSnapshotAsync(latest.name);
 
   return { ok: true, capturedAt: replaced.createdAt };

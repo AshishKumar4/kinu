@@ -322,6 +322,7 @@ const ORCHESTRATOR_METHODS = [
   'requestOverviewPush',
   'ownsBrowserSession',
   'supervisorOp',
+  'agentWorkspace',
   'workspaceTitle',
   // Eval-only. Never `@callable`; the route admits only the eval-service identity.
   'evalAbortActivation',

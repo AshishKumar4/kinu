@@ -11,6 +11,9 @@ export const NEST_MISSION = 'HIRE-NEST-BRIEF';
 
 export const NEST_RELAY = 'RELAYED';
 
+/** The deepest helper's answer under `chain`: its own hire is refused at the depth cap. */
+export const CHAIN_BOTTOM = 'CHAIN-BOTTOM-7';
+
 /** How a hired agent's report reads in the drain turn it opens on its hirer. */
 export const REPORT_MARK = '[subordinate_report]';
 
@@ -68,5 +71,22 @@ export interface HireObservation {
   readonly toolResults: readonly string[];
   /** Every report message a hirer's turn opened on (`[subordinate_report]` drain text). */
   readonly reports: readonly string[];
+  /** The reports the root's own turns opened on: the root alone carries no `report` tool. */
+  readonly rootReports: readonly string[];
   readonly transcript: readonly string[];
+}
+
+/** The model endpoint a workspace's owner credential names; the path carries the workspace to its run. */
+export function hireModelsBaseUrl(workspace: string): string {
+  return `http://hire-models.invalid/w/${encodeURIComponent(workspace)}/v1`;
+}
+
+/** A workspace's control endpoint: its reset, gates and log. */
+export function hireControlUrl(workspace: string, op: string): string {
+  return `http://hire-control.invalid/hire/${encodeURIComponent(workspace)}/${op}`;
+}
+
+export interface ArchiveSections {
+  readonly listed: readonly string[];
+  readonly sections: Readonly<Record<string, number>>;
 }

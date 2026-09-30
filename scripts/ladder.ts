@@ -177,6 +177,10 @@ export interface Gate {
    *  reason a hash over the tree cannot stand for it. See
    *  `scripts/ladder-closure.ts`. */
   readonly inputs: Inputs;
+  /** Why no measured cost stands for the gate: its work is whatever the staged index holds, nothing on one commit
+   *  and six suites' worth on the next. A tier runs it alone after its wave ({@link tierSchedule}); a deploy runs
+   *  on a clean worktree, whose index holds nothing. */
+  readonly sizedByIndex?: string;
 }
 
 /** The environment names the by-name projections in `packages/test-utils`
@@ -386,6 +390,21 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
+    run: 'bun run gate:cost-table',
+    label: 'Cost table covers the wave',
+    // COMMIT: a lane that changes a row's command is the one asked to measure it. Until 2026-09-29 only
+    // deploy.test.ts (ci) reached `deployPlan()`'s refusal, and b631df84cd's widened chat-scroll row reached the
+    // ci tier unmeasured. Measured 2026-09-29 on the 24-thread box at load 1.1: 1.05 s through the ladder's runner.
+    tier: 'commit',
+    seconds: 1.05,
+    catches: 'a row the deploy\'s concurrent wave schedules with no measured cost, a figure taken from a run that '
+      + 'failed, and a figure kept for a command that is no longer a gate: the three ways the wave admits a row '
+      + 'against a number nobody took for it.',
+    blind: 'whether a figure still describes its row: a command whose text stays while its work grows keeps its old '
+      + 'figure.',
+    inputs: { kind: 'derived' },
+  },
+  {
     run: 'bun run gate:set-equality',
     label: 'Measured set equals governed set',
     tier: 'commit',
@@ -526,11 +545,12 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:skip-ratchet',
     label: 'Declared skip ratchet',
-    // Push: a skip set is fully recoverable at push.
-    tier: 'push',
-    // Re-measured 2026-09-23 on the 24-thread box at load 5: 17.8/17.9/18.5 s; the
-    // vitest arm has grown since the 12 s of 2026-09-05. Too slow for commit.
-    seconds: 18,
+    // COMMIT, moved from push 2026-09-29, for gate:dead-code's reason: a lane commits and never pushes, so a push
+    // gate first ran at integration. It caught the live-model lifecycle still reading `inodes` after the Nimbus
+    // 0.13.1 adoption renamed the table, which that lane's own matrix had passed. Measured 2026-09-29 alone in
+    // kinu-deploy.slice: 16.7/28.5/29.0 s at load 7-10, 48-74 CPU-s, 4.6 GiB peak; 24.6 s inside the ci wave.
+    tier: 'commit',
+    seconds: 25,
     catches: 'a test that starts skipping, and a declared skip that has started running '
       + 'without the lock being tightened. Credential-free the live tier reports its skips '
       + 'and exits 0, and that exit code is all anyone reads — so the skipped set is locked '
@@ -1748,7 +1768,7 @@ export const LADDER: readonly Gate[] = [
     inputs: CLIENT_BUILD,
   },
   {
-    run: 'bun test --timeout=0 tests/browser/chat-scroll.test.ts',
+    run: 'bun test --timeout=0 tests/browser/chat-scroll.test.ts tests/browser/chat-sparse-pages.test.ts',
     label: 'Chat infinite scroll',
     tier: 'ci',
     seconds: 34,
@@ -1764,7 +1784,8 @@ export const LADDER: readonly Gate[] = [
       + 'the prefetch re-arms on a view left pinned at the top edge. Also that the '
       + 'browser\'s own scroll anchoring is off, that each page is one request rather '
       + 'than a burst, that a FAILED page never renders "beginning of the '
-      + 'conversation", and that the walk and the socket do not draw one message twice.',
+      + 'conversation", and that the walk and the socket do not draw one message twice. '
+      + 'A failed sparse page keeps Retry visible at its gap and pauses until it is retried.',
     blind: 'everything about the SERVER half. The frame stubs `fetchPage`, so no rowid '
       + 'seek, no `limit + 1` over-read and no stale cursor is exercised here — those '
       + 'are unit-tested against the read model instead. Two hooks and one merge rule '
@@ -1993,6 +2014,8 @@ export const LADDER: readonly Gate[] = [
     run: 'bun scripts/flake-gate.ts',
     label: 'Changed test files, repeated',
     tier: 'commit',
+    sizedByIndex: 'it repeats each staged test file as its own row runs it, browser and workerd suites included, and '
+      + 'plain suites up to six at once; its measured cost is the empty index\'s.',
     // 0.3 s when the commit changes no test file, as at push, in CI and at a deploy. A commit that changes one pays
     // for REPEATS runs of it (BROWSER_REPEATS for a browser suite), which is the gate's whole point.
     seconds: 0.3,
@@ -2570,6 +2593,16 @@ export function waveCaps() {
   if (!(rssMb > 0)) throw new Error('cannot read MemAvailable from /proc/meminfo, so the wave has no memory cap; set KINU_DEPLOY_RSS_MB');
 
   return { threads, rssMb };
+}
+
+/** How a tier runs its gates: the ones that declare a phase alone first, as the deploy's preflight does, then the
+ *  wave, then each gate whose work is the staged index alone. */
+export function tierSchedule<G extends Gate>(gates: readonly G[]) {
+  return {
+    first: gates.filter((gate) => gate.phase !== undefined),
+    wave: gates.filter((gate) => gate.phase === undefined && gate.sizedByIndex === undefined),
+    last: gates.filter((gate) => gate.phase === undefined && gate.sizedByIndex !== undefined),
+  };
 }
 
 /**
@@ -3591,18 +3624,24 @@ if (import.meta.main) {
   };
 
   if (concurrent) {
-    const alone = pending.filter((entry) => entry.gate.phase !== undefined);
-    const wave = pending.filter((entry) => entry.gate.phase === undefined);
+    const schedule = tierSchedule(pending.map((entry) => entry.gate));
+    const entriesOf = (part: readonly Gate[]) => pending.filter((entry) => part.includes(entry.gate));
 
-    for (const entry of alone) {
+    for (const entry of entriesOf(schedule.first)) {
       await runPending(entry);
 
       if (failed.length > 0) process.exit(1);
     }
 
-    await tierWave(wave.map((entry) => ({ entry, row: waveRow(entry.gate, tracked) })), runPending, () => failed.length > 0);
+    await tierWave(entriesOf(schedule.wave).map((entry) => ({ entry, row: waveRow(entry.gate, tracked) })), runPending, () => failed.length > 0);
 
     if (failed.length > 0) process.exit(1);
+
+    for (const entry of entriesOf(schedule.last)) {
+      await runPending(entry);
+
+      if (failed.length > 0) process.exit(1);
+    }
   } else {
     for (const entry of pending) {
       await runPending(entry);

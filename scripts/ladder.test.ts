@@ -24,8 +24,8 @@ import { childEnv } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
-  DEPLOY_PHASES, browserModules, deployPlan, gatesFor, liveTierTargets, packageScripts,
-  printPlan, runnableArgv, sharedBrowserModules, sharedOf, tierWave, trackedTestFiles, type WaveRow,
+  DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts,
+  printPlan, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, type WaveRow,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
@@ -36,7 +36,8 @@ import { declaredName, parse, walk } from './syntax';
 import { auditClosure } from './ladder-audit';
 import { gateEnvironment } from './ladder-cache';
 import { deriveClosure, repoAt } from './ladder-closure';
-import { COST_TABLE, QUIET_LOAD, readCosts } from './gate-cost';
+import { COST_TABLE, readCosts } from './gate-cost';
+import { costTableFaults } from './cost-table';
 
 const root = resolve(import.meta.dir, '..');
 
@@ -183,37 +184,27 @@ describe('the ladder measures something', () => {
         + 'its figure is of a run that exited 1');
   });
 
-  // THE COST TABLE IS THE WAVE'S ONE SET OF FIGURES, and a figure for a row
-  // that no longer exists is the same defect as a row with no figure: both are
-  // a scheduler deciding from something nobody measured. `deployPlan()`
-  // refuses the second at plan time; this names the first, which it cannot
-  // see, and names the rows whose figures were taken on a busy box.
-  test('the cost table measures exactly the rows the wave schedules concurrently', () => {
+  // THE COST TABLE IS THE WAVE'S ONE SET OF FIGURES, checked at commit by `gate:cost-table`: a figure for a row
+  // that no longer exists is the same defect as a row with no figure. Both, and a figure from a failed run, name
+  // the row; a full table names nothing.
+  test('the cost table gate names a stale figure, an unmeasured wave row and a failed figure', () => {
     const costs = readCosts();
-    const runs = new Set(LADDER.map((gate) => gate.run));
-    const stale = Object.keys(costs.rows).filter((run) => !runs.has(run));
-    expect(stale, 'measured figures kept for rows that are no longer gates').toEqual([]);
+    const planned = deployOrder().filter((gate) => (gate.phase ?? 'source') === 'source');
+    const [first, second] = planned;
 
-    const failed = Object.entries(costs.rows).filter(([, cost]) => cost.exit !== 0).map(([run, cost]) => `${run}: exit ${String(cost.exit)}`);
-    expect(failed, 'figures taken from runs that failed, so short by whatever they never ran').toEqual([]);
+    if (first === undefined || second === undefined) throw new Error('the deploy wave holds fewer than two rows');
+    const failed = costs.rows[second.run];
 
-    const unmeasured = deployPlan()
-      .filter((row) => row.phase === 'source' && costs.rows[row.run] === undefined)
-      .map((row) => row.run);
+    if (failed === undefined) throw new Error(`${second.run} has no figure`);
+    const rows = Object.fromEntries(Object.entries(costs.rows).filter(([run]) => run !== first.run));
+    rows['bun test --timeout=0 gone.test.ts'] = failed;
 
-    expect(unmeasured, 'rows the wave runs concurrently with no measured cost').toEqual([]);
-
-    // A row measured under load reads its achieved parallelism LOW, and a cost
-    // read low is a row the wave over-admits. The runnable-task figure carries
-    // such a row (gate-cost.ts), so this is a report and not a verdict — but
-    // an unrepeated figure has to be visible somewhere.
-    const contended = Object.entries(costs.rows)
-      .filter(([, cost]) => cost.loadAtStart >= QUIET_LOAD)
-      .map(([run]) => run);
-
-    if (contended.length > 0) {
-      console.log(`cost table: ${String(contended.length)} row(s) measured above load ${String(QUIET_LOAD)}; re-run with gate-cost-measure.ts --contended on a quiet box`);
-    }
+    expect(costTableFaults(costs)).toEqual([]);
+    expect(costTableFaults({ ...costs, rows: { ...rows, [second.run]: { ...failed, exit: 1 } } })).toEqual([
+      'a figure for a row that is no longer a gate: bun test --timeout=0 gone.test.ts',
+      `a row the wave runs concurrently with no measured cost: ${first.run}`,
+      `a figure taken from a run that exited 1: ${second.run}`,
+    ]);
   });
 
   /* ── The browser-lane census ──────────────────────────────────────────
@@ -977,6 +968,18 @@ describe('the deadline wrapper reads only what its closure holds', () => {
 });
 
 describe('a tier runs its gates as a wave', () => {
+  // Review of d35c1060fe: the commit wave admitted the flake gate on its empty-index cost (0.34 s, 72 MiB) while a
+  // staged browser or workerd suite had it running up to six real suites beside the rest.
+  test('a gate whose work is the staged index runs alone after the wave, never in it', () => {
+    const schedule = tierSchedule(tierRun('commit'));
+    const byIndex = tierRun('commit').filter((gate) => gate.inputs.kind === 'live' && gate.sizedByIndex !== undefined);
+
+    expect(byIndex.map((gate) => gate.run)).toContain('bun scripts/flake-gate.ts');
+    expect(schedule.last).toEqual(byIndex);
+    expect(schedule.wave.filter((gate) => byIndex.includes(gate))).toEqual([]);
+    expect([...schedule.first, ...schedule.wave, ...schedule.last]).toHaveLength(tierRun('commit').length);
+  });
+
   const row = (threads: number, shared: WaveRow['shared'] = 'none', wall = 1): WaveRow => ({ threads, rssMb: 100, wall, shared });
 
   /** Runs the wave over `rows`, each gate a few microtask turns long, and records what ran beside what. */

@@ -27,13 +27,14 @@ export const SUBORDINATE_LIFETIMES = ['durable', 'task'] as const;
 
 export type SubordinateLifetime = (typeof SUBORDINATE_LIFETIMES)[number];
 
-/** Later while a hire works, input is queued, or a settled hire's report waits unread. */
+/** Later while a hire works, input is queued, or a settled hire's report waits unread. An evolution helper (the
+ *  turn's advisor) answers the runtime, never this turn, so it holds nothing. */
 export function taskAnswerIsLater(input: {
   readonly roster: SubordinateRosterStore;
   readonly log: EventLog;
   readonly turnTaskId?: string;
 }): boolean {
-  return input.roster.list().some((hire) => hire.status === 'working')
+  return input.roster.list().some((hire) => hire.status === 'working' && hire.origin !== 'evolution')
     || input.log.pending({ variant: 'subordinate_task' }).some((row) => row.id !== input.turnTaskId)
     || input.log.pending({ variant: 'subordinate_report' }).length > 0;
 }

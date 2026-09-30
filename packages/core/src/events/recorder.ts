@@ -95,7 +95,7 @@ export const RunEventSchema = v.variant('type', [
     status: v.optional(v.number()),
     source: v.picklist(['header', 'backoff', 'cooldown']) }),
   v.object({ ...BaseFields, type: v.literal('model_fallback'), from: v.string(), to: v.string(), reason: v.string() }),
-  v.object({ ...BaseFields, type: v.literal('context_admitted'), tokens: v.number(), contextWindow: v.number() }),
+  v.object({ ...BaseFields, type: v.literal('context_admitted'), tokens: v.nullable(v.number()), contextWindow: v.nullable(v.number()) }),
   v.object({ ...BaseFields, type: v.literal('head_split'), rootId: v.string(),
     headIds: v.array(v.string()), rationale: v.string() }),
   v.object({ ...BaseFields, type: v.literal('head_merge'), rootId: v.string(),
@@ -199,8 +199,8 @@ export interface ContextMeasureRow {
 }
 
 export interface ContextMeasures {
-  readonly provider: ContextMeasureRow | null;
-  readonly gate: (ContextMeasureRow & { readonly contextWindow: number }) | null;
+  readonly provider: (ContextMeasureRow & { readonly step: Extract<RunEvent, { type: 'step_finish' }> }) | null;
+  readonly gate: (Omit<ContextMeasureRow, 'tokens'> & { readonly tokens: number | null; readonly contextWindow: number | null }) | null;
 }
 
 /** Ceiling for untrusted callers only; in-object folds (e.g. `getRunSummaries`) state their own
@@ -679,18 +679,21 @@ export class RunEventRecorder {
   readContextMeasures(): ContextMeasures {
     this.actor.assertCurrent();
 
-    const provider = this.sql<{ tokens: number; ts: string; seq: number }>`
-      SELECT json_extract(payload, '$.usage.input') AS tokens, ts, rowid AS seq FROM run_events
+    const provider = this.sql<{ tokens: number; ts: string; seq: number; payload: string }>`
+      SELECT json_extract(payload, '$.usage.input') AS tokens, ts, rowid AS seq, payload FROM run_events
       WHERE actor_id = ${this.actorId} AND type = 'step_finish' AND json_extract(payload, '$.usage.input') IS NOT NULL
       ORDER BY ts DESC, rowid DESC LIMIT 1`[0];
 
-    const gate = this.sql<{ tokens: number; contextWindow: number; ts: string; seq: number }>`
+    const step = provider === undefined ? null : parseStoredRunEvent(provider.payload);
+
+    const gate = this.sql<{ tokens: number | null; contextWindow: number | null; ts: string; seq: number }>`
       SELECT json_extract(payload, '$.tokens') AS tokens, json_extract(payload, '$.contextWindow') AS contextWindow, ts, rowid AS seq
       FROM run_events WHERE actor_id = ${this.actorId} AND type = 'context_admitted'
       ORDER BY ts DESC, rowid DESC LIMIT 1`[0];
 
     return {
-      provider: provider === undefined ? null : { tokens: provider.tokens, at: provider.ts, seq: provider.seq },
+      provider: provider === undefined || step?.type !== 'step_finish'
+        ? null : { tokens: provider.tokens, at: provider.ts, seq: provider.seq, step },
       gate: gate === undefined ? null : { tokens: gate.tokens, contextWindow: gate.contextWindow, at: gate.ts, seq: gate.seq },
     };
   }

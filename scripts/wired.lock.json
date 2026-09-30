@@ -1,5 +1,7 @@
 [
+  "packages/cf-backend/src/agent-facets.ts#AgentWorkspaceRPC (unreached-export)",
   "packages/cf-backend/src/codemode-egress.ts#CodemodeEgress (unreached-export)",
+  "packages/cf-backend/src/codemode-sandbox.ts#CodemodeLauncher (unreached-export)",
   "packages/cf-backend/src/components/surfaces/EnvironmentSurface.tsx#statusOf (unreached-export)",
   "packages/cf-backend/src/components/surfaces/WorkTab.tsx#ParkedCommands (unreached-export)",
   "packages/cf-backend/src/components/surfaces/WorkTab.tsx#ParkedDecisionFlow (unreached-export)",
@@ -158,8 +160,6 @@
   "packages/core/src/execution/sandbox.ts#isSandboxTransientError (unreached-export)",
   "packages/core/src/execution/sandbox.ts#sandboxFiles (unreached-export)",
   "packages/core/src/experience/imports.ts#listImportedExperience (unreached-export)",
-  "packages/core/src/heads/head-inference.ts#buildHeadMessages (unreached-export)",
-  "packages/core/src/heads/head-inference.ts#buildHeadSystemPrompt (unreached-export)",
   "packages/core/src/heads/journal.ts#UNREPORTED_AT_MERGE_REASON (unreached-export)",
   "packages/core/src/heads/reconcile.ts#FORK_INTERRUPTED_REASON (unreached-export)",
   "packages/core/src/heads/reconcile.ts#FORK_INTERRUPTED_SIGNAL (unreached-export)",

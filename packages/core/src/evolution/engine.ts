@@ -12,6 +12,7 @@
 import type { ShadowTrialPlan, ShadowTrialQueueOutcome } from './types';
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
+import { parseJsonValue } from '../utils/json';
 
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { LLM } from '../types/primitives';
@@ -35,7 +36,7 @@ import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombston
 import { conversationTurnPair } from '../identity/conversation-store';
 import { CHAT_SESSION_ID } from '../session/transcript-schema';
 import {
-  ADVISOR_DEDUPE_WINDOW, ADVISOR_EVENT_TYPE, normalizeNote,
+  ADVISOR_DEDUPE_WINDOW, ADVISOR_EVENT_TYPE, AdvisorRowDataSchema, normalizeNote,
   type AdvisorNote, type AdvisorRowData,
 } from '../advisor/review';
 import {
@@ -256,7 +257,12 @@ export class EvolutionEngine {
 
     if (actor === undefined) throw new KinuError('missing', 'the evolution actor has no membership record');
     this.recordsTurns = this.config.enabled && actor.evolves === 1;
-    this.craftLedger = createCraftLedger({ craftStore: rt.craftStore, sql: rt.storage.sql });
+    // Opened on first use: an engine with evolution off never scores a crafted tool, and an agent in its own
+    // isolate has no crafted-tool store (they are the workspace's).
+    let ledger: CraftLedger | undefined;
+    const craft = (): CraftLedger => (ledger ??= createCraftLedger({ craftStore: rt.craftStore, sql: rt.storage.sql }));
+
+    this.craftLedger = { names: () => craft().names(), observe: (names, quality) => craft().observe(names, quality) };
 
     // Created here so every backend gets the engine's ledgers without schema wiring.
     initTurnOutcomeTables(rt.storage.execRaw);
@@ -339,9 +345,9 @@ export class EvolutionEngine {
      * `advisorNegatives` resolves the graded turn through the transcript, so neither
      * message nor response is copied here.
      */
-  recordAdvisorNote(note: AdvisorNote, turnId?: string): void {
+  recordAdvisorNote(note: AdvisorNote, turnId?: string, spoken = false): void {
     const data: AdvisorRowData = {
-      severity: note.severity, class: note.class, turnId: turnId ?? null,
+      severity: note.severity, class: note.class, turnId: turnId ?? null, spoken,
     };
 
     this.emit({ type: ADVISOR_EVENT_TYPE, message: note.note, data });
@@ -361,6 +367,20 @@ export class EvolutionEngine {
      * Idempotency guard for a replayed `advisor_review` effect: the note row is the only
      * durable evidence that the review completed.
      */
+  /** The note recorded for `turnId`, and whether it is to be said to the actor; null before its review is judged. */
+  advisorNoteForTurn(turnId: string): { readonly note: AdvisorNote; readonly spoken: boolean } | null {
+    const [row] = this.rt.storage.sql<{ message: string; data: string }>`
+      SELECT message, data FROM evolution_events
+      WHERE actor_id = ${this.rt.actor.actorId} AND type = ${ADVISOR_EVENT_TYPE}
+        AND json_extract(data, '$.turnId') = ${turnId}
+      ORDER BY created_at LIMIT 1`;
+
+    if (row === undefined) return null;
+    const data = v.parse(AdvisorRowDataSchema, parseJsonValue(row.data));
+
+    return { note: { note: row.message, severity: data.severity, class: data.class }, spoken: data.spoken === true };
+  }
+
   hasAdvisorNoteForTurn(turnId: string): boolean {
     const rows = this.rt.storage.sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM evolution_events

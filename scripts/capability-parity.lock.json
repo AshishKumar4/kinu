@@ -1,1 +1,4 @@
-[]
+[
+  "asymmetry SubordinateInspectionAccess.ownRows#absent-in-cli",
+  "movable packages/cf-backend/src/agent-facet/protocol.ts"
+]

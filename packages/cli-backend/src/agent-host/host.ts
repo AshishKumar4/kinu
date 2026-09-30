@@ -108,8 +108,8 @@ import type { ProfileEnvelopeSource } from '../profile-authority';
 import type { McpServerConfig } from '../mcp';
 
 /**
- * Budget bounds one pass (a full pass re-wakes, so the lease can change hands); independent of
- * `HOSTED_DELEGATION_DRAIN_BUDGET`. Grace is zero for the reason core's `NO_STRANDED_DELIVERY_GRACE`
+ * Budget bounds one pass (a full pass re-wakes, so the lease can change hands); independent of the
+ * cloud drain's one turn per pass. Grace is zero for the reason core's `NO_STRANDED_DELIVERY_GRACE`
  * is: every conversion runs under the cross-process driver lease; cloud's `STALE_EVENT_DELIVERY_MS`
  * is ten minutes because a Durable Object activation may race its own predecessor, which this lease
  * rules out.
@@ -1547,6 +1547,9 @@ export class LocalAgentHost {
         if (admitted.status !== 'queued') {
           throw new KinuError('unavailable', `the local turn queue answered "${admitted.status}"`);
         }
+
+        // The queue owns the turn now; the row is answered by its admission.
+        entry.eventLog.markTurnCompleted(task.turnId);
       },
       onFailure: ({ cause }) => {
         diagnostics.failure(

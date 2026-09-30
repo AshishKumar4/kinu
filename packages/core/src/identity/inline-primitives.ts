@@ -15,7 +15,8 @@ import { renderThrownChain, settle } from '../obs/index';
 import * as v from 'valibot';
 
 export interface AgentDatabase {
-  prepare<T = unknown>(sql: string): { all(...params: unknown[]): T[]; run(...params: unknown[]): void };
+  /** Compiled once per text and kept by the database (bun:sqlite's statement cache). */
+  query<T = unknown>(sql: string): { all(...params: unknown[]): T[]; run(...params: unknown[]): void };
   exec(sql: string): void;
   run(sql: string, params?: unknown[]): void;
   transaction<T>(fn: () => T): () => T;
@@ -33,13 +34,13 @@ const SqlBindingSchema = v.union([
 ]);
 
 /** Rows for every statement, as DO storage.sql answers a write's `RETURNING`. */
-function sqlExecOver(db: Pick<AgentDatabase, 'prepare'>) {
+function sqlExecOver(db: Pick<AgentDatabase, 'query'>) {
   return <T>(query: string, ...bindings: unknown[]): T[] =>
-    db.prepare<T>(query).all(...bindings.map((binding) => v.parse(SqlBindingSchema, binding)));
+    db.query<T>(query).all(...bindings.map((binding) => v.parse(SqlBindingSchema, binding)));
 }
 
 /** DO storage.sql's cursor: a blob reads back as its own ArrayBuffer. */
-export function sqlStorageOver(db: Pick<AgentDatabase, 'prepare'>): SqlExec {
+export function sqlStorageOver(db: Pick<AgentDatabase, 'query'>): SqlExec {
   const exec = sqlExecOver(db);
 
   return {

@@ -159,6 +159,30 @@ describe('the workspace takes its own first turn', () => {
     harness.db.close();
   });
 
+  test('an owner prompt sent while the start measure holds the first turn rides genesis, never replaces it', async () => {
+    const harness = orchestratorHarness();
+    seedMission(harness.db, MISSION);
+    const turns = chatSessionTurns(harness.agent);
+    const held = Promise.withResolvers<void>();
+    // The start measure is held open; genesis and the prompt both arrive inside it.
+    const measuring = harness.agent.harnessHoldNextProfile(held.promise);
+    // A model switch measures the next request, as a new workspace's start does.
+    await harness.agent.setModel('anthropic/claude-sonnet-4-5');
+    await measuring;
+    const genesis = turns.park();
+
+    expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
+    await harness.agent.send('Summarize the incident timeline first.', 'm-first');
+    held.resolve();
+
+    const asked = requestText((await genesis).prompt);
+    expect(asked).toContain('first turn');
+    expect(asked.indexOf('first turn')).toBeLessThan(asked.indexOf('Summarize the incident timeline first.'));
+    await turns.settle({ messageId: 'a-genesis', text: 'ok' });
+    expect(activityEvents(harness.db)).not.toContain('genesis.yielded_to_message');
+    harness.db.close();
+  });
+
   test('a message admitted after the genesis slot opened is the next turn', async () => {
     const harness = orchestratorHarness();
     seedMission(harness.db, MISSION);

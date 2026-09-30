@@ -19,14 +19,12 @@ import {
 } from "@kinu.run/core";
 import { KinuError } from '@kinu.run/core/obs';
 import {
-  KinuSandboxExecutor, renderToolsPrelude,
+  KinuSandboxExecutor, renderToolsPrelude, type ProgramLaunch,
 } from "./codemode-sandbox";
 import { BROWSER_PRELUDE } from './browser-prelude';
 
 export interface CodemodeFactoryOptions {
-  loader: WorkerLoader;
-  /** The loopback Fetcher the sandbox's `fetch` rides; null keeps it offline. */
-  egress: Fetcher | null;
+  launch: (online: boolean) => ProgramLaunch;
   rt: { actor: ActorHandle; craftStore: Pick<CraftStore, 'list'>; executionRouter?: Pick<ExecutionRouter, 'getProviders'>; storage: { vfs: VFS } };
   sql: SqlExecutor;
   workspace: string;
@@ -66,9 +64,7 @@ export interface CodemodeFactory {
 }
 
 export function createCodemodeToolFactory(options: CodemodeFactoryOptions): CodemodeFactory {
-  const { loader, rt, sql, webSearch } = options;
-
-  if (!loader) throw new Error("CF runtime missing LOADER binding");
+  const { rt, sql, webSearch } = options;
   const craftedTools = () => selectInjectableCraftedTools(rt.craftStore, sql);
 
   const stateProvider = createStateCodemodeProvider(rt.actor.programState);
@@ -139,7 +135,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
         : Object.fromEntries(Object.entries(native).filter(([name]) => options.reach?.allowsTool(name)));
 
       const build = (mode: WorkMode): Tool => {
-        const executor = new KinuSandboxExecutor({ loader, egress: mode === 'plan' ? null : options.egress });
+        const executor = new KinuSandboxExecutor({ launch: options.launch(mode !== 'plan') });
 
         // No prelude here: createCodeTool drops every one; the per-call executor below restores them.
         const toolsProvider: CodemodeProvider = {

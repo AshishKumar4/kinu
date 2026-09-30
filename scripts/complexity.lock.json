@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-30",
-  "files": 2827,
-  "functions": 70333,
+  "files": 2843,
+  "functions": 71012,
   "ceiling": 87,
   "line": 29,
   "inventory": [
@@ -287,10 +287,6 @@
     },
     {
       "key": "packages/core/src/feedback/png.ts#sanitizePng",
-      "complexity": 29
-    },
-    {
-      "key": "packages/core/src/identity/archive.ts#restoreWorkspaceArchive>gen",
       "complexity": 29
     },
     {

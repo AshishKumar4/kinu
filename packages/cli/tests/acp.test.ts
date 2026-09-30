@@ -74,7 +74,7 @@ function fakeClient(opts: FakeOptions = {}): Fake {
       readInstructionApproval: async () => null,
       approveInstruction: async () => ({ ok: true as const, path: '', digest: '' }),
       revokeInstruction: async () => ({ ok: true as const, path: '', digest: '' }),
-      clearConversation: async () => {},
+      clearConversation: async () => null,
       compact: async () => {},
     },
     connect: async () => {},

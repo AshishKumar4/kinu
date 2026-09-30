@@ -3,7 +3,7 @@
 import { Effect } from 'effect';
 import type { VFS } from '../types/primitives';
 import type { VfsMount } from './mounts';
-import { isVfsError, makeVfsError, type VfsError } from './errno';
+import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { settle } from '../obs/effect';
 import { toKinuError, type KinuError } from '../obs/error';
 import { MEMORY_PATH } from '../memory/note';
@@ -30,23 +30,21 @@ export function agentViewMount(state: VFS, scaffoldDir: string): VfsMount {
     const source = sourceOf(path);
 
     return source === undefined
-      ? Effect.fail(makeVfsError('ENOENT', `no such file or directory, '${AGENT_VIEW}${path}'`, `${AGENT_VIEW}${path}`))
+      ? Effect.fail(new VfsError('ENOENT', 'no such file or directory', `${AGENT_VIEW}${path}`))
       : Effect.succeed(source);
   };
 
   const fromState = <A>(doing: string, run: () => Promise<A>): Effect.Effect<A, KinuError | VfsError> => Effect.tryPromise({
     try: run,
     catch: (cause) => (isVfsError(cause)
-      ? makeVfsError(cause.code, cause.message.replace(`${cause.code}: `, ''), cause.path ?? '')
+      ? cause
       : toKinuError({ doing, cause, otherwise: 'io' })),
   });
 
-  const readOnly = (path: string): Effect.Effect<never, VfsError> => Effect.fail(makeVfsError(
-    'EROFS',
-    `${AGENT_VIEW} is a read-only view: memory changes through the memory tool, SOUL.md through the owner, `
-      + 'the scaffold through self-modification',
-    `${AGENT_VIEW}${path}`,
-  ));
+  const readOnly = (path: string): Effect.Effect<never, VfsError> => Effect.fail(new VfsError('EROFS',
+  `${AGENT_VIEW} is a read-only view: memory changes through the memory tool, SOUL.md through the owner, `
+    + 'the scaffold through self-modification',
+  `${AGENT_VIEW}${path}`,));
 
   const present = async (): Promise<string[]> => {
     const names: string[] = [];
@@ -58,7 +56,7 @@ export function agentViewMount(state: VFS, scaffoldDir: string): VfsMount {
 
   const files: VFS = {
     readFile: (path, opts) => settle(Effect.flatMap(shown(path), (source) => (source === null
-      ? Effect.fail(makeVfsError('EISDIR', `illegal operation on a directory, read '${AGENT_VIEW}'`, AGENT_VIEW))
+      ? Effect.fail(new VfsError('EISDIR', 'illegal operation on a directory, read', AGENT_VIEW))
       : fromState(`reading ${AGENT_VIEW}${path}`, () => state.readFile(source, opts))))),
     readdir: (path) => settle(Effect.flatMap(shown(path), (source) =>
       fromState(`listing ${AGENT_VIEW}${path}`, () => (source === null ? present() : state.readdir(source))))),

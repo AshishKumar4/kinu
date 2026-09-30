@@ -26,9 +26,9 @@ import { slateBatchStub } from '../../src/slates/rpc-transport';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
 // `env.FILES` and `codemodeEgress()` resolve exports of this worker; without them a `build` boot throws before the route.
-export { SlateBinding } from '../../src/slates/bindings';
 
-export { CodemodeEgress } from '../../src/codemode-egress';
+
+export * from '../../src/server';
 
 /** Every other binding kind the probe slate declares surfaces as a `problem` row. */
 const CATALOG = {
@@ -372,3 +372,5 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
 }
 
 export default class SlateShareProbeWorker extends WorkerEntrypoint<Cloudflare.Env> {}
+
+

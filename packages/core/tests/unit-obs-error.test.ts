@@ -5,6 +5,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
+import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import {
   classifyErrorCode,
   CODE_IS_REFUSAL,
@@ -167,6 +168,14 @@ describe('the memory wall is classified from the catalogue, not from memory', ()
 });
 
 describe('the cause chain is the language `%w` and is never broken', () => {
+  test('Nimbus failures keep the native syscall/path shape through a cause chain', () => {
+    const path = "/kinu-does-not-exist/a file with 'quotes'.txt";
+    const native = raisedBy(() => { readFileSync(path); });
+    const vfs = new VfsError('ENOENT', 'no such file or directory, open', path);
+    const outer = new KinuError('missing', 'reading a file', { cause: vfs });
+    expect(renderCauseChain(outer)).toBe(`reading a file: ${native.message}`);
+  });
+
   test('every link is rendered, outermost first', () => {
     const inner = new Error('ECONNRESET');
     const middle = new Error('reading the exec response', { cause: inner });
