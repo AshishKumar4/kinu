@@ -183,6 +183,8 @@ AI_GATEWAY_BASE_URL=… AI_GATEWAY_AUTH=…     # an AI Gateway, for models the 
 | `request-logs` | 3 | A slate that reads gateway log files through a namespace binding: per-route counts, error rates and nearest-rank percentiles; a new day and a rule change without a rebuild. The rule change survives an eviction. |
 | `budget-board` | 4 | Two slates joined by an app binding: a ledger and a budget board that reads it live; euros converted at a rate file the checker rewrites; the ledger's listing replaced by pages while the board keeps working. The expenses and the conversion survive an eviction after each change. |
 | `order-book` | 3 | A limit order book with price-time priority, market orders and cancels, checked against a reference engine over two seeded days of orders; self-trade prevention and post-only orders added later. The book and both features survive an eviction, probed without changing the book. |
+| `launch-prep` | 2 | Several capabilities at once, as the owner asked on 2026-09-18: two helpers hired, each writing one tally from seeded files, checked against the reference and read off each helper's transcript in the inspector; launch day planned on the task board, one task per checklist item; two slates, a countdown and a waitlist, built while the helpers work and kept across an eviction; then a question answered from a helper's report. |
+| `site-preview` | 2 | A public repository (octocat/Spoon-Knife) cloned into the workspace, served by a dev server in the workspace and another in the sandbox, each exposed and fetched through its preview address with no credential; then a change to the page both previews must show. |
 
 ```bash
 bun run evals                                  # every task, 10 trials each, all at once, on kinu.run

@@ -1,5 +1,8 @@
 import * as v from 'valibot';
-import { JsonValueSchema, projectJsonValue, type JsonValue } from '@kinu.run/core';
+import {
+  JsonValueSchema, projectJsonValue, type JsonValue, type SubordinateChild, type SubordinateInspectionRequest,
+  type SubordinateInspectionResult, type WorkspaceWork,
+} from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER, TRANSIENT_PLATFORM_ERRORS } from '@kinu.run/test-utils';
 import { redact, redactJson } from './redact';
@@ -26,6 +29,9 @@ export type VerifierSession = {
   slateOp(operation: JsonValue): Promise<JsonValue>;
   readFile(path: string, options?: { allowMissing?: boolean }): Promise<string>;
   writeFile(path: string, content: string): Promise<void>;
+  workspaceWork(): Promise<WorkspaceWork>;
+  inspect(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult>;
+  exposedPorts(executor: string): Promise<readonly { port: number; url: string }[]>;
 };
 
 /** What a check saw: JSON-like data, projected to JSON when it is recorded. */
@@ -196,6 +202,47 @@ export class EvalVerifier {
   /** Change the workspace's data mid-check, the way a person drops in a new file. */
   writeFile(path: string, content: string): Promise<void> {
     return this.#session.writeFile(path, content);
+  }
+
+  /** Every agent's plans and tasks, as the Work tab shows them. */
+  workspaceWork(): Promise<WorkspaceWork> {
+    return this.#session.workspaceWork();
+  }
+
+  /** The lead's helpers, retired ones included, as the Agents surface lists them. */
+  async helpers(): Promise<SubordinateChild[]> {
+    const helpers: SubordinateChild[] = [];
+
+    for (let cursor: { after: string } | undefined; ;) {
+      const answer = await this.#session.inspect({ path: [], view: 'children', page: cursor === undefined ? {} : { cursor } });
+
+      if (answer.view !== 'children') throw new Error(`the lead's helpers could not be listed: ${JSON.stringify(answer)}`);
+      helpers.push(...answer.page.items);
+
+      if (answer.page.status === 'end') return helpers;
+      cursor = answer.page.next;
+    }
+  }
+
+  /** One helper's transcript as its inspector shows it: what it was told and what it said. */
+  async transcriptOf(helper: string): Promise<string[]> {
+    const answer = await this.#session.inspect({ path: [helper], view: 'history', page: { limit: 200 } });
+
+    if (answer.view !== 'history') throw new Error(`${helper}'s transcript could not be read: ${JSON.stringify(answer)}`);
+
+    return answer.page.items.map((entry) => entry.content);
+  }
+
+  /** The preview addresses an executor serves, as the ports panel lists them. */
+  previews(executor: string): Promise<readonly { port: number; url: string }[]> {
+    return this.#session.exposedPorts(executor);
+  }
+
+  /** A preview opened the way a person's browser opens it: no credential, the status and the page. */
+  async open(url: string): Promise<{ status: number; body: string }> {
+    const response = await fetch(url, { redirect: 'follow' });
+
+    return { status: response.status, body: await response.text() };
   }
 
   async collect(verify: (verifier: EvalVerifier) => Promise<void>): Promise<EvalCheck[]> {

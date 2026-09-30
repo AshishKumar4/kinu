@@ -1494,9 +1494,11 @@ export const LADDER: readonly Gate[] = [
     seconds: 717,
     catches: 'a regression in what the DEPLOYED product does for a user, task by task. Each '
       + 'file in evals/tasks is one multi-turn task on a fresh eval-service workspace, and every '
-      + 'turn is checked black-box: the checker calls the slate the agent built over the slate '
+      + 'turn is checked black-box: the checker calls the slates the agent built over the slate '
       + 'RPC and compares every answer with its own reference implementation of the contract, so '
-      + 'any correct build passes. Ten trials per task, compared with the latest complete report '
+      + 'any correct build passes, and reads what a person would: the files, the task board, each '
+      + 'helper\'s transcript, and each preview address fetched with no credential. Ten trials per '
+      + 'task, all at once, compared with the latest complete report '
       + 'of an earlier deployed build by a two-sided Fisher exact test (evals/src/comparison.ts), '
       + 'with infrastructure failures and 429 waits reported apart from the agent\'s results.',
     blind: 'anything the tasks do not exercise, and a change smaller than ten trials can tell '

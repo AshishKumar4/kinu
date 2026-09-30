@@ -98,9 +98,10 @@ import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 
 import {
   DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema,
-  STEER_STEP_METADATA_KEY, parseJsonValue, renderSoulMarkdown, rowText, CommandResultSchema,
+  STEER_STEP_METADATA_KEY, SubordinateInspectionResultSchema, WorkspaceWorkSchema, parseJsonValue, renderSoulMarkdown,
+  rowText, CommandResultSchema,
   type EvalAccount, type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent,
-  type WorkspaceSpend,
+  type SubordinateInspectionRequest, type SubordinateInspectionResult, type WorkspaceSpend, type WorkspaceWork,
 } from '../../packages/core/src/index';
 import { renderThrownChain, tolerate } from '../../packages/core/src/obs/index';
 import { CloudTurnStream } from '../../packages/cli/src/cloud-turn-stream';
@@ -1434,6 +1435,23 @@ export class KinuPublicSession {
     );
 
     return v.parse(ToolDescriptionsSchema, answer).crafted;
+  }
+
+  /** Every agent's plans and tasks, retired agents' included, as the Work tab reads them (`listWorkspaceWork`). */
+  async workspaceWork(): Promise<WorkspaceWork> {
+    return v.parse(WorkspaceWorkSchema, await this.boundary(
+      `listWorkspaceWork on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('listWorkspaceWork', []),
+    ));
+  }
+
+  /** A subordinate's children, transcript, runs or events, as the Agents surface's inspector reads them
+   *  (`inspectSubordinate`). */
+  async inspect(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
+    return v.parse(SubordinateInspectionResultSchema, await this.boundary(
+      `inspectSubordinate on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('inspectSubordinate', [v.parse(JsonValueSchema, request)]),
+    ));
   }
 
   /** The agent-written tabs, including project loading failures. */
