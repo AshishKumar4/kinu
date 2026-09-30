@@ -5,6 +5,7 @@ import { cpus, tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { childEnv, scratchDir } from "@kinu.run/test-utils";
 import { parseReleaseManifest } from "@kinu.run/core/deploy";
+import { generateReleaseSigningKey } from "../packages/core/src/http/release-signing";
 import {
   DEPLOY_PHASES, GATE_DEADLINE_SECONDS, LADDER, PATH_IGNORE_FLAG, SHARED_RESOURCES, claims, deployPlan,
   printPlan,
@@ -1307,14 +1308,22 @@ describe("CLI distribution artifacts", () => {
   // Cloudflare's static-asset limit, per file, on both plans.
   const MAX_ASSET_BYTES = 25 * 1024 * 1024;
 
-  function buildDist() {
+  async function buildDist() {
     const directory = scratchDir("cli-dist-test");
     const manifest = join(REPO_ROOT, "packages", "cli", "package.json");
     const before = { bytes: readFileSync(manifest, "utf8"), mtimeMs: statSync(manifest).mtimeMs };
+    const signingKey = await generateReleaseSigningKey();
 
     const build = Bun.spawnSync(
       ["bash", join(REPO_ROOT, "scripts", "build-cli-dist.sh"), directory],
-      { cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe" },
+      {
+        cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe",
+        env: {
+          ...freshHome(directory),
+          KINU_RELEASE_SIGNING_KEY: signingKey.privateKeyPkcs8Base64,
+          KINU_RELEASE_SIGNING_PUBLIC_KEY: signingKey.publicKeyHex,
+        },
+      },
     );
 
     expect(build.exitCode, new TextDecoder().decode(build.stderr)).toBe(0);
@@ -1322,9 +1331,9 @@ describe("CLI distribution artifacts", () => {
     return { directory, before };
   }
 
-  let distribution: ReturnType<typeof buildDist>;
+  let distribution: Awaited<ReturnType<typeof buildDist>>;
 
-  beforeAll(() => { distribution = buildDist(); });
+  beforeAll(async () => { distribution = await buildDist(); });
 
   function members(archive: string): Set<string> {
     const decoder = new TextDecoder();

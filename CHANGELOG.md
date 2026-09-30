@@ -32,6 +32,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- CLI distribution tests generate their own release signing key in a throwaway home. CI needs no deployment key.
 - Swarm heads, nodes and steer branches now run their model loops in the same isolated agent facets as hired and background agents. Their turn state stays in each facet's database; tools, search state and the file plane stay in the workspace. Retired task histories remain available to export until their parent is deleted.
 - Workerd product probes share the production Worker's entrypoint exports, so eval and scaffold programs can reach `CodemodeLauncher` rather than leaving background turns hung.
 - Mark reviewed succeeds once its snapshot is created. Failed removal of older snapshots is logged as `workspace.review_cleanup_failed` and returned in `cleanupFailures`; the next review retries every unreferenced snapshot. A snapshot-creation failure leaves the previous diff and Undo intact.
