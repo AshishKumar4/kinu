@@ -1,6 +1,7 @@
 import { defineRule } from "@oxlint/plugins";
 
-import type { ESTree, Scope, SourceCode, Variable } from "@oxlint/plugins";
+import type { ESTree } from "@oxlint/plugins";
+import { resolveVariable } from "../shared/scope.ts";
 
 /**
  * Reject copying a JSRPC stub's members instead of holding the stub.
@@ -50,19 +51,6 @@ export const noCopyRpcStubRule = defineRule({
     /** Guards the `const` alias walk against a cycle (`const a = b; const b = a;` parses).
      *  Reset per file, because `createOnce` reuses one visitor set across every file. */
     let resolving: Set<string>;
-
-    const resolveVariable = (
-      sourceCode: SourceCode,
-      identifier: ESTree.IdentifierReference,
-    ): Variable | null => {
-      let scope: Scope | null = sourceCode.getScope(identifier);
-      while (scope !== null) {
-        const variable = scope.set.get(identifier.name);
-        if (variable !== undefined) return variable;
-        scope = scope.upper;
-      }
-      return null;
-    };
 
     /** Strip the wrappers that sit between the producing call and its use without changing what the
      *  value is: `await`, `x!`, `x as T`, `x satisfies T`. */

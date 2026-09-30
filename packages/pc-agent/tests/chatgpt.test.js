@@ -359,7 +359,7 @@ describe('the daemon\'s own sign-in', () => {
   function deviceRecord(home, fields) {
     fs.writeFileSync(path.join(home, chatgpt.DEVICE_RECORD_FILE), JSON.stringify({
       issuer: 'https://auth.openai.com', subject: 'user-sub', email: 'owner@example.com', clientId: 'oaiapp_device',
-      idToken: 'id', scopes: FULL_SCOPE.split(' '), savedAt: new Date().toISOString(), ...fields,
+      scopes: FULL_SCOPE.split(' '), ...fields,
     }), { mode: 0o600 });
   }
 

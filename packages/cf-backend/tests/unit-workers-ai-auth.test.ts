@@ -9,7 +9,7 @@ import { asFetchFunction, createChatModel, reasoningEffortOptions, type JsonObje
 import * as v from 'valibot';
 import { createDirectWorkersAIFetch } from '@kinu.run/core';
 import { requestUrl } from '@kinu.run/core';
-import { requestBodyText } from '@kinu.run/test-utils';
+
 import { present } from '@kinu.run/test-utils';
 
 
@@ -58,7 +58,7 @@ describe('Workers AI credential refresh', () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(requestUrl(input)).toBe('https://dash.cloudflare.com/oauth2/token');
-      const body = new URLSearchParams(await requestBodyText(input, init));
+      const body = new URLSearchParams(await new Request(input, init).text());
       expect(body.get('grant_type')).toBe('refresh_token');
       expect(body.get('refresh_token')).toBe('cf-refresh-1');
 

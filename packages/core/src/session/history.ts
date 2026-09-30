@@ -9,7 +9,6 @@ import { SessionProposals, type ContextProposal } from './proposals';
 import { SessionRequests } from './requests';
 import { KinuError } from '../obs/error';
 import { diagnostics } from '../obs/log';
-import type { JsonObject } from '../utils/json';
 import { SessionTranscript } from './transcript';
 import { toolPairingGaps } from './tool-pairing';
 import type { ContextEventRecorder } from '../types/context-plane';
@@ -437,21 +436,6 @@ export class SessionHistory {
     if (reference === null) throw new KinuError('io', 'message publication did not return its identity');
 
     return reference;
-  }
-
-  /** One message and its transcript entry, outside working context: search trajectories, other non-chat sessions. */
-  async record(sessionId: string, input: { readonly id: string; readonly message: ModelMessage; readonly origin: MessageOrigin; readonly metadata?: JsonObject }): Promise<MessageReference> {
-    const prepared = await this.messages.prepare(input.message, input.id);
-    const metadata = input.metadata === undefined ? null : await this.messages.payloads.prepare(input.metadata);
-    const transcript = this.transcript(sessionId);
-
-    return this.dependencies.transactionSync(() => {
-      const reference = this.messages.insert(prepared, input.origin);
-      transcript.record({ id: input.id, role: input.message.role, turnId: null, runId: null, metadata, context: null,
-        parts: prepared.content.parts.map(part => ({ messageId: reference.messageId, partNo: part.partNo })) });
-
-      return reference;
-    });
   }
 
   assertClaimEpoch(turnId: string, epoch: number): void {

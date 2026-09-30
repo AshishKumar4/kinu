@@ -22,10 +22,8 @@ import {
   buildEvalAgentSurface, createStepToolCallLog,
 } from './harness';
 import { provisionLocalTarget, type LocalTarget } from './target-local';
-import {
-  finalIntegerAnswer,
-  liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM,
-} from '@kinu.run/test-utils';
+import { seedTranscriptEntry, finalIntegerAnswer,
+liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, UNCONFIGURED_LLM, } from '@kinu.run/test-utils';
 
 // Proof against a real model, so a target is required. `liveModelTarget` states
 // which target and cost basis this run used, or why it is skipping — and throws
@@ -89,8 +87,8 @@ async function solveProblem(
 
   // Store in DB
   const id = crypto.randomUUID();
-  await rt.stores.history.record('deep', { id, message: { role: 'user', content: problem.question }, origin: 'input' });
-  await rt.stores.history.record('deep', {
+  await seedTranscriptEntry(rt.stores.history, 'deep', { id, message: { role: 'user', content: problem.question }, origin: 'input' });
+  await seedTranscriptEntry(rt.stores.history, 'deep', {
     id: crypto.randomUUID(), message: { role: 'assistant', content: response }, origin: 'output',
   });
 

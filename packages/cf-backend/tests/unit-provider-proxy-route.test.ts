@@ -10,7 +10,7 @@ import { asFetchFunction } from '@kinu.run/core';
 import type { AccessTokenScope, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 import { requestUrl } from '@kinu.run/core';
-import { requestBodyText } from '@kinu.run/test-utils';
+
 
 const providerProxy = serveFamily(providerProxyRoutes);
 
@@ -134,7 +134,7 @@ function captureUpstream(respond: () => Response): Upstream[] {
       url,
       method: init?.method ?? 'GET',
       headers: new Headers(init?.headers),
-      body: await requestBodyText(input, init),
+      body: await new Request(input, init).text(),
     });
 
     return respond();

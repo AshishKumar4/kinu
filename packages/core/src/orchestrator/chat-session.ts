@@ -121,7 +121,6 @@ interface TurnContinuation {
   /** The continuation appends to it, so the open run is the run that closes. */
   readonly runId: string;
   readonly messageId: string;
-  readonly steps: readonly ModelMessage[];
   readonly finishedSteps: number;
   /** The outputs the cut step left open, named before a claim seals them. */
   readonly openOutputs: readonly string[];
@@ -919,7 +918,7 @@ export class ChatSession {
     await this.ports.armTurnWake(Date.now() + RECOVERY_BACKOFF_CEILING_MS);
 
     try {
-      await runOperationProfile(null, () => runWorkModeInvocation(mode, () => this.runTurn(item, event, startedAt, lease)));
+      await runOperationProfile(null, () => runWorkModeInvocation(mode, () => this.runTurn(item, event, lease)));
     } catch (error) {
       const message = renderThrownChain({ cause: error });
       const interrupted = lease.signal.aborted;
@@ -976,7 +975,7 @@ export class ChatSession {
   }
 
   /** Everything here may throw; runOpenedTurn owns what that means. */
-  private async runTurn(item: QueueItem, eventName: string | undefined, startedAt: number, lease: ActorTurnLease): Promise<void> {
+  private async runTurn(item: QueueItem, eventName: string | undefined, lease: ActorTurnLease): Promise<void> {
     const input: ChatTurnInput = item;
 
     await this.actorSession.openTurnInput(lease, {
@@ -1075,11 +1074,8 @@ export class ChatSession {
       item,
       turnId: lease.turnId,
       event: eventName,
-      startedAt,
       assistantText: fullText,
       owedReport,
-      // A turn cut before its first token has no answer row.
-      assistantRow: streamed || !interrupted,
       preparedAssistant,
       runError,
       end,
@@ -1172,11 +1168,8 @@ export class ChatSession {
     readonly item: QueueItem;
     readonly turnId: string;
     readonly event: string | undefined;
-    readonly startedAt: number;
     readonly assistantText: string;
     readonly owedReport: OwedReport | null;
-    /** False only for a turn interrupted before it streamed anything. */
-    readonly assistantRow: boolean;
     readonly preparedAssistant: PreparedConversationEntry | null;
     readonly runError: string | null;
     /** Classified once by the caller — see `closeRun`. */
@@ -1333,7 +1326,6 @@ export class ChatSession {
       continuation: {
         runId,
         messageId: turn.messageId,
-        steps,
         finishedSteps,
         openOutputs,
       },

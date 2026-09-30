@@ -1,3 +1,4 @@
+import { seedTranscriptEntry } from '@kinu.run/test-utils';
 import { afterAll, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { homedir, tmpdir } from 'node:os';
@@ -26,7 +27,7 @@ async function say(db: Database, actor: ActorHandle, id: string, content: string
     files: () => Promise.reject(new Error('a short message stores no file')),
   });
 
-  await history.record(CHAT_SESSION_ID, { id, origin: 'input', message: { role: 'user', content } });
+  await seedTranscriptEntry(history, CHAT_SESSION_ID, { id, origin: 'input', message: { role: 'user', content } });
 }
 
 describe('local inspection of a subordinate', () => {

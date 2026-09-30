@@ -77,24 +77,6 @@ function withCors(response: Response): Response {
   return response;
 }
 
-async function mcpClient(resolveAgent: McpResolver, agentName: string): Promise<McpAgentClient> {
-  const stub = await resolveAgent(agentName);
-
-  return {
-    searchMemoryHybrid: (query, limit) => stub.searchMemoryHybrid(query, limit),
-    saveNoteFromMcp: (content) => stub.saveNoteFromMcp(content),
-    getToolList: () => stub.getToolList(),
-    runScaffoldOnce: (task, opts) => stub.runScaffoldOnce(task, opts),
-    getShadowStatus: () => stub.getShadowStatus(),
-    listRuns: (request) => stub.listRuns(request),
-    getRunEvents: (runId, opts) => stub.getRunEvents(runId, opts),
-    runTaskFromMcp: (text) => stub.runTaskFromMcp(text),
-    sendPeerFromMcp: (input) => stub.sendPeerFromMcp(input),
-    listPeersFromMcp: () => stub.listPeersFromMcp(),
-    getMemoryContent: () => stub.getMemoryContent(),
-  };
-}
-
 /** A tool's failure as the owner's MCP client reads it: logged and answered with its chain. */
 function mcpToolFailure(failure: { tool: string; cause: unknown }): string {
   const { tool, cause } = failure;
@@ -124,7 +106,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
     },
     async ({ query, limit }) => {
       try {
-        const agent = await mcpClient(resolveAgent, agentName);
+        const agent = await resolveAgent(agentName);
         const hits = await agent.searchMemoryHybrid(query, limit ?? 10);
 
         const text = hits.length === 0
@@ -149,7 +131,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
     },
     async ({ content }) => {
       try {
-        const agent = await mcpClient(resolveAgent, agentName);
+        const agent = await resolveAgent(agentName);
         await agent.saveNoteFromMcp(content);
 
         return { content: [{ type: "text", text: "Note saved." }] };
@@ -167,7 +149,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
     },
     async () => {
       try {
-        const agent = await mcpClient(resolveAgent, agentName);
+        const agent = await resolveAgent(agentName);
         const out = await agent.getToolList();
         const lines: string[] = [];
         lines.push(`## Built-in (${out.builtIn.length})`);
@@ -198,7 +180,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
     },
     async ({ task, useShadowOverride }) => {
       try {
-        const agent = await mcpClient(resolveAgent, agentName);
+        const agent = await resolveAgent(agentName);
 
         const result = await agent.runScaffoldOnce(task, useShadowOverride ? { useShadowOverride: true } : undefined);
 
@@ -225,7 +207,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
     },
     async () => {
       try {
-        const agent = await mcpClient(resolveAgent, agentName);
+        const agent = await resolveAgent(agentName);
         const status = await agent.getShadowStatus();
 
         return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }] };
@@ -247,7 +229,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
     },
     async ({ limit, after }) => {
       try {
-        const agent = await mcpClient(resolveAgent, agentName);
+        const agent = await resolveAgent(agentName);
         const page = await agent.listRuns({ limit: limit ?? 20, cursor: after ? { after } : undefined });
         const lines = page.items.map((r) => `- ${r.runId}: ${r.eventCount} events @ ${r.lastTs}`);
 
@@ -275,7 +257,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
     },
     async ({ runId, since, limit }) => {
       try {
-        const agent = await mcpClient(resolveAgent, agentName);
+        const agent = await resolveAgent(agentName);
 
         const events = await agent.getRunEvents(runId, { since, limit: limit ?? 100 });
 
@@ -304,7 +286,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
     },
     async ({ text }) => {
       try {
-        const agent = await mcpClient(resolveAgent, agentName);
+        const agent = await resolveAgent(agentName);
         const result: EnqueueTurnResult = await agent.runTaskFromMcp(text);
 
         const msg = result.status === "queued"
@@ -332,7 +314,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
     },
     async ({ agent: peer, message, topic }) => {
       try {
-        const agent = await mcpClient(resolveAgent, agentName);
+        const agent = await resolveAgent(agentName);
         const peerMessage: PeerMessageInput = { agent: peer, message };
 
         if (topic) peerMessage.topic = topic;
@@ -357,7 +339,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
     },
     async () => {
       try {
-        const agent = await mcpClient(resolveAgent, agentName);
+        const agent = await resolveAgent(agentName);
         const peers = await agent.listPeersFromMcp();
 
         const text = peers.length === 0
@@ -381,7 +363,7 @@ function buildServer(resolveAgent: McpResolver, agentName: string): McpServer {
     },
     async (uri) => {
       try {
-        const agent = await mcpClient(resolveAgent, agentName);
+        const agent = await resolveAgent(agentName);
         const content = await agent.getMemoryContent();
 
         return { contents: [{ uri: uri.href, text: content, mimeType: "text/markdown" }] };

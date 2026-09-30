@@ -269,18 +269,6 @@ export class MctsSearchStore {
       WHERE actor_id=${this.actorId} AND root_id=${rootId} AND status='running' AND epoch=${epoch}`;
   }
 
-  get(rootId: string): { status: SearchStatus; iteration: number; budget: number; epoch: number } | null {
-    this.actor.assertCurrent();
-
-    const r = this.sql<Row>`
-      SELECT root_id, task, config_json, status, epoch
-      FROM mcts_search_runs WHERE actor_id=${this.actorId} AND root_id=${rootId} LIMIT 1`[0];
-
-    if (!r) return null;
-
-    return settleSync(Effect.map(this.swarmProgress(r.root_id, r.config_json), (progress) => ({ status: readStatus(r.status), ...progress, epoch: r.epoch })));
-  }
-
   private swarmProgress(rootId: string, configJson: string): Effect.Effect<{ iteration: number; budget: number }> {
     const children = this.childrenOf(rootId);
 
