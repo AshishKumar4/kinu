@@ -98,9 +98,10 @@ import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 
 import {
   DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema,
-  STEER_STEP_METADATA_KEY, parseJsonValue, renderSoulMarkdown, rowText, CommandResultSchema,
+  STEER_STEP_METADATA_KEY, SubordinateInspectionResultSchema, WorkspaceWorkSchema, parseJsonValue, renderSoulMarkdown,
+  rowText, CommandResultSchema,
   type EvalAccount, type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent,
-  type WorkspaceSpend,
+  type SubordinateInspectionRequest, type SubordinateInspectionResult, type WorkspaceSpend, type WorkspaceWork,
 } from '../../packages/core/src/index';
 import { renderThrownChain, tolerate } from '../../packages/core/src/obs/index';
 import { CloudTurnStream } from '../../packages/cli/src/cloud-turn-stream';
@@ -647,6 +648,9 @@ const RunPageSchema = v.variant('status', [
 
 const RunEventsSchema = v.array(RunEventSchema);
 
+/** A turn frame's body is one AI SDK UI message chunk. */
+const ChunkTypeSchema = v.object({ type: v.string() });
+
 const SetModelSchema = v.object({ spec: v.string() });
 
 
@@ -1073,6 +1077,14 @@ export class KinuPublicSession {
    *  sleeps stops beating, and a sweep deletes a workspace whose mark is older than the lease (`sweep.ts`). */
   lastMarked = Date.now();
 
+  /** Told what arrives for the turns this session sent: each chunk's type as it arrives, `replay` for a chunk the
+   *  deployment sends again after a redial, `done` at a turn's last frame, and `closed <code>` when the socket drops. */
+  onChunk: (type: string) => void = () => undefined;
+
+  /** The ledger read so far, by run. Its rows are never rewritten, so a later read asks each run only for what it
+   *  added: a settle poll that walked every row of a long trial again was the harness's heaviest read. */
+  private readonly ledger = new Map<string, readonly RunEvent[]>();
+
   constructor(
     private readonly input: PublicSessionInput,
     /** The name the deployment gave this workspace, which is not always the one
@@ -1150,7 +1162,12 @@ export class KinuPublicSession {
     // reconnect"); the next send redials rather than writing into a CLOSED socket, which discards the
     // frame without an error and leaves its caller waiting forever.
     socket.addEventListener('close', (event: CloseEvent) => {
-      if (this.socket === socket) this.socket = null;
+      // A socket this session let go of (`disconnect`, `teardown`) is no longer `this.socket`; any other close is news.
+      if (this.socket === socket) {
+        this.socket = null;
+        this.onChunk(`closed ${String(event.code)}`);
+      }
+
       const reason = `the workspace socket closed (code ${String(event.code)}${event.reason ? `, ${event.reason}` : ''})`;
 
       this.survive(reason).catch(this.unrecoverable);
@@ -1420,6 +1437,23 @@ export class KinuPublicSession {
     return v.parse(ToolDescriptionsSchema, answer).crafted;
   }
 
+  /** Every agent's plans and tasks, retired agents' included, as the Work tab reads them (`listWorkspaceWork`). */
+  async workspaceWork(): Promise<WorkspaceWork> {
+    return v.parse(WorkspaceWorkSchema, await this.boundary(
+      `listWorkspaceWork on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('listWorkspaceWork', []),
+    ));
+  }
+
+  /** A subordinate's children, transcript, runs or events, as the Agents surface's inspector reads them
+   *  (`inspectSubordinate`). */
+  async inspect(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
+    return v.parse(SubordinateInspectionResultSchema, await this.boundary(
+      `inspectSubordinate on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('inspectSubordinate', [v.parse(JsonValueSchema, request)]),
+    ));
+  }
+
   /** The agent-written tabs, including project loading failures. */
   async listSlates(): Promise<PublicSlateListing> {
     const answer = await this.boundary(
@@ -1616,7 +1650,13 @@ export class KinuPublicSession {
   async runEvents(): Promise<readonly RunEvent[]> {
     const events: RunEvent[] = [];
 
-    for (const runId of await this.runIds()) events.push(...await this.runEventsOf(runId));
+    for (const runId of await this.runIds()) {
+      const known = this.ledger.get(runId) ?? [];
+      const read = [...known, ...await this.runEventsOf(runId, known.reduce((next, event) => Math.max(next, event.eventIndex + 1), 0))];
+
+      this.ledger.set(runId, read);
+      events.push(...read);
+    }
 
     events.sort(compareRunEventOrder);
 
@@ -1878,6 +1918,9 @@ export class KinuPublicSession {
     const body = frame.frame.body;
 
     if (body !== undefined) {
+      const chunk = v.safeParse(ChunkTypeSchema, decodeSocketJson(body));
+
+      if (chunk.success) this.onChunk(frame.frame.replay === true ? 'replay' : chunk.output.type);
       const watchers = this.chunkWatchers.get(frame.frame.id) ?? [];
 
       const remaining = watchers.filter((watcher) => {
@@ -1891,6 +1934,7 @@ export class KinuPublicSession {
       else this.chunkWatchers.delete(frame.frame.id);
     }
 
+    if (frame.frame.done === true) this.onChunk('done');
     turn.recorder.apply(frame.frame);
     const done = turn.recorder.settled();
 
