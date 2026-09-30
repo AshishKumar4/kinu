@@ -49,7 +49,7 @@ import { KeptChatColumn } from "@/components/KeptChatColumn";
 import { nestedAgent, type AgentLinkIds } from "@/pages/nested-agent";
 import { WorkspaceBar, type Altitude } from "@/components/WorkspaceBar";
 import { Composer, workspaceLoadNotice, type ComposerNotice } from "@/components/Composer";
-import { ownerFacingSubordinate, revealMisrepresenting, workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type SubordinateActivityEvent } from "@kinu.run/core";
+import { revealMisrepresenting, workspaceDisplayTitle, workspaceTitleDraft, type PendingConsent, type SubordinateActivityEvent } from "@kinu.run/core";
 import { renderThrownChain, settleLogged } from "@kinu.run/core/obs";
 import { InspectorToggle, WorkbenchPanels, type InspectorControl, type WorkbenchHandle } from "@/components/WorkbenchPanels";
 
@@ -691,14 +691,6 @@ export default function WorkspacePage() {
     }
   }, [agentId, navigate, state.createSubordinate]);
 
-  useEffect(() => {
-    const open = async (): Promise<void> => { await createAndOpenAgent(); };
-
-    window.addEventListener("kinu:new-agent", open);
-
-    return () => window.removeEventListener("kinu:new-agent", open);
-  }, [createAndOpenAgent]);
-
   // `setModel` records failure on `state.error` and rolls the picker back itself.
   const setModel = state.setModel;
 
@@ -804,36 +796,6 @@ export default function WorkspacePage() {
       }
     });
   }, [agentId, reportSide]);
-
-  // Only the mounted workspace has a live socket, so the sidebar shows live status only for
-  // workspaces visited this session.
-  useEffect(() => {
-    if (!agentId) return;
-    const running = live || state.backgroundJobs.some((j) => j.status === "running");
-    window.dispatchEvent(new CustomEvent("kinu:workspace-activity", {
-      detail: {
-        name: agentId,
-        running,
-        unseenChangelog: state.changelogUnseen,
-        // Dismissed agents stay reachable from the chat strip, not the sidebar's working roster.
-        agents: state.subordinates.filter((sub) => sub.status !== "dismissed" && ownerFacingSubordinate(sub)).map((sub) => ({
-          name: sub.name, displayName: sub.displayName, status: sub.status,
-        })),
-      },
-    }));
-  }, [agentId, live, state.backgroundJobs, state.changelogUnseen, state.subordinates]);
-
-  // The sidebar has no socket; clear its snapshot on unmount so no stale "working" dot remains.
-  useEffect(() => {
-    if (!agentId) return;
-
-    return () => {
-      window.dispatchEvent(new CustomEvent("kinu:workspace-activity", {
-        detail: { name: agentId, running: false, unseenChangelog: 0, agents: [] },
-      }));
-    };
-  }, [agentId]);
-
 
   // Steer-as-Branch: runs the draft as a parallel head while the live turn continues.
   const [branchNotice, setBranchNotice] = useState<string | null>(null);

@@ -1,14 +1,6 @@
 import * as v from 'valibot';
 import { settleLogged } from '@kinu.run/core/obs';
-import React, {
-  forwardRef,
-  useCallback,
-  useEffect,
-  useImperativeHandle,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import DOMPurify from 'dompurify';
 import katex from 'katex';
@@ -21,24 +13,13 @@ import { useAnnotationHighlighter } from '@plannotator/ui/hooks/useAnnotationHig
 
 interface ViewerProps {
   blocks: Block[];
-  markdown: string;
   frontmatter?: Frontmatter | null;
   annotations: Annotation[];
   onAddAnnotation: (annotation: Annotation) => void;
   onSelectAnnotation: (id: string | null) => void;
   selectedAnnotationId: string | null;
   mode: EditorMode;
-  stickyActions?: boolean;
-  gridEnabled?: boolean;
-  maxWidth?: number | null;
-  copyLabel?: string;
   readOnly?: boolean;
-}
-
-export interface ViewerHandle {
-  removeHighlight: (id: string) => void;
-  clearAllHighlights: () => void;
-  applySharedAnnotations: (annotations: Annotation[]) => void;
 }
 
 const annotationId = (): string => crypto.randomUUID();
@@ -505,24 +486,18 @@ const PlanCommentPopover = ({
 };
 
 /** Kinu's intentionally narrow Plannotator document surface. */
-export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
+export const Viewer = ({
   blocks,
-  markdown,
   frontmatter,
   annotations,
   onAddAnnotation,
   onSelectAnnotation,
   selectedAnnotationId,
   mode,
-  stickyActions = true,
-  gridEnabled = false,
-  maxWidth,
-  copyLabel = 'Copy plan',
   readOnly = false,
-}, ref) => {
+}: ViewerProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const globalCommentButtonRef = useRef<HTMLButtonElement>(null);
-  const [copied, setCopied] = useState(false);
   const [globalCommentOpen, setGlobalCommentOpen] = useState(false);
   const headingSlugMap = useMemo(() => buildHeadingSlugMap(blocks), [blocks]);
 
@@ -534,7 +509,6 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
     handleRequestComment,
     handleCommentSubmit,
     handleCommentClose,
-    removeHighlight,
     clearAllHighlights,
     applyAnnotations,
   } = useAnnotationHighlighter({
@@ -548,12 +522,6 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
     interactive: !readOnly,
   });
 
-  useImperativeHandle(ref, () => ({
-    removeHighlight,
-    clearAllHighlights,
-    applySharedAnnotations: applyAnnotations,
-  }), [applyAnnotations, clearAllHighlights, removeHighlight]);
-
   useEffect(() => {
     const eligible = annotations.filter((annotation) => (
       annotation.type !== AnnotationType.GLOBAL_COMMENT && Boolean(annotation.originalText)
@@ -566,12 +534,6 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
 
     return () => window.clearTimeout(timer);
   }, [annotations, applyAnnotations, blocks, clearAllHighlights, readOnly]);
-
-  const copyPlan = useCallback(async () => {
-    if (!await copyTextToClipboard(markdown)) return;
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }, [markdown]);
 
   const addGlobalComment = useCallback((text: string) => {
     onAddAnnotation({
@@ -589,19 +551,17 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
   }, [onAddAnnotation]);
 
   return (
-    <div className="relative z-50 w-full" style={maxWidth === null ? undefined : { maxWidth: maxWidth ?? 832 }}>
+    <div className="relative z-50 w-full">
       <article
         ref={containerRef}
         data-print-region="article"
-        className={`relative w-full rounded-xl bg-card py-5 md:py-8 lg:py-10 xl:py-12 ${
-          gridEnabled ? 'border border-border/50 px-5 shadow-xl md:px-8 lg:px-10 xl:px-12' : ''
-        }`}
+        className="relative w-full rounded-xl bg-card py-5 md:py-8 lg:py-10 xl:py-12"
       >
-        <div
-          data-print-hide
-          className={`${stickyActions ? 'sticky top-3' : ''} z-30 float-right mt-6 flex items-start gap-1 rounded-lg bg-card/95 p-1 shadow-sm backdrop-blur-sm md:-mt-5 md:gap-2 md:p-2 lg:-mt-7 xl:-mt-9`}
-        >
-          {!readOnly && (
+        {!readOnly && (
+          <div
+            data-print-hide
+            className="z-30 float-right mt-6 flex items-start gap-1 rounded-lg bg-card/95 p-1 shadow-sm backdrop-blur-sm md:-mt-5 md:gap-2 md:p-2 lg:-mt-7 xl:-mt-9"
+          >
             <button
               ref={globalCommentButtonRef}
               type="button"
@@ -610,15 +570,8 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
             >
               Global comment
             </button>
-          )}
-          <button
-            type="button"
-            className="rounded-md bg-muted/50 px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-            onClick={() => void copyPlan()}
-          >
-            {copied ? 'Copied' : copyLabel}
-          </button>
-        </div>
+          </div>
+        )}
 
         {frontmatter && <><div className="clear-right md:hidden" /><FrontmatterCard frontmatter={frontmatter} /></>}
         {!frontmatter && blocks.length > 0 && blocks[0]?.type !== 'heading' && <div className="mt-4" />}
@@ -663,4 +616,4 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
       </article>
     </div>
   );
-});
+};
