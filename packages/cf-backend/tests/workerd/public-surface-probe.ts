@@ -1,7 +1,7 @@
 /**
  * The production Worker entry (`export { default }`, not a copy) bound in the pool, so the web client's route table runs
  * under workerd. A loopback host is the one authority `authenticateRequest` takes without a secret (auth/session.ts);
- * model traffic goes to the Node-side fake via `outboundService`, `SurfaceAI` answers the Workers AI lanes.
+ * model traffic goes to the Node-side fake; the native Workers AI binding serves its auxiliary lanes.
  */
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { ownerCaller } from '@kinu.run/core';
