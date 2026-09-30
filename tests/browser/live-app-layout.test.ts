@@ -5,32 +5,12 @@ import { SCRATCH_ROOT_PREFIX } from '../../packages/test-utils/src/scratch';
 import { INSPECTOR_SHUT_PX } from '../../scripts/product-flows';
 import { RAIL_SHUT_PX, liveRows } from '../../scripts/live-app-rows';
 
-const { observed, verdictOf, boot } = liveRows('live-app-layout', ['panel', 'geometry', 'controls', 'state']);
+const { observed, verdictOf, boot } = liveRows('live-app-layout', ['geometry', 'controls', 'state']);
 
 beforeAll(boot);
 
 afterAll(() => {
   if (observed.bootFailure !== null) throw new Error(observed.bootFailure);
-});
-
-describe('the right panel keeps its Work, Files and Env state when the chat tab changes', () => {
-  test('the Files surface DOM node identity and scroll position survive', () => {
-    const panel = verdictOf(observed.panel, 'panel');
-
-    expect(panel.nodeSurvives).toBe(true);
-    expect(panel.scrollSurvives).toBe(true);
-  });
-
-  test('no refetch of the workspace-scoped reads occurs on either switch', () => {
-    const panel = verdictOf(observed.panel, 'panel');
-
-    expect(panel.workspaceReadsOnSwitch).toBe(0);
-    expect(panel.workspaceReadsOnBack).toBe(0);
-  });
-
-  test("the '+' tab's own actor socket answered its pane", () => {
-    expect(verdictOf(observed.panel, 'panel').agentSocketFrames).toBeGreaterThan(0);
-  });
 });
 
 describe("the tab strip's rule is continuous and the active underline sits on it", () => {

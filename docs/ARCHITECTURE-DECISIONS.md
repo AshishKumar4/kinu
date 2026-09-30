@@ -1115,6 +1115,23 @@ and ends naming the failed requests. The live-app harness reloads a page once
 when only net::ERR_NETWORK_CHANGED failed it, because a deploy host's containers
 are not the run's. The gallery reloads nothing: the change was this tier's own.
 
+L15. The product flows run only against a real Workers deployment: staging,
+after each deploy's publish. Decided 2026-09-30, on the owner's direction.
+Under `vite dev` no agent facet loads. The live-app layout row's kept
+dev-server output read `The agent bundle is missing from this deployment
+(/_agent/agent.js answered 403 text/plain)` when it opened a new agent's tab,
+because the Vite plugin's ASSETS serves only HTML in dev. Cloudflare generates
+no version preview URL for a Worker that implements Durable Objects, so
+staging is the one deployment a build reaches before production. So the
+pre-publish row that ran the flows on `vite dev` is gone, with its wrapper,
+and a row that needs an agent other than Main runs in the post-publish flows:
+the right panel's kept state across a switch to a new agent's tab, and each
+pane keeping its own transcript. A red there fails the deploy before staging's
+record is written, so `promote.ts` refuses the build. The cost is that such a
+red is found after the upload, on a build already serving on staging. The
+live-app rows that stay on `vite dev` drive Main alone, and a row that breaks
+names the file (`kinu-logs/dev-server/`) holding its server's output.
+
 ## Providers
 
 P1. The ChatGPT plan is Sign in with ChatGPT's open-source token sharing
