@@ -151,7 +151,11 @@ Bun.plugin({
 Bun.plugin({
   name: 'kinu-slate-vendor-for-bun-test',
   setup(build) {
-    build.module('virtual:kinu-slate-vendor', async () => ({ exports: { default: await sharedSlateVendor() }, loader: 'object' }));
+    build.module('virtual:kinu-slate-vendor', async () => {
+      const { workerCompatibility } = await import('../packages/cf-backend/vite-agent-bundle');
+
+      return { exports: { default: await sharedSlateVendor(), workerCompatibility }, loader: 'object' };
+    });
   },
 });
 

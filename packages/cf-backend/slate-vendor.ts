@@ -117,10 +117,12 @@ export function slateVendor(): Plugin {
 
       return null;
     },
-    load: (id: string) => {
+    load: async (id: string) => {
       if (id !== RESOLVED_ID) return null;
 
-      return `export default ${JSON.stringify(slateVendorBundle())};`;
+      const { workerCompatibility } = await import('./vite-agent-bundle');
+
+      return `export const workerCompatibility = ${JSON.stringify(workerCompatibility)};\nexport default ${JSON.stringify(slateVendorBundle())};`;
     },
   };
 }
