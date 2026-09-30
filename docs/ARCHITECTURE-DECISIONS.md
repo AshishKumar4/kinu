@@ -1103,6 +1103,7 @@ resource credits. The runner reads Bash's running-job set, waits cached
 completions by pid, and restricts `wait -n` to the tracked wave. If every child
 finishes between that read and the wait, a tracked pid still yields its cached
 status. No new process, timer, timeout or resource budget governs a gate.
+Superseded by L16: the Bash wave is gone.
 
 L14. A test's `docker build` runs its steps on the host's network, and a
 gallery wait on a page whose app script never ran ends at once. Decided
@@ -1152,6 +1153,24 @@ record is written, so `promote.ts` refuses the build. The cost is that such a
 red is found after the upload, on a build already serving on staging. The
 live-app rows that stay on `vite dev` drive Main alone, and a row that breaks
 names the file (`kinu-logs/dev-server/`) holding its server's output.
+
+L16. One wave runner schedules every gate: the ladder's `tierWave`. Decided
+2026-09-30, from a cleanup review. deploy.sh carried a second scheduler in
+Bash (`run_phase`/`flush_gates`, its caps and its queue, about 360 lines) that
+repeated what the CI tier's wave already did over the same cost table:
+admission by measured threads and resident set under the box's caps, one
+browser row at a time, and no new launch after the first red. Two schedulers
+over one table can disagree, and each carried its own reaping defects (L13).
+Now `run_phase <phase>` is `bun scripts/ladder.ts --deploy-phase=<phase>`,
+which runs the plan's rows of that phase through `tierWave` and returns when
+every row it launched has ended, which is the phase barrier. `--all` keeps
+launching after a red, and a red phase still ends the deploy before the next
+one, the build or any publish. The ladder prints each row's output whole when
+it ends and names every failed row at the end. The plan's TSV (`--plan`), its
+parser, the gate log directory, the quote check and the Bash 5.1 guard went
+with the Bash wave. deploy.test.ts now proves the boundary deploy.sh owns (the
+phases in order, the options it passes, the stop on a red phase) against a
+stub ladder, and ladder.test.ts proves the admission.
 
 ## Providers
 

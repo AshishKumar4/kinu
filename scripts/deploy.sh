@@ -240,379 +240,40 @@ json_field() {
   node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=process.argv[1].split(".").reduce((o,k)=>o?.[k],JSON.parse(s));process.stdout.write(v==null?"":String(v))}catch{}})' "$1"
 }
 
-# `wait -n -p`, which the gate runner takes every verdict from, is bash 5.1
-# (December 2020). Refused here rather than at the first flush: an unsupported
-# shell is a fact about the machine, not a gate result. The associative arrays
-# below already ruled out bash 3.
-if ((BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 1))); then
-  echo -e "${RED}bash $BASH_VERSION cannot run the gate wave: 'wait -n -p' needs bash 5.1 or newer.${NC}"
-  exit 1
-fi
-
-# ── The gate plan ────────────────────────────────────────────────
+# ── The gate phases ──────────────────────────────────────────────
 #
-# WHAT RUNS IS READ, NOT WRITTEN HERE. `bun scripts/ladder.ts --plan` prints
-# every deploy-tier gate as one tab-separated line — phase, label, measured
-# threads, measured resident MiB, shared resource, command — in the order the phases
-# run. This script loads that once and `run_phase <name>` schedules the phase's
-# gates concurrently under the machine cap, then waits: a barrier. Until
-# 2026-09-15 this file held a second copy of every row (the command lines, a
-# weight table, a deadline table, an exclusion table) that deploy.test.ts held
-# equal to the ladder, and every new suite was a hand edit in three files.
-# There is one copy now.
+# WHAT RUNS IS READ, NOT WRITTEN HERE, AND SCHEDULED THERE TOO. `run_phase
+# <name>` is `bun scripts/ladder.ts --deploy-phase=<name>`: the ladder runs its
+# plan's rows of that phase through its one wave runner (`tierWave`), the same
+# one the CI tier runs through. Admission is by each row's measured threads and
+# resident set (scripts/gate-cost.json) under this box's caps (the CPU count
+# and three quarters of MemAvailable, or KINU_DEPLOY_THREADS and
+# KINU_DEPLOY_RSS_MB), one row at a time per shared resource such as the
+# browser, and no new launch after the first red unless `--all`. The command
+# returns once every row it launched has ended: the phase's barrier. Each
+# row's output is printed whole when it ends, under its own hang detector
+# (scripts/deadline.ts), and a red names every failed row at the end. Until
+# 2026-09-15 this file held a second copy of every row, and until 2026-09-30 a
+# second scheduler in Bash over the same cost table (L16).
 #
 # Phases, in the ladder's DEPLOY_PHASES order: `preflight` alone before
 # anything; `source`, the one concurrent wave; `hammer` and `infra` alone after
 # it; `post-publish` after the upload and the smoke test. A gate's row in
 # scripts/ladder.ts declares which, and why it runs alone.
-#
-# The runner passes each command unchanged to `ladder.ts --gate`; the ladder
-# resolves its argv and globs against the tracked corpus.
-PLAN_PHASE=()
-PLAN_LABEL=()
-PLAN_THREADS=()
-PLAN_RSS=()
-PLAN_SHARED=()
-PLAN_CMD=()
-
-load_plan() {
-  local plan
-  plan="$(bun scripts/ladder.ts --plan)" || {
-    echo -e "${RED}❌ the ladder printed no plan; nothing is scheduled without one.${NC}"
-    exit 1
-  }
-  local phase label threads rss shared cmd
-  while IFS=$'\t' read -r phase label threads rss shared cmd; do
-    [ -n "$cmd" ] || continue
-    PLAN_PHASE+=("$phase")
-    PLAN_LABEL+=("$label")
-    PLAN_THREADS+=("$threads")
-    PLAN_RSS+=("$rss")
-    PLAN_SHARED+=("$shared")
-    PLAN_CMD+=("$cmd")
-  done <<< "$plan"
-  if [ "${#PLAN_CMD[@]}" -eq 0 ]; then
-    echo -e "${RED}❌ the plan holds no gate. A deploy that schedules nothing publishes nothing.${NC}"
-    exit 1
-  fi
-}
-
-# The gates of one phase, as the queue flush_gates runs.
-GATE_LABELS=()
-GATE_CMDS=()
-GATE_THREADS=()
-GATE_RSS=()
-GATE_SHARED=()
-
 run_phase() {
-  local wanted="$1" index
-  GATE_LABELS=(); GATE_CMDS=(); GATE_THREADS=(); GATE_RSS=(); GATE_SHARED=()
-  for ((index = 0; index < ${#PLAN_CMD[@]}; index++)); do
-    if [ "${PLAN_PHASE[index]}" != "$wanted" ]; then continue; fi
-    GATE_LABELS+=("${PLAN_LABEL[index]}")
-    GATE_CMDS+=("${PLAN_CMD[index]}")
-    GATE_THREADS+=("${PLAN_THREADS[index]}")
-    GATE_RSS+=("${PLAN_RSS[index]}")
-    GATE_SHARED+=("${PLAN_SHARED[index]}")
-  done
-  if [ "${#GATE_CMDS[@]}" -eq 0 ]; then
-    echo -e "${RED}❌ phase '$wanted' holds no gate in the plan.${NC}"
-    exit 1
-  fi
-  flush_gates
-}
-
-# THE WAVE IS SCHEDULED BY MEASURED COST, IN TWO DIMENSIONS, UNDER A CAP THIS
-# BOX ANSWERS FOR. A row carries what it was measured to take when it ran alone
-# (scripts/gate-cost.json, written by `bun scripts/gate-cost-measure.ts`):
-# the threads it burns at peak and the resident set it holds at peak. A row
-# launches only while BOTH the running threads plus its own fit `nproc` and the
-# running resident set plus its own fits the memory the kernel says is
-# available. A row heavier than the whole cap still launches when nothing else
-# is running, so the cap can never wedge.
-#
-# Measured 2026-08-23: a half-thread rule launched 12 outer gates and up to 48
-# inner workers here, turned a 23.67s CLI file into a 173.54s run and produced
-# nine false timeout failures. Measured 2026-09-16: a six-gate width — the rule
-# that replaced it — put the eleven-suite UI row beside two `--parallel=4`
-# package suites and failed every deploy that day on a puppeteer wall, while
-# the same row passed alone in 361s. The DECLARED thread figure that replaced
-# the width then failed the same way for the same reason: five rows died on
-# their per-row deadline across the two deploys of 2026-09-16, one of them at
-# 137 — the kernel's status for a SIGKILL, which no thread budget can predict —
-# and the three rows that run workerd had each declared one thread and no
-# memory at all. A count of gates is not a measure of load; neither is a
-# number a row wrote about itself.
-#
-# MemAvailable, not MemTotal: MemTotal includes memory nothing can have, and a
-# cap taken from it is a cap that admits rows onto swap. The reserve is the
-# fraction of what is available that the wave does not claim — page cache for
-# the suites' own I/O, and whatever else on this box grows while the wave runs.
-# Measured 2026-09-17: the source wave's summed admitted peaks ran 5.9 GiB
-# under the machine's own MemAvailable floor at a 75% reserve line, and no row
-# was killed under either loaded run.
-#
-# AND ONE ROW AT A TIME PER SHARED RESOURCE, WHICH NO COST FIGURE CAN EXPRESS.
-# A row that boots a headless browser takes the box's browser lane whole — the
-# Chrome tree, the dev server behind it, and the workerd the Cloudflare vite
-# plugin runs the product in. The plan carries the resource per row (`shared`,
-# derived in scripts/ladder.ts from the modules each row claims) and the wave
-# holds at most one row of it in flight; every row's declared seconds were
-# measured alone, so serial admission is what those declarations assumed.
-#
-# A HYPOTHESIS, AND THE MEASUREMENT THAT SAYS SO. Measured 2026-09-18 on this
-# box, quiet (load 1.04 concurrent, 0.45 serial, 41,197 MiB available), the
-# three browser rows of that day's red wave: concurrently 480.1s/124,
-# 480.1s/124 and 152.8s/1; serially 480.2s/124, 480.2s/124 and 149.7s/1. The
-# overlap is NOT what reddened them — all three are red alone on one product
-# defect (L9). What IS measured is that no cap can refuse the overlap: those
-# rows are admitted at 1, 1 and 3 threads and 2,534, 2,458 and 6,446 MiB
-# against 24 threads and 30.7 GiB. L9 in docs/ARCHITECTURE-DECISIONS.md.
-GATE_RESERVE_PERCENT=75
-
-gate_thread_cap() {
-  echo "${KINU_DEPLOY_THREADS:-$(nproc 2>/dev/null || echo 4)}"
-}
-
-# Prints nothing it cannot read: the CALLER refuses, because an `exit` inside a
-# command substitution ends only the subshell and would leave the wave running
-# with an empty cap.
-gate_rss_cap() {
-  if [ -n "${KINU_DEPLOY_RSS_MB:-}" ]; then
-    echo "$KINU_DEPLOY_RSS_MB"
-    return 0
-  fi
-  awk -v reserve="$GATE_RESERVE_PERCENT" \
-    '/^MemAvailable:/ { print int($2 / 1024 * reserve / 100) }' /proc/meminfo 2>/dev/null
-}
-
-# Run everything enqueued, then clear the queue. Each gate's output goes to its
-# own file and is printed ONLY if it fails: a wave's concurrent streams interleaved
-# into one terminal is not a log anybody can read, and the output a reader wants
-# is the failing gate's.
-#
-# WHERE A GATE'S VERDICT COMES FROM: `wait -n -p`, which hands back the pid that
-# terminated and its exit status together. That is the whole reaping story, and
-# it is deliberately not a status file. A status file is written by the gate, so
-# a gate whose process dies before it can write one — an OOM kill, a `kill -9`
-# from outside the gate's own tree — leaves no verdict at all, and the only way
-# left to notice is probing `kill -0` on a pid the shell has already reaped. A
-# recycled pid answers that probe as somebody else's process, and a loop built
-# that way has nothing left to wait on: it spins at 100% CPU and the deploy
-# never ends. The kernel already knows every child's fate, so asking it removes
-# the status files, the atomic-rename dance, the liveness probe and the poll in
-# one move.
-#
-# A gate killed by a signal therefore settles as 128+signal, a gate its hang
-# detector ended as 124, and a gate whose command does not exist as 127.
-# None of those can be read as a pass, and none depends on the gate cooperating.
-#
-# On the first failure it stops LAUNCHING and lets the running gates finish. That
-# is deliberate rather than tidy — a wave usually holds more than one real
-# failure, and reporting "these three failed" beats reporting the first one and
-# discarding two diagnostics that have already been paid for.
-flush_gates() {
-  local total=${#GATE_LABELS[@]}
-  if [ "$total" -eq 0 ]; then return 0; fi
-
-  local thread_cap rss_cap
-  thread_cap="$(gate_thread_cap)"
-  rss_cap="$(gate_rss_cap)"
-  if [ -z "$rss_cap" ] || [ "$rss_cap" -le 0 ]; then
-    # A cap nobody can read is a wave with no memory dimension at all, which is
-    # the defect this scheduling came from. Refused rather than defaulted.
-    echo -e "${RED}❌ cannot read MemAvailable from /proc/meminfo; the wave has no memory cap to schedule under.${NC}"
-    echo "   Set KINU_DEPLOY_RSS_MB to schedule against a figure you name instead."
-    exit 1
-  fi
-
-  # Every gate writes its output here and every failure is reported out of it, so
-  # a directory that could not be created is a wave that cannot be reported on.
-  # Refused rather than worked around: with `$dir` empty the redirections below
-  # would write to `/0.log`, and a box out of space or inodes would present as a
-  # clean pass.
-  local dir=""
-  dir="$(mktemp -d "${TMPDIR:-/tmp}/kinu-gates.XXXXXX" 2>/dev/null)" || dir=""
-  if [ -z "$dir" ] || [ ! -d "$dir" ]; then
-    echo -e "${RED}❌ cannot create a gate log directory under ${TMPDIR:-/tmp}.${NC}"
-    echo "   Nothing can be reported without it, so nothing is built or published."
-    echo "   Free space or inodes, or set TMPDIR."
-    exit 1
-  fi
-
-  local index
-  for ((index = 0; index < total; index++)); do
-    # The ladder parses plain words without shell quoting, so refuse a command
-    # that could not round-trip through that argv grammar.
-    case "${GATE_CMDS[index]}" in
-      *\"*|*\'*)
-        echo -e "${RED}❌ gate ${index}: '${GATE_CMDS[index]}' carries a quote.${NC}"
-        echo "   Gate commands must be plain words. scripts/ladder.ts parses these lines"
-        echo "   and this runner splits them; a quoted argument would not survive either."
-        rm -rf "$dir"
-        exit 1
-        ;;
-    esac
-  done
-
-  local -a launched=() statuses=() started=()
-  local -A gate_of_pid=()
-  local -A resource_held=()
-  local pick finished status threads rss resource wall pid live_pids
-  local running=0 load=0 held=0 settled=0 failures=0 cached=0
-  local wave_started=$SECONDS
-  for ((index = 0; index < total; index++)); do launched[index]=0; statuses[index]=-1; done
-
-  if [ "$KINU_GATES_ALL" = "1" ]; then
-    echo "Running $total gate(s) within $thread_cap threads and $rss_cap MiB of measured cost, every gate regardless of failures (--all)"
+  local phase="$1" status
+  local -a flags=("--deploy-phase=$phase")
+  if [ "$KINU_GATES_ALL" = "1" ]; then flags+=("--all"); fi
+  bun scripts/ladder.ts "${flags[@]}"
+  status=$?
+  if [ "$status" -eq 0 ]; then return 0; fi
+  echo ""
+  if [ "${DEPLOY_PUBLISHED:-0}" -eq 1 ]; then
+    echo -e "${RED}❌ the ${phase} phase failed AFTER publish (exit $status): the build is live and this tier is red against it.${NC}"
   else
-    echo "Running $total gate(s) within $thread_cap threads and $rss_cap MiB of measured cost, stopping new launches at the first failure"
+    echo -e "${RED}❌ the ${phase} phase failed (exit $status). The build and publish steps did not start.${NC}"
   fi
-  local lanes=0
-  for ((index = 0; index < total; index++)); do
-    if [ "${GATE_SHARED[index]}" != "none" ]; then lanes=$((lanes + 1)); fi
-  done
-  if [ "$lanes" -gt 0 ]; then
-    echo "  $lanes of them hold a shared resource (a browser and the dev server behind it) and run one at a time"
-  fi
-  while [ "$settled" -lt "$total" ]; do
-    # Take the FIRST gate that is not launched, whose shared resource is free,
-    # and whose MEASURED cost fits what is left of both caps — or, when nothing
-    # is running, the first gate regardless of the caps, so a gate heavier than
-    # the whole cap still runs and the cap can never wedge. A plain queue
-    # pointer would stall the whole wave behind a gallery gate waiting for its
-    # turn.
-    #
-    # The RESOURCE check is not part of that bypass: it is the one admission a
-    # row cannot be let past, and with nothing running no resource is held, so
-    # it cannot wedge either.
-    while [ "$failures" -eq 0 ] || [ "$KINU_GATES_ALL" = "1" ]; do
-      pick=-1
-      for ((index = 0; index < total; index++)); do
-        if [ "${launched[index]}" -eq 1 ]; then continue; fi
-        threads="${GATE_THREADS[index]}"
-        rss="${GATE_RSS[index]}"
-        resource="${GATE_SHARED[index]}"
-        if [ "$resource" != "none" ] && [ -n "${resource_held[$resource]:-}" ]; then continue; fi
-        if [ "$running" -gt 0 ]; then
-          if [ $((load + threads)) -gt "$thread_cap" ] || [ $((held + rss)) -gt "$rss_cap" ]; then continue; fi
-        fi
-        pick=$index
-        break
-      done
-      if [ "$pick" -lt 0 ]; then break; fi
-      launched[pick]=1
-      load=$((load + GATE_THREADS[pick]))
-      held=$((held + GATE_RSS[pick]))
-      if [ "${GATE_SHARED[pick]}" != "none" ]; then resource_held["${GATE_SHARED[pick]}"]="$pick"; fi
-      # `ladder.ts --gate` runs the row under its hang detector: killed once
-      # it has written nothing for the row's bound (scripts/deadline.ts). Not
-      # a `timeout` on wall time here, which killed the CLI suite at 480 s
-      # after 484 tests had passed in 476 s (ci-0965z): slow is not hung. A
-      # child that calls setsid (a detached dev server, a daemonized browser
-      # helper) leaves the gate's process group; the run's KINU_RUN mark is
-      # what finds and ends it after the gate exits.
-      #
-      # `exec` so the tracked pid IS the gate's runner: one process fewer per
-      # gate, and the status `wait` reports below is the gate's own.
-      (
-        exec bun scripts/ladder.ts --gate "${GATE_CMDS[pick]}" > "$dir/$pick.log" 2>&1
-      ) &
-      gate_of_pid[$!]=$pick
-      started[pick]=$SECONDS
-      running=$((running + 1))
-    done
-
-    if [ "$running" -eq 0 ]; then
-      # Nothing running and nothing launchable: after a failure that is the
-      # planned end of the wave, and with nothing running every unlaunched gate
-      # fits both caps by construction, so anything else here is a scheduler
-      # defect and fails rather than looping over a queue that cannot move.
-      if [ "$failures" -ne 0 ]; then break; fi
-      echo -e "${RED}❌ $((total - settled)) gate(s) can never launch with nothing running.${NC}"
-      rm -rf "$dir"
-      exit 1
-    fi
-
-    # Bash 5.3.9, measured 2026-09-30: wait -n ignores a child already done
-    # before the call (127, no pid), while wait <pid> still returns its status.
-    # Collect those cached completions first so their resource credits cannot
-    # strand later rows. Restrict wait -n to this wave's tracked children.
-    finished=""
-    live_pids=" $(jobs -pr) "
-    live_pids="${live_pids//$'\n'/ }"
-    for pid in "${!gate_of_pid[@]}"; do
-      if [[ "$live_pids" == *" $pid "* ]]; then continue; fi
-      finished="$pid"
-      break
-    done
-    if [ -n "$finished" ]; then
-      wait "$finished"; status=$?
-    else
-      wait -n -p finished "${!gate_of_pid[@]}"; status=$?
-      if [ -z "${finished:-}" ] && [ "$status" -eq 127 ]; then
-        # Every child can finish between jobs and wait -n; its status is cached.
-        for finished in "${!gate_of_pid[@]}"; do break; done
-        wait "$finished"; status=$?
-      fi
-    fi
-    if [ -z "${finished:-}" ] || [ -z "${gate_of_pid[$finished]:-}" ]; then
-      # `wait` came back without naming a child of this wave, so the status
-      # cannot be attributed to a gate. Stop rather than credit it to one.
-      echo -e "${RED}❌ a gate wait returned no child of this wave (status $status).${NC}"
-      echo "Gate logs retained at $dir" >&2
-      exit 1
-    fi
-    index="${gate_of_pid[$finished]}"
-    unset "gate_of_pid[$finished]"
-    running=$((running - 1))
-    load=$((load - GATE_THREADS[index]))
-    held=$((held - GATE_RSS[index]))
-    if [ "${GATE_SHARED[index]}" != "none" ]; then unset "resource_held[${GATE_SHARED[index]}]"; fi
-    settled=$((settled + 1))
-    statuses[index]=$status
-    # Wall seconds since launch, on the line itself: which row a wave waits on
-    # is otherwise unanswerable once the gate dir is gone.
-    wall=$((SECONDS - started[index]))
-    if [ "$status" -eq 0 ]; then
-      # scripts/ladder.ts prints `skip  <run>  hit …` when its cache proves the
-      # gate's inputs unchanged since a green run: a reused verdict reads as one.
-      if grep -q '^skip  ' "$dir/$index.log" 2>/dev/null; then
-        cached=$((cached + 1))
-        echo -e "${GREEN}✅ ${GATE_LABELS[index]}${NC} ${wall}s (cached)"
-      else
-        echo -e "${GREEN}✅ ${GATE_LABELS[index]}${NC} ${wall}s"
-      fi
-    else
-      failures=$((failures + 1))
-      echo -e "${RED}❌ ${GATE_LABELS[index]} failed (exit $status)${NC} ${wall}s"
-    fi
-  done
-
-  if [ "$failures" -ne 0 ]; then
-    for ((index = 0; index < total; index++)); do
-      if [ "${statuses[index]}" -le 0 ]; then continue; fi
-      echo ""
-      echo -e "${BOLD}── ${GATE_LABELS[index]} ──${NC}"
-      echo "Reproduce: ${GATE_CMDS[index]}"
-      if [ -f "$dir/$index.log" ]; then
-        cat "$dir/$index.log"
-      else
-        echo "(the gate left no log file: its output went with the process)"
-      fi
-    done
-    echo ""
-    if [ "${DEPLOY_PUBLISHED:-0}" -eq 1 ]; then
-      echo -e "${RED}❌ $failures gate(s) failed AFTER publish: the build is live and this tier is red against it.${NC}"
-    else
-      echo -e "${RED}❌ $failures gate(s) failed. The build and publish steps did not start.${NC}"
-    fi
-    rm -rf "$dir"
-    exit 1
-  fi
-
-  echo "Wave done: $total gate(s), $cached cached, in $((SECONDS - wave_started))s"
-  rm -rf "$dir"
+  exit 1
 }
 
 echo -e "${BOLD}Kinu Deploy Pipeline${NC}"
@@ -642,9 +303,7 @@ echo ""
 # has to run before anything that could be poisoned: an exhausted $TMPDIR inode
 # table surfaces later as a 5-second timeout inside an unrelated filesystem
 # test, which reads as a code regression and is not one. It repairs nothing;
-# `--reclaim` is explicit and separate. The plan is loaded first because the
-# preflight is its first phase.
-load_plan
+# `--reclaim` is explicit and separate.
 run_phase preflight
 
 # ── Pre-flight: verify npx + wrangler auth ───────────────────────
