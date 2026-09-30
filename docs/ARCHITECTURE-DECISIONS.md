@@ -255,6 +255,16 @@ The read-back guard of the 2026-09-16 amendment is gone: the transaction
 either commits the bump or throws, and "a generation write that fails refuses
 the open and leaves the counter where it was" pins that.
 
+W2. A box asking whether its container is still in use (`sandboxInUse`) does
+not start the workspace: the answer reads only what the current activation
+runs, and an object that did not start runs nothing, so it answers from its
+constructor. Owed work stays with the object's own wake. Decided 2026-09-30,
+commit e7dc69b685, on ironwood-cairn-6dbcb8de: from 18:04Z to 18:18Z the
+devbox heartbeat's ask started the resting object once a minute, and each start
+booted its files and armed the wake that retried its owed effects at the next
+second. Pinned by `unit-activation-boot-failure` (the ask waited on the start
+and failed with the boot's cause; now it answers false).
+
 ## Chat loop
 
 C1. The stored assistant row holds the turn's answer. The runner selects it
@@ -588,6 +598,20 @@ Heap was read as headroom: the largest held allocation that survived.
   about 1,000 touch the turn's own tables. At 5-10 ms a hop, storage that stays
   in the workspace object and is reached one statement at a time would cost a
   loader-hosted turn 5-50 s.
+- Re-measured 2026-09-30 with the same hold-until-reset probe, each bundle
+  loaded by a throwaway (deleted after; kinu-logs/heap/WORKSPACE-BUNDLE.md).
+  The probe alone survives 128 MB. Production 2f660875cc's workspace bundle
+  survives 68-70, so it holds ~58-60 MiB: its index.js is 10.7 M chars,
+  unminified, with 5,231 above U+00FF, so V8 keeps 21.4 MB of it two bytes a
+  char. Integration 5d113a8210's survives 92 (~36 MiB, minified ASCII), and the
+  agent facet bundle 118-120 (~8-10 MiB). workerd holds and compiles every
+  uploaded module at startup, imported or not: 19.3 MB used locally with
+  index.js never imported, against 40.8 imported. esbuild-wasm initialized in
+  the isolate and run for 10 slate builds (linear memory 28 then 44 MiB) cost
+  2-4 MiB of headroom, so the limit counts almost none of its wasm memory. A
+  reset past the limit answered with a 200 from a new isolate and no error line
+  7 times in 9 (1101 twice), the shape of ironwood-cairn-6dbcb8de's unlogged
+  restarts on 2026-09-29, where each turn still ran in that ~68 MiB of room.
 
 D9. A non-main agent's turn runs in its own loader isolate, and every tool
 it calls runs in the workspace object. Decided 2026-09-28 on D8, extended below.
