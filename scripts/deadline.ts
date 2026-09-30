@@ -195,6 +195,16 @@ const WATCH_MS = 250;
 /** Signals whose default ends this process; a run's session no longer hears the terminal, so each is passed on. */
 const PASSED_ON = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 } as const;
 
+/** A record is not drained at the reader's EOF: process.exit can discard pending stream writes. */
+export function writeFully(onward: NodeJS.WriteStream, value: string | Uint8Array): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    onward.write(value, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
 /**
  * Run `argv` under the process-tree hang detector and report how it ended.
  *
@@ -251,14 +261,8 @@ export async function runUnderDeadline(run: DeadlineRun): Promise<DeadlineOutcom
     for (let read = await reader.read(); !read.done; read = await reader.read()) {
       heard();
 
-      if (stdio === 'inherit') {
-        await new Promise<void>((resolve, reject) => {
-          onward.write(read.value, (error) => {
-            if (error) reject(error);
-            else resolve();
-          });
-        });
-      } else text += decoder.decode(read.value, { stream: true });
+      if (stdio === 'inherit') await writeFully(onward, read.value);
+      else text += decoder.decode(read.value, { stream: true });
     }
 
     return text + decoder.decode();

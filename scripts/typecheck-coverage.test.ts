@@ -8,9 +8,7 @@ import {
   runnableTestFiles,
   scriptDebtCoverage,
   scriptTypeScriptFiles,
-  SCRIPT_TYPECHECK_DEBT,
   testCoverage,
-  UNTYPECHECKED_TESTS,
 } from './typecheck-coverage';
 
 function configFixture(files: Readonly<Record<string, string>>) {
@@ -113,22 +111,8 @@ describe('this tree', () => {
       .toEqual([devboxWorkspaceTest]);
   });
 
-  test('keeps the declared exceptions and script debt exact', async () => {
+  test('has no undeclared or stale script typecheck debt', async () => {
     const programs = await programFiles();
-    expect(Object.keys(UNTYPECHECKED_TESTS).sort()).toEqual([
-      'packages/pc-agent/tests/daemon.test.js',
-      'packages/pc-agent/tests/pty-protocol.test.js',
-      'packages/pc-agent/tests/pty.test.js',
-      'packages/pc-agent/tests/refinement-device-view.test.js',
-      'packages/pc-agent/tests/sandbox.test.js',
-    ]);
-    expect(UNTYPECHECKED_TESTS['packages/pc-agent/tests/daemon.test.js']).toMatchObject({
-      kind: 'JavaScript test', runner: 'bun test packages/pc-agent/',
-    });
-    expect(Object.keys(SCRIPT_TYPECHECK_DEBT).sort()).toEqual([
-      'scripts/layergate.ts',
-      'scripts/schema-drift.ts',
-    ]);
     expect(scriptDebtCoverage(scriptTypeScriptFiles(), programs)).toEqual({ undeclared: [], stale: [] });
   });
 

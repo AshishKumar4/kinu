@@ -34,6 +34,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- Concurrent CI reports wait for their full output to drain before returning a verdict, preserving the failure beyond the pipe's first 64 KiB. Typecheck coverage still enforces actual missing/stale membership and debt; duplicate lists of those declarations no longer pin a second copy.
 - The deploy wave collects a gate that completed before Bash's next wait. Its cached exit status releases the gate's resource credits and still stops the deploy on failure.
 - Release CI fixtures record the opaque ladder row the deploy passes to its gate runner, rather than expanding it again in a locale-dependent shell. The device sandbox's GPU observer accepts a machine with no GPU nodes while still checking every node present.
 - The built-Worker heap probe uses the deployment's asset directory and native Workers AI transport. Its parked call receives SSE headers before waiting for tokens; the measured pre-header request cost is recorded separately, with all heap bounds unchanged.

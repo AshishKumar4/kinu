@@ -35,7 +35,7 @@ import { cpus } from 'node:os';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 import { plantedInputs, readCensusLock } from './census-plants';
-import { DEADLINE_BLIND_SPOTS, DEADLINE_EXIT_CODE, runUnderDeadline } from './deadline';
+import { DEADLINE_BLIND_SPOTS, DEADLINE_EXIT_CODE, runUnderDeadline, writeFully } from './deadline';
 import {
   CACHE_BLIND_SPOTS, defaultStoreDirectory, gateEnvironment, gateEnvNames, planGate, recordGreen, storeAt, toolVersions,
 } from './ladder-cache';
@@ -3591,7 +3591,7 @@ if (import.meta.main) {
       stdio: concurrent ? 'pipe' : 'inherit',
     });
 
-    if (concurrent) console.log([header, ...lines, `${outcome.stdout}${outcome.stderr}`.trimEnd()].join('\n'));
+    if (concurrent) await writeFully(process.stdout, `${[header, ...lines, `${outcome.stdout}${outcome.stderr}`.trimEnd()].join('\n')}\n`);
     const { seconds } = outcome;
 
     if (outcome.exitCode === 0) {

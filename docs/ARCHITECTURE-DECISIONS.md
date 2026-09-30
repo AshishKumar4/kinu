@@ -1051,6 +1051,13 @@ bytes. Awaiting the write callback preserved all 1,191,111 bytes on stdout
 and stderr. Without that wait, the wrapper's `process.exit` can discard the
 queued tail, including a failing verdict.
 
+The same completed-write boundary drains a concurrent tier's accumulated row
+report. Measured 2026-09-30, replaying a real 729,413-byte CI record through
+the pipe capture and `console.log` to a reader first reading after 200 ms
+kept only 65,536 bytes before process exit. Awaiting that record's write
+callback preserved all 729,413 bytes. A child's EOF alone does not drain the
+parent's report, so both inherited and accumulated output use this boundary.
+
 
 ## Providers
 
