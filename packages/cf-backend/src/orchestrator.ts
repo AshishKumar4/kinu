@@ -4,7 +4,7 @@ import { storeRevision, type WorkspaceOverviewInputs } from '@kinu.run/core';
  * Tool factory, system prompt, and crafted-tool injection live in @kinu.run/core, shared with the CLI.
  */
 
-import { callable, type AgentContext, type Connection, type ConnectionContext } from "agents";
+import { Agent, callable, type AgentContext, type Connection, type ConnectionContext } from "agents";
 import { ORCHESTRATOR_RPC_SURFACE, ORCHESTRATOR_STARTED_RPC, sealRpcSurface } from "./rpc-surface";
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from "./activation-gate";
 import { KINU_TIMER_JOB } from "./wake-jobs";
@@ -418,7 +418,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const gate = new ActivationGate();
     this.lifecycle.use(gate);
     startBeforeRpc(this, ORCHESTRATOR_STARTED_RPC, () => (this.nimbusSibling ? Promise.resolve() : gate.ready()));
-    reportSocketCallFailures(this);
   }
 
   /** A Nimbus sibling (docs/NIMBUS-INTEGRATION.md); no workspace name holds `:`. */
@@ -759,20 +758,20 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return await stub.listCredentials(caller);
       },
-      codexRelayDevice: async () => {
+      relayDevice: async (provider) => {
         const { stub, caller } = await credentials();
 
-        return await stub.codexRelayDevice(caller);
+        return await stub.relayDevice(caller, provider);
       },
-      relayCodex: async (deviceId, callId, request) => {
+      relayModelCall: async (deviceId, callId, request) => {
         const { stub, caller } = await credentials();
 
-        return await stub.relayCodex(caller, deviceId, callId, request);
+        return await stub.relayModelCall(caller, deviceId, callId, request);
       },
-      cancelCodexRelay: async (callId) => {
+      cancelModelRelay: async (callId) => {
         const { stub, caller } = await credentials();
 
-        await stub.cancelCodexRelay(caller, callId);
+        await stub.cancelModelRelay(caller, callId);
       },
     });
   }
@@ -5963,6 +5962,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
 }
+
+reportSocketCallFailures(OrchestratorAgent, Agent);
 
 /** Cursor is client-supplied: anything malformed starts a fresh archive instead of reaching the query. */
 function parseArchiveCursor(value: ArchiveCursor | undefined): ArchiveCursor | null {

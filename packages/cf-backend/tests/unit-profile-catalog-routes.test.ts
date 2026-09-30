@@ -185,12 +185,13 @@ describe('CLI profile catalog route', () => {
   test('the session route reads and CAS-writes the same account authority', async () => {
     const { harness, env, token } = await setup();
 
-    const initial = handled(await serveFamily(cliRoutes)(cliRequest(token), env));
+    const initial = handled(await serveFamily(cliRoutes, { ctx: workerContext() })(cliRequest(token), env));
     const read = validateProfileCatalogEnvelope({ value: await initial.json() });
     expect(read.version).toBe(0);
     expect(read.authority).toEqual({ kind: 'account', accountId: USER_ID });
 
-    const put = handled(await serveFamily(cliRoutes)(cliRequest(token, 'PUT', {
+    // A landed write tells the owner's live workspaces, under the request's waitUntil.
+    const put = handled(await serveFamily(cliRoutes, { ctx: workerContext() })(cliRequest(token, 'PUT', {
       catalog: CUSTOM_CATALOG,
       expectedVersion: read.version,
     }), env));

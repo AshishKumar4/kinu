@@ -103,7 +103,7 @@ describe('what each provider account has left', () => {
     });
 
     expect(stale.limits.map((report) => report.provider)).toEqual(['codex']);
-    expect(limitLines(stale.limits, stale.limitsUnread, now).join('\n')).toContain('ChatGPT · main · as of 10m ago');
+    expect(limitLines(stale.limits, stale.limitsUnread, now).join('\n')).toContain('ChatGPT Codex · main · as of 10m ago');
     expect(stale.limitsUnread.map((entry) => [entry.provider, entry.account])).toEqual([['claude', 'work']]);
     expect(limitLines(stale.limits, stale.limitsUnread, now).join('\n')).toMatch(/Claude · work: couldn't be read \(.*HTTP 401/u);
   });

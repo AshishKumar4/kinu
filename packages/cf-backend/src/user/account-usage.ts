@@ -4,7 +4,7 @@ import {
 } from '@kinu.run/core';
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from './user-do';
-import { codexEgressFetch, codexRouteFetch, type CodexEgressNamespace } from '../egress/codex-egress-route';
+import { codexEgressFetch, deviceRouteFetch, type CodexEgressNamespace } from '../egress/codex-egress-route';
 
 export type AccountLedgerTarget = Pick<OrchestratorAgent, 'accountSpend'>;
 
@@ -17,7 +17,7 @@ const LIMITS = new Map<string, LimitCache>();
 
 export async function readUserAccountUsage<Id>(input: {
   readonly env: AccountUsageEnv<Id>;
-  readonly userDO: Pick<UserDO, 'listActiveWorkspaces' | 'listCredentials' | 'getAuthHeaders' | 'codexRelayDevice' | 'relayCodex' | 'cancelCodexRelay'>;
+  readonly userDO: Pick<UserDO, 'listActiveWorkspaces' | 'listCredentials' | 'getAuthHeaders' | 'relayDevice' | 'relayModelCall' | 'cancelModelRelay'>;
   readonly owner: UserCaller;
   readonly userId: string;
   readonly refresh?: boolean;
@@ -35,7 +35,7 @@ export async function readUserAccountUsage<Id>(input: {
 
   LIMITS.set(userId, cache);
   const container = env.CodexEgress === undefined ? undefined : codexEgressFetch(env.CodexEgress, userId);
-  const codex = container === undefined ? undefined : codexRouteFetch({ container, hub: userDO, caller: async () => owner });
+  const codex = container === undefined ? undefined : deviceRouteFetch({ provider: 'codex', container, hub: userDO, caller: async () => owner });
 
   const [usage, live] = await Promise.all([
     readAccountUsage(workspaces.map(({ name }) => ({

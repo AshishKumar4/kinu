@@ -68,7 +68,7 @@ The model spec decides which credential answers a turn. `resolveLLMConfig` gives
 | `providers.openai.apiKey` | OpenAI API key. |
 | `providers.anthropic.apiKey` | Anthropic API key. |
 | `providers.openrouter.apiKey` | OpenRouter API key. |
-| `providers.codex` | The ChatGPT device-flow tokens (`accessToken`, `refreshToken`, `expiresAt`, `metadata`), written by `kinu provider connect codex`. |
+| `providers.chatgpt` | The ChatGPT plan's Sign in with ChatGPT login (`accessToken`, `refreshToken`, `expiresAt`, and `metadata` with the issued `clientId`, the verified identity and the granted `scopes`), written by `kinu provider connect chatgpt`. Signing out keeps `metadata.clientId` for the next sign-in. The machine's `ext_agent_host_id` is `chatgpt-host-id`, and the device daemon keeps its own sign-in in `pc-agent.chatgpt.json`. |
 | `providers.openaiCompat.<name>` | An OpenAI-compatible endpoint: `{baseURL, apiKey?, headers?, extraHeaders?}`. |
 
 The Claude subscription provider stores nothing here. Kinu drives Anthropic's official `claude` binary, which owns its own login.
@@ -119,7 +119,6 @@ Six apply to every command. `kinu --help` lists exactly these.
 | `OPENAI_API_KEY` | `providers.openai.apiKey` |
 | `ANTHROPIC_API_KEY` | `providers.anthropic.apiKey` |
 | `OPENROUTER_API_KEY` | `providers.openrouter.apiKey` |
-| `CODEX_ACCESS_TOKEN` | the access token in `providers.codex` |
 
 Precedence is the same everywhere. An explicit flag beats the environment, and the environment beats `config.json`. `KINU_BASE_URL` and `KINU_AUTH` have no `config.json` counterpart. I set a direct endpoint only by flag or environment.
 

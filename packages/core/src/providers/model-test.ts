@@ -94,7 +94,7 @@ function failed({ cause }: { readonly cause: unknown }): ModelTestResult {
 }
 
 const PROVIDER_NAMES = new Map(Object.entries({
-  codex: 'ChatGPT', claude: 'Claude', anthropic: 'Anthropic', openai: 'OpenAI', openrouter: 'OpenRouter',
+  chatgpt: 'ChatGPT', codex: 'ChatGPT Codex', claude: 'Claude', anthropic: 'Anthropic', openai: 'OpenAI', openrouter: 'OpenRouter',
   'workers-ai': 'Workers AI', 'ai-gateway': 'AI Gateway', 'my-gateway': 'AI Gateway', opencode: 'OpenCode',
   'opencode-go': 'OpenCode Go', devin: 'Devin',
 }));

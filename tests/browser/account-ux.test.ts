@@ -193,7 +193,7 @@ describe('account panels', () => {
 
             const text = await dialogText(providers);
             expect(text).toContain('Cloudflare AI');
-            expect(text).toContain('ChatGPT (Codex)');
+            expect(text).toContain('ChatGPT');
             expect(text).toContain('Claude');
             expect(text).toContain('Add an API key');
             shots.push(await shoot(providers, `setupmodal-providers-${viewport}-${theme}`));

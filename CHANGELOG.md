@@ -36,6 +36,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 - Test hygiene now follows source paths held in constants and checks reconnect snapshots through real RPCs and the mounted client. Cosmetic prose, stylesheet and artwork pins are removed; public pages are checked for working local resources and theme preferences.
 - CLI and TUI fixtures wait for socket frames, stdout, pidfiles and rendered frames instead of fixed sleeps. Transcript checks keep chronology, sanitization and contrast without pinning palette hex values, gutter glyphs or decoration.
+- The deploy wave collects a gate that completed before Bash's next wait. Its cached exit status releases the gate's resource credits and still stops the deploy on failure.
 - Release CI fixtures record the opaque ladder row the deploy passes to its gate runner, rather than expanding it again in a locale-dependent shell. The device sandbox's GPU observer accepts a machine with no GPU nodes while still checking every node present.
 - The built-Worker heap probe uses the deployment's asset directory and native Workers AI transport. Its parked call receives SSE headers before waiting for tokens; the measured pre-header request cost is recorded separately, with all heap bounds unchanged.
 - CLI distribution tests generate their own release signing key in a throwaway home. CI needs no deployment key.

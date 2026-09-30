@@ -367,6 +367,9 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
       : fixtureJson({ error: "Codex status fixture failed" }, 503);
   }
 
+  // No machine connected: the ChatGPT entry offers the Codex device code.
+  if (path === "/api/user/chatgpt") return fixtureJson({ device: null, status: null });
+
   if (path === "/api/user/models") {
     // Different effort lists per model: the tier levels are the model's, never a fixed three.
     return fixtureJson({

@@ -11,7 +11,7 @@ import * as v from 'valibot';
 import { scriptedTurnModel, type ModelStreamPart, type ScriptedTurnOptions, type ScriptedTurnResult } from '@kinu.run/test-utils/turn-model';
 import { convertArrayToReadableStream, MockLanguageModelV3 } from 'ai/test';
 import type { PreparedRequest, ScriptedAnswer, SettledTurn, TurnHarness } from './turn-harness';
-import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, SpendSource, BackendHost, ModelInfo } from '@kinu.run/core';
+import type { UserCaller, SendLanding, ProgrammaticTurn, EnqueueTurnResult, BackendHost, ModelInfo, ModelRouteResolution } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { Refusal } from '@kinu.run/core/obs';
 import type { SessionTranscript, WorkspaceOverview } from '@kinu.run/core';
@@ -142,8 +142,8 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** Side models (titler, advisor, judge) are silent scripted ones: harness actors hold no
    *  provider credentials. A suite-scripted route is honoured; never the turn model. */
   sideModelFactory?: () => LanguageModel;
-  protected override async modelForSource(source: SpendSource) {
-    const routed = await super.modelForSource(source);
+  protected override modelForResolution(resolution: Pick<ModelRouteResolution, 'model' | 'reasoningEffort'>) {
+    const routed = super.modelForResolution(resolution);
     // A scripted resolver is a plain object, not an `OwnedModelServices` instance.
     const scriptedRoute = !(this.ownedModelServices instanceof OwnedModelServices);
 

@@ -1,17 +1,16 @@
 // Subscription logins on this machine, one `config.json` provider section per issuer with named accounts.
-// Every issuer renews through core's issuer table, as a hosted account's logins do.
+// Claude renews through core's issuer table, as a hosted account's login does; the ChatGPT plan's login
+// exists only on a machine, so its issuer lives beside the daemon's (`chatgpt-login.ts`).
 import {
+  CHATGPT_CRED_KEY,
   CLAUDE_CRED_KEY,
   CLAUDE_LOGIN_ISSUER,
-  CODEX_CRED_KEY,
-  CODEX_LOGIN_ISSUER,
   JsonObjectSchema,
   JsonValueSchema,
   MAIN_ACCOUNT,
   accountCredentialKey,
   accountOf,
   baseCredentialKey,
-  codexCredentialToHeaders,
   credentialToHeaders,
   refusedLogin,
   type AuthRequest,
@@ -22,6 +21,7 @@ import {
 import * as v from 'valibot';
 import { readFileSync } from 'node:fs';
 import { tolerate } from '@kinu.run/core/obs';
+import { chatgptLoginIssuer } from './chatgpt-login';
 import { withConfigLock } from './config-lock';
 import { writeSecretFile } from './secret-file';
 
@@ -41,7 +41,7 @@ const storedIssuerSchema = v.object({
 
 const kinuConfigSchema = v.objectWithRest({
   providers: v.optional(v.objectWithRest({
-    codex: v.optional(storedIssuerSchema),
+    chatgpt: v.optional(storedIssuerSchema),
     claude: v.optional(storedIssuerSchema),
   }, JsonValueSchema)),
 }, JsonValueSchema);
@@ -49,13 +49,13 @@ const kinuConfigSchema = v.objectWithRest({
 type KinuConfigFile = v.InferOutput<typeof kinuConfigSchema>;
 
 interface OAuthIssuer {
-  readonly section: 'codex' | 'claude';
+  readonly section: 'chatgpt' | 'claude';
   headers(credential: OAuthCredential): Record<string, string>;
   readonly renewal: SubscriptionIssuer;
 }
 
 const ISSUERS = new Map<string, OAuthIssuer>([
-  [CODEX_CRED_KEY, { section: 'codex', headers: codexCredentialToHeaders, renewal: CODEX_LOGIN_ISSUER }],
+  [CHATGPT_CRED_KEY, { section: 'chatgpt', headers: (credential) => ({ Authorization: `Bearer ${credential.accessToken}` }), renewal: chatgptLoginIssuer() }],
   [CLAUDE_CRED_KEY, { section: 'claude', headers: (credential) => credentialToHeaders(CLAUDE_CRED_KEY, credential), renewal: CLAUDE_LOGIN_ISSUER }],
 ]);
 

@@ -30,6 +30,7 @@ export async function healthResponse(
       'GET/POST/DELETE /api/user/credentials[/<key>]': 'BYO API keys',
       'POST /api/user/codex/start | /codex/poll': 'ChatGPT device-flow',
       'GET/DELETE /api/user/codex': 'Codex status / disconnect',
+      'GET/DELETE /api/user/chatgpt | POST /chatgpt/sign-in': 'ChatGPT plan on a connected device: status, sign-out, sign-in',
       'GET /api/user/models': 'available models (union of connected providers)',
       'POST /api/client-errors': 'browser render-failure reports',
       // Per-agent (auth + ownership required)

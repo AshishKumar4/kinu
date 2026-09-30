@@ -2,7 +2,7 @@
 import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessageChunk } from 'ai';
 import {
   CHAT_SESSION_ID, HeadCapture, decodeJsonValue, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan,
-  type AuthRequest, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type ObservedCall, type ProviderEnv, type WorkMode,
+  type AuthRequest, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type ObservedCall, type ProviderEnv, type WorkMode,
   type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind,
 } from '@kinu.run/core';
 import { attempt, diagnostics, renderCauseChain, settle } from '@kinu.run/core/obs';
@@ -33,9 +33,9 @@ export interface AgentWorkspace {
   getAuthHeaders(key: string, opts?: AuthRequest): Promise<Record<string, string> | null>;
   getCredentialBaseURL(key: string): Promise<string | null>;
   listCredentials(): ReturnType<UserCredentialClient['listCredentials']>;
-  codexRelayDevice(): ReturnType<UserCredentialClient['codexRelayDevice']>;
-  relayCodex(deviceId: string, callId: string, request: Request): Promise<Response>;
-  cancelCodexRelay(callId: string): Promise<void>;
+  relayDevice(provider: RelayedProvider): ReturnType<UserCredentialClient['relayDevice']>;
+  relayModelCall(deviceId: string, callId: string, request: Request): Promise<Response>;
+  cancelModelRelay(callId: string): Promise<void>;
 }
 
 class HeadTrace {
@@ -72,9 +72,9 @@ function brokeredCredentials(workspace: AgentWorkspace): UserCredentialClient {
     getAuthHeaders: (_caller, key, opts) => workspace.getAuthHeaders(key, opts),
     getCredentialBaseURL: (_caller, key) => workspace.getCredentialBaseURL(key),
     listCredentials: () => workspace.listCredentials(),
-    codexRelayDevice: () => workspace.codexRelayDevice(),
-    relayCodex: (_caller, deviceId, callId, request) => workspace.relayCodex(deviceId, callId, request),
-    cancelCodexRelay: (_caller, callId) => workspace.cancelCodexRelay(callId),
+    relayDevice: (_caller, provider) => workspace.relayDevice(provider),
+    relayModelCall: (_caller, deviceId, callId, request) => workspace.relayModelCall(deviceId, callId, request),
+    cancelModelRelay: (_caller, callId) => workspace.cancelModelRelay(callId),
   };
 }
 

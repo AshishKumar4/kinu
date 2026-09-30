@@ -56,9 +56,10 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'credentials.model', name: 'getCredentialBaseURL(openai-compat.box)', run: (u, c) => u.getCredentialBaseURL(c, 'openai-compat.box') },
   { capability: 'credentials.model', name: 'listCredentials', run: (u, c) => u.listCredentials(c) },
   { capability: 'credentials.model', name: 'listConnectedProviders', run: (u, c) => u.listConnectedProviders(c) },
-  { capability: 'credentials.model', name: 'codexRelayDevice', run: (u, c) => u.codexRelayDevice(c) },
-  { capability: 'credentials.model', name: 'relayCodex', run: (u, c) => u.relayCodex(c, 'dev-none', 'call-1', new Request('https://chatgpt.com/backend-api/codex/models')) },
-  { capability: 'credentials.model', name: 'cancelCodexRelay', run: (u, c) => u.cancelCodexRelay(c, 'call-1') },
+  { capability: 'credentials.model', name: 'relayDevice', run: (u, c) => u.relayDevice(c, 'codex') },
+  { capability: 'credentials.model', name: 'relayModelCall', run: (u, c) => u.relayModelCall(c, 'dev-none', 'call-1', new Request('https://chatgpt.com/backend-api/codex/models')) },
+  { capability: 'credentials.model', name: 'cancelModelRelay', run: (u, c) => u.cancelModelRelay(c, 'call-1') },
+  { capability: 'credentials.model', name: 'chatgptPlan', run: (u, c) => u.chatgptPlan(c) },
 
   { capability: 'credentials.other', name: 'getAuthHeaders(github)', run: (u, c) => u.getAuthHeaders(c, 'github') },
   { capability: 'credentials.other', name: 'getCredentialBaseURL(github)', run: (u, c) => u.getCredentialBaseURL(c, 'github') },
@@ -255,6 +256,8 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
   { capability: 'device.manage', name: 'verifyDeviceToken', run: (u, c) => u.verifyDeviceToken(c, 'pdt_x') },
   { capability: 'device.manage', name: 'verifyDeviceConnectTicket', run: (u, c) => u.verifyDeviceConnectTicket(c, 'pct_x') },
   { capability: 'device.manage', name: 'issueDeviceConnectTicket', run: (u, c) => u.issueDeviceConnectTicket(c, 'pdt_x') },
+  { capability: 'device.manage', name: 'startChatGptSignIn', run: (u, c) => u.startChatGptSignIn(c) },
+  { capability: 'device.manage', name: 'signOutChatGpt', run: (u, c) => u.signOutChatGpt(c) },
 
   {
     capability: 'shares',

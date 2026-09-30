@@ -1,13 +1,11 @@
 import { createChatModel, type LLMProviderConfig } from '@kinu.run/core';
 import {
-  CODEX_CRED_KEY,
   DEFAULT_WORKERS_AI_MODEL_ID,
   credentialToHeaders,
   normalizeModelMenu,
-  codexCredentialToHeaders,
   createAnthropicProvider,
+  createChatGptProvider,
   createClaudeProvider,
-  createCodexProvider,
   availableJudgeSpecs,
   accountDeps,
   catalogModelInfo,
@@ -75,7 +73,6 @@ export interface LocalProviderCredentials {
   openaiApiKey?: string;
   anthropicApiKey?: string;
   openrouterApiKey?: string;
-  codexAccessToken?: string;
   openaiCompat?: Record<string, LocalOpenAICompatCredential>;
   apiKeyAccounts?: Readonly<Record<string, string>>;
 }
@@ -84,7 +81,6 @@ export const PROVIDER_CREDENTIAL_ENV = {
   openaiApiKey: 'OPENAI_API_KEY',
   anthropicApiKey: 'ANTHROPIC_API_KEY',
   openrouterApiKey: 'OPENROUTER_API_KEY',
-  codexAccessToken: 'CODEX_ACCESS_TOKEN',
 } as const satisfies Record<Exclude<keyof LocalProviderCredentials, 'openaiCompat' | 'apiKeyAccounts'>, string>;
 
 export const SESSION_CREDENTIAL_ENV = ['KINU_TOKEN', 'KINU_AUTH', 'AI_GATEWAY_AUTH'] as const;
@@ -293,7 +289,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
   registry.register(createClaudeProvider());
   registry.register(createOpenCodeProvider());
-  registry.register(createCodexProvider());
+  registry.register(createChatGptProvider());
   registry.register(createOpenAIProvider());
   registry.register(createAnthropicProvider());
   registry.register(createOpenRouterProvider({ appTitle: 'Kinu CLI' }));
@@ -694,7 +690,7 @@ function noDefaultModelMessage(): string {
 }
 
 type CliProviderId =
-  | 'workers-ai' | 'codex' | 'openai' | 'anthropic'
+  | 'workers-ai' | 'chatgpt' | 'openai' | 'anthropic'
   | 'openrouter' | 'openai-compat' | 'opencode' | 'claude';
 
 /**
@@ -707,7 +703,7 @@ function defaultProviderFor(llm: LLMProviderConfig | null): CliProviderId | null
 
   if (llm.name === 'workers-ai' || llm.model.startsWith('@cf/')) return 'workers-ai';
 
-  if (llm.name === 'codex') return 'codex';
+  if (llm.name === 'chatgpt') return 'chatgpt';
 
   if (llm.name === 'openai') return 'openai';
 
@@ -729,7 +725,7 @@ export function defaultSpecForEndpoint(llm: LLMProviderConfig | null): string | 
 
   if (provider === null || llm === null) return null;
 
-  // Some `codex` configs already carry the prefix; avoid `codex/codex/…`.
+  // Some configs already carry the prefix; avoid `chatgpt/chatgpt/…`.
   return `${provider}/${stripProvider(llm.model, provider)}`;
 }
 
@@ -817,33 +813,19 @@ function buildAuthStore(
     store.set(key, { headers: credentialToHeaders(key, { kind: 'bearer', token }) });
   }
 
-  const envCodex = credentials.codexAccessToken ? [CODEX_CRED_KEY] : [];
-
   return {
     has(key: string): boolean {
-      if (isOAuthLoginKey(key)) return oauthStore ? oauthStore.has(key) : envCodex.includes(key);
+      if (isOAuthLoginKey(key)) return oauthStore?.has(key) ?? false;
 
       return store.has(key);
     },
     keys(): string[] {
-      return [...store.keys(), ...(oauthStore?.keys() ?? envCodex)];
+      return [...store.keys(), ...(oauthStore?.keys() ?? [])];
     },
     async get(key: string, authOpts?: AuthRequest): Promise<AuthResolution | null> {
       if (!isOAuthLoginKey(key)) return store.get(key) ?? null;
 
-      if (oauthStore) return oauthStore.getAuth(key, authOpts);
-
-      if (key === CODEX_CRED_KEY && credentials.codexAccessToken) {
-        return {
-          headers: codexCredentialToHeaders({
-            kind: 'oauth',
-            accessToken: credentials.codexAccessToken,
-            refreshToken: '',
-          }),
-        };
-      }
-
-      return null;
+      return oauthStore ? oauthStore.getAuth(key, authOpts) : null;
     },
   };
 }

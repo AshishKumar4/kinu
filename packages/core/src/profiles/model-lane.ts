@@ -47,7 +47,9 @@ export async function completeOnRoute(route: ModelRouteResolution, lane: RouteCa
       const next = yield* Effect.promise(() => chain.next(serving.spec, failure));
 
       if (next === undefined) {
-        if (providerRefusalCode({ cause: error }) === 'denied') lane.refusals?.refused({ tier: route.tier, model: route.model, cause: error.cause });
+        const refused = providerRefusalCode({ cause: error });
+
+        if (refused === 'denied' || refused === 'budget') lane.refusals?.refused({ tier: route.tier, model: route.model, cause: error.cause });
 
         const exhausted = chain.exhausted(failure);
 
