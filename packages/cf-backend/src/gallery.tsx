@@ -21,7 +21,7 @@ import {
 } from "@phosphor-icons/react";
 import "./index.css";
 import { KINU_MARK, MARK_IDS, mark, codenameFor, WorkspaceTerminalInputSchema } from "@kinu.run/core";
-import { mcpPresetById, READS_CHANGED_EVENT, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
+import { hostedActorSocketPath, mcpPresetById, READS_CHANGED_EVENT, seededRandom, SLATES_CHANGED_METADATA_KEY } from "@kinu.run/core";
 import { CHECKPOINTS_NO_DEVICE, CHECKPOINTS_UNAVAILABLE_NO_GIT, PositionCursorSchema } from "@kinu.run/core";
 import type { ParkedWriteReview, ReasoningEffort } from "@kinu.run/core";
 import {
@@ -1354,6 +1354,11 @@ let gallerySubSeq = 0;
 const AGENTS_PANEL = new URLSearchParams(location.search).get("agents") === "panel";
 
 if (AGENTS_PANEL) {
+  seedGalleryChat([
+    msg({ id: "ca-u1", role: "user", createdAt: NOW - 6 * 60e3, parts: [{ type: "text", text: "Audit every coupon rule against the campaign table." }] }),
+    msg({ id: "ca-a1", role: "assistant", createdAt: NOW - 5 * 60e3, parts: [{ type: "text", text: "Two rules skip the expiry check; both are in pricing.ts." }] }),
+  ], hostedActorSocketPath("coupon-auditor"));
+
   const docs = {
     name: "docs", actorId: galleryActorId("docs"), displayName: "Docs writer", role: "agent", nameOrigin: "user", origin: "user",
     lifetime: "durable", status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
@@ -1585,10 +1590,16 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
       owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false, path: [] },
       plan: galleryAgentPlan, tasks: [],
     }],
-    tasks: document.documentElement.dataset.workMoved === "1" ? [{
-      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false }, plan: null,
-      tasks: [{ id: "t-moved", parentId: null, title: "Written during the outage", status: "active", updatedAt: 1, note: null, subtasks: [] }],
-    }] : [],
+    tasks: [
+      ...document.documentElement.dataset.workMoved === "1" ? [{
+        owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false }, plan: null,
+        tasks: [{ id: "t-moved", parentId: null, title: "Written during the outage", status: "active", updatedAt: 1, note: null, subtasks: [] }],
+      }] : [],
+      ...AGENTS_PANEL ? [{
+        owner: { actorId: galleryActorId("coupon-auditor"), name: "coupon-auditor", title: "Coupon auditor", retired: false, path: ["coupon-auditor"] }, plan: null,
+        tasks: [{ id: "t-audit", parentId: null, title: "Audit the coupon rules", status: "active", updatedAt: 1, note: null, subtasks: [] }],
+      }] : [],
+    ],
   }),
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
   listWorkspaceAgents: () => (AGENTS_PANEL ? GALLERY_AGENTS : []),
