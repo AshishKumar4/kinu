@@ -22,6 +22,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **The Agents sidebar shows hired agents and swarm workers' cost and prompt-cache rate.** Their tokens, cost, active time and cache EMA are read from each agent's own isolate, through the same run-event reader as main's.
 - **A hired agent's own records are read where they live.** Its inherited context, conversation recall, `/context` files (its own and its hirer's `/context/agents/<key>/`), turn requests and spend now come from its own isolate, so an inheriting hire sees the running turn, recall finds its past conversations, edits to its working context reach its next turn, and its model calls count in the workspace's and the account's spend.
 - **A hired agent's advisor answers to the owner's settings and reaches the hirer.** The severity floor and the other owner settings are read from the workspace, and a blocker note goes to the hirer's conversation instead of back to the hire.
 - **A hired agent acts with the authority its turn resolved to.** A planner hired from a Build turn stays in Plan: the workspace, which runs every tool the agent calls, now enforces the resolved mode, and the turn's record says Plan.

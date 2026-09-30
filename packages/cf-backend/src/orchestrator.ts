@@ -136,7 +136,7 @@ import {
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
   readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork,
-  readWorkspaceAgents, type PanelAgent,
+  readWorkspaceAgents, readAgentFigures, type PanelAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
@@ -2949,6 +2949,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return readWorkspaceAgents({
       sql: this.boundSql, exec: this.ctx.storage.sql, root: this.actorHandle(), rootLabel: 'Main',
       actors: this.workspaceActors().list({ retired: true }),
+      figures: async (actorIds) => {
+        const main = this.actorHandle().actorId;
+        const local = readAgentFigures(this.boundSql, [main]);
+
+        const remote = await Promise.all(actorIds.filter((actorId) => actorId !== main).map(async (actorId) =>
+          [actorId, await this.agentStores(actorId).figures()] as const));
+
+        return new Map([...local, ...remote]);
+      },
     });
   }
 

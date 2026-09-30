@@ -82,7 +82,8 @@ test('every table a live read selects from is one whose writes name that read', 
     await liveRead(agent, read);
 
     for (const query of queries) {
-      for (const [, table = ''] of query.matchAll(/\b(?:FROM|JOIN)\s+([A-Za-z_]\w*)/gi)) {
+      for (const [, table = '', call] of query.matchAll(/\b(?:FROM|JOIN)\s+([A-Za-z_]\w*)(\s*\()?/gi)) {
+        if (call !== undefined) continue; // Table-valued functions read arguments, not a table with writers.
         const moves = readsWrittenBy(`INSERT INTO ${table}`);
 
         if (!moves.includes(read) && !MOVED_ELSEWHERE.has(table)) unwatched.push(`${read} <- ${table}`);
