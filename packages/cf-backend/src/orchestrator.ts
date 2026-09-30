@@ -3079,7 +3079,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** A parked write's bytes against the file now, so the owner sees what an approval writes. */
   @callable()
-  async reviewParkedWrite(id: string): Promise<ParkedWriteReview | null> {
+  async reviewParkedWrite(id: string): Promise<ParkedWriteReview> {
     return reviewParkedWrite(this.deferrals, this.rt.storage.vfs, id);
   }
 
