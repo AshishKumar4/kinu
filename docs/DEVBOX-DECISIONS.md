@@ -2331,17 +2331,35 @@ and nothing is filed; an evicted object's successor reads the same row. A
 changed input asks again, as does a caller's explicit ask (`start()`,
 `attachNow()`), and an admitted start deletes the row. A terminal refusal
 over a container the box found running (D47's marker) is not stored: a later
-start gets a fresh container, which can come up clean. Kinu calls neither
-`start()` nor `attachNow()`, so there a refused start is asked again by a
-deploy that changes the image, or by a new size from the Environment card,
-`sandbox.resize` or the owner's default.
+start gets a fresh container, which can come up clean. `boxSize()` reports
+a recorded start refusal (`startRefused`).
+
+A refusal names only actions its reader can take. D47's text told every
+reader to call `attachNow()`, which Kinu never exposes, so devbox's terminal
+refusal now states the failure and names no action, under its own code
+(`refused`), and the host adds its readers' actions. Kinu's adapter maps it to
+`unavailable`, which `withSandboxRetry` never re-enters, and tells the agent
+to choose another size with `sandbox.resize(...)` or ask the owner. The
+owner's try-again is "Start again" on the sandbox's Environment card, shown
+only while a start refusal is recorded; it calls `startSandbox`, which runs
+the box's one start path and so clears the record. Agents get no retry: a
+start with the same inputs fails the same way, and a resize is theirs.
+
+A capacity answer is not terminal. The platform's "There is no container
+instance that can be provided to this Durable Object, try again later"
+(three times for Medium on the old path, `c-before.log`) is a plain error
+with no code, which the ladder classes `unclassified`, so it retries: the
+caller gets `pending` with the platform's words, a startup row is armed,
+nothing is recorded, and a successor starts the box once the platform has
+room (`tests/box-size.test.ts`).
 
 Red then green: `tests/box-size.test.ts`
 (`bench-artifacts/start-refusal/red.log`, `green.log`). After one refused
 start, two requests, a successor's `kickStartup()` and its request answer the
 refusal with one start, one incident and no startup row. An image the host
-names later, another size, another internet setting and `attachNow()` each
-start the box again.
+names later, another size, another internet setting, `attachNow()` and
+`start()` each start the box again. The agent's and the owner's words:
+`packages/cf-backend/tests/unit-sandbox-size-settings.test.ts`.
 
 ## Measurement contract for a strategy comparison
 

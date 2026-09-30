@@ -8,7 +8,7 @@ import { Card, Choice, Field } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { getAccountSandboxSize, setAccountSandboxSize } from "../lib/user-api";
-import { ACCOUNT_DEFAULT, sandboxSizeText, workspaceSizeNote, workspaceSizeOptions } from "../lib/sandbox-size-text";
+import { ACCOUNT_DEFAULT, sandboxSizeText, startRefusedNote, workspaceSizeNote, workspaceSizeOptions } from "../lib/sandbox-size-text";
 import type { SandboxSizeState } from "../sandbox-size";
 
 const shownIn = (show: (message: string) => void) => (failure: { readonly cause?: unknown }) =>
@@ -17,25 +17,27 @@ const shownIn = (show: (message: string) => void) => (failure: { readonly cause?
 export function SandboxSizeRow({ rpc }: { rpc: Rpc }) {
   const load = useCallback(() => rpc<SandboxSizeState | null>("getSandboxSize"), [rpc]);
   const { resource, set } = useAsyncResource(load);
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState<"resize" | "start" | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const state = lastValue(resource);
 
   if (state === null) return null;
 
-  const choose = (value: BoxSize | typeof ACCOUNT_DEFAULT) => {
-    setPending(true);
+  const act = (action: "resize" | "start", doing: string, method: string, args: unknown[]) => {
+    setPending(action);
     setFailure(null);
 
-    return attempt({ doing: "resizing the sandbox", otherwise: "io" },
-      () => rpc<SandboxSizeState | null>("resizeSandbox", [value === ACCOUNT_DEFAULT ? null : value])).pipe(
+    return attempt({ doing, otherwise: "io" }, () => rpc<SandboxSizeState | null>(method, args)).pipe(
       Effect.map((next) => { if (next !== null) set(next); }),
       Effect.catch(shownIn(setFailure)),
-      Effect.ensuring(Effect.sync(() => { setPending(false); })),
+      Effect.ensuring(Effect.sync(() => { setPending(null); })),
     );
   };
 
-  const note = failure ?? workspaceSizeNote(state, pending);
+  const choose = (value: BoxSize | typeof ACCOUNT_DEFAULT) =>
+    act("resize", "resizing the sandbox", "resizeSandbox", [value === ACCOUNT_DEFAULT ? null : value]);
+
+  const note = failure ?? workspaceSizeNote(state, pending === "resize");
 
   return (
     <div data-env-size className="space-y-1" onClick={(event) => event.stopPropagation()}
@@ -46,8 +48,19 @@ export function SandboxSizeRow({ rpc }: { rpc: Rpc }) {
         value={state.chosen ?? ACCOUNT_DEFAULT}
         options={workspaceSizeOptions(state.account)}
         onChange={(value) => settle(choose(value))}
-        disabled={pending}
+        disabled={pending !== null}
       />
+      {state.startRefused !== null && (
+        <div data-env-start-refused className="space-y-1">
+          <div className="p-meta p-danger">{startRefusedNote(state.startRefused)}</div>
+          <button
+            data-env-start-again
+            onClick={() => settle(act("start", "starting the sandbox", "startSandbox", []))}
+            disabled={pending !== null}
+            className="px-2 py-1 rounded-md p-t-control p-text-2 p-fill hover:p-text"
+          >{pending === "start" ? "Starting…" : "Start again"}</button>
+        </div>
+      )}
       {note !== null && <div className={`p-meta ${failure === null ? "p-text-3" : "p-danger"}`}>{note}</div>}
     </div>
   );
