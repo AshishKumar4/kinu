@@ -634,6 +634,21 @@ Heap was read as headroom: the largest held allocation that survived.
   reset past the limit answered with a 200 from a new isolate and no error line
   7 times in 9 (1101 twice), the shape of ironwood-cairn-6dbcb8de's unlogged
   restarts on 2026-09-29, where each turn still ran in that ~68 MiB of room.
+- Deferring a module, measured 2026-09-30 on e5bcd4b29's build: live heap after
+  a full GC in local workerd, two runs each. Kinu's MCP server loaded on first
+  use: 37.83-37.84 MB as built, 37.79-37.80 deferred, so 0.04 MB; not done. The
+  split made zod (194 KB) and the SDK's types (13 KB) chunks of their own that
+  load at startup anyway, and dropping the deferred chunks from the upload gave
+  back only 0.13-0.16 MB more. A build that stubbed the same modules out
+  measured 1.2 MB less with the same 7.89 MB of static source: a stub overstates
+  a deferral, so measure the real split. The Agents SDK's
+  `@modelcontextprotocol/client`, split so `MCPClientManager` loads it with its
+  first connection: 37.84-37.89 MB as built, 30.46-30.47 deferred, 37.88-37.91
+  once that connection imports it (50-99 ms, once per isolate). So 7.4 MB for an
+  isolate that never connects. The code is upstream's; the PR is drafted, not
+  filed (kinu-logs/agents-upstream/PR-mcp-client-first-connection.md). If it
+  lands, src/user/mcp.ts must load its v2 error classes where a failure is
+  handled, or its static import keeps the client loaded.
 
 D9. A non-main agent's turn runs in its own loader isolate, and every tool
 it calls runs in the workspace object. Decided 2026-09-28 on D8, extended below.
