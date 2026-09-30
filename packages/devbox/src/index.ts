@@ -1,6 +1,6 @@
 /** Export a type only when a caller must write its name. */
 
-export { Devbox, type DevboxState, type UntimedResult } from './devbox';
+export { Devbox, type DevboxState } from './devbox';
 
 export { DevboxError, devboxFailure, type DevboxErrorCode } from './errors';
 
@@ -12,7 +12,7 @@ export type { RestoreClockPhase, RestoreStatus } from './restoration';
 
 export { DEFAULT_DEVBOX_STRATEGY, parseDevboxStrategyName } from './storage';
 
-export { BOX_SIZE_ORDER, BoxSizeSchema, DEFAULT_BOX_SIZE, type BoxSize, type ResizeOutcome } from './sizes';
+export { BOX_SIZES, BOX_SIZE_ORDER, BoxSizeSchema, DEFAULT_BOX_SIZE, type BoxSize, type ResizeOutcome } from './sizes';
 
 export type {
   AttachOutcome,

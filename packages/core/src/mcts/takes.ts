@@ -57,7 +57,6 @@ export function initAlternateTakesTable(execRaw: RawSqlExec): void {
     turn_id TEXT,
     session_id TEXT,
     task TEXT NOT NULL,
-    winner_node_id TEXT NOT NULL,
     chosen_node_id TEXT,
     candidates TEXT NOT NULL,
     settlement_key TEXT,
@@ -115,12 +114,12 @@ export function recordBranchTakeSet(
 
   const now = input.now ?? nowMs();
   void sql`INSERT INTO alternate_takes
-        (actor_id, id, turn_id, session_id, task, winner_node_id, chosen_node_id, candidates,
+        (actor_id, id, turn_id, session_id, task, chosen_node_id, candidates,
          settlement_key, created_at)
       VALUES
         (${actor.actorId}, ${id}, ${input.turnId}, ${input.sessionId},
          ${input.task.slice(0, 500)},
-         ${candidates[0].nodeId}, ${null}, ${JSON.stringify(candidates)},
+         ${null}, ${JSON.stringify(candidates)},
          ${settlementKey}, ${now})`;
 
   if (settlementKey !== null) recordEffectDone(sql, actor, { scope: BRANCH_SCOPE, key: settlementKey });
@@ -134,15 +133,17 @@ export function recordBranchTakeSet(
 
 interface RawTakeRow {
   id: string; turn_id: string | null; session_id: string | null; task: string;
-  winner_node_id: string; chosen_node_id: string | null; candidates: string;
+  chosen_node_id: string | null; candidates: string;
   created_at: number;
 }
 
 function toTakeSet(r: RawTakeRow): AlternateTakeSet {
+  const candidates = v.parse(v.array(AlternateTakeCandidateSchema), JSON.parse(r.candidates));
+
   return {
     id: r.id, turnId: r.turn_id, sessionId: r.session_id, task: r.task,
-    winnerNodeId: r.winner_node_id, chosenNodeId: r.chosen_node_id,
-    candidates: v.parse(v.array(AlternateTakeCandidateSchema), JSON.parse(r.candidates)),
+    winnerNodeId: r.chosen_node_id ?? candidates[0].nodeId, chosenNodeId: r.chosen_node_id,
+    candidates,
     createdAt: r.created_at,
   };
 }
@@ -187,7 +188,7 @@ export async function recordTakePick(
   const changedAnswer = chosen.nodeId !== set.winnerNodeId;
 
   void sql`UPDATE alternate_takes
-      SET chosen_node_id = ${chosen.nodeId}, winner_node_id = ${chosen.nodeId}
+      SET chosen_node_id = ${chosen.nodeId}
       WHERE actor_id = ${actor.actorId} AND id = ${set.id}`;
 
   let userMessage = set.task;

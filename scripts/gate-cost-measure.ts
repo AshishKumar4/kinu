@@ -41,12 +41,20 @@
  * the same hang detector, uncached. A measurement taken under a different
  * runner measures the runner.
  *
+ * THE ROWS THAT READ A DEPLOYMENT are measured against one, and only when
+ * asked: `--deployment=<origin>` measures the plan's post-publish rows, and no
+ * other, with KINU_ORIGIN and KINU_EVAL_ORIGIN set to that origin as deploy.sh
+ * sets them, and every credential they read taken from the caller's
+ * environment. Their subject is the deployment, but their Chrome, daemons and
+ * test runners run on this box, beside the source rows in the deploy's one
+ * wave, so they are admitted by measured cost like any other row (L18).
+ *
  * This is a TOOL, not a gate: no ladder row runs it, nothing imports it, and it
  * imports the ladder rather than the other way round. That direction is what
  * keeps the machine-walking out of every gate program's graph.
  *
  *   bun scripts/gate-cost-measure.ts [--only=<row>] [--contended]
- *     [--quiet-wait=<s>] [--shared-wait=<s>]
+ *     [--quiet-wait=<s>] [--shared-wait=<s>] [--deployment=<origin>]
  */
 
 import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, statSync } from 'node:fs';
@@ -100,7 +108,8 @@ const COST_METHOD = 'each row alone under `setsid /usr/bin/time -v bun scripts/l
   + `${String(BURST_SAMPLE_SECONDS)}s for its first ${String(BURST_SECONDS)}s and every `
   + `${String(SAMPLE_SECONDS)}s after — summed proportional set (Pss, /proc/<pid>/smaps_rollup) for `
   + `memory, tasks in state R for parallel demand, Δ(utime+stime+cutime+cstime) over at least `
-  + `${String(CPU_WINDOW_SECONDS)}s for parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN)`;
+  + `${String(CPU_WINDOW_SECONDS)}s for parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN); `
+  + 'a post-publish row against the deployment `--deployment=<origin>` named, with KINU_ORIGIN and KINU_EVAL_ORIGIN set to it';
 
 /** One instant of a row's tree: what it has burned, what it holds, and how
  *  many of its tasks want a CPU right now. */
@@ -332,6 +341,8 @@ interface MeasureRequest {
   readonly ticksPerSecond: number;
   /** `--dump-peak`: record which processes the memory peak was made of. */
   readonly dumpMembers: boolean;
+  /** The row's whole environment. */
+  readonly env: Record<string, string | undefined>;
 }
 
 function round(value: number): number {
@@ -356,7 +367,7 @@ async function measureRow(request: MeasureRequest): Promise<RowCost> {
       'setsid',
       '/usr/bin/time', '-v', '-o', request.rusagePath,
       'bun', 'scripts/ladder.ts', '--gate', request.run, '--no-cache',
-    ], { cwd: root, stdout: log, stderr: log });
+    ], { cwd: root, env: request.env, stdout: log, stderr: log });
   } finally {
     closeSync(log);
   }
@@ -451,19 +462,29 @@ if (import.meta.main) {
   const only = process.argv.find((argument) => argument.startsWith('--only='))?.slice('--only='.length);
   const existing = existsSync(COST_TABLE) ? readCosts().rows : {};
   const contendedOnly = process.argv.includes('--contended');
+  const deployment = process.argv.find((argument) => argument.startsWith('--deployment='))?.slice('--deployment='.length);
 
-  // The two post-publish rows are excluded: their subject is a DEPLOYED build
-  // this tree does not have, and their cost is a network and model wait rather
-  // than this box.
+  if (deployment !== undefined && !URL.canParse(deployment)) {
+    console.error(`gate-cost-measure: --deployment=${deployment} is not an origin, such as https://staging.kinu.run`);
+    process.exit(2);
+  }
+
+  // A post-publish row's subject is a DEPLOYED build, so it is measured only against the one `--deployment` names,
+  // and that run measures nothing else.
   const rows = gatesFor('deploy').filter((gate) => gate.tier !== 'evals'
-    && (gate.phase ?? 'source') !== 'post-publish'
+    && ((gate.phase ?? 'source') === 'post-publish') === (deployment !== undefined)
     && (only === undefined || gate.run.includes(only) || gate.label.includes(only))
     && (!contendedOnly || (existing[gate.run]?.loadAtStart ?? 0) >= QUIET_LOAD));
 
   if (rows.length === 0) {
-    console.error(`gate-cost-measure: no deploy row matches${only === undefined ? '' : ` --only=${only}`}${contendedOnly ? ' --contended' : ''}`);
+    console.error(`gate-cost-measure: no deploy row matches${only === undefined ? '' : ` --only=${only}`}${contendedOnly ? ' --contended' : ''}`
+      + `${deployment === undefined ? '' : ` --deployment=${deployment}`}`);
     process.exit(2);
   }
+
+  // The origin as deploy.sh hands it to these rows: the deployment's URL without its trailing slash.
+  const origin = deployment?.replace(/\/+$/u, '');
+  const env = origin === undefined ? { ...process.env } : { ...process.env, KINU_ORIGIN: origin, KINU_EVAL_ORIGIN: origin };
 
   // A figure for a row that is no longer a ladder gate is dropped as the table is written: a renamed row is a new
   // key, and the plan must not keep reading the old one (`ladder.test.ts` refuses a stale entry).
@@ -486,7 +507,8 @@ if (import.meta.main) {
   const failed: string[] = [];
   const scripts = packageScripts();
   const tracked = trackedTestFiles();
-  console.log(`measuring ${String(rows.length)} row(s) alone on ${machine}, MemAvailable ${String(memAvailableMb())} MiB`);
+  console.log(`measuring ${String(rows.length)} row(s) alone on ${machine}, MemAvailable ${String(memAvailableMb())} MiB`
+    + `${origin === undefined ? '' : `, against ${origin}`}`);
 
   for (const [index, gate] of rows.entries()) {
     // WAIT ON THE CONDITION, NOT A CLOCK, and wait differently for the two
@@ -537,6 +559,7 @@ if (import.meta.main) {
       ticksPerSecond,
       rusagePath: join(scratch, `${String(index)}.rusage`),
       dumpMembers,
+      env,
     });
 
     // A run that failed stopped early, so its figure is short by whatever it never ran: it is

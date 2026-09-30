@@ -138,12 +138,12 @@ describe('measureCompactionTrigger', () => {
 
         return tokens;
       },
-      takeArmedCompaction(): 'force' | null {
+      takeArmedCompaction(): boolean {
         this.takes += 1;
         const was = flag;
         flag = false;
 
-        return was ? 'force' : null;
+        return was;
       },
     };
   }

@@ -1,7 +1,7 @@
 // Behavior tests for the `memory` tool's `conversations` action over the same
 // ConversationSearchStore on both backends.
 import { describe, test, expect } from 'bun:test';
-import { toolExecute } from '@kinu.run/test-utils';
+import { seedTranscriptEntry, toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   buildBuiltinTools,
@@ -20,7 +20,7 @@ function setup() {
   const insert = async (conversationId: string, role: 'user' | 'assistant', content: string): Promise<string> => {
     const id = `m-${++row}`;
     const recordedAt = 1_000_000 + row * 1000;
-    await stores.history.record(conversationId, {
+    await seedTranscriptEntry(stores.history, conversationId, {
       id, message: { role, content },
       origin: role === 'user' ? 'input' : 'output',
     });

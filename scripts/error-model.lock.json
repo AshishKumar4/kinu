@@ -180,7 +180,7 @@
     "packages/cf-backend/src/obs/cf-tracer.ts#catch": 1,
     "packages/cf-backend/src/obs/cf-tracer.ts#promise-rejection": 1,
     "packages/cf-backend/src/obs/cf-tracer.ts#throw": 1,
-    "packages/cf-backend/src/orchestrator.ts#catch": 34,
+    "packages/cf-backend/src/orchestrator.ts#catch": 32,
     "packages/cf-backend/src/orchestrator.ts#promise-rejection": 2,
     "packages/cf-backend/src/orchestrator.ts#result-literal": 17,
     "packages/cf-backend/src/orchestrator.ts#result-type": 10,

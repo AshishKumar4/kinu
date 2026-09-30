@@ -9,7 +9,6 @@ import type {
 import type { TurnEscalationLedger } from '../execution/escalation';
 import type { CompletedTurn } from '../evolution/types';
 import type { WorkMode } from '../types/turn';
-import type { ArmedCompaction } from '../extension';
 import { usageReported, type Usage } from '../usage';
 import type { TurnAccumulator } from './turn-accumulator';
 import {
@@ -263,7 +262,7 @@ export function snapshotCompletedTurn(acc: TurnAccumulator, opts: {
 /** Structural: the concrete store lives in @kinu.run/compaction, which depends on core. */
 export interface CompactionTriggerState {
   savePromptTokens(sessionKey: string, tokens: number, historyLength: number): void;
-  armCompaction(sessionKey: string, kind: ArmedCompaction): void;
+  armCompaction(sessionKey: string): void;
 }
 
 /**
@@ -300,7 +299,7 @@ export function applyOverflowRecovery(opts: {
     turnWasOverflowRetry: opts.turnWasOverflowRetry,
   });
 
-  if (recovery.forceCompaction) opts.state.armCompaction(opts.sessionKey, 'force');
+  if (recovery.forceCompaction) opts.state.armCompaction(opts.sessionKey);
 
   return recovery;
 }

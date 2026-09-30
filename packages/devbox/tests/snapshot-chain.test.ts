@@ -22,7 +22,6 @@ import {
   archiveCommand,
   archiveSizeCommand,
   baseObjectKey,
-  chainBackupOptions,
   chainStoreRoot,
   CHAIN_EXCLUDES,
   deltaObjectKey,
@@ -754,12 +753,12 @@ function harness(overrides: {
         : Promise.resolve();
     },
     createExtractSnapshot: (options) => {
-      calls.push(`createExtractSnapshot:${options.localBucket}`);
+      calls.push('createExtractSnapshot');
       const id = `a1b2c3d4-0000-4000-8000-${String(extractSeq).padStart(12, '0')}`;
       extractSeq += 1;
       objects.set(baseObjectKey(STORE_ROOT, id), DELTA_BYTES);
 
-      return Promise.resolve({ id, dir: options.dir, localBucket: true });
+      return Promise.resolve({ id, dir: options.dir });
     },
     now: () => overrides.now ?? 10 * INTERVAL_MS,
     log: (message) => calls.push(`log:${message}`),
@@ -1715,7 +1714,6 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       const outcome = await checkpointOf(record, 'quiesce');
       expect(outcome.kind).toBe('committed');
       expect(outcome.bytes).toBeGreaterThan(0);
-      expect(record.state?.changeVersion).toBe('v1');
     });
 
   test('a periodic tick is not blocked by the same missing baseline', async () => {
@@ -1736,8 +1734,8 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
   test('a stored record that carries no version is treated as having no baseline', async () => {
     const record = harness({
-      state: chainState({ changeVersion: undefined }),
-      mounts: MOUNTED,
+      state: chainState({ mode: 'extract', delta: undefined, changeVersion: undefined }),
+      mounts: NOT_MOUNTED,
       change: { status: 'unchanged', version: 'v7' },
     });
 
@@ -1972,7 +1970,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
   test('a commit whose record another writer advanced is refused, and the loser is stamped on the record as it stands',
     async () => {
-      // Swapping the record in `checkChanges` models a rival committing rev 2 after this read.
+      // Swapping the record while counting the upper models a rival committing rev 2 after this read.
       // The stamp lands on the winner's record because the stale copy cannot be written either.
       const record = harness({
         state: chainState({ base: { id: CHAIN_ID, bytes: 100 }, at: 1 }),
@@ -1984,10 +1982,10 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
       const ports: SnapshotChainPorts = {
         ...record.ports,
-        checkChanges: async (dir, since) => {
+        countEntries: async (dir) => {
           record.state = rival;
 
-          return await record.ports.checkChanges(dir, since);
+          return await record.ports.countEntries(dir);
         },
       };
 
@@ -2448,13 +2446,13 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     });
 
   test('a change inside the interval is declined WITHOUT forgetting it', async () => {
-    const record = harness({ state: chainState({ at: 1 }), mounts: MOUNTED, now: 2 });
+    const record = harness({ state: chainState({ at: 1, upperMark: 'before-interval' }), mounts: MOUNTED, now: 2 });
     const outcome = await checkpointOf(record, 'tick');
     expect(outcome.kind).toBe('skipped');
     expect(outcome.reason).toContain('interval');
     // NOT advanced. Advancing here would discard the change signal and the next
     // tick would believe the work was already saved.
-    expect(record.state?.changeVersion).toBe('v1');
+    expect(record.state?.upperMark).toBe('before-interval');
   });
 
   test('a quiesce skips the interval gate but NEVER the change gate', async () => {
@@ -2477,7 +2475,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
   test('lost change state is treated as changed and is archived', async () => {
     const record = harness({
-      state: chainState(), mounts: MOUNTED, change: { status: 'resync', version: 'v3' },
+      state: chainState({ mode: 'extract', delta: undefined }), mounts: NOT_MOUNTED, change: { status: 'resync', version: 'v3' },
     });
 
     expect((await checkpointOf(record, 'quiesce')).kind).toBe('committed');
@@ -2545,7 +2543,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
   test('a checkChanges failure is a recorded failure, not a silent skip', async () => {
     const record = harness({
-      state: chainState(), mounts: MOUNTED, change: new Error('change state gone'),
+      state: chainState({ mode: 'extract', delta: undefined }), mounts: NOT_MOUNTED, change: new Error('change state gone'),
     });
 
     const outcome = await checkpointOf(record, 'tick');
@@ -2993,13 +2991,6 @@ describe('the real archiver applies the policy this file claims', () => {
     expect(entries).toContain('sub/.cache/x');
   });
 
-  test('the extraction options carry the box\'s own exclude policy, not a copy of the default', () => {
-    // If `chainBackupOptions` spelled the policy itself, a box that replaced it would be
-    // obeyed in the chain path and ignored in the extraction path.
-    const replaced = ['**/node_modules', 'dist/**'];
-
-    expect(chainBackupOptions(true, replaced).excludes).toEqual(replaced);
-  });
 
   test('the staging estimate measures exactly the bytes the archive takes', () => {
     // The estimate is the archive's worst case only while both agree which files travel;

@@ -57,8 +57,6 @@ There is no top-level `model` or `reasoningEffort`. The default model and reason
 
 Signed in, `kinu provider connect` sends my key to my Kinu account by default. The key is encrypted at rest there, and this machine reaches it through the provider proxy without holding a copy. I pass `--local` to keep one here instead, for offline use or an endpoint only this machine can see.
 
-Two deliberate exceptions. Codex stays local. The Codex endpoint refuses Cloudflare Workers egress, so proxying it would break a credential that works today. With no account signed in, there is nowhere else to put a key, so it lands here.
-
 `providers` is therefore the local-override store. Cloud workspaces never read it.
 
 The model spec decides which credential answers a turn. `resolveLLMConfig` gives the account every spec the account hosts. `@cf/…` and the provider ids the proxy carries go to the proxy even when a local key is present. Every other spec falls to the local store, matched on the provider the spec names (`openai/…`, `anthropic/…`, `openrouter/…`, `codex/…`, `opencode/…`). A bare model id with no provider goes to a stored Codex or OpenAI credential, in that order. `providers.openaiCompat.default` catches anything still unmatched except a `@cf/…` spec, which a local endpoint would accept and answer with some other model. With no account session the local store is the only source.

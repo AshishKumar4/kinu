@@ -49,8 +49,6 @@ interface PrepareStepResumption {
 /** 'force': overflow recovery; 'user': /compact. */
 export type CompactionTrigger = 'auto' | 'force' | 'user';
 
-export type ArmedCompaction = 'force';
-
 export interface TransformContext {
   /** The agent/DO name on cf, the session key on cli. */
   readonly sessionKey: string;

@@ -1,3 +1,4 @@
+import { seedTranscriptEntry } from '@kinu.run/test-utils';
 /** The conversation itself: what the owner sends, and taking it back. */
 import { expect } from 'bun:test';
 import { CHAT_SESSION_ID, type SessionHistory } from '@kinu.run/core';
@@ -5,10 +6,10 @@ import type { SharedCase } from '../cases';
 
 /** One question and its answer, as a settled turn records them. */
 async function exchange(history: SessionHistory, id: string, question: string, answer: string): Promise<void> {
-  await history.record(CHAT_SESSION_ID, {
+  await seedTranscriptEntry(history, CHAT_SESSION_ID, {
     id, origin: 'input', message: { role: 'user', content: question },
   });
-  await history.record(CHAT_SESSION_ID, {
+  await seedTranscriptEntry(history, CHAT_SESSION_ID, {
     id: `${id}-answer`, origin: 'output', message: { role: 'assistant', content: answer },
   });
 }

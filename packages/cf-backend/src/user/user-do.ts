@@ -4600,13 +4600,6 @@ export class UserDO extends Agent<Env> {
     return { ok: true, workspaces: workspaces.length };
   }
 
-  /** The SDK's manager, with activation restore retired (see {@link retireActivationRestore}).
-   *  Its config is `user_mcp_servers`; the SDK rows are derived from it. */
-  private userMcp(): MCPClientManager {
-
-    return this.mcp;
-  }
-
   /**
    * The single hydration path for this user's MCP plane; `user_mcp_servers` is the truth.
    * Order matters: remove orphan SDK rows, re-register rows this plane owns, then let the SDK
@@ -4627,7 +4620,7 @@ export class UserDO extends Agent<Env> {
 
   /** Called only through {@link hydrateUserMcp}, which coalesces concurrent callers. */
   private async hydrateUserMcpOnce(): Promise<void> {
-    const mgr = this.userMcp();
+    const mgr = this.mcp;
 
     const rows = this.sqlx<McpHydrationRow>(
       `SELECT s.id, s.name, s.server_url, s.transport, s.headers, p.preset_id
@@ -4679,7 +4672,7 @@ export class UserDO extends Agent<Env> {
   /** Replace the SDK row with a transport this plane owns; tear down any live connection first,
    *  since `createConnection` returns an existing one untouched (`client-zqKcsyFa.js:1719-1720`). */
   private async registerOwnedMcpTransport(row: McpHydrationRow): Promise<void> {
-    const mgr = this.userMcp();
+    const mgr = this.mcp;
     const stored = mgr.listServers().find((server) => server.id === row.id);
     const callbackUrl = stored?.callback_url ?? '';
 
@@ -4760,7 +4753,7 @@ export class UserDO extends Agent<Env> {
 
     try {
       await this.hydrateUserMcp();
-      await this.userMcp().waitForConnections();
+      await this.mcp.waitForConnections();
       await this.readMcpToolLists();
     } catch (err) {
       diagnostics.failure('mcp.connection_warmup_failed', toKinuError({
@@ -4918,7 +4911,7 @@ export class UserDO extends Agent<Env> {
     let authUrl: string | null = null;
 
     try {
-      const mgr = this.userMcp();
+      const mgr = this.mcp;
       await mgr.registerServer(id, {
         url: cfg.serverUrl,
         name: cfg.name,
@@ -4948,7 +4941,7 @@ export class UserDO extends Agent<Env> {
     } catch (err) {
       // Roll back both our row and the SDK's storage entry so the user can retry cleanly.
       this.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
-      await this.userMcp().removeServer(id);
+      await this.mcp.removeServer(id);
       throw new KinuError('unavailable', 'Could not connect to the MCP server. Check its URL and credentials, then add it again.', { cause: err });
     }
 
@@ -4960,7 +4953,7 @@ export class UserDO extends Agent<Env> {
 
     if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new KinuError('bad_input', 'Invalid server id.');
 
-    try { await this.userMcp().removeServer(id); }
+    try { await this.mcp.removeServer(id); }
     catch (err) {
       diagnostics.failure('mcp.live_server_removal_failed', toKinuError({
         doing: 'removing a server from the live MCP manager',
@@ -5058,7 +5051,7 @@ export class UserDO extends Agent<Env> {
 
 
   private async readMcpToolList(id: string): Promise<void> {
-    const conn = this.userMcp().mcpConnections[id];
+    const conn = this.mcp.mcpConnections[id];
 
     if (conn?.connectionState !== 'connected') {
       this._mcpToolLists.delete(id);
@@ -5076,7 +5069,7 @@ export class UserDO extends Agent<Env> {
   }
 
   private async readMcpToolLists(): Promise<void> {
-    const ids = new Set([...Object.keys(this.userMcp().mcpConnections), ...this._mcpToolLists.keys()]);
+    const ids = new Set([...Object.keys(this.mcp.mcpConnections), ...this._mcpToolLists.keys()]);
 
     for (const id of ids) await this.readMcpToolList(id);
   }
@@ -5176,7 +5169,7 @@ export class UserDO extends Agent<Env> {
   ): Promise<string> {
     // Caller identity comes from the capability token, not an argument, so no agent name can be spoofed.
     await this.requireTier(caller, 'mcp.tools');
-    const manager = this.userMcp();
+    const manager = this.mcp;
 
     if (!this._userMcpHydrated) {
       try { await this.hydrateUserMcp(); }
@@ -5227,7 +5220,7 @@ export class UserDO extends Agent<Env> {
     if (!isMcpTransportUnauthorized(input)) return;
     const { serverId } = input;
 
-    try { await this.userMcp().discoverIfConnected(serverId); }
+    try { await this.mcp.discoverIfConnected(serverId); }
     catch (err) {
       diagnostics.failure('mcp.auth_state_convergence_failed', toKinuError({
         doing: 'reprobing an MCP connection that failed to authorize',
@@ -5242,12 +5235,12 @@ export class UserDO extends Agent<Env> {
 
     try {
       const req = new Request(url);
-      const result = await this.userMcp().handleCallbackRequest(req);
+      const result = await this.mcp.handleCallbackRequest(req);
 
       if (result.authSuccess) {
         // Awaited in its own try: tokens are already saved, so a connect failure is not an auth failure.
         // A DO cannot retain an unawaited promise (`do.wait_until.no_op`).
-        try { await this.userMcp().establishConnection(result.serverId); }
+        try { await this.mcp.establishConnection(result.serverId); }
         catch (cause) {
           diagnostics.failure('mcp.connect_failed', toKinuError({ doing: 'establishing an authorized MCP connection', cause, otherwise: 'unavailable' }));
 

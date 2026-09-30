@@ -664,14 +664,14 @@
       "exit": 0
     },
     "bun run gate:hammer": {
-      "wallSeconds": 188.96,
-      "cpuSeconds": 2860.95,
-      "peakRssMb": 11925.91,
-      "peakRunnable": 39,
-      "peakCpuThreads": 19.26,
-      "meanThreads": 15.14,
-      "samples": 583,
-      "loadAtStart": 4.91,
+      "wallSeconds": 403.96,
+      "cpuSeconds": 6233,
+      "peakRssMb": 5553.02,
+      "peakRunnable": 60,
+      "peakCpuThreads": 18.83,
+      "meanThreads": 15.43,
+      "samples": 1314,
+      "loadAtStart": 8.36,
       "exit": 0
     },
     "bun run gate:infra": {

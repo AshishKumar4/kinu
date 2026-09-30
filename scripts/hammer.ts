@@ -14,10 +14,14 @@
  * red on an order-only diff while `reclaimed: 4` held every time.
  *
  * WHAT IT DOES. `bun test --parallel=4 packages/cf-backend/`, N times (N from
- * `KINU_HAMMER_RUNS`, default 6), with nproc/2 CPU burners alive for the whole
- * sequence. Contention is the instrument: a starved box changes which
- * interleavings occur, and the 4 workers of the suite under test then fight
- * the burners for the same threads.
+ * `KINU_HAMMER_RUNS`, default 6), each run beside nproc/2 CPU burners spawned
+ * for it and ended with it. Contention is the instrument: a starved box
+ * changes which interleavings occur, and the 4 workers of the suite under
+ * test then fight the burners for the same threads. Each run is under the
+ * repo's one hang detector with its row's silence bound, as every gate is: a
+ * run that keeps writing is never killed for being slow, and one that writes
+ * nothing for the bound is (L17 in docs/ARCHITECTURE-DECISIONS.md). Each run
+ * prints one line as it ends, so the gate's own row bound holds a hung hammer.
  *
  * IT NEVER INSTITUTIONALISES A FLAKE. There is no retry, no quarantine list
  * and no "known flaky" allowance: one failing run in N fails the gate, and the
@@ -48,8 +52,9 @@ import { cpus } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { runUnderDeadline, writeFully } from './deadline';
 import { assertMeasured, finding } from './gate-ratchet';
-import { claims, LADDER } from './ladder';
+import { claims, GATE_DEADLINE_SECONDS, LADDER } from './ladder';
 import { trackedFiles } from './sources';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -70,27 +75,42 @@ export const HAMMER_SUITE = hammerRow.run;
  *  absence, and the green path says so. */
 export const DEFAULT_RUNS = 6;
 
-/** The whole gate's own wall-clock budget, in milliseconds. Under deploy.sh
- *  every gate is wrapped in `timeout 480`, so a hammer that could outlive that
- *  would be killed by the runner with no artifact written — the per-run
- *  deadline below is derived from this so the gate reports its own overrun
- *  instead of being reported dead. */
-const BUDGET_MS = 440_000;
+/** What one run executes, and the longest it may write nothing. */
+export interface HammerCommand {
+  /** Spawned with no shell. */
+  readonly argv: readonly string[];
+  /** The run's silence bound, in seconds. */
+  readonly seconds: number;
+  /** Whose bound it is, printed with a kill. */
+  readonly label: string;
+}
+
+/** The suite as each run executes it: the row's own words, under the row's own silence bound. */
+export const SUITE_RUN: HammerCommand = {
+  // `Bun.spawn` runs no shell, and the row's command is bare words.
+  argv: HAMMER_SUITE.split(' '),
+  seconds: hammerRow.deadline?.seconds ?? GATE_DEADLINE_SECONDS,
+  label: hammerRow.label,
+};
 
 /** One run of the suite. */
 export interface HammerRun {
   readonly index: number;
-  readonly exit: number | null;
+  readonly exit: number;
   readonly seconds: number;
   /** Test files bun said it ran, from its own output. */
   readonly measured: readonly string[];
   /** `N pass` / `N fail`, as bun reported them. */
   readonly passed: number;
   readonly failed: number;
+  /** The tests bun reported failing, each `<file> > <name>`. */
+  readonly failing: readonly string[];
   /** The complete captured output. Kept for every failing run. */
   readonly output: string;
-  /** Set when the run outlived its own deadline. */
-  readonly timedOut: boolean;
+  /** Set when the hang detector ended the run: it wrote nothing for its bound. */
+  readonly killed: boolean;
+  /** Processes of the run still running when it exited, each `<pid> <command>`; the detector ended them. */
+  readonly leftovers: readonly string[];
 }
 
 /**
@@ -134,68 +154,89 @@ export function reportedCounts(output: string): ReportedCounts {
   return { passed: Number(passed ?? 0), failed: Number(failed ?? 0) };
 }
 
+/** The tests a run reported failing, each `<file> > <name>`. Bun prints a file's heading, then each failing test's
+ *  error block ending in its `(fail) <name> [time]` line, so a failure belongs to the heading above it. */
+export function failingTests(output: string): string[] {
+  const failing: string[] = [];
+  let file = '';
+
+  for (const line of output.split('\n').map((text) => text.trim())) {
+    const heading = /^((?:packages|scripts|tests)\/[\w./-]+\.test\.tsx?):$/u.exec(line)?.[1];
+
+    if (heading !== undefined) {
+      file = heading;
+      continue;
+    }
+
+    const name = /^\(fail\)\s+(.+?)(?:\s+\[[\d.]+m?s\])?$/u.exec(line)?.[1];
+
+    if (name !== undefined) failing.push(file === '' ? name : `${file} > ${name}`);
+  }
+
+  return failing;
+}
+
 /** A live CPU burner. */
 interface Burner {
+  readonly pid: number;
   kill(): void;
 }
 
 /**
- * Saturate half the machine's threads for as long as the handle is held.
+ * One CPU burner: it spins in 50 ms slices and exits when its stdin ends
+ * between them. Spawned with a pipe from the gate as its stdin, it ends with
+ * the gate however the gate died, since the kernel closes a dead process's
+ * pipes: a SIGKILLed gate leaves no burner spinning.
+ */
+export const BURNER = [
+  'bun', '-e',
+  "process.stdin.on('end', () => { process.exit(0); }); process.stdin.resume(); let x = 0;"
+    + 'const slice = () => { const until = Date.now() + 50; while (Date.now() < until) x = Math.sqrt(x + 1); setImmediate(slice); };'
+    + 'slice();',
+] as const;
+
+/**
+ * Saturate half the machine's threads with {@link BURNER}s until the handles are dropped or this process dies.
  *
  * HALF, not all: the suite under test runs four workers of its own, and a box
- * with nothing left to schedule measures the deadline of the burners rather
- * than the behaviour of the code. Each burner is a bounded spin — it exits on
- * its own after `ms` even if this process dies without killing it, so a
- * SIGKILLed gate cannot leave a machine at 100% forever.
+ * with nothing left to schedule measures the burners rather than the
+ * behaviour of the code. `kill` ends a burner sooner, and killing twice is
+ * safe. A burner writes nothing but holds this process's output open, so the
+ * ladder's hang detector ends one that outlives the gate.
  */
-export function spawnContention(workers: number, ms: number): Burner[] {
-  const spin = `const until = Date.now() + ${String(ms)};`
-    + 'let x = 0; while (Date.now() < until) { x = Math.sqrt(x + 1); } if (x < 0) process.exit(1);';
-
+export function spawnContention(workers: number): Burner[] {
   const burners: Burner[] = [];
 
   for (let index = 0; index < workers; index += 1) {
-    const child = Bun.spawn(['bun', '-e', spin], {
-      cwd: root, stdout: 'ignore', stderr: 'ignore', stdin: 'ignore',
+    const child = Bun.spawn([...BURNER], {
+      cwd: root, stdout: 'inherit', stderr: 'inherit', stdin: 'pipe',
     });
 
-    burners.push({ kill: () => { child.kill(); } });
+    burners.push({ pid: child.pid, kill: () => { child.kill(); } });
   }
 
   return burners;
 }
 
-/** One suite run under whatever contention is already live. */
-async function hammerOnce(index: number, deadlineMs: number): Promise<HammerRun> {
-  const started = performance.now();
-
-  // `Bun.spawn` runs no shell, and the row's command is bare words.
-  const child = Bun.spawn(HAMMER_SUITE.split(' '), {
-    cwd: root, stdout: 'pipe', stderr: 'pipe',
-  });
-
-  let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; child.kill(); }, deadlineMs);
-
-  const [stdout, stderr] = await Promise.all([
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ]);
-
-  const exit = await child.exited;
-  clearTimeout(timer);
-  const output = `${stdout}${stderr}`;
+/** One run of `command` under whatever contention is live, under the repo's one hang detector (scripts/deadline.ts):
+ *  ended once it has written nothing for its bound, however long it runs while writing, and with every process it
+ *  leaves behind ended and named. */
+export async function hammerOnce(index: number, command: HammerCommand): Promise<HammerRun> {
+  const outcome = await runUnderDeadline({ ...command, cwd: root, stdio: 'pipe' });
+  const output = `${outcome.stdout}${outcome.stderr}`;
   const counts = reportedCounts(output);
 
   return {
     index,
-    exit: timedOut ? null : exit,
-    seconds: (performance.now() - started) / 1000,
+    exit: outcome.exitCode,
+    seconds: outcome.seconds,
     measured: measuredFiles(output),
     passed: counts.passed,
     failed: counts.failed,
+    failing: failingTests(output),
     output,
-    timedOut,
+    killed: outcome.killed,
+    leftovers: outcome.leftovers,
   };
 }
 
@@ -207,18 +248,38 @@ export function artifactPath(now: Date): string {
   return join(root, 'bench-artifacts', 'hammer', `${stamp}.json`);
 }
 
-/** Runs N times under contention, and answers with every run. */
-export async function hammer(runs: number, workers: number): Promise<HammerRun[]> {
-  const perRunMs = Math.max(30_000, Math.floor(BUDGET_MS / runs));
-  const burners = spawnContention(workers, BUDGET_MS + 60_000);
+/** The line a run prints as it ends. */
+function runLine(run: HammerRun, runs: number, command: HammerCommand): string {
+  const at = `hammer: run ${String(run.index)}/${String(runs)}:`;
+
+  const head = run.killed
+    ? `${at} killed after ${String(command.seconds)}s with no output, ${run.seconds.toFixed(1)}s in; `
+      + `${String((run.output.match(/^\(pass\)/gmu) ?? []).length)} test(s) had passed`
+    : `${at} ${String(run.passed)} pass, ${String(run.failed)} fail, ${run.seconds.toFixed(1)}s`;
+
+  const notes = [
+    ...(run.failing.length === 0 ? [] : [`failing: ${run.failing.join('; ')}`]),
+    ...(run.leftovers.length === 0 ? [] : [`${String(run.leftovers.length)} process(es) of its own left running, now ended`]),
+  ];
+
+  return [head, ...notes].join(' — ');
+}
+
+/** Runs `command` N times, each beside burners spawned for it and ended with it, and answers with every run. Each
+ *  run prints its line as it ends, and the write is waited on: the gate's output is then never silent across runs,
+ *  so its row's silence bound holds a hung hammer as it holds any gate. */
+export async function hammer(runs: number, workers: number, command: HammerCommand = SUITE_RUN): Promise<HammerRun[]> {
   const results: HammerRun[] = [];
 
-  try {
-    for (let index = 1; index <= runs; index += 1) {
-      results.push(await hammerOnce(index, perRunMs));
-    }
-  } finally {
-    for (const burner of burners) burner.kill();
+  for (let index = 1; index <= runs; index += 1) {
+    const burners = spawnContention(workers);
+
+    const run = await hammerOnce(index, command).finally(() => {
+      for (const burner of burners) burner.kill();
+    });
+
+    await writeFully(process.stdout, `${runLine(run, runs, command)}\n`);
+    results.push(run);
   }
 
   return results;
@@ -258,13 +319,23 @@ if (import.meta.main) {
   for (const run of results) {
     const label = `run ${String(run.index)}/${String(runs)}`;
 
-    if (run.timedOut) {
+    if (run.leftovers.length > 0) {
+      findings.push(finding({
+        at: label,
+        invariant: 'a run ends what it starts',
+        found: `it exited with ${String(run.leftovers.length)} process(es) of its own still running, now ended: `
+          + run.leftovers.join('; '),
+        silently: 'a leftover keeps loading the machine every later run is measured on',
+        fix: 'end it in whatever started it',
+      }));
+    }
+
+    if (run.killed) {
       findings.push(finding({
         at: `${label} (${run.seconds.toFixed(1)}s)`,
         invariant: 'the suite settles under contention',
-        found: 'the run outlived its own deadline and was killed',
-        silently: 'a hung suite under load is indistinguishable from a slow one, and the '
-          + 'deploy runner would report the whole gate dead with no evidence kept',
+        found: `it wrote nothing for its ${String(SUITE_RUN.seconds)}s bound and the hang detector ended it`,
+        silently: 'a suite that hangs only when the machine is busy reads green on every idle tier',
         fix: `${HAMMER_SUITE}   # under load: run \`bun scripts/hammer.ts\` and read the artifact`,
       }));
       continue;
@@ -274,7 +345,8 @@ if (import.meta.main) {
       findings.push(finding({
         at: `${label} (${run.seconds.toFixed(1)}s, ${String(run.failed)} failing test(s))`,
         invariant: 'every run of the suite passes under contention',
-        found: `exit ${String(run.exit)} — the failing blocks are in the artifact below`,
+        found: `exit ${String(run.exit)}${run.failing.length === 0 ? '' : `, failing ${run.failing.join('; ')}`}`
+          + ' — the failing blocks are in the artifact below',
         silently: 'the suite passes on an idle box, so every other tier reads green while '
           + 'the same code fails whenever the machine is busy — which is what a deploy, a '
           + 'CI runner and a real workspace all are',
@@ -328,17 +400,19 @@ if (import.meta.main) {
     // EVERY failing run's full block, verbatim. A summary line is not evidence:
     // the interleaving that produced it is only in the output.
     failures: results
-      .filter((run) => run.exit !== 0 || run.timedOut)
+      .filter((run) => run.exit !== 0 || run.killed || run.leftovers.length > 0)
       .map((run) => ({
         run: run.index,
         exit: run.exit,
-        timedOut: run.timedOut,
+        killed: run.killed,
         seconds: Number(run.seconds.toFixed(1)),
         failed: run.failed,
+        failing: run.failing,
+        leftovers: run.leftovers,
         output: run.output,
       })),
     passes: results
-      .filter((run) => run.exit === 0 && !run.timedOut)
+      .filter((run) => run.exit === 0 && !run.killed && run.leftovers.length === 0)
       .map((run) => ({
         run: run.index,
         seconds: Number(run.seconds.toFixed(1)),
@@ -374,6 +448,8 @@ if (import.meta.main) {
     + '  - bun\'s own scheduling. Which four files run together is bun\'s decision, not\n'
     + '    this gate\'s, so a two-file interleaving that never gets scheduled is unmeasured.\n'
     + '  - the composition root, not the platform. Every test here mocks the Agent SDK and\n'
-    + '    runs under bun; a race that needs workerd is `bun run test:workerd`\'s.',
+    + '    runs under bun; a race that needs workerd is `bun run test:workerd`\'s.\n'
+    + '  - a run that keeps writing and never ends is not killed: its bound is silence, as\n'
+    + '    every gate\'s is (scripts/deadline.ts).',
   );
 }

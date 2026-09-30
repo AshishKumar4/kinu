@@ -44,7 +44,7 @@ import { initAgentDataTables } from '../tools/db-codemode';
 import { initCacheWarmTable } from '../providers/cache-warming';
 
 /** Actor-local state, without a workspace ownership root or fork lineage. */
-export function initActorTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
+function initActorTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
   initActorDdl(execRaw);
   initSearchTables(execRaw);
   initScaffoldTables(execRaw);

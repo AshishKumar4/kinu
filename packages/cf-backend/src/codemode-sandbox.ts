@@ -101,10 +101,6 @@ export function codemodeLauncher(props: CodemodeLauncherProps): ProgramLaunch {
   return { run: (source, providers) => exports.CodemodeLauncher({ props }).run(source, providers) };
 }
 
-export interface KinuSandboxExecutorOptions {
-  readonly launch: ProgramLaunch;
-}
-
 /** No work deadline, where codemode's default is 60 s: a node agent's whole scaffold loop is one program, bounded
  *  by the detach window and the platform CPU limit. */
 function programWorker(input: { readonly loader: WorkerLoader; readonly egress: Fetcher | null; readonly kinuNode: boolean }): DynamicWorkerExecutor {
@@ -119,8 +115,8 @@ function programWorker(input: { readonly loader: WorkerLoader; readonly egress: 
 export class KinuSandboxExecutor {
   readonly #inner: ProgramLaunch;
 
-  constructor(options: KinuSandboxExecutorOptions) {
-    this.#inner = options.launch;
+  constructor(launch: ProgramLaunch) {
+    this.#inner = launch;
   }
 
   async execute(code: string, providers: DynamicProviderInput) {

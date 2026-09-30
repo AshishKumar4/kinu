@@ -24,7 +24,7 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import { createTestRuntime, storesFor } from './helpers';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { RunEventRecorder } from '../src/events/recorder';
-import { unobservedSpend } from '@kinu.run/test-utils';
+import { seedTranscriptEntry, unobservedSpend } from '@kinu.run/test-utils';
 
 const EVAL_SIZE = 8;
 
@@ -152,9 +152,9 @@ async function seedAdvisorNotes(rt: AgentRuntime, count: number): Promise<void> 
 
   for (let i = 0; i < count; i++) {
     const turnId = `adv-${String(i)}`;
-    await history.record(CHAT_SESSION_ID, { id: `ask-${String(i)}`, origin: 'input',
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, { id: `ask-${String(i)}`, origin: 'input',
       message: { role: 'user', content: failureTask(i) } });
-    await history.record(CHAT_SESSION_ID, { id: turnId, origin: 'output',
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, { id: turnId, origin: 'output',
       message: { role: 'assistant', content: '{"files":["a.txt"]}' } });
     engine.recordAdvisorNote({
       note: `you answered this alone; agents was reachable and the work had ${String(i + 2)} angles`,
