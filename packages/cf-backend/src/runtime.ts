@@ -30,14 +30,14 @@ import {
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore, generateReported,
   decodeJsonValue,
   initAgentConfigTable, initActorTables,
-  parseModelSpec, reasoningEffortOptions, createRoutedModelLane,
+  parseModelSpec, reasoningEffortOptions, createRoutedModelLane, tierRefusals,
   createScaffoldSurface,
   type FixedTierSource,
   type VectorStore,
 } from "@kinu.run/core";
 import type { DeviceFileScope, LiveRead, SandboxHandle } from "@kinu.run/core";
 import { withHostedNodeExecution, WORKSPACE_ROOT } from '@kinu.run/core';
-import type { ActorReference, HostedNodeHome } from '@kinu.run/core';
+import type { ActorReference, HostedNodeHome, TierRefusals } from '@kinu.run/core';
 import { mountActorFiles } from './workspace-host';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
@@ -284,8 +284,10 @@ export function createCFRuntime(
 
   const executor = createRuntimeExecutor(codemodeLauncher({ kinuNode: false, egress: null }));
 
+  const refusals = tierRefusals({ sql, actor: actor.actor, config: actor.actor.config, now: Date.now, settings: MODEL_SETTINGS });
+
   const profileLane = (source: FixedTierSource): LLM | undefined => createProfileLaneLLM({
-    agent, env, actor, resolveProfile: hooks.resolveProfile, source, report: hooks.reportModelCall, currentTurn: hooks.currentTurn,
+    agent, env, actor, resolveProfile: hooks.resolveProfile, source, report: hooks.reportModelCall, currentTurn: hooks.currentTurn, refusals,
   });
 
   // The one required lane: `AgentRuntime.llm` is not optional.
@@ -592,6 +594,9 @@ function actorProviderRegistry(lane: Pick<ProfileLaneOptions, 'agent' | 'env' | 
   });
 }
 
+/** Where the owner changes a tier's model, as a refusal notice names it. */
+export const MODEL_SETTINGS = 'Settings > Models';
+
 /** `resolveProfile` absent means no lane to build. */
 export interface ProfileLaneOptions {
   readonly agent: AgentHost;
@@ -601,16 +606,23 @@ export interface ProfileLaneOptions {
   readonly source: FixedTierSource;
   readonly report: ModelCallSink;
   readonly currentTurn: ((reference: ActorReference) => string | null) | undefined;
+  readonly refusals: TierRefusals;
 }
 
 /** Only a completed call reports: a thrown seam was not billed. */
 function createProfileLaneLLM(options: ProfileLaneOptions): LLM | undefined {
-  const { actor, resolveProfile, source, report } = options;
+  const { actor, resolveProfile, source, report, refusals } = options;
 
   if (!resolveProfile) return undefined;
 
   return createRoutedModelLane(actor.actor, source, {
     resolveProfile,
+    refusals,
+    credentialOf: (spec) => {
+      const agent = actorProviderRegistry(options, `Kinu (${source})`);
+
+      return agent.registry.credentialFor(agent.normalizeSpecSync(spec), agent.deps);
+    },
     llm: route => ({
       async *stream() { yield ""; },
       async complete(prompt: string): Promise<string> {

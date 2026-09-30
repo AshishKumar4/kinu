@@ -412,7 +412,7 @@
     "packages/core/src/bench/split.ts#throw": 4,
     "packages/core/src/bench/stats.ts#throw": 4,
     "packages/core/src/chat.ts#catch": 4,
-    "packages/core/src/chat.ts#promise-rejection": 3,
+    "packages/core/src/chat.ts#promise-rejection": 2,
     "packages/core/src/chat.ts#throw": 5,
     "packages/core/src/cli/access-tokens.ts#result-literal": 13,
     "packages/core/src/cli/access-tokens.ts#result-type": 7,

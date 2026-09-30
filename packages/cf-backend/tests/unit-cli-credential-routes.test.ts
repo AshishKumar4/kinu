@@ -70,7 +70,7 @@ function setupEnv() {
     OrchestratorAgent: {
       idFromName: (n) => n,
       get: (name) => workspaceObject({
-        async onCredentialsChanged() {
+        async onModelSettingsChanged() {
           notified.push(name);
 
           return { ok: true as const };

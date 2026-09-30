@@ -36,7 +36,7 @@ import type { WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 import { authoredTurnMetadata, PROGRAMMATIC_MESSAGE_ID_PREFIX } from '../utils/ui-message';
 import { CLEAR_NEEDS_IDLE, COMPACT_NEEDS_IDLE, REVERT_NEEDS_IDLE } from './actor-session';
-import type { ActorSession, ActorTurnLease, ActorExecutionInput, ActorExecutionResult } from './actor-session';
+import type { ActorSession, ActorTurnLease, ActorExecutionInput } from './actor-session';
 import { CompletionGate, COMPLETION_GATE_EVENT } from './completion-gate';
 import type { LandedSteerRow, PendingSendRow, PendingSendStore, UserSteer } from './inbox';
 import type { OwedEffect } from './terminal-effects';
@@ -47,7 +47,6 @@ import {
   type CompactionTriggerState, type RunEndClassification, type RunEndFacts, type RunEndReason,
 } from './turn-lifecycle';
 import { answerParts, type SessionTranscript, type PreparedConversationEntry } from '../session/transcript';
-import type { CutStep } from '../session/history';
 import { RECOVERY_BACKOFF_CEILING_MS } from '../utils/recovery-backoff';
 import type { MessageReference } from '../session/messages';
 import type { ContextSelection } from '../session/context';
@@ -138,16 +137,6 @@ export function turnInputMessage(item: Pick<ChatTurnInput, 'text' | 'files'>): M
   return fileParts.length > 0
     ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
     : { role: 'user', content: item.text };
-}
-
-/** The cut step's text heads the answer only when that step was the answer; narration-step text stays with its step. */
-function continuedAnswer(
-  partial: CutStep | null,
-  execution: Pick<ActorExecutionResult, 'text' | 'steps' | 'interrupted'>,
-): string {
-  if (partial === null || partial.calledTools) return execution.text;
-
-  return execution.interrupted || execution.steps <= 1 ? partial.text + execution.text : execution.text;
 }
 
 
@@ -999,6 +988,11 @@ export class ChatSession {
     const prepared = await this.ports.prepareTurn(input, lease);
 
     const partial = item.continuation === undefined ? null : await this.actorSession.canonical.cutStep(item.continuation.openOutputs);
+
+    if (item.continuation !== undefined && partial === 'text') {
+      await this.actorSession.retractCutStep(lease, item.continuation.openOutputs);
+    }
+
     /** A Stop before any output leaves the operator's row alone. */
     let streamed = partial !== null;
 
@@ -1034,7 +1028,7 @@ export class ChatSession {
         || event.type === 'error') return this.emit(event);
     });
 
-    const fullText = continuedAnswer(partial, execution);
+    const fullText = execution.text;
     const interrupted = execution.interrupted;
     let runError: string | null = null;
     let overflowRetry = false;

@@ -22,6 +22,7 @@ import { build } from 'esbuild';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import * as v from 'valibot';
 import { ownerCaller } from '../packages/core/src/safety/workspace-capability';
+import { workersAiBinding } from '../packages/cf-backend/tests/helpers/workers-ai-binding';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 
@@ -38,6 +39,12 @@ export const HEAP_AFTER_SETUP_BOUND_BYTES = 56_000_000;
  *  AI fetch stopped copying the request; 4.8 MB once our own prompt text left no character above U+00FF, so V8
  *  keeps the request JSON one byte per character. */
 export const STEP_LIVE_BOUND_BYTES = 5_500_000;
+
+/** Pre-header cost, measured 2026-09-29 with the native Ai binding and the same 12-answer transcript: 7.2 MB
+ * live, including two serialized requests (2,466,160 and 2,466,104 bytes). The platform's
+ * `cloudflare-internal:ai-api.#generateFetch` holds its inputs JSON until HTTP headers arrive; the product's
+ * retry frame holds init.body until it can read the response status. A snapshot after SSE headers found neither
+ * serialized request nor a live #generateFetch frame; the mid-stream step's measured delta was -0.1 MB. Bound unchanged. */
 
 /** Measured 2026-09-27 at {@link HEADS}: 7.7 MB on main 20cacf3423, every released head's runtime held by the
  *  workspace's mount table; 1.1 MB once release unmounts it: Nimbus's inode cache of the homes still on disk and
@@ -284,14 +291,21 @@ export async function measure(): Promise<HeapMeasurement> {
   const wrangler = v.parse(WranglerSchema, JSON.parse(readFileSync(join(DIST, 'wrangler.json'), 'utf8')));
   const key = btoa('worker-heap-credential-key-32byt');
   const port = await freePort();
-  const compat = { compatibilityDate: wrangler.compatibility_date, compatibilityFlags: [...wrangler.compatibility_flags, 'enable_abortsignal_rpc'] };
+  const compat = { compatibilityDate: wrangler.compatibility_date, compatibilityFlags: wrangler.compatibility_flags };
+
+  let driver: Awaited<ReturnType<Miniflare['getWorker']>>;
+
+  // A native Ai binding transports cancellation to this local backend; an RPC fake cannot transport a facet's signal.
+  const ai = await workersAiBinding((request) => driver.fetch('http://driver.invalid/ai', {
+    method: request.method, body: request.body, signal: request.signal,
+  }));
 
   const mf = new Miniflare(convertV4MiniflareOptions({
     inspectorPort: port,
     workers: [{
       name: 'kinu', ...compat, modulesRoot: DIST, modules: await productModules(), workerLoaders: { LOADER: {} },
       bindings: { ...wrangler.vars, CREDENTIAL_ENCRYPTION_KEY: key },
-      serviceBindings: { AI: { name: 'driver', entrypoint: 'ScriptedAI' } },
+      ai,
       assets: { binding: wrangler.assets.binding, directory: resolvePath(DIST, wrangler.assets.directory) },
       r2Buckets: wrangler.r2_buckets.map((bucket) => bucket.binding),
       kvNamespaces: wrangler.kv_namespaces.map((namespace) => namespace.binding),
@@ -311,7 +325,7 @@ export async function measure(): Promise<HeapMeasurement> {
   }));
 
   try {
-    const driver = await mf.getWorker('driver');
+    driver = await mf.getWorker('driver');
 
     const ask = async (path: string): Promise<string> => {
       const response = await driver.fetch(`http://driver.invalid${path}`);

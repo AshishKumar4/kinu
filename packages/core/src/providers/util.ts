@@ -264,6 +264,26 @@ export function describeProviderError(failure: { readonly cause: unknown }): str
   return evidenceWindow(rendered, PROVIDER_ERROR_MAX_CHARS);
 }
 
+/** The first HTTP status in the cause chain; a wrapper's code is only a guess. */
+export function providerStatusOf(failure: { readonly cause: unknown }): number | undefined {
+  const seen = new Set<unknown>();
+
+  for (let link = failure.cause; link !== undefined && !seen.has(link); link = link instanceof Error ? link.cause : undefined) {
+    seen.add(link);
+    const { status } = providerFailureFacts({ cause: link });
+
+    if (status !== undefined) return status;
+  }
+
+  return undefined;
+}
+
+export function providerRefusalCode(failure: { readonly cause: unknown }): ErrorCode | null {
+  const status = providerStatusOf(failure);
+
+  return status === undefined ? null : codeForStatus(status);
+}
+
 /** HTTP status to `obs/error.ts` class; null when the status says nothing. */
 function codeForStatus(status: number): ErrorCode | null {
   if (status === 401 || status === 402 || status === 403) return 'denied';

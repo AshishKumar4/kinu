@@ -14,8 +14,8 @@ import { ownerCaller } from '@kinu.run/core';
 import { authoredRefusal, diagnostics, toKinuError } from '@kinu.run/core/obs';
 import type { AccountLedgerTarget } from './account-usage';
 
-export interface CreateWorkspaceEnv<Id> extends CreateCloudWorkspaceEnv<Id>, CredentialFanoutEnv<Id> {
-  OrchestratorAgent: ObjectNamespace<Id, CloudWorkspaceBirth & CredentialFanoutTarget & AccountLedgerTarget>;
+export interface CreateWorkspaceEnv<Id> extends CreateCloudWorkspaceEnv<Id>, ModelSettingsFanoutEnv<Id> {
+  OrchestratorAgent: ObjectNamespace<Id, CloudWorkspaceBirth & ModelSettingsFanoutTarget & AccountLedgerTarget>;
 }
 
 export interface CreateWorkspaceRequest<Id> {
@@ -54,16 +54,17 @@ export async function handleCreateWorkspaceRequest<Id>(call: CreateWorkspaceRequ
   }
 }
 
-export type CredentialFanoutTarget = Pick<ActorAgent, 'onCredentialsChanged'>;
+export type ModelSettingsFanoutTarget = Pick<ActorAgent, 'onModelSettingsChanged'>;
 
-export interface CredentialFanoutEnv<Id> extends OwnerCapabilityEnv {
-  OrchestratorAgent: ObjectNamespace<Id, CredentialFanoutTarget>;
+export interface ModelSettingsFanoutEnv<Id> extends OwnerCapabilityEnv {
+  OrchestratorAgent: ObjectNamespace<Id, ModelSettingsFanoutTarget>;
 }
 
-/** Tell active workspaces to drop cached provider/model state; the request's waitUntil owns it.
- *  Timeliness only: workspaces also check the credential revision, so a missed notify heals. */
-export function notifyWorkspacesCredentialsChanged<Id>(
-  env: CredentialFanoutEnv<Id>,
+/** Tell active workspaces their owner's credentials or model profile moved: each drops cached provider state
+ *  and releases the effects a refusal parked. The request's waitUntil owns it. A missed notify heals for the
+ *  caches (workspaces check the credential revision) and for parked effects at the workspace's next settled turn. */
+export function notifyWorkspacesModelSettingsChanged<Id>(
+  env: ModelSettingsFanoutEnv<Id>,
   userDO: Pick<UserDO, 'listActiveWorkspaces'>,
   ctx: Pick<ExecutionContext, 'waitUntil'>,
 ): void {
@@ -73,24 +74,24 @@ export function notifyWorkspacesCredentialsChanged<Id>(
     try {
       workspaces = await userDO.listActiveWorkspaces(await ownerCaller(env));
     } catch (cause) {
-      diagnostics.failure('workspace.credential_fanout_failed', toKinuError({
-        doing: 'notifying the user\'s workspaces of a credential change',
+      diagnostics.failure('workspace.model_settings_fanout_failed', toKinuError({
+        doing: 'notifying the user\'s workspaces of a model settings change',
         cause,
         otherwise: 'unavailable',
       }));
       workspaces = null;
     }
 
-    // Unreadable roster: skip; the credential write landed and each workspace reconciles on next use.
+    // Unreadable roster: skip; the write landed and each workspace reconciles on next use.
     if (workspaces === null) return;
 
     const settled = await Promise.allSettled(workspaces
-      .map((a) => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(a.name)).onCredentialsChanged()));
+      .map((a) => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(a.name)).onModelSettingsChanged()));
 
     for (const [index, outcome] of settled.entries()) {
       if (outcome.status === 'fulfilled') continue;
-      diagnostics.failure('workspace.credential_notify_failed', toKinuError({
-        doing: 'telling a workspace its owner\'s credentials changed',
+      diagnostics.failure('workspace.model_settings_notify_failed', toKinuError({
+        doing: 'telling a workspace its owner\'s model settings changed',
         cause: outcome.reason,
         otherwise: 'unavailable',
       }), { workspace: workspaces[index].name });
