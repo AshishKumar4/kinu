@@ -25,7 +25,7 @@ import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { KinuError, settle, type AgentTracing } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import { createCFRuntime, type CFRuntime, type CFRuntimeHooks } from './runtime';
-import type { HostedNodeHome, LiveRead, TemporaryAgentPort } from '@kinu.run/core';
+import type { LiveRead, TemporaryAgentPort } from '@kinu.run/core';
 
 /** The root agents-SDK members a hosted actor's runtime borrows; projected from `Agent` so upstream drift fails to compile. */
 export type HostRootAgent = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber'>;
@@ -51,6 +51,7 @@ export interface WorkspaceHostSeams {
   workspaceBox(shellId: string): NimbusSandboxHandle;
   /** Root-owned uid-0 view, principal registry and uid table, so homes are provisioned in this isolate. */
   homeHost(): Promise<NodeHomeHost>;
+  readonly homes: HostedActorHomes;
   /** The profile authority chats resolve through, so role restrictions narrow heads, nodes and subordinates identically. */
   resolveProfile(input: {
     readonly actor: ActorHandle;
@@ -115,55 +116,62 @@ export function hostedActorPlacement(record: WorkspaceActor): HostedActorPlaceme
  * Provision one hosted actor's home. The single implementation: the swarm's
  * `provisionNodeHome` must report the same home. Keyed on the storage key, never a raw id.
  */
-export async function provisionHostedActorHome(
-  seams: Pick<WorkspaceHostSeams, 'homeHost' | 'directory'>,
-  record: WorkspaceActor,
-  reference: ActorReference,
-): Promise<NodeWorkspace> {
-  const { homeName } = hostedActorPlacement(record);
 
-  if (homeName === null) return await settle(Effect.fail(new KinuError('denied', `Actor ${record.name} has no home of its own.`)));
+export class HostedActorHomes {
+  private readonly homes = new Map<string, Promise<Extract<NodeWorkspace, { isolation: 'private-home' }>>>();
 
-  const path = seams.directory.storagePath(reference);
-  const provision = facetHomeProvisioner(seams.homeHost(), () => { seams.directory.validate(reference, path); });
+  constructor(private readonly seams: Pick<WorkspaceHostSeams, 'homeHost' | 'directory'>) {}
 
-  return await provision(homeName);
-}
+  async provision(record: WorkspaceActor, reference: ActorReference): Promise<NodeWorkspace> {
+    const { homeName } = hostedActorPlacement(record);
 
-/** Build the workspace's one actor host over the root's `Storage` (open-38). */
-export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
-  const runtimes = new WeakMap<ActorHandle, CFRuntime>();
-  /** Per-activation round-trip saver; provisioning is idempotent, so never a source of truth. */
-  const homes = new Map<string, Promise<HostedNodeHome>>();
-  let host: ActorHost | null = null;
+    if (homeName === null) return settle(Effect.fail(new KinuError('denied', `Actor ${record.name} has no home of its own.`)));
+    const path = this.seams.directory.storagePath(reference);
+    const provision = facetHomeProvisioner(this.seams.homeHost(), () => { this.seams.directory.validate(reference, path); });
 
-  const homeFor = (record: WorkspaceActor, reference: ActorReference): Promise<HostedNodeHome> | null => {
+    return await provision(homeName);
+  }
+
+  get(record: WorkspaceActor, reference: ActorReference): Promise<Extract<NodeWorkspace, { isolation: 'private-home' }>> | null {
     if (hostedActorPlacement(record).homeName === null) return null;
-    const held = homes.get(record.actorId);
+    const held = this.homes.get(record.actorId);
 
     if (held) return held;
+    let provisioning: Promise<Extract<NodeWorkspace, { isolation: 'private-home' }>> | null = null;
 
-    // Cleanup rethrows so the stored promise still rejects for the acquire awaiting it; the identity
-    // check keeps a failure from clearing a newer attempt's entry.
-    let provisioning: Promise<HostedNodeHome> | null = null;
-
-    provisioning = (async (): Promise<HostedNodeHome> => {
+    provisioning = (async (): Promise<Extract<NodeWorkspace, { isolation: 'private-home' }>> => {
       try {
-        const home = await provisionHostedActorHome(seams, record, reference);
+        const home = await this.provision(record, reference);
 
         if (home.isolation !== 'private-home') throw new KinuError('denied', 'A hosted actor requires its own credential.');
 
-        return { home: home.home, tmp: home.tmp, cred: home.cred };
+        return home;
       } catch (cause) {
-        if (homes.get(record.actorId) === provisioning) homes.delete(record.actorId);
+        if (this.homes.get(record.actorId) === provisioning) this.homes.delete(record.actorId);
         throw cause;
       }
     })();
-
-    homes.set(record.actorId, provisioning);
+    this.homes.set(record.actorId, provisioning);
 
     return provisioning;
-  };
+  }
+
+  require(record: WorkspaceActor, reference: ActorReference): Promise<Extract<NodeWorkspace, { isolation: 'private-home' }>> {
+    const home = this.get(record, reference);
+
+    if (home !== null) return home;
+
+    return settle(Effect.fail(new KinuError('denied', `Actor ${record.name} has no home of its own.`)));
+  }
+
+  forget(actorId: string): void {
+    this.homes.delete(actorId);
+  }
+}
+
+export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
+  const runtimes = new WeakMap<ActorHandle, CFRuntime>();
+  let host: ActorHost | null = null;
 
   const deps: ActorHostDeps = {
     storage: {
@@ -176,7 +184,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
     workspace: seams.workspaceName,
     tracing: () => seams.tracing(),
     filesFor: async (bound) => {
-      const provisioning = homeFor(bound.record, bound.reference);
+      const provisioning = seams.homes.get(bound.record, bound.reference);
       const box = seams.workspaceBox(hostedActorPlacement(bound.record).shellId);
 
       if (provisioning === null) {
@@ -194,7 +202,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
       const held = runtimes.get(bound.handle);
 
       if (held) return held;
-      const home = homeFor(bound.record, bound.reference);
+      const home = seams.homes.get(bound.record, bound.reference);
 
       const hooks: CFRuntimeHooks = {
         reportModelCall: (report) => { seams.reportModelCall(report); },
@@ -325,7 +333,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
 
       if (homeName !== null) await facetHomeReleaser(seams.homeHost())(homeName);
 
-      homes.delete(record.actorId);
+      seams.homes.forget(record.actorId);
       const box = seams.workspaceBox(shellId);
 
       // A hired-but-idle actor never materialized its subtree, so absence is swallowed.

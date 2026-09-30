@@ -4,9 +4,9 @@ import { DurableObject, RpcTarget } from 'cloudflare:workers';
 import { Nimbus, type NimbusSandbox, type NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import type { ModelMessage, UIMessage } from 'ai';
 import {
-  decodeJsonValue, readAgentArchivePage,
+  jsonResultOrVoid, readAgentArchivePage,
   type AgentFigures,
-  type AgentOwnInspection, type AnsweredEvolutionHelper, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage, type JsonValue,
+  type AgentOwnInspection, type AnsweredEvolutionHelper, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
   type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
 } from '@kinu.run/core';
@@ -27,12 +27,6 @@ export interface AgentFacetEnv {
   readonly WORKERS_AI_VIA_BINDING?: string;
 }
 
-async function json(result: Promise<unknown>): Promise<JsonValue | undefined> {
-  const value = await result;
-
-  return value === undefined ? undefined : decodeJsonValue({ value });
-}
-
 function sandboxHandle(sandbox: NimbusSandbox): NimbusSandboxHandle {
   return {
     ready: () => sandbox.ready(),
@@ -41,14 +35,14 @@ function sandboxHandle(sandbox: NimbusSandbox): NimbusSandboxHandle {
     runCode: (code, options) => sandbox.runCode(code, options),
     files: sandbox.files,
     runtimes: {
-      ensure: (specs, options) => json(sandbox.runtimes.ensure(specs, options)),
-      install: (spec, options) => json(sandbox.runtimes.install(spec, options)),
-      list: () => json(sandbox.runtimes.list()),
+      ensure: (specs, options) => jsonResultOrVoid(sandbox.runtimes.ensure(specs, options)),
+      install: (spec, options) => jsonResultOrVoid(sandbox.runtimes.install(spec, options)),
+      list: () => jsonResultOrVoid(sandbox.runtimes.list()),
     },
     processes: {
-      list: () => json(sandbox.processes.list()),
-      kill: (pid) => json(sandbox.processes.kill(pid)),
-      logs: (pid, options) => json(sandbox.processes.logs(pid, options)),
+      list: () => jsonResultOrVoid(sandbox.processes.list()),
+      kill: (pid) => jsonResultOrVoid(sandbox.processes.kill(pid)),
+      logs: (pid, options) => jsonResultOrVoid(sandbox.processes.logs(pid, options)),
     },
   };
 }
@@ -71,6 +65,7 @@ export interface AgentFacetCalls {
   openTurn(snapshot: AgentSnapshot, opening: AgentTurnOpening): Promise<void>;
   history(snapshot: AgentSnapshot, limit?: number): Promise<UIMessage[]>;
   historyPage(snapshot: AgentSnapshot, page: PositionPageRequest): Promise<ChatHistoryPage>;
+  messageCount(snapshot: AgentSnapshot): Promise<number>;
   inspect(snapshot: AgentSnapshot, request: AgentOwnInspection): Promise<SubordinateInspectionResult>;
   inheritedContext(snapshot: AgentSnapshot): Promise<SerializedMessage[]>;
   workingContext(snapshot: AgentSnapshot): Promise<readonly ModelMessage[]>;
@@ -173,6 +168,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async turnRequest(snapshot: AgentSnapshot, at: TurnRequestAt): Promise<TurnRequestPage> {
     return await this.open(snapshot).turnRequest(at);
+  }
+
+  async messageCount(snapshot: AgentSnapshot): Promise<number> {
+    return this.open(snapshot).messageCount();
   }
 
   async searchConversations(snapshot: AgentSnapshot, query: string, limit?: number): Promise<ConversationSearchHit[]> {

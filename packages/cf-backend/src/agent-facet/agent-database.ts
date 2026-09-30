@@ -2,7 +2,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** An agent's own SQLite, under the core stores; its roster rows are copies the workspace sends on each call. */
 import type { ModelMessage, UIMessage } from 'ai';
 import {
-  CHAT_SESSION_ID, EventLog, EvolutionEngine, REAL_CLOCK, WorkspaceActorDirectory, runEventSinks,
+  CHAT_SESSION_ID, EventLog, EvolutionEngine, WorkspaceActorDirectory, runEventSinks,
   actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
   initWorkspaceSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, actorReadHandle, readSessionTranscript, readSubordinateInspection,
   getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
@@ -285,6 +285,10 @@ export class AgentDatabase {
     return await getChatHistoryPage(this.readable().transcript, page);
   }
 
+  messageCount(): number {
+    return this.readable().transcript.count();
+  }
+
   async workingContext(): Promise<readonly ModelMessage[]> {
     return (await this.acquire()).session.history;
   }
@@ -406,5 +410,4 @@ export class AgentDatabase {
     });
   }
 
-  readonly clock = REAL_CLOCK;
 }

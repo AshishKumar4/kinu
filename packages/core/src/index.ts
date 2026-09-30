@@ -1223,7 +1223,7 @@ export {
 
 export {
   JsonValueSchema, JsonObjectSchema, JsonArraySchema,
-  parseJsonValue, parseJsonObject, parseJsonArray, safeJsonParse, decodeJsonValue, projectJsonValue, nonEmptyString,
+  parseJsonValue, parseJsonObject, parseJsonArray, safeJsonParse, decodeJsonValue, jsonResultOrVoid, projectJsonValue, nonEmptyString,
   type JsonPrimitive, type JsonObject, type JsonValue,
 } from './utils/json';
 

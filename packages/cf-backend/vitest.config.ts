@@ -406,7 +406,7 @@ export default defineConfig({
           workerLoaders: { LOADER: {} },
           modules: probeModules(twoTurnProbe),
           bindings: { DEV_USER_EMAIL: 'probe@local', WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
-          serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'FakeAI' } },
+          serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'FakeAI' }, ASSETS: agentAssets(shippedAgentBundle) },
           // Compat HTTP falls back to the
           // global fetch (owned-model-services passes no deps.fetch), which
           // routes to the Node-side fake; unknown hosts throw.
