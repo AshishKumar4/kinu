@@ -30,9 +30,11 @@ export interface GalleryAgent {
 	reopen(): void;
 	/** A server-initiated frame, delivered raw so `useKinu`'s own parse and gates run. */
 	deliver(raw: string): void;
+	readonly path: string;
 }
 
 interface AgentHandlers {
+	path?: string;
 	onOpen?: (event: Event) => void;
 	onClose?: (event: CloseEvent) => void;
 	onError?: (event: Event) => void;
@@ -48,14 +50,15 @@ export function serveGalleryRpc(rpc: GalleryRpc): void {
 	served = rpc;
 }
 
-let seededChat: readonly UIMessage[] = [];
+/** Each chat's transcript by socket path ("" the workspace's), sent on connect as the chat room does. */
+const seededChats = new Map<string, readonly UIMessage[]>();
 
-export function seedGalleryChat(messages: readonly UIMessage[]): void {
-	seededChat = messages;
+export function seedGalleryChat(messages: readonly UIMessage[], path = ""): void {
+	seededChats.set(path, messages);
 }
 
 export function seededGalleryChatRows(): number {
-	return seededChat.length;
+	return seededChats.get("")?.length ?? 0;
 }
 
 /** Only ids are read: a walk-back redraw names rows the client already holds and adds none. */
@@ -80,6 +83,7 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 		const listeners = new Map<string, Set<EventListener>>();
 
 		return {
+			path: options.path ?? "",
 			readyState: 1,
 			connectionError: terminalClose,
 			call: <T,>(method: string, args: unknown[] = []): Promise<T> => (
@@ -125,6 +129,9 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 
 		window.addEventListener("gallery-reconnect", reconnect);
 		live.add(agent);
+		queueMicrotask(() => {
+			agent.deliver(JSON.stringify({ type: "cf_agent_chat_messages", messages: seededChats.get(agent.path) ?? [] }));
+		});
 
 		return () => {
 			live.delete(agent);
@@ -137,7 +144,7 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 
 /** The held-send DOM values are transport controls only; `useKinu` decides whether presses reach it. */
 export function useAgentChat(options: { agent: GalleryAgent }) {
-	const [messages, setMessages] = useState<readonly UIMessage[]>(seededChat);
+	const [messages, setMessages] = useState<readonly UIMessage[]>(seededChats.get(options.agent.path) ?? []);
 	const agent = options.agent;
 
 	useEffect(() => {

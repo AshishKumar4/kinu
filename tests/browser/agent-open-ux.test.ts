@@ -9,6 +9,9 @@ import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
 const AUDITOR_PANE = '[data-agent-pane="checkout-fixes/agents/coupon-auditor"]';
 
+/** A message only the coupon auditor's own transcript holds. */
+const AUDITOR_SAID = 'Two rules skip the expiry check';
+
 const VIEWPORTS = { desktop: { width: 1280, height: 860 }, phone: { width: 390, height: 844 } } as const;
 
 async function workspace(gallery: Gallery, viewport: keyof typeof VIEWPORTS): Promise<Page> {
@@ -36,6 +39,7 @@ describe('opening an agent shows its live chat in the main chat area', () => {
         await page.click('[data-agents-counter]');
         await page.click('[data-agent-row="a-scout"]');
         await page.waitForSelector(AUDITOR_PANE);
+        await page.waitForFunction((pane, said) => document.querySelector(pane)?.textContent?.includes(said), {}, AUDITOR_PANE, AUDITOR_SAID);
 
         expect(await chatShows(page, AUDITOR_PANE)).toBe(true);
         await page.close();
@@ -57,6 +61,7 @@ describe('opening an agent shows its live chat in the main chat area', () => {
         await page.click('[data-back-to-work]');
         await page.click('button[aria-label="Open Coupon auditor\'s conversation"]');
         await page.waitForSelector(AUDITOR_PANE);
+        await page.waitForFunction((pane, said) => document.querySelector(pane)?.textContent?.includes(said), {}, AUDITOR_PANE, AUDITOR_SAID);
 
         expect(await chatShows(page, AUDITOR_PANE)).toBe(true);
         await page.close();
