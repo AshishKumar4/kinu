@@ -956,6 +956,13 @@ exit), and the bound holds until the pipes close. Blind: a run that keeps
 writing and never ends; a holder that left the session and dropped the mark
 is cut off at the bound, not ended.
 
+The inherited-output pump also waits for each stream write before it returns.
+Measured 2026-09-29, replaying a 1,191,111-byte CI record through
+`ladder.ts --run` to a reader that first reads 200 ms later kept only 524,288
+bytes. Awaiting the write callback preserved all 1,191,111 bytes on stdout
+and stderr. Without that wait, the wrapper's `process.exit` can discard the
+queued tail, including a failing verdict.
+
 ## Open
 
 O1. A gate that pins a nonzero cache read on a representative multi-step turn
