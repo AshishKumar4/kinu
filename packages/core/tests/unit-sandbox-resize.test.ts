@@ -118,10 +118,10 @@ describe('what sandbox.resize answers', () => {
     });
   });
 
-  test('without a container, or without a table, the refusal says which', async () => {
-    const unbound = await resize(createSandboxExecutor(), 'large');
-    const unsized = await resize(createSandboxExecutor(boxAnswering(async (size) => ({ kind: 'recorded', size }))), 'large');
+  test('without a container the refusal says so, and without a table there is no resize to call', async () => {
+    const unbound = await resize(createSandboxExecutor(undefined, undefined, undefined, SIZES), 'large');
+    const unsized = createSandboxExecutor(boxAnswering(async (size) => ({ kind: 'recorded', size })));
 
-    expect({ unbound, unsized }).toMatchObject({ unbound: { reason: 'unavailable' }, unsized: { reason: 'unsupported' } });
+    expect({ unbound, unsized: Object.keys(unsized.tools).includes('resize') }).toMatchObject({ unbound: { reason: 'unavailable' }, unsized: false });
   });
 });

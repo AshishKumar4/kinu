@@ -2158,9 +2158,10 @@ at the one start boundary (`#startContainer`), whichever path woke the box: a
 request, an alarm, a file call on the `/sandbox` mount, `start()`. The sizes
 are one table, `src/sizes.ts`: Small 1 vCPU, 4 GiB; Medium 2 vCPU, 8 GiB;
 Large 4 vCPU, 12 GiB; each a 20 GB disk. A box stores the key (`devbox:size`,
-absent means the host's `defaultSize`, Medium) and the size its running
-container got (`devbox:running-size`); `boxSize()`, `setSize()` and
-`devboxState()` report both. `resize(size)` is one call: a box that is not
+absent means the default its host stored with `useDefaultSize(size)`, else
+the class's `defaultSize`, Medium) and the size its running container got
+(`devbox:running-size`); `boxSize()` and `devboxState()` report both, and
+`resize(null)` drops the choice. `resize(size)` is one call: a box that is not
 running only records the size, so its first start comes up at it; one
 running at another size commits in D39's order and starts again at the new
 size, supervised processes and exposed ports come back from their specs, and
@@ -2171,6 +2172,16 @@ makes a rest refuse. `@cloudflare/sandbox` moves from 1.0.0-rc.1 to 1.0.0:
 unchanged (`sandbox-tools/src/s3_mount/{marker_store,model,observation}.rs`
 at the `@cloudflare/sandbox@1.0.0` tag are byte-identical to rc.1). The
 image moves to 1.0.0's shim (`sha256:5db34cc1…`, `block-lower/upstream.json`).
+
+In Kinu the owner's default is the `sandbox_size` config key, set in User
+settings under Sandbox, and a workspace chooses its own size on its
+Environment card, which applies at once, as `sandbox.resize(size)` does from
+codemode. Before a box's first operation in each turn, the runtime hands it
+the owner's default through `useDefaultSize`. The codemode declaration of
+`resize` and the prompt's sandbox line come from the size table and replace
+the stale "2 vCPU, about 6 GB"; a sandbox executor given no table has no
+`resize`. The boundary tests: `packages/core/tests/unit-sandbox-resize.test.ts`
+and `packages/cf-backend/tests/unit-sandbox-size-settings.test.ts`.
 
 What the policy removes. There is no application-wide rollout, so the
 fixtures no longer wait for one (`awaitApplicationRollout`, D5's 38 s), and a

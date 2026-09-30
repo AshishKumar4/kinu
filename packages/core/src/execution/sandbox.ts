@@ -597,26 +597,6 @@ export function createSandboxExecutor(
         }
       },
     },
-    resize: {
-      description: 'Change the sandbox\'s size. A running sandbox at another size restarts: files stay, '
-        + 'supervised servers and exposed ports come back, and a running command ends.',
-      execute: async (...args: unknown[]): Promise<string | Refusal> => {
-        if (!handle) return notConfigured();
-
-        if (sizes === undefined) return refusalOf(new KinuError('unsupported', 'sandbox resize: this deployment names no sandbox sizes'));
-        const size = parseInput(v.picklist(sizes.sizes.map((row) => row.size)), { value: args[0] });
-
-        if (size === undefined) {
-          return refusalOf(new KinuError('bad_input', `sandbox resize: size must be one of ${sizes.sizes.map((row) => row.size).join(', ')}`));
-        }
-
-        // Retried: a resize repeated after a lost answer finds its size already applied.
-        return settle(Effect.match(Effect.tryPromise({
-          try: () => withSandboxRetry(() => touch(() => handle.resize(size))),
-          catch: (cause) => sandboxFailure({ doing: `sandbox resize ${size}`, cause }),
-        }), { onSuccess: (resized) => resizedText(resized, sizes), onFailure: refusalOf }));
-      },
-    },
     listProcesses: {
       description:
         'List sandbox processes as JSON rows {processId,pid,status,restartable,command}. ' +
@@ -638,6 +618,27 @@ export function createSandboxExecutor(
       },
     },
   };
+
+  if (sizes !== undefined) {
+    tools.resize = {
+      description: 'Change the sandbox\'s size. A running sandbox at another size restarts: files stay, '
+        + 'supervised servers and exposed ports come back, and a running command ends.',
+      execute: async (...args: unknown[]): Promise<string | Refusal> => {
+        if (!handle) return notConfigured();
+        const size = parseInput(v.picklist(sizes.sizes.map((row) => row.size)), { value: args[0] });
+
+        if (size === undefined) {
+          return refusalOf(new KinuError('bad_input', `sandbox resize: size must be one of ${sizes.sizes.map((row) => row.size).join(', ')}`));
+        }
+
+        // Retried: a resize repeated after a lost answer finds its size already applied.
+        return settle(Effect.match(Effect.tryPromise({
+          try: () => withSandboxRetry(() => touch(() => handle.resize(size))),
+          catch: (cause) => sandboxFailure({ doing: `sandbox resize ${size}`, cause }),
+        }), { onSuccess: (resized) => resizedText(resized, sizes), onFailure: refusalOf }));
+      },
+    };
+  }
 
   const types = `
 /**
