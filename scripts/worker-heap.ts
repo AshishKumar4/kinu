@@ -16,7 +16,7 @@
 import { readFileSync } from 'node:fs';
 import { builtinModules } from 'node:module';
 import { createServer } from 'node:net';
-import { dirname, join, normalize } from 'node:path';
+import { dirname, join, normalize, resolve as resolvePath } from 'node:path';
 import { literalString, parse, walk } from './syntax';
 import { build } from 'esbuild';
 import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
@@ -80,6 +80,7 @@ const WranglerSchema = v.object({
   r2_buckets: v.array(v.object({ binding: v.string() })),
   kv_namespaces: v.array(v.object({ binding: v.string() })),
   durable_objects: v.object({ bindings: v.array(v.object({ name: v.string(), class_name: v.string() })) }),
+  assets: v.object({ binding: v.string(), directory: v.string() }),
 });
 
 const TargetsSchema = v.array(v.object({ id: v.string(), webSocketDebuggerUrl: v.string() }));
@@ -291,6 +292,7 @@ export async function measure(): Promise<HeapMeasurement> {
       name: 'kinu', ...compat, modulesRoot: DIST, modules: await productModules(), workerLoaders: { LOADER: {} },
       bindings: { ...wrangler.vars, CREDENTIAL_ENCRYPTION_KEY: key },
       serviceBindings: { AI: { name: 'driver', entrypoint: 'ScriptedAI' } },
+      assets: { binding: wrangler.assets.binding, directory: resolvePath(DIST, wrangler.assets.directory) },
       r2Buckets: wrangler.r2_buckets.map((bucket) => bucket.binding),
       kvNamespaces: wrangler.kv_namespaces.map((namespace) => namespace.binding),
       durableObjects: Object.fromEntries(wrangler.durable_objects.bindings.map((binding) =>
