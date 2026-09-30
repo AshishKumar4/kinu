@@ -5,6 +5,8 @@
 
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { routeAgentRequest } from "agents";
+import { WorkerEntrypoint } from 'cloudflare:workers';
+import { containerEventResolver, handleContainerEgress, handleContainerEvent, parseEgressParams, type KinuEgressParams } from './egress/outbound';
 import { ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
 import { diagnostics, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
 import {
@@ -56,9 +58,19 @@ export { CodemodeEgress } from "./codemode-egress";
 
 export { SlateBinding } from "./slates/bindings";
 
-// Required: the Sandbox DO builds outbound interception from
-// `ctx.exports.ContainerProxy`; without it egress goes unintercepted.
-export { ContainerProxy } from "@cloudflare/sandbox";
+export { DevboxSyncGateway, DevboxOutbound, DevboxStoreGateway } from '@kinu.run/devbox';
+
+export class KinuEgress extends WorkerEntrypoint<Env, KinuEgressParams> {
+  override fetch(request: Request): Promise<Response> {
+    return handleContainerEgress(request, this.env, parseEgressParams(this.ctx));
+  }
+}
+
+export class KinuEvents extends WorkerEntrypoint<Env, KinuEgressParams> {
+  override fetch(request: Request): Promise<Response> {
+    return handleContainerEvent(request, containerEventResolver(this.env), parseEgressParams(this.ctx));
+  }
+}
 
 export { UserDO } from "./user/user-do";
 

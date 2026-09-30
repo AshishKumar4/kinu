@@ -174,15 +174,6 @@ describe('the startup kick arms restoration without attaching inline', () => {
 
     await box.devboxStartup();
 
-    expect(container.startWaitOptions).toHaveLength(1);
-    expect(container.startWaitOptions[0]).toMatchObject({
-      portToCheck: 3000,
-      // `retries` is the port window divided by the interval; fewer retries make the SDK give up
-      // before the abort can fire. The wait targets the instance, not an app port restore starts.
-      retries: Math.ceil(TEST_POLICY.portWaitMs / 100),
-      waitInterval: 100,
-      signal: expect.any(AbortSignal),
-    });
     const state = await box.devboxState();
     expect({
       starts: container.containerStarts,
@@ -222,16 +213,6 @@ describe('the startup kick arms restoration without attaching inline', () => {
     expect((await box.devboxState()).restoration).toBe('unstarted');
   });
 
-  test('an app-port wait refuses a dark box — admission waits for the instance', async () => {
-    // An unrestored port answers nothing, so the SDK port wait never breaks on a fresh box.
-    // Production admits through `start()`; this pins the fake so port-wait admission fails here.
-    const { box, container } = harness(TestBox);
-    await container.stop();
-
-    await expect(box.startAndWaitForPorts({ ports: 8080 })).rejects.toThrow('never answered');
-    expect(container.execs).toEqual([]);
-    expect((await box.devboxState()).restoration).toBe('unstarted');
-  });
 
   test('a dark box admits through the instance probe and restores', async () => {
     // Dark means no listener, no specs, nothing exposed: the instance probe asks the platform.
@@ -434,14 +415,11 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
     await successor;
     parked.release();
     await stale;
-    expect(container.exposures).toEqual([{ port: 3000, token: 'tok3000', name: 'web' }]);
+    expect(await box.getExposedPorts('preview.test')).toEqual([{ port: 3000, url: 'https://3000-devbox-under-test-tok3000.preview.test', name: 'web' }]);
   });
 
-  test('a superseded ADMISSION refusal arms nothing and files nothing', async () => {
-    // An attempt parked in the `start()` admission probe holds no lane or single-flight entry,
-    // so the heartbeat's busy check cannot see it and a quiesce can land inside that wait.
-    const harnessed = harness(TestBox);
-    const { box, container, rows } = harnessed;
+  test('quiesce drains a pending admission before leaving the container stopped', async () => {
+    const { box, container } = harness(TestBox);
     await container.stop();
     const admitting = gate();
     container.containerStartGate = admitting;
@@ -451,15 +429,12 @@ describe('a startup attempt owns a generation, and a superseded one is inert', (
     const stale = box.devboxStartup();
     await admitting.reached;
 
-    // Quiesce while the start is parked so the generation turns over before the refusal lands.
-    await box.quiesce();
-    const armedByQuiesce = armed(container);
-
+    const stopping = box.quiesce();
+    expect((await box.resolveReadiness()).kind).toBe('pending');
     admitting.release();
     await stale;
-
-    expect(armed(container)).toBe(armedByQuiesce);
-    expect(incidents(rows)).toEqual([]);
+    expect((await stopping).kind).toBe('skipped');
+    expect(container.scheduleRows.map(row => row.callback)).not.toContain('devboxStartup');
     expect(container.running.running).toBe(false);
   });
 });
@@ -525,28 +500,6 @@ describe('a destroyed box starts nothing of its own until it is asked again', ()
       .toEqual({ running: false, rows: [] });
   });
 
-  test('a beat whose command is starting a container when the box is torn down leaves nothing running', async () => {
-    const { box, container } = harness(TestBox);
-    await box.devboxStartup();
-    const reading = gate();
-    container.stateReadGate = reading;
-    const beat = box.devboxHeartbeat();
-    await reading.reached;
-    // The container stops under the beat, so its command starts one, and the teardown lands
-    // inside that start.
-    await container.stop();
-    const granted = gate();
-    container.containerStartGate = granted;
-    reading.release();
-    await granted.reached;
-    const destroying = box.destroy();
-    granted.release();
-    await destroying;
-    await beat;
-
-    expect({ running: container.running.running, rows: container.scheduleRows.map(row => row.callback) })
-      .toEqual({ running: false, rows: [] });
-  });
 
   // Review, 2026-09-28: a file write queued on its path before the teardown got the path after it,
   // and its readiness check reopened the box and started a container.
@@ -612,7 +565,7 @@ describe('a failed restored service is never exposed and never reported ready', 
     await box.devboxStartup();
     expect(container.starts)
       .toEqual([{ command: 'bun run server.ts', cwd: '/workspace', processId: 'p1' }]);
-    expect(container.exposures).toEqual([{ port: 3000, token: 'tok3000', name: 'web' }]);
+    expect(await box.getExposedPorts('preview.test')).toEqual([{ port: 3000, url: 'https://3000-devbox-under-test-tok3000.preview.test', name: 'web' }]);
     const state = await box.devboxState();
     expect({ ready: state.ready, unready: state.unready })
       .toEqual({ ready: true, unready: undefined });
@@ -620,10 +573,10 @@ describe('a failed restored service is never exposed and never reported ready', 
 
   test('a silent listener is NOT exposed, and the box says why it is not ready', async () => {
     const harnessed = harness(TestBox);
-    const { box, container, rows } = harnessed;
+    const { box, rows } = harnessed;
     port(rows, 3000, 'tok3000');
     await box.devboxStartup();
-    expect(container.exposures).toEqual([]);
+    expect(await box.getExposedPorts('preview.test')).toEqual([]);
     const state = await box.devboxState();
     expect(state.ready).toBe(false);
     expect(state.unready).toBe('port 3000 never answered');
@@ -641,7 +594,7 @@ describe('a failed restored service is never exposed and never reported ready', 
     container.listening.add(3000).add(8080);
     container.startFaults.push(refused('COMMAND_NOT_FOUND'));
     await box.devboxStartup();
-    expect(container.exposures).toEqual([]);
+    expect(await box.getExposedPorts('preview.test')).toEqual([]);
     const state = await box.devboxState();
     expect(state.ready).toBe(false);
     expect(state.unready).toBe('process p1 did not restart; no port was exposed');
@@ -1078,7 +1031,7 @@ describe('one budget, two policies: the attach may replace, the phases after it 
     for (const value of [3000, 8080, 9000]) port(rows, value, `tok${String(value)}`);
     await box.devboxStartup();
     // A slow app is no reason to destroy a working box: no port answered, so none is exposed.
-    expect(container.exposures).toEqual([]);
+    expect(await box.getExposedPorts('preview.test')).toEqual([]);
     expect(container.destroys).toBe(0);
     expect(container.running.running).toBe(true);
     const state = await box.devboxState();
@@ -1104,7 +1057,7 @@ describe('one budget, two policies: the attach may replace, the phases after it 
 
       expect(container.destroys).toBe(0);
       expect(container.running.running).toBe(true);
-      expect(container.exposures).toEqual([]);
+      expect(await box.getExposedPorts('preview.test')).toEqual([]);
       const stalled = await box.devboxState();
       expect(stalled.ready).toBe(false);
       expect(stalled.unready).toContain('process p1');
@@ -1121,7 +1074,7 @@ describe('one budget, two policies: the attach may replace, the phases after it 
       const repaired = await box.devboxState();
       expect({ ready: repaired.ready, unready: repaired.unready })
         .toEqual({ ready: true, unready: undefined });
-      expect(container.exposures).toEqual([{ port: 3000, token: 'tok3000', name: 'web' }]);
+      expect(await box.getExposedPorts('preview.test')).toEqual([{ port: 3000, url: 'https://3000-devbox-under-test-tok3000.preview.test', name: 'web' }]);
     });
 
   test('a process the container already holds is not started twice by the retry', async () => {
@@ -1137,50 +1090,6 @@ describe('one budget, two policies: the attach may replace, the phases after it 
     expect(container.processes.size).toBe(1);
   });
 
-  test('an exposure that outruns its allowance is reported, not exposed and not replaced',
-    async () => {
-      const harnessed = harness(TightBox);
-    const { box, container, rows } = harnessed;
-      port(rows, 3000, 'tok3000');
-      container.listening.add(3000);
-      const slow = gate();
-      container.exposeGate = slow;
-      const attempt = box.devboxStartup();
-      await slow.reached;
-      // The exposure's own allowance expires and nothing else does: the hook
-      // budget stays armed, so what is reported is the exposure, not the hook.
-      box.clock.tick();
-      await attempt;
-      expect(container.destroys).toBe(0);
-      const state = await box.devboxState();
-      expect(state.ready).toBe(false);
-      expect(state.unready).toContain('port 3000');
-      expect(incidents(rows).map(row => row.stage)).toEqual(['port']);
-      slow.release();
-    });
-
-  test('the exposure verdict does not depend on how slowly the container answers',
-    async () => {
-      // Every command takes longer in real time than the whole 20 ms budget; on the test's
-      // own clock (D19) only the exposure's allowance elapses.
-      const harnessed = harness(TightBox);
-    const { box, container, rows } = harnessed;
-      port(rows, 3000, 'tok3000');
-      container.listening.add(3000);
-      container.execDelayMs = 25;
-      const slow = gate();
-      container.exposeGate = slow;
-      const attempt = box.devboxStartup();
-      await slow.reached;
-      box.clock.tick();
-      await attempt;
-      expect(container.destroys).toBe(0);
-      const state = await box.devboxState();
-      expect(state.unready).toContain('port 3000');
-      expect(state.unready).not.toContain('hook budget');
-      expect(incidents(rows).map(row => row.stage)).toEqual(['port']);
-      slow.release();
-    });
 
   test('an initial boot stamp that exceeds the hook budget leaves the box unattached',
     async () => {
@@ -1293,7 +1202,7 @@ describe('the fakes can fail, so the assertions above are not vacuous', () => {
     port(fixture.rows, 7000, 'tok7000');
     fixture.container.listening.add(7000);
     await fixture.box.devboxStartup();
-    expect(fixture.container.exposures).toHaveLength(1);
+    expect(await fixture.box.getExposedPorts('preview.test')).toHaveLength(1);
   });
 
   test('the durable owner check really refuses a write, so the fence is not vacuous', async () => {

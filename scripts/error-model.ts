@@ -22,6 +22,7 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import * as v from 'valibot';
+import { FAILURE_SURFACES, failureSurface } from '../tools/oxlint/anti-slop/rules/effect-run-in-adapter';
 
 import { assertMeasured, finding, refuseLock, shrinkOnly, type LockRefusal, type LockedNumber } from './gate-ratchet';
 import { readSources } from './sources';
@@ -44,10 +45,9 @@ interface Declaration {
 
 /** Files whose mechanisms are the target model's boundary, not a legacy site. */
 export const DECLARED = new Map<string, Declaration>([
-  ['packages/core/src/obs/effect.ts', {
-    mechanisms: MECHANISMS,
-    reason: 'the one runner: `settle` rethrows the typed failure or the defect',
-  }],
+  ...Object.values(FAILURE_SURFACES).map(surface => [surface.adapter, {
+    mechanisms: MECHANISMS, reason: `${surface.type}'s one runner rethrows its typed failure or a defect`,
+  }] as const),
   ['packages/core/src/slates/content.ts', {
     mechanisms: ['throw'],
     reason: 'a vendored `ContentStore`: its failures are the vendored package\'s `AgentCoreError` codes, its contract',
@@ -68,11 +68,15 @@ export const HOST_BOUNDARIES = new Map<string, string>([
   ['packages/core/src/vfs/shell-mounts.ts', 'a mounted plane answers Nimbus\'s own VFS calls, which must fail with Nimbus\'s `VfsError`: a Nimbus-owned call'],
 ]);
 
-const RUNNERS: readonly string[] = ['settle', 'settleSync'];
+const RUNNERS: readonly string[] = ['settle', 'settleSync', 'observe'];
 
-/** A module an `obs` runner is imported from: the adapter itself, its barrel, or the package roots re-exporting it. */
-const isObsModule = (specifier: string): boolean =>
-  /(^|\/)obs(\/(effect|index))?$/.test(specifier) || specifier === '@kinu.run/core' || specifier === '@kinu.run/core/obs';
+/** The selected library's runner, imported through its boundary or public barrel. */
+function isFailureModule(file: string, specifier: string): boolean {
+  const surface = failureSurface(file);
+
+  return surface.modules.some(module => module === specifier)
+    || surface.relativeModules.some(module => specifier === module || specifier.endsWith('/' + module));
+}
 
 /**
  * Bridges: a migrated function run at its own edge so its callers keep their signature, spelled
@@ -93,7 +97,7 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
   const findings: string[] = [];
 
   for (const [file, text] of sources) {
-    if (file === 'packages/core/src/obs/effect.ts' || HOST_BOUNDARIES.has(file)) continue;
+    if (Object.values(FAILURE_SURFACES).some(surface => file === surface.adapter) || HOST_BOUNDARIES.has(file)) continue;
     const parsed = parse(file, text);
     const runners = new Set<string>();
     const syncRunners = new Set<string>();
@@ -101,7 +105,7 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
     walk(parsed.root, (node) => {
       const { raw } = node;
 
-      if (raw.type !== 'ImportDeclaration' || !isObsModule(raw.source.value)) return;
+      if (raw.type !== 'ImportDeclaration' || !isFailureModule(file, raw.source.value)) return;
 
       for (const specifier of raw.specifiers) {
         if (specifier.type === 'ImportSpecifier' && specifier.imported.type === 'Identifier' && RUNNERS.includes(specifier.imported.name)) {
@@ -202,8 +206,8 @@ const arrowBody = (raw: SyntaxNode['raw']): SyntaxNode['raw'] | null =>
 const isPublicMember = (member: { accessibility?: string | null; key: { type: string } }): boolean =>
   member.accessibility !== 'private' && member.accessibility !== 'protected' && member.key.type !== 'PrivateIdentifier';
 
-/** Built-in error constructors a class can extend; `KinuError` extends `Data.TaggedError(...)`. */
-const ERROR_BASES: readonly string[] = ['Error', 'TypeError', 'RangeError', 'SyntaxError', 'AggregateError', 'DOMException', 'KinuError'];
+/** Subclassing either library failure creates a second convention; tagged constructors do not. */
+const ERROR_BASES: readonly string[] = ['Error', 'TypeError', 'RangeError', 'SyntaxError', 'AggregateError', 'DOMException', ...Object.values(FAILURE_SURFACES).map(surface => surface.type)];
 
 const RESULT_KEYS: readonly string[] = ['ok', 'success'];
 
@@ -410,8 +414,8 @@ if (import.meta.main) {
         found: `${String(now)}, ${was === undefined ? 'and the lock holds none for this file' : `locked at ${String(was)}`}`,
         silently: 'a second failure convention grows beside the one being migrated to, and the migration '
           + 'never finishes because each slice lands on a larger tree than it measured',
-        fix: 'fail with `KinuError` in an effect and cross the boundary with `settle` '
-          + '(packages/core/src/obs/effect.ts); `--lock` never raises a number',
+        fix: `fail with ${failureSurface(key).type} in an effect and cross the boundary with settle `
+          + `(${failureSurface(key).adapter}); --lock never raises a number`,
       }));
     }
 

@@ -137,7 +137,6 @@ CC-CORPUS-*.md
 
 # Per-run durability probe config contains a one-run Worker/bucket identity and
 # bearer token. The probe tears it down; this prevents a failed run escaping it.
-/scripts/fixtures/kinu-durability/wrangler.*.jsonc
 
 # The `:memory:` SQLite sentinel, joined onto as if it were a path. A literal
 # `:memory:/branches` directory was created in 16 working trees before

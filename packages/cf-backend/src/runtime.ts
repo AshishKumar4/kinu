@@ -45,9 +45,9 @@ export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { kinuEgressParams } from "./egress/configure";
 import { driveBound, tenantDrive } from "./drive/tenant";
-import { adaptCloudflareSandbox, openSandbox } from "./sandbox-exec-lane";
+import { adaptCloudflareSandbox } from "./sandbox-exec-lane"
 import { previewHostSuffix } from "@kinu.run/core";
-import { SANDBOX_TRANSPORT, sandboxIdForWorkspace } from "@kinu.run/core";
+import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import { MemoryStore } from "@kinu.run/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore } from "@kinu.run/agent-utils/stores";
@@ -397,7 +397,7 @@ export function createCFRuntime(
 
   if (env.Sandbox) {
     try {
-      const sdk = openSandbox(env.Sandbox, sandboxId, { normalizeId: true });
+      const sdk = env.Sandbox.getByName(sandboxId);
 
       // Egress is configured before the container runs anything, not in `onStart` (too late); until then
       // the container has no network, so it fails closed. Only the owning workspace configures.
@@ -417,12 +417,10 @@ export function createCFRuntime(
       () => hooks.liveReadsMoved?.(['getExposedPorts']));
 
       sandboxHandle = handle;
-      // No restore wrapper: KinuSandbox.onStart restores inside blockConcurrencyWhile.
       executionRouter.register(createSandboxExecutor(handle, previewSuffix,
         () => hooks.liveReadsMoved?.(['getExecutors', 'getToolDescriptions', 'getExposedPorts'])));
       diagnostics.event('sandbox.executor_registered', {
         sandboxId,
-        transport: SANDBOX_TRANSPORT,
         previews: previewSuffix ?? '',
       });
     } catch (err) {

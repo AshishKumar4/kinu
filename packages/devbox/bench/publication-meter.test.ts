@@ -90,36 +90,19 @@ test('the R2 transport meter preserves streaming bodies and includes a failed PU
 });
 
 // Deployed 2026-09-13: p20260913101758's 4,198,400-byte single PUT stalled
-// just like multipart. The previous test omitted the SDK's own stream bridge.
-test('the installed SDK R2 proxy publishes single PUTs and multipart with the meter idle or active', async () => {
+// just like multipart. The previous test omitted the R2 bridge's own stream.
+test('the store gateway publishes single PUTs and multipart with the meter idle or active', async () => {
   const root = mkdtempSync(join(tmpdir(), DEVBOX_SCRATCH_PREFIX));
   scratch.push(root);
-  const entry = join(root, 'sdk-worker.ts');
-  const sdk = new URL('../../../node_modules/@cloudflare/sandbox/dist/index.js', import.meta.url).pathname;
+  const entry = join(root, 'gateway-worker.ts');
+  const gateway = new URL('../src/store-gateway.ts', import.meta.url).pathname;
+  const errors = new URL('../src/errors.ts', import.meta.url).pathname;
   const transport = new URL('./publication-transport.ts', import.meta.url).pathname;
   writeFileSync(entry, `
-    import { ContainerProxy } from ${JSON.stringify(sdk)};
+    import { serveStore, storeSource } from ${JSON.stringify(gateway)};
+    import { settle } from ${JSON.stringify(errors)};
     import { meterPublicationBucket, observePublicationRequest } from ${JSON.stringify(transport)};
-    export class MeteredProxy extends ContainerProxy {
-      constructor(ctx, env) {
-        const bucket = meterPublicationBucket(env.BUCKET, {
-          async begin() { return ctx.props.active ? crypto.randomUUID() : null; },
-          async finish(id, result) { await env.BUCKET.put('receipts/' + id, JSON.stringify(result)); }
-        });
-        super(ctx, { ...env, BUCKET: bucket });
-      }
-      async fetch(request) {
-        const headers = new Headers(request.headers);
-        // Miniflare's external dispatcher rewrites the host and strips empty
-        // Content-Length. Reconstruct the s3fs wire envelope at this boundary.
-        const length = headers.get('x-probe-length');
-        if (length !== null) headers.set('content-length', length);
-        const incoming = new Request('http://r2.internal' + new URL(request.url).pathname + new URL(request.url).search,
-          { method: request.method, headers, body: request.body });
-        return await observePublicationRequest(incoming, next => super.fetch(next));
-      }
-    }
-    export default { async fetch(request, env, ctx) {
+    export default { async fetch(request, env) {
       const url = new URL(request.url);
       if (url.pathname === '/inspect') {
         const receipts = await env.BUCKET.list({ prefix: 'receipts/' });
@@ -127,31 +110,46 @@ test('the installed SDK R2 proxy publishes single PUTs and multipart with the me
           multipart: (await env.BUCKET.head('boxes/test/multipart')).size,
           receipts: await Promise.all(receipts.objects.map(async row => await (await env.BUCKET.get(row.key)).json())) });
       }
-      return await new MeteredProxy({ props: {
-        active: url.searchParams.has('active'), enableInternet: false, containerId: 'test', className: 'ContainerProxy',
-        outboundByHostOverrides: { 'r2.internal': { method: 'r2EgressMount', params: {
-          buckets: { BUCKET: { prefix: 'boxes/test', readOnly: false } }
-        } } }
-      } }, env).fetch(request);
+      const active = request.headers.has('x-meter-active');
+      const bucket = meterPublicationBucket(env.BUCKET, {
+        async begin() { return active ? crypto.randomUUID() : null; },
+        async finish(id, result) { await env.BUCKET.put('receipts/' + id, JSON.stringify(result)); }
+      });
+      const headers = new Headers(request.headers);
+      // Miniflare's external dispatcher rewrites the host and strips empty
+      // Content-Length. Reconstruct the container's wire envelope at this boundary.
+      const length = headers.get('x-probe-length');
+      if (length !== null) headers.set('content-length', length);
+      const incoming = new Request('http://s3-devbox-publish.sandbox.internal' + url.pathname + url.search,
+        { method: request.method, headers, body: request.body });
+      const props = { protocolVersion: 1, mode: 'active', routeId: 'devbox-publish', source: storeSource('BUCKET'), keyPrefix: 'boxes/test/', access: 'read-write' };
+      return await observePublicationRequest(incoming, next => settle(serveStore(next, props, name => name === 'BUCKET' ? bucket : undefined)));
     } };
   `);
   const runtime = await meterRuntime(entry);
   const partBytes = 5 * 1024 * 1024;
 
   try {
-    for (const mode of ['', '&active=1']) {
+    for (const active of [false, true]) {
       const send = async (path: string, method: string, bytes?: Uint8Array) => {
-        const response = await runtime.dispatchFetch(`http://r2.internal/BUCKET/${path}${mode}`, {
-          method, body: bytes, headers: bytes === undefined ? {} : { 'content-length': String(bytes.byteLength), 'x-probe-length': String(bytes.byteLength) },
-        });
+        const headers: Record<string, string> = {};
 
-        if (!response.ok) throw new Error(`SDK proxy ${response.status}: ${await response.text()}`);
+        if (active) headers['x-meter-active'] = '1';
+
+        if (bytes !== undefined) {
+          headers['content-length'] = String(bytes.byteLength);
+          headers['x-probe-length'] = String(bytes.byteLength);
+        }
+
+        const response = await runtime.dispatchFetch(`http://s3-devbox-publish.sandbox.internal/BUCKET/boxes/test/${path}`, { method, body: bytes, headers });
+
+        if (!response.ok) throw new Error(`store gateway ${response.status}: ${await response.text()}`);
 
         return response;
       };
 
-      expect((await send('direct?probe=1', 'PUT', new Uint8Array(0))).status).toBe(200);
-      expect((await send('direct?probe=1', 'PUT', new Uint8Array(4 * 1024 * 1024))).status).toBe(200);
+      expect((await send('direct', 'PUT', new Uint8Array(0))).status).toBe(200);
+      expect((await send('direct', 'PUT', new Uint8Array(4 * 1024 * 1024))).status).toBe(200);
       const opened = await send('multipart?uploads', 'POST');
       const uploadId = /<UploadId>([^<]+)<\/UploadId>/.exec(await opened.text())?.[1];
       expect(uploadId).toBeDefined();
@@ -168,7 +166,7 @@ test('the installed SDK R2 proxy publishes single PUTs and multipart with the me
       expect((await send(`multipart?uploadId=${upload}`, 'POST', new TextEncoder().encode(completion))).status).toBe(200);
     }
 
-    const inspection = await (await runtime.dispatchFetch('http://r2.internal/inspect')).json();
+    const inspection = await (await runtime.dispatchFetch('http://s3-devbox-publish.sandbox.internal/inspect')).json();
     expect(inspection).toMatchObject({ direct: 4 * 1024 * 1024, multipart: partBytes + 17 });
     expect(inspection).toHaveProperty('receipts.length', 5);
     expect(inspection).toHaveProperty('receipts', expect.arrayContaining(
@@ -179,13 +177,14 @@ test('the installed SDK R2 proxy publishes single PUTs and multipart with the me
   }
 });
 
-test('the bench proxy flushes an under-threshold operation on success and failure', async () => {
+test('the bench store gateway flushes an under-threshold operation on success and failure', async () => {
   const root = mkdtempSync(join(tmpdir(), DEVBOX_SCRATCH_PREFIX));
   scratch.push(root);
   const entry = join(root, 'counter-worker.ts');
   const bench = new URL('./worker.ts', import.meta.url).pathname;
   writeFileSync(entry, `
-    import { ContainerProxy } from ${JSON.stringify(bench)};
+    import { DevboxStoreGateway } from ${JSON.stringify(bench)};
+    import { storeSource } from ${JSON.stringify(new URL('../src/store-gateway.ts', import.meta.url).pathname)};
     const calls = {};
     const counter = {
       async beginPublicationAttempt() { return null; },
@@ -200,14 +199,11 @@ test('the bench proxy flushes an under-threshold operation on success and failur
         if (url.searchParams.has('fail')) throw new Error('lost acknowledgement');
         return result;
       };
-      const proxy = new ContainerProxy({ props: {
-        enableInternet: false, containerId: 'test', className: 'ContainerProxy',
-        outboundByHostOverrides: { 'r2.internal': { method: 'r2EgressMount', params: {
-          buckets: { BACKUP_BUCKET: { prefix: 'boxes/test', readOnly: false } }
-        } } }
+      const gateway = new DevboxStoreGateway({ props: {
+        protocolVersion: 1, mode: 'active', routeId: 'devbox-publish', source: storeSource('BACKUP_BUCKET'), keyPrefix: 'boxes/test/', access: 'read-write',
       } }, { BACKUP_BUCKET: bucket, BenchOpCounter: { idFromName() { return 'test'; }, get() { return counter; } } });
       try {
-        return await proxy.fetch(new Request('http://r2.internal/BACKUP_BUCKET/data', {
+        return await gateway.fetch(new Request('http://s3-devbox-publish.sandbox.internal/BACKUP_BUCKET/boxes/test/data', {
           method: 'PUT', headers: { 'content-length': '5' }, body: request.body
         }));
       } catch (error) { return new Response(error.message, { status: 502 }); }

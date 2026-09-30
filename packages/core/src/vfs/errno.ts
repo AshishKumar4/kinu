@@ -21,7 +21,7 @@ export const ERRNO = {
   ENOTDIR: -20, EISDIR: -21, ENOTEMPTY: -39, EROFS: -30, ENOTSUP: -95,
 } satisfies Readonly<Record<VfsErrorCode, number>>;
 
-const VfsErrorCodeSchema = v.picklist([
+export const VfsErrorCodeSchema = v.picklist([
   'EPERM', 'ENOENT', 'EIO', 'ENXIO', 'EACCES', 'EEXIST', 'ENOTDIR',
   'EISDIR', 'ENOTEMPTY', 'EROFS', 'ENOTSUP',
 ]);

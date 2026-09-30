@@ -25,7 +25,7 @@ import {
   type DeltaProbeEntry,
 } from '../src/chunked-delta';
 import { deltaCommand, type ShellReply } from './support/delta-shell';
-import { requireSessionShellAccepts } from './support/session-shell';
+import { requireShellAccepts } from './support/container-shell';
 import { readDeltaIndex } from '../src/chunked-delta';
 import { ContainerDisk } from './support/strategy-machine';
 import {
@@ -194,7 +194,7 @@ function realShell(command: string): ShellReply {
 /** Mirrors `runOpsBatched`: operations run under a subshell-scoped `set -e` (D18);
  *  the session-shell model refuses the unscoped form. */
 function batch(ops: readonly string[]): string {
-  requireSessionShellAccepts([ops[0], '(', 'set -e', ...ops.slice(1), ')'].join('\n'));
+  requireShellAccepts([ops[0], '(', 'set -e', ...ops.slice(1), ')'].join('\n'));
 
   return [ops[0], '(', 'set -e', ...ops.slice(1), ')'].join('\n');
 }

@@ -1,6 +1,12 @@
 /** Export a type only when a caller must write its name. */
 
-export { Devbox, devboxSyncHandlers, type UntimedResult } from './devbox';
+export { Devbox, type DevboxState, type UntimedResult } from './devbox';
+
+export { DevboxError, devboxFailure, type DevboxErrorCode } from './errors';
+
+export { DevboxSyncGateway, DevboxOutbound, type OutboundPolicy } from './gateway';
+
+export { DevboxStoreGateway } from './store-gateway';
 
 export type { RestoreClockPhase, RestoreStatus } from './restoration';
 

@@ -1,7 +1,7 @@
 /**
  * The `/sandbox` mount end to end: `file` tool and codemode `sandbox.*` over one container view.
- * The double follows the SDK: misses and empty paths throw typed errors, and relative paths
- * resolve against `/workspace`.
+ * The double follows the native file boundary: a miss carries its errno in `Error.cause`, an empty
+ * path is refused as the SDK's `Files` refuses it, and relative paths resolve against `/workspace`.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -17,17 +17,11 @@ import type { VFS } from '../src/types/primitives';
 import type { JsonValue } from '../src/utils/json';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 
-/** SDK error as carried across the DO hop: own properties only; the `code` getter is lost. */
-function sdkError(name: string, code: string, message: string): Error {
-	const error = new Error(message);
-	error.name = name;
-	Object.defineProperty(error, 'errorResponse', { value: { code }, enumerable: true });
+/** A native file failure as it reaches core: the errno travels in `Error.cause`, which Worker RPC keeps. */
+const nativeFileError = (code: string, path: string): Error =>
+	new Error(`${code}: ${path}`, { cause: { kind: 'devbox.file', code, path, operation: 'readFile' } });
 
-	return error;
-}
-
-const sdkNotFound = (path: string): Error =>
-	sdkError('FileNotFoundError', 'FILE_NOT_FOUND', `File not found: ${path}`);
+const notFound = (path: string): Error => nativeFileError('ENOENT', path);
 
 class ContainerFs {
 	readonly files = new Map<string, Uint8Array>();
@@ -35,10 +29,7 @@ class ContainerFs {
 	readonly calls: string[] = [];
 
 	resolve(path: string): string {
-		if (path === '') {
-			throw sdkError('ValidationFailedError', 'VALIDATION_FAILED',
-				`Invalid path format for '': Path must be a non-empty string`);
-		}
+		if (path === '') throw new TypeError('path must not be empty');
 
 		const absolute = path.startsWith('/') ? path : `${WORKSPACE_BACKUP_DIR}/${path}`;
 		const out: string[] = [];
@@ -64,12 +55,12 @@ function container(fs: ContainerFs): SandboxHandle {
 			const resolved = fs.resolve(path);
 
 			if (fs.dirs.has(resolved)) {
-				throw sdkError('FileSystemError', 'IS_DIRECTORY', `Is a directory: ${resolved}`);
+				throw nativeFileError('EISDIR', resolved);
 			}
 
 			const bytes = fs.files.get(resolved);
 
-			if (bytes === undefined) throw sdkNotFound(resolved);
+			if (bytes === undefined) throw notFound(resolved);
 
 			return { content: Buffer.from(bytes).toString('base64'), encoding: 'base64', exitCode: 0 };
 		},
@@ -77,7 +68,7 @@ function container(fs: ContainerFs): SandboxHandle {
 			const resolved = fs.resolve(path);
 			const parent = resolved.slice(0, resolved.lastIndexOf('/')) || '/';
 
-			if (!fs.dirs.has(parent)) throw sdkNotFound(parent);
+			if (!fs.dirs.has(parent)) throw notFound(parent);
 
 			fs.files.set(resolved, opts?.encoding === 'base64'
 				? new Uint8Array(Buffer.from(content, 'base64'))
@@ -88,10 +79,10 @@ function container(fs: ContainerFs): SandboxHandle {
 			fs.calls.push(`listFiles:${resolved}`);
 
 			if (fs.files.has(resolved)) {
-				throw sdkError('FileSystemError', 'NOT_DIRECTORY', `Not a directory: ${resolved}`);
+				throw nativeFileError('ENOTDIR', resolved);
 			}
 
-			if (!fs.dirs.has(resolved)) throw sdkNotFound(resolved);
+			if (!fs.dirs.has(resolved)) throw notFound(resolved);
 
 			const names = new Set<string>();
 			const prefix = resolved === '/' ? '/' : `${resolved}/`;
@@ -118,7 +109,7 @@ function container(fs: ContainerFs): SandboxHandle {
 		async deleteFile(path) {
 			const resolved = fs.resolve(path);
 
-			if (!fs.files.delete(resolved)) throw sdkNotFound(resolved);
+			if (!fs.files.delete(resolved)) throw notFound(resolved);
 		},
 		async exec(command) {
 			const quoted = [...command.matchAll(/'([^']*)'/g)].map((m) => m[1]);

@@ -1,6 +1,7 @@
 /** Pure decisions: nothing here touches a container, a bucket or a clock. */
 
 import * as v from 'valibot';
+import { devboxFailure, startOverrun } from './errors';
 
 import {
   DEVBOX_WORKDIR, type CheckpointKind, type CheckpointOutcome, type StoredValue,
@@ -51,25 +52,6 @@ export interface LateStartFailure {
   readonly cause: unknown;
 }
 
-/** A distinct type because abandoned `exec` work keeps mounting paths no DO token can reach;
- *  recovery replaces the container identity instead of retrying, and must not parse messages. */
-export class ContainerStartOverrun extends Error {
-  constructor(label: string, budgetMs: number) {
-    super(
-      `${label} exceeded its ${budgetMs}ms budget and was abandoned; the work it left `
-      + 'running inside the container cannot be fenced from here.',
-    );
-    this.name = 'ContainerStartOverrun';
-  }
-}
-
-export class ContainerStartInterrupted extends Error {
-  constructor() {
-    super('the previous restoration was interrupted before settlement; its container work may still be running');
-    this.name = 'ContainerStartInterrupted';
-  }
-}
-
 /** Every post-attach step (restart, listener proof, expose, boot stamp) draws on this one budget;
  *  each allowance is the remainder divided by the steps still declared, nothing reserved. */
 interface StartBudget {
@@ -84,14 +66,13 @@ interface StartBudget {
   nextAllowanceMs(): number;
 }
 
-/** One clock for a start budget and its timers, handed in so tests advance time (D19).
- *  Production uses {@link REAL_START_CLOCK}. */
+/** A start budget takes its clock from the host; the native owner uses a container deadline. */
 export interface StartClock {
   now(): number;
   after(ms: number, fire: () => void): () => void;
 }
 
-export const REAL_START_CLOCK: StartClock = {
+const REAL_START_CLOCK: StartClock = {
   now: () => Date.now(),
   after: (ms, fire) => {
     const timer = setTimeout(fire, ms);
@@ -192,7 +173,7 @@ async function withContainerStartDeadline<T>(
   const budgetMs = budget.remainingMs();
   const raced = await raceAllowance(budgetMs, work, onOverrun, budget.clock);
 
-  if (raced.kind === 'late') throw new ContainerStartOverrun(label, budgetMs);
+  if (raced.kind === 'late') throw startOverrun(label, budgetMs);
 
   // A real failure is rethrown unwrapped so the attach's own error reaches the taxonomy
   // unchanged.
@@ -250,9 +231,19 @@ export type RecoveryClass =
    *  the least destructive outcome that can still make progress. */
   | 'unclassified';
 
-/** Only SDK codes whose class is certain: a wrong `permanent` refuses a fixable box, a wrong
- *  `transient` retries doomed work. Absent codes are `unclassified` (retry once, escalate). */
-const RECOVERY_BY_SDK_CODE: ReadonlyMap<string, RecoveryClass> = new Map([
+/** Only codes whose recovery class is known; an unknown wrapper is transparent. */
+const RECOVERY_BY_CODE: ReadonlyMap<string, RecoveryClass> = new Map([
+  ['mount-marker', 'permanent'],
+  ['configuration', 'permanent'],
+  ['invalid-input', 'permanent'],
+  ['not-ready', 'transient'],
+  ['ENOSPC', 'exhausted'],
+  ['EFBIG', 'exhausted'],
+  ['EMFILE', 'exhausted'],
+  ['ENFILE', 'exhausted'],
+  ['EACCES', 'permanent'],
+  ['EPERM', 'permanent'],
+  ['EROFS', 'permanent'],
   // The container's own disk and descriptor limits. Copying a base into a full
   // filesystem again is exactly the harmful repetition this class exists for.
   ['NO_SPACE', 'exhausted'],
@@ -277,19 +268,20 @@ const RECOVERY_BY_SDK_CODE: ReadonlyMap<string, RecoveryClass> = new Map([
   ['CONTAINER_UNAVAILABLE', 'transient'],
 ]);
 
-/** The SDK's error classes are not exported and `code` is a getter on them, so match the
- *  shape, not the class (same boundary as `ProcessAbsentSchema` in devbox.ts). */
+/** Code getters and JSRPC-crossed error properties share this boundary. */
 const CodedFailureSchema = v.object({ code: v.string() });
 
 /** Walks the whole cause chain: the snapshot chain wraps SDK failures as `cause`.
  *  The outermost classified answer wins; an unclassified wrapper is transparent. */
 export function classifyRecovery(thrown: { readonly cause: unknown }): RecoveryClass {
   for (let value = thrown.cause; ;) {
-    if (value instanceof ContainerStartOverrun || value instanceof ContainerStartInterrupted) return 'abandoned';
+    const code = devboxFailure({ cause: value })?.code;
+
+    if (code === 'start-overrun' || code === 'start-interrupted') return 'abandoned';
     const coded = v.safeParse(CodedFailureSchema, value);
 
     if (coded.success) {
-      const held = RECOVERY_BY_SDK_CODE.get(coded.output.code);
+      const held = RECOVERY_BY_CODE.get(coded.output.code);
 
       if (held !== undefined) return held;
     }
@@ -463,8 +455,8 @@ export function findMount(procMounts: string, dir: string): MountLine | undefine
  *  that ignores SIGTERM unstoppable. Long enough to flush, short enough to stop within ceilings. */
 const HOLDER_TERM_WAIT_MS = 5_000;
 
-/** Frees the work directory for unmount: TERMs then KILLs fd holders; names cwd holders,
- *  pid 1 and this shell's ancestors unsignalled. One line, no `exit`: shares the SDK session. */
+/** After admissions drain, release fd and cwd holders. PID 1 and this command
+ *  ancestor chain are never signalled. */
 export function releaseWorkdirHoldersCommand(workdir: string): string {
   const quoted = `'${workdir.replaceAll("'", `'\\''`)}'`;
   const termWait = String(Math.ceil(HOLDER_TERM_WAIT_MS / 1_000));
@@ -476,8 +468,7 @@ export function releaseWorkdirHoldersCommand(workdir: string): string {
     + `a=$(sed 's/.*) //' /proc/$a/stat 2>/dev/null | cut -d' ' -f2); `
     + 'if [ -n "$a" ]; then mine="$mine$a "; fi; done; ';
 
-  // One scan function, run before signalling and after it; both runs must classify identically.
-  // The odd name keeps it from colliding with anything else in the shared session shell.
+  // Both scans use the same ownership classification.
   const scan = '__devbox_hold() { fdh=""; cwdh=""; kin=""; '
     + `for pid in $(ls /proc | grep -E '^[0-9]+$' | grep -v '^1$'); do `
     + 'h=""; '
@@ -493,11 +484,10 @@ export function releaseWorkdirHoldersCommand(workdir: string): string {
 
   return `${ancestorPids}${scan}__devbox_hold; `
     + 'if [ -n "$kin" ]; then echo "not signalled, this session\'s own:$kin" >&2; fi; '
-    + 'if [ -n "$cwdh" ]; then echo "not signalled, cwd-only holders:$cwdh" >&2; fi; '
-    + 'if [ -n "$fdh" ]; then echo "signalling:$fdh" >&2; '
-    + 'for name in $fdh; do kill -TERM "${name%%:*}" 2>/dev/null || true; done; '
+    + 'holders="$fdh$cwdh"; if [ -n "$holders" ]; then echo "signalling:$holders" >&2; '
+    + 'for name in $holders; do kill -TERM "${name%%:*}" 2>/dev/null || true; done; '
     + `sleep ${termWait}; `
-    + 'for name in $fdh; do p="${name%%:*}"; '
+    + 'for name in $holders; do p="${name%%:*}"; '
     + 'if [ -d "/proc/$p" ]; then kill -KILL "$p" 2>/dev/null || true; fi; done; fi; '
     // The final stdout line comes from a fresh `__devbox_hold` scan after signalling, not from
     // the pre-signal lists; it is the only output a caller acts on.
@@ -622,18 +612,6 @@ export function restartPlan(
   };
 }
 
-/** The SDK deletes a fired row only after its callback returns, so a dispatching callback
- *  counts only future rows; other callers count every row, since re-arming a due one is D14. */
-export function needsArming(
-  rows: readonly { readonly time: number }[],
-  nowSeconds: number,
-  dispatching: boolean,
-): boolean {
-  if (dispatching) return !rows.some(row => row.time > nowSeconds);
-
-  return rows.length === 0;
-}
-
 
 /** `path` leads with its namespace (`file:/workspace/src`, `port:3000`, `proc:sup-1`) so one
  *  lane orders all kinds; `subtree` claims everything beneath, as recursive list/remove need. */
@@ -666,6 +644,7 @@ export function scopesOverlap(
 interface ResourceLane {
   /** A streamed read keeps the lane busy until its body drains or is cancelled. */
   busy(): boolean;
+  drain(): Promise<void>;
   /** Strict FIFO per resource, no shared reads; the whole scope set is claimed in one step,
    *  so a multi-resource operation cannot hold one resource while waiting for another. */
   run<T>(scopes: readonly ResourceScope[], op: () => Promise<T>): Promise<T>;
@@ -701,6 +680,7 @@ export function createResourceLane(): ResourceLane {
 
   return {
     busy: () => inFlight.size !== 0,
+    async drain() { while (inFlight.size !== 0) await Promise.all([...inFlight].map(entry => entry.settled)); },
     hold,
     async run(scopes, op) {
       const release = await hold(scopes);
@@ -799,6 +779,7 @@ export function canonicalPath(path: string): string {
 
 interface CheckpointLane {
   busy(): boolean;
+  drain(): Promise<void>;
   /** Same kind in flight joins it; a different kind queues, so a quiesce never inherits a tick's
    *  `skipped` and stops over just-landed work. */
   run(kind: CheckpointKind, op: () => Promise<CheckpointOutcome>): Promise<CheckpointOutcome>;
@@ -810,6 +791,7 @@ export function createCheckpointLane(): CheckpointLane {
 
   return {
     busy: () => Object.values(inFlight).some(run => run !== undefined),
+    drain: async () => { await tail; },
     run(kind, op) {
       const pending = inFlight[kind];
 

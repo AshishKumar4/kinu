@@ -4,6 +4,7 @@ import { describe, expect, setSystemTime, test, vi } from 'bun:test';
 
 import { DEFAULT_DEVBOX_POLICY, LAST_INTERACTION_KEY, QUIET_SINCE_KEY, type DevboxPolicy } from '../src/lifecycle';
 import { Devbox, harness, wakeWhileArmed } from './support/devbox-harness';
+import { Processes } from "../src/processes";
 
 /** The shipped policy with a test-length probe: nothing here is about budgets. */
 class TestBox extends Devbox<unknown> {
@@ -93,13 +94,6 @@ describe('a throwing host-background check holds the box', () => {
   });
 });
 
-/** Idle host; the container's process list fails every read. */
-class UnreadableProcessesBox extends IdleHostBox {
-  override listProcesses(): Promise<never> {
-    return Promise.reject(new Error('the sandbox /processes endpoint answered 500'));
-  }
-}
-
 /** Busy, and counts how often the beat asks: each ask wakes the owning workspace. */
 class CountingHostBox extends TestBox {
   asks = 0;
@@ -146,10 +140,9 @@ describe('a box rests only once no command it ran is still running', () => {
 
     try {
       await box.devboxStartup();
+      await new Processes(container.handle()).start("npm test", { processId: "cmd-npm-test" });
       rows.set(LAST_INTERACTION_KEY, start - DEFAULT_DEVBOX_POLICY.idleMs - 60_000);
       rows.set(QUIET_SINCE_KEY, start - DEFAULT_DEVBOX_POLICY.quietConfirmMs - 60_000);
-      // A detached `npm test` its caller's evicted activation left running.
-      container.processes.set('cmd-npm-test', { id: 'cmd-npm-test', pid: 4242, status: 'running', command: 'npm test' });
 
       await box.devboxHeartbeat();
 
@@ -169,10 +162,11 @@ describe('a box rests only once no command it ran is still running', () => {
 
   test('a process list that never reads holds for one quiet-confirm window, then lets the box rest', async () => {
     const start = Date.now();
-    const { box, container, rows } = harness(UnreadableProcessesBox);
+    const { box, container, rows } = harness(IdleHostBox);
+    await box.devboxStartup();
+    container.fileFaults.set('/var/tmp/devbox/processes', { errno: 13, message: 'the process directory cannot be read' });
 
     try {
-      await box.devboxStartup();
       rows.set(LAST_INTERACTION_KEY, start - DEFAULT_DEVBOX_POLICY.idleMs - 60_000);
       const beats = [];
 
@@ -183,18 +177,18 @@ describe('a box rests only once no command it ran is still running', () => {
         beats.push(tick?.decision);
 
         if (tick?.decision === 'quiesce') {
-          expect(tick.note).toContain('process list');
+          expect(tick.note).toContain('the process directory cannot be read');
           break;
         }
       }
 
       expect(beats.slice(0, 9).every((decision) => decision === 'hold')).toBe(true);
       expect(beats.at(-1)).toBe('quiesce');
-      // The stop itself reads the list to kill processes; it must not refuse on the same failure.
       expect(container.running.running).toBe(false);
-      // On record, not only on the console: the streak's start, the give-way, and the stop's fallback.
+      // The streak's start, the give-way, and the stop's fallback are durable incidents.
       expect((await box.devboxState()).incidents.total).toBe(3);
     } finally {
+      container.fileFaults.clear();
       setSystemTime();
     }
   });

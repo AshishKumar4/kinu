@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
+import { devboxFailure } from '../src/errors';
 import { Devbox, gate, harness } from './support/devbox-harness';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 
@@ -29,6 +30,8 @@ const localExec: Container['exec'] = async (argv, options) => {
   const exitCode = child.exited;
 
   return {
+    isPty: false,
+    resize: async () => { throw new Error("the local pipe test cannot resize a PTY"); },
     stdin: null,
     stdout: child.stdout,
     stderr: child.stderr,
@@ -102,5 +105,30 @@ describe('an untimed command on the runtime\'s exec', () => {
 
     expect(await killed).toBe(true);
     expect((await ran).exitCode).not.toBe(0);
+  });
+  test('a cancellation during readiness prevents the command from ever starting', async () => {
+    const { box, container } = harness(TestBox, undefined, localExec);
+    const admission = gate();
+    container.containerStartGate = admission;
+    const cwd = mkdtempSync(join(root, 'pre-admission-'));
+    const marker = join(cwd, 'must-not-exist');
+
+    const ran = Promise.allSettled([box.execUntimed(`sleep 10; touch '${marker}'`, { cwd, execId: 'cancel-before-ready' })]);
+
+    try {
+      await admission.reached;
+      const cancelled = await box.killUntimed('cancel-before-ready');
+      admission.release();
+      const [outcome] = await ran;
+      const kind = outcome.status === 'rejected' ? devboxFailure({ cause: outcome.reason })?.code : 'completed';
+
+      expect({ cancelled, outcome: kind, wrote: existsSync(marker) })
+        .toEqual({ cancelled: true, outcome: 'cancelled', wrote: false });
+      expect(await box.killUntimed('cancel-before-ready')).toBe(false);
+    } finally {
+      admission.release();
+      await ran;
+      await box.destroy();
+    }
   });
 });

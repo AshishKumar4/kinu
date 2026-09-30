@@ -4,64 +4,47 @@
  * and an abort kills the process, not just the wait. See `SandboxHandle.exec`.
  */
 
-import { getSandbox, type SandboxOptions } from "@cloudflare/sandbox";
-import { decodeJsonValue, SANDBOX_TRANSPORT, SandboxPending, WORKSPACE_BACKUP_DIR, type SandboxHandle } from "@kinu.run/core";
-import { diagnostics, toKinuError } from "@kinu.run/core/obs";
+import { decodeJsonValue, SandboxPending, WORKSPACE_BACKUP_DIR, type SandboxHandle } from '@kinu.run/core';
+import { classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
+import { devboxFailure, type DevboxErrorCode } from '@kinu.run/devbox';
+import { Effect } from 'effect';
 import type { KinuSandbox } from "./kinu-sandbox";
 import { sandboxPreviewLabelOf } from "@kinu.run/core";
 import type { SandboxPreviewExposures } from "@kinu.run/core";
 
-/**
- * The one way product code reaches a sandbox. The SDK persists the transport a sandbox was first reached over
- * and drops the in-flight requests of a client that names another, so the transport is fixed here and never
- * a caller's to choose. The route-based clients cannot restore a large workspace (`sandbox.route_client.restore_bytes`).
- */
-export function openSandbox(
-  namespace: DurableObjectNamespace<KinuSandbox>,
-  id: string,
-  options: Omit<SandboxOptions, 'transport'>,
-): KinuSandbox {
-  return getSandbox(namespace, id, { ...options, transport: SANDBOX_TRANSPORT });
-}
+type ContainerOperations = Pick<KinuSandbox,
+  "execUntimed" | "killUntimed" | "resolveReadiness" | "readFile" | "writeFile" | "listFiles"
+  | "deleteFile" | "exposePort" | "getExposedPorts" | "unexposePort" | "startSupervised"
+  | "stopSupervised" | "listSupervised" | "portToken" | "notePortRemoved">;
 
 /** Without AUTH_KV the edge cannot verify a preview hostname, so a minted URL would be dead. */
 const PREVIEWS_UNPUBLISHABLE =
   'Port exposure is unavailable: this deployment has no AUTH_KV binding, so a '
   + 'preview URL could not be published for the edge to verify.';
 
-/**
- * capnweb re-materializes unknown error names as plain `Error`, leaving the SDK kind only as the
- * message's leading token; restore `name` and `errorResponse.code` from it, file errors only.
- */
-const RPC_SDK_FILE_CODE = new Map<string, string>([
-  ["FileNotFoundError", "FILE_NOT_FOUND"],
-  ["FileExistsError", "FILE_EXISTS"],
-  ["FileTooLargeError", "FILE_TOO_LARGE"],
-  ["PermissionDeniedError", "PERMISSION_DENIED"],
-  ["FileSystemError", "FILESYSTEM_ERROR"],
-  ["ValidationFailedError", "VALIDATION_FAILED"],
-]);
+const DEVBOX_FAILURE_CODES: Readonly<Record<DevboxErrorCode, ErrorCode>> = {
+  io: 'io', configuration: 'unavailable', 'invalid-input': 'bad_input', 'not-ready': 'unavailable',
+  cancelled: 'cancelled', missing: 'missing', file: 'io', process: 'io',
+  'start-overrun': 'timeout', 'start-interrupted': 'unavailable', 'container-changed': 'unavailable',
+  'layer-unreadable': 'io', 'chain-advanced': 'io', 'delta-namespace': 'io', 'mount-marker': 'unsupported',
+};
 
-function restoreSandboxFileError(cause: Error, path: string): Error {
-  if (cause.name !== "Error") return cause;
+/** The one conversion from the standalone library's failures to the application's channel. An
+ *  unclassified failure, a transport one included, is `io`: `unavailable` is a verdict
+ *  `withSandboxRetry` never re-enters, and the text keeps its transient marker. */
+function fromDevbox(thrown: { readonly cause: unknown }): KinuError {
+  const { cause } = thrown;
 
-  const sdkName = /^([A-Za-z_$][\w$]*Error): /.exec(cause.message)?.[1];
+  if (cause instanceof KinuError) return cause;
+  const failure = devboxFailure(thrown);
 
-  if (sdkName === undefined) return cause;
+  return failure === undefined
+    ? new KinuError(classifyErrorCode(thrown) ?? 'io', renderThrownChain(thrown), { cause })
+    : new KinuError(DEVBOX_FAILURE_CODES[failure.code], failure.message, { cause });
+}
 
-  const code = RPC_SDK_FILE_CODE.get(sdkName);
-
-  if (code === undefined) return cause;
-
-  const restored = new Error(cause.message);
-  restored.name = sdkName;
-  restored.cause = cause;
-  Object.defineProperty(restored, "errorResponse", {
-    value: { code, context: { path } },
-    enumerable: true,
-  });
-
-  return restored;
+function callDevbox<A>(run: () => PromiseLike<A>): Effect.Effect<A, KinuError> {
+  return Effect.tryPromise({ try: run, catch: (cause) => fromDevbox({ cause }) });
 }
 
 async function jsonResultOrVoid<Result>(result: Promise<Result>) {
@@ -76,7 +59,7 @@ async function jsonResultOrVoid<Result>(result: Promise<Result>) {
  * since the process is still running, and a command that finished first is returned as finished.
  */
 async function execWithoutDeadline(
-  handle: KinuSandbox,
+  handle: Pick<KinuSandbox, "execUntimed" | "killUntimed">,
   command: string,
   cwd?: string,
   signal?: AbortSignal,
@@ -116,7 +99,7 @@ async function execWithoutDeadline(
  * that the overlay hides). Methods writing only this DO's rows skip it.
  */
 export function adaptCloudflareSandbox(
-  handle: KinuSandbox,
+  handle: ContainerOperations,
   configureEgress: () => Promise<void>,
   previews: SandboxPreviewExposures | null,
   portsMoved?: () => void,
@@ -137,74 +120,65 @@ export function adaptCloudflareSandbox(
     }
   };
 
-  const onContainer = async <T>(run: () => Promise<T>): Promise<T> => {
-    await configured();
-    // Readiness arrives as data: a thrown refusal's class does not survive the DO RPC.
-    const readiness = await handle.resolveReadiness();
+  const onContainer = <T>(run: () => Promise<T>): Effect.Effect<T, KinuError> => Effect.tryPromise({
+    try: async () => {
+      await configured();
+      const readiness = await handle.resolveReadiness();
 
-    if (readiness.kind === 'pending') throw new SandboxPending(readiness.reason);
+      if (readiness.kind === 'pending') throw new SandboxPending(readiness.reason);
 
-    return await run();
-  };
+      return await run();
+    },
+    catch: (cause) => fromDevbox({ cause }),
+  });
 
-  const onFile = async <T>(path: string, run: () => Promise<T>): Promise<T> =>
-    onContainer(async () => {
-      try {
-        return await run();
-      } catch (cause) {
-        if (!(cause instanceof Error)) throw cause;
-
-        throw restoreSandboxFileError(cause, path);
-      }
-    });
 
   return {
-    ensureReady: () => onContainer(() => Promise.resolve()),
-    // Absent timeout: the runtime's exec, the only lane an abort can kill.
-    exec: (command, opts) => onContainer(() => (opts?.timeout === undefined
-      ? execWithoutDeadline(handle, command, opts?.cwd, opts?.signal)
-      : handle.exec(command, opts))),
-    readFile: (path, opts) => onFile(path, () => handle.readFile(path, opts)),
+    ensureReady: () => settle(onContainer(() => Promise.resolve())),
+    exec: (command, opts) => settle(onContainer(() => {
+      const signals = [opts?.signal, opts?.timeout === undefined ? undefined : AbortSignal.timeout(opts.timeout)].filter((held) => held !== undefined);
+      const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+
+      return execWithoutDeadline(handle, command, opts?.cwd, signal);
+    })),
+    readFile: (path, opts) => settle(onContainer(() => handle.readFile(path, opts))),
     writeFile: (path, content, opts) =>
-      onFile(path, () => jsonResultOrVoid(handle.writeFile(path, content, opts))),
-    listFiles: (path, opts) => onFile(path, () => handle.listFiles(path, opts)),
-    deleteFile: (path) => onFile(path, () => jsonResultOrVoid(handle.deleteFile(path))),
+      settle(onContainer(() => jsonResultOrVoid(handle.writeFile(path, content, opts)))),
+    listFiles: (path, opts) => settle(onContainer(() => handle.listFiles(path, opts))),
+    deleteFile: (path) => settle(onContainer(() => jsonResultOrVoid(handle.deleteFile(path)))),
     // Published first: the edge verifies preview hostnames against the record (`preview-proxy.ts`).
     // Then `servePreviewRequest`'s gates run here, without forwarding.
-    exposePort: async (port, opts) => {
-      if (previews === null) throw new Error(PREVIEWS_UNPUBLISHABLE);
-      const exposed = await onContainer(() => handle.exposePort(port, opts));
-      const label = sandboxPreviewLabelOf(new URL(exposed.url), { PREVIEW_HOST_SUFFIX: opts.hostname });
+    exposePort: (port, opts) => settle(Effect.gen(function* () {
+      if (previews === null) return yield* Effect.fail(new KinuError('unavailable', PREVIEWS_UNPUBLISHABLE));
+      const exposed = yield* onContainer(() => handle.exposePort(port, opts));
+      const label = yield* Effect.try({ try: () => sandboxPreviewLabelOf(new URL(exposed.url), { PREVIEW_HOST_SUFFIX: opts.hostname }), catch: (cause) => fromDevbox({ cause }) });
 
-      if (label === null || label.port !== port) {
-        throw new Error(`the SDK minted a preview URL this deployment cannot publish: ${exposed.url}`);
-      }
-
-      await previews.publish(port, label.token);
+      if (label === null || label.port !== port) return yield* Effect.fail(new KinuError('io', `the container minted a preview URL this deployment cannot publish: ${exposed.url}`));
+      yield* callDevbox(() => previews.publish(port, label.token));
       portsMoved?.();
 
-      if (!await previews.exposed(port, label.token)) {
-        return { ...exposed, route: { reached: false, gate: 'published', detail: 'the edge holds no published record for this URL' } };
+      if (!(yield* callDevbox(() => previews.exposed(port, label.token)))) {
+        return { ...exposed, route: { reached: false, gate: 'published' as const, detail: 'the edge holds no published record for this URL' } };
       }
 
-      const live = await onContainer(() => handle.getExposedPorts(opts.hostname));
+      const live = yield* onContainer(() => handle.getExposedPorts(opts.hostname));
 
-      return live.some((row) => row.port === port && row.url === exposed.url)
+      return live.some(row => row.port === port && row.url === exposed.url)
         ? { ...exposed, route: { reached: true } }
-        : { ...exposed, route: { reached: false, gate: 'exposed', detail: `the container holds no live exposure of port ${port} for this URL` } };
-    },
-    // Withdrawn first: a live unreachable port is safe; a revoked port the edge still admits is not.
-    unexposePort: async (port) => {
-      await previews?.withdraw(port);
-      const removed = await onContainer(() => jsonResultOrVoid(handle.unexposePort(port)));
+        : { ...exposed, route: { reached: false, gate: 'exposed' as const, detail: `the container holds no live exposure of port ${port} for this URL` } };
+    })),
+    // Withdraw first: a revoked port the edge still admits is unsafe.
+    unexposePort: (port) => settle(Effect.gen(function* () {
+      if (previews !== null) yield* callDevbox(() => previews.withdraw(port));
+      const removed = yield* onContainer(() => jsonResultOrVoid(handle.unexposePort(port)));
       portsMoved?.();
 
       return removed;
-    },
+    })),
     // Re-publishing keeps long-lived previews from ageing out. A failed refresh is reported and the
     // listing stands: the record is already correct, unlike an unpublished URL in `exposePort`.
     // Not `onContainer`: a read never starts a container.
-    getExposedPorts: async (hostname) => {
+    getExposedPorts: (hostname) => settle(callDevbox(async () => {
       const rows = await handle.getExposedPorts(hostname);
 
       if (previews !== null) {
@@ -227,20 +201,20 @@ export function adaptCloudflareSandbox(
       }
 
       return rows;
-    },
+    })),
     startSupervisedProcess: (command, opts) =>
-      onContainer(() => handle.startSupervised(command, opts?.cwd)),
-    stopSupervisedProcess: (processId) => onContainer(() => handle.stopSupervised(processId)),
-    listSupervisedProcesses: () => onContainer(async () =>
+      settle(onContainer(() => handle.startSupervised(command, opts?.cwd))),
+    stopSupervisedProcess: (processId) => settle(onContainer(() => handle.stopSupervised(processId))),
+    listSupervisedProcesses: () => settle(onContainer(async () =>
       (await handle.listSupervised()).map(row => ({
         processId: row.processId, pid: row.pid, status: row.status,
         command: row.command, restartable: row.restartable,
-      }))),
+      })))),
     // DO rows only: no egress, no attach wait, since the token must be mintable before its exposure.
-    portToken: (port, name) => handle.portToken(port, name),
-    notePortRemoved: async (port) => {
+    portToken: (port, name) => settle(callDevbox(() => handle.portToken(port, name))),
+    notePortRemoved: (port) => settle(callDevbox(async () => {
       await previews?.withdraw(port);
       await handle.notePortRemoved(port);
-    },
+    })),
   };
 }

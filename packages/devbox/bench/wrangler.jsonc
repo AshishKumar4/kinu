@@ -17,12 +17,7 @@
   "account_id": "f44999d1ddda7012e9a87729eba250f1",
   "main": "worker.ts",
 
-  // ≥ 2025-12-01 is REQUIRED, not preferred: `ctx.exports` — which is how the
-  // Sandbox object reaches `ContainerProxy` to build its interception fetchers —
-  // does not exist before it. Without interception there is no credential-less
-  // R2 binding mount, so the strategy loses its production path: the chain
-  // cannot mount a layer at all.
-  "compatibility_date": "2025-12-01",
+  "compatibility_date": "2026-09-28",
   // `nodejs_compat` for the same reason the product sets it. A different runtime
   // is a different measurement.
   "compatibility_flags": ["nodejs_compat"],
@@ -44,18 +39,8 @@
       // a box's storage layout cannot change once it holds bytes, so the class
       // is what the migration and the container binding name.
       { "class_name": "SnapshotChainBox", "name": "SnapshotChainBox" },
-      // Accumulates R2 operation counts flushed from the ContainerProxy. A
-      // Durable Object rather than module state because the proxy and the fetch
-      // handler are separate entrypoints with no guarantee of sharing an
-      // isolate, so module state reads short from the other side.
+      // The S3 gateway and this Worker need not share an isolate.
       { "class_name": "BenchOpCounter", "name": "BenchOpCounter" }
-      //
-      // ContainerProxy is EXPORTED by worker.ts and deliberately NOT bound here.
-      // It is a WorkerEntrypoint, not a Durable Object: the Sandbox object
-      // builds its interception fetchers from `ctx.exports.ContainerProxy`, so
-      // the export is what matters, and declaring a durable-object binding for
-      // it is refused outright — "Cannot create binding for class
-      // 'ContainerProxy' that is not exported by the script" [code 10061].
     ]
   },
 
@@ -66,33 +51,14 @@
     }
   ],
 
-  // Image tag, vCPU, memory and disk all equal to the product's own container
-  // block. The image tag MUST equal the @cloudflare/sandbox version in
-  // package.json: the SDK asks the container for its own SANDBOX_VERSION on
-  // every start and logs a mismatch.
-  //
-  // `max_instances` is 1 because a run drives one box at a time; a second
-  // would compete for account capacity while a measurement is running.
   "containers": [
     {
       "class_name": "SnapshotChainBox",
-      "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-block-layer@sha256:43bb41963d6539b33388d9cc5559d2392dd0bef06bfeaf033ab1fbae12518eb7",
+      "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:3378de60488908c6ed763aa799ae568000f78aa714a4b0058c2c2092bb098c87",
       "max_instances": 1,
       "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
     }
   ],
-
-  // REQUIRED, and pinned to the product's own value. The snapshot chain streams
-  // a staged archive out of the container with `readFile(…, { encoding: 'none' })`
-  // to avoid base64 framing, and the SDK refuses that on every transport but
-  // `rpc`: "readFile with encoding: 'none' requires the rpc transport". Measured
-  // here — without this var the very first checkpoint fails with exactly that
-  // text. The route-based transports are deprecated upstream and are dropped in
-  // the next major, so `rpc` is both the only working and the only surviving
-  // path.
-  "vars": {
-    "SANDBOX_TRANSPORT": "rpc"
-  },
 
   // The driver creates this bucket before a run and deletes it after, and
   // refuses to run against a non-empty pre-existing one. Bound as

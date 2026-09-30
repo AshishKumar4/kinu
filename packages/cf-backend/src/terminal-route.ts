@@ -1,13 +1,12 @@
 /**
  * Interactive terminal transport: one WebSocket per attached terminal carrying raw PTY bytes,
  * off the JSON-only chat rail, behind the same auth/ownership/CSRF gates as `/api/workspaces/:agentName/`.
- * The container PTY is the sandbox SDK's (`/ws/pty`); the workspace shell is the runtime's (workspace-terminal.ts).
+ * Container sessions use native exec PTYs; workspace sessions use workspace-terminal.ts.
  */
 
 import { Hono, type Context } from "hono";
-import type { PtyOptions } from "@cloudflare/sandbox";
 import { getAgentByName } from "agents";
-import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
+import { diagnostics, renderThrownChain, toKinuError, type KinuError } from "@kinu.run/core/obs";
 import type { OrchestratorAgent } from "./orchestrator";
 
 import { err, json } from "@kinu.run/core";
@@ -17,15 +16,9 @@ import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { WORKSPACE_TERMINAL_PATH } from "@kinu.run/core";
 import type { FamilyEnv } from "./api/context";
 import { LITERAL_WORKSPACE, type WorkspaceVariables } from "./api/workspace";
-import { openSandbox } from "./sandbox-exec-lane";
 
-/**
- * Optional: `getSession` is added by `getSandbox`'s Proxy, not declared on the class. A property,
- * not a method, since the proxy's entries are closures over the stub. The session sets cwd and env.
- */
-type SandboxPty = {
-  getSession?: (sessionId: string) => Promise<{ terminal: (request: Request, options?: PtyOptions) => Promise<Response> }>;
-};
+
+type PtyOptions = { cols: number; rows: number };
 
 const DEVICE_EXECUTOR = "device";
 
@@ -40,15 +33,12 @@ interface DeviceHolderNamespace {
 
 export type TerminalWorkspace = Pick<OrchestratorAgent, 'prepareTerminal' | 'openDeviceTerminal' | 'fetch'>;
 
-/**
- * `noteTerminalActivity` and `deleteSession` reach the stub through the proxy's fall-through.
- */
-export interface TerminalSandbox extends SandboxPty {
+export interface TerminalSandbox {
+  fetch(request: Request): Promise<Response>;
   noteTerminalActivity(): Promise<void>;
-  deleteSession(sessionId: string): Promise<{ success: boolean }>;
+  resetShell(): Promise<void>;
 }
 
-/** Seams, not bindings: `getAgentByName` waits on startup and retries, and `getSandbox` returns the PTY proxy. */
 export interface TerminalRouteDeps {
   resolveWorkspace(name: string): Promise<TerminalWorkspace>;
   /** Called on the container lane only, so device and workspace terminals mint no container stub. */
@@ -61,7 +51,7 @@ export function terminalRouteDeps(env: Env): TerminalRouteDeps {
     resolveWorkspace: (name) => getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name),
     resolveSandbox: (name) => env.Sandbox === undefined
       ? null
-      : openSandbox(env.Sandbox, sandboxIdForWorkspace(name), { normalizeId: true }),
+      : env.Sandbox.getByName(sandboxIdForWorkspace(name)),
     UserDO: env.UserDO,
   };
 }
@@ -77,11 +67,6 @@ function paneWindow(url: URL) {
   return { cols: axis("cols"), rows: axis("rows") };
 }
 
-/**
- * One stable session per workspace, so a reload reattaches; separate from the agent's exec session,
- * which holds one PTY and foreground process and would feed keystrokes into the agent's command.
- */
-const TERMINAL_SESSION = "kinu-terminal";
 
 /**
  * Allowlist: the SDK forwards every header to the container, which runs agent code, so the session
@@ -251,67 +236,30 @@ async function workspaceTerminal(call: TerminalCall): Promise<Response> {
   }
 }
 
-/**
- * Proxied frames renew the SDK's activity clock but not the durable lease `Devbox` reads before
- * quiescing; without this beat a container can stop under a typing user.
- */
-async function sandboxKeepalive(sandbox: TerminalSandbox, call: TerminalCall): Promise<Response> {
+/** One sandbox call behind a POST. A failure keeps its whole chain (AGENTS.md § Errors): it is
+ *  never broken at a display boundary. */
+async function sandboxCommand(
+  call: TerminalCall,
+  run: () => Promise<void>,
+  failed: { readonly doing: string; readonly report: (error: KinuError) => void },
+): Promise<Response> {
   if (call.request.method !== "POST") return err(405, "use POST");
 
   try {
-    await sandbox.noteTerminalActivity();
+    await run();
 
     return json({ body: { ok: true } });
   } catch (cause) {
-    // The whole chain (AGENTS.md § Errors): it is never broken at a display boundary.
-    const error = toKinuError({
-      doing: "renewing the container's lease for an attached terminal",
-      cause,
-      otherwise: "unavailable",
-    });
+    const error = toKinuError({ doing: failed.doing, cause, otherwise: "unavailable" });
 
-    diagnostics.failure("terminal.lease_renewal_failed", error, call.scope);
+    failed.report(error);
 
     return err(503, renderThrownChain({ cause: error }));
   }
 }
 
-/**
- * The container reuses a session's cached PTY even after its shell exits; deleting the session
- * destroys it so the next attach opens a fresh shell without recycling the container.
- */
-async function sandboxReset(sandbox: TerminalSandbox, call: TerminalCall): Promise<Response> {
-  if (call.request.method !== "POST") return err(405, "use POST");
-
-  try {
-    // A missing session is reported, not thrown, and already satisfies a reset.
-    const deleted = await sandbox.deleteSession(TERMINAL_SESSION);
-
-    return json({ body: { ok: true, existed: deleted.success } });
-  } catch (cause) {
-    const error = toKinuError({
-      doing: "restarting the terminal's shell",
-      cause,
-      otherwise: "unavailable",
-    });
-
-    diagnostics.failure("terminal.reset_failed", error, call.scope);
-
-    return err(503, renderThrownChain({ cause: error }));
-  }
-}
-
-/** Bounded: these reach `Bun.Terminal` directly. */
 function ptySize(url: URL): PtyOptions {
-  const size: PtyOptions = {};
-
-  for (const axis of ["cols", "rows"] as const) {
-    const value = Number(url.searchParams.get(axis));
-
-    if (Number.isInteger(value) && value > 0 && value <= DEVICE_PTY_MAX_AXIS) size[axis] = value;
-  }
-
-  return size;
+  return paneWindow(url);
 }
 
 /**
@@ -358,17 +306,14 @@ async function sandboxAttach(sandbox: TerminalSandbox, call: TerminalCall, ctx: 
 
   if (request.signal.aborted) return abandonedAttach();
 
-  const openSession = sandbox.getSession;
-
-  if (openSession === undefined) {
-    return err(503, "the installed Sandbox SDK adds no PTY session surface to the container stub");
-  }
-
   try {
-    // `shell` is unnamed: `PtyOptions.shell` is spawned as one argv token, so `bash -l` would ENOENT.
     await sandbox.noteTerminalActivity();
-    const session = await openSession(TERMINAL_SESSION);
-    const upgrade = session.terminal(ptyUpgradeRequest(request), ptySize(call.url));
+    const url = new URL(request.url);
+    url.pathname = "/_devbox/terminal";
+    const size = ptySize(call.url);
+    url.searchParams.set("cols", String(size.cols));
+    url.searchParams.set("rows", String(size.rows));
+    const upgrade = sandbox.fetch(new Request(url.toString(), ptyUpgradeRequest(request)));
     const settled = await Promise.race([upgrade, clientGone(request.signal)]);
 
     if (settled === CLIENT_GONE) {
@@ -410,9 +355,22 @@ async function sandboxTerminal(call: TerminalCall, ctx: Pick<ExecutionContext, '
 
   if (sandbox === null) return err(503, "no Sandbox binding is configured on this deployment");
 
-  if (call.verb === "keepalive") return sandboxKeepalive(sandbox, call);
+  // Proxied frames renew the platform's activity clock but not the durable lease `Devbox` reads
+  // before quiescing; without this beat a container can stop under a typing user.
+  if (call.verb === "keepalive") {
+    return sandboxCommand(call, () => sandbox.noteTerminalActivity(), {
+      doing: "renewing the container's lease for an attached terminal",
+      report: (error) => diagnostics.failure("terminal.lease_renewal_failed", error, call.scope),
+    });
+  }
 
-  if (call.verb === "reset") return sandboxReset(sandbox, call);
+  // The persistent tmux session goes; the next native PTY attach creates its shell.
+  if (call.verb === "reset") {
+    return sandboxCommand(call, () => sandbox.resetShell(), {
+      doing: "restarting the terminal's shell",
+      report: (error) => diagnostics.failure("terminal.reset_failed", error, call.scope),
+    });
+  }
 
   const refused = notAnUpgrade(call.request) ?? await sandboxPreflight(call);
 

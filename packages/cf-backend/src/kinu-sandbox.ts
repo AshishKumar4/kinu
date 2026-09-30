@@ -4,23 +4,33 @@
   */
 
 import {
-  Devbox, devboxSyncHandlers,
-  type DevboxIncident, type DevboxStore,
+  Devbox, type DevboxState,
+  type DevboxIncident, type DevboxStore, type OutboundPolicy,
   type IncidentDisposition, type RestoreClockPhase,
 } from "@kinu.run/devbox";
 import { getAgentByName } from "agents";
 import { diagnostics, toKinuError } from "@kinu.run/core/obs";
+import { sandboxIdForWorkspace } from '@kinu.run/core';
 import type { OrchestratorAgent } from "./orchestrator";
 import { restoreNotices, SANDBOX_LIFECYCLE_ENVELOPE_VERSION } from "./sandbox-lifecycle";
 import type { SandboxLifecycleFailure } from "./sandbox-lifecycle";
 import {
-  CONTAINER_EVENT_HOST, EGRESS_HANDLER, EVENT_HANDLER,
-  containerEventResolver, handleContainerEgress, handleContainerEvent, parseEgressParams,
+  CONTAINER_EVENT_HOST,
   type KinuEgressParams,
 } from "./egress/outbound";
+import type { KinuEgress, KinuEvents } from './server';
 
 /** Owning workspace; without it no root agent can answer Devbox's two questions. */
 const WORKSPACE_NAME_KEY = "kinu:workspace-name";
+
+const EGRESS_CONFIG_KEY = 'kinu:egress-config';
+
+interface KinuState extends DevboxState {
+  readonly exports: DevboxState['exports'] & {
+    readonly KinuEgress: (options: { readonly props: KinuEgressParams }) => Pick<Service<KinuEgress>, keyof Fetcher>;
+    readonly KinuEvents: (options: { readonly props: KinuEgressParams }) => Pick<Service<KinuEvents>, keyof Fetcher>;
+  };
+}
 
 /** Type-only, so nothing here reaches orchestrator code at runtime. */
 type SandboxRootClient = Pick<
@@ -29,23 +39,30 @@ type SandboxRootClient = Pick<
 >;
 
 export class KinuSandbox extends Devbox<Env> {
+  readonly #nativeExports: KinuState['exports'];
+  constructor(ctx: KinuState, env: Env) {
+    super(ctx, env);
+    this.#nativeExports = ctx.exports;
+  }
   /**
    * No raw sockets: the platform never routes ports other than 80/443 through an outbound handler,
    * so this is what makes interception cover all egress (git-over-SSH, raw DB sockets refused).
    */
   enableInternet = false;
 
-  /**
-   * Measured: the SDK inherits `interceptHttps = false` despite its docs, so HTTPS bypasses the vault.
-   * A field, not a start hook: the base refreshes interception before `container.start()`.
-   */
-  interceptHttps = true;
 
-  /** The NAME is what the credential-less mount resolves; the binding is what the chain PUTs/HEADs. */
   protected override get store(): DevboxStore | undefined {
     const bucket = this.env.BACKUP_BUCKET;
 
-    return bucket === undefined ? undefined : { binding: "BACKUP_BUCKET", bucket };
+    return bucket === undefined ? undefined : { binding: 'BACKUP_BUCKET', bucket };
+  }
+
+  protected override get namespaceBinding(): string { return 'Sandbox'; }
+
+  protected override get previewName(): string {
+    const workspaceName = this.ctx.storage.kv.get<string>(WORKSPACE_NAME_KEY);
+
+    return sandboxIdForWorkspace(workspaceName ?? this.ctx.id.toString());
   }
 
   /** Absent turns port publishing off; exec and files keep working. */
@@ -70,8 +87,8 @@ export class KinuSandbox extends Devbox<Env> {
     this.#restoreNotice(phase);
   }
 
-  override async onStop(params?: Parameters<Devbox<Env>["onStop"]>[0]): Promise<void> {
-    await super.onStop(params);
+  override async onStop(): Promise<void> {
+    await super.onStop();
 
     try {
       await (await this.#rootAgent())?.sandboxStopped();
@@ -108,15 +125,21 @@ export class KinuSandbox extends Devbox<Env> {
     return result.status;
   }
 
-  /**
-   * Called by the workspace DO before first use and on grant/vault change; a start hook is too late
-   * to install interception. Pins the owning workspace so incidents reach it from a cold object.
-   */
   async configureEgress(params: KinuEgressParams): Promise<void> {
-    await this.ctx.storage.put(WORKSPACE_NAME_KEY, params.workspaceName);
-    // Per-host before catch-all, else a container event could take the egress path in between.
-    await this.setOutboundByHost(CONTAINER_EVENT_HOST, EVENT_HANDLER, params);
-    await this.setOutboundHandler(EGRESS_HANDLER, params);
+    await this.ctx.storage.put({ [WORKSPACE_NAME_KEY]: params.workspaceName, [EGRESS_CONFIG_KEY]: params });
+
+    if (this.ctx.container?.running) await this.configureContainer();
+  }
+
+  protected override async outboundPolicy(): Promise<OutboundPolicy> {
+    const params = await this.ctx.storage.get<KinuEgressParams>(EGRESS_CONFIG_KEY);
+
+    if (params === undefined) return { routes: {} };
+
+    return {
+      routes: { [CONTAINER_EVENT_HOST]: this.#nativeExports.KinuEvents({ props: params }) },
+      fallback: this.#nativeExports.KinuEgress({ props: params }),
+    };
   }
 
   async #rootAgent(): Promise<SandboxRootClient | null> {
@@ -130,14 +153,3 @@ export class KinuSandbox extends Devbox<Env> {
   }
 }
 
-KinuSandbox.outboundHandlers = {
-  ...devboxSyncHandlers((env: Env) => env.Sandbox),
-  // `ctx.params` is parsed, and undefined refuses: an unconfigured container cannot egress.
-  // patches/@cloudflare%2Fsandbox@0.12.9.patch makes bucket mounts merge handler maps, not replace them.
-  [EGRESS_HANDLER]: (request, env: Env, ctx) => handleContainerEgress(
-    request, env, parseEgressParams(ctx),
-  ),
-  [EVENT_HANDLER]: (request, env: Env, ctx) => handleContainerEvent(
-    request, containerEventResolver(env), parseEgressParams(ctx),
-  ),
-};
