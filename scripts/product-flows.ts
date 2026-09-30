@@ -220,8 +220,10 @@ const liveLedgers = new Set<() => string>();
 
 let dropWaitsHold: (() => void) | null = null;
 
-/** `wait`, logged by what it waits for when it opens and when it is reached, and named while it is open. */
-async function named<Value>(what: string, wait: () => Promise<Value>): Promise<Value> {
+/** `wait`, logged by what it waits for when it opens and when it is reached, and named while it is open. A step
+ *  that is not a wait on a page (a create through the API, a navigation) is named through it too, so a slow run's
+ *  log accounts for every second, not only the page waits. */
+export async function named<Value>(what: string, wait: () => Promise<Value>): Promise<Value> {
   const open = { what };
   const started = performance.now();
 
