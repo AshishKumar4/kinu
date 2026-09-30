@@ -31,12 +31,29 @@ describe('the models section keeps every control reachable by name', () => {
       await page.keyboard.down('Alt');
       await page.keyboard.press('KeyT');
       await page.keyboard.up('Alt');
-      await page.waitForSelector('[role="option"][data-highlighted] [role="status"]');
+      await page.waitForFunction(() => document.querySelector('[role="option"][data-highlighted] [role="status"]')?.textContent?.includes('Works'));
 
-      expect(await page.$eval('[role="option"][data-highlighted] [role="status"]', (status) => status.textContent)).toContain('Works');
       expect(await page.$eval('[role="option"][data-highlighted]', (row) => row.textContent ?? '')).toContain(highlighted.slice(0, 8));
       // Testing never picks: the search is still open.
       expect(await page.$('input[aria-label="Search deep model"]')).not.toBeNull();
+      await page.close();
+    });
+  });
+
+  test('the selected model has its own Test button, which answers beside it and opens no menu', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1100 });
+      await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=models`, { waitUntil: 'networkidle0' });
+      const row = '[data-tier="default"]';
+      await page.waitForSelector(`${row} button[aria-label^="Test "]`);
+
+      // From the keyboard: focus the button by its name, press Enter.
+      await page.focus(`${row} button[aria-label^="Test "]`);
+      await page.keyboard.press('Enter');
+      await page.waitForFunction((tier) => document.querySelector(`${tier} [role="status"]`)?.textContent?.includes('Works'), {}, row);
+
+      expect(await page.$('[role="listbox"]')).toBeNull();
       await page.close();
     });
   });

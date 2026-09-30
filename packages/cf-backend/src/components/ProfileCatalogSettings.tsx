@@ -311,18 +311,20 @@ export function ProfileCatalogSettings({ tiersOnly = false }: { tiersOnly?: bool
                           onClick={() => removeTier(tierId)} />
                       )}
                     </div>
-                    <ModelPicker
-                      models={menu.models}
-                      failures={menu.failures}
-                      accounts={menu.accounts}
-                      value={assignment?.model ?? ''}
-                      onChange={(model) => setTier(tierId, model)}
-                      clearable={tierId !== 'default'}
-                      placeholder={tierId === 'default' ? resolved.model : `Use default: ${defaultLabel}`}
-                      label={`${tierId} model`}
-                      test={testModel}
-                      size="sm"
-                    />
+                    <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 [&>:first-child]:min-w-0 [&>:first-child]:flex-1">
+                      <ModelPicker
+                        models={menu.models}
+                        failures={menu.failures}
+                        accounts={menu.accounts}
+                        value={assignment?.model ?? ''}
+                        onChange={(model) => setTier(tierId, model)}
+                        clearable={tierId !== 'default'}
+                        placeholder={tierId === 'default' ? resolved.model : `Use default: ${defaultLabel}`}
+                        label={`${tierId} model`}
+                        test={testModel}
+                        size="sm"
+                      />
+                    </div>
                     <Choice<ReasoningEffort | ''>
                       label={`${tierId} reasoning effort`}
                       size="sm"
