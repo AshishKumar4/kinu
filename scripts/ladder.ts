@@ -14,8 +14,8 @@
  *
  *   1. The ladder is MONOTONE: commit ⊆ push ⊆ ci ⊆ deploy, compared by the test
  *      files each gate claims rather than by command text, so a gate growing an
- *      argument does not read as a hole. `deploy.sh` runs `--plan`, so this file
- *      holds the one list.
+ *      argument does not read as a hole. `deploy.sh` runs each phase with
+ *      `--deploy-phase=<phase>`, so this file holds the one list.
  *   2. Every deploy gate is claimed by the CI tier or carries a written reason
  *      why it cannot be. `ladder.test.ts` fails naming any gate with neither.
  *
@@ -2127,14 +2127,17 @@ export const LADDER: readonly Gate[] = [
       + 'fails for a reason unrelated to the change under test. It runs AFTER the source '
       + 'wave so a cheap source failure still fails first, and before the account gate.',
     tier: 'deploy',
-    // 6 runs x ~11s contended = 65.8s measured 2026-08-31 (24 threads, 12
-    // burners). Alone by construction — see its `phase` and `alone` below.
-    seconds: 66,
+    // 403.96 s measured 2026-09-30 (24 threads, 12 burners): six runs of 61.9 to
+    // 77.5 s, each 3,624 pass and 0 fail. The 1-minute load was 8.4 at the start,
+    // from other work on the box, so this wall is a loaded one. Alone by
+    // construction — see its `phase` and `alone` below.
+    seconds: 404,
     catches: 'a test that passes once on an idle box and fails when the machine is busy or '
       + 'when the suite runs again. Every other tier runs each suite ONCE and reads the exit '
       + 'code, which answers "does this pass" and cannot answer "does this pass reliably". '
-      + 'This runs `bun test --parallel=4 packages/cf-backend/` six times with nproc/2 CPU '
-      + 'burners alive throughout, keeps EVERY failing block in an artifact whose path is '
+      + 'This runs `bun test --parallel=4 packages/cf-backend/` six times, each run beside nproc/2 '
+      + 'CPU burners spawned for it and under the suite row\'s silence bound, so a slow run is never '
+      + 'read as a hung one. It prints one line per run, keeps EVERY failing block in an artifact whose path is '
       + 'printed on both paths, and fails on any failure — no retry, no quarantine list, no '
       + 'known-flake allowance, because a lane that retried until green converts the only '
       + 'evidence of a race into a slower green. It also holds the set it MEASURES equal to '
@@ -2482,13 +2485,10 @@ export interface PlanRow {
 
 /**
  * The deploy plan: every deploy-tier gate with its phase, label, measured cost
- * and deadline, in phase order. This is what `bash scripts/deploy.sh`
- * schedules from — the single source of what blocks a publish.
- *
- * LONGEST FIRST inside the concurrent `source` wave, by the row's measured
- * solo wall: the runner launches the first row that fits, so a long row
- * listed late starts late and the wave waits on its tail. Every other phase
- * keeps ladder order; its rows run alone or are the two post-publish tiers.
+ * and deadline, in phase order. Each phase `bash scripts/deploy.sh` runs is
+ * this plan's rows of it ({@link phaseWave}), so it is the single source of
+ * what blocks a publish. Ladder order inside each phase: the order a phase
+ * launches in is the wave's ({@link tierWave}).
  *
  * REFUSES rather than defaults. A `source` row is admitted CONCURRENTLY, so a
  * row there with no measurement is a row the wave would schedule against a
@@ -2503,37 +2503,55 @@ export function deployPlan(costs: CostTable = readCosts()): PlanRow[] {
   const tracked = trackedTestFiles();
   const browsers = sharedBrowserModules();
 
-  const rows = deployOrder().map((gate): PlanRow => {
-    const phase = gate.phase ?? 'source';
-    const recorded = costs.rows[gate.run];
-    const cost = recorded?.exit === 0 ? recorded : undefined;
+  return deployOrder().map((gate) => planRow(gate, costs, tracked, browsers));
+}
 
-    if (cost === undefined && phase === 'source') {
-      throw new Error(
-        `${gate.run} is scheduled in the concurrent source wave and has no measured cost in `
-        + `${COST_TABLE}${recorded === undefined ? '' : `: its figure is of a run that exited ${String(recorded.exit)}`}. `
-        + `Measure it alone from a green run — bun scripts/gate-cost-measure.ts --only="${gate.run}" `
-        + '— and commit the figures. A row admitted against a number nobody took is how five rows '
-        + 'died on their deadline on 2026-09-16.',
-      );
-    }
+/** One gate's row of the deploy plan; see {@link deployPlan} for why an unmeasured source row is refused. */
+function planRow(gate: Gate, costs: CostTable, tracked: readonly string[], browsers: ReadonlySet<string>): PlanRow {
+  const phase = gate.phase ?? 'source';
+  const recorded = costs.rows[gate.run];
+  const cost = recorded?.exit === 0 ? recorded : undefined;
+
+  if (cost === undefined && phase === 'source') {
+    throw new Error(
+      `${gate.run} is scheduled in the concurrent source wave and has no measured cost in `
+      + `${COST_TABLE}${recorded === undefined ? '' : `: its figure is of a run that exited ${String(recorded.exit)}`}. `
+      + `Measure it alone from a green run — bun scripts/gate-cost-measure.ts --only="${gate.run}" `
+      + '— and commit the figures. A row admitted against a number nobody took is how five rows '
+      + 'died on their deadline on 2026-09-16.',
+    );
+  }
+
+  return {
+    phase,
+    label: gate.label,
+    threads: cost === undefined ? 1 : costThreads(cost, gate.seconds),
+    rssMb: cost === undefined ? 1 : costRssMb(cost),
+    shared: sharedOf(gate, tracked, browsers) ?? 'none',
+    run: gate.run,
+  };
+}
+
+/** A deploy phase's gates as the wave admits them, with the plan's figures. The source wave starts its longest
+ *  measured rows first, since the wave launches the first row that fits and a long row listed late makes the wave
+ *  wait on its tail; every other phase keeps ladder order, which a wall of 0 leaves as it is under the wave's stable
+ *  sort, since its rows run alone or are the two post-publish tiers. */
+export function phaseWave(phase: DeployPhase, costs: CostTable = readCosts()): { readonly gate: Gate; readonly row: WaveRow }[] {
+  const tracked = trackedTestFiles();
+  const browsers = sharedBrowserModules();
+
+  return deployOrder().filter((gate) => (gate.phase ?? 'source') === phase).map((gate) => {
+    const planned = planRow(gate, costs, tracked, browsers);
 
     return {
-      phase,
-      label: gate.label,
-      threads: cost === undefined ? 1 : costThreads(cost, gate.seconds),
-      rssMb: cost === undefined ? 1 : costRssMb(cost),
-      shared: sharedOf(gate, tracked, browsers) ?? 'none',
-      run: gate.run,
+      gate,
+      row: {
+        threads: planned.threads,
+        rssMb: planned.rssMb,
+        wall: phase === 'source' ? costs.rows[gate.run]?.wallSeconds ?? 0 : 0,
+        shared: planned.shared,
+      },
     };
-  });
-
-  const wall = (row: PlanRow): number => costs.rows[row.run]?.wallSeconds ?? 0;
-
-  return DEPLOY_PHASES.flatMap((phase) => {
-    const inPhase = rows.filter((row) => row.phase === phase);
-
-    return phase === 'source' ? inPhase.sort((left, right) => wall(right) - wall(left)) : inPhase;
   });
 }
 
@@ -2558,10 +2576,13 @@ export function waveRow(gate: Gate, tracked: readonly string[], costs: CostTable
   };
 }
 
-/** The share of MemAvailable the wave may claim, as scripts/deploy.sh's GATE_RESERVE_PERCENT. */
+/** The share of MemAvailable the wave may claim. The rest is the reserve: page cache for the suites' own I/O, and
+ *  whatever else on the box grows while the wave runs. */
 const WAVE_MEMORY_PERCENT = 75;
 
-/** The caps a wave admits under, read as scripts/deploy.sh reads them, with the same overrides. */
+/** The caps a wave admits under: the box's CPU count and its share of MemAvailable, or the figures an operator names
+ *  in KINU_DEPLOY_THREADS and KINU_DEPLOY_RSS_MB. A memory cap nobody can read is refused, not defaulted: a wave with
+ *  no memory dimension is the defect this scheduling came from. */
 export function waveCaps() {
   const available = /^MemAvailable:\s+(\d+)/mu.exec(readFileSync('/proc/meminfo', 'utf8'))?.[1];
   const threads = Number(process.env['KINU_DEPLOY_THREADS'] ?? cpus().length);
@@ -2583,9 +2604,20 @@ export function tierSchedule<G extends Gate>(gates: readonly G[]) {
 }
 
 /**
- * Runs `work` for every row as the deploy's source wave admits gates: longest measured wall first, the first row
- * whose cost fits what is left of both caps and whose shared resource is free, or the first row at all when nothing
- * runs (an oversized row runs alone). Once `stopped` says so, nothing more launches and the running rows finish.
+ * The one wave runner, for a tier and for every deploy phase: runs `work` for each row, longest measured wall first,
+ * launching the first row whose cost fits what is left of both caps and whose shared resource is free, or the first
+ * row at all when nothing runs (an oversized row runs alone, so the caps can never wedge). The resource check has no
+ * such bypass: with nothing running nothing is held. Once `stopped` says so, nothing more launches and the running
+ * rows finish: a wave usually holds more than one real failure, and reporting every red already paid for beats
+ * reporting the first.
+ *
+ * ONE ROW AT A TIME PER SHARED RESOURCE, WHICH NO COST FIGURE CAN EXPRESS. A row that boots a headless browser takes
+ * the box's browser lane whole: the Chrome tree and whatever serves it. Every row's declared seconds were measured
+ * alone, so serial admission is what those declarations assumed. Measured 2026-09-18 on the 24-thread workstation,
+ * the three browser rows of that day's red wave ran 480.1 s/124, 480.1 s/124 and 152.8 s/1 concurrently and
+ * 480.2 s/124, 480.2 s/124 and 149.7 s/1 serially, red either way on one product defect (L9 in
+ * docs/ARCHITECTURE-DECISIONS.md): no cap can refuse that overlap, since those rows are admitted at 1, 1 and 3
+ * threads and 2,534, 2,458 and 6,446 MiB against 24 threads and 30.7 GiB.
  */
 export async function tierWave<T>(
   rows: readonly { readonly entry: T; readonly row: WaveRow }[],
@@ -2633,27 +2665,18 @@ export async function tierWave<T>(
   await Promise.all(running);
 }
 
-/** The plan as the runner reads it: one tab-separated line per row — phase,
- *  label, threads, resident MiB, shared resource, command. Tabs,
- *  because a command holds spaces and a label holds punctuation, and neither
- *  holds a tab; the command stays LAST, so a field added here cannot be eaten
- *  by the runner's `read` of it. */
-export function printPlan(rows: readonly PlanRow[]): string {
-  return rows
-    .map((row) => [
-      row.phase, row.label, String(row.threads), String(row.rssMb), row.shared, row.run,
-    ].join('\t'))
-    .join('\n');
-}
-
 /**
  * THE WAVE'S COST MODEL, AND WHY IT IS MEASURED.
  *
  * A row's cost is its measured peak parallelism and its measured peak resident
  * set ({@link costThreads}, {@link costRssMb} over scripts/gate-cost.json),
  * and the wave admits rows while the sum of both stays under a cap derived
- * from the box — `nproc` and `MemAvailable`, read by scripts/deploy.sh at the
- * start of each phase.
+ * from the box ({@link waveCaps}): the CPU count, and a share of
+ * `MemAvailable`, read when a tier or a deploy phase starts. MemAvailable, not
+ * MemTotal: MemTotal includes memory nothing can have, and a cap taken from it
+ * admits rows onto swap. Measured 2026-09-17: the source wave's summed
+ * admitted peaks ran 5.9 GiB under the machine's own MemAvailable floor at the
+ * 75% line, and no row was killed under either loaded run.
  *
  * It used to be a DECLARED thread figure, one unless a row said otherwise, and
  * no memory dimension at all. Two things followed.
@@ -3293,11 +3316,6 @@ if (import.meta.main) {
     process.exit(outcome.exitCode);
   }
 
-  if (process.argv.includes('--plan')) {
-    console.log(printPlan(deployPlan()));
-    process.exit(0);
-  }
-
   if (process.argv.includes('--matrix')) {
     printMatrix();
     process.exit(0);
@@ -3433,26 +3451,36 @@ if (import.meta.main) {
   // `--affected=<ref>`: the source rows a change since `ref` can turn red, each
   // run as `--gate` runs one, so a lane proves a change before it sends it.
   const affectedFrom = process.argv.find((argument) => argument.startsWith('--affected='))?.slice('--affected='.length);
+  // `--deploy-phase=<phase>`: one phase of the deploy, its plan rows through the same wave, the way deploy.sh runs
+  // each phase; `--all` keeps launching after a red so one run reports every red of the phase.
+  const phaseAsked = process.argv.find((argument) => argument.startsWith('--deploy-phase='))?.slice('--deploy-phase='.length);
+  const deployPhase = DEPLOY_PHASES.find((candidate) => candidate === phaseAsked);
   const flag = process.argv.find((argument) => argument.startsWith('--tier='));
-  const asked = selectedGate === undefined && affectedFrom === undefined ? flag?.slice('--tier='.length) : 'deploy';
+
+  const asked = selectedGate === undefined && affectedFrom === undefined && phaseAsked === undefined
+    ? flag?.slice('--tier='.length)
+    : 'deploy';
+
   const tier = TIERS.find((candidate) => candidate === asked);
 
-  if (tier === undefined || affectedFrom === '') {
+  if (tier === undefined || affectedFrom === '' || (phaseAsked !== undefined && deployPhase === undefined)) {
     console.error(
-      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] [--serial] | --gate <declared-command> | --affected=<ref> | --plan | --audit-closure [--tier=<tier> | --gate <declared-command>] | --matrix | --costs | --install-hooks`,
+      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] [--serial] | --gate <declared-command> | --deploy-phase=${DEPLOY_PHASES.join('|')} [--all] | --affected=<ref> | --audit-closure [--tier=<tier> | --gate <declared-command>] | --matrix | --costs | --install-hooks`,
     );
     process.exit(2);
   }
 
   const repo = repoAt(root, (run, files) => claims(run, files));
+  const phaseRows = deployPhase === undefined ? undefined : phaseWave(deployPhase);
 
-  const declared = selectedGate === undefined
-    ? tierRun(tier)
-    : [selectedGate];
+  const declared = selectedGate !== undefined
+    ? [selectedGate]
+    : phaseRows?.map(({ gate }) => gate) ?? tierRun(tier);
 
   const gates = affectedFrom === undefined ? declared : affectedSince(affectedFrom, repo);
+  const name = deployPhase === undefined ? `--tier=${tier}` : `--deploy-phase=${deployPhase}`;
 
-  const measured = assertMeasured(`ladder --tier=${tier}`, [
+  const measured = assertMeasured(`ladder ${name}`, [
     ['gates in this tier', gates.length],
     ['gates in the deploy plan', deployOrder().length],
   ]);
@@ -3514,7 +3542,6 @@ if (import.meta.main) {
 
     if (plan?.kind === 'hit') {
       console.log(`\n── ${tier} ${String(index + 1)}/${String(gates.length)}: ${gate.run}`);
-      // deploy.sh reads the `skip  ` prefix to mark the gate's line cached.
       console.log(
         `skip  ${gate.run}  hit ${plan.key.slice(0, 12)}, proved green on ${plan.entry.revision} `
         + `(${String(plan.entry.closureSize)} files in the closure, ${plan.entry.seconds.toFixed(1)}s then)`,
@@ -3526,12 +3553,21 @@ if (import.meta.main) {
     pending.push({ index, gate, plan, closure: plan?.closure ?? deriveClosure(gate.run, gate.inputs, repo) });
   }
 
-  // THE WAVE. With more than one gate to run, the tier admits them as the deploy's source wave does (the same
-  // measured costs, caps and one-at-a-time browser lane, `tierWave`), each gate's output printed whole when it ends;
-  // a gate that declares a phase runs alone first, as the deploy's preflight does. One gate, or `--serial`, runs
-  // in order with its output live, which is how `--gate` and deploy.sh read it.
+  // THE WAVE. With more than one gate to run, a tier or a deploy phase admits them through `tierWave` (the measured
+  // costs, the box's caps and the one-at-a-time browser lane), each gate's output printed whole when it ends; in a
+  // tier, a gate that declares a phase runs alone first, as the deploy's preflight does. One gate, or `--serial`, runs
+  // in order with its output live, which is how `--gate` reads it.
   const concurrent = pending.length > 1 && !process.argv.includes('--serial');
   const failed: string[] = [];
+  const all = deployPhase !== undefined && process.argv.includes('--all');
+  const stopped = (): boolean => !all && failed.length > 0;
+
+  // A red run ends here, naming every gate that failed: the reds of a wave are spread over its output.
+  const finish = (): void => {
+    if (failed.length === 0) return;
+    console.error(`\nladder ${name}: ${String(failed.length)} of ${String(gates.length)} gate(s) failed: ${failed.join(', ')}`);
+    process.exit(1);
+  };
 
   const runPending = async (entry: (typeof pending)[number]): Promise<void> => {
     const { index, gate, plan, closure } = entry;
@@ -3596,32 +3632,49 @@ if (import.meta.main) {
     failed.push(gate.run);
   };
 
-  if (concurrent) {
+  if (phaseRows !== undefined) {
+    // A deploy phase is one wave of its plan rows: the phase's barrier is this process ending.
+    const caps = waveCaps();
+    const lanes = phaseRows.filter(({ row }) => row.shared !== 'none').length;
+
+    console.log(
+      `\nladder ${name}: ${String(pending.length)} gate(s) to run within ${String(caps.threads)} threads and `
+      + `${String(caps.rssMb)} MiB of measured cost, `
+      + (all ? 'every gate regardless of failures (--all)' : 'stopping new launches at the first failure'),
+    );
+
+    if (lanes > 0) console.log(`  ${String(lanes)} of the phase's gates hold a shared resource and run one at a time`);
+
+    // One gate, or `--serial`, runs with its output live, so nothing may run beside it: under caps of nothing the
+    // wave admits a row only when none runs.
+    await tierWave(
+      pending.flatMap((entry) => phaseRows.filter(({ gate }) => gate === entry.gate).map(({ row }) => ({ entry, row }))),
+      runPending, stopped, concurrent ? caps : { threads: 0, rssMb: 0 },
+    );
+  } else if (concurrent) {
     const schedule = tierSchedule(pending.map((entry) => entry.gate));
     const entriesOf = (part: readonly Gate[]) => pending.filter((entry) => part.includes(entry.gate));
 
     for (const entry of entriesOf(schedule.first)) {
       await runPending(entry);
-
-      if (failed.length > 0) process.exit(1);
+      finish();
     }
 
-    await tierWave(entriesOf(schedule.wave).map((entry) => ({ entry, row: waveRow(entry.gate, tracked) })), runPending, () => failed.length > 0);
-
-    if (failed.length > 0) process.exit(1);
+    await tierWave(entriesOf(schedule.wave).map((entry) => ({ entry, row: waveRow(entry.gate, tracked) })), runPending, stopped);
+    finish();
 
     for (const entry of entriesOf(schedule.last)) {
       await runPending(entry);
-
-      if (failed.length > 0) process.exit(1);
+      finish();
     }
   } else {
     for (const entry of pending) {
       await runPending(entry);
-
-      if (failed.length > 0) process.exit(1);
+      finish();
     }
   }
+
+  finish();
 
   if (caching) {
     console.log(
@@ -3639,6 +3692,6 @@ if (import.meta.main) {
   for (const spot of DEADLINE_BLIND_SPOTS) console.log(`  blind: ${spot}`);
 
   console.log(
-    `\nladder --tier=${tier}: ok — ${measured}, ${((performance.now() - started) / 1000).toFixed(1)}s`,
+    `\nladder ${name}: ok — ${measured}, ${((performance.now() - started) / 1000).toFixed(1)}s`,
   );
 }
