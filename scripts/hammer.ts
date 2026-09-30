@@ -183,27 +183,32 @@ interface Burner {
 }
 
 /**
- * Saturate half the machine's threads until the handles are dropped or this process dies.
+ * One CPU burner: it spins in 50 ms slices and exits when its stdin ends
+ * between them. Spawned with a pipe from the gate as its stdin, it ends with
+ * the gate however the gate died, since the kernel closes a dead process's
+ * pipes: a SIGKILLed gate leaves no burner spinning.
+ */
+export const BURNER = [
+  'bun', '-e',
+  "process.stdin.on('end', () => { process.exit(0); }); process.stdin.resume(); let x = 0;"
+    + 'const slice = () => { const until = Date.now() + 50; while (Date.now() < until) x = Math.sqrt(x + 1); setImmediate(slice); };'
+    + 'slice();',
+] as const;
+
+/**
+ * Saturate half the machine's threads with {@link BURNER}s until the handles are dropped or this process dies.
  *
  * HALF, not all: the suite under test runs four workers of its own, and a box
  * with nothing left to schedule measures the burners rather than the
- * behaviour of the code. A burner spins in 50 ms slices and exits when its
- * stdin, a pipe from this process, ends between them: the pipe closes with
- * this process however it died, so a SIGKILLed gate leaves no burner spinning.
- * `kill` ends one sooner, and killing twice is safe. A burner writes nothing
- * but holds this process's output open, so whatever reads that output reaches
- * its end only once every burner is gone: the ladder's hang detector ends one
- * that outlives the gate, and a test awaits that end instead of a clock.
+ * behaviour of the code. `kill` ends a burner sooner, and killing twice is
+ * safe. A burner writes nothing but holds this process's output open, so the
+ * ladder's hang detector ends one that outlives the gate.
  */
 export function spawnContention(workers: number): Burner[] {
-  const spin = "process.stdin.on('end', () => { process.exit(0); }); process.stdin.resume(); let x = 0;"
-    + 'const slice = () => { const until = Date.now() + 50; while (Date.now() < until) x = Math.sqrt(x + 1); setImmediate(slice); };'
-    + 'slice();';
-
   const burners: Burner[] = [];
 
   for (let index = 0; index < workers; index += 1) {
-    const child = Bun.spawn(['bun', '-e', spin], {
+    const child = Bun.spawn([...BURNER], {
       cwd: root, stdout: 'inherit', stderr: 'inherit', stdin: 'pipe',
     });
 

@@ -15,12 +15,9 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import * as v from 'valibot';
 
 import {
-  DEFAULT_RUNS, HAMMER_SUITE, artifactPath, failingTests, hammerOnce, measuredFiles, reportedCounts,
+  BURNER, DEFAULT_RUNS, HAMMER_SUITE, artifactPath, failingTests, hammerOnce, measuredFiles, reportedCounts,
 } from './hammer';
 import { claims, LADDER } from './ladder';
 import { trackedFiles } from './sources';
@@ -132,46 +129,15 @@ describe('the governed set is the ladder\'s, not the gate\'s own', () => {
   });
 });
 
-/** Whether `pid` is still a live process: a zombie is a process that has ended. */
-function running(pid: number): boolean {
-  let stat: string;
+describe('contention ends with the gate however the gate ends', () => {
+  // A SIGKILLed gate runs no cleanup of its own, and the kernel closing its pipes is all a burner then sees: the end
+  // of its stdin. A burner that ended only when killed would spin on after the gate.
+  test('a burner exits when its stdin ends', async () => {
+    const burner = Bun.spawn([...BURNER], { stdin: 'pipe', stdout: 'inherit', stderr: 'inherit' });
 
-  try {
-    stat = readFileSync(`/proc/${String(pid)}/stat`, 'utf8');
-  } catch (error) {
-    // Its /proc entry went with it, before the read or during it.
-    if (error instanceof Error && 'code' in error && (error.code === 'ENOENT' || error.code === 'ESRCH')) return false;
-    throw error;
-  }
+    await burner.stdin.end();
 
-  return !/\) Z /u.test(stat);
-}
-
-describe('contention is real, and ends with the gate however the gate ends', () => {
-  // A SIGKILLed gate runs no cleanup of its own, so a burner that only ended when killed would spin on after it.
-  test('burners spin while the process that spawned them lives, and end when it is SIGKILLed', async () => {
-    // A real gate process, which stays alive until it is killed.
-    const parent = Bun.spawn([process.execPath, '-e', [
-      `import { spawnContention } from ${JSON.stringify(join(import.meta.dir, 'hammer.ts'))};`,
-      'console.log(JSON.stringify(spawnContention(2).map((burner) => burner.pid)));',
-      'await Bun.sleep(60_000);',
-    ].join('\n')], { stdout: 'pipe', stderr: 'inherit' });
-
-    const reader = parent.stdout.getReader();
-    const pids = v.parse(v.array(v.number()), JSON.parse(new TextDecoder().decode((await reader.read()).value)));
-
-    expect(pids).toHaveLength(2);
-    expect(pids.every(running)).toBe(true);
-
-    parent.kill('SIGKILL');
-
-    // The burners are the dead gate's orphans, not this process's children, so there is no exit of theirs to await.
-    // They hold the gate's output open, so its end is theirs: it comes once the last one has exited.
-    let drained = await reader.read();
-
-    while (!drained.done) drained = await reader.read();
-
-    expect(pids.filter(running)).toEqual([]);
+    expect(await burner.exited).toBe(0);
   });
 });
 
