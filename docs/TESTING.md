@@ -305,7 +305,7 @@ Test public behavior, not a source file's spelling. `test-census` follows source
 
 The reconnect snapshot tests call the real RPCs and mount `useKinu` behind the gallery transport. A held snapshot is released after newer reads land, and the client must retain the newer memory, executors, plan, tab presence and slates. Prompt prose hashes, decorative SVG/GIF checks and stylesheet ordering are not contracts. Section overrides, resource loading, preference precedence, permissions and data integrity are.
 
-Wait for the effect being asserted. A theme control waits for the applied mode, not a fixed number of sleeps. The flake gate below repeats the real suites without synthetic load.
+Wait for the effect being asserted. A theme control waits for the applied mode, not a fixed number of sleeps. CLI protocol waits are notified by the socket or RPC callback. Daemon waits observe stdout, file changes, process exit or the owning hub's frames. OpenTUI fixtures use the upstream frame and scheduler APIs; rendered text is checked with an independent WCAG contrast calculation, not the theme's own hex values. The flake gate below repeats the real suites without synthetic load.
 
 ## Flakes
 

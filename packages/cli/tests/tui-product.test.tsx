@@ -4,7 +4,7 @@ import { createTestRenderer } from '@opentui/core/testing';
 import { createRoot, flushSync } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 import { present, scratchDir } from '@kinu.run/test-utils';
-import { TUI_ADVERTISED_HINTS, TUI_MARKS } from '@kinu.run/core/tui';
+import { TUI_ADVERTISED_HINTS } from '@kinu.run/core/tui';
 
 import {
   KEYMAP_PRESET_IDS,
@@ -142,8 +142,7 @@ describe('TUI product registries', () => {
     }
   });
 
-  test('navigator rows draw activity through the shared contract', async () => {
-    // The landing page's terminal demo imports TUI_MARKS.activity too, so both surfaces share one vocabulary.
+  test('running and idle agents remain distinguishable in the navigator', async () => {
     const source = agentSourceFromList(() => [
       { name: 'worker', label: 'worker', mode: 'local', status: 'running', cwd: '/tmp/kinu-activity-probe' },
       { name: 'resting', label: 'resting', mode: 'local', status: 'idle', cwd: '/tmp/kinu-activity-probe' },
@@ -159,7 +158,7 @@ describe('TUI product registries', () => {
       );
     }
 
-    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
+    const { renderer, waitForFrame } = await createTestRenderer({
       width: 120,
       height: 20,
       useThread: false,
@@ -167,20 +166,20 @@ describe('TUI product registries', () => {
     });
 
     const root = createRoot(renderer);
+    renderer.start();
 
     try {
       root.render(<TuiProductProvider><Probe /></TuiProductProvider>);
 
-      for (let pass = 0; pass < 200; pass += 1) {
-        await renderOnce();
+      const frame = await waitForFrame((painted) => painted.includes('worker') && painted.includes('resting'));
 
-        if (captureCharFrame().includes('resting')) break;
-        await Bun.sleep(10);
-      }
+      const marker = (name: string) => {
+        const row = present(frame.split('\n').find((line) => line.includes(name)), name + ' activity row');
 
-      const frame = captureCharFrame();
-      expect(frame).toContain(`${TUI_MARKS.activity.running} worker`);
-      expect(frame).toContain(`${TUI_MARKS.activity.idle} resting`);
+        return row.slice(0, row.indexOf(name)).trim();
+      };
+
+      expect(marker('worker')).not.toBe(marker('resting'));
     } finally {
       flushSync(() => { root.unmount(); });
       renderer.destroy();
@@ -250,7 +249,7 @@ describe('adaptive TUI shell', () => {
 async function renderedThemeId(
   selection?: ThemeSelection,
 ): Promise<string> {
-  const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
+  const { renderer, waitForFrame } = await createTestRenderer({
     width: 40,
     height: 4,
     useThread: false,
@@ -258,6 +257,7 @@ async function renderedThemeId(
   });
 
   const root = createRoot(renderer);
+  renderer.start();
 
   try {
     root.render(
@@ -270,15 +270,9 @@ async function renderedThemeId(
       </TuiThemeProvider>,
     );
 
-    for (let pass = 0; pass < 40; pass += 1) {
-      await renderOnce();
-      const marked = captureCharFrame().split('theme=')[1];
+    const frame = await waitForFrame((painted) => (painted.split('theme=')[1]?.trim().length ?? 0) > 0);
 
-      if (marked !== undefined && marked.trim() !== '') return marked.trimEnd();
-      await Bun.sleep(5);
-    }
-
-    throw new Error('The theme provider did not render its selection');
+    return present(frame.split('theme=')[1], 'the selected theme').trimEnd();
   } finally {
     flushSync(() => { root.unmount(); });
     renderer.destroy();

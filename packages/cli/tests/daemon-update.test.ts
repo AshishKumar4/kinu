@@ -11,9 +11,10 @@ import {
   type DeviceStatus, type DeviceTransport, type JsonObject,
 } from '@kinu.run/core';
 import {
-  DAEMON_FILES, daemonArchive, PLATFORM_ARTIFACT, releaseSigningEnv, ROTATED_TOKEN, startUpdateHub, until,
+  DAEMON_FILES, daemonArchive, PLATFORM_ARTIFACT, releaseSigningEnv, ROTATED_TOKEN, startUpdateHub,
   type HubPush, type HubSocket, type UpdateHub,
 } from './helpers/update-hub';
+import { waitForDaemonPid, waitForFileText } from './helpers/device-process';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -104,6 +105,7 @@ function startDaemon(home: string, extraEnv: Record<string, string> = {}) {
   return {
     proc,
     log: () => (existsSync(logPath) ? readFileSync(logPath, 'utf-8') : ''),
+    waitForLog: (text: string) => waitForFileText(logPath, text, proc.exited),
   };
 }
 
@@ -111,9 +113,6 @@ const pidfile = (home: string) => Number(readFileSync(join(home, 'pc-agent.pid')
 
 const installed = (home: string, name: string) => readFileSync(join(home, name), 'utf-8');
 
-async function waitForExit(proc: Subprocess, timeoutMs = 15_000): Promise<number | 'still running'> {
-  return Promise.race([proc.exited, Bun.sleep(timeoutMs).then(() => 'still running' as const)]);
-}
 
 describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
   test('HELLO names the build, the platform and the opt-out state; a current build gets no UPDATE', async () => {
@@ -121,7 +120,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
 
-    const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
+    const socket = await served.until(() => served.sockets[0], 'the HELLO', daemon.log);
     expect(socket.hello).toMatchObject({ type: 'HELLO', version: OLD, os: process.platform, arch: process.arch, updateCheck: true });
     await socket.settle();
     expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([]);
@@ -133,12 +132,12 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
-    const oldPid = await until(() => (existsSync(join(home, 'pc-agent.pid')) ? pidfile(home) : null), 'the pidfile', daemon.log);
+    const oldPid = await waitForDaemonPid(home);
 
-    const successor = await until(() => served.sockets[1], 'the successor HELLO', daemon.log);
+    const successor = await served.until(() => served.sockets[1], 'the successor HELLO', daemon.log);
     expect(successor.hello).toMatchObject({ version: NEW, updateCheck: true });
     expect(served.sockets[0]?.closed).toBe('hub');
-    expect(await waitForExit(daemon.proc)).toBe(0);
+    expect(await daemon.proc.exited).toBe(0);
     expect(daemon.log()).toContain('device.update_handed_over');
 
     const newPid = pidfile(home);
@@ -162,9 +161,9 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW), signing: 'none' });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
-    const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
+    const socket = await served.until(() => served.sockets[0], 'the HELLO', daemon.log);
     await socket.settle();
-    await until(() => (daemon.log().includes('device.update_ignored reason=malformed_frame detail=no signature') ? true : null), 'the refusal', daemon.log);
+    await daemon.waitForLog('device.update_ignored reason=malformed_frame detail=no signature');
 
     expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([]);
     expect(installed(home, 'pc-agent.js')).toBe(DAEMON_FILES['pc-agent.js']);
@@ -176,9 +175,9 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW), signing: 'foreign' });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
-    const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
+    const socket = await served.until(() => served.sockets[0], 'the HELLO', daemon.log);
     await socket.settle();
-    await until(() => (daemon.log().includes('device.update_ignored reason=bad_signature') ? true : null), 'the refusal', daemon.log);
+    await daemon.waitForLog('device.update_ignored reason=bad_signature');
 
     expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([]);
     expect(installed(home, 'pc-agent.js')).toBe(DAEMON_FILES['pc-agent.js']);
@@ -188,9 +187,9 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home);
-    const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
+    const socket = await served.until(() => served.sockets[0], 'the HELLO', daemon.log);
     await socket.settle();
-    await until(() => (daemon.log().includes('device.update_ignored reason=bad_signature') ? true : null), 'the refusal', daemon.log);
+    await daemon.waitForLog('device.update_ignored reason=bad_signature');
 
     expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([]);
   });
@@ -200,7 +199,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
 
-    await until(() => daemon.log().includes('device.update_failed'), 'the update to fail', daemon.log);
+    await daemon.waitForLog('device.update_failed');
     expect(daemon.log()).toContain(`checksum mismatch for ${PLATFORM_ARTIFACT}`);
     expect(installed(home, 'pc-agent.js')).toBe(DAEMON_FILES['pc-agent.js']);
     expect(existsSync(join(home, 'pc-agent.js.prev'))).toBe(false);
@@ -218,7 +217,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
 
-    await until(() => daemon.log().includes('device.update_failed'), 'the update to fail', daemon.log);
+    await daemon.waitForLog('device.update_failed');
     expect(daemon.log()).toContain('failed its selftest; the previous build was restored');
     expect(installed(home, 'pc-agent.js')).toBe(DAEMON_FILES['pc-agent.js']);
     expect(installed(home, 'pc-agent.version').trim()).toBe(OLD);
@@ -233,9 +232,9 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     const home = installedMachine(served.origin, OLD, { updateCheck: false });
     const daemon = startDaemon(home, await releaseSigningEnv());
 
-    const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
+    const socket = await served.until(() => served.sockets[0], 'the HELLO', daemon.log);
     expect(socket.hello).toMatchObject({ version: OLD, updateCheck: false });
-    await until(() => daemon.log().includes('device.update_ignored reason=updateCheck_false'), 'the refusal', daemon.log);
+    await daemon.waitForLog('device.update_ignored reason=updateCheck_false');
     expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([]);
     expect(installed(home, 'pc-agent.js')).toBe(DAEMON_FILES['pc-agent.js']);
   });
@@ -245,12 +244,12 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     const served = hub({ served: OLD, archive: await daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
-    const first = await until(() => served.sockets[0], 'the HELLO', daemon.log);
+    const first = await served.until(() => served.sockets[0], 'the HELLO', daemon.log);
     expect(first.hello.version).toBe(OLD);
 
     writeFileSync(join(home, 'pc-agent.version'), `${NEW}\n`, { mode: 0o600 });
     first.drop();
-    const again = await until(() => served.sockets[1], 'the second HELLO', daemon.log);
+    const again = await served.until(() => served.sockets[1], 'the second HELLO', daemon.log);
 
     expect(again.hello.version).toBe(OLD);
   });
@@ -259,7 +258,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     const served = hub({ served: OLD, archive: await daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
-    const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
+    const socket = await served.until(() => served.sockets[0], 'the HELLO', daemon.log);
     const sha256 = 'a'.repeat(64);
 
     socket.send({ type: 'UPDATE', version: NEW, urls: { tarball: 'https://evil.invalid/cli.tar.gz', checksum: `${PLATFORM_ARTIFACT}.sha256` }, sha256 });
@@ -276,7 +275,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     const home = installedMachine(served.origin, null);
     const daemon = startDaemon(home, await releaseSigningEnv());
 
-    const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
+    const socket = await served.until(() => served.sockets[0], 'the HELLO', daemon.log);
     expect('version' in socket.hello).toBe(false);
     await socket.settle();
     expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([]);
@@ -306,7 +305,7 @@ function tunnelOver(socket: HubSocket, sandbox: FrameSandbox, log: () => string)
     rpc: async (method, params, opts) => {
       const id = opts?.requestId ?? `rpc-spillfile0-${String(next += 1)}`;
       socket.send({ id, method, params, sandbox });
-      const reply = v.parse(ReplySchema, await until(() => socket.frames.find((frame) => frame.id === id), `the answer to ${id}`, log));
+      const reply = v.parse(ReplySchema, await socket.waitForReply(id, log));
 
       if (reply.error !== undefined) throw new Error(reply.error);
 
@@ -323,8 +322,8 @@ describe('the daemon answers the hub in core\'s frames', () => {
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
 
-    const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
-    await until(() => socket.frames.find((frame) => frame.type === DEVICE_TOKEN_ROTATION_ACK), 'the rotation acknowledgement', daemon.log);
+    const socket = await served.until(() => served.sockets[0], 'the HELLO', daemon.log);
+    await served.until(() => socket.frames.find((frame) => frame.type === DEVICE_TOKEN_ROTATION_ACK), 'the rotation acknowledgement', daemon.log);
 
     expect(parseJsonObject(installed(home, 'device.json')).token).toBe(ROTATED_TOKEN);
   });
@@ -333,7 +332,7 @@ describe('the daemon answers the hub in core\'s frames', () => {
     const served = hub({ served: OLD, archive: await daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
-    const socket = await until(() => served.sockets[0], 'the HELLO', daemon.log);
+    const socket = await served.until(() => served.sockets[0], 'the HELLO', daemon.log);
     const proved = v.parse(ProvedHelloSchema, socket.hello);
 
     // What the machine proved at start: one that cannot sandbox runs no sandboxed command at all.
@@ -377,9 +376,9 @@ describe('a successor that dies before connecting is the old daemon\'s to undo',
     const served = hub({ served: NEW, archive: await daemonArchive({ ...NEW_FILES, 'pc-agent.js': DYING_DAEMON }, NEW) });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
-    const oldPid = await until(() => (existsSync(join(home, 'pc-agent.pid')) ? pidfile(home) : null), 'the pidfile', daemon.log);
+    const oldPid = await waitForDaemonPid(home);
 
-    await until(() => (daemon.log().includes('device.update_rolled_back') ? true : null), 'the rollback', daemon.log);
+    await daemon.waitForLog('device.update_rolled_back');
 
     expect(pidfile(home)).toBe(oldPid);
     expect(alive(oldPid)).toBe(true);
@@ -411,7 +410,7 @@ describe('a successor that dies before connecting is the old daemon\'s to undo',
     const served = hub({ served: OLD, archive: await daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
     const daemon = startDaemon(home, await releaseSigningEnv());
-    await until(() => served.sockets[0], 'the HELLO', daemon.log);
+    await served.until(() => served.sockets[0], 'the HELLO', daemon.log);
     writeFileSync(join(home, 'pc-agent.js.prev'), 'process.exit(9);\n', { mode: 0o700 });
     writeFileSync(join(home, 'pc-agent.update-pending'), `${NEW}\n`, { mode: 0o600 });
 

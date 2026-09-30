@@ -84,7 +84,7 @@ import {
   CHARS_PER_TOKEN, DEVICE_TIERS, JsonObjectSchema, JsonValueSchema,
   missingSubordinateHistory,
   parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
-  type AdvisorSeverity, type JsonValue, type PlanReview, type ReviewAnnotation,
+  type AdvisorSeverity, type JsonObject, type JsonValue, type PlanReview, type ReviewAnnotation,
   type ProfileCatalogEnvelope, type SubordinateInspectionRequest, type AccountUsage,
 } from "@kinu.run/core";
 import type { ActivitySnapshot, ExecutorCommandResult, ForkNode, MemoryEntry, Rpc } from "@kinu.run/core";
@@ -6322,13 +6322,13 @@ const snapshotRaceRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promi
     return rpcResult(answer).json<T>();
   }
 
-  const reads = new Map<string, JsonValue>([
-    ["getMemoryContent", memoryContent], ["getExecutors", executors],
-    ["getActivePlanReview", activePlan], ["getWorkspaceTabPresence", tabPresence],
-    ["listSlates", { slates, problems: [] }],
-  ]);
+  const reads: JsonObject = {
+    getMemoryContent: memoryContent, getExecutors: executors,
+    getActivePlanReview: activePlan, getWorkspaceTabPresence: tabPresence,
+    listSlates: { slates, problems: [] },
+  };
 
-  const value = reads.get(method);
+  const value = Object.hasOwn(reads, method) ? reads[method] : undefined;
 
   return value === undefined ? workspacePageRpc<T>(method, args) : rpcResult(value).json<T>();
 };

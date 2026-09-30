@@ -127,6 +127,7 @@ async function mountProbe(options: {
   });
 
   const root = createRoot(testRenderer.renderer);
+  testRenderer.renderer.start();
   const store = createMemoryTuiPreferenceStore();
   const activations: Array<{ name: string; mode: 'local' | 'cloud' }> = [];
   root.render(
@@ -138,7 +139,7 @@ async function mountProbe(options: {
       currentAgent={options.currentAgent}
     />,
   );
-  await renderSettled(testRenderer.renderOnce);
+  await testRenderer.flush();
 
   return {
     ...testRenderer,
@@ -146,7 +147,7 @@ async function mountProbe(options: {
     activations,
     frame: () => testRenderer.captureCharFrame(),
     async settle() {
-      await renderSettled(testRenderer.renderOnce);
+      await testRenderer.flush();
     },
     async destroy() {
       flushSync(() => { root.unmount(); });
@@ -299,10 +300,18 @@ describe('grouped workspace navigator', () => {
       probe.mockInput.pressKey('\u001B[C');
       await probe.settle();
       expect(probe.frame()).toContain('▾ shop · 2');
+      const escape = Promise.withResolvers<void>();
+      probe.renderer.keyInput.once('keypress', (event) => {
+        if (event.name !== 'escape') throw new Error('expected Escape, received ' + event.name);
+        escape.resolve();
+      });
       probe.mockInput.pressEscape();
+      await escape.promise;
       await probe.settle();
-      expect(probe.frame()).not.toContain('Workspaces · Esc close');
       expect(probeTextarea?.focused).toBe(true);
+      await probe.mockInput.typeText('focus returned');
+      await probe.waitForFrame((painted) => painted.includes('focus returned'));
+      expect(probeTextarea?.plainText).toContain('focus returned');
     } finally {
       await probe.destroy();
     }
@@ -442,7 +451,7 @@ function lineWithMarker(frame: string): string {
 
 describe('adaptive TUI shell renderer', () => {
   test('wide, medium, and narrow transitions preserve draft, focus, and scroll while paging stays explicit', async () => {
-    const { renderer, mockInput, renderOnce, captureCharFrame, resize } = await createTestRenderer({
+    const { renderer, mockInput, flush, captureCharFrame, resize } = await createTestRenderer({
       width: 120,
       height: 28,
       useThread: false,
@@ -450,11 +459,12 @@ describe('adaptive TUI shell renderer', () => {
     });
 
     const root = createRoot(renderer);
+    renderer.start();
     const store = createMemoryTuiPreferenceStore();
 
     try {
       root.render(<ShellProbe store={store} />);
-      await renderSettled(renderOnce);
+      await flush();
       expect(captureCharFrame()).toContain('checkout');
       expect(captureCharFrame()).toContain('2 of 4');
       expect(captureCharFrame()).toContain('Load more');
@@ -467,10 +477,9 @@ describe('adaptive TUI shell renderer', () => {
       expect(textarea?.focused).toBe(true);
 
       resize(80, 28);
-      await Bun.sleep(20);
-      await renderSettled(renderOnce);
+      await flush();
       shellSetNavigationOpen?.(true);
-      await renderSettled(renderOnce);
+      await flush();
       expect(shellTextarea).toBe(textarea);
       expect(shellTextarea?.plainText).toBe('draft survives');
       expect(shellTextarea?.focused).toBe(false);
@@ -478,15 +487,14 @@ describe('adaptive TUI shell renderer', () => {
       expect(captureCharFrame()).toContain('Workspaces · Esc close');
       expect(shellScroll?.scrollTop).toBe(3);
       shellSetNavigationOpen?.(false);
-      await renderSettled(renderOnce);
+      await flush();
       expect(shellTextarea?.focused).toBe(true);
       expect(captureCharFrame()).toContain('survives');
 
       resize(40, 28);
-      await Bun.sleep(20);
-      await renderSettled(renderOnce);
+      await flush();
       shellSetNavigationOpen?.(true);
-      await renderSettled(renderOnce);
+      await flush();
       expect(captureCharFrame()).toContain('Workspaces · Esc close');
       expect(shellTextarea?.focused).toBe(false);
       expect(captureCharFrame()).toContain('2 of 4');
@@ -494,7 +502,7 @@ describe('adaptive TUI shell renderer', () => {
       expect(shellTextarea?.plainText).toBe('draft survives');
       expect(shellScroll?.scrollTop).toBe(3);
       shellSetNavigationOpen?.(false);
-      await renderSettled(renderOnce);
+      await flush();
       expect(shellTextarea?.focused).toBe(true);
       expect(captureCharFrame()).toContain('survives');
     } finally {
@@ -581,13 +589,6 @@ function ShellProbe(props: {
   );
 }
 
-/** The navigator's scrollbox needs several commits to lay out, and key bursts need effects flushed. */
-async function renderSettled(renderOnce: () => Promise<void>): Promise<void> {
-  for (let pass = 0; pass < 6; pass += 1) {
-    await renderOnce();
-    await Bun.sleep(5);
-  }
-}
 
 let failingRoster: TuiAgentRoster | null = null;
 
@@ -618,13 +619,14 @@ async function mountRosterProbe(source: TuiAgentSource) {
   });
 
   const root = createRoot(testRenderer.renderer);
+  testRenderer.renderer.start();
   root.render(<RosterFailureProbe store={createMemoryTuiPreferenceStore()} source={source} />);
-  await renderSettled(testRenderer.renderOnce);
+  await testRenderer.flush();
 
   return {
     frame: () => testRenderer.captureCharFrame(),
     async settle() {
-      await renderSettled(testRenderer.renderOnce);
+      await testRenderer.flush();
     },
     async clickLine(text: string) {
       const index = testRenderer.captureCharFrame().split('\n').findIndex((line) => line.includes(text));

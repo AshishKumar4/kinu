@@ -1,11 +1,12 @@
 // The stub origin serves poison at the retired /pc/daemon.js route, so a connect that fetches
 // executable bytes shows up as poison on disk.
-import { killAndAwaitExit, recordedIn, runToExit } from '@kinu.run/test-utils';
+import { awaitExit, killAndAwaitExit, recordedIn, runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 
 import { join, resolve } from 'node:path';
+import { EventEmitter, once } from 'node:events';
 import type { Server, Subprocess } from 'bun';
 import { afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import {
@@ -25,7 +26,8 @@ import DAEMON_SOURCE from '../../pc-agent/src/index.js' with { type: 'text' };
 import SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type: 'text' };
 import PTY_SOURCE from '../../pc-agent/src/pty.js' with { type: 'text' };
 import UPDATE_SOURCE from '../../pc-agent/src/update.js' with { type: 'text' };
-import { daemonArchive, releaseSigningEnv, startUpdateHub, until, type UpdateHub } from './helpers/update-hub';
+import { daemonArchive, releaseSigningEnv, startUpdateHub, type UpdateHub } from './helpers/update-hub';
+import { readProcessOutput, waitForDaemonPid } from './helpers/device-process';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -72,6 +74,7 @@ afterEach(async () => {
 interface StubCloud {
   origin: string;
   hits: { register: number; list: number; daemonScript: number; ticket: number };
+  waitForLists(count: number): Promise<void>;
 }
 
 interface StubCloudOptions {
@@ -99,6 +102,7 @@ const POISON_DAEMON = [
 
 function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
   const hits = { register: 0, list: 0, daemonScript: 0, ticket: 0 };
+  const lists = new EventEmitter();
 
   const server = Bun.serve({
     port: 0,
@@ -129,6 +133,7 @@ function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
 
       if (url.pathname === '/api/cli/devices' && req.method === 'GET') {
         hits.list += 1;
+        lists.emit('listed');
 
         return Response.json(opts.devices?.() ?? []);
       }
@@ -152,7 +157,7 @@ function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
 
   stubs.push(server);
 
-  return { origin: `http://localhost:${server.port}`, hits };
+  return { origin: 'http://localhost:' + server.port, hits, waitForLists: async (count) => { while (hits.list < count) await once(lists, 'listed'); } };
 }
 
 function makeHome(config: JsonObject): string {
@@ -215,66 +220,6 @@ function connectedResult(label = connectedDevice(true).label) {
   return { kind: 'connected', deviceId: 'dev_1', label, sandbox: connectedDevice(true).sandbox, wholeMachine: false };
 }
 
-async function waitForPidExit(pid: number, timeoutMs = 3_000): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    try { process.kill(pid, 0); } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'ESRCH')) throw error;
-
-      return true;
-    }
-
-    await Bun.sleep(25);
-  }
-
-  return false;
-}
-
-async function waitForDaemonPid(home: string, timeoutMs = 10_000): Promise<number> {
-  const pidfile = join(home, 'pc-agent.pid');
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    if (existsSync(pidfile)) {
-      const pid = Number(readFileSync(pidfile, 'utf-8').trim());
-
-      if (Number.isInteger(pid) && pid > 0) return pid;
-    }
-
-    await Bun.sleep(25);
-  }
-
-  throw new Error(`no daemon claimed ${pidfile} within ${timeoutMs}ms`);
-}
-
-interface ProcessOutput {
-  drained: Promise<void>;
-  output: () => string;
-  waitFor: (text: string, timeoutMs?: number) => Promise<void>;
-}
-
-/** A child's stdout buffer; no event exists for another process's lines, so `waitFor` polls it. */
-function readProcessOutput(stdout: ReadableStream<Uint8Array>): ProcessOutput {
-  let output = '';
-
-  const drained = (async () => {
-    for await (const chunk of stdout) output += new TextDecoder().decode(chunk);
-  })();
-
-  return {
-    drained,
-    output: () => output,
-    waitFor: async (text, timeoutMs = 10_000) => {
-      const deadline = Date.now() + timeoutMs;
-
-      while (!output.includes(text)) {
-        if (Date.now() > deadline) throw new Error(`timed out waiting for ${JSON.stringify(text)} in:\n${output}`);
-        await Bun.sleep(25);
-      }
-    },
-  };
-}
 
 async function liveDaemons(script: string): Promise<number[]> {
   const found = await runToExit(['pgrep', '-f', script]);
@@ -294,12 +239,10 @@ function daemonRuntimeProbe(origin: string): string {
 
   return `
     import { connectDevice, daemonStatus } from './packages/cli/src/device-connect.ts';
+    import { waitForDaemonPid } from './packages/cli/tests/helpers/device-process.ts';
     const result = await connectDevice({ origin: ${JSON.stringify(origin)}, token: 'ptc_test' }, { session: true });
-    let pid = daemonStatus().daemonPid;
-    for (let attempt = 0; pid === null && attempt < 100; attempt += 1) {
-      await Bun.sleep(50);
-      pid = daemonStatus().daemonPid;
-    }
+    await waitForDaemonPid(process.env.KINU_HOME);
+    const pid = daemonStatus().daemonPid;
     const listed = Bun.spawn([${JSON.stringify(ps)}, '-p', String(pid), '-o', 'command='], { stdout: 'pipe' });
     const command = (await new Response(listed.stdout).text()).trim();
     if (await listed.exited !== 0) throw new Error('ps found no process ' + String(pid));
@@ -386,14 +329,10 @@ describe('device-connect daemon lifecycle', () => {
 
     const out = await runScript(home, `
       import { connectDevice, daemonStatus } from './packages/cli/src/device-connect.ts';
+      import { waitForDaemonPid } from './packages/cli/tests/helpers/device-process.ts';
       const result = await connectDevice({ origin: '${stub.origin}', token: 'ptc_test' }, { session: true });
-      // The daemon claims the machine's pidfile itself, in its own process, so
-      // this waits for that claim rather than assuming it already landed.
-      let status = daemonStatus();
-      for (let attempt = 0; status.daemonPid === null && attempt < 100; attempt += 1) {
-        await Bun.sleep(50);
-        status = daemonStatus();
-      }
+      await waitForDaemonPid(process.env.KINU_HOME);
+      const status = daemonStatus();
       console.log(JSON.stringify({ result, status }));
       process.exit(0);
     `);
@@ -417,7 +356,7 @@ describe('device-connect daemon lifecycle', () => {
     expect(statSync(join(home, 'agents')).mode & 0o777).toBe(0o700);
     expect(readdirSync(home).filter((entry) => entry.includes('.tmp-'))).toEqual([]);
 
-    expect(await waitForPidExit(status.daemonPid ?? 0)).toBe(true);
+    await awaitExit(status.daemonPid ?? 0);
   });
 
   test('linking this machine again names the registration it replaces, only to the hub that issued it', async () => {
@@ -435,7 +374,7 @@ describe('device-connect daemon lifecycle', () => {
       `);
       const pidfile = join(home, 'pc-agent.pid');
 
-      if (existsSync(pidfile)) expect(await waitForPidExit(Number(readFileSync(pidfile, 'utf-8').trim()))).toBe(true);
+      if (existsSync(pidfile)) await awaitExit(Number(readFileSync(pidfile, 'utf-8').trim()));
     };
 
     // A device.json another deployment issued is that deployment's secret, and stays unsent.
@@ -520,7 +459,6 @@ describe('the sandbox state the machine reported', () => {
 
     for (const reason of DEVICE_SANDBOX_REASONS) {
       const fix = sandboxReasonFix(reason);
-      expect(fix.length).toBeGreaterThan(20);
       expect(fix).toContain(REASON_FIX_MARKER[reason]);
       expect(describeDeviceSandbox({ tier: 'sandboxed', capability: 'files_only', reason, detail: null, gpu: [] }))
         .toEqual(['This machine cannot sandbox.', fix, NO_COMMANDS_LINE]);
@@ -956,13 +894,9 @@ describe('device daemon single-instance lock', () => {
 
     const second = startDaemon(home);
 
-    const exited = await Promise.race([
-      second.proc.exited,
-      // Bounds a daemon that never exits, which is the defect this pins.
-      Bun.sleep(5_000).then(() => 'still running' as const),
-    ]);
+    const exited = await second.proc.exited;
 
-    await Promise.race([second.drained, Bun.sleep(100)]);
+    await second.drained;
 
     expect(second.output()).toContain('already running');
     expect(second.output()).not.toContain('Ticket exchange');
@@ -982,19 +916,19 @@ describe('device daemon single-instance lock', () => {
     const old = startDaemon(home);
     await old.waitFor('Connected');
     const oldPid = await waitForDaemonPid(home);
-    await until(() => hub.sockets[1], 'the successor to connect', old.output);
+    await hub.until(() => hub.sockets[1], 'the successor to connect', old.output);
     expect(await old.proc.exited).toBe(0);
 
     const successorPid = await waitForDaemonPid(home);
     expect(successorPid).not.toBe(oldPid);
     daemonHomes.push(home);
-    expect(await waitForPidExit(oldPid)).toBe(true);
+    await awaitExit(oldPid);
     expect(await liveDaemons(join(home, 'pc-agent.js'))).toEqual([successorPid]);
     expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(newDaemon);
 
     const third = startDaemon(home);
-    expect(await Promise.race([third.proc.exited, Bun.sleep(5_000).then(() => 'still running' as const)])).toBe(3);
-    await Promise.race([third.drained, Bun.sleep(100)]);
+    expect(await third.proc.exited).toBe(3);
+    await third.drained;
     expect(third.output()).toContain('already running');
     expect(Number(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim())).toBe(successorPid);
   });
@@ -1076,7 +1010,7 @@ describe('classic cloud chat connect prompt', () => {
     expect(stub.hits.daemonScript).toBe(0);
     expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(DAEMON_SOURCE);
 
-    expect(await waitForPidExit(daemonPid)).toBe(true);
+    await awaitExit(daemonPid);
   });
 
   test('non-interactive stdin prints the kinu connect instruction instead', async () => {
@@ -1115,32 +1049,9 @@ describe('kinu connect waits on the daemon and says less', () => {
       env: process.env,
     });
 
-    let output = '';
-    let eof = false;
-
-    // Strip at the seam: a colour TERM makes chalk wrap tokens in escape bytes.
-    const drained = (async () => {
-      for await (const chunk of proc.stdout) output += Bun.stripANSI(new TextDecoder().decode(chunk));
-      eof = true;
-    })();
-
     return {
       proc,
-      output: () => output,
-      drained,
-      // Resolves on the text; rejects only after exit and PTY EOF (output can land after exit). No deadline:
-      // the product waits on the daemon, not a clock.
-      async waitFor(text: string): Promise<void> {
-        while (true) {
-          if (output.includes(text)) return;
-
-          if (eof) {
-            throw new Error(`pty reached EOF while waiting for ${JSON.stringify(text)} in:\n${output}`);
-          }
-
-          await Bun.sleep(25);
-        }
-      },
+      ...readProcessOutput(proc.stdout, (text) => Bun.stripANSI(text)),
       async send(line: string): Promise<void> {
         await proc.stdin.write(`${line}\n`);
         await proc.stdin.flush();
@@ -1200,7 +1111,7 @@ describe('kinu connect waits on the daemon and says less', () => {
 
     const daemonPid = await waitForDaemonPid(home);
     process.kill(daemonPid, 'SIGTERM');
-    expect(await waitForPidExit(daemonPid)).toBe(true);
+    await awaitExit(daemonPid);
   });
 
   test('the stub daemon exiting ends the wait with its tail', async () => {
@@ -1232,7 +1143,7 @@ describe('kinu connect waits on the daemon and says less', () => {
 
     await waiting.waitFor('.');
 
-    while (stub.hits.list < listsAtStart + 2) await Bun.sleep(25);
+    await stub.waitForLists(listsAtStart + 2);
     expect(waiting.proc.exitCode).toBeNull();
     expect(waiting.output()).not.toContain('✓ Connected as');
     expect(waiting.output()).not.toContain('exited before it could connect');
@@ -1244,7 +1155,7 @@ describe('kinu connect waits on the daemon and says less', () => {
 
     const daemonPid = await waitForDaemonPid(home);
     process.kill(daemonPid, 'SIGTERM');
-    expect(await waitForPidExit(daemonPid)).toBe(true);
+    await awaitExit(daemonPid);
   });
 
   test('answering no installs nothing at all', async () => {

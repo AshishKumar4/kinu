@@ -3,6 +3,7 @@
  * file. Production rule: a HELLO whose `version` is not the served build gets UPDATE; a second socket replaces the first.
  */
 import { createHash } from 'node:crypto';
+import { EventEmitter, once } from 'node:events';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ServerWebSocket } from 'bun';
@@ -70,6 +71,7 @@ export interface HubSocket {
   send(frame: HubPush): void;
   /** Frames are handled in order, so an answer proves every earlier frame was handled too. */
   settle(): Promise<void>;
+  waitForReply(id: string, log?: () => string): Promise<HubFrame>;
   /** Ordinary close from the hub side (a hub restart) so the daemon reconnects; recorded as 'hub'. */
   drop(): void;
 }
@@ -80,6 +82,7 @@ export interface UpdateHub {
   sockets: HubSocket[];
   hits: string[];
   close(): Promise<void>;
+  until<T>(predicate: () => T | null | undefined | false, what: string, log?: () => string): Promise<T>;
 }
 
 /** Per-process release signing key; the daemon pins its public half via {@link RELEASE_SIGNING_ENV}. */
@@ -107,6 +110,21 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
   const digest = createHash('sha256').update(opts.corrupt ? new Uint8Array([0]) : opts.archive).digest('hex');
   const checksums = { [PLATFORM_ARTIFACT]: digest };
 
+  const changes = new EventEmitter();
+  let ended = false;
+
+  async function until<T>(predicate: () => T | null | undefined | false, what: string, log?: () => string): Promise<T> {
+    for (;;) {
+      const found = predicate();
+
+      if (found) return found;
+
+      if (ended) throw new Error('the hub closed while waiting for ' + what + (log ? '; daemon log: ' + log() : ''));
+      await once(changes, 'changed');
+    }
+  }
+
+
   const manifest: Promise<SignedRelease | null> = (async () => {
     if (opts.signing === 'none') return null;
     const key = opts.signing === 'foreign' ? await generateReleaseSigningKey() : await signingKey;
@@ -122,6 +140,7 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
     fetch(req, self) {
       const { pathname } = new URL(req.url);
       hits.push(pathname);
+      changes.emit('changed');
 
       if (pathname === '/pc/connect-ticket') return Response.json({ ticket: `pct_${'b'.repeat(32)}`, expiresAt: Date.now() + 60_000 });
 
@@ -142,6 +161,7 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
 
         if (known) {
           known.frames.push(v.parse(FrameSchema, JSON.parse(text)));
+          changes.emit('changed');
 
           return;
         }
@@ -159,13 +179,15 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
           send: (out) => { ws.send(JSON.stringify(out)); },
           drop: () => {
             socket.closed = 'hub';
+            changes.emit('changed');
             ws.close(1012, 'hub restart');
           },
+          waitForReply: (id, log) => until(() => socket.frames.find((frame) => frame.id === id), 'the answer to ' + id, log),
           settle: async () => {
             asked += 1;
             const id = `rpc-settle0000-${asked}`;
             ws.send(JSON.stringify({ id, method: 'which', params: [['bash']] }));
-            await until(() => socket.frames.find((answer) => answer.id === id), `the answer to ${id}`);
+            await socket.waitForReply(id);
           },
         };
 
@@ -181,6 +203,7 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
 
         sockets.push(socket);
         openSockets.add(ws);
+        changes.emit('changed');
         ws.send(JSON.stringify({ type: DEVICE_TOKEN_ROTATION, token: ROTATED_TOKEN }));
 
         const behind = hello.version !== undefined && hello.version !== opts.served;
@@ -203,6 +226,7 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
         const socket = bySocket.get(ws);
 
         if (socket && socket.closed === null) socket.closed = 'daemon';
+        changes.emit('changed');
       },
     },
   });
@@ -212,19 +236,8 @@ export function startUpdateHub(opts: UpdateHubOptions): UpdateHub {
     served: opts.served,
     sockets,
     hits,
-    close: async () => { await server.stop(true); },
+    until,
+    close: async () => { ended = true; changes.emit('changed'); await server.stop(true); },
   };
 }
 
-export async function until<T>(predicate: () => T | null | undefined | false, what: string, log?: () => string, timeoutMs = 15_000): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
-
-  for (;;) {
-    const found = predicate();
-
-    if (found) return found;
-
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}${log ? `; daemon log:\n${log()}` : ''}`);
-    await Bun.sleep(25);
-  }
-}

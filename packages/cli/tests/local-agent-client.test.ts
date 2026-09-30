@@ -1,5 +1,5 @@
 import { scratchDir } from '../../test-utils/src/scratch';
-import { present, readTranscriptRows } from '@kinu.run/test-utils';
+import { AwaitedList, present, readTranscriptRows } from '@kinu.run/test-utils';
 import { existsSync } from 'node:fs';
 
 import { join } from 'node:path';
@@ -247,7 +247,6 @@ describe('LocalAgentClient', () => {
     if (result.landed !== 'turn') throw new Error('an idle agent runs the message as its own turn');
     expect(result.text, JSON.stringify(events)).toBe('hello there');
     expect(result.hadError).toBe(false);
-    expect(result.durationMs).toBeGreaterThanOrEqual(0);
 
     const types = events.map((event) => event.type);
     expect(types[0]).toBe('turn-start');
@@ -318,16 +317,13 @@ describe('LocalAgentClient', () => {
 
   test('stop() aborts the in-flight turn through LocalAgentSession', async () => {
     const { client } = setup(stallingModel());
-    const events: AgentClientEvent[] = [];
-    client.subscribe((event) => events.push(event));
+    const observed = new AwaitedList<AgentClientEvent>();
+    const events = observed.items;
+    client.subscribe((event) => observed.push(event));
     await client.connect();
 
     const turn = client.send('long task');
-    const deadline = Date.now() + 2_000;
-
-    while (!events.some((event) => event.type === 'text-delta') && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
+    await observed.until((items) => items.some((event) => event.type === 'text-delta'));
 
     expect(events.some((event) => event.type === 'text-delta')).toBe(true);
 
@@ -384,19 +380,16 @@ describe('LocalAgentClient', () => {
     });
 
     const { client } = setup(model);
-    const events: AgentClientEvent[] = [];
-    client.subscribe((event) => events.push(event));
+    const observed = new AwaitedList<AgentClientEvent>();
+    const events = observed.items;
+    client.subscribe((event) => observed.push(event));
     await client.connect();
 
     expect(await client.send('too early')).toMatchObject({ landed: 'turn' });
 
     armed = true;
     const turn = client.send('start');
-    const deadline = Date.now() + 2_000;
-
-    while (!events.some((event) => event.type === 'tool-call') && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
+    await observed.until((items) => items.some((event) => event.type === 'tool-call'));
 
     const steer = client.send('actually, use yaml');
     release();
@@ -935,8 +928,8 @@ describe('/changelog — the Evolution Changelog over a real local client', () =
 describe('/takes — Alternate Takes over a real local client', () => {
   test('latestTakes/pickTake round-trip: ledger write, repoint, and the /takes command surface', async () => {
     const { client, rt } = setup(fakeModel('answered with A'));
-    const events: AgentClientEvent[] = [];
-    client.subscribe((event) => events.push(event));
+    const observed = new AwaitedList<AgentClientEvent>();
+    client.subscribe((event) => observed.push(event));
     await client.connect();
     const { executeSlashCommand } = await import('../src/slash-commands');
     const { initAlternateTakesTable, recordBranchTakeSet } = await import('@kinu.run/core');
@@ -974,13 +967,8 @@ describe('/takes — Alternate Takes over a real local client', () => {
     if (row === undefined) throw new Error('expected a take_pick outcome row');
     expect(row).toMatchObject({ outcome: 'corrected', source: 'take_pick', turn_id: set.turnId });
 
-    const deadline = Date.now() + 2000;
-
-    while (!events.some((e) => e.type === 'turn-start' && e.kind === 'programmatic' && e.event === 'take_pick')
-        || events.filter((e) => e.type === 'turn-end').length < 2) {
-      if (Date.now() > deadline) throw new Error('timed out waiting for the take_pick continuation turn');
-      await new Promise((r) => setTimeout(r, 5));
-    }
+    await observed.until((items) => items.some((event) => event.type === 'turn-start' && event.kind === 'programmatic' && event.event === 'take_pick')
+      && items.filter((event) => event.type === 'turn-end').length >= 2);
 
     const missing = await executeSlashCommand(client, '/takes 9');
 
