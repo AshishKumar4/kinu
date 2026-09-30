@@ -85,7 +85,7 @@ const slateVendorModulePath = fileURLToPath(new URL('../../node_modules/.cache/k
 
 mkdirSync(dirname(slateVendorModulePath), { recursive: true });
 
-writeWhole(slateVendorModulePath, `export default ${JSON.stringify(buildSlateVendor())};\n`);
+writeWhole(slateVendorModulePath, `export const workerCompatibility = ${JSON.stringify(workerCompatibility)};\nexport default ${JSON.stringify(buildSlateVendor())};\n`);
 
 
 /** Probe bundles reach miniflare as an ES module entry plus compiled `.wasm`. */

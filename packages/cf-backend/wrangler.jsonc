@@ -7,7 +7,7 @@
   // the same app under a different cookie site.
   "workers_dev": false,
   "main": "src/server.ts",
-  "compatibility_date": "2026-09-28",
+  "compatibility_date": "2026-09-30",
   // `experimental` is a dev-only umbrella flag that the deploy API rejects
   // (code 10021). If a specific experimental feature is needed, enable it
   // by its real flag name (e.g. `streaming_subrequests`).

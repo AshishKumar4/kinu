@@ -7,6 +7,7 @@ import { Miniflare, type Response as MiniflareResponse } from 'miniflare';
 import * as v from 'valibot';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 import { disposeMiniflare } from './support/miniflare-settle';
+import { workerCompatibility } from '../../cf-backend/vite-agent-bundle';
 
 // The gateway runs on workerd's own R2 binding: the S3 semantics it serves are the binding's.
 // A route is rooted at its box's prefix (D46): the guest names keys under that root, and
@@ -51,7 +52,7 @@ beforeAll(async () => {
 
   if (!build.success || build.outputs[0] === undefined) throw new Error(build.logs.map(String).join('\n'));
   runtime = new Miniflare({ workers: [{ config: {
-    name: 'store-gateway', compatibilityDate: '2026-09-28', compatibilityFlags: ['nodejs_compat'],
+    name: 'store-gateway', ...workerCompatibility,
     manifest: { mainModule: 'index.mjs', modulesRoot: '/', modules: { 'index.mjs': { type: 'esm', contents: await build.outputs[0].text() } } },
     env: { WORKSPACES: { type: 'r2', name: 'WORKSPACES' } },
   } }] });

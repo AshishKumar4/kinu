@@ -6,7 +6,7 @@ import type { ComposedFacetManager, LongRunningWorkerSpawnOptions } from '@nimbu
 import type { WorkspaceSession } from '@kinu.run/core/workspace';
 import { SLATE_METHOD_NAME_SOURCE, type SlateProcess, type SlateProject } from '@kinu.run/core';
 import { diagnostics, KinuError } from '@kinu.run/core/obs';
-import slateVendor from 'virtual:kinu-slate-vendor';
+import slateVendor, { workerCompatibility } from 'virtual:kinu-slate-vendor';
 import { slateCredentialKey } from './bindings';
 import { SLATE_CLIENT_MODULE, SLATE_SERVER_MODULE } from '@kinu.run/core/slates';
 
@@ -491,8 +491,7 @@ export class ResidentSlateProcesses {
 
     const launch: LongRunningWorkerSpawnOptions = {
       mainModule: MAIN_MODULE,
-      compatibilityDate: '2025-12-01',
-      compatibilityFlags: ['nodejs_compat'],
+      ...workerCompatibility,
       vfsTextModules: textModules,
       env: input.bindings,
       globalOutbound: input.globalOutbound,

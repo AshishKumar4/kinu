@@ -17,6 +17,7 @@ import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { Refusal } from '@kinu.run/core/obs';
 import type { RouteableFacetTarget, SqlValue } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { actorObjectState, durableObjectStorage, durableSqlStorage, durableStorage, SCRIPT_EXPORTS } from './helpers/programmatic-host';
+import { workerCompatibility } from '../vite-agent-bundle';
 
 type KernelVfs = ReturnType<Awaited<ReturnType<HostedWorkspace['bundle']['session']>>['vfs']['as']>;
 
@@ -783,7 +784,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       pid: 41, command: 'slate keeper', attempt: 0, phase: 'starting', owner: 'keeper', restart: 'never', port: 20000,
       recipe: {
         kind: 'worker', owner: 'keeper', port: 20000, cwd: '/slates/keeper', mainModule: 'runner.js',
-        image: { runner: 'a'.repeat(64), application: 'b'.repeat(64) }, compatibilityDate: '2025-12-01', compatibilityFlags: ['nodejs_compat'],
+        image: { runner: 'a'.repeat(64), application: 'b'.repeat(64) }, ...workerCompatibility,
       },
     });
     const redriven: string[] = [];
