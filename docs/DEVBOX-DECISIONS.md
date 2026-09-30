@@ -2308,6 +2308,37 @@ deleted by hand. A native-only store would have removed about 5,190 lines
 block-lower crate) and squashfuse and s3fs from the image. The chain stays
 the record of truth.
 
+D52. A start that fails the same way every time is refused once, from a
+record of what it was made with (2026-09-30). D47 settles a terminal
+admission failure and files one incident, but that settled phase held only
+while a container ran. A start the platform refuses leaves none running,
+such as one for a host that names no image (D50), so every later request,
+every startup row a `kickStartup()` or a `devboxState()` poll armed, and
+every request after an eviction started the box again and filed another
+incident: one start and three asks made four starts and four incidents
+(`bench-artifacts/start-refusal/red.log`, on 719c2d1ac).
+
+A terminal refusal of a start this box made is now stored with that start's
+inputs (`devbox:start-refused`): the image, the size and the internet
+setting, which is everything `ctx.container.start()` receives. While the
+container is stopped and those inputs are unchanged, the one start boundary
+answers the recorded refusal and starts nothing, `#armStartup` arms nothing,
+and nothing is filed; an evicted object's successor reads the same row. A
+changed input asks again, as does a caller's explicit ask (`start()`,
+`attachNow()`), and an admitted start deletes the row. A terminal refusal
+over a container the box found running (D47's marker) is not stored: a later
+start gets a fresh container, which can come up clean. Kinu calls neither
+`start()` nor `attachNow()`, so there a refused start is asked again by a
+deploy that changes the image, or by a new size from the Environment card,
+`sandbox.resize` or the owner's default.
+
+Red then green: `tests/box-size.test.ts`
+(`bench-artifacts/start-refusal/red.log`, `green.log`). After one refused
+start, two requests, a successor's `kickStartup()` and its request answer the
+refusal with one start, one incident and no startup row. An image the host
+names later, another size, another internet setting and `attachNow()` each
+start the box again.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q

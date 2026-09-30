@@ -39,7 +39,10 @@ that when it attaches.
 1. Start calls the native container API and proves admission with
    `container.exec(['/bin/true'])`. A refusal records an incident and arms
    the `devboxStartup` row. A caller asking meanwhile receives the
-   platform's refusal.
+   platform's refusal. A refusal the recovery ladder classes terminal is
+   recorded with the start's image, size and internet setting; until one of
+   them changes or a caller asks with `start()` or `attachNow()`, requests
+   get that refusal and nothing starts or is filed again (D52).
 2. Devbox installs outbound routing, then enters its own
    `blockConcurrencyWhile` restore block. It adopts an already-restored
    instance or restores files, supervised processes and port exposures under

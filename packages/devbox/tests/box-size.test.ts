@@ -183,20 +183,85 @@ test('a resize goes ahead over an unmanaged command, which a rest would refuse t
   await box.destroy();
 });
 
-test('a host that names no image is refused its start as a permanent configuration error that names the image, and arms no retry', async () => {
-  class NoImageBox extends TestBox {
-    protected override get containerImage(): string | undefined {
-      return undefined;
-    }
+/** Names no image until its host deploys one, so the platform refuses each start the same way. */
+class LateImageBox extends TestBox {
+  image: string | undefined = undefined;
+
+  protected override get containerImage(): string | undefined {
+    return this.image;
   }
+}
 
-  const { box, container } = harness(NoImageBox);
-  await box.start();
-  const [ready] = await Promise.allSettled([box.resolveReadiness()]);
-  const reason = expect.stringContaining('[permanent -> refuse] no image to start: name it `devbox` in the container `images` map');
+const NO_IMAGE = '[permanent -> refuse] no image to start: name it `devbox` in the container `images` map';
 
-  const incidents = (await box.devboxIncidentReasons()).map((row) => row.reason);
+async function refusedStart() {
+  const made = harness(LateImageBox);
+  await made.box.start();
 
-  expect({ ready, named: incidents.length > 0 && incidents.every((incident) => incident.includes('no image to start')), armed: container.scheduleRows.filter((row) => row.callback === 'devboxStartup').length })
-    .toEqual({ ready: { status: 'rejected', reason: expect.objectContaining({ message: reason }) }, named: true, armed: 0 });
+  return made;
+}
+
+async function refusalOf<T>(asked: Promise<T>): Promise<T | string | undefined> {
+  const [settled] = await Promise.allSettled([asked]);
+
+  return settled.status === 'rejected' ? devboxFailure({ cause: settled.reason })?.message : settled.value;
+}
+
+// Red on 719c2d1ac: each request started the box again and filed another incident.
+test('a start that fails permanently is refused once: later requests and a successor after eviction answer the recorded refusal without starting again', async () => {
+  const { box, container, state } = await refusedStart();
+  const asked = [await refusalOf(box.resolveReadiness()), await refusalOf(box.resolveReadiness())];
+  const successor = new LateImageBox(state, {});
+  container.owner = successor;
+  const armed = () => container.scheduleRows.filter((row) => row.callback === 'devboxStartup').length;
+  await successor.kickStartup();
+  const armedByKick = armed();
+  asked.push(await refusalOf(successor.resolveReadiness()));
+
+  expect({
+    asked,
+    starts: container.startOptions.length,
+    incidents: (await successor.devboxIncidentReasons()).map((row) => row.reason),
+    armed: [armedByKick, armed()],
+  }).toEqual({
+    asked: Array.from({ length: 3 }, () => expect.stringContaining(NO_IMAGE)),
+    starts: 1,
+    incidents: [expect.stringContaining(NO_IMAGE)],
+    armed: [0, 0],
+  });
+});
+
+test('a changed input asks again: an image the host names later, another size, the internet setting, or an explicit attach', async () => {
+  const imaged = await refusedStart();
+  imaged.box.image = HARNESS_IMAGE;
+  const ready = await imaged.box.resolveReadiness();
+
+  const resized = await refusedStart();
+  await resized.box.resize('large');
+  await refusalOf(resized.box.resolveReadiness());
+
+  const offline = await refusedStart();
+  offline.box.enableInternet = false;
+  await refusalOf(offline.box.resolveReadiness());
+
+  const attached = await refusedStart();
+  const reattached = await refusalOf(attached.box.attachNow());
+
+  expect({
+    ready,
+    resized: resized.container.startOptions.map((options) => options?.instance),
+    offline: offline.container.startOptions.map((options) => options?.enableInternet),
+    reattached,
+    attached: attached.container.startOptions.length,
+    incidents: (await attached.box.devboxIncidentReasons()).length,
+  }).toEqual({
+    ready: { kind: 'restored' },
+    resized: [instance('medium'), instance('large')],
+    offline: [true, false],
+    reattached: expect.stringContaining(NO_IMAGE),
+    attached: 2,
+    incidents: 2,
+  });
+
+  for (const { box } of [imaged, resized, offline, attached]) await box.destroy();
 });

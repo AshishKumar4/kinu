@@ -49,9 +49,9 @@ import { DevboxError, attempt, attemptSync, settle, settleSync, startOverrun, st
 import { BOX_SIZE_ORDER, BoxSizeSchema, DEFAULT_BOX_SIZE, instanceOf, type BoxSize, type ResizeOutcome } from './sizes';
 import type { RestorePhase, RestorePhaseStamps } from './durability/contracts';
 import {
-  admissionOf, isSettledRestoration, recoveryRow, settledRestoration, terminalRefusal, unreadyOf,
+  admissionOf, isSettledRestoration, recoveryRow, refusedStart, settledRestoration, terminalRefusal, unreadyOf,
   type RecoveryClaim, type RestoreAdmission, type RestoreClockPhase, type RestoreReadiness, type RestoreStatus,
-  type Restoration, type SettledRestoration, type StampOutcome,
+  type Restoration, type SettledRestoration, type StampOutcome, type StartInputs,
 } from './restoration';
 import type { DevboxReport, HeartbeatTick, IncidentReasonRow, SupervisedProcessRow } from './report';
 import {
@@ -159,6 +159,8 @@ const SIZE_KEY = 'devbox:size';
 const DEFAULT_SIZE_KEY = 'devbox:default-size';
 
 const RUNNING_SIZE_KEY = 'devbox:running-size';
+
+const START_REFUSED_KEY = 'devbox:start-refused';
 
 const NO_START_IMAGE = 'no image to start: name it `devbox` in the container `images` map';
 
@@ -457,7 +459,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   start(): Promise<void> {
-    return settle(this.#reopening(() => this.#startContainer()));
+    return settle(this.#reopening(async () => {
+      this.ctx.storage.kv.delete(START_REFUSED_KEY);
+      await this.#startContainer();
+    }));
   }
 
   /** A caller asking reopens a destroyed box once a quiesce in flight has settled. */
@@ -483,7 +488,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     });
   }
 
-  async #startNative(): Promise<void> {
+  async #startNative(inputs: StartInputs): Promise<void> {
     if (this.#closed) throw new DevboxError("io", DESTROYED_START);
     const container = this.#container();
     const generation = this.#generation;
@@ -492,10 +497,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     if (!wasRunning) {
       // D50: the one start boundary.
-      const size = this.#size();
-      const image = this.containerImage ?? '';
-      this.ctx.storage.kv.put(RUNNING_SIZE_KEY, size);
-      container.start({ image, instance: instanceOf(size), enableInternet: this.enableInternet });
+      this.ctx.storage.kv.put(RUNNING_SIZE_KEY, inputs.size);
+      container.start({ image: inputs.image, instance: instanceOf(inputs.size), enableInternet: this.enableInternet });
       this.#routes().started();
     }
 
@@ -957,6 +960,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** All delivered startup doors share admission and destructive recovery. */
   async #startContainer(): Promise<void> {
+    const refused = this.#refusedStart();
+
+    if (refused !== undefined) {
+      await this.#settle({ phase: 'unattached', reason: refused, retry: false });
+
+      return;
+    }
+
     if (this.ctx.container?.running !== true
       && (this.#restoration.phase !== 'unstarted' || this.#gateRestore !== undefined)) {
       this.#invalidateGeneration();
@@ -1018,15 +1029,26 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     await this.#admitExecution();
   }
 
+  #startInputs(): StartInputs {
+    return { image: this.containerImage ?? '', size: this.#size(), internet: this.enableInternet };
+  }
+
+  #refusedStart(): string | undefined {
+    return this.ctx.container?.running === true ? undefined : refusedStart(this.ctx.storage.kv.get(START_REFUSED_KEY), this.#startInputs());
+  }
+
   async #admitExecution(): Promise<void> {
     const generation = this.#generation;
     const since = Date.now();
-    this.#trace('startup.admit.enter', { generation, running: this.ctx.container?.running === true });
+    const inputs = this.#startInputs();
+    const startsContainer = this.ctx.container?.running !== true;
+    this.#trace('startup.admit.enter', { generation, running: !startsContainer });
 
     try {
-      await this.#startNative();
+      await this.#startNative(inputs);
 
       this.#refused = undefined;
+      this.ctx.storage.kv.delete(START_REFUSED_KEY);
       this.#trace('startup.admit.exit', { generation, ms: Date.now() - since, admitted: true, owned: this.#owns(generation) });
     } catch (thrown) {
       const cause = this.containerImage === undefined ? new DevboxError('configuration', NO_START_IMAGE, { cause: thrown }) : thrown;
@@ -1044,6 +1066,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         if (isTerminalRecovery(failure)) {
           const refusal = `[${failure} -> refuse] ${reason}`;
           this.#adoptionPending = false;
+
+          if (startsContainer) this.ctx.storage.kv.put(START_REFUSED_KEY, { reason: refusal, ...inputs });
           await this.#settle({ phase: 'unattached', reason: refusal, retry: false });
 
           if (this.#owns(generation)) {
@@ -1467,6 +1491,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     if (held.phase === 'unattached' && !held.retry
       && await this.ctx.storage.get(RECOVERY_ACTION_KEY) === undefined) return;
+
+    if (this.#refusedStart() !== undefined) return;
     await this.armAlarm(STARTUP_CALLBACK, 1);
   }
 
@@ -1692,6 +1718,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           await this.#repairAttached(this.#generation);
         } else {
           if (this.#unready() !== undefined) {
+            this.ctx.storage.kv.delete(START_REFUSED_KEY);
             await this.#settle({ phase: 'unstarted' });
             await this.#startContainer();
 
