@@ -34,6 +34,7 @@ export {
   type BoundedRunEventQuery,
   type StoredRunEvent,
   type ContextMeasures,
+  type StepSpendSource,
 } from './recorder';
 
 export {

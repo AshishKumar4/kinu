@@ -5,7 +5,7 @@ import {
   initFactsTable,
   type MemoryToolInput, type VectorStore,
 } from '../src/index';
-import { storesFor } from './helpers';
+import { conversationsFor, storesFor } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 
 const unavailableIndex: VectorStore = {
@@ -45,11 +45,11 @@ describe('memory search coverage across backend capabilities', () => {
       initAllTables(testSql.execRaw, testSql.sql);
       rt.memory.search = needleIndex('needle');
       const { history } = storesFor(rt);
-      const native = toolExecute<MemoryToolInput, string>(buildBuiltinTools({ rt, vectorStore, history }).memory);
+      const native = toolExecute<MemoryToolInput, string>(buildBuiltinTools({ rt, vectorStore, conversations: conversationsFor(rt, history) }).memory);
 
       const provider = createMemoryCodemodeProvider(() => ({
-        memory: rt.memory, sql: rt.storage.sql, actor: rt.actor, vectorStore,
-        transcriptFor: (sessionId) => history.transcript(sessionId),
+        memory: rt.memory, actor: rt.actor, vectorStore,
+        conversations: conversationsFor(rt, history),
       }));
 
       const search = provider.tools.search;
@@ -82,7 +82,7 @@ describe('memory search coverage across backend capabilities', () => {
       const { history } = storesFor(rt);
 
       const native = toolExecute<MemoryToolInput, string>(
-        buildBuiltinTools({ rt, vectorStore, facts, history }).memory);
+        buildBuiltinTools({ rt, vectorStore, facts, conversations: conversationsFor(rt, history) }).memory);
 
       // remember landed but search never saw it: the failure this guards.
       await native({ action: 'remember', key: 'every-tool probe', value: 'ok' });
@@ -94,8 +94,8 @@ describe('memory search coverage across backend capabilities', () => {
       expect(result).not.toContain('No results found.');
 
       const provider = createMemoryCodemodeProvider(() => ({
-        memory: rt.memory, sql: rt.storage.sql, actor: rt.actor, vectorStore, facts,
-        transcriptFor: (sessionId) => history.transcript(sessionId),
+        memory: rt.memory, actor: rt.actor, vectorStore, facts,
+        conversations: conversationsFor(rt, history),
       }));
 
       const search = provider.tools.search;
@@ -112,7 +112,7 @@ describe('memory search coverage across backend capabilities', () => {
       const facts = createFactsStore(testSql.sql, rt.actor);
 
       const native = toolExecute<MemoryToolInput, string>(
-        buildBuiltinTools({ rt, vectorStore, facts, history: storesFor(rt).history }).memory);
+        buildBuiltinTools({ rt, vectorStore, facts, conversations: conversationsFor(rt) }).memory);
 
       await native({ action: 'remember', key: 'deploy.target', value: 'staging' });
 
@@ -130,7 +130,7 @@ describe('memory search coverage across backend capabilities', () => {
       const facts = createFactsStore(testSql.sql, rt.actor);
 
       const native = toolExecute<MemoryToolInput, string>(
-        buildBuiltinTools({ rt, vectorStore, facts, history: storesFor(rt).history }).memory);
+        buildBuiltinTools({ rt, vectorStore, facts, conversations: conversationsFor(rt) }).memory);
 
       await native({ action: 'remember', key: 'needle policy', value: 'keep it sharp' });
 
@@ -150,7 +150,7 @@ describe('memory search coverage across backend capabilities', () => {
       const facts = createFactsStore(testSql.sql, rt.actor);
 
       const native = toolExecute<MemoryToolInput, string>(
-        buildBuiltinTools({ rt, vectorStore, facts, history: storesFor(rt).history }).memory);
+        buildBuiltinTools({ rt, vectorStore, facts, conversations: conversationsFor(rt) }).memory);
 
       await native({ action: 'remember', key: 'deploy.target', value: 'staging' });
 
@@ -172,7 +172,7 @@ describe('memory search coverage across backend capabilities', () => {
     const { rt, testSql } = createTestRuntime();
     initAllTables(testSql.execRaw, testSql.sql);
     rt.memory.search = needleIndex('needle');
-    const native = toolExecute<MemoryToolInput, string>(buildBuiltinTools({ rt, vectorStore: null, history: storesFor(rt).history }).memory);
+    const native = toolExecute<MemoryToolInput, string>(buildBuiltinTools({ rt, vectorStore: null, conversations: conversationsFor(rt) }).memory);
 
     expect(await native({ action: 'search', query: 'needle' })).toBe(
       'Lexical search only; semantic recall is unavailable.\n[memory.md:1-1] (score 1.00)\nneedle');

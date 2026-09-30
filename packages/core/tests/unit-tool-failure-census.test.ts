@@ -20,7 +20,7 @@ import {
   type ErrorCode, type RecordingLogger, refusalOf, renderThrownChain,
 } from '../src/obs/index';
 import { JsonObjectSchema } from '../src/utils/json';
-import { createTestRuntime, storesFor } from './helpers';
+import { createTestRuntime, conversationsFor } from './helpers';
 import type { RunEvent } from '../src/events/types';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 
@@ -359,7 +359,7 @@ describe('the classification the `shell` tool actually produced reaches the read
   }> {
     const { rt } = createTestRuntime();
     const logger = createRecordingLogger();
-    const tools = buildBuiltinTools({ rt, logger, history: storesFor(rt).history });
+    const tools = buildBuiltinTools({ rt, logger, conversations: conversationsFor(rt) });
     const run = { execute: toolExecute<{ command: string; runtime: string }, string>(tools.shell) };
 
     return { record: await recordInvocation(run.execute({ command: 'pytest -q', runtime })), logger };
@@ -407,7 +407,7 @@ describe('the classification the `shell` tool actually produced reaches the read
     // start.
     const { rt } = createTestRuntime();
     const logger = createRecordingLogger();
-    const tools = buildBuiltinTools({ rt: { ...rt, shell: undefined }, logger, history: storesFor(rt).history });
+    const tools = buildBuiltinTools({ rt: { ...rt, shell: undefined }, logger, conversations: conversationsFor(rt) });
     const run = { execute: toolExecute<{ command: string }, string>(tools.shell) };
     const record = await recordInvocation(run.execute({ command: 'pytest -q' }));
     expect(classifyToolFailure(record)).toMatchObject({
@@ -498,7 +498,7 @@ describe('each executor tool files its own failure in the right part', () => {
     const { rt } = createTestRuntime();
     const router = new DefaultExecutionRouter();
     router.register(provider);
-    const tools = buildBuiltinTools({ rt: { ...rt, executionRouter: router }, history: storesFor(rt).history });
+    const tools = buildBuiltinTools({ rt: { ...rt, executionRouter: router }, conversations: conversationsFor(rt) });
     const run = { execute: toolExecute<{ command: string; runtime: string }, string>(tools.shell) };
 
     return recordInvocation(run.execute({ command, runtime: provider.name }));

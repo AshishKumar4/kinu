@@ -8,7 +8,7 @@ import { scriptedTurnModel } from '@kinu.run/test-utils';
 import {
   ActorSession, EvolutionEngine, WorkspaceActorDirectory, createAgentStores, profileCatalogDigest,
   resolveTurnProfile, verifyClaimedProgram, readVersionedScaffoldSource, sha256Hex,
-  contextMount, withMountTable, createFileDispatcher, TurnContextBudget, WORKSPACE_ROOT,
+  contextMount, localContextTree, withMountTable, createFileDispatcher, TurnContextBudget, WORKSPACE_ROOT,
 } from '@kinu.run/core';
 import type {
   ActorHandle, AgentRuntime, AgentStores, ChatEvent, FileToolInput, ProfileAuthorityInputs,
@@ -135,6 +135,13 @@ async function selectedInput(bound: Bound, messages: readonly ModelMessage[]) {
     author: bound.handle.actorId, via: 'session', turnId: null, stage: false,
     assertOwner: () => bound.handle.assertCurrent(),
   })).selection;
+}
+
+/** An actor's own `/context` tree over its own claims. */
+function ownTree(actor: { readonly handle: ActorHandle; readonly stores: Pick<AgentStores, 'claims'> }) {
+  const tree = localContextTree(() => ({ claims: actor.stores.claims, events: null }), { author: actor.handle.actorId, child: false });
+
+  return () => tree;
 }
 
 test('the claim and its admitted context are durable before the first model call', async () => {
@@ -342,7 +349,7 @@ test('a context edit written through the native file tool reaches the NEXT model
   const left = bind('left');
 
   const vfs = withMountTable(left.runtime.storage.vfs, [contextMount({
-    stores: () => ({ actorId: left.handle.actorId, claims: left.stores.claims, events: null }),
+    actorId: left.handle.actorId, own: ownTree(left),
   })]);
 
   const file = createFileDispatcher({
@@ -440,7 +447,7 @@ test('a versioned context edit refuses a replaced target and preserves its histo
   await selectedInput(left, [{ role: 'user', content: 'original premise' }]);
 
   const files = withMountTable(left.runtime.storage.vfs, [contextMount({
-    stores: () => ({ claims: left.stores.claims, events: null }),
+    actorId: left.handle.actorId, own: ownTree(left),
   })]);
 
   const file = createFileDispatcher({ vfs: files, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
@@ -465,7 +472,7 @@ test('pending context edits can be read and revised but cannot overwrite another
   await selectedInput(left, [{ role: 'user', content: 'original premise' }]);
 
   const files = withMountTable(left.runtime.storage.vfs, [contextMount({
-    stores: () => ({ claims: left.stores.claims, events: null }),
+    actorId: left.handle.actorId, own: ownTree(left),
   })]);
 
   const first = createFileDispatcher({ vfs: files, ledger: new TurnFileLedger(), budget: new TurnContextBudget() });
@@ -489,8 +496,8 @@ test('historical context reads preserve byte ranges and cannot cross actor bound
   await selectedInput(left, [{ role: 'user', content: 'café boundary' }]);
 
   const files = withMountTable(left.runtime.storage.vfs, [contextMount({
-    stores: () => ({ claims: left.stores.claims, events: null }),
-    children: { list: () => ['right'], resolve: name => name === 'right' ? { claims: right.stores.claims, events: null } : null },
+    actorId: left.handle.actorId, own: ownTree(left),
+    children: { list: () => ['right'], tree: (name, author) => name === 'right' ? localContextTree(() => ({ claims: right.stores.claims, events: null }), { author, child: true }) : null },
   })]);
 
   const path = '/context/working.jsonl';

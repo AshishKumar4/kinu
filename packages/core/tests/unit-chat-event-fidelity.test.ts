@@ -9,7 +9,7 @@ import { runChat, collectStepText, ExtensionHost, createAgentsTool, createAgents
 import { synthesizeToolFallback } from '../src/utils/evidence-window';
 import { isFailingToolResult } from '../src/orchestrator/turn-steering';
 import { buildBuiltinTools } from '../src/tools/builtins';
-import { createTestRuntime, storesFor } from './helpers';
+import { createTestRuntime, conversationsFor } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
 
 type FinishPart = Extract<LanguageModelV3StreamPart, { type: 'finish' }>;
@@ -95,7 +95,7 @@ describe('ChatEvent tool success/error fidelity', () => {
     };
 
     const { rt } = createTestRuntime();
-    const tools = buildBuiltinTools({ rt: { ...rt, shell: { exec: async () => ({ stdout, stderr: '', exitCode: 0 }) } }, history: storesFor(rt).history });
+    const tools = buildBuiltinTools({ rt: { ...rt, shell: { exec: async () => ({ stdout, stderr: '', exitCode: 0 }) } }, conversations: conversationsFor(rt) });
     const model = toolThenTextModel({ toolName: 'shell', input: JSON.stringify({ command: 'cat incident.json' }) });
     const events = await collect(model, tools, new ExtensionHost().register(extension));
     expect(failures).toEqual([false]);
@@ -107,7 +107,7 @@ describe('ChatEvent tool success/error fidelity', () => {
 
     const tools = buildBuiltinTools({ rt: { ...rt, shell: {
       exec: async () => ({ stdout: 'tests failed', stderr: 'detail', exitCode: 7 }),
-    } }, history: storesFor(rt).history });
+    } }, conversations: conversationsFor(rt) });
 
     const model = toolThenTextModel({ toolName: 'shell', input: JSON.stringify({ command: 'test' }) });
     const events = await collect(model, tools);
@@ -137,7 +137,7 @@ describe('ChatEvent tool success/error fidelity', () => {
     };
 
     const model = toolThenTextModel({ toolName: 'shell', input: '{}' });
-    const events = await collect(model, buildBuiltinTools({ rt: { ...rt, shell }, history: storesFor(rt).history }));
+    const events = await collect(model, buildBuiltinTools({ rt: { ...rt, shell }, conversations: conversationsFor(rt) }));
     expect(runs).toBe(0);
     expect(events.find((event) => event.type === 'tool-result')).toMatchObject({ success: false, reason: 'bad_input', result: expect.stringContaining('command') });
 

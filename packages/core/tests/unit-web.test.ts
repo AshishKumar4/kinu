@@ -2,7 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import { tool, jsonSchema } from 'ai';
 import * as v from 'valibot';
-import { createTestRuntime, storesFor } from './helpers';
+import { createTestRuntime, conversationsFor } from './helpers';
 import {
   buildActorTools,
   buildBuiltinTools,
@@ -502,7 +502,7 @@ function buildWithWeb(rt: ReturnType<typeof createTestRuntime>['rt'], webSearch?
 
   return buildActorTools({
     rt,
-    history: storesFor(rt).history,
+    conversations: conversationsFor(rt),
     craftedToolExecute: unusedCraftedExecute,
     codemode: createNodeCodemodeBuilder([createWebCodemodeProvider({ provider, vfs: rt.storage.vfs, sessions: NO_BROWSER_RUN })]),
     effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
@@ -513,7 +513,7 @@ function buildWithWeb(rt: ReturnType<typeof createTestRuntime>['rt'], webSearch?
 describe('web builtin', () => {
   test('gated on the webSearch dep', () => {
     const { rt } = createTestRuntime();
-    const without = buildBuiltinTools({ rt, craftedToolExecute: unusedCraftedExecute, history: storesFor(rt).history });
+    const without = buildBuiltinTools({ rt, craftedToolExecute: unusedCraftedExecute, conversations: conversationsFor(rt) });
     expect(Object.keys(without)).not.toContain('web');
 
     const withWeb = buildWithWeb(rt);

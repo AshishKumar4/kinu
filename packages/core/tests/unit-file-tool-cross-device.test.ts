@@ -12,7 +12,7 @@ import type { ShellApprovalPolicy } from '../src/safety/approval-gate';
 import type { FileToolInput } from '../src/tools/file-tool';
 import type { JsonValue } from '../src/utils/json';
 import { standardMounts, withMountTable } from '../src/vfs/mounts';
-import { createTestRuntime, storesFor } from './helpers';
+import { createTestRuntime, conversationsFor } from './helpers';
 
 const STUDIO: DeviceFleetEntry = { id: 'dev-studio', name: 'ashish@studio', os: 'darwin', hostname: 'studio', connected: true };
 
@@ -71,7 +71,7 @@ function fileToolOverTheFleet(written: JsonValue = { success: true }, gated = fa
 
   const tools = buildBuiltinTools({
     rt: { ...rt, storage: { ...rt.storage, vfs: plane }, toolFiles, executionRouter: router, deviceTransport: transport },
-    history: storesFor(rt).history,
+    conversations: conversationsFor(rt),
   });
 
   if (tools.file === undefined) throw new Error('No file tool');

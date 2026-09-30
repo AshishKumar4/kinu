@@ -4,7 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import { handRolledFileWrite, fileToolSteer, createFileToolSteer } from '../src/tools/shell-file-steer';
 import { buildBuiltinTools } from '../src/tools/builtins';
-import { createTestRuntime, storesFor } from './helpers';
+import { createTestRuntime, conversationsFor } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { Shell } from '../src/types/primitives';
 
@@ -20,7 +20,7 @@ const shellToolOver = (shell: Shell): ShellTool => {
 
   return {
     execute: toolExecute<{ command: string; runtime?: string }, string>(
-      buildBuiltinTools({ rt: runtime, history: storesFor(runtime).history }).shell,
+      buildBuiltinTools({ rt: runtime, conversations: conversationsFor(runtime) }).shell,
     ),
   };
 };

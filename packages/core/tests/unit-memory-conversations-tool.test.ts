@@ -8,11 +8,11 @@ import {
   type MemoryToolInput,
   type JsonValue,
 } from '../src/index';
-import { createTestRuntime } from './helpers';
+import { conversationsFor, createTestRuntime } from './helpers';
 
 function setup() {
   const { rt, stores } = createTestRuntime();
-  const tools = buildBuiltinTools({ rt, history: stores.history });
+  const tools = buildBuiltinTools({ rt, conversations: conversationsFor(rt, stores.history) });
   const memoryExec = toolExecute<MemoryToolInput, JsonValue>(tools.memory);
   let row = 0;
 

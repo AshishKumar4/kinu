@@ -10,7 +10,7 @@ import {
   BUILTIN_PROFILE_CATALOG, BUILTIN_ROLE_DEFINITIONS, deriveRoleLabel, profileCatalogDigest,
   type AgentRuntime, type CodemodeProvider, type JsonValue, type ProfileCatalogEnvelope,
 } from '../src/index';
-import { storesFor } from './helpers';
+import { conversationsFor } from './helpers';
 
 type TasksResult = object | string | number | boolean | null | undefined;
 
@@ -46,7 +46,7 @@ const PROFILE_ENVELOPE: ProfileCatalogEnvelope = {
 };
 
 function nativeTasks(rt: AgentRuntime): Exec {
-  const entry = buildBuiltinTools({ rt, roleSwitch: agentRoleSwitch(() => PROFILE_ENVELOPE), history: storesFor(rt).history }).tasks;
+  const entry = buildBuiltinTools({ rt, roleSwitch: agentRoleSwitch(() => PROFILE_ENVELOPE), conversations: conversationsFor(rt) }).tasks;
 
   if (!entry) throw new Error('Expected tasks tool to be registered');
 
@@ -149,7 +149,7 @@ describe('tasks tool', () => {
     ));
 
     const fresh = createTestRuntime().rt;
-    const entry = buildBuiltinTools({ rt: fresh, history: storesFor(fresh).history }).tasks;
+    const entry = buildBuiltinTools({ rt: fresh, conversations: conversationsFor(fresh) }).tasks;
 
     if (!entry) throw new Error('Expected tasks tool to be registered');
 
@@ -298,7 +298,7 @@ describe('tasks action=mode — the agent\'s durable role', () => {
     expect(plan).toContain('Role: Task');
     expect(plan).toContain('In Plan, inspect and research only. Do not change project files or system resources, release, deploy');
     expect(plan).toContain('Implementation waits for an approved Build turn.');
-    expect(Object.keys(buildBuiltinTools({ rt, history: storesFor(rt).history }))).not.toContain('submit_plan');
+    expect(Object.keys(buildBuiltinTools({ rt, conversations: conversationsFor(rt) }))).not.toContain('submit_plan');
   });
 
 });

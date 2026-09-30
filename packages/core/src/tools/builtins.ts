@@ -9,7 +9,7 @@ import type { ToolSet } from 'ai';
 import * as v from 'valibot';
 import { z } from 'zod';
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { SessionHistory } from '../session/history';
+import type { ConversationRecall } from '../memory/conversation-search';
 import type { ExecutorProviderSurface } from '../execution/types';
 import {
   BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription, keepBuiltins,
@@ -75,7 +75,7 @@ export interface BuiltinToolDeps {
   vectorStore?: import('../memory/vector-store').VectorStore | null;
   /** Enables remember/recall/forget and joins facts into the search RRF merge. */
   facts?: import('../memory/facts').FactsStore;
-  history: SessionHistory;
+  conversations: ConversationRecall;
   /** Wired only on subordinate actors. */
   report?: ReportToolDeps;
   webSearch?: WebSearchProvider;
@@ -336,8 +336,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   const facts = deps.facts;
 
   const runMemoryAction = createMemoryDispatcher({
-    memory, vectorStore: deps.vectorStore, facts, sql: rt.storage.sql, actor: rt.actor,
-    transcriptFor: (sessionId) => deps.history.transcript(sessionId),
+    memory, vectorStore: deps.vectorStore, facts, actor: rt.actor, conversations: deps.conversations,
   });
 
   tools.memory = permitInPlan(tool({

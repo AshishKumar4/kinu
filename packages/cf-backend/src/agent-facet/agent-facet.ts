@@ -1,15 +1,16 @@
 /** One non-main agent in its own loader isolate (D9). */
-import { DurableObject } from 'cloudflare:workers';
+import { DurableObject, RpcTarget } from 'cloudflare:workers';
 import { Nimbus, type NimbusSandbox, type NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
-import type { UIMessage } from 'ai';
+import type { ModelMessage, UIMessage } from 'ai';
 import {
   decodeJsonValue, readAgentArchivePage,
   type AgentOwnInspection, type AnsweredEvolutionHelper, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage, type JsonValue,
-  type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
+  type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type VfsRevision, type SerializedMessage, type SubordinateInspectionResult,
+  servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
 } from '@kinu.run/core';
 import { AgentDatabase } from './agent-database';
 import { queueAgentTask, type AgentWorkspace } from './agent-turn';
-import type { AgentOpening, AgentRecovery, AgentSnapshot, AgentTask } from './protocol';
+import type { AgentOpening, AgentRecovery, AgentSnapshot, AgentTask, TurnRequestAt } from './protocol';
 
 export type { AgentWorkspace } from './agent-turn';
 
@@ -50,6 +51,19 @@ function sandboxHandle(sandbox: NimbusSandbox): NimbusSandboxHandle {
   };
 }
 
+class AgentContextTree extends RpcTarget implements ContextTreeRemote {
+  constructor(private readonly served: ContextTreeRemote) { super(); }
+
+  readFile(path: string) { return this.served.readFile(path); }
+  readFileAtRevision(path: string, revision: VfsRevision, range?: { readonly offset: number; readonly length: number }) { return this.served.readFileAtRevision(path, revision, range); }
+  readRange(path: string, offset: number, length: number) { return this.served.readRange(path, offset, length); }
+  readdir(path: string) { return this.served.readdir(path); }
+  stat(path: string) { return this.served.stat(path); }
+  exists(path: string) { return this.served.exists(path); }
+  writeFile(path: string, data: string | Uint8Array) { return this.served.writeFile(path, data); }
+  writeFileIfRevision(path: string, data: Uint8Array, expected: VfsRevision) { return this.served.writeFileIfRevision(path, data, expected); }
+}
+
 export interface AgentFacetCalls {
   deliver(snapshot: AgentSnapshot, task: AgentTask): Promise<void>;
   holds(turnId: string): Promise<boolean>;
@@ -58,6 +72,14 @@ export interface AgentFacetCalls {
   historyPage(snapshot: AgentSnapshot, page: PositionPageRequest): Promise<ChatHistoryPage>;
   inspect(snapshot: AgentSnapshot, request: AgentOwnInspection): Promise<SubordinateInspectionResult>;
   inheritedContext(snapshot: AgentSnapshot): Promise<SerializedMessage[]>;
+  workingContext(snapshot: AgentSnapshot): Promise<readonly ModelMessage[]>;
+  turnRequests(snapshot: AgentSnapshot, turnId: string): Promise<TurnRequestIndex>;
+  turnRequest(snapshot: AgentSnapshot, at: TurnRequestAt): Promise<TurnRequestPage>;
+  spend(snapshot: AgentSnapshot, steps: readonly StepSpendSource[]): Promise<SpendLedger>;
+  context(snapshot: AgentSnapshot, editor: ContextEditor): Promise<ContextTreeRemote>;
+  searchConversations(snapshot: AgentSnapshot, query: string, limit?: number): Promise<ConversationSearchHit[]>;
+  scrollConversation(snapshot: AgentSnapshot, around: string, window?: number, maxChars?: number): Promise<ConversationScrollResult | null>;
+  browseConversations(snapshot: AgentSnapshot, limit?: number): Promise<ConversationSummary[]>;
   admitted(snapshot: AgentSnapshot, id: string): Promise<boolean>;
   interrupt(snapshot: AgentSnapshot, turnId: string): Promise<void>;
   clear(snapshot: AgentSnapshot): Promise<void>;
@@ -96,6 +118,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     this.database ??= new AgentDatabase(this.ctx.storage, {
       agent: () => this.workspace(), state: () => this.state(), enqueueTurn: (input) => this.env.WORKSPACE.enqueueTurn(input),
       memory: () => this.env.WORKSPACE.memory(), program: (...args) => this.env.WORKSPACE.program(...args),
+      sayToParent: (signal) => this.env.WORKSPACE.sayToParent(signal),
     });
     this.database.adopt(snapshot);
 
@@ -136,6 +159,38 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async inheritedContext(snapshot: AgentSnapshot): Promise<SerializedMessage[]> {
     return await this.open(snapshot).inheritedContext();
+  }
+
+  async workingContext(snapshot: AgentSnapshot): Promise<readonly ModelMessage[]> {
+    return await this.open(snapshot).workingContext();
+  }
+
+  async turnRequests(snapshot: AgentSnapshot, turnId: string): Promise<TurnRequestIndex> {
+    return this.open(snapshot).turnRequests(turnId);
+  }
+
+  async turnRequest(snapshot: AgentSnapshot, at: TurnRequestAt): Promise<TurnRequestPage> {
+    return await this.open(snapshot).turnRequest(at);
+  }
+
+  async searchConversations(snapshot: AgentSnapshot, query: string, limit?: number): Promise<ConversationSearchHit[]> {
+    return await this.open(snapshot).conversations().search(query, limit);
+  }
+
+  async scrollConversation(snapshot: AgentSnapshot, around: string, window?: number, maxChars?: number): Promise<ConversationScrollResult | null> {
+    return await this.open(snapshot).conversations().scroll(around, window, maxChars);
+  }
+
+  async browseConversations(snapshot: AgentSnapshot, limit?: number): Promise<ConversationSummary[]> {
+    return await this.open(snapshot).conversations().browse(limit);
+  }
+
+  async context(snapshot: AgentSnapshot, editor: ContextEditor): Promise<ContextTreeRemote> {
+    return new AgentContextTree(servedContextTree(this.open(snapshot).contextTree(editor)));
+  }
+
+  async spend(snapshot: AgentSnapshot, steps: readonly StepSpendSource[]): Promise<SpendLedger> {
+    return this.open(snapshot).spend(steps);
   }
 
   async admitted(snapshot: AgentSnapshot, id: string): Promise<boolean> {

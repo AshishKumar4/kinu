@@ -9,7 +9,7 @@ import { createTestRuntime } from '@kinu.run/test-utils';
 import { scriptedTurnModel } from '@kinu.run/test-utils/turn-model';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { runChat, UNBOUNDED_STEPS, type ChatEvent } from '../src/chat';
-import { storesFor } from './helpers';
+import { conversationsFor } from './helpers';
 
 /** An MCP tool whose schema uses what providers reject: `$schema`, `const`, `oneOf`, a boolean subschema, a root `anyOf`. */
 const REMOTE_SCHEMA: JsonObject = {
@@ -124,7 +124,7 @@ describe('built-in input schemas per provider', () => {
 
     for await (const event of runChat({
       model, modelSpec: spec, system: 's', history: [{ role: 'user', content: 'go' }], stopWhen: UNBOUNDED_STEPS,
-      tools: buildBuiltinTools({ rt, history: storesFor(rt).history }),
+      tools: buildBuiltinTools({ rt, conversations: conversationsFor(rt) }),
     })) {
       if (event.type === 'tool-result') results.push(event);
     }

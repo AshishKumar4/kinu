@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-30",
-  "files": 2856,
-  "functions": 71449,
+  "files": 2860,
+  "functions": 71752,
   "ceiling": 87,
   "line": 29,
   "inventory": [
@@ -115,10 +115,6 @@
     },
     {
       "key": "packages/cli/src/config.ts#deriveLLMConfigFromProviderCredentials",
-      "complexity": 34
-    },
-    {
-      "key": "packages/core/src/vfs/context-plane.ts#contextFiles>document",
       "complexity": 34
     },
     {

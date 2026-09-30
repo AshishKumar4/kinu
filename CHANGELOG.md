@@ -22,6 +22,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **A hired agent's own records are read where they live.** Its inherited context, conversation recall, `/context` files (its own and its hirer's `/context/agents/<key>/`), turn requests and spend now come from its own isolate, so an inheriting hire sees the running turn, recall finds its past conversations, edits to its working context reach its next turn, and its model calls count in the workspace's and the account's spend.
+- **A hired agent's advisor answers to the owner's settings and reaches the hirer.** The severity floor and the other owner settings are read from the workspace, and a blocker note goes to the hirer's conversation instead of back to the hire.
 - **A hired agent acts with the authority its turn resolved to.** A planner hired from a Build turn stays in Plan: the workspace, which runs every tool the agent calls, now enforces the resolved mode, and the turn's record says Plan.
 - **A turn survives its agent's isolate resetting on its own.** While a hired agent's turn is out, each workspace wake asks its isolate whether it still holds the turn; a reset one is recovered and re-run the way a workspace reset re-runs it, instead of holding its hirer until an unrelated reset.
 - **A hired agent's Codex and account routing match main's.** Its Codex calls with no connected machine go out through the owner's egress container, and it authenticates with the provider account the owner selected.

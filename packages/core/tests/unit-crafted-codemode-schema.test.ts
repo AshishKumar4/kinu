@@ -7,7 +7,7 @@
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool } from 'ai';
 import * as v from 'valibot';
-import { createTestRuntime, storesFor } from './helpers';
+import { createTestRuntime, conversationsFor } from './helpers';
 import {
   buildActorTools,
   type ActorToolsetDeps,
@@ -49,7 +49,7 @@ function actorTools(rt: ActorToolsetDeps['rt'], deps: Pick<ActorToolsetDeps, 'cr
   // The runtime's own actor: a claim is keyed by its owner.
   return buildActorTools({
     rt,
-    history: storesFor(rt).history,
+    conversations: conversationsFor(rt),
     effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => 'turn-1', durable: () => Promise.resolve() },
     ...deps,
   });

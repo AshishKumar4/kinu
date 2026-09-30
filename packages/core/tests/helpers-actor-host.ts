@@ -12,6 +12,7 @@ import { initEventsHubTables, EventLog } from '../src/events/hub/index';
 import { EvolutionEngine } from '../src/evolution/engine';
 import { createScaffoldSurface } from '../src/scaffold/surface';
 import { resolveTurnProfile, type ProviderCatalogSnapshot } from '../src/profiles/resolve';
+import { ConversationSearchStore } from '../src/memory/conversation-search';
 import {
   profileCatalogDigest,
   type ProfileCatalogEnvelope, type RoleDefinition, type TierAssignments,
@@ -171,6 +172,7 @@ export function hostedSeatsOver(input: {
     const seated: HostedNodeSeat = {
       actor,
       runId,
+      conversations: new ConversationSearchStore(actor.runtime.storage.sql, actor.handle, (sessionId) => actor.stores.history.transcript(sessionId)),
       // The real resolver over a real catalog envelope, so role narrowing is applied, not assumed.
       profile: async ({ availableTools, workMode }) => ({
         profile: resolveTurnProfile({
