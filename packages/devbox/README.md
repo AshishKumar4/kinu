@@ -42,7 +42,9 @@ that when it attaches.
    platform's refusal. A refusal the recovery ladder classes terminal is
    recorded with the start's image, size and internet setting; until one of
    them changes or a caller asks with `start()` or `attachNow()`, requests
-   get that refusal and nothing starts or is filed again (D52).
+   get that refusal (code `refused`) and nothing starts or is filed again,
+   and `boxSize()` reports it. The refusal names no action: the host tells
+   its own readers what they can do (D52).
 2. Devbox installs outbound routing, then enters its own
    `blockConcurrencyWhile` restore block. It adopts an already-restored
    instance or restores files, supervised processes and port exposures under

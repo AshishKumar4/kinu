@@ -1526,8 +1526,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       : Effect.fail(new DevboxError('invalid-input', `no box size ${size}; the sizes are ${BOX_SIZE_ORDER.join(', ')}`));
   }
 
-  boxSize(): Promise<{ readonly size: BoxSize; readonly chosen: BoxSize | undefined; readonly running: BoxSize | undefined }> {
-    return settle(Effect.sync(() => ({ size: this.#size(), chosen: this.#stored(SIZE_KEY), running: this.#runningSize() })));
+  boxSize(): Promise<{
+    readonly size: BoxSize; readonly chosen: BoxSize | undefined; readonly running: BoxSize | undefined; readonly startRefused: string | undefined;
+  }> {
+    return settle(Effect.sync(() => ({
+      size: this.#size(), chosen: this.#stored(SIZE_KEY), running: this.#runningSize(), startRefused: this.#refusedStart(),
+    })));
   }
 
   useDefaultSize(size: string | null): Promise<BoxSize> {
@@ -1594,7 +1598,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     await this.#armStartup();
 
     if (this.#restoration.phase === 'unattached' && !this.#restoration.retry) {
-      throw new DevboxError("io", terminalRefusal(this.#restoration.reason));
+      throw new DevboxError('refused', terminalRefusal(this.#restoration.reason));
     }
 
     return {

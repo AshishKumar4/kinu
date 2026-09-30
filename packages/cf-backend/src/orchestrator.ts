@@ -4750,7 +4750,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (box === undefined) return null;
     const [account, size] = await Promise.all([this.accountSandboxSize(), box.boxSize()]);
 
-    return { account, chosen: size.chosen ?? null, size: size.size, running: size.running ?? null };
+    return { account, chosen: size.chosen ?? null, size: size.size, running: size.running ?? null, startRefused: size.startRefused ?? null };
+  }
+
+  /** The owner's try-again for a refused start: the box's one start path, which clears the refusal. */
+  @callable() async startSandbox(): Promise<SandboxSizeState | null> {
+    const box = this.env.KinuDevbox?.getByName(sandboxIdForWorkspace(this.name));
+
+    if (box === undefined) return null;
+    await box.useDefaultSize(await this.accountSandboxSize());
+    await box.start();
+
+    return await this.getSandboxSize();
   }
 
   @callable() async resizeSandbox(size: string | null): Promise<SandboxSizeState | null> {

@@ -15,7 +15,7 @@ mockAgentsSdk();
 
 const SUFFIX = 'previews.example';
 
-const TERMINAL = 'this devbox has no attached work directory: the mount refused. That recovery class is terminal: call attachNow() to attempt the attach again.';
+const TERMINAL = 'this devbox has no attached work directory: the mount refused. That failure is terminal, so nothing retries it.';
 
 const PORT = 8788;
 
