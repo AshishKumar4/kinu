@@ -12,7 +12,7 @@ import { storedUsage } from '../heads/journal';
 import type { StoredHeadUsage } from '../heads/schema';
 import { listMissionSpend, type MissionBudgetSnapshot } from '../mission-budget';
 import type { ActorHandle } from '../identity/actor-handle';
-import { sortAccountSpend } from './account-usage';
+import { addSpendTally, mergeAccountSpend } from './account-usage';
 
 export interface ProducerSpend extends SpendTally {
   readonly source: SpendSource;
@@ -87,21 +87,39 @@ export interface WorkspaceSpendDeps {
   readonly events: RunEventRecorder;
   readonly sql: SqlExecutor;
   readonly actor: ActorHandle;
+  /** Each agent's own isolate keeps its own (D9). */
+  readonly others?: readonly SpendLedger[];
+}
+
+export interface SpendLedger {
+  readonly producers: readonly ProducerSpend[];
+  readonly accounts: readonly AccountSpend[];
+}
+
+export function spendLedger(events: RunEventRecorder, stepSources: readonly StepSpendSource[]): SpendLedger {
+  return { producers: [...events.spendByProducer(stepSources)].map(([source, tally]) => ({ source, ...tally })), accounts: events.spendByAccount() };
+}
+
+export function headStepSources(sql: SqlExecutor): StepSpendSource[] {
+  return readHeadSpend(sql).flatMap((head): StepSpendSource[] => head.headActorId === null ? [] : [{
+    actorId: head.headActorId,
+    source: 'head',
+    coveredSince: head.completedAt !== null && usageReported(storedUsage(head))
+      ? new Date(head.spawnedAt).toISOString() : null,
+  }]);
 }
 
 export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend & { readonly accounts: readonly AccountSpend[] } {
   deps.actor.assertCurrent();
   const tallies: Tallies = new Map();
   const heads = readHeadSpend(deps.sql);
+  const ledgers = [spendLedger(deps.events, headStepSources(deps.sql)), ...deps.others ?? []];
 
-  const stepSources = heads.flatMap((head): StepSpendSource[] => head.headActorId === null ? [] : [{
-    actorId: head.headActorId,
-    source: 'head',
-    coveredSince: head.completedAt !== null && usageReported(storedUsage(head))
-      ? new Date(head.spawnedAt).toISOString() : null,
-  }]);
+  for (const { source, ...tally } of ledgers.flatMap((ledger) => ledger.producers)) {
+    const held = tallies.get(source);
 
-  for (const [source, tally] of deps.events.spendByProducer(stepSources)) tallies.set(source, openTally(tally));
+    tallies.set(source, openTally(held === undefined ? tally : addSpendTally(held, tally)));
+  }
 
   for (const head of heads) {
     const usage = storedUsage(head);
@@ -155,7 +173,7 @@ export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend & { rea
       ? null
       : (measuredTokens - turnTokens) / measuredTokens,
     missions: listMissionSpend(deps.sql, deps.actor),
-    accounts: sortAccountSpend(deps.events.spendByAccount()),
+    accounts: mergeAccountSpend(ledgers.map((ledger) => ledger.accounts)),
   };
 }
 

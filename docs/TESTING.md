@@ -299,6 +299,16 @@ The pilot searches. A human reads each survivor and decides whether it is an equ
 
 The pilot mutates source in place and refuses to run in the main checkout. The reason is measured and recorded in `mutation-sweep.ts`: a sandbox copy resolves `@kinu.run/*` through the donor `node_modules` to the pristine package, so two thirds of a mutant's own defenders would never see it. So `nightly-mutation.sh` builds a detached worktree, runs `setup-worktree.sh` in it, and removes it in a trap.
 
+## Test hygiene
+
+Test public behavior, not a source file's spelling. `test-census` follows source paths held in literal bindings through local reader parameters; its red fixtures cover that route as well as direct reads. Runtime-built paths remain a reported blind spot.
+
+The reconnect snapshot tests call the real RPCs and mount `useKinu` behind the gallery transport. A held snapshot is released after newer reads land, and the client must retain the newer memory, executors, plan, tab presence and slates. Prompt prose hashes, decorative SVG/GIF checks and stylesheet ordering are not contracts. Section overrides, resource loading, preference precedence, permissions and data integrity are.
+
+Wait for the effect being asserted. A theme control waits for the applied mode, not a fixed number of sleeps. CLI protocol waits are notified by the socket or RPC callback. Daemon waits observe stdout, file changes, process exit or the owning hub's frames. OpenTUI fixtures use the upstream frame and scheduler APIs; rendered text is checked with an independent WCAG contrast calculation, not the theme's own hex values. The flake gate below repeats the real suites without synthetic load.
+
+Escape has a decoder stage before rendering. The keyboard fixture awaits its native key event, then proves that focus returns by typing into the visible composer; visual idle alone does not prove the input was decoded.
+
 ## Flakes
 
 A test that passes and fails on one tree is a flake. A row runs each suite once, so only a repeat can show one.

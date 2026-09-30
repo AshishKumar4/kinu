@@ -1,5 +1,5 @@
 /** Durable memory surface: prose notes, keyed facts, and past transcript recall. Also backs `memory.*` in eval. */
-import type { Memory, MemorySearchResult, SqlExecutor } from '../types/primitives';
+import type { Memory, MemorySearchResult } from '../types/primitives';
 import { Effect } from 'effect';
 import * as v from 'valibot';
 import { z } from 'zod';
@@ -10,8 +10,7 @@ import type { ActorHandle } from '../identity/actor-handle';
 import { appendMemoryNote } from '../memory/note';
 import { normalizeFactKey, searchFacts, type FactSearchHit, type FactsStore } from '../memory/facts';
 import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memory/hybrid-search';
-import { ConversationSearchStore } from '../memory/conversation-search';
-import type { SessionTranscriptReader } from '../session/transcript';
+import type { ConversationRecall } from '../memory/conversation-search';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
 import { memoryActionsFor, type MEMORY_FACT_ACTIONS } from './registry';
 import { KinuError, settle, toKinuError, renderThrownChain } from '../obs/index';
@@ -25,11 +24,9 @@ export interface MemoryToolDeps {
   vectorStore?: VectorStore | null;
   /** remember/recall/forget are reachable only when set. */
   facts?: FactsStore;
-  sql: SqlExecutor;
-  /** Conversation store is bound to this actor, so recall reads only its rows. */
   readonly actor: ActorHandle;
-  /** Recall materializes entry text through this reader; text is not a column. */
-  readonly transcriptFor: (sessionId: string) => SessionTranscriptReader;
+  /** Bound to this actor, so recall reads only its rows. */
+  readonly conversations: ConversationRecall;
 }
 
 /** A remembered fact's confidence; `memory.remember` in eval takes it positionally. */
@@ -124,7 +121,7 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
   };
 
   // Mode: around_message_id -> scroll, query -> search, neither -> browse.
-  const conversationSearch = new ConversationSearchStore(deps.sql, deps.actor, deps.transcriptFor);
+  const conversationSearch = deps.conversations;
 
   const runConversationsAction = (args: MemoryToolInput): Effect.Effect<JsonValue, KinuError> => Effect.gen(function* () {
     const around = args.around_message_id;

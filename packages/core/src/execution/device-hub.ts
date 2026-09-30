@@ -86,8 +86,6 @@ interface TunnelEntry {
   ws: DeviceSocket;
 }
 
-const CHATGPT_STATUS_TIMEOUT_MS = 5_000;
-
 export class DeviceSocketHub {
   private readonly tunnels = new Map<string, TunnelEntry>();
 
@@ -239,10 +237,7 @@ export class DeviceSocketHub {
 
     if (!tunnel) return settle(Effect.fail(new KinuError('unavailable', NO_DEVICE_CONNECTED)));
     const status = method === DEVICE_CHATGPT.status;
-
-    const asked = attempt({ doing: 'asking the machine about its ChatGPT sign-in', otherwise: 'unavailable' }, () => tunnel.rpc(method, [], status
-      ? { timeoutMs: CHATGPT_STATUS_TIMEOUT_MS }
-      : undefined));
+    const asked = attempt({ doing: 'asking the machine about its ChatGPT sign-in', otherwise: 'unavailable' }, () => tunnel.rpc(method, [], { timeoutMs: 0 }));
 
     return settle(asked.pipe(
       Effect.map((answer) => answer ?? null),

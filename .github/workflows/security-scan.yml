@@ -45,7 +45,7 @@ jobs:
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version-file: package.json
 
       # The self-test imports the repository's own modules (valibot, test-utils);
       # without an install it fails on the first import, not on a finding.

@@ -351,6 +351,15 @@ Workers Observability in unsampled 15-minute windows): the fast tier answered
 nobody there (36 alarm invocations and 18 cancelled deliveries an hour, each
 activation re-sweeping the provider listing for 0.9-1.7 s). Pinned by
 `unit-terminal-effect-refusal`.
+Amended 2026-09-30 (review): a refusal that answers after a release does not
+park; it falls due at once, as a released row does. The release found only rows
+already parked, so a call made with a key the owner replaced while it waited
+parked on its late 401, and nothing tried the new key until another change. The
+ledger counts its releases in memory, the owner's change and a newer claim
+alike, and an attempt reads the count as it starts: the call and the release
+run in the one object, and an attempt its isolate does not outlive never
+parks. A newer claim then costs an in-flight refusal one more call, never a
+clock. Pinned by the two "falls due at once instead of parking" cases.
 
 T2. An actor owes at most one `sleep_time`: the claim that owes a newer row
 completes the older owed ones, parked or pending, because the effect reads the
@@ -370,6 +379,19 @@ workspace's chat ran on Workers AI while `MODEL_ROUTE_POLICY` held compaction,
 fast and reflection on the account profile's fast tier (opencode/glm-5.3), the
 background lanes called `route.model` alone, and the owner saw none of the
 refusals. Pinned by `unit-fixed-tier-chain`.
+Amended 2026-09-30 (review): the notice names each model of the call that
+refused for the owner to fix, in the order called, with the named account its
+credential lookup chose (`opencode@work/glm-5.3`; the main account stays
+implicit). It named the route's primary, so a primary that handed over on a 503
+was blamed for its fallback's 402, and a primary its cooldown skipped was named
+though never called. It is said only when the call ends on such a refusal; a
+tier a later model answered for is answering. A call that started before the
+owner's latest model-settings change says nothing: its refusal answered for
+what the change replaced, and the owner's fix would meet a notice that it is
+still broken. The workspace object counts those changes in memory, every
+actor's notices it builds read the one count, and the first refusal after a
+change is news even if it matches the last. A local session has no such change
+under it.
 
 ## Delegation
 
@@ -1051,6 +1073,22 @@ bytes. Awaiting the write callback preserved all 1,191,111 bytes on stdout
 and stderr. Without that wait, the wrapper's `process.exit` can discard the
 queued tail, including a failing verdict.
 
+The same completed-write boundary drains a concurrent tier's accumulated row
+report. Measured 2026-09-30, replaying a real 729,413-byte CI record through
+the pipe capture and `console.log` to a reader first reading after 200 ms
+kept only 65,536 bytes before process exit. Awaiting that record's write
+callback preserved all 729,413 bytes. A child's EOF alone does not drain the
+parent's report, so both inherited and accumulated output use this boundary.
+
+L13. The Bash wave collects completed children by pid before waiting for a live
+child. Decided 2026-09-30. Measured on Bash 5.3.9: after a child exited 47,
+`jobs -l` named its exit, `wait -n -p` returned 127 and no pid, and `wait <pid>`
+returned 47. A future-only wait leaves completed gates holding the wave
+resource credits. The runner reads Bash's running-job set, waits cached
+completions by pid, and restricts `wait -n` to the tracked wave. If every child
+finishes between that read and the wait, a tracked pid still yields its cached
+status. No new process, timer, timeout or resource budget governs a gate.
+
 ## Providers
 
 P1. The ChatGPT plan is Sign in with ChatGPT's open-source token sharing
@@ -1117,14 +1155,56 @@ the docs, not the route: `prompt_cache_key`, `include` and `parallel_tool_calls`
 which the docs' list of refused fields does not name, have not met the real
 route, and neither has the `functions` namespace name.
 
-L13. The Bash wave collects completed children by pid before waiting for a live
-child. Decided 2026-09-30. Measured on Bash 5.3.9: after a child exited 47,
-`jobs -l` named its exit, `wait -n -p` returned 127 and no pid, and `wait <pid>`
-returned 47. A future-only wait leaves completed gates holding the wave
-resource credits. The runner reads Bash's running-job set, waits cached
-completions by pid, and restricts `wait -n` to the tracked wave. If every child
-finishes between that read and the wait, a tracked pid still yields its cached
-status. No new process, timer, timeout or resource budget governs a gate.
+Amended 2026-09-30 after the security review of b23ebbbe20 (SIWC-01 to 11).
+A sign-in's record has one writer at a time, and every writer re-reads it
+there: the daemon's refresh, sign-in landing and sign-out run on one chain,
+and the CLI's refresh and sign-out (`signOutChatGptLogin`) take the config
+lock. So a sign-out waits for a rotation in flight and revokes the token it
+left, no call gets a token while it runs, and a refresh answer that arrives
+late or queued renews only the login still on disk: none brings a signed-out
+session back or writes over a newer sign-in. A spent refresh token retires the
+login on both (the CLI resubmitted it on every call), and signing out, main or
+named account, keeps only the registration (issuer, subject, email, client
+ID), never the ID token. A daemon that exits or hands over to an update
+quiesces first: no new rotation, the one in flight lands, and so does a
+sign-in whose browser has come back. No clock ends anything there (owner
+rule 5). A call to auth.openai.com ends when its answer does, or when a
+forced stop ends it: a second stop signal aborts it unanswered, writes
+nothing, and the exit follows. The successor waits for its predecessor's
+exit itself: the updater starts it with a pipe for stdin, never written,
+whose far end the OS closes when the predecessor ends, however it ends (a
+clean exit, a crash, SIGKILL; seen on Bun 1.4.0 and Node, with a grandchild
+still running and after forced collections). Only then does it rotate
+(`device.predecessor_exited`). A hung call therefore holds the old daemon's
+exit and the new one's rotations until the platform's connection fails or
+the owner stops the old daemon; `device.exit_draining` says which daemon
+waits. The web's status call on a machine is deadline-free too, ended by
+the answer or by the tunnel's liveness probe. The refused request fields are dropped
+from the wire body, the preview's whole list, because product code may not
+name the output cap (`no-output-token-cap`). `response.incomplete` is not
+success: on a stream an output-limit stop reaches the SDK as a `length`
+finish, which the chat loop continues once, and any other reason fails the
+stream (`content_filter` as `denied`); a one-shot call fails on any. A refusal
+carries the provider's own words (its message, or an admission answer's
+`detail`) with the status, code and request ID; Kinu's sentence stands in
+only when the provider says nothing. A device sign-in tells nobody, so the
+first read of `/api/user/chatgpt` to see one start or end raises the
+credential revision and fans out as a credential write does (the last one
+seen is `chatgpt_sign_in_seen` in the UserDO's key-value store). Hosted
+eligibility (SIWC-06) is the owner's call; until then the web's ChatGPT entry
+says that the plan runs through the owner's device, that OpenAI's
+open-source terms cover locally hosted apps, and that they connect at their
+own risk. Measured red on the reviewed code and green after:
+`pc-agent/tests/chatgpt.test.js` (a sign-out and a sign-in landing during a
+held rotation, quiesce, a successor waiting on its predecessor, the fields a
+signed-out record keeps, a declined grant),
+`cli-backend/tests/oauth-store.test.ts` (a spent refresh retired, a refresh
+queued behind a sign-out, a sign-out behind a rotation, a named sign-out),
+`core/tests/contract-chatgpt-plan.test.ts` (the whole refused list with an
+output cap supplied, three incomplete cases, the provider's words),
+`unit-pc-agent-provider-relay` (the real daemon stopped mid-rotation writes
+the rotated token before it exits; the first read of a sign-in raises the
+revision), `unit-chatgpt-plan-route` and `providers-command`.
 
 ## Open
 

@@ -15,7 +15,7 @@ import { buildDrainBatch, EventLog, initEventsHubTables } from '../src/events/hu
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
 import type { Schedule, SqlExecutor, SqlValue } from '../src/types/primitives';
 import type { JsonValue } from '../src/utils/json';
-import { makeSql, makeExecRaw, makeSqlExec, storesFor } from './helpers';
+import { makeSql, makeExecRaw, makeSqlExec, conversationsFor } from './helpers';
 import { createTestRuntime, createTestActors, toolExecute } from '@kinu.run/test-utils';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { inWorkMode } from '../src/execution/work-mode';
@@ -1210,7 +1210,7 @@ test('a recovered Plan job cannot mutate project files through a Build-shaped ca
   const path = '/home/main/resumed.txt';
   await rt.storage.vfs.mkdir('/home/main', { recursive: true });
   await rt.storage.vfs.writeFile(path, 'original');
-  const file = buildBuiltinTools({ rt, history: storesFor(rt).history }).file;
+  const file = buildBuiltinTools({ rt, conversations: conversationsFor(rt) }).file;
 
   if (file === undefined) throw new Error('No file tool');
   const write = toolExecute<JsonValue, JsonValue>(file);

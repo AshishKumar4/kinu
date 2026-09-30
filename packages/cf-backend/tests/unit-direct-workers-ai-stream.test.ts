@@ -112,6 +112,7 @@ function manualStream() {
   let sink: ReadableStreamDefaultController<Uint8Array> | undefined;
   let closed = false;
   let cancelled = false;
+  const cancellation = Promise.withResolvers<void>();
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -119,6 +120,7 @@ function manualStream() {
     },
     cancel() {
       cancelled = true;
+      cancellation.resolve();
     },
   });
 
@@ -134,6 +136,7 @@ function manualStream() {
     },
     closed: () => closed,
     cancelled: () => cancelled,
+    whenCancelled: cancellation.promise,
   };
 }
 
@@ -445,8 +448,7 @@ describe('direct Workers AI binding — incremental streaming', () => {
     controller.abort();
     await reader.cancel();
 
-    // Cancellation propagates in microtasks; bounded so a broken chain fails instead of hanging.
-    for (let i = 0; i < 100 && !upstream.cancelled(); i++) await Promise.resolve();
+    await upstream.whenCancelled;
 
     expect(upstream.cancelled()).toBe(true);
   });

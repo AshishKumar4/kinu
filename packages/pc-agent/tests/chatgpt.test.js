@@ -10,6 +10,10 @@
 
 const { describe, expect, test } = require('bun:test');
 
+const { once } = require('node:events');
+
+const { spawn } = require('node:child_process');
+
 const fs = require('node:fs');
 
 const path = require('node:path');
@@ -17,6 +21,8 @@ const path = require('node:path');
 const { scratchDir } = require('../../test-utils/src/scratch');
 
 const chatgpt = require('../src/chatgpt.js');
+
+const update = require('../src/update.js');
 
 const TOKEN_URL = 'https://auth.openai.com/api/accounts/oauth/token';
 
@@ -60,11 +66,11 @@ function authServer(keys, answer) {
   const fetch = async (input, init) => {
     const url = String(input);
     const form = Object.fromEntries(new URLSearchParams(init?.body === undefined ? '' : String(init.body)));
-    calls.push({ url, form });
+    calls.push({ url, form, signal: init?.signal });
 
     if (url === JWKS_URL) return Response.json(keys.jwks);
 
-    if (url === TOKEN_URL) return answer(form);
+    if (url === TOKEN_URL) return answer(form, init);
 
     if (url === REVOKE_URL) return new Response(null, { status: 200 });
 
@@ -324,6 +330,15 @@ describe('refresh', () => {
       { grant_type: 'refresh_token', client_id: 'oaiapp_issued', refresh_token: 'rt-1', resource: 'https://api.openai.com/v1' },
     ]);
     expect(tokens).toMatchObject({ accessToken: 'at-2', refreshToken: 'rt-2', scopes: FULL_SCOPE.split(' ') });
+    // No clock rides the call: it ends when its answer does.
+    expect(auth.tokenCalls().map((call) => call.signal)).toEqual([undefined]);
+  });
+
+  test('a revocation carries no deadline either', async () => {
+    const auth = authServer(await signer(), async () => Response.json({}));
+
+    expect(await chatgpt.revokeSession({ clientId: 'oaiapp_issued', refreshToken: 'rt-1', fetch: auth.fetch })).toEqual({ unconfirmed: null });
+    expect(auth.calls.map((call) => [call.url, call.signal])).toEqual([[REVOKE_URL, undefined]]);
   });
 
   test.each(chatgpt.UNUSABLE_REFRESH_CODES)('%s spends the session', async (code) => {
@@ -349,6 +364,17 @@ describe('the daemon\'s own sign-in', () => {
   }
 
   const read = (home) => JSON.parse(fs.readFileSync(path.join(home, chatgpt.DEVICE_RECORD_FILE), 'utf8'));
+
+  /** Resolves once the record holds `accessToken`; each write renames a file into `home`, which the watch sees. */
+  async function recordHolds(home, accessToken) {
+    const watcher = fs.watch(home);
+
+    try {
+      while (read(home).accessToken !== accessToken) await once(watcher, 'change');
+    } finally {
+      watcher.close();
+    }
+  }
 
   test('callers that meet an expiring token share one rotation, and the replacement lands owner-only', async () => {
     const home = scratchDir('siwc-device-rotate');
@@ -390,10 +416,9 @@ describe('the daemon\'s own sign-in', () => {
     const session = chatgpt.createDeviceSession({ home, fetch: authServer(await signer(), async () => Response.json({ error: 'refresh_token_reused' }, { status: 400 })).fetch });
 
     await expect(session.bearer()).rejects.toThrow('refresh_token_reused');
-    expect(read(home)).not.toHaveProperty('accessToken');
-    expect(read(home)).not.toHaveProperty('refreshToken');
-    expect(chatgpt.registrationOf(read(home))).toEqual({ clientId: 'oaiapp_device', subject: 'user-sub', email: 'owner@example.com' });
-    expect(session.status()).toMatchObject({ signedIn: false, email: 'owner@example.com' });
+    // Only the account and client mapping stays: every token goes, the ID token with them.
+    expect(read(home)).toEqual({ issuer: 'https://auth.openai.com', subject: 'user-sub', email: 'owner@example.com', clientId: 'oaiapp_device' });
+    expect(session.status()).toMatchObject({ signedIn: false, planDeclined: false, email: 'owner@example.com' });
     expect(await session.bearer()).toBeNull();
   });
 
@@ -407,8 +432,212 @@ describe('the daemon\'s own sign-in', () => {
     expect(auth.calls.filter((call) => call.url === REVOKE_URL).map((call) => call.form)).toEqual([
       { token: 'rt-1', token_type_hint: 'refresh_token', client_id: 'oaiapp_device' },
     ]);
+    expect(read(home)).toEqual({ issuer: 'https://auth.openai.com', subject: 'user-sub', email: 'owner@example.com', clientId: 'oaiapp_device' });
+    // Signed out, which is not a sign-in that declined plan usage.
+    expect(session.status()).toMatchObject({ signedIn: false, planDeclined: false });
+  });
+
+  test('a sign-in that declined plan usage says so, and the next one asks for consent again', async () => {
+    const home = scratchDir('siwc-device-declined');
+    deviceRecord(home, { scopes: ['email', 'openid', 'profile'] });
+    const session = chatgpt.createDeviceSession({ home, fetch: authServer(await signer(), async () => Response.json({})).fetch });
+
+    expect(session.status()).toMatchObject({ signedIn: false, planDeclined: true, planEnabled: false });
+    expect(new URL((await session.signIn()).authorizeUrl).searchParams.get('prompt')).toBe('consent');
+    await session.signOut();
+  });
+
+  /** auth.openai.com with each refresh held until the test lets it answer; revocations answer at once. */
+  async function heldRefreshes() {
+    const released = Promise.withResolvers();
+    const reached = Promise.withResolvers();
+    const events = [];
+
+    const auth = authServer(await signer(), async (form, init) => {
+      if (form.grant_type !== 'refresh_token') return Response.json({});
+      reached.resolve();
+
+      // Held as a real call is, and ended as one is when its signal aborts.
+      await new Promise((resolve, reject) => {
+        released.promise.then(resolve, reject);
+        init?.signal?.addEventListener('abort', () => { reject(init.signal.reason); }, { once: true });
+      });
+
+      events.push('answered');
+
+      return Response.json({ access_token: 'at-new', refresh_token: 'rt-new', expires_in: 3600 });
+    });
+
+    return { auth, events, reached: reached.promise, release: released.resolve };
+  }
+
+  // SIWC-01: a delayed refresh answer used to write the rotated tokens over a sign-out that had finished.
+  test('a sign-out during a rotation waits for it, revokes the rotated token, and nothing brings the session back', async () => {
+    const home = scratchDir('siwc-device-out-mid-rotation');
+    deviceRecord(home, { accessToken: 'at-old', refreshToken: 'rt-old', expiresAt: Date.now() + 60_000 });
+    const held = await heldRefreshes();
+    const session = chatgpt.createDeviceSession({ home, fetch: held.auth.fetch });
+    const using = session.bearer();
+
+    await held.reached;
+    const signingOut = session.signOut();
+    // No call is handed a token while the sign-out is under way, the rotated one included.
+    const during = session.bearer();
+
+    held.release();
+
+    expect(await signingOut).toEqual({ unconfirmed: null });
+    expect(await during).toBeNull();
+    await using;
+    expect(held.auth.calls.filter((call) => call.url === REVOKE_URL).map((call) => call.form.token)).toEqual(['rt-new']);
     expect(read(home)).not.toHaveProperty('refreshToken');
     expect(session.status().signedIn).toBe(false);
+    expect(await session.bearer()).toBeNull();
+  });
+
+  test('a sign-in that lands during an old session\'s rotation keeps the new session', async () => {
+    const home = scratchDir('siwc-device-in-mid-rotation');
+    deviceRecord(home, { accessToken: 'at-old', refreshToken: 'rt-old', expiresAt: Date.now() + 60_000 });
+    const keys = await signer();
+    const released = Promise.withResolvers();
+    const reached = Promise.withResolvers();
+    const exchange = exchangeAnswer(keys);
+
+    const auth = authServer(keys, async (form) => {
+      if (form.grant_type === 'authorization_code') return exchange(form);
+      reached.resolve();
+      await released.promise;
+
+      return Response.json({ access_token: 'at-stale', refresh_token: 'rt-stale', expires_in: 3600 });
+    });
+
+    const session = chatgpt.createDeviceSession({ home, fetch: auth.fetch });
+    const using = session.bearer();
+
+    await reached.promise;
+    const authorize = new URL((await session.signIn()).authorizeUrl);
+    pendingNonce = authorize.searchParams.get('nonce') ?? '';
+    const callback = new URL(authorize.searchParams.get('redirect_uri') ?? '');
+    callback.searchParams.set('code', 'code-new');
+    callback.searchParams.set('state', authorize.searchParams.get('state') ?? '');
+
+    expect((await fetch(callback)).status).toBe(200);
+    released.resolve();
+    await using;
+
+    // The landing waits its turn behind the rotation, then writes the new session over it.
+    await recordHolds(home, 'at-1');
+    expect(read(home)).toMatchObject({ accessToken: 'at-1', refreshToken: 'rt-1' });
+  });
+
+  // SIWC-07: an update handoff used to exit with a rotation in flight, leaving the spent token on disk.
+  test('a quiesced session lets the rotation in flight land before it lets go, and starts no other', async () => {
+    const home = scratchDir('siwc-device-quiesce');
+    deviceRecord(home, { accessToken: 'at-old', refreshToken: 'rt-old', expiresAt: Date.now() + 60_000 });
+    const held = await heldRefreshes();
+    const session = chatgpt.createDeviceSession({ home, fetch: held.auth.fetch });
+    const using = session.bearer();
+
+    await held.reached;
+    const quiet = session.quiesce().then(() => { held.events.push('drained'); });
+    const during = session.bearer();
+
+    held.release();
+    await quiet;
+    // A clean drain waits for the answer, however long it takes, and ends nothing itself.
+    expect(held.events).toEqual(['answered', 'drained']);
+    expect(held.auth.tokenCalls().map((call) => call.signal?.aborted)).toEqual([false]);
+    expect(await during).toBeNull();
+    expect(read(home)).toMatchObject({ accessToken: 'at-new', refreshToken: 'rt-new' });
+    expect(await using).toBe('at-new');
+  });
+
+  // A second stop signal, or an explicit forced stop: the owner's decision, not a clock's.
+  test('a forced stop ends the auth call in flight unanswered, writes nothing, and lets the daemon go', async () => {
+    const home = scratchDir('siwc-device-forced');
+    deviceRecord(home, { accessToken: 'at-old', refreshToken: 'rt-old', expiresAt: Date.now() + 60_000 });
+    const held = await heldRefreshes();
+    const session = chatgpt.createDeviceSession({ home, fetch: held.auth.fetch });
+    const using = failureOf(session.bearer());
+
+    await held.reached;
+    const quiet = session.quiesce();
+
+    session.abort();
+    await quiet;
+    expect((await using)?.message).toContain('stopped before auth.openai.com answered');
+    expect(held.events).toEqual([]);
+    expect(held.auth.tokenCalls().map((call) => call.signal?.aborted)).toEqual([true]);
+    expect(read(home)).toMatchObject({ accessToken: 'at-old', refreshToken: 'rt-old' });
+    expect(await session.bearer()).toBeNull();
+  });
+
+  test('a sign-in the browser finishes during a clean drain lands, and the drain waits for it', async () => {
+    const home = scratchDir('siwc-device-drain-sign-in');
+    const keys = await signer();
+    const reached = Promise.withResolvers();
+    const released = Promise.withResolvers();
+    const exchange = exchangeAnswer(keys);
+
+    const auth = authServer(keys, async (form) => {
+      reached.resolve();
+      await released.promise;
+
+      return exchange(form);
+    });
+
+    const session = chatgpt.createDeviceSession({ home, fetch: auth.fetch });
+    const authorize = new URL((await session.signIn()).authorizeUrl);
+    pendingNonce = authorize.searchParams.get('nonce') ?? '';
+    const callback = new URL(authorize.searchParams.get('redirect_uri') ?? '');
+
+    for (const [name, value] of Object.entries({ code: 'code-drain', state: authorize.searchParams.get('state') ?? '', client_id: 'oaiapp_issued' })) {
+      callback.searchParams.set(name, value);
+    }
+
+    const page = fetch(callback);
+
+    await reached.promise;
+    const quiet = session.quiesce();
+
+    released.resolve();
+    await quiet;
+    expect((await page).status).toBe(200);
+    expect(read(home)).toMatchObject({ clientId: 'oaiapp_issued', accessToken: 'at-1', refreshToken: 'rt-1' });
+    expect(auth.calls.filter((call) => call.url === REVOKE_URL)).toEqual([]);
+  });
+
+  // The updater gives a successor its stdin as a lifeline, whose far end the OS closes when the predecessor ends.
+  test('an updated daemon rotates only once the daemon it replaced has exited, which the lifeline closing says', async () => {
+    const home = scratchDir('siwc-device-successor');
+    deviceRecord(home, { accessToken: 'at-old', refreshToken: 'rt-old', expiresAt: Date.now() + 60_000 });
+    // Stands in for the replaced daemon: it holds the pipe's far end until it exits.
+    const predecessor = spawn('sleep', ['30'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    const exited = once(predecessor, 'exit');
+    let lifelineClosed = false;
+    /** For each refresh, whether the lifeline had closed when it was sent. */
+    const afterClose = [];
+
+    predecessor.stdout.once('end', () => { lifelineClosed = true; });
+
+    try {
+      const auth = authServer(await signer(), async () => {
+        afterClose.push(lifelineClosed);
+
+        return Response.json({ access_token: 'at-new', refresh_token: 'rt-new', expires_in: 3600 });
+      });
+
+      const session = chatgpt.createDeviceSession({ home, fetch: auth.fetch, predecessorExited: update.lifelineClosed(predecessor.stdout) });
+      const using = session.bearer();
+
+      predecessor.kill();
+
+      expect(await using).toBe('at-new');
+      expect(afterClose).toEqual([true]);
+      await exited;
+    } finally {
+      predecessor.kill();
+    }
   });
 
   test('a sign-in the owner starts from the web reuses the CLI\'s registration on this machine', async () => {

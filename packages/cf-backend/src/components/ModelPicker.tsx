@@ -208,11 +208,11 @@ export function ModelPicker({
   );
 
   // Outside the menu, so it tests the selection without opening or closing anything.
-  // A stored spec the menu no longer lists is still tested: that failure is what the owner needs to see.
-  const selectedTest = !tests.enabled || listed === '' ? null : (
+  // The whole value, account included. A spec the menu no longer lists is still tested: its failure is the point.
+  const selectedTest = !tests.enabled || value === '' ? null : (
     <>
-      <TestButton spec={listed} tests={tests} inMenu={false} />
-      <TestStatus state={tests.stateOf(listed)} provider={parseModelSpec(listed).provider} className="basis-full" />
+      <TestButton spec={value} tests={tests} inMenu={false} />
+      <TestStatus state={tests.stateOf(value)} provider={parseModelSpec(value).provider} className="basis-full" />
     </>
   );
 

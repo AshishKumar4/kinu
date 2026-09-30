@@ -344,6 +344,22 @@ function describeFailure(err) {
 }
 
 /**
+ * Settles once the process holding the other end of `stream` has exited. A successor's stdin is its
+ * predecessor's pipe, and the OS closes the predecessor's end when it ends, however it ends: a clean exit, a
+ * crash, SIGKILL. The event is the exit itself, not a clock's guess at it.
+ */
+function lifelineClosed(stream) {
+  const { promise, resolve } = Promise.withResolvers();
+
+  stream.once('end', resolve);
+  stream.once('close', resolve);
+  stream.once('error', resolve);
+  stream.resume();
+
+  return promise;
+}
+
+/**
  * The updater for one daemon process.
  *
  * `layout` names what this daemon is: its home, its file, its siblings, the
@@ -365,7 +381,8 @@ function createUpdater(opts) {
     const child = spawnFn(layout.runtime, [layout.daemonPath], {
       cwd: layout.deviceHome,
       detached: true,
-      stdio: ['ignore', 'inherit', 'inherit'],
+      // Stdin is the successor's lifeline (`lifelineClosed`): never written, closed by the OS when this process ends.
+      stdio: ['pipe', 'inherit', 'inherit'],
       env: { ...process.env, KINU_HOME: layout.deviceHome, [PREDECESSOR_ENV]: String(process.pid) },
     });
 
@@ -496,6 +513,7 @@ module.exports = {
   VERSION_STAMP,
   UPDATE_PENDING_MARKER,
   PREDECESSOR_ENV,
+  lifelineClosed,
   UPDATE_FRAME,
   readVersionStamp,
   updateOptedOut,

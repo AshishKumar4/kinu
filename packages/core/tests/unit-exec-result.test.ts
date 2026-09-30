@@ -8,7 +8,7 @@ import { createInlineExecutor, createNimbusWorkspaceExecutor } from '../src/tool
 import { nimbusSessionFiles, nimbusSessionShell, type NimbusSandboxHandle } from '../src/execution/nimbus';
 import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-executor';
 import { buildBuiltinTools } from '../src/tools/builtins';
-import { createTestRuntime, storesFor } from './helpers';
+import { createTestRuntime, conversationsFor } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { Shell } from '../src/types/primitives';
 
@@ -26,7 +26,7 @@ const shellToolOver = (shell: Shell): ShellTool => {
 
   return {
     execute: toolExecute<{ command: string; runtime?: string }, CommandResult>(
-      buildBuiltinTools({ rt: runtime, history: storesFor(runtime).history }).shell,
+      buildBuiltinTools({ rt: runtime, conversations: conversationsFor(runtime) }).shell,
     ),
   };
 };

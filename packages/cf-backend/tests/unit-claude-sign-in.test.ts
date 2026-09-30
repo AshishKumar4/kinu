@@ -169,4 +169,38 @@ describe('Claude sign-in on the web', () => {
       harness.close();
     }
   });
+
+  test('a disconnect while a sign-in is open spends it: its code no longer connects Claude', async () => {
+    const harness = createTestUserDO();
+    const web = routes(harness);
+    claudeTokenEndpoint(() => Response.json({ access_token: 'at', refresh_token: 'rt' }));
+
+    try {
+      const state = (await web.start()).searchParams.get('state') ?? '';
+      await harness.userDO.deleteCredential(await testOwner(), CLAUDE_CRED_KEY);
+      const finished = await web.call('/claude/finish', { code: `the-code#${state}` });
+
+      expect(v.parse(FinishedSchema, await finished.json()).connected).toBe(false);
+      expect(await storedKeys(harness)).toEqual([]);
+    } finally {
+      harness.close();
+    }
+  });
+
+  test('a sign-in Claude answers without a refresh token stores nothing and says why', async () => {
+    const harness = createTestUserDO();
+    const web = routes(harness);
+    claudeTokenEndpoint(() => Response.json({ access_token: 'at', expires_in: 3600 }));
+
+    try {
+      const state = (await web.start()).searchParams.get('state') ?? '';
+      const status = v.parse(FinishedSchema, await (await web.call('/claude/finish', { code: `the-code#${state}` })).json());
+
+      expect(status.connected).toBe(false);
+      expect(status.error).toContain('refresh token');
+      expect(await storedKeys(harness)).toEqual([]);
+    } finally {
+      harness.close();
+    }
+  });
 });

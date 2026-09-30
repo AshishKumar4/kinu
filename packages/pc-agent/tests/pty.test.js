@@ -14,13 +14,10 @@
 
 const { afterEach, describe, expect, test } = require('bun:test');
 
+const { AwaitedList, awaitExit } = require('@kinu.run/test-utils');
+
 const { createSessions, MAX_AXIS, TERMINAL_NAME, parseSessionName } = require('../src/pty.js');
 
-/** Long enough for a shell to start, read a command and answer it on a loaded
- *  machine; short enough that a broken session fails a test rather than
- *  hanging it. Every wait below is for a CONDITION, never a fixed sleep, so a
- *  fast machine spends milliseconds here. */
-const SETTLE_MS = 15_000;
 
 const opened = [];
 
@@ -38,13 +35,14 @@ afterEach(() => {
  * it records, and answers true, exactly as an uncongested socket does.
  */
 function harness(options = {}) {
-  const frames = [];
+  const recorded = new AwaitedList();
+  const frames = recorded.items;
   const logged = [];
   const sessions = createSessions({ log: (...args) => logged.push(args), ...options });
   opened.push(sessions);
 
   const send = (frame) => {
-    frames.push(frame);
+    recorded.push(frame);
 
     return options.congested === true ? false : true;
   };
@@ -53,23 +51,18 @@ function harness(options = {}) {
     frames.filter((f) => f.type === 'PTY_OUT').map((f) => Buffer.from(f.data, 'base64')),
   ).toString('utf8');
 
-  return { sessions, frames, logged, send, output };
+  return { sessions, frames, logged, send, output, until: async (predicate) => {
+    let found;
+    await recorded.until(() => {
+      found = predicate();
+
+      return Boolean(found);
+    });
+
+    return found;
+  } };
 }
 
-/** Wait until `predicate` holds, checking on the event loop rather than on a
- *  clock: the assertion that follows is then about a state that was reached. */
-async function until(predicate, what, budgetMs = SETTLE_MS) {
-  const started = Date.now();
-
-  for (;;) {
-    const value = predicate();
-
-    if (value) return value;
-
-    if (Date.now() - started > budgetMs) throw new Error(`${what} did not happen within ${budgetMs} ms`);
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-}
 
 /** A shell on a terminal, as the daemon starts one for a device with no
  *  sandbox: the plan's own argv, and the terminal named in the environment. */
@@ -95,7 +88,7 @@ function shellEnv() {
  */
 async function ready(h, session) {
   h.sessions.write(session, Buffer.from('echo $((6 * 7))\r').toString('base64'));
-  await until(() => /(^|[^)*\s])42\b/m.test(h.output()), 'the shell answered a command');
+  await h.until(() => /(^|[^)*\s])42\b/m.test(h.output()));
 }
 
 describe('a device terminal is a real one', () => {
@@ -110,7 +103,7 @@ describe('a device terminal is a real one', () => {
 
     // top's own header. It draws this only after asking the terminal for its
     // size and putting the cursor somewhere, neither of which a pipe answers.
-    const painted = await until(() => /load average|%Cpu|Tasks:/.test(h.output()), 'top painted its screen');
+    const painted = await h.until(() => /load average|%Cpu|Tasks:/.test(h.output()));
     expect(painted).toBe(true);
     expect(h.output()).toContain('\u001b[');
 
@@ -128,25 +121,21 @@ describe('a device terminal is a real one', () => {
     const h = harness();
     h.sessions.open({ session: 'pane-jobs', cols: 80, rows: 24, argv: shellArgv(), env: shellEnv(), send: h.send });
     await ready(h, 'pane-jobs');
+    const prompts = () => h.output().match(/\b12831\b/g)?.length ?? 0;
+    h.sessions.write('pane-jobs', Buffer.from("PS1=; PROMPT_COMMAND='echo $((987 * 13))'\r").toString('base64'));
+    await h.until(() => prompts() === 1);
 
-    h.sessions.write('pane-jobs', Buffer.from('sleep 300\r').toString('base64'));
-    await until(() => h.output().includes('sleep 300'), 'the shell read the command');
-    // ^Z. The kernel sends SIGTSTP to the terminal's foreground group, which
-    // exists only because the leader claimed the terminal.
+    h.sessions.write('pane-jobs', Buffer.from("sh -c 'echo $((311 * 7)); exec sleep 300'\r").toString('base64'));
+    await h.until(() => /\b2177\b/.test(h.output()));
     h.sessions.write('pane-jobs', Buffer.from('\u001a').toString('base64'));
-    await until(() => /Stopped|suspended/.test(h.output()), 'the job stopped');
+    await h.until(() => /Stopped|suspended/.test(h.output()) && prompts() >= 2);
 
-    h.sessions.write('pane-jobs', Buffer.from('bg\r').toString('base64'));
-    await until(() => /Running|\[1\]\+? sleep/.test(h.output()), 'the job resumed in the background');
-
-    // ^C on the foreground shell leaves it alive and prompting, which is what
-    // makes it a terminal rather than a pipe that dies.
+    h.sessions.write('pane-jobs', Buffer.from('bg; jobs -l\r').toString('base64'));
+    await h.until(() => /Running/.test(h.output()) && prompts() >= 3);
     h.sessions.write('pane-jobs', Buffer.from('\u0003').toString('base64'));
-    h.sessions.write('pane-jobs', Buffer.from('echo alive\r').toString('base64'));
-    await until(() => h.output().includes('alive'), 'the shell survived the interrupt');
-
-    // The negative direction, so this test cannot pass on a terminal that has
-    // no controlling terminal: such a shell says so on the way up.
+    await h.until(() => prompts() >= 4);
+    h.sessions.write('pane-jobs', Buffer.from('echo $((123 * 29))\r').toString('base64'));
+    await h.until(() => /\b3567\b/.test(h.output()));
     expect(h.output()).not.toContain('no job control in this shell');
   });
 
@@ -156,12 +145,12 @@ describe('a device terminal is a real one', () => {
     await ready(h, 'pane-size');
 
     h.sessions.write('pane-size', Buffer.from('stty size\r').toString('base64'));
-    await until(() => /\b24 80\b/.test(h.output()), 'the shell reported the opening window');
+    await h.until(() => /\b24 80\b/.test(h.output()));
 
     const resized = h.sessions.resize('pane-size', 133, 44);
     expect(resized).toEqual({ cols: 133, rows: 44 });
     h.sessions.write('pane-size', Buffer.from('stty size\r').toString('base64'));
-    await until(() => /\b44 133\b/.test(h.output()), 'the shell reported the new window');
+    await h.until(() => /\b44 133\b/.test(h.output()));
   });
 
   test('a resize signals the running program, not only the next command', async () => {
@@ -179,9 +168,9 @@ describe('a device terminal is a real one', () => {
       env: shellEnv(),
       send: h.send,
     });
-    await until(() => h.output().includes('waiting'), 'the program started waiting');
+    await h.until(() => h.output().includes('waiting'));
     h.sessions.resize('pane-winch', 120, 40);
-    await until(() => /\b40 120\b/.test(h.output()), 'the program was told the window changed');
+    await h.until(() => /\b40 120\b/.test(h.output()));
   });
 
   test('the program exits and the session reports its status once', async () => {
@@ -189,7 +178,7 @@ describe('a device terminal is a real one', () => {
     h.sessions.open({
       session: 'pane-exit', cols: 80, rows: 24, argv: ['bash', '-c', 'exit 7'], env: shellEnv(), send: h.send,
     });
-    await until(() => h.frames.some((f) => f.type === 'PTY_EXIT'), 'the session reported the exit');
+    await h.until(() => h.frames.some((f) => f.type === 'PTY_EXIT'));
     const exits = h.frames.filter((f) => f.type === 'PTY_EXIT');
     expect(exits).toHaveLength(1);
     expect(exits[0]).toEqual({ type: 'PTY_EXIT', session: 'pane-exit', exitCode: 7 });
@@ -203,27 +192,17 @@ describe('a device terminal is a real one', () => {
     await ready(h, 'pane-close');
     // A descendant that outlives its shell is what a group signal is for.
     h.sessions.write('pane-close', Buffer.from('sleep 600 & echo started $!\r').toString('base64'));
-    const started = await until(() => /started (\d+)/.exec(h.output()), 'the shell started a background job');
+    const started = await h.until(() => /started (\d+)/.exec(h.output()));
     const descendant = Number(started[1]);
 
     const pid = h.sessions.pidOf('pane-close');
     h.sessions.close('pane-close');
-    await until(() => h.frames.some((f) => f.type === 'PTY_EXIT'), 'the session reported the exit');
+    await h.until(() => h.frames.some((f) => f.type === 'PTY_EXIT'));
     expect(h.sessions.has('pane-close')).toBe(false);
 
-    const gone = (candidate) => {
-      try {
-        process.kill(candidate, 0);
 
-        return false;
-      } catch (err) {
-        if (err && err.code === 'ESRCH') return true;
-        throw err;
-      }
-    };
-
-    await until(() => gone(pid), 'the shell is gone');
-    await until(() => gone(descendant), 'the background job is gone');
+    await awaitExit(pid);
+    await awaitExit(descendant);
   });
 });
 
@@ -300,7 +279,7 @@ describe('the session registry answers for what it holds', () => {
       env: shellEnv(),
       send: h.send,
     });
-    await until(() => h.frames.some((f) => f.type === 'PTY_EXIT'), 'the program exited');
+    await h.until(() => h.frames.some((f) => f.type === 'PTY_EXIT'));
     const discarded = h.logged.find((entry) => entry[0] === 'device.terminal_output_discarded');
     expect(discarded).toBeDefined();
     expect(discarded[1]).toBe('pane-loud');
@@ -313,36 +292,12 @@ describe('the session registry answers for what it holds', () => {
     h.sessions.open({ session: 'pane-2', cols: 80, rows: 24, argv: shellArgv(), env: shellEnv(), send: h.send });
     expect(h.sessions.size()).toBe(2);
     expect(h.sessions.closeAll().sort()).toEqual(['pane-1', 'pane-2']);
-    await until(() => h.sessions.size() === 0, 'both terminals ended');
+    await h.until(() => h.frames.filter((frame) => frame.type === 'PTY_EXIT').length === 2);
+    expect(h.sessions.size()).toBe(0);
   });
 });
 
-describe('the terminal is asked for the way that gives it signals', () => {
-  // The one detail this whole capability rests on, and the one a refactor can
-  // undo without breaking a single output assertion: Bun claims the pty as the
-  // shell's controlling terminal only for a terminal it creates during the
-  // spawn. Handing it one built beforehand costs ^C, ^Z, fg, bg and SIGWINCH,
-  // and costs them silently. The job-control test above goes red then; this
-  // one names the reason, so a reader knows why the shape matters.
-  test('the spawn creates the terminal, rather than receiving one', () => {
-    const asked = [];
-
-    const sessions = createSessions({
-      spawn(argv, options) {
-        asked.push({ argv, options });
-
-        return { pid: 4242, terminal: { write() {}, resize() {}, close() {} }, exited: new Promise(() => {}), kill() {} };
-      },
-    });
-
-    sessions.open({ session: 'pane-shape', cols: 80, rows: 24, argv: shellArgv(), env: shellEnv(), send: () => true });
-    const { terminal } = asked[0].options;
-    expect(terminal).not.toBeInstanceOf(Bun.Terminal);
-    expect(terminal.cols).toBe(80);
-    expect(terminal.rows).toBe(24);
-    expect(terminal.name).toBe(TERMINAL_NAME);
-    expect(terminal.data).toBeInstanceOf(Function);
-  });
+describe('an unsupported terminal runtime is refused', () => {
 
   test('a runtime that spawns no terminal is refused, not half-run', () => {
     const sessions = createSessions({

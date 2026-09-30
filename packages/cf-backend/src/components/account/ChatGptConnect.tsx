@@ -1,7 +1,4 @@
-/**
- * Sign in with ChatGPT runs on the owner's connected machine, which keeps the token and carries each call;
- * Kinu's servers never see it. With no machine, the Codex device code (`legacy`) is the way in.
- */
+/** Sign in with ChatGPT on the owner's machine (ADR P1); `legacy`, the Codex device code, without one. */
 import { useEffect, useState, type ReactNode } from "react";
 import { Loader } from "@cloudflare/kumo";
 import { Effect } from "effect";
@@ -79,8 +76,11 @@ export function ChatGptConnect({ plan, legacy, onChanged }: { plan: ChatGptPlan;
 
   return (
     <div className="space-y-2">
-      {status?.email !== null && status?.email !== undefined && !status.planEnabled && (
-        <p className="text-xs p-text-2">{status.email} signed in without ChatGPT plan usage. Continue with ChatGPT to allow it.</p>
+      <p className="rounded-md px-3 py-2 text-xs p-notice-warning">
+        Using your ChatGPT plan from kinu.run goes through your own device. OpenAI&apos;s open-source terms cover locally hosted apps, so you connect at your own risk.
+      </p>
+      {status?.planDeclined === true && (
+        <p className="text-xs p-text-2">{status.email ?? "Your ChatGPT account"} signed in without ChatGPT plan usage. Continue with ChatGPT to allow it.</p>
       )}
       <div className="flex flex-wrap items-center gap-3">
         <FilledButton onClick={() => settle(signIn())} disabled={waiting}>Continue with ChatGPT</FilledButton>
@@ -89,6 +89,7 @@ export function ChatGptConnect({ plan, legacy, onChanged }: { plan: ChatGptPlan;
       <p className="p-meta p-text-3">
         Signs in on {device.label}, which keeps the sign-in and carries your ChatGPT plan&apos;s requests. Open it in a browser on that machine.
       </p>
+
       {error && <p className="text-xs p-danger">{error}</p>}
       {welcome && (
         <Modal title="You're using your ChatGPT plan" icon={<BrandMark brand="openai" size={16} bare />} onClose={dismiss}

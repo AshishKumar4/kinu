@@ -407,8 +407,8 @@ export type { ContextSelection, ContextEntry } from './session/context';
 export type { ContextProposal, ContextChange } from './session/proposals';
 
 export {
-  contextMount,
-  type ActorContextStores, type ChildContextResolver, type ContextMountDeps, type ContextFileHeader,
+  contextMount, localContextTree, remoteContextTree, servedContextTree,
+  type ActorContextStores, type ChildContextResolver, type ContextMountDeps, type ContextFileHeader, type ContextTree, type ContextEditor, type ContextTreeRemote,
 } from './vfs/context-plane';
 
 export type { SessionFilePlane } from './session/payload';
@@ -582,7 +582,7 @@ export {
 
 // open-38: one physical workspace SQLite for every logical actor.
 export {
-  createActorHost, recoverActorTurns, childContextResolver, registeredParent,
+  createActorHost, recoverActorTurns, childContextResolver, hostedChildTree, registeredParent,
   type ActorHost, type ActorHostDeps, type BoundActor, type HostedActor,
   type LoopSeed, type ActorRetirement, type ResumableActorTurn,
 } from './state/actor-host';
@@ -1210,7 +1210,7 @@ export { appendMemoryNote, MEMORY_PATH, parseMemoryNotes, readMemoryTail, MEMORY
 
 export {
   ConversationSearchStore, invalidateConversationSearchIndex,
-  type ConversationSearchHit, type ConversationScrollMessage,
+  type ConversationRecall, type ConversationSearchHit, type ConversationScrollMessage,
   type ConversationScrollResult, type ConversationSummary,
 } from './memory/conversation-search';
 
@@ -1254,7 +1254,7 @@ export {
   parseStoredRunEvent,
   RunEventSchema,
   recordModelOperations,
-  RunEventRecorder,
+  RunEventRecorder, type StepSpendSource,
   boundRunEventQuery,
   RUN_EVENT_LIMIT_MAX,
   summarizeSteps,
@@ -1866,7 +1866,7 @@ export type { TurnRequestHead, TurnRequestIndex, TurnRequestPage, TurnRequestRow
 
 export type { RunListEntry, RunSummary } from './read-models/runs';
 
-export { workspaceSpend } from './read-models/workspace-spend';
+export { headStepSources, spendLedger, workspaceSpend } from './read-models/workspace-spend';
 
 export {
   AccountSpendSchema, AccountUsageSchema, mergeAccountSpend, readAccountUsage,
@@ -1874,7 +1874,7 @@ export {
 } from './read-models/account-usage';
 
 export type {
-  ProducerSpend, SpendCoverage, WorkspaceSpend, WorkspaceSpendDeps,
+  ProducerSpend, SpendCoverage, SpendLedger, WorkspaceSpend, WorkspaceSpendDeps,
 } from './read-models/workspace-spend';
 
 export {
@@ -2526,3 +2526,8 @@ export {
 } from './utils/spawned-output';
 
 export { MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId } from './mcp/presets';
+
+export type {
+  AgentTurnActivity, AgentCaptureDelta, AgentTurnOpening, AgentRecovery, AgentReview, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
+  AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn, StoredRow, TurnRequestAt,
+} from './subordinates/agent-isolate';

@@ -1,5 +1,5 @@
 import * as v from 'valibot';
-import type { AccountSpend } from '../events/model-call';
+import type { AccountSpend, SpendTally } from '../events/model-call';
 import { QuotaSnapshotSchema, type QuotaSnapshot } from '../providers/quota';
 import { LimitReportSchema, LimitUnreadSchema, type LimitReport, type LimitUnread } from '../providers/usage-limits';
 import { diagnostics, toKinuError } from '../obs/index';
@@ -26,7 +26,7 @@ export const AccountUsageSchema: v.GenericSchema<AccountUsage> = v.object({
   limitsUnread: v.optional(v.array(LimitUnreadSchema)),
 });
 
-export function sortAccountSpend(rows: readonly AccountSpend[]): AccountSpend[] {
+function sortAccountSpend(rows: readonly AccountSpend[]): AccountSpend[] {
   return [...rows].sort((a, b) => (a.provider === null ? 1 : 0) - (b.provider === null ? 1 : 0)
     || (usageTotal(b.usage) ?? -1) - (usageTotal(a.usage) ?? -1));
 }
@@ -43,20 +43,23 @@ function sumUsd(a: number | undefined, b: number | undefined): number | undefine
   return b === undefined ? a : a + b;
 }
 
-function addAccountSpend(a: AccountSpend, b: AccountSpend): AccountSpend {
+export function addSpendTally(a: SpendTally, b: SpendTally): SpendTally {
   const usd = sumUsd(a.usd, b.usd);
-  const quota = newer(a.quota, b.quota);
 
-  const sum: AccountSpend = {
-    provider: a.provider,
-    account: a.account,
+  const sum: SpendTally = {
     calls: a.calls + b.calls,
     callsWithoutUsage: a.callsWithoutUsage + b.callsWithoutUsage,
     usage: addUsage(a.usage, b.usage),
     unpricedCalls: a.unpricedCalls + b.unpricedCalls,
   };
 
-  return { ...sum, ...(usd !== undefined && { usd }), ...(quota !== undefined && { quota }) };
+  return usd === undefined ? sum : { ...sum, usd };
+}
+
+function addAccountSpend(a: AccountSpend, b: AccountSpend): AccountSpend {
+  const quota = newer(a.quota, b.quota);
+
+  return { provider: a.provider, account: a.account, ...addSpendTally(a, b), ...(quota !== undefined && { quota }) };
 }
 
 export function mergeAccountSpend(ledgers: readonly (readonly AccountSpend[])[]): AccountSpend[] {

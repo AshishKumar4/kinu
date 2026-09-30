@@ -4,6 +4,7 @@
  * The main actor hires through its `agents` tool, the wake runs the hire's assignment, and the hire's
  * report lands in the main actor's inbox; every model call is the platform gateway's.
  */
+import type { Database } from 'bun:sqlite';
 import { expect, test } from 'bun:test';
 import { ADVISOR_HEADER } from '@kinu.run/core';
 import { agentSql, catalogTurn, driveUntil, gatewayWorkspace, relayedReports, workspaceMainActor } from './helpers/actor-harness';
@@ -24,6 +25,11 @@ function hiring(run: RecordedGatewayRun, agent: string | undefined, lifetime?: '
   return step === 0
     ? toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', mission: MISSION, ...(agent !== undefined && { agent }), ...(lifetime && { lifetime }) } }, 'hire_0')
     : chatCompletion(run, 'Handed off.');
+}
+
+/** The hire named `advised`, whose rows are in its own database. */
+function advisedHire(db: Database): string {
+  return db.query<{ actor_id: string }, []>("SELECT actor_id FROM workspace_actors WHERE name = 'advised'").get()?.actor_id ?? '';
 }
 
 test("a delegated turn's tool call reaches the answer its caller gets", async () => {
@@ -77,7 +83,7 @@ test('a hosted subordinate hires its advisor, whose note opens its next turn, wi
   const hostedTurns = () => workspace.db.query<{ n: number }, [string]>('SELECT COUNT(*) AS n FROM completed_turns WHERE actor_id != ?').get(root.actorId)?.n ?? 0;
 
   // The hire's notes and window are in its own database.
-  const hire = () => workspace.db.query<{ actor_id: string }, []>("SELECT actor_id FROM workspace_actors WHERE name = 'advised'").get()?.actor_id ?? '';
+  const hire = () => advisedHire(workspace.db);
   const advisorNotes = () => agentSql(hire())<{ actor_id: string; message: string }>`SELECT actor_id, message FROM evolution_events WHERE type = 'advisor_note'`;
   const ownTurns = () => agentSql(hire())<{ n: number }>`SELECT COUNT(*) AS n FROM completed_turns`[0]?.n ?? 0;
 
@@ -93,6 +99,60 @@ test('a hosted subordinate hires its advisor, whose note opens its next turn, wi
   expect(notes.map((row) => row.message)).toEqual([note]);
   expect(hostedTurns()).toBe(0);
   expect(ownTurns()).toBe(0);
+});
+
+function advisedWorkspace(severity: 'concern' | 'blocker') {
+  const note = 'Stop relying on the failed run.';
+  const hireRequests: string[] = [];
+
+  const gateway = stubAiBinding((run) => {
+    const request = JSON.stringify(requestOf(run).messages);
+
+    if (request.includes('You are reviewing one finished turn')) return chatCompletion(run, JSON.stringify({ note, severity, class: 'wrong-work' }));
+
+    if (!forTheHire(run)) return hiring(run, 'advised');
+    hireRequests.push(request);
+
+    return chatCompletion(run, 'The probe succeeded.');
+  });
+
+  const workspace = gatewayWorkspace(gateway);
+  const root = workspaceMainActor(workspace.db);
+  const hire = () => advisedHire(workspace.db);
+  const judged = () => agentSql(hire())<{ data: string }>`SELECT data FROM evolution_events WHERE type = 'advisor_note'`.map((row) => row.data);
+
+  return { gateway, workspace, root, hireRequests, judged };
+}
+
+test("a hire's advice is judged against the owner's severity floor", async () => {
+  const { workspace, root, hireRequests, judged } = advisedWorkspace('concern');
+
+  await catalogTurn(workspace.agent, 'Have someone check the probe.');
+  root.config.setAdvisorEnabled(true);
+  root.config.setAdvisorMinSeverity('blocker');
+  await driveUntil(workspace, "the hire's advice was never judged", () => judged().length > 0);
+  await joinHarnessFibers();
+
+  expect(judged().join(' ')).toContain('"spoken":false');
+  expect(hireRequests).toHaveLength(1);
+});
+
+test("a hire's blocker advice reaches its hirer, not the hire again", async () => {
+  const { gateway, workspace, root } = advisedWorkspace('blocker');
+  const toHirer = () => workspace.agent.harnessEnqueued.filter((turn) => turn.text.includes('[Actor advised]'));
+
+  const ask = 'Have someone check the probe.';
+
+  // The hire's conversation never holds the root's ask; a review quotes the turn it reviews.
+  const hireToldAgain = () => gateway.runs.map((run) => JSON.stringify(requestOf(run).messages)).filter((request) =>
+    request.includes('[Actor advised]') && !request.includes(ask) && !request.includes('You are reviewing one finished turn'));
+
+  await catalogTurn(workspace.agent, ask);
+  root.config.setAdvisorEnabled(true);
+  await driveUntil(workspace, "the blocker never reached the hirer's turns", () => toHirer().length > 0);
+  await joinHarnessFibers();
+
+  expect(hireToldAgain()).toEqual([]);
 });
 
 // Review P1 (d35c1060fe): the task hire's advisor, still reviewing, held the hire's answer back, and an advisor with

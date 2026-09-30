@@ -97,7 +97,7 @@ jobs:
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version-file: package.json
 
       # Stored complete reports are artifacts named kinu-evals-<sha>-<trials>-per-task.
       - name: Find the baseline
@@ -154,7 +154,7 @@ jobs:
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version-file: package.json
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -199,7 +199,7 @@ jobs:
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version-file: package.json
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -270,7 +270,7 @@ jobs:
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version-file: package.json
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -338,7 +338,7 @@ jobs:
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version-file: package.json
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

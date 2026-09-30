@@ -11,6 +11,8 @@
 
 const { afterEach, describe, expect, test } = require('bun:test');
 
+const { AwaitedList } = require('@kinu.run/test-utils');
+
 /** This suite changes no environment. The daemon fixture reloads its own module after declaring its home;
  * these terminal cases need only this machine's capability, which is proved before any path is read. */
 
@@ -30,34 +32,24 @@ const { createSessions, TERMINAL_NAME } = require('../src/pty.js');
 /** The block a hub with the owner's Sandbox switch OFF sends. */
 const RAW = { tier: 'raw', agentHome: '', roots: [] };
 
-const SETTLE_MS = 15_000;
-
-async function until(predicate, what, budgetMs = SETTLE_MS) {
-  const started = Date.now();
-
-  for (;;) {
-    const value = predicate();
-
-    if (value) return value;
-
-    if (Date.now() - started > budgetMs) throw new Error(`${what} did not happen within ${budgetMs} ms`);
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-}
 
 /** The socket, as the daemon writes to it. `bufferedAmount` is the real
  *  property the daemon reads to decide a socket is too far behind. */
 function fakeWs(bufferedAmount = 0) {
-  const frames = [];
+  const recorded = new AwaitedList();
+  const frames = recorded.items;
 
   return {
     frames,
     bufferedAmount,
-    send(data) { frames.push(JSON.parse(data)); },
+    send(data) { recorded.push(JSON.parse(data)); },
     reply(id) { return frames.find((f) => f.id === id); },
     async response(id) {
-      return until(() => this.reply(id), `a reply for ${id}`);
+      await recorded.until((items) => items.some((frame) => frame.id === id));
+
+      return frames.find((frame) => frame.id === id);
     },
+    until: (holds) => recorded.until(holds),
     output() {
       return Buffer.concat(
         frames.filter((f) => f.type === PTY_OUTPUT_FRAME).map((f) => Buffer.from(f.data, 'base64')),
@@ -111,14 +103,14 @@ describe('opening a terminal is a call, and the rest is a stream', () => {
 
     // A keystroke frame carries no id: it is not a question.
     handle({ type: PTY_INPUT_FRAME, session: 'pane-a', data: Buffer.from('echo $((3 + 4))\r').toString('base64') }, ws, ctx);
-    await until(() => /(^|[^)+\s])7\b/m.test(ws.output()), 'the shell answered');
+    await ws.until(() => /(^|[^)+\s])7\b/m.test(ws.output()));
 
     handle({ type: PTY_RESIZE_FRAME, session: 'pane-a', cols: 120, rows: 40 }, ws, ctx);
     handle({ type: PTY_INPUT_FRAME, session: 'pane-a', data: Buffer.from('stty size\r').toString('base64') }, ws, ctx);
-    await until(() => /\b40 120\b/.test(ws.output()), 'the shell saw the new window');
+    await ws.until(() => /\b40 120\b/.test(ws.output()));
 
     handle({ type: PTY_CLOSE_FRAME, session: 'pane-a' }, ws, ctx);
-    await until(() => ws.frames.some((f) => f.type === PTY_EXIT_FRAME), 'the session reported its exit');
+    await ws.until(() => ws.frames.some((f) => f.type === PTY_EXIT_FRAME));
   });
 
   test('a session runs the plan a command runs, with the terminal named in it', async () => {
@@ -173,7 +165,7 @@ describe('opening a terminal is a call, and the rest is a stream', () => {
     const reply = await ws.response('rpc-abcdefghij-5');
     expect(reply.result.pid).toBeGreaterThan(0);
     handle({ type: PTY_INPUT_FRAME, session: 'pane-e', data: Buffer.from('exit 0\r').toString('base64') }, ws, ctx);
-    await until(() => ws.frames.some((f) => f.type === PTY_EXIT_FRAME), 'the session reported its exit');
+    await ws.until(() => ws.frames.some((f) => f.type === PTY_EXIT_FRAME));
     expect(ws.frames.some((f) => f.type === PTY_OUTPUT_FRAME)).toBe(false);
   });
 });

@@ -56,6 +56,7 @@ export interface AgentProviderDeps {
   sessionAffinity?: string;
   accountFor?: (providerId: string) => string | undefined;
   currentTurn?: (actor: ActorReference) => string | null;
+  codexContainer?: typeof fetch;
 }
 
 export interface AgentProviderRegistry {
@@ -108,9 +109,9 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
 
   const source = opts.userDO ?? null;
 
-  const container = opts.env.CodexEgress !== undefined && opts.ownerUserId
+  const container = opts.codexContainer ?? (opts.env.CodexEgress !== undefined && opts.ownerUserId
     ? codexEgressFetch(opts.env.CodexEgress, opts.ownerUserId)
-    : undefined;
+    : undefined);
 
   const relayed = source === null ? null : {
     hub: source.stub, caller: () => resolveCaller(source), ...(opts.currentTurn !== undefined && { currentTurn: opts.currentTurn }),

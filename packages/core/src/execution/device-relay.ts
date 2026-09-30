@@ -21,6 +21,7 @@ export const DeviceChatGptStatusSchema = v.object({
   signedIn: v.boolean(),
   email: v.nullable(v.string()),
   planEnabled: v.boolean(),
+  planDeclined: v.optional(v.boolean(), false),
   pending: v.boolean(),
   lastFailure: v.nullable(v.string()),
   firstSignIn: v.boolean(),

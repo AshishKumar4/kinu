@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { lstatSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { present, requestBodyText, scratchDir } from '@kinu.run/test-utils';
-import { createFileOAuthStore } from '../src/oauth-store';
+import { withConfigLock } from '../src/config-lock';
+import { createFileOAuthStore, signOutChatGptLogin } from '../src/oauth-store';
 import { asFetchFunction, CHATGPT_CRED_KEY, CLAUDE_CRED_KEY, JsonObjectSchema, OAuthTokenError } from '@kinu.run/core';
 import * as v from 'valibot';
 
@@ -75,6 +76,132 @@ describe('createFileOAuthStore', () => {
     await expect(refused).rejects.toBeInstanceOf(OAuthTokenError);
     await expect(refused).rejects.toHaveProperty('revoked', true);
     await expect(refused).rejects.toThrow('refresh_token_expired');
+  });
+
+  // SIWC-05: the spent token stayed on disk, read as connected, and was resubmitted by every later call.
+  test.each(['refresh_token_expired', 'refresh_token_reused'])('a login %s is retired: tokens gone, registration kept, never resubmitted', async (code) => {
+    const configPath = join(scratchDir('oauth-store'), 'config.json');
+    const stale = { accessToken: 'at-old', refreshToken: 'refresh-old', expiresAt: Date.now() - 1, metadata: { ...REGISTRATION, idToken: 'id-old' } };
+
+    writeFileSync(configPath, `${JSON.stringify({ origin: 'https://kinu.example', providers: { chatgpt: stale } })}\n`);
+    let submitted = 0;
+
+    const store = createFileOAuthStore(configPath, {
+      fetch: asFetchFunction(async () => {
+        submitted += 1;
+
+        return Response.json({ error: code }, { status: 400 });
+      }),
+    });
+
+    await expect(store.getAuth(CHATGPT_CRED_KEY)).rejects.toHaveProperty('revoked', true);
+
+    expect(JSON.parse(readFileSync(configPath, 'utf-8'))).toEqual({
+      origin: 'https://kinu.example',
+      providers: { chatgpt: { metadata: { clientId: 'oaiapp_issued', subject: 'user-sub', email: 'owner@example.com' } } },
+    });
+    expect(store.has(CHATGPT_CRED_KEY)).toBe(false);
+    expect(store.keys()).toEqual([]);
+    expect(await store.getAuth(CHATGPT_CRED_KEY)).toBeNull();
+    expect(submitted).toBe(1);
+  });
+
+  // SIWC-04: a refresh waiting on the lock renewed the login it read before it waited, reviving a disconnected one.
+  test('a refresh queued behind a sign-out renews nothing and brings nothing back', async () => {
+    const configPath = join(scratchDir('oauth-store'), 'config.json');
+    const stale = { accessToken: 'at-old', refreshToken: 'refresh-old', expiresAt: Date.now() - 1, metadata: REGISTRATION };
+
+    writeFileSync(configPath, `${JSON.stringify({ providers: { chatgpt: stale } })}\n`);
+    const submitted: string[] = [];
+
+    const store = createFileOAuthStore(configPath, {
+      fetch: asFetchFunction(async (input, init) => {
+        submitted.push(await requestBodyText(input, init));
+
+        return Response.json({ access_token: 'at-new', refresh_token: 'refresh-new', expires_in: 3600 });
+      }),
+    });
+
+    const holding = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+
+    const signingOut = withConfigLock(configPath, async () => {
+      holding.resolve();
+      await release.promise;
+      writeFileSync(configPath, `${JSON.stringify({ providers: { chatgpt: { metadata: { clientId: 'oaiapp_issued' } } } })}\n`);
+    });
+
+    await holding.promise;
+    const renewing = store.getAuth(CHATGPT_CRED_KEY);
+
+    release.resolve();
+    await signingOut;
+
+    expect(await renewing).toBeNull();
+    expect(submitted).toEqual([]);
+    expect(JSON.parse(readFileSync(configPath, 'utf-8'))).toEqual({ providers: { chatgpt: { metadata: { clientId: 'oaiapp_issued' } } } });
+  });
+
+  // SIWC-04: the disconnect revoked the token it read outside the lock while a rotation replaced it, leaving a live grant.
+  test('a sign-out waits for the rotation in flight and revokes the token it left on disk', async () => {
+    const configPath = join(scratchDir('oauth-store'), 'config.json');
+    const stale = { accessToken: 'at-old', refreshToken: 'refresh-old', expiresAt: Date.now() - 1, metadata: REGISTRATION };
+
+    writeFileSync(configPath, `${JSON.stringify({ providers: { chatgpt: stale } })}\n`);
+    const reached = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<void>();
+    const revoked: string[] = [];
+
+    const fetch = asFetchFunction(async (input, init) => {
+      const form = new URLSearchParams(await requestBodyText(input, init));
+
+      if (form.get('grant_type') !== 'refresh_token') {
+        revoked.push(form.get('token') ?? '');
+
+        return new Response(null, { status: 200 });
+      }
+
+      reached.resolve();
+      await released.promise;
+
+      return Response.json({ access_token: 'at-new', refresh_token: 'refresh-new', expires_in: 3600 });
+    });
+
+    const renewing = createFileOAuthStore(configPath, { fetch }).getAuth(CHATGPT_CRED_KEY);
+
+    await reached.promise;
+    const signingOut = signOutChatGptLogin(configPath, 'main', { fetch });
+
+    released.resolve();
+    expect(await renewing).toMatchObject({ headers: { Authorization: 'Bearer at-new' } });
+    expect(await signingOut).toEqual({ removed: true, unconfirmed: null });
+    expect(revoked).toEqual(['refresh-new']);
+    expect(JSON.parse(readFileSync(configPath, 'utf-8'))).toEqual({
+      providers: { chatgpt: { metadata: { clientId: 'oaiapp_issued', subject: 'user-sub', email: 'owner@example.com' } } },
+    });
+  });
+
+  // SIWC-10: a named account's disconnect dropped its issued client ID, so its next sign-in registered anew.
+  test('signing a named ChatGPT account out keeps its registration and leaves the others alone', async () => {
+    const configPath = join(scratchDir('oauth-store'), 'config.json');
+    const main = { accessToken: 'at-main', refreshToken: 'refresh-main', expiresAt: Date.now() + 3_600_000, metadata: REGISTRATION };
+    const work = { accessToken: 'at-work', refreshToken: 'refresh-work', expiresAt: Date.now() + 3_600_000, metadata: { ...REGISTRATION, clientId: 'oaiapp_work', idToken: 'id-work' } };
+
+    writeFileSync(configPath, `${JSON.stringify({ providers: { chatgpt: { ...main, accounts: { work } } } })}\n`);
+    const revoked: string[] = [];
+
+    const fetch = asFetchFunction(async (input, init) => {
+      revoked.push(new URLSearchParams(await requestBodyText(input, init)).get('client_id') ?? '');
+
+      return new Response(null, { status: 200 });
+    });
+
+    expect(await signOutChatGptLogin(configPath, 'work', { fetch })).toEqual({ removed: true, unconfirmed: null });
+    expect(revoked).toEqual(['oaiapp_work']);
+    expect(JSON.parse(readFileSync(configPath, 'utf-8'))).toEqual({
+      providers: { chatgpt: { ...main, accounts: { work: { metadata: { clientId: 'oaiapp_work', subject: 'user-sub', email: 'owner@example.com' } } } } },
+    });
+    expect(createFileOAuthStore(configPath).keys()).toEqual(['chatgpt.oauth']);
   });
 
   // The refresh must run inside the lock: an async callback releases the synchronous helper's lock on its first await,

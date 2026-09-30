@@ -224,7 +224,38 @@ const CHATGPT_METHODS = Object.freeze({ status: 'chatgptStatus', signIn: 'chatgp
 /** The error code of the answer a relayed ChatGPT call gets when this machine holds no usable sign-in. */
 const CHATGPT_SIGNED_OUT = 'chatgpt_signed_out';
 
-const chatgptSession = chatgpt?.createDeviceSession({ home: DEVICE_HOME }) ?? null;
+/** The daemon that started this one as its successor, which may still be finishing a rotation of its own. */
+const replacedDaemon = isPredecessor(process.ppid) ? process.ppid : null;
+
+function predecessorExited() {
+  return update.lifelineClosed(process.stdin).then(() => { log('device.predecessor_exited', `pid ${String(replacedDaemon)}`); });
+}
+
+const chatgptSession = chatgpt?.createDeviceSession({ home: DEVICE_HOME, predecessorExited: replacedDaemon === null ? null : predecessorExited() }) ?? null;
+
+let exiting = false;
+
+/**
+ * Exits once this machine's ChatGPT sign-in has written what it is writing, so a successor never reads a spent
+ * refresh token: an update handoff or a first stop signal waits for the auth call in flight to end, as long as
+ * that takes. A second call is a forced stop: that call ends there, unanswered, and the exit follows.
+ */
+function exitWhenQuiet(code) {
+  if (chatgptSession === null) process.exit(code);
+
+  if (exiting) {
+    log('device.exit_forced', 'the ChatGPT auth call in flight is abandoned');
+    chatgptSession.abort();
+
+    return;
+  }
+
+  exiting = true;
+  const exit = () => process.exit(code);
+
+  log('device.exit_draining', 'the ChatGPT sign-in finishes the write in flight first');
+  chatgptSession.quiesce().then(exit, exit);
+}
 
 /** Hop-by-hop headers, plus the ones a relay must not carry from the cloud side. */
 const RELAY_DROPPED_HEADERS = new Set([
@@ -3114,7 +3145,7 @@ async function main() {
       const ended = sessions.closeAll();
 
       if (ended.length > 0) log('device.terminals_closed_with_daemon', ended.join(' '));
-      process.exit(0);
+      exitWhenQuiet(0);
     });
   }
 
@@ -3194,7 +3225,9 @@ async function main() {
         if (ended.length > 0) log('device.terminals_closed_with_socket', ended.join(' '));
         log('device.update_handed_over', `successor connected; pid ${process.pid} exiting`);
         loop.stop();
-        process.exit(0);
+        exitWhenQuiet(0);
+
+        return;
       }
 
       /** @param {unknown} error */

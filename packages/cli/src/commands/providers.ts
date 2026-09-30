@@ -1,5 +1,5 @@
 import { deleteCloudCredential, listCloudCredentials } from '../cloud-api';
-import { API_KEY_PROVIDERS, bumpProviderRevision, loadConfigFile, resolveCloudSession, updateConfigFile, type KinuConfig } from '../config';
+import { API_KEY_PROVIDERS, CONFIG_PATH, bumpProviderRevision, resolveCloudSession, updateConfigFile, type KinuConfig } from '../config';
 import { readDefaultAccounts, readDefaultTier } from '../profiles';
 import { updateDefaultAccount } from '../default-model';
 import { ACCENT, DIM, OK, WARN } from '../display';
@@ -8,7 +8,7 @@ import { canonicalProviderName, connectOptions, connectProviderOnConsole } from 
 import * as v from 'valibot';
 import { MAIN_ACCOUNT, accountCredentialKey, catalogCredKey, isAccountName } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { registrationOf, revokeSession } from '../../../pc-agent/src/chatgpt.js';
+import { signOutChatGptLogin } from '@kinu.run/cli-backend';
 
 type ProviderAction = 'list' | 'connect' | 'disconnect' | 'default';
 
@@ -135,13 +135,15 @@ async function disconnectAccount(provider: ProviderName, account: string): Promi
   console.log('');
   let removed = false;
 
-  if (provider === 'chatgpt') await revokeChatGpt(account);
-
-  await updateConfigFile((config) => {
-    const accounts = config.providers?.[provider]?.accounts;
-    removed = accounts?.[account] !== undefined;
-    delete accounts?.[account];
-  });
+  if (provider === 'chatgpt') {
+    removed = await signOutChatGpt(account);
+  } else {
+    await updateConfigFile((config) => {
+      const accounts = config.providers?.[provider]?.accounts;
+      removed = accounts?.[account] !== undefined;
+      delete accounts?.[account];
+    });
+  }
 
   if (removed) console.log(`${OK('✓')} Removed the ${ACCENT(`${provider} ${account}`)} account from this machine.`);
   const cloud = provider === 'chatgpt' || provider === 'claude' ? null : resolveCloudSession();
@@ -167,47 +169,22 @@ async function forgetDefaultAccount(provider: string, account: string): Promise<
   console.log(`${WARN('!')} ${account} was the default ${provider} account; ${provider} models now run on main, or its only account.`);
 }
 
-/** Revokes at OpenAI, then forgets the tokens whatever it answered. */
-async function revokeChatGpt(account: string): Promise<void> {
-  const stored = loadConfigFile().providers?.chatgpt;
-  const login = account === MAIN_ACCOUNT ? stored : stored?.accounts?.[account];
-  const registration = registrationOf(login?.metadata);
+/** Revokes at OpenAI and forgets the tokens under the lock the refresh takes; the registration stays. */
+async function signOutChatGpt(account: string): Promise<boolean> {
+  const { removed, unconfirmed } = await signOutChatGptLogin(CONFIG_PATH, account);
 
-  if (login?.refreshToken === undefined || registration === null) return;
-  const { unconfirmed } = await revokeSession({ clientId: registration.clientId, refreshToken: login.refreshToken });
+  if (unconfirmed === null) console.log(`${OK('✓')} OpenAI revoked this machine's ChatGPT sign-in.`);
 
-  if (unconfirmed === null) {
-    console.log(`${OK('✓')} OpenAI revoked this machine's ChatGPT sign-in.`);
-
-    return;
+  if (unconfirmed !== undefined && unconfirmed !== null) {
+    console.log(`${WARN('!')} OpenAI did not confirm the revocation (${unconfirmed}).`);
+    console.log(DIM('  Disconnect Kinu under Apps in ChatGPT settings to be sure.'));
   }
 
-  console.log(`${WARN('!')} OpenAI did not confirm the revocation (${unconfirmed}).`);
-  console.log(DIM('  Disconnect Kinu under Apps in ChatGPT settings to be sure.'));
-}
-
-/** Keeps the client ID for the next sign-in. */
-function forgetChatGptTokens(providers: NonNullable<KinuConfig['providers']>): boolean {
-  const entry = providers.chatgpt;
-
-  if (entry === undefined || (entry.accessToken === undefined && entry.refreshToken === undefined)) return false;
-  const registration = registrationOf(entry.metadata);
-
-  if (registration === null) return deleteMain(providers, 'chatgpt');
-  const kept: NonNullable<typeof providers.chatgpt> = { metadata: { ...registration } };
-
-  if (entry.accounts !== undefined) kept.accounts = entry.accounts;
-  providers.chatgpt = kept;
-
-  return true;
+  return removed;
 }
 
 /** Env vars listed here keep supplying the credential after the file entry is gone. */
 const LOCAL_CREDENTIALS = new Map<ProviderName, LocalCredential>([
-  ['chatgpt', {
-    clear: forgetChatGptTokens,
-    envVars: [],
-  }],
   ['claude', {
     clear: (p) => deleteMain(p, 'claude'),
     envVars: [],
@@ -244,7 +221,7 @@ function deleteKey(
   return true;
 }
 
-function deleteMain(providers: NonNullable<KinuConfig['providers']>, key: 'chatgpt' | 'claude' | 'openai' | 'anthropic' | 'openrouter'): boolean {
+function deleteMain(providers: NonNullable<KinuConfig['providers']>, key: 'claude' | 'openai' | 'anthropic' | 'openrouter'): boolean {
   const entry = providers[key];
 
   if (entry?.accounts === undefined || Object.keys(entry.accounts).length === 0) return deleteKey(providers, key);
@@ -289,11 +266,19 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
     return;
   }
 
+  // No cloud copy and no environment variable: the machine's own sign-in is the whole credential.
+  if (provider === 'chatgpt') {
+    if (await signOutChatGpt(MAIN_ACCOUNT)) console.log(`${OK('✓')} Removed the ${ACCENT(provider)} credential from this machine.`);
+    else console.log(`${WARN('!')} ${provider} was not connected. Nothing to remove.`);
+    warnDefaultModelFor(provider);
+    await bumpProviderRevision();
+
+    return;
+  }
+
   const credential = LOCAL_CREDENTIALS.get(provider);
 
   if (!credential) throw new Error(`No local credential for ${provider}.`);
-
-  if (provider === 'chatgpt') await revokeChatGpt(MAIN_ACCOUNT);
   let removed = false;
   await updateConfigFile((config) => {
     if (config.providers) removed = credential.clear(config.providers);

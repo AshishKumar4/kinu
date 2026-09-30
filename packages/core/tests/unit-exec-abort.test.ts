@@ -16,7 +16,7 @@ import {
   type NimbusExecResult,
   type NimbusSandboxHandle,
 } from '../src/execution/nimbus';
-import { createTestRuntime, storesFor } from './helpers';
+import { createTestRuntime, conversationsFor } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { Shell } from '../src/types/primitives';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
@@ -69,7 +69,7 @@ describe('run tool — workspace shell abort', () => {
     };
 
     const rtWithShell: AgentRuntime = { ...rt, shell };
-    const tools = buildBuiltinTools({ rt: rtWithShell, history: storesFor(rtWithShell).history });
+    const tools = buildBuiltinTools({ rt: rtWithShell, conversations: conversationsFor(rtWithShell) });
     const run = toolExecute<{ command: string; runtime?: string }, CommandResult>(tools.shell);
 
     controller.abort();

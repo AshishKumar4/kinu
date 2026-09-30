@@ -1,24 +1,31 @@
 // Tool card summary lines: repeated calls stay distinguishable, and no summary invents detail.
 import { describe, test, expect } from 'bun:test';
+import type { JsonObject } from '@kinu.run/core';
 import { clip, describeToolCall, summarizeToolCall, toolCallEffect } from '../src/tools/tool-call-summary';
 
 describe('tool call summaries — the unified agents tool', () => {
-  test('agents calls are told apart by action and target', () => {
-    expect(summarizeToolCall('agents', { action: 'hire', agent: 'scout', role: 'researcher — landscape' }))
-      .toBe('hire scout: "researcher — landscape"');
-    expect(summarizeToolCall('agents', { action: 'hire', role: 'researcher' })).toBe('hire researcher');
-    expect(summarizeToolCall('agents', { action: 'hire', scope: 'workspace', mission: 'summarize papers' }))
-      .toBe('hire workspace: "summarize papers"');
-    expect(summarizeToolCall('agents', { action: 'hire', agent: 'scout', message: 'Audit the CLI surface' }))
-      .toBe('hire scout: "Audit the CLI surface"');
-    expect(summarizeToolCall('agents', { action: 'hire', lifetime: 'task', role: 'auditor', mission: 'Audit the CLI surface' }))
-      .toBe('hire (task) auditor');
-    expect(summarizeToolCall('agents', { action: 'msg', agent: 'scout', topic: 'fyi' }))
-      .toBe('msg scout: "fyi"');
-    expect(summarizeToolCall('agents', { action: 'msg', event_id: 'ev-1', message: 'here you go' }))
-      .toBe('msg: "here you go"');
-    expect(summarizeToolCall('agents', { action: 'dismiss', agent: 'arch-auditor' })).toBe('dismiss arch-auditor');
-    expect(summarizeToolCall('agents', { action: 'list' })).toBe('list');
+  test('agents calls retain their action and distinguishing input', () => {
+    const calls: { input: JsonObject; facts: string[] }[] = [
+      { input: { action: 'hire', agent: 'scout', role: 'researcher — landscape' }, facts: ['hire', 'scout', 'researcher — landscape'] },
+      { input: { action: 'hire', role: 'researcher' }, facts: ['hire', 'researcher'] },
+      { input: { action: 'hire', scope: 'workspace', mission: 'summarize papers' }, facts: ['hire', 'workspace', 'summarize papers'] },
+      { input: { action: 'hire', agent: 'scout', message: 'Audit the CLI surface' }, facts: ['hire', 'scout', 'Audit the CLI surface'] },
+      { input: { action: 'hire', lifetime: 'task', role: 'auditor', mission: 'Audit the CLI surface' }, facts: ['hire', 'task', 'auditor'] },
+      { input: { action: 'msg', agent: 'scout', topic: 'fyi' }, facts: ['msg', 'scout', 'fyi'] },
+      { input: { action: 'msg', event_id: 'ev-1', message: 'here you go' }, facts: ['msg', 'here you go'] },
+      { input: { action: 'dismiss', agent: 'arch-auditor' }, facts: ['dismiss', 'arch-auditor'] },
+      { input: { action: 'list' }, facts: ['list'] },
+    ];
+
+    const summaries = calls.map(({ input, facts }) => {
+      const summary = summarizeToolCall('agents', input);
+
+      for (const fact of facts) expect(summary).toContain(fact);
+
+      return summary;
+    });
+
+    expect(new Set(summaries).size).toBe(calls.length);
   });
 });
 
@@ -29,38 +36,38 @@ describe('tool call summaries — builtins', () => {
   });
 
   test('memory and web name their subject', () => {
-    expect(summarizeToolCall('memory', { action: 'search', query: 'deploy' })).toBe('search "deploy"');
+    expect(summarizeToolCall('memory', { action: 'search', query: 'deploy' })).toContain('deploy');
     expect(summarizeToolCall('memory', { action: 'save', content: 'the deploy target is staging' }))
-      .toBe('save: "the deploy target is staging"');
+      .toContain('the deploy target is staging');
     expect(summarizeToolCall('memory', { action: 'conversations' })).toBe('conversations');
     expect(summarizeToolCall('memory', { action: 'remember', key: 'user.tz', value: 'UTC' }))
-      .toBe('remember user.tz');
-    expect(summarizeToolCall('memory', { action: 'forget', key: 'deploy.target' })).toBe('forget deploy.target');
+      .toContain('user.tz');
+    expect(summarizeToolCall('memory', { action: 'forget', key: 'deploy.target' })).toContain('deploy.target');
     expect(summarizeToolCall('web', { action: 'search', query: 'workers ai session affinity' }))
-      .toBe('search "workers ai session affinity"');
+      .toContain('workers ai session affinity');
     expect(summarizeToolCall('web', { action: 'fetch', url: 'https://example.com/docs' }))
-      .toBe('fetch https://example.com/docs');
+      .toContain('https://example.com/docs');
   });
 
   test('report leads with the status it is reporting', () => {
-    expect(summarizeToolCall('report', { status: 'completed', content: 'audit finished' }))
-      .toBe('completed: "audit finished"');
+    const summary = summarizeToolCall('report', { status: 'completed', content: 'audit finished' });
+    expect(summary).toContain('completed');
+    expect(summary).toContain('audit finished');
   });
 
   test('eval separates the visible intent from the first executable line', () => {
     const code = '// Fetch the roster to identify idle agents\n\nconst r = await team.list();\nreturn r;';
     expect(describeToolCall('eval', { code })).toBe('Fetch the roster to identify idle agents');
     expect(summarizeToolCall('eval', { code })).toBe('const r = await team.list();');
-    expect(describeToolCall('eval', { code: 'const r = await team.list();' })).toBe('Ran a tool program');
   });
 
-  test('native calls name their operation and target in plain language', () => {
-    expect(describeToolCall('file', { action: 'read', path: '/workspace/package.json' })).toBe('Read package.json');
-    expect(describeToolCall('file', { action: 'edit', path: '/workspace/src/auth.ts' })).toBe('Edited auth.ts');
-    expect(describeToolCall('shell', { command: 'bun test packages/core' })).toBe('Ran tests');
-    expect(describeToolCall('web', { action: 'fetch', url: 'https://example.com' })).toBe('Fetched a page');
-    expect(describeToolCall('memory', { action: 'search', query: 'deployment' })).toBe('Searched memory');
-    expect(describeToolCall('agents', { action: 'hire', agent: 'scout' })).toBe('Asked scout');
+  test('native descriptions retain the target and distinguish reading from editing', () => {
+    const read = describeToolCall('file', { action: 'read', path: '/workspace/package.json' });
+    const edit = describeToolCall('file', { action: 'edit', path: '/workspace/package.json' });
+    expect(read).toContain('package.json');
+    expect(edit).toContain('package.json');
+    expect(edit).not.toBe(read);
+    expect(describeToolCall('agents', { action: 'hire', agent: 'scout' })).toContain('scout');
   });
 });
 

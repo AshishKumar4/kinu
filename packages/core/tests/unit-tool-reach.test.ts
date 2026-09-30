@@ -3,7 +3,7 @@
 import { unobservedSearchSeams } from '@kinu.run/test-utils';
 import { describe, test, expect } from 'bun:test';
 import { MockLanguageModelV3 } from 'ai/test';
-import { createTestRuntime, storesFor } from './helpers';
+import { conversationsFor, createTestRuntime, storesFor } from './helpers';
 import {
   BUILTIN_TOOLS,
   TOOL_REACH,
@@ -70,8 +70,8 @@ describe('the reach declaration', () => {
         },
       })),
       memory: () => createMemoryCodemodeProvider(() => ({
-        memory: rt.memory, sql: rt.storage.sql, actor: rt.actor,
-        transcriptFor: (sessionId) => history.transcript(sessionId),
+        memory: rt.memory, actor: rt.actor,
+        conversations: conversationsFor(rt, history),
       })),
       tasks: () => createTasksCodemodeProvider(
         new TaskListStore(rt.storage.sql, rt.actor, rt.storage.transactionSync.bind(rt.storage)),

@@ -415,6 +415,15 @@ describe('DeviceSocketHub ChatGPT sign-in calls', () => {
     expect(await older).toBeNull();
   });
 
+  // No deadline rides these calls: the machine's answer ends one, or the machine going.
+  test('a machine that goes while it is asked is not signed in', async () => {
+    const { hub, ws } = connected();
+    const asked = hub.chatgpt('dev-a', DEVICE_CHATGPT.status);
+
+    hub.handleClose('dev-a', ws);
+    expect(await asked).toBeNull();
+  });
+
   test('a sign-in the machine could not start keeps its failure', async () => {
     const { hub, ws } = connected();
 

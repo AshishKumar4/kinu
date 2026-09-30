@@ -1214,6 +1214,33 @@ describe('LocalAgentHost', () => {
     } finally { db.close(); }
   });
 
+  test("a subordinate's blocker advice opens a turn of its hirer's, and never comes back to it as a hirer's note", async () => {
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const note = 'Stop relying on the failed run.';
+    const prompts: string[] = [];
+
+    const model = streamingModel(
+      'The probe succeeded.',
+      (options) => { if (!isReview(options)) prompts.push(JSON.stringify(options.prompt)); },
+      JSON.stringify({ note, severity: 'blocker', class: 'wrong-work' }),
+    );
+
+    // The hirer's copy names the actor it is about; only the hire's system prompt carries its researcher role.
+    const hirerCopies = (root: boolean) => prompts.filter((prompt) => prompt.includes('[Actor ') && prompt.includes(note)
+      && prompt.includes('## Role: Researcher') !== root);
+
+    const { host } = makeHost(state, model, [{ name: 'root', cwd: project, workspaceId: 'proj' }], { advisor: true });
+    const rootTold = Promise.withResolvers<void>();
+    host.subscribe((agent, event) => { if (agent === 'root' && event.type === 'turn-end' && hirerCopies(true).length > 0) rootTold.resolve(); });
+    const team = await host.team('root');
+    await team.spawn({ role: 'researcher', mission: 'Check the probe.', mode: 'build' });
+    await rootTold.promise;
+    await host.close();
+
+    expect(hirerCopies(false)).toEqual([]);
+  });
+
   test('no hosted child records a turn into the evolution window, whatever its lifetime', async () => {
     const ask = makeRoots();
     const askDb = await seedAgent(ask.state, 'root');

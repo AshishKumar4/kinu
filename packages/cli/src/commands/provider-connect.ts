@@ -166,17 +166,30 @@ function namedAccounts(baseKey: string, localNames: readonly string[], facts: Co
     .sort();
 }
 
+/** A login that kept only its registration holds none. */
+function holdsTokens(login: LocalOAuthSession | undefined): boolean {
+  return login?.accessToken !== undefined || login?.refreshToken !== undefined;
+}
+
+/** A sign-in whose grant left out plan usage, which a signed-out registration is not. */
+function chatgptPlanDeclined(metadata: LocalOAuthSession['metadata']): boolean {
+  const grant = v.safeParse(v.object({ scopes: v.array(v.string()) }), metadata);
+
+  return grant.success && !planEnabled(grant.output);
+}
+
 function loginState(descriptor: ProviderDescriptor & { readonly id: 'chatgpt' | 'claude' }, facts: ConnectionFacts): ProviderConnectionState {
   const login = facts.providers[descriptor.id];
-  const accounts = namedAccounts(descriptor.id === 'chatgpt' ? CHATGPT_CRED_KEY : CLAUDE_CRED_KEY, Object.keys(login?.accounts ?? {}), facts);
-  const signedInWithoutPlan = descriptor.id === 'chatgpt' && login?.accessToken === undefined ? registrationOf(login?.metadata) : null;
+  const signedIn = Object.entries(login?.accounts ?? {}).flatMap(([name, entry]) => (holdsTokens(entry) ? [name] : []));
+  const accounts = namedAccounts(descriptor.id === 'chatgpt' ? CHATGPT_CRED_KEY : CLAUDE_CRED_KEY, signedIn, facts);
 
-  if (signedInWithoutPlan !== null && accounts.length === 0) {
-    return { descriptor, connected: false, detail: `${signedInWithoutPlan.email ?? 'signed in'} without ChatGPT plan usage: kinu provider connect chatgpt` };
-  }
+  if (!holdsTokens(login) && accounts.length === 0) {
+    const registration = descriptor.id === 'chatgpt' ? registrationOf(login?.metadata) : null;
 
-  if (login?.accessToken === undefined && login?.refreshToken === undefined && accounts.length === 0) {
-    return { descriptor, connected: false, detail: `kinu provider connect ${descriptor.id}` };
+    if (registration === null) return { descriptor, connected: false, detail: `kinu provider connect ${descriptor.id}` };
+    const state = chatgptPlanDeclined(login?.metadata) ? 'signed in without ChatGPT plan usage' : 'signed out';
+
+    return { descriptor, connected: false, detail: `${registration.email ?? 'your ChatGPT account'} ${state}: kinu provider connect chatgpt` };
   }
 
   const model = currentModel(facts.defaultModel, descriptor.id);
@@ -417,10 +430,9 @@ async function connectChatGpt(port: ProviderConnectPort, requestedModel: string 
   const stored = loadConfigFile().providers?.chatgpt;
   const saved = account === MAIN_ACCOUNT ? stored : stored?.accounts?.[account];
   const registration = registrationOf(saved?.metadata) ?? (account === MAIN_ACCOUNT ? deviceRegistration(AGENT_HOME) : null);
-  const grant = v.safeParse(v.object({ scopes: v.array(v.string()) }), saved?.metadata);
 
   const result = await port.skippable('Waiting for you to continue with ChatGPT in your browser.', async (signal) => {
-    const flow = await beginSignIn({ home: AGENT_HOME, registration, consent: grant.success && !planEnabled(grant.output), signal });
+    const flow = await beginSignIn({ home: AGENT_HOME, registration, consent: chatgptPlanDeclined(saved?.metadata), signal });
 
     port.report(`Continue with ChatGPT: ${flow.authorizeUrl}`);
     openBrowser(flow.authorizeUrl);

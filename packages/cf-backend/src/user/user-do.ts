@@ -546,7 +546,12 @@ const REFRESH_DOING: ReadonlyMap<string, string> = new Map([
 
 const CLAUDE_SIGN_IN_KEY = 'claude.sign-in';
 
-const ClaudeSignInSchema = v.object({ url: v.string(), state: v.string(), verifier: v.string() });
+/** `revision` at the start: a write or disconnect since spends the sign-in. */
+const ClaudeSignInSchema = v.object({ url: v.string(), state: v.string(), verifier: v.string(), revision: v.number() });
+
+function unrenewable(key: string, cred: Credential): string | null {
+  return subscriptionIssuer(key) !== null && cred.kind === 'oauth' && !cred.refreshToken ? `${key} requires an OAuth refresh token.` : null;
+}
 
 export interface CodexStatus {
   connected: boolean;
@@ -555,10 +560,13 @@ export interface CodexStatus {
   startedFlow: { userCode: string; portalURL: string; pollIntervalSec: number } | null;
 }
 
+const CHATGPT_SIGNED_OUT_MARK = 'signed out';
+
 /** The machine that holds, or would hold, the ChatGPT sign-in, and what it says. */
 export interface ChatGptPlanStatus {
   readonly device: { readonly id: string; readonly label: string } | null;
   readonly status: DeviceChatGptStatus | null;
+  readonly changed: boolean;
 }
 
 export interface ConnectedProvider {
@@ -2621,8 +2629,21 @@ export class UserDO extends Agent<Env> {
   async chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
     await this.requireTier(caller, 'credentials.model');
     const machine = await this.chatgptMachine();
+    const device = machine === null ? null : { id: machine.id, label: machine.label };
 
-    return machine === null ? { device: null, status: null } : { device: { id: machine.id, label: machine.label }, status: machine.status };
+    return { device, status: machine?.status ?? null, changed: this.noteChatGptSignIn(device, machine?.status ?? null) };
+  }
+
+  /** The first read to see a sign-in start or end raises the credential revision (ADR P1). */
+  private noteChatGptSignIn(device: { readonly id: string } | null, status: DeviceChatGptStatus | null): boolean {
+    const now = device === null || status?.signedIn !== true ? CHATGPT_SIGNED_OUT_MARK : `${device.id} ${status.email ?? ''}`;
+    const seen = this.ctx.storage.kv.get<string>(UserDO.CHATGPT_SIGN_IN_SEEN_KEY);
+
+    if (seen === now || (seen === undefined && now === CHATGPT_SIGNED_OUT_MARK)) return false;
+    this.ctx.storage.kv.put(UserDO.CHATGPT_SIGN_IN_SEEN_KEY, now);
+    this.bumpCredentialsRevision();
+
+    return true;
   }
 
   /** Starts Sign in with ChatGPT on the owner's machine; the browser that opens the URL must run there. */
@@ -2645,6 +2666,8 @@ export class UserDO extends Agent<Env> {
 
     if (machine === null) return { unconfirmed: null };
     const answer = v.safeParse(v.object({ unconfirmed: v.nullable(v.string()) }), await this._devices.chatgpt(machine.id, DEVICE_CHATGPT.signOut));
+
+    this.noteChatGptSignIn(null, null);
 
     return answer.success ? answer.output : { unconfirmed: `${machine.label} did not say whether OpenAI revoked the sign-in` };
   }
@@ -3366,9 +3389,9 @@ export class UserDO extends Agent<Env> {
 
     const cred = validateCredential({ key, value: credentialJson });
 
-    if (subscriptionIssuer(key) !== null && cred.kind === 'oauth' && !cred.refreshToken) {
-      throw new KinuError('bad_input', `${key} requires an OAuth refresh token.`);
-    }
+    const refusal = unrenewable(key, cred);
+
+    if (refusal !== null) throw new KinuError('bad_input', refusal);
 
     await this.writeCredential(key, cred);
 
@@ -3821,6 +3844,8 @@ export class UserDO extends Agent<Env> {
 
   private static readonly AI_GATEWAY_CONFIG_KEY = 'cloudflare_ai_gateway';
 
+  private static readonly CHATGPT_SIGN_IN_SEEN_KEY = 'chatgpt_sign_in_seen';
+
   private selectedAIGatewayId(): string | null {
     const row = this.sqlx<{ value: string }>(
       `SELECT value FROM user_config WHERE key = ?`, UserDO.AI_GATEWAY_CONFIG_KEY,
@@ -4098,7 +4123,7 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'subscription_auth');
     const signIn = await startClaudeSignIn();
 
-    this.ctx.storage.kv.put(CLAUDE_SIGN_IN_KEY, signIn);
+    this.ctx.storage.kv.put(CLAUDE_SIGN_IN_KEY, { ...signIn, revision: this.credentialRevision(CLAUDE_CRED_KEY) });
 
     return { url: signIn.url };
   }
@@ -4116,8 +4141,6 @@ export class UserDO extends Agent<Env> {
       if (!held.success) return yield* Effect.fail(new KinuError('missing', 'No Claude sign-in is in progress: start it again.'));
       const signIn = held.output;
       const code = claudeCodeFrom(returned, signIn.state);
-      // Both fences are read before Claude answers: a newer start or a disconnect meanwhile wins.
-      const revision = this.credentialRevision(CLAUDE_CRED_KEY);
 
       const exchanged = yield* Effect.match(
         attempt({ doing: 'exchanging the Claude sign-in code', otherwise: 'io' }, () => createClaudeOAuthClient().exchange(signIn, code)),
@@ -4133,11 +4156,14 @@ export class UserDO extends Agent<Env> {
 
       if ('error' in exchanged) return { connected: false, error: exchanged.error };
       const { credential } = exchanged;
+      const refusal = unrenewable(CLAUDE_CRED_KEY, credential);
+
+      if (refusal !== null) return { connected: false, error: `Claude signed you in without a refresh token, so Kinu cannot keep the login: ${refusal}` };
       const sealed = yield* attempt({ doing: 'sealing the Claude credential', otherwise: 'io' }, () => this.sealCredential(CLAUDE_CRED_KEY, credential));
       const current = v.safeParse(ClaudeSignInSchema, this.ctx.storage.kv.get(CLAUDE_SIGN_IN_KEY));
 
       if (!current.success || current.output.state !== signIn.state
-        || !this.commitCredential({ key: CLAUDE_CRED_KEY, kind: credential.kind, sealed, expectRevision: revision })) {
+        || !this.commitCredential({ key: CLAUDE_CRED_KEY, kind: credential.kind, sealed, expectRevision: signIn.revision })) {
         return { connected: false, error: 'That Claude sign-in was superseded before it completed: start it again.' };
       }
 

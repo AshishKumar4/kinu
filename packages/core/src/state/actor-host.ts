@@ -16,9 +16,10 @@ import type { PreparedRequest } from '../session/requests';
 import { actorReferenceOf, sameActorReference, type ActorHandle, type ActorReference } from '../identity/actor-handle';
 import { createAgentStores, type AgentStores } from './agent-stores';
 import { tracedActorKind, type WorkspaceActor, type WorkspaceActorDirectory } from '../identity/workspace-actors';
-import type { ActorContextStores, ChildContextResolver } from '../vfs/context-plane';
+import { localContextTree, type ActorContextStores, type ChildContextResolver, type ContextTree } from '../vfs/context-plane';
 import type { ContextEventRecorder } from '../types/context-plane';
 import type { TemporaryAgentPort } from '../types/subordinates';
+import type { AgentSignal, SendOutcome } from '../types/signals';
 import { seedActorLoop, type LoopOrigin } from '../scaffold/bootstrap';
 import { verifyClaimedProgram } from '../orchestrator/actor-claims';
 import { recordRecoverySettled, sameBuildOf } from '../orchestrator/turn-recovery-events';
@@ -80,6 +81,7 @@ export interface ActorHostDeps {
   discardBytes?(record: WorkspaceActor): Promise<void>;
   /** The port a hosted actor hires its advisor through; absent, hosted turns are not reviewed. */
   advisorPort?(bound: BoundActor): TemporaryAgentPort | null;
+  sayToParent?(child: ActorReference, signal: AgentSignal): Promise<SendOutcome>;
   readonly tracing: (() => AgentTracing) | undefined;
 }
 
@@ -246,6 +248,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
             return root.runtime.agentStateVfs ?? root.runtime.storage.vfs;
           },
           parent: async (signal) => {
+            if (deps.sayToParent !== undefined) return await deps.sayToParent(reference, signal);
             const parentId = reference.parentActorId;
 
             if (parentId === null) throw new KinuError('missing', 'A non-root advisor has no parent actor.');
@@ -477,15 +480,12 @@ function unsettledClaimsOf(sql: SqlExecutor, actorId: string, limit: number): re
 }
 
 /**
- * Spec §6.3: a parent edits a child's context under the child's own checks, so this resolves
- * the child's stores. Authority is the directory row; non-children resolve to null.
+ * Spec §6.3: a parent edits a child's context under the child's own checks, so this resolves the child's tree.
  */
 export function childContextResolver(deps: {
-  readonly host: Pick<ActorHost, 'bindStores'>;
   readonly directory: WorkspaceActorDirectory;
   readonly parent: ActorHandle;
-  /** The child's recorder, not the parent's. Required so an authority action is never unaudited. */
-  readonly events: (child: BoundActor) => ActorContextStores['events'];
+  readonly tree: (child: WorkspaceActor, author: string) => ContextTree;
 }): ChildContextResolver {
   const children = (): readonly WorkspaceActor[] => {
     const parent = deps.directory.describe(deps.parent);
@@ -495,18 +495,21 @@ export function childContextResolver(deps: {
 
   return {
     list: () => children().map((actor) => actor.storageKey),
-    resolve: (storageKey: string): ActorContextStores | null => {
+    tree: (storageKey, author) => {
       const child = children().find((actor) => actor.storageKey === storageKey);
 
-      if (!child) return null;
-
-      const bound = deps.host.bindStores({
-        actorId: child.actorId, workspaceId: child.workspaceId, parentActorId: child.parentActorId,
-      });
-
-      return { claims: bound.stores.claims, events: deps.events(bound) };
+      return child === undefined ? null : deps.tree(child, author);
     },
   };
+}
+
+/** `events` is the child's recorder, so an authority action is never unaudited. */
+export function hostedChildTree(host: Pick<ActorHost, 'bindStores'>, events: (child: BoundActor) => ActorContextStores['events']) {
+  return (child: WorkspaceActor, author: string): ContextTree => localContextTree(() => {
+    const bound = host.bindStores(actorReferenceOf(child));
+
+    return { claims: bound.stores.claims, events: events(bound) };
+  }, { author, child: true });
 }
 
 /** The claim's consumed request, or why its own rows cannot be read: a failure no later sweep reads differently. */

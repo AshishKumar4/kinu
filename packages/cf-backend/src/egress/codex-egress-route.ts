@@ -71,9 +71,22 @@ function stamped(response: Response, route: string): Response {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
+export interface CodexContainer {
+  forward(callId: string, request: Request): Promise<Response>;
+  cancel(callId: string): Promise<void>;
+}
+
 export function codexEgressFetch<Id>(namespace: CodexEgressNamespace<Id>, ownerUserId: string): typeof fetch {
+  return codexContainerFetch(ownerContainer(namespace, ownerUserId));
+}
+
+export function ownerContainer<Id>(namespace: CodexEgressNamespace<Id>, ownerUserId: string): CodexContainer {
   const stub = namespace.get(namespace.idFromName(ownerUserId));
 
+  return { forward: (callId, request) => stub.forward(ownerUserId, callId, request), cancel: (callId) => stub.cancel(callId) };
+}
+
+export function codexContainerFetch(stub: CodexContainer): typeof fetch {
   return asFetchFunction(async (input, init) => {
     const signal = init?.signal ?? undefined;
 
@@ -81,7 +94,7 @@ export function codexEgressFetch<Id>(namespace: CodexEgressNamespace<Id>, ownerU
     const callId = crypto.randomUUID();
     const request = new Request(input, { ...init, signal: null });
     const stopped = stoppedBy(signal, () => stub.cancel(callId), 'container');
-    const response = await Promise.race([stub.forward(ownerUserId, callId, request), stopped]);
+    const response = await Promise.race([stub.forward(callId, request), stopped]);
     const refusal = response.headers.get(EGRESS_REFUSAL_HEADER);
 
     if (refusal !== null) throw refusalError({ url: request.url, refusal, message: await response.text() });

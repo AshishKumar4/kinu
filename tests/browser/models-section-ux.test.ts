@@ -58,6 +58,29 @@ describe('the models section keeps every control reachable by name', () => {
     });
   });
 
+  test('the selected model\'s Test runs on the account the tier names, not the default one', async () => {
+    await withGallery(async ({ newPage, origin }) => {
+      const page = await newPage();
+      await page.setViewport({ width: 1280, height: 1100 });
+      await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=models`, { waitUntil: 'networkidle0' });
+      const row = '[data-tier="default"]';
+      await page.click(`${row} [data-model-picker="default model"]`);
+      await page.waitForSelector('input[aria-label="Search default model"]');
+      await page.type('input[aria-label="Search default model"]', 'Claude Opus');
+      await page.keyboard.press('Enter');
+      await page.click(`${row} [aria-label="default model account"]`);
+      await page.waitForSelector('[role="option"]');
+      const options = await page.$$('[role="option"]');
+      const labels = await Promise.all(options.map((option) => option.evaluate((node) => node.textContent)));
+      await options[labels.indexOf('work')]?.click();
+      await page.waitForSelector(`${row} button[aria-label="Test anthropic@work/claude-opus-4-7"]`);
+
+      await page.click(`${row} button[aria-label="Test anthropic@work/claude-opus-4-7"]`);
+      await page.waitForFunction((tier) => document.querySelector(`${tier} [role="status"]`)?.textContent?.includes('Works'), {}, row);
+      await page.close();
+    });
+  });
+
   test('tier rows and the role editor expose their controls by accessible name', async () => {
     await withGallery(async ({ newPage, origin }) => {
       const page = await newPage();

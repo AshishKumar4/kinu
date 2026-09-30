@@ -83,6 +83,9 @@ function stringsOf(value) {
   return Array.isArray(value) ? value.flatMap((entry) => stringOf(entry) ?? []) : [];
 }
 
+/** The chain only orders its steps; each step's own promise carries its outcome to its caller. */
+function noop() {}
+
 function messageOf(err) {
   return stringOf(err?.message) ?? String(err);
 }
@@ -491,34 +494,68 @@ function deviceRegistration(home) {
   return registrationOf(readRecord(path.join(home, DEVICE_RECORD_FILE)));
 }
 
-function withoutTokens(record) {
-  const { accessToken: _access, refreshToken: _refresh, expiresAt: _expires, ...kept } = record;
+/** What a signed-out record keeps (SIWC's sign-out): the account and client mapping, and no token of any kind. */
+function signedOut(record) {
+  const { issuer, subject, email, clientId } = record;
 
-  return kept;
+  return {
+    issuer, ...(subject !== undefined && { subject }), ...(email !== null && email !== undefined && { email }), ...(clientId !== undefined && { clientId }),
+  };
+}
+
+/** A sign-in whose grant left out plan usage: signed in, and asked for consent again next time. */
+function planDeclined(record) {
+  return record !== null && record.scopes.length > 0 && !planEnabled(record);
 }
 
 /**
- * The daemon's own ChatGPT sign-in: one record file, one sign-in at a time, one refresh at a time.
- * The daemon is this machine's only process writing the file, so an in-process chain serializes the
- * rotation.
+ * The daemon's own ChatGPT sign-in. Every write of the record (a rotation, a sign-in landing, a sign-out) runs
+ * on one chain, and each re-reads the record there, so none acts on a session another has replaced: a delayed
+ * refresh cannot bring a signed-out session back, and a sign-out revokes the newest refresh token.
+ *
+ * No clock ends anything here. The chain starts when `predecessorExited` settles, the event of the daemon this
+ * one replaced having exited, so an update's overlap submits no refresh token twice. A call to auth.openai.com
+ * ends when its answer does, or when `abort` (a forced stop) ends it.
  */
-function createDeviceSession({ home, fetch: fetchImpl = globalThis.fetch, now = Date.now }) {
+function createDeviceSession({ home, fetch: baseFetch = globalThis.fetch, now = Date.now, predecessorExited = null }) {
   const file = path.join(home, DEVICE_RECORD_FILE);
-  /** The sign-in waiting for the browser: its abort, and its landing, which settles once it is over. */
+  /** The sign-in waiting for the browser: its abort, whether it was cancelled, and its landing. */
   let signingIn = null;
   let refreshing = null;
   let lastFailure = null;
   let firstSignIn = false;
+  /** Sign-outs under way; while any is, no call gets a token. */
+  let signingOut = 0;
+  /** Set by `quiesce` or `abort`: an update handoff or an exit is under way, and nothing new starts. */
+  let closed = false;
+  const closing = Promise.withResolvers();
+  const stopping = new AbortController();
+  const fetchImpl = (input, init) => baseFetch(input, { ...init, signal: stopping.signal });
+
+  // A daemon stopping has nothing left to wait for its predecessor over.
+  let chain = predecessorExited === null ? Promise.resolve() : Promise.race([predecessorExited, closing.promise]);
 
   const current = () => readRecord(file);
 
+  /** Runs `step` after every write queued before it; the chain itself never rejects. */
+  const serially = (step) => {
+    const run = chain.then(step);
+    chain = run.then(noop, noop);
+
+    return run;
+  };
+
+  const admitting = () => !closed && signingOut === 0;
+
+  /** A replacing sign-in or a sign-out: the one waiting is cancelled, and a grant it still gets is revoked. */
   const cancelSignIn = async () => {
     if (signingIn === null) return;
+    signingIn.cancelled = true;
     signingIn.controller.abort();
     await signingIn.landed;
   };
 
-  const land = async (flow, controller) => {
+  const land = async (flow, attempt) => {
     try {
       const result = await flow.done;
 
@@ -528,30 +565,48 @@ function createDeviceSession({ home, fetch: fetchImpl = globalThis.fetch, now = 
         return;
       }
 
-      writeRecord(file, result.record);
-      firstSignIn = result.registered;
-      lastFailure = result.outcome === 'plan-disabled' ? 'ChatGPT plan usage was not granted' : null;
+      await serially(async () => {
+        // Cancelled while the browser finished: the grant it made is not kept, so it is not left live either.
+        if (attempt.cancelled) {
+          if (result.record.refreshToken !== undefined) await revokeSession({ clientId: result.record.clientId, refreshToken: result.record.refreshToken, fetch: fetchImpl });
+
+          return;
+        }
+
+        writeRecord(file, result.record);
+        firstSignIn = result.registered;
+        lastFailure = result.outcome === 'plan-disabled' ? 'ChatGPT plan usage was not granted' : null;
+      });
     } catch (err) {
-      if (!controller.signal.aborted) lastFailure = messageOf(err);
+      if (!attempt.controller.signal.aborted) lastFailure = messageOf(err);
     } finally {
-      if (signingIn?.controller === controller) signingIn = null;
+      if (signingIn === attempt) signingIn = null;
     }
   };
 
-  const rotate = async (record) => {
+  /** Renews the session `seen` came from, unless the record moved on while this waited its turn. */
+  const rotate = (seen, forced) => serially(async () => {
+    const record = current();
+
+    if (!admitting() || record?.refreshToken === undefined || record.accessToken === undefined || !planEnabled(record)) return null;
+
+    // Another step rotated, signed in or signed out meanwhile: its token is the one to use, if any.
+    if (record.refreshToken !== seen.refreshToken) return expiring(record, now()) ? null : record.accessToken;
+
+    if (!forced && !expiring(record, now())) return record.accessToken;
+
     try {
       const fresh = await refreshTokens({ clientId: record.clientId, refreshToken: record.refreshToken, scopes: record.scopes, fetch: fetchImpl, now });
-      const next = { ...record, ...fresh };
 
-      writeRecord(file, next);
+      writeRecord(file, { ...record, ...fresh });
 
-      return next;
+      return fresh.accessToken ?? null;
     } catch (err) {
       if (!(err instanceof SiwcError) || !err.unusable) throw err;
-      writeRecord(file, withoutTokens(record));
+      writeRecord(file, signedOut(record));
       throw new SiwcError(`ChatGPT ended this machine's sign-in (${err.code}); it is signed out`, { code: err.code, cause: err });
     }
-  };
+  });
 
   return {
     status() {
@@ -561,6 +616,7 @@ function createDeviceSession({ home, fetch: fetchImpl = globalThis.fetch, now = 
         signedIn: record?.accessToken !== undefined && planEnabled(record),
         email: record?.email ?? null,
         planEnabled: planEnabled(record),
+        planDeclined: planDeclined(record),
         pending: signingIn !== null,
         lastFailure,
         firstSignIn,
@@ -569,17 +625,21 @@ function createDeviceSession({ home, fetch: fetchImpl = globalThis.fetch, now = 
 
     /** Starts a sign-in for the browser the owner holds, replacing one still waiting. */
     async signIn() {
+      if (closed) throw new SiwcError('this daemon is handing over to a newer one; sign in again in a moment');
       await cancelSignIn();
       const controller = new AbortController();
       const record = current();
       const registration = registrationOf(record) ?? cliRegistration(home);
 
       const flow = await beginSignIn({
-        home, registration, consent: record !== null && !planEnabled(record), fetch: fetchImpl, now, signal: controller.signal,
+        home, registration, consent: planDeclined(record), fetch: fetchImpl, now, signal: controller.signal,
       });
 
+      const attempt = { controller, cancelled: false, landed: null };
+
       lastFailure = null;
-      signingIn = { controller, landed: land(flow, controller) };
+      signingIn = attempt;
+      attempt.landed = land(flow, attempt);
 
       return { authorizeUrl: flow.authorizeUrl };
     },
@@ -588,33 +648,65 @@ function createDeviceSession({ home, fetch: fetchImpl = globalThis.fetch, now = 
     async bearer(rejected) {
       const record = current();
 
-      if (record?.accessToken === undefined || !planEnabled(record)) return null;
+      if (!admitting() || record?.accessToken === undefined || !planEnabled(record)) return null;
 
       if (record.accessToken !== rejected && !expiring(record, now())) return record.accessToken;
-      refreshing ??= rotate(record).finally(() => { refreshing = null; });
+      refreshing ??= rotate(record, record.accessToken === rejected).finally(() => { refreshing = null; });
 
-      return (await refreshing).accessToken;
+      return refreshing;
     },
 
     /**
      * Revokes the renewable session, then forgets its tokens either way; the registration stays for the
-     * next sign-in. `unconfirmed` says why the revocation was not confirmed, for the owner to finish in
+     * next sign-in. It waits for a rotation in flight, so the token revoked is the newest, and no call gets
+     * a token meanwhile. `unconfirmed` says why the revocation was not confirmed, for the owner to finish in
      * ChatGPT's settings.
      */
     async signOut() {
-      await cancelSignIn();
-      const record = current();
+      signingOut += 1;
 
-      if (record === null) return { unconfirmed: null };
+      try {
+        await cancelSignIn();
 
-      const { unconfirmed } = record.refreshToken !== undefined && record.clientId !== undefined
-        ? await revokeSession({ clientId: record.clientId, refreshToken: record.refreshToken, fetch: fetchImpl })
-        : { unconfirmed: null };
+        return await serially(async () => {
+          const record = current();
 
-      writeRecord(file, withoutTokens(record));
-      firstSignIn = false;
+          if (record === null) return { unconfirmed: null };
 
-      return { unconfirmed };
+          const { unconfirmed } = record.refreshToken !== undefined && record.clientId !== undefined
+            ? await revokeSession({ clientId: record.clientId, refreshToken: record.refreshToken, fetch: fetchImpl })
+            : { unconfirmed: null };
+
+          writeRecord(file, signedOut(record));
+          firstSignIn = false;
+
+          return { unconfirmed };
+        });
+      } finally {
+        signingOut -= 1;
+      }
+    },
+
+    /**
+     * Starts nothing new and waits for what is under way: an update handoff or an exit calls it. A browser that
+     * has not come back is no longer waited for; one that has lands, and the auth call in flight ends when its
+     * answer does.
+     */
+    async quiesce() {
+      closed = true;
+      closing.resolve();
+      const attempt = signingIn;
+
+      attempt?.controller.abort();
+      await attempt?.landed;
+      await chain;
+    },
+
+    /** A forced stop: the auth call in flight ends now, unanswered, and writes nothing. */
+    abort() {
+      closed = true;
+      closing.resolve();
+      stopping.abort(new SiwcError('the daemon was stopped before auth.openai.com answered'));
     },
   };
 }

@@ -389,7 +389,13 @@ userRoutes.post('/api/user/codex/poll', async (c) => {
   } catch (cause) { throw toKinuError({ doing: 'checking the Codex sign-in', cause, otherwise: 'unavailable' }); }
 });
 
-userRoutes.get('/api/user/chatgpt', async (c) => json({ body: await c.get('stub').chatgptPlan(c.get('owner')) }));
+userRoutes.get('/api/user/chatgpt', async (c) => {
+  const plan = await c.get('stub').chatgptPlan(c.get('owner'));
+
+  if (plan.changed) modelSettingsChanged(c);
+
+  return json({ body: plan });
+});
 
 userRoutes.post('/api/user/chatgpt/sign-in', async (c) => json({ body: await c.get('stub').startChatGptSignIn(c.get('owner')) }));
 

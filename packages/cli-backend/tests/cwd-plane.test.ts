@@ -7,7 +7,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
 import * as v from 'valibot';
 import type { AgentRuntime, DeferredApprovalChannel, LLMProviderConfig, ShellApprovalOutcome, WriteEvent, WriteObserver } from '@kinu.run/core';
-import { buildBuiltinTools, discoverSkills, initWorkspaceSchema, reviewCommand, SLATES_ROOT, WORKSPACE_ROOT, subordinateAgentName } from '@kinu.run/core';
+import { ConversationSearchStore, buildBuiltinTools, discoverSkills, initWorkspaceSchema, reviewCommand, SLATES_ROOT, WORKSPACE_ROOT, subordinateAgentName } from '@kinu.run/core';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { present, scratchDir, toolExecute } from '@kinu.run/test-utils';
@@ -251,7 +251,7 @@ describe('addressing the bound directory', () => {
       return answer();
     });
 
-    const file = toolExecute(present(buildBuiltinTools({ rt, workMode: 'build', history: rt.stores.history }).file, 'the file tool'));
+    const file = toolExecute(present(buildBuiltinTools({ rt, workMode: 'build', conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) }).file, 'the file tool'));
     const writeFile = present(rt.executionRouter?.getProvider('workspace'), 'the workspace executor').tools.writeFile;
 
     return { file, writeFile: (path: string, content: string) => present(writeFile, 'workspace.writeFile').execute(path, content), asked };
@@ -583,7 +583,7 @@ test('local Plan file inspection remains useful without granting native project 
   const { state, project } = roots('plan-cwd-inspection');
   writeFileSync(join(project, 'inspect.txt'), 'alpha\nneedle\nomega');
   const rt = agentRuntime(state, 'inspector', project);
-  const planned = buildBuiltinTools({ rt, workMode: 'plan', history: rt.stores.history });
+  const planned = buildBuiltinTools({ rt, workMode: 'plan', conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) });
   const file = planned.file;
 
   if (file === undefined) throw new Error('No Plan file tool');
@@ -594,7 +594,7 @@ test('local Plan file inspection remains useful without granting native project 
   expect(await inspect({ action: 'read', path: 'inspect.txt' })).toEqual(expect.stringContaining('needle'));
   await expect(inspect({ action: 'write', path: 'inspect.txt', content: 'changed' })).rejects.toMatchObject({ code: 'denied' });
   expect(readFileSync(join(project, 'inspect.txt'), 'utf8')).toBe('alpha\nneedle\nomega');
-  const buildFile = buildBuiltinTools({ rt, workMode: 'build', history: rt.stores.history }).file;
+  const buildFile = buildBuiltinTools({ rt, workMode: 'build', conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) }).file;
 
   if (buildFile === undefined) throw new Error('No Build file tool');
   const build = toolExecute(buildFile);
@@ -607,7 +607,7 @@ test('a file the agent writes is named local:// when the directory is the worksp
   const { state, project } = roots('cwd-plane-reference');
 
   const write = (rt: CLIRuntime) => {
-    const file = buildBuiltinTools({ rt, workMode: 'build', history: rt.stores.history }).file;
+    const file = buildBuiltinTools({ rt, workMode: 'build', conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) }).file;
 
     if (file === undefined) throw new Error('No Build file tool');
 

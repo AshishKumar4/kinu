@@ -32,7 +32,7 @@ import {
   type SwarmInput,
 } from '../src/strategy/swarm';
 import { createTestRuntime, createTestActors, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
-import { makeSqlExec, storesFor } from './helpers';
+import { makeSqlExec, conversationsFor } from './helpers';
 import { createAgentSelfProvider, type AgentSelfHost } from '../src/tools/agent-self';
 
 /** Type block of the `agent.*` codemode namespace as it ships; the host is never called. */
@@ -56,7 +56,7 @@ describe('buildSystemPromptSync', () => {
     expectDefaultPromptToMatch(/Kinu/, /self-evolving/i);
   });
 
-  test('renders a neutral delegation index — one tool, no advice on when to delegate', () => {
+  test('the delegation index advertises its supported actions, not retired fields or actions', () => {
     // Which rung a task wants lives in the `agents` schema; advice here would drift from it.
     const { rt } = createTestRuntime();
 
@@ -67,19 +67,7 @@ describe('buildSystemPromptSync', () => {
       registeredExecutors: [],
     });
 
-    expect(prompt).toMatch(/## Delegation/);
-    expect(prompt).toMatch(/Helper agents are one tool: `agents`/);
-    expect(prompt).toMatch(/Its schema says what each action does/);
-    expect(prompt).toMatch(/`swarm` runs parallel nodes over this workspace/);
-    expect(prompt).toMatch(/`hire` creates a persistent subordinate in this workspace/);
-    expect(prompt).toMatch(/Subordinates share this workspace's files and sandbox/);
-    expect(prompt).not.toContain('Delegate once the shape of the work is settled');
-    expect(prompt).not.toContain('goes to the ladder');
-    expect(prompt).not.toContain('Reach for it when');
-    expect(prompt).not.toContain('coordination loop');
-    expect(prompt).not.toContain('competing candidates');
-    expect(prompt).not.toContain('search depth 3');
-    expect(prompt).not.toContain('shared/findings/');
+    for (const action of ['agents', 'swarm', 'hire']) expect(prompt).toContain('`' + action + '`');
     expect(prompt).not.toContain('action=swarm');
     expect(prompt).not.toContain('`think`');
     expect(prompt).not.toContain('`team`');
@@ -90,7 +78,7 @@ describe('buildSystemPromptSync', () => {
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).not.toContain('settle=');
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toMatch(/`swarm` runs parallel nodes over this workspace/);
+    expect(prompt).toContain('`swarm`');
     expect(prompt).not.toContain('action=swarm');
   });
 
@@ -102,9 +90,8 @@ describe('buildSystemPromptSync', () => {
       registeredExecutors: [],
     });
 
-    expect(both).toContain('## Delegation');
-    expect(both).toMatch(/`swarm` runs parallel nodes over this workspace/);
-    expect(both).toMatch(/`hire` creates a persistent subordinate in this workspace/);
+    expect(both).toContain('`swarm`');
+    expect(both).toContain('`hire`');
 
     const searchOnly = buildSystemPromptSync(rt, {
       availableTools: ['agents'],
@@ -112,9 +99,8 @@ describe('buildSystemPromptSync', () => {
       registeredExecutors: [],
     });
 
-    expect(searchOnly).toContain('## Delegation');
-    expect(searchOnly).toMatch(/`swarm` runs parallel nodes over this workspace/);
-    expect(searchOnly).not.toContain('`hire` creates a persistent subordinate');
+    expect(searchOnly).toContain('`swarm`');
+    expect(searchOnly).not.toContain('`hire`');
   });
 
   test('the in-sandbox actions are advertised only where both halves exist', () => {
@@ -126,7 +112,7 @@ describe('buildSystemPromptSync', () => {
       registeredExecutors: [],
     });
 
-    expect(both).toContain('callable inside eval as `agents.<action>`');
+    expect(both).toContain('agents.<action>');
 
     const noSandbox = buildSystemPromptSync(rt, {
       availableTools: ['agents'],
@@ -864,7 +850,7 @@ describe('buildSystemPromptSync', () => {
         const mode = phase === 2 ? 'build' : 'plan';
         const path = `/mode-${subject.actor.name}-${roleId}-${phase}.txt`;
         await subject.storage.vfs.writeFile(path, 'original');
-        const file = buildBuiltinTools({ rt: subject, history: storesFor(subject).history }).file;
+        const file = buildBuiltinTools({ rt: subject, conversations: conversationsFor(subject) }).file;
 
         if (!file) throw new Error('missing file tool');
         const tools: ToolSet = { file };

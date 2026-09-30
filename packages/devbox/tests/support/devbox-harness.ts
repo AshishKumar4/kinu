@@ -51,6 +51,9 @@ export function gate(): Gate {
   };
 }
 
+/** The process manager's scripts, named by their `$0` (`src/processes.ts`). */
+const PROCESS_SCRIPTS = new Set(['devbox-process', 'devbox-unlaunch', 'devbox-status', 'devbox-kill']);
+
 /** Uses the SDK's own status vocabulary: `isProcessLive` reads `status`. */
 export interface FakeProcessRow {
   readonly id: string;
@@ -390,6 +393,8 @@ export class FakeSandbox {
   containerStarts = 0;
   readonly startWaitOptions: unknown[] = [];
   readonly files = new Map<string, string>();
+  /** Files whose bytes are not UTF-8 text, which `files` cannot hold; the SDK's file reads serve them as bytes. */
+  readonly binaryFiles = new Map<string, Uint8Array>();
   readonly fileFaults = new Map<string, { readonly errno: number; readonly message: string }>();
   /** Recorded by the box's own `fuse-overlayfs` command and reported via `cat /proc/mounts`,
    *  which `isOverlayMounted` reads; termination clears them with the local filesystem (P1). */
@@ -935,6 +940,8 @@ export class FakeSandbox {
   async deleteFile(path: string): Promise<void> {
     for (const key of this.files.keys()) if (key === path || key.startsWith(path + '/')) this.files.delete(key);
 
+    for (const key of this.binaryFiles.keys()) if (key === path || key.startsWith(path + '/')) this.binaryFiles.delete(key);
+
     for (const key of this.directories) if (key === path || key.startsWith(path + '/')) this.directories.delete(key);
     this.stagedArchives.delete(path);
     this.changeVersion++;
@@ -1062,6 +1069,7 @@ export class FakeSandbox {
 
   #loseContainerLocalState(): void {
     this.files.clear();
+    this.binaryFiles.clear();
     this.directories.clear();
 
     for (const path of IMAGE_DIRECTORIES) this.directories.add(path);
@@ -1222,29 +1230,82 @@ export class FakeSandbox {
       return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
     }
 
-    if (args[3] === 'devbox-process') {
-      const id = (args[4] ?? '').split('/').at(-1) ?? '';
-      const row = await this.startProcess(args.at(-1) ?? '', { cwd: options.cwd, processId: id });
-      this.files.set(`${args[4]}/pid`, String(row.pid));
-
-      return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), row.pid);
-    }
-
-    if (args[3] === 'devbox-status') return this.#nativeProcessStatus(args.slice(4), pid);
-
-    if (args[3] === 'devbox-kill') {
-      const id = (args[4] ?? '').split('/').at(-1) ?? '';
-      const row = this.processes.get(id);
-
-      if (this.files.has(`${args[4]}/process.json`) && (row?.status === 'running' || row?.status === 'starting')) await this.killProcess(id);
-
-      return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
-    }
+    if (PROCESS_SCRIPTS.has(args[3] ?? '')) return await this.#processScript(args, pid);
 
     const command = args[2] ?? '';
 
     return processResult(this.#execIn(command, { cwd: options.cwd }), pid);
   }
+
+  /** The process scripts' file protocol: `launch` stands for the claim symlink and holds its target. */
+  async #processScript(args: string[], pid: number): Promise<ExecProcess> {
+    if (args[3] === 'devbox-process') {
+      const dir = args[4] ?? '';
+      const cwd = args[5] ?? '';
+      const id = dir.split('/').at(-1) ?? '';
+      const ran = processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
+
+      if (this.files.has(`${dir}/launch`)) return ran;
+
+      if (!this.directories.has(cwd)) {
+        this.files.set(`${dir}/launch`, 'launched');
+        this.files.set(`${dir}/stderr.log`, `Failed to change directory to '${cwd}'\n`);
+        this.files.set(`${dir}/exit`, '1');
+
+        return ran;
+      }
+
+      let row: FakeProcessRow;
+
+      try {
+        row = await this.startProcess(args.at(-1) ?? '', { cwd, processId: id });
+      } catch (error) {
+        // An answer lost after the fork: the wrapper ran, so it holds the claim and wrote its pid.
+        const created = this.processes.get(id);
+
+        if (created !== undefined) this.#launched(dir, created.pid);
+        throw error;
+      }
+
+      this.#launched(dir, row.pid);
+
+      return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), row.pid);
+    }
+
+    if (args[3] === 'devbox-unlaunch') {
+      const dir = args[4] ?? '';
+
+      return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: this.#unlaunched(dir) ? 0 : 1 }), pid);
+    }
+
+    if (args[3] === 'devbox-kill') {
+      const dir = args[4] ?? '';
+      const id = dir.split('/').at(-1) ?? '';
+      const row = this.processes.get(id);
+
+      if (this.files.has(`${dir}/process.json`) && !this.#unlaunched(dir) && !this.files.has(`${dir}/exit`)
+        && (row?.status === 'running' || row?.status === 'starting')) await this.killProcess(id);
+
+      return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
+    }
+
+    return this.#nativeProcessStatus(args.slice(4), pid);
+  }
+
+  #launched(dir: string, pid: number): void {
+    this.files.set(`${dir}/launch`, 'launched');
+    this.files.set(`${dir}/pid`, String(pid));
+  }
+
+  /** The claim `UNLAUNCH` makes: a launch with no pid, no exit and no claim is claimed for nobody. */
+  #unlaunched(dir: string): boolean {
+    if (!this.files.has(`${dir}/pid`) && !this.files.has(`${dir}/exit`) && !this.files.has(`${dir}/launch`)) {
+      this.files.set(`${dir}/launch`, 'unlaunched');
+    }
+
+    return this.files.get(`${dir}/launch`) === 'unlaunched';
+  }
+
   async #nativeProcessStatus(dirs: string[], pid: number): Promise<ExecProcess> {
     const lines: string[] = [];
 
@@ -1254,9 +1315,13 @@ export class FakeSandbox {
       const record = this.files.get(`${dir}/process.json`);
 
       if (record === undefined) continue;
+      const exited = this.files.get(`${dir}/exit`);
       let state = `exit ${row?.status === 'completed' ? 0 : 1}`;
 
-      if (row === null) state = 'lost';
+      if (exited !== undefined) state = `exit ${exited}`;
+      else if (this.files.get(`${dir}/launch`) === 'unlaunched') state = 'unlaunched';
+      else if (!this.files.has(`${dir}/pid`)) state = 'starting';
+      else if (row === null) state = 'lost';
       else if (row.status === 'running') state = `running ${row.pid}`;
       else if (row.status === 'starting') state = 'starting';
       lines.push(state, record);
@@ -1370,6 +1435,8 @@ export interface Harness<Box> {
   readonly container: FakeSandbox;
   readonly rows: Map<string, StoredValue>;
   readonly storage: FakeStorage;
+  /** What the platform hands a new instance of the object after an eviction: same storage, same container. */
+  readonly state: BoxState;
 }
 
 /** `id` defaults to `TEST_BOX_ID`; pass `deriveBoxId` output to model production identity.
@@ -1412,7 +1479,7 @@ export function harness<Box extends SyncServing>(
   container.owner = box;
   container.syncHost = body => box.devboxSync(body);
 
-  return { box, container, rows: storage.rows, storage };
+  return { box, container, rows: storage.rows, storage, state };
 }
 
 /** Holds the operation until the init gate opens: no event reaches a Durable Object inside

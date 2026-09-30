@@ -1,10 +1,12 @@
 /** An agent's own SQLite, under the core stores; its roster rows are copies the workspace sends on each call. */
-import type { UIMessage } from 'ai';
+import type { ModelMessage, UIMessage } from 'ai';
 import {
   CHAT_SESSION_ID, EventLog, EvolutionEngine, REAL_CLOCK, WorkspaceActorDirectory, runEventSinks,
   actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
   initWorkspaceSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, actorReadHandle, readSessionTranscript, readSubordinateInspection,
-  getChatHistoryPage, inheritedContextFromTranscript,
+  getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
+  type TurnRequestIndex, type TurnRequestPage, ConversationSearchStore, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource,
+  localContextTree, type ContextEditor, type ContextTree, type ConversationRecall,
   type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
   type SessionTranscriptReader, type SubordinateInspectionResult, type ModelPricing, type SqlExecutor, type VFS,
   type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
@@ -13,7 +15,7 @@ import {
 import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import type { AgentActivity, AgentOpening, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow } from './protocol';
+import type { AgentTurnActivity, AgentTurnOpening, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt } from '@kinu.run/core';
 import type { AgentWorkspace } from './agent-turn';
 
 const refused = (what: string) => Effect.fail(new KinuError('unsupported', `${what} runs in the workspace object, not in an agent's own isolate.`));
@@ -26,7 +28,9 @@ interface AgentRuntimeFiles {
 }
 
 /** Each copied table's key. An upsert: a replace deletes the row first, cascading through the agent's rows. */
-const COPIED_KEY = { workspace_identity: ['singleton'], workspace_actors: ['actor_id'], scaffold_versions: ['actor_id', 'version'] } as const;
+const COPIED_KEY = {
+  workspace_identity: ['singleton'], workspace_actors: ['actor_id'], scaffold_versions: ['actor_id', 'version'], actor_config: ['actor_id', 'key'],
+} as const;
 
 function upsertRow(storage: DurableObjectStorage, table: keyof typeof COPIED_KEY, row: StoredRow): void {
   const columns = Object.keys(row);
@@ -58,9 +62,9 @@ export class AgentDatabase {
 
   private readonly stops = new Map<string, AbortController>();
 
-  private lines: AgentActivity[] = [];
+  private lines: AgentTurnActivity[] = [];
 
-  takeActivity(): AgentActivity[] {
+  takeActivity(): AgentTurnActivity[] {
     const taken = this.lines;
 
     this.lines = [];
@@ -69,6 +73,7 @@ export class AgentDatabase {
   }
 
   private priced: { readonly model: string; readonly pricing: ModelPricing | null } | null = null;
+  private recall: ConversationRecall | null = null;
   private execution: Executor | null = null;
 
   private readonly sql: SqlExecutor = <T,>(query: TemplateStringsArray, ...values: SqlValue[]): T[] =>
@@ -82,6 +87,7 @@ export class AgentDatabase {
       readonly enqueueTurn: BackendHost['enqueueTurn'];
       readonly program: AgentWorkspace['program'];
       readonly memory: AgentWorkspace['memory'];
+      readonly sayToParent: AgentWorkspace['sayToParent'];
     },
   ) {
     initWorkspaceSchema({
@@ -96,7 +102,12 @@ export class AgentDatabase {
     this.storage.transactionSync(() => {
       upsertRow(this.storage, 'workspace_identity', snapshot.identity);
 
-      for (const row of snapshot.lineage) upsertRow(this.storage, 'workspace_actors', row);
+      for (const row of snapshot.lineage) {
+        upsertRow(this.storage, 'workspace_actors', row);
+        this.storage.sql.exec('DELETE FROM actor_config WHERE actor_id = ?', row.actor_id ?? null);
+      }
+
+      for (const row of snapshot.config) upsertRow(this.storage, 'actor_config', row);
     });
     this.snapshot = snapshot;
   }
@@ -169,6 +180,7 @@ export class AgentDatabase {
         eventLog: new EventLog({ exec: (query, ...bindings) => storage.sql.exec(query, ...bindings) }, bound.handle),
       }),
       contextEvents: () => null,
+      sayToParent: (_child, signal) => this.workspace.sayToParent(signal),
       tracing: undefined,
     });
   }
@@ -271,11 +283,40 @@ export class AgentDatabase {
     return await getChatHistoryPage(this.readable().transcript, page);
   }
 
+  async workingContext(): Promise<readonly ModelMessage[]> {
+    return (await this.acquire()).session.history;
+  }
+
+  conversations(): ConversationRecall {
+    const reference = this.reference();
+
+    this.recall ??= new ConversationSearchStore(this.sql, this.actorHost().bindStores(reference).handle,
+      (sessionId) => this.actorHost().bindStores(reference).stores.history.transcript(sessionId));
+
+    return this.recall;
+  }
+
+  contextTree(editor: ContextEditor): ContextTree {
+    return localContextTree(() => ({ claims: this.actorHost().bindStores(this.reference()).stores.claims, events: null }), editor);
+  }
+
+  spend(steps: readonly StepSpendSource[]): SpendLedger {
+    return spendLedger(new RunEventRecorder(this.sql, this.readable().actor), steps);
+  }
+
+  turnRequests(turnId: string): TurnRequestIndex {
+    return turnRequestIndex(this.actorHost().bindStores(this.reference()).stores, turnId);
+  }
+
+  async turnRequest(at: TurnRequestAt): Promise<TurnRequestPage> {
+    return await turnRequestPage(this.actorHost().bindStores(this.reference()).stores, at);
+  }
+
   async inheritedContext(): Promise<SerializedMessage[]> {
     return await inheritedContextFromTranscript(this.readable().transcript);
   }
 
-  async open(opening: AgentOpening): Promise<void> {
+  async open(opening: AgentTurnOpening): Promise<void> {
     const bound = this.actorHost().bindStores(this.reference());
     const history = bound.stores.history;
     const rows = history.transcript(CHAT_SESSION_ID);

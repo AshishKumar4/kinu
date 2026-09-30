@@ -307,7 +307,7 @@ export const CHATGPT_USAGE_URL = 'https://chatgpt.com/settings/usage';
 const ChatGptPlanSchema = v.object({
   device: v.nullable(v.object({ id: v.string(), label: v.string() })),
   status: v.nullable(v.object({
-    signedIn: v.boolean(), email: v.nullable(v.string()), planEnabled: v.boolean(), pending: v.boolean(),
+    signedIn: v.boolean(), email: v.nullable(v.string()), planEnabled: v.boolean(), planDeclined: v.optional(v.boolean(), false), pending: v.boolean(),
     lastFailure: v.nullable(v.string()), firstSignIn: v.boolean(),
   })),
 });

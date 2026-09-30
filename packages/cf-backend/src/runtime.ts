@@ -13,7 +13,7 @@ import type {
   WriteObserver,
   ModelCallSink, ResolvedTurnProfile, GenerateRequest,
   SlateCallResult, SlateOperation,
-  ActorClaimStore, ChildContextResolver, ContextEventRecorder,
+  ChildContextResolver, ContextTree,
 } from "@kinu.run/core";
 import {
   nimbusSessionFiles, nimbusSessionShell, shellCwd, createShellSession,
@@ -231,9 +231,7 @@ export interface CFRuntimeHooks {
   /** `children` is opened under the actor host's directory authority, never by a caller knowing an id. */
   contextPlane?: {
     readonly actorId: string;
-    claims(): ActorClaimStore;
-    /** Null until the `context_edit` run-event variant exists; not a stub. */
-    events(): ContextEventRecorder | null;
+    own(): ContextTree;
     readonly children: ChildContextResolver;
   };
 }
@@ -361,8 +359,9 @@ export function createCFRuntime(
 
   if (plane) {
     mounts.push(contextMount({
+      actorId: plane.actorId,
       // A thunk: a mount must not capture a store bound to a since-retired identity.
-      stores: () => ({ actorId: plane.actorId, claims: plane.claims(), events: plane.events() }),
+      own: () => plane.own(),
       children: plane.children,
     }));
   }

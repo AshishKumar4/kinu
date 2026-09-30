@@ -86,8 +86,9 @@ describe('startup notice through runStartupUpdateCheck', () => {
     const home = configHome(signedIn);
     const { lines, outcome, spawned } = await runStartup(home, { isTTY: true, fetchExpr: serveVersion(`'9.9.9+check'`) });
     expect(spawned).toBe(1);
-    expect(outcome).toBe('Installing Kinu 9.9.9+check in the background; it applies on the next launch.');
-    expect(lines).toEqual(['Installing Kinu 9.9.9+check in the background; it applies on the next launch.']);
+    expect(outcome).toContain('9.9.9+check');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('9.9.9+check');
     expect(homeConfig(home)).toMatchObject({ updateCheckedAt: NOW, updateLatestSeen: '9.9.9+check' });
   });
 

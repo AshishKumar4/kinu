@@ -4,7 +4,7 @@ import { Database } from 'bun:sqlite';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC,
   initWorkspaceSchema, profileCatalogDigest, resolveTurnProfile,
-  WorkspaceActorDirectory, actorReferenceOf,
+  WorkspaceActorDirectory, actorReferenceOf, localContextTree, tierRefusals,
   type ActorHost, type ActorReference, type AgentRuntime, type HostedActor, type LoopOrigin,
   type ProfileAuthorityInputs, type SqlExecutor,
 } from '@kinu.run/core';
@@ -122,11 +122,19 @@ export async function hostedWorkspace(
 
       return rootRuntime;
     },
+    // This fixture hosts every actor over one database, so a child's tree is over its stores here.
+    contextTree: (actorId, editor) => localContextTree(() => {
+      const bound = host.bindStores(actorReferenceOf(directory.open(actorId)));
+
+      return { claims: bound.stores.claims, events: null };
+    }, editor),
     installedBuild: () => 'harness-build',
     ownerUserId: () => 'harness-owner',
     capabilityToken: () => 'harness-token',
     resolveProfile: () => Promise.resolve(fixtureProfile()),
     reportModelCall: () => undefined,
+    // Nothing changes the owner's model settings under this fixture.
+    refusals: (actor) => tierRefusals({ sql, actor, config: actor.config, now: Date.now, settings: 'Settings > Models', changes: () => 0 }),
     currentTurn: () => null,
     liveReadsMoved: () => undefined,
     modelOperations: () => undefined,

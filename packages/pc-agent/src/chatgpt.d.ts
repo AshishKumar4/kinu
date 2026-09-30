@@ -108,6 +108,8 @@ export interface DeviceSessionStatus {
   readonly signedIn: boolean;
   readonly email: string | null;
   readonly planEnabled: boolean;
+  /** A sign-in whose grant left out plan usage; a signed-out record is not one. */
+  readonly planDeclined: boolean;
   readonly pending: boolean;
   readonly lastFailure: string | null;
   readonly firstSignIn: boolean;
@@ -118,6 +120,16 @@ export interface DeviceSession {
   signIn(): Promise<{ readonly authorizeUrl: string }>;
   bearer(rejected?: string): Promise<string | null>;
   signOut(): Promise<{ readonly unconfirmed: string | null }>;
+  /** Starts nothing new and waits for what is under way: a landing sign-in, the auth call in flight. */
+  quiesce(): Promise<void>;
+  /** A forced stop: the auth call in flight ends now, unanswered, and writes nothing. */
+  abort(): void;
 }
 
-export declare function createDeviceSession(opts: { readonly home: string; readonly fetch?: typeof fetch; readonly now?: () => number }): DeviceSession;
+export declare function createDeviceSession(opts: {
+  readonly home: string;
+  readonly fetch?: typeof fetch;
+  readonly now?: () => number;
+  /** Settles when the daemon this one replaced has exited: nothing writes the record before. */
+  readonly predecessorExited?: Promise<void> | null;
+}): DeviceSession;

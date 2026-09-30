@@ -4,7 +4,7 @@ import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import { asSchema, tool, jsonSchema } from 'ai';
 import * as v from 'valibot';
-import { createTestRuntime, storesFor } from './helpers';
+import { createTestRuntime, conversationsFor, storesFor } from './helpers';
 import {
   narrowToolSurface, codemodeCapabilitiesFor, TOOL_REACH,
   buildActorTools,
@@ -90,7 +90,7 @@ function tools(
 ) {
   return buildActorTools({
     rt,
-    history: storesFor(rt).history,
+    conversations: conversationsFor(rt),
     escalations,
     craftedToolExecute: nodeCraftedExecute,
     codemode: nodeCodemodeBuilder,
@@ -204,7 +204,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
     const t = buildActorTools({
       rt,
-      history: storesFor(rt).history,
+      conversations: conversationsFor(rt),
       craftedToolExecute: nodeCraftedExecute,
       codemode: nodeCodemodeBuilder,
       facts: stubFacts,
@@ -269,7 +269,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
     const t = buildBuiltinTools({
       rt, craftedToolExecute: nodeCraftedExecute,
-      history: storesFor(rt).history,
+      conversations: conversationsFor(rt),
       facts,
     });
 
@@ -297,7 +297,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
     const t = buildBuiltinTools({
       rt, craftedToolExecute: nodeCraftedExecute,
-      history: storesFor(rt).history,
+      conversations: conversationsFor(rt),
       facts: { upsert: () => 'created' as const, recall: () => null, forget: () => {}, recentTopK: () => [], all: () => [] },
     });
 
@@ -325,8 +325,8 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const { history } = storesFor(rt);
 
     const provider = createMemoryCodemodeProvider(() => ({
-      memory: rt.memory, sql: rt.storage.sql, actor: rt.actor,
-      transcriptFor: (sessionId) => history.transcript(sessionId),
+      memory: rt.memory, actor: rt.actor,
+      conversations: conversationsFor(rt, history),
     }));
 
     // No facts wired: remember/recall/forget are absent, as in the native tool.
@@ -343,8 +343,8 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const { store, facts } = factsOverMap();
 
     const provider = createMemoryCodemodeProvider(() => ({
-      memory: rt.memory, sql: rt.storage.sql, actor: rt.actor, facts,
-      transcriptFor: (sessionId) => history.transcript(sessionId),
+      memory: rt.memory, actor: rt.actor, facts,
+      conversations: conversationsFor(rt, history),
     }));
 
     expect(Object.keys(provider.tools)).toContain('remember');
@@ -413,7 +413,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
     const propertiesOf = async (report: ReportToolDeps): Promise<string[]> => Object.keys(v.parse(
       v.object({ properties: v.record(v.string(), v.unknown()) }),
-      await asSchema(buildBuiltinTools({ rt, report, history: storesFor(rt).history }).report?.inputSchema).jsonSchema,
+      await asSchema(buildBuiltinTools({ rt, report, conversations: conversationsFor(rt) }).report?.inputSchema).jsonSchema,
     ).properties);
 
     const sink: ReportToolDeps['report'] = async () => ({ ok: true });
@@ -542,7 +542,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     try {
       buildActorTools({
         rt,
-        history: storesFor(rt).history,
+        conversations: conversationsFor(rt),
         craftedToolExecute: nodeCraftedExecute,
         codemode: (surface) => {
           injected = Object.keys(surface.craftedTools());
