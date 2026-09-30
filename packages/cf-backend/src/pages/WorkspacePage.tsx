@@ -1220,7 +1220,10 @@ export default function WorkspacePage() {
             changesFocus={changesFocus}
             planOwner={planOwnerName(subName, agentId)}
             workspacePlanArrival={state.workspacePlanArrival}
-            onReviewActor={async (name, actorId) => { await navigate(`${helperBase(agentId, name).slice(0, -1)}${actorId === undefined ? "" : `?actor=${encodeURIComponent(actorId)}`}`); }}
+            onReviewActor={async (name, actorId) => {
+              await navigate(`${helperBase(agentId, name).slice(0, -1)}${actorId === undefined ? "" : `?actor=${encodeURIComponent(actorId)}`}`);
+              workbench.current?.showChat();
+            }}
             onSurface={setSurface}
             agents={agentsPanel}
             pinnedPorts={state.pinnedPorts}

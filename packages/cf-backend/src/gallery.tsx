@@ -1585,10 +1585,17 @@ const WORKSPACE_PAGE_RPC = new Map(Object.entries({
       owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false, path: [] },
       plan: galleryAgentPlan, tasks: [],
     }],
-    tasks: document.documentElement.dataset.workMoved === "1" ? [{
-      owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false }, plan: null,
-      tasks: [{ id: "t-moved", parentId: null, title: "Written during the outage", status: "active", updatedAt: 1, note: null, subtasks: [] }],
-    }] : [],
+    tasks: [
+      ...document.documentElement.dataset.workMoved === "1" ? [{
+        owner: { actorId: galleryActorId(WORKSPACE_PAGE_NAME), name: WORKSPACE_PAGE_NAME, title: WORKSPACE_PAGE_NAME, retired: false }, plan: null,
+        tasks: [{ id: "t-moved", parentId: null, title: "Written during the outage", status: "active", updatedAt: 1, note: null, subtasks: [] }],
+      }] : [],
+      // A hired agent's task: its owner mark opens that agent.
+      ...AGENTS_PANEL ? [{
+        owner: { actorId: galleryActorId("coupon-auditor"), name: "coupon-auditor", title: "Coupon auditor", retired: false, path: ["coupon-auditor"] }, plan: null,
+        tasks: [{ id: "t-audit", parentId: null, title: "Audit the coupon rules", status: "active", updatedAt: 1, note: null, subtasks: [] }],
+      }] : [],
+    ],
   }),
   savePlanReviewAnnotations: () => ({ ok: true, plan: galleryAgentPlan }),
   listWorkspaceAgents: () => (AGENTS_PANEL ? GALLERY_AGENTS : []),
