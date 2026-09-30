@@ -6,8 +6,8 @@ name: Evals
 # and anyone with write access can dispatch it by hand.
 #
 # The candidate is the deployed build. The baseline is the latest complete report of an earlier
-# deployed build that is an ancestor of it: deploys come several a day and a run takes hours, so it
-# is not always the previous deploy. The results comment goes on the pull request that merged the
+# deployed build that is an ancestor of it, not always the previous deploy: the next deploy's run
+# cancels one still in flight. The results comment goes on the pull request that merged the
 # deployed commit, else on the commit itself, and a Kinu workspace then posts why the evals failed.
 # Earlier comments of either kind on the same pull request or commit are deleted first.
 #
@@ -30,13 +30,6 @@ concurrency:
 
 env:
   EVAL_TRIALS: '10'
-  # A task's trials are split across jobs of this many, so no job nears GitHub's 6-hour limit: in
-  # the 2026-09-24 pilot a budget-board trial was still in its second turn after 55 minutes, and
-  # ten trials at three at a time are four such waves.
-  EVAL_TRIALS_PER_JOB: '5'
-  # Trials at once per job, and jobs at once: together within what the eval account's Workers AI
-  # rate limit sustains (evals/src/config.ts), since more only adds 429 waits.
-  EVAL_CONCURRENCY: '3'
 
 jobs:
   plan:
@@ -47,8 +40,6 @@ jobs:
       contents: read
     outputs:
       sha: ${{ steps.build.outputs.sha }}
-      tasks: ${{ steps.tasks.outputs.tasks }}
-      jobs: ${{ steps.tasks.outputs.jobs }}
       baseline-sha: ${{ steps.baseline.outputs.sha }}
       baseline-artifact: ${{ steps.baseline.outputs.artifact-id }}
     steps:
@@ -80,19 +71,6 @@ jobs:
           ref: ${{ steps.build.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
-
-      # One job per task and block of trials: `first` numbers the block's first trial.
-      - name: List the tasks
-        id: tasks
-        run: |
-          tasks=$(find evals/tasks -name '*.eval.ts' | sort |
-            jq -Rnc '[inputs | {file: ., task: (sub("^evals/tasks/"; "") | sub("\\.eval\\.ts$"; ""))}]')
-          jobs=$(jq -c --argjson trials "$EVAL_TRIALS" --argjson per "$EVAL_TRIALS_PER_JOB" '
-            [range(0; $trials; $per) | {first: (. + 1), last: ([. + $per, $trials] | min)}
-              | . + {count: (.last - .first + 1)}] as $blocks
-            | [.[] as $task | $blocks[] | $task + .]' <<<"$tasks")
-          echo "tasks=$tasks" >> "$GITHUB_OUTPUT"
-          echo "jobs=$jobs" >> "$GITHUB_OUTPUT"
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
@@ -130,21 +108,18 @@ jobs:
             echo "No stored report of an earlier build: this run stands alone and becomes the first baseline."
           fi
 
+  # Every task, and every trial of it, at once in one process (evals/vitest.config.ts): a trial waits on
+  # the deployment and its model, so the job takes as long as the slowest trial, minutes on the default
+  # models (evals/src/config.ts).
   evals:
-    name: Eval ${{ matrix.task }}, trials ${{ matrix.first }} to ${{ matrix.last }}
+    name: Evals
     needs: plan
     runs-on: ubuntu-latest
     # No timeout-minutes: a trial ends when the deployment says its turns ended, never on a clock
-    # (AGENTS.md). GitHub's own limit is 6 hours per job, which EVAL_TRIALS_PER_JOB stays under;
-    # validate.ts prints each task's slowest trial, the number to re-size it from.
+    # (AGENTS.md).
     environment: eval
     permissions:
       contents: read
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        include: ${{ fromJSON(needs.plan.outputs.jobs) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -160,69 +135,20 @@ jobs:
         run: bun install --frozen-lockfile
 
       # A failed trial is data, so the step goes on to upload; a report missing trials is refused
-      # by validate.ts in the assemble job.
-      - name: Run ${{ matrix.task }}
+      # by validate.ts below.
+      - name: Run every task
         continue-on-error: true
         env:
           KINU_EVAL_WEB_IDENTITY: ${{ secrets.KINU_EVAL_WEB_IDENTITY }}
-          KINU_EVAL_TRIALS: ${{ matrix.count }}
-          KINU_EVAL_FIRST_TRIAL: ${{ matrix.first }}
-          KINU_EVAL_CONCURRENCY: ${{ env.EVAL_CONCURRENCY }}
+          KINU_EVAL_TRIALS: ${{ env.EVAL_TRIALS }}
           KINU_EVAL_COMMIT: ${{ needs.plan.outputs.sha }}
-          EVAL_FILE: ${{ matrix.file }}
-        run: bun run evals "$EVAL_FILE"
+        run: bun run evals
 
-      - name: Upload the ${{ matrix.task }} report
-        uses: actions/upload-artifact@v4
-        with:
-          name: kinu-evals-task-${{ matrix.task }}-${{ matrix.first }}
-          path: bench-artifacts/evals/results.json
-          if-no-files-found: error
-          retention-days: 30
-
-  assemble:
-    name: Assemble
-    needs: [plan, evals]
-    if: ${{ !cancelled() && needs.plan.result == 'success' }}
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: read
-    outputs:
-      complete: ${{ steps.complete.outcome == 'success' }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.plan.outputs.sha }}
-          persist-credentials: false
-
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Download the task reports
-        uses: actions/download-artifact@v4
-        with:
-          pattern: kinu-evals-task-*
-          path: artifacts/tasks
-
-      # Exactly the planned jobs, each once: a missing task would otherwise read as removed.
-      - name: Join the task reports
-        env:
-          JOBS: ${{ needs.plan.outputs.jobs }}
+      # Every task file once: a task missing from the report would otherwise read as removed.
+      - name: Check every task ran
         run: |
-          mapfile -t reports < <(find artifacts/tasks -name results.json | sort)
-          if [[ ${#reports[@]} -ne $(jq length <<<"$JOBS") ]]; then
-            echo "::error::expected $(jq length <<<"$JOBS") job reports, found ${#reports[@]}"
-            exit 1
-          fi
-          jq -s '{testResults: map(.testResults[])}' "${reports[@]}" > artifacts/results.json
-          expected=$(jq -c '[.[].file] | sort' <<<"$JOBS")
-          actual=$(jq -c '[.testResults[].name | sub("^.*/evals/tasks/"; "evals/tasks/")] | sort' artifacts/results.json)
+          expected=$(find evals/tasks -name '*.eval.ts' | sort | jq -Rsc 'split("\n") | map(select(. != ""))')
+          actual=$(jq -c '[.testResults[].name | sub("^.*/evals/tasks/"; "evals/tasks/")] | sort' bench-artifacts/evals/results.json)
           if [[ "$actual" != "$expected" ]]; then
             echo "::error::expected task files $expected, got $actual"
             exit 1
@@ -233,14 +159,14 @@ jobs:
       - name: Check the report is a complete baseline
         id: complete
         continue-on-error: true
-        run: bun evals/scripts/validate.ts artifacts/results.json --trials "$EVAL_TRIALS" | tee -a "$GITHUB_STEP_SUMMARY"
+        run: bun evals/scripts/validate.ts bench-artifacts/evals/results.json --trials "$EVAL_TRIALS" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Store the baseline for build ${{ needs.plan.outputs.sha }}
         if: steps.complete.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: kinu-evals-${{ needs.plan.outputs.sha }}-${{ env.EVAL_TRIALS }}-per-task
-          path: artifacts/results.json
+          path: bench-artifacts/evals/results.json
           if-no-files-found: error
           retention-days: 90
 
@@ -248,14 +174,29 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kinu-evals-results
-          path: artifacts/results.json
+          path: bench-artifacts/evals/results.json
+          if-no-files-found: error
+          retention-days: 30
+
+      # Each trial's evidence, a failed one's above all: its transcript and ledger, the files and
+      # slates its workspace held, and the data they served, scrubbed like the report (redact.ts).
+      - name: Scrub every trial's evidence
+        if: ${{ !cancelled() }}
+        run: bun evals/scripts/scrub-evidence.ts bench-artifacts
+
+      - name: Upload every trial's evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: kinu-evals-evidence
+          path: bench-artifacts/evals-*/
           if-no-files-found: error
           retention-days: 30
 
   compare:
     name: Compare
-    needs: [plan, assemble]
-    if: ${{ !cancelled() && needs.assemble.result == 'success' }}
+    needs: [plan, evals]
+    if: ${{ !cancelled() && needs.evals.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       actions: read

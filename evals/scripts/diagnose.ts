@@ -6,7 +6,7 @@ import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as v from 'valibot';
-import { DEFAULT_MODEL, EXERCISED_PATHS } from '../src/config';
+import { DEFAULT_MODELS, EXERCISED_PATHS } from '../src/config';
 import { redact } from '../src/redact';
 import { repliesTo, settle } from '../src/harness';
 import { openWorkspace, resolveEvalTarget } from '../src/target';
@@ -76,7 +76,7 @@ const target = resolveEvalTarget(process.env);
 
 const named = process.env.KINU_EVAL_REVIEW_MODEL?.trim() ?? '';
 
-const model = named === '' ? DEFAULT_MODEL : named;
+const model = named === '' ? DEFAULT_MODELS[0] : named;
 
 const session = await openWorkspace(target, { subject: 'diagnose', mission: 'Explains why the evals of a Kinu deployment failed.', model });
 
