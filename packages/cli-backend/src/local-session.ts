@@ -5,7 +5,7 @@
 
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
-import { sameActorReference, testModel, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
+import { ConversationSearchStore, sameActorReference, testModel, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
 import type { ActorHandle, JsonObject } from '@kinu.run/core';
 import { resolve } from 'node:path';
 import {
@@ -2779,9 +2779,7 @@ export class LocalAgentSession {
       this.webNamespace(),
       // `this.taskList` is the same TaskListStore the dynamic-context snapshot reads.
       createMemoryCodemodeProvider(() => ({
-        memory: this.rt.memory, facts: this.factsStore, sql: this.rt.storage.sql,
-        actor: this.rt.actor,
-        transcriptFor: (sessionId) => this.stores.history.transcript(sessionId),
+        memory: this.rt.memory, facts: this.factsStore, actor: this.rt.actor, conversations: this.ownConversations(),
         vectorStore: null,
       })),
       createTasksCodemodeProvider(
@@ -2872,6 +2870,7 @@ export class LocalAgentSession {
         runId: this.chat.currentRunId ?? WORKSPACE_RUN_ID,
         profile: (profileInput) => this.resolveActorTurnProfile(actor, profileInput),
         dynamic: (profile, tools) => this.actorDynamicContext(actor, profile, tools),
+        conversations: new ConversationSearchStore(actor.runtime.storage.sql, actor.handle, (sessionId) => actor.stores.history.transcript(sessionId)),
       },
     };
   }
@@ -2942,12 +2941,16 @@ export class LocalAgentSession {
     this.activateToolMode(this.actorSession.workMode);
   }
 
+  private ownConversations(): ConversationRecall {
+    return new ConversationSearchStore(this.rt.storage.sql, this.rt.actor, (sessionId) => this.stores.history.transcript(sessionId));
+  }
+
   /** Tool deps with the effect-claim id as an argument; the id decides what a replay dedupes against. */
   private actorToolsetDeps(mode: WorkMode, turnId: () => string): ActorToolsetDeps {
     const deps: ActorToolsetDeps = {
       rt: this.rt,
       workMode: mode,
-      history: this.stores.history,
+      conversations: this.ownConversations(),
       effectClaims: {
         sql: this.rt.storage.sql, actor: this.rt.actor, turnId,
         durable: (callId, signal) => this.actorSession.durableCall(callId, signal),

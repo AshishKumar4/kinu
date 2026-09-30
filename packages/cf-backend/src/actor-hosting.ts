@@ -9,7 +9,7 @@
 
 import type { Agent, AgentContext } from 'agents';
 import {
-  childContextResolver, createActorHost, defaultLoopOrigin, runEventSinks, EvolutionEngine, EventLog, MissionGovernor,
+  childContextResolver, localContextTree, type ContextEditor, type ContextTree, createActorHost, defaultLoopOrigin, runEventSinks, EvolutionEngine, EventLog, MissionGovernor,
   facetHomeProvisioner, facetHomeReleaser, headAgentName, subordinateAgentName, parseActorKey, actorStateRoot,
   actorScaffoldPath, nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT, type ActorHost,
   type ActorHostDeps, type ActorRetirement, type BoundActor, type ActorHandle, type ActorReference,
@@ -19,12 +19,12 @@ import {
   type NodeHomeHost, type NodeWorkspace, type ProfileAuthorityInputs, type ProgrammaticTurn,
   type ResolvedTurnProfile, type SlateCallResult, type SlateOperation, type SqlExec,
   type SqlExecutor, type SqlValue, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory,
-  type WriteObserver, isSubordinateOrigin, tierRefusals,
+  type WriteObserver, isSubordinateOrigin, type TierRefusals,
 } from '@kinu.run/core';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { KinuError, settle, type AgentTracing } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
-import { bindAgentSql, createCFRuntime, MODEL_SETTINGS, type CFRuntime, type CFRuntimeHooks } from './runtime';
+import { createCFRuntime, type CFRuntime, type CFRuntimeHooks } from './runtime';
 import type { HostedNodeHome, LiveRead, TemporaryAgentPort } from '@kinu.run/core';
 
 /** The root agents-SDK members a hosted actor's runtime borrows; projected from `Agent` so upstream drift fails to compile. */
@@ -38,6 +38,7 @@ export interface WorkspaceHostSeams {
   currentTurn(reference: ActorReference): string | null;
   /** The root's own runtime: inheriting children read the retained program from it. */
   rootRuntime(): AgentRuntime;
+  contextTree(actorId: string, editor: ContextEditor): ContextTree;
   readonly sql: SqlExecutor;
   /** Positional executor over the same database; the event log and archive reader need it. */
   readonly exec: SqlExec;
@@ -57,6 +58,7 @@ export interface WorkspaceHostSeams {
     readonly workMode: WorkMode;
   }): Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
   reportModelCall(report: ModelCallReport): void;
+  refusals(actor: ActorHandle): TierRefusals;
   liveReadsMoved(reads: readonly LiveRead[]): void;
   readonly modelOperations: ModelOperationSink;
   pricing(spec?: string): ModelPricing | null;
@@ -198,9 +200,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         reportModelCall: (report) => { seams.reportModelCall(report); },
         currentTurn: (reference) => seams.currentTurn(reference),
         // Built with the runtime, which lives as long as this actor stays bound.
-        refusals: tierRefusals({
-          sql: bindAgentSql(seams.agent), actor: bound.handle, config: bound.handle.config, now: Date.now, settings: MODEL_SETTINGS,
-        }),
+        refusals: seams.refusals(bound.handle),
         liveReadsMoved: (reads) => { seams.liveReadsMoved(reads); },
         slate: (operation) => seams.slate(bound.handle, operation),
         deferrals: () => seams.deferrals(),
@@ -210,14 +210,13 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         })).profile,
         contextPlane: {
           actorId: bound.handle.actorId,
-          claims: () => bound.stores.claims,
-          // Null until the `context_edit` run-event variant exists; see contextEventsFor.
-          events: () => null,
+          own: () => (bound.handle.parentActorId === null
+            ? localContextTree(() => ({ claims: bound.stores.claims, events: contextEventsFor(bound) }), { author: bound.handle.actorId, child: false })
+            : seams.contextTree(bound.handle.actorId, { author: bound.handle.actorId, child: false })),
           children: childContextResolver({
-            host: { bindStores: (reference) => host?.bindStores(reference) ?? bound },
             directory: seams.directory,
             parent: bound.handle,
-            events: (child) => contextEventsFor(child),
+            tree: (child, author) => seams.contextTree(child.actorId, { author, child: true }),
           }),
         },
       };

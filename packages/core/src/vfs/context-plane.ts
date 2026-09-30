@@ -9,17 +9,27 @@ import type { PreparedMessage } from '../session/messages';
 import type { ContextChange } from '../session/proposals';
 import { JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
-import { KinuError } from '../obs/error';
+import { KinuError, toKinuError } from '../obs/error';
+import { settle } from '../obs/effect';
+import { Effect } from 'effect';
 import { FileRefusalError } from '../types/file-edits';
-import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { isVfsError, VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import type { VfsMount, VfsNativeReads } from './mounts';
 import { toolPairingGaps } from '../session/tool-pairing';
 
 export interface ActorContextStores { readonly claims: ActorClaimReader; readonly events: ContextEventRecorder | null }
 
-export interface ChildContextResolver { list(): readonly string[]; resolve(storageKey: string): ActorContextStores | null }
+export type ContextTree = VFS & Required<Pick<VFS, 'readFileAtRevision' | 'writeFileIfRevision'>> & Pick<VfsNativeReads, 'readRange'>;
 
-export interface ContextMountDeps { readonly stores: () => ActorContextStores; readonly children?: ChildContextResolver | null }
+export interface ContextEditor { readonly author: string; readonly child: boolean }
+
+export interface ChildContextResolver { list(): readonly string[]; tree(storageKey: string, author: string): ContextTree | null }
+
+export interface ContextMountDeps {
+  readonly actorId: string;
+  readonly own: () => ContextTree;
+  readonly children?: ChildContextResolver | null;
+}
 
 export interface ContextFileHeader {
   readonly actor: string; readonly contextId: string | null; readonly revision: number; readonly proposalId: string | null;
@@ -213,22 +223,16 @@ function changesAgainst(base: readonly ContextEntry[], desired: readonly Desired
   return changes;
 }
 
-function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readRange'> {
+function isContextDirectory(head: string | undefined, second: string | undefined, third: string | undefined): boolean {
+  return head === undefined || head === 'agents' || (head === 'requests' && third === undefined)
+    || (head === 'revisions' && second === undefined) || (head === 'proposals' && second === undefined);
+}
+
+export function localContextTree(stores: () => ActorContextStores, editor: ContextEditor): ContextTree {
   const target = (path: string): Target | null => {
-    const parts = path.split('/').filter(part => part !== '' && part !== '.');
+    const segments = path.split('/').filter(part => part !== '' && part !== '.');
 
-    if (parts.includes('..')) return null;
-    const own = deps.stores();
-
-    if (parts[0] !== 'agents') return { stores: own, author: own.claims.actorId, segments: parts, child: false };
-
-    if (parts.length === 1) return { stores: own, author: own.claims.actorId, segments: parts, child: false };
-    const key = parts[1];
-    const child = key === undefined ? null : deps.children?.resolve(key);
-
-    if (!child || parts[2] === 'agents') return null;
-
-    return { stores: child, author: own.claims.actorId, segments: parts.slice(2), child: true };
+    return segments.includes('..') || (segments[0] === 'agents' && segments.length > 1) ? null : { stores: stores(), author: editor.author, segments, child: editor.child };
   };
 
   const located = (path: string): Target => {
@@ -364,7 +368,7 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
         } };
     }
 
-    if (head === undefined || head === 'agents' || (head === 'requests' && third === undefined) || (head === 'revisions' && second === undefined) || (head === 'proposals' && second === undefined)) throw new VfsError('EISDIR', 'context path is a directory', path);
+    if (isContextDirectory(head, second, third)) throw new VfsError('EISDIR', 'context path is a directory', path);
 
     return null;
   };
@@ -375,9 +379,7 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
     const history = resolved.stores.claims.history;
     const selected = history.context.selected();
 
-    if (head === undefined) return ['working.jsonl', 'claim.json', 'history.json', 'revisions', 'requests', 'proposals', ...(!resolved.child && (deps.children?.list().length ?? 0) > 0 ? ['agents'] : [])];
-
-    if (head === 'agents' && second === undefined && !resolved.child) return [...(deps.children?.list() ?? [])];
+    if (head === undefined) return ['working.jsonl', 'claim.json', 'history.json', 'revisions', 'requests', 'proposals'];
 
     if (head === 'revisions' && second === undefined) return selected === null ? [] : history.context.revisions(selected.contextId).map(row => `${row.revision}.json`);
 
@@ -513,7 +515,7 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
 
   const readRange = (path: string, offset: number, length: number): Promise<Uint8Array> => readDocumentRange(file(path), offset, length);
 
-  const files: VFS & Pick<VfsNativeReads, 'readRange'> = {
+  const files: ContextTree = {
     async readFile(path) {
       const source = file(path);
       let text = '';
@@ -571,6 +573,154 @@ function contextFiles(deps: ContextMountDeps): VFS & Pick<VfsNativeReads, 'readR
   };
 
   return files;
+}
+
+/** An error's class does not cross an isolate boundary. */
+export type ContextFailure =
+  | { readonly kind: 'vfs'; readonly code: VfsErrorCode; readonly detail: string; readonly path: string | null }
+  | { readonly kind: 'refusal'; readonly verdict: FileRefusalError['verdict']; readonly message: string }
+  | { readonly kind: 'kinu'; readonly code: KinuError['code']; readonly message: string };
+
+export type ContextAnswer<T> = { readonly value: T } | { readonly failure: ContextFailure };
+
+export interface ContextTreeRemote {
+  readFile(path: string): Promise<ContextAnswer<string | Uint8Array>>;
+  readFileAtRevision(path: string, revision: VfsRevision, range?: { readonly offset: number; readonly length: number }): Promise<ContextAnswer<string | Uint8Array>>;
+  readRange(path: string, offset: number, length: number): Promise<ContextAnswer<Uint8Array>>;
+  readdir(path: string): Promise<ContextAnswer<string[]>>;
+  stat(path: string): Promise<ContextAnswer<VfsEntryStat | null>>;
+  exists(path: string): Promise<ContextAnswer<boolean>>;
+  writeFile(path: string, data: string | Uint8Array): Promise<ContextAnswer<null>>;
+  writeFileIfRevision(path: string, data: Uint8Array, expected: VfsRevision): Promise<ContextAnswer<{ ok: boolean; revision: VfsRevision }>>;
+}
+
+function contextFailure(error: Error): ContextFailure {
+  if (error instanceof FileRefusalError) return { kind: 'refusal', verdict: error.verdict, message: error.message };
+
+  if (isVfsError(error)) {
+    const prefix = `${error.code}: `;
+    const suffix = error.path === undefined ? '' : `, '${error.path}'`;
+    const detail = error.message.startsWith(prefix) && error.message.endsWith(suffix) ? error.message.slice(prefix.length, error.message.length - suffix.length) : error.message;
+
+    return { kind: 'vfs', code: error.code, detail, path: error.path ?? null };
+  }
+
+  const failure = toKinuError({ doing: 'serving a context file', cause: error, otherwise: 'io' });
+
+  return { kind: 'kinu', code: failure.code, message: failure.message };
+}
+
+function answered<T>(operation: () => Promise<T>): Effect.Effect<ContextAnswer<T>> {
+  return Effect.tryPromise({ try: operation, catch: (cause) => ({ cause }) }).pipe(
+    Effect.map((value): ContextAnswer<T> => ({ value })),
+    Effect.catch((failed) => Effect.succeed({
+      failure: contextFailure(failed.cause instanceof Error
+        ? failed.cause
+        : toKinuError({ doing: 'serving a context file', cause: failed.cause, otherwise: 'io' })),
+    })),
+  );
+}
+
+export function servedContextTree(tree: ContextTree): ContextTreeRemote {
+  return {
+    readFile: (path) => settle(answered(() => tree.readFile(path))),
+    readFileAtRevision: (path, revision, range) => settle(answered(() => tree.readFileAtRevision(path, revision, range))),
+    readRange: (path, offset, length) => settle(answered(() => tree.readRange(path, offset, length))),
+    readdir: (path) => settle(answered(() => tree.readdir(path))),
+    stat: (path) => settle(answered(() => tree.stat(path))),
+    exists: (path) => settle(answered(() => tree.exists(path))),
+    writeFile: (path, data) => settle(answered(async () => {
+      await tree.writeFile(path, data);
+
+      return null;
+    })),
+    writeFileIfRevision: (path, data, expected) => settle(answered(() => tree.writeFileIfRevision(path, data, expected))),
+  };
+}
+
+function rebuilt(failure: ContextFailure): Error {
+  if (failure.kind === 'refusal') return new FileRefusalError(failure.verdict, failure.message);
+
+  if (failure.kind === 'vfs') return new VfsError(failure.code, failure.detail, failure.path ?? undefined);
+
+  return new KinuError(failure.code, failure.message);
+}
+
+function valueOf<T>(answer: () => Promise<ContextAnswer<T>>): Effect.Effect<T> {
+  return Effect.flatMap(Effect.promise(answer), (settled) => ('value' in settled ? Effect.succeed(settled.value) : Effect.die(rebuilt(settled.failure))));
+}
+
+export function remoteContextTree(remote: () => Promise<ContextTreeRemote>): ContextTree {
+  const refused = (path: string): Effect.Effect<never> => valueOf(async () => ({ failure: contextFailure(readOnly(path)) }));
+
+  return {
+    readFile: (path) => settle(valueOf(async () => await (await remote()).readFile(path))),
+    readFileAtRevision: (path, revision, range) => settle(valueOf(async () => await (await remote()).readFileAtRevision(path, revision, range))),
+    readRange: (path, offset, length) => settle(valueOf(async () => await (await remote()).readRange(path, offset, length))),
+    readdir: (path) => settle(valueOf(async () => await (await remote()).readdir(path))),
+    stat: (path) => settle(valueOf(async () => await (await remote()).stat(path))),
+    exists: (path) => settle(valueOf(async () => await (await remote()).exists(path))),
+    writeFile: (path, data) => settle(valueOf(async () => await (await remote()).writeFile(path, data)).pipe(Effect.asVoid)),
+    writeFileIfRevision: (path, data, expected) => settle(valueOf(async () => await (await remote()).writeFileIfRevision(path, data, expected))),
+    unlink: (path) => settle(refused(path)),
+    mkdir: (path) => settle(refused(path)),
+  };
+}
+
+function contextFiles(deps: ContextMountDeps): ContextTree {
+  const route = (path: string): { readonly tree: ContextTree; readonly path: string; readonly root?: true } | 'agents' | null => {
+    const parts = path.split('/').filter(part => part !== '' && part !== '.');
+
+    if (parts.includes('..')) return null;
+
+    if (parts[0] !== 'agents') return { tree: deps.own(), path, ...(parts.length === 0 && { root: true as const }) };
+
+    if (parts.length === 1) return 'agents';
+    const child = deps.children?.tree(parts[1] ?? '', deps.actorId) ?? null;
+
+    return child === null || parts[2] === 'agents' ? null : { tree: child, path: `/${parts.slice(2).join('/')}` };
+  };
+
+  // A path no tree holds is the own tree's to refuse, as it refuses every unknown path.
+  const on = async <T,>(path: string, operation: (tree: ContextTree, rest: string) => Promise<T>): Promise<T> => {
+    const found = route(path);
+
+    return found === null || found === 'agents' ? await operation(deps.own(), path) : await operation(found.tree, found.path);
+  };
+
+  const children = (): readonly string[] => deps.children?.list() ?? [];
+
+  return {
+    readFile: (path) => on(path, (tree, rest) => tree.readFile(rest)),
+    readFileAtRevision: (path, revision, range) => on(path, (tree, rest) => tree.readFileAtRevision(rest, revision, range)),
+    readRange: (path, offset, length) => on(path, (tree, rest) => tree.readRange(rest, offset, length)),
+    async readdir(path) {
+      const found = route(path);
+
+      if (found === null) return await deps.own().readdir(path);
+
+      if (found === 'agents') return [...children()];
+      const entries = await found.tree.readdir(found.path);
+
+      return found.root === true && children().length > 0 ? [...entries, 'agents'] : entries;
+    },
+    async stat(path) {
+      const found = route(path);
+
+      if (found === null) return null;
+
+      return found === 'agents' ? { isDir: true, size: 0, mtimeMs: 0 } : await found.tree.stat(found.path);
+    },
+    async exists(path) {
+      const found = route(path);
+
+      return found !== null && (found === 'agents' || await found.tree.exists(found.path));
+    },
+    writeFile: (path, data) => on(path, (tree, rest) => tree.writeFile(rest, data)),
+    writeFileIfRevision: (path, data, expected) => on(path, (tree, rest) => tree.writeFileIfRevision(rest, data, expected)),
+    unlink: (path) => on(path, (tree, rest) => tree.unlink(rest)),
+    mkdir: (path) => on(path, (tree, rest) => tree.mkdir(rest)),
+  };
 }
 
 export function contextMount(deps: ContextMountDeps): VfsMount {

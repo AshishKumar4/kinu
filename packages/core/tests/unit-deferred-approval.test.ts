@@ -19,7 +19,7 @@ import { gateProviderExec } from '../src/execution/approval';
 import { commandResult, formatExecResult, type CommandResult } from '../src/execution/exec-result';
 import { createRecordingLogger, setDiagnosticsSink, KinuError, refusalOf } from '../src/obs/index';
 import type { ExecutorProvider } from '../src/execution/types';
-import { createTestRuntime, createTestWorkspace, createWorkspaceBundle, storesFor } from './helpers';
+import { createTestRuntime, createTestWorkspace, createWorkspaceBundle, conversationsFor } from './helpers';
 import { makeSql, makeExecRaw } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
 import type { ActorHandle } from '../src/identity/actor-handle';
@@ -100,7 +100,7 @@ function setup(opts: {
   const shell = withApprovalGatedShell(rawShell, { ...AGENTS_OWN, filesOwner }, policy);
   const { rt } = createTestRuntime();
   const runtime: AgentRuntime = { ...rt, shell };
-  const tools = buildBuiltinTools({ rt: runtime, history: storesFor(runtime).history });
+  const tools = buildBuiltinTools({ rt: runtime, conversations: conversationsFor(runtime) });
 
   const shellTool: ShellTool = {
     execute: toolExecute<{ command: string; runtime?: string }, string>(tools.shell),

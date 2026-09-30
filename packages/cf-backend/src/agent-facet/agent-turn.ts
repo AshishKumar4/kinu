@@ -3,7 +3,7 @@ import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessageChunk 
 import {
   CHAT_SESSION_ID, HeadCapture, decodeJsonValue, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan,
   type AuthRequest, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type ObservedCall, type ProviderEnv, type WorkMode,
-  type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind,
+  type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
 } from '@kinu.run/core';
 import { attempt, diagnostics, renderCauseChain, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
@@ -11,7 +11,7 @@ import type { NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import { createAgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
 import { codexContainerFetch } from '../egress/codex-egress-route';
 import type { AgentDatabase } from './agent-database';
-import type { AgentReview, AgentTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn } from './protocol';
+import type { AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn } from '@kinu.run/core';
 
 export interface AgentWorkspace {
   session(): NimbusSessionSurface;
@@ -38,6 +38,7 @@ export interface AgentWorkspace {
   relayModelCall(deviceId: string, callId: string, request: Request): Promise<Response>;
   cancelModelRelay(callId: string): Promise<void>;
   forwardCodex(callId: string, request: Request): Promise<Response>;
+  sayToParent(signal: AgentSignal): Promise<SendOutcome>;
   cancelCodex(callId: string): Promise<void>;
 }
 
@@ -128,7 +129,7 @@ export interface QueuedAgentTask {
   readonly database: AgentDatabase;
   readonly workspace: AgentWorkspace;
   readonly providers: ProviderEnv;
-  readonly task: AgentTask;
+  readonly task: AgentTurnTask;
 }
 
 export function queueAgentTask({ after, database, workspace, providers, task }: QueuedAgentTask): Promise<void> {
@@ -146,7 +147,7 @@ export function queueAgentTask({ after, database, workspace, providers, task }: 
 
 
 async function runTurn(
-  database: AgentDatabase, workspace: AgentWorkspace, providers: ProviderEnv, task: AgentTask,
+  database: AgentDatabase, workspace: AgentWorkspace, providers: ProviderEnv, task: AgentTurnTask,
 ): Promise<void> {
   const prepared = await workspace.prepareTurn(task.sequenceId);
 

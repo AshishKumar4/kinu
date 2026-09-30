@@ -27,9 +27,9 @@ import {
   withMountTable, readTailWithVfsOps, sharedDriveMount, SHARED_DRIVE_UNBOUND,
   withApprovalGatedShell, withApprovalGatedFiles, createShellSession, shellCwd, holdsGrant,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
-  createAgentStores, contextMount, skillsMount,
+  createAgentStores, contextMount, localContextTree, skillsMount,
   resolveRoutingProfile, createRoutedModelLane, tierRefusals, type TierRefusals,
-  type AgentStores, type ChildContextResolver,
+  type AgentStores, type ChildContextResolver, type ContextTree,
   type ModelCallSink, type ModelOperationSink, type NodeHomeHost, type NodeWorkspace,
   type WorkspaceActor,
   BoundedOutput, COMMAND_OUTPUT_LIMITS, nanoid, SPILL_DIRS, unsandboxedCommandEnvironment,
@@ -94,6 +94,14 @@ interface CLIRuntimeOptions {
   oauthConfigPath?: string;
   /** Shadow-git checkpoints kept per working directory. */
   checkpointKeep?: number;
+}
+
+
+/** An actor's own `/context` tree over its own stores in this process. */
+function ownContextTree(actor: ActorHandle, stores: AgentStores): () => ContextTree {
+  const tree = localContextTree(() => ({ claims: stores.claims, events: stores.eventRecorder }), { author: actor.actorId, child: false });
+
+  return () => tree;
 }
 
 export type CLIRuntimeConfig = CLIRuntimeOptions & LocalActorConfig;
@@ -341,7 +349,8 @@ export function createCLIRuntime(
     modelRouteFactory(resolution);
 
   const credentialOf = (spec: string): Promise<string | null> => localResolver().credentialFor(spec);
-  const refusals = tierRefusals({ sql, actor, config: agentConfig, now: Date.now, settings: LOCAL_MODEL_SETTINGS });
+  // A local session reads the owner's model settings as it opens; nothing changes them under it.
+  const refusals = tierRefusals({ sql, actor, config: agentConfig, now: Date.now, settings: LOCAL_MODEL_SETTINGS, changes: () => 0 });
 
   const modelLanes = {
     resolveProfile: ensureProfile,
@@ -458,10 +467,11 @@ export function createCLIRuntime(
     ...(cwd === null ? [] : [agentViewMount(agentStateVfs, 'scaffold')]),
     // `/context`: this actor's own working history, keyed on its own id.
     contextMount({
-      stores: () => ({ actorId: actor.actorId, claims: stores.claims, events: stores.eventRecorder }),
+      actorId: actor.actorId,
+      own: ownContextTree(actor, stores),
       children: {
         list: () => childContext?.list() ?? [],
-        resolve: (storageKey) => childContext?.resolve(storageKey) ?? null,
+        tree: (storageKey, author) => childContext?.tree(storageKey, author) ?? null,
       },
     }),
   ]);
@@ -731,7 +741,8 @@ async function buildCLIHeadRuntime(
     skillsMount((): VFS => agentVfs),
     ...(cwdPlane === null ? [] : [agentViewMount(agentStateVfs, dirname(actorScaffoldPath(opts.actorBinding)))]),
     contextMount({
-      stores: () => ({ actorId: actor.actorId, claims: stores.claims, events: stores.eventRecorder }),
+      actorId: actor.actorId,
+      own: ownContextTree(actor, stores),
     }),
   ]);
 

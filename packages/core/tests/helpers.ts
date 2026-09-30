@@ -26,6 +26,7 @@ import {
 import type { WorkspaceBundle, WorkspaceVFS } from '../src/vfs/nimbus-workspace';
 import { createWorkspaceForkSource } from '../src/vfs/workspace-planes';
 import type { ForkFileSource } from '../src/identity/fork';
+import { ConversationSearchStore, type ConversationRecall } from '../src/memory/conversation-search';
 import type { VfsNativeReads } from '../src/vfs/mounts';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { createAgentStores, type AgentStores } from '../src/state/agent-stores';
@@ -271,6 +272,11 @@ export function createTestRuntime(opts?: {
 }
 
 /** The store bundle over an already-built runtime. */
+/** The actor's own past conversations, over its own rows. */
+export function conversationsFor(rt: AgentRuntime, history: AgentStores['history'] = storesFor(rt).history): ConversationRecall {
+  return new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => history.transcript(sessionId));
+}
+
 export function storesFor(rt: AgentRuntime): AgentStores {
   return createAgentStores(
     () => rt.storage.sql,

@@ -7,7 +7,7 @@ import {
   chatSessionTurns, gatewayWorkspace, orchestratorHarness, rpcReachableFrom, workspaceMainActor,
 } from './helpers/actor-harness';
 import { chatCompletion, requestOf, stubAiBinding, type StubbedAiBinding } from './helpers/platform-gateway';
-import { isAgentRpcMethod } from '@kinu.run/core';
+import { ConversationSearchStore, isAgentRpcMethod } from '@kinu.run/core';
 import {
   HeadCapture,
   HeadController,
@@ -107,7 +107,7 @@ function buildSurface(opts?: {
     input: opts?.input ?? headInput(),
     capture,
     rt,
-    history: stores.history,
+    conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => stores.history.transcript(sessionId)),
     codemodeTool,
     webSearch: noopWebSearch,
     split: opts?.split ?? (async () => ({

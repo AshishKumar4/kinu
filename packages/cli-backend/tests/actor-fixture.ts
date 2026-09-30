@@ -9,7 +9,7 @@ import {
   type SqlExec, type SqlValue, type WriteObserver,
   DEFAULT_WORKERS_AI_MODEL_SPEC, WORKSPACE_ROOT,
 } from '@kinu.run/core';
-import { bindLocalActor, localActorDirectory, registerLocalActor, registerLocalNode, retireLocalActor } from '@kinu.run/core';
+import { ConversationSearchStore, bindLocalActor, localActorDirectory, registerLocalActor, registerLocalNode, retireLocalActor } from '@kinu.run/core';
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
 import type { HeadSeat } from '@kinu.run/core';
 
@@ -104,6 +104,7 @@ export function headSeatFactory(
           inputs,
         };
       },
+      conversations: new ConversationSearchStore(actor.runtime.storage.sql, actor.handle, (sessionId) => actor.stores.history.transcript(sessionId)),
       dynamic: (profile, tools) => collectDynamicContext({
         rt: actor.runtime,
         stores: actor.stores,
@@ -208,6 +209,7 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
       subordinateDelegates: () => [],
       approvals: () => ({ items: [], total: 0 }),
     }),
+    conversations: new ConversationSearchStore(runtime.storage.sql, runtime.actor, (sessionId) => stores.history.transcript(sessionId)),
   } satisfies Omit<HeadSeat, 'release'>;
 }
 
@@ -219,6 +221,6 @@ export function nodeSeatFactory(rt: CLIRuntime, runId = 'fixture-run'): (node: N
     const runtime = await buildLocalActorRuntime(rt, { reference: actorReferenceOf(handle), handle }, undefined, true);
     const seams = headLoopSeams(rt, runId, handle, runtime);
 
-    return { actor: seams.actor, runId: seams.runId, profile: seams.profile, dynamic: seams.dynamic };
+    return { actor: seams.actor, runId: seams.runId, profile: seams.profile, dynamic: seams.dynamic, conversations: seams.conversations };
   };
 }

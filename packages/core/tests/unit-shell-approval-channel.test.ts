@@ -3,7 +3,7 @@
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import { buildBuiltinTools } from '../src/tools/builtins';
-import { createTestRuntime, storesFor } from './helpers';
+import { createTestRuntime, conversationsFor } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import {
   withApprovalGatedShell,
@@ -47,7 +47,7 @@ function harness(opts: {
 
   const shell = withApprovalGatedShell(rawShell, { filesOwner: 'agent' }, policy);
   const runtime: AgentRuntime = { ...rt, shell };
-  const tools = buildBuiltinTools({ rt: runtime, history: storesFor(runtime).history });
+  const tools = buildBuiltinTools({ rt: runtime, conversations: conversationsFor(runtime) });
 
   const run: RunTool = {
     execute: toolExecute<{ command: string; runtime?: string }, string>(tools.shell),

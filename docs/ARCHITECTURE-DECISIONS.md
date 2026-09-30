@@ -351,6 +351,15 @@ Workers Observability in unsampled 15-minute windows): the fast tier answered
 nobody there (36 alarm invocations and 18 cancelled deliveries an hour, each
 activation re-sweeping the provider listing for 0.9-1.7 s). Pinned by
 `unit-terminal-effect-refusal`.
+Amended 2026-09-30 (review): a refusal that answers after a release does not
+park; it falls due at once, as a released row does. The release found only rows
+already parked, so a call made with a key the owner replaced while it waited
+parked on its late 401, and nothing tried the new key until another change. The
+ledger counts its releases in memory, the owner's change and a newer claim
+alike, and an attempt reads the count as it starts: the call and the release
+run in the one object, and an attempt its isolate does not outlive never
+parks. A newer claim then costs an in-flight refusal one more call, never a
+clock. Pinned by the two "falls due at once instead of parking" cases.
 
 T2. An actor owes at most one `sleep_time`: the claim that owes a newer row
 completes the older owed ones, parked or pending, because the effect reads the
@@ -370,6 +379,19 @@ workspace's chat ran on Workers AI while `MODEL_ROUTE_POLICY` held compaction,
 fast and reflection on the account profile's fast tier (opencode/glm-5.3), the
 background lanes called `route.model` alone, and the owner saw none of the
 refusals. Pinned by `unit-fixed-tier-chain`.
+Amended 2026-09-30 (review): the notice names each model of the call that
+refused for the owner to fix, in the order called, with the named account its
+credential lookup chose (`opencode@work/glm-5.3`; the main account stays
+implicit). It named the route's primary, so a primary that handed over on a 503
+was blamed for its fallback's 402, and a primary its cooldown skipped was named
+though never called. It is said only when the call ends on such a refusal; a
+tier a later model answered for is answering. A call that started before the
+owner's latest model-settings change says nothing: its refusal answered for
+what the change replaced, and the owner's fix would meet a notice that it is
+still broken. The workspace object counts those changes in memory, every
+actor's notices it builds read the one count, and the first refusal after a
+change is news even if it matches the last. A local session has no such change
+under it.
 
 ## Delegation
 

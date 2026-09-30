@@ -1,24 +1,32 @@
-/** Plain turn data crossing between the workspace and an agent's isolate. */
 import type { JSONSchema7, ModelMessage } from 'ai';
-import type { CompletedTurn, DynamicContext, HeadCapture, HeadInput, HeadInferenceDeps, HeadReport, HeadStep, HeadStreamKind, JsonValue, ModelPricing, JsonObject, ProfileAuthorityInputs, ResolvedTurnProfile, WorkMode } from '@kinu.run/core';
+import type { CompletedTurn } from '../evolution/types';
+import type { DynamicContext } from '../prompting/volatile-context';
+import type { HeadCapture, HeadInferenceDeps } from '../heads/head-inference';
+import type { HeadInput, HeadReport, HeadStep } from '../heads/types';
+import type { HeadStreamKind } from '../heads/head-stream';
+import type { JsonObject, JsonValue } from '../utils/json';
+import type { ModelPricing } from '../providers/types';
+import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles/resolve';
+import type { WorkMode } from '../types/turn';
 
-export type StoredRow = Readonly<Record<string, SqlStorageValue>>;
+export type StoredRow = Readonly<Record<string, string | number | ArrayBuffer | null>>;
 
 export interface AgentSnapshot {
   readonly identity: StoredRow;
   readonly lineage: readonly StoredRow[];
+  readonly config: readonly StoredRow[];
   readonly workspaceName: string;
   readonly installedBuild: string | null;
   readonly artifactDirectory: string;
 }
 
-export interface AgentOpening {
+export interface AgentTurnOpening {
   readonly id: string;
   readonly message: ModelMessage;
   readonly metadata: JsonObject;
 }
 
-export interface AgentTask {
+export interface AgentTurnTask {
   readonly sequenceId: string;
   readonly body: string;
   readonly mode: WorkMode;
@@ -56,13 +64,13 @@ export interface AgentTurnProfile {
   readonly dynamic: DynamicContext;
 }
 
-export interface AgentActivity {
+export interface AgentTurnActivity {
   readonly event: string;
   readonly detail?: string;
 }
 
 export interface AgentToolCall {
-  readonly activity: readonly AgentActivity[];
+  readonly activity: readonly AgentTurnActivity[];
   readonly turnId: string;
   readonly callId: string;
   readonly name: string;
@@ -95,10 +103,17 @@ export type AgentTrace =
   | { readonly kind: HeadStreamKind; readonly delta: string };
 
 export interface AgentTurnEnd extends Omit<HeadReport, 'errorMessage'> {
-  readonly activity: readonly AgentActivity[];
+  readonly activity: readonly AgentTurnActivity[];
   readonly errorMessage: string | null;
   readonly narration: string;
   readonly produced?: readonly ModelMessage[];
+}
+
+export interface TurnRequestAt {
+  readonly turnId: string;
+  readonly epoch: number;
+  readonly revision: number;
+  readonly from?: number;
 }
 
 export interface AgentRecovery {

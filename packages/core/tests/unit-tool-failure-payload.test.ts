@@ -7,7 +7,7 @@ import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { createInlineExecutor } from '../src/tools/inline-executor';
-import { createTestRuntime, storesFor } from './helpers';
+import { createTestRuntime, conversationsFor } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type {  } from '../src/types/agent-runtime';
 import type { Shell } from '../src/types/primitives';
@@ -36,7 +36,7 @@ function failingSuiteShell(stderr = ''): Shell {
 function shellToolOver(shell: Shell): ShellTool {
   const { rt } = createTestRuntime();
   const runtime: AgentRuntime = { ...rt, shell };
-  const tools = buildBuiltinTools({ rt: runtime, history: storesFor(runtime).history });
+  const tools = buildBuiltinTools({ rt: runtime, conversations: conversationsFor(runtime) });
 
   return { execute: toolExecute<{ command: string; runtime?: string }, string>(tools.shell) };
 }

@@ -98,7 +98,13 @@ function ensureIndexTables(sql: SqlExecutor): void {
     VALUES (1, ${''}, 0, 0, -1, -1, 0)`;
 }
 
-export class ConversationSearchStore {
+export interface ConversationRecall {
+  search(query: string, limit?: number): Promise<ConversationSearchHit[]>;
+  scroll(aroundMessageId: string, window?: number, maxChars?: number): Promise<ConversationScrollResult | null>;
+  browse(limit?: number): Promise<ConversationSummary[]>;
+}
+
+export class ConversationSearchStore implements ConversationRecall {
   private ensured = false;
   private syncing: Deferred.Deferred<void, KinuError> | null = null;
   private readonly actorId: string;

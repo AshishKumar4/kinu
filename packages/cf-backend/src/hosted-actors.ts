@@ -1,6 +1,6 @@
 /** Shared tools and roster for non-main agents; their turns run in AgentFacet. */
 
-import { INTERRUPTED_TURN, type HeadReport, isSubordinateOrigin } from '@kinu.run/core';
+import { INTERRUPTED_TURN, type ConversationRecall, type HeadReport, isSubordinateOrigin } from '@kinu.run/core';
 import type { LanguageModel, ModelMessage, Tool, ToolSet } from 'ai';
 import {
   EventLog, HeadCapture, titleActorFromMessage, spawnSeatedHead, buildHeadMessages, buildHeadSystemPrompt,
@@ -70,6 +70,7 @@ export interface HostedActorSeams {
   transaction<Result>(body: () => Result): Result;
   /** Scoped to the actor, so a subordinate manages only its own subtree. */
   roster(actor: BoundActor): SubordinateRosterStore;
+  conversations(reference: ActorReference): ConversationRecall;
   vfs(): VFS;
   /** The same profile authority actor chat uses, so role restrictions narrow a hire identically. */
   profile(input: {
@@ -648,6 +649,7 @@ async function runActorSeat(seams: HostedActorSeams, reference: ActorReference):
     runId: crypto.randomUUID(),
     profile: (request) => seams.profile({ actor, ...request }),
     dynamic: (profile, tools) => explorationDynamicContext(actor, profile, tools),
+    conversations: seams.conversations(reference),
   };
 }
 

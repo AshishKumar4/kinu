@@ -29,11 +29,11 @@ import {
   whenActorTakesInput,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
-import { agentFacet, agentStateShellId, AgentMemory, AgentWorkspaceHost, uiChunks, type AgentFacetPlacement } from "./agent-facets";
+import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, uiChunks, type AgentFacetPlacement } from "./agent-facets";
 import { providerBindingsOf } from "./providers/agent-registry";
 import { AgentTurns } from "./agent-turns";
-import type { AgentActivity, AgentSnapshot, StoredRow } from "./agent-facet/protocol";
-import type { AgentOwnInspection, ChatHistoryPage, SerializedMessage } from '@kinu.run/core';
+import type { AgentTurnActivity, AgentSnapshot, StoredRow } from '@kinu.run/core';
+import type { SerializedMessage } from '@kinu.run/core';
 import type { AgentFacet, AgentFacetCalls } from "./agent-facet/agent-facet";
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
@@ -79,7 +79,7 @@ import {
   readActivityLog,
   summarizeSteps,
   // Whole-workspace spend by producer; `summarizeSteps` covers only this agent's turns.
-  workspaceSpend,
+  workspaceSpend, headStepSources, mergeAccountSpend, type SpendLedger,
   initWorkspaceSchema,
   tableExists,
   BUILTIN_TOOLS,
@@ -173,7 +173,7 @@ import {
   type RecordObjectiveHandle, type RecordCellHandle, type ExplorationRecord,
   type HeadStep,
   buildPendingActions, listPendingPlanReviews, type PendingAction,
-  type Page, type PageRequest, type PositionPageRequest,
+  type Page, type PageRequest,
   getRunTimeline, type TimelineSpan,
   getRunEvents, getRunEventText, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
   turnRequestIndex, turnRequestPage, type TurnRequestIndex, type TurnRequestPage, type AgentStores,
@@ -608,6 +608,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return settleSync(Effect.fail(new KinuError('denied', `No agent ${actorId} with a home of its own is registered in this workspace.`)));
   }
 
+  private isAgent(actorId: string): boolean {
+    const record = this.actorHost().describe(actorId);
+
+    return record !== null && record.parentActorId !== null && hostedActorPlacement(record).homeName !== null;
+  }
+
   liveAgentOf(actorId: string): WorkspaceActor & { readonly homeName: string; readonly shellId: string } {
     const agent = this.agentOf(actorId);
 
@@ -678,8 +684,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (identity === undefined) return settleSync(Effect.fail(new KinuError('missing', 'The workspace has no durable identity to hand an agent.')));
 
+    const config = lineage.flatMap((row) => this.ctx.storage.sql.exec<StoredRow>('SELECT * FROM actor_config WHERE actor_id = ?', row.actor_id).toArray());
+
     return {
-      identity, lineage, workspaceName: this.workspaceName(),
+      identity, lineage, config, workspaceName: this.workspaceName(),
       installedBuild: this.env.CF_VERSION_METADATA?.id ?? null,
       artifactDirectory: agentArtifactDirectory(agentHome(agent.homeName)),
     };
@@ -707,7 +715,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * What one agent in its own isolate may ask of this workspace, bound to that agent. Not `@callable`: reached
    * through `AgentWorkspaceRPC`, whose props this object minted, so the id is the caller's own.
    */
-  private agentActivity(actorId: string, lines: readonly AgentActivity[]): void {
+  private agentActivity(actorId: string, lines: readonly AgentTurnActivity[]): void {
     for (const { event, detail } of lines) this.logActivity(event, detail === undefined ? actorId : `${actorId} ${detail}`);
   }
 
@@ -778,6 +786,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       },
       forwardCodex: async (callId, request) => await (await this.codexContainer()).forward(callId, request),
       cancelCodex: async (callId) => { await (await this.codexContainer()).cancel(callId); },
+      sayToParent: async (signal) => {
+        const { parentActorId } = this.liveAgentOf(actorId);
+
+        if (parentActorId === null) return settleSync(Effect.fail(new KinuError('missing', 'A root actor has no hirer to tell.')));
+
+        const parent = parentActorId === this.actorHandle().actorId
+          ? this.actorSession
+          : (await this.actorHost().acquire(actorReferenceOf(this.actorDirectoryStore().open(parentActorId)))).session;
+
+        return await parent.orchestrator.inbox.send(signal);
+      },
     });
   }
 
@@ -874,10 +893,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // The root's durable program is always readable because the root is this runtime;
       // `loopFor` explains why hosting is the wrong question.
       rootRuntime: () => this.rt,
+      contextTree: (actorId, editor) => this.agentStores(actorId).contextTree(editor),
       // Same profile authority an actor chat resolves through, so a role restriction narrows
       // a chat and a head identically; branches under an unresolved profile are unreproducible.
       resolveProfile: (input) => this.hostedActorProfile(input),
       reportModelCall: (report) => { this.reportModelCall(report); },
+      refusals: (actor) => this.refusalNoticesFor(actor),
       liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
       modelOperations: this.modelOperations,
       pricing: (spec) => this.modelCatalog.pricing(spec),
@@ -926,6 +947,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       infer: (reference, input, inference) => this.agentTurns.run(reference, input, inference),
       transaction: (body) => this.ctx.storage.transactionSync(body),
       roster: (actor) => new SubordinateRosterStore(this.watchedExec, actor.handle),
+      conversations: (reference) => this.agentStores(reference.actorId).conversations(),
       vfs: () => this.rt.storage.vfs,
       // The hire's own role, not the root's: a delegated turn's prompt and advertised tool
       // surface are framed from it.
@@ -1042,8 +1064,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const deps: ActorToolsetDeps = {
       rt: turn.runtime,
       workMode: turn.input.mode,
-      // This actor's own conversation, never the workspace's.
-      history: turn.actor.stores.history,
+      conversations: this.agentStores(turn.actor.handle.actorId).conversations(),
       // Keyed on the turn id a recovery re-admits; a fresh id would replay the effect.
       effectClaims: {
         actor: turn.actor.handle,
@@ -1155,7 +1176,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       temporary: seams.temporary(actor),
       now: () => Date.now(),
       inheritedContext: () => this.readInheritedContext(actor.handle),
-      originContext: async () => actor.session.history,
+      originContext: () => this.agentStores(actor.handle.actorId).workingContext(),
       // The workspace's purpose, shared by every actor in it.
       ownMission: () => this.ownMission(),
       createName: mintSubordinateName,
@@ -1333,7 +1354,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       unsettledClaims: this.actorHost().resumable(1).length > 0,
       // Admitted but unstarted delegations hold no claim, so `resumable` does not cover them.
       admittedDelegations: this.hasAdmittedDelegations(),
-      agentTurns: new AgentOpenTurns(this.boundSql).any(),
+      agentTurns: this.agentTurns.out(),
       // The root's loop: a turn a dead process was inside, or an acknowledged send never drained.
       chatLoop: this.chatLoopOwesWork(),
     };
@@ -2140,18 +2161,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.actorHost().bindStores(actor).stores.history.transcript(CHAT_SESSION_ID);
   }
 
-  protected override async agentHistoryPage(actorId: string, page: PositionPageRequest): Promise<ChatHistoryPage> {
-    return await (await this.agentCalls(actorId)).historyPage(this.agentSnapshot(actorId), page);
-  }
-
-  protected override async agentInspection(actorId: string, request: AgentOwnInspection): Promise<SubordinateInspectionResult> {
-    return await (await this.agentCalls(actorId)).inspect(this.agentSnapshot(actorId), request);
+  protected override agentStores(actorId: string): AgentStoreBroker {
+    return new AgentStoreBroker(() => this.agentCalls(actorId), () => this.agentSnapshot(actorId));
   }
 
   protected override async readInheritedContext(actor: ActorHandle = this.actorHandle()): Promise<SerializedMessage[]> {
     if (actor.parentActorId === null) return await super.readInheritedContext(actor);
 
-    return await (await this.agentCalls(actor.actorId)).inheritedContext(this.agentSnapshot(actor.actorId));
+    return await this.agentStores(actor.actorId).inheritedContext();
   }
 
   private hostedReference(actorId: string): ActorReference | null {
@@ -2187,8 +2204,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       resumes: false,
       getConnection: (id) => this.getConnection(id),
       broadcast: (message, exclude) => { this.broadcastToActor(actorId, message, exclude); },
-      history: async (limit) => await (await facet()).history(snapshot(), limit),
-      admitted: async (id) => await (await facet()).admitted(snapshot(), id),
+      history: (limit) => this.agentStores(actorId).history(limit),
+      admitted: (id) => this.agentStores(actorId).admitted(id),
       send: (input) => whenActorTakesInput(this.boundSql, actorId, () => sendNow(input)),
       interrupt: () => {
         this.detachOwned(() => this.agentTurns.interrupt(actorId));
@@ -4204,14 +4221,25 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     });
   }
 
-  private agentArchiveSource(): ArchiveAgentSource {
-    const agents = this.actorDirectoryStore().list({ retired: true })
+  /** Retired ones hold their stores until destroyed. */
+  private agentsWithStores(): string[] {
+    return this.actorDirectoryStore().list({ retired: true })
       .filter((record) => hostedActorPlacement(record).homeName !== null)
       .map((record) => record.actorId);
+  }
+
+  private async agentLedgers(): Promise<SpendLedger[]> {
+    const steps = headStepSources(this.boundSql);
+
+    return await Promise.all(this.agentsWithStores().map((actorId) => this.agentStores(actorId).spend(steps)));
+  }
+
+  private agentArchiveSource(): ArchiveAgentSource {
+    const agents = this.agentsWithStores();
 
     return {
       list: () => agents,
-      page: async (actorId, cursor, maxBytes) => await (await this.agentCalls(actorId)).archivePage(this.agentSnapshot(actorId), cursor, maxBytes),
+      page: (actorId, cursor, maxBytes) => this.agentStores(actorId).archivePage(cursor, maxBytes),
     };
   }
 
@@ -4273,13 +4301,19 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   async getTurnRequests(turnId: string, actor?: string): Promise<TurnRequestIndex> {
+    if (actor !== undefined && this.isAgent(actor)) return await this.agentStores(actor).turnRequests(turnId);
+
     return turnRequestIndex(this.turnRequestSources(actor), turnId);
   }
 
   async getTurnRequest(
     turnId: string, at: { readonly epoch: number; readonly revision: number; readonly from?: number; readonly actor?: string },
   ): Promise<TurnRequestPage> {
-    return await turnRequestPage(this.turnRequestSources(at.actor), { turnId, epoch: at.epoch, revision: at.revision, from: at.from });
+    const read = { turnId, epoch: at.epoch, revision: at.revision, ...(at.from !== undefined && { from: at.from }) };
+
+    if (at.actor !== undefined && this.isAgent(at.actor)) return await this.agentStores(at.actor).turnRequest(read);
+
+    return await turnRequestPage(this.turnRequestSources(at.actor), read);
   }
 
   /** Not @callable: the audited `workspace.turn_read`. */
@@ -4395,7 +4429,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   async accountSpend(): Promise<AccountSpend[]> {
-    return this.eventRecorder.spendByAccount();
+    return mergeAccountSpend([this.eventRecorder.spendByAccount(), ...(await this.agentLedgers()).map((ledger) => ledger.accounts)]);
   }
 
   /** The machine's name is read from the account, so it is current. */
@@ -4450,7 +4484,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       telemetry: summarizeSteps(steps, { windowLimit, warms }),
       // Not `this.budget.snapshot()`: that answers a narrower question, and two mission figures
       // would conflict.
-      spend: workspaceSpend({ events: this.eventRecorder, sql: this.boundSql, actor: this.actorHandle() }),
+      spend: workspaceSpend({ events: this.eventRecorder, sql: this.boundSql, actor: this.actorHandle(), others: await this.agentLedgers() }),
       log: readActivityLog(this.boundSql, this.actorHandle(), logLimit),
     };
   }

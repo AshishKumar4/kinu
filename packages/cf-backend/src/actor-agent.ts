@@ -13,7 +13,7 @@ import {
   TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
-  type RunEventInput, type SubordinateInspectionAuthority, type AgentOwnInspection,
+  type RunEventInput, type SubordinateInspectionAuthority, ConversationSearchStore, type ConversationRecall,
   isSubordinateOrigin,
 } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
@@ -173,7 +173,7 @@ import {
   toolsForInvocation, withTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, requireWorkModePermission, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing, type CountableRequest, type InputTokenCount,
   type AgentInbox,
-  type NimbusSandboxHandle, childContextResolver,
+  type NimbusSandboxHandle, childContextResolver, localContextTree,
 } from "@kinu.run/core";
 import {
   bindAgentSql, createCFRuntime, isCFRuntime, MODEL_SETTINGS,
@@ -207,6 +207,7 @@ import { codemodeLauncher, type ProgramLaunch } from "./codemode-sandbox";
 import { createHeadRuntime } from "./head-runtime";
 import type { AgentProviderRegistry } from "./providers/agent-registry";
 import { OwnedModelServices } from "./owned-model-services";
+import type { AgentStoreBroker } from "./agent-facets";
 import { markLastToolForAnthropicCache } from "@kinu.run/core";
 import type { CodemodeProvider, DeferredApprovalChannel, SlateBindingRoute, SlateCallResult, SlateOperation, SlateReadModel } from "@kinu.run/core";
 import { workspaceOwner } from "./workspace-owner-rpc";
@@ -487,7 +488,7 @@ const MCP_CATALOG_READ_FAILURES: ReadonlySet<ErrorCode> = new Set(['unavailable'
  * A hosted actor's binding reaches only its own files, tables, tasks and facts, never the
  * workspace actor's (pinned by `tests/unit-slate-composition.test.ts`).
  */
-function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider) {
+function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider, conversations: ConversationRecall) {
   // `ActorHostDeps.runtimeFor` is `createCFRuntime` on this backend; core only narrows the type.
   const runtime = actor.runtime;
 
@@ -501,15 +502,13 @@ function hostedActorSurface(actor: HostedActor, webSearch: WebSearchProvider) {
     createDbCodemodeProvider(actor.stores.appData),
     createTasksCodemodeProvider(actor.stores.taskList, actor.stores.config),
     createMemoryCodemodeProvider(() => ({
-      memory: runtime.memory, vectorStore: runtime.vectorStore,
-      facts: actor.stores.facts, sql: runtime.storage.sql, actor: actor.handle,
-      transcriptFor: (sessionId) => actor.stores.history.transcript(sessionId),
+      memory: runtime.memory, vectorStore: runtime.vectorStore, facts: actor.stores.facts, actor: actor.handle, conversations,
     })),
   ];
 
   const native = buildBuiltinTools({
     rt: runtime, vectorStore: runtime.vectorStore, facts: actor.stores.facts, webSearch,
-    history: actor.stores.history,
+    conversations,
     fileLedger: actor.session.orchestrator.acc.files, contextBudget: actor.session.orchestrator.acc.context,
   });
 
@@ -2940,13 +2939,11 @@ export abstract class ActorAgent extends Agent<Env> {
         refusals: this.tierRefusals,
         contextPlane: {
           actorId: this.actorHandle().actorId,
-          claims: () => this.claims,
-          events: () => this.stores.eventRecorder,
+          own: () => localContextTree(() => ({ claims: this.claims, events: this.stores.eventRecorder }), { author: this.actorHandle().actorId, child: false }),
           children: childContextResolver({
-            host: { bindStores: (reference) => this.actorHost().bindStores(reference) },
             directory: this.actorDirectoryStore(),
             parent: this.actorHandle(),
-            events: (child) => child.stores.eventRecorder,
+            tree: (child, author) => this.agentStores(child.actorId).contextTree({ author, child: true }),
           }),
         },
       };
@@ -3033,7 +3030,7 @@ export abstract class ActorAgent extends Agent<Env> {
         throw new KinuError('denied', `a hosted actor has no ${route.kind} surface; that route belongs to the workspace actor`);
       }
 
-      const surface = hostedActorSurface(actor, this.ownedModelServices.getWebSearchProvider());
+      const surface = hostedActorSurface(actor, this.ownedModelServices.getWebSearchProvider(), this.agentStores(actor.handle.actorId).conversations());
       const providers = providersInWorkMode(mode, surface.providers);
       // Narrow by the child's own durable, per-actor role.
       const reach = slateToolReach(await this.hostedSlateReach(actor, providers, Object.keys(surface.native)));
@@ -3244,8 +3241,7 @@ export abstract class ActorAgent extends Agent<Env> {
     return [
       createMemoryCodemodeProvider(() => ({
         memory: this.rt.memory, vectorStore: this.rt.vectorStore,
-        facts: this.facts, sql: this.rt.storage.sql, actor: this.actorHandle(),
-        transcriptFor: (sessionId) => this.stores.history.transcript(sessionId),
+        facts: this.facts, actor: this.actorHandle(), conversations: this.ownConversations(),
       })),
       createTasksCodemodeProvider(this.taskList, this.config),
     ];
@@ -3437,11 +3433,16 @@ export abstract class ActorAgent extends Agent<Env> {
       sql: this.boundSql, raw: this.ctx.storage.sql,
       actor: this.actorHandle(), directory: this.actorDirectoryStore(),
       transcriptFor: (actor) => this.transcriptFor(actor),
-      ownRows: (actor, own) => this.agentInspection(actor.actorId, own),
+      ownRows: (actor, own) => this.agentStores(actor.actorId).inspect(own),
     }, request, authority);
   }
 
-  protected abstract agentInspection(actorId: string, request: AgentOwnInspection): Promise<SubordinateInspectionResult>;
+  /** Every read or write of an agent's own stores goes here (D9). */
+  protected abstract agentStores(actorId: string): AgentStoreBroker;
+
+  protected ownConversations(): ConversationRecall {
+    return new ConversationSearchStore(this.rt.storage.sql, this.actorHandle(), (sessionId) => this.stores.history.transcript(sessionId));
+  }
 
   /**
    * One page of one chat: the caller's own by default, or the subordinate a pane names by actor id.
@@ -3455,7 +3456,7 @@ export abstract class ActorAgent extends Agent<Env> {
     if (actor === undefined) return getChatHistoryPage(this.chatTranscript, page);
     this.requireSubordinateChat(actor);
 
-    return await this.agentHistoryPage(actor, page);
+    return await this.agentStores(actor).historyPage(page);
   }
 
   private requireSubordinateChat(actorId: string): void {
@@ -3469,7 +3470,6 @@ export abstract class ActorAgent extends Agent<Env> {
     }
   }
 
-  protected abstract agentHistoryPage(actorId: string, page: PositionPageRequest): Promise<ChatHistoryPage>;
 
   /** Used to preselect a menu entry; the model list comes from /api/user/models (user-scoped). */
   @callable()
@@ -3672,19 +3672,25 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private refusalNotices: TierRefusals | null = null;
 
+  private modelSettingsChanges = 0;
+
+  protected refusalNoticesFor(actor: ActorHandle): TierRefusals {
+    return tierRefusals({
+      sql: this.boundSql, actor, config: actor.config, now: Date.now, settings: MODEL_SETTINGS, changes: () => this.modelSettingsChanges,
+    });
+  }
+
   /** One for the object's life, shared with the runtime's lanes, so what it said is read once. */
   protected get tierRefusals(): TierRefusals {
-    const actor = this.actorHandle();
-
-    this.refusalNotices ??= tierRefusals({ sql: this.boundSql, actor, config: actor.config, now: Date.now, settings: MODEL_SETTINGS });
+    this.refusalNotices ??= this.refusalNoticesFor(this.actorHandle());
 
     return this.refusalNotices;
   }
 
   /** The owner changed what decides a tier's model or credential: a parked refusal may answer differently. */
   protected async modelSettingsChanged(): Promise<void> {
+    this.modelSettingsChanges += 1;
     this.invalidateModelCaches();
-    this.tierRefusals.forget();
     await this.terminal.releaseParked();
   }
 
@@ -3740,7 +3746,7 @@ export abstract class ActorAgent extends Agent<Env> {
       const builtinDeps: Parameters<typeof buildActorTools>[0] = {
         rt: this.rt,
         workMode: mode,
-        history: this.stores.history,
+        conversations: this.ownConversations(),
         // `turnId` is a closure because the toolset is cached across turns; it must be the durable
         // message id a recovery replays, not a run id. Rollouts supply their own ({@link
         // makeScaffoldCallTool}).

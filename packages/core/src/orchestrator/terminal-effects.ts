@@ -14,7 +14,7 @@ import {
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { writeActivityLog } from '../identity/activity-log';
-import { providerRefusalCode, providerStatusOf } from '../providers/util';
+import { OWNER_FIXABLE_REFUSALS, providerRefusalCode, providerStatusOf } from '../providers/util';
 import type { AgentOrchestrator, TurnContinuity } from './agent-orchestrator';
 import type { EvolutionEngine } from '../evolution/engine';
 import type { HeadJournal } from '../heads/journal';
@@ -57,9 +57,6 @@ export const TERMINAL_EFFECT_RETRY_CEILING_MS = 600_000;
 
 /** Provider answers a retry cannot change (a 404 route, a request refused as malformed). */
 const LASTING_REFUSALS: ReadonlySet<ErrorCode> = new Set(['missing', 'bad_input']);
-
-/** Only the owner can fix these, so the row parks with no wake (T1). */
-const OWNER_FIXABLE_REFUSALS: ReadonlySet<ErrorCode> = new Set(['denied', 'budget']);
 
 /** The owner reads an abandoned effect in the Activity log, by what it was doing. */
 const EFFECT_ACTIVITY: Partial<Record<TerminalEffectName, string>> = {
@@ -432,6 +429,9 @@ export interface TerminalSequenceRun {
 export class TerminalEffectLedger {
   private readonly actorId: string;
 
+  /** A refusal answered after a release does not park (T1). */
+  private releases = 0;
+
   constructor(private readonly deps: {
     readonly sql: SqlExecutor;
     /** Sequence ids collide across actors and the sweeps would cross them; `assertCurrent()` runs before every statement. */
@@ -481,6 +481,7 @@ export class TerminalEffectLedger {
     }
 
     const rows = JSON.stringify([...firsts.values()]);
+    this.releases += 1;
     const superseding = JSON.stringify([...new Set(owed.map((effect) => effect.name))].filter((name) => COALESCED_EFFECTS.includes(name)));
     const now = this.deps.now();
 
@@ -506,6 +507,7 @@ export class TerminalEffectLedger {
   /** Parked rows fall due now; the caller arms the wake. */
   release(): number {
     this.deps.actor.assertCurrent();
+    this.releases += 1;
 
     return this.deps.sql<{ effect_key: string }>`UPDATE terminal_effects
       SET status = 'pending', next_attempt_at = ${this.deps.now()}
@@ -690,6 +692,7 @@ export class TerminalEffectLedger {
 
     const { name, effect } = row.target;
     const fault = this.deps.fault?.() ?? null;
+    const releases = this.releases;
     let outcome: TerminalEffectOutcome;
 
     try {
@@ -735,6 +738,13 @@ export class TerminalEffectLedger {
       }
 
       if (refused !== null && OWNER_FIXABLE_REFUSALS.has(refused)) {
+        if (this.releases !== releases) {
+          this.due(sequenceId, row.key);
+          diagnostics.event('turn.terminal_effect_refusal_outdated', { sequence: sequenceId, effect: row.key, attempts, code: refused });
+
+          return;
+        }
+
         this.record(sequenceId, row.key, 'parked');
         diagnostics.event('turn.terminal_effect_parked', { sequence: sequenceId, effect: row.key, attempts, code: refused });
 
@@ -786,6 +796,14 @@ export class TerminalEffectLedger {
       SET attempts = ${row.attempts + 1}, next_attempt_at = ${nextAttemptAt}
       WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
         AND effect_key = ${row.key} AND status != 'completed'`;
+  }
+
+  private due(sequenceId: string, key: string): void {
+    this.deps.actor.assertCurrent();
+    void this.deps.sql`UPDATE terminal_effects
+      SET status = 'pending', next_attempt_at = ${this.deps.now()}
+      WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
+        AND effect_key = ${key} AND status != 'completed'`;
   }
 
   /** `completed` is irreversible; the others may replace each other. */

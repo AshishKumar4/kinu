@@ -10,7 +10,7 @@ import {
   type AgentRuntime, type WebSearchProvider,
 } from '../src/index';
 import { asSchema, type ToolSet } from 'ai';
-import { storesFor } from './helpers';
+import { conversationsFor } from './helpers';
 
 /** The malformed argument a model actually emitted, kept verbatim. */
 const MALFORMED = 'list">';
@@ -32,24 +32,24 @@ const noopWebSearch: WebSearchProvider = {
 const SURFACES: readonly DispatchSurface[] = [
   {
     tool: 'tasks', field: 'action', vocabulary: TASKS_TOOL_ACTIONS,
-    build: (rt) => buildBuiltinTools({ rt, history: storesFor(rt).history }),
+    build: (rt) => buildBuiltinTools({ rt, conversations: conversationsFor(rt) }),
   },
   {
     tool: 'web', field: 'action', vocabulary: WEB_TOOL_ACTIONS,
-    build: (rt) => buildBuiltinTools({ rt, webSearch: noopWebSearch, history: storesFor(rt).history }),
+    build: (rt) => buildBuiltinTools({ rt, webSearch: noopWebSearch, conversations: conversationsFor(rt) }),
   },
   {
     // Facts not wired: the refusal must name only the reachable set.
     tool: 'memory', field: 'action', vocabulary: memoryActionsFor(false),
-    build: (rt) => buildBuiltinTools({ rt, history: storesFor(rt).history }),
+    build: (rt) => buildBuiltinTools({ rt, conversations: conversationsFor(rt) }),
   },
   {
     tool: 'report', field: 'status', vocabulary: SUBORDINATE_REPORT_STATUSES,
-    build: (rt) => buildBuiltinTools({ rt, report: { report: async () => ({ ok: true }) }, history: storesFor(rt).history }),
+    build: (rt) => buildBuiltinTools({ rt, report: { report: async () => ({ ok: true }) }, conversations: conversationsFor(rt) }),
   },
   {
     tool: 'file', field: 'action', vocabulary: FILE_TOOL_ACTIONS,
-    build: (rt) => buildBuiltinTools({ rt, history: storesFor(rt).history }),
+    build: (rt) => buildBuiltinTools({ rt, conversations: conversationsFor(rt) }),
   },
 ];
 
@@ -97,7 +97,7 @@ describe('a model-supplied discriminant is refused with its vocabulary', () => {
 
     const tools = buildBuiltinTools({
       rt,
-      history: storesFor(rt).history,
+      conversations: conversationsFor(rt),
       webSearch: noopWebSearch,
       report: { report: async () => ({ ok: true }) },
     });

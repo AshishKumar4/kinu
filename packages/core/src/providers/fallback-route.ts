@@ -37,8 +37,8 @@ function handsOver(failure: CallFailure): boolean {
 }
 
 /** A failed lookup is logged and unknown: it skips nothing. */
-function credentialOrUnknown(credentialOf: (spec: string) => Promise<string | null>, spec: string): Effect.Effect<string | null> {
-  return attempt({ doing: 'look up a fallback\'s credential', otherwise: 'io' }, () => credentialOf(spec)).pipe(
+export function credentialOrUnknown(credentialOf: (spec: string) => Promise<string | null>, spec: string): Effect.Effect<string | null> {
+  return attempt({ doing: 'look up the credential a model is called with', otherwise: 'io' }, () => credentialOf(spec)).pipe(
     Effect.catch((failed) => Effect.sync(() => {
       diagnostics.failure('llm_call.fallback_credential_unknown', failed, { spec });
 

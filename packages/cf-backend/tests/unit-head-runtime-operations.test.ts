@@ -75,6 +75,7 @@ const neverHost: HostedActorSeams = {
   get directory(): never { throw new Error('mergeLLM read the actor directory'); },
   transaction() { throw new Error('mergeLLM opened a transaction'); },
   roster() { throw new Error('mergeLLM read a roster'); },
+  conversations() { throw new Error('mergeLLM read a conversation'); },
   vfs() { throw new Error('mergeLLM read the file plane'); },
   suggestTitle() { throw new Error('mergeLLM asked for a title'); },
   taskProfile() { throw new Error('mergeLLM built a hire profile'); },

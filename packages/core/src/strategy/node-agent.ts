@@ -5,6 +5,7 @@
  * reports, never on workspace state; {@link readNodeReport} is the only report boundary.
  */
 
+import type { ConversationRecall } from '../memory/conversation-search';
 import { REAL_CLOCK, type Clock } from '../types/clock';
 import { tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { z } from 'zod';
@@ -172,6 +173,7 @@ export interface HostedNodeSeat {
     => Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
   /** This node's own live per-step block (its jobs, tasks, approvals). */
   readonly dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
+  readonly conversations: ConversationRecall;
 }
 
 export interface NodeLoopDeps {
@@ -185,6 +187,7 @@ export interface NodeLoopDeps {
   profile: (input: { readonly availableTools: readonly string[]; readonly workMode: WorkMode })
     => Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }>;
   dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
+  conversations: ConversationRecall;
   model: LanguageModel;
   logger: Logger;
   signal?: AbortSignal;
@@ -318,7 +321,7 @@ function buildNodeToolSet(input: {
   // runs inside the capture so the transcript records the handle the model was told.
   return buildToolSurface({
     rt: deps.actor.runtime,
-    history: deps.actor.stores.history,
+    conversations: deps.conversations,
     workMode: input.mode,
     logger: deps.logger,
     report,
@@ -649,6 +652,7 @@ function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps, seat: HostedNo
     runId: seat.runId,
     profile: seat.profile,
     dynamic: seat.dynamic,
+    conversations: seat.conversations,
     model: deps.model,
     logger: deps.logger,
     // Real time unless the run handed a clock (D19).

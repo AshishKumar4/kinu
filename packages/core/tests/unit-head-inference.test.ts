@@ -2,7 +2,7 @@
 import { REAL_CLOCK } from '../src/types/clock';
 import { describe, test, expect } from 'bun:test';
 import { createTestActors, createTestRuntime, scriptedTurnModel, toolExecute, type ScriptedTurnOptions } from '@kinu.run/test-utils';
-import { createTestWorkspace, storesFor } from './helpers';
+import { createTestWorkspace, conversationsFor } from './helpers';
 import { buildHeadToolSet } from '../src/heads/head-tools';
 import type { LanguageModel, ModelMessage } from 'ai';
 import { hostedSeatsOver } from './helpers-actor-host';
@@ -204,7 +204,7 @@ describe('buildHeadAccumulatorTools', () => {
 
     // The head's own surface, as both backends build it.
     const tools = buildHeadToolSet({
-      input, capture, rt, history: storesFor(rt).history, codemodeTool: undefined,
+      input, capture, rt, conversations: conversationsFor(rt), codemodeTool: undefined,
       webSearch: { search: async (query) => ({ query, results: [], source: 'duckduckgo' }), fetch: async (url) => ({ url, retrievedAt: '', markdown: '' }), render: async (url) => ({ url, retrievedAt: '', markdown: '' }), screenshot: async (url) => ({ url, retrievedAt: '', bytes: new Uint8Array() }) },
       split: async () => { throw new Error('this head cannot split'); },
     });

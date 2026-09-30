@@ -15,7 +15,7 @@ import type { VFS } from '../src/types/primitives';
 import type { JsonObject, JsonValue } from '../src/utils/json';
 import type { FactsStore } from '../src/memory/facts';
 import type { PlanEdit, SubmitPlanToolDeps } from '../src/types/plans';
-import { storesFor } from './helpers';
+import { conversationsFor } from './helpers';
 
 const USAGE = {
   inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
@@ -164,7 +164,7 @@ describe('a call base ran is still run', () => {
     };
 
     const memory = toolExecute<{ action: string; key: string; value: string; confidence: number }, JsonValue>(
-      buildBuiltinTools({ rt, facts, history: storesFor(rt).history }).memory,
+      buildBuiltinTools({ rt, facts, conversations: conversationsFor(rt) }).memory,
     );
 
     expect(await memory({ action: 'remember', key: 'deploy.target', value: 'production', confidence: 95 })).toMatchObject({ ok: true });
@@ -182,7 +182,7 @@ describe('a call base ran is still run', () => {
     };
 
     const submitPlan = toolExecute<{ edits: Array<PlanEdit & { reason: string }> }, JsonValue>(
-      buildBuiltinTools({ rt, history: storesFor(rt).history, submitPlan: { submit } }).submit_plan,
+      buildBuiltinTools({ rt, conversations: conversationsFor(rt), submitPlan: { submit } }).submit_plan,
     );
 
     await submitPlan({ edits: Array.from({ length: 101 }, (_, index) => ({ start: index + 1, content: 'x', reason: 'first' })) });
