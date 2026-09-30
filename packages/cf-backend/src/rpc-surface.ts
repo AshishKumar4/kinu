@@ -324,8 +324,10 @@ export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
   ...ORCHESTRATOR_METHODS,
 ];
 
-/** Never gated: `destroyAgent` must work when start throws. */
-const ORCHESTRATOR_STARTLESS: ReadonlySet<string> = new Set(['destroyAgent', 'evalAbortActivation']);
+/** Never gated: `destroyAgent` must work when start throws. `sandboxInUse` reads only what this activation runs, so
+ *  an object its box asks cold answers from its constructor instead of booting its workspace once a minute
+ *  (ironwood-cairn-6dbcb8de, 2026-09-29 18:04-18:18Z: each ask started the object and armed its owed-effect wake). */
+const ORCHESTRATOR_STARTLESS: ReadonlySet<string> = new Set(['destroyAgent', 'evalAbortActivation', 'sandboxInUse']);
 
 export const ORCHESTRATOR_STARTED_RPC: readonly string[] = [
   ...ACTOR_AGENT_RPC_SURFACE,
