@@ -234,7 +234,10 @@ describe('the assistant row holds the answer', () => {
     db.close();
   });
 
-  test('a continuation of the cut answer step joins the cut text to what it finished', async () => {
+  // One continuation path for both backends (core ChatSession, Chat loop C1 amended 2026-09-30): a step cut mid-text is
+  // written again whole, so the row is the continuation's answer alone. The join it replaced stored ironwood-cairn-6dbcb8de's
+  // "...clipped before theServer"; cf's parity record changed the same way.
+  test('a continuation of a cut text step stores the answer written again, not the cut text joined to it', async () => {
     const opened = openSession('joined');
     const { db, rt } = opened;
     const streamedA = Promise.withResolvers<void>();
@@ -274,7 +277,7 @@ describe('the assistant row holds the answer', () => {
     await ended.promise;
     await b.end();
 
-    expect(await rowsOf(opened, 'assistant')).toEqual(['part-two']);
+    expect(await rowsOf(opened, 'assistant')).toEqual(['two']);
     await Promise.race([dying, Promise.resolve()]);
     db.close();
   });
