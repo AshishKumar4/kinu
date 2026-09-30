@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { compareEvalResults, fisherExact, renderEvalComparison, validateEvalResults } from './comparison';
+import { compareEvalResults, evalGateVerdict, fisherExact, renderEvalComparison, validateEvalResults } from './comparison';
 
 /**
  * `infra`: the deployment ended the turn in error. `refused`: it answered the turn's request with this failure.
@@ -137,5 +137,51 @@ describe('validateEvalResults', () => {
 
     expect(validateEvalResults(report('t', [...block(1), ...block(6)], BASE), 10)).toHaveLength(1);
     expect(() => validateEvalResults(report('t', [...block(1), ...block(1)], BASE), 10)).toThrow(/expected 1 to 10 once each/);
+  });
+});
+
+describe('evalGateVerdict, what a promote reads', () => {
+  const complete = (text: string) => {
+    validateEvalResults(text, 10);
+
+    return null;
+  };
+
+  test('a complete report compared with a baseline stands when nothing fell, and says what it found', () => {
+    const candidate = report('order-book', trialsOf(6, 10), NEXT);
+    const verdict = evalGateVerdict(compareEvalResults(report('order-book', trialsOf(6, 10), BASE), candidate), complete(candidate));
+
+    expect(verdict).toEqual({ pass: true, reason: expect.stringContaining('Unchanged') });
+  });
+
+  test('a significant fall fails it, naming the task and both pass counts', () => {
+    const candidate = report('order-book', trialsOf(2, 10), NEXT);
+    const verdict = evalGateVerdict(compareEvalResults(report('order-book', trialsOf(9, 10), BASE), candidate), complete(candidate));
+
+    expect(verdict.pass).toBe(false);
+    expect(verdict.reason).toContain('order-book');
+    expect(verdict.reason).toContain('9/10');
+    expect(verdict.reason).toContain('2/10');
+  });
+
+  test('no baseline fails it: nothing was compared', () => {
+    const candidate = report('order-book', trialsOf(10, 10), NEXT);
+
+    expect(evalGateVerdict(compareEvalResults(null, candidate), complete(candidate))).toEqual({ pass: false, reason: expect.stringMatching(/^No baseline/) });
+  });
+
+  test('a baseline that could not be compared fails it, with the reason each task could not be', () => {
+    const candidate = report('order-book', trialsOf(6, 10, { taskVersion: 'v2' }), NEXT);
+    const verdict = evalGateVerdict(compareEvalResults(report('order-book', trialsOf(6, 10), BASE), candidate), complete(candidate));
+
+    expect(verdict.pass).toBe(false);
+    expect(verdict.reason).toContain('task version changed');
+  });
+
+  test('a report that is not a complete baseline fails it, with the reason it is not, whatever the comparison says', () => {
+    const candidate = report('order-book', trialsOf(6, 9), NEXT);
+
+    expect(evalGateVerdict(compareEvalResults(report('order-book', trialsOf(6, 10), BASE), candidate), 'order-book holds trials [1..9]'))
+      .toEqual({ pass: false, reason: expect.stringContaining('order-book holds trials [1..9]') });
   });
 });
