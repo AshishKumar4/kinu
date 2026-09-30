@@ -11,12 +11,12 @@ import {
   prepareHostedTurn, settleHostedTask,
   type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn,
 } from './hosted-actors';
-import type { AgentReview, AgentTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn, StoredRow } from './agent-facet/protocol';
+import type { AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn, StoredRow } from '@kinu.run/core';
 
 export interface AgentTurnsDeps {
   readonly sql: SqlExecutor;
   seams(): HostedActorSeams;
-  deliver(reference: ActorReference, task: AgentTask): Promise<void>;
+  deliver(reference: ActorReference, task: AgentTurnTask): Promise<void>;
   interrupt(reference: ActorReference, turnId: string): Promise<void>;
   holds(reference: ActorReference, turnId: string): Promise<boolean>;
   dynamic(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext;
@@ -36,7 +36,7 @@ export interface AgentTurnHooks {
 interface PendingTurn {
   readonly reference: ActorReference;
   readonly request: HostedTurnRequest;
-  readonly task: AgentTask;
+  readonly task: AgentTurnTask;
   readonly hooks: AgentTurnHooks;
   prepared: PreparedHostedTurn | null;
   profile?: ResolvedTurnProfile;
@@ -63,7 +63,7 @@ export class AgentTurns {
 
   constructor(private readonly deps: AgentTurnsDeps) {}
 
-  start(reference: ActorReference, request: HostedTurnRequest, task: AgentTask, hooks: AgentTurnHooks): Promise<void> {
+  start(reference: ActorReference, request: HostedTurnRequest, task: AgentTurnTask, hooks: AgentTurnHooks): Promise<void> {
     const pending: PendingTurn = {
       reference, request, task, hooks, prepared: null, delivered: false, over: false, done: Promise.withResolvers<void>(),
     };
