@@ -539,6 +539,38 @@ describe('a destroyed box starts nothing of its own until it is asked again', ()
       .toEqual({ starts, running: false, rows: ['devboxIncidents'] });
   });
 
+  // Review 3f6, 2026-09-30: a reopen waiting on a quiesce took no arrival, so a teardown that landed
+  // while it waited did not fence it, and once the quiesce settled it reopened the torn-down box.
+  const reopens = [
+    ['start', (box: TestBox) => box.start()],
+    ['kickStartup', (box: TestBox) => box.kickStartup()],
+    ['attachNow', (box: TestBox) => box.attachNow()],
+  ] as const;
+
+  for (const [door, ask] of reopens) {
+    test(`a ${door} queued behind a quiesce is refused when the box is torn down while it waits, and starts nothing`, async () => {
+      const { box, container } = harness(TestBox);
+      await box.devboxStartup();
+      const held = gate();
+      container.execGate = held;
+      const admitted = box.exec('printf draining');
+      await held.reached;
+      const stopping = box.quiesce();
+      const queued = ask(box);
+      await box.destroy();
+      const starts = container.containerStarts;
+      held.release();
+      await Promise.allSettled([admitted, stopping]);
+
+      const [outcome] = await Promise.allSettled([queued]);
+
+      expect({ outcome, starts: container.containerStarts, running: container.running.running, armed: armed(container) }).toEqual({
+        outcome: { status: 'rejected', reason: expect.objectContaining({ message: expect.stringContaining('destroyed after this request arrived') }) },
+        starts, running: false, armed: 0,
+      });
+    });
+  }
+
   test('the next caller opens it again, and a host that asks for a start gets one', async () => {
     const { box, container } = harness(TestBox);
     await box.devboxStartup();

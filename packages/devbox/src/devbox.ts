@@ -24,6 +24,7 @@ import {
   processScope,
   admissionStep,
   classifyRecovery,
+  isTerminalRecovery,
   parseRecoveryRow,
   parseWorkdirHolders,
   releaseWorkdirHoldersCommand,
@@ -43,7 +44,7 @@ import {
   racedRestoreSteps, runRestoreStep, type RestoreSteps,
   type StartClock,
 } from './lifecycle';
-import { DevboxError, attempt, attemptSync, settle, settleSync, startOverrun, startInterrupted, chainAdvanced } from './errors';
+import { DevboxError, attempt, attemptSync, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
 import type { RestorePhase, RestorePhaseStamps } from './durability/contracts';
 import {
   admissionOf, isSettledRestoration, recoveryRow, settledRestoration, terminalRefusal, unreadyOf,
@@ -451,13 +452,25 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** A caller asking reopens a destroyed box once a quiesce in flight has settled. */
   #reopening(work: () => Promise<void>): Effect.Effect<void, DevboxError> {
-    const reopened = (async () => {
-      if (this.#quiescing !== undefined) await this.#quiescing;
-      this.#closed = false;
-      await work();
-    })();
+    const arrived = this.#teardowns;
 
-    return attempt('io', () => reopened);
+    return Effect.gen({ self: this }, function* () {
+      yield* this.#afterQuiesce(arrived, 'io');
+      this.#closed = false;
+      yield* attempt('io', work);
+    });
+  }
+
+  /** Waits out a quiesce in flight; a teardown while it waited refuses the ask, which arrived
+   *  before that teardown (D36). */
+  #afterQuiesce(arrived: number, code: DevboxErrorCode): Effect.Effect<void, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      const quiescing = this.#quiescing;
+
+      if (quiescing !== undefined) yield* attempt(code, () => quiescing);
+
+      if (arrived !== this.#teardowns) return yield* Effect.fail(new DevboxError('io', DESTROYED_AFTER_ARRIVAL));
+    });
   }
 
   async #startNative(): Promise<void> {
@@ -1009,11 +1022,25 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       });
 
       if (this.#owns(generation)) {
-        this.#refused = { generation, reason };
         const failure = classifyRecovery({ cause });
-        await this.#record('attach', `[${failure} -> retry] ${reason}`);
 
-        if (this.#owns(generation)) await this.armAlarm(STARTUP_CALLBACK, 1);
+        // Classified first, as the ladder does: a start that fails the same way every time (an
+        // S3Mounts marker this box cannot route, D40) is refused once, not re-armed each second (D47).
+        if (isTerminalRecovery(failure)) {
+          const refusal = `[${failure} -> refuse] ${reason}`;
+          this.#adoptionPending = false;
+          await this.#settle({ phase: 'unattached', reason: refusal, retry: false });
+
+          if (this.#owns(generation)) {
+            await this.#record('attach', refusal);
+            this.#deleteSchedule(STARTUP_CALLBACK);
+          }
+        } else {
+          this.#refused = { generation, reason };
+          await this.#record('attach', `[${failure} -> retry] ${reason}`);
+
+          if (this.#owns(generation)) await this.armAlarm(STARTUP_CALLBACK, 1);
+        }
       } else {
         console.error(`[devbox] superseded admission refused: ${reason}`);
       }
@@ -1568,29 +1595,33 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** The only transition that clears a terminal refusal; keeps the `replace` stage, so a failed
    *  retry refuses again instead of destroying. Also re-runs an incomplete restoration. */
   attachNow(): Promise<AttachOutcome> {
-    return settle(attempt('not-ready', async (): Promise<AttachOutcome> => {
-      if (this.#quiescing !== undefined) await this.#quiescing;
-      const arrived = this.#teardowns;
-      this.#closed = false;
-      this.stampInteraction();
+    const arrived = this.#teardowns;
 
-      if (this.#restoration.phase === 'repair') {
-        await this.#repairAttached(this.#generation);
-      } else {
-        if (this.#unready() !== undefined) {
-          await this.#settle({ phase: 'unstarted' });
-          await this.#startContainer();
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* this.#afterQuiesce(arrived, 'not-ready');
 
-          if (this.#admission() === undefined) {
-            throw new DevboxError("io", `this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}`);
+      return yield* attempt('not-ready', async (): Promise<AttachOutcome> => {
+        this.#closed = false;
+        this.stampInteraction();
+
+        if (this.#restoration.phase === 'repair') {
+          await this.#repairAttached(this.#generation);
+        } else {
+          if (this.#unready() !== undefined) {
+            await this.#settle({ phase: 'unstarted' });
+            await this.#startContainer();
+
+            if (this.#admission() === undefined) {
+              throw new DevboxError("io", `this devbox is not ready: ${this.#unready() ?? 'the restoration has not settled'}`);
+            }
           }
+
+          await this.#ensureReady(arrived);
         }
 
-        await this.#ensureReady(arrived);
-      }
-
-      return await this.ctx.storage.get<AttachOutcome>(LAST_ATTACH_KEY)
-        ?? { kind: 'empty', detail: 'this box has attached nothing' };
+        return await this.ctx.storage.get<AttachOutcome>(LAST_ATTACH_KEY)
+          ?? { kind: 'empty', detail: 'this box has attached nothing' };
+      });
     }));
   }
 

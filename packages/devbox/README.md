@@ -293,8 +293,13 @@ The package test command loads the repository's one Workers platform preload.
 - `quiesce-order.test.ts` covers admission draining, resident restart and the
   delta after a first-quiesce base. `untimed-exec.test.ts` uses real local
   processes to check output, process-tree termination and early cancellation.
-- `mount-route.test.ts` checks that absent or incompatible SDK registration
-  markers refuse rather than replacing the container or widening its route.
+- `mount-route.test.ts` checks that an owner evicted over its running container
+  rebinds the SDK's registration marker, or needs none when nothing is mounted,
+  and that an incompatible marker, or a mount with none, refuses once rather
+  than replacing the container or widening its route (D47).
+- `processes-image.test.ts` runs the process scripts in the real image's shell
+  over `docker exec`: a stop escalates TERM to KILL, and a launch that never
+  ran is recorded and launched again, never adopted as live (D48).
 - `snapshot-chain.test.ts` covers crash order, delta adoption, attach
   postconditions, unattached checkpoint refusal, archive scope, generation
   retention, and fallback recovery. Its denominator tests make an unexercised
