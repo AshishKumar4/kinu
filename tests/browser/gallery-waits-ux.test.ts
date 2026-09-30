@@ -5,7 +5,7 @@
  * welcome frame, which renders it unconditionally, and the log said only "ended while waiting for h1".
  */
 import { afterEach, beforeEach, expect, test } from 'bun:test';
-import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 
@@ -199,5 +199,27 @@ test('a frame whose page chunk fails to load shows the failure, not a blank root
 
     expect(await page.$eval('#root [data-failure]', (node) => node.textContent ?? '')).toContain('This view crashed');
     await page.close();
+  });
+});
+
+/** A chunk the server cannot read is a 500 that names the file, so the page fails where it can be seen. */
+test('a chunk the server cannot read is refused with its reason, and the page shows the failure', async () => {
+  await withGallery(async ({ newPage, origin, dist }) => {
+    const chunk = readdirSync(join(dist, 'assets')).find((name) => /^WelcomePage-[^/]+\.js$/u.test(name)) ?? '';
+    const path = join(dist, 'assets', chunk);
+    const refused = written(`gallery-harness: could not read /assets/${chunk}`);
+
+    chmodSync(path, 0o000);
+
+    try {
+      const page = await newPage();
+      await page.goto(`${origin}/gallery.html?frame=welcome&step=0`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('#root [data-failure]');
+
+      expect(await refused).toContain('EACCES');
+      await page.close();
+    } finally {
+      chmodSync(path, 0o644);
+    }
   });
 });

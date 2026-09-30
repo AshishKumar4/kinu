@@ -19,14 +19,15 @@
  * gates on this shared tree ("Execution context was destroyed").
  */
 
-import { createReadStream, existsSync, mkdirSync, readdirSync, rmSync, statSync, watch } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, watch } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { createServer as createHttpServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { extname, join, resolve, sep } from 'node:path';
 import type { Page } from 'puppeteer';
 import { build } from 'vite';
 import * as v from 'valibot';
-import { tolerate } from '@kinu.run/core/obs';
+import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
 import { releaseScratch, scratchDir, SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
 import { declaredSettings } from './browser-declarations';
 import { SILENCE_NOTICE_ENV } from './deadline';
@@ -50,6 +51,8 @@ export interface Gallery {
   readonly newPage: () => Promise<Page>;
   /** `http://127.0.0.1:<port>` — this run's server, never another worktree's. */
   readonly origin: string;
+  /** The built artifact the server reads each response from. */
+  readonly dist: string;
 }
 
 /** A classified diagnostic, as the page's `diagnostics` sink writes it to the
@@ -403,7 +406,7 @@ export interface GalleryOptions {
 export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, options: GalleryOptions = {}): Promise<T> {
   const dist = await builtGalleryDist();
 
-  const http = createHttpServer((request, response) => {
+  const http = createHttpServer(async (request, response) => {
     // Static semantics, GET/HEAD only: the artifact is immutable, and any
     // /api/* traffic a frame produces belongs to the page's own fixtures or
     // to a gate's request interception, never to this server.
@@ -425,15 +428,21 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
       return;
     }
 
-    response.writeHead(200, { 'content-type': builtAssetContentType(file) });
+    // Read whole before the status is sent: a read that fails is a 500 naming why, never a 200 with a cut body,
+    // which a module script cannot tell from a complete one and which leaves the app unmounted in silence.
+    const bytes = await readFile(file).then((read) => read, (...rejection: [unknown]) => {
+      const reason = renderThrownChain({ cause: rejection[0] });
 
-    if (request.method === 'HEAD') {
-      response.end();
+      process.stderr.write(`gallery-harness: could not read ${pathname}: ${reason}\n`);
+      response.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+      response.end(`could not read ${pathname}: ${reason}`);
 
-      return;
-    }
+      return null;
+    });
 
-    createReadStream(file).pipe(response);
+    if (bytes === null) return;
+    response.writeHead(200, { 'content-type': builtAssetContentType(file), 'content-length': String(bytes.byteLength) });
+    response.end(request.method === 'HEAD' ? undefined : bytes);
   });
 
   const listening = Promise.withResolvers<void>();
@@ -556,7 +565,7 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
     };
 
     try {
-      return await body({ newPage, origin });
+      return await body({ newPage, origin, dist });
     } finally {
       notices?.close();
       process.off('SIGTERM', endOnSignal);
