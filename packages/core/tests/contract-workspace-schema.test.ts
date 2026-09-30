@@ -9,7 +9,6 @@ import { wrapDatabase } from '../src/identity/inline-primitives';
 import { normalizeObservedTables } from '../src/conformance';
 import { initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
 import { initWorkspaceOwnershipTables } from '../src/identity/schema';
-import { initActorTables } from '../src/state/workspace-schema';
 import { initWorkspaceActorTable } from '../src/identity/workspace-actors';
 import { initEffectTombstoneTable } from '../src/identity/effect-tombstones';
 import { initAgentConfigTable } from '../src/config/store';
@@ -45,7 +44,6 @@ import { makeSqlExec } from './helpers';
 const OWNED = {
   initWorkspaceOwnershipTables: (db) => initWorkspaceOwnershipTables(db.execRaw),
   initWorkspaceActorTable: (db) => initWorkspaceActorTable(db.execRaw),
-  initActorTables: (db) => initActorTables(db.execRaw, db.sql),
   initSearchTables: (db) => initSearchTables(db.execRaw),
   initScaffoldTables: (db) => initScaffoldTables(db.execRaw),
   initCodemodeStateTable: (db) => initCodemodeStateTable(db.execRaw),

@@ -41,14 +41,9 @@ export interface ListedFile {
 export interface DirectoryBackup {
   readonly id: string;
   readonly dir: string;
-  readonly localBucket?: boolean;
 }
 
 export interface BackupOptions {
   readonly dir: string;
-  readonly localBucket?: boolean;
-  readonly gitignore?: boolean;
   readonly excludes?: readonly string[];
-  readonly ttl?: number;
-  readonly compression?: { readonly format: 'zstd' };
 }

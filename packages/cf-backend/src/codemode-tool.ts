@@ -135,7 +135,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
         : Object.fromEntries(Object.entries(native).filter(([name]) => options.reach?.allowsTool(name)));
 
       const build = (mode: WorkMode): Tool => {
-        const executor = new KinuSandboxExecutor({ launch: options.launch(mode !== 'plan') });
+        const executor = new KinuSandboxExecutor(options.launch(mode !== 'plan'));
 
         // No prelude here: createCodeTool drops every one; the per-call executor below restores them.
         const toolsProvider: CodemodeProvider = {

@@ -3,7 +3,7 @@
 
 import * as v from 'valibot';
 
-import { NAMED_SWARM_PRESETS } from '../strategy/swarm-presets';
+import { NAMED_SWARM_PRESETS } from '../types/swarm';
 import { REASONING_EFFORTS, type ReasoningEffort } from '../providers/effort';
 import type { WorkMode } from '../types/turn';
 import { TierIdSchema,

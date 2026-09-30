@@ -14,7 +14,7 @@ import {
   fetchCloudflareAIGateways,
 } from '@kinu.run/core';
 import { requestUrl } from '@kinu.run/core';
-import { requestBodyText } from '@kinu.run/test-utils';
+
 import { present } from '@kinu.run/test-utils';
 
 const ACCOUNT_ROOT = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1';
@@ -66,7 +66,7 @@ describe('my-gateway request shape', () => {
       userDO: gatewayStub({ gatewayId: 'prod-gw', token: 'cf-user-token' }),
       fetch: asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
         const headers = new Headers(init?.headers);
-        const body = parseJsonObject(await requestBodyText(input, init));
+        const body = parseJsonObject(await new Request(input, init).text());
         seen.push({
           url: requestUrl(input),
           auth: headers.get('authorization'),

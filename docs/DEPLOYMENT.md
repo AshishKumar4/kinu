@@ -395,7 +395,7 @@ The ChatGPT plan (Sign in with ChatGPT, provider `chatgpt`, ADR P1) is served on
 | Binding | Type | Description |
 |---------|------|-------------|
 | `OrchestratorAgent` | Durable Object | The workspace agent (`OrchestratorAgent extends ActorAgent extends Agent<Env>`) |
-| `UserDO` | Durable Object | Per-user profile, CLI tokens, devices, release changes |
+| `UserDO` | Durable Object | Per-user profile, CLI tokens, devices |
 | `MonitorDO` | Durable Object | Synthetic monitoring: open incidents and the alert outbox (one instance, `site`) |
 | `Sandbox` | Durable Object + Container | `KinuSandbox` (@cloudflare/sandbox); one container per agent |
 | `ControlPlaneDO` | Durable Object | The admin surface's singleton (one instance, `site`): a fleet index and an audit log. It holds no business logic, and every action it exposes proxies an existing `@callable` on the object that already owns that state |

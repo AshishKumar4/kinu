@@ -76,7 +76,7 @@ const stateProvider = {
 };
 
 describe('the eval sandbox under workerd', () => {
-  const executor = new KinuSandboxExecutor({ launch: codemodeLauncher({ kinuNode: true, egress: null }) });
+  const executor = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: null }));
 
   test('hosted codemode distinguishes returned data, handled refusal, and unhandled failure', async () => {
     const outcomes: ToolOutcome[] = [];
@@ -276,7 +276,7 @@ describe('the eval sandbox under workerd', () => {
     expect(String(offline.result)).toContain('threw: ');
 
     // The loopback stub `enable_ctx_exports` mints for the exported class.
-    const online = new KinuSandboxExecutor({ launch: codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null } }) });
+    const online = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null } }));
     const result = await online.execute(program, [toolsProvider([]), stateProvider, workspace]);
     // `.invalid` resolves for nobody: the network's own failure comes back via the marked 502, not a sandbox refusal.
     expect(String(offline.result)).toContain('not permitted to access the internet');
@@ -286,7 +286,7 @@ describe('the eval sandbox under workerd', () => {
 
   test('a program cannot reach cloud metadata, and is told why', async () => {
     // Refused by the shared classifier before any DNS lookup or socket, as shell and `web.fetch` refuse it.
-    const online = new KinuSandboxExecutor({ launch: codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null } }) });
+    const online = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null } }));
     const program = "// probe the metadata service\ntry { await fetch('http://169.254.169.254/latest/meta-data/'); return 'reached'; } catch (e) { return 'threw: ' + e.message; }";
 
     const result = await online.execute(program, [toolsProvider([]), stateProvider, workspace]);
@@ -303,7 +303,7 @@ describe('the eval sandbox under workerd', () => {
 
     const web = createWebCodemodeProvider({ provider, vfs: null, sessions: { missing: 'no sessions here' }, prelude: { source: BROWSER_PRELUDE } });
     const fns = Object.fromEntries(Object.entries(web.tools).map(([name, entry]) => [name, (...args: unknown[]) => entry.execute(...args)]));
-    const online = new KinuSandboxExecutor({ launch: codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null } }) });
+    const online = new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: { workspace: null, actor: null } }));
 
     const ran = await withCodemodeProgram(() => online.execute(
       "// reach a browser this agent did not open, then list tools on something that is no page\n"

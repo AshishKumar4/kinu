@@ -1235,6 +1235,9 @@ are: DBX-5 moves backup and sync into the container (m712: that machinery
 "should live inside the docker image/container itself, and NOT be issued via
 the DO"), which takes them off the Durable Object entirely.
 
+The SDK-specific census was retired on 2026-09-30 after native Container.exec
+replaced sandbox.exec logging; restore it from `98f64cde610869efc60ff072ff89e866bb5fd116`.
+
 D29. Checkpoint payloads do not cross the Durable Object; DBX-5 moves the
 orchestration, not the bytes (2026-09-23). The chain's publish (D15) and its
 layer reads go to `r2.internal`, which the SDK serves in its `ContainerProxy`

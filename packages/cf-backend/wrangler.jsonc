@@ -160,7 +160,7 @@
   "containers": [
     {
       "class_name": "KinuSandbox",
-      "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:649439b506fef5e66b0b9b67d69e9bb9c1b034b37470a9f1ab81ac5fac4093ac",
+      "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:a87e1836293cd5319ec2cb1abb59fe4912d420193ca818daf01b8ebbcf49ec6d",
       "max_instances": 10,
       "instance_type": {
         "vcpu": 2,
@@ -489,7 +489,7 @@
       "containers": [
         {
           "class_name": "KinuSandbox",
-          "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:649439b506fef5e66b0b9b67d69e9bb9c1b034b37470a9f1ab81ac5fac4093ac",
+          "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:a87e1836293cd5319ec2cb1abb59fe4912d420193ca818daf01b8ebbcf49ec6d",
           "max_instances": 10,
           "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
         },

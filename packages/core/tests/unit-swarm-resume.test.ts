@@ -77,9 +77,9 @@ describe('the swarm-scoped resume lookup, and what it does about a collision', (
 
     expect(store.findRunningSwarms(TASK)).toEqual([]);
     // `superseded` is not `failed`: a newer attempt took the run over.
-    expect(store.get('converged')?.status).toBe('converged');
-    expect(store.get('failed')?.status).toBe('failed');
-    expect(store.get('superseded')?.status).toBe('superseded');
+    expect(store.list().find((run) => run.rootId === 'converged')?.status).toBe('converged');
+    expect(store.list().find((run) => run.rootId === 'failed')?.status).toBe('failed');
+    expect(store.list().find((run) => run.rootId === 'superseded')?.status).toBe('superseded');
     expect(store.list(10).map((row) => [row.rootId, row.status])).toEqual([
       ['superseded', 'superseded'], ['failed', 'failed'], ['converged', 'converged'],
     ]);
@@ -90,7 +90,7 @@ describe('the swarm-scoped resume lookup, and what it does about a collision', (
     beganSwarm(store, 'root', 1_000);
     store.converge('root', 0, 2_000);
     store.supersede('root', 3_000);
-    expect(store.get('root')?.status).toBe('converged');
+    expect(store.list().find((run) => run.rootId === 'root')?.status).toBe('converged');
   });
 
   test('the caller context round-trips through the swarm ledger', () => {
@@ -154,7 +154,7 @@ describe('swarm progress reads the durable tree, not the row', () => {
     expect(ledger.findRunningSwarms(TASK)).toEqual([
       { rootId: 'mid-level', iteration: 3, budget: 3, epoch: 0 },
     ]);
-    expect(ledger.get('mid-level')).toMatchObject({ iteration: 3, budget: 3 });
+    expect(ledger.list().find((run) => run.rootId === 'mid-level')).toMatchObject({ iteration: 3, budget: 3 });
     expect(ledger.list(10)[0]).toMatchObject({ iteration: 3, budget: 3 });
   });
 
@@ -168,7 +168,7 @@ describe('swarm progress reads the durable tree, not the row', () => {
     expect(ledger.findRunningSwarms(TASK)).toEqual([
       { rootId: 'mid-level', iteration: 4, budget: 2, epoch: 1 },
     ]);
-    expect(ledger.get('mid-level')).toMatchObject({ iteration: 4, budget: 2, epoch: 1 });
+    expect(ledger.list().find((run) => run.rootId === 'mid-level')).toMatchObject({ iteration: 4, budget: 2, epoch: 1 });
   });
 
   test('touch is the only row write a live swarm makes: heartbeat, fenced on epoch', () => {
@@ -191,7 +191,7 @@ describe('swarm progress reads the durable tree, not the row', () => {
 
     ledger.converge('mid-level', 0, 7_000);
     ledger.touch('mid-level', 0, 8_000);
-    expect(ledger.get('mid-level')).toMatchObject({ status: 'converged' });
+    expect(ledger.list().find((run) => run.rootId === 'mid-level')).toMatchObject({ status: 'converged' });
     expect(sql<{ updated_at: number }>`
       SELECT updated_at FROM mcts_search_runs
       WHERE actor_id = ${actor.actorId} AND root_id = 'mid-level'`[0]?.updated_at).toBe(7_000);
@@ -733,7 +733,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     const rootId = firstRoot(sql)?.root_id ?? '';
     expect(rootId).not.toBe('');
     expect(log.emitted.map((line) => line.event)).toContain('swarm.checkpoint_reached');
-    expect(ledger.get(rootId)).toMatchObject({ status: 'running', iteration: 2, epoch: 0 });
+    expect(ledger.list().find((run) => run.rootId === rootId)).toMatchObject({ status: 'running', iteration: 2, epoch: 0 });
     expect(treeOf(sql).filter((node) => node.depth === 1)).toHaveLength(2);
     expect(treeOf(sql).filter((node) => node.depth === 2)).toHaveLength(0);
     expect(journal.listLive().items.find((run) => run.rootId === rootId)?.running).toBe(FROZEN_NODES);
@@ -860,7 +860,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     // Epoch fencing: attempt one's heartbeat and settle cannot move the row.
     ledger.touch(rootId, 0, Date.now());
     ledger.fail(rootId, 0, Date.now());
-    expect(ledger.get(rootId)).toMatchObject({ status: 'converged', iteration: 4 });
+    expect(ledger.list().find((run) => run.rootId === rootId)).toMatchObject({ status: 'converged', iteration: 4 });
 
     await runner.recoverOrphans();
     expect(jobs.get(jobId)?.status).toBe('completed');
@@ -896,7 +896,7 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
     const rootId = firstRoot(sql)?.root_id ?? '';
     expect(rootId).not.toBe('');
     expect(treeOf(sql)).toHaveLength(1);
-    expect(ledger.get(rootId)).toMatchObject({ status: 'running', iteration: 0, epoch: 0 });
+    expect(ledger.list().find((run) => run.rootId === rootId)).toMatchObject({ status: 'running', iteration: 0, epoch: 0 });
 
     const spawnedIds = sql<{ id: string }>`
       SELECT id FROM head_journal
@@ -966,7 +966,7 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
 
     expect(ledger.list(10).map((row) => row.rootId))
       .toEqual([rootId]);
-    expect(ledger.get(rootId)).toMatchObject({ epoch: 1, iteration: FLAT_SEARCH.branches });
+    expect(ledger.list().find((run) => run.rootId === rootId)).toMatchObject({ epoch: 1, iteration: FLAT_SEARCH.branches });
 
     expect(sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM swarm_node_records WHERE root_id = ${rootId}`[0]?.n)
@@ -1014,7 +1014,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
 
     const rootId = firstRoot(sql)?.root_id ?? '';
     expect(rootId).not.toBe('');
-    expect(ledger.get(rootId)).toMatchObject({ status: 'running' });
+    expect(ledger.list().find((run) => run.rootId === rootId)).toMatchObject({ status: 'running' });
     expect(journal.listLive().items.find((run) => run.rootId === rootId)?.running).toBe(FROZEN_NODES);
 
     const second = nodeModel();
@@ -1147,7 +1147,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
       SELECT COUNT(*) AS n FROM head_journal
       WHERE actor_id = ${rt.actor.actorId}
         AND error_message = ${FORK_INTERRUPTED_REASON}`[0]?.n).toBe(FROZEN_NODES);
-    expect(ledger.get(rootId)?.status).toBe('failed');
+    expect(ledger.list().find((run) => run.rootId === rootId)?.status).toBe('failed');
     // One card, on the activation that settled it.
     expect(agent.enqueued.map((turn) => turn.metadata?.kinuEvent))
       .toEqual([FORK_INTERRUPTED_SIGNAL]);
@@ -1196,7 +1196,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     expect(frozen).toBeInstanceOf(Promise);
     await first.script.frozen;
     const rootId = firstRoot(sql)?.root_id ?? '';
-    expect(ledger.get(rootId)).toMatchObject({ status: 'running' });
+    expect(ledger.list().find((run) => run.rootId === rootId)).toMatchObject({ status: 'running' });
     const agent = idleAgent();
 
     const retired = await reconcileInterruptedForks({
@@ -1207,7 +1207,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     });
 
     expect(retired.map((run) => run.rootId)).toEqual([rootId]);
-    expect(ledger.get(rootId)?.status).toBe('failed');
+    expect(ledger.list().find((run) => run.rootId === rootId)?.status).toBe('failed');
     expect(readForkRun(sql, rt.actor, rootId)?.status).not.toBe('running');
   });
 
@@ -1237,7 +1237,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     });
 
     // Still the re-drive's row: closing it here would fail a search about to continue.
-    expect(ledger.get(rootId)?.status).toBe('running');
+    expect(ledger.list().find((run) => run.rootId === rootId)?.status).toBe('running');
   });
 
   test('a search-only root is offered to the resume gate before closure', async () => {
@@ -1259,7 +1259,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     });
 
     expect(offered).toEqual([['root-search-only']]);
-    expect(ledger.get('root-search-only')?.status).toBe('running');
+    expect(ledger.list().find((run) => run.rootId === 'root-search-only')?.status).toBe('running');
   });
 
   test('a row with no journalled heads closes too, on its own evidence', async () => {
@@ -1278,7 +1278,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
       resume: async () => [],
     });
 
-    expect(ledger.get('root-thought-only')?.status).toBe('failed');
+    expect(ledger.list().find((run) => run.rootId === 'root-thought-only')?.status).toBe('failed');
   });
 
   test('a gate that throws closes nothing', async () => {
@@ -1299,7 +1299,7 @@ describe('the start-of-life sweep closes a swarm row nothing re-drives', () => {
     });
 
     // An unanswered gate is not a refusal.
-    expect(ledger.get('root-ungated')?.status).toBe('running');
+    expect(ledger.list().find((run) => run.rootId === 'root-ungated')?.status).toBe('running');
   });
 });
 
@@ -1417,7 +1417,7 @@ describe('a second search over a task already running is refused', () => {
 
     expect(ledger.list(10).map((row) => row.rootId))
       .toEqual(['root-in-flight']);
-    expect(ledger.get('root-in-flight')).toMatchObject({ status: 'running', epoch: 0 });
+    expect(ledger.list().find((run) => run.rootId === 'root-in-flight')).toMatchObject({ status: 'running', epoch: 0 });
 
     expect(sql<{ id: string }>`SELECT id FROM search_nodes
                                  WHERE actor_id = ${rt.actor.actorId} ORDER BY id`.map((r) => r.id))
@@ -1511,7 +1511,7 @@ describe('the swarm ledger row', () => {
     const realised = realisedOf(store, sql, actor);
     store.observeJudgeEnsemble('some-other-root', 3);
     expect(realised()).toBeNull();
-    expect(store.get('some-other-root')).toBeNull();
+    expect(store.list().find((run) => run.rootId === 'some-other-root')).toBeUndefined();
   });
 
   test('a row whose config will not parse, or carries no budget, refuses instead of resuming', () => {
@@ -1529,6 +1529,6 @@ describe('the swarm ledger row', () => {
     beganSwarm(store, 'r1', 1_000);
     store.reclaim('r1');
     expect(() => beganSwarm(store, 'r1', 2_000)).toThrow();
-    expect(store.get('r1')).toMatchObject({ status: 'running', epoch: 1 });
+    expect(store.list().find((run) => run.rootId === 'r1')).toMatchObject({ status: 'running', epoch: 1 });
   });
 });

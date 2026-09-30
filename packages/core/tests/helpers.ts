@@ -28,12 +28,11 @@ import { createWorkspaceForkSource } from '../src/vfs/workspace-planes';
 import type { ForkFileSource } from '../src/identity/fork';
 import { ConversationSearchStore, type ConversationRecall } from '../src/memory/conversation-search';
 import type { VfsNativeReads } from '../src/vfs/mounts';
-import { initWorkspaceSchema } from '../src/state/workspace-schema';
+import { initActorStateSchema, initWorkspaceSchema } from '../src/state/workspace-schema';
 import { createAgentStores, type AgentStores } from '../src/state/agent-stores';
 import { CraftStore as AgentUtilsCraftStore } from '@kinu.run/agent-utils/stores';
 import { createScaffoldSurface } from '../src/scaffold/surface';
 import { WORKSPACE_IDENTITY_DDL, tableExists } from '../src/identity/schema';
-import { initActorTables } from '../src/state/workspace-schema';
 import { initWorkspaceActorTable, WorkspaceActorDirectory, openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { initAgentConfigTable } from '../src/config/store';
 import { initCodemodeStateTable } from '../src/identity/program-state';
@@ -200,7 +199,7 @@ export function createMemoryCraftStore(db: Database): CraftStore {
  * because the real primary key includes `actor_id`.
  */
 export function createMemorySchedule(db: Database, actor: ActorHandle): Schedule {
-  initActorTables(makeExecRaw(db), makeSql(db));
+  initActorStateSchema({ execRaw: makeExecRaw(db), sql: makeSql(db), exec: makeSqlExec(db), transactionSync: write => db.transaction(write)() });
 
   return {
     after: async (_ms, fn) => { await fn(); },

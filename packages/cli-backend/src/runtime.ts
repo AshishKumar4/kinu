@@ -91,7 +91,6 @@ interface CLIRuntimeOptions {
   agentName?: string;
   providerCredentials?: LocalProviderCredentials;
   oauthStore?: LocalOAuthStore;
-  oauthConfigPath?: string;
   /** Shadow-git checkpoints kept per working directory. */
   checkpointKeep?: number;
 }

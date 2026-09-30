@@ -136,7 +136,7 @@ export function createFileOAuthStore(configPath: string, opts: { fetch?: typeof 
     },
 
     async save(key: string, credential: OAuthCredential): Promise<void> {
-      await withConfigLock(configPath, () => { writeCredential(configPath, key, credential); });
+      await withConfigLock(configPath, () => { writeLogin(configPath, key, credentialToConfig(credential)); });
     },
   };
 }
@@ -164,7 +164,7 @@ function renewUnderLock(
     const [renewal] = await Promise.allSettled([issuer.renewal.refresh(latest, fetchFn)]);
 
     if (renewal.status === 'fulfilled') {
-      writeCredential(configPath, key, renewal.value);
+      writeLogin(configPath, key, credentialToConfig(renewal.value));
 
       return { kind: 'renewed', credential: renewal.value };
     }
@@ -217,19 +217,6 @@ export function signOutChatGptLogin(configPath: string, account: string, opts: {
   });
 }
 
-function writeCredential(configPath: string, key: string, credential: OAuthCredential): void {
-  const { section } = issuerOf(key);
-  const account = accountOf(key);
-  const config = readConfig(configPath);
-  const stored = config.providers?.[section] ?? {};
-
-  const next = account === MAIN_ACCOUNT
-    ? { ...stored, ...credentialToConfig(credential) }
-    : { ...stored, accounts: { ...stored.accounts, [account]: credentialToConfig(credential) } };
-
-  writeConfig(configPath, { ...config, providers: { ...config.providers, [section]: next } });
-}
-
 /** Replaces one login, or removes it (null); the section's other logins and keys stay as they were. */
 function writeLogin(configPath: string, key: string, login: StoredLogin | null): void {
   const { section } = issuerOf(key);
@@ -237,11 +224,12 @@ function writeLogin(configPath: string, key: string, login: StoredLogin | null):
   const config = readConfig(configPath);
   const stored = config.providers?.[section] ?? {};
   const { accessToken: _access, refreshToken: _refresh, expiresAt: _expires, metadata: _metadata, accounts, ...rest } = stored;
-  const others = Object.fromEntries(Object.entries(accounts ?? {}).filter(([name]) => name !== account));
 
   const next = account === MAIN_ACCOUNT
     ? { ...rest, ...login, ...(accounts !== undefined && { accounts }) }
-    : { ...stored, accounts: login === null ? others : { ...others, [account]: login } };
+    : { ...stored, accounts: login === null
+      ? Object.fromEntries(Object.entries(accounts ?? {}).filter(([name]) => name !== account))
+      : { ...accounts, [account]: login } };
 
   const { [section]: _replaced, ...providers } = config.providers ?? {};
 

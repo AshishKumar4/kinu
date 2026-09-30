@@ -6,7 +6,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 
-import { present, testActorHandle } from '@kinu.run/test-utils';
+import { seedTranscriptEntry, present, testActorHandle } from '@kinu.run/test-utils';
 import {
   createTestActor, createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql, makeSqlExec,
 } from './helpers';
@@ -72,7 +72,7 @@ function chatStore(w: { db: Database; sql: SqlExecutor; actor: ActorHandle; vfs:
 /** Appended in order, as a real turn writes. */
 async function seedTranscript(history: SessionHistory, rows: readonly SeedRow[]): Promise<void> {
   for (const row of rows) {
-    await history.record(CHAT_SESSION_ID, {
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, {
       id: row.id, message: { role: row.role, content: row.content },
       origin: row.role === 'user' ? 'input' : 'output',
     });
@@ -309,11 +309,11 @@ describe('agent status', () => {
   test('chat history flattens multi-part content and drops non-chat roles', async () => {
     const w = workspace();
     const { history, transcript } = chatStore(w);
-    await history.record(CHAT_SESSION_ID, {
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, {
       id: 'a', origin: 'input',
       message: { role: 'user', content: [{ type: 'text', text: 'hel' }, { type: 'text', text: 'lo' }] },
     });
-    await history.record(CHAT_SESSION_ID, {
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, {
       id: 'b', origin: 'output',
       message: { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'probe', output: { type: 'text', value: 'not a chat role' } }] },
     });

@@ -102,7 +102,6 @@ export interface HostedActorSeams {
   /** The root's own auto-title round-trip, asked on the hosted actor's behalf. */
   suggestTitle(mission: string): Promise<string | null>;
   taskProfile(turn: HostedTaskTurn): Promise<HostedTaskProfile>;
-  dynamic(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext;
   announce(actor: BoundActor): void;
   /** Drain on a reaction (a child's report). Never for an assignment: `wakesADrain` excludes it. */
   scheduleDrain(actor: BoundActor): void;

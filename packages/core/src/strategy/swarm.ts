@@ -18,7 +18,7 @@ import {
   NAMED_SWARM_PRESETS,
   type NamedSwarmPreset,
   type SwarmPreset,
-} from './swarm-presets';
+} from '../types/swarm';
 
 export {
   NAMED_SWARM_PRESETS,

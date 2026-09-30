@@ -40,6 +40,9 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- **Less redundant state in the runtime.** Fork reception reuses its staged snapshot, overflow compaction keeps one consumable arm, and alternate takes derive their current winner from the chosen answer. Retired test-only store methods, duplicate credential writers and server facades leave the public behavior unchanged.
+- **An overlay checkpoint reads its upper once.** Its fingerprint already gates publication; the extra whole-workspace change scan is gone. Extraction still keeps its own change watermark. Native archives no longer carry SDK backup flags they do not read, and obsolete ergonomics and SDK-exec probes are archived by restore commit.
+- **Local ChatGPT sign-in no longer saves the unused ID token or save timestamp.** Sign-in still verifies the transient ID token and retains its issuer, registration and active tokens.
 - The product flows run once per deploy, against staging after the publish, and no longer on a local `vite dev` server first: under `vite dev` no agent facet loads, and a Worker with Durable Objects gets no version preview URL. A red there still fails the deploy before staging's record, so production never takes the build. The live-app rows that switch to a new agent's tab (the right panel's kept state, and each pane keeping its own transcript) moved into those flows for the same reason. A live-app row that breaks now names the file holding its dev server's output.
 - The Chrome launcher's dead-profile test waits until its stand-in browser runs under the profile's command line before the sweep reads it; a hosted runner's sweep read the process before it had one and removed a profile still in use.
 - The CI job's time cap fits the whole CI tier on a hosted runner (about 28 minutes when every row is green) plus one row's silence bound; the old 25-minute cap cancelled the first all-green run.

@@ -27,7 +27,6 @@ interface CLIOpenOptions {
   llm: LLMProviderConfig | null;
   providerCredentials?: LocalProviderCredentials;
   oauthStore?: LocalOAuthStore;
-  oauthConfigPath?: string;
   cwd?: string | null;
   checkpointKeep?: number;
 }

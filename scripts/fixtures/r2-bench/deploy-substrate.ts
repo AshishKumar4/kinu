@@ -111,12 +111,6 @@ export function runWrangler(
   }
 }
 
-/** Cloudflare derives a container application name from Worker and DO class. */
-export function containerApplicationName(workerName: string, className: string): string {
-  return `${workerName}-${className.toLowerCase()}`;
-}
-
-
 /**
  * Container applications matching `names`, by id.
  *
@@ -183,58 +177,6 @@ export function deleteContainerApps(
   });
 }
 
-/** The tree and generated config that name the Worker, plus the wrangler runner
- *  that carries the two delete calls. */
-export interface WorkerDeletion {
-  readonly repoRoot: string;
-  readonly configPath: string;
-  readonly workerName: string;
-  readonly log: (message: string) => void;
-  readonly wrangle?: typeof runWrangler;
-}
-
-/**
- * Remove the fixture Worker, trying both routes.
- *
- * MEASURED: `delete --config` errored against /workers/services/kinu-r2-bench
- * and left the Worker live on workers.dev, while `delete --name` removed it on
- * the first try. A teardown with one route leaks whenever that route is the one
- * that breaks.
- */
-export function deleteFixtureWorker(deletion: WorkerDeletion): boolean {
-  const { repoRoot, configPath, workerName, log, wrangle = runWrangler } = deletion;
-
-  const configured = wrangle(
-    repoRoot,
-    ['delete', '--config', configPath, '--force'],
-    { allowFailure: true },
-  );
-
-  if (!configured.startsWith(WRANGLER_FAILED)) {
-    log('fixture Worker deleted');
-
-    return true;
-  }
-
-  log(`delete --config failed, falling back to --name: ${configured.slice(0, 160)}`);
-
-  const named = wrangle(
-    repoRoot,
-    ['delete', '--name', workerName, '--force'],
-    { allowFailure: true },
-  );
-
-  if (!wranglerProvesAbsence(named)) {
-    log(`WARNING: the fixture Worker was NOT deleted. Remove it by hand: ${named.slice(0, 300)}`);
-
-    return false;
-  }
-
-  log('fixture Worker deleted or absent');
-
-  return true;
-}
-
 /**
  * Teardown reachable from a signal.
  *
@@ -255,82 +197,6 @@ export async function runTeardownOnce(): Promise<void> {
   if (teardownRan || teardownHook === null) return;
   teardownRan = true;
   await teardownHook();
-}
-
-export function armSignalTeardown(log: (message: string) => void): void {
-  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-    process.on(signal, () => {
-      log(`${signal} received; running teardown before exit`);
-
-      return runTeardownOnce().finally(() => process.exit(130));
-    });
-  }
-}
-
-/** The origin and path the readiness probe calls, and the token it must see
- *  accepted there. */
-export interface TokenReadiness {
-  readonly origin: string;
-  readonly token: string;
-  readonly probePath: string;
-  readonly log: (message: string) => void;
-  readonly deadlineMs?: number;
-}
-
-/**
- * Wait until the deployment accepts THIS run's token.
- *
- * MEASURED: a stable workers.dev hostname means an unauthenticated 401 proves
- * only that SOMETHING is answering — an older deployment 401s identically. A run
- * started on that evidence got 401 back on its own freshly minted token for every
- * arm and recorded failed creates that were nothing of the kind. So the
- * unauthenticated probe stays as a security assertion, and readiness is an
- * AUTHORIZED 200.
- */
-export async function awaitTokenAccepted(readiness: TokenReadiness): Promise<void> {
-  const { origin, token, probePath, log, deadlineMs = 180_000 } = readiness;
-
-  const probe = async (headers?: Record<string, string>): Promise<number | 'unreachable'> => {
-    const init: RequestInit = { signal: AbortSignal.timeout(15_000) };
-
-    if (headers !== undefined) init.headers = headers;
-
-    try {
-      return (await fetch(`${origin}${probePath}`, init)).status;
-    } catch (error) {
-      // TOLERATED AND NAMED: a transport failure here is not a status and must
-      // not be scored as one. During a cold deploy it means "not yet"; past the
-      // deadline the caller reports the origin never came up. Recorded so a
-      // persistent DNS or TLS fault is visible rather than looking like a slow
-      // deploy.
-      log(`readiness probe unreachable: ${describeThrown({ cause: error })}`);
-
-      return 'unreachable';
-    }
-  };
-
-  const unauth = await probe();
-
-  if (unauth === 200) {
-    throw new Error('the fixture answered an unauthenticated request; refusing to run');
-  }
-
-  const deadline = Date.now() + deadlineMs;
-
-  for (;;) {
-    const authed = await probe({ authorization: `Bearer ${token}` });
-
-    if (authed === 200) return;
-
-    if (Date.now() > deadline) {
-      throw new Error(
-        `the deployment never accepted this run's token at ${origin} (last status ${authed}). `
-        + 'A stable workers.dev hostname means an older deployment can answer here.',
-      );
-    }
-
-    await delay(3_000);
-  }
 }
 
 /** What `wrangler containers info <id> --json` is trusted to say about an

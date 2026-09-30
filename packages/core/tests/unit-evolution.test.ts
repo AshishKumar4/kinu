@@ -3,7 +3,7 @@
 import { describe, test, expect } from 'bun:test';
 import * as v from 'valibot';
 import { createTestRuntime } from './helpers';
-import { createTestActors } from '@kinu.run/test-utils';
+import { seedTranscriptEntry, createTestActors } from '@kinu.run/test-utils';
 import { EvolutionEngine } from '../src/evolution/engine';
 import type { EvolutionEvent, CompletedTurn, CompletedSession } from '../src/evolution/types';
 import { DELEGATION_RUBRIC } from '../src/evolution/delegation-features';
@@ -431,8 +431,8 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
   test('applyExplicitFeedback (late thumbs) upserts the ledger and corroborates lessons', async () => {
     const { rt, stores } = createTestRuntime();
     const engine = new EvolutionEngine(rt, stores.history);
-    await stores.history.record('default', { id: 'u1', message: { role: 'user', content: 'the task' }, origin: 'input' });
-    await stores.history.record('default', { id: 'a1', message: { role: 'assistant', content: 'the answer' }, origin: 'output' });
+    await seedTranscriptEntry(stores.history, 'default', { id: 'u1', message: { role: 'user', content: 'the task' }, origin: 'input' });
+    await seedTranscriptEntry(stores.history, 'default', { id: 'a1', message: { role: 'assistant', content: 'the answer' }, origin: 'output' });
     recordLesson(rt.storage.sql, rt.actor, {
       turnIds: ['a1'], text: 'late-corroborated lesson', source: 'turn_reflection', status: 'provisional',
     });

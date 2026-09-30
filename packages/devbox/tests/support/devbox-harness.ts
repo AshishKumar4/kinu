@@ -413,10 +413,6 @@ export class FakeSandbox {
   /** Local files keyed by container path: what the box's `mksquashfs` produced, which a later
    *  `dd` of that path publishes. Not the remote objects in chainStore. */
   readonly stagedArchives = new Map<string, Uint8Array>();
-  /** Bumped by every SDK file write, which is what the real watcher observes; a version a
-   *  caller holds still matches `checkChanges` until such a write. */
-  changeVersion = 0;
-
   /** The SDK's start block (D26): set while the start hook runs, so `deliver` holds every
    *  operation that arrives during the restore until the hook settles. */
   initGate: Promise<void> | undefined;
@@ -908,14 +904,6 @@ export class FakeSandbox {
     return row;
   }
 
-  async readFile(path: string): Promise<{ content: string }> {
-    const content = this.files.get(path);
-
-    if (content === undefined) throw new Error(`File not found: ${path}`);
-
-    return { content };
-  }
-
   /** A write under the work directory also lands in the overlay upper, where an overlayfs
    *  write really goes and what the chain's delta archiver walks. */
   async writeFile(path: string, content: string): Promise<{ success: true; path: string; timestamp: string }> {
@@ -928,7 +916,6 @@ export class FakeSandbox {
     }
 
     this.files.set(path, content);
-    this.changeVersion += 1;
 
     if (path.startsWith('/workspace/')) {
       this.files.set(`/var/tmp/devbox/upper/${path.slice('/workspace/'.length)}`, content);
@@ -944,19 +931,6 @@ export class FakeSandbox {
 
     for (const key of this.directories) if (key === path || key.startsWith(path + '/')) this.directories.delete(key);
     this.stagedArchives.delete(path);
-    this.changeVersion++;
-  }
-
-  /** Models the SDK's retained change state: a held version matches until a write moves it;
-   *  a first call with no `since` establishes the baseline and reports unchanged. */
-  async checkChanges(
-    _path: string,
-    options?: { readonly since?: string },
-  ): Promise<{ success: true; status: 'unchanged' | 'changed'; version: string; timestamp: string }> {
-    const version = `v${String(this.changeVersion)}`;
-    const status = options?.since === undefined || options.since === version ? 'unchanged' : 'changed';
-
-    return { success: true, status, version, timestamp: new Date().toISOString() };
   }
 
   /** The files this container holds under one directory, as the SDK lists
@@ -1041,10 +1015,6 @@ export class FakeSandbox {
     return Promise.resolve(row ?? null);
   }
 
-  listProcesses(): Promise<readonly FakeProcessRow[]> {
-    return Promise.resolve([...this.processes.values()]);
-  }
-
   killProcess(id: string): Promise<void> {
     this.kills.push(id);
     const fault = this.killFaults.shift();
@@ -1080,7 +1050,6 @@ export class FakeSandbox {
     this.layerMounts.clear();
     this.#layerSources.clear();
     this.s3fsMounts.clear();
-    this.changeVersion = 0;
   }
   /** Starting a running container is a health probe, not a new instance: it adds no start,
    *  but the ask is still recorded and an injected fault still fires. */

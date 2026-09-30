@@ -20,7 +20,6 @@ import {
   type SessionEvent,
 } from '@kinu.run/cli-backend';
 import {
-  CONFIG_PATH,
   agentDbPath,
   createOAuthStore,
   loadConfigFile,
@@ -96,7 +95,7 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
   const db = new Database(dbPath);
 
   const openConfig = {
-    llm: llmConfig, providerCredentials, oauthStore, oauthConfigPath: CONFIG_PATH,
+    llm: llmConfig, providerCredentials, oauthStore,
     checkpointKeep: loadConfigFile().checkpointKeep,
     cwd: opts.cwd,
   };

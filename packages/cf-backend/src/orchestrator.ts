@@ -956,7 +956,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       priceAs: (actor, spec) => this.priceHostedModel(actor.handle, spec),
       suggestTitle: (mission) => this.suggestTitle(mission),
       taskProfile: (turn) => this.hostedTaskProfile(turn),
-      dynamic: (actor, profile, tools) => this.hostedActorDynamicContext(actor, profile, tools),
       announce: () => { this.broadcastSubordinatesChanged(); },
       // The root's turns run on this object's own chat loop, not its hosted slot.
       scheduleDrain: (actor) => {
@@ -2300,7 +2299,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         budget: () => this.budget,
         // Owner's revoke path; drops the webhook secret with the row.
         cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
-        armCompactNow: () => { this.compactionState.armCompaction(this.name, 'force'); },
+        armCompactNow: () => { this.compactionState.armCompaction(this.name); },
       })),
     ];
   }

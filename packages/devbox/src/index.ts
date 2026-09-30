@@ -1,6 +1,6 @@
 /** Export a type only when a caller must write its name. */
 
-export { Devbox, type DevboxState, type UntimedResult } from './devbox';
+export { Devbox, type DevboxState } from './devbox';
 
 export { DevboxError, devboxFailure, type DevboxErrorCode } from './errors';
 
