@@ -150,7 +150,7 @@ describe('webhook ingress admits a verified delivery', () => {
     expect(path).toBeString();
 
     if (!path) throw new Error('large webhook body was not spilled');
-    expect(await h.files.get(path)).toContain('x'.repeat(4000));
+    expect(h.files.get(path)).toEqual(new TextEncoder().encode(JSON.stringify({ blob: 'x'.repeat(4000) })));
   });
 
   test('the same signed request is admitted ONCE, across a dedupe-bucket boundary', async () => {

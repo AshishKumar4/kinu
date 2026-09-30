@@ -1,13 +1,11 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The backend a shared behaviour suite runs against is configuration: `KINU_TEST_BACKEND=cf` or `cli`
  * runs one, unset runs both. Each adapter maps a shared operation onto that backend's public method
  * and does nothing else, so a behaviour one backend changes on its own fails in that backend, by name.
  */
 import { Database } from 'bun:sqlite';
-import {
-  initWorkspaceSchema, type ActorHandle, type CheckpointTurnMeta, type EvolutionChangelogView, type LLMProviderConfig,
-  type RefinementRequestView, type SessionHistory, type SqlExecutor, type VFS,
-} from '@kinu.run/core';
+import { initWorkspaceSchema, type ActorHandle, type CheckpointTurnMeta, type EvolutionChangelogView, type LLMProviderConfig, type RefinementRequestView, type SessionHistory, type SqlExecutor } from '@kinu.run/core';
 import { scratchPath, scriptedTurnModel, sqlOver } from '@kinu.run/test-utils';
 import {
   historyOver, orchestratorHarness, workspaceFiles, workspaceMainActor,

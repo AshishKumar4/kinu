@@ -1,12 +1,15 @@
+import { exists, type Awaitable, type VFS, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Workspace plane mount table: the durable workspace tree extended by `/pc` (device tunnel) and `/sandbox`
  * (container), each read through that executor's own `files` VFS so its boundaries still apply.
  * Mount points are absolute; relative paths stay in the workspace, so `pc/x` is a workspace file.
  */
 
-import type { VFS, VfsEntryStat } from '../types/primitives';
+
+import type { CheckpointFiles } from '../types/primitives';
+import { Effect } from 'effect';
 import type { FilesOwner } from '../safety/approval-gate';
-import { renderThrownChain } from '../obs/index';
+import { renderThrownChain, settle } from '../obs/index';
 import { nanoid } from '../utils/nanoid';
 import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 
@@ -64,35 +67,14 @@ export function standardMounts(provider: (name: string) => MountableProvider | u
 	];
 }
 
-function absentError(mount: VfsMount, path: string): Error {
+function absentError(mount: VfsMount, path: string): VfsError {
 	return new VfsError('ENXIO', `/${mount.name}: ${mount.absentReason()}`, path);
-}
-
-/** Native mutations the composite plane forwards where the routed tree has them. */
-export interface VfsNativeMutations {
-	rename(oldPath: string, newPath: string): Promise<void>;
-	removeRecursive(path: string): Promise<void>;
 }
 
 /** `stat` is null for an entry that vanished between the listing and its metadata. */
 export interface VfsListedEntry {
 	readonly name: string;
-	readonly stat: VfsEntryStat | null;
-}
-
-/**
- * `readRange` is a prefix read from `offset` without materializing the file.
- * `readdirStats` returns type and size in one call; the container's `stat` derives from the parent listing.
- */
-export interface VfsNativeReads {
-	readRange(path: string, offset: number, length: number): Promise<Uint8Array>;
-	readdirStats(path: string): Promise<VfsListedEntry[]>;
-}
-
-function nativeOps(files: VFS): Partial<VfsNativeMutations & VfsNativeReads> {
-	const probed: VFS & Partial<VfsNativeMutations & VfsNativeReads> = files;
-
-	return probed;
+	readonly stat: VfsStat | null;
 }
 
 /** Most text held in memory for a bounded view on a plane with no ranged read (viewer preview, tools/file-scan.ts). */
@@ -106,7 +88,7 @@ export async function readBoundedWithVfsOps(
 	files: VFS, path: string, limit: number, size: number | null,
 ): Promise<Uint8Array> {
 	if (limit <= 0) return new Uint8Array(0);
-	const native = nativeOps(files).readRange;
+	const native = files.readRange?.bind(files);
 
 	if (native) return native.call(files, path, 0, limit);
 
@@ -117,9 +99,7 @@ export async function readBoundedWithVfsOps(
 			path,);
 	}
 
-	const raw = await files.readFile(path);
-
-	return raw instanceof Uint8Array ? raw : new TextEncoder().encode(raw);
+	return files.readFile(path);
 }
 
 /**
@@ -127,7 +107,7 @@ export async function readBoundedWithVfsOps(
  * A window opening mid-sequence drops the continuation bytes.
  */
 export async function readTailWithVfsOps(
-	files: VFS & Pick<VfsNativeReads, 'readRange'>, path: string, bytes: number,
+	files: VFS & Required<Pick<VFS, 'readRange'>>, path: string, bytes: number,
 ): Promise<string | null> {
 	const stat = await files.stat(path);
 
@@ -148,19 +128,16 @@ export async function readTailWithVfsOps(
  * Stats run concurrently; ENOENT on a child answers `stat: null`, any other error propagates.
  */
 export async function listWithVfsOps(files: VFS, dir: string): Promise<VfsListedEntry[]> {
-	const native = nativeOps(files).readdirStats;
+	const entries = await files.readdir(dir);
 
-	if (native) return native.call(files, dir);
-	const names = await files.readdir(dir);
-
-	return Promise.all(names.map(async (name) => {
-		const child = dir === '/' ? `/${name}` : `${dir}/${name}`;
+	return Promise.all(entries.map(async (entry) => {
+		const child = dir === '/' ? `/${entry.name}` : `${dir}/${entry.name}`;
 
 		try {
-			return { name, stat: await files.stat(child) };
+			return { name: entry.name, stat: entry.stat ?? await files.stat(child) };
 		} catch (cause) {
 			// The plane's own code, never prose matching.
-			if (isVfsError(cause) && cause.code === 'ENOENT') return { name, stat: null };
+			if (isVfsError(cause) && cause.code === 'ENOENT') return { name: entry.name, stat: null };
 			throw cause;
 		}
 	}));
@@ -198,9 +175,9 @@ export async function removeTreeWithVfsOps(files: VFS, path: string): Promise<Tr
 
 		order.push(current);
 
-		if (currentStat.isDir) {
-			for (const name of await files.readdir(current)) {
-				pending.push(current === '/' ? `/${name}` : `${current}/${name}`);
+		if ((currentStat.type === 'directory')) {
+			for (const entry of await files.readdir(current)) {
+				pending.push(current === '/' ? `/${entry.name}` : `${current}/${entry.name}`);
 			}
 		}
 	}
@@ -256,7 +233,7 @@ export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promi
 
 	if (!sourceStat) throw new VfsError('ENOENT', 'no such file or directory', from.path);
 
-	if (sourceStat.isDir) {
+	if ((sourceStat.type === 'directory')) {
 		throw new VfsError('EPERM',
 			'a directory cannot be renamed here: this plane has no native rename, and only a file\'s bytes can be carried',
 			from.path,);
@@ -264,14 +241,14 @@ export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promi
 
 	const payload = await from.files.readFile(from.path);
 	const temp = siblingPath(to.path, 'carry', nanoid(10));
-	const destinationExisted = await to.files.exists(to.path);
-	const native = nativeOps(to.files).rename;
+	const destinationExisted = await exists(to.files, to.path);
+	const native = to.files.rename?.bind(to.files);
 	// Without native rename the destination is overwritten in place, so it must be read first to be restorable.
 	const destinationBytes = destinationExisted && !native ? await to.files.readFile(to.path) : null;
 
 	await to.files.writeFile(temp, payload);
 
-	if (!(await to.files.exists(temp))) {
+	if (!(await exists(to.files, temp))) {
 		throw new VfsError('EIO', `the staged copy at ${temp} is not there after writing it`, from.path);
 	}
 
@@ -284,7 +261,7 @@ export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promi
 			await to.files.writeFile(to.path, payload);
 
 			// The staged copy is the last witness, so the destination is confirmed before it goes.
-			if (!(await to.files.exists(to.path))) {
+			if (!(await exists(to.files, to.path))) {
 				throw new VfsError('EIO', `the copy at ${to.path} is not there after writing it`, to.path);
 			}
 
@@ -293,11 +270,11 @@ export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promi
 	} catch (cause) {
 		try {
 			if (destinationBytes !== null) await to.files.writeFile(to.path, destinationBytes);
-			else if (!destinationExisted && await to.files.exists(to.path)) await to.files.unlink(to.path);
+			else if (!destinationExisted && await exists(to.files, to.path)) await to.files.unlink(to.path);
 
-			if (!(await from.files.exists(from.path))) await from.files.writeFile(from.path, payload);
+			if (!(await exists(from.files, from.path))) await from.files.writeFile(from.path, payload);
 
-			if (await to.files.exists(temp)) await to.files.unlink(temp);
+			if (await exists(to.files, temp)) await to.files.unlink(temp);
 		} catch (rollback) {
 			throw new VfsError('EIO', `the rename failed (${renderThrownChain({ cause })}) and rollback failed (${renderThrownChain({ cause: rollback })})`, to.path, { cause: rollback });
 		}
@@ -325,7 +302,7 @@ export interface VfsMountRouting {
 	userRoots(): readonly string[];
 }
 
-export type MountedVfs = VFS & VfsNativeMutations & VfsNativeReads & VfsMountRouting;
+export type MountedVfs = VFS & Required<Pick<VFS, 'rename' | 'removeRecursive' | 'readRange'>> & VfsMountRouting & CheckpointFiles;
 
 /**
  * `base` extended by `mounts`. Mount routes delegate with the prefix stripped; an absent mount refuses with
@@ -392,7 +369,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 		return { mount, native: segments.length === 0 ? '/' : `/${segments.join('/')}` };
 	};
 
-	const delegate = async <T>(path: string, op: (files: VFS, native: string) => Promise<T>): Promise<T> => {
+	const delegate = async <T>(path: string, op: (files: VFS, native: string) => Awaitable<T>): Promise<T> => {
 		const routed = routeOf(path);
 
 		if (!('mount' in routed)) return op(base, path);
@@ -413,7 +390,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 
 	/** Mutating a mount point is EPERM, which outranks an absent mount. */
 	const mutate = async <T>(
-		path: string, operation: string, op: (files: VFS, native: string) => Promise<T>,
+		path: string, operation: string, op: (files: VFS, native: string) => Awaitable<T>,
 	): Promise<T> => {
 		const routed = routeOf(path);
 
@@ -435,8 +412,8 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 		mountPoints,
 		mounts: () => [...byName.values()],
 		userRoots: () => userRoots,
-		readFile(path, opts) {
-			return delegate(path, (files, native) => files.readFile(native, opts));
+		readFile(path) {
+			return delegate(path, (files, native) => files.readFile(native));
 		},
 		readFileAtRevision(path, revision, range) {
 			return delegate(path, (files, native) => {
@@ -450,7 +427,9 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 		},
 		writeFileWithReport(path, data) {
 			return mutate(path, 'written', async (files, native) => {
-				if (files.writeFileWithReport) return files.writeFileWithReport(native, data);
+				const reporting: VFS & CheckpointFiles = files;
+
+				if (reporting.writeFileWithReport) return reporting.writeFileWithReport(native, data);
 				await files.writeFile(native, data);
 
 				return null;
@@ -471,23 +450,24 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 			return delegate(path, async (files, native) => {
 				const entries = await files.readdir(native);
 
-				// Only the true root lists mount points, and only live ones.
-				return path === '/' ? [...new Set([...entries, ...mountPoints()])] : entries;
+				if (path !== '/') return entries;
+				const named = new Set(entries.map((entry) => entry.name));
+
+				return [...entries, ...mountPoints().filter((name) => !named.has(name)).map((name) => ({ name, type: 'directory' as const, stat: MOUNT_POINT_STAT }))];
 			});
 		},
-		async stat(path) {
+		async stat(path, options) {
 			const routed = routeOf(path);
 
-			if (!('mount' in routed)) return base.stat(path);
+			if (!('mount' in routed)) return base.stat(path, options);
 			const files = routed.mount.files();
 
-			// Null, not an error, so an existence probe does not fail.
-			if (!files) return null;
+			if (!files) return settle(Effect.fail(absentError(routed.mount, path)));
 
 			// Some trees cannot stat their own root (the container derives stat from the parent listing).
 			if (routed.native === '/') return MOUNT_POINT_STAT;
 
-			return files.stat(routed.native);
+			return files.stat(routed.native, options);
 		},
 		unlink(path) {
 			return mutate(path, 'unlinked', (files, native) => files.unlink(native));
@@ -502,14 +482,6 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 			}
 
 			return mutate(path, 'created', (files, native) => files.mkdir(native, opts));
-		},
-		async exists(path) {
-			const routed = routeOf(path);
-
-			if (!('mount' in routed)) return base.exists(path);
-			const files = routed.mount.files();
-
-			return files ? files.exists(routed.native) : false;
 		},
 		async rename(oldPath, newPath) {
 			const from = routeOf(oldPath);
@@ -527,7 +499,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 				}
 
 				const files = filesForMount(from.mount, oldPath);
-				const native = nativeOps(files).rename;
+				const native = files.rename?.bind(files);
 
 				if (native) return native.call(files, from.native, to.native);
 				await carryFileWithVfsOps(
@@ -548,14 +520,14 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 				throw new VfsError('EPERM', 'cannot rename across VFS mount boundaries', oldPath);
 			}
 
-			const native = nativeOps(base).rename;
+			const native = base.rename?.bind(base);
 
 			if (native) return native.call(base, oldPath, newPath);
 			const st = await base.stat(oldPath);
 
 			if (!st) throw new VfsError('ENOENT', 'no such file or directory', oldPath);
 
-			if (st.isDir) {
+			if ((st.type === 'directory')) {
 				throw new VfsError('EPERM', 'a directory cannot be renamed here: this route has no native rename, and only a file\'s bytes can be carried', oldPath);
 			}
 
@@ -566,7 +538,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 		},
 		removeRecursive(path) {
 			return mutate(path, 'removed', async (files, native) => {
-				const remove = nativeOps(files).removeRecursive;
+				const remove = files.removeRecursive?.bind(files);
 
 				if (remove) return remove.call(files, native);
 
@@ -583,7 +555,7 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 		// A plane with no ranged read refuses rather than whole-reading; only `readBoundedWithVfsOps` may whole-read.
 		readRange(path, offset, length) {
 			return delegate(path, (files, native) => {
-				const range = nativeOps(files).readRange;
+				const range = files.readRange?.bind(files);
 
 				// ENOTSUP, not EPERM: callers like the `file` scan fall back on this code.
 				if (!range) throw new VfsError('ENOTSUP', 'this plane serves no ranged read', path);
@@ -591,50 +563,16 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 				return range.call(files, native, offset, length);
 			});
 		},
-		readdirStats(path) {
-			return delegate(path, async (files, native) => {
-				const listed = await listWithVfsOps(files, native);
-
-				if (path !== '/') return listed;
-				const named = new Set(listed.map((entry) => entry.name));
-
-				return [
-					...listed,
-					...mountPoints().filter((name) => !named.has(name)).map((name) => ({ name, stat: MOUNT_POINT_STAT })),
-				];
-			});
-		},
 	};
 
-	const baseLstat = base.lstat?.bind(base);
+	table.readlink = (path) => delegate(path, async (files, native) => {
+		if (!files.readlink) throw new VfsError('ENOTSUP', 'this plane serves no readlink', path);
 
-	// Only a base that tells a link from its target gives the table an lstat.
-	if (baseLstat !== undefined) {
-		table.lstat = async (path) => {
-			const routed = routeOf(path);
+		return files.readlink(native);
+	});
 
-			if (!('mount' in routed)) return baseLstat(path);
-			const files = routed.mount.files();
-
-			if (!files) return null;
-
-			if (routed.native === '/') return { ...MOUNT_POINT_STAT, isSymlink: false };
-
-			if (files.lstat) return files.lstat(routed.native);
-			const stat = await files.stat(routed.native);
-
-			return stat && { ...stat, isSymlink: false };
-		};
-
-		// A mount with no readlink reports no link, so none is asked of it.
-		table.readlink = (path) => delegate(path, async (files, native) => {
-			if (!files.readlink) throw new VfsError('ENOTSUP', 'this plane serves no readlink', path);
-
-			return files.readlink(native);
-		});
-	}
 
 	return table;
 }
 
-const MOUNT_POINT_STAT: VfsEntryStat = { size: 0, mtimeMs: 0, isDir: true };
+const MOUNT_POINT_STAT: VfsStat = { size: 0, mtimeMs: 0, type: 'directory' };

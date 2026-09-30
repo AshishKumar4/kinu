@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Canonical conversation seeding for the fork suites, through the production
  * writers rather than hand INSERTs, so what a fork reads is what a turn wrote.
@@ -172,7 +173,7 @@ export async function seedForkSource(workspace: TestWorkspace, opts: {
   if (memory.length > 0) await workspace.vfs.mkdir('memory', { recursive: true });
 
   for (const [index, file] of memory.entries()) {
-    await workspace.vfs.writeFile(file.path, file.text);
+    await writeText(workspace.vfs, file.path, file.text);
     void workspace.sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text)
       VALUES (${`chunk-${index}`}, ${file.path}, ${1}, ${2}, ${`hash-${index}`}, ${file.text})`;
   }

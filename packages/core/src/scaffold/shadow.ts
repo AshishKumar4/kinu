@@ -1,3 +1,4 @@
+import { exists, readText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Shadow-mode scaffold rollout. A pending version is judged against the current
  * one on sampled turns until `decidePromotion` is conclusive.
@@ -368,9 +369,9 @@ export async function readVersionedScaffoldSource(rt: AgentRuntime, version: num
   const versioned = `${rt.identity.scaffold.path}.v${version}`;
   const scaffoldVfs = rt.agentStateVfs ?? rt.storage.vfs;
 
-  if (!await scaffoldVfs.exists(versioned)) return null;
+  if (!await exists(scaffoldVfs, versioned)) return null;
 
-  return v.parse(v.string(), await scaffoldVfs.readFile(versioned, { encoding: 'utf8' }));
+  return v.parse(v.string(), await readText(scaffoldVfs, versioned));
 }
 
 /** Prefers the canonical `agent.js.v{N}` file; the live file holds the current version, not a pending one. */

@@ -1,8 +1,9 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // Map-backed VFS; `mkdir` surfaces EEXIST on repeat unless recursive, like the real backends.
-import type { VFS, VfsNativeReads } from '@kinu.run/core';
+
 
 export interface MemoryVfs {
-  vfs: VFS & Pick<VfsNativeReads, 'readRange'>;
+  vfs: VFS & Required<Pick<VFS, 'readRange'>>;
   /** Written files, by absolute path — assert spill contents through this. */
   files: Map<string, string | Uint8Array>;
 }
@@ -11,13 +12,13 @@ export function createMemoryVfs(): MemoryVfs {
   const files = new Map<string, string | Uint8Array>();
   const dirs = new Set<string>();
 
-  const vfs: VFS & Pick<VfsNativeReads, 'readRange'> = {
+  const vfs: VFS & Required<Pick<VFS, 'readRange'>> = {
     readFile: async (path) => {
       const content = files.get(path);
 
       if (content === undefined) throw new Error(`ENOENT: ${path}`);
 
-      return content instanceof Uint8Array ? content.slice() : content;
+      return content instanceof Uint8Array ? content.slice() : new TextEncoder().encode(content);
     },
     /** Real prefix read, so callers exercise the ranged-read branch, not the no-ranged-read one. */
     readRange: async (path, offset, length) => {
@@ -34,13 +35,13 @@ export function createMemoryVfs(): MemoryVfs {
     },
     readdir: async (path) => [...files.keys()]
       .filter((f) => f.startsWith(`${path}/`))
-      .map((f) => f.slice(path.length + 1)),
+      .map((f) => ({ name: f.slice(path.length + 1), type: 'file' })),
     stat: async (path) => {
       const content = files.get(path);
 
-      if (content === undefined) return dirs.has(path) ? { size: 0, mtimeMs: 0, isDir: true } : null;
+      if (content === undefined) return dirs.has(path) ? { size: 0, mtimeMs: 0, type: 'directory' } : null;
 
-      return { size: content instanceof Uint8Array ? content.byteLength : new TextEncoder().encode(content).byteLength, mtimeMs: 0, isDir: false };
+      return { size: content instanceof Uint8Array ? content.byteLength : new TextEncoder().encode(content).byteLength, mtimeMs: 0, type: 'file' };
     },
     unlink: async (path) => { files.delete(path); },
     mkdir: async (path, opts) => {
@@ -49,7 +50,7 @@ export function createMemoryVfs(): MemoryVfs {
       if (dirs.has(path)) throw new Error(`EEXIST: directory exists ${path}`);
       dirs.add(path);
     },
-    exists: async (path) => files.has(path) || dirs.has(path),
+
   };
 
   return { vfs, files };

@@ -1,3 +1,4 @@
+import { exists, type VFS, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The file manager's read/write surface, one executor at a time, each in its own native paths
  * (the agent-facing merge is `vfs/mounts.ts`). Errors are values so the pane can render them.
@@ -7,12 +8,11 @@ import { normalizePath } from '@kinu.run/agent-utils';
 import {
   MOUNT_EXECUTORS, RESIDENT_TEXT_MAX_BYTES, carryFileWithVfsOps, listWithVfsOps,
   readBoundedWithVfsOps, partialTreeRemovalMessage, removeTreeWithVfsOps,
-  type VfsNativeMutations,
 } from '../vfs/mounts';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { inlineFileType } from './file-types';
 import { isSystemManaged } from '../vfs/workspace-path';
-import type { VFS, VfsRevision } from '../types/primitives';
+
 import { Effect } from 'effect';
 import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, type Refusal } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';
@@ -397,7 +397,7 @@ export function getExecutorFiles(
 
     // A null `stat` is one unreadable child, not a failed listing.
     const entries: DirEntry[] = listed.filter(({ name }) => !isSystemManaged(name)).map(({ name, stat }) => ({
-      name, type: stat?.isDir ? 'dir' : 'file', size: stat?.size, mtimeMs: stat?.mtimeMs,
+      name, type: stat?.type === 'directory' ? 'dir' : 'file', size: stat?.size, mtimeMs: stat?.mtimeMs,
     }));
 
     // Each ancestor of home lists the next segment down: on a fresh workspace nothing above home
@@ -432,15 +432,17 @@ export function readExecutorFile(
   return settle(orError(step(async (): Promise<ExecutorTextFile> => {
     const stat = await vfs.stat(path);
 
-    if (stat?.isDir) return { error: 'path is a directory' };
+    if (stat === null) return { error: `no such file or directory: ${path}` };
+
+    if (stat?.type === 'directory') return { error: 'path is a directory' };
     const inlineType = inlineFileType(path);
 
     if (inlineType !== undefined) {
       return { error: `${inlineType} is not text: this file is shown and downloaded as bytes` };
     }
 
-    const window = stat === null ? RESIDENT_TEXT_MAX_BYTES : Math.min(stat.size, RESIDENT_TEXT_MAX_BYTES);
-    const bytes = await readBoundedWithVfsOps(vfs, path, window, stat?.size ?? null);
+    const window = Math.min(stat.size, RESIDENT_TEXT_MAX_BYTES);
+    const bytes = await readBoundedWithVfsOps(vfs, path, window, stat.size);
 
     if (bytes.includes(0)) return { error: 'binary file, not previewable' };
 
@@ -497,7 +499,7 @@ export function writeExecutorFileOp(
     });
   }
 
-  return settle(step(() => conditional(path, bytes, expectedRevision)).pipe(Effect.match({
+  return settle(step(async () => conditional(path, bytes, expectedRevision)).pipe(Effect.match({
     onSuccess: (result): ExecutorWriteResult => (result.ok
       ? { ok: true, revision: result.revision }
       : { conflict: true, revision: result.revision }),
@@ -520,10 +522,9 @@ export function readExecutorFileBytes(
   return settle(orError(step(async (): Promise<{ bytes: Uint8Array } | { error: string }> => {
     const stat = await vfs.stat(path);
 
-    if (stat?.isDir) return { error: 'path is a directory' };
-    const raw = await vfs.readFile(path);
+    if (stat?.type === 'directory') return { error: 'path is a directory' };
 
-    return { bytes: raw instanceof Uint8Array ? raw : new TextEncoder().encode(raw) };
+    return { bytes: await vfs.readFile(path) };
   })));
 }
 
@@ -542,16 +543,10 @@ export function statExecutorFile(
 
     if (!stat) return { error: `no such file: ${path}` };
 
-    if (stat.isDir) return { error: 'path is a directory' };
+    if ((stat.type === 'directory')) return { error: 'path is a directory' };
 
     return { size: stat.size };
   })));
-}
-
-function nativeMutations(vfs: VFS): Partial<VfsNativeMutations> {
-  const probed: VFS & Partial<VfsNativeMutations> = vfs;
-
-  return probed;
 }
 
 /** Native rename where available, else a confirmed byte carry for files (directories refused).
@@ -575,8 +570,8 @@ export function renameExecutorPathOp(
   if (!vfs) return Promise.resolve({ error: `Executor "${executorId}" has no file plane` });
 
   return settle(orError(step(async (): Promise<ExecutorWriteResult> => {
-    if (await vfs.exists(to)) return { error: `${to} already exists` };
-    const native = nativeMutations(vfs).rename;
+    if (await exists(vfs, to)) return { error: `${to} already exists` };
+    const native = vfs.rename?.bind(vfs);
 
     if (native) {
       await native.call(vfs, from, to);
@@ -588,7 +583,7 @@ export function renameExecutorPathOp(
 
     if (!stat) return { error: `no such file or directory: ${from}` };
 
-    if (stat.isDir) return { error: 'this environment cannot rename a directory in place' };
+    if ((stat.type === 'directory')) return { error: 'this environment cannot rename a directory in place' };
     await carryFileWithVfsOps({ files: vfs, path: from }, { files: vfs, path: to });
 
     return { ok: true };
@@ -615,13 +610,13 @@ export function deleteExecutorPathOp(
 
     if (!stat) return { error: `no such file or directory: ${path}` };
 
-    if (!stat.isDir) {
+    if (!(stat.type === 'directory')) {
       await vfs.unlink(path);
 
       return { ok: true };
     }
 
-    const native = nativeMutations(vfs).removeRecursive;
+    const native = vfs.removeRecursive?.bind(vfs);
 
     if (native) {
       await native.call(vfs, path);

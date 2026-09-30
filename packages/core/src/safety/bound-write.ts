@@ -1,5 +1,6 @@
+import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
-import type { VFS } from '../types/primitives';
+
 import { sha256Hex } from './argument-digest';
 
 export interface BoundFileWrite {
@@ -38,7 +39,7 @@ export function boundWriteOf(command: string): BoundFileWrite | null {
 export const asBytes = (data: string | Uint8Array): Uint8Array => (v.is(v.string(), data) ? new TextEncoder().encode(data) : data);
 
 export async function currentBytes(plane: VFS, path: string): Promise<Uint8Array | null> {
-  return await plane.exists(path) ? asBytes(await plane.readFile(path)) : null;
+  return await exists(plane, path) ? asBytes(await plane.readFile(path)) : null;
 }
 
 /** Only over the file asked about; no plane offers compare-and-write, so a change between the compare and the write

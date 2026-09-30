@@ -1,4 +1,5 @@
-import { CHAT_SESSION_ID, readSessionTranscript, type ActorHandle, type SqlExecutor, type VFS } from '@kinu.run/core';
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { CHAT_SESSION_ID, readSessionTranscript, type ActorHandle, type SqlExecutor } from '@kinu.run/core';
 
 export interface TranscriptRow {
   readonly id: string;

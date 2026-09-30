@@ -1,9 +1,9 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { diffLines, fileDiff, type FileDiff, type FileStatus, type Omitted } from '../vfs/diff';
 import { BODY_MAX_BYTES } from './workspace-diff';
 import { sha256Hex } from '../safety/argument-digest';
 import { currentBytes, type WriteSubject } from '../safety/bound-write';
 import type { DeferredApprovalQueue } from '../safety/deferred-approval';
-import type { VFS } from '../types/primitives';
 import { Effect } from 'effect';
 import { KinuError, settle } from '../obs/index';
 

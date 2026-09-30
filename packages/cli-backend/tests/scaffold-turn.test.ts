@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // The mutable scaffold on a local workspace through LocalAgentSession: a promoted scaffold drives the turn,
 // and a pending proposal resolves, so maybeEvolveScaffold's pending guard cannot deadlock the loop.
 import { describe, test, expect } from 'bun:test';
@@ -78,7 +79,7 @@ async function installScaffold(
   rt: AgentRuntime,
   opts: { version: number; status: 'current' | 'pending'; code: string },
 ): Promise<void> {
-  await rt.storage.vfs.writeFile(`scaffold/agent.js.v${opts.version}`, opts.code);
+  await writeText(rt.storage.vfs, `scaffold/agent.js.v${opts.version}`, opts.code);
 
   if (opts.status === 'current') await rt.identity.scaffold.write(opts.code);
   void rt.storage.sql`

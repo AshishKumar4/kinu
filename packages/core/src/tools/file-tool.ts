@@ -1,3 +1,4 @@
+import { type VFS, type VfsRevision, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * `file` — the built-in file plane: read, edit, write, all through `rt.toolFiles`.
  * No second filesystem path; another environment is reached through its own namespace.
@@ -9,7 +10,7 @@ import type { ToolSet } from 'ai';
 import * as v from 'valibot';
 import { z } from 'zod';
 import { oneOf } from './tool-schema';
-import type { Memory, VFS, VfsRevision, VfsWriteReport } from '../types/primitives';
+import type { CheckpointFiles, Memory, VfsWriteReport } from '../types/primitives';
 import type { TurnContextBudget } from '../context-budget';
 import { vfsAddressingHint } from '@kinu.run/agent-utils/vfs';
 import { isVfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
@@ -53,7 +54,7 @@ function boundListing(path: string, entries: readonly string[]): JsonValue {
 }
 
 export interface FileToolDeps {
-  vfs: VFS;
+  vfs: VFS & CheckpointFiles;
   ledger: TurnFileLedger;
   /** The turn-cumulative bulk budget; a file read counts as bulk. */
   budget: TurnContextBudget;
@@ -178,8 +179,8 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
     if (dir) await ensureDir(vfs, dir);
 
     if (expected === undefined) {
-      if (vfs.writeFileWithReport) report = await vfs.writeFileWithReport(path, content);
-      else await vfs.writeFile(path, content);
+      if (vfs.writeFileWithReport) report = await vfs.writeFileWithReport(path, new TextEncoder().encode(content));
+      else await writeText(vfs, path, content);
       observe();
     } else {
       if (!vfs.writeFileIfRevision) throw new KinuError('unsupported', 'versioned edits require revision-checked writes');
@@ -238,12 +239,12 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
 
     switch (args.action) {
       case 'list':
-        return inspect('list', path, async () => boundListing(path, await vfs.readdir(path)));
+        return inspect('list', path, async () => boundListing(path, (await vfs.readdir(path)).map(({ name }) => name)));
       case 'stat':
         return inspect('stat', path, async () => {
           const stat = await vfs.stat(path);
 
-          return stat === null ? null : { path, size: stat.size, mtimeMs: stat.mtimeMs, isDir: stat.isDir };
+          return stat === null ? null : { path, size: stat.size, mtimeMs: stat.mtimeMs, isDir: (stat.type === 'directory') };
         });
       case 'search': {
         const query = QuerySchema.safeParse(args.query);

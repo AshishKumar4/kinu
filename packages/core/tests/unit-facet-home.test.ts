@@ -1,3 +1,4 @@
+import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Every facet kind (subordinate, head, swarm node) gets a home: owned inodes, a private `/tmp`,
  * and a readable window for grading and merge-back, on both the file and shell planes.
@@ -92,20 +93,20 @@ describe('a subordinate and a head provision like a node', () => {
       const asSub = await bundle.asAgent(sub);
       const asHead = await bundle.asAgent(head);
 
-      await asSub.vfs.writeFile(`${sub.home}/plan.md`, 'my plan\n');
-      expect(await asSub.vfs.readFile(`${sub.home}/plan.md`, { encoding: 'utf8' })).toBe('my plan\n');
+      await writeText(asSub.vfs, `${sub.home}/plan.md`, 'my plan\n');
+      expect(await readText(asSub.vfs, `${sub.home}/plan.md`)).toBe('my plan\n');
 
-      expect(await asHead.vfs.readFile(`${sub.home}/plan.md`, { encoding: 'utf8' })).toBe('my plan\n');
+      expect(await readText(asHead.vfs, `${sub.home}/plan.md`)).toBe('my plan\n');
 
-      await expect(asHead.vfs.writeFile(`${sub.home}/plan.md`, 'stolen'))
+      await expect(writeText(asHead.vfs, `${sub.home}/plan.md`, 'stolen'))
         .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
       const refused = await asHead.shell.exec(`echo leak > ${sub.home}/leak.txt`);
       expect(refused.exitCode).not.toBe(0);
-      expect(await asSub.vfs.exists(`${sub.home}/leak.txt`)).toBe(false);
+      expect(await exists(asSub.vfs, `${sub.home}/leak.txt`)).toBe(false);
 
       expect(await asSub.shell.exec('echo scratch > /tmp/pad.txt')).toMatchObject({ exitCode: 0 });
       expect(await asHead.vfs.stat('/tmp/pad.txt')).toBeNull();
-      expect(await asSub.vfs.readFile('/tmp/pad.txt', { encoding: 'utf8' })).toBe('scratch\n');
+      expect(await readText(asSub.vfs, '/tmp/pad.txt')).toBe('scratch\n');
     } finally {
       database.close();
     }

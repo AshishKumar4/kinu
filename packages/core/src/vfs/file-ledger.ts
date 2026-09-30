@@ -1,3 +1,4 @@
+import type { VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Per-turn file ledger: read-before-write gating and per-edit outcome counts.
  * A `write` that overwrites needs the whole file read (contiguous prefix coverage); an `edit` needs only part.
@@ -5,7 +6,7 @@
 
 import { fnv1a64 } from '../utils/fnv1a';
 import { lineCount } from '../utils/text';
-import type { VfsRevision } from '../types/primitives';
+
 import type { FileEditOutcomeReason, FileEditSnapshot } from '../types/file-edits';
 import { countSharedWrite, newWriteAuthor } from '../obs/msg-counters';
 

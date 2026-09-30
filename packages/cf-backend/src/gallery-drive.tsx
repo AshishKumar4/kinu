@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Gallery Drive frames on an in-memory tenant running the core Drive rules; `/api/shared` answers a fixed library. */
 import { lazy, Suspense } from "react";
 import { Loader } from "@cloudflare/kumo";
@@ -36,7 +37,7 @@ const DEPLOY_SCRIPT = [
 
 async function seededDrive(): Promise<MossaicVfs> {
   const drive = mossaicVfs(fakeMossaic().tenant("gallery-owner"));
-  const write = (path: string, text: string) => drive.writeFile(path, text);
+  const write = (path: string, text: string) => writeText(drive, path, text);
 
   await write("/README.md", "# Drive\n\nShared across every workspace.\n");
   await write("/data/customers.csv", CUSTOMERS);
@@ -136,7 +137,7 @@ async function serveDrive(drive: MossaicVfs, request: Request): Promise<Response
         const stat = await drive.stat(path);
 
         if (stat === null) throw new KinuError("missing", `no such entry: ${path}`);
-        const bytes = stat.isDir ? await packDriveFolder(drive, path, 64 * 1024 * 1024) : await drive.readFile(path);
+        const bytes = (stat.type === 'directory') ? await packDriveFolder(drive, path, 64 * 1024 * 1024) : await drive.readFile(path);
         const owned = new Uint8Array(new ArrayBuffer(bytes.length));
         owned.set(bytes instanceof Uint8Array ? bytes : new TextEncoder().encode(bytes));
 

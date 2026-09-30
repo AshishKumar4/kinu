@@ -1,10 +1,11 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // The MEMORY.md tail is a bounded read: byte-identical to slicing the whole file,
 // and the store is asked for the window only.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createWorkspaceBundle, createMemoryMemory } from './helpers';
 import { readMemoryTail, MEMORY_TAIL_MAX_CHARS } from '../src/memory/note';
-import type { WorkspaceVFS } from '../src/vfs/nimbus-workspace';
+import type { WorkspaceBundle } from '../src/vfs/nimbus-workspace';
 
 /** The file as the agent's shell and the owner's Files view address it; the product names it relative to the workspace. */
 const PATH = '/home/user/memory/MEMORY.md';
@@ -14,11 +15,11 @@ function seeded(content: string | null) {
   const files = createWorkspaceBundle(db).vfs;
   let bytesRead = 0;
 
-  const counted: WorkspaceVFS = {
+  const counted: WorkspaceBundle['vfs'] = {
     ...files,
-    async readFile(path, opts) {
-      const raw = await files.readFile(path, opts);
-      bytesRead += raw instanceof Uint8Array ? raw.byteLength : new TextEncoder().encode(raw).byteLength;
+    async readFile(path) {
+      const raw = await files.readFile(path);
+      bytesRead += raw.byteLength;
 
       return raw;
     },
@@ -34,7 +35,7 @@ function seeded(content: string | null) {
 
   const ready = content === null
     ? Promise.resolve()
-    : files.mkdir('memory', { recursive: true }).then(() => files.writeFile(PATH, content));
+    : Promise.resolve(files.mkdir('memory', { recursive: true })).then(() => writeText(files, PATH, content));
 
   return { memory, ready, bytesRead: () => bytesRead };
 }

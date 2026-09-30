@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Frames must carry the cut's conversation, stay within the frame budget, and carry an oversized row alone. */
 
 import { describe, expect, test } from 'bun:test';
@@ -139,7 +140,7 @@ describe('forkTransferFrames source streamer', () => {
     // An unsplittable inline row crosses alone rather than being refused.
     const inline = 'x'.repeat(INLINE_PAYLOAD_BYTES - 200);
     await chat.say({ id: 'm4', role: 'user', text: inline });
-    await ws.vfs.writeFile('memory/large.md', 'y'.repeat(1_000_000));
+    await writeText(ws.vfs, 'memory/large.md', 'y'.repeat(1_000_000));
 
     const frames = await framesFor(ws, 2048, 'm4');
     const rowFrames = frames.filter(isRowFrame);
@@ -182,8 +183,8 @@ describe('forkTransferFrames source streamer', () => {
     await seedChain(ws);
     // Distinct bytes throughout, so no two chunks are one.
     const ranged = Array.from({ length: 40_000 }, (_, index) => `line ${index}`).join('\n');
-    await ws.vfs.writeFile('memory/ranged.md', ranged);
-    await ws.vfs.writeFile('memory/empty.md', '');
+    await writeText(ws.vfs, 'memory/ranged.md', ranged);
+    await writeText(ws.vfs, 'memory/empty.md', '');
     const frames = await framesFor(ws, 64 * 1024);
 
     expect(frames.filter(isChunksFrame).length).toBeGreaterThan(1);
@@ -197,8 +198,8 @@ describe('forkTransferFrames source streamer', () => {
     const ws = createTestWorkspace();
     await seedChain(ws);
     const shared = Array.from({ length: 20_000 }, (_, index) => `shared ${index}`).join('\n');
-    await ws.vfs.writeFile('memory/a.md', shared);
-    await ws.vfs.writeFile('notes/b.md', shared);
+    await writeText(ws.vfs, 'memory/a.md', shared);
+    await writeText(ws.vfs, 'notes/b.md', shared);
     const frames = await framesFor(ws, 64 * 1024);
     const crossed = frames.filter(isChunksFrame).flatMap((frame) => frame.chunks.map((chunk) => chunk.hash));
 

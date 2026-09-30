@@ -1,8 +1,9 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** The native `web` tool: search, fetch (plain or rendered) and screenshot. `web.*` in eval is `web/provider.ts`. */
 import { tool, type ToolSet } from 'ai';
 import { Effect } from 'effect';
 import { z } from 'zod';
-import type { VFS } from '../types/primitives';
+
 import type { TurnContextBudget } from '../context-budget';
 import type { WebSearchProvider, WebSearchResponse } from '../web/provider';
 import { saveScreenshot } from '../web/screenshots';

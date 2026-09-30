@@ -1,10 +1,11 @@
+import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** InlineExecutor: the `workspace.*` codemode provider over its workspace's files, shell, memory and craft store. */
 
 import * as v from 'valibot';
 import type { ExecutorProvider, ExecutorCapability, PortAnsweringExecutor, ResourceLimits } from '../execution/types';
 import { nimbusSession, type NimbusSessionOpts } from '../execution/nimbus';
 import type { FilesOwner, ShellSession } from '../safety/approval-gate';
-import type { VFS, Memory, SqlExecutor } from '../types/primitives';
+import type { Memory, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { CraftStore } from '../types/agent-runtime';
 import { appendMemoryNote } from '../memory/note';
@@ -131,7 +132,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           return refusalOf(new KinuError('bad_input', 'workspace.readFile: path must be a string'));
         }
 
-        const content = await vfs.readFile(p, { encoding: 'utf8' });
+        const content = await readText(vfs, p);
         const text = v.parse(v.string(), content);
         // The caller now has the whole file, so a later `file` edit on this path is not blind.
         currentLedger().observeWhole(p, text);
@@ -188,7 +189,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         }
 
         // A path that is absent or blank names the workspace root.
-        return vfs.readdir(path === undefined || path === '' ? '/' : path);
+        return Promise.resolve(vfs.readdir(path === undefined || path === '' ? '/' : path)).then(entries => entries.map(({ name }) => name));
       },
     },
 

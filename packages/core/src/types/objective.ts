@@ -1,8 +1,9 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Objective and measurement contract, declared at the platform layer so the swarm engine,
  *  swarm-input schemas and delegation surface share it without importing the strategy harness. */
 
 import type { ExecOutcome } from '../execution/exec-result';
-import type { VFS } from './primitives';
+
 import type { JsonValue } from '../utils/json';
 
 /** What a verifier is given. No model, no network, no trajectory: a measurement must be

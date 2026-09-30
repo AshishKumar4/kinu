@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The owner's instruction-file desk (KINU-N028), one for both backends.
  *
@@ -11,7 +12,7 @@ import {
   admitInstructionDecision,
   type AdmittedInstructionDecision, type InstructionApprovalStore, type InstructionTrustResolver,
 } from '../safety/instruction-trust';
-import type { SkillsVfs } from '../skills/discover';
+
 import type { Page, PageRequest } from '../session/page';
 import type { AgentsMdSources } from '../prompting/agents-md';
 import { stepContextLimit, type ModelWindow } from '../context-window';
@@ -26,7 +27,7 @@ export interface InstructionDeskPort {
   /** Discovered fresh on every call: a digest shown from a stale read would
    *  authorize bytes that already moved. */
   readonly agentsMd: (window: ModelWindow, trust: InstructionTrustResolver) => Promise<AgentsMdSources>;
-  readonly skillsVfs: SkillsVfs;
+  readonly skillsVfs: VFS;
   readonly approvals: InstructionApprovalStore;
   readonly window: () => ModelWindow;
 }

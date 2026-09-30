@@ -1,3 +1,4 @@
+import { exists as nimbusExists, readText, type Awaitable, type VFS, type VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * DeviceTunnelExecutor (`device.*`): the user's machines via a daemon connected through the UserDO hub.
  * A fleet: with several live machines a call must name one (`{ device }`); files mount per machine under `/pc/<name>`.
@@ -5,8 +6,8 @@
 
 import * as v from 'valibot';
 import { isAbortError, raceAbort } from '@kinu.run/agent-utils';
-import type { VFS, VfsEntryStat } from '../types/primitives';
-import type { VfsNativeReads } from '../vfs/mounts';
+
+import type { CheckpointFiles } from '../types/primitives';
 import { vfsErrorFromText } from '../vfs/errno';
 import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { Effect } from 'effect';
@@ -339,7 +340,7 @@ export function createDeviceTunnelExecutor(
           if (target.kind === 'refusal') return target.refusal;
           const view = target.view;
 
-          return v.parse(v.string(), await view.readFile(path, { encoding: 'utf8' }));
+          return v.parse(v.string(), await readText(view, path));
         } catch (err) {
           if (isDeviceNotConnectedError({ cause: err })) return notConnected();
 
@@ -370,7 +371,7 @@ export function createDeviceTunnelExecutor(
 
           const written = Effect.andThen(
             approveOverwrite(policy, transport, target.deviceId, { view, path, content }),
-            Effect.promise(() => view.writeFileWithReport(path, content)),
+            Effect.promise(() => view.writeFileWithReport(path, new TextEncoder().encode(content))),
           );
 
           const said = `Written ${content.length} bytes to ${path}`;
@@ -403,7 +404,7 @@ export function createDeviceTunnelExecutor(
           if (target.kind === 'refusal') return target.refusal;
           const view = target.view;
 
-          return await view.readdir(path ?? await view.homeDir());
+          return (await view.readdir(path ?? await view.homeDir())).map(({ name }) => name);
         } catch (err) {
           if (isDeviceNotConnectedError({ cause: err })) return notConnected();
 
@@ -429,7 +430,7 @@ export function createDeviceTunnelExecutor(
           if (target.kind === 'refusal') return target.refusal;
           const view = target.view;
 
-          return await view.exists(path);
+          return await nimbusExists(view, path);
         } catch (err) {
           if (isDeviceNotConnectedError({ cause: err })) return notConnected();
 
@@ -514,7 +515,7 @@ function approveOverwrite(
   const device = deviceId === undefined ? undefined : fleet?.find((entry) => entry.id === deviceId);
   const mounted = device === undefined || !path.startsWith('/') ? null : `/pc/${deviceMountSegment(device, fleet)}${path}`;
 
-  return Effect.flatMap(Effect.promise(() => view.exists(path)), (exists) => (exists ? approveFileAccess(
+  return Effect.flatMap(Effect.promise(() => nimbusExists(view, path)), (exists) => (exists ? approveFileAccess(
     { op: 'write', path: mounted ?? path, hostPath: mounted ?? path, reaches: 'user-mount', replaces: true }, 'device', policy, {
       subject: async () => ({ path: mounted ?? path, current: asBytes(await view.readFile(path)), next: asBytes(content) }),
       parks: mounted !== null,
@@ -584,7 +585,7 @@ const ALWAYS_CONSENTED: DeviceFileConsent = {
 
 const AGENT_TMP_PATHS = ['/tmp', '/var/tmp'] as const;
 
-export type DeviceVFS = VFS & Required<Pick<VFS, 'writeFileWithReport'>> & Pick<ExecutorProvider, 'homeDir'> & Pick<VfsNativeReads, 'readRange'>;
+export type DeviceVFS = VFS & Required<CheckpointFiles> & Pick<ExecutorProvider, 'homeDir'> & Required<Pick<VFS, 'readRange'>>;
 
 /** The machine's files in its own absolute paths: the daemon resolves root and path, this guard only rejects lexical
  *  escapes, and `homeDir` is HELLO's, never an `exec`'s. */
@@ -693,13 +694,13 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
 
   const guarded = (path: string, op: string) => Effect.promise(() => guard(path, op));
 
-  const writeReported = (path: string, data: string | Uint8Array) => Effect.gen(function* () {
+  const writeReported = (path: string, data: Uint8Array) => Effect.gen(function* () {
     const root = yield* guarded(path, 'open');
-    const text = v.is(v.string(), data) ? data : asLosslessText(data);
+    const text = asLosslessText(data);
 
     const result = yield* text !== null
       ? call('writeFile', [path, text, { root }], path)
-      : call('writeFile', [path, bytesToBase64(v.parse(v.instance(Uint8Array), data)), { encoding: 'base64', root }], path);
+      : call('writeFile', [path, bytesToBase64(data), { encoding: 'base64', root }], path);
 
     const ok = result === 'ok'
       || (result !== undefined && isJsonObject(result) && result.success === true);
@@ -712,11 +713,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
 
   return {
     homeDir: openingDir,
-    readFile: (path, opts) => settle(Effect.gen(function* () {
-      const bytes = yield* readChunked(path, yield* guarded(path, 'open'), 0, null);
-
-      return opts?.encoding === 'utf8' ? new TextDecoder().decode(bytes) : bytes;
-    })),
+    readFile: (path) => settle(Effect.flatMap(guarded(path, 'open'), (root) => readChunked(path, root, 0, null))),
 
     async readRange(path, offset, length) {
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
@@ -752,17 +749,23 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
         if (isJsonObject(entry)) {
           const name = v.safeParse(v.string(), entry.name);
 
-          if (name.success) return name.output;
+          if (name.success) {
+            if (entry.type === 'symlink') return { name: name.output, type: 'symlink' as const };
+
+            return { name: name.output, type: entry.type === 'directory' || entry.type === 'dir' ? 'directory' as const : 'file' as const };
+          }
         }
 
-        return JSON.stringify(entry);
+        return { name: JSON.stringify(entry), type: 'file' as const };
       });
     })),
 
     stat: (path) => settle(Effect.gen(function* () {
       const root = yield* guarded(path, 'stat');
 
-      return v.parse(DeviceStatSchema, yield* call('statPath', [path, { root }], path));
+      const stat = v.parse(DeviceStatSchema, yield* call('statPath', [path, { root }], path));
+
+      return stat === null ? null : { size: stat.size, mtimeMs: stat.mtimeMs, type: stat.isDir ? 'directory' as const : 'file' as const };
     })),
 
     unlink: (path) => settle(Effect.gen(function* () {
@@ -775,11 +778,6 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
       yield* call('mkdirPath', [path, { root, recursive: opts?.recursive ?? false }], path);
     })),
 
-    exists: (path) => settle(Effect.gen(function* () {
-      const root = yield* guarded(path, 'stat');
-
-      return v.parse(v.boolean(), yield* call('exists', [path, { root }], path));
-    })),
   };
 }
 
@@ -840,7 +838,7 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
 
   /** Dispatches by first segment. Root "/" is handled by readdir/stat/exists. Without a fleet snapshot the unnamed view
    *  goes to the hub. */
-  const dispatch = async <T>(path: string, op: (view: DeviceVFS, native: string) => Promise<T>): Promise<T> => {
+  const dispatch = async <T>(path: string, op: (view: DeviceVFS, native: string) => Awaitable<T>): Promise<T> => {
     if (connectedDevices(transport.status().devices).length === 0) {
       return op(deviceFiles(transport, consent, undefined), path);
     }
@@ -858,8 +856,8 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
   return {
     // The mount root is a roster, not a directory, so it cannot be a working directory.
     homeDir: async () => '/',
-    async readFile(path, opts) {
-      return dispatch(path, (view, native) => view.readFile(native, opts));
+    async readFile(path) {
+      return dispatch(path, (view, native) => view.readFile(native));
     },
     async readRange(path, offset, length) {
       return dispatch(path, (view, native) => view.readRange(native, offset, length));
@@ -871,42 +869,29 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
       return dispatch(path, (view, native) => view.writeFileWithReport(native, data));
     },
     async readdir(path) {
-      if (isFleetRoot(path)) return routes().map((route) => route.segment);
+      if (isFleetRoot(path)) return routes().map((route) => ({ name: route.segment, type: 'directory' }));
 
       return dispatch(path, (view, native) => view.readdir(native));
     },
-    async stat(path): Promise<VfsEntryStat | null> {
-      if (isFleetRoot(path)) return { size: 0, mtimeMs: 0, isDir: true };
+    async stat(path, options): Promise<VfsStat | null> {
+      if (isFleetRoot(path)) return { size: 0, mtimeMs: 0, type: 'directory' };
 
       if (connectedDevices(transport.status().devices).length === 0) {
-        return deviceFiles(transport, consent, undefined).stat(path);
+        return deviceFiles(transport, consent, undefined).stat(path, options);
       }
 
       const route = routeOf(path);
 
       // Answered here so listing /pc never asks a machine to stat a `/` its consent boundary refuses.
-      if (route?.rest === '/') return { size: 0, mtimeMs: 0, isDir: true };
+      if (route?.rest === '/') return { size: 0, mtimeMs: 0, type: 'directory' };
 
-      return route ? route.view.stat(route.rest) : null;
+      return route ? route.view.stat(route.rest, options) : dispatch(path, (view, native) => view.stat(native, options));
     },
     async unlink(path) {
       await dispatch(path, (view, native) => view.unlink(native));
     },
     async mkdir(path, opts) {
       await dispatch(path, (view, native) => view.mkdir(native, opts));
-    },
-    async exists(path) {
-      if (isFleetRoot(path)) return true;
-
-      if (connectedDevices(transport.status().devices).length === 0) {
-        return deviceFiles(transport, consent, undefined).exists(path);
-      }
-
-      const route = routeOf(path);
-
-      if (route?.rest === '/') return true;
-
-      return route ? route.view.exists(route.rest) : false;
     },
   };
 }

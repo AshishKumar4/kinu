@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Async agent-to-agent transport over the shared outbox; the host supplies only `deliver`.
  * Per-(sender, receiver) order comes from outbox id order plus receiver-side dedupe on
@@ -17,7 +18,7 @@ import {
   type PeerAskOutcome, type PeerReplyOutcome, type PeerSendOutcome,
 } from '../../types/peers';
 import { countMsgReceived } from '../../obs/msg-counters';
-import type { SqlExec, VFS } from '../../types/primitives';
+import type { SqlExec } from '../../types/primitives';
 import type { WorkMode } from '../../types/turn';
 import {
   JsonValueSchema, parseJsonObject,

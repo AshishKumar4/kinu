@@ -1,8 +1,9 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
 import { validateUIMessages, type UIMessage } from 'ai';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { PromptFile } from '../types/backend-host';
-import type { SqlExecutor, VFS } from '../types/primitives';
+import type { SqlExecutor } from '../types/primitives';
 import { JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json';
 import { KinuError } from '../obs/error';
 import { type SessionMessages, SessionMessageReader, type ActorReadAuthority, type MessagePartReference, type MessageReference, type StoredPart } from './messages';

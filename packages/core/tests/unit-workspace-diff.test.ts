@@ -1,3 +1,4 @@
+import { exists, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { afterEach, describe, expect, setSystemTime, spyOn, test } from 'bun:test';
 import * as v from 'valibot';
 import { fakeMossaic, git, gitEnv, initRepo, scratchDir } from '@kinu.run/test-utils';
@@ -32,7 +33,7 @@ import { sharedDriveMount } from '../src/vfs/shared-drive';
  * scaffold on its first file call, which a review taken before it would list as the agent's work.
  */
 async function baselinesOf(rt: AgentRuntime, workspace: Pick<WorkspaceBundle, 'session'>): Promise<WorkspaceBaselines> {
-  await rt.storage.vfs.exists('scaffold/agent.js');
+  await exists(rt.storage.vfs, 'scaffold/agent.js');
 
   return { store: (await workspace.session()).vfs, cred: CRED_SESSION_USER };
 }
@@ -83,7 +84,7 @@ describe('workspace diff lifecycle', () => {
     const baselines = await baselinesOf(rt, workspace);
     await resetWorkspaceBaseline(rt, baselines);
 
-    await rt.storage.vfs.writeFile('finished-before-output.txt', 'done');
+    await writeText(rt.storage.vfs, 'finished-before-output.txt', 'done');
     const result = await getWorkspaceDiff(rt, baselines);
 
     expect(result.files).toHaveLength(1);
@@ -102,10 +103,10 @@ describe('workspace diff lifecycle', () => {
 
     for (const path of ['bin/python', 'bin/python3', 'etc/ssl/cert.pem', 'lib/python3.13/os.py', 'LICENSE', 'manifest.json']) {
       await rt.storage.vfs.mkdir(`${runtime}/${path}`.replace(/\/[^/]+$/, ''), { recursive: true });
-      await rt.storage.vfs.writeFile(`${runtime}/${path}`, `${path}\n`);
+      await writeText(rt.storage.vfs, `${runtime}/${path}`, `${path}\n`);
     }
 
-    await rt.storage.vfs.writeFile('hello.py', 'print(42)\n');
+    await writeText(rt.storage.vfs, 'hello.py', 'print(42)\n');
 
     expect((await getWorkspaceDiff(rt, baselines)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['added hello.py']);
   });
@@ -116,9 +117,9 @@ describe('workspace diff lifecycle', () => {
     const baselines = await baselinesOf(rt, workspace);
     await rt.storage.vfs.mkdir('s', { recursive: true });
 
-    for (let i = 0; i < 450; i++) await rt.storage.vfs.writeFile(`s/f-${i}.txt`, `line ${i}\n`);
+    for (let i = 0; i < 450; i++) await writeText(rt.storage.vfs, `s/f-${i}.txt`, `line ${i}\n`);
     await resetWorkspaceBaseline(rt, baselines);
-    await rt.storage.vfs.writeFile('s/f-7.txt', 'line 7\nchanged\n');
+    await writeText(rt.storage.vfs, 's/f-7.txt', 'line 7\nchanged\n');
 
     expect((await getWorkspaceDiff(rt, baselines)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['changed s/f-7.txt']);
   });
@@ -127,9 +128,9 @@ describe('workspace diff lifecycle', () => {
     const { rt, workspace } = createTestRuntime();
     const baselines = await baselinesOf(rt, workspace);
     const row = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value;
-    await rt.storage.vfs.writeFile('big.log', 'x'.repeat(row));
+    await writeText(rt.storage.vfs, 'big.log', 'x'.repeat(row));
     await resetWorkspaceBaseline(rt, baselines);
-    await rt.storage.vfs.writeFile('big.log', 'y'.repeat(row + 1));
+    await writeText(rt.storage.vfs, 'big.log', 'y'.repeat(row + 1));
 
     expect((await getWorkspaceDiff(rt, baselines)).files).toEqual([
       { path: 'big.log', status: 'changed', added: 0, removed: 0, lines: [], omitted: 'large' },
@@ -141,7 +142,7 @@ describe('workspace diff lifecycle', () => {
     const baselines = await baselinesOf(rt, workspace);
     await rt.storage.vfs.writeFile('logo.png', PNG);
     await rt.storage.vfs.writeFile('old.png', PNG);
-    await rt.storage.vfs.writeFile('notes.txt', 'plain\n');
+    await writeText(rt.storage.vfs, 'notes.txt', 'plain\n');
     await resetWorkspaceBaseline(rt, baselines);
     await rt.storage.vfs.writeFile('chart.png', PNG);
     await rt.storage.vfs.writeFile('notes.txt', PNG);
@@ -173,12 +174,12 @@ describe('workspace diff lifecycle', () => {
   test('a file whose mode alone changed stays off the list; one whose bytes changed is on it', async () => {
     const { rt, workspace } = createTestRuntime();
     const baselines = await baselinesOf(rt, workspace);
-    await rt.storage.vfs.writeFile('run.sh', 'echo hi\n');
-    await rt.storage.vfs.writeFile('notes.md', 'one\n');
+    await writeText(rt.storage.vfs, 'run.sh', 'echo hi\n');
+    await writeText(rt.storage.vfs, 'notes.md', 'one\n');
     await resetWorkspaceBaseline(rt, baselines);
     // Nimbus's diff lists a mode change as modified: the change-set compares the bytes.
     (await workspace.session()).vfs.as(CRED_SESSION_USER).chmod(`${WORKSPACE_ROOT}/run.sh`, 0o744);
-    await rt.storage.vfs.writeFile('notes.md', 'two\n');
+    await writeText(rt.storage.vfs, 'notes.md', 'two\n');
 
     expect((await getWorkspaceDiff(rt, baselines)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['changed notes.md']);
   });
@@ -187,9 +188,9 @@ describe('workspace diff lifecycle', () => {
     setSystemTime(ONE_MILLISECOND);
     const { rt, workspace } = createTestRuntime();
     const baselines = await baselinesOf(rt, workspace);
-    await rt.storage.vfs.writeFile('hello.py', 'print(42)\n');
+    await writeText(rt.storage.vfs, 'hello.py', 'print(42)\n');
     await resetWorkspaceBaseline(rt, baselines);
-    await rt.storage.vfs.writeFile('hello.py', 'print(43)\n');
+    await writeText(rt.storage.vfs, 'hello.py', 'print(43)\n');
 
     expect((await getWorkspaceDiff(rt, baselines)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['changed hello.py']);
   });
@@ -198,13 +199,13 @@ describe('workspace diff lifecycle', () => {
     setSystemTime(ONE_MILLISECOND);
     const { rt, workspace } = createTestRuntime();
     const baselines = await baselinesOf(rt, workspace);
-    await rt.storage.vfs.writeFile('hello.py', 'print(42)\n');
+    await writeText(rt.storage.vfs, 'hello.py', 'print(42)\n');
     await resetWorkspaceBaseline(rt, baselines);
-    await rt.storage.vfs.writeFile('hello.py', 'print(43)\n');
+    await writeText(rt.storage.vfs, 'hello.py', 'print(43)\n');
     setSystemTime(ONE_MILLISECOND + 1000);
     await resetWorkspaceBaseline(rt, baselines);
     setSystemTime(ONE_MILLISECOND + 2000);
-    await rt.storage.vfs.writeFile('hello.py', 'print(42)\n');
+    await writeText(rt.storage.vfs, 'hello.py', 'print(42)\n');
 
     expect((await getWorkspaceDiff(rt, baselines)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['changed hello.py']);
   });
@@ -212,7 +213,7 @@ describe('workspace diff lifecycle', () => {
   test('a workspace without a baseline starts tracking at its first read, then shows exactly what it writes', async () => {
     const { rt, workspace } = createTestRuntime();
     const baselines = await baselinesOf(rt, workspace);
-    await rt.storage.vfs.writeFile('already-there.txt', 'v1');
+    await writeText(rt.storage.vfs, 'already-there.txt', 'v1');
     const before = Date.now();
 
     const first = await getWorkspaceDiff(rt, baselines);
@@ -220,7 +221,7 @@ describe('workspace diff lifecycle', () => {
     expect(first.files).toEqual([]);
     expect(first.trackedSince).toBeGreaterThanOrEqual(before);
 
-    await rt.storage.vfs.writeFile('written-after.txt', 'new');
+    await writeText(rt.storage.vfs, 'written-after.txt', 'new');
     const second = await getWorkspaceDiff(rt, baselines);
 
     expect(second.files.map((file) => `${file.status} ${file.path}`)).toEqual(['added written-after.txt']);
@@ -233,9 +234,9 @@ describe('workspace diff lifecycle', () => {
     await resetWorkspaceBaseline(rt, baselines);
     await rt.storage.vfs.mkdir('.git', { recursive: true });
     await rt.storage.vfs.mkdir('node_modules/pkg', { recursive: true });
-    await rt.storage.vfs.writeFile('.git/object-1', 'metadata');
-    await rt.storage.vfs.writeFile('node_modules/pkg/file-1.js', 'dependency');
-    await rt.storage.vfs.writeFile('app.ts', 'export const visible = true;');
+    await writeText(rt.storage.vfs, '.git/object-1', 'metadata');
+    await writeText(rt.storage.vfs, 'node_modules/pkg/file-1.js', 'dependency');
+    await writeText(rt.storage.vfs, 'app.ts', 'export const visible = true;');
 
     expect((await getWorkspaceDiff(rt, baselines)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['added app.ts']);
   });
@@ -252,14 +253,14 @@ describe('workspace diff lifecycle', () => {
     const kernel = session.vfs.as(CRED_KERNEL);
     await resetWorkspaceBaseline(rt, baselines);
 
-    await rt.storage.vfs.writeFile('notes.md', 'one\n');
+    await writeText(rt.storage.vfs, 'notes.md', 'one\n');
     builder.writeFile(`${home}/draft.md`, 'draft\n');
     builder.writeFile(`${home}/.kinu/context/run.json`, '{}');
     builder.mkdir(`${home}/private`, { mode: 0o700 });
     builder.writeFile(`${home}/private/key`, 'secret');
     builder.mkdir('/slates/board', { recursive: true });
     builder.writeFile('/slates/board/app.tsx', 'export default null;\n');
-    await drive.writeFile('/notes.md', 'from the Drive\n');
+    await writeText(drive, '/notes.md', 'from the Drive\n');
     kernel.mkdir('/etc/kinu-slate-content', { recursive: true });
     kernel.writeFile('/etc/kinu-slate-content/blob', 'stored');
     kernel.mkdir('/tmp', { recursive: true });
@@ -280,8 +281,8 @@ describe('workspace diff lifecycle', () => {
     const builder = (await workspace.session()).vfs.as(agentCred(identity));
     await resetWorkspaceBaseline(rt, baselines);
 
-    await rt.storage.vfs.writeFile('.env', 'TOKEN=1\n');
-    await rt.storage.vfs.writeFile('notes.md', 'one\n');
+    await writeText(rt.storage.vfs, '.env', 'TOKEN=1\n');
+    await writeText(rt.storage.vfs, 'notes.md', 'one\n');
     builder.writeFile(`${home}/.bashrc`, 'alias ll=ls\n');
     builder.mkdir(`${home}/.config/tool`, { recursive: true });
     builder.writeFile(`${home}/.config/tool/settings.json`, '{}');
@@ -303,11 +304,11 @@ describe('workspace diff lifecycle', () => {
     const session = await workspace.session();
     const builder = session.vfs.as(agentCred(identity));
     const user = session.vfs.as(CRED_SESSION_USER);
-    await rt.storage.vfs.writeFile('notes.md', 'one\n');
+    await writeText(rt.storage.vfs, 'notes.md', 'one\n');
     await resetWorkspaceBaseline(rt, baselines);
 
     await rt.storage.vfs.mkdir('.config', { recursive: true });
-    await rt.storage.vfs.writeFile('.config/secret.txt', 'TOKEN=1\n');
+    await writeText(rt.storage.vfs, '.config/secret.txt', 'TOKEN=1\n');
     builder.mkdir(`${home}/node_modules/pkg`, { recursive: true });
     builder.writeFile(`${home}/node_modules/pkg/index.js`, 'installed\n');
     user.symlink(`${WORKSPACE_ROOT}/.config`, `${WORKSPACE_ROOT}/cfg`);
@@ -325,7 +326,7 @@ describe('workspace diff lifecycle', () => {
 
     await resetWorkspaceBaseline(rt, baselines);
     await rt.storage.vfs.unlink('alias.md');
-    await rt.storage.vfs.writeFile('alias.md', 'notes.md');
+    await writeText(rt.storage.vfs, 'alias.md', 'notes.md');
     expect((await getWorkspaceDiff(rt, baselines)).files.map((file) => `${file.status} ${file.path}`)).toEqual(['changed alias.md']);
   });
 
@@ -333,7 +334,7 @@ describe('workspace diff lifecycle', () => {
     const { rt, workspace } = createTestRuntime();
     const baselines = await baselinesOf(rt, workspace);
     await rt.storage.vfs.mkdir('slates', { recursive: true });
-    await rt.storage.vfs.writeFile('slates/todo.md', 'mine\n');
+    await writeText(rt.storage.vfs, 'slates/todo.md', 'mine\n');
     await resetWorkspaceBaseline(rt, baselines);
 
     expect((await getWorkspaceDiff(rt, baselines)).files).toEqual([]);
@@ -349,7 +350,7 @@ describe('workspace diff lifecycle', () => {
       changes.touched(paths);
       delivered.resolve();
     });
-    await rt.storage.vfs.writeFile('notes.md', 'one\n');
+    await writeText(rt.storage.vfs, 'notes.md', 'one\n');
     await resetWorkspaceBaseline(rt, baselines);
     let walked = 0;
 
@@ -373,13 +374,13 @@ describe('workspace diff lifecycle', () => {
 
     expect(await poll()).toEqual({ walked: true, listed: [] });
     expect(await poll()).toEqual({ walked: false, listed: [] });
-    await landed(() => rt.storage.vfs.writeFile('.cache/state.json', '{}'));
+    await landed(() => writeText(rt.storage.vfs, '.cache/state.json', '{}'));
     expect(await poll()).toEqual({ walked: false, listed: [] });
-    await landed(() => rt.storage.vfs.writeFile('notes.md', 'two\n'));
+    await landed(() => writeText(rt.storage.vfs, 'notes.md', 'two\n'));
     expect(await poll()).toEqual({ walked: true, listed: ['changed notes.md'] });
     await landed(async () => { await workspace.shell.exec('echo from the shell > shell.txt'); });
     expect(await poll()).toEqual({ walked: true, listed: ['changed notes.md', 'added shell.txt'] });
-    await landed(() => workspace.vfs.rename(`${WORKSPACE_ROOT}/shell.txt`, '/tmp/shell.txt'));
+    await landed(async () => workspace.vfs.rename(`${WORKSPACE_ROOT}/shell.txt`, '/tmp/shell.txt'));
     expect(await poll()).toEqual({ walked: true, listed: ['changed notes.md'] });
     await resetWorkspaceBaseline(rt, baselines);
     changes.moved();
@@ -411,10 +412,10 @@ describe('workspace diff lifecycle', () => {
     const read = async (): Promise<void> => { await changes.read(() => getWorkspaceDiff(rt, baselines)); };
 
     await read();
-    await landed(() => rt.storage.vfs.writeFile('.cache/state.json', '{}'));
+    await landed(() => writeText(rt.storage.vfs, '.cache/state.json', '{}'));
     expect(told).toBe(0);
-    await landed(() => rt.storage.vfs.writeFile('notes.md', 'one\n'));
-    await landed(() => rt.storage.vfs.writeFile('more.md', 'two\n'));
+    await landed(() => writeText(rt.storage.vfs, 'notes.md', 'one\n'));
+    await landed(() => writeText(rt.storage.vfs, 'more.md', 'two\n'));
     expect(told).toBe(1);
     await read();
     await landed(async () => { await workspace.shell.exec('echo from the shell > shell.txt'); });
@@ -425,7 +426,7 @@ describe('workspace diff lifecycle', () => {
 
     await changes.read(async () => {
       const result = await getWorkspaceDiff(rt, baselines);
-      await landed(() => rt.storage.vfs.writeFile('late.md', 'three\n'));
+      await landed(() => writeText(rt.storage.vfs, 'late.md', 'three\n'));
       toldMidWalk = told;
 
       return result;
@@ -442,9 +443,9 @@ describe('workspace diff lifecycle', () => {
     // Under the admission gate but far over what whole-file alignment affords; only the differing region is aligned.
     const lines = 8000;
     const before = Array.from({ length: lines }, (_, i) => `${i % 10}`.repeat(9)).join('\n');
-    await rt.storage.vfs.writeFile('agent.log', before);
+    await writeText(rt.storage.vfs, 'agent.log', before);
     await resetWorkspaceBaseline(rt, baselines);
-    await rt.storage.vfs.writeFile('agent.log', `${before}\nappended`);
+    await writeText(rt.storage.vfs, 'agent.log', `${before}\nappended`);
 
     const result = await getWorkspaceDiff(rt, baselines);
 
@@ -465,9 +466,9 @@ describe('workspace diff lifecycle', () => {
     const lines = 8000;
     const before = Array.from({ length: lines }, (_, i) => `${i % 10}`.repeat(9)).join('\n');
     const after = Array.from({ length: lines }, (_, i) => `${(i % 10) + 1}`.repeat(9)).join('\n');
-    await rt.storage.vfs.writeFile('bundle.min.js', before);
+    await writeText(rt.storage.vfs, 'bundle.min.js', before);
     await resetWorkspaceBaseline(rt, baselines);
-    await rt.storage.vfs.writeFile('bundle.min.js', after);
+    await writeText(rt.storage.vfs, 'bundle.min.js', after);
 
     const result = await getWorkspaceDiff(rt, baselines);
 
@@ -485,12 +486,12 @@ describe('workspace diff lifecycle', () => {
   test('a failed snapshot publication preserves the prior diff and its Undo target', async () => {
     const { rt, workspace } = createTestRuntime();
     const baselines = await baselinesOf(rt, workspace);
-    await rt.storage.vfs.writeFile('notes.md', 'zero');
+    await writeText(rt.storage.vfs, 'notes.md', 'zero');
     await resetWorkspaceBaseline(rt, baselines);
     const first = await getWorkspaceDiff(rt, baselines);
-    await rt.storage.vfs.writeFile('notes.md', 'one');
+    await writeText(rt.storage.vfs, 'notes.md', 'one');
     await resetWorkspaceBaseline(rt, baselines);
-    await rt.storage.vfs.writeFile('notes.md', 'two');
+    await writeText(rt.storage.vfs, 'notes.md', 'two');
     const before = await getWorkspaceDiff(rt, baselines);
     const failure = new Error('snapshot publication refused');
     const snapshot = spyOn(baselines.store, 'snapshot').mockImplementationOnce(() => { throw failure; });
@@ -515,15 +516,15 @@ describe('workspace diff lifecycle', () => {
     const baselines = await baselinesOf(rt, workspace);
     const CLOCK = Date.parse('2026-09-28T12:00:00Z');
     setSystemTime(new Date(CLOCK));
-    await rt.storage.vfs.writeFile('notes.md', 'zero');
+    await writeText(rt.storage.vfs, 'notes.md', 'zero');
     await resetWorkspaceBaseline(rt, baselines);
     const first = await getWorkspaceDiff(rt, baselines);
     setSystemTime(new Date(CLOCK + 10));
     const staleName = `diffs:${rt.actor.actorId}:${first.baseline}`;
-    await rt.storage.vfs.writeFile('notes.md', 'one');
+    await writeText(rt.storage.vfs, 'notes.md', 'one');
     await resetWorkspaceBaseline(rt, baselines);
     const previous = await getWorkspaceDiff(rt, baselines);
-    await rt.storage.vfs.writeFile('notes.md', 'two');
+    await writeText(rt.storage.vfs, 'notes.md', 'two');
     const priorDiff = await getWorkspaceDiff(rt, baselines);
     const log = createRecordingLogger();
     const restoreLog = setDiagnosticsSink(log);
@@ -554,7 +555,7 @@ describe('workspace diff lifecycle', () => {
       expect(await restoreWorkspaceBaseline(rt, baselines)).toMatchObject({ ok: false });
     } else {
       setSystemTime(new Date(CLOCK + 30));
-      await rt.storage.vfs.writeFile('notes.md', 'three');
+      await writeText(rt.storage.vfs, 'notes.md', 'three');
       expect(await resetWorkspaceBaseline(rt, baselines)).toMatchObject({ ok: true, cleanupFailures: [] });
       const latest = await getWorkspaceDiff(rt, baselines);
       const retained = baselines.store.snapshots().filter((snapshot) => snapshot.name.startsWith(`diffs:${rt.actor.actorId}:`));
@@ -570,7 +571,7 @@ describe('workspace diff lifecycle', () => {
     const { rt, workspace } = createTestRuntime();
     const baselines = await baselinesOf(rt, workspace);
     const earlier = await resetWorkspaceBaseline(rt, baselines);
-    await rt.storage.vfs.writeFile('notes.md', 'one\n');
+    await writeText(rt.storage.vfs, 'notes.md', 'one\n');
     // The baseline a note names: a review moves it, and Undo brings it back.
     const noted = (await getWorkspaceDiff(rt, baselines)).baseline;
     await resetWorkspaceBaseline(rt, baselines);

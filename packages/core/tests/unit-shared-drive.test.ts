@@ -1,3 +1,4 @@
+import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** The `/shared` mount isolates by tenant resolved live from the owner, not by path. */
 import { describe, expect, test } from 'bun:test';
 import { createMemoryVfs } from '@kinu.run/test-utils';
@@ -29,17 +30,17 @@ describe('the /shared mount', () => {
     const aliceSecond = workspacePlane(mossaic, () => 'user-alice');
     const bob = workspacePlane(mossaic, () => 'user-bob');
 
-    await alice.writeFile(`${SHARED_ROOT}/notes.txt`, 'alice only');
+    await writeText(alice, `${SHARED_ROOT}/notes.txt`, 'alice only');
 
-    expect(await aliceSecond.readFile(`${SHARED_ROOT}/notes.txt`, { encoding: 'utf8' })).toBe('alice only');
-    expect(await aliceSecond.readdir(SHARED_ROOT)).toEqual(['notes.txt']);
+    expect(await readText(aliceSecond, `${SHARED_ROOT}/notes.txt`)).toBe('alice only');
+    expect((await aliceSecond.readdir(SHARED_ROOT)).map(({ name }) => name)).toEqual(['notes.txt']);
 
-    expect(await bob.exists(`${SHARED_ROOT}/notes.txt`)).toBe(false);
+    expect(await exists(bob, `${SHARED_ROOT}/notes.txt`)).toBe(false);
     expect(await bob.stat(`${SHARED_ROOT}/notes.txt`)).toBeNull();
     await expect(bob.readFile(`${SHARED_ROOT}/notes.txt`)).rejects.toMatchObject({ code: 'ENOENT' });
 
-    await bob.writeFile(`${SHARED_ROOT}/notes.txt`, 'bob only');
-    expect(await alice.readFile(`${SHARED_ROOT}/notes.txt`, { encoding: 'utf8' })).toBe('alice only');
+    await writeText(bob, `${SHARED_ROOT}/notes.txt`, 'bob only');
+    expect(await readText(alice, `${SHARED_ROOT}/notes.txt`)).toBe('alice only');
     expect(mossaic.stores.get('user-bob')?.size).toBe(1);
     expect(mossaic.stores.get('user-alice')?.size).toBe(1);
   });
@@ -48,24 +49,24 @@ describe('the /shared mount', () => {
     let owner: string | null = null;
     const plane = workspacePlane(fakeMossaic(), () => owner);
 
-    await expect(plane.readdir(SHARED_ROOT)).rejects.toMatchObject({ code: 'ENXIO', message: expect.stringContaining(SHARED_DRIVE_UNCLAIMED) });
+    await expect(Promise.resolve(plane.readdir(SHARED_ROOT)).then(entries => entries.map(({ name }) => name))).rejects.toMatchObject({ code: 'ENXIO', message: expect.stringContaining(SHARED_DRIVE_UNCLAIMED) });
 
     owner = 'user-late';
-    expect(await plane.readdir(SHARED_ROOT)).toEqual([]);
+    expect((await plane.readdir(SHARED_ROOT)).map(({ name }) => name)).toEqual([]);
   });
 
   test('the mount forwards the native operations the Drive has: rename, recursive removal, stats listing', async () => {
     const plane = workspacePlane(fakeMossaic(), () => 'user-alice');
 
-    await plane.writeFile(`${SHARED_ROOT}/skills/deploy/SKILL.md`, '---\nname: deploy\ndescription: d\n---\nbody');
+    await writeText(plane, `${SHARED_ROOT}/skills/deploy/SKILL.md`, '---\nname: deploy\ndescription: d\n---\nbody');
     await plane.rename(`${SHARED_ROOT}/skills/deploy/SKILL.md`, `${SHARED_ROOT}/skills/ship/SKILL.md`);
-    expect(await plane.exists(`${SHARED_ROOT}/skills/ship/SKILL.md`)).toBe(true);
+    expect(await exists(plane, `${SHARED_ROOT}/skills/ship/SKILL.md`)).toBe(true);
 
-    const listed = await plane.readdirStats(`${SHARED_ROOT}/skills`);
+    const listed = await plane.readdir(`${SHARED_ROOT}/skills`);
 
-    expect(listed).toEqual([{ name: 'ship', stat: { size: 0, mtimeMs: expect.any(Number), isDir: true } }]);
+    expect(listed).toEqual([{ name: 'ship', type: 'directory', stat: { size: 0, mtimeMs: expect.any(Number), type: 'directory' } }]);
     await plane.removeRecursive(`${SHARED_ROOT}/skills`);
-    expect(await plane.readdir(SHARED_ROOT)).toEqual([]);
+    expect((await plane.readdir(SHARED_ROOT)).map(({ name }) => name)).toEqual([]);
   });
 });
 

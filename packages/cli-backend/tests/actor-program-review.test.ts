@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { expect, test } from 'bun:test';
 import { REAL_CLOCK } from '@kinu.run/core';
 import { jsonSchema, tool } from 'ai';
@@ -49,7 +50,7 @@ async function runtime(source: string, version = 1) {
   rt.identity.scaffold.version = async () => version;
   const files = rt.agentStateVfs ?? rt.storage.vfs;
   await files.mkdir('scaffold', { recursive: true });
-  await files.writeFile(rt.identity.scaffold.path + '.v' + version, source);
+  await writeText(files, rt.identity.scaffold.path + '.v' + version, source);
 
   return { rt, files };
 }
@@ -189,7 +190,7 @@ test('the transform executes its pinned version even if live and version files l
   const chat = scaffoldChatTransform({ program, chat: (async function* () {})(), run });
 
   rt.identity.scaffold.read = async () => changed;
-  await files.writeFile(rt.identity.scaffold.path + '.v1', changed);
+  await writeText(files, rt.identity.scaffold.path + '.v1', changed);
   expect((await collect(chat)).flatMap(event => event.type === 'text-delta' ? [event.delta] : []).join('')).toBe('version one');
 });
 

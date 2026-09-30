@@ -1,9 +1,10 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Nimbus executor adapter: maps a backend-supplied workspace box onto Kinu's ExecutorProvider contract. */
 
 import * as v from 'valibot';
 import { raceAbort } from '@kinu.run/agent-utils';
-import type { Shell, VFS, VfsLinkStat } from '../types/primitives';
-import type { MountedVfs, VfsNativeReads } from '../vfs/mounts';
+import type { Shell } from '../types/primitives';
+import type { MountedVfs } from '../vfs/mounts';
 import { atVfsPath } from '../vfs/errno';
 import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { workspacePath } from '../vfs/workspace-path';
@@ -662,12 +663,7 @@ function asCred(cred: VfsCred | undefined): { cred: VfsCred } | Record<string, n
   return cred === undefined ? {} : { cred };
 }
 
-export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VFS & {
-  lstat(path: string): Promise<VfsLinkStat | null>;
-  readlink(path: string): Promise<string>;
-  removeRecursive(path: string): Promise<void>;
-  rename(from: string, to: string): Promise<void>;
-} & Pick<VfsNativeReads, 'readRange'> {
+export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VFS & Required<Pick<VFS, 'readlink' | 'removeRecursive' | 'rename' | 'readRange'>> {
   let files = box.files;
 
   if (cred !== undefined) {
@@ -679,10 +675,10 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
   }
 
   return {
-    async readFile(path, opts) {
+    async readFile(path) {
       const absolute = workspacePath(path);
 
-      if (opts?.encoding !== 'utf8' && files.readBytes) {
+      if (files.readBytes) {
         const bytes = await atVfsPath(absolute, 'open', () => files.readBytes?.(absolute) ?? null);
 
         if (bytes === null) throw new VfsError('ENOENT', 'no such file or directory, open', absolute);
@@ -694,7 +690,7 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
 
       if (content === null) throw new VfsError('ENOENT', 'no such file or directory, open', absolute);
 
-      return opts?.encoding === 'utf8' ? content : new TextEncoder().encode(content);
+      return new TextEncoder().encode(content);
     },
     /** Prefix the origin's fixed Node reader reads; the SDK file methods cannot express a range. */
     async readRange(path, offset, length) {
@@ -710,25 +706,11 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
     async readdir(path) {
       const absolute = workspacePath(path);
 
-      return (await atVfsPath(absolute, 'scandir', () => files.list(absolute))).map((e) => e.name);
-    },
-    async lstat(path) {
-      const absolute = workspacePath(path);
+      return (await atVfsPath(absolute, 'scandir', () => files.list(absolute))).map((entry) => {
+        if (entry.type === 'symlink') return { name: entry.name, type: 'symlink' as const };
 
-      if (files.lstat) {
-        const st = await files.lstat(absolute);
-
-        return st && { size: st.size, mtimeMs: st.mtime, isDir: st.type === 'directory', isSymlink: st.type === 'symlink' };
-      }
-
-      // `stat` without -L describes a link itself.
-      const r = await box.exec(`stat -c '%s %Y %F' ${shellQuote(absolute)}`, asCred(cred));
-
-      if (!r.success || r.exitCode !== 0) return null;
-      const [size, seconds, ...kind] = r.stdout.trim().split(/\s+/);
-      const type = kind.join(' ');
-
-      return { size: Number(size), mtimeMs: Number(seconds) * 1_000, isDir: type === 'directory', isSymlink: type === 'symbolic link' };
+        return { name: entry.name, type: entry.type === 'directory' || entry.isDir === true ? 'directory' as const : 'file' as const };
+      });
     },
     async readlink(path) {
       const absolute = workspacePath(path);
@@ -748,26 +730,28 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
 
       return r.stdout.replace(/\n$/, '');
     },
-    async stat(path) {
-      if (files.stat) {
-        const st = await files.stat(workspacePath(path));
+    async stat(path, options) {
+      const absolute = workspacePath(path);
+      const native = options?.follow === false ? files.lstat?.bind(files) : files.stat?.bind(files);
 
-        if (!st) return null;
+      if (native) {
+        const stat = await native.call(files, absolute);
 
-        return {
-          size: st.size,
-          mtimeMs: st.mtime,
-          isDir: st.type === 'directory',
-        };
+        if (stat === null) return null;
+        const type = stat.type === 'symlink' ? 'symlink' as const : 'file' as const;
+
+        return { size: stat.size, mtimeMs: stat.mtime, type: stat.type === 'directory' ? 'directory' : type };
       }
 
-      // Shell fallbacks run as the plane's credential; running as the session user would change identity silently.
-      const r = await box.exec(`stat -c '%s %Y %F' ${shellQuote(workspacePath(path))}`, asCred(cred));
+      const result = await box.exec(`stat -c '%s %Y %F' ${shellQuote(absolute)}`, asCred(cred));
 
-      if (!r.success || r.exitCode !== 0) return null;
-      const [size, seconds, ...kind] = r.stdout.trim().split(/\s+/);
+      if (!result.success || result.exitCode !== 0) return null;
+      const [size, seconds, ...kind] = result.stdout.trim().split(/\s+/);
+      const type = kind.join(' ');
 
-      return { size: Number(size), mtimeMs: Number(seconds) * 1_000, isDir: kind.join(' ') === 'directory' };
+      const entryType = type === 'symbolic link' ? 'symlink' as const : 'file' as const;
+
+      return { size: Number(size), mtimeMs: Number(seconds) * 1_000, type: type === 'directory' ? 'directory' : entryType };
     },
     async unlink(path) { await files.delete(workspacePath(path)); },
     async removeRecursive(path) { await files.delete(workspacePath(path), { recursive: true }); },
@@ -788,6 +772,5 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
         throw new VfsError('EIO', `${r.stderr.trim() || 'operation failed'}, mkdir`, path);
       }
     },
-    async exists(path) { return files.exists(workspacePath(path)); },
   };
 }

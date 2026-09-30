@@ -1,3 +1,4 @@
+import { exists, readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // SOUL.md is a file, edited via setSoul; its mission is mirrored onto `workspace_identity` by
 // {@link writeSoul} alone, so listings never open (and mutate) a filesystem.
 
@@ -6,7 +7,7 @@ import { WORKSPACE_SOUL_DDL } from './schema';
 import type { SqlRow } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { AgentSignal } from '../types/signals';
 import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
-import type { SqlExecutor, VFS } from '../types/primitives';
+import type { SqlExecutor } from '../types/primitives';
 
 export const SOUL_PATH = 'SOUL.md';
 
@@ -121,10 +122,10 @@ export function summarizeSoul(markdown: string | null | undefined, maxLength = 2
 
 /** Null when absent; asked, not caught. */
 export async function readSoul(vfs: VFS): Promise<string | null> {
-  if (!await vfs.exists(SOUL_PATH)) return null;
+  if (!await exists(vfs, SOUL_PATH)) return null;
 
-  if ((await vfs.lstat?.(SOUL_PATH))?.isSymlink === true) return null;
-  const text = v.parse(v.string(), await vfs.readFile(SOUL_PATH, { encoding: 'utf8' }));
+  if ((await vfs.stat(SOUL_PATH, { follow: false }))?.type === 'symlink') return null;
+  const text = v.parse(v.string(), await readText(vfs, SOUL_PATH));
 
   return text.trim() ? text : null;
 }

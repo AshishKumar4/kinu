@@ -1,3 +1,4 @@
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 // appendToFile must not overwrite existing content when a read fails with anything but ENOENT.
 import { describe, test, expect } from "bun:test";
 import { MemoryStore } from "../src/memory/store";
@@ -17,13 +18,13 @@ describe("MemoryStore.appendToFile", () => {
 		const { store, fs } = createStore();
 		await store.writeFile("memory/MEMORY.md", "# notes\n");
 		await store.appendToFile("memory/MEMORY.md", "- new fact\n");
-		expect(await fs.readFile("memory/MEMORY.md", { encoding: "utf8" })).toBe("# notes\n- new fact\n");
+		expect(await readText(fs, 'memory/MEMORY.md')).toBe('# notes\n- new fact\n');
 	});
 
 	test("starts fresh when the file does not exist (ENOENT)", async () => {
 		const { store, fs } = createStore();
 		await store.appendToFile("memory/MEMORY.md", "first line\n");
-		expect(await fs.readFile("memory/MEMORY.md", { encoding: "utf8" })).toBe("first line\n");
+		expect(await readText(fs, 'memory/MEMORY.md')).toBe('first line\n');
 	});
 
 	test("a non-ENOENT read failure propagates instead of overwriting the file", async () => {

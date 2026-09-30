@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Shipped workspace and facet bundles: isolated turns over one shared Nimbus file plane. */
 import { getAgentByName, type AgentContext } from 'agents';
 import { DurableObject } from 'cloudflare:workers';
@@ -76,7 +77,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     }`;
 
     const files = this.rt.agentStateVfs ?? this.rt.storage.vfs;
-    await files.writeFile(`${this.rt.identity.scaffold.path}.v7`, source);
+    await writeText(files, `${this.rt.identity.scaffold.path}.v7`, source);
     void this.boundSql`UPDATE scaffold_versions SET status = 'historical' WHERE actor_id = ${this.actorHandle().actorId}`;
     void this.boundSql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
       VALUES (${this.actorHandle().actorId}, 7, ${Date.now()}, 'facet probe custom loop', 'current')`;

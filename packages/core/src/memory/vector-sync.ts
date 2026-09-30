@@ -1,10 +1,11 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Keeps the Vectorize index in step with the FTS5 memory store; separate from runtime.ts to stay dependency-light. */
 
 import { Effect } from 'effect';
 import { type AgentConfigStore } from '../config/store';
-import { type Memory, type VFS } from '../types/primitives';
+import { type Memory } from '../types/primitives';
 import { type VectorStore } from './vector-store';
-import { type VfsNativeReads } from '../vfs/mounts';
+
 import { AGENT_CONFIG_KEYS } from '../config/store';
 import { readTailWithVfsOps } from '../vfs/mounts';
 import type { MemoryStore } from "@kinu.run/agent-utils/memory";
@@ -21,7 +22,7 @@ function invalidateSemanticIndex(config: AgentConfigStore): void {
  * marker so chunks are re-embedded. Vector calls are awaited so embeddings are durable before the turn continues.
  */
 export function adaptMemory(
-  store: MemoryStore, files: VFS & Pick<VfsNativeReads, 'readRange'>,
+  store: MemoryStore, files: VFS & Required<Pick<VFS, 'readRange'>>,
   vectorStore: VectorStore, config: AgentConfigStore,
 ): Memory {
   return {

@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * One-shot runs (`kinu exec`, `kinu run`) do not end on the model's say-so: once per task, the
  * harness shows state it read itself and requires a second claim. Fires on what the turn did,
@@ -5,7 +6,7 @@
  */
 
 import type { CompletionGateRecord } from '../events/types';
-import type { VFS } from '../types/primitives';
+
 import type { ExecOutcome } from '../execution/exec-result';
 import { formatExecResult } from '../execution/exec-result';
 import { clampToolResult } from '../tools/clamp';

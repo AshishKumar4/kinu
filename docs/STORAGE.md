@@ -303,11 +303,16 @@ Three properties follow:
   sizes its write batches with the same constant, imported rather than
   restated (`core/src/strategy/merge-back.ts:60`).
 
-`packages/agent-utils` supplies the `VFS` interface both planes satisfy
-(`agent-utils/src/vfs/types.ts`) and nothing else on this axis: no filesystem
-implementation and no shell emulator. The shell is the Nimbus `runtime-bash`.
-Memory indexing reads through the active VFS on either backend, so relational
-`memory_chunks` never becomes a second file authority.
+Every file plane implements Nimbus's `VFS`, imported directly from
+`@nimbus-sh/core/vfs/vfs.js`, with `VfsStat`, `VfsDirent` and `VfsRevision`.
+Reads and writes carry bytes; text callers use Nimbus's `readText` and
+`writeText`. Directory listings carry dirents, with metadata when the plane
+has it. `stat` returns null for an absent path, including an absent parent;
+permission and transport failures still throw. An unavailable mount refuses
+with `ENXIO`, rather than claiming a file is missing. Kinu retains only its
+checkpoint write-report extension, not another filesystem interface. The
+shell is Nimbus's `runtime-bash`. Memory indexing reads through the active
+VFS on either backend, so `memory_chunks` never becomes a second authority.
 
 One table named `vfs_files` still appears in the tree, in
 `packages/cli/tests/export-import.test.ts`. The test creates it as a blob

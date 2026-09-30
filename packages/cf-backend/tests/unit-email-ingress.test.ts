@@ -264,7 +264,7 @@ describe('acceptInboundEmail — the trust gate', () => {
     expect(payload.body_path).toBeTruthy();
 
     if (!payload.body_path) throw new Error('expected spilled email body path');
-    expect(files.get(payload.body_path)).toBe(body);
+    expect(files.get(payload.body_path)).toEqual(new TextEncoder().encode(body));
 
     const batch = buildDrainBatch(log.pending());
 

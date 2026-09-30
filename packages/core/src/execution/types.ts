@@ -1,10 +1,12 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Execution layer types: executors are codemode ToolProviders. docs/EXECUTION-LAYER-SPEC.md
  * Lean formalization: lean/Kinu/Execution/Capabilities.lean
  */
 
-import type { VFS } from '../types/primitives';
+
 import type { JsonValue } from '../utils/json';
+import type { CheckpointFiles } from '../types/primitives';
 import type { DeviceSandboxStatus } from './device-status';
 import type { FilesOwner, ShellSession } from '../safety/approval-gate';
 
@@ -93,7 +95,7 @@ export interface ExecutorProvider {
    * This environment's files in its own native paths, over the raw handle (not its lossy LLM tools).
    * Mounted into the workspace via vfs/mounts.ts, so consent and path scoping hold on mounted paths.
    */
-  readonly files?: VFS;
+  readonly files?: VFS & CheckpointFiles;
 
   /**
    * Absolute directory relative paths resolve against; asked, never guessed. A multi-machine plane

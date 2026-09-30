@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The executor-seam approval gate: a command gated via `shell` must also be gated via codemode
  * (`nimbus.exec`, `sandbox.exec`, `device.exec`). Fails if `ExecutionRouter.register()` stops gating.
@@ -10,7 +11,7 @@ import { gateProviderExec, withApprovalGatedShell } from '../src/execution/appro
 import { createSandboxExecutor } from '../src/execution/sandbox';
 import type { ExecutorProvider } from '../src/execution/types';
 import { createShellSession, type FilesOwner, type ShellApprovalPolicy, type ShellApprovalRequest } from '../src/safety/approval-gate';
-import type { VFS } from '../src/types/primitives';
+
 import { withMountTable } from '../src/vfs/mounts';
 import { skillsMount } from '../src/skills/view';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
@@ -362,22 +363,21 @@ function deviceProject() {
   const isDir = (path: string) => path === '/' || path === '' || path === '/proj';
 
   const stat = (path: string) => {
-    if (isDir(path)) return { isDir: true, size: 0, mtimeMs: 0 };
+    if (isDir(path)) return { type: 'directory' as const, size: 0, mtimeMs: 0 };
 
-    return files.has(path) ? { isDir: false, size: 1, mtimeMs: 0 } : null;
+    return files.has(path) ? { type: 'file' as const, size: 1, mtimeMs: 0 } : null;
   };
 
   const device: VFS = {
     readFile: async (path) => new TextEncoder().encode(files.get(path) ?? ''),
     writeFile: async () => undefined,
-    readdir: async (path) => (path === '/proj' ? [...files.keys()].map((file) => file.slice('/proj/'.length)) : ['proj']),
+    readdir: async (path) => (path === '/proj' ? [...files.keys()].map((file) => ({ name: file.slice('/proj/'.length), type: 'file' as const })) : [{ name: 'proj', type: 'directory' }]),
     stat: async (path) => stat(path),
     unlink: async (path) => {
       removed.push(path);
       files.delete(path);
     },
     mkdir: async () => undefined,
-    exists: async (path) => isDir(path) || files.has(path),
   };
 
   return { device, removed };

@@ -1,3 +1,4 @@
+import { type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 /** One non-main agent in its own loader isolate (D9). */
 import { DurableObject, RpcTarget } from 'cloudflare:workers';
 import { Nimbus, type NimbusSandbox, type NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
@@ -6,7 +7,7 @@ import {
   decodeJsonValue, readAgentArchivePage,
   type AgentFigures,
   type AgentOwnInspection, type AnsweredEvolutionHelper, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage, type JsonValue,
-  type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type VfsRevision, type SerializedMessage, type SubordinateInspectionResult,
+  type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
 } from '@kinu.run/core';
 import { AgentDatabase } from './agent-database';
@@ -59,9 +60,8 @@ class AgentContextTree extends RpcTarget implements ContextTreeRemote {
   readFileAtRevision(path: string, revision: VfsRevision, range?: { readonly offset: number; readonly length: number }) { return this.served.readFileAtRevision(path, revision, range); }
   readRange(path: string, offset: number, length: number) { return this.served.readRange(path, offset, length); }
   readdir(path: string) { return this.served.readdir(path); }
-  stat(path: string) { return this.served.stat(path); }
-  exists(path: string) { return this.served.exists(path); }
-  writeFile(path: string, data: string | Uint8Array) { return this.served.writeFile(path, data); }
+  stat(path: string, options?: { follow?: boolean }) { return this.served.stat(path, options); }
+  writeFile(path: string, data: Uint8Array) { return this.served.writeFile(path, data); }
   writeFileIfRevision(path: string, data: Uint8Array, expected: VfsRevision) { return this.served.writeFileIfRevision(path, data, expected); }
 }
 

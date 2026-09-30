@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 import type { AgentRuntime } from './types/agent-runtime';
 import type { RawSqlExec, SqlExecutor, Storage } from './types/primitives';
@@ -92,14 +93,14 @@ export async function createWorkspace(
   await workspace.vfs.mkdir('scaffold', { recursive: true });
   // The versioned source is authoritative; agent.js is its rebuildable view.
   const scaffoldSource = config.scaffold ?? INITIAL_SCAFFOLD_SOURCE;
-  await workspace.vfs.writeFile('scaffold/agent.js.v0', scaffoldSource);
+  await writeText(workspace.vfs, 'scaffold/agent.js.v0', scaffoldSource);
   void sql`INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale)
     VALUES (${actor.actorId}, 0, ${nowMs()}, ${'initial bootstrap'})`;
   markStoreChanged(sql);
-  await workspace.vfs.writeFile('scaffold/agent.js', scaffoldSource);
+  await writeText(workspace.vfs, 'scaffold/agent.js', scaffoldSource);
 
   await workspace.vfs.mkdir('memory', { recursive: true });
-  await workspace.vfs.writeFile('memory/MEMORY.md', `# ${heading}\n\nCreated: ${new Date().toISOString()}\n`);
+  await writeText(workspace.vfs, 'memory/MEMORY.md', `# ${heading}\n\nCreated: ${new Date().toISOString()}\n`);
 
   return buildComponents({ db, sql, execRaw, transactionSync, workspace, actor, llm: config.llm });
 }

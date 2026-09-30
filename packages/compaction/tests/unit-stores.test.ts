@@ -1,13 +1,8 @@
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import {
-  initWorkspaceSchema,
-  type SqlExec,
-  type SqlExecRow,
-  type SqlExecutor,
-  type SqlValue,
-  type VFS,
-} from '@kinu.run/core';
+import { initWorkspaceSchema, type SqlExec, type SqlExecRow, type SqlExecutor, type SqlValue } from '@kinu.run/core';
 import { createTestActorsOver } from '@kinu.run/test-utils';
 import {
   compactionTranscriptPath,
@@ -106,13 +101,19 @@ function memoryVfs(): MemoryVfs {
 
       if (content === undefined) throw new Error(`ENOENT: ${path}`);
 
-      return content;
+      return new TextEncoder().encode(content);
     },
     writeFile: async (path, data) => {
       files.set(path, data instanceof Uint8Array ? new TextDecoder().decode(data) : data);
     },
     readdir: async () => [],
-    stat: async () => null,
+    stat: async (path) => {
+      const content = files.get(path);
+
+      if (content !== undefined) return { type: 'file', size: new TextEncoder().encode(content).byteLength, mtimeMs: 0 };
+
+      return dirs.has(path) ? { type: 'directory', size: 0, mtimeMs: 0 } : null;
+    },
     unlink: async (path) => {
       files.delete(path);
     },
@@ -120,7 +121,6 @@ function memoryVfs(): MemoryVfs {
       if (dirs.has(path)) throw new Error(`EEXIST: directory exists ${path}`);
       dirs.add(path);
     },
-    exists: async (path) => files.has(path) || dirs.has(path),
   };
 
   return { vfs, files };
@@ -145,7 +145,7 @@ describe('createVfsTranscriptStore', () => {
     const { absolutePath } = await store.write(path, '# transcript');
     expect(absolutePath).toBe(path);
     expect(files.get(path)).toBe('# transcript');
-    expect(await vfs.readFile(path)).toBe('# transcript');
+    expect(await readText(vfs, path)).toBe('# transcript');
   });
 
   test('citablePath survives unbound invocation (the engine passes it around bare)', () => {
@@ -158,7 +158,7 @@ describe('createVfsTranscriptStore', () => {
     const store = createVfsTranscriptStore(() => vfs);
     await store.write(store.citablePath('a', 'h1'), 'one');
     await store.write(store.citablePath('a', 'h2'), 'two');
-    expect(await vfs.readFile(store.citablePath('a', 'h2'))).toBe('two');
+    expect(await readText(vfs, store.citablePath('a', 'h2'))).toBe('two');
   });
 });
 
