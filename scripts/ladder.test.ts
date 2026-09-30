@@ -19,13 +19,14 @@
 
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
+import { cpus } from 'node:os';
 import { relative, resolve } from 'node:path';
 import { childEnv } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
-  DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts,
-  printPlan, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, type WaveRow,
+  DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts, phaseWave,
+  runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
@@ -129,27 +130,27 @@ const omittedGate = (directory: string): string | undefined =>
   Object.entries(ROOT_TEST_OMISSIONS).find(([name]) => name === directory)?.[1];
 
 describe('the ladder measures something', () => {
-  test('the deploy plan holds every non-evals gate, in phase order, and nothing else', () => {
-    // The plan is what `bash scripts/deploy.sh` schedules from — the one copy
-    // of what blocks a publish. Until 2026-09-15 this parsed deploy.sh's own
-    // `run_required_gate` lines and held them equal to the ladder; the parser
-    // and the second list are gone, and the property is that the plan is the
-    // ladder: every gate but the evals tier, each once, phases in order.
+  test('the deploy plan holds every non-evals gate, in phase order, and each phase runs exactly its rows', () => {
+    // The plan is the one copy of what blocks a publish. Until 2026-09-15 this
+    // parsed deploy.sh's own `run_required_gate` lines and held them equal to
+    // the ladder; the parser and the second list are gone, and the property is
+    // that the plan is the ladder: every gate but the evals tier, each once,
+    // phases in order. deploy.sh runs each phase as `--deploy-phase`, which is
+    // the plan's rows of that phase and no other.
     const plan = deployPlan();
     expect(plan.length).toBeGreaterThan(10);
     expect(plan.map((row) => row.run).sort()).toEqual(LADDER.filter((gate) => gate.tier !== 'evals').map((gate) => gate.run).sort());
     const phaseIndex = plan.map((row) => DEPLOY_PHASES.indexOf(row.phase));
     expect([...phaseIndex].sort((a, b) => a - b)).toEqual(phaseIndex);
-    // The printed form round-trips: what the runner reads is what was planned.
-    const printed = printPlan(plan).split('\n').map((line) => line.split('\t'));
-    expect(printed.map((fields) => fields[5])).toEqual(plan.map((row) => row.run));
-    expect(printed.map((fields) => fields[4])).toEqual(plan.map((row) => row.shared));
-    expect(printed.map((fields) => fields[0])).toEqual(plan.map((row) => row.phase));
+
+    for (const phase of DEPLOY_PHASES) {
+      expect(phaseWave(phase).map(({ gate }) => gate.run)).toEqual(plan.filter((row) => row.phase === phase).map((row) => row.run));
+    }
   });
 
-  test('the concurrent wave starts its longest measured rows first, and every alone phase keeps ladder order', () => {
-    // Walls assigned against ladder order, so a plan that kept ladder order
-    // inside the wave, or sorted the other way, reads the wrong row first.
+  test('the source phase launches its longest measured rows first, and every alone phase keeps ladder order', async () => {
+    // Walls assigned against ladder order, so a phase that launched in ladder
+    // order inside the wave, or sorted the other way, starts the wrong row first.
     const real = readCosts();
     const ladderOrder = LADDER.map((gate) => gate.run);
 
@@ -158,15 +159,25 @@ describe('the ladder measures something', () => {
       rows: Object.fromEntries(Object.entries(real.rows).map(([run, cost]) => [run, { ...cost, wallSeconds: ladderOrder.indexOf(run) }])),
     };
 
-    const plan = deployPlan(costs);
-    const source = plan.filter((row) => row.phase === 'source').map((row) => costs.rows[row.run]?.wallSeconds ?? -1);
+    // Under caps of nothing the wave admits a row only when none runs, so the start order is the launch order.
+    const launched = async (phase: (typeof DEPLOY_PHASES)[number]): Promise<string[]> => {
+      const started: string[] = [];
+
+      await tierWave(phaseWave(phase, costs).map(({ gate, row }) => ({ entry: gate.run, row })), async (run) => {
+        started.push(run);
+      }, () => false, { threads: 0, rssMb: 0 });
+
+      return started;
+    };
+
+    const source = (await launched('source')).map((run) => costs.rows[run]?.wallSeconds ?? -1);
 
     expect(source.length).toBeGreaterThan(10);
     expect(source).toEqual([...source].sort((left, right) => right - left));
 
-    const alone = plan.filter((row) => row.phase !== 'source').map((row) => ladderOrder.indexOf(row.run));
-    expect(alone).toEqual(DEPLOY_PHASES.flatMap((phase) => LADDER.filter((gate) => gate.tier !== 'evals' && gate.phase === phase))
-      .map((gate) => ladderOrder.indexOf(gate.run)));
+    for (const phase of DEPLOY_PHASES.filter((candidate) => candidate !== 'source')) {
+      expect(await launched(phase)).toEqual(LADDER.filter((gate) => gate.tier !== 'evals' && gate.phase === phase).map((gate) => gate.run));
+    }
   });
 
   test('a concurrent row whose figure is of a failed run has no measured cost, and the plan refuses it', () => {
@@ -981,10 +992,10 @@ describe('a tier runs its gates as a wave', () => {
     expect([...schedule.first, ...schedule.wave, ...schedule.last]).toHaveLength(tierRun('commit').length);
   });
 
-  const row = (threads: number, shared: WaveRow['shared'] = 'none', wall = 1): WaveRow => ({ threads, rssMb: 100, wall, shared });
+  const row = (threads: number, shared: WaveRow['shared'] = 'none', wall = 1, rssMb = 100): WaveRow => ({ threads, rssMb, wall, shared });
 
   /** Runs the wave over `rows`, each gate a few microtask turns long, and records what ran beside what. */
-  async function waved(rows: readonly WaveRow[], stopAfter = Number.POSITIVE_INFINITY) {
+  async function waved(rows: readonly WaveRow[], stopAfter = Number.POSITIVE_INFINITY, caps = { threads: 8, rssMb: 1_000 }) {
     const running = new Set<number>();
     const beside: number[][] = [];
     const started: number[] = [];
@@ -996,7 +1007,7 @@ describe('a tier runs its gates as a wave', () => {
 
       for (let turn = 0; turn < 3; turn += 1) await Promise.resolve();
       running.delete(index);
-    }, () => started.length >= stopAfter, { threads: 8, rssMb: 1_000 });
+    }, () => started.length >= stopAfter, caps);
 
     return { beside, started };
   }
@@ -1006,6 +1017,47 @@ describe('a tier runs its gates as a wave', () => {
 
     expect(Math.max(...beside.map((set) => set.length))).toBe(2);
     expect(beside.flat().length).toBeGreaterThan(4);
+  });
+
+  // THE MEMORY DIMENSION DECIDES, not just the thread one: the gate self-tests row settled at 137 on 2026-09-16, the
+  // kernel's status for a SIGKILL, which a wave that counts only threads cannot see coming.
+  test('admits gates up to the resident-set cap and no further', async () => {
+    const { beside } = await waved([row(1, 'none', 1, 400), row(1, 'none', 1, 400), row(1, 'none', 1, 400)]);
+
+    expect(Math.max(...beside.map((set) => set.length))).toBe(2);
+  });
+
+  // How a deploy phase runs one gate, or `--serial`: the gate's output is live, so nothing may run beside it.
+  test('caps of nothing run the wave one gate at a time, its longest measured rows first', async () => {
+    const { beside, started } = await waved([row(1, 'none', 1), row(1, 'none', 3), row(1, 'none', 2)], Number.POSITIVE_INFINITY, { threads: 0, rssMb: 0 });
+
+    expect(started).toEqual([1, 2, 0]);
+    expect(Math.max(...beside.map((set) => set.length))).toBe(1);
+  });
+
+  test('the caps are the box: its CPUs and three quarters of MemAvailable, or the figures an operator names', () => {
+    const named = { threads: process.env['KINU_DEPLOY_THREADS'], rssMb: process.env['KINU_DEPLOY_RSS_MB'] };
+
+    try {
+      delete process.env['KINU_DEPLOY_THREADS'];
+      delete process.env['KINU_DEPLOY_RSS_MB'];
+      const derived = waveCaps();
+      // Read beside the caps, not before them: MemAvailable moves while other work shares the box.
+      const availableMb = Number(/^MemAvailable:\s+(\d+) kB$/mu.exec(readFileSync('/proc/meminfo', 'utf8'))?.[1] ?? 0) / 1024;
+
+      expect(derived.threads).toBe(cpus().length);
+      expect(derived.rssMb).toBeGreaterThan(availableMb * 0.5);
+      expect(derived.rssMb).toBeLessThan(availableMb);
+
+      process.env['KINU_DEPLOY_THREADS'] = '7';
+      process.env['KINU_DEPLOY_RSS_MB'] = '1234';
+      expect(waveCaps()).toEqual({ threads: 7, rssMb: 1234 });
+    } finally {
+      for (const [name, value] of [['KINU_DEPLOY_THREADS', named.threads], ['KINU_DEPLOY_RSS_MB', named.rssMb]] as const) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
   });
 
   test('never runs two gates that hold the browser at once', async () => {

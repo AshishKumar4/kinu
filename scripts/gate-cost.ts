@@ -18,9 +18,9 @@
  * from a ladder row is a gate program and a gate program reads the tree through
  * `scripts/sources.ts` alone (`gate:set-equality`).
  *
- * Nothing edits the table by hand. `deployPlan()` reads it and refuses to print
- * a plan while a concurrently scheduled row has no measurement, so a new heavy
- * row cannot reach the wave carrying an invented cost.
+ * Nothing edits the table by hand. `deployPlan()` reads it and refuses a plan
+ * while a concurrently scheduled row has no measurement, so a new heavy row
+ * cannot reach the wave carrying an invented cost.
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
