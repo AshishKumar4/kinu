@@ -2120,6 +2120,8 @@ export { fmtPct, fmtSpan, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } fr
 
 export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './utils/do-rpc';
 
+export { inheritedDescriptor, type RpcSurfaceSubject } from './utils/prototype-members';
+
 export {
   type ActivitySnapshot, type ExecutorCommandResult, type ForkNode, type ForkNodeLifecycle,
   type MemoryEntry, type PendingConsent, type Rpc, type SubordinateActivityEvent,

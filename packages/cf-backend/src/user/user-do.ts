@@ -642,7 +642,6 @@ export class UserDO extends Agent<Env> {
     const gate = new ActivationGate();
     this.lifecycle.use(gate);
     startBeforeRpc(this, USER_DO_STARTED_RPC, () => gate.ready());
-    reportSocketCallFailures(this);
     // A DO is its own isolate, so the Worker's diagnostics sink must be installed here too.
     installAnalyticsDiagnostics(this.env);
     // Every event, a native RPC included, reaches whole tables: native RPCs run no `onStart`.
@@ -5211,3 +5210,5 @@ export class UserDO extends Agent<Env> {
     return out;
   }
 }
+
+reportSocketCallFailures(UserDO, Agent);

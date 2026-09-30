@@ -7,11 +7,10 @@
  * an allowlist, so a new member is unreachable until listed; native RPC has no dispatch hook to intercept.
  */
 
-import { AGENT_RPC_ACCESS } from '@kinu.run/core';
+import { AGENT_RPC_ACCESS, inheritedDescriptor, type RpcSurfaceSubject } from '@kinu.run/core';
 import type { ActorAgent } from './actor-agent';
 import type { OrchestratorAgent } from './orchestrator';
 import type { UserDO } from './user/user-do';
-import { inheritedDescriptor, type RpcSurfaceSubject } from './activation-gate';
 
 /**
  * Names the runtime and SDKs dispatch on a stub. `__unsafe_ensureInitialized` is what `getAgentByName`
