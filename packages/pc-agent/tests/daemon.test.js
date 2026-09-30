@@ -20,15 +20,15 @@ const path = require('node:path');
 
 const { tolerate } = require('@kinu.run/core/obs');
 
-/**
- * The daemon reads its config and in-flight root once at module load. Set both
- * before require so this suite cannot inspect or modify the developer's home.
- */
+/** The daemon snapshots these paths at load. Reload its module after this fixture declares them: another suite
+ * can have required it first, with the runner's throwaway home and a different in-flight root. */
 const INFLIGHT_ROOT = scratchDir('daemon-inflight');
 
 const DEVICE_HOME = scratchDir('daemon-home');
 
 const previousKinuHome = process.env.KINU_HOME;
+
+const previousInFlightRoot = process.env.KINU_INFLIGHT_ROOT;
 
 process.env.KINU_INFLIGHT_ROOT = INFLIGHT_ROOT;
 
@@ -38,7 +38,12 @@ afterAll(() => {
 
   if (previousKinuHome === undefined) delete process.env.KINU_HOME;
   else process.env.KINU_HOME = previousKinuHome;
+
+  if (previousInFlightRoot === undefined) delete process.env.KINU_INFLIGHT_ROOT;
+  else process.env.KINU_INFLIGHT_ROOT = previousInFlightRoot;
 });
+
+delete require.cache[require.resolve('../src/index.js')];
 
 const {
   CONFIG_PATH,

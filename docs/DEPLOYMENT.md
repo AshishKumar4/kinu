@@ -472,6 +472,8 @@ Step 2 asserts downloads exist in `dist/client/downloads/`. Step 3 asserts wrang
 
 ### CI credentials
 
+Source CI (`ci.yml`) runs the ladder's CI tier on pushes to `main` and `integration/**`, and on pull requests to `main`. It needs no account credential or release signing key: the distribution fixture generates its own key. Public Ubuntu runners supply Chrome; the workflow installs bubblewrap for the device sandbox. Lean verification and secret scanning also run on an integration push, with read-only repository tokens. Bench validation is scheduled or dispatched (or label-triggered on a PR), and live evals run only on dispatch.
+
 `.github/workflows/evals.yml` holds a credential, so its two jobs that read it (`evals`, `diagnose`) ask for the GitHub environment `eval`, and no pull request can start the workflow: it is dispatched after a promotion and measures the build production serves. Two things only an operator can do:
 
 | Operator setup required | Where | Why the repository cannot do it |
