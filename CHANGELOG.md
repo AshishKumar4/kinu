@@ -39,6 +39,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- Devbox test images build on the host's network, so a build step no longer adds a host interface that makes a concurrent browser row's Chrome fail its module loads with net::ERR_NETWORK_CHANGED. A gallery wait on a page whose app script never loaded now ends at once, naming the script requests that failed, instead of waiting out the row's silence bound.
 - Every GitHub workflow installs Bun from the package manager version in `package.json`, keeping image bundles and the local compiler on the same pinned toolchain.
 - Concurrent CI reports wait for their full output to drain before returning a verdict, preserving the failure beyond the pipe's first 64 KiB. Typecheck coverage still enforces actual missing/stale membership and debt; duplicate lists of those declarations no longer pin a second copy.
 - Test hygiene now follows source paths held in constants and checks reconnect snapshots through real RPCs and the mounted client. Cosmetic prose, stylesheet and artwork pins are removed; public pages are checked for working local resources and theme preferences.

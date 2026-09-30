@@ -3,6 +3,7 @@
 import { spawnSync } from 'node:child_process';
 import { afterAll, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
+import { dockerBuild } from './support/docker-build';
 
 const FIXTURE_DIR = join(import.meta.dir, 'support', 'workspace-mount-contract');
 
@@ -46,9 +47,7 @@ function probe(kind: 'overlay' | 'direct-io'): MountVerdicts {
 
 describe.skipIf(!usable)('the workspace mount honours writable MAP_SHARED mappings', () => {
   test('the fixture image builds both probes inside the shipped image', () => {
-    const built = spawnSync('docker', ['build', '-t', IMAGE, FIXTURE_DIR], {
-      encoding: 'utf8',
-    });
+    const built = dockerBuild(IMAGE, FIXTURE_DIR);
 
     expect(built.stderr + built.stdout).not.toContain('error:');
     expect(built.status).toBe(0);
