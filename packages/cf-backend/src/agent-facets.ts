@@ -85,6 +85,7 @@ export class AgentStoreBroker {
   async turnRequest(at: TurnRequestAt) { return await (await this.calls()).turnRequest(this.snapshot(), at); }
   async archivePage(cursor: ArchiveSqlCursor | null, maxBytes: number) { return await (await this.calls()).archivePage(this.snapshot(), cursor, maxBytes); }
   async spend(steps: readonly StepSpendSource[]) { return await (await this.calls()).spend(this.snapshot(), steps); }
+  async figures() { return await (await this.calls()).figures(this.snapshot()); }
 
   contextTree(editor: ContextEditor): ContextTree {
     return remoteContextTree(async () => await (await this.calls()).context(this.snapshot(), editor));

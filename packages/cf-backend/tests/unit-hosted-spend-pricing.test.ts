@@ -71,3 +71,50 @@ test('a researcher hire\'s steps are priced at its fast tier\'s rate, not the ro
   // The root's two steps, at its own model's $10.
   expect(priced(true)).toEqual([20, 20]);
 });
+
+for (const kind of ['hire', 'swarm'] as const) {
+  test("the agents panel reads a scripted " + kind + "'s cost and cache from its own facet", async () => {
+    const gateway = stubAiBinding((run) => {
+      const request = requestOf(run);
+      const child = request.tools.includes('report');
+      const step = request.messages.filter((message) => message.role === 'tool').length;
+
+      if (!child) return step === 0
+        ? toolCallCompletion(run, { tool: 'agents', args: kind === 'hire'
+          ? { action: 'hire', role: 'researcher', agent: 'counter', mission: 'Count the parser paths.' }
+          : { action: 'swarm', preset: 'ideate', task: 'Count the parser paths.', branches: 1, depth: 1 } }, 'start')
+        : chatCompletion(run, 'Handed off.');
+
+      const usage = step === 0
+        ? { prompt_tokens: 1000, completion_tokens: 200, total_tokens: 1200, prompt_tokens_details: { cached_tokens: 0 } }
+        : { prompt_tokens: 2000, completion_tokens: 100, total_tokens: 2100, prompt_tokens_details: { cached_tokens: 1800 } };
+
+      const delta = step === 0
+        ? { tool_calls: [{ index: 0, id: 'inspect', type: 'function', function: { name: 'tasks', arguments: '{"action":"list"}' } }] }
+        : { content: 'Counted.' };
+
+      const frames = [
+        { id: 'counted', model: 'harness', choices: [{ index: 0, delta, finish_reason: null }] },
+        { id: 'counted', model: 'harness', choices: [{ index: 0, delta: {}, finish_reason: step === 0 ? 'tool_calls' : 'stop' }], usage },
+      ];
+
+      return new Response(frames.map((frame) => 'data: ' + JSON.stringify(frame) + '\n\n').join('') + 'data: [DONE]\n\n', {
+        headers: { 'content-type': 'text/event-stream' },
+      });
+    });
+
+    const workspace = gatewayWorkspace(gateway);
+    workspace.agent.harnessCatalogModels({ [GATEWAY_MODEL]: { cost: { input: 2, output: 3, cacheRead: 0.5 } } });
+    await workspace.agent.setSoul('# Purpose\n\nCount the parser paths.');
+    await catalogTurn(workspace.agent, 'Delegate counting the parser paths.');
+    await workspace.agent.terminalRetryPass();
+    await joinHarnessFibers();
+
+    const listed = await workspace.agent.listWorkspaceAgents();
+    const worker = listed.find((agent) => agent.category === (kind === 'hire' ? 'hired' : 'swarm'));
+
+    expect(worker?.figures.tokens).toBe(3300);
+    expect(worker?.figures.usd).toBeCloseTo(0.0042, 10);
+    expect(worker?.figures.cacheEma).toBeCloseTo(0.18, 10);
+  });
+}
