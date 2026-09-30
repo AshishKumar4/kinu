@@ -34,18 +34,18 @@ import type { CountableRequest, InputTokenCount } from './providers/input-tokens
 import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
 import type { CompactionTrigger, ExtensionHost } from './extension';
 import { mergeProviderOptions } from './providers/effort';
-import { describeProviderError, providerFailureFacts, toProviderError } from './providers/util';
+import { describeProviderError, toProviderError } from './providers/util';
 import { repairToolCall } from './tools/repair-tool-call';
 import { renderToolResult, synthesizeToolFallback } from './utils/evidence-window';
 import * as v from 'valibot';
 import { JsonObjectSchema, projectJsonValue, type JsonObject, type JsonValue } from './utils/json';
 import { normalizeUsage, usageReported, type Usage } from './usage';
 import { PROVIDER_RETRIES_HEADER } from './providers/rate-limit-retry';
-import { createFallbackCooldowns, statedRetryAfterMs, type FallbackCooldowns } from './providers/fallback-cooldown';
-import { DEFAULT_PROVIDER_RETRIES } from './types/profile';
+import type { FallbackCooldowns } from './providers/fallback-cooldown';
+import { FallbackRoute, type CallFailure } from './providers/fallback-route';
 import { callAccountOf, type CallAccount } from './providers/quota';
 import { EGRESS_ROUTE_HEADER } from './execution/device-relay';
-import { classifyErrorCode, KinuError, diagnostics, renderThrownChain, toKinuError, type TurnTrace } from './obs/index';
+import { diagnostics, renderThrownChain, toKinuError, type TurnTrace } from './obs/index';
 import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
 import { invalidToolCallRefusal, toolSchemaDialect, withToolSchemaDialect } from './tools/tool-schema';
@@ -233,13 +233,6 @@ function toolOutput(raw: ChatToolOutput['output']): { output: JsonValue } | unde
 
 type PendingStepEvent = Omit<Extract<ChatEvent, { type: 'step-finish' }>, 'type'>;
 
-interface CallFailure {
-  readonly cause: unknown;
-  readonly error: Error;
-  /** The failing step had streamed text or started a tool. */
-  readonly streamed: boolean;
-}
-
 interface CallOutcome {
   /** The SDK's steps on a natural finish, the `onAbort` handover on a cut. */
   readonly steps: readonly StepResult<ToolSet>[];
@@ -248,89 +241,6 @@ interface CallOutcome {
   readonly finishReason: string | undefined;
   readonly interrupted: boolean;
   readonly failure: CallFailure | null;
-}
-
-/** A fallback takes a call that failed before streaming for a provider or account failure; a malformed or
- *  too-large request fails the turn. */
-function handsOver(failure: CallFailure): boolean {
-  if (failure.streamed) return false;
-  const { status } = providerFailureFacts({ cause: failure.cause });
-
-  if (status !== undefined) return [401, 402, 403, 404, 408, 429].includes(status) || status >= 500;
-  const code = classifyErrorCode({ cause: failure.error });
-
-  return code === null || code === 'unavailable' || code === 'timeout' || code === 'budget';
-}
-
-/** A failed lookup is logged and unknown: it skips nothing. */
-async function credentialOrUnknown(credentialOf: (spec: string) => Promise<string | null>, spec: string): Promise<string | null> {
-  const found = await credentialOf(spec).then(
-    (key) => ({ key }),
-    (...rejection: [unknown]) => ({ failed: toKinuError({ doing: 'look up a fallback\'s credential', cause: rejection[0], otherwise: 'io' }) }),
-  );
-
-  if ('key' in found) return found.key;
-  diagnostics.failure('llm_call.fallback_credential_unknown', found.failed, { spec });
-
-  return null;
-}
-
-const isolateCooldowns = createFallbackCooldowns();
-
-/** OMP's chain (coding-agent session/turn-recovery.ts 2448-2490): hand over at once, park, retry only the last. */
-class FallbackRoute {
-  readonly tried: string[];
-  private readonly chain: ChatFallback[];
-  private readonly cooldowns: FallbackCooldowns;
-  private readonly retries: number;
-
-  constructor(private readonly opts: ChatOptions) {
-    this.chain = [...(opts.fallbacks ?? [])];
-    this.cooldowns = opts.cooldowns ?? isolateCooldowns;
-    this.retries = opts.retries ?? DEFAULT_PROVIDER_RETRIES;
-    this.tried = [opts.modelSpec ?? 'the turn model'];
-  }
-
-  get callRetries(): number {
-    return this.chain.length > 0 ? 0 : this.retries;
-  }
-
-  cooledStart(): ChatFallback | undefined {
-    const spec = this.opts.modelSpec;
-
-    if (spec === undefined || !this.cooldowns.parked(spec)) return undefined;
-    const at = this.chain.findIndex((entry) => !this.cooldowns.parked(entry.spec));
-
-    return at < 0 ? undefined : this.chain.splice(0, at + 1).at(-1);
-  }
-
-  /** A 401 refuses the credential, so entries holding it are passed over; a 403 may be model-scoped. */
-  async next(failed: string | undefined, failure: CallFailure): Promise<ChatFallback | undefined> {
-    if (!handsOver(failure)) return undefined;
-
-    if (failed !== undefined) this.cooldowns.park(failed, statedRetryAfterMs({ cause: failure.cause }));
-    const { status } = providerFailureFacts({ cause: failure.cause });
-    const lookup = status === 401 && failed !== undefined ? this.opts.credentialOf : undefined;
-    const refused = lookup !== undefined && failed !== undefined ? await credentialOrUnknown(lookup, failed) : null;
-
-    for (let next = this.chain.shift(); next !== undefined; next = this.chain.shift()) {
-      if (this.cooldowns.parked(next.spec) && this.chain.length > 0) continue;
-
-      if (refused === null || lookup === undefined || await credentialOrUnknown(lookup, next.spec) !== refused) return next;
-    }
-
-    return undefined;
-  }
-
-  exhausted(failure: CallFailure): Error {
-    if (this.tried.length < 2) return failure.error;
-
-    return new KinuError(
-      classifyErrorCode({ cause: failure.error }) ?? 'unavailable',
-      `Tried ${this.tried.join(', ')}: ${describeProviderError({ cause: failure.cause })}`,
-      { cause: failure.error },
-    );
-  }
 }
 
 const DEAD_STREAM = 'Model stream ended without output: the provider stream terminated prematurely '
@@ -719,7 +629,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     providerOptions: mergeProviderOptions(cache.providerOptions, opts.providerOptions),
   };
 
-  const route = new FallbackRoute(opts);
+  const route = new FallbackRoute<ChatFallback>(opts);
   /** The fallback serving the turn, once one took over. */
   let servingFallback: string | undefined;
   let calls = 0;

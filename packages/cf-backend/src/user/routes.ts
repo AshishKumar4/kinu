@@ -11,7 +11,7 @@ import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, norm
 import { listAvailableModels, listProviderCatalog, testAvailableModel } from './available-models';
 import { readUserAccountUsage } from './account-usage';
 import {
-  handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged, type CreateWorkspaceEnv,
+  handleCreateWorkspaceRequest, notifyWorkspacesModelSettingsChanged, type CreateWorkspaceEnv,
 } from './workspace-access';
 import type { CloudWorkspaceRegistry } from './workspace-create';
 import type { ObjectNamespace } from '@kinu.run/core';
@@ -92,23 +92,27 @@ function publicOrigin(c: UserContext): string {
   return new URL(c.req.url).origin;
 }
 
-/** Credential writes refresh live workspaces' provider caches via waitUntil. */
-function credentialsChanged(c: UserContext): void {
-  notifyWorkspacesCredentialsChanged(c.env, c.get('stub'), c.executionCtx);
+/** Credential and profile writes reach live workspaces via waitUntil. */
+function modelSettingsChanged(c: UserContext): void {
+  notifyWorkspacesModelSettingsChanged(c.env, c.get('stub'), c.executionCtx);
 }
 
 type CatalogWrite = (
   catalog: Parameters<UserDO['putProfileCatalog']>[1], expectedVersion: number,
 ) => ReturnType<UserDO['putProfileCatalog']>;
 
-/** A profile-catalog `PUT`, from the browser or the CLI. */
-export async function answerCatalogPut(request: Request, write: CatalogWrite): Promise<Response> {
+/** A profile-catalog `PUT`, from the browser or the CLI; `changed` tells the owner's workspaces once it landed. */
+export async function answerCatalogPut(request: Request, write: CatalogWrite, changed: () => void): Promise<Response> {
   const body = await safeJson(request, v.object({ catalog: JsonValueSchema, expectedVersion: v.number() }));
 
   if (!body) return err(400, 'Body must be { catalog, expectedVersion }.');
   const result = await write(body.catalog, body.expectedVersion);
 
-  if (result.ok) return json({ body: result.envelope });
+  if (result.ok) {
+    changed();
+
+    return json({ body: result.envelope });
+  }
 
   if (result.kind === 'conflict') {
     return json({
@@ -175,7 +179,8 @@ userRoutes.get('/api/user/profile', async (c) => {
 userRoutes.get('/api/user/profile-catalog', async (c) => json({ body: await c.get('stub').getProfileCatalog(c.get('owner')) }));
 
 userRoutes.put('/api/user/profile-catalog', async (c) => answerCatalogPut(c.req.raw,
-  (catalog, expectedVersion) => c.get('stub').putProfileCatalog(c.get('owner'), catalog, expectedVersion)));
+  (catalog, expectedVersion) => c.get('stub').putProfileCatalog(c.get('owner'), catalog, expectedVersion),
+  () => { modelSettingsChanged(c); }));
 
 userRoutes.get('/api/user/cli', async (c) => {
   const cliOrigin = cliOriginFor(c);
@@ -337,7 +342,7 @@ userRoutes.post('/api/user/credentials/:key', async (c) => {
   try { await c.get('stub').setCredential(c.get('owner'), c.get('key'), body); }
   catch (cause) { throw authoredRefusal({ doing: 'storing this credential', cause }); }
 
-  credentialsChanged(c);
+  modelSettingsChanged(c);
 
   return json({ body: { ok: true } });
 });
@@ -346,7 +351,7 @@ userRoutes.delete('/api/user/credentials/:key', async (c) => {
   try { await c.get('stub').deleteCredential(c.get('owner'), c.get('key')); }
   catch (cause) { throw authoredRefusal({ doing: 'deleting this credential', cause }); }
 
-  credentialsChanged(c);
+  modelSettingsChanged(c);
 
   return json({ body: { ok: true } });
 });
@@ -363,7 +368,7 @@ userRoutes.get('/api/user/codex', async (c) => json({ body: await c.get('stub').
 
 userRoutes.delete('/api/user/codex', async (c) => {
   await c.get('stub').disconnectCodex(c.get('owner'));
-  credentialsChanged(c);
+  modelSettingsChanged(c);
 
   return json({ body: { ok: true } });
 });
@@ -377,7 +382,7 @@ userRoutes.post('/api/user/codex/poll', async (c) => {
   try {
     const status = await c.get('stub').pollCodexDeviceFlow(c.get('owner'));
 
-    if (status.connected) credentialsChanged(c);
+    if (status.connected) modelSettingsChanged(c);
 
     return json({ body: status });
   } catch (cause) { throw toKinuError({ doing: 'checking the Codex sign-in', cause, otherwise: 'unavailable' }); }
@@ -391,7 +396,7 @@ userRoutes.post('/api/user/claude/finish', async (c) => {
   if (body === null) return err(400, 'Body must be { code }');
   const status = await c.get('stub').finishClaudeSignIn(c.get('owner'), body.code);
 
-  if (status.connected) credentialsChanged(c);
+  if (status.connected) modelSettingsChanged(c);
 
   return json({ body: status });
 });
@@ -456,7 +461,7 @@ userRoutes.put('/api/user/cloudflare/account', async (c) => {
   try { await c.get('stub').selectCloudflareAccount(c.get('owner'), body.id); }
   catch (cause) { throw authoredRefusal({ doing: 'selecting this Cloudflare account', cause }); }
 
-  credentialsChanged(c);
+  modelSettingsChanged(c);
 
   return json({ body: { ok: true } });
 });
@@ -473,7 +478,7 @@ userRoutes.put('/api/user/cloudflare/gateway', async (c) => {
   try { await c.get('stub').selectAIGateway(c.get('owner'), body.id); }
   catch (cause) { throw authoredRefusal({ doing: 'selecting this AI Gateway', cause }); }
 
-  credentialsChanged(c);
+  modelSettingsChanged(c);
 
   return json({ body: { ok: true } });
 });

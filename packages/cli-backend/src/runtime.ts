@@ -28,7 +28,7 @@ import {
   withApprovalGatedShell, withApprovalGatedFiles, createShellSession, shellCwd, holdsGrant,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount, skillsMount,
-  resolveRoutingProfile, createRoutedModelLane,
+  resolveRoutingProfile, createRoutedModelLane, tierRefusals, type TierRefusals,
   type AgentStores, type ChildContextResolver,
   type ModelCallSink, type ModelOperationSink, type NodeHomeHost, type NodeWorkspace,
   type WorkspaceActor,
@@ -76,6 +76,9 @@ import { stampSchemaGenesis } from './schema-genesis';
 
 const HARNESS_CREDENTIAL_ENV = [...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV];
 
+/** Where a local owner changes a tier's model, as a refusal notice names it. */
+export const LOCAL_MODEL_SETTINGS = 'your model settings';
+
 interface CLIRuntimeOptions {
   /**
    * Physical directory the workspace plane binds to. Absent deliberately does not
@@ -113,6 +116,9 @@ export interface CLIRuntime extends AgentRuntime {
   ownerSoul?: () => Promise<string | null>;
   setModelForRoute?(factory: (resolution: ModelRouteResolution) => LLM): void;
   modelForRoute?: (resolution: ModelRouteResolution) => LLM;
+  /** A facet's lanes share its parent's credential lookup and refusal notices. */
+  credentialOf?: (spec: string) => Promise<string | null>;
+  refusals?: TierRefusals;
   /**
    * Fallback turn-profile authority, so a session-less runtime (`kinu evolve`) still
    * routes. A session refines its inputs rather than installing a second resolver.
@@ -290,16 +296,18 @@ export function createCLIRuntime(
   // Same endpoint and credentials as the routed-lane factory, so a tier's model is spelled one way.
   let specResolver: LocalModelResolver | null = null;
 
-  const profilePlane: LocalProfileModelPlane = {
-    normalizeSpec: (spec) => {
-      specResolver ??= createLocalModelResolver({
-        llm: config.llm,
-        credentials: config.providerCredentials,
-        oauthStore: config.oauthStore,
-      });
+  const localResolver = (): LocalModelResolver => {
+    specResolver ??= createLocalModelResolver({
+      llm: config.llm,
+      credentials: config.providerCredentials,
+      oauthStore: config.oauthStore,
+    });
 
-      return specResolver.normalizeSpecSync(spec);
-    },
+    return specResolver;
+  };
+
+  const profilePlane: LocalProfileModelPlane = {
+    normalizeSpec: (spec) => localResolver().normalizeSpecSync(spec),
     // Claims nothing it did not look up; a session that can list refines it.
     listModels: () => Promise.resolve({ models: [], failures: [] }),
   };
@@ -331,9 +339,14 @@ export function createCLIRuntime(
   const modelForRoute = (resolution: ModelRouteResolution): LLM =>
     modelRouteFactory(resolution);
 
+  const credentialOf = (spec: string): Promise<string | null> => localResolver().credentialFor(spec);
+  const refusals = tierRefusals({ sql, actor, config: agentConfig, now: Date.now, settings: LOCAL_MODEL_SETTINGS });
+
   const modelLanes = {
     resolveProfile: ensureProfile,
     llm: modelForRoute,
+    credentialOf,
+    refusals,
   };
 
   const llm = createRoutedModelLane(actor, 'reflection', modelLanes);
@@ -504,6 +517,8 @@ export function createCLIRuntime(
     setModelOperations: (sink: ModelOperationSink | null) => { modelOperations = sink; },
     profiles,
     modelForRoute,
+    credentialOf,
+    refusals,
     setModelForRoute: (factory: (resolution: ModelRouteResolution) => LLM) => {
       modelRouteFactory = factory;
     },
@@ -742,6 +757,8 @@ async function buildCLIHeadRuntime(
     runtimeOptions.modelLanes = {
       resolveProfile: parentProfile,
       llm: parentModelForRoute,
+      ...(parent.credentialOf !== undefined && { credentialOf: parent.credentialOf }),
+      ...(parent.refusals !== undefined && { refusals: parent.refusals }),
     };
   }
 

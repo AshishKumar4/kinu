@@ -14,7 +14,7 @@ import {
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { writeActivityLog } from '../identity/activity-log';
-import { providerFailureFacts, toProviderError } from '../providers/util';
+import { providerRefusalCode, providerStatusOf } from '../providers/util';
 import type { AgentOrchestrator, TurnContinuity } from './agent-orchestrator';
 import type { EvolutionEngine } from '../evolution/engine';
 import type { HeadJournal } from '../heads/journal';
@@ -55,8 +55,11 @@ export const TERMINAL_EFFECT_RETRY_BASE_MS = 5_000;
 
 export const TERMINAL_EFFECT_RETRY_CEILING_MS = 600_000;
 
-/** Provider answers a retry cannot change (a 404 route, a request refused as malformed); 401/402/403 the owner can fix. */
+/** Provider answers a retry cannot change (a 404 route, a request refused as malformed). */
 const LASTING_REFUSALS: ReadonlySet<ErrorCode> = new Set(['missing', 'bad_input']);
+
+/** Only the owner can fix these, so the row parks with no wake (T1). */
+const OWNER_FIXABLE_REFUSALS: ReadonlySet<ErrorCode> = new Set(['denied']);
 
 /** The owner reads an abandoned effect in the Activity log, by what it was doing. */
 const EFFECT_ACTIVITY: Partial<Record<TerminalEffectName, string>> = {
@@ -92,9 +95,12 @@ export type TerminalEffectName = (typeof TERMINAL_EFFECT_NAMES)[number];
 
 const TerminalEffectNameSchema = v.picklist(TERMINAL_EFFECT_NAMES);
 
+/** The newest row covers the older ones: an actor owes at most one (T2). */
+const COALESCED_EFFECTS: readonly TerminalEffectName[] = ['sleep_time'];
+
 
 /** `blocked` (unknown key version or effect) is still owed and reported: a deploy-shape problem a human resolves. */
-export type TerminalEffectStatus = 'pending' | 'completed' | 'blocked';
+export type TerminalEffectStatus = 'pending' | 'completed' | 'blocked' | 'parked';
 
 /** `owed`: the effect ran, reported unfinished, and stays owed. */
 export type TerminalEffectOutcome =
@@ -486,6 +492,36 @@ export class TerminalEffectLedger {
       WHERE NOT EXISTS (SELECT 1 FROM terminal_effects t WHERE t.actor_id = ${this.actorId} AND t.sequence_id = ${sequenceId}
         AND t.effect_name = e.value ->> '$.name' AND t.scope = e.value ->> '$.scope')
       ORDER BY e.key`;
+
+    const coalesced = new Set(owed.map((effect) => effect.name).filter((effectName) => COALESCED_EFFECTS.includes(effectName)));
+
+    for (const name of coalesced) {
+      void this.deps.sql`DELETE FROM terminal_effects
+        WHERE actor_id = ${this.actorId} AND effect_name = ${name} AND sequence_id != ${sequenceId} AND status != 'completed'`;
+    }
+
+    this.release();
+  }
+
+  /** Parked rows fall due now; the caller arms the wake. */
+  release(): number {
+    this.deps.actor.assertCurrent();
+
+    return this.deps.sql<{ effect_key: string }>`UPDATE terminal_effects
+      SET status = 'pending', next_attempt_at = ${this.deps.now()}
+      WHERE actor_id = ${this.actorId} AND status = 'parked'
+      RETURNING effect_key`.length;
+  }
+
+  waitingOnOwner(sequenceId: string): boolean {
+    this.deps.actor.assertCurrent();
+
+    const [row] = this.deps.sql<{ parked: number; other: number }>`
+      SELECT COALESCE(SUM(status = 'parked'), 0) AS parked, COALESCE(SUM(status != 'parked'), 0) AS other
+      FROM terminal_effects
+      WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId} AND status != 'completed'`;
+
+    return row !== undefined && row.parked > 0 && row.other === 0;
   }
 
   /** `inFlight`: every sequence this process is running now, live; this one is counted in it either way. */
@@ -543,7 +579,7 @@ export class TerminalEffectLedger {
       .map((row) => row.sequence_id);
   }
 
-  /** Null when nothing is owed; a past instant means due now. */
+  /** Null when nothing is owed on a clock; a past instant means due now. */
   nextRetryAt(
     /** Deferred, not dropped: the live activation running them can still die. */
     inFlight: ReadonlySet<string> = new Set(),
@@ -552,7 +588,7 @@ export class TerminalEffectLedger {
 
     const rows = this.deps.sql<{ sequence_id: string; at: number | null }>`
       SELECT sequence_id, MIN(next_attempt_at) AS at FROM terminal_effects
-      WHERE actor_id = ${this.actorId} AND status != 'completed' GROUP BY sequence_id`;
+      WHERE actor_id = ${this.actorId} AND status IN ('pending', 'blocked') GROUP BY sequence_id`;
 
     const deferred = this.deps.now() + TERMINAL_EFFECT_RETRY_CEILING_MS;
     let earliest: number | null = null;
@@ -588,7 +624,7 @@ export class TerminalEffectLedger {
         scope: row.scope,
         seq: row.seq,
         input: row.input_json,
-        status: row.status === 'blocked' ? 'blocked' : 'pending',
+        status: row.status === 'blocked' || row.status === 'parked' ? row.status : 'pending',
         attempts: row.attempts,
         nextAttemptAt: row.next_attempt_at,
         lane: row.lane === 'detached' ? 'detached' : 'inline',
@@ -633,7 +669,7 @@ export class TerminalEffectLedger {
     // The stored schedule governs every attempt, including a fresh row (due immediately).
     this.deps.actor.assertCurrent();
 
-    if (row.nextAttemptAt > this.deps.now()) return;
+    if (row.status === 'parked' || row.nextAttemptAt > this.deps.now()) return;
     const attempts = row.attempts + 1;
     const nextAttemptAt = this.deps.now() + terminalEffectBackoffMs(attempts);
     const inline = row.lane === 'inline' && row.target.kind === 'runnable' && row.target.effect.synchronous;
@@ -680,13 +716,13 @@ export class TerminalEffectLedger {
         cause: err,
         otherwise: 'unavailable',
       }), { sequence: sequenceId, effect: row.key, attempts });
-      const refused = toProviderError({ doing: `running the ${name} effect`, cause: err });
+      const refused = providerRefusalCode({ cause: err });
 
       // A refusal that will answer the same way again ends the effect, its row deleted; anything else stays owed.
-      if (LASTING_REFUSALS.has(refused.code)) {
-        const status = providerFailureFacts({ cause: err }).status;
-        const answered = status === undefined ? `refused it (${refused.code})` : `answered HTTP ${String(status)}`;
-        diagnostics.event('turn.terminal_effect_abandoned', { sequence: sequenceId, effect: row.key, attempts, code: refused.code });
+      if (refused !== null && LASTING_REFUSALS.has(refused)) {
+        const status = providerStatusOf({ cause: err });
+        const answered = status === undefined ? `refused it (${refused})` : `answered HTTP ${String(status)}`;
+        diagnostics.event('turn.terminal_effect_abandoned', { sequence: sequenceId, effect: row.key, attempts, code: refused });
         writeActivityLog(() => ({ sql: this.deps.sql, actor: this.deps.actor }), {
           event: 'terminal_effect_abandoned',
           detail: `${EFFECT_ACTIVITY[name] ?? name} failed: the model provider ${answered}, so it is not retried`,
@@ -694,6 +730,13 @@ export class TerminalEffectLedger {
         });
         void this.deps.sql`DELETE FROM terminal_effects
           WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId} AND effect_key = ${row.key}`;
+
+        return;
+      }
+
+      if (refused !== null && OWNER_FIXABLE_REFUSALS.has(refused)) {
+        this.record(sequenceId, row.key, 'parked');
+        diagnostics.event('turn.terminal_effect_parked', { sequence: sequenceId, effect: row.key, attempts, code: refused });
 
         return;
       }
@@ -745,9 +788,9 @@ export class TerminalEffectLedger {
         AND effect_key = ${row.key} AND status != 'completed'`;
   }
 
-  /** `completed` is irreversible; `pending` and `blocked` may replace each other. */
+  /** `completed` is irreversible; the others may replace each other. */
   private record(
-    sequenceId: string, key: string, status: 'pending' | 'blocked',
+    sequenceId: string, key: string, status: Exclude<TerminalEffectStatus, 'completed'>,
   ): void {
     this.deps.actor.assertCurrent();
     void this.deps.sql`UPDATE terminal_effects

@@ -46,7 +46,7 @@ function setupEnv() {
     UserDO: { idFromName: (name) => name, get: () => userDO },
     OrchestratorAgent: {
       idFromName: (name) => name,
-      get: () => ({ onCredentialsChanged: async () => ({ ok: true as const }) }),
+      get: () => ({ onModelSettingsChanged: async () => ({ ok: true as const }) }),
     },
     CLOUDFLARE_OAUTH_CLIENT_ID: 'cf-client-id',
     CLOUDFLARE_OAUTH_CLIENT_SECRET: 'cf-client-secret',

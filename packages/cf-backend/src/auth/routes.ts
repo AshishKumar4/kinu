@@ -23,7 +23,7 @@ import {
 } from '@kinu.run/core';
 import { JsonValueSchema, type JsonObject, type JsonValue } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
-import { notifyWorkspacesCredentialsChanged, type CredentialFanoutTarget } from '../user/workspace-access';
+import { notifyWorkspacesModelSettingsChanged, type ModelSettingsFanoutTarget } from '../user/workspace-access';
 import type { UserDO } from '../user/user-do';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
@@ -68,7 +68,7 @@ export type AuthRoutesAuthority = SessionAuthority
 export interface AuthRoutesEnv<Id = DurableObjectId> extends OAuthProviderEnv, OwnerCapabilityEnv {
   AUTH_KV: KvStore;
   UserDO: ObjectNamespace<Id, AuthRoutesAuthority>;
-  OrchestratorAgent: ObjectNamespace<Id, CredentialFanoutTarget>;
+  OrchestratorAgent: ObjectNamespace<Id, ModelSettingsFanoutTarget>;
   DEV_USER_EMAIL?: string;
   DEV_IDENTITY_SECRET?: string;
 }
@@ -276,7 +276,7 @@ async function attachCloudflareWorkersAI<Id>(
     const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
     await userDO.setCredential(await ownerCaller(env), CLOUDFLARE_OAUTH_CRED_KEY, credential);
     // No model seeding: the built-in default tier already names the native Workers AI model.
-    notifyWorkspacesCredentialsChanged(env, userDO, ctx);
+    notifyWorkspacesModelSettingsChanged(env, userDO, ctx);
   } catch (e) {
     const failure = summarizeOAuthFailure({ cause: e });
     diagnostics.failure('auth.workers_ai_credential_unavailable', toKinuError({

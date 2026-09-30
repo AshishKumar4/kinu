@@ -271,7 +271,7 @@ export function workspaceObject<Built extends Partial<CliAgentTarget>>(built: Bu
     setRole: refuse('setRole'),
     beginGenesisTurn: refuse('beginGenesisTurn'),
     reportFacetModelCall: refuse('reportFacetModelCall'),
-    onCredentialsChanged: refuse('onCredentialsChanged'),
+    onModelSettingsChanged: refuse('onModelSettingsChanged'),
     accountSpend: refuse('accountSpend'),
     createDurableWebhook: refuse('createDurableWebhook'),
     requestOverviewPush: refuse('requestOverviewPush'),
