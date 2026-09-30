@@ -3194,8 +3194,8 @@ function narrowWords(words: readonly string[], file: string, tracked: readonly s
 /** What a red row that ran to its end found: its exit code, or the processes it left (named above). */
 function ranRed(leftovers: readonly string[]): string {
   return leftovers.length === 0
-    ? 'the command exited non-zero; its own output is immediately above'
-    : `the run left ${String(leftovers.length)} process(es) running after it exited; the LEFT line above names them`;
+    ? 'the command exited non-zero'
+    : `the run left ${String(leftovers.length)} process(es) running after it exited`;
 }
 
 /**
@@ -3666,15 +3666,19 @@ if (import.meta.main) {
       return;
     }
 
-    const found = outcome.exitCode === DEADLINE_EXIT_CODE
-      ? `the run hung: it wrote nothing for the row's ${String(gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS)}s bound and was killed; its own output is immediately above`
+    const hung = outcome.exitCode === DEADLINE_EXIT_CODE;
+
+    // What went wrong, said once for the terminal, where the row's output is just above, and once for the report,
+    // which quotes the output's tail below the finding and keeps the whole of it in a log.
+    const found = hung
+      ? `the run hung: it wrote nothing for the row's ${String(gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS)}s bound and was killed`
       : ranRed(outcome.leftovers);
 
     console.error(`\nFAILED  ${gate.run}  after ${seconds.toFixed(1)}s\n`);
     console.error(finding({
       at: gate.run,
       invariant: gate.catches,
-      found,
+      found: `${found}; ${!hung && outcome.leftovers.length > 0 ? 'the LEFT line above names them' : 'its own output is immediately above'}`,
       silently: `every later tier assumes this held. What this gate does NOT cover: ${gate.blind}`,
       fix: `${gate.run}   # reproduce exactly this, nothing else`,
     }));
