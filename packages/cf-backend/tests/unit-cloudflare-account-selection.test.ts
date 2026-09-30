@@ -175,7 +175,7 @@ function routeHarness(selectFails = false) {
     OrchestratorAgent: {
       idFromName: (name) => name,
       get: (id) => workspaceObject({
-        async onCredentialsChanged() {
+        async onModelSettingsChanged() {
           notified.push(id);
 
           return { ok: true as const };

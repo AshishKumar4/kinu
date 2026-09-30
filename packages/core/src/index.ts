@@ -1713,7 +1713,9 @@ export { createScaffoldCandidateSurface, type ScaffoldCandidateBinding } from '.
 export { activeOperationProfile, captureOperationProfile, currentOperationProfile, resolveOperationProfile, runOperationProfile,
   withOperationProfile, operationProfileStream, type OperationProfile } from './profiles/operation';
 
-export { createRoutedModelLane } from './profiles/model-lane';
+export { completeOnRoute, createRoutedModelLane } from './profiles/model-lane';
+
+export { tierRefusals, type TierRefusals } from './profiles/tier-refusals';
 
 export {
   BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob, type SwarmHarvestDeps,

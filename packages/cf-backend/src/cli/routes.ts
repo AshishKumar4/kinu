@@ -33,12 +33,12 @@ import { readUserAccountUsage, type AccountLedgerTarget } from '../user/account-
 import { answerCatalogPut } from '../user/routes';
 import { WebhookRequestSchema } from '../events/routes';
 import type { CloudWorkspaceBirth, CloudWorkspaceRegistry } from '../user/workspace-create';
-import type { CreateWorkspaceEnv, CredentialFanoutTarget } from '../user/workspace-access';
+import type { CreateWorkspaceEnv, ModelSettingsFanoutTarget } from '../user/workspace-access';
 import type { SessionAuthority } from '../auth/store';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { KvStore } from '@kinu.run/agent-utils';
 import type { UserDO } from '../user/user-do';
-import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from '../user/workspace-access';
+import { handleCreateWorkspaceRequest, notifyWorkspacesModelSettingsChanged } from '../user/workspace-access';
 import type { UserAIProxyEnv } from '../user/ai-proxy';
 import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { OwnerCapabilityUnavailableError, ownerCaller } from '@kinu.run/core';
@@ -58,7 +58,7 @@ export type CliRoutesAuthority = CliAuthAuthority & SessionAuthority & CloudWork
   | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'getAuthHeaders'
 >;
 
-export type CliAgentTarget = CloudWorkspaceBirth & CredentialFanoutTarget & AccountLedgerTarget
+export type CliAgentTarget = CloudWorkspaceBirth & ModelSettingsFanoutTarget & AccountLedgerTarget
   & Pick<OrchestratorAgent, 'createDurableWebhook' | 'requestOverviewPush'> & AgentRpcDispatch;
 
 export interface CliRoutesEnv<Id>
@@ -236,7 +236,8 @@ cliRoutes.delete('/api/cli/sessions/:hash{[a-f0-9]{64}}', async (c) => {
 cliRoutes.get('/api/cli/profile', async (c) => json({ body: await c.get('cli').userDO.getProfileCatalog(await ownerCaller(c.env)) }));
 
 cliRoutes.put('/api/cli/profile', async (c) => answerCatalogPut(c.req.raw,
-  async (catalog, expectedVersion) => c.get('cli').userDO.putProfileCatalog(await ownerCaller(c.env), catalog, expectedVersion)));
+  async (catalog, expectedVersion) => c.get('cli').userDO.putProfileCatalog(await ownerCaller(c.env), catalog, expectedVersion),
+  () => { notifyWorkspacesModelSettingsChanged(c.env, c.get('cli').userDO, c.executionCtx); }));
 
 cliRoutes.get('/api/cli/tokens', async (c) =>
   json({ body: { tokens: await c.get('cli').userDO.listAccessTokens(await ownerCaller(c.env)) } }));
@@ -401,7 +402,7 @@ cliRoutes.post('/api/cli/credentials/:key', async (c) => {
   catch (cause) { throw authoredRefusal({ doing: 'storing this credential', cause }); }
 
   // Invalidate live workspaces' caches, as the browser routes do, or a new provider stays invisible.
-  notifyWorkspacesCredentialsChanged(c.env, cli.userDO, c.executionCtx);
+  notifyWorkspacesModelSettingsChanged(c.env, cli.userDO, c.executionCtx);
 
   return json({ body: { ok: true } }, { status: 201 });
 });
@@ -412,7 +413,7 @@ cliRoutes.delete('/api/cli/credentials/:key', async (c) => {
   try { await cli.userDO.deleteCredential(await ownerCaller(c.env), c.get('key')); }
   catch (cause) { throw authoredRefusal({ doing: 'deleting this credential', cause }); }
 
-  notifyWorkspacesCredentialsChanged(c.env, cli.userDO, c.executionCtx);
+  notifyWorkspacesModelSettingsChanged(c.env, cli.userDO, c.executionCtx);
 
   return json({ body: { ok: true } });
 });

@@ -5393,7 +5393,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable() async setProviderAccount(provider: string, account: string | null, actor?: string) {
-    return setProviderAccount(actor === undefined ? this.config : this.hostedChild(actor).child.stores.config, provider, account);
+    const set = setProviderAccount(actor === undefined ? this.config : this.hostedChild(actor).child.stores.config, provider, account);
+
+    await this.modelSettingsChanged();
+
+    return set;
   }
 
   /** A hosted actor's own model pin, over the workspace's for its turns. */
