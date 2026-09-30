@@ -10,9 +10,11 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 import { runToExit } from '@kinu.run/test-utils';
 import { withBrowser } from '../../scripts/live-app-harness';
-import { HOST_NETWORK_CHANGED, hostNetworkChange, recordDeadEnds, until, waitOn } from '../../scripts/product-flows';
+import { frameLedger, HOST_NETWORK_CHANGED, hostNetworkChange, recordDeadEnds, settledAfter, until, waitOn } from '../../scripts/product-flows';
 
 const NETWORK_CHANGE_SCENARIO = join(import.meta.dir, '..', '..', 'scripts', 'network-change-scenario.ts');
+
+const UNSETTLED_PAGE_SCENARIO = join(import.meta.dir, '..', '..', 'scripts', 'fixtures', 'unsettled-page-scenario.ts');
 
 const ScenarioSchema = v.object({ loads: v.number(), reasons: v.array(v.string()) });
 
@@ -192,4 +194,83 @@ test('only a module graph that the host\'s network change alone failed is the ho
   expect(hostNetworkChange([{ at: 4, url: 'http://127.0.0.1:1/x.js', reason: 'net::ERR_CONNECTION_REFUSED' }])).toBeNull();
   expect(hostNetworkChange([cancelled])).toBeNull();
   expect(hostNetworkChange([])).toBeNull();
+});
+
+/**
+ * 2026-09-30 (staging deploy of d59a30999): a row waited 480 s on a reloaded page that never went quiet, and the
+ * kill named only the wait. Ended the way the row's bound ends it, the run names what the page kept sending.
+ */
+test('a wait on a page that never goes quiet, ended from outside, names what the page kept sending', async () => {
+  const child = Bun.spawn(['bun', UNSETTLED_PAGE_SCENARIO], { stdout: 'pipe', stderr: 'pipe' });
+  const stderr = new Response(child.stderr).text();
+  const reader = child.stdout.getReader();
+  let said = '';
+
+  while (!said.includes('waiting')) {
+    const read = await reader.read();
+
+    if (read.done) break;
+    said += new TextDecoder().decode(read.value);
+  }
+
+  child.kill('SIGTERM');
+  await child.exited;
+  const printed = await stderr;
+
+  expect(printed).toContain('ended while waiting for an answer that never comes');
+  expect(printed).toMatch(/requests: \/poll ×([2-9]|\d{2,})/u);
+});
+
+/**
+ * A socket's own RPC ids restart with it, and a page that unloads leaves its last asks unanswered. On 2026-09-30 a
+ * row restarted its ledger, reloaded the page, and waited 480 s on an ask the unloaded page's socket never answered.
+ */
+test('an ask whose socket closed unanswered does not hold the wait, and an id another socket reuses is its own', async () => {
+  // Answers `getWorkspaceSnapshot` at once and closes on anything else without answering, as an unloading page's
+  // socket ends with its last ask open.
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch(request, bun) {
+      if (bun.upgrade(request)) return undefined;
+
+      return new Response('<main></main>', { headers: { 'content-type': 'text/html' } });
+    },
+    websocket: {
+      message(socket, raw) {
+        const ask = v.parse(v.object({ id: v.string(), method: v.string() }), JSON.parse(String(raw)));
+
+        if (ask.method === 'getWorkspaceSnapshot') socket.send(JSON.stringify({ type: 'rpc', id: ask.id, done: true, result: {} }));
+        else socket.close();
+      },
+    },
+  });
+
+  try {
+    await withBrowser(async (browser) => {
+      const page = await blankPage(browser);
+      await page.goto(`http://127.0.0.1:${String(server.port)}/`);
+      const ledger = await frameLedger(page);
+
+      await page.evaluate(async (url) => {
+        const ask = (id: string, method: string) => new Promise<void>((resolve) => {
+          const socket = new WebSocket(url);
+
+          socket.onopen = () => { socket.send(JSON.stringify({ type: 'rpc', id, method })); };
+
+          socket.onclose = () => { resolve(); };
+
+          socket.onmessage = () => { socket.close(); };
+        });
+
+        await ask('7', 'listTurnFeedback');
+        await ask('1', 'getWorkspaceSnapshot');
+      }, `ws://127.0.0.1:${String(server.port)}/`);
+
+      await settledAfter(page, ledger, 'getWorkspaceSnapshot');
+      await ledger.stop();
+    });
+  } finally {
+    await server.stop(true);
+  }
 });
