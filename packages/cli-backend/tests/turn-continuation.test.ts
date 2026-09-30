@@ -253,7 +253,9 @@ const parkedAfterCall = (lead: string, toolCallId: string): Step => (abortSignal
 });
 
 /** A dead process's cut step, then a second process that re-opens and finishes it. */
-async function resumed(cut: Step, finish: Step): Promise<{ readonly db: Database; readonly stored: string | null; readonly streamed: readonly string[] }> {
+async function resumed(cut: Step, finish: Step): Promise<{
+  readonly db: Database; readonly stored: string | null; readonly streamed: readonly string[]; readonly continued: readonly PromptMessage[];
+}> {
   const db = new Database(scratchPath('turn-continuation', 'agent.db'));
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
@@ -264,7 +266,8 @@ async function resumed(cut: Step, finish: Step): Promise<{ readonly db: Database
   await waitFor(() => eventsA.some((event) => event.type === 'text-delta'));
 
   const eventsB: SessionEvent[] = [];
-  const b = new LocalAgentSession({ rt, db, model: scriptedModel([finish]), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsB.push(event) });
+  const promptsB: PromptMessage[][] = [];
+  const b = new LocalAgentSession({ rt, db, model: scriptedModel([finish], promptsB), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsB.push(event) });
   await waitFor(() => eventsB.some((event) => event.type === 'turn-end'));
   await b.end();
   await Promise.race([dying, Promise.resolve()]);
@@ -273,15 +276,19 @@ async function resumed(cut: Step, finish: Step): Promise<{ readonly db: Database
   const last = [...transcript.entries()].reverse().find((entry) => entry.role === 'assistant');
   const stored = last === undefined ? null : (await transcript.project(last.id))?.content ?? null;
 
-  return { db, stored, streamed: eventsB.flatMap((event) => event.type === 'text-delta' ? [event.delta] : []) };
+  return { db, stored, streamed: eventsB.flatMap((event) => event.type === 'text-delta' ? [event.delta] : []), continued: promptsB[0] ?? [] };
 }
 
-// 2026-09-28 (turn-sql, one buffer): the cut step's partial is read back from the stream buffer, not a run-event ledger.
-describe('A STEP CUT MID-STREAM — resumed from what it streamed', () => {
-  test('the text a dead process streamed heads the answer once, and is not streamed again', async () => {
-    const { db, stored, streamed } = await resumed(parked('part-'), answer('one'));
+// 2026-09-30 (ironwood-cairn-6dbcb8de): a continuation sent the cut text as the last assistant message, which an
+// OpenAI-compatible model answers with a new message ("My last few sends got clipped"), and the stored answer joined
+// the two ("...clipped before theServer"). The cut text leaves the request and the answer.
+describe('A STEP CUT MID-STREAM — written again whole', () => {
+  test('a step cut mid-text is not shown to the model again, and the answer is the continuation alone', async () => {
+    const { db, stored, streamed, continued } = await resumed(parked('part-'), answer('one'));
 
-    expect(stored).toBe('part-one');
+    expect(continued.at(-1)?.role).toBe('user');
+    expect(continued.map(messageText).join('\n')).not.toContain('part-');
+    expect(stored).toBe('one');
     expect(streamed.join('')).toBe('one');
     db.close();
   });
