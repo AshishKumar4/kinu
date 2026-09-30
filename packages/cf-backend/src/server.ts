@@ -15,6 +15,7 @@ import {
 import { releaseArtifact, releaseArtifactHead } from "@kinu.run/core";
 import { DEPLOY_PAGE_PATH, RELEASE_ARTIFACT_NAME } from "@kinu.run/core/deploy";
 import { servePreviewRequest } from "./preview-proxy";
+import { AGENT_BUNDLE_DIRECTORY } from "./agent-facets";
 import { mcpAgentResolver, mcpRoutes } from "./mcp-server";
 import { cliPageRoutes } from "./cli/routes";
 import { deployCallbackRoutes } from "./deploy/routes";
@@ -54,7 +55,11 @@ export { CodexEgress } from "./egress/codex-egress";
 // Loopback egress for `eval` programs (codemode-egress.ts); absent, they have no network.
 export { CodemodeEgress } from "./codemode-egress";
 
+export { CodemodeLauncher } from "./codemode-sandbox";
+
 export { SlateBinding } from "./slates/bindings";
+
+export { AgentWorkspaceRPC } from "./agent-facets";
 
 // Required: the Sandbox DO builds outbound interception from
 // `ctx.exports.ContainerProxy`; without it egress goes unintercepted.
@@ -338,6 +343,8 @@ for (const prefix of ['/src', '/@vite', '/@fs', '/node_modules', '/.vite']) {
 worker.all('/@react-refresh', viteDevAsset);
 
 worker.all('/client-node-stubs.ts', viteDevAsset);
+
+worker.all(`${AGENT_BUNDLE_DIRECTORY}/*`, () => new Response('Not found', { status: 404 }));
 
 // Public: the blueprint page's data is signature-checked; the deploy page's run key is its authority.
 for (const path of ['/login', '/logout', DEPLOY_PAGE_PATH]) worker.all(path, appShell);

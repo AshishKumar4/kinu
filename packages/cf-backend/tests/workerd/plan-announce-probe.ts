@@ -9,7 +9,8 @@ import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface'
 import * as v from 'valibot';
 
 // A root claims an owner and reaches `env.UserDO` for the device plane, so this worker binds the class.
-export { UserDO } from '../../src/user/user-do';
+export * from '../../src/server';
+
 
 export { UserSocketProbeDO } from './user-socket-probe';
 

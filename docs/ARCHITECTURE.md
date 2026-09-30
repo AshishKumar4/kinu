@@ -40,11 +40,11 @@ graph TB
             S["sandbox.*: Linux container, KinuSandbox (when configured)"]
             P["device.*: the user's own machine (connect + consent)"]
         end
-        State["Actor SQL: sessions · plans · task/evolution/search ledgers<br/>Nimbus files: SOUL.md · memory · actor scaffolds"]
+        State["Workspace SQL: main session · roster · shared ledgers<br/>Nimbus files: SOUL.md · memory · actor scaffolds"]
     end
 
     Orch["orchestrator<br/>the workspace's default agent"] --> WS
-    Subs["subordinates · heads · swarm nodes<br/>logical actors hosted on the ONE workspace SQLite (core/src/state/actor-host.ts)<br/>shared workspace file plane, actor-scoped rows + shell + scaffold"] -.->|assigned-work reports · findings merge back| Orch
+    Subs["subordinates · heads · swarm nodes · background agents<br/>one AgentFacet loader isolate and SQLite per actor<br/>tools and shared files through workspace RPC"] -.->|assigned-work reports · findings merge back| Orch
     Peers["peers<br/>the owner's other workspaces"] -.->|peer transport| Orch
 ```
 
@@ -65,15 +65,14 @@ interception. [WORKSPACES.md](./WORKSPACES.md) holds the noun model;
 
 ## The actor hierarchy
 
-One DO class acts inside a workspace, and its shared base is the security
-model:
+The workspace hosts main and the shared services; non-main turns run in facets:
 
 ```mermaid
 graph TB
     A["Agent&lt;Env&gt;: agents SDK"]
     AA["ActorAgent (abstract)<br/>cf-backend/src/actor-agent.ts<br/>runtime · BackendHost · AgentOrchestrator<br/>ExtensionHost · ChatSession ports"]
     O["OrchestratorAgent<br/>agents: swarm · hire · msg · list · dismiss<br/>codemode: release · agent"]
-    H["Hosted actors (no class)<br/>subordinate · task hire · head · node<br/>logical rows in workspace_actors, one ActorHost"]
+    H["AgentFacet<br/>subordinate · head · node · background<br/>own isolate and SQLite; workspace RPC for tools"]
     OMS["OwnedModelServices<br/>owner-scoped provider · model<br/>affinity · web search"]
 
     A --> AA
@@ -107,45 +106,32 @@ message. At the depth cap `teamProfile()` returns nothing, so the roster and the
 not a native tool: it is an orchestrator-only codemode provider, left out of the
 Plan-mode set. `submit_plan` exists only on an owner turn in Plan mode.
 
-Non-root actors are logical rows, not classes. A durable hire, a
-`lifetime:'task'` hire, a branching head and a swarm node are
-rows in `workspace_actors`. The workspace's one `ActorHost` acquires each as a
-`HostedActor` with its own runtime objects (session, stores, queue, abort,
-roles, loop pointer) under the root's lifecycle. A subordinate runs delegated
-turns through `runHeadInference` over its own `HostedActor`, with the full-agent
-surface built by the same `buildActorTools` the root uses, over its own runtime,
-plus the `report` lane that settles the `agents.hire` that gave it the work. It
-gets no peer transport, so it cannot leave its subtree. A head runs the same
-runner with the head tool surface (`record_evidence`, `record_decision`, and
-`split_subheads` while depth remains). A swarm node runs a `NodeRunSpec` through
-the same runner. There is no second object and no second database. Hosting buys lifecycle
-(acquire, fence, retire), not a second storage boundary. Heads and swarm nodes
-share the workspace files, processes, and ports. No seed RPC crosses an object
-boundary: registration is a directory write, and acquisition binds stores.
-Recursion stays bounded by construction (`maxDepth` per spawn, refused once
-exhausted).
+Every non-main agent is a roster row in `workspace_actors` and runs its turns
+in an `AgentFacet` with its own Worker Loader isolate and SQLite (D8/D9).
+Hired agents, background evolution agents, branching heads, swarm nodes and
+steer branches use the same `runHeadInference` loop and facet queue. Main
+keeps its model loop and conversation in the workspace object.
 
-Actor addresses keep the two families apart inside one roster
-(`packages/core/src/identity/actor-key.ts`). A subordinate's storage key is its
-roster slug. A head or swarm node registers under an `exp:`-prefixed
-key (`explorationActorKey`), which a slug cannot carry, so a hire and a
-generated worker id never collide. Journals and handles keep the plain id.
+The workspace prepares profiles, prompts and tool surfaces. Every tool call
+returns through `AgentWorkspaceRPC`; the facet holds conversation, claims,
+effect claims and run events. A head keeps its accumulator tools and split
+callback in the workspace. A swarm node keeps its report, branch arbiter,
+background jobs and wake queue there too. Steps, live deltas and mission
+charges return over RPC; the completed turn returns its report and produced
+conversation. Inherited scaffold programs use the existing workspace executor,
+with model-loop callbacks running in the facet.
 
-No actor owns a database. Every logical actor of a workspace (the orchestrator,
-its hires, its heads and its swarm nodes) is bound by one
-`ActorHost` (`packages/core/src/state/actor-host.ts`) over the workspace
-object's own SQLite. `actor_id` leads the primary key of every table that holds
-an actor's state, so a SQL-only snapshot of the workspace object is the
-workspace, for every actor. Two actors that pick the same logical row key cannot
-read or overwrite each other's row. What stays per actor is everything mutable:
-its session, its store bundle bound to its own handle, its queue, its abort, its
-roles, and its loop pointer.
+The roster's storage key names the facet and its shared agent-state path.
+Swarm actors have `exp:`-prefixed roster names, not a separate actor class.
+Their files, processes and ports remain on the workspace's one Nimbus plane,
+reached through the same credentialed session surface as hired agents.
+Retirement keeps a task agent's history; destruction deletes its facet.
+A workspace archive must include each retained non-main agent's database:
+a SQL-only copy of the workspace object is not the whole workspace.
 
-One `OwnedModelServices` (`packages/cf-backend/src/owned-model-services.ts`)
-serves every actor by composition: provider registry, model spec, Workers AI
-affinity key, web-search provider. `ActorAgent` constructs it with
-`ownerRequired: true`. A hired child reads the workspace's owner through its
-parent and carries no credentials of its own.
+`OwnedModelServices` prepares the workspace's model and tool services. Each
+facet builds the same provider registry and brokers credential requests
+through the workspace; it owns no credential store.
 
 A subordinate is a durable teammate: its own session, store bundle, queue, and
 abort over the workspace's one SQLite, and the full-agent tool surface. It

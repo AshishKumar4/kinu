@@ -4,7 +4,7 @@
  */
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
-import { catalogTurn, gatewayWorkspace, workspaceMainActor } from './helpers/actor-harness';
+import { agentSql, catalogTurn, gatewayWorkspace, workspaceMainActor } from './helpers/actor-harness';
 import {
   GATEWAY_MODEL, chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun,
 } from './helpers/platform-gateway';
@@ -52,12 +52,17 @@ test('a researcher hire\'s steps are priced at its fast tier\'s rate, not the ro
 
   const root = workspaceMainActor(workspace.db);
 
-  const steps = workspace.db.query<{ actor_id: string; payload: string }, []>(
-    "SELECT actor_id, payload FROM run_events WHERE type = 'step_finish' ORDER BY ts, event_index",
-  ).all();
+  const hire = workspace.db.query<{ actor_id: string }, []>("SELECT actor_id FROM workspace_actors WHERE origin = 'agent'").get();
 
-  const priced = (mine: boolean) => steps
-    .filter((row) => (row.actor_id === root.actorId) === mine)
+  if (hire === null) throw new Error('the root hired no one');
+
+  // The root's steps are in the workspace's ledger; the hire's in its own database.
+  const priced = (mine: boolean) => (mine
+    ? workspace.db.query<{ payload: string }, [string]>(
+      "SELECT payload FROM run_events WHERE type = 'step_finish' AND actor_id = ? ORDER BY ts, event_index",
+    ).all(root.actorId)
+    : agentSql(hire.actor_id)<{ payload: string }>`
+      SELECT payload FROM run_events WHERE type = 'step_finish' AND actor_id = ${hire.actor_id} ORDER BY ts, event_index`)
     .map((row) => v.parse(StepSpendSchema, JSON.parse(row.payload)).usd);
 
   expect(gateway.runs.some(onTheFastTier)).toBe(true);

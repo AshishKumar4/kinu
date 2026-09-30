@@ -1353,7 +1353,7 @@ describe('drainAssignments', () => {
 
     const sweep: DrainAssignmentsOptions = {
       now: NOW, budget: 4, staleMs: 600_000,
-      run: async (task) => { ran.push(task); await held.promise; },
+      run: async (task) => { ran.push(task); await held.promise; log.markTurnCompleted(task.turnId); },
       onFailure: (cause) => { throw cause; },
     };
 

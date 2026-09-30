@@ -10,7 +10,9 @@ import type { UserDO } from '../../src/user/user-do';
 import { FakeAI } from './two-turn-probe';
 import { HELD_PROXY_MODEL } from './ai-proxy-shapes';
 
-export { default, OrchestratorAgent, UserDO } from '../../src/server';
+export { default } from '../../src/server';
+
+export * from '../../src/server';
 
 /** A call to the Node-side control host (`http-model-fake.ts`); a refusal fails the caller. */
 async function probeControl(path: string, method: 'GET' | 'POST'): Promise<Response> {

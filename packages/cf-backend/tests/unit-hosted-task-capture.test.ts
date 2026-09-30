@@ -6,7 +6,7 @@
  */
 import { expect, test } from 'bun:test';
 import { ADVISOR_HEADER } from '@kinu.run/core';
-import { catalogTurn, driveUntil, gatewayWorkspace, relayedReports, workspaceMainActor } from './helpers/actor-harness';
+import { agentSql, catalogTurn, driveUntil, gatewayWorkspace, relayedReports, workspaceMainActor } from './helpers/actor-harness';
 import { chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun } from './helpers/platform-gateway';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 
@@ -76,9 +76,10 @@ test('a hosted subordinate hires its advisor, whose note opens its next turn, wi
   // The root's own window grows with the turns the relays open; no hosted actor's ever does.
   const hostedTurns = () => workspace.db.query<{ n: number }, [string]>('SELECT COUNT(*) AS n FROM completed_turns WHERE actor_id != ?').get(root.actorId)?.n ?? 0;
 
-  const advisorNotes = () => workspace.db.query<{ actor_id: string; message: string }, []>(
-    "SELECT actor_id, message FROM evolution_events WHERE type = 'advisor_note'",
-  ).all();
+  // The hire's notes and window are in its own database.
+  const hire = () => workspace.db.query<{ actor_id: string }, []>("SELECT actor_id FROM workspace_actors WHERE name = 'advised'").get()?.actor_id ?? '';
+  const advisorNotes = () => agentSql(hire())<{ actor_id: string; message: string }>`SELECT actor_id, message FROM evolution_events WHERE type = 'advisor_note'`;
+  const ownTurns = () => agentSql(hire())<{ n: number }>`SELECT COUNT(*) AS n FROM completed_turns`[0]?.n ?? 0;
 
   // The hire's turn ends on its own answer; its advisor answers on a delegated turn of its own, whose note opens the hire's next.
   await driveUntil(workspace, 'the advice reached the hire', () => requests.length >= 2);
@@ -91,6 +92,7 @@ test('a hosted subordinate hires its advisor, whose note opens its next turn, wi
   const notes = advisorNotes().filter((row) => row.actor_id !== root.actorId);
   expect(notes.map((row) => row.message)).toEqual([note]);
   expect(hostedTurns()).toBe(0);
+  expect(ownTurns()).toBe(0);
 });
 
 // Review P1 (d35c1060fe): the task hire's advisor, still reviewing, held the hire's answer back, and an advisor with

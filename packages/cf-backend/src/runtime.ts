@@ -51,7 +51,7 @@ import { SANDBOX_TRANSPORT, sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import { MemoryStore } from "@kinu.run/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore } from "@kinu.run/agent-utils/stores";
-import { createRuntimeExecutor } from "./codemode-sandbox";
+import { codemodeLauncher, createRuntimeExecutor } from "./codemode-sandbox";
 import type { Agent } from "agents";
 import {
   createHubDeviceTransport,
@@ -282,13 +282,7 @@ export function createCFRuntime(
 
   const memory = adaptMemory(memoryStore, originVfs, vectorStore, memoryConfig);
 
-  const envForExec = env;
-
-  if (!envForExec.LOADER) {
-    throw new Error("CF runtime requires env.LOADER binding (worker_loaders in wrangler.jsonc)");
-  }
-
-  const executor = createRuntimeExecutor(envForExec.LOADER);
+  const executor = createRuntimeExecutor(codemodeLauncher({ kinuNode: false, egress: null }));
 
   const profileLane = (source: FixedTierSource): LLM | undefined => createProfileLaneLLM({
     agent, env, actor, resolveProfile: hooks.resolveProfile, source, report: hooks.reportModelCall, currentTurn: hooks.currentTurn,

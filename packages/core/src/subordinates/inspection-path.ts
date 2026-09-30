@@ -30,6 +30,14 @@ export interface SubordinateInspectionAccess {
   /** Membership authority: which actors exist, and whose children they are. */
   readonly directory: WorkspaceActorDirectory;
   readonly transcriptFor: (actor: ActorHandle) => SessionTranscriptReader;
+  /** Answers an agent's chat and run views from its own database; absent: every view reads `sql`. */
+  readonly ownRows?: (actor: ActorHandle, request: AgentOwnInspection) => Promise<SubordinateInspectionResult>;
+}
+
+export type AgentOwnInspection = Extract<SubordinateInspectionRequest, { readonly view: 'history' | 'runs' | 'events' }>;
+
+function ownView(request: SubordinateInspectionRequest): request is AgentOwnInspection {
+  return request.view === 'history' || request.view === 'runs' || request.view === 'events';
 }
 
 const OwnerRowSchema = v.object({ name: v.string(), owner_user_id: v.nullable(v.string()) });
@@ -75,8 +83,14 @@ export async function inspectDescendant(
   if ('actor' in input && input.actor !== undefined) {
     const kept = retainedDescendant(access, target, input.actor);
 
-    return kept === null ? missing() : readSubordinateInspection({ sql: access.sql, raw: access.raw, actor: kept.actor, transcriptFor: () => kept.transcript }, input);
+    if (kept === null) return missing();
+
+    if (access.ownRows !== undefined && ownView(input)) return await access.ownRows(kept.actor, input);
+
+    return readSubordinateInspection({ sql: access.sql, raw: access.raw, actor: kept.actor, transcriptFor: () => kept.transcript }, input);
   }
+
+  if (access.ownRows !== undefined && ownView(input) && target.parentActorId !== null) return await access.ownRows(target, input);
 
   return readSubordinateInspection({ sql: access.sql, raw: access.raw, actor: target, transcriptFor: access.transcriptFor }, input);
 }

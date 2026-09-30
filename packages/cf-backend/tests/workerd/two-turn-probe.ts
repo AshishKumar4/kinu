@@ -71,7 +71,8 @@ import type { ToolSet } from 'ai';
 
 // Re-exported under production names so the auxiliary worker binds the shipped
 // classes, as slate-actor-probe.ts:43-48 does.
-export { UserDO } from '../../src/user/user-do';
+export * from '../../src/server';
+
 
 /** DO SQLite types columns as `ArrayBuffer | string | number | null`; refuse a blob at the read. */
 const textColumn = (value: SqlStorageValue): string => v.parse(v.string(), value);
