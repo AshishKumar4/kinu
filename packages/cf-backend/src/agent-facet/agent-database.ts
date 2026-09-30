@@ -15,7 +15,7 @@ import {
 import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import * as v from 'valibot';
-import type { AgentActivity, AgentOpening, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt } from './protocol';
+import type { AgentTurnActivity, AgentTurnOpening, AgentRecovery, AgentSnapshot, PreparedAgentTurn, StoredRow, TurnRequestAt } from '@kinu.run/core';
 import type { AgentWorkspace } from './agent-turn';
 
 const refused = (what: string) => Effect.fail(new KinuError('unsupported', `${what} runs in the workspace object, not in an agent's own isolate.`));
@@ -62,9 +62,9 @@ export class AgentDatabase {
 
   private readonly stops = new Map<string, AbortController>();
 
-  private lines: AgentActivity[] = [];
+  private lines: AgentTurnActivity[] = [];
 
-  takeActivity(): AgentActivity[] {
+  takeActivity(): AgentTurnActivity[] {
     const taken = this.lines;
 
     this.lines = [];
@@ -316,7 +316,7 @@ export class AgentDatabase {
     return await inheritedContextFromTranscript(this.readable().transcript);
   }
 
-  async open(opening: AgentOpening): Promise<void> {
+  async open(opening: AgentTurnOpening): Promise<void> {
     const bound = this.actorHost().bindStores(this.reference());
     const history = bound.stores.history;
     const rows = history.transcript(CHAT_SESSION_ID);

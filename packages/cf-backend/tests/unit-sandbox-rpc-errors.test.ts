@@ -64,3 +64,26 @@ test('a transient failure on the way to the box is retried by the executor', asy
 
   expect({ read: await executor.tools.readFile?.execute('/workspace/kept.txt'), calls }).toEqual({ read: 'kept', calls: 2 });
 });
+
+// Review 3f6, 2026-09-30: the file view read with no encoding, which the native box answers as
+// `Response.text()`, so a download or a copy of a binary file came back with its bytes replaced.
+test('the sandbox file view reads exact bytes through the adapter', async () => {
+  const png = new Uint8Array([0x89, 0x50, 0x00, 0xff, 0xfe]);
+  const asked: unknown[] = [];
+
+  const box: KinuSandbox = Object.create({
+    resolveReadiness: async () => ({ kind: 'restored' as const }),
+    // As `Devbox.readFile` answers: the bytes only when asked for base64.
+    readFile: async (_path: string, opts?: { encoding?: 'utf-8' | 'base64' }) => {
+      asked.push(opts);
+
+      return opts?.encoding === 'base64'
+        ? { content: Buffer.from(png).toString('base64'), encoding: 'base64' as const }
+        : { content: new TextDecoder().decode(png), encoding: 'utf-8' as const };
+    },
+  });
+
+  const read = await sandboxFiles(adaptCloudflareSandbox(box, async () => {}, null)).readFile('/workspace/logo.png');
+
+  expect({ read, asked }).toEqual({ read: png, asked: [{ encoding: 'base64' }] });
+});

@@ -734,7 +734,7 @@ function pathScope(parsed: ParsedFile, tracked: ReadonlySet<string>): PathScope 
     if (name === undefined || init === null || init === undefined) return;
     const initNode = nodeAt(node, init);
     // Declarations are met in source order, so `LANDING = resolve(ROOT, ...)` builds on `ROOT`.
-    const joined = initNode === undefined ? undefined : joinedSegments(initNode, scope);
+    const joined = initNode === undefined ? undefined : literalText(initNode) ?? joinedSegments(initNode, scope);
 
     const named = joined === undefined ? undefined
       : productFileNamed(joined, parsed.file, tracked) ?? productDirNamed(joined, parsed.file, tracked);

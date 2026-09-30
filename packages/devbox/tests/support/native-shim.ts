@@ -4,8 +4,11 @@ import type { StoredValue } from '../../src/storage';
 
 interface Disk {
   readonly files: Map<string, string>;
+  readonly binaryFiles: ReadonlyMap<string, Uint8Array>;
   readonly directories: Set<string>;
   readonly fileFaults: Map<string, { readonly errno: number; readonly message: string }>;
+  /** What `/proc/self/mountinfo` reports mounted by s3fs, which the shim's inspection reads. */
+  readonly s3fsMounts: ReadonlySet<string>;
   writeFile(path: string, contents: string): Promise<{ readonly success: true }>;
   deleteFile(path: string): Promise<void>;
   mountBucket(name: string, path: string, options: { prefix: string; readOnly: boolean; s3fsOptions: string[] }): Promise<void>;
@@ -136,7 +139,7 @@ export class NativeShim {
     const fault = this.disk.fileFaults.get(path);
 
     if (fault !== undefined) return io.fail(fault.errno, fault.message);
-    const exists = this.disk.files.has(path) || this.disk.directories.has(path);
+    const exists = this.disk.files.has(path) || this.disk.binaryFiles.has(path) || this.disk.directories.has(path);
     const parent = path.slice(0, path.lastIndexOf('/')) || '/';
 
     if (op === 'write') return this.#write(path, parent, io);
@@ -149,7 +152,7 @@ export class NativeShim {
       case 'read':
         if (this.disk.directories.has(path)) return io.fail(21, 'Is a directory');
         io.stderr.enqueue(frame(0));
-        io.stdout.enqueue(encode.encode(this.disk.files.get(path)));
+        io.stdout.enqueue(this.#bytes(path));
         io.stderr.enqueue(frame(0));
         break;
       case 'stat':
@@ -223,17 +226,21 @@ export class NativeShim {
     const view = new DataView(payload.buffer);
 
     payload[0] = directory ? 1 : 0;
-    view.setBigUint64(1, BigInt(encode.encode(this.disk.files.get(path) ?? '').length), true);
+    view.setBigUint64(1, BigInt(this.#bytes(path).length), true);
     view.setUint32(9, directory ? 0o40755 : 0o100644, true);
 
     return frame(2, payload);
+  }
+
+  #bytes(path: string): Uint8Array {
+    return this.disk.binaryFiles.get(path) ?? encode.encode(this.disk.files.get(path) ?? '');
   }
 
   #directory(path: string): Uint8Array {
     const entries = new Map<string, number>();
     const prefix = path.endsWith('/') ? path : path + '/';
 
-    for (const file of this.disk.files.keys()) {
+    for (const file of [...this.disk.files.keys(), ...this.disk.binaryFiles.keys()]) {
       if (file.startsWith(prefix) && !file.slice(prefix.length).includes('/')) entries.set(file.slice(prefix.length), 0);
     }
 
@@ -293,9 +300,12 @@ export class NativeShim {
       return io.end();
     }
 
+    // `observation.rs:17-47`: no marker is `absent` unless something is mounted at the path.
     if (operation === 'inspect') {
+      const unmarked = this.disk.s3fsMounts.has(at) ? { kind: 'unmanaged', filesystemType: 'fuse.s3fs' } : { kind: 'absent' };
+
       io.stdout.enqueue(json(previous === undefined
-        ? { state: { kind: 'absent' } }
+        ? { state: unmarked }
         : { state: { kind: 'managed', marker: previous, fuse: { status: 'connected' } }, gateway: { kind: 'usable' } }));
 
       return io.end();

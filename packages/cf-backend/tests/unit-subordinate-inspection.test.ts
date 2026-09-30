@@ -9,7 +9,7 @@ import {
   SubordinateRosterStore,
   SubordinateInspectionRequestSchema,
   actorReferenceOf,
-  inspectSubordinateStorage,
+  inspectSubordinateStorage, readSessionTranscript, readSubordinateInspection,
   type ActorHandle,
   type SubordinateInspectionAccess,
   type SubordinateInspectionRequest,
@@ -56,6 +56,8 @@ function workspaceFixture(): InspectionFixture {
     actor: actors.main,
     directory: actors.directory,
     transcriptFor: (actor) => history(actor).transcript(CHAT_SESSION_ID),
+    // One database holds every actor's rows here.
+    ownRows: (actor, own) => readSubordinateInspection({ sql: created.sql, raw, actor, transcriptFor: () => readSessionTranscript(created.sql, actor, CHAT_SESSION_ID, null) }, own),
   };
 
   return {

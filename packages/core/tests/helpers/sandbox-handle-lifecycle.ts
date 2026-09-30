@@ -13,3 +13,11 @@ export const sandboxHandleLifecycle: Pick<
   portToken: async () => ({ urlToken: 'tok-1' }),
   notePortRemoved: async () => {},
 };
+
+/** A file read as the native `Devbox.readFile` answers it: the bytes only when asked for base64,
+ *  otherwise `Response.text()`, which replaces every invalid UTF-8 sequence. */
+export function nativeFileRead(bytes: Uint8Array, opts?: { encoding?: 'utf-8' | 'base64' }): { content: string; encoding: string } {
+  return opts?.encoding === 'base64'
+    ? { content: Buffer.from(bytes).toString('base64'), encoding: 'base64' }
+    : { content: new TextDecoder().decode(bytes), encoding: 'utf-8' };
+}

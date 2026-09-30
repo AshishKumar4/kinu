@@ -32,7 +32,7 @@ import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } f
 import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, uiChunks, type AgentFacetPlacement } from "./agent-facets";
 import { providerBindingsOf } from "./providers/agent-registry";
 import { AgentTurns } from "./agent-turns";
-import type { AgentActivity, AgentSnapshot, StoredRow } from "./agent-facet/protocol";
+import type { AgentTurnActivity, AgentSnapshot, StoredRow } from '@kinu.run/core';
 import type { SerializedMessage } from '@kinu.run/core';
 import type { AgentFacet, AgentFacetCalls } from "./agent-facet/agent-facet";
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -715,7 +715,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * What one agent in its own isolate may ask of this workspace, bound to that agent. Not `@callable`: reached
    * through `AgentWorkspaceRPC`, whose props this object minted, so the id is the caller's own.
    */
-  private agentActivity(actorId: string, lines: readonly AgentActivity[]): void {
+  private agentActivity(actorId: string, lines: readonly AgentTurnActivity[]): void {
     for (const { event, detail } of lines) this.logActivity(event, detail === undefined ? actorId : `${actorId} ${detail}`);
   }
 

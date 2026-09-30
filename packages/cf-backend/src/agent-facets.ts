@@ -6,7 +6,7 @@ import { remoteContextTree } from '@kinu.run/core';
 import type { AgentOwnInspection, ArchiveSqlCursor, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ObservedCall, ProviderEnv, WorkMode, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace } from './agent-facet/agent-turn';
-import type { AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, AgentTurnEnd, TurnRequestAt } from './agent-facet/protocol';
+import type { AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, AgentTurnEnd, TurnRequestAt } from '@kinu.run/core';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { AgentFacet, AgentFacetCalls, AgentFacetEnv } from './agent-facet/agent-facet';

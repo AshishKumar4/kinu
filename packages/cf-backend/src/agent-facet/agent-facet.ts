@@ -10,7 +10,7 @@ import {
 } from '@kinu.run/core';
 import { AgentDatabase } from './agent-database';
 import { queueAgentTask, type AgentWorkspace } from './agent-turn';
-import type { AgentOpening, AgentRecovery, AgentSnapshot, AgentTask, TurnRequestAt } from './protocol';
+import type { AgentTurnOpening, AgentRecovery, AgentSnapshot, AgentTurnTask, TurnRequestAt } from '@kinu.run/core';
 
 export type { AgentWorkspace } from './agent-turn';
 
@@ -65,9 +65,9 @@ class AgentContextTree extends RpcTarget implements ContextTreeRemote {
 }
 
 export interface AgentFacetCalls {
-  deliver(snapshot: AgentSnapshot, task: AgentTask): Promise<void>;
+  deliver(snapshot: AgentSnapshot, task: AgentTurnTask): Promise<void>;
   holds(turnId: string): Promise<boolean>;
-  openTurn(snapshot: AgentSnapshot, opening: AgentOpening): Promise<void>;
+  openTurn(snapshot: AgentSnapshot, opening: AgentTurnOpening): Promise<void>;
   history(snapshot: AgentSnapshot, limit?: number): Promise<UIMessage[]>;
   historyPage(snapshot: AgentSnapshot, page: PositionPageRequest): Promise<ChatHistoryPage>;
   inspect(snapshot: AgentSnapshot, request: AgentOwnInspection): Promise<SubordinateInspectionResult>;
@@ -125,7 +125,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return this.database;
   }
 
-  async deliver(snapshot: AgentSnapshot, task: AgentTask): Promise<void> {
+  async deliver(snapshot: AgentSnapshot, task: AgentTurnTask): Promise<void> {
     const database = this.open(snapshot);
 
     this.held.add(task.sequenceId);
@@ -137,7 +137,7 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return this.held.has(turnId);
   }
 
-  async openTurn(snapshot: AgentSnapshot, opening: AgentOpening): Promise<void> {
+  async openTurn(snapshot: AgentSnapshot, opening: AgentTurnOpening): Promise<void> {
     await this.open(snapshot).open(opening);
   }
 

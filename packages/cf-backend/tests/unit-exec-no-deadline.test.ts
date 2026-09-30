@@ -1,6 +1,7 @@
 // Untimed work ends only on completion or cancellation. An explicit deadline also kills the
 // native process before reporting cancellation; codemode has no implicit work deadline.
 import { describe, test, expect } from "bun:test";
+import { createSandboxExecutor } from "@kinu.run/core";
 import type { KinuSandbox } from "../src/kinu-sandbox";
 import { adaptCloudflareSandbox } from "../src/sandbox-exec-lane";
 // codemode reaches `cloudflare:workers` at load; the preload's boundary stub serves it.
@@ -156,6 +157,21 @@ describe("adaptCloudflareSandbox — cancellation reaches the process", () => {
     await expect(box.handle.exec("bash forever.sh", { signal: controller.signal }))
       .rejects.toMatchObject({ code: 'cancelled' });
     expect(box.calls.killed).toHaveLength(1);
+  });
+
+  // Review 3f6, 2026-09-30: the adapter's cancellation reached the executor as `KinuError[cancelled]`,
+  // which it did not recognise, so an aborted exec came back as an ordinary tool result.
+  test("the sandbox executor rejects an aborted exec as a cancellation, not as a tool result", async () => {
+    const box = fakeBox({ holdsUntilKilled: true });
+    const executor = createSandboxExecutor(box.handle);
+    const controller = new AbortController();
+
+    const pending = executor.tools.exec.execute("bash forever.sh", { signal: controller.signal });
+    controller.abort();
+    const [settled] = await Promise.allSettled([pending]);
+
+    expect(settled).toEqual({ status: 'rejected', reason: expect.objectContaining({ code: 'cancelled' }) });
+    expect({ killed: box.calls.killed.length, exited: box.hasExited() }).toEqual({ killed: 1, exited: true });
   });
 
   test("a kill that FAILS is reported as itself, never as a cancellation", async () => {

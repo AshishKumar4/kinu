@@ -11,7 +11,7 @@ import type { NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import { createAgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
 import { codexContainerFetch } from '../egress/codex-egress-route';
 import type { AgentDatabase } from './agent-database';
-import type { AgentReview, AgentTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn } from './protocol';
+import type { AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn } from '@kinu.run/core';
 
 export interface AgentWorkspace {
   session(): NimbusSessionSurface;
@@ -129,7 +129,7 @@ export interface QueuedAgentTask {
   readonly database: AgentDatabase;
   readonly workspace: AgentWorkspace;
   readonly providers: ProviderEnv;
-  readonly task: AgentTask;
+  readonly task: AgentTurnTask;
 }
 
 export function queueAgentTask({ after, database, workspace, providers, task }: QueuedAgentTask): Promise<void> {
@@ -147,7 +147,7 @@ export function queueAgentTask({ after, database, workspace, providers, task }: 
 
 
 async function runTurn(
-  database: AgentDatabase, workspace: AgentWorkspace, providers: ProviderEnv, task: AgentTask,
+  database: AgentDatabase, workspace: AgentWorkspace, providers: ProviderEnv, task: AgentTurnTask,
 ): Promise<void> {
   const prepared = await workspace.prepareTurn(task.sequenceId);
 

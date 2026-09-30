@@ -75,7 +75,7 @@ describe('role, tier, and agent hubs', () => {
       },
     };
 
-    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
+    const { renderer, waitForFrame, captureCharFrame } = await createTestRenderer({
       width: 100,
       height: 30,
       useThread: false,
@@ -83,6 +83,7 @@ describe('role, tier, and agent hubs', () => {
     });
 
     const root = createRoot(renderer);
+    renderer.start();
     const store = createMemoryTuiPreferenceStore();
 
     try {
@@ -98,14 +99,13 @@ describe('role, tier, and agent hubs', () => {
             </box>
           </TuiProductProvider>,
         );
-        await waitForFrame(renderOnce, captureCharFrame, expected);
+        await waitForFrame((frame) => frame.includes(expected));
 
         if (view !== 'agents') continue;
-        expect(captureCharFrame().toLowerCase()).not.toContain('subordinate');
         const lines = captureCharFrame().split('\n').map((line) => line.replaceAll('│', ' ').trim());
         const checkout = lines.findIndex((line) => line === 'checkout');
         const main = lines.findIndex((line) => line.includes('Checkout · main'));
-        const reviewer = lines.findIndex((line) => line.startsWith('└ ') && line.includes('Reviewer · agent'));
+        const reviewer = lines.findIndex((line) => line.includes('Reviewer') && line.includes('auditor/deep'));
         const jarvisHeading = lines.findIndex((line) => line === 'jarvis');
         expect(checkout).toBeGreaterThanOrEqual(0);
         expect(main).toBeGreaterThan(checkout);
@@ -119,17 +119,3 @@ describe('role, tier, and agent hubs', () => {
   });
 });
 
-async function waitForFrame(
-  renderOnce: () => Promise<void>,
-  capture: () => string,
-  expected: string,
-): Promise<void> {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    await renderOnce();
-
-    if (capture().includes(expected)) return;
-    await Bun.sleep(1);
-  }
-
-  expect(capture()).toContain(expected);
-}

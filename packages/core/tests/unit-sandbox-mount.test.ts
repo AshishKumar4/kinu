@@ -8,6 +8,7 @@ import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import { TurnContextBudget } from '../src/context-budget';
 import { createSandboxExecutor, WORKSPACE_BACKUP_DIR, type SandboxHandle } from '../src/execution/sandbox';
+import { nativeFileRead } from './helpers/sandbox-handle-lifecycle';
 import { TurnFileLedger } from '../src/vfs/file-ledger';
 import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
@@ -51,7 +52,7 @@ class ContainerFs {
 
 function container(fs: ContainerFs): SandboxHandle {
 	const handle: SandboxHandle = {
-		async readFile(path) {
+		async readFile(path, opts) {
 			const resolved = fs.resolve(path);
 
 			if (fs.dirs.has(resolved)) {
@@ -62,7 +63,7 @@ function container(fs: ContainerFs): SandboxHandle {
 
 			if (bytes === undefined) throw notFound(resolved);
 
-			return { content: Buffer.from(bytes).toString('base64'), encoding: 'base64', exitCode: 0 };
+			return nativeFileRead(bytes, opts);
 		},
 		async writeFile(path, content, opts) {
 			const resolved = fs.resolve(path);

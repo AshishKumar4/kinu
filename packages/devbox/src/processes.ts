@@ -2,6 +2,7 @@ import { Files, SandboxFileError } from '@cloudflare/sandbox';
 import * as v from 'valibot';
 import { Effect, Result } from 'effect';
 import { DevboxError, attempt, attemptSync, settle } from './errors';
+import { TERM_GRACE_MS } from './lifecycle';
 
 const CA_PATH = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 
@@ -25,13 +26,28 @@ export interface ProcessRecord {
 
 // Cloudflare sandbox-sdk rc.1's process-workspace example: file-backed identities survive a DO
 // eviction, native exec starts the wrapper, and a process group carries signals to its children.
-const RUN = `dir=$1; shift
+// An exec whose answer is lost may or may not have spawned the wrapper, so one symlink decides the
+// launch: the wrapper makes `launch -> launched` before anything runs, and a caller that finds no pid
+// and no exit makes `launch -> unlaunched`, after which nothing runs (D48). The wrapper enters the cwd
+// itself, as 0.12.9's session shell did, so a missing one is the launch's own recorded failure.
+const RUN = `dir=$1; cwd=$2; shift 2
+ln -s launched "$dir/launch" 2>/dev/null || exit 0
+if ! cd -- "$cwd" 2>/dev/null; then
+  printf "Failed to change directory to '%s'\\n" "$cwd" >"$dir/stderr.log"
+  echo 1 >"$dir/exit.tmp" && mv "$dir/exit.tmp" "$dir/exit"
+  exit 0
+fi
 setsid sh -c 'echo "$$" >"$0/pid"; exec "$@"' "$dir" "$@" >"$dir/stdout.log" 2>"$dir/stderr.log"
 echo "$?" >"$dir/exit.tmp" && mv "$dir/exit.tmp" "$dir/exit"`;
+
+/** Exits 0 when the launch in `$1` never ran: nothing claimed it, so this claims it for nobody. */
+const UNLAUNCH = `[ -f "$1/pid" ] || [ -f "$1/exit" ] || ln -s unlaunched "$1/launch" 2>/dev/null
+[ "$(readlink "$1/launch")" = unlaunched ]`;
 
 const STATUS = `for dir in "$@"; do
   [ -f "$dir/process.json" ] || continue
   if [ -f "$dir/exit" ]; then state="exit $(cat "$dir/exit")"
+  elif [ "$(readlink "$dir/launch")" = unlaunched ]; then state=unlaunched
   elif [ ! -f "$dir/pid" ]; then state=starting
   elif kill -0 "$(cat "$dir/pid")" 2>/dev/null; then state="running $(cat "$dir/pid")"
   else state=lost
@@ -62,16 +78,27 @@ export class Processes {
 
         if (held === undefined) return yield* Effect.fail(made.failure);
 
-        if (held.status === 'running' || held.status === 'starting') return held;
+        // A launch with no pid yet is live only if its wrapper claimed it; one nobody claimed never ran.
+        if (held.status === 'running' || (held.status === 'starting' && !(yield* this.#unlaunched(dir)))) return held;
         yield* attempt('file', () => this.#files.remove(dir, { recursive: true }));
         yield* attempt('file', () => this.#files.mkdir(dir));
       }
 
       const record = { id: options.processId, command, cwd: options.cwd ?? '/workspace' };
       yield* attempt('file', () => this.#files.writeFile(`${dir}/process.json`, JSON.stringify(record)));
-      yield* attempt('process', () => this.container.exec(['/bin/sh', '-c', RUN, 'devbox-process', dir, '/bin/bash', '-c', command], {
-        cwd: record.cwd, env: CONTAINER_TRUST_ENV, stdout: 'ignore', stderr: 'ignore',
-      }));
+
+      const launched = yield* Effect.result(attempt('process', () => this.container.exec(['/bin/sh', '-c', RUN, 'devbox-process', dir, record.cwd, '/bin/bash', '-c', command], {
+        env: CONTAINER_TRUST_ENV, stdout: 'ignore', stderr: 'ignore',
+      })));
+
+      if (Result.isFailure(launched)) {
+        // Refused, or lost after the spawn: the claim says which, and records a launch that never
+        // ran, so neither a retry nor a kill adopts it as live. Unreadable, the next one decides.
+        const decided = yield* Effect.result(this.#unlaunched(dir));
+
+        return yield* Effect.fail(Result.isSuccess(decided) ? launched.failure : new DevboxError(launched.failure.code,
+          `${launched.failure.message}; whether it ran is left to the next start or kill: ${decided.failure.message}`, { cause: launched.failure }));
+      }
 
       return { ...record, pid: undefined, status: 'starting' as const, exitCode: undefined };
     }));
@@ -108,19 +135,39 @@ export class Processes {
     return settle(Effect.gen({ self: this }, function* () {
       const dir = yield* directory(id);
 
+      // TERM, then KILL whatever of the group outlives the grace, as 0.12.9 did; it returns when
+      // the group has exited, not at a deadline. `kill -0 -- -N` is a usage error in dash.
       const ended = yield* attempt('process', () => this.container.exec(['/bin/sh', '-c', `dir=$1
 [ -f "$dir/process.json" ] || exit 0
+set -- "$dir"
+${UNLAUNCH} && exit 0
 while [ ! -f "$dir/pid" ] && [ ! -f "$dir/exit" ]; do sleep 0.1; done
 [ -f "$dir/exit" ] && exit 0
 pid=$(cat "$dir/pid")
 kill -0 "$pid" 2>/dev/null || exit 0
 kill -s TERM -- "-$pid" || exit $?
-while kill -0 "$pid" 2>/dev/null; do sleep 0.1; done`, 'devbox-kill', dir]));
+waited=0
+while kill -s 0 -- "-$pid" 2>/dev/null; do
+  [ "$waited" -eq ${TERM_GRACE_MS / 100} ] && kill -s KILL -- "-$pid" 2>/dev/null
+  sleep 0.1; waited=$((waited + 1))
+done`, 'devbox-kill', dir]));
 
       const result = yield* attempt('process', () => ended.output());
 
       if (result.exitCode !== 0) return yield* Effect.fail(new DevboxError('process', `process ${id} was not stopped: ${new TextDecoder().decode(result.stderr)}`));
     }));
+  }
+
+  /** `true`: the launch in `dir` never ran, and never will. */
+  #unlaunched(dir: string): Effect.Effect<boolean, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      const claim = yield* attempt('process', () => this.container.exec(['/bin/sh', '-c', UNLAUNCH, 'devbox-unlaunch', dir]));
+      const result = yield* attempt('process', () => claim.output());
+
+      if (result.exitCode > 1) return yield* Effect.fail(new DevboxError('process', `the launch claim failed: ${new TextDecoder().decode(result.stderr)}`));
+
+      return result.exitCode === 0;
+    });
   }
 
   #status(dirs: string[]): Effect.Effect<ProcessRecord[], DevboxError> {

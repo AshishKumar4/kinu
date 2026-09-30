@@ -48,6 +48,18 @@ describe('a run under a deadline', () => {
     expect(outcome.seconds).toBeGreaterThan(3);
   });
 
+  test('a silent run is told through its notice file before the kill, once per silent stretch', async () => {
+    // Prints what it was told, once: that output restarts the silence, and the second stretch ends in the kill.
+    const listens = "const { watch, readFileSync } = await import('node:fs'); const path = process.env.KINU_SILENCE_NOTICE ?? '';"
+      + " const watcher = watch(path, () => { const told = readFileSync(path, 'utf8'); if (told !== '') { console.log(`told: ${told.trim()}`); watcher.close(); } });"
+      + ' await new Promise(() => {});';
+
+    const outcome = await runUnderDeadline({ argv: ['bun', '-e', listens], seconds: 1, label: 'listens', stdio: 'pipe' });
+
+    expect(outcome).toMatchObject({ killed: true, exitCode: DEADLINE_EXIT_CODE });
+    expect(outcome.stdout).toMatch(/^told: silent 0\.\d+s of 1s$/mu);
+  });
+
   test('a run that ends keeps its own exit code and is not reported as killed', async () => {
     const ok = await runUnderDeadline({ argv: ['bun', '-e', 'process.exit(0)'], seconds: 30, label: 'ends', stdio: 'pipe' });
     const failed = await runUnderDeadline({ argv: ['bun', '-e', 'process.exit(3)'], seconds: 30, label: 'fails', stdio: 'pipe' });

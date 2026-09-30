@@ -67,22 +67,46 @@ const Marker = v.object({
   mountPath: v.literal(CHAIN_STORE_MOUNT),
   configuration: v.object({
     source: v.object({ type: v.literal('s3'), endpoint: v.string(), region: v.string(), bucket: v.string() }),
-    keyPrefix: v.string(), access: v.literal('read-write'),
+    // The shim omits an absent prefix (`model.rs:45`); only a mount made before D46 names one.
+    keyPrefix: v.optional(v.string()), access: v.literal('read-write'),
   }),
 });
 
-function restoredStoreRoute(files: Pick<Files, 'readFile'>, source: S3MountRequest['source'], prefix: string, gateway: S3GatewayBinding): Effect.Effect<Readonly<{ hostname: string; handler: Fetcher }>, DevboxError> {
+/** The SDK's two views of what the container holds at the store path. */
+interface StorePath {
+  readonly files: Pick<Files, 'readFile'>;
+  readonly mounts: Pick<S3Mounts, 'inspect'>;
+}
+
+/** `undefined`: nothing is mounted at the store path, so there is no route to rebuild and the chain's
+ *  next mount registers its own. `mount-marker` is terminal (D47), so only what the container
+ *  answered about the marker carries it; a failure to reach the container is retried as itself. */
+function restoredStoreRoute(at: StorePath, source: S3MountRequest['source'], prefix: string, gateway: S3GatewayBinding): Effect.Effect<Readonly<{ hostname: string; handler: Fetcher }> | undefined, DevboxError> {
   return Effect.gen(function* () {
-    const read = yield* Effect.result(attempt('mount-marker', () => files.readFile(SDK_STORE_MARKER)));
+    const read = yield* Effect.result(attempt('io', () => at.files.readFile(SDK_STORE_MARKER)));
 
     if (Result.isFailure(read)) {
       const cause = read.failure.cause;
-      const detail = SandboxFileError.is(cause) && cause.code === 'ENOENT' ? 'missing' : 'could not be read';
 
-      return yield* Effect.fail(new DevboxError('mount-marker', 'S3Mounts marker ' + detail + ' for ' + CHAIN_STORE_MOUNT + '; routing cannot be rebuilt', { cause }));
+      if (!SandboxFileError.is(cause)) return yield* Effect.fail(read.failure);
+
+      if (cause.code !== 'ENOENT') {
+        return yield* Effect.fail(new DevboxError('mount-marker', 'S3Mounts marker could not be read for ' + CHAIN_STORE_MOUNT + '; routing cannot be rebuilt', { cause }));
+      }
+
+      // Without a marker the SDK's own inspection says whether anything is mounted there.
+      const inspected = yield* attempt('io', () => at.mounts.inspect(CHAIN_STORE_MOUNT), 'S3Mounts could not inspect ' + CHAIN_STORE_MOUNT);
+
+      if (inspected.attachment.status === 'absent') return undefined;
+
+      return yield* Effect.fail(new DevboxError('mount-marker', 'S3Mounts marker missing for ' + CHAIN_STORE_MOUNT + ', which is ' + inspected.attachment.status + '; routing cannot be rebuilt', { cause }));
     }
 
-    const value = yield* attempt('mount-marker', () => read.success.json(), 'S3Mounts marker JSON not understood');
+    const text = yield* attempt('io', () => read.success.text(), 'S3Mounts marker could not be read');
+    const json = v.safeParse(v.pipe(v.string(), v.parseJson()), text);
+
+    if (!json.success) return yield* Effect.fail(new DevboxError('mount-marker', 'S3Mounts marker JSON not understood'));
+    const value = json.output;
     const version = v.safeParse(v.object({ protocolVersion: v.unknown() }), value);
 
     if (!version.success || version.output.protocolVersion !== 1) {
@@ -144,8 +168,9 @@ export class ContainerRoutes {
         if (sync === undefined) return yield* Effect.fail(new DevboxError('configuration', 'export DevboxSyncGateway from the Worker'));
 
         if (reused) {
-          const mount = yield* restoredStoreRoute(this.host.files, source, this.host.prefix, gateway);
-          routes[mount.hostname] = mount.handler;
+          const mount = yield* restoredStoreRoute({ files: this.host.files, mounts: yield* this.#mounts() }, source, this.host.prefix, gateway);
+
+          if (mount !== undefined) routes[mount.hostname] = mount.handler;
         }
 
         routes[DEVBOX_SYNC_HOST] = sync({ props: this.host.owner });

@@ -49,6 +49,9 @@ export interface ChainBox {
   readonly container: FakeSandbox;
   readonly rows: Map<string, StoredValue>;
   readonly objects: Map<string, Uint8Array>;
+  /** The platform evicts the object while its container runs on: a new instance over the same
+   *  storage, container and bucket, holding nothing in memory. */
+  readonly evict: () => ChainTestBox;
 }
 
 /** The shipped policy with a test-length probe: nothing here is about budgets,
@@ -76,10 +79,20 @@ export class ChainTestBox extends Devbox<Record<string, never>> {
 }
 
 export function chainBox(Box: typeof ChainTestBox = ChainTestBox): ChainBox {
-  const { box, container, rows } = harness(Box);
+  const { box, container, rows, state } = harness(Box);
   const objects = new Map<string, Uint8Array>();
   container.chainStore = { objects, root: chainStoreRoot(`boxes/${TEST_BOX_ID}`) };
-  box.useStore({ binding: 'BACKUP_BUCKET', bucket: memoryBucket(objects) });
+  const store = { binding: 'BACKUP_BUCKET', bucket: memoryBucket(objects) };
+  box.useStore(store);
 
-  return { box, container, rows, objects };
+  const evict = (): ChainTestBox => {
+    const successor = new Box(state, {});
+    successor.useStore(store);
+    container.owner = successor;
+    container.syncHost = body => successor.devboxSync(body);
+
+    return successor;
+  };
+
+  return { box, container, rows, objects, evict };
 }
