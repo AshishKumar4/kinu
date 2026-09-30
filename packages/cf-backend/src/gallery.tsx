@@ -52,6 +52,7 @@ import { FeedbackButton } from "@/components/FeedbackButton";
 import { FEEDBACK_ENDPOINT } from "@kinu.run/core";
 import { CLIENT_ERROR_ENDPOINT } from "@kinu.run/core";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { AgentsNavProvider } from "@/hooks/use-agents-nav";
 import { APP_ROUTES, rosterBucket, rosterMatches, WorkspaceOverviewSchema, type WorkspaceOverview } from "@kinu.run/core";
 import { CHUNK_FIXED_KEY, lazyRoute } from "@/lazy-route";
 import { useKinu, type SubordinateSnapshot } from "@/hooks/use-kinu";
@@ -1803,16 +1804,23 @@ async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
 }
 
 const GALLERY_AGENTS: PanelAgent[] = [
-  { key: galleryActorId("docs"), label: "Docs writer", category: "user", activity: "idle", parent: "Main", open: { kind: "chat", path: "docs" }, tab: true, input: true },
-  { key: "a-scout", label: "Coupon auditor", category: "hired", activity: "working", parent: "Main", open: { kind: "chat", path: "coupon-auditor" }, tab: false, input: true },
-  { key: "a-check", label: "Checkout tester", category: "hired", activity: "waiting", parent: "Coupon auditor", open: { kind: "chat", path: "coupon-auditor/tester" }, tab: false, input: true },
+  { key: "main", label: "Main", category: "main", activity: "idle", parent: null, open: { kind: "chat", path: null }, tab: true, input: true,
+    figures: { tokens: 184_300, usd: 0.42, activeMs: 21 * 60_000, cacheEma: 0.94 } },
+  { key: galleryActorId("docs"), label: "Docs writer", category: "user", activity: "idle", parent: "Main", open: { kind: "chat", path: "docs" }, tab: true, input: true,
+    figures: { tokens: 12_400, usd: 0.03, activeMs: 3 * 60_000, cacheEma: 0.88 } },
+  { key: "a-scout", label: "Coupon auditor", category: "hired", activity: "working", parent: "Main", open: { kind: "chat", path: "coupon-auditor" }, tab: false, input: true,
+    figures: { tokens: 48_900, usd: 0.11, activeMs: 7 * 60_000, cacheEma: 0.91 } },
+  { key: "a-check", label: "Checkout tester", category: "hired", activity: "waiting", parent: "Coupon auditor", open: { kind: "chat", path: "coupon-auditor/tester" }, tab: false, input: true,
+    figures: { tokens: 6_100, activeMs: 45_000, cacheEma: null } },
   { key: "root-merge-1/root-merge-1-h0", label: "packages/checkout/src/apply-coupon.ts", category: "swarm", activity: "done", parent: "Main",
-    open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h0", owner: null }, tab: false, input: false },
+    open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h0", owner: null }, tab: false, input: false,
+    figures: { tokens: 9_800, activeMs: 94_000, cacheEma: null } },
   { key: "root-merge-1/root-merge-1-h1", label: "packages/cart/src/serializer.ts", category: "swarm", activity: "working", parent: "Main",
-    open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h1", owner: null }, tab: false, input: false },
+    open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h1", owner: null }, tab: false, input: false, figures: { activeMs: 0, cacheEma: null } },
   { key: "root-merge-1/root-merge-1-h3", label: "packages/checkout/src/pricing.ts", category: "swarm", activity: "working", parent: "Main",
-    open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h3", owner: null }, tab: false, input: false },
-  { key: "a-refine", label: "Prompt refiner", category: "background", activity: "idle", parent: "Main", open: { kind: "chat", path: "refiner" }, tab: false, input: false },
+    open: { kind: "node", runId: "root-merge-1", nodeId: "root-merge-1-h3", owner: null }, tab: false, input: false, figures: { activeMs: 0, cacheEma: null } },
+  { key: "a-refine", label: "Prompt refiner", category: "background", activity: "idle", parent: "Main", open: { kind: "chat", path: "refiner" }, tab: false, input: false,
+    figures: { tokens: 2_300, usd: 0.004, activeMs: 20_000, cacheEma: 0.5 } },
 ];
 
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
@@ -6278,6 +6286,23 @@ function workspacePageFrame(): MountedFrame {
   };
 }
 
+function workspaceShellFrame(): MountedFrame {
+  serveGalleryRpc(workspacePageRpc);
+
+  return {
+    entries: [`/workspace/${WORKSPACE_PAGE_NAME}`],
+    node: (
+      <Routes>
+        <Route element={<Layout />}>
+          <Route path="/workspace/:agentId" element={<WorkspacePage />} />
+          <Route path="/workspace/:agentId/agents/:subName" element={<WorkspacePage />} />
+          <Route path="*" element={<div className="h-full" data-gallery-blank />} />
+        </Route>
+      </Routes>
+    ),
+  };
+}
+
 /** `&section=devices` goes through the router: the page reads the hash off `useLocation`. */
 function userSettingsStateFrame(): MountedFrame {
   const section = new URLSearchParams(location.search).get("section");
@@ -6423,6 +6448,7 @@ async function mount() {
     }],
     ["drive-design", () => Promise.resolve(driveDesignFrame())],
     ["snapshotrace", () => Promise.resolve(snapshotRaceFrame())],
+    ["workspaceshell", () => Promise.resolve(workspaceShellFrame())],
   ]);
 
   const dynamicFixture = dynamicFrames.get(frame);
@@ -6503,7 +6529,7 @@ async function mount() {
     <StrictMode>
       <ErrorBoundary label="gallery">
         <MemoryRouter initialEntries={entries}>
-          <AccountProvider><WorkspaceRosterProvider>{node}</WorkspaceRosterProvider></AccountProvider>
+          <AccountProvider><WorkspaceRosterProvider><AgentsNavProvider>{node}</AgentsNavProvider></WorkspaceRosterProvider></AccountProvider>
         </MemoryRouter>
       </ErrorBoundary>
     </StrictMode>,

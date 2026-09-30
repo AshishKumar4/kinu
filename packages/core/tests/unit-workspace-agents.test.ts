@@ -1,6 +1,6 @@
 // Defends: an agent the panel cannot see, a hired or background agent given a tab or a composer, a swarm worker
 // left out or shown working after its run ended.
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, setSystemTime, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createTestActors } from '@kinu.run/test-utils';
 import { makeExecRaw, makeSql, makeSqlExec } from './helpers';
@@ -14,6 +14,7 @@ import { actorReferenceOf, type ActorHandle } from '../src/identity/actor-handle
 import type { SubordinateRosterEntry } from '../src/delegation/agents-tool';
 import { agentActive, readWorkspaceAgents, type PanelAgent } from '../src/read-models/workspace-agents';
 import { OWNER_STOPPED } from '../src/heads/types';
+import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
 
 function workspace() {
   const db = new Database(':memory:');
@@ -25,6 +26,7 @@ function workspace() {
   initHeadsTables(execRaw);
   initSwarmNodeRecords(execRaw);
   initActorClaimTables(execRaw);
+  initRunEventTables(execRaw);
   const actors = createTestActors(sql, execRaw);
   new SubordinateRosterStore(exec, actors.main).ensureSchema();
 
@@ -49,7 +51,22 @@ function workspace() {
       VALUES (?, ?, 'run', 0, 'build', 'builtin', 1, NULL, 1)`).run(actor.actorId, `turn-${actor.name}`);
   };
 
-  return { db, main: actors.main, hire, read, openTurn };
+  /** One turn through the real recorder: each step's usage and price, `minutes` of wall clock from its start to its end. */
+  const turn = (actor: ActorHandle, runId: string, minutes: number, steps: readonly { input: number; output: number; cacheRead: number; usd: number }[]): void => {
+    const recorder = new RunEventRecorder(sql, actor);
+    const start = Date.parse('2026-09-30T10:00:00.000Z');
+
+    setSystemTime(start);
+    recorder.emit(runId, { type: 'turn_start', turnIndex: 0 });
+
+    for (const [stepIndex, { usd, ...usage }] of steps.entries()) recorder.emit(runId, { type: 'step_finish', stepIndex, usage, usd });
+
+    setSystemTime(start + minutes * 60_000);
+    recorder.emit(runId, { type: 'turn_end', turnIndex: 0 });
+    setSystemTime();
+  };
+
+  return { db, main: actors.main, hire, read, openTurn, turn };
 }
 
 const byLabel = <T extends { label: string }>(rows: T[]): T[] => rows.sort((a, b) => a.label.localeCompare(b.label));
@@ -66,6 +83,7 @@ describe('the Agents panel lists every agent in the workspace', () => {
     db.query('UPDATE workspace_actors SET created_at = 0 WHERE name = ?').run('scout-1');
 
     expect(byLabel(read().map(row))).toEqual(byLabel([
+      { label: 'Kinu', category: 'main', activity: 'idle', parent: null, tab: true, input: true, open: { kind: 'chat', path: null } },
       { label: 'alice', category: 'user', activity: 'idle', parent: 'Kinu', tab: true, input: true, open: { kind: 'chat', path: 'alice' } },
       { label: 'scout-1', category: 'hired', activity: 'working', parent: 'alice', tab: false, input: true, open: { kind: 'chat', path: 'alice/scout-1' } },
       { label: 'refiner-1', category: 'background', activity: 'idle', parent: 'Kinu', tab: false, input: false, open: { kind: 'chat', path: 'refiner-1' } },
@@ -141,5 +159,29 @@ describe('the Agents panel lists every agent in the workspace', () => {
 
     expect(workers.find((agent) => agent.label === 'Still grinding')?.activity).toBe('working');
     expect(workers.filter((agent) => agent.label.startsWith('Finished'))).toHaveLength(20);
+  });
+
+  test('each agent shows what its own turns cost: tokens, dollars, time and the prompt-cache EMA', () => {
+    const { main, hire, read, turn } = workspace();
+    const alice = hire(main, 'alice', { origin: 'user' });
+
+    turn(alice, 'run-a', 3, [
+      { input: 1000, output: 200, cacheRead: 0, usd: 0.01 },
+      { input: 2000, output: 100, cacheRead: 1800, usd: 0.02 },
+    ]);
+    turn(main, 'run-m', 1, [{ input: 500, output: 50, cacheRead: 400, usd: 0.005 }]);
+
+    const figures = (label: string) => read().find((agent) => agent.label === label)?.figures;
+
+    // The EMA seeds on the first rate (0) and moves α = 0.2 toward the second (0.9).
+    expect(figures('alice')).toEqual({ tokens: 3300, usd: 0.03, activeMs: 180_000, cacheEma: 0.2 * 0.9 });
+    expect(figures('Kinu')).toEqual({ tokens: 550, usd: 0.005, activeMs: 60_000, cacheEma: 0.8 });
+  });
+
+  test('an agent that has not run shows no figures, not zeros', () => {
+    const { main, hire, read } = workspace();
+    hire(main, 'idle-one', { origin: 'user' });
+
+    expect(read().find((agent) => agent.label === 'idle-one')?.figures).toEqual({ activeMs: 0, cacheEma: null });
   });
 });

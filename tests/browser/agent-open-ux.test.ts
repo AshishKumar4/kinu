@@ -1,5 +1,5 @@
 /**
- * An agent opened from the Agents panel or from a task in the Work tab shows its live chat in the main chat area
+ * An agent opened from the sidebar's agents list or from a task in the Work tab shows its live chat in the main chat area
  * (owner, 2026-09-27: "the live chat appears in the main chat area itself"). On a phone that means the Chat pane.
  */
 import { describe, expect, test } from 'bun:test';
@@ -17,7 +17,7 @@ const VIEWPORTS = { desktop: { width: 1280, height: 860 }, phone: { width: 390, 
 async function workspace(gallery: Gallery, viewport: keyof typeof VIEWPORTS): Promise<Page> {
   const page = await gallery.newPage();
   await page.setViewport(VIEWPORTS[viewport]);
-  await page.goto(`${gallery.origin}/gallery.html?frame=workspacepage&agents=panel`, { waitUntil: 'networkidle0' });
+  await page.goto(`${gallery.origin}/gallery.html?frame=workspaceshell&agents=panel`, { waitUntil: 'networkidle0' });
 
   return page;
 }
@@ -33,11 +33,12 @@ function chatShows(page: Page, pane: string): Promise<boolean> {
 
 describe('opening an agent shows its live chat in the main chat area', () => {
   for (const viewport of ['desktop', 'phone'] as const) {
-    test(`from the Agents panel, on a ${viewport}`, async () => {
+    test(`from the sidebar's agents list, on a ${viewport}`, async () => {
       await withGallery(async (gallery) => {
         const page = await workspace(gallery, viewport);
         await page.click('[data-agents-counter]');
-        await page.click('[data-agent-row="a-scout"]');
+        // The list is the sidebar's: the rail's on a desktop, the drawer's on a phone.
+        await page.click(`${viewport === 'phone' ? '[data-drawer]' : '[data-rail]'} [data-agent-row="a-scout"]`);
         await page.waitForSelector(AUDITOR_PANE);
         await page.waitForFunction((pane, said) => document.querySelector(pane)?.textContent?.includes(said), {}, AUDITOR_PANE, AUDITOR_SAID);
 
