@@ -196,6 +196,19 @@ describe('source_text', () => {
     `)).toEqual(['reads a source file', 'expect(<source text>).not.toContain']);
   });
 
+  test('RED: a source path held in a literal binding reaches a reader parameter', () => {
+    expect(found('source_text', `
+      import { readFileSync } from 'node:fs';
+      const CLIENT = 'packages/probe/src/budget.ts';
+      function fields(file: string): string[] {
+        return readFileSync(file, 'utf8').split('export');
+      }
+      test('the client declares its budget', () => {
+        expect(fields(CLIENT)).toContain('PROMPT_BUDGET');
+      });
+    `)).toEqual(['reads a source file', 'expect(<source text>).toContain']);
+  });
+
   test('RED: a reader helper built on a root the suite climbs to', () => {
     expect(found('source_text', `
       import { readFileSync } from 'node:fs';

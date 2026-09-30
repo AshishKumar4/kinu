@@ -5,7 +5,6 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { createHash } from 'node:crypto';
 import { buildSystemPromptSync } from '../src/prompt';
 import { renderDynamicContextBlock } from '../src/prompting/volatile-context';
 import { PROMPT_SECTIONS } from '../src/prompting/section-templates';
@@ -50,13 +49,6 @@ function movedCharacters(baseline: string, mutated: string): string[] {
 }
 
 describe('every registered section reaches a rendered prompt', () => {
-  test('the Markdown extraction preserves every rendered byte of the surface matrix', () => {
-    const hashes = Object.fromEntries(PROMPT_MATRIX.map(({ name, opts }) => [
-      name, createHash('sha256').update(buildSystemPromptSync(rt, opts)).digest('hex'),
-    ]));
-
-    expect(hashes).toMatchSnapshot();
-  });
 
   test('all sections reach a surface that enables them', () => {
     for (const section of PROMPT_SECTIONS) {

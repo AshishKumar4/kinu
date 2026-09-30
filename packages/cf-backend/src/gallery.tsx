@@ -54,7 +54,7 @@ import { CLIENT_ERROR_ENDPOINT } from "@kinu.run/core";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { APP_ROUTES, rosterBucket, rosterMatches, WorkspaceOverviewSchema, type WorkspaceOverview } from "@kinu.run/core";
 import { CHUNK_FIXED_KEY, lazyRoute } from "@/lazy-route";
-import type { SubordinateSnapshot } from "@/hooks/use-kinu";
+import { useKinu, type SubordinateSnapshot } from "@/hooks/use-kinu";
 import { primePageDeployedBuildSha } from "@kinu.run/core";
 import { ChatLiveTail, DeviceOfflineRow, MessageView, SteerBubble } from "@/components/MessageView";
 import { buildTranscript, profileCatalogCanonical } from "@kinu.run/core";
@@ -6255,6 +6255,72 @@ function userSettingsStateFrame(): MountedFrame {
   };
 }
 
+function SnapshotRaceFrame() {
+  const state = useKinu(WORKSPACE_PAGE_NAME);
+
+  return <>
+    <button data-snapshot-race-retry onClick={state.retryLoad}>Retry</button>
+    <button data-snapshot-race-refresh onClick={() => galleryServerPush(JSON.stringify({
+      type: READS_CHANGED_EVENT,
+      reads: ["getMemoryContent", "getExecutors", "getWorkspaceTabPresence", "getActivePlanReview", "listSlates"],
+    }))}>Refresh</button>
+    <output data-snapshot-race-state>{JSON.stringify({
+      snapshot: state.agentStatus?.displayName,
+      memory: state.memoryContent,
+      executors: state.executors.map((executor) => executor.name),
+      plan: state.activePlan?.id ?? null,
+      presence: state.tabPresence,
+      slates: state.slates.map((slate) => slate.id),
+    })}</output>
+  </>;
+}
+
+const snapshotRaceRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  const current = document.documentElement.dataset.snapshotRaceRevision === "current";
+  const memoryContent = current ? "current memory" : "snapshot memory";
+  const executors = current ? [{ name: "current-executor", type: "workspace", cwd: "/workspace" }] : [];
+  const activePlan = current ? v.parse(JsonValueSchema, { ...galleryAgentPlan, id: "current-plan" }) : null;
+  const tabPresence = { work: current, explorations: false };
+  const slates = current ? [{ id: "current-slate", title: "Current slate", bindings: [] }] : [];
+  const seeded = { memoryContent, executors, activePlan, tabPresence, slates };
+
+  if (method === "getWorkspaceSnapshot") {
+    const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get(method));
+    const held = document.documentElement.dataset.snapshotRaceHold === "1";
+
+    const answer = v.parse(JsonValueSchema, {
+      ...snapshot, ...seeded,
+      status: { ...v.parse(JsonObjectSchema, snapshot.status), displayName: held ? "held snapshot" : "initial snapshot" },
+    });
+
+    if (held) {
+      document.documentElement.dataset.snapshotRaceWaiting = "1";
+      await new Promise<void>((resolve) => {
+        window.addEventListener("gallery:release-snapshot", () => { resolve(); }, { once: true });
+      });
+    }
+
+    return rpcResult(answer).json<T>();
+  }
+
+  const reads = new Map<string, JsonValue>([
+    ["getMemoryContent", memoryContent], ["getExecutors", executors],
+    ["getActivePlanReview", activePlan], ["getWorkspaceTabPresence", tabPresence],
+    ["listSlates", { slates, problems: [] }],
+  ]);
+
+  const value = reads.get(method);
+
+  return value === undefined ? workspacePageRpc<T>(method, args) : rpcResult(value).json<T>();
+};
+
+function snapshotRaceFrame(): MountedFrame {
+  serveGalleryRpc(snapshotRaceRpc);
+
+  return { entries: ["/"], node: <SnapshotRaceFrame /> };
+}
+
+
 async function mount() {
   const document_ = publicDocument(frame);
 
@@ -6323,6 +6389,7 @@ async function mount() {
       return diffDesignFrame();
     }],
     ["drive-design", () => Promise.resolve(driveDesignFrame())],
+    ["snapshotrace", () => Promise.resolve(snapshotRaceFrame())],
   ]);
 
   const dynamicFixture = dynamicFrames.get(frame);
