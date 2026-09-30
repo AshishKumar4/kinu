@@ -125,6 +125,9 @@ export class ContainerRoutes {
   #fallback: Fetcher | undefined;
   #source: S3MountRequest['source'] | undefined;
   #mountClient: S3Mounts | undefined;
+  /** The container was started by this object and no mount has been tried in it since, so it holds
+   *  no S3Mounts marker for an unmount to clear (D45). */
+  #unmarked = false;
 
   constructor(readonly host: RouteHost) {}
 
@@ -164,12 +167,19 @@ export class ContainerRoutes {
     })));
   }
 
+  /** Called when this object has just started the container: its `/run` is new. */
+  started(): void {
+    this.#unmarked = true;
+  }
+
   mount(path: string): Promise<void> {
     return settle(Effect.gen({ self: this }, function* () {
       const source = this.#source;
 
       if (source === undefined) return yield* Effect.fail(new DevboxError('configuration', 'this devbox has no store to mount'));
       const mounts = yield* this.#mounts();
+      // A failed attempt can leave a marker behind, so the next unmount must run.
+      this.#unmarked = false;
       yield* attempt('io', () => mounts.mount({ mountPath: path, source, keyPrefix: this.host.prefix, access: 'read-write',
         s3fsOptions: { connect_timeout: 10, readwrite_timeout: 30, retries: 3 } }));
     }));
@@ -177,6 +187,7 @@ export class ContainerRoutes {
 
   unmount(path: string): Promise<void> {
     return settle(Effect.gen({ self: this }, function* () {
+      if (this.#unmarked) return;
       const mounts = yield* this.#mounts();
       yield* attempt('io', () => mounts.unmount(path));
     }));
