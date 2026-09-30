@@ -98,7 +98,7 @@ Sign in to Kinu and pick a model provider for local workspaces.
 | Option | What it does |
 | --- | --- |
 | `--origin <url>` | Kinu app origin |
-| `--provider <name>` | Provider: workers-ai, codex, openai, openrouter, anthropic, openai-compatible, opencode, skip |
+| `--provider <name>` | Provider: workers-ai, chatgpt, openai, openrouter, anthropic, openai-compatible, opencode, skip |
 | `--model <id>` | Default model for the selected provider |
 | `--local-model` | Set up a model provider for local workspaces |
 | `--local` | Keep the provider key on this machine instead of your Kinu account |
@@ -106,7 +106,7 @@ Sign in to Kinu and pick a model provider for local workspaces.
 | `--skip-cloud` | Skip account sign-in |
 
 ```bash
-kinu setup --provider codex
+kinu setup --provider chatgpt
 ```
 
 ### kinu provider [action] [name] [account]
@@ -744,7 +744,7 @@ These apply to every command.
 
 ```bash
 kinu setup
-kinu provider connect codex
+kinu provider connect chatgpt
 kinu create jarvis --mode cloud --alias jarvis
 jarvis "review this repo"
 kinu transcripts jarvis

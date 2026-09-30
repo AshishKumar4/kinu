@@ -231,7 +231,7 @@ describe('kinu label', () => {
     const { home, truth } = seedWorkspace('demo');
     const file = join(home, 'calib.txt');
 
-    const early = await runCli(home, ['label', 'ensemble', 'demo', '--models', 'anthropic/claude-fable-5,codex/gpt-5.6-sol']);
+    const early = await runCli(home, ['label', 'ensemble', 'demo', '--models', 'anthropic/claude-fable-5,chatgpt/gpt-5.6-sol']);
     expect(early.exitCode).toBe(0);
     expect(early.stdout).toContain('did not run');
     expect(early.stdout).toContain('kinu label export');

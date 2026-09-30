@@ -1,7 +1,7 @@
 // Per-agent provider registry: Cloudflare providers, core providers, then the models.dev catalog (static ids win).
 // Registration order is the model picker's listing order. Auth goes through the UserDO stub.
 import {
-  createProviderRegistry, createCodexProvider, createOpenAIProvider,
+  createProviderRegistry, createChatGptProvider, createCodexProvider, createOpenAIProvider,
   createOpenRouterProvider, createOpenAICompatProvider, createAnthropicProvider, createClaudeProvider,
   createModelsDevCatalogSource,
   type ProviderRegistry, type ProviderDeps, type ProviderEnv, type AuthResolver, type AuthRequest,
@@ -15,13 +15,13 @@ import { AI_GATEWAY_PROVIDER_ID, createAIGatewayProvider, resolvePlatformGateway
 import type { CredentialSummary } from '../user/user-do';
 import type { ActorReference, UserCaller } from '@kinu.run/core';
 import { retryTransientDO } from '@kinu.run/core';
-import { codexEgressFetch, codexRouteFetch, type CodexEgressNamespace, type CodexRelayHub } from '../egress/codex-egress-route';
+import { codexEgressFetch, deviceRouteFetch, type CodexEgressNamespace, type ModelRelayHub } from '../egress/codex-egress-route';
 
 /**
  * Credential DO stub paired with the capability this context presents (owner, or workspace token resolved per call),
  * so no context holds the stub without saying who it is.
  */
-export interface UserCredentialClient extends CodexRelayHub {
+export interface UserCredentialClient extends ModelRelayHub {
   getAuthHeaders(
     caller: UserCaller,
     key: string,
@@ -112,12 +112,23 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     ? codexEgressFetch(opts.env.CodexEgress, opts.ownerUserId)
     : undefined;
 
-  const codexEgress = source === null
-    ? container
-    : codexRouteFetch({
-      container: container ?? opts.fetch ?? fetch, hub: source.stub, caller: () => resolveCaller(source),
-      ...(opts.currentTurn !== undefined && { currentTurn: opts.currentTurn }),
-    });
+  const relayed = source === null ? null : {
+    hub: source.stub, caller: () => resolveCaller(source), ...(opts.currentTurn !== undefined && { currentTurn: opts.currentTurn }),
+  };
+
+  const codexEgress = relayed === null ? container : deviceRouteFetch({ ...relayed, provider: 'codex', container: container ?? opts.fetch ?? fetch });
+
+  // The ChatGPT plan's token never leaves the machine that signed in, so the web reaches it only through that machine.
+  if (relayed !== null) {
+    registry.register(createChatGptProvider({
+      device: {
+        fetch: deviceRouteFetch({ ...relayed, provider: 'chatgpt' }),
+        unavailableReason: async () => (await relayed.hub.relayDevice(await relayed.caller(), 'chatgpt') === null
+          ? 'Continue with ChatGPT on a connected machine to use your ChatGPT plan.'
+          : undefined),
+      },
+    }));
+  }
 
   registry.register(createCodexProvider(codexEgress === undefined ? {} : { egress: codexEgress }));
   registry.register(createClaudeProvider());

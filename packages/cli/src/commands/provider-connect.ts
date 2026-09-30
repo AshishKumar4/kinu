@@ -2,29 +2,31 @@
 import { checkOpenCodeAvailability, createOpenCodeProvider } from '@kinu.run/cli-backend';
 import {
   ANTHROPIC_DEFAULT_MODEL,
+  CHATGPT_CRED_KEY,
+  CHATGPT_DEFAULT_MODEL,
+  CHATGPT_USAGE_URL,
   CLAUDE_CRED_KEY,
   CLAUDE_OAUTH_CALLBACK_PORT,
-  CODEX_CRED_KEY,
   MAIN_ACCOUNT,
   accountCredentialKey,
   baseCredentialKey,
   claudeCodeFrom,
   storedAccounts,
+  createChatGptProvider,
   createClaudeOAuthClient,
   listAnthropicModels,
   settleModelList,
-  createCodexOAuthClient,
   startClaudeSignIn,
-  decodeCodexAccountId,
   decodeJsonValue,
   discoverOpenAICompatibleModels,
-  tokensToCredential,
   type ModelInfo,
-  waitForAnswer,
 } from '@kinu.run/core';
 import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
+import * as v from 'valibot';
+import { beginSignIn, deviceRegistration, planEnabled, registrationOf, type SiwcRecord } from '../../../pc-agent/src/chatgpt.js';
 import { listCloudCredentials, setCloudCredential } from '../cloud-api';
 import {
+  AGENT_HOME,
   API_KEY_PROVIDERS,
   bumpProviderRevision,
   loadConfigFile,
@@ -42,14 +44,14 @@ import { awaitOAuthCallback } from './oauth-callback';
 export type ProviderConnectId =
   | 'cloudflare'
   | 'claude'
-  | 'codex'
+  | 'chatgpt'
   | 'openai'
   | 'openrouter'
   | 'anthropic'
   | 'openai-compatible'
   | 'opencode';
 
-type ProviderCredentialKind = 'browser' | 'device-code' | 'api-key' | 'binary';
+type ProviderCredentialKind = 'browser' | 'api-key' | 'binary';
 
 interface ProviderAsk {
   readonly label: string;
@@ -111,10 +113,10 @@ export const PROVIDER_CONNECTORS: readonly ProviderDescriptor[] = Object.freeze(
     credential: 'browser',
   },
   {
-    id: 'codex',
-    label: 'Codex',
-    blurb: 'Your ChatGPT Codex subscription. You sign in with a code in your browser.',
-    credential: 'device-code',
+    id: 'chatgpt',
+    label: 'ChatGPT',
+    blurb: 'Your ChatGPT plan. You continue with ChatGPT in your browser, and eligible requests use your plan.',
+    credential: 'browser',
   },
   { id: 'openai', label: 'OpenAI', blurb: 'An OpenAI API key.', credential: 'api-key' },
   { id: 'openrouter', label: 'OpenRouter', blurb: 'An OpenRouter API key.', credential: 'api-key' },
@@ -140,7 +142,7 @@ const NAMED_ACCOUNT_KEYS: Readonly<Record<string, true>> = Object.freeze({
   'openai-compat.default': true,
   'cloudflare.oauth': true,
   'cloudflare.ai-gateway': true,
-  'codex.oauth': true,
+  'chatgpt.oauth': true,
   'claude.oauth': true,
 });
 
@@ -164,15 +166,25 @@ function namedAccounts(baseKey: string, localNames: readonly string[], facts: Co
     .sort();
 }
 
-function loginState(descriptor: ProviderDescriptor & { readonly id: 'codex' | 'claude' }, facts: ConnectionFacts): ProviderConnectionState {
+function loginState(descriptor: ProviderDescriptor & { readonly id: 'chatgpt' | 'claude' }, facts: ConnectionFacts): ProviderConnectionState {
   const login = facts.providers[descriptor.id];
-  const accounts = namedAccounts(descriptor.id === 'codex' ? CODEX_CRED_KEY : CLAUDE_CRED_KEY, Object.keys(login?.accounts ?? {}), facts);
+  const accounts = namedAccounts(descriptor.id === 'chatgpt' ? CHATGPT_CRED_KEY : CLAUDE_CRED_KEY, Object.keys(login?.accounts ?? {}), facts);
+  const signedInWithoutPlan = descriptor.id === 'chatgpt' && login?.accessToken === undefined ? registrationOf(login?.metadata) : null;
+
+  if (signedInWithoutPlan !== null && accounts.length === 0) {
+    return { descriptor, connected: false, detail: `${signedInWithoutPlan.email ?? 'signed in'} without ChatGPT plan usage: kinu provider connect chatgpt` };
+  }
 
   if (login?.accessToken === undefined && login?.refreshToken === undefined && accounts.length === 0) {
     return { descriptor, connected: false, detail: `kinu provider connect ${descriptor.id}` };
   }
 
-  return { descriptor, connected: true, detail: currentModel(facts.defaultModel, descriptor.id) ?? 'your subscription', accounts };
+  const model = currentModel(facts.defaultModel, descriptor.id);
+
+  // OpenAI's wording (SIWC UI guidelines).
+  if (descriptor.id === 'chatgpt') return { descriptor, connected: true, detail: [model, `Using ChatGPT plan · Manage usage: ${CHATGPT_USAGE_URL}`].filter(Boolean).join(' · '), accounts };
+
+  return { descriptor, connected: true, detail: model ?? 'your subscription', accounts };
 }
 
 function apiKeyState(
@@ -213,7 +225,7 @@ export async function readProviderConnections(): Promise<ProviderConnections> {
           ? { descriptor, connected: false, detail: hint }
           : { descriptor, connected: true, detail: config.user?.email ?? 'your account' };
       case 'claude':
-      case 'codex': return loginState({ ...descriptor, id: descriptor.id }, facts);
+      case 'chatgpt': return loginState({ ...descriptor, id: descriptor.id }, facts);
       case 'opencode':
         if (opencode.binary && opencode.authenticated) {
           return { descriptor, connected: true, detail: currentModel(defaultModel, 'opencode') ?? 'your opencode install' };
@@ -265,7 +277,7 @@ function localApiKey(providers: NonNullable<KinuConfig['providers']>, id: Provid
     case 'openai-compatible': return providers.openaiCompat?.default !== undefined;
     case 'cloudflare':
     case 'claude':
-    case 'codex':
+    case 'chatgpt':
     case 'opencode':
       return false;
   }
@@ -285,8 +297,8 @@ const API_KEY_CONNECTORS: Readonly<Record<ApiKeyProviderId, { readonly label: st
   anthropic: { label: 'Anthropic', defaultModel: 'claude-sonnet-4-5' },
 };
 
-export function holdsAccounts(id: string): id is ApiKeyProviderId | 'codex' | 'claude' {
-  return id === 'codex' || id === 'claude' || id in API_KEY_PROVIDERS;
+export function holdsAccounts(id: string): id is ApiKeyProviderId | 'chatgpt' | 'claude' {
+  return id === 'chatgpt' || id === 'claude' || id in API_KEY_PROVIDERS;
 }
 
 /** Stores and answers `connected`, or stores nothing and answers `blocked`; failures the person cannot act on throw. */
@@ -298,13 +310,13 @@ export async function connectProvider(
   const account = opts.account ?? MAIN_ACCOUNT;
 
   if (account !== MAIN_ACCOUNT && !holdsAccounts(id)) {
-    return { kind: 'blocked', reason: `${id} holds one account here.`, hint: 'Accounts are for openai, openrouter, anthropic, codex and claude.' };
+    return { kind: 'blocked', reason: `${id} holds one account here.`, hint: 'Accounts are for openai, openrouter, anthropic, chatgpt and claude.' };
   }
 
   switch (id) {
     case 'cloudflare': return await connectCloudflare(port, opts.origin);
     case 'claude': return await connectClaude(port, opts.model, account);
-    case 'codex': return await connectCodex(port, opts.model, account);
+    case 'chatgpt': return await connectChatGpt(port, opts.model, account);
     case 'opencode': return await connectOpenCode(port, opts.model);
     case 'openai':
     case 'openrouter':
@@ -400,24 +412,68 @@ async function runClaudeSignIn(port: ProviderConnectPort): Promise<LocalOAuthSes
   return createClaudeOAuthClient().exchange(signIn, pasted);
 }
 
-async function connectCodex(port: ProviderConnectPort, requestedModel: string | undefined, account: string): Promise<ProviderConnectOutcome> {
-  if (account !== MAIN_ACCOUNT) {
-    const credential = await runCodexDeviceFlow(port);
-    await updateConfigFile((next) => withOAuthSession(next, 'codex', account, credential));
+/** Sign in with ChatGPT here, reusing the account's saved client ID (or, first, the daemon's). */
+async function connectChatGpt(port: ProviderConnectPort, requestedModel: string | undefined, account: string): Promise<ProviderConnectOutcome> {
+  const stored = loadConfigFile().providers?.chatgpt;
+  const saved = account === MAIN_ACCOUNT ? stored : stored?.accounts?.[account];
+  const registration = registrationOf(saved?.metadata) ?? (account === MAIN_ACCOUNT ? deviceRegistration(AGENT_HOME) : null);
+  const grant = v.safeParse(v.object({ scopes: v.array(v.string()) }), saved?.metadata);
 
-    return { kind: 'connected', summary: `Connected the ChatGPT Codex account ${account}`, detail: accountDetail('codex', account) };
+  const result = await port.skippable('Waiting for you to continue with ChatGPT in your browser.', async (signal) => {
+    const flow = await beginSignIn({ home: AGENT_HOME, registration, consent: grant.success && !planEnabled(grant.output), signal });
+
+    port.report(`Continue with ChatGPT: ${flow.authorizeUrl}`);
+    openBrowser(flow.authorizeUrl);
+
+    return flow.done;
+  });
+
+  if (result === null) return { kind: 'blocked', reason: 'The ChatGPT sign-in was skipped.', hint: 'Run kinu provider connect chatgpt when you want to use your ChatGPT plan.' };
+
+  if (result.outcome === 'declined') return { kind: 'blocked', reason: 'You cancelled the ChatGPT sign-in.', hint: 'Run kinu provider connect chatgpt to try again.' };
+  await updateConfigFile((next) => withOAuthSession(next, 'chatgpt', account, chatgptSession(result.record)));
+
+  if (result.outcome === 'plan-disabled') {
+    return {
+      kind: 'blocked',
+      reason: `Signed in as ${result.record.email ?? 'your ChatGPT account'}, but ChatGPT plan usage was not granted, so Kinu cannot use your plan.`,
+      hint: 'Run kinu provider connect chatgpt to enable it, or connect another provider such as an OpenAI API key (kinu provider connect openai).',
+    };
   }
 
-  const current = currentModel(readDefaultTier()?.model, 'codex') ?? 'gpt-5.5';
-  const answered = requestedModel ?? await port.ask({ label: 'Default Codex model', fallback: current });
-  const model = answered.startsWith('codex/') ? answered.slice('codex/'.length) : answered;
-  const credential = await runCodexDeviceFlow(port);
-  await updateConfigFile((next) => withOAuthSession(next, 'codex', MAIN_ACCOUNT, credential));
+  // OpenAI's first-use confirmation.
+  if (result.registered) port.report(`You're using your ChatGPT plan. Eligible requests in Kinu now use it. Manage usage: ${CHATGPT_USAGE_URL}`);
 
-  return { kind: 'connected', summary: 'Connected ChatGPT Codex subscription', detail: await defaultModelDetail(`codex/${model}`) };
+  if (account !== MAIN_ACCOUNT) {
+    return { kind: 'connected', summary: `Connected the ChatGPT account ${account} (${result.record.email ?? 'signed in'})`, detail: accountDetail('chatgpt', account) };
+  }
+
+  const model = requestedModel ?? await port.ask({ label: 'Default ChatGPT model', fallback: await suggestedChatGptModel(port, result.record.accessToken ?? '') });
+
+  return { kind: 'connected', summary: `Connected your ChatGPT plan as ${result.record.email ?? 'your ChatGPT account'}`, detail: await defaultModelDetail(`chatgpt/${model.replace(/^chatgpt\//, '')}`) };
 }
 
-function withOAuthSession(config: KinuConfig, issuer: 'codex' | 'claude', account: string, credential: LocalOAuthSession): KinuConfig {
+function chatgptSession(record: SiwcRecord): LocalOAuthSession {
+  const { accessToken, refreshToken, expiresAt, ...identity } = record;
+
+  return { accessToken, refreshToken, expiresAt, metadata: { ...identity, scopes: [...identity.scopes] } };
+}
+
+async function suggestedChatGptModel(port: ProviderConnectPort, accessToken: string): Promise<string> {
+  const provider = createChatGptProvider();
+
+  const { models, stale } = await settleModelList(provider.listModels({
+    env: {}, getAuth: async () => ({ headers: { Authorization: `Bearer ${accessToken}` } }), hasCredential: async () => true,
+  }));
+
+  if (stale !== null) port.report(stale.message);
+  else port.report(`Your ChatGPT plan lists: ${models.map((entry) => entry.id).join(', ')}`);
+  const current = currentModel(readDefaultTier()?.model, 'chatgpt');
+
+  return models.find((entry) => entry.id === current)?.id ?? models[0]?.id ?? CHATGPT_DEFAULT_MODEL;
+}
+
+function withOAuthSession(config: KinuConfig, issuer: 'chatgpt' | 'claude', account: string, credential: LocalOAuthSession): KinuConfig {
   const stored = config.providers?.[issuer] ?? {};
 
   const session: LocalOAuthSession = {
@@ -434,35 +490,6 @@ function withOAuthSession(config: KinuConfig, issuer: 'codex' | 'claude', accoun
 
 function accountDetail(provider: string, account: string): string {
   return `Use it with ${provider}@${account}/<model>, or make it the default: kinu provider default ${provider} ${account}`;
-}
-
-async function runCodexDeviceFlow(port: ProviderConnectPort) {
-  const client = createCodexOAuthClient();
-  const flow = await client.startDeviceFlow();
-  port.report(`Open: ${flow.portalURL}`);
-  port.report(`Code: ${flow.userCode}`);
-  openBrowser(flow.portalURL);
-
-  // No clock: the provider's own expired answer ends the wait.
-  const probe = async () => {
-    const poll = await client.pollDeviceFlow(flow.deviceAuthId, flow.userCode);
-
-    return poll.status === 'pending' ? undefined : poll;
-  };
-
-  const outcome = await waitForAnswer(probe, {
-    intervalMs: Math.max(3, flow.pollIntervalSec) * 1000,
-    onWaiting: () => port.report('Waiting for approval…'),
-  });
-
-  if (outcome.status === 'expired' || outcome.status === 'denied') throw new Error(outcome.message);
-  const credential = tokensToCredential(outcome.tokens);
-  const accountId = decodeCodexAccountId(credential.accessToken);
-
-  return {
-    ...credential,
-    metadata: accountId ? { accountId } : credential.metadata,
-  };
 }
 
 interface ApiKeyProvider {

@@ -154,9 +154,9 @@ describe("CLI behavior", () => {
       origin: "https://kinu.example.com",
       accessToken: ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join(""),
       user: { id: "user_123", email: "ashish@example.com" },
-      model: "codex/gpt-5.5",
+      model: "chatgpt/gpt-6.1-sol",
       providers: {
-        codex: { accessToken: "codex-access-token", refreshToken: "codex-refresh-token" },
+        chatgpt: { accessToken: "chatgpt-access-token", refreshToken: "chatgpt-refresh-token", metadata: { clientId: "oaiapp_issued", email: "ashish@example.com" } },
         openai: { apiKey: "sk-secret" },
       },
     });
@@ -167,10 +167,12 @@ describe("CLI behavior", () => {
     expect(proc.exitCode).toBe(0);
     expect(stdout).toContain("Model providers");
     expect(stdout).toContain("Kinu account");
-    expect(stdout).toContain("Codex");
+    expect(stdout).toContain("ChatGPT");
+    expect(stdout).toContain("Using ChatGPT plan · Manage usage: https://chatgpt.com/settings/usage");
     expect(stdout).toContain("OpenAI");
     expect(stdout).not.toContain("sk-secret");
-    expect(stdout).not.toContain("codex-refresh-token");
+    expect(stdout).not.toContain("chatgpt-refresh-token");
+    expect(stdout).not.toContain("chatgpt-access-token");
   });
 
   test("no-arg CLI keeps a non-interactive help fallback", async () => {

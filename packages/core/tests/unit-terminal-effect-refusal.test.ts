@@ -20,6 +20,7 @@ import { initToolEffectClaimTable } from '../src/tools/effect-claim';
 import { initActorDdl } from '../src/identity/schema';
 import { readActivityLog } from '../src/identity/activity-log';
 import { toKinuError } from '../src/obs/index';
+import { asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider } from '../src/index';
 import { makeExecRaw, makeSql } from './helpers';
 
 const NOW = 1_700_000_000_000;
@@ -138,6 +139,38 @@ test.each([
 
   expect(rows()).toEqual([...left]);
   expect(ledger.nextRetryAt()).toBeNull();
+});
+
+/** A call on the ChatGPT plan after its usage limit is reached (SIWC errors-and-recovery, 2026-09-30). */
+function planSpent() {
+  const provider = createChatGptProvider();
+
+  const model = provider.createModel('gpt-6.1-sol', {
+    env: {},
+    fetch: asFetchFunction(async () => Response.json(
+      { error: { code: 'subscription_sharing_usage_limit_exceeded', message: 'usage limit reached', param: null, type: 'rate_limit_error' } },
+      { status: 429 },
+    )),
+    getAuth: async () => ({ headers: { Authorization: 'Bearer at-1' } }),
+    hasCredential: async (key) => key === CHATGPT_CRED_KEY,
+  });
+
+  return async () => {
+    await generateText({ model, prompt: 'compress the facts', maxRetries: 0 });
+
+    return { status: 'completed' as const };
+  };
+}
+
+// A 429 that is a spent plan, not a busy one: waiting does not restore it, so it is the owner's to fix.
+test('a spent ChatGPT plan parks the effect with no wake, even wrapped in the host\'s step', async () => {
+  const { ledger, wakes, rows } = ledgerOver(429, wrapped(planSpent()));
+
+  await (await ledger.run('turn-1', [{ name: 'sleep_time', scope: 'm-1', input: {}, lane: 'detached' }])).reported;
+
+  expect(rows()).toEqual([{ status: 'parked', attempts: 1 }]);
+  expect(ledger.nextRetryAt()).toBeNull();
+  expect(wakes).toEqual([NOW + TERMINAL_EFFECT_RETRY_CEILING_MS]);
 });
 
 // ironwood-cairn-6dbcb8de, 2026-09-29: genesis owed auto_title, three settled turns each owed sleep_time, and the fast

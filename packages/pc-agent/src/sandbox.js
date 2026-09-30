@@ -138,7 +138,7 @@ const ENV_ALLOWLIST_FAMILY = /^LC_[A-Z_]+$/;
  * settings this daemon itself reads: its update key and its predecessor.
  */
 const WITHHELD_ENV = Object.freeze([
-  'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY', 'CODEX_ACCESS_TOKEN',
+  'OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'OPENROUTER_API_KEY',
   'KINU_TOKEN', 'KINU_AUTH', 'AI_GATEWAY_AUTH', 'KINU_LLM_HEADERS', 'KINU_PROVIDER_CREDENTIALS',
   update.RELEASE_SIGNING_PUBLIC_KEY_ENV, update.PREDECESSOR_ENV,
 ]);

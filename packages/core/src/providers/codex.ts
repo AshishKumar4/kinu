@@ -15,11 +15,11 @@ import { Effect } from 'effect';
 import { classify, diagnostics, KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
 import { knownReasoningEfforts, type ReasoningEffort } from './reasoning-effort';
 
-export const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
+const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 
 export const CODEX_CRED_KEY = 'codex.oauth';
 
-export const CODEX_DEFAULT_MODEL = 'gpt-5.5';
+const CODEX_DEFAULT_MODEL = 'gpt-5.5';
 
 /** Evolution's mechanical-call tier. */
 const CODEX_FAST_MODEL = 'gpt-6-luna';
@@ -249,18 +249,22 @@ const ModelInputModalitySchema: v.GenericSchema<ModelInputModality> = v.picklist
 /** The object form of a `supported_reasoning_levels` row; the other form is a bare level string. */
 const CodexReasoningLevelSchema = v.object({ effort: v.string() });
 
-function parseCodexModels(input: { body: unknown }): ModelInfo[] {
-  const parsed = v.safeParse(CodexModelsResponseSchema, input.body);
+export interface ChatGptCatalogRow {
+  readonly model: ModelInfo;
+  readonly visibility: string | undefined;
+  readonly priority: number;
+}
+
+
+export function chatgptCatalogRows(answer: { readonly body: unknown }): ChatGptCatalogRow[] {
+  const parsed = v.safeParse(CodexModelsResponseSchema, answer.body);
 
   if (!parsed.success) return [];
-  const rows = parsed.output.models ?? [];
-  const models: Array<ModelInfo & { priority: number }> = [];
 
-  for (const row of rows) {
-    if (row.visibility !== 'list' && row.visibility !== undefined) continue;
+  return (parsed.output.models ?? []).flatMap((row): ChatGptCatalogRow[] => {
     const id = nonEmptyString({ value: row.slug });
 
-    if (!id) continue;
+    if (!id) return [];
     const capabilities: NonNullable<ModelInfo['capabilities']> = ['tools', 'streaming'];
 
     const reasoningEfforts = knownReasoningEfforts((row.supported_reasoning_levels ?? []).map((level) => {
@@ -279,21 +283,26 @@ function parseCodexModels(input: { body: unknown }): ModelInfo[] {
       return parsedModality.success ? [parsedModality.output] : [];
     });
 
-    const priority = v.safeParse(v.number(), row.priority);
-    models.push({
-      id,
-      label: nonEmptyString({ value: row.display_name }) ?? id,
-      capabilities,
-      contextWindow: positiveInteger({ value: row.context_window }) ?? positiveInteger({ value: row.max_context_window }),
-      inputModalities: inputModalities.length > 0 ? inputModalities : undefined,
-      reasoningEfforts,
-      priority: priority.success ? priority.output : 0,
-    });
-  }
+    return [{
+      model: {
+        id,
+        label: nonEmptyString({ value: row.display_name }) ?? id,
+        capabilities,
+        contextWindow: positiveInteger({ value: row.context_window }) ?? positiveInteger({ value: row.max_context_window }),
+        inputModalities: inputModalities.length > 0 ? inputModalities : undefined,
+        reasoningEfforts,
+      },
+      visibility: row.visibility,
+      priority: row.priority ?? 0,
+    }];
+  });
+}
 
-  return models
-    .sort((a, b) => (b.priority - a.priority) || (a.label ?? a.id).localeCompare(b.label ?? b.id))
-    .map(({ priority: _priority, ...model }) => model);
+function parseCodexModels(input: { body: unknown }): ModelInfo[] {
+  return chatgptCatalogRows(input)
+    .filter((row) => row.visibility === 'list' || row.visibility === undefined)
+    .sort((a, b) => (b.priority - a.priority) || (a.model.label ?? a.model.id).localeCompare(b.model.label ?? b.model.id))
+    .map((row) => row.model);
 }
 
 const CODEX_DEFAULT_INSTRUCTIONS = 'You are Kinu, a helpful coding agent.';

@@ -10,6 +10,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { generateText } from 'ai';
 import { createTestActors } from '@kinu.run/test-utils';
 import { completeOnRoute } from '../src/profiles/model-lane';
+import { asFetchFunction, createChatGptProvider } from '../src/index';
 import { tierRefusals } from '../src/profiles/tier-refusals';
 import type { ModelRouteResolution } from '../src/profiles/model-route';
 import { initActorDdl } from '../src/identity/schema';
@@ -99,6 +100,32 @@ test('a tier the owner must fix is said once, naming the tier and the model, unt
   await expect(completeOnRoute(route('gateway/unfunded'), lane, 'four')).rejects.toThrow();
 
   expect(said()).toHaveLength(2);
+});
+
+test('a spent plan on the tier is said once, where a busy one says nothing', async () => {
+  const { refusals, said } = notices();
+
+  const spent = createChatGptProvider().createModel('gpt-6.1-sol', {
+    env: {},
+    fetch: asFetchFunction(async () => Response.json(
+      { error: { code: 'subscription_sharing_usage_limit_exceeded', message: 'usage limit reached', param: null, type: 'rate_limit_error' } },
+      { status: 429 },
+    )),
+    getAuth: async () => ({ headers: { Authorization: 'Bearer at-1' } }),
+    hasCredential: async () => true,
+  });
+
+  const lane = {
+    llm: (): LLM => ({ async *stream() { yield ''; }, complete: async (prompt) => (await generateText({ model: spent, prompt, maxRetries: 0 })).text }),
+    refusals,
+  };
+
+  await expect(completeOnRoute(route('chatgpt/gpt-6.1-sol'), lane, 'one')).rejects.toThrow();
+  await expect(completeOnRoute(route('chatgpt/gpt-6.1-sol'), lane, 'two')).rejects.toThrow();
+
+  expect(said()).toHaveLength(1);
+  expect(said()[0]).toContain('Your fast tier, chatgpt/gpt-6.1-sol, is refusing requests');
+  expect(said()[0]).toContain('https://chatgpt.com/settings/usage');
 });
 
 test('a refusal the owner cannot fix (a 429) says nothing', async () => {

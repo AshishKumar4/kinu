@@ -23,7 +23,7 @@ function runProviders(args: string[], opts: { home: string; env?: Record<string,
     cwd: repoRoot,
     env: {
       ...process.env,
-      OPENAI_API_KEY: '', ANTHROPIC_API_KEY: '', OPENROUTER_API_KEY: '', CODEX_ACCESS_TOKEN: '',
+      OPENAI_API_KEY: '', ANTHROPIC_API_KEY: '', OPENROUTER_API_KEY: '',
       KINU_BASE_URL: '', KINU_AUTH: '', KINU_MODEL: '',
       PATH: path, KINU_HOME: opts.home, NO_COLOR: '1',
       ...opts.env,
@@ -188,20 +188,20 @@ describe('providers command — disconnect', () => {
   test('removes the stored credential from disk and says the default model ran on it, leaving the default', async () => {
     const home = homeWith({
       providers: {
-        codex: { accessToken: 'at-secret', refreshToken: 'rt-secret' },
+        chatgpt: { accessToken: 'at-secret', refreshToken: 'rt-secret' },
         openai: { apiKey: 'sk-keep-me' },
       },
     });
 
-    await withDefaultModel(home, 'codex/gpt-5.5');
-    const res = await runProviders(['disconnect', 'codex'], { home });
+    await withDefaultModel(home, 'chatgpt/gpt-6.1-sol');
+    const res = await runProviders(['disconnect', 'chatgpt'], { home });
     expect(res.exitCode).toBe(0);
-    expect(res.stdout).toContain('Removed the codex credential from this machine');
-    expect(res.stdout).toContain('codex/gpt-5.5 runs on it');
+    expect(res.stdout).toContain('Removed the chatgpt credential from this machine');
+    expect(res.stdout).toContain('chatgpt/gpt-6.1-sol runs on it');
 
     const config = readConfig(home);
     expect(config.providers).toEqual({ openai: { apiKey: 'sk-keep-me' } });
-    expect(v.parse(DefaultModelSchema, config).localProfile.catalog.tiers.default.model).toBe('codex/gpt-5.5');
+    expect(v.parse(DefaultModelSchema, config).localProfile.catalog.tiers.default.model).toBe('chatgpt/gpt-6.1-sol');
     expect(readFileSync(join(home, 'config.json'), 'utf8')).not.toContain('secret');
   });
 
@@ -230,10 +230,10 @@ describe('providers command — disconnect', () => {
   });
 
   test('says nothing about a default model that runs on another provider', async () => {
-    const home = homeWith({ providers: { codex: { accessToken: 'at' }, openai: { apiKey: 'sk' } } });
+    const home = homeWith({ providers: { chatgpt: { accessToken: 'at' }, openai: { apiKey: 'sk' } } });
     await withDefaultModel(home, 'openai/gpt-5.5');
 
-    const res = await runProviders(['disconnect', 'codex'], { home });
+    const res = await runProviders(['disconnect', 'chatgpt'], { home });
     expect(res.stdout).not.toContain('runs on it');
     expect(v.parse(DefaultModelSchema, readConfig(home)).localProfile.catalog.tiers.default.model).toBe('openai/gpt-5.5');
   });

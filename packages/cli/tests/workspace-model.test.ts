@@ -22,7 +22,7 @@ const repoRoot = resolve(import.meta.dir, '../../..');
 const endpointFixture = resolve(import.meta.dir, 'fixtures/mock-llm-server.ts');
 
 /** Credentials a developer shell may export; any of them would outrank the endpoint under test. */
-const NO_AMBIENT_PROVIDER = { OPENAI_API_KEY: '', ANTHROPIC_API_KEY: '', OPENROUTER_API_KEY: '', CODEX_ACCESS_TOKEN: '' };
+const NO_AMBIENT_PROVIDER = { OPENAI_API_KEY: '', ANTHROPIC_API_KEY: '', OPENROUTER_API_KEY: '' };
 
 const REPLY = 'fixture-reply-7c1d';
 

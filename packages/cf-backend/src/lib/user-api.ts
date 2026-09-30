@@ -301,6 +301,29 @@ export const pollCodexFlow    = () => api(PollResultSchema, 'POST', '/codex/poll
 
  return r; });
 
+/** Where the owner reviews and limits what Kinu spends of their ChatGPT plan. */
+export const CHATGPT_USAGE_URL = 'https://chatgpt.com/settings/usage';
+
+const ChatGptPlanSchema = v.object({
+  device: v.nullable(v.object({ id: v.string(), label: v.string() })),
+  status: v.nullable(v.object({
+    signedIn: v.boolean(), email: v.nullable(v.string()), planEnabled: v.boolean(), pending: v.boolean(),
+    lastFailure: v.nullable(v.string()), firstSignIn: v.boolean(),
+  })),
+});
+
+export type ChatGptPlan = v.InferOutput<typeof ChatGptPlanSchema>;
+
+export const chatgptPlan = () => api(ChatGptPlanSchema, 'GET', '/chatgpt');
+
+/** The URL is for a browser on that device: the sign-in comes back to a port there. */
+export const startChatGptSignIn = () => api(v.object({ authorizeUrl: v.string(), device: v.object({ id: v.string(), label: v.string() }) }), 'POST', '/chatgpt/sign-in');
+
+export const signOutChatGpt = () => api(v.object({ unconfirmed: v.nullable(v.string()) }), 'DELETE', '/chatgpt')
+  .then((r) => { invalidateModelsCache();
+
+ return r; });
+
 export const startClaudeSignIn = () => api(v.object({ url: v.string() }), 'POST', '/claude/start');
 
 /** `code` is what Claude showed: the code, or the address it sent the browser to. */

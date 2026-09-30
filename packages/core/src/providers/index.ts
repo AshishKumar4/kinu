@@ -36,6 +36,8 @@ export * from './openai';
 
 export * from './codex';
 
+export * from './chatgpt';
+
 export * from './model-test';
 
 export { EGRESS_REFUSAL_HEADER, EgressCalls, refusalError } from './egress-calls';
@@ -56,7 +58,7 @@ export {
   type ClaudeOAuthClient, type ClaudeSignIn,
 } from './claude-oauth';
 
-export { CLAUDE_LOGIN_ISSUER, CODEX_LOGIN_ISSUER, subscriptionIssuer, type SubscriptionIssuer } from './subscription-login';
+export { CLAUDE_LOGIN_ISSUER, subscriptionIssuer, type SubscriptionIssuer } from './subscription-login';
 
 export * from './fetch-shim';
 
