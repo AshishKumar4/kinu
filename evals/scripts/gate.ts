@@ -10,16 +10,16 @@
 // every trial of it at once. A task's report is stored only when it is complete and free of
 // infrastructure failures, and the joined report becomes a baseline only when it can be one
 // (`validateEvalResults`: every task, trials 1 to N once each, one build, one eval commit, no
-// infrastructure failure). With `--gate`, a regressed cohort or a report that cannot be a baseline
-// exits 1; without it the verdict is printed and the exit is 0.
+// infrastructure failure). With `--gate`, a run that does not stand as the build's verdict exits 1
+// (`evalGateVerdict`: a report that cannot be a baseline, no baseline compared, or a regressed
+// cohort); without it the verdict is printed and the exit is 0.
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as v from 'valibot';
-import { renderThrownChain } from '@kinu.run/core/obs';
-import { compareEvalResults, renderEvalComparison, validateEvalResults } from '../src/comparison';
+import { compareEvalResults, evalGateVerdict, renderEvalComparison, whyNotABaseline } from '../src/comparison';
 import { DEFINITION_PATHS, EXERCISED_PATHS, evalCommit, evalMatrix } from '../src/config';
 import { ARMS, deployedBuild, resolveEvalTarget } from '../src/target';
 import { diffBetween, ensureCommit, git } from './git';
@@ -95,17 +95,6 @@ export function joinReports(tasks: readonly string[], reports: ReadonlyMap<strin
   return `${JSON.stringify({ testResults: files })}\n`;
 }
 
-/** Why `report` cannot stand for its tasks, or null when it can. */
-function unfit(report: string, trials: number): string | null {
-  try {
-    validateEvalResults(report, trials);
-
-    return null;
-  } catch (error) {
-    return renderThrownChain({ cause: error });
-  }
-}
-
 function definitionsTree(): string {
   const tree = git(['rev-parse', 'HEAD:evals']);
 
@@ -174,7 +163,7 @@ async function main(): Promise<number> {
 
     await runTask(task, out, env);
     const report = readFileSync(out, 'utf8');
-    const problem = unfit(report, matrix.trials);
+    const problem = whyNotABaseline(report, matrix.trials);
 
     reports.set(task, report);
 
@@ -183,7 +172,7 @@ async function main(): Promise<number> {
   }));
 
   const joined = joinReports(tasks, reports);
-  const problem = unfit(joined, matrix.trials);
+  const problem = whyNotABaseline(joined, matrix.trials);
 
   writeFileSync(join(run, 'results.json'), joined);
 
@@ -205,11 +194,14 @@ async function main(): Promise<number> {
     },
   );
 
+  const verdict = evalGateVerdict(comparison, problem);
+
   writeFileSync(join(run, 'comparison.json'), `${JSON.stringify(comparison, null, 2)}\n`);
   writeFileSync(join(run, 'comparison.md'), `${renderEvalComparison(comparison)}\n`);
-  process.stdout.write(`${renderEvalComparison(comparison)}\nevals: ${comparison.verdict} against ${baseline ?? 'no baseline'}; ${run}\n`);
+  process.stdout.write(`${renderEvalComparison(comparison)}\nevals: ${verdict.pass ? 'stands' : 'does not stand'} against `
+    + `${baseline ?? 'no baseline'}: ${verdict.reason} ${run}\n`);
 
-  return values.gate === true && (comparison.verdict === 'regressed' || problem !== null) ? 1 : 0;
+  return values.gate === true && !verdict.pass ? 1 : 0;
 }
 
 if (import.meta.main) process.exit(await main());
