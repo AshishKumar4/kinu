@@ -82,9 +82,10 @@ const NON_BUN_RUNNERS: readonly {
  * The `*.eval.ts` task files are here because the eval suite measures the
  * deployed product, which a pull request has not changed, and a `bun test` gate
  * cannot select a `.eval.ts` at all — so `bun run evals` is their only runner.
- * The live-app suite and the product flows are here because their own
- * deploy rows are their only runners: CI_EXEMPT carries why a pull request
- * cannot boot the product's dev server. The capability suite needs a user
+ * The live-app suite is here because its own deploy rows are its only
+ * runners: CI_EXEMPT carries why a pull request cannot boot the product's dev
+ * server. The product flows run only against the deployment a deploy publishes,
+ * in its post-publish wave, which a pull request has none of. The capability suite needs a user
  * systemd manager that grants a unit an ambient capability, which a CI runner's
  * does not; CI_EXEMPT carries that too.
  */
@@ -98,7 +99,7 @@ const AFTER_CI_SUITES = {
   'tests/browser/live-app-plans.test.ts': 'bun test --timeout=0 tests/browser/live-app-plans.test.ts',
   'tests/browser/live-app-sleep.test.ts': 'bun test --timeout=0 tests/browser/live-app-sleep.test.ts',
   'tests/browser/live-app-turns.test.ts': 'bun test --timeout=0 tests/browser/live-app-turns.test.ts',
-  'tests/browser/product-flows.test.ts': 'bun scripts/with-dev-server.ts bun test --timeout=0 tests/browser/product-flows.test.ts',
+  'tests/browser/product-flows.test.ts': 'bash scripts/product-flows-tier.sh',
 } satisfies Record<string, string>;
 
 /**
@@ -348,7 +349,7 @@ describe('the ladder measures something', () => {
       'Live app in a browser: a page that loses the turn',
       'Live app in a browser: a running turn',
       'Live app in a browser: the inspector column\'s layout',
-      'Product flows in a browser, on the local dev server',
+      'Product flows in a browser, on the deployment',
       'Public pages render',
       'React runtime identity',
       'Swarm-tree geometry',

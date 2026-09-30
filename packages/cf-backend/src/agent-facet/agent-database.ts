@@ -6,6 +6,7 @@ import {
   initWorkspaceSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, actorReadHandle, readSessionTranscript, readSubordinateInspection,
   getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
   type TurnRequestIndex, type TurnRequestPage, ConversationSearchStore, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource,
+  readAgentFigures, NO_FIGURES, type AgentFigures,
   localContextTree, type ContextEditor, type ContextTree, type ConversationRecall,
   type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
   type SessionTranscriptReader, type SubordinateInspectionResult, type ModelPricing, type SqlExecutor, type VFS,
@@ -298,6 +299,12 @@ export class AgentDatabase {
 
   contextTree(editor: ContextEditor): ContextTree {
     return localContextTree(() => ({ claims: this.actorHost().bindStores(this.reference()).stores.claims, events: null }), editor);
+  }
+
+  figures(): AgentFigures {
+    const actorId = this.readable().actor.actorId;
+
+    return readAgentFigures(this.sql, [actorId]).get(actorId) ?? NO_FIGURES;
   }
 
   spend(steps: readonly StepSpendSource[]): SpendLedger {

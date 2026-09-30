@@ -740,17 +740,6 @@
       "loadAtStart": 70.66,
       "exit": 0
     },
-    "bun scripts/with-dev-server.ts bun test --timeout=0 tests/browser/product-flows.test.ts": {
-      "wallSeconds": 209,
-      "cpuSeconds": 193.66,
-      "peakRssMb": 5271.07,
-      "peakRunnable": 10,
-      "peakCpuThreads": 9.33,
-      "meanThreads": 0.93,
-      "samples": 783,
-      "loadAtStart": 3.38,
-      "exit": 0
-    },
     "bun test --timeout=0 ./evals/ scripts/deploy-preflight.test.ts": {
       "wallSeconds": 0.34,
       "cpuSeconds": 0.39,

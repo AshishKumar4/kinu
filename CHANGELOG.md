@@ -22,6 +22,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **The Agents sidebar shows hired agents and swarm workers' cost and prompt-cache rate.** Their tokens, cost, active time and cache EMA are read from each agent's own isolate, through the same run-event reader as main's.
 - **A hired agent's own records are read where they live.** Its inherited context, conversation recall, `/context` files (its own and its hirer's `/context/agents/<key>/`), turn requests and spend now come from its own isolate, so an inheriting hire sees the running turn, recall finds its past conversations, edits to its working context reach its next turn, and its model calls count in the workspace's and the account's spend.
 - **A hired agent's advisor answers to the owner's settings and reaches the hirer.** The severity floor and the other owner settings are read from the workspace, and a blocker note goes to the hirer's conversation instead of back to the hire.
 - **A hired agent acts with the authority its turn resolved to.** A planner hired from a Build turn stays in Plan: the workspace, which runs every tool the agent calls, now enforces the resolved mode, and the turn's record says Plan.
@@ -39,8 +40,10 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- The product flows run once per deploy, against staging after the publish, and no longer on a local `vite dev` server first: under `vite dev` no agent facet loads, and a Worker with Durable Objects gets no version preview URL. A red there still fails the deploy before staging's record, so production never takes the build. The live-app rows that switch to a new agent's tab (the right panel's kept state, and each pane keeping its own transcript) moved into those flows for the same reason. A live-app row that breaks now names the file holding its dev server's output.
+- The Chrome launcher's dead-profile test waits until its stand-in browser runs under the profile's command line before the sweep reads it; a hosted runner's sweep read the process before it had one and removed a profile still in use.
 - The CI job's time cap fits the whole CI tier on a hosted runner (about 28 minutes when every row is green) plus one row's silence bound; the old 25-minute cap cancelled the first all-green run.
-- Devbox test images build on the host's network, so a build step no longer adds a host interface that makes a concurrent browser row's Chrome fail its module loads with net::ERR_NETWORK_CHANGED. A gallery wait on a page whose app script never loaded now ends at once, naming the script requests that failed, instead of waiting out the row's silence bound.
+- Devbox test images build on the host's network, so a build step no longer adds a host interface that makes a concurrent browser row's Chrome fail its module loads with net::ERR_NETWORK_CHANGED. A gallery wait on a page whose app script never loaded now ends at once, naming the script requests that failed, instead of waiting out the row's silence bound; so does one on a page whose render threw an uncaught error with nothing drawn, naming the error.
 - Every GitHub workflow installs Bun from the package manager version in `package.json`, keeping image bundles and the local compiler on the same pinned toolchain.
 - Concurrent CI reports wait for their full output to drain before returning a verdict, preserving the failure beyond the pipe's first 64 KiB. Typecheck coverage still enforces actual missing/stale membership and debt; duplicate lists of those declarations no longer pin a second copy.
 - Test hygiene now follows source paths held in constants and checks reconnect snapshots through real RPCs and the mounted client. Cosmetic prose, stylesheet and artwork pins are removed; public pages are checked for working local resources and theme preferences.
