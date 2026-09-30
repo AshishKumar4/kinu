@@ -321,6 +321,8 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
     ]);
   }
 
+  if (path === "/api/user/unrevoked-grants") return fixtureJson([]);
+
   if (path === "/api/user/claude/start" && method === "POST") {
     return fixtureJson({ url: "https://claude.ai/oauth/authorize?state=gallery" });
   }
