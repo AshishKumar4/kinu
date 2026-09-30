@@ -590,6 +590,19 @@ and report tool, then left its completed claim only in the facet database.
 The claim remained readable after retirement. Task histories are retained
 until destruction; archive fan-out includes them.
 
+Compatibility measured 2026-09-29 with workerd 1.20260926.1: the loader now
+uses Wrangler's resolved deployment date and flags, emitted beside the agent
+bundle. At 2025-12-01 a remote KinuError loses its code and cause; from
+2026-04-21 its own fields survive and failedToolOutcome reads `unsupported`.
+The extra refusal-value transport is therefore removed at deployment date
+2026-09-28. Loaders refuse `enable_abortsignal_rpc` at every measured date;
+that flag is not a production remedy. The native Workers AI wrapped binding
+rebuilds Ai around its fetcher and carries cancellation as a fetch signal.
+Measured cancellation closed upstream before its answer ended. RPC `.run`
+fakes do not have that contract; the hire and surface fixtures now use the
+native binding backed by local HTTP. A refused facet load is reported by
+name to the hirer instead of leaving it waiting indefinitely.
+
 ## Deploy ladder
 
 L1. The deploy wave is scheduled by a thread budget, not a gate count. Each

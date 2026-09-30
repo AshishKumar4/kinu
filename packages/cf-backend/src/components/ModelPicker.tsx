@@ -8,7 +8,7 @@ import {
   type ReasoningEffort,
 } from "@kinu.run/core";
 import {
-  cloudflareReconnectPath, listAvailableModels, testModel,
+  cloudflareReconnectPath, listAvailableModels,
   type ModelMenu, type ModelMenuEntry, type ModelTestResult, type ProviderFailure,
 } from "../lib/user-api";
 import { badgeCapabilities, groupModelMenu, modelMatchesQuery } from "./model-picker-options";
@@ -170,6 +170,7 @@ export function ModelPicker({
       </Combobox.TriggerValue>
       <Combobox.Content className="w-[min(28rem,calc(100vw-1rem))]">
         <Combobox.Input placeholder={tests.enabled ? "Search models · Alt+T tests" : "Search models"} aria-label={`Search ${label.toLowerCase()}`}
+          {...(tests.enabled && { "aria-keyshortcuts": "Alt+T" })}
           onKeyDown={(event) => {
             if (!event.altKey || event.code !== "KeyT" || highlighted === null) return;
             event.preventDefault();
@@ -205,18 +206,28 @@ export function ModelPicker({
     <AccountPicker spec={value} accounts={accounts?.[selected.provider] ?? []} onChange={onChange} disabled={disabled} label={`${label} account`} />
   );
 
-  if (!effort) return accountPicker === null ? combobox : <>{combobox}{accountPicker}</>;
+  // Outside the menu, so it tests the selection without opening or closing anything.
+  // A stored spec the menu no longer lists is still tested: that failure is what the owner needs to see.
+  const selectedTest = !tests.enabled || listed === '' ? null : (
+    <>
+      <TestButton spec={listed} tests={tests} inMenu={false} />
+      <TestStatus state={tests.stateOf(listed)} provider={parseModelSpec(listed).provider} className="basis-full" />
+    </>
+  );
 
   return (
     <>
       {combobox}
       {accountPicker}
-      <EffortPicker
-        options={offeredReasoningEfforts(selected?.reasoningEfforts, effort.value)}
-        value={effort.value}
-        onChange={effort.onChange}
-        disabled={disabled}
-      />
+      {effort && (
+        <EffortPicker
+          options={offeredReasoningEfforts(selected?.reasoningEfforts, effort.value)}
+          value={effort.value}
+          onChange={effort.onChange}
+          disabled={disabled}
+        />
+      )}
+      {selectedTest}
     </>
   );
 }
@@ -227,7 +238,7 @@ export function ModelPicker({
  */
 export function ConnectedModelPicker({
   value, onChange, size, className, clearable, placeholder, renderEmpty, disabled, effort,
-}: Omit<ModelPickerProps, "models"> & {
+}: Omit<ModelPickerProps, "models" | "test"> & {
   renderEmpty?: () => React.ReactNode;
 }) {
   const [menu, setMenu] = useState<ModelMenu | null | { error: string }>(null);
@@ -313,7 +324,6 @@ export function ConnectedModelPicker({
       placeholder={placeholder}
       disabled={disabled}
       effort={effort}
-      test={testModel}
     />
   );
 }
@@ -359,7 +369,13 @@ function ProviderLabel({ provider, label }: { provider: string; label: string | 
 
 type TestState = { running: AbortController } | { result: ModelTestResult } | { error: string };
 
-function useModelTests(test: ModelPickerProps["test"]) {
+interface ModelTests {
+  readonly enabled: boolean;
+  stateOf(spec: string): TestState | undefined;
+  toggle(spec: string): void;
+}
+
+function useModelTests(test: ModelPickerProps["test"]): ModelTests {
   const [states, setStates] = useState<ReadonlyMap<string, TestState>>(new Map());
 
   const settle = (spec: string, state: TestState | null) => setStates((prev) => {
@@ -392,8 +408,9 @@ function useModelTests(test: ModelPickerProps["test"]) {
   return { enabled: test !== undefined, stateOf: (spec: string) => states.get(spec), toggle };
 }
 
-function TestStatus({ state, provider }: { state: TestState | undefined; provider: string }) {
-  if (state === undefined || "running" in state) return null;
+/** The live region stays mounted so a screen reader announces the result that lands in it. */
+function TestStatus({ state, provider, className = "" }: { state: TestState | undefined; provider: string; className?: string }) {
+  if (state === undefined || "running" in state) return <span role="status" className={className} />;
   const failed = "error" in state || !state.result.ok;
   const text = "error" in state ? "The test couldn't run." : modelTestText(state.result, { provider, from: "this server" });
   let detail: string | undefined;
@@ -402,21 +419,39 @@ function TestStatus({ state, provider }: { state: TestState | undefined; provide
   else if (!state.result.ok) detail = state.result.message;
 
   return (
-    <span role="status" title={detail} className="block p-t-status">
+    <span role="status" title={detail} className={`block p-t-status ${className}`}>
       <span className={failed ? "p-warning" : "p-success"}>{text}</span>
       <span className="block p-text-3">Tests from the web aren't counted in Usage.</span>
     </span>
   );
 }
 
+/** In a menu row the button stays out of the tab order: focus lives in the search, and Alt+T tests the highlighted row. */
+function TestButton({ spec, tests, inMenu }: { spec: string; tests: ModelTests; inMenu: boolean }) {
+  const state = tests.stateOf(spec);
+  const running = state !== undefined && "running" in state;
+  const stop = (event: React.SyntheticEvent) => { if (inMenu) event.stopPropagation(); };
+
+  return (
+    <button type="button"
+      className="shrink-0 rounded border p-border px-1.5 py-0.5 p-t-status p-text-2 hover:p-text"
+      aria-label={running ? `Cancel the test of ${spec}` : `Test ${spec}`}
+      title={inMenu ? "Test (Alt+T)" : "Test"}
+      {...(inMenu && { tabIndex: -1, "aria-keyshortcuts": "Alt+T" })}
+      onPointerDown={stop}
+      onMouseDown={stop}
+      onClick={(event) => { stop(event); event.preventDefault(); tests.toggle(spec); }}>
+      {running ? "Testing… Cancel" : "Test"}
+    </button>
+  );
+}
+
 function ModelPickerItem({ model, unavailable, tests }: {
   model: ModelMenuEntry;
   unavailable: string | undefined;
-  tests: ReturnType<typeof useModelTests>;
+  tests: ModelTests;
 }) {
   const context = formatContextWindow(model.contextWindow);
-  const state = tests.stateOf(model.spec);
-  const running = state !== undefined && "running" in state;
 
   return (
     <Combobox.Item value={model}>
@@ -433,20 +468,10 @@ function ModelPickerItem({ model, unavailable, tests }: {
             return <Icon key={cap} size={13} className="p-text-3" aria-label={words}><title>{words}</title></Icon>;
           })}
           {context && <Badge variant="secondary">{context}</Badge>}
-          {tests.enabled && (
-            <button type="button"
-              className="shrink-0 rounded border p-border px-1.5 py-0.5 p-t-status p-text-2 hover:p-text"
-              aria-label={running ? `Cancel the test of ${model.spec}` : `Test ${model.spec}`}
-              title="Test (Alt+T)"
-              onPointerDown={(event) => { event.stopPropagation(); }}
-              onMouseDown={(event) => { event.stopPropagation(); }}
-              onClick={(event) => { event.stopPropagation(); event.preventDefault(); tests.toggle(model.spec); }}>
-              {running ? "Testing… Cancel" : "Test"}
-            </button>
-          )}
+          {tests.enabled && <TestButton spec={model.spec} tests={tests} inMenu />}
         </span>
       </span>
-      <TestStatus state={state} provider={model.provider} />
+      <TestStatus state={tests.stateOf(model.spec)} provider={model.provider} />
     </Combobox.Item>
   );
 }

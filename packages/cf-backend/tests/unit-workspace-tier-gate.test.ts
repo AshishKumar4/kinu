@@ -207,10 +207,12 @@ const GATED_CALLS: GatedCall[] = [
     run: (u, c) => u.getCredentialsRevision(c),
   },
 
-  { capability: 'codex_auth', name: 'startCodexDeviceFlow', run: (u, c) => u.startCodexDeviceFlow(c) },
-  { capability: 'codex_auth', name: 'pollCodexDeviceFlow', run: (u, c) => u.pollCodexDeviceFlow(c) },
-  { capability: 'codex_auth', name: 'disconnectCodex', run: (u, c) => u.disconnectCodex(c) },
-  { capability: 'codex_auth', name: 'getCodexStatus', run: (u, c) => u.getCodexStatus(c) },
+  { capability: 'subscription_auth', name: 'startCodexDeviceFlow', run: (u, c) => u.startCodexDeviceFlow(c) },
+  { capability: 'subscription_auth', name: 'pollCodexDeviceFlow', run: (u, c) => u.pollCodexDeviceFlow(c) },
+  { capability: 'subscription_auth', name: 'disconnectCodex', run: (u, c) => u.disconnectCodex(c) },
+  { capability: 'subscription_auth', name: 'getCodexStatus', run: (u, c) => u.getCodexStatus(c) },
+  { capability: 'subscription_auth', name: 'startClaudeSignIn', run: (u, c) => u.startClaudeSignIn(c) },
+  { capability: 'subscription_auth', name: 'finishClaudeSignIn', run: (u, c) => u.finishClaudeSignIn(c, 'code#state') },
 ];
 
 interface OwnerOnlyCall {

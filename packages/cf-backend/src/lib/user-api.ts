@@ -39,8 +39,6 @@ export interface RosterQuery {
 
 export type CredentialSummary = v.InferOutput<typeof CredentialSummarySchema>;
 
-export type CodexStatus = v.InferOutput<typeof CodexStatusSchema>;
-
 export type ModelMenuEntry = v.InferOutput<typeof ModelMenuEntrySchema>;
 
 /** A provider unreachable while building the menu, shown as a notice rather than an empty picker. */
@@ -299,6 +297,14 @@ export const codexStatus      = () => api(CodexStatusSchema, 'GET', '/codex');
 export const startCodexFlow   = () => api(DeviceFlowStartSchema, 'POST', '/codex/start');
 
 export const pollCodexFlow    = () => api(PollResultSchema, 'POST', '/codex/poll')
+  .then((r) => { if (r.connected) invalidateModelsCache();
+
+ return r; });
+
+export const startClaudeSignIn = () => api(v.object({ url: v.string() }), 'POST', '/claude/start');
+
+/** `code` is what Claude showed: the code, or the address it sent the browser to. */
+export const finishClaudeSignIn = (code: string) => api(PollResultSchema, 'POST', '/claude/finish', { code })
   .then((r) => { if (r.connected) invalidateModelsCache();
 
  return r; });

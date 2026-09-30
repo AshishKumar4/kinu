@@ -1,6 +1,6 @@
 /**
  * Lanes are keyed on who is speaking, not the model id: root and child share the workspace pin
- * (`hostedActorProfile`); a delegated turn carries the `report` tool. `hire-probe.ts:HireAI` answers
+ * (`hostedActorProfile`); a delegated turn carries the `report` tool. The native Workers AI fixture answers
  * only the auxiliary lanes. No clocks: `scripts/test-clocks.ts` locks the clock corpus shrink-only,
  * so every wait is a gate a request resolves.
  */

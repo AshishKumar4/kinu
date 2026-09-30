@@ -1,14 +1,12 @@
 /**
  * The production Worker entry (`export { default }`, not a copy) bound in the pool, so the web client's route table runs
  * under workerd. A loopback host is the one authority `authenticateRequest` takes without a secret (auth/session.ts);
- * model traffic goes to the Node-side fake via `outboundService`, `SurfaceAI` answers the Workers AI lanes.
+ * model traffic goes to the Node-side fake; the native Workers AI binding serves its auxiliary lanes.
  */
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { ownerCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { UserDO } from '../../src/user/user-do';
-import { FakeAI } from './two-turn-probe';
-import { HELD_PROXY_MODEL } from './ai-proxy-shapes';
 
 export { default } from '../../src/server';
 
@@ -23,15 +21,6 @@ async function probeControl(path: string, method: 'GET' | 'POST'): Promise<Respo
   return response;
 }
 
-/** `FakeAI`, except `HELD_PROXY_MODEL` parks at the Node-side hold, so its caller waits on real I/O until released. */
-export class SurfaceAI extends FakeAI {
-  override async run(...args: Parameters<FakeAI['run']>): Promise<Response> {
-    if (args[0] !== HELD_PROXY_MODEL) return super.run(...args);
-    await probeControl('/proxy/park', 'POST');
-
-    return Response.json({ response: 'held' });
-  }
-}
 
 interface SurfaceEnv {
   readonly UserDO: DurableObjectNamespace<UserDO>;

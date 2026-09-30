@@ -194,7 +194,8 @@ describe('account panels', () => {
             const text = await dialogText(providers);
             expect(text).toContain('Cloudflare AI');
             expect(text).toContain('ChatGPT (Codex)');
-            expect(text).toContain('API keys');
+            expect(text).toContain('Claude');
+            expect(text).toContain('Add an API key');
             shots.push(await shoot(providers, `setupmodal-providers-${viewport}-${theme}`));
           } finally {
             await providers.close();
@@ -263,7 +264,7 @@ describe('account panels', () => {
             await settleAccountFixture(settings);
 
             const text = await settings.evaluate(() => document.body.innerText);
-            expect(text).toContain('API keys');
+            expect(text).toContain('Add an API key');
             expect(text).toContain('Manage MCP servers');
             shots.push(await shoot(settings, `settings-providers-${viewport}-${theme}`));
           } finally {

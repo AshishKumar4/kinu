@@ -5,7 +5,6 @@
  */
 
 import { Agent, getAgentByName, type AgentContext } from 'agents';
-import { WorkerEntrypoint } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { actorReferenceOf, isSubordinateOrigin, ownerCaller, type ArchiveCursor } from '@kinu.run/core';
 import { diagnostics } from '@kinu.run/core/obs';
@@ -228,25 +227,6 @@ export class HireOrchestrator extends ProductionOrchestrator {
 
 export { HireOrchestrator as OrchestratorAgent };
 
-/** The auxiliary Workers AI lanes (title suggester, sleep-time judge). The child's turn is deliberately not on this
- *  binding: the direct Workers AI streaming path hangs a delegated turn ("ReadableStream reader has been released"). */
-export class HireAI extends WorkerEntrypoint {
-  async run(
-    _model: string,
-    body: { messages?: readonly { role?: string }[] },
-    _options?: HireRunOptions,
-  ): Promise<Response> {
-
-    // Lane by role, never by text: the title lane leads with a system message, the sleep judge is user-only.
-    const title = body.messages?.[0]?.role === 'system';
-
-    return Response.json({
-      response: title
-        ? JSON.stringify({ title: 'Hire Probe' })
-        : JSON.stringify({ upserts: [], decay: [] }),
-    });
-  }
-}
 
 const WireLogSchema = v.looseObject({
   calls: v.array(v.looseObject({
@@ -254,11 +234,6 @@ const WireLogSchema = v.looseObject({
   })),
 });
 
-interface HireRunOptions {
-  readonly signal?: unknown;
-  readonly returnRawResponse?: boolean;
-  readonly extraHeaders?: Readonly<Record<string, string>>;
-}
 
 /** A `Pick` intersection: the full stub type instantiates too deeply to compile. */
 type HireTarget = Pick<ProductionOrchestrator, 'claimOwner' | 'setModel' | 'setSoul' | 'runTaskFromMcp' | 'dismissSubordinate'>

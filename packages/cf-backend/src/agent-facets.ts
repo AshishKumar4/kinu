@@ -142,6 +142,16 @@ function agentBundle(assets: Fetcher): Effect.Effect<Response, KinuError> {
     }));
 }
 
+const CompatibilitySchema = v.object({ compatibilityDate: v.string(), compatibilityFlags: v.array(v.string()) });
+
+function agentCompatibility(assets: Fetcher) {
+  return attempt({ doing: 'reading deployment compatibility', otherwise: 'unavailable' }, async () => {
+    const response = await assets.fetch(new URL(`${AGENT_BUNDLE_DIRECTORY}/compatibility.json`, 'https://assets.invalid'));
+
+    return v.parse(CompatibilitySchema, await response.json());
+  });
+}
+
 async function tagOf(response: Response): Promise<string> {
   const etag = response.headers.get('etag');
 
@@ -184,16 +194,17 @@ export function agentFacet<Facet extends AgentFacet = AgentFacet>(
   } satisfies Record<Exclude<keyof AgentFacetEnv, keyof ProviderEnv>, Fetcher | string> & ProviderEnv;
 
   return settle(agentBundleTag(env.ASSETS).pipe(Effect.map((tag) => {
-    const worker = env.LOADER.get(`kinu-agent:${tag}:${workspace}:${placement.storageKey}`, () => settle(agentBundle(env.ASSETS).pipe(
+    const worker = env.LOADER.get(`kinu-agent:${tag}:${workspace}:${placement.storageKey}`, () => settle(agentCompatibility(env.ASSETS).pipe(
+      Effect.flatMap((compatibility) => agentBundle(env.ASSETS).pipe(
         Effect.flatMap((response) => attempt({ doing: 'reading the agent bundle', otherwise: 'unavailable' }, () => response.text())),
         Effect.map((source) => ({
-          compatibilityDate: '2025-12-01',
-          compatibilityFlags: ['nodejs_compat'],
+          ...compatibility,
           mainModule: 'agent.js',
           modules: { 'agent.js': source },
           env: facetEnv,
         })),
-      )));
+      )),
+    )));
 
     return ctx.facets.get<Facet>(placement.storageKey, () => ({ class: worker.getDurableObjectClass<Facet>(AGENT_FACET_CLASS) }));
   })));

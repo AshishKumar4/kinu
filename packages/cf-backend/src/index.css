@@ -609,6 +609,9 @@ body { background: var(--c-bg); color: var(--c-text); }
   overflow: hidden;
 }
 .p-group > * + * { border-top: 1px dashed var(--c-dash); }
+/* A `contents` wrapper (a CardSlot) draws no box, so its rows take the rule themselves. */
+.p-group > * + .contents > :first-child,
+.p-group > .contents > * + * { border-top: 1px dashed var(--c-dash); }
 
 /* A section label — names a block ("Mission", "Journal", "Identity") at the
    panel-heading size, in the faint register that keeps it under the title. */

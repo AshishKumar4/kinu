@@ -309,12 +309,31 @@ function accountProfileFixture(path: string, method: string, body: BodyInit | nu
   return null;
 }
 
-async function settingsSectionsFixture(path: string): Promise<Response | null> {
+/** Flips when the gallery's Claude sign-in finishes with the fixture's code. */
+let settingsClaudeConnected = false;
+
+async function settingsSectionsFixture(path: string, method: string, body: BodyInit | null | undefined): Promise<Response | null> {
   if (path === "/api/user/credentials") {
     return fixtureJson([
       { key: "anthropic.bearer", kind: "bearer" },
       { key: "anthropic.bearer@work", kind: "bearer" },
+      ...(settingsClaudeConnected ? [{ key: "claude.oauth", kind: "oauth" }] : []),
     ]);
+  }
+
+  if (path === "/api/user/unrevoked-grants") return fixtureJson([]);
+
+  if (path === "/api/user/claude/start" && method === "POST") {
+    return fixtureJson({ url: "https://claude.ai/oauth/authorize?state=gallery" });
+  }
+
+  // `good-code` connects; any other code is refused the way Claude's token endpoint words it.
+  if (path === "/api/user/claude/finish" && method === "POST") {
+    settingsClaudeConnected = v.parse(v.object({ code: v.string() }), JSON.parse(v.parse(v.string(), body))).code === "good-code";
+
+    return fixtureJson(settingsClaudeConnected
+      ? { connected: true }
+      : { connected: false, error: "exchanging the Claude sign-in code: Claude's token endpoint refused the sign-in: Invalid authorization code" });
   }
 
   if (path === "/api/user/usage") {
