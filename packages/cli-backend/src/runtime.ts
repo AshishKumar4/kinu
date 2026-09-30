@@ -77,7 +77,7 @@ import { stampSchemaGenesis } from './schema-genesis';
 const HARNESS_CREDENTIAL_ENV = [...Object.values(PROVIDER_CREDENTIAL_ENV), ...SESSION_CREDENTIAL_ENV];
 
 /** Where a local owner changes a tier's model, as a refusal notice names it. */
-export const LOCAL_MODEL_SETTINGS = 'your model settings';
+const LOCAL_MODEL_SETTINGS = 'your model settings';
 
 interface CLIRuntimeOptions {
   /**
@@ -118,7 +118,8 @@ export interface CLIRuntime extends AgentRuntime {
   modelForRoute?: (resolution: ModelRouteResolution) => LLM;
   /** A facet's lanes share its parent's credential lookup and refusal notices. */
   credentialOf?: (spec: string) => Promise<string | null>;
-  refusals?: TierRefusals;
+  /** The actor's one notice state for its runtime's life; the session's titling says through it too. */
+  refusals: TierRefusals;
   /**
    * Fallback turn-profile authority, so a session-less runtime (`kinu evolve`) still
    * routes. A session refines its inputs rather than installing a second resolver.
@@ -758,7 +759,7 @@ async function buildCLIHeadRuntime(
       resolveProfile: parentProfile,
       llm: parentModelForRoute,
       ...(parent.credentialOf !== undefined && { credentialOf: parent.credentialOf }),
-      ...(parent.refusals !== undefined && { refusals: parent.refusals }),
+      refusals: parent.refusals,
     };
   }
 

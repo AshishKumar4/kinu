@@ -481,26 +481,26 @@ export class TerminalEffectLedger {
     }
 
     const rows = JSON.stringify([...firsts.values()]);
+    const superseding = JSON.stringify([...new Set(owed.map((effect) => effect.name))].filter((name) => COALESCED_EFFECTS.includes(name)));
+    const now = this.deps.now();
 
     // One statement for the sequence. Matched by name and scope, not by the computed key, so an
-    // older-version row is not duplicated and routed two ways.
+    // older-version row is not duplicated and routed two ways. It also releases parked rows and completes superseded ones (T1, T2).
     void this.deps.sql`INSERT INTO terminal_effects
       (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, attempts, next_attempt_at)
       SELECT ${this.actorId}, ${sequenceId}, e.value ->> '$.key', e.value ->> '$.name', e.value ->> '$.scope', e.value ->> '$.seq',
-        e.value ->> '$.input', e.value ->> '$.lane', 'pending', 0, ${this.deps.now()}
+        e.value ->> '$.input', e.value ->> '$.lane', 'pending', 0, ${now}
       FROM json_each(${rows}) AS e
       WHERE NOT EXISTS (SELECT 1 FROM terminal_effects t WHERE t.actor_id = ${this.actorId} AND t.sequence_id = ${sequenceId}
         AND t.effect_name = e.value ->> '$.name' AND t.scope = e.value ->> '$.scope')
-      ORDER BY e.key`;
-
-    const coalesced = new Set(owed.map((effect) => effect.name).filter((effectName) => COALESCED_EFFECTS.includes(effectName)));
-
-    for (const name of coalesced) {
-      void this.deps.sql`DELETE FROM terminal_effects
-        WHERE actor_id = ${this.actorId} AND effect_name = ${name} AND sequence_id != ${sequenceId} AND status != 'completed'`;
-    }
-
-    this.release();
+      UNION ALL
+      SELECT actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, attempts, next_attempt_at
+      FROM terminal_effects
+      WHERE actor_id = ${this.actorId} AND sequence_id != ${sequenceId} AND status IN ('pending', 'blocked', 'parked')
+        AND (status = 'parked' OR effect_name IN (SELECT value FROM json_each(${superseding})))
+      ON CONFLICT (actor_id, sequence_id, effect_key) DO UPDATE SET
+        status = CASE WHEN terminal_effects.effect_name IN (SELECT value FROM json_each(${superseding})) THEN 'completed' ELSE 'pending' END,
+        next_attempt_at = ${now}`;
   }
 
   /** Parked rows fall due now; the caller arms the wake. */

@@ -19,12 +19,12 @@ import {
   type NodeHomeHost, type NodeWorkspace, type ProfileAuthorityInputs, type ProgrammaticTurn,
   type ResolvedTurnProfile, type SlateCallResult, type SlateOperation, type SqlExec,
   type SqlExecutor, type SqlValue, type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory,
-  type WriteObserver, isSubordinateOrigin,
+  type WriteObserver, isSubordinateOrigin, tierRefusals,
 } from '@kinu.run/core';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { KinuError, settle, type AgentTracing } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
-import { createCFRuntime, type CFRuntime, type CFRuntimeHooks } from './runtime';
+import { bindAgentSql, createCFRuntime, MODEL_SETTINGS, type CFRuntime, type CFRuntimeHooks } from './runtime';
 import type { HostedNodeHome, LiveRead, TemporaryAgentPort } from '@kinu.run/core';
 
 /** The root agents-SDK members a hosted actor's runtime borrows; projected from `Agent` so upstream drift fails to compile. */
@@ -197,6 +197,10 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
       const hooks: CFRuntimeHooks = {
         reportModelCall: (report) => { seams.reportModelCall(report); },
         currentTurn: (reference) => seams.currentTurn(reference),
+        // Built with the runtime, which lives as long as this actor stays bound.
+        refusals: tierRefusals({
+          sql: bindAgentSql(seams.agent), actor: bound.handle, config: bound.handle.config, now: Date.now, settings: MODEL_SETTINGS,
+        }),
         liveReadsMoved: (reads) => { seams.liveReadsMoved(reads); },
         slate: (operation) => seams.slate(bound.handle, operation),
         deferrals: () => seams.deferrals(),
