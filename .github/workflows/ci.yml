@@ -51,10 +51,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install device sandbox prerequisite
+      - name: Install system prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install --yes bubblewrap
+          # bubblewrap: the device sandbox suite. ffmpeg: the plan demo film's recorder tests
+          # (ffmpeg and ffprobe), absent from the runner image in CI 36754331407.
+          sudo apt-get install --yes bubblewrap ffmpeg
           # Ubuntu 24.04's AppArmor userns restriction refused bwrap after install
           # in CI 36673378254 (2026-09-30); the sandboxed suite needs namespaces.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0

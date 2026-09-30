@@ -15,8 +15,7 @@ import { storedMcpOptionsCarryCredential, validateMcpServerInput } from '../src/
 import { createCredentialCipher, McpToolSurfaceSchema } from '@kinu.run/core';
 import type { McpToolSurface } from '../src/user/user-do';
 import type { UserCaller } from '@kinu.run/core';
-import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
-import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { refusedSseConnect, refusedToolCall } from './helpers/mcp-transport';
 import * as v from 'valibot';
 
 /** The descriptor surface, parsed by `McpToolSurfaceSchema`, the contract the orchestrator's cache validates. */
@@ -660,13 +659,13 @@ describe('an authorization failure converges to the reconnect state', () => {
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
     // The `authUrl` the SDK reads back while AUTHENTICATING (`client-zqKcsyFa.js:1704-1706`).
     seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
-    // What the pinned SDK throws on an unresolvable POST 401 (`streamableHttp.js:364`); the status is a number.
-    failNextMcpToolCall(new StreamableHTTPError(401, 'Error POSTing to endpoint: nope'));
+    // A POST 401 with no auth provider to retry through.
+    failNextMcpToolCall(await refusedToolCall({ status: 401, body: 'nope' }));
     // In production the dispatch and the `discoverIfConnected` probe are two failing requests.
-    failNextMcpDiscovery(new StreamableHTTPError(401, 'Error POSTing to endpoint: nope'));
+    failNextMcpDiscovery(await refusedToolCall({ status: 401, body: 'nope' }));
 
     await expect(h.userDO.userMcp_callTool(await testOwner(), 'srv1', 'do_thing', {}))
-      .rejects.toThrow(/Streamable HTTP error/);
+      .rejects.toThrow('Error POSTing to endpoint: nope');
 
     // Observe the persisted `authenticating` status and `authUrl`, not merely that a re-probe was attempted.
     expect(recordedMcpLifecycle().discovered).toContain('srv1');
@@ -681,8 +680,9 @@ describe('an authorization failure converges to the reconnect state', () => {
     await seedServer(h, 'srv1');
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
     seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
-    failNextMcpToolCall(new UnauthorizedError());
-    failNextMcpDiscovery(new StreamableHTTPError(401, 'Error POSTing to endpoint: nope'));
+    // An auth provider that cannot recover the token.
+    failNextMcpToolCall(await refusedToolCall({ status: 401, body: 'nope', authProvider: { token: () => Promise.resolve('stale') } }));
+    failNextMcpDiscovery(await refusedToolCall({ status: 401, body: 'nope' }));
 
     await expect(h.userDO.userMcp_callTool(await testOwner(), 'srv1', 'do_thing', {}))
       .rejects.toThrow();
@@ -699,10 +699,12 @@ describe('an authorization failure converges to the reconnect state', () => {
     await seedServer(h, 'srv1');
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
     seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
+    // An auth provider that re-authenticated, and the retry answered 401 again.
+    const reauthenticated = { token: () => Promise.resolve('stale'), onUnauthorized: () => Promise.resolve() };
     failNextMcpToolCall(new Error('MCP request failed', {
-      cause: new StreamableHTTPError(401, 'Server returned 401 after successful authentication'),
+      cause: await refusedToolCall({ status: 401, body: 'nope', authProvider: reauthenticated }),
     }));
-    failNextMcpDiscovery(new StreamableHTTPError(401, 'Server returned 401 after successful authentication'));
+    failNextMcpDiscovery(await refusedToolCall({ status: 401, body: 'nope', authProvider: reauthenticated }));
 
     await expect(h.userDO.userMcp_callTool(await testOwner(), 'srv1', 'do_thing', {}))
       .rejects.toThrow();
@@ -720,17 +722,49 @@ describe('an authorization failure converges to the reconnect state', () => {
     const h = harness();
     await seedServer(h, 'srv1');
     seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
-    failNextMcpToolCall(new StreamableHTTPError(401, 'Error POSTing to endpoint: nope'));
-    failNextMcpDiscovery(new StreamableHTTPError(401, 'Error POSTing to endpoint: nope'));
+    failNextMcpToolCall(await refusedToolCall({ status: 401, body: 'nope' }));
+    failNextMcpDiscovery(await refusedToolCall({ status: 401, body: 'nope' }));
 
     await expect(h.userDO.userMcp_callTool(await testOwner(), 'srv1', 'do_thing', {}))
-      .rejects.toThrow(/Streamable HTTP error/);
+      .rejects.toThrow('Error POSTing to endpoint: nope');
 
     const surface = await readSurface(h, await testOwner());
     expect(surface.descriptors).toEqual([]);
     expect(surface.unavailable).toHaveLength(1);
     expect(surface.unavailable[0]?.server).toBe('srv1');
     h.close();
+  });
+
+  test('an SSE stream refused with 401 converges too', async () => {
+    const h = harness();
+    await seedServer(h, 'srv1');
+    seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
+    seedMcpAuthContinuation('srv1', 'https://auth.example/authorize?srv1');
+    failNextMcpToolCall(await refusedSseConnect({ status: 401 }));
+    failNextMcpDiscovery(await refusedSseConnect({ status: 401 }));
+
+    await expect(h.userDO.userMcp_callTool(await testOwner(), 'srv1', 'do_thing', {}))
+      .rejects.toThrow();
+
+    expect(recordedMcpLifecycle().discovered).toContain('srv1');
+    const [listed] = await h.userDO.userMcp_list(await testOwner());
+    expect(listed?.status).toBe('authenticating');
+    h.close();
+  });
+
+  test('a transport refusal other than 401 reconnects nothing', async () => {
+    for (const status of [403, 500]) {
+      const h = harness();
+      await seedServer(h, 'srv1');
+      seedMcpTools('srv1', [{ name: 'do_thing', inputSchema: { type: 'object' } }]);
+      failNextMcpToolCall(await refusedToolCall({ status, body: 'nope' }));
+
+      await expect(h.userDO.userMcp_callTool(await testOwner(), 'srv1', 'do_thing', {}))
+        .rejects.toThrow('Error POSTing to endpoint: nope');
+
+      expect({ status, discovered: recordedMcpLifecycle().discovered.includes('srv1') }).toEqual({ status, discovered: false });
+      h.close();
+    }
   });
 
   test("a tool's own error is not treated as an auth failure", async () => {

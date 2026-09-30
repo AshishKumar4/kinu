@@ -1,8 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useLocation } from "react-router-dom";
 import type { PanelAgent } from "@kinu.run/core";
-import { KinuError, settleSync } from "@kinu.run/core/obs";
-import { Effect } from "effect";
 
 export interface WorkspaceAgentsPanel {
   readonly workspace: string;
@@ -21,7 +19,12 @@ interface AgentsNavValue {
   readonly publish: (panel: WorkspaceAgentsPanel | null) => void;
 }
 
-const AgentsNavContext = createContext<AgentsNavValue | null>(null);
+const NO_AGENTS_NAV: AgentsNavValue = {
+  drilled: null, panel: null, entries: 0, trigger: { current: null },
+  enter: () => {}, back: () => {}, publish: () => {},
+};
+
+const AgentsNavContext = createContext<AgentsNavValue>(NO_AGENTS_NAV);
 
 export function AgentsNavProvider({ children }: { readonly children: ReactNode }) {
   const [drilled, setDrilled] = useState<string | null>(null);
@@ -57,11 +60,7 @@ export function AgentsNavProvider({ children }: { readonly children: ReactNode }
 }
 
 export function useAgentsNav(): AgentsNavValue {
-  const nav = useContext(AgentsNavContext);
-
-  if (nav !== null) return nav;
-
-  return settleSync(Effect.fail(new KinuError("bad_input", "useAgentsNav requires AgentsNavProvider")));
+  return useContext(AgentsNavContext);
 }
 
 export function useDrilledPanel(workspace: string | undefined): WorkspaceAgentsPanel | null {

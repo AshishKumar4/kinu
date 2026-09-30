@@ -85,6 +85,7 @@ export class AgentStoreBroker {
   async turnRequest(at: TurnRequestAt) { return await (await this.calls()).turnRequest(this.snapshot(), at); }
   async archivePage(cursor: ArchiveSqlCursor | null, maxBytes: number) { return await (await this.calls()).archivePage(this.snapshot(), cursor, maxBytes); }
   async spend(steps: readonly StepSpendSource[]) { return await (await this.calls()).spend(this.snapshot(), steps); }
+  async figures() { return await (await this.calls()).figures(this.snapshot()); }
 
   contextTree(editor: ContextEditor): ContextTree {
     return remoteContextTree(async () => await (await this.calls()).context(this.snapshot(), editor));
@@ -172,7 +173,8 @@ function agentBundle(assets: Fetcher): Effect.Effect<Response, KinuError> {
       return response.ok && type.includes('javascript')
         ? Effect.succeed(response)
         : Effect.fail(new KinuError(
-          'unavailable', `The agent bundle is missing from this deployment (${AGENT_BUNDLE_PATH} answered ${response.status} ${type}).`,
+          'unavailable', `The agent bundle is missing from this deployment (${AGENT_BUNDLE_PATH} answered ${response.status} ${type}). `
+            + 'Under `vite dev` the ASSETS binding serves only HTML, so agent turns need a deployed Worker.',
         ));
     }));
 }

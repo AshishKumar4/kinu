@@ -64,7 +64,8 @@ const MOVED_ELSEWHERE = new Map([
   ['workspace_actors', 'identity lookup'],
   ['workspace_identity', 'identity lookup'],
   ['conversation_entries', "the work mode follows the root's own turns, and every page re-reads at turn end"],
-  ['run_events', 'the changelog reads only promotions and rollbacks, each written with its scaffold_versions row'],
+  ['run_events', 'the changelog reads only promotions and rollbacks, each written with its scaffold_versions row; '
+    + "the agents list reads each agent's figures, which move when its turn settles its actor_turn_claims row"],
   ['vfs_inodes', 'Nimbus file rows: file events, not table writes, move the reads over workspace files'],
   ['vfs_chunks', 'workspace ports move with the port registry'],
   ['nimbus_session_kv', 'workspace ports move with the port registry'],
@@ -82,7 +83,8 @@ test('every table a live read selects from is one whose writes name that read', 
     await liveRead(agent, read);
 
     for (const query of queries) {
-      for (const [, table = ''] of query.matchAll(/\b(?:FROM|JOIN)\s+([A-Za-z_]\w*)/gi)) {
+      for (const [, table = '', call] of query.matchAll(/\b(?:FROM|JOIN)\s+([A-Za-z_]\w*)(\s*\()?/gi)) {
+        if (call !== undefined) continue; // Table-valued functions read arguments, not a table with writers.
         const moves = readsWrittenBy(`INSERT INTO ${table}`);
 
         if (!moves.includes(read) && !MOVED_ELSEWHERE.has(table)) unwatched.push(`${read} <- ${table}`);

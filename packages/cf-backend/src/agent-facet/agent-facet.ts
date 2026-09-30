@@ -4,6 +4,7 @@ import { Nimbus, type NimbusSandbox, type NimbusSessionSurface } from '@nimbus-s
 import type { ModelMessage, UIMessage } from 'ai';
 import {
   decodeJsonValue, readAgentArchivePage,
+  type AgentFigures,
   type AgentOwnInspection, type AnsweredEvolutionHelper, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage, type JsonValue,
   type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type VfsRevision, type SerializedMessage, type SubordinateInspectionResult,
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
@@ -76,6 +77,7 @@ export interface AgentFacetCalls {
   turnRequests(snapshot: AgentSnapshot, turnId: string): Promise<TurnRequestIndex>;
   turnRequest(snapshot: AgentSnapshot, at: TurnRequestAt): Promise<TurnRequestPage>;
   spend(snapshot: AgentSnapshot, steps: readonly StepSpendSource[]): Promise<SpendLedger>;
+  figures(snapshot: AgentSnapshot): Promise<AgentFigures>;
   context(snapshot: AgentSnapshot, editor: ContextEditor): Promise<ContextTreeRemote>;
   searchConversations(snapshot: AgentSnapshot, query: string, limit?: number): Promise<ConversationSearchHit[]>;
   scrollConversation(snapshot: AgentSnapshot, around: string, window?: number, maxChars?: number): Promise<ConversationScrollResult | null>;
@@ -191,6 +193,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async spend(snapshot: AgentSnapshot, steps: readonly StepSpendSource[]): Promise<SpendLedger> {
     return this.open(snapshot).spend(steps);
+  }
+
+  async figures(snapshot: AgentSnapshot): Promise<AgentFigures> {
+    return this.open(snapshot).figures();
   }
 
   async admitted(snapshot: AgentSnapshot, id: string): Promise<boolean> {
