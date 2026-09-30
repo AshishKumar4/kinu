@@ -785,6 +785,8 @@ which tests the strip itself; and the cf-backend suite through
 L3. A deploy wave stops launching at its first red and lets running gates
 finish; `--all` audits the whole wave. Decided 2026-09-15, commit 5d5df1b59,
 proved at budget 1 in both directions.
+Superseded by L18 for the deploy: every deploy phase runs each row to its end,
+and `--all` is gone. A tier still stops launching at its first red.
 
 L4. The connectome's cost pins are ratios against an in-process calibration
 unit measured in the same cheapest-of-N loop, never absolute CPU time. Decided
@@ -1176,6 +1178,9 @@ parser, the gate log directory, the quote check and the Bash 5.1 guard went
 with the Bash wave. deploy.test.ts now proves the boundary deploy.sh owns (the
 phases in order, the options it passes, the stop on a red phase) against a
 stub ladder, and ladder.test.ts proves the admission.
+Amended by L18: a phase no longer stops at its first red, only the preflight
+and the upload phase end a deploy, and one call may run several phases as one
+wave.
 
 L17. The hammer bounds each run by its silence, as every gate is bounded, and
 never by a wall deadline. Decided 2026-09-30. Each run had 440 s
@@ -1191,6 +1196,34 @@ tests), so the gate's own row bound holds a hung hammer. Its burners are
 spawned per run and end with it. Each also exits when its pipe from the gate
 closes, so none outlives a SIGKILLed gate. No budget or run length replaces the
 73.3 s.
+
+L18. The staging deploy uploads first, then runs everything to its end and
+writes one report. Decided 2026-09-30 by the owner. Both of that day's deploy
+stops were local harness defects (the frame ledger, the hire fixture), not
+product defects, and each stopped the deploy before staging saw the build.
+Now only two phases stop a deploy: the preflight, the precondition for any
+verdict, and the upload phase, `gate:infra` and the secret scan, whose damage
+(a wrong account, a published credential) the next deploy cannot undo. Then
+the deploy builds and uploads to staging, and every later phase runs each row
+to its end whatever goes red: the rows that read the deployment (first-run,
+the product flows) share one wave with every source row, and the hammer runs
+alone and last. A failed build, upload or smoke test is a red step; the rows
+that read the deployment are named as not run, and the local gates and the
+hammer still run. A deploy with any red writes no record, so production never
+takes it; a red staging is fine, since the next deploy replaces it. The report
+(`scripts/deploy-report.ts`, under `bench-artifacts/deploys/<environment>/`)
+holds every red with its finding, command and output tail, grouped by phase,
+each NEW or CARRIED OVER against the previous deploy of the environment, and
+the merges between the two deployed commits. `--all` is gone. A record listing
+its gates was considered and dropped: the record is keyed by a sha, whose plan
+cannot differ from the one `check` reads.
+The rows that read the deployment are admitted by measured cost like any other
+row, measured against a deployment (`gate-cost-measure.ts --deployment`). The
+product flows measured 60.4 s wall, 745 MiB and 1 thread at load 31.5. First-run
+could not be measured against staging's older build, whose run events the new
+schema rejects, so a row that reads the deployment and has no figure takes the
+whole box: it runs alone, and the report names the command that measures it.
+Every other row with no figure is still refused.
 
 ## Providers
 

@@ -22,13 +22,25 @@ const REPO_ROOT = resolve(import.meta.dir, "..");
 /** The deploy's plan: which gate runs in which phase. deploy.sh runs a phase as one ladder call. */
 const PLAN = deployPlan();
 
-/** How deploy.sh runs one phase: the ladder runs that phase's plan rows through its wave. */
-function phaseRun(phase: DeployPhase, all = false): string {
-  return `bun scripts/ladder.ts --deploy-phase=${phase}${all ? " --all" : ""}`;
+/** How deploy.sh runs one or more phases: the ladder runs their plan rows through one wave. */
+function phaseRun(...phases: DeployPhase[]): string {
+  return `bun scripts/ladder.ts --deploy-phase=${phases.join(",")}`;
 }
 
-/** The phases before the upload, in the order a deploy runs them, as the fixture's event log spells them. */
-const PRE_PUBLISH: readonly string[] = DEPLOY_PHASES.filter((phase) => phase !== "post-publish").map((phase) => phaseRun(phase));
+/** The phases that stop a deploy on a red, in the order it runs them, as the fixture's event log spells them. Nothing
+ *  is built or uploaded past a red one. */
+const STOPS: readonly string[] = [phaseRun("preflight"), phaseRun("upload")];
+
+/** How deploy.sh names, not runs, the rows that read a deployment which does not serve this build. */
+function skipped(why: string): string {
+  return `${phaseRun("post-publish")} --skip=${why}`;
+}
+
+/** What a staging deploy runs after the fixture's build, which fails on purpose: the rows that read the deployment
+ *  named as not run, then every local gate and the hammer, to their end. */
+const AFTER_A_FAILED_BUILD: readonly string[] = [
+  skipped("staging does not serve this build: vite build failed"), phaseRun("source"), phaseRun("hammer"),
+];
 
 /** The commands one phase of the plan runs. */
 function phaseGates(phase: string): string[] {
@@ -75,10 +87,14 @@ function commandStub(name: string): string {
 command_line="${name} $*"
 command_line="\${command_line//$KINU_DEPLOY_ROOT\\//}"
 printf '%s\\n' "$command_line" >> "$KINU_DEPLOY_GATE_LOG"
+# The deploy's report directory, as scripts/deploy-report.ts opens and names it.
+if [ "\${1##*/}" = "deploy-report.ts" ] && [ "$2" = "open" ]; then
+  printf '%s\\n' "$KINU_DEPLOY_ROOT/report"
+fi
 # WHAT THE INFRASTRUCTURE PHASE ACTUALLY SAW. The account gate reads its phase
 # and account from the environment deploy.sh hands the ladder, so the only way to
 # assert which a deploy ran is to record them where the ladder would start it.
-if [ "$1" = "scripts/ladder.ts" ] && [ "$2" = "--deploy-phase=infra" ]; then
+if [ "$1" = "scripts/ladder.ts" ] && [ "$2" = "--deploy-phase=upload" ]; then
   printf '%s\\n' "\${KINU_INFRA_PHASE:-unset}" > "$KINU_DEPLOY_PHASE_LOG"
   printf '%s\\n' "\${KINU_INFRA_ENVIRONMENT:-unset}" > "$KINU_DEPLOY_INFRA_ENV_LOG"
 fi
@@ -194,9 +210,18 @@ exit 87
     stderr: "pipe",
   });
 
-  const events = existsSync(log)
+  const logged = existsSync(log)
     ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean)
     : [];
+
+  // The report's own calls apart from the steps: what the deploy wrote into its report, each without the report's
+  // directory, and a mark without the seconds it was reached at.
+  const REPORT = "bun scripts/deploy-report.ts ";
+
+  const events = logged.filter((event) => !event.startsWith(REPORT));
+
+  const report = logged.filter((event) => event.startsWith(REPORT))
+    .map((event) => event.slice(REPORT.length).replace(/^(\w+) report( |$)/u, "$1$2").replace(/^mark (\S+) \d+$/u, "mark $1"));
 
   const buildEnvironment = existsSync(buildEnvironmentLog)
     ? readFileSync(buildEnvironmentLog, "utf8").trim()
@@ -209,6 +234,7 @@ exit 87
   return {
     status: run.exitCode,
     events,
+    report,
     stdout: run.stdout.toString(),
     buildEnvironment,
     infraPhase,
@@ -221,25 +247,35 @@ describe("deploy gate", () => {
   // runs that phase's gates through the ladder's wave (scripts/ladder.ts,
   // `tierWave`, whose admission ladder.test.ts holds). What is asserted here is
   // what deploy.sh itself decides: the phases, in order, each a barrier, the
-  // options it hands them, and that a red phase stops the deploy before the
-  // next phase, the build or any publish.
+  // options it hands them, that only the preflight and the upload gates stop
+  // it, and what it writes into its report (L18).
   //
   // Review job 150, P1: a staging re-deploy of a verified commit replaces what staging serves for it, so it withdraws
   // that commit's record first, after its gates and before anything it builds can be published.
-  test("runs every pre-publish phase in order, withdraws HEAD's record, then builds for staging", () => {
+  test("runs the upload gates, withdraws HEAD's record, builds for staging, and runs every local gate after a failed build", () => {
     const run = runDeploy();
 
-    expect(run.status).not.toBe(0);
-    expect(run.events).toEqual([...PRE_PUBLISH, WITHDRAW, "MUTATE bunx vite build"]);
+    expect(run.status).toBe(1);
+    expect(run.events).toEqual([...STOPS, WITHDRAW, "MUTATE bunx vite build", ...AFTER_A_FAILED_BUILD]);
     expect(run.buildEnvironment).toBe("staging");
     expect(run.infraEnvironment).toBe("staging");
+    // The failed step is a red of the report's, the skipped rows are named by the ladder, and the report is rendered.
+    expect(run.report).toEqual([
+      "open staging deploy testsha", "mark preflight", "mark upload",
+      "note publish build, upload and smoke vite build failed", "mark wave", "mark hammer", "mark end", "render",
+    ]);
   });
 
-  test("a record that cannot be withdrawn builds nothing", () => {
+  test("a record that cannot be withdrawn builds nothing, and every local gate still runs", () => {
     const run = runDeploy({ failingGate: WITHDRAW });
 
-    expect(run.status).not.toBe(0);
-    expect(run.events.at(-1)).toBe(WITHDRAW);
+    expect(run.status).toBe(1);
+    expect(run.events.some((event) => event.startsWith("MUTATE "))).toBe(false);
+    expect(run.events).toEqual([
+      ...STOPS, WITHDRAW,
+      skipped("staging does not serve this build: testsha's record on staging could not be withdrawn, so this deploy will not replace what it verified"),
+      phaseRun("source"), phaseRun("hammer"),
+    ]);
   });
 
   // ── Promotion ──────────────────────────────────────────────────
@@ -249,11 +285,14 @@ describe("deploy gate", () => {
   // of them, and a HEAD staging never verified builds nothing at all.
   const PROMOTION_CHECK = "bun scripts/promote.ts check";
 
-  test("a promotion runs no source gate: staging's record, the account gate on production, a production build", () => {
+  test("a promotion runs no source gate: staging's record, the upload gates on production, a production build", () => {
     const run = runDeploy({ option: "--promote" });
 
-    expect(run.status).not.toBe(0);
-    expect(run.events).toEqual([phaseRun("preflight"), PROMOTION_CHECK, phaseRun("infra"), "MUTATE bunx vite build"]);
+    expect(run.status).toBe(1);
+    expect(run.events).toEqual([
+      phaseRun("preflight"), PROMOTION_CHECK, phaseRun("upload"), "MUTATE bunx vite build",
+      skipped("production does not serve this build: vite build failed"),
+    ]);
     expect(run.buildEnvironment).toBe("root");
     expect(run.infraEnvironment).toBe("production");
   });
@@ -261,9 +300,12 @@ describe("deploy gate", () => {
   test("a promotion of a build staging never verified builds nothing", () => {
     const run = runDeploy({ option: "--promote", failingGate: PROMOTION_CHECK });
 
-    expect(run.status).not.toBe(0);
+    expect(run.status).toBe(1);
     expect(run.events).toEqual([phaseRun("preflight"), PROMOTION_CHECK]);
     expect(run.infraEnvironment).toBeNull();
+    expect(run.report).toContain(
+      "note promote staging's record staging has not verified testsha with every phase green; deploy it to staging first.",
+    );
   });
 
   // Review job 150, P2: a red promotion leaves production serving it, and one command must undo it.
@@ -310,7 +352,7 @@ describe("deploy gate", () => {
     expect(failedBuild.events).toContain("MUTATE bunx vite build");
     expect(wiped(failedBuild.events)).toEqual([]);
 
-    const redGate = runDeploy({ option: "--reset", failingGate: PRE_PUBLISH.at(-1) });
+    const redGate = runDeploy({ option: "--reset", failingGate: phaseRun("upload") });
 
     expect(redGate.status).not.toBe(0);
     expect(redGate.events.some((event) => event.startsWith("MUTATE "))).toBe(false);
@@ -324,29 +366,28 @@ describe("deploy gate", () => {
     expect(runDeploy({ option: "--promote", ambientEnvironment: "staging" }).infraEnvironment).toBe("production");
   });
 
-  // STRUCTURAL, over the plan each phase runs: every phase but `source` holds
-  // gates that run alone, one wave each, in DEPLOY_PHASES order; deploy.sh runs
-  // the phases in that order, each a barrier. The preflight is first because
-  // nothing may report on a machine the preflight has not passed; the hammer
-  // and the account gate follow the source wave so a cheap source red fails
-  // first; the post-publish phase runs after the upload against the build that
-  // just shipped.
-  test("every gate outside the source wave declares its phase and why it runs alone", () => {
-    expect(DEPLOY_PHASES).toEqual(["preflight", "source", "hammer", "infra", "post-publish"]);
+  // STRUCTURAL, over the plan each phase runs, in DEPLOY_PHASES order; deploy.sh
+  // runs the phases in that order, each a barrier. The preflight is first
+  // because nothing may report on a machine the preflight has not passed; the
+  // upload gates hold the upload, since their damage cannot be undone; the rows
+  // that read the deployment share one wave with the source rows after it; the
+  // hammer, whose subject is contention, is last and alone (L18).
+  test("every gate outside the source wave declares its phase and why it runs there", () => {
+    expect(DEPLOY_PHASES).toEqual(["preflight", "upload", "post-publish", "source", "hammer"]);
     const byPhase = Object.fromEntries(DEPLOY_PHASES.map((phase) => [phase, PLAN.filter((row) => row.phase === phase).map((row) => row.run)]));
     expect(byPhase.preflight).toEqual(["bun scripts/preflight.ts"]);
-    expect(byPhase.hammer).toEqual(["bun run gate:hammer"]);
-    expect(byPhase.infra).toEqual(["bun run gate:infra"]);
+    expect(byPhase.upload).toEqual(["bun scripts/secret-scan.ts", "bun run gate:infra"]);
     expect(byPhase["post-publish"]).toEqual(["bun run gate:first-run", "bash scripts/product-flows-tier.sh"]);
-    expect(byPhase.source?.length).toBe(PLAN.length - 5);
+    expect(byPhase.hammer).toEqual(["bun run gate:hammer"]);
+    expect(byPhase.source?.length).toBe(PLAN.length - 6);
 
     for (const gate of LADDER) {
       if (gate.phase === undefined) {
-        expect(gate.alone, `${gate.run} explains running alone but runs in the source wave`).toBeUndefined();
+        expect(gate.alone, `${gate.run} explains where it runs but runs in the source wave`).toBeUndefined();
         continue;
       }
 
-      expect(gate.alone?.length ?? 0, `${gate.run} runs alone with no reason`).toBeGreaterThan(80);
+      expect(gate.alone?.length ?? 0, `${gate.run} declares its phase with no reason`).toBeGreaterThan(80);
     }
   });
 
@@ -370,25 +411,29 @@ describe("deploy gate", () => {
   // L16 removed.
   test("deploy.sh names no gate; the ladder runs each phase", () => {
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
-    const commands = source.split("\n").filter((line) => /^\s*(?:bun test |bun run gate:|bun scripts\/(?!ladder\.ts "\$\{flags\[@\]\}"))/.test(line));
+    const commands = source.split("\n").filter((line) => /^\s*(?:bun test |bun run gate:|bun scripts\/(?!ladder\.ts "--deploy-phase=\$1"))/.test(line));
 
     expect(commands).toEqual([]);
 
-    for (const phase of DEPLOY_PHASES) expect(source).toContain(`run_phase ${phase}`);
+    for (const phase of DEPLOY_PHASES) expect(source).toMatch(new RegExp(`(?:run|stop)_phase (?:[a-z-]+,)*${phase}\\b`, "u"));
     expect(source).not.toContain("run_required_gate");
   });
 
   // A phase's runner can end without saying anything about itself: the OOM
   // killer takes it, or something outside its process tree SIGKILLs it.
   // deploy.sh settles that from the child's exit status, which the kernel
-  // supplies whether the runner cooperates or not.
-  test("a phase killed without a verdict of its own fails the deploy", () => {
+  // supplies whether the runner cooperates or not, and the report names the
+  // phase, since the runner could not name its rows.
+  test("a phase killed without a verdict of its own fails the deploy, and the report says so", () => {
     const run = runDeploy({ killGate: phaseRun("source") });
 
-    expect(run.status).not.toBe(0);
+    expect(run.status).toBe(1);
     // 128 + SIGKILL. The status is the child's fate, not a claim the runner made.
     expect(run.stdout).toContain("the source phase failed (exit 137)");
-    expect(run.events).toEqual([phaseRun("preflight"), phaseRun("source")]);
+    expect(run.events).toEqual([...STOPS, WITHDRAW, "MUTATE bunx vite build", ...AFTER_A_FAILED_BUILD]);
+    expect(run.report).toContain(
+      "note source the source phase's runner it ended with exit 137 and no verdict of its own, so a row it had not reported on may be red and unnamed",
+    );
   });
 
   // THE WAVE IS SCHEDULED BY MEASURED COST IN TWO DIMENSIONS. A count of gates
@@ -399,19 +444,22 @@ describe("deploy gate", () => {
   // memory at all. Nothing declares a cost now; scripts/gate-cost.json holds
   // what each row was measured to take, and the wave admits against both
   // figures under the box's caps (ladder.test.ts holds the admission itself).
-  test("each source row is admitted on its measured threads and resident set, and no Chrome or worker row is free", () => {
+  test("each row is admitted on its measured threads and resident set, and no Chrome or worker row is free", () => {
     const costs = readCosts();
 
+    // Every row, the ones that read the deployment included: they share the one wave with the source rows (L18). One
+    // of those with no figure yet takes the whole box, since only a deployment of its build can measure it.
     for (const row of PLAN) {
       const cost = costs.rows[row.run];
       const gate = LADDER.find((candidate) => candidate.run === row.run);
 
-      // Outside the one concurrent wave a row is declared to run alone or is a
-      // live probe against the deployment, so its cost is not what admits it.
-      if (row.phase !== "source") continue;
+      if (cost === undefined && row.phase === "post-publish") {
+        expect([row.threads, row.rssMb]).toEqual([Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]);
+        continue;
+      }
 
       if (cost === undefined || gate === undefined) {
-        expect(cost, `${row.run} runs in the concurrent wave with no measured cost`).toBeDefined();
+        expect(cost, `${row.run} is planned with no measured cost`).toBeDefined();
         continue;
       }
 
@@ -433,7 +481,8 @@ describe("deploy gate", () => {
     const browserRows = PLAN.filter((row) => row.shared === "browser").map((row) => row.run);
 
     for (const row of PLAN) {
-      // A live probe against the deployment has no measured cost to admit it by, as above.
+      // The 1 GiB proxy is a LOCAL browser row's tree, a dev server and workerd behind its Chrome; a row driving the
+      // deployment runs Chrome alone (the product flows measured 745 MiB, 2026-09-30), so its figures stand as taken.
       if (row.phase === "post-publish") continue;
       const opensChrome = browserRows.includes(row.run);
       const multiWorker = row.run.includes("--parallel=") || row.run === "bun run test:core" || row.run === "bun run test:cli";
@@ -446,16 +495,34 @@ describe("deploy gate", () => {
     }
   });
 
-  // A red phase TRUNCATES the run: no later phase starts, nothing is built and
-  // nothing is published, whichever phase it is, with the former skip variable
-  // (SKIP_E2E, on every run here) set.
-  test("every phase fails closed: a red one stops the deploy before the next phase, the build or a publish", () => {
-    for (const [index, phase] of PRE_PUBLISH.entries()) {
+  // THE TWO STOPS. A red preflight or upload phase TRUNCATES the run: nothing
+  // later starts, nothing is built and nothing is published, with the former
+  // skip variable (SKIP_E2E, on every run here) set. The preflight is the
+  // precondition for any verdict; the upload gates hold what cannot be undone.
+  test("a red preflight or upload phase stops the deploy before anything later, the build or a publish", () => {
+    for (const [index, phase] of STOPS.entries()) {
       const run = runDeploy({ failingGate: phase });
 
-      expect(run.status, `${phase} did not fail the deploy`).not.toBe(0);
-      expect(run.events, `${phase} failed and a later step ran\n${run.stdout}`).toEqual(PRE_PUBLISH.slice(0, index + 1));
-      expect(run.stdout).toContain("(exit 47). The build and publish steps did not start.");
+      expect(run.status, `${phase} did not fail the deploy`).toBe(1);
+      expect(run.events, `${phase} failed and a later step ran\n${run.stdout}`).toEqual(STOPS.slice(0, index + 1));
+      expect(run.stdout).toContain("phase is red, so nothing was built or uploaded.");
+      expect(run.report.slice(-2)).toEqual(["mark end", "render"]);
+    }
+  });
+
+  // REPORT-ALL. After the upload gates nothing stops a deploy: every phase runs
+  // to its end, the hammer included, so one deploy reports every red (L18).
+  test("a red after the upload gates stops nothing: every later phase runs, and the deploy is red", () => {
+    for (const option of [undefined, "--gates-only"]) {
+      const run = runDeploy({ failingGate: phaseRun("source"), option });
+
+      const expected = option === undefined
+        ? [...STOPS, WITHDRAW, "MUTATE bunx vite build", ...AFTER_A_FAILED_BUILD]
+        : [...STOPS, phaseRun("source"), phaseRun("hammer")];
+
+      expect(run.status, `a red source phase under ${option ?? "a deploy"} did not fail it`).toBe(1);
+      expect(run.events, `the ${option ?? "deploy"} stopped at the red source phase\n${run.stdout}`).toEqual(expected);
+      expect(run.report.slice(-2)).toEqual(["mark end", "render"]);
     }
   });
 
@@ -500,7 +567,7 @@ describe("deploy gate", () => {
     // Same phases, same order, same failure semantics as any other deploy. This
     // is the assertion that would catch a future `--bootstrap` that skipped a
     // check rather than re-scoping one.
-    expect(bootstrap.events).toEqual([...PRE_PUBLISH, WITHDRAW, "MUTATE bunx vite build"]);
+    expect(bootstrap.events).toEqual([...STOPS, WITHDRAW, "MUTATE bunx vite build", ...AFTER_A_FAILED_BUILD]);
     expect(bootstrap.infraPhase).toBe("bootstrap");
     // The operator is told what is deferred and what is not, before the gates run.
     expect(bootstrap.stdout).toContain("BOOTSTRAP");
@@ -542,30 +609,12 @@ describe("deploy gate", () => {
     expect(run.infraPhase).toBeNull();
   });
 
-  // FAIL FAST, WITH A FULL AUDIT ON REQUEST. Inside a phase the wave stops
-  // launching at its first red and lets what is running finish; `--all` keeps
-  // launching so one run reports every red (ladder.test.ts holds the wave).
-  // Either way a red phase ends the deploy before the next barrier.
-  test("the first red stops the deploy at its phase, and --all asks each phase for every gate anyway", () => {
-    const stopped = runDeploy({ failingGate: phaseRun("source") });
-
-    expect(stopped.status).not.toBe(0);
-    expect(stopped.events).toEqual([phaseRun("preflight"), phaseRun("source")]);
-
-    const audited = runDeploy({ failingGate: phaseRun("source", true), option: "--gates-only", options: ["--all"] });
-
-    expect(audited.status).not.toBe(0);
-    expect(audited.events).toEqual([phaseRun("preflight", true), phaseRun("source", true)]);
-  });
-
-  // The rehearsal path: every pre-publish phase, no build, no upload. It is how
-  // the wave's wall time is measured for the figures in scripts/ladder.ts, so it
-  // has to run exactly the phases a deploy runs and touch nothing after.
-  test("gates-only runs every pre-publish phase and mutates nothing", () => {
+  // The rehearsal path: every local phase, no build, no upload, no record.
+  test("gates-only runs every local phase and mutates nothing", () => {
     const run = runDeploy({ option: "--gates-only" });
 
     expect(run.status).toBe(0);
-    expect(run.events).toEqual([...PRE_PUBLISH]);
+    expect(run.events).toEqual([...STOPS, phaseRun("source"), phaseRun("hammer")]);
     expect(run.stdout).toContain("Gates only: stopping before the build");
   });
 
@@ -574,10 +623,10 @@ describe("deploy gate", () => {
   // Asserted as TEXT, for the reason the version-annotation test above is: the
   // fixture's build stub fails on purpose, which is what every behavioural test
   // in this file depends on, so no run here reaches step 5. The properties that
-  // matter are structural anyway — that the invocation exists, that it is
-  // unconditional, that it names the strictest phase, and that its failure ends
-  // the deploy.
-  test("the post-deploy infrastructure phase is unconditional and fails the deploy", () => {
+  // matter are structural anyway — that the invocation exists, that it runs
+  // whenever the upload happened, that it names the strictest phase, and that
+  // its failure is a red of the deploy, which then writes no record.
+  test("the post-deploy infrastructure phase runs whenever the upload happened, and its red is the deploy's", () => {
     // EXECUTABLE lines, whole-line comments dropped — the same reading the "no
     // shell script but the deploy script publishes" rule below takes, and for the
     // same reason: this script's prose names every command it runs, so a claim
@@ -588,19 +637,21 @@ describe("deploy gate", () => {
 
     const source = lines.join("\n");
 
-    // At column zero, and after the upload: nested inside any `if`, this would be
-    // a phase some deploys skip, which is the whole thing `--bootstrap` must not
-    // become.
-    const invocation = 'if bun scripts/infra-verify.ts --phase=post-deploy; then';
+    // After the upload, and inside no condition but the upload's own, at column zero: nested inside any other `if`,
+    // this would be a phase some deploys skip, which is the whole thing `--bootstrap` must not become.
+    const uploaded = 'if [ "${DEPLOY_PUBLISHED:-0}" = "1" ]; then';
+    const invocation = '  if bun scripts/infra-verify.ts --phase=post-deploy; then';
     const upload = 'if npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}" 2>&1 | tee "$KINU_DEPLOY_LOG"; then';
+    expect(lines).toContain(uploaded);
     expect(lines).toContain(invocation);
     expect(lines).toContain(upload);
     expect(lines.indexOf(invocation)).toBeGreaterThan(lines.indexOf(upload));
+    expect(lines.slice(lines.indexOf(uploaded) + 1, lines.indexOf(invocation)).filter((line) => /^\s*if /u.test(line))).toEqual([]);
 
-    // Its failure arm exits. A phase that reported and continued would print
-    // findings above a "deployed and verified" summary.
+    // Its failure arm is a red of the deploy's: its findings go into the report, and a deploy with a red writes no
+    // record, so the build cannot be promoted.
     const arm = lines.slice(lines.indexOf(invocation));
-    expect(arm.slice(0, arm.indexOf("fi"))).toContain("  exit 1");
+    expect(arm.slice(0, arm.indexOf("  fi")).some((line) => line.includes('step_red publish "post-deploy infrastructure"'))).toBe(true);
 
     // `post-deploy` is the only phase spelled on an argv here, and it is the
     // strictest. `bootstrap` reaches the pre-deploy gate through the environment,
@@ -641,21 +692,19 @@ describe("deploy gate", () => {
 
     for (const resource of access) expect(resource.required).toBe(true);
 
-    // And the gate that observes them is a REQUIRED gate of this pipeline,
-    // running in its own wave after every source gate. Both halves matter: a
-    // declared-and-unobserved resource proves nothing, and an observed-but-
-    // optional gate is a warning.
-    // ITS OWN WAVE, AFTER EVERY SOURCE GATE, so an account that cannot be
-    // proved never reaches Wrangler deployment; and THE LAST WAVE BEFORE THE
-    // UPLOAD, which is what the property has always meant: a live gate against
-    // the deployment runs after the publish, beside first-run, because a
+    // And the gate that observes them is a REQUIRED gate of this pipeline, in
+    // the upload phase, whose red stops the deploy before the build: an account
+    // that cannot be proved never reaches Wrangler deployment. Both halves
+    // matter: a declared-and-unobserved resource proves nothing, and an
+    // observed-but-optional gate is a warning. A live gate against the
+    // deployment runs after the publish, beside first-run, because a
     // pre-publish live gate can only measure the previous build and refuses
     // the deploy carrying its fix.
-    expect(phaseGates('infra')).toEqual(['bun run gate:infra']);
-    expect(PRE_PUBLISH.at(-1)).toBe(phaseRun('infra'));
+    expect(phaseGates('upload')).toContain('bun run gate:infra');
+    expect(STOPS.at(-1)).toBe(phaseRun('upload'));
     expect(phaseGates('post-publish')).toContain('bun run gate:first-run');
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
-    expect(source.indexOf('run_phase infra')).toBeLessThan(source.indexOf('Step 2: Building Kinu'));
+    expect(source.indexOf('stop_phase upload')).toBeLessThan(source.indexOf('Step 2: Building Kinu'));
     expect(source.indexOf('run_phase post-publish')).toBeGreaterThan(source.indexOf('Step 4: Post-deploy smoke test'));
   });
 
