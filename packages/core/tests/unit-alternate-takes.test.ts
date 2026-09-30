@@ -8,7 +8,7 @@ import {
   buildTakeContinuationPrompt,
 } from '../src/mcts/takes';
 import { buildOutcomeEvalSplit } from '../src/evolution/eval-split';
-import { present } from '@kinu.run/test-utils';
+import { seedTranscriptEntry, present } from '@kinu.run/test-utils';
 import {
   listTurnOutcomes, realOutcomeScaffoldRates,
 } from '../src/evolution/outcomes';
@@ -34,9 +34,9 @@ async function capturedSet(sql: ReturnType<typeof makeSql>, actor: ReturnType<ty
     task: 'the task', turnId: 'msg-9', sessionId: 'default',
     liveText: 'winning approach', branchText: 'alternative approach',
   });
-  await history.record(CHAT_SESSION_ID, { id: 'u-9', origin: 'input',
+  await seedTranscriptEntry(history, CHAT_SESSION_ID, { id: 'u-9', origin: 'input',
     message: { role: 'user', content: 'please solve it' } });
-  await history.record(CHAT_SESSION_ID, { id: 'msg-9', origin: 'output',
+  await seedTranscriptEntry(history, CHAT_SESSION_ID, { id: 'msg-9', origin: 'output',
     message: { role: 'assistant', content: 'I used the winning approach' } });
 
   const set = present(latestAlternateTakeSet(sql, actor), 'the latest take set');

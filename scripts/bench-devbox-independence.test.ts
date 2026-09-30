@@ -1,5 +1,5 @@
-// Devbox must not import the product's core. Asserted on the module graph the bundler resolves from every
-// entry the repository declares for the package, so an import, a re-export and a dynamic import all count.
+// Devbox must not import the product's core. Resolve the graph from every non-test module of the package,
+// so an import, a re-export and a dynamic import all count.
 import { describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -43,35 +43,11 @@ function forbiddenScope(): string {
 
 const REPOSITORY = join(PACKAGE_DIR, '..', '..');
 
-const Exports = v.object({ exports: v.record(v.string(), v.string()) });
-
-const KnipWorkspaces = v.object({ knip: v.object({ workspaces: v.record(v.string(), v.object({ entry: v.array(v.string()) })) }) });
-
-const WorkerConfig = v.object({ main: v.string() });
-
-/**
- * Every file the repository declares as an entry of this package, read from configuration and never from source:
- * its manifest's exports, the production entries (`!`) the root's knip config names for it, and the `main` of each
- * Worker it deploys from `bench/`. A module no entry reaches ships nowhere, and knip names it unused.
- */
-function declaredEntries(): readonly string[] {
-  const exported = Object.values(v.parse(Exports, JSON.parse(readFileSync(join(PACKAGE_DIR, 'package.json'), 'utf8'))).exports);
-  const knip = v.parse(KnipWorkspaces, JSON.parse(readFileSync(join(REPOSITORY, 'package.json'), 'utf8')));
-
-  const production = (knip.knip.workspaces[relative(REPOSITORY, PACKAGE_DIR)]?.entry ?? [])
-    .filter((entry) => entry.endsWith('!')).map((entry) => entry.slice(0, -1));
-
-  const workers = trackedFiles().filter(path => /^packages\/devbox\/bench\/wrangler[^/]*\.jsonc$/.test(path))
-    .map(config => join("bench", v.parse(WorkerConfig, Bun.JSONC.parse(readFileSync(join(REPOSITORY, config), "utf8"))).main));
-
-  return [...new Set([...exported, ...production, ...workers].map((entry) => join(PACKAGE_DIR, entry)))].sort();
-}
-
 /**
  * Every module of the package that is not a test: an entry of the graph too. A module only scripts or tests import
  * (`bench/c3-result.ts`, `bench/seeded.ts`) is reached by no declared entry, and it still must not import the core.
  */
-function everyModule(): readonly string[] {
+function everyModule(): string[] {
   return trackedFiles().filter(path => path.startsWith('packages/devbox/') && isParseable(path) && !isTestFile(path))
     .map(path => join(REPOSITORY, path));
 }
@@ -80,7 +56,7 @@ describe('package independence', () => {
   const scope = forbiddenScope();
 
   test('nothing any entry of the package reaches imports the product core', async () => {
-    const entries = [...new Set([...declaredEntries(), ...everyModule()])].sort();
+    const entries = everyModule().sort();
     const crossing: Record<string, readonly string[]> = {};
 
     // The manifest's main entry and a module only scripts import are among them, so an empty reading cannot pass.

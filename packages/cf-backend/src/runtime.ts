@@ -19,7 +19,6 @@ import {
   type NimbusSandboxHandle,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore, generateReported,
   decodeJsonValue,
-  initAgentConfigTable, initActorTables,
   parseModelSpec, reasoningEffortOptions, createRoutedModelLane,
   createScaffoldSurface,
   type FixedTierSource,
@@ -274,11 +273,6 @@ export function createCFRuntime(
 
   // Built before the memory adapter so writes embed.
   const vectorStore = buildVectorStore(env, actor, hooks.reportModelCall);
-  // An exploration facet's own storage is untouched by `initWorkspaceSchema`; without this every head
-  // dies on `no such table: actor_config`.
-  initAgentConfigTable(execRaw);
-  // The rest of a full-loop actor's own tables (e.g. `crafted_tools`, `evolution_events`), for the same reason.
-  initActorTables(execRaw, sql);
   const memoryConfig = actor.actor.config;
 
   const craftStore = new AgentUtilsCraftStore(sql);

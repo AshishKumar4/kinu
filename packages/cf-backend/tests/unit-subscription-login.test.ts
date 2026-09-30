@@ -5,7 +5,7 @@ import { createTestUserDO, testOwner } from './helpers/user-do';
 import { credentialToHeaders } from '@kinu.run/core';
 import { asFetchFunction } from '@kinu.run/core';
 import { requestUrl } from '@kinu.run/core';
-import { requestBodyText } from '@kinu.run/test-utils';
+
 import * as v from 'valibot';
 
 /** The headers a call sent with the login stored under `key` holding `accessToken`, which the upstream then refused. */
@@ -24,7 +24,7 @@ describe('UserDO Codex credential revocation', () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async (input, init) => {
       expect(requestUrl(input)).toBe(CODEX_TOKEN_URL);
-      const body = new URLSearchParams(await requestBodyText(input, init));
+      const body = new URLSearchParams(await new Request(input, init).text());
       expect(body.get('grant_type')).toBe('refresh_token');
       expect(body.get('refresh_token')).toBe('rt-revoked');
 
@@ -75,7 +75,7 @@ describe('UserDO Codex credential revocation', () => {
 describe('UserDO Codex credential of a named account', () => {
   const refreshedTo = (tokens: { access: string; refresh: string }) => asFetchFunction(async (input, init) => {
     expect(requestUrl(input)).toBe(CODEX_TOKEN_URL);
-    const body = new URLSearchParams(await requestBodyText(input, init));
+    const body = new URLSearchParams(await new Request(input, init).text());
     expect(body.get('refresh_token')).toBe('rt-work');
 
     return Response.json({ access_token: tokens.access, refresh_token: tokens.refresh, expires_in: 3600 });
@@ -143,7 +143,7 @@ describe('UserDO Claude subscription login', () => {
 
     globalThis.fetch = asFetchFunction(async (input, init) => {
       expect(requestUrl(input)).toBe(CLAUDE_TOKEN_URL);
-      asked.push(v.parse(ClaudeRefreshSchema, JSON.parse(await requestBodyText(input, init))).refresh_token);
+      asked.push(v.parse(ClaudeRefreshSchema, JSON.parse(await new Request(input, init).text())).refresh_token);
 
       return Response.json({ access_token: 'fresh-work', refresh_token: 'rt-work-2', expires_in: 3600 });
     });
@@ -196,7 +196,7 @@ describe('UserDO subscription login renewed by two calls at once', () => {
 
     globalThis.fetch = asFetchFunction(async (input, init) => {
       expect(requestUrl(input)).toBe(CLAUDE_TOKEN_URL);
-      const token = v.parse(ClaudeRefreshSchema, JSON.parse(await requestBodyText(input, init))).refresh_token;
+      const token = v.parse(ClaudeRefreshSchema, JSON.parse(await new Request(input, init).text())).refresh_token;
 
       if (answerNow !== null) return answerNow();
 
@@ -265,7 +265,7 @@ describe('UserDO subscription login renewed by two calls at once', () => {
       globalThis.fetch = asFetchFunction(async (input, init) => {
         // A Cloudflare login's headers also name its AI gateway, from the account's (here empty) listing.
         if (requestUrl(input) !== login.url) return Response.json({ success: true, result: [] });
-        const body = await requestBodyText(input, init);
+        const body = await new Request(input, init).text();
         spent.push(body.includes('rt-1') ? 'rt-1' : body);
 
         if (spent.length > 1) return Response.json({ error: 'invalid_grant' }, { status: 400 });

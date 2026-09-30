@@ -7,7 +7,7 @@ import { isWorkMode, type WorkMode } from '../types/turn';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import { JsonValueSchema } from '../utils/json';
 import { REASONING_EFFORT_FOR_STAGE, REASONING_EFFORTS, type ReasoningEffort } from '../providers/effort';
-import type { NamedSwarmPreset } from '../strategy/swarm-presets';
+import type { NamedSwarmPreset } from '../types/swarm';
 import { DEFAULT_PROVIDER_RETRIES, ROLE_ID_RE, isValidRoleId } from '../types/profile';
 import { TierIdSchema, tierIdsOf,
   BUILTIN_PROFILE_CATALOG, SYSTEM_ROLE_DEFINITIONS, deriveRoleLabel, effectiveRoleCatalog,

@@ -1,3 +1,4 @@
+import { seedTranscriptEntry } from '@kinu.run/test-utils';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { createTestWorkspace, makeSqlExec } from '../../core/tests/helpers';
@@ -182,7 +183,7 @@ describe('owner reads of retained subordinate paths', () => {
     const fixture = workspaceFixture();
     const child = fixture.child(fixture.main, 'child');
     const leaf = fixture.child(child, 'leaf');
-    await fixture.history(leaf).record(CHAT_SESSION_ID, {
+    await seedTranscriptEntry(fixture.history(leaf), CHAT_SESSION_ID, {
       id: 'answer', origin: 'input', message: { role: 'user', content: 'kept answer' },
     });
 
@@ -240,7 +241,7 @@ describe('owner reads of retained subordinate paths', () => {
 
     for (const id of ['one', 'two', 'three']) {
       events.emit(id, { type: 'run_start', agentId: 'child', userMessage: id });
-      await fixture.history(child).record(CHAT_SESSION_ID, {
+      await seedTranscriptEntry(fixture.history(child), CHAT_SESSION_ID, {
         id, origin: 'input', message: { role: 'user', content: id },
       });
     }
@@ -267,7 +268,7 @@ describe('owner reads of retained subordinate paths', () => {
     const name = `reader-${'r'.repeat(52)}`;
     const fixture = workspaceFixture();
     const child = fixture.child(fixture.main, name);
-    await fixture.history(child).record(CHAT_SESSION_ID, {
+    await seedTranscriptEntry(fixture.history(child), CHAT_SESSION_ID, {
       id: 'message', origin: 'input', message: { role: 'user', content: 'retained answer' },
     });
     expect(await read(fixture, { path: [name], view: 'history', page: {} })).toMatchObject({

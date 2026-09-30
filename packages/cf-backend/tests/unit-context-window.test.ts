@@ -90,7 +90,7 @@ describe("the input allocation a resolved model leaves", () => {
   function allocation(session: ModelCatalogSession): number {
     return stepContextLimit({
       contextWindow: session.contextWindow(),
-      modelOutputLimit: session.modelOutputLimit(),
+      modelOutputLimit: session.window().modelOutputLimit,
     });
   }
 
@@ -99,7 +99,7 @@ describe("the input allocation a resolved model leaves", () => {
     await Promise.resolve();
 
     expect(session.contextWindow()).toBe(1_048_576);
-    expect(session.modelOutputLimit()).toBeNull();
+    expect(session.window().modelOutputLimit).toBeNull();
     expect(allocation(session)).toBe(1_048_576);
   });
 

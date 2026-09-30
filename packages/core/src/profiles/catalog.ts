@@ -9,7 +9,7 @@ import advisor from "../prompts/role-advisor.md" with { type: 'text' };
 import * as v from 'valibot';
 import { definePromptSection } from '../prompting/template';
 
-import { NAMED_SWARM_PRESETS } from '../strategy/swarm-presets';
+import { NAMED_SWARM_PRESETS } from '../types/swarm';
 import { MODEL_ROUTE_POLICY } from './model-route';
 import { REASONING_EFFORTS } from '../providers/effort';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../providers/workers-ai';

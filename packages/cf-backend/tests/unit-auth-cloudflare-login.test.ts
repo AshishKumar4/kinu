@@ -12,7 +12,7 @@ import { asFetchFunction, type OAuthCredential } from '@kinu.run/core';
 import { makeKv } from './helpers/kv';
 import type { BrowserSessionIdentity } from '../src/user/user-do';
 import type { UserCaller } from '@kinu.run/core';
-import { requestBodyText } from '@kinu.run/test-utils';
+
 
 const authPages = serveFamily(authPageRoutes, { ctx: workerContext() });
 
@@ -71,7 +71,7 @@ function fakeCloudflareNetwork(tokens: { access_token: string; refresh_token?: s
     }
 
     if (url === 'https://dash.cloudflare.com/oauth2/token') {
-      tokenRequests.push(new URLSearchParams(await requestBodyText(input, init)));
+      tokenRequests.push(new URLSearchParams(await new Request(input, init).text()));
 
       return Response.json({
         ...tokens,

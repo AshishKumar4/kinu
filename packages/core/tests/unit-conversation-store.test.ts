@@ -9,7 +9,7 @@ import { readSessionTranscript, type SessionTranscript } from '../src/session/tr
 import type { ActorHandle } from '../src/identity/actor-handle';
 import type { SqlExecutor, SqlValue } from '../src/types/primitives';
 import { createTestActor, createTestWorkspace, type TestWorkspace } from './helpers';
-import { present } from '@kinu.run/test-utils';
+import { seedTranscriptEntry, present } from '@kinu.run/test-utils';
 
 interface Fixture extends TestWorkspace {
   readonly actor: ActorHandle;
@@ -35,9 +35,9 @@ async function turn(
   text: { ask: string; answer: string },
   sessionId = CHAT_SESSION_ID,
 ): Promise<void> {
-  await history.record(sessionId, { id: ids.ask, origin: 'input',
+  await seedTranscriptEntry(history, sessionId, { id: ids.ask, origin: 'input',
     message: { role: 'user', content: text.ask } });
-  await history.record(sessionId, { id: ids.answer, origin: 'output',
+  await seedTranscriptEntry(history, sessionId, { id: ids.answer, origin: 'output',
     message: { role: 'assistant', content: text.answer } });
 }
 
@@ -54,13 +54,13 @@ describe('the message count — the default chat alone', () => {
   test('counts the chat the head reads, not a branch a rewind left behind', async () => {
     const s = setup();
     await turn(s.history, { ask: 'u1', answer: 'a1' }, { ask: 'first ask', answer: 'first answer' });
-    await s.history.record(CHAT_SESSION_ID, { id: 'u2', origin: 'input', message: { role: 'user', content: 'second ask' } });
-    await s.history.record(CHAT_SESSION_ID, { id: 'a2', origin: 'output', message: { role: 'assistant', content: 'second answer' } });
+    await seedTranscriptEntry(s.history, CHAT_SESSION_ID, { id: 'u2', origin: 'input', message: { role: 'user', content: 'second ask' } });
+    await seedTranscriptEntry(s.history, CHAT_SESSION_ID, { id: 'a2', origin: 'output', message: { role: 'assistant', content: 'second answer' } });
     s.history.revertTo(CHAT_SESSION_ID, 'u2', () => {});
 
     expect(s.transcript.count()).toBe(2);
 
-    await s.history.record(CHAT_SESSION_ID, { id: 'u3', origin: 'input', message: { role: 'user', content: 'another ask' } });
+    await seedTranscriptEntry(s.history, CHAT_SESSION_ID, { id: 'u3', origin: 'input', message: { role: 'user', content: 'another ask' } });
 
     expect(s.transcript.count()).toBe(3);
   });
@@ -69,15 +69,15 @@ describe('the message count — the default chat alone', () => {
   test('a rewind deletes the entries it rewound, and the next ask continues the list', async () => {
     const s = setup();
     await turn(s.history, { ask: 'u1', answer: 'a1' }, { ask: 'first ask', answer: 'first answer' });
-    await s.history.record(CHAT_SESSION_ID, { id: 'u2', origin: 'input', message: { role: 'user', content: 'second ask' } });
-    await s.history.record(CHAT_SESSION_ID, { id: 'a2', origin: 'output', message: { role: 'assistant', content: 'second answer' } });
+    await seedTranscriptEntry(s.history, CHAT_SESSION_ID, { id: 'u2', origin: 'input', message: { role: 'user', content: 'second ask' } });
+    await seedTranscriptEntry(s.history, CHAT_SESSION_ID, { id: 'a2', origin: 'output', message: { role: 'assistant', content: 'second answer' } });
     s.history.revertTo(CHAT_SESSION_ID, 'u2', () => {});
 
     const stored = () => s.sql<{ id: string }>`SELECT id FROM conversation_entries WHERE session_id=${CHAT_SESSION_ID} ORDER BY rowid`.map((row) => row.id);
 
     expect(stored()).toEqual(['u1', 'a1']);
 
-    await s.history.record(CHAT_SESSION_ID, { id: 'u3', origin: 'input', message: { role: 'user', content: 'another ask' } });
+    await seedTranscriptEntry(s.history, CHAT_SESSION_ID, { id: 'u3', origin: 'input', message: { role: 'user', content: 'another ask' } });
 
     expect(stored()).toEqual(['u1', 'a1', 'u3']);
     expect(s.transcript.entries().map((entry) => entry.id)).toEqual(['u1', 'a1', 'u3']);
@@ -155,9 +155,9 @@ describe('conversationTurnPair — what a grader attributes from', () => {
   test('a sibling answer attributes to its own parent edge, not to the newest leaf', async () => {
     const s = setup();
     await turn(s.history, { ask: 'u1', answer: 'a1' }, { ask: 'first ask', answer: 'first answer' });
-    await s.history.record(CHAT_SESSION_ID, { id: 'sib', origin: 'output',
+    await seedTranscriptEntry(s.history, CHAT_SESSION_ID, { id: 'sib', origin: 'output',
       message: { role: 'assistant', content: 'branch take' } });
-    await s.history.record(CHAT_SESSION_ID, { id: 'u2', origin: 'input',
+    await seedTranscriptEntry(s.history, CHAT_SESSION_ID, { id: 'u2', origin: 'input',
       message: { role: 'user', content: 'second ask' } });
 
     const pair = present(await conversationTurnPair(s.transcript, 'sib'), 'the turn pair for sib');
@@ -168,7 +168,7 @@ describe('conversationTurnPair — what a grader attributes from', () => {
 
   test('an answer that roots its own chain reports a null request, not an absent pair', async () => {
     const s = setup();
-    await s.history.record(CHAT_SESSION_ID, { id: 'orphan', origin: 'output',
+    await seedTranscriptEntry(s.history, CHAT_SESSION_ID, { id: 'orphan', origin: 'output',
       message: { role: 'assistant', content: 'unprompted' } });
 
     const pair = present(await conversationTurnPair(s.transcript, 'orphan'), 'the turn pair for orphan');

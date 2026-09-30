@@ -15,7 +15,7 @@ import {
 import type { AccessTokenScope, AuthRequest, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 import { requestUrl } from '@kinu.run/core';
-import { requestBodyText } from '@kinu.run/test-utils';
+
 
 const aiProxy = serveFamily(aiProxyRoutes);
 
@@ -172,7 +172,7 @@ function captureUpstream(respond: (seen: CapturedUpstream) => Response): Capture
     const seen: CapturedUpstream = {
       url: requestUrl(input),
       headers: new Headers(init?.headers),
-      body: parseJsonObject(await requestBodyText(input, init)),
+      body: parseJsonObject(await new Request(input, init).text()),
     };
 
     captured.push(seen);

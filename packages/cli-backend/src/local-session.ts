@@ -151,7 +151,7 @@ import { TierIdSchema,
   type PlanDecisionOutcome, type PlanEdit, type PlanReview, type ReviewAnnotation, type PlanReviewDecision,
   type PlanReviewResult,
   ChatSession, CHAT_SESSION_ID, checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore,
-  type ArmedCompaction, type ChatTurnInput, type ComposedRequest, type ContextFill, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
+  type ChatTurnInput, type ComposedRequest, type ContextFill, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
 import {
   diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
@@ -1184,8 +1184,8 @@ export class LocalAgentSession {
   }
 
   /** Overflow recovery's fold, at the next turn. */
-  armCompaction(kind: ArmedCompaction): void {
-    this.compactionState.armCompaction(this.cacheIdentity().sessionKey, kind);
+  armCompaction(): void {
+    this.compactionState.armCompaction(this.cacheIdentity().sessionKey);
   }
 
   /** Aborted by {@link end}, so an MCP connect that never answers cannot block ending. */
@@ -2770,7 +2770,7 @@ export class LocalAgentSession {
         jobs: () => this.jobs,
         budget: () => this.budget,
         cancelTrigger: (id, caller) => this.cancelTrigger(id, caller),
-        armCompactNow: () => { this.compactionState.armCompaction(this.cacheIdentity().sessionKey, 'force'); },
+        armCompactNow: () => { this.compactionState.armCompaction(this.cacheIdentity().sessionKey); },
       })),
       createAgentsCodemodeProvider(() => this.agentsToolDeps(mode)),
       createStateCodemodeProvider(this.rt.actor.programState),

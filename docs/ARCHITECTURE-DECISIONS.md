@@ -715,6 +715,11 @@ fakes do not have that contract; the hire and surface fixtures now use the
 native binding backed by local HTTP. A refused facet load is reported by
 name to the hirer instead of leaving it waiting indefinitely.
 
+The obsolete seven-axis ergonomics study in `scripts/axis-ergonomics/` was
+removed by `37a8d6c10` on 2026-09-30. Restore it from
+`98f64cde610869efc60ff072ff89e866bb5fd116` to replay that historical surface,
+not the six-axis swarm contract.
+
 ## Deploy ladder
 
 L1. The deploy wave is scheduled by a thread budget, not a gate count. Each
