@@ -53,7 +53,7 @@ function routes(harness: TestUserDO) {
     UserDO: { idFromName: (name) => name, get: () => stub },
     OrchestratorAgent: {
       idFromName: (name) => name,
-      get: (id) => workspaceObject({ async onCredentialsChanged() { notified.push(id);
+      get: (id) => workspaceObject({ async onModelSettingsChanged() { notified.push(id);
 
  return { ok: true as const }; } }),
     },

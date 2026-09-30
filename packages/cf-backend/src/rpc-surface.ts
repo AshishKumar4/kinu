@@ -248,7 +248,7 @@ const ACTOR_AGENT_RPC_SURFACE = [
   'listWorkspaceFiles',
   'missionDebit',
   'missionGuard',
-  'onCredentialsChanged',
+  'onModelSettingsChanged',
   'readWorkspaceFile',
   'receiveSubordinateEvent',
   'recordSubordinateTitle',

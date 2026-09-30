@@ -1,12 +1,14 @@
-// Credential mutations must notify active agents to drop cached provider/model state.
+// Credential and profile-catalog writes must notify active workspaces: each drops cached provider state and
+// releases the background effects a provider refusal parked (ironwood-cairn-6dbcb8de, 2026-09-29).
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { serveFamily } from './helpers/api';
 import { describe, test, expect } from 'bun:test';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
+import type { ProfileCatalogWriteResult } from '../src/user/user-do';
 import { bootstrappedProfile, userAccount, workspaceObject } from './helpers/bindings';
 import type { UserCaller } from '@kinu.run/core';
 import type { AuthIdentity } from '../src/auth/session';
-import type { JsonValue } from '@kinu.run/core';
+import { BUILTIN_PROFILE_CATALOG, type JsonValue } from '@kinu.run/core';
 
 const IDENTITY: AuthIdentity = {
   userId: '0123456789abcdef0123456789abcdef',
@@ -26,6 +28,11 @@ function setup() {
     async deleteCredential() {},
     async disconnectCodex() {},
     async pollCodexDeviceFlow() { return { connected: true, accountId: 'acc' }; },
+    async putProfileCatalog(_caller: UserCaller, _catalog: JsonValue, expectedVersion: number): Promise<ProfileCatalogWriteResult> {
+      return expectedVersion === 28
+        ? { ok: true, envelope: { authority: { kind: 'account', accountId: 'acc' }, version: 29, digest: 'd', catalog: BUILTIN_PROFILE_CATALOG } }
+        : { ok: false, kind: 'conflict', currentVersion: 28, currentDigest: 'd' };
+    },
     async listActiveWorkspaces() {
       return [
         { name: 'jarvis', displayName: 'Jarvis', createdAt: 1, nameOrigin: 'user' as const },
@@ -43,7 +50,7 @@ function setup() {
     OrchestratorAgent: {
       idFromName: (n) => n,
       get: (id) => workspaceObject({
-        async onCredentialsChanged() {
+        async onModelSettingsChanged() {
           notified.push(id);
 
           return { ok: true as const };
@@ -84,6 +91,18 @@ describe('credential-change fanout to agent DOs', () => {
   test('deleting a credential notifies agents', async () => {
     const { env, ctx, notified, pending } = setup();
     await call({ env, ctx, path: '/credentials/openai.api', method: 'DELETE' });
+    await Promise.all(pending);
+    expect(notified).toEqual(['jarvis', 'old-bot']);
+  });
+
+  test('a profile-catalog write that lands notifies agents; a refused one does not', async () => {
+    const { env, ctx, notified, pending } = setup();
+    await call({ env, ctx, path: '/profile-catalog', method: 'PUT', body: { catalog: {}, expectedVersion: 27 } });
+    await Promise.all(pending);
+    expect(notified).toEqual([]);
+
+    const res = await call({ env, ctx, path: '/profile-catalog', method: 'PUT', body: { catalog: {}, expectedVersion: 28 } });
+    expect(res?.status).toBe(200);
     await Promise.all(pending);
     expect(notified).toEqual(['jarvis', 'old-bot']);
   });

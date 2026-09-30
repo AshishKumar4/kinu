@@ -165,7 +165,8 @@ import {
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
   agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createSlateWebCodemodeProvider, createAgentsCodemodeProvider,
-  resolveModelRoute, narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
+  resolveModelRoute, completeOnRoute, tierRefusals, type TierRefusals,
+  narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema,
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs,
@@ -175,7 +176,7 @@ import {
   type NimbusSandboxHandle, childContextResolver,
 } from "@kinu.run/core";
 import {
-  bindAgentSql, createCFRuntime, isCFRuntime,
+  bindAgentSql, createCFRuntime, isCFRuntime, MODEL_SETTINGS,
   type CFRuntime, type CFRuntimeHooks,
 } from "./runtime";
 import {
@@ -3480,6 +3481,7 @@ export abstract class ActorAgent extends Agent<Env> {
     const { envelope } = await this.profileInputs();
     const changed = changeRoleAsOwner({ config: this.config, envelope, to: roleId, active: this.activeRoleLabel() });
     this.chatLoop.reviseContext({ counted: true });
+    await this.modelSettingsChanged();
 
     return changed;
   }
@@ -3638,23 +3640,46 @@ export abstract class ActorAgent extends Agent<Env> {
   protected abstract promptIdentity(): Promise<PromptIdentity>;
 
   /**
-   * One `'fast'` literal feeds both the model route and the spend label, so they cannot disagree.
+   * One `'fast'` literal feeds both the model route and the spend label, so they cannot disagree. Down the
+   * fast tier's chain like every fixed-tier call ({@link completeOnRoute}).
    */
   protected async suggestTitle(mission: string): Promise<string | null> {
-    const { model, spec, providerOptions } = await this.modelForSource('fast');
+    const route = resolveModelRoute('fast', await this.routingProfile());
 
-    return suggestWorkspaceTitle(async (system, prompt) => {
-      // No output cap: reasoning models spend budget thinking and a cap starves the JSON.
-      const request: GenerateRequest = { model, system, prompt };
+    return suggestWorkspaceTitle((system, prompt) => completeOnRoute(route, {
+      llm: (resolution) => ({
+        async *stream() { yield ''; },
+        complete: async (text) => {
+          const { model, providerOptions } = this.ownedModelServices.resolveModelWithEffort(resolution.model, resolution.reasoningEffort);
+          // No output cap: reasoning models spend budget thinking and a cap starves the JSON.
+          const request: GenerateRequest = { model, system, prompt: text };
 
-      if (providerOptions) request.providerOptions = providerOptions;
+          if (providerOptions) request.providerOptions = providerOptions;
 
-      // Billed before the caller parses the answer.
-      return (await generateReported(request, {
-        spend: { source: 'fast', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
-        spec,
-      })).text;
-    }, mission);
+          // Billed before the caller parses the answer.
+          return (await generateReported(request, {
+            spend: { source: 'fast', report: (report) => this.reportModelCall(report), operations: this.modelOperations },
+            spec: resolution.model,
+          })).text;
+        },
+      }),
+      credentialOf: (spec) => this.ownedModelServices.credentialFor(spec),
+      refusals: this.tierRefusals,
+    }, prompt), mission);
+  }
+
+  /** The lanes `createCFRuntime` builds keep the same rows. */
+  protected get tierRefusals(): TierRefusals {
+    const actor = this.actorHandle();
+
+    return tierRefusals({ sql: this.boundSql, actor, config: actor.config, now: Date.now, settings: MODEL_SETTINGS });
+  }
+
+  /** The owner changed what decides a tier's model or credential: a parked refusal may answer differently. */
+  protected async modelSettingsChanged(): Promise<void> {
+    this.invalidateModelCaches();
+    this.tierRefusals.forget();
+    await this.terminal.releaseParked();
   }
 
   /**
@@ -4718,9 +4743,9 @@ export abstract class ActorAgent extends Agent<Env> {
   // All credentials live in UserDO; providers resolve auth headers through the UserDO stub at
   // fetch time, so this agent stores no raw credentials.
 
-  /** Fan-out target of notifyWorkspacesCredentialsChanged after UserDO credential mutations. */
-  async onCredentialsChanged(): Promise<{ ok: true }> {
-    this.invalidateModelCaches();
+  /** Fan-out target of notifyWorkspacesModelSettingsChanged after the owner's credential or profile writes. */
+  async onModelSettingsChanged(): Promise<{ ok: true }> {
+    await this.modelSettingsChanged();
 
     return { ok: true };
   }
