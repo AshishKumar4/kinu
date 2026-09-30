@@ -14,7 +14,7 @@
  * four requests their clients abandoned at 02:59Z, each after 182 s with no response.
  *
  * Red at 6c3b99cfb in this pool: 6x200 and 2 hung from eight; 5x200 and 1 hung from six after one cancel, while six
- * with nothing canceled first all answered. `SurfaceAI` parks every `HELD_PROXY_MODEL` call on the Node-side hold, so
+ * with nothing canceled first all answered. The native AI fixture parks `HELD_PROXY_MODEL` on the Node-side hold, so
  * each request stays out on real I/O until the test releases them all. A request the runtime kills settles at once; a
  * parked one only after release.
  */

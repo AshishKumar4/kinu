@@ -1,8 +1,6 @@
 /** Plain turn data crossing between the workspace and an agent's isolate. */
 import type { JSONSchema7, ModelMessage } from 'ai';
-import type { BindingFailure, CompletedTurn, DynamicContext, HeadCapture, HeadInput, HeadInferenceDeps, HeadReport, HeadStep, HeadStreamKind, JsonValue, ModelPricing, JsonObject, ProfileAuthorityInputs, ResolvedTurnProfile, WorkMode } from '@kinu.run/core';
-import { Effect } from 'effect';
-import { settleSync } from '@kinu.run/core/obs';
+import type { CompletedTurn, DynamicContext, HeadCapture, HeadInput, HeadInferenceDeps, HeadReport, HeadStep, HeadStreamKind, JsonValue, ModelPricing, JsonObject, ProfileAuthorityInputs, ResolvedTurnProfile, WorkMode } from '@kinu.run/core';
 
 export type StoredRow = Readonly<Record<string, SqlStorageValue>>;
 
@@ -86,14 +84,9 @@ export interface AgentCaptureDelta {
 }
 
 export interface AgentToolAnswer {
-  readonly output?: unknown;
-  readonly failure?: Omit<BindingFailure, 'tool' | 'action'>;
+  readonly output: unknown;
   readonly captured: AgentCaptureDelta;
   readonly dynamic: DynamicContext;
-}
-
-export function agentToolFailure(failure: NonNullable<AgentToolAnswer['failure']>): never {
-  return settleSync(Effect.die(new Error(failure.error, { cause: failure })));
 }
 
 export type AgentTrace =

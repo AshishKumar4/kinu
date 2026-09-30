@@ -22,7 +22,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
-- **A hired agent keeps typed tool refusals across its isolate boundary.** Reaching the delegation depth cap now gives the helper the same structured refusal as a local turn, so it can answer and relay that answer back to the root instead of losing it to an untyped RPC exception.
+- **Agent isolates use the deployment's compatibility settings.** The build reads Wrangler's resolved date and flags and serves them beside the agent bundle; native error fields survive on the deployment date without a second refusal transport. Workers AI fixtures use the real platform binding and fetch cancellation rather than RPC signal serialization.
+- **A hired agent whose isolate cannot load reports failure to its hirer.** The report names the agent and the load error instead of leaving its caller waiting forever.
 - **Fork counts include unloaded chat history.** The fork dialog counts through a loaded message's stored position, so gaps between pages no longer make a fork promise fewer messages than it copies. Reaching the first page does not imply every page is loaded.
 - **A failed chat history page offers Retry where it failed.** Gaps between loaded pages now show their failure beside the missing history, including in agent chats. Scrolling leaves the failed read paused until Retry requests that same page.
 - **A redirect stays with its own turn when chat history has gaps.** Loading an old page and a recent page no longer places a mid-turn redirect inside an unrelated reply. The redirect stays at the edge of the old page until its reply loads.

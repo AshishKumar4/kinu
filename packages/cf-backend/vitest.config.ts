@@ -2,7 +2,7 @@
  * The workerd layer: only tests whose assertion is about the platform (DO gates, shutdown, facet
  * storage, DO SQLite features); our code stays in `bun test`. `include`, `bunfig.toml`
  * `pathIgnorePatterns` and `scripts/ladder.test.ts` keep the two sets disjoint and non-empty.
- * Compat date/flags match `wrangler.jsonc:6,10`. `tests/workerd` is its own tsc project (its
+ * Compat date/flags are read from the deployment config. `tests/workerd` is its own tsc project (its
  * `env.d.ts` would merge into production `Env`); tsconfigs carry no comments (`JSON.parse` readers).
  */
 import { fileURLToPath } from 'node:url';
@@ -23,7 +23,30 @@ import {
 import { kCurrentWorker, type V4ModuleDefinition } from 'miniflare';
 import { builtinModules } from 'node:module';
 import { promptText } from './vite-prompt-text';
-import { buildAgentBundle } from './vite-agent-bundle';
+import { buildAgentBundle, workerCompatibility } from './vite-agent-bundle';
+import { workersAiBinding } from './tests/helpers/workers-ai-binding';
+import * as v from 'valibot';
+import { HELD_PROXY_MODEL } from './tests/workerd/ai-proxy-shapes';
+
+const NativeAiInputSchema = v.looseObject({ inputs: v.looseObject({ messages: v.optional(v.array(v.looseObject({ role: v.optional(v.string()) }))) }) });
+
+const hireAi = await workersAiBinding(async (request) => {
+  const { inputs } = v.parse(NativeAiInputSchema, await request.json());
+
+  return Response.json({ response: JSON.stringify(inputs.messages?.[0]?.role === 'system' ? { title: 'Hire Probe' } : { upserts: [], decay: [] }) });
+});
+
+const surfaceAi = await workersAiBinding(async (request) => {
+  if (request.headers.get('mf-header-cf-consn-model-id') === HELD_PROXY_MODEL) {
+    await probeOutbound(new Request('http://probe-control.invalid/proxy/park', { method: 'POST', signal: request.signal }));
+
+    return Response.json({ response: 'held' });
+  }
+
+  const { inputs } = v.parse(NativeAiInputSchema, await request.json());
+
+  return Response.json({ response: JSON.stringify(inputs.messages?.[0]?.role === 'system' ? { title: 'Two Turn Probe' } : { upserts: [], decay: [] }) });
+});
 
 /**
  * KINU-065: Vite's oxc supports only legacy decorators, which break `@callable()` (they register the
@@ -64,7 +87,6 @@ mkdirSync(dirname(slateVendorModulePath), { recursive: true });
 
 writeFileSync(slateVendorModulePath, `export default ${JSON.stringify(buildSlateVendor())};\n`);
 
-const workerCompatibility = { compatibilityDate: '2026-09-28', compatibilityFlags: ['nodejs_compat'] };
 
 /** Probe bundles reach miniflare as an ES module entry plus compiled `.wasm`. */
 function probeModules(bundle: OutputFile[]): V4ModuleDefinition[] {
@@ -189,9 +211,15 @@ const agentFacetProbeBundle = buildAgentBundle(fileURLToPath(new URL('./tests/wo
 const shippedAgentBundle = buildAgentBundle();
 
 function agentAssets(bundle: string) {
-  return async (request: Request): Promise<Response> => (new URL(request.url).pathname === '/_agent/agent.js'
-    ? new Response(bundle, { headers: { 'content-type': 'text/javascript' } })
-    : new Response('Not found', { status: 404 }));
+  return async (request: Request): Promise<Response> => {
+    const path = new URL(request.url).pathname;
+
+    if (path === '/_agent/compatibility.json') return Response.json(workerCompatibility);
+
+    return path === '/_agent/agent.js'
+      ? new Response(bundle, { headers: { 'content-type': 'text/javascript' } })
+      : new Response('Not found', { status: 404 });
+  };
 }
 
 const attributionProbe = buildSync({
@@ -398,11 +426,12 @@ export default defineConfig({
           // `openai-compat` lane on outbound.
           name: 'hire-probe',
           compatibilityDate: workerCompatibility.compatibilityDate,
-          compatibilityFlags: [...workerCompatibility.compatibilityFlags, 'enable_abortsignal_rpc'],
+          compatibilityFlags: workerCompatibility.compatibilityFlags,
           workerLoaders: { LOADER: {} },
           modules: probeModules(hireProbe),
           bindings: { DEV_USER_EMAIL: 'probe@local', WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
-          serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'HireAI' }, ASSETS: agentAssets(shippedAgentBundle) },
+          ai: hireAi,
+          serviceBindings: { ASSETS: agentAssets(shippedAgentBundle) },
           outboundService: hireOutbound,
           durableObjects: {
             HIRE_PROBE: { className: 'HireProbeRoot', useSQLite: true },
@@ -478,7 +507,8 @@ export default defineConfig({
           name: 'agent-facet-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
           modules: probeModules(agentFacetProbe),
           bindings: { WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'YWdlbnQtZmFjZXQtcHJvYmUtY3JlZGVudGlhbC1rZXk=' },
-          serviceBindings: { AI: { name: 'hire-probe', entrypoint: 'HireAI' }, ASSETS: agentAssets(agentFacetProbeBundle) },
+          ai: hireAi,
+          serviceBindings: { ASSETS: agentAssets(agentFacetProbeBundle) },
           outboundService: hireOutbound,
           durableObjects: {
             AGENT_FACET_PROBE: { className: 'AgentFacetProbeRoot', useSQLite: true },
@@ -500,14 +530,15 @@ export default defineConfig({
           // `enable_abortsignal_rpc` reason as two-turn-probe.
           name: 'public-surface-probe',
           compatibilityDate: workerCompatibility.compatibilityDate,
-          compatibilityFlags: [...workerCompatibility.compatibilityFlags, 'enable_abortsignal_rpc'],
+          compatibilityFlags: workerCompatibility.compatibilityFlags,
           workerLoaders: { LOADER: {} },
           modules: probeModules(publicSurfaceProbe),
           // `DEV_USER_EMAIL` is the loopback identity; `WORKERS_AI_VIA_BINDING` puts its inference on `AI`.
           bindings: { DEV_USER_EMAIL: 'probe@local', WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
           // The CLI device sign-in and its rate limits live in AUTH_KV (cli-scoped-socket).
           kvNamespaces: ['AUTH_KV'],
-          serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'SurfaceAI' }, ASSETS: agentAssets(shippedAgentBundle) },
+          ai: surfaceAi,
+          serviceBindings: { ASSETS: agentAssets(shippedAgentBundle) },
           outboundService: probeOutbound,
           durableObjects: {
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },

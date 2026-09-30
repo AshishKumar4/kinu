@@ -724,8 +724,6 @@ export {
 
 export { ToolOutcomeSchema, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, type ToolOutcome } from './tools/outcome';
 
-export type { BindingFailure } from './types/tool-outcome';
-
 export { repairToolCall } from './tools/repair-tool-call';
 
 export { McpToolError, McpProtocolFailureSchema } from './tools/mcp-error';

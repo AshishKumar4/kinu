@@ -59,7 +59,8 @@ const WORKSPACE_CAPABILITY_TIERS = {
   'auth_tokens': 'workspace',
   /** Whether a bearer that authenticated a socket on this workspace may still act; names no token, mints nothing. */
   'auth_tokens.socket': 'workspace',
-  'codex_auth': 'workspace',
+  /** Signing in to a subscription provider (ChatGPT, Claude). */
+  'subscription_auth': 'workspace',
   /** Blueprints other accounts shared with this owner. Owner-only: forking is the owner's browser asking. */
   'shares': 'owner_only',
   /** The owner's Drive as the web UI manages it. Owner-only: workspaces already reach it via their `/shared` mount. */

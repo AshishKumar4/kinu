@@ -1,21 +1,19 @@
 /**
- * Providers panel (Cloudflare AI, ChatGPT/Codex, BYO keys), also mounted as a modal.
+ * Providers panel: one list of every provider, each with its own sign-in (Cloudflare, device code, claude.ai, API key); also mounted as a modal.
  * Each read is its own resource and fails visibly: a swallowed rejection shows a connected account as disconnected.
  */
 import { useEffect, useState, useCallback, useRef, type ReactNode } from "react";
 import { Combobox, Loader } from "@cloudflare/kumo";
-import {
-  KeyIcon, CheckIcon, CloudIcon, OpenAiLogoIcon, ArrowSquareOutIcon, TrashIcon,
-} from "@phosphor-icons/react";
+import { CheckIcon, ArrowSquareOutIcon, PlugIcon } from "@phosphor-icons/react";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
 import {
   listCredentials, setCredential, deleteCredential,
-  codexStatus, startCodexFlow, pollCodexFlow, disconnectCodex,
+  codexStatus, startCodexFlow, pollCodexFlow, disconnectCodex, startClaudeSignIn, finishClaudeSignIn,
   listAvailableModels, listProviderCatalog, getProfileCatalog, updateProfileCatalog,
   listCloudflareGateways, selectCloudflareGateway,
   listCloudflareAccounts, selectCloudflareAccount,
   listUnrevokedGrants, dismissUnrevokedGrant, type UnrevokedGrant,
-  type CredentialSummary, type CodexStatus,
+  type CredentialSummary,
   type ProviderCatalogEntry, type DeviceFlowStart,
   type CloudflareGatewayStatus, type CloudflareAccountStatus,
 } from "@/lib/user-api";
@@ -24,10 +22,11 @@ import { Card, Choice, Field, inputCls } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { FilledButton } from "@/components/ui/FilledButton";
+import { BrandMark, providerBrand } from "@/components/ui/BrandMark";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { renderThrownChain } from '@kinu.run/core/obs';
 import {
-  CLOUDFLARE_OAUTH_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, accountOf, baseCredentialKey, catalogProviderOfKey, isAccountName, storedAccounts,
+  CLAUDE_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, accountOf, baseCredentialKey, catalogProviderOfKey, isAccountName, storedAccounts,
 } from '@kinu.run/core';
 
 function ConnectedBadge({ detail }: { detail?: ReactNode }) {
@@ -90,44 +89,140 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
       <CardSlot resource={unrevoked.resource} what="your disconnected logins" onRetry={reloadAll}>
         {(grants) => <UnrevokedGrants grants={grants} onChanged={reloadAll} />}
       </CardSlot>
-      <Card title="Cloudflare AI" icon={CloudIcon}>
-        <CardSlot resource={models.resource} what="your connected models" onRetry={reloadAll}>
-          {(menu) => menu.models.some((model) => model.provider === 'workers-ai') ? (
-            <div className="space-y-5">
-              <ConnectedBadge />
-              {/* Asked first: the account decides which gateway is reachable. */}
-              <CardSlot resource={accounts.resource} what="your Cloudflare accounts" onRetry={reloadAll}>
-                {(status) => <CloudflareAccountSection status={status} onChanged={reloadAll} />}
-              </CardSlot>
-              <CardSlot resource={gateways.resource} what="your AI gateways" onRetry={reloadAll}>
-                {(status) => <CloudflareGatewaySection status={status} returnTo={returnTo} onChanged={reloadAll} />}
-              </CardSlot>
-            </div>
-          ) : (
-            <CloudflareAIConnectNotice
-              returnTo={returnTo}
-              message="Connect Cloudflare to use your Workers AI quota and AI Gateway."
-            />
-          )}
-        </CardSlot>
-      </Card>
-
-      <Card title="ChatGPT (Codex)" icon={OpenAiLogoIcon}>
-        <CardSlot resource={codex.resource} what="your ChatGPT connection" onRetry={reloadAll}>
-          {(status) => <CodexConnect status={status} onChanged={reloadAll} />}
-        </CardSlot>
-      </Card>
-
-      <Card title="API keys" icon={KeyIcon}>
+      <Card title="Connect a provider" icon={PlugIcon}>
         <CardSlot resource={creds.resource} what="your API keys" onRetry={reloadAll}>
-          {(credentials) => (
-            <CardSlot resource={catalog.resource} what="the provider catalog" onRetry={reloadAll}>
-              {(providers) => <ApiKeyManager creds={credentials} catalog={providers} onChanged={reloadAll} />}
-            </CardSlot>
-          )}
+          {(credentials) => {
+            const held = new Set(credentials.map((c) => c.key));
+            const forget = (key: string) => async () => { await deleteCredential(key); };
+
+            return (
+              <div className="space-y-5">
+                <div className="p-group">
+                  <CardSlot resource={models.resource} what="your connected models" onRetry={reloadAll}>
+                    {(menu) => (
+                      <ProviderEntry provider="workers-ai" name="Cloudflare AI" method="Cloudflare sign-in"
+                        connected={menu.models.some((model) => model.provider === 'workers-ai')}
+                        disconnect={held.has(CLOUDFLARE_OAUTH_CRED_KEY) ? forget(CLOUDFLARE_OAUTH_CRED_KEY) : undefined}
+                        onChanged={reloadAll}
+                        connect={<CloudflareAIConnectNotice returnTo={returnTo} message="Connect Cloudflare to use your Workers AI quota and AI Gateway." />}>
+                        {/* Asked first: the account decides which gateway is reachable. */}
+                        <CardSlot resource={accounts.resource} what="your Cloudflare accounts" onRetry={reloadAll}>
+                          {(status) => <CloudflareAccountSection status={status} onChanged={reloadAll} />}
+                        </CardSlot>
+                        <CardSlot resource={gateways.resource} what="your AI gateways" onRetry={reloadAll}>
+                          {(status) => <CloudflareGatewaySection status={status} returnTo={returnTo} onChanged={reloadAll} />}
+                        </CardSlot>
+                      </ProviderEntry>
+                    )}
+                  </CardSlot>
+                  <CardSlot resource={codex.resource} what="your ChatGPT connection" onRetry={reloadAll}>
+                    {(status) => (
+                      <ProviderEntry provider="codex" name="ChatGPT (Codex)" method="Device code"
+                        connected={status.connected}
+                        detail={status.accountId === null ? undefined : <>account {status.accountId.slice(0, 8)}…</>}
+                        disconnect={async () => { await disconnectCodex(); }}
+                        onChanged={reloadAll}
+                        connect={<CodexConnect onChanged={reloadAll} />} />
+                    )}
+                  </CardSlot>
+                  <ProviderEntry provider="claude" name="Claude" method="claude.ai sign-in"
+                    connected={held.has(CLAUDE_CRED_KEY)}
+                    disconnect={forget(CLAUDE_CRED_KEY)}
+                    onChanged={reloadAll}
+                    connect={<ClaudeConnect onChanged={reloadAll} />} />
+                  <CardSlot resource={catalog.resource} what="the provider catalog" onRetry={reloadAll}>
+                    {(providers) => storedEntries(credentials, providers).map((entry) => (
+                      <ProviderEntry key={entry.key} provider={entry.provider} name={entry.name} method={entry.method}
+                        detail={<span className="p-annotation">{entry.key}</span>}
+                        connected
+                        disconnect={async () => { await deleteCredential(entry.key); await forgetDefaultAccount(entry.key); }}
+                        onChanged={reloadAll} />
+                    ))}
+                  </CardSlot>
+                </div>
+                <CardSlot resource={catalog.resource} what="the provider catalog" onRetry={reloadAll}>
+                  {(providers) => (
+                    <>
+                      <ApiKeyConnect creds={credentials} catalog={providers} onChanged={reloadAll} />
+                      <DefaultAccounts keys={credentials.map((c) => c.key)} catalog={providers} />
+                    </>
+                  )}
+                </CardSlot>
+              </div>
+            );
+          }}
         </CardSlot>
       </Card>
     </>
+  );
+}
+
+const SUBSCRIPTION_NAMES = new Map([[CODEX_CRED_KEY, 'ChatGPT (Codex)'], [CLAUDE_CRED_KEY, 'Claude']]);
+
+/** Every stored key the fixed entries above do not show: API keys, endpoints, and named subscription accounts. */
+function storedEntries(creds: readonly CredentialSummary[], catalog: readonly ProviderCatalogEntry[]) {
+  const byCredKey = new Map(catalog.map((p) => [p.credKey, p]));
+
+  return creds.flatMap(({ key }) => {
+    const account = accountOf(key);
+    const suffix = account === MAIN_ACCOUNT ? '' : ` · ${account}`;
+    const subscription = SUBSCRIPTION_NAMES.get(baseCredentialKey(key));
+
+    if (subscription !== undefined) {
+      return account === MAIN_ACCOUNT ? [] : [{ key, provider: key.split('.')[0] ?? '', name: `${subscription}${suffix}`, method: 'Subscription sign-in' }];
+    }
+
+    if (key.startsWith('openai-compat.')) return [{ key, provider: 'openai', name: key.slice('openai-compat.'.length), method: 'OpenAI-compatible' }];
+    const provider = catalogProviderOfKey(key);
+
+    if (provider === null) return [];
+
+    return [{ key, provider, name: `${byCredKey.get(baseCredentialKey(key))?.name ?? key}${suffix}`, method: 'API key' }];
+  });
+}
+
+/**
+ * One provider in the list: its sign-in method, whether it is connected, and the way in or out. What
+ * connecting takes differs per method, so each passes its own `connect`; status and disconnect are this.
+ */
+function ProviderEntry({ provider, name, method, connected, detail, disconnect, onChanged, connect, children }: {
+  provider: string;
+  name: string;
+  method: string;
+  connected: boolean;
+  detail?: ReactNode;
+  disconnect?: () => Promise<void>;
+  onChanged: () => void;
+  connect?: ReactNode;
+  /** Settings shown under a connected entry. */
+  children?: ReactNode;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const brand = providerBrand(provider);
+
+  const leave = async () => {
+    if (disconnect === undefined || !confirm(`Disconnect ${name}? Your agents lose its models.`)) return;
+    setError(null);
+
+    try { await disconnect(); onChanged(); } catch (e) { setError(renderThrownChain({ cause: e })); }
+  };
+
+  return (
+    <div className="space-y-3 px-4 py-3" data-provider={name}>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+        {brand !== undefined && <BrandMark brand={brand} size={13} bare />}
+        <span className="p-row-text font-medium p-text">{name}</span>
+        <span className="p-meta p-text-3">{method}</span>
+        <span className="ml-auto flex items-center gap-2">
+          {connected ? <ConnectedBadge detail={detail} /> : <span className="p-meta p-text-3">Not connected</span>}
+          {connected && disconnect !== undefined && (
+            <button type="button" onClick={leave} className={dangerQuietCls} aria-label={`Disconnect ${name}`}>Disconnect</button>
+          )}
+        </span>
+      </div>
+      {connected ? children : connect}
+      {error && <p className="text-xs p-danger">{error}</p>}
+    </div>
   );
 }
 
@@ -221,9 +316,9 @@ function CloudflareGatewaySection({ status, returnTo, onChanged }: {
   );
 }
 
-function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onChanged: () => void }) {
+/** ChatGPT's device code: the owner enters it at OpenAI while this polls. */
+function CodexConnect({ onChanged }: { onChanged: () => void }) {
   const [flow, setFlow] = useState<DeviceFlowStart | null>(null);
-  const [polling, setPolling] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -235,12 +330,11 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
     try {
       const f = await startCodexFlow();
       setFlow(f);
-      setPolling(true);
 
       const stopPolling = () => {
         if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
 
-        setPolling(false);
+        setFlow(null);
       };
 
       pollRef.current = setInterval(async () => {
@@ -249,12 +343,10 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
 
           if (result.connected) {
             stopPolling();
-            setFlow(null);
             onChanged();
           } else if (result.error) {
             // A reported error (expired/denied/no flow) is terminal; pending returns { connected: false }.
             stopPolling();
-            setFlow(null);
             setError(result.error);
           } else {
             setError(null);
@@ -269,21 +361,7 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
     }
   }, [onChanged]);
 
-  const disconnect = useCallback(async () => {
-    if (!confirm('Disconnect ChatGPT? Your agents will lose access to Codex models.')) return;
-
-    try { await disconnectCodex(); onChanged(); } catch (e) { setError(renderThrownChain({ cause: e })); }
-  }, [onChanged]);
-
-  if (status?.connected) {
-    return (
-      <Field inline label={<ConnectedBadge detail={status.accountId ? <>account {status.accountId.slice(0, 8)}…</> : undefined} />}>
-        <button onClick={disconnect} className={dangerQuietCls}>Disconnect</button>
-      </Field>
-    );
-  }
-
-  if (flow && polling) {
+  if (flow) {
     return (
       <Field label={<>Open <a href={flow.portalURL} target="_blank" rel="noopener noreferrer" className="p-accent underline underline-offset-2">{flow.portalURL}</a> and enter this code</>}>
         <div className="flex flex-wrap items-center gap-3">
@@ -305,210 +383,166 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
 
   return (
     <div className="space-y-2">
-      <Field inline label="Not connected">
-        <FilledButton onClick={start}>Connect ChatGPT</FilledButton>
-      </Field>
+      <FilledButton onClick={start}>Connect ChatGPT</FilledButton>
       {error && <p className="text-xs p-danger">{error}</p>}
     </div>
   );
 }
 
-function ApiKeyManager({ creds, catalog, onChanged }: {
-  creds: CredentialSummary[];
-  catalog: ProviderCatalogEntry[];
+/**
+ * Claude's PKCE sign-in, as `kinu provider connect claude` runs it: Claude sends the browser to a local address
+ * that does not open here, so the owner pastes the code Claude shows, or that address, back.
+ */
+function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
+  const [authorizeUrl, setAuthorizeUrl] = useState<string | null>(null);
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const run = async (step: () => Promise<void>) => {
+    setBusy(true);
+    setError(null);
+
+    try { await step(); } catch (e) { setError(renderThrownChain({ cause: e })); } finally { setBusy(false); }
+  };
+
+  const start = () => run(async () => { setAuthorizeUrl((await startClaudeSignIn()).url); setCode(''); });
+
+  const finish = () => run(async () => {
+    const result = await finishClaudeSignIn(code.trim());
+
+    if (result.connected) onChanged();
+    else setError(result.error ?? 'Claude did not connect.');
+  });
+
+  return (
+    <div className="space-y-3">
+      <p className="rounded-md px-3 py-2 text-xs p-notice-warning">
+        Signing in with a Claude subscription runs Kinu on your own Claude plan. Anthropic&apos;s terms limit subscription use to its own apps, so you connect at your own risk.
+      </p>
+      {authorizeUrl === null ? (
+        <FilledButton onClick={start} disabled={busy}>Sign in with Claude</FilledButton>
+      ) : (
+        <Field label={<>Open <a href={authorizeUrl} target="_blank" rel="noopener noreferrer" className="p-accent underline underline-offset-2">claude.ai</a>, approve Kinu, and paste what Claude shows you</>}
+          hint="The code Claude shows, or the address your browser ended on if the page did not load.">
+          <form className="flex flex-wrap gap-2" onSubmit={async (event) => { event.preventDefault(); await finish(); }}>
+            <input
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
+              placeholder="Code or address"
+              aria-label="Claude sign-in code"
+              autoComplete="off"
+              className={`${inputCls} min-w-0 flex-1`}
+            />
+            <button type="submit" disabled={busy || code.trim() === ''}
+              className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs">{busy ? '...' : 'Connect'}</button>
+            <button type="button" onClick={start} disabled={busy}
+              className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs">Start again</button>
+          </form>
+        </Field>
+      )}
+      {error && <p className="text-xs p-danger">{error}</p>}
+    </div>
+  );
+}
+
+const COMPAT_ENTRY: ProviderCatalogEntry = {
+  id: 'openai-compat', name: 'OpenAI-compatible endpoint', credKey: 'openai-compat', connected: false,
+};
+
+/** API-key providers: the catalog from models.dev, and any OpenAI-compatible endpoint. */
+function ApiKeyConnect({ creds, catalog, onChanged }: {
+  creds: readonly CredentialSummary[];
+  catalog: readonly ProviderCatalogEntry[];
   onChanged: () => void;
 }) {
-  const [savingKey, setSavingKey] = useState<string | null>(null);
-
-  const remove = useCallback(async (key: string, name: string) => {
-    if (!confirm(`Remove the saved API key for "${name}"?`)) return;
-
-    try {
-      await deleteCredential(key);
-      await forgetDefaultAccount(key);
-      onChanged();
-    } catch (e) {
-      alert(renderThrownChain({ cause: e }));
-    }
-  }, [onChanged]);
-
-  const byCredKey = new Map(catalog.map((p) => [p.credKey, p]));
-
-  const storedKeys = creds
-    .filter((c) => catalogProviderOfKey(c.key) !== null)
-    .map((c) => ({ key: c.key, account: accountOf(c.key), provider: byCredKey.get(baseCredentialKey(c.key)) }));
-
   const [selected, setSelected] = useState<ProviderCatalogEntry | null>(null);
   const [apiKey, setApiKey] = useState('');
   const [accountName, setAccountName] = useState('');
-  const named = accountName.trim().toLowerCase();
-
-  const saveSelected = useCallback(async () => {
-    if (!selected || !apiKey.trim()) return;
-    setSavingKey(selected.credKey);
-
-    try {
-      await setCredential(named === '' ? selected.credKey : accountCredentialKey(selected.credKey, named), { kind: 'bearer', token: apiKey.trim() });
-      setSelected(null);
-      setApiKey('');
-      setAccountName('');
-      onChanged();
-    } catch (e) {
-      alert(renderThrownChain({ cause: e }));
-    } finally {
-      setSavingKey(null);
-    }
-  }, [selected, apiKey, named, onChanged]);
-
   const [compatName, setCompatName] = useState('');
   const [compatBaseURL, setCompatBaseURL] = useState('');
-  const [compatApiKey, setCompatApiKey] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const named = accountName.trim().toLowerCase();
+  const compat = selected?.id === COMPAT_ENTRY.id;
 
-  const saveCompat = useCallback(async () => {
-    if (!compatName.trim() || !compatBaseURL.trim() || !compatApiKey.trim()) return;
-    const credKey = `openai-compat.${compatName.trim()}`;
-    setSavingKey(credKey);
+  const save = async () => {
+    if (!selected || !apiKey.trim()) return;
+    setSaving(true);
+    setError(null);
 
     try {
-      await setCredential(credKey, {
-        kind: 'openai-compat',
-        baseURL: compatBaseURL.trim(),
-        apiKey: compatApiKey.trim(),
-      });
-      setCompatName(''); setCompatBaseURL(''); setCompatApiKey('');
+      if (compat) {
+        await setCredential(`openai-compat.${compatName.trim()}`, { kind: 'openai-compat', baseURL: compatBaseURL.trim(), apiKey: apiKey.trim() });
+      } else {
+        await setCredential(named === '' ? selected.credKey : accountCredentialKey(selected.credKey, named), { kind: 'bearer', token: apiKey.trim() });
+      }
+
+      setSelected(null);
+      setApiKey(''); setAccountName(''); setCompatName(''); setCompatBaseURL('');
       onChanged();
     } catch (e) {
-      alert(renderThrownChain({ cause: e }));
+      setError(renderThrownChain({ cause: e }));
     } finally {
-      setSavingKey(null);
+      setSaving(false);
     }
-  }, [compatName, compatBaseURL, compatApiKey, onChanged]);
+  };
 
-  const compatKeys = creds.filter((c) => c.key.startsWith('openai-compat.'));
-  const target = selected === null ? null : formKey(selected.credKey, named);
+  const target = selected === null || compat ? null : formKey(selected.credKey, named);
   const saveWord = creds.some((c) => c.key === target) ? 'Replace' : 'Save';
+  const ready = apiKey.trim() !== '' && (!compat || (compatName.trim() !== '' && compatBaseURL.trim() !== ''));
 
   return (
-    <div className="space-y-5">
-      {storedKeys.length > 0 && (
-        <div className="p-group">
-          {storedKeys.map(({ key, account, provider }) => (
-            <div key={key} className="flex items-center gap-2 px-4 py-2.5 text-xs">
-              <CheckIcon size={13} className="p-success shrink-0" />
-              <span className="p-row-text font-medium p-text">
-                {provider?.name ?? key}{account === MAIN_ACCOUNT ? '' : ` · ${account}`}
-              </span>
-              {provider?.doc && (
-                <a href={provider.doc} target="_blank" rel="noopener noreferrer" className="p-text-3 hover:p-accent" title="Provider docs">
-                  <ArrowSquareOutIcon size={12} />
-                </a>
-              )}
-              <span className="p-annotation p-text-3 truncate">{key}</span>
-              <button onClick={() => remove(key, provider?.name ?? key)} className={`${dangerQuietCls} ml-auto`}>
-                <TrashIcon size={11} /> Remove
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <Field label="Connect a provider">
-        <Combobox
-          items={catalog}
-          value={selected}
-          onValueChange={(next: ProviderCatalogEntry | null) => setSelected(next)}
-          itemToStringLabel={(item: ProviderCatalogEntry) => item.name}
-          itemToStringValue={(item: ProviderCatalogEntry) => item.id}
-        >
-          <Combobox.TriggerInput placeholder="Search providers (Groq, DeepSeek, Fireworks, …)" />
-          <Combobox.Content>
-            <Combobox.Empty>No match. Add an OpenAI-compatible endpoint below.</Combobox.Empty>
-            <Combobox.List>
-              {(item: ProviderCatalogEntry) => (
-                <Combobox.Item key={item.id} value={item}>
-                  <span className="flex w-full items-center gap-2">
-                    <span>{item.name}</span>
-                    {item.connected && <CheckIcon size={12} className="p-success ml-auto" />}
-                  </span>
-                </Combobox.Item>
-              )}
-            </Combobox.List>
-          </Combobox.Content>
-        </Combobox>
-        {selected && (
-          <div className="space-y-2">
-            <div className="flex gap-2">
-              <input
-                value={accountName}
-                onChange={(e) => setAccountName(e.target.value)}
-                placeholder="account (blank: main)"
-                aria-label="Account name"
-                className={`${inputCls} max-w-44`}
-              />
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder={saveWord === 'Replace' ? '••••••• (stored, paste to replace)' : `${selected.name} API key`}
-                aria-label="API key"
-                className={inputCls}
-              />
-              <button
-                onClick={saveSelected}
-                disabled={savingKey !== null || !apiKey.trim()}
-                className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs"
-              >{savingKey === selected.credKey ? '...' : saveWord}</button>
-            </div>
-          </div>
-        )}
-      </Field>
-
-      <DefaultAccounts keys={creds.map((c) => c.key)} catalog={catalog} />
-
-      <Field label="OpenAI-compatible (Groq, Together, …)">
-        <div className="grid gap-2 sm:grid-cols-[1fr_1.6fr_1fr]">
-          <input
-            value={compatName}
-            onChange={(e) => setCompatName(e.target.value)}
-            placeholder="name (e.g. groq)"
-            aria-label="Endpoint name"
-            className={inputCls}
-          />
-          <input
-            value={compatBaseURL}
-            onChange={(e) => setCompatBaseURL(e.target.value)}
-            placeholder="https://api.example.com/v1"
-            aria-label="Base URL"
-            className={inputCls}
-          />
+    <Field label="Add an API key">
+      <Combobox
+        items={[...catalog, COMPAT_ENTRY]}
+        value={selected}
+        onValueChange={(next: ProviderCatalogEntry | null) => setSelected(next)}
+        itemToStringLabel={(item: ProviderCatalogEntry) => item.name}
+        itemToStringValue={(item: ProviderCatalogEntry) => item.id}
+      >
+        <Combobox.TriggerInput placeholder="Search providers (Groq, DeepSeek, Fireworks, …)" />
+        <Combobox.Content>
+          <Combobox.Empty>No match. Pick OpenAI-compatible endpoint for any other.</Combobox.Empty>
+          <Combobox.List>
+            {(item: ProviderCatalogEntry) => (
+              <Combobox.Item key={item.id} value={item}>
+                <span className="flex w-full items-center gap-2">
+                  <span>{item.name}</span>
+                  {item.connected && <CheckIcon size={12} className="p-success ml-auto" />}
+                </span>
+              </Combobox.Item>
+            )}
+          </Combobox.List>
+        </Combobox.Content>
+      </Combobox>
+      {selected && (
+        <form className="flex flex-wrap gap-2" onSubmit={async (event) => { event.preventDefault(); await save(); }}>
+          {compat ? (
+            <>
+              <input value={compatName} onChange={(e) => setCompatName(e.target.value)} placeholder="name (e.g. groq)"
+                aria-label="Endpoint name" className={`${inputCls} max-w-44`} />
+              <input value={compatBaseURL} onChange={(e) => setCompatBaseURL(e.target.value)} placeholder="https://api.example.com/v1"
+                aria-label="Base URL" className={`${inputCls} min-w-0 flex-1`} />
+            </>
+          ) : (
+            <input value={accountName} onChange={(e) => setAccountName(e.target.value)} placeholder="account (blank: main)"
+              aria-label="Account name" className={`${inputCls} max-w-44`} />
+          )}
           <input
             type="password"
-            value={compatApiKey}
-            onChange={(e) => setCompatApiKey(e.target.value)}
-            placeholder="api key"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={saveWord === 'Replace' ? '••••••• (stored, paste to replace)' : `${selected.name} API key`}
             aria-label="API key"
-            className={inputCls}
+            className={`${inputCls} min-w-0 flex-1`}
           />
-        </div>
-        <button
-          onClick={saveCompat}
-          disabled={savingKey !== null || !compatName.trim() || !compatBaseURL.trim() || !compatApiKey.trim()}
-          className="p-btn-quiet inline-flex h-6.5 items-center px-2.5 text-xs"
-        >Add endpoint</button>
-        {compatKeys.length > 0 && (
-          <div className="p-group">
-            {compatKeys.map((c) => (
-              <div key={c.key} className="flex items-center gap-2 px-4 py-2.5 text-xs">
-                <span className="p-annotation p-text">{c.key}</span>
-                <button onClick={() => remove(c.key, c.key)} className={`${dangerQuietCls} ml-auto`}>
-                  <TrashIcon size={11} /> Remove
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </Field>
-    </div>
+          <button type="submit" disabled={saving || !ready}
+            className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs">{saving ? '...' : saveWord}</button>
+        </form>
+      )}
+      {error && <p className="text-xs p-danger">{error}</p>}
+    </Field>
   );
 }
 

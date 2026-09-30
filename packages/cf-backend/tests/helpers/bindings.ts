@@ -327,6 +327,8 @@ export function userAccount<Built extends Partial<UserRoutesAuthority>>(
     disconnectCodex: refuse('disconnectCodex'),
     startCodexDeviceFlow: refuse('startCodexDeviceFlow'),
     pollCodexDeviceFlow: refuse('pollCodexDeviceFlow'),
+    startClaudeSignIn: refuse('startClaudeSignIn'),
+    finishClaudeSignIn: refuse('finishClaudeSignIn'),
     listConfig: refuse('listConfig'),
     getConfig: refuse('getConfig'),
     setConfig: refuse('setConfig'),
