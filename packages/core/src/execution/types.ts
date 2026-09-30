@@ -70,6 +70,21 @@ export interface ResourceLimits {
   readonly memBytes?: number;
 }
 
+/** One size a container can run at, as its host's table names it. */
+export interface SandboxSize {
+  readonly size: string;
+  readonly label: string;
+  readonly vcpu: number;
+  readonly memoryMib: number;
+  readonly diskMb: number;
+}
+
+/** The host's sizes, smallest first, and the one a container starts at unless someone chose another. */
+export interface SandboxSizes {
+  readonly sizes: readonly SandboxSize[];
+  readonly defaultSize: string;
+}
+
 export interface ExecutorStatus {
   configured: boolean;
   available: boolean;
@@ -83,6 +98,8 @@ export interface ExecutorStatus {
   granted?: boolean;
   /** Device sandbox mode; absent for non-device environments. */
   sandbox?: DeviceSandboxStatus;
+  /** The sizes `sandbox.resize` offers; absent for every other environment. */
+  sizes?: SandboxSizes;
 }
 
 /** An executor registered as a named codemode provider; matches @cloudflare/codemode's ToolProvider shape. */
@@ -192,6 +209,7 @@ export interface ExecutorInfo {
   label?: string;
   granted?: boolean;
   sandbox?: DeviceSandboxStatus;
+  sizes?: SandboxSizes;
 }
 
 /** Manages the provider set passed to createExecuteTool; codemode does the namespace routing. */

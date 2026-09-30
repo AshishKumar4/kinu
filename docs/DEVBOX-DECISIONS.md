@@ -2158,9 +2158,10 @@ at the one start boundary (`#startContainer`), whichever path woke the box: a
 request, an alarm, a file call on the `/sandbox` mount, `start()`. The sizes
 are one table, `src/sizes.ts`: Small 1 vCPU, 4 GiB; Medium 2 vCPU, 8 GiB;
 Large 4 vCPU, 12 GiB; each a 20 GB disk. A box stores the key (`devbox:size`,
-absent means the host's `defaultSize`, Medium) and the size its running
-container got (`devbox:running-size`); `boxSize()`, `setSize()` and
-`devboxState()` report both. `resize(size)` is one call: a box that is not
+absent means the default its host stored with `useDefaultSize(size)`, else
+the class's `defaultSize`, Medium) and the size its running container got
+(`devbox:running-size`); `boxSize()` and `devboxState()` report both, and
+`resize(null)` drops the choice. `resize(size)` is one call: a box that is not
 running only records the size, so its first start comes up at it; one
 running at another size commits in D39's order and starts again at the new
 size, supervised processes and exposed ports come back from their specs, and
@@ -2171,6 +2172,16 @@ makes a rest refuse. `@cloudflare/sandbox` moves from 1.0.0-rc.1 to 1.0.0:
 unchanged (`sandbox-tools/src/s3_mount/{marker_store,model,observation}.rs`
 at the `@cloudflare/sandbox@1.0.0` tag are byte-identical to rc.1). The
 image moves to 1.0.0's shim (`sha256:5db34cc1…`, `block-lower/upstream.json`).
+
+In Kinu the owner's default is the `sandbox_size` config key, set in User
+settings under Sandbox, and a workspace chooses its own size on its
+Environment card, which applies at once, as `sandbox.resize(size)` does from
+codemode. Before a box's first operation in each turn, the runtime hands it
+the owner's default through `useDefaultSize`. The codemode declaration of
+`resize` and the prompt's sandbox line come from the size table and replace
+the stale "2 vCPU, about 6 GB"; a sandbox executor given no table has no
+`resize`. The boundary tests: `packages/core/tests/unit-sandbox-resize.test.ts`
+and `packages/cf-backend/tests/unit-sandbox-size-settings.test.ts`.
 
 What the policy removes. There is no application-wide rollout, so the
 fixtures no longer wait for one (`awaitApplicationRollout`, D5's 38 s), and a
@@ -2296,6 +2307,37 @@ deleted by hand. A native-only store would have removed about 5,190 lines
 `store-gateway.ts`, `sync.ts`, `sync-main.ts`, `native-archives.ts`, the
 block-lower crate) and squashfuse and s3fs from the image. The chain stays
 the record of truth.
+
+D52. A start that fails the same way every time is refused once, from a
+record of what it was made with (2026-09-30). D47 settles a terminal
+admission failure and files one incident, but that settled phase held only
+while a container ran. A start the platform refuses leaves none running,
+such as one for a host that names no image (D50), so every later request,
+every startup row a `kickStartup()` or a `devboxState()` poll armed, and
+every request after an eviction started the box again and filed another
+incident: one start and three asks made four starts and four incidents
+(`bench-artifacts/start-refusal/red.log`, on 719c2d1ac).
+
+A terminal refusal of a start this box made is now stored with that start's
+inputs (`devbox:start-refused`): the image, the size and the internet
+setting, which is everything `ctx.container.start()` receives. While the
+container is stopped and those inputs are unchanged, the one start boundary
+answers the recorded refusal and starts nothing, `#armStartup` arms nothing,
+and nothing is filed; an evicted object's successor reads the same row. A
+changed input asks again, as does a caller's explicit ask (`start()`,
+`attachNow()`), and an admitted start deletes the row. A terminal refusal
+over a container the box found running (D47's marker) is not stored: a later
+start gets a fresh container, which can come up clean. Kinu calls neither
+`start()` nor `attachNow()`, so there a refused start is asked again by a
+deploy that changes the image, or by a new size from the Environment card,
+`sandbox.resize` or the owner's default.
+
+Red then green: `tests/box-size.test.ts`
+(`bench-artifacts/start-refusal/red.log`, `green.log`). After one refused
+start, two requests, a successor's `kickStartup()` and its request answer the
+refusal with one start, one incident and no startup row. An image the host
+names later, another size, another internet setting and `attachNow()` each
+start the box again.
 
 ## Measurement contract for a strategy comparison
 

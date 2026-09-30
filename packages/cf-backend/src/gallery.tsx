@@ -144,6 +144,7 @@ const GALLERY_ROSTER: { entries: WorkspaceEntry[]; total: number } =
   : STOCK_ROSTER;
 
 const STUB_DATA = v.parse(JsonObjectSchema, {
+  "/api/user/config/sandbox_size": { key: "sandbox_size", value: null },
   // Every field the client's `UserProfileSchema` requires; a fixture that type-checks can still fail that parse.
   "/api/user/profile": {
     email: "ashish@example.com", displayName: "Ashish",
@@ -1062,6 +1063,7 @@ const NO_HEAD_ACTIVITY: ReadonlyMap<string, number> = new Map();
  * Non-agent sockets (vite HMR) fall through to the real WebSocket.
  */
 const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
+  getSandboxSize: { account: null, chosen: null, size: "medium", running: "medium" },
   getWorkspaceSnapshot: {
     status: {
       id: "agent_01j9x7q2m4checkoutfixes", name: "checkout-coupon-bug-9935d3",

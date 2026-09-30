@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DEFAULT_BOX_SIZE } from '../src/sizes';
+import { DEFAULT_BOX_SIZE, type BoxSize } from '../src/sizes';
 import { devboxFailure } from '../src/errors';
 import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
 import { Devbox, HARNESS_IMAGE, harness } from './support/devbox-harness';
@@ -59,7 +59,7 @@ test('a box with no size chosen starts at the default size, on the image the hos
 
   expect(DEFAULT_BOX_SIZE).toBe('medium');
   expect(container.startOptions).toEqual([{ image: HARNESS_IMAGE, instance: instance('medium'), enableInternet: true }]);
-  expect(await box.boxSize()).toEqual({ size: 'medium', running: 'medium' });
+  expect(await box.boxSize()).toEqual({ size: 'medium', chosen: undefined, running: 'medium' });
   await box.destroy();
 });
 
@@ -73,7 +73,7 @@ test('resizing a box that has never started records the size and starts nothing;
   await box.writeFile('/workspace/first.txt', 'first');
 
   expect(container.startOptions.map((options) => options?.instance)).toEqual([instance('large')]);
-  expect(await box.boxSize()).toEqual({ size: 'large', running: 'large' });
+  expect(await box.boxSize()).toEqual({ size: 'large', chosen: 'large', running: 'large' });
   await box.destroy();
 });
 
@@ -89,26 +89,60 @@ test('resizing to the size a box runs at changes nothing', async () => {
 
 test('an unknown size is refused and the recorded size stays', async () => {
   const { box } = harness(TestBox);
-  await box.setSize('small');
+  await box.resize('small');
 
   const [refused] = await Promise.allSettled([box.resize('huge')]);
 
   expect(refused.status === 'rejected' ? devboxFailure({ cause: refused.reason }) : refused)
     .toMatchObject({ code: 'invalid-input', message: 'no box size huge; the sizes are small, medium, large' });
-  expect(await box.boxSize()).toEqual({ size: 'small', running: undefined });
+  expect(await box.boxSize()).toEqual({ size: 'small', chosen: 'small', running: undefined });
+  const [refusedDefault] = await Promise.allSettled([box.useDefaultSize('huge')]);
+  expect(refusedDefault.status === 'rejected' ? devboxFailure({ cause: refusedDefault.reason }) : refusedDefault)
+    .toMatchObject({ code: 'invalid-input', message: 'no box size huge; the sizes are small, medium, large' });
 });
 
-test('setting a size records it for the next start and leaves the running container alone', async () => {
+test('a box that chose no size starts at the default its host stored, over the class\'s own default', async () => {
+  class DefaultedBox extends TestBox {
+    protected override get defaultSize(): BoxSize {
+      return 'small';
+    }
+  }
+
+  const stored = harness(DefaultedBox);
+  expect(await stored.box.useDefaultSize('large')).toBe('large');
+  await stored.box.start();
+  const bare = harness(DefaultedBox);
+  await bare.box.start();
+
+  expect({ stored: stored.container.startOptions.map((options) => options?.instance), bare: bare.container.startOptions.map((options) => options?.instance) })
+    .toEqual({ stored: [instance('large')], bare: [instance('small')] });
+  await stored.box.destroy();
+  await bare.box.destroy();
+});
+
+test('a box\'s own choice wins over the stored default, and dropping the choice follows the default again', async () => {
+  const { box, container } = harness(TestBox);
+  await box.useDefaultSize('large');
+  await box.resize('small');
+  await box.start();
+
+  expect(await box.boxSize()).toEqual({ size: 'small', chosen: 'small', running: 'small' });
+  expect(await box.resize(null)).toMatchObject({ kind: 'restarted', size: 'large', previous: 'small' });
+  expect(await box.boxSize()).toEqual({ size: 'large', chosen: undefined, running: 'large' });
+  expect(await box.devboxState()).toMatchObject({ size: 'large', runningSize: 'large' });
+  expect(container.startOptions.map((options) => options?.instance)).toEqual([instance('small'), instance('large')]);
+  await box.destroy();
+});
+
+test('a new stored default is recorded and waits for the running container\'s next start', async () => {
   const { box, container } = harness(TestBox);
   await box.start();
 
-  expect(await box.setSize('small')).toBe('small');
-  expect(await box.boxSize()).toEqual({ size: 'small', running: 'medium' });
-  expect((await box.devboxState())).toMatchObject({ size: 'small', runningSize: 'medium' });
-
+  expect(await box.useDefaultSize('small')).toBe('small');
+  expect(await box.boxSize()).toEqual({ size: 'small', chosen: undefined, running: 'medium' });
   await box.quiesce();
   await box.start();
-
+  expect(await box.useDefaultSize(null)).toBe('medium');
   expect(container.startOptions.map((options) => options?.instance)).toEqual([instance('medium'), instance('small')]);
   await box.destroy();
 });
@@ -132,7 +166,7 @@ test('resizing a running box commits and starts it again at the new size; a runn
   expect(ended.exitCode).not.toBe(0);
   expect(container.startOptions.map((options) => options?.instance)).toEqual([instance('medium'), instance('large')]);
   expect(container.starts.filter((start) => start.processId === supervised.processId)).toHaveLength(2);
-  expect(await box.boxSize()).toEqual({ size: 'large', running: 'large' });
+  expect(await box.boxSize()).toEqual({ size: 'large', chosen: 'large', running: 'large' });
   expect((await box.devboxState()).ready).toBe(true);
   await box.destroy();
 });
@@ -149,20 +183,85 @@ test('a resize goes ahead over an unmanaged command, which a rest would refuse t
   await box.destroy();
 });
 
-test('a host that names no image is refused its start as a permanent configuration error that names the image, and arms no retry', async () => {
-  class NoImageBox extends TestBox {
-    protected override get containerImage(): string | undefined {
-      return undefined;
-    }
+/** Names no image until its host deploys one, so the platform refuses each start the same way. */
+class LateImageBox extends TestBox {
+  image: string | undefined = undefined;
+
+  protected override get containerImage(): string | undefined {
+    return this.image;
   }
+}
 
-  const { box, container } = harness(NoImageBox);
-  await box.start();
-  const [ready] = await Promise.allSettled([box.resolveReadiness()]);
-  const reason = expect.stringContaining('[permanent -> refuse] no image to start: name it `devbox` in the container `images` map');
+const NO_IMAGE = '[permanent -> refuse] no image to start: name it `devbox` in the container `images` map';
 
-  const incidents = (await box.devboxIncidentReasons()).map((row) => row.reason);
+async function refusedStart() {
+  const made = harness(LateImageBox);
+  await made.box.start();
 
-  expect({ ready, named: incidents.length > 0 && incidents.every((incident) => incident.includes('no image to start')), armed: container.scheduleRows.filter((row) => row.callback === 'devboxStartup').length })
-    .toEqual({ ready: { status: 'rejected', reason: expect.objectContaining({ message: reason }) }, named: true, armed: 0 });
+  return made;
+}
+
+async function refusalOf<T>(asked: Promise<T>): Promise<T | string | undefined> {
+  const [settled] = await Promise.allSettled([asked]);
+
+  return settled.status === 'rejected' ? devboxFailure({ cause: settled.reason })?.message : settled.value;
+}
+
+// Red on 719c2d1ac: each request started the box again and filed another incident.
+test('a start that fails permanently is refused once: later requests and a successor after eviction answer the recorded refusal without starting again', async () => {
+  const { box, container, state } = await refusedStart();
+  const asked = [await refusalOf(box.resolveReadiness()), await refusalOf(box.resolveReadiness())];
+  const successor = new LateImageBox(state, {});
+  container.owner = successor;
+  const armed = () => container.scheduleRows.filter((row) => row.callback === 'devboxStartup').length;
+  await successor.kickStartup();
+  const armedByKick = armed();
+  asked.push(await refusalOf(successor.resolveReadiness()));
+
+  expect({
+    asked,
+    starts: container.startOptions.length,
+    incidents: (await successor.devboxIncidentReasons()).map((row) => row.reason),
+    armed: [armedByKick, armed()],
+  }).toEqual({
+    asked: Array.from({ length: 3 }, () => expect.stringContaining(NO_IMAGE)),
+    starts: 1,
+    incidents: [expect.stringContaining(NO_IMAGE)],
+    armed: [0, 0],
+  });
+});
+
+test('a changed input asks again: an image the host names later, another size, the internet setting, or an explicit attach', async () => {
+  const imaged = await refusedStart();
+  imaged.box.image = HARNESS_IMAGE;
+  const ready = await imaged.box.resolveReadiness();
+
+  const resized = await refusedStart();
+  await resized.box.resize('large');
+  await refusalOf(resized.box.resolveReadiness());
+
+  const offline = await refusedStart();
+  offline.box.enableInternet = false;
+  await refusalOf(offline.box.resolveReadiness());
+
+  const attached = await refusedStart();
+  const reattached = await refusalOf(attached.box.attachNow());
+
+  expect({
+    ready,
+    resized: resized.container.startOptions.map((options) => options?.instance),
+    offline: offline.container.startOptions.map((options) => options?.enableInternet),
+    reattached,
+    attached: attached.container.startOptions.length,
+    incidents: (await attached.box.devboxIncidentReasons()).length,
+  }).toEqual({
+    ready: { kind: 'restored' },
+    resized: [instance('medium'), instance('large')],
+    offline: [true, false],
+    reattached: expect.stringContaining(NO_IMAGE),
+    attached: 2,
+    incidents: 2,
+  });
+
+  for (const { box } of [imaged, resized, offline, attached]) await box.destroy();
 });
