@@ -41,7 +41,7 @@ describe('guided onboarding renderer', () => {
       skip: (step) => update({ skippedSteps: [...readiness.skippedSteps, step] }),
     };
 
-    const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({
+    const { renderer, mockInput, waitForFrame, flush } = await createTestRenderer({
       width: 80,
       height: 24,
       useThread: false,
@@ -49,6 +49,7 @@ describe('guided onboarding renderer', () => {
     });
 
     const root = createRoot(renderer);
+    renderer.start();
     const store = createMemoryTuiPreferenceStore();
 
     const scene = (
@@ -64,14 +65,14 @@ describe('guided onboarding renderer', () => {
 
     try {
       root.render(scene);
-      await waitForFrame(renderOnce, captureCharFrame, 'Step 4/6 · theme');
+      await waitForFrame((frame) => frame.includes('Step 4/6 · theme'));
       mockInput.pressKey('s');
-      await waitForFrame(renderOnce, captureCharFrame, 'Step 5/6 · keymap');
+      await waitForFrame((frame) => frame.includes('Step 5/6 · keymap'));
 
       flushSync(() => { root.unmount(); });
-      await renderSettled(renderOnce);
+      await flush();
       root.render(scene);
-      await waitForFrame(renderOnce, captureCharFrame, 'Step 5/6 · keymap');
+      await waitForFrame((frame) => frame.includes('Step 5/6 · keymap'));
       expect(readiness.skippedSteps).toEqual(['theme']);
     } finally {
       flushSync(() => { root.unmount(); });
@@ -102,7 +103,7 @@ describe('guided onboarding renderer', () => {
       skip: () => {},
     };
 
-    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
+    const { renderer, waitForFrame, captureCharFrame } = await createTestRenderer({
       width: 80,
       height: 24,
       useThread: false,
@@ -110,6 +111,7 @@ describe('guided onboarding renderer', () => {
     });
 
     const root = createRoot(renderer);
+    renderer.start();
 
     try {
       root.render(
@@ -122,7 +124,7 @@ describe('guided onboarding renderer', () => {
           />
         </TuiProductProvider>,
       );
-      await waitForFrame(renderOnce, captureCharFrame, 'Step 1/6 · location');
+      await waitForFrame((frame) => frame.includes('Step 1/6 · location'));
       expect(captureCharFrame()).toContain('Where will your workspaces live?');
     } finally {
       flushSync(() => { root.unmount(); });
@@ -145,7 +147,7 @@ describe('guided onboarding renderer', () => {
       skip: () => {},
     };
 
-    const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
+    const { renderer, waitForFrame, captureCharFrame } = await createTestRenderer({
       width: 80,
       height: 24,
       useThread: false,
@@ -153,6 +155,7 @@ describe('guided onboarding renderer', () => {
     });
 
     const root = createRoot(renderer);
+    renderer.start();
 
     try {
       root.render(
@@ -165,7 +168,7 @@ describe('guided onboarding renderer', () => {
           />
         </TuiProductProvider>,
       );
-      await waitForFrame(renderOnce, captureCharFrame, 'readiness read failed: no such table: onboarding');
+      await waitForFrame((frame) => frame.includes('readiness read failed: no such table: onboarding'));
       expect(captureCharFrame()).not.toContain('Checking readiness…');
     } finally {
       flushSync(() => { root.unmount(); });
@@ -198,7 +201,7 @@ describe('guided onboarding renderer', () => {
       skip: () => {},
     };
 
-    const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({
+    const { renderer, mockInput, waitForFrame } = await createTestRenderer({
       width: 80,
       height: 24,
       useThread: false,
@@ -206,6 +209,7 @@ describe('guided onboarding renderer', () => {
     });
 
     const root = createRoot(renderer);
+    renderer.start();
 
     try {
       root.render(
@@ -218,9 +222,9 @@ describe('guided onboarding renderer', () => {
           />
         </TuiProductProvider>,
       );
-      await waitForFrame(renderOnce, captureCharFrame, 'Step 1/6 · location');
+      await waitForFrame((frame) => frame.includes('Step 1/6 · location'));
       mockInput.pressEnter();
-      await waitForFrame(renderOnce, captureCharFrame, 'the location could not be saved: config.json is read-only');
+      await waitForFrame((frame) => frame.includes('the location could not be saved: config.json is read-only'));
     } finally {
       flushSync(() => { root.unmount(); });
       renderer.destroy();
@@ -228,23 +232,3 @@ describe('guided onboarding renderer', () => {
   });
 });
 
-async function renderSettled(renderOnce: () => Promise<void>): Promise<void> {
-  await renderOnce();
-  await Bun.sleep(0);
-  await renderOnce();
-}
-
-async function waitForFrame(
-  renderOnce: () => Promise<void>,
-  capture: () => string,
-  expected: string,
-): Promise<void> {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    await renderOnce();
-
-    if (capture().includes(expected)) return;
-    await Bun.sleep(1);
-  }
-
-  expect(capture()).toContain(expected);
-}

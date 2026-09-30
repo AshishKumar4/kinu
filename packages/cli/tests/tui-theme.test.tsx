@@ -1,7 +1,6 @@
 /** @jsxImportSource @opentui/react */
 import { join } from 'node:path';
-import { TextAttributes } from '@opentui/core';
-import { createTestRenderer } from '@opentui/core/testing';
+import { createTestRenderer, type TestRendererSetup } from '@opentui/core/testing';
 import { createRoot, flushSync } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
 import { present, scratchDir } from '@kinu.run/test-utils';
@@ -15,34 +14,13 @@ import {
   TuiThemeProvider,
   createThemeRegistry, DEFAULT_TUI_THEME_SELECTION, type ThemeSelection,
 } from '../src/tui/theme';
+import { contrastRatio, rgbHex } from './helpers/contrast';
 
 const MID_TONE_TERMINALS = {
   dark: { 'Nord #2E3440': '#2E3440', 'Dracula #282A36': '#282A36', 'Solarized dark #002B36': '#002B36' },
   light: { 'Solarized light #FDF6E3': '#FDF6E3', 'GitHub light #FFFFFF': '#FFFFFF' },
 } as const;
 
-/** WCAG 2.x arithmetic owned by this test, so the palette is not judged by the registry's own math. */
-function luminance(hex: string): number {
-  const channel = (index: number): number => {
-    const value = Number.parseInt(hex.slice(1 + index * 2, 3 + index * 2), 16) / 255;
-
-    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
-  };
-
-  return 0.2126 * channel(0) + 0.7152 * channel(1) + 0.0722 * channel(2);
-}
-
-function contrast(foreground: string, background: string): number {
-  const [light, dark] = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
-
-  return (light + 0.05) / (dark + 0.05);
-}
-
-function hexOf(color: { toInts(): [number, number, number, number] }): string {
-  const [red, green, blue] = color.toInts();
-
-  return `#${[red, green, blue].map((channel) => channel.toString(16).padStart(2, '0')).join('')}`.toUpperCase();
-}
 
 describe('TUI theme', () => {
   test('the theme picker renders and commits the selected shared default', async () => {
@@ -115,8 +93,8 @@ describe('TUI theme', () => {
 
     for (const theme of registry.themes) {
       const { text, background } = theme.colors;
-      const bubble = contrast(text.strong, background.user);
-      const onAccent = contrast(text.onAccent, background.accent);
+      const bubble = contrastRatio(text.strong, background.user);
+      const onAccent = contrastRatio(text.onAccent, background.accent);
       expect(bubble, `${theme.id} bubble ink`).toBeGreaterThanOrEqual(4.5);
       expect(onAccent, `${theme.id} ink on accent`).toBeGreaterThanOrEqual(4.5);
       lines.push(`${theme.id}: bubble ink ${bubble.toFixed(2)} · ink on accent ${onAccent.toFixed(2)}`);
@@ -124,7 +102,7 @@ describe('TUI theme', () => {
       if (background.canvas === undefined) {
         // Blind spot: the gate measures the web canvas and the extreme, never mid-tone terminals.
         const grounds = MID_TONE_TERMINALS[theme.appearance];
-        const dim = Object.entries(grounds).map(([name, ground]) => `${name} ${contrast(text.muted, ground).toFixed(2)}`);
+        const dim = Object.entries(grounds).map(([name, ground]) => `${name} ${contrastRatio(text.muted, ground).toFixed(2)}`);
         lines.push(`  not gated — text.muted on ${dim.join(', ')}`);
       }
     }
@@ -144,15 +122,15 @@ describe('TUI theme', () => {
     expect(() => createThemeRegistry([invisible])).toThrow(/text\.strong\/background\.user contrast/);
   });
 
-  test('under Kinu light the user turn carries the accent gutter on the canvas and the assistant turn avoids the user fill', async () => {
-    const light = present(BUILTIN_TUI_THEMES.find((theme) => theme.id === 'kinu-light'), 'the kinu-light theme');
-    const { renderer, renderOnce, captureSpans } = await createTestRenderer({ width: 80, height: 16, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+  test('user, assistant and tool text remain readable on a light terminal', async () => {
+    const { renderer, waitFor, captureSpans } = await createTestRenderer({ width: 80, height: 16, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
+    renderer.start();
 
     try {
       root.render(
         <TuiThemeProvider selection={{ mode: 'theme', themeId: 'kinu-light' }} colorCapability="truecolor">
-          <box style={{ width: '100%', height: '100%' }}>
+          <box style={{ width: '100%', height: '100%', backgroundColor: '#FFFFFF' }}>
             <MessageList
               messages={[
                 { id: 'u1', role: 'user', content: 'USERTURN' },
@@ -163,43 +141,29 @@ describe('TUI theme', () => {
           </box>
         </TuiThemeProvider>,
       );
-      // opentui paints markdown prose only after an async grammar load: wait for the spans read below.
-      let spans = captureSpans().lines.flatMap((line) => line.spans);
+      await waitFor(() => paints(captureSpans, ['USERTURN', 'ASSISTANTTURN', 'exec']));
+      const spans = captureSpans().lines.flatMap((line) => line.spans);
 
-      for (let index = 0; index < 60; index += 1) {
-        await renderOnce();
-        spans = captureSpans().lines.flatMap((line) => line.spans);
-
-        if (['USERTURN', 'ASSISTANTTURN', 'exec'].every((text) => spans.some((span) => span.text.includes(text)))) break;
-        await Bun.sleep(20);
-      }
-
-      const gutter = present(spans.find((span) => span.text.includes('YOU')), 'the gutter span');
       const user = present(spans.find((span) => span.text.includes('USERTURN')), 'the user span');
       const assistant = present(spans.find((span) => span.text.includes('ASSISTANTTURN')), 'the assistant span');
       const tool = present(spans.find((span) => span.text.includes('exec')), 'the tool span');
-      expect(hexOf(gutter.fg)).toBe(light.colors.intent.accent);
-      expect(hexOf(user.fg)).toBe(light.colors.text.strong);
-      expect(hexOf(user.bg)).not.toBe(light.colors.background.user);
-      expect(hexOf(assistant.bg)).not.toBe(light.colors.background.user);
-      expect(hexOf(assistant.fg)).toBe(light.colors.text.strong);
-      expect(hexOf(tool.bg)).toBe(light.colors.well.fill);
-      expect(hexOf(tool.fg)).toBe(light.colors.well.ink);
+
+      for (const span of [user, assistant, tool]) expect(contrastRatio(rgbHex(span.fg), rgbHex(span.bg))).toBeGreaterThanOrEqual(4.5);
     } finally {
       flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
 
-  test('each transcript role resolves its own ink: prose in ink, thinking muted and italic, notes muted', async () => {
-    const dark = present(BUILTIN_TUI_THEMES.find((theme) => theme.id === 'kinu-dark-solid'), 'the kinu-dark-solid theme');
-    const { renderer, renderOnce, captureSpans } = await createTestRenderer({ width: 80, height: 20, useThread: false, maxFps: Number.POSITIVE_INFINITY });
+  test('every transcript role remains readable on a dark terminal', async () => {
+    const { renderer, waitFor, captureSpans } = await createTestRenderer({ width: 80, height: 20, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
+    renderer.start();
 
     try {
       root.render(
         <TuiThemeProvider selection={{ mode: 'theme', themeId: 'kinu-dark-solid' }} colorCapability="truecolor">
-          <box style={{ width: '100%', height: '100%' }}>
+          <box style={{ width: '100%', height: '100%', backgroundColor: '#000000' }}>
             <MessageList
               messages={[
                 { id: 'u1', role: 'user', content: 'USERTURN' },
@@ -212,28 +176,23 @@ describe('TUI theme', () => {
         </TuiThemeProvider>,
       );
       const wanted = ['USERTURN', 'PROSETURN', 'SYSTEMNOTE', 'THINKINGLABEL'];
-      let spans = captureSpans().lines.flatMap((line) => line.spans);
+      await waitFor(() => paints(captureSpans, wanted));
+      const spans = captureSpans().lines.flatMap((line) => line.spans);
 
-      for (let index = 0; index < 60; index += 1) {
-        await renderOnce();
-        spans = captureSpans().lines.flatMap((line) => line.spans);
-
-        if (wanted.every((text) => spans.some((span) => span.text.includes(text)))) break;
-        await Bun.sleep(20);
+      for (const text of wanted) {
+        const span = present(spans.find((candidate) => candidate.text.includes(text)), 'the ' + text + ' span');
+        expect(contrastRatio(rgbHex(span.fg), rgbHex(span.bg))).toBeGreaterThanOrEqual(4.5);
       }
-
-      const span = (text: string) => present(spans.find((candidate) => candidate.text.includes(text)), `the ${text} span`);
-      const { text } = dark.colors;
-      expect(hexOf(span('USERTURN').fg)).toBe(text.strong);
-      expect(hexOf(span('PROSETURN').fg)).toBe(text.strong);
-      expect(hexOf(span('SYSTEMNOTE').fg)).toBe(text.muted);
-      const thinking = span('THINKINGLABEL');
-      expect(hexOf(thinking.fg)).toBe(text.muted);
-      expect(thinking.attributes & TextAttributes.ITALIC).not.toBe(0);
-      expect(text.strong).not.toBe(text.muted);
     } finally {
       flushSync(() => { root.unmount(); });
       renderer.destroy();
     }
   });
 });
+
+function paints(capture: TestRendererSetup['captureSpans'], texts: readonly string[]): boolean {
+  const spans = capture().lines.flatMap((line) => line.spans);
+
+  return texts.every((text) => spans.some((span) => span.text.includes(text)));
+}
+

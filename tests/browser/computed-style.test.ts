@@ -123,19 +123,8 @@ async function run(): Promise<Scenarios> {
       await page.waitForSelector(control);
       await page.click(control);
 
-      // Polled rather than awaited on a selector so a control that fails to
-      // switch reports the theme it stayed in, instead of failing every scenario
-      // in this file from `beforeAll` with a timeout.
-      const read = () => page.evaluate(() => ({
-        mode: document.documentElement.dataset.mode,
-      }));
-
-      let applied = await read();
-
-      for (let attempt = 0; attempt < 40 && applied.mode !== want; attempt += 1) {
-        await Bun.sleep(25);
-        applied = await read();
-      }
+      await page.waitForFunction((mode) => document.documentElement.dataset.mode === mode, {}, want);
+      const applied = await page.evaluate(() => ({ mode: document.documentElement.dataset.mode }));
 
       const audit = await page.evaluate(auditPage);
       await page.close();

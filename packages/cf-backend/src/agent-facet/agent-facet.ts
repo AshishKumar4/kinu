@@ -52,6 +52,7 @@ function sandboxHandle(sandbox: NimbusSandbox): NimbusSandboxHandle {
 
 export interface AgentFacetCalls {
   deliver(snapshot: AgentSnapshot, task: AgentTask): Promise<void>;
+  holds(turnId: string): Promise<boolean>;
   openTurn(snapshot: AgentSnapshot, opening: AgentOpening): Promise<void>;
   history(snapshot: AgentSnapshot, limit?: number): Promise<UIMessage[]>;
   historyPage(snapshot: AgentSnapshot, page: PositionPageRequest): Promise<ChatHistoryPage>;
@@ -73,6 +74,8 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   private database: AgentDatabase | undefined;
 
   private queue: Promise<void> = Promise.resolve();
+
+  private readonly held = new Set<string>();
 
   protected workspace(): NimbusSandboxHandle {
     this.box ??= sandboxHandle(Nimbus.fromSession((): NimbusSessionSurface => this.env.WORKSPACE.session())
@@ -102,7 +105,13 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
   async deliver(snapshot: AgentSnapshot, task: AgentTask): Promise<void> {
     const database = this.open(snapshot);
 
-    this.queue = queueAgentTask({ after: this.queue, database, workspace: this.env.WORKSPACE, providers: this.env, task });
+    this.held.add(task.sequenceId);
+    this.queue = queueAgentTask({ after: this.queue, database, workspace: this.env.WORKSPACE, providers: this.env, task })
+      .finally(() => { this.held.delete(task.sequenceId); });
+  }
+
+  async holds(turnId: string): Promise<boolean> {
+    return this.held.has(turnId);
   }
 
   async openTurn(snapshot: AgentSnapshot, opening: AgentOpening): Promise<void> {

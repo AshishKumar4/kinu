@@ -37,6 +37,7 @@ export interface PreparedAgentTurn {
   readonly birthContext?: readonly ModelMessage[];
   readonly model: string;
   readonly pricing: ModelPricing | null;
+  readonly accounts: Readonly<Record<string, string>>;
   readonly scaffold: StoredRow;
   readonly languages: readonly [string, ...string[]];
   readonly framing?: HeadInferenceDeps['framing'];

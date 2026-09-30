@@ -22,6 +22,9 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **A hired agent acts with the authority its turn resolved to.** A planner hired from a Build turn stays in Plan: the workspace, which runs every tool the agent calls, now enforces the resolved mode, and the turn's record says Plan.
+- **A turn survives its agent's isolate resetting on its own.** While a hired agent's turn is out, each workspace wake asks its isolate whether it still holds the turn; a reset one is recovered and re-run the way a workspace reset re-runs it, instead of holding its hirer until an unrelated reset.
+- **A hired agent's Codex and account routing match main's.** Its Codex calls with no connected machine go out through the owner's egress container, and it authenticates with the provider account the owner selected.
 - **Agent isolates use the deployment's compatibility settings.** The build reads Wrangler's resolved date and flags and serves them beside the agent bundle; native error fields survive on the deployment date without a second refusal transport. Workers AI fixtures use the real platform binding and fetch cancellation rather than RPC signal serialization.
 - **A hired agent whose isolate cannot load reports failure to its hirer.** The report names the agent and the load error instead of leaving its caller waiting forever.
 - **Fork counts include unloaded chat history.** The fork dialog counts through a loaded message's stored position, so gaps between pages no longer make a fork promise fewer messages than it copies. Reaching the first page does not imply every page is loaded.
@@ -35,6 +38,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 ### Changed
 
 - Concurrent CI reports wait for their full output to drain before returning a verdict, preserving the failure beyond the pipe's first 64 KiB. Typecheck coverage still enforces actual missing/stale membership and debt; duplicate lists of those declarations no longer pin a second copy.
+- Test hygiene now follows source paths held in constants and checks reconnect snapshots through real RPCs and the mounted client. Cosmetic prose, stylesheet and artwork pins are removed; public pages are checked for working local resources and theme preferences.
+- CLI and TUI fixtures wait for socket frames, stdout, pidfiles and rendered frames instead of fixed sleeps. Transcript checks keep chronology, sanitization and contrast without pinning palette hex values, gutter glyphs or decoration.
 - The deploy wave collects a gate that completed before Bash's next wait. Its cached exit status releases the gate's resource credits and still stops the deploy on failure.
 - Release CI fixtures record the opaque ladder row the deploy passes to its gate runner, rather than expanding it again in a locale-dependent shell. The device sandbox's GPU observer accepts a machine with no GPU nodes while still checking every node present.
 - The built-Worker heap probe uses the deployment's asset directory and native Workers AI transport. Its parked call receives SSE headers before waiting for tokens; the measured pre-header request cost is recorded separately, with all heap bounds unchanged.

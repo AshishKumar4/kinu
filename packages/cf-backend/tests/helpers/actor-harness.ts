@@ -99,6 +99,10 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     await this.settleBackgroundTasks();
   }
 
+  harnessResetAgentIsolate(storageKey: string): void {
+    this.harnessAgentFacets.reset(storageKey);
+  }
+
   protected override dropAgentFacet(storageKey: string): void {
     this.harnessAgentFacets.drop(storageKey);
   }

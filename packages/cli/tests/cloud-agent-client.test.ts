@@ -28,6 +28,12 @@ interface MockAgentServer {
 
 const servers: MockAgentServer[] = [];
 
+const pendingReads = new Map<() => void, () => void>();
+
+function observedState(): void {
+  for (const read of pendingReads.keys()) read();
+}
+
 const MENU_EFFORTS: ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh'];
 
 /** A model declaring its own reasoning levels, as the hub's menu lists it. */
@@ -35,6 +41,9 @@ const MENU_MODEL = { spec: 'openai/gpt-5.5', label: 'GPT-5.5', provider: 'openai
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((mock) => mock.close()));
+
+  for (const fail of pendingReads.values()) fail();
+  pendingReads.clear();
 });
 
 /** `getActivitySnapshot`'s spend as a deployment before 6de08b071 answers it: no `accounts`. */
@@ -70,6 +79,7 @@ function startMockAgentServer(options: ({
           name: decodeURIComponent(ticketMatch[1]),
           auth: req.headers.get('authorization'),
         });
+        observedState();
 
         if ('holdTicketAt' in options && ticketRequests.length === options.holdTicketAt) {
           await options.ticketGate;
@@ -89,6 +99,7 @@ function startMockAgentServer(options: ({
         const parsedArgs = v.safeParse(JsonArraySchema, request.args);
         const args = parsedArgs.success ? parsedArgs.output : [];
         rpcRequests.push({ method, args });
+        observedState();
 
         // Pages of two, so a client that reads only the first page fails.
         if (method === 'getChatHistoryPage') {
@@ -136,6 +147,7 @@ function startMockAgentServer(options: ({
 
       if (url.pathname.startsWith('/agents/orchestrator-agent/')) {
         connectUrls.push(url);
+        observedState();
 
         if (srv.upgrade(req)) return;
 
@@ -151,6 +163,7 @@ function startMockAgentServer(options: ({
         const answer = options.serve?.(frame) ?? null;
 
         frames.push(frame);
+        observedState();
 
         if (answer !== null) socket.send(JSON.stringify(answer));
       },
@@ -183,27 +196,45 @@ function startMockAgentServer(options: ({
   return mock;
 }
 
-async function waitFor<T>(probe: () => T | undefined, label: string, timeoutMs = 3_000): Promise<T> {
-  const deadline = Date.now() + timeoutMs;
+async function waitFor<T>(probe: () => T | undefined, label: string): Promise<T> {
+  const present = probe();
 
-  while (Date.now() < deadline) {
-    const value = probe();
+  if (present !== undefined) return present;
 
-    if (value !== undefined) return value;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
+  return new Promise<T>((resolve, reject) => {
+    const changed = (): void => {
+      let value: T | undefined;
 
-  throw new Error(`timed out waiting for ${label}`);
+      try { value = probe(); }
+      catch (cause) {
+        pendingReads.delete(changed);
+        reject(cause);
+
+        return;
+      }
+
+      if (value === undefined) return;
+      pendingReads.delete(changed);
+      resolve(value);
+    };
+
+    pendingReads.set(changed, () => { reject(new Error(label + ': the fixtures closed before the observation')); });
+    changed();
+  });
 }
 
 function newClient(mock: MockAgentServer): CloudAgentClient {
-  return new CloudAgentClient({
+  const client = new CloudAgentClient({
     origin: mock.origin,
     token: 'ptc_token',
     agentName: 'helios',
     cloudName: 'helios',
     transcript: { noTranscript: true },
   });
+
+  client.subscribe(() => { queueMicrotask(observedState); });
+
+  return client;
 }
 
 interface ChatRequestFrame {
@@ -1057,7 +1088,11 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
     await dropAndProbe(mock);
 
     mock.reply({ type: CHAT_MESSAGE_TYPES.STREAM_PENDING, id: request.id });
-    await Bun.sleep(50);
+    // A later RPC reply on this socket is a FIFO barrier: STREAM_PENDING was consumed before it.
+    const barrier = client.latestTakes();
+    const rpc = await waitFor(() => mock.frames.find((frame) => frame.type === 'rpc' && frame.method === 'latestAlternateTakes'), 'pending-stream barrier');
+    mock.reply({ type: 'rpc', id: rpc.id, success: true, done: true, result: null });
+    await barrier;
     expect(events.some((e) => e.type === 'turn-end')).toBe(false);
     expect(resumeAcks(mock)).toHaveLength(0);
 

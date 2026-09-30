@@ -28,12 +28,18 @@
 // does not. Which bound applies is the ladder's knowledge (`scriptDeadline` in
 // ladder.ts); this module only enforces one.
 //
+// Before the kill, the run is told: at three quarters of its bound of silence a line is appended to the file named
+// by `KINU_SILENCE_NOTICE`, so a run that can say what it is stuck on (the gallery harness's open waits) says it
+// while the log is still read. A run that does not watch the file loses nothing.
+//
 // A run that exits is also asked what it left running: every process it starts
 // inherits `KINU_RUN`, and one still carrying it after the exit fails the run
 // and is ended. Measured 2026-09-24: `bun test` of unit-pc-agent-exec left
 // nine 30 MB supervisors and a `sleep 20`, and the run reported success.
 
-import { readdirSync, statSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { tolerate } from '@kinu.run/core/obs';
 import { procFile, processStartTicks } from './process-owner';
 
@@ -43,6 +49,12 @@ export const KILL_AFTER_SECONDS = 5;
 /** The exit code a killed run reports: coreutils `timeout`'s own, so a
  *  reader sees one figure for "ended by the hang detector". */
 export const DEADLINE_EXIT_CODE = 124;
+
+/** Names the file a run is told through that its silence nears the bound; one line is appended per silent stretch. */
+export const SILENCE_NOTICE_ENV = 'KINU_SILENCE_NOTICE';
+
+/** How far into its bound of silence a run is told: late enough that a slow run is not, early enough to answer. */
+const NOTICE_AT = 0.75;
 
 /** The name every process a run starts inherits, so what outlives the run is found by it. */
 export const RUN_MARK = 'KINU_RUN';
@@ -220,12 +232,17 @@ export async function runUnderDeadline(run: DeadlineRun): Promise<DeadlineOutcom
   const stdio = run.stdio ?? 'inherit';
   const mark = crypto.randomUUID();
 
+  const noticeDir = mkdtempSync(join(tmpdir(), 'kinu-silence-'));
+  const notice = join(noticeDir, 'notice');
+
+  writeFileSync(notice, '');
+
   const child = Bun.spawn([...run.argv], {
     cwd: run.cwd,
     stdout: 'pipe',
     stderr: 'pipe',
     detached: true,
-    env: { ...(run.env ?? process.env), [RUN_MARK]: mark },
+    env: { ...(run.env ?? process.env), [RUN_MARK]: mark, [SILENCE_NOTICE_ENV]: notice },
   });
 
   const signalGroup = (signal: NodeJS.Signals): void => {
@@ -278,8 +295,18 @@ export async function runUnderDeadline(run: DeadlineRun): Promise<DeadlineOutcom
   const graceOver = Promise.withResolvers<void>();
 
   // Until the pipes close, not only until the child exits: a process holding one keeps the run open.
+  let noticed = -1;
+
   const watchdog = setInterval(() => {
-    if (killed || searching || performance.now() - Math.max(lastOutput, searchedAt) < run.seconds * 1000) return;
+    const silentFrom = Math.max(lastOutput, searchedAt);
+    const silent = performance.now() - silentFrom;
+
+    if (!killed && !searching && noticed !== silentFrom && silent >= run.seconds * 1000 * NOTICE_AT) {
+      noticed = silentFrom;
+      appendFileSync(notice, `silent ${(silent / 1000).toFixed(1)}s of ${String(run.seconds)}s\n`);
+    }
+
+    if (killed || searching || silent < run.seconds * 1000) return;
     killed = true;
     signalGroup('SIGTERM');
     setTimeout(() => {
@@ -301,6 +328,7 @@ export async function runUnderDeadline(run: DeadlineRun): Promise<DeadlineOutcom
   if (!drained) await Promise.all(readers.map(async (reader) => { await reader.cancel(); }));
   const [stdout, stderr] = await output;
   clearInterval(watchdog);
+  rmSync(noticeDir, { recursive: true, force: true });
 
   for (const release of passOn) release();
   longestSilence = Math.max(longestSilence, performance.now() - lastOutput);
