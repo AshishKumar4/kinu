@@ -524,6 +524,13 @@ export class ActorSession {
 
 
 
+  async retractCutStep(lease: ActorTurnLease, outputs: readonly string[]): Promise<void> {
+    await this.canonical.retract(outputs, this.preparingTurnFence(lease, 'a cut step is retracted by the turn preparing it'));
+    const opened = await this.canonical.materialize();
+    this.requireTurn(lease).context = opened;
+    this.messages.splice(0, this.messages.length, ...opened.messages);
+  }
+
   /** A recovered activation re-admitting the same turn writes its own run id under a new epoch. */
   beginTurn(
     ids: { readonly runId: string; readonly turnId: string },

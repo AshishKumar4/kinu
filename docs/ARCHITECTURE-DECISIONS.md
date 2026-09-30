@@ -280,6 +280,19 @@ had been moved last regardless of where it streamed. The one text part now
 stays where the last streamed text part stood: a turn answered after its
 calls keeps it last, and one that ended on its calls keeps its narration
 first; pinned by `unit-chat-transcript`.
+Amended 2026-09-30, reversing the join above: a continuation joins nothing. A
+step cut before it called a tool is sealed empty and leaves the working
+context, so the continuation writes it again whole and the answer is the
+continuation's alone; a step cut after a tool call keeps its text with that
+step, as before. Measured under both shapes. Before, on 33e05c13d8
+(`turn-continuation.test.ts`), the continuation request ended with the cut
+text as an assistant message, and in production (ironwood-cairn-6dbcb8de,
+2026-09-29, Workers AI glm-5.3, an OpenAI-compatible provider that takes no
+prefill) the model answered that message instead of continuing it ("My last
+few sends got clipped mid-stream") and two stored answers joined the two
+("...clipped before theServer"). After, the request ends with the person's
+message, and the cf parity record changes only there: the answer text and
+two later requests lose the cut text.
 
 C2. A Stop is the operator's act, not a failure of the turn. The transport
 sends the model stream's `abort` chunk and closes the request. It sends no
@@ -321,7 +334,7 @@ moment a fix made outside Kinu, such as a top-up, can show. The refusal is read
 off the provider's status anywhere in the cause chain (`providerRefusalCode`):
 the cf `sleep_time` body wraps the failure in its own step, and that wrapper's
 guessed code, read first, hid both the 404 an earlier fix ended and the 402.
-Decided 2026-09-30. Measured on ironwood-cairn-6dbcb8de (build 2f660875cc,
+Decided 2026-09-30, commit 55447ce6a7. Measured on ironwood-cairn-6dbcb8de (build 2f660875cc,
 Workers Observability in unsampled 15-minute windows): the fast tier answered
 402 to every background call from 17:18Z, and four owed rows, each on its own
 600 s ceiling, woke the object 18 times an hour from 18:19Z to 04:49Z with
@@ -331,7 +344,7 @@ activation re-sweeping the provider listing for 0.9-1.7 s). Pinned by
 
 T2. An actor owes at most one `sleep_time`: a newer row replaces the older
 owed ones, parked or pending, because the effect reads the recent window when
-it runs and records no input. Decided 2026-09-30 on the same measurement:
+it runs and records no input. Decided 2026-09-30, commit 55447ce6a7, on the same measurement:
 three settled turns left three rows over one window.
 
 T3. Every fixed-tier model call (fact compression, titling, reflection,
@@ -339,7 +352,8 @@ judging) walks the chain the profile configured for the tier with the turn's
 own policy (`FallbackRoute`, `providers/fallback-route.ts`), and nothing
 re-routes without one. A tier that still refuses for the owner to fix is said
 once in the Activity log, naming the tier and the model, and again only after
-it answers or the owner's model settings change. Decided 2026-09-30: the same
+it answers or the owner's model settings change. Decided 2026-09-30, commit
+55447ce6a7: the same
 workspace's chat ran on Workers AI while `MODEL_ROUTE_POLICY` held compaction,
 fast and reflection on the account profile's fast tier (opencode/glm-5.3), the
 background lanes called `route.model` alone, and the owner saw none of the
