@@ -2252,9 +2252,65 @@ processors online of which 2 are allowed, and a single thread about 20%
 slower at `zstd -15` (6.4 to 7.2 s for 160 MiB against 5.1 to 6.2 s). The
 pack is no faster with `-processors $(nproc)` (`pack09302106.json`) nor
 written into a directory with compression off (`chattr +m`, 12.3 to 15.8 s
-against 12.5 to 14.3 s, `pack09302116o.json`), so the rest of the doubling is
-not explained. The checkpoint is off the wake path; the owner
-decides whether it matters.
+against 12.5 to 14.3 s, `pack09302116o.json`), so the rest of the doubling was
+not explained then. The checkpoint is off the wake path.
+
+Where the time goes, measured the same evening (22:51 to 23:33 UTC).
+`bench-artifacts/side-by-side/phases.ts` samples the container every 200 ms
+without forking: the VM's CPU jiffies, the whole disks' sectors and busy
+time, the network bytes, Dirty and Writeback, and which of the flush's
+programs runs. Each interval is charged to the phase its opening sample
+names: the pack (`mksquashfs`), the upload (`devbox-publish.mjs`) and the
+rest of the flush (the sync's round trips to the box). Base commits of the
+same 224 MiB, as written (runs `sbs09302251opb`, `sbs09302257opb2`,
+`sbs09302308opub` and `sbs09302316othb` on the default policy;
+`sbs09302257npm2`, `sbs09302314npum2`, `sbs09302316nthm` and
+`sbs09302327nps1` on Medium):
+
+| | default policy, 7 boxes | Medium, 13 boxes |
+| --- | --- | --- |
+| Base commit, median | 59.4 s (33.0 to 63.8) | 66.1 s (50.2 to 93.2) |
+| Pack | 7.8 s, 14.1 CPU-s | 15.2 s, 29.7 CPU-s |
+| Upload, one 5 MiB part at a time | 44.7 s (19.9 to 51.8) | 43.5 s (35.0 to 71.7) |
+| Rest of the flush | 4.9 s | 3.9 s |
+
+The pack is where the policies differ, and it is the platform's CPU. It is
+CPU-bound on both (its two threads keep the two usable CPUs busy, and no
+disk wait runs under it) and does identical work, yet costs 2.1 times the
+CPU-seconds on Medium. The same pack with one thread and with two
+(`-processors 1` and `2`, runs `sbs09302316othb` and `sbs09302316nthm`): one
+thread 12.3 to 13.8 s on the default policy and 18.5 to 29.8 s on Medium,
+two threads 5.8 to 6.9 s and 10.4 to 14.9 s. The vCPUs are separate cores
+(`core_id` 0 and 1, no siblings) and both policies gain from the second
+thread, so a Medium vCPU does about half a default one's work, and it varies
+within one box (one thread took 20.2 s, then 29.8 s). The kernel reports
+steal under the pack on Medium, 0.7 to 7.6 s (median 1.9 s) against under
+0.1 s on the default policy, too little to account for the doubling alone.
+The shapes: the default policy's `instance_type`
+of 2 vCPU, 6,144 MiB and 8,000 MB, 2 CPUs online, an ext4 root, image
+`649439b5…`; Medium on `durable_object`, 2 vCPU, 8,192 MiB and 20,000 MB, 8
+CPUs online of which the process may use 2, a btrfs root with zstd:3, image
+`5db34cc1…`; both "AMD EPYC". This is recorded for the owner to raise with
+the Containers team. Medium's disk is slower too: a `sync` of 226 MiB of
+dirty data took 2.5 to 5.9 s there and 0.2 to 1.1 s on the default policy,
+and that writeback shows as iowait under the pack and the upload.
+
+The upload was ours. The publisher sent one 5 MiB part at a time, and its
+rate moved with the hour on both policies (10 MiB/s at 22:51, 3 to 6 MiB/s by
+23:16). The same 224 MiB, synced to disk, through the store gateway with one
+to eight parts in flight, median of 3 boxes each:
+
+| Parts in flight | 1 | 2 | 4 | 8 |
+| --- | --- | --- | --- | --- |
+| default policy | 37.9 s | 26.9 s | 21.5 s | 22.2 s |
+| Medium | 39.1 s | 23.6 s | 20.9 s | 20.9 s |
+
+The publisher now keeps four parts in flight (`PUBLISH_PARTS_IN_FLIGHT`;
+`tests/publish-script.test.ts`, red on e0dc4195a,
+`bench-artifacts/parallel-publish/`). On Medium in the same hour, 3 boxes
+each: the base commit took 62.5 s (61.4 to 76.9) with one part in flight
+(`sbs09302327nps1`) and 30.6 s (30.6 to 37.8) with four (`sbs09302323npf`,
+image `7e0f8359…`); its upload fell from 43.5 s to 17.3 s.
 
 D51. The platform's container snapshots are faster than the chain on every
 measure and cannot replace it: a snapshot never follows a new image, and it
@@ -2331,17 +2387,35 @@ and nothing is filed; an evicted object's successor reads the same row. A
 changed input asks again, as does a caller's explicit ask (`start()`,
 `attachNow()`), and an admitted start deletes the row. A terminal refusal
 over a container the box found running (D47's marker) is not stored: a later
-start gets a fresh container, which can come up clean. Kinu calls neither
-`start()` nor `attachNow()`, so there a refused start is asked again by a
-deploy that changes the image, or by a new size from the Environment card,
-`sandbox.resize` or the owner's default.
+start gets a fresh container, which can come up clean. `boxSize()` reports
+a recorded start refusal (`startRefused`).
+
+A refusal names only actions its reader can take. D47's text told every
+reader to call `attachNow()`, which Kinu never exposes, so devbox's terminal
+refusal now states the failure and names no action, under its own code
+(`refused`), and the host adds its readers' actions. Kinu's adapter maps it to
+`unavailable`, which `withSandboxRetry` never re-enters, and tells the agent
+to choose another size with `sandbox.resize(...)` or ask the owner. The
+owner's try-again is "Start again" on the sandbox's Environment card, shown
+only while a start refusal is recorded; it calls `startSandbox`, which runs
+the box's one start path and so clears the record. Agents get no retry: a
+start with the same inputs fails the same way, and a resize is theirs.
+
+A capacity answer is not terminal. The platform's "There is no container
+instance that can be provided to this Durable Object, try again later"
+(three times for Medium on the old path, `c-before.log`) is a plain error
+with no code, which the ladder classes `unclassified`, so it retries: the
+caller gets `pending` with the platform's words, a startup row is armed,
+nothing is recorded, and a successor starts the box once the platform has
+room (`tests/box-size.test.ts`).
 
 Red then green: `tests/box-size.test.ts`
 (`bench-artifacts/start-refusal/red.log`, `green.log`). After one refused
 start, two requests, a successor's `kickStartup()` and its request answer the
 refusal with one start, one incident and no startup row. An image the host
-names later, another size, another internet setting and `attachNow()` each
-start the box again.
+names later, another size, another internet setting, `attachNow()` and
+`start()` each start the box again. The agent's and the owner's words:
+`packages/cf-backend/tests/unit-sandbox-size-settings.test.ts`.
 
 ## Measurement contract for a strategy comparison
 

@@ -1685,7 +1685,7 @@ function isTransientContainerCreateError(error: string | undefined): boolean {
     .test(error ?? '');
 }
 
-/** Matches `Devbox.ensureReady()`'s own retry phrases; only the one naming `attachNow()` is a verdict.
+/** Matches `Devbox.ensureReady()`'s own retry phrases; anything else, a terminal refusal included, is a verdict.
  *  The reply carries no phase code, so re-armability cannot be inferred from one. */
 function isRearmableStartupRefusal(error: string | undefined): boolean {
   return /a startup is armed, so ask again|a retry is already under way/i.test(error ?? '');

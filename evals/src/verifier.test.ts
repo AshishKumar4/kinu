@@ -19,6 +19,9 @@ function session(methods: Record<string, (input: JsonValue) => JsonValue>): Veri
     },
     readFile: () => Promise.resolve(''),
     writeFile: () => Promise.resolve(),
+    workspaceWork: () => Promise.reject(new Error('no work board here')),
+    inspect: () => Promise.reject(new Error('no inspector here')),
+    exposedPorts: () => Promise.resolve([]),
   };
 }
 

@@ -65,7 +65,7 @@ describe('a trial\'s evidence', () => {
 
     const directory = join(scratchDir('eval-evidence'), 'trial-2');
 
-    writeEvidence(directory, { run: RUN, verdict: { status: 'failed', durationMs: 60_000 }, events: [], workspace: gathered });
+    writeEvidence(directory, { run: RUN, verdict: { status: 'failed', durationMs: 60_000 }, events: [], workspace: gathered, timeline: [] });
 
     expect(readFileSync(join(directory, 'files/slates/exchange/server.ts'), 'utf8')).toBe('export class Slate {}\n');
     expect(readFileSync(join(directory, 'files/home/main/SOUL.md'), 'utf8')).toBe('Fernhill Bakery.');
@@ -80,16 +80,31 @@ describe('a trial\'s evidence', () => {
     expect(readFileSync(join(directory, 'transcript.md'), 'utf8')).toContain('order-book \u00b7 test/model \u00b7 product \u00b7 trial 2 \u2014 failed');
   });
 
-  test('a workspace that could not be read still leaves the transcript and the ledger, and says why', () => {
+  test('a data read that resets the workspace keeps the files, the slates, the transcript and the ledger, and says why', async () => {
+    // Measured 2026-09-30 on kinu.run: the request-logs reads reset the workspace, and all ten trials lost their files.
+    const served = workspace({ '/home/main/logs/2027-06-01.log': 'GET /api 200 3ms FRA\n', '/slates/logs/server.ts': 'export class Slate {}\n' });
+
+    const reset: EvidenceSession = {
+      ...served,
+      slateOp: (operation) => v.is(v.object({ op: v.literal('call') }), operation)
+        ? Promise.reject(new Error('the workspace socket closed (code 1006, Connection ended)'))
+        : served.slateOp(operation),
+    };
+
+    const gathered = await gatherEvidence(reset, async (call) => { await call('logs', 'days'); });
     const directory = join(scratchDir('eval-evidence'), 'trial-1');
 
     writeEvidence(directory, {
       run: RUN, verdict: { status: 'failed', durationMs: 1 },
       events: [{ runId: 'run-1', eventIndex: 1, timestamp: '2026-09-26T00:00:00.000Z', type: 'run_start', agentId: 'root' }],
-      workspace: { unread: 'listSlates did not answer' },
+      workspace: gathered, timeline: [],
     });
 
-    expect(readFileSync(join(directory, 'workspace.txt'), 'utf8')).toContain('listSlates did not answer');
+    expect(readFileSync(join(directory, 'files/home/main/logs/2027-06-01.log'), 'utf8')).toBe('GET /api 200 3ms FRA\n');
+    expect(readFileSync(join(directory, 'files/slates/logs/server.ts'), 'utf8')).toBe('export class Slate {}\n');
+    expect(existsSync(join(directory, 'slates.json'))).toBe(true);
+    expect(readFileSync(join(directory, 'workspace.txt'), 'utf8')).toContain('data: ');
+    expect(readFileSync(join(directory, 'workspace.txt'), 'utf8')).toContain('code 1006');
     expect(JSON.parse(readFileSync(join(directory, 'ledger.jsonl'), 'utf8'))).toMatchObject({ type: 'run_start', runId: 'run-1' });
     expect(existsSync(join(directory, 'transcript.md'))).toBe(true);
   });

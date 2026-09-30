@@ -3,13 +3,14 @@
 // `sandbox.resize` through the adapter.
 import './helpers/ui-module-globals';
 import { describe, expect, test } from 'bun:test';
+import { createSandboxExecutor } from '@kinu.run/core';
 import { DevboxError } from '@kinu.run/devbox';
 import type { AuthIdentity } from '../src/auth/session';
 import type { KinuDevbox } from '../src/kinu-devbox';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from '../src/sandbox-size';
-import { sandboxSizeText, workspaceSizeNote, workspaceSizeOptions } from '../src/lib/sandbox-size-text';
+import { sandboxSizeText, startRefusedNote, workspaceSizeNote, workspaceSizeOptions } from '../src/lib/sandbox-size-text';
 import { settingsSection } from '../src/components/SettingsRail';
 import { serveFamily } from './helpers/api';
 import { unreachableNamespace, workerContext } from './helpers/bindings';
@@ -83,14 +84,14 @@ describe('what the owner reads', () => {
   });
 
   const NOTES = [
-    { name: 'a sandbox running at its size says nothing more', state: { account: null, chosen: null, size: 'medium', running: 'medium' }, pending: false, says: null },
-    { name: 'a stopped sandbox says nothing more', state: { account: null, chosen: 'large', size: 'large', running: null }, pending: false, says: null },
+    { name: 'a sandbox running at its size says nothing more', state: { account: null, chosen: null, size: 'medium', running: 'medium', startRefused: null }, pending: false, says: null },
+    { name: 'a stopped sandbox says nothing more', state: { account: null, chosen: 'large', size: 'large', running: null, startRefused: null }, pending: false, says: null },
     { name: 'a sandbox still running at an older size says when it changes',
-      state: { account: 'small', chosen: null, size: 'small', running: 'medium' }, pending: false,
+      state: { account: 'small', chosen: null, size: 'small', running: 'medium', startRefused: null }, pending: false,
       says: 'Runs at Medium until it next starts, then at Small.' },
-    { name: 'a change to a running sandbox restarts it', state: { account: null, chosen: null, size: 'medium', running: 'medium' }, pending: true,
+    { name: 'a change to a running sandbox restarts it', state: { account: null, chosen: null, size: 'medium', running: 'medium', startRefused: null }, pending: true,
       says: 'Restarting at the new size…' },
-    { name: 'a change to a stopped sandbox only saves', state: { account: null, chosen: null, size: 'medium', running: null }, pending: true,
+    { name: 'a change to a stopped sandbox only saves', state: { account: null, chosen: null, size: 'medium', running: null, startRefused: null }, pending: true,
       says: 'Saving…' },
   ] as const;
 
@@ -99,6 +100,11 @@ describe('what the owner reads', () => {
       expect(workspaceSizeNote(state, pending)).toBe(says);
     });
   }
+
+  test('a start refused for good names the actions the card offers', () => {
+    expect(startRefusedNote('[permanent -> refuse] no image to start'))
+      .toBe('The sandbox did not start: [permanent -> refuse] no image to start. It stays stopped until you start it again or choose another size.');
+  });
 
   test('User settings has a Sandbox section of its own', () => {
     expect(settingsSection('#sandbox')).toBe('sandbox');
@@ -122,6 +128,31 @@ describe('sandbox.resize through the adapter', () => {
 
     expect({ resized: await handle.resize('small'), steps })
       .toEqual({ resized: { kind: 'recorded', size: 'small' }, steps: ['configured', 'resize small'] });
+  });
+
+  // Review 2026-09-30: the refusal told the agent to call attachNow(), which Kinu never exposes.
+  test('a terminal refusal reaches the agent naming only what it can do, and is not retried', async () => {
+    let asked = 0;
+    const refusal = 'this devbox has no attached work directory: [permanent -> refuse] no image to start. That failure is terminal, so nothing retries it.';
+
+    const box: KinuDevbox = Object.create({
+      resolveReadiness: async () => {
+        asked += 1;
+        throw new DevboxError('refused', refusal);
+      },
+    });
+
+    const refused = await createSandboxExecutor(adaptCloudflareSandbox(box, async () => {}, null)).tools.readFile?.execute('/workspace/a.txt');
+
+    expect({ refused, asked }).toMatchObject({
+      refused: {
+        reason: 'unavailable',
+        error: 'sandbox readFile /workspace/a.txt: refused until something changes (choose another size with sandbox.resize(...), '
+          + `or ask the owner to start the sandbox again): ${refusal}`,
+      },
+      asked: 1,
+    });
+    expect(JSON.stringify(refused)).not.toContain('attachNow');
   });
 
   test('a size devbox does not know is refused as bad input', async () => {

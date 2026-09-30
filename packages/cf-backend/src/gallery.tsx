@@ -1063,7 +1063,7 @@ const NO_HEAD_ACTIVITY: ReadonlyMap<string, number> = new Map();
  * Non-agent sockets (vite HMR) fall through to the real WebSocket.
  */
 const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
-  getSandboxSize: { account: null, chosen: null, size: "medium", running: "medium" },
+  getSandboxSize: { account: null, chosen: null, size: "medium", running: "medium", startRefused: null },
   getWorkspaceSnapshot: {
     status: {
       id: "agent_01j9x7q2m4checkoutfixes", name: "checkout-coupon-bug-9935d3",

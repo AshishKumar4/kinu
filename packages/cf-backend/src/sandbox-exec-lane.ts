@@ -27,7 +27,11 @@ const DEVBOX_FAILURE_CODES: Readonly<Record<DevboxErrorCode, ErrorCode>> = {
   cancelled: 'cancelled', missing: 'missing', file: 'io', process: 'io',
   'start-overrun': 'timeout', 'start-interrupted': 'unavailable', 'container-changed': 'unavailable',
   'layer-unreadable': 'io', 'chain-advanced': 'io', 'delta-namespace': 'io', 'mount-marker': 'unsupported',
+  refused: 'unavailable',
 };
+
+/** A terminal refusal names what its reader can do; the owner's own is on the Environment card (D52). */
+const REFUSED_NEXT = 'refused until something changes (choose another size with sandbox.resize(...), or ask the owner to start the sandbox again)';
 
 /** The one conversion from the standalone library's failures to the application's channel. An
  *  unclassified failure, a transport one included, is `io`: `unavailable` is a verdict
@@ -38,9 +42,9 @@ function fromDevbox(thrown: { readonly cause: unknown }): KinuError {
   if (cause instanceof KinuError) return cause;
   const failure = devboxFailure(thrown);
 
-  return failure === undefined
-    ? new KinuError(classifyErrorCode(thrown) ?? 'io', renderThrownChain(thrown), { cause })
-    : new KinuError(DEVBOX_FAILURE_CODES[failure.code], failure.message, { cause });
+  if (failure === undefined) return new KinuError(classifyErrorCode(thrown) ?? 'io', renderThrownChain(thrown), { cause });
+
+  return new KinuError(DEVBOX_FAILURE_CODES[failure.code], failure.code === 'refused' ? `${REFUSED_NEXT}: ${failure.message}` : failure.message, { cause });
 }
 
 function callDevbox<A>(run: () => PromiseLike<A>): Effect.Effect<A, KinuError> {
