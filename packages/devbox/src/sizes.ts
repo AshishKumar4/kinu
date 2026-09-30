@@ -2,7 +2,7 @@ import * as v from 'valibot';
 import type { CheckpointOutcome } from './storage';
 
 /** Smallest first; a box stores the key (D50). */
-const BOX_SIZES = {
+export const BOX_SIZES = {
   small: { label: 'Small', vcpu: 1, memoryMib: 4_096, diskMb: 20_000 },
   medium: { label: 'Medium', vcpu: 2, memoryMib: 8_192, diskMb: 20_000 },
   large: { label: 'Large', vcpu: 4, memoryMib: 12_288, diskMb: 20_000 },

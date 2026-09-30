@@ -4,6 +4,7 @@ import * as v from 'valibot';
 
 import type { RestorePhase } from './durability/contracts';
 import type { RecoveryRow, RecoveryStage } from './lifecycle';
+import { BoxSizeSchema, type BoxSize } from './sizes';
 import type { StoredValue } from './storage';
 
 /** One value per container generation, so a superseded attempt cannot leave readiness and
@@ -33,6 +34,23 @@ export interface RestoreStatus {
 export function terminalRefusal(reason: string): string {
   return `this devbox has no attached work directory: ${reason}. `
     + 'That recovery class is terminal: call attachNow() to attempt the attach again.';
+}
+
+export interface StartInputs {
+  readonly image: string;
+  readonly size: BoxSize;
+  readonly internet: boolean;
+}
+
+const StartRefusalSchema = v.strictObject({ reason: v.string(), image: v.string(), size: BoxSizeSchema, internet: v.boolean() });
+
+export function refusedStart(stored: StoredValue, inputs: StartInputs): string | undefined {
+  const row = v.safeParse(StartRefusalSchema, stored);
+
+  if (!row.success) return undefined;
+  const { reason, image, size, internet } = row.output;
+
+  return image === inputs.image && size === inputs.size && internet === inputs.internet ? reason : undefined;
 }
 
 /** Adopted only beside a container boot id that still names this instance, so a row never

@@ -256,6 +256,8 @@ import {
 } from "./sandbox-lifecycle";
 
 import type { RestoreStatus } from "@kinu.run/devbox";
+import type { BoxSize } from "@kinu.run/devbox/sizes";
+import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY, type SandboxSizeState } from "./sandbox-size";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import type { ExposedPortList } from "@kinu.run/core";
@@ -4740,6 +4742,31 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   @callable() async listMounts() {
     return this.rt.executionRouter ? listEnvironments(this.rt.executionRouter) : [];
+  }
+
+  @callable() async getSandboxSize(): Promise<SandboxSizeState | null> {
+    const box = this.env.KinuDevbox?.getByName(sandboxIdForWorkspace(this.name));
+
+    if (box === undefined) return null;
+    const [account, size] = await Promise.all([this.accountSandboxSize(), box.boxSize()]);
+
+    return { account, chosen: size.chosen ?? null, size: size.size, running: size.running ?? null };
+  }
+
+  @callable() async resizeSandbox(size: string | null): Promise<SandboxSizeState | null> {
+    const box = this.env.KinuDevbox?.getByName(sandboxIdForWorkspace(this.name));
+
+    if (box === undefined) return null;
+    await box.useDefaultSize(await this.accountSandboxSize());
+    await box.resize(size);
+
+    return await this.getSandboxSize();
+  }
+
+  private async accountSandboxSize(): Promise<BoxSize | null> {
+    const owner = this.getOwnerUserDO();
+
+    return owner === null ? null : accountSandboxSize(await owner.getConfig(await this.userCaller(), SANDBOX_SIZE_CONFIG_KEY));
   }
 
   /** Browser-only; delegates to the same orchestration policy as the model's agents tool. */

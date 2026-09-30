@@ -34,6 +34,8 @@ export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
 import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { kinuEgressParams } from "./egress/configure";
+import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE, type BoxSize } from "@kinu.run/devbox/sizes";
+import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from "./sandbox-size";
 import { driveBound, tenantDrive } from "./drive/tenant";
 import { adaptCloudflareSandbox } from "./sandbox-exec-lane"
 import { previewHostSuffix } from "@kinu.run/core";
@@ -116,6 +118,7 @@ export interface ActorRuntimeIdentity {
 
 interface RuntimeUserDOClient extends UserCredentialClient, DeviceHubClient {
   getDeviceFileView(caller: UserCaller, agentName: string, device?: string): Promise<{ scope: DeviceFileScope }>;
+  getConfig(caller: UserCaller, key: string): Promise<string | null>;
 }
 
 interface RuntimeUserDONamespace {
@@ -150,6 +153,17 @@ async function listOwnerEgressVault(
 interface EgressVaultClient {
   listEgressSecrets(caller: UserCaller): Promise<readonly EgressSecretBinding[]>;
 }
+
+async function ownerSandboxSize(env: Env, actor: ActorRuntimeIdentity): Promise<BoxSize | null> {
+  const owner = userDOStubFor(env, actor);
+
+  return owner === null ? null : accountSandboxSize(await owner.getConfig(await ownerCaller(env), SANDBOX_SIZE_CONFIG_KEY));
+}
+
+const SANDBOX_SIZES = {
+  sizes: BOX_SIZE_ORDER.map((size) => ({ size, ...BOX_SIZES[size] })),
+  defaultSize: DEFAULT_BOX_SIZE,
+};
 
 async function userCallerFor(actor: ActorRuntimeIdentity): Promise<UserCaller> {
   const workspaceToken = actor.capabilityToken();
@@ -397,6 +411,13 @@ export function createCFRuntime(
           vault: await listOwnerEgressVault(env, actor),
           grants: memoryConfig.getShellApprovalGrants(),
         }));
+        // Unread, the box keeps its last default.
+        const [accountSize] = await Promise.allSettled([ownerSandboxSize(env, actor)]);
+
+        if (accountSize.status === 'fulfilled') await sdk.useDefaultSize(accountSize.value);
+        else diagnostics.failure('sandbox.account_size_unread', toKinuError({
+          doing: "reading the owner's sandbox size", cause: accountSize.reason, otherwise: 'unavailable',
+        }), { sandboxId });
       },
       // The edge proves a preview hostname from `AUTH_KV` without creating the per-name DO.
       env.AUTH_KV ? sandboxPreviewExposures(env.AUTH_KV, sandboxId) : null,
@@ -404,7 +425,7 @@ export function createCFRuntime(
 
       sandboxHandle = handle;
       executionRouter.register(createSandboxExecutor(handle, previewSuffix,
-        () => hooks.liveReadsMoved?.(['getExecutors', 'getToolDescriptions', 'getExposedPorts'])));
+        () => hooks.liveReadsMoved?.(['getExecutors', 'getToolDescriptions', 'getExposedPorts']), SANDBOX_SIZES));
       diagnostics.event('sandbox.executor_registered', {
         sandboxId,
         previews: previewSuffix ?? '',
