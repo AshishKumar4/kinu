@@ -1172,6 +1172,21 @@ with the Bash wave. deploy.test.ts now proves the boundary deploy.sh owns (the
 phases in order, the options it passes, the stop on a red phase) against a
 stub ladder, and ladder.test.ts proves the admission.
 
+L17. The hammer bounds each run by its silence, as every gate is bounded, and
+never by a wall deadline. Decided 2026-09-30. Each run had 440 s
+divided by the run count, 73.3 s, a budget sized to fit a wall `timeout` the
+deploy runner once wrapped every gate in. The cf-backend suite's contended runs
+had grown from 44.6-60.1 s on 2026-09-26 to 71 s. Alone on the box, five of six
+runs were killed at 73.3 s with 2,460 to 3,616 of 3,624 tests passed and not
+one failing, and the run allowed to finish passed all 3,624 in 71.1 s. That
+wall deadline read slow as hung. Now each run goes through `runUnderDeadline`
+with the suite row's silence bound. Its processes are ended and named when it
+leaves any. It prints one line as it ends (pass, fail, seconds and the failing
+tests), so the gate's own row bound holds a hung hammer. Its burners are
+spawned per run and end with it. Each also exits when its pipe from the gate
+closes, so none outlives a SIGKILLed gate. No budget or run length replaces the
+73.3 s.
+
 ## Providers
 
 P1. The ChatGPT plan is Sign in with ChatGPT's open-source token sharing

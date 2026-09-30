@@ -15,9 +15,12 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import * as v from 'valibot';
 
 import {
-  DEFAULT_RUNS, HAMMER_SUITE, artifactPath, measuredFiles, reportedCounts, spawnContention,
+  DEFAULT_RUNS, HAMMER_SUITE, artifactPath, failingTests, hammerOnce, measuredFiles, reportedCounts,
 } from './hammer';
 import { claims, LADDER } from './ladder';
 import { trackedFiles } from './sources';
@@ -85,6 +88,13 @@ describe('what a run REPORTED, read from bun\'s own output', () => {
     expect(reportedCounts(FAILING_OUTPUT)).toEqual({ passed: 2698, failed: 1 });
   });
 
+  test('a failing test is named with the file whose heading it follows', () => {
+    // What a run's line prints on a red run, so the name has to be the test bun failed and no other.
+    expect(failingTests(FAILING_OUTPUT))
+      .toEqual(['packages/cf-backend/tests/unit-zz-flake.test.ts > intermittently failing fixture > passes the first time']);
+    expect(failingTests(REAL_OUTPUT)).toEqual([]);
+  });
+
   test('a governed file absent from the measured set is visible in both directions', () => {
     // The comparison the gate makes per run, over the two real shapes. A
     // governed file that reported nothing (it stopped being selected, or it
@@ -122,19 +132,74 @@ describe('the governed set is the ladder\'s, not the gate\'s own', () => {
   });
 });
 
-describe('contention is real, bounded, and released', () => {
-  test('the burners run and stop being ours when the handle is dropped', () => {
-    // A gate claiming to measure under load while spawning nothing would read
-    // green over the ordinary tier's conditions. Two burners for a moment, so
-    // the assertion is about the mechanism rather than about the box.
-    const burners = spawnContention(2, 2_000);
-    expect(burners.length).toBe(2);
+/** Whether `pid` is still a live process: a zombie is a process that has ended. */
+function running(pid: number): boolean {
+  let stat: string;
 
-    for (const burner of burners) burner.kill();
+  try {
+    stat = readFileSync(`/proc/${String(pid)}/stat`, 'utf8');
+  } catch (error) {
+    // Its /proc entry went with it, before the read or during it.
+    if (error instanceof Error && 'code' in error && (error.code === 'ENOENT' || error.code === 'ESRCH')) return false;
+    throw error;
+  }
 
-    // The spin is SELF-BOUNDED as well as killed, so a SIGKILLed gate cannot
-    // leave a machine at 100% forever; killing twice is safe.
-    for (const burner of burners) burner.kill();
+  return !/\) Z /u.test(stat);
+}
+
+describe('contention is real, and ends with the gate however the gate ends', () => {
+  // A SIGKILLed gate runs no cleanup of its own, so a burner that only ended when killed would spin on after it.
+  test('burners spin while the process that spawned them lives, and end when it is SIGKILLed', async () => {
+    // A real gate process, which stays alive until it is killed.
+    const parent = Bun.spawn([process.execPath, '-e', [
+      `import { spawnContention } from ${JSON.stringify(join(import.meta.dir, 'hammer.ts'))};`,
+      'console.log(JSON.stringify(spawnContention(2).map((burner) => burner.pid)));',
+      'await Bun.sleep(60_000);',
+    ].join('\n')], { stdout: 'pipe', stderr: 'inherit' });
+
+    const reader = parent.stdout.getReader();
+    const pids = v.parse(v.array(v.number()), JSON.parse(new TextDecoder().decode((await reader.read()).value)));
+
+    expect(pids).toHaveLength(2);
+    expect(pids.every(running)).toBe(true);
+
+    parent.kill('SIGKILL');
+
+    // The burners are the dead gate's orphans, not this process's children, so there is no exit of theirs to await.
+    // They hold the gate's output open, so its end is theirs: it comes once the last one has exited.
+    let drained = await reader.read();
+
+    while (!drained.done) drained = await reader.read();
+
+    expect(pids.filter(running)).toEqual([]);
+  });
+});
+
+describe('a run is ended by its silence, never by its length', () => {
+  // SLOW IS NOT HUNG. 2026-09-30: five of six runs under load were killed at a per-run wall deadline with not one
+  // failing test between them (2,460 to 3,616 of 3,624 passed); the run allowed to finish passed all 3,624. These
+  // runs are real processes on the real clock the hang detector reads, which no fake timer in this process drives.
+  test('a run that writes throughout is not killed for outlasting its bound', async () => {
+    const run = await hammerOnce(1, {
+      argv: [process.execPath, '-e', 'for (let line = 0; line < 25; line += 1) { console.log(line); await Bun.sleep(100); }'],
+      seconds: 1,
+      label: 'a slow run that writes',
+    });
+
+    expect(run.killed).toBe(false);
+    expect(run.exit).toBe(0);
+    expect(run.seconds).toBeGreaterThan(2);
+  });
+
+  test('a run that writes nothing for its bound is ended', async () => {
+    const run = await hammerOnce(1, {
+      argv: [process.execPath, '-e', 'console.log("started"); await Bun.sleep(30_000);'],
+      seconds: 1,
+      label: 'a silent run',
+    });
+
+    expect(run.killed).toBe(true);
+    expect(run.seconds).toBeLessThan(15);
   });
 });
 

@@ -2127,14 +2127,17 @@ export const LADDER: readonly Gate[] = [
       + 'fails for a reason unrelated to the change under test. It runs AFTER the source '
       + 'wave so a cheap source failure still fails first, and before the account gate.',
     tier: 'deploy',
-    // 6 runs x ~11s contended = 65.8s measured 2026-08-31 (24 threads, 12
-    // burners). Alone by construction — see its `phase` and `alone` below.
-    seconds: 66,
+    // 403.96 s measured 2026-09-30 (24 threads, 12 burners): six runs of 61.9 to
+    // 77.5 s, each 3,624 pass and 0 fail. The 1-minute load was 8.4 at the start,
+    // from other work on the box, so this wall is a loaded one. Alone by
+    // construction — see its `phase` and `alone` below.
+    seconds: 404,
     catches: 'a test that passes once on an idle box and fails when the machine is busy or '
       + 'when the suite runs again. Every other tier runs each suite ONCE and reads the exit '
       + 'code, which answers "does this pass" and cannot answer "does this pass reliably". '
-      + 'This runs `bun test --parallel=4 packages/cf-backend/` six times with nproc/2 CPU '
-      + 'burners alive throughout, keeps EVERY failing block in an artifact whose path is '
+      + 'This runs `bun test --parallel=4 packages/cf-backend/` six times, each run beside nproc/2 '
+      + 'CPU burners spawned for it and under the suite row\'s silence bound, so a slow run is never '
+      + 'read as a hung one. It prints one line per run, keeps EVERY failing block in an artifact whose path is '
       + 'printed on both paths, and fails on any failure — no retry, no quarantine list, no '
       + 'known-flake allowance, because a lane that retried until green converts the only '
       + 'evidence of a race into a slower green. It also holds the set it MEASURES equal to '
