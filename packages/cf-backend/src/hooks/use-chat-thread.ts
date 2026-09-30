@@ -21,6 +21,7 @@ export interface ChatHistory {
   readonly entries: readonly ChatHistoryEntry[];
   readonly loading: boolean;
   readonly error: string | null;
+  readonly errorRange: ReserveRange | null;
   readonly exhausted: boolean;
   readonly loadMore: (urgent?: boolean) => void;
   readonly read: (ask: ReserveAsk) => void;
@@ -108,6 +109,7 @@ export function useChatThread({
   ), CHAT_PAGE_SIZE);
 
   const { segments, busy, sizeFor, load, reset } = pages;
+  const reading = useRef<ReserveRange | null>(null);
 
   useEffect(() => {
     if (current.gaps > 0) reset();
@@ -124,10 +126,11 @@ export function useChatThread({
   }, [load, sizeFor, live.length]);
 
   const loadMore = useCallback((urgent = false) => {
-    if (!startable || busy()) return;
+    if (!startable || busy() || pages.error !== null) return;
     const first = segments[0];
 
     if (first === undefined) {
+      reading.current = null;
       readNewest(urgent);
 
       return;
@@ -136,11 +139,13 @@ export function useChatThread({
     if (first.start === 0) return;
     const size = sizeFor(urgent);
 
+    reading.current = null;
     load(size, { cursor: { before: first.start }, limit: size });
-  }, [startable, busy, segments, readNewest, sizeFor, load]);
+  }, [startable, busy, pages.error, segments, readNewest, sizeFor, load]);
 
   const read = useCallback((ask: ReserveAsk) => {
-    if (!startable || busy()) return;
+    if (!startable || busy() || pages.error !== null) return;
+    reading.current = ask;
 
     if (ask.from === null && (segments.length === 0 || ask.end === liveEdge)) {
       readNewest(ask.urgent);
@@ -152,7 +157,7 @@ export function useChatThread({
     const before = ask.from === null ? ask.end : Math.min(ask.end, ask.from + size);
 
     load(size, { cursor: { before }, limit: size });
-  }, [startable, busy, segments.length, liveEdge, readNewest, sizeFor, load]);
+  }, [startable, busy, pages.error, segments.length, liveEdge, readNewest, sizeFor, load]);
 
   // Minted once per entry, so a prepended page renders its own rows, not every row below.
   const minted = useRef(new WeakMap<ChatHistoryEntry, UIMessage>());
@@ -161,20 +166,23 @@ export function useChatThread({
 
   const restored = useMemo(() => {
     const seen = new Set<string>();
-    const rows: UIMessage[] = [];
 
-    for (const entry of entries) {
-      if (seen.has(entry.id)) continue;
-      seen.add(entry.id);
-      const row = minted.current.get(entry) ?? restoredRows([entry])[0];
+    return segments.map((segment) => {
+      const rows: UIMessage[] = [];
 
-      if (row === undefined) continue;
-      minted.current.set(entry, row);
-      rows.push(row);
-    }
+      for (const entry of segment.entries) {
+        if (seen.has(entry.id)) continue;
+        seen.add(entry.id);
+        const row = minted.current.get(entry) ?? restoredRows([entry])[0];
 
-    return rows;
-  }, [entries]);
+        if (row === undefined) continue;
+        minted.current.set(entry, row);
+        rows.push(row);
+      }
+
+      return rows;
+    });
+  }, [segments]);
 
   const positions = useMemo(() => new Map(entries.map((entry) => [entry.id, entry.position])), [entries]);
 
@@ -185,19 +193,24 @@ export function useChatThread({
     [liveIdsKey]);
 
   // The sources overlap by construction; the live copy wins because it carries parts the stored copy lost.
-  const olderRows = useMemo(
-    () => restored.filter((row) => !liveIds.has(row.id)),
+  const olderSegments = useMemo(
+    () => restored.map((rows) => rows.filter((row) => !liveIds.has(row.id))),
     [restored, liveIds]);
+
+  const olderRows = useMemo(() => olderSegments.flat(), [olderSegments]);
 
   const transcript = useMemo(
     () => olderRows.length === 0 ? live : [...olderRows, ...live],
     [olderRows, live]);
 
-  const olderFold = useMemo(() => extendTranscript(EMPTY_TRANSCRIPT_FOLD, olderRows), [olderRows]);
+  const olderFold = useMemo(() => olderSegments.reduce(
+    (fold, rows) => extendTranscript(fold, rows, false), EMPTY_TRANSCRIPT_FOLD), [olderSegments]);
+
+  const joinsLive = segments.length === 0 || segments.at(-1)?.end === Infinity;
 
   const thread = useMemo(
-    () => sealTranscript(extendTranscript(olderFold, live), steerRuns),
-    [olderFold, live, steerRuns]);
+    () => sealTranscript(extendTranscript(olderFold, live, joinsLive), steerRuns),
+    [olderFold, live, joinsLive, steerRuns]);
 
   const reserves = useMemo((): ChatReserves => {
     const first = segments[0];
@@ -237,6 +250,7 @@ export function useChatThread({
 
   const history: ChatHistory = {
     entries, loading: pages.loading, error: pages.error, exhausted: pages.exhausted,
+    errorRange: pages.error === null ? null : reading.current,
     loadMore, read, retry: pages.retry, reset,
   };
 

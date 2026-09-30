@@ -7,7 +7,7 @@
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { DELEGATION_MAX_DEPTH } from '@kinu.run/core';
-import { CHILD_ANSWER, HIRE_MISSION, NEST_RELAY, type HireObservation, type LogRow } from './hire-shapes';
+import { CHAIN_BOTTOM, CHILD_ANSWER, HIRE_MISSION, NEST_RELAY, type HireObservation, type LogRow } from './hire-shapes';
 
 /** Re-acquired per use: the id survives an eviction, a stub does not. */
 const probe = (workspace: string) => env.HIRE_PROBE.get(env.HIRE_PROBE.idFromName(workspace));
@@ -90,7 +90,8 @@ describe('hire', () => {
     const hired = observed.actors.filter((row) => row.hired);
 
     expect(hired).toHaveLength(DELEGATION_MAX_DEPTH);
-    expect(observed.reports.join(' ')).toContain(NEST_RELAY);
+    // Relayed up every level: the deepest helper's own answer reaches the root.
+    expect(observed.rootReports.join(' ')).toContain(CHAIN_BOTTOM);
   });
 
   it('dismissing a helper retires the task agent it hired, mid-turn', async () => {

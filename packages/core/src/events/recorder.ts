@@ -199,7 +199,7 @@ export interface ContextMeasureRow {
 }
 
 export interface ContextMeasures {
-  readonly provider: ContextMeasureRow | null;
+  readonly provider: (ContextMeasureRow & { readonly step: Extract<RunEvent, { type: 'step_finish' }> }) | null;
   readonly gate: (Omit<ContextMeasureRow, 'tokens'> & { readonly tokens: number | null; readonly contextWindow: number | null }) | null;
 }
 
@@ -679,10 +679,12 @@ export class RunEventRecorder {
   readContextMeasures(): ContextMeasures {
     this.actor.assertCurrent();
 
-    const provider = this.sql<{ tokens: number; ts: string; seq: number }>`
-      SELECT json_extract(payload, '$.usage.input') AS tokens, ts, rowid AS seq FROM run_events
+    const provider = this.sql<{ tokens: number; ts: string; seq: number; payload: string }>`
+      SELECT json_extract(payload, '$.usage.input') AS tokens, ts, rowid AS seq, payload FROM run_events
       WHERE actor_id = ${this.actorId} AND type = 'step_finish' AND json_extract(payload, '$.usage.input') IS NOT NULL
       ORDER BY ts DESC, rowid DESC LIMIT 1`[0];
+
+    const step = provider === undefined ? null : parseStoredRunEvent(provider.payload);
 
     const gate = this.sql<{ tokens: number | null; contextWindow: number | null; ts: string; seq: number }>`
       SELECT json_extract(payload, '$.tokens') AS tokens, json_extract(payload, '$.contextWindow') AS contextWindow, ts, rowid AS seq
@@ -690,7 +692,8 @@ export class RunEventRecorder {
       ORDER BY ts DESC, rowid DESC LIMIT 1`[0];
 
     return {
-      provider: provider === undefined ? null : { tokens: provider.tokens, at: provider.ts, seq: provider.seq },
+      provider: provider === undefined || step?.type !== 'step_finish'
+        ? null : { tokens: provider.tokens, at: provider.ts, seq: provider.seq, step },
       gate: gate === undefined ? null : { tokens: gate.tokens, contextWindow: gate.contextWindow, at: gate.ts, seq: gate.seq },
     };
   }

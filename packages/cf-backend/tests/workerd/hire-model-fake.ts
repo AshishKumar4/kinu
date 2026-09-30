@@ -7,7 +7,7 @@
 
 import * as v from 'valibot';
 import {
-  CHILD_ANSWER, HIRE_CHILD_MODEL, HIRE_DURABLE_MODEL, HIRE_MISSION, HIRE_ROOT_MODEL, NEST_MISSION, NEST_RELAY, REPORT_MARK,
+  CHAIN_BOTTOM, CHILD_ANSWER, HIRE_CHILD_MODEL, HIRE_DURABLE_MODEL, HIRE_MISSION, HIRE_ROOT_MODEL, NEST_MISSION, NEST_RELAY, REPORT_MARK,
   type ChildScript,
 } from './hire-shapes';
 
@@ -302,6 +302,9 @@ async function childLane(run: HireRun, body: OutboundBody, results: readonly str
   // `chain`: every helper hires one of its own, to the depth cap; the others nest one level.
   if (run.childScript !== 'answer' && run.childScript !== 'throw' && run.childScript !== 'park' && allUsers(body).includes(NEST_MISSION)) {
     if (onReport(body)) return textBody(model, `${NEST_RELAY} ${lastUser(body)}`.slice(0, 600));
+
+    // At the depth cap `hire` is not among this helper's actions: it is the bottom of the chain, so it answers.
+    if (results.some((result) => result.includes('"reason":"unsupported"') && result.includes('hire'))) return textBody(model, CHAIN_BOTTOM);
 
     if (results.length !== 0) return textBody(model, 'HELPER-WAITS');
 

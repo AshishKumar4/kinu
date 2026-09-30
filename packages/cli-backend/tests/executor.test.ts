@@ -81,12 +81,17 @@ describe('createSandboxedExecutor', () => {
   // A daemonized child holding the wrapper's stdio must not hold `kinu exec` open (file-backed stdio);
   // a hang outlives bun's 5s default test timeout and fails red.
   test('a daemonized grandchild does not hold the executor past exit', async () => {
+    const pid = join(scratchDir('executor-grandchild'), 'pid');
+
     const result = await createSandboxedExecutor().execute(
-      'const c = Bun.spawn(["sleep", "30"], { stdout: "inherit", stderr: "inherit" });\nc.unref();\n"done"',
+      'const c = Bun.spawn(["sleep", "30"], { stdout: "inherit", stderr: "inherit" });\nc.unref();\n'
+        + `await Bun.write(${JSON.stringify(pid)}, String(c.pid));\n"done"`,
       [],
     );
 
     expect(result).toEqual({ result: 'done' });
+    // The test ends what its command started, once the claim is checked.
+    process.kill(Number(readFileSync(pid, 'utf8')), 'SIGKILL');
   });
 
   // A side effect before a runtime throw must land once, not once per expression/statement form.

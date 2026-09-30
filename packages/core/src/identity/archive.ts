@@ -157,7 +157,7 @@ export interface ArchiveExportOptions {
   now?: number;
   /** Authoritative files outside `sql`; null declares a SQL-only workspace. */
   files?: ArchiveFileSource | null;
-  /** Agents whose rows live in databases of their own; absent when every actor's rows are in `sql`. */
+  /** Agents with databases of their own; absent when every actor's rows are in `sql`. */
   agents?: ArchiveAgentSource | null;
 }
 
@@ -181,7 +181,7 @@ interface ArchiveHeader {
   exported_at: number;
   /** The schema genesis of the Kinu that wrote it; an archive under another is refused by name. */
   schema_genesis?: string;
-  /** Agents whose rows live in databases of their own; each must close its section, or the archive is refused. */
+  /** Each agent must close its section, or the archive is refused. */
   agents?: string[];
 }
 
@@ -209,7 +209,7 @@ interface RowRecord {
   agent?: string;
 }
 
-/** An agent's section is complete: every row its own database holds for it was written above. */
+/** Closes an agent's section: every row its database holds was written above. */
 interface AgentRecord {
   t: 'agent';
   actor: string;
@@ -534,7 +534,6 @@ function agentTables(sql: SqlExec): SchemaObject[] {
     && sql.exec(`PRAGMA table_info(${quoteIdent(o.name)})`).toArray().some((column) => v.parse(v.object({ name: v.string() }), column).name === 'actor_id'));
 }
 
-/** One page of an agent's section: its rows, then (once `next` is null) the section's close. */
 export function readAgentArchivePage(sql: SqlExec, actorId: string, cursor: ArchiveSqlCursor | null, maxBytes: number): Promise<ArchiveAgentPage> {
   return settle(Effect.gen(function* () {
     const live = agentTables(sql);

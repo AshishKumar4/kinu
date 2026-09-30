@@ -249,7 +249,9 @@ export class HireAI extends WorkerEntrypoint {
 }
 
 const WireLogSchema = v.looseObject({
-  calls: v.array(v.looseObject({ toolResults: v.optional(v.array(v.unknown())), lastUser: v.optional(v.string()) })),
+  calls: v.array(v.looseObject({
+    toolResults: v.optional(v.array(v.unknown())), lastUser: v.optional(v.string()), tools: v.optional(v.array(v.string())),
+  })),
 });
 
 interface HireRunOptions {
@@ -394,19 +396,23 @@ export class HireProbeRoot extends Agent<ProbeRootEnv> {
 
     const toolResults: string[] = [];
     const reports: string[] = [];
+    const rootReports: string[] = [];
 
     for (const call of wire.calls) {
       for (const result of call.toolResults ?? []) {
         if (v.is(v.string(), result)) toolResults.push(result);
       }
 
-      if (call.lastUser?.includes(REPORT_MARK) === true) reports.push(call.lastUser);
+      if (call.lastUser?.includes(REPORT_MARK) !== true) continue;
+      reports.push(call.lastUser);
+
+      if (call.tools?.includes('report') !== true) rootReports.push(call.lastUser);
     }
 
     const transcript: string[] = [];
 
     for (const row of roster) transcript.push(...await target.childTranscript(row.name));
 
-    return { rootActorId, roster, actors, log, turns, toolResults, reports, transcript };
+    return { rootActorId, roster, actors, log, turns, toolResults, reports, rootReports, transcript };
   }
 }

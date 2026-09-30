@@ -30,14 +30,10 @@ export interface SubordinateInspectionAccess {
   /** Membership authority: which actors exist, and whose children they are. */
   readonly directory: WorkspaceActorDirectory;
   readonly transcriptFor: (actor: ActorHandle) => SessionTranscriptReader;
-  /**
-   * An actor whose conversation and run ledger live in its own database (an agent in its own isolate) answers
-   * those views there. Absent: every view reads `sql`.
-   */
+  /** Answers an agent's chat and run views from its own database; absent: every view reads `sql`. */
   readonly ownRows?: (actor: ActorHandle, request: AgentOwnInspection) => Promise<SubordinateInspectionResult>;
 }
 
-/** The views an agent's own database answers: its chat and its run ledger. */
 export type AgentOwnInspection = Extract<SubordinateInspectionRequest, { readonly view: 'history' | 'runs' | 'events' }>;
 
 function ownView(request: SubordinateInspectionRequest): request is AgentOwnInspection {
