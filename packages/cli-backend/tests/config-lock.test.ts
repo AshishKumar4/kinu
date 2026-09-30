@@ -10,7 +10,7 @@ import {
 
 /**
  * Lock ownership rules in-process; cross-process proofs live in packages/cli/tests/config-lock.test.ts and
- * codex-refresh-processes.test.ts. Breakability is process identity (pid + /proc start time), never duration.
+ * chatgpt-refresh-processes.test.ts. Breakability is process identity (pid + /proc start time), never duration.
  */
 describe('the config lock is held by a process, not by a path', () => {
   function scratchConfig() {

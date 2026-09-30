@@ -7,8 +7,8 @@ import { Database } from 'bun:sqlite';
 import {
   ANTHROPIC_BASE_URL,
   ANTHROPIC_DEFAULT_MODEL,
-  CODEX_BASE_URL,
-  CODEX_DEFAULT_MODEL,
+  CHATGPT_BASE_URL,
+  CHATGPT_DEFAULT_MODEL,
   DEFAULT_WORKERS_AI_MODEL_ID,
   WORKERS_AI_PROVIDER_ID, WORKERS_AI_MODEL_ID_PREFIX,
   OPENAI_BASE_URL,
@@ -160,7 +160,7 @@ const KinuConfigSchema = v.object({
     openai: v.optional(LocalApiKeyProviderSchema),
     anthropic: v.optional(LocalApiKeyProviderSchema),
     openrouter: v.optional(LocalApiKeyProviderSchema),
-    codex: v.optional(v.object({
+    chatgpt: v.optional(v.object({
       ...LocalOAuthSessionSchema.entries,
       accounts: v.optional(v.record(v.string(), LocalOAuthSessionSchema)),
     })),
@@ -782,7 +782,6 @@ export function resolveProviderCredentials(): LocalProviderCredentials {
     openaiApiKey: process.env.OPENAI_API_KEY ?? file.providers?.openai?.apiKey,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? file.providers?.anthropic?.apiKey,
     openrouterApiKey: process.env.OPENROUTER_API_KEY ?? file.providers?.openrouter?.apiKey,
-    codexAccessToken: process.env.CODEX_ACCESS_TOKEN,
     openaiCompat: file.providers?.openaiCompat,
     apiKeyAccounts: localApiKeyAccounts(file),
   };
@@ -813,15 +812,12 @@ export function resolveMcpServers(): Record<string, McpServerConfig> {
 function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string | undefined): LLMProviderConfig | null {
   const providerModel = model ?? preferredModelFromCredentials(file);
 
-  const hasCodexCredential = [process.env.CODEX_ACCESS_TOKEN, file.providers?.codex?.accessToken, file.providers?.codex?.refreshToken]
-    .some((token) => token !== undefined && token !== '');
-
-  if (hasCodexCredential && (!providerModel || providerModel.startsWith('codex/') || !providerModel.includes('/'))) {
+  if (file.providers?.chatgpt?.accessToken !== undefined && (!providerModel || providerModel.startsWith('chatgpt/') || !providerModel.includes('/'))) {
     return {
-      name: 'codex',
-      baseURL: CODEX_BASE_URL,
+      name: 'chatgpt',
+      baseURL: CHATGPT_BASE_URL,
       headers: {},
-      model: stripProvider(providerModel ?? CODEX_DEFAULT_MODEL, 'codex'),
+      model: stripProvider(providerModel ?? CHATGPT_DEFAULT_MODEL, 'chatgpt'),
     };
   }
 
@@ -917,7 +913,7 @@ function registryFamilyMarker(model: string | undefined): LLMProviderConfig | nu
 }
 
 function preferredModelFromCredentials(file: KinuConfig): string | undefined {
-  if (file.providers?.codex?.accessToken || file.providers?.codex?.refreshToken || process.env.CODEX_ACCESS_TOKEN) return `codex/${CODEX_DEFAULT_MODEL}`;
+  if (file.providers?.chatgpt?.accessToken) return `chatgpt/${CHATGPT_DEFAULT_MODEL}`;
 
   if (file.providers?.claude?.accessToken) return `claude/${ANTHROPIC_DEFAULT_MODEL}`;
 

@@ -2,7 +2,7 @@ import { Effect } from 'effect';
 import {
   activeOperationProfile, asFetchFunction, WORKSPACE_RUN_ID, abortCause, EGRESS_REFUSAL_HEADER, EGRESS_ROUTE_HEADER, refusalError,
   isDeviceNotConnectedError, isDeviceUnknownMethodError, DEVICE_UNRESPONSIVE,
-  type ActorReference, type OperationProfile, type UserCaller,
+  type ActorReference, type OperationProfile, type RelayedProvider, type UserCaller,
 } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, renderThrownChain, settle, toKinuError } from '@kinu.run/core/obs';
 import type { CodexEgress } from './codex-egress';
@@ -15,17 +15,22 @@ export interface CodexEgressNamespace<Id = DurableObjectId> {
   };
 }
 
-export interface CodexRelayHub {
-  codexRelayDevice(caller: UserCaller): Promise<{ readonly id: string; readonly label: string } | null>;
-  relayCodex(caller: UserCaller, deviceId: string, callId: string, request: Request): Promise<Response>;
-  cancelCodexRelay(caller: UserCaller, callId: string): Promise<void>;
+/** The account's side of the device relay: which machine carries a provider, and one relayed call. */
+export interface ModelRelayHub {
+  relayDevice(caller: UserCaller, provider: RelayedProvider): Promise<{ readonly id: string; readonly label: string } | null>;
+  relayModelCall(caller: UserCaller, deviceId: string, callId: string, request: Request): Promise<Response>;
+  cancelModelRelay(caller: UserCaller, callId: string): Promise<void>;
 }
 
-type CodexRoute = { readonly kind: 'device'; readonly id: string; readonly label: string } | { readonly kind: 'container' };
+type DeviceRoute = { readonly kind: 'device'; readonly id: string; readonly label: string } | { readonly kind: 'container' } | { readonly kind: 'none' };
 
-const CONTAINER: CodexRoute = { kind: 'container' };
+const CONTAINER: DeviceRoute = { kind: 'container' };
 
-const PINNED = new Map<string, { readonly turn: string; readonly route: Promise<CodexRoute> }>();
+const NONE: DeviceRoute = { kind: 'none' };
+
+const PROVIDER_NAMES: Readonly<Record<RelayedProvider, string>> = { codex: 'Codex', chatgpt: 'ChatGPT' };
+
+const PINNED = new Map<string, { readonly turn: string; readonly route: Promise<DeviceRoute> }>();
 
 interface TurnKey {
   readonly actor: string;
@@ -33,11 +38,13 @@ interface TurnKey {
 }
 
 /** Only live-turn calls pin. */
-function liveTurnOf(operation: OperationProfile | undefined, currentTurn: (actor: ActorReference) => string | null): TurnKey | null {
+function liveTurnOf(
+  provider: RelayedProvider, operation: OperationProfile | undefined, currentTurn: (actor: ActorReference) => string | null,
+): TurnKey | null {
   if (operation === undefined || operation.turnId === WORKSPACE_RUN_ID || currentTurn(operation.actor) !== operation.turnId) return null;
   const { actor } = operation;
 
-  return { actor: JSON.stringify([actor.workspaceId, actor.actorId, actor.parentActorId]), turn: JSON.stringify([operation.runId, operation.turnId]) };
+  return { actor: JSON.stringify([provider, actor.workspaceId, actor.actorId, actor.parentActorId]), turn: JSON.stringify([operation.runId, operation.turnId]) };
 }
 
 function stoppedBy(signal: AbortSignal | undefined, cancel: () => Promise<void>, route: 'container' | 'device'): Promise<never> {
@@ -46,7 +53,7 @@ function stoppedBy(signal: AbortSignal | undefined, cancel: () => Promise<void>,
   signal?.addEventListener('abort', () => {
     stopped.reject(abortCause(signal));
     cancel().catch((...rejection: [unknown]) => diagnostics.failure('codex_egress.cancel_failed', toKinuError({
-      doing: 'cancelling a Codex call', cause: rejection[0], otherwise: 'unavailable',
+      doing: 'cancelling a relayed model call', cause: rejection[0], otherwise: 'unavailable',
     }), { route }));
   }, { once: true });
 
@@ -83,34 +90,42 @@ export function codexEgressFetch<Id>(namespace: CodexEgressNamespace<Id>, ownerU
   });
 }
 
-export function codexRouteFetch(input: {
-  readonly container: typeof fetch;
-  readonly hub: CodexRelayHub;
+/**
+ * A provider's calls through the owner's own machine, one machine per turn. Codex falls back to its egress
+ * container when no machine carries it; the ChatGPT plan has no fallback, since its token lives only on
+ * the machine that signed in.
+ */
+export function deviceRouteFetch(input: {
+  readonly provider: RelayedProvider;
+  readonly container?: typeof fetch;
+  readonly hub: ModelRelayHub;
   readonly caller: () => Promise<UserCaller>;
   readonly currentTurn?: (actor: ActorReference) => string | null;
 }): typeof fetch {
-  const { container, hub, caller, currentTurn = () => null } = input;
+  const { provider, container, hub, caller, currentTurn = () => null } = input;
+  const name = PROVIDER_NAMES[provider];
+  const fallback = container === undefined ? NONE : CONTAINER;
 
-  const pick = async (): Promise<CodexRoute> => {
-    const device = await hub.codexRelayDevice(await caller());
+  const pick = async (): Promise<DeviceRoute> => {
+    const device = await hub.relayDevice(await caller(), provider);
 
-    return device === null ? CONTAINER : { kind: 'device', id: device.id, label: device.label };
+    return device === null ? fallback : { kind: 'device', id: device.id, label: device.label };
   };
 
-  const routeOf = (turn: TurnKey | null): Effect.Effect<CodexRoute, KinuError> => {
-    const asking = attempt({ doing: 'asking the account which machine carries Codex', otherwise: 'unavailable' }, () => pick());
+  const routeOf = (turn: TurnKey | null): Effect.Effect<DeviceRoute, KinuError> => {
+    const asking = attempt({ doing: `asking the account which machine carries ${name}`, otherwise: 'unavailable' }, () => pick());
 
     if (turn === null) return asking;
     const held = PINNED.get(turn.actor);
 
-    if (held?.turn === turn.turn) return attempt({ doing: 'reading this turn\'s Codex route', otherwise: 'unavailable' }, () => held.route);
+    if (held?.turn === turn.turn) return attempt({ doing: `reading this turn's ${name} route`, otherwise: 'unavailable' }, () => held.route);
 
     const picking = pick();
     PINNED.set(turn.actor, { turn: turn.turn, route: picking });
 
-    return attempt({ doing: 'asking the account which machine carries Codex', otherwise: 'unavailable' }, () => picking).pipe(
+    return attempt({ doing: `asking the account which machine carries ${name}`, otherwise: 'unavailable' }, () => picking).pipe(
       Effect.tap((route) => Effect.sync(() => {
-        diagnostics.event('codex.route_pinned', { route: route.kind, device: route.kind === 'device' ? route.id : '' });
+        diagnostics.event('codex.route_pinned', { provider, route: route.kind, device: route.kind === 'device' ? route.id : '' });
       })),
       Effect.tapError(() => Effect.sync(() => {
         if (PINNED.get(turn.actor)?.turn === turn.turn) PINNED.delete(turn.actor);
@@ -118,12 +133,13 @@ export function codexRouteFetch(input: {
     );
   };
 
-  const viaContainer = (request: RequestInfo | URL, init: RequestInit | undefined): Effect.Effect<Response> =>
-    Effect.promise(async () => stamped(await container(request, init), 'relay'));
+  const viaFallback = (request: RequestInfo | URL, init: RequestInit | undefined): Effect.Effect<Response, KinuError> => (container === undefined
+    ? Effect.fail(new KinuError('unavailable', 'No connected machine holds a ChatGPT sign-in with plan usage'))
+    : Effect.promise(async () => stamped(await container(request, init), 'relay')));
 
   return asFetchFunction(async (request, init) => {
     const signal = init?.signal ?? undefined;
-    const turn = liveTurnOf(activeOperationProfile(), currentTurn);
+    const turn = liveTurnOf(provider, activeOperationProfile(), currentTurn);
     // Checked before anything is sent.
     const unstopped = Effect.suspend(() => (signal?.aborted === true ? Effect.die(abortCause(signal)) : Effect.void));
 
@@ -131,21 +147,21 @@ export function codexRouteFetch(input: {
       yield* unstopped;
       const route = yield* routeOf(turn);
 
-      if (route.kind === 'container') return yield* viaContainer(request, init);
-      const who = yield* attempt({ doing: 'reading who asks for Codex', otherwise: 'unavailable' }, () => caller());
+      if (route.kind !== 'device') return yield* viaFallback(request, init);
+      const who = yield* attempt({ doing: `reading who asks for ${name}`, otherwise: 'unavailable' }, () => caller());
       const callId = crypto.randomUUID();
       yield* unstopped;
-      const stopped = stoppedBy(signal, () => hub.cancelCodexRelay(who, callId), 'device');
+      const stopped = stoppedBy(signal, () => hub.cancelModelRelay(who, callId), 'device');
 
       const lostDevice = (failure: { readonly cause: unknown }): KinuError => {
-        const lost = new KinuError('unavailable', `${route.label} went offline during this turn, and Codex keeps one route per turn. Send again to continue`, failure);
-        diagnostics.failure('codex.route_device_lost', lost, { device: route.id });
+        const lost = new KinuError('unavailable', `${route.label} went offline during this turn, and ${name} keeps one route per turn. Send again to continue`, failure);
+        diagnostics.failure('codex.route_device_lost', lost, { provider, device: route.id });
 
         return lost;
       };
 
       const relaying = Effect.tryPromise({
-        try: () => Promise.race([hub.relayCodex(who, route.id, callId, new Request(request, { ...init, signal: null })), stopped]),
+        try: () => Promise.race([hub.relayModelCall(who, route.id, callId, new Request(request, { ...init, signal: null })), stopped]),
         catch: (cause) => ({ cause }),
       });
 
@@ -173,13 +189,15 @@ export function codexRouteFetch(input: {
         if (signal?.aborted === true) return Effect.die(failure.cause);
 
         if (isDeviceUnknownMethodError(failure)) {
-          if (turn !== null && PINNED.get(turn.actor)?.turn === turn.turn) PINNED.set(turn.actor, { turn: turn.turn, route: Promise.resolve(CONTAINER) });
-          diagnostics.event('codex.route_pinned', { route: 'container', device: '', reason: 'daemon_without_relay' });
+          const next = container === undefined ? NONE : CONTAINER;
 
-          return viaContainer(request, init);
+          if (turn !== null && PINNED.get(turn.actor)?.turn === turn.turn) PINNED.set(turn.actor, { turn: turn.turn, route: Promise.resolve(next) });
+          diagnostics.event('codex.route_pinned', { provider, route: next.kind, device: '', reason: 'daemon_without_relay' });
+
+          return viaFallback(request, init);
         }
 
-        return Effect.fail(deviceLost(failure) ? lostDevice(failure) : toKinuError({ doing: 'relaying a Codex call through the owner\'s machine', cause: failure.cause, otherwise: 'unavailable' }));
+        return Effect.fail(deviceLost(failure) ? lostDevice(failure) : toKinuError({ doing: `relaying a ${name} call through the owner's machine`, cause: failure.cause, otherwise: 'unavailable' }));
       });
     }));
   });

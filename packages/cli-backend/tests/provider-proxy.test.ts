@@ -171,19 +171,19 @@ describe('web-UI-connected providers reach local agents', () => {
 
 describe('what an unreachable account does and does not claim', () => {
   test('a provider the proxy would never front reports its own honest reason', async () => {
-    // Codex is proxy-denied (its endpoint refuses Worker egress), so a missing local credential is the whole answer.
+    // The ChatGPT plan's token never leaves the machine that signed in, so a missing local sign-in is the whole answer.
     const resolver = resolverWith(networkFetch({ credentialsStatus: 503 }));
-    const codex = (await resolver.listProviders()).find((p) => p.id === 'codex');
-    expect(codex?.available).toBe(false);
-    expect(codex?.unavailableReason).not.toContain('Kinu account');
+    const chatgpt = (await resolver.listProviders()).find((p) => p.id === 'chatgpt');
+    expect(chatgpt?.available).toBe(false);
+    expect(chatgpt?.unavailableReason).not.toContain('Kinu account');
   });
 
-  test('a Codex account is answered here too, never asked of the proxy', async () => {
+  test('a ChatGPT account is answered here too, never asked of the proxy', async () => {
     const recorded: Recorded[] = [];
     const resolver = resolverWith(networkFetch({ credentialsStatus: 503, recorded }), undefined, () => 'work');
-    const codex = (await resolver.listProviders()).find((p) => p.id === 'codex');
-    expect(codex?.available).toBe(false);
-    expect(codex?.unavailableReason).not.toContain('Kinu account');
+    const chatgpt = (await resolver.listProviders()).find((p) => p.id === 'chatgpt');
+    expect(chatgpt?.available).toBe(false);
+    expect(chatgpt?.unavailableReason).not.toContain('Kinu account');
   });
 });
 

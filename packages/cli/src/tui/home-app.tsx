@@ -472,7 +472,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
             <text><strong fg={colors.text.primary}>Setup required</strong></text>
             <text><span fg={colors.text.muted}>  kinu setup</span> <span fg={colors.text.primary}>sign in and pick a model provider</span></text>
             <text><span fg={colors.text.muted}>  kinu auth</span>  <span fg={colors.text.primary}>sign in for cloud workspaces only</span></text>
-            <text><span fg={colors.text.muted}>  kinu provider connect codex</span> <span fg={colors.text.primary}>use ChatGPT Codex</span></text>
+            <text><span fg={colors.text.muted}>  kinu provider connect chatgpt</span> <span fg={colors.text.primary}>use your ChatGPT plan</span></text>
           </box>
         )}
 

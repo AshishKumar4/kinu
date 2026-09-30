@@ -400,8 +400,11 @@ function createUpdater(opts) {
   async function apply(frame) {
     // The files on disk may already be this build: a successor that died
     // before connecting, and the next UPDATE for the same version. Nothing is
-    // downloaded again, and `.prev` — the last build that ran — is kept.
-    if (readVersionStamp(layout.deviceHome) !== frame.version) {
+    // downloaded again, and `.prev` — the last build that ran — is kept;
+    // unless a sibling is missing, which an older daemon's landing leaves.
+    const complete = layout.siblings.every((name) => fs.existsSync(path.join(layout.deviceHome, name)));
+
+    if (readVersionStamp(layout.deviceHome) !== frame.version || !complete) {
       const work = fs.mkdtempSync(path.join(layout.deviceHome, 'pc-agent.update-'));
 
       try {

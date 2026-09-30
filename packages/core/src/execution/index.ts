@@ -80,7 +80,8 @@ export {
 } from './device-hub';
 
 export {
-  DEVICE_RELAY, EGRESS_ROUTE_HEADER, type DeviceRelayRequest,
+  DEVICE_CHATGPT, DEVICE_RELAY, DeviceChatGptStatusSchema, EGRESS_ROUTE_HEADER,
+  type DeviceChatGptMethod, type DeviceChatGptStatus, type DeviceRelayRequest, type RelayedProvider,
 } from './device-relay';
 
 export {

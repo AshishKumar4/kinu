@@ -341,7 +341,7 @@ describe('Codex egress: the owner\'s machine first, the container when none is o
       },
     });
 
-    const relaying = harness.userDO.relayCodex(owner, machine.deviceId, 'call-revoked', new Request('https://chatgpt.com/backend-api/codex/responses', {
+    const relaying = harness.userDO.relayModelCall(owner, machine.deviceId, 'call-revoked', new Request('https://chatgpt.com/backend-api/codex/responses', {
       method: 'POST', body: held, headers: { authorization: `Bearer ${ACCESS_1}` },
     }));
 

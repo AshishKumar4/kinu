@@ -5,11 +5,11 @@
  */
 import { KinuError, toKinuError } from '../obs/error';
 import { diagnostics } from '../obs/log';
-import { settle } from '../obs/effect';
+import { attempt, settle } from '../obs/effect';
 import { Effect } from 'effect';
 import type { JsonValue } from '../utils/json';
 import { DeviceTunnel, NO_DEVICE_CONNECTED, isDeviceUnknownMethodError, type TunnelSocket } from './device-tunnel';
-import { DEVICE_RELAY, DeviceRelays, parseDeviceRelayFrame, type DeviceRelayRequest } from './device-relay';
+import { DEVICE_CHATGPT, DEVICE_RELAY, DeviceRelays, parseDeviceRelayFrame, type DeviceChatGptMethod, type DeviceRelayRequest } from './device-relay';
 import { REAL_CLOCK } from '../types/clock';
 import { deviceToolchainAnswer, freshDeviceToolchain, type DeviceToolchain } from './device-status';
 import { TOOLCHAIN_PROBE_BINARIES } from './toolchain';
@@ -85,6 +85,8 @@ interface TunnelEntry {
   tunnel: DeviceTunnel;
   ws: DeviceSocket;
 }
+
+const CHATGPT_STATUS_TIMEOUT_MS = 5_000;
 
 export class DeviceSocketHub {
   private readonly tunnels = new Map<string, TunnelEntry>();
@@ -230,6 +232,32 @@ export class DeviceSocketHub {
         return outcome;
       },
     });
+  }
+
+  chatgpt(deviceId: string, method: DeviceChatGptMethod): Promise<JsonValue | null> {
+    const tunnel = this.tunnel(deviceId);
+
+    if (!tunnel) return settle(Effect.fail(new KinuError('unavailable', NO_DEVICE_CONNECTED)));
+    const status = method === DEVICE_CHATGPT.status;
+
+    const asked = attempt({ doing: 'asking the machine about its ChatGPT sign-in', otherwise: 'unavailable' }, () => tunnel.rpc(method, [], status
+      ? { timeoutMs: CHATGPT_STATUS_TIMEOUT_MS }
+      : undefined));
+
+    return settle(asked.pipe(
+      Effect.map((answer) => answer ?? null),
+      Effect.catch((failure) => {
+        if (isDeviceUnknownMethodError({ cause: failure })) return Effect.succeed(null);
+
+        if (!status) return Effect.fail(failure);
+
+        return Effect.sync(() => {
+          diagnostics.failure('device.chatgpt_status_unanswered', failure, { device: deviceId });
+
+          return null;
+        });
+      }),
+    ));
   }
 
   isConnected(deviceId: string): boolean {

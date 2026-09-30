@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-30",
-  "files": 2843,
-  "functions": 71012,
+  "files": 2856,
+  "functions": 71449,
   "ceiling": 87,
   "line": 29,
   "inventory": [
@@ -90,10 +90,6 @@
       "complexity": 37
     },
     {
-      "key": "packages/cli/src/config.ts#deriveLLMConfigFromProviderCredentials",
-      "complexity": 36
-    },
-    {
       "key": "packages/core/src/tui/input-state.ts#reduceInput",
       "complexity": 36
     },
@@ -115,6 +111,10 @@
     },
     {
       "key": "packages/cli/src/commands/debug.ts#printHumanSummary",
+      "complexity": 34
+    },
+    {
+      "key": "packages/cli/src/config.ts#deriveLLMConfigFromProviderCredentials",
       "complexity": 34
     },
     {

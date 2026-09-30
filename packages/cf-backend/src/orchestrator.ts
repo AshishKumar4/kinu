@@ -758,20 +758,20 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         return await stub.listCredentials(caller);
       },
-      codexRelayDevice: async () => {
+      relayDevice: async (provider) => {
         const { stub, caller } = await credentials();
 
-        return await stub.codexRelayDevice(caller);
+        return await stub.relayDevice(caller, provider);
       },
-      relayCodex: async (deviceId, callId, request) => {
+      relayModelCall: async (deviceId, callId, request) => {
         const { stub, caller } = await credentials();
 
-        return await stub.relayCodex(caller, deviceId, callId, request);
+        return await stub.relayModelCall(caller, deviceId, callId, request);
       },
-      cancelCodexRelay: async (callId) => {
+      cancelModelRelay: async (callId) => {
         const { stub, caller } = await credentials();
 
-        await stub.cancelCodexRelay(caller, callId);
+        await stub.cancelModelRelay(caller, callId);
       },
     });
   }

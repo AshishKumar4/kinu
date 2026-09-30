@@ -1025,6 +1025,72 @@ bytes. Awaiting the write callback preserved all 1,191,111 bytes on stdout
 and stderr. Without that wait, the wrapper's `process.exit` can discard the
 queued tail, including a failing verdict.
 
+## Providers
+
+P1. The ChatGPT plan is Sign in with ChatGPT's open-source token sharing
+(developers.openai.com/siwc, read 2026-09-30), provider `chatgpt`, and its
+token never leaves the user's machine. The terms cover locally hosted apps
+only: hosted server-side use is a separate approval Kinu does not hold, so no
+Worker, container or Durable Object stores or sends the token.
+`packages/pc-agent/src/chatgpt.js` is the one implementation of the sign-in
+(authorization code with PKCE and OIDC, a loopback redirect on 127.0.0.1 at
+`/auth/callback`, `dynamic_agent_client` with `agent_name_hint=Kinu` on first
+use and the issued client ID saved after, a per-machine `ext_agent_host_id`),
+the rotating refresh and the revocation. The CLI imports it and keeps the
+login in `config.json` (0600) under `providers.chatgpt`, renewed under the
+config lock; the daemon requires it as a sibling and keeps its own sign-in in
+`pc-agent.chatgpt.json` (0600), renewed on one in-process chain. Each reuses
+the other's saved client ID on this machine's first sign-in. Core's
+`createChatGptProvider` rides the AI SDK Responses path at
+`api.openai.com/v1`: `store: false`, every call streaming (a call that wants one
+JSON answer is rebuilt from the stream), system instructions sent as developer
+messages, function tools grouped in one `functions` namespace (replayed calls
+name it), and the options the preview refuses stripped. Success is
+`response.completed` only; `response.failed`, `error` and a stream that stops
+short fail the call. Each `subscription_sharing_*` code maps to a KinuError
+with the status, the code and the request ID in its message: not eligible is
+`denied` (403), the usage limit is `budget` (429, naming
+chatgpt.com/settings/usage), and the two unavailable codes are `unavailable`
+(503), the only ones the rate-limit retry backs off on; the rest never reach
+it. A plan sign-in
+that did not grant `chatgpt.tokens.use.direct` keeps the identity and the
+client ID, and no tokens.
+
+On kinu.run the provider exists only through a connected machine: the daemon
+holds the token, the web asks it to sign in (`chatgptSignIn` returns the URL
+for a browser on that machine), and each `api.openai.com` call rides the
+existing device relay (`relayModelCall`, the Codex relay generalized to a
+provider), with the daemon attaching its own token and rotating it on a 401.
+With no machine connected, the entry offers the Codex device code as before
+(`codex.ts`, `codex-oauth.ts`, the relay and the egress container), which
+stays until OpenAI approves hosted use. The CLI's Codex device-code login is
+deleted: SIWC serves every CLI use it had. The web keeps it for that one case.
+`chatgpt.js` is a new daemon sibling, which an older daemon's updater does not
+land: the daemon requires it optionally, reports `<stamp>.incomplete` in HELLO
+while it is missing, and the hub's resulting UPDATE re-lands the same build
+with every sibling (`daemon-update`'s "a build landed without a newer
+sibling").
+
+A `budget` refusal anywhere in a failure's cause chain is now
+`providerRefusalCode`'s answer, ahead of the status, so a spent plan (this
+usage limit, and Claude's spent usage) parks an owed effect as T1's
+owner-fixable refusals do, and a fixed tier says it once as T3 does. Before,
+its 429 read as `unavailable` and retried on the 600 s ceiling. Decided
+2026-09-30. Measured against api.openai.com, auth.openai.com and a loopback
+browser faked at the fetch seam: `pc-agent/tests/chatgpt.test.js` (registration,
+the exchange with the issued client, PKCE, state, nonce, audience and signature
+checks, a declined consent, a grant without plan use, each spent-refresh code,
+one rotation shared by concurrent callers, revocation) and
+`core/tests/contract-chatgpt-plan.test.ts` (request shape, each
+`subscription_sharing_*` code, the refresh on a 401, stream completion, the
+model list). The real daemon relays through a real UserDO to impersonated hosts
+(`cf-backend/tests/unit-pc-agent-provider-relay.test.ts`), and
+`unit-terminal-effect-refusal` and `unit-fixed-tier-chain` pin the budget
+parking. Blind: no live call has been made, so the shape is checked against
+the docs, not the route: `prompt_cache_key`, `include` and `parallel_tool_calls`,
+which the docs' list of refused fields does not name, have not met the real
+route, and neither has the `functions` namespace name.
+
 ## Open
 
 O1. A gate that pins a nonzero cache read on a representative multi-step turn

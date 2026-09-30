@@ -28,6 +28,7 @@ interface ProviderVendorIndex {
 const PROVIDER_VENDOR: ProviderVendorIndex = {
   // OpenAI's Codex OAuth endpoint — same GPT models as the `openai` provider.
   codex: 'openai',
+  chatgpt: 'openai',
 };
 
 /** The vendor family of a model spec: the path segment before the model name, else the provider id. */

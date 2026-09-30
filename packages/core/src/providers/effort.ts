@@ -53,6 +53,7 @@ export function reasoningEffortOptions(
       return workersAIEffortOption(effort).providerOptions;
     case 'openai':
     case 'codex':
+    case 'chatgpt':
     case 'openai-compat':
       return { openai: { reasoningEffort: effort } };
     case 'opencode':

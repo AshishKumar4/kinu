@@ -7,10 +7,11 @@ import {
   DEVICE_PTY_INPUT, DEVICE_PTY_OPEN_METHOD,
   DEVICE_TOOLCHAIN_TTL_MS, TOOLCHAIN_PROBE_BINARIES,
   DEVICE_RELAY,
-  DEVICE_UNKNOWN_METHOD, TUNNEL_DISCONNECTED,
+  DEVICE_UNKNOWN_METHOD, TUNNEL_DISCONNECTED, DEVICE_CHATGPT,
   type JsonValue,
 } from '@kinu.run/core';
 import * as v from 'valibot';
+import { renderThrownChain } from '@kinu.run/core/obs';
 import { CAPABLE_HELLO, WORKSPACE } from './helpers/device-harness';
 import { provisionTestWorkspace } from './helpers/user-do';
 import {
@@ -389,6 +390,38 @@ describe('DeviceSocketHub Codex relay', () => {
 
   test('no machine online picks none', () => {
     expect(new DeviceSocketHub(fakeCtx()).relayDevice()).toBeNull();
+  });
+});
+
+/** The web asks each machine whether it holds a ChatGPT sign-in before routing the plan or listing its models. */
+describe('DeviceSocketHub ChatGPT sign-in calls', () => {
+  function answerLast(hub: DeviceSocketHub, ws: FakeSocket, reply: Record<string, JsonValue>) {
+    const frame = v.parse(v.object({ id: v.string(), method: v.string() }), JSON.parse(ws.sent[ws.sent.length - 1] ?? 'null'));
+
+    hub.handleMessage('dev-a', JSON.stringify({ id: frame.id, ...reply }));
+
+    return frame;
+  }
+
+  test('a machine that fails to say is not signed in; a daemon without the calls is the same', async () => {
+    const { hub, ws } = connected();
+
+    const failing = hub.chatgpt('dev-a', DEVICE_CHATGPT.status);
+    expect(answerLast(hub, ws, { error: 'EIO reading pc-agent.chatgpt.json' }).method).toBe('chatgptStatus');
+    expect(await failing).toBeNull();
+
+    const older = hub.chatgpt('dev-a', DEVICE_CHATGPT.status);
+    answerLast(hub, ws, { error: `${DEVICE_UNKNOWN_METHOD}: chatgptStatus` });
+    expect(await older).toBeNull();
+  });
+
+  test('a sign-in the machine could not start keeps its failure', async () => {
+    const { hub, ws } = connected();
+
+    const starting = hub.chatgpt('dev-a', DEVICE_CHATGPT.signIn).then(() => '', (...rejection: [unknown]) => renderThrownChain({ cause: rejection[0] }));
+    answerLast(hub, ws, { error: 'EADDRINUSE 127.0.0.1' });
+
+    expect(await starting).toContain('EADDRINUSE 127.0.0.1');
   });
 });
 

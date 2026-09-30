@@ -11,7 +11,24 @@ export const DEVICE_RELAY = {
   cancel: 'RELAY_CANCEL',
 } as const;
 
-/** Names the route a Codex call took, `device <label>` or `relay`. */
+export type RelayedProvider = 'codex' | 'chatgpt';
+
+export const DEVICE_CHATGPT = { status: 'chatgptStatus', signIn: 'chatgptSignIn', signOut: 'chatgptSignOut' } as const;
+
+export type DeviceChatGptMethod = (typeof DEVICE_CHATGPT)[keyof typeof DEVICE_CHATGPT];
+
+export const DeviceChatGptStatusSchema = v.object({
+  signedIn: v.boolean(),
+  email: v.nullable(v.string()),
+  planEnabled: v.boolean(),
+  pending: v.boolean(),
+  lastFailure: v.nullable(v.string()),
+  firstSignIn: v.boolean(),
+});
+
+export type DeviceChatGptStatus = v.InferOutput<typeof DeviceChatGptStatusSchema>;
+
+/** Names the route a relayed model call took, `device <label>` or `relay`. */
 export const EGRESS_ROUTE_HEADER = 'x-kinu-egress';
 
 const HeaderPairsSchema = v.array(v.tuple([v.string(), v.string()]));
