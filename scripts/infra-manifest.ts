@@ -464,17 +464,15 @@ export const UNCAPTURED: readonly Uncaptured[] = [
     check: 'npx wrangler secret list --format json',
   },
   {
-    what: 'The sandbox container image being PULLABLE, and the container it starts reporting the '
-      + 'SANDBOX_VERSION the configured digest was resolved for. The SDK asks the container for '
-      + 'its own SANDBOX_VERSION on every start.',
+    what: 'The sandbox container image being PULLABLE, and its sandbox-shim speaking the protocol of the '
+      + '`@cloudflare/sandbox` release devbox imports. Nothing compares the two when a container starts: '
+      + 'a mismatch first shows as a refused file or mount call.',
     evidence: 'a container application is named after the top-level Worker name and its class — '
       + '`kinu-kinusandbox`, and `kinu-kinusandbox-staging` for staging — and it does not exist until the Worker is '
-      + 'deployed. The image is '
-      + 'reconciled only by a deploy, and Sandbox.checkVersionCompatibility logs the mismatch at container '
-      + 'start rather than failing the deploy. What IS captured, by '
+      + 'deployed. The image is reconciled only by a deploy. What IS captured, by '
       + '`scripts/release-config.test.ts`: the config names one immutable digest rather '
-      + 'than a re-pointable tag, and the version that digest was resolved for equals the '
-      + '`@cloudflare/sandbox` dependency that ships.',
+      + 'than a re-pointable tag, and the release that digest was built for equals the '
+      + '`@cloudflare/sandbox` dependency of `packages/devbox`, which ships it.',
     check: 'npx wrangler containers list --json',
   },
   {
