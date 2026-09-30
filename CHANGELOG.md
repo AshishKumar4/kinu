@@ -37,6 +37,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- Every GitHub workflow installs Bun from the package manager version in `package.json`, keeping image bundles and the local compiler on the same pinned toolchain.
 - Concurrent CI reports wait for their full output to drain before returning a verdict, preserving the failure beyond the pipe's first 64 KiB. Typecheck coverage still enforces actual missing/stale membership and debt; duplicate lists of those declarations no longer pin a second copy.
 - Test hygiene now follows source paths held in constants and checks reconnect snapshots through real RPCs and the mounted client. Cosmetic prose, stylesheet and artwork pins are removed; public pages are checked for working local resources and theme preferences.
 - CLI and TUI fixtures wait for socket frames, stdout, pidfiles and rendered frames instead of fixed sleeps. Transcript checks keep chronology, sanitization and contrast without pinning palette hex values, gutter glyphs or decoration.
