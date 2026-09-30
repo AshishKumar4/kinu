@@ -6,7 +6,7 @@
 import { expect, test } from 'bun:test';
 import { sqlOver } from '@kinu.run/test-utils';
 import { EventLog, actorConnectionTag, admitSubordinateTask } from '@kinu.run/core';
-import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
+import { createRecordingLogger, KinuError, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { makeSqlExec } from '../../core/tests/helpers';
 import { asPane, joinHarnessKeepAlives } from './helpers/agents-sdk';
 import {
@@ -113,6 +113,27 @@ test("a helper whose turn ends with its hire still working is released, and no d
   } finally {
     restore();
   }
+});
+
+test('a hire whose facet cannot load reports its named failure to its hirer', async () => {
+  const gateway = stubAiBinding((run) => openingOf(run).includes('[subordinate_report]') || toolResults(run) > 0
+    ? chatCompletion(run, 'Root received the failure.')
+    : toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', lifetime: 'task', mission: 'Unloadable task.' } }, 'call_unloadable'));
+
+  const workspace = gatewayWorkspace(gateway);
+
+  Object.defineProperty(workspace.agent, 'agentCalls', { value: async () => {
+    throw new KinuError('unsupported', 'loader refused the facet compatibility flag');
+  } });
+  await catalogTurn(workspace.agent, 'Hire one task agent.');
+  const reports = () => gateway.runs.map(openingOf).filter((text) => text.includes('[subordinate_report]'));
+
+  await driveUntil(workspace, 'the load failure never reached the hirer', () => reports().length > 0);
+  const hire = workspace.db.query<{ name: string }, []>("SELECT name FROM workspace_actors WHERE origin = 'agent'").get();
+
+  expect(reports().join(' ')).toContain(hire?.name ?? 'missing hire');
+  expect(reports().join(' ')).toContain('loader refused the facet compatibility flag');
+  expect(reports().join(' ')).toContain('failed');
 });
 
 test("a durable hire whose turn fails delivers its failure to its hirer as a message", async () => {

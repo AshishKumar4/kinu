@@ -10,7 +10,7 @@ import { Effect } from 'effect';
 import type { NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import { createAgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
 import type { AgentDatabase } from './agent-database';
-import { agentToolFailure, type AgentReview, type AgentTask, type AgentToolAnswer, type AgentToolCall, type AgentTrace, type AgentTurnEnd, type AgentTurnProfile, type PreparedAgentTurn } from './protocol';
+import type { AgentReview, AgentTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn } from './protocol';
 
 export interface AgentWorkspace {
   session(): NimbusSessionSurface;
@@ -106,8 +106,6 @@ function workspaceTools(
         turn.capture.artifacts.push(...answer.captured.artifacts);
         turn.capture.toolCalls.push(...answer.captured.toolCalls);
         turn.capture.childHeadIds.push(...answer.captured.childHeadIds);
-
-        if (answer.failure !== undefined) return agentToolFailure(answer.failure);
 
         return answer.output;
       },

@@ -19,6 +19,7 @@ tester.run("anti-slop/effect-run-in-adapter", effectRunInAdapterRule, {
     { code: "import { settle } from '../obs/index'; import { Effect } from 'effect'; await settle(Effect.succeed(1));", filename: product },
     // The adapter runs effects and chooses the scheduler.
     { code: "import { Effect, Scheduler } from 'effect'; const s = new Scheduler.MixedScheduler('sync'); await Effect.runPromiseExit(Effect.succeed(1), { scheduler: s });", filename: adapter },
+    { code: "import { Effect, Scheduler } from 'effect'; const s = new Scheduler.MixedScheduler('sync'); Effect.runCallback(Effect.void, { scheduler: s, onExit() {} });", filename: "packages/devbox/src/errors.ts" },
     // A suite or a probe runs what it asserts on.
     { code: "import { Effect } from 'effect'; await Effect.runPromise(Effect.succeed(1));", filename: "packages/core/tests/unit-x.test.ts" },
     { code: "import { Effect } from 'effect'; await Effect.runPromise(Effect.succeed(1));", filename: "packages/cf-backend/tests/workerd/probe.ts" },
@@ -27,6 +28,7 @@ tester.run("anti-slop/effect-run-in-adapter", effectRunInAdapterRule, {
   ],
   invalid: [
     { name: "runPromise", code: "import { Effect } from 'effect'; await Effect.runPromise(Effect.succeed(1));", filename: product, errors: [run] },
+    { name: "standalone library code also cannot run effects outside its adapter", code: "import { Effect } from 'effect'; Effect.runSync(Effect.void);", filename: "packages/devbox/src/storage.ts", errors: [run] },
     { name: "runFork", code: "import { Effect } from 'effect'; Effect.runFork(Effect.never);", filename: product, errors: [run] },
     { name: "a run passed by reference", code: "import { Effect } from 'effect'; export const go = Effect.runPromiseExit;", filename: product, errors: [run] },
     { name: "a namespace import of effect/Effect", code: "import * as E from 'effect/Effect'; E.runSync(E.succeed(1));", filename: product, errors: [run] },

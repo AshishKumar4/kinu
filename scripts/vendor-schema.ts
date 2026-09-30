@@ -10,9 +10,8 @@
  * The fixture and the code drifted together; nothing compared either against
  * what production has.
  *
- * Both sides here are DERIVED, nothing is hand-listed. The vendor side is
- * every `CREATE TABLE` in the installed `agents` and
- * `@cloudflare/containers` dist, built in one in-memory SQLite. The Kinu side
+ * Both sides are derived. The vendor side is every CREATE TABLE in the
+ * installed Agents SDK dist, built in one in-memory SQLite. The Kinu side
  * is every SQL template literal in the product corpus that names one of those
  * tables, prepared against that database: SQLite refuses an unknown column at
  * prepare, so a read the vendor cannot satisfy fails here, and an SDK bump that
@@ -37,7 +36,7 @@ import {
   entityName, holesAsNames, leadingKeywords, type Names, namesIn, sqlProgram, type SqlStatement, sqlStrings,
 } from './sql-text';
 
-const VENDORS = ['agents', '@cloudflare/containers'] as const;
+const VENDORS = ['agents'] as const;
 
 export interface VendorTable {
   readonly table: string;

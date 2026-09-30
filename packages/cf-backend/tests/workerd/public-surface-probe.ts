@@ -7,8 +7,6 @@ import { WorkerEntrypoint } from 'cloudflare:workers';
 import { ownerCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 import type { UserDO } from '../../src/user/user-do';
-import { FakeAI } from './two-turn-probe';
-import { HELD_PROXY_MODEL } from './ai-proxy-shapes';
 
 export { default } from '../../src/server';
 
@@ -23,15 +21,6 @@ async function probeControl(path: string, method: 'GET' | 'POST'): Promise<Respo
   return response;
 }
 
-/** `FakeAI`, except `HELD_PROXY_MODEL` parks at the Node-side hold, so its caller waits on real I/O until released. */
-export class SurfaceAI extends FakeAI {
-  override async run(...args: Parameters<FakeAI['run']>): Promise<Response> {
-    if (args[0] !== HELD_PROXY_MODEL) return super.run(...args);
-    await probeControl('/proxy/park', 'POST');
-
-    return Response.json({ response: 'held' });
-  }
-}
 
 interface SurfaceEnv {
   readonly UserDO: DurableObjectNamespace<UserDO>;

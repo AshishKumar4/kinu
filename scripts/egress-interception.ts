@@ -1,93 +1,24 @@
-/**
- * Egress interception totality — no container has an un-intercepted way out.
- *
- * Kinu removes the owner's secrets from the agent container. It substitutes
- * the real value outside the container on the way out. That trade is only safe
- * if the interception is TOTAL. A path
- * that leaves without passing a handler is worse than having no vault at all:
- * the secret is gone from the container, so the agent's own work breaks, while
- * the path that could have carried it is still open.
- *
- * So this gate enumerates the ways a request can leave a container and asserts
- * each one is closed by construction. It is a source gate, not a runtime probe,
- * because every one of these is a static property of the class declaration and
- * the Worker's export list — and because the failure mode being guarded is
- * somebody deleting a field during a refactor, which is exactly what a source
- * gate catches and a staging probe does not.
- *
- * ## The paths, and what closes each
- *
- * 1. TCP on any port other than 80/443. The platform NEVER routes these
- *    through an outbound handler — `outbound`/`outboundByHost` see HTTP and
- *    HTTPS only. The only thing that closes it is `enableInternet = false`,
- *    which makes the platform deny them outright.
- *
- * 2. HTTPS. Closed by `interceptHttps = true`, and NOT by default: the SDK's
- *    documentation says "Sandboxes intercept HTTPS traffic by default —
- *    `interceptHttps` is set to `true` on the Sandbox class", and that is false
- *    for the whole stable line. The gate re-measures the claim against the copy
- *    the deployed artifact binds (see {@link boundContainers}) so the day
- *    upstream changes it, this gate says so instead of our comments quietly
- *    becoming wrong.
- *
- * 3. HTTP with no handler bound. `ContainerProxy` must be exported from the
- *    Worker entry or `applyOutboundInterception` throws and NOTHING is
- *    intercepted; and a catch-all handler must be registered, or only the
- *    handful of hosts with per-host handlers are seen and everything else falls
- *    through to `enableInternet`.
- *
- * 4. An allow-listed host. `allowedHosts` is a gate, not a bypass, WHEN a
- *    catch-all handler exists — but the ContainerProxy's own precedence has a
- *    branch (`if (allowedHosts) return fetch(request)`) reached when no handler
- *    matched. Rather than depend on a handler always matching, the gate refuses
- *    a static `allowedHosts`/`deniedHosts` on a container class, so totality
- *    does not rest on the ordering of somebody else's switch.
- *
- * 5. DNS. NOT an open residual. The claim — "DNS leaves, to Cloudflare's
- *    resolvers, so query LABELS are a low-bandwidth channel outward" — is
- *    MEASURED FALSE on the deployed worker (0.2.0+28bc79307), inside a
- *    real KinuSandbox container reached through `executeInExecutor`:
- *
- *      raw UDP/53 to 1.1.1.1, 8.8.8.8 and 2606:4700:4700::1111 — no reply
- *      raw TCP/53 to 1.1.1.1                                   — timeout
- *      every name resolves to the SAME private ULA, fd00::119:1,
- *        including `<random>.invalidtld-nothing-here`, a TLD that cannot exist
- *
- *    A public resolver cannot return an fd00::/8 address, and cannot answer a
- *    nonexistent TLD at all, so those answers were not resolved on the internet:
- *    the platform synthesizes them locally to route 80/443 into the interception
- *    layer. Nothing reaches a resolver, so query labels carry nothing outward.
- *
- *    Kept as a printed line rather than deleted, because it is the load-bearing
- *    claim the placeholder design rests on and it is a property of the PLATFORM,
- *    not of this code — a future change could restore the residual without any
- *    diff here. It is re-measurable by the probe recorded above.
- *
- * ## Denominator
- *
- * The container classes are read from `packages/cf-backend/wrangler.jsonc`'s
- * `containers[].class_name` — the deployment's own list, which Cloudflare
- * requires to be complete and which therefore cannot drift the way a
- * hand-kept list here would. If that list is empty, or if none of those
- * classes is found in the source, the gate fails rather than passing on an
- * empty scan.
- */
+/** Native container egress policy. D38 records the 2026-09-28/29 runtime measurements:
+ * Kinu has no raw internet; HTTP/HTTPS go through the owner vault; generic Devbox stays public.
+ * Configuration and source lineage jointly define the private set. Generic classes come from
+ * Devbox's source lineage. Fixed-image forwarders retain separate image and RPC confinement.
+ * This is a source proof; its blind spots print on every green run. */
 
-import { existsSync, readFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
-import { dirname, join, relative } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import * as v from 'valibot';
 
 import type { Node } from 'oxc-parser';
 import { parseJsonc } from './jsonc';
-import { readSources } from './sources';
-import { assertMeasured, finding } from './gate-ratchet';
+import { posix } from 'node:path';
+import { readMatching, isProductSource, isParseable, isTestFile } from "./sources";
+import { assertMeasured } from "./gate-ratchet";
 import {
-  classMembers, declaredName, literalText, memberCalleeName, parse, publishedNames, superClassName, walk, type SyntaxNode,
+  classMembers, declaredName, importBindings, literalText, memberCalleeName, parse, publishedNames, superClassName, walk, type SyntaxNode,
 } from './syntax';
 import { CONTAINER_IMAGES, imageReference, readSource, sourceHash, type ContainerImage } from './container-images';
-import { tolerate } from '../packages/core/src/obs/index';
+import { tolerate } from "../packages/core/src/obs/index";
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -95,16 +26,10 @@ const WRANGLER = 'packages/cf-backend/wrangler.jsonc';
 
 const WORKER_ENTRY = 'packages/cf-backend/src/server.ts';
 
-/** Fields that must be present, with this exact value, on every container
- *  class. The value is spelled as source text because that is what the gate can
- *  read, and because `false`/`true` here are the whole security posture. */
-const REQUIRED_FIELDS = {
-  enableInternet: 'false',
-  interceptHttps: 'true',
-} satisfies Record<string, string>;
-
-/** Fields whose mere presence opens path 4. */
-const FORBIDDEN_FIELDS: readonly string[] = ['allowedHosts', 'deniedHosts'];
+export function readInterceptionSources(): Map<string, string> {
+  return readMatching(file => isProductSource(file) || (file.startsWith("packages/devbox/")
+    && isParseable(file) && !isTestFile(file) && !file.includes("/tests/")));
+}
 
 /** `containers[].class_name` — the shape this gate reads out of wrangler.jsonc,
  *  at the top level and under every named environment. Parsed where the file is
@@ -159,25 +84,15 @@ export function wranglerContainerClasses(declared: v.InferOutput<typeof Wrangler
  * identifier cannot reach the AST without its token appearing in the text.
  */
 export function sandboxLineage(sources: ReadonlyMap<string, string>): ReadonlySet<string> {
-  const lineage = new Set<string>(['Sandbox']);
-  let grew = true;
+  const classes = containerClasses(sources);
+  const lineage = new Set<string>(['Devbox']);
+  let changed = true;
 
-  while (grew) {
-    grew = false;
+  while (changed) {
+    changed = false;
 
-    for (const [file, text] of sources) {
-      if (!text.includes('Sandbox') && !text.includes('Devbox')) continue;
-      walk(parse(file, text).root, (node) => {
-        const base = superClassName(node);
-
-        if (base === undefined || !lineage.has(base)) return;
-        const name = declaredName(node);
-
-        if (name !== undefined && !lineage.has(name)) {
-          lineage.add(name);
-          grew = true;
-        }
-      });
+    for (const [name, cls] of classes) if (cls.base !== undefined && lineage.has(cls.base) && !lineage.has(name)) {
+      lineage.add(name); changed = true;
     }
   }
 
@@ -190,7 +105,7 @@ export function declaredForwarderClasses(sources: ReadonlyMap<string, string>): 
   const declared = new Map<string, string>();
 
   for (const [file, text] of sources) {
-    if (!file.startsWith('packages/cf-backend/') || !text.includes('Container')) continue;
+    if (!file.startsWith("packages/cf-backend/") || !text.includes("DurableObject")) continue;
     walk(parse(file, text).root, (node) => {
       const name = superClassName(node) === 'DurableObject' ? declaredName(node) : undefined;
 
@@ -211,17 +126,11 @@ const FORWARDER_INSTRUCTIONS: readonly string[] = ['FROM', 'COPY', 'WORKDIR', 'E
 /** Everything RPC can call on an admitted forwarder, each with why it cannot change what the container runs or where it
  *  may connect. The class's own function properties must equal this table; one more, from the class or its base, is red. */
 export const FORWARDER_SURFACE: ReadonlyMap<string, string> = new Map([
-  ['constructor', 'not callable over RPC; builds the private container box on this object\'s ctx'],
+  ['constructor', 'not callable over RPC; the native container belongs to this Durable Object'],
   ['forward', 'checks the owner and core codexEgressAllowed, then the container\'s policy.mjs checks again'],
   ['cancel', 'aborts one of this object\'s own in-flight calls by id'],
-  ['alarm', 'a runtime handler, not RPC-callable (reserved); runs the box\'s sleepAfter and schedules'],
 ]);
 
-/** The only fields the private box may declare: none names a command, env or outbound policy. */
-const BOX_FIELDS: readonly string[] = ['defaultPort', 'sleepAfter', 'enableInternet'];
-
-/** How the owner may touch its box: a member read or call, never the box itself. */
-const BOX_USES: readonly string[] = ['startAndWaitForPorts', 'containerFetch', 'defaultPort', 'alarm'];
 
 export interface ForwarderSurface {
   readonly parentIsDurableObject: boolean;
@@ -335,106 +244,123 @@ export function surfaceReasons(surface: ForwarderSurface): string[] {
   return reasons;
 }
 
-/** Why the private box could change what runs: a declaration beyond BOX_FIELDS, or any member at all besides them. */
-function boxReasons(box: SyntaxNode): string[] {
-  const reasons: string[] = [];
-
-  for (const member of classMembers(box)) {
-    const name = member.raw.type === 'PropertyDefinition' || member.raw.type === 'MethodDefinition' ? nameOf(member.raw.key) : undefined;
-
-    if (name === undefined || !BOX_FIELDS.includes(name) || member.raw.type !== 'PropertyDefinition' || member.raw.static) {
-      reasons.push(`its box declares \`${name ?? member.raw.type}\`, outside ${BOX_FIELDS.join(', ')}`);
-    }
-  }
-
-  walk(box, (inner) => { if (inner.type === 'Decorator') reasons.push('its box carries a decorator'); });
-
-  return reasons;
+function isNativeContainer(raw: Node | null | undefined): boolean {
+  return memberPath(raw) === 'this.ctx.container';
 }
 
-function inConstructor(node: SyntaxNode): boolean {
-  for (let up = node.parent; up !== undefined; up = up.parent) {
-    if (up.raw.type === 'MethodDefinition') return up.raw.kind === 'constructor';
-  }
-
-  return false;
-}
-
-/** Why the owner could hand its box out: a use of `this.#box`, or an alias of it, other than a BOX_USES member. */
-function boxUseReasons(owner: SyntaxNode, field: string): string[] {
-  const reasons: string[] = [];
+function containerAliases(owner: SyntaxNode): ReadonlySet<string> {
   const aliases = new Set<string>();
+  let changed = true;
 
-  walk(owner, (inner) => {
-    const { raw } = inner;
+  while (changed) {
+    changed = false;
+    walk(owner, node => {
+      const raw = node.raw;
 
-    if (raw.type === 'VariableDeclarator' && raw.init?.type === 'MemberExpression' && raw.init.object.type === 'ThisExpression' && nameOf(raw.init.property) === field) {
-      const alias = nameOf(raw.id);
+      if (raw.type !== 'VariableDeclarator' || raw.init === null || raw.init === undefined) return;
 
-      if (alias === undefined) reasons.push('destructures its box');
-      else aliases.add(alias);
+      if (!isNativeContainer(raw.init) && !(raw.init.type === 'Identifier' && aliases.has(raw.init.name))) return;
+      const name = nameOf(raw.id);
+
+      if (name !== undefined && !aliases.has(name)) { aliases.add(name); changed = true; }
+    });
+  }
+
+  return aliases;
+}
+
+function constantString(raw: Node | null | undefined, tree: SyntaxNode): boolean {
+  if (raw?.type === 'Literal') return v.is(v.string(), raw.value);
+
+  if (raw?.type === 'TemplateLiteral') return raw.expressions.length === 0;
+
+  if (raw?.type !== 'Identifier') return false;
+  let found = false;
+  walk(tree, node => {
+    if (node.raw.type === 'VariableDeclarator' && nameOf(node.raw.id) === raw.name
+      && node.parent?.raw.type === 'VariableDeclaration' && node.parent.raw.kind === 'const') {
+      const value = node.raw.init;
+
+      if (value?.type === 'Literal' && v.is(v.string(), value.value)) found = true;
+
+      if (value?.type === 'TemplateLiteral' && value.expressions.length === 0) found = true;
     }
   });
 
-  walk(owner, (inner) => {
-    const { raw } = inner;
+  return found;
+}
 
-    const isBox = (raw.type === 'MemberExpression' && raw.object.type === 'ThisExpression' && nameOf(raw.property) === field)
-      || (raw.type === 'Identifier' && aliases.has(raw.name) && inner.parent?.raw.type !== 'VariableDeclarator');
+function nativeReadinessAllowed(args: readonly Node[], tree: SyntaxNode): boolean {
+  const [argv, options] = args;
 
-    if (isBox && !allowedBoxUse(inner)) reasons.push(`uses its box other than to read ${BOX_USES.join(', ')}, so the box or its ctx could leave the class`);
+  return args.length === 2 && argv?.type === 'ArrayExpression' && argv.elements.length === 3
+    && literalIs(argv.elements[0], 'node') && literalIs(argv.elements[1], '-e') && constantString(argv.elements[2], tree)
+    && options?.type === 'ObjectExpression' && options.properties.length === 1 && objectValue(options, 'signal') !== undefined;
+}
+
+function nativePortFetchAllowed(args: readonly Node[], call: SyntaxNode): boolean {
+  if (args.length !== 1 || !literalIs(args[0], 8080)) return false;
+  const fetch = call.parent?.parent?.raw;
+
+  return call.parent?.raw.type === 'MemberExpression' && nameOf(call.parent.raw.property) === 'fetch'
+    && fetch?.type === 'CallExpression' && fetch.arguments.length === 1
+    && fetch.arguments[0]?.type === 'NewExpression' && nameOf(fetch.arguments[0].callee) === 'Request'
+    && literalIs(fetch.arguments[0].arguments[0], 'http://codex-egress/forward');
+}
+
+function nativeCallAllowed(member: string, args: readonly Node[], call: SyntaxNode, tree: SyntaxNode): boolean {
+  if (args.some(arg => arg.type === 'SpreadElement')) return false;
+
+  if (member === 'start') {
+    const options = args[0];
+
+    return args.length === 1 && options?.type === 'ObjectExpression' && options.properties.length === 1
+      && literalIs(objectValue(options, 'enableInternet'), true);
+  }
+
+  if (member === 'setInactivityTimeout') return args.length === 1;
+
+  if (member === 'exec') return nativeReadinessAllowed(args, tree);
+
+  return member === 'getTcpPort' && nativePortFetchAllowed(args, call);
+}
+
+function containerUseReasons(owner: SyntaxNode, tree: SyntaxNode): string[] {
+  const aliases = containerAliases(owner);
+  const reasons: string[] = [];
+  let uses = 0;
+  walk(owner, node => {
+    const raw = node.raw;
+
+    if (!isNativeContainer(raw) && !(raw.type === 'Identifier' && aliases.has(raw.name))) return;
+    const parent = node.parent?.raw;
+
+    if (parent?.type === 'MemberExpression' && parent.property === raw && !parent.computed) return;
+
+    if (parent?.type === 'VariableDeclarator' && (parent.id === raw || parent.init === raw)) return;
+
+    if (parent?.type === 'BinaryExpression' && ['===', '!=='].includes(parent.operator)
+      && (nameOf(parent.left) === 'undefined' || nameOf(parent.right) === 'undefined')) return;
+
+    if (parent?.type === 'MemberExpression' && parent.object === raw && !parent.computed) {
+      const member = nameOf(parent.property);
+
+      if (member === 'running') return;
+      const call = node.parent?.parent;
+
+      if (member !== undefined && call?.raw.type === 'CallExpression' && nativeCallAllowed(member, call.raw.arguments, call, tree)) { uses++;
+
+ return; }
+    }
+
+    reasons.push('uses the native container outside fixed start, readiness, inactivity, and port-forward operations');
   });
+
+  if (uses === 0) reasons.push('has no measured native container operations');
 
   return reasons;
 }
 
-/** A box reference used as a declaration, the constructor's assignment, or a BOX_USES read or call. */
-function allowedBoxUse(inner: SyntaxNode): boolean {
-  const { raw } = inner;
-  const up = inner.parent?.raw;
-
-  if ((up?.type === 'VariableDeclarator' && up.init === raw) || (up?.type === 'PropertyDefinition' && up.key === raw)) return true;
-
-  if (up?.type === 'AssignmentExpression' && up.left === raw) return inConstructor(inner);
-
-  if (up?.type !== 'MemberExpression' || up.object !== raw || up.computed) return false;
-  const member = nameOf(up.property) ?? '';
-  const called = inner.parent?.parent?.raw;
-
-  if (member === 'defaultPort') return true;
-
-  return called?.type === 'CallExpression' && called.callee === up && boxCallAllowed(member, called.arguments, inner);
-}
-
-/** The only box calls: startAndWaitForPorts(box.defaultPort, { abort: X }), containerFetch(new Request(…)), and
- *  alarm(<the alarm parameter>). */
-function boxCallAllowed(member: string, args: readonly Node[], inner: SyntaxNode): boolean {
-  if (args.some((arg) => arg.type === 'SpreadElement')) return false;
-
-  if (member === 'containerFetch') return args.length === 1 && args[0]?.type === 'NewExpression' && nameOf(args[0].callee) === 'Request';
-
-  if (member === 'startAndWaitForPorts') {
-    const [port, cancellation] = args;
-
-    const onlyAbort = cancellation?.type === 'ObjectExpression' && cancellation.properties.length === 1
-      && cancellation.properties[0]?.type === 'Property' && !cancellation.properties[0].computed && nameOf(cancellation.properties[0].key) === 'abort';
-
-    return args.length === 2 && port?.type === 'MemberExpression' && !port.computed && nameOf(port.property) === 'defaultPort' && onlyAbort;
-  }
-
-  if (member !== 'alarm') return false;
-  const method = enclosingMethod(inner);
-  const param = method?.raw.type === 'MethodDefinition' ? nameOf(method.raw.value.params[0]) : undefined;
-
-  return method !== undefined && nameOf(method.raw.type === 'MethodDefinition' ? method.raw.key : null) === 'alarm'
-    && args.length <= 1 && (args.length === 0 || (param !== undefined && nameOf(args[0]) === param));
-}
-
-function enclosingMethod(node: SyntaxNode): SyntaxNode | undefined {
-  for (let up = node.parent; up !== undefined; up = up.parent) if (up.raw.type === 'MethodDefinition') return up;
-
-  return undefined;
-}
 
 /** A getter or setter is a function RPC can reach under a property name. */
 function accessorReasons(owner: SyntaxNode): string[] {
@@ -448,27 +374,23 @@ function accessorReasons(owner: SyntaxNode): string[] {
 function closureReasons(owner: SyntaxNode, tree: SyntaxNode): string[] {
   const reasons: string[] = [];
   const trustedRun = callsIsEgressCalls(owner, tree);
-
-  walk(owner, (inner) => {
-    const { raw } = inner;
-
-    if (raw.type !== 'ArrowFunctionExpression' && raw.type !== 'FunctionExpression') return;
+  const aliases = containerAliases(owner);
+  walk(owner, inner => {
+    if (inner.raw.type !== 'ArrowFunctionExpression' && inner.raw.type !== 'FunctionExpression') return;
 
     if (inner.parent?.raw.type === 'MethodDefinition') return;
     let captures = false;
-
-    walk(inner, (deep) => {
-      if (deep.raw.type === 'ThisExpression' || (deep.raw.type === 'Identifier' && deep.raw.name === 'box')) captures = true;
-    });
+    walk(inner, child => { if (child.raw.type === 'ThisExpression' || (child.raw.type === 'Identifier' && aliases.has(child.raw.name))) captures = true; });
 
     if (!captures) return;
-    const up = inner.parent?.raw;
-    const calledHere = up?.type === 'CallExpression' && up.callee === raw;
 
-    const runArgument = trustedRun && up?.type === 'Property' && inner.parent?.parent?.parent?.raw.type === 'CallExpression'
-      && isCallsRun(inner.parent.parent.parent.raw);
+    if (inner.parent?.raw.type === 'CallExpression' && inner.parent.raw.callee === inner.raw) return;
 
-    if (!calledHere && !runArgument) reasons.push('makes a function that captures `this` or the box and is not called where it is made');
+    for (let parent = inner.parent; parent !== undefined; parent = parent.parent) {
+      if (trustedRun && parent.raw.type === 'CallExpression' && isCallsRun(parent.raw)) return;
+    }
+
+    reasons.push('makes a function that captures this or the native container outside the owned call lifetime');
   });
 
   return reasons;
@@ -491,41 +413,15 @@ function isCallsRun(call: Node): boolean {
 }
 
 function classReasons(input: ForwarderInputs): string[] {
-  const reasons: string[] = [];
   const tree = parse(input.file, input.fileText).root;
-  const boxes: SyntaxNode[] = [];
   let owner: SyntaxNode | undefined;
+  walk(tree, node => { if (node.type === 'ClassDeclaration' && declaredName(node) === input.owner) owner = node; });
 
-  walk(tree, (node) => {
-    if (node.type !== 'ClassDeclaration') return;
+  if (owner === undefined) return ['has no declared forwarder class'];
+  const reasons: string[] = [];
+  walk(owner, node => { if (node.type === 'Decorator') reasons.push('carries a decorator, which can rewrite its RPC surface'); });
 
-    if (declaredName(node) === input.owner) owner = node;
-    else if (superClassName(node) === 'Container') boxes.push(node);
-  });
-
-  if (owner === undefined) return [`is not declared in ${input.file}`];
-
-  if (boxes.length !== 1) return [`declares ${String(boxes.length)} Container classes beside it, not one private box`];
-  const [box] = boxes;
-
-  if (box === undefined) return reasons;
-
-  for (const statement of tree.children) {
-    if (statement.raw.type === 'ExportNamedDeclaration' && statement.children.some((child) => child === box)) reasons.push('exports its box');
-  }
-
-  walk(owner, (inner) => { if (inner.type === 'Decorator') reasons.push('carries a decorator, which can add or rewrite members'); });
-  reasons.push(...accessorReasons(owner), ...closureReasons(owner, tree));
-  reasons.push(...boxReasons(box));
-
-  const field = classMembers(owner)
-    .flatMap((member) => (member.raw.type === 'PropertyDefinition' && member.raw.key.type === 'PrivateIdentifier' ? [member.raw.key.name] : []))
-    .find((name) => name === 'box');
-
-  if (field === undefined) reasons.push('holds no private #box');
-  else reasons.push(...boxUseReasons(owner, `#${field}`));
-
-  return reasons;
+  return [...reasons, ...accessorReasons(owner), ...closureReasons(owner, tree), ...containerUseReasons(owner, tree)];
 }
 
 /** A loaded class: a function whose prototype is an object. */
@@ -544,23 +440,9 @@ export function surfaceOf(cls: { readonly prototype: object }, durableObject: { 
 
 export function declaredSandboxClasses(sources: ReadonlyMap<string, string>): string[] {
   const lineage = sandboxLineage(sources);
-  const names = new Set<string>();
 
-  for (const [file, text] of sources) {
-    if (!file.startsWith('packages/cf-backend/')) continue;
-
-    if (!text.includes('Sandbox') && !text.includes('Devbox')) continue;
-    walk(parse(file, text).root, (node) => {
-      const base = superClassName(node);
-
-      if (base === undefined || !lineage.has(base)) return;
-      const name = declaredName(node);
-
-      if (name !== undefined) names.add(name);
-    });
-  }
-
-  return [...names].sort();
+  return [...containerClasses(sources)].filter(([name, cls]) => lineage.has(name)
+    && cls.file.startsWith("packages/cf-backend/")).map(([name]) => name).sort();
 }
 
 export interface Violation {
@@ -587,191 +469,247 @@ function fieldValue(member: SyntaxNode): string | undefined {
   return undefined;
 }
 
-export function auditInterception(
-  sources: ReadonlyMap<string, string>,
-  classes: readonly string[],
-): InterceptionAudit {
-  const inspected: { file: string; owner: string }[] = [];
-  const violations: Violation[] = [];
-  const wanted = new Set(classes);
+interface ContainerClass {
+  readonly file: string;
+  readonly node: SyntaxNode;
+  readonly base: string | undefined;
+  readonly policy: string | undefined;
+  readonly declaresPolicy: boolean;
+}
+
+function containerClasses(sources: ReadonlyMap<string, string>): Map<string, ContainerClass> {
+  const classes = new Map<string, ContainerClass>();
 
   for (const [file, text] of sources) {
-    if (!classes.some((name) => text.includes(`class ${name} `))) continue;
-    const parsed = parse(file, text);
-    walk(parsed.root, (node) => {
+    if (!text.includes('class')) continue;
+    walk(parse(file, text).root, node => {
       if (node.type !== 'ClassDeclaration') return;
-      const owner = declaredName(node);
+      const name = declaredName(node);
 
-      if (owner === undefined || !wanted.has(owner)) return;
-      inspected.push({ file, owner });
-      const line = parsed.lineAt(node.start);
-      const fail = (reason: string): void => void violations.push({ file, line, owner, reason });
-
-      const declared = new Map<string, string | undefined>();
-
-      for (const member of classMembers(node)) {
-        const name = declaredName(member);
-
-        if (member.type === 'PropertyDefinition' && name !== undefined) {
-          declared.set(name, fieldValue(member));
-        }
-      }
-
-      for (const [field, value] of Object.entries(REQUIRED_FIELDS)) {
-        if (!declared.has(field)) {
-          fail(`does not declare \`${field} = ${value}\` — see this gate's header for the path that opens`);
-        } else if (declared.get(field) !== value) {
-          fail(`declares \`${field} = ${String(declared.get(field))}\`, must be \`${value}\``);
-        }
-      }
-
-      for (const field of FORBIDDEN_FIELDS) {
-        if (declared.has(field)) {
-          fail(`declares \`${field}\` — an allow/deny list must not be what totality rests on`);
-        }
-      }
+      if (name === undefined) return;
+      const policy = classMembers(node).find(member => declaredName(member) === 'enableInternet');
+      classes.set(name, { file, node, base: superClassName(node), policy: policy === undefined ? undefined : fieldValue(policy), declaresPolicy: policy !== undefined });
     });
+  }
+
+  return classes;
+}
+
+function inheritedPolicy(name: string, classes: ReadonlyMap<string, ContainerClass>, seen = new Set<string>()): string | undefined {
+  if (seen.has(name)) return undefined;
+  seen.add(name);
+  const cls = classes.get(name);
+
+  if (cls === undefined) return undefined;
+
+  if (cls.declaresPolicy) return cls.policy;
+
+  return cls.base === undefined ? undefined : inheritedPolicy(cls.base, classes, seen);
+}
+
+export function auditInterception(sources: ReadonlyMap<string, string>, names: readonly string[], internet = false): InterceptionAudit {
+  const classes = containerClasses(sources);
+  const inspected: { file: string; owner: string }[] = [];
+  const violations: Violation[] = [];
+
+  for (const owner of names) {
+    const cls = classes.get(owner);
+
+    if (cls === undefined) {
+      violations.push({ file: '<sources>', line: 1, owner, reason: 'network policy owner is absent from the measured sources' });
+      continue;
+    }
+
+    inspected.push({ file: cls.file, owner });
+
+    if (inheritedPolicy(owner, classes) !== String(internet)) {
+      violations.push({ file: cls.file, line: parse(cls.file, sources.get(cls.file) ?? '').lineAt(cls.node.start), owner,
+        reason: `effective enableInternet must be ${internet}, including inherited policy` });
+    }
   }
 
   return { inspected, violations };
 }
 
-/** Whether the Worker entry publishes `ContainerProxy` under that name, bound to the SDK's own class. Without it the
- *  Sandbox DO cannot build an interception fetcher at all, and every request leaves unintercepted while the vault
- *  still believes it is substituting. An `export * from` is not credited: this file cannot list what it publishes. */
-export function exportsContainerProxy(entry: string): boolean {
-  return publishedNames(parse(WORKER_ENTRY, entry).root).some(({ name, origin }) =>
-    name === 'ContainerProxy' && origin?.specifier === CONTAINERS_HOST && origin.imported === 'ContainerProxy');
+function memberPath(raw: Node | null | undefined): string | undefined {
+  if (raw?.type === 'ThisExpression') return 'this';
+
+  if (raw?.type === 'Identifier') return raw.name;
+
+  if (raw?.type !== 'MemberExpression' || raw.computed) return undefined;
+  const base = memberPath(raw.object);
+  const member = nameOf(raw.property);
+
+  return base === undefined || member === undefined ? undefined : `${base}.${member}`;
 }
 
-/** The SDK whose default this gate re-measures, and the package that resolves
- *  that SDK for the deployed artifact. Two copies of Containers are installed at
- *  two versions: the top-level copy carries one type import and no runtime byte,
- *  while the Worker reaches the nested copy through `@cloudflare/sandbox`. So the
- *  resolution starts at Sandbox's own module, never at this repository. */
-const CONTAINERS = '@cloudflare/containers';
+function objectValue(raw: Node | null | undefined, name: string): Node | undefined {
+  if (raw?.type !== 'ObjectExpression') return undefined;
+  const property = raw.properties.find(entry => entry.type === 'Property' && !entry.computed && nameOf(entry.key) === name);
 
-const CONTAINERS_HOST = '@cloudflare/sandbox';
-
-/** The module that declares the default, spelled the way Containers' own entry
- *  spells it: `dist/index.js` re-exports `./lib/container`. A relative specifier,
- *  because Containers publishes `.` alone in `exports` and Node refuses every
- *  subpath of it. */
-const CONTAINERS_MODULE = './lib/container';
-
-const CopyVersion = v.object({ version: v.string() });
-
-/** The installed copy of Containers the deployed artifact loads. */
-export interface BoundContainers {
-  /** Absolute path of the module the artifact loads. */
-  readonly module: string;
-  /** Version of the copy that module belongs to, from its own manifest. */
-  readonly version: string;
+  return property?.type === 'Property' ? property.value : undefined;
 }
 
-/** Resolve `specifier` the way the module at `from` resolves it. Throws, and
- *  answers with no other copy: a gate that falls back to the top-level copy
- *  measures code the Worker never loads. */
-function resolveFrom(from: string, specifier: string): string {
-  try {
-    return createRequire(from).resolve(specifier);
-  } catch (cause) {
-    throw new Error(finding({
-      invariant: `the ${CONTAINERS} copy this gate reads is the copy the deployed artifact binds, `
-        + `resolved from ${CONTAINERS_HOST} rather than named by a path`,
-      at: `resolving '${specifier}' from ${from}`,
-      found: 'the specifier resolves to nothing there',
-      silently: `the top-level ${CONTAINERS} copy is a different version and contributes no runtime `
-        + 'byte to the artifact, so it is NOT a substitute: reading it asserts a property of code '
-        + 'the Worker never loads',
-      fix: `install ${CONTAINERS_HOST} so it resolves ${CONTAINERS}, or correct the specifier`,
-    }), { cause });
-  }
+function callsIn(node: SyntaxNode): SyntaxNode[] {
+  const calls: SyntaxNode[] = [];
+  walk(node, child => { if (child.raw.type === 'CallExpression') calls.push(child); });
+
+  return calls;
 }
 
-/** The version of the copy `module` belongs to, read from the nearest manifest
- *  above it. Read rather than written down, because which version this gate read
- *  is the fact a future divergence becomes visible in. */
-function copyVersion(module: string): string {
-  for (let dir = dirname(module); dir !== dirname(dir); dir = dirname(dir)) {
-    const manifest = join(dir, 'package.json');
+function callName(node: SyntaxNode): string | undefined {
+  if (node.raw.type !== 'CallExpression') return undefined;
 
-    if (existsSync(manifest)) {
-      return v.parse(CopyVersion, JSON.parse(readFileSync(manifest, 'utf8'))).version;
-    }
-  }
-
-  throw new Error(finding({
-    invariant: `the ${CONTAINERS} copy the artifact binds reports its own version`,
-    at: module,
-    found: 'no package.json above the resolved module',
-    silently: 'the gate reads bytes it cannot attribute to a version, so an upstream change moves '
-      + 'the property without moving anything the output names',
-    fix: `reinstall ${CONTAINERS_HOST} so its nested ${CONTAINERS} copy carries its manifest`,
-  }));
+  return node.raw.callee.type === 'Identifier' ? node.raw.callee.name : memberCalleeName(node);
 }
 
-/**
- * The Containers module the deployed Worker binds, resolved along the edge the
- * artifact itself resolves: this repository loads `@cloudflare/sandbox`, and
- * Sandbox's own modules load the Containers copy nested beneath it.
- *
- * Resolved rather than spelled: a literal path names the TOP-LEVEL copy, which
- * is a different version and ships nothing, so the property asserted below
- * would hold by accident.
- */
-export function boundContainers(): BoundContainers {
-  const host = resolveFrom(`${root}package.json`, CONTAINERS_HOST);
-  const module = resolveFrom(resolveFrom(host, CONTAINERS), CONTAINERS_MODULE);
-
-  return { module, version: copyVersion(module) };
+function literalIs(raw: Node | null | undefined, value: string | number | boolean): boolean {
+  return raw?.type === 'Literal' && raw.value === value;
 }
 
-/** Re-measure the upstream default this whole posture exists to correct. True while the SDK still declares a class
- *  field `interceptHttps = false`. */
-export function sdkDefaultsHttpsInterceptionOff(containerModule: string): boolean {
-  let off = false;
-  walk(parse('container.js', containerModule).root, (node) => {
-    if (node.type === 'PropertyDefinition' && declaredName(node) === 'interceptHttps' && fieldValue(node) === 'false') off = true;
+function exportsNamed(entry: string, name: string, source?: string): boolean {
+  return publishedNames(parse(WORKER_ENTRY, entry).root).some(published => published.name === name
+    && (source === undefined ? published.origin === undefined : published.origin?.specifier === source && published.origin.imported === name));
+}
+
+function admissionPolicyReasons(base: ContainerClass): string[] {
+  const reasons: string[] = [];
+  const starts = callsIn(base.node).filter(call => call.raw.type === 'CallExpression' && memberPath(call.raw.callee) === 'container.start');
+
+  if (starts.length !== 1 || starts.some(call => call.raw.type !== 'CallExpression'
+    || memberPath(objectValue(call.raw.arguments[0], 'enableInternet')) !== 'this.enableInternet')) reasons.push('native start does not use the declared internet policy');
+  const factories: Node[] = [];
+  walk(base.node, node => { if (node.raw.type === 'NewExpression' && nameOf(node.raw.callee) === 'ContainerRoutes') factories.push(node.raw); });
+  const factory = factories[0];
+
+  if (factories.length !== 1 || factory?.type !== 'NewExpression'
+    || memberPath(objectValue(factory.arguments[0], 'internet')) !== 'this.enableInternet') reasons.push('the router does not receive the declared public-network policy');
+
+  return reasons;
+}
+
+function interceptionReasons(routes: ContainerClass): string[] {
+  const reasons: string[] = [];
+  const calls = callsIn(routes.node);
+  const http = calls.find(call => callName(call) === 'interceptAllOutboundHttp');
+  const https = calls.find(call => callName(call) === 'interceptOutboundHttps');
+
+  if (http?.raw.type !== 'CallExpression' || http.raw.arguments.length !== 1) reasons.push('HTTP has no total native interception');
+
+  if (https?.raw.type !== 'CallExpression' || https.raw.arguments.length !== 2 || !literalIs(https.raw.arguments[0], '*')) reasons.push('HTTPS has no total native interception');
+
+  if (http?.raw.type === 'CallExpression' && https?.raw.type === 'CallExpression'
+    && memberPath(http.raw.arguments[0]) !== memberPath(https.raw.arguments[1])) reasons.push('HTTP and HTTPS use different routing policies');
+  let receivesPolicy = false;
+  walk(routes.node, node => {
+    if (node.raw.type === 'Property' && nameOf(node.raw.key) === 'internet' && memberPath(node.raw.value) === 'this.host.internet') receivesPolicy = true;
   });
 
-  return off;
+  if (!receivesPolicy) reasons.push('the router does not receive the declared public-network policy');
+
+  return reasons;
 }
 
-const isEgressHandler = (raw: Node | undefined): boolean => raw?.type === 'Identifier' && raw.name === 'EGRESS_HANDLER';
+function importedImplementation(sources: ReadonlyMap<string, string>, file: string, name: string): SyntaxNode | undefined {
+  const tree = parse(file, sources.get(file) ?? '').root;
 
-/** An `outboundHandlers` registry, as a class field or an assignment, whose object keys the catch-all. */
-function registersCatchAll(node: SyntaxNode): boolean {
-  const { raw } = node;
-  let registry: Node | null | undefined;
+  for (const statement of tree.children) {
+    if (statement.raw.type !== 'ImportDeclaration' || !statement.raw.source.value.startsWith('.')) continue;
 
-  if (raw.type === 'PropertyDefinition' && declaredName(node) === 'outboundHandlers') registry = raw.value;
-  else if (raw.type === 'AssignmentExpression' && raw.left.type === 'MemberExpression' && !raw.left.computed
-    && nameOf(raw.left.property) === 'outboundHandlers') registry = raw.right;
+    if (!importBindings(statement).some(binding => binding.local === name && binding.imported === name)) continue;
+    const path = posix.normalize(posix.join(posix.dirname(file), statement.raw.source.value)) + '.ts';
+    const text = sources.get(path);
 
-  return registry?.type === 'ObjectExpression'
-    && registry.properties.some((entry) => entry.type === 'Property' && entry.computed && isEgressHandler(entry.key));
-}
-
-/** Whether a catch-all handler is registered AND bound. Both halves matter: a
- *  registry entry nobody binds intercepts nothing, and a bind naming a handler
- *  that is not in the registry throws at configuration time. */
-export function catchAllIsBound(sources: ReadonlyMap<string, string>): boolean {
-  let registered = false;
-  let bound = false;
-
-  for (const [file, text] of sources) {
-    if (!text.includes('EGRESS_HANDLER')) continue;
-    walk(parse(file, text).root, (node) => {
-      if (registersCatchAll(node)) registered = true;
-
-      if (node.raw.type === 'CallExpression' && memberCalleeName(node) === 'setOutboundHandler'
-        && isEgressHandler(node.raw.arguments[0])) bound = true;
-    });
+    if (text !== undefined) return parse(path, text).root;
   }
 
-  return registered && bound;
+  return undefined;
 }
+
+/** The four classes the vault rule reads: Devbox, Kinu's sandbox, the route owner and the vault entrypoint. */
+interface VaultClasses {
+  readonly base: ContainerClass;
+  readonly kinu: ContainerClass;
+  readonly routes: ContainerClass;
+  readonly vault: ContainerClass;
+}
+
+function vaultPolicyReasons({ base, kinu, routes, vault }: VaultClasses, sources: ReadonlyMap<string, string>): string[] {
+  const reasons: string[] = [];
+  const hostPolicy = classMembers(kinu.node).find(member => declaredName(member) === 'outboundPolicy');
+  let bindsVault = false;
+
+  if (hostPolicy !== undefined) walk(hostPolicy, node => {
+    if (node.raw.type !== 'ReturnStatement') return;
+    const fallback = objectValue(node.raw.argument, 'fallback');
+
+    if (fallback?.type === 'CallExpression' && memberPath(fallback.callee) === 'this.#nativeExports.KinuEgress') bindsVault = true;
+  });
+  let usesHostPolicy = false;
+  walk(routes.node, node => {
+    if (node.raw.type === 'AssignmentExpression' && memberPath(node.raw.left) === 'this.#fallback'
+      && memberPath(node.raw.right) === 'policy.fallback') usesHostPolicy = true;
+  });
+
+  const configured = callsIn(base.node).some(call => {
+    if (callName(call) !== 'configure' || call.raw.type !== 'CallExpression') return false;
+    const policy = call.raw.arguments[0];
+
+    return policy?.type === 'AwaitExpression' && policy.argument.type === 'CallExpression' && memberPath(policy.argument.callee) === 'this.outboundPolicy';
+  });
+
+  if (!bindsVault || !usesHostPolicy || !configured) reasons.push('Kinu does not bind the vault as its default egress route');
+
+  if (!callsIn(vault.node).some(call => callName(call) === 'handleContainerEgress')) reasons.push('the native vault entry does not enter credential injection');
+  const implementation = importedImplementation(sources, vault.file, 'handleContainerEgress');
+
+  if (implementation === undefined || !callsIn(implementation).some(call => callName(call) === 'resolveEgressInjection')) reasons.push('credential injection does not consult the owner vault');
+
+  return reasons;
+}
+
+function dispatcherReasons(router: ContainerClass): string[] {
+  const reasons: string[] = [];
+  let hasFallback = false;
+  walk(router.node, node => { if (node.raw.type === 'LogicalExpression' && memberPath(node.raw.right) === 'this.ctx.props.fallback') hasFallback = true; });
+  const calls = callsIn(router.node);
+  const routed = calls.find(call => call.raw.type === 'CallExpression' && memberPath(call.raw.callee) === 'route.fetch');
+  const direct = calls.find(call => call.raw.type === 'CallExpression' && nameOf(call.raw.callee) === 'fetch');
+
+  if (!hasFallback || routed === undefined || direct === undefined || routed.start >= direct.start) reasons.push('owned routes do not precede public networking');
+  let conditional = false;
+
+  for (let parent = direct?.parent; parent !== undefined; parent = parent.parent) {
+    if (parent.raw.type === 'ConditionalExpression' && memberPath(parent.raw.test) === 'this.ctx.props.internet'
+      && direct !== undefined && direct.start >= parent.raw.consequent.start && direct.end <= parent.raw.consequent.end) conditional = true;
+  }
+
+  if (!conditional) reasons.push('public forwarding is not conditional on the declared internet policy');
+
+  return reasons;
+}
+
+/** Literal native admission, route installation, vault ownership and dispatch are separate obligations. */
+export function nativeRoutingReasons(sources: ReadonlyMap<string, string>, entry: string): string[] {
+  const classes = containerClasses(sources);
+  const base = classes.get('Devbox');
+  const kinu = classes.get('KinuSandbox');
+  const routes = classes.get('ContainerRoutes');
+  const router = classes.get('DevboxOutbound');
+  const vault = classes.get('KinuEgress');
+
+  if (base === undefined || kinu === undefined || routes === undefined || router === undefined || vault === undefined) return ['native routing has an unmeasured owner'];
+
+  const reasons = [...admissionPolicyReasons(base), ...interceptionReasons(routes),
+    ...vaultPolicyReasons({ base, kinu, routes, vault }, sources), ...dispatcherReasons(router)];
+
+  if (!exportsNamed(entry, 'DevboxOutbound', '@kinu.run/devbox')) reasons.push('DevboxOutbound is not bound to its routing implementation in the Worker entry');
+
+  if (vault.file !== WORKER_ENTRY || !exportsNamed(entry, 'KinuEgress')) reasons.push('KinuEgress is not bound to its routing implementation in the Worker entry');
+
+  return reasons;
+}
+
 
 /** What RPC can reach on `name` exported from `path`, read off the loaded class. `cloudflare:workers` is shimmed as
  *  scripts/test-preload.ts does, unless something already provides it; the class and the comparison use one module. */
@@ -799,7 +737,7 @@ export async function loadForwarderSurface(path: string, name: string): Promise<
 }
 
 if (import.meta.main) {
-  const sources = readSources();
+  const sources = readInterceptionSources();
   const bound = wranglerContainerClasses(parseJsonc(readFileSync(`${root}${WRANGLER}`, 'utf8'), WranglerContainers, WRANGLER));
   const declaredContainers = parseJsonc(readFileSync(`${root}${WRANGLER}`, 'utf8'), WranglerContainers, WRANGLER).containers ?? [];
   const records = new Map<string, ContainerImage>(Object.entries(CONTAINER_IMAGES));
@@ -824,113 +762,43 @@ if (import.meta.main) {
     for (const reason of reasons) console.error(`egress-interception: ${owner} is not an admitted forwarder: it ${reason}`);
   }
 
-  const fromWrangler = bound.filter((name) => !forwarders.includes(name));
+  const fromWrangler = bound.filter(name => !forwarders.includes(name));
   const fromSource = declaredSandboxClasses(sources);
   const classes = [...new Set([...fromWrangler, ...fromSource])].sort();
-  const { inspected, violations } = auditInterception(sources, classes);
+  const privateAudit = auditInterception(sources, classes);
+  const lineage = sandboxLineage(sources);
 
-  const problems: string[] = [];
+  const generic = [...containerClasses(sources)].filter(([name, cls]) => lineage.has(name)
+    && cls.file.startsWith('packages/devbox/') && !cls.file.includes('/tests/')).map(([name]) => name).sort();
 
-  if (fromWrangler.length === 0) {
-    problems.push(`parsed no "containers" class_name out of ${WRANGLER} — nothing is bound to a container image`);
-  }
+  const publicAudit = auditInterception(sources, generic, true);
+  const entry = sources.get(WORKER_ENTRY) ?? readFileSync(join(root, WORKER_ENTRY), 'utf8');
+  const problems = nativeRoutingReasons(sources, entry);
 
-  if (fromSource.length === 0) {
-    problems.push('found no class extending the Sandbox lineage in the deployment source — the matcher is not matching');
-  }
+  if (fromWrangler.length === 0 || fromSource.length === 0 || generic.length === 0) problems.push('the configured/private/public container denominator is empty');
 
-  if (inspected.length === 0) {
-    problems.push(`found none of the container classes (${classes.join(', ') || 'none'}) in the source`);
-  }
+  for (const name of classes) if (!fromSource.includes(name)) problems.push(name + ' is bound but has no Devbox lineage in the deployment source');
+  const violations = [...privateAudit.violations, ...publicAudit.violations];
 
-  // A name in one source and not the other is always worth reporting: bound but
-  // absent from source means the scan missed a container, and the union is what
-  // stops a corrected binding from silently shrinking the corpus.
-  for (const name of classes) {
-    if (!fromSource.includes(name)) {
-      problems.push(`${name} is bound to a container in ${WRANGLER} but no class ${name} extending the Sandbox lineage was found`);
-    }
-  }
-
-  if (problems.length > 0) {
-    for (const problem of problems) console.error(`egress-interception: ${problem}`);
-    process.exit(1);
-  }
-
-  const entry = sources.get(WORKER_ENTRY) ?? readFileSync(`${root}${WORKER_ENTRY}`, 'utf8');
-
-  if (!exportsContainerProxy(entry)) {
-    console.error(finding({
-      invariant: 'the Worker entry re-exports ContainerProxy, without which no interception is installed at all',
-      at: WORKER_ENTRY,
-      found: 'no `export { ContainerProxy }`',
-      silently: 'applyOutboundInterception throws inside the Sandbox DO, so every container request leaves '
-        + 'unintercepted while the vault still substitutes placeholders it believes are being caught',
-      fix: `add \`export { ContainerProxy } from "@cloudflare/sandbox";\` to ${WORKER_ENTRY}`,
-    }));
-    process.exit(1);
-  }
-
-  if (!catchAllIsBound(sources)) {
-    console.error(finding({
-      invariant: 'a catch-all outbound handler is both registered in outboundHandlers and bound via setOutboundHandler',
-      at: 'packages/cf-backend/src/egress/',
-      found: 'the catch-all is missing from the registry, or nothing binds it',
-      silently: 'only hosts with an explicit per-host handler are intercepted and everything else falls '
-        + 'through to enableInternet, so a request to any other host leaves without being seen',
-      fix: 'register EGRESS_HANDLER in KinuSandbox.outboundHandlers and bind it with setOutboundHandler',
-    }));
-    process.exit(1);
-  }
-
-  const containers = boundContainers();
-
-  const httpsStillOffByDefault = sdkDefaultsHttpsInterceptionOff(
-    readFileSync(containers.module, 'utf8'),
-  );
+  for (const issue of violations) problems.push(issue.file + ':' + issue.line + ' ' + issue.owner + ': ' + issue.reason);
 
   const measured = assertMeasured('egress-interception', [
-    ['container classes bound in wrangler.jsonc', fromWrangler.length],
-    ['classes extending Sandbox in source', fromSource.length],
-    ['container classes inspected (union)', inspected.length],
-    ['interception invariants per class', Object.keys(REQUIRED_FIELDS).length + FORBIDDEN_FIELDS.length],
+    ['private configured classes', fromWrangler.length], ['private source classes', fromSource.length],
+    ['generic devbox/bench classes', generic.length], ['native routing owners', 5],
   ]);
 
-  if (violations.length > 0) {
-    console.error(`egress-interception: ${violations.length} un-intercepted egress path(s)`);
-
-    for (const violation of violations) {
-      console.error(`  ${violation.file}:${violation.line} ${violation.owner} — ${violation.reason}`);
-    }
-
+  if (problems.length > 0) {
+    for (const problem of problems) console.error('egress-interception: ' + problem);
     process.exit(1);
   }
 
-  console.log(`egress-interception: ok — ${measured}`);
-  console.log(`egress-interception: ADMITTED FORWARDERS — ${forwarders.join(', ') || 'none'}: each proved its image is the `
-    + 'pinned build of a hashed tracked directory running one tracked script, and its loaded class extends DurableObject '
-    + 'with exactly this RPC surface:');
+  console.log('egress-interception: ok — ' + measured);
+  console.log('egress-interception: private network denied: ' + classes.join(', ') + '; public network retained: ' + generic.join(', '));
+  console.log('egress-interception: HTTP and HTTPS enter the host router; Kinu binds the owner vault before the public-network fallback');
+  console.log('egress-interception: admitted fixed-image forwarders: ' + (forwarders.join(', ') || 'none'));
 
-  for (const [method, why] of FORWARDER_SURFACE) console.log(`egress-interception:   ${method} — ${why}`);
-  console.log('egress-interception: residual: policy.mjs is proved by its unit test, not parsed, and holds for every forward');
-  console.log('egress-interception: blind: ContainerProxy counts only as a named export bound to '
-    + `${CONTAINERS_HOST}'s own class, never through \`export *\`; the catch-all counts only as a computed `
-    + '`[EGRESS_HANDLER]` registry key and a `setOutboundHandler(EGRESS_HANDLER, …)` call naming that identifier');
-  console.log(`egress-interception: read the SDK default from ${CONTAINERS} ${containers.version} `
-    + `at ${relative(root, containers.module)}, the copy ${CONTAINERS_HOST} resolves for itself and `
-    + 'the only copy the artifact binds');
-
-  if (!httpsStillOffByDefault) {
-    // Not a failure: upstream turning it on is good news. But our source
-    // comments assert the opposite, so say it loudly rather than let them rot.
-    console.log(`egress-interception: NOTE — ${CONTAINERS} ${containers.version} no longer defaults `
-      + 'interceptHttps to false. Update the comments in kinu-sandbox.ts and this gate.');
-  }
-
-  console.log('egress-interception: DNS RESIDUAL — MEASURED CLOSED on the deployed container '
-    + '(0.2.0+28bc79307): raw UDP/53 and TCP/53 to public resolvers get no reply, and every name '
-    + 'resolves to the same private ULA fd00::119:1 including a TLD that cannot exist, so nothing '
-    + 'reaches a resolver and query labels carry nothing outward. This is a PLATFORM property, not '
-    + 'a property of this code: it can regress with no diff here. Re-measure, do not assume.');
+  for (const [method, why] of FORWARDER_SURFACE) console.log('egress-interception: ' + method + ' — ' + why);
+  console.log('egress-interception: blind spots: this proves literal/inherited policy and explicit native call/binding edges, not arbitrary control-flow equivalence or runtime platform enforcement. Dynamic aliases and metaprogramming are not credited. Vault authorization and forwarder policy bodies are covered by their behavioral tests; native routing, TLS trust and platform behavior by D38.');
+  console.log('egress-interception: DNS was measured closed with internet disabled on 0.2.0+28bc79307: UDP/TCP 53 did not escape and nonexistent names resolved to the same private ULA. This is a platform observation, not a source proof.');
   process.exit(0);
 }

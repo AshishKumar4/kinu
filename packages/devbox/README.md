@@ -11,48 +11,49 @@ Every decision in this package, with the measurement that settled it, is in
 change the package. The block-layer design is in
 [docs/DEVBOX-BLOCK-LAYER.md](../../docs/DEVBOX-BLOCK-LAYER.md).
 
-Devbox extends `Sandbox` from `@cloudflare/sandbox`:
+Devbox extends the platform's `DurableObject` and owns `ctx.container`.
+It uses `Files` and `S3Mounts` from `@cloudflare/sandbox` 1.0.0-rc.1, not the
+old Sandbox or Containers classes.
 
-```ts
-import { Devbox } from '@kinu.run/devbox';
+`example/worker.ts` is the complete standalone host: its class supplies an
+R2 binding and its Durable Object binding name. The Worker exports
+`DevboxSyncGateway`, `DevboxOutbound` and `DevboxStoreGateway`. The store
+gateway answers the container's S3 requests from the R2 binding, so no key
+pair exists in the Worker or the guest (D41).
 
-export class MyBox extends Devbox<Env> {
-  protected override get store() {
-    return { binding: 'BUCKET', bucket: this.env.BUCKET };
-  }
-}
-```
-
-A subclass with no overrides is a working box with no durability. It says so
-on every call.
+A subclass with no store is a working box with no durability. It reports
+that when it attaches.
 
 ## Lifecycle
 
 `Devbox` owns this order:
 
-1. Admission proves the SDK's control listener answers, through
-   `startAndWaitForPorts`, before the SDK calls `onStart`. A failed admission
-   records an incident and arms the `devboxStartup` row to try again. A caller
-   asking meanwhile is told the platform's refusal in its own words.
-2. `onStart` adopts the running instance when it is already restored, or
-   restores it (attach, workload restart, port exposure) under one raced
-   budget. The SDK runs it inside its start block, so nothing else reaches the
-   object until it settles. It then arms the container schedule rows, starts
-   the container's own sync, and retires the startup row.
-3. Operations wait on attachment. A failed attach refuses with its reason and
-   walks one bounded recovery ladder instead of resetting the object.
-4. A heartbeat holds the lease. Three gates must agree before a stop. A box
-   no caller has used counts its idle time from its container's start.
-5. A graceful stop takes a final checkpoint through the container's sync, ends
-   the sync, disables keep-alive, then sends `SIGTERM`.
-6. A lifecycle failure is stored before delivery retries until the host accepts
-   it.
-7. `destroy` closes the box. It cancels every start under way and waits for
-   it, deletes its startup, heartbeat and checkpoint rows, then runs the SDK's
-   destroy, so nothing such a start launched is still running when it
-   returns. Until a caller or a host asks again, Devbox's
-   `startAndWaitForPorts` refuses to start a container, and a request that
-   arrived before the destroy is refused when it reaches readiness (D36).
+1. Start calls the native container API and proves admission with
+   `container.exec(['/bin/true'])`. A refusal records an incident and arms
+   the `devboxStartup` row. A caller asking meanwhile receives the
+   platform's refusal.
+2. Devbox installs outbound routing, then enters its own
+   `blockConcurrencyWhile` restore block. It adopts an already-restored
+   instance or restores files, supervised processes and port exposures under
+   one budget. A native sleeper, not a Worker timer, enforces that budget.
+3. Operations wait for attachment. A failed attach refuses with its reason
+   and walks one bounded recovery ladder instead of resetting the object.
+4. A heartbeat renews the native inactivity deadline. Three gates must agree
+   before a stop. A box no caller has used counts idle time from its start.
+5. A graceful stop fences new calls and drains admitted commands and resource
+   streams without a work deadline. A detached, unsupervised command still
+   running refuses the stop. D35 permits stop after an unreadable process
+   list exhausts its quiet-confirm window; the result names that risk. Devbox
+   stops residents but retains their launch records, releases work-directory
+   holders, takes the final
+   checkpoint, detaches, and destroys the container. A failed commit resumes
+   residents and reopens admission (D39).
+6. A lifecycle failure is stored before delivery retries until the host
+   accepts it.
+7. `destroy` closes the box, cancels and joins starts in flight, and deletes
+   startup, heartbeat and checkpoint rows before destroying the native
+   container. A request that arrived before the destroy cannot reopen it.
+   A later caller or host can ask for a new start (D36).
 
 `DevboxStorage` hides durable bytes behind the three methods every strategy
 needs:
@@ -94,11 +95,11 @@ Writes land on the overlay's local upper. The container syncs it in the
 background (D30): the image's `sync.js` runs the chain checkpoint every
 `checkpointIntervalMs` (5 min) on the container's own shell, gated on the
 upper's fingerprint, so an idle box costs one local walk per period. It asks
-its Durable Object only for what a container cannot reach: the record, the
-store binding, and the SDK's store mount, over `http://devbox.internal`, which
-each concrete class routes to its box with `devboxSyncHandlers`. The box holds
-every such request to its own record, prefix and restored container, and the
-record write stays fenced. Payload bytes never cross the box (D29).
+its Durable Object only for the record, store metadata and mount control,
+over `http://devbox.internal`. `DevboxSyncGateway` binds that request to its
+own box. Payloads go through `DevboxStoreGateway` and never cross the owner
+object (D29). On DO recreation, Devbox rebuilds routing from the SDK's
+mount-registration marker, not a second copy in its own storage (D40).
 
 Keys are `boxes/<box>/backups/<uuid>/data.sqsh` and `…/delta.sqsh`: one chain
 root per box, every generation beneath it. Key builders require a UUID, so no
@@ -173,27 +174,20 @@ refuses it, to prove the test can go red.
 
 ## Platform constraints
 
-Restore runs once per fresh container, in `onStart`, after admission and
-inside the SDK's `blockConcurrencyWhile` start block (D26 in the decision
-log). Two platform facts shape the patched SDK. A WebSocket delivers its
-messages under the input gate it was accepted under, so the hook gets a
-control connection opened inside the block (P4). Timers fire in due order,
-each under the gate it was set under, so a timer set before the block that
-falls due inside it holds every timer the hook sets (P5); the SDK clears its
-own such timers at block entry, and Devbox sets none that outlive into the
-block. `scripts/do-init-gate.ts` holds the SDK and the hook to that shape.
+Restore runs once per fresh container, after native admission, inside
+Devbox's `blockConcurrencyWhile` block. D38 reran D26's three controls on
+the patched 0.12.9 SDK and the native API before removing the SDK patches.
+Native command completion does not need a control WebSocket. Worker timers
+still depend on the gate where they were created: an earlier timer can hold
+a later in-block timer until the platform resets the object. The restore
+budget therefore uses a native `/bin/sleep` process; cancellation kills that
+process. The three deployed deadline controls ended in 5.03, 5.18 and 5.03 s.
 
-Before admission waited for the control listener, the in-block restore failed. On a deployed Worker
-the first operation after a stop answered 500:
-`A call to blockConcurrencyWhile() in a Durable Object waited for too long.
-The call was canceled and the Durable Object was reset.` Six fresh container
-starts of that shape (2026-09-10,
-`bench/measure-first/DECISIVE-2026-09-05.md`): one admitted at 3,270 ms, five
-reset by the platform at 30.0 s with no phase stamped. The first command on a
-fresh container opens the SDK's control connection, whose connect abort
-(`@cloudflare/sandbox` `dist/sandbox-D0rNqxlr.js:3563`, 30 s) and retry backoff
-(`:812`, 3 s) both run on the Durable Object. Admission now waits for that
-control listener, never for an app port the restore has not started yet.
+`Files` preserves POSIX failures through the SDK's structured error.
+Commands use native exec; an untimed command's cancellation is registered
+before readiness, so cancelling during startup cannot launch it afterwards.
+PTY input, resize and signals use the native process API. Preview requests
+reach `getTcpPort(port).fetch` over HTTP inside the container.
 
 Every operation awaits `ensureReady()`, which resolves once the work directory is
 attached. A failed attach records an incident, refuses with its reason, and
@@ -268,59 +262,39 @@ through an 11-minute true idle. The final tick was
 pending and no inactivity sleep occurred. The marker in the container still
 vanished because the platform replaced the instance.
 
-The heartbeat renews the SDK clock, and quiesce is the only deliberate stop.
-Continuity survives replacement: each restored instance writes a boot id under
-`/tmp` and mirrors it durably. A different id, or no id, increments
-`state.replacedCount` and restores immediately. `state.bootId` identifies the
-instance the durable state expects. Replacement is a platform fact, not a
-package failure.
+The heartbeat renews the native inactivity deadline, and quiesce is the
+deliberate idle stop. Continuity survives replacement: each restored instance
+writes a boot id under `/tmp` and mirrors it durably. A changed or missing id
+increments `state.replacedCount` and restores immediately.
 
-Three of four schedule rows re-arm themselves. A broken chain does not restart
-itself. Devbox arms all three initial rows because `devboxHeartbeat` cannot
-supply its own first link; every container start runs the start hook, which
-arms them. A heartbeat that finds the container stopped writes one last tick
-and arms nothing, so nothing wakes a stopped box until something starts it
-(D34). The arming guard counts only strictly-future rows: the SDK retains a
-fired row until its callback returns, so counting the active row would
-suppress its successor.
-
-Devbox never enables `setKeepAlive(true)`. The SDK alarm loop's activity branch
-returns without an alarm. With keepAlive on, `onActivityExpired` logs, then an
-idle box expires, stops neither itself nor its alarm, and leaves unreachable
-rows. Devbox renews the SDK clock and overrides `onActivityExpired` to make a
-final checkpoint before stop. `state.lastTick` records each heartbeat because
-these failures look the same from outside.
+Devbox owns its schedule records and the platform alarm. Startup, heartbeat
+and checkpoint rows re-arm while work remains; incident delivery runs until
+the host accepts it. A heartbeat that finds the container stopped writes one
+last tick and arms nothing (D34). The arming guard counts strictly-future
+rows, not the callback currently being consumed. With no row left,
+`alarm()` deletes the platform alarm.
 
 Attach verifies a mount line and an existing writable layer before a checkpoint
 can report a change. A live container once reported a successful attach with no
 overlay mount; forced checkpoint returned `unchanged`, and restart found an empty
 work directory.
 
-`checkChanges` also needs a baseline. The SDK returns `unchanged` without
-`since`, but a never-checkpointed box has no baseline. I reproduced a fresh box
-that wrote files, stopped, and saved nothing while every call succeeded. Without
-a baseline, content counts as change.
-
 ## Tests
 
-`bun test packages/devbox` runs every suite and `bunx tsc --noEmit -p
-packages/devbox` exits 0. Each suite passes standalone, and their standalone
-counts equal the directory total.
+`bun run --cwd packages/devbox test` runs the package's Bun and workerd
+suites. `bun run --cwd packages/devbox check` checks both TypeScript targets.
+The package test command loads the repository's one Workers platform preload.
 
-This README records no test count. Two runs of the same commit minutes apart
-gave different totals while suites landed around them, so a count here would
-be wrong within the hour. Run the command for today's total. What stays true
-is which suite pins what:
-
-- `decisions.test.ts` pins quiesce timing, restart order, port tokens, listener
-  probes, incident backoff, start budget, the recovery taxonomy and its ladder,
-  mount parsing, UUID refusals, and the interval gate.
+- `decisions.test.ts` covers restart order, port tokens, listener probes,
+  incident backoff, start budgets, recovery and mount parsing.
 - `supervised-lifecycle.test.ts` and `lifecycle-generation.test.ts` drive the
-  real class over `support/devbox-harness.ts`, which holds the one SDK
-  substitution. The first pins reservation order and the evidence a kill needs;
-  the second pins generation ownership, that a failed service is neither exposed
-  nor reported ready, and that repeated failure of one identity ends by replacing
-  it.
+  real class over `support/devbox-harness.ts` and its native platform model.
+  They cover generation ownership, process restoration and bounded recovery.
+- `quiesce-order.test.ts` covers admission draining, resident restart and the
+  delta after a first-quiesce base. `untimed-exec.test.ts` uses real local
+  processes to check output, process-tree termination and early cancellation.
+- `mount-route.test.ts` checks that absent or incompatible SDK registration
+  markers refuse rather than replacing the container or widening its route.
 - `snapshot-chain.test.ts` covers crash order, delta adoption, attach
   postconditions, unattached checkpoint refusal, archive scope, generation
   retention, and fallback recovery. Its denominator tests make an unexercised
@@ -330,13 +304,13 @@ is which suite pins what:
   blanks, dying at each commit sub-step. `workspace-mount-contract.test.ts`
   holds the mmap and WAL contract described under Storage against the real
   image.
-- `independence.test.ts` rejects product-core imports and workspace dependencies;
-  its third test proves the check can fail.
+- `scripts/bench-devbox-independence.test.ts` rejects product-core imports and
+  workspace dependencies; its third test proves the check can fail.
 - `workspace-resolution.test.ts` rejects `@kinu.run/*` resolving outside this
   checkout. A wrong `node_modules` can otherwise test another tree's source.
 
-Suites import modules rather than the package index. The index loads `Sandbox`
-and `cloudflare:workers`, neither available outside a Worker.
+The package entry loads `cloudflare:workers`; a non-Worker test must use the
+platform preload rather than replace the whole SDK.
 
 ## Benchmark fixture
 
@@ -355,10 +329,10 @@ Routes are `/create`, `/exec`, `/write`, `/checkpoint`, `/stop`, `/wake`,
 `Authorization: Bearer $BENCH_TOKEN`. An absent token refuses everything, so an
 old fixture is inert.
 
-s3fs traffic bypasses the Durable Object binding, so `ContainerProxy` is the
-only place that sees every operation. `uploadPart` and `complete` are methods on
-the handle from `createMultipartUpload`; wrapping only the bucket reported two
-class-A operations for a phase that wrote 111 MiB.
+S3 traffic bypasses the owner object. `CountingStoreGateway` serves it from the
+counting binding and meters each request, including each multipart part.
+Counting only the bucket binding misses this traffic; the 160 MiB native
+proof made one multipart create, 33 part uploads and one completion.
 
 A purge cannot promise an empty bucket. Pending multipart uploads count towards
 emptiness, but the Workers binding cannot list them. Use a dedicated bucket with
@@ -366,37 +340,37 @@ a lifecycle rule that aborts incomplete multipart uploads.
 
 ## Independence and evidence
 
-Devbox declares three dependencies, `@cloudflare/sandbox`,
-`@cloudflare/containers`, and `valibot`, and no workspace dependency.
-`independence.test.ts` rejects product-core imports and `workspace:` ranges. It
-reads the forbidden scope from a sibling manifest, so a rename cannot leave a
-dead guard.
+Devbox declares three dependencies, `@cloudflare/sandbox`, `effect` and
+`valibot`, and no workspace dependency. `scripts/bench-devbox-independence.test.ts`
+rejects product-core imports and `workspace:` ranges. There are no Sandbox or
+Containers patches.
 
-`patches/@cloudflare%2Fsandbox@0.12.9.patch` makes the SDK merge
-`outboundHandlers` rather than assign them. A bucket mount cannot then unbind a
-host handler.
+Every failure the package raises is one type, `DevboxError`, an Effect
+`Data.TaggedError` with a `code` (D42). Inside the package failures travel in
+the Effect channel; `settle` in `src/errors.ts` is the one runner.
+`devboxFailure` reads a failure back after Worker RPC has dropped its class.
+Kinu turns it into its own `KinuError` in one adapter,
+`packages/cf-backend/src/sandbox-exec-lane.ts`.
 
-`example/worker.ts` uses Devbox with no Kinu code: one class, its outbound
-sync handler, and a router over the public entry. Kinu's `KinuSandbox`
-(`packages/cf-backend/src/kinu-sandbox.ts`) is the same shape plus the
-product's egress, preview and incident wiring.
+`example/worker.ts` uses Devbox with no Kinu code. Kinu's `KinuSandbox`
+(`packages/cf-backend/src/kinu-sandbox.ts`) adds product egress, previews and
+incident delivery. Generic Devbox classes allow public networking;
+`KinuSandbox` starts with raw internet disabled and routes HTTP and HTTPS
+through the vault. Native routing uses exact-host gateway capabilities
+before that fallback; `scripts/egress-interception.ts` checks both policies.
 `bun scripts/bench-devbox-standalone.ts` deploys the example on its own Worker,
 bucket and container application, drives one box through start, write,
 delete, stop, wake and discard, and deletes everything it made.
 
-Every rule above has a unit test. Two deployed production-workerd runs of
-`bun scripts/sandbox-durability-probe.ts --run` passed all six phases on
-2026-08-24.
-
+Historical production-workerd observations from 2026-08-24, before the native cutover:
 | Run | P1 | P2 | P3 | P4 | P5 | P6 |
 | --- | --- | --- | --- | --- | --- | --- |
 | `31158290` | 64 MiB base | wake 79 ms; deep slice 82 ms | 4,096 B committed | HTTP 200 before and after restart | heartbeat chain alive for 11 minutes; platform replaced and healed the container | workspace intact |
 | `e54c7de8` | passed; no separate byte figure recorded | wake 443 ms; deep slice 72 ms | passed | passed | passed | passed |
 
 These are two observations, not a latency distribution, and not evidence for
-later source changes. The probe writes each later JSON record under the ignored
-`bench-artifacts/`, including partial evidence and the phase error.
+later source changes. The probe that took them, `scripts/sandbox-durability-probe.ts`,
+left the tree with the native cutover (D41).
 
-The source keeps the earlier failure records behind these policies: `onStart` in
-`src/devbox.ts`, `#stampBootId`, the `allowExtraction` reasoning in
-`src/snapshot-chain.ts`, and the `ContainerProxy` note in `bench/worker.ts`.
+D38-D40 record the native API controls, stop/wake proof, byte-exact 160 MiB
+read after owner eviction, and the SDK marker format used for route recovery.

@@ -1,9 +1,9 @@
 /** The workspace half of an agent-isolate turn (D9). */
 import { asSchema, type ToolSet } from 'ai';
-import { attempt, diagnostics, KinuError, renderThrownChain, settle, settleSync } from '@kinu.run/core/obs';
+import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import {
-  AgentOpenTurns, failedToolOutcome, hasPlanPermission, scaffoldProviders, runWorkModeInvocation,
+  AgentOpenTurns, hasPlanPermission, scaffoldProviders, runWorkModeInvocation,
   type ActorReference, type DynamicContext, type HostedActor, type ModelPricing, type ResolvedTurnProfile, type WorkMode,
   type HeadInput, type HeadInferenceDeps, type HeadReport, type SqlExecutor, type MissionBudgetPort, type Executor,
 } from '@kinu.run/core';
@@ -299,23 +299,19 @@ export class AgentTurns {
       toolCalls: capture.toolCalls.length, childHeadIds: capture.childHeadIds.length,
     };
 
-    return settle(Effect.tryPromise({
-      try: async () => ({ output: await runWorkModeInvocation(pending.task.mode, () => execute(input, { toolCallId: callId, messages: [] })) }),
-      catch: (cause) => ({ cause }),
-    }).pipe(
-      Effect.catch((failed) => Effect.succeed({ failure: { ...failedToolOutcome(failed), error: renderThrownChain(failed) } })),
-      Effect.map((result) => ({
-        ...result,
-        captured: {
-          evidence: capture.evidence.slice(before.evidence),
-          decisions: capture.decisions.slice(before.decisions),
-          artifacts: capture.artifacts.slice(before.artifacts),
-          toolCalls: capture.toolCalls.slice(before.toolCalls),
-          childHeadIds: capture.childHeadIds.slice(before.childHeadIds),
-        },
-        dynamic: this.dynamic(pending),
-      })),
-    ));
+    const output = await runWorkModeInvocation(pending.task.mode, () => execute(input, { toolCallId: callId, messages: [] }));
+
+    return {
+      output,
+      captured: {
+        evidence: capture.evidence.slice(before.evidence),
+        decisions: capture.decisions.slice(before.decisions),
+        artifacts: capture.artifacts.slice(before.artifacts),
+        toolCalls: capture.toolCalls.slice(before.toolCalls),
+        childHeadIds: capture.childHeadIds.slice(before.childHeadIds),
+      },
+      dynamic: this.dynamic(pending),
+    };
   }
 
   finish(actorId: string, turnId: string, end: AgentTurnEnd): Promise<void> {

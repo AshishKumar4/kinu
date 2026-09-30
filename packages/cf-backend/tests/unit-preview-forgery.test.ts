@@ -1,11 +1,5 @@
-/**
- * The real Sandbox SDK resolves the Durable Object before checking the port token, and the preview
- * host precedes auth, CSRF and budgets: a guessed hostname must be refused before `proxyToSandbox`.
- * The oracle is the namespace's `idFromName`: a refusal that resolved no id created nothing.
- */
+/** Unminted preview hostnames must be refused before a native Durable Object lookup. */
 import { afterAll, describe, expect, setSystemTime, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { makeKv, type FakeKv } from './helpers/kv';
 import { workerContext } from './helpers/bindings';
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
@@ -52,12 +46,9 @@ function probe(): SandboxProbe {
     PREVIEW_HOST_SUFFIX: SUFFIX,
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     Sandbox: {
-      idFromName(name: string) {
+      getByName(name: string) {
         resolved.push(name);
 
-        return { name };
-      },
-      get(_id: { name: string }) {
         return {
           async fetch(request: Request) {
             forwarded.push(request);
@@ -185,11 +176,6 @@ describe('a preview this deployment published', () => {
     expect(p.resolved).toEqual([SANDBOX_ID]);
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('container');
-    const forwarded = p.forwarded[0];
-
-    if (!forwarded) throw new Error('expected the container to receive the request');
-    expect(forwarded.headers.get('x-sandbox-preview-token')).toBe(MINTED_TOKEN);
-    expect(forwarded.headers.get('x-sandbox-preview-port')).toBe(String(PORT));
   });
 
   test('withdrawing the exposure stops the same URL at the edge', async () => {
@@ -240,22 +226,6 @@ describe('a preview this deployment published', () => {
 
     expect(p.resolved).toEqual([]);
     expect(res.status).toBe(404);
-  });
-});
-
-describe('the premise this gate rests on', () => {
-  test('the SDK resolves the object before the token is judged', () => {
-    const sdk = readFileSync(
-      join(import.meta.dir, '../../../node_modules/@cloudflare/sandbox/dist/index.js'),
-      'utf8',
-    );
-
-    const resolve = sdk.indexOf('getSandbox(env.Sandbox, sandboxId');
-    const forward = sdk.indexOf('await sandbox.fetch(previewRequest)');
-    expect(resolve).toBeGreaterThan(-1);
-    expect(forward).toBeGreaterThan(resolve);
-    // The token is set as a header for the object to validate, so the object must already exist.
-    expect(sdk).toContain('headers.set(PREVIEW_PROXY_TOKEN_HEADER, token)');
   });
 });
 

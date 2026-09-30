@@ -724,8 +724,6 @@ export {
 
 export { ToolOutcomeSchema, failedToolOutcome, successfulToolOutcome, withCodemodeProgram, type ToolOutcome } from './tools/outcome';
 
-export type { BindingFailure } from './types/tool-outcome';
-
 export { repairToolCall } from './tools/repair-tool-call';
 
 export { McpToolError, McpProtocolFailureSchema } from './tools/mcp-error';
@@ -2394,7 +2392,6 @@ export {
 export {
   sandboxIdForWorkspace,
   isKinuSandboxId,
-  SANDBOX_TRANSPORT,
 } from './preview/sandbox-id';
 
 export {

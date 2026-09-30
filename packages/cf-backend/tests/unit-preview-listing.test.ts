@@ -3,12 +3,11 @@
  * never asks the container's readiness, which starts a stopped container, so an open page cannot wake one. A
  * restoring container says so itself, and the listing answers pending until it settles.
  */
-import { afterAll, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from "bun:test";
 import * as v from 'valibot';
 import { isPreviewUrl, reconcilePreviewPorts, type ExposedPortList, type PinnedPreviewPort } from '@kinu.run/core';
 import { mockAgentsSdk } from './helpers/agents-sdk';
-import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
-import { socketConnection } from './helpers/bindings';
+import { socketConnection, unreachableObjects } from "./helpers/bindings";
 import type { RecordedUserPlaneCalls } from './helpers/actor-harness';
 import type { KinuSandbox } from '../src/kinu-sandbox';
 
@@ -30,11 +29,7 @@ let readinessAsked = 0;
 
 let restoreStatusAsked = 0;
 
-// Reset in `afterAll`, so a later file meets the real SDK.
-await installSandboxSdkMock();
-
-setSandboxSdk({
-  getSandbox: (_ns: NonNullable<Env['Sandbox']>, id: string) => ({
+const sandboxFor = (id: string) => ({
     resolveReadiness: async () => {
       readinessAsked += 1;
 
@@ -51,10 +46,9 @@ setSandboxSdk({
     getExposedPorts: async (hostname: string) => [{
       url: `https://${String(PORT)}-${id}-p8788_ab12cd34.${hostname}/`, port: PORT, status: 'active',
     }],
-  }),
 });
 
-afterAll(() => { setSandboxSdk(null); });
+const sandboxes = Object.assign(unreachableObjects<KinuSandbox>("Sandbox"), { getByName: sandboxFor });
 
 // Must follow the sandbox double: both helpers' module graphs reach the sandbox SDK.
 const { makeEnv, orchestratorHarness, until } = await import('./helpers/actor-harness');
@@ -68,7 +62,7 @@ async function usedSandbox() {
   const world = { container: true };
 
   const { agent } = orchestratorHarness(userPlane, world, {
-    ...makeEnv(undefined, userPlane, world), PREVIEW_HOST_SUFFIX: SUFFIX, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    ...makeEnv(undefined, userPlane, world), Sandbox: sandboxes, PREVIEW_HOST_SUFFIX: SUFFIX, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
 
   expect(await agent.executeInExecutor('sandbox', 'true')).toMatchObject({ exitCode: 0 });

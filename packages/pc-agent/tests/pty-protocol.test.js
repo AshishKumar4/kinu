@@ -11,16 +11,8 @@
 
 const { afterEach, describe, expect, test } = require('bun:test');
 
-/**
- * This suite touches NO environment.
- *
- * The daemon captures `KINU_HOME` and the in-flight root once, when it is
- * required, so a suite that sets either decides them for every other suite in
- * the same process — `daemon.test.js` sets both, and two files racing to win
- * that assignment is three failures that appear only when they run together.
- * Nothing here needs them: a sandboxed frame is refused on this machine's
- * capability, which is proved before any path is read.
- */
+/** This suite changes no environment. The daemon fixture reloads its own module after declaring its home;
+ * these terminal cases need only this machine's capability, which is proved before any path is read. */
 
 const {
   handle,

@@ -222,7 +222,7 @@ export async function admitHostedTask(
 /** A child's report to its hiring parent, in-process; `sequenceId` remains the ingress dedupe key. */
 export async function relayHostedReport(
   seams: HostedActorSeams,
-  child: HostedActor,
+  child: BoundActor,
   report: {
     readonly status: SubordinateReportStatus;
     readonly content: string;

@@ -35,7 +35,7 @@ declare global {
     /** Singleton admin control-plane index and audit log; reachable only via a capability derived from
      *  CREDENTIAL_ENCRYPTION_KEY (control-plane/admin-caller.ts). */
     ControlPlaneDO: DurableObjectNamespace<ControlPlaneDO>;
-    /** @cloudflare/sandbox container DO; the name is fixed because `proxyToSandbox` reads `env.Sandbox`. */
+    /** Native workspace container owner. */
     Sandbox: DurableObjectNamespace<KinuSandbox>;
     CodexEgress: DurableObjectNamespace<CodexEgress>;
     /** One guided self-deployment per run (docs/SELF-DEPLOY.md § The Cloudflare door). */
@@ -48,7 +48,7 @@ declare global {
     JWT_SECRET?: string;
     /** Sessions, OAuth state, CLI approval state; all self-expiring, never a source of truth. */
     AUTH_KV: KVNamespace;
-    /** R2 sandbox `/workspace` snapshots; bytes stream through the DO so no credential enters the container. */
+    /** Durable workspace payloads; the container reaches them through `DevboxStoreGateway`. */
     BACKUP_BUCKET?: R2Bucket;
     /** Feedback screenshots; absent ⇒ note-only feedback lands and screenshots are refused. */
     FEEDBACK_BUCKET?: R2Bucket;

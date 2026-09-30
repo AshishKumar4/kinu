@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import * as v from 'valibot';
 
 import { deltaCommand, type ShellReply as DeltaShellReply } from './delta-shell';
-import { sessionShellRefusal } from './session-shell';
+import { shellSyntaxError } from './container-shell';
 import {
   LiveTree,
   ancestorsOf,
@@ -20,9 +20,9 @@ import {
   type TreeProperty,
 } from './tree-model';
 import { DELTA_MANIFEST_NAME, DeltaManifestSchema } from '../../src/chunked-delta';
+import { chainAdvanced, DevboxError } from '../../src/errors';
 import {
   baseObjectKey,
-  ChainRecordAdvanced,
   chainStoreRoot,
   deltaObjectKey,
   snapshotChainStorage,
@@ -1315,7 +1315,7 @@ function chainExec(
     disk.execCalls.push(command);
     // The session shell first: a command it would refuse never reaches a
     // strategy's answer, on a deployment or here. See `session-shell.ts`.
-    const refused = sessionShellRefusal(command);
+    const refused = shellSyntaxError(command);
 
     if (refused !== undefined) throw refused;
     const fault = processFaultReply(disk, command);
@@ -1707,7 +1707,7 @@ function snapshotChainArm(): ConformanceArm {
           // between the comparison and the write.
           const stored = row?.rev ?? null;
 
-          if (stored !== expectedRev) throw new ChainRecordAdvanced(expectedRev, stored);
+          if (stored !== expectedRev) throw chainAdvanced(expectedRev, stored);
           row = next;
 
           if (next.lastFailure !== undefined) this.failures.push(next.lastFailure.reason);
@@ -1762,7 +1762,7 @@ function snapshotChainArm(): ConformanceArm {
           for (const key of keys) isolate.delete(key);
         },
         countEntries: async (dir) => this.disk.snapshot(dir).length,
-        restoreExtract: async () => ({ success: false }),
+        restoreExtract: async () => { throw new DevboxError('configuration', 'the block-layer strategy model has no extraction backend'); },
         createExtractSnapshot: async () => {
           throw new Error('the conformance battery runs the chain, never extraction');
         },

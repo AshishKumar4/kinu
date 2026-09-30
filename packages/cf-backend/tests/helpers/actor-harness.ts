@@ -272,7 +272,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
   /** Deployment bindings declared after construction (AUTH_KV, preview suffix).
    *  Declare before the read: `slates` memoizes its deps on first use. */
-  harnessDeclareEnv(bindings: { AUTH_KV?: KvStore; PREVIEW_HOST_SUFFIX?: string; CREDENTIAL_ENCRYPTION_KEY?: string }): void {
+  harnessDeclareEnv(bindings: { AUTH_KV?: KvStore; PREVIEW_HOST_SUFFIX?: string; CREDENTIAL_ENCRYPTION_KEY?: string; Sandbox?: Env["Sandbox"] }): void {
     Object.assign(this.env, bindings);
   }
 
@@ -1549,7 +1549,7 @@ export function makeEnv(
     ...platformGatewayEnv(world?.aiGateway),
     ...(world?.versionId !== undefined && { CF_VERSION_METADATA: { id: world.versionId, tag: '', timestamp: '' } }),
     ...(world?.email !== undefined && { EMAIL: world.email }),
-    ...(world?.container === true && { Sandbox: { idFromName: (name: string) => name, get: () => ({}) } }),
+    ...(world?.container === true && { Sandbox: { getByName: () => ({}) } }),
     UserDO: {
       idFromName: (n: string) => ({ toString: () => n }),
       // Recording when asked, refusing otherwise, so an unannounced user-plane path fails

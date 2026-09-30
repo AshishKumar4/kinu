@@ -1,17 +1,14 @@
-// Defends: the secret reaches the upstream and nothing the container reads carries it. The class-level
-// posture (no raw internet, HTTPS intercepted, ContainerProxy exported) is gate:egress-interception's.
+// Defends credential injection without exposing the secret to a guest.
+// Native network policy and vault routing are also measured by gate:egress-interception.
 import { describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import * as v from 'valibot';
 import {
-  EGRESS_PLACEHOLDER_PREFIX, refusedHostname, type EgressSecretBinding, type JsonValue,
+  EGRESS_PLACEHOLDER_PREFIX, refusedHostname, type EgressSecretBinding,
 } from '@kinu.run/core';
 import type { KinuSandbox } from '../src/kinu-sandbox';
 // Static: neither module reaches `cloudflare:email`, so neither needs the mock below.
 import { kinuEgressParams } from '../src/egress/configure';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
 import type { EgressInjectionResult } from '@kinu.run/core';
-import type { OutboundHandlerContext } from '@cloudflare/containers';
 import type { ContainerEgressEnv, ContainerEventResolver, KinuEgressParams } from '../src/egress/outbound';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { jsrpcStub } from './helpers/jsrpc-stub';
@@ -30,12 +27,9 @@ const {
 } = await import('../src/egress/outbound');
 
 const {
-  eventsOver, makeCtx, nextTurn, orchestratorHarness, stubOf,
+  eventsOver, orchestratorHarness, stubOf,
 } = await import('./helpers/actor-harness');
 
-function ctx(params: OutboundHandlerContext['params']): OutboundHandlerContext {
-  return { containerId: 'container-1', className: 'KinuSandbox', params };
-}
 
 const SECRET = ['sk_live_', 'abcdefghij0123456789'].join('');
 
@@ -201,9 +195,9 @@ describe('what the container is configured with', () => {
   });
 
   test('params are parsed, so a malformed configuration reads as unconfigured', () => {
-    expect(parseEgressParams(ctx(PARAMS))).toEqual(PARAMS);
-    expect(parseEgressParams(ctx({ workspaceName: 'w' }))).toBeUndefined();
-    expect(parseEgressParams(ctx(undefined))).toBeUndefined();
+    expect(parseEgressParams({ props: PARAMS })).toEqual(PARAMS);
+    expect(parseEgressParams({ props: { workspaceName: 'w' } })).toBeUndefined();
+    expect(parseEgressParams({ props: undefined })).toBeUndefined();
   });
 });
 
@@ -324,97 +318,6 @@ describe('reachability of the container event channel', () => {
   });
 });
 
-/** One interception configuration the Containers base applied, as the ContainerProxy it builds receives it. */
-interface AppliedInterception {
-  readonly internet: boolean;
-  readonly byHost: readonly string[];
-  readonly catchAll: boolean;
-}
-
-/** A handler the base names by method; its params are the egress configuration it was given. */
-const HandlerOverride = v.looseObject({ method: v.string() });
-
-/** The props the Containers base hands its `ContainerProxy`, narrowed to what these tests read. */
-const ProxyOptions = v.object({
-  props: v.object({
-    enableInternet: v.boolean(),
-    outboundByHostOverrides: v.optional(v.record(v.string(), HandlerOverride), {}),
-    outboundHandlerOverride: v.optional(HandlerOverride),
-  }),
-});
-
-/**
- * A Durable Object context the Containers base runs on: storage over SQLite, a container that records the
- * interception calls it receives, and the `ctx.exports.ContainerProxy` loopback the base binds handlers through.
- */
-function containerHost() {
-  const effects: string[] = [];
-  const applied: AppliedInterception[] = [];
-  const synchronous = new Map<string, JsonValue>();
-  const base = makeCtx(new Database(':memory:'), 'box-1');
-
-  const storage = {
-    ...base.storage,
-    sync: async () => {},
-    // The synchronous KV API the base keeps its outbound configuration in.
-    kv: {
-      get: (key: string) => synchronous.get(key),
-      put: (key: string, value: JsonValue) => { synchronous.set(key, value); },
-      delete: (key: string) => synchronous.delete(key),
-    },
-    put: async (key: string, value: JsonValue) => {
-      effects.push(`stored ${key}`);
-      await base.storage.put(key, value);
-    },
-  };
-
-  const container = new Proxy({ running: false }, {
-    get: (target, member) => {
-      if (member === 'running') return target.running;
-
-      return async (host?: string) => { effects.push(`${String(member)}(${host ?? ''})`); };
-    },
-  });
-
-  const ContainerProxy = (options: JsonValue) => {
-    const { props } = v.parse(ProxyOptions, options);
-
-    applied.push({
-      internet: props.enableInternet,
-      byHost: Object.keys(props.outboundByHostOverrides),
-      catchAll: props.outboundHandlerOverride !== undefined,
-    });
-    effects.push('intercepted');
-
-    return { fetch: async () => new Response(null, { status: 204 }) };
-  };
-
-  return { ctx: { ...base, storage, container, exports: { ContainerProxy } }, effects, applied };
-}
-
-describe('a configured container has no way out but the handlers', () => {
-  test('raw internet stays denied, HTTPS is intercepted, and events are routed before the catch-all', async () => {
-    const { KinuSandbox } = await import('../src/kinu-sandbox');
-    const host = containerHost();
-    // SAFETY: the context above carries every member the Containers base and Devbox read while configuring.
-    const box = new KinuSandbox(host.ctx as never, {} as Env);
-
-    // The base finishes its own activation inside `blockConcurrencyWhile` before the first request.
-    await nextTurn();
-    await box.configureEgress(PARAMS);
-
-    // Catch-all first would forward a container event to the unresolvable `.internal` name.
-    expect(host.applied).toEqual([
-      { internet: false, byHost: [CONTAINER_EVENT_HOST], catchAll: false },
-      { internet: false, byHost: [CONTAINER_EVENT_HOST], catchAll: true },
-    ]);
-    // The event handler resolves the workspace from storage, so it is there before any event can arrive.
-    expect(host.effects[0]).toBe('stored kinu:workspace-name');
-    expect(host.effects.filter((effect) => effect.startsWith('interceptOutboundHttps'))).toEqual([
-      'interceptOutboundHttps(*)', 'interceptOutboundHttps(*)',
-    ]);
-  });
-});
 
 // A JSRPC stub is a Proxy: `Object.assign`/spread copy nothing off it. The lint
 // `anti-slop/no-copy-rpc-stub` detects copies; this pins that the double behaves like a stub.

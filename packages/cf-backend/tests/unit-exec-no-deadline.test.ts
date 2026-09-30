@@ -1,6 +1,5 @@
-// Defends: detached work killed by `Command timeout after 60000ms` (owner screenshot). The SDK's
-// plain `exec` is bounded (`sandbox.exec.request_ceiling_ms`), so untimed exec takes the runtime's own exec;
-// codemode's default deadline killed `eval` programs awaiting long host tool calls.
+// Untimed work ends only on completion or cancellation. An explicit deadline also kills the
+// native process before reporting cancellation; codemode has no implicit work deadline.
 import { describe, test, expect } from "bun:test";
 import type { KinuSandbox } from "../src/kinu-sandbox";
 import { adaptCloudflareSandbox } from "../src/sandbox-exec-lane";
@@ -10,7 +9,6 @@ import { workerContext } from "./helpers/bindings";
 import { inProcessWorkerLoader } from "./helpers/worker-loader";
 
 interface BoxCalls {
-  exec: Array<{ command: string; timeout?: number }>;
   started: Array<{ command: string; cwd?: string }>;
   killed: string[];
 }
@@ -25,20 +23,12 @@ function fakeBox(input: {
   finishesFirst?: boolean;
   killFails?: boolean;
 } = {}) {
-  const calls: BoxCalls = { exec: [], started: [], killed: [] };
+  const calls: BoxCalls = { started: [], killed: [] };
   const held = Promise.withResolvers<{ stdout: string; stderr: string; exitCode: number }>();
   let exited = false;
 
   const box = {
     resolveReadiness: async () => ({ kind: 'restored' as const }),
-    exec: async (command: string, opts?: { timeout?: number }) => {
-      const call: BoxCalls["exec"][number] = { command };
-
-      if (opts?.timeout !== undefined) call.timeout = opts.timeout;
-      calls.exec.push(call);
-
-      return { stdout: "bounded", exitCode: 0 };
-    },
     execUntimed: async (command: string, opts: { cwd?: string; execId: string }) => {
       const call: BoxCalls["started"][number] = { command };
 
@@ -96,27 +86,11 @@ function fakeBox(input: {
 
 const TRAINING = "python3 train.py --epochs 40 2>&1 | tee /workspace/train.log";
 
-describe("adaptCloudflareSandbox — which lane a command gets", () => {
-  test("no timeout asked for → the runtime's exec, and the SDK's bounded exec is untouched", async () => {
-    const box = fakeBox();
-
-    const res = await box.handle.exec(TRAINING, { cwd: "/workspace" });
-
-    expect(box.calls.exec).toEqual([]);
-    expect(box.calls.started).toEqual([{ command: TRAINING, cwd: "/workspace" }]);
-    expect(res.stdout).toContain("epoch 40/40 done");
-    expect(res.exitCode).toBe(0);
-  });
-
-  test("a caller that ASKED for a deadline still gets the bounded exec", async () => {
-    const box = fakeBox();
-
-    // Not git-shaped: that trips no-ambient-git-in-tests, which cannot see this is a fake.
-    const res = await box.handle.exec("bun test --changed", { cwd: "/workspace", timeout: 5_000 });
-
-    expect(box.calls.exec).toEqual([{ command: "bun test --changed", timeout: 5_000 }]);
-    expect(box.calls.started).toEqual([]);
-    expect(res.stdout).toBe("bounded");
+describe("adaptCloudflareSandbox — command completion", () => {
+  test("an explicit deadline ends the process before reporting cancellation", async () => {
+    const box = fakeBox({ holdsUntilKilled: true });
+    await expect(box.handle.exec("work until cancelled", { timeout: 1 })).rejects.toMatchObject({ code: 'cancelled' });
+    expect(box.hasExited()).toBe(true);
   });
 
   test("a non-zero exit is reported as itself, not as a transport failure", async () => {
@@ -125,13 +99,6 @@ describe("adaptCloudflareSandbox — which lane a command gets", () => {
     expect((await box.handle.exec("bash oom.sh", {})).exitCode).toBe(137);
   });
 
-  test("the untimed lane defaults to the durable work directory", async () => {
-    const box = fakeBox();
-
-    await box.handle.exec("ls", {});
-
-    expect(box.calls.started[0]?.cwd).toBe("/workspace");
-  });
 });
 
 describe("adaptCloudflareSandbox — a pending readiness refuses before dispatch", () => {
@@ -140,12 +107,11 @@ describe("adaptCloudflareSandbox — a pending readiness refuses before dispatch
     const reason = 'this devbox has no attached work directory: stale owner, retry armed. '
       + 'A retry is already under way; operations are refused until it lands.';
  
-    const calls: BoxCalls = { exec: [], started: [], killed: [] };
+    const calls: BoxCalls = { started: [], killed: [] };
 
     const box: KinuSandbox = Object.create({
       resolveReadiness: async () => ({ kind: 'pending' as const, reason }),
-      exec: async (command: string) => { calls.exec.push({ command }); },
-      startProcess: async (command: string) => { calls.started.push({ command }); },
+      execUntimed: async (command: string) => { calls.started.push({ command }); },
     });
 
     const handle = adaptCloudflareSandbox(box, async () => {}, null);
@@ -153,12 +119,12 @@ describe("adaptCloudflareSandbox — a pending readiness refuses before dispatch
     await expect(handle.exec("bun test")).rejects.toMatchObject({
       name: 'KinuError[unavailable]', code: 'unavailable', message: reason,
     });
-    expect(calls).toEqual({ exec: [], started: [], killed: [] });
+    expect(calls).toEqual({ started: [], killed: [] });
 
     // The refusal is the pending kind, not a blanket gate failure.
     const ready: KinuSandbox = Object.create({
       resolveReadiness: async () => ({ kind: 'restored' as const }),
-      exec: async () => ({ stdout: 'ok', exitCode: 0 }),
+      execUntimed: async () => ({ stdout: 'ok', stderr: '', exitCode: 0 }),
     });
  
     await expect(adaptCloudflareSandbox(ready, async () => {}, null)
@@ -177,10 +143,7 @@ describe("adaptCloudflareSandbox — cancellation reaches the process", () => {
     // Only the kill ends this process, so a report without one is over live work.
     controller.abort();
 
-    await expect(pending).rejects.toMatchObject({
-      name: "AbortError",
-      message: expect.stringContaining("its container process tree was ended"),
-    });
+    await expect(pending).rejects.toMatchObject({ code: 'cancelled' });
     expect(box.calls.killed).toHaveLength(1);
     expect(box.hasExited()).toBe(true);
   });
@@ -191,7 +154,7 @@ describe("adaptCloudflareSandbox — cancellation reaches the process", () => {
     controller.abort();
 
     await expect(box.handle.exec("bash forever.sh", { signal: controller.signal }))
-      .rejects.toMatchObject({ name: "AbortError" });
+      .rejects.toMatchObject({ code: 'cancelled' });
     expect(box.calls.killed).toHaveLength(1);
   });
 

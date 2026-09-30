@@ -1,16 +1,10 @@
-/**
- * Outbound interception: every HTTP/HTTPS request leaving an agent's container passes through these handlers, in the
- * Workers runtime. HTTPS needs `interceptHttps = true` (SDK does not default it; see {@link KinuSandbox}). Other TCP ports
- * are denied (`enableInternet = false`); measured on the deployed worker, as is DNS being platform-synthesized
- * (every name resolves to `fd00::119:1`, no label channel). Platform property: `scripts/egress-interception.ts` probes it.
- * `ctx.params` is trusted (set by the owning DO); `ctx.containerId` is platform-supplied; the request is not.
- */
+/** HTTP and HTTPS leave the native container through Worker entrypoints. Raw sockets stay
+ *  disabled; configuration props come only from the owning Durable Object. */
 
 import { getAgentByName } from 'agents';
 import * as v from 'valibot';
 import { Hono } from 'hono';
 import { rawPath, rethrow, type FamilyEnv } from '../api/context';
-import type { OutboundHandlerContext } from '@cloudflare/containers';
 import {
   createScrubStream,
   refusedHostname,
@@ -37,11 +31,6 @@ export const CONTAINER_EVENT_HOST = 'events.kinu.internal';
 
 const CONTAINER_EVENT_PATH = '/v1/events';
 
-/** The string is the contract between the class's registry and the configuring DO. */
-export const EGRESS_HANDLER = 'kinuEgress';
-
-export const EVENT_HANDLER = 'kinuEvents';
-
 /** Set by the owning DO; not readable or influenceable from the container. */
 export interface KinuEgressParams {
   readonly workspaceName: string;
@@ -63,8 +52,8 @@ const EgressParamsSchema = v.object({
 });
 
 /** Undefined when the container is not configured yet; both handlers then refuse. */
-export function parseEgressParams(ctx: OutboundHandlerContext): KinuEgressParams | undefined {
-  const parsed = v.safeParse(EgressParamsSchema, ctx.params);
+export function parseEgressParams(ctx: { readonly props: unknown }): KinuEgressParams | undefined {
+  const parsed = v.safeParse(EgressParamsSchema, ctx.props);
 
   return parsed.success ? parsed.output : undefined;
 }
@@ -312,3 +301,4 @@ function refusal(status: number, reason: string): Response {
     headers: { 'content-type': 'text/plain; charset=utf-8' },
   });
 }
+

@@ -469,10 +469,10 @@ describe('the ladder measures something', () => {
     // expansion cannot read as a gate that ran nothing.
     expect(claims('bun test scripts/bench*.test.ts', tracked).length).toBeGreaterThan(0);
 
-    const durabilityProbeGate = LADDER.find(gate =>
-      gate.run.includes('scripts/sandbox-durability-probe.test.ts'));
+    const benchRigGate = LADDER.find(gate =>
+      gate.run.includes('scripts/deploy-substrate.test.ts'));
 
-    expect(durabilityProbeGate?.tier).toBe('ci');
+    expect(benchRigGate?.tier).toBe('ci');
     // `bun run test` fans out through package.json into three package suites.
     expect(claims('bun run test', tracked).length).toBeGreaterThan(200);
     // The workerd layer resolves from its own command text, so it is

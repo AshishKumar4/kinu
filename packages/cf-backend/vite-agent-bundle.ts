@@ -4,6 +4,15 @@ import { builtinModules } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { buildSync } from 'esbuild';
 import type { Plugin } from 'vite';
+import { unstable_readConfig } from 'wrangler';
+import * as v from 'valibot';
+
+const deployment = unstable_readConfig({ config: resolve(import.meta.dirname, 'wrangler.jsonc'), env: process.env.CLOUDFLARE_ENV });
+
+export const workerCompatibility = {
+  compatibilityDate: v.parse(v.string(), deployment.compatibility_date),
+  compatibilityFlags: deployment.compatibility_flags,
+};
 
 export const AGENT_BUNDLE_ENTRY = resolve(import.meta.dirname, 'src/agent-facet/agent-facet.ts');
 
@@ -35,6 +44,7 @@ export function agentBundle(): Plugin {
       if (built) return;
       mkdirSync(dirname(AGENT_BUNDLE_OUTPUT), { recursive: true });
       writeFileSync(AGENT_BUNDLE_OUTPUT, buildAgentBundle());
+      writeFileSync(resolve(dirname(AGENT_BUNDLE_OUTPUT), 'compatibility.json'), JSON.stringify(workerCompatibility));
       built = true;
     },
   };

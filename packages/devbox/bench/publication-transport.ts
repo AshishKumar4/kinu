@@ -20,8 +20,8 @@ interface BodyObservation {
 
 const incomingBody = new AsyncLocalStorage<BodyObservation>();
 
-/** The SDK R2 bridge owns the FixedLengthStream passed to the binding.
- * A second native fixed-length stream here deadlocks that bridge's pipe;
+/** The store gateway owns the FixedLengthStream passed to the binding, as the SDK R2 bridge did (D41).
+ * A second native fixed-length stream here deadlocked that bridge's pipe;
  * measured on workerd and deployed Containers, 2026-09-13:
  * bench-artifacts/block-attach/20260913-publication/.
  * Count with a backpressured transform and preserve the request length header. */

@@ -2,10 +2,11 @@ import { describe, expect, test } from 'bun:test';
 
 import type { RestoreClockPhase } from '../src/restoration';
 import type { StoredValue } from '../src/storage';
-import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
+import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy, type StartClock } from '../src/lifecycle';
+import { handClock } from '../../test-utils/src/hand-clock';
 import {
   Devbox, FakeSandbox, STAMP_COMMAND, TEST_BOX_ID, boxState, deliver, fakeStorage, gate, harness,
-  scheduleTableOf, type Harness,
+  type Harness,
 } from './support/devbox-harness';
 
 /** The listener proof is one container command whose loop the container bounds,
@@ -83,7 +84,6 @@ function activatedOverRunning(rows: Map<string, StoredValue>): Activated {
   const state = boxState({
     storage: storage.handle,
     id: TEST_BOX_ID,
-    container: { running: true },
     blockConcurrencyWhile: async <T>(closure: () => Promise<T>): Promise<T> => {
       const run = closure();
       activation = run;
@@ -92,12 +92,10 @@ function activatedOverRunning(rows: Map<string, StoredValue>): Activated {
     },
   });
 
+  const container = new FakeSandbox(state);
+  state.container = container.handle();
   const box = new TestBox(state, {});
-  const container = FakeSandbox.last;
-
-  if (container === undefined) {
-    throw new Error('the substituted Sandbox base class did not run its constructor');
-  }
+  container.owner = box;
 
   return { box, container, activation };
 }
@@ -180,7 +178,7 @@ describe('the start hook owns restoration', () => {
       await box.ensureReady();
       expect(container.ctx.id.toString()).toBe(identity);
       expect(container.bootId).not.toBe(previousBoot);
-      await expect(box.readFile('/tmp/uncheckpointed-marker')).rejects.toThrow('File not found');
+      expect(await box.exists("/tmp/uncheckpointed-marker")).toEqual({ exists: false });
     });
 
     test(`a refused container ${termination} keeps the still-running generation intact`, async () => {
@@ -238,7 +236,7 @@ describe('the start hook owns restoration', () => {
     await box.start();
     expect(stamps(container)).toBe(1);
     expect(container.starts).toHaveLength(1);
-    expect(container.exposures).toEqual([{ port: 3000, token: 'tok3000', name: 'web' }]);
+    expect(await box.getExposedPorts('preview.test')).toEqual([{ port: 3000, url: 'https://3000-devbox-under-test-tok3000.preview.test', name: 'web' }]);
     expect((await deliver(container, () => box.exec('echo hi'))).exitCode).toBe(0);
     expect(container.execs.findIndex(command => command.includes(STAMP_COMMAND)))
       .toBeLessThan(container.execs.findIndex(command => command.includes('echo hi')));
@@ -281,7 +279,7 @@ describe('the start hook owns restoration', () => {
     const { box, container } = await stoppedBoxWithService();
     await box.start();
     const before = { stamps: stamps(container), starts: container.starts.length };
-    await box.onStart();
+    await box.start();
     expect({ stamps: stamps(container), starts: container.starts.length }).toEqual(before);
     expect(await box.resolveReadiness()).toEqual({ kind: 'restored' });
   });
@@ -316,7 +314,7 @@ describe('the start hook owns restoration', () => {
     expect(stamps(container)).toBe(0);
     expect(container.starts).toEqual([]);
     expect((await box.devboxState()).unready).toContain('[abandoned -> replace]');
-    container.deleteSchedules('devboxStartup');
+    container.clearSchedules("devboxStartup");
     // The page's read names the refusal without arming the startup the next line proves it arms.
     expect((await box.restoreStatus()).refused).toContain('no attached work directory');
     expect(armed(container)).toBe(0);
@@ -372,7 +370,6 @@ describe('the start hook owns restoration', () => {
     const { box, container } = runningBoxWithService();
     container.running.running = true;
     expect(await box.resolveReadiness()).toEqual({ kind: 'restored' });
-    expect(container.startWaitOptions).toHaveLength(1);
     expect(stamps(container)).toBe(1);
     expect(container.starts).toHaveLength(1);
     expect(armed(container)).toBe(0);
@@ -397,9 +394,9 @@ describe('the start hook owns restoration', () => {
     container.running.running = true;
     const parked = gate();
     container.stampGate = parked;
-    const first = box.onStart();
+    const first = box.start();
     await parked.reached;
-    const second = box.onStart();
+    const second = box.start();
     parked.release();
     await Promise.all([first, second]);
     expect(stamps(container)).toBe(1);
@@ -422,7 +419,7 @@ describe('the start hook owns restoration', () => {
     const { box, container } = await stoppedBoxWithService();
     await box.start();
     container.bootId = undefined;
-    await box.onStart();
+    await box.start();
     expect(stamps(container)).toBe(2);
     expect((await box.devboxState()).ready).toBe(true);
   });
@@ -466,8 +463,14 @@ describe('the start hook owns restoration', () => {
 
   test('an over-budget hook settles unready and late work cannot publish readiness', async () => {
     class BudgetBox extends TestBox {
+      readonly clock = handClock(1_000_000);
+
       protected override get policy(): DevboxPolicy {
         return { ...TEST_POLICY, attachBudgetMs: 10 };
+      }
+
+      protected override get startClock(): StartClock {
+        return this.clock;
       }
     }
 
@@ -476,6 +479,8 @@ describe('the start hook owns restoration', () => {
     container.execGate = parked;
     const start = box.start();
     await parked.reached;
+    await box.clock.whenArmed(1);
+    box.clock.advance(10);
     await start;
     expect(container.initGate).toBeUndefined();
     expect((await box.devboxState()).ready).toBe(false);
@@ -487,37 +492,6 @@ describe('the start hook owns restoration', () => {
     expect((await box.devboxState()).ready).toBe(false);
   });
 
-  test('a schedule row naming a callback this class cannot call is dropped at activation', async () => {
-    // The sweep runs in the constructor's activation gate, before any event (alarm included);
-    // activate as the platform does: storage with rows first, then `new`, no `start()`.
-    const storage = fakeStorage();
-    // Overdue rows are the shape that re-arms the physical alarm at once.
-    const overdue = Date.now() / 1000 - 1;
-    scheduleTableOf(storage.handle).push(
-      { callback: 'snapshotWorkspaceIfDue', time: overdue },
-      { callback: 'devboxIncidents', time: overdue },
-    );
-
-    // Mirrors `harness` construction but with the dead row already stored, as an activation
-    // wakes into it.
-    const state = boxState({
-      storage: storage.handle,
-      id: TEST_BOX_ID,
-      blockConcurrencyWhile: async <T>(closure: () => Promise<T>): Promise<T> => await closure(),
-    });
-
-    new TestBox(state, {});
-    // No waiting: the stub runs the gate closure inline and the sweep is synchronous storage I/O,
-    // so rows are gone before `new` returns; an `await` inside the sweep must update this test.
-
-    // The probe is membership on `this`, so a callback the class carries —
-    // inherited or its own — survives, or the sweep would break a live chain.
-    const remaining = scheduleTableOf(storage.handle).map((row) => row.callback);
-    expect(remaining).not.toContain('snapshotWorkspaceIfDue');
-    expect(remaining).toContain('devboxIncidents');
-    expect(FakeSandbox.last?.schedules).toEqual([]);
-    expect(FakeSandbox.last?.execs).toEqual([]);
-  });
 });
 
 describe('every ending is a named state, and no ending rejects into the platform', () => {
@@ -535,7 +509,7 @@ describe('every ending is a named state, and no ending rejects into the platform
         ready: false,
         unready: 'port 3000 never answered',
       });
-    expect(container.exposures).toEqual([]);
+    expect(await box.getExposedPorts('preview.test')).toEqual([]);
     expect((await box.exec('echo fixing')).exitCode).toBe(0);
     expect([...rows.keys()].some((key) => key.startsWith('devbox:incident:'))).toBe(true);
   });

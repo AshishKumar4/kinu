@@ -43,7 +43,6 @@ describe('vendor-schema', () => {
     const modules = scratchDir('vendor-schema');
     const dist = join(modules, 'agents', 'dist');
     mkdirSync(dist, { recursive: true });
-    mkdirSync(join(modules, '@cloudflare', 'containers', 'dist'), { recursive: true });
     writeFileSync(join(dist, 'index.js'), [
       'const TABLE = "cf_plain";',
       'export function init(sql) {',

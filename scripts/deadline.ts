@@ -251,8 +251,14 @@ export async function runUnderDeadline(run: DeadlineRun): Promise<DeadlineOutcom
     for (let read = await reader.read(); !read.done; read = await reader.read()) {
       heard();
 
-      if (stdio === 'inherit') onward.write(read.value);
-      else text += decoder.decode(read.value, { stream: true });
+      if (stdio === 'inherit') {
+        await new Promise<void>((resolve, reject) => {
+          onward.write(read.value, (error) => {
+            if (error) reject(error);
+            else resolve();
+          });
+        });
+      } else text += decoder.decode(read.value, { stream: true });
     }
 
     return text + decoder.decode();

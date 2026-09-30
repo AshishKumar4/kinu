@@ -2,11 +2,12 @@
  * the box's own record: its restored container generation, its store prefix, layers the store holds,
  * and the fenced write. `syncWorker` keeps a flush from overlapping a tick. */
 import { describe, expect, test, vi } from 'bun:test';
+import { chainAdvanced } from '../src/errors';
 import {
-  ChainRecordAdvanced, baseObjectKey, deltaObjectKey, type ChainState, type SnapshotChainPorts,
+  baseObjectKey, deltaObjectKey, type ChainState, type SnapshotChainPorts,
 } from '../src/snapshot-chain';
 import type { CheckpointKind, CheckpointOutcome } from '../src/storage';
-import { DEVBOX_SYNC_HANDLER, DEVBOX_SYNC_HOST, serveSync, syncCaller, syncWorker } from '../src/sync';
+import { serveSync, syncCaller, syncWorker } from '../src/sync';
 import { ChainTestBox, chainBox } from './support/chain-box';
 import { wakeWhileArmed } from './support/devbox-harness';
 
@@ -44,7 +45,7 @@ function boxWire(initial: ChainState, held: ReadonlyMap<string, number>) {
     writeState: async (next, expectedRev) => {
       const stored = state?.rev ?? null;
 
-      if (stored !== expectedRev) throw new ChainRecordAdvanced(expectedRev, stored);
+      if (stored !== expectedRev) throw chainAdvanced(expectedRev, stored);
       state = await Promise.resolve(next);
     },
     clearState: unused,
@@ -99,11 +100,11 @@ describe('the box holds the container to its own record (D30)', () => {
     expect(stored()?.delta?.id).toBe(DELTA);
   });
 
-  test('a fenced refusal reaches the container as ChainRecordAdvanced, so its checkpoint re-reads', async () => {
+  test('a fenced refusal carries chain-advanced and the observed revisions', async () => {
     const { container } = boxWire(record(3, undefined), held);
 
     await expect(container(RESTORED)({ op: 'writeState', state: record(2, { id: DELTA, bytes: 7 }), expectedRev: 1 }))
-      .rejects.toBeInstanceOf(ChainRecordAdvanced);
+      .rejects.toMatchObject({ code: 'chain-advanced', expectedRev: 1, storedRev: 3 });
   });
 
   test('a record naming a layer the store does not hold at that size is refused', async () => {
@@ -203,7 +204,6 @@ test('a restored box runs its sync in the container, not on its own alarm, and a
   await box.devboxStartup();
 
   expect(container.syncRunning).toBe(true);
-  expect(container.outboundHosts.get(DEVBOX_SYNC_HOST)).toBe(DEVBOX_SYNC_HANDLER);
   expect(container.scheduleRows.map((row) => row.callback)).not.toContain('devboxCheckpoint');
 
   container.syncRunning = false;
@@ -228,22 +228,11 @@ test('a beat over a running sync reads the container the box restored: one start
     // about forty beats; a box that re-read its container as replaced would never get there.
     await wakeWhileArmed(container, (to) => { now = Math.max(now, to); }, 120);
 
-    expect({ starts: container.startHooks, running: container.running.running, alarm: container.alarmAt })
+    expect({ starts: container.containerStarts, running: container.running.running, alarm: container.alarmAt })
       .toEqual({ starts: 1, running: false, alarm: null });
   } finally {
     clock.mockRestore();
   }
-});
-
-test('a stop ends the container\'s sync before it releases the work directory, so no tick races the detach', async () => {
-  const { box, container } = chainBox(SyncingBox);
-  await box.devboxStartup();
-
-  expect((await box.quiesce()).kind).not.toBe('failed');
-  expect(container.syncRunning).toBe(false);
-  const stoppedAt = container.sequence.indexOf('exec:devbox-sync-stop-v1');
-  expect(stoppedAt).toBeGreaterThan(-1);
-  expect(stoppedAt).toBeLessThan(container.sequence.indexOf('exec:release-workdir-holders'));
 });
 
 test('discarding a box ends its sync first, so no tick publishes after the bytes are gone', async () => {

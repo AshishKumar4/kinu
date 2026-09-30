@@ -25,15 +25,15 @@ permissions:
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'integration/**']
   pull_request:
     branches: [main]
 
 jobs:
   gate-ladder:
     runs-on: ubuntu-latest
-    # The declared CI tier is 257s of gates; the cap is generous enough for a
-    # cold runner and tight enough that a hung gate fails rather than idles.
+    # The CI tier took 724s locally on 2026-09-29; the cap leaves room for a
+    # cold runner while still bounding a hung job.
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -46,6 +46,11 @@ jobs:
           # security-scan.yml.
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Install device sandbox prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
