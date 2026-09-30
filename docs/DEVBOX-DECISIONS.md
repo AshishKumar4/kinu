@@ -2368,6 +2368,33 @@ deleted by hand. A native-only store would have removed about 5,190 lines
 block-lower crate) and squashfuse and s3fs from the image. The chain stays
 the record of truth.
 
+The hybrid's premise, a snapshot as the wake path in front of the chain,
+does not hold on a chain-mounted box (queue item 4, measured the same night
+on Medium, run `sbs09302343nhy` with `bench-artifacts/side-by-side/hybrid.ts`:
+the bench box's next start restored the snapshot instead of the image, and
+Devbox's attach ran over it). A snapshot taken with the chain mounted (s3fs
+at `/backups`, squashfuse lowers, fuse-overlayfs at `/workspace`) succeeded
+in 5.1 s, left the mounts working, and recorded `size` 176,268,790 B: the
+rootfs, whose upper held 168 MiB because fuse-overlayfs copies a whole file
+up on a 64 KiB overwrite. The lowers are not in it: they are FUSE views of
+objects in R2, and no mount survives a restore. On each wake from the
+snapshot the attach mounted the base and the delta from R2 again and emptied
+the restored upper (its seed stamp did not match the stored delta; not
+traced further), so the wake did the chain's work over a larger rootfs.
+Three wakes each way on one box, medians with ranges:
+
+| | chain wake | wake from the snapshot |
+| --- | --- | --- |
+| Restore inside the gate | 3,366 ms (3,149 to 3,701) | 2,779 ms (2,702 to 3,055) |
+| Wake as the driver sees it | 4,030 ms (3,951 to 6,108) | 3,610 ms (3,182 to 4,124) |
+| Cold read, 160 MiB | 44.1 MiB/s (39.5 to 52.4) | 49.8 MiB/s (33.6 to 73.3) |
+
+Every read was byte-exact. The snapshot's 0.5 to 2.6 s wakes and 181 MiB/s
+cold reads above came from a box whose files were on its own disk. A
+chain-mounted box gets them only if its workspace lives on the container's
+disk rather than behind FUSE, with the chain packing from that disk: a
+different design, which goes to the owner. Nothing of the hybrid is built.
+
 D52. A start that fails the same way every time is refused once, from a
 record of what it was made with (2026-09-30). D47 settles a terminal
 admission failure and files one incident, but that settled phase held only
