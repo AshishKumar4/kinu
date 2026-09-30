@@ -443,6 +443,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     return attachment.success && attachment.output.device !== null ? [`device:${attachment.output.device}`] : [];
   };
 
+  const kv = new Map<string, JsonValue>();
+
   const ctx = {
     // Sealed values are bound to the DO id; fixed so a DB written in one test opens in another.
     id: {
@@ -453,6 +455,11 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     // `transactionSync`; a fake makes that claim torn.
     storage: {
       sql,
+      kv: {
+        get: (key: string): JsonValue | undefined => kv.get(key),
+        put: (key: string, value: JsonValue): void => { kv.set(key, value); },
+        delete: (key: string): boolean => kv.delete(key),
+      },
       transactionSync: <T,>(closure: () => T): T => db.transaction(closure)(),
       // The SDK's `destroy()` runs these before the abort; dropping every table matches `deleteAll`.
       deleteAlarm: async (): Promise<void> => {},
@@ -465,6 +472,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         ).all();
 
         for (const { name } of tables) db.exec(`DROP TABLE IF EXISTS "${name}"`);
+        kv.clear();
       },
     },
     abort: (reason: string): void => { aborts.push(reason); },

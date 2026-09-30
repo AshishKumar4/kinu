@@ -32,7 +32,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'listDevices' | 'acknowledgeUnstoppedDevice' | 'revokeDevice' | 'renameDevice' | 'listDeviceConsents'
   | 'setDeviceTier' | 'revokeDeviceConsent'
   | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'listUnrevokedGrants' | 'dismissUnrevokedGrant' | 'listActiveWorkspaces' | 'getAuthHeaders'
-  | 'getCodexStatus' | 'disconnectCodex' | 'startCodexDeviceFlow' | 'pollCodexDeviceFlow'
+  | 'getCodexStatus' | 'disconnectCodex' | 'startCodexDeviceFlow' | 'pollCodexDeviceFlow' | 'startClaudeSignIn' | 'finishClaudeSignIn'
   | 'listConfig' | 'getConfig' | 'setConfig' | 'listConnectedProviders'
   | 'listCloudflareAccounts' | 'selectCloudflareAccount' | 'listAIGateways' | 'selectAIGateway'
   | 'userMcp_list' | 'userMcp_presets' | 'userMcp_add' | 'userMcp_remove' | 'userMcp_update'
@@ -381,6 +381,19 @@ userRoutes.post('/api/user/codex/poll', async (c) => {
 
     return json({ body: status });
   } catch (cause) { throw toKinuError({ doing: 'checking the Codex sign-in', cause, otherwise: 'unavailable' }); }
+});
+
+userRoutes.post('/api/user/claude/start', async (c) => json({ body: await c.get('stub').startClaudeSignIn(c.get('owner')) }));
+
+userRoutes.post('/api/user/claude/finish', async (c) => {
+  const body = await safeJson(c.req.raw, v.object({ code: v.string() }));
+
+  if (body === null) return err(400, 'Body must be { code }');
+  const status = await c.get('stub').finishClaudeSignIn(c.get('owner'), body.code);
+
+  if (status.connected) credentialsChanged(c);
+
+  return json({ body: status });
 });
 
 userRoutes.get('/api/user/config', async (c) => json({ body: await c.get('stub').listConfig(c.get('owner')) }));
