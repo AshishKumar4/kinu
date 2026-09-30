@@ -87,8 +87,8 @@ function AgentsList({ panel }: { panel: WorkspaceAgentsPanel }) {
                 const status = ACTIVITY[agent.activity];
                 const depth = section.category === "hired" ? hiredDepth(agent, hiredPaths) : 0;
                 const figures = agentFiguresLine(agent.figures);
-                const topHired = section.category === "hired" && depth === 0;
-                const from = agent.parent !== null && (section.category !== "hired" || topHired) && section.category !== "main" ? agent.parent : null;
+                const launched = section.category === "swarm" || (section.category === "hired" && depth === 0);
+                const from = launched ? agent.parent : null;
 
                 return (
                   <li key={agent.key}>

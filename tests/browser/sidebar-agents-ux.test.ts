@@ -51,6 +51,9 @@ describe('the sidebar drills into a workspace\'s agents', () => {
         .toBe('48.9k tok · $0.110 · 7m · 91% cached');
       // A figure nothing recorded is left out, never shown as zero.
       expect(await page.$eval(`${LIST} [data-agent-row="a-check"] [data-agent-figures]`, (line) => line.textContent)).toBe('6.1k tok · 45s');
+      // A chat the owner made has no parent line; one an agent hired names it.
+      expect(await page.$(`${LIST} [data-agent-row="actor-docs"]`).then((row) => row?.evaluate((node) => node.textContent))).not.toContain('from');
+      expect(await page.$eval(`${LIST} [data-agent-row="a-scout"]`, (row) => row.textContent)).toContain('from Main');
       // The tester sits under the auditor that hired it.
       const indent = (key: string) => page.$eval(`${LIST} [data-agent-row="${key}"]`, (row) => row.getBoundingClientRect().left + parseFloat(getComputedStyle(row).paddingLeft));
       expect(await indent('a-check')).toBeGreaterThan(await indent('a-scout'));
