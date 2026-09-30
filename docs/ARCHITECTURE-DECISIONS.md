@@ -1027,6 +1027,15 @@ bytes. Awaiting the write callback preserved all 1,191,111 bytes on stdout
 and stderr. Without that wait, the wrapper's `process.exit` can discard the
 queued tail, including a failing verdict.
 
+L13. The Bash wave collects completed children by pid before waiting for a live
+child. Decided 2026-09-30. Measured on Bash 5.3.9: after a child exited 47,
+`jobs -l` named its exit, `wait -n -p` returned 127 and no pid, and `wait <pid>`
+returned 47. A future-only wait leaves completed gates holding the wave
+resource credits. The runner reads Bash's running-job set, waits cached
+completions by pid, and restricts `wait -n` to the tracked wave. If every child
+finishes between that read and the wait, a tracked pid still yields its cached
+status. No new process, timer, timeout or resource budget governs a gate.
+
 ## Open
 
 O1. A gate that pins a nonzero cache read on a representative multi-step turn

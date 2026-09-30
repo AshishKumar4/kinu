@@ -723,7 +723,7 @@ describe("deploy gate", () => {
       const run = runDeploy({ failingGate: gate });
 
       expect(run.status, `${gate} did not fail the deploy`).not.toBe(0);
-      expect(run.events, `${gate} failed and never ran`).toContain(gate);
+      expect(run.events, `${gate} failed and never ran\n${run.stdout}`).toContain(gate);
       expect(
         run.events.some((event) => event.startsWith("MUTATE ")),
         `${gate} failed and the build ran anyway`,

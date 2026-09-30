@@ -458,7 +458,7 @@ flush_gates() {
   local -a launched=() statuses=() started=()
   local -A gate_of_pid=()
   local -A resource_held=()
-  local pick finished status threads rss resource wall
+  local pick finished status threads rss resource wall pid live_pids
   local running=0 load=0 held=0 settled=0 failures=0 cached=0
   local wave_started=$SECONDS
   for ((index = 0; index < total; index++)); do launched[index]=0; statuses[index]=-1; done
@@ -534,8 +534,28 @@ flush_gates() {
       exit 1
     fi
 
+    # Bash 5.3.9, measured 2026-09-30: wait -n ignores a child already done
+    # before the call (127, no pid), while wait <pid> still returns its status.
+    # Collect those cached completions first so their resource credits cannot
+    # strand later rows. Restrict wait -n to this wave's tracked children.
     finished=""
-    wait -n -p finished; status=$?
+    live_pids=" $(jobs -pr) "
+    live_pids="${live_pids//$'\n'/ }"
+    for pid in "${!gate_of_pid[@]}"; do
+      if [[ "$live_pids" == *" $pid "* ]]; then continue; fi
+      finished="$pid"
+      break
+    done
+    if [ -n "$finished" ]; then
+      wait "$finished"; status=$?
+    else
+      wait -n -p finished "${!gate_of_pid[@]}"; status=$?
+      if [ -z "${finished:-}" ] && [ "$status" -eq 127 ]; then
+        # Every child can finish between jobs and wait -n; its status is cached.
+        for finished in "${!gate_of_pid[@]}"; do break; done
+        wait "$finished"; status=$?
+      fi
+    fi
     if [ -z "${finished:-}" ] || [ -z "${gate_of_pid[$finished]:-}" ]; then
       # `wait` came back without naming a child of this wave, so the status
       # cannot be attributed to a gate. Stop rather than credit it to one.
