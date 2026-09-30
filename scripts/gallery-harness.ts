@@ -204,6 +204,8 @@ interface OpenWait {
   readonly page: Page;
   /** The page's requests sent and not yet answered, by URL. */
   readonly requests: ReadonlySet<string>;
+  /** Everything that went wrong on the page since it opened: uncaught errors, console errors, failed and refused requests. */
+  readonly faults: readonly string[];
   reported: boolean;
   /** The page was asked what it shows and has not answered. */
   asking: boolean;
@@ -252,6 +254,7 @@ async function reportStuck(open: OpenWait): Promise<void> {
   const view = await open.page.evaluate(() => ({
     readyState: document.readyState,
     elements: document.querySelectorAll('*').length,
+    root: document.querySelectorAll('#root *').length,
     headings: [...document.querySelectorAll('h1, h2, [role="alert"]')].map((node) => node.textContent?.trim() ?? '').slice(0, 6),
     text: (document.body?.innerText ?? '').replace(/\s+/gu, ' ').slice(0, 300),
   })).then((facts) => facts, (...rejection: [unknown]) => ({ unread: String(rejection[0]) }));
@@ -262,10 +265,13 @@ async function reportStuck(open: OpenWait): Promise<void> {
   const taken = await open.page.screenshot({ path: shot }).then(() => shot, () => 'none');
 
   open.asking = false;
+  const faults = open.faults.length === 0 ? 'none' : JSON.stringify(open.faults.slice(-12));
 
+  process.stderr.write(`gallery-harness: faults since the page opened (${open.condition}): ${faults}\n`);
   process.stderr.write('unread' in view
     ? `gallery-harness: the page could not be read (${open.condition}): ${view.unread}; screenshot: ${taken}\n`
     : `gallery-harness: the page shows (${open.condition}): readyState: ${view.readyState}, elements: ${String(view.elements)}, `
+      + `root: ${view.root === 0 ? 'empty' : `${String(view.root)} elements`}, `
       + `headings: ${JSON.stringify(view.headings)}, text: ${JSON.stringify(view.text)}, screenshot: ${taken}\n`);
 }
 
@@ -484,7 +490,15 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
 
       page.on('request', (request) => { requests.add(request.url()); });
       page.on('requestfinished', (request) => { requests.delete(request.url()); });
-      page.on('requestfailed', (request) => { requests.delete(request.url()); });
+      const faults: string[] = [];
+
+      page.on('requestfailed', (request) => {
+        requests.delete(request.url());
+        faults.push(`request failed: ${request.url()} ${request.failure()?.errorText ?? ''}`);
+      });
+      page.on('response', (response) => { if (response.status() >= 400) faults.push(`HTTP ${String(response.status())}: ${response.url()}`); });
+      page.on('pageerror', (error) => { faults.push(`uncaught: ${error instanceof Error ? error.stack ?? error.message : String(error)}`); });
+      page.on('console', (message) => { if (message.type() === 'error') faults.push(`console.error: ${message.text()}`); });
 
       // Puppeteer answers a renderer crash with an `error` event and nothing else, and a closed tab or a dead browser
       // with events no wait listens to: a wait with no timeout on the page never ends. Every unbounded wait is ended
@@ -529,14 +543,14 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
       page.setDefaultTimeout(0);
       page.setDefaultNavigationTimeout(0);
       page.waitForSelector = async (selector, waitOptions) => recorded(
-        { condition: `${selector} on ${page.url()}`, page, requests },
+        { condition: `${selector} on ${page.url()}`, page, requests, faults },
         () => untilEnded(waitForSelector(selector, waitOptions)),
       );
       page.waitForFunction = async (condition, waitOptions, ...args) => recorded(
-        { condition: `${String(condition).replace(/\s+/gu, ' ')} on ${page.url()}`, page, requests },
+        { condition: `${String(condition).replace(/\s+/gu, ' ')} on ${page.url()}`, page, requests, faults },
         () => untilEnded(waitForFunction(condition, waitOptions, ...args)),
       );
-      page.goto = async (url, gotoOptions) => recorded({ condition: `load of ${url}`, page, requests }, () => untilEnded(goto(url, gotoOptions)));
+      page.goto = async (url, gotoOptions) => recorded({ condition: `load of ${url}`, page, requests, faults }, () => untilEnded(goto(url, gotoOptions)));
 
       return page;
     };

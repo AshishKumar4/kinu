@@ -112,10 +112,39 @@ test('told the row nears its bound, a stuck wait says what the page shows, and k
     const view = await shows;
     expect(view).toContain('readyState: complete');
     expect(view).toMatch(/elements: \d+/u);
+    expect(view).toMatch(/root: \d+ elements/u);
     const shot = /screenshot: (\S+)/u.exec(view)?.[1] ?? '';
     expect(existsSync(shot)).toBe(true);
     // A report ends nothing: the wait is still open.
     expect(await Promise.race([settled.then(() => 'ended'), Promise.resolve('open')])).toBe('open');
+
+    await page.close();
+    await settled;
+  });
+});
+
+/**
+ * 2026-09-30 (CI run 36692757065 on 965d472d4e): the report said readyState complete, 98 elements, empty text: a blank
+ * app. What blanked it happened before the report, so the report carries what went wrong since the page opened.
+ */
+test('a stuck wait reports what went wrong on its page since it opened, and whether the app root is empty', async () => {
+  const notice = noticeFile();
+
+  await withGallery(async (gallery) => {
+    const page = await tabsPage(gallery);
+    await Promise.allSettled([page.addScriptTag({ content: "throw new Error('planted before the wait');" })]);
+    await Promise.allSettled([page.evaluate(() => fetch('/no-such-chunk.js'))]);
+    await page.evaluate(() => { document.getElementById('root')?.replaceChildren(); });
+    const settled = Promise.allSettled([page.waitForSelector(NEVER)]);
+    const shows = written('gallery-harness: the page shows');
+
+    appendFileSync(notice, 'silent 360.0s of 480s\n');
+
+    const faults = await written('gallery-harness: faults since the page opened');
+    expect(faults).toContain('planted before the wait');
+    expect(faults).toContain('HTTP 404');
+    expect(faults).toContain('no-such-chunk.js');
+    expect(await shows).toContain('root: empty');
 
     await page.close();
     await settled;
@@ -150,5 +179,25 @@ test('a stuck page that answers nothing is reported without it, and says so', as
     await written('gallery-harness: the page shows');
     await page.close();
     await settled;
+  });
+});
+
+/**
+ * A frame whose page chunk never loads (a rejected dynamic import) threw outside every boundary, and React emptied
+ * the root: the blank app the CI stuck report found. Under the app's own boundary it says what broke.
+ */
+test('a frame whose page chunk fails to load shows the failure, not a blank root', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+    await page.setRequestInterception(true);
+    page.on('request', async (request) => {
+      if (/\/WelcomePage-[^/]+\.js$/u.test(request.url())) await request.abort();
+      else await request.continue();
+    });
+    await page.goto(`${origin}/gallery.html?frame=welcome&step=0`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('#root [data-failure]');
+
+    expect(await page.$eval('#root [data-failure]', (node) => node.textContent ?? '')).toContain('This view crashed');
+    await page.close();
   });
 });

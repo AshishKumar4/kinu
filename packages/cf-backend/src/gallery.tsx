@@ -13,7 +13,7 @@ const IDLE_TURN: TurnLiveness = { kind: "idle" };
 
 const LIVE_TURN: TurnLiveness = { kind: "live", turnId: null };
 
-import { diagnostics, toKinuError, tolerate } from "@kinu.run/core/obs";
+import { diagnostics, renderThrownChain, toKinuError, tolerate } from "@kinu.run/core/obs";
 import { Button } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
@@ -6490,9 +6490,11 @@ async function mount() {
   createRoot(root).render(
     // Every frame mounts under the shell's three stores; a frame mounting `Layout` gets its nearer store, as the app does.
     <StrictMode>
-      <MemoryRouter initialEntries={entries}>
-        <AccountProvider><WorkspaceRosterProvider>{node}</WorkspaceRosterProvider></AccountProvider>
-      </MemoryRouter>
+      <ErrorBoundary label="gallery">
+        <MemoryRouter initialEntries={entries}>
+          <AccountProvider><WorkspaceRosterProvider>{node}</WorkspaceRosterProvider></AccountProvider>
+        </MemoryRouter>
+      </ErrorBoundary>
     </StrictMode>,
   );
 }
@@ -6500,9 +6502,10 @@ async function mount() {
 try {
   await mount();
 } catch (cause) {
-  diagnostics.failure("gallery.mount_failed", toKinuError({
-    doing: "mount the design-system gallery",
-    cause,
-    otherwise: "unavailable",
+  const failure = toKinuError({ doing: "mount the design-system gallery", cause, otherwise: "unavailable" });
+
+  diagnostics.failure("gallery.mount_failed", failure);
+  document.getElementById("root")?.replaceChildren(Object.assign(document.createElement("pre"), {
+    textContent: renderThrownChain({ cause: failure }),
   }));
 }
