@@ -49,8 +49,9 @@ while read -r _ local_sha _ _; do
     exit 1
   fi
 done
-if [ -n "$(git status --porcelain=v1 --untracked-files=no)" ]; then
-  printf 'pre-push: the working tree has uncommitted changes, so the tier would not prove the pushed commit.\n' >&2
+# Untracked files count: the gates' corpus includes untracked, non-ignored files (scripts/sources.ts).
+if [ -n "$(git status --porcelain=v1)" ]; then
+  printf 'pre-push: the working tree has uncommitted or untracked changes, so the tier would not prove the pushed commit.\n' >&2
   exit 1
 fi
 
