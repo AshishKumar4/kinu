@@ -272,7 +272,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
   /** Deployment bindings declared after construction (AUTH_KV, preview suffix).
    *  Declare before the read: `slates` memoizes its deps on first use. */
-  harnessDeclareEnv(bindings: { AUTH_KV?: KvStore; PREVIEW_HOST_SUFFIX?: string; CREDENTIAL_ENCRYPTION_KEY?: string; Sandbox?: Env["Sandbox"] }): void {
+  harnessDeclareEnv(bindings: { AUTH_KV?: KvStore; PREVIEW_HOST_SUFFIX?: string; CREDENTIAL_ENCRYPTION_KEY?: string; KinuDevbox?: Env["KinuDevbox"] }): void {
     Object.assign(this.env, bindings);
   }
 
@@ -1506,8 +1506,8 @@ export interface HarnessActorWorld {
   versionId?: string;
   /** The `send_email` binding at `env.EMAIL`; unset, the workspace has no mail route. */
   email?: SendEmail;
-  /** The container binding at `env.Sandbox`: the runtime registers the sandbox executor over the Sandbox SDK,
-   *  whose `getSandbox` a suite doubles. Unset, the workspace has no container. */
+  /** The container binding at `env.KinuDevbox`: the runtime registers the sandbox executor over it.
+   *  Unset, the workspace has no container. */
   container?: boolean;
   /** Every method this object served over its own namespace's stub, in call order. */
   rpcServed?: string[];
@@ -1549,7 +1549,7 @@ export function makeEnv(
     ...platformGatewayEnv(world?.aiGateway),
     ...(world?.versionId !== undefined && { CF_VERSION_METADATA: { id: world.versionId, tag: '', timestamp: '' } }),
     ...(world?.email !== undefined && { EMAIL: world.email }),
-    ...(world?.container === true && { Sandbox: { getByName: () => ({}) } }),
+    ...(world?.container === true && { KinuDevbox: { getByName: () => ({}) } }),
     UserDO: {
       idFromName: (n: string) => ({ toString: () => n }),
       // Recording when asked, refusing otherwise, so an unannounced user-plane path fails

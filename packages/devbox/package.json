@@ -12,7 +12,7 @@
     "./incidents": "./src/incidents.ts"
   },
   "dependencies": {
-    "@cloudflare/sandbox": "1.0.0-rc.1",
+    "@cloudflare/sandbox": "1.0.0",
     "effect": "4.0.0-rc.117",
     "valibot": "^1.4.1"
   },

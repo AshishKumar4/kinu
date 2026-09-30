@@ -381,9 +381,9 @@ export function createCFRuntime(
   const sandboxId = sandboxIdForWorkspace(actor.workspaceName);
   let sandboxHandle: SandboxHandle | null = null;
 
-  if (env.Sandbox) {
+  if (env.KinuDevbox) {
     try {
-      const sdk = env.Sandbox.getByName(sandboxId);
+      const sdk = env.KinuDevbox.getByName(sandboxId);
 
       // Egress is configured before the container runs anything, not in `onStart` (too late); until then
       // the container has no network, so it fails closed. Only the owning workspace configures.

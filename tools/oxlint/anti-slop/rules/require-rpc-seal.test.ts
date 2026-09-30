@@ -12,7 +12,7 @@ tester.run("anti-slop/require-rpc-seal", requireRpcSealRule, {
       code: "export class UserDO extends Agent<Env> { constructor(ctx, env) { super(ctx, env); sealRpcSurface(this, USER_DO_RPC_SURFACE); } }",
     },
     { filename: product, code: "export abstract class ActorAgent extends Agent<Env> { run() {} }" },
-    { filename: product, code: "export class KinuSandbox extends Devbox<Env> { constructor(ctx, env) { super(ctx, env); } }" },
+    { filename: product, code: "export class KinuDevbox extends Devbox<Env> { constructor(ctx, env) { super(ctx, env); } }" },
     { filename: "/repo/packages/cf-backend/tests/helpers/actor-harness.ts", code: "class Harness extends Agent<Env> {}" },
   ],
   invalid: [

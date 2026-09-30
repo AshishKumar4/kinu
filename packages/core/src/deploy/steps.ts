@@ -931,7 +931,7 @@ async function wireBinding(
       return { type: 'vectorize', name, index_name: resource };
     case 'durable-object': {
       if (!context.inputs.sandbox && manifest.migrations.some((migration) => migration.newSqliteClasses.includes(binding.resource))
-        && binding.resource === 'KinuSandbox') return null;
+        && binding.resource === 'KinuDevbox') return null;
 
       return { type: 'durable_object_namespace', name, class_name: binding.resource };
     }

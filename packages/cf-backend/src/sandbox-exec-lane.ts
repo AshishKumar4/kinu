@@ -1,5 +1,5 @@
 /**
- * `KinuSandbox` presented as core's `SandboxHandle`. No `timeout` means no work deadline, so such
+ * `KinuDevbox` presented as core's `SandboxHandle`. No `timeout` means no work deadline, so such
  * commands run on the runtime's own exec (plain `exec` is bounded by the container and the request path),
  * and an abort kills the process, not just the wait. See `SandboxHandle.exec`.
  */
@@ -8,11 +8,11 @@ import { jsonResultOrVoid, SandboxPending, WORKSPACE_BACKUP_DIR, type SandboxHan
 import { classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
 import { devboxFailure, type DevboxErrorCode } from '@kinu.run/devbox';
 import { Effect } from 'effect';
-import type { KinuSandbox } from "./kinu-sandbox";
+import type { KinuDevbox } from "./kinu-devbox";
 import { sandboxPreviewLabelOf } from "@kinu.run/core";
 import type { SandboxPreviewExposures } from "@kinu.run/core";
 
-type ContainerOperations = Pick<KinuSandbox,
+type ContainerOperations = Pick<KinuDevbox,
   "execUntimed" | "killUntimed" | "resolveReadiness" | "readFile" | "writeFile" | "listFiles"
   | "deleteFile" | "exposePort" | "getExposedPorts" | "unexposePort" | "startSupervised"
   | "stopSupervised" | "listSupervised" | "portToken" | "notePortRemoved">;
@@ -53,7 +53,7 @@ function callDevbox<A>(run: () => PromiseLike<A>): Effect.Effect<A, KinuError> {
  * since the process is still running, and a command that finished first is returned as finished.
  */
 async function execWithoutDeadline(
-  handle: Pick<KinuSandbox, "execUntimed" | "killUntimed">,
+  handle: Pick<KinuDevbox, "execUntimed" | "killUntimed">,
   command: string,
   cwd?: string,
   signal?: AbortSignal,

@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   EGRESS_PLACEHOLDER_PREFIX, refusedHostname, type EgressSecretBinding,
 } from '@kinu.run/core';
-import type { KinuSandbox } from '../src/kinu-sandbox';
+import type { KinuDevbox } from '../src/kinu-devbox';
 // Static: neither module reaches `cloudflare:email`, so neither needs the mock below.
 import { kinuEgressParams } from '../src/egress/configure';
 import { adaptCloudflareSandbox } from '../src/sandbox-exec-lane';
@@ -78,8 +78,8 @@ function captureFetch(response: () => Response): FetchCapture {
   return { seen, restore: () => { globalThis.fetch = original; } };
 }
 
-/** `KinuSandbox` is a DO class a test cannot construct; implements only what the preflight reaches. */
-function execOnlyBox(): KinuSandbox {
+/** `KinuDevbox` is a DO class a test cannot construct; implements only what the preflight reaches. */
+function execOnlyBox(): KinuDevbox {
   return Object.create({
     resolveReadiness: async () => ({ kind: 'restored' as const }),
     execUntimed: async () => ({ stdout: 'done', stderr: '', exitCode: 0 }),
@@ -244,7 +244,7 @@ describe('configuration is awaited before the container runs', () => {
       // A cold file op must not start the container itself and read a blank disk.
       const order: string[] = [];
 
-      const box: KinuSandbox = Object.create({
+      const box: KinuDevbox = Object.create({
         resolveReadiness: async () => {
           order.push('resolveReadiness');
 

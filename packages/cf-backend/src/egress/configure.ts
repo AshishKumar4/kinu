@@ -1,5 +1,5 @@
 /**
- * Egress configuration contents only. Applying it belongs to `KinuSandbox.configureEgress`, the one writer that binds
+ * Egress configuration contents only. Applying it belongs to `KinuDevbox.configureEgress`, the one writer that binds
  * the handlers in the safe order; timing belongs to `sandbox-exec-lane.ts`, before any op that can start the container.
  * Until it lands the container has no network (`enableInternet = false`, no handler): fails closed.
  * Not `onStart`: `gate:do-init` forbids awaiting there, and this needs a UserDO round trip.

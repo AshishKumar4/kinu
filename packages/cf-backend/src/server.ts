@@ -50,7 +50,7 @@ const RELEASE_ARTIFACT_PATH = `/downloads/:artifact{${RELEASE_ARTIFACT_NAME}}`;
 // The one actor-bearing DO class: every actor in a workspace shares its SQLite.
 export { OrchestratorAgent } from "./orchestrator";
 
-export { KinuSandbox } from "./kinu-sandbox";
+export { KinuDevbox } from "./kinu-devbox";
 
 export { CodexEgress } from "./egress/codex-egress";
 
@@ -403,7 +403,7 @@ worker.all('/agents/*', async (c, next) => {
   if (!agentName) return next();
 
   // routeAgentRequest maps every DO binding by slug; the rejection above keeps
-  // UserDO and KinuSandbox unreachable.
+  // UserDO and KinuDevbox unreachable.
   const identity = c.get('identity');
   const claim = await claimOwnedWorkspace(c.env, identity.userId, agentName);
 
