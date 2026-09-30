@@ -1,11 +1,10 @@
 /** Native container executor, one durable workspace per agent, exposed as sandbox.*. */
 
 import * as v from 'valibot';
-import { isAbortError } from '@kinu.run/agent-utils';
 import type { ExecutorProvider, ExecutorCapability, PortExposureResult, PreviewRouteCheck } from './types';
 import { readExecSignal } from './signal';
 import { commandResult, exposedPortText, type CommandResult } from './exec-result';
-import { diagnostics, KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
+import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import type { VFS } from '../types/primitives';
 import { isVfsError, VfsError, VFS_ERRNO, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import type { VfsNativeReads } from '../vfs/mounts';
@@ -56,7 +55,7 @@ export interface SandboxHandle {
    */
   exec(command: string, opts?: SandboxExecOptions):
     Promise<{ output?: string; stdout?: string; stderr?: string; exitCode?: number }>;
-  /** The SDK returns binary files base64-encoded with `encoding: 'base64'`; text as utf-8. */
+  /** `base64` is the only exact read; without it the content is UTF-8 text. */
   readFile(path: string, opts?: { encoding?: 'utf-8' | 'base64' }):
     Promise<{ content?: string; encoding?: string; isBinary?: boolean; exitCode?: number }>;
   writeFile(path: string, content: string, opts?: { encoding?: 'utf-8' | 'base64' }): Promise<JsonValue | void>;
@@ -285,7 +284,7 @@ export function createSandboxExecutor(
 
           return normalize(res);
         } catch (err) {
-          if (isAbortError(err)) throw err;
+          if (classifyErrorCode({ cause: err }) === 'cancelled') throw err;
 
           return refusalOf(sandboxFailure({ doing: `sandbox exec \`${command}\``, cause: err }));
         }
@@ -715,21 +714,16 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
 
   return {
     async readFile(path, opts) {
-      const r = await serving(path, () => handle.readFile(path));
+      const r = await serving(path, () => handle.readFile(path, { encoding: 'base64' }));
 
       if (r.exitCode != null && r.exitCode !== 0) {
         throw new VfsError('ENOENT', `no such file or directory, open '${path}' (exit ${r.exitCode})`, path);
       }
 
-      if (r.encoding === 'base64') {
-        const bytes = base64ToBytes(r.content ?? '');
+      // base64: the only exact read.
+      const bytes = r.encoding === 'base64' ? base64ToBytes(r.content ?? '') : new TextEncoder().encode(r.content ?? '');
 
-        return opts?.encoding === 'utf8' ? new TextDecoder().decode(bytes) : bytes;
-      }
-
-      const text = r.content ?? '';
-
-      return opts?.encoding === 'utf8' ? text : new TextEncoder().encode(text);
+      return opts?.encoding === 'utf8' ? new TextDecoder().decode(bytes) : bytes;
     },
 
     /** Bounded window via `dd` + base64; the SDK's `readFile` has no offset/length. Bounds validated before use. */

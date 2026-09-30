@@ -18,7 +18,7 @@ import {
   type SandboxHandle,
 } from '../src/execution/index';
 import { createWorkspaceBundle } from './helpers';
-import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
+import { nativeFileRead, sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 import {
   agentCred,
   agentHome,
@@ -123,14 +123,14 @@ function nativeFileError(code: string, path: string, operation: string): Error {
 
 function sandboxHandle(fs: MemFs): SandboxHandle {
 	const handle: SandboxHandle = {
-		async readFile(path: string) {
+		async readFile(path: string, opts?: { encoding?: 'utf-8' | 'base64' }) {
 			const b = fs.read(path);
 
 			if (b === null) {
 				throw nativeFileError('ENOENT', path, 'readFile');
 			}
 
-			return { content: Buffer.from(b).toString('base64'), encoding: 'base64', exitCode: 0 };
+			return nativeFileRead(b, opts);
 		},
 		async writeFile(path: string, content: string, opts?: { encoding?: string }) {
 			fs.write(path, opts?.encoding === 'base64'

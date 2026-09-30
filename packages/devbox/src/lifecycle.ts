@@ -364,13 +364,18 @@ interface RecoveryDecision {
   readonly stage: RecoveryStage | undefined;
 }
 
+/** No retry and no replacement changes the answer: the same container, or its successor, fails the same way. */
+export function isTerminalRecovery(failure: RecoveryClass): boolean {
+  return failure === 'exhausted' || failure === 'permanent';
+}
+
 /** A stale owner retries without advancing: a failure on a gone identity says nothing of its successor.
  *  Abandoned work enters at `replace`, since its only cancellation is the container's death. */
 export function recoveryStep(input: RecoveryInput): RecoveryDecision {
   if (!input.owned) return { action: 'inert', stage: input.stage };
   const { stage } = input;
 
-  if (input.failure === 'exhausted' || input.failure === 'permanent') {
+  if (isTerminalRecovery(input.failure)) {
     return { action: 'refuse', stage };
   }
 
@@ -451,15 +456,16 @@ export function findMount(procMounts: string, dir: string): MountLine | undefine
   return undefined;
 }
 
-/** Bounded because a waiting caller's stop runs this; an unbounded wait makes one process
- *  that ignores SIGTERM unstoppable. Long enough to flush, short enough to stop within ceilings. */
-const HOLDER_TERM_WAIT_MS = 5_000;
+/** TERM's grace before KILL, for work-directory holders and supervised processes alike: without
+ *  KILL one process that ignores TERM is unstoppable, and a waiting caller's stop runs this. Long
+ *  enough to flush, short enough to stop within ceilings; 0.12.9's container gave a command 5 s too. */
+export const TERM_GRACE_MS = 5_000;
 
 /** After admissions drain, release fd and cwd holders. PID 1 and this command
  *  ancestor chain are never signalled. */
 export function releaseWorkdirHoldersCommand(workdir: string): string {
   const quoted = `'${workdir.replaceAll("'", `'\\''`)}'`;
-  const termWait = String(Math.ceil(HOLDER_TERM_WAIT_MS / 1_000));
+  const termWait = String(Math.ceil(TERM_GRACE_MS / 1_000));
 
   // This shell's parent chain. `comm` can hold spaces and parentheses, so ppid is read after
   // the last `)` of `pid (comm) state ppid …`, never by column.

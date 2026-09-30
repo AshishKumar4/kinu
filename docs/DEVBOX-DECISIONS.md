@@ -1759,6 +1759,8 @@ access and its exact key prefix, constructs S3Gateway with the current Worker
 secrets, and installs the complete mount/static/vault routing table. It
 persists no registration mirror. A missing or unknown marker refuses by name
 as a permanent configuration error; it never silently replaces the container.
+(D47: a missing marker refuses only where something is mounted, and the
+refusal is settled once rather than retried.)
 
 Red: the 160 MiB lazy read after explicit owner eviction exited 1. Green:
 from a clean mount, eviction followed by route reconstruction returned the
@@ -2031,6 +2033,122 @@ against 109 ms (each run has its own bucket), which covers its later
 segments. Its attach took 2,574 against 2,316 ms over about 14 serial
 requests, and its restore 6,526 against 6,374 ms. The wake as the caller sees
 it took 10,206 against 10,717 ms.
+
+D47. A warm owner rebinds whatever its container holds, and a start that
+fails the same way every time is refused once (2026-09-30, review 3f6).
+D46 mounted the store with no key prefix, but D40's marker schema still
+required one, and its check then refused any marker that named one. So every
+owner evicted over a running container failed to rebind after its first store
+mount: `S3Mounts marker registration not understood for /backups`. A box
+evicted before its store was ever mounted failed too, on `S3Mounts marker
+missing`: its container held no marker because nothing had been mounted. Both
+are healthy boxes.
+
+The shim omits an absent prefix (`crates/sandbox-tools/src/s3_mount/model.rs:45`,
+`skip_serializing_if`), so the marker's `keyPrefix` is optional and a
+marker that names one, from a mount made before D46, is still refused. With
+no marker, the SDK's own `S3Mounts.inspect()` says what is at the store path
+(`observation.rs:17-47`): `absent`, nothing mounted, leaves nothing to route,
+and the chain's next mount registers its own route; anything else, such as
+an s3fs mount with no registration (`unmanaged`), is refused by name.
+
+That admission failure was retried each second forever: `#admitExecution`
+armed a startup after any failure, so a `mount-marker` refusal, which the
+recovery ladder classes `permanent`, filed an incident on every start. The
+admission now classifies first, as the ladder does. A terminal class
+(`permanent` or `exhausted`, now one predicate, `isTerminalRecovery`) settles
+the box unattached with no retry, files one incident, drops the startup row
+and ends the pending adoption, so later requests are answered from the
+settled refusal; `attachNow()` asks again. Because `mount-marker` is now
+terminal, only the container's answers about the marker carry it: a failure
+to read the marker file or to inspect the path through the transport stays
+`io` and is retried.
+
+Red then green: `tests/mount-route.test.ts`
+(`bench-artifacts/review-3f6/marker-rebind-red.log`, `-green.log`). An owner
+evicted after a checkpoint (whose mount wrote the marker) and one evicted
+before any mount both answer `restored`, with no incident, no destroy and no
+second start. The exact marker the shim writes rebinds a route rooted at the
+box's prefix. An unknown protocol files `[permanent -> refuse]` once, arms no
+startup, and a later request and the platform's alarm file nothing more.
+
+D48. A stop ends a process that ignores TERM, and one claim decides whether a
+launch ran (2026-09-30, review 3f6). Two defects in the process scripts
+(`src/processes.ts`), which the harness only imitated.
+
+The stop sent TERM to the process group and then waited for the pid with no
+end, so a resident that traps TERM held `quiesce()` and `stopSupervised()`
+before their holder scan, and admission stayed fenced. 0.12.9's container
+(`cloudflare/sandbox:0.12.9`, `/container-server/dist/index.js`,
+`Session.killCommand`, the path its `killProcess` took for a default-session
+start) sent SIGTERM to the command's whole tree, walking
+`/proc/<pid>/task/<pid>/children`, and polled every 50 ms for up to 5 s for
+every pid in it to end. It then sent SIGKILL to the tree and to any pid still
+standing, polled up to 5 s more, logged a warning if any remained, and
+reported success either way (exit 143 or 137). Its sessionless path
+(`terminateProcessTree`) signalled the group the same way with a 5 s grace
+and a 1 s wait after KILL. The stop now sends TERM to the group, sends KILL to
+the group if any member outlives the same 5 s (`TERM_GRACE_MS`, which the
+workspace holder scan also uses), and returns when the group has exited. That
+end is the process's own, not a deadline: after KILL nothing the group does
+delays it, so 0.12.9's second cap, which reported success over survivors, is
+not kept. The probe is `kill -s 0 -- -PGID`: dash rejects `kill -0 -- -PGID`
+as a usage error (exit 2), which a loop would read as the group being gone.
+
+`start` wrote the record before the exec. An exec that never ran its wrapper
+(a missing `cwd` the runtime refuses, or any refusal) left the record with
+neither pid nor exit, which reads `starting` forever, so a retry adopted it
+and reported a start it never made, and a stop waited forever for its pid.
+An exec whose answer is lost after the spawn looks the same from the box,
+and its process must be adopted, not started twice (the harness's
+`created: true` fault). So one symlink now decides each launch: the wrapper
+makes `launch -> launched` before it runs anything, and a caller that finds
+no pid and no exit makes `launch -> unlaunched`, after which the wrapper
+exits without running. The start claims that way when its exec fails, and so
+do a retry and a stop that find a launch nobody answered. A launch that never
+ran reads `failed` with no exit code, and a retry launches it again. The
+wrapper also enters the `cwd` itself, as 0.12.9's session shell did, so a
+missing one is the launch's own recorded failure: exit 1 and `Failed to
+change directory to '<cwd>'` in its stderr.
+
+Red then green, in the real image's shell with the SDK's file calls against
+its `sandbox-shim` (`tests/processes-image.test.ts`, over `docker exec`;
+`bench-artifacts/review-3f6/processes-image-red.log`, `-green.log`). On
+integration's scripts the stop of a TERM-trapping resident never returned
+(killed by the outer timeout), a missing `cwd` was refused at the exec, and a
+refused exec left `starting`. Now the first ends on KILL after the grace
+(exit 137), a process that obeys TERM gets no KILL (exit 143), both failed
+launches record their failure, each retry launches exactly one process, and
+an answer lost after the spawn runs once however the retry finds it.
+
+D49. Three boundary defects from the same review (2026-09-30, review 3f6).
+
+- A reopen waited on a quiesce without taking its arrival, so a destroy that
+  landed while it waited (D36) did not fence it: once the quiesce settled,
+  `start()` and `attachNow()` launched a container for the torn-down box and
+  `kickStartup()` armed one. All three now take their arrival before that
+  wait and refuse with `this devbox was destroyed after this request arrived`
+  (`tests/lifecycle-generation.test.ts`, red: the request ran and the
+  container started or the startup was armed; green: refused, nothing
+  started, nothing armed).
+- The adapter maps `DevboxError` to `KinuError` (D42), so an aborted exec
+  reached core's sandbox executor as `KinuError[cancelled]`, which it did not
+  take for a cancellation: the exec tool returned an ordinary `cancelled`
+  result instead of rejecting. The executor now propagates anything that
+  classifies as `cancelled` (`classifyErrorCode`), the bare `AbortError`
+  included (`packages/cf-backend/tests/unit-exec-no-deadline.test.ts`, core's
+  executor over the real adapter).
+- Core's sandbox file view read with no encoding, which this box answers as
+  `Response.text()`, so a binary file came back with its invalid UTF-8
+  replaced: a download or a copy of `89 50 00 ff fe` was corrupted. The view
+  now asks for base64, the only exact read, and decodes each answer as its
+  `encoding` names it. The core test doubles answered base64 whatever
+  was asked, which hid this; they now answer as the box does
+  (`nativeFileRead`), and the VFS conformance binary round-trip is red on the
+  old view. The adapter (`unit-sandbox-rpc-errors.test.ts`) and the box's own
+  read (`tests/file-bytes.test.ts`) are each held to the exact bytes. The
+  `readFile` tool still returns text for the model: 0.12.9 returned base64 for
+  a file it detected as binary, and the native box returns it decoded.
 
 ## Measurement contract for a strategy comparison
 
