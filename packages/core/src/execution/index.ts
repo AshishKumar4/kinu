@@ -9,6 +9,8 @@ export type {
   ResourceLimits,
   ExecutionRouter,
   PreviewRouteCheck,
+  SandboxSize,
+  SandboxSizes,
 } from './types';
 
 export { EXECUTOR_CAPABILITIES, NO_TIMER_DEADLINE_MS } from './types';
@@ -34,8 +36,8 @@ export { DefaultExecutionRouter } from './router';
 export { withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, shellCwd, type FileReach, type ShellReach } from './approval';
 
 export {
-  createSandboxExecutor, type SandboxHandle, isSandboxTransientError, SandboxPending,
-  WORKSPACE_BACKUP_DIR,
+  createSandboxExecutor, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending,
+  WORKSPACE_BACKUP_DIR, sandboxSizeLabel,
 } from './sandbox';
 
 export { createDeviceTunnelExecutor, type DeviceTransport } from './device-tunnel-executor';

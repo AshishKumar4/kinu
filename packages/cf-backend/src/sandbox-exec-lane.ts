@@ -15,7 +15,7 @@ import type { SandboxPreviewExposures } from "@kinu.run/core";
 type ContainerOperations = Pick<KinuDevbox,
   "execUntimed" | "killUntimed" | "resolveReadiness" | "readFile" | "writeFile" | "listFiles"
   | "deleteFile" | "exposePort" | "getExposedPorts" | "unexposePort" | "startSupervised"
-  | "stopSupervised" | "listSupervised" | "portToken" | "notePortRemoved">;
+  | "stopSupervised" | "listSupervised" | "portToken" | "notePortRemoved" | "resize">;
 
 /** Without AUTH_KV the edge cannot verify a preview hostname, so a minted URL would be dead. */
 const PREVIEWS_UNPUBLISHABLE =
@@ -100,7 +100,7 @@ async function execWithoutDeadline(
  */
 export function adaptCloudflareSandbox(
   handle: ContainerOperations,
-  configureEgress: () => Promise<void>,
+  configure: () => Promise<void>,
   previews: SandboxPreviewExposures | null,
   portsMoved?: () => void,
 ): SandboxHandle {
@@ -109,7 +109,7 @@ export function adaptCloudflareSandbox(
 
   const configured = async (): Promise<void> => {
     if (inFlight !== null) return await inFlight;
-    const attempt = configureEgress();
+    const attempt = configure();
     inFlight = attempt;
 
     try {
@@ -210,6 +210,11 @@ export function adaptCloudflareSandbox(
         processId: row.processId, pid: row.pid, status: row.status,
         command: row.command, restartable: row.restartable,
       })))),
+    resize: (size) => settle(callDevbox(async () => {
+      await configured();
+
+      return await handle.resize(size);
+    })),
     // DO rows only: no egress, no attach wait, since the token must be mintable before its exposure.
     portToken: (port, name) => settle(callDevbox(() => handle.portToken(port, name))),
     notePortRemoved: (port) => settle(callDevbox(async () => {

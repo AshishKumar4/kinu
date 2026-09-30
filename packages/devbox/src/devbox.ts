@@ -156,6 +156,8 @@ const STARTED_AT_KEY = 'devbox:started-at';
 
 const SIZE_KEY = 'devbox:size';
 
+const DEFAULT_SIZE_KEY = 'devbox:default-size';
+
 const RUNNING_SIZE_KEY = 'devbox:running-size';
 
 const NO_START_IMAGE = 'no image to start: name it `devbox` in the container `images` map';
@@ -1476,17 +1478,18 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return DEFAULT_BOX_SIZE;
   }
 
-  #size(): BoxSize {
-    const stored = v.safeParse(BoxSizeSchema, this.ctx.storage.kv.get(SIZE_KEY));
+  #stored(key: string): BoxSize | undefined {
+    const stored = v.safeParse(BoxSizeSchema, this.ctx.storage.kv.get(key));
 
-    return stored.success ? stored.output : this.defaultSize;
+    return stored.success ? stored.output : undefined;
+  }
+
+  #size(): BoxSize {
+    return this.#stored(SIZE_KEY) ?? this.#stored(DEFAULT_SIZE_KEY) ?? this.defaultSize;
   }
 
   #runningSize(): BoxSize | undefined {
-    if (this.ctx.container?.running !== true) return undefined;
-    const recorded = v.safeParse(BoxSizeSchema, this.ctx.storage.kv.get(RUNNING_SIZE_KEY));
-
-    return recorded.success ? recorded.output : undefined;
+    return this.ctx.container?.running === true ? this.#stored(RUNNING_SIZE_KEY) : undefined;
   }
 
   #parseSize(size: string): Effect.Effect<BoxSize, DevboxError> {
@@ -1497,36 +1500,40 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       : Effect.fail(new DevboxError('invalid-input', `no box size ${size}; the sizes are ${BOX_SIZE_ORDER.join(', ')}`));
   }
 
-  boxSize(): Promise<{ readonly size: BoxSize; readonly running: BoxSize | undefined }> {
-    return settle(Effect.sync(() => ({ size: this.#size(), running: this.#runningSize() })));
+  boxSize(): Promise<{ readonly size: BoxSize; readonly chosen: BoxSize | undefined; readonly running: BoxSize | undefined }> {
+    return settle(Effect.sync(() => ({ size: this.#size(), chosen: this.#stored(SIZE_KEY), running: this.#runningSize() })));
   }
 
-  setSize(size: string): Promise<BoxSize> {
-    return settle(this.#parseSize(size).pipe(Effect.tap((chosen) => Effect.sync(() => {
-      this.ctx.storage.kv.put(SIZE_KEY, chosen);
-    }))));
-  }
-
-  resize(size: string): Promise<ResizeOutcome> {
+  useDefaultSize(size: string | null): Promise<BoxSize> {
     return settle(Effect.gen({ self: this }, function* () {
-      const chosen = yield* this.#parseSize(size);
+      if (size === null) this.ctx.storage.kv.delete(DEFAULT_SIZE_KEY);
+      else this.ctx.storage.kv.put(DEFAULT_SIZE_KEY, yield* this.#parseSize(size));
+
+      return this.#size();
+    }));
+  }
+
+  resize(size: string | null): Promise<ResizeOutcome> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (size === null) this.ctx.storage.kv.delete(SIZE_KEY);
+      else this.ctx.storage.kv.put(SIZE_KEY, yield* this.#parseSize(size));
+      const target = this.#size();
       const running = this.ctx.container?.running === true;
       const previous = this.#runningSize();
-      this.ctx.storage.kv.put(SIZE_KEY, chosen);
 
-      if (!running) return { kind: 'recorded', size: chosen, previous: undefined } as const;
+      if (!running) return { kind: 'recorded', size: target, previous: undefined } as const;
 
-      if (previous === chosen) return { kind: 'unchanged', size: chosen, previous } as const;
+      if (previous === target) return { kind: 'unchanged', size: target, previous } as const;
       const endedCommands = this.#untimed.size;
       const committed = yield* attempt('io', () => this.#quiesce(true));
 
       if (committed.kind === 'failed') {
-        return { kind: 'failed', size: chosen, previous, reason: committed.reason ?? 'the final checkpoint failed' } as const;
+        return { kind: 'failed', size: target, previous, reason: committed.reason ?? 'the final checkpoint failed' } as const;
       }
 
       yield* attempt('io', () => this.start());
 
-      return { kind: 'restarted', size: chosen, previous, endedCommands, checkpoint: committed } as const;
+      return { kind: 'restarted', size: target, previous, endedCommands, checkpoint: committed } as const;
     }));
   }
 

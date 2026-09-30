@@ -2,10 +2,11 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Native container executor, one durable workspace per agent, exposed as sandbox.*. */
 
 import * as v from 'valibot';
-import type { ExecutorProvider, ExecutorCapability, PortExposureResult, PreviewRouteCheck } from './types';
+import { Effect } from 'effect';
+import type { ExecutorProvider, ExecutorCapability, ExecutorStatus, PortExposureResult, PreviewRouteCheck, SandboxSize, SandboxSizes } from './types';
 import { readExecSignal } from './signal';
 import { commandResult, exposedPortText, type CommandResult } from './exec-result';
-import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
+import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
 import { isVfsError, VfsError, VFS_ERRNO, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { shellQuote } from '../utils/shell';
 import { vfsDirname } from '../utils/vfs-helpers';
@@ -77,6 +78,59 @@ export interface SandboxHandle {
   /** Asked before the first exposure: restarts re-expose with the stored token, so the first URL must use it too. */
   portToken(port: number, name?: string): Promise<{ urlToken: string }>;
   notePortRemoved(port: number): Promise<void>;
+  /** Records the size; a container running at another size restarts at it, and one not running stays so. */
+  resize(size: string): Promise<SandboxResize>;
+}
+
+/** `failed`: the final checkpoint failed, so the container runs on at `previous` until its next start. */
+export type SandboxResize =
+  | { readonly kind: 'recorded' | 'unchanged'; readonly size: string }
+  | { readonly kind: 'restarted'; readonly size: string; readonly previous: string | undefined; readonly endedCommands: number }
+  | { readonly kind: 'failed'; readonly size: string; readonly previous: string | undefined; readonly reason: string };
+
+/** Everything but the lifecycle word, which each branch of `getStatus` names. */
+type ExecutorStatusBase = Omit<ExecutorStatus, 'status'>;
+
+/** `Medium (2 vCPU, 8 GiB)`: what the prompt, the types and a resize's answer call a size. */
+export function sandboxSizeLabel(row: SandboxSize): string {
+  return `${row.label} (${String(row.vcpu)} vCPU, ${String(Math.round(row.memoryMib / 102.4) / 10)} GiB)`;
+}
+
+function labelOf(sizes: SandboxSizes, size: string | undefined): string {
+  const row = sizes.sizes.find((candidate) => candidate.size === size);
+
+  return row === undefined ? String(size) : sandboxSizeLabel(row);
+}
+
+/** The answer to `sandbox.resize`, in the terms its declaration uses. */
+function resizedText(resized: SandboxResize, sizes: SandboxSizes): string | Refusal {
+  const size = labelOf(sizes, resized.size);
+
+  switch (resized.kind) {
+    case 'recorded':
+      return `The sandbox is not running; it starts at ${size}.`;
+    case 'unchanged':
+      return `The sandbox already runs at ${size}.`;
+    case 'restarted': {
+      const ended = resized.endedCommands === 0 ? '' : `; ${String(resized.endedCommands)} running command${resized.endedCommands === 1 ? '' : 's'} ended`;
+
+      return `The sandbox restarted at ${size}${resized.previous === undefined ? '' : `, from ${labelOf(sizes, resized.previous)}`}. `
+        + `Files are kept, and supervised servers and exposed ports came back${ended}.`;
+    }
+
+    case 'failed':
+      return refusalOf(new KinuError('io', `The sandbox still runs at ${labelOf(sizes, resized.previous)}: its final checkpoint failed `
+        + `(${resized.reason}). It starts at ${size} next time.`));
+  }
+}
+
+/** The declaration codemode shows for `sandbox.resize`, from the host's table. */
+function resizeDeclaration(sizes: SandboxSizes | undefined): string {
+  if (sizes === undefined) return '';
+  const choices = sizes.sizes.map((row) => `${row.size}: ${String(row.vcpu)} vCPU, ${String(Math.round(row.memoryMib / 102.4) / 10)} GiB`).join('; ');
+
+  return `\n  /** ${choices}. A running sandbox restarts at the new size: files stay, supervised servers and ports come back, a running command ends. */`
+    + `\n  function resize(size: ${sizes.sizes.map((row) => `'${row.size}'`).join(' | ')}): Promise<string | Refusal>;`;
 }
 
 const NOT_CONFIGURED =
@@ -186,11 +240,13 @@ function notDispatched(): Error {
   );
 }
 
-/** Pass `undefined` for a "not configured" stub. Without `previewHostSuffix` only port exposure refuses. */
+/** Pass `undefined` for a "not configured" stub. Without `previewHostSuffix` only port exposure refuses;
+ *  without `sizes` there is no `resize`. */
 export function createSandboxExecutor(
   handle?: SandboxHandle,
   previewHostSuffix?: string,
   activated?: () => void,
+  sizes?: SandboxSizes,
 ): ExecutorProvider {
   const connected = handle != null;
   const previews = previewHostSuffix !== undefined && previewHostSuffix.length > 0;
@@ -541,6 +597,26 @@ export function createSandboxExecutor(
         }
       },
     },
+    resize: {
+      description: 'Change the sandbox\'s size. A running sandbox at another size restarts: files stay, '
+        + 'supervised servers and exposed ports come back, and a running command ends.',
+      execute: async (...args: unknown[]): Promise<string | Refusal> => {
+        if (!handle) return notConfigured();
+
+        if (sizes === undefined) return refusalOf(new KinuError('unsupported', 'sandbox resize: this deployment names no sandbox sizes'));
+        const size = parseInput(v.picklist(sizes.sizes.map((row) => row.size)), { value: args[0] });
+
+        if (size === undefined) {
+          return refusalOf(new KinuError('bad_input', `sandbox resize: size must be one of ${sizes.sizes.map((row) => row.size).join(', ')}`));
+        }
+
+        // Retried: a resize repeated after a lost answer finds its size already applied.
+        return settle(Effect.match(Effect.tryPromise({
+          try: () => withSandboxRetry(() => touch(() => handle.resize(size))),
+          catch: (cause) => sandboxFailure({ doing: `sandbox resize ${size}`, cause }),
+        }), { onSuccess: (resized) => resizedText(resized, sizes), onFailure: refusalOf }));
+      },
+    },
     listProcesses: {
       description:
         'List sandbox processes as JSON rows {processId,pid,status,restartable,command}. ' +
@@ -565,8 +641,8 @@ export function createSandboxExecutor(
 
   const types = `
 /**
- * A Linux container of your own (2 vCPU, about 6 GB) with its own files. Relative paths resolve in
- * /workspace. It has no docker, python3, make, gcc, clang or tsc. It refuses past 10 instances (503)
+ * A Linux container of your own with its own files. Relative paths resolve in /workspace. It has no
+ * docker, python3, make, gcc, clang or tsc. A start can be refused when the platform has no room (503)
  * or on a burst of starts (429); \`unavailable\` means this deployment has no container. A server
  * started with startProcess comes back when the container restarts; a nohup job does not.
  */
@@ -588,7 +664,7 @@ declare namespace sandbox {
   function listProcesses(): Promise<string | Refusal>;
   function exposePort(port: number, name?: string): Promise<string | Refusal>;
   function unexposePort(port: number): Promise<string | Refusal>;
-  function listPorts(): Promise<string | Refusal>;
+  function listPorts(): Promise<string | Refusal>;${resizeDeclaration(sizes)}
 }
 `.trim();
 
@@ -609,9 +685,11 @@ declare namespace sandbox {
     filesOwner: 'agent',
     isAvailable: () => connected,
     getStatus: () => {
-      const seen = { configured: connected, available: connected, active };
+      const seen: ExecutorStatusBase = { configured: connected, available: connected, active };
 
       if (!connected) return { ...seen, status: 'not_configured', reason: NOT_CONFIGURED };
+
+      if (sizes !== undefined) seen.sizes = sizes;
 
       if (!previews) return { ...seen, status: active ? 'active' : 'idle', reason: PREVIEWS_NOT_CONFIGURED };
 

@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { DEFAULT_BOX_SIZE } from '../src/sizes';
+import { DEFAULT_BOX_SIZE, type BoxSize } from '../src/sizes';
 import { devboxFailure } from '../src/errors';
 import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
 import { Devbox, HARNESS_IMAGE, harness } from './support/devbox-harness';
@@ -59,7 +59,7 @@ test('a box with no size chosen starts at the default size, on the image the hos
 
   expect(DEFAULT_BOX_SIZE).toBe('medium');
   expect(container.startOptions).toEqual([{ image: HARNESS_IMAGE, instance: instance('medium'), enableInternet: true }]);
-  expect(await box.boxSize()).toEqual({ size: 'medium', running: 'medium' });
+  expect(await box.boxSize()).toEqual({ size: 'medium', chosen: undefined, running: 'medium' });
   await box.destroy();
 });
 
@@ -73,7 +73,7 @@ test('resizing a box that has never started records the size and starts nothing;
   await box.writeFile('/workspace/first.txt', 'first');
 
   expect(container.startOptions.map((options) => options?.instance)).toEqual([instance('large')]);
-  expect(await box.boxSize()).toEqual({ size: 'large', running: 'large' });
+  expect(await box.boxSize()).toEqual({ size: 'large', chosen: 'large', running: 'large' });
   await box.destroy();
 });
 
@@ -89,26 +89,60 @@ test('resizing to the size a box runs at changes nothing', async () => {
 
 test('an unknown size is refused and the recorded size stays', async () => {
   const { box } = harness(TestBox);
-  await box.setSize('small');
+  await box.resize('small');
 
   const [refused] = await Promise.allSettled([box.resize('huge')]);
 
   expect(refused.status === 'rejected' ? devboxFailure({ cause: refused.reason }) : refused)
     .toMatchObject({ code: 'invalid-input', message: 'no box size huge; the sizes are small, medium, large' });
-  expect(await box.boxSize()).toEqual({ size: 'small', running: undefined });
+  expect(await box.boxSize()).toEqual({ size: 'small', chosen: 'small', running: undefined });
+  const [refusedDefault] = await Promise.allSettled([box.useDefaultSize('huge')]);
+  expect(refusedDefault.status === 'rejected' ? devboxFailure({ cause: refusedDefault.reason }) : refusedDefault)
+    .toMatchObject({ code: 'invalid-input', message: 'no box size huge; the sizes are small, medium, large' });
 });
 
-test('setting a size records it for the next start and leaves the running container alone', async () => {
+test('a box that chose no size starts at the default its host stored, over the class\'s own default', async () => {
+  class DefaultedBox extends TestBox {
+    protected override get defaultSize(): BoxSize {
+      return 'small';
+    }
+  }
+
+  const stored = harness(DefaultedBox);
+  expect(await stored.box.useDefaultSize('large')).toBe('large');
+  await stored.box.start();
+  const bare = harness(DefaultedBox);
+  await bare.box.start();
+
+  expect({ stored: stored.container.startOptions.map((options) => options?.instance), bare: bare.container.startOptions.map((options) => options?.instance) })
+    .toEqual({ stored: [instance('large')], bare: [instance('small')] });
+  await stored.box.destroy();
+  await bare.box.destroy();
+});
+
+test('a box\'s own choice wins over the stored default, and dropping the choice follows the default again', async () => {
+  const { box, container } = harness(TestBox);
+  await box.useDefaultSize('large');
+  await box.resize('small');
+  await box.start();
+
+  expect(await box.boxSize()).toEqual({ size: 'small', chosen: 'small', running: 'small' });
+  expect(await box.resize(null)).toMatchObject({ kind: 'restarted', size: 'large', previous: 'small' });
+  expect(await box.boxSize()).toEqual({ size: 'large', chosen: undefined, running: 'large' });
+  expect(await box.devboxState()).toMatchObject({ size: 'large', runningSize: 'large' });
+  expect(container.startOptions.map((options) => options?.instance)).toEqual([instance('small'), instance('large')]);
+  await box.destroy();
+});
+
+test('a new stored default is recorded and waits for the running container\'s next start', async () => {
   const { box, container } = harness(TestBox);
   await box.start();
 
-  expect(await box.setSize('small')).toBe('small');
-  expect(await box.boxSize()).toEqual({ size: 'small', running: 'medium' });
-  expect((await box.devboxState())).toMatchObject({ size: 'small', runningSize: 'medium' });
-
+  expect(await box.useDefaultSize('small')).toBe('small');
+  expect(await box.boxSize()).toEqual({ size: 'small', chosen: undefined, running: 'medium' });
   await box.quiesce();
   await box.start();
-
+  expect(await box.useDefaultSize(null)).toBe('medium');
   expect(container.startOptions.map((options) => options?.instance)).toEqual([instance('medium'), instance('small')]);
   await box.destroy();
 });
@@ -132,7 +166,7 @@ test('resizing a running box commits and starts it again at the new size; a runn
   expect(ended.exitCode).not.toBe(0);
   expect(container.startOptions.map((options) => options?.instance)).toEqual([instance('medium'), instance('large')]);
   expect(container.starts.filter((start) => start.processId === supervised.processId)).toHaveLength(2);
-  expect(await box.boxSize()).toEqual({ size: 'large', running: 'large' });
+  expect(await box.boxSize()).toEqual({ size: 'large', chosen: 'large', running: 'large' });
   expect((await box.devboxState()).ready).toBe(true);
   await box.destroy();
 });
