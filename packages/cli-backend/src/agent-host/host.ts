@@ -47,7 +47,7 @@ import {
   terminalTaskReport,
   taskAnswerIsLater,
   type ActorHost,
-  type ActorReference,
+  type ActorReference, type AgentSignal, type SendOutcome,
   type AgentRuntime,
   type AdmittedSubordinateReport,
   type BoundActor,
@@ -485,6 +485,8 @@ export class LocalAgentHost {
       installedBuild: null,
       // Its own entry's port; a seated swarm node has none, and takes no input to be reviewed on.
       advisorPort: (bound) => this.byActor.get(bound.reference.actorId)?.temporary ?? null,
+      // Every hirer here, the root included, is an entry of this process.
+      sayToParent: (child, signal) => this.sayToHirer(child, signal),
       runtimeFor: (bound) => this.runtimeFor(runtimes, db, bound),
       filesFor: async (bound) => {
         if (!ws.rt.filesForActor) throw new KinuError('missing', 'workspace has no actor file-plane resolver');
@@ -1198,6 +1200,13 @@ export class LocalAgentHost {
   }
 
   /** The entry an issued actor id belongs to. */
+  /** A hire's note to its hirer, said in the hirer's conversation. */
+  sayToHirer(child: ActorReference, signal: AgentSignal): Promise<SendOutcome> {
+    return settle(child.parentActorId === null
+      ? Effect.fail(new KinuError('missing', 'A root actor has no hirer to tell.'))
+      : Effect.promise(() => this.requireActorEntry(child.parentActorId ?? '').actor.session.orchestrator.inbox.send(signal)));
+  }
+
   private requireActorEntry(actorId: string): HostEntry {
     const entry = this.byActor.get(actorId);
 
