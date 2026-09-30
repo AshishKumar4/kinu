@@ -1,3 +1,4 @@
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Live smoke: ONE real agent turn per backend, against the Workers-AI default.
  *
@@ -544,7 +545,7 @@ describe('Live Smoke — one real turn per backend', () => {
       const messages = db.query<{ c: number }, []>('SELECT COUNT(*) as c FROM conversation_entries').get()?.c ?? 0;
       console.log(`    cli durable: ${String(messages)} message row(s)`);
       expect(messages).toBeGreaterThanOrEqual(2);
-      expect(await rt.storage.vfs.readFile('smoke.txt', { encoding: 'utf8' })).toBe('live smoke ok');
+      expect(await readText(rt.storage.vfs, 'smoke.txt')).toBe('live smoke ok');
     } finally {
       // `kinu exec`'s own one-shot sequence, and it is not optional. The
       // session detaches durable fibers, and `end()` documents the hazard

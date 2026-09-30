@@ -1,3 +1,4 @@
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Device daemon self-update, and the frames it shares with the hub, with the hub faked at its two seams (helpers/update-hub.ts). */
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -399,7 +400,7 @@ describe('the daemon answers the hub in core\'s frames', () => {
 
     expect(ran.exitCode).toBe(0);
     expect(ran.stdout).toContain(`the full stdout is at ${shown}]`);
-    expect(await files.readFile(shown, { encoding: 'utf8' })).toBe(`${'x'.repeat(600_000)}END`);
+    expect(await readText(files, shown)).toBe(`${'x'.repeat(600_000)}END`);
     await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL]);
   });
 });

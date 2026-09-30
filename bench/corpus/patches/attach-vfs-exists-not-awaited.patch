@@ -2,12 +2,12 @@ diff --git a/packages/core/src/prompting/attachment-sanitizer.ts b/packages/core
 index 6fb149657..70675e133 100644
 --- a/packages/core/src/prompting/attachment-sanitizer.ts
 +++ b/packages/core/src/prompting/attachment-sanitizer.ts
-@@ -281,7 +281,7 @@ async function storeContentAddressed(
+@@ -289,7 +289,7 @@ async function storeContentAddressed(
  
  /** Absent is the ordinary first spill; mismatched bytes are rewritten. */
  async function holdsBytes(vfs: VFS, path: string, bytes: Uint8Array): Promise<boolean> {
--  if (!(await vfs.exists(path))) return false;
-+  if (!vfs.exists(path)) return false;
+-  if (!(await exists(vfs, path))) return false;
++  if (!exists(vfs, path)) return false;
    const stored = await vfs.readFile(path);
    // Narrowed by class, as prompting/agents-md.ts does for the same VFS return.
    const existing = stored instanceof Uint8Array ? stored : new TextEncoder().encode(stored);

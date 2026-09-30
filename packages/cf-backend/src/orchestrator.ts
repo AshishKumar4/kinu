@@ -1,3 +1,4 @@
+import { exists as nimbusExists, type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 import { storeRevision, type WorkspaceOverviewInputs } from '@kinu.run/core';
 /**
  * OrchestratorAgent: the workspace-facing actor on top of ActorAgent (actor-agent.ts).
@@ -38,7 +39,7 @@ import type { AgentFacet, AgentFacetCalls } from "./agent-facet/agent-facet";
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { isWorkspaceTerminal, WORKSPACE_TERMINAL_PATH, WORKSPACE_TERMINAL_TAG } from "@kinu.run/core";
 import { McpToolSurfaceSchema, ShareViewerClaimSchema, tierIdsOf, type ShareViewerClaim } from '@kinu.run/core';
-import { AgentOpenTurns, type AgentOpenTurn, CHAT_SESSION_ID, readSessionTranscript, turnInputMessage, type SessionTranscript, type VfsRevision } from '@kinu.run/core';
+import { AgentOpenTurns, type AgentOpenTurn, CHAT_SESSION_ID, readSessionTranscript, turnInputMessage, type SessionTranscript } from '@kinu.run/core';
 // Main actor's payload plane on both fork halves: the carried conversation references
 // payload files by absolute path, and the fork is a cut of the main actor's conversation.
 import { agentArtifactDirectory, agentHome, MAIN_AGENT } from '@kinu.run/core';
@@ -2384,7 +2385,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const vfs = this.hostedWorkspace().bundle.vfs;
     const kept = [];
 
-    for (const id of slatesToPreview(new Set(changed), shown, await texts())) if (await vfs.exists(`${SLATES_ROOT}/${id}`)) kept.push(id);
+    for (const id of slatesToPreview(new Set(changed), shown, await texts())) if (await nimbusExists(vfs, `${SLATES_ROOT}/${id}`)) kept.push(id);
 
     return kept.length === 0 ? null : { [SLATES_CHANGED_METADATA_KEY]: kept };
   }

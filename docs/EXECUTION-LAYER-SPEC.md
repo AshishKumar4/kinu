@@ -9,6 +9,14 @@
 
 Kinu has one workspace file plane. Nimbus holds it as a library over the owning Durable Object's own `ctx.storage.sql` on Cloudflare. On the CLI the workspace is the directory the agent was placed in, and Nimbus over `bun:sqlite` holds the agent's own state (docs/STORAGE.md, "Local and cloud construction"). The `file` tool, default `shell`, `Storage.vfs`, and `workspace.*` all address the same paths and bytes.
 
+All planes use Nimbus's `VFS`, `VfsStat`, `VfsDirent` and `VfsRevision`
+(`@nimbus-sh/core/vfs/vfs.js`). File bodies are bytes; text is decoded or
+encoded through Nimbus's helpers. A listing returns dirents.
+`stat(path, { follow: false })` inspects the entry without following a link.
+A missing path or parent returns null; denied or unavailable storage still
+throws. The file tool reports a missing path as missing, without trying a
+ranged read that would turn that absence into an I/O failure.
+
 | Namespace | Registered by | Filesystem relationship |
 |---|---|---|
 | `workspace` | both backends. Cloudflare registers `createNimbusWorkspaceExecutor`; the CLI registers `createInlineExecutor` | the canonical workspace |

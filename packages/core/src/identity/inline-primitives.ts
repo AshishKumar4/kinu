@@ -1,14 +1,13 @@
+import { exists, readText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Inline primitives over a bun:sqlite-style database for createWorkspace; the filesystem is the production one.
 
 import { createWorkspace as createWorkspaceFilesystem, workspaceGenerationStorage } from '../vfs/nimbus-workspace';
 import type { WorkspaceBundle, WorkspaceOptions } from '../vfs/nimbus-workspace';
-import { readTailWithVfsOps, type VfsNativeReads } from '../vfs/mounts';
+import { readTailWithVfsOps } from '../vfs/mounts';
 import { chunkMarkdown, initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
 import { CraftStore as AgentUtilsCraftStore } from '@kinu.run/agent-utils/stores';
 import type { CraftStore } from '../types/agent-runtime';
-import type {
-  ExecuteResult, Executor, Memory, RawSqlExec, SqlExec, SqlExecutor, SqlValue, Storage, VFS,
-} from '../types/primitives';
+import type { ExecuteResult, Executor, Memory, RawSqlExec, SqlExec, SqlExecutor, SqlValue, Storage } from '../types/primitives';
 import { decodeJsonValue } from '../utils/json';
 import { Effect } from 'effect';
 import { renderThrownChain, settle } from '../obs/index';
@@ -87,23 +86,23 @@ export function createInlineWorkspace(db: AgentDatabase): WorkspaceBundle {
 }
 
 /** LIKE-based search over `memory_chunks`, written through the production chunker and its one DDL owner. */
-export function createInlineMemory(db: AgentDatabase, vfs: VFS & Pick<VfsNativeReads, 'readRange'>): Memory {
+export function createInlineMemory(db: AgentDatabase, vfs: VFS & Required<Pick<VFS, 'readRange'>>): Memory {
   const { sql } = wrapDatabase(db);
   initMemoryChunkTables(sql);
 
   return {
-    async write(path, content) { await vfs.writeFile(path, content); },
+    async write(path, content) { await writeText(vfs, path, content); },
     async append(path, content) {
-      const existing = await vfs.exists(path)
-        ? v.parse(v.string(), await vfs.readFile(path, { encoding: 'utf8' }))
+      const existing = await exists(vfs, path)
+        ? v.parse(v.string(), await readText(vfs, path))
         : '';
 
-      await vfs.writeFile(path, existing + content);
+      await writeText(vfs, path, existing + content);
     },
     async index(path) {
       // Asked, not caught: an unreadable file must not index as absent.
-      if (!await vfs.exists(path)) return;
-      const content = v.parse(v.string(), await vfs.readFile(path, { encoding: 'utf8' }));
+      if (!await exists(vfs, path)) return;
+      const content = v.parse(v.string(), await readText(vfs, path));
       // Replace the chunk set and keep the FTS5 shadow in step for the real MemoryStore.
       void sql`DELETE FROM memory_chunks_fts WHERE rowid IN (SELECT rowid FROM memory_chunks WHERE path = ${path})`;
       void sql`DELETE FROM memory_chunks WHERE path = ${path}`;
@@ -126,9 +125,9 @@ export function createInlineMemory(db: AgentDatabase, vfs: VFS & Pick<VfsNativeR
       }));
     },
     async read(path) {
-      if (!await vfs.exists(path)) return null;
+      if (!await exists(vfs, path)) return null;
 
-      return v.parse(v.string(), await vfs.readFile(path, { encoding: 'utf8' }));
+      return v.parse(v.string(), await readText(vfs, path));
     },
     tail: (path, bytes) => readTailWithVfsOps(vfs, path, bytes),
   };

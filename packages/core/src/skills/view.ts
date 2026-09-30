@@ -1,6 +1,7 @@
+import type { VFS, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /** `/skills`: one read-only `<name>/SKILL.md` folder per skill, resolved per call by `discover.ts`. */
 
-import type { VFS, VfsEntryStat } from '../types/primitives';
+
 import type { VfsMount } from '../vfs/mounts';
 import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { SHARED_SKILLS_DIR } from '../vfs/shared-drive';
@@ -8,7 +9,7 @@ import { BUILTIN_SKILL_FILES } from './builtins';
 import { compareSkillNames, listSkillFiles, resolveSkillFile, type SkillFile } from './discover';
 import { SKILL_FOLDER_FILE, SKILLS_VIEW, WORKSPACE_SKILLS_DIR } from './types';
 
-const FOLDER_STAT: VfsEntryStat = { size: 0, mtimeMs: 0, isDir: true };
+const FOLDER_STAT: VfsStat = { size: 0, mtimeMs: 0, type: 'directory' };
 
 type Located =
   | { readonly kind: 'builtin'; readonly text: string; readonly rest: string }
@@ -44,7 +45,7 @@ export function skillsMount(plane: () => VFS): VfsMount {
     return located.file.folder === null || located.rest === '' ? null : `${located.file.folder}/${located.rest}`;
   };
 
-  const stat = async (path: string): Promise<VfsEntryStat | null> => {
+  const stat = async (path: string): Promise<VfsStat | null> => {
     const located = await locate(path);
 
     if (located === null) return path.split('/').some((segment) => segment !== '') ? null : FOLDER_STAT;
@@ -52,7 +53,7 @@ export function skillsMount(plane: () => VFS): VfsMount {
     if (located.rest === '') return FOLDER_STAT;
 
     if (located.kind === 'builtin') {
-      return located.rest === SKILL_FOLDER_FILE ? { size: encoder.encode(located.text).byteLength, mtimeMs: 0, isDir: false } : null;
+      return located.rest === SKILL_FOLDER_FILE ? { size: encoder.encode(located.text).byteLength, mtimeMs: 0, type: 'file' } : null;
     }
 
     const real = source(located);
@@ -61,18 +62,18 @@ export function skillsMount(plane: () => VFS): VfsMount {
   };
 
   const files: VFS = {
-    async readFile(path, opts) {
+    async readFile(path) {
       const located = await locate(path);
 
       if (located?.kind === 'builtin' && located.rest === SKILL_FOLDER_FILE) {
-        return opts?.encoding === 'utf8' ? located.text : encoder.encode(located.text);
+        return encoder.encode(located.text);
       }
 
       const real = located?.kind === 'file' ? source(located) : null;
 
       if (real === null) throw absent(path);
 
-      return plane().readFile(real, opts);
+      return plane().readFile(real);
     },
     async readdir(path) {
       const located = await locate(path);
@@ -81,17 +82,16 @@ export function skillsMount(plane: () => VFS): VfsMount {
         if (path.split('/').some((segment) => segment !== '')) throw absent(path);
         const names = [...Object.keys(BUILTIN_SKILL_FILES), ...(await listSkillFiles(plane())).map((file) => file.name)];
 
-        return names.sort(compareSkillNames);
+        return names.sort(compareSkillNames).map((name) => ({ name, type: 'directory' }));
       }
 
-      if (located.rest === '' && (located.kind === 'builtin' || located.file.folder === null)) return [SKILL_FOLDER_FILE];
+      if (located.rest === '' && (located.kind === 'builtin' || located.file.folder === null)) return [{ name: SKILL_FOLDER_FILE, type: 'file' }];
 
       if (located.kind === 'builtin' || located.file.folder === null) throw absent(path);
 
       return plane().readdir(located.rest === '' ? located.file.folder : `${located.file.folder}/${located.rest}`);
     },
     stat,
-    async exists(path) { return (await stat(path)) !== null; },
     async writeFile(path) { throw readOnly(path); },
     async unlink(path) { throw readOnly(path); },
     async mkdir(path) { throw readOnly(path); },

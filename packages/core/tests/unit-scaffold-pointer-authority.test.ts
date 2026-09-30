@@ -1,3 +1,4 @@
+import { exists, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * S4: scaffold promotion is pointer-first. The `.vN` file is canonical and the `current` row the single
  * pointer; each fault leaves one current pointer whose file a cold reopen executes.
@@ -73,7 +74,7 @@ describe('bootstrap seeds the canonical source', () => {
 
     await bootstrapScaffold(rt);
 
-    expect(await rt.storage.vfs.exists(scaffoldVfsPath(rt, '.v0'))).toBe(true);
+    expect(await exists(rt.storage.vfs, scaffoldVfsPath(rt, '.v0'))).toBe(true);
     expect(await readScaffoldVersion(rt, 0)).toBe(INITIAL_SCAFFOLD_SOURCE);
     expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(0);
     // The live view materialises from the same canonical source.
@@ -84,11 +85,11 @@ describe('bootstrap seeds the canonical source', () => {
     const { rt } = createTestRuntime();
     await rt.storage.vfs.unlink(scaffoldVfsPath(rt, ''));
     // Preserved shape: a live file and no archive at all.
-    await rt.storage.vfs.writeFile(scaffoldVfsPath(rt, ''), V0);
+    await writeText(rt.storage.vfs, scaffoldVfsPath(rt, ''), V0);
 
     await bootstrapScaffold(rt);
 
-    expect(await rt.storage.vfs.exists(scaffoldVfsPath(rt, '.v0'))).toBe(true);
+    expect(await exists(rt.storage.vfs, scaffoldVfsPath(rt, '.v0'))).toBe(true);
     expect(await readScaffoldVersion(rt, 0)).toBe(V0);
     expect(getCurrentScaffoldVersion(rt.storage.sql, rt.actor)).toBe(0);
     // One-shot: re-running changes nothing.
@@ -124,7 +125,7 @@ describe('proposal boundary — source lands before the pending row', () => {
     const realWrite = vfs.writeFile.bind(vfs);
     rt.agentStateVfs = {
       ...vfs,
-      writeFile: async (path: string, data: string | Uint8Array) => {
+      writeFile: async (path: string, data: Uint8Array) => {
         if (path === scaffoldVfsPath(rt, '.v1')) throw new Error('injected disk failure');
 
         return realWrite(path, data);

@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { expect, test } from 'bun:test';
 import { createTestRuntime } from '../../core/tests/helpers';
 import {
@@ -85,8 +86,8 @@ test('actual owner approval admits the real Think program and attributes its nat
   const files = workspaceFiles(agent);
   const scaffold = actorScaffoldPath({ origin: 'system', storageKey: MAIN_AGENT });
   const source = "async function run() { await host.callTool(\"tasks\", { action: \"add\", titles: [\"host task\"] }); }";
-  await files.writeFile(scaffold, source);
-  await files.writeFile(`${scaffold}.v1`, source);
+  await writeText(files, scaffold, source);
+  await writeText(files, `${scaffold}.v1`, source);
   const actor = workspaceMainActor(db);
   db.query("UPDATE scaffold_versions SET status = 'historical' WHERE actor_id = ? AND status = 'current'")
     .run(actor.actorId);

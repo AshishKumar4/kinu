@@ -1,3 +1,4 @@
+import { exists, readText as nimbusReadText, type Awaitable, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Workspace plane bound to a physical directory: peers share canonical files on disk while identity stays in each agent's database. */
 
 import { describe, expect, test } from 'bun:test';
@@ -69,12 +70,12 @@ async function openedWorkspace(state: string, name: string, cwd: string) {
 }
 
 async function readText(rt: AgentRuntime, path: string): Promise<string> {
-  const raw = await rt.storage.vfs.readFile(path, { encoding: 'utf8' });
+  const raw = await nimbusReadText(rt.storage.vfs, path);
 
-  return raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
+  return raw;
 }
 
-async function refusalOf<T>(op: () => Promise<T>): Promise<string> {
+async function refusalOf<T>(op: () => Awaitable<T>): Promise<string> {
   let caught: unknown;
 
   try { await op(); } catch (error) { caught = error; }
@@ -90,12 +91,12 @@ describe('peers over one directory', () => {
     const first = agentRuntime(state, 'first', project);
     const second = agentRuntime(state, 'second', project);
 
-    await first.storage.vfs.writeFile('shared.txt', 'written by first');
+    await writeText(first.storage.vfs, 'shared.txt', 'written by first');
 
     expect(await readText(second, 'shared.txt')).toBe('written by first');
     expect(readFileSync(join(project, 'shared.txt'), 'utf8')).toBe('written by first');
 
-    await second.storage.vfs.writeFile('src/deep/file.ts', 'export const x = 1;\n');
+    await writeText(second.storage.vfs, 'src/deep/file.ts', 'export const x = 1;\n');
     expect(await readText(first, 'src/deep/file.ts')).toBe('export const x = 1;\n');
   });
 
@@ -107,7 +108,7 @@ describe('peers over one directory', () => {
 
     expect(await readText(first, 'AGENTS.md')).toBe('# House rules\n');
     expect(await readText(second, 'AGENTS.md')).toBe('# House rules\n');
-    expect(await first.storage.vfs.readdir('.')).toContain('AGENTS.md');
+    expect((await first.storage.vfs.readdir('.')).map(({ name }) => name)).toContain('AGENTS.md');
   });
 
   test('identity, scaffold and memory stay private to each peer', async () => {
@@ -126,7 +127,7 @@ describe('peers over one directory', () => {
     const secondState = second.agentStateVfs;
 
     if (!secondState) throw new Error('a bound runtime must expose its own state plane');
-    expect(await secondState.exists('memory/notes.md')).toBe(false);
+    expect(await exists(secondState, 'memory/notes.md')).toBe(false);
 
     expect(readdirSync(project)).toEqual([]);
   });
@@ -142,7 +143,7 @@ describe('peers over one directory', () => {
       parent, physicalName,
     );
 
-    await child.storage.vfs.writeFile('from-child.txt', 'child was here');
+    await writeText(child.storage.vfs, 'from-child.txt', 'child was here');
     expect(readFileSync(join(project, 'from-child.txt'), 'utf8')).toBe('child was here');
     expect(await readText(parent, 'from-child.txt')).toBe('child was here');
 
@@ -168,7 +169,7 @@ describe('a fork over the bound directory', () => {
     const head = await createHeadRuntime(parent, 'h1', observer);
 
     expect(await readText(head, 'task.txt')).toBe('the task input');
-    await head.storage.vfs.writeFile('head-output.md', 'what the head found');
+    await writeText(head.storage.vfs, 'head-output.md', 'what the head found');
     expect(readFileSync(join(project, 'head-output.md'), 'utf8')).toBe('what the head found');
     expect(await readText(parent, 'head-output.md')).toBe('what the head found');
 
@@ -201,7 +202,7 @@ describe('addressing the bound directory', () => {
     const { state, project } = roots('cwd-plane-addresses');
     const rt = agentRuntime(state, 'solo', project);
 
-    await rt.storage.vfs.writeFile('notes/one.md', 'one');
+    await writeText(rt.storage.vfs, 'notes/one.md', 'one');
 
     // Relative, the advertised workspace root, the skills-style /workspace root, and the real host path.
     expect(await readText(rt, 'notes/one.md')).toBe('one');
@@ -209,20 +210,20 @@ describe('addressing the bound directory', () => {
     expect(await readText(rt, '/workspace/notes/one.md')).toBe('one');
     expect(await readText(rt, join(project, 'notes/one.md'))).toBe('one');
 
-    expect(await rt.storage.vfs.readdir('/')).toContain('notes');
-    expect(await rt.storage.vfs.readdir('/workspace')).toContain('notes');
-    expect(await rt.storage.vfs.readdir(WORKSPACE_ROOT)).toContain('notes');
+    expect((await rt.storage.vfs.readdir('/')).map(({ name }) => name)).toContain('notes');
+    expect((await rt.storage.vfs.readdir('/workspace')).map(({ name }) => name)).toContain('notes');
+    expect((await rt.storage.vfs.readdir(WORKSPACE_ROOT)).map(({ name }) => name)).toContain('notes');
   });
 
   test('a slate the agent writes at /slates is in the project\'s own slates/ folder', async () => {
     const { state, project } = roots('cwd-plane-slates');
     const rt = agentRuntime(state, 'solo', project);
 
-    await rt.storage.vfs.writeFile(`${SLATES_ROOT}/widgets/package.json`, '{"main":"server.ts"}');
+    await writeText(rt.storage.vfs, `${SLATES_ROOT}/widgets/package.json`, '{"main":"server.ts"}');
 
     expect(readFileSync(join(project, 'slates/widgets/package.json'), 'utf8')).toBe('{"main":"server.ts"}');
-    expect(await rt.storage.vfs.readdir(SLATES_ROOT)).toEqual(['widgets']);
-    expect(await refusalOf(() => rt.storage.vfs.writeFile(`${SLATES_ROOT}/../../outside.txt`, 'escaped'))).toBe('EACCES');
+    expect((await rt.storage.vfs.readdir(SLATES_ROOT)).map(({ name }) => name)).toEqual(['widgets']);
+    expect(await refusalOf(() => writeText(rt.storage.vfs, `${SLATES_ROOT}/../../outside.txt`, 'escaped'))).toBe('EACCES');
     expect(existsSync(join(project, '..', 'outside.txt'))).toBe(false);
   });
 
@@ -232,9 +233,9 @@ describe('addressing the bound directory', () => {
     const rt = agentRuntime(state, 'solo', project);
 
     expect(await refusalOf(() => rt.storage.vfs.readFile('/workspace/../outside.txt'))).toBe('EACCES');
-    expect(await refusalOf(() => rt.storage.vfs.writeFile('/workspace/../outside.txt', 'escaped'))).toBe('EACCES');
-    expect(await refusalOf(() => rt.storage.vfs.writeFile('../outside.txt', 'escaped'))).toBe('EACCES');
-    expect(await refusalOf(() => rt.storage.vfs.writeFile(`${WORKSPACE_ROOT}/../outside.txt`, 'escaped'))).toBe('EACCES');
+    expect(await refusalOf(() => writeText(rt.storage.vfs, '/workspace/../outside.txt', 'escaped'))).toBe('EACCES');
+    expect(await refusalOf(() => writeText(rt.storage.vfs, '../outside.txt', 'escaped'))).toBe('EACCES');
+    expect(await refusalOf(() => writeText(rt.storage.vfs, `${WORKSPACE_ROOT}/../outside.txt`, 'escaped'))).toBe('EACCES');
     expect(await refusalOf(() => rt.storage.vfs.mkdir('/workspace/../sneaky', { recursive: true }))).toBe('EACCES');
 
     expect(existsSync(outside)).toBe(false);
@@ -343,7 +344,7 @@ describe('addressing the bound directory', () => {
     const { state, project } = roots('cwd-plane-dotnames');
     const rt = agentRuntime(state, 'solo', project);
 
-    await rt.storage.vfs.writeFile('..hidden/file.txt', 'still inside');
+    await writeText(rt.storage.vfs, '..hidden/file.txt', 'still inside');
     expect(readFileSync(join(project, '..hidden/file.txt'), 'utf8')).toBe('still inside');
   });
 
@@ -412,12 +413,12 @@ describe('the shell over the bound directory', () => {
 
     const unplaced = agentRuntime(state, 'local-harm-unplaced');
     const askedUnplaced = askedOn(unplaced);
-    await unplaced.storage.vfs.writeFile('doomed/kept.txt', 'the agent\'s scratch\n');
+    await writeText(unplaced.storage.vfs, 'doomed/kept.txt', 'the agent\'s scratch\n');
 
     for (const command of commands) await present(unplaced.shell, 'the in-SQLite shell').exec(command);
 
     expect(askedUnplaced).toEqual([]);
-    expect(await unplaced.storage.vfs.exists('doomed')).toBe(false);
+    expect(await exists(unplaced.storage.vfs, 'doomed')).toBe(false);
 
     // Both executors are named 'workspace'; the rules follow what each declares it holds.
     const declared = (rt: CLIRuntime) => present(rt.executionRouter?.getProvider('workspace'), 'the workspace executor').filesOwner;
@@ -496,7 +497,7 @@ describe('the shell over the bound directory', () => {
 
     if (!(await checkpoints.status()).available) return; // no git on this box
 
-    await rt.storage.vfs.writeFile('notes/plan.md', 'ship it\n');
+    await writeText(rt.storage.vfs, 'notes/plan.md', 'ship it\n');
 
     const entries = await checkpoints.list({ limit: 10 });
     expect(entries.map((entry) => entry.dir)).toEqual([resolve(project)]);
@@ -515,19 +516,19 @@ describe('what an opened workspace puts where', () => {
 
     await rt.memory.append('memory/MEMORY.md', '\nlearned something\n');
     await rt.identity.scaffold.write('// evolved\n');
-    await rt.storage.vfs.writeFile('README.md', '# the project\n');
+    await writeText(rt.storage.vfs, 'README.md', '# the project\n');
 
     expect(readdirSync(project)).toEqual(['README.md']);
-    expect(await rt.storage.vfs.exists('SOUL.md')).toBe(false);
-    expect(await rt.storage.vfs.exists('memory/MEMORY.md')).toBe(false);
-    expect(await rt.storage.vfs.exists('scaffold/agent.js')).toBe(false);
+    expect(await exists(rt.storage.vfs, 'SOUL.md')).toBe(false);
+    expect(await exists(rt.storage.vfs, 'memory/MEMORY.md')).toBe(false);
+    expect(await exists(rt.storage.vfs, 'scaffold/agent.js')).toBe(false);
 
     const agentState = rt.agentStateVfs;
 
     if (!agentState) throw new Error('an opened workspace must expose its own state plane');
-    expect(await agentState.exists('SOUL.md')).toBe(true);
-    expect(await agentState.exists('memory/MEMORY.md')).toBe(true);
-    expect(await agentState.exists('scaffold/agent.js')).toBe(true);
+    expect(await exists(agentState, 'SOUL.md')).toBe(true);
+    expect(await exists(agentState, 'memory/MEMORY.md')).toBe(true);
+    expect(await exists(agentState, 'scaffold/agent.js')).toBe(true);
   });
 });
 
@@ -537,16 +538,16 @@ describe('the agent\'s own state in a placed workspace', () => {
     const { rt } = await openedWorkspace(state, 'jarvis', project);
     await rt.memory.append('memory/MEMORY.md', '\nlearned something\n');
     await rt.identity.scaffold.write('// evolved\n');
-    const soul = String(await present(rt.agentStateVfs, 'the agent state plane').readFile('SOUL.md', { encoding: 'utf8' }));
+    const soul = String(await nimbusReadText(present(rt.agentStateVfs, 'the agent state plane'), 'SOUL.md'));
 
-    expect([...await rt.storage.vfs.readdir('/agent')].sort()).toEqual(['SOUL.md', 'memory', 'scaffold']);
+    expect((await rt.storage.vfs.readdir('/agent')).map(({ name }) => name).sort()).toEqual(['SOUL.md', 'memory', 'scaffold']);
     expect(await readText(rt, '/agent/SOUL.md')).toBe(soul);
     expect(await readText(rt, '/agent/memory/MEMORY.md')).toContain('learned something');
     expect(await readText(rt, '/agent/scaffold/agent.js')).toBe('// evolved\n');
-    expect(await rt.storage.vfs.exists('/agent/workspace.db')).toBe(false);
+    expect(await exists(rt.storage.vfs, '/agent/workspace.db')).toBe(false);
 
-    expect(await refusalOf(() => rt.storage.vfs.writeFile('/agent/memory/MEMORY.md', 'forged'))).toBe('EROFS');
-    expect(await refusalOf(() => rt.storage.vfs.writeFile('/agent/SOUL.md', 'forged'))).toBe('EROFS');
+    expect(await refusalOf(() => writeText(rt.storage.vfs, '/agent/memory/MEMORY.md', 'forged'))).toBe('EROFS');
+    expect(await refusalOf(() => writeText(rt.storage.vfs, '/agent/SOUL.md', 'forged'))).toBe('EROFS');
     expect(await refusalOf(() => rt.storage.vfs.unlink('/agent/scaffold/agent.js'))).toBe('EROFS');
     expect(await refusalOf(() => rt.storage.vfs.mkdir('/agent/memory/more', { recursive: true }))).toBe('EROFS');
     expect(await readText(rt, '/agent/SOUL.md')).toBe(soul);
@@ -560,7 +561,7 @@ describe('a runtime with no directory bound', () => {
     const rt = agentRuntime(state, 'solo');
 
     expect(rt.cwd ?? null).toBeNull();
-    await rt.storage.vfs.writeFile('untracked.txt', 'in the database');
+    await writeText(rt.storage.vfs, 'untracked.txt', 'in the database');
     expect(await readText(rt, 'untracked.txt')).toBe('in the database');
     expect(existsSync(join(process.cwd(), 'untracked.txt'))).toBe(false);
 
@@ -568,7 +569,7 @@ describe('a runtime with no directory bound', () => {
     const agentState = rt.agentStateVfs;
 
     if (!agentState) throw new Error('every runtime states where its own state lives');
-    expect(await agentState.readFile('untracked.txt', { encoding: 'utf8' })).toBe('in the database');
+    expect(await nimbusReadText(agentState, 'untracked.txt')).toBe('in the database');
   });
 
   test('offers a node home only when the plane it would confine is its own', async () => {
@@ -633,7 +634,7 @@ describe('SOUL.md is the owner\'s', () => {
     const ownerSoul = present(rt.ownerSoul, 'the owner soul reader');
     const born = present(await ownerSoul(), 'the born soul');
 
-    await expect(rt.storage.vfs.writeFile('SOUL.md', 'forged')).rejects.toThrow();
+    await expect(writeText(rt.storage.vfs, 'SOUL.md', 'forged')).rejects.toThrow();
 
     for (const command of forgeries) {
       await present(rt.shell, 'the workspace shell').exec(command);

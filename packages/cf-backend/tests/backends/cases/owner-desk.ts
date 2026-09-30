@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** What waits on the owner: instruction files to follow, and commands the gate parked. */
 import { expect } from 'bun:test';
 import { DeferredApprovalStore, formatApproval, reviewCommand, WORKSPACE_SKILLS_DIR, workspaceSkillPath } from '@kinu.run/core';
@@ -13,7 +14,7 @@ export const OWNER_DESK_CASES: readonly SharedCase[] = [
     covers: ['readInstructionApproval', 'approveInstruction', 'listInstructionApprovals', 'revokeInstruction'],
     async run({ surface, files }) {
       await files.mkdir(`${WORKSPACE_SKILLS_DIR}/focused`, { recursive: true });
-      await files.writeFile(PATH, SKILL);
+      await writeText(files, PATH, SKILL);
 
       const reviewed = await surface.readInstructionApproval(PATH);
 
@@ -21,12 +22,12 @@ export const OWNER_DESK_CASES: readonly SharedCase[] = [
       expect(reviewed).toMatchObject({ path: PATH, kind: 'skill', decision: 'none', bytes: SKILL.length });
 
       // Bytes changed after the owner read them: the approval names bytes nobody reviewed.
-      await files.writeFile(PATH, `${SKILL}\n# changed after review\n`);
+      await writeText(files, PATH, `${SKILL}\n# changed after review\n`);
       expect(await surface.approveInstruction(PATH, reviewed.digest)).toMatchObject({
         ok: false, error: expect.stringContaining('changed'),
       });
 
-      await files.writeFile(PATH, SKILL);
+      await writeText(files, PATH, SKILL);
       expect(await surface.approveInstruction(PATH, reviewed.digest)).toEqual({ ok: true, path: PATH, digest: reviewed.digest });
 
       // The CLI also lists the AGENTS.md of the directory it runs in; the skill is the case's own.

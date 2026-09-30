@@ -1,3 +1,4 @@
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createMemoryVfs, createTestActorsOver, present } from '@kinu.run/test-utils';
@@ -250,7 +251,7 @@ describe('renderForLLM', () => {
         `[... ${longReport.length - EVENT_BRIEF_MAX_CHARS} chars omitted from the middle ...]`,
       );
       expect(r.brief.endsWith(`: full report: ${content_path}`)).toBe(true);
-      expect(await vfs.readFile(content_path)).toBe(longReport);
+      expect(await readText(vfs, content_path)).toBe(longReport);
     });
 
     test('a report within the brief budget spills nothing and renders unreferenced', async () => {
@@ -288,7 +289,7 @@ describe('renderForLLM', () => {
         `[... ${serialized.length - EVENT_BRIEF_MAX_CHARS} chars omitted from the middle ...]`,
       );
       expect(r.brief).toContain(`"}: full message: ${body_path}`);
-      expect(await vfs.readFile(body_path)).toBe(serialized);
+      expect(await readText(vfs, body_path)).toBe(serialized);
     });
 
     test('a peer body within the brief budget spills nothing and renders unreferenced', async () => {
@@ -327,7 +328,7 @@ describe('renderForLLM', () => {
       );
       expect(r.brief).toContain('rollback');
       expect(r.brief.endsWith(`: full body: ${body_path}`)).toBe(true);
-      expect(await vfs.readFile(body_path)).toBe(serialized);
+      expect(await readText(vfs, body_path)).toBe(serialized);
     });
 
     test('an oversize email body is windowed, counted, and addressable', async () => {
@@ -409,7 +410,7 @@ describe('renderForLLM', () => {
         vfs: {
           ...vfs,
           async writeFile(path, data) {
-            if (data === stderr) throw new Error('the disk is full');
+            if (new TextDecoder().decode(data) === stderr) throw new Error('the disk is full');
             await vfs.writeFile(path, data);
           },
         },

@@ -1,13 +1,12 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Native container executor, one durable workspace per agent, exposed as sandbox.*. */
 
 import * as v from 'valibot';
 import type { ExecutorProvider, ExecutorCapability, PortExposureResult, PreviewRouteCheck } from './types';
 import { readExecSignal } from './signal';
 import { commandResult, exposedPortText, type CommandResult } from './exec-result';
-import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
-import type { VFS } from '../types/primitives';
+import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
 import { isVfsError, VfsError, VFS_ERRNO, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
-import type { VfsNativeReads } from '../vfs/mounts';
 import { shellQuote } from '../utils/shell';
 import { vfsDirname } from '../utils/vfs-helpers';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
@@ -665,8 +664,8 @@ declare namespace sandbox {
 }
 
 /** Container files at absolute paths. stat is synthesized from the parent listing (mtime 0);
- *  `readdirStats` avoids one relisting per child. */
-export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 'readdirStats' | 'readRange'> {
+ *  dirent stats avoid one relisting per child. */
+export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'readRange'>> {
   const isDir = (f: { type?: string; isDirectory?: boolean }): boolean =>
     f.isDirectory ?? (f.type === 'directory' || f.type === 'dir');
 
@@ -713,17 +712,14 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
   };
 
   return {
-    async readFile(path, opts) {
-      const r = await serving(path, () => handle.readFile(path, { encoding: 'base64' }));
+    async readFile(path) {
+      const result = await serving(path, () => handle.readFile(path, { encoding: 'base64' }));
 
-      if (r.exitCode != null && r.exitCode !== 0) {
-        throw new VfsError('ENOENT', `no such file or directory, open '${path}' (exit ${r.exitCode})`, path);
+      if (result.exitCode != null && result.exitCode !== 0) {
+        throw new VfsError('ENOENT', `no such file or directory, open '${path}' (exit ${result.exitCode})`, path);
       }
 
-      // base64: the only exact read.
-      const bytes = r.encoding === 'base64' ? base64ToBytes(r.content ?? '') : new TextEncoder().encode(r.content ?? '');
-
-      return opts?.encoding === 'utf8' ? new TextDecoder().decode(bytes) : bytes;
+      return result.encoding === 'base64' ? base64ToBytes(result.content ?? '') : new TextEncoder().encode(result.content ?? '');
     },
 
     /** Bounded window via `dd` + base64; the SDK's `readFile` has no offset/length. Bounds validated before use. */
@@ -744,45 +740,38 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
     },
 
     async writeFile(path, data) {
-      await serving(path, () => v.is(v.string(), data)
-        ? handle.writeFile(path, data)
-        : handle.writeFile(path, bytesToBase64(data), { encoding: 'base64' }));
+      await serving(path, () => handle.writeFile(path, bytesToBase64(data), { encoding: 'base64' }));
     },
 
     async readdir(path) {
-      const r = await serving(path, () => handle.listFiles(path, { recursive: false }));
+      const result = await serving(path, () => handle.listFiles(path, { recursive: false }));
 
-      return (r.files ?? []).map(nameOf).filter((n) => n.length > 0);
-    },
-
-    async readdirStats(path) {
-      const r = await serving(path, () => handle.listFiles(path, { recursive: false }));
-
-      return (r.files ?? [])
-        .map((f) => ({ name: nameOf(f), entry: f }))
+      return (result.files ?? [])
+        .map((entry) => ({ name: nameOf(entry), entry }))
         .filter(({ name }) => name.length > 0)
-        .map(({ name, entry }) => ({
-          name,
-          stat: { size: entry.size ?? 0, mtimeMs: 0, isDir: isDir(entry) },
-        }));
+        .map(({ name, entry }) => {
+          const type = isDir(entry) ? 'directory' as const : 'file' as const;
+
+          return { name, type, stat: { size: entry.size ?? 0, mtimeMs: 0, type } };
+        });
     },
 
     async stat(path) {
       const clean = path.length > 1 ? path.replace(/\/+$/, '') : path;
 
-      if (clean === '/' || clean === '') return { size: 0, mtimeMs: 0, isDir: true };
+      if (clean === '/' || clean === '') return { size: 0, mtimeMs: 0, type: 'directory' };
 
       const name = clean.slice(clean.lastIndexOf('/') + 1);
 
-      // null is reserved for "no such entry"; an unlistable parent propagates.
-      const files = (await serving(clean, () =>
-        handle.listFiles(vfsDirname(clean), { recursive: false }))).files ?? [];
+      const listing = await tolerateAsync(() => serving(clean, () =>
+        handle.listFiles(vfsDirname(clean), { recursive: false })), 'enoent');
 
-      const entry = files.find((f) => nameOf(f) === name);
+      if (listing === undefined) return null;
+      const entry = (listing.files ?? []).find((file) => nameOf(file) === name);
 
       if (!entry) return null;
 
-      return { size: entry.size ?? 0, mtimeMs: 0, isDir: isDir(entry) };
+      return { size: entry.size ?? 0, mtimeMs: 0, type: isDir(entry) ? 'directory' : 'file' };
     },
 
     async unlink(path) { await serving(path, () => handle.deleteFile(path)); },
@@ -795,10 +784,5 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
       }
     },
 
-    async exists(path) {
-      const r = await handle.exec(`test -e ${shellQuote(path)} && echo true || echo false`);
-
-      return (r.stdout ?? r.output ?? '').includes('true');
-    },
   };
 }

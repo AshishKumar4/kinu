@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { expect } from 'bun:test';
 import { createTestActorsOver, createTestSql, readTranscriptRows, scratchPath, type HandClock, type TranscriptRow } from '@kinu.run/test-utils';
 import { MissionGovernor } from '@kinu.run/core';
@@ -548,7 +549,7 @@ export const FOCUSED_PATH = workspaceSkillPath('focused');
 
 export async function writeFocusedSkill(rt: CLIRuntime): Promise<void> {
   await rt.storage.vfs.mkdir(`${WORKSPACE_SKILLS_DIR}/focused`, { recursive: true });
-  await rt.storage.vfs.writeFile(FOCUSED_PATH, FOCUSED_SKILL);
+  await writeText(rt.storage.vfs, FOCUSED_PATH, FOCUSED_SKILL);
 }
 
 export function messageText(message: PromptMessage): string {

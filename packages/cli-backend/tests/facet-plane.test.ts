@@ -1,3 +1,4 @@
+import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
@@ -50,13 +51,13 @@ describe('local actor file-plane identity', () => {
     expect(alpha.actor.actorId).not.toBe(beta.actor.actorId);
     expect(home(alpha)).not.toBe(home(beta));
     expect(readdirSync(state).filter((entry) => entry.endsWith('.db'))).toEqual(['agent.db']);
-    await alpha.storage.vfs.writeFile(`${home(alpha)}/notes`, 'alpha');
-    expect(await beta.storage.vfs.readFile(`${home(alpha)}/notes`, { encoding: 'utf8' })).toBe('alpha');
-    await expect(beta.storage.vfs.writeFile(`${home(alpha)}/intruder`, 'beta')).rejects.toMatchObject({ code: 'EACCES' });
+    await writeText(alpha.storage.vfs, `${home(alpha)}/notes`, 'alpha');
+    expect(await readText(beta.storage.vfs, `${home(alpha)}/notes`)).toBe('alpha');
+    await expect(writeText(beta.storage.vfs, `${home(alpha)}/intruder`, 'beta')).rejects.toMatchObject({ code: 'EACCES' });
     expect((await exec(beta, `echo beta > ${home(alpha)}/intruder`)).exitCode).not.toBe(0);
     expect((await exec(alpha, 'echo private > /tmp/note')).exitCode).toBe(0);
     expect((await exec(beta, 'cat /tmp/note')).exitCode).not.toBe(0);
-    expect(await root.rt.storage.vfs.exists('/tmp/note')).toBe(false);
+    expect(await exists(root.rt.storage.vfs, '/tmp/note')).toBe(false);
   });
 
   test('directory-bound children retain logical names and use distinct physical HOME values', async () => {
@@ -70,7 +71,7 @@ describe('local actor file-plane identity', () => {
       resolve(project), join(project, '.kinu', 'facets', key), join(project, '.kinu', 'facets', key, 'tmp'),
     ]);
     expect((await exec(child, 'echo shared > shared.txt')).exitCode).toBe(0);
-    expect(await root.rt.storage.vfs.readFile('shared.txt', { encoding: 'utf8' })).toBe('shared\n');
+    expect(await readText(root.rt.storage.vfs, 'shared.txt')).toBe('shared\n');
     expect(child.identity.name).toBe('reader');
   });
 

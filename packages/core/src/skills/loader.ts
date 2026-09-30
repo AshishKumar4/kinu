@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Which skills are active for a turn, and which the turn can afford.
  *
@@ -14,7 +15,7 @@ import { estimateTokens } from '../llm';
 import { diagnostics, toKinuError } from '../obs/index';
 import {
   readSkillFile, compareSkillNames,
-  type SkillsDiscovery, type SkillsVfs,
+  type SkillsDiscovery,
 } from './discover';
 import { parseSkillFile } from './parse';
 import { skillIndexLine, unreadSkillLine } from './render';
@@ -115,7 +116,7 @@ export function admitSkillsIndex(
  * built-ins are trusted, files only if the owner approved these bytes at this path.
  */
 export async function admitActiveSkills(opts: {
-  vfs: SkillsVfs;
+  vfs: VFS;
   activated: ReadonlyArray<ActivatedSkill>;
   admissionTokens: number;
   trust: InstructionTrustResolver;
@@ -131,7 +132,7 @@ export async function admitActiveSkills(opts: {
     try {
       // Stat first so a replacement that grew past the remaining allocation stays a pointer.
       if (skill.bodyRef.kind === 'file') {
-        const stat = opts.vfs.stat ? await opts.vfs.stat(skill.bodyRef.path) : null;
+        const stat = await opts.vfs.stat(skill.bodyRef.path);
         const declared = stat === null ? skill.bodyRef.chars : stat.size;
 
         if (estimateTokens(declared) > remaining) {

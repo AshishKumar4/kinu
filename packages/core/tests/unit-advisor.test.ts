@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** The advisor's decision half: each suppression rule alone, and the reply
  *  delivery an advisor agent's answer takes, asserted on observable calls. */
 
@@ -81,7 +82,7 @@ describe('workspace advisor guidance', () => {
   async function promptWith(content?: string) {
     const { vfs } = createMemoryVfs();
 
-    if (content !== undefined) await vfs.writeFile('ADVISOR.md', content);
+    if (content !== undefined) await writeText(vfs, 'ADVISOR.md', content);
     const reads: string[] = [];
 
     const workspace: AdvisorWorkspace = {
@@ -93,10 +94,10 @@ describe('workspace advisor guidance', () => {
           return stat === null || content === undefined
             ? stat : { ...stat, size: new TextEncoder().encode(content).length };
         },
-        readFile: async (path, options) => {
+        readFile: async (path) => {
           reads.push(path);
 
-          return vfs.readFile(path, options);
+          return vfs.readFile(path);
         },
       },
       limits: async () => limits,

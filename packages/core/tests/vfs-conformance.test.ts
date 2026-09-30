@@ -1,3 +1,5 @@
+import { exists, readText, type Awaitable, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
+import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 /**
  * VFS conformance (SPEC §11.1) across the workspace filesystem and every executor file view:
  * exact binary byte round-trip, and the errno taxonomy (missing path → ENOENT).
@@ -6,7 +8,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import type { VFS } from '../src/types/primitives';
+
 import type { JsonValue } from '../src/utils/json';
 import { present } from '@kinu.run/test-utils';
 import {
@@ -19,6 +21,8 @@ import {
 } from '../src/execution/index';
 import { createWorkspaceBundle } from './helpers';
 import { nativeFileRead, sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
+import { createParentWorkspaceVfs } from '../src/execution/parent';
+import { shellQuote } from '../src/utils/shell';
 import {
   agentCred,
   agentHome,
@@ -34,7 +38,7 @@ const BINARY = new Uint8Array([0xef, 0xbb, 0xbf, 0x00, 0x01, 0x80, 0xff, 0xfe, 0
 
 const ErrorCodeSchema = v.object({ code: v.optional(v.string()) });
 
-async function rejectionCode<Result>(action: () => Promise<Result>): Promise<string | undefined> {
+async function rejectionCode<Result>(action: () => Awaitable<Result>): Promise<string | undefined> {
   try {
     await action();
 
@@ -318,22 +322,55 @@ interface Case {
   make: () => VFS;
   /** Compose a path this implementation accepts (env-native root varies). */
   path: (sub: string) => string;
-  /** How a missing path stats: core-VFS impls return null. */
-  statMissing: 'null' | 'enoent';
 }
 
 const cases: Case[] = [
-  { name: 'the workspace filesystem', statMissing: 'null',
+  { name: 'the workspace filesystem',
     make: () => createWorkspaceBundle(new Database(':memory:')).vfs,
     path: (s) => `conf/${s}` },
-  { name: 'sandbox file view', statMissing: 'null',
+  { name: 'sandbox file view',
     make: () => sandboxFiles(sandboxHandle(new MemFs())), path: (s) => `/conf/${s}` },
-  { name: 'nimbus session file view', statMissing: 'null',
+  { name: 'nimbus session file view',
     make: () => nimbusSessionFiles(nimbusHandle(new MemFs())), path: (s) => `/conf/${s}` },
-  { name: 'device file view', statMissing: 'null',
+  { name: 'device file view',
     make: () => deviceFiles(deviceTransport(new MemFs()), {
       consentedRoot: async () => '/', deviceHome: async () => '/', scope: async () => 'unconfined',
     }), path: (s) => `/conf/${s}` },
+  { name: 'parent workspace file view',
+    make: () => {
+      const workspace = createWorkspaceBundle(new Database(':memory:'));
+      const files = workspace.vfs;
+
+      return createParentWorkspaceVfs({
+        read: async (path) => files.readFile(path),
+        write: async (input) => {
+          if (input.kind === 'file') return Promise.resolve(files.writeFile(input.path, input.data)).then(() => null);
+
+          const options = input.recursive ? '-p ' : '';
+          const made = await workspace.shell.exec(`mkdir ${options}${shellQuote(input.path)}`);
+
+          if (made.exitCode !== 0) throw new VfsError('EIO', made.stderr, input.path);
+
+          return null;
+        },
+        list: async (path) => files.readdir(path),
+        stat: async (path, options) => files.stat(path, options),
+        delete: async (path) => {
+          await files.unlink(path);
+
+          return null;
+        },
+        exec: async () => { throw new Error('this fixture drives the parent file plane, not its shell'); },
+      });
+    }, path: (path) => `conf/${path}` },
+  { name: 'mounted workspace file view',
+    make: () => {
+      const workspace = createWorkspaceBundle(new Database(':memory:')).vfs;
+
+      return withMountTable(createWorkspaceBundle(new Database(':memory:')).vfs, [{
+        name: 'store', files: () => workspace, absentReason: () => 'not mounted', filesOwner: 'agent',
+      }]);
+    }, path: (path) => `/store${WORKSPACE_ROOT}/conf/${path}` },
 ];
 
 for (const c of cases) {
@@ -349,15 +386,15 @@ for (const c of cases) {
     test('utf-8 text round-trips through the encoding gate', async () => {
       const vfs = c.make();
       const p = c.path('notes.md');
-      await vfs.writeFile(p, 'héllo — wörld\n');
-      expect(await vfs.readFile(p, { encoding: 'utf8' })).toBe('héllo — wörld\n');
+      await writeText(vfs, p, 'héllo — wörld\n');
+      expect(await readText(vfs, p)).toBe('héllo — wörld\n');
     });
 
     test('readdir lists written entries', async () => {
       const vfs = c.make();
-      await vfs.writeFile(c.path('a.txt'), 'a');
-      await vfs.writeFile(c.path('b.txt'), 'b');
-      const names = await vfs.readdir(c.path('').replace(/\/$/, ''));
+      await writeText(vfs, c.path('a.txt'), 'a');
+      await writeText(vfs, c.path('b.txt'), 'b');
+      const names = (await vfs.readdir(c.path('').replace(/\/$/, ''))).map(({ name }) => name);
       expect(names).toContain('a.txt');
       expect(names).toContain('b.txt');
     });
@@ -367,47 +404,59 @@ for (const c of cases) {
       const p = c.path('sized.bin');
       await vfs.writeFile(p, BINARY);
       const s = present(await vfs.stat(p), 'the written file\'s stat');
-      expect(s.isDir).toBe(false);
+      expect((s.type === 'directory')).toBe(false);
       expect(s.size).toBe(BINARY.length);
     });
 
     test('an empty file reads as empty; only a missing one throws ENOENT (closed taxonomy)', async () => {
       const vfs = c.make();
-      await vfs.writeFile(c.path('empty.txt'), '');
-      expect(await vfs.readFile(c.path('empty.txt'), { encoding: 'utf8' })).toBe('');
+      await writeText(vfs, c.path('empty.txt'), '');
+      expect(await readText(vfs, c.path('empty.txt'))).toBe('');
       expect(await rejectionCode(() => vfs.readFile(c.path('nope.txt')))).toBe('ENOENT');
     });
 
-    test('stat of a missing name under a live directory signals absence per the impl contract', async () => {
+    test('stat of a missing name under a live directory is null', async () => {
       const vfs = c.make();
-
-      // The sandbox stat lists the parent, so a missing parent is ENOENT, not null.
       await vfs.mkdir(c.path('ghost').replace(/\/ghost$/, ''), { recursive: true });
+      expect(await vfs.stat(c.path('ghost'))).toBeNull();
+    });
 
-      if (c.statMissing === 'null') {
-        expect(await vfs.stat(c.path('ghost'))).toBeNull();
-      } else {
-        expect(await rejectionCode(() => vfs.stat(c.path('ghost')))).toBe('ENOENT');
-      }
+    test('stat under an absent parent is null', async () => {
+      expect(await c.make().stat(c.path('missing-parent/ghost'))).toBeNull();
     });
 
     test('exists tracks written / removed files', async () => {
       const vfs = c.make();
       const p = c.path('here.txt');
-      expect(await vfs.exists(p)).toBe(false);
-      await vfs.writeFile(p, 'x');
-      expect(await vfs.exists(p)).toBe(true);
+      expect(await exists(vfs, p)).toBe(false);
+      await writeText(vfs, p, 'x');
+      expect(await exists(vfs, p)).toBe(true);
       await vfs.unlink(p);
-      expect(await vfs.exists(p)).toBe(false);
+      expect(await exists(vfs, p)).toBe(false);
     });
   });
 }
+
+test('sandbox stat preserves a denied parent instead of reporting absence', async () => {
+  const handle = sandboxHandle(new MemFs());
+  handle.listFiles = async () => { throw nativeFileError('EACCES', '/private', 'readDirectory'); };
+
+  expect(await rejectionCode(() => sandboxFiles(handle).stat('/private/file'))).toBe('EACCES');
+});
+
+test('sandbox stat preserves a failed transport instead of reporting absence', async () => {
+  const failure = new Error('the file transport disconnected');
+  const handle = sandboxHandle(new MemFs());
+  handle.listFiles = async () => { throw failure; };
+
+  await expect(sandboxFiles(handle).stat('/workspace/file')).rejects.toBe(failure);
+});
 
 test('the workspace filesystem names the absolute path, never the storage key, when a relative listing fails', async () => {
   // The 2048 transcript: `readdir('skills')` failed as `ENOENT: home/user/skills`, a path no tool can address.
   const vfs = createWorkspaceBundle(new Database(':memory:')).vfs;
 
-  await expect(vfs.readdir('skills')).rejects.toThrow(`${WORKSPACE_ROOT}/skills`);
+  await expect(Promise.resolve(vfs.readdir('skills')).then(entries => entries.map(({ name }) => name))).rejects.toThrow(`${WORKSPACE_ROOT}/skills`);
 });
 
 describe('the global workspace namespace', () => {
@@ -448,19 +497,19 @@ describe('the global workspace namespace', () => {
         tmp: agentTmpRoot('agent-b'),
       });
 
-      await a.vfs.writeFile('/home/agent-a/owned.txt', 'a owns this');
-      expect(await b.vfs.readFile('/home/agent-a/owned.txt', { encoding: 'utf8' })).toBe('a owns this');
-      expect(await rejectionCode(() => b.vfs.writeFile('/home/agent-a/blocked.txt', 'b'))).toBe('EACCES');
+      await writeText(a.vfs, '/home/agent-a/owned.txt', 'a owns this');
+      expect(await readText(b.vfs, '/home/agent-a/owned.txt')).toBe('a owns this');
+      expect(await rejectionCode(() => writeText(b.vfs, '/home/agent-a/blocked.txt', 'b'))).toBe('EACCES');
 
       expect((await a.shell.exec('echo a-scratch > /tmp/scratch.txt')).exitCode).toBe(0);
       expect((await b.shell.exec('echo b-scratch > /tmp/scratch.txt')).exitCode).toBe(0);
-      expect(await a.vfs.readFile('/tmp/scratch.txt', { encoding: 'utf8' })).toBe('a-scratch\n');
-      expect(await b.vfs.readFile('/tmp/scratch.txt', { encoding: 'utf8' })).toBe('b-scratch\n');
+      expect(await readText(a.vfs, '/tmp/scratch.txt')).toBe('a-scratch\n');
+      expect(await readText(b.vfs, '/tmp/scratch.txt')).toBe('b-scratch\n');
 
       confiner.releasePrincipal(agentA.uid);
       expect(await rejectionCode(() => a.vfs.readFile('/tmp/scratch.txt'))).toBe('ENOENT');
-      expect(await a.vfs.readFile('/home/agent-a/owned.txt', { encoding: 'utf8' })).toBe('a owns this');
-      expect(await b.vfs.readFile('/tmp/scratch.txt', { encoding: 'utf8' })).toBe('b-scratch\n');
+      expect(await readText(a.vfs, '/home/agent-a/owned.txt')).toBe('a owns this');
+      expect(await readText(b.vfs, '/tmp/scratch.txt')).toBe('b-scratch\n');
     } finally {
       db.close();
     }
@@ -479,7 +528,7 @@ describe('the global workspace namespace', () => {
         stat: async () => null,
         unlink: async () => undefined,
         mkdir: async () => undefined,
-        exists: async () => false,
+
       };
 
       const mounted = withMountTable(workspace.vfs, [{
@@ -489,7 +538,7 @@ describe('the global workspace namespace', () => {
         filesOwner: 'user',
       }]);
 
-      expect(await mounted.readdir('/')).toContain('pc');
+      expect((await mounted.readdir('/')).map(({ name }) => name)).toContain('pc');
       expect((await workspace.shell.exec('test ! -e /pc')).exitCode).toBe(0);
     } finally {
       db.close();
@@ -514,10 +563,10 @@ describe('device file view — the consented subtree is a boundary', () => {
       /outside the consented device directory '\/home\/me\/proj'[\s\S]*Ask the owner to consent that directory/,
     );
     expect(await rejectionCode(() => vfs.readFile('/home/me/projects/x'))).toBe('EACCES');
-    expect(await rejectionCode(() => vfs.writeFile('/etc/cron.d/evil', 'x'))).toBe('EACCES');
+    expect(await rejectionCode(() => writeText(vfs, '/etc/cron.d/evil', 'x'))).toBe('EACCES');
     expect(await rejectionCode(() => vfs.readdir('/etc'))).toBe('EACCES');
     expect(await rejectionCode(() => vfs.stat('/etc/passwd'))).toBe('EACCES');
-    expect(await rejectionCode(() => vfs.exists('/etc/passwd'))).toBe('EACCES');
+    expect(await rejectionCode(() => exists(vfs, '/etc/passwd'))).toBe('EACCES');
     expect(await rejectionCode(() => vfs.unlink('/etc/passwd'))).toBe('EACCES');
     expect(await rejectionCode(() => vfs.mkdir('/opt/x'))).toBe('EACCES');
     expect(calls).toEqual([]);
@@ -525,9 +574,9 @@ describe('device file view — the consented subtree is a boundary', () => {
 
   test('the consented root itself, and everything under it, stays reachable', async () => {
     const { vfs } = scoped('/home/me/proj');
-    await vfs.writeFile('/home/me/proj/notes.md', 'ok');
-    expect(await vfs.readFile('/home/me/proj/notes.md', { encoding: 'utf8' })).toBe('ok');
-    expect(await rejectionCode(() => vfs.readdir('/home/me/proj'))).toBeUndefined();
+    await writeText(vfs, '/home/me/proj/notes.md', 'ok');
+    expect(await readText(vfs, '/home/me/proj/notes.md')).toBe('ok');
+    expect((await vfs.readdir('/home/me/proj')).map(({ name }) => name)).toContain('notes.md');
   });
 });
 

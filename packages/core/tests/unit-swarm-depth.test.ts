@@ -1,3 +1,4 @@
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 // `depth > 1` swarm: the arbiter against `Exploration/Arbitration.lean`, the depth cap over real rows,
 // and whole runs with a real `exec-ratio` measurement. Each cap-evasion route has its own test.
 // Specified by docs/EXPLORATION.md — "Accepted and ignored", "Arbitration", "Presets",
@@ -1103,7 +1104,7 @@ describe('merge-back at the settle barrier', () => {
     expect(applied?.fields).toMatchObject({ policy: 'apply-winner', files: 1 });
     expect(applied?.fields.node).toBe(winner.id);
 
-    const landed = await rt.storage.vfs.readFile(SOLUTION_FILE, { encoding: 'utf8' });
+    const landed = await readText(rt.storage.vfs, SOLUTION_FILE);
     expect(landed).toBe(winner.artifact);
 
     const [settled] = logger.emitted.filter((line) => line.event === 'swarm.merge_settled');
@@ -1280,7 +1281,7 @@ describe("`expand:'aggregate'`: a level is fanned in, in dependency order", () =
     expect(winner).not.toBeNull();
 
     if (!winner) return;
-    expect(await rt.storage.vfs.readFile(SOLUTION_FILE, { encoding: 'utf8' })).toBe(winner.artifact);
+    expect(await readText(rt.storage.vfs, SOLUTION_FILE)).toBe(winner.artifact);
   });
 
   test('a parent the tree retired is consumed anyway, and the report says how many', async () => {

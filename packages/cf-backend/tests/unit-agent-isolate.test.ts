@@ -1,3 +1,4 @@
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { afterEach, expect, test } from 'bun:test';
 import { accountCredentialKey, asFetchFunction, requestUrl } from '@kinu.run/core';
 import {
@@ -208,14 +209,14 @@ test("a hired agent's working context is read and edited where its conversation 
 
   await wakeForDelegatedTask(workspace, middleId, 'First task OTTERX.');
   await driveUntil(workspace, 'the first turn never ended', () => ended() > 0);
-  const working = String(await own.readFile('/context/working.jsonl'));
+  const working = await readText(own, '/context/working.jsonl');
 
   expect(working).toContain('First task OTTERX.');
   const storageKey = middle.actor.record.storageKey;
   const main = (await hostedMainActor(workspace)).actor.runtime.storage.vfs;
 
-  expect(String(await main.readFile(`/context/agents/${storageKey}/working.jsonl`))).toContain('First task OTTERX.');
-  await own.writeFile('/context/working.jsonl', `${working}${JSON.stringify({ new: true, message: { role: 'user', content: 'INJECTED-NOTE' } })}\n`);
+  expect(await readText(main, `/context/agents/${storageKey}/working.jsonl`)).toContain('First task OTTERX.');
+  await writeText(own, '/context/working.jsonl', `${working}${JSON.stringify({ new: true, message: { role: 'user', content: 'INJECTED-NOTE' } })}\n`);
   await wakeForDelegatedTask(workspace, middleId, 'Second task.');
   await driveUntil(workspace, 'the second turn never ended', () => ended() > 1);
 

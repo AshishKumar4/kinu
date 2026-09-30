@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The roster tile a workspace folds over its real stores, and when it pushes it: a change is pushed once,
  * a fold that changed nothing is not pushed at all.
@@ -65,9 +66,9 @@ describe('the folded tile', () => {
     const { agent } = orchestratorHarness();
     const files = workspaceFiles(agent);
     await files.mkdir('/slates/board', { recursive: true });
-    await files.writeFile('/slates/board/package.json', JSON.stringify({ name: 'board', main: 'server.ts', slate: { title: 'First' } }));
+    await writeText(files, '/slates/board/package.json', JSON.stringify({ name: 'board', main: 'server.ts', slate: { title: 'First' } }));
     expect((await agent.foldOverview()).slates).toEqual([{ id: 'board', title: 'First', picture: null, bindings: 0, visibility: null }]);
-    await files.writeFile('/slates/board/package.json', JSON.stringify({
+    await writeText(files, '/slates/board/package.json', JSON.stringify({
       name: 'board', main: 'server.ts', slate: { title: 'Renamed', bindings: { NOTES: { kind: 'memory' } } },
     }));
     expect((await agent.foldOverview()).slates).toEqual([{ id: 'board', title: 'Renamed', picture: null, bindings: 1, visibility: null }]);

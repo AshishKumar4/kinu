@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Root arm only: non-root kinds are covered in `tests/unit-loop-contract.test.ts`. The root drives Think's
  * own loop, and this is the only proof the selected program actually ran; do not delete as a duplicate.
@@ -28,7 +29,7 @@ const SCAFFOLD = actorScaffoldPath({ origin: 'system', storageKey: MAIN_AGENT })
 /** Version 1 of the root's program on disk and selected as current, as a promotion leaves it. */
 async function selectProgram(harness: ActorHarness<HarnessOrchestratorAgent>, source: string, rationale: string): Promise<void> {
   const { db } = harness;
-  await workspaceFiles(harness.agent).writeFile(`${SCAFFOLD}.v1`, source);
+  await writeText(workspaceFiles(harness.agent), `${SCAFFOLD}.v1`, source);
   const actorId = workspaceMainActor(db).actorId;
   db.query("UPDATE scaffold_versions SET status = 'historical' WHERE actor_id = ? AND status = 'current'").run(actorId);
   db.query("INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status) VALUES (?, 1, 1, ?, 'current')")
@@ -43,8 +44,7 @@ test('the real Think turn uses preselected versioned source, not the live alias'
   await selectProgram(harness,
     'async function run() { await host.emit({ type: "text_delta", text: "selected-root-v1" }); }', 'selected program proof');
   // The live alias names a different program; the turn must not run it.
-  await workspaceFiles(agent).writeFile(SCAFFOLD,
-    'async function run() { await host.emit({ type: "text_delta", text: "wrong-live-alias" }); }');
+  await writeText(workspaceFiles(agent), SCAFFOLD, 'async function run() { await host.emit({ type: "text_delta", text: "wrong-live-alias" }); }');
 
   const result = await chatSessionTurns(agent).run('Run the selected program.');
   expect(result.status).toBe('completed');

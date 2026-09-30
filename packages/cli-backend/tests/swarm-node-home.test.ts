@@ -1,3 +1,4 @@
+import { exists, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * A shipped `agents.swarm` call reaches `facetHomeProvisioner`: each node gets a private home keyed on its actor's
  * storage key, never the node id. Five settled nodes and a no-provisioner control arm are the denominator.
@@ -160,7 +161,7 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
 
     if (!before.shell) throw new Error('node shell missing');
     expect(await before.shell.exec('echo private > /tmp/note; echo answer > "$HOME/answer"')).toMatchObject({ exitCode: 0 });
-    await first.storage.vfs.writeFile('/home/main/shared', 'shared');
+    await writeText(first.storage.vfs, '/home/main/shared', 'shared');
     const second = createCLIRuntime(database, config);
 
     if (!second.nodeRuntime) throw new Error('reset node plane missing');
@@ -169,8 +170,8 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
     if (!after.shell) throw new Error('reset node shell missing');
     expect(await after.shell.exec('echo $HOME $TMPDIR; cat /tmp/note; cat "$HOME/answer"; cat /home/main/shared'))
       .toMatchObject({ exitCode: 0, stdout: `${home.home} ${home.tmp}\nprivate\nanswer\nshared` });
-    expect(await second.storage.vfs.exists('/tmp/note')).toBe(false);
-    await expect(second.storage.vfs.writeFile(`${home.home}/answer`, 'stolen')).rejects.toThrow();
+    expect(await exists(second.storage.vfs, '/tmp/note')).toBe(false);
+    await expect(writeText(second.storage.vfs, `${home.home}/answer`, 'stolen')).rejects.toThrow();
   });
   test('every node of the run, and the count the preset fans', async () => {
     const rt = cliRuntime('swarm-node-home-private');
@@ -191,12 +192,12 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
 
     expect(settled).toHaveLength(IDEATE_BRANCHES);
     // Through `rt.storage.vfs`, the origin's own view: a home the origin could not see would be a second tree.
-    const homes = await rt.storage.vfs.readdir('/home');
+    const homes = (await rt.storage.vfs.readdir('/home')).map(({ name }) => name);
     const owned = settled.map(({ node }) => nodeHomeName(rt, node));
 
     for (const home of owned) {
       expect(homes).toContain(home);
-      expect(await rt.storage.vfs.stat(`/home/${home}`)).toMatchObject({ isDir: true });
+      expect(await rt.storage.vfs.stat(`/home/${home}`)).toMatchObject({ type: 'directory' });
     }
 
     for (const { node } of settled) expect(homes).not.toContain(headAgentName(node));

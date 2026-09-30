@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { expect, setSystemTime, test } from 'bun:test';
 import * as v from 'valibot';
 import { createTestRuntime, present } from '@kinu.run/test-utils';
@@ -239,7 +240,7 @@ test('VFS-backed image payloads fail explicitly after file corruption', async ()
     expect(await s.messages.materialize(reference)).toEqual({ role: 'user', content: [{ type: 'image', image: new Uint8Array([0, 1, 255]) }] });
     const stored = await s.messages.materializeParts(reference);
     const external = v.parse(v.object({ image: v.object({ $sessionAttachment: v.object({ path: v.string() }) }) }), stored[0]?.value);
-    await s.rt.storage.vfs.writeFile(external.image.$sessionAttachment.path, 'corrupt');
+    await writeText(s.rt.storage.vfs, external.image.$sessionAttachment.path, 'corrupt');
     // The reader that verified these bytes keeps serving them; a reader that
     // has not, as after a restart, finds the corruption.
     expect(await s.messages.materialize(reference)).toEqual({ role: 'user', content: [{ type: 'image', image: new Uint8Array([0, 1, 255]) }] });

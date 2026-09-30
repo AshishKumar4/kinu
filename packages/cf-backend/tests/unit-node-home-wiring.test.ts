@@ -1,3 +1,4 @@
+import { exists, readText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * `facetHomeProvisioner` against a real workspace: the uid floor, uid-0-only `chown`, 0o755 home and sibling EACCES are
  * `SqliteVFS` rules, and `confinePrincipal` has no RPC (`@nimbus-sh/core/dist/vfs/sqlite-vfs.d.ts:302`).
@@ -19,7 +20,7 @@ import {
   type NodeWorkspaceProvisioner,
 } from '@kinu.run/core';
 import type { NimbusSandboxHandle } from '@kinu.run/core';
-import { nimbusSessionFiles, readExecutorFile, writeExecutorFileOp, type ExecutorFileLookup, type VFS } from '@kinu.run/core';
+import { nimbusSessionFiles, readExecutorFile, writeExecutorFileOp, type ExecutorFileLookup } from '@kinu.run/core';
 import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import {
   credentialedSessionBox,
@@ -403,7 +404,7 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     const written: string[] = [];
     box.files.write = async (path) => { written.push(path); };
 
-    await nimbusSessionFiles(box).writeFile('/home/main/notes.md', 'origin');
+    await writeText(nimbusSessionFiles(box), '/home/main/notes.md', 'origin');
 
     expect(written).toEqual(['/home/main/notes.md']);
     expect(nimbus.calls).toEqual([]);
@@ -444,11 +445,11 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
 
     expect(await asA.readFile('/home/head-aX9/candidate.bin')).toEqual(bytes);
     expect(f.workspace.vfs.as(ROOT).readFile('/home/head-aX9/candidate.bin')).toEqual(bytes);
-    expect(await asA.readdir('/home/head-aX9')).toEqual(['.kinu', 'candidate.bin']);
+    expect((await asA.readdir('/home/head-aX9')).map(({ name }) => name)).toEqual(['.kinu', 'candidate.bin']);
     expect((await asA.stat('/home/head-aX9/candidate.bin'))?.size).toBe(bytes.byteLength);
     expect(await asB.readFile('/home/head-aX9/candidate.bin')).toEqual(bytes);
     // The sibling's file tools are refused, not only its shell.
-    await expect(asB.writeFile('/home/head-aX9/candidate.bin', 'overwritten'))
+    await expect(writeText(asB, '/home/head-aX9/candidate.bin', 'overwritten'))
       .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
     await expect(asB.mkdir('/home/head-aX9/hostile')).rejects.toThrow(
       expect.objectContaining({ code: 'EACCES' }),
@@ -472,7 +473,7 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     await expect(asA.stat(`${shut}/secret`)).rejects.toThrow(
       expect.objectContaining({ code: 'EACCES' }),
     );
-    await expect(asA.exists(`${shut}/secret`)).rejects.toThrow(
+    await expect(exists(asA, `${shut}/secret`)).rejects.toThrow(
       expect.objectContaining({ code: 'EACCES' }),
     );
   });
@@ -484,21 +485,21 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     const names = ["we\nird 'q'-name", '--dash-leading', 'two  spaces\ttab', 'back\\slash$dollar'];
 
     for (const [index, name] of names.entries()) {
-      await asA.writeFile(`/home/head-aX9/${name}`, `body ${String(index)}`);
+      await writeText(asA, `/home/head-aX9/${name}`, `body ${String(index)}`);
     }
 
-    expect((await asA.readdir('/home/head-aX9')).sort()).toEqual(['.kinu', ...names].sort());
-    expect(await asA.readFile(`/home/head-aX9/${names[0]}`, { encoding: 'utf8' })).toBe('body 0');
+    expect(((await asA.readdir('/home/head-aX9')).map(({ name }) => name)).sort()).toEqual(['.kinu', ...names].sort());
+    expect(await readText(asA, `/home/head-aX9/${names[0]}`)).toBe('body 0');
     await asA.rename(`/home/head-aX9/${names[0]}`, '/home/head-aX9/clean');
-    expect(await asA.exists(`/home/head-aX9/${names[0]}`)).toBe(false);
-    expect(await asA.readFile('/home/head-aX9/clean', { encoding: 'utf8' })).toBe('body 0');
+    expect(await exists(asA, `/home/head-aX9/${names[0]}`)).toBe(false);
+    expect(await readText(asA, '/home/head-aX9/clean')).toBe('body 0');
     await asA.unlink(`/home/head-aX9/${names[1]}`);
-    expect((await asA.readdir('/home/head-aX9')).sort())
+    expect(((await asA.readdir('/home/head-aX9')).map(({ name }) => name)).sort())
       .toEqual(['.kinu', 'back\\slash$dollar', 'clean', 'two  spaces\ttab']);
     await asA.mkdir('/home/head-aX9/nest/deep', { recursive: true });
-    await asA.writeFile('/home/head-aX9/nest/deep/leaf', 'leaf');
+    await writeText(asA, '/home/head-aX9/nest/deep/leaf', 'leaf');
     await asA.removeRecursive('/home/head-aX9/nest');
-    expect(await asA.exists('/home/head-aX9/nest')).toBe(false);
+    expect(await exists(asA, '/home/head-aX9/nest')).toBe(false);
   });
 
   test('against the real substrate: a large file lands byte-exact through the bound plane', async () => {
@@ -523,15 +524,15 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     const f = await openFixture();
     const a = credOf(await f.provision(node('aX9')));
     const asA = nimbusSessionFiles(sessionBox(f, a), a);
-    await asA.writeFile('/home/head-aX9/keeper', 'the old bytes\n');
+    await writeText(asA, '/home/head-aX9/keeper', 'the old bytes\n');
     await asA.mkdir('/home/head-aX9/occupied', { recursive: true });
-    await asA.writeFile('/home/head-aX9/occupied/child', 'child');
+    await writeText(asA, '/home/head-aX9/occupied/child', 'child');
 
-    await expect(asA.writeFile('/home/head-aX9/occupied', 'clobber')).rejects.toThrow();
+    await expect(writeText(asA, '/home/head-aX9/occupied', 'clobber')).rejects.toThrow();
 
-    expect(await asA.readFile('/home/head-aX9/keeper', { encoding: 'utf8' })).toBe('the old bytes\n');
-    expect(await asA.readFile('/home/head-aX9/occupied/child', { encoding: 'utf8' })).toBe('child');
-    expect((await asA.readdir('/home/head-aX9')).sort()).toEqual(['.kinu', 'keeper', 'occupied']);
+    expect(await readText(asA, '/home/head-aX9/keeper')).toBe('the old bytes\n');
+    expect(await readText(asA, '/home/head-aX9/occupied/child')).toBe('child');
+    expect(((await asA.readdir('/home/head-aX9')).map(({ name }) => name)).sort()).toEqual(['.kinu', 'keeper', 'occupied']);
   });
 });
 
@@ -554,7 +555,7 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
     const restored = await second.asAgent(identity);
     expect((await second.shell.exec('cat /tmp/note')).stdout).toBe('main\n');
     expect((await restored.shell.exec('cat /tmp/note')).stdout).toBe('node\n');
-    expect(await restored.vfs.readFile('/home/main/shared', { encoding: 'utf8' })).toBe('shared\n');
+    expect(await readText(restored.vfs, '/home/main/shared')).toBe('shared\n');
     const root = (await second.privileged()).root;
     expect(root.exists('tmp/main/note')).toBe(true);
     await second.destroy();
@@ -584,11 +585,11 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
     const asA = await workspace.asAgent(a);
     const asB = await workspace.asAgent(b);
 
-    await asA.vfs.writeFile(`${a.home}/candidate.md`, 'my answer\n');
-    expect(await asA.vfs.readFile(`${a.home}/candidate.md`, { encoding: 'utf8' })).toBe('my answer\n');
-    await expect(asB.vfs.writeFile(`${a.home}/candidate.md`, 'stolen'))
+    await writeText(asA.vfs, `${a.home}/candidate.md`, 'my answer\n');
+    expect(await readText(asA.vfs, `${a.home}/candidate.md`)).toBe('my answer\n');
+    await expect(writeText(asB.vfs, `${a.home}/candidate.md`, 'stolen'))
       .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
-    expect(await asB.vfs.readFile(`${a.home}/candidate.md`, { encoding: 'utf8' })).toBe('my answer\n');
+    expect(await readText(asB.vfs, `${a.home}/candidate.md`)).toBe('my answer\n');
 
     expect(await asA.shell.exec('pwd')).toMatchObject({ exitCode: 0, stdout: `${a.home}\n` });
     expect((await asA.shell.exec('echo $HOME $TMPDIR')).stdout.trim()).toBe(`${a.home} ${a.tmp}`);
@@ -596,15 +597,15 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
     const refused = await asB.shell.exec(`echo leak > ${a.home}/leak.txt`);
     expect(refused.exitCode).not.toBe(0);
     expect(refused.stderr.toLowerCase()).toContain('permission denied');
-    expect(await asA.vfs.exists(`${a.home}/leak.txt`)).toBe(false);
+    expect(await exists(asA.vfs, `${a.home}/leak.txt`)).toBe(false);
 
     // A bare `/tmp` write is the node's own, because this isolate can rewrite it.
     expect(await asA.shell.exec('echo scratch > /tmp/pad.txt')).toMatchObject({ exitCode: 0 });
-    expect(await workspace.vfs.exists('/tmp/pad.txt')).toBe(false);
-    expect(await asA.vfs.readFile('/tmp/pad.txt', { encoding: 'utf8' })).toBe('scratch\n');
+    expect(await exists(workspace.vfs, '/tmp/pad.txt')).toBe(false);
+    expect(await readText(asA.vfs, '/tmp/pad.txt')).toBe('scratch\n');
 
     expect((await workspace.shell.exec('id -u')).stdout).toContain(String(SESSION_UID));
-    expect(await workspace.vfs.readFile(`${a.home}/candidate.md`, { encoding: 'utf8' })).toBe('my answer\n');
+    expect(await readText(workspace.vfs, `${a.home}/candidate.md`)).toBe('my answer\n');
 
     // One plane per uid: a shell holds cwd, so a second call must not forget the node's `cd`.
     expect(await workspace.asAgent(a)).toBe(asA);
@@ -628,15 +629,15 @@ describe('a plane with no compare-and-write says so, once, in one voice', () => 
     const a = credOf(await f.provision(node('cw2')));
     const plane = nimbusSessionFiles(sessionBox(f, a), a);
     const target = '/home/head-cw2/report.md';
-    await plane.writeFile(target, 'the previous file');
+    await writeText(plane, target, 'the previous file');
 
     const refused = await writeExecutorFileOp(lookupFor(plane), 'workspace', target, { bytes: new TextEncoder().encode('the replacement'), expectedRevision: 3 });
 
     if (!('unsupported' in refused)) throw new Error('expected the unsupported refusal');
-    expect(await plane.readFile(target, { encoding: 'utf8' })).toBe('the previous file');
+    expect(await readText(plane, target)).toBe('the previous file');
 
     expect(await writeExecutorFileOp(lookupFor(plane), 'workspace', target, { bytes: new TextEncoder().encode('the replacement') })).toEqual({ ok: true });
-    expect(await plane.readFile(target, { encoding: 'utf8' })).toBe('the replacement');
+    expect(await readText(plane, target)).toBe('the replacement');
   });
 
   test('the viewer is handed the reason rather than an edit token', async () => {
@@ -644,7 +645,7 @@ describe('a plane with no compare-and-write says so, once, in one voice', () => 
     const a = credOf(await f.provision(node('cw3')));
     const plane = nimbusSessionFiles(sessionBox(f, a), a);
     const target = '/home/head-cw3/notes.md';
-    await plane.writeFile(target, 'editable text');
+    await writeText(plane, target, 'editable text');
 
     const refused = await writeExecutorFileOp(lookupFor(plane), 'workspace', target, { bytes: new TextEncoder().encode('an edit'), expectedRevision: 7 });
 

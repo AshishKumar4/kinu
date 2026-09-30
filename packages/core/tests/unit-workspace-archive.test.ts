@@ -1,3 +1,4 @@
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Workspace archive, driven against the real production schema: BLOB fidelity, FTS rebuilt not dumped,
  *  the capability secret never exported, and a paged export equal to an unpaged one. */
 
@@ -27,7 +28,7 @@ import { writeSoul } from '../src/identity/soul';
 import { writeWorkspaceSoul } from '../src/vfs/workspace-planes';
 import { ConversationSearchStore } from '../src/memory/conversation-search';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
-import type { WorkspaceBundle, WorkspaceVFS } from '../src/vfs/nimbus-workspace';
+import type { WorkspaceBundle } from '../src/vfs/nimbus-workspace';
 import { workspaceArchiveTarget } from '../src/vfs/workspace-planes';
 import type { RawSqlExec, SqlExec, SqlExecutor } from '../src/types/primitives';
 import { testActorHandle, present } from '@kinu.run/test-utils';
@@ -38,7 +39,7 @@ interface Workspace {
   readonly sql: SqlExecutor;
   readonly execRaw: RawSqlExec;
   readonly archive: SqlExec;
-  readonly vfs: WorkspaceVFS;
+  readonly vfs: WorkspaceBundle['vfs'];
   readonly bundle: WorkspaceBundle;
 }
 
@@ -103,7 +104,7 @@ async function seeded() {
   await ws.vfs.mkdir('artifacts', { recursive: true });
   await ws.vfs.writeFile('artifacts/logo.bin', bytes);
   await ws.vfs.mkdir('notes', { recursive: true });
-  await ws.vfs.writeFile('notes/plan.md', 'a plan with a "quote" and a \\ backslash');
+  await writeText(ws.vfs, 'notes/plan.md', 'a plan with a "quote" and a \\ backslash');
   await new ConversationSearchStore(ws.sql, actor, (sessionId) => history.transcript(sessionId)).search('sqlite');
 
   return { ...ws, bytes, actor, history };
@@ -119,7 +120,7 @@ describe('workspace archive', () => {
 
     expect(restored.files).toBeGreaterThan(0);
     expect(await target.vfs.readFile('artifacts/logo.bin')).toEqual(source.bytes);
-    expect(await target.vfs.readFile('notes/plan.md', { encoding: 'utf8' })).toBe('a plan with a "quote" and a \\ backslash');
+    expect(await readText(target.vfs, 'notes/plan.md')).toBe('a plan with a "quote" and a \\ backslash');
   });
 
   test('SQL cannot arrive after the destination filesystem has opened', async () => {
@@ -158,7 +159,7 @@ describe('workspace archive', () => {
     ]);
 
     expect(await target.vfs.readFile('artifacts/logo.bin')).toEqual(source.bytes);
-    expect(await target.vfs.readFile('notes/plan.md', { encoding: 'utf8' }))
+    expect(await readText(target.vfs, 'notes/plan.md'))
       .toBe('a plan with a "quote" and a \\ backslash');
   });
 

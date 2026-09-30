@@ -1,3 +1,4 @@
+import { exists, readText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * A replacement transfer through the fork receiver's activation cache: the cached receiver must follow a fresh
  * transferId, the replacement's begin must take away what the first one imported, and a reset between a frame of
@@ -92,13 +93,13 @@ describe('a replacement transfer', () => {
     expect(await tx1.frame({ kind: 'page', target: memory, page: one.page })).toMatchObject({ status: 'want' });
     await tx1.frame({ kind: 'chunks', target: memory, chunks: one.chunks });
     expect(await tx1.frame({ kind: 'page', target: memory, page: one.page })).toEqual({ ok: true, status: 'staged' });
-    expect(await workspaceFiles(first.agent).readFile('memory/replaced.md', { encoding: 'utf8' })).toBe('the first transfer\'s bytes');
+    expect(await readText(workspaceFiles(first.agent), 'memory/replaced.md')).toBe('the first transfer\'s bytes');
 
     // A fresh transfer id through the same activation; the receiver must follow the reset staging row.
     const two = await exported('replacement transfer bytes!');
     const tx2 = transferTo(toFirst, 'tx-two');
     await tx2.frame({ kind: 'begin', head: HEAD, counts: COUNTS });
-    expect(await workspaceFiles(first.agent).exists('memory/replaced.md')).toBe(false);
+    expect(await exists(workspaceFiles(first.agent), 'memory/replaced.md')).toBe(false);
     await tx2.frame(CUT);
     expect(await tx2.frame({ kind: 'page', target: memory, page: two.page })).toMatchObject({ status: 'want' });
     await tx2.frame({ kind: 'chunks', target: memory, chunks: two.chunks });
@@ -116,6 +117,6 @@ describe('a replacement transfer', () => {
     const outcome = await tx2.frame(tx2.commit());
 
     expect(outcome).toMatchObject({ ok: true, status: 'published' });
-    expect(await workspaceFiles(second.agent).readFile('memory/replaced.md', { encoding: 'utf8' })).toBe('replacement transfer bytes!');
+    expect(await readText(workspaceFiles(second.agent), 'memory/replaced.md')).toBe('replacement transfer bytes!');
   });
 });

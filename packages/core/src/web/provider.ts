@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Web search/fetch provider shared by both backends; key-less by default (DuckDuckGo), Tavily when a `tavily`
  * credential is stored. Rendered fetches and screenshots go through Browser Run (`browser-run.ts`).
@@ -15,7 +16,7 @@ import { codemodeText } from '../tools/sandbox-contract';
 import { attemptInItsWords, diagnostics, KinuError, settle, toKinuError, tolerate } from '../obs/index';
 import { Effect } from 'effect';
 import type { CodemodeProvider } from '../types/codemode';
-import type { VFS } from '../types/primitives';
+
 import { bytesToBase64 } from '../utils/base64';
 import { saveScreenshot } from './screenshots';
 

@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * What the owner reads before deciding which workspace instruction files may hold system
  * placement (KINU-N028). Derived, never stored: a stored pending table would be one the agent
@@ -10,7 +11,7 @@ import {
   type InstructionTrust, type InstructionTrustResolver,
 } from '../safety/instruction-trust';
 import {
-  discoverSkills, readSkillFile, type SkillsVfs,
+  discoverSkills, readSkillFile,
 } from '../skills/discover';
 import { boundedInt } from '../utils/bounds';
 import { compareCodeUnits } from '../utils/text';
@@ -139,7 +140,7 @@ export function readInstructionSource(input: {
  */
 export async function gatherApprovableInstructions(input: {
   readonly agentsMd?: AgentsMdSources;
-  readonly skillsVfs: SkillsVfs;
+  readonly skillsVfs: VFS;
   readonly admissionTokens: number;
 }): Promise<InstructionSourceMeta[]> {
   const sources: InstructionSourceMeta[] = (input.agentsMd?.admitted ?? []).map((file) => ({
@@ -188,7 +189,7 @@ export async function gatherApprovableInstructions(input: {
 export async function openInstructionSource(input: {
   readonly path: string;
   readonly agentsMd?: AgentsMdSources;
-  readonly skillsVfs: SkillsVfs;
+  readonly skillsVfs: VFS;
   readonly trust: InstructionTrustResolver;
   readonly decisions: readonly InstructionApproval[];
   readonly previewChars?: number;

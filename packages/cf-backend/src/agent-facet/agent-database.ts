@@ -1,17 +1,7 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** An agent's own SQLite, under the core stores; its roster rows are copies the workspace sends on each call. */
 import type { ModelMessage, UIMessage } from 'ai';
-import {
-  CHAT_SESSION_ID, EventLog, EvolutionEngine, REAL_CLOCK, WorkspaceActorDirectory, runEventSinks,
-  actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin,
-  initWorkspaceSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, actorReadHandle, readSessionTranscript, readSubordinateInspection,
-  getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage,
-  type TurnRequestIndex, type TurnRequestPage, ConversationSearchStore, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource,
-  localContextTree, type ContextEditor, type ContextTree, type ConversationRecall,
-  type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage,
-  type SessionTranscriptReader, type SubordinateInspectionResult, type ModelPricing, type SqlExecutor, type VFS,
-  type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor,
-  type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue,
-} from '@kinu.run/core';
+import { CHAT_SESSION_ID, EventLog, EvolutionEngine, REAL_CLOCK, WorkspaceActorDirectory, runEventSinks, actorReferenceOf, actorScaffoldPath, createActorHost, createScaffoldSurface, defaultLoopOrigin, initWorkspaceSchema, nimbusSessionFiles, recoverActorTurns, MissionGovernor, actorReadHandle, readSessionTranscript, readSubordinateInspection, getChatHistoryPage, inheritedContextFromTranscript, turnRequestIndex, turnRequestPage, type TurnRequestIndex, type TurnRequestPage, ConversationSearchStore, RunEventRecorder, spendLedger, type SpendLedger, type StepSpendSource, localContextTree, type ContextEditor, type ContextTree, type ConversationRecall, type ActorHandle, type AgentOwnInspection, type ChatHistoryPage, type PositionPageRequest, type SerializedMessage, type SessionTranscriptReader, type SubordinateInspectionResult, type ModelPricing, type SqlExecutor, type ActorHost, type ActorReference, type AgentRuntime, type BackendHost, type BoundActor, type HeadReport, type HostedActor, type Executor, type JsonObject, type NimbusSandboxHandle, type SqlValue } from '@kinu.run/core';
 import { attempt, diagnostics, KinuError, settle, settleSync } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import * as v from 'valibot';

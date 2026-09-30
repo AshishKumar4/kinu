@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import type { ChatEvent } from '../src/chat';
 /** Shadow trials run offline: a turn only queues one row, and the cadence-lane drain runs it. */
 
@@ -69,7 +70,7 @@ async function setup(): Promise<AgentRuntime> {
     VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'initial', 'current')`;
   void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
     VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'candidate', 'pending')`;
-  await rt.storage.vfs.writeFile('scaffold/agent.js.v1', PENDING_SOURCE);
+  await writeText(rt.storage.vfs, 'scaffold/agent.js.v1', PENDING_SOURCE);
   await rt.identity.scaffold.write('async function* run(rt, task) { yield { type: "chunk", data: "live" }; }');
 
   return rt;

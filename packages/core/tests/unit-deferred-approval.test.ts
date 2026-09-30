@@ -1,16 +1,10 @@
+import { readText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Deferred approval: a gated command in an unattended run parks durably. A queued action is
 // never reported as a success, and an approval is never reported as an effect.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createMemoryVfs, fakeMossaic, toolExecute } from '@kinu.run/test-utils';
-import {
-  DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable,
-  DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools,
-  formatApprovalGrant, createShellSession, withApprovalGatedFiles, performBoundWrite, withMountTable, sharedDriveMount, mossaicVfs,
-  ParkedWriteFiles,
-  type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome,
-  type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, type VFS, WORKSPACE_ROOT,
-} from '../src/index';
+import { DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, DEFERRED_APPROVAL_SIGNAL, DENIAL_STANDING_MS, withApprovalGatedShell, buildBuiltinTools, formatApprovalGrant, createShellSession, withApprovalGatedFiles, performBoundWrite, withMountTable, sharedDriveMount, mossaicVfs, ParkedWriteFiles, type DeferredApproval, type ShellApprovalPolicy, type ShellApprovalOutcome, type AgentRuntime, type AgentSignal, type FilesOwner, type Shell, WORKSPACE_ROOT } from '../src/index';
 import type { BoundFileWrite } from '../src/safety/bound-write';
 import { CHUNK_SIZE } from '@nimbus-sh/core/constants.js';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
@@ -933,51 +927,51 @@ test('a new file on the Drive is free; an overwrite parks, and a write that fail
     return await performBoundWrite(plane, write, bytes);
   });
 
-  await files.writeFile('/shared/new.md', 'created\n');
-  await drive.writeFile('/notes.md', 'the owner\u2019s\n');
-  await expect(files.writeFile('/shared/notes.md', 'rewritten\n')).rejects.toMatchObject({ code: 'unavailable' });
+  await writeText(files, '/shared/new.md', 'created\n');
+  await writeText(drive, '/notes.md', 'the owner\u2019s\n');
+  await expect(writeText(files, '/shared/notes.md', 'rewritten\n')).rejects.toMatchObject({ code: 'unavailable' });
   expect(queue.list().map((row) => row.command)).toEqual([expect.stringMatching(/^file write \/shared\/notes\.md sha256:[0-9a-f]{64} over sha256:[0-9a-f]{64}$/u)]);
 
   await queue.decide(['defer-1'], 'approved');
-  expect(await drive.readFile('/notes.md', { encoding: 'utf8' })).toBe('the owner\u2019s\n');
+  expect(await readText(drive, '/notes.md')).toBe('the owner\u2019s\n');
   expect(store.get('defer-1')?.status).toBe('approved');
   expect(woken.at(-1)).toContain('APPROVED, still not run: re-issue once');
 
   outage = false;
-  await files.writeFile('/shared/notes.md', 'rewritten\n');
-  expect(await drive.readFile('/notes.md', { encoding: 'utf8' })).toBe('rewritten\n');
-  expect(await drive.readFile('/new.md', { encoding: 'utf8' })).toBe('created\n');
+  await writeText(files, '/shared/notes.md', 'rewritten\n');
+  expect(await readText(drive, '/notes.md')).toBe('rewritten\n');
+  expect(await readText(drive, '/new.md')).toBe('created\n');
   expect(store.get('defer-1')).toBeNull();
 });
 
 test('a parked write that is denied leaves no bytes behind', async () => {
   const { drive, files, queue, kernel } = await driveWithQueue();
 
-  await drive.writeFile('/notes.md', 'the owner\u2019s\n');
-  await expect(files.writeFile('/shared/notes.md', 'rewritten\n')).rejects.toMatchObject({ code: 'unavailable' });
+  await writeText(drive, '/notes.md', 'the owner\u2019s\n');
+  await expect(writeText(files, '/shared/notes.md', 'rewritten\n')).rejects.toMatchObject({ code: 'unavailable' });
   expect(parkedFile(kernel, sha256('rewritten\n'))).not.toBeNull();
 
   await queue.decide(['defer-1'], 'denied');
   expect(parkedFile(kernel, sha256('rewritten\n'))).toBeNull();
-  expect(await drive.readFile('/notes.md', { encoding: 'utf8' })).toBe('the owner\u2019s\n');
+  expect(await readText(drive, '/notes.md')).toBe('the owner\u2019s\n');
 });
 
 test('two parked writes of the same bytes keep them until both close', async () => {
   const { drive, files, queue, kernel } = await driveWithQueue();
   const same = sha256('one template\n');
 
-  await drive.writeFile('/a.md', 'a\n');
-  await drive.writeFile('/b.md', 'b\n');
-  await expect(files.writeFile('/shared/a.md', 'one template\n')).rejects.toMatchObject({ code: 'unavailable' });
-  await expect(files.writeFile('/shared/b.md', 'one template\n')).rejects.toMatchObject({ code: 'unavailable' });
+  await writeText(drive, '/a.md', 'a\n');
+  await writeText(drive, '/b.md', 'b\n');
+  await expect(writeText(files, '/shared/a.md', 'one template\n')).rejects.toMatchObject({ code: 'unavailable' });
+  await expect(writeText(files, '/shared/b.md', 'one template\n')).rejects.toMatchObject({ code: 'unavailable' });
   expect(queue.list()).toHaveLength(2);
 
   await queue.decide(['defer-1'], 'denied');
   expect(parkedFile(kernel, same)).not.toBeNull();
 
   await queue.decide(['defer-2'], 'approved');
-  expect(await drive.readFile('/b.md', { encoding: 'utf8' })).toBe('one template\n');
-  expect(await drive.readFile('/a.md', { encoding: 'utf8' })).toBe('a\n');
+  expect(await readText(drive, '/b.md')).toBe('one template\n');
+  expect(await readText(drive, '/a.md')).toBe('a\n');
   expect(parkedFile(kernel, same)).toBeNull();
 });
 
@@ -985,7 +979,7 @@ test('a write larger than one storage chunk parks and lands byte for byte', asyn
   const { drive, files, queue, kernel } = await driveWithQueue();
   const big = Uint8Array.from({ length: 3 * CHUNK_SIZE + 17 }, (_, index) => (index * 31) % 251 || 1);
 
-  await drive.writeFile('/big.bin', 'small\n');
+  await writeText(drive, '/big.bin', 'small\n');
   await expect(files.writeFile('/shared/big.bin', big)).rejects.toMatchObject({ code: 'unavailable' });
 
   await queue.decide(['defer-1'], 'approved');

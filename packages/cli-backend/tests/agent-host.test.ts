@@ -1,3 +1,4 @@
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { REAL_CLOCK } from '@kinu.run/core';
 import { HIRE_FORK_PARENT, HIRE_FORK_REQUEST, HIRE_FORK_PREFIX, HIRE_FORK_MISSION,
@@ -1871,8 +1872,8 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
       const alphaRt = present(runtimes.get('alpha'), 'the alpha runtime');
       const betaRt = present(runtimes.get('beta'), 'the beta runtime');
 
-      await alphaRt.storage.vfs.writeFile('shared-note.md', 'peers share this file');
-      expect(await betaRt.storage.vfs.readFile('shared-note.md', { encoding: 'utf-8' }))
+      await writeText(alphaRt.storage.vfs, 'shared-note.md', 'peers share this file');
+      expect(await readText(betaRt.storage.vfs, 'shared-note.md'))
         .toBe('peers share this file');
       expect(readFileSync(join(project, 'shared-note.md'), 'utf-8')).toBe('peers share this file');
       expect(alphaRt.cwd).toBe(project);

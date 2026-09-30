@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Local peer transport: agent-to-agent mail among root agents sharing one `{ cwd, workspaceId }` pair.
  * Membership is exact pair equality; subordinates never hold this transport.
@@ -15,7 +16,7 @@ import type { ReplyChannelStore } from '../events/hub/reply-channel';
 import type { ReplyChannelRow } from '../events/hub/types';
 import type { JsonValue } from '../utils/json';
 import type { PeerSpawnOutcome, PeersToolDeps } from '../types/peers';
-import type { SqlExec, VFS } from '../types/primitives';
+import type { SqlExec } from '../types/primitives';
 
 /** One local agent the host may bind. `cwd` is realpath'd; only the pair identifies a group. */
 export interface HostedAgentRef {

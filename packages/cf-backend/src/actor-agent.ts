@@ -1,3 +1,4 @@
+import type { VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Actor-agnostic substrate beneath every full-loop Kinu actor on the Cloudflare backend.
  * Tool gating is structural: a profile with no `team` deps gets no hiring actions on `agents`.
@@ -3375,11 +3376,7 @@ export abstract class ActorAgent extends Agent<Env> {
   /** A fork reaches these through its `parent` executor. No `@callable`: only a worker-held
    * parent stub can reach them. */
   async readWorkspaceFile(path: string): Promise<Uint8Array> {
-    return answerParentRpc(path, async () => {
-      const content = await this.rt.localVfs.readFile(path);
-
-      return v.is(v.string(), content) ? new TextEncoder().encode(content) : content;
-    });
+    return answerParentRpc(path, async () => this.rt.localVfs.readFile(path));
   }
 
   async writeWorkspaceFile(input: ParentRpcWrite): Promise<null> {
@@ -3391,12 +3388,12 @@ export abstract class ActorAgent extends Agent<Env> {
     });
   }
 
-  async listWorkspaceFiles(path: string): Promise<string[]> {
-    return answerParentRpc(path, () => this.rt.localVfs.readdir(path));
+  async listWorkspaceFiles(path: string): Promise<VfsDirent[]> {
+    return answerParentRpc(path, async () => this.rt.localVfs.readdir(path));
   }
 
-  async statWorkspaceFile(path: string): Promise<{ size: number; mtimeMs: number; isDir: boolean } | null> {
-    return answerParentRpc(path, () => this.rt.localVfs.stat(path));
+  async statWorkspaceFile(path: string, options?: { follow?: boolean }): Promise<VfsStat | null> {
+    return answerParentRpc(path, async () => this.rt.localVfs.stat(path, options));
   }
 
   async deleteWorkspaceFile(path: string): Promise<null> {

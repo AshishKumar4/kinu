@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The owner's instruction desk on the hosted backend, driven through the
  * actor's own RPCs over its real workspace plane. The rule is core's
@@ -17,13 +18,13 @@ describe('the instruction desk on a Durable Object', () => {
     const { agent } = orchestratorHarness();
     const vfs = workspaceFiles(agent);
     const path = workspaceSkillPath('focused');
-    await vfs.writeFile(path, SKILL);
+    await writeText(vfs, path, SKILL);
 
 
     const reviewed = await agent.readInstructionApproval(path);
 
     if (reviewed === null) throw new Error('the skill file was not found on the workspace plane');
-    await vfs.writeFile(path, `${SKILL}\n# changed after review\n`);
+    await writeText(vfs, path, `${SKILL}\n# changed after review\n`);
 
     expect(await agent.approveInstruction(path, reviewed.digest)).toMatchObject({
       ok: false, error: expect.stringContaining('changed'),
@@ -57,7 +58,7 @@ describe('the instruction desk on a Durable Object', () => {
 
     const workspace = gatewayWorkspace(gateway);
 
-    await workspaceFiles(workspace.agent).writeFile(workspaceSkillPath('focused'), SKILL);
+    await writeText(workspaceFiles(workspace.agent), workspaceSkillPath('focused'), SKILL);
     await catalogTurn(workspace.agent, 'Read the focused skill and the slates skill.');
 
     expect(toolResults).toHaveLength(2);

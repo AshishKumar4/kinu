@@ -1,3 +1,5 @@
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * FEAT-17: the workspace root is `/home/main`. A workspace made when it was `/home/user` boots with its
  * whole tree moved there, and `/home/user` stays a link to it, so an absolute path written before still
@@ -54,7 +56,7 @@ async function legacyWorkspace(): Promise<Database> {
   return database;
 }
 
-const utf8 = { encoding: 'utf8' } as const;
+
 
 describe('a workspace made before the move', () => {
   test('boots with its files and SOUL.md at /home/main, and its slates at /slates', async () => {
@@ -78,11 +80,11 @@ describe('a workspace made before the move', () => {
     expect(user.isSymlink('/home/user')).toBe(true);
     expect(user.readlink('/home/user')).toBe('/home/main');
     expect(user.readFileString('/home/user/data/2026/rows.csv')).toBe('id,kind\n1,percent\n');
-    expect(await bundle.vfs.readFile('/home/user/notes.md', utf8)).toBe('# coupon regression\n');
+    expect(await readText(bundle.vfs, '/home/user/notes.md')).toBe('# coupon regression\n');
 
     // A write by the old name lands in the one tree.
-    await bundle.vfs.writeFile('/home/user/notes.md', '# fixed\n');
-    expect(await bundle.vfs.readFile('/home/main/notes.md', utf8)).toBe('# fixed\n');
+    await writeText(bundle.vfs, '/home/user/notes.md', '# fixed\n');
+    expect(await readText(bundle.vfs, '/home/main/notes.md')).toBe('# fixed\n');
   });
 
   test('runs its shell from /home/main', async () => {
@@ -109,7 +111,7 @@ describe('a new workspace', () => {
 
     expect(kernel.isDirectory('/home/main')).toBe(true);
     expect(kernel.readlink('/home/user')).toBe('/home/main');
-    await bundle.vfs.writeFile('notes.md', 'fresh');
+    await writeText(bundle.vfs, 'notes.md', 'fresh');
     expect(kernel.readFileString('/home/main/notes.md')).toBe('fresh');
   });
 });

@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Inbound mail gate: the owner's verified address or an active email_route allowlist entry is
  *  admitted; anyone else is dropped with no event row. */
 
@@ -7,7 +8,7 @@ import type { ReplyChannelStore } from '../hub/reply-channel';
 import type { TriggerRegistry } from '../hub/triggers';
 import type { EmailAttachmentMeta, EmailPayload, EventId } from '../hub/types';
 import { spillEventContent } from '../hub/content-spill';
-import type { SqlExec, VFS } from '../../types/primitives';
+import type { SqlExec } from '../../types/primitives';
 import type { MissingCapability } from '../../types/dynamic-context';
 import { argumentDigest } from '../../safety/argument-digest';
 import { tryConsumeWebhookRateLimit } from './rate-limit';

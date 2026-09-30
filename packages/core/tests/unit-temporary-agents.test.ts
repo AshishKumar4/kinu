@@ -1,44 +1,11 @@
+import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // `lifetime:'task'` hires through the public surfaces (native dispatch and sandbox namespace). A hire returns at once;
 // its answer is one `subordinate_report` on the hirer's rail, which wakes it, and the child retires after its turn.
 import { Database } from 'bun:sqlite';
 import type { ModelMessage } from 'ai';
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
-import {
-  DELEGATION_MAX_DEPTH,
-  ROOT_DELEGATION_BUDGET,
-  delegationExhausted,
-  SubordinateRosterStore,
-  TEMPORARY_LIFETIME,
-  EventLog,
-  TASK_TURN_ENDINGS,
-  agentsActionsFor,
-  initEventsHubTables,
-  terminalTaskReport,
-  createAgentsCodemodeProvider,
-  createTeamToolDeps,
-  createTemporaryAgentPort,
-  taskAnswerIsLater,
-  deriveChildDelegationBudget, delegationDepthRefusal,
-  receiveSubordinateEvent,
-  type SubordinateEventResult,
-  type SubordinateReportHandoff,
-  renderAgentsToolDescription,
-  TOOL_REACH,
-  type AgentsToolDeps,
-  type AgentsProfileContext,
-  type VFS,
-  type SubordinateHandoff,
-  type SubordinateRuntime,
-  type TemporaryAgentPort,
-  type WorkMode,
-  type AgentsToolAction,
-  type AgentsToolInput,
-  type CodemodeResult,
-  BUILTIN_PROFILE_CATALOG,
-  profileCatalogDigest,
-  DEFAULT_WORKERS_AI_MODEL_SPEC, recoverSubordinateLifecycles,
-} from '../src/index';
+import { DELEGATION_MAX_DEPTH, ROOT_DELEGATION_BUDGET, delegationExhausted, SubordinateRosterStore, TEMPORARY_LIFETIME, EventLog, TASK_TURN_ENDINGS, agentsActionsFor, initEventsHubTables, terminalTaskReport, createAgentsCodemodeProvider, createTeamToolDeps, createTemporaryAgentPort, taskAnswerIsLater, deriveChildDelegationBudget, delegationDepthRefusal, receiveSubordinateEvent, type SubordinateEventResult, type SubordinateReportHandoff, renderAgentsToolDescription, TOOL_REACH, type AgentsToolDeps, type AgentsProfileContext, type SubordinateHandoff, type SubordinateRuntime, type TemporaryAgentPort, type WorkMode, type AgentsToolAction, type AgentsToolInput, type CodemodeResult, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, DEFAULT_WORKERS_AI_MODEL_SPEC, recoverSubordinateLifecycles } from '../src/index';
 import { dispatchAgentsAction, parseAgentsToolInput } from '../src/delegation/agents-tool';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw, makeSqlExec } from './helpers';
@@ -752,7 +719,7 @@ describe('the two hire targets are decided by `role`', () => {
 describe('bulk material travels by path, not by field', () => {
   test('a path named in the mission reaches the child brief and the bytes never do', async () => {
     const scene = makeScene();
-    await scene.files.writeFile('/spill/tool-output.txt', 'x'.repeat(5000));
+    await writeText(scene.files, '/spill/tool-output.txt', 'x'.repeat(5000));
 
     await startRun(scene, {
       role: 'auditor',
