@@ -18,17 +18,26 @@ const REFUSAL_KEY = 'model_refusal:';
 export function tierRefusals(deps: {
   readonly sql: SqlExecutor;
   readonly actor: ActorHandle;
-  readonly config: Pick<AgentConfigStore, 'get' | 'set' | 'delete' | 'all'>;
+  readonly config: Pick<AgentConfigStore, 'set' | 'delete' | 'all'>;
   readonly now: () => number;
   readonly settings: string;
 }): TierRefusals {
+  let said: Map<string, string> | null = null;
+
+  const saidSoFar = (): Map<string, string> => {
+    said ??= new Map(Object.entries(deps.config.all()).filter(([key]) => key.startsWith(REFUSAL_KEY)));
+
+    return said;
+  };
+
   return {
     refused: ({ tier, model, cause }) => {
       const status = providerStatusOf({ cause });
-      const said = JSON.stringify({ model, status: status ?? null });
+      const text = JSON.stringify({ model, status: status ?? null });
 
-      if (deps.config.get(`${REFUSAL_KEY}${tier}`) === said) return;
-      deps.config.set(`${REFUSAL_KEY}${tier}`, said);
+      if (saidSoFar().get(`${REFUSAL_KEY}${tier}`) === text) return;
+      deps.config.set(`${REFUSAL_KEY}${tier}`, text);
+      saidSoFar().set(`${REFUSAL_KEY}${tier}`, text);
       diagnostics.event('profile.tier_refused', { tier, model, status: status ?? 0 });
       writeActivityLog(() => ({ sql: deps.sql, actor: deps.actor }), {
         event: 'model_tier_refused',
@@ -38,10 +47,12 @@ export function tierRefusals(deps: {
       });
     },
     answered: (tier) => {
-      if (deps.config.get(`${REFUSAL_KEY}${tier}`) !== null) deps.config.delete(`${REFUSAL_KEY}${tier}`);
+      if (!saidSoFar().delete(`${REFUSAL_KEY}${tier}`)) return;
+      deps.config.delete(`${REFUSAL_KEY}${tier}`);
     },
     forget: () => {
-      for (const key of Object.keys(deps.config.all())) if (key.startsWith(REFUSAL_KEY)) deps.config.delete(key);
+      for (const key of saidSoFar().keys()) deps.config.delete(key);
+      saidSoFar().clear();
     },
   };
 }
