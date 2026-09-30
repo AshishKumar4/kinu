@@ -12,11 +12,8 @@ import {
   type SerializableToolDescriptor, type McpSurfaceBudget,
 } from '@kinu.run/core';
 import { diagnostics, KinuError, renderCauseChain, tolerate, toKinuError } from '@kinu.run/core/obs';
-import type { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { SdkHttpError, SseError, UnauthorizedError, type Client } from '@modelcontextprotocol/client';
 import { ResultSchema } from '@modelcontextprotocol/sdk/types.js';
-import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js';
-import { SseError } from '@modelcontextprotocol/sdk/client/sse.js';
-import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import * as v from 'valibot';
 
 
@@ -349,7 +346,8 @@ export function storedMcpOptionsCarryCredential(raw: string | null | undefined):
 /** Whether a failed MCP dispatch failed on transport authorization, decided by error class, never text. */
 export function isMcpTransportUnauthorized(input: { cause: unknown }): boolean {
   return causeChain(input).some((error) => error instanceof UnauthorizedError
-    || ((error instanceof StreamableHTTPError || error instanceof SseError) && error.code === 401));
+    || (error instanceof SdkHttpError && error.status === 401)
+    || (error instanceof SseError && error.code === 401));
 }
 
 function causeChain(input: { cause: unknown }): Error[] {
@@ -418,7 +416,7 @@ export async function callRenewingExpiredSession<Result>(
   try {
     return await sent(traffic, call);
   } catch (cause) {
-    if (expired === undefined || !causeChain({ cause }).some((error) => error instanceof StreamableHTTPError && error.code === 404)) throw cause;
+    if (expired === undefined || !causeChain({ cause }).some((error) => error instanceof SdkHttpError && error.status === 404)) throw cause;
   }
 
   const renewal = traffic.renewals.get(expired)
