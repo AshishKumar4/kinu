@@ -1537,6 +1537,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
             await room?.deliver({ type: 'error', message: renderCauseChain(failure) });
             await room?.closeTurn();
             diagnostics.failure('subordinate.delegated_turn_failed', failure, { workspace: this.name, actor: record.name });
+
+            if (this.liveActor(record.actorId)) await relayHostedReport(this.hostedSeams(), this.actorHost().bindStores(reference), {
+              status: 'blocked', content: `${record.name} failed to run its assigned turn: ${renderCauseChain(failure)}`,
+              origin: 'turn_end', mode: task.mode, sequenceId: task.sequenceId, answers: task.sequenceId,
+            });
           },
           after: async () => {
             openTurns.close(opened);

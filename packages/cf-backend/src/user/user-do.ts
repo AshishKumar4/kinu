@@ -54,7 +54,10 @@ import {
   CODEX_CRED_KEY,
   OAuthTokenError,
   baseCredentialKey,
+  claudeCodeFrom,
+  createClaudeOAuthClient,
   createCodexOAuthClient,
+  startClaudeSignIn,
   subscriptionIssuer,
   type SubscriptionIssuer,
   decodeCodexAccountId,
@@ -74,6 +77,7 @@ import {
   type NameOrigin,
 } from '@kinu.run/core';
 import {
+  attempt,
   authoredRefusal,
   diagnostics,
   KinuError,
@@ -538,6 +542,10 @@ const REFRESH_DOING: ReadonlyMap<string, string> = new Map([
   [CLAUDE_CRED_KEY, 'refreshing the Claude credential'],
   [CLOUDFLARE_OAUTH_CRED_KEY, 'refreshing the Cloudflare credential'],
 ]);
+
+const CLAUDE_SIGN_IN_KEY = 'claude.sign-in';
+
+const ClaudeSignInSchema = v.object({ url: v.string(), state: v.string(), verifier: v.string() });
 
 export interface CodexStatus {
   connected: boolean;
@@ -3934,7 +3942,7 @@ export class UserDO extends Agent<Env> {
   // attempt a poll belongs to and `settled_at` whether it is still live, fencing stale polls.
 
   async startCodexDeviceFlow(caller: UserCaller): Promise<DeviceCodeStart> {
-    await this.requireTier(caller, 'codex_auth');
+    await this.requireTier(caller, 'subscription_auth');
     const client = createCodexOAuthClient();
     const result = await client.startDeviceFlow();
     // The generation rises in the write itself so two racing starts cannot get the same number.
@@ -3956,7 +3964,7 @@ export class UserDO extends Agent<Env> {
   }
 
   async pollCodexDeviceFlow(caller: UserCaller): Promise<{ connected: boolean; accountId?: string; error?: string }> {
-    await this.requireTier(caller, 'codex_auth');
+    await this.requireTier(caller, 'subscription_auth');
 
     const row = this.sqlx<{ device_auth_id: string; user_code: string; generation: number }>(
       `SELECT device_auth_id, user_code, generation FROM codex_device_flow
@@ -4019,8 +4027,62 @@ export class UserDO extends Agent<Env> {
     return true;
   }
 
+  /** One Claude sign-in at a time; its PKCE verifier stays in this object, as the CLI's stays on the machine. */
+  async startClaudeSignIn(caller: UserCaller): Promise<{ readonly url: string }> {
+    await this.requireTier(caller, 'subscription_auth');
+    const signIn = await startClaudeSignIn();
+
+    this.ctx.storage.kv.put(CLAUDE_SIGN_IN_KEY, signIn);
+
+    return { url: signIn.url };
+  }
+
+  /**
+   * `returned` is what Claude showed the owner: the code, or the address it sent the browser to. A code that
+   * is not this sign-in's is refused; Claude's own refusal comes back as `error`, as a Codex poll's does.
+   */
+  async finishClaudeSignIn(caller: UserCaller, returned: string): Promise<{ connected: boolean; error?: string }> {
+    await this.requireTier(caller, 'subscription_auth');
+
+    return settle(Effect.gen({ self: this }, function* () {
+      const held = v.safeParse(ClaudeSignInSchema, this.ctx.storage.kv.get(CLAUDE_SIGN_IN_KEY));
+
+      if (!held.success) return yield* Effect.fail(new KinuError('missing', 'No Claude sign-in is in progress: start it again.'));
+      const signIn = held.output;
+      const code = claudeCodeFrom(returned, signIn.state);
+      // Both fences are read before Claude answers: a newer start or a disconnect meanwhile wins.
+      const revision = this.credentialRevision(CLAUDE_CRED_KEY);
+
+      const exchanged = yield* Effect.match(
+        attempt({ doing: 'exchanging the Claude sign-in code', otherwise: 'io' }, () => createClaudeOAuthClient().exchange(signIn, code)),
+        {
+          onFailure: (error) => {
+            diagnostics.failure('user.claude_sign_in_failed', error);
+
+            return { error: renderThrownChain({ cause: error }) };
+          },
+          onSuccess: (credential) => ({ credential }),
+        },
+      );
+
+      if ('error' in exchanged) return { connected: false, error: exchanged.error };
+      const { credential } = exchanged;
+      const sealed = yield* attempt({ doing: 'sealing the Claude credential', otherwise: 'io' }, () => this.sealCredential(CLAUDE_CRED_KEY, credential));
+      const current = v.safeParse(ClaudeSignInSchema, this.ctx.storage.kv.get(CLAUDE_SIGN_IN_KEY));
+
+      if (!current.success || current.output.state !== signIn.state
+        || !this.commitCredential({ key: CLAUDE_CRED_KEY, kind: credential.kind, sealed, expectRevision: revision })) {
+        return { connected: false, error: 'That Claude sign-in was superseded before it completed: start it again.' };
+      }
+
+      this.ctx.storage.kv.delete(CLAUDE_SIGN_IN_KEY);
+
+      return { connected: true };
+    }));
+  }
+
   async disconnectCodex(caller: UserCaller): Promise<void> {
-    await this.requireTier(caller, 'codex_auth');
+    await this.requireTier(caller, 'subscription_auth');
     await this.disconnectCredential(CODEX_CRED_KEY);
     // Settled, not deleted: the generation must keep rising, and a poll already waiting on OpenAI
     // must find this attempt closed rather than find no row to fence against.
@@ -4028,7 +4090,7 @@ export class UserDO extends Agent<Env> {
   }
 
   async getCodexStatus(caller: UserCaller): Promise<CodexStatus> {
-    await this.requireTier(caller, 'codex_auth');
+    await this.requireTier(caller, 'subscription_auth');
     const cred = await this.readCredential(CODEX_CRED_KEY);
 
     // Only an open attempt is an in-progress flow; a settled row just keeps the generation rising.
