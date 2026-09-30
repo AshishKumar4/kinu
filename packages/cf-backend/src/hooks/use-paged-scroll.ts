@@ -19,10 +19,6 @@ export interface PagedScrollOptions<Item> {
   startFrom: () => SeekCursor | null;
 }
 
-interface PageLoadOperation {
-  promise: Promise<void> | null;
-}
-
 export const MAX_PAGE = 200;
 
 const CHAINED_MS = 100;
@@ -32,21 +28,18 @@ function usePageLoads(pageSize: number) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // A ref, not state: several scroll handlers in one frame would all read the uncommitted `false`.
-  const inFlight = useRef(false);
-  // Abandoned walks stay owned until settled: StrictMode retires the first mid-request.
-  const nextTaskId = useRef(0);
-  const loadTasks = useRef(new Map<number, PageLoadOperation>());
+  // The page in flight. A ref, not state: several scroll handlers in one frame would all read an uncommitted `null`.
+  const inFlight = useRef<Promise<void> | null>(null);
   const walk = useRef(0);
   const size = useRef({ limit: pageSize, landedAt: -Infinity });
 
   // Unmount retires the generation so a late page cannot publish.
   useEffect(() => () => {
     walk.current += 1;
-    inFlight.current = false;
+    inFlight.current = null;
   }, []);
 
-  const busy = useCallback(() => inFlight.current, []);
+  const busy = useCallback(() => inFlight.current !== null, []);
 
   const sizeFor = useCallback((urgent: boolean) => {
     if (urgent) return MAX_PAGE;
@@ -58,12 +51,8 @@ function usePageLoads(pageSize: number) {
     const generation = walk.current;
 
     size.current.limit = limit;
-    inFlight.current = true;
     setLoading(true);
-    const taskId = ++nextTaskId.current;
-    const owner: PageLoadOperation = { promise: null };
-    loadTasks.current.set(taskId, owner);
-    owner.promise = (async () => {
+    inFlight.current = (async () => {
       // Decided after the handler: `reset` or unmount may have retired this walk.
       let thrown: { cause: unknown } | null = null;
 
@@ -76,10 +65,8 @@ function usePageLoads(pageSize: number) {
       } catch (err) {
         thrown = { cause: err };
       } finally {
-        if (loadTasks.current.get(taskId) === owner) loadTasks.current.delete(taskId);
-
         if (generation === walk.current) {
-          inFlight.current = false;
+          inFlight.current = null;
           size.current.landedAt = performance.now();
           setLoading(false);
         }
@@ -92,7 +79,7 @@ function usePageLoads(pageSize: number) {
   const retire = useCallback(() => {
     walk.current += 1;
     // The abandoned walk's `finally` can no longer clear these.
-    inFlight.current = false;
+    inFlight.current = null;
     setLoading(false);
     setError(null);
   }, []);
