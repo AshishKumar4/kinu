@@ -11,6 +11,7 @@ const databases = new Map<string, Database>();
 export interface InProcessAgentFacets {
   open(placement: AgentFacetPlacement, workspace: AgentWorkspaceHost): Promise<AgentFacet>;
   drop(storageKey: string): void;
+  reset(storageKey: string): void;
 }
 
 function unreachable(): never {
@@ -82,6 +83,8 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           relayDevice: (provider) => host.relayDevice(provider),
           relayModelCall: (deviceId, callId, request) => host.relayModelCall(deviceId, callId, request),
           cancelModelRelay: (callId) => host.cancelModelRelay(callId),
+          forwardCodex: (callId, request) => host.forwardCodex(callId, request),
+          cancelCodex: (callId) => host.cancelCodex(callId),
         },
         WORKSPACE_NAME: placement.workspaceName,
         SHELL_ID: placement.shellId,
@@ -96,6 +99,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
 
       return facet;
     },
+    reset: (storageKey) => { live.delete(storageKey); },
     drop: (storageKey) => {
       live.delete(storageKey);
       databases.get(storageKey)?.close();

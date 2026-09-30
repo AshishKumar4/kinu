@@ -238,6 +238,7 @@ import {
 import type { CodemodeProvider, MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { Effect } from 'effect';
 import { attempt, authoredRefusal, classify, diagnostics, KinuError, refusalOf, renderCauseChain, renderThrownChain, settle, settleSync, toKinuError, type Refusal } from "@kinu.run/core/obs";
+import { ownerContainer, type CodexContainer } from "./egress/codex-egress-route";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
 import { deliverCloudFork, type ForkFrameAck } from "./user/workspace-fork";
@@ -692,8 +693,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       seams: () => this.hostedSeams(),
       deliver: async (reference, task) => { await (await this.agentCalls(reference.actorId)).deliver(this.agentSnapshot(reference.actorId), task); },
       interrupt: async (reference, turnId) => { await (await this.agentCalls(reference.actorId)).interrupt(this.agentSnapshot(reference.actorId), turnId); },
+      holds: async (reference, turnId) => await (await this.agentCalls(reference.actorId)).holds(turnId),
       dynamic: (actor, profile, tools) => this.hostedActorDynamicContext(actor, profile, tools),
       pricing: (spec) => this.modelCatalog.pricing(spec),
+      accounts: () => this.config.getProviderAccounts(),
       live: (actorId) => this.liveActor(actorId),
     });
 
@@ -773,7 +776,18 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
         await stub.cancelModelRelay(caller, callId);
       },
+      forwardCodex: async (callId, request) => await (await this.codexContainer()).forward(callId, request),
+      cancelCodex: async (callId) => { await (await this.codexContainer()).cancel(callId); },
     });
+  }
+
+  async codexContainer(): Promise<CodexContainer> {
+    const owner = await this.getOwnerUserId();
+    const namespace = this.env.CodexEgress;
+
+    if (namespace === undefined || !owner) return settleSync(Effect.fail(new KinuError('unavailable', "This workspace has no Codex egress container for its owner.")));
+
+    return ownerContainer(namespace, owner);
   }
 
   /** A promise so the workspace boots on the first provision, never at activation. */
@@ -1319,6 +1333,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       unsettledClaims: this.actorHost().resumable(1).length > 0,
       // Admitted but unstarted delegations hold no claim, so `resumable` does not cover them.
       admittedDelegations: this.hasAdmittedDelegations(),
+      agentTurns: new AgentOpenTurns(this.boundSql).any(),
       // The root's loop: a turn a dead process was inside, or an acknowledged send never drained.
       chatLoop: this.chatLoopOwesWork(),
     };
@@ -1543,6 +1558,16 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
               origin: 'turn_end', mode: task.mode, sequenceId: task.sequenceId, answers: task.sequenceId,
             });
           },
+          lost: async () => {
+            await room?.closeTurn();
+            openTurns.close(opened);
+
+            if (!this.liveActor(record.actorId)) return;
+
+            if (!await this.recoverAgent(record.actorId, [task.sequenceId])) log.unbind(task.sequenceId);
+            this.releaseIdleHosted(reference);
+            this.delegatedTurns.start([record]);
+          },
           after: async () => {
             openTurns.close(opened);
 
@@ -1620,22 +1645,26 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return settle(Effect.forEach([...byAgent], ([actorId, turns]) => attempt(
       { doing: "recovering the turns an agent's own isolate held when the workspace reset", otherwise: 'io' },
       async () => {
-        const record = this.actorDirectoryStore().retained(actorId);
-
-        if (record !== null && record.retiringAt === null && record.deletedAt === null) {
-          const reference = actorReferenceOf(record);
-          const recovered = await (await this.agentCalls(actorId)).recover(this.agentSnapshot(actorId));
-
-          if (isSubordinateOrigin(record.origin)) {
-            for (const turn of recovered.stalled) await retireStalledTask(this.hostedSeams(), await this.actorHost().acquire(reference), turn);
-          }
-        }
+        await this.recoverAgent(actorId, []);
 
         for (const turn of turns) open.close(turn);
       },
     ).pipe(Effect.catch((failure) => Effect.sync(() => {
       diagnostics.failure('subordinate.agent_recovery_failed', failure, { workspace: this.name, actor: actorId });
     }))), { discard: true }));
+  }
+
+  private async recoverAgent(actorId: string, turnIds: readonly string[]): Promise<boolean> {
+    const record = this.actorDirectoryStore().retained(actorId);
+
+    if (record === null || record.retiringAt !== null || record.deletedAt !== null) return false;
+    const recovered = await (await this.agentCalls(actorId)).recover(this.agentSnapshot(actorId));
+
+    if (!isSubordinateOrigin(record.origin)) return false;
+
+    for (const turn of recovered.stalled) await retireStalledTask(this.hostedSeams(), await this.actorHost().acquire(actorReferenceOf(record)), turn);
+
+    return recovered.stalled.some((turn) => turnIds.includes(turn.turnId));
   }
 
   private async retireStalledAssignments(stalled: readonly ResumableActorTurn[]): Promise<void> {
@@ -1698,6 +1727,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }
     }
 
+    await this.agentTurns.reconcile();
     await super.owedDeliveryWork();
   }
 

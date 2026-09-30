@@ -465,6 +465,7 @@ export interface UntimedArms {
   readonly pendingDeletions?: boolean;
   readonly unsettledClaims?: boolean;
   readonly admittedDelegations?: boolean;
+  readonly agentTurns?: boolean;
   readonly chatLoop?: boolean;
 }
 
