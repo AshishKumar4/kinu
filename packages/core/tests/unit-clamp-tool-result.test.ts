@@ -1,3 +1,4 @@
+import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // Oversize tool outputs are clamped head+tail after offloading the full output to the VFS.
 // The cap covers the whole string the model receives, marker and producer prefix included.
 import { describe, test, expect } from 'bun:test';
@@ -17,7 +18,7 @@ import { TurnContextBudget } from '../src/context-budget';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { createTestRuntime, conversationsFor } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
-import type { VFS } from '../src/types/primitives';
+
 import { decodeJsonValue, parseJsonValue, type JsonValue } from '../src/utils/json';
 
 interface ShellToolInput {
@@ -80,7 +81,7 @@ describe('clampToolResult', () => {
 
     const path = markerPath(clamped);
     expect(path).toStartWith(`${TOOL_OUTPUT_DIR}/`);
-    const restored = await rt.storage.vfs.readFile(path, { encoding: 'utf8' });
+    const restored = await readText(rt.storage.vfs, path);
     expect(restored).toBe(original);
   });
 
@@ -126,7 +127,7 @@ describe('clampToolResult', () => {
     const clamped = await clampToolResult(original, { vfs: rt.storage.vfs, budget: new TurnContextBudget() });
     expect(clamped.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
     expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(clamped)).toBe(false);
-    expect(await rt.storage.vfs.readFile(markerPath(clamped), { encoding: 'utf8' })).toBe(original);
+    expect(await readText(rt.storage.vfs, markerPath(clamped))).toBe(original);
   });
 
   test('a standalone surrogate in the source is data, not something to trim away', async () => {
@@ -184,7 +185,7 @@ describe('clampSerializedToolResult', () => {
 
     const restored = v.parse(
       v.string(),
-      await rt.storage.vfs.readFile(markerPath(clampedText), { encoding: 'utf8' }),
+      await readText(rt.storage.vfs, markerPath(clampedText)),
     );
 
     expect(parseJsonValue(restored)).toEqual(value);
@@ -230,7 +231,7 @@ describe('tool result budget (behavior through the public tool surface)', () => 
     expect(clamped).toContain('FINAL-ERROR-LINE');
 
     const path = markerPath(clamped);
-    const restored = await rt.storage.vfs.readFile(path, { encoding: 'utf8' });
+    const restored = await readText(rt.storage.vfs, path);
     expect(restored).toBe(original);
     const grepped = await invoke({ command: `grep UNIQUE-MIDDLE-MARKER ${path}` });
     expect(grepped).toContain('UNIQUE-MIDDLE-MARKER');
@@ -268,7 +269,7 @@ describe('tool result budget (behavior through the public tool surface)', () => 
     expect(steered).toContain('[truncated;');
     expect(steered.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS);
 
-    const restored = v.parse(v.string(), await rt.storage.vfs.readFile(markerPath(steered), { encoding: 'utf8' }));
+    const restored = v.parse(v.string(), await readText(rt.storage.vfs, markerPath(steered)));
     expect(restored).toStartWith('[Kinu note:');
     expect(restored).toEndWith(stdout.slice(-50));
   });

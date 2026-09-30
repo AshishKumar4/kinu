@@ -1,3 +1,4 @@
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@kinu.run/test-utils';
 import { tool, jsonSchema } from 'ai';
@@ -552,7 +553,7 @@ describe('web builtin', () => {
     expect(savedPath).toContain(TOOL_OUTPUT_DIR);
 
     if (savedPath === undefined) throw new Error(`Expected a saved-output path in: ${out}`);
-    const saved = await rt.storage.vfs.readFile(savedPath, { encoding: 'utf8' });
+    const saved = await readText(rt.storage.vfs, savedPath);
     expect(String(saved).length).toBeGreaterThan(out.length);
     expect(String(saved)).toStartWith('# ');
   });
@@ -570,7 +571,7 @@ describe('web builtin', () => {
     const savedPath = /full result at (\S+)\]/.exec(out)?.[1];
 
     if (savedPath === undefined) throw new Error(`Expected a saved-output path in: ${out.slice(-300)}`);
-    const saved = String(await rt.storage.vfs.readFile(savedPath, { encoding: 'utf8' }));
+    const saved = String(await readText(rt.storage.vfs, savedPath));
     expect(saved).toStartWith('# ');
     expect(saved.length).toBeGreaterThan(out.length);
   });
@@ -784,11 +785,11 @@ describe('web on a shared slate', () => {
   async function tree(vfs: ReturnType<typeof createTestRuntime>['rt']['storage']['vfs'], dir = '.'): Promise<string[]> {
     const paths: string[] = [];
 
-    for (const name of await vfs.readdir(dir)) {
-      const path = dir === '.' ? name : `${dir}/${name}`;
+    for (const entry of await vfs.readdir(dir)) {
+      const path = dir === '.' ? entry.name : `${dir}/${entry.name}`;
       paths.push(path);
 
-      if ((await vfs.stat(path))?.isDir === true) paths.push(...await tree(vfs, path));
+      if ((await vfs.stat(path))?.type === 'directory') paths.push(...await tree(vfs, path));
     }
 
     return paths;

@@ -1,3 +1,4 @@
+import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Replaces parts the resolved model cannot accept with content-addressed VFS copies plus a text reference.
  * Applied to the whole history each turn, never mutating it; byte-stable (prompt-cache prefix); message count
@@ -5,7 +6,7 @@
  */
 
 import type { AssistantModelMessage, FilePart, ImagePart, ModelMessage, TextPart, UserModelMessage } from 'ai';
-import type { VFS } from '../types/primitives';
+
 import type { ModelInputModality } from '../providers/types';
 import { SPILL_DIRS, type TurnContextBudget } from '../context-budget';
 import { classify, diagnostics, renderThrownChain, toKinuError } from '../obs/index';
@@ -288,7 +289,7 @@ async function storeContentAddressed(
 
 /** Absent is the ordinary first spill; mismatched bytes are rewritten. */
 async function holdsBytes(vfs: VFS, path: string, bytes: Uint8Array): Promise<boolean> {
-  if (!(await vfs.exists(path))) return false;
+  if (!(await exists(vfs, path))) return false;
   const stored = await vfs.readFile(path);
   // Narrowed by class, as prompting/agents-md.ts does for the same VFS return.
   const existing = stored instanceof Uint8Array ? stored : new TextEncoder().encode(stored);

@@ -1,3 +1,4 @@
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * One promoted-loop contract for every full actor kind (open-41): the pinned scaffold version is selected and
  * recorded, with the live alias poisoned so an alias read is observable. The model is not driven here.
@@ -24,7 +25,7 @@ async function installVersion(
   const source = markerSource(marker);
   const files = rt.agentStateVfs ?? rt.storage.vfs;
   await files.mkdir('scaffold', { recursive: true });
-  await files.writeFile(`${rt.identity.scaffold.path}.v${String(version)}`, source);
+  await writeText(files, `${rt.identity.scaffold.path}.v${String(version)}`, source);
   // UPSERT: acquiring the actor already seeded a v1 row.
   fixture.db.query(
     `INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
@@ -173,8 +174,7 @@ describe('the promoted-loop contract holds for every full actor kind', () => {
       expect(row?.parent_version).toBe(2);
       const rt = child.runtime;
 
-      const raw = await (rt.agentStateVfs ?? rt.storage.vfs)
-        .readFile(`${rt.identity.scaffold.path}.v1`, { encoding: 'utf8' });
+      const raw = await readText((rt.agentStateVfs ?? rt.storage.vfs), `${rt.identity.scaffold.path}.v1`);
 
       // `encoding: 'utf8'` was requested, so a non-string is the plane breaking its contract.
       const source = v.parse(v.string(), raw);

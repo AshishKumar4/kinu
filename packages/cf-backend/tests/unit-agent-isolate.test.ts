@@ -1,3 +1,4 @@
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { afterEach, expect, test } from 'bun:test';
 import { accountCredentialKey, asFetchFunction, requestUrl } from '@kinu.run/core';
 import {
@@ -208,16 +209,40 @@ test("a hired agent's working context is read and edited where its conversation 
 
   await wakeForDelegatedTask(workspace, middleId, 'First task OTTERX.');
   await driveUntil(workspace, 'the first turn never ended', () => ended() > 0);
-  const working = String(await own.readFile('/context/working.jsonl'));
+  const working = await readText(own, '/context/working.jsonl');
 
   expect(working).toContain('First task OTTERX.');
   const storageKey = middle.actor.record.storageKey;
   const main = (await hostedMainActor(workspace)).actor.runtime.storage.vfs;
 
-  expect(String(await main.readFile(`/context/agents/${storageKey}/working.jsonl`))).toContain('First task OTTERX.');
-  await own.writeFile('/context/working.jsonl', `${working}${JSON.stringify({ new: true, message: { role: 'user', content: 'INJECTED-NOTE' } })}\n`);
+  expect(await readText(main, `/context/agents/${storageKey}/working.jsonl`)).toContain('First task OTTERX.');
+  await writeText(own, '/context/working.jsonl', `${working}${JSON.stringify({ new: true, message: { role: 'user', content: 'INJECTED-NOTE' } })}\n`);
   await wakeForDelegatedTask(workspace, middleId, 'Second task.');
   await driveUntil(workspace, 'the second turn never ended', () => ended() > 1);
 
   expect(gateway.runs.some((run) => openingOf(run).includes('Second task.') && JSON.stringify(requestOf(run).messages).includes('INJECTED-NOTE'))).toBe(true);
+});
+
+test("a child's client snapshot counts its own chat inputs and answers", async () => {
+  const gateway = stubAiBinding((run) => openingOf(run).includes('Counter task.') || toolOutputs(run) !== '[]'
+    ? chatCompletion(run, 'Done.')
+    : toolCallCompletion(run, { tool: 'agents', args: { action: 'hire', role: 'task', lifetime: 'durable', mission: 'Counter task.' } }, 'call_counter'));
+
+  const workspace = gatewayWorkspace(gateway);
+
+  await catalogTurn(workspace.agent, 'Hire a counter.');
+  const child = workspace.db.query<{ actorId: string; name: string }, []>("SELECT actor_id AS actorId, name FROM workspace_actors WHERE origin = 'agent'").get();
+
+  if (child === null) throw new Error('the child was not registered');
+  const actorId = child.actorId;
+
+  await driveUntil(workspace, 'the child never completed its answer', () => agentSql(actorId)<{ n: number }>`
+    SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${actorId} AND type = 'run_end'`[0]?.n === 1);
+
+  expect((await workspace.agent.getActorSnapshot(child.name)).messageCount).toBe(2);
+  await wakeForDelegatedTask(workspace, actorId, 'Second task.');
+  await driveUntil(workspace, 'the child never completed its second answer', () => agentSql(actorId)<{ n: number }>`
+    SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${actorId} AND type = 'run_end'`[0]?.n === 2);
+
+  expect((await workspace.agent.getActorSnapshot(child.name)).messageCount).toBe(4);
 });

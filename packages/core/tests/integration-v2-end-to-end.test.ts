@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** v2 end-to-end: inline executor, branching heads, scaffold shadow rollout, durable event log, approval gate. */
 
 import { describe, test, expect } from 'bun:test';
@@ -200,8 +201,8 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     const V0 = 'async function* run(rt, task) { yield { type: "chunk", data: "v0" }; }';
     const V1 = 'async function* run(rt, task) { yield { type: "chunk", data: "v1-retry" }; }';
     await rt.identity.scaffold.write(V0);
-    await rt.storage.vfs.writeFile(`${rt.identity.scaffold.path}.v0`, V0);
-    await rt.storage.vfs.writeFile(`${rt.identity.scaffold.path}.v1`, V1);
+    await writeText(rt.storage.vfs, `${rt.identity.scaffold.path}.v0`, V0);
+    await writeText(rt.storage.vfs, `${rt.identity.scaffold.path}.v1`, V1);
 
     const judge = (winner: 'pending' | 'current') => ({
       winner, rationale: 'mock',

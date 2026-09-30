@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Heads are forks of their parent workspace: they read the shared tree directly and write only their own subtree.
  * Defends: a head getting an empty filesystem on its own facet storage and reporting "found nothing".
@@ -65,7 +66,7 @@ async function hostedHead(files: Record<string, string> = {}, id = 'head-1', use
   workspace.agent.harnessDeclareEnv({ CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY, Sandbox: sandboxes });
 
   for (const [path, content] of Object.entries(files)) {
-    await workspace.agent.writeWorkspaceFile({ kind: 'file', path, data: content });
+    await workspace.agent.writeWorkspaceFile({ kind: 'file', path, data: new TextEncoder().encode(content) });
   }
 
   const head = await hostedExplorationHarness(workspace, id);
@@ -171,10 +172,10 @@ describe('a head forks its parent workspace', () => {
     const plane = workspacePlane(rt);
 
     expect(await plane.tools.readFile.execute('/home/main/repo/parser.ts')).toBe('one\ntwo\n');
-    await rt.storage.vfs.writeFile(`${home}/notes.md`, 'visible');
+    await writeText(rt.storage.vfs, `${home}/notes.md`, 'visible');
     expect(await workspace.agent.readWorkspaceFile(`${home}/notes.md`))
       .toEqual(new TextEncoder().encode('visible'));
-    await expect(rt.storage.vfs.writeFile('/home/main/repo/parser.ts', 'one\ntwo\nthree\n'))
+    await expect(writeText(rt.storage.vfs, '/home/main/repo/parser.ts', 'one\ntwo\nthree\n'))
       .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
     expect(await workspace.agent.readWorkspaceFile('/home/main/repo/parser.ts'))
       .toEqual(new TextEncoder().encode('one\ntwo\n'));

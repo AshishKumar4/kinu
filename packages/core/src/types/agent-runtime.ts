@@ -1,16 +1,8 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** The one struct the agent core receives, constructed per backend. See docs/ARCHITECTURE.md
  *  "Backends and the AgentRuntime contract". */
 
-import type {
-  Storage,
-  Memory,
-  Executor,
-  LLM,
-  Schedule,
-  Identity,
-  Shell,
-  VFS,
-} from './primitives';
+import type { Storage, Memory, Executor, LLM, Schedule, Identity, Shell } from './primitives';
 import type { CraftStore as SqlCraftStore } from '@kinu.run/agent-utils';
 import type { ExecutionRouter } from '../execution/types';
 import type { DeviceTransport } from '../execution/device-tunnel-executor';

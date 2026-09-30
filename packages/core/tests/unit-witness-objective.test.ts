@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, test } from 'bun:test';
 
 import { measureChild } from '../src/strategy/swarm-scoring';
@@ -8,7 +9,7 @@ import type {
 } from '../src/strategy/objective';
 import type { ResolvedVerifier } from '../src/strategy/verifier-registry';
 import type { SwarmCandidate } from '../src/strategy/swarm';
-import type { VFS } from '../src/types/primitives';
+
 
 function context(): MeasurementContext {
   const files = new Map<string, Uint8Array>();
@@ -28,11 +29,10 @@ function context(): MeasurementContext {
     stat: async (path) => {
       const bytes = files.get(path);
 
-      return bytes === undefined ? null : { size: bytes.byteLength, mtimeMs: 0, isDir: false };
+      return bytes === undefined ? null : { size: bytes.byteLength, mtimeMs: 0, type: 'file' };
     },
     unlink: async (path) => { files.delete(path); },
     mkdir: async () => undefined,
-    exists: async (path) => files.has(path),
   };
 
   return {

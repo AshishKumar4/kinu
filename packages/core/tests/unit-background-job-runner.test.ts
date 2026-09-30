@@ -1,3 +1,4 @@
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // BackgroundJobRunner lifecycle over a fake fiber and fake BackendHost, no DO.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -1209,7 +1210,7 @@ test('a recovered Plan job cannot mutate project files through a Build-shaped ca
   const { rt } = createTestRuntime();
   const path = '/home/main/resumed.txt';
   await rt.storage.vfs.mkdir('/home/main', { recursive: true });
-  await rt.storage.vfs.writeFile(path, 'original');
+  await writeText(rt.storage.vfs, path, 'original');
   const file = buildBuiltinTools({ rt, conversations: conversationsFor(rt) }).file;
 
   if (file === undefined) throw new Error('No file tool');
@@ -1220,13 +1221,13 @@ test('a recovered Plan job cannot mutate project files through a Build-shaped ca
   const recovered = setup({ db: first.db, resume: async () => write({ action: 'write', path, content: 'changed' }) });
   await recovered.runner.recover({ jobId: 'plan-write', phase: 'running' });
   await recovered.settled();
-  expect(await rt.storage.vfs.readFile(path, { encoding: 'utf8' })).toBe('original');
+  expect(await readText(rt.storage.vfs, path)).toBe('original');
   expect(recovered.store.get('plan-write')).toMatchObject({ status: 'failed' });
   recovered.store.create({ id: 'build-write', kind: 'shell', workMode: 'build', input: '{}', now: Date.now() });
   await inWorkMode('plan', async () => {
     await recovered.runner.recover({ jobId: 'build-write', phase: 'running' });
     await recovered.settled();
   });
-  expect(await rt.storage.vfs.readFile(path, { encoding: 'utf8' })).toBe('changed');
+  expect(await readText(rt.storage.vfs, path)).toBe('changed');
   expect(recovered.store.get('build-write')).toMatchObject({ status: 'completed' });
 });

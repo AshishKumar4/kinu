@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Owner 2026-09-25 (SLATE-INLINE-0925): when the agent changes a slate, its new preview appears at the bottom of the
  * chat. The product adds it, not the model: an answer carries the slates its turn wrote, once each, and the chat
@@ -48,7 +49,7 @@ test('a slate written outside any turn is not claimed by the next answer', async
   const files = workspaceFiles(agent);
 
   await files.mkdir('/slates/board', { recursive: true });
-  await files.writeFile('/slates/board/client.tsx', 'written by the owner, between turns');
+  await writeText(files, '/slates/board/client.tsx', 'written by the owner, between turns');
   agent.harnessDrivingUserMessage('Say hi.', { kinuMode: 'build' });
   const turns = chatSessionTurns(agent);
 
@@ -111,7 +112,7 @@ test("a write under an answered turn is previewed on the actor's next answer", a
     actor: workspaceMainActor(harness.db), profile: mergePolicyProfile(), inputs: null, runId: 'run-job', turnId: answered.turn_id,
   });
 
-  await runOperationProfile(job, () => files.writeFile('/slates/notes/client.tsx', 'the job finished'));
+  await runOperationProfile(job, () => writeText(files, '/slates/notes/client.tsx', 'the job finished'));
 
   agent.harnessDrivingUserMessage('Anything new?', { kinuMode: 'build' });
   turns = chatSessionTurns(agent);
@@ -213,7 +214,7 @@ test("a write under an earlier turn's operation leaves the running turn's previe
     actor: workspaceMainActor(harness.db), profile: mergePolicyProfile(), inputs: null, runId: 'run-earlier', turnId: 'turn-earlier',
   });
 
-  await runOperationProfile(earlier, () => files.writeFile('/slates/notes/client.tsx', 'from the job'));
+  await runOperationProfile(earlier, () => writeText(files, '/slates/notes/client.tsx', 'from the job'));
   await turns.settle({ messageId: 'a-board', text: 'Added the column.' });
 
   const answer = (await storedChat(harness)).filter((message) => message.role === 'assistant').at(-1);

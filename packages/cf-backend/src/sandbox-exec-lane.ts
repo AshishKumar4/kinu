@@ -4,7 +4,7 @@
  * and an abort kills the process, not just the wait. See `SandboxHandle.exec`.
  */
 
-import { decodeJsonValue, SandboxPending, WORKSPACE_BACKUP_DIR, type SandboxHandle } from '@kinu.run/core';
+import { jsonResultOrVoid, SandboxPending, WORKSPACE_BACKUP_DIR, type SandboxHandle } from '@kinu.run/core';
 import { classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
 import { devboxFailure, type DevboxErrorCode } from '@kinu.run/devbox';
 import { Effect } from 'effect';
@@ -45,12 +45,6 @@ function fromDevbox(thrown: { readonly cause: unknown }): KinuError {
 
 function callDevbox<A>(run: () => PromiseLike<A>): Effect.Effect<A, KinuError> {
   return Effect.tryPromise({ try: run, catch: (cause) => fromDevbox({ cause }) });
-}
-
-async function jsonResultOrVoid<Result>(result: Promise<Result>) {
-  const value = await result;
-
-  return value === undefined ? undefined : decodeJsonValue({ value });
 }
 
 /**

@@ -1,3 +1,4 @@
+import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 /**
  * Scaffold cold-start bootstrap and activation refresh. Fresh workspaces write
@@ -16,7 +17,7 @@ import { KinuError } from '../obs/error';
 import { settle } from '../obs/effect';
 import { initScaffoldTables } from './schemas';
 import { getCurrentScaffoldVersion, readScaffoldVersion, readVersionedScaffoldSource } from './shadow';
-import { readScaffoldFileText } from './surface';
+
 import { nowMs } from '../utils/date';
 
 export const INITIAL_SCAFFOLD_SOURCE = `\
@@ -56,10 +57,10 @@ export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
   const versionedPath = (version: number) => `${path}.v${version}`;
 
   let current = getCurrentScaffoldVersion(sql, rt.actor);
-  const liveExists = await vfs.exists(path);
+  const liveExists = await exists(vfs, path);
 
   if (current === null && !liveExists) {
-    await vfs.writeFile(versionedPath(0), INITIAL_SCAFFOLD_SOURCE);
+    await writeText(vfs, versionedPath(0), INITIAL_SCAFFOLD_SOURCE);
     insertV0Row(rt);
     await rt.identity.scaffold.write(INITIAL_SCAFFOLD_SOURCE);
 
@@ -69,9 +70,9 @@ export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
   // Preserved workspace: seed the pointer's version file from the live source once.
   const seededVersion = current ?? 0;
 
-  if (!(await vfs.exists(versionedPath(seededVersion)))) {
+  if (!(await exists(vfs, versionedPath(seededVersion)))) {
     if (!liveExists) return;
-    await vfs.writeFile(versionedPath(seededVersion), await readScaffoldFileText(vfs, path));
+    await writeText(vfs, versionedPath(seededVersion), await readText(vfs, path));
   }
 
   if (current === null) {
@@ -81,10 +82,10 @@ export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
 
   const activeVersion = current;
 
-  if (activeVersion === null || !(await vfs.exists(versionedPath(activeVersion)))) return;
-  const canonical = await readScaffoldFileText(vfs, versionedPath(activeVersion));
+  if (activeVersion === null || !(await exists(vfs, versionedPath(activeVersion)))) return;
+  const canonical = await readText(vfs, versionedPath(activeVersion));
 
-  if (!liveExists || (await readScaffoldFileText(vfs, path)) !== canonical) {
+  if (!liveExists || (await readText(vfs, path)) !== canonical) {
     await rt.identity.scaffold.write(canonical);
   }
 }
@@ -121,7 +122,7 @@ export function seedActorLoop(
     const inherited = yield* inheritedSource(parent, origin);
     const version = 1;
     const vfs = child.agentStateVfs ?? child.storage.vfs;
-    yield* Effect.promise(() => vfs.writeFile(`${child.identity.scaffold.path}.v${version}`, inherited.source));
+    yield* Effect.promise(() => writeText(vfs, `${child.identity.scaffold.path}.v${version}`, inherited.source));
     child.actor.assertCurrent();
     void child.storage.sql`
       INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale, status, parent_version)

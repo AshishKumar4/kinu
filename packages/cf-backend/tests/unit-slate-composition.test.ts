@@ -1,3 +1,4 @@
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
@@ -116,7 +117,7 @@ test('an MCP binding follows connection identity, binding scope and the owner al
     const vfs = workspaceFiles(actor.agent);
     await vfs.mkdir('/slates/issues', { recursive: true });
 
-    const bind = (server: string, tools?: string[]) => vfs.writeFile('/slates/issues/package.json', JSON.stringify({
+    const bind = (server: string, tools?: string[]) => writeText(vfs, '/slates/issues/package.json', JSON.stringify({
       main: 'server.ts', slate: { title: 'Issues', bindings: { GITHUB: { kind: 'mcp', server, tools } } },
     }));
 
@@ -177,11 +178,11 @@ test('a lazy boot after activation failure still broadcasts Slate edits once', a
   const vfs = workspaceFiles(actor.agent);
   await vfs.mkdir('/slates/recovered', { recursive: true });
   broadcasts.length = 0;
-  await vfs.writeFile('/slates/recovered/server.ts', 'export default { fetch() { return new Response("ready"); } };');
+  await writeText(vfs, '/slates/recovered/server.ts', 'export default { fetch() { return new Response("ready"); } };');
   expect(broadcasts.map((payload) => JSON.parse(payload))).toEqual([{ type: 'slates_changed', ids: ['recovered'] }]);
   await actor.agent.listSlates();
   broadcasts.length = 0;
-  await vfs.writeFile('/slates/recovered/server.ts', 'export default { fetch() { return new Response("updated"); } };');
+  await writeText(vfs, '/slates/recovered/server.ts', 'export default { fetch() { return new Response("updated"); } };');
   expect(broadcasts.map((payload) => JSON.parse(payload))).toEqual([{ type: 'slates_changed', ids: ['recovered'] }]);
 });
 
@@ -189,10 +190,10 @@ test('the initial snapshot discovers authored Slate projects', async () => {
   const actor = orchestratorHarness();
   const vfs = workspaceFiles(actor.agent);
   await vfs.mkdir('/slates/overview', { recursive: true });
-  await vfs.writeFile('/slates/overview/package.json', JSON.stringify({
+  await writeText(vfs, '/slates/overview/package.json', JSON.stringify({
     main: 'server.ts', slate: { title: 'Overview', bindings: { JOBS: { kind: 'rpc', methods: ['listBackgroundJobs'] } } },
   }));
-  await vfs.writeFile('/slates/overview/server.ts', 'export default { fetch() { return new Response("overview"); } };');
+  await writeText(vfs, '/slates/overview/server.ts', 'export default { fetch() { return new Response("overview"); } };');
   expect(await actor.agent.getWorkspaceSnapshot()).toHaveProperty('slates', [
     { id: 'overview', title: 'Overview', bindings: ['JOBS'] },
   ]);
@@ -203,11 +204,11 @@ test('slate history answers one bounded page and its cursor continues where it s
   const files = workspaceFiles(actor.agent);
   const root = '/slates/notes';
   await files.mkdir(root, { recursive: true });
-  await files.writeFile(root + '/package.json', JSON.stringify({ main: 'server.ts' }));
+  await writeText(files, root + '/package.json', JSON.stringify({ main: 'server.ts' }));
   const committed: string[] = [];
 
   for (let n = 0; n < 20; n += 1) {
-    await files.writeFile(root + '/server.ts', `export default { fetch() { return new Response("${String(n)}"); } };`);
+    await writeText(files, root + '/server.ts', `export default { fetch() { return new Response("${String(n)}"); } };`);
     const result = await actor.agent.slate({ op: 'commit', id: 'notes' });
 
     if (!result.ok) throw new Error(result.reason + ': ' + result.error);
@@ -244,8 +245,8 @@ test('the agent slate operation commits, forks and restores its authored source'
   const files = workspaceFiles(actor.agent);
   const root = '/slates/notes';
   await files.mkdir(root, { recursive: true });
-  await files.writeFile(root + '/package.json', JSON.stringify({ main: 'server.ts' }));
-  await files.writeFile(root + '/server.ts', 'export default { fetch() { return new Response("first"); } };');
+  await writeText(files, root + '/package.json', JSON.stringify({ main: 'server.ts' }));
+  await writeText(files, root + '/server.ts', 'export default { fetch() { return new Response("first"); } };');
 
   const record = (result: SlateCallResult) => {
     if (!result.ok) throw new Error(result.reason + ': ' + result.error);
@@ -254,7 +255,7 @@ test('the agent slate operation commits, forks and restores its authored source'
   };
 
   const first = record(await actor.agent.slate({ op: 'commit', id: 'notes' }));
-  await files.writeFile(root + '/server.ts', 'export default { fetch() { return new Response("second"); } };');
+  await writeText(files, root + '/server.ts', 'export default { fetch() { return new Response("second"); } };');
   const second = record(await actor.agent.slate({ op: 'commit', id: 'notes' }));
   const history = await actor.agent.slate({ op: 'history', id: 'notes' });
 
@@ -262,9 +263,9 @@ test('the agent slate operation commits, forks and restores its authored source'
   expect(v.parse(v.object({ versions: v.array(v.object({ id: v.string() })) }), history.value).versions)
     .toEqual([{ id: first.id }, { id: second.id }]);
   record(await actor.agent.slate({ op: 'restore', id: 'notes', version: first.id }));
-  expect(await files.readFile(root + '/server.ts', { encoding: 'utf8' })).toContain('"first"');
+  expect(await readText(files, root + '/server.ts')).toContain('"first"');
   const fork = record(await actor.agent.slate({ op: 'fork', version: second.id }));
-  expect(await files.readFile('/slates/' + fork.id + '/server.ts', { encoding: 'utf8' })).toContain('"second"');
+  expect(await readText(files, '/slates/' + fork.id + '/server.ts')).toContain('"second"');
   expect(await actor.agent.slate({ op: 'restore', id: fork.id, version: first.id })).toMatchObject({ ok: false, reason: 'missing' });
   expect(await actor.agent.slate({ op: 'commit', id: '../outside' })).toMatchObject({ ok: false, reason: 'bad_input' });
 });
@@ -282,18 +283,18 @@ test('a hired agent makes a slate where slates live, restores it with the main a
   const first = 'import { SlateObject } from "kinu:slate";\nexport class Slate extends SlateObject { async count() { return 3; } }\n';
 
   await own.mkdir(dir, { recursive: true });
-  await own.writeFile(`${dir}/package.json`, JSON.stringify({ main: 'server.ts', slate: { title: 'Widgets', runtime: 'worker' } }));
-  await own.writeFile(`${dir}/server.ts`, first);
+  await writeText(own, `${dir}/package.json`, JSON.stringify({ main: 'server.ts', slate: { title: 'Widgets', runtime: 'worker' } }));
+  await writeText(own, `${dir}/server.ts`, first);
   const asChild = await childCaller(parent.db, subordinateAgentName(child.actor.handle.storageKey), 'builder');
   const committed = await parent.agent.slateAs(asChild, { op: 'commit', id: 'widgets' });
 
   if (!committed.ok) throw new Error(committed.reason + ': ' + committed.error);
   // The main agent changes the hire's slate as its own, and the hire puts its version back.
-  await workspaceFiles(parent.agent).writeFile(`${dir}/server.ts`, first.replace('3', '4'));
+  await writeText(workspaceFiles(parent.agent), `${dir}/server.ts`, first.replace('3', '4'));
   const version = v.parse(v.object({ id: v.string() }), committed.value).id;
   expect(await parent.agent.slateAs(asChild, { op: 'restore', id: 'widgets', version })).toMatchObject({ ok: true });
 
-  expect(await workspaceFiles(parent.agent).readFile(`${dir}/server.ts`, { encoding: 'utf8' })).toBe(first);
+  expect(await readText(workspaceFiles(parent.agent), `${dir}/server.ts`)).toBe(first);
   expect(await parent.agent.slateAs(asChild, { op: 'list' })).toMatchObject({
     ok: true, value: { slates: [expect.objectContaining({ id: 'widgets', title: 'Widgets' })], problems: [] },
   });
@@ -307,14 +308,14 @@ test('a hosted actor cannot restore source that its own filesystem authority can
   const dir = slateDirectory(new SlateId('root-app'));
   const path = `${dir}/server.ts`;
   await files.mkdir(dir, { recursive: true });
-  await files.writeFile(`${dir}/package.json`, JSON.stringify({ main: 'server.ts' }));
-  await files.writeFile(path, 'export default { fetch() { return new Response("first"); } };');
+  await writeText(files, `${dir}/package.json`, JSON.stringify({ main: 'server.ts' }));
+  await writeText(files, path, 'export default { fetch() { return new Response("first"); } };');
   const committed = await parent.agent.slate({ op: 'commit', id: 'root-app' });
 
   if (!committed.ok) throw new Error(committed.reason + ': ' + committed.error);
   const version = v.parse(v.object({ id: v.string() }), committed.value);
   const current = 'export default { fetch() { return new Response("second"); } };';
-  await files.writeFile(path, current);
+  await writeText(files, path, current);
 
   // A file in the shared slates the root kept to itself: a group the child is not in. Permission bits are VFS state a
   // host stamps as uid 0 over the stored rows; the next activation reads them from storage.
@@ -328,11 +329,11 @@ test('a hosted actor cannot restore source that its own filesystem authority can
   });
 
   // Same uid as the binding below, so an EACCES here and a denial there are one fact.
-  await expect(child.actor.runtime.storage.vfs.writeFile(path, 'blocked'))
+  await expect(writeText(child.actor.runtime.storage.vfs, path, 'blocked'))
     .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
   const asChild = await childCaller(parent.db, subordinateAgentName(child.actor.handle.storageKey), 'slate-author');
   const restored = await reopened.agent.slateAs(asChild, { op: 'restore', id: 'root-app', version: version.id });
-  expect(await workspaceFiles(reopened.agent).readFile(path, { encoding: 'utf8' })).toBe(current);
+  expect(await readText(workspaceFiles(reopened.agent), path)).toBe(current);
   expect(restored).toMatchObject({ ok: false, reason: 'denied' });
 });
 
@@ -340,10 +341,10 @@ test('a binding held by a hosted actor reaches its own files and role, never the
   const parent = orchestratorHarness();
   const rootFiles = workspaceFiles(parent.agent);
   await rootFiles.mkdir('/slates/reader', { recursive: true });
-  await rootFiles.writeFile('/slates/reader/package.json', JSON.stringify({
+  await writeText(rootFiles, '/slates/reader/package.json', JSON.stringify({
     main: 'server.ts', slate: { bindings: { FILES: { kind: 'namespace', namespace: 'workspace' } } },
   }));
-  await rootFiles.writeFile('/home/main/private.md', 'root only');
+  await writeText(rootFiles, '/home/main/private.md', 'root only');
 
   const child = await hostedSubordinateHarness(parent, {
     name: 'reader-1', displayName: 'Reader', nameOrigin: 'user',
@@ -358,16 +359,16 @@ test('a binding held by a hosted actor reaches its own files and role, never the
     parent.agent.slateBindingCallAs(caller, 'reader', 'FILES', { member, args, invocation: null });
 
   expect(await call(asChild, 'writeFile', [`${childHome}/note.md`, 'mine'])).toMatchObject({ ok: true });
-  expect(await rootFiles.readFile(`${childHome}/note.md`, { encoding: 'utf8' })).toBe('mine');
+  expect(await readText(rootFiles, `${childHome}/note.md`)).toBe('mine');
   // Readable (homes are 0o755), but a write is the child's own EACCES.
   expect(await call(asChild, 'readFile', ['/home/main/private.md'])).toEqual({ ok: true, value: 'root only' });
   expect(await call(asChild, 'writeFile', ['/home/main/private.md', 'stolen'])).toMatchObject({ ok: false, reason: 'denied' });
-  expect(await rootFiles.readFile('/home/main/private.md', { encoding: 'utf8' })).toBe('root only');
+  expect(await readText(rootFiles, '/home/main/private.md')).toBe('root only');
   // Under the root's own read-before-overwrite guard, which a blind write trips.
   expect(await call(ROOT_SLATE_CALLER, 'writeFile', ['/home/main/private.md', 'blind'])).toMatchObject({ ok: false, reason: 'bad_input' });
   expect(await call(ROOT_SLATE_CALLER, 'readFile', ['/home/main/private.md'])).toEqual({ ok: true, value: 'root only' });
   expect(await call(ROOT_SLATE_CALLER, 'writeFile', ['/home/main/private.md', 'root wrote'])).toMatchObject({ ok: true });
-  expect(await rootFiles.readFile('/home/main/private.md', { encoding: 'utf8' })).toBe('root wrote');
+  expect(await readText(rootFiles, '/home/main/private.md')).toBe('root wrote');
 
   const scribe = {
     roles: { scribe: { description: 'Writes prose only.', instructions: 'Write.', tier: 'default', preset: 'ideate', allowedTools: ['memory'] } },
@@ -391,10 +392,10 @@ test('native tool bindings use the caller file plane and lose reach immediately 
   const parent = orchestratorHarness();
   const files = workspaceFiles(parent.agent);
   await files.mkdir('/slates/native-reader', { recursive: true });
-  await files.writeFile('/slates/native-reader/package.json', JSON.stringify({
+  await writeText(files, '/slates/native-reader/package.json', JSON.stringify({
     main: 'server.ts', slate: { bindings: { FILE: { kind: 'tool', name: 'file' }, NOTES: { kind: 'memory', members: ['remember', 'recall'] } } },
   }));
-  await files.writeFile('/home/main/slate-note.txt', 'root note');
+  await writeText(files, '/home/main/slate-note.txt', 'root note');
 
   const child = await hostedSubordinateHarness(parent, {
     name: 'native-reader', displayName: 'Native reader', nameOrigin: 'user', roleId: 'task', mission: 'Read',
@@ -426,7 +427,7 @@ test('a slate cannot bind the agent, delegate through a tool alias, or widen a p
   const files = workspaceFiles(actor.agent);
   await files.mkdir('/slates/limited', { recursive: true });
 
-  const bind = (binding: JsonValue) => files.writeFile('/slates/limited/package.json', JSON.stringify({
+  const bind = (binding: JsonValue) => writeText(files, '/slates/limited/package.json', JSON.stringify({
     main: 'server.ts', slate: { bindings: { CAP: binding } },
   }));
 
@@ -454,7 +455,7 @@ test('a tool binding keeps native Plan checks and the same approval ladder as co
   const actor = orchestratorHarness();
   const files = workspaceFiles(actor.agent);
   await files.mkdir('/slates/tool-gate', { recursive: true });
-  await files.writeFile('/slates/tool-gate/package.json', JSON.stringify({
+  await writeText(files, '/slates/tool-gate/package.json', JSON.stringify({
     main: 'server.ts', slate: { bindings: { RUN: { kind: 'tool', name: 'shell' }, FILE: { kind: 'tool', name: 'file' } } },
   }));
   const marker = '/home/main/slate-tool-approved';
@@ -488,7 +489,7 @@ test('workspace read models are the root\'s own reads; a hosted actor holds none
   const parent = orchestratorHarness();
   const rootFiles = workspaceFiles(parent.agent);
   await rootFiles.mkdir('/slates/status', { recursive: true });
-  await rootFiles.writeFile('/slates/status/package.json', JSON.stringify({
+  await writeText(rootFiles, '/slates/status/package.json', JSON.stringify({
     main: 'server.ts', slate: { bindings: { DATA: { kind: 'rpc', methods: ['getExecutors'] } } },
   }));
 
@@ -505,8 +506,8 @@ test('source capture does not retain a previous caller supplementary group', asy
   const parent = orchestratorHarness();
   const files = workspaceFiles(parent.agent);
   await files.mkdir('/slates/group-source', { recursive: true });
-  await files.writeFile('/slates/group-source/package.json', JSON.stringify({ main: 'server.ts' }));
-  await files.writeFile('/slates/group-source/server.ts', 'export default { fetch() { return new Response("group source"); } };');
+  await writeText(files, '/slates/group-source/package.json', JSON.stringify({ main: 'server.ts' }));
+  await writeText(files, '/slates/group-source/server.ts', 'export default { fetch() { return new Response("group source"); } };');
 
   // Permission bits are VFS state a host stamps as uid 0 over the stored rows, never agent-chosen;
   // the next activation reads them from storage.
@@ -525,7 +526,7 @@ test('a command the approval ladder stops answers every surface with its class, 
   const actor = orchestratorHarness();
   const files = workspaceFiles(actor.agent);
   await files.mkdir('/slates/shell', { recursive: true });
-  await files.writeFile('/slates/shell/package.json', JSON.stringify({
+  await writeText(files, '/slates/shell/package.json', JSON.stringify({
     main: 'server.ts', slate: { bindings: { FILES: { kind: 'namespace', namespace: 'workspace', members: ['exec'] } } },
   }));
   const marker = '/home/main/never-written.txt';
@@ -549,7 +550,7 @@ test('a command the approval ladder stops answers every surface with its class, 
 
   await actor.agent.setShellApprovalMode('allow_all');
   const incident = JSON.stringify({ reason: 'denied', error: 'historical incident' });
-  await files.writeFile('/home/main/incident.json', incident);
+  await writeText(files, '/home/main/incident.json', incident);
   expect(await binding('cat /home/main/incident.json')).toEqual({ ok: true, value: incident });
   expect(await actor.agent.executeInExecutor('workspace', 'cat /home/main/incident.json'))
     .toEqual({ stdout: incident, stderr: '', exitCode: 0 });
@@ -557,16 +558,16 @@ test('a command the approval ladder stops answers every surface with its class, 
     .toMatchObject({ exitCode: 1, refusal: { reason: 'io', error: expect.stringContaining('detail') } });
   const failed = await binding('printf ran > ' + marker + '; exit 1');
   expect(failed).toMatchObject({ ok: false, reason: 'io' });
-  expect(await files.readFile(marker, { encoding: 'utf8' })).toBe('ran');
+  expect(await readText(files, marker)).toBe('ran');
 });
 
 test('the reserved __storage binding answers the slate\'s own durable KV, per slate and within bounds', async () => {
   const actor = orchestratorHarness();
   const files = workspaceFiles(actor.agent);
   await files.mkdir('/slates/self-store', { recursive: true });
-  await files.writeFile('/slates/self-store/package.json', JSON.stringify({ main: 'server.ts' }));
+  await writeText(files, '/slates/self-store/package.json', JSON.stringify({ main: 'server.ts' }));
   await files.mkdir('/slates/peer-store', { recursive: true });
-  await files.writeFile('/slates/peer-store/package.json', JSON.stringify({ main: 'server.ts' }));
+  await writeText(files, '/slates/peer-store/package.json', JSON.stringify({ main: 'server.ts' }));
 
   const storage = (id: string, member: string, args: JsonValue[] = []) =>
     actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, id, '__storage', { member, args, invocation: null });
@@ -595,7 +596,7 @@ test('a slate agent binding delivers one inbox signal naming the slate', async (
   const actor = orchestratorHarness();
   const files = workspaceFiles(actor.agent);
   await files.mkdir('/slates/pager', { recursive: true });
-  await files.writeFile('/slates/pager/package.json', JSON.stringify({
+  await writeText(files, '/slates/pager/package.json', JSON.stringify({
     main: 'server.ts', slate: { bindings: { AGENT: { kind: 'agent' } } },
   }));
 
@@ -635,7 +636,7 @@ test('a slate ai binding runs one model call under the caller authority, as a sl
   actor.agent.harnessInstallCatalog({ tiers: { default: { model: GATEWAY_MODEL } }, availableModels: [GATEWAY_MODEL] });
   const files = workspaceFiles(actor.agent);
   await files.mkdir('/slates/thinker', { recursive: true });
-  await files.writeFile('/slates/thinker/package.json', JSON.stringify({
+  await writeText(files, '/slates/thinker/package.json', JSON.stringify({
     main: 'server.ts', slate: { bindings: { MODEL: { kind: 'ai' } } },
   }));
 
@@ -666,12 +667,12 @@ test('a path-scoped workspace binding reaches inside its prefixes and nowhere el
   const actor = orchestratorHarness();
   const files = workspaceFiles(actor.agent);
   await files.mkdir('/slates/warden', { recursive: true });
-  await files.writeFile('/slates/warden/package.json', JSON.stringify({
+  await writeText(files, '/slates/warden/package.json', JSON.stringify({
     main: 'server.ts', slate: { bindings: { FILES: { kind: 'namespace', namespace: 'workspace', paths: ['/home/main/allowed'] } } },
   }));
   await files.mkdir('/home/main/allowed', { recursive: true });
-  await files.writeFile('/home/main/allowed/ok.md', 'in');
-  await files.writeFile('/home/main/secret.md', 'out');
+  await writeText(files, '/home/main/allowed/ok.md', 'in');
+  await writeText(files, '/home/main/secret.md', 'out');
 
   const call = (member: string, args: JsonValue[]) =>
     actor.agent.slateBindingCallAs(ROOT_SLATE_CALLER, 'warden', 'FILES', { member, args, invocation: null });

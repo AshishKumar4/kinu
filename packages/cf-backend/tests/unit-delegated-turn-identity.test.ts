@@ -1,3 +1,4 @@
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Each delegated turn is its own turn to the effect ledger. A provider may number tool calls per response (`call_0`,
  * the positional ids `tool-call-id.ts` exists for), so two turns of one durable hire can make the same call under the
@@ -30,7 +31,7 @@ test('two turns of one hire making the same call under a reused call id each run
   await runDelegatedTask(workspace, child.actor.handle.actorId, 'Save the note.');
   await runDelegatedTask(workspace, child.actor.handle.actorId, 'Save the note again.');
 
-  const memory = await child.actor.runtime.storage.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' });
+  const memory = await readText(child.actor.runtime.storage.vfs, 'memory/MEMORY.md');
   const notes = parseMemoryNotes(String(memory)).filter((note) => note.content === NOTE);
 
   expect(notes).toHaveLength(2);

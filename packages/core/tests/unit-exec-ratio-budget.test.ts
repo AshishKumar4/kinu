@@ -1,3 +1,4 @@
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * `exec-ratio`'s oracle budget: how far past the reference's spend a candidate is measured, and whether
  * the call landing on the allowance is allowed (`OPS > LIMIT`). The allowance is read off the
@@ -48,7 +49,7 @@ async function measure(source: string): Promise<RatioMeasurement> {
     exec: (command) => shell.exec(command),
   };
 
-  await rt.storage.vfs.writeFile(SOLUTION_FILE, source);
+  await writeText(rt.storage.vfs, SOLUTION_FILE, source);
 
   return await runRatioMeasurement(ctx, {
     params: { n: REFERENCE_CALLS },
@@ -134,10 +135,10 @@ describe('every quantity the instrument reports is a key an archive can bin', ()
 
     if ('reason' in instrument) throw new Error(`the one registered kind must resolve: ${instrument.error}`);
 
-    await rt.storage.vfs.writeFile(SOLUTION_FILE, REFERENCE);
+    await writeText(rt.storage.vfs, SOLUTION_FILE, REFERENCE);
     const asFound: Measurement = await instrument.verify(ctx);
     // Worse and correct, so both sides really measured rather than agreeing by both failing.
-    await rt.storage.vfs.writeFile(SOLUTION_FILE, candidateSpending(REFERENCE_CALLS * 2));
+    await writeText(rt.storage.vfs, SOLUTION_FILE, candidateSpending(REFERENCE_CALLS * 2));
     const candidate: Measurement = await instrument.verify(ctx);
     expect(asFound.kind).toBe('measured');
     expect(candidate.kind).toBe('measured');
@@ -171,7 +172,7 @@ describe('a measurement removes the modules it wrote', () => {
     if (!shell) throw new Error('this runtime has no shell, so nothing can run a measurement in it');
     const ctx: MeasurementContext = { vfs: rt.storage.vfs, exec: (command) => shell.exec(command) };
     const candidate = candidateSpending(REFERENCE_CALLS * 2);
-    await rt.storage.vfs.writeFile(SOLUTION_FILE, candidate);
+    await writeText(rt.storage.vfs, SOLUTION_FILE, candidate);
 
     const measured = await runRatioMeasurement(ctx, {
       params: { n: REFERENCE_CALLS },
@@ -183,9 +184,9 @@ describe('a measurement removes the modules it wrote', () => {
 
     expect(measured.failure).toBeNull();
     expect(measured.correct).toBe(true);
-    const entries = await rt.storage.vfs.readdir('');
+    const entries = (await rt.storage.vfs.readdir('')).map(({ name }) => name);
     expect(entries.filter((name) => name.startsWith('_candidate_') || name.startsWith('_measure_'))).toEqual([]);
-    expect(await rt.storage.vfs.readFile(SOLUTION_FILE, { encoding: 'utf8' })).toBe(candidate);
+    expect(await readText(rt.storage.vfs, SOLUTION_FILE)).toBe(candidate);
   });
 
   test('a passing preflight leaves no probe module', async () => {
@@ -195,14 +196,14 @@ describe('a measurement removes the modules it wrote', () => {
     if (!shell) throw new Error('this runtime has no shell, so nothing can run a preflight in it');
     const ctx: MeasurementContext = { vfs: rt.storage.vfs, exec: (command) => shell.exec(command) };
     expect(await preflightRatioHarness(ctx)).toBeNull();
-    const entries = await rt.storage.vfs.readdir('');
+    const entries = (await rt.storage.vfs.readdir('')).map(({ name }) => name);
     expect(entries.filter((name) => name.startsWith('_measure_'))).toEqual([]);
   });
 
   test('a measurement that cannot run still reports its own failure and leaves no stamped module', async () => {
     const { rt } = createTestRuntime();
     const candidate = candidateSpending(REFERENCE_CALLS * 2);
-    await rt.storage.vfs.writeFile(SOLUTION_FILE, candidate);
+    await writeText(rt.storage.vfs, SOLUTION_FILE, candidate);
 
     const ctx: MeasurementContext = {
       vfs: rt.storage.vfs,
@@ -218,8 +219,8 @@ describe('a measurement removes the modules it wrote', () => {
       targetOps: REFERENCE_CALLS,
       lowerBoundOps: 1,
     })).rejects.toThrow('the shell is down');
-    const entries = await rt.storage.vfs.readdir('');
+    const entries = (await rt.storage.vfs.readdir('')).map(({ name }) => name);
     expect(entries.filter((name) => name.startsWith('_candidate_') || name.startsWith('_measure_'))).toEqual([]);
-    expect(await rt.storage.vfs.readFile(SOLUTION_FILE, { encoding: 'utf8' })).toBe(candidate);
+    expect(await readText(rt.storage.vfs, SOLUTION_FILE)).toBe(candidate);
   });
 });

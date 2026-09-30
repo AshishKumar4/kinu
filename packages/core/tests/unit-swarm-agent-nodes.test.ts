@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Depth-2 swarm of tool-using agents on a real task, real instrument and tools; only the
  * model is scripted. Specified by docs/EXPLORATION.md — "A node is an agent", "Arbitration",
@@ -241,7 +242,7 @@ function workingNode(input: { readonly proposeAtDepth1: boolean }): ScriptedNode
 async function workspace(): Promise<{ rt: AgentRuntime; db: Database }> {
   const { rt, db } = createTestRuntime();
   await rt.storage.vfs.mkdir('candidate', { recursive: true });
-  await rt.storage.vfs.writeFile(REFERENCE_PATH, `// a nested loop over every pair\n${REFERENCE}`);
+  await writeText(rt.storage.vfs, REFERENCE_PATH, `// a nested loop over every pair\n${REFERENCE}`);
 
   return { rt, db };
 }

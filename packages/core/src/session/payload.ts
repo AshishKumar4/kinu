@@ -1,5 +1,6 @@
+import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
-import type { VFS } from '../types/primitives';
+
 import { KinuError } from '../obs/error';
 import { classify } from '../obs/index';
 import { sha256Hex } from '../safety/argument-digest';
@@ -137,7 +138,7 @@ export class SessionPayloads extends SessionPayloadReader {
     const digest = sha256Hex(bytes);
     const { vfs } = await this.files();
 
-    if (!(await vfs.exists(path))) {
+    if (!(await exists(vfs, path))) {
       try { await vfs.mkdir(directory, { recursive: true }); }
       catch (cause) { if (classify({ cause }) !== 'eexist') throw cause; }
 

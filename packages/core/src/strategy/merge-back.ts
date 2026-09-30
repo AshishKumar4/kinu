@@ -1,3 +1,4 @@
+import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Merge-back: how a settled swarm's work reaches the origin.
  * Spec: docs/EXPLORATION.md "Merge-back", "Isolation", "Settle is derived", "The publication seal".
@@ -14,7 +15,7 @@ import type { Logger } from '../obs/log';
 import type { SwarmCarrySetting, SwarmSettle } from './swarm';
 import { admitsPublication, type PublicationState } from './objective';
 import { textPayload } from '../vfs/observe';
-import type { VFS } from '../types/primitives';
+
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { Effect } from 'effect';
 import { renderThrownChain, settle } from '../obs/index';
@@ -742,7 +743,7 @@ export function settleCarry(
 
 /** Missing is null; other read failures propagate, since unreadable is not absent. */
 export function originReader(vfs: VFS): (path: string) => Promise<string | null> {
-  return (path) => settle(Effect.tryPromise({ try: () => vfs.readFile(path, { encoding: 'utf8' }), catch: (cause) => ({ cause }) }).pipe(
+  return (path) => settle(Effect.tryPromise({ try: () => readText(vfs, path), catch: (cause) => ({ cause }) }).pipe(
     Effect.catch((failed) => (isVfsError(failed.cause) && failed.cause.code === 'ENOENT' ? Effect.succeed(null) : Effect.die(failed.cause))),
     Effect.map((raw) => {
       if (raw === null) return null;

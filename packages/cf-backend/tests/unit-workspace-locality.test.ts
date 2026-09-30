@@ -1,3 +1,4 @@
+import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Nimbus is a library in the Durable Object that owns the workspace, over its own `ctx.storage.sql`; no second
  * object per workspace. Built via `createCFRuntime`; env is a Proxy that throws on any unnamed binding.
@@ -119,7 +120,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     // The bundle opens on its first operation, so an activation that touches no file pays for none.
     expect(actor.tables()).toEqual(['kinu_workspace_generation']);
 
-    await workspace.bundle.vfs.writeFile('memory/MEMORY.md', 'the bytes are here\n');
+    await writeText(workspace.bundle.vfs, 'memory/MEMORY.md', 'the bytes are here\n');
 
     const tables = actor.tables();
 
@@ -131,7 +132,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       expect(tables).toContain(table);
     }
 
-    expect(await workspace.bundle.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' }))
+    expect(await readText(workspace.bundle.vfs, 'memory/MEMORY.md'))
       .toBe('the bytes are here\n');
   });
 
@@ -177,7 +178,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const restarted = (await ownedSoul(actorObject()))();
     const box = restarted.box('agent:main');
 
-    await expect(restarted.bundle.vfs.writeFile('SOUL.md', 'forged')).rejects.toThrow();
+    await expect(writeText(restarted.bundle.vfs, 'SOUL.md', 'forged')).rejects.toThrow();
     await expect(box.files.write('/home/main/SOUL.md', 'forged')).rejects.toThrow();
 
     for (const command of ['printf forged > SOUL.md', 'printf forged >> SOUL.md', 'chmod 666 SOUL.md', 'rm -f SOUL.md',
@@ -213,8 +214,8 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       const restarted = open();
 
       expect(await soulFile(restarted)).toMatchObject(SEALED);
-      expect(await restarted.bundle.vfs.readFile('SOUL.md', { encoding: 'utf8' })).toBe(OWNER_SOUL);
-      expect(await restarted.bundle.vfs.exists('SOUL.md.unverified')).toBe(false);
+      expect(await readText(restarted.bundle.vfs, 'SOUL.md')).toBe(OWNER_SOUL);
+      expect(await exists(restarted.bundle.vfs, 'SOUL.md.unverified')).toBe(false);
       expect(actor.database.query('SELECT event FROM activity_log WHERE event = \'soul.unverified_moved\'').all())
         .toEqual([]);
     });
@@ -226,7 +227,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
       expect(await settledWorkspaceSoul(workspace.bundle)).toBe(OWNER_SOUL);
       expect(await soulFile(workspace)).toMatchObject(SEALED);
-      expect(await workspace.bundle.vfs.exists('SOUL.md.unverified')).toBe(false);
+      expect(await exists(workspace.bundle.vfs, 'SOUL.md.unverified')).toBe(false);
       expect(actor.database.query('SELECT event FROM activity_log WHERE event = \'soul.unverified_moved\'').all())
         .toEqual([]);
     });
@@ -252,7 +253,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const restarted = open();
 
     expect(await settledWorkspaceSoul(restarted.bundle)).toBe(renderSoulMarkdown({ name: 'Atlas', mission: 'Help with testing.' }));
-    expect(await restarted.bundle.vfs.readFile('SOUL.md.unverified', { encoding: 'utf8' })).toBe('an old soul of mine');
+    expect(await readText(restarted.bundle.vfs, 'SOUL.md.unverified')).toBe('an old soul of mine');
     expect(await soulFile(restarted)).toMatchObject({ uid: 0, mode: 0o444 });
     expect(actor.database.query('SELECT event FROM activity_log WHERE event = \'soul.unverified_moved\'').all())
       .toHaveLength(1);
@@ -292,13 +293,13 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     const home = provisionAgentHome(session.vfs.as(CRED_KERNEL), 'subordinate-alpha', identity);
     const subordinate = await workspace.bundle.asAgent({ cred: agentCred(identity), home, tmp: `${home}/tmp` });
 
-    await expect(subordinate.vfs.writeFile('/home/main/AGENTS.md', 'forged')).rejects.toThrow();
+    await expect(writeText(subordinate.vfs, '/home/main/AGENTS.md', 'forged')).rejects.toThrow();
     await subordinate.shell.exec('printf forged > /home/main/skills.md');
     await workspace.box('agent:main').exec('printf mine > /home/main/notes.md');
 
-    expect(await workspace.bundle.vfs.exists('AGENTS.md')).toBe(false);
-    expect(await workspace.bundle.vfs.exists('skills.md')).toBe(false);
-    expect(await workspace.bundle.vfs.readFile('notes.md', { encoding: 'utf8' })).toBe('mine');
+    expect(await exists(workspace.bundle.vfs, 'AGENTS.md')).toBe(false);
+    expect(await exists(workspace.bundle.vfs, 'skills.md')).toBe(false);
+    expect(await readText(workspace.bundle.vfs, 'notes.md')).toBe('mine');
   });
 
   test('the shell and the file plane are two views of the same rows', async () => {
@@ -311,7 +312,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     });
 
     await workspace.bundle.vfs.mkdir('proof', { recursive: true });
-    await workspace.bundle.vfs.writeFile('proof/from-vfs.txt', 'same bytes');
+    await writeText(workspace.bundle.vfs, 'proof/from-vfs.txt', 'same bytes');
 
     const box = workspace.box('agent:main');
     expect(await box.exec('cat proof/from-vfs.txt')).toMatchObject({
@@ -320,7 +321,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     });
     expect(await box.exec('printf %s "from the shell" > proof/from-shell.txt'))
       .toMatchObject({ exitCode: 0 });
-    expect(await workspace.bundle.vfs.readFile('proof/from-shell.txt', { encoding: 'utf8' }))
+    expect(await readText(workspace.bundle.vfs, 'proof/from-shell.txt'))
       .toBe('from the shell');
 
     expect(await box.files.read('/home/main/proof/from-shell.txt')).toBe('from the shell');
@@ -337,7 +338,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     });
 
     const drive = mossaicVfs(fakeMossaic().tenant('owner'));
-    await drive.writeFile('/notes.md', 'from the Drive\n');
+    await writeText(drive, '/notes.md', 'from the Drive\n');
     const box = workspace.box('agent:main');
     box.mountTable?.(withMountTable(workspace.bundle.vfs, [sharedDriveMount(() => drive, () => 'no Drive in this test')]));
 
@@ -355,7 +356,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     });
 
     const drive = mossaicVfs(fakeMossaic().tenant('owner'));
-    await drive.writeFile('/notes.md', 'from the Drive\n');
+    await writeText(drive, '/notes.md', 'from the Drive\n');
     const mounted = () => withMountTable(workspace.bundle.vfs, [sharedDriveMount(() => drive, () => 'no Drive in this test')]);
     const box = workspace.box('agent:main');
     const first = box.mountTable?.(mounted());
@@ -426,7 +427,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
       previewUrl: async () => ({ unavailable: 'no preview host in this test' }),
     });
 
-    await workspace.bundle.vfs.writeFile('proof.txt', 'no binding was read');
+    await writeText(workspace.bundle.vfs, 'proof.txt', 'no binding was read');
     expect(await workspace.box('agent:main').exec('cat proof.txt'))
       .toMatchObject({ stdout: 'no binding was read', exitCode: 0 });
   });
@@ -451,7 +452,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
     expect(tables).toContain('vfs_chunks');
     expect(tables).toContain('memory_chunks');
     expect(store.search('indexed bytes', 5)).not.toHaveLength(0);
-    expect(await workspace.bundle.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' }))
+    expect(await readText(workspace.bundle.vfs, 'memory/MEMORY.md'))
       .toContain('the indexed bytes');
   });
 
@@ -466,7 +467,7 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     actor.ctx.storage.sql.exec('CREATE TABLE actor_rows (id INTEGER PRIMARY KEY)');
     actor.ctx.storage.sql.exec('INSERT INTO actor_rows (id) VALUES (1)');
-    await workspace.bundle.vfs.writeFile('doomed.txt', 'bytes');
+    await writeText(workspace.bundle.vfs, 'doomed.txt', 'bytes');
     expect(actor.tables()).toContain('vfs_inodes');
 
     await workspace.destroy();
@@ -499,9 +500,9 @@ describe('the hosted workspace lives in the actor Durable Object', () => {
 
     // Armed after construction: the boot is lazy.
     failures = 1;
-    await expect(workspace.bundle.vfs.exists('SOUL.md')).rejects.toThrow(/transient storage failure/);
-    await workspace.bundle.vfs.writeFile('recovered.txt', 'alive');
-    expect(await workspace.bundle.vfs.readFile('recovered.txt', { encoding: 'utf8' })).toBe('alive');
+    await expect(exists(workspace.bundle.vfs, 'SOUL.md')).rejects.toThrow(/transient storage failure/);
+    await writeText(workspace.bundle.vfs, 'recovered.txt', 'alive');
+    expect(await readText(workspace.bundle.vfs, 'recovered.txt')).toBe('alive');
   });
 
   test('a durable URL re-drives its owner before routing; unknown and forged links stay 404', async () => {

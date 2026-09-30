@@ -1,3 +1,4 @@
+import { exists, readText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // ActorHost: N logical actors over one physical database, without sharing state.
 // Two real issued actors over one `SqlExecutor` with colliding keys each read back
 // only their own rows, through the production binder and directory.
@@ -15,9 +16,9 @@ import { initEventsHubTables, EventLog } from '../src/events/hub/index';
 import { initCompletedTurnTable } from '../src/evolution/session-window';
 import { EvolutionEngine } from '../src/evolution/engine';
 import { listRecoveryFindings } from '../src/evolution/recovery';
-import { readScaffoldFileText } from '../src/scaffold/surface';
+
 import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
-import type { AgentRuntime, Identity, VFS, SqlExecutor } from '../src/index';
+import type { AgentRuntime, Identity, SqlExecutor } from '../src/index';
 import { actorReferenceOf, type ActorReference } from '../src/identity/actor-handle';
 import type { ActorProgramIdentity, ActorTurnClaim } from '../src/orchestrator/actor-claims';
 import type { ContextSelection } from '../src/session/context';
@@ -48,9 +49,9 @@ function scaffoldIdentity(name: string, vfs: VFS, sql: SqlExecutor, actorId: str
     name,
     scaffold: {
       path,
-      exists: () => vfs.exists(path),
-      read: () => readScaffoldFileText(vfs, path),
-      write: (source: string) => vfs.writeFile(path, source),
+      exists: () => exists(vfs, path),
+      read: () => readText(vfs, path),
+      write: (source: string) => writeText(vfs, path, source),
       version: async () => sql<{ version: number | null }>`
         SELECT MAX(version) AS version FROM scaffold_versions WHERE actor_id = ${actorId}`[0]?.version ?? 0,
     },
@@ -435,7 +436,7 @@ describe('one workspace database, many logical actors', () => {
     const fx = build();
     const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'));
     const source = 'export default async function main() { return "retained"; }';
-    await actor.runtime.storage.vfs.writeFile(`${actor.runtime.identity.scaffold.path}.v1`, source);
+    await writeText(actor.runtime.storage.vfs, `${actor.runtime.identity.scaffold.path}.v1`, source);
 
     const admitted = await actor.stores.claims.admit({
       runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor),
@@ -454,7 +455,7 @@ describe('one workspace database, many logical actors', () => {
     const fx = build();
     const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'));
     const source = 'export default async function main() { return "retained"; }';
-    await actor.runtime.storage.vfs.writeFile(`${actor.runtime.identity.scaffold.path}.v1`, source);
+    await writeText(actor.runtime.storage.vfs, `${actor.runtime.identity.scaffold.path}.v1`, source);
 
     await actor.stores.claims.admit({
       runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor),
@@ -476,7 +477,7 @@ describe('one workspace database, many logical actors', () => {
     const fx = build(undefined, undefined, false, hostBuild);
     const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'));
     const source = 'export default async function main() { return "retained"; }';
-    await actor.runtime.storage.vfs.writeFile(`${actor.runtime.identity.scaffold.path}.v1`, source);
+    await writeText(actor.runtime.storage.vfs, `${actor.runtime.identity.scaffold.path}.v1`, source);
     const program: ActorProgramIdentity = { kind: 'scaffold', version: 1, digest: sha256Hex(source), build: null };
 
     return {
@@ -588,7 +589,7 @@ describe('one workspace database, many logical actors', () => {
     const fx = build();
     const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'agent'));
     const path = `${actor.runtime.identity.scaffold.path}.v1`;
-    await actor.runtime.storage.vfs.writeFile(path, 'changed source');
+    await writeText(actor.runtime.storage.vfs, path, 'changed source');
     await actor.stores.claims.admit({
       runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: contextOf(actor),
       program: { kind: 'scaffold', version: 1, digest: sha256Hex('expected source'), build: null },
@@ -597,13 +598,13 @@ describe('one workspace database, many logical actors', () => {
     const release = Promise.withResolvers<void>();
     const read = actor.runtime.storage.vfs.readFile.bind(actor.runtime.storage.vfs);
 
-    actor.runtime.storage.vfs.readFile = async (file, options) => {
+    actor.runtime.storage.vfs.readFile = async (file) => {
       if (file === path) {
         reading.resolve();
         await release.promise;
       }
 
-      return read(file, options);
+      return read(file);
     };
 
     const recovering = recoverActorTurns(fx.host);
@@ -687,7 +688,10 @@ describe('one workspace database, many logical actors', () => {
 
     const storageKey = fx.host.describe(a.actorId)?.storageKey ?? '';
     expect(resolver.list()).toContain(storageKey);
-    expect(String(await resolver.tree(storageKey, fx.main.actorId)?.readFile('/working.jsonl'))).toContain(a.actorId);
+    const tree = resolver.tree(storageKey, fx.main.actorId);
+
+    if (tree === null) throw new Error('the issued child has no context tree');
+    expect(await readText(tree, '/working.jsonl')).toContain(a.actorId);
     expect(resolver.tree('not-a-child', fx.main.actorId)).toBeNull();
   });
 });

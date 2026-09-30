@@ -1,4 +1,5 @@
-import type { VFS } from '../types/primitives';
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+
 import { nanoid } from '../utils/nanoid';
 import type { WebScreenshot } from './provider';
 

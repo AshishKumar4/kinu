@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // How this backend hosts core's subordinate module (policy: core/tests/unit-subordinates.test.ts), read
 // through the actor's own bootstrap reads, a hosted child's runtime, and the tools each actor is built with.
 import './helpers/ui-module-globals';
@@ -333,7 +334,7 @@ describe('an agent\'s window hears only what it may act on', () => {
       // The workspace's page has read its Changes, so the next write it reviews is news.
       await agent.getExecutorDiff('workspace');
       await workspaceFiles(agent).mkdir('/slates/tally', { recursive: true });
-      await workspaceFiles(agent).writeFile('/slates/tally/server.ts', 'export default { fetch() { return new Response("ok"); } };');
+      await writeText(workspaceFiles(agent), '/slates/tally/server.ts', 'export default { fetch() { return new Response("ok"); } };');
       await agent.announceDeviceAvailable({ id: 'device-1', label: 'studio' });
 
       for (const flush of agent.harnessOwedLiveReads.splice(0)) flush();

@@ -1,3 +1,4 @@
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 /** SOUL.md and its mission row cannot drift: `writeSoul` is the only writer of either. */
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -28,7 +29,7 @@ describe('the soul is a file', () => {
     await writeSoul(sql, '# Atlas\n\n## Mission\n\nHelp with testing.', seal);
 
     expect(await readSoul(vfs)).toBe('# Atlas\n\n## Mission\n\nHelp with testing.');
-    expect(await vfs.readFile(SOUL_PATH, { encoding: 'utf8' })).toContain('Help with testing.');
+    expect(await readText(vfs, SOUL_PATH)).toContain('Help with testing.');
   });
 
   test('an unborn workspace reads as no soul rather than throwing', async () => {
@@ -99,8 +100,8 @@ describe('workspace birth', () => {
       name: 'quiet-harbor-1a4e20', title: 'Atlas', purpose: 'Help with testing.', llm: TEST_LLM,
     });
 
-    expect(await rt.storage.vfs.readFile('scaffold/agent.js', { encoding: 'utf8' })).toContain('async');
-    expect(await rt.storage.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' })).toContain('Atlas');
+    expect(await readText(rt.storage.vfs, 'scaffold/agent.js')).toContain('async');
+    expect(await readText(rt.storage.vfs, 'memory/MEMORY.md')).toContain('Atlas');
   });
 
   /** `name` is the address and `title` is the name; a workspace is born untitled. */
@@ -118,7 +119,7 @@ describe('workspace birth', () => {
     const soul = await readSoul(untitled.storage.vfs) ?? '';
     expect(soul).toStartWith('# Kinu');
     expect(soul).not.toContain('quiet-harbor-1a4e20');
-    expect(await untitled.storage.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' }))
+    expect(await readText(untitled.storage.vfs, 'memory/MEMORY.md'))
       .not.toContain('quiet-harbor-1a4e20');
   });
 });

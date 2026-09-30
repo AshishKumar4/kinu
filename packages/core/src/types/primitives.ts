@@ -1,6 +1,7 @@
 /** The portability layer: the agent core is written against these; backends satisfy them. */
 
 import type { SqlExecutor } from '@kinu.run/agent-utils';
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
 import type { MemorySearchResult } from '@kinu.run/agent-utils/memory';
 import type { ToolSet as AiToolSet } from 'ai';
@@ -18,16 +19,6 @@ export interface RawSqlExec {
 /** Native generations remain numbers; relational projections expose their persisted identity tuple. */
 export const VfsRevisionSchema = v.union([v.number(), v.string()]);
 
-export type VfsRevision = v.InferOutput<typeof VfsRevisionSchema>;
-
-export interface VfsEntryStat {
-  size: number;
-  mtimeMs: number;
-  isDir: boolean;
-  /** Never derived from size/mtime: a same-size/same-mtime peer write is still a new value. */
-  revision?: VfsRevision;
-}
-
 export interface Uncheckpointed {
   readonly dir: string;
   readonly why: string;
@@ -37,36 +28,12 @@ export interface VfsWriteReport {
   readonly uncheckpointed: Uncheckpointed;
 }
 
-export interface VfsLinkStat extends VfsEntryStat {
-  readonly isSymlink: boolean;
-}
-
-/** Relative paths resolve at the workspace root, the same directory the workspace shell starts in. */
-export interface VFS {
-  /** Native compare-and-write. When undefined, callers must not emulate it with read/compare/write. */
-  writeFileIfRevision?(
-    path: string,
-    data: Uint8Array,
-    expectedRevision: VfsRevision,
-  ): Promise<{ ok: true; revision: VfsRevision } | { ok: false; revision: VfsRevision }>;
-  readFile(path: string, opts?: { encoding?: string }): Promise<Uint8Array | string>;
-  /** Exact immutable version or refusal; never substitutes the current file. */
-  readFileAtRevision?: (path: string, revision: VfsRevision, range?: { offset: number; length: number }) => Promise<Uint8Array | string>;
-  writeFile(path: string, data: string | Uint8Array): Promise<void>;
-  writeFileWithReport?(path: string, data: string | Uint8Array): Promise<VfsWriteReport | null>;
-  readdir(path: string): Promise<string[]>;
-  stat(path: string): Promise<VfsEntryStat | null>;
-  /** The entry itself, a symbolic link not followed; absent on a plane that cannot tell a link from its target. */
-  lstat?(path: string): Promise<VfsLinkStat | null>;
-  /** A link's target text, never followed; present wherever `lstat` reports links. */
-  readlink?(path: string): Promise<string>;
-  unlink(path: string): Promise<void>;
-  mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
-  exists(path: string): Promise<boolean>;
+export interface CheckpointFiles {
+  writeFileWithReport?(path: string, data: Uint8Array): Promise<VfsWriteReport | null>;
 }
 
 export interface Storage {
-  vfs: VFS;
+  vfs: VFS & CheckpointFiles;
   sql: SqlExecutor;
   execRaw: RawSqlExec;
   /** Atomic synchronous writes on the same connection as sql; rolls back on throw. */

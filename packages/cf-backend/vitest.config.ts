@@ -6,7 +6,7 @@
  * `env.d.ts` would merge into production `Env`); tsconfigs carry no comments (`JSON.parse` readers).
  */
 import { fileURLToPath } from 'node:url';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { cloudflareTest } from '@cloudflare/vitest-plugin';
 import { buildSync, transform, type OutputFile } from 'esbuild';
@@ -23,7 +23,7 @@ import {
 import { kCurrentWorker, type V4ModuleDefinition } from 'miniflare';
 import { builtinModules } from 'node:module';
 import { promptText } from './vite-prompt-text';
-import { buildAgentBundle, workerCompatibility } from './vite-agent-bundle';
+import { buildAgentBundle, workerCompatibility, writeWhole } from './vite-agent-bundle';
 import { workersAiBinding } from './tests/helpers/workers-ai-binding';
 import * as v from 'valibot';
 import { HELD_PROXY_MODEL } from './tests/workerd/ai-proxy-shapes';
@@ -85,7 +85,7 @@ const slateVendorModulePath = fileURLToPath(new URL('../../node_modules/.cache/k
 
 mkdirSync(dirname(slateVendorModulePath), { recursive: true });
 
-writeFileSync(slateVendorModulePath, `export default ${JSON.stringify(buildSlateVendor())};\n`);
+writeWhole(slateVendorModulePath, `export default ${JSON.stringify(buildSlateVendor())};\n`);
 
 
 /** Probe bundles reach miniflare as an ES module entry plus compiled `.wasm`. */
@@ -406,7 +406,7 @@ export default defineConfig({
           workerLoaders: { LOADER: {} },
           modules: probeModules(twoTurnProbe),
           bindings: { DEV_USER_EMAIL: 'probe@local', WORKERS_AI_VIA_BINDING: 'on', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
-          serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'FakeAI' } },
+          serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'FakeAI' }, ASSETS: agentAssets(shippedAgentBundle) },
           // Compat HTTP falls back to the
           // global fetch (owned-model-services passes no deps.fetch), which
           // routes to the Node-side fake; unknown hosts throw.

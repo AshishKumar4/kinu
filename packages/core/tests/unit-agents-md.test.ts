@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // A file is admitted on its size before its bytes are read, so these tests prove what was read, not only rendered.
 import { describe, test, expect } from 'bun:test';
 import { createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
@@ -6,7 +7,7 @@ import {
   stepContextLimit, CHARS_PER_TOKEN,
   type InstructionTrustResolver, type ModelWindow,
 } from '../src/index';
-import type { VFS } from '../src/types/primitives';
+
 import type { ExecutorProvider, ExecutorStatus } from '../src/execution/types';
 
 const WINDOW: ModelWindow = { contextWindow: 800, modelOutputLimit: 400 };
@@ -163,10 +164,10 @@ function fakeVfs(files: Readonly<Record<string, string>>): FakeVfs {
 
         return memory.vfs.stat(path);
       },
-      readFile: async (path, opts) => {
+      readFile: async (path) => {
         reads.push(path);
 
-        return memory.vfs.readFile(path, opts);
+        return memory.vfs.readFile(path);
       },
     },
     stats,

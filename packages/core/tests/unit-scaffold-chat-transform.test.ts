@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Local-seam peer of unit-scaffold-inference-transform.test.ts, over `runChat`'s ChatEvent vocabulary. */
 import { describe, test, expect } from 'bun:test';
 import { scaffoldChatTransform, prepareActorProgram, type ChatEvent } from '../src/index';
@@ -55,7 +56,7 @@ async function selected(version: number, scaffoldCode: string,
   const rt = runtime();
   const files = rt.agentStateVfs ?? rt.storage.vfs;
   await files.mkdir('scaffold', { recursive: true });
-  await files.writeFile(rt.identity.scaffold.path + '.v' + version, scaffoldCode);
+  await writeText(files, rt.identity.scaffold.path + '.v' + version, scaffoldCode);
   const program = await prepareActorProgram({ runtime: rt, mode: 'build', version });
 
   const run: Omit<ScaffoldRunOptions, 'emit' | 'defaultInference' | 'scaffoldCodeOverride'> = {

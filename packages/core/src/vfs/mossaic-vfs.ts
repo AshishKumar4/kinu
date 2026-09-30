@@ -1,11 +1,11 @@
+import type { VFS, VfsDirent, VfsStat } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Kinu's `VFS` over a Mossaic tenant. Core never imports the Mossaic SDK; the hosted backend injects a
  * {@link MossaicClient}. Mossaic errors and stats are re-issued in Kinu's closed `VfsErrorCode` set.
  */
 import * as v from 'valibot';
-import type { VFS, VfsEntryStat } from '../types/primitives';
+
 import { VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
-import type { VfsListedEntry, VfsNativeMutations, VfsNativeReads } from './mounts';
 
 export interface MossaicStat {
   readonly type: 'file' | 'dir' | 'symlink';
@@ -42,9 +42,12 @@ export interface MossaicClient {
   createReadStream(path: string, opts?: { start?: number; end?: number }): Promise<ReadableStream<Uint8Array>>;
 }
 
-export interface MossaicVfs extends VFS, VfsNativeMutations, Pick<VfsNativeReads, 'readdirStats' | 'readRange'> {
-  readlink(path: string): Promise<string>;
-  symlink(target: string, path: string): Promise<void>;
+export interface MossaicVfs extends VFS {
+  readlink: NonNullable<VFS['readlink']>;
+  symlink: NonNullable<VFS['symlink']>;
+  rename: NonNullable<VFS['rename']>;
+  removeRecursive: NonNullable<VFS['removeRecursive']>;
+  readRange: NonNullable<VFS['readRange']>;
 }
 
 /** Mossaic error union mapped to Kinu's by meaning: unavailable tenant is `ENXIO`, unfixable input is `EIO`,
@@ -105,24 +108,18 @@ const MossaicStatRecord = v.object({
   mtimeMs: v.number(),
 });
 
-function entryStat(raw: MossaicStat): VfsEntryStat {
+function entryStat(raw: MossaicStat): VfsStat {
   const stat = v.parse(MossaicStatRecord, raw);
 
-  return { size: stat.size, mtimeMs: stat.mtimeMs, isDir: stat.type === 'dir' };
+  return { size: stat.size, mtimeMs: stat.mtimeMs, type: stat.type === 'dir' ? 'directory' : stat.type };
 }
 
 const CHILDREN_PAGE = 1000;
 
 export function mossaicVfs(client: MossaicClient): MossaicVfs {
   return {
-    async readFile(path, opts) {
-      const bytes = await guarded(path, () => client.readFile(path));
-
-      // The workspace plane decodes exactly one encoding, and so does this one.
-      return opts?.encoding === 'utf8' ? new TextDecoder().decode(bytes) : bytes;
-    },
+    readFile: (path) => guarded(path, () => client.readFile(path)),
     writeFile: (path, data) => guarded(path, () => client.writeFile(path, data)),
-    readdir: (path) => guarded(path, () => client.readdir(path)),
     async stat(path) {
       try {
         return entryStat(await client.stat(path));
@@ -133,7 +130,6 @@ export function mossaicVfs(client: MossaicClient): MossaicVfs {
         throw translated;
       }
     },
-    exists: (path) => guarded(path, () => client.exists(path)),
     unlink: (path) => guarded(path, () => client.unlink(path)),
     mkdir: (path, opts) => guarded(path, () => client.mkdir(path, opts)),
     rename: (from, to) => guarded(from, () => client.rename(from, to)),
@@ -143,20 +139,19 @@ export function mossaicVfs(client: MossaicClient): MossaicVfs {
     readRange: (path, offset, length) => guarded(path, async () => new Uint8Array(
       await new Response(await client.createReadStream(path, { start: offset, end: offset + length })).arrayBuffer(),
     )),
-    async readdirStats(path) {
-      const listed: VfsListedEntry[] = [];
+    async readdir(path) {
+      const listed: VfsDirent[] = [];
       let cursor: string | undefined;
 
       do {
         const page = await guarded(path, () => client.listChildren(path, { limit: CHILDREN_PAGE, cursor, includeStat: true }));
 
         for (const child of page.entries) {
-          listed.push({
-            name: child.name,
-            stat: child.stat === undefined
-              ? { size: 0, mtimeMs: 0, isDir: child.kind === 'folder' }
-              : entryStat(child.stat),
-          });
+          const stat = child.stat === undefined
+            ? { size: 0, mtimeMs: 0, type: child.kind === 'folder' ? 'directory' as const : child.kind }
+            : entryStat(child.stat);
+
+          listed.push({ name: child.name, type: stat.type, stat });
         }
 
         cursor = page.cursor;

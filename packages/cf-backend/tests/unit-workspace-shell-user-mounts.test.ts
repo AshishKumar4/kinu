@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // The hosted workspace is the agent's own, but its shell serves the actor's mount table: the user's machine at
 // /pc and their Drive at /shared. A local-harm command there waits for the owner; one in the agent's home does not.
 import { expect, test } from 'bun:test';
@@ -27,7 +28,7 @@ async function withDevice() {
   const main = await hostedMainActor(workspace);
   const project = createMemoryVfs();
   await project.vfs.mkdir('/proj');
-  await project.vfs.writeFile('/proj/kept.txt', 'the user\u2019s work');
+  await writeText(project.vfs, '/proj/kept.txt', 'the user\u2019s work');
 
   const device: ExecutorProvider = {
     name: 'device', kind: 'device', capabilities: new Set(['shell']), filesOwner: 'user', files: project.vfs,

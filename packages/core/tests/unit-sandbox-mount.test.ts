@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The `/sandbox` mount end to end: `file` tool and codemode `sandbox.*` over one container view.
  * The double follows the native file boundary: a miss carries its errno in `Error.cause`, an empty
@@ -14,7 +15,7 @@ import { createFileTool, type FileToolInput } from '../src/tools/file-tool';
 import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { standardMounts, withMountTable } from '../src/vfs/mounts';
 import { bytesToBase64 } from '../src/utils/base64';
-import type { VFS } from '../src/types/primitives';
+
 import type { JsonValue } from '../src/utils/json';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 
@@ -161,7 +162,6 @@ function basePlane(): VFS {
 		stat: async () => null,
 		unlink: async () => {},
 		mkdir: async () => {},
-		exists: async () => false,
 	};
 }
 

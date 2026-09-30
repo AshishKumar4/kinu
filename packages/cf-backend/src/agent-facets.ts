@@ -77,6 +77,7 @@ export class AgentStoreBroker {
 
   async history(limit?: number) { return await (await this.calls()).history(this.snapshot(), limit); }
   async historyPage(page: PositionPageRequest) { return await (await this.calls()).historyPage(this.snapshot(), page); }
+  async messageCount() { return await (await this.calls()).messageCount(this.snapshot()); }
   async admitted(id: string) { return await (await this.calls()).admitted(this.snapshot(), id); }
   async inspect(request: AgentOwnInspection) { return await (await this.calls()).inspect(this.snapshot(), request); }
   async inheritedContext() { return await (await this.calls()).inheritedContext(this.snapshot()); }

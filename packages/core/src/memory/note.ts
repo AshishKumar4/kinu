@@ -1,6 +1,7 @@
+import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** The one note-save primitive: appends a dated `### Note` heading to `memory/MEMORY.md`, then indexes it. */
 
-import type { VFS, Memory } from '../types/primitives';
+import type { Memory } from '../types/primitives';
 
 export const MEMORY_PATH = 'memory/MEMORY.md';
 
@@ -77,15 +78,15 @@ export function parseMemoryNotes(content: string): MemoryNote[] {
 
 /** Walks the filesystem so the size matches the files the user can open, not the storage encoding. */
 export async function memoryBytes(vfs: VFS, dir = 'memory'): Promise<number> {
-  if (!await vfs.exists(dir)) return 0;
+  if (!await exists(vfs, dir)) return 0;
   let total = 0;
 
-  for (const name of await vfs.readdir(dir)) {
-    const full = `${dir}/${name}`;
+  for (const entry of await vfs.readdir(dir)) {
+    const full = `${dir}/${entry.name}`;
     const st = await vfs.stat(full);
 
     if (!st) continue;
-    total += st.isDir ? await memoryBytes(vfs, full) : st.size;
+    total += (st.type === 'directory') ? await memoryBytes(vfs, full) : st.size;
   }
 
   return total;

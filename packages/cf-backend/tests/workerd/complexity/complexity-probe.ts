@@ -1,3 +1,4 @@
+import { type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * What one hot-path operation costs the database, counted rather than timed: every statement the
  * operation runs goes through a metered `SqlStorage`, and the cursors' own `rowsRead` and
@@ -10,15 +11,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { ModelMessage } from 'ai';
 import { SlateId } from '@agent-core/core/slates';
-import {
-  ChangeSetCache, DynamicContextLedger, MAIN_AGENT, WORKSPACE_IDENTITY_DDL, WorkspaceActorDirectory,
-  agentArtifactDirectory, agentHome, composePrepareStep, createAgentStores, getWorkspaceDiff, initActorClaimTables,
-  initAgentConfigTable, initCodemodeStateTable, initWorkspaceActorTable, initWorkspaceSchema,
-  classifyRunEnd, closeTurnRun, nimbusSessionFiles, openTurnRun, resetWorkspaceBaseline, settleWorkspaceSlates, standardMounts,
-  withMountTable,
-  type ActorHandle, type AgentStores, type NimbusSandboxHandle, type SqlExecutor,
-  type SqlValue, type StepContextPlane, type StepPipeline, type VFS, type WorkspaceBaselines,
-} from '@kinu.run/core';
+import { ChangeSetCache, DynamicContextLedger, MAIN_AGENT, WORKSPACE_IDENTITY_DDL, WorkspaceActorDirectory, agentArtifactDirectory, agentHome, composePrepareStep, createAgentStores, getWorkspaceDiff, initActorClaimTables, initAgentConfigTable, initCodemodeStateTable, initWorkspaceActorTable, initWorkspaceSchema, classifyRunEnd, closeTurnRun, nimbusSessionFiles, openTurnRun, resetWorkspaceBaseline, settleWorkspaceSlates, standardMounts, withMountTable, type ActorHandle, type AgentStores, type NimbusSandboxHandle, type SqlExecutor, type SqlValue, type StepContextPlane, type StepPipeline, type WorkspaceBaselines } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { SlateFiles, WorkspaceSlateContentStore, slateDirectory } from '@kinu.run/core/slates';
 import { workspaceBoxFiles } from '@kinu.run/core/workspace';
@@ -311,12 +304,12 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     const vfs = this.agentFiles();
     const baselines = await this.baselines();
 
-    for (let index = 0; index < files; index += 1) await vfs.writeFile(filePath(index), fileText(index));
+    for (let index = 0; index < files; index += 1) await writeText(vfs, filePath(index), fileText(index));
 
     await resetWorkspaceBaseline({ actor }, baselines);
     const edited = Math.floor(files / 2);
 
-    await vfs.writeFile(filePath(edited), fileText(edited, 1));
+    await writeText(vfs, filePath(edited), fileText(edited, 1));
 
     return await this.meter.measure(async () => {
       const diff = await getWorkspaceDiff({ actor }, baselines);
@@ -340,11 +333,11 @@ export class ComplexityProbeDO extends DurableObject<Cloudflare.Env> {
     (await this.workspace()).events.on((batch) => changes.touched(batch.flatMap((event) => (event.oldPath === undefined ? [event.path] : [event.path, event.oldPath]))));
     const baselines = await this.baselines();
 
-    for (let index = 0; index < files; index += 1) await vfs.writeFile(filePath(index), fileText(index));
+    for (let index = 0; index < files; index += 1) await writeText(vfs, filePath(index), fileText(index));
 
     await resetWorkspaceBaseline({ actor }, baselines);
     changes.moved();
-    await vfs.writeFile(filePath(Math.floor(files / 2)), fileText(Math.floor(files / 2), 1));
+    await writeText(vfs, filePath(Math.floor(files / 2)), fileText(Math.floor(files / 2), 1));
     const first = await changes.read(() => getWorkspaceDiff({ actor }, baselines));
 
     return await this.meter.measure(async () => {

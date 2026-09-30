@@ -1,8 +1,6 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { afterEach, describe, test, expect } from "bun:test";
-import {
-  deleteExecutorPathOp, getExecutorFiles, inlineFileType, readExecutorFile, readExecutorFileBytes,
-  renameExecutorPathOp, sortDirEntries, writeExecutorFileOp, type VFS,
-} from "@kinu.run/core";
+import { deleteExecutorPathOp, getExecutorFiles, inlineFileType, readExecutorFile, readExecutorFileBytes, renameExecutorPathOp, sortDirEntries, writeExecutorFileOp } from "@kinu.run/core";
 import { asFetchFunction } from "@kinu.run/core";
 import { fileResponseHeaders } from "@kinu.run/core";
 import {
@@ -28,7 +26,7 @@ describe("sortDirEntries", () => {
 describe("writeExecutorFileOp", () => {
   /** Captures what its file view is given; optionally throws, like an offline environment. */
   function makeDeps(opts: { throwOn?: RegExp; error?: string } = {}) {
-    const written = new Map<string, Uint8Array | string>();
+    const written = new Map<string, Uint8Array>();
 
     const files: VFS = {
       readFile: async (path) => {
@@ -38,7 +36,7 @@ describe("writeExecutorFileOp", () => {
 
         return data;
       },
-      writeFile: async (path: string, data: Uint8Array | string) => {
+      writeFile: async (path: string, data: Uint8Array) => {
         if (opts.throwOn?.test(path)) throw new Error(opts.error ?? "environment unavailable");
         written.set(path, data);
       },
@@ -47,13 +45,11 @@ describe("writeExecutorFileOp", () => {
         const data = written.get(path);
 
         if (data === undefined) return null;
-        const size = data instanceof Uint8Array ? data.length : new TextEncoder().encode(data).length;
 
-        return { size, mtimeMs: 0, isDir: false };
+        return { size: data.byteLength, mtimeMs: 0, type: 'file' };
       },
       unlink: async (path) => { written.delete(path); },
       mkdir: async () => undefined,
-      exists: async (path) => written.has(path),
     };
 
     const deps = { getProvider: () => ({ files, homeDir: async () => "/home/main" }) };
@@ -141,7 +137,7 @@ function makeTree(seed: Record<string, string>, opts: { native?: boolean; unlink
 
       if (data === undefined) throw new Error(`ENOENT: ${path}`);
 
-      return data;
+      return data instanceof Uint8Array ? data : new TextEncoder().encode(data);
     },
     writeFile: async (path, data) => { files.set(path, data); },
     readdir: async (path) => {
@@ -152,21 +148,20 @@ function makeTree(seed: Record<string, string>, opts: { native?: boolean; unlink
         if (key.startsWith(prefix)) names.add(key.slice(prefix.length).split("/")[0]);
       }
 
-      return [...names];
+      return [...names].map((name) => ({ name, type: dirs.has(`${prefix}${name}`) ? 'directory' : 'file' }));
     },
     stat: async (path) => {
       const stored = files.get(path);
 
-      if (stored !== undefined) return { size: stored.length, mtimeMs: 1_724_500_000_000, isDir: false };
+      if (stored !== undefined) return { size: stored instanceof Uint8Array ? stored.byteLength : new TextEncoder().encode(stored).byteLength, mtimeMs: 1_724_500_000_000, type: 'file' };
 
-      return dirs.has(path) ? { size: 0, mtimeMs: 0, isDir: true } : null;
+      return dirs.has(path) ? { size: 0, mtimeMs: 0, type: 'directory' } : null;
     },
     unlink: async (path) => {
       if (opts.unlinkFails?.test(path)) throw new Error(`EBUSY: ${path} is held open`);
       files.delete(path); dirs.delete(path);
     },
     mkdir: async (path) => { dirs.add(path); },
-    exists: async (path) => files.has(path) || dirs.has(path),
   };
 
   const native = opts.native
@@ -197,7 +192,7 @@ describe("renameExecutorPathOp", () => {
     const { deps, files } = makeTree({ "/home/main/a.txt": "carried" });
     const out = await renameExecutorPathOp(deps, "workspace", "/home/main/a.txt", "/home/main/b.txt");
     expect(out).toEqual({ ok: true });
-    expect(files.get("/home/main/b.txt")).toBe("carried");
+    expect(files.get("/home/main/b.txt")).toEqual(new TextEncoder().encode('carried'));
     expect(files.has("/home/main/a.txt")).toBe(false);
   });
 
@@ -510,7 +505,7 @@ describe("the file viewer's dispatch", () => {
 
 /** `readRange` is declared only when `ranged` is set; `readFile` returns a whole copy. */
 function makeCountingPlane(
-  path: string, bytes: Uint8Array, opts: { ranged?: boolean; statSize?: number; unstatable?: boolean } = {},
+  path: string, bytes: Uint8Array, opts: { ranged?: boolean; statSize?: number } = {},
 ) {
   const asked: Array<{ op: "readFile" | "readRange"; length?: number }> = [];
 
@@ -522,13 +517,12 @@ function makeCountingPlane(
       return bytes;
     },
     writeFile: async () => undefined,
-    readdir: async () => [path.slice(path.lastIndexOf("/") + 1)],
-    stat: async (target) => (target === path && opts.unstatable !== true
-      ? { size: opts.statSize ?? bytes.byteLength, mtimeMs: 0, isDir: false }
+    readdir: async () => [{ name: path.slice(path.lastIndexOf('/') + 1), type: 'file' }],
+    stat: async (target) => (target === path
+      ? { size: opts.statSize ?? bytes.byteLength, mtimeMs: 0, type: 'file' }
       : null),
     unlink: async () => undefined,
     mkdir: async () => undefined,
-    exists: async (target) => target === path,
   };
 
   const files = opts.ranged
@@ -590,13 +584,6 @@ describe("readExecutorFile bounds the preview before it reads", () => {
     expect(asked).toEqual([{ op: "readFile" }]);
   });
 
-  test("an unstatable file on a plane with no ranged read is refused, never guessed", async () => {
-    const { deps, asked } = makeCountingPlane("/home/main/opaque", new TextEncoder().encode("x"), { unstatable: true });
-    expect((await readExecutorFile(deps, "workspace", "/home/main/opaque")).error)
-      .toContain("unknown size");
-    expect(asked).toEqual([]);
-  });
-
   test("a binary file is refused off its BYTES, before any decode", async () => {
     const bin = new Uint8Array(VIEW_CAP * 2);
     bin.set([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d], 0);
@@ -631,13 +618,12 @@ describe("readExecutorFile bounds the preview before it reads", () => {
     expect(out.content).toBe(text);
   });
 
-  test("a directory is refused, and a missing path reports the plane's own failure", async () => {
+  test('a directory is refused, and a missing path is reported before any read', async () => {
     const { deps } = makeTree({ "/home/main/src/app.ts": "x" });
     expect((await readExecutorFile(deps, "workspace", "/home/main/src")).error)
       .toBe("path is a directory");
-    // No proven size: a plane with no ranged read refuses rather than reading to find out.
     expect((await readExecutorFile(deps, "workspace", "/home/main/gone.txt")).error)
-      .toContain("unknown size");
+      .toContain('no such file or directory');
   });
 });
 
@@ -646,23 +632,23 @@ describe("getExecutorFiles isolates one child's failure", () => {
     const names = ["alpha", "beta.txt", poisoned];
 
     const files: VFS = {
-      readFile: async () => "",
+      readFile: async () => new Uint8Array(),
       writeFile: async () => undefined,
-      readdir: async () => names,
+      readdir: async () => names.map((name) => ({ name, type: name === 'alpha' ? 'directory' : 'file' })),
       stat: async (path) => {
         if (path === `/home/main/${poisoned}`) {
+          if (code === 'ENOENT') return null;
           throw new VfsError(code, 'the plane said so', path);
         }
 
-        if (path === "/home/main/alpha") return { size: 0, mtimeMs: 0, isDir: true };
+        if (path === '/home/main/alpha') return { size: 0, mtimeMs: 0, type: 'directory' };
 
-        if (path === "/home/main") return { size: 0, mtimeMs: 0, isDir: true };
+        if (path === '/home/main') return { size: 0, mtimeMs: 0, type: 'directory' };
 
-        return { size: 7, mtimeMs: 42, isDir: false };
+        return { size: 7, mtimeMs: 42, type: 'file' };
       },
       unlink: async () => undefined,
       mkdir: async () => undefined,
-      exists: async () => true,
     };
 
     return { getProvider: () => ({ files, homeDir: async () => "/home/main" }) };
@@ -694,29 +680,25 @@ describe("getExecutorFiles isolates one child's failure", () => {
     let stats = 0;
     const entries = ["a.txt", "b.txt", "c.txt", "d"];
 
-    const files: VFS & { readdirStats(path: string): Promise<Array<{ name: string; stat: { size: number; mtimeMs: number; isDir: boolean } | null }>> } = {
-      readFile: async () => "",
+    const files: VFS = {
+      readFile: async () => new Uint8Array(),
       writeFile: async () => undefined,
       readdir: async () => {
         listings += 1;
 
-        return entries;
-      },
-      readdirStats: async () => {
-        listings += 1;
+        return entries.map((name) => {
+          const type = name === 'd' ? 'directory' as const : 'file' as const;
 
-        return entries.map((name) => ({
-          name, stat: { size: name === "d" ? 0 : 3, mtimeMs: 0, isDir: name === "d" },
-        }));
+          return { name, type, stat: { size: name === 'd' ? 0 : 3, mtimeMs: 0, type } };
+        });
       },
       stat: async () => {
         stats += 1;
 
-        return { size: 0, mtimeMs: 0, isDir: true };
+        return { size: 0, mtimeMs: 0, type: 'directory' };
       },
       unlink: async () => undefined,
       mkdir: async () => undefined,
-      exists: async () => true,
     };
 
     const deps = { getProvider: () => ({ files, homeDir: async () => "/home/main" }) };

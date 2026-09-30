@@ -1,6 +1,7 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { Effect } from 'effect';
 import { settle } from '../obs/effect';
-import type { VFS } from '../types/primitives';
+
 
 /** POSIX dirname: '' for a bare name, '/' for a top-level one (a naive `lastIndexOf` slice gets both wrong). */
 export function vfsDirname(path: string): string {
