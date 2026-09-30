@@ -12,6 +12,8 @@ const { describe, expect, test } = require('bun:test');
 
 const { once } = require('node:events');
 
+const { spawn } = require('node:child_process');
+
 const fs = require('node:fs');
 
 const path = require('node:path');
@@ -19,6 +21,8 @@ const path = require('node:path');
 const { scratchDir } = require('../../test-utils/src/scratch');
 
 const chatgpt = require('../src/chatgpt.js');
+
+const update = require('../src/update.js');
 
 const TOKEN_URL = 'https://auth.openai.com/api/accounts/oauth/token';
 
@@ -62,11 +66,11 @@ function authServer(keys, answer) {
   const fetch = async (input, init) => {
     const url = String(input);
     const form = Object.fromEntries(new URLSearchParams(init?.body === undefined ? '' : String(init.body)));
-    calls.push({ url, form });
+    calls.push({ url, form, signal: init?.signal });
 
     if (url === JWKS_URL) return Response.json(keys.jwks);
 
-    if (url === TOKEN_URL) return answer(form);
+    if (url === TOKEN_URL) return answer(form, init);
 
     if (url === REVOKE_URL) return new Response(null, { status: 200 });
 
@@ -326,6 +330,15 @@ describe('refresh', () => {
       { grant_type: 'refresh_token', client_id: 'oaiapp_issued', refresh_token: 'rt-1', resource: 'https://api.openai.com/v1' },
     ]);
     expect(tokens).toMatchObject({ accessToken: 'at-2', refreshToken: 'rt-2', scopes: FULL_SCOPE.split(' ') });
+    // No clock rides the call: it ends when its answer does.
+    expect(auth.tokenCalls().map((call) => call.signal)).toEqual([undefined]);
+  });
+
+  test('a revocation carries no deadline either', async () => {
+    const auth = authServer(await signer(), async () => Response.json({}));
+
+    expect(await chatgpt.revokeSession({ clientId: 'oaiapp_issued', refreshToken: 'rt-1', fetch: auth.fetch })).toEqual({ unconfirmed: null });
+    expect(auth.calls.map((call) => [call.url, call.signal])).toEqual([[REVOKE_URL, undefined]]);
   });
 
   test.each(chatgpt.UNUSABLE_REFRESH_CODES)('%s spends the session', async (code) => {
@@ -438,16 +451,24 @@ describe('the daemon\'s own sign-in', () => {
   async function heldRefreshes() {
     const released = Promise.withResolvers();
     const reached = Promise.withResolvers();
+    const events = [];
 
-    const auth = authServer(await signer(), async (form) => {
+    const auth = authServer(await signer(), async (form, init) => {
       if (form.grant_type !== 'refresh_token') return Response.json({});
       reached.resolve();
-      await released.promise;
+
+      // Held as a real call is, and ended as one is when its signal aborts.
+      await new Promise((resolve, reject) => {
+        released.promise.then(resolve, reject);
+        init?.signal?.addEventListener('abort', () => { reject(init.signal.reason); }, { once: true });
+      });
+
+      events.push('answered');
 
       return Response.json({ access_token: 'at-new', refresh_token: 'rt-new', expires_in: 3600 });
     });
 
-    return { auth, reached: reached.promise, release: released.resolve };
+    return { auth, events, reached: reached.promise, release: released.resolve };
   }
 
   // SIWC-01: a delayed refresh answer used to write the rotated tokens over a sign-out that had finished.
@@ -518,37 +539,102 @@ describe('the daemon\'s own sign-in', () => {
     const using = session.bearer();
 
     await held.reached;
-    const quiet = session.quiesce();
+    const quiet = session.quiesce().then(() => { held.events.push('drained'); });
     const during = session.bearer();
 
     held.release();
     await quiet;
+    // A clean drain waits for the answer, however long it takes, and ends nothing itself.
+    expect(held.events).toEqual(['answered', 'drained']);
+    expect(held.auth.tokenCalls().map((call) => call.signal?.aborted)).toEqual([false]);
     expect(await during).toBeNull();
     expect(read(home)).toMatchObject({ accessToken: 'at-new', refreshToken: 'rt-new' });
     expect(await using).toBe('at-new');
   });
 
-  test('an updated daemon rotates only after the daemon it replaced has exited', async () => {
+  // A second stop signal, or an explicit forced stop: the owner's decision, not a clock's.
+  test('a forced stop ends the auth call in flight unanswered, writes nothing, and lets the daemon go', async () => {
+    const home = scratchDir('siwc-device-forced');
+    deviceRecord(home, { accessToken: 'at-old', refreshToken: 'rt-old', expiresAt: Date.now() + 60_000 });
+    const held = await heldRefreshes();
+    const session = chatgpt.createDeviceSession({ home, fetch: held.auth.fetch });
+    const using = failureOf(session.bearer());
+
+    await held.reached;
+    const quiet = session.quiesce();
+
+    session.abort();
+    await quiet;
+    expect((await using)?.message).toContain('stopped before auth.openai.com answered');
+    expect(held.events).toEqual([]);
+    expect(held.auth.tokenCalls().map((call) => call.signal?.aborted)).toEqual([true]);
+    expect(read(home)).toMatchObject({ accessToken: 'at-old', refreshToken: 'rt-old' });
+    expect(await session.bearer()).toBeNull();
+  });
+
+  test('a sign-in the browser finishes during a clean drain lands, and the drain waits for it', async () => {
+    const home = scratchDir('siwc-device-drain-sign-in');
+    const keys = await signer();
+    const reached = Promise.withResolvers();
+    const released = Promise.withResolvers();
+    const exchange = exchangeAnswer(keys);
+
+    const auth = authServer(keys, async (form) => {
+      reached.resolve();
+      await released.promise;
+
+      return exchange(form);
+    });
+
+    const session = chatgpt.createDeviceSession({ home, fetch: auth.fetch });
+    const authorize = new URL((await session.signIn()).authorizeUrl);
+    pendingNonce = authorize.searchParams.get('nonce') ?? '';
+    const callback = new URL(authorize.searchParams.get('redirect_uri') ?? '');
+
+    for (const [name, value] of Object.entries({ code: 'code-drain', state: authorize.searchParams.get('state') ?? '', client_id: 'oaiapp_issued' })) {
+      callback.searchParams.set(name, value);
+    }
+
+    const page = fetch(callback);
+
+    await reached.promise;
+    const quiet = session.quiesce();
+
+    released.resolve();
+    await quiet;
+    expect((await page).status).toBe(200);
+    expect(read(home)).toMatchObject({ clientId: 'oaiapp_issued', accessToken: 'at-1', refreshToken: 'rt-1' });
+    expect(auth.calls.filter((call) => call.url === REVOKE_URL)).toEqual([]);
+  });
+
+  // The updater gives a successor its stdin as a lifeline, whose far end the OS closes when the predecessor ends.
+  test('an updated daemon rotates only once the daemon it replaced has exited, which the lifeline closing says', async () => {
     const home = scratchDir('siwc-device-successor');
     deviceRecord(home, { accessToken: 'at-old', refreshToken: 'rt-old', expiresAt: Date.now() + 60_000 });
-    const predecessor = Bun.spawn(['sleep', '30']);
-    /** For each refresh, whether the replaced daemon had exited when it was sent. */
-    const afterExit = [];
+    // Stands in for the replaced daemon: it holds the pipe's far end until it exits.
+    const predecessor = spawn('sleep', ['30'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    const exited = once(predecessor, 'exit');
+    let lifelineClosed = false;
+    /** For each refresh, whether the lifeline had closed when it was sent. */
+    const afterClose = [];
+
+    predecessor.stdout.once('end', () => { lifelineClosed = true; });
 
     try {
       const auth = authServer(await signer(), async () => {
-        afterExit.push(predecessor.exitCode !== null || predecessor.signalCode !== null);
+        afterClose.push(lifelineClosed);
 
         return Response.json({ access_token: 'at-new', refresh_token: 'rt-new', expires_in: 3600 });
       });
 
-      const session = chatgpt.createDeviceSession({ home, fetch: auth.fetch, predecessor: predecessor.pid });
+      const session = chatgpt.createDeviceSession({ home, fetch: auth.fetch, predecessorExited: update.lifelineClosed(predecessor.stdout) });
       const using = session.bearer();
 
       predecessor.kill();
 
       expect(await using).toBe('at-new');
-      expect(afterExit).toEqual([true]);
+      expect(afterClose).toEqual([true]);
+      await exited;
     } finally {
       predecessor.kill();
     }

@@ -54,14 +54,6 @@ const REFRESH_LEAD_MS = 5 * 60_000;
 /** The ID token's allowed clock skew, as OpenAI's own verification example sets it. */
 const CLOCK_SKEW_SEC = 5;
 
-/** One call to auth.openai.com, bounded, so a hung call holds neither a sign-out nor an update handoff. */
-const TOKEN_CALL_TIMEOUT_MS = 30_000;
-
-/** How long an updated daemon waits for the one it replaced to finish its rotation and exit: past one token call. */
-const PREDECESSOR_WAIT_MS = 45_000;
-
-const PROCESS_POLL_MS = 50;
-
 /** Refresh answers that end the renewable session: clear the tokens, sign in again with the saved client. */
 const UNUSABLE_REFRESH_CODES = Object.freeze([
   'invalid_grant', 'invalid_refresh_token', 'token_expired', 'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused',
@@ -186,7 +178,6 @@ async function tokenCall(fetchImpl, fields, doing) {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
     body: new URLSearchParams(fields).toString(),
-    signal: AbortSignal.timeout(TOKEN_CALL_TIMEOUT_MS),
   });
 
   const answer = tokenAnswerOf(parseJson(await res.text()));
@@ -236,7 +227,6 @@ async function revokeSession({ clientId, refreshToken, fetch: fetchImpl = global
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ token: refreshToken, token_type_hint: 'refresh_token', client_id: clientId }).toString(),
-      signal: AbortSignal.timeout(TOKEN_CALL_TIMEOUT_MS),
     });
 
     return { unconfirmed: res.ok ? null : `auth.openai.com answered HTTP ${res.status}` };
@@ -518,46 +508,32 @@ function planDeclined(record) {
   return record !== null && record.scopes.length > 0 && !planEnabled(record);
 }
 
-function processAlive(pid) {
-  try {
-    process.kill(pid, 0);
-
-    return true;
-  } catch (err) {
-    return err?.code === 'EPERM';
-  }
-}
-
-function pause(ms) {
-  return new Promise((resolve) => { setTimeout(resolve, ms); });
-}
-
 /**
  * The daemon's own ChatGPT sign-in. Every write of the record (a rotation, a sign-in landing, a sign-out) runs
  * on one chain, and each re-reads the record there, so none acts on a session another has replaced: a delayed
- * refresh cannot bring a signed-out session back, and a sign-out revokes the newest refresh token. The chain's
- * first step waits for the daemon this one replaced, so an update's overlap submits no refresh token twice.
+ * refresh cannot bring a signed-out session back, and a sign-out revokes the newest refresh token.
+ *
+ * No clock ends anything here. The chain starts when `predecessorExited` settles, the event of the daemon this
+ * one replaced having exited, so an update's overlap submits no refresh token twice. A call to auth.openai.com
+ * ends when its answer does, or when `abort` (a forced stop) ends it.
  */
-function createDeviceSession({ home, fetch: fetchImpl = globalThis.fetch, now = Date.now, predecessor = null }) {
+function createDeviceSession({ home, fetch: baseFetch = globalThis.fetch, now = Date.now, predecessorExited = null }) {
   const file = path.join(home, DEVICE_RECORD_FILE);
-  /** The sign-in waiting for the browser: its abort, and its landing, which settles once it is over. */
+  /** The sign-in waiting for the browser: its abort, whether it was cancelled, and its landing. */
   let signingIn = null;
   let refreshing = null;
   let lastFailure = null;
   let firstSignIn = false;
   /** Sign-outs under way; while any is, no call gets a token. */
   let signingOut = 0;
-  /** Set by `quiesce`: an update handoff or an exit is under way, and nothing new starts. */
+  /** Set by `quiesce` or `abort`: an update handoff or an exit is under way, and nothing new starts. */
   let closed = false;
+  const closing = Promise.withResolvers();
+  const stopping = new AbortController();
+  const fetchImpl = (input, init) => baseFetch(input, { ...init, signal: stopping.signal });
 
-  // Until the replaced daemon has exited, or for a bound a hung one cannot outlast; a quiesce ends the wait.
-  const replaced = async () => {
-    const deadline = Date.now() + PREDECESSOR_WAIT_MS;
-
-    while (!closed && processAlive(predecessor) && Date.now() < deadline) await pause(PROCESS_POLL_MS);
-  };
-
-  let chain = predecessor === null ? Promise.resolve() : replaced();
+  // A daemon stopping has nothing left to wait for its predecessor over.
+  let chain = predecessorExited === null ? Promise.resolve() : Promise.race([predecessorExited, closing.promise]);
 
   const current = () => readRecord(file);
 
@@ -571,13 +547,15 @@ function createDeviceSession({ home, fetch: fetchImpl = globalThis.fetch, now = 
 
   const admitting = () => !closed && signingOut === 0;
 
+  /** A replacing sign-in or a sign-out: the one waiting is cancelled, and a grant it still gets is revoked. */
   const cancelSignIn = async () => {
     if (signingIn === null) return;
+    signingIn.cancelled = true;
     signingIn.controller.abort();
     await signingIn.landed;
   };
 
-  const land = async (flow, controller) => {
+  const land = async (flow, attempt) => {
     try {
       const result = await flow.done;
 
@@ -589,7 +567,7 @@ function createDeviceSession({ home, fetch: fetchImpl = globalThis.fetch, now = 
 
       await serially(async () => {
         // Cancelled while the browser finished: the grant it made is not kept, so it is not left live either.
-        if (controller.signal.aborted) {
+        if (attempt.cancelled) {
           if (result.record.refreshToken !== undefined) await revokeSession({ clientId: result.record.clientId, refreshToken: result.record.refreshToken, fetch: fetchImpl });
 
           return;
@@ -600,9 +578,9 @@ function createDeviceSession({ home, fetch: fetchImpl = globalThis.fetch, now = 
         lastFailure = result.outcome === 'plan-disabled' ? 'ChatGPT plan usage was not granted' : null;
       });
     } catch (err) {
-      if (!controller.signal.aborted) lastFailure = messageOf(err);
+      if (!attempt.controller.signal.aborted) lastFailure = messageOf(err);
     } finally {
-      if (signingIn?.controller === controller) signingIn = null;
+      if (signingIn === attempt) signingIn = null;
     }
   };
 
@@ -657,8 +635,11 @@ function createDeviceSession({ home, fetch: fetchImpl = globalThis.fetch, now = 
         home, registration, consent: planDeclined(record), fetch: fetchImpl, now, signal: controller.signal,
       });
 
+      const attempt = { controller, cancelled: false, landed: null };
+
       lastFailure = null;
-      signingIn = { controller, landed: land(flow, controller) };
+      signingIn = attempt;
+      attempt.landed = land(flow, attempt);
 
       return { authorizeUrl: flow.authorizeUrl };
     },
@@ -706,11 +687,26 @@ function createDeviceSession({ home, fetch: fetchImpl = globalThis.fetch, now = 
       }
     },
 
-    /** Stops new token work and waits for the writes already queued: an update handoff or an exit calls it. */
+    /**
+     * Starts nothing new and waits for what is under way: an update handoff or an exit calls it. A browser that
+     * has not come back is no longer waited for; one that has lands, and the auth call in flight ends when its
+     * answer does.
+     */
     async quiesce() {
       closed = true;
-      signingIn?.controller.abort();
+      closing.resolve();
+      const attempt = signingIn;
+
+      attempt?.controller.abort();
+      await attempt?.landed;
       await chain;
+    },
+
+    /** A forced stop: the auth call in flight ends now, unanswered, and writes nothing. */
+    abort() {
+      closed = true;
+      closing.resolve();
+      stopping.abort(new SiwcError('the daemon was stopped before auth.openai.com answered'));
     },
   };
 }

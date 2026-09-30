@@ -165,9 +165,17 @@ function startUpstream(tls: { key: string; cert: string }) {
   };
 }
 
-/** The hub the daemon dials, bridged to the real UserDO. */
+/** One daemon's connection to the bridge, settled when it opens. */
+interface Connection {
+  readonly promise: Promise<AcceptedSocket>;
+  readonly resolve: (accepted: AcceptedSocket) => void;
+}
+
+/** The hub the daemon dials, bridged to the real UserDO; `connected(n)` settles as the n-th daemon connects. */
 function startHubBridge(harness: TestUserDO) {
-  const connected = Promise.withResolvers<AcceptedSocket>();
+  const connections: Connection[] = [];
+  const nth = (n: number): Connection => (connections[n] ??= Promise.withResolvers<AcceptedSocket>());
+  let opened = 0;
 
   const server = Bun.serve<{ accepted: AcceptedSocket }>({
     port: 0,
@@ -198,7 +206,8 @@ function startHubBridge(harness: TestUserDO) {
     websocket: {
       open(ws) {
         ws.data.accepted.forward((data) => { ws.send(data); });
-        connected.resolve(ws.data.accepted);
+        nth(opened).resolve(ws.data.accepted);
+        opened += 1;
       },
       async message(ws, message) {
         await harness.userDO.webSocketMessage(ws.data.accepted.ws, String(message));
@@ -206,7 +215,7 @@ function startHubBridge(harness: TestUserDO) {
     },
   });
 
-  return { origin: `http://127.0.0.1:${String(server.port)}`, connected: connected.promise, stop: () => server.stop(true) };
+  return { origin: `http://127.0.0.1:${String(server.port)}`, connected: (n: number) => nth(n).promise, stop: () => server.stop(true) };
 }
 
 describe('the daemon relays model calls from the owner\'s machine', () => {
@@ -217,9 +226,20 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
   let logPath: string;
   let deviceId: string;
   let home: string;
+  let root: string;
+  let daemonEnv: NodeJS.ProcessEnv;
+
+  /** A daemon on the machine's home, logging to `log`. */
+  const startDaemon = (log: string) => {
+    const fd = openSync(log, 'a');
+
+    return Bun.spawn({ cmd: [process.execPath, DAEMON_PATH], env: daemonEnv, stdout: fd, stderr: fd, stdin: 'ignore' });
+  };
+
+  const signIn = () => v.parse(v.object({ accessToken: v.string(), refreshToken: v.string() }), JSON.parse(readFileSync(join(home, 'pc-agent.chatgpt.json'), 'utf8')));
 
   beforeAll(async () => {
-    const root = scratchDir('provider-relay');
+    root = scratchDir('provider-relay');
     const certs = mintCertificates(root);
     harness = createTestUserDO();
     const owner = await testOwner();
@@ -234,18 +254,14 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
     writeFileSync(join(home, 'device.json'), JSON.stringify({ user: 'user-1', token: registered.token, origin: hub.origin }), { mode: 0o600 });
     writeFileSync(join(home, 'pc-agent.chatgpt.json'), JSON.stringify(DEVICE_SIGN_IN), { mode: 0o600 });
     logPath = join(root, 'pc-agent.log');
-    const log = openSync(logPath, 'a');
 
-    daemon = Bun.spawn({
-      cmd: [process.execPath, DAEMON_PATH],
-      env: {
-        ...process.env, KINU_HOME: home, KINU_INFLIGHT_ROOT: join(home, 'inflight'),
-        HTTPS_PROXY: `http://127.0.0.1:${String(proxyPort)}`, NO_PROXY: '127.0.0.1,localhost', NODE_EXTRA_CA_CERTS: certs.ca,
-      },
-      stdout: log, stderr: log, stdin: 'ignore',
-    });
+    daemonEnv = {
+      ...process.env, KINU_HOME: home, KINU_INFLIGHT_ROOT: join(home, 'inflight'),
+      HTTPS_PROXY: `http://127.0.0.1:${String(proxyPort)}`, NO_PROXY: '127.0.0.1,localhost', NODE_EXTRA_CA_CERTS: certs.ca,
+    };
 
-    await hub.connected;
+    daemon = startDaemon(logPath);
+    await hub.connected(0);
   });
 
   afterAll(async () => {
@@ -365,12 +381,11 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
   });
 
   // SIWC-07: an exit mid-rotation (a stop, or an update's handoff, which exits the same way) left the spent
-  // refresh token on disk for the next daemon to submit. Last in this suite: it ends the daemon.
+  // refresh token on disk for the next daemon to submit. It ends the suite's first daemon.
   test('a daemon told to stop mid-rotation writes the rotated token before it exits', async () => {
     const owner = await testOwner();
     const hold = Promise.withResolvers<void>();
     const rotating = Promise.withResolvers<void>();
-    const signIn = () => v.parse(v.object({ accessToken: v.string(), refreshToken: v.string() }), JSON.parse(readFileSync(join(home, 'pc-agent.chatgpt.json'), 'utf8')));
     upstream.state.held = hold.promise;
     upstream.state.rotating = rotating.resolve;
     // Refused whichever token the machine holds now, so it rotates.
@@ -392,6 +407,39 @@ describe('the daemon relays model calls from the owner\'s machine', () => {
     expect(await daemon.exited).toBe(0);
     const rotated = String(upstream.state.rotations);
     expect(signIn()).toEqual({ accessToken: `device-at-${rotated}`, refreshToken: `device-rt-${rotated}` });
+  });
+
+  // No clock ends a drain: the owner does, with a second stop signal. The call in flight ends unanswered, and
+  // nothing is written, so the machine keeps the session it had.
+  test('a second stop signal ends the rotation in flight unanswered, and the daemon exits without writing it', async () => {
+    const owner = await testOwner();
+    const forcedLog = join(root, 'pc-agent.forced.log');
+    const rotating = Promise.withResolvers<void>();
+
+    // One daemon holds a machine: the suite's first goes before this one starts.
+    daemon.kill('SIGTERM');
+    await daemon.exited;
+    daemon = startDaemon(forcedLog);
+    await hub.connected(1);
+    const kept = signIn();
+    // Never answered: only the forced stop ends this rotation.
+    upstream.state.held = Promise.withResolvers<void>().promise;
+    upstream.state.rotating = rotating.resolve;
+    upstream.state.refusing = kept.accessToken;
+    const settled = () => undefined;
+
+    harness.userDO.relayModelCall(owner, deviceId, 'call-forced', new Request(PLAN_RESPONSES_URL, {
+      method: 'POST', body: '{"model":"gpt-6.1-sol"}', headers: { authorization: 'Bearer chatgpt-plan' },
+    })).then(settled, settled);
+
+    await rotating.promise;
+    daemon.kill('SIGTERM');
+    await logged(forcedLog, 'device.exit_draining');
+    daemon.kill('SIGTERM');
+
+    expect(await daemon.exited).toBe(0);
+    expect(readFileSync(forcedLog, 'utf8')).toContain('device.exit_forced');
+    expect(signIn()).toEqual(kept);
   });
 });
 

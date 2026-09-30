@@ -120,14 +120,16 @@ export interface DeviceSession {
   signIn(): Promise<{ readonly authorizeUrl: string }>;
   bearer(rejected?: string): Promise<string | null>;
   signOut(): Promise<{ readonly unconfirmed: string | null }>;
-  /** Stops new token work and waits for the writes already queued. */
+  /** Starts nothing new and waits for what is under way: a landing sign-in, the auth call in flight. */
   quiesce(): Promise<void>;
+  /** A forced stop: the auth call in flight ends now, unanswered, and writes nothing. */
+  abort(): void;
 }
 
 export declare function createDeviceSession(opts: {
   readonly home: string;
   readonly fetch?: typeof fetch;
   readonly now?: () => number;
-  /** The daemon this one replaced: no rotation starts until it has exited. */
-  readonly predecessor?: number | null;
+  /** Settles when the daemon this one replaced has exited: nothing writes the record before. */
+  readonly predecessorExited?: Promise<void> | null;
 }): DeviceSession;

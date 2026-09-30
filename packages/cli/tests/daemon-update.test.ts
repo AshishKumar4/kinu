@@ -14,7 +14,7 @@ import {
   DAEMON_FILES, daemonArchive, PLATFORM_ARTIFACT, releaseSigningEnv, ROTATED_TOKEN, startUpdateHub,
   type HubPush, type HubSocket, type UpdateHub,
 } from './helpers/update-hub';
-import { waitForDaemonPid, waitForFileText } from './helpers/device-process';
+import { readProcessOutput, waitForDaemonPid, waitForFileText } from './helpers/device-process';
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -109,6 +109,26 @@ function startDaemon(home: string, extraEnv: Record<string, string> = {}) {
   };
 }
 
+/**
+ * A daemon whose log is read from a pipe as it is written, a successor's lines included: the successor writes to
+ * the stdout it inherits. A watched file can miss a line written the moment its watch begins.
+ */
+function startPipedDaemon(home: string, extraEnv: Record<string, string> = {}) {
+  const proc = Bun.spawn({
+    cmd: [process.execPath, join(home, 'pc-agent.js')],
+    cwd: home,
+    env: { ...process.env, KINU_HOME: home, KINU_INFLIGHT_ROOT: join(home, 'inflight'), ...extraEnv },
+    stdout: 'pipe',
+    stderr: Bun.file(join(home, 'pc-agent.log')),
+    stdin: 'ignore',
+  });
+
+  daemons.push(proc);
+  const output = readProcessOutput(proc.stdout);
+
+  return { proc, log: output.output, waitForLog: output.waitFor };
+}
+
 const pidfile = (home: string) => Number(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim());
 
 const installed = (home: string, name: string) => readFileSync(join(home, name), 'utf-8');
@@ -131,7 +151,7 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
   test('a behind build is landed, selftested, started as a successor; the old daemon stays until replaced', async () => {
     const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW) });
     const home = installedMachine(served.origin, OLD);
-    const daemon = startDaemon(home, await releaseSigningEnv());
+    const daemon = startPipedDaemon(home, await releaseSigningEnv());
     const oldPid = await waitForDaemonPid(home);
 
     const successor = await served.until(() => served.sockets[1], 'the successor HELLO', daemon.log);
@@ -139,6 +159,11 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     expect(served.sockets[0]?.closed).toBe('hub');
     expect(await daemon.proc.exited).toBe(0);
     expect(daemon.log()).toContain('device.update_handed_over');
+
+    // The successor learns of that exit from its stdin, the lifeline the OS closes when the old daemon ends, and
+    // not from a clock: its line follows the old daemon's last one.
+    await daemon.waitForLog(`device.predecessor_exited pid ${String(oldPid)}`);
+    expect(daemon.log().indexOf('device.update_handed_over')).toBeLessThan(daemon.log().indexOf('device.predecessor_exited'));
 
     const newPid = pidfile(home);
     expect(newPid).not.toBe(oldPid);

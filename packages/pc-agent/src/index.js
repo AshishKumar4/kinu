@@ -224,19 +224,32 @@ const CHATGPT_METHODS = Object.freeze({ status: 'chatgptStatus', signIn: 'chatgp
 /** The error code of the answer a relayed ChatGPT call gets when this machine holds no usable sign-in. */
 const CHATGPT_SIGNED_OUT = 'chatgpt_signed_out';
 
-/** The daemon that started this one as its successor, while it may still be finishing a rotation. */
-const replacedDaemon = Number(process.env[update.PREDECESSOR_ENV]);
+/** The daemon that started this one as its successor, which may still be finishing a rotation of its own. */
+const replacedDaemon = isPredecessor(process.ppid) ? process.ppid : null;
 
-const chatgptSession = chatgpt?.createDeviceSession({
-  home: DEVICE_HOME, predecessor: Number.isInteger(replacedDaemon) && replacedDaemon > 0 && replacedDaemon === process.ppid ? replacedDaemon : null,
-}) ?? null;
+function predecessorExited() {
+  return update.lifelineClosed(process.stdin).then(() => { log('device.predecessor_exited', `pid ${String(replacedDaemon)}`); });
+}
+
+const chatgptSession = chatgpt?.createDeviceSession({ home: DEVICE_HOME, predecessorExited: replacedDaemon === null ? null : predecessorExited() }) ?? null;
 
 let exiting = false;
 
-/** Exits once this machine's ChatGPT sign-in has written the rotation it was writing, so a successor never reads
- *  a spent refresh token; a second call exits at once. */
+/**
+ * Exits once this machine's ChatGPT sign-in has written what it is writing, so a successor never reads a spent
+ * refresh token: an update handoff or a first stop signal waits for the auth call in flight to end, as long as
+ * that takes. A second call is a forced stop: that call ends there, unanswered, and the exit follows.
+ */
 function exitWhenQuiet(code) {
-  if (exiting || chatgptSession === null) process.exit(code);
+  if (chatgptSession === null) process.exit(code);
+
+  if (exiting) {
+    log('device.exit_forced', 'the ChatGPT auth call in flight is abandoned');
+    chatgptSession.abort();
+
+    return;
+  }
+
   exiting = true;
   const exit = () => process.exit(code);
 

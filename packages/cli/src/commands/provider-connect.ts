@@ -166,7 +166,7 @@ function namedAccounts(baseKey: string, localNames: readonly string[], facts: Co
     .sort();
 }
 
-/** Holds tokens: a login that kept only its registration (signed out, or its refresh spent) does not. */
+/** A login that kept only its registration holds none. */
 function holdsTokens(login: LocalOAuthSession | undefined): boolean {
   return login?.accessToken !== undefined || login?.refreshToken !== undefined;
 }

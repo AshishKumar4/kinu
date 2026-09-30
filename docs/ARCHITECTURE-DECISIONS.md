@@ -1166,9 +1166,20 @@ session back or writes over a newer sign-in. A spent refresh token retires the
 login on both (the CLI resubmitted it on every call), and signing out, main or
 named account, keeps only the registration (issuer, subject, email, client
 ID), never the ID token. A daemon that exits or hands over to an update
-quiesces first: no new rotation, the one in flight lands; its successor
-rotates only once it has exited (bounded at 45 s), and each call to
-auth.openai.com is bounded at 30 s. The refused request fields are dropped
+quiesces first: no new rotation, the one in flight lands, and so does a
+sign-in whose browser has come back. No clock ends anything there (owner
+rule 5). A call to auth.openai.com ends when its answer does, or when a
+forced stop ends it: a second stop signal aborts it unanswered, writes
+nothing, and the exit follows. The successor waits for its predecessor's
+exit itself: the updater starts it with a pipe for stdin, never written,
+whose far end the OS closes when the predecessor ends, however it ends (a
+clean exit, a crash, SIGKILL; seen on Bun 1.4.0 and Node, with a grandchild
+still running and after forced collections). Only then does it rotate
+(`device.predecessor_exited`). A hung call therefore holds the old daemon's
+exit and the new one's rotations until the platform's connection fails or
+the owner stops the old daemon; `device.exit_draining` says which daemon
+waits. The web's status call on a machine is deadline-free too, ended by
+the answer or by the tunnel's liveness probe. The refused request fields are dropped
 from the wire body, the preview's whole list, because product code may not
 name the output cap (`no-output-token-cap`). `response.incomplete` is not
 success: on a stream an output-limit stop reaches the SDK as a `length`
