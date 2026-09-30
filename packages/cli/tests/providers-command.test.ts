@@ -205,6 +205,29 @@ describe('providers command — disconnect', () => {
     expect(readFileSync(join(home, 'config.json'), 'utf8')).not.toContain('secret');
   });
 
+  // SIWC-10: a named account kept nothing, so its next sign-in registered Kinu anew instead of reusing its client.
+  test('a named ChatGPT account signs out keeping its issued client, and is no longer listed as an account', async () => {
+    const registration = { clientId: 'oaiapp_work', subject: 'work-sub', email: 'work@example.com' };
+    const home = homeWith({ providers: { chatgpt: { accessToken: 'at-main', accounts: { work: { accessToken: 'at-work', metadata: { ...registration, idToken: 'id-work' } } } } } });
+
+    const res = await runProviders(['disconnect', 'chatgpt', 'work'], { home });
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain('Removed the chatgpt work account from this machine');
+    expect(readConfig(home).providers).toEqual({ chatgpt: { accessToken: 'at-main', accounts: { work: { metadata: registration } } } });
+    expect((await runProviders(['list'], { home })).stdout).not.toContain('accounts: main, work');
+  });
+
+  test('a signed-out ChatGPT login reads as signed out, not as a sign-in without plan usage', async () => {
+    const scopes = ['chatgpt.tokens.use.direct', 'email', 'offline_access', 'openid', 'profile', 'resource.invoke'];
+    const home = homeWith({ providers: { chatgpt: { accessToken: 'at', metadata: { clientId: 'oaiapp_me', email: 'me@example.com', scopes } } } });
+
+    expect((await runProviders(['disconnect', 'chatgpt'], { home })).exitCode).toBe(0);
+    const listed = (await runProviders(['list'], { home })).stdout;
+
+    expect(listed).toContain('me@example.com signed out');
+    expect(listed).not.toContain('without ChatGPT plan usage');
+  });
+
   test('an account is picked as the default, listed as it, and taken out of the default when removed', async () => {
     const home = homeWith({ providers: { anthropic: { apiKey: 'sk-main', accounts: { work: { apiKey: 'sk-work' } } } } });
     await withDefaultModel(home, 'anthropic/claude-x');

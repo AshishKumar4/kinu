@@ -555,10 +555,13 @@ export interface CodexStatus {
   startedFlow: { userCode: string; portalURL: string; pollIntervalSec: number } | null;
 }
 
+const CHATGPT_SIGNED_OUT_MARK = 'signed out';
+
 /** The machine that holds, or would hold, the ChatGPT sign-in, and what it says. */
 export interface ChatGptPlanStatus {
   readonly device: { readonly id: string; readonly label: string } | null;
   readonly status: DeviceChatGptStatus | null;
+  readonly changed: boolean;
 }
 
 export interface ConnectedProvider {
@@ -2621,8 +2624,21 @@ export class UserDO extends Agent<Env> {
   async chatgptPlan(caller: UserCaller): Promise<ChatGptPlanStatus> {
     await this.requireTier(caller, 'credentials.model');
     const machine = await this.chatgptMachine();
+    const device = machine === null ? null : { id: machine.id, label: machine.label };
 
-    return machine === null ? { device: null, status: null } : { device: { id: machine.id, label: machine.label }, status: machine.status };
+    return { device, status: machine?.status ?? null, changed: this.noteChatGptSignIn(device, machine?.status ?? null) };
+  }
+
+  /** The first read to see a sign-in start or end raises the credential revision (ADR P1). */
+  private noteChatGptSignIn(device: { readonly id: string } | null, status: DeviceChatGptStatus | null): boolean {
+    const now = device === null || status?.signedIn !== true ? CHATGPT_SIGNED_OUT_MARK : `${device.id} ${status.email ?? ''}`;
+    const seen = this.ctx.storage.kv.get<string>(UserDO.CHATGPT_SIGN_IN_SEEN_KEY);
+
+    if (seen === now || (seen === undefined && now === CHATGPT_SIGNED_OUT_MARK)) return false;
+    this.ctx.storage.kv.put(UserDO.CHATGPT_SIGN_IN_SEEN_KEY, now);
+    this.bumpCredentialsRevision();
+
+    return true;
   }
 
   /** Starts Sign in with ChatGPT on the owner's machine; the browser that opens the URL must run there. */
@@ -2645,6 +2661,8 @@ export class UserDO extends Agent<Env> {
 
     if (machine === null) return { unconfirmed: null };
     const answer = v.safeParse(v.object({ unconfirmed: v.nullable(v.string()) }), await this._devices.chatgpt(machine.id, DEVICE_CHATGPT.signOut));
+
+    this.noteChatGptSignIn(null, null);
 
     return answer.success ? answer.output : { unconfirmed: `${machine.label} did not say whether OpenAI revoked the sign-in` };
   }
@@ -3820,6 +3838,8 @@ export class UserDO extends Agent<Env> {
   }
 
   private static readonly AI_GATEWAY_CONFIG_KEY = 'cloudflare_ai_gateway';
+
+  private static readonly CHATGPT_SIGN_IN_SEEN_KEY = 'chatgpt_sign_in_seen';
 
   private selectedAIGatewayId(): string | null {
     const row = this.sqlx<{ value: string }>(

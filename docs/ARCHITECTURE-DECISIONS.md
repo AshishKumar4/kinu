@@ -1133,6 +1133,46 @@ the docs, not the route: `prompt_cache_key`, `include` and `parallel_tool_calls`
 which the docs' list of refused fields does not name, have not met the real
 route, and neither has the `functions` namespace name.
 
+Amended 2026-09-30 after the security review of b23ebbbe20 (SIWC-01 to 11).
+A sign-in's record has one writer at a time, and every writer re-reads it
+there: the daemon's refresh, sign-in landing and sign-out run on one chain,
+and the CLI's refresh and sign-out (`signOutChatGptLogin`) take the config
+lock. So a sign-out waits for a rotation in flight and revokes the token it
+left, no call gets a token while it runs, and a refresh answer that arrives
+late or queued renews only the login still on disk: none brings a signed-out
+session back or writes over a newer sign-in. A spent refresh token retires the
+login on both (the CLI resubmitted it on every call), and signing out, main or
+named account, keeps only the registration (issuer, subject, email, client
+ID), never the ID token. A daemon that exits or hands over to an update
+quiesces first: no new rotation, the one in flight lands; its successor
+rotates only once it has exited (bounded at 45 s), and each call to
+auth.openai.com is bounded at 30 s. The refused request fields are dropped
+from the wire body, the preview's whole list, because product code may not
+name the output cap (`no-output-token-cap`). `response.incomplete` is not
+success: on a stream an output-limit stop reaches the SDK as a `length`
+finish, which the chat loop continues once, and any other reason fails the
+stream (`content_filter` as `denied`); a one-shot call fails on any. A refusal
+carries the provider's own words (its message, or an admission answer's
+`detail`) with the status, code and request ID; Kinu's sentence stands in
+only when the provider says nothing. A device sign-in tells nobody, so the
+first read of `/api/user/chatgpt` to see one start or end raises the
+credential revision and fans out as a credential write does (the last one
+seen is `chatgpt_sign_in_seen` in the UserDO's key-value store). Hosted
+eligibility (SIWC-06) is the owner's call; until then the web's ChatGPT entry
+says that the plan runs through the owner's device, that OpenAI's
+open-source terms cover locally hosted apps, and that they connect at their
+own risk. Measured red on the reviewed code and green after:
+`pc-agent/tests/chatgpt.test.js` (a sign-out and a sign-in landing during a
+held rotation, quiesce, a successor waiting on its predecessor, the fields a
+signed-out record keeps, a declined grant),
+`cli-backend/tests/oauth-store.test.ts` (a spent refresh retired, a refresh
+queued behind a sign-out, a sign-out behind a rotation, a named sign-out),
+`core/tests/contract-chatgpt-plan.test.ts` (the whole refused list with an
+output cap supplied, three incomplete cases, the provider's words),
+`unit-pc-agent-provider-relay` (the real daemon stopped mid-rotation writes
+the rotated token before it exits; the first read of a sign-in raises the
+revision), `unit-chatgpt-plan-route` and `providers-command`.
+
 ## Open
 
 O1. A gate that pins a nonzero cache read on a representative multi-step turn

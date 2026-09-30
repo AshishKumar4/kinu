@@ -13,6 +13,7 @@ import { withCallAccount } from './quota';
 import { withRateLimitRetry } from './rate-limit-retry';
 import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types';
 import { StaleModelList, statelessResponses } from './util';
+import { JsonObjectSchema } from '../utils/json';
 
 export const CHATGPT_BASE_URL = 'https://api.openai.com/v1';
 
@@ -43,8 +44,9 @@ export interface ChatGptProviderOptions {
   readonly device?: ChatGptDeviceRoute;
 }
 
-const REFUSED_OPTIONS = [
-  'conversation', 'maxToolCalls', 'metadata', 'previousResponseId', 'user', 'promptCacheRetention', 'safetyIdentifier', 'logprobs', 'truncation',
+const REFUSED_FIELDS = [
+  'background', 'conversation', 'max_output_tokens', 'max_tool_calls', 'metadata', 'moderation', 'multi_agent', 'prompt',
+  'prompt_cache_retention', 'previous_response_id', 'safety_identifier', 'temperature', 'top_logprobs', 'top_p', 'truncation', 'user',
 ] as const;
 
 function namespacedCall(message: LanguageModelV3Message, functions: ReadonlySet<string>): LanguageModelV3Message {
@@ -62,14 +64,10 @@ const PLAN_REQUEST: LanguageModelMiddleware = {
   specificationVersion: 'v3',
   transformParams: async ({ params }): Promise<LanguageModelV3CallOptions> => {
     const openai: JSONObject = { ...params.providerOptions?.openai, systemMessageMode: 'developer' };
-
-    for (const field of REFUSED_OPTIONS) delete openai[field];
     const functions = new Set(params.tools?.flatMap((tool) => (tool.type === 'function' ? [tool.name] : [])));
 
     return {
       ...params,
-      temperature: undefined,
-      topP: undefined,
       prompt: params.prompt.map((message) => namespacedCall(message, functions)),
       tools: params.tools?.map((tool) => (tool.type === 'function'
         ? { ...tool, providerOptions: { ...tool.providerOptions, openai: { ...tool.providerOptions?.openai, namespace: { name: TOOL_NAMESPACE, description: '' } } } }
@@ -82,28 +80,31 @@ const PLAN_REQUEST: LanguageModelMiddleware = {
 interface Refusal {
   readonly code: ErrorCode;
   readonly status: number;
-  readonly words: (said: { readonly param: string | null; readonly message: string | null }) => string;
+  readonly unsaid: (param: string | null) => string;
+  readonly next?: string;
 }
 
-const NOT_AUTHORIZED: Refusal = { code: 'denied', status: 403, words: () => 'This sign-in\'s ChatGPT plan permission does not authorize the call' };
+const NOT_AUTHORIZED: Refusal = { code: 'denied', status: 403, unsaid: () => 'This sign-in\'s ChatGPT plan permission does not authorize the call' };
 
 const PLAN_REFUSALS = new Map<string, Refusal>([
-  ['subscription_sharing_user_not_eligible', { code: 'denied', status: 403, words: () => 'ChatGPT plan usage is not available for this ChatGPT account, workspace or policy' }],
-  ['subscription_sharing_usage_limit_exceeded', { code: 'budget', status: 429, words: () => `The ChatGPT plan's usage limit is reached; manage usage at ${CHATGPT_USAGE_URL}` }],
-  ['subscription_sharing_usage_unavailable', { code: 'unavailable', status: 503, words: () => 'ChatGPT could not check plan usage right now' }],
-  ['subscription_sharing_user_unavailable', { code: 'unavailable', status: 503, words: () => 'ChatGPT account information is unavailable right now' }],
-  ['subscription_sharing_unsupported_capability', { code: 'unsupported', status: 400, words: ({ param }) => `ChatGPT plan usage does not support ${param ?? 'part of this request'}` }],
-  ['subscription_sharing_route_not_supported', { code: 'unsupported', status: 403, words: () => 'ChatGPT plan usage does not serve this route' }],
-  ['subscription_sharing_invalid_user', { code: 'denied', status: 401, words: () => 'ChatGPT could not validate the subscriber behind this sign-in' }],
+  ['subscription_sharing_user_not_eligible', { code: 'denied', status: 403, unsaid: () => 'ChatGPT plan usage is not available for this ChatGPT account, workspace or policy' }],
+  ['subscription_sharing_usage_limit_exceeded', {
+    code: 'budget', status: 429, unsaid: () => 'The ChatGPT plan\'s usage limit is reached', next: `manage usage at ${CHATGPT_USAGE_URL}`,
+  }],
+  ['subscription_sharing_usage_unavailable', { code: 'unavailable', status: 503, unsaid: () => 'ChatGPT could not check plan usage right now' }],
+  ['subscription_sharing_user_unavailable', { code: 'unavailable', status: 503, unsaid: () => 'ChatGPT account information is unavailable right now' }],
+  ['subscription_sharing_unsupported_capability', { code: 'unsupported', status: 400, unsaid: (param) => `ChatGPT plan usage does not support ${param ?? 'part of this request'}` }],
+  ['subscription_sharing_route_not_supported', { code: 'unsupported', status: 403, unsaid: () => 'ChatGPT plan usage does not serve this route' }],
+  ['subscription_sharing_invalid_user', { code: 'denied', status: 401, unsaid: () => 'ChatGPT could not validate the subscriber behind this sign-in' }],
   ['chatpass_v2_scope_not_authorized', NOT_AUTHORIZED],
   ['chatpass_v2_invalid_authorization_context', NOT_AUTHORIZED],
-  [CHATGPT_SIGNED_OUT, { code: 'missing', status: 401, words: ({ message }) => message ?? 'No ChatGPT sign-in with plan usage' }],
+  [CHATGPT_SIGNED_OUT, { code: 'missing', status: 401, unsaid: () => 'No ChatGPT sign-in with plan usage' }],
 ]);
 
 const ADMISSION_REFUSALS = new Map<number, Refusal>([
-  [401, { code: 'denied', status: 401, words: () => 'ChatGPT did not accept this sign-in or its plan permission' }],
-  [403, { code: 'denied', status: 403, words: () => 'ChatGPT refused admission (a policy or the serving region)' }],
-  [503, { code: 'unavailable', status: 503, words: () => 'ChatGPT plan routing is unavailable right now' }],
+  [401, { code: 'denied', status: 401, unsaid: () => 'ChatGPT did not accept this sign-in or its plan permission' }],
+  [403, { code: 'denied', status: 403, unsaid: () => 'ChatGPT refused admission (a policy or the serving region)' }],
+  [503, { code: 'unavailable', status: 503, unsaid: () => 'ChatGPT plan routing is unavailable right now' }],
 ]);
 
 const PlanErrorSchema = v.object({
@@ -113,6 +114,8 @@ const PlanErrorSchema = v.object({
 });
 
 const PlanErrorBodySchema = v.object({ error: PlanErrorSchema });
+
+const AdmissionBodySchema = v.object({ detail: v.string() });
 
 interface PlanError {
   readonly code: string | null;
@@ -126,17 +129,23 @@ function planErrorOf(said: { readonly error: unknown }): PlanError | null {
   return parsed.success ? { code: parsed.output.code ?? null, param: parsed.output.param ?? null, message: parsed.output.message ?? null } : null;
 }
 
+function requestIdOf(headers: Headers): string | null {
+  return headers.get('x-request-id') ?? headers.get('openai-request-id');
+}
+
 function refusalError(input: {
   readonly url: string;
   readonly refusal: Refusal;
   readonly said: PlanError | null;
+  readonly words: string | null;
   readonly headers: Headers;
   readonly body: unknown;
 }): APICallError {
   const { refusal, said } = input;
-  const requestId = input.headers.get('x-request-id') ?? input.headers.get('openai-request-id');
+  const requestId = requestIdOf(input.headers);
   const tags = [`HTTP ${String(refusal.status)}`, ...(said?.code ? [said.code] : []), ...(requestId === null ? [] : [`request ${requestId}`])];
-  const message = `${refusal.words({ param: said?.param ?? null, message: said?.message ?? null })} (${tags.join(', ')})`;
+  const stated = `${input.words ?? refusal.unsaid(said?.param ?? null)} (${tags.join(', ')})`;
+  const message = refusal.next === undefined ? stated : `${stated}; ${refusal.next}`;
   const cause = new KinuError(refusal.code, message);
 
   diagnostics.failure('provider.chatgpt_refused', cause, { code: said?.code ?? '', status: refusal.status, request: requestId ?? '' });
@@ -160,9 +169,11 @@ function refusalOf(res: Response, url: string): Effect.Effect<APICallError | nul
     const body = tolerate<unknown>(() => JSON.parse(text), 'malformed-input') ?? text;
     const envelope = v.safeParse(PlanErrorBodySchema, body);
     const said = envelope.success ? planErrorOf({ error: envelope.output.error }) : null;
+    const admission = v.safeParse(AdmissionBodySchema, body);
     const refusal = (said?.code ? PLAN_REFUSALS.get(said.code) : undefined) ?? ADMISSION_REFUSALS.get(res.status);
+    const words = said?.message ?? (admission.success ? admission.output.detail : null);
 
-    return refusal === undefined ? null : refusalError({ url, refusal, said, headers: res.headers, body });
+    return refusal === undefined ? null : refusalError({ url, refusal, said, words, headers: res.headers, body });
   });
 }
 
@@ -174,9 +185,17 @@ const EventSchema = v.object({ type: v.string() });
 
 const FailedSchema = v.object({ response: v.object({ error: v.optional(v.nullable(v.unknown())) }) });
 
-const TERMINAL = new Set(['response.completed', 'response.incomplete']);
+const COMPLETED = 'response.completed';
+
+const INCOMPLETE = 'response.incomplete';
+
+const OUTPUT_LIMIT = 'max_output_tokens';
 
 const ENDED_EARLY = 'ChatGPT ended the stream before response.completed';
+
+const IncompleteSchema = v.object({
+  response: v.object({ incomplete_details: v.optional(v.nullable(v.object({ reason: v.optional(v.nullable(v.string())) }))) }),
+});
 
 function eventOf(message: EventSourceMessage): { readonly type: string; readonly value: unknown } | null {
   const value = tolerate<unknown>(() => JSON.parse(message.data), 'malformed-input');
@@ -190,9 +209,24 @@ function streamRefusal(event: { readonly type: string; readonly value: unknown }
   const said = planErrorOf({ error: failed.success ? failed.output.response.error : event.value });
   const refusal = said?.code ? PLAN_REFUSALS.get(said.code) : undefined;
 
-  if (refusal !== undefined) return refusalError({ url, refusal, said, headers, body: event.value });
+  if (refusal !== undefined) return refusalError({ url, refusal, said, words: said?.message ?? null, headers, body: event.value });
 
   return new KinuError('unavailable', `ChatGPT failed the response${said?.code ? ` (${said.code})` : ''}: ${said?.message ?? event.type}`);
+}
+
+function incompleteReason(event: { readonly value: unknown }): string {
+  const parsed = v.safeParse(IncompleteSchema, event.value);
+
+  return (parsed.success ? parsed.output.response.incomplete_details?.reason : null) ?? 'no reason given';
+}
+
+function incompleteFailure(reason: string, headers: Headers): KinuError {
+  const requestId = requestIdOf(headers);
+  const failure = new KinuError(reason === 'content_filter' ? 'denied' : 'unavailable', `ChatGPT stopped the response short: ${reason}${requestId === null ? '' : ` (request ${requestId})`}`);
+
+  diagnostics.failure('provider.chatgpt_incomplete', failure, { reason, request: requestId ?? '' });
+
+  return failure;
 }
 
 function guardedStream(res: Response, url: string): Response {
@@ -208,7 +242,15 @@ function guardedStream(res: Response, url: string): Response {
         return;
       }
 
-      if (event !== null && TERMINAL.has(event.type)) ended = true;
+      const reason = event?.type === INCOMPLETE ? incompleteReason(event) : null;
+
+      if (reason !== null && reason !== OUTPUT_LIMIT) {
+        controller.error(incompleteFailure(reason, res.headers));
+
+        return;
+      }
+
+      if (event?.type === COMPLETED || reason === OUTPUT_LIMIT) ended = true;
       controller.enqueue(`${message.event === undefined ? '' : `event: ${message.event}\n`}data: ${message.data}\n\n`);
     },
     flush(controller) {
@@ -240,10 +282,12 @@ function collectedResponse(res: Response, url: string): Effect.Effect<Response, 
       if (event === null) continue;
 
       if (event.type === 'response.failed' || event.type === 'error') return yield* Effect.die(streamRefusal(event, url, res.headers));
+
+      if (event.type === INCOMPLETE) return yield* Effect.fail(incompleteFailure(incompleteReason(event), res.headers));
       const done = event.type === 'response.output_item.done' ? v.safeParse(OutputItemDoneSchema, event.value) : null;
 
       if (done?.success === true) items.set(done.output.output_index, done.output.item);
-      const finished = TERMINAL.has(event.type) ? v.safeParse(TerminalSchema, event.value) : null;
+      const finished = event.type === COMPLETED ? v.safeParse(TerminalSchema, event.value) : null;
 
       if (finished?.success === true) terminal = finished.output.response;
     }
@@ -263,20 +307,21 @@ function collectedResponse(res: Response, url: string): Effect.Effect<Response, 
   });
 }
 
-const StreamFlagSchema = v.looseObject({ stream: v.optional(v.boolean()) });
-
 interface PlanCall {
   readonly init: RequestInit | undefined;
   readonly streamed: boolean;
 }
 
-function streamingRequest(init: RequestInit | undefined): PlanCall {
+function planRequest(init: RequestInit | undefined): PlanCall {
   const text = v.safeParse(v.string(), init?.body);
-  const body = text.success ? v.safeParse(StreamFlagSchema, tolerate<unknown>(() => JSON.parse(text.output), 'malformed-input')) : null;
+  const parsed = text.success ? v.safeParse(JsonObjectSchema, tolerate<unknown>(() => JSON.parse(text.output), 'malformed-input')) : null;
 
-  if (body?.success !== true || body.output.stream === true) return { init, streamed: true };
+  if (parsed?.success !== true) return { init, streamed: true };
+  const body = { ...parsed.output };
 
-  return { init: { ...init, body: JSON.stringify({ ...body.output, stream: true }) }, streamed: false };
+  for (const field of REFUSED_FIELDS) delete body[field];
+
+  return { init: { ...init, body: JSON.stringify({ ...body, stream: true }) }, streamed: parsed.output.stream === true };
 }
 
 function resolvedAuth(deps: ProviderDeps, rejected?: Readonly<Record<string, string>>): Effect.Effect<AuthResolution | null, KinuError> {
@@ -346,7 +391,7 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
       });
 
       const customFetch = asFetchFunction(async (input, requested) => {
-        const { init, streamed } = streamingRequest(requested);
+        const { init, streamed } = planRequest(requested);
         const url = requestUrl(input);
 
         const sending = (headers: Readonly<Record<string, string>>) => Effect.promise(() => {

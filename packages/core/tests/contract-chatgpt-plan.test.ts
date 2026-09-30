@@ -57,6 +57,12 @@ const MESSAGE = { id: 'msg_1', type: 'message', status: 'completed', role: 'assi
 
 const RESPONSE = { id: 'resp_1', object: 'response', created_at: 1_790_000_000, model: 'gpt-6.1-sol', status: 'in_progress', output: [] };
 
+/** The fields developers.openai.com/siwc/token-sharing-open-source/preview-limitations says to omit (2026-09-30). */
+const PREVIEW_REFUSED_FIELDS = [
+  'background', 'conversation', 'max_output_tokens', 'max_tool_calls', 'metadata', 'moderation', 'multi_agent', 'prompt',
+  'prompt_cache_retention', 'previous_response_id', 'safety_identifier', 'temperature', 'top_logprobs', 'top_p', 'truncation', 'user',
+];
+
 const USAGE = { input_tokens: 7, output_tokens: 1, total_tokens: 8, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } };
 
 /** One answer, `ok`, streamed as the Responses API streams it; `output` stays empty on the terminal event
@@ -137,11 +143,12 @@ describe('the request the preview accepts', () => {
       system: 'You are Kinu.',
       temperature: 0.2,
       topP: 0.9,
+      maxOutputTokens: 512,
       tools: { read_file: tool({ description: 'Read a file.', inputSchema: jsonSchema({ type: 'object', properties: { path: { type: 'string' } } }) }) },
       providerOptions: {
         openai: {
           metadata: { run: 'r1' }, previousResponseId: 'resp_0', promptCacheRetention: '24h', safetyIdentifier: 'owner',
-          user: 'owner', truncation: 'auto', maxToolCalls: 3, promptCacheKey: 'conversation-1',
+          user: 'owner', truncation: 'auto', maxToolCalls: 3, promptCacheKey: 'conversation-1', logprobs: 3, conversation: 'conv_1',
         },
       },
       messages: [
@@ -160,9 +167,8 @@ describe('the request the preview accepts', () => {
 
     expect(body).toMatchObject({ model: 'gpt-6.1-sol', store: false, stream: true, prompt_cache_key: 'conversation-1' });
 
-    for (const refused of ['temperature', 'top_p', 'max_output_tokens', 'metadata', 'previous_response_id', 'prompt_cache_retention', 'safety_identifier', 'user', 'truncation', 'max_tool_calls']) {
-      expect(body).not.toHaveProperty(refused);
-    }
+    // preview-limitations (2026-09-30), whole, and `previous_response_id`, which nothing stored can answer.
+    for (const refused of PREVIEW_REFUSED_FIELDS) expect(body).not.toHaveProperty(refused);
 
     const input = v.parse(v.array(v.looseObject({ type: v.optional(v.string()), role: v.optional(v.string()) })), body.input);
 
@@ -202,15 +208,19 @@ describe('what the plan route answers', () => {
 
     expect(api.sent).toHaveLength(1);
     expect(APICallError.isInstance(failed?.error)).toBe(true);
-    expect(failed?.error).toMatchObject({ statusCode: status, isRetryable: false, message: expect.stringContaining(`req_${code}`) });
+    // The provider's own words reach the owner, not a sentence of Kinu's in their place, with the request id.
+    expect(failed?.error).toMatchObject({ statusCode: status, isRetryable: false, message: expect.stringMatching(new RegExp(`^refused: ${code} .*request req_${code}`)) });
     expect(failed === null ? null : kinuCause(failed)?.code).toBe(kind);
   });
 
-  test('the usage limit names where the owner manages it', async () => {
+  test('the usage limit keeps OpenAI\'s words and names where the owner manages it', async () => {
     const api = openai(refusal(429, 'subscription_sharing_usage_limit_exceeded'));
     const model = createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps);
+    const failed = await failureOf(generateText({ model, prompt: 'hello', maxRetries: 0 }));
 
-    await expect(generateText({ model, prompt: 'hello', maxRetries: 0 })).rejects.toThrow('https://chatgpt.com/settings/usage');
+    expect(failed?.error).toMatchObject({
+      message: expect.stringMatching(/^refused: subscription_sharing_usage_limit_exceeded .*manage usage at https:\/\/chatgpt\.com\/settings\/usage$/),
+    });
   });
 
   test.each(['subscription_sharing_usage_unavailable', 'subscription_sharing_user_unavailable'])('%s backs off and asks again', async (code) => {
@@ -245,8 +255,8 @@ describe('what the plan route answers', () => {
     const model = createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps);
     const failed = await failureOf(generateText({ model, prompt: 'hello', maxRetries: 0 }));
 
-    expect(failed?.error).toMatchObject({ statusCode: 403 });
-    expect(failed === null ? null : kinuCause(failed)?.code).toBe('denied');
+    expect(failed?.error).toMatchObject({ statusCode: 403, message: expect.stringContaining('serving region not permitted') });
+    expect(failed === null ? null : kinuCause(failed)).toMatchObject({ code: 'denied', message: expect.stringContaining('serving region not permitted') });
   });
 
   test('a usage limit after the stream opens fails it as a budget refusal', async () => {
@@ -260,6 +270,50 @@ describe('what the plan route answers', () => {
     const failure = await streamFailure(createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps));
 
     expect(kinuCause(failure)?.code).toBe('budget');
+  });
+
+  test('an answer ChatGPT stops on its content filter fails the stream, naming the reason', async () => {
+    const api = openai(sse(
+      { type: 'response.created', response: RESPONSE },
+      { type: 'response.output_item.added', output_index: 0, item: { ...MESSAGE, status: 'in_progress', content: [] } },
+      { type: 'response.output_text.delta', item_id: 'msg_1', output_index: 0, content_index: 0, delta: 'o' },
+      { type: 'response.incomplete', response: { ...RESPONSE, status: 'incomplete', incomplete_details: { reason: 'content_filter' }, usage: USAGE } },
+    ));
+
+    const failure = await streamFailure(createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps));
+
+    expect(kinuCause(failure)).toMatchObject({ code: 'denied', message: expect.stringContaining('content_filter') });
+  });
+
+  // The chat loop's continuation contract: it continues a `length` finish once (chat.ts, OUTPUT_LIMIT_REACHED).
+  test('an answer stopped at its output limit reaches the stream as a `length` finish, which the chat loop continues', async () => {
+    const api = openai(sse(
+      { type: 'response.created', response: RESPONSE },
+      { type: 'response.output_item.added', output_index: 0, item: { ...MESSAGE, status: 'in_progress', content: [] } },
+      { type: 'response.output_text.delta', item_id: 'msg_1', output_index: 0, content_index: 0, delta: 'ok' },
+      { type: 'response.output_item.done', output_index: 0, item: { ...MESSAGE, status: 'incomplete' } },
+      { type: 'response.incomplete', response: { ...RESPONSE, status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, usage: USAGE } },
+    ));
+
+    const result = streamText({ model: createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps), prompt: 'hello', maxRetries: 0 });
+
+    expect(await result.finishReason).toBe('length');
+    expect(await result.text).toBe('ok');
+  });
+
+  test.each(['max_output_tokens', 'content_filter'])('a one-shot answer ChatGPT stops short (%s) is a failure, not the partial text', async (reason) => {
+    const api = openai(sse(
+      { type: 'response.created', response: RESPONSE },
+      { type: 'response.output_item.added', output_index: 0, item: { ...MESSAGE, status: 'in_progress', content: [] } },
+      { type: 'response.output_text.delta', item_id: 'msg_1', output_index: 0, content_index: 0, delta: 'ok' },
+      { type: 'response.output_item.done', output_index: 0, item: { ...MESSAGE, status: 'incomplete' } },
+      { type: 'response.incomplete', response: { ...RESPONSE, status: 'incomplete', incomplete_details: { reason }, output: [MESSAGE], usage: USAGE } },
+    ));
+
+    const model = createChatGptProvider().createModel('gpt-6.1-sol', signedIn(api.fetch).deps);
+    const failed = await failureOf(generateText({ model, prompt: 'hello', maxRetries: 0 }));
+
+    expect(failed === null ? null : kinuCause(failed)).toMatchObject({ message: expect.stringContaining(reason) });
   });
 
   test('a stream that ends before response.completed is not an answer', async () => {

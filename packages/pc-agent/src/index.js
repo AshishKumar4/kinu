@@ -224,7 +224,25 @@ const CHATGPT_METHODS = Object.freeze({ status: 'chatgptStatus', signIn: 'chatgp
 /** The error code of the answer a relayed ChatGPT call gets when this machine holds no usable sign-in. */
 const CHATGPT_SIGNED_OUT = 'chatgpt_signed_out';
 
-const chatgptSession = chatgpt?.createDeviceSession({ home: DEVICE_HOME }) ?? null;
+/** The daemon that started this one as its successor, while it may still be finishing a rotation. */
+const replacedDaemon = Number(process.env[update.PREDECESSOR_ENV]);
+
+const chatgptSession = chatgpt?.createDeviceSession({
+  home: DEVICE_HOME, predecessor: Number.isInteger(replacedDaemon) && replacedDaemon > 0 && replacedDaemon === process.ppid ? replacedDaemon : null,
+}) ?? null;
+
+let exiting = false;
+
+/** Exits once this machine's ChatGPT sign-in has written the rotation it was writing, so a successor never reads
+ *  a spent refresh token; a second call exits at once. */
+function exitWhenQuiet(code) {
+  if (exiting || chatgptSession === null) process.exit(code);
+  exiting = true;
+  const exit = () => process.exit(code);
+
+  log('device.exit_draining', 'the ChatGPT sign-in finishes the write in flight first');
+  chatgptSession.quiesce().then(exit, exit);
+}
 
 /** Hop-by-hop headers, plus the ones a relay must not carry from the cloud side. */
 const RELAY_DROPPED_HEADERS = new Set([
@@ -3114,7 +3132,7 @@ async function main() {
       const ended = sessions.closeAll();
 
       if (ended.length > 0) log('device.terminals_closed_with_daemon', ended.join(' '));
-      process.exit(0);
+      exitWhenQuiet(0);
     });
   }
 
@@ -3194,7 +3212,9 @@ async function main() {
         if (ended.length > 0) log('device.terminals_closed_with_socket', ended.join(' '));
         log('device.update_handed_over', `successor connected; pid ${process.pid} exiting`);
         loop.stop();
-        process.exit(0);
+        exitWhenQuiet(0);
+
+        return;
       }
 
       /** @param {unknown} error */

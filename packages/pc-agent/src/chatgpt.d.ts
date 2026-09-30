@@ -108,6 +108,8 @@ export interface DeviceSessionStatus {
   readonly signedIn: boolean;
   readonly email: string | null;
   readonly planEnabled: boolean;
+  /** A sign-in whose grant left out plan usage; a signed-out record is not one. */
+  readonly planDeclined: boolean;
   readonly pending: boolean;
   readonly lastFailure: string | null;
   readonly firstSignIn: boolean;
@@ -118,6 +120,14 @@ export interface DeviceSession {
   signIn(): Promise<{ readonly authorizeUrl: string }>;
   bearer(rejected?: string): Promise<string | null>;
   signOut(): Promise<{ readonly unconfirmed: string | null }>;
+  /** Stops new token work and waits for the writes already queued. */
+  quiesce(): Promise<void>;
 }
 
-export declare function createDeviceSession(opts: { readonly home: string; readonly fetch?: typeof fetch; readonly now?: () => number }): DeviceSession;
+export declare function createDeviceSession(opts: {
+  readonly home: string;
+  readonly fetch?: typeof fetch;
+  readonly now?: () => number;
+  /** The daemon this one replaced: no rotation starts until it has exited. */
+  readonly predecessor?: number | null;
+}): DeviceSession;

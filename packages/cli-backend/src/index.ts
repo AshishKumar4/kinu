@@ -43,7 +43,7 @@ export {
   type LocalProviderCredentials,
 } from './model-resolver';
 
-export { createFileOAuthStore, type LocalOAuthStore } from './oauth-store';
+export { createFileOAuthStore, signOutChatGptLogin, type ChatGptSignOut, type LocalOAuthStore } from './oauth-store';
 
 export {
   createOpenCodeProvider, checkOpenCodeAvailability,
