@@ -30,7 +30,7 @@
     "test:workerd:cf-complexity": "bun scripts/ladder.ts --run vitest run --root packages/cf-backend tests/workerd/complexity/",
     "coverage": "bun scripts/coverage.ts",
     "coverage:check": "bun scripts/coverage-check.ts",
-    "typecheck": "tsc --noEmit -p packages/agent-utils && tsc --noEmit -p packages/core && tsc --noEmit -p packages/compaction && tsc --noEmit -p packages/cf-backend && tsc --noEmit -p packages/cf-backend/tests/workerd && tsc --noEmit -p packages/cli-backend && tsc --noEmit -p packages/cli && tsc --noEmit -p packages/devbox && tsc --noEmit -p packages/devbox/tests/workerd && tsc --noEmit -p packages/test-utils && tsc --noEmit -p tests && tsc --noEmit -p evals && tsc --noEmit -p scripts/tsconfig.scripts.json && tsc --noEmit -p scripts/fixtures/kinu-durability && tsc --noEmit -p scripts/fixtures/payload-transport && tsc --noEmit -p scripts/worker-heap && node --check packages/pc-agent/src/index.js && node --check packages/pc-agent/src/sandbox.js && node --check packages/pc-agent/src/pty.js",
+    "typecheck": "tsc --noEmit -p packages/agent-utils && tsc --noEmit -p packages/core && tsc --noEmit -p packages/compaction && tsc --noEmit -p packages/cf-backend && tsc --noEmit -p packages/cf-backend/tests/workerd && tsc --noEmit -p packages/cli-backend && tsc --noEmit -p packages/cli && tsc --noEmit -p packages/devbox && tsc --noEmit -p packages/devbox/tests/workerd && tsc --noEmit -p packages/test-utils && tsc --noEmit -p tests && tsc --noEmit -p evals && tsc --noEmit -p scripts/tsconfig.scripts.json && tsc --noEmit -p scripts/worker-heap && node --check packages/pc-agent/src/index.js && node --check packages/pc-agent/src/sandbox.js && node --check packages/pc-agent/src/pty.js",
     "check": "bun run lint && bun test --timeout=0 packages/agent-core/drift.test.ts scripts/mossaic-sdk.test.ts && bun run typecheck && bun run gate:typecheck-coverage",
     "test:anti-slop": "tsc --noEmit -p tools/oxlint/anti-slop && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/rules.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/drift.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-swallow.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-design-smells.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-wait-until.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-ambient-git.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-copy-rpc-stub.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-untyped-console.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/import-extension.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/typescript-escapes.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-deep-import.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-elapsed-deadline.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/type-aware.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-vacuous-type-predicate.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/no-sync-spawn.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/effect.gate.test.ts && node --no-warnings --experimental-strip-types tools/oxlint/anti-slop/live-tree.gate.test.ts",
     "lint": "bun run test:anti-slop",
@@ -151,7 +151,6 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@cloudflare/sandbox": "0.12.9",
     "@earendil-works/pi-ai": "0.87.1",
     "@earendil-works/pi-coding-agent": "0.87.1",
     "@effect/tsgo": "0.45.0",
@@ -170,7 +169,6 @@
     "aws4fetch": "^1.0.20",
     "effect": "4.0.0-rc.117",
     "esbuild": "^0.28.1",
-    "jose": "^6.2.3",
     "knip": "6.32.2",
     "miniflare": "5.20260926.0-alpha",
     "oxc-parser": "0.143.0",
@@ -186,18 +184,15 @@
   },
   "patchedDependencies": {
     "@plannotator/ui@0.46.1": "patches/@plannotator%2Fui@0.46.1.patch",
-    "@cloudflare/sandbox@0.12.9": "patches/@cloudflare%2Fsandbox@0.12.9.patch",
-    "@cloudflare/containers@0.3.7": "patches/@cloudflare%2Fcontainers@0.3.7.patch",
     "agents@0.24.0": "patches/agents@0.24.0.patch",
     "@cloudflare/codemode@0.5.2": "patches/@cloudflare%2Fcodemode@0.5.2.patch"
   },
-  "//overrides": "@cloudflare/containers is pinned here because @cloudflare/sandbox@0.12.9 declares `^0.3.5`, and the lock resolved that range to a SECOND copy at 0.3.6 nested under the SDK. That nested copy was the only one the deployed Worker ever bound: the top-level 0.3.7 both workspaces pin contributed zero runtime bytes, because the one import of it in the tree is a type import. So the pinned and documented version was not the version that ran, and 0.3.7's container state-machine fix — setStoppedIfUnchanged, `setRunning` moved later in the start path, and the pre-onStop state threaded through callOnStop so a stop cannot overwrite a newer state — never shipped. 0.3.7 satisfies the SDK's own range, so this reconciles the two resolutions rather than forcing an incompatible one. Removing the entry is only safe once the SDK's own range no longer resolves to anything else; scripts/nested-container-resolution.test.ts holds the manifests, the lockfile, the installed graph and the emitted artifact to one version, so a reintroduced copy is red.",
+
   "//overrides:hono": "hono is pinned here because the resolve landed TWO copies below 4.13.5 and neither is reachable by a range of ours: 4.13.2 under `@cloudflare/sandbox@0.12.8` (which declares `^4.13.0`, and which `@hono/node-server`'s `^4` peer also lands on) and 4.12.23 under `@modelcontextprotocol/sdk@1.29.0` (which declares `^4.11.4`). Both are hit by GHSA-gqvv-2mrq-wpjv, GHSA-g6gw-c38x-mqfc and GHSA-crvj-82cr-hjcx — a `toSSG()` write outside the output directory, unbounded dot-notation nesting in `parseBody()`, and a query parser that reads past the URL fragment — all three fixed in 4.13.5. 4.13.7 is the current publish and satisfies both declared ranges and the peer, so this reconciles the two resolutions onto the patched line rather than forcing an incompatible one, and it collapses them to one copy. Note what it also does: the twelve advisories that would need a reviewed-and-accepted `hono` entry are all against the 4.12.23 copy, and moving past them is why `hono` needs no REVIEWED_ADVISORIES entry at all.",
   "//overrides:miniflare": "miniflare's undici is pinned here because every published miniflare, up to and including 5.20260926.0-alpha, pins `undici: 7.29.0` EXACTLY, and 7.29.0 carries GHSA-3wwx-pv8p-q78v (a permessage-deflate DoS, fixed in 7.29.1). The override is scoped to miniflare's subtree, so the other undici copies keep their own resolution. Delete it once a miniflare release pins 7.29.1 or later.",
   "//overrides:lodash-es": "lodash-es is pinned here because @plannotator/ui 0.46.1 brought mermaid -> dagre-d3-es, and the resolve landed lodash-es 4.17.23, which carries GHSA-r5fr-rjxr-66jc (code injection through `_.template` import names) and GHSA-f23m-r3pf-42rh (prototype pollution through `_.unset`), both fixed in 4.18.0. dagre-d3-es declares `^4.17.21`, so ^4.18.1 satisfies it and moves the one copy onto the patched line. Delete it once the resolve lands at 4.18.0 or later without it.",
   "//overrides:fast-uri": "fast-uri is pinned here because ajv declares `^3.0.1`, and a lock that satisfies it keeps an old copy: 3.1.7 carries GHSA-hrr3-gc8f-f4qj, fixed in 3.1.8, and the install scanner refuses it. Delete it once ajv's own range starts at 3.1.8 or later.",
   "overrides": {
-    "@cloudflare/containers": "0.3.7",
     "fast-uri": "^3.1.8",
     "hono": "4.13.7",
     "lodash-es": "^4.18.1",

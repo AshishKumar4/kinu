@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
+import { Buffer } from 'node:buffer';
 import * as v from 'valibot';
+import { DevboxError } from './errors';
 
 export const DELTA_BLOCK_BYTES = 16 * 1024;
 
@@ -24,7 +26,7 @@ const digest = (bytes: Uint8Array): string => createHash('sha256').update(bytes)
 
 function validOffset(offset: number, size: number, previous: number): void {
   if (!Number.isSafeInteger(offset) || offset < 0 || offset % DELTA_BLOCK_BYTES !== 0
-    || offset >= size || offset <= previous) throw new Error('invalid delta index offset');
+    || offset >= size || offset <= previous) throw new DevboxError("io", 'invalid delta index offset');
 }
 
 /** Pages occupy sorted ranks; subtree [lo, hi) roots at floor((lo+hi)/2), so no pointer
@@ -43,7 +45,7 @@ export function buildDeltaIndex(entries: readonly DeltaOverride[], size: number)
     const mid = Math.floor((lo + hi) / 2);
     const entry = entries[mid];
 
-    if (entry === undefined) throw new Error('missing delta index entry');
+    if (entry === undefined) throw new DevboxError("io", 'missing delta index entry');
     const page = bytes.subarray(mid * DELTA_INDEX_PAGE_BYTES, (mid + 1) * DELTA_INDEX_PAGE_BYTES);
     page.writeBigUInt64LE(BigInt(entry.o));
     page[8] = entry.src === 'chunk' ? 1 : 2;
@@ -66,10 +68,10 @@ export function lookupDeltaIndex(ref: DeltaIndexRef, size: number, offset: numbe
   read: (offset: number, length: number) => Uint8Array): DeltaOverride | null {
   v.parse(DeltaIndexRefSchema, ref);
 
-  if (ref.count > Math.ceil(size / DELTA_BLOCK_BYTES)) throw new Error('delta index count exceeds file');
+  if (ref.count > Math.ceil(size / DELTA_BLOCK_BYTES)) throw new DevboxError("io", 'delta index count exceeds file');
 
   if (ref.count === 0) {
-    if (ref.root !== EMPTY_DIGEST || ref.index !== EMPTY_DIGEST) throw new Error('invalid empty delta index');
+    if (ref.root !== EMPTY_DIGEST || ref.index !== EMPTY_DIGEST) throw new DevboxError("io", 'invalid empty delta index');
 
     return null;
   }
@@ -84,7 +86,7 @@ export function lookupDeltaIndex(ref: DeltaIndexRef, size: number, offset: numbe
     const mid = Math.floor((lo + hi) / 2);
     const raw = read(mid * DELTA_INDEX_PAGE_BYTES, DELTA_INDEX_PAGE_BYTES);
 
-    if (raw.byteLength !== DELTA_INDEX_PAGE_BYTES || digest(raw) !== expected) throw new Error('corrupt delta index page');
+    if (raw.byteLength !== DELTA_INDEX_PAGE_BYTES || digest(raw) !== expected) throw new DevboxError("io", 'corrupt delta index page');
     const page = Buffer.from(raw);
     const at = Number(page.readBigUInt64LE());
     validOffset(at, upper, lower);
@@ -96,7 +98,7 @@ export function lookupDeltaIndex(ref: DeltaIndexRef, size: number, offset: numbe
     if ((src !== 1 && src !== 2) || page.subarray(9, 16).some((byte: number) => byte !== 0)
       || page.subarray(112).some((byte: number) => byte !== 0) || (src === 2 && d !== NULL_CHILD)
       || (lo === mid) !== (left === NULL_CHILD) || (mid + 1 === hi) !== (right === NULL_CHILD)) {
-      throw new Error('invalid delta index page');
+      throw new DevboxError("io", 'invalid delta index page');
     }
 
     if (offset === at) return src === 1 ? { o: at, src: 'chunk', d } : { o: at, src: 'hole' };

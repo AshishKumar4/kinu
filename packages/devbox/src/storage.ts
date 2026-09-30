@@ -89,8 +89,7 @@ export interface DevboxStorage {
   discard: () => Promise<void>;
 }
 
-/** Same bucket twice: `mountBucket` takes the binding name and resolves it in the container;
- *  `bucket` is resolved because the snapshot chain reads/writes R2 from the Durable Object. */
+/** `binding` names `bucket` in the Worker's env: the store gateway serves the container from it (D41). */
 export interface DevboxStore {
   readonly binding: string;
   readonly bucket: R2Bucket;

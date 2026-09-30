@@ -3,6 +3,7 @@
 
 import { createHash } from 'node:crypto';
 import * as v from 'valibot';
+import { DevboxError, deltaNamespaceFailed } from './errors';
 import { buildDeltaIndex, DELTA_BLOCK_BYTES, DELTA_INDEX_PAGE_BYTES, DeltaIndexRefSchema, lookupDeltaIndex, type DeltaIndexRef, type DeltaOverride } from './delta-index';
 
 /** What the attach log says an upper was restored from; the bench reads served facts
@@ -119,20 +120,15 @@ export function deltaProbeCommand(upperDir: string, excludes: readonly string[])
 }
 
 /** An unreadable opacity decision cannot become a legacy-format publication. */
-export class DeltaNamespaceProbeFailed extends Error {
-  constructor(code: string) {
-    super(`opaque-directory namespace could not be observed (probe ${code})`);
-    this.name = 'DeltaNamespaceProbeFailed';
-  }
-}
+
 
 export function parseDeltaProbe(stdout: string): DeltaProbeEntry[] {
   const space = stdout.indexOf(' ');
   const rc = space === -1 ? stdout.trim() : stdout.slice(0, space);
 
-  if (rc === '78' || rc === '127') throw new DeltaNamespaceProbeFailed(rc);
+  if (rc === '78' || rc === '127') throw deltaNamespaceFailed(rc);
 
-  if (rc !== '0') throw new Error(`the delta probe failed (${rc}): ${stdout.slice(0, 200)}`);
+  if (rc !== '0') throw new DevboxError("io", `the delta probe failed (${rc}): ${stdout.slice(0, 200)}`);
   const payload = space === -1 ? '' : stdout.slice(space + 1).trim();
 
   if (payload === '') return [];
@@ -143,7 +139,7 @@ export function parseDeltaProbe(stdout: string): DeltaProbeEntry[] {
   const STRIDE = 11;
 
   if (fields.length % STRIDE !== 0) {
-    throw new Error(`the delta probe holds ${fields.length} fields, not a multiple of ${STRIDE}`);
+    throw new DevboxError("io", `the delta probe holds ${fields.length} fields, not a multiple of ${STRIDE}`);
   }
 
   const records: DeltaProbeEntry[] = [];
@@ -156,16 +152,16 @@ export function parseDeltaProbe(stdout: string): DeltaProbeEntry[] {
     };
 
     if (!Object.values(numbers).every(Number.isSafeInteger)) {
-      throw new Error(`the delta probe holds a non-count at record ${records.length}`);
+      throw new DevboxError("io", `the delta probe holds a non-count at record ${records.length}`);
     }
 
     const mode = field(3);
 
-    if (!/^[0-7]+$/.test(mode)) throw new Error(`the delta probe holds a non-mode at record ${records.length}`);
+    if (!/^[0-7]+$/.test(mode)) throw new DevboxError("io", `the delta probe holds a non-mode at record ${records.length}`);
     const path = field(10);
 
     if ((path === '' && field(0) !== 'o') || path.startsWith('/') || path.split('/').includes('..')) {
-      throw new Error(`the delta probe holds a hostile path at record ${records.length}`);
+      throw new DevboxError("io", `the delta probe holds a hostile path at record ${records.length}`);
     }
 
     records.push({ path, type: field(0), ...numbers, mode: Number.parseInt(mode, 8), target: field(9) });
@@ -237,7 +233,7 @@ export function parseDeltaBlockHashes(
   stdout: string,
   wanted: ReadonlyMap<number, { upperBlocks: number; baseBlocks: number | null }>,
 ): Map<number, DeltaFileHashes> {
-  if (stdout.includes('NOSPLIT')) throw new Error('NOSPLIT');
+  if (stdout.includes('NOSPLIT')) throw new DevboxError("io", 'NOSPLIT');
   const uppers = new Map<number, Map<number, string>>();
   const bases = new Map<number, Map<number, string>>();
   const emptyBase = new Set<number>();
@@ -262,13 +258,13 @@ export function parseDeltaBlockHashes(
 
     if (line === '' || line.startsWith('#')) continue;
 
-    if (side === null) throw new Error(`a delta hash line names no side: ${line.slice(0, 80)}`);
+    if (side === null) throw new DevboxError("io", `a delta hash line names no side: ${line.slice(0, 80)}`);
     const digest = line.slice(0, 64);
 
-    if (!/^[0-9a-f]{64}$/.test(digest)) throw new Error(`a delta hash line is not a digest: ${line.slice(0, 80)}`);
+    if (!/^[0-9a-f]{64}$/.test(digest)) throw new DevboxError("io", `a delta hash line is not a digest: ${line.slice(0, 80)}`);
     const block = parseSplitSuffix(line.slice(line.lastIndexOf('/') + 1).replace(/^x/, ''));
 
-    if (block === null) throw new Error(`a delta hash line names no block: ${line.slice(0, 80)}`);
+    if (block === null) throw new DevboxError("io", `a delta hash line names no block: ${line.slice(0, 80)}`);
     let held = side.into.get(side.index);
 
     if (held === undefined) {
@@ -285,7 +281,7 @@ export function parseDeltaBlockHashes(
     const upper = uppers.get(index);
 
     if (upper === undefined || upper.size !== counts.upperBlocks) {
-      throw new Error(`upper side of file ${index} holds ${upper?.size ?? 0} blocks, expected ${counts.upperBlocks}`);
+      throw new DevboxError("io", `upper side of file ${index} holds ${upper?.size ?? 0} blocks, expected ${counts.upperBlocks}`);
     }
 
     let base: Map<number, string> | null = null;
@@ -294,7 +290,7 @@ export function parseDeltaBlockHashes(
       const held = bases.get(index);
 
       if (held === undefined || held.size !== counts.baseBlocks) {
-        throw new Error(`base side of file ${index} holds ${held?.size ?? 0} blocks, expected ${counts.baseBlocks}`);
+        throw new DevboxError("io", `base side of file ${index} holds ${held?.size ?? 0} blocks, expected ${counts.baseBlocks}`);
       }
 
       base = held;
@@ -335,7 +331,7 @@ export function parseDeltaBaseStat(stdout: string, paths: readonly string[]): Ma
   const lines = stdout.split('\n').filter((line) => line !== '' && !line.startsWith('#'));
 
   if (lines.length !== paths.length) {
-    throw new Error(`the delta base stat holds ${lines.length} lines for ${paths.length} paths`);
+    throw new DevboxError("io", `the delta base stat holds ${lines.length} lines for ${paths.length} paths`);
   }
 
   const out = new Map<string, DeltaBaseFact | null>();
@@ -351,7 +347,7 @@ export function parseDeltaBaseStat(stdout: string, paths: readonly string[]): Ma
     const lastSpace = line.lastIndexOf(' ');
     const size = Number(line.slice(lastSpace + 1));
 
-    if (!Number.isSafeInteger(size) || size < 0) throw new Error(`the delta base stat holds no size for ${path}`);
+    if (!Number.isSafeInteger(size) || size < 0) throw new DevboxError("io", `the delta base stat holds no size for ${path}`);
     out.set(path, { kind: BASE_KIND.get(line.slice(0, lastSpace)) ?? 'other', size });
   }
 
@@ -409,7 +405,7 @@ export function planDeltaPublication(input: DeltaPlanInput): DeltaPlan {
       if (basename === '.wh..wh..opq') {
         const parent = entry.path.slice(0, Math.max(0, entry.path.lastIndexOf('/')));
 
-        if (!opaque.has(parent)) throw new Error('opaque-directory publication requires an explicit namespace record');
+        if (!opaque.has(parent)) throw new DevboxError("io", 'opaque-directory publication requires an explicit namespace record');
         continue;
       }
 
@@ -455,11 +451,11 @@ export function planDeltaPublication(input: DeltaPlanInput): DeltaPlan {
 
     const hashed = input.hashes.get(index);
 
-    if (hashed === undefined) throw new Error(`no block hashes for big file ${entry.path}`);
+    if (hashed === undefined) throw new DevboxError("io", `no block hashes for big file ${entry.path}`);
     const blockCount = Math.ceil(entry.size / DELTA_BLOCK_BYTES);
 
     if (hashed.upper.size !== blockCount) {
-      throw new Error(`upper of ${entry.path} holds ${hashed.upper.size} blocks, probed size says ${blockCount}`);
+      throw new DevboxError("io", `upper of ${entry.path} holds ${hashed.upper.size} blocks, probed size says ${blockCount}`);
     }
 
     let upperHoles = 0;
@@ -471,7 +467,7 @@ export function planDeltaPublication(input: DeltaPlanInput): DeltaPlan {
       const length = Math.min(DELTA_BLOCK_BYTES, entry.size - offset);
       const upper = hashed.upper.get(block);
 
-      if (upper === undefined) throw new Error(`upper of ${entry.path} is missing block ${block}`);
+      if (upper === undefined) throw new DevboxError("io", `upper of ${entry.path} is missing block ${block}`);
       const upperZero = upper === zeroBlockDigest(length);
 
       if (upperZero) upperHoles += 1;
@@ -538,7 +534,7 @@ function encodeDeltaManifest(manifest: DeltaManifest): string {
 /** Publication may enumerate a retained index. The block server never does. */
 export function readDeltaIndex(ref: DeltaIndexRef, size: number, bytes: Uint8Array): DeltaOverride[] {
   if (bytes.byteLength !== ref.count * DELTA_INDEX_PAGE_BYTES || createHash('sha256').update(bytes).digest('hex') !== ref.index) {
-    throw new Error('corrupt delta index file');
+    throw new DevboxError("io", 'corrupt delta index file');
   }
 
   const out: DeltaOverride[] = [];
@@ -547,10 +543,10 @@ export function readDeltaIndex(ref: DeltaIndexRef, size: number, bytes: Uint8Arr
   for (let rank = 0; rank < ref.count; rank += 1) {
     const at = Number(Buffer.from(bytes.subarray(rank * DELTA_INDEX_PAGE_BYTES)).readBigUInt64LE());
 
-    if (!Number.isSafeInteger(at) || at % DELTA_BLOCK_BYTES !== 0 || at >= size || at <= previous) throw new Error('invalid delta index offset');
+    if (!Number.isSafeInteger(at) || at % DELTA_BLOCK_BYTES !== 0 || at >= size || at <= previous) throw new DevboxError("io", 'invalid delta index offset');
     const entry = lookupDeltaIndex(ref, size, at, (offset, length) => bytes.subarray(offset, offset + length));
 
-    if (entry === null) throw new Error('unreachable delta index entry');
+    if (entry === null) throw new DevboxError("io", 'unreachable delta index entry');
     out.push(entry);
     previous = at;
   }
@@ -579,7 +575,7 @@ export function mergeDeltaPublication(plan: DeltaPlan, retained: DeltaManifest,
 
     const bytes = indexes.get(file.over.index);
 
-    if (bytes === undefined) throw new Error(`missing retained index for ${file.p}`);
+    if (bytes === undefined) throw new DevboxError("io", `missing retained index for ${file.p}`);
     mergedIndexes.set(file.over.index, bytes);
 
     for (const entry of readDeltaIndex(file.over, file.s, bytes)) {

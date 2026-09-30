@@ -57,7 +57,6 @@ import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 
 import { isPreviewHostRequest, previewHostSuffix } from '../packages/core/src/preview/preview-origin';
-import { SANDBOX_TRANSPORT } from '../packages/core/src/preview/sandbox-id';
 import { parseJsonc } from './jsonc';
 import { CONTAINER_IMAGES, imageReference, readSource, sourceHash, type ContainerImage } from './container-images';
 import { allCommands, invocation, parseShell, type ShellScript } from './shell-words';
@@ -71,7 +70,8 @@ const REPO_ROOT = join(import.meta.dir, '..');
 
 const WRANGLER = 'packages/cf-backend/wrangler.jsonc';
 
-const PACKAGE = 'packages/cf-backend/package.json';
+/** The package that imports the SDK and so decides which of its versions ships; Kinu reaches it through devbox. */
+const PACKAGE = 'packages/devbox/package.json';
 
 const VITE_CONFIG = 'packages/cf-backend/vite.config.ts';
 
@@ -162,7 +162,7 @@ const WranglerSchema = v.object({
     image: v.string(),
   }))),
   assets: v.object({ run_worker_first: v.union([v.boolean(), v.array(v.string())]) }),
-  vars: v.object({ PREVIEW_HOST_SUFFIX: v.string(), CLI_PUBLIC_ORIGIN: v.string(), SANDBOX_TRANSPORT: v.string() }),
+  vars: v.object({ PREVIEW_HOST_SUFFIX: v.string(), CLI_PUBLIC_ORIGIN: v.string() }),
   kv_namespaces: v.array(v.object({ binding: v.string() })),
   d1_databases: v.optional(v.array(v.object({ binding: v.string() }))),
   durable_objects: v.object({ bindings: v.array(v.object({ name: v.string(), class_name: v.string() })) }),
@@ -654,17 +654,6 @@ describe('sign-in has no single chokepoint', () => {
   });
 });
 
-/**
- * A7 THE SANDBOX HAS ONE TRANSPORT. The Sandbox SDK keeps the transport a sandbox was first reached over and
- * drops the in-flight requests of a client that names another. Product code opens every client through
- * `openSandbox`, which passes `SANDBOX_TRANSPORT`; the SDK's own lookup passes none (`proxyToSandbox`,
- * SDK 0.12.9), and the sandbox object then takes this var, whose absence means `http`.
- */
-describe('the sandbox has one transport', () => {
-  test('the deployed default is the transport every client names', () => {
-    expect(CONFIG.vars.SANDBOX_TRANSPORT).toBe(SANDBOX_TRANSPORT);
-  });
-});
 
 /**
  * A8 THE BLOCK-LOWER IMAGE IS BUILT FROM THIS TREE. The pushed image is the only thing any host runs, so a

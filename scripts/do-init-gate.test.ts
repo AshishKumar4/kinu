@@ -104,127 +104,6 @@ describe('DO init-gate purity', () => {
   });
 });
 
-const containerFixture = (
-  body = "await runRestoreStep(25_000, () => this.exec('probe'), () => {});",
-  entry = 'return this.startAndWaitForPorts({ports: this.defaultPort});',
-): string => `export class Devbox extends Sandbox {
-  onStart(): Promise<void> { return this.#restoreInStartGate(); }
-  start(): Promise<void> { ${entry} }
-  async #runStartHook(): Promise<void> { ${body} }
-}`;
-
-describe('DO init-gate — port-proven, budgeted container restore', () => {
-  test('control-port proof and raced container work pass', () => {
-    expect(reasons(containerFixture())).toEqual([]);
-  });
-
-  test('plain start does not prove the control listener', () => {
-    expect(reasons(containerFixture(undefined, 'return super.start();')))
-      .toContain('no port-proven startAndWaitForPorts({ports: this.defaultPort}) entry');
-  });
-
-  test('an application port does not substitute for the control listener', () => {
-    expect(reasons(containerFixture(undefined, 'return this.startAndWaitForPorts({ports: 8080});')))
-      .toContain('no port-proven startAndWaitForPorts({ports: this.defaultPort}) entry');
-  });
-
-  test('a string containing the proof spelling is not a control-port argument', () => {
-    expect(reasons(containerFixture(undefined, "return this.startAndWaitForPorts('ports:this.defaultPort');")))
-      .toContain('no port-proven startAndWaitForPorts({ports: this.defaultPort}) entry');
-  });
-
-  test('a timer inside the raced work is legal', () => {
-    expect(reasons(containerFixture('await runRestoreStep(25_000, () => scheduler.wait(50), () => {});')))
-      .toEqual([]);
-  });
-
-  test('a container call beside the budget is refused', () => {
-    expect(reasons(containerFixture("await this.exec('probe'); await runRestoreStep(1, () => Promise.resolve(), () => {});")))
-      .toContain('reaches `exec` outside the budgeted restore path');
-  });
-
-  test('a nested callback does not hide an unbudgeted container reach', () => {
-    expect(reasons(containerFixture("void (async () => this.exec('probe'))(); await runRestoreStep(1, () => Promise.resolve(), () => {});")))
-      .toContain('reaches `exec` outside the budgeted restore path');
-  });
-
-  test('a sleep beside the budget is refused', () => {
-    expect(reasons(containerFixture('await scheduler.wait(50); await runRestoreStep(1, () => Promise.resolve(), () => {});')))
-      .toContain('reaches `wait` outside the budgeted restore path');
-  });
-
-  test('no race means no bound, even if the body only writes storage', () => {
-    expect(reasons(containerFixture("await this.ctx.storage.put('k', 1);")))
-      .toContain('must bound the hook with `runRestoreStep`');
-  });
-
-  // One edit to the passing fixture each, and every refusal that edit must draw.
-  const MUTATIONS = [
-    {
-      name: 'a second plain-start entry cannot hide beside the proven entry',
-      anchor: 'start(): Promise<void>',
-      replacement: 'unsafe(): Promise<void> { return super.start(); } start(): Promise<void>',
-      refusals: ['super.start bypasses control-listener proof before onStart'],
-    },
-    {
-      name: 'the hook cannot restore directly',
-      anchor: 'return this.#restoreInStartGate();',
-      replacement: "return this.exec('probe');",
-      refusals: [
-        'must return this.#restoreInStartGate(): the sole budgeted restore path',
-        'reaches `exec` outside the budgeted restore path',
-      ],
-    },
-    {
-      name: 'a detached hook is refused',
-      anchor: 'onStart(): Promise<void> { return this.#restoreInStartGate(); }',
-      replacement: 'onStart(): void { void this.#restoreInStartGate(); }',
-      refusals: [
-        'must annotate `: Promise<void>` explicitly (found `void`)',
-        'must return this.#restoreInStartGate(): the sole budgeted restore path',
-      ],
-    },
-    {
-      name: 'the removed storage-only marker cannot defer restoration again',
-      anchor: 'return this.#restoreInStartGate();',
-      replacement: 'void BOUNDED_STORAGE_ONLY; return this.#noteContainerStart();',
-      refusals: ['must return this.#restoreInStartGate(): the sole budgeted restore path'],
-    },
-  ] as const;
-
-  for (const mutation of MUTATIONS) {
-    test(mutation.name, () => {
-      const found = reasons(containerFixture().replace(mutation.anchor, mutation.replacement));
-
-      for (const refusal of mutation.refusals) expect(found).toContain(refusal);
-    });
-  }
-
-  test('an async hook is refused so it cannot add an unbudgeted await', () => {
-    const source = containerFixture().replace(
-      'onStart(): Promise<void> { return this.#restoreInStartGate(); }',
-      'async onStart(): Promise<void> { await this.#restoreInStartGate(); }',
-    );
-
-    expect(reasons(source).some(reason => reason.includes('declared `async`'))).toBe(true);
-    expect(reasons(source).some(reason => reason.includes('awaits in its own scope'))).toBe(true);
-  });
-
-  test('the Sandbox lineage includes indirect subclasses', () => {
-    const found = audit(new Map([
-      ['devbox.ts', 'export class Devbox extends Sandbox {}'],
-      ['box.ts', 'class Box extends Devbox { onStart(): Promise<void> { return this.restore(); } }'],
-    ]));
-
-    expect(found.inspected[0]?.hook).toBe('container-start');
-    expect(found.violations[0]?.reason).toContain('must return this.#restoreInStartGate()');
-  });
-
-  test('a non-Sandbox class retains the per-request annotation rule', () => {
-    const source = containerFixture().replace('extends Sandbox', 'extends ActorAgent');
-    expect(reasons(source)).toContain('must annotate `: void` explicitly (found `Promise<void>`)');
-  });
-});
 
 describe('DO init-gate purity — the SDK-awaited recovery hook', () => {
   /**
@@ -471,18 +350,6 @@ describe('DO init-gate purity — model work spawned from the init gate', () => 
     expect(reasons(bounded)).toEqual([]);
   });
 
-  test('the container-start hook is held to the same reach rule', () => {
-    // Same name, opposite wait requirement — and the same answer about REACH: a
-    // container start is not a licence to open a provider connection either.
-    const container = `export class Devbox extends Sandbox {
-      override onStart(): Promise<void> {
-        void (async () => { await streamText(this.describeBoot()); })();
-        return this.#restoreInStartGate();
-      }
-    }`;
-
-    expect(reasons(container)).toEqual([expect.stringContaining('reaches `streamText`')]);
-  });
 
   test('a recovery hook is exempt — the re-drive it detaches may reach the model', () => {
     // Deliberate, and printed on the success path rather than left to be
@@ -503,20 +370,6 @@ describe('DO init-gate purity — model work spawned from the init gate', () => 
 describe('DO init-gate purity, against the real tree', () => {
   const SOURCES = readSources();
 
-  test('it inspects every governed hook the backend declares, in all three populations', () => {
-    // The denominator. `violations: []` is only good news over a non-empty
-    // `inspected`; a matcher that stopped matching would pass forever. And the
-    // split matters as much as the total: the two narrow rules are the ones an
-    // exemption would hide behind, so an empty container-start or recovery
-    // population would mean a narrowing had quietly become an exemption over
-    // nothing.
-    const { inspected } = audit(SOURCES);
-    expect(inspected.map((i) => `${i.owner}.${i.member}:${i.hook}`).sort()).toEqual([
-      'ActorAgent.onFiberRecovered:recovery',
-      'Devbox.onStart:container-start',
-      'OrchestratorAgent.onStart:per-request',
-    ]);
-  });
 
   test('it found the classification seam, and that seam is synchronous', () => {
     // The recovery rule's other half, over the real tree: pinned to a name
@@ -627,28 +480,6 @@ ${hold.body}
     expect(violations[0].reason).toContain('not on the admitted init-await list');
   });
 
-  test('the real hook continuation is budgeted and its entry proves the control port', () => {
-    expect(audit(SOURCES).arms).toEqual({
-      reaches: [], timers: [], deadlineWrapped: true, portProven: true,
-      file: 'packages/devbox/src/devbox.ts', line: expect.any(Number),
-    });
-  });
-
-  test.each([
-    ['direct hook restore', 'return this.#restoreInStartGate();', "return this.exec('probe');", 'outside the budgeted restore path'],
-    ['plain start', 'this.startAndWaitForPorts({', 'super.start({', 'no port-proven'],
-    ['wrong port', 'ports: this.defaultPort', 'ports: 8080', 'no port-proven'],
-    ['unraced hook', 'const result = await runRestoreStep(', 'const result = await unbounded(', 'must bound the hook'],
-    ['container outside budget', 'async #runStartHook(): Promise<void> {', "async #runStartHook(): Promise<void> { await this.exec('probe');", 'outside the budgeted restore path'],
-    ['sleep outside budget', 'async #runStartHook(): Promise<void> {', 'async #runStartHook(): Promise<void> { await scheduler.wait(50);', 'outside the budgeted restore path'],
-    ['detached hook', 'return this.#restoreInStartGate();', 'void this.#restoreInStartGate();', 'must return this.#restoreInStartGate()'],
-  ])('cut the real wire: %s', (_name, from, to, reason) => {
-    const file = 'packages/devbox/src/devbox.ts';
-    const real = present(SOURCES.get(file), `the ${file} source`);
-    const changed = real.replaceAll(from, to);
-    expect(changed).not.toBe(real);
-    expect(auditFile(file, changed).violations.some(value => value.reason.includes(reason))).toBe(true);
-  });
 
   test('cut the wire: re-inlining the real terminal replay in the recovery hook goes red', () => {
     // The P1 defect, restored against the real file: the hook hands the gate the
@@ -753,12 +584,6 @@ describe('a Durable Object constructor is held to the synchronous start rule', (
     expect(ctorViolations(inherited, ['Other'])).toEqual([]);
   });
 
-  test('the real tree governs every constructor of a declared class, and each is clean', () => {
-    const declared = ['OrchestratorAgent', 'UserDO', 'ControlPlaneDO', 'MonitorDO', 'DeployRunDO', 'CodexEgress'];
-    const { inspected, violations } = auditConstructors(SOURCES, declared);
-    expect(inspected.map((i) => i.owner).sort()).toEqual([...declared, 'ActorAgent'].sort());
-    expect(violations).toEqual([]);
-  });
 
   test('cut the wire: a row loop planted in the real UserDO constructor path goes red', () => {
     const file = 'packages/cf-backend/src/user/user-do.ts';

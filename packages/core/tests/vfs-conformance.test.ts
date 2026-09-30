@@ -116,13 +116,9 @@ const quoted = (cmd: string): string => {
   return all.length ? all[all.length - 1][1] : '';
 };
 
-/** The SDK error shape across the capnweb hop: `code` lives only in `errorResponse.code`. */
-function sandboxSdkError(name: string, code: string, message: string): Error {
-	const error = new Error(message);
-	error.name = name;
-	Object.defineProperty(error, 'errorResponse', { value: { code }, enumerable: true });
-
-	return error;
+/** A native file failure as it reaches core: the errno travels in `Error.cause`, which Worker RPC keeps. */
+function nativeFileError(code: string, path: string, operation: string): Error {
+	return new Error(`${code}: ${path}`, { cause: { kind: 'devbox.file', code, path, operation } });
 }
 
 function sandboxHandle(fs: MemFs): SandboxHandle {
@@ -131,7 +127,7 @@ function sandboxHandle(fs: MemFs): SandboxHandle {
 			const b = fs.read(path);
 
 			if (b === null) {
-				throw sandboxSdkError('FileNotFoundError', 'FILE_NOT_FOUND', `File not found: ${path}`);
+				throw nativeFileError('ENOENT', path, 'readFile');
 			}
 
 			return { content: Buffer.from(b).toString('base64'), encoding: 'base64', exitCode: 0 };
@@ -143,7 +139,7 @@ function sandboxHandle(fs: MemFs): SandboxHandle {
 		},
 		async listFiles(dir: string) {
 			if (dir !== '/' && !fs.exists(dir)) {
-				throw sandboxSdkError('FileNotFoundError', 'FILE_NOT_FOUND', `File not found: ${dir}`);
+				throw nativeFileError('ENOENT', dir, 'readDirectory');
 			}
 
 			return { files: fs.list(dir).map((name) => {
@@ -156,7 +152,7 @@ function sandboxHandle(fs: MemFs): SandboxHandle {
 		},
 		async deleteFile(path: string) {
 			if (!fs.del(path)) {
-				throw sandboxSdkError('FileNotFoundError', 'FILE_NOT_FOUND', `File not found: ${path}`);
+				throw nativeFileError('ENOENT', path, 'remove');
 			}
 		},
     async exec(command: string) {

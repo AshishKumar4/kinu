@@ -1609,6 +1609,306 @@ The first-run case `sandbox-exec-output` runs 600 commands, 32 at once,
 through `sandbox.exec` with no deadline. Red on staging 690e3a6040 (595 of
 600); the upstream report is `kinu-logs/deploy-lane/sandbox-sdk-issue.md`.
 
+D38. Devbox owns the native container; the SDK supplies files and S3 mounts
+(2026-09-29). This replaces D26's patched Sandbox/Containers start owner,
+not its rule that restoration excludes callers. The control was the shipped
+patched Sandbox 0.12.9 and Containers 0.3.7 on commit `45d4f9e40d`. The
+candidate used native `ctx.container`, Sandbox 1.0.0-rc.1, Workers types
+5.20260928.1, compatibility date 2026-09-28 and Wrangler 4.143.0.
+
+The deployed D26 control was rerun on 2026-09-28: three runs per pending
+condition, a six-second hold inside the start block, and concurrent touch
+requests. A command opened the old control connection before reentry. Native
+exec has no such connection; its matching condition leaves an outside timer
+pending. The three shapes gave:
+
+| Shape | Prior connection / native outside timer | Alarm | Stray outside timer |
+| --- | --- | --- | --- |
+| Patched 0.12.9, Worker-timer hold | 3/3 completed | 3/3 completed | 3/3 reset at the platform block limit |
+| Native exec, native-process hold | 3/3 completed | 3/3 completed | 3/3 completed |
+| Native exec, Worker-timer hold | 3/3 reset | 3/3 completed | 3/3 reset |
+
+Native-process holds took 7.006-7.911 s end to end, including admission.
+There were no touch deliveries strictly between the recorded hook entry and
+exit. Timestamps equal to exit count as released, not as a gate breach.
+Worker time froze behind pending timers in the native arm, so its apparent
+one-second hook duration is not elapsed time. A separate five-second native
+deadline cut a 60-second guest command at 5.03, 5.18 and 5.03 s, measured by
+`/proc/uptime`, with an outside timer, an alarm and a stray timer pending.
+Each command exited 137. Removing the SDK does not fix Worker timer ordering.
+Devbox uses a native sleeper for its restore budget and kills it on cancel.
+
+The Files comparison ran 16 operations concurrently. All 256 4 KiB and all
+32 1 MiB create/read/stat/rename/delete cycles were byte-exact in both arms.
+Files p50/max was 273/369 ms at 4 KiB and 557/639 ms at 1 MiB; direct native
+exec was 219/412 ms and 322/483 ms. Files is not the faster arm. It replaces
+our shell/protocol work with the SDK's file API and POSIX error contract.
+Commands, PTYs, port forwarding, alarms and inactivity use the native API.
+The old control WebSocket, ContainerProxy, SDK transport selector, SDK mocks
+and both Cloudflare patches leave the tree.
+
+PID-namespace controls covered the sandbox and Codex images, enabled and
+disabled. Enabled exposed the application as PID 1; disabled exposed the VM's
+`/sbin/init` and kernel processes. The cutover keeps the namespace enabled.
+The native snapshot method existed but refused with "Snapshots are not
+available because this container does not support the requested snapshot
+operation." The directory-snapshot attempt lost container connectivity.
+Neither is a durability fallback. The existing lazy squashfs/block-delta
+chain stays. The Ubuntu 24 image includes the SDK shim and s3fs 1.93; its
+pinned provenance is `packages/devbox/block-lower/upstream.json`.
+
+Native outbound registration order let an earlier catch-all shadow a later
+exact host, and replacing the catch-all still shadowed it. An exact-first
+routing table returned the specific response and then its revoked response.
+`DevboxOutbound` is that permanent host router: first-party gateway
+capabilities first, then host policy. Kinu starts with raw internet disabled
+and sends HTTP and HTTPS through its vault; generic Devbox/bench classes
+retain public networking. Commands, residents and PTYs receive the documented
+Cloudflare CA environment rather than disabling certificate verification.
+The deployed PTY proof read cwd /workspace, resized to 37x111, interrupted a
+command with exit 130, retained tmux state on reconnect, reset it on request,
+and reached Codex through the forwarder (the uncredentialed request returned
+its upstream 401). HTTP and WebSocket previews worked through native ports.
+
+S3Mounts' own gateway in 1.0.0-rc.1 has no R2-binding route: active routes
+resolve S3 credentials and sign upstream requests; the other mode denies. The
+upstream `docs/s3-mounts-design.md:70-72` explicitly declines an
+S3-to-R2-binding server. DirectoryBackups accepts a binding but restores whole
+tar+zstd archives, not lazy mounts. This entry concluded that each deployment
+needs its own bucket-scoped R2 token. D41 reverses that: the key belongs to
+the SDK's gateway, not to the mount, and Devbox's own gateway serves the mount
+from the binding with no key.
+
+The SDK's payload-transport comparison (`scripts/bench-payload-transports.ts`
+and its fixture) and the product durability probe
+(`scripts/sandbox-durability-probe.ts` and `scripts/fixtures/kinu-durability/`)
+left the tree with this change. Both Workers were built on the SDK `Sandbox`
+class it removes, and the durability probe pinned the stock
+`cloudflare/sandbox:0.12.8` image, which has lacked the block lower since
+2026-09-13, so it could not pass its P1 since then; its P5 (the container
+never sleeps) is what D35 reversed. The standalone acceptance and the bench
+fixture's lifecycle cover the rest. Restore both from the parent of the commit
+that carries this paragraph.
+
+Evidence: `/mnt/scratch/kinu/wt/devbox-native/bench-artifacts/native-migration/`
+holds `gate-all.json`, `native-deadline-*.json`, `files-*.json`, the PID
+controls and interception observations. The corresponding directory under
+`devbox-native-current` holds `terminal-input-smoke.log`,
+`quiesce-live.json` and the live marker proof. Final marker deployment:
+`kinu-devbox-native-m2609281930`, version
+`fcfaadf9-757d-416f-b151-02577a5bfd31`. These are probe deployments, not a
+staging product acceptance.
+
+D39. Quiesce releases holders before its final commit (2026-09-29).
+D10's first-quiesce reseat is retained, as is D31's requirement that a delta
+names the base actually mounted. The defect was order: the first quiesce
+published a base, then attempted to reseat /workspace while a supervised
+server still held it as cwd. The live stop refused EBUSY after publishing the
+base. Removing the reseat would make later warm commits republish the full
+base rather than a delta, so that alternative was rejected.
+
+Quiesce now fences new admissions, joins startup, and drains admitted calls,
+resource streams and checkpoints without a work deadline. A readable live
+unmanaged command refuses the stop. The existing D35 grace still applies to
+an unreadable process list: before the quiet-confirm window is spent the
+stop refuses; afterwards it records `devbox.quiesce.processes.unreadable`
+and a durable incident, and includes the failure in its result. Under D35 an
+unobservable detached command can be stopped. Admitted calls still drain.
+
+After that check, quiesce drains and stops the ambient sync, stops resident
+processes without deleting their launch records, and releases fd and cwd
+holders. The final one-shot flush commits before detach and native destroy.
+If it fails, resident processes and ambient sync resume before admissions
+reopen. Init runs from /, outside the removable workdir; it and the scan's
+ancestor chain are never signalled.
+
+Red proofs: the parked-call regression admitted a later caller; the resident
+regression returned a failed commit; the real-image holder scan stopped init
+(exit 137); the native unreadable-list regression kept the container running.
+A planted inverted unmanaged-command guard made its stop return skipped and
+killed the command. Green covers both D35 branches, the named result,
+admission draining, byte-exact restore and the resident's restart.
+
+Deployed proof on 2026-09-29: a resident /workspace server no longer prevented
+the first stop. The base was 167,776,256 bytes: one multipart create, 33 parts
+and one completion. Wake restored the 160 MiB file's SHA-256 and its HTTP
+server. A 64 KiB overwrite then published a 4,096-byte chunked delta while
+retaining the base id. The later cold wake took 17,034 ms, restored the changed
+SHA-256, and served HTTP again. The final stop and discard succeeded.
+The final sync-before-holder ordering and D35 exception are covered locally;
+the owner-token cutover must rerun this live sequence on the final image.
+
+Tests: `quiesce-order.test.ts`, `terminal-activity.test.ts`, the real-image
+`block-image.test.ts`, and the real Linux holder test in
+`decisions.test.ts`. Red/green logs are under the native-migration artifact
+directories named in D38. This does not change the storage algorithm.
+
+D40. Rebuild reused-mount routing from the SDK's own registration
+(2026-09-29). In the deployed rc.1 image, reusing an S3Mounts mount after
+owner eviction did not repopulate our replacement routing table. An uncached
+lazy read then failed with Input/output error. Direct download and extraction
+of the immutable R2 archive still gave the original SHA-256: the object was
+intact; its lazy route was missing.
+
+The shim already stores the authoritative registration at
+`/run/sandbox/s3-mounts/markers/<sha256(mountPath)>.json`.
+`@cloudflare/sandbox` 1.0.0-rc.1's
+`crates/sandbox-tools/src/s3_mount/marker_store.rs:100-112` names that path.
+Devbox reads this file through Files, checks protocol 1, mount path, source,
+access and its exact key prefix, constructs S3Gateway with the current Worker
+secrets, and installs the complete mount/static/vault routing table. It
+persists no registration mirror. A missing or unknown marker refuses by name
+as a permanent configuration error; it never silently replaces the container.
+
+Red: the 160 MiB lazy read after explicit owner eviction exited 1. Green:
+from a clean mount, eviction followed by route reconstruction returned the
+original SHA-256, `f9bafecadaf380ceb4ad3492e168f6227602f94e79aec05dad404e198329aaed`.
+A mount whose earlier failed reads had already poisoned its cache was not
+used as a green control. Marker tests also refuse another box's prefix,
+unknown protocol and an absent marker.
+
+This is deliberate coupling to an SDK-internal file. The unfiled upstream
+request, `kinu-logs/devbox/ISSUE-s3mount-registrations.md`, asks for public
+registrations or supported rebinding. Delete the direct marker read when
+that API ships. The live evidence is `warm-eviction-red.log` and
+`warm-read-byte-green.log` under `devbox-native-current`'s artifact directory.
+
+D41. A store mount needs no key pair: the Worker answers its S3 requests
+from the R2 binding (2026-09-30). This reverses D38's finding that each
+deployment needs a bucket-scoped R2 token. The key was the price of the SDK's
+`S3Gateway`, not of the mount. sandbox-shim (1.0.0-rc.1, source at
+`dc8a7103`) starts s3fs with a fixed placeholder password,
+`sandbox-access-key:sandbox-secret-key`
+(`crates/sandbox-tools/src/s3_mount/linux_mount.rs:53`), against
+`url=http://s3-<routeId>.sandbox.internal` (`:85`). `S3Mounts.mount` routes
+that host to whatever Fetcher its gateway binding returns
+(`dist/index.mjs:2406-2417`), through the container's
+`interceptOutboundHttp` (workers-types 5.20260928.1, `index.d.ts:3996`).
+Only `S3Gateway` resolves a key and signs for R2's S3 endpoint
+(`index.mjs:1764-1786`). 0.12.9 had the same shape with a binding behind it
+(`r2EgressHandler`), which is why it needed no key.
+
+`DevboxStoreGateway` (`src/store-gateway.ts`) is that gateway for the
+binding. S3Mounts receives it instead of `S3Gateway`. The store's source
+names the R2 binding as its bucket, with an endpoint and key pair nothing
+reads. It serves what s3fs and the publisher send: HEAD, GET with one byte
+range, PUT with a declared length, DELETE, ListObjects v1 and v2, and
+multipart create, part, complete and abort. It answers 403 for another
+bucket, a key or listing outside the route's prefix, another route's host, a
+revoked route and a write on a read-only route, and 501 for server-side copy,
+aws-chunked bodies and any other query. The bucket, prefix and access come
+from the object (S3Mounts' props), never from the guest. The upstream design
+note declines this server for the SDK (`docs/s3-mounts-design.md:70-72`); it
+lives here because the binding is the application's. It differs from S3 in
+three places nothing here uses: no server-side copy (a binding has none, and
+the chain never copies), no aws-chunked bodies (s3fs sends none), and no
+inspection headers for `S3Mounts.inspect()` (Devbox never calls it).
+
+Measured. Locally on 2026-09-30, s3fs 1.93 from the pinned image, started
+with the shim's options, against `serveStore` over Miniflare's R2: the
+publisher's 167,776,256-byte base (1 create, 33 parts, 1 complete), the
+listing, and a squashfuse read of the 160 MiB file, byte-exact
+(`bench-artifacts/native-migration/credential-free/local-s3fs.log`).
+Deployed on 2026-09-30 UTC with no secret on the Worker, image
+`kinu-devbox-native@sha256:e79fe2d9…`: the standalone acceptance
+`s20260930031837` passed start, write, delete, stop, wake, verify and discard,
+and cleaned up; the bench fixture runs `sbs09300316n` and `sbs09300321n`
+published a 234,885,120-byte base (1 create, 45 parts, 1 complete), read it
+back lazily byte-exact on every wake, committed a 64 KiB overwrite as a
+69,632-byte chunked delta, and after an owner eviction read an uncached
+64 MiB file byte-exact through the rebuilt route (D40). The same runs on the
+old shape (`d35c1060fe`, patched 0.12.9) are `s20260930031843`,
+`sbs09300316o` and `sbs09300321o`; D43 sets the figures side by side. Red
+for the refusals: `tests/store-gateway.test.ts`.
+
+Removed with the key: the `DEVBOX_S3_*` vars and secrets, their
+infra-manifest rows, the fixtures' secrets files and the owner's token steps.
+The pinned image, `sha256:3378de60…`, is the measured one rebuilt with the
+same binaries and a sync bundle that no longer carries the payload-transport
+contracts, whose only consumer left with D38's instruments.
+
+D42. Devbox has one failure type of its own, `DevboxError` (2026-09-29).
+DBX-9 keeps the package free of product-core imports, and the error model
+wants one failure type in the Effect channel, while `KinuError` lives in
+core. So devbox owns one type, as Nimbus owns `VfsError`: `DevboxError`, an
+Effect `Data.TaggedError` with a `code` (`src/errors.ts`; `effect`
+4.0.0-rc.117, pinned exactly). The six Error subclasses
+(`ContainerStartOverrun`, `ContainerStartInterrupted`, `ChainRecordAdvanced`,
+`ContainerChangedDuringAttach`, `LayerUnreadable`,
+`DeltaNamespaceProbeFailed`) are codes.
+Failures travel through `attempt` and `attemptSync`; `settle` and
+`settleSync` in `src/errors.ts` are the one runner, on a microtask scheduler.
+`devboxFailure({ cause })` reads a failure back after Worker RPC has dropped
+its class; its tag, code and message survive
+(`cf-backend/tests/workerd/error-compatibility.test.ts`). The Files errno
+error is the platform's contract, and one function (`fileFault`) puts it in
+the failure's cause. `gate:error-model` reads each package's failure type
+from one table (`FAILURE_SURFACES`: core `KinuError`, devbox `DevboxError`)
+under the same rules, with no exclusion and no raised lock. Kinu turns a
+DevboxError into a `KinuError` in one function, `fromDevbox` in
+`cf-backend/src/sandbox-exec-lane.ts`.
+
+Measured on the error-model lock: devbox falls from 169 sites to 158
+(error-class 6 to 0, throw 102 to 100, catch 51 to 49, promise-rejection 3
+to 2). The remaining throws throw `DevboxError` from async functions not yet
+moved into the channel; the lock only falls. Red:
+`scripts/error-model.test.ts` "a stray throw in the standalone devbox library
+is red and cannot grow its lock". `fromDevbox` first classified every failure
+it could not read as `unavailable`, a verdict `withSandboxRetry` never
+re-enters, so a transport failure on the way to the box stopped being
+retried as it was before the cutover. An unread failure is now `io` and keeps
+its text. `cf-backend/tests/unit-sandbox-rpc-errors.test.ts` was red (one
+call, a refusal) and is green (two calls, the read returned).
+
+D43. Native devbox measured beside the path it replaces (2026-09-30 UTC).
+Both shapes ran the same instruments on the same day, each on throwaway
+Workers and buckets that were deleted after: the native tree (credential-free
+store, image `sha256:e79fe2d9…`) and the old shape, `d35c1060fe` with patched
+0.12.9. The side-by-side probe is the bench fixture driven through create,
+160 MiB and 64 MiB of random data plus 200 small files, a base checkpoint,
+stop, wake, cold and warm reads, a 64 KiB overwrite and delta checkpoint, an
+owner eviction with an uncached read, stop, wake and five more stop and wake
+cycles (`sbs09300316n`, `sbs09300321n`, `sbs09300316o`, `sbs09300321o`). Every
+read on both shapes was byte-exact.
+
+| Measure | Native | Old |
+| --- | --- | --- |
+| Standalone acceptance | pass, 7 of 7 steps (`s20260930031837`) | pass, 7 of 7 (`s20260930031843`) |
+| Base checkpoint, 234,885,120 B | 38.8, 41.1 s; 97 class A, 16 class B | 39.8, 38.5 s; 95 A, 20 B |
+| Delta checkpoint | 69,632 B, 1 PUT; 6.5, 8.4 s | 69,632 B, 1 PUT; 11.9, 12.8 s |
+| Stop, median of 9 | 2,215 ms (294 to 5,915) | 3,265 ms (1,091 to 4,909) |
+| Wake as the caller sees it, median of 9 | 9,636 ms (7,834 to 14,928) | 10,084 ms (9,577 to 11,599) |
+| Restore inside the gate, median of 9 | 4,687 ms (3,726 to 8,734) | 3,902 ms (3,306 to 6,018) |
+| Cold lazy read, 160 MiB, median of 9 | 33.5 MiB/s (26.0 to 39.4) | 29.3 MiB/s (21.7 to 32.8) |
+| Warm read, median of 7 | 925 MiB/s | 216 MiB/s |
+| Uncached read after owner eviction | 86.8, 80.9 MiB/s | 54.6, 28.2 MiB/s |
+
+One figure is worse: the store mount inside the restore gate, a median
+1,869 ms against 863 ms. An instrumented native run (`sbs09300339n`) put the
+extra time between the mount's route install and s3fs's first request
+reaching the gateway: 1.3 to 1.6 s in 6 of 7 mounts and 0.2 s in one. The
+route install is two RPCs of 5 to 10 ms, the shim's stdin handshake arrives
+in under 10 ms, and DNS and a second s3fs start on the same container take 5
+to 21 ms (`sbs09300347n`, `sbs09300350n`, `sbs09300356n`). No Worker runs in
+the gap, so the time is spent in the container before s3fs sends; the old
+shape's mount call also waited 0.8 s for its first request. The caller's
+wake is not slower because the native container starts sooner.
+
+D26's check. Its probe is the SDK start block, which the native owner does
+not have. The same probe shape on `ctx.container` (2026-09-28,
+`devbox-native/bench-artifacts/native-migration/gate-all.json`): in every
+run no request ran while the hook held the gate. A hook that holds
+on a container process, as `src/native-clock.ts` makes the restore deadline
+do, ended 9 of 9 with a connection, alarm or stray timer pending; D26's
+rotated arm ended 6 of 9 and reset on all three stray runs. A hook that holds
+on a Worker timer still resets behind a stray timer (0 of 3), as D26 found.
+
+The durability canary was not run on either shape. Its steps call `shell`
+with the `workspace` runtime (`scripts/canary-script.ts:50`) and nothing in
+`cf-backend` starts the devbox unasked, so its three numbers cannot tell the
+shapes apart. It also needs a whole product deployment. Its baseline is the
+staging run of 2026-09-26 (`kinu-logs/onstart/DESIGN.md`).
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q

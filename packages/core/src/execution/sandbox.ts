@@ -1,4 +1,4 @@
-/** SandboxExecutor: @cloudflare/sandbox-backed executor, one container per agent, exposed as `sandbox.*`. */
+/** Native container executor, one durable workspace per agent, exposed as sandbox.*. */
 
 import * as v from 'valibot';
 import { isAbortError } from '@kinu.run/agent-utils';
@@ -7,7 +7,7 @@ import { readExecSignal } from './signal';
 import { commandResult, exposedPortText, type CommandResult } from './exec-result';
 import { diagnostics, KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import type { VFS } from '../types/primitives';
-import { isVfsError, VfsError, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { isVfsError, VfsError, VFS_ERRNO, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 import type { VfsNativeReads } from '../vfs/mounts';
 import { shellQuote } from '../utils/shell';
 import { vfsDirname } from '../utils/vfs-helpers';
@@ -51,7 +51,7 @@ export interface SandboxHandle {
   /** Every operation awaits this first so an agent never observes a half-restored workspace. */
   ensureReady(): Promise<void>;
   /**
-   * `timeout` absent means no work deadline: pick a transport with none (catalog: sandbox.exec.request_ceiling_ms).
+   * `timeout` absent means no work deadline: native container exec adds none.
    * `signal` cancels the remote work: settle only once the process is gone; a transport with no kill must not accept one.
    */
   exec(command: string, opts?: SandboxExecOptions):
@@ -92,7 +92,7 @@ const PREVIEWS_NOT_CONFIGURED =
 
 /** Lower-cased markers for transient sandbox/RPC errors, retried with backoff (STABILITY-AUDIT §B2/§B3). */
 const TRANSIENT_MARKERS = [
-  // First call after a stop/eviction can land while the RPC session tears down (scripts/sandbox-durability-probe.ts).
+  // First call after a stop/eviction can land while the RPC session tears down (measured 2026-09-05, DECISIVE-2026-09-05.md).
   'while the runtime connection was closing',
   'stopped while the operation was pending',
   'network connection lost',
@@ -677,39 +677,23 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
     return p.slice(p.lastIndexOf('/') + 1);
   };
 
-  /** SDK file errors into this plane's taxonomy. `code` is a getter lost over the wire; `errorResponse` survives. */
-  const SDK_ERRNO = new Map<string, VfsErrorCode>([
-    ['FILE_NOT_FOUND', 'ENOENT'],
-    ['FILE_EXISTS', 'EEXIST'],
-    ['IS_DIRECTORY', 'EISDIR'],
-    ['NOT_DIRECTORY', 'ENOTDIR'],
-    ['PERMISSION_DENIED', 'EACCES'],
-    ['READ_ONLY', 'EROFS'],
-    ['FILESYSTEM_ERROR', 'EIO'],
-    ['FILE_TOO_LARGE', 'EIO'],
-    ['VALIDATION_FAILED', 'EIO'],
-  ]);
-
-  const SDK_ERRNO_BY_NAME = new Map<string, VfsErrorCode>([
-    ['FileNotFoundError', 'ENOENT'],
-    ['FileExistsError', 'EEXIST'],
-    ['PermissionDeniedError', 'EACCES'],
-    ['FileSystemError', 'EIO'],
-    ['FileTooLargeError', 'EIO'],
-    ['ValidationFailedError', 'EIO'],
-  ]);
+  const isErrnoCode = (code: string): code is VfsErrorCode => Object.hasOwn(VFS_ERRNO, code);
 
   const errnoOf = (cause: Error): VfsErrorCode | null => {
     if (isVfsError(cause)) return null;
-    const response = 'errorResponse' in cause ? cause.errorResponse : undefined;
-    const code = v.is(v.looseObject({ code: v.string() }), response) ? response.code : undefined;
+    const visited = new Set<Error>();
 
-    if (code !== undefined) return SDK_ERRNO.get(code) ?? 'EIO';
+    for (let current: unknown = cause; current instanceof Error && !visited.has(current); current = current.cause) {
+      visited.add(current);
+      const detail = v.safeParse(v.object({ kind: v.literal('devbox.file'), code: v.string() }), current.cause);
 
-    if (response !== undefined) return 'EIO';
+      if (!detail.success) continue;
+      const { code } = detail.output;
 
-    // Only the name crossed the wire; EIO covers codes the taxonomy has no word for.
-    return SDK_ERRNO_BY_NAME.get(cause.name) ?? null;
+      return isErrnoCode(code) ? code : 'EIO';
+    }
+
+    return null;
   };
 
   const serving = async <T>(path: string, op: () => Promise<T>): Promise<T> => {

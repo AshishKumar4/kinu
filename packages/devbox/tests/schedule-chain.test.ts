@@ -1,11 +1,9 @@
 // The box's schedule table is its lifeline and its bill: every self-re-arming chain keeps a successor,
 // and a row nobody owes must not exist, since the platform wakes the object for every row it holds.
-// Driven through the SDK's own entry points (scheduled callbacks, the activity expiry, `quiesce`,
-// `checkpointNow`) against the harness container, whose schedule table the box and the SDK share.
+// Driven through native alarm dispatch, quiesce and checkpoint entrypoints.
 import { describe, expect, test, vi } from 'bun:test';
 
 import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
-import { chainBox, chainHead } from './support/chain-box';
 import { Devbox, harness, wakeWhileArmed, type FakeSandbox } from './support/devbox-harness';
 
 class TestBox extends Devbox<unknown> {
@@ -36,7 +34,7 @@ describe('the schedule a started box holds', () => {
   for (const [how, stop] of [
     ['quiesced', async (box: TestBox) => { await box.quiesce(); }],
     ['was stopped under it', async (box: TestBox) => { await box.stop(); }],
-    ['outlived its activity lease', async (box: TestBox) => { await box.onActivityExpired(); }],
+    ['was reclaimed by the platform', async (_box: TestBox, container: FakeSandbox) => { await container.stop(); }],
   ] as const) {
     test(`a box that ${how} is woken for what the stop left, then never again`, async () => {
       let now = Date.now();
@@ -45,10 +43,10 @@ describe('the schedule a started box holds', () => {
       try {
         const { box, container } = harness(TestBox);
         await box.devboxStartup();
-        await stop(box);
+        await stop(box, container);
         const starts = container.containerStarts;
 
-        for (const late of [3, 2, 1]) container.scheduleRows.push({ callback: 'devboxHeartbeat', time: now / 1000 - late });
+        await container.seedSchedule("devboxHeartbeat", now / 1000 - 1);
 
         await wakeWhileArmed(container, (to) => { now = Math.max(now, to); }, 20);
 
@@ -65,7 +63,7 @@ describe('every self-re-arming chain keeps its successor', () => {
   test('a heartbeat whose own tick cannot be written still arms the next beat', async () => {
     const { box, container, storage } = harness(TestBox);
     await box.devboxStartup();
-    container.scheduleRows.splice(0);
+    container.clearSchedules();
     storage.faultOn('devbox:last-tick', new Error('the storage write was refused'));
 
     await box.devboxHeartbeat();
@@ -73,26 +71,34 @@ describe('every self-re-arming chain keeps its successor', () => {
     // Nothing else re-arms a heartbeat: a beat that ends without a successor is the last one.
     expect(callbacks(container)).toEqual(['devboxHeartbeat']);
   });
-
-  test('a heartbeat renews the activity timeout, which alone keeps the SDK alarm chain alive', async () => {
+  test("one native alarm dispatches both due callbacks while each arms its successor", async () => {
     const { box, container } = harness(TestBox);
-    await box.devboxStartup();
-    const before = container.activityRenewals;
-
-    await box.devboxHeartbeat();
-
-    expect(container.activityRenewals).toBe(before + 1);
+    await box.start();
+    await container.seedSchedule("devboxCheckpoint", Date.now() / 1000 - 1);
+    await container.seedSchedule("devboxHeartbeat", Date.now() / 1000 - 1);
+    await box.alarm();
+    expect(callbacks(container)).toEqual(["devboxCheckpoint", "devboxHeartbeat"]);
+    expect(container.alarmAt).toBeGreaterThan(Date.now());
   });
+  test("a failed native alarm is delivered again until its callback settles", async () => {
+    let calls = 0;
+    const failure = new Error("interrupted heartbeat");
 
-  test('the activity expiry commits a final checkpoint before the SDK stops the container', async () => {
-    const { box, container, rows } = chainBox();
-    expect((await box.attachNow()).kind).toBe('empty');
-    await box.writeFile('/workspace/notes.md', 'written just before the box went idle');
+    class InterruptedBox extends TestBox {
+      override async devboxHeartbeat(): Promise<void> {
+        calls++;
 
-    await box.onActivityExpired();
+        if (calls === 1) throw failure;
+        await super.devboxHeartbeat();
+      }
+    }
 
-    expect({ committed: chainHead(rows) !== null, running: container.running.running })
-      .toEqual({ committed: true, running: false });
+    const { box, container } = harness(InterruptedBox);
+    await container.seedSchedule("devboxHeartbeat", Date.now() / 1000 - 1);
+    await expect(box.alarm()).rejects.toMatchObject({ _tag: "DevboxError", message: failure.message });
+    await box.alarm();
+    expect({ calls, rows: callbacks(container), alarm: container.alarmAt })
+      .toEqual({ calls: 2, rows: [], alarm: null });
   });
 });
 
@@ -106,7 +112,7 @@ describe('a commit on a replaced container is refused, and the restore is armed'
     test(`${commit} refuses`, async () => {
       const { box, container } = harness(TestBox);
       await box.devboxStartup();
-      container.scheduleRows.splice(0);
+      container.clearSchedules();
       container.bootId = undefined;
 
       await expect(run(box)).rejects.toThrow('the restored container was replaced');

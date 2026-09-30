@@ -7,7 +7,7 @@ import { scratchDir } from '@kinu.run/test-utils';
 import { findMovable, withoutComments } from './capability-parity';
 import { classify, exportedDeclarations, inScope, keyOf } from './dead-code';
 import {
-  auditInterception, catchAllIsBound, declaredSandboxClasses, exportsContainerProxy, sdkDefaultsHttpsInterceptionOff,
+  auditInterception, declaredSandboxClasses, nativeRoutingReasons, readInterceptionSources,
   WranglerContainers, wranglerContainerClasses,
 } from './egress-interception';
 import { assertMeasured, reconcile, writeLock } from './gate-ratchet';
@@ -635,87 +635,84 @@ describe('egress interception denominator', () => {
 
   test('a generic container class is in the denominator', () => {
     expect(declaredSandboxClasses(new Map([
-      ['packages/cf-backend/src/g.ts', 'export class Gen<T> extends Sandbox<T> { run(): void {} }'],
+      ['packages/cf-backend/src/g.ts', 'export class Gen<T> extends Devbox<T> { run(): void {} }'],
     ]))).toEqual(['Gen']);
   });
 
   test('a mention in a comment or a string is not a declaration', () => {
     expect(declaredSandboxClasses(new Map([
       ['packages/cf-backend/src/c.ts',
-        '// class Fake extends Sandbox\nexport const doc = "class AlsoFake extends Sandbox";'],
+        `// class Fake extends Devbox
+export const doc = "class AlsoFake extends Devbox";`],
     ]))).toEqual([]);
   });
 });
 
-describe('egress interception invariant — red in every direction it claims', () => {
-  const at = (body: string): ReadonlyMap<string, string> => new Map([
-    ['packages/cf-backend/src/kinu-sandbox.ts', `export class KinuSandbox extends Sandbox<Env> {\n${body}\n}`],
-  ]);
+describe('native egress constraints — red in every governed direction', () => {
+  const sources = readInterceptionSources();
+  const base = 'packages/devbox/src/devbox.ts';
+  const kinu = 'packages/cf-backend/src/kinu-sandbox.ts';
+  const router = 'packages/devbox/src/gateway.ts';
+  const vault = 'packages/cf-backend/src/egress/outbound.ts';
+  const worker = 'packages/cf-backend/src/server.ts';
+  const bench = 'packages/devbox/bench/worker.ts';
+  const generic = ['Devbox', 'BenchBox', 'SnapshotChainBox', 'ExampleBox'];
+  const entry = sources.get(worker) ?? '';
 
-  test('a class carrying both fields at their required values and nothing forbidden is clean', () => {
-    const audit = auditInterception(at('  enableInternet = false;\n  interceptHttps = true;'), ['KinuSandbox']);
+  function changed(file: string, before: string, after: string): Map<string, string> {
+    const original = sources.get(file);
 
-    expect(audit.inspected).toEqual([{ file: 'packages/cf-backend/src/kinu-sandbox.ts', owner: 'KinuSandbox' }]);
-    expect(audit.violations).toEqual([]);
-  });
+    if (original === undefined || !original.includes(before)) throw new Error('mutation has no subject: ' + file + ' / ' + before);
 
-  // One class body each, and the single refusal it must draw.
-  const REFUSED_BODIES = [
-    {
-      name: 'a class that LOST `enableInternet = false` is the open path',
-      body: '  interceptHttps = true;',
-      reason: 'does not declare `enableInternet = false` — see this gate\'s header for the path that opens',
-    },
-    {
-      name: 'a field present at the wrong value is reported with both values',
-      body: '  enableInternet = true;\n  interceptHttps = true;',
-      reason: 'declares `enableInternet = true`, must be `false`',
-    },
-  ];
-
-  for (const refused of REFUSED_BODIES) {
-    test(refused.name, () => {
-      const { violations } = auditInterception(at(refused.body), ['KinuSandbox']);
-
-      expect(violations.map((v) => v.reason)).toEqual([refused.reason]);
-    });
+    return new Map(sources).set(file, original.replace(before, after));
   }
 
-  test('a host allow or deny list is refused even beside a correct pair', () => {
-    const { violations } = auditInterception(
-      at('  enableInternet = false;\n  interceptHttps = true;\n  allowedHosts = ["api.example"];'), ['KinuSandbox'],
-    );
-
-    expect(violations.map((v) => v.reason)).toEqual(['declares `allowedHosts` — an allow/deny list must not be what totality rests on']);
+  test('the actual private and public hosts retain their declared network policies', () => {
+    expect(auditInterception(sources, ['KinuSandbox']).violations).toEqual([]);
+    expect(auditInterception(sources, generic, true).violations).toEqual([]);
+    expect(nativeRoutingReasons(sources, entry)).toEqual([]);
   });
 
-  test('a class wrangler does not bind is outside the denominator, whatever it declares', () => {
-    expect(auditInterception(at('  enableInternet = true;'), ['Other']).inspected).toEqual([]);
+  test('giving Kinu raw internet or dropping its override is refused', () => {
+    for (const replacement of ['enableInternet = true;', '']) {
+      const mutated = changed(kinu, 'enableInternet = false;', replacement);
+      expect(auditInterception(mutated, ['KinuSandbox']).violations.map(issue => issue.owner)).toEqual(['KinuSandbox']);
+    }
   });
+
+  test('closing generic Devbox networking closes its inherited hosts and is refused', () => {
+    const mutated = changed(base, 'enableInternet = true;', 'enableInternet = false;');
+    expect(auditInterception(mutated, generic, true).violations.map(issue => issue.owner).sort()).toEqual([...generic].sort());
+  });
+
+  test('a benchmark-only override cannot silently remove public networking', () => {
+    const mutated = changed(bench, 'class BenchBox extends Devbox<BenchEnv> {', 'class BenchBox extends Devbox<BenchEnv> { enableInternet = false;');
+    expect(auditInterception(mutated, generic, true).violations.map(issue => issue.owner).sort()).toEqual(['BenchBox', 'SnapshotChainBox']);
+  });
+
+  const paths = [
+    [base, 'container.start({ enableInternet: this.enableInternet })', 'container.start({ enableInternet: true })', 'declared internet policy'],
+    [router, '.interceptAllOutboundHttp(router)', '.removedHttpRoute(router)', 'HTTP has no total'],
+    [router, ".interceptOutboundHttps('*', router)", ".interceptOutboundHttps('api.example.com', router)", 'HTTPS has no total'],
+    [base, 'internet: this.enableInternet', 'internet: true', 'router does not receive'],
+    [router, 'internet: this.host.internet', 'internet: true', 'router does not receive'],
+    [kinu, 'outboundPolicy()', 'removedVaultPolicy()', 'does not bind the vault'],
+    [kinu, 'this.#nativeExports.KinuEgress({ props: params })', 'this.#nativeExports.KinuEvents({ props: params })', 'does not bind the vault'],
+    [base, 'await this.outboundPolicy()', '{ routes: {} }', 'does not bind the vault'],
+    [router, 'this.#fallback = policy.fallback', 'this.#fallback = undefined', 'does not bind the vault'],
+    [worker, 'return handleContainerEgress(request, this.env, parseEgressParams(this.ctx));', 'return fetch(request);', 'does not enter credential injection'],
+    [vault, 'vault.resolveEgressInjection(', 'vault.unrelatedInjection(', 'does not consult the owner vault'],
+    [router, '?? this.ctx.props.fallback', '', 'owned routes do not precede'],
+    [router, 'this.ctx.props.internet ?', 'true ?', 'public forwarding is not conditional'],
+    [worker, "from '@kinu.run/devbox'", "from '@unrelated/devbox'", 'DevboxOutbound is not bound'],
+    [worker, 'export class KinuEgress', 'class KinuEgress', 'KinuEgress is not bound'],
+  ] as const;
+
+  for (const [file, before, after, constraint] of paths) {
+    test('refuses a broken native edge: ' + constraint, () => {
+      const mutated = changed(file, before, after);
+      expect(nativeRoutingReasons(mutated, mutated.get(worker) ?? '').some(reason => reason.includes(constraint))).toBe(true);
+    });
+  }
 });
 
-/** The three module-level reads, each over a shape a text match reads backwards: a commented-out
- *  statement, an alias, and a mention outside the construct it is meant to find. */
-describe('egress interception reads the entry, the handlers and the SDK default as syntax', () => {
-  test('the entry exports ContainerProxy only under that name, from the SDK, outside a comment', () => {
-    expect(exportsContainerProxy('export { ContainerProxy } from "@cloudflare/sandbox";')).toBe(true);
-    expect(exportsContainerProxy("import { ContainerProxy as P } from '@cloudflare/sandbox';\nexport { P as ContainerProxy };")).toBe(true);
-    expect(exportsContainerProxy('// export { ContainerProxy } from "@cloudflare/sandbox";\nexport {};')).toBe(false);
-    expect(exportsContainerProxy('export { ContainerProxy as Proxy } from "@cloudflare/sandbox";')).toBe(false);
-    expect(exportsContainerProxy('class ContainerProxy {}\nexport { ContainerProxy };')).toBe(false);
-  });
-
-  const sandbox = (body: string): ReadonlyMap<string, string> => new Map([['packages/cf-backend/src/kinu-sandbox.ts', body]]);
-  const bind = 'class S { async start(p: unknown) { await this.setOutboundHandler(EGRESS_HANDLER, p); } }\n';
-
-  test('the catch-all counts only when a registry keys it and a call binds it', () => {
-    expect(catchAllIsBound(sandbox(`${bind}S.outboundHandlers = { [EGRESS_HANDLER]: h };`))).toBe(true);
-    expect(catchAllIsBound(sandbox(`${bind}S.outboundHandlers = { [EVENT_HANDLER]: h };`))).toBe(false);
-    expect(catchAllIsBound(sandbox('// this.setOutboundHandler(EGRESS_HANDLER, p);\nS.outboundHandlers = { [EGRESS_HANDLER]: h };'))).toBe(false);
-  });
-
-  test('the SDK default is the class field, not a mention of it', () => {
-    expect(sdkDefaultsHttpsInterceptionOff('export class Container { interceptHttps = false; }')).toBe(true);
-    expect(sdkDefaultsHttpsInterceptionOff('// interceptHttps = false was the old default\nexport class Container { interceptHttps = true; }')).toBe(false);
-  });
-});

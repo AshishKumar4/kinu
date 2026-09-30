@@ -17,12 +17,12 @@ function devboxScratchDir(label: string): string {
   return mkdtempSync(join(suiteRoot, `${label}-`));
 }
 
+import { chainAdvanced, layerUnreadable } from '../src/errors';
 import {
   archiveCommand,
   archiveSizeCommand,
   baseObjectKey,
   chainBackupOptions,
-  ChainRecordAdvanced,
   chainStoreRoot,
   CHAIN_EXCLUDES,
   deltaObjectKey,
@@ -95,7 +95,7 @@ import {
   type CheckpointKind,
   type CheckpointOutcome,
 } from '../src/storage';
-import { sessionShellOutput, sessionShellRefusal } from './support/session-shell';
+import { shellSyntaxError } from "./support/container-shell";
 
 const CHAIN_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 
@@ -570,7 +570,7 @@ function harness(overrides: {
       // Models the Durable Object transaction's compare-and-set fence on `rev`.
       const stored = state?.rev ?? null;
 
-      if (stored !== expectedRev) return Promise.reject(new ChainRecordAdvanced(expectedRev, stored));
+      if (stored !== expectedRev) return Promise.reject(chainAdvanced(expectedRev, stored));
       state = next;
 
       return Promise.resolve();
@@ -593,7 +593,7 @@ function harness(overrides: {
     // The fake execs the strategy's real commands and models the SDK's persistent shell: `exit`
     // or an unparseable command ends the session, failing any test that runs it (D18).
     exec: (command) => {
-      const refused = sessionShellRefusal(command);
+      const refused = shellSyntaxError(command);
 
       if (refused !== undefined) {
         calls.push(`sessionKilled:${command.split(' ')[0]}`);
@@ -749,7 +749,9 @@ function harness(overrides: {
     restoreExtract: (backup) => {
       calls.push(`restoreExtract:${backup.id}`);
 
-      return Promise.resolve({ success: overrides.extractLands ?? true });
+      return overrides.extractLands === false
+        ? Promise.reject(layerUnreadable('extraction', backup.id, { cause: new Error('archive refused by the fixture') }))
+        : Promise.resolve();
     },
     createExtractSnapshot: (options) => {
       calls.push(`createExtractSnapshot:${options.localBucket}`);
@@ -1366,7 +1368,7 @@ describe('attach — the mount must be observed to have landed', () => {
       extractLands: false,
     });
 
-    await expect(attachOf(record)).rejects.toThrow(/reported failure/);
+    await expect(attachOf(record)).rejects.toThrow(/the extraction layer of generation \S+ could not be read: archive refused by the fixture/);
   });
 });
 
@@ -2500,14 +2502,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       && call.includes('change watermark could not be advanced'))).toBe(true);
   });
 
-  // The gate's one call runs on two shells: the image's sync runs it on its own and reads the bytes
-  // bash wrote, and a box that drives its own ticks runs it through the container server, which
-  // re-reads them by lines and drops NUL bytes (P6). Both must read the same mark.
-  for (const [shell, output] of [
-    ['on the sync\'s own shell', (raw: string): string => raw],
-    ['through the container server', sessionShellOutput],
-  ] as const) {
-    test(`an attached tick reads its gate in one container call ${shell}, which bash runs`, async () => {
+  test("an attached tick reads its gate in one native container command, which bash runs", async () => {
       const scratch = devboxScratchDir('devbox-probe');
       const upper = join(scratch, 'upper');
       mkdirSync(upper);
@@ -2525,7 +2520,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
           // The command as sent, run by bash over a scratch upper and mount table.
           const ran = Bun.spawnSync(['bash', '-c', command.replaceAll(UPPER, walked).replaceAll('/proc/mounts', table)]);
 
-          return { stdout: output(ran.stdout.toString()), stderr: output(ran.stderr.toString()), exitCode: ran.exitCode };
+          return { stdout: ran.stdout.toString(), stderr: ran.stderr.toString(), exitCode: ran.exitCode };
         };
 
         const outcome = await checkpointOf(record, 'tick');
@@ -2537,7 +2532,6 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // A walk that fails reads as no mark, which never matches, so the tick does not skip.
       expect((await tick(join(scratch, 'absent'))).reason).not.toBe('work directory is unchanged');
     });
-  }
 
   test('a failed publication leaves the previous record intact and records the reason', async () => {
     const record = harness({ state: chainState(), mounts: MOUNTED, failPublish: true });

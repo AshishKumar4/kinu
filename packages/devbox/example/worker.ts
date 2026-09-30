@@ -5,9 +5,9 @@
  * `scripts/bench-devbox-standalone.ts` deploys it and runs its acceptance.
  */
 import * as v from 'valibot';
-import { Devbox, devboxSyncHandlers, type DevboxStore } from '../src/index';
+import { Devbox, type DevboxStore } from "../src/index";
 
-export { ContainerProxy } from '@cloudflare/sandbox';
+export { DevboxSyncGateway, DevboxOutbound, DevboxStoreGateway } from "../src/index";
 
 interface Env {
   readonly Box: DurableObjectNamespace<ExampleBox>;
@@ -17,14 +17,12 @@ interface Env {
 }
 
 export class ExampleBox extends Devbox<Env> {
+  protected override get namespaceBinding(): string { return "Box"; }
   protected override get store(): DevboxStore {
-    return { binding: 'WORKSPACES', bucket: this.env.WORKSPACES };
+    return { binding: "WORKSPACES", bucket: this.env.WORKSPACES };
   }
 }
 
-// The container's own sync reaches its box through this handler (D30); the registry is keyed by
-// class name, so each concrete class registers its own.
-ExampleBox.outboundHandlers = devboxSyncHandlers((env: Env) => env.Box);
 
 const BodySchema = v.object({
   command: v.optional(v.string()),

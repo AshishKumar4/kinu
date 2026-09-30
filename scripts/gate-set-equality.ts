@@ -205,8 +205,8 @@ export const NON_REPOSITORY_SCANS = new Map<string, string>([
   ],
   [
     'scripts/vendor-schema.ts',
-    'reads the installed `agents` and `@cloudflare/containers` dist for '
-    + 'their CREATE TABLE DDL — the vendor\'s own shape is the corpus, `git ls-files` has never '
+    'reads the installed Agents SDK dist for its CREATE TABLE DDL — the vendor\'s own '
+    + 'shape is the corpus, `git ls-files` has never '
     + 'listed `node_modules`, and preparing against Kinu\'s copy of the DDL is the defect class '
     + 'this gate exists to catch.',
   ],

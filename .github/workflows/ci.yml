@@ -47,6 +47,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Install device sandbox prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
         with:

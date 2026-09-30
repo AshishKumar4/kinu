@@ -498,17 +498,6 @@
       "loadAtStart": 6.21,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/storage-matrix-cleanup.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts": {
-      "wallSeconds": 6.34,
-      "cpuSeconds": 6.29,
-      "peakRssMb": 200.52,
-      "peakRunnable": 10,
-      "peakCpuThreads": 2.59,
-      "meanThreads": 0.99,
-      "samples": 65,
-      "loadAtStart": 6.09,
-      "exit": 0
-    },
     "bun test --timeout=0 tests/browser/public-pages.test.ts scripts/plan-demo-film.test.ts": {
       "wallSeconds": 42.06,
       "cpuSeconds": 38.24,
@@ -982,17 +971,6 @@
       "loadAtStart": 8.38,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/do-init-block-bodies.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/error-model.test.ts": {
-      "wallSeconds": 49.47,
-      "cpuSeconds": 76.68,
-      "peakRssMb": 6107.33,
-      "peakRunnable": 19,
-      "peakCpuThreads": 11.96,
-      "meanThreads": 1.55,
-      "samples": 217,
-      "loadAtStart": 6.79,
-      "exit": 0
-    },
     "bun test --timeout=0 tests/browser/chat-scroll.test.ts tests/browser/chat-sparse-pages.test.ts": {
       "wallSeconds": 50.44,
       "cpuSeconds": 35.91,
@@ -1013,6 +991,28 @@
       "meanThreads": 1.72,
       "samples": 18,
       "loadAtStart": 1.06,
+      "exit": 0
+    },
+    "bun test --timeout=0 scripts/bench*.test.ts scripts/storage-matrix-cleanup.test.ts scripts/deploy-substrate.test.ts scripts/devbox-e2e.test.ts": {
+      "wallSeconds": 10.2,
+      "cpuSeconds": 11.43,
+      "peakRssMb": 401.21,
+      "peakRunnable": 13,
+      "peakCpuThreads": 2.53,
+      "meanThreads": 1.12,
+      "samples": 73,
+      "loadAtStart": 12.19,
+      "exit": 0
+    },
+    "bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/error-model.test.ts": {
+      "wallSeconds": 54.8,
+      "cpuSeconds": 95.8,
+      "peakRssMb": 8399.51,
+      "peakRunnable": 24,
+      "peakCpuThreads": 13.81,
+      "meanThreads": 1.75,
+      "samples": 242,
+      "loadAtStart": 1.84,
       "exit": 0
     }
   }

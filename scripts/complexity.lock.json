@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-09-29",
-  "files": 2855,
-  "functions": 71050,
+  "measuredAt": "2026-09-30",
+  "files": 2843,
+  "functions": 71012,
   "ceiling": 87,
   "line": 29,
   "inventory": [
@@ -15,7 +15,7 @@
     },
     {
       "key": "packages/devbox/bench/worker.ts#fetch",
-      "complexity": 48
+      "complexity": 47
     },
     {
       "key": "scripts/silent-drop.ts#auditFile>walk",
@@ -26,15 +26,7 @@
       "complexity": 43
     },
     {
-      "key": "scripts/do-init-gate.ts#auditFile>walk",
-      "complexity": 43
-    },
-    {
       "key": "packages/core/src/evolution/engine.ts#EvolutionEngine.reviewTurn",
-      "complexity": 42
-    },
-    {
-      "key": "scripts/bench-payload-transports.ts#main",
       "complexity": 42
     },
     {
@@ -106,15 +98,15 @@
       "complexity": 36
     },
     {
+      "key": "scripts/do-init-gate.ts#auditFile>walk",
+      "complexity": 36
+    },
+    {
       "key": "packages/cli/src/cc-transcript.ts#mineSession",
       "complexity": 35
     },
     {
       "key": "scripts/bench-external.ts#readHarborTrial",
-      "complexity": 35
-    },
-    {
-      "key": "scripts/fixtures/payload-transport/worker.ts#fetch",
       "complexity": 35
     },
     {
@@ -263,10 +255,6 @@
     },
     {
       "key": "packages/core/src/chat.ts#ProviderCall.consume",
-      "complexity": 30
-    },
-    {
-      "key": "scripts/fixtures/kinu-durability/worker.ts#fetch",
       "complexity": 30
     },
     {

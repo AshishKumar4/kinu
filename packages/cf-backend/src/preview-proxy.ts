@@ -1,9 +1,4 @@
-/**
- * Sandbox previews on the preview host; routing and token validation are the @cloudflare/sandbox SDK's.
- * The label is proven against the published KV exposures first: `proxyToSandbox` creates a Durable Object per guessed hostname.
- */
-
-import { proxyToSandbox, type SandboxEnv } from "@cloudflare/sandbox";
+/** Native container previews: a published capability is checked before a DO is addressed. */
 import { diagnostics, toKinuError } from "@kinu.run/core/obs";
 import { escapeHtml } from "@kinu.run/core";
 import { containPreviewResponse, sandboxPreviewLabelOf } from "@kinu.run/core";
@@ -11,23 +6,7 @@ import { isKinuSandboxId } from "@kinu.run/core";
 import { sandboxPreviewExposed, type PreviewSuffixEnv } from "@kinu.run/core";
 import type { KvStore } from "@kinu.run/agent-utils";
 import { sanitizePreviewRequestHeaders } from "./lib/preview-request";
-import type { KinuSandbox } from "./kinu-sandbox";
-import { openSandbox } from "./sandbox-exec-lane";
 
-/** `proxyToSandbox`'s response for every forward failure; `unit-preview-origin.test.ts` pins the shape. */
-const SDK_FORWARD_FAILURE = { status: 500, body: 'Proxy routing error' } as const;
-
-/**
- * SDK answer for a valid port token whose exposure is not live (transcribed from `stalePreviewURLResponse`; pinned by the suite).
- * Safe to act on: the object only returns it after the token matched.
- */
-const SDK_STALE_PREVIEW = {
-  status: 410,
-  body: JSON.stringify({
-    error: 'Preview URL is stale because the sandbox runtime is not active',
-    code: 'STALE_PREVIEW_URL',
-  }),
-} as const;
 
 /** One refusal shape for every unserved hostname, so it is not an existence oracle. */
 function refusePreview(code: string, error: string, status: number): Response {
@@ -37,9 +16,9 @@ function refusePreview(code: string, error: string, status: number): Response {
   ));
 }
 
-/** `Sandbox` is optional: a deployment can omit the binding; the SDK accepts nothing narrower than the full namespace. */
+/** A deployment can omit container previews entirely. */
 export interface SandboxPreviewEnv extends PreviewSuffixEnv {
-  Sandbox?: DurableObjectNamespace<KinuSandbox>;
+  Sandbox?: { getByName(name: string): { fetch(request: Request): Promise<Response> } };
   AUTH_KV?: KvStore;
 }
 
@@ -58,7 +37,6 @@ export async function servePreviewRequest(request: Request, env: SandboxPreviewE
     return refusePreview('PREVIEW_UNAVAILABLE', 'Preview routing is unavailable.', 503);
   }
 
-  const containers: SandboxEnv<KinuSandbox> = { Sandbox: env.Sandbox };
 
   if (!(await sandboxPreviewExposed(env.AUTH_KV, label))) {
     diagnostics.event('preview.unpublished_label', { sandboxId: label.sandboxId, port: label.port });
@@ -70,50 +48,21 @@ export async function servePreviewRequest(request: Request, env: SandboxPreviewE
     );
   }
 
-  const forward = (): Promise<Response | null> => proxyToSandbox(new Request(request, {
-    headers: sanitizePreviewRequestHeaders(request.headers),
-  }), containers);
-
-  let response = await forward();
-
-  if (!response) {
-    return refusePreview('NOT_A_PREVIEW', 'This host serves sandbox previews only.', 404);
-  }
-
-  // One repair, one re-issue: the re-issue is the test of whether the repair worked; no retry loop.
-  if (request.method === 'GET' && await isStalePreview(response)) {
-    await repairStalePreview(label.sandboxId, containers);
-    const reissued = await forward();
-
-    if (reissued !== null) response = reissued;
-  }
-
-  if (response.status === SDK_FORWARD_FAILURE.status
-    && (await response.clone().text()) === SDK_FORWARD_FAILURE.body) {
-    return renderNotReadyPage(url.hostname);
-  }
-
-  return containPreviewResponse(response);
-}
-
-async function isStalePreview(response: Response): Promise<boolean> {
-  return response.status === SDK_STALE_PREVIEW.status
-    && (await response.clone().text()) === SDK_STALE_PREVIEW.body;
-}
-
-/**
- * `ensureReady` re-exposes each recorded port with its original token, so the same URL works; it is singleflight.
- * Best effort: a failure keeps the stale 410 for the visitor rather than a 500.
- */
-async function repairStalePreview(sandboxId: string, env: SandboxEnv<KinuSandbox>): Promise<void> {
   try {
-    await openSandbox(env.Sandbox, sandboxId, { normalizeId: true }).ensureReady();
+    const forwarded = new URL(request.url);
+    forwarded.pathname = `/_devbox/preview/${label.port}/${encodeURIComponent(label.token)}${forwarded.pathname}`;
+
+    const response = await env.Sandbox.getByName(label.sandboxId).fetch(new Request(forwarded, new Request(request, {
+      headers: sanitizePreviewRequestHeaders(request.headers),
+    })));
+
+    return containPreviewResponse(response);
   } catch (cause) {
-    diagnostics.failure('preview.stale_repair_failed', toKinuError({
-      doing: 'restoring the container behind a stale preview URL',
-      cause,
-      otherwise: 'unavailable',
-    }), { sandboxId });
+    diagnostics.failure('preview.forward_failed', toKinuError({
+      doing: 'reaching the restored container preview', cause, otherwise: 'unavailable',
+    }), { sandboxId: label.sandboxId, port: label.port });
+
+    return renderNotReadyPage(url.hostname);
   }
 }
 

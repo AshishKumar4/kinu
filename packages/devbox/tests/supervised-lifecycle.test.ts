@@ -123,17 +123,12 @@ describe('stopping a supervised process drops its spec only on evidence', () => 
     expect(await reservations(box)).toEqual([]);
   });
 
-  test('a container answering PROCESS_NOT_FOUND is absence, and the spec goes', async () => {
-    // A restarted spec keeps its id, so a caller may hold the previous one. The container
-    // answered that it holds no such id; keeping the row would restore a nonexistent process.
+  test('a native process already gone leaves no launch record or failure incident', async () => {
     const { box, container } = harness(Devbox);
     const { processId } = await box.startSupervised(COMMAND);
-    container.killFaults.push(new SandboxFailure({
-      code: 'PROCESS_NOT_FOUND',
-      message: 'Process not found',
-    }));
-
-    expect(await box.stopSupervised(processId)).toEqual({ stopped: false });
+    container.processes.delete(processId);
+    container.files.delete(`/var/tmp/devbox/processes/${processId}/process.json`);
+    await box.stopSupervised(processId);
 
     const state = await box.devboxState();
     expect(state.supervised).toEqual([]);

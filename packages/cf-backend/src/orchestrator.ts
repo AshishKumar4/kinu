@@ -252,7 +252,7 @@ import {
   acceptSandboxLifecycleFailure, initSandboxLifecycleTable,
   type SandboxLifecycleFailureResult,
 } from "./sandbox-lifecycle";
-import { openSandbox } from "./sandbox-exec-lane";
+
 import type { RestoreStatus } from "@kinu.run/devbox";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
@@ -2597,7 +2597,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     if (this.config.get(SANDBOX_STARTING) == null && this.config.get(SANDBOX_REFUSED) == null) return;
     this.detachOwned(async () => {
       try {
-        await this.sandboxRestore(await openSandbox(namespace, sandboxIdForWorkspace(this.name), { normalizeId: true }).restoreStatus());
+        await this.sandboxRestore(await namespace.getByName(sandboxIdForWorkspace(this.name)).restoreStatus());
       } catch (cause) {
         diagnostics.failure('sandbox.restore_recheck_failed', toKinuError({
           doing: "reading the sandbox's restore state", cause, otherwise: 'unavailable',
@@ -4202,7 +4202,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
 
     if (this.env.Sandbox) {
-      const sb = openSandbox(this.env.Sandbox, sandboxIdForWorkspace(this.name), { normalizeId: true });
+      const sb = this.env.Sandbox.getByName(sandboxIdForWorkspace(this.name));
 
       // Before destroy(): the container object owns its /workspace snapshot, and
       // once its storage is gone nothing knows which R2 objects were its.

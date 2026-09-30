@@ -1,14 +1,12 @@
-// Drivers: PTY (sandbox via SandboxAddon; device via own socket, same frames),
-// workspace shell (runtime JSON frames), line mode. Lanes: core execution/terminal-lane.ts.
+// Native container PTY, device PTY, workspace shell and line-mode terminal lanes.
 
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { SandboxAddon } from "@cloudflare/sandbox/xterm";
+import * as v from 'valibot';
 import "@xterm/xterm/css/xterm.css";
 import { describeError } from "@/hooks/use-async-resource";
 import { renderThrownChain, tolerate } from "@kinu.run/core/obs";
-import * as v from "valibot";
 import { useTheme, type Theme, type ThemeMode } from "@/hooks/use-theme";
 import {
   BUSY, LINE_MODE_LABEL, LineTerminalState, clearBusy, feedInput, terminalLane, writeOutputRow, writePrompt,
@@ -25,6 +23,8 @@ export interface TerminalPaneProps {
   outputs?: readonly TerminalPaneOutput[];
   onExecute?: (cmd: string) => Promise<ExecutorCommandResult>;
 }
+
+type PtyState = 'connecting' | 'connected' | 'disconnected' | 'error';
 
 /** The durable container lease moves only on object operations, not proxied frames;
  *  this beat keeps a container from quiescing under a typing user. */
@@ -46,7 +46,6 @@ export function TerminalPane({ workspace, executor, outputs, onExecute }: Termin
 }
 
 
-type PtyState = "connecting" | "connected" | "disconnected";
 
 interface TerminalOperation {
   promise: Promise<void> | null;
@@ -127,7 +126,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
   const theme = useTheme();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
-  const addonRef = useRef<SandboxAddon | null>(null);
+  const [connection, reconnect] = useState(0);
   const copyOperation = useRef<TerminalOperation | null>(null);
   const keepaliveOperations = useRef(new Map<string, TerminalOperation>());
   const [state, setState] = useState<PtyState>("connecting");
@@ -141,31 +140,44 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
     const { term, dispose: disposeChrome } = mountPtyTerminal(host, theme.mode, copyOperation, setFailure);
     termRef.current = term;
 
-    const addon = new SandboxAddon({
-      // Cookie and Origin on the handshake authorize the socket; geometry in the query avoids an 80x24 first paint.
-      getWebSocketUrl: ({ sandboxId, origin }) =>
-        `${origin}/api/workspaces/${encodeURIComponent(sandboxId)}/terminal`
-        + `?executor=${encodeURIComponent(executor)}&cols=${term.cols}&rows=${term.rows}`,
-      onStateChange: (next, error) => {
-        setState(next);
-        // A reconnecting socket is not a failure to report; a stated error is.
-        setFailure(error ? error.message : null);
-      },
-    });
+    setState('connecting');
+    setFailure(null);
+    const origin = window.location.origin.replace(/^http/, 'ws');
 
-    term.loadAddon(addon);
-    addonRef.current = addon;
-    addon.connect({ sandboxId: workspace });
+    const socket = new WebSocket(`${origin}/api/workspaces/${encodeURIComponent(workspace)}/terminal`
+      + `?executor=${encodeURIComponent(executor)}&cols=${term.cols}&rows=${term.rows}`);
+
+    socket.binaryType = 'arraybuffer';
+    let current = true;
+
+    socket.addEventListener('open', () => { if (current) setState('connected'); });
+    // The native PTY sends terminal bytes only; the query carries its first geometry.
+    socket.addEventListener('message', event => {
+      if (current && event.data instanceof ArrayBuffer) term.write(new Uint8Array(event.data));
+    });
+    socket.addEventListener('close', event => {
+      if (!current) return;
+      setState('disconnected');
+
+      if (event.code !== 1000 && event.code !== 1001) setFailure(event.reason || `terminal closed (${event.code})`);
+    });
+    socket.addEventListener('error', () => { if (current) { setState('error'); setFailure('terminal connection failed'); } });
+    const input = inputFrames(term, socket);
+    const binary = term.onBinary(data => { if (socket.readyState === WebSocket.OPEN) socket.send(Uint8Array.from(data, byte => byte.charCodeAt(0))); });
+    const geometry = resizeFrames(term, socket);
 
     return () => {
+      current = false;
       copyOperation.current = null;
       keepaliveOperations.current.clear();
-      addon.dispose();
+      input.dispose();
+      binary.dispose();
+      geometry.dispose();
+      socket.close(1000, 'pane closed');
       disposeChrome();
       termRef.current = null;
-      addonRef.current = null;
     };
-  }, [workspace, executor]);
+  }, [workspace, executor, connection]);
 
   useTerminalPalette(termRef, theme);
 
@@ -224,8 +236,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
     }
 
     termRef.current?.reset();
-    addonRef.current?.disconnect();
-    addonRef.current?.connect({ sandboxId: workspace });
+    reconnect(value => value + 1);
   };
 
   return (
@@ -254,6 +265,15 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
       <div ref={hostRef} className="p-bg flex-1 min-h-0 rounded-lg border p-border overflow-hidden" />
     </div>
   );
+}
+
+/** Keystrokes out as bytes: the frame both PTY routes read. */
+function inputFrames(term: Terminal, socket: WebSocket): IDisposable {
+  const encoder = new TextEncoder();
+
+  return term.onData((data) => {
+    if (socket.readyState === WebSocket.OPEN) socket.send(encoder.encode(data));
+  });
 }
 
 function resizeFrames(term: Terminal, socket: WebSocket): IDisposable {
@@ -321,14 +341,11 @@ function DeviceTerminal({ workspace, executor }: { workspace: string; executor: 
 
     // Bytes rather than Blob, so output goes straight into xterm.
     socket.binaryType = "arraybuffer";
-    const encoder = new TextEncoder();
     let dataSubscription: IDisposable | null = null;
     let resizeSubscription: IDisposable | null = null;
 
     socket.onopen = () => {
-      dataSubscription = term.onData((data) => {
-        if (socket.readyState === WebSocket.OPEN) socket.send(encoder.encode(data));
-      });
+      dataSubscription = inputFrames(term, socket);
       resizeSubscription = resizeFrames(term, socket);
     };
 
