@@ -36,6 +36,7 @@ import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet';
 import { plantedInputs, readCensusLock } from './census-plants';
 import { DEADLINE_BLIND_SPOTS, DEADLINE_EXIT_CODE, runUnderDeadline, writeFully } from './deadline';
+import { recordNotice, recordRed, recordSkipped, recordStep } from './deploy-report';
 import {
   CACHE_BLIND_SPOTS, defaultStoreDirectory, gateEnvironment, gateEnvNames, planGate, recordGreen, storeAt, toolVersions,
 } from './ladder-cache';
@@ -91,13 +92,17 @@ export const HOOKS_DIR = '.githooks';
 export const TIERS = ['commit', 'push', 'ci', 'deploy', 'evals'] as const;
 
 /**
- * The deploy's phases, in the order the runner walks them, with a barrier
- * after each. `source` is the one concurrent wave; every other phase holds
- * the gates that run alone, and `post-publish` runs after the upload and the
- * smoke test against the build that just shipped. The runner reads this
- * order out of `--plan`, so the order lives here and nowhere else.
+ * The deploy's phases, in the order a staging deploy reaches them (L18).
+ * `preflight` alone first, the precondition for any verdict; `upload`, the
+ * account gate and the secret scan, the only gates that hold the upload since
+ * their damage cannot be undone; then, after the upload and the smoke test,
+ * `post-publish`, the rows that read the deployment, in ONE wave with `source`,
+ * every local gate; `hammer` alone and last. The preflight and the upload stop a
+ * deploy on a red; every phase after the upload runs to its end whatever goes
+ * red, so one deploy reports every failure. deploy.sh runs each as
+ * `--deploy-phase`.
  */
-export const DEPLOY_PHASES = ['preflight', 'source', 'hammer', 'infra', 'post-publish'] as const;
+export const DEPLOY_PHASES = ['preflight', 'upload', 'post-publish', 'source', 'hammer'] as const;
 
 export type DeployPhase = (typeof DEPLOY_PHASES)[number];
 
@@ -224,9 +229,10 @@ export const LADDER: readonly Gate[] = [
     run: 'bun scripts/preflight.ts',
     label: 'Environment preflight',
     phase: 'preflight',
-    alone: 'runs alone and FIRST. Its subject is the environment every other gate reports through: '
-      + 'an exhausted $TMPDIR inode table surfaces later as a 5-second timeout inside an '
-      + 'unrelated filesystem test, which reads as a code regression and is not one. A gate '
+    alone: 'runs alone and FIRST, and its red ends a deploy, as only the upload gates\' does besides. '
+      + 'Its subject is the environment every other gate reports through, so it is the precondition '
+      + 'for any verdict: an exhausted $TMPDIR inode table surfaces later as a 5-second timeout inside '
+      + 'an unrelated filesystem test, which reads as a code regression and is not one. A gate '
       + 'running beside it could report that regression before the preflight had said the '
       + 'machine was unfit to be reported on.',
     tier: 'commit',
@@ -890,6 +896,10 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun scripts/secret-scan.ts',
     label: 'Secret scan',
+    phase: 'upload',
+    alone: 'holds every upload, with the account gate beside it: a credential in an asset a deploy '
+      + 'publishes cannot be withdrawn, since staging is a public origin, where every other source '
+      + 'gate\'s red is recoverable on staging and gates the promotion instead (L18).',
     tier: 'push',
     // Measured 2026-08-30: the persistent cat-file reader made the history
     // phase 16.3 s; live/index adds under 1 s on the local-ref corpus then present.
@@ -1081,17 +1091,20 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 scripts/deploy.test.ts scripts/promote.test.ts',
+    run: 'bun test --timeout=0 scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts',
     label: 'Production deploy contract',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 86.8/86.5s (33 tests). The 1s
     // predates the archive unpack-and-install tests; the suite really installs.
-    // Replaces 1s. promote.test.ts joined 2026-09-26 at 0.4 s (13 tests).
-    seconds: 87,
+    // Replaces 1s. promote.test.ts joined 2026-09-26 at 0.4 s (13 tests); the
+    // report and provider-key suites joined 2026-09-30 at about 3 s (6 tests).
+    seconds: 90,
     catches: 'a deploy gate deleted, reordered, or made skippable, and a deploy from a '
       + 'dirty checkout. Cut-the-wire proven: remove one gate line and it fails. And a promotion '
       + 'that ships bytes staging never verified or that production cannot return from: each '
-      + 'promote guard removed in turn fails its own test.',
+      + 'promote guard removed in turn fails its own test. And a deploy report that marks a red new '
+      + 'or carried over against the wrong previous deploy, and a provider key printed by the step '
+      + 'that stores it after a reset.',
     blind: 'whether the gates it enumerates pass, and whether Cloudflare serves what a '
       + 'promotion uploaded: that is its smoke test\'s, against the deployment.',
     inputs: AMBIENT_BY_NAME,
@@ -2127,8 +2140,9 @@ export const LADDER: readonly Gate[] = [
       + 'purpose, so every gate beside it would be measured on a machine this one is '
       + 'deliberately starving: the five-suite UI batch is 198.5s solo against a 480s '
       + 'per-gate deadline, and a browser gate that times out under someone else\'s load '
-      + 'fails for a reason unrelated to the change under test. It runs AFTER the source '
-      + 'wave so a cheap source failure still fails first, and before the account gate.',
+      + 'fails for a reason unrelated to the change under test. It runs LAST, after the wave of '
+      + 'staging tiers and source gates has ended, whatever that wave\'s verdict: its own is part '
+      + 'of what a promotion needs.',
     tier: 'deploy',
     // 403.96 s measured 2026-09-30 (24 threads, 12 burners): six runs of 61.9 to
     // 77.5 s, each 3,624 pass and 0 fail. The 1-minute load was 8.4 at the start,
@@ -2310,11 +2324,11 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:infra',
     label: 'Declared infrastructure exists and is bound',
-    phase: 'infra',
-    alone: 'runs alone, after every source gate. It is the cheapest gate that talks to Cloudflare, '
-      + '`npx wrangler whoami` is its precondition, and its place in the order carries meaning: '
-      + 'everything before it proves the SOURCE is deployable and it proves the ACCOUNT is. '
-      + 'Running it early would spend account calls on a tree that has not been shown to compile.',
+    phase: 'upload',
+    alone: 'holds every upload, with the secret scan beside it: an account that cannot be proved never '
+      + 'reaches `wrangler deploy`, and a wrong account is damage the next deploy cannot undo, where a '
+      + 'red source gate on staging is recoverable and gates the promotion instead (L18). It is the '
+      + 'cheapest gate that talks to Cloudflare, and `npx wrangler whoami` is its precondition.',
     tier: 'deploy',
     seconds: 43,
     catches: 'a resource the binding manifest declares and the account does not hold, and a '
@@ -2367,11 +2381,11 @@ export const LADDER: readonly Gate[] = [
         + 'The six-case deployed wall is unmeasured. This configured bound stays unchanged '
         + 'until a deployed run measures it and the cost in LADDER.',
     },
-    alone: 'runs alone, and AFTER the deploy — the only gate here whose subject is the DEPLOYED '
-      + 'build rather than this tree. It attaches real machines to the account, opens a real '
-      + 'browser session and creates workspaces as the same identity `gate:infra` '
-      + 'authenticates with, so anything beside it would be inside the fleet one of its cases '
-      + 'is measuring: the two-machines case asserts that exactly two machines are live and a '
+    alone: 'runs AFTER the upload, in the wave of the deployment\'s tiers and the local source gates '
+      + '(L18): its subject is the DEPLOYED build rather than this tree. It attaches real machines to '
+      + 'the account, opens a real browser session and creates workspaces as the same identity '
+      + '`gate:infra` authenticates with, and no other row of that wave attaches a machine to that '
+      + 'account: the two-machines case asserts that exactly two machines are live, and a '
       + "sibling's daemon would make that three.",
     tier: 'deploy',
     // On 2026-09-05, credential-free collection skipped six files and six tests.
@@ -2415,8 +2429,9 @@ export const LADDER: readonly Gate[] = [
     run: 'bash scripts/product-flows-tier.sh',
     label: 'Product flows in a browser, on the deployment',
     phase: 'post-publish',
-    alone: 'runs in the post-publish wave, after the upload and the smoke gate, beside the '
-      + 'other tiers whose subject is the build that just shipped. It acts as the `scripted` '
+    alone: 'runs after the upload and the smoke gate, in the wave of the tiers whose subject is the '
+      + 'build that just shipped and the local source gates (L18), its Chrome in the browser lane '
+      + 'with the local browser rows\'. It acts as the `scripted` '
       + 'eval account, as the first-run cases do; its workspaces carry the eval prefix and are '
       + 'torn down by the row that made them, and it attaches no machine, so it stands outside '
       + 'the device fleet the first-run tier counts.',
@@ -2484,6 +2499,8 @@ export interface PlanRow {
    *  holding a resource at a time; see {@link SHARED_RESOURCES}. */
   readonly shared: SharedResource | 'none';
   readonly run: string;
+  /** Its measured wall alone, in seconds: the wave launches the longest first. */
+  readonly wall: number;
 }
 
 /**
@@ -2493,14 +2510,19 @@ export interface PlanRow {
  * what blocks a publish. Ladder order inside each phase: the order a phase
  * launches in is the wave's ({@link tierWave}).
  *
- * REFUSES rather than defaults. A `source` row is admitted CONCURRENTLY, so a
- * row there with no measurement is a row the wave would schedule against a
- * number nobody took: exactly the 2026-09-16 failure. A figure taken from a
- * run that failed is no measurement either: the row stopped early, so its
- * cost is short by whatever it never ran. Outside `source` every
- * phase's rows are declared to run alone or are the two post-publish live
- * probes whose cost is a network wait, so the cap is not what decides them and
- * an unmeasured row there carries one thread and one MiB.
+ * REFUSES rather than defaults. Every row is admitted by its measured cost:
+ * the source rows and the rows that read the deployment share one concurrent
+ * wave (L18), and the upload phase's two rows run beside each other. So a row
+ * with no measurement is a row the wave would schedule against a number
+ * nobody took: exactly the 2026-09-16 failure. A figure taken from a run that
+ * failed is no measurement either: the row stopped early, so its cost is short
+ * by whatever it never ran.
+ *
+ * Except a row that reads the deployment, which can be measured only against a
+ * deployment of the build it was written for (`gate-cost-measure.ts
+ * --deployment=<origin>`): with no figure it takes the whole box, as
+ * {@link waveRow} gives any unmeasured gate, so it runs alone, and the deploy's
+ * report names the command that measures it.
  */
 export function deployPlan(costs: CostTable = readCosts()): PlanRow[] {
   const tracked = trackedTestFiles();
@@ -2509,52 +2531,48 @@ export function deployPlan(costs: CostTable = readCosts()): PlanRow[] {
   return deployOrder().map((gate) => planRow(gate, costs, tracked, browsers));
 }
 
-/** One gate's row of the deploy plan; see {@link deployPlan} for why an unmeasured source row is refused. */
+/** One gate's row of the deploy plan; see {@link deployPlan} for why an unmeasured row is refused. */
 function planRow(gate: Gate, costs: CostTable, tracked: readonly string[], browsers: ReadonlySet<string>): PlanRow {
   const phase = gate.phase ?? 'source';
   const recorded = costs.rows[gate.run];
   const cost = recorded?.exit === 0 ? recorded : undefined;
 
-  if (cost === undefined && phase === 'source') {
+  if (cost === undefined && phase !== 'post-publish') {
     throw new Error(
-      `${gate.run} is scheduled in the concurrent source wave and has no measured cost in `
+      `${gate.run} is a row of the deploy plan with no measured cost in `
       + `${COST_TABLE}${recorded === undefined ? '' : `: its figure is of a run that exited ${String(recorded.exit)}`}. `
-      + `Measure it alone from a green run — bun scripts/gate-cost-measure.ts --only="${gate.run}" `
-      + '— and commit the figures. A row admitted against a number nobody took is how five rows '
-      + 'died on their deadline on 2026-09-16.',
+      + `Measure it alone from a green run — bun scripts/gate-cost-measure.ts --only="${gate.run}" — and commit the `
+      + 'figures. A row admitted against a number nobody took is how five rows died on their deadline on 2026-09-16.',
     );
   }
 
   return {
     phase,
     label: gate.label,
-    threads: cost === undefined ? 1 : costThreads(cost, gate.seconds),
-    rssMb: cost === undefined ? 1 : costRssMb(cost),
+    threads: cost === undefined ? Number.POSITIVE_INFINITY : costThreads(cost, gate.seconds),
+    rssMb: cost === undefined ? Number.POSITIVE_INFINITY : costRssMb(cost),
     shared: sharedOf(gate, tracked, browsers) ?? 'none',
     run: gate.run,
+    wall: cost?.wallSeconds ?? 0,
   };
 }
 
-/** A deploy phase's gates as the wave admits them, with the plan's figures. The source wave starts its longest
- *  measured rows first, since the wave launches the first row that fits and a long row listed late makes the wave
- *  wait on its tail; every other phase keeps ladder order, which a wall of 0 leaves as it is under the wave's stable
- *  sort, since its rows run alone or are the two post-publish tiers. */
-export function phaseWave(phase: DeployPhase, costs: CostTable = readCosts()): { readonly gate: Gate; readonly row: WaveRow }[] {
+/** The command that measures a row of the deploy plan that reads the deployment, against `origin`. */
+function measuringCommand(run: string, origin: string): string {
+  return `bun scripts/gate-cost-measure.ts --deployment=${origin} --only="${run}"`;
+}
+
+/** The gates of one or more deploy phases as ONE wave admits them, with the plan's figures, each started in order of
+ *  its measured wall, longest first: the wave launches the first row that fits, and a long row listed late makes the
+ *  wave wait on its tail. */
+export function phaseWave(phases: readonly DeployPhase[], costs: CostTable = readCosts()): { readonly gate: Gate; readonly row: WaveRow }[] {
   const tracked = trackedTestFiles();
   const browsers = sharedBrowserModules();
 
-  return deployOrder().filter((gate) => (gate.phase ?? 'source') === phase).map((gate) => {
-    const planned = planRow(gate, costs, tracked, browsers);
+  return deployOrder().filter((gate) => phases.includes(gate.phase ?? 'source')).map((gate) => {
+    const { threads, rssMb, wall, shared } = planRow(gate, costs, tracked, browsers);
 
-    return {
-      gate,
-      row: {
-        threads: planned.threads,
-        rssMb: planned.rssMb,
-        wall: phase === 'source' ? costs.rows[gate.run]?.wallSeconds ?? 0 : 0,
-        shared: planned.shared,
-      },
-    };
+    return { gate, row: { threads, rssMb, wall, shared } };
   });
 }
 
@@ -3179,8 +3197,8 @@ function narrowWords(words: readonly string[], file: string, tracked: readonly s
 /** What a red row that ran to its end found: its exit code, or the processes it left (named above). */
 function ranRed(leftovers: readonly string[]): string {
   return leftovers.length === 0
-    ? 'the command exited non-zero; its own output is immediately above'
-    : `the run left ${String(leftovers.length)} process(es) running after it exited; the LEFT line above names them`;
+    ? 'the command exited non-zero'
+    : `the run left ${String(leftovers.length)} process(es) running after it exited`;
 }
 
 /**
@@ -3454,10 +3472,12 @@ if (import.meta.main) {
   // `--affected=<ref>`: the source rows a change since `ref` can turn red, each
   // run as `--gate` runs one, so a lane proves a change before it sends it.
   const affectedFrom = process.argv.find((argument) => argument.startsWith('--affected='))?.slice('--affected='.length);
-  // `--deploy-phase=<phase>`: one phase of the deploy, its plan rows through the same wave, the way deploy.sh runs
-  // each phase; `--all` keeps launching after a red so one run reports every red of the phase.
+  // `--deploy-phase=<phase>[,<phase>…]`: phases of the deploy, their plan rows through ONE wave, the way deploy.sh
+  // runs them. Every row runs to its end whatever goes red, so one run reports every red (L18).
   const phaseAsked = process.argv.find((argument) => argument.startsWith('--deploy-phase='))?.slice('--deploy-phase='.length);
-  const deployPhase = DEPLOY_PHASES.find((candidate) => candidate === phaseAsked);
+  const phasesAsked = phaseAsked?.split(',') ?? [];
+  const deployPhases = DEPLOY_PHASES.filter((candidate) => phasesAsked.includes(candidate));
+  const deployPhase = phaseAsked === undefined || deployPhases.length !== phasesAsked.length ? undefined : deployPhases;
   const flag = process.argv.find((argument) => argument.startsWith('--tier='));
 
   const asked = selectedGate === undefined && affectedFrom === undefined && phaseAsked === undefined
@@ -3468,7 +3488,7 @@ if (import.meta.main) {
 
   if (tier === undefined || affectedFrom === '' || (phaseAsked !== undefined && deployPhase === undefined)) {
     console.error(
-      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] [--serial] | --gate <declared-command> | --deploy-phase=${DEPLOY_PHASES.join('|')} [--all] | --affected=<ref> | --audit-closure [--tier=<tier> | --gate <declared-command>] | --matrix | --costs | --install-hooks`,
+      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] [--serial] | --gate <declared-command> | --deploy-phase=<${DEPLOY_PHASES.join('|')}>[,<phase>…] | --affected=<ref> | --audit-closure [--tier=<tier> | --gate <declared-command>] | --matrix | --costs | --install-hooks`,
     );
     process.exit(2);
   }
@@ -3481,12 +3501,30 @@ if (import.meta.main) {
     : phaseRows?.map(({ gate }) => gate) ?? tierRun(tier);
 
   const gates = affectedFrom === undefined ? declared : affectedSince(affectedFrom, repo);
-  const name = deployPhase === undefined ? `--tier=${tier}` : `--deploy-phase=${deployPhase}`;
+  const name = deployPhase === undefined ? `--tier=${tier}` : `--deploy-phase=${deployPhase.join(',')}`;
 
   const measured = assertMeasured(`ladder ${name}`, [
     ['gates in this tier', gates.length],
     ['gates in the deploy plan', deployOrder().length],
   ]);
+
+  // A deploy's one failure report (scripts/deploy-report.ts), which deploy.sh opens and names: every red of a deploy
+  // phase goes into it. Only a deploy phase writes there, never a tier some row of the deploy runs inside it.
+  const report = deployPhase === undefined ? '' : process.env['KINU_DEPLOY_REPORT'] ?? '';
+
+  // `--skip=<why>` with `--deploy-phase`: the deploy cannot run these rows (after a failed upload, nothing that reads
+  // the deployment can test this build), so each is named, not run, and why, in its report.
+  const skipWhy = process.argv.find((argument) => argument.startsWith('--skip='))?.slice('--skip='.length);
+
+  if (skipWhy !== undefined && deployPhase !== undefined) {
+    for (const gate of gates) {
+      console.log(`not run  ${gate.run}  — ${skipWhy}`);
+
+      if (report !== '') recordSkipped(report, { phase: gate.phase ?? 'source', command: gate.run, why: skipWhy });
+    }
+
+    process.exit(0);
+  }
 
   // THE INSTALLED TREE. Every row runs on `node_modules` and the cache below stands `bun.lock` in for it, so a tree
   // that drifted from the lock makes every verdict here, fresh or recorded, one about packages the lock does not
@@ -3494,7 +3532,12 @@ if (import.meta.main) {
   const drifted = installDrift(root);
 
   if (drifted.length > 0) {
-    console.error(driftFinding(drifted));
+    const found = driftFinding(drifted);
+
+    console.error(found);
+
+    if (report !== '') recordStep(report, { phase: deployPhase?.join(',') ?? '', what: 'the installed tree', finding: found });
+
     process.exit(1);
   }
 
@@ -3562,8 +3605,8 @@ if (import.meta.main) {
   // in order with its output live, which is how `--gate` reads it.
   const concurrent = pending.length > 1 && !process.argv.includes('--serial');
   const failed: string[] = [];
-  const all = deployPhase !== undefined && process.argv.includes('--all');
-  const stopped = (): boolean => !all && failed.length > 0;
+  // A tier stops launching at its first red: the fastest path to a finding. A deploy phase never does (L18).
+  const stopped = (): boolean => deployPhase === undefined && failed.length > 0;
 
   // A red run ends here, naming every gate that failed: the reds of a wave are spread over its output.
   const finish = (): void => {
@@ -3593,6 +3636,10 @@ if (import.meta.main) {
 
     if (!concurrent) console.log([header, ...lines].join('\n'));
 
+    // A lone row's output is passed on live; under a deploy phase it is kept as well, since the report quotes a red
+    // row's output.
+    const lone = deployPhase === undefined ? 'inherit' : 'tee';
+
     // Under the row's own silence bound: the one hang detector this tier has,
     // now that no test carries a clock. A row that hangs is killed and named
     // here instead of holding the hook — and `git push` — open forever.
@@ -3600,7 +3647,7 @@ if (import.meta.main) {
       argv: runnableArgv(gate.run, tracked), cwd: root,
       seconds: gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS, label: gate.label,
       env: closure.kind === 'derived' ? gateEnvironment(closure) : undefined,
-      stdio: concurrent ? 'pipe' : 'inherit',
+      stdio: concurrent ? 'pipe' : lone,
     });
 
     if (concurrent) await writeFully(process.stdout, `${[header, ...lines, `${outcome.stdout}${outcome.stderr}`.trimEnd()].join('\n')}\n`);
@@ -3622,17 +3669,32 @@ if (import.meta.main) {
       return;
     }
 
+    const hung = outcome.exitCode === DEADLINE_EXIT_CODE;
+
+    // What went wrong, said once for the terminal, where the row's output is just above, and once for the report,
+    // which quotes the output's tail below the finding and keeps the whole of it in a log.
+    const found = hung
+      ? `the run hung: it wrote nothing for the row's ${String(gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS)}s bound and was killed`
+      : ranRed(outcome.leftovers);
+
     console.error(`\nFAILED  ${gate.run}  after ${seconds.toFixed(1)}s\n`);
     console.error(finding({
       at: gate.run,
       invariant: gate.catches,
-      found: outcome.exitCode === DEADLINE_EXIT_CODE
-        ? `the run hung: it wrote nothing for the row's ${String(gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS)}s bound and was killed; its own output is immediately above`
-        : ranRed(outcome.leftovers),
+      found: `${found}; ${!hung && outcome.leftovers.length > 0 ? 'the LEFT line above names them' : 'its own output is immediately above'}`,
       silently: `every later tier assumes this held. What this gate does NOT cover: ${gate.blind}`,
       fix: `${gate.run}   # reproduce exactly this, nothing else`,
     }));
     failed.push(gate.run);
+
+    // Under a deploy, into its one failure report, with the row's whole output.
+    if (report !== '') {
+      recordRed(report, {
+        phase: gate.phase ?? 'source', what: gate.label, command: gate.run,
+        verdict: outcome.exitCode === DEADLINE_EXIT_CODE ? 'killed: silent for its bound' : `exit ${String(outcome.exitCode)}`,
+        reproduce: gate.run, finding: found, output: `${outcome.stdout}${outcome.stderr}`,
+      });
+    }
   };
 
   if (phaseRows !== undefined) {
@@ -3643,10 +3705,26 @@ if (import.meta.main) {
     console.log(
       `\nladder ${name}: ${String(pending.length)} gate(s) to run within ${String(caps.threads)} threads and `
       + `${String(caps.rssMb)} MiB of measured cost, `
-      + (all ? 'every gate regardless of failures (--all)' : 'stopping new launches at the first failure'),
+      + 'every gate to its end whatever goes red',
     );
 
     if (lanes > 0) console.log(`  ${String(lanes)} of the phase's gates hold a shared resource and run one at a time`);
+
+    // A row that reads the deployment with no figure yet takes the whole box ({@link deployPlan}): this deploy is
+    // where it can be measured, and its report says how.
+    for (const { gate, row } of phaseRows) {
+      if (row.threads !== Number.POSITIVE_INFINITY) continue;
+      const measure = measuringCommand(gate.run, process.env['KINU_ORIGIN'] ?? '<origin>');
+
+      console.log(`  ${gate.label} has no measured cost, so it runs alone; measure it: ${measure}`);
+
+      if (report !== '') {
+        recordNotice(report, {
+          phase: gate.phase ?? 'source', what: gate.label,
+          notice: `no measured cost, so it ran alone with the whole box. Measure it against this deployment and commit scripts/gate-cost.json: ${measure}`,
+        });
+      }
+    }
 
     // One gate, or `--serial`, runs with its output live, so nothing may run beside it: under caps of nothing the
     // wave admits a row only when none runs.

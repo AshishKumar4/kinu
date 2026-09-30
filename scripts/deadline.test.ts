@@ -69,6 +69,18 @@ describe('a run under a deadline', () => {
     expect(failed.stderr).not.toContain('KILLED');
   });
 
+  // A deploy phase's lone row: its output reaches the terminal as it comes, and the deploy's report still quotes it.
+  test('a tee\'d run passes its output on as it comes and keeps it too', () => {
+    const probe = `import { runUnderDeadline } from ${JSON.stringify(join(import.meta.dir, 'deadline.ts'))};\n`
+      + 'const outcome = await runUnderDeadline({ argv: [process.execPath, \'-e\', \'console.log("from the row")\'], '
+      + 'seconds: 30, label: \'tee\', stdio: \'tee\' });\n'
+      + 'console.log(`KEPT ${JSON.stringify(outcome.stdout)}`);';
+
+    const run = Bun.spawnSync([process.execPath, '-e', probe], { stdout: 'pipe', stderr: 'pipe' });
+
+    expect(run.stdout.toString()).toBe('from the row\nKEPT "from the row\\n"\n');
+  });
+
   test('a run that exits with a process of its own still running fails, naming it, and it is ended', async () => {
     // The shell exits at once; the sleep it backgrounded outlives it and holds the stdout pipe.
     const outcome = await runUnderDeadline({ argv: ['sh', '-c', 'sleep 30 & echo $!'], seconds: 30, label: 'leaves one', stdio: 'pipe' });

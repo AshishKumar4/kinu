@@ -146,13 +146,13 @@ describe('the ladder measures something', () => {
     expect([...phaseIndex].sort((a, b) => a - b)).toEqual(phaseIndex);
 
     for (const phase of DEPLOY_PHASES) {
-      expect(phaseWave(phase).map(({ gate }) => gate.run)).toEqual(plan.filter((row) => row.phase === phase).map((row) => row.run));
+      expect(phaseWave([phase]).map(({ gate }) => gate.run)).toEqual(plan.filter((row) => row.phase === phase).map((row) => row.run));
     }
   });
 
-  test('the source phase launches its longest measured rows first, and every alone phase keeps ladder order', async () => {
-    // Walls assigned against ladder order, so a phase that launched in ladder
-    // order inside the wave, or sorted the other way, starts the wrong row first.
+  test('a wave of deploy phases launches its longest measured rows first, whichever phase each is in', async () => {
+    // Walls assigned against ladder order, so a wave that launched in ladder
+    // order, or sorted the other way, starts the wrong row first.
     const real = readCosts();
     const ladderOrder = LADDER.map((gate) => gate.run);
 
@@ -162,62 +162,101 @@ describe('the ladder measures something', () => {
     };
 
     // Under caps of nothing the wave admits a row only when none runs, so the start order is the launch order.
-    const launched = async (phase: (typeof DEPLOY_PHASES)[number]): Promise<string[]> => {
+    const launched = async (phases: readonly (typeof DEPLOY_PHASES)[number][]): Promise<number[]> => {
       const started: string[] = [];
 
-      await tierWave(phaseWave(phase, costs).map(({ gate, row }) => ({ entry: gate.run, row })), async (run) => {
+      await tierWave(phaseWave(phases, costs).map(({ gate, row }) => ({ entry: gate.run, row })), async (run) => {
         started.push(run);
       }, () => false, { threads: 0, rssMb: 0 });
 
-      return started;
+      return started.map((run) => costs.rows[run]?.wallSeconds ?? -1);
     };
 
-    const source = (await launched('source')).map((run) => costs.rows[run]?.wallSeconds ?? -1);
+    // The deploy's one wave: the rows that read the deployment beside every source row.
+    const wave = await launched(['post-publish', 'source']);
 
-    expect(source.length).toBeGreaterThan(10);
-    expect(source).toEqual([...source].sort((left, right) => right - left));
+    expect(wave.length).toBe(deployPlan().filter((row) => row.phase === 'post-publish' || row.phase === 'source').length);
+    expect(wave).toEqual([...wave].sort((left, right) => right - left));
 
-    for (const phase of DEPLOY_PHASES.filter((candidate) => candidate !== 'source')) {
-      expect(await launched(phase)).toEqual(LADDER.filter((gate) => gate.tier !== 'evals' && gate.phase === phase).map((gate) => gate.run));
+    for (const phase of DEPLOY_PHASES) {
+      const walls = await launched([phase]);
+
+      expect(walls).toEqual([...walls].sort((left, right) => right - left));
     }
   });
 
-  test('a concurrent row whose figure is of a failed run has no measured cost, and the plan refuses it', () => {
+  test('a row whose figure is of a failed run, or is missing, has no measured cost, and the plan refuses it', () => {
     const real = readCosts();
     // Every figure green but the one planted, so the refusal names the plant whatever the committed table holds.
     const green = { ...real, rows: Object.fromEntries(Object.entries(real.rows).map(([run, cost]) => [run, { ...cost, exit: 0 }])) };
     const [planted] = deployPlan(green).filter((row) => row.phase === 'source');
 
-    if (planted === undefined) throw new Error('the deploy plan has no concurrent row to plant a failed run on');
+    if (planted === undefined) throw new Error('the deploy plan has no source row to plant a failed run on');
     const cost = green.rows[planted.run];
 
     if (cost === undefined) throw new Error(`${planted.run} has no figure to plant a failed run on`);
+    const without = Object.fromEntries(Object.entries(green.rows).filter(([run]) => run !== planted.run));
 
     expect(() => deployPlan({ ...green, rows: { ...green.rows, [planted.run]: { ...cost, exit: 1 } } }))
-      .toThrow(`${planted.run} is scheduled in the concurrent source wave and has no measured cost in ${COST_TABLE}: `
-        + 'its figure is of a run that exited 1');
+      .toThrow(`${planted.run} is a row of the deploy plan with no measured cost in ${COST_TABLE}: its figure is of a run that exited 1`);
+    expect(() => deployPlan({ ...green, rows: without }))
+      .toThrow(`${planted.run} is a row of the deploy plan with no measured cost in ${COST_TABLE}. `);
+  });
+
+  // THE BOOTSTRAP. A row that reads the deployment can be measured only against a deployment of the build it was
+  // written for, so the plan cannot refuse it unmeasured: the deploy that first ships it could never run. It takes
+  // the whole box instead, so the wave starts it only once nothing else runs and admits nothing beside it.
+  test('a row that reads the deployment with no measured cost runs alone, with nothing admitted beside it', async () => {
+    const real = readCosts();
+    const [live] = deployOrder().filter((gate) => gate.phase === 'post-publish');
+
+    if (live === undefined) throw new Error('the deploy plan has no post-publish row');
+    const costs = { ...real, rows: Object.fromEntries(Object.entries(real.rows).filter(([run]) => run !== live.run)) };
+    const row = deployPlan(costs).find((candidate) => candidate.run === live.run);
+
+    expect([row?.threads, row?.rssMb]).toEqual([Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY]);
+
+    // Under the box's own caps, whatever runs when the live row starts, and whatever starts while it runs.
+    const running = new Set<string>();
+    const beside: string[][] = [];
+
+    await tierWave(phaseWave(['post-publish', 'source'], costs).map(({ gate, row: wave }) => ({ entry: gate.run, row: wave })), async (run) => {
+      running.add(run);
+
+      if (run === live.run || running.has(live.run)) beside.push([...running].filter((other) => other !== live.run));
+      await Promise.resolve();
+      running.delete(run);
+    }, () => false);
+
+    expect(beside.flat()).toEqual([]);
   });
 
   // THE COST TABLE IS THE WAVE'S ONE SET OF FIGURES, checked at commit by `gate:cost-table`: a figure for a row
   // that no longer exists is the same defect as a row with no figure. Both, and a figure from a failed run, name
   // the row; a full table names nothing.
-  test('the cost table gate names a stale figure, an unmeasured wave row and a failed figure', () => {
+  // A row outside the source wave is no exemption, and a row that reads the deployment is, since only a deployment of
+  // its own build can measure it (the plan gives it the whole box instead).
+  test('the cost table gate names a stale figure, an unmeasured row and a failed figure', () => {
     const costs = readCosts();
-    const planned = deployOrder().filter((gate) => (gate.phase ?? 'source') === 'source');
-    const [first, second] = planned;
+    const first = deployOrder().find((gate) => gate.phase === 'hammer');
+    const second = deployOrder().find((gate) => (gate.phase ?? 'source') === 'source');
+    const live = deployOrder().find((gate) => gate.phase === 'post-publish');
 
-    if (first === undefined || second === undefined) throw new Error('the deploy wave holds fewer than two rows');
+    if (first === undefined || second === undefined || live === undefined) {
+      throw new Error('the deploy plan holds no hammer, no source or no post-publish row');
+    }
+
     const failed = costs.rows[second.run];
 
     if (failed === undefined) throw new Error(`${second.run} has no figure`);
-    const rows = Object.fromEntries(Object.entries(costs.rows).filter(([run]) => run !== first.run));
+    const rows = Object.fromEntries(Object.entries(costs.rows).filter(([run]) => run !== first.run && run !== live.run));
     rows['bun test --timeout=0 gone.test.ts'] = failed;
 
     expect(costTableFaults(costs)).toEqual([]);
     expect(costTableFaults({ ...costs, rows: { ...rows, [second.run]: { ...failed, exit: 1 } } })).toEqual([
       'a figure for a row that is no longer a gate: bun test --timeout=0 gone.test.ts',
-      `a row the wave runs concurrently with no measured cost: ${first.run}`,
       `a figure taken from a run that exited 1: ${second.run}`,
+      `a row of the deploy plan with no measured cost: ${first.run}`,
     ]);
   });
 
