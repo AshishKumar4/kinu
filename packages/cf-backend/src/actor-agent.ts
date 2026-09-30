@@ -3672,19 +3672,25 @@ export abstract class ActorAgent extends Agent<Env> {
 
   private refusalNotices: TierRefusals | null = null;
 
+  private modelSettingsChanges = 0;
+
+  protected refusalNoticesFor(actor: ActorHandle): TierRefusals {
+    return tierRefusals({
+      sql: this.boundSql, actor, config: actor.config, now: Date.now, settings: MODEL_SETTINGS, changes: () => this.modelSettingsChanges,
+    });
+  }
+
   /** One for the object's life, shared with the runtime's lanes, so what it said is read once. */
   protected get tierRefusals(): TierRefusals {
-    const actor = this.actorHandle();
-
-    this.refusalNotices ??= tierRefusals({ sql: this.boundSql, actor, config: actor.config, now: Date.now, settings: MODEL_SETTINGS });
+    this.refusalNotices ??= this.refusalNoticesFor(this.actorHandle());
 
     return this.refusalNotices;
   }
 
   /** The owner changed what decides a tier's model or credential: a parked refusal may answer differently. */
   protected async modelSettingsChanged(): Promise<void> {
+    this.modelSettingsChanges += 1;
     this.invalidateModelCaches();
-    this.tierRefusals.forget();
     await this.terminal.releaseParked();
   }
 

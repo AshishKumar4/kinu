@@ -8,7 +8,7 @@
 import { expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { generateText } from 'ai';
+import { generateText, type LanguageModel } from 'ai';
 import * as v from 'valibot';
 import { createTestActors } from '@kinu.run/test-utils';
 import {
@@ -28,6 +28,15 @@ const NOW = 1_700_000_000_000;
 /** opencode's answer to ironwood-cairn-6dbcb8de's fast tier on 2026-09-29. */
 const NO_FUNDS = JSON.stringify({ error: { message: 'Upstream request failed: Insufficient account funds', type: 'server_error' } });
 
+/** An effect body that calls `model` once. */
+function calling(model: LanguageModel) {
+  return async () => {
+    await generateText({ model, prompt: 'compress the facts', maxRetries: 0 });
+
+    return { status: 'completed' as const };
+  };
+}
+
 /** A model call through a route whose gateway answers `status`. */
 function answering(status: number, body = 'Not Found', calls: { n: number } = { n: 0 }) {
   const provider = createOpenAICompatible({
@@ -40,11 +49,7 @@ function answering(status: number, body = 'Not Found', calls: { n: number } = { 
     }, { preconnect: async (): Promise<void> => {} }),
   });
 
-  return async () => {
-    await generateText({ model: provider('fast'), prompt: 'compress the facts', maxRetries: 0 });
-
-    return { status: 'completed' as const };
-  };
+  return calling(provider('fast'));
 }
 
 /** The shape a host's effect body throws: its own step wrapped around the provider's answer. */
@@ -155,11 +160,7 @@ function planSpent() {
     hasCredential: async (key) => key === CHATGPT_CRED_KEY,
   });
 
-  return async () => {
-    await generateText({ model, prompt: 'compress the facts', maxRetries: 0 });
-
-    return { status: 'completed' as const };
-  };
+  return calling(model);
 }
 
 // A 429 that is a spent plan, not a busy one: waiting does not restore it, so it is the owner's to fix.
@@ -235,6 +236,68 @@ test('settled turns under an owner-fixable refusal leave one row per effect and 
   await transitions.releaseParked();
   expect(wakes.slice(armed)).toEqual([NOW]);
   expect(transitions.nextRetryAt()).toBe(NOW);
+});
+
+/** Answers each call from `answers` once `gate` opens; past the list, a completion. */
+function gatedGateway(answers: number[], gate: Promise<void>, calls: { n: number }) {
+  const provider = createOpenAICompatible({
+    name: 'my-gateway', baseURL: 'https://gateway.example.test/v1',
+    fetch: Object.assign(async () => {
+      calls.n += 1;
+      await gate;
+
+      const status = answers.shift();
+
+      return status === undefined
+        ? Response.json({ id: 'r', object: 'chat.completion', created: 0, model: 'fast', choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'Hello' } }] })
+        : new Response(NO_FUNDS, { status, headers: { 'content-type': 'application/json' } });
+    }, { preconnect: async (): Promise<void> => {} }),
+  });
+
+  return calling(provider('fast'));
+}
+
+// Review of T1, 2026-09-30: the owner replaced a refused key while a call made with the old one still waited on its
+// answer. The release found nothing parked, the late refusal parked the row, and nothing tried the new key.
+test.each([
+  ['the owner changes the model settings', 401, (transitions: TerminalTransitions) => transitions.releaseParked()],
+  ['a newer turn claims its effects', 402, async (transitions: TerminalTransitions) => {
+    transitions.ledger.claim('t2/t2-answer', [{ name: 'sleep_time', scope: 't2-answer', input: {}, lane: 'detached' }]);
+  }],
+] as const)('a refusal answered after %s falls due at once instead of parking', async (_when, status, release) => {
+  const { db, sql, actor } = store();
+  const answer = Promise.withResolvers<void>();
+  const calls = { n: 0 };
+  const wakes: number[] = [];
+
+  const transitions = new TerminalTransitions({
+    sql, actor, now: () => NOW,
+    effects: {
+      auto_title: terminalEffect({ input: v.object({ subject: v.string() }), run: wrapped(gatedGateway([status], answer.promise, calls)) }),
+      sleep_time: terminalEffect({ input: v.object({}), run: async () => ({ status: 'completed' as const }) }),
+    },
+    scheduleRetry: async (at) => { wakes.push(at); },
+    transaction: <T>(body: () => T): T => db.transaction(body)(),
+    turnIsLive: () => false,
+    settled: async () => {},
+  });
+
+  const titled = () => sql<{ status: string; next_attempt_at: number }>`
+    SELECT status, next_attempt_at FROM terminal_effects WHERE sequence_id = 't1/t1-answer'`;
+
+  const run = await transitions.ledger.run('t1/t1-answer', [{ name: 'auto_title', scope: 't1-answer', input: { subject: 'Hello' }, lane: 'detached' }]);
+
+  await release(transitions);
+  answer.resolve();
+  await run.reported;
+
+  expect(titled()).toEqual([{ status: 'pending', next_attempt_at: NOW }]);
+  expect(wakes.at(-1)).toBe(NOW);
+
+  // The wake tries what the change may have fixed.
+  await transitions.ledger.replayOwed('t1/t1-answer');
+  expect(calls.n).toBe(2);
+  expect(titled().map((row) => row.status)).toEqual(['completed']);
 });
 
 // 2026-09-29 (workerd complexity flake, 632 statements against 541): the pre-attempt arm was due now, so a sequence

@@ -4,7 +4,7 @@ import { Database } from 'bun:sqlite';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC,
   initWorkspaceSchema, profileCatalogDigest, resolveTurnProfile,
-  WorkspaceActorDirectory, actorReferenceOf, localContextTree,
+  WorkspaceActorDirectory, actorReferenceOf, localContextTree, tierRefusals,
   type ActorHost, type ActorReference, type AgentRuntime, type HostedActor, type LoopOrigin,
   type ProfileAuthorityInputs, type SqlExecutor,
 } from '@kinu.run/core';
@@ -133,6 +133,8 @@ export async function hostedWorkspace(
     capabilityToken: () => 'harness-token',
     resolveProfile: () => Promise.resolve(fixtureProfile()),
     reportModelCall: () => undefined,
+    // Nothing changes the owner's model settings under this fixture.
+    refusals: (actor) => tierRefusals({ sql, actor, config: actor.config, now: Date.now, settings: 'Settings > Models', changes: () => 0 }),
     currentTurn: () => null,
     liveReadsMoved: () => undefined,
     modelOperations: () => undefined,

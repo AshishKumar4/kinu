@@ -349,7 +349,8 @@ export function createCLIRuntime(
     modelRouteFactory(resolution);
 
   const credentialOf = (spec: string): Promise<string | null> => localResolver().credentialFor(spec);
-  const refusals = tierRefusals({ sql, actor, config: agentConfig, now: Date.now, settings: LOCAL_MODEL_SETTINGS });
+  // A local session reads the owner's model settings as it opens; nothing changes them under it.
+  const refusals = tierRefusals({ sql, actor, config: agentConfig, now: Date.now, settings: LOCAL_MODEL_SETTINGS, changes: () => 0 });
 
   const modelLanes = {
     resolveProfile: ensureProfile,
