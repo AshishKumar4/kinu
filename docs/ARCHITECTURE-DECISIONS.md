@@ -342,9 +342,11 @@ nobody there (36 alarm invocations and 18 cancelled deliveries an hour, each
 activation re-sweeping the provider listing for 0.9-1.7 s). Pinned by
 `unit-terminal-effect-refusal`.
 
-T2. An actor owes at most one `sleep_time`: a newer row replaces the older
-owed ones, parked or pending, because the effect reads the recent window when
-it runs and records no input. Decided 2026-09-30, commit 55447ce6a7, on the same measurement:
+T2. An actor owes at most one `sleep_time`: the claim that owes a newer row
+completes the older owed ones, parked or pending, because the effect reads the
+recent window when it runs and records no input. The claim's one statement
+also makes parked rows due (T1), so a turn pays no statement for either
+(workerd `complexity`, 398 a turn; the first cut paid 400). Decided 2026-09-30, commit 55447ce6a7, on the same measurement:
 three settled turns left three rows over one window.
 
 T3. Every fixed-tier model call (fact compression, titling, reflection,

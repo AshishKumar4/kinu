@@ -182,6 +182,7 @@ test('settled turns under an owner-fixable refusal leave one row per effect and 
   const rows = sql<{ sequence_id: string; effect_name: string; status: string }>`
     SELECT sequence_id, effect_name, status FROM terminal_effects ORDER BY effect_name`;
 
+  // The newest sleep_time completed each one before it, and a completed sequence ends with its rows.
   expect(rows).toEqual([
     { sequence_id: 'genesis/genesis-answer', effect_name: 'auto_title', status: 'parked' },
     { sequence_id: 't3/t3-answer', effect_name: 'sleep_time', status: 'parked' },

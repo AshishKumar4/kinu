@@ -12,6 +12,7 @@ import type { HostileCalls, ProbeRecords } from './codex-egress-records';
 import type { TerminalEffectProbeDO } from './terminal-effect-probe';
 import type { DbCapabilityProbeDO } from './db-capability-probe';
 import type { FiberRecoveryProbeAgent } from './agent-fiber-recovery-probe';
+import type { SocketCallProbeAgent } from './socket-call-probe';
 import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { ChatAnswers, SeedAnswer } from './store-reset-shapes';
@@ -323,6 +324,7 @@ declare global {
       TERMINAL_EFFECT_PROBE: DurableObjectNamespace<TerminalEffectProbeDO>;
       DB_CAPABILITY_PROBE: DurableObjectNamespace<DbCapabilityProbeDO>;
       FIBER_RECOVERY_PROBE: DurableObjectNamespace<FiberRecoveryProbeAgent>;
+      SOCKET_CALL_PROBE: DurableObjectNamespace<SocketCallProbeAgent>;
       FORK_SOURCE: DurableObjectNamespace<ForkSourceProbeDO>;
       FORK_TARGET: DurableObjectNamespace<ForkTargetProbeDO>;
       STREAM_LIFECYCLE: DurableObjectNamespace<StreamLifecycleDO>;

@@ -244,11 +244,11 @@ export function storeRouteHost(routeId: string): string {
 /** The route the container's publisher PUTs through; S3Mounts names its own routes at random. */
 export const STORE_PUBLISH_ROUTE = 'devbox-publish';
 
-/** The store gateway grants access only within this box's prefix (D41). */
+/** The store gateway roots each route at this box's prefix, so the URL names the key under it (D46). */
 export function storeObjectUrl(root: string, bucket: string, key: string): string {
   if (!key.startsWith(`${root}/`)) throw new DevboxError("io", `storeObjectUrl: ${key} is outside this box's store prefix ${root}`);
 
-  return `http://${storeRouteHost(STORE_PUBLISH_ROUTE)}/${encodeURIComponent(bucket)}/${key.split('/').map(encodeURIComponent).join('/')}`;
+  return `http://${storeRouteHost(STORE_PUBLISH_ROUTE)}/${encodeURIComponent(bucket)}/${key.slice(root.length + 1).split('/').map(encodeURIComponent).join('/')}`;
 }
 
 /** Beside the upper, whose contents are all archived; on ephemeral disk (P1), so a replaced disk

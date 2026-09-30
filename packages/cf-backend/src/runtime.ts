@@ -30,7 +30,7 @@ import {
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore, generateReported,
   decodeJsonValue,
   initAgentConfigTable, initActorTables,
-  parseModelSpec, reasoningEffortOptions, createRoutedModelLane, tierRefusals,
+  parseModelSpec, reasoningEffortOptions, createRoutedModelLane,
   createScaffoldSurface,
   type FixedTierSource,
   type VectorStore,
@@ -223,6 +223,8 @@ export interface CFRuntimeHooks {
   reportModelCall: ModelCallSink;
   resolveProfile?: () => Promise<ResolvedTurnProfile>;
   currentTurn?: (actor: ActorReference) => string | null;
+  /** The actor's one notice state for its object's life; the root's titling and settings changes use it too. */
+  refusals: TierRefusals;
   /** The actor's uid on both planes, or neither: split credentials measured `EACCES` on its own home
      *  and could write a sibling's. */
   workspaceExecution?: HostedNodeHome;
@@ -284,10 +286,9 @@ export function createCFRuntime(
 
   const executor = createRuntimeExecutor(codemodeLauncher({ kinuNode: false, egress: null }));
 
-  const refusals = tierRefusals({ sql, actor: actor.actor, config: actor.actor.config, now: Date.now, settings: MODEL_SETTINGS });
-
   const profileLane = (source: FixedTierSource): LLM | undefined => createProfileLaneLLM({
-    agent, env, actor, resolveProfile: hooks.resolveProfile, source, report: hooks.reportModelCall, currentTurn: hooks.currentTurn, refusals,
+    agent, env, actor, resolveProfile: hooks.resolveProfile, source, report: hooks.reportModelCall, currentTurn: hooks.currentTurn,
+    refusals: hooks.refusals,
   });
 
   // The one required lane: `AgentRuntime.llm` is not optional.

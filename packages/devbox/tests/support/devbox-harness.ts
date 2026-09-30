@@ -656,7 +656,7 @@ export class FakeSandbox {
 
     if (bytes === undefined) return { stdout: '2 ', stderr: `no archive at ${archivePath}`, exitCode: 0 };
 
-    const key = decodeURIComponent(relative);
+    const key = `${store.root}/${decodeURIComponent(relative)}`;
     store.attempts?.push({ operation: 'put', key, bytes: bytes.byteLength });
     store.objects.set(key, bytes.slice());
 
@@ -1125,6 +1125,8 @@ export class FakeSandbox {
 
   activityRenewals = 0;
   readonly shim = new NativeShim(this);
+  /** Each `sandbox-shim` invocation's operation, as `s3-mount unmount`. */
+  readonly shimCalls: string[] = [];
   owner: { alarm(): Promise<void>; onStop(): Promise<void> } | undefined;
   nativeExec: Container['exec'] | undefined;
   /** The model's start behind the platform's synchronous `start`; a failure surfaces at the next exec. */
@@ -1195,7 +1197,12 @@ export class FakeSandbox {
 
     if (this.nativeExec !== undefined && (args[0] === "bash" || args[3] === "kill-tree")) return this.nativeExec(args, options);
 
-    if (args[0] === '/usr/local/bin/sandbox-shim') return this.shim.exec(args);
+    if (args[0] === '/usr/local/bin/sandbox-shim') {
+      this.shimCalls.push(args.slice(1, 3).join(' '));
+
+      return this.shim.exec(args);
+    }
+
     const pid = this.#pid++;
 
     // The restore deadline's process ends only when it is killed: a test that needs the deadline to

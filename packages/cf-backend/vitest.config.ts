@@ -591,6 +591,7 @@ export default defineConfig({
           TERMINAL_EFFECT_PROBE: { className: 'TerminalEffectProbeDO', useSQLite: true },
           DB_CAPABILITY_PROBE: { className: 'DbCapabilityProbeDO', useSQLite: true },
           FIBER_RECOVERY_PROBE: { className: 'FiberRecoveryProbeAgent', useSQLite: true },
+          SOCKET_CALL_PROBE: { className: 'SocketCallProbeAgent', useSQLite: true },
           FORK_SOURCE: { className: 'ForkSourceProbeDO', useSQLite: true },
           FORK_TARGET: { className: 'ForkTargetProbeDO', useSQLite: true },
           STREAM_LIFECYCLE: { className: 'StreamLifecycleDO', useSQLite: true },

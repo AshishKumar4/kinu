@@ -3,6 +3,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import { DEFAULT_DEVBOX_POLICY } from '../src/lifecycle';
+import { CHAIN_STORE_MOUNT } from '../src/snapshot-chain';
 import { chainBox } from './support/chain-box';
 
 /** A key the mount omits leaves s3fs's own default in charge, so its absence fails by name. */
@@ -39,5 +40,23 @@ describe('the store mount states its own s3fs bounds', () => {
     expect(connect).toBeLessThan(300);
     expect(silence).toBeLessThan(120);
     expect(retries).toBeLessThan(5);
+  });
+});
+
+describe('the store mount clears a marker only where one can be', () => {
+  const s3Calls = (arm: ReturnType<typeof chainBox>) => arm.container.shimCalls.filter((call) => call.startsWith('s3-mount'));
+
+  test('a container this box started holds no marker, so its first mount runs no unmount; a remount does', async () => {
+    const arm = chainBox();
+    expect((await arm.box.attachNow()).kind).toBe('empty');
+    await arm.box.writeFile('/workspace/notes.md', 'one line');
+    expect((await arm.box.checkpointNow('quiesce')).kind).toBe('committed');
+    expect(s3Calls(arm)).toEqual(['s3-mount mount']);
+
+    // s3fs gone while its marker stands: the mount must clear the marker, or the shim reports it mounted.
+    arm.container.s3fsMounts.delete(CHAIN_STORE_MOUNT);
+    await arm.box.writeFile('/workspace/notes.md', 'two lines');
+    expect((await arm.box.checkpointNow('quiesce')).kind).toBe('committed');
+    expect(s3Calls(arm)).toEqual(['s3-mount mount', 's3-mount unmount', 's3-mount mount']);
   });
 });
