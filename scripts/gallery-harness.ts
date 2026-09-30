@@ -19,7 +19,7 @@
  * gates on this shared tree ("Execution context was destroyed").
  */
 
-import { createReadStream, existsSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, readdirSync, rmSync, statSync, watch } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { extname, join, resolve, sep } from 'node:path';
@@ -29,6 +29,7 @@ import * as v from 'valibot';
 import { tolerate } from '@kinu.run/core/obs';
 import { releaseScratch, scratchDir, SCRATCH_ROOT_PREFIX } from '../packages/test-utils/src/scratch';
 import { declaredSettings } from './browser-declarations';
+import { SILENCE_NOTICE_ENV } from './deadline';
 import { launchTestChrome } from './test-chrome';
 
 const REPO = join(import.meta.dir, '..');
@@ -195,21 +196,77 @@ export function unruledClasses(scope: string, family: string, markers: readonly 
 }
 
 /** The conditions pages are being waited on, so a run ended mid-wait names them. No page wait has a clock; a
- *  condition that never arrives is ended by the row's deadline, and this is what that end prints. A page opened
- *  on `gallery.browser` directly, not through `newPage`, records nothing. */
-const pendingWaits = new Set<{ readonly condition: string }>();
+ *  condition that never arrives is reported when the row's runner says its silence nears the bound
+ *  (`SILENCE_NOTICE_ENV`), and ended by the row's bound, and each prints what it knows. A page opened on
+ *  `gallery.browser` directly, not through `newPage`, records nothing. */
+interface OpenWait {
+  readonly condition: string;
+  readonly page: Page;
+  /** The page's requests sent and not yet answered, by URL. */
+  readonly requests: ReadonlySet<string>;
+  reported: boolean;
+  /** The page was asked what it shows and has not answered. */
+  asking: boolean;
+}
+
+const pendingWaits = new Set<OpenWait>();
 
 /** `wait`, with `condition` recorded while it is open. */
-async function recorded<T>(condition: string, wait: () => Promise<T>): Promise<T> {
-  const open = { condition };
+async function recorded<T>(open: Omit<OpenWait, 'reported' | 'asking'>, wait: () => Promise<T>): Promise<T> {
+  const entry: OpenWait = { ...open, reported: false, asking: false };
 
-  pendingWaits.add(open);
+  pendingWaits.add(entry);
 
   try {
     return await wait();
   } finally {
-    pendingWaits.delete(open);
+    pendingWaits.delete(entry);
   }
+}
+
+/** Whether puppeteer's generic "Waiting for selector … failed" was the page going away under the wait. */
+function detachedCause(error: Error): boolean {
+  for (let link: unknown = error.cause; link instanceof Error; link = link.cause) {
+    if (link.name === 'TargetCloseError' || link.message.includes('Frame detached')) return true;
+  }
+
+  return false;
+}
+
+const STUCK_SHOTS = join(REPO, '..', 'kinu-logs', 'gallery-stuck');
+
+let stuckShots = 0;
+
+/**
+ * Writes what a stuck wait's page shows: first what the harness knows without the page, then what the page answers.
+ * A page whose script never yields never answers, and the first line says the question is open, so the log reads
+ * the same whether the page is busy, paused, or slow.
+ */
+async function reportStuck(open: OpenWait): Promise<void> {
+  open.reported = true;
+  open.asking = true;
+  const requests = open.requests.size === 0 ? 'none' : [...open.requests].join(', ');
+
+  process.stderr.write(`gallery-harness: stuck on ${open.condition}; open requests: ${requests}; asking the page what it shows\n`);
+
+  const view = await open.page.evaluate(() => ({
+    readyState: document.readyState,
+    elements: document.querySelectorAll('*').length,
+    headings: [...document.querySelectorAll('h1, h2, [role="alert"]')].map((node) => node.textContent?.trim() ?? '').slice(0, 6),
+    text: (document.body?.innerText ?? '').replace(/\s+/gu, ' ').slice(0, 300),
+  })).then((facts) => facts, (...rejection: [unknown]) => ({ unread: String(rejection[0]) }));
+
+  mkdirSync(STUCK_SHOTS, { recursive: true });
+  stuckShots += 1;
+  const shot = join(STUCK_SHOTS, `${String(process.pid)}-${String(stuckShots)}.png`);
+  const taken = await open.page.screenshot({ path: shot }).then(() => shot, () => 'none');
+
+  open.asking = false;
+
+  process.stderr.write('unread' in view
+    ? `gallery-harness: the page could not be read (${open.condition}): ${view.unread}; screenshot: ${taken}\n`
+    : `gallery-harness: the page shows (${open.condition}): readyState: ${view.readyState}, elements: ${String(view.elements)}, `
+      + `headings: ${JSON.stringify(view.headings)}, text: ${JSON.stringify(view.text)}, screenshot: ${taken}\n`);
 }
 
 /** The one built artifact this process serves. Built lazily on the first
@@ -393,10 +450,20 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
         if (pendingWaits.size > 0) {
           process.stderr.write(`gallery-harness: ended while waiting for ${[...pendingWaits].map((open) => open.condition).join('; ')}\n`);
         }
+
+        for (const open of pendingWaits) {
+          if (open.asking) process.stderr.write(`gallery-harness: the page never answered what it shows (${open.condition})\n`);
+        }
       },
     });
 
     const { browser } = chrome;
+    const noticePath = process.env[SILENCE_NOTICE_ENV];
+
+    // The row's runner appends a line when its silence nears the bound: each open wait not yet reported says why.
+    const notices = noticePath === undefined ? null : watch(noticePath, async () => {
+      await Promise.all([...pendingWaits].filter((open) => !open.reported).map(reportStuck));
+    });
 
     // Under `bun test` the preload's own listener ends the process first and the browser goes with its release
     // (test-chrome.ts). Under a bare `bun scripts/…` run (computed-style, plan-demo-film, review-package) there is no
@@ -413,42 +480,63 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
       const waitForSelector = page.waitForSelector.bind(page);
       const waitForFunction = page.waitForFunction.bind(page);
       const goto = page.goto.bind(page);
-      // Puppeteer answers a renderer crash with an `error` event and nothing else: a wait with no timeout on the dead
-      // page never ends. Every unbounded wait is ended by it, so a crash fails the test by name instead of going silent.
-      let crash: Error | null = null;
-      const onCrash = new Set<(cause: Error) => void>();
+      const requests = new Set<string>();
 
-      page.once('error', (cause) => {
-        crash = new Error(`the page crashed on ${page.url()}`, { cause });
-        process.stderr.write(`gallery-harness: ${crash.message}\n`);
+      page.on('request', (request) => { requests.add(request.url()); });
+      page.on('requestfinished', (request) => { requests.delete(request.url()); });
+      page.on('requestfailed', (request) => { requests.delete(request.url()); });
 
-        for (const end of onCrash) end(crash);
-      });
+      // Puppeteer answers a renderer crash with an `error` event and nothing else, and a closed tab or a dead browser
+      // with events no wait listens to: a wait with no timeout on the page never ends. Every unbounded wait is ended
+      // by each of them, so the test fails by the name of what happened instead of going silent.
+      let ended: Error | null = null;
+      const onEnd = new Set<(cause: Error) => void>();
 
-      const untilCrash = async <Result>(work: Promise<Result>): Promise<Result> => {
-        if (crash !== null) throw crash;
-        const ended = Promise.withResolvers<never>();
+      const end = (reason: Error, always: boolean): void => {
+        if (ended !== null) return;
+        ended = reason;
 
-        onCrash.add(ended.reject);
+        if (always || onEnd.size > 0) process.stderr.write(`gallery-harness: ${reason.message}\n`);
+
+        for (const stop of onEnd) stop(reason);
+      };
+
+      page.once('error', (cause) => { end(new Error(`the page crashed on ${page.url()}`, { cause }), true); });
+      page.once('close', () => { end(new Error(`the page closed on ${page.url()}`), false); });
+      browser.once('disconnected', () => { end(new Error(`the browser disconnected while on ${page.url()}`), false); });
+
+      const untilEnded = async <Result>(work: Promise<Result>): Promise<Result> => {
+        if (ended !== null) throw ended;
+        const stopped = Promise.withResolvers<never>();
+
+        onEnd.add(stopped.reject);
 
         try {
-          return await Promise.race([work, ended.promise]);
+          return await Promise.race([work, stopped.promise]);
+        } catch (cause) {
+          // Puppeteer ends a wait on a detached page itself, sooner than the events above, with the reason only in
+          // the error's `cause`.
+          if (ended === null && !browser.connected) throw new Error(`the browser disconnected while on ${page.url()}`, { cause });
+
+          if (ended === null && cause instanceof Error && detachedCause(cause)) throw new Error(`the page closed on ${page.url()}`, { cause });
+
+          throw cause;
         } finally {
-          onCrash.delete(ended.reject);
+          onEnd.delete(stopped.reject);
         }
       };
 
       page.setDefaultTimeout(0);
       page.setDefaultNavigationTimeout(0);
       page.waitForSelector = async (selector, waitOptions) => recorded(
-        `${selector} on ${page.url()}`,
-        () => untilCrash(waitForSelector(selector, waitOptions)),
+        { condition: `${selector} on ${page.url()}`, page, requests },
+        () => untilEnded(waitForSelector(selector, waitOptions)),
       );
       page.waitForFunction = async (condition, waitOptions, ...args) => recorded(
-        `${String(condition).replace(/\s+/gu, ' ')} on ${page.url()}`,
-        () => untilCrash(waitForFunction(condition, waitOptions, ...args)),
+        { condition: `${String(condition).replace(/\s+/gu, ' ')} on ${page.url()}`, page, requests },
+        () => untilEnded(waitForFunction(condition, waitOptions, ...args)),
       );
-      page.goto = async (url, gotoOptions) => recorded(`load of ${url}`, () => untilCrash(goto(url, gotoOptions)));
+      page.goto = async (url, gotoOptions) => recorded({ condition: `load of ${url}`, page, requests }, () => untilEnded(goto(url, gotoOptions)));
 
       return page;
     };
@@ -456,6 +544,7 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
     try {
       return await body({ newPage, origin });
     } finally {
+      notices?.close();
       process.off('SIGTERM', endOnSignal);
       await chrome.close();
     }
