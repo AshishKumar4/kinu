@@ -6,10 +6,11 @@ import { decodeLockOwner, withConfigLock } from '../src/config-lock';
 import * as v from 'valibot';
 
 /**
- * Codex refresh across two real `kinu` processes sharing a home. The token endpoint is the barrier: the waiter
- * is released only once the holder's refresh is in flight, so an uncovered refresh sends a second request.
+ * A ChatGPT plan refresh across two real `kinu` processes sharing a home: the refresh token rotates, so a second
+ * refresh with the first token would spend the session. The token endpoint is the barrier: the waiter is released
+ * only once the holder's refresh is in flight, so an uncovered refresh sends a second request.
  */
-describe('two kinu processes refreshing one Codex credential', () => {
+describe('two kinu processes refreshing one ChatGPT plan login', () => {
   const STORE_TS = JSON.stringify(join(import.meta.dir, '../src/oauth-store.ts'));
 
   const childResultSchema = v.object({
@@ -20,11 +21,11 @@ describe('two kinu processes refreshing one Codex credential', () => {
   const savedSchema = v.object({
     origin: v.string(),
     providers: v.object({
-      codex: v.object({
+      chatgpt: v.object({
         accessToken: v.string(),
         refreshToken: v.string(),
         expiresAt: v.number(),
-        metadata: v.object({ accountId: v.string() }),
+        metadata: v.object({ clientId: v.string() }),
       }),
     }),
   });
@@ -38,20 +39,6 @@ describe('two kinu processes refreshing one Codex credential', () => {
     const { promise, resolve } = Promise.withResolvers<void>();
 
     return { reached: promise, open: resolve };
-  }
-
-  type JwtSegment =
-    | { readonly alg: string; readonly typ: string }
-    | { readonly exp: number };
-
-  function jwt(expSeconds: number): string {
-    const segment = (payload: JwtSegment): string => Buffer.from(JSON.stringify(payload), 'utf-8')
-      .toString('base64')
-      .replace(/\+/gu, '-')
-      .replace(/\//gu, '_')
-      .replace(/=+$/u, '');
-
-    return `${segment({ alg: 'none', typ: 'JWT' })}.${segment({ exp: expSeconds })}.`;
   }
 
   /** One child is one `kinu` process: `bun -e` gives it its own module state, file handles and view of the lock. */
@@ -76,7 +63,7 @@ describe('two kinu processes refreshing one Codex credential', () => {
         // refresh. Awaiting here would hand the holder time to finish.
         if (role === 'waiter') void fetch(base + '/armed');
 
-        const auth = await store.getAuth('codex.oauth');
+        const auth = await store.getAuth('chatgpt.oauth');
         console.log(JSON.stringify({ role, authorization: auth.headers.Authorization }));
       `],
       cwd: join(import.meta.dir, '../../..'),
@@ -97,15 +84,16 @@ describe('two kinu processes refreshing one Codex credential', () => {
   }
 
   test('the provider sees one rotation and both processes carry it', async () => {
-    const configPath = join(scratchDir('codex-refresh-processes'), 'config.json');
-    const rotated = jwt(Math.floor(Date.now() / 1000) + 3600);
+    const configPath = join(scratchDir('chatgpt-refresh-processes'), 'config.json');
+    const rotated = 'at-rotated';
     writeFileSync(configPath, `${JSON.stringify({
       origin: 'https://kinu.example',
       providers: {
-        codex: {
-          accessToken: jwt(Math.floor(Date.now() / 1000) - 60),
+        chatgpt: {
+          accessToken: 'at-old',
           refreshToken: 'refresh-old',
-          metadata: { accountId: 'acct_123' },
+          expiresAt: Date.now() - 60_000,
+          metadata: { clientId: 'oaiapp_issued', scopes: ['chatgpt.tokens.use.direct', 'offline_access', 'openid', 'resource.invoke'] },
         },
       },
     }, null, 2)}\n`);
@@ -177,9 +165,9 @@ describe('two kinu processes refreshing one Codex credential', () => {
 
       const saved = v.parse(savedSchema, JSON.parse(readFileSync(configPath, 'utf-8')));
       expect(saved.origin).toBe('https://kinu.example');
-      expect(saved.providers.codex.accessToken).toBe(rotated);
-      expect(saved.providers.codex.refreshToken).toBe('refresh-new-1');
-      expect(saved.providers.codex.metadata.accountId).toBe('acct_123');
+      expect(saved.providers.chatgpt.accessToken).toBe(rotated);
+      expect(saved.providers.chatgpt.refreshToken).toBe('refresh-new-1');
+      expect(saved.providers.chatgpt.metadata.clientId).toBe('oaiapp_issued');
       expect(lstatSync(`${configPath}.lock`, { throwIfNoEntry: false })).toBeUndefined();
     } finally {
       // The endpoint holds the refresh open and `stop(true)` waits for it: open every gate so a failure cannot hang.
@@ -193,7 +181,7 @@ describe('two kinu processes refreshing one Codex credential', () => {
   });
 
   test('a process killed while holding the lock does not block the next one', async () => {
-    const configPath = join(scratchDir('codex-refresh-crash'), 'config.json');
+    const configPath = join(scratchDir('chatgpt-refresh-crash'), 'config.json');
     writeFileSync(configPath, `${JSON.stringify({ origin: 'https://kinu.example' }, null, 2)}\n`);
 
     const holding = gate();

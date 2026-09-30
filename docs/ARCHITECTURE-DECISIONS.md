@@ -255,6 +255,16 @@ The read-back guard of the 2026-09-16 amendment is gone: the transaction
 either commits the bump or throws, and "a generation write that fails refuses
 the open and leaves the counter where it was" pins that.
 
+W2. A box asking whether its container is still in use (`sandboxInUse`) does
+not start the workspace: the answer reads only what the current activation
+runs, and an object that did not start runs nothing, so it answers from its
+constructor. Owed work stays with the object's own wake. Decided 2026-09-30,
+commit e7dc69b685, on ironwood-cairn-6dbcb8de: from 18:04Z to 18:18Z the
+devbox heartbeat's ask started the resting object once a minute, and each start
+booted its files and armed the wake that retried its owed effects at the next
+second. Pinned by `unit-activation-boot-failure` (the ask waited on the start
+and failed with the boot's cause; now it answers false).
+
 ## Chat loop
 
 C1. The stored assistant row holds the turn's answer. The runner selects it
@@ -588,6 +598,20 @@ Heap was read as headroom: the largest held allocation that survived.
   about 1,000 touch the turn's own tables. At 5-10 ms a hop, storage that stays
   in the workspace object and is reached one statement at a time would cost a
   loader-hosted turn 5-50 s.
+- Re-measured 2026-09-30 with the same hold-until-reset probe, each bundle
+  loaded by a throwaway (deleted after; kinu-logs/heap/WORKSPACE-BUNDLE.md).
+  The probe alone survives 128 MB. Production 2f660875cc's workspace bundle
+  survives 68-70, so it holds ~58-60 MiB: its index.js is 10.7 M chars,
+  unminified, with 5,231 above U+00FF, so V8 keeps 21.4 MB of it two bytes a
+  char. Integration 5d113a8210's survives 92 (~36 MiB, minified ASCII), and the
+  agent facet bundle 118-120 (~8-10 MiB). workerd holds and compiles every
+  uploaded module at startup, imported or not: 19.3 MB used locally with
+  index.js never imported, against 40.8 imported. esbuild-wasm initialized in
+  the isolate and run for 10 slate builds (linear memory 28 then 44 MiB) cost
+  2-4 MiB of headroom, so the limit counts almost none of its wasm memory. A
+  reset past the limit answered with a 200 from a new isolate and no error line
+  7 times in 9 (1101 twice), the shape of ironwood-cairn-6dbcb8de's unlogged
+  restarts on 2026-09-29, where each turn still ran in that ~68 MiB of room.
 
 D9. A non-main agent's turn runs in its own loader isolate, and every tool
 it calls runs in the workspace object. Decided 2026-09-28 on D8, extended below.
@@ -1035,6 +1059,72 @@ resource credits. The runner reads Bash's running-job set, waits cached
 completions by pid, and restricts `wait -n` to the tracked wave. If every child
 finishes between that read and the wait, a tracked pid still yields its cached
 status. No new process, timer, timeout or resource budget governs a gate.
+
+## Providers
+
+P1. The ChatGPT plan is Sign in with ChatGPT's open-source token sharing
+(developers.openai.com/siwc, read 2026-09-30), provider `chatgpt`, and its
+token never leaves the user's machine. The terms cover locally hosted apps
+only: hosted server-side use is a separate approval Kinu does not hold, so no
+Worker, container or Durable Object stores or sends the token.
+`packages/pc-agent/src/chatgpt.js` is the one implementation of the sign-in
+(authorization code with PKCE and OIDC, a loopback redirect on 127.0.0.1 at
+`/auth/callback`, `dynamic_agent_client` with `agent_name_hint=Kinu` on first
+use and the issued client ID saved after, a per-machine `ext_agent_host_id`),
+the rotating refresh and the revocation. The CLI imports it and keeps the
+login in `config.json` (0600) under `providers.chatgpt`, renewed under the
+config lock; the daemon requires it as a sibling and keeps its own sign-in in
+`pc-agent.chatgpt.json` (0600), renewed on one in-process chain. Each reuses
+the other's saved client ID on this machine's first sign-in. Core's
+`createChatGptProvider` rides the AI SDK Responses path at
+`api.openai.com/v1`: `store: false`, every call streaming (a call that wants one
+JSON answer is rebuilt from the stream), system instructions sent as developer
+messages, function tools grouped in one `functions` namespace (replayed calls
+name it), and the options the preview refuses stripped. Success is
+`response.completed` only; `response.failed`, `error` and a stream that stops
+short fail the call. Each `subscription_sharing_*` code maps to a KinuError
+with the status, the code and the request ID in its message: not eligible is
+`denied` (403), the usage limit is `budget` (429, naming
+chatgpt.com/settings/usage), and the two unavailable codes are `unavailable`
+(503), the only ones the rate-limit retry backs off on; the rest never reach
+it. A plan sign-in
+that did not grant `chatgpt.tokens.use.direct` keeps the identity and the
+client ID, and no tokens.
+
+On kinu.run the provider exists only through a connected machine: the daemon
+holds the token, the web asks it to sign in (`chatgptSignIn` returns the URL
+for a browser on that machine), and each `api.openai.com` call rides the
+existing device relay (`relayModelCall`, the Codex relay generalized to a
+provider), with the daemon attaching its own token and rotating it on a 401.
+With no machine connected, the entry offers the Codex device code as before
+(`codex.ts`, `codex-oauth.ts`, the relay and the egress container), which
+stays until OpenAI approves hosted use. The CLI's Codex device-code login is
+deleted: SIWC serves every CLI use it had. The web keeps it for that one case.
+`chatgpt.js` is a new daemon sibling, which an older daemon's updater does not
+land: the daemon requires it optionally, reports `<stamp>.incomplete` in HELLO
+while it is missing, and the hub's resulting UPDATE re-lands the same build
+with every sibling (`daemon-update`'s "a build landed without a newer
+sibling").
+
+A `budget` refusal anywhere in a failure's cause chain is now
+`providerRefusalCode`'s answer, ahead of the status, so a spent plan (this
+usage limit, and Claude's spent usage) parks an owed effect as T1's
+owner-fixable refusals do, and a fixed tier says it once as T3 does. Before,
+its 429 read as `unavailable` and retried on the 600 s ceiling. Decided
+2026-09-30. Measured against api.openai.com, auth.openai.com and a loopback
+browser faked at the fetch seam: `pc-agent/tests/chatgpt.test.js` (registration,
+the exchange with the issued client, PKCE, state, nonce, audience and signature
+checks, a declined consent, a grant without plan use, each spent-refresh code,
+one rotation shared by concurrent callers, revocation) and
+`core/tests/contract-chatgpt-plan.test.ts` (request shape, each
+`subscription_sharing_*` code, the refresh on a 401, stream completion, the
+model list). The real daemon relays through a real UserDO to impersonated hosts
+(`cf-backend/tests/unit-pc-agent-provider-relay.test.ts`), and
+`unit-terminal-effect-refusal` and `unit-fixed-tier-chain` pin the budget
+parking. Blind: no live call has been made, so the shape is checked against
+the docs, not the route: `prompt_cache_key`, `include` and `parallel_tool_calls`,
+which the docs' list of refused fields does not name, have not met the real
+route, and neither has the `functions` namespace name.
 
 ## Open
 

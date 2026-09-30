@@ -278,7 +278,20 @@ export function providerStatusOf(failure: { readonly cause: unknown }): number |
   return undefined;
 }
 
+function spentAllowance(failure: { readonly cause: unknown }): boolean {
+  const seen = new Set<unknown>();
+
+  for (let link = failure.cause; link !== undefined && !seen.has(link); link = link instanceof Error ? link.cause : undefined) {
+    seen.add(link);
+
+    if (link instanceof KinuError && link.code === 'budget') return true;
+  }
+
+  return false;
+}
+
 export function providerRefusalCode(failure: { readonly cause: unknown }): ErrorCode | null {
+  if (spentAllowance(failure)) return 'budget';
   const status = providerStatusOf(failure);
 
   return status === undefined ? null : codeForStatus(status);

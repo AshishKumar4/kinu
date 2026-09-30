@@ -33,6 +33,7 @@ export type UserRoutesAuthority = CloudWorkspaceRegistry & Pick<
   | 'setDeviceTier' | 'revokeDeviceConsent'
   | 'listCredentials' | 'setCredential' | 'deleteCredential' | 'listUnrevokedGrants' | 'dismissUnrevokedGrant' | 'listActiveWorkspaces' | 'getAuthHeaders'
   | 'getCodexStatus' | 'disconnectCodex' | 'startCodexDeviceFlow' | 'pollCodexDeviceFlow' | 'startClaudeSignIn' | 'finishClaudeSignIn'
+  | 'chatgptPlan' | 'startChatGptSignIn' | 'signOutChatGpt'
   | 'listConfig' | 'getConfig' | 'setConfig' | 'listConnectedProviders'
   | 'listCloudflareAccounts' | 'selectCloudflareAccount' | 'listAIGateways' | 'selectAIGateway'
   | 'userMcp_list' | 'userMcp_presets' | 'userMcp_add' | 'userMcp_remove' | 'userMcp_update'
@@ -386,6 +387,17 @@ userRoutes.post('/api/user/codex/poll', async (c) => {
 
     return json({ body: status });
   } catch (cause) { throw toKinuError({ doing: 'checking the Codex sign-in', cause, otherwise: 'unavailable' }); }
+});
+
+userRoutes.get('/api/user/chatgpt', async (c) => json({ body: await c.get('stub').chatgptPlan(c.get('owner')) }));
+
+userRoutes.post('/api/user/chatgpt/sign-in', async (c) => json({ body: await c.get('stub').startChatGptSignIn(c.get('owner')) }));
+
+userRoutes.delete('/api/user/chatgpt', async (c) => {
+  const signedOut = await c.get('stub').signOutChatGpt(c.get('owner'));
+  modelSettingsChanged(c);
+
+  return json({ body: signedOut });
 });
 
 userRoutes.post('/api/user/claude/start', async (c) => json({ body: await c.get('stub').startClaudeSignIn(c.get('owner')) }));

@@ -1063,7 +1063,8 @@ export {
   DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT, DEVICE_PTY_MAX_AXIS,
   type DeviceCancelResult,
   DeviceSocketHub, deviceIdFromSocket, WS_OPEN,
-  DEVICE_RELAY, EGRESS_ROUTE_HEADER, type DeviceRelayRequest,
+  DEVICE_CHATGPT, DEVICE_RELAY, DeviceChatGptStatusSchema, EGRESS_ROUTE_HEADER,
+  type DeviceChatGptMethod, type DeviceChatGptStatus, type DeviceRelayRequest, type RelayedProvider,
   DEVICE_KEEPALIVE_PING, DEVICE_KEEPALIVE_PONG,
   type DeviceSocket, type DeviceSocketCtx,
   DeviceRequestLedger, initDeviceInflightTable,
@@ -2119,6 +2120,8 @@ export { SWARM_PRESET_DOCTRINE } from './strategy/swarm';
 export { fmtPct, fmtSpan, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } from './utils/format';
 
 export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './utils/do-rpc';
+
+export { inheritedDescriptor, type RpcSurfaceSubject } from './utils/prototype-members';
 
 export {
   type ActivitySnapshot, type ExecutorCommandResult, type ForkNode, type ForkNodeLifecycle,

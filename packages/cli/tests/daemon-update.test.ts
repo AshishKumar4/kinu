@@ -157,6 +157,24 @@ describe('the daemon updates itself on the hub\'s UPDATE frame', () => {
     expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toHaveLength(2);
   });
 
+  // An older daemon's updater lands only the siblings it knew, so the first build that requires chatgpt.js
+  // arrives without it. It must still run, and say so, so the hub's next UPDATE brings the rest.
+  test('a build landed without a newer sibling runs, reports itself incomplete, and the next UPDATE lands the sibling', async () => {
+    const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW) });
+    const home = installedMachine(served.origin, NEW);
+    rmSync(join(home, 'chatgpt.js'));
+    const daemon = startDaemon(home, await releaseSigningEnv());
+
+    const first = await until(() => served.sockets[0], 'the HELLO', daemon.log);
+    expect(first.hello).toMatchObject({ version: `${NEW}.incomplete` });
+
+    const successor = await until(() => served.sockets[1], 'the successor HELLO', daemon.log);
+    expect(successor.hello).toMatchObject({ version: NEW });
+    expect(installed(home, 'chatgpt.js')).toBe(DAEMON_FILES['chatgpt.js']);
+    expect(served.hits.filter((hit) => hit.startsWith('/downloads/'))).toEqual([PLATFORM_ARTIFACT, `${PLATFORM_ARTIFACT}.sha256`]);
+    await successor.settle();
+  });
+
   test('THE TROJAN PROBE: a hub-chosen checksum with no Kinu signature downloads nothing', async () => {
     // SECURITY-devices C1: an unsigned frame naming a trojaned tarball is refused before any byte is fetched.
     const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW), signing: 'none' });

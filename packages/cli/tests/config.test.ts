@@ -137,7 +137,7 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
       origin: CLOUD_ORIGIN,
       accessToken: CLOUD_TOKEN,
       providers: {
-        codex: { accessToken: "codex-token", refreshToken: "codex-refresh" },
+        chatgpt: { accessToken: "chatgpt-token", refreshToken: "chatgpt-refresh" },
         openai: { apiKey: "sk-test" },
         openrouter: { apiKey: "or-test" },
         anthropic: { apiKey: "ant-test" },
@@ -244,7 +244,7 @@ describe("resolveLLMConfig — registry-only providers", () => {
     for (const name of [
       "KINU_TOKEN", "KINU_ORIGIN", "KINU_MODEL", "KINU_BASE_URL", "KINU_AUTH",
       "AI_GATEWAY_BASE_URL", "AI_GATEWAY_AUTH", "AI_GATEWAY_MODEL",
-      "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "CODEX_ACCESS_TOKEN",
+      "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY",
     ]) delete env[name];
 
     const proc = await runToExit([process.execPath, "-e", script], {
@@ -278,7 +278,7 @@ async function runResolveLLM(
   for (const name of [
     "KINU_TOKEN", "KINU_ORIGIN", "KINU_MODEL", "KINU_BASE_URL", "KINU_AUTH",
     "AI_GATEWAY_BASE_URL", "AI_GATEWAY_AUTH", "AI_GATEWAY_MODEL",
-    "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "CODEX_ACCESS_TOKEN",
+    "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY",
   ]) {
     if (!(name in extraEnv)) delete env[name];
   }

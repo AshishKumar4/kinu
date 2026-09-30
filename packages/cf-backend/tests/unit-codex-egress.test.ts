@@ -3,7 +3,7 @@ import { generateText } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { asFetchFunction, codexEgressAllowed, EgressCalls, toProviderError } from '@kinu.run/core';
 import { ALLOWED_ROUTES, forwardedHeaders, refusal } from '../containers/codex-egress/policy.mjs';
-import { codexEgressFetch, codexRouteFetch, type CodexEgressNamespace } from '../src/egress/codex-egress-route';
+import { codexEgressFetch, deviceRouteFetch, type CodexEgressNamespace } from '../src/egress/codex-egress-route';
 
 function egressOver(opts: {
   readonly start?: (signal: AbortSignal) => Promise<void>;
@@ -157,22 +157,23 @@ describe('a Stop on a call bound for the owner\'s machine', () => {
     const cancelled: string[] = [];
     const asked = Promise.withResolvers<void>();
 
-    const route = codexRouteFetch({
+    const route = deviceRouteFetch({
+      provider: 'codex',
       container: asFetchFunction(async () => { throw new Error('the container was asked'); }),
       caller: async () => ({ workspaceToken: 'token' }),
       hub: {
-        codexRelayDevice: async () => {
+        relayDevice: async () => {
           asked.resolve();
           await pickHeld;
 
           return { id: 'dev-1', label: 'studio' };
         },
-        relayCodex: async (_caller, _device, callId) => {
+        relayModelCall: async (_caller, _device, callId) => {
           relayed.push(callId);
 
           throw new Error('relayed after a Stop, so the call ends and names the miss');
         },
-        cancelCodexRelay: async (_caller, callId) => { cancelled.push(callId); },
+        cancelModelRelay: async (_caller, callId) => { cancelled.push(callId); },
       },
     });
 

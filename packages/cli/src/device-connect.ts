@@ -40,6 +40,17 @@ const DAEMON_SIBLINGS: readonly { readonly name: string; readonly source: string
   { name: 'update.js', source: PC_AGENT_UPDATE_SOURCE },
 ];
 
+/**
+ * chatgpt.js is read, not imported as text: the CLI imports it as a module too, and Bun's bundler gives one
+ * file one loader (21 of 40 builds failed). Beside the bundled cli.js, or in the source tree; absent, the
+ * daemon asks for it on its next UPDATE.
+ */
+function daemonSiblings(): readonly { readonly name: string; readonly source: string }[] {
+  const file = [join(import.meta.dir, 'pc-agent', 'chatgpt.js'), join(import.meta.dir, '..', '..', 'pc-agent', 'src', 'chatgpt.js')].find(existsSync);
+
+  return file === undefined ? DAEMON_SIBLINGS : [...DAEMON_SIBLINGS, { name: 'chatgpt.js', source: readFileSync(file, 'utf8') }];
+}
+
 export const DAEMON_LOG_PATH = join(AGENT_HOME, 'pc-agent.log');
 
 export const DEVICE_CONFIG_PATH = join(AGENT_HOME, 'device.json');
@@ -356,7 +367,7 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
   const scriptTemporary = stageInstallFile(SCRIPT_PATH, PC_AGENT_DAEMON_SOURCE, 0o700);
 
   // Siblings ship with the release, never fetched.
-  const siblingTemporaries = DAEMON_SIBLINGS.map((sibling) => ({
+  const siblingTemporaries = daemonSiblings().map((sibling) => ({
     target: join(AGENT_HOME, sibling.name),
     temporary: stageInstallFile(join(AGENT_HOME, sibling.name), sibling.source, 0o700),
   }));

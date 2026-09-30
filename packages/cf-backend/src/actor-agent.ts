@@ -165,7 +165,7 @@ import {
   captureOperationProfile, currentOperationProfile, withOperationProfile,
   type OperationProfile,
   agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider, createSlateWebCodemodeProvider, createAgentsCodemodeProvider,
-  resolveModelRoute, completeOnRoute, tierRefusals, type TierRefusals,
+  resolveModelRoute, completeOnRoute, tierRefusals, type TierRefusals, type ModelRouteResolution,
   narrowToolSurface, codemodeCapabilitiesFor, slateToolReach, callCodemodeMember, inWorkMode,
   toolSurfaceTokens, McpToolSurfaceSchema,
   SUBMIT_PLAN_TOOL, REPORT_TOOL,
@@ -3651,7 +3651,7 @@ export abstract class ActorAgent extends Agent<Env> {
       llm: (resolution) => ({
         async *stream() { yield ''; },
         complete: async (text) => {
-          const { model, providerOptions } = this.ownedModelServices.resolveModelWithEffort(resolution.model, resolution.reasoningEffort);
+          const { model, providerOptions } = this.modelForResolution(resolution);
           // No output cap: reasoning models spend budget thinking and a cap starves the JSON.
           const request: GenerateRequest = { model, system, prompt: text };
 
@@ -4585,9 +4585,14 @@ export abstract class ActorAgent extends Agent<Env> {
       throw new KinuError('unsupported', `${source} is platform-routed: it has no model in the turn profile`);
     }
 
+    return this.modelForResolution(route);
+  }
+
+  /** One model of a side route or of its chain, resolved the one way every side model is. */
+  protected modelForResolution(resolution: Pick<ModelRouteResolution, 'model' | 'reasoningEffort'>) {
     return {
-      spec: route.model,
-      ...this.ownedModelServices.resolveModelWithEffort(route.model, route.reasoningEffort),
+      spec: resolution.model,
+      ...this.ownedModelServices.resolveModelWithEffort(resolution.model, resolution.reasoningEffort),
     };
   }
 

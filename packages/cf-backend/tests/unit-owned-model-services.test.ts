@@ -5,7 +5,7 @@ import { testOwner } from './helpers/user-do';
 import { generateText } from 'ai';
 import { createMockFetch, createTestActors, createTestSql, unobservedSpend } from '@kinu.run/test-utils';
 import { OwnedModelServices, type OwnedModelEnv } from '../src/owned-model-services';
-import type { CodexRelayHub } from '../src/egress/codex-egress-route';
+import type { ModelRelayHub } from '../src/egress/codex-egress-route';
 import { NO_RELAY_MACHINE } from './helpers/user-credentials';
 import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, asFetchFunction, profileCatalogDigest,
@@ -26,7 +26,7 @@ function resolved(model: LanguageModel): v.InferOutput<typeof ResolvedModelSchem
   return v.parse(ResolvedModelSchema, model);
 }
 
-interface FakeUserDO extends CodexRelayHub {
+interface FakeUserDO extends ModelRelayHub {
   getAuthHeaders(caller: UserCaller, key: string): Promise<CredentialHeaders | null>;
   getCredentialBaseURL(caller: UserCaller, key: string): Promise<string | null>;
   listCredentials(caller: UserCaller): Promise<Array<{ key: string; kind: 'bearer'; createdAt: number; updatedAt: number }>>;

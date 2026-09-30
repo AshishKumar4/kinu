@@ -1,65 +1,80 @@
 import { describe, expect, test } from 'bun:test';
-import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
+import { lstatSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { present, requestBodyText, scratchDir } from '@kinu.run/test-utils';
 import { createFileOAuthStore } from '../src/oauth-store';
-import { asFetchFunction, CLAUDE_CRED_KEY, CODEX_CRED_KEY, JsonObjectSchema, OAuthTokenError, type JsonObject } from '@kinu.run/core';
+import { asFetchFunction, CHATGPT_CRED_KEY, CLAUDE_CRED_KEY, JsonObjectSchema, OAuthTokenError } from '@kinu.run/core';
 import * as v from 'valibot';
 
 const savedConfigSchema = v.object({
   origin: v.optional(v.string()),
   providers: v.optional(v.object({
     openai: v.optional(v.object({ apiKey: v.optional(v.string()) })),
-    codex: v.optional(v.object({
+    chatgpt: v.optional(v.object({
+      accessToken: v.optional(v.string()),
       refreshToken: v.optional(v.string()),
+      expiresAt: v.optional(v.number()),
       metadata: v.optional(JsonObjectSchema),
     })),
   })),
 });
 
 describe('createFileOAuthStore', () => {
-  test('refreshes Codex OAuth credentials atomically and preserves config', async () => {
+  test('a ChatGPT plan login near its expiry rotates once with its issued client and keeps the rest of the config', async () => {
     const dir = scratchDir('oauth-store');
     const configPath = join(dir, 'config.json');
     writeFileSync(configPath, `${JSON.stringify({
       origin: 'https://kinu.example',
       providers: {
         openai: { apiKey: 'sk-openai' },
-        codex: {
-          accessToken: jwt({ exp: Math.floor(Date.now() / 1000) - 60 }),
-          refreshToken: 'refresh-old',
-          metadata: { accountId: 'acct_123' },
-        },
+        chatgpt: { accessToken: 'at-old', refreshToken: 'refresh-old', expiresAt: Date.now() + 60_000, metadata: REGISTRATION },
       },
     }, null, 2)}\n`);
 
-    const calls: string[] = [];
+    const calls: [string, string][] = [];
 
     const store = createFileOAuthStore(configPath, {
-      fetch: asFetchFunction(async (input) => {
-        calls.push(input instanceof Request ? input.url : input.toString());
+      fetch: asFetchFunction(async (input, init) => {
+        calls.push([input instanceof Request ? input.url : input.toString(), await requestBodyText(input, init)]);
 
-        return Response.json({
-          access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
-          refresh_token: 'refresh-new',
-          expires_in: 3600,
-        });
+        return Response.json({ access_token: 'at-new', refresh_token: 'refresh-new', expires_in: 3600 });
       }),
     });
 
-    expect(store.has(CODEX_CRED_KEY)).toBe(true);
-    const auth = await store.getAuth(CODEX_CRED_KEY);
+    expect(store.has(CHATGPT_CRED_KEY)).toBe(true);
+    const auth = await store.getAuth(CHATGPT_CRED_KEY);
 
-    expect(calls).toHaveLength(1);
-    expect(auth?.headers.Authorization).toStartWith('Bearer ');
-    expect(auth?.headers.originator).toBe('codex_cli_rs');
-    expect(auth?.headers['ChatGPT-Account-ID']).toBe('acct_123');
+    // The saved issued client, never `dynamic_agent_client`, and no `scope`: the grant keeps what it had.
+    expect(calls.map(([url, body]) => [url, Object.fromEntries(new URLSearchParams(body))])).toEqual([[
+      'https://auth.openai.com/api/accounts/oauth/token',
+      { grant_type: 'refresh_token', client_id: 'oaiapp_issued', refresh_token: 'refresh-old', resource: 'https://api.openai.com/v1' },
+    ]]);
+    expect(auth).toEqual({ headers: { Authorization: 'Bearer at-new' }, credentialKey: CHATGPT_CRED_KEY });
 
     const saved = v.parse(savedConfigSchema, JSON.parse(readFileSync(configPath, 'utf-8')));
     expect(saved.origin).toBe('https://kinu.example');
     expect(saved.providers?.openai?.apiKey).toBe('sk-openai');
-    expect(saved.providers?.codex?.refreshToken).toBe('refresh-new');
-    expect(saved.providers?.codex?.metadata?.accountId).toBe('acct_123');
+    expect(saved.providers?.chatgpt?.refreshToken).toBe('refresh-new');
+    expect(saved.providers?.chatgpt?.expiresAt).toBeGreaterThan(Date.now() + 3_000_000);
+    expect(saved.providers?.chatgpt?.metadata).toMatchObject({ ...REGISTRATION, scopes: REGISTRATION.scopes });
+    expect(statSync(configPath).mode & 0o777).toBe(0o600);
+  });
+
+  test('a spent ChatGPT refresh token surfaces as revoked, naming the code OpenAI sent', async () => {
+    const configPath = join(scratchDir('oauth-store'), 'config.json');
+    const stale = { accessToken: 'at-old', refreshToken: 'refresh-old', expiresAt: Date.now() - 1, metadata: REGISTRATION };
+
+    writeFileSync(configPath, `${JSON.stringify({ providers: { chatgpt: stale } })}\n`);
+
+    const store = createFileOAuthStore(configPath, {
+      fetch: asFetchFunction(async () => Response.json({ error: 'refresh_token_expired' }, { status: 400 })),
+    });
+
+    const refused = store.getAuth(CHATGPT_CRED_KEY);
+
+    await expect(refused).rejects.toBeInstanceOf(OAuthTokenError);
+    await expect(refused).rejects.toHaveProperty('revoked', true);
+    await expect(refused).rejects.toThrow('refresh_token_expired');
   });
 
   // The refresh must run inside the lock: an async callback releases the synchronous helper's lock on its first await,
@@ -68,13 +83,7 @@ describe('createFileOAuthStore', () => {
     const dir = scratchDir('oauth-store');
     const configPath = join(dir, 'config.json');
     writeFileSync(configPath, `${JSON.stringify({
-      providers: {
-        codex: {
-          accessToken: jwt({ exp: Math.floor(Date.now() / 1000) - 60 }),
-          refreshToken: 'refresh-old',
-          metadata: { accountId: 'acct_123' },
-        },
-      },
+      providers: { chatgpt: { accessToken: 'at-old', refreshToken: 'refresh-old', expiresAt: Date.now() - 60_000, metadata: REGISTRATION } },
     }, null, 2)}\n`);
 
     const submitted: string[] = [];
@@ -88,24 +97,20 @@ describe('createFileOAuthStore', () => {
         midFlight.resolve();
         await Promise.resolve();
 
-        return Response.json({
-          access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
-          refresh_token: `refresh-${String(submitted.length)}`,
-          expires_in: 3600,
-        });
+        return Response.json({ access_token: `at-${String(submitted.length)}`, refresh_token: `refresh-${String(submitted.length)}`, expires_in: 3600 });
       }),
     });
 
     // The second caller starts outside the first's callback: nesting it in the holder's async context would deadlock.
-    const first = store.getAuth(CODEX_CRED_KEY);
+    const first = store.getAuth(CHATGPT_CRED_KEY);
     await midFlight.promise;
-    const second = store.getAuth(CODEX_CRED_KEY);
+    const second = store.getAuth(CHATGPT_CRED_KEY);
     const [firstAuth, waiter] = await Promise.all([first, second]);
 
     expect(submitted).toEqual(['refresh-old']);
     expect(waiter?.headers.Authorization).toBe(firstAuth?.headers.Authorization);
     const saved = v.parse(savedConfigSchema, JSON.parse(readFileSync(configPath, 'utf-8')));
-    expect(saved.providers?.codex?.refreshToken).toBe('refresh-1');
+    expect(saved.providers?.chatgpt?.refreshToken).toBe('refresh-1');
     expect(lstatSync(`${configPath}.lock`, { throwIfNoEntry: false })).toBeUndefined();
   });
 
@@ -116,28 +121,29 @@ describe('createFileOAuthStore', () => {
 
     const intact = JSON.stringify({
       origin: 'https://kinu.example',
-      providers: { openai: { apiKey: 'sk-openai' }, codex: { refreshToken: 'refresh-old' } },
+      providers: { openai: { apiKey: 'sk-openai' }, chatgpt: { refreshToken: 'refresh-old' } },
     }, null, 2);
 
     writeFileSync(configPath, intact.slice(0, -12));
 
     const store = createFileOAuthStore(configPath);
-    expect(() => store.has(CODEX_CRED_KEY)).toThrow();
-    await expect(store.save(CODEX_CRED_KEY, { kind: 'oauth', accessToken: 'a', refreshToken: 'r' })).rejects.toThrow();
+    expect(() => store.has(CHATGPT_CRED_KEY)).toThrow();
+    await expect(store.save(CHATGPT_CRED_KEY, { kind: 'oauth', accessToken: 'a', refreshToken: 'r' })).rejects.toThrow();
     expect(readFileSync(configPath, 'utf-8')).toBe(intact.slice(0, -12));
   });
 
-  test('refreshing one Codex account keeps the other sessions', async () => {
+  test('refreshing one ChatGPT account keeps the other sessions', async () => {
     const dir = scratchDir('oauth-store');
     const configPath = join(dir, 'config.json');
-    const mainToken = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 });
 
     writeFileSync(configPath, `${JSON.stringify({
       providers: {
-        codex: {
-          accessToken: mainToken,
+        chatgpt: {
+          accessToken: 'at-main',
           refreshToken: 'refresh-main',
-          accounts: { work: { accessToken: jwt({ exp: Math.floor(Date.now() / 1000) - 60 }), refreshToken: 'refresh-work' } },
+          expiresAt: Date.now() + 3_600_000,
+          metadata: REGISTRATION,
+          accounts: { work: { accessToken: 'at-work', refreshToken: 'refresh-work', expiresAt: Date.now() - 60_000, metadata: { ...REGISTRATION, clientId: 'oaiapp_work' } } },
         },
       },
     }, null, 2)}\n`);
@@ -148,43 +154,39 @@ describe('createFileOAuthStore', () => {
       fetch: asFetchFunction(async (input, init) => {
         refreshedWith.push(await requestBodyText(input, init));
 
-        return Response.json({
-          access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
-          refresh_token: 'refresh-work-2',
-          expires_in: 3600,
-        });
+        return Response.json({ access_token: 'at-work-2', refresh_token: 'refresh-work-2', expires_in: 3600 });
       }),
     });
 
-    expect(store.keys()).toEqual(['codex.oauth', 'codex.oauth@work']);
-    await store.getAuth('codex.oauth@work');
-    expect(refreshedWith.join(' ')).toContain('refresh-work');
+    expect(store.keys()).toEqual(['chatgpt.oauth', 'chatgpt.oauth@work']);
+    await store.getAuth('chatgpt.oauth@work');
+    expect(refreshedWith.map((body) => new URLSearchParams(body).get('client_id'))).toEqual(['oaiapp_work']);
 
-    const saved = v.parse(v.object({ providers: v.object({ codex: v.object({
+    const saved = v.parse(v.object({ providers: v.object({ chatgpt: v.object({
       accessToken: v.string(), refreshToken: v.string(),
       accounts: v.record(v.string(), v.object({ refreshToken: v.string() })),
     }) }) }), JSON.parse(readFileSync(configPath, 'utf-8')));
 
-    expect(saved.providers.codex.accessToken).toBe(mainToken);
-    expect(saved.providers.codex.refreshToken).toBe('refresh-main');
-    expect(saved.providers.codex.accounts.work?.refreshToken).toBe('refresh-work-2');
+    expect(saved.providers.chatgpt.accessToken).toBe('at-main');
+    expect(saved.providers.chatgpt.refreshToken).toBe('refresh-main');
+    expect(saved.providers.chatgpt.accounts.work?.refreshToken).toBe('refresh-work-2');
   });
 
   test('a config that has never been written reads as empty', async () => {
     const dir = scratchDir('oauth-store');
     const store = createFileOAuthStore(join(dir, 'nested', 'config.json'));
-    expect(store.has(CODEX_CRED_KEY)).toBe(false);
-    await store.save(CODEX_CRED_KEY, { kind: 'oauth', accessToken: 'a', refreshToken: 'r' });
-    expect(store.has(CODEX_CRED_KEY)).toBe(true);
+    expect(store.has(CHATGPT_CRED_KEY)).toBe(false);
+    await store.save(CHATGPT_CRED_KEY, { kind: 'oauth', accessToken: 'a', refreshToken: 'r' });
+    expect(store.has(CHATGPT_CRED_KEY)).toBe(true);
   });
 
-  test('a Claude login near its expiry refreshes as Claude Code does, keeps its sign-in org and leaves Codex alone', async () => {
+  test('a Claude login near its expiry refreshes as Claude Code does, keeps its sign-in org and leaves ChatGPT alone', async () => {
     const configPath = join(scratchDir('oauth-store'), 'config.json');
-    const codex = { accessToken: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }), refreshToken: 'refresh-codex' };
+    const chatgpt = { accessToken: 'at-chatgpt', refreshToken: 'refresh-chatgpt', expiresAt: Date.now() + 3_600_000, metadata: REGISTRATION };
 
     writeFileSync(configPath, `${JSON.stringify({
       providers: {
-        codex,
+        chatgpt,
         claude: {
           accounts: { work: {
             accessToken: 'sk-ant-oat01-old', refreshToken: 'rt-old', expiresAt: Date.now() + 60_000,
@@ -204,7 +206,7 @@ describe('createFileOAuthStore', () => {
       }),
     });
 
-    expect(store.keys()).toEqual(['codex.oauth', 'claude.oauth@work']);
+    expect(store.keys()).toEqual(['chatgpt.oauth', 'claude.oauth@work']);
     const auth = await store.getAuth(`${CLAUDE_CRED_KEY}@work`);
 
     expect(auth).toEqual({ headers: { Authorization: 'Bearer sk-ant-oat01-new' }, credentialKey: 'claude.oauth@work' });
@@ -215,11 +217,11 @@ describe('createFileOAuthStore', () => {
     ]]);
 
     const saved = v.parse(v.object({ providers: v.object({
-      codex: v.object({ refreshToken: v.string() }),
+      chatgpt: v.object({ refreshToken: v.string() }),
       claude: v.object({ accounts: v.object({ work: v.object({ refreshToken: v.string(), metadata: JsonObjectSchema }) }) }),
     }) }), JSON.parse(readFileSync(configPath, 'utf-8')));
 
-    expect(saved.providers.codex.refreshToken).toBe('refresh-codex');
+    expect(saved.providers.chatgpt.refreshToken).toBe('refresh-chatgpt');
     expect(saved.providers.claude.accounts.work).toEqual({ refreshToken: 'rt-new', metadata: { accountUuid: 'acct-1', orgUuid: 'org-1', orgName: 'Team' } });
   });
 
@@ -242,18 +244,11 @@ describe('createFileOAuthStore', () => {
   });
 });
 
-function jwt(payload: JsonObject): string {
-  return [
-    b64url(JSON.stringify({ alg: 'none', typ: 'JWT' })),
-    b64url(JSON.stringify(payload)),
-    'sig',
-  ].join('.');
-}
-
-function b64url(value: string): string {
-  return Buffer.from(value, 'utf-8')
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/g, '');
-}
+/** A ChatGPT plan login's registration as the sign-in saves it. */
+const REGISTRATION = {
+  issuer: 'https://auth.openai.com',
+  subject: 'user-sub',
+  email: 'owner@example.com',
+  clientId: 'oaiapp_issued',
+  scopes: ['chatgpt.tokens.use.direct', 'email', 'offline_access', 'openid', 'profile', 'resource.invoke'],
+};

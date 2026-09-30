@@ -2,7 +2,7 @@
 import { RpcTarget, WorkerEntrypoint, exports } from 'cloudflare:workers';
 import type { UIMessageChunk } from 'ai';
 import * as v from 'valibot';
-import type { AuthRequest, ProgrammaticTurn, ObservedCall, ProviderEnv, WorkMode, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
+import type { AuthRequest, RelayedProvider, ProgrammaticTurn, ObservedCall, ProviderEnv, WorkMode, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace } from './agent-facet/agent-turn';
 import type { AgentReview, AgentToolCall, AgentTrace, AgentTurnEnd } from './agent-facet/protocol';
@@ -62,9 +62,9 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   getAuthHeaders(key: string, opts?: AuthRequest) { return this.answers.getAuthHeaders(key, opts); }
   getCredentialBaseURL(key: string) { return this.answers.getCredentialBaseURL(key); }
   listCredentials() { return this.answers.listCredentials(); }
-  codexRelayDevice() { return this.answers.codexRelayDevice(); }
-  relayCodex(deviceId: string, callId: string, request: Request) { return this.answers.relayCodex(deviceId, callId, request); }
-  cancelCodexRelay(callId: string) { return this.answers.cancelCodexRelay(callId); }
+  relayDevice(provider: RelayedProvider) { return this.answers.relayDevice(provider); }
+  relayModelCall(deviceId: string, callId: string, request: Request) { return this.answers.relayModelCall(deviceId, callId, request); }
+  cancelModelRelay(callId: string) { return this.answers.cancelModelRelay(callId); }
 }
 
 export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps> {
@@ -94,9 +94,9 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   getAuthHeaders(key: string, opts?: AuthRequest) { return this.host().getAuthHeaders(key, opts); }
   getCredentialBaseURL(key: string) { return this.host().getCredentialBaseURL(key); }
   listCredentials() { return this.host().listCredentials(); }
-  codexRelayDevice() { return this.host().codexRelayDevice(); }
-  relayCodex(deviceId: string, callId: string, request: Request) { return this.host().relayCodex(deviceId, callId, request); }
-  cancelCodexRelay(callId: string) { return this.host().cancelCodexRelay(callId); }
+  relayDevice(provider: RelayedProvider) { return this.host().relayDevice(provider); }
+  relayModelCall(deviceId: string, callId: string, request: Request) { return this.host().relayModelCall(deviceId, callId, request); }
+  cancelModelRelay(callId: string) { return this.host().cancelModelRelay(callId); }
 }
 
 const UIChunkSchema = v.custom<UIMessageChunk>((value) => v.is(v.looseObject({ type: v.string() }), value), 'a UI message chunk');

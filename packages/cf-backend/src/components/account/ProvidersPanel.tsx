@@ -9,6 +9,7 @@ import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotic
 import {
   listCredentials, setCredential, deleteCredential,
   codexStatus, startCodexFlow, pollCodexFlow, disconnectCodex, startClaudeSignIn, finishClaudeSignIn,
+  chatgptPlan, signOutChatGpt,
   listAvailableModels, listProviderCatalog, getProfileCatalog, updateProfileCatalog,
   listCloudflareGateways, selectCloudflareGateway,
   listCloudflareAccounts, selectCloudflareAccount,
@@ -23,6 +24,7 @@ import { CardSlot } from "@/components/ui/CardSlot";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { BrandMark, providerBrand } from "@/components/ui/BrandMark";
+import { ChatGptConnect, ChatGptPlanUsage } from "@/components/account/ChatGptConnect";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { renderThrownChain } from '@kinu.run/core/obs';
 import {
@@ -74,13 +76,14 @@ function UnrevokedGrants({ grants, onChanged }: { grants: readonly UnrevokedGran
 export function ProvidersPanel({ returnTo }: { returnTo: string }) {
   const creds = useAsyncResource(listCredentials);
   const codex = useAsyncResource(codexStatus);
+  const chatgpt = useAsyncResource(chatgptPlan);
   const models = useAsyncResource(listAvailableModels);
   const catalog = useAsyncResource(listProviderCatalog);
   const gateways = useAsyncResource(listCloudflareGateways);
   const accounts = useAsyncResource(listCloudflareAccounts);
   const unrevoked = useAsyncResource(listUnrevokedGrants);
 
-  const reads = [creds, codex, models, catalog, gateways, accounts, unrevoked];
+  const reads = [creds, codex, chatgpt, models, catalog, gateways, accounts, unrevoked];
   // Retry re-reads the whole account: mutators invalidate more than their own row.
   const reloadAll = () => { for (const read of reads) read.reload(); };
 
@@ -117,12 +120,35 @@ export function ProvidersPanel({ returnTo }: { returnTo: string }) {
                   </CardSlot>
                   <CardSlot resource={codex.resource} what="your ChatGPT connection" onRetry={reloadAll}>
                     {(status) => (
-                      <ProviderEntry provider="codex" name="ChatGPT (Codex)" method="Device code"
-                        connected={status.connected}
-                        detail={status.accountId === null ? undefined : <>account {status.accountId.slice(0, 8)}…</>}
-                        disconnect={async () => { await disconnectCodex(); }}
-                        onChanged={reloadAll}
-                        connect={<CodexConnect onChanged={reloadAll} />} />
+                      <CardSlot resource={chatgpt.resource} what="your ChatGPT plan" onRetry={reloadAll}>
+                        {(plan) => {
+                          // A machine's own sign-in wins; the Codex device code is the way in without one.
+                          const planSignedIn = plan.status?.signedIn === true;
+                          const codexAccount = status.accountId === null ? undefined : <>account {status.accountId.slice(0, 8)}…</>;
+
+                          return (
+                            <ProviderEntry provider="chatgpt" name="ChatGPT"
+                              method={plan.device === null ? "Device code" : `Sign in with ChatGPT on ${plan.device.label}`}
+                              connected={status.connected || planSignedIn}
+                              detail={planSignedIn ? <>{plan.status?.email ?? 'signed in'} on {plan.device?.label}</> : codexAccount}
+                              disconnect={async () => {
+                                if (!planSignedIn) {
+                                  await disconnectCodex();
+
+                                  return;
+                                }
+
+                                const { unconfirmed } = await signOutChatGpt();
+
+                                if (unconfirmed !== null) alert(`OpenAI did not confirm it revoked the sign-in (${unconfirmed}). Disconnect Kinu under Apps in ChatGPT settings to be sure.`);
+                              }}
+                              onChanged={reloadAll}
+                              connect={<ChatGptConnect plan={plan} legacy={<CodexConnect onChanged={reloadAll} />} onChanged={reloadAll} />}>
+                              {planSignedIn && <ChatGptPlanUsage />}
+                            </ProviderEntry>
+                          );
+                        }}
+                      </CardSlot>
                     )}
                   </CardSlot>
                   <ProviderEntry provider="claude" name="Claude" method="claude.ai sign-in"

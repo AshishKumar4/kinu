@@ -12,7 +12,7 @@ export interface SubscriptionIssuer {
   refresh(credential: OAuthCredential, fetchFn?: typeof fetch): Promise<OAuthCredential>;
 }
 
-export const CODEX_LOGIN_ISSUER: SubscriptionIssuer = {
+const CODEX_LOGIN_ISSUER: SubscriptionIssuer = {
   expiring: (credential) => (credential.expiresAt !== undefined && Date.now() + CODEX_REFRESH_LEAD_SEC * 1_000 >= credential.expiresAt)
     || codexAccessTokenExpiring(credential.accessToken),
   async refresh(credential, fetchFn) {
