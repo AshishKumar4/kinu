@@ -11,6 +11,7 @@ import { AGENT_RPC_ACCESS } from '@kinu.run/core';
 import type { ActorAgent } from './actor-agent';
 import type { OrchestratorAgent } from './orchestrator';
 import type { UserDO } from './user/user-do';
+import { inheritedDescriptor, type RpcSurfaceSubject } from './activation-gate';
 
 /**
  * Names the runtime and SDKs dispatch on a stub. `__unsafe_ensureInitialized` is what `getAgentByName`
@@ -50,10 +51,6 @@ const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
   '_cf_unregisterFacetRun',
 ] as const;
 
-export interface RpcSurfaceSubject {
-  readonly constructor: Function;
-}
-
 /** Every prototype-chain member below `Object.prototype` not shadowed by an own property; the rule
  * workerd implements, pinned by unit-rpc-surface.test.ts. */
 function rpcReachableNames(target: RpcSurfaceSubject): string[] {
@@ -86,17 +83,6 @@ export function sealRpcSurface(instance: RpcSurfaceSubject, surface: readonly st
   }
 }
 
-export function inheritedDescriptor(instance: RpcSurfaceSubject, name: string): PropertyDescriptor | undefined {
-  for (let proto: object | null = Object.getPrototypeOf(instance);
-       proto !== null && proto !== Object.prototype;
-       proto = Object.getPrototypeOf(proto)) {
-    const descriptor = Object.getOwnPropertyDescriptor(proto, name);
-
-    if (descriptor) return descriptor;
-  }
-
-  return undefined;
-}
 
 // `satisfies readonly (keyof X)[]` fails the build on a name that is not a public member.
 
@@ -248,7 +234,7 @@ const ACTOR_AGENT_RPC_SURFACE = [
   'listWorkspaceFiles',
   'missionDebit',
   'missionGuard',
-  'onCredentialsChanged',
+  'onModelSettingsChanged',
   'readWorkspaceFile',
   'receiveSubordinateEvent',
   'recordSubordinateTitle',
@@ -338,8 +324,10 @@ export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [
   ...ORCHESTRATOR_METHODS,
 ];
 
-/** Never gated: `destroyAgent` must work when start throws. */
-const ORCHESTRATOR_STARTLESS: ReadonlySet<string> = new Set(['destroyAgent', 'evalAbortActivation']);
+/** Never gated: `destroyAgent` must work when start throws. `sandboxInUse` reads only what this activation runs, so
+ *  an object its box asks cold answers from its constructor instead of booting its workspace once a minute
+ *  (ironwood-cairn-6dbcb8de, 2026-09-29 18:04-18:18Z: each ask started the object and armed its owed-effect wake). */
+const ORCHESTRATOR_STARTLESS: ReadonlySet<string> = new Set(['destroyAgent', 'evalAbortActivation', 'sandboxInUse']);
 
 export const ORCHESTRATOR_STARTED_RPC: readonly string[] = [
   ...ACTOR_AGENT_RPC_SURFACE,

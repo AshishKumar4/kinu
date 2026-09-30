@@ -1,7 +1,7 @@
 /** @jsxImportSource @opentui/react */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ScrollBoxRenderable, TextareaRenderable } from '@opentui/core';
+import type { KeyEvent, ScrollBoxRenderable, TextareaRenderable } from '@opentui/core';
 import { createTestRenderer } from '@opentui/core/testing';
 import { createRoot, flushSync } from '@opentui/react';
 import { useRef, useState } from 'react';
@@ -301,10 +301,14 @@ describe('grouped workspace navigator', () => {
       await probe.settle();
       expect(probe.frame()).toContain('▾ shop · 2');
       const escape = Promise.withResolvers<void>();
-      probe.renderer.keyInput.once('keypress', (event) => {
-        if (event.name !== 'escape') throw new Error('expected Escape, received ' + event.name);
+
+      const decoded = (event: KeyEvent) => {
+        if (event.name !== 'escape') return;
+        probe.renderer.keyInput.off('keypress', decoded);
         escape.resolve();
-      });
+      };
+
+      probe.renderer.keyInput.on('keypress', decoded);
       probe.mockInput.pressEscape();
       await escape.promise;
       await probe.settle();

@@ -307,6 +307,8 @@ The reconnect snapshot tests call the real RPCs and mount `useKinu` behind the g
 
 Wait for the effect being asserted. A theme control waits for the applied mode, not a fixed number of sleeps. CLI protocol waits are notified by the socket or RPC callback. Daemon waits observe stdout, file changes, process exit or the owning hub's frames. OpenTUI fixtures use the upstream frame and scheduler APIs; rendered text is checked with an independent WCAG contrast calculation, not the theme's own hex values. The flake gate below repeats the real suites without synthetic load.
 
+Escape has a decoder stage before rendering. The keyboard fixture awaits its native key event, then proves that focus returns by typing into the visible composer; visual idle alone does not prove the input was decoded.
+
 ## Flakes
 
 A test that passes and fails on one tree is a flake. A row runs each suite once, so only a repeat can show one.

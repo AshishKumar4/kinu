@@ -141,7 +141,8 @@ test('the store gateway publishes single PUTs and multipart with the meter idle 
           headers['x-probe-length'] = String(bytes.byteLength);
         }
 
-        const response = await runtime.dispatchFetch(`http://s3-devbox-publish.sandbox.internal/BUCKET/boxes/test/${path}`, { method, body: bytes, headers });
+        // The route is rooted at `boxes/test/` (D46): the URL names the key under it.
+        const response = await runtime.dispatchFetch(`http://s3-devbox-publish.sandbox.internal/BUCKET/${path}`, { method, body: bytes, headers });
 
         if (!response.ok) throw new Error(`store gateway ${response.status}: ${await response.text()}`);
 
@@ -203,7 +204,7 @@ test('the bench store gateway flushes an under-threshold operation on success an
         protocolVersion: 1, mode: 'active', routeId: 'devbox-publish', source: storeSource('BACKUP_BUCKET'), keyPrefix: 'boxes/test/', access: 'read-write',
       } }, { BACKUP_BUCKET: bucket, BenchOpCounter: { idFromName() { return 'test'; }, get() { return counter; } } });
       try {
-        return await gateway.fetch(new Request('http://s3-devbox-publish.sandbox.internal/BACKUP_BUCKET/boxes/test/data', {
+        return await gateway.fetch(new Request('http://s3-devbox-publish.sandbox.internal/BACKUP_BUCKET/data', {
           method: 'PUT', headers: { 'content-length': '5' }, body: request.body
         }));
       } catch (error) { return new Response(error.message, { status: 502 }); }

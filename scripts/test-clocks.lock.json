@@ -1,6 +1,6 @@
 {
   "measuredAt": "2026-09-30",
-  "total": 134,
+  "total": 124,
   "files": {
     "packages/cf-backend/tests/helpers/actor-harness.ts": {
       "lap-poll": 1
@@ -97,10 +97,6 @@
     "packages/cli-backend/tests/mcp.test.ts": {
       "clock-compare": 1
     },
-    "packages/cli-backend/tests/runtime-shell.test.ts": {
-      "sleep": 1,
-      "clock-compare": 3
-    },
     "packages/cli-backend/tests/terminal-transition.test.ts": {
       "sleep": 2
     },
@@ -149,16 +145,8 @@
       "sleep": 1
     },
     "packages/pc-agent/tests/daemon.test.js": {
-      "clock-compare": 3,
-      "sleep": 3
-    },
-    "packages/pc-agent/tests/pty-protocol.test.js": {
-      "clock-compare": 1,
-      "sleep": 1
-    },
-    "packages/pc-agent/tests/pty.test.js": {
-      "clock-compare": 1,
-      "sleep": 1
+      "clock-compare": 2,
+      "sleep": 2
     },
     "scripts/bench.test.ts": {
       "sleep": 2

@@ -122,7 +122,8 @@ import { TierIdSchema,
   reasoningEffortOptions,
   BUILTIN_PROFILE_CATALOG, effectiveRoleCatalog,
   changeRoleAsOwner, agentsProfileContext, canonicalConversationId,
-  resolveAgentTurnProfile, resolveModelRoute, resolveRoutingProfile, currentOperationProfile, ownProfileChoices,
+  resolveAgentTurnProfile, resolveModelRoute, completeOnRoute,
+  resolveRoutingProfile, currentOperationProfile, ownProfileChoices,
   type PinnedProfile,
   buildModelCallEvent,
   applyWorkspaceTitle, persistAutoTitle, planWorkspaceTitle, suggestWorkspaceTitle,
@@ -1447,6 +1448,8 @@ export class LocalAgentSession {
       });
     }
 
+    // A local session opens on the owner's command, the one moment here a parked refusal may answer differently.
+    await this.terminal.releaseParked();
     await this.recoverTerminalTransitions();
   }
 
@@ -2141,17 +2144,17 @@ export class LocalAgentSession {
     });
   }
 
-  /** Naming round-trip on the routed `fast` lane; `localRouteLlm` ties route and spend label. */
+  /** Naming round-trip down the `fast` tier's chain, like every fixed-tier call; `localRouteLlm` ties route and
+   *  spend label. */
   private async suggestTitle(mission: string): Promise<string | null> {
-    const profile = await this.routingProfile();
-    const resolution = resolveModelRoute('fast', profile);
+    const route = resolveModelRoute('fast', await this.routingProfile());
+    const resolver = this.modelResolver;
 
-    if (!resolution) return null;
-
-    return suggestWorkspaceTitle(
-      (system, prompt) => this.localRouteLlm(resolution, system).complete(prompt),
-      mission,
-    );
+    return suggestWorkspaceTitle((system, prompt) => completeOnRoute(route, {
+      llm: (resolution) => this.localRouteLlm(resolution, system),
+      ...(resolver !== null && { credentialOf: (spec: string) => resolver.credentialFor(spec) }),
+      refusals: this.rt.refusals,
+    }, prompt), mission);
   }
 
   private agentName(): string {

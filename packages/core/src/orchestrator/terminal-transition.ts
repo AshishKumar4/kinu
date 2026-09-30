@@ -229,9 +229,13 @@ export class TerminalTransitions {
     const prefix = `${TERMINAL_TRANSITION_CALL_ID}:`;
 
     return this.deps.sql<{ present: number }>`
-      SELECT 1 AS present FROM tool_effect_claims
-      WHERE actor_id = ${this.deps.actor.actorId}
-        AND normalized_call_id LIKE ${`${prefix}%`} AND result_json IS NULL LIMIT 1
+      SELECT 1 AS present FROM tool_effect_claims c
+      WHERE c.actor_id = ${this.deps.actor.actorId}
+        AND c.normalized_call_id LIKE ${`${prefix}%`} AND c.result_json IS NULL
+        AND NOT EXISTS (SELECT 1 FROM terminal_effects t
+          WHERE t.actor_id = c.actor_id AND t.status = 'parked'
+            AND t.sequence_id = c.turn_id || '/' || substr(c.normalized_call_id, ${prefix.length + 1}))
+      LIMIT 1
     `.length > 0;
   }
 
@@ -244,6 +248,8 @@ export class TerminalTransitions {
   /** Reads the roster from storage. Never throws: one unrecoverable response must not stop the next. */
   async resumeAll(): Promise<void> {
     for (const transition of this.incomplete()) {
+      if (this.ledger.waitingOnOwner(this.sequenceId(transition))) continue;
+
       // Acquired, not merely checked: startup reconcile and retry wakes interleave, and must not replay one row concurrently.
       if (!this.enter(transition)) continue;
 
@@ -264,7 +270,7 @@ export class TerminalTransitions {
 
   /** Arms the wake without replaying, for a caller that must not await (a fiber-recovery hook runs inside the init gate). {@link resumeAll}'s claim join makes the re-entry safe. */
   async armOwedRecovery(): Promise<void> {
-    const owed = this.incomplete();
+    const owed = this.incomplete().filter((transition) => !this.ledger.waitingOnOwner(this.sequenceId(transition)));
 
     if (owed.length === 0) return;
     // The ledger's own instant when it has one; the base delay otherwise.
@@ -321,6 +327,11 @@ export class TerminalTransitions {
     } catch (refusal) {
       return { armed: false, refusal };
     }
+  }
+
+  async releaseParked(): Promise<void> {
+    if (this.ledger.release() === 0) return;
+    await this.deps.scheduleRetry(this.deps.now());
   }
 
   /** Idempotent: re-arms from what is left. */

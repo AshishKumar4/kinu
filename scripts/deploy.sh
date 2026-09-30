@@ -266,11 +266,8 @@ fi
 # it; `post-publish` after the upload and the smoke test. A gate's row in
 # scripts/ladder.ts declares which, and why it runs alone.
 #
-# Every gate is a plain argv of words — the plan carries no quotes — and
-# `flush_gates` splits it on whitespace; bash expands a glob word against the
-# tree, which is how the UI row's `tests/browser/*-ux.test.ts` reaches its family.
-# Its `--path-ignore-patterns=<suite>` word holds no glob character, so bash
-# passes it through and bun subtracts the suite that is a row of its own.
+# The runner passes each command unchanged to `ladder.ts --gate`; the ladder
+# resolves its argv and globs against the tracked corpus.
 PLAN_PHASE=()
 PLAN_LABEL=()
 PLAN_THREADS=()
@@ -445,10 +442,8 @@ flush_gates() {
 
   local index
   for ((index = 0; index < total; index++)); do
-    # `$cmd` is split on whitespace on purpose: every gate is a plain argv of
-    # words, which is the same assumption scripts/ladder.ts's parse makes and
-    # deploy.test.ts pins by exact string. A quoted argument would mis-split
-    # silently, so refuse it here instead.
+    # The ladder parses plain words without shell quoting, so refuse a command
+    # that could not round-trip through that argv grammar.
     case "${GATE_CMDS[index]}" in
       *\"*|*\'*)
         echo -e "${RED}❌ gate ${index}: '${GATE_CMDS[index]}' carries a quote.${NC}"

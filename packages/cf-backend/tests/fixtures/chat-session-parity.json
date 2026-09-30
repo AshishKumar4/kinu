@@ -1015,7 +1015,7 @@
             },
             {
               "type": "text",
-              "text": "echo:part-one echo:helloPARITY-FOUR-STEER",
+              "text": "echo:helloPARITY-FOUR-STEER",
               "state": "done"
             }
           ]
@@ -2244,7 +2244,6 @@
         "user",
         "assistant",
         "tool",
-        "assistant",
         "user"
       ]
     },
@@ -2274,7 +2273,6 @@
         "user",
         "assistant",
         "tool",
-        "assistant",
         "user",
         "assistant",
         "user"

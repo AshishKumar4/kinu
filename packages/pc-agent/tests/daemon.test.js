@@ -10,6 +10,8 @@ const { scratchDir } = require('../../test-utils/src/scratch');
 
 const { killAndAwaitExit, recordedIn, runToExit } = require('../../test-utils/src/spawn');
 
+const { AwaitedList } = require('@kinu.run/test-utils');
+
 const { afterAll, afterEach, describe, expect, spyOn, test } = require('bun:test');
 
 const fs = require('node:fs');
@@ -71,23 +73,17 @@ afterEach(async () => {
 const RAW = { tier: 'raw', agentHome: '', roots: [] };
 
 function fakeWs() {
-  const frames = [];
+  const recorded = new AwaitedList();
+  const frames = recorded.items;
 
   return {
     frames,
-    send(data) { frames.push(JSON.parse(data)); },
+    send(data) { recorded.push(JSON.parse(data)); },
     /** Await the correlated response for an id (exec resolves async). */
-    async response(id, timeoutMs = 5000) {
-      const t0 = Date.now();
+    async response(id) {
+      await recorded.until((items) => items.some((frame) => frame.id === id));
 
-      for (;;) {
-        const frame = this.frames.find((f) => f.id === id);
-
-        if (frame) return frame;
-
-        if (Date.now() - t0 > timeoutMs) throw new Error(`no response for ${id}`);
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      return frames.find((frame) => frame.id === id);
     },
   };
 }

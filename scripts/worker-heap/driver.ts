@@ -2,7 +2,8 @@
  * The worker beside the built product in `scripts/worker-heap.ts`: it claims and sets up one workspace through
  * the product's own RPC, as the account plane does, so the product isolate's heap is read after a real setup.
  */
-import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
+import { DurableObject } from 'cloudflare:workers';
+import * as v from 'valibot';
 
 /** The product RPC setup calls, as the account plane calls it; the classes live in the built bundle. */
 interface WorkspaceRpc extends Rpc.DurableObjectBranded {
@@ -81,98 +82,115 @@ const HELPER_STEPS = 4;
 const USAGE = `data: ${JSON.stringify({ response: '', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\n`;
 
 /** The product's `AI` binding: each streamed turn answers `answerBytes` of text, and waits while `holding`. */
-export class ScriptedAI extends WorkerEntrypoint {
-  async run(_model: string, inputs: { readonly stream?: boolean; readonly messages?: readonly object[] }): Promise<Response> {
-    model.calls += 1;
+async function scriptedBody(inputs: { readonly stream?: boolean; readonly messages?: readonly object[] }): Promise<string> {
+  model.calls += 1;
 
-    if (inputs.stream !== true) return Response.json({ response: '{"upserts":[],"decay":[]}' });
-    const request = JSON.stringify(inputs);
+  if (inputs.stream !== true) return JSON.stringify({ response: '{"upserts":[],"decay":[]}' });
 
-    // Each character above U+00FF, with the text before it: one of them stores the whole request two bytes each.
-    for (const match of request.matchAll(/[\u{100}-\u{10ffff}]/gu)) model.wide.add(request.slice(Math.max(0, match.index - 48), match.index + 1));
-    model.parked += 1;
-    // Stepping: each call waits until the gate has read the heap at it.
-    const seq = model.stepping ? ++model.arrived : 0;
+  const request = JSON.stringify(inputs);
 
-    // A timer is I/O to the runtime; a bare pending promise would be cancelled as a hung request.
-    while (model.holding || model.released < seq) await scheduler.wait(seq > 0 ? 2 : 20);
-    model.parked -= 1;
+  // Each character above U+00FF, with the text before it: one of them stores the whole request two bytes each.
+  for (const match of request.matchAll(/[\u{100}-\u{10ffff}]/gu)) model.wide.add(request.slice(Math.max(0, match.index - 48), match.index + 1));
+  model.parked += 1;
+  // Stepping: each call waits until the gate has read the heap at it.
+  const seq = model.stepping ? ++model.arrived : 0;
 
-    // Hiring: the root turn hires `hires` task helpers; each helper answers one page and is done.
+  // A timer is I/O to the runtime; a bare pending promise would be cancelled as a hung request.
+  while (model.holding || model.released < seq) await scheduler.wait(seq > 0 ? 2 : 20);
+  model.parked -= 1;
 
-    if (model.hires > 0) {
-      const users = userTexts(inputs.messages ?? []);
-      const messages = inputs.messages ?? [];
-      const root = users.some((text) => text.includes('HIRE-ROOT'));
-      const asked = messages.findLastIndex((message) => 'content' in message && JSON.stringify(message.content).includes('HIRE-ROOT'));
-      const hiring = root && !messages.slice(asked).some((message) => 'role' in message && message.role === 'tool');
+  // Hiring: the root turn hires `hires` task helpers; each helper answers one page and is done.
 
-      if (!root) {
-        const steps = messages.filter((message) => 'role' in message && message.role === 'tool').length;
+  if (model.hires > 0) {
+    const users = userTexts(inputs.messages ?? []);
+    const messages = inputs.messages ?? [];
+    const root = users.some((text) => text.includes('HIRE-ROOT'));
+    const asked = messages.findLastIndex((message) => 'content' in message && JSON.stringify(message.content).includes('HIRE-ROOT'));
+    const hiring = root && !messages.slice(asked).some((message) => 'role' in message && message.role === 'tool');
 
-        const briefed = messages.some((message) => 'role' in message && (message.role === 'system' || message.role === 'user')
-          && 'content' in message && JSON.stringify(message.content).includes('SUB-HELPER'));
+    if (!root) {
+      const steps = messages.filter((message) => 'role' in message && message.role === 'tool').length;
 
-        // Nested: the helper's own hire, held on its first call while the helper and the root wait on it. First call
-        // only: the helper's own later steps carry the mission too, in the runtime context naming its hire.
-        if (model.nest && briefed && steps === 0) {
-          await parkHelper();
+      const briefed = messages.some((message) => 'role' in message && (message.role === 'system' || message.role === 'user')
+        && 'content' in message && JSON.stringify(message.content).includes('SUB-HELPER'));
 
-          return new Response(`data: ${JSON.stringify({ response: 'done' })}\n\n${USAGE}data: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
-        }
+      // Nested: the helper's own hire, held on its first call while the helper and the root wait on it. First call
+      // only: the helper's own later steps carry the mission too, in the runtime context naming its hire.
+      if (model.nest && briefed && steps === 0) {
+        await parkHelper();
 
-        if (model.nest && steps === HELPER_STEPS) {
-          const hire = { id: `sub-${String(model.calls)}`, name: 'agents', arguments: { action: 'hire', role: 'task', lifetime: 'task', mission: 'SUB-HELPER: answer done.' } };
-
-          return new Response(`data: ${JSON.stringify({ response: '', tool_calls: [hire] })}\n\n${USAGE}data: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
-        }
-
-        // Held at its last working step, a helper turn carries its whole transcript into a model call.
-        if (!model.nest && steps === HELPER_STEPS - 1) await parkHelper();
-
-        // A helper works a page per step, with a cheap tool call, then answers in one word.
-        if (steps < HELPER_STEPS) {
-          const page = 'word '.repeat(Math.ceil(model.answerBytes / 5)).slice(0, model.answerBytes);
-          const call = { id: `work-${String(model.calls)}`, name: 'tasks', arguments: { action: 'list' } };
-
-          return new Response(`data: ${JSON.stringify({ response: page, tool_calls: [call] })}\n\n${USAGE}data: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
-        }
-
-        model.helpersAnswered += 1;
-
-        return new Response(`data: ${JSON.stringify({ response: 'done' })}\n\n${USAGE}data: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
+        return `data: ${JSON.stringify({ response: 'done' })}\n\n${USAGE}data: [DONE]\n\n`;
       }
 
-      const calls = hiring
-        ? Array.from({ length: model.hires }, (_, at) => ({ id: `hire-${String(model.calls)}-${String(at)}`, name: 'agents',
-          arguments: { action: 'hire', role: 'task', lifetime: 'task', mission: `Helper ${String(at)}: write one page, then stop.` } }))
-        : [];
+      if (model.nest && steps === HELPER_STEPS) {
+        const hire = { id: `sub-${String(model.calls)}`, name: 'agents', arguments: { action: 'hire', role: 'task', lifetime: 'task', mission: 'SUB-HELPER: answer done.' } };
 
-      return new Response(`data: ${JSON.stringify(calls.length > 0 ? { response: '', tool_calls: calls } : { response: 'done' })}\n\n${USAGE}data: [DONE]\n\n`,
-        { headers: { 'content-type': 'text/event-stream' } });
+        return `data: ${JSON.stringify({ response: '', tool_calls: [hire] })}\n\n${USAGE}data: [DONE]\n\n`;
+      }
+
+      // Held at its last working step, a helper turn carries its whole transcript into a model call.
+      if (!model.nest && steps === HELPER_STEPS - 1) await parkHelper();
+
+      // A helper works a page per step, with a cheap tool call, then answers in one word.
+      if (steps < HELPER_STEPS) {
+        const page = 'word '.repeat(Math.ceil(model.answerBytes / 5)).slice(0, model.answerBytes);
+        const call = { id: `work-${String(model.calls)}`, name: 'tasks', arguments: { action: 'list' } };
+
+        return `data: ${JSON.stringify({ response: page, tool_calls: [call] })}\n\n${USAGE}data: [DONE]\n\n`;
+      }
+
+      model.helpersAnswered += 1;
+
+      return `data: ${JSON.stringify({ response: 'done' })}\n\n${USAGE}data: [DONE]\n\n`;
     }
 
-    if (model.toolSteps > 0) {
-      model.toolSteps -= 1;
-      const call = { id: `step-${String(seq)}`, name: 'file', arguments: JSON.stringify({ action: 'stat', path: '.' }) };
+    const calls = hiring
+      ? Array.from({ length: model.hires }, (_, at) => ({ id: `hire-${String(model.calls)}-${String(at)}`, name: 'agents',
+        arguments: { action: 'hire', role: 'task', lifetime: 'task', mission: `Helper ${String(at)}: write one page, then stop.` } }))
+      : [];
 
-      return new Response(`data: ${JSON.stringify({ response: '', tool_calls: [call] })}\n\ndata: ${JSON.stringify({ response: '', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\ndata: [DONE]\n\n`,
-        { headers: { 'content-type': 'text/event-stream' } });
-    }
-
-    const text = 'word '.repeat(Math.ceil(model.answerBytes / 5)).slice(0, model.answerBytes);
-    const frames = [];
-
-    for (let at = 0; at < text.length; at += 4096) frames.push(`data: ${JSON.stringify({ response: text.slice(at, at + 4096) })}\n\n`);
-    frames.push(`data: ${JSON.stringify({ response: '', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\n`, 'data: [DONE]\n\n');
-
-    return new Response(frames.join(''), { headers: { 'content-type': 'text/event-stream' } });
+    return `data: ${JSON.stringify(calls.length > 0 ? { response: '', tool_calls: calls } : { response: 'done' })}\n\n${USAGE}data: [DONE]\n\n`;
   }
+
+  if (model.toolSteps > 0) {
+    model.toolSteps -= 1;
+    const call = { id: `step-${String(seq)}`, name: 'file', arguments: JSON.stringify({ action: 'stat', path: '.' }) };
+
+    return `data: ${JSON.stringify({ response: '', tool_calls: [call] })}\n\ndata: ${JSON.stringify({ response: '', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\ndata: [DONE]\n\n`;
+  }
+
+  const text = 'word '.repeat(Math.ceil(model.answerBytes / 5)).slice(0, model.answerBytes);
+  const frames = [];
+
+  for (let at = 0; at < text.length; at += 4096) frames.push(`data: ${JSON.stringify({ response: text.slice(at, at + 4096) })}\n\n`);
+  frames.push(`data: ${JSON.stringify({ response: '', usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}\n\n`, 'data: [DONE]\n\n');
+
+  return frames.join('');
 }
+
+async function scriptedAnswer(inputs: Parameters<typeof scriptedBody>[0]): Promise<Response> {
+  if (inputs.stream !== true) return new Response(await scriptedBody(inputs), { headers: { 'content-type': 'application/json' } });
+
+  const encoder = new TextEncoder();
+
+  return new Response(new ReadableStream<Uint8Array>({
+    async start(controller) {
+      controller.enqueue(encoder.encode(': stream opened\n\n'));
+      controller.enqueue(encoder.encode(await scriptedBody(inputs)));
+      controller.close();
+    },
+  }), { headers: { 'content-type': 'text/event-stream' } });
+}
+
+const AIRequestSchema = v.object({
+  inputs: v.looseObject({ stream: v.optional(v.boolean()), messages: v.optional(v.array(v.record(v.string(), v.unknown()))) }),
+});
 
 export default {
   async fetch(request: Request, env: DriverEnv & { readonly HEAP_DRIVER: DurableObjectNamespace<HeapDriver> }): Promise<Response> {
     const url = new URL(request.url);
+
+    if (url.pathname === '/ai') return scriptedAnswer(v.parse(AIRequestSchema, await request.json()).inputs);
     const workspace = url.searchParams.get('workspace') ?? 'heap';
     const driver = env.HEAP_DRIVER.get(env.HEAP_DRIVER.idFromName(workspace));
 
