@@ -7,6 +7,8 @@ export type StoredRow = Readonly<Record<string, SqlStorageValue>>;
 export interface AgentSnapshot {
   readonly identity: StoredRow;
   readonly lineage: readonly StoredRow[];
+  /** The lineage's `actor_config` rows, read here. */
+  readonly config: readonly StoredRow[];
   readonly workspaceName: string;
   readonly installedBuild: string | null;
   readonly artifactDirectory: string;
@@ -99,6 +101,13 @@ export interface AgentTurnEnd extends Omit<HeadReport, 'errorMessage'> {
   readonly errorMessage: string | null;
   readonly narration: string;
   readonly produced?: readonly ModelMessage[];
+}
+
+export interface TurnRequestAt {
+  readonly turnId: string;
+  readonly epoch: number;
+  readonly revision: number;
+  readonly from?: number;
 }
 
 export interface AgentRecovery {

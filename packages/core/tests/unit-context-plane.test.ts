@@ -8,7 +8,7 @@ import { ActorClaimStore, initActorClaimTables, type ActorTurnClaim } from '../s
 import { SessionHistory } from '../src/session/history';
 import type { ContextSelection } from '../src/session/context';
 import type { PendingContextProposal } from '../src/session/proposals';
-import { contextMount } from '../src/vfs/context-plane';
+import { contextMount, localContextTree } from '../src/vfs/context-plane';
 import { withMountTable } from '../src/vfs/mounts';
 import { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { decodeModelMessageValues, encodeModelMessageValues } from '../src/session/message-codec';
@@ -108,7 +108,9 @@ function workspace(): Workspace {
 }
 
 function planeFor(bound: Bound, children?: ChildContextResolver): VFS {
-  return withMountTable(emptyTree(), [contextMount({ stores: () => bound.stores, children })]);
+  return withMountTable(emptyTree(), [contextMount({
+    actorId: bound.handle.actorId, own: () => localContextTree(() => bound.stores, { author: bound.handle.actorId, child: false }), children,
+  })]);
 }
 
 /** Settled history committed straight through the session store. */
@@ -363,7 +365,7 @@ test('an authorized parent edits a child through the child\'s own store; a sibli
 
   const resolver: ChildContextResolver = {
     list: () => ['agent:child'],
-    resolve: (key) => (key === 'agent:child' ? child.stores : null),
+    tree: (key, author) => (key === 'agent:child' ? localContextTree(() => child.stores, { author, child: true }) : null),
   };
 
   const vfs = planeFor(parent, resolver);
@@ -401,7 +403,7 @@ test('a retired actor stops authorising context reads and writes at its own hand
   const claims = new ActorClaimStore(sql, handle, (write) => write(), history);
   const bound: Bound = { handle, claims, history, stores: { claims, events: null } };
 
-  const vfs = withMountTable(emptyTree(), [contextMount({ stores: () => bound.stores })]);
+  const vfs = withMountTable(emptyTree(), [contextMount({ actorId: handle.actorId, own: () => localContextTree(() => bound.stores, { author: handle.actorId, child: false }) })]);
 
   await hydrate(bound, [{ role: 'user', content: 'while live' }]);
   const served = await readText(vfs, '/context/working.jsonl');

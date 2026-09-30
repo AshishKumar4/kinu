@@ -32,7 +32,7 @@ import {
   type SwarmInput,
 } from '../src/strategy/swarm';
 import { createTestRuntime, createTestActors, scriptedTurnModel, type ScriptedTurnResult } from '@kinu.run/test-utils';
-import { makeSqlExec, storesFor } from './helpers';
+import { makeSqlExec, conversationsFor } from './helpers';
 import { createAgentSelfProvider, type AgentSelfHost } from '../src/tools/agent-self';
 
 /** Type block of the `agent.*` codemode namespace as it ships; the host is never called. */
@@ -864,7 +864,7 @@ describe('buildSystemPromptSync', () => {
         const mode = phase === 2 ? 'build' : 'plan';
         const path = `/mode-${subject.actor.name}-${roleId}-${phase}.txt`;
         await subject.storage.vfs.writeFile(path, 'original');
-        const file = buildBuiltinTools({ rt: subject, history: storesFor(subject).history }).file;
+        const file = buildBuiltinTools({ rt: subject, conversations: conversationsFor(subject) }).file;
 
         if (!file) throw new Error('missing file tool');
         const tools: ToolSet = { file };

@@ -27,7 +27,7 @@ import { createTasksCodemodeProvider } from '../src/tools/tasks-codemode';
 import { createDbCodemodeProvider } from '../src/tools/db-codemode';
 import { createWebCodemodeProvider } from '../src/web/provider';
 import { createAgentSelfProvider } from '../src/tools/agent-self';
-import { createTestRuntime, storesFor } from './helpers';
+import { createTestRuntime, conversationsFor } from './helpers';
 
 /**
  * A dependency whose every property is another such double and none of which can be called, so each member takes
@@ -124,7 +124,7 @@ test('a native tool a program calls runs only on input its own schema admits', a
     },
   };
 
-  const native = buildBuiltinTools({ rt: { ...rt, shell }, history: storesFor(rt).history });
+  const native = buildBuiltinTools({ rt: { ...rt, shell }, conversations: conversationsFor(rt) });
   const admitted: string[] = [];
 
   // Every native tool whose schema requires a field is called without it.
@@ -155,7 +155,7 @@ test('every member of every namespace refuses with the one declared Refusal, and
     createSandboxExecutor(),
     createParentExecutor({ handle: refusingDouble() }),
     createDeviceTunnelExecutor(refusingDouble()),
-    { name: CRAFTED_TOOL_NAMESPACE, types: '', tools: nativeToolFunctions(buildBuiltinTools({ rt, history: storesFor(rt).history })) },
+    { name: CRAFTED_TOOL_NAMESPACE, types: '', tools: nativeToolFunctions(buildBuiltinTools({ rt, conversations: conversationsFor(rt) })) },
     createStateCodemodeProvider(refusingDouble()),
     createAgentsCodemodeProvider(() => refusingDouble()),
     createReportCodemodeProvider(() => refusingDouble()),

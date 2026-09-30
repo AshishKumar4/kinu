@@ -9,7 +9,7 @@
 
 import type { Agent, AgentContext } from 'agents';
 import {
-  childContextResolver, createActorHost, defaultLoopOrigin, runEventSinks, EvolutionEngine, EventLog, MissionGovernor,
+  childContextResolver, localContextTree, type ContextEditor, type ContextTree, createActorHost, defaultLoopOrigin, runEventSinks, EvolutionEngine, EventLog, MissionGovernor,
   facetHomeProvisioner, facetHomeReleaser, headAgentName, subordinateAgentName, parseActorKey, actorStateRoot,
   actorScaffoldPath, nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT, type ActorHost,
   type ActorHostDeps, type ActorRetirement, type BoundActor, type ActorHandle, type ActorReference,
@@ -38,6 +38,7 @@ export interface WorkspaceHostSeams {
   currentTurn(reference: ActorReference): string | null;
   /** The root's own runtime: inheriting children read the retained program from it. */
   rootRuntime(): AgentRuntime;
+  contextTree(actorId: string, editor: ContextEditor): ContextTree;
   readonly sql: SqlExecutor;
   /** Positional executor over the same database; the event log and archive reader need it. */
   readonly exec: SqlExec;
@@ -210,14 +211,13 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         })).profile,
         contextPlane: {
           actorId: bound.handle.actorId,
-          claims: () => bound.stores.claims,
-          // Null until the `context_edit` run-event variant exists; see contextEventsFor.
-          events: () => null,
+          own: () => (bound.handle.parentActorId === null
+            ? localContextTree(() => ({ claims: bound.stores.claims, events: contextEventsFor(bound) }), { author: bound.handle.actorId, child: false })
+            : seams.contextTree(bound.handle.actorId, { author: bound.handle.actorId, child: false })),
           children: childContextResolver({
-            host: { bindStores: (reference) => host?.bindStores(reference) ?? bound },
             directory: seams.directory,
             parent: bound.handle,
-            events: (child) => contextEventsFor(child),
+            tree: (child, author) => seams.contextTree(child.actorId, { author, child: true }),
           }),
         },
       };

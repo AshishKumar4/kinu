@@ -1,7 +1,7 @@
 /** Local clamp marker: its advertised remedy, a ranged read of the named path, restores the bytes on any plane. */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { buildBuiltinTools, DEFAULT_TOOL_RESULT_MAX_CHARS } from '@kinu.run/core';
+import { ConversationSearchStore, buildBuiltinTools, DEFAULT_TOOL_RESULT_MAX_CHARS } from '@kinu.run/core';
 import { createCLIRuntime } from '../src/runtime';
 import { present, scratchDir, scratchPath, toolExecute } from '@kinu.run/test-utils';
 import * as v from 'valibot';
@@ -18,7 +18,7 @@ function localRuntime() {
 describe('clamped run output on the local backend', () => {
   test('the marker remedy round-trips: a ranged read restores what the host shell cannot see', async () => {
     const rt = localRuntime();
-    const tools = buildBuiltinTools({ rt, history: rt.stores.history });
+    const tools = buildBuiltinTools({ rt, conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) });
     const run = toolExecute<{ command: string; runtime?: string }, string>(tools.shell);
 
     const clamped = await run({

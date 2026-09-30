@@ -2,13 +2,14 @@
 import { RpcTarget, WorkerEntrypoint, exports } from 'cloudflare:workers';
 import type { UIMessageChunk } from 'ai';
 import * as v from 'valibot';
-import type { AuthRequest, RelayedProvider, ProgrammaticTurn, ObservedCall, ProviderEnv, WorkMode, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
+import { remoteContextTree } from '@kinu.run/core';
+import type { AgentOwnInspection, ArchiveSqlCursor, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ObservedCall, ProviderEnv, WorkMode, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace } from './agent-facet/agent-turn';
-import type { AgentReview, AgentToolCall, AgentTrace, AgentTurnEnd } from './agent-facet/protocol';
+import type { AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, AgentTurnEnd, TurnRequestAt } from './agent-facet/protocol';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
-import type { AgentFacet, AgentFacetEnv } from './agent-facet/agent-facet';
+import type { AgentFacet, AgentFacetCalls, AgentFacetEnv } from './agent-facet/agent-facet';
 
 export const AGENT_BUNDLE_DIRECTORY = '/_agent';
 
@@ -66,7 +67,36 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   relayModelCall(deviceId: string, callId: string, request: Request) { return this.answers.relayModelCall(deviceId, callId, request); }
   cancelModelRelay(callId: string) { return this.answers.cancelModelRelay(callId); }
   forwardCodex(callId: string, request: Request) { return this.answers.forwardCodex(callId, request); }
+  sayToParent(signal: AgentSignal) { return this.answers.sayToParent(signal); }
   cancelCodex(callId: string) { return this.answers.cancelCodex(callId); }
+}
+
+/** One agent's own stores, in its isolate (D9). */
+export class AgentStoreBroker {
+  constructor(private readonly calls: () => Promise<AgentFacetCalls>, private readonly snapshot: () => AgentSnapshot) {}
+
+  async history(limit?: number) { return await (await this.calls()).history(this.snapshot(), limit); }
+  async historyPage(page: PositionPageRequest) { return await (await this.calls()).historyPage(this.snapshot(), page); }
+  async admitted(id: string) { return await (await this.calls()).admitted(this.snapshot(), id); }
+  async inspect(request: AgentOwnInspection) { return await (await this.calls()).inspect(this.snapshot(), request); }
+  async inheritedContext() { return await (await this.calls()).inheritedContext(this.snapshot()); }
+  async workingContext() { return await (await this.calls()).workingContext(this.snapshot()); }
+  async turnRequests(turnId: string) { return await (await this.calls()).turnRequests(this.snapshot(), turnId); }
+  async turnRequest(at: TurnRequestAt) { return await (await this.calls()).turnRequest(this.snapshot(), at); }
+  async archivePage(cursor: ArchiveSqlCursor | null, maxBytes: number) { return await (await this.calls()).archivePage(this.snapshot(), cursor, maxBytes); }
+  async spend(steps: readonly StepSpendSource[]) { return await (await this.calls()).spend(this.snapshot(), steps); }
+
+  contextTree(editor: ContextEditor): ContextTree {
+    return remoteContextTree(async () => await (await this.calls()).context(this.snapshot(), editor));
+  }
+
+  conversations(): ConversationRecall {
+    return {
+      search: async (query, limit) => await (await this.calls()).searchConversations(this.snapshot(), query, limit),
+      scroll: async (around, window, maxChars) => await (await this.calls()).scrollConversation(this.snapshot(), around, window, maxChars),
+      browse: async (limit) => await (await this.calls()).browseConversations(this.snapshot(), limit),
+    };
+  }
 }
 
 export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps> {
@@ -100,6 +130,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   relayModelCall(deviceId: string, callId: string, request: Request) { return this.host().relayModelCall(deviceId, callId, request); }
   cancelModelRelay(callId: string) { return this.host().cancelModelRelay(callId); }
   forwardCodex(callId: string, request: Request) { return this.host().forwardCodex(callId, request); }
+  sayToParent(signal: AgentSignal) { return this.host().sayToParent(signal); }
   cancelCodex(callId: string) { return this.host().cancelCodex(callId); }
 }
 

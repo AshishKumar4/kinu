@@ -24,7 +24,7 @@ import * as v from 'valibot';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime';
 import { makeSql, makeExecRaw, makeWorkspaceSchemaSql, createCLIRuntime, type CLIRuntime } from '../src/runtime';
 import { createHeadRuntime, headSeatFactory, localTestActorHost } from './actor-fixture';
-import { openLocalActor } from '@kinu.run/core';
+import { ConversationSearchStore, openLocalActor } from '@kinu.run/core';
 import { LocalAgentSession } from '../src/local-session';
 
 // A head owns no store: its rows are actor-keyed in the parent's one database.
@@ -574,8 +574,8 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
 
     const tools = buildHeadToolSet({
       input: aHeadInput(), capture, rt,
-      history: createAgentStores(() => rt.storage.sql, () => rt.actor, rt.storage.transactionSync,
-        async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor/.kinu/context' })).history,
+      conversations: new ConversationSearchStore(rt.storage.sql, rt.actor, (sessionId) => createAgentStores(() => rt.storage.sql, () => rt.actor,
+        rt.storage.transactionSync, async () => ({ vfs: rt.storage.vfs, artifactDirectory: '/actor/.kinu/context' })).history.transcript(sessionId)),
       codemodeTool: { description: 'x', inputSchema: {}, execute: async () => ({ result: 'unused' }) },
       webSearch: stubWeb,
       split: async () => ({ narrative: '', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0 }),

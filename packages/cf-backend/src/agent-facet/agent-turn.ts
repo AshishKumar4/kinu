@@ -3,7 +3,7 @@ import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessageChunk 
 import {
   CHAT_SESSION_ID, HeadCapture, decodeJsonValue, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan,
   type AuthRequest, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type ObservedCall, type ProviderEnv, type WorkMode,
-  type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind,
+  type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
 } from '@kinu.run/core';
 import { attempt, diagnostics, renderCauseChain, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
@@ -38,6 +38,7 @@ export interface AgentWorkspace {
   relayModelCall(deviceId: string, callId: string, request: Request): Promise<Response>;
   cancelModelRelay(callId: string): Promise<void>;
   forwardCodex(callId: string, request: Request): Promise<Response>;
+  sayToParent(signal: AgentSignal): Promise<SendOutcome>;
   cancelCodex(callId: string): Promise<void>;
 }
 

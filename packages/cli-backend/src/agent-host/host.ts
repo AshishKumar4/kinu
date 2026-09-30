@@ -20,7 +20,7 @@ import {
   actorReferenceOf,
   subordinateDescendants,
   canonicalConversationId,
-  childContextResolver,
+  childContextResolver, hostedChildTree,
   createActorHost,
   createLocalPeerEndpoint,
   defaultLoopOrigin,
@@ -683,10 +683,9 @@ export class LocalAgentHost {
     // The roster needs the session's broadcast, so deps are installed right after construction, before any turn.
     entry.session.setTeam(this.buildTeam(entry));
     input.ws.rt.setChildContext?.(childContextResolver({
-      host: input.tree.host,
       directory: input.tree.directory,
       parent: input.actor.handle,
-      events: (child) => child.stores.eventRecorder,
+      tree: hostedChildTree(input.tree.host, (child) => child.stores.eventRecorder),
     }));
     // Consulted before every turn, so an interactive process takes the lease at a turn boundary.
     // A closed host refuses: a turn continuation can outlive close(), which already closed the handle.

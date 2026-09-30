@@ -26,10 +26,6 @@ export class AgentOpenTurns {
     void this.sql`DELETE FROM agent_open_turns WHERE actor_id = ${turn.actorId} AND turn_id = ${turn.turnId}`;
   }
 
-  any(): boolean {
-    return this.sql<{ one: number }>`SELECT 1 AS one FROM agent_open_turns LIMIT 1`.length > 0;
-  }
-
   /** Opened before `before`: an earlier activation handed them out, and no end reached this one. */
   openedBefore(before: number): readonly AgentOpenTurn[] {
     return this.sql<{ actor_id: string; turn_id: string }>`

@@ -41,7 +41,7 @@ export function spawnSeatedHead(input: HeadInput, deps: SeatedHeadDeps): Spawned
       clock: REAL_CLOCK,
       model,
       tools: buildHeadToolSet({
-        input, capture, rt: seat.actor.runtime, history: seat.actor.stores.history,
+        input, capture, rt: seat.actor.runtime, conversations: seat.conversations,
         codemodeTool: deps.codemodeTool(seat), webSearch: deps.webSearch, split: deps.split(seat, input),
       }),
       capture,

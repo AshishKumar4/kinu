@@ -17,7 +17,7 @@ import {
   type JsonValue,
   type PlanEdit,
 } from '../src/index';
-import { createTestRuntime, makeExecRaw, makeSql, storesFor } from './helpers';
+import { createTestRuntime, makeExecRaw, makeSql, conversationsFor } from './helpers';
 
 describe('plan edit contract', () => {
   test('writes the initial full plan and applies later edits against pre-edit line numbers', () => {
@@ -279,13 +279,13 @@ describe('the plan lock holds only its own thread', () => {
 describe('submit_plan native tool', () => {
   test('exists only when a plan-mode submit dependency is wired', async () => {
     const { rt } = createTestRuntime();
-    expect(buildBuiltinTools({ rt, history: storesFor(rt).history }).submit_plan).toBeUndefined();
+    expect(buildBuiltinTools({ rt, conversations: conversationsFor(rt) }).submit_plan).toBeUndefined();
 
     const received: Array<readonly PlanEdit[]> = [];
 
     const tools = buildBuiltinTools({
       rt,
-      history: storesFor(rt).history,
+      conversations: conversationsFor(rt),
       submitPlan: {
         submit: (edits) => {
           received.push([...edits]);

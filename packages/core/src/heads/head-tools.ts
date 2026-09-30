@@ -11,7 +11,7 @@ import { buildToolSurface } from '../tools/builtins';
 import { buildHeadAccumulatorTools, HeadCapture, withHeadCaptureRecording } from './head-inference';
 import { HEAD_BUILTIN_TOOLS, MERGE_STRATEGIES } from './types';
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { SessionHistory } from '../session/history';
+import type { ConversationRecall } from '../memory/conversation-search';
 import type { Decision, HeadId, HeadInput, MergeStrategy } from './types';
 import type { WebSearchProvider } from '../web/index';
 import { permitInPlan } from '../execution/work-mode';
@@ -37,7 +37,7 @@ export interface HeadToolDeps {
   /** Backs `shell`, `file`, and eval; the file topology reaches the prompt separately. */
   rt: AgentRuntime;
   /** The builtin factory builds the whole surface and narrows it afterwards, so its deps are whole. */
-  history: SessionHistory;
+  conversations: ConversationRecall;
   /** Pre-built `eval` (codemode differs per platform). A function receives the finished head surface and its result replaces `eval`. */
   codemodeTool: unknown;
   webSearch: WebSearchProvider;
@@ -99,7 +99,7 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
 
   return buildToolSurface({
     rt: deps.rt,
-    history: deps.history,
+    conversations: deps.conversations,
     workMode: input.mode,
     webSearch: deps.webSearch,
     admitted: HEAD_BUILTIN_TOOLS,

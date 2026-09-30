@@ -8,7 +8,7 @@ import { makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import {
-  createActorHost, childContextResolver, recoverActorTurns,
+  createActorHost, childContextResolver, hostedChildTree, recoverActorTurns,
   type ActorHost, type BoundActor,
 } from '../src/state/actor-host';
 import { initEventsHubTables, EventLog } from '../src/events/hub/index';
@@ -680,17 +680,14 @@ describe('one workspace database, many logical actors', () => {
     await fx.host.acquire(a);
 
     const resolver = childContextResolver({
-      host: fx.host, directory: fx.directory, parent: fx.directory.open(fx.main.actorId),
+      directory: fx.directory, parent: fx.directory.open(fx.main.actorId),
       // The child's own recorder: an edit to a child's context is recorded against the child.
-      events: () => null,
+      tree: hostedChildTree(fx.host, () => null),
     });
 
     const storageKey = fx.host.describe(a.actorId)?.storageKey ?? '';
     expect(resolver.list()).toContain(storageKey);
-    expect(resolver.resolve(storageKey)?.claims.actorId).toBe(a.actorId);
-    expect(resolver.resolve('not-a-child')).toBeNull();
-    // Bound to the child's handle, so the same fence refuses it.
-    const child = resolver.resolve(storageKey);
-    expect(child?.claims).toBeDefined();
+    expect(String(await resolver.tree(storageKey, fx.main.actorId)?.readFile('/working.jsonl'))).toContain(a.actorId);
+    expect(resolver.tree('not-a-child', fx.main.actorId)).toBeNull();
   });
 });

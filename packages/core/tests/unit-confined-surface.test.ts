@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { scriptedTurnModel, toolExecute, unobservedSpend } from '@kinu.run/test-utils';
-import { createTestRuntime, storesFor } from './helpers';
+import { createTestRuntime, conversationsFor } from './helpers';
 import { hostedSeatsOver } from './helpers-actor-host';
 import { createRecordingLogger } from '../src/obs/index';
 import { HeadCapture } from '../src/heads/head-inference';
@@ -97,7 +97,7 @@ describe('head function-form eval resolves over the allowed surface', () => {
     };
 
     const tools = buildHeadToolSet({
-      history: storesFor(rt).history,
+      conversations: conversationsFor(rt),
       input: headInput({ allowedTools: allowed }),
       capture: new HeadCapture(),
       rt,
@@ -128,7 +128,7 @@ describe('head function-form eval resolves over the allowed surface', () => {
     };
 
     const tools = buildHeadToolSet({
-      history: storesFor(rt).history,
+      conversations: conversationsFor(rt),
       input: headInput({ allowedTools: ['shell'] }),
       capture: new HeadCapture(),
       rt,
@@ -146,7 +146,7 @@ describe('head function-form eval resolves over the allowed surface', () => {
     const { rt } = createTestRuntime();
 
     const tools = buildHeadToolSet({
-      history: storesFor(rt).history,
+      conversations: conversationsFor(rt),
       input: headInput(),
       capture: new HeadCapture(),
       rt,

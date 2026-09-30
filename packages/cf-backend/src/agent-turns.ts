@@ -57,6 +57,10 @@ async function describe(tools: ToolSet): Promise<AgentToolDescriptor[]> {
 export class AgentTurns {
   private readonly pending = new Map<string, PendingTurn>();
 
+  out(): boolean {
+    return [...this.pending.values()].some((pending) => pending.delivered && !pending.over);
+  }
+
   constructor(private readonly deps: AgentTurnsDeps) {}
 
   start(reference: ActorReference, request: HostedTurnRequest, task: AgentTask, hooks: AgentTurnHooks): Promise<void> {

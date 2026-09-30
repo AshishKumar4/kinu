@@ -19,7 +19,7 @@ import {
   currentDateForPrompt, isBuiltinToolName, JsonObjectSchema,
   projectJsonValue, failedToolOutcome, TaskListStore,
   BUILTIN_PROFILE_CATALOG, profileCatalogDigest, resolveAgentTurnProfile,
-  WORKSPACE_RUN_ID,
+  WORKSPACE_RUN_ID, ConversationSearchStore,
 } from '../../packages/core/src/index';
 import { renderThrownChain } from '../../packages/core/src/obs/index';
 import {
@@ -149,13 +149,13 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
 
   const tools = buildActorTools({
     rt,
-    history: rt.stores.history,
+    conversations: new ConversationSearchStore(sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)),
     craftedToolExecute: createNodeCraftedExecute(),
     codemode: createNodeCodemodeToolFactory({
       extraProviders: [
         createAgentsCodemodeProvider(() => agents),
         web(),
-        createMemoryCodemodeProvider(() => ({ memory: rt.memory, facts, sql, actor: rt.actor, transcriptFor: (sessionId) => rt.stores.history.transcript(sessionId) })),
+        createMemoryCodemodeProvider(() => ({ memory: rt.memory, facts, actor: rt.actor, conversations: new ConversationSearchStore(sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)) })),
         createTasksCodemodeProvider(taskList, config),
       ],
     }),
