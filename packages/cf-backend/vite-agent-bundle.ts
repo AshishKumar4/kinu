@@ -2,7 +2,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { builtinModules } from 'node:module';
 import { dirname, resolve } from 'node:path';
-import { buildSync } from 'esbuild';
+import { buildSync, stop } from 'esbuild';
 import type { Plugin } from 'vite';
 import { unstable_readConfig } from 'wrangler';
 import * as v from 'valibot';
@@ -40,11 +40,13 @@ export function agentBundle(): Plugin {
 
   return {
     name: 'kinu:agent-bundle',
-    buildStart() {
+    async buildStart() {
       if (built) return;
       mkdirSync(dirname(AGENT_BUNDLE_OUTPUT), { recursive: true });
       writeFileSync(AGENT_BUNDLE_OUTPUT, buildAgentBundle());
       writeFileSync(resolve(dirname(AGENT_BUNDLE_OUTPUT), 'compatibility.json'), JSON.stringify(workerCompatibility));
+      // buildSync leaves esbuild's service process running for the life of the process that ran the build.
+      await stop();
       built = true;
     },
   };

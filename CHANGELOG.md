@@ -39,6 +39,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- The CI job's time cap fits the whole CI tier on a hosted runner (about 28 minutes when every row is green) plus one row's silence bound; the old 25-minute cap cancelled the first all-green run.
+- Devbox test images build on the host's network, so a build step no longer adds a host interface that makes a concurrent browser row's Chrome fail its module loads with net::ERR_NETWORK_CHANGED. A gallery wait on a page whose app script never loaded now ends at once, naming the script requests that failed, instead of waiting out the row's silence bound.
 - Every GitHub workflow installs Bun from the package manager version in `package.json`, keeping image bundles and the local compiler on the same pinned toolchain.
 - Concurrent CI reports wait for their full output to drain before returning a verdict, preserving the failure beyond the pipe's first 64 KiB. Typecheck coverage still enforces actual missing/stale membership and debt; duplicate lists of those declarations no longer pin a second copy.
 - Test hygiene now follows source paths held in constants and checks reconnect snapshots through real RPCs and the mounted client. Cosmetic prose, stylesheet and artwork pins are removed; public pages are checked for working local resources and theme preferences.
@@ -46,7 +48,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 - The deploy wave collects a gate that completed before Bash's next wait. Its cached exit status releases the gate's resource credits and still stops the deploy on failure.
 - File planes now use Nimbus 0.13's own VFS types, byte bodies and directory entries. Missing paths, including missing parents, return null from stat and are reported as missing by the file tool. Unavailable mounts and stopped containers retain their own refusals; permission and transport errors are not mistaken for absence.
 - Release CI fixtures record the opaque ladder row the deploy passes to its gate runner, rather than expanding it again in a locale-dependent shell. The device sandbox's GPU observer accepts a machine with no GPU nodes while still checking every node present.
-- The built-Worker heap probe uses the deployment's asset directory and native Workers AI transport. Its parked call receives SSE headers before waiting for tokens; the measured pre-header request cost is recorded separately, with all heap bounds unchanged.
+- The built-Worker heap probe uses the deployment's asset directory and native Workers AI transport. Its parked call receives SSE headers before waiting for tokens, and the step is read only once the product reports the stream's first byte, so a loaded runner cannot read it before its headers arrive; the measured pre-header request cost is recorded separately, with all heap bounds unchanged.
 - CLI distribution tests generate their own release signing key in a throwaway home. CI needs no deployment key.
 - Swarm heads, nodes and steer branches now run their model loops in the same isolated agent facets as hired and background agents. Their turn state stays in each facet's database; tools, search state and the file plane stay in the workspace. Retired task histories remain available to export until their parent is deleted.
 - Workerd product probes share the production Worker's entrypoint exports, so eval and scaffold programs can reach `CodemodeLauncher` rather than leaving background turns hung.

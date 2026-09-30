@@ -1089,6 +1089,32 @@ completions by pid, and restricts `wait -n` to the tracked wave. If every child
 finishes between that read and the wait, a tracked pid still yields its cached
 status. No new process, timer, timeout or resource budget governs a gate.
 
+L14. A test's `docker build` runs its steps on the host's network, and a
+gallery wait on a page whose app script never ran ends at once. Decided
+2026-09-30. CI runs 36692757065, 36695091265 and 36742984678 each killed a
+browser row after 480 s on a blank gallery page: `readyState` complete, 98
+elements, the root empty, and in the last run the page's queued modules failed
+with net::ERR_NETWORK_CHANGED. Each page opened while the devbox row beside it
+ran an uncached image build: the first block-image build, or the
+workspace-mount-contract fixture build. On the runner every step of those
+builds executes. A step on Docker's default bridge adds a veth to the host, and
+the veth's IPv6 link-local address is an address change: Chrome flushes its
+socket pools, and each request still queued for one of its six connections to
+the host fails. Measured on this workstation with Docker 29.5.1, a page whose
+entry imports twelve held modules: a five-second `RUN sleep 5` build on the
+bridge failed the six queued ones with net::ERR_NETWORK_CHANGED and left the
+root empty, three times of three. The same build with `--network=host` failed
+none, twice of twice, and `ip monitor` saw two address events against zero.
+`docker run --network=none`, which the suites use for their containers, adds
+no interface. So the one build helper (`packages/devbox/tests/support/
+docker-build.ts`) builds on the host's network, and the steps still fetch what
+they install. The gallery harness records script failures as product-flows
+does (`scripts/script-failures.ts`). A selector or function wait races the
+page showing that the app script failed to load while the root holds nothing,
+and ends naming the failed requests. The live-app harness reloads a page once
+when only net::ERR_NETWORK_CHANGED failed it, because a deploy host's containers
+are not the run's. The gallery reloads nothing: the change was this tier's own.
+
 ## Providers
 
 P1. The ChatGPT plan is Sign in with ChatGPT's open-source token sharing

@@ -44,7 +44,9 @@ export const STEP_LIVE_BOUND_BYTES = 5_500_000;
  * live, including two serialized requests (2,466,160 and 2,466,104 bytes). The platform's
  * `cloudflare-internal:ai-api.#generateFetch` holds its inputs JSON until HTTP headers arrive; the product's
  * retry frame holds init.body until it can read the response status. A snapshot after SSE headers found neither
- * serialized request nor a live #generateFetch frame; the mid-stream step's measured delta was -0.1 MB. Bound unchanged. */
+ * serialized request nor a live #generateFetch frame; the mid-stream step's measured delta was -0.1 MB. Bound unchanged.
+ * So the step is read once the product reports the answer's first byte, not at the driver's park: on 2026-09-30 a
+ * loaded CI tier read the park before the headers arrived and found 7.1 MB. */
 
 /** Measured 2026-09-27 at {@link HEADS}: 7.7 MB on main 20cacf3423, every released head's runtime held by the
  *  workspace's mount table; 1.1 MB once release unmounts it: Nimbus's inode cache of the homes still on disk and
@@ -295,6 +297,10 @@ export async function measure(): Promise<HeapMeasurement> {
 
   let driver: Awaited<ReturnType<Miniflare['getWorker']>>;
 
+  // The product's own reports that a streamed answer's first byte arrived, counted: only then are its response
+  // headers in. The driver's park starts before they leave it.
+  let firstBytes = 0;
+
   // A native Ai binding transports cancellation to this local backend; an RPC fake cannot transport a facet's signal.
   const ai = await workersAiBinding((request) => driver.fetch('http://driver.invalid/ai', {
     method: request.method, body: request.body, signal: request.signal,
@@ -302,6 +308,13 @@ export async function measure(): Promise<HeapMeasurement> {
 
   const mf = new Miniflare(convertV4MiniflareOptions({
     inspectorPort: port,
+    // Miniflare's default handler, printing every line as it would, plus the count above.
+    handleStructuredLogs: ({ level, message }) => {
+      if (message.includes('"event":"workers_ai.direct_stream_first_byte"')) firstBytes += 1;
+
+      if (level === 'error' || level === 'warn') console.error(message);
+      else console.log(message);
+    },
     workers: [{
       name: 'kinu', ...compat, modulesRoot: DIST, modules: await productModules(), workerLoaders: { LOADER: {} },
       bindings: { ...wrangler.vars, CREDENTIAL_ENCRYPTION_KEY: key },
@@ -346,12 +359,15 @@ export async function measure(): Promise<HeapMeasurement> {
 
       for (let turn = 0; turn < STEP.turns; turn++) await ask(`/turn?workspace=heap&text=turn-${String(turn)}`);
       const idle = await inspector.liveHeap();
+      const answered = firstBytes;
       await ask(`/model?answerBytes=${String(STEP.answerBytes)}&holding=1`);
       const parked = ask('/turn?workspace=heap&text=parked');
       const waiting = v.object({ parked: v.number(), wide: v.array(v.string()) });
 
-      // Each poll is a request to the driver, which answers only once the product's model call is parked.
-      while (v.parse(waiting, JSON.parse(await ask(`/model?answerBytes=${String(STEP.answerBytes)}&holding=1`))).parked === 0) {
+      // Parked mid-stream: the driver holds the call, and the product has read the answer's first byte. Read at the
+      // park alone, a loaded CI tier caught the step before its headers, holding the pre-header cost (2026-09-30).
+      while (firstBytes === answered
+        || v.parse(waiting, JSON.parse(await ask(`/model?answerBytes=${String(STEP.answerBytes)}&holding=1`))).parked === 0) {
         await Bun.sleep(20);
       }
 

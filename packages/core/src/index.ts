@@ -1642,6 +1642,8 @@ export {
   type PanelAgent, type AgentCategory, type AgentActivity, type AgentOpening,
 } from './read-models/workspace-agents';
 
+export type { AgentFigures } from './read-models/agent-figures';
+
 export type { WorkspaceWork, OwnedPlan, OwnedTask, WorkspaceWorkOwner } from './read-models/workspace-work';
 
 export {
@@ -2294,7 +2296,7 @@ export {
   type SlateSurfaceKind,
   type SurfaceContent,
   type SurfaceKind,
-  ACTIVITY_SURFACE, AGENTS_SURFACE,
+  ACTIVITY_SURFACE,
   SLATE_PREFIX,
   SURFACES,
   landedSurface,

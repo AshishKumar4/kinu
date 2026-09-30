@@ -20,6 +20,7 @@ import { HistoryReserve, historyBoundaryError, useReservedScroll } from "@/hooks
 import { useConversationUiState, usePlanApprovedMode } from "@/hooks/use-conversation-ui-state";
 import { useSteerActions } from "@/hooks/use-steer-actions";
 import { useWorkspaceRoster } from "@/hooks/use-workspace-roster";
+import { useAgentsNav } from "@/hooks/use-agents-nav";
 import { usePendingAttachments } from "@/hooks/use-pending-attachments";
 import { useFileDrop } from "@/hooks/use-file-drop";
 import { touchWorkspace } from "@/lib/user-api";
@@ -37,7 +38,7 @@ import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import type { ChangesFocus } from "@/components/surfaces/ChangesSurface";
 import { SlateInlineContext } from "@/components/slates/context";
 import { ChatSlates } from "@/components/slates/InlineSlate";
-import { AGENTS_SURFACE, SLATE_PREFIX, agentActive, type ForkNode, type PanelAgent, type SurfaceKind } from "@kinu.run/core";
+import { SLATE_PREFIX, agentActive, type ForkNode, type PanelAgent, type SurfaceKind } from "@kinu.run/core";
 import { ViewOnlyBar } from "@/components/ViewOnlyBar";
 import { NodeTranscript } from "@/components/NodeTranscript";
 import { ConversationStartBoundary, HistoryBoundary } from "@/components/surfaces/shared";
@@ -365,6 +366,11 @@ function SwarmNodeColumn({ main, ownerPath, runId, nodeId, agent }: {
   );
 }
 
+const MAIN_AGENT: PanelAgent = {
+  key: "main", label: "Main", category: "main", activity: "idle", parent: null,
+  open: { kind: "chat", path: null }, tab: true, input: true, figures: { activeMs: 0, cacheEma: null },
+};
+
 function useAgentsPanel({ listed, live, workspace = "", node, subName, workbench }: {
   listed: readonly PanelAgent[] | null;
   live: boolean;
@@ -375,10 +381,11 @@ function useAgentsPanel({ listed, live, workspace = "", node, subName, workbench
 }) {
   const navigate = useNavigate();
 
-  const agents = useMemo((): readonly PanelAgent[] => [{
-    key: "main", label: "Main", category: "main", activity: live ? "working" : "idle", parent: null,
-    open: { kind: "chat", path: null }, tab: true, input: true,
-  }, ...listed ?? []], [listed, live]);
+  const agents = useMemo((): readonly PanelAgent[] => {
+    const main = listed?.find((agent) => agent.category === "main") ?? MAIN_AGENT;
+
+    return [{ ...main, activity: live ? "working" : main.activity }, ...(listed ?? []).filter((agent) => agent.category !== "main")];
+  }, [listed, live]);
 
   const shownAgent = useMemo(() => shownPanelAgent(agents, node, subName), [agents, node, subName]);
 
@@ -387,11 +394,14 @@ function useAgentsPanel({ listed, live, workspace = "", node, subName, workbench
     workbench.current?.showChat();
   }), [navigate, workspace, workbench]);
 
+  const shown = shownAgent?.key ?? null;
+  const panel = useMemo(() => ({ list: agents, shown, open }), [agents, shown, open]);
+
   return {
     shownAgent,
     rosterLoaded: listed !== null,
     hiddenActive: agents.filter((agent) => agentActive(agent) && !agent.tab).length,
-    panel: { list: agents, shown: shownAgent?.key ?? null, open },
+    panel,
   };
 }
 
@@ -721,6 +731,12 @@ export default function WorkspacePage() {
   const workbench = useRef<WorkbenchHandle | null>(null);
 
   const { shownAgent, rosterLoaded, hiddenActive, panel: agentsPanel } = useAgentsPanel({ listed: state.workspaceAgents, live, workspace: agentId, node: shownNode, subName, workbench });
+  const agentsNav = useAgentsNav();
+  const { publish } = agentsNav;
+
+  useEffect(() => {
+    if (agentId !== undefined) publish({ workspace: agentId, ...agentsPanel });
+  }, [agentId, agentsPanel, publish]);
 
   // A surface opened from the chat, a note or a landing is brought into view; a collapsed inspector or a phone
   // showing the chat would hide it.
@@ -1045,7 +1061,8 @@ export default function WorkspacePage() {
               onDismiss={(name, keepHistory) => state.dismissSubordinate(name, keepHistory).then(() => {})}
               onRename={(name, displayName) => state.renameSubordinate(name, displayName).then((entry) => entry.displayName)}
               trailing={<>
-                <button type="button" onClick={() => show(AGENTS_SURFACE)} data-agents-counter
+                <button type="button" onClick={() => agentsNav.enter(agentId ?? "")} data-agents-counter ref={agentsNav.trigger}
+                  aria-pressed={agentsNav.drilled === agentId}
                   aria-label={hiddenActive === 0 ? "Agents" : `Agents: ${hiddenActive} active without a tab`}
                   title="Every agent in this workspace"
                   className="relative flex size-7 items-center justify-center rounded-md p-text-2 transition-colors hover:bg-[var(--c-elevated)] hover:p-text focus-visible:bg-[var(--c-elevated)]">
@@ -1220,7 +1237,10 @@ export default function WorkspacePage() {
             changesFocus={changesFocus}
             planOwner={planOwnerName(subName, agentId)}
             workspacePlanArrival={state.workspacePlanArrival}
-            onReviewActor={async (name, actorId) => { await navigate(`${helperBase(agentId, name).slice(0, -1)}${actorId === undefined ? "" : `?actor=${encodeURIComponent(actorId)}`}`); }}
+            onReviewActor={async (name, actorId) => {
+              await navigate(`${helperBase(agentId, name).slice(0, -1)}${actorId === undefined ? "" : `?actor=${encodeURIComponent(actorId)}`}`);
+              workbench.current?.showChat();
+            }}
             onSurface={setSurface}
             agents={agentsPanel}
             pinnedPorts={state.pinnedPorts}

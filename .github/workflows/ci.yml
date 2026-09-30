@@ -32,9 +32,13 @@ on:
 jobs:
   gate-ladder:
     runs-on: ubuntu-latest
-    # The CI tier took 724s locally on 2026-09-29; the cap leaves room for a
-    # cold runner while still bounding a hung job.
-    timeout-minutes: 25
+    # Run 36750629917 (2026-09-30) was the first all-green tier on this runner:
+    # 69 of 82 rows had finished at 23.7 min when a 25 min cap cancelled it, and
+    # the 13 left measure 191 s alone (474 s CPU), so the whole tier is about
+    # 28 min here. Earlier runs fit only because a red stops new launches. The
+    # cap holds that tier plus one row's 480 s silence bound, and still ends a
+    # job that hangs outside any row.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:

@@ -2,11 +2,12 @@
  * The desktop rail lane: the roster, or the icon rail it folds to. Only the `aside`'s width
  * animates; each state's column has its own width behind `overflow-hidden`, so nothing reflows.
  */
-import { useState, type MouseEvent } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { PlusIcon, SidebarSimpleIcon } from "@phosphor-icons/react";
 
 import { useAccount } from "@/hooks/use-account";
+import { useAgentsNav } from "@/hooks/use-agents-nav";
 import { lastValue } from "@/hooks/use-async-resource";
 import { KinuMark } from "./ui/KinuLogo";
 import Sidebar from "./Sidebar";
@@ -31,6 +32,14 @@ export function SidebarRail() {
     localStorage.setItem(RAIL_KEY, open ? "1" : "0");
     setRailOpen(open);
   };
+
+  const { entries } = useAgentsNav();
+
+  useEffect(() => {
+    if (entries === 0) return;
+    localStorage.setItem(RAIL_KEY, "1");
+    setRailOpen(true);
+  }, [entries]);
 
   // Anywhere on the folded lane that is not a control unfolds it.
   const onRailClick = (event: MouseEvent<HTMLElement>) => {

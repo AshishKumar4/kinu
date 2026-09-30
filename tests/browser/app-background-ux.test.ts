@@ -19,7 +19,7 @@ import type { JsonValue } from '@kinu.run/core';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
-const SHOTS = '/home/mrwhite0racle/kinu-logs/app-background/ux';
+const SHOTS = join(import.meta.dir, '..', '..', '..', 'kinu-logs', 'app-background', 'ux');
 
 mkdirSync(SHOTS, { recursive: true });
 

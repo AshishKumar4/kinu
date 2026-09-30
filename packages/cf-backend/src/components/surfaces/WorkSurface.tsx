@@ -24,12 +24,11 @@ import { WorkTab } from "./WorkTab";
 import { EnvironmentSurface } from "./EnvironmentSurface";
 import { FilesSurface } from "./FilesSurface";
 import { ActivitySurface } from "./ActivitySurface";
-import { AgentsSurface } from "./AgentsSurface";
 import { SlateFrame } from "@/components/slates/SlateFrame";
 import { ShareSlateControl } from "@/components/slates/ShareSlateControl";
 import { UnmappedBindingsPanel } from "@/components/slates/UnmappedBindingsPanel";
 import {
-  ACTIVITY_SURFACE, AGENTS_SURFACE, SLATE_PREFIX, SURFACES, landedSurface, openPortOf, parentDir, surfaceHasContent,
+  ACTIVITY_SURFACE, SLATE_PREFIX, SURFACES, landedSurface, openPortOf, parentDir, surfaceHasContent,
   type PanelAgent, type SlateSurfaceKind, type SurfaceKind,
 } from "@kinu.run/core";
 import { useSurfaceFocus } from "./use-surface-focus";
@@ -331,7 +330,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             />
           )}
           {openPort && <PreviewFrame url={openPort.url} label={openPort.name ?? `${openPort.executor} :${openPort.port}`} />}
-          <SideSurface shown={surface} rpc={props.rpc} isStreaming={props.isStreaming} agents={props.agents} />
+          <SideSurface shown={surface} rpc={props.rpc} isStreaming={props.isStreaming} />
           {openSlate !== null && <OpenSlatePanel {...props} slate={openSlate} summary={openSlateSummary} />}
         </ErrorBoundary>
       </div>
@@ -346,8 +345,6 @@ export function WorkSurface(props: WorkSurfaceProps) {
   );
 }
 
-function SideSurface({ shown, rpc, isStreaming, agents }: Pick<WorkSurfaceProps, "rpc" | "isStreaming" | "agents"> & { shown: SurfaceKind | null }) {
-  if (shown === ACTIVITY_SURFACE) return <ActivitySurface rpc={rpc} isStreaming={isStreaming} />;
-
-  return shown === AGENTS_SURFACE ? <AgentsSurface panel={agents} /> : null;
+function SideSurface({ shown, rpc, isStreaming }: Pick<WorkSurfaceProps, "rpc" | "isStreaming"> & { shown: SurfaceKind | null }) {
+  return shown === ACTIVITY_SURFACE ? <ActivitySurface rpc={rpc} isStreaming={isStreaming} /> : null;
 }

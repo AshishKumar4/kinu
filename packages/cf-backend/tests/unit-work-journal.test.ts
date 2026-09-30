@@ -129,7 +129,7 @@ describe('Now owes the work in hand whatever the plan read is doing', () => {
 describe('an evolution helper is a Now row that opens its chat', () => {
   const agent = (label: string, category: PanelAgent['category']): PanelAgent => ({
     key: `actor-${label}`, label, category, activity: 'working', parent: null,
-    open: { kind: 'chat', path: `ask-${label}` }, tab: false, input: category !== 'background',
+    open: { kind: 'chat', path: `ask-${label}` }, tab: false, input: category !== 'background', figures: { activeMs: 0, cacheEma: null },
   });
 
   test('a background helper is listed in Now and a hired agent is not', () => {

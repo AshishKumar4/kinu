@@ -10,6 +10,9 @@ import { headStatusUnsettled, shownHeadStatus } from '../heads/types';
 import { HeadJournal } from '../heads/journal';
 import type { HeadRunView } from '../heads/types';
 import { actorReadHandle } from './workspace-work';
+import { explorationActorKey } from '../identity/actor-key';
+import { usageTotal } from '../usage';
+import { NO_FIGURES, readAgentFigures, type AgentFigures } from './agent-figures';
 
 export type AgentCategory = 'main' | 'user' | 'hired' | 'swarm' | 'background';
 
@@ -29,6 +32,8 @@ export interface PanelAgent {
   readonly open: AgentOpening;
   readonly tab: boolean;
   readonly input: boolean;
+  readonly actorId?: string;
+  readonly figures: AgentFigures;
 }
 
 export function agentActive(agent: Pick<PanelAgent, 'activity'>): boolean {
@@ -128,7 +133,7 @@ function rosterAgents({ sql, exec, root, actors, labels, paths, handleOf }: Walk
     agents.push({
       key: row.actorId, label, category, activity: subordinateActivity(entry, turnOpen(sql, row.actorId)), parent: labels.get(row.parentActorId ?? '') ?? null,
       open: { kind: 'chat', path }, tab: row.parentActorId === root.actorId && ownerFacingSubordinate(entry),
-      input: category !== 'background',
+      input: category !== 'background', actorId: row.actorId, figures: NO_FIGURES,
     });
   }
 
@@ -151,10 +156,15 @@ function swarmAgents({ sql, root, actors, labels, paths, handleOf }: Walk): Pane
         const label = node.task.trim().split('\n')[0]?.slice(0, 80) || node.id;
         nodeLabels.set(node.id, label);
 
+        const tokens = usageTotal(node.usage);
+        const nodeActor = actors.find((row) => row.origin === 'swarm' && row.parentActorId === owner.actorId && row.name === explorationActorKey(node.id));
+
         agents.push({
           key: `${run.rootId}/${node.id}`, label, category: 'swarm', activity: headActivity(node.status, node.errorMessage, running),
           parent: (node.parentId === null ? undefined : nodeLabels.get(node.parentId)) ?? ownerLabel,
           open: { kind: 'node', runId: run.rootId, nodeId: node.id, owner: ownerPath }, tab: false, input: false,
+          ...(nodeActor !== undefined && { actorId: nodeActor.actorId }),
+          figures: { ...(tokens !== undefined && { tokens }), activeMs: node.wallClockMs, cacheEma: null },
         });
       }
     }
@@ -182,5 +192,25 @@ export function readWorkspaceAgents(input: {
   const hired = tableExists(sql, 'actor_subordinates') ? rosterAgents(walk) : [];
   const swarms = tableExists(sql, 'head_journal') ? swarmAgents(walk) : [];
 
-  return [...hired, ...swarms];
+  const main: PanelAgent = {
+    key: 'main', label: input.rootLabel, category: 'main', activity: turnOpen(sql, root.actorId) ? 'working' : 'idle', parent: null,
+    open: { kind: 'chat', path: null }, tab: true, input: true, actorId: root.actorId, figures: NO_FIGURES,
+  };
+
+  const listed = [main, ...hired, ...swarms];
+  const figures = readAgentFigures(sql, listed.flatMap((agent) => (agent.actorId === undefined ? [] : [agent.actorId])));
+
+  return listed.map((agent) => {
+    const logged = (agent.actorId === undefined ? undefined : figures.get(agent.actorId)) ?? NO_FIGURES;
+
+    return {
+      ...agent,
+      figures: {
+        ...agent.figures,
+        ...logged,
+        ...(logged.tokens === undefined && agent.figures.tokens !== undefined && { tokens: agent.figures.tokens }),
+        activeMs: logged.activeMs || agent.figures.activeMs,
+      },
+    };
+  });
 }
