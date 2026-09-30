@@ -54,19 +54,24 @@ export const CHAIN_STORE_MOUNT = '/backups';
  *  fails mid-upload rather than running slower. */
 const PUBLISH_PART_BYTES = 5 * 1024 * 1024;
 
+/** 224 MiB took 38 s one part at a time and 20 s with four in flight, on both policies; eight was no faster (D50). */
+const PUBLISH_PARTS_IN_FLIGHT = 4;
+
 /** s3fs PUTs a directory marker and an empty object before flush, so publishing bypasses the
  *  mount (D15); a `Bun.file` slice sends no body, so parts send `slice.stream()` (Bun 1.3.12). */
-const PUBLISH_SCRIPT = `// devbox-publish-v1
-const [archive, url, partArg] = process.argv.slice(2);
+const PUBLISH_SCRIPT = `// devbox-publish-v2
+const [archive, url, partArg, inFlightArg] = process.argv.slice(2);
 const partBytes = Number(partArg);
+const inFlight = Number(inFlightArg);
 
 function refuse(code, message) {
   process.stderr.write(message + '\\n');
   process.exit(code);
 }
 
-if (archive === undefined || url === undefined || !Number.isSafeInteger(partBytes) || partBytes <= 0) {
-  refuse(2, 'usage: publish.mjs <archive> <url> <partBytes>');
+if (archive === undefined || url === undefined || !Number.isSafeInteger(partBytes) || partBytes <= 0
+  || !Number.isSafeInteger(inFlight) || inFlight <= 0) {
+  refuse(2, 'usage: publish.mjs <archive> <url> <partBytes> <partsInFlight>');
 }
 
 const file = Bun.file(archive);
@@ -99,19 +104,25 @@ if (size <= partBytes) {
 
   if (uploadId.length === 0) refuse(1, 'the multipart upload was opened without an id');
   const id = encodeURIComponent(uploadId);
-  const parts = [];
+  const count = Math.ceil(size / partBytes);
+  const etags = [];
+  let next = 1;
 
-  try {
-    for (let number = 1, offset = 0; offset < size; number += 1, offset += partBytes) {
-      const slice = file.slice(offset, Math.min(size, offset + partBytes));
+  const send = async () => {
+    for (let number = next++; number <= count; number = next++) {
+      const slice = file.slice((number - 1) * partBytes, Math.min(size, number * partBytes));
       const part = await answered('PUT part ' + number, await fetch(url + '?partNumber=' + number + '&uploadId=' + id, {
         method: 'PUT',
         headers: { 'content-length': String(slice.size) },
         body: slice.stream(),
       }));
-      parts.push('<Part><PartNumber>' + number + '</PartNumber><ETag>' + (part.headers.get('etag') ?? '') + '</ETag></Part>');
+      etags[number - 1] = part.headers.get('etag') ?? '';
     }
+  };
 
+  try {
+    await Promise.all(Array.from({ length: Math.min(inFlight, count) }, send));
+    const parts = etags.map((etag, index) => '<Part><PartNumber>' + (index + 1) + '</PartNumber><ETag>' + etag + '</ETag></Part>');
     const completed = await answered('POST ?uploadId', await fetch(url + '?uploadId=' + id, {
       method: 'POST', body: '<CompleteMultipartUpload>' + parts.join('') + '</CompleteMultipartUpload>',
     }));
@@ -2033,7 +2044,7 @@ export function publishCommand(input: { archivePath: string; objectUrl: string }
   const script = `${DEVBOX_RUNTIME_DIR}/devbox-publish.mjs`;
 
   return `mkdir -p ${shellPath(DEVBOX_RUNTIME_DIR)} && printf %s ${shellPath(PUBLISH_SCRIPT_B64)} | base64 -d > ${shellPath(script)}; `
-    + `out=$(bun ${shellPath(script)} ${shellPath(input.archivePath)} ${shellPath(input.objectUrl)} ${String(PUBLISH_PART_BYTES)}); `
+    + `out=$(bun ${shellPath(script)} ${shellPath(input.archivePath)} ${shellPath(input.objectUrl)} ${String(PUBLISH_PART_BYTES)} ${String(PUBLISH_PARTS_IN_FLIGHT)}); `
     + `rc=$?; printf '%s %s' "$rc" "$out"`;
 }
 
