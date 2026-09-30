@@ -31,6 +31,9 @@ import { beatWorkspace, webHeaders, type PublicWebIdentity } from '../evals/src/
 import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { DESKTOP } from './live-app-harness';
 import { FLOW_SLATE, SLATE_ASK, WRITE_FILE_ASK } from './flows-script';
+import {
+  documentScriptFailures, explained, FAILED_APP_SCRIPT, recordScriptFailures, SCRIPT_FAILED, type ScriptFailure,
+} from './script-failures';
 
 export interface FlowTarget {
   readonly browser: Browser;
@@ -55,20 +58,12 @@ export async function signedInPage(browser: Browser, identity: PublicWebIdentity
   return page;
 }
 
-/** Records, on `window`, what ends a page's chances for good: every turn the
- *  workspace's socket reports ended in error (the frame the chat renders its
- *  error from), and every app script that failed to load, which leaves the page
- *  blank (2026-09-24: the host's network changed mid-load, Chrome aborted the
- *  module graph with net::ERR_NETWORK_CHANGED, and a row waited on a page that
- *  would never draw). Installed before each document's scripts run, so the
- *  socket and the scripts the app loads are the recorded ones. */
-const RECORD_DEAD_ENDS = `(() => {
+/** Records, on `window`, every turn the workspace's socket reports ended in
+ *  error (the frame the chat renders its error from), which ends a page's
+ *  chances for good. Installed before each document's scripts run, so the
+ *  socket the app opens is the recorded one. */
+const RECORD_TURN_ERRORS = `(() => {
   window.__turnErrors = [];
-  window.__scriptFailures = [];
-  // A module the entry imports that fails to fetch fails the entry script itself.
-  window.addEventListener('error', (event) => {
-    if (event.target instanceof HTMLScriptElement) window.__scriptFailures.push(event.target.src || 'an inline script');
-  }, true);
   const Socket = window.WebSocket;
   window.WebSocket = class extends Socket {
     constructor(url, protocols) {
@@ -84,31 +79,11 @@ const RECORD_DEAD_ENDS = `(() => {
   };
 })()`;
 
-/** A script request of a page that failed: its URL, why (the browser's error text, or the status a server
- *  answered), and when this process saw it. */
-interface ScriptFailure {
-  readonly at: number;
-  readonly url: string;
-  readonly reason: string;
-}
-
-const scriptFailures = new WeakMap<Page, ScriptFailure[]>();
-
-/** Installs {@link RECORD_DEAD_ENDS} on every document `page` loads, and records why each of its script requests
- *  failed: the page sees only that a module graph failed, the browser's network events say why. */
+/** Records what ends `page`'s chances for good on every document it loads: each app script that failed to load
+ *  (script-failures.ts), and each turn its socket reports ended in error. */
 export async function recordDeadEnds(page: Page): Promise<void> {
-  const failures: ScriptFailure[] = [];
-
-  scriptFailures.set(page, failures);
-  page.on('requestfailed', (request) => {
-    if (request.resourceType() !== 'script') return;
-    failures.push({ at: Date.now(), url: request.url(), reason: request.failure()?.errorText ?? 'no error text' });
-  });
-  page.on('response', (response) => {
-    if (response.request().resourceType() !== 'script' || response.status() < 400) return;
-    failures.push({ at: Date.now(), url: response.url(), reason: `HTTP ${String(response.status())}` });
-  });
-  await page.evaluateOnNewDocument(RECORD_DEAD_ENDS);
+  await recordScriptFailures(page);
+  await page.evaluateOnNewDocument(RECORD_TURN_ERRORS);
 }
 
 /** The error text Chrome fails the requests in flight with when a host network interface comes or goes: not the
@@ -128,30 +103,6 @@ export function hostNetworkChange(failures: readonly ScriptFailure[]): ScriptFai
   const causes = failures.filter((failure) => failure.reason !== CANCELLED);
 
   return causes.length > 0 && causes.every((failure) => failure.reason === HOST_NETWORK_CHANGED) ? causes[0] : null;
-}
-
-/** Why the current document's script requests failed, as this process saw them: those since its navigation
- *  started. */
-async function documentScriptFailures(page: Page): Promise<ScriptFailure[]> {
-  const started = v.parse(v.number(), await page.evaluate('performance.timeOrigin'));
-
-  return (scriptFailures.get(page) ?? []).filter((failure) => failure.at >= started);
-}
-
-/** The prefix {@link DEAD_END} names a failed app script with. */
-const SCRIPT_FAILED = 'the app script ';
-
-/** `deadEnd`, and when an app script never loaded, why the document's script requests failed. */
-async function explained(page: Page, deadEnd: string): Promise<string> {
-  if (!deadEnd.startsWith(SCRIPT_FAILED)) return deadEnd;
-  const failures = await documentScriptFailures(page);
-
-  if (failures.length === 0) return `${deadEnd}; no script request of this document failed on the wire`;
-
-  const shown = failures.slice(0, 5).map((failure) => `${failure.url} (${failure.reason})`);
-  const more = failures.length > shown.length ? ` and ${String(failures.length - shown.length)} more` : '';
-
-  return `${deadEnd}; its script requests failed: ${shown.join(', ')}${more}`;
 }
 
 const reloaded = new WeakSet<Page>();
@@ -242,8 +193,8 @@ const CHAT_IDLE = `[...document.querySelectorAll('#chat button')].some((el) => e
  *  A Drive whose listing failed draws no section and no empty state, so a wait
  *  for either outlived the failure it showed (2026-09-24, 36 minutes). */
 const DEAD_END = `(() => {
-  const script = (window.__scriptFailures ?? []).at(-1);
-  if (script !== undefined) return ${JSON.stringify(SCRIPT_FAILED)} + script + ' failed to load, which leaves the page blank';
+  const script = ${FAILED_APP_SCRIPT};
+  if (script !== null) return script;
   const failed = (window.__turnErrors ?? []).at(-1);
   if (failed !== undefined) return 'a turn that ended in error: ' + failed;
   const welcomeOffers = [...document.querySelectorAll('button')].some((b) => !b.disabled && b.getClientRects().length > 0

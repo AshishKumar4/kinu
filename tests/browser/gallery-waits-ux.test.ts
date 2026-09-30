@@ -183,6 +183,34 @@ test('a stuck page that answers nothing is reported without it, and says so', as
 });
 
 /**
+ * 2026-09-30 (CI run 36742984678 on b905572545): a docker build beside the row changed the host's network, Chrome failed
+ * the tabs frame's queued modules with net::ERR_NETWORK_CHANGED, and the wait sat on the empty root until the row's
+ * bound. A module the entry imports that fails leaves the entry never run, so the wait ends at once and says why.
+ */
+test('a wait on a page whose app script never ran ends at once by the request that failed, not in silence', async () => {
+  await withGallery(async ({ newPage, origin }) => {
+    const page = await newPage();
+
+    await page.goto(`${origin}/gallery.html?frame=tabs`, { waitUntil: 'networkidle0' });
+    const entry = new URL(await page.$eval('script[type="module"][src]', (node) => node.getAttribute('src') ?? ''), origin).href;
+
+    await page.setRequestInterception(true);
+    // Every module but the entry fails, so the entry never runs; a lazy chunk's failure alone fails only its import.
+    page.on('request', async (request) => {
+      if (request.resourceType() === 'script' && request.url() !== entry) await request.abort('connectionreset');
+      else await request.continue();
+    });
+    await page.reload({ waitUntil: 'networkidle0' });
+    const waiting = page.waitForSelector(NEVER);
+
+    await expect(waiting).rejects.toThrow(`waiting for ${NEVER} on ${origin}/gallery.html?frame=tabs, the page showed `
+      + `the app script ${entry} failed to load, which leaves the page blank; its script requests failed: ${origin}/assets/`);
+    await expect(waiting).rejects.toThrow(' (net::ERR_CONNECTION_RESET)');
+    await page.close();
+  });
+});
+
+/**
  * A frame whose page chunk never loads (a rejected dynamic import) threw outside every boundary, and React emptied
  * the root: the blank app the CI stuck report found. Under the app's own boundary it says what broke.
  */
