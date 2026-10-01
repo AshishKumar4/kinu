@@ -1100,7 +1100,7 @@ export const LADDER: readonly Gate[] = [
     // report and provider-key suites joined 2026-09-30 at about 3 s (6 tests), and
     // the evals dispatch suite at 0.2 s (3 tests); the reset suite joined
     // 2026-10-01 at 0.1 s (4 tests), the version telemetry suite at 0.1 s
-    // (2 tests), and the continuous staging and promotion suite at 1 s (6 tests).
+    // (2 tests), and the continuous staging and promotion suite at 2 s (7 tests).
     seconds: 90,
     catches: 'a deploy gate deleted, reordered, or made skippable, and a deploy from a '
       + 'dirty checkout. Cut-the-wire proven: remove one gate line and it fails. And a promotion '
@@ -1112,7 +1112,8 @@ export const LADDER: readonly Gate[] = [
       + 'partway with no record, no barrier, or no way to finish it. And a version\'s uncaught exception, '
       + 'platform kill, failed or owed effect, wake loop or alarm storm left out of the deploy\'s findings. '
       + 'And two deploys of one environment at once, or continuous staging deploying a tip a newer one '
-      + 'passed, or one tip twice, and a promotion of an unverified build or a red one retried.',
+      + 'passed, or one tip twice, or on another revision\'s install, and a promotion of an unverified build '
+      + 'or a red one retried.',
     blind: 'whether the gates it enumerates pass, and whether Cloudflare serves what a '
       + 'promotion uploaded: that is its smoke test\'s, against the deployment.',
     inputs: AMBIENT_BY_NAME,

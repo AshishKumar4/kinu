@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { childEnv, scratchDir } from '@kinu.run/test-utils';
-import { DEPLOY_BUSY, promoteRound, runLoop } from './staging-loop';
+import { DEPLOY_BUSY, prepareInstall, promoteRound, runLoop } from './staging-loop';
 
 const BRANCH = 'integration/0965';
 
@@ -24,6 +24,9 @@ function land(work: string, message: string): string {
 
   return git(work, 'rev-parse', 'HEAD');
 }
+
+/** The tip-selection fixtures carry no packages, so there is nothing to install; the install has its own fixture. */
+const unpackaged = (): void => {};
 
 let work = '';
 
@@ -53,7 +56,7 @@ describe('continuous staging deploys the newest tip, once', () => {
     let newest = '';
 
     const deployed = runLoop({
-      branch: BRANCH, worktree, stateFile,
+      branch: BRANCH, worktree, stateFile, prepare: unpackaged,
       deploy: (where) => {
         seen.push(git(where, 'rev-parse', 'HEAD'));
 
@@ -74,19 +77,19 @@ describe('continuous staging deploys the newest tip, once', () => {
     expect(seen).toEqual([first, newest]);
     expect(seen).not.toContain(passed);
     expect(readFileSync(stateFile, 'utf8').trim()).toBe(newest);
-    expect(runLoop({ branch: BRANCH, worktree, stateFile, deploy: () => 0, waitForDeploys: () => {} })).toEqual([]);
+    expect(runLoop({ branch: BRANCH, worktree, stateFile, prepare: unpackaged, deploy: () => 0, waitForDeploys: () => {} })).toEqual([]);
   });
 
   test('a red deploy is not deployed again until the tip moves', () => {
     const red = git(work, 'rev-parse', 'HEAD');
     const deploy = (): number => 1;
 
-    expect(runLoop({ branch: BRANCH, worktree, stateFile, deploy, waitForDeploys: () => {} })).toEqual([red]);
-    expect(runLoop({ branch: BRANCH, worktree, stateFile, deploy, waitForDeploys: () => {} })).toEqual([]);
+    expect(runLoop({ branch: BRANCH, worktree, stateFile, prepare: unpackaged, deploy, waitForDeploys: () => {} })).toEqual([red]);
+    expect(runLoop({ branch: BRANCH, worktree, stateFile, prepare: unpackaged, deploy, waitForDeploys: () => {} })).toEqual([]);
 
     const next = land(work, 'the fix');
 
-    expect(runLoop({ branch: BRANCH, worktree, stateFile, deploy, waitForDeploys: () => {} })).toEqual([next]);
+    expect(runLoop({ branch: BRANCH, worktree, stateFile, prepare: unpackaged, deploy, waitForDeploys: () => {} })).toEqual([next]);
   });
 
   // Another staging deploy (a person's, say) holds the deploy lock: this round deployed nothing, so it waits for that
@@ -96,7 +99,7 @@ describe('continuous staging deploys the newest tip, once', () => {
     let newest = '';
 
     const deployed = runLoop({
-      branch: BRANCH, worktree, stateFile,
+      branch: BRANCH, worktree, stateFile, prepare: unpackaged,
       deploy: () => {
         if (refused) return 0;
         refused = true;
@@ -121,7 +124,7 @@ describe('auto-promotion takes the last staged tip once it is verified, once', (
     const promoted: string[] = [];
 
     const input = {
-      stagedFile: stateFile, triedFile: `${stateFile}.tried`, worktree,
+      stagedFile: stateFile, triedFile: `${stateFile}.tried`, worktree, prepare: unpackaged,
       productionBuild: async () => '',
       verified: () => 0,
       promote: (where: string) => {
@@ -176,5 +179,70 @@ describe('auto-promotion takes the last staged tip once it is verified, once', (
 
     expect(await busy.run()).toBe('another production deploy is running');
     expect(await round().run()).toBe(`promoted ${staged}`);
+  });
+});
+
+/** A package `name` at `version`, as the npm tarball a `file:` dependency names: offline and exact. */
+function tarball(dir: string, name: string, version: string): string {
+  const unpacked = join(dir, `${name}-${version}`, 'package');
+
+  mkdirSync(unpacked, { recursive: true });
+  writeFileSync(join(unpacked, 'package.json'), JSON.stringify({ name, version }));
+  Bun.spawnSync(['tar', 'czf', join(dir, `${name}-${version}.tgz`), '-C', join(dir, `${name}-${version}`), 'package']);
+
+  return `file:./vendor/${name}-${version}.tgz`;
+}
+
+/** The release changes its dependencies: package.json and the bun.lock an install writes for it, pushed. */
+function depend(dependencies: Record<string, string>, message: string): string {
+  writeFileSync(join(work, 'package.json'), JSON.stringify({ name: 'fixture', private: true, dependencies }));
+
+  if (Bun.spawnSync(['bun', 'install'], { cwd: work, stdout: 'ignore', stderr: 'pipe' }).exitCode !== 0) throw new Error(`bun install for ${message} failed`);
+  git(work, 'add', 'package.json', 'bun.lock', 'vendor');
+
+  return land(work, message);
+}
+
+// 2026-10-01: a checkout moves the revision and keeps node_modules, and deploy.sh installs only when there is none, so
+// the loop's first deploy and any tip that changes bun.lock would deploy on another revision's install. And a frozen
+// install over the old tree updates what the lock names but keeps what it dropped (measured with bun 1.4), the
+// 2026-09-26 drift install-parity.ts exists for: so the tree is removed first.
+describe('each deploy runs on the install of its own tip', () => {
+  test('a tip that changes a dependency is deployed on that dependency, installed from its own lock', () => {
+    const vendor = join(work, 'vendor');
+
+    mkdirSync(vendor);
+    writeFileSync(join(work, '.gitignore'), 'node_modules\n');
+    // The fixture's parity, the same rule as the real script's for this tree: every installed package is one its
+    // bun.lock names, at the version it names.
+    mkdirSync(join(work, 'scripts'));
+    writeFileSync(join(work, 'scripts', 'install-parity.ts'), [
+      'import { existsSync, readdirSync } from "node:fs";',
+      'const lock = await Bun.file("bun.lock").text();',
+      'const installed = existsSync("node_modules") ? readdirSync("node_modules").filter((name) => !name.startsWith(".")) : [];',
+      'const named = async (name) => lock.includes(`"${name}@./vendor/${name}-${(await Bun.file(`node_modules/${name}/package.json`).json()).version}.tgz"`);',
+      'const ok = installed.includes("fixture-dep") && (await Promise.all(installed.map(named))).every(Boolean);',
+      'process.exit(ok ? 0 : 1);',
+    ].join('\n'));
+    git(work, 'add', '.gitignore', 'scripts');
+
+    const first = depend({ 'fixture-dep': tarball(vendor, 'fixture-dep', '1.0.0'), 'fixture-extra': tarball(vendor, 'fixture-extra', '1.0.0') }, 'fixture-dep 1.0.0, fixture-extra');
+    const seen: string[] = [];
+
+    const deploy = (where: string): number => {
+      const dep = String(JSON.parse(readFileSync(join(where, 'node_modules', 'fixture-dep', 'package.json'), 'utf8')).version);
+
+      seen.push(`${git(where, 'rev-parse', 'HEAD')} on fixture-dep ${dep}${existsSync(join(where, 'node_modules', 'fixture-extra')) ? ' and fixture-extra' : ''}`);
+
+      return 0;
+    };
+
+    // The first deploy finds no install at all; the second, the first tip's, whose fixture-extra the second dropped.
+    runLoop({ branch: BRANCH, worktree, stateFile, prepare: prepareInstall, deploy, waitForDeploys: () => {} });
+
+    const second = depend({ 'fixture-dep': tarball(vendor, 'fixture-dep', '2.0.0') }, 'fixture-dep 2.0.0, no fixture-extra');
+
+    runLoop({ branch: BRANCH, worktree, stateFile, prepare: prepareInstall, deploy, waitForDeploys: () => {} });
+    expect(seen).toEqual([`${first} on fixture-dep 1.0.0 and fixture-extra`, `${second} on fixture-dep 2.0.0`]);
   });
 });

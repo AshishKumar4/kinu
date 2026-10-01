@@ -1259,7 +1259,11 @@ meanwhile is dropped and the newest is never lost. Measured 2026-10-01 with a
 real push: pushes during a run start exactly one more run, and a push onto a
 packed ref still fires. deploy.sh holds a lock per environment for its run
 (exit 75 when held), which is how "no deploy runs" is known, for a person's
-deploy as much as the loop's.
+deploy as much as the loop's. Each checkout's install is its own revision's:
+when install-parity.ts does not hold, every node_modules tree is removed and
+installed from the frozen lock, then parity is required; a frozen install over
+the old tree updates what the lock names and keeps what it dropped (measured
+with bun 1.4, 2026-10-01).
 
 L22. Production promotes whichever build staging verified, by itself, through
 `deploy.sh --promote`. Decided 2026-09-30 by the owner, the policy 2026-10-01

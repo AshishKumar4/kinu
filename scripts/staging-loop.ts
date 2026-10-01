@@ -24,7 +24,7 @@
  *   bun scripts/staging-loop.ts promote <branch>    one promotion round
  *   bun scripts/staging-loop.ts install <branch>    both worktrees and the four units, the path unit and the timer enabled
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
@@ -52,10 +52,47 @@ function git(cwd: string, args: readonly string[]): string {
   return run.stdout.toString().trim();
 }
 
+/** Every `node_modules` tree of `worktree`: the root's and each workspace's, none inside another. */
+function nodeModulesTrees(worktree: string): string[] {
+  const found = Bun.spawnSync(
+    ['find', worktree, '-path', join(worktree, '.git'), '-prune', '-o', '-name', 'node_modules', '-type', 'd', '-prune', '-print'],
+    { stdout: 'pipe', stderr: 'pipe' },
+  );
+
+  if (found.exitCode !== 0) throw new Error(`find failed in ${worktree}: ${found.stderr.toString().trim()}`);
+
+  return found.stdout.toString().split('\n').filter((tree) => tree !== '');
+}
+
+function holdsInstallParity(worktree: string): boolean {
+  return Bun.spawnSync(['bun', 'scripts/install-parity.ts'], { cwd: worktree, stdin: 'ignore', stdout: 'inherit', stderr: 'inherit' }).exitCode === 0;
+}
+
+/**
+ * The worktree's packages as the bun.lock of its revision names them, before anything runs on them. A checkout moves
+ * the revision and leaves `node_modules`, which deploy.sh installs only when it is absent, so a tip that changes the
+ * lock would deploy on the last tip's install. Kept when `scripts/install-parity.ts` holds; otherwise every
+ * `node_modules` tree is removed and installed afresh from the frozen lock, the way a linked worktree is installed by
+ * hand, and parity is then required: nothing runs on another revision's install.
+ */
+export function prepareInstall(worktree: string): void {
+  if (holdsInstallParity(worktree)) return;
+
+  for (const tree of nodeModulesTrees(worktree)) rmSync(tree, { recursive: true, force: true });
+
+  const installed = Bun.spawnSync(['bun', 'install', '--frozen-lockfile'], { cwd: worktree, stdin: 'ignore', stdout: 'inherit', stderr: 'inherit' });
+
+  if (installed.exitCode !== 0) throw new Error(`bun install --frozen-lockfile failed in ${worktree}; nothing was deployed`);
+
+  if (!holdsInstallParity(worktree)) throw new Error(`install parity does not hold in ${worktree} after a clean install; nothing was deployed`);
+}
+
 export interface LoopInput {
   readonly branch: string;
   /** Where `refs/remotes/origin/<branch>` is read: the worktree shares the repository's refs. */
   readonly worktree: string;
+  /** Makes the worktree's packages its revision's: {@link prepareInstall}. */
+  readonly prepare: (worktree: string) => void;
   /** The last tip deployed, kept between runs. */
   readonly stateFile: string;
   /** Runs the deploy in `worktree` and answers its exit status. */
@@ -89,6 +126,7 @@ export function runLoop(input: LoopInput): string[] {
 
     if (tip === readState(input.stateFile)) return deployed;
     checkout(input.worktree, tip);
+    input.prepare(input.worktree);
     console.log(`staging-loop: deploying ${tip} of origin/${input.branch}`);
 
     if (input.deploy(input.worktree) === DEPLOY_BUSY) {
@@ -109,6 +147,8 @@ export interface PromoteInput {
   /** The last tip a round tried to promote, kept between rounds. */
   readonly triedFile: string;
   readonly worktree: string;
+  /** Makes the worktree's packages its revision's: {@link prepareInstall}. */
+  readonly prepare: (worktree: string) => void;
   /** The build sha production serves, as its `/api/health` names it; empty when it names none. */
   readonly productionBuild: () => Promise<string>;
   /** `promote.ts check` in `worktree`: 0 once staging's record and the evals' green Verdict are both there. */
@@ -128,6 +168,7 @@ export async function promoteRound(input: PromoteInput): Promise<string> {
 
   if (serving !== '' && staged.startsWith(serving)) return `production serves ${staged} already`;
   checkout(input.worktree, staged);
+  input.prepare(input.worktree);
 
   if (input.verified(input.worktree) !== 0) return `${staged} is not verified yet`;
   const status = input.promote(input.worktree);
@@ -293,8 +334,8 @@ if (import.meta.main) {
       triedFile: stateOf('promote-loop', branch),
       worktree,
       productionBuild: () => servedBuild(process.env['KINU_PRODUCTION_ORIGIN'] ?? ''),
-      // Installed first: a round may meet a worktree no deploy has installed yet.
-      verified: (where) => inWorktree(where, ['bun', 'install', '--frozen-lockfile']) || inWorktree(where, ['bun', 'scripts/promote.ts', 'check']),
+      prepare: prepareInstall,
+      verified: (where) => inWorktree(where, ['bun', 'scripts/promote.ts', 'check']),
       promote: (where) => inWorktree(where, ['bash', 'scripts/deploy.sh', '--promote']),
     })}`);
   } else {
@@ -302,6 +343,7 @@ if (import.meta.main) {
       branch,
       worktree,
       stateFile: stateOf('staging-loop', branch),
+      prepare: prepareInstall,
       deploy: (where) => inWorktree(where, ['bash', 'scripts/deploy.sh']),
       waitForDeploys: () => {
         Bun.spawnSync(['flock', deployLock('staging'), 'true']);
