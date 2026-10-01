@@ -29,6 +29,7 @@ function setupEnv() {
     async builtinHasOwner() { return true; },
     async builtinInvitedEmail() { return null; },
     async builtinResetAccount() { return null; },
+    async builtinOwnerAccount() { return null; },
     async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
     async registerBrowserSession(
       _caller: UserCaller, tokenHash: string, expiresAt: number, identity: BrowserSessionIdentity,

@@ -13,7 +13,7 @@ import { createSession, deriveBuiltinUserId, sanitizeReturnTo, type OAuthProfile
 import { builtinSignInOn } from '@kinu.run/core/identity';
 import type { AuthRoutesAuthority, AuthRoutesEnv } from './routes';
 import {
-  BUILTIN_ACCOUNTS_OBJECT, NOT_ADMITTED, type AttemptBucket, type ChallengePurpose, type InvitePurpose, type PasswordAccount, type PasswordHash, type Reset,
+  BUILTIN_ACCOUNTS_OBJECT, NOT_ADMITTED, OWNER_RESET, type AttemptBucket, type ChallengePurpose, type InvitePurpose, type PasswordAccount, type PasswordHash, type Reset,
 } from '@kinu.run/core/identity';
 import type { UserDO } from '../user/user-do';
 import type { ApiVariables, FamilyEnv } from '../api/context';
@@ -23,7 +23,7 @@ export type BuiltinAuthority = AuthRoutesAuthority & Pick<UserDO,
   | 'builtinAdmissible' | 'builtinCreateInvite' | 'builtinInvitedEmail' | 'builtinIsOwner' | 'builtinIssueChallenge' | 'builtinPasskeyAccount'
   | 'builtinPasswordAccount' | 'builtinRecordPasskeyUse' | 'builtinRegister' | 'builtinSpendChallenge'
   | 'builtinReserveAttempt' | 'builtinClearAttempts' | 'builtinReplacePassword'
-  | 'builtinResetAccount' | 'builtinApplyReset' | 'builtinListAccounts' | 'endAllSessions'>;
+  | 'builtinResetAccount' | 'builtinApplyReset' | 'builtinListAccounts' | 'builtinOwnerAccount' | 'endAllSessions'>;
 
 export interface BuiltinAuthEnv<Id = DurableObjectId> extends Omit<AuthRoutesEnv<Id>, 'UserDO'> {
   UserDO: ObjectNamespace<Id, BuiltinAuthority>;
@@ -339,8 +339,16 @@ async function resetTo<Id>(env: BuiltinAuthEnv<Id>, request: Request, reset: Res
   return signedIn(env, request, builtinProfile(reset.passkey ? 'passkey' : 'password', account.userId, account.email), returnTo);
 }
 
+async function resetHashOf<Id>(env: BuiltinAuthEnv<Id>, reset: string | null, setup: string | null): Promise<string | null> {
+  if (reset !== null && reset !== '') return sha256Hex(reset);
+
+  return await setupProven(env, setup) ? OWNER_RESET : null;
+}
+
+const ResetSchema = { reset: TokenSchema, setup: TokenSchema };
+
 builtinAuthRoutes.post('/api/auth/builtin/password/reset', async (c) => {
-  const parsed = await body(c.req.raw, v.object({ reset: v.string(), password: PasswordSchema, returnTo: ReturnToSchema }));
+  const parsed = await body(c.req.raw, v.object({ ...ResetSchema, password: PasswordSchema, returnTo: ReturnToSchema }));
 
   if (!parsed.success) return misread(parsed.issues);
   const limited = await reserve(c.env, [buckets.register(addressKey(c.req.raw))]);
@@ -349,20 +357,26 @@ builtinAuthRoutes.post('/api/auth/builtin/password/reset', async (c) => {
   const root = c.env.CREDENTIAL_ENCRYPTION_KEY;
 
   if (!root) return refuse(NO_ROOT_SECRET, 503);
+  const resetHash = await resetHashOf(c.env, parsed.output.reset, parsed.output.setup);
 
-  return resetTo(c.env, c.req.raw, { resetHash: await sha256Hex(parsed.output.reset), password: await hashPassword(root, parsed.output.password) }, parsed.output.returnTo);
+  if (resetHash === null) return refuse(RESET_SPENT, 403);
+
+  return resetTo(c.env, c.req.raw, { resetHash, password: await hashPassword(root, parsed.output.password) }, parsed.output.returnTo);
 });
 
 builtinAuthRoutes.post('/api/auth/builtin/passkey/reset/options', async (c) => {
-  const parsed = await body(c.req.raw, v.object({ reset: v.string() }));
+  const parsed = await body(c.req.raw, v.object(ResetSchema));
 
   if (!parsed.success) return misread(parsed.issues);
   const limited = await reserve(c.env, [buckets.challenge(addressKey(c.req.raw)), buckets.register(addressKey(c.req.raw))]);
 
   if (limited) return limited;
   const caller = await ownerCaller(c.env);
-  const resetHash = await sha256Hex(parsed.output.reset);
-  const account = await accounts(c.env).builtinResetAccount(caller, resetHash);
+  const resetHash = await resetHashOf(c.env, parsed.output.reset, parsed.output.setup);
+
+  if (resetHash === null) return refuse(RESET_SPENT, 403);
+  const store = accounts(c.env);
+  const account = resetHash === OWNER_RESET ? await store.builtinOwnerAccount(caller) : await store.builtinResetAccount(caller, resetHash);
 
   if (account === null) return refuse(RESET_SPENT, 403);
   const url = new URL(c.req.url);

@@ -305,11 +305,23 @@ export interface Reset {
   readonly passkey?: StoredPasskey;
 }
 
+export const OWNER_RESET = 'owner-by-setup-token';
+
+export function ownerAccount(sql: BuiltinSql): ResetAccount | null {
+  const parsed = v.safeParse(AccountRowSchema, sql`SELECT user_id, email FROM builtin_accounts WHERE role = 'owner'`[0]);
+
+  return parsed.success ? { userId: parsed.output.user_id, email: parsed.output.email } : null;
+}
+
 export function applyReset(sql: BuiltinSql, reset: Reset, now: number): ResetAccount | null {
-  const account = resetAccount(sql, reset.resetHash, now);
+  const account = reset.resetHash === OWNER_RESET ? ownerAccount(sql) : resetAccount(sql, reset.resetHash, now);
 
   if (account === null) return null;
-  void sql`UPDATE builtin_invites SET used_by = ${account.userId}, used_at = ${now} WHERE token_hash = ${reset.resetHash}`;
+
+  if (reset.resetHash !== OWNER_RESET) {
+    void sql`UPDATE builtin_invites SET used_by = ${account.userId}, used_at = ${now} WHERE token_hash = ${reset.resetHash}`;
+  }
+
   void sql`DELETE FROM builtin_passkeys WHERE user_id = ${account.userId}`;
   void sql`UPDATE builtin_accounts SET password_hash = ${reset.password?.hash ?? null}, password_salt = ${reset.password?.salt ?? null},
     password_iterations = ${reset.password?.iterations ?? null} WHERE user_id = ${account.userId}`;

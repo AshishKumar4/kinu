@@ -163,7 +163,7 @@ import { deletePictures, picturePrefix } from '../slates/pictures';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import {
   builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, invitedEmail, isBuiltinOwner,
-  issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, reserveAttempt, clearAttempts, replacePassword, applyReset, listBuiltinAccounts, resetAccount,
+  issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, reserveAttempt, clearAttempts, replacePassword, applyReset, listBuiltinAccounts, ownerAccount, resetAccount,
   type Admission, type AttemptBucket, type BuiltinSql, type ChallengePurpose, type NewBuiltinAccount, type NewInvite, type PasskeyAccount,
   type PasswordAccount, type PasswordHash, type PendingChallenge, type ListedAccount, type Reset, type ResetAccount,
 } from '@kinu.run/core/identity';
@@ -1522,6 +1522,12 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'builtin_accounts');
 
     return resetAccount(this.builtinSql(), resetHash, Date.now());
+  }
+
+  async builtinOwnerAccount(caller: UserCaller): Promise<ResetAccount | null> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return ownerAccount(this.builtinSql());
   }
 
   async builtinApplyReset(caller: UserCaller, reset: Reset): Promise<ResetAccount | null> {

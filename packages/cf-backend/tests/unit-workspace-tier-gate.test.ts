@@ -304,6 +304,7 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
   },
   { capability: 'builtin_accounts', name: 'builtinResetAccount', run: (u, c) => u.builtinResetAccount(c, 'h') },
   { capability: 'builtin_accounts', name: 'builtinApplyReset', run: (u, c) => u.builtinApplyReset(c, { resetHash: 'h' }) },
+  { capability: 'builtin_accounts', name: 'builtinOwnerAccount', run: (u, c) => u.builtinOwnerAccount(c) },
   { capability: 'builtin_accounts', name: 'builtinListAccounts', run: (u, c) => u.builtinListAccounts(c) },
   { capability: 'builtin_accounts', name: 'builtinClearAttempts', run: (u, c) => u.builtinClearAttempts(c, ['k']) },
   { capability: 'builtin_accounts', name: 'builtinInvitedEmail', run: (u, c) => u.builtinInvitedEmail(c, 'h') },

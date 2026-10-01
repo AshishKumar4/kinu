@@ -57,7 +57,7 @@ function builtinBody({ mode, invite, reset, email, setup, notice, returnTo }: Bu
   if (mode === 'setup') return `<p class="lede">${escapeHtml(lede ?? '')}</p>`;
 
   return `${lede === null ? '' : `<p class="lede">${escapeHtml(lede)}</p>`}
-  <form id="builtin-sign-in" class="fields" data-mode="${registering ? 'register' : 'sign-in'}" data-return-to="${escapeHtml(returnTo)}" data-invite="${escapeHtml(invite ?? '')}" data-setup="${escapeHtml(setup ?? '')}" data-reset="${escapeHtml(reset ?? '')}" novalidate>
+  <form id="builtin-sign-in" class="fields" data-mode="${registering ? 'register' : 'sign-in'}" data-return-to="${escapeHtml(returnTo)}" data-invite="${escapeHtml(invite ?? '')}" data-setup="${escapeHtml(setup ?? '')}" data-reset="${escapeHtml(reset ?? '')}" data-resetting="${mode === 'reset' ? '1' : ''}" novalidate>
     <label>Email<input type="email" name="email" autocomplete="${registering ? 'email' : 'username webauthn'}" required${email === undefined ? '' : ` value="${escapeHtml(email)}" readonly`} /></label>
     <label>Password<input type="password" name="password" autocomplete="${registering ? 'new-password' : 'current-password'}"${registering ? ' minlength="10" aria-describedby="password-rule"' : ''} /></label>
     ${registering ? `<p id="password-rule" class="muted">At least 10 characters.${mode === 'reset' ? '' : ' Not needed with a passkey.'}</p>` : ''}
@@ -78,6 +78,7 @@ const registering = form.dataset.mode === 'register';
 const invite = form.dataset.invite || null;
 const setup = form.dataset.setup || null;
 const reset = form.dataset.reset || null;
+const resetting = form.dataset.resetting === '1';
 const returnTo = form.dataset.returnTo || '/';
 const bytes = (value) => Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
 const text = (buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer))).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
@@ -99,8 +100,8 @@ async function run(work) {
 form.addEventListener('submit', (event) => {
   event.preventDefault();
   if (!form.elements.email.checkValidity()) return say('Enter an email address.');
-  run(async () => done(await post(reset ? 'password/reset' : registering ? 'password/register' : 'password/sign-in',
-    reset ? { reset, password: form.elements.password.value, returnTo }
+  run(async () => done(await post(resetting ? 'password/reset' : registering ? 'password/register' : 'password/sign-in',
+    resetting ? { reset, setup, password: form.elements.password.value, returnTo }
       : { email: email(), password: form.elements.password.value, invite, setup, returnTo })));
 });
 passkey.addEventListener('click', () => {
@@ -108,7 +109,7 @@ passkey.addEventListener('click', () => {
   if (registering && !form.elements.email.checkValidity()) return say('Enter your email first: it names the account.');
   run(async () => {
     if (registering) {
-      const options = reset ? await post('passkey/reset/options', { reset })
+      const options = resetting ? await post('passkey/reset/options', { reset, setup })
         : await post('passkey/register/options', { email: email(), invite, setup });
       const created = await navigator.credentials.create({ publicKey: { ...options, challenge: bytes(options.challenge),
         user: { ...options.user, id: bytes(options.user.id) },

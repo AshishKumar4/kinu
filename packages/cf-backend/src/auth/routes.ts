@@ -64,7 +64,7 @@ interface MutableTokenEndpointResponse {
 }
 
 export type AuthRoutesAuthority = SessionAuthority
-  & Pick<UserDO, 'setCredential' | 'listActiveWorkspaces' | 'builtinHasOwner' | 'builtinInvitedEmail' | 'builtinResetAccount'>;
+  & Pick<UserDO, 'setCredential' | 'listActiveWorkspaces' | 'builtinHasOwner' | 'builtinInvitedEmail' | 'builtinResetAccount' | 'builtinOwnerAccount'>;
 
 /** Nothing optional that the session port leaves optional: sign-out revokes through `AUTH_KV` unguarded. */
 export interface AuthRoutesEnv<Id = DurableObjectId> extends SignInDeclarationEnv, OwnerCapabilityEnv {
@@ -167,10 +167,17 @@ async function builtinSignIn<Id>(env: AuthRoutesEnv<Id>, url: URL, returnTo: str
       : { mode: 'invite', invite, email, returnTo };
   }
 
-  if (await accounts.builtinHasOwner(caller)) return { mode: 'sign-in', returnTo };
   const setup = url.searchParams.get('setup');
+  const proven = await setupProven(env, setup);
+  const owner = await accounts.builtinOwnerAccount(caller);
 
-  if (await setupProven(env, setup)) return { mode: 'owner', setup: setup ?? '', returnTo };
+  if (owner !== null) {
+    return proven
+      ? { mode: 'reset', setup: setup ?? '', email: owner.email, notice: "Reset the owner's sign-in. It replaces the owner's password and passkeys and signs the owner out everywhere.", returnTo }
+      : { mode: 'sign-in', returnTo };
+  }
+
+  if (proven) return { mode: 'owner', setup: setup ?? '', returnTo };
 
   return {
     mode: 'setup', returnTo,

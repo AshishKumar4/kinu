@@ -191,6 +191,19 @@ describe('a reset link', () => {
   });
 });
 
+test("the deployer's setup token resets the owner's sign-in and ends the owner's sessions", async () => {
+  const { env, post, registerOwner } = deployment();
+  const before = sessionOf(await registerOwner('owner@example.com'));
+  const guessed = await post('/api/auth/builtin/password/reset', { setup: 'a guess', password: 'a brand new password' });
+  const reset = await post('/api/auth/builtin/password/reset', { setup: SETUP_TOKEN, password: 'a brand new password' });
+
+  expect(guessed.status).toBe(403);
+  expect(reset.status).toBe(200);
+  expect(await verifySession(env, before)).toBeNull();
+  expect((await post('/api/auth/builtin/password/sign-in', { email: 'owner@example.com', password: 'a brand new password' })).status).toBe(200);
+  expect((await post('/api/auth/builtin/password/sign-in', { email: 'owner@example.com', password: 'a long enough password' })).status).toBe(401);
+});
+
 describe('signing in', () => {
   test('a wrong password is refused, and no session is set', async () => {
     const { post, registerOwner } = deployment();
