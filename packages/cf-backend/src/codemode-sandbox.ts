@@ -153,7 +153,6 @@ export function createRuntimeExecutor(launch: ProgramLaunch): Executor {
           ? providers
           : [{ name: 'codemode', fns: providers }];
 
-        // Each function answers the launcher over RPC, so its answer leaves as a relayed one.
         const bridged = normalized.map((provider) => ({
           name: provider.name,
           fns: Object.fromEntries(Object.entries(provider.fns).map(([name, fn]) => [
