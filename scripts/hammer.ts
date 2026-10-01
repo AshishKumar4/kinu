@@ -51,6 +51,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { cpus } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stripVTControlCharacters } from 'node:util';
 
 import { runUnderDeadline, writeFully } from './deadline';
 import { assertMeasured, finding } from './gate-ratchet';
@@ -113,6 +114,10 @@ export interface HammerRun {
   readonly leftovers: readonly string[];
 }
 
+function reporterText(output: string): string {
+  return stripVTControlCharacters(output).replace(/^::group::/gmu, '');
+}
+
 /**
  * Test files a `bun test` run REPORTS having executed.
  *
@@ -126,7 +131,7 @@ export interface HammerRun {
 export function measuredFiles(output: string): string[] {
   const seen = new Set<string>();
 
-  for (const line of output.split('\n')) {
+  for (const line of reporterText(output).split('\n')) {
     // The per-test lines: `(pass) packages/<package>/tests/<name>.test.ts > name [1.00ms]`,
     // and bun's own file heading: `packages/<package>/tests/<name>.test.ts:`.
     const reported = /(?:^\((?:pass|fail|skip|todo)\)\s+|^)((?:packages|scripts|tests)\/[\w./-]+\.test\.tsx?)(?::|\s|$)/
@@ -148,8 +153,9 @@ export interface ReportedCounts {
 
 /** `N pass` and `N fail` out of bun's summary. */
 export function reportedCounts(output: string): ReportedCounts {
-  const passed = /^\s*(\d+)\s+pass\s*$/m.exec(output)?.[1];
-  const failed = /^\s*(\d+)\s+fail\s*$/m.exec(output)?.[1];
+  const text = reporterText(output);
+  const passed = /^\s*(\d+)\s+pass\s*$/m.exec(text)?.[1];
+  const failed = /^\s*(\d+)\s+fail\s*$/m.exec(text)?.[1];
 
   return { passed: Number(passed ?? 0), failed: Number(failed ?? 0) };
 }
@@ -160,7 +166,7 @@ export function failingTests(output: string): string[] {
   const failing: string[] = [];
   let file = '';
 
-  for (const line of output.split('\n').map((text) => text.trim())) {
+  for (const line of reporterText(output).split('\n').map((text) => text.trim())) {
     const heading = /^((?:packages|scripts|tests)\/[\w./-]+\.test\.tsx?):$/u.exec(line)?.[1];
 
     if (heading !== undefined) {
@@ -285,6 +291,14 @@ export async function hammer(runs: number, workers: number, command: HammerComma
   return results;
 }
 
+/** Coverage is part of the verdict: an exit-zero run that did not report every governed file stays in red evidence. */
+export function completeRun(run: HammerRun, governed: readonly string[]): boolean {
+  const files = new Set(run.measured);
+
+  return run.exit === 0 && !run.killed && run.leftovers.length === 0 && run.passed > 0
+    && files.size === governed.length && governed.every((file) => files.has(file));
+}
+
 /* ── The verdict ──────────────────────────────────────────────────────── */
 
 if (import.meta.main) {
@@ -400,7 +414,7 @@ if (import.meta.main) {
     // EVERY failing run's full block, verbatim. A summary line is not evidence:
     // the interleaving that produced it is only in the output.
     failures: results
-      .filter((run) => run.exit !== 0 || run.killed || run.leftovers.length > 0)
+      .filter((run) => !completeRun(run, governed))
       .map((run) => ({
         run: run.index,
         exit: run.exit,
@@ -412,7 +426,7 @@ if (import.meta.main) {
         output: run.output,
       })),
     passes: results
-      .filter((run) => run.exit === 0 && !run.killed && run.leftovers.length === 0)
+      .filter((run) => completeRun(run, governed))
       .map((run) => ({
         run: run.index,
         seconds: Number(run.seconds.toFixed(1)),

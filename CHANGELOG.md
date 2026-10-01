@@ -24,6 +24,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **The hosted hammer reads Bun’s Actions report as well as its terminal report.** Grouped file headings and colour codes no longer hide executed files, and an exit-zero run with missing coverage keeps its complete output as red evidence.
 - **A reset that stops partway can be finished.** `bun run deploy --reset` checks the REST token and everything else it needs before it deletes anything, writes its record and the rollback barrier before its first deletion, and run again against its own placeholder finishes what that record says is left, instead of refusing it.
 - **Queued hired-agent receipts no longer make the regression model resend or leave a caller unfinished.** The hire-message case now observes the real workspace socket's roster and completed reply stream, not cross-actor test gates. Dismiss awaits its own caller and retirement, so eviction cannot resume a turn the case abandoned.
 - **A sandbox that fails to start the same way every time stops retrying.** It is refused once, with one incident, instead of starting again on every request. The Environment card says why and offers Start again, and the agent is told to choose another size or ask you. A refusal for lack of capacity is still retried.

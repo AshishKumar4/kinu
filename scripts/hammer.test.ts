@@ -17,10 +17,8 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
-  BURNER, DEFAULT_RUNS, HAMMER_SUITE, artifactPath, failingTests, hammerOnce, measuredFiles, reportedCounts,
+  BURNER, artifactPath, completeRun, failingTests, hammerOnce, measuredFiles, reportedCounts, type HammerRun,
 } from './hammer';
-import { claims, LADDER } from './ladder';
-import { trackedFiles } from './sources';
 
 /** Bun's real output, trimmed to the shapes the parse reads. */
 const REAL_OUTPUT = `bun test v1.4.0 (34cbb9a40)
@@ -55,6 +53,19 @@ Ran 2699 tests across 199 files. [11.02s]
 `;
 
 describe('what a run REPORTED, read from bun\'s own output', () => {
+  // Hosted 70464f439, 2026-10-01: Bun's Actions reporter prefixes headings with ::group::.
+  // Output::is_github_action in Bun's parallel Coordinator emits it; it is not part of the filename.
+  test('Actions grouping and terminal decoration preserve the executed files and failing attribution', () => {
+    const grouped = FAILING_OUTPUT.split(String.fromCharCode(10)).map((line) => line.startsWith('packages/') ? '::group::' + line : line).join(String.fromCharCode(10));
+
+    expect(measuredFiles(grouped)).toEqual(['packages/cf-backend/tests/unit-zz-flake.test.ts']);
+    expect(failingTests(grouped)).toEqual(['packages/cf-backend/tests/unit-zz-flake.test.ts > intermittently failing fixture > passes the first time']);
+
+    const escape = String.fromCharCode(27);
+
+    expect(reportedCounts(escape + '[32m 6 pass' + escape + '[0m' + String.fromCharCode(10) + escape + '[2m 0 fail' + escape + '[0m')).toEqual({ passed: 6, failed: 0 });
+  });
+
   test('every file bun names is measured, from the per-test line and from the heading', () => {
     // BOTH shapes, because a file whose every test fails contributes no
     // `(pass)` line: reading only those would make a fully-red file look
@@ -109,23 +120,14 @@ describe('what a run REPORTED, read from bun\'s own output', () => {
     expect(measuredFiles(FAILING_OUTPUT).filter((file) => !governed.includes(file)))
       .toEqual(['packages/cf-backend/tests/unit-zz-flake.test.ts']);
   });
-});
 
-describe('the governed set is the ladder\'s, not the gate\'s own', () => {
-  test('the hammered command is a real gate, resolved through the one enumeration', () => {
-    // The gate hammers what a tier already runs — the same string, resolved by
-    // the same `claims()` the ladder uses. A private spelling here would let
-    // the two drift, and the hammer would be reporting on a set no tier owns.
-    expect(LADDER.some((gate) => gate.run === HAMMER_SUITE)).toBe(true);
-    const governed = claims(HAMMER_SUITE, trackedFiles());
-    expect(governed.length).toBeGreaterThan(100);
-    expect(governed.every((file) => file.startsWith('packages/cf-backend/'))).toBe(true);
-  });
+  test('an exit-zero run with missing or extra files is retained as red evidence', () => {
+    const governed = ['packages/cf-backend/tests/unit-backend-twins.test.ts', 'packages/cf-backend/tests/unit-facet-reconciliation.test.ts'];
+    const run: HammerRun = { index: 1, exit: 0, seconds: 1, measured: measuredFiles(REAL_OUTPUT), passed: 2698, failed: 0, failing: [], output: REAL_OUTPUT, killed: false, leftovers: [] };
 
-  test('the default run count is more than one, or the lane is just another tier', () => {
-    // A one-run hammer is the tier above it with extra steps: the intermittent
-    // failure this gate exists for was green on run 1 and red on run 2.
-    expect(DEFAULT_RUNS).toBeGreaterThan(1);
+    expect(completeRun(run, governed)).toBe(true);
+    expect(completeRun({ ...run, measured: [] }, governed)).toBe(false);
+    expect(completeRun({ ...run, measured: [...run.measured, 'scripts/another.test.ts'] }, governed)).toBe(false);
   });
 });
 

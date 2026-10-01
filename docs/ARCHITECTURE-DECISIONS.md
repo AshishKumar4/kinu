@@ -1295,6 +1295,7 @@ minutes. These are scheduling estimates, not green-run claims: first-run
 and the one-trial eval pass were red. The four-vCPU hosted hammer is not
 yet measured and can bound completion; the statistical eval Verdict still
 gates production independently.
+The first hosted run (70464f439, 2026-10-01) took 24m47s for the hammer job; all six runs passed 3,672 tests, but its coverage parser recognized zero files. Bun’s Actions reporter prefixes each file heading with ::group::. The reader now normalizes that supported prefix and terminal decoration before reading filenames or failures, and coverage-red runs keep output even when the child exits zero.
 
 ## Providers
 
