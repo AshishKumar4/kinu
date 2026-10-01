@@ -1,4 +1,4 @@
-import { recordSessionEvent, waitFor } from './helpers/local-session';
+
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
@@ -7,7 +7,7 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { present, scratchDir, scratchPath } from '@kinu.run/test-utils';
+import { AwaitedList, present, scratchDir, scratchPath } from '@kinu.run/test-utils';
 import {
   appendMemoryNote, CHAT_SESSION_ID, DYNAMIC_CONTEXT_OPEN_TAG, initWorkspaceSchema, workspaceSkillPath, WORKSPACE_SKILLS_DIR,
   type LLMProviderConfig,
@@ -135,28 +135,28 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
 
-    const eventsA: SessionEvent[] = [];
-    const a = new LocalAgentSession({ rt, db, model: scriptedModel([parked('part-')]), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => recordSessionEvent(eventsA, event) });
+    const eventsA = new AwaitedList<SessionEvent>();
+    const a = new LocalAgentSession({ rt, db, model: scriptedModel([parked('part-')]), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsA.push(event) });
     const dying = a.send('continue me', { id: crypto.randomUUID() });
-    await waitFor(eventsA, () => eventsA.some((event) => event.type === 'text-delta'));
+    await eventsA.until((frames) => frames.some((event) => event.type === 'text-delta'));
 
-    const eventsB: SessionEvent[] = [];
+    const eventsB = new AwaitedList<SessionEvent>();
     const promptsB: PromptMessage[][] = [];
-    const b = new LocalAgentSession({ rt, db, model: scriptedModel([answer('one')], promptsB), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => recordSessionEvent(eventsB, event) });
-    await waitFor(eventsB, () => eventsB.some((event) => event.type === 'turn-end'));
+    const b = new LocalAgentSession({ rt, db, model: scriptedModel([answer('one')], promptsB), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsB.push(event) });
+    await eventsB.until((frames) => frames.some((event) => event.type === 'turn-end'));
     await b.end();
-    expect(eventsB.filter((event) => event.type === 'background' && event.event === 'turn_reopened')).toHaveLength(1);
+    expect(eventsB.items.filter((event) => event.type === 'background' && event.event === 'turn_reopened')).toHaveLength(1);
     expect(promptsB).toHaveLength(1);
 
     const runs = db.query<{ run_id: string; type: string }, []>("SELECT run_id, type FROM run_events WHERE type IN ('run_start', 'run_end') ORDER BY rowid").all();
     expect(runs.map((row) => row.type)).toEqual(['run_start', 'run_end']);
     expect(new Set(runs.map((row) => row.run_id)).size).toBe(1);
 
-    const eventsC: SessionEvent[] = [];
+    const eventsC = new AwaitedList<SessionEvent>();
     const promptsC: PromptMessage[][] = [];
-    const c = new LocalAgentSession({ rt, db, model: scriptedModel([answer('never')], promptsC), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => recordSessionEvent(eventsC, event) });
+    const c = new LocalAgentSession({ rt, db, model: scriptedModel([answer('never')], promptsC), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsC.push(event) });
     await c.end();
-    expect(eventsC.filter((event) => event.type === 'background' && event.event === 'turn_reopened')).toHaveLength(0);
+    expect(eventsC.items.filter((event) => event.type === 'background' && event.event === 'turn_reopened')).toHaveLength(0);
     expect(promptsC).toHaveLength(0);
     expect(db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM conversation_entries WHERE role = 'assistant'").get()?.n).toBe(1);
 
@@ -173,16 +173,16 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
     const restore = setDiagnosticsSink(logger);
 
     try {
-      const eventsA: SessionEvent[] = [];
-      const a = new LocalAgentSession({ rt, db, model: scriptedModel([memoryCall('call-1'), parked('part-')]), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => recordSessionEvent(eventsA, event) });
+      const eventsA = new AwaitedList<SessionEvent>();
+      const a = new LocalAgentSession({ rt, db, model: scriptedModel([memoryCall('call-1'), parked('part-')]), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsA.push(event) });
       const dying = a.send('keep going', { id: crypto.randomUUID() });
-      await waitFor(eventsA, () => eventsA.some((event) => event.type === 'text-delta'));
+      await eventsA.until((frames) => frames.some((event) => event.type === 'text-delta'));
       // A fresh turn in a live process is not a resume.
       expect(logger.emitted.filter((line) => line.event === 'turn.resumed')).toHaveLength(0);
 
-      const eventsB: SessionEvent[] = [];
-      const b = new LocalAgentSession({ rt, db, model: scriptedModel([answer('done')]), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => recordSessionEvent(eventsB, event) });
-      await waitFor(eventsB, () => eventsB.some((event) => event.type === 'turn-end'));
+      const eventsB = new AwaitedList<SessionEvent>();
+      const b = new LocalAgentSession({ rt, db, model: scriptedModel([answer('done')]), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsB.push(event) });
+      await eventsB.until((frames) => frames.some((event) => event.type === 'turn-end'));
       await b.end();
 
       expect(logger.emitted.filter((line) => line.event === 'turn.resumed').map((line) => line.fields)).toEqual([
@@ -205,17 +205,17 @@ describe('AN INTERRUPTED TURN CONTINUES — once', () => {
 
     // The dead process keeps one finished step and dies inside the next.
     const promptsA: PromptMessage[][] = [];
-    const eventsA: SessionEvent[] = [];
-    const a = new LocalAgentSession({ rt, db, model: scriptedModel([memoryCall('kept'), parked('part-')], promptsA), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => recordSessionEvent(eventsA, event) });
+    const eventsA = new AwaitedList<SessionEvent>();
+    const a = new LocalAgentSession({ rt, db, model: scriptedModel([memoryCall('kept'), parked('part-')], promptsA), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsA.push(event) });
     const dying = a.send('/focused remember this', { id: crypto.randomUUID() });
-    await waitFor(eventsA, () => promptsA.length === 2);
+    await eventsA.until((frames) => frames.some((event) => event.type === 'text-delta' && event.delta === 'part-'));
 
-    const eventsB: SessionEvent[] = [];
+    const eventsB = new AwaitedList<SessionEvent>();
     const promptsB: PromptMessage[][] = [];
-    const b = new LocalAgentSession({ rt, db, model: scriptedModel([memoryCall('resumed'), answer('done')], promptsB), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => recordSessionEvent(eventsB, event) });
-    await waitFor(eventsB, () => eventsB.some((event) => event.type === 'turn-end'));
+    const b = new LocalAgentSession({ rt, db, model: scriptedModel([memoryCall('resumed'), answer('done')], promptsB), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsB.push(event) });
+    await eventsB.until((frames) => frames.some((event) => event.type === 'turn-end'));
     await b.end();
-    expect(eventsB.filter((event) => event.type === 'background' && event.event === 'turn_reopened')).toHaveLength(1);
+    expect(eventsB.items.filter((event) => event.type === 'background' && event.event === 'turn_reopened')).toHaveLength(1);
     expect(promptsB).toHaveLength(2);
 
     for (const prompt of promptsB) {
@@ -254,15 +254,15 @@ async function resumed(cut: Step, finish: Step): Promise<{
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
 
-  const eventsA: SessionEvent[] = [];
-  const a = new LocalAgentSession({ rt, db, model: scriptedModel([cut]), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => recordSessionEvent(eventsA, event) });
+  const eventsA = new AwaitedList<SessionEvent>();
+  const a = new LocalAgentSession({ rt, db, model: scriptedModel([cut]), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsA.push(event) });
   const dying = a.send('carry on', { id: crypto.randomUUID() });
-  await waitFor(eventsA, () => eventsA.some((event) => event.type === 'text-delta'));
+  await eventsA.until((frames) => frames.some((event) => event.type === 'text-delta'));
 
-  const eventsB: SessionEvent[] = [];
+  const eventsB = new AwaitedList<SessionEvent>();
   const promptsB: PromptMessage[][] = [];
-  const b = new LocalAgentSession({ rt, db, model: scriptedModel([finish], promptsB), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => recordSessionEvent(eventsB, event) });
-  await waitFor(eventsB, () => eventsB.some((event) => event.type === 'turn-end'));
+  const b = new LocalAgentSession({ rt, db, model: scriptedModel([finish], promptsB), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsB.push(event) });
+  await eventsB.until((frames) => frames.some((event) => event.type === 'turn-end'));
   await b.end();
   await Promise.race([dying, Promise.resolve()]);
 
@@ -270,7 +270,7 @@ async function resumed(cut: Step, finish: Step): Promise<{
   const last = [...transcript.entries()].reverse().find((entry) => entry.role === 'assistant');
   const stored = last === undefined ? null : (await transcript.project(last.id))?.content ?? null;
 
-  return { db, stored, streamed: eventsB.flatMap((event) => event.type === 'text-delta' ? [event.delta] : []), continued: promptsB[0] ?? [] };
+  return { db, stored, streamed: eventsB.items.flatMap((event) => event.type === 'text-delta' ? [event.delta] : []), continued: promptsB[0] ?? [] };
 }
 
 // 2026-09-30 (ironwood-cairn-6dbcb8de): a continuation sent the cut text as the last assistant message, which an
@@ -308,17 +308,17 @@ describe('RUNTIME CONTEXT SURVIVES A RESTART — where it was woven', () => {
 
     // The dead process answers a turn, keeps one step of the next and dies inside the one after.
     const promptsA: PromptMessage[][] = [];
-    const eventsA: SessionEvent[] = [];
+    const eventsA = new AwaitedList<SessionEvent>();
     const search = memoryCall('kept', '{"action":"search","query":"invoices"}');
-    const a = new LocalAgentSession({ rt, db, model: scriptedModel([answer('the first answer'), search, parked('part-')], promptsA), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => recordSessionEvent(eventsA, event) });
+    const a = new LocalAgentSession({ rt, db, model: scriptedModel([answer('the first answer'), search, parked('part-')], promptsA), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsA.push(event) });
     await a.send('the first question', { id: crypto.randomUUID() });
     const dying = a.send('the second question', { id: crypto.randomUUID() });
-    await waitFor(eventsA, () => promptsA.length === 3);
+    await eventsA.until((frames) => frames.some((event) => event.type === 'text-delta' && event.delta === 'part-'));
 
-    const eventsB: SessionEvent[] = [];
+    const eventsB = new AwaitedList<SessionEvent>();
     const promptsB: PromptMessage[][] = [];
-    const b = new LocalAgentSession({ rt, db, model: scriptedModel([answer('done')], promptsB), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => recordSessionEvent(eventsB, event) });
-    await waitFor(eventsB, () => eventsB.some((event) => event.type === 'turn-end'));
+    const b = new LocalAgentSession({ rt, db, model: scriptedModel([answer('done')], promptsB), noAutoEvolve: true, cwd: WORKSPACE, onEvent: (event) => eventsB.push(event) });
+    await eventsB.until((frames) => frames.some((event) => event.type === 'turn-end'));
     await b.end();
 
     const last = present(promptsA.at(-1), 'the dead process\u2019s last request');
