@@ -6,7 +6,11 @@ import {
   createChatModel, createFallbackCooldowns, PLATFORM_CATALOG, runChat, silenceBoundMs, type ChatEvent, type ChatFallback,
   type PlatformFactId, type SilenceBoundId,
 } from '../src/index';
+import { APICallError } from 'ai';
 import { asFetchFunction } from '../src/providers/fetch-shim';
+import { PROVIDER_RETRIES_HEADER, withRateLimitRetry } from '../src/providers/rate-limit-retry';
+import type { ProviderWaitInfo } from '../src/providers/types';
+import { fmtSpan } from '../src/utils/format';
 
 const IDLE_MS = silenceBoundMs('provider.stream.idle_ms');
 
@@ -139,3 +143,69 @@ describe('a provider stream that stops sending', () => {
     expect(turn.events).toContainEqual(expect.objectContaining({ type: 'done', text: 'one two three four five six seven eight nine ten' }));
   });
 });
+
+describe('a provider that sends nothing before its first byte', () => {
+  /** A provider silent `silent` times, each request hanging until the transport cuts it, then answering. */
+  function silentThenAnswering(silent: number) {
+    let calls = 0;
+    const arrivals = Array.from({ length: silent + 1 }, () => Promise.withResolvers<void>());
+    const waits: ProviderWaitInfo[] = [];
+
+    const fetch = asFetchFunction(async (_input, init) => {
+      calls += 1;
+      arrivals[calls - 1]?.resolve();
+
+      if (calls > silent) return new Response(new Blob([delta('at last'), ...finish].map((chunk) => new Uint8Array(chunk))));
+
+      return await new Promise<Response>((_, reject) => {
+        init?.signal?.addEventListener('abort', () => { reject(init.signal?.reason); }, { once: true });
+      });
+    });
+
+    const wrapped = withRateLimitRetry(fetch, { provider: 'stub', sleep: async () => {}, onWait: (info) => { waits.push(info); } });
+
+    const call = (retries: number) => wrapped('https://stub.invalid/v1/chat/completions', {
+      method: 'POST', body: JSON.stringify({ model: 'm', stream: true }), headers: { [PROVIDER_RETRIES_HEADER]: String(retries) },
+    });
+
+    /** Settles once request `n` (1-based) reached the provider. */
+    const reached = (n: number) => arrivals[n - 1]?.promise;
+
+    return { call, waits, calls: () => calls, reached };
+  }
+
+  test('each silent attempt spends a retry and declares a wait before the transport asks again', async () => {
+    jest.useFakeTimers();
+    const provider = silentThenAnswering(2);
+    const answered = provider.call(2);
+
+    for (const request of [1, 2]) {
+      await provider.reached(request);
+      jest.advanceTimersByTime(IDLE_MS);
+    }
+
+    expect((await answered).status).toBe(200);
+    expect(provider.calls()).toBe(3);
+    expect(provider.waits.map(({ source, attempt, provider: who }) => ({ source, attempt, who })))
+      .toEqual([{ source: 'stall', attempt: 1, who: 'stub' }, { source: 'stall', attempt: 2, who: 'stub' }]);
+  });
+
+  test('past its retries the call fails for the chain, which the SDK must not retry again', async () => {
+    jest.useFakeTimers();
+    const provider = silentThenAnswering(5);
+    const answered = Promise.allSettled([provider.call(1)]);
+
+    for (const request of [1, 2]) {
+      await provider.reached(request);
+      jest.advanceTimersByTime(IDLE_MS);
+    }
+
+    const [settled] = await answered;
+    const failure = settled.status === 'rejected' ? settled.reason : null;
+    expect(APICallError.isInstance(failure) && { message: failure.message, retryable: failure.isRetryable })
+      .toEqual({ message: `stub sent nothing for ${fmtSpan(IDLE_MS)}`, retryable: false });
+    expect(provider.calls()).toBe(2);
+    expect(provider.waits.map(({ source }) => source)).toEqual(['stall']);
+  });
+});
+
