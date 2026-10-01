@@ -203,6 +203,34 @@ describe('a turn that stays busy and silent fails as a product hang, never holds
     expect(await settle(new TurnWatch(failingOver, clock))).toBeUndefined();
   });
 
+  // A provider silent from its first byte: the transport fails each attempt at the provider's bound and declares a
+  // `stall` wait before the next, until the chain takes the call (core `rate-limit-retry.ts`, 3817d2ca9).
+  test('a provider silent from its start declares a stall at each attempt, and each declaration is heard', async () => {
+    const attemptMs = silenceBoundMs('provider.stream.idle_ms') + 2_000;
+    const answeredAt = 3 * attemptMs + MINUTE;
+
+    const stall = (attempt: number): RunEvent => ({ type: 'provider_wait', runId: 'run-1', eventIndex: attempt,
+      timestamp: at(attempt * attemptMs), provider: 'opencode-go', waitMs: 2_000, attempt, source: 'stall' });
+
+    // Three silent attempts, then the chain's next model answers within a minute.
+    const retrying = (declared: boolean) => (elapsed: number): Snapshot => {
+      const stalls = declared ? [1, 2, 3].filter((attempt) => attempt * attemptMs <= elapsed).map(stall) : [];
+
+      return { events: [start('run-1'), ...stalls, ...elapsed >= answeredAt ? [end('run-1', answeredAt, 4)] : []] };
+    };
+
+    // Undeclared, as before the transport owned these retries, the attempts were one silence: hung.
+    const before = watchClock();
+    const undeclared = await hangOf(settle(new TurnWatch(fixtureWorkspace(before, retrying(false)), before)));
+
+    expect(undeclared.message).toContain('held by open run run-1');
+
+    const after = watchClock();
+
+    expect(await settle(new TurnWatch(fixtureWorkspace(after, retrying(true)), after))).toBeUndefined();
+    expect(after.elapsed()).toBeGreaterThanOrEqual(answeredAt);
+  });
+
   test("a working helper is heard in its own room, which the watch listens to only while it works", async () => {
     const clock = watchClock();
     const listened: string[][] = [];
