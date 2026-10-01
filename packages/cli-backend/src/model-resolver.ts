@@ -37,6 +37,7 @@ import {
   type ProviderInfo,
   type ProviderWaitInfo,
   type ModelCallSpend,
+  type ModelRouteResolution,
   type GenerateRequest,
   type StreamRequest,
   countRequestInputTokens,
@@ -151,12 +152,12 @@ export interface LocalModelResolverConfig {
 }
 
 /**
- * The workspace LLM seam over the local registry. `spec` overrides the model
- * (chosen by the turn profile's tier route); omitted = configured chat model.
+ * The workspace LLM seam over the local registry. `route` is the turn profile's
+ * model and effort; omitted = configured chat model at its own effort.
  * Only completed calls report spend: a thrown call yields no usage.
  */
 export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
-  spec?: string | null;
+  route?: Pick<ModelRouteResolution, 'model' | 'reasoningEffort'>;
   conversation: string;
   /** Sink and producer label together: only the consumer knows which producer
    *  a call belongs to. */
@@ -164,10 +165,10 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
 }): LLM {
   const resolver = createLocalModelResolver(opts);
   // Normalized per call: an unresolvable id fails at the call, not at construction.
-  const spec = () => resolver.normalizeSpecSync(opts.spec ?? null);
+  const spec = () => resolver.normalizeSpecSync(opts.route?.model ?? null);
   const model = (resolved: string) => resolver.resolveModel(resolved, opts.conversation);
   const spend = opts.spend;
-  const effortOptions = (resolved: string) => reasoningEffortOptions('low', parseModelSpec(resolved).provider);
+  const effortOptions = (resolved: string) => reasoningEffortOptions(opts.route?.reasoningEffort, parseModelSpec(resolved).provider);
 
   return {
     stream(input) {
