@@ -745,15 +745,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         return this.agentTurns.finish(actorId, turnId, end);
       },
       failTurn: (turnId, failure) => this.agentTurns.fail(actorId, turnId, failure),
-      getAuthHeaders: async (key, opts) => {
+      getAuth: async (key, opts) => {
         const { stub, caller } = await credentials();
 
-        return await stub.getAuthHeaders(caller, key, opts);
-      },
-      getCredentialBaseURL: async (key) => {
-        const { stub, caller } = await credentials();
-
-        return await stub.getCredentialBaseURL(caller, key);
+        return await stub.getAuth(caller, key, opts);
       },
       listCredentials: async () => {
         const { stub, caller } = await credentials();

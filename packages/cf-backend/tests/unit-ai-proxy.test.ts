@@ -12,7 +12,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from '@kinu.run/core';
-import type { AccessTokenScope, AuthRequest, UserCaller } from '@kinu.run/core';
+import type { AccessTokenScope, AuthRequest, AuthResolution, UserCaller } from '@kinu.run/core';
 import * as v from 'valibot';
 import { requestUrl } from '@kinu.run/core';
 
@@ -92,21 +92,16 @@ function setupEnv(opts: {
         user: { id: USER_ID, email: 'ashish@example.com', displayName: 'Ashish' },
       };
     },
-    async getAuthHeaders(
-      _caller: UserCaller, key: string, o?: AuthRequest,
-    ): Promise<Record<string, string> | null> {
+    async getAuth(_caller: UserCaller, key: string, o?: AuthRequest): Promise<AuthResolution | null> {
       const bearer = o?.rejected === undefined ? token : (opts.freshToken ?? token);
 
-      if (key === 'cloudflare.oauth') return { authorization: `Bearer ${bearer}` };
+      if (key === 'cloudflare.oauth') return { headers: { authorization: `Bearer ${bearer}` }, baseURL: AI_BASE_URL };
 
       if (key === 'cloudflare.ai-gateway') {
-        return gatewayId ? { authorization: `Bearer ${bearer}`, 'cf-aig-gateway-id': gatewayId } : null;
+        return gatewayId ? { headers: { authorization: `Bearer ${bearer}`, 'cf-aig-gateway-id': gatewayId }, baseURL: AI_BASE_URL } : null;
       }
 
       return null;
-    },
-    async getCredentialBaseURL(_caller: UserCaller, key: string) {
-      return (key === 'cloudflare.oauth' || key === 'cloudflare.ai-gateway') ? AI_BASE_URL : null;
     },
     async listCredentials(_caller: UserCaller) {
       return [{ key: 'cloudflare.oauth', kind: 'oauth' as const, createdAt: 0, updatedAt: 0 }];

@@ -27,16 +27,18 @@ function resolved(model: LanguageModel): v.InferOutput<typeof ResolvedModelSchem
 }
 
 interface FakeUserDO extends ModelRelayHub {
-  getAuthHeaders(caller: UserCaller, key: string): Promise<CredentialHeaders | null>;
-  getCredentialBaseURL(caller: UserCaller, key: string): Promise<string | null>;
+  getAuth(caller: UserCaller, key: string): Promise<{ headers: CredentialHeaders } | null>;
   listCredentials(caller: UserCaller): Promise<Array<{ key: string; kind: 'bearer'; createdAt: number; updatedAt: number }>>;
 }
 
 function fakeUserDO(credentials: Readonly<Record<string, CredentialHeaders>> = {}): FakeUserDO {
   return {
     ...NO_RELAY_MACHINE,
-    async getAuthHeaders(_caller, key) { return credentials[key] ?? null; },
-    async getCredentialBaseURL() { return null; },
+    async getAuth(_caller, key) {
+      const headers = credentials[key];
+
+      return headers === undefined ? null : { headers };
+    },
     async listCredentials() {
       return Object.keys(credentials).map((key) => ({ key, kind: 'bearer' as const, createdAt: 0, updatedAt: 0 }));
     },
