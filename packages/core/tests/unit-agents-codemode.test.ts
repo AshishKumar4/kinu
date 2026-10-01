@@ -788,6 +788,7 @@ swarm: swarmDeps(),
       provider: { revision: 'test-1', availableModels: [DEFAULT_WORKERS_AI_MODEL_SPEC] },
       roleId: 'task',
       availableTools: [],
+      pins: {},
     }),
     ...overrides,
   };
@@ -846,6 +847,7 @@ describe('agents delegation — role/tier/preset precedence', () => {
         provider: { revision: 'test-1', availableModels: [DEFAULT_WORKERS_AI_MODEL_SPEC] },
         roleId: 'lead',
         availableTools: [],
+        pins: {},
       }),
     });
 

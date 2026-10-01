@@ -1601,7 +1601,7 @@ export class UserDO extends Agent<Env> {
   async builtinCreateInvite(caller: UserCaller, invite: NewInvite): Promise<boolean> {
     await this.requireTier(caller, 'builtin_accounts');
 
-    return createBuiltinInvite(this.builtinSql(), invite, Date.now());
+    return createBuiltinInvite(this.builtinSql(), invite);
   }
 
   async revokeBrowserSession(caller: UserCaller, tokenHash: string): Promise<void> {

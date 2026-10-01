@@ -65,14 +65,12 @@ export function initBuiltinAccounts(sql: BuiltinSql): void {
     user_id TEXT NOT NULL,
     public_key TEXT NOT NULL,
     counter INTEGER NOT NULL,
-    transports TEXT NOT NULL,
-    created_at INTEGER NOT NULL
+    transports TEXT NOT NULL
   )`;
   void sql`CREATE TABLE IF NOT EXISTS builtin_invites (
     token_hash TEXT PRIMARY KEY,
     purpose TEXT NOT NULL CHECK (purpose IN ('join', 'reset')),
     email TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL
   )`;
   void sql`CREATE TABLE IF NOT EXISTS builtin_challenges (
@@ -90,6 +88,11 @@ export function initBuiltinAccounts(sql: BuiltinSql): void {
     window_start INTEGER NOT NULL,
     locked_until INTEGER NOT NULL
   )`;
+}
+
+function storePasskey(sql: BuiltinSql, userId: string, { credentialId, publicKey, counter, transports }: StoredPasskey): void {
+  void sql`INSERT INTO builtin_passkeys (credential_id, user_id, public_key, counter, transports)
+      VALUES (${credentialId}, ${userId}, ${publicKey}, ${counter}, ${JSON.stringify(transports)})`;
 }
 
 export function hasBuiltinOwner(sql: BuiltinSql): boolean {
@@ -153,12 +156,7 @@ export function registerBuiltinAccount(sql: BuiltinSql, account: NewBuiltinAccou
       VALUES (${account.userId}, ${account.email}, ${admission.role}, ${account.password?.hash ?? null},
               ${account.password?.salt ?? null}, ${account.password?.iterations ?? null}, ${now})`;
 
-  if (account.passkey) {
-    const { credentialId, publicKey, counter, transports } = account.passkey;
-
-    void sql`INSERT INTO builtin_passkeys (credential_id, user_id, public_key, counter, transports, created_at)
-        VALUES (${credentialId}, ${account.userId}, ${publicKey}, ${counter}, ${JSON.stringify(transports)}, ${now})`;
-  }
+  if (account.passkey) storePasskey(sql, account.userId, account.passkey);
 
   return admission;
 }
@@ -243,13 +241,13 @@ export interface NewInvite {
   readonly expiresAt: number;
 }
 
-export function createBuiltinInvite(sql: BuiltinSql, invite: NewInvite, now: number): boolean {
+export function createBuiltinInvite(sql: BuiltinSql, invite: NewInvite): boolean {
   if (!isBuiltinOwner(sql, invite.ownerUserId)) return false;
   const exists = sql`SELECT 1 FROM builtin_accounts WHERE email = ${invite.email}`.length > 0;
 
   if (exists !== (invite.purpose === 'reset')) return false;
-  void sql`INSERT INTO builtin_invites (token_hash, purpose, email, created_at, expires_at)
-      VALUES (${invite.tokenHash}, ${invite.purpose}, ${invite.email}, ${now}, ${invite.expiresAt})`;
+  void sql`INSERT INTO builtin_invites (token_hash, purpose, email, expires_at)
+      VALUES (${invite.tokenHash}, ${invite.purpose}, ${invite.email}, ${invite.expiresAt})`;
 
   return true;
 }
@@ -329,12 +327,7 @@ export function applyReset(sql: BuiltinSql, reset: Reset, now: number): ResetAcc
   void sql`UPDATE builtin_accounts SET password_hash = ${reset.password?.hash ?? null}, password_salt = ${reset.password?.salt ?? null},
     password_iterations = ${reset.password?.iterations ?? null} WHERE user_id = ${account.userId}`;
 
-  if (reset.passkey) {
-    const { credentialId, publicKey, counter, transports } = reset.passkey;
-
-    void sql`INSERT INTO builtin_passkeys (credential_id, user_id, public_key, counter, transports, created_at)
-        VALUES (${credentialId}, ${account.userId}, ${publicKey}, ${counter}, ${JSON.stringify(transports)}, ${now})`;
-  }
+  if (reset.passkey) storePasskey(sql, account.userId, reset.passkey);
 
   return account;
 }

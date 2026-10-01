@@ -211,6 +211,7 @@ test('the setup token never rides in a URL: /login takes it in a password field 
   const signIn = await page(`/login?setup=${encodeURIComponent(SETUP_TOKEN)}`);
 
   expect(signIn).toContain('Set up or recover the owner');
+  expect(signIn).toContain('aria-describedby="recovery-status" /></label>\n      <p class="status" id="recovery-status"');
   expect(signIn).not.toContain('owner@example.com');
   expect(signIn).not.toContain(encodeURIComponent(SETUP_TOKEN));
 });
@@ -222,6 +223,7 @@ test("the deployer's setup token resets the owner's sign-in and ends the owner's
   const reset = await post('/api/auth/builtin/password/reset', { setup: SETUP_TOKEN, password: 'a brand new password' });
 
   expect(guessed.status).toBe(403);
+  expect(v.parse(ErrorSchema, await guessed.json()).error).toBe('That is not the setup token.');
   expect(reset.status).toBe(200);
   expect(await verifySession(env, before)).toBeNull();
   expect((await post('/api/auth/builtin/password/sign-in', { email: 'owner@example.com', password: 'a brand new password' })).status).toBe(200);

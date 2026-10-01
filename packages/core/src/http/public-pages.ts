@@ -54,7 +54,8 @@ const OWNER_RECOVERY = `<details class="recovery">
     <summary>Set up or recover the owner</summary>
     <form id="owner-recovery" class="fields" novalidate>
       <p class="muted">The setup token replaces the owner's password and passkeys and signs the owner out everywhere.</p>
-      ${SETUP_FIELD}
+      <label>Setup token<input type="password" name="setup" autocomplete="off" required aria-describedby="recovery-status" /></label>
+      <p class="status" id="recovery-status" role="alert" aria-live="assertive"></p>
       <label>New password<input type="password" name="password" autocomplete="new-password" minlength="10" aria-describedby="recovery-rule" /></label>
       <p id="recovery-rule" class="muted">At least 10 characters, or register a passkey instead.</p>
       <button type="submit">Set the owner's password</button>
@@ -95,7 +96,7 @@ const resetting = form.dataset.resetting === '1';
 const returnTo = form.dataset.returnTo || '/';
 const bytes = (value) => Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
 const text = (buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer))).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
-const say = (message) => { status.textContent = message; };
+const say = (message, slot = status) => { slot.textContent = message; };
 const busy = (on) => { for (const control of document.querySelectorAll('button, input')) control.disabled = on; };
 async function post(path, body) {
   const response = await fetch('/api/auth/builtin/' + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -115,10 +116,10 @@ async function createPasskey(options) {
     response: { clientDataJSON: text(created.response.clientDataJSON), attestationObject: text(created.response.attestationObject),
       transports: created.response.getTransports ? created.response.getTransports() : [] } } }));
 }
-async function run(work) {
-  say('');
+async function run(work, slot = status) {
+  say('', slot);
   busy(true);
-  try { await work(); } catch (error) { say(error.name === 'NotAllowedError' ? 'The passkey request was cancelled.' : error.message); busy(false); }
+  try { await work(); } catch (error) { say(error.name === 'NotAllowedError' ? 'The passkey request was cancelled.' : error.message, slot); busy(false); }
 }
 form.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -148,16 +149,17 @@ passkey.addEventListener('click', () => {
 });
 const recovery = document.getElementById('owner-recovery');
 if (recovery) {
+  const slot = document.getElementById('recovery-status');
   const token = () => recovery.elements.setup.value;
   recovery.addEventListener('submit', (event) => {
     event.preventDefault();
-    if (!token()) return say('Enter the setup token.');
-    run(async () => done(await post('password/reset', { setup: token(), password: recovery.elements.password.value, returnTo })));
+    if (!token()) return say('Enter the setup token.', slot);
+    run(async () => done(await post('password/reset', { setup: token(), password: recovery.elements.password.value, returnTo })), slot);
   });
   document.getElementById('recovery-passkey').addEventListener('click', () => {
-    if (!window.PublicKeyCredential) return say('This browser does not support passkeys.');
-    if (!token()) return say('Enter the setup token.');
-    run(async () => createPasskey(await post('passkey/reset/options', { setup: token() })));
+    if (!window.PublicKeyCredential) return say('This browser does not support passkeys.', slot);
+    if (!token()) return say('Enter the setup token.', slot);
+    run(async () => createPasskey(await post('passkey/reset/options', { setup: token() })), slot);
   });
 }`;
 
@@ -225,7 +227,7 @@ form{margin-top:20px}
 .fields input{min-height:42px;padding:0 13px;border:1px solid var(--c-input-border);border-radius:var(--r-row);
 background:var(--c-bg);color:var(--c-text);font:inherit;font-size:14.5px}
 .fields input:focus-visible{outline:2px solid var(--c-accent);outline-offset:1px;border-color:var(--c-accent)}
-.fields .muted{margin:-6px 0 0}
+.fields .muted,.fields .status{margin:-6px 0 0}
 .or{display:flex;align-items:center;gap:12px;margin-top:22px;color:var(--c-text-3);font-size:12.5px}
 .or::before,.or::after{content:"";flex:1;border-top:var(--rule)}
 .or+.providers{margin-top:16px}
