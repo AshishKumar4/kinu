@@ -4,9 +4,12 @@ import { steerSkillsBlock, workspaceGenesisSignal, type JsonObject } from '@kinu
 import { createMemoryVfs } from '../../packages/test-utils/src/vfs';
 import { HELLO_SLATE_ASK, HELLO_SLATE_ID } from './asks';
 import worker, { MAX_BODY_BYTES } from '../../scripts/scripted-model-worker';
-import { startScriptedModel } from '../../scripts/scripted-model';
+import { SCRIPTED_CREDENTIAL, startScriptedModel } from '../../scripts/scripted-model';
 import { FALLBACK_ANSWER } from '../../scripts/scripted-protocol';
 import { tierModel } from '../../scripts/tier-model';
+import { generateText, streamText } from 'ai';
+import { createOpenAICompatProvider, runSleepTimeCompute, type LLM } from '@kinu.run/core';
+import { SLEEP_TIME_PROMPT_OPENING } from '../../packages/core/src/utils/prompt-sections';
 
 /** An OpenAI-shaped refusal of a request, with the failure's class as its code. */
 const RefusalSchema = v.object({
@@ -57,7 +60,7 @@ describe('the scripted model refuses a body it cannot read, the way a provider d
   });
 
   test('a request it can read is answered, not refused', async () => {
-    const body = JSON.stringify({ messages: [{ role: 'user', content: 'an ask no script names' }] });
+    const body = JSON.stringify({ messages: [{ role: 'user', content: `Explain the phrase "${SLEEP_TIME_PROMPT_OPENING}"` }] });
     const response = await worker.fetch(asked(COMPLETIONS, body), ENV);
 
     expect(response.status).toBe(200);
@@ -160,4 +163,40 @@ test('an ask spliced into genesis survives the skills it activates', async () =>
   const stopped = await worker.fetch(asked(COMPLETIONS, JSON.stringify({ messages, tools })), ENV);
 
   expect(v.parse(CompletionSchema, await stopped.json()).choices[0].message.content).toBe(FALLBACK_ANSWER);
+});
+
+describe('the tier model behind background memory compression', () => {
+  test('a conversation with no durable knowledge returns a usable no-change update', async () => {
+    const server = await startScriptedModel(tierModel);
+
+    try {
+      const model = createOpenAICompatProvider().createModel('fake-live', {
+        env: {},
+        getAuth: async (key) => key === SCRIPTED_CREDENTIAL ? { baseURL: server.baseURL, headers: {} } : null,
+        hasCredential: async (key) => key === SCRIPTED_CREDENTIAL,
+      });
+
+      const llm: LLM = {
+        async *stream(options) {
+          yield* streamText({ model, system: options.system, messages: options.messages, tools: options.tools }).textStream;
+        },
+        async complete(prompt) {
+          return (await generateText({ model, prompt, maxRetries: 0 })).text;
+        },
+      };
+
+      const update = await runSleepTimeCompute(llm, {
+        turns: [
+          { task: 'Hello', output: 'Hello back', toolCalls: [] },
+          { task: 'How are you?', output: 'Ready to help', toolCalls: [] },
+          { task: 'Thanks', output: 'You are welcome', toolCalls: [] },
+        ],
+        currentFacts: [],
+      });
+
+      expect(update).toEqual({ upserts: [], decay: [] });
+    } finally {
+      await server.stop();
+    }
+  });
 });

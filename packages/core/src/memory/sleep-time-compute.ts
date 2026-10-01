@@ -12,6 +12,7 @@ import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/struc
 import { KinuError, settleSync } from '../obs/index';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
+import { SLEEP_TIME_PROMPT_OPENING } from '../utils/prompt-sections';
 
 export const SLEEP_TIME_CADENCE = {
   everyTurns: 3,
@@ -123,7 +124,7 @@ const renderTurn = (turn: SleepTimeTurn, index: number): string => `Turn ${index
 - Output: ${evidenceWindow(turn.output, EVIDENCE_BUDGETS.outcomeAssistantResponse)}
 - Tools used: ${turn.toolCalls.join(', ') || '(none)'}`;
 
-const PROMPT = (i: SleepTimeInput) => `You are a background memory-compression agent. Between user turns, you
+const PROMPT = (i: SleepTimeInput) => `${SLEEP_TIME_PROMPT_OPENING} Between user turns, you
 update the agent's persistent state so the next turn starts smarter.
 
 You distill reusable, durable knowledge only: what the user told the agent
