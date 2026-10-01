@@ -845,6 +845,8 @@ const PublicBackgroundJobSchema = v.object({
   status: v.string(),
   result: v.optional(v.nullable(v.string())),
   error: v.optional(v.nullable(v.string())),
+  /** When the job began, in milliseconds since the epoch. */
+  createdAt: v.optional(v.number()),
 });
 
 const BackgroundJobsSchema = v.array(PublicBackgroundJobSchema);
@@ -1667,15 +1669,22 @@ export class KinuPublicSession {
    *   detached tool call became: `shell`/`eval` calls that outrun the
    *   foreground window answer a `{jobId}` handle and settle out of turn, so
    *   their result is reachable only through this row — never in the run
-   *   events of the prompt that issued them.
+   *   events of the prompt that issued them. `of`, a helper's name, reads
+   *   that helper's own jobs (the RPC's `actor`); a helper dismissed since the
+   *   roster was read has none.
    */
-  async backgroundJobs(): Promise<readonly PublicBackgroundJob[]> {
-    const answer = await this.boundary(
-      `listBackgroundJobs on ${this.input.origin}/${this.workspace}`,
-      () => this.rpc('listBackgroundJobs', [50]),
-    );
+  async backgroundJobs(of?: string): Promise<readonly PublicBackgroundJob[]> {
+    try {
+      const answer = await this.boundary(
+        `listBackgroundJobs${of === undefined ? '' : ` of ${of}`} on ${this.input.origin}/${this.workspace}`,
+        () => this.rpc('listBackgroundJobs', of === undefined ? [50] : [50, of]),
+      );
 
-    return v.parse(BackgroundJobsSchema, answer);
+      return v.parse(BackgroundJobsSchema, answer);
+    } catch (error) {
+      if (of !== undefined && error instanceof DeploymentAnswer && error.message.includes('is not an agent of this workspace')) return [];
+      throw error;
+    }
   }
 
   /** The tools this workspace holds that the MODEL wrote, as the Tools pane

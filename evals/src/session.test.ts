@@ -119,6 +119,41 @@ function socketOnly(request: Request, server: Server<undefined>): Response | und
   return new Response('not found', { status: 404 });
 }
 
+test("a helper's own jobs are the RPC's actor, and a helper dismissed since the roster was read has none", async () => {
+  const asked: unknown[][] = [];
+
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: socketOnly,
+    websocket: {
+      message(socket, message) {
+        const request = v.parse(RpcRequestFrameSchema, JSON.parse(message.toString()));
+
+        asked.push(request.args);
+
+        if (request.args[1] === 'gone-helper') {
+          socket.send(rpcReplyFrame({ requestId: request.id, error: '"gone-helper" is not an agent of this workspace.' }));
+
+          return;
+        }
+
+        socket.send(rpcReplyFrame({ requestId: request.id, result: [{ id: 'bgjob-tests', kind: 'shell', status: 'running', label: 'workspace: npm test', createdAt: 1 }] }));
+      },
+    },
+  });
+
+  const session = new KinuPublicSession({ origin: server.url.origin, identity: { kind: 'loopback' },
+    workspace: 'probe', purpose: 'helper jobs probe',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  try {
+    await session.connect();
+    expect((await session.backgroundJobs('task-helper')).map((job) => job.id)).toEqual(['bgjob-tests']);
+    expect(await session.backgroundJobs('gone-helper')).toEqual([]);
+    expect(await session.backgroundJobs()).toHaveLength(1);
+    expect(asked).toEqual([[50, 'task-helper'], [50, 'gone-helper'], [50]]);
+  } finally { await session.teardown(); await server.stop(true); }
+});
+
 test('executor RPC decoding preserves refusal provenance and successful refusal-shaped stdout', async () => {
   let response: JsonValue = { stdout: 'failed', stderr: 'remote error', exitCode: 1,
     refusal: { reason: 'io', error: 'remote error', execution: { exitCode: 7 } } };

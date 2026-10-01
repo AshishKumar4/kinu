@@ -17,7 +17,8 @@ import { redact } from './redact';
 import { cutButCompleted, measure, toTranscript } from './transcript';
 import { TrialTimeline } from './timeline';
 import { EvalVerifier } from './verifier';
-import { answered, repliesTo, settle, TurnWatch, WorkspaceHang } from './workspace-completion';
+import { trialBudgetMs } from './budget';
+import { answered, repliesTo, settle, TurnWatch, type WatchOptions, WorkspaceHeld } from './workspace-completion';
 
 /** How long a trial whose workspace keeps streaming may go without a line before it says so. */
 const STREAMING_LINE_MS = 60_000;
@@ -134,11 +135,12 @@ function outcomeOf(events: readonly RunEvent[], before: ReadonlySet<string>): Ev
   return { status: memoryReset(message) ? 'reset' : 'error', message: redact(message) };
 }
 
-/**
- * One turn: its seeded files, the prompt, the wait until the workspace settles, and the checks. `stepped` hears how
- * many steps the turn's runs have recorded while it settles: a stream that dropped shows no more, and the ledger does.
- */
-async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: TrialTimeline, stepped: (steps: number) => void): Promise<EvalTurnResult> {
+/** What a turn tells its trial while it waits: how many steps its runs have recorded (a stream that dropped shows no
+ *  more, and the ledger does), and through `watching` the trial's budget and the jobs it waits on. */
+type TurnHooks = { readonly stepped: (steps: number) => void; readonly watching: WatchOptions };
+
+/** One turn: its seeded files, the prompt, the wait until the workspace settles, and the checks. */
+async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: TrialTimeline, { stepped, watching }: TurnHooks): Promise<EvalTurnResult> {
   if (turn.fresh) {
     await timeline.span('evict', async () => {
       await session.abortActivation();
@@ -154,7 +156,7 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
 
   const before = new Set((await timeline.span('ledger', () => session.runEvents())).map((event) => event.runId));
   const startedAt = Date.now();
-  const watch = new TurnWatch(session);
+  const watch = new TurnWatch(session, watching);
   let lost: Error | undefined;
 
   try {
@@ -163,7 +165,7 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
     } catch (error) {
       // A socket the deployment drops loses the turn's stream, not the turn: the run goes on up there
       // and the ledger records its end. The history below says whether the prompt ever arrived.
-      if (error instanceof WorkspaceHang || !renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER)) throw error;
+      if (error instanceof WorkspaceHeld || !renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER)) throw error;
       lost = error instanceof Error ? error : new Error(renderThrownChain({ cause: error }));
     }
 
@@ -172,9 +174,9 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
       stepped(events.filter((event) => event.type === 'step_finish' && !before.has(event.runId)).length);
     }));
   } catch (error) {
-    if (!(error instanceof WorkspaceHang)) throw error;
+    if (!(error instanceof WorkspaceHeld)) throw error;
 
-    return { outcome: { status: 'hung', message: redact(error.message), heldBy: [...error.heldBy] }, checks: [], turnWallMs: Date.now() - startedAt, verificationWallMs: 0 };
+    return { outcome: { status: error.outcome, message: redact(error.message), heldBy: [...error.heldBy] }, checks: [], turnWallMs: Date.now() - startedAt, verificationWallMs: 0 };
   }
 
   const turnWallMs = Date.now() - startedAt;
@@ -335,8 +337,11 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
           timeline.mark('turn', { index });
           say(`turn ${String(turnNumber)} of ${String(task.turns.length)} sent`);
 
-          const result = await runTurn(opened, turn, timeline, (recorded) => {
-            if (recorded > steps) say(`turn ${String(turnNumber)}, step ${String(steps = recorded)}, off the ledger`);
+          const result = await runTurn(opened, turn, timeline, {
+            stepped: (recorded) => {
+              if (recorded > steps) say(`turn ${String(turnNumber)}, step ${String(steps = recorded)}, off the ledger`);
+            },
+            watching: { budget: { task: task.id, ms: trialBudgetMs(task.id), startedAt }, waiting: say },
           });
 
           say(`turn ${String(turnNumber)} ${result.outcome.status} in ${String(Math.round(result.turnWallMs / 1000))}s, `

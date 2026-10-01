@@ -1,7 +1,15 @@
 import { describe, expect, test } from 'bun:test';
-import { silenceBoundMs, type RunEvent } from '@kinu.run/core';
+import {
+  BackgroundJobRunner, BackgroundJobStore, Inbox, initBackgroundJobsTable, listBackgroundJobs, silenceBoundMs, waitOn,
+  withBackgroundThreshold, type RunEvent,
+} from '@kinu.run/core';
+import { createTestActorsOver, createTestSql, handClock, type HandClock } from '@kinu.run/test-utils';
+import type { BackendHost } from '../../packages/core/src/types/backend-host';
+import { trialBudgetMs } from './budget';
 import type { PublicBackgroundJob, PublicSubordinate } from './session';
-import { answered, HUNG_AFTER_MS, settle, TurnWatch, type WatchClock, type WatchedWorkspace, WorkspaceHang } from './workspace-completion';
+import {
+  answered, HUNG_AFTER_MS, settle, TrialOverBudget, TurnWatch, type WatchClock, type WatchedWorkspace, WorkspaceHang, type WorkspaceHeld,
+} from './workspace-completion';
 
 const START = Date.parse('2026-10-01T06:00:00.000Z');
 
@@ -38,36 +46,45 @@ function watchClock(): FixtureClock {
   };
 }
 
-/** The hang a watch ended on. Any other end, a settle or another failure, fails the test with it. */
-async function hangOf(watching: Promise<unknown>): Promise<WorkspaceHang> {
+/** What a watch ended on, which must be an `ending`. Any other end, a settle or another failure, fails the test with it. */
+async function ended<T extends WorkspaceHeld>(watching: Promise<unknown>, ending: new (message: string, heldBy: readonly string[]) => T): Promise<T> {
   try {
     await watching;
   } catch (error) {
-    if (error instanceof WorkspaceHang) return error;
+    if (error instanceof ending) return error;
     throw error;
   }
 
-  throw new Error('the watch ended without a hang');
+  throw new Error(`the watch ended without a ${ending.name}`);
 }
 
-/** `heard`: the live frames heard so far on every room the session listens to, as `heard()` counts them. */
-type Snapshot = { events: RunEvent[]; jobs?: PublicBackgroundJob[]; helpers?: PublicSubordinate[]; inFlight?: string[]; heard?: number };
+const hangOf = (watching: Promise<unknown>) => ended(watching, WorkspaceHang);
+
+/** `heard`: the live frames heard so far on every room the session listens to, as `heard()` counts them. `helperJobs`:
+ *  each helper's own jobs, by its name. */
+type Snapshot = {
+  events: RunEvent[]; jobs?: PublicBackgroundJob[]; helperJobs?: Record<string, PublicBackgroundJob[]>; helpers?: PublicSubordinate[];
+  inFlight?: string[]; heard?: number;
+};
+
+/** Past every trial's budget: a watch still reading a fixture this far in never gave a verdict. */
+const UNANSWERED_MS = 120 * MINUTE;
 
 /**
- * A workspace whose state at each moment of the watch's clock is `state(elapsed)`. One read half an hour in is a watch
- * that never gave a verdict: the read fails, so a settle without the hang rule fails here instead of polling forever.
+ * A workspace whose state at each moment of the watch's clock is `state(elapsed)`. A read two hours in is a watch that
+ * never gave a verdict: the read fails, so a settle without the rule under test fails here instead of polling forever.
  * `listened` keeps each set of helper rooms the watch asked to listen to.
  */
 function fixtureWorkspace(clock: FixtureClock, state: (elapsed: number) => Snapshot, listened: string[][] = []): WatchedWorkspace {
   const read = () => {
-    if (clock.elapsed() > 30 * MINUTE) throw new Error('the fixture workspace was still being read half an hour into its silence');
+    if (clock.elapsed() > UNANSWERED_MS) throw new Error('the fixture workspace was still being read two hours in');
 
     return state(clock.elapsed());
   };
 
   return {
     runEvents: () => Promise.resolve(read().events),
-    backgroundJobs: () => Promise.resolve(read().jobs ?? []),
+    backgroundJobs: (of) => Promise.resolve(of === undefined ? read().jobs ?? [] : read().helperJobs?.[of] ?? []),
     subordinates: () => Promise.resolve(read().helpers ?? []),
     toolCallsInFlight: () => read().inFlight ?? [],
     heard: () => read().heard ?? 0,
@@ -93,7 +110,7 @@ describe('a turn that stays busy and silent fails as a product hang, never holds
     const clock = watchClock();
     const silent = fixtureWorkspace(clock, () => ({ events: [start('run-1'), step('run-1', 1_000, 1)] }));
 
-    const hang = await hangOf(settle(new TurnWatch(silent, clock)));
+    const hang = await hangOf(settle(new TurnWatch(silent, { clock })));
 
     // Polled each second from the first row the watch saw: the first look past the bound is a second past it.
     expect(hang.message).toContain(`busy for ${String(BOUND_S + 1)} s with no ledger row, no stream byte, no tool call in flight and no provider wait declared`);
@@ -101,24 +118,24 @@ describe('a turn that stays busy and silent fails as a product hang, never holds
     expect(hang.heldBy).toEqual(['open run']);
   });
 
-  // A job publishes no output while it runs, so one that runs silent holds its turn as a model would: the hang says which
-  // it was, the job by its id and what it runs, never a model hang (staging f75f06932: the agent's own Node server).
-  test('the running job and the working helper that hold it are named, and nothing that is done', async () => {
+  // Staging f75f06932, order-book (Ling): the turn's own run silent since its last step, eight jobs running beside it.
+  test('the silent run and helper that hold it are named, a job running meanwhile beside them, and nothing that is done', async () => {
     const clock = watchClock();
 
     const held = fixtureWorkspace(clock, () => ({
-      events: [start('run-1'), end('run-1', 5_000, 1)],
-      jobs: [{ id: 'bgjob-server', kind: 'shell', status: 'running', label: 'workspace: node server.js' },
+      events: [start('run-1'), step('run-1', 5_000, 1)],
+      jobs: [{ id: 'bgjob-ls', kind: 'shell', status: 'running', label: 'workspace: ls -la' },
         { id: 'bgjob-install', kind: 'shell', status: 'completed', label: 'workspace: npm install' }],
       helpers: [{ name: 'task-helper', status: 'working', lifetime: 'task' }, { name: 'done-helper', status: 'idle', lifetime: 'task' }],
     }));
 
-    const hang = await hangOf(settle(new TurnWatch(held, clock)));
+    const hang = await hangOf(settle(new TurnWatch(held, { clock })));
 
-    expect(hang.message).toContain('held by running shell job bgjob-server (workspace: node server.js); working helper task-helper');
+    expect(hang.message).toContain(`held by open run run-1, its last row step_finish at ${at(5_000)}; working helper task-helper, `
+      + 'with shell job bgjob-ls (workspace: ls -la) running meanwhile');
     expect(hang.message).not.toContain('bgjob-install');
     expect(hang.message).not.toContain('done-helper');
-    expect(hang.heldBy).toEqual(['running shell job', 'working helper']);
+    expect(hang.heldBy).toEqual(['open run', 'working helper']);
   });
 
   // Measured 2026-10-01: a lead's `agents` hire ran 840 s with nothing in the ledger while its helper worked, and the
@@ -130,7 +147,7 @@ describe('a turn that stays busy and silent fails as a product hang, never holds
       ? { events: [start('run-1'), step('run-1', 2_000, 1)], inFlight: ['call-hire'] }
       : { events: [start('run-1'), step('run-1', 2_000, 1), end('run-1', 14 * MINUTE, 2)] }));
 
-    expect(await settle(new TurnWatch(hiring, clock))).toBeUndefined();
+    expect(await settle(new TurnWatch(hiring, { clock }))).toBeUndefined();
   });
 
   test('a provider wait the product declared is not silence, and the silence counts from its end', async () => {
@@ -138,7 +155,7 @@ describe('a turn that stays busy and silent fails as a product hang, never holds
     const wait: RunEvent = { type: 'provider_wait', runId: 'run-1', eventIndex: 1, timestamp: at(0), provider: 'workers-ai', waitMs: 10 * MINUTE, attempt: 1, source: 'header' };
     const waiting = fixtureWorkspace(clock, () => ({ events: [start('run-1'), wait] }));
 
-    const hang = await hangOf(settle(new TurnWatch(waiting, clock)));
+    const hang = await hangOf(settle(new TurnWatch(waiting, { clock })));
 
     expect(hang.message).toContain(`busy for ${String(BOUND_S + 1)} s`);
     expect(clock.elapsed()).toBe(10 * MINUTE + HUNG_AFTER_MS + 1_000);
@@ -153,7 +170,7 @@ describe('a turn that stays busy and silent fails as a product hang, never holds
       return { events: [start('run-1'), ...steps, ...steps.length === 5 ? [end('run-1', 25 * MINUTE, 6)] : []] };
     });
 
-    expect(await settle(new TurnWatch(working, clock))).toBeUndefined();
+    expect(await settle(new TurnWatch(working, { clock }))).toBeUndefined();
   });
 
   // The provider sent nothing for 181.8 s while Muse thought, in a stream that completed (provider lane, 2026-10-01): a
@@ -162,21 +179,21 @@ describe('a turn that stays busy and silent fails as a product hang, never holds
     const clock = watchClock();
     const streaming = fixtureWorkspace(clock, (elapsed) => ({ events: [start('run-1')], heard: words(elapsed, 10 * MINUTE) }));
 
-    expect(await answered(new TurnWatch(streaming, clock), clock.reached(10 * MINUTE).then(() => 'answered'))).toBe('answered');
+    expect(await answered(new TurnWatch(streaming, { clock }), clock.reached(10 * MINUTE).then(() => 'answered'))).toBe('answered');
 
     // The same step in a turn the product opened on its own, heard on the workspace's room while the turn settles.
     const woken = fixtureWorkspace(clock, (elapsed) => (elapsed < 20 * MINUTE
       ? { events: [start('run-1'), end('run-1', 1_000, 1), start('wake-1', 10 * MINUTE)], heard: words(elapsed, 20 * MINUTE, 10 * MINUTE) }
       : { events: [start('run-1'), end('run-1', 1_000, 1), start('wake-1', 10 * MINUTE), step('wake-1', 20 * MINUTE, 1), end('wake-1', 20 * MINUTE, 2)] }));
 
-    expect(await settle(new TurnWatch(woken, clock))).toBeUndefined();
+    expect(await settle(new TurnWatch(woken, { clock }))).toBeUndefined();
   });
 
   test('a model that streams, then falls silent past the bound, is hung from its last word', async () => {
     const clock = watchClock();
     const stalled = fixtureWorkspace(clock, (elapsed) => ({ events: [start('run-1')], heard: words(elapsed, 2 * MINUTE) }));
 
-    const hang = await hangOf(settle(new TurnWatch(stalled, clock)));
+    const hang = await hangOf(settle(new TurnWatch(stalled, { clock })));
 
     expect(hang.message).toContain(`busy for ${String(BOUND_S + 1)} s with no ledger row, no stream byte`);
     expect(hang.message).toContain('held by open run run-1');
@@ -205,7 +222,7 @@ describe('a turn that stays busy and silent fails as a product hang, never holds
         : { events: [start('run-1'), failed, fellBack, end('run-1', failedAt + 2 * MINUTE, 3)] };
     });
 
-    expect(await settle(new TurnWatch(failingOver, clock))).toBeUndefined();
+    expect(await settle(new TurnWatch(failingOver, { clock }))).toBeUndefined();
   });
 
   // A provider silent from its first byte: the transport fails each attempt at the provider's bound and declares a
@@ -226,13 +243,13 @@ describe('a turn that stays busy and silent fails as a product hang, never holds
 
     // Undeclared, as before the transport owned these retries, the attempts were one silence: hung.
     const before = watchClock();
-    const undeclared = await hangOf(settle(new TurnWatch(fixtureWorkspace(before, retrying(false)), before)));
+    const undeclared = await hangOf(settle(new TurnWatch(fixtureWorkspace(before, retrying(false)), { clock: before })));
 
     expect(undeclared.message).toContain('held by open run run-1');
 
     const after = watchClock();
 
-    expect(await settle(new TurnWatch(fixtureWorkspace(after, retrying(true)), after))).toBeUndefined();
+    expect(await settle(new TurnWatch(fixtureWorkspace(after, retrying(true)), { clock: after }))).toBeUndefined();
     expect(after.elapsed()).toBeGreaterThanOrEqual(answeredAt);
   });
 
@@ -246,7 +263,7 @@ describe('a turn that stays busy and silent fails as a product hang, never holds
       ? { events: [start('run-1'), end('run-1', 1_000, 1)], helpers: [helper('working')], heard: words(elapsed, 10 * MINUTE) }
       : { events: [start('run-1'), end('run-1', 1_000, 1)], helpers: [helper('idle')], heard: words(elapsed, 10 * MINUTE) }), listened);
 
-    expect(await settle(new TurnWatch(delegated, clock))).toBeUndefined();
+    expect(await settle(new TurnWatch(delegated, { clock }))).toBeUndefined();
     expect(listened.at(0)).toEqual(['task-helper']);
     expect(listened.at(-1)).toEqual([]);
   });
@@ -255,7 +272,7 @@ describe('a turn that stays busy and silent fails as a product hang, never holds
     const clock = watchClock();
     const silent = fixtureWorkspace(clock, () => ({ events: [start('run-1')] }));
 
-    const hang = await hangOf(answered(new TurnWatch(silent, clock), new Promise<never>(() => undefined)));
+    const hang = await hangOf(answered(new TurnWatch(silent, { clock }), new Promise<never>(() => undefined)));
 
     expect(hang.message).toContain('held by open run run-1');
   });
@@ -264,7 +281,142 @@ describe('a turn that stays busy and silent fails as a product hang, never holds
     const clock = watchClock();
     const streaming = fixtureWorkspace(clock, () => ({ events: [start('run-1')] }));
 
-    expect(await answered(new TurnWatch(streaming, clock), Promise.resolve('answered'))).toBe('answered');
-    await expect(answered(new TurnWatch(streaming, clock), Promise.reject(new Error('the socket closed')))).rejects.toThrow('the socket closed');
+    expect(await answered(new TurnWatch(streaming, { clock }), Promise.resolve('answered'))).toBe('answered');
+    await expect(answered(new TurnWatch(streaming, { clock }), Promise.reject(new Error('the socket closed')))).rejects.toThrow('the socket closed');
+  });
+});
+
+/** The watch's clock over the hand clock the product's runner reads: a look's wait moves both on at once. */
+function overHand(hand: HandClock): WatchClock {
+  return {
+    now: () => hand.now(),
+    sleep: (ms) => {
+      hand.advance(ms);
+
+      return Promise.resolve();
+    },
+  };
+}
+
+/**
+ * The lead's shell call `sleep 600; make`, as the product runs it: core's detach race over a real `BackgroundJobRunner`,
+ * on the test's clock, makes it a background job at the interactive threshold, and the lead's run ends; the job's settle
+ * wakes the lead in a run of its own, which answers. `never`: the command never ends.
+ */
+type DetachedCommand = { readonly workspace: WatchedWorkspace; readonly store: BackgroundJobStore; readonly lead: Promise<void> };
+
+function detachedCommand(hand: HandClock, never: boolean): DetachedCommand {
+  const { db, sql, execRaw } = createTestSql();
+
+  initBackgroundJobsTable(execRaw);
+  const store = new BackgroundJobStore(sql, createTestActorsOver(db).main);
+  const ledger: RunEvent[] = [start('run-1')];
+  const elapsed = () => hand.now() - START;
+  let inFlight = ['call-make'];
+
+  const host: BackendHost = {
+    broadcast: () => undefined,
+    enqueueTurn: () => {
+      ledger.push(start('wake-1', elapsed()), end('wake-1', elapsed(), 1));
+
+      return Promise.resolve({ status: 'queued' });
+    },
+    turnInFlight: () => false,
+    setTimer: () => undefined,
+  };
+
+  const runner = new BackgroundJobRunner({ store, fiber: (_name, body) => body({ stash: () => undefined, snapshot: null }), inbox: new Inbox(host) });
+  const command = never ? () => new Promise<never>(() => undefined) : () => waitOn(hand, 10 * MINUTE).then(() => 'made');
+
+  const lead = withBackgroundThreshold('shell', command, {
+    ...runner.thresholdDeps({ command: 'sleep 600; make', runtime: 'workspace' }, 'build', new AbortController()), clock: hand,
+  }).then(() => {
+    inFlight = [];
+    ledger.push(step('run-1', elapsed(), 1), end('run-1', elapsed(), 2));
+  });
+
+  const read = <T>(value: () => T): Promise<T> => {
+    if (elapsed() > UNANSWERED_MS) return Promise.reject(new Error('the workspace was still being read two hours in'));
+
+    return Promise.resolve(value());
+  };
+
+  return {
+    store,
+    lead,
+    workspace: {
+      runEvents: () => read(() => [...ledger]),
+      backgroundJobs: (of) => read(() => (of === undefined ? listBackgroundJobs(store, 50) : [])),
+      subordinates: () => read(() => []),
+      toolCallsInFlight: () => inFlight,
+      heard: () => 0,
+      listen: () => undefined,
+    },
+  };
+}
+
+describe('a job is waited on until it settles, never judged by its silence; the trial budget bounds what never ends', () => {
+  const budget = { task: 'site-preview', ms: trialBudgetMs('site-preview'), startedAt: START };
+
+  // A detached `sleep 600; make` was graded hung at 420 s (2026-10-01): a job publishes nothing while it runs.
+  test("a quiet ten-minute job the product's runner detached settles green, the trial saying each minute what it waits on", async () => {
+    const hand = handClock(START);
+    const { workspace, store, lead } = detachedCommand(hand, false);
+    const lines: string[] = [];
+
+    expect(await settle(new TurnWatch(workspace, { clock: overHand(hand), budget, waiting: (line) => { lines.push(line); } }))).toBeUndefined();
+    await lead;
+
+    const [job] = listBackgroundJobs(store, 50);
+
+    if (job === undefined) throw new Error('the runner made no job');
+    expect(job.status).toBe('completed');
+    expect(hand.now() - START).toBeGreaterThan(10 * MINUTE);
+    expect(lines).toEqual(Array.from({ length: 10 }, () => `waiting on job ${job.id} (workspace: sleep 600; make) since ${new Date(job.createdAt).toISOString()}`));
+  });
+
+  test('a job that never ends fails the trial over budget, naming the job, never as hung', async () => {
+    const hand = handClock(START);
+    const { workspace, store, lead } = detachedCommand(hand, true);
+    const lines: string[] = [];
+
+    const over = await ended(settle(new TurnWatch(workspace, { clock: overHand(hand), budget, waiting: (line) => { lines.push(line); } })), TrialOverBudget);
+    await lead;
+    const [job] = listBackgroundJobs(store, 50);
+    const budgetS = budget.ms / 1000;
+
+    expect(job?.status).toBe('running');
+    expect(over.message).toBe(`over budget, held by running shell job ${job?.id ?? ''} (workspace: sleep 600; make): `
+      + `the trial ran ${String(budgetS + 1)} s, past the site-preview budget of ${String(budgetS)} s`);
+    expect(over.heldBy).toEqual(['running shell job']);
+    expect(lines).toHaveLength(Math.floor(budgetS / 60));
+  });
+
+  // A task helper whose turn ended with a job running stays working until the job settles (core `finishTurn`).
+  test('a helper waiting on a job of its own is judged by that job, not its silence', async () => {
+    const clock = watchClock();
+    const lines: string[] = [];
+    const tests: PublicBackgroundJob = { id: 'bgjob-tests', kind: 'shell', status: 'running', label: 'workspace: npm test', createdAt: START + MINUTE };
+    const helper = (status: PublicSubordinate['status']): PublicSubordinate => ({ name: 'task-helper', status, lifetime: 'task' });
+    const lead = [start('run-1'), end('run-1', MINUTE, 1)];
+
+    const delegated = fixtureWorkspace(clock, (elapsed) => (elapsed < 12 * MINUTE
+      ? { events: lead, helpers: [helper('working')], helperJobs: { 'task-helper': [tests] } }
+      : { events: lead, helpers: [helper('idle')], helperJobs: { 'task-helper': [{ ...tests, status: 'completed' }] } }));
+
+    expect(await settle(new TurnWatch(delegated, { clock, waiting: (line) => { lines.push(line); } }))).toBeUndefined();
+    expect(lines[0]).toBe(`waiting on helper task-helper's job bgjob-tests (workspace: npm test) since ${at(MINUTE)}`);
+  });
+
+  // Staging, 2026-10-01: two Ling site-preview trials stepped for 55 minutes without ending turn 1.
+  test("a run that never stops streaming ends at the trial's budget, held by its run, never as hung", async () => {
+    const clock = watchClock();
+    const looping = fixtureWorkspace(clock, (elapsed) => ({ events: [start('run-1')], heard: words(elapsed, Infinity) }));
+    const memory = { task: 'memory-recall', ms: trialBudgetMs('memory-recall'), startedAt: START };
+
+    const over = await ended(answered(new TurnWatch(looping, { clock, budget: memory }), new Promise<never>(() => undefined)), TrialOverBudget);
+
+    expect(over.message).toContain(`over budget, held by open run run-1, its last row run_start at ${at(0)}: the trial ran`);
+    expect(over.heldBy).toEqual(['open run']);
   });
 });
