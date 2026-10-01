@@ -27,6 +27,11 @@ export interface JobClaim {
   attempts: number;
 }
 
+export interface JobResume {
+  readonly id: string;
+  readonly at: number;
+}
+
 interface Row {
   id: string; kind: string; label: string | null; status: string;
   work_mode: string;
@@ -175,23 +180,13 @@ export class BackgroundJobStore {
       WHERE actor_id=${this.actorId} AND id=${id} AND status='running'`;
   }
 
-  /** Soonest armed instant across the workspace; the host arms one timer for every actor. */
-  nextResumeAtInWorkspace(): number | null {
+  /** Running jobs' armed next attempts, workspace-wide: the host arms one timer for every actor. */
+  resumesInWorkspace(): JobResume[] {
     this.actor.assertCurrent();
 
-    const rows = this.sql<{ at: number | null }>`SELECT MIN(resume_after) AS at
-      FROM background_jobs WHERE status='running' AND resume_after IS NOT NULL`;
-
-    return rows[0]?.at ?? null;
-  }
-
-  /** Workspace running jobs not yet due at `now`; same population as {@link countRunningInWorkspace}. */
-  resumeOwedIdsInWorkspace(now: number): string[] {
-    this.actor.assertCurrent();
-
-    return this.sql<{ id: string }>`SELECT id FROM background_jobs
-      WHERE status='running' AND resume_after IS NOT NULL AND resume_after > ${now}`
-      .map((r) => r.id);
+    return this.sql<JobResume>`SELECT id, resume_after AS at
+      FROM background_jobs WHERE status='running' AND resume_after IS NOT NULL`
+      .map((r) => ({ id: r.id, at: r.at }));
   }
 
   /** Null when absent or owned by another actor. */

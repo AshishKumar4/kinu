@@ -7,7 +7,7 @@ import type { EventLog } from '../events/hub/log';
 import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold';
 import { REAL_CLOCK } from '../types/clock';
 import type { DeviceRequestOwnership } from './device-ownership';
-import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './store';
+import { BackgroundJobStore, serializeJobResult, type BackgroundJob, type JobResume } from './store';
 import { nanoid } from '../utils/nanoid';
 import { runWorkModeInvocation } from '../execution/work-mode';
 import { recoveryBackoffMs } from '../utils/recovery-backoff';
@@ -267,12 +267,15 @@ export class BackgroundJobRunner {
    * tree). Exact because one workspace has one driver.
    */
   private liveDetachedCount(): number {
-    const owed = this.deps.store.resumeOwedIdsInWorkspace(Date.now());
-    let idle = 0;
-
-    for (const jobId of owed) if (!this.controllers.has(jobId)) idle++;
+    const now = Date.now();
+    const idle = this.owedResumes().filter((resume) => resume.at > now).length;
 
     return this.deps.store.countRunningInWorkspace() - idle;
+  }
+
+  /** Not the jobs this runner drives: a re-drive arms its instant for the activation after a death. */
+  private owedResumes(): readonly JobResume[] {
+    return this.deps.store.resumesInWorkspace().filter((resume) => !this.controllers.has(resume.id));
   }
 
   /** A failed transfer may have moved a prefix, so the job keeps its claim rather than aborting. */
@@ -655,12 +658,14 @@ export class BackgroundJobRunner {
   }
 
   nextResumeAt(): number | null {
-    return this.deps.store.nextResumeAtInWorkspace();
+    const owed = this.owedResumes();
+
+    return owed.length === 0 ? null : Math.min(...owed.map((resume) => resume.at));
   }
 
-  /** Timer entry: one MIN read; re-arms a not-yet-due attempt, since its schedule row can be lost. */
+  /** Timer entry: re-arms a not-yet-due attempt, since its schedule row can be lost. */
   async recoverDueResumes(): Promise<void> {
-    const next = this.deps.store.nextResumeAtInWorkspace();
+    const next = this.nextResumeAt();
 
     if (next === null) return;
 
