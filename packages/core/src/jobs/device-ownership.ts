@@ -14,6 +14,8 @@ export interface DeviceRequestChannel {
 }
 
 export class DeviceRequestOwnership implements DeviceRequestChannel {
+  constructor(readonly jobId: string) {}
+
   #issued: string[] = [];
   #owningJobId: string | null = null;
   readonly #detached = new AbortController();

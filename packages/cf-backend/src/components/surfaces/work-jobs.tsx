@@ -3,7 +3,7 @@ import { useState, useCallback } from "react";
 import { Button } from "@cloudflare/kumo";
 import {
   XCircleIcon, ArrowClockwiseIcon, TrashIcon, CheckCircleIcon,
-  WarningCircleIcon, ProhibitIcon, SpinnerGapIcon,
+  WarningCircleIcon, ProhibitIcon, SpinnerGapIcon, BroadcastIcon,
 } from "@phosphor-icons/react";
 import type { Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
@@ -13,6 +13,7 @@ import { renderThrownChain } from "@kinu.run/core/obs";
 function statusMeta(status: BackgroundJob["status"]) {
   switch (status) {
     case "running": return { icon: SpinnerGapIcon, tone: "p-warning", spin: true, label: "Running" };
+    case "serving": return { icon: BroadcastIcon, tone: "p-success", spin: false, label: "Serving" };
     case "completed": return { icon: CheckCircleIcon, tone: "p-success", spin: false, label: "Completed" };
     case "failed": return { icon: WarningCircleIcon, tone: "p-danger", spin: false, label: "Failed" };
     case "cancelled": return { icon: ProhibitIcon, tone: "p-text-3", spin: false, label: "Cancelled" };
@@ -83,6 +84,7 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
 
   const m = statusMeta(job.status);
   const Icon = m.icon;
+  const live = job.status === "running" || job.status === "serving";
   const detail = job.status === "completed" ? job.result : job.error;
   const interrupted = interruptionNote(job, Date.now());
 
@@ -90,7 +92,7 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
     <div className={grouped ? "p-3" : "p-group p-3"}>
       <div className="grid grid-cols-[15px_minmax(0,1fr)_auto] items-start gap-2">
         <Icon size={15} className={`${m.tone} shrink-0 mt-0.5 ${m.spin ? "animate-spin" : ""}`}
-          weight={job.status === "running" ? "bold" : "fill"} />
+          weight={live ? "bold" : "fill"} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <span className="p-row-text font-medium p-text">{job.kind}</span>
@@ -111,7 +113,7 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
           {err && <div className="p-t-status p-danger mt-1">{err}</div>}
         </div>
         <div className="grid auto-cols-max grid-flow-col items-center gap-1 justify-self-end">
-          {job.status === "running" ? (
+          {live ? (
             <Button size="sm" variant="ghost" disabled={busy} onClick={() => act("cancelBackgroundJob")}
               title="Hard-cancel, aborting the underlying work">
               <XCircleIcon size={13} /><span className="ml-1">Cancel</span>

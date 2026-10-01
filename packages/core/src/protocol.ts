@@ -100,7 +100,8 @@ export interface BackgroundJob {
 	kind: string;
 	label: string | null;
 	workMode: "plan" | "build";
-	status: "running" | "completed" | "failed" | "cancelled";
+	/** `serving`: running, holding an exposed port. */
+	status: "running" | "serving" | "completed" | "failed" | "cancelled";
 	result: string | null;
 	error: string | null;
 	createdAt: number;
@@ -110,6 +111,7 @@ export interface BackgroundJob {
 	resumeAttempts?: number;
 	/** When the next attempt may start; null while nothing is owed, including during a running attempt. */
 	resumeAfter?: number | null;
+	serves?: number | null;
 }
 
 /** A pending device request (method `connect` asks for a device to exist); `always` is the per-workspace binding. */

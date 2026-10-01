@@ -223,6 +223,8 @@ export interface CFRuntimeHooks {
   slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
   workspaceObserver?: WriteObserver;
   liveReadsMoved?: (reads: readonly LiveRead[]) => void;
+  /** A sandbox port was exposed or withdrawn, which can change the job that serves it; awaited by the call. */
+  servingMoved?: () => Promise<void>;
   /** Where non-turn model seams (judge, fast tier, reflection, embedder) report cost; turn spend arrives
      *  as `step_finish`. */
   reportModelCall: ModelCallSink;
@@ -421,7 +423,10 @@ export function createCFRuntime(
       },
       // The edge proves a preview hostname from `AUTH_KV` without creating the per-name DO.
       env.AUTH_KV ? sandboxPreviewExposures(env.AUTH_KV, sandboxId) : null,
-      () => hooks.liveReadsMoved?.(['getExposedPorts']));
+      async () => {
+        hooks.liveReadsMoved?.(['getExposedPorts']);
+        await hooks.servingMoved?.();
+      });
 
       sandboxHandle = handle;
       executionRouter.register(createSandboxExecutor(handle, previewSuffix,

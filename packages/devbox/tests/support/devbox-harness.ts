@@ -1180,7 +1180,7 @@ export class FakeSandbox {
   async #native(args: string[], options: ContainerExecOptions = {}): Promise<ExecProcess> {
     await this.#admitNative(options);
 
-    if (this.nativeExec !== undefined && (args[0] === "bash" || args[3] === "kill-tree")) return this.nativeExec(args, options);
+    if (this.nativeExec !== undefined && (args[0] === "bash" || args[3] === "kill-tree" || args[3] === "port-listeners")) return this.nativeExec(args, options);
 
     if (args[0] === '/usr/local/bin/sandbox-shim') {
       this.shimCalls.push(args.slice(1, 3).join(' '));

@@ -11,7 +11,7 @@ import {
   type WSMessage,
 } from "agents";
 import {
-  TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice,
+  TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, JOB_STAMP_ENV,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
   type RunEventInput, type SubordinateInspectionAuthority, ConversationSearchStore, type ConversationRecall,
@@ -2625,7 +2625,11 @@ export abstract class ActorAgent extends Agent<Env> {
       logActivity: (event, detail) => this.logActivity(event, detail),
       // Transfer by request id, never by turn: only the detaching call's device work changes hands,
       // so parallel foreground commands stay reachable by Stop.
-      onDetached: (jobId, requestIds) => this.transferDeviceRequests(jobId, requestIds),
+      onDetached: (jobId, requestIds) => {
+        this.detachOwned(() => this.servingMoved());
+
+        return this.transferDeviceRequests(jobId, requestIds);
+      },
       // Throws when the device cannot confirm the cancel; runner calls this before any state change,
       // so a refused cancel leaves the job running and retryable.
       onCancelled: (jobId) => this.cancelBackgroundDeviceRequests(jobId),
@@ -2634,6 +2638,7 @@ export abstract class ActorAgent extends Agent<Env> {
         const notice = backgroundJobNotice(job);
         this.notifyOwner(notice.subject, notice.body);
         this.sandboxUsed();
+        this.detachOwned(() => this.servingMoved());
       },
       // Evict-resume (B6): re-drive from the durable checkpoint. Side-effecting kinds (eval / run)
       // decline and fall back to the eviction failure.
@@ -2685,6 +2690,26 @@ export abstract class ActorAgent extends Agent<Env> {
     throw new KinuError('unavailable', `background job ${jobId} still holds ${unconfirmed.length} `
       + `device command(s) nothing confirmed stopped: `
       + unconfirmed.map((o) => `${o.requestId} (${o.detail ?? 'no detail'})`).join('; '));
+  }
+
+  /**
+   * Records which running job's command holds each exposed sandbox port when that can move (a port exposed or
+   * withdrawn, a job detached or settled), so a listing reads a row and never the box. Only a box this activation
+   * reached is asked, and one that is down is not read: the next exposure reads again.
+   */
+  protected async servingMoved(): Promise<void> {
+    const rt = this._rt;
+
+    if (rt?.sandboxReached() !== true) return;
+    const handle = rt.sandboxHandle;
+    const exposedPorts = rt.executionRouter?.getProvider('sandbox')?.listExposedPorts;
+
+    if (handle === null || exposedPorts === undefined) return;
+    const ports = (await exposedPorts()).map((row) => row.port);
+    // No port exposed: nothing serves, and the box is not asked.
+    const listeners = ports.length === 0 ? [] : await handle.portListeners(JOB_STAMP_ENV, ports);
+
+    if (listeners !== null) this.jobs.recordServingInWorkspace(new Map(listeners.flatMap((listener) => (listener.stamp === null ? [] : [[listener.stamp, listener.port] as const]))));
   }
 
   /** A turn's claim moving or a job settling is the box's use too, so it rests only once neither the
@@ -2938,6 +2963,7 @@ export abstract class ActorAgent extends Agent<Env> {
         reportModelCall: (report) => this.reportModelCall(report),
         modelOperations: this.modelOperations,
         liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
+        servingMoved: () => this.servingMoved(),
         resolveProfile: () => this.routingProfile(),
         currentTurn: (reference) => this.currentTurnOf(reference),
         refusals: this.tierRefusals,

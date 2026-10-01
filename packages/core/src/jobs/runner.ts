@@ -80,6 +80,10 @@ interface DetachRequest {
   readonly ownership?: DeviceRequestOwnership;
 }
 
+export function newJobId(): string {
+  return `bgjob-${nanoid()}`;
+}
+
 export interface BackgroundJobRunnerDeps {
   store: BackgroundJobStore;
   /** Resolved per read: one runner can serve watched and unwatched surfaces. Defaults to interactive. */
@@ -105,7 +109,6 @@ export interface BackgroundJobRunnerDeps {
   scheduleResume?: (atMs: number) => Promise<void> | void;
 }
 
-/** Short label derived from tool input, truncated like other debug summaries. */
 const SearchJobInputSchema = v.object({ task: v.string() });
 
 const RunJobInputSchema = v.object({ command: v.string(), runtime: v.optional(v.string()) });
@@ -190,7 +193,10 @@ export class BackgroundJobRunner {
 
   /** Pure: callers log their own lifecycle event. */
   create(kind: string, input: JsonValue, mode: WorkMode, controller: AbortController): string {
-    const id = `bgjob-${nanoid()}`;
+    return this.createJob(newJobId(), { kind, input, mode, controller });
+  }
+
+  private createJob(id: string, { kind, input, mode, controller }: Pick<DetachRequest, 'kind' | 'input' | 'mode' | 'controller'>): string {
     this.deps.store.create({
       id, kind, workMode: mode, input: serializeJobResult({ value: input }), now: Date.now(),
       label: describeJobInput(kind, input),
@@ -202,7 +208,7 @@ export class BackgroundJobRunner {
 
   /** Null means another retry already owns the source row. */
   createRetry(request: BackgroundRetryRequest): string | null {
-    const id = `bgjob-${nanoid()}`;
+    const id = newJobId();
 
     const created = this.deps.store.createRetry({
       sourceId: request.sourceId,
@@ -255,7 +261,7 @@ export class BackgroundJobRunner {
       return { detached: false, reason: 'too many jobs already running' };
     }
 
-    const jobId = this.create(kind, input, mode, controller);
+    const jobId = this.createJob(ownership?.jobId ?? newJobId(), { kind, input, mode, controller });
     this.deps.logActivity?.('bg_job_started', `${kind} -> ${jobId}`);
     await this.beginDetachedWork(jobId, kind, promise, ownership);
 

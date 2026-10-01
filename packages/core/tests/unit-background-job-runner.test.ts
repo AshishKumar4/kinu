@@ -3,7 +3,7 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  BackgroundJobRunner, JobNotResumable, MAX_CONCURRENT_DETACHED_JOBS,
+  BackgroundJobRunner, JobNotResumable, MAX_CONCURRENT_DETACHED_JOBS, newJobId,
   type JobHarvester, type JobResumer,
 } from '../src/jobs/runner';
 import { Inbox } from '../src/orchestrator/inbox';
@@ -988,7 +988,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
 
   test('the detach transfers what the call had issued, and OWNS what it issues next', async () => {
     // Requests issued after the claim, before the transfer resolves, must belong to the job.
-    const ownership = new DeviceRequestOwnership();
+    const ownership = new DeviceRequestOwnership(newJobId());
     ownership.report('req-1');
     ownership.report('req-2');
     const received: string[][] = [];
@@ -1014,7 +1014,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
   });
 
   test('a transfer failure keeps the job-owned live completion without aborting it', async () => {
-    const ownership = new DeviceRequestOwnership();
+    const ownership = new DeviceRequestOwnership(newJobId());
     ownership.report('req-1');
     const work = Promise.withResolvers<string>();
 

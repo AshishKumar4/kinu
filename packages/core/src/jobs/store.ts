@@ -38,6 +38,7 @@ interface Row {
   result: string | null; error: string | null; created_at: number; settled_at: number | null;
   epoch: number; resume_attempts: number; attempt_started_at: number | null; retried_by: string | null;
   resume_after: number | null;
+  serves?: number | null;
 }
 
 function toJob(r: Row): BackgroundJob {
@@ -53,6 +54,7 @@ function toJob(r: Row): BackgroundJob {
     retriedBy: r.retried_by ?? null,
     attemptStartedAt: r.attempt_started_at ?? r.created_at,
     resumeAfter: r.resume_after ?? null,
+    serves: r.serves ?? null,
   };
 }
 
@@ -89,6 +91,12 @@ export function initBackgroundJobsTable(execRaw: RawSqlExec): void {
   // One retry per source within an owner; table-wide uniqueness would collide across actors' ids.
   execRaw(`CREATE UNIQUE INDEX IF NOT EXISTS idx_background_jobs_retry_of
     ON background_jobs(actor_id, retry_of) WHERE retry_of IS NOT NULL`);
+  execRaw(`CREATE TABLE IF NOT EXISTS background_job_serves (
+    actor_id TEXT NOT NULL,
+    job_id   TEXT NOT NULL,
+    port     INTEGER NOT NULL,
+    PRIMARY KEY (actor_id, job_id)
+  )`);
 }
 
 export class BackgroundJobStore {
@@ -227,10 +235,11 @@ export class BackgroundJobStore {
     const rows = this.sql<Row>`SELECT job.id, job.kind, job.label, job.work_mode,
       job.status, job.result, job.error, job.created_at, job.settled_at,
       job.epoch, job.resume_attempts, job.attempt_started_at, job.resume_after,
-      replacement.id AS retried_by
+      replacement.id AS retried_by, serving.port AS serves
       FROM background_jobs job
       LEFT JOIN background_jobs replacement
         ON replacement.actor_id=job.actor_id AND replacement.retry_of=job.id
+      LEFT JOIN background_job_serves serving ON serving.actor_id=job.actor_id AND serving.job_id=job.id
       WHERE job.actor_id=${this.actorId} AND job.id=${id} LIMIT 1`;
 
     return rows[0] ? toJob(rows[0]) : null;
@@ -242,12 +251,36 @@ export class BackgroundJobStore {
     return this.sql<Row>`SELECT job.id, job.kind, job.label, job.work_mode,
       job.status, job.result, job.error, job.created_at, job.settled_at,
       job.epoch, job.resume_attempts, job.attempt_started_at, job.resume_after,
-      replacement.id AS retried_by
+      replacement.id AS retried_by, serving.port AS serves
       FROM background_jobs job
       LEFT JOIN background_jobs replacement
         ON replacement.actor_id=job.actor_id AND replacement.retry_of=job.id
+      LEFT JOIN background_job_serves serving ON serving.actor_id=job.actor_id AND serving.job_id=job.id
       WHERE job.actor_id=${this.actorId}
       ORDER BY job.created_at DESC LIMIT ${limit}`.map(toJob);
+  }
+
+  /** Writes only changed rows: facts announce once. */
+  recordServingInWorkspace(holders: ReadonlyMap<string, number>): void {
+    this.actor.assertCurrent();
+    const running = this.sql<{ actor_id: string; id: string }>`SELECT actor_id, id FROM background_jobs WHERE status='running'`;
+
+    const wanted = new Map(running.flatMap((job) => {
+      const port = holders.get(job.id);
+
+      return port === undefined ? [] : [[`${job.actor_id}/${job.id}`, { ...job, port }] as const];
+    }));
+
+    for (const row of this.sql<{ actor_id: string; job_id: string; port: number }>`SELECT actor_id, job_id, port FROM background_job_serves`) {
+      const kept = wanted.get(`${row.actor_id}/${row.job_id}`);
+
+      if (kept?.port === row.port) wanted.delete(`${row.actor_id}/${row.job_id}`);
+      else if (kept === undefined) void this.sql`DELETE FROM background_job_serves WHERE actor_id=${row.actor_id} AND job_id=${row.job_id}`;
+    }
+
+    for (const job of wanted.values()) {
+      void this.sql`INSERT OR REPLACE INTO background_job_serves (actor_id, job_id, port) VALUES (${job.actor_id}, ${job.id}, ${job.port})`;
+    }
   }
 
   /** Workspace-wide running count for the concurrent-detach cap; per-actor would multiply the machine ceiling. */

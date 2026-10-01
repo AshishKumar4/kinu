@@ -19,6 +19,8 @@ import { conversationsFor, createTestRuntime, makeSql, makeExecRaw, makeSqlExec 
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
 import type { Schedule, Shell, ShellExecResult } from '../src/types/primitives';
 import { withApprovalGatedShell } from '../src/execution/approval';
+import { DefaultExecutionRouter } from '../src/execution/router';
+import { JOB_STAMP_ENV } from '../src/types/jobs';
 import { createShellSession } from '../src/safety/approval-gate';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
@@ -296,5 +298,51 @@ describe("a detached workspace command and the agent's next one", () => {
     await Promise.all(bodies);
     expect(store.get(isBackgroundHandle(detached) ? detached.jobId : '')?.result).toContain('stopped');
     expect((await shellSession.at()).cwd).toBe(WORKSPACE_ROOT);
+  });
+});
+
+describe('a sandbox command a job takes', () => {
+  // eval-site-preview-1-2ypddc, staging f75f06932, 2026-10-01: `node server.js` in the sandbox outran the window and
+  // its job read as running forever, though all it did was serve the port the agent then exposed. The command carries
+  // its job's id, so the sandbox's listener read can name the job that serves a port.
+  test("carries the id of the job it became in its environment", async () => {
+    const { runner, store, bodies } = wholeChainRunner();
+    const serving = Promise.withResolvers<{ stdout: string; exitCode: number }>();
+    const environments: Array<Record<string, string> | undefined> = [];
+
+    const handle: SandboxHandle = {
+      exec: (_command, opts) => {
+        environments.push(opts?.env);
+
+        return serving.promise;
+      },
+      readFile: async () => ({}),
+      writeFile: async () => {},
+      listFiles: async () => ({ files: [] }),
+      deleteFile: async () => {},
+      exposePort: async (port) => ({ url: `https://preview.example.com/${String(port)}`, port, route: { reached: true } }),
+      unexposePort: async () => {},
+      getExposedPorts: async () => [],
+      ...sandboxHandleLifecycle,
+    };
+
+    const router = new DefaultExecutionRouter();
+    router.register(createSandboxExecutor(handle, 'preview.example.com'));
+    const { rt } = createTestRuntime();
+
+    const wrapped = wrapToolsForBackground(
+      buildBuiltinTools({ rt: { ...rt, executionRouter: router }, conversations: conversationsFor(rt) }),
+      { jobRunner: runner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS },
+    );
+
+    const run = toolExecute<{ command: string; runtime: string; why: string }, object | string>(present(wrapped.shell, 'the wrapped shell tool'));
+    const detached = await run({ command: 'node server.js', runtime: 'sandbox', why: 'serve the site' });
+
+    if (!isBackgroundHandle(detached)) throw new Error(`the server call did not detach: ${JSON.stringify(detached)}`);
+    expect(environments).toEqual([{ [JOB_STAMP_ENV]: detached.jobId }]);
+    expect(store.get(detached.jobId)?.status).toBe('running');
+
+    serving.resolve({ stdout: 'stopped\n', exitCode: 0 });
+    await Promise.all(bodies);
   });
 });
