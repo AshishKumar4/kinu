@@ -465,7 +465,7 @@ export {
 export type { Usage } from './usage';
 
 export {
-  contextWindowForModel, stepContextLimit, outputReserveTokens,
+  contextWindowForModel, resolveModelWindow, stepContextLimit, outputReserveTokens,
   type ContextWindowEstimate, type ModelWindow, type ResolvedModelWindow,
 } from './context-window';
 

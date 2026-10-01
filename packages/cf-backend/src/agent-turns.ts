@@ -21,6 +21,7 @@ export interface AgentTurnsDeps {
   holds(reference: ActorReference, turnId: string): Promise<boolean>;
   dynamic(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext;
   pricing(spec: string): ModelPricing | null;
+  window(spec: string): Promise<PreparedAgentTurn['window']>;
   accounts(): Readonly<Record<string, string>>;
   live(actorId: string): boolean;
 }
@@ -265,6 +266,7 @@ export class AgentTurns {
       runId: run?.runId ?? crypto.randomUUID(),
       ...(run === undefined && { birthContext: prepared.birthContext }),
       model: prepared.model,
+      window: await this.deps.window(prepared.model),
       pricing: this.deps.pricing(prepared.model),
       accounts: this.deps.accounts(),
       scaffold,

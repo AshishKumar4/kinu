@@ -7,8 +7,9 @@ import { createClaudeProvider } from './claude';
 import { createOpenAIProvider } from './openai';
 import { createOpenAICompatProvider } from './openai-compat';
 import { createOpenRouterProvider } from './openrouter';
-import { createProviderRegistry, type ProviderRegistry } from './registry';
-import { specProvider, type ModelProvider } from './types';
+import { accountDeps, createProviderRegistry, type ProviderRegistry } from './registry';
+import { catalogModelInfo } from './util';
+import { parseModelSpec, specProvider, type ModelInfo, type ModelProvider, type ProviderDeps } from './types';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC, WORKERS_AI_MODEL_ID_PREFIX, workersAiSpec } from './workers-ai';
 
 export interface BackendTransports {
@@ -66,6 +67,13 @@ export function normalizeModelSpec(named: string | null | undefined, registry: P
   return settleSync(fallback.spec === null || provider === null
     ? Effect.fail(new KinuError('missing', fallback.missing))
     : Effect.succeed(spec === '' ? fallback.spec : `${provider}/${spec}`));
+}
+
+/** A spec's catalog entry, under the account it names or the deps choose; null when unknown. */
+export function specModelInfo(registry: ProviderRegistry, deps: ProviderDeps, spec: string): Promise<ModelInfo | null> {
+  const { provider, modelId, account } = parseModelSpec(spec);
+
+  return catalogModelInfo(registry.get(provider), accountDeps(deps, provider, account), modelId);
 }
 
 /** A servable explicit choice, else Workers AI's default; never the first menu entry, a paid BYO provider. */

@@ -2874,6 +2874,7 @@ export class LocalAgentSession {
         runId: this.chat.currentRunId ?? WORKSPACE_RUN_ID,
         profile: (profileInput) => this.resolveActorTurnProfile(actor, profileInput),
         dynamic: (profile, tools) => this.actorDynamicContext(actor, profile, tools),
+        windowOf: (spec) => (spec === null ? this.modelCatalog.resolved() : this.modelCatalog.windowFor(spec)),
         conversations: new ConversationSearchStore(actor.runtime.storage.sql, actor.handle, (sessionId) => actor.stores.history.transcript(sessionId)),
       },
     };

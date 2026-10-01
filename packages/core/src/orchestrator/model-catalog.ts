@@ -73,7 +73,12 @@ export class ModelCatalogSession {
 
   /** Await the selected operation's catalog, independent of the live chat cache. */
   async contextFor(spec: string): Promise<PromptModelContext & ResolvedModelWindow> {
-    return Object.freeze({ id: spec, ...resolveModelWindow(spec, await this.lookup(spec)) });
+    return Object.freeze({ id: spec, ...await this.windowFor(spec) });
+  }
+
+  /** As {@link contextFor}, the window alone: what a head or swarm node on `spec` is admitted against. */
+  async windowFor(spec: string): Promise<ResolvedModelWindow> {
+    return resolveModelWindow(spec, await this.lookup(spec));
   }
 
   /** The window pair every producer divides (`stepContextLimit`), read now. */

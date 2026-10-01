@@ -6,7 +6,7 @@ import {
   createChatGptProvider,
   availableJudgeSpecs,
   accountDeps,
-  catalogModelInfo,
+  specModelInfo,
   createOpenAICompatProvider,
   createProviderProxyFetch,
   listModelsDevProviderModels,
@@ -339,11 +339,8 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     listModels() {
       return registry.listAllModels(own);
     },
-    async modelInfo(specOrNull) {
-      const spec = normalizeSpecSync(specOrNull);
-      const { provider, modelId, account } = parseModelSpec(spec);
-
-      return catalogModelInfo(registry.get(provider), accountDeps(own, provider, account), modelId);
+    modelInfo(specOrNull) {
+      return specModelInfo(registry, own, normalizeSpecSync(specOrNull));
     },
     async countInputTokens(specOrNull, request) {
       const spec = normalizeSpecSync(specOrNull);
