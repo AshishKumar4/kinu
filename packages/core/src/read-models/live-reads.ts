@@ -46,6 +46,7 @@ const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string,
   ['actor_subordinates', AGENTS],
   ['actor_config', AGENTS],
   ['actor_turn_claims', AGENTS],
+  ['agent_log', AGENTS],
   ['head_journal', AGENTS],
   ['head_runs', AGENTS],
 ]);

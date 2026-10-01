@@ -1806,6 +1806,8 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   private _chatLoop: ChatSession | null = null;
+  /** A read never builds the chat to ask. */
+  protected get chatTurnOwed(): boolean { return this._chatLoop?.turnOwed ?? false; }
   protected get chatLoop(): ChatSession {
     if (!this._chatLoop) {
       this._chatLoop = new ChatSession({
@@ -1839,7 +1841,9 @@ export abstract class ActorAgent extends Agent<Env> {
           // Arm the turn's own wake at its open, so a kill mid-turn leaves both the run row and the wake
           // that re-drives what it owed.
           armTurnWake: async (atMs) => { await this.scheduleTerminalRetry(atMs); },
+          owed: () => { this.liveReadsMoved(['listWorkspaceAgents']); },
           quiet: () => {
+            this.liveReadsMoved(['listWorkspaceAgents']);
             this.chatTransport.quiet();
             this.overviewChanged();
             this.detachOwned(() => this.restWhenIdle());
@@ -2539,7 +2543,7 @@ export abstract class ActorAgent extends Agent<Env> {
   // EventsHub primitives. Spec: docs/ARCHITECTURE.md — "Events and ingress"
   private _eventLog: EventLog | null = null;
   protected get eventLog(): EventLog {
-    this._eventLog ??= new EventLog(this.ctx.storage.sql, this.actorHandle());
+    this._eventLog ??= new EventLog(this.watchedExec, this.actorHandle());
 
     return this._eventLog;
   }

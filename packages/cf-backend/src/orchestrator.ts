@@ -25,7 +25,7 @@ import {
   type BoundActor, type DynamicContext, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult, type HostedActor,
   type LoopOrigin, type NimbusSandboxHandle, type NodeHomeHost,
-  type SqlExec, type SqlValue, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
+  type SqlExec, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
   isSubordinateOrigin,
   whenActorTakesInput,
 } from "@kinu.run/core";
@@ -857,9 +857,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Immutable catalogs are shared by value; per-actor state (event log, governor, broadcast)
    * is built per actor in `actor-hosting.ts` and is never this object's own.
    */
-  /** The single adapter from the DO's `SqlStorage` to core's positional `SqlExec`. */
+  /** The single adapter from the DO's `SqlStorage` to core's positional `SqlExec`; its writes name the reads they move. */
   protected boundExec(): SqlExec {
-    return { exec: (query: string, ...bindings: SqlValue[]) => this.ctx.storage.sql.exec(query, ...bindings) };
+    return this.watchedExec;
   }
 
   private workspaceHostSeams(): WorkspaceHostSeams {
@@ -1358,6 +1358,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** A lease from before this activation lost its runner; effects dedupe on rerun. */
   private rependDeadActivationLeases(): void {
+    // Looked for first: every wake runs this, and a write tells each open page its agents moved.
+    const dead = this.boundExec().exec(
+      `SELECT 1 FROM agent_log
+       WHERE kind = 'event' AND variant = 'subordinate_task' AND turn_id LIKE 'evt-%'
+         AND consumed_at IS NOT NULL AND consumed_at < ?
+       LIMIT 1`,
+      this.activationStartedAt,
+    ).toArray();
+
+    if (dead.length === 0) return;
+
     const rows = this.boundExec().exec(
       `UPDATE agent_log SET turn_id = NULL, step_idx = NULL, consumed_at = NULL
        WHERE kind = 'event' AND variant = 'subordinate_task' AND turn_id LIKE 'evt-%'
@@ -2856,7 +2867,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async listWorkspaceAgents(): Promise<PanelAgent[]> {
     return readWorkspaceAgents({
-      sql: this.boundSql, exec: this.ctx.storage.sql, root: this.actorHandle(), rootLabel: 'Main',
+      sql: this.boundSql, exec: this.ctx.storage.sql, root: this.actorHandle(), rootLabel: 'Main', queued: this.chatTurnOwed,
       actors: this.workspaceActors().list({ retired: true }),
       figures: async (actorIds) => {
         const main = this.actorHandle().actorId;

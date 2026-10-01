@@ -215,6 +215,8 @@ export interface ChatSessionPorts {
   driverGate(): Refusal | null;
   /** Called at the turn's synchronous open; soonest-wins. A backend whose process is the wake arms nothing. */
   armTurnWake(atMs: number): Promise<void>;
+  /** A turn is owed until {@link quiet}. */
+  owed?(): void;
   /** The queue drained and no turn runs. */
   quiet?(): void;
   /** Read at commit, never captured earlier. */
@@ -356,6 +358,7 @@ export class ChatSession {
   }
 
   get pumpPromise(): Promise<void> | null { return this.activePump; }
+  get turnOwed(): boolean { return this.pumpActive || this.queue.length > 0; }
   get pumping(): boolean { return this.pumpActive; }
   get currentRunId(): string | null { return this.runId; }
   /** Open on purpose, so the wake reconcile must not seal them. */
@@ -744,10 +747,10 @@ export class ChatSession {
   pump(): void {
     if (this.pumpActive) return;
     this.pumpActive = true;
+    this.ports.owed?.();
     const running = this.runPump();
 
-    // Assigned only if still running: an empty-queue run completes synchronously, and reinstating its
-    // resolved promise would spin settleBackgroundWork forever.
+    // Assigned only while running: reinstating a resolved promise would spin settleBackgroundWork forever.
     if (this.pumpActive) this.activePump = running;
   }
 
