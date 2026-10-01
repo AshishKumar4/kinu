@@ -102,6 +102,7 @@ export const DECLARED = new Map<string, Declaration>([
 
 /** Where an effect is run for a host that owns the call, permanently: not a bridge. */
 export const HOST_BOUNDARIES = new Map<string, string>([
+  ['packages/core/src/scaffold/executor.ts', 'a scaffold\'s `host.*` functions answer the sandbox that calls them: a platform-owned call'],
   ['packages/core/src/execution/parent.ts', '`answerParentRpc` answers a fork over DO RPC and in the CLI: a platform-owned call'],
 ]);
 

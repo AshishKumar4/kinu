@@ -23,7 +23,8 @@ import {
   type JsonObject,
   type JsonValue,
 } from '../utils/json';
-import { renderThrownChain, KinuError } from '../obs/index';
+import { Effect, Result } from 'effect';
+import { renderThrownChain, KinuError, settle } from '../obs/index';
 import type { WorkMode } from '../types/turn';
 import { bindTaskPlan } from '../tools/task-plan-scope';
 import { currentWorkMode, requireWorkModePermission, runWorkModeInvocation } from '../execution/work-mode';
@@ -252,6 +253,14 @@ const HistoryQuerySchema = v.object({
 });
 
 
+interface Failed { readonly cause: unknown }
+
+const tried = <A>(run: () => A | PromiseLike<A>): Effect.Effect<A, Failed> => Effect.tryPromise({ try: async () => run(), catch: (cause) => ({ cause }) });
+
+function answeredOrError<A extends JsonValue>(run: () => Promise<A>): Effect.Effect<A | { error: string }> {
+  return Effect.catch(tried(run), (failed) => Effect.succeed({ error: renderThrownChain(failed) }));
+}
+
 function buildHostProvider(opts: ScaffoldRunControl & {
   workMode: WorkMode;
   emit: ScaffoldEmitFn;
@@ -277,6 +286,12 @@ function buildHostProvider(opts: ScaffoldRunControl & {
     await emit(ev);
   }
 
+  const reported = (doing: string, failed: Failed): Effect.Effect<JsonValue> => {
+    const msg = renderThrownChain(failed);
+
+    return Effect.as(Effect.promise(() => pushEvent({ type: 'error', message: `${doing}${msg}` })), { error: msg });
+  };
+
   const fns = {
     emit: async (...args: unknown[]) => {
       assertScaffoldActive(opts);
@@ -287,34 +302,34 @@ function buildHostProvider(opts: ScaffoldRunControl & {
 
       return 'emitted';
     },
-    callTool: async (...rawArgs: unknown[]) => {
+    callTool: (...rawArgs: unknown[]) => settle(Effect.gen(function* () {
       assertScaffoldActive(opts);
       const name = v.safeParse(v.string(), rawArgs[0]);
 
-      if (!name.success) throw new KinuError('bad_input', 'host.callTool: name must be a string');
+      if (!name.success) return yield* new KinuError('bad_input', 'host.callTool: name must be a string');
 
-      if (!callTool) throw new KinuError('unavailable', 'host.callTool is unavailable in this runtime');
+      if (!callTool) return yield* new KinuError('unavailable', 'host.callTool is unavailable in this runtime');
       const callId = `tc-${Math.random().toString(36).slice(2, 10)}`;
       const parsedArgs = v.safeParse(JsonValueSchema, rawArgs[1]);
 
-      if (!parsedArgs.success) throw new KinuError('bad_input', 'host.callTool: arguments must be JSON', { cause: parsedArgs.issues });
+      if (!parsedArgs.success) return yield* new KinuError('bad_input', 'host.callTool: arguments must be JSON', { cause: parsedArgs.issues });
       const toolArgs = parsedArgs.output;
 
-      if (!isJsonObject(toolArgs)) throw new KinuError('bad_input', 'host.callTool: arguments must be a JSON object');
-      await pushEvent({ type: 'tool_call', name: name.output, args: toolArgs, toolCallId: callId });
+      if (!isJsonObject(toolArgs)) return yield* new KinuError('bad_input', 'host.callTool: arguments must be a JSON object');
+      yield* Effect.promise(() => pushEvent({ type: 'tool_call', name: name.output, args: toolArgs, toolCallId: callId }));
+      const called = yield* Effect.result(tried(() => callTool(name.output, toolArgs)));
 
-      try {
-        const result = await callTool(name.output, toolArgs);
-        await pushEvent({ type: 'tool_result', toolCallId: callId, result, outcome: { success: true } });
+      if (Result.isSuccess(called)) {
+        yield* Effect.promise(() => pushEvent({ type: 'tool_result', toolCallId: callId, result: called.success, outcome: { success: true } }));
 
-        return result;
-      } catch (err) {
-        const msg = renderThrownChain({ cause: err });
-        await pushEvent({ type: 'tool_result', toolCallId: callId, error: msg, outcome: failedToolOutcome({ cause: err }) });
-
-        return { error: msg };
+        return called.success;
       }
-    },
+
+      const msg = renderThrownChain(called.failure);
+      yield* Effect.promise(() => pushEvent({ type: 'tool_result', toolCallId: callId, error: msg, outcome: failedToolOutcome(called.failure) }));
+
+      return { error: msg };
+    })),
     llmStream: async (...args: unknown[]) => {
       assertScaffoldActive(opts);
       const parsed = v.safeParse(LlmStreamOptionsSchema, args[0]);
@@ -323,7 +338,7 @@ function buildHostProvider(opts: ScaffoldRunControl & {
       let acc = '';
       const streamId = nanoid();
 
-      try {
+      return settle(Effect.catch(tried(async () => {
         for await (const chunk of llmStream(parsed.output)) {
           if (chunk.type === 'native-tool-output') await pushEvent({ type: 'model_output', streamId, output: chunk.output });
           else {
@@ -333,12 +348,7 @@ function buildHostProvider(opts: ScaffoldRunControl & {
         }
 
         return acc;
-      } catch (err) {
-        const msg = renderThrownChain({ cause: err });
-        await pushEvent({ type: 'error', message: `llmStream failed: ${msg}` });
-
-        return { error: msg };
-      }
+      }), (failed) => reported('llmStream failed: ', failed)));
     },
     defaultInference: async () => {
       // Chunks are emitted host-side; they do not round-trip through the sandbox.
@@ -350,7 +360,7 @@ function buildHostProvider(opts: ScaffoldRunControl & {
 
       const streamId = nanoid();
 
-      try {
+      return settle(Effect.catch(tried(async () => {
         for await (const chunk of defaultInference()) {
           if ('event' in chunk) await pushEvent({ type: 'chat_chunk', streamId, chunk: chunk.event });
           else {
@@ -360,12 +370,7 @@ function buildHostProvider(opts: ScaffoldRunControl & {
         }
 
         return 'done';
-      } catch (err) {
-        const msg = renderThrownChain({ cause: err });
-        await pushEvent({ type: 'error', message: `defaultInference failed: ${msg}` });
-
-        return { error: msg };
-      }
+      }), (failed) => reported('defaultInference failed: ', failed)));
     },
     history: async (...args: unknown[]) => {
       assertScaffoldActive(opts);
@@ -374,14 +379,12 @@ function buildHostProvider(opts: ScaffoldRunControl & {
       const parsed = v.safeParse(HistoryQuerySchema, args[0] ?? {});
       const query = parsed.success ? parsed.output : {};
 
-      try {
+      return settle(answeredOrError(async () => {
         const page = { value: await history(query) };
         assertJsonValue(page);
 
         return page.value;
-      } catch (err) {
-        return { error: renderThrownChain({ cause: err }) };
-      }
+      }));
     },
     readMemory: async (...args: unknown[]) => {
       assertScaffoldActive(opts);
@@ -389,8 +392,7 @@ function buildHostProvider(opts: ScaffoldRunControl & {
 
       if (!path.success) return { error: 'host.readMemory: path must be a string' };
 
-      try { return await readMemory(path.output); }
-      catch (err) { return { error: renderThrownChain({ cause: err }) }; }
+      return settle(answeredOrError(() => readMemory(path.output)));
     },
     appendMemory: async (...args: unknown[]) => {
       assertScaffoldActive(opts);
@@ -401,12 +403,11 @@ function buildHostProvider(opts: ScaffoldRunControl & {
         return { error: 'host.appendMemory: path and content must be strings' };
       }
 
-      try {
+      return settle(answeredOrError(async () => {
         await appendMemory(path.output, content.output);
 
         return 'appended';
-      }
-      catch (err) { return { error: renderThrownChain({ cause: err }) }; }
+      }));
     },
   } satisfies Record<string, (...args: unknown[]) => Promise<JsonValue | undefined>>;
 
@@ -421,91 +422,93 @@ function buildHostProvider(opts: ScaffoldRunControl & {
  * Execute the agent's current scaffold for one turn. No elapsed deadline; on
  * failure returns ok=false and the caller falls back and queues a rollback.
  */
-export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRunResult> {
-  assertScaffoldActive(opts);
-  const mode = opts.workMode ?? currentWorkMode();
-  requireWorkModePermission(mode, false, 'Unrestricted scaffold execution');
-  const { rt, task, emit, llmStream, callTool, scaffoldCodeOverride } = opts;
-  const startedAt = Date.now();
-  const capturedEvents: ScaffoldEvent[] = [];
+export function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRunResult> {
+  return settle(Effect.gen(function* () {
+    assertScaffoldActive(opts);
+    const mode = opts.workMode ?? currentWorkMode();
+    requireWorkModePermission(mode, false, 'Unrestricted scaffold execution');
+    const { rt, task, emit, llmStream, callTool, scaffoldCodeOverride } = opts;
+    const startedAt = Date.now();
+    const capturedEvents: ScaffoldEvent[] = [];
 
-  const state = {
-    doneEmitted: false,
-    finalResult: undefined,
-  } satisfies { doneEmitted: boolean; finalResult: JsonValue | undefined };
+    const state = {
+      doneEmitted: false,
+      finalResult: undefined,
+    } satisfies { doneEmitted: boolean; finalResult: JsonValue | undefined };
 
-  let code: string;
+    const read = yield* Effect.result(tried(async () => scaffoldCodeOverride ?? rt.identity.scaffold.read()));
 
-  try {
-    code = scaffoldCodeOverride ?? (await rt.identity.scaffold.read());
-  } catch (err) {
-    const msg = `scaffold read failed: ${renderThrownChain({ cause: err })}`;
-    await emit({ type: 'error', message: msg });
+    if (Result.isFailure(read)) {
+      const msg = `scaffold read failed: ${renderThrownChain(read.failure)}`;
+      yield* Effect.promise(async () => emit({ type: 'error', message: msg }));
+
+      return {
+        ok: false, doneEmitted: false, emitCount: 0, events: [], durationMs: Date.now() - startedAt, error: msg,
+      };
+    }
+
+    const code = read.success;
+
+    if (!code || code.trim().length === 0) {
+      const msg = 'scaffold empty or unreadable';
+      yield* Effect.promise(async () => emit({ type: 'error', message: msg }));
+
+      return {
+        ok: false, doneEmitted: false, emitCount: 0, events: [], durationMs: Date.now() - startedAt, error: msg,
+      };
+    }
+
+    const hostProvider = buildHostProvider({
+      emit, llmStream, callTool, workMode: mode, signal: opts.signal, assertActive: opts.assertActive,
+      defaultInference: opts.defaultInference,
+      history: opts.history,
+      readMemory: async (path) => (await rt.memory.read(path)) ?? '',
+      appendMemory: async (path, content) => { await rt.memory.append(path, content); },
+      capturedEvents, state,
+    });
+
+    // Scaffolds reach the host only via `host.*`; `rt` is not a sandbox
+    // global (the live object can't cross the boundary).
+    const wrapperCode = buildScaffoldWrapperCode(code, task);
+
+    const exec: Executor = rt.executor;
+    const providers = [hostProvider, ...scaffoldProviders(rt, opts, mode)];
+
+    for (const provider of providers) {
+      for (const [name, invoke] of Object.entries(provider.fns)) provider.fns[name] = bindTaskPlan(invoke);
+    }
+
+    assertScaffoldActive(opts);
+    const result = yield* Effect.promise(() => runWorkModeInvocation(mode, () => exec.execute(wrapperCode, providers)));
+    const durationMs = Date.now() - startedAt;
+
+    if (result.error) {
+      const msg = result.error;
+      yield* Effect.promise(async () => emit({ type: 'error', message: msg }));
+
+      return {
+        ok: false,
+        doneEmitted: state.doneEmitted,
+        emitCount: capturedEvents.length,
+        events: capturedEvents,
+        durationMs,
+        error: msg,
+      };
+    }
+
+    if (!state.doneEmitted) {
+      yield* Effect.promise(async () => emit({ type: 'done', result: state.finalResult }));
+    }
 
     return {
-      ok: false, doneEmitted: false, emitCount: 0, events: [], durationMs: Date.now() - startedAt, error: msg,
-    };
-  }
-
-  if (!code || code.trim().length === 0) {
-    const msg = 'scaffold empty or unreadable';
-    await emit({ type: 'error', message: msg });
-
-    return {
-      ok: false, doneEmitted: false, emitCount: 0, events: [], durationMs: Date.now() - startedAt, error: msg,
-    };
-  }
-
-  const hostProvider = buildHostProvider({
-    emit, llmStream, callTool, workMode: mode, signal: opts.signal, assertActive: opts.assertActive,
-    defaultInference: opts.defaultInference,
-    history: opts.history,
-    readMemory: async (path) => (await rt.memory.read(path)) ?? '',
-    appendMemory: async (path, content) => { await rt.memory.append(path, content); },
-    capturedEvents, state,
-  });
-
-  // Scaffolds reach the host only via `host.*`; `rt` is not a sandbox
-  // global (the live object can't cross the boundary).
-  const wrapperCode = buildScaffoldWrapperCode(code, task);
-
-  const exec: Executor = rt.executor;
-  const providers = [hostProvider, ...scaffoldProviders(rt, opts, mode)];
-
-  for (const provider of providers) {
-    for (const [name, invoke] of Object.entries(provider.fns)) provider.fns[name] = bindTaskPlan(invoke);
-  }
-
-  assertScaffoldActive(opts);
-  const result = await runWorkModeInvocation(mode, () => exec.execute(wrapperCode, providers));
-  const durationMs = Date.now() - startedAt;
-
-  if (result.error) {
-    const msg = result.error;
-    await emit({ type: 'error', message: msg });
-
-    return {
-      ok: false,
-      doneEmitted: state.doneEmitted,
+      ok: true,
+      doneEmitted: true,
       emitCount: capturedEvents.length,
       events: capturedEvents,
       durationMs,
-      error: msg,
+      finalResult: state.finalResult,
     };
-  }
-
-  if (!state.doneEmitted) {
-    await emit({ type: 'done', result: state.finalResult });
-  }
-
-  return {
-    ok: true,
-    doneEmitted: true,
-    emitCount: capturedEvents.length,
-    events: capturedEvents,
-    durationMs,
-    finalResult: state.finalResult,
-  };
+  }));
 }
 
 /** Wrap scaffold source with a driver for either `run` shape, forwarding yields to host.emit. */

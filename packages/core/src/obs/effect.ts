@@ -106,22 +106,29 @@ export function shared<A>(run: () => Effect.Effect<A, KinuError | VfsError>): ()
   return sharedBy<void, A>(() => null, run);
 }
 
-/** One run at a time. */
-export function deduped<A>(run: () => Effect.Effect<A, KinuError | VfsError>): () => Promise<A> {
-  let running: Promise<A> | undefined;
+/** One run per key at a time; the key frees when the run settles. */
+export function dedupedBy<I, A>(keyOf: (input: I) => string | number | null, run: (input: I) => Effect.Effect<A, KinuError | VfsError>): (input: I) => Promise<A> {
+  const running = new Map<string | number | null, Promise<A>>();
 
-  return () => {
-    if (running !== undefined) return running;
+  return (input) => {
+    const key = keyOf(input);
+    const held = running.get(key);
+
+    if (held !== undefined) return held;
     let started: Promise<A> | undefined;
     let live = true;
 
-    started = settle(Effect.ensuring(run(), Effect.sync(() => {
+    started = settle(Effect.ensuring(run(input), Effect.sync(() => {
       if (started === undefined) live = false;
-      else if (running === started) running = undefined;
+      else if (running.get(key) === started) running.delete(key);
     })));
 
-    if (live) running = started;
+    if (live) running.set(key, started);
 
     return started;
   };
+}
+
+export function deduped<A>(run: () => Effect.Effect<A, KinuError | VfsError>): () => Promise<A> {
+  return dedupedBy<void, A>(() => null, run);
 }

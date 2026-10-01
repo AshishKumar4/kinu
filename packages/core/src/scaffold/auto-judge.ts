@@ -15,8 +15,9 @@ import {
   DEFAULT_SHADOW_CONFIG, getPendingScaffold,
   recordShadowEvaluation, scoredShadowTrial, decidePromotion, applyPromotionDecision, readScaffoldVersion,
 } from './shadow';
-import { runScaffold, scaffoldEventText, type ScaffoldRunResult } from './executor';
-import { diagnostics, KinuError, toKinuError } from '../obs/index';
+import { runScaffold, scaffoldEventText } from './executor';
+import { Effect, Result } from 'effect';
+import { attempt, diagnostics, KinuError, settle } from '../obs/index';
 
 /** One judge call's output. The judge sees two unlabelled responses in random order. */
 const JudgeOutputSchema = v.object({
@@ -81,137 +82,132 @@ export interface AutoShadowEvalResult {
 }
 
 /** Execute one shadow trial and, if conclusive and `autoApply`, apply the decision. */
-export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<AutoShadowEvalResult> {
-  const config: AutoJudgeConfig = { ...DEFAULT_AUTO_JUDGE_CONFIG, ...opts.config };
-  const rng = opts.random ?? Math.random;
+export function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<AutoShadowEvalResult> {
+  return settle(Effect.gen(function* () {
+    const config: AutoJudgeConfig = { ...DEFAULT_AUTO_JUDGE_CONFIG, ...opts.config };
+    const rng = opts.random ?? Math.random;
 
-  const pending = getPendingScaffold(opts.rt.storage.sql, opts.rt.actor);
+    const pending = getPendingScaffold(opts.rt.storage.sql, opts.rt.actor);
 
-  if (!pending) return { skipped: true, reason: 'no_pending' };
+    if (!pending) return { skipped: true, reason: 'no_pending' };
 
-  // Already scored: skip the re-drive (it would repeat live tool calls), but the promotion decision is still owed.
-  const scored = opts.trialId === undefined
-    ? null
-    : scoredShadowTrial(opts.rt.storage.sql, opts.rt.actor, opts.trialId);
+    // Already scored: skip the re-drive (it would repeat live tool calls), but the promotion decision is still owed.
+    const scored = opts.trialId === undefined
+      ? null
+      : scoredShadowTrial(opts.rt.storage.sql, opts.rt.actor, opts.trialId);
 
-  if (scored) {
-    const settled = await settlePromotion(opts, config, pending);
+    if (scored) {
+      const settled = yield* settlePromotion(opts, config, pending);
 
-    return { skipped: false, evaluation: { ...scored }, ...settled };
-  }
+      return { skipped: false, evaluation: { ...scored }, ...settled };
+    }
 
-  const pendingCode = await readScaffoldVersion(opts.rt, pending.version);
+    const pendingCode = yield* Effect.promise(() => readScaffoldVersion(opts.rt, pending.version));
 
-  if (!pendingCode) return { skipped: true, reason: 'pending_unreadable' };
+    if (!pendingCode) return { skipped: true, reason: 'pending_unreadable' };
 
-  // Final text includes ui_chunk text-deltas so a delegating pending is judged on its real output.
-  const pendingEvents: string[] = [];
-  let pendingResult: ScaffoldRunResult;
+    // Final text includes ui_chunk text-deltas so a delegating pending is judged on its real output.
+    const pendingEvents: string[] = [];
 
-  try {
-    pendingResult = await runScaffold({
-      rt: opts.rt,
-      task: opts.task,
-      emit: (event) => {
-        const text = scaffoldEventText(event);
+    const ran = yield* Effect.result(attempt({ doing: 'run the pending scaffold for a shadow trial', otherwise: 'unavailable' }, () => runScaffold({
+        rt: opts.rt,
+        task: opts.task,
+        emit: (event) => {
+          const text = scaffoldEventText(event);
 
-        if (text !== null) pendingEvents.push(text);
+          if (text !== null) pendingEvents.push(text);
+        },
+        llmStream: opts.llmStream,
+        // Without callTool, runScaffold's capability guard returns an unavailable-runtime error.
+        callTool: opts.callTool,
+        defaultInference: opts.defaultInference,
+        history: opts.history,
+        scaffoldCodeOverride: pendingCode,
+      })));
+
+    if (Result.isFailure(ran)) {
+      diagnostics.failure('scaffold.pending_run_failed', ran.failure);
+
+      return { skipped: true, reason: 'pending_unreadable' };
+    }
+
+    const pendingResult = ran.success;
+
+    const pendingOutput = pendingEvents.join('') || (pendingResult.error ?? '');
+
+    // Windowed once so the recorded task is exactly the one judged.
+    const evidence = {
+      task: evidenceWindow(opts.task, EVIDENCE_BUDGETS.shadowTask),
+      currentOutput: evidenceWindow(opts.currentOutput, EVIDENCE_BUDGETS.shadowOutput),
+      pendingOutput: evidenceWindow(pendingOutput, EVIDENCE_BUDGETS.shadowOutput),
+    };
+
+    const judged = yield* Effect.result(attempt({ doing: 'judge a shadow trial', otherwise: 'unavailable' },
+      () => judgeTrialOrderSwapped({ ...evidence, judge: opts.judge, pendingFirst: rng() < 0.5 })));
+
+    if (Result.isFailure(judged)) {
+      diagnostics.failure('scaffold.judge_failed', judged.failure);
+
+      return { skipped: true };
+    }
+
+    const judgeResult: ShadowTrialVerdict = judged.success;
+
+    const evaluation = { pendingVersion: pending.version, task: evidence.task, judgeResult };
+
+    recordShadowEvaluation(
+      opts.rt.storage.sql,
+      opts.rt.actor,
+      opts.trialId === undefined ? evaluation : { ...evaluation, trialId: opts.trialId },
+    );
+
+    const settled = yield* settlePromotion(opts, config, pending);
+
+    return {
+      skipped: false,
+      evaluation: {
+        currentScore: judgeResult.currentScore,
+        pendingScore: judgeResult.pendingScore,
+        winner: judgeResult.winner,
+        rationale: judgeResult.rationale,
       },
-      llmStream: opts.llmStream,
-      // Without callTool, runScaffold's capability guard returns an unavailable-runtime error.
-      callTool: opts.callTool,
-      defaultInference: opts.defaultInference,
-      history: opts.history,
-      scaffoldCodeOverride: pendingCode,
-    });
-  } catch (err) {
-    diagnostics.failure(
-      'scaffold.pending_run_failed',
-      toKinuError({ doing: 'run the pending scaffold for a shadow trial', cause: err, otherwise: 'unavailable' }),
-    );
-
-    return { skipped: true, reason: 'pending_unreadable' };
-  }
-
-  const pendingOutput = pendingEvents.join('') || (pendingResult.error ?? '');
-
-  // Windowed once so the recorded task is exactly the one judged.
-  const evidence = {
-    task: evidenceWindow(opts.task, EVIDENCE_BUDGETS.shadowTask),
-    currentOutput: evidenceWindow(opts.currentOutput, EVIDENCE_BUDGETS.shadowOutput),
-    pendingOutput: evidenceWindow(pendingOutput, EVIDENCE_BUDGETS.shadowOutput),
-  };
-
-  let judgeResult: ShadowTrialVerdict;
-
-  try {
-    judgeResult = await judgeTrialOrderSwapped({ ...evidence, judge: opts.judge, pendingFirst: rng() < 0.5 });
-  } catch (err) {
-    diagnostics.failure(
-      'scaffold.judge_failed',
-      toKinuError({ doing: 'judge a shadow trial', cause: err, otherwise: 'unavailable' }),
-    );
-
-    return { skipped: true };
-  }
-
-  const evaluation = { pendingVersion: pending.version, task: evidence.task, judgeResult };
-
-  recordShadowEvaluation(
-    opts.rt.storage.sql,
-    opts.rt.actor,
-    opts.trialId === undefined ? evaluation : { ...evaluation, trialId: opts.trialId },
-  );
-
-  const settled = await settlePromotion(opts, config, pending);
-
-  return {
-    skipped: false,
-    evaluation: {
-      currentScore: judgeResult.currentScore,
-      pendingScore: judgeResult.pendingScore,
-      winner: judgeResult.winner,
-      rationale: judgeResult.rationale,
-    },
-    ...settled,
-  };
+      ...settled,
+    };
+  }));
 }
 
 /** Read the gate and apply its decision; counts are re-read because other trials may have landed. */
-async function settlePromotion(
+function settlePromotion(
   opts: RunAutoShadowEvalOpts,
   config: AutoJudgeConfig,
   pending: { version: number },
-): Promise<{ decision: 'promote' | 'rollback' | 'continue'; applied: 'promote' | 'rollback' | null }> {
+): Effect.Effect<{ decision: 'promote' | 'rollback' | 'continue'; applied: 'promote' | 'rollback' | null }> {
   const fresh = getPendingScaffold(opts.rt.storage.sql, opts.rt.actor);
 
-  if (!fresh || fresh.version !== pending.version) return { decision: 'continue', applied: null };
+  if (!fresh || fresh.version !== pending.version) return Effect.succeed({ decision: 'continue', applied: null });
   const decision = decidePromotion(fresh, config.shadowConfig).decision;
 
-  if (!config.autoApply || decision === 'continue') return { decision, applied: null };
+  if (!config.autoApply || decision === 'continue') return Effect.succeed({ decision, applied: null });
 
-  try {
-    // The promotion-time misevolution recheck can turn 'promote' into 'rollback'.
-    const outcome = await applyPromotionDecision(opts.rt, fresh, decision, opts.events);
+  // The promotion-time misevolution recheck can turn 'promote' into 'rollback'.
+  return attempt({ doing: 'apply a scaffold promotion decision', otherwise: 'io' }, () => applyPromotionDecision(opts.rt, fresh, decision, opts.events)).pipe(
+    Effect.map((outcome) => {
+      if (outcome.vetoReason) {
+        diagnostics.failure(
+          'scaffold.promotion_vetoed',
+          new KinuError('denied', outcome.vetoReason),
+          { scaffoldVersion: fresh.version, action: outcome.action },
+        );
+      }
 
-    if (outcome.vetoReason) {
-      diagnostics.failure(
-        'scaffold.promotion_vetoed',
-        new KinuError('denied', outcome.vetoReason),
-        { scaffoldVersion: fresh.version, action: outcome.action },
-      );
-    }
+      return { decision, applied: outcome.action };
+    }),
+    Effect.catch((failure) => Effect.sync(() => {
+      diagnostics.failure('scaffold.promotion_apply_failed', failure, { scaffoldVersion: fresh.version, decision });
 
-    return { decision, applied: outcome.action };
-  } catch (err) {
-    diagnostics.failure(
-      'scaffold.promotion_apply_failed',
-      toKinuError({ doing: 'apply a scaffold promotion decision', cause: err, otherwise: 'io' }),
-      { scaffoldVersion: fresh.version, decision },
-    );
-
-    return { decision, applied: null };
-  }
+      return { decision, applied: null };
+    })),
+  );
 }
 
 interface JudgeTrialOpts {
