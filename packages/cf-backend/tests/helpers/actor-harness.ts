@@ -1515,8 +1515,8 @@ export interface HarnessActorWorld {
   /** The container binding at `env.KinuDevbox`: the runtime registers the sandbox executor over it.
    *  Unset, the workspace has no container. */
   container?: boolean;
-  /** Each box the workspace told it worked (`noteHostWork`), by name, in call order. */
-  boxesTold?: string[];
+  /** Every call the workspace made on a box, as `<box>.<method>`, in call order. */
+  boxCalls?: string[];
   /** Every method this object served over its own namespace's stub, in call order. */
   rpcServed?: string[];
   /** This activation's isolate stops once in its terminal sequence, at that effect, before or after
@@ -1558,7 +1558,11 @@ export function makeEnv(
     ...(world?.versionId !== undefined && { CF_VERSION_METADATA: { id: world.versionId, tag: '', timestamp: '' } }),
     ...(world?.email !== undefined && { EMAIL: world.email }),
     ...(world?.container === true && {
-      KinuDevbox: { getByName: (name: string) => ({ noteHostWork: () => { world.boxesTold?.push(name); } }) },
+      KinuDevbox: {
+        getByName: (name: string) => new Proxy({}, {
+          get: (_target, method) => () => { world.boxCalls?.push(`${name}.${String(method)}`); },
+        }),
+      },
     }),
     UserDO: {
       idFromName: (n: string) => ({ toString: () => n }),
