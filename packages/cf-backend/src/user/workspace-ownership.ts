@@ -4,7 +4,7 @@
  */
 import type { OrchestratorAgent } from '../orchestrator';
 import type { UserDO } from './user-do';
-import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
+import { ERROR_STATUS, ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { classifyTransientDO, retryTransientDO } from '@kinu.run/core';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
@@ -37,7 +37,7 @@ function forgetWorkspaceMembership(userId: string, workspaceName: string): void 
 }
 
 /** 404 when not in the caller's registry (probes must not create workspaces); 403 for a
- * cross-user collision; 503 for a dropped platform call; anything else is a surfaced 500. */
+ * cross-user collision; otherwise the failure's class: 503 for a dropped or refused platform call. */
 export async function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>(
   env: WorkspaceOwnershipEnv<Id, Agent>,
   userId: string,
@@ -81,13 +81,13 @@ export async function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>
 
     const transient = classifyTransientDO({ cause: e });
 
-    diagnostics.failure('workspace.claim_owner_failed', toKinuError({
-      doing: 'claiming workspace ownership',
-      cause: e,
-      otherwise: 'unavailable',
-    }), { workspace: workspaceName, transient: transient ?? 'none' });
+    const failure = toKinuError({
+      doing: 'claiming workspace ownership', cause: e, otherwise: transient === null ? 'io' : 'unavailable',
+    });
 
-    return { ok: false, status: transient === null ? 500 : 503, error: `Could not reach workspace ${workspaceName}; try again.` };
+    diagnostics.failure('workspace.claim_owner_failed', failure, { workspace: workspaceName, transient: transient ?? 'none' });
+
+    return { ok: false, status: ERROR_STATUS[failure.code], error: `Could not reach workspace ${workspaceName}; try again.` };
   }
 
   // The UserDO serializes this reconcile; it returns immediately once both sides agree.
@@ -106,17 +106,14 @@ export async function claimOwnedWorkspace<Id, Agent extends WorkspaceOwnerClaim>
     }
 
     const transient = classifyTransientDO({ cause: e });
-    diagnostics.failure('workspace.capability_provisioning_failed', toKinuError({
-      doing: "provisioning the workspace's capability token",
-      cause: e,
-      otherwise: 'unavailable',
-    }), { workspace: workspaceName, transient: transient ?? 'none' });
 
-    return {
-      ok: false,
-      status: transient !== null ? 503 : 500,
-      error: 'Could not issue this workspace\'s capability token; try again.',
-    };
+    const failure = toKinuError({
+      doing: "provisioning the workspace's capability token", cause: e, otherwise: transient === null ? 'io' : 'unavailable',
+    });
+
+    diagnostics.failure('workspace.capability_provisioning_failed', failure, { workspace: workspaceName, transient: transient ?? 'none' });
+
+    return { ok: false, status: ERROR_STATUS[failure.code], error: 'Could not issue this workspace\'s capability token; try again.' };
   }
 
   return { ok: true, agent };

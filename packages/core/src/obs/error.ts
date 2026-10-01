@@ -211,6 +211,8 @@ const OOM_SIGNATURES: readonly RegExp[] = [
   /exceededMemory/iu,
 ];
 
+export const OVERLOADED_SIGNATURE = /Durable Object is overloaded/iu;
+
 /**
  * Class of a caught value, or null when nothing pinned recognises it; callers supply the fallback.
  * Reads the cause chain outermost first; the first recognised class wins.
@@ -242,7 +244,9 @@ export function classifyErrorCode(input: { cause: unknown }): ErrorCode | null {
   if (!(input.cause instanceof Error)) return null;
   const chain = renderCauseChain(input.cause);
 
-  return OOM_SIGNATURES.some((signature) => signature.test(chain)) ? 'oom' : null;
+  if (OOM_SIGNATURES.some((signature) => signature.test(chain))) return 'oom';
+
+  return OVERLOADED_SIGNATURE.test(chain) ? 'unavailable' : null;
 }
 
 /**
