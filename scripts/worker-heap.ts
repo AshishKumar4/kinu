@@ -68,15 +68,16 @@ export const HELPER_TURN_LIVE_BOUND_BYTES = 3_600_000;
  *  stale park (1-2 MB, before the tree started) or the helper's own next step (16-17 MB, mid-turn over its pages). */
 export const WAITING_PARENT_LIVE_BOUND_BYTES = 14_500_000;
 
-/** Measured 2026-09-27 at {@link LONG_TURN}, after the setup, step and heads above in the same isolate: 104-116 MB
- *  used over 3 runs on main 20cacf3423, 99-117 MB over 10 once no step keeps its request body. The collector decides
- *  when garbage goes, hence the spread; this row trips only as the peak nears the 128 MB isolate, and the growth row
- *  below is the one that pins what a turn keeps. */
+/** Measured 2026-10-01 at {@link LONG_TURN}, after the setup, step and heads above in the same isolate: 98.4-104.5 MB
+ *  used over 3 runs on lane/staging-fix-1 c7beb9ce1. The collector decides when garbage goes, hence the spread; this
+ *  row trips only as the peak nears the 128 MB isolate, and the growth row below is the one that pins what a turn keeps. */
 export const LONG_TURN_PEAK_BOUND_BYTES = 124_000_000;
 
-/** Measured 2026-09-27 at {@link LONG_TURN}: 7.7 MB on main 20cacf3423, where the AI SDK's record of every step
- *  kept its request body, a full copy of the message list; 3.6-4.0 MB over 10 runs once the body stays off the record. */
-export const LONG_TURN_GROWTH_BOUND_BYTES = 5_000_000;
+/** Measured 2026-10-01 at {@link LONG_TURN}: 2.9-6.8 MB over 7 runs on lane/staging-fix-1 c7beb9ce1; 32.1-35.2 MB over
+ *  2 with each step's request body left on the AI SDK's record (98517e993 reverted), as production 2f660875cc ran.
+ *  The `file stat` turn this row measured before read 7.7 MB for that defect against 3.6-4.0 MB: its requests shared
+ *  the history's strings, where the hosted providers' path copies them for every request. */
+export const LONG_TURN_GROWTH_BOUND_BYTES = 12_000_000;
 
 /** Measured 2026-09-26 at {@link STEP} before any copy fix: 13.5 MB, the transcript and, whole, the last request;
  *  11.1 MB (twice) on 2026-09-27 once the root's chat room no longer keeps each answer; 9.8-10.0 MB over 3 runs on
@@ -261,8 +262,15 @@ export const HEADS = { warm: 5, count: 200 } as const;
  *  ANSWER_BYTES (`worker-heap/driver.ts`) before a one-word answer. */
 export const HELPERS = { warm: 2, count: 12, answerBytes: 200_000, waitingPageBytes: 1_000_000 } as const;
 
-/** The long turn the peak bound is about: STEPS model calls, each after a small `file stat` result. */
-export const LONG_TURN = { steps: 150 } as const;
+/**
+ * The long turn the peak and growth bounds are about: `steps` model calls on the OpenAI-compatible path, each writing a
+ * page of `stepBytes` through the file tool. That path rebuilds every message of the history for each request, with a
+ * fresh copy of each earlier call's arguments, so whatever keeps a request keeps the turn so far again.
+ */
+export const LONG_TURN = { steps: 150, stepBytes: 3000 } as const;
+
+/** The host the product's OpenAI-compatible credential names; its requests go to the driver, any other is refused. */
+const COMPAT_HOST = 'model.invalid';
 
 /** The step the heap bounds are about: TURNS turns of ANSWER_BYTES each, then one more parked on the model. */
 export const STEP = { turns: 12, answerBytes: 200_000 } as const;
@@ -325,11 +333,16 @@ export async function measure(): Promise<HeapMeasurement> {
       kvNamespaces: wrangler.kv_namespaces.map((namespace) => namespace.binding),
       durableObjects: Object.fromEntries(wrangler.durable_objects.bindings.map((binding) =>
         [binding.name, { className: binding.class_name, useSQLite: true }])),
-      outboundService: (request) => { throw new Error(`worker-heap: the product reached the network at ${request.url}`); },
+      outboundService: (request) => {
+        if (new URL(request.url).hostname !== COMPAT_HOST) throw new Error(`worker-heap: the product reached the network at ${request.url}`);
+
+        // Its own host header would name no route of the driver's.
+        return driver.fetch(request.url, { method: request.method, body: request.body });
+      },
     }, {
       name: 'driver', ...compat,
       modules: [{ type: 'ESModule', path: join(DIST, 'worker-heap-driver.js'), contents: await bundled('driver.ts') }],
-      bindings: { OWNER_TOKEN: v.parse(OwnerCallerSchema, await ownerCaller({ CREDENTIAL_ENCRYPTION_KEY: key })).ownerToken },
+      bindings: { OWNER_TOKEN: v.parse(OwnerCallerSchema, await ownerCaller({ CREDENTIAL_ENCRYPTION_KEY: key })).ownerToken, COMPAT_HOST },
       durableObjects: {
         HEAP_DRIVER: { className: 'HeapDriver', useSQLite: true },
         OrchestratorAgent: { className: 'OrchestratorAgent', scriptName: 'kinu', useSQLite: true },
@@ -383,8 +396,8 @@ export async function measure(): Promise<HeapMeasurement> {
       await ask(`/heads?workspace=heads&tag=swarm&count=${String(HEADS.count)}`);
       const headsRetained = await inspector.liveHeap() - beforeHeads;
 
-      await ask('/?workspace=long');
-      await ask(`/model?answerBytes=0&toolSteps=${String(LONG_TURN.steps - 1)}`);
+      await ask('/?workspace=long&compat=1');
+      await ask(`/model?answerBytes=0&toolSteps=${String(LONG_TURN.steps - 1)}&stepBytes=${String(LONG_TURN.stepBytes)}`);
       const long = ask('/turn?workspace=long&text=long');
       let longTurnPeak = 0;
       let firstLive = 0;
