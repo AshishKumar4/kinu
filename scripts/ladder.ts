@@ -2459,6 +2459,27 @@ export const LADDER: readonly Gate[] = [
       + 'row names is the evals\' question, not this tier\'s.',
     inputs: { kind: 'live', why: 'drives the DEPLOYED build in real Chrome as the `scripted` eval account and the scripted model\'s Worker.' },
   },
+  {
+    run: 'bash scripts/eval-pass-tier.sh',
+    label: 'One trial of every eval task, on the deployment',
+    phase: 'post-publish',
+    alone: 'runs after the upload and the smoke gate, in the wave of the tiers against the deployment and the local '
+      + 'source gates (L18): its subject is the DEPLOYED build, driven as eval-service on its own eval workspaces '
+      + 'and seeded data, on the models the evals measure. No other row acts as eval-service, so none shares its '
+      + 'workspaces or its model account, and it attaches no machine, so it stands outside the fleet first-run counts.',
+    tier: 'deploy',
+    // The eval lane's measurement on production, 2026-09-30: one trial of each task, all at once, took 4 to
+    // 7 minutes. Between two lines of a run the longest gap was 13 s, and inside one trial 67 s (a model
+    // step and its checks), well inside the shared silence bound.
+    seconds: 420,
+    catches: 'an eval task that fails outright on the build that just shipped: a trial whose workspace, turn or '
+      + 'checks break on the deployment, reported in that deploy\'s own report with the trial\'s evidence beside '
+      + 'it, and a trial that stops advancing, which its silence bound ends.',
+    blind: 'a pass rate. One trial says nothing about a task that fails one time in three: the statistics are '
+      + '.github/workflows/evals.yml\'s, which the deploy dispatches against the same deployment and whose '
+      + 'Verdict a promotion waits for.',
+    inputs: { kind: 'live', why: 'drives the DEPLOYED build as eval-service on the models the evals measure.' },
+  },
 ];
 
 
@@ -2895,6 +2916,9 @@ export const CI_EXEMPT = {
   'bash scripts/product-flows-tier.sh':
     'has nothing to run against at CI: its subject is the deployment that just went up, as the '
     + 'eval identity, whose secret no pull request holds.',
+  'bash scripts/eval-pass-tier.sh':
+    'has nothing to run against at CI: its subject is the deployment that just went up, as eval-service, '
+    + 'whose secret no pull request holds.',
   'bun test --timeout=0 tests/browser/live-app-turns.test.ts': LIVE_APP_AT_CI,
   'bun test --timeout=0 tests/browser/live-app-sleep.test.ts': LIVE_APP_AT_CI,
   'bun test --timeout=0 tests/browser/live-app-plans.test.ts': LIVE_APP_AT_CI,

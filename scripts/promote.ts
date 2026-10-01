@@ -16,8 +16,10 @@
  *
  *   bun scripts/promote.ts digest                                   the artifact digest of packages/cf-backend/dist
  *   bun scripts/promote.ts forget                                   staging's deploy, before it builds: HEAD is not verified
- *   bun scripts/promote.ts record <staging version> [reset record]  staging's deploy, after every post-deploy tier passed
- *   bun scripts/promote.ts check                                    before promotion builds: HEAD is verified and staging serves it
+ *   bun scripts/promote.ts record <staging version> <evals run> [reset record]
+ *                                                                   staging's deploy, when every phase passed
+ *   bun scripts/promote.ts check                                    before promotion builds: HEAD is verified, staging serves it,
+ *                                                                   and its evals run's verdict is green
  *   bun scripts/promote.ts adopt                                    after the production build: downloads, digest, release tarball
  *   bun scripts/promote.ts promoted <version> [reset record]        production's deploy, after every post-deploy tier passed
  *   bun scripts/promote.ts rollback                                 production back to the build it took before the one it serves
@@ -119,10 +121,64 @@ export const VerifiedSchema = v.object({
   stagingVersion: v.string(),
   recordedAt: v.string(),
   downloads: DownloadsSchema,
+  /** The .github/workflows/evals.yml run the staging deploy dispatched against this build, whose verdict a promotion
+   *  waits for. Absent on a record written before the deploy dispatched one. */
+  evalsRun: v.optional(v.pipe(v.number(), v.integer())),
   reset: v.optional(ResetSchema),
 });
 
 export type Verified = v.InferOutput<typeof VerifiedSchema>;
+
+/** A workflow run's jobs, as the GitHub API lists them. */
+const RunJobsSchema = v.looseObject({
+  jobs: v.array(v.looseObject({ name: v.string(), status: v.string(), conclusion: v.nullable(v.string()), html_url: v.string() })),
+});
+
+export type RunJob = v.InferOutput<typeof RunJobsSchema>['jobs'][number];
+
+/** The evals workflow's job whose conclusion is the statistics' verdict: green only when a complete report was
+ *  compared with a baseline and no cohort regressed. The run's own conclusion is not it: a run is green whenever it
+ *  finished, trials failed or not. */
+export const EVAL_VERDICT_JOB = 'Verdict';
+
+/** Why the eval run `runUrl` does not let its build be promoted, or undefined when its verdict is green. */
+export function evalVerdictRefusal(jobs: readonly RunJob[], runUrl: string): string | undefined {
+  const verdict = jobs.find((job) => job.name === EVAL_VERDICT_JOB);
+
+  if (verdict === undefined) return `no eval verdict yet: ${runUrl} has no ${EVAL_VERDICT_JOB} job`;
+
+  if (verdict.status !== 'completed') return `the eval verdict is still ${verdict.status}: ${verdict.html_url}`;
+
+  return verdict.conclusion === 'success' ? undefined : `the eval verdict is ${verdict.conclusion ?? 'no conclusion'}: ${verdict.html_url}`;
+}
+
+/** The id of the evals run a staging deploy dispatched, as `record` is handed it. */
+function evalsRunOf(argument: string): number {
+  const run = Number(argument);
+
+  if (!Number.isInteger(run) || run <= 0) throw new Error(`${argument} is not the id of the evals run this deploy dispatched`);
+
+  return run;
+}
+
+/** THE STATISTICS GATE PRODUCTION: the ten-trial run the staging deploy of `sha` dispatched, by its verdict job. */
+function assertEvalVerdict(sha: string, record: Verified): void {
+  if (record.evalsRun === undefined) throw new Error(`${sha}'s record names no evals run: deploy it to staging again`);
+  const refusal = evalVerdictRefusal(runJobs(record.evalsRun), `evals run ${String(record.evalsRun)}`);
+
+  if (refusal !== undefined) throw new Error(`${sha} cannot be promoted: ${refusal}`);
+}
+
+/** The jobs of eval run `run`, read through the `gh` session of whoever promotes. */
+function runJobs(run: number): readonly RunJob[] {
+  const answer = Bun.spawnSync(['gh', 'api', `repos/{owner}/{repo}/actions/runs/${String(run)}/jobs?per_page=100`], {
+    cwd: REPO, stdout: 'pipe', stderr: 'pipe',
+  });
+
+  if (answer.exitCode !== 0) throw new Error(`reading eval run ${String(run)}'s jobs failed: ${answer.stderr.toString().trim()}`);
+
+  return v.parse(RunJobsSchema, JSON.parse(answer.stdout.toString())).jobs;
+}
 
 export const verifiedKey = (sha: string): string => `verified/${sha}.json`;
 
@@ -481,10 +537,10 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
     return 0;
   }
 
-  if (command === 'record' && (rest.length === 1 || rest.length === 2)) {
+  if (command === 'record' && (rest.length === 2 || rest.length === 3)) {
     const record: Verified = {
       sha, digest: artifactDigest(DIST), stagingVersion: rest[0] ?? '', recordedAt: new Date().toISOString(), downloads: downloadsIn(DOWNLOADS),
-      ...resetIn(rest[1]),
+      evalsRun: evalsRunOf(rest[1] ?? ''), ...resetIn(rest[2]),
     };
 
     await servedAs(origins.staging, sha, record.downloads);
@@ -501,7 +557,9 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
     const record = verified(buckets.staging, sha);
 
     await servedAs(origins.staging, sha, record.downloads);
-    console.log(`promote: ${sha} was verified on staging (version ${record.stagingVersion}), and staging serves that run's downloads`);
+
+    assertEvalVerdict(sha, record);
+    console.log(`promote: ${sha} was verified on staging (version ${record.stagingVersion}), staging serves that run's downloads, and its evals verdict is green`);
 
     return 0;
   }
@@ -566,7 +624,7 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
     return 0;
   }
 
-  console.error('usage: bun scripts/promote.ts digest | forget | record <staging version> [reset record] | check | adopt '
+  console.error('usage: bun scripts/promote.ts digest | forget | record <staging version> <evals run> [reset record] | check | adopt '
     + '| promoted <version> [reset record] | rollback');
 
   return 2;

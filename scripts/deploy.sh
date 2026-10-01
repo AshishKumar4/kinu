@@ -885,10 +885,52 @@ fi
 # (packages/test-utils/src/eval-identity.ts): each deployment has its own.
 export KINU_EVAL_ORIGIN="${KINU_URL%/}"
 export KINU_ORIGIN="${KINU_URL%/}"
+
+# THE STATISTICS, on GitHub. .github/workflows/evals.yml runs every eval task
+# ten times on staging, which must be serving this build, and on production,
+# the baseline, and its Verdict job fails on a regression between the two.
+# Dispatched and not awaited: the report names the run and the record keeps its
+# id, since a promotion waits for its verdict (scripts/promote.ts check). The
+# workflow runs from the default branch, and the API version that answers a
+# dispatch with the run it started is asked for by name.
+KINU_EVALS_RUN=""
+KINU_EVALS_URL=""
+KINU_EVALS_WHY=""
+dispatch_evals() {
+  local answer
+  if ! command -v gh >/dev/null 2>&1; then
+    KINU_EVALS_WHY="gh is not installed"
+    return 1
+  fi
+  if ! gh api "repos/{owner}/{repo}/commits/$KINU_SHA" --silent >/dev/null 2>&1; then
+    KINU_EVALS_WHY="build $KINU_SHA is not on GitHub, so no run can check it out: push it"
+    return 1
+  fi
+  if ! answer="$(gh api -X POST -H 'X-GitHub-Api-Version: 2026-03-10' \
+    "repos/{owner}/{repo}/actions/workflows/evals.yml/dispatches" \
+    -f ref=main -f "inputs[build]=$KINU_SHA" 2>&1)"; then
+    KINU_EVALS_WHY="GitHub refused the dispatch: ${answer:0:300}"
+    return 1
+  fi
+  KINU_EVALS_RUN="$(printf '%s' "$answer" | json_field workflow_run_id)"
+  KINU_EVALS_URL="$(printf '%s' "$answer" | json_field html_url)"
+  if [ -z "$KINU_EVALS_RUN" ]; then
+    KINU_EVALS_WHY="GitHub named no run for the dispatch: ${answer:0:300}"
+    return 1
+  fi
+  report dispatched "the evals, every task ten times on staging against production" "$KINU_EVALS_URL"
+}
+
 if [ "$KINU_PROMOTE" = "1" ]; then
   if [ -z "$KINU_TIERS_WHY" ]; then run_phase post-publish; else skip_phase post-publish "$KINU_TIERS_WHY"; fi
   mark tiers
 else
+  # Started first, so its hours run while the wave runs here. Without its run
+  # this build has no verdict to be promoted on, so a failed dispatch is a red.
+  if [ "$KINU_SERVING" = "1" ]; then
+    dispatch_evals \
+      || step_red evals "the evals" "evals.yml was not dispatched for $KINU_SHA: $KINU_EVALS_WHY; this build has no eval verdict to be promoted on"
+  fi
   if [ -z "$KINU_TIERS_WHY" ]; then
     run_phase post-publish,source
   else
@@ -941,17 +983,15 @@ fi
 # ── Step 6: The record, or the history and the evals ─────────────
 #
 # ON STAGING, THE RECORD: every phase and step above passed for this commit, so
-# promotion may take it (scripts/promote.ts). It lists every download this run
-# published by its hash, and promotion takes those bytes and no others. Written
-# last and only on a deploy with no red anywhere, and a record that could not be
-# written is a red of its own: without it this build can never be promoted.
+# promotion may take it (scripts/promote.ts), once the evals run it names has a
+# green verdict. It lists every download this run published by its hash, and
+# promotion takes those bytes and no others. Written last and only on a deploy
+# with no red anywhere, and a record that could not be written is a red of its
+# own: without it this build can never be promoted.
 #
 # ON PRODUCTION, THE HISTORY: the build it took, which a later rollback may
-# return to. Then the evals: .github/workflows/evals.yml runs every eval task
-# against the build kinu.run now serves and posts the results on the pull
-# request that merged it. It checks the deployed commit out on GitHub, so an
-# unpushed commit cannot be measured. Non-blocking: the deploy is done whatever
-# this prints.
+# return to. Its evals ran before it was promoted, against the build production
+# served then.
 echo ""
 if [ "$KINU_REDS" != "0" ] && [ "$KINU_ENV" = "staging" ]; then
   echo -e "${RED}❌ This deploy has a red, so no record is written: $KINU_SHA cannot be promoted.${NC}"
@@ -961,19 +1001,11 @@ elif [ "$KINU_REDS" != "0" ]; then
   finish
 elif [ "$KINU_ENV" = "staging" ]; then
   echo -e "${BOLD}Step 6: Recording $KINU_SHA as verified on staging${NC}"
-  bun "$KINU_ROOT/scripts/promote.ts" record "${KINU_VERSION:-unknown}" "${KINU_RECORD_ARGS[@]}" \
+  bun "$KINU_ROOT/scripts/promote.ts" record "${KINU_VERSION:-unknown}" "$KINU_EVALS_RUN" "${KINU_RECORD_ARGS[@]}" \
     || { step_red record "the record" "the record was not written, so this build cannot be promoted"; finish; }
 elif ! bun "$KINU_ROOT/scripts/promote.ts" promoted "${KINU_VERSION:-}" "${KINU_RECORD_ARGS[@]}"; then
   step_red record "production's history" "production serves $KINU_SHA, and its history does not hold it, so no rollback can return to it"
   finish
-elif ! command -v gh >/dev/null 2>&1; then
-  echo "⚠ Evals not dispatched: gh is not installed. Once build $KINU_SHA is on GitHub: gh workflow run evals.yml"
-elif ! gh api "repos/{owner}/{repo}/commits/$KINU_SHA" --silent >/dev/null 2>&1; then
-  echo "⚠ Evals not dispatched: build $KINU_SHA is not on GitHub. Push it, then run: gh workflow run evals.yml"
-elif gh workflow run evals.yml >/dev/null 2>&1; then
-  echo "Evals dispatched for build $KINU_SHA: gh run list --workflow=evals.yml"
-else
-  echo "⚠ Evals not dispatched: gh workflow run evals.yml failed; evals.yml must be on the default branch on GitHub."
 fi
 
 # ── Step 7: Summary ──────────────────────────────────────────────
