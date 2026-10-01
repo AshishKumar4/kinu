@@ -6,10 +6,12 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { SLATES_ROOT, WORKSPACE_ROOT, type JsonValue, type RunEvent } from '@kinu.run/core';
+import { renderThrownChain } from '@kinu.run/core/obs';
 import { unheld } from './redact';
 import type { HarnessRun } from './results';
 import type { KinuPublicSession } from './session';
 import type { EvalTask } from './task';
+import type { TimelineEntry } from './timeline';
 import { renderTrial } from './trajectories';
 import { SlateAnswerSchema } from './verifier';
 
@@ -20,16 +22,19 @@ export type EvidenceSession = Pick<KinuPublicSession, 'listFiles' | 'readBytes' 
 
 /** The workspace as it ended, read before teardown. */
 export interface WorkspaceEvidence {
-  /** Every file under the home and the slates, by absolute path. */
+  /** Every file under the home and the slates that could be read, by absolute path. */
   readonly files: ReadonlyMap<string, Uint8Array>;
   /** The slate listing, and each slate's `history` pages: its versions, or why it has none. */
   readonly slates: JsonValue;
   /** The task's reads of its slates' data, each as the slate answered it. */
   readonly data: readonly JsonValue[];
+  /** Each part the deployment would not give up, and why. A failed read ends its own part and keeps the others: the
+   *  data reads call the agent's slates, and one that reset the workspace once took its files with it. */
+  readonly unread: readonly string[];
 }
 
 async function walk(session: EvidenceSession, dir: string, files: Map<string, Uint8Array>): Promise<void> {
-  for (const entry of await session.listFiles(dir, { allowMissing: true })) {
+  for (const entry of await session.listFiles(dir)) {
     const path = `${dir}/${entry.name}`;
 
     if (entry.type === 'file') files.set(path, await session.readBytes(path));
@@ -46,12 +51,8 @@ function historyCursor(answer: JsonValue | undefined): string | null {
   return page.success ? page.output.value.next : null;
 }
 
-/** Read what the workspace holds and what its slates serve. Every read is one a person could make. */
-export async function gatherEvidence(session: EvidenceSession, reads: EvalTask['evidence']): Promise<WorkspaceEvidence> {
-  const files = new Map<string, Uint8Array>();
-
-  for (const root of [WORKSPACE_ROOT, SLATES_ROOT]) await walk(session, root, files);
-
+/** The slate listing and every slate's history pages. */
+async function readSlates(session: EvidenceSession): Promise<JsonValue> {
   const listing = await session.listSlates();
   const histories: JsonValue[] = [];
 
@@ -65,17 +66,43 @@ export async function gatherEvidence(session: EvidenceSession, reads: EvalTask['
     histories.push({ id, history: pages });
   }
 
+  return { listing, histories };
+}
+
+/**
+ * Read what the workspace holds and what its slates serve, the files first and the slates' data last, since only the
+ * data reads run the agent's code. Every read is one a person could make.
+ */
+export async function gatherEvidence(session: EvidenceSession, reads: EvalTask['evidence']): Promise<WorkspaceEvidence> {
+  const files = new Map<string, Uint8Array>();
   const data: JsonValue[] = [];
+  const unread: string[] = [];
+  let slates: JsonValue = null;
 
-  await reads?.(async (slate, method, input) => {
-    const answer = v.parse(SlateAnswerSchema, await session.slateOp({ op: 'call', id: slate, method, args: input === undefined ? [] : [input] }));
+  // A part the deployment failed is recorded as evidence, with its reason, and the parts read before it are kept.
+  const part = async (name: string, read: () => Promise<void>): Promise<void> => {
+    try {
+      await read();
+    } catch (error) {
+      unread.push(`${name}: ${renderThrownChain({ cause: error })}`);
+    }
+  };
 
-    data.push({ slate, method, input: input ?? null, answer });
+  await part('files', async () => {
+    for (const root of [WORKSPACE_ROOT, SLATES_ROOT]) await walk(session, root, files);
+  });
+  await part('slates', async () => { slates = await readSlates(session); });
+  await part('data', async () => {
+    await reads?.(async (slate, method, input) => {
+      const answer = v.parse(SlateAnswerSchema, await session.slateOp({ op: 'call', id: slate, method, args: input === undefined ? [] : [input] }));
 
-    return answer.ok ? answer.value : null;
+      data.push({ slate, method, input: input ?? null, answer });
+
+      return answer.ok ? answer.value : null;
+    });
   });
 
-  return { files, slates: { listing, histories }, data };
+  return { files, slates, data, unread };
 }
 
 /** A file as the workspace held it, the run's own credential taken out of text. */
@@ -85,8 +112,8 @@ function kept(bytes: Uint8Array): string | Uint8Array {
 
 /**
  * Write one trial's evidence into `directory`: `transcript.md` (rendered, and scrubbed, as a reviewer
- * reads a report), `ledger.jsonl`, and, when the workspace could be read, `files/`, `slates.json` and
- * `data.json`; when it could not, `workspace.txt` says why. Everything but the transcript is kept as
+ * reads a report), `ledger.jsonl`, `timeline.jsonl`, and what the workspace gave up of `files/`, `slates.json`
+ * and `data.json`; `workspace.txt` says what it would not, and why. Everything but the transcript is kept as
  * the deployment answered, less the run's own credential: a pattern scrub would rewrite the code a
  * reader came for, and this directory stays on the machine that ran the trial.
  */
@@ -94,17 +121,13 @@ export function writeEvidence(directory: string, trial: {
   readonly run: HarnessRun;
   readonly verdict: { status: 'passed' | 'failed'; durationMs: number };
   readonly events: readonly RunEvent[];
-  readonly workspace: WorkspaceEvidence | { readonly unread: string };
+  readonly workspace: WorkspaceEvidence;
+  readonly timeline: readonly TimelineEntry[];
 }): void {
   mkdirSync(directory, { recursive: true });
   writeFileSync(join(directory, 'transcript.md'), `${renderTrial(trial.run, trial.verdict)}\n`);
   writeFileSync(join(directory, 'ledger.jsonl'), trial.events.map((event) => `${unheld(JSON.stringify(event))}\n`).join(''));
-
-  if ('unread' in trial.workspace) {
-    writeFileSync(join(directory, 'workspace.txt'), `The workspace could not be read before teardown: ${unheld(trial.workspace.unread)}\n`);
-
-    return;
-  }
+  writeFileSync(join(directory, 'timeline.jsonl'), trial.timeline.map((entry) => `${JSON.stringify(entry)}\n`).join(''));
 
   for (const [path, bytes] of trial.workspace.files) {
     const target = join(directory, 'files', path);
@@ -113,6 +136,11 @@ export function writeEvidence(directory: string, trial: {
     writeFileSync(target, kept(bytes));
   }
 
-  writeFileSync(join(directory, 'slates.json'), `${unheld(JSON.stringify(trial.workspace.slates, null, 2))}\n`);
-  writeFileSync(join(directory, 'data.json'), `${unheld(JSON.stringify(trial.workspace.data, null, 2))}\n`);
+  if (trial.workspace.slates !== null) writeFileSync(join(directory, 'slates.json'), `${unheld(JSON.stringify(trial.workspace.slates, null, 2))}\n`);
+
+  if (trial.workspace.data.length > 0) writeFileSync(join(directory, 'data.json'), `${unheld(JSON.stringify(trial.workspace.data, null, 2))}\n`);
+
+  if (trial.workspace.unread.length > 0) {
+    writeFileSync(join(directory, 'workspace.txt'), `The workspace did not give up all of itself before teardown:\n${unheld(trial.workspace.unread.join('\n'))}\n`);
+  }
 }

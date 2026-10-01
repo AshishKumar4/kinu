@@ -100,10 +100,10 @@ import {
   DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema,
   STEER_STEP_METADATA_KEY, parseJsonValue, renderSoulMarkdown, rowText, CommandResultSchema,
   type EvalAccount, type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent,
-  type WorkspaceSpend,
+  type SubordinateInspectionRequest, type WorkspaceSpend,
 } from '../../packages/core/src/index';
 import { renderThrownChain, tolerate } from '../../packages/core/src/obs/index';
-import { CloudTurnStream } from '../../packages/cli/src/cloud-turn-stream';
+import { CloudTurnStream, TurnStreams } from '../../packages/cli/src/cloud-turn-stream';
 import { createUserUiMessage, type AgentSendResult, type AgentTurnResult } from '../../packages/cli/src/agent-client';
 import { ActivitySpendSchema } from '../../packages/cli/src/cloud-api';
 import {
@@ -350,7 +350,8 @@ export function resolvePublicSessionPlan(
  *
  * `trigger: 'submit-message'` is the SDK's own value for a user send, and the
  * message is built by `createUserUiMessage` — the shipped constructor, so the
- * UIMessage shape cannot drift from what the DO parses.
+ * UIMessage shape cannot drift from what the DO parses. It carries the request's
+ * own id: a turn a later activation re-opens is announced by that id.
  *
  * NO `oneShot`. That flag makes each prompt an `independent_task`
  * (actor-agent.ts:470-478), which is the CLI's one-shot contract and the exact
@@ -368,7 +369,7 @@ export function encodeChatRequest(input: {
     init: {
       method: 'POST',
       body: JSON.stringify({
-        messages: [createUserUiMessage(input.text)],
+        messages: [createUserUiMessage(input.requestId, input.text)],
         trigger: 'submit-message',
       }),
     },
@@ -419,8 +420,11 @@ export type PublicFrame =
     }
   /** The DO announcing it holds a resumable stream for `id`, or that it holds
    *  none. Both are answered rather than ignored, because a socket that dropped
-   *  mid-turn is the one case where the turn is still running up there. */
-  | { readonly kind: 'resuming'; readonly id: string }
+   *  mid-turn is the one case where the turn is still running up there. A turn a
+   *  later activation re-opened streams under an id that activation minted;
+   *  `turnId` names the turn by its opening message, the request's own here. A
+   *  build before 2026-09-30 sends none. */
+  | { readonly kind: 'resuming'; readonly id: string; readonly turnId: string | undefined }
   | { readonly kind: 'resume-none' }
   /** The DO's account of where a steered message is: taken, read by the
    *  running turn at a step, run as a turn of its own, or handed back. */
@@ -447,6 +451,7 @@ const FrameSchema = v.object({
   replay: v.optional(v.boolean()),
   success: v.optional(v.boolean()),
   result: v.optional(JsonValueSchema),
+  turnId: v.optional(v.string()),
 });
 
 /**
@@ -503,7 +508,7 @@ export function decodeFrame(data: SocketPayload): PublicFrame | null {
   }
 
   if (type === CHAT_MESSAGE_TYPES.STREAM_RESUMING && id !== undefined) {
-    return { kind: 'resuming', id };
+    return { kind: 'resuming', id, turnId: frame.output.turnId };
   }
 
   if (type === CHAT_MESSAGE_TYPES.STREAM_RESUME_NONE) return { kind: 'resume-none' };
@@ -566,6 +571,10 @@ export type PublicTurn = AgentSendResult;
 export interface PublicTurnRecorder {
   /** Feed one response frame. */
   apply(frame: PublicResponseFrame): void;
+  /** Called on each ack: the replay that follows starts at the stream's chunk zero. */
+  beginReplay(): void;
+  /** Called when the turn moves to a stream a later activation re-opened it under. */
+  follow(): void;
   /** The send's settled result, or null while it is still open. */
   settled(): PublicTurn | null;
 }
@@ -608,6 +617,8 @@ export function recordPublicTurn(): PublicTurnRecorder {
         else stream.settle();
       }
     },
+    beginReplay: () => { stream.beginReplay(); },
+    follow: () => { stream.follow(); },
     settled: () => settled,
   };
 }
@@ -645,7 +656,82 @@ const RunPageSchema = v.variant('status', [
   v.object({ status: v.literal('end'), items: v.array(v.object({ runId: v.string() })) }),
 ]);
 
-const RunEventsSchema = v.array(RunEventSchema);
+/** Every ledger row type this harness reads. A row of another type is another build's (`LedgerPageSchema`). */
+const RUN_EVENT_TYPES: ReadonlySet<string> = new Set(RunEventSchema.options.map((option) => option.entries.type.literal));
+
+/** A ledger row as far as paging needs it: its type and its index. */
+const LedgerRowSchema = v.looseObject({ type: v.string(), eventIndex: v.number() });
+
+/**
+ * A page of a run's ledger, less the rows of a type this harness does not know: those are another build's. The eval
+ * verdict's baseline leg runs the promoted build, which can still write a type the candidate retired (2f660875cc
+ * writes `step_partial`). A row of a known type that does not parse is a broken contract, and fails the read.
+ */
+const LedgerPageSchema = v.pipe(
+  v.array(LedgerRowSchema),
+  v.transform((rows) => ({
+    rows: rows.length,
+    highest: rows.reduce((max, row) => Math.max(max, row.eventIndex), -1),
+    events: rows.filter((row) => RUN_EVENT_TYPES.has(row.type)),
+  })),
+  v.object({ rows: v.number(), highest: v.number(), events: v.array(RunEventSchema) }),
+);
+
+/**
+ * A page of an inspector or work-board answer, read as far as a check reads it. These answers come from both legs of
+ * the eval verdict, and the baseline leg runs the promoted build, whose rows can lack a field the candidate added or
+ * renamed: 2f660875cc's roster rows carry `createdBy` where the candidate's carry `origin`, and its work-board owners
+ * have no `path`. So the harness reads only what a check reads, and nothing it does not.
+ */
+function pageOf<Item extends v.GenericSchema>(item: Item) {
+  return v.variant('status', [
+    v.object({ status: v.literal('more'), items: v.array(item), next: v.object({ after: v.string() }) }),
+    v.object({ status: v.literal('end'), items: v.array(item) }),
+  ]);
+}
+
+/** The inspector's answers a check reads (`inspectSubordinate`): the lead's helpers and each helper's runs. */
+const InspectionAnswerSchema = v.variant('view', [
+  v.object({ view: v.literal('children'), page: pageOf(v.object({ name: v.string(), status: v.string(), lifetime: v.string() })) }),
+  v.object({ view: v.literal('runs'), page: pageOf(v.object({ status: v.nullable(v.string()), userMessage: v.nullable(v.string()) })) }),
+  v.object({ view: v.literal('missing'), reason: v.string(), error: v.string() }),
+]);
+
+export type InspectionAnswer = v.InferOutput<typeof InspectionAnswerSchema>;
+
+/** The work board's owners and their tasks (`listWorkspaceWork`); an owner's `path` is absent on 2f660875cc. */
+const WorkEntrySchema = v.object({
+  owner: v.object({ name: v.string(), path: v.optional(v.nullable(v.array(v.string()))) }),
+  tasks: v.array(v.object({
+    title: v.string(), status: v.string(),
+    subtasks: v.optional(v.array(v.object({ title: v.string(), status: v.string() })), []),
+  })),
+});
+
+const WorkBoardSchema = v.object({ plans: v.array(WorkEntrySchema), tasks: v.array(WorkEntrySchema) });
+
+export type WorkBoard = v.InferOutput<typeof WorkBoardSchema>;
+
+/**
+ * One swarm the lead ran, as the Swarms pane draws it (`getExplorationCanvas`): the run, its search's dispatch
+ * parameters, and each node's journalled row. `head.rationale` is the preset, or a `custom` run's label (core
+ * `swarm-setup.ts`); a search scored by its verifier requested no judge samples (core `swarm-run.ts`).
+ */
+const SwarmRunSchema = v.object({
+  run: v.object({ id: v.string(), status: v.string(), startedAt: v.number(), winnerScore: v.nullable(v.number()) }),
+  params: v.nullable(v.object({ search: v.nullable(v.object({ judgeSamplesRequested: v.nullable(v.number()) })) })),
+  head: v.nullable(v.object({
+    rationale: v.string(),
+    heads: v.array(v.object({ depth: v.number(), status: v.string(), spawnedAt: v.number(), wallClockMs: v.number() })),
+  })),
+});
+
+export type PublicSwarmRun = v.InferOutput<typeof SwarmRunSchema>;
+
+const SwarmPageSchema = pageOf(SwarmRunSchema);
+
+/** A turn frame's body is one AI SDK UI message chunk. */
+const ChunkTypeSchema = v.object({ type: v.string() });
 
 const SetModelSchema = v.object({ spec: v.string() });
 
@@ -1044,6 +1130,8 @@ export class KinuPublicSession {
     readonly sentAt: string;
   }>();
 
+  private readonly streams = new TurnStreams();
+
   /** Callers waiting on one response chunk of a request: settled by the
    *  first frame body the predicate accepts, then dropped. */
   private readonly chunkWatchers = new Map<string, Array<{ readonly accept: (body: string) => boolean; readonly resolve: () => void }>>();
@@ -1072,6 +1160,14 @@ export class KinuPublicSession {
   /** When the deployment last took this workspace's mark: its create, then each beat that landed. A machine that
    *  sleeps stops beating, and a sweep deletes a workspace whose mark is older than the lease (`sweep.ts`). */
   lastMarked = Date.now();
+
+  /** Told what arrives for the turns this session sent: each chunk's type as it arrives, `replay` for a chunk the
+   *  deployment sends again after a redial, `done` at a turn's last frame, and `closed <code>` when the socket drops. */
+  onChunk: (type: string) => void = () => undefined;
+
+  /** The ledger read so far, by run. Its rows are never rewritten, so a later read asks each run only for what it
+   *  added: a settle poll that walked every row of a long trial again was the harness's heaviest read. */
+  private readonly ledger = new Map<string, readonly RunEvent[]>();
 
   constructor(
     private readonly input: PublicSessionInput,
@@ -1130,7 +1226,32 @@ export class KinuPublicSession {
     await this.opening;
   }
 
-  private async dial(): Promise<void> {
+  /**
+   * Clear the chat as its Clear control does. The deployment answers the clear to every socket but the sender's, so a
+   * second socket hears it land: the clear is done once that socket is told, after storage dropped the conversation.
+   */
+  async clearConversation(): Promise<void> {
+    await this.boundary(`clearing the conversation on ${this.workspace}`, async () => {
+      const observer = this.newSocket();
+
+      try {
+        await new Promise<void>((resolve, reject) => {
+          observer.addEventListener('open', () => {
+            this.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.CHAT_CLEAR })).catch(reject);
+          }, { once: true });
+          observer.addEventListener('message', (event: MessageEvent) => {
+            const frame = v.safeParse(FrameSchema, decodeSocketJson(event.data));
+
+            if (frame.success && frame.output.type === CHAT_MESSAGE_TYPES.CHAT_CLEAR) resolve();
+          });
+          observer.addEventListener('error', () => { reject(new Error('the socket that hears the clear failed')); }, { once: true });
+          observer.addEventListener('close', () => { reject(new Error('the socket that hears the clear closed before it was told')); }, { once: true });
+        });
+      } finally { observer.close(); }
+    });
+  }
+
+  private newSocket(): WebSocket {
     const url = new URL(
       `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.workspace)}`,
       this.input.origin,
@@ -1138,9 +1259,14 @@ export class KinuPublicSession {
 
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
 
-    const socket = new HEADER_WEBSOCKET(url.toString(), {
+    return new HEADER_WEBSOCKET(url.toString(), {
       headers: webHeaders(this.input.identity),
     });
+  }
+
+  private async dial(): Promise<void> {
+    const socket = this.newSocket();
+    const where = new URL(socket.url);
 
     this.socket = socket;
     socket.addEventListener('message', (event: MessageEvent) => {
@@ -1150,15 +1276,20 @@ export class KinuPublicSession {
     // reconnect"); the next send redials rather than writing into a CLOSED socket, which discards the
     // frame without an error and leaves its caller waiting forever.
     socket.addEventListener('close', (event: CloseEvent) => {
-      if (this.socket === socket) this.socket = null;
+      // A socket this session let go of (`disconnect`, `teardown`) is no longer `this.socket`; any other close is news.
+      if (this.socket === socket) {
+        this.socket = null;
+        this.onChunk(`closed ${String(event.code)}`);
+      }
+
       const reason = `the workspace socket closed (code ${String(event.code)}${event.reason ? `, ${event.reason}` : ''})`;
 
       this.survive(reason).catch(this.unrecoverable);
     });
-    await this.boundary(`ws ${url.host}${url.pathname}`, () => new Promise<void>((resolve, reject) => {
+    await this.boundary(`ws ${where.host}${where.pathname}`, () => new Promise<void>((resolve, reject) => {
       socket.addEventListener('open', () => resolve(), { once: true });
       socket.addEventListener('error', () => {
-        reject(new Error(`could not open the public chat socket to ${url.host}${url.pathname}`));
+        reject(new Error(`could not open the public chat socket to ${where.host}${where.pathname}`));
       }, { once: true });
       socket.addEventListener('close', () => {
         reject(new Error('the public chat socket closed before it opened — the deployment '
@@ -1420,6 +1551,42 @@ export class KinuPublicSession {
     return v.parse(ToolDescriptionsSchema, answer).crafted;
   }
 
+  /** Every agent's plans and tasks, retired agents' included, as the Work tab reads them (`listWorkspaceWork`). */
+  async workspaceWork(): Promise<WorkBoard> {
+    return v.parse(WorkBoardSchema, await this.boundary(
+      `listWorkspaceWork on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('listWorkspaceWork', []),
+    ));
+  }
+
+  /** Every swarm the lead ran, newest first, as the Swarms pane pages them (`getExplorationCanvas`). */
+  async swarmRuns(): Promise<PublicSwarmRun[]> {
+    const runs: PublicSwarmRun[] = [];
+
+    for (let cursor: { after: string } | undefined; ;) {
+      const request: JsonValue = cursor === undefined ? {} : { cursor };
+
+      const page = v.parse(SwarmPageSchema, await this.boundary(
+        `getExplorationCanvas on ${this.input.origin}/${this.workspace}`,
+        () => this.rpc('getExplorationCanvas', [request]),
+      ));
+
+      runs.push(...page.items);
+
+      if (page.status === 'end') return runs;
+      cursor = page.next;
+    }
+  }
+
+  /** A subordinate's children, transcript, runs or events, as the Agents surface's inspector reads them
+   *  (`inspectSubordinate`). */
+  async inspect(request: SubordinateInspectionRequest): Promise<InspectionAnswer> {
+    return v.parse(InspectionAnswerSchema, await this.boundary(
+      `inspectSubordinate on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('inspectSubordinate', [v.parse(JsonValueSchema, request)]),
+    ));
+  }
+
   /** The agent-written tabs, including project loading failures. */
   async listSlates(): Promise<PublicSlateListing> {
     const answer = await this.boundary(
@@ -1468,10 +1635,9 @@ export class KinuPublicSession {
     return v.parse(SubordinateRosterSchema, rows);
   }
 
-  /** One folder of the workspace as the Files tab lists it. With
-   *  `allowMissing`, a folder that does not exist lists nothing; any other
+  /** One folder of the workspace as the Files tab lists it. A folder that does not exist lists nothing; any other
    *  refusal is the build's answer. */
-  async listFiles(dir: string, options: { allowMissing?: boolean } = {}): Promise<readonly PublicDirEntry[]> {
+  async listFiles(dir: string): Promise<readonly PublicDirEntry[]> {
     const listing = v.parse(DirectorySchema, await this.boundary(
       `getExecutorFiles ${dir} on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('getExecutorFiles', [WORKSPACE_EXECUTOR, dir]),
@@ -1479,7 +1645,7 @@ export class KinuPublicSession {
 
     if (listing.error === undefined) return listing.entries ?? [];
 
-    if (options.allowMissing === true && /\bENOENT\b/.test(listing.error)) return [];
+    if (/\bENOENT\b/.test(listing.error)) return [];
 
     throw new DeploymentAnswer(`could not list ${dir}: ${listing.error.slice(0, 200)}`, 500);
   }
@@ -1519,10 +1685,15 @@ export class KinuPublicSession {
 
       for await (const message of sseMessages(response.body)) {
         if (message.event === 'error') break;
-        const event = v.parse(RunEventSchema, JSON.parse(message.data));
+        const row = v.parse(LedgerRowSchema, JSON.parse(message.data));
 
-        if (event.eventIndex <= cursor) continue;
-        cursor = event.eventIndex;
+        if (row.eventIndex <= cursor) continue;
+        cursor = row.eventIndex;
+
+        // Another build's row type, as `LedgerPageSchema` leaves out of a page.
+        if (!RUN_EVENT_TYPES.has(row.type)) continue;
+        const event = v.parse(RunEventSchema, row);
+
         yield event;
 
         if (event.type === 'run_end') return;
@@ -1616,7 +1787,13 @@ export class KinuPublicSession {
   async runEvents(): Promise<readonly RunEvent[]> {
     const events: RunEvent[] = [];
 
-    for (const runId of await this.runIds()) events.push(...await this.runEventsOf(runId));
+    for (const runId of await this.runIds()) {
+      const known = this.ledger.get(runId) ?? [];
+      const read = [...known, ...await this.runEventsOf(runId, known.reduce((next, event) => Math.max(next, event.eventIndex + 1), 0))];
+
+      this.ledger.set(runId, read);
+      events.push(...read);
+    }
 
     events.sort(compareRunEventOrder);
 
@@ -1696,7 +1873,7 @@ export class KinuPublicSession {
 
   /** Seed one file through the same route, so a case's inputs arrive on the
    *  plane the agent's own tools read. */
-  writeFile(path: string, content: string): Promise<void> {
+  writeFile(path: string, content: string | Uint8Array<ArrayBuffer>): Promise<void> {
     return this.boundary(`PUT files ${path}`, async () => {
       const response = await fetch(this.filesUrl(path), {
         method: 'PUT',
@@ -1761,26 +1938,27 @@ export class KinuPublicSession {
       const page = await this.getJson(
         `/api/workspaces/${encodeURIComponent(this.workspace)}/runs/`
         + `${encodeURIComponent(runId)}/events?since=${String(since)}&limit=${String(EVENT_PAGE)}`,
-        RunEventsSchema,
+        LedgerPageSchema,
         `read the events of run ${runId}`,
       );
 
-      if (page.length === 0) break;
-      events.push(...page);
+      if (page.rows === 0) break;
+      events.push(...page.events);
       // The route's `since` is an INCLUSIVE lower bound (recorder.ts:169-171),
       // so the next read starts one past the highest index this one returned.
       // Advancing by `page.length` instead would re-read a run whose indices
-      // are not contiguous, and stall on one whose page ended mid-index.
-      const highest = page.reduce((max, event) => Math.max(max, event.eventIndex), since);
+      // are not contiguous, and stall on one whose page ended mid-index. Both
+      // count the rows the route sent, the ones left out included.
+      const highest = Math.max(page.highest, since);
 
-      if (page.length < EVENT_PAGE) break;
+      if (page.rows < EVENT_PAGE) break;
       since = highest + 1;
     }
 
     return events;
   }
 
-  private getJson<T>(path: string, schema: v.GenericSchema<T>, doing: string): Promise<T> {
+  private getJson<T>(path: string, schema: v.GenericSchema<unknown, T>, doing: string): Promise<T> {
     return this.boundary(`GET ${this.input.origin}${path.split('?')[0] ?? path}`, async () => {
       const response = await fetch(`${this.input.origin}${path}`, {
         headers: webHeaders(this.input.identity),
@@ -1854,31 +2032,39 @@ export class KinuPublicSession {
     }
 
     if (frame.kind === 'resuming') {
-      // The DO holds a stream for a turn this session started: ack it so the
-      // buffered chunks are replayed. The accumulator is replay-idempotent, so
-      // an ack cannot double an answer.
-      if (this.turns.has(frame.id)) {
-        this.socket?.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK, id: frame.id }));
-      }
+      // The DO holds a stream for a turn this session started, on whatever stream
+      // carries it now: ack it so the buffered chunks are replayed. The accumulator
+      // is replay-idempotent, so an ack cannot double an answer.
+      const resuming = this.streams.resuming(frame.id, frame.turnId, this.turns);
+
+      if (resuming === null) return;
+
+      if (resuming.moved) resuming.turn.recorder.follow();
+      resuming.turn.recorder.beginReplay();
+      this.socket?.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK, id: frame.id }));
 
       return;
     }
 
     if (frame.kind !== 'response') return;
-    const turn = this.turns.get(frame.frame.id);
+    const requestId = this.streams.requestOf(frame.frame.id);
+    const turn = this.turns.get(requestId);
 
     // A stream nobody here submitted: a turn the product opened on its own. Its bodies belong to no
     // request of ours.
     if (!turn) return;
 
     if (frame.frame.done === true && frame.frame.landed === 'mid-turn') {
-      this.midTurnLandings.set(frame.frame.id, new Date().toISOString());
+      this.midTurnLandings.set(requestId, new Date().toISOString());
     }
 
     const body = frame.frame.body;
 
     if (body !== undefined) {
-      const watchers = this.chunkWatchers.get(frame.frame.id) ?? [];
+      const chunk = v.safeParse(ChunkTypeSchema, decodeSocketJson(body));
+
+      if (chunk.success) this.onChunk(frame.frame.replay === true ? 'replay' : chunk.output.type);
+      const watchers = this.chunkWatchers.get(requestId) ?? [];
 
       const remaining = watchers.filter((watcher) => {
         if (!watcher.accept(body)) return true;
@@ -1887,22 +2073,25 @@ export class KinuPublicSession {
         return false;
       });
 
-      if (remaining.length > 0) this.chunkWatchers.set(frame.frame.id, remaining);
-      else this.chunkWatchers.delete(frame.frame.id);
+      if (remaining.length > 0) this.chunkWatchers.set(requestId, remaining);
+      else this.chunkWatchers.delete(requestId);
     }
 
+    if (frame.frame.done === true) this.onChunk('done');
     turn.recorder.apply(frame.frame);
     const done = turn.recorder.settled();
 
     if (done === null) return;
-    this.turns.delete(frame.frame.id);
+    this.turns.delete(requestId);
+    this.streams.ended(frame.frame.id);
     turn.resolve(done);
   }
 
   /**
    * A dropped socket, survived as the browser survives it: rpcs in flight are lost with it and fail
    * now, but a turn is durable up there, so the socket is redialled at once and the DO's
-   * stream-resume frames finish it (`resuming` in handleFrame). A turn whose run ended while no
+   * stream-resume frames finish it (`resuming` in handleFrame), on its own stream or on the one a
+   * later activation re-opened it under. A turn whose run ended while no
    * socket was open has no stream left to resume; the run ledger says when that run ended, and a turn
    * still unsettled then fails under the infrastructure marker, not as the agent's.
    */
@@ -1952,6 +2141,7 @@ export class KinuPublicSession {
   private failInFlight(reason: string): void {
     const turns = [...this.turns.values()];
     this.turns.clear();
+    this.streams.clear();
     this.midTurnLandings.clear();
     const rpcs = [...this.rpcs.values()];
     this.rpcs.clear();

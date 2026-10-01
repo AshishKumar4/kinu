@@ -157,3 +157,58 @@ describe('the closed-tab trigger', () => {
     expect(prompts).toHaveLength(0);
   });
 });
+
+describe('definitive sleep-time failures', () => {
+  test('a prose answer ends the turn-count effect and consumes its window', async () => {
+    const harness = orchestratorHarness(undefined, undefined, undefined, {
+      sleepTimeModel: 'Live answer from the fake model.',
+    });
+
+    await harness.started;
+
+    for (let n = 1; n <= 3; n++) await settle(harness, n);
+
+    expect(harness.db.prepare(
+      "SELECT status FROM terminal_effects WHERE effect_name = 'sleep_time' AND status != 'completed'",
+    ).all()).toEqual([]);
+    expect(facts(harness)).toEqual([]);
+    expect(harness.db.prepare("SELECT event FROM activity_log WHERE event = 'terminal_effect_abandoned'").all())
+      .toEqual([{ event: 'terminal_effect_abandoned' }]);
+
+    setSystemTime(new Date(Date.now() + SLEEP_TIME_CADENCE.idleMs * 2));
+    await harness.agent._kinuTimerTick();
+    await settle(harness, 4);
+    await settle(harness, 5);
+    expect(harness.sleepTimePrompts).toHaveLength(1);
+
+    await settle(harness, 6);
+    expect(harness.sleepTimePrompts).toHaveLength(2);
+    expect(harness.sleepTimePrompts[1]).not.toContain('ask-3');
+  });
+
+  test('a prose answer on the idle wake is not attempted again by a wake or the next turn', async () => {
+    const harness = orchestratorHarness(undefined, undefined, undefined, {
+      sleepTimeModel: 'Live answer from the fake model.',
+    });
+
+    await harness.started;
+    await settle(harness, 1);
+    await settle(harness, 2);
+
+    setSystemTime(new Date(Date.now() + SLEEP_TIME_CADENCE.idleMs));
+    await harness.agent._kinuTimerTick();
+    expect(facts(harness)).toEqual([]);
+
+    setSystemTime(new Date(Date.now() + SLEEP_TIME_CADENCE.idleMs));
+    await harness.agent._kinuTimerTick();
+    await settle(harness, 3);
+    await settle(harness, 4);
+    expect(harness.sleepTimePrompts).toHaveLength(1);
+
+    expect(harness.db.prepare("SELECT event FROM activity_log WHERE event = 'terminal_effect_abandoned'").all())
+      .toEqual([{ event: 'terminal_effect_abandoned' }]);
+    await settle(harness, 5);
+    expect(harness.sleepTimePrompts).toHaveLength(2);
+    expect(harness.sleepTimePrompts[1]).not.toContain('ask-2');
+  });
+});

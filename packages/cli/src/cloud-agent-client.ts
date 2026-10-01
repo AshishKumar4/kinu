@@ -37,7 +37,7 @@ import {
   type CliSession,
   type CliSessionOptions,
 } from './session';
-import { CloudTurnStream, jsonErrorMessage } from './cloud-turn-stream';
+import { CloudTurnStream, jsonErrorMessage, TurnStreams } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
 import type { AgentModelMenu, AgentRpcMethod } from '@kinu.run/core';
 import { hostedWindowCalls, positionPageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, WorkspaceWorkSchema, type WorkspaceWork, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
@@ -252,6 +252,7 @@ const SocketFrameSchema = v.objectWithRest({
   done: v.optional(v.boolean()),
   replay: v.optional(v.boolean()),
   landed: v.optional(v.picklist(['mid-turn', 'turn'])),
+  turnId: v.optional(v.string()),
 }, JsonValueSchema);
 
 type SocketFrame = v.InferOutput<typeof SocketFrameSchema>;
@@ -316,6 +317,7 @@ export class CloudAgentClient implements AgentClient {
   /** A socket that dies after close() must not reconnect. */
   private closed = false;
   private readonly activeTurns = new Map<string, CloudTurnStream>();
+  private readonly streams = new TurnStreams();
   private readonly pendingRpcs = new Map<string, { resolve: (value: JsonValue) => void; reject: (err: Error) => void }>();
   /** Kept visible until the actor confirms its durable cancellation sweep. */
   private readonly stoppingTurnIds = new Set<string>();
@@ -451,7 +453,7 @@ export class CloudAgentClient implements AgentClient {
 
       try {
         const body: JsonObject = {
-          messages: [decodeJsonValue({ value: createUserUiMessage(text, files, opts.mode) })],
+          messages: [decodeJsonValue({ value: createUserUiMessage(requestId, text, files, opts.mode) })],
           trigger: 'submit-message',
         };
 
@@ -964,9 +966,7 @@ export class CloudAgentClient implements AgentClient {
 
     // Ack only our own turns, so the DO replays their chunks after a reconnect.
     if (payload.type === CHAT_MESSAGE_TYPES.STREAM_RESUMING && payload.id) {
-      const resuming = this.activeTurns.get(payload.id);
-
-      if (resuming) this.ackResume(payload.id, resuming);
+      this.resume(payload.id, payload.turnId);
 
       return;
     }
@@ -984,7 +984,8 @@ export class CloudAgentClient implements AgentClient {
     if (payload.type === CHAT_MESSAGE_TYPES.STREAM_PENDING) return;
 
     if (payload.type !== CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE || !payload.id) return;
-    const active = this.activeTurns.get(payload.id);
+    const id = this.streams.requestOf(payload.id);
+    const active = this.activeTurns.get(id);
 
     if (!active) return;
     // Read before clearing: the terminal branch needs to know whether anything rebound.
@@ -992,8 +993,9 @@ export class CloudAgentClient implements AgentClient {
     active.awaitingRebind = false;
 
     if (payload.error) {
-      if (this.stoppingTurnIds.has(payload.id)) return;
-      this.activeTurns.delete(payload.id);
+      if (this.stoppingTurnIds.has(id)) return;
+      this.activeTurns.delete(id);
+      this.streams.ended(payload.id);
       const body = payload.body ?? '';
       const message = body === '' ? 'Cloud agent stream failed.' : body;
       this.emit({ type: 'error', message });
@@ -1004,7 +1006,7 @@ export class CloudAgentClient implements AgentClient {
 
     // Landed mid-turn: no stream. Checked before apply, which would fire a turn-start that never ends.
     if (payload.done && payload.landed === 'mid-turn') {
-      this.activeTurns.delete(payload.id);
+      this.activeTurns.delete(id);
       active.landedMidTurn();
 
       return;
@@ -1013,8 +1015,9 @@ export class CloudAgentClient implements AgentClient {
     if (payload.body?.trim()) active.apply(payload.body, payload.replay === true);
 
     if (payload.done) {
-      if (this.stoppingTurnIds.has(payload.id)) return;
-      this.activeTurns.delete(payload.id);
+      if (this.stoppingTurnIds.has(id)) return;
+      this.activeTurns.delete(id);
+      this.streams.ended(payload.id);
 
       // A replayed terminal as the first frame back means nothing rebound; settling it clean would present a
       // truncated answer as complete.
@@ -1041,6 +1044,7 @@ export class CloudAgentClient implements AgentClient {
   private failInFlight(error: Error): void {
     const active = [...this.activeTurns.values()];
     this.activeTurns.clear();
+    this.streams.clear();
 
     if (active.length > 0) this.emit({ type: 'error', message: error.message });
 
@@ -1085,7 +1089,15 @@ export class CloudAgentClient implements AgentClient {
     this.requestStreamResume();
   }
 
-  /** At most once per socket generation per turn: the DO replays the whole buffer per ack. */
+  private resume(stream: string, turnId: string | undefined): void {
+    const resuming = this.streams.resuming(stream, turnId, this.activeTurns);
+
+    if (resuming === null) return;
+
+    if (resuming.moved) resuming.turn.follow();
+    this.ackResume(stream, resuming.turn);
+  }
+
   private ackResume(requestId: string, turn: CloudTurnStream): void {
     if (turn.resumeAcked) return;
     turn.resumeAcked = true;

@@ -4,8 +4,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { scratchDir } from '../packages/test-utils/src/scratch';
 import {
-  adoptDownloads, adoptTarball, artifactDigest, downloadsServed, imagesStagingNeverRan, planRollback, readDownloads, verifyServing,
-  type Promotion, type Verified,
+  adoptDownloads, adoptTarball, artifactDigest, downloadsServed, evalVerdictRefusal, imagesStagingNeverRan, planRollback, readDownloads,
+  verifyServing, type Promotion, type RunJob, type Verified,
 } from './promote';
 import type { Reset } from './reset';
 
@@ -247,5 +247,21 @@ describe('a rollback', () => {
     expect(planRollback(HISTORY, 'v4-red', 'now', reset('2026-09-27T00:00:00.000Z')))
       .toEqual({ refused: expect.stringContaining('reset-2026-09-27T00:00:00.000Z') });
     expect(planRollback(HISTORY, 'v4-red', 'now', reset('2026-09-25T00:00:00.000Z'))).toMatchObject({ target: promotion('v3') });
+  });
+});
+
+// THE STATISTICS GATE PRODUCTION: a staging build is promoted on its evals run's Verdict job, never on the run's own
+// conclusion, which is green whenever the run finished, however its trials went.
+describe('the eval verdict a promotion waits for', () => {
+  const job = (name: string, status: string, conclusion: string | null): RunJob => ({ name, status, conclusion, html_url: `https://github.com/x/y/actions/runs/1/job/${name}` });
+
+  test('only a completed, green Verdict job lets a build through', () => {
+    const finished = [job('Plan', 'completed', 'success'), job('Evals', 'completed', 'success')];
+
+    expect(evalVerdictRefusal([...finished, job('Verdict', 'completed', 'success')], 'evals run 1')).toBeUndefined();
+    expect(evalVerdictRefusal(finished, 'evals run 1')).toBe('no eval verdict yet: evals run 1 has no Verdict job');
+    expect(evalVerdictRefusal([...finished, job('Verdict', 'in_progress', null)], 'evals run 1')).toContain('still in_progress');
+    expect(evalVerdictRefusal([...finished, job('Verdict', 'completed', 'failure')], 'evals run 1')).toContain('the eval verdict is failure');
+    expect(evalVerdictRefusal([...finished, job('Verdict', 'completed', 'skipped')], 'evals run 1')).toContain('the eval verdict is skipped');
   });
 });

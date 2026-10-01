@@ -79,8 +79,9 @@ export const LONG_TURN_PEAK_BOUND_BYTES = 124_000_000;
 export const LONG_TURN_GROWTH_BOUND_BYTES = 5_000_000;
 
 /** Measured 2026-09-26 at {@link STEP} before any copy fix: 13.5 MB, the transcript and, whole, the last request;
- *  11.1 MB (twice) on 2026-09-27 once the root's chat room no longer keeps each answer. */
-export const IDLE_RETAINED_BOUND_BYTES = 12_000_000;
+ *  11.1 MB (twice) on 2026-09-27 once the root's chat room no longer keeps each answer; 9.8-10.0 MB over 3 runs on
+ *  integration 48fa23c62 (2026-09-30), 7.6-7.8 MB over 4 once a turn keeps its origin as a revision, not a clone. */
+export const IDLE_RETAINED_BOUND_BYTES = 8_800_000;
 
 const WranglerSchema = v.object({
   compatibility_date: v.string(),

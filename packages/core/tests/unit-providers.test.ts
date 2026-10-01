@@ -9,7 +9,7 @@ import {
   DEFAULT_WORKERS_AI_MODEL_ID,
   DEFAULT_WORKERS_AI_MODEL_SPEC,
   CODEX_CRED_KEY,
-  type ModelProvider, type ProviderDeps, type AuthResolution,
+  type ModelProvider, type ModelCallDeps, type ProviderDeps, type AuthResolution,
 } from '../src/index';
 
 function createTestAuth(store: Map<string, AuthResolution> = new Map()): Pick<ProviderDeps, 'getAuth' | 'hasCredential'> {
@@ -55,7 +55,7 @@ describe('ProviderRegistry', () => {
     };
   }
 
-  const baseDeps = (): ProviderDeps => ({ env: {}, ...createTestAuth() });
+  const baseDeps = (): ModelCallDeps => ({ env: {}, sessionAffinity: 'kinu-test', ...createTestAuth() });
 
   test('register + resolve', () => {
     const r = createProviderRegistry();

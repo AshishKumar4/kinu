@@ -111,7 +111,7 @@ import {
   // Prices a model_call row only when the rate belongs to that call's own model.
   buildModelCallEvent,
   type FactsStore,
-  createAgentStores, type AgentConfigStore, type SetModelDeps, collectDynamicContext, subordinateDelegatesOf,
+  createAgentStores, type AgentConfigStore, type SetModelDeps, type ContextSelection, collectDynamicContext, subordinateDelegatesOf,
   nimbusSessionFiles, agentArtifactDirectory, agentHome, MAIN_AGENT,
   CHAT_SESSION_ID, type SessionTranscript,
   type SqlExecutor,
@@ -455,13 +455,15 @@ function actorAgentsActions(deps: ActorToolDeps): AgentsToolAction[] {
 /** The codemode tool whose script keeps issuing device execs even after its call has detached. */
 const CODEMODE_TOOL_TOOL = 'eval' satisfies BuiltinToolName;
 
-/** Ledgers that can owe work with no instant. */
+/**
+ * Ledgers that can owe work with no instant and nothing else to watch it. A running background job is not one: its
+ * `bg:` fiber holds the object while it runs and re-drives it after a death, and a deferred one is timed (`nextOwedAt`).
+ */
 export interface UntimedArms {
   readonly openDrainLease?: boolean;
   readonly terminalIncomplete?: boolean;
   readonly unfinishedHeads?: boolean;
   readonly runningSwarms?: boolean;
-  readonly untimedJobs?: boolean;
   readonly retirements?: boolean;
   readonly pendingBirths?: boolean;
   readonly pendingDeletions?: boolean;
@@ -926,7 +928,7 @@ export abstract class ActorAgent extends Agent<Env> {
       temporary: this.temporaryAgentPort(),
       now: () => Date.now(),
       inheritedContext: () => this.readInheritedContext(),
-      originContext: async () => this._turnOriginContext,
+      originContext: () => this.turnOriginContext(),
       ownMission: () => this.ownMission(),
       createName: mintSubordinateName,
       broadcast: (event) => this.broadcastSubordinatesChanged(event),
@@ -1838,6 +1840,7 @@ export abstract class ActorAgent extends Agent<Env> {
           // that re-drives what it owed.
           armTurnWake: async (atMs) => { await this.scheduleTerminalRetry(atMs); },
           quiet: () => {
+            this.chatTransport.quiet();
             this.overviewChanged();
             this.detachOwned(() => this.restWhenIdle());
           },
@@ -1861,6 +1864,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected get chatTransport(): ChatWireTransport {
     this._chatTransport ??= new ChatWireTransport({
       resumes: true,
+      turnOwed: () => this.chatLoopOwesWork(),
       broadcast: (message, exclude) => { this.broadcastToActor(null, message, exclude); },
       getConnection: (id) => this.getConnection(id),
       history: (limit) => this.chatTranscript.history(limit),
@@ -2713,7 +2717,7 @@ export abstract class ActorAgent extends Agent<Env> {
   private getAgentsToolDeps(workMode: WorkMode): AgentsToolDeps {
     const actorDeps = this.actorToolDeps();
 
-    const swarm = this.swarmDeps(this.rt, this.getModel(), () => this._turnOriginContext, createSharedPrefixCompactor({
+    const swarm = this.swarmDeps(this.rt, this.getModel(), () => this.turnOriginContext(), createSharedPrefixCompactor({
         ports: {
           transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
           plans: this.compactionState.plans,
@@ -2924,6 +2928,7 @@ export abstract class ActorAgent extends Agent<Env> {
         deferrals: () => this.deferralChannel(),
         slate: (operation) => this.slate(operation),
         reportModelCall: (report) => this.reportModelCall(report),
+        modelOperations: this.modelOperations,
         liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
         resolveProfile: () => this.routingProfile(),
         currentTurn: (reference) => this.currentTurnOf(reference),
@@ -3988,9 +3993,8 @@ export abstract class ActorAgent extends Agent<Env> {
 
     // The loop already placed the turn's input on the working history before handing it here.
     const history = this.actorSession.history;
-    // Frozen so a background re-drive of a context:'inherit' hire carries the conversation
-    // the caller actually had.
-    this._turnOriginContext = Object.freeze(structuredClone([...history]));
+    // The revision, not a copy: a context:'inherit' hire reads back the conversation the caller had.
+    this._turnOrigin = this.actorSession.turnContext;
     const assembled = await this.assembleTurn({ history, tools, reads });
     this._turnDurableLength = assembled.rawMessages.length;
     // Bound exactly once before execution; the CLI adapter binds it at the same point.
@@ -4346,7 +4350,11 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /** Set in beforeTurn; read by beforeStep's prune budget every step. */
   protected _turnContextWindow = 0;
-  private _turnOriginContext: readonly ModelMessage[] = [];
+  private _turnOrigin: ContextSelection | null = null;
+
+  private async turnOriginContext(): Promise<readonly ModelMessage[]> {
+    return this._turnOrigin === null ? [] : (await this.actorSession.canonical.materializeAt(this._turnOrigin)).messages;
+  }
 
   /** Subclass-only planes, read per step by the shared assembler; empty here. */
   protected extraDynamicContext(): ActorDynamicContextExtras {

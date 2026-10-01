@@ -33,6 +33,7 @@ import { parseJsonc } from './jsonc';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import type { InfraEnvironment } from './infra-manifest';
+import { restApiToken } from './cloudflare-rest';
 
 /** The argv that points a Worker-scoped wrangler command at `environment`'s Worker; production is the top level. */
 export function environmentArgs(environment: InfraEnvironment): readonly string[] {
@@ -754,7 +755,7 @@ export async function edgeResponds(hostname: string): Promise<Observation> {
 const ACCESS_TOKEN_HELP =
   'Access is readable only with an API token: mint one at '
   + 'https://dash.cloudflare.com/profile/api-tokens with `Access: Apps and Policies Read` '
-  + 'scoped to this account, and export it as KINU_ACCESS_API_TOKEN — a name wrangler never '
+  + 'scoped to this account, and export it as KINU_CLOUDFLARE_API_TOKEN — a name wrangler never '
   + 'reads, so the deploy\'s own OAuth login keeps serving every other subcommand. The '
   + 'wrangler OAuth login carries no Access scope and answers 403 there.';
 
@@ -924,14 +925,7 @@ async function accessGet<TSchema extends v.GenericSchema>(
   path: string,
   schema: TSchema,
 ): Promise<{ readonly body: v.InferOutput<TSchema> } | { readonly failure: string }> {
-  // KINU_ACCESS_API_TOKEN first, ON PURPOSE: wrangler honours BOTH generic
-  // names (CLOUDFLARE_API_TOKEN and CF_API_TOKEN), so exporting the
-  // Access-scoped token under either hijacks every wrangler subcommand this
-  // verification also runs — measured: `wrangler vectorize list` refusing
-  // under an Access-only token. A name wrangler never reads keeps the two
-  // credentials apart.
-  const token = (process.env['KINU_ACCESS_API_TOKEN']
-    ?? process.env['CLOUDFLARE_API_TOKEN'] ?? process.env['CF_API_TOKEN'] ?? '').trim();
+  const token = restApiToken();
 
   if (token.length === 0) return { failure: ACCESS_TOKEN_HELP };
   const account = process.env['CLOUDFLARE_ACCOUNT_ID'] ?? declaredAccountId();

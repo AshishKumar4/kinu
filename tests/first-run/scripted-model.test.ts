@@ -1,9 +1,15 @@
 import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
+import { steerSkillsBlock, workspaceGenesisSignal, type JsonObject } from '@kinu.run/core';
+import { createMemoryVfs } from '../../packages/test-utils/src/vfs';
+import { HELLO_SLATE_ASK, HELLO_SLATE_ID } from './asks';
 import worker, { MAX_BODY_BYTES } from '../../scripts/scripted-model-worker';
-import { startScriptedModel } from '../../scripts/scripted-model';
+import { SCRIPTED_CREDENTIAL, startScriptedModel } from '../../scripts/scripted-model';
 import { FALLBACK_ANSWER } from '../../scripts/scripted-protocol';
 import { tierModel } from '../../scripts/tier-model';
+import { generateText, streamText } from 'ai';
+import { createOpenAICompatProvider, runSleepTimeCompute, type LLM } from '@kinu.run/core';
+import { SLEEP_TIME_PROMPT_OPENING } from '../../packages/core/src/utils/prompt-sections';
 
 /** An OpenAI-shaped refusal of a request, with the failure's class as its code. */
 const RefusalSchema = v.object({
@@ -54,7 +60,7 @@ describe('the scripted model refuses a body it cannot read, the way a provider d
   });
 
   test('a request it can read is answered, not refused', async () => {
-    const body = JSON.stringify({ messages: [{ role: 'user', content: 'an ask no script names' }] });
+    const body = JSON.stringify({ messages: [{ role: 'user', content: `Explain the phrase "${SLEEP_TIME_PROMPT_OPENING}"` }] });
     const response = await worker.fetch(asked(COMPLETIONS, body), ENV);
 
     expect(response.status).toBe(200);
@@ -98,5 +104,100 @@ describe('the deployed tiers\' Worker answers a Tavily search', () => {
     expect(body.results.every((result) => result.url.startsWith('https://'))).toBe(true);
     expect((await worker.fetch(asked(search, '{}'), ENV)).status).toBe(400);
     expect((await worker.fetch(new Request(search, { method: 'POST', body: '{}' }), ENV)).status).toBe(401);
+  });
+});
+
+test('an ask spliced into genesis survives the skills it activates', async () => {
+  const purpose = 'A precise engineer who builds small TypeScript HTTP apps.';
+  const genesis = workspaceGenesisSignal(purpose);
+
+  const skills = await steerSkillsBlock({
+    vfs: createMemoryVfs().vfs, config: { getAlwaysActiveSkills: () => [] },
+    userText: HELLO_SLATE_ASK, alreadyActive: new Set(), trust: () => 'approved',
+    limits: { contextWindow: 128_000, modelOutputLimit: 16_384 },
+  });
+
+  if (genesis === null || skills === null) throw new Error('the slate ask must activate skills in a genesis turn');
+
+  const messages: JsonObject[] = [
+    { role: 'user', content: genesis.text },
+    { role: 'user', content: HELLO_SLATE_ASK },
+    { role: 'user', content: skills },
+  ];
+
+  const tools = ['file', 'eval'].map(name => ({ type: 'function', function: { name } }));
+  const ToolCallSchema = v.object({ id: v.string(), function: v.object({ name: v.string(), arguments: v.string() }) });
+
+  const AnswerSchema = v.object({ choices: v.tuple([v.object({ message: v.object({
+    content: v.nullish(v.string()), tool_calls: v.optional(v.array(ToolCallSchema)),
+  }) })]) });
+
+  for (const file of ['package.json', 'server.ts']) {
+    const response = await worker.fetch(asked(COMPLETIONS, JSON.stringify({ messages, tools })), ENV);
+    const message = v.parse(AnswerSchema, await response.json()).choices[0].message;
+
+    expect(message.tool_calls?.map(call => call.function.name), message.content ?? '').toEqual(['file']);
+    const call = v.parse(ToolCallSchema, message.tool_calls?.[0]);
+
+    const args = v.parse(v.pipe(v.string(), v.parseJson(), v.object({
+      action: v.literal('write'), path: v.string(), content: v.string(),
+    })), call.function.arguments);
+
+    expect(args.path).toBe(`/slates/${HELLO_SLATE_ID}/${file}`);
+
+    if (file === 'package.json') expect(JSON.parse(args.content)).toMatchObject({
+      main: 'server.ts', slate: { title: 'Hello', port: 8787, bindings: {} },
+    });
+    messages.push(
+      { role: 'assistant', content: message.content ?? '', tool_calls: message.tool_calls ?? [] },
+      { role: 'tool', tool_call_id: call.id, content: 'written' },
+    );
+  }
+
+  const preview = await worker.fetch(asked(COMPLETIONS, JSON.stringify({ messages, tools })), ENV);
+  const previewed = v.parse(AnswerSchema, await preview.json()).choices[0].message;
+
+  expect(previewed.tool_calls?.map(call => call.function.name), previewed.content ?? '').toEqual(['eval']);
+
+  messages.push({ role: 'user', content: 'Stop building the slate. Reply without calling a tool.' });
+  const stopped = await worker.fetch(asked(COMPLETIONS, JSON.stringify({ messages, tools })), ENV);
+
+  expect(v.parse(CompletionSchema, await stopped.json()).choices[0].message.content).toBe(FALLBACK_ANSWER);
+});
+
+describe('the tier model behind background memory compression', () => {
+  test('a conversation with no durable knowledge returns a usable no-change update', async () => {
+    const server = await startScriptedModel(tierModel);
+
+    try {
+      const model = createOpenAICompatProvider().createModel('fake-live', {
+        env: {},
+        sessionAffinity: 'sleep-time-tier-test',
+        getAuth: async (key) => key === SCRIPTED_CREDENTIAL ? { baseURL: server.baseURL, headers: {} } : null,
+        hasCredential: async (key) => key === SCRIPTED_CREDENTIAL,
+      });
+
+      const llm: LLM = {
+        async *stream(options) {
+          yield* streamText({ model, system: options.system, messages: options.messages, tools: options.tools }).textStream;
+        },
+        async complete(prompt) {
+          return (await generateText({ model, prompt, maxRetries: 0 })).text;
+        },
+      };
+
+      const update = await runSleepTimeCompute(llm, {
+        turns: [
+          { task: 'Hello', output: 'Hello back', toolCalls: [] },
+          { task: 'How are you?', output: 'Ready to help', toolCalls: [] },
+          { task: 'Thanks', output: 'You are welcome', toolCalls: [] },
+        ],
+        currentFacts: [],
+      });
+
+      expect(update).toEqual({ upserts: [], decay: [] });
+    } finally {
+      await server.stop();
+    }
   });
 });

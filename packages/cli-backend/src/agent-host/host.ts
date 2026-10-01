@@ -58,6 +58,7 @@ import {
   type SubordinateEventResult,
   type SubordinateReportHandoff,
   type SubordinateReportStatus,
+  type SubordinatesChangedEvent,
   type AgentConfigStore,
   type JsonObject,
   type HostedAgentRef,
@@ -1000,6 +1001,13 @@ export class LocalAgentHost {
   private parentRelayFor(child: HostEntry): LocalParentRelay {
     return {
       owed: async (ending, assistantText, narration) => {
+        const parent = this.requireActorEntry(child.actor.record.parentActorId ?? '');
+
+        if (parent.roster.finishTurn(child.name, ending, Date.now())) {
+          const event: SubordinatesChangedEvent = { type: 'subordinates_changed', subordinates: parent.roster.list() };
+          parent.session.host.broadcast(event);
+        }
+
         const state = child.relay;
 
         // Suppressed only by a run-settling report, never a progress note.
@@ -1616,8 +1624,8 @@ function childRef(parent: HostEntry, childName: string): HostedAgentRef {
 }
 
 /**
- * When this process must next wake, over every actor in the workspace. Unscoped by design, like
- * `hasUntimedLiveJobsInWorkspace()`: scoping to the root would sleep through a subordinate's trigger.
+ * When this process must next wake, over every actor in the workspace. Unscoped by design: scoping to the root would
+ * sleep through a subordinate's trigger.
  */
 function nextTriggerAt(db: Database): number | null {
   const table = db.query(`SELECT name FROM sqlite_master WHERE type='table' AND name='triggers'`).get();

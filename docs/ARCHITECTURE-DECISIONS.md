@@ -785,6 +785,8 @@ which tests the strip itself; and the cf-backend suite through
 L3. A deploy wave stops launching at its first red and lets running gates
 finish; `--all` audits the whole wave. Decided 2026-09-15, commit 5d5df1b59,
 proved at budget 1 in both directions.
+Superseded by L18 for the deploy: every deploy phase runs each row to its end,
+and `--all` is gone. A tier still stops launching at its first red.
 
 L4. The connectome's cost pins are ratios against an in-process calibration
 unit measured in the same cheapest-of-N loop, never absolute CPU time. Decided
@@ -1176,6 +1178,9 @@ parser, the gate log directory, the quote check and the Bash 5.1 guard went
 with the Bash wave. deploy.test.ts now proves the boundary deploy.sh owns (the
 phases in order, the options it passes, the stop on a red phase) against a
 stub ladder, and ladder.test.ts proves the admission.
+Amended by L18: a phase no longer stops at its first red, only the preflight
+and the upload phase end a deploy, and one call may run several phases as one
+wave.
 
 L17. The hammer bounds each run by its silence, as every gate is bounded, and
 never by a wall deadline. Decided 2026-09-30. Each run had 440 s
@@ -1191,6 +1196,83 @@ tests), so the gate's own row bound holds a hung hammer. Its burners are
 spawned per run and end with it. Each also exits when its pipe from the gate
 closes, so none outlives a SIGKILLed gate. No budget or run length replaces the
 73.3 s.
+
+L18. The staging deploy uploads first, then runs everything to its end and
+writes one report. Decided 2026-09-30 by the owner. Both of that day's deploy
+stops were local harness defects (the frame ledger, the hire fixture), not
+product defects, and each stopped the deploy before staging saw the build.
+Now only two phases stop a deploy: the preflight, the precondition for any
+verdict, and the upload phase, `gate:infra` and the secret scan, whose damage
+(a wrong account, a published credential) the next deploy cannot undo. Then
+the deploy builds and uploads to staging, and every later phase runs each row
+to its end whatever goes red: the rows that read the deployment (first-run,
+the product flows) share one wave with every source row, and the hammer runs
+alone and last. A failed build, upload or smoke test is a red step; the rows
+that read the deployment are named as not run, and the local gates and the
+hammer still run. A deploy with any red writes no record, so production never
+takes it; a red staging is fine, since the next deploy replaces it. The report
+(`scripts/deploy-report.ts`, under `bench-artifacts/deploys/<environment>/`)
+holds every red with its finding, command and output tail, grouped by phase,
+each NEW or CARRIED OVER against the previous deploy of the environment, and
+the merges between the two deployed commits. `--all` is gone. A record listing
+its gates was considered and dropped: the record is keyed by a sha, whose plan
+cannot differ from the one `check` reads.
+The rows that read the deployment are admitted by measured cost like any other
+row, measured against a deployment (`gate-cost-measure.ts --deployment`). The
+product flows measured 60.4 s wall, 745 MiB and 1 thread at load 31.5. First-run
+could not be measured against staging's older build, whose run events the new
+schema rejects, so a row that reads the deployment and has no figure takes the
+whole box: it runs alone, and the report names the command that measures it.
+Every other row with no figure is still refused.
+
+L19. A build is promoted on its evals' verdict, never on a run's conclusion.
+Decided 2026-09-30 with Main. evals.yml's own conclusion is green whenever the
+run finished: its trial step continues on error, and the comparison never
+exits non-zero. So the staging deploy dispatches it naming the build it
+published (the API answers with the run's id, which the record keeps), from
+the branch on origin that holds the build nearest its tip, read from git:
+GitHub runs the evals.yml of the ref it is given, and main, behind the
+release, has none that takes a build. The run measures staging against
+production, and its `Verdict` job fails on an
+incomplete report or a regression. `promote.ts check` requires that job, by
+name, to have completed green, and says "no eval verdict yet" while the run has
+none. The deploy's own one-trial pass (`eval-pass-tier.sh`) reports a task that
+fails outright the same day, as a red of that deploy.
+
+L20. A staging deploy reads what its version did, and each signal is a red.
+Decided 2026-09-30 by the owner: with zero users, staging's traffic is our own
+tiers and evals, so its own telemetry for the version is evidence beyond them.
+`prod-logs.ts version` (the existing reader, not a new one) counts that
+version's uncaught exceptions, platform-ended invocations, failed and owed
+terminal effects, and objects woken by startups or alarms at the product's
+wake-loop rate. Measured on staging that day: one version passed every test
+with 19 uncaught exceptions in SupervisorRPC; alarms peaked at 16 in an
+object-hour, under the 30 a loop takes. A canceled or aborted invocation is a
+caller going away and is not counted.
+
+L21. Continuous staging: the release branch's newest tip is deployed whenever it
+moves and no staging deploy runs. Decided 2026-09-30 by the owner, the design
+by Main. A systemd path unit on the branch's remote-tracking ref (it moves
+when the release is pushed) starts a oneshot that deploys from a dedicated
+clean worktree and reads the tip again when each deploy ends, so a tip passed
+meanwhile is dropped and the newest is never lost. Measured 2026-10-01 with a
+real push: pushes during a run start exactly one more run, and a push onto a
+packed ref still fires. deploy.sh holds a lock per environment for its run
+(exit 75 when held), which is how "no deploy runs" is known, for a person's
+deploy as much as the loop's. Each checkout's install is its own revision's:
+when install-parity.ts does not hold, every node_modules tree is removed and
+installed from the frozen lock, then parity is required; a frozen install over
+the old tree updates what the lock names and keeps what it dropped (measured
+with bun 1.4, 2026-10-01).
+
+L22. Production promotes whichever build staging verified, by itself, through
+`deploy.sh --promote`. Decided 2026-09-30 by the owner, the policy 2026-10-01
+by Main. A timer every 15 minutes takes the last staged tip and runs
+`promote.ts check` at it, which refuses until staging's record and the evals'
+green Verdict are both there; only then does it promote. Nothing rolls back by
+itself: a red promotion is never retried, its report and the rollback hint
+stand, and the next verified tip deploys forward. A tip passed by a newer
+staging deploy before its verdict lands is never promoted.
 
 ## Providers
 

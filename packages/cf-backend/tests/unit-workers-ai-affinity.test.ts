@@ -28,7 +28,7 @@ function chatCompletionResponse(): Response {
   }), { headers: { 'content-type': 'application/json' } });
 }
 
-async function captureWorkersAIRequest(workersAI?: { sessionAffinity?: string }) {
+async function captureWorkersAIRequest(conversation: string) {
   const captured: Array<{ url: string; headers: Headers }> = [];
 
   const reg = createAgentProviderRegistry({
@@ -40,11 +40,10 @@ async function captureWorkersAIRequest(workersAI?: { sessionAffinity?: string })
 
       return chatCompletionResponse();
     }),
-    sessionAffinity: workersAI?.sessionAffinity,
   });
 
   await generateText({
-    model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6'),
+    model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', conversation),
     prompt: 'ping',
   });
   expect(captured).toHaveLength(1);
@@ -56,20 +55,11 @@ async function captureWorkersAIRequest(workersAI?: { sessionAffinity?: string })
 }
 
 describe('Workers AI session affinity (REST path)', () => {
-  test('agentAffinityKey is the stable kinu-<name> scheme', () => {
-    expect(agentAffinityKey('jarvis')).toBe('kinu-jarvis');
-  });
-
-  test('sessionAffinity option is emitted as the x-session-affinity header', async () => {
-    const req = await captureWorkersAIRequest({ sessionAffinity: agentAffinityKey('jarvis') });
+  test("the call's conversation is emitted as the x-session-affinity header", async () => {
+    const req = await captureWorkersAIRequest(agentAffinityKey('jarvis'));
     expect(req.headers.get('x-session-affinity')).toBe('kinu-jarvis');
     expect(req.headers.get('authorization')).toBe('Bearer cf-user-token');
     expect(req.url.startsWith(`${ACCOUNT_BASE_URL}/`)).toBe(true);
-  });
-
-  test('no affinity header without the option (no accidental shared bucket)', async () => {
-    const req = await captureWorkersAIRequest(undefined);
-    expect(req.headers.get('x-session-affinity')).toBeNull();
   });
 
   test('agent-registry model fetches use the patient rate-limit retry', async () => {
@@ -88,7 +78,7 @@ describe('Workers AI session affinity (REST path)', () => {
     });
 
     const result = await generateText({
-      model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6'),
+      model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', 'kinu-test'),
       prompt: 'ping',
       maxRetries: 0,
     });

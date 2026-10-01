@@ -58,11 +58,11 @@ describe('createLocalModelResolver', () => {
     const staleCap = { maxTokens: 123 };
 
     try {
-      await createLocalProviderLLM({ llm, spend: UNOBSERVED }).complete('uncapped');
-      await createLocalProviderLLM({ llm: { ...llm, ...staleCap }, spend: UNOBSERVED }).complete('stale cap');
+      await createLocalProviderLLM({ llm, conversation: 'kinu-test', spend: UNOBSERVED }).complete('uncapped');
+      await createLocalProviderLLM({ llm: { ...llm, ...staleCap }, conversation: 'kinu-test', spend: UNOBSERVED }).complete('stale cap');
       let streamed = '';
 
-      for await (const chunk of createLocalProviderLLM({ llm: { ...llm, ...staleCap }, spend: UNOBSERVED })
+      for await (const chunk of createLocalProviderLLM({ llm: { ...llm, ...staleCap }, conversation: 'kinu-test', spend: UNOBSERVED })
         .stream({ system: 'be brief', messages: [{ role: 'user', content: 'stream' }] })) {
         streamed += chunk;
       }
@@ -111,7 +111,7 @@ describe('createLocalModelResolver', () => {
 
     try {
       const judge = createLocalProviderLLM({
-        llm, spend: { source: 'judge', report: (report) => { reports.push(report); } },
+        llm, conversation: 'kinu-test', spend: { source: 'judge', report: (report) => { reports.push(report); } },
       });
 
       expect(await judge.complete('grade this')).toBe('graded');
@@ -244,10 +244,10 @@ describe('createLocalModelResolver', () => {
       }),
     });
 
-    await generateText({ model: resolver.resolveModel('anthropic@work/claude-x'), prompt: 'hi' });
-    await generateText({ model: resolver.resolveModel('anthropic/claude-x'), prompt: 'hi' });
+    await generateText({ model: resolver.resolveModel('anthropic@work/claude-x', 'kinu-test'), prompt: 'hi' });
+    await generateText({ model: resolver.resolveModel('anthropic/claude-x', 'kinu-test'), prompt: 'hi' });
     const chosen = resolver.withAccountChoice?.((provider) => (provider === 'anthropic' ? 'work' : undefined));
-    await generateText({ model: (chosen ?? resolver).resolveModel('anthropic/claude-x'), prompt: 'hi' });
+    await generateText({ model: (chosen ?? resolver).resolveModel('anthropic/claude-x', 'kinu-test'), prompt: 'hi' });
 
     expect(sent).toEqual(['sk-ant-work', 'sk-ant-main', 'sk-ant-work']);
   });
@@ -339,11 +339,11 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
 
     const resolver = createLocalModelResolver({
       llm: proxyLLMConfig(), cloud: { origin: CLOUD_ORIGIN, token: CLOUD_TOKEN },
-      fetch: mock.fetch, sessionAffinity: 'kinu-local-conversation',
+      fetch: mock.fetch,
     });
 
     await resolver.listModels();
-    await generateText({ model: resolver.resolveModel('opencode-go/muse-spark-1.3-contributor'), prompt: 'hello' });
+    await generateText({ model: resolver.resolveModel('opencode-go/muse-spark-1.3-contributor', 'kinu-local-conversation'), prompt: 'hello' });
     const call = mock.requests.find((request) => request.url.endsWith('/api/user/ai/proxy/forward'));
 
     expect(call?.headers['x-kinu-proxy-target']).toBe('https://opencode.ai/zen/go/v1/responses');
@@ -475,18 +475,17 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
         llm: proxyLLMConfig(origin),
         credentials: {},
         cloud: { origin, token: CLOUD_TOKEN },
-        sessionAffinity: 'kinu-jarvis',
         fetch: cloudMenuFetch(origin),
       });
 
       const viaWorkersAI = await generateText({
-        model: resolver.resolveModel(null),
+        model: resolver.resolveModel(null, 'kinu-jarvis'),
         prompt: 'ping',
         maxRetries: 0,
       });
 
       expect(viaWorkersAI.text).toBe('ok');
-      const viaGateway = await generateText({ model: resolver.resolveModel('my-gateway/openai/gpt-4.1'), prompt: 'ping' });
+      const viaGateway = await generateText({ model: resolver.resolveModel('my-gateway/openai/gpt-4.1', 'kinu-jarvis'), prompt: 'ping' });
       expect(viaGateway.text).toBe('ok');
 
       expect(seen.map((s) => s.path)).toEqual(['/api/user/ai/v1/chat/completions', '/api/user/ai/v1/chat/completions']);
@@ -548,24 +547,23 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
       });
 
       const pinned = createLocalModelResolver({
-        llm: endpoint('workers-ai', '@cf/moonshotai/kimi-k2.6'), credentials: {}, sessionAffinity: 'kinu-harbor',
+        llm: endpoint('workers-ai', '@cf/moonshotai/kimi-k2.6'), credentials: {},
       });
 
-      await generateText({ model: pinned.resolveModel(null), prompt: 'ping', maxRetries: 0 });
+      await generateText({ model: pinned.resolveModel(null, 'kinu-harbor'), prompt: 'ping', maxRetries: 0 });
 
       const elsewhere = createLocalModelResolver({
-        llm: endpoint('openai-compat', 'gpt-4o-mini'), credentials: {}, sessionAffinity: 'kinu-harbor',
+        llm: endpoint('openai-compat', 'gpt-4o-mini'), credentials: {},
       });
 
-      await generateText({ model: elsewhere.resolveModel(null), prompt: 'ping', maxRetries: 0 });
+      await generateText({ model: elsewhere.resolveModel(null, 'kinu-harbor'), prompt: 'ping', maxRetries: 0 });
 
       const explicit = createLocalModelResolver({
         llm: { ...endpoint('workers-ai', '@cf/moonshotai/kimi-k2.6'),
           headers: { Authorization: 'Bearer cf-direct', 'X-Session-Affinity': 'caller-pin' } },
-        sessionAffinity: 'kinu-harbor',
       });
 
-      await generateText({ model: explicit.resolveModel(null), prompt: 'ping', maxRetries: 0 });
+      await generateText({ model: explicit.resolveModel(null, 'kinu-harbor'), prompt: 'ping', maxRetries: 0 });
       expect(seen).toEqual([
         { affinity: 'kinu-harbor', auth: 'Bearer cf-direct' },
         { affinity: null, auth: 'Bearer cf-direct' },
@@ -608,8 +606,8 @@ describe('createLocalModelResolver — claude subscription provider', () => {
     });
 
     expect((await resolver.listProviders()).find((p) => p.id === 'claude')?.available).toBe(true);
-    await generateText({ model: resolver.resolveModel('claude@work/claude-opus-4-7'), prompt: 'hi' });
-    await generateText({ model: resolver.resolveModel('claude/claude-opus-4-7'), prompt: 'hi' });
+    await generateText({ model: resolver.resolveModel('claude@work/claude-opus-4-7', 'kinu-test'), prompt: 'hi' });
+    await generateText({ model: resolver.resolveModel('claude/claude-opus-4-7', 'kinu-test'), prompt: 'hi' });
 
     expect(sent).toEqual([
       ['https://api.anthropic.com/v1/messages?beta=true', 'Bearer sk-ant-oat01-work'],
@@ -652,6 +650,6 @@ describe('createLocalModelResolver — signed out', () => {
       expect(provider?.unavailableReason).toContain('kinu auth');
     }
 
-    expect(() => resolver.resolveModel('my-gateway/openai/gpt-4.1')).toThrow(/kinu auth/);
+    expect(() => resolver.resolveModel('my-gateway/openai/gpt-4.1', 'kinu-test')).toThrow(/kinu auth/);
   });
 });

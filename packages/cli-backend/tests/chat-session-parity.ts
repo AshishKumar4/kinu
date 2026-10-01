@@ -336,6 +336,7 @@ export async function runParityScenario(interruptRecovery = false): Promise<Pari
   const steerTwo = a.send({ text: 'two-steer', files: [NOTE_FILE] }, { id: crypto.randomUUID() });
   two.stepGate.resolve();
   const landingTwo = await steerTwo;
+  await eventsA.until((frames) => turnEvents(frames, 2).some((event) => event.type === 'text-delta'));
   two.endGate.resolve();
   await turnTwo;
   const afterTwo = await durableRows(db, norm, transcript);

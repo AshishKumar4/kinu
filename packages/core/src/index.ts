@@ -24,7 +24,7 @@ export {
   outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
   branchesTerminalEffect, turnRecordTerminalEffect,
   eventDrainTerminalEffect, shadowTrialTerminalEffect,
-  terminalEffectKey, keyedScope, TerminalEffectInterrupt,
+  terminalEffectKey, keyedScope, TerminalEffectInterrupt, isDefinitiveTerminalFailure,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
   RunEndReasonSchema,
   type TerminalEffect, type TerminalEffectTable, type TerminalEffectName,
@@ -2123,6 +2123,8 @@ export { fmtPct, fmtSpan, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } fr
 
 export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './utils/do-rpc';
 
+export { relayedAnswer } from './utils/relayed-answer';
+
 export { inheritedDescriptor, type RpcSurfaceSubject } from './utils/prototype-members';
 
 export {
@@ -2276,10 +2278,7 @@ export {
   createMyGatewayProvider,
 } from './providers/my-gateway';
 
-export {
-  type WorkersAIOptions,
-  createWorkersAIProvider,
-} from './providers/workers-ai-provider';
+export { createWorkersAIProvider } from './providers/workers-ai-provider';
 
 export {
   type AnyToolPart,

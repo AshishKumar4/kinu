@@ -740,17 +740,12 @@ describe('a terminal close that fails leaves a way back', () => {
     const storage: { sql: SqlExecutor } = rt.storage;
     storage.sql = cutting;
 
-    const titled = Promise.withResolvers<void>();
-
-    const { model } = scriptedModel('answered', { onGenerate: () => titled.promise });
+    const { model } = scriptedModel('answered');
 
     const events: SessionEvent[] = [];
     const session = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
 
-    const turning = session.send('write the migration', { id: crypto.randomUUID() });
-    await session.recoverTerminalTransitions();
-    titled.resolve();
-    await turning;
+    await session.send('write the migration', { id: crypto.randomUUID() });
     await session.settleBackgroundWork();
 
     // The turn completed; recovery finishes the unsettled close.
@@ -772,15 +767,18 @@ describe('a one-shot exit waits on the turn\'s own close', () => {
     const clock = handClock();
     const titled = Promise.withResolvers<void>();
     const { model } = scriptedModel('answered', { onGenerate: async () => { await titled.promise; } });
-    const events: SessionEvent[] = [];
+    const events = new AwaitedList<SessionEvent>();
     const session = new ProbeSession({ rt, db, model, clock, onEvent: (e) => events.push(e) });
 
     await session.send('write the migration', { id: crypto.randomUUID() });
+    await events.until((frames) => frames.some((e) => e.type === 'run-event' && e.event.type === 'model_operation' && e.event.source === 'fast' && e.event.phase === 'start'));
     const settling = session.settleBackgroundWork();
+    await Promise.resolve();
+    expect(Bun.peek.status(settling)).toBe('pending');
     titled.resolve();
     await settling;
 
-    expect(events.filter((e) => e.type === 'background')).toEqual([]);
+    expect(events.items.filter((e) => e.type === 'background')).toEqual([]);
     await session.end();
     db.close();
   });

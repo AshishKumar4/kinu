@@ -15,6 +15,11 @@ export const WORKSPACE_INSTRUCTIONS_TAG = 'workspace_instructions';
 
 export const SYSTEM_REMINDER_TAG = 'system-reminder';
 
+/** A skill activation spliced after a person's message, in the same user role. */
+export const STEER_SKILLS_HEADING = 'The message above activates these skills; they apply for the rest of this turn.';
+
+export const SLEEP_TIME_PROMPT_OPENING = 'You are a background memory-compression agent.';
+
 export const DYNAMIC_CONTEXT_DELIMITER = /<(\/?)dynamic_context/g;
 
 const SOUL_TAG = 'soul';

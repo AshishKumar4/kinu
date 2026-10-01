@@ -79,7 +79,7 @@ describe('my-gateway request shape', () => {
     });
 
     const result = await generateText({
-      model: reg.resolveModel('my-gateway/openai/gpt-4.1'),
+      model: reg.resolveModel('my-gateway/openai/gpt-4.1', 'kinu-test'),
       prompt: 'ping',
     });
 
@@ -112,7 +112,7 @@ describe('my-gateway request shape', () => {
     });
 
     const result = await generateText({
-      model: reg.resolveModel('my-gateway/anthropic/claude-sonnet-4-5'),
+      model: reg.resolveModel('my-gateway/anthropic/claude-sonnet-4-5', 'kinu-test'),
       prompt: 'ping',
     });
 
@@ -332,7 +332,7 @@ describe('my-gateway error mapping', () => {
     });
 
     try {
-      await generateText({ model: reg.resolveModel('my-gateway/minimax/m3'), prompt: 'ping' });
+      await generateText({ model: reg.resolveModel('my-gateway/minimax/m3', 'kinu-test'), prompt: 'ping' });
       throw new Error('expected generateText to fail');
     } catch (err) {
       return err instanceof Error ? err.message : String(err);
@@ -376,7 +376,7 @@ describe('my-gateway registry precedence', () => {
 
     // `workers-ai/...` resolves through the bespoke workers-ai provider —
     // same /ai/v1 endpoint, no my-gateway involvement.
-    await generateText({ model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6'), prompt: 'ping' });
+    await generateText({ model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', 'kinu-test'), prompt: 'ping' });
     expect(wire).toEqual([`${AI_BASE_URL}/chat/completions`]);
     expect(reg.registry.get('my-gateway')).toBeDefined();
     expect(reg.registry.canResolve('my-gateway')).toBe(true);

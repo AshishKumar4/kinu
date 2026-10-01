@@ -16,7 +16,7 @@ import {
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY, CODEX_CRED_KEY,
   JsonObjectSchema, JsonValueSchema, parseJsonObject,
   type JsonObject, type JsonValue, type KinuExtension, type Usage,
-  type ProviderDeps, type AuthResolution,
+  type ModelCallDeps, type AuthResolution,
 } from '../src/index';
 import { createMockFetch, type MockFetchHandle, type RecordedRequest } from '@kinu.run/test-utils';
 
@@ -312,21 +312,23 @@ interface ProviderCase {
   /** The provider addresses no cache at all — the mock answers plain usage. */
   unaddressed?: boolean;
   credentials: Record<string, AuthResolution>;
-  model: (deps: ProviderDeps) => LanguageModel;
+  model: (deps: ModelCallDeps) => LanguageModel;
 }
 
-function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ProviderDeps {
+const SESSION_KEY = 'kinu-cache-hit-gate';
+
+function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ModelCallDeps {
   const store = new Map(Object.entries(creds));
 
   return {
     env: {},
+    sessionAffinity: SESSION_KEY,
     fetch: fetchFn,
     async getAuth(key) { return store.get(key) ?? null; },
     async hasCredential(key) { return store.has(key); },
   };
 }
 
-const SESSION_KEY = 'kinu-cache-hit-gate';
 
 const CACHING_PROVIDERS: readonly ProviderCase[] = [
   {
@@ -380,7 +382,7 @@ const CACHING_PROVIDERS: readonly ProviderCase[] = [
         baseURL: 'https://workers-ai.example/v1',
       },
     },
-    model: (deps) => createWorkersAIProvider({ sessionAffinity: SESSION_KEY }, {
+    model: (deps) => createWorkersAIProvider({
       async run(model, inputs, options) {
         if (deps.fetch === undefined) throw new Error('the binding fixture needs its recording fetch');
 

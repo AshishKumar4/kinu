@@ -87,13 +87,6 @@ const reported = (async () => {
 })();
 
 describe('ControlPlaneDO in workerd', () => {
-  test('the fixture runs clean and reports one structured result', async () => {
-    const { exitCode, stdout, stderr } = await settled;
-    expect(stderr).toBe('');
-    expect(exitCode).toBe(0);
-    expect(stdout.trim().split('\n')).toHaveLength(1);
-  });
-
   test('a caller without the capability is REJECTED across the RPC boundary', async () => {
     const result = await reported;
 

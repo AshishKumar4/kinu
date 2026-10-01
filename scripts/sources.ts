@@ -434,6 +434,10 @@ export const isTypescriptConfig = (file: string): boolean => TYPESCRIPT_CONFIG.t
  *  all of them — the lock's mention of `clsx` is the installation, not a use. */
 export const isLockfile = (file: string): boolean => LOCKFILE.test(file);
 
+/** Static Worker manifests: JSONC cannot import the deployment date, so these mirror the canonical one. */
+export const isWorkerConfig = (file: string): boolean =>
+  !file.startsWith('third_party/') && /(?:^|\/)(?:wrangler(?:\.[^/]+)?|[^/]+-worker)\.jsonc?$/u.test(file);
+
 /** A stylesheet. Its own package references are at-rules — this tree's
  *  `@import "@cloudflare/kumo/styles/tailwind"` resolves a package the build
  *  needs — and `.css` is outside {@link isTextSource}, so a dependency census

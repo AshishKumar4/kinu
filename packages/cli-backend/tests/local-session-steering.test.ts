@@ -3,7 +3,7 @@ import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, test, expect } from 'bun:test';
 import { AwaitedList, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { KinuError } from '@kinu.run/core/obs';
-import { initWorkspaceSchema } from '@kinu.run/core';
+import { agentAffinityKey, initWorkspaceSchema } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { APICallError } from 'ai';
 import type { ToolExecutionOptions } from 'ai';
@@ -1181,7 +1181,6 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
         },
         credentials: {},
         cloud: { origin, token: TOKEN },
-        sessionAffinity: 'kinu-jarvis',
       });
 
       const { rt, session, events } = setupWithResolver(resolver);
@@ -1203,7 +1202,7 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
 
       expect(completions).toEqual([{
         auth: `Bearer ${TOKEN}`,
-        affinity: 'kinu-jarvis',
+        affinity: agentAffinityKey(rt.actor.name),
         model: DEFAULT_WORKERS_AI_MODEL_ID,
         stream: true,
       }]);

@@ -2,7 +2,7 @@
 import { withToolResultImages } from './tool-result-images';
 import type { LanguageModel } from 'ai';
 import type {
-  AuthResolution, ModelProvider, ProviderDeps, ProviderInfo, ModelInfo,
+  AuthResolution, ModelCallDeps, ModelProvider, ProviderDeps, ProviderInfo, ModelInfo,
 } from './types';
 import { parseModelSpec } from './types';
 import { settleModelList, StaleModelList } from './util';
@@ -42,7 +42,7 @@ export interface ProviderRegistry {
   listProviders(deps: ProviderDeps): Promise<ProviderInfo[]>;
   /** Never rejects because of one provider. */
   listAllModels(deps: ProviderDeps): Promise<ModelMenu>;
-  resolve(spec: string, deps: ProviderDeps): LanguageModel;
+  resolve(spec: string, deps: ModelCallDeps): LanguageModel;
   /** The stored credential `spec` authenticates with, found without authenticating; null when none would serve. */
   credentialFor(spec: string, deps: ProviderDeps): Promise<string | null>;
   defaultSpec(deps: ProviderDeps): Promise<string | null>;
@@ -73,7 +73,7 @@ async function defaultSpecOf(p: ModelProvider, deps: ProviderDeps): Promise<stri
 }
 
 /** `named`, else `accountFor`'s, else `main`, else the only one; several unchosen: refused. */
-export function accountDeps(deps: ProviderDeps, providerId: string, named?: string): ProviderDeps {
+export function accountDeps<Deps extends ProviderDeps>(deps: Deps, providerId: string, named?: string): Deps {
   const chosen = (): string | undefined => named ?? deps.accountFor?.(providerId);
 
   const soleKey = async (key: string): Promise<string | null> => {

@@ -11,7 +11,7 @@ import {
   listModelsDevProviders,
   modelsDevCompatBaseURL,
   reasoningEffortOptions,
-  type ProviderDeps, type AuthResolution, type ModelProvider,
+  type ModelCallDeps, type AuthResolution, type ModelProvider,
 } from '../src/index';
 import { describeProviderError } from '../src/providers/util';
 import { getModelsDevModelEndpoint } from '../src/providers/models-dev';
@@ -58,11 +58,12 @@ const CATALOG = {
   },
 };
 
-function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ProviderDeps {
+function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ModelCallDeps {
   const store = new Map(Object.entries(creds));
 
   return {
     env: {},
+    sessionAffinity: 'kinu-test',
     fetch: fetchFn,
     async getAuth(key) { return store.get(key) ?? null; },
     async hasCredential(key) { return store.has(key); },

@@ -26,10 +26,13 @@ export function userCredentialSource(store: CredentialStoreDouble): UserCredenti
     caller: () => ownerCaller(TEST_USER_ENV),
     stub: {
       ...NO_RELAY_MACHINE,
-      getAuthHeaders: (_caller: UserCaller, key: string, opts?: AuthRequest) =>
-        store.getAuthHeaders(key, opts),
+      getAuth: async (_caller: UserCaller, key: string, opts?: AuthRequest) => {
+        const headers = await store.getAuthHeaders(key, opts);
+        const baseURL = headers === null ? null : await store.getCredentialBaseURL(key);
+
+        return headers === null ? null : { headers, ...(baseURL !== null && { baseURL }) };
+      },
       listCredentials: (_caller: UserCaller) => store.listCredentials(),
-      getCredentialBaseURL: (_caller: UserCaller, key: string) => store.getCredentialBaseURL(key),
     },
   };
 }

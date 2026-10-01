@@ -4,6 +4,14 @@
  * chains in the store bucket, which only a box's own state could name. The procedure and why each step is there:
  * docs/DEPLOYMENT.md, § Wrangler bindings.
  *
+ * SAFE TO STOP ANYWHERE. Everything a reset needs is checked before it deletes anything: the version the Worker
+ * serves and what it binds, the applications, and the REST token the REST-only deletions take. Its record goes to
+ * the releases bucket `started`, as `resets/<tag>.json` and the rollback barrier {@link LATEST_RESET_KEY}, before
+ * the first deletion, and `done` after the last. A reset that stops between them leaves its placeholder serving and
+ * its record `started`; run again, it finishes what that record names instead of refusing the placeholder. On
+ * 2026-09-30 one stopped with its placeholder up and two applications deleted, for want of a REST token checked
+ * only when it was first needed, and its rerun could only refuse.
+ *
  *   bun scripts/reset.ts plan <environment>           what a reset deletes, read from wrangler.jsonc
  *   bun scripts/reset.ts wipe <environment> <record>  delete it, recorded in <record> and the releases bucket;
  *                                                     production asks for `reset production` typed at a terminal
@@ -14,21 +22,26 @@ import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { evalSessionPath } from '@kinu.run/test-utils';
-import { deleteApplicationByRest, deleteR2Prefix, deletedByRest } from './cloudflare-rest';
-import { containerApplications, deployment, why, wrangler } from './infra-cloudflare';
+import { deleteApplicationByRest, deleteR2Prefix, deletedByRest, restApiToken } from './cloudflare-rest';
+import { type ContainerApplication, containerApplications, deployment, why, wrangler } from './infra-cloudflare';
 import { type DeployedConfig, INFRA_ENVIRONMENTS, type InfraEnvironment, deployedConfig, liveClasses } from './infra-manifest';
 
-/** What one reset deleted. */
+/** What one reset deleted, or is deleting. */
 export const ResetSchema = v.object({
   environment: v.picklist(INFRA_ENVIRONMENTS),
   worker: v.string(),
   tag: v.string(),
   at: v.string(),
+  /** Empty in a `started` record written before the placeholder answered with its version. */
   placeholderVersion: v.string(),
   classes: v.array(v.object({ className: v.string(), namespace: v.string() })),
   applications: v.array(v.object({ name: v.string(), id: v.string() })),
   /** Absent where the environment binds no devbox store, and in the records of resets before 2026-09-30. */
   chains: v.optional(v.object({ bucket: v.string(), prefix: v.string(), objects: v.number() })),
+  /** `started` from before the first deletion until after the last. Absent in the records of resets before
+   *  2026-10-01, written only once complete. Either way the record is a barrier no rollback crosses: from the
+   *  placeholder on, the storage it names is gone. */
+  state: v.optional(v.picklist(['started', 'done'])),
 });
 
 export type Reset = v.InferOutput<typeof ResetSchema>;
@@ -59,6 +72,45 @@ const HEALTH_ATTEMPTS = 8;
 
 const StamplessSchema = v.pipe(v.string(), v.parseJson(), v.object({ build: v.null() }));
 
+/** The version a Worker serves, and the class → namespace of every Durable Object it binds. */
+export interface Serving {
+  readonly versionId: string;
+  readonly bound: ReadonlyMap<string, string>;
+}
+
+/**
+ * What a reset reads and changes outside this file: the account (wrangler and the REST API, in
+ * {@link cloudflareTarget}), the deployment's origin, and the eval sessions this machine keeps for it. A test passes
+ * its own, which can fail at any step. Every call that fails throws.
+ */
+export interface ResetTarget {
+  serving: () => Serving;
+  applications: () => readonly ContainerApplication[];
+  /** The newest reset record of the releases bucket, or none. */
+  latest: () => Reset | undefined;
+  /** Uploads the placeholder that deletes `classes`, and answers its version. */
+  deployPlaceholder: (classes: readonly string[], tag: string) => string;
+  deleteApplication: (application: Reset['applications'][number]) => void;
+  /** Deletes every object under the prefix, and answers how many. */
+  deleteChains: (chains: { readonly bucket: string; readonly prefix: string }) => Promise<number>;
+  /** Puts the record in `file` at `key` in the releases bucket. */
+  putRecord: (key: string, file: string) => void;
+  /** Whether the origin's `/api/health` answers 200 `{ build: null }`. */
+  stampless: (attempt: number) => Promise<boolean>;
+  /** Drops every eval bearer this machine keeps for the origin: each named a session the reset deleted. */
+  forgetSessions: () => void;
+}
+
+export interface WipeInput {
+  readonly environment: InfraEnvironment;
+  readonly config: DeployedConfig;
+  /** Where the deploy reads the reset's record from, once it is done. */
+  readonly recordFile: string;
+  /** What the REST-only deletions authenticate with (`restApiToken`). */
+  readonly restToken: string;
+  readonly target: ResetTarget;
+}
+
 function origin(config: DeployedConfig): string {
   const value = config.vars?.CLI_PUBLIC_ORIGIN;
 
@@ -67,10 +119,8 @@ function origin(config: DeployedConfig): string {
   return value;
 }
 
-async function stampless(url: string): Promise<boolean> {
-  const answer = await fetch(url);
-
-  return answer.status === 200 && v.safeParse(StamplessSchema, await answer.text()).success;
+function bucketOf(config: DeployedConfig, binding: string): string | undefined {
+  return config.r2_buckets?.find((entry) => entry.binding === binding)?.bucket_name;
 }
 
 function run(argv: readonly string[]): string {
@@ -87,127 +137,218 @@ function plan(environment: InfraEnvironment) {
   return { config, classes: liveClasses(config.exports) };
 }
 
-/** Each one is named as it goes. */
-function deleteApplications(accountId: string, applications: readonly { readonly name: string; readonly id: string }[]): void {
-  for (const application of applications) {
-    if (deletedByRest(application.id)) {
-      const deleted = deleteApplicationByRest(accountId, application.id);
+/** The newest reset recorded in `bucket`, or none. */
+export function latestReset(bucket: string): Reset | undefined {
+  const read = wrangler(['r2', 'object', 'get', `${bucket}/${LATEST_RESET_KEY}`, '--pipe', '--remote'], 600_000);
+
+  if (read.ok) return v.parse(ResetSchema, JSON.parse(read.stdout));
+
+  if (`${read.stderr}\n${read.stdout}`.includes('The specified key does not exist.')) return undefined;
+
+  throw new Error(`wrangler r2 object get ${bucket}/${LATEST_RESET_KEY} failed: ${why(read)}`);
+}
+
+/** The account as wrangler and the REST API reach it. */
+function cloudflareTarget(environment: InfraEnvironment, config: DeployedConfig, scratch: string): ResetTarget {
+  const worker = config.name ?? '';
+  const releases = bucketOf(config, 'RELEASES_BUCKET') ?? '';
+  const site = origin(config);
+
+  return {
+    serving: () => {
+      const live = deployment(environment);
+
+      if (live.state !== 'deployed') throw new Error(`${worker} serves no version to reset: ${live.state === 'unknown' ? live.reason : 'it has no deployment'}`);
+
+      return {
+        versionId: live.versionId,
+        bound: new Map(live.bindings.flatMap((binding) => (binding.type === 'durable_object_namespace' && binding.target !== undefined
+          && binding.namespace !== undefined ? [[binding.target, binding.namespace] as const] : []))),
+      };
+    },
+    applications: () => {
+      const listed = containerApplications();
+
+      if ('failure' in listed) throw new Error(listed.failure);
+
+      return listed;
+    },
+    latest: () => latestReset(releases),
+    deployPlaceholder: (classes, tag) => {
+      const placeholder = join(scratch, 'wrangler.json');
+
+      writeFileSync(join(scratch, 'worker.js'), PLACEHOLDER);
+      writeFileSync(placeholder, JSON.stringify({
+        name: worker,
+        account_id: config.account_id,
+        main: 'worker.js',
+        compatibility_date: config.compatibility_date,
+        workers_dev: false,
+        routes: config.routes,
+        exports: Object.fromEntries(classes.map((name) => [name, { type: 'durable-object', state: 'deleted' }])),
+      }));
+
+      return /Version ID:\s*([0-9a-f-]{36})/u.exec(run(['deploy', '-c', placeholder, '--message', `kinu ${environment} ${tag}`]))?.[1] ?? '';
+    },
+    deleteApplication: (application) => {
+      if (!deletedByRest(application.id)) {
+        run(['containers', 'delete', application.id]);
+
+        return;
+      }
+
+      const deleted = deleteApplicationByRest(config.account_id ?? '', application.id);
 
       if (!deleted.ok) throw new Error(deleted.reason);
-    } else {
-      run(['containers', 'delete', application.id]);
-    }
+    },
+    deleteChains: (chains) => deleteR2Prefix({ accountId: config.account_id ?? '', bucket: chains.bucket, prefix: chains.prefix }),
+    putRecord: (key, file) => {
+      run(['r2', 'object', 'put', `${releases}/${key}`, '--file', file, '--content-type', 'application/json', '--remote']);
+    },
+    stampless: async (attempt) => {
+      const answer = await fetch(`${site}/api/health?reset=${String(attempt)}`);
 
-    console.log(`reset: deleted container application ${application.name} (${application.id})`);
+      return answer.status === 200 && v.safeParse(StamplessSchema, await answer.text()).success;
+    },
+    forgetSessions: () => {
+      rmSync(dirname(evalSessionPath(site, undefined)), { recursive: true, force: true });
+    },
+  };
+}
+
+/** Why a reset cannot delete `applications` and `chains` with `restToken`, or undefined: asked before it deletes. */
+function credentialRefusal(applications: Reset['applications'], chains: Reset['chains'], restToken: string): string | undefined {
+  const rest = applications.filter((application) => deletedByRest(application.id)).map((application) => application.name);
+  const needs = [...rest.length === 0 ? [] : [`container application(s) ${rest.join(', ')}`], ...chains === undefined ? [] : [`the chains under ${chains.bucket}/${chains.prefix}`]];
+
+  return restToken !== '' || needs.length === 0 ? undefined
+    : `${needs.join(' and ')} are deleted only through the REST API, and no REST token is set (KINU_CLOUDFLARE_API_TOKEN); nothing was deleted`;
+}
+
+/** The record at `file`, at `resets/<tag>.json` and at the barrier, in that order. */
+function record(target: ResetTarget, file: string, reset: Reset): void {
+  writeFileSync(file, JSON.stringify(reset));
+
+  for (const key of [`resets/${reset.tag}.json`, LATEST_RESET_KEY]) target.putRecord(key, file);
+}
+
+/** A version that binds no class is a reset's placeholder: this reset, then, which stopped before it was done or
+ *  finished before its build uploaded. Only its record can say which, and what is left. */
+function resumed(worker: string, live: Serving, latest: Reset | undefined): Reset {
+  if (latest === undefined || latest.worker !== worker || (latest.placeholderVersion !== '' && latest.placeholderVersion !== live.versionId)) {
+    throw new Error(`version ${live.versionId} of ${worker} binds no class, as a reset placeholder does, and no reset record names it: `
+      + 'deploy without --reset (with --bootstrap, the classes being gone)');
   }
+
+  console.log(`reset: ${worker} serves the placeholder of ${latest.tag}, whose record is ${latest.state ?? 'done'}; finishing it`);
+
+  return { ...latest, placeholderVersion: live.versionId };
 }
 
-/** Every chain object in the devbox store, or undefined where the environment binds none. */
-async function deleteChains(config: DeployedConfig): Promise<Reset['chains']> {
-  const store = config.r2_buckets?.find((entry) => entry.binding === DEVBOX_STORE_BINDING)?.bucket_name;
-
-  if (store === undefined) return undefined;
-  const objects = await deleteR2Prefix({ accountId: config.account_id ?? '', bucket: store, prefix: CHAIN_PREFIX });
-
-  console.log(`reset: deleted ${String(objects)} chain objects under ${store}/${CHAIN_PREFIX}`);
-
-  return { bucket: store, prefix: CHAIN_PREFIX, objects };
-}
-
-async function wipe(environment: InfraEnvironment, recordFile: string, scratch: string): Promise<Reset> {
-  const { config, classes } = plan(environment);
+/** Everything checked, the record and the barrier written `started`, then the placeholder that deletes the classes. */
+function begin(input: WipeInput, live: Serving): Reset {
+  const { config, target } = input;
   const worker = config.name ?? '';
-  const health = `${origin(config)}/api/health`;
-  const bucket = config.r2_buckets?.find((entry) => entry.binding === 'RELEASES_BUCKET')?.bucket_name;
-
-  if (bucket === undefined) throw new Error(`${worker} binds no RELEASES_BUCKET to keep the reset's record in`);
-  const live = deployment(environment);
-
-  if (live.state !== 'deployed') throw new Error(`${worker} serves no version to reset: ${live.state === 'unknown' ? live.reason : 'it has no deployment'}`);
-
-  const bound = new Map(live.bindings.flatMap((binding) => (binding.type === 'durable_object_namespace' && binding.target !== undefined
-    && binding.namespace !== undefined ? [[binding.target, binding.namespace] as const] : [])));
-
-  // The placeholder deletes what the live version binds: a class it does not carry fails the delete as non-existent,
-  // and one it carries and the list misses survives. wrangler.jsonc may name others, which the next deploy creates,
-  // or retire one, which is deleted here.
-  if (bound.size === 0) {
-    throw new Error(`version ${live.versionId} of ${worker} binds no class, as a reset placeholder does: deploy without --reset`);
-  }
-
-  const retired = [...bound.keys()].filter((name) => !classes.includes(name));
-  const added = classes.filter((name) => !bound.has(name));
-
-  const applications = containerApplications();
-
-  if ('failure' in applications) throw new Error(applications.failure);
+  const classes = liveClasses(config.exports);
   const names = new Set((config.containers ?? []).map((container) => container.name));
-  const namespaces = new Set(bound.values());
+  const namespaces = new Set(live.bound.values());
 
-  const doomed = applications.filter((application) => names.has(application.name)
-    || (application.namespace !== undefined && namespaces.has(application.namespace)));
+  const applications = target.applications()
+    .filter((application) => names.has(application.name) || (application.namespace !== undefined && namespaces.has(application.namespace)))
+    .map(({ name, id }) => ({ name, id }));
 
+  const store = bucketOf(config, DEVBOX_STORE_BINDING);
+  const chains = store === undefined ? undefined : { bucket: store, prefix: CHAIN_PREFIX, objects: 0 };
+  const refused = credentialRefusal(applications, chains, input.restToken);
+
+  if (refused !== undefined) throw new Error(refused);
   const tag = `reset-${new Date().toISOString().replace(/[-:]|\.\d+/gu, '')}`;
-  const placeholder = join(scratch, 'wrangler.json');
 
-  writeFileSync(join(scratch, 'worker.js'), PLACEHOLDER);
-  writeFileSync(placeholder, JSON.stringify({
-    name: worker,
-    account_id: config.account_id,
-    main: 'worker.js',
-    compatibility_date: config.compatibility_date,
-    workers_dev: false,
-    routes: config.routes,
-    exports: Object.fromEntries([...bound.keys()].map((name) => [name, { type: 'durable-object', state: 'deleted' }])),
-  }));
-  const deployed = run(['deploy', '-c', placeholder, '--message', `kinu ${environment} ${tag}`]);
-  const placeholderVersion = /Version ID:\s*([0-9a-f-]{36})/u.exec(deployed)?.[1] ?? '';
-  const after = deployment(environment);
+  const started: Reset = {
+    environment: input.environment, worker, tag, at: new Date().toISOString(), placeholderVersion: '',
+    classes: [...live.bound].map(([className, namespace]) => ({ className, namespace })), applications, state: 'started',
+  };
 
-  if (after.state !== 'deployed' || after.versionId !== placeholderVersion || after.bindings.some((binding) => binding.type === 'durable_object_namespace')) {
+  if (chains !== undefined) started.chains = chains;
+
+  // Before the first deletion: from the placeholder on, the storage is gone, and no rollback may cross that.
+  record(target, input.recordFile, started);
+  const placeholderVersion = target.deployPlaceholder([...live.bound.keys()], tag);
+  const after = target.serving();
+
+  if (after.versionId !== placeholderVersion || after.bound.size > 0) {
     throw new Error(`the placeholder uploaded as '${placeholderVersion}', and ${worker} does not serve it without Durable Objects`);
   }
 
-  console.log(`reset: ${worker} serves placeholder ${placeholderVersion} under ${tag}; deleted ${[...bound].map(([name, namespace]) => `${name} (${namespace})`).join(', ')}`
+  const retired = [...live.bound.keys()].filter((name) => !classes.includes(name));
+  const added = classes.filter((name) => !live.bound.has(name));
+
+  console.log(`reset: ${worker} serves placeholder ${placeholderVersion} under ${tag}; deleted ${started.classes.map((each) => `${each.className} (${each.namespace})`).join(', ')}`
     + `${retired.length === 0 ? '' : `; retired ${retired.join(', ')}`}${added.length === 0 ? '' : `; the deploy creates ${added.join(', ')}`}`);
 
-  // After the placeholder, so a refused upload leaves every application in place.
-  deleteApplications(config.account_id ?? '', doomed);
+  const placed = { ...started, placeholderVersion };
 
-  const reset: Reset = {
-    environment,
-    worker,
-    tag,
-    at: new Date().toISOString(),
-    placeholderVersion,
-    classes: [...bound].map(([className, namespace]) => ({ className, namespace })),
-    applications: doomed.map(({ name, id }) => ({ name, id })),
-  };
+  record(target, input.recordFile, placed);
 
-  // Last, once no box is left to write one.
-  const chains = await deleteChains(config);
+  return placed;
+}
 
-  if (chains !== undefined) reset.chains = chains;
+/** What the record names and is still there, deleted, the record written `done`, and the placeholder seen serving. */
+async function finish(input: WipeInput, reset: Reset): Promise<Reset> {
+  const { target } = input;
 
-  writeFileSync(recordFile, JSON.stringify(reset));
+  // The sessions died with the classes; the tiers mint new ones.
+  target.forgetSessions();
+  let done = reset;
 
-  for (const key of [`resets/${tag}.json`, LATEST_RESET_KEY]) {
-    run(['r2', 'object', 'put', `${bucket}/${key}`, '--file', recordFile, '--content-type', 'application/json', '--remote']);
+  if (reset.state === 'started') {
+    const there = new Set(target.applications().map((application) => application.id));
+    const left = reset.applications.filter((application) => there.has(application.id));
+    const refused = credentialRefusal(left, reset.chains, input.restToken);
+
+    if (refused !== undefined) throw new Error(refused);
+
+    for (const application of left) {
+      target.deleteApplication(application);
+      console.log(`reset: deleted container application ${application.name} (${application.id})`);
+    }
+
+    // Last, once no box is left to write one.
+    const objects = reset.chains === undefined ? undefined : await target.deleteChains(reset.chains);
+
+    done = { ...reset, state: 'done' };
+
+    if (reset.chains !== undefined) {
+      done.chains = { ...reset.chains, objects: objects ?? 0 };
+      console.log(`reset: deleted ${String(objects)} chain objects under ${reset.chains.bucket}/${reset.chains.prefix}`);
+    }
+
+    record(target, input.recordFile, done);
+  } else {
+    writeFileSync(input.recordFile, JSON.stringify(done));
   }
 
-  // Every eval bearer this machine keeps for the origin named a session the reset deleted; the tiers mint new ones.
-  rmSync(dirname(evalSessionPath(origin(config), undefined)), { recursive: true, force: true });
   let answered = false;
 
   for (let attempt = 1; attempt <= HEALTH_ATTEMPTS && !answered; attempt += 1) {
-    answered = await stampless(`${health}?reset=${String(attempt)}`);
+    answered = await target.stampless(attempt);
 
     if (!answered && attempt < HEALTH_ATTEMPTS) await Bun.sleep(15_000);
   }
 
-  if (!answered) throw new Error(`${health} never answered 200 { build: null }`);
+  if (!answered) throw new Error(`${origin(input.config)}/api/health never answered 200 { build: null }`);
 
-  return reset;
+  return done;
+}
+
+export async function wipe(input: WipeInput): Promise<Reset> {
+  const worker = input.config.name ?? '';
+
+  if (bucketOf(input.config, 'RELEASES_BUCKET') === undefined) throw new Error(`${worker} binds no RELEASES_BUCKET to keep the reset's record in`);
+  origin(input.config);
+  const live = input.target.serving();
+
+  return finish(input, live.bound.size === 0 ? resumed(worker, live, input.target.latest()) : begin(input, live));
 }
 
 /** Asks on the terminal, and only there: piped input is no person's answer. */
@@ -227,7 +368,7 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
   if (known && command === 'plan' && recordFile === undefined) {
     const { config, classes } = plan(environment);
 
-    const store = config.r2_buckets?.find((entry) => entry.binding === DEVBOX_STORE_BINDING)?.bucket_name;
+    const store = bucketOf(config, DEVBOX_STORE_BINDING);
 
     console.log(`${config.name ?? ''}: the classes the live version binds, of which wrangler.jsonc carries ${classes.join(', ')}; `
       + `container applications ${(config.containers ?? []).map((container) => container.name).join(', ')}, and those bound to the deleted namespaces`
@@ -243,7 +384,11 @@ async function main(argv: readonly string[], scratch: string): Promise<number> {
       return 1;
     }
 
-    const reset = await wipe(environment, recordFile, scratch);
+    const { config } = plan(environment);
+
+    const reset = await wipe({
+      environment, config, recordFile, restToken: restApiToken(), target: cloudflareTarget(environment, config, scratch),
+    });
 
     console.log(`reset: placeholder ${reset.placeholderVersion} answers /api/health with no build; recorded at resets/${reset.tag}.json`);
 

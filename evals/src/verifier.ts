@@ -1,5 +1,6 @@
 import * as v from 'valibot';
-import { JsonValueSchema, projectJsonValue, type JsonValue } from '@kinu.run/core';
+import { JsonValueSchema, projectJsonValue, type JsonValue, type SubordinateInspectionRequest } from '@kinu.run/core';
+import type { InspectionAnswer, PublicCraftedTool, PublicDirEntry, PublicExecutorResult, PublicSwarmRun, WorkBoard } from './session';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER, TRANSIENT_PLATFORM_ERRORS } from '@kinu.run/test-utils';
 import { redact, redactJson } from './redact';
@@ -25,8 +26,30 @@ function lostByThePlatform(call: string, answer: { reason: string; error: string
 export type VerifierSession = {
   slateOp(operation: JsonValue): Promise<JsonValue>;
   readFile(path: string, options?: { allowMissing?: boolean }): Promise<string>;
-  writeFile(path: string, content: string): Promise<void>;
+  writeFile(path: string, content: string | Uint8Array<ArrayBuffer>): Promise<void>;
+  listFiles(dir: string): Promise<readonly PublicDirEntry[]>;
+  craftedTools(): Promise<readonly PublicCraftedTool[]>;
+  workspaceWork(): Promise<WorkBoard>;
+  inspect(request: SubordinateInspectionRequest): Promise<InspectionAnswer>;
+  swarmRuns(): Promise<PublicSwarmRun[]>;
+  execute(executor: string, command: string): Promise<PublicExecutorResult>;
+  exposedPorts(executor: string): Promise<readonly { port: number; url: string }[]>;
 };
+
+/** A helper and its runs, as the inspector lists them: how each run ended, and the message that started it. */
+export type HelperWork = { name: string; status: string; runs: { status: string | null; userMessage: string | null }[] };
+
+/**
+ * The helpers that finished the work naming `subject`: a message naming it started one of their runs, and a run of
+ * their own completed. Told is not done: on 2026-10-01 every helper's model call on staging was refused, the lead
+ * did the helpers' work itself, and the helpers' transcripts still held the work they were given.
+ */
+export function finishedWork(helpers: readonly HelperWork[], subject: string): string[] {
+  return helpers
+    .filter((helper) => helper.runs.some((run) => run.status === 'completed')
+      && helper.runs.some((run) => (run.userMessage ?? '').includes(subject)))
+    .map((helper) => helper.name);
+}
 
 /** What a check saw: JSON-like data, projected to JSON when it is recorded. */
 export type Evidence = string | number | boolean | null | undefined | readonly Evidence[] | { readonly [key: string]: Evidence };
@@ -194,8 +217,109 @@ export class EvalVerifier {
   }
 
   /** Change the workspace's data mid-check, the way a person drops in a new file. */
-  writeFile(path: string, content: string): Promise<void> {
+  writeFile(path: string, content: string | Uint8Array<ArrayBuffer>): Promise<void> {
     return this.#session.writeFile(path, content);
+  }
+
+  /** One folder as the Files tab lists it; nothing for a folder that is not there. */
+  files(dir: string): Promise<readonly PublicDirEntry[]> {
+    return this.#session.listFiles(dir);
+  }
+
+  /** The tools the agent built for itself, as the Tools pane lists them. */
+  tools(): Promise<readonly PublicCraftedTool[]> {
+    return this.#session.craftedTools();
+  }
+
+  /** Every agent's plans and tasks, as the Work tab shows them. */
+  workspaceWork(): Promise<WorkBoard> {
+    return this.#session.workspaceWork();
+  }
+
+  /** The lead's helpers, retired ones included, as the Agents surface lists them. */
+  async helpers(): Promise<{ name: string; status: string; lifetime: string }[]> {
+    const helpers: { name: string; status: string; lifetime: string }[] = [];
+
+    for (let cursor: { after: string } | undefined; ;) {
+      const answer = await this.#session.inspect({ path: [], view: 'children', page: cursor === undefined ? {} : { cursor } });
+
+      if (answer.view !== 'children') throw new Error(`the lead's helpers could not be listed: ${JSON.stringify(answer)}`);
+      helpers.push(...answer.page.items);
+
+      if (answer.page.status === 'end') return helpers;
+      cursor = answer.page.next;
+    }
+  }
+
+  /** Every helper the lead hired, with its runs. */
+  async helperWork(): Promise<HelperWork[]> {
+    return Promise.all((await this.helpers()).map(async (helper) => ({
+      name: helper.name, status: helper.status, runs: await this.runsOf(helper.name),
+    })));
+  }
+
+  /**
+   * The lead's own tasks and their subtasks, in one list. Its board entries are those whose owner's path is empty,
+   * or, on a build whose owners carry no path, whose owner is none of its helpers.
+   */
+  async leadTasks(): Promise<{ title: string; status: string }[]> {
+    const [work, helpers] = await Promise.all([this.workspaceWork(), this.helpers()]);
+    const helperNames = new Set(helpers.map((helper) => helper.name));
+
+    return [...work.plans, ...work.tasks]
+      .filter((entry) => (entry.owner.path === undefined ? !helperNames.has(entry.owner.name) : entry.owner.path === null || entry.owner.path.length === 0))
+      .flatMap((entry) => entry.tasks.flatMap((task) => [task, ...task.subtasks]))
+      .map(({ title, status }) => ({ title, status }));
+  }
+
+  /** One helper's runs as its inspector lists them: how each ended, and the message that started it. */
+  async runsOf(helper: string): Promise<HelperWork['runs']> {
+    const runs: HelperWork['runs'] = [];
+
+    for (let cursor: { after: string } | undefined; ;) {
+      const answer = await this.#session.inspect({ path: [helper], view: 'runs', page: cursor === undefined ? {} : { cursor } });
+
+      if (answer.view !== 'runs') throw new Error(`${helper}'s runs could not be listed: ${JSON.stringify(answer)}`);
+      runs.push(...answer.page.items);
+
+      if (answer.page.status === 'end') return runs;
+      cursor = answer.page.next;
+    }
+  }
+
+  /** The swarms the lead ran, newest first, as the Swarms pane draws them. */
+  swarms(): Promise<PublicSwarmRun[]> {
+    return this.#session.swarmRuns();
+  }
+
+  /** One command on an executor, the call the Env pane makes, answered whole: output, exit code and any refusal. */
+  run(executor: string, command: string): Promise<PublicExecutorResult> {
+    return this.#session.execute(executor, command);
+  }
+
+  /** The preview addresses an executor serves, as the ports panel lists them. */
+  previews(executor: string): Promise<readonly { port: number; url: string }[]> {
+    return this.#session.exposedPorts(executor);
+  }
+
+  /**
+   * One command on an executor, the call the Env pane makes: what it printed. A refusal, a non-zero exit among
+   * them, throws with the product's words, so the check that ran it fails with them.
+   */
+  async execute(executor: string, command: string): Promise<string> {
+    const answer = await this.run(executor, command);
+    const refused = answer.refusal?.error ?? answer.error;
+
+    if (refused !== undefined) throw new Error(`${executor} refused the command: ${refused}`);
+
+    return answer.stdout ?? '';
+  }
+
+  /** A preview opened the way a person's browser opens it: no credential, the status and the page. */
+  async open(url: string): Promise<{ status: number; body: string }> {
+    const response = await fetch(url, { redirect: 'follow' });
+
+    return { status: response.status, body: await response.text() };
   }
 
   async collect(verify: (verifier: EvalVerifier) => Promise<void>): Promise<EvalCheck[]> {

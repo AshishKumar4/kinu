@@ -1,10 +1,15 @@
 import { execFileSync } from 'node:child_process';
 
 /**
- * The model published baselines are measured on: the product default on kinu.run, so a baseline
- * measures what a user gets. `KINU_EVAL_MODELS` adds others; each is its own cohort.
+ * The models a run measures unless `KINU_EVAL_MODELS` names others, each its own cohort: fast models off Workers AI,
+ * the owner's choice for evals (2026-09-18, 09-19). The product default, GLM-5.3 on Workers AI, spent 26 to 66 minutes
+ * a trial in the 2026-09-24 pilot (~100k output tokens at ~40 tok/s, 4-17% of it in 429 waits); Muse Spark spent 2 to
+ * 6 (2026-09-30, `kinu-logs/evals-fast`). Each runs on the eval account's own provider key, which both deployments'
+ * eval accounts hold for all three since 2026-10-01.
  */
-export const DEFAULT_MODEL = 'workers-ai/@cf/zai-org/glm-5.3';
+export const DEFAULT_MODELS: readonly [string, ...string[]] = [
+  'opencode-go/muse-spark-1.3-contributor', 'openrouter/inception/mercury-2.5', 'openrouter/inclusionai/ling-3.0-flash-vl',
+];
 
 /** The product as deployed, with no workspace setting changed. */
 export const DEFAULT_ARM = 'product';
@@ -12,13 +17,6 @@ export const DEFAULT_ARM = 'product';
 /** Trials per task, model and arm; a pass rate over fewer cannot separate a regression from noise. */
 export const DEFAULT_TRIALS = 10;
 
-/**
- * Trials a run holds at once. Every trial shares the eval account's Workers AI rate limit with every
- * other eval-service run, so trials past what it sustains only add 429 waits: on 2026-09-24, twelve
- * at once all sat in 429 backoff with no model step done after two minutes. `KINU_EVAL_CONCURRENCY`
- * overrides it; task files run one at a time.
- */
-export const DEFAULT_CONCURRENCY = 3;
 
 /** The paths whose changes can move an eval result; a change elsewhere is not named in the report. */
 export const EXERCISED_PATHS: readonly string[] = [
@@ -36,10 +34,8 @@ type Env = Record<string, string | undefined>;
 export interface EvalMatrix {
   readonly models: readonly string[];
   readonly arms: readonly string[];
-  /** Trials per cohort in this run, numbered from `firstTrial`. */
+  /** Trials per cohort in this run, numbered from 1. */
   readonly trials: number;
-  /** A run can hold one block of a cohort's trials, so a task's trials can be split across jobs. */
-  readonly firstTrial: number;
 }
 
 /** A positive integer from `env[name]`, or `fallback` when it is unset. */
@@ -52,9 +48,13 @@ function positiveInteger(env: Env, name: string, fallback: number): number {
   return value;
 }
 
-/** How many trials run at once, from `KINU_EVAL_CONCURRENCY`. */
+/**
+ * How many trials of a task run at once: all of them, unless `KINU_EVAL_CONCURRENCY` caps it for a provider that
+ * cannot hold them. A trial waits on its provider, not on this machine. Muse Spark met no provider wait with 20 trials
+ * at once (2026-09-26); Workers AI put all of 12 at once into 429 backoff (2026-09-24), so a run on it sets a cap.
+ */
 export function evalConcurrency(env: Env): number {
-  return positiveInteger(env, 'KINU_EVAL_CONCURRENCY', DEFAULT_CONCURRENCY);
+  return positiveInteger(env, 'KINU_EVAL_CONCURRENCY', Number.MAX_SAFE_INTEGER);
 }
 
 /** The cohorts one run measures, parsed before any trial spends inference. */
@@ -69,10 +69,9 @@ export function evalMatrix(env: Env, knownArms: readonly string[]): EvalMatrix {
   }
 
   return {
-    models: models.length > 0 ? models : [DEFAULT_MODEL],
+    models: models.length > 0 ? models : DEFAULT_MODELS,
     arms: arms.length > 0 ? arms : [DEFAULT_ARM],
     trials: positiveInteger(env, 'KINU_EVAL_TRIALS', DEFAULT_TRIALS),
-    firstTrial: positiveInteger(env, 'KINU_EVAL_FIRST_TRIAL', 1),
   };
 }
 

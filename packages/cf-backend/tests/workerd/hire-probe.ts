@@ -15,6 +15,8 @@ import { HIRE_CHILD_MODEL, hireControlUrl, hireModelsBaseUrl, REPORT_MARK, type 
 
 export * from '../../src/server';
 
+export { default } from '../../src/server';
+
 
 
 
@@ -249,10 +251,6 @@ type OwnerTarget = Pick<UserDO,
   'registerWorkspace' | 'ensureWorkspaceCapability' | 'setCredential' | 'getProfileCatalog' | 'putProfileCatalog'>;
 
 export class HireProbeRoot extends Agent<ProbeRootEnv> {
-  /** Settles once the durable lane's `msg` call has returned its receipt, its admission written. */
-  async msgSent(): Promise<void> {
-    await fetch(hireControlUrl(this.name, 'msg-sent'));
-  }
 
   private target(workspace: string): Promise<HireTarget> {
     return getAgentByName<ProbeEnv, HireOrchestrator>(this.env.OrchestratorAgent, workspace);

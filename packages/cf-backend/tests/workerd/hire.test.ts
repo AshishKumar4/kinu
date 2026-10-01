@@ -6,8 +6,10 @@
 
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { DELEGATION_MAX_DEPTH } from '@kinu.run/core';
+import { DELEGATION_MAX_DEPTH, ORCHESTRATOR_AGENT_SLUG } from '@kinu.run/core';
 import { CHAIN_BOTTOM, CHILD_ANSWER, HIRE_MISSION, NEST_RELAY, type HireObservation, type LogRow } from './hire-shapes';
+import * as v from 'valibot';
+import { HireRosterSchema, hireSocket } from '../helpers/hire-socket';
 
 /** Re-acquired per use: the id survives an eviction, a stub does not. */
 const probe = (workspace: string) => env.HIRE_PROBE.get(env.HIRE_PROBE.idFromName(workspace));
@@ -202,15 +204,13 @@ describe('hire', () => {
     const workspace = 'hire-dismiss';
 
     await probe(workspace).setup(workspace, 'hire-root-durable', 'park');
-    // Held, not awaited: the root's turn waits on the child's answers, which the dismissal ends.
-    const hiring = probe(workspace).openHire(workspace, 'Hire one durable auditor; the owner will dismiss it.');
-
+    await probe(workspace).openHire(workspace, 'Hire one durable auditor; the owner will dismiss it.');
+    // The child's request reaching the model is the turn parked; Dismiss before it would retire an unstarted child.
     await probe(workspace).childSpoke();
     // Hangs while the retirement waits on the parked turn: nothing below releases it.
     const dismissed = await probe(workspace).dismissChild(workspace);
 
     await abortAllDurableObjects();
-    await Promise.allSettled([hiring]);
     await probe(workspace).reenter(workspace);
 
     const observed: HireObservation = await probe(workspace).observe(workspace);
@@ -218,6 +218,7 @@ describe('hire', () => {
 
     expect(observed.roster.find((row) => row.name === dismissed)?.status).toBe('dismissed');
     expect(observed.reports.join(' ')).not.toContain(CHILD_ANSWER);
+    expect(childTurns).toHaveLength(1);
     expect(childTurns[0]?.runs).toBe(1);
   });
 
@@ -284,40 +285,47 @@ describe('hire', () => {
     expect(childTurns[0]?.runs).toBe(1);
   });
   it('a message to a hired durable subordinate produces one turn and no unbounded admissions', async () => {
-    const workspace = 'hire-msg';
+    const app = env.HIRE_APP;
 
-    await probe(workspace).setup(workspace, 'hire-root-durable', 'answer');
-    // Held: under the bug the caller's turn never finishes, so the count reaches the record first.
-    const hiring = probe(workspace).openHire(workspace, 'Hire a durable auditor, then send it one message.');
+    const created = await app.fetch('http://localhost/api/user/workspaces', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'hire-msg-client', displayName: 'Hire Message Client' }),
+    });
 
-    await probe(workspace).msgSent();
+    expect(created.ok).toBe(true);
+    const { name: workspace } = v.parse(v.object({ name: v.string() }), await created.json());
 
-    const early: HireObservation = await probe(workspace).observe(workspace);
-    const earlyAdmissions = childAdmissions(early);
+    const configured = await app.fetch('http://localhost/api/user/credentials/openai-compat.default', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ kind: 'openai-compat', baseURL: `http://hire-models.invalid/w/${encodeURIComponent(workspace)}/v1`, apiKey: 'hire-fixture-key' }),
+    });
 
-    expect(earlyAdmissions, [
-      `subordinate_task rows: ${String(earlyAdmissions.length)}`,
-      `newest body head: ${earlyAdmissions.at(-1)?.body.slice(0, 160) ?? ''}`,
-    ].join(' | ')).toHaveLength(2);
+    expect(configured.ok).toBe(true);
 
-    await hiring;
-    await probe(workspace).callerObserved();
+    const client = await hireSocket(app, `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(workspace)}`, CHILD_ANSWER);
 
-    const observed: HireObservation = await probe(workspace).observe(workspace);
+    try {
+      await client.rpc('setModel', ['openai-compat/hire-root-durable'], v.object({ spec: v.string() }));
+      client.send('Hire a durable auditor, then send it one message.');
+      await client.completed();
+      const roster = await client.rpc('listSubordinates', [], HireRosterSchema);
+      const observed = await probe(workspace).observe(workspace);
 
-    expect(observed.roster.filter((row) => row.lifetime === 'durable')).toHaveLength(1);
-    expect(childAdmissions(observed)).toHaveLength(2);
+      expect(roster.filter((row) => row.lifetime === 'durable')).toHaveLength(1);
+      expect(roster.every((row) => row.status !== 'working')).toBe(true);
+      expect(childAdmissions(observed)).toHaveLength(2);
+      const childTurns = observed.turns.filter((row) => row.actorId !== observed.rootActorId);
 
-    const childTurns = observed.turns.filter((row) => row.actorId !== observed.rootActorId);
+      expect(childTurns).toHaveLength(1);
+      expect(childTurns[0]?.runs).toBe(2);
+      expect(observed.rootReports.join(' ')).toContain(CHILD_ANSWER);
+      const child = childTurns[0]?.actorId ?? '';
+      const archived = await probe(workspace).archiveSections(workspace);
 
-    // The message runs as its own turn, or steers the brief's when that one is still running: never more.
-    expect(childTurns).toHaveLength(1);
-    expect(childTurns[0]?.runs).toBeLessThanOrEqual(2);
-
-    const child = childTurns[0]?.actorId ?? '';
-    const archived = await probe(workspace).archiveSections(workspace);
-
-    expect(archived.listed).toContain(child);
-    expect(archived.sections[child]).toBeGreaterThan(0);
+      expect(archived.listed).toContain(child);
+      expect(archived.sections[child]).toBeGreaterThan(0);
+    } finally {
+      client.close();
+    }
   });
 });

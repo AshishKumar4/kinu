@@ -111,6 +111,7 @@ describe('connectMcpServers', () => {
     try {
       const stop = new AbortController();
       const running = conn.call('echo', 'held', {}, stop.signal);
+      expect(Bun.peek.status(running)).toBe('pending');
       stop.abort();
       await expect(running).rejects.toBeInstanceOf(Error);
     } finally {

@@ -27,16 +27,18 @@ function resolved(model: LanguageModel): v.InferOutput<typeof ResolvedModelSchem
 }
 
 interface FakeUserDO extends ModelRelayHub {
-  getAuthHeaders(caller: UserCaller, key: string): Promise<CredentialHeaders | null>;
-  getCredentialBaseURL(caller: UserCaller, key: string): Promise<string | null>;
+  getAuth(caller: UserCaller, key: string): Promise<{ headers: CredentialHeaders } | null>;
   listCredentials(caller: UserCaller): Promise<Array<{ key: string; kind: 'bearer'; createdAt: number; updatedAt: number }>>;
 }
 
 function fakeUserDO(credentials: Readonly<Record<string, CredentialHeaders>> = {}): FakeUserDO {
   return {
     ...NO_RELAY_MACHINE,
-    async getAuthHeaders(_caller, key) { return credentials[key] ?? null; },
-    async getCredentialBaseURL() { return null; },
+    async getAuth(_caller, key) {
+      const headers = credentials[key];
+
+      return headers === undefined ? null : { headers };
+    },
     async listCredentials() {
       return Object.keys(credentials).map((key) => ({ key, kind: 'bearer' as const, createdAt: 0, updatedAt: 0 }));
     },
@@ -341,6 +343,38 @@ describe('OwnedModelServices — the provider snapshot', () => {
 
     expect(profile.tiers.fast.model).toBe(glm);
     expect(profile.tiers.deep.model).toBe('openai-compatible/house-model');
+  });
+
+  // 180 workspaces of one account each listed providers at once on staging (2026-10-01 01:07Z); a read per
+  // question overloaded that account's object, and its capability tokens failed.
+  test('a listing asks the account for its credentials once', async () => {
+    catalogUp();
+    const account = fakeUserDO({ 'openai.bearer': { Authorization: 'Bearer o' }, 'groq.bearer': { Authorization: 'Bearer g' } });
+    let reads = 0;
+
+    const counted: FakeUserDO = {
+      ...account,
+      async listCredentials(caller) {
+        reads += 1;
+
+        return await account.listCredentials(caller);
+      },
+    };
+
+    const services = new OwnedModelServices({
+      env: fakeEnv(counted, platformGatewayEnv()),
+      agentName: () => 'snapshot',
+      appTitle: 'Kinu',
+      ownerRequired: false,
+      getOwnerUserId: () => 'owner-1',
+      getUserCaller: async () => ({ workspaceToken: 'wt' }),
+      getCredentialsRevision: async () => 0,
+      reportModelCall: unobservedSpend,
+    });
+
+    await services.profileProviderSnapshot();
+
+    expect(reads).toBe(1);
   });
 
   test('a complete listing is memoized, and only a change expires it', async () => {

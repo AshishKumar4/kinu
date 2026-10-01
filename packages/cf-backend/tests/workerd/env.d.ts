@@ -17,7 +17,7 @@ import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { ChatAnswers, SeedAnswer } from './store-reset-shapes';
 import type { AddressedAnswers } from './addressed-name-shapes';
-import type { OnePlaneObservation } from './agent-facet-shapes';
+import type { OnePlaneObservation, RelayedAnswer } from './agent-facet-shapes';
 import type { AttributedLine } from './attribution-shapes';
 import type {
   DeployFakeRefusal, DeployFakeServedBuild, DeployFakeStall, DeployFakeState, DeployFakeWeight,
@@ -40,7 +40,7 @@ import type {
 import type {
   DurabilityReservation, PreviewAnswer, RemovedSlate, RpcAnswer, ServedSlate,
 } from './slate-durability-shapes';
-import type { JsonValue } from '@kinu.run/core';
+import type { JsonValue, SlateCallResult } from '@kinu.run/core';
 
 interface SlateActorRootRpc extends Rpc.DurableObjectBranded {
   craftedSlate(): Promise<string>;
@@ -138,7 +138,6 @@ interface HireProbeRpc extends Rpc.DurableObjectBranded {
   childSpoke(): Promise<void>;
   callerObserved(): Promise<void>;
   openHire(workspace: string, prompt: string): Promise<void>;
-  msgSent(): Promise<void>;
   reenter(workspace: string): Promise<void>;
   wakeReturned(workspace: string): Promise<void>;
   /** Every delegated turn ended and every answered task agent retired. */
@@ -178,6 +177,9 @@ interface AccountResetProbeRpc extends Rpc.DurableObjectBranded {
 interface AgentFacetProbeRpc extends Rpc.DurableObjectBranded {
   onePlane(workspace: string, agent: string): Promise<OnePlaneObservation>;
   swarmNode(workspace: string): Promise<ReadableStream<Uint8Array>>;
+  agentWorkspaceAnswer(workspace: string, agent: string): Promise<RelayedAnswer<Readonly<Record<string, string>> | null>>;
+  agentWorkspaceListing(workspace: string, agent: string): Promise<RelayedAnswer<readonly { readonly key: string; readonly kind: string }[]>>;
+  slateBindingAnswer(workspace: string): Promise<RelayedAnswer<SlateCallResult>>;
 }
 
 interface AddressedNameProbeRpc extends Rpc.DurableObjectBranded {
@@ -355,6 +357,7 @@ declare global {
       LOADER: WorkerLoader;
       /** The production Worker entry hosted by `public-surface-probe`, WebSocket upgrades included. */
       PUBLIC_SURFACE: Fetcher;
+      HIRE_APP: Fetcher;
       SURFACE_CONTROL: Service<SurfaceControlRpc>;
       /** Production deploy run, hosted by `deploy-probe` as a subclass with read-only storage windows. */
       DEPLOY_RUN_PROBE: DurableObjectNamespace<DeployRunProbeRpc>;

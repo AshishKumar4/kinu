@@ -17,7 +17,7 @@
   "account_id": "f44999d1ddda7012e9a87729eba250f1",
   "main": "worker.ts",
 
-  "compatibility_date": "2026-09-28",
+  "compatibility_date": "2026-09-30",
   // `nodejs_compat` for the same reason the product sets it. A different runtime
   // is a different measurement.
   "compatibility_flags": ["nodejs_compat"],
@@ -57,7 +57,7 @@
     {
       "class_name": "SnapshotChainBox",
       "scheduling_policy": "durable_object",
-      "images": { "devbox": { "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:2f37e1def8b1bb8789a15a129b85cdba7566c204bda11c28fb18f3ef963fce74" } }
+      "images": { "devbox": { "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:c072f8f5755700d26bc962e2eefa9fa8daeb8d4da498ce04440b54a5adcfb5cd" } }
     }
   ],
 

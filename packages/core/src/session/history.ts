@@ -197,6 +197,11 @@ export class SessionHistory {
     return { selection, members, ...await this.partition(members) };
   }
 
+  /** Revisions are durable: a past one reads back as it was. */
+  async materializeAt(selection: ContextSelection): Promise<MaterializedContext> {
+    return this.partition(this.context.entries(selection));
+  }
+
   private async partition(members: readonly ContextEntry[]): Promise<MaterializedContext> {
     const all = await this.messages.materializeAll(members);
     const entries: ContextEntry[] = [];

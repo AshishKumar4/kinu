@@ -532,8 +532,8 @@ function agentComposer(workspace: string, agent: string): string {
   return `document.querySelector(${JSON.stringify(`[data-agent-pane="${workspace}/agents/${agent}"] textarea:not([disabled])`)}) !== null`;
 }
 
-/** What the reader sees of one agent: its tab in the strip and its entry in
- *  the sidebar, each by the agent's own name and each with the title shown. */
+/** What the reader sees of one agent: its tab by URL name and its drilled
+ *  sidebar row by actor id, each with the title shown. */
 export interface AgentPresence {
   readonly tab: string | null;
   readonly sidebar: string | null;
@@ -544,16 +544,16 @@ const SIDEBAR_LISTED = `document.querySelector('aside ul[aria-busy="false"]') !=
 
 const AgentPresenceSchema = v.object({ tab: v.nullable(v.string()), sidebar: v.nullable(v.string()) });
 
-async function agentPresence(page: Page, workspace: string, agent: string): Promise<AgentPresence> {
+async function agentPresence(page: Page, workspace: string, agent: string, actorId: string): Promise<AgentPresence> {
   return v.parse(AgentPresenceSchema, await page.evaluate((input) => {
     const shown = (element: Element | null): string | null =>
       element !== null && element.getClientRects().length > 0 ? (element.textContent ?? '').trim() : null;
 
     return {
       tab: shown(document.querySelector(`nav[aria-label="Workspace agents"] [data-agent-tab="${input.agent}"]`)),
-      sidebar: shown(document.querySelector(`aside a[href="/workspace/${input.workspace}/agents/${input.agent}"]`)),
+      sidebar: shown(document.querySelector(`[data-sidebar-agents="${input.workspace}"] [data-agent-row="${input.actorId}"]`)),
     };
-  }, { workspace, agent }));
+  }, { workspace, agent, actorId }));
 }
 
 export interface AgentReturnVerdict {
@@ -577,10 +577,11 @@ export interface AgentReturnVerdict {
  * they come back to it.
  *
  * Make an agent with the strip's '+', message it and let the turn end (its
- * title lands), rename it through its tab, go to another workspace, then open
- * the agent in a new page: its tab, its sidebar entry and its conversation must
- * all be there. #13, the owner's report of 2026-09-23: every agent was present
- * over the API and a reloaded page showed none of them.
+ * title lands), rename it through its tab and open the Agents sidebar. Go to
+ * another workspace, then return in a new page and open Agents again: its tab,
+ * its sidebar row and its conversation must all be there. #13, the owner's
+ * report of 2026-09-23: every agent was present over the API and a reloaded page
+ * showed none of them.
  */
 export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentReturnVerdict> {
   const workspace = await createFlowWorkspace(target, 'agent-return');
@@ -604,18 +605,29 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
     const renamed = `Flow ${agent.slice(-6)}`;
 
     await sendAndSettle(page, said);
+    const renameLedger = await frameLedger(page);
 
     // Rename through the tab: its title button opens the name field with the
     // current name selected, so typing replaces it.
     await page.click(`[data-agent-tab="${agent}"] button[title="Rename agent"]`);
     await until(page, "the agent's name field", `document.querySelector('input[aria-label="Agent name"]') !== null`);
     await page.keyboard.type(renamed);
+    renameLedger.restart();
     await page.keyboard.press('Enter');
     await until(page, 'the name field to close', `document.querySelector('input[aria-label="Agent name"]') === null`);
-    await until(page, 'the tab under its new name',
-      `(document.querySelector(${JSON.stringify(`[data-agent-tab="${agent}"]`)})?.textContent ?? '').includes(${JSON.stringify(renamed)})`);
+    // The rename reply can close the editor before the deferred reads_changed notice refreshes the sidebar.
+    await settledAfter(page, renameLedger, 'renameSubordinateAgent', 'listWorkspaceAgents');
+    await renameLedger.stop();
+    await page.click('[data-agents-counter]');
+    await painted(page);
 
-    const before = await agentPresence(page, workspace, agent);
+    // The current row belongs to the agent whose chat is open; its key is an actor id, not the URL name.
+    const actorId = v.parse(v.string(), await page.$eval(
+      `[data-sidebar-agents="${workspace}"] [data-agent-row][aria-current="true"]`,
+      (row) => row.getAttribute('data-agent-row'),
+    ));
+
+    const before = await agentPresence(page, workspace, agent, actorId);
 
     await page.goto(`${target.origin}/workspace/${encodeURIComponent(elsewhere)}`, { waitUntil: 'load' });
     await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
@@ -626,12 +638,13 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
 
     // Back to the workspace, the way a person returns: its own page, not the agent's.
     await back.goto(`${target.origin}/workspace/${encodeURIComponent(workspace)}`, { waitUntil: 'load' });
-    await settledAfter(back, ledger, 'getWorkspaceSnapshot', 'getChatHistoryPage');
+    await settledAfter(back, ledger, 'getWorkspaceSnapshot', 'getChatHistoryPage', 'listWorkspaceAgents');
     // The sidebar's workspaces arrive over HTTP once the roster socket opens, which the ledger does not see.
     await until(back, "the sidebar's workspace list", SIDEBAR_LISTED);
+    await back.click('[data-agents-counter]');
     await painted(back);
 
-    const after = await agentPresence(back, workspace, agent);
+    const after = await agentPresence(back, workspace, agent, actorId);
 
     // Its conversation, through its tab, when the tab is there to press.
     let conversation = '';

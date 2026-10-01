@@ -41,6 +41,7 @@ describe('createHostShell', () => {
     const controller = new AbortController();
     const gate = await pipeGate();
     const command = shell.exec('read released < ' + shellQuote(gate.fifo) + '; echo done', { signal: controller.signal });
+    expect(Bun.peek.status(command)).toBe('pending');
     controller.abort(new Error('stop requested'));
     const result = await command;
     expect(result.stdout).not.toContain('done');

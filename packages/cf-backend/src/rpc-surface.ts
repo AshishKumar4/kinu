@@ -100,6 +100,7 @@ const USER_DO_METHODS = [
   'ensureProfile',
   'ensureWorkspaceCapability',
   'finishClaudeSignIn',
+  'getAuth',
   'getAuthHeaders',
   'getCodexStatus',
   'getConfig',

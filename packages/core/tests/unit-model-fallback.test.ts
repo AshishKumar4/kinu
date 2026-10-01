@@ -8,7 +8,7 @@ import { z } from 'zod';
 import {
   createChatModel, createFallbackCooldowns, createOpenAICompatProvider, createProviderRegistry, runChat,
   type FallbackCooldowns,
-  type AuthResolution, type ChatEvent, type ChatFallback, type ProviderDeps,
+  type AuthResolution, type ChatEvent, type ChatFallback, type ModelCallDeps,
 } from '../src/index';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 import type { MediaModality } from '../src/prompting/attachment-sanitizer';
@@ -323,8 +323,9 @@ async function accountTurn(
     ['openai-compat.default@home', { headers: { Authorization: 'Bearer key-home' }, baseURL }],
   ]);
 
-  const deps: ProviderDeps = {
+  const deps: ModelCallDeps = {
     env: {},
+    sessionAffinity: 'kinu-test',
     async getAuth(key) { return stored.get(key) ?? null; },
     async hasCredential(key) { return stored.has(key); },
     async listCredentialKeys() { return [...stored.keys()]; },

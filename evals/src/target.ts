@@ -36,15 +36,11 @@ export function resolveEvalTarget(env: Env): EvalTarget {
 
 const HealthSchema = v.object({
   build: v.object({ sha: v.pipe(v.string(), v.regex(/^[0-9a-f]{7,40}$/)) }),
-  versionId: v.nullable(v.string()),
 });
 
-/** What the deployment serves now, the product a trial measures: the build's sha, and the Worker version that runs
- *  it. A version changes with every deploy, config and secrets included, so a redeploy of one build is a new one;
- *  a loopback dev server has none. */
+/** What the deployment serves now, the product a trial measures: the build's sha. */
 export interface Served {
   readonly sha: string;
-  readonly versionId: string | null;
 }
 
 export function deployedBuild(target: EvalTarget): Promise<Served> {
@@ -54,7 +50,7 @@ export function deployedBuild(target: EvalTarget): Promise<Served> {
     if (!response.ok) throw new DeploymentAnswer(`/api/health answered ${String(response.status)}`, response.status);
     const health = v.parse(HealthSchema, await response.json());
 
-    return { sha: health.build.sha, versionId: health.versionId };
+    return { sha: health.build.sha };
   });
 }
 

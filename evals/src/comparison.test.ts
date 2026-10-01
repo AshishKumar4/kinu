@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { compareEvalResults, fisherExact, renderEvalComparison, validateEvalResults } from './comparison';
+import { compareEvalResults, evalGateVerdict, fisherExact, renderEvalComparison, validateEvalResults, whyIncomplete } from './comparison';
 
 /**
  * `infra`: the deployment ended the turn in error. `refused`: it answered the turn's request with this failure.
@@ -7,6 +7,7 @@ import { compareEvalResults, fisherExact, renderEvalComparison, validateEvalResu
  */
 type Trial = {
   pass: boolean; infra?: boolean; refused?: string; reset?: string; productSha?: string; taskVersion?: string; failed?: string; trial?: number;
+  inputTokens?: number; cacheReadTokens?: number; costUsd?: number; model?: string; durationMs?: number; harnessInfra?: boolean;
 };
 
 function outcomeOf(trial: Trial) {
@@ -17,11 +18,12 @@ function outcomeOf(trial: Trial) {
   return trial.refused === undefined ? { status: 'completed' } : { status: 'refused', message: trial.refused };
 }
 
-/** A vitest JSON report of one task's trials, as the reporter writes it, cut to the fields the comparison reads. */
-function report(taskId: string, trials: readonly Trial[], side: { productSha: string; evalCommit: string }): string {
+/** One task file's vitest JSON result, cut to the fields the comparison reads. */
+function fileResult(taskId: string, trials: readonly Trial[], side: { productSha: string; evalCommit: string },
+  timing?: { startTime?: number; endTime?: number }) {
   const assertionResults = trials.map((trial, index) => ({
     status: trial.pass ? 'passed' : 'failed',
-    duration: 60_000,
+    duration: trial.durationMs ?? 60_000,
     meta: {
       harness: {
         run: {
@@ -32,7 +34,10 @@ function report(taskId: string, trials: readonly Trial[], side: { productSha: st
             },
             events: [],
           },
-          usage: { model: 'workers-ai/@cf/zai-org/glm-5.3', metadata: {} },
+          usage: {
+            model: trial.model ?? 'workers-ai/@cf/zai-org/glm-5.3', inputTokens: trial.inputTokens,
+            metadata: { cacheReadTokens: trial.cacheReadTokens, costUsd: trial.costUsd },
+          },
           output: {
             metrics: { modelTurns: 4, toolCalls: 6, toolErrors: 0, providerWaits: 2, providerWaitMs: 30_000 },
             turns: [{
@@ -42,13 +47,17 @@ function report(taskId: string, trials: readonly Trial[], side: { productSha: st
                 : [],
             }],
           },
-          errors: [],
+          errors: trial.harnessInfra === true ? [{ name: 'InfraError', message: 'the public request disconnected' }] : [],
         },
       },
     },
   }));
 
-  return JSON.stringify({ testResults: [{ name: `/repo/evals/tasks/${taskId}.eval.ts`, assertionResults }] });
+  return { name: `/repo/evals/tasks/${taskId}.eval.ts`, ...timing, assertionResults };
+}
+
+function report(taskId: string, trials: readonly Trial[], side: { productSha: string; evalCommit: string }): string {
+  return JSON.stringify({ testResults: [fileResult(taskId, trials, side)] });
 }
 
 function trialsOf(passed: number, total: number, extra: Partial<Trial> = {}): Trial[] {
@@ -125,6 +134,109 @@ describe('compareEvalResults', () => {
   });
 });
 
+describe('metric accounting', () => {
+  test('cache rates weight prompt tokens within cohorts and across unequal tasks, separately on each model and side', () => {
+    const model = 'opencode-go/muse-spark-1.3-contributor';
+
+    const leg = (side: { productSha: string; evalCommit: string }, reads: readonly [number, number, number]) => JSON.stringify({
+      testResults: [
+        fileResult('alpha', [
+          { pass: true, model, inputTokens: 100, cacheReadTokens: reads[0] },
+          { pass: false, model, inputTokens: 900, cacheReadTokens: reads[1] },
+        ], side),
+        fileResult('beta', [
+          { pass: true, model, inputTokens: 2000, cacheReadTokens: reads[2] },
+          { pass: true, model: 'openrouter/inception/mercury-2.5', inputTokens: 10_000, cacheReadTokens: 0 },
+        ], side),
+      ],
+    });
+
+    const comparison = compareEvalResults(leg(BASE, [60, 360, 1800]), leg(NEXT, [20, 180, 600]));
+    const cohort = comparison.rows.find((row) => row.taskId === 'alpha' && row.model === model);
+    const pooled = comparison.profiles.find((profile) => profile.model === model);
+
+    expect(cohort?.baseline?.cacheHitRate).toBe(0.42);
+    expect(cohort?.candidate?.cacheHitRate).toBe(0.2);
+    expect(pooled?.baseline?.cacheHitRate).toBe(0.74);
+    expect(pooled?.candidate.cacheHitRate).toBeCloseTo(0.2666666667, 10);
+  });
+
+  test('a missing prompt or cache-read count invalidates the whole non-infra cohort and pooled model', () => {
+    for (const missing of [{ inputTokens: 900 }, { cacheReadTokens: 360 }, {}]) {
+      const comparison = compareEvalResults(null, report('t', [
+        { pass: true, inputTokens: 100, cacheReadTokens: 60 },
+        { pass: false, ...missing },
+      ], NEXT));
+
+      expect(comparison.rows[0]?.candidate?.cacheHitRate).toBeNull();
+      expect(comparison.profiles[0]?.candidate.cacheHitRate).toBeNull();
+    }
+  });
+
+  test('infra trials do not enter cache rates, resets do, and all attempted trials still enter spend', () => {
+    const infra: Trial[] = [
+      { pass: false, infra: true, inputTokens: 100_000, cacheReadTokens: 0, costUsd: 0.1 },
+      { pass: false, harnessInfra: true, costUsd: 0.2 },
+    ];
+
+    const comparison = compareEvalResults(null, report('t', [
+      { pass: true, inputTokens: 100, cacheReadTokens: 60, costUsd: 0.01 },
+      { pass: false, reset: 'the isolate was reset for memory', inputTokens: 100, cacheReadTokens: 0, costUsd: 0.03 },
+      ...infra,
+    ], NEXT));
+
+    expect(comparison.rows[0]?.candidate?.cacheHitRate).toBe(0.3);
+    expect(comparison.profiles[0]?.candidate.cacheHitRate).toBe(0.3);
+    expect(comparison.totals.candidate.costUsd).toBeCloseTo(0.34, 10);
+    expect(compareEvalResults(null, report('t', infra, NEXT)).rows[0]?.candidate?.cacheHitRate).toBeNull();
+  });
+
+  test('the report distinguishes an unreported cache count from a reported cold cache', () => {
+    const comparison = compareEvalResults(
+      report('t', [{ pass: true, inputTokens: 100 }], BASE),
+      report('t', [{ pass: true, inputTokens: 100, cacheReadTokens: 0 }], NEXT),
+    );
+
+    expect(renderEvalComparison(comparison)).toContain('— → 0.0%');
+  });
+
+  test('one unreported cost makes cohort, model and suite cost unknown, but a reported zero remains measured', () => {
+    const compare = (lastCost?: number) => compareEvalResults(null, report('t', [
+      { pass: true, costUsd: 0.01 }, { pass: false, costUsd: lastCost },
+    ], NEXT));
+
+    const unknown = compare();
+    const known = compare(0);
+
+    expect(unknown.rows[0]?.candidate?.meanCostUsd).toBeNull();
+    expect(unknown.profiles[0]?.candidate.meanCostUsd).toBeNull();
+    expect(unknown.totals.candidate.costUsd).toBeNull();
+    expect(known.rows[0]?.candidate?.meanCostUsd).toBe(0.005);
+    expect(known.profiles[0]?.candidate.meanCostUsd).toBe(0.005);
+    expect(known.totals.candidate.costUsd).toBe(0.01);
+  });
+
+  test('suite wall spans the earliest start to the latest end, not summed concurrent durations or file order', () => {
+    const baseline = JSON.stringify({ testResults: [
+      fileResult('late', [{ pass: true, durationMs: 180_000 }], BASE, { startTime: 61_000, endTime: 241_000 }),
+      fileResult('early', [{ pass: true, durationMs: 120_000 }, { pass: true, durationMs: 90_000 }], BASE,
+        { startTime: 1000, endTime: 121_000 }),
+    ] });
+
+    const candidate = JSON.stringify({ testResults: [
+      fileResult('late', [{ pass: true, durationMs: 180_000 }], NEXT, { startTime: 101_000, endTime: 281_000 }),
+      fileResult('early', [{ pass: true, durationMs: 120_000 }, { pass: true, durationMs: 90_000 }], NEXT,
+        { startTime: 21_000, endTime: 141_000 }),
+    ] });
+
+    const comparison = compareEvalResults(baseline, candidate);
+
+    expect(comparison.totals.baseline?.wallTimeMs).toBe(240_000);
+    expect(comparison.totals.candidate.wallTimeMs).toBe(260_000);
+    expect(compareEvalResults(null, report('t', [{ pass: true }], NEXT)).totals.candidate.wallTimeMs).toBeNull();
+  });
+});
+
 describe('validateEvalResults', () => {
   test('a baseline needs every trial and no infrastructure failure, and reports its wall time', () => {
     expect(validateEvalResults(report('t', trialsOf(4, 10), BASE), 10)).toEqual([{ taskId: 't', slowestTrialMs: 60_000 }]);
@@ -137,5 +249,78 @@ describe('validateEvalResults', () => {
 
     expect(validateEvalResults(report('t', [...block(1), ...block(6)], BASE), 10)).toHaveLength(1);
     expect(() => validateEvalResults(report('t', [...block(1), ...block(1)], BASE), 10)).toThrow(/expected 1 to 10 once each/);
+  });
+});
+
+describe('evalGateVerdict, what a promote reads', () => {
+  /** Both legs of one run: the baseline and the candidate deployment, measured under the same definitions. */
+  const complete = { baseline: null, candidate: null };
+
+  test('two complete legs stand when nothing fell, and say what they found', () => {
+    const verdict = evalGateVerdict(compareEvalResults(report('order-book', trialsOf(6, 10), BASE), report('order-book', trialsOf(6, 10), NEXT)), complete);
+
+    expect(verdict).toEqual({ pass: true, reason: expect.stringContaining('Unchanged') });
+  });
+
+  test('a significant fall fails it, naming the task and both pass counts', () => {
+    const verdict = evalGateVerdict(compareEvalResults(report('order-book', trialsOf(9, 10), BASE), report('order-book', trialsOf(2, 10), NEXT)), complete);
+
+    expect(verdict.pass).toBe(false);
+    expect(verdict.reason).toContain('order-book');
+    expect(verdict.reason).toContain('9/10');
+    expect(verdict.reason).toContain('2/10');
+  });
+
+  test('a baseline leg that is not a complete report fails it, naming the baseline and why', () => {
+    const verdict = evalGateVerdict(
+      compareEvalResults(report('order-book', trialsOf(6, 10), BASE), report('order-book', trialsOf(6, 10), NEXT)),
+      { baseline: 'order-book has 10 infrastructure failures', candidate: null },
+    );
+
+    expect(verdict).toEqual({ pass: false, reason: expect.stringMatching(/^The baseline's report is not complete: order-book has 10 infrastructure failures/) });
+  });
+
+  test('a candidate leg that is not a complete report fails it, naming the candidate and why, whatever the comparison says', () => {
+    const verdict = evalGateVerdict(
+      compareEvalResults(report('order-book', trialsOf(6, 10), BASE), report('order-book', trialsOf(6, 9), NEXT)),
+      { baseline: null, candidate: 'order-book holds trials [1..9]' },
+    );
+
+    expect(verdict).toEqual({ pass: false, reason: expect.stringMatching(/^The candidate's report is not complete: order-book holds trials \[1\.\.9\]/) });
+  });
+
+  test('no baseline report fails it: nothing was compared', () => {
+    expect(evalGateVerdict(compareEvalResults(null, report('order-book', trialsOf(10, 10), NEXT)), complete))
+      .toEqual({ pass: false, reason: expect.stringMatching(/^No baseline/) });
+  });
+
+  test('legs that could not be compared fail it, with the reason each task could not be', () => {
+    const verdict = evalGateVerdict(
+      compareEvalResults(report('order-book', trialsOf(6, 10), BASE), report('order-book', trialsOf(6, 10, { taskVersion: 'v2' }), NEXT)), complete,
+    );
+
+    expect(verdict.pass).toBe(false);
+    expect(verdict.reason).toContain('task version changed');
+  });
+});
+
+describe('whyIncomplete, whether a leg can stand in a verdict', () => {
+  const leg = report('order-book', trialsOf(6, 10), NEXT);
+
+  test('a leg with every task, every trial, no infrastructure failure and the planned build is complete', () => {
+    expect(whyIncomplete(leg, { trials: 10, taskFiles: ['order-book.eval.ts'], build: 'bbbbbbbb2' })).toBeNull();
+    expect(whyIncomplete(leg, { trials: 10, build: 'bbbbbbb' })).toBeNull();
+  });
+
+  test('a task of these definitions missing from the leg is named', () => {
+    expect(whyIncomplete(leg, { trials: 10, taskFiles: ['order-book.eval.ts', 'launch-prep.eval.ts'] })).toBe('launch-prep.eval.ts did not run');
+  });
+
+  test('a leg that ran on another build than the one planned for it is named, with both builds', () => {
+    expect(whyIncomplete(leg, { trials: 10, build: 'aaaaaaaa1' })).toBe('its trials ran on build bbbbbbbb2, not the planned aaaaaaaa1');
+  });
+
+  test('missing trials are named as validateEvalResults names them', () => {
+    expect(whyIncomplete(report('order-book', trialsOf(6, 9), NEXT), { trials: 10 })).toContain('holds trials [1, 2, 3, 4, 5, 6, 7, 8, 9]');
   });
 });

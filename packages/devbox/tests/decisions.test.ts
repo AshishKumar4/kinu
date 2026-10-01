@@ -945,6 +945,8 @@ describe('the checkpoint lane — one checkpoint at a time', () => {
     };
 
     const first = lane.run('tick', op);
+    expect(lane.busy()).toBe(true);
+    expect(Bun.peek.status(first)).toBe('pending');
     const second = lane.run('tick', op);
     release.resolve();
     const [a, b] = await Promise.all([first, second]);
@@ -990,6 +992,8 @@ describe('the checkpoint lane — one checkpoint at a time', () => {
     };
 
     const first = lane.run('tick', slowTick);
+    expect(lane.busy()).toBe(true);
+    expect(Bun.peek.status(first)).toBe('pending');
     const second = lane.run('quiesce', quiesce);
     release.resolve();
     await Promise.all([first, second]);

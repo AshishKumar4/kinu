@@ -10,15 +10,7 @@ import { createDirectWorkersAIFetch } from './direct-workers-ai-fetch';
 import { WORKERS_AI_FALLBACK_MODEL_CATALOG, WORKERS_AI_PREFERRED_MODEL_IDS } from './workers-ai-catalog';
 import { CLOUDFLARE_OAUTH_CRED_KEY } from './cloudflare-oauth';
 
-export interface WorkersAIOptions {
-  /** Prefix-cache affinity key — routes same-key requests to the same replica. */
-  sessionAffinity?: string;
-}
-
-export function createWorkersAIProvider(
-  opts: WorkersAIOptions = {},
-  deploymentBinding?: Parameters<typeof createDirectWorkersAIFetch>[0],
-): ModelProvider {
+export function createWorkersAIProvider(deploymentBinding?: Parameters<typeof createDirectWorkersAIFetch>[0]): ModelProvider {
   return {
     id: 'workers-ai',
     label: 'Cloudflare Workers AI',
@@ -35,7 +27,7 @@ export function createWorkersAIProvider(
       preferredIds: WORKERS_AI_PREFERRED_MODEL_IDS,
     }),
     createModel(modelId, deps): LanguageModel {
-      const requestHeaders = opts.sessionAffinity ? { 'x-session-affinity': opts.sessionAffinity } : undefined;
+      const requestHeaders = { 'x-session-affinity': deps.sessionAffinity };
 
       if (deploymentBinding) {
         return createOpenAICompatible({

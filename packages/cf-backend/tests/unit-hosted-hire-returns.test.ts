@@ -5,10 +5,10 @@
  */
 import { expect, test } from 'bun:test';
 import { sqlOver } from '@kinu.run/test-utils';
-import { EventLog, actorConnectionTag, admitSubordinateTask } from '@kinu.run/core';
+import { EventLog, SubordinateRosterStore, actorConnectionTag, admitSubordinateTask } from '@kinu.run/core';
 import { createRecordingLogger, KinuError, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { makeSqlExec } from '../../core/tests/helpers';
-import { asPane, joinHarnessKeepAlives } from './helpers/agents-sdk';
+import { asPane, joinHarnessFibers, joinHarnessKeepAlives } from './helpers/agents-sdk';
 import {
   actorOver, agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedSubordinateHarness, wakeForDelegatedTask,
 } from './helpers/actor-harness';
@@ -156,6 +156,8 @@ test("a durable hire whose turn fails delivers its failure to its hirer as a mes
   const told = gateway.runs.filter((run) => openingOf(run).includes('This turn failed before an answer existed'));
 
   expect(told.length).toBe(1);
+  expect(new SubordinateRosterStore(makeSqlExec(workspace.db), actorOver(workspace.db, middleId)).list())
+    .toMatchObject([{ status: 'awaiting_input', currentTask: 'Durable task.' }]);
 });
 
 test("a Stop reaches the agent a stopped helper hired, and wakes no one", async () => {
@@ -182,6 +184,9 @@ test("a Stop reaches the agent a stopped helper hired, and wakes no one", async 
   await workspace.agent.cancelCurrentWork();
   await driveUntil(workspace, 'the Stop never ended the hired agent\'s turn', () => count(durableId, 'run_end') > 0);
 
+  await joinHarnessFibers();
+  expect(new SubordinateRosterStore(makeSqlExec(workspace.db), actorOver(workspace.db, middleId)).list())
+    .toMatchObject([{ status: 'awaiting_input', currentTask: 'Durable task.' }]);
   expect(count(middleId, 'run_start')).toBe(1);
 });
 

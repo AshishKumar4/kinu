@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import {
+  agentAffinityKey,
   BackgroundJobStore,
   BUILTIN_TOOL_DESCRIPTIONS,
   BUILTIN_TOOLS,
@@ -559,12 +560,12 @@ export function getLocalEnsemble(name: string): EnsembleReport {
 }
 
 /** Resolving costs credentials, so `runEnsemble` takes this as a callback rather than resolving up front. */
-function localJudge(resolver: LocalModelResolver, named: string, report: ModelCallSink): EnsembleJudge {
+function localJudge(resolver: LocalModelResolver, named: string, workspace: string, report: ModelCallSink): EnsembleJudge {
   const spec = resolver.normalizeSpecSync(named);
 
   return {
     spec,
-    llm: createCompletionLLM({ model: resolver.resolveModel(spec), spec, stage: 'judge', spend: { source: 'judge', report } }),
+    llm: createCompletionLLM({ model: resolver.resolveModel(spec, agentAffinityKey(workspace)), spec, stage: 'judge', spend: { source: 'judge', report } }),
   };
 }
 
@@ -580,7 +581,7 @@ export async function runLocalOutcomeEnsemble(
     const sql = makeSql(db);
     initTurnOutcomeTables((ddl) => { db.exec(ddl); });
     // Choosing judges reads the catalog; resolving one needs credentials. Deferred so a label-less workspace is told that, not "unauthenticated".
-    const { resolver } = createConfiguredLocalModelResolver({ agentName: name });
+    const { resolver } = createConfiguredLocalModelResolver();
     const actor = openWorkspaceMainActor(sql);
     const report = unpricedLedgerSink(new RunEventRecorder(sql, actor));
 
@@ -590,7 +591,7 @@ export async function runLocalOutcomeEnsemble(
         chatSpec: () => resolver.normalizeSpecSync(actor.config.getModel()),
         candidates: () => resolver.judgeCandidates(),
       })).specs,
-      judge: (named) => localJudge(resolver, named, report),
+      judge: (named) => localJudge(resolver, named, name, report),
     });
   } finally {
     db.close();
@@ -604,7 +605,7 @@ export async function runLocalCorpusEval(name: string, input: {
   specs: string[] | null;
 }): Promise<CorpusEvalReport> {
   ensureLocalAgent(name);
-  const { resolver } = createConfiguredLocalModelResolver({ agentName: name });
+  const { resolver } = createConfiguredLocalModelResolver();
   const db = new Database(agentDbPath(name));
 
   try {
@@ -619,7 +620,7 @@ export async function runLocalCorpusEval(name: string, input: {
       candidates: () => resolver.judgeCandidates(),
     });
 
-    const judges = selection.specs.map((named) => localJudge(resolver, named, report));
+    const judges = selection.specs.map((named) => localJudge(resolver, named, name, report));
 
     return await runCorpusEval({
       turns: input.turns,
@@ -627,7 +628,7 @@ export async function runLocalCorpusEval(name: string, input: {
       classifier: {
         name: `${chatSpec} (turn-outcome classifier)`,
         llm: createCompletionLLM({
-          model: resolver.resolveModel(chatSpec), spec: chatSpec, stage: 'chat', spend: { source: 'fast', report },
+          model: resolver.resolveModel(chatSpec, agentAffinityKey(name)), spec: chatSpec, stage: 'chat', spend: { source: 'fast', report },
         }),
       },
       judges,
@@ -714,7 +715,7 @@ export async function createLocalTimerTrigger(name: string, input: { cron?: stri
 }
 
 export async function setLocalWorkspaceModel(name: string, spec: string): Promise<{ spec: string }> {
-  const { resolver } = createConfiguredLocalModelResolver({ agentName: name });
+  const { resolver } = createConfiguredLocalModelResolver();
 
   return withLocalWritableDb(name, (db) => setModel({
     config: openWorkspaceMainActor(makeSql(db)).config,

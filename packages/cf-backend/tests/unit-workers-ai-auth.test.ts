@@ -162,7 +162,7 @@ describe('Workers AI credential refresh', () => {
     });
 
     const result = await generateText({
-      model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6'),
+      model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', 'kinu-test'),
       prompt: 'ping',
     });
 
@@ -199,7 +199,7 @@ describe('Workers AI credential refresh', () => {
 
     try {
       await generateText({
-        model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6'),
+        model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', 'kinu-test'),
         prompt: 'ping',
       });
     } catch (cause) {

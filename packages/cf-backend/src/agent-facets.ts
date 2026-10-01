@@ -2,7 +2,7 @@
 import { RpcTarget, WorkerEntrypoint, exports } from 'cloudflare:workers';
 import type { UIMessageChunk } from 'ai';
 import * as v from 'valibot';
-import { remoteContextTree } from '@kinu.run/core';
+import { relayedAnswer, remoteContextTree } from '@kinu.run/core';
 import type { AgentOwnInspection, ArchiveSqlCursor, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ObservedCall, ProviderEnv, WorkMode, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace } from './agent-facet/agent-turn';
@@ -60,8 +60,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   answerMetadata(turnId: string, narration: readonly string[]) { return this.answers.answerMetadata(turnId, narration); }
   finishTurn(turnId: string, end: AgentTurnEnd) { return this.answers.finishTurn(turnId, end); }
   failTurn(turnId: string, failure: string) { return this.answers.failTurn(turnId, failure); }
-  getAuthHeaders(key: string, opts?: AuthRequest) { return this.answers.getAuthHeaders(key, opts); }
-  getCredentialBaseURL(key: string) { return this.answers.getCredentialBaseURL(key); }
+  getAuth(key: string, opts?: AuthRequest) { return this.answers.getAuth(key, opts); }
   listCredentials() { return this.answers.listCredentials(); }
   relayDevice(provider: RelayedProvider) { return this.answers.relayDevice(provider); }
   relayModelCall(deviceId: string, callId: string, request: Request) { return this.answers.relayModelCall(deviceId, callId, request); }
@@ -108,32 +107,31 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
     return namespace.get(namespace.idFromString(this.ctx.props.workspace)).agentWorkspace(this.ctx.props.actorId);
   }
 
-  session() { return this.host().session(); }
-  stateSession() { return this.host().stateSession(); }
-  memory() { return this.host().memory(); }
-  program(turnId: string, ...args: Parameters<Executor['execute']>) { return this.host().program(turnId, ...args); }
-  traceTurn(turnId: string, event: AgentTrace) { return this.host().traceTurn(turnId, event); }
-  resume(turnId: string) { return this.host().resume(turnId); }
-  guard(turnId: string, ...args: Parameters<MissionBudgetPort['guard']>) { return this.host().guard(turnId, ...args); }
-  debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>) { return this.host().debit(turnId, ...args); }
-  prepareTurn(turnId: string) { return this.host().prepareTurn(turnId); }
-  profile(turnId: string, availableTools: readonly string[], workMode: WorkMode) { return this.host().profile(turnId, availableTools, workMode); }
-  advise(review: AgentReview) { return this.host().advise(review); }
-  enqueueTurn(input: ProgrammaticTurn) { return this.host().enqueueTurn(input); }
-  executeTool(call: AgentToolCall) { return this.host().executeTool(call); }
-  observe(lines: ReadableStream<Uint8Array>, call: ObservedCall) { return this.host().observe(lines, call); }
-  answerMetadata(turnId: string, narration: readonly string[]) { return this.host().answerMetadata(turnId, narration); }
-  finishTurn(turnId: string, end: AgentTurnEnd) { return this.host().finishTurn(turnId, end); }
-  failTurn(turnId: string, failure: string) { return this.host().failTurn(turnId, failure); }
-  getAuthHeaders(key: string, opts?: AuthRequest) { return this.host().getAuthHeaders(key, opts); }
-  getCredentialBaseURL(key: string) { return this.host().getCredentialBaseURL(key); }
-  listCredentials() { return this.host().listCredentials(); }
-  relayDevice(provider: RelayedProvider) { return this.host().relayDevice(provider); }
-  relayModelCall(deviceId: string, callId: string, request: Request) { return this.host().relayModelCall(deviceId, callId, request); }
-  cancelModelRelay(callId: string) { return this.host().cancelModelRelay(callId); }
-  forwardCodex(callId: string, request: Request) { return this.host().forwardCodex(callId, request); }
-  sayToParent(signal: AgentSignal) { return this.host().sayToParent(signal); }
-  cancelCodex(callId: string) { return this.host().cancelCodex(callId); }
+  session() { return relayedAnswer(this.host().session()); }
+  stateSession() { return relayedAnswer(this.host().stateSession()); }
+  memory() { return relayedAnswer(this.host().memory()); }
+  program(turnId: string, ...args: Parameters<Executor['execute']>) { return relayedAnswer(this.host().program(turnId, ...args)); }
+  traceTurn(turnId: string, event: AgentTrace) { return relayedAnswer(this.host().traceTurn(turnId, event)); }
+  resume(turnId: string) { return relayedAnswer(this.host().resume(turnId)); }
+  guard(turnId: string, ...args: Parameters<MissionBudgetPort['guard']>) { return relayedAnswer(this.host().guard(turnId, ...args)); }
+  debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>) { return relayedAnswer(this.host().debit(turnId, ...args)); }
+  prepareTurn(turnId: string) { return relayedAnswer(this.host().prepareTurn(turnId)); }
+  profile(turnId: string, availableTools: readonly string[], workMode: WorkMode) { return relayedAnswer(this.host().profile(turnId, availableTools, workMode)); }
+  advise(review: AgentReview) { return relayedAnswer(this.host().advise(review)); }
+  enqueueTurn(input: ProgrammaticTurn) { return relayedAnswer(this.host().enqueueTurn(input)); }
+  executeTool(call: AgentToolCall) { return relayedAnswer(this.host().executeTool(call)); }
+  observe(lines: ReadableStream<Uint8Array>, call: ObservedCall) { return relayedAnswer(this.host().observe(lines, call)); }
+  answerMetadata(turnId: string, narration: readonly string[]) { return relayedAnswer(this.host().answerMetadata(turnId, narration)); }
+  finishTurn(turnId: string, end: AgentTurnEnd) { return relayedAnswer(this.host().finishTurn(turnId, end)); }
+  failTurn(turnId: string, failure: string) { return relayedAnswer(this.host().failTurn(turnId, failure)); }
+  getAuth(key: string, opts?: AuthRequest) { return relayedAnswer(this.host().getAuth(key, opts)); }
+  listCredentials() { return relayedAnswer(this.host().listCredentials()); }
+  relayDevice(provider: RelayedProvider) { return relayedAnswer(this.host().relayDevice(provider)); }
+  relayModelCall(deviceId: string, callId: string, request: Request) { return relayedAnswer(this.host().relayModelCall(deviceId, callId, request)); }
+  cancelModelRelay(callId: string) { return relayedAnswer(this.host().cancelModelRelay(callId)); }
+  forwardCodex(callId: string, request: Request) { return relayedAnswer(this.host().forwardCodex(callId, request)); }
+  sayToParent(signal: AgentSignal) { return relayedAnswer(this.host().sayToParent(signal)); }
+  cancelCodex(callId: string) { return relayedAnswer(this.host().cancelCodex(callId)); }
 }
 
 const UIChunkSchema = v.custom<UIMessageChunk>((value) => v.is(v.looseObject({ type: v.string() }), value), 'a UI message chunk');
