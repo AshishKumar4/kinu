@@ -63,7 +63,6 @@ import {
   WakeRowsSchema,
   WAKE_MARKER,
   type WakeDriveResult,
-  type WakeHoldPlacement,
   type WakeRows,
 } from './two-turn-shapes';
 import { ownerCaller, type PeerMessage, type SessionTranscript, type WorkMode } from '@kinu.run/core';
@@ -220,26 +219,23 @@ export class ObservedOrchestrator extends ProductionOrchestrator {
     return transcript;
   }
 
-  /** Parks a turn-end extension over `/wake/wait`, holding the settle window open
-   *  (between the answer's commit and the pump's next item), and a turn's start; a measure has no history. */
-  private _settleHoldInstalled = false;
-  private installSettleHold(): void {
-    if (this._settleHoldInstalled) return;
-    this._settleHoldInstalled = true;
+
+  /** Genesis can hold a turn before its first step. */
+  private _startHoldInstalled = false;
+  private installStartHold(): void {
+    if (this._startHoldInstalled) return;
+    this._startHoldInstalled = true;
     this.extensions.register({
-      name: 'probe.settle-hold',
+      name: 'probe.start-hold',
       onTurnStart: async ({ history }) => {
         if (history.length > 0) await fetch('http://probe-control.invalid/wake/wait?at=start');
-      },
-      onTurnEnd: async () => {
-        await fetch('http://probe-control.invalid/wake/wait?at=settle');
       },
     });
   }
 
   /** Only the execute is the probe's; schema, wrap and runner are the product's. */
   protected override getRawToolsForWorkMode(mode: WorkMode, claimScope?: string): ToolSet {
-    this.installSettleHold();
+    this.installStartHold();
     const tools = super.getRawToolsForWorkMode(mode, claimScope);
     const shell = tools.shell;
 
@@ -1022,14 +1018,10 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     }
   }
 
-  /**
-   * Background wake with the settle window held (`where`: reply step or settle): the wake
-   * asks the loop for a turn while the interactive turn owns it; on the loop, 'queued'
-   * means the pump runs it next.
-   */
-  async backgroundWakeConversation(where: WakeHoldPlacement): Promise<WakeDriveResult> {
-    const workspace = `wake-workspace-${where}`;
-    const owner = `wake-owner-${where}`;
+  /** A job settles while the interactive reply owns the loop; its queued wake must run next. */
+  async backgroundWakeConversation(): Promise<WakeDriveResult> {
+    const workspace = 'wake-workspace-reply';
+    const owner = 'wake-owner-reply';
     const target: QueueTarget = await this.queueTarget(workspace);
 
     const caller = await ownerCaller(this.env);
@@ -1043,7 +1035,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
     await target.setModel('openai-compat/probe-wake');
     await target.setSoul('# Wake Probe\n\n## Mission\n\nFollow the owner\'s exact request.');
     await this.httpReset();
-    await fetch('http://probe-control.invalid/wake/hold', { method: 'POST', body: JSON.stringify({ where }) });
+    await fetch('http://probe-control.invalid/wake/hold', { method: 'POST', body: JSON.stringify({ where: 'reply' }) });
 
     let socket: WebSocket | null = null;
 
@@ -1098,7 +1090,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeRootEnv> {
           const calls = await this.httpCalls();
 
           return v.parse(WakeDriveResultSchema, {
-            where, rows, releasedAt, settledAt,
+            rows, releasedAt, settledAt,
             calls: calls.filter((call) => call.model === 'probe-wake')
               .map((call) => ({ model: call.model, users: call.users, toolResults: call.toolResults })),
           });
