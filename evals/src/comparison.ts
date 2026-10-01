@@ -290,7 +290,7 @@ function stats({ assertions }: Cohort): EvalStats {
  * baseline data and pass. Returns each task's wall time, which the report records.
  */
 export function validateEvalResults(text: string, expectedTrials: number): { taskId: string; slowestTrialMs: number }[] {
-  const files = parseResults('baseline', text);
+  const files = parseResults('the', text);
 
   for (const file of files) {
     if (file.assertionResults.length === 0) {
