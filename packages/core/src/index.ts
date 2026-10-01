@@ -47,7 +47,7 @@ export { initAllTables, initWorkspaceSchema, initActorStateSchema, type Workspac
 
 export { resetGuardedExec, StoragePredatesResetError } from './state/store-reset';
 
-export { initUserTables, PROFILE_CATALOG_CONFIG_KEY } from './state/user-schema';
+export { initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS, type WorkspaceKeyedRows } from './state/user-schema';
 
 export {
   DEFAULT_SOUL_MD,
