@@ -228,9 +228,12 @@ restores an archive as a local workspace. The backup action in the web app
 exports the same set of data.
 
 Exporting a cloud workspace needs an interactive session (`kinu auth`). A
-scoped CI token can run tasks but cannot take the database. Export reads the
-live database page by page, so pause writes to the workspace if you need a
-consistent copy; changes made during the export may be missing. The archive
+scoped CI token can run tasks but cannot take the database. A cloud export
+takes the workspace's files from one snapshot, but it reads the database live,
+page by page, so pause writes to the workspace if you need a consistent copy;
+changes made during the export may be missing. If the workspace restarts while
+you export it, the snapshot ends and `kinu export` starts again from the
+beginning. The archive
 leaves out capability secrets, but treat it as sensitive data anyway.
 `kinu workspace delete` is permanent, so export first.
 

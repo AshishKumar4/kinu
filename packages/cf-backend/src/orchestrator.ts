@@ -12,7 +12,7 @@ import { KINU_TIMER_JOB } from "./wake-jobs";
 import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
   ArchiveCursorSchema,
-  createWorkspaceForkSink, createWorkspaceForkSource, settledWorkspaceSoul, workspaceArchiveFiles, writeWorkspaceSoul,
+  createWorkspaceForkSink, createWorkspaceForkSource, settledWorkspaceSoul, workspaceArchiveStore, writeWorkspaceSoul,
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
   createReportCodemodeProvider, HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
   recoverActorTurns, EventLog, dismissOrphanedAssignments, actorReferenceOf, subordinateDescendants, TEMPORARY_LIFETIME,
@@ -4126,7 +4126,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       workspace: this.name,
       source: 'cloud',
       cursor: parseArchiveCursor(cursor),
-      files: workspaceArchiveFiles(workspace),
+      store: workspaceArchiveStore(workspace),
       agents: this.agentArchiveSource(),
     });
   }
@@ -4170,15 +4170,12 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (this.wipe === undefined) await this.releaseOutsideState();
 
-    // Once per instance: the wipe takes the tables, and the SDK resets the isolate only on a timer after it
-    // (agents 0.24 `destroy()`), so a delete that arrives in between joins this one instead of reading storage.
     this.wipe ??= { ownerUserId, done: this.wipeStorage() };
     await this.wipe.done;
 
     return { ok: true };
   }
 
-  /** What the workspace holds outside its own storage; each step is safe to repeat, so a failed one is retried. */
   private async releaseOutsideState(): Promise<void> {
     // First: revoke all preview URLs, else answering a stale one would create a fresh container object.
     // The watermark outranks every earlier record (core preview/preview-exposures.ts).
@@ -4198,10 +4195,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     }
   }
 
-  /** The delete under way on this instance, with the owner it was authorized for. */
   private wipe: { readonly ownerUserId: string | null; readonly done: Promise<void> } | undefined;
 
-  /** Reads the facets before its first await, while the tables are whole. */
   private async wipeStorage(): Promise<void> {
     // deleteAll misses facet storage.
     if (this.storageRefusal === undefined && this.ctx.storage.sql.exec('SELECT 1 FROM workspace_identity').toArray().length > 0) {
@@ -4210,7 +4205,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }
     }
 
-    // agents base: drops SDK tables, deleteAlarm, deleteAll (takes the filesystem), aborts the isolate.
+    // Drops SDK tables, alarms and storage; the isolate resets later, so a concurrent delete joins `wipe`.
     await this.destroy();
   }
 

@@ -1,13 +1,12 @@
+import { readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { beforeAll } from 'vitest';
 import { createJudge, describeEval } from 'vitest-evals';
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
 import { evalCommit, evalMatrix } from './config';
 import { createKinuHarness } from './harness';
-import { deleteWorkspace, listWorkspaces } from './session';
-import { heldWorkspaces, sweepEvalWorkspaces } from './sweep';
-import { ARMS, resolveEvalTarget, type EvalTarget } from './target';
+import { trialAccounts, trialSlot } from './slot';
+import { ARMS, resolveEvalTarget } from './target';
 import { taskVersion, type EvalRunInput, type EvalRunOutput, type EvalTask } from './task';
 
 const FunctionalJudge = createJudge<EvalRunInput, EvalRunOutput>('functional result', ({ output }) => {
@@ -25,24 +24,11 @@ const FunctionalJudge = createJudge<EvalRunInput, EvalRunOutput>('functional res
   };
 });
 
-/** Before a task's first trial: its account keeps no eval workspace a dead run left behind (`sweep.ts`). */
-async function sweep(target: EvalTarget): Promise<void> {
-  const swept = await sweepEvalWorkspaces({
-    list: () => listWorkspaces(target.origin, target.identity),
-    remove: (name) => deleteWorkspace(target.origin, target.identity, name),
-    held: heldWorkspaces(target.origin),
-    now: Date.now(),
-  });
-
-  console.warn(`[evals] ${target.origin}: deleted ${String(swept.deleted.length)} eval workspace(s) no run still marks live`
-    + `${swept.deleted.length === 0 ? '' : ` (${swept.deleted.join(', ')})`}; ${String(swept.live.length)} marked live`
-    + `${swept.held.map(({ name, reason }) => `; ${name} held: ${reason}`).join('')}`);
-}
-
 /**
  * Register one task as model x arm x trial cases. Trials run concurrently, each on its own
- * workspace, so a task takes as long as its slowest trial. A missing identity or a bad matrix fails
- * here, at collection, before any inference. Every trial's evidence goes under one directory per run, retained
+ * workspace and its own account (`slot.ts`), so a task takes as long as its slowest trial. A missing
+ * identity, a bad matrix or one past the trial accounts a deployment has fails here, at collection,
+ * before any inference. Every trial's evidence goes under one directory per run, retained
  * beside every other family's runs (`resolveArtifactRoot`), never under a swept root.
  */
 export function defineTaskEval(task: EvalTask): void {
@@ -54,11 +40,16 @@ export function defineTaskEval(task: EvalTask): void {
     `evals-${task.id}-${String(Date.now())}`,
   );
 
-  const harness = createKinuHarness(task, target, { taskVersion: taskVersion(task), evalCommit: evalCommit(process.env) }, evidence);
+  const taskFiles = readdirSync(join(import.meta.dirname, '../tasks')).filter((name) => name.endsWith('.eval.ts'));
+
+  trialAccounts(taskFiles, matrix);
+
+  const harness = createKinuHarness(task, target, {
+    taskVersion: taskVersion(task), evalCommit: evalCommit(process.env),
+    slotOf: (input) => trialSlot({ taskFiles, task: task.id, matrix, ...input }),
+  }, evidence);
 
   describeEval(task.id, { harness }, (it) => {
-    beforeAll(() => sweep(target));
-
     for (const model of matrix.models) {
       for (const arm of matrix.arms) {
         for (let trial = 1; trial <= matrix.trials; trial += 1) {

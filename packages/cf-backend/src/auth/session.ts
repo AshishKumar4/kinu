@@ -1,8 +1,7 @@
 // Cookies are opaque HttpOnly session handles; KV stores only their hashes.
 
-import * as v from 'valibot';
 import {
-  DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_ACCOUNTS, timingSafeEqual,
+  DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, EVAL_ACCOUNTS, EVAL_TRIAL_ACCOUNTS, parseEvalAccount, timingSafeEqual,
 } from '@kinu.run/core';
 import {
   SessionAuthorityUnavailableError, deriveUserId, verifySession,
@@ -172,12 +171,15 @@ export async function authenticateRequest<Id>(request: Request, env: AuthEnv<Id>
 /** `eval@x` → `eval+devices@x`: a separate user, so its machines reach no other eval account's workspaces. */
 function evalAccountEmail(email: string, account: string | null): string {
   if (account === null) return email;
-  const named = v.safeParse(v.picklist(EVAL_ACCOUNTS), account);
+  const named = parseEvalAccount(account);
 
-  if (!named.success) throw new AuthError(400, `Unknown eval account "${account}": one of ${EVAL_ACCOUNTS.join(', ')}`);
+  if (named === null) {
+    throw new AuthError(400, `Unknown eval account "${account}": one of ${EVAL_ACCOUNTS.join(', ')}, or trial-1 to trial-${String(EVAL_TRIAL_ACCOUNTS)}`);
+  }
+
   const at = email.lastIndexOf('@');
 
-  return `${email.slice(0, at)}+${named.output}${email.slice(at)}`;
+  return `${email.slice(0, at)}+${named}${email.slice(at)}`;
 }
 
 function assertSessionBindings<Id>(env: AuthEnv<Id>): asserts env is AuthEnv<Id> & AuthStoreEnv<Id> {

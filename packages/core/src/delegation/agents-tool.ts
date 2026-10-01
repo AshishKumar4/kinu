@@ -279,7 +279,6 @@ export interface AgentsSwarmDeps {
 export interface AgentsProfileContext extends ProfileAuthorityInputs {
   readonly roleId: RoleId;
   readonly availableTools: readonly string[];
-  /** The model the caller's turn was pinned to: a delegated invocation runs on its turn's model (MODEL_ROUTE_POLICY). */
   readonly pins: Pick<ResolveTurnProfileInput, 'workspaceModel' | 'actorModel'>;
 }
 

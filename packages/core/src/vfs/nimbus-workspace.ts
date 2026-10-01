@@ -27,6 +27,8 @@ import { registerNpm, workspaceCommandNotFound } from './workspace-runtimes';
 import * as v from 'valibot';
 import type { Shell, ShellExecOptions } from '../types/primitives';
 import { WORKSPACE_ROOT, workspacePath } from './workspace-path';
+import { FORK_PIN_PREFIX } from '../identity/fork';
+import { ARCHIVE_PIN_PREFIX } from '../identity/archive';
 import { diagnostics, KinuError, tolerate, toKinuError } from '../obs/index';
 import { atVfsPath } from './errno';
 import type { MountedVfs } from './mounts';
@@ -252,6 +254,11 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     if (opts.runtimeSource !== undefined) creation = { ...creation, runtimeSource: opts.runtimeSource };
 
     const workspace = await shellOver(creation);
+
+    // A transfer pin lives for its activation: a restart ends the forks and exports it served.
+    for (const pin of workspace.vfs.snapshots()) {
+      if (pin.name.startsWith(FORK_PIN_PREFIX) || pin.name.startsWith(ARCHIVE_PIN_PREFIX)) await workspace.vfs.dropSnapshotAsync(pin.name);
+    }
 
     shellMountPoints = shellMounts(workspace.filesystem, tableFor);
 

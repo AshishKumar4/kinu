@@ -115,7 +115,7 @@ export {
 export {
   WORKSPACE_ARCHIVE_EXTENSION,
   archiveSqlFromDatabase, readAgentArchivePage, readWorkspaceArchivePage, type ArchiveAgentSource, restoreWorkspaceArchive, writeWorkspaceArchive,
-  ArchiveCursorSchema,
+  ArchiveCursorSchema, ARCHIVE_SNAPSHOT_ENDED,
   type ArchiveCursor, type ArchiveSqlCursor, type ArchiveAgentsCursor, type ArchiveFilesCursor, type ArchiveAgentPage,
   type ArchiveExportOptions, type ArchivePage,
   type ArchiveFileEntry, type ArchiveFileSource, type ArchiveFileTarget,
@@ -1120,7 +1120,7 @@ export type {
 
 export {
   settledWorkspaceSoul, writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource,
-  workspaceArchiveFiles, workspaceArchiveTarget, archiveFileTree,
+  workspaceArchiveStore, workspaceArchiveTarget, archiveFileTree,
 } from './vfs/workspace-planes';
 
 
@@ -1390,6 +1390,8 @@ export {
   DEV_IDENTITY_ACCOUNT_HEADER,
   DEV_IDENTITY_HEADER,
   EVAL_ACCOUNTS,
+  EVAL_TRIAL_ACCOUNTS,
+  parseEvalAccount,
   type EvalAccount,
   DEVICE_CONNECT_PATH,
   DEVICE_TERMINAL_PATH,
@@ -1553,7 +1555,7 @@ export { nanoid } from './utils/nanoid';
 
 export { abortCause } from './utils/abort';
 
-export { createPkcePair, hmacSha256Hex, randomToken, timingSafeEqual, type PkcePair } from './utils/crypto';
+export { base64Url, createPkcePair, hmacSha256Hex, randomToken, timingSafeEqual, type PkcePair } from './utils/crypto';
 
 export { labelSigner, type LabelSigner, type LabelSignerEnv } from './utils/label-signer';
 
@@ -2215,7 +2217,7 @@ export {
 } from './http/public-shell';
 
 export {
-  approvalDocument, authDocument, installDocument, loginDocument, type LoginProvider,
+  approvalDocument, authDocument, installDocument, loginDocument, type BuiltinSignIn, type LoginProvider,
 } from './http/public-pages';
 
 export {

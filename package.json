@@ -93,7 +93,7 @@
     "gate:devbox-e2e": "bun scripts/devbox-e2e.ts",
     "infra:provision": "bun scripts/infra-provision.ts",
     "infra:teardown": "bun scripts/infra-teardown.ts",
-    "evals": "bun --bun vitest run --config evals/vitest.config.ts --reporter=vitest-evals/reporter --reporter=json --outputFile.json=bench-artifacts/evals/results.json",
+    "evals": "bun evals/scripts/sweep.ts && bun --bun vitest run --config evals/vitest.config.ts --reporter=./evals/src/reporter.ts --reporter=json --outputFile.json=bench-artifacts/evals/results.json",
     "evals:ui": "vitest-evals serve bench-artifacts/evals/results.json",
     "evals:compare": "bun evals/scripts/compare.ts",
     "deploy:preflight": "bun scripts/deploy-preflight.ts"

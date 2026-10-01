@@ -287,6 +287,12 @@ jobs:
           name: kinu-evals-results-candidate
           path: artifacts/candidate
 
+      - name: Download the candidate's evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: kinu-evals-evidence-candidate
+          path: artifacts/candidate/evidence
+
       - name: Download the comparison
         uses: actions/download-artifact@v4
         with:
@@ -299,7 +305,7 @@ jobs:
           KINU_EVAL_WEB_IDENTITY: ${{ secrets.KINU_EVAL_WEB_IDENTITY }}
         run: |
           bun evals/scripts/diagnose.ts --results artifacts/candidate/results.json \
-            --comparison artifacts/comparison/comparison.json --out artifacts/why/why.md
+            --comparison artifacts/comparison/comparison.json --evidence artifacts/candidate/evidence --out artifacts/why/why.md
           if [[ -f artifacts/why/why.md ]]; then
             { echo '<!-- kinu-evals-why -->'; cat artifacts/why/why.md; } > artifacts/why/comment.md
             echo "written=true" >> "$GITHUB_OUTPUT"

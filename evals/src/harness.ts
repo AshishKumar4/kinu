@@ -2,12 +2,13 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 import { attachHarnessRunToError, createHarness, normalizeHarnessRun } from 'vitest-evals/harness';
 import type { TranscriptEvent } from 'vitest-evals';
-import { platformFact, type RunEvent } from '@kinu.run/core';
+import { platformFact, type EvalAccount, type RunEvent } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { DeploymentAnswer, evalNameSlug, INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
 import { gatherEvidence, writeEvidence, type WorkspaceEvidence } from './evidence';
 import { HarnessRunSchema, type StepUsage, type UsageMetadata } from './results';
-import type { KinuPublicSession, PublicMessage } from './session';
+import type { KinuPublicSession } from './session';
+import { claimTrialAccount, trialTarget } from './slot';
 import { ARMS, deployedBuild, openWorkspace, type EvalArm, type EvalTarget } from './target';
 import type {
   EvalCheck, EvalRunInput, EvalRunOutput, EvalTask, EvalTurn, EvalTurnOutcome, EvalTurnResult, HarnessError,
@@ -16,13 +17,7 @@ import { redact } from './redact';
 import { cutButCompleted, measure, toTranscript } from './transcript';
 import { TrialTimeline } from './timeline';
 import { EvalVerifier } from './verifier';
-
-/** How often an unsettled workspace is looked at. A poll, not a deadline: nothing here ends a turn. A poll reads only
- *  what the ledger added since the last one, so a short interval costs the deployment little. */
-const IDLE_POLL_MS = 1_000;
-
-/** Polls in a row the deployment's transport may fail before the trial fails as infrastructure. */
-const DROPPED_POLLS = 3;
+import { repliesTo, settle } from './workspace-completion';
 
 /**
  * Trials of one process opening their workspaces at once, at most. Opening is where a trial makes its new connections
@@ -62,7 +57,13 @@ function release(): void {
 const CUT_REPORTED_COMPLETED = 'deployment.cut-reported-completed';
 
 
-export type TrialIdentity = { readonly taskVersion: string; readonly evalCommit: string };
+/** What a trial is: its task's version, the eval commit, and the account each trial acts as (`slot.ts`); without
+ *  `slotOf` every trial acts as eval-service. */
+export type TrialIdentity = {
+  readonly taskVersion: string;
+  readonly evalCommit: string;
+  readonly slotOf?: (input: EvalRunInput) => EvalAccount;
+};
 
 /** How an isolate memory reset reads when it surfaces (platform catalog `do.isolate.oom_reported`). */
 const MEMORY_RESETS = platformFact('do.isolate.oom_reported').observable.map((observable) => observable.message);
@@ -110,59 +111,6 @@ export function measurePromptUsage(events: readonly RunEvent[]) {
   }
 
   return { inputTokens: total('inputTokens'), metadata };
-}
-
-function openRuns(events: readonly RunEvent[]): string[] {
-  const ended = new Set(events.filter((event) => event.type === 'run_end').map((event) => event.runId));
-
-  return events.filter((event) => event.type === 'run_start' && !ended.has(event.runId)).map((event) => event.runId);
-}
-
-/** What one poll of {@link settle} saw: whether the workspace was busy, and the ledger it read. */
-export type SettlePoll = (busy: boolean, events: readonly RunEvent[]) => void;
-
-/**
- * Wait until the workspace has nothing left to do for this turn: no run open, no background job
- * running, no helper working, seen on two polls in a row. A background job's completion wakes the
- * agent in a run of its own, and that run answers the prompt too.
- */
-export async function settle(session: KinuPublicSession, polled?: SettlePoll): Promise<void> {
-  let quiet = 0;
-  let dropped = 0;
-
-  for (;;) {
-    let busy = true;
-
-    try {
-      const [events, jobs, helpers] = await Promise.all([session.runEvents(), session.backgroundJobs(), session.subordinates()]);
-
-      busy = openRuns(events).length > 0 || jobs.some((job) => job.status === 'running')
-        || helpers.some((helper) => helper.status === 'working');
-
-      dropped = 0;
-      polled?.(busy, events);
-    } catch (error) {
-      // An eviction closes the socket under the polls in flight, and the next poll redials. Three
-      // failed polls in a row is a deployment that is not answering, and fails the trial as that.
-      dropped += 1;
-
-      if (!renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER) || dropped >= DROPPED_POLLS) throw error;
-    }
-
-    quiet = busy ? 0 : quiet + 1;
-
-    if (quiet >= 2) return;
-    await new Promise<void>((resolve) => { setTimeout(resolve, IDLE_POLL_MS); });
-  }
-}
-
-/** What the agent said after `prompt`, oldest first; wake rows between are the agent's own work. */
-export function repliesTo(history: readonly PublicMessage[], prompt: string): string[] {
-  const asked = history.map((row) => row.role === 'user' && row.text.trim() === prompt.trim()).lastIndexOf(true);
-
-  if (asked === -1) return [];
-
-  return history.slice(asked + 1).filter((row) => row.role === 'assistant' && row.text.trim() !== '').map((row) => row.text);
 }
 
 /** A turn whose runs the deployment ended in error measured the deployment, not the agent. */
@@ -300,6 +248,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       const errors: HarnessError[] = [];
       let session: KinuPublicSession | undefined;
       let productSha = 'unknown';
+      let account = 'eval-service';
       let attempted: string | undefined;
       let turnStartedAt = Date.now();
 
@@ -308,14 +257,22 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
 
         const opened = await (async () => {
           try {
-            productSha = (await timeline.span('build', () => deployedBuild(target))).sha;
+            const { slotOf } = identity;
 
-            const created = await timeline.span('open', () => openWorkspace(target, {
+            const trial = slotOf === undefined ? { target, account }
+              : await timeline.span('account', () => trialTarget(target, slotOf(input), Date.now()));
+
+            account = trial.account;
+            productSha = (await timeline.span('build', () => deployedBuild(trial.target))).sha;
+
+            const created = await timeline.span('open', () => openWorkspace(trial.target, {
               subject: `${task.id}-${String(input.trial)}`, mission: task.mission, model: input.model,
             }));
 
             session = created;
-            say(`workspace ${created.workspace} open`);
+            say(`workspace ${created.workspace} open on ${account}`);
+
+            if (trial.target !== target) await timeline.span('claim', () => claimTrialAccount(trial.target, created.workspace, Date.now()));
             created.onChunk = (type) => {
               timeline.chunk(type);
 
@@ -426,7 +383,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
         errors: scrubbed,
         metadata: {
           taskId: task.id, taskVersion: identity.taskVersion, evalCommit: identity.evalCommit, productSha,
-          arm: input.arm, trial: input.trial, origin: target.origin, workspace: session?.workspace ?? null,
+          arm: input.arm, trial: input.trial, origin: target.origin, account, workspace: session?.workspace ?? null,
           evidence: join(evidenceRoot, evalNameSlug(input.model), input.arm, `${task.id}-trial-${String(input.trial)}`),
         },
       };

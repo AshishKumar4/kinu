@@ -211,10 +211,6 @@ const OOM_SIGNATURES: readonly RegExp[] = [
   /exceededMemory/iu,
 ];
 
-/**
- * The runtime's refusal of a call to an overloaded object, platform-catalog.ts do.requests_per_second_soft. It refuses
- * before the object runs the call, so the class is `unavailable`; retrying at once only adds to the load.
- */
 export const OVERLOADED_SIGNATURE = /Durable Object is overloaded/iu;
 
 /**
