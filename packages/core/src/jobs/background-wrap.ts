@@ -7,6 +7,7 @@
 import type { ToolExecutionOptions, ToolSet } from 'ai';
 import { DEVICE_REQUEST_OPTION, SPAWN_STARTED_OPTION, withBackgroundThreshold, withSpawnDetach } from './threshold';
 import { DeviceRequestOwnership } from './device-ownership';
+import { DETACH_OPTION } from '../tools/detach-option';
 import type { BackgroundJobRunner } from './runner';
 import type { WorkMode } from '../types/turn';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
@@ -64,10 +65,12 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
                 const execOptions: ToolExecutionOptions & {
                   [SPAWN_STARTED_OPTION]: () => void;
                   [DEVICE_REQUEST_OPTION]: DeviceRequestOwnership;
+                  [DETACH_OPTION]: AbortSignal;
                 } = {
                   ...options, abortSignal,
                   [SPAWN_STARTED_OPTION]: spawnStarted,
                   [DEVICE_REQUEST_OPTION]: ownership,
+                  [DETACH_OPTION]: ownership.detached,
                 };
 
                 return exec(input, execOptions);
@@ -78,8 +81,9 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
         } else {
           const execOptions: ToolExecutionOptions & {
             [DEVICE_REQUEST_OPTION]: DeviceRequestOwnership;
+            [DETACH_OPTION]: AbortSignal;
           } = {
-            ...options, abortSignal, [DEVICE_REQUEST_OPTION]: ownership,
+            ...options, abortSignal, [DEVICE_REQUEST_OPTION]: ownership, [DETACH_OPTION]: ownership.detached,
           };
 
           run = withBackgroundThreshold(
