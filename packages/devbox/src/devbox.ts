@@ -295,6 +295,15 @@ const SCHEDULE_PREFIX = 'devbox:schedule:';
 
 const EXPOSED_PREFIX = 'devbox:exposed:';
 
+/** Constant-time: answer time says nothing of the token. */
+function sameToken(held: string | undefined, given: string): boolean {
+  if (held === undefined || held.length !== given.length) return false;
+  let diff = 0;
+
+  for (let at = 0; at < held.length; at += 1) diff |= held.charCodeAt(at) ^ given.charCodeAt(at);
+
+  return diff === 0;
+}
 
 export class Devbox<Env = unknown> extends DurableObject<Env> {
   readonly #gateways: GatewayBindings;
@@ -329,6 +338,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** Public work with no resource name: shell commands and supervised starts.
    *  Resource and checkpoint work reports directly through their own lanes. */
   #activeCallers = 0;
+  #openSockets = 0;
   #callersDrained: { promise: Promise<void>; resolve: () => void } | undefined;
   #quiescing: Promise<CheckpointOutcome> | undefined;
   /** Repair recreates storage mounts while a checkpoint may start a runner; one FIFO owns that
@@ -2456,7 +2466,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
         // Each busy lane covers its own tail: claims include draining streams, checkpoints queued runs,
         // startup restore/repair; shell commands and supervised starts count only via `#activeCallers`.
-        const backgroundWork = this.#quiescing !== undefined || this.#activeCallers !== 0
+        const backgroundWork = this.#quiescing !== undefined || this.#activeCallers !== 0 || this.#openSockets !== 0
           || this.#resources.busy()
           || this.#lane.busy()
           || this.#startup !== undefined
@@ -2595,8 +2605,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     if (now - this.#lastInteractionPersisted < INTERACTION_PERSIST_INTERVAL_MS) return;
     this.#lastInteractionPersisted = now;
-    // Not awaited on this hot path: the in-memory stamp already renewed this incarnation,
-    // so a lost write costs at most one extra heartbeat cycle of lease, never a leak.
+    // Not awaited: a lost write costs at most one heartbeat cycle of lease.
     unawaited(this.ctx.storage.put(LAST_INTERACTION_KEY, now), 'lease stamp was not persisted');
   }
 
@@ -2652,8 +2661,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return snapshotChainStorage(this.#chainPorts(store));
   }
 
-  /** The Durable Object id is already hex and unique per box, so the prefix needs no escaping
-   *  and cannot collide with another box's prefix. */
+  /** The Durable Object id is hex and unique per box: no escaping, no collision. */
   #boxPrefix(): string {
     return `boxes/${this.ctx.id.toString()}`;
   }
@@ -2797,18 +2805,47 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return Effect.gen({ self: this }, function* () {
       const spec = yield* attempt('io', () => this.ctx.storage.get<PortExposureSpec>(`${PORT_SPEC_PREFIX}${port}`));
 
-      if (spec === undefined || spec.token !== token) return new Response('Preview not exposed', { status: 404 });
+      if (spec === undefined || !sameToken(spec.token, token)) return new Response('Preview not exposed', { status: 404 });
 
       return yield* this.#withActiveCaller(attempt('io', async () => {
         await this.ensureReady();
 
-        if (this.ctx.storage.kv.get(EXPOSED_PREFIX + port) !== token) return new Response('Preview not ready', { status: 503 });
+        if (!sameToken(this.ctx.storage.kv.get<string>(EXPOSED_PREFIX + port), token)) return new Response('Preview not ready', { status: 503 });
         const target = new URL(request.url);
         target.protocol = 'http:';
+        const answer = await this.#container().getTcpPort(port).fetch(new Request(target.toString(), request));
 
-        return this.#container().getTcpPort(port).fetch(new Request(target.toString(), request));
+        return answer.webSocket ? this.#bridge(answer.webSocket, answer.headers) : answer;
       }));
     });
+  }
+
+  /** The SDK's `bridge()`: an open preview socket is the box's use. */
+  #bridge(upstream: WebSocket, headers: Headers): Response {
+    const [visitor, held] = Object.values(new WebSocketPair());
+    let open = true;
+
+    const end = (code: number, reason: string): void => {
+      if (!open) return;
+      open = false;
+      this.#openSockets -= 1;
+      this.stampInteraction();
+
+      for (const socket of [held, upstream]) socket.close(code === 1005 || code === 1006 ? 1000 : code, reason);
+    };
+
+    held.accept();
+    upstream.accept();
+    this.#openSockets += 1;
+    held.addEventListener('message', (event) => { if (open) upstream.send(event.data); });
+    upstream.addEventListener('message', (event) => { if (open) held.send(event.data); });
+
+    for (const socket of [held, upstream]) {
+      socket.addEventListener('close', (event) => end(event.code, event.reason));
+      socket.addEventListener('error', () => end(1011, 'preview socket failed'));
+    }
+
+    return new Response(null, { status: 101, headers, webSocket: visitor });
   }
 
   #archiveClient: NativeArchives | undefined;

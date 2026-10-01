@@ -340,6 +340,8 @@ export class FakeSandbox {
   /** Configured probe answers for services on a started container, retained
    *  with the other fault controls; this is not a live process registry. */
   readonly listening = new Set<number>();
+  /** Answers a port's fetch in place of the probe status, e.g. with an upgrade. */
+  portAnswer: ((port: number, request: Request) => Response) | undefined;
   readonly fileOperations: FileOperation[] = [];
   readonly mountCalls: string[] = [];
   /** Mounts and execs share one chronological list: stop order is a property of the order
@@ -1145,7 +1147,7 @@ export class FakeSandbox {
       destroy: async () => { await this.destroy(); this.#ended.resolve(); },
       signal: () => { void this.stop().then(this.#ended.resolve, this.#ended.reject); },
       getTcpPort: port => ({
-        fetch: async () => new Response('', { status: this.listening.has(port) ? 200 : 503 }),
+        fetch: async (request: Request) => this.portAnswer?.(port, request) ?? new Response('', { status: this.listening.has(port) ? 200 : 503 }),
         connect: () => unreached('port.connect'),
       }),
       setInactivityTimeout: async () => { this.activityRenewals++; },

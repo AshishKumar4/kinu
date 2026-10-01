@@ -279,3 +279,103 @@ describe('every admitted operation is an interaction', () => {
     expect((await box.devboxState()).lastInteractionAt).toEqual(expect.any(Number));
   });
 });
+
+/** Workers' socket pair, which Bun lacks: each end delivers its sends and its close to the other. */
+class FakeSocket extends EventTarget {
+  peer: FakeSocket | undefined;
+  closed = false;
+  readonly heard: string[] = [];
+  heardClose: { readonly code: number; readonly reason: string } | undefined;
+
+  accept(): void {}
+
+  send(data: string): void {
+    if (this.closed) throw new TypeError('send after close');
+    this.peer?.heard.push(data);
+    this.peer?.dispatchEvent(new MessageEvent('message', { data }));
+  }
+
+  close(code: number, reason: string): void {
+    if (this.closed) return;
+    this.closed = true;
+
+    if (this.peer === undefined) return;
+    this.peer.heardClose = { code, reason };
+    this.peer.dispatchEvent(new CloseEvent('close', { code, reason }));
+  }
+}
+
+function socketPair(): [FakeSocket, FakeSocket] {
+  const ends: [FakeSocket, FakeSocket] = [new FakeSocket(), new FakeSocket()];
+  ends[0].peer = ends[1];
+  ends[1].peer = ends[0];
+
+  return ends;
+}
+
+class PreviewBox extends TestBox {
+  protected override get previewHost(): string | undefined {
+    return 'preview.test';
+  }
+}
+
+// SDK audit (b), 2026-10-01: a preview's WebSocket is the box's use for as long as it is open.
+describe('an open preview socket is the box\'s use', () => {
+  test('a box holds while a preview socket is open, relays both ways, and rests one idle window after it closes', async () => {
+    const pairs: [FakeSocket, FakeSocket][] = [];
+    const app = socketPair();
+
+    const opened = (): [FakeSocket, FakeSocket] => {
+      const ends = socketPair();
+      pairs.push(ends);
+
+      return ends;
+    };
+
+    Object.assign(globalThis, { WebSocketPair: function WebSocketPair() { return opened(); } });
+    const start = Date.now();
+    const { box, rows, container } = harness(PreviewBox);
+    rows.set('devbox:port:5173', { port: 5173, name: 'web', token: 'tok5173', createdAt: 1 });
+    container.listening.add(5173);
+    container.portAnswer = (_port, request) => (request.headers.get('upgrade') === 'websocket'
+      ? Object.assign(new Response(null, { status: 101 }), { webSocket: app[0] })
+      : new Response('', { status: 200 }));
+
+    const { idleMs, quietConfirmMs } = DEFAULT_DEVBOX_POLICY;
+
+    const beat = async (at: number): Promise<string | undefined> => {
+      setSystemTime(at);
+      await box.devboxHeartbeat();
+
+      return (await box.devboxState()).lastTick?.decision;
+    };
+
+    try {
+      setSystemTime(start);
+      await box.devboxStartup();
+      await box.fetch(new Request('https://box/_devbox/preview/5173/tok5173/hmr', { headers: { upgrade: 'websocket' } }));
+      const visitor = pairs[0]?.[0];
+      visitor?.send('from the visitor');
+      app[1].send('from the app');
+
+      await beat(start + idleMs);
+      const open = await beat(start + idleMs + quietConfirmMs);
+      const closedAt = start + idleMs + quietConfirmMs + 60_000;
+
+      setSystemTime(closedAt);
+      visitor?.close(1001, 'tab closed');
+      const closing = await beat(closedAt + idleMs - 60_000);
+
+      await beat(closedAt + idleMs);
+      const closed = await beat(closedAt + idleMs + quietConfirmMs);
+
+      expect({ bridged: pairs.length, app: app[1].heard, visitor: visitor?.heard, appClosed: app[1].heardClose, open, closing, closed }).toEqual({
+        bridged: 1, app: ['from the visitor'], visitor: ['from the app'], appClosed: { code: 1001, reason: 'tab closed' },
+        open: 'hold', closing: 'hold', closed: 'quiesce',
+      });
+    } finally {
+      setSystemTime();
+      Reflect.deleteProperty(globalThis, 'WebSocketPair');
+    }
+  });
+});
