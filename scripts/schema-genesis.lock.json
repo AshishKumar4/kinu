@@ -177,12 +177,19 @@
     "password_iterations INTEGER",
     "created_at INTEGER NOT NULL"
   ],
+  "builtin_attempts@packages/core/src/identity/builtin-accounts.ts": [
+    "bucket TEXT PRIMARY KEY",
+    "count INTEGER NOT NULL",
+    "window_start INTEGER NOT NULL",
+    "locked_until INTEGER NOT NULL"
+  ],
   "builtin_challenges@packages/core/src/identity/builtin-accounts.ts": [
     "challenge TEXT PRIMARY KEY",
     "purpose TEXT NOT NULL CHECK (purpose IN ('register', 'authenticate'))",
     "user_id TEXT",
     "email TEXT",
     "invite_hash TEXT",
+    "setup_proven INTEGER NOT NULL",
     "expires_at INTEGER NOT NULL"
   ],
   "builtin_invites@packages/core/src/identity/builtin-accounts.ts": [

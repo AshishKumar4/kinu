@@ -14,8 +14,9 @@ export interface LoginProvider {
 
 /** Built-in sign-in, offered where no OAuth app is configured (`auth/builtin.ts`). */
 export interface BuiltinSignIn {
-  /** `owner`: no account yet, so this one becomes the owner. `invite`: an invite link was opened. */
-  readonly mode: 'owner' | 'invite' | 'sign-in';
+  /** `setup`: no owner and no setup link, so no form. */
+  readonly mode: 'owner' | 'invite' | 'sign-in' | 'setup';
+  readonly setup?: string;
   /** `invite` mode: the token, and the one address it admits. */
   readonly invite?: string;
   readonly email?: string;
@@ -25,10 +26,10 @@ export interface BuiltinSignIn {
 }
 
 export function loginDocument(providers: readonly LoginProvider[], builtin: BuiltinSignIn | null = null): string {
-  if (builtin !== null) return authDocument('Sign in to Kinu.run', builtinBody(builtin), BUILTIN_SCRIPT);
+  if (builtin !== null) return authDocument('Sign in to Kinu.run', builtinBody(builtin), builtin.mode === 'setup' ? undefined : BUILTIN_SCRIPT);
 
   const body = providers.length === 0
-    ? '<p class="lede">Sign-in is unavailable.</p><div class="providers"><a class="provider" href="/install">Run Kinu locally</a></div>'
+    ? '<p class="lede">Sign-in is unavailable.</p><p>This deployment declares an OAuth provider whose client id or secret is missing, so no one can sign in until it is fixed. Built-in sign-in stays off while any provider is declared.</p><div class="providers"><a class="provider" href="/install">Run Kinu locally</a></div>'
     : `<div class="providers">${providers.map((provider) => (
       `<a class="provider" href="${provider.href}">Continue with ${escapeHtml(provider.label)}</a>`
     )).join('')}</div>`;
@@ -40,15 +41,18 @@ const BUILTIN_COPY = {
   owner: { lede: 'Create the first account. It becomes the owner of this deployment.', password: 'Create account', passkey: 'Create account with a passkey' },
   invite: { lede: 'You were invited. Create your account for this address.', password: 'Create account', passkey: 'Create account with a passkey' },
   'sign-in': { lede: null, password: 'Sign in', passkey: 'Sign in with a passkey' },
+  setup: { lede: null, password: '', passkey: '' },
 } as const;
 
-function builtinBody({ mode, invite, email, notice, returnTo }: BuiltinSignIn): string {
+function builtinBody({ mode, invite, email, setup, notice, returnTo }: BuiltinSignIn): string {
   const copy = BUILTIN_COPY[mode];
   const registering = mode !== 'sign-in';
   const lede = notice ?? copy.lede;
 
+  if (mode === 'setup') return `<p class="lede">${escapeHtml(lede ?? '')}</p>`;
+
   return `${lede === null ? '' : `<p class="lede">${escapeHtml(lede)}</p>`}
-  <form id="builtin-sign-in" class="fields" data-mode="${registering ? 'register' : 'sign-in'}" data-return-to="${escapeHtml(returnTo)}" data-invite="${escapeHtml(invite ?? '')}" novalidate>
+  <form id="builtin-sign-in" class="fields" data-mode="${registering ? 'register' : 'sign-in'}" data-return-to="${escapeHtml(returnTo)}" data-invite="${escapeHtml(invite ?? '')}" data-setup="${escapeHtml(setup ?? '')}" novalidate>
     <label>Email<input type="email" name="email" autocomplete="${registering ? 'email' : 'username webauthn'}" required${email === undefined ? '' : ` value="${escapeHtml(email)}" readonly`} /></label>
     <label>Password<input type="password" name="password" autocomplete="${registering ? 'new-password' : 'current-password'}"${registering ? ' minlength="10" aria-describedby="password-rule"' : ''} /></label>
     ${registering ? '<p id="password-rule" class="muted">At least 10 characters. Not needed with a passkey.</p>' : ''}
@@ -67,6 +71,7 @@ const status = document.getElementById('status');
 const passkey = document.getElementById('passkey');
 const registering = form.dataset.mode === 'register';
 const invite = form.dataset.invite || null;
+const setup = form.dataset.setup || null;
 const returnTo = form.dataset.returnTo || '/';
 const bytes = (value) => Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
 const text = (buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer))).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
@@ -89,14 +94,14 @@ form.addEventListener('submit', (event) => {
   event.preventDefault();
   if (!form.elements.email.checkValidity()) return say('Enter an email address.');
   run(async () => done(await post(registering ? 'password/register' : 'password/sign-in',
-    { email: email(), password: form.elements.password.value, invite, returnTo })));
+    { email: email(), password: form.elements.password.value, invite, setup, returnTo })));
 });
 passkey.addEventListener('click', () => {
   if (!window.PublicKeyCredential) return say('This browser does not support passkeys.');
   if (registering && !form.elements.email.checkValidity()) return say('Enter your email first: it names the account.');
   run(async () => {
     if (registering) {
-      const options = await post('passkey/register/options', { email: email(), invite });
+      const options = await post('passkey/register/options', { email: email(), invite, setup });
       const created = await navigator.credentials.create({ publicKey: { ...options, challenge: bytes(options.challenge),
         user: { ...options.user, id: bytes(options.user.id) },
         excludeCredentials: (options.excludeCredentials || []).map((c) => ({ ...c, id: bytes(c.id) })) } });

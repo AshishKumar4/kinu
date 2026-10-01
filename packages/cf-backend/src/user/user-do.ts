@@ -163,9 +163,9 @@ import { deletePictures, picturePrefix } from '../slates/pictures';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import {
   builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, invitedEmail, isBuiltinOwner,
-  issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge,
-  type Admission, type BuiltinSql, type ChallengePurpose, type NewBuiltinAccount, type NewInvite, type PasskeyAccount,
-  type PasswordAccount, type PendingChallenge,
+  issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, reserveAttempt, clearAttempts, replacePassword,
+  type Admission, type AttemptBucket, type BuiltinSql, type ChallengePurpose, type NewBuiltinAccount, type NewInvite, type PasskeyAccount,
+  type PasswordAccount, type PasswordHash, type PendingChallenge,
 } from '@kinu.run/core/identity';
 import {
   CLOUDFLARE_AI_GATEWAY_CRED_KEY,
@@ -1500,10 +1500,27 @@ export class UserDO extends Agent<Env> {
     return isBuiltinOwner(this.builtinSql(), userId);
   }
 
-  async builtinAdmissible(caller: UserCaller, email: string, inviteHash: string | null): Promise<Admission> {
+  async builtinAdmissible(caller: UserCaller, request: Pick<NewBuiltinAccount, 'email' | 'inviteHash' | 'setupProven'>): Promise<Admission> {
     await this.requireTier(caller, 'builtin_accounts');
 
-    return builtinAdmission(this.builtinSql(), email, inviteHash, Date.now());
+    return builtinAdmission(this.builtinSql(), request, Date.now());
+  }
+
+  /** 0 when the attempt may run, else milliseconds to wait; counted before the caller does any work. */
+  async builtinReserveAttempt(caller: UserCaller, buckets: readonly AttemptBucket[]): Promise<number> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return reserveAttempt(this.builtinSql(), buckets, Date.now());
+  }
+
+  async builtinReplacePassword(caller: UserCaller, userId: string, password: PasswordHash): Promise<void> {
+    await this.requireTier(caller, 'builtin_accounts');
+    replacePassword(this.builtinSql(), userId, password);
+  }
+
+  async builtinClearAttempts(caller: UserCaller, keys: readonly string[]): Promise<void> {
+    await this.requireTier(caller, 'builtin_accounts');
+    clearAttempts(this.builtinSql(), keys);
   }
 
   async builtinInvitedEmail(caller: UserCaller, inviteHash: string): Promise<string | null> {

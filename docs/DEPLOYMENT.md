@@ -233,6 +233,21 @@ openssl rand -base64 32 | bunx wrangler secret put WEBHOOK_ROUTE_SECRET
 
 After it, every external system that posts to a Kinu webhook needs the new URL. I read it from the triggers list: the Supervise Automations block, or `kinu triggers <workspace> list`, which prints the current URL for each webhook row. Trigger rows, secrets and delivery history are untouched; only the URL changes. I rotate on purpose (a leaked URL, an operator handover), not on a schedule.
 
+#### Built-in sign-in (self-hosting without an OAuth app)
+
+A deployment that declares no OAuth provider signs in with its own accounts: a password or a passkey. "Declares" means any of the `*_OAUTH_CLIENT_ID` / `*_OAUTH_CLIENT_SECRET` names set to a non-empty value, or a non-empty `SIGN_IN_PROVIDERS`. A declared provider that is broken (an id without its secret) leaves sign-in unavailable rather than falling back to built-in accounts. The default `wrangler.jsonc` declares Cloudflare (`CLOUDFLARE_OAUTH_CLIENT_ID`, `SIGN_IN_PROVIDERS`), so a self-hosted deployment clears both for built-in sign-in.
+
+The first account becomes the deployment's owner, and only a request carrying the setup token may create it:
+
+```bash
+openssl rand -base64 32 | tee /dev/stderr | bunx wrangler secret put KINU_SETUP_TOKEN
+# then open https://<your-host>/login?setup=<that token> and create the owner account
+```
+
+After that, people join only through invite links the owner makes in Settings → Account → Invite people. Each link names one email address, works once, and expires after 7 days. The token can be removed once the owner exists; `/login` then offers sign-in only.
+
+Built-in accounts have their own ids, unrelated to any OAuth login of the same address: configuring OAuth later makes OAuth sign-in a separate account, and built-in sessions stop working once any provider is declared. Passwords are PBKDF2-SHA256 at 100,000 iterations (the most Cloudflare's runtime runs), salted per account and peppered with a key derived from `CREDENTIAL_ENCRYPTION_KEY`. During a key rotation a password still verifies against `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` and is re-hashed under the new key at that sign-in; an account that does not sign in during the window needs a new password. Passkeys need a domain: browsers refuse them on an IP address.
+
 ### 3. Build and deploy
 
 ```bash

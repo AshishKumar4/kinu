@@ -4,7 +4,8 @@ import { createHash } from 'node:crypto';
 import * as v from 'valibot';
 import { builtinAccountRoutes, builtinAuthRoutes, type BuiltinAuthEnv } from '../src/auth/builtin';
 import type { AuthIdentity } from '../src/auth/session';
-import { deriveUserId } from '../src/auth/store';
+import { deriveBuiltinUserId, deriveUserId, verifySession } from '../src/auth/store';
+import { readCookie, SESSION_COOKIE_NAME } from '../src/auth/session';
 import { serveFamily } from './helpers/api';
 import { makeKv } from './helpers/kv';
 import { createTestUserDO, TEST_CREDENTIAL_ENCRYPTION_KEY, type TestUserDO } from './helpers/user-do';
@@ -12,6 +13,8 @@ import { workspaceObject } from './helpers/bindings';
 import type { JsonValue } from '@kinu.run/core';
 
 const ORIGIN = 'https://kinu.example.com';
+
+const SETUP_TOKEN = 'the deployer set this secret';
 
 const harnesses: TestUserDO[] = [];
 
@@ -40,6 +43,7 @@ function deployment() {
     UserDO: { idFromName: (name) => name, get: (name) => objectFor(name).userDO },
     OrchestratorAgent: { idFromName: (name) => name, get: () => workspaceObject({}) },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    KINU_SETUP_TOKEN: SETUP_TOKEN,
   };
 
   const post = async (path: string, body: JsonValue, identity?: AuthIdentity): Promise<Response> => {
@@ -59,7 +63,11 @@ function deployment() {
   const register = (email: string, invite?: string) =>
     post('/api/auth/builtin/password/register', { email, password: 'a long enough password', invite: invite ?? null });
 
-  return { env, post, register };
+  /** The owner's sign-up, through the deployer's setup link. */
+  const registerOwner = (email: string, setup: string | null = SETUP_TOKEN) =>
+    post('/api/auth/builtin/password/register', { email, password: 'a long enough password', setup });
+
+  return { env, post, register, registerOwner };
 }
 
 const ErrorSchema = v.object({ error: v.string() });
@@ -69,26 +77,26 @@ const InviteSchema = v.object({ url: v.string() });
 const ChallengeSchema = v.object({ challenge: v.string() });
 
 async function identityOf(email: string): Promise<AuthIdentity> {
-  return { userId: await deriveUserId(email), email, sub: 'sub', provider: 'password', authTime: Date.now() };
+  return { userId: await deriveBuiltinUserId(email), email, sub: 'sub', provider: 'password', authTime: Date.now() };
 }
 
 describe('who may register', () => {
   test('after the first account, registration without a valid invite is refused', async () => {
-    const { register } = deployment();
+    const { register, registerOwner } = deployment();
 
-    expect((await register('owner@example.com')).status).toBe(200);
+    expect((await registerOwner('owner@example.com')).status).toBe(200);
     const stranger = await register('stranger@example.com');
     const forged = await register('forger@example.com', 'not-an-invite');
 
     expect(stranger.status).toBe(403);
-    expect(v.parse(ErrorSchema, await stranger.json()).error).toContain('already has an owner');
+    expect(v.parse(ErrorSchema, await stranger.json()).error).toContain('Ask the owner');
     expect(forged.status).toBe(403);
   });
 
   test("an owner's invite admits its one address, once", async () => {
-    const { post, register } = deployment();
+    const { post, register, registerOwner } = deployment();
 
-    await register('owner@example.com');
+    await registerOwner('owner@example.com');
     const made = await post('/api/user/builtin-auth/invites', { email: 'First@Example.com' }, await identityOf('owner@example.com'));
     const invite = new URL(v.parse(InviteSchema, await made.json()).url).searchParams.get('invite') ?? '';
 
@@ -103,15 +111,52 @@ describe('who may register', () => {
 
     expect(again.status).toBe(403);
     expect(another.status).toBe(403);
-    expect(v.parse(ErrorSchema, await another.json()).error).toContain('already used');
+    expect(v.parse(ErrorSchema, await another.json()).error).toContain('not valid');
+  });
+});
+
+describe('the owner seat and the namespace', () => {
+  test('the owner seat needs the setup token, and a declared OAuth provider turns built-in sign-in off', async () => {
+    const { env, registerOwner } = deployment();
+
+    expect((await registerOwner('first@example.com', null)).status).toBe(403);
+    expect((await registerOwner('first@example.com', 'a guess')).status).toBe(403);
+
+    // A client id with no secret is a broken provider: sign-in is unavailable, never built-in.
+    Object.assign(env, { GOOGLE_OAUTH_CLIENT_ID: 'declared-but-broken' });
+    expect((await registerOwner('first@example.com')).status).toBe(404);
+  });
+
+  test('a sign-up no seat or invite admits is refused the same, whether or not its email has an account', async () => {
+    const { register, registerOwner } = deployment();
+
+    await registerOwner('owner@example.com');
+    const known = await register('owner@example.com');
+    const unknown = await register('nobody@example.com');
+
+    expect([known.status, await known.text()]).toEqual([unknown.status, await unknown.text()]);
+  });
+
+  test("a built-in account is not its address's OAuth account, and its session ends once OAuth is declared", async () => {
+    const { env, registerOwner } = deployment();
+    const answer = await registerOwner('owner@example.com');
+    const token = readCookie(new Request(ORIGIN, { headers: { cookie: answer.headers.get('set-cookie') ?? '' } }), SESSION_COOKIE_NAME) ?? '';
+
+    const identity = await verifySession(env, token);
+
+    expect(identity?.userId).toBe(await deriveBuiltinUserId('owner@example.com'));
+    expect(identity?.userId).not.toBe(await deriveUserId('owner@example.com'));
+
+    Object.assign(env, { GOOGLE_OAUTH_CLIENT_ID: 'now-oauth', GOOGLE_OAUTH_CLIENT_SECRET: 'secret' });
+    expect(await verifySession(env, token)).toBeNull();
   });
 });
 
 describe('signing in', () => {
   test('a wrong password is refused, and no session is set', async () => {
-    const { post, register } = deployment();
+    const { post, registerOwner } = deployment();
 
-    await register('owner@example.com');
+    await registerOwner('owner@example.com');
     const wrong = await post('/api/auth/builtin/password/sign-in', { email: 'owner@example.com', password: 'not the password' });
     const right = await post('/api/auth/builtin/password/sign-in', { email: 'owner@example.com', password: 'a long enough password' });
 
@@ -125,7 +170,7 @@ describe('signing in', () => {
     const { post } = deployment();
     const authenticator = await Authenticator.create();
 
-    const creation = v.parse(ChallengeSchema, await (await post('/api/auth/builtin/passkey/register/options', { email: 'owner@example.com' })).json());
+    const creation = v.parse(ChallengeSchema, await (await post('/api/auth/builtin/passkey/register/options', { email: 'owner@example.com', setup: SETUP_TOKEN })).json());
 
     expect((await post('/api/auth/builtin/passkey/register', { response: await authenticator.attest(creation.challenge) })).status).toBe(200);
 

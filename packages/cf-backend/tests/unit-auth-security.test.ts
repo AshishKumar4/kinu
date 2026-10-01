@@ -866,20 +866,26 @@ async function cloudflareSignInSteps(
 
 describe('sanitizeReturnTo (single strict implementation)', () => {
   test('accepts plain relative paths', () => {
-    expect(sanitizeReturnTo('/agents/jarvis')).toBe('/agents/jarvis');
-    expect(sanitizeReturnTo('/user/settings?tab=mcp')).toBe('/user/settings?tab=mcp');
+    expect(sanitizeReturnTo('/agents/jarvis', ORIGIN)).toBe('/agents/jarvis');
+    expect(sanitizeReturnTo('/user/settings?tab=mcp', ORIGIN)).toBe('/user/settings?tab=mcp');
   });
 
   test('rejects absolute, protocol-relative, and backslash escapes', () => {
-    expect(sanitizeReturnTo('https://evil.example')).toBe('/');
-    expect(sanitizeReturnTo('//evil.example')).toBe('/');
-    expect(sanitizeReturnTo('/\\evil.example')).toBe('/');
-    expect(sanitizeReturnTo('')).toBe('/');
+    expect(sanitizeReturnTo('https://evil.example', ORIGIN)).toBe('/');
+    expect(sanitizeReturnTo('//evil.example', ORIGIN)).toBe('/');
+    expect(sanitizeReturnTo('/\\evil.example', ORIGIN)).toBe('/');
+    expect(sanitizeReturnTo('', ORIGIN)).toBe('/');
+  });
+
+  test('rejects a tab or newline that a URL parser strips into another host', () => {
+    expect(sanitizeReturnTo(decodeURIComponent('/%09/evil.example'), ORIGIN)).toBe('/');
+    expect(sanitizeReturnTo(decodeURIComponent('/%0a/evil.example'), ORIGIN)).toBe('/');
+    expect(sanitizeReturnTo('/%09/evil.example', ORIGIN)).toBe('/%09/evil.example');
   });
 
   test('rejects redirect loops back into the auth flow, on the stored state too', () => {
-    expect(sanitizeReturnTo('/auth/github/start')).toBe('/');
-    expect(sanitizeReturnTo('/login')).toBe('/');
-    expect(sanitizeReturnTo('/logout')).toBe('/');
+    expect(sanitizeReturnTo('/auth/github/start', ORIGIN)).toBe('/');
+    expect(sanitizeReturnTo('/login', ORIGIN)).toBe('/');
+    expect(sanitizeReturnTo('/logout', ORIGIN)).toBe('/');
   });
 });

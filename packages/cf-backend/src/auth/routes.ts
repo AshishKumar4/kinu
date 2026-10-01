@@ -10,11 +10,12 @@ import {
 } from './store';
 import { escapeHtml, json, KINU_USER_AGENT, sha256Hex } from '@kinu.run/core';
 import { authDocument, loginDocument, type BuiltinSignIn } from '@kinu.run/core';
-import { builtinAccounts, builtinAuthEnabled } from './builtin';
+import { builtinAccounts, setupProven } from './builtin';
+import { builtinSignInOn, type SignInDeclarationEnv } from './sign-in-declaration';
 import { publicHtmlHeaders } from '@kinu.run/core';
 import {
   clientAuth, getAuthorizationServer, getOAuthProvider, listConfiguredOAuthProviders,
-  type OAuthProviderConfig, type OAuthProviderEnv,
+  type OAuthProviderConfig,
 } from './providers';
 import {
   CLOUDFLARE_OAUTH_CRED_KEY,
@@ -66,7 +67,8 @@ export type AuthRoutesAuthority = SessionAuthority
   & Pick<UserDO, 'setCredential' | 'listActiveWorkspaces' | 'builtinHasOwner' | 'builtinInvitedEmail'>;
 
 /** Nothing optional that the session port leaves optional: sign-out revokes through `AUTH_KV` unguarded. */
-export interface AuthRoutesEnv<Id = DurableObjectId> extends OAuthProviderEnv, OwnerCapabilityEnv {
+export interface AuthRoutesEnv<Id = DurableObjectId> extends SignInDeclarationEnv, OwnerCapabilityEnv {
+  KINU_SETUP_TOKEN?: string;
   AUTH_KV: KvStore;
   UserDO: ObjectNamespace<Id, AuthRoutesAuthority>;
   OrchestratorAgent: ObjectNamespace<Id, ModelSettingsFanoutTarget>;
@@ -107,7 +109,7 @@ authPageRoutes.get('/auth/:provider/callback', noHead<AuthPagesEnv>(async (c) =>
 
 async function renderLogin<Id>(request: Request, env: AuthRoutesEnv<Id>): Promise<Response> {
   const url = new URL(request.url);
-  const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/');
+  const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/', url.origin);
   const prompt = url.searchParams.get('prompt') === 'login' ? 'login' : null;
 
   try {
@@ -120,7 +122,7 @@ async function renderLogin<Id>(request: Request, env: AuthRoutesEnv<Id>): Promis
     if (!(e instanceof AuthError) || e.status !== 401) throw e;
   }
 
-  if (builtinAuthEnabled(env)) {
+  if (builtinSignInOn(env)) {
     return new Response(loginDocument([], await builtinSignIn(env, url, returnTo)), {
       headers: { ...publicHtmlHeaders(), 'cache-control': 'no-store' },
     });
@@ -155,7 +157,18 @@ async function builtinSignIn<Id>(env: AuthRoutesEnv<Id>, url: URL, returnTo: str
       : { mode: 'invite', invite, email, returnTo };
   }
 
-  return { mode: await accounts.builtinHasOwner(caller) ? 'sign-in' : 'owner', returnTo };
+  if (await accounts.builtinHasOwner(caller)) return { mode: 'sign-in', returnTo };
+  const setup = url.searchParams.get('setup');
+
+  if (await setupProven(env, setup)) return { mode: 'owner', setup: setup ?? '', returnTo };
+
+  return {
+    mode: 'setup', returnTo,
+    notice: (env.KINU_SETUP_TOKEN ?? '').trim() === ''
+      ? 'This deployment has no owner yet. Its deployer sets a setup token first: '
+        + 'openssl rand -base64 32 | npx wrangler secret put KINU_SETUP_TOKEN, then opens /login?setup=<that token>.'
+      : 'This deployment has no owner yet. Its deployer creates the owner account from the setup link: /login?setup=<KINU_SETUP_TOKEN>.',
+  };
 }
 
 async function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: string): Promise<Response> {
@@ -166,7 +179,7 @@ async function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, provider
   if (!env.AUTH_KV) return html('Sign in unavailable', '<p>This deployment has no sign-in storage (<code>AUTH_KV</code>) set up, so no one can sign in yet.</p>', { status: 503 });
 
   const url = new URL(request.url);
-  const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/');
+  const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/', url.origin);
   const redirectUri = new URL(`/auth/${provider.id}/callback`, url.origin).toString();
   const as = await getAuthorizationServer(provider);
 
@@ -341,7 +354,7 @@ async function processOAuthTokenResponse(
  *  the only handle that can still revoke this session. Other sessions are untouched. */
 async function logout<Id>(request: Request, env: AuthRoutesEnv<Id>): Promise<Response> {
   const url = new URL(request.url);
-  const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/');
+  const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/', url.origin);
   const token = readSessionToken(request);
 
   if (token) {
