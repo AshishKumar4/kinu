@@ -3,7 +3,7 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { describeThrown as describe } from './lifecycle';
 import { snapshotChainStorage } from './snapshot-chain';
-import { DEVBOX_RUNTIME_DIR, type CheckpointKind, type CheckpointOutcome } from './storage';
+import { DEVBOX_RUNTIME_DIR, type CheckpointKind, type CheckpointOutcome, type DevboxStorage } from './storage';
 import {
   BOOT_ID_PATH, DEVBOX_SYNC_HOST, DEVBOX_SYNC_PROGRAM, SYNC_PID_PATH, SYNC_SOCKET_PATH,
   containerChainPorts, decodeSyncConfig, parseCheckpointKind, parseSyncOutcome, runSyncLoop, syncCaller, syncWorker,
@@ -33,8 +33,49 @@ const transport = async (body: string): Promise<{ status: number; text: string }
   return { status: reply.status, text: await reply.text() };
 };
 
+/** Beside the stage: each commit deletes the stage, and a deleted directory's lock excludes nobody. */
+const COMMIT_LOCK_PATH = `${DEVBOX_RUNTIME_DIR}/stage.lock`;
+
+let releasedAs: string | undefined;
+
+/** One commit at a time in a container (D54). `flock` holds the lock while its stdin is open, so a
+ *  killed program releases it. */
+async function holdingCommitLock(work: (othersHeldIt: boolean) => Promise<CheckpointOutcome>): Promise<CheckpointOutcome> {
+  const holder = Bun.spawn(['flock', COMMIT_LOCK_PATH, 'sh', '-c', 'echo held; exec cat >/dev/null'], { stdin: 'pipe', stdout: 'pipe', stderr: 'pipe' });
+  const reader = holder.stdout.getReader();
+  const { value } = await reader.read();
+  reader.releaseLock();
+
+  try {
+    if (new TextDecoder().decode(value).trim() !== 'held') {
+      const reason = `the commit lock was not taken (exit ${String(await holder.exited)}): ${await new Response(holder.stderr).text()}`;
+
+      return { kind: 'failed', reason, bytes: undefined, movedBytes: undefined };
+    }
+
+    const othersHeldIt = readFileSync(COMMIT_LOCK_PATH, 'utf8') !== releasedAs;
+    releasedAs = crypto.randomUUID();
+    writeFileSync(COMMIT_LOCK_PATH, releasedAs);
+
+    return await work(othersHeldIt);
+  } finally {
+    await holder.stdin.end();
+    await holder.exited;
+  }
+}
+
 function syncing(config: SyncConfig): SyncWorker {
-  return syncWorker(snapshotChainStorage(containerChainPorts(config, { exec, call: syncCaller(transport, generation), generation, log })));
+  let storage: DevboxStorage | undefined;
+
+  return syncWorker({
+    checkpoint: async (kind) => await holdingCommitLock(async (othersHeldIt) => {
+      if (othersHeldIt || storage === undefined) {
+        storage = snapshotChainStorage(containerChainPorts(config, { exec, call: syncCaller(transport, generation), generation, log }));
+      }
+
+      return await storage.checkpoint(kind);
+    }),
+  });
 }
 
 function runningProgram(): boolean {

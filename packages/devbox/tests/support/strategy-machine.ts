@@ -628,16 +628,18 @@ export class ContainerDisk {
     return new TextEncoder().encode(JSON.stringify({ archive: 2, entries }));
   }
 
-  unpack(bytes: Uint8Array, dir: string): void {
-    // Stored bytes are untrusted even though this module wrote them: a truncated archive
-    // must fail to parse exactly as a truncated squashfs fails to mount.
-    let archive: v.InferOutput<typeof ArchiveSchema>;
-
+  /** Stored bytes are untrusted even though this module wrote them: a truncated archive
+   *  must fail to parse exactly as a truncated squashfs fails to mount or to list. */
+  static read(bytes: Uint8Array): v.InferOutput<typeof ArchiveSchema> {
     try {
-      archive = v.parse(ArchiveSchema, JSON.parse(decoder.decode(bytes)));
+      return v.parse(ArchiveSchema, JSON.parse(decoder.decode(bytes)));
     } catch (error) {
       throw new Error('the archive superblock is not readable', { cause: error });
     }
+  }
+
+  unpack(bytes: Uint8Array, dir: string): void {
+    const archive = ContainerDisk.read(bytes);
 
     const entries = archive.entries.map((row): NodeEntry => {
       // squashfuse reports the one stored time for all three.
@@ -1200,6 +1202,23 @@ function checkpointCommand(
     }
 
     return shellOk(`0 ${landed.landed} "etag-${landed.landed}"`);
+  }
+
+  // The read-back before a record names a layer: `unsquashfs -l` reads the tables a mount reads.
+  const readBack = /\/usr\/bin\/unsquashfs -l '(?<archive>[^']+)'/.exec(command)?.groups?.archive;
+
+  if (readBack !== undefined) {
+    const bytes = disk.readFile(readBack);
+
+    if (bytes === undefined) return shellFail(`unsquashfs: ${readBack}: No such file or directory`);
+
+    try {
+      ContainerDisk.read(bytes);
+    } catch (error) {
+      return shellFail(`FATAL ERROR: ${error instanceof Error ? error.message : String(error)}`);
+    }
+
+    return shellOk();
   }
 
   if (command.includes('df -Pk')) {

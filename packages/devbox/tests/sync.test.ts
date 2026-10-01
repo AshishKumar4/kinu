@@ -132,8 +132,6 @@ test('a flush that arrives during a tick runs after it, never beside it', async 
   const held = new Promise<void>((resolve) => { release = resolve; });
 
   const { run } = syncWorker({
-    attach: async () => await Promise.reject(new Error('unused')),
-    discard: async () => await Promise.reject(new Error('unused')),
     checkpoint: async (kind: CheckpointKind): Promise<CheckpointOutcome> => {
       order.push(`start:${kind}`);
 
@@ -157,8 +155,6 @@ test('a checkpoint that throws is a failed outcome, and the next one still runs'
   let calls = 0;
 
   const { run } = syncWorker({
-    attach: async () => await Promise.reject(new Error('unused')),
-    discard: async () => await Promise.reject(new Error('unused')),
     checkpoint: async (): Promise<CheckpointOutcome> => {
       calls += 1;
 
