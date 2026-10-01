@@ -142,15 +142,22 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
   // `cloudflare-workers-ai` aliases the bespoke workers-ai provider; excluded so it has one resolution path.
   registry.registerDynamic(createModelsDevCatalogSource({ exclude: ['cloudflare-workers-ai'] }));
   const getAuth = createUserDOAuthResolver(source);
+  // Read once per registry: a listing asks about every provider, and a registry lives one call, or until the
+  // account's credentials change (`OwnedModelServices.invalidate`).
+  let keys: string[] | undefined;
 
   const credentialKeys = async (): Promise<string[]> => {
     if (!source) return [];
+
+    if (keys !== undefined) return keys;
     const caller = await resolveCaller(source);
 
     const credentials = await retryTransientDO('credential listing',
       () => source.stub.listCredentials(caller));
 
-    return credentials.map((c) => c.key);
+    keys = credentials.map((c) => c.key);
+
+    return keys;
   };
 
   const deps: ProviderDeps = {

@@ -343,6 +343,38 @@ describe('OwnedModelServices — the provider snapshot', () => {
     expect(profile.tiers.deep.model).toBe('openai-compatible/house-model');
   });
 
+  // 180 workspaces of one account each listed providers at once on staging (2026-10-01 01:07Z); a read per
+  // question overloaded that account's object, and its capability tokens failed.
+  test('a listing asks the account for its credentials once', async () => {
+    catalogUp();
+    const account = fakeUserDO({ 'openai.bearer': { Authorization: 'Bearer o' }, 'groq.bearer': { Authorization: 'Bearer g' } });
+    let reads = 0;
+
+    const counted: FakeUserDO = {
+      ...account,
+      async listCredentials(caller) {
+        reads += 1;
+
+        return await account.listCredentials(caller);
+      },
+    };
+
+    const services = new OwnedModelServices({
+      env: fakeEnv(counted, platformGatewayEnv()),
+      agentName: () => 'snapshot',
+      appTitle: 'Kinu',
+      ownerRequired: false,
+      getOwnerUserId: () => 'owner-1',
+      getUserCaller: async () => ({ workspaceToken: 'wt' }),
+      getCredentialsRevision: async () => 0,
+      reportModelCall: unobservedSpend,
+    });
+
+    await services.profileProviderSnapshot();
+
+    expect(reads).toBe(1);
+  });
+
   test('a complete listing is memoized, and only a change expires it', async () => {
     catalogUp();
     const services = snapshotServices(null);
