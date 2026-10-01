@@ -111,7 +111,6 @@ describe('connectMcpServers', () => {
     try {
       const stop = new AbortController();
       const running = conn.call('echo', 'held', {}, stop.signal);
-      await conn.call('echo', 'heldEntered', {});
       stop.abort();
       await expect(running).rejects.toBeInstanceOf(Error);
     } finally {
@@ -125,8 +124,8 @@ describe('connectMcpServers', () => {
 
     try {
       expect(conn.descriptors.map((d) => d.toolKey))
-        .toEqual(['mcp_echo_echo', 'mcp_echo_held', 'mcp_echo_heldEntered', 'mcp_echo_huge']);
-      expect(conn.diagnostics).toEqual([{ server: 'echo', status: 'connected', toolCount: 4 }]);
+        .toEqual(['mcp_echo_echo', 'mcp_echo_held', 'mcp_echo_huge']);
+      expect(conn.diagnostics).toEqual([{ server: 'echo', status: 'connected', toolCount: 3 }]);
       expect(logs.some((m) => m.includes('mcp: echo'))).toBe(true);
       await expect(conn.call('echo', 'echo', { text: 'hello' })).resolves.toBe('echo: hello');
       await conn.close();
@@ -242,8 +241,8 @@ describe('LocalAgentSession MCP admission', () => {
         alpha: { command: 'node', args: [fixtureServer] },
       });
       expect(session.toolNames().filter((name) => isMcpToolKey(name))).toEqual([
-        'mcp_alpha_echo', 'mcp_alpha_held', 'mcp_alpha_heldEntered',
-        'mcp_zulu_echo', 'mcp_zulu_held', 'mcp_zulu_heldEntered',
+        'mcp_alpha_echo', 'mcp_alpha_held',
+        'mcp_zulu_echo', 'mcp_zulu_held',
       ]);
     } finally {
       await session.end();

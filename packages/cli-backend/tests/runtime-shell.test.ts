@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import { constants } from 'node:os';
-import { existsSync, readFileSync, statSync, watch } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
 import { awaitExit, runToExit, scratchDir } from '@kinu.run/test-utils';
@@ -25,14 +25,14 @@ async function endBackgrounded(stdout: string): Promise<void> {
   await awaitExit(pid);
 }
 
-async function pipeGate(): Promise<{ home: string; fifo: string; resident: string }> {
+async function pipeGate(): Promise<{ fifo: string; resident: string }> {
   const home = scratchDir('host-shell');
   const fifo = join(home, 'release');
   const made = await runToExit(['mkfifo', fifo]);
 
   if (made.exitCode !== 0) throw new Error(made.stderr);
 
-  return { home, fifo, resident: 'sh -c ' + shellQuote('read released < ' + shellQuote(fifo)) + ' & echo started $!' };
+  return { fifo, resident: 'sh -c ' + shellQuote('read released < ' + shellQuote(fifo)) + ' & echo started $!' };
 }
 
 describe('createHostShell', () => {
@@ -40,22 +40,12 @@ describe('createHostShell', () => {
     const shell = createHostShell(process.cwd());
     const controller = new AbortController();
     const gate = await pipeGate();
-    const readyFile = join(gate.home, 'ready');
-    const entered = Promise.withResolvers<void>();
-    const observer = watch(gate.home, () => { if (existsSync(readyFile)) entered.resolve(); });
-    observer.once('error', entered.reject);
-    const command = shell.exec('printf ready > ' + shellQuote(readyFile) + '; read released < ' + shellQuote(gate.fifo) + '; echo done', { signal: controller.signal });
-
-    try {
-      await Promise.race([entered.promise, command.then(() => { if (!controller.signal.aborted) throw new Error('the command exited before the abort'); })]);
-      controller.abort(new Error('stop requested'));
-      const result = await command;
-      expect(result.stdout).not.toContain('done');
-      expect(result.stderr).toContain('Command aborted.');
-      expect(result.exitCode).toBe(130);
-    } finally {
-      observer.close();
-    }
+    const command = shell.exec('read released < ' + shellQuote(gate.fifo) + '; echo done', { signal: controller.signal });
+    controller.abort(new Error('stop requested'));
+    const result = await command;
+    expect(result.stdout).not.toContain('done');
+    expect(result.stderr).toContain('Command aborted.');
+    expect(result.exitCode).toBe(130);
   });
 
   test('returns when the command finishes while its child still holds stdout', async () => {

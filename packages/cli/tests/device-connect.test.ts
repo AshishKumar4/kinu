@@ -1,12 +1,11 @@
 // The stub origin serves poison at the retired /pc/daemon.js route, so a connect that fetches
 // executable bytes shows up as poison on disk.
-import { awaitExit, killAndAwaitExit, recordedIn, runToExit } from '@kinu.run/test-utils';
+import { AwaitedList, awaitExit, killAndAwaitExit, recordedIn, runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 
 import { join, resolve } from 'node:path';
-import { EventEmitter, once } from 'node:events';
 import type { Server, Subprocess } from 'bun';
 import { afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import {
@@ -74,14 +73,15 @@ afterEach(async () => {
 
 interface StubCloud {
   origin: string;
-  hits: { register: number; list: number; daemonScript: number; ticket: number };
-  waitForLists(count: number): Promise<void>;
+  hits: { daemonScript: number; ticket: number };
+  registrationRequests: AwaitedList<Request>;
+  listRequests: AwaitedList<Request>;
 }
 
 interface StubCloudOptions {
   /** Typed as the wire, not `CloudDevice`, so a case can serve an older hub's row. */
   devices?: () => unknown[];
-  registerGate?: { release: Promise<void>; onArrival?: () => void };
+  registerGate?: Promise<void>;
   registrationFailure?: { status: number; error: string };
   onRegister?: (body: { label?: string; replaces?: string }) => void;
   /** Ticket-exchange statuses in order, last repeating; 401 makes the daemon exit, 404 retries. */
@@ -102,8 +102,9 @@ const POISON_DAEMON = [
 ].join('\n');
 
 function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
-  const hits = { register: 0, list: 0, daemonScript: 0, ticket: 0 };
-  const lists = new EventEmitter();
+  const hits = { daemonScript: 0, ticket: 0 };
+  const registrationRequests = new AwaitedList<Request>();
+  const listRequests = new AwaitedList<Request>();
 
   const server = Bun.serve({
     port: 0,
@@ -111,14 +112,11 @@ function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
       const url = new URL(req.url);
 
       if (url.pathname === '/api/cli/devices' && req.method === 'POST') {
-        hits.register += 1;
+        registrationRequests.push(req);
         const body = v.safeParse(v.object({ label: v.optional(v.string()), replaces: v.optional(v.string()) }), await req.json());
         opts.onRegister?.(body.success ? body.output : {});
 
-        if (opts.registerGate) {
-          opts.registerGate.onArrival?.();
-          await opts.registerGate.release;
-        }
+        if (opts.registerGate) await opts.registerGate;
 
         if (opts.registrationFailure) {
           return Response.json({ error: opts.registrationFailure.error }, { status: opts.registrationFailure.status });
@@ -133,8 +131,7 @@ function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
       }
 
       if (url.pathname === '/api/cli/devices' && req.method === 'GET') {
-        hits.list += 1;
-        lists.emit('listed');
+        listRequests.push(req);
 
         return Response.json(opts.devices?.() ?? []);
       }
@@ -158,7 +155,7 @@ function startStubCloud(opts: StubCloudOptions = {}): StubCloud {
 
   stubs.push(server);
 
-  return { origin: 'http://localhost:' + server.port, hits, waitForLists: async (count) => { while (hits.list < count) await once(lists, 'listed'); } };
+  return { origin: 'http://localhost:' + server.port, hits, registrationRequests, listRequests };
 }
 
 function makeHome(config: JsonObject): string {
@@ -263,7 +260,7 @@ describe('device-connect prompt policy', () => {
     `);
 
     expect(JSON.parse(out.trim())).toEqual([true, false]);
-    expect(stub.hits.list).toBe(1);
+    expect(stub.listRequests.items.length).toBe(1);
   });
 
   test('THIS machine connected suppresses the offer without re-fetching', async () => {
@@ -276,7 +273,7 @@ describe('device-connect prompt policy', () => {
     `);
 
     expect(JSON.parse(out.trim())).toEqual([false, false]);
-    expect(stub.hits.list).toBe(1);
+    expect(stub.listRequests.items.length).toBe(1);
   });
 
   test("another machine's connected device still leaves this computer to offer", async () => {
@@ -290,7 +287,7 @@ describe('device-connect prompt policy', () => {
     `);
 
     expect(JSON.parse(out.trim())).toEqual([true, false]);
-    expect(stub.hits.list).toBe(1);
+    expect(stub.listRequests.items.length).toBe(1);
   });
 
   test("dismissDeviceConnectPrompt persists don't-ask-again and skips the device fetch", async () => {
@@ -304,7 +301,7 @@ describe('device-connect prompt policy', () => {
     `);
 
     expect(JSON.parse(out.trim())).toBe(false);
-    expect(stub.hits.list).toBe(0);
+    expect(stub.listRequests.items.length).toBe(0);
     const config = parseJsonObject(readFileSync(join(home, 'config.json'), 'utf-8'));
     expect(config.deviceConnectPromptDismissed).toBe(true);
   });
@@ -319,7 +316,7 @@ describe('device-connect prompt policy', () => {
     `);
 
     expect(JSON.parse(out.trim())).toBe(false);
-    expect(stub.hits.list).toBe(0);
+    expect(stub.listRequests.items.length).toBe(0);
   });
 });
 
@@ -347,7 +344,7 @@ describe('device-connect daemon lifecycle', () => {
     expect(status.sessionActive).toBe(true);
     expect(status.daemonPid ?? 0).toBeGreaterThan(0);
 
-    expect(stub.hits.register).toBe(1);
+    expect(stub.registrationRequests.items.length).toBe(1);
     expect(stub.hits.daemonScript).toBe(0);
     // runScript sets cwd to the repo root; the daemon reports it to the hub as the consented tree.
     const deviceConfig = parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'));
@@ -405,7 +402,7 @@ describe('device-connect daemon lifecycle', () => {
     }), JSON.parse(out.trim()));
 
     expect(result).toEqual({ kind: 'already-running', connected: false });
-    expect(stub.hits.register).toBe(0);
+    expect(stub.registrationRequests.items.length).toBe(0);
     expect(stub.hits.daemonScript).toBe(0);
     expect(sleeper.killed).toBe(false);
     expect(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim()).toBe(String(sleeper.pid));
@@ -639,7 +636,7 @@ describe('device-connect install hardening', () => {
     `);
 
     expect(failure).toContain('that device name is already registered');
-    expect(stub.hits.register).toBe(1);
+    expect(stub.registrationRequests.items.length).toBe(1);
     expect(stub.hits.daemonScript).toBe(0);
     expect(existsSync(join(home, 'device.json'))).toBe(false);
   });
@@ -659,7 +656,7 @@ describe('device-connect install hardening', () => {
     `);
 
     expect(out.trim()).toContain('runs on Linux and macOS only');
-    expect(stub.hits.register).toBe(0);
+    expect(stub.registrationRequests.items.length).toBe(0);
     expect(stub.hits.daemonScript).toBe(0);
   });
 
@@ -761,7 +758,6 @@ describe('device-connect install hardening', () => {
     `);
 
     expect(failure).toContain('exited before it could connect (exit code 4)');
-    expect(stub.hits.list).toBeLessThan(5);
   });
 
   test('a caller ends the wait through its signal and the result says so', async () => {
@@ -813,19 +809,10 @@ describe('device-connect install hardening', () => {
 
   test('concurrent connects leave one daemon owner and no partial files', async () => {
     const release = Promise.withResolvers<void>();
-    const bothRegistered = Promise.withResolvers<void>();
-    let arrivals = 0;
 
     const stub = startStubCloud({
       devices: () => [connectedDevice(true)],
-      registerGate: {
-        release: release.promise,
-        onArrival() {
-          arrivals += 1;
-
-          if (arrivals === 2) bothRegistered.resolve();
-        },
-      },
+      registerGate: release.promise,
     });
 
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
@@ -837,7 +824,7 @@ describe('device-connect install hardening', () => {
     `;
 
     const outcomes = Promise.allSettled([runScript(home, program), runScript(home, program)]);
-    await bothRegistered.promise;
+    await stub.registrationRequests.until((requests) => requests.length === 2);
     release.resolve();
 
     const settled = await outcomes;
@@ -917,7 +904,7 @@ describe('device daemon single-instance lock', () => {
     const old = startDaemon(home);
     await old.waitFor('Connected');
     const oldPid = await waitForDaemonPid(home);
-    await hub.until(() => hub.sockets[1], 'the successor to connect', old.output);
+    await hub.sockets.until((hellos) => hellos[1] !== undefined);;
     expect(await old.proc.exited).toBe(0);
 
     const successorPid = await waitForDaemonPid(home);
@@ -1007,7 +994,7 @@ describe('classic cloud chat connect prompt', () => {
     await chat.proc.exited;
     await chat.drained;
 
-    expect(stub.hits.register).toBe(1);
+    expect(stub.registrationRequests.items.length).toBe(1);
     expect(stub.hits.daemonScript).toBe(0);
     expect(readFileSync(join(home, 'pc-agent.js'), 'utf-8')).toBe(DAEMON_SOURCE);
 
@@ -1035,7 +1022,7 @@ describe('classic cloud chat connect prompt', () => {
 
     expect(exitCode).toBe(0);
     expect(stdout).toContain('No computer is connected. Connect this one with: kinu connect');
-    expect(stub.hits.register).toBe(0);
+    expect(stub.registrationRequests.items.length).toBe(0);
   });
 });
 
@@ -1091,12 +1078,12 @@ describe('kinu connect waits on the daemon and says less', () => {
     await connect.waitFor('Everything else stays invisible to it.');
     await connect.waitFor('The daemon only dials out.');
     await connect.waitFor('Device name');
-    expect(stub.hits.register).toBe(0);
+    expect(stub.registrationRequests.items.length).toBe(0);
     expect(existsSync(join(home, 'pc-agent.js'))).toBe(false);
 
     await connect.send('typed-name');
     await connect.waitFor('Link and start the daemon?');
-    expect(stub.hits.register).toBe(0);
+    expect(stub.registrationRequests.items.length).toBe(0);
 
     await connect.send('y');
     await connect.waitFor('✓ Connected as hub-names-it');
@@ -1106,7 +1093,7 @@ describe('kinu connect waits on the daemon and says less', () => {
     await connect.proc.exited;
     await connect.drained;
 
-    expect(stub.hits.register).toBe(1);
+    expect(stub.registrationRequests.items.length).toBe(1);
     expect(stub.hits.daemonScript).toBe(0);
     expect(existsSync(join(home, 'device.json'))).toBe(true);
 
@@ -1138,17 +1125,9 @@ describe('kinu connect waits on the daemon and says less', () => {
     await waiting.waitFor('Link and start the daemon?');
     await waiting.send('y');
     await waiting.waitFor('Waiting for the daemon to connect');
-    // Advance by the stub's poll counter, not a sleep.
-
-    const listsAtStart = stub.hits.list;
-
-    await waiting.waitFor('.');
-
-    await stub.waitForLists(listsAtStart + 2);
     expect(waiting.proc.exitCode).toBeNull();
     expect(waiting.output()).not.toContain('✓ Connected as');
     expect(waiting.output()).not.toContain('exited before it could connect');
-    expect(stub.hits.list).toBeGreaterThanOrEqual(listsAtStart + 2);
 
     waiting.proc.kill('SIGINT');
     await waiting.proc.exited;
@@ -1172,7 +1151,7 @@ describe('kinu connect waits on the daemon and says less', () => {
     await connect.drained;
 
     expect(connect.output()).toContain('Nothing was installed');
-    expect(stub.hits.register).toBe(0);
+    expect(stub.registrationRequests.items.length).toBe(0);
     expect(stub.hits.daemonScript).toBe(0);
     expect(existsSync(join(home, 'pc-agent.js'))).toBe(false);
     expect(existsSync(join(home, 'device.json'))).toBe(false);

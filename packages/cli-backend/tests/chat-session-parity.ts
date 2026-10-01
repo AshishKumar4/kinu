@@ -3,7 +3,7 @@
  * with minted ids and clocks normalized; `chat-session-parity.test.ts` compares it to a recorded fixture.
  */
 import { Database } from 'bun:sqlite';
-import { parityNormalizer, scratchPath, type ParityNormalizer } from '@kinu.run/test-utils';
+import { AwaitedList, parityNormalizer, scratchPath, type ParityNormalizer } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import { decodeJsonValue, initWorkspaceSchema, JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
@@ -12,7 +12,7 @@ import type { LLMProviderConfig, SessionTranscriptReader } from '@kinu.run/core'
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
-import { recordSessionEvent, waitFor } from './helpers/local-session';
+
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -48,7 +48,6 @@ function answeringModel(answer: string, prompts: PromptMessage[][] = []): TestLa
 
 /** Call #1 parks on `stepGate` after announcing a tool call; call #2 parks on `endGate` after the steer lands. */
 function drainWindowModel(answer: string) {
-  const prompts: PromptMessage[][] = [];
   const stepGate = Promise.withResolvers<void>();
   const endGate = Promise.withResolvers<void>();
   let calls = 0;
@@ -57,7 +56,6 @@ function drainWindowModel(answer: string) {
     provider: 'fake',
     modelId: 'fake-model',
     doStream: async (options) => {
-      prompts.push(options.prompt);
       calls += 1;
 
       if (calls === 1) {
@@ -89,8 +87,8 @@ function drainWindowModel(answer: string) {
             }, { once: true });
             controller.enqueue({ type: 'stream-start', warnings: [] });
             controller.enqueue({ type: 'text-start', id: '0' });
-            await endGate.promise;
             controller.enqueue({ type: 'text-delta', id: '0', delta: answer });
+            await endGate.promise;
             controller.enqueue({ type: 'text-end', id: '0' });
             controller.enqueue({ type: 'finish', finishReason: 'stop', usage: USAGE });
             controller.close();
@@ -101,7 +99,7 @@ function drainWindowModel(answer: string) {
     },
   });
 
-  return { model, prompts, stepGate, endGate };
+  return { model, stepGate, endGate };
 }
 
 function gatedTextModel(answer: string) {
@@ -160,9 +158,6 @@ async function refusalCode(landing: Promise<string>): Promise<string> {
   }
 }
 
-function pendingSteerTexts(db: Database): string[] {
-  return db.query<{ text: string }, []>('SELECT text FROM pending_steers ORDER BY seq').all().map((row) => row.text);
-}
 
 
 /** Harness-authored blocks beside the conversation; their wording is not a loop decision. */
@@ -203,6 +198,11 @@ function turnEvents(events: readonly SessionEvent[], n: number): readonly Sessio
   const from = events.findIndex((event) => event.type === 'turn-start' && ++starts === n);
 
   return from === -1 ? [] : events.slice(from);
+}
+
+function queuedSteer(events: readonly SessionEvent[], text: string): boolean {
+  return events.some((event) => event.type === 'broadcast' && event.event.type === 'steer_status'
+    && event.event.status === 'queued' && event.event.text === text);
 }
 
 const NOTE_FILE = { filename: 'note.txt', mediaType: 'text/plain', url: 'data:text/plain;base64,aGVsbG8=' };
@@ -311,7 +311,7 @@ export async function runParityScenario(interruptRecovery = false): Promise<Pari
   const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
   const transcript = rt.stores.history.transcript('default');
 
-  const eventsA: SessionEvent[] = [];
+  const eventsA = new AwaitedList<SessionEvent>();
   const two = drainWindowModel('answer two');
   const three = gatedTextModel('answer three');
   const four = drainWindowModel('never answered');
@@ -324,7 +324,7 @@ export async function runParityScenario(interruptRecovery = false): Promise<Pari
     ...(interruptRecovery ? [four.model] : []),
   ]);
 
-  const a = new LocalAgentSession({ rt, db, model: modelA, noAutoEvolve: true, onEvent: (event) => recordSessionEvent(eventsA, event) });
+  const a = new LocalAgentSession({ rt, db, model: modelA, noAutoEvolve: true, onEvent: (event) => eventsA.push(event) });
   const norm = parityNormalizer();
 
   // 1. An idle send runs as a turn of its own.
@@ -332,20 +332,19 @@ export async function runParityScenario(interruptRecovery = false): Promise<Pari
 
   // 2. A send mid-turn with a file lands and is answered at the next step boundary (the drain's, not admission's).
   const turnTwo = a.send('two', { id: crypto.randomUUID() });
-  await waitFor(eventsA, () => turnEvents(eventsA, 2).some((event) => event.type === 'tool-call'));
+  await eventsA.until(() => turnEvents(eventsA.items, 2).some((event) => event.type === 'tool-call'));
   const steerTwo = a.send({ text: 'two-steer', files: [NOTE_FILE] }, { id: crypto.randomUUID() });
   two.stepGate.resolve();
   const landingTwo = await steerTwo;
-  await waitFor(eventsA, () => two.prompts.length === 2);
   two.endGate.resolve();
   await turnTwo;
   const afterTwo = await durableRows(db, norm, transcript);
 
   // 3. An interrupt hands the steer back and cuts the turn: the send is refused, never landed.
   const turnThree = a.send('three', { id: crypto.randomUUID() });
-  await waitFor(eventsA, () => turnEvents(eventsA, 3).some((event) => event.type === 'text-delta'));
+  await eventsA.until(() => turnEvents(eventsA.items, 3).some((event) => event.type === 'text-delta'));
   const steerThree = a.send('three-steer', { id: crypto.randomUUID() });
-  await waitFor(eventsA, () => pendingSteerTexts(db).includes('three-steer'));
+  await eventsA.until((frames) => queuedSteer(frames, 'three-steer'));
   const returned = a.interrupt();
   const landingThree = await refusalCode(steerThree);
   await turnThree;
@@ -353,35 +352,35 @@ export async function runParityScenario(interruptRecovery = false): Promise<Pari
 
   // 4. A send with a file is acknowledged mid-turn, then the process dies before the drain; its producers stay parked.
   const turnFour = a.send('four', { id: crypto.randomUUID() });
-  await waitFor(eventsA, () => turnEvents(eventsA, 4).some((event) => event.type === 'tool-call'));
+  await eventsA.until(() => turnEvents(eventsA.items, 4).some((event) => event.type === 'tool-call'));
   const steerFour = a.send({ text: 'four-steer', files: [NOTE_FILE] }, { id: crypto.randomUUID() });
-  await waitFor(eventsA, () => pendingSteerTexts(db).includes('four-steer'));
+  await eventsA.until((frames) => queuedSteer(frames, 'four-steer'));
   const landingFour = 'acknowledged';
   const beforeRestart = await durableRows(db, norm, transcript);
 
   if (interruptRecovery) {
     four.stepGate.resolve();
-    await waitFor(eventsA, () => four.prompts.length === 2);
-    const recoveryEvents: SessionEvent[] = [];
+    await eventsA.until((frames) => turnEvents(frames, 4).some((event) => event.type === 'text-delta'));
+    const recoveryEvents = new AwaitedList<SessionEvent>();
     const recovery = gatedTextModel('recovery paused');
-    new LocalAgentSession({ rt, db, model: recovery.model, noAutoEvolve: true, onEvent: (event) => recordSessionEvent(recoveryEvents, event) });
-    await waitFor(recoveryEvents, () => recoveryEvents.some((event) => event.type === 'text-delta'));
+    new LocalAgentSession({ rt, db, model: recovery.model, noAutoEvolve: true, onEvent: (event) => recoveryEvents.push(event) });
+    await recoveryEvents.until((frames) => frames.some((event) => event.type === 'text-delta'));
   }
 
   // 5. The restart: the next process replays what the dead one acknowledged,
   //    then takes a fresh send.
-  const eventsB: SessionEvent[] = [];
+  const eventsB = new AwaitedList<SessionEvent>();
   const restartedPrompts: PromptMessage[][] = [];
   const modelB = sequencedModel([answeringModel('answer four again', restartedPrompts), answeringModel('answer five', restartedPrompts)]);
-  const b = new LocalAgentSession({ rt, db, model: modelB, noAutoEvolve: true, onEvent: (event) => recordSessionEvent(eventsB, event) });
-  await waitFor(eventsB, () => eventsB.some((event) => event.type === 'turn-end'));
+  const b = new LocalAgentSession({ rt, db, model: modelB, noAutoEvolve: true, onEvent: (event) => eventsB.push(event) });
+  await eventsB.until((frames) => frames.some((event) => event.type === 'turn-end'));
   const landingFive = await b.send('five', { id: crypto.randomUUID() });
 
   const record: ParitySnapshot = {
     afterTwo,
     beforeRestart,
     end: await durableRows(db, norm, transcript),
-    events: [eventsA, eventsB].map((stream) => stream.map((event) => norm.json(frontendView(event)))),
+    events: [eventsA, eventsB].map((stream) => stream.items.map((event) => norm.json(frontendView(event)))),
     landings: { landingTwo, landingThree, returned, landingFour, landingFive },
     restartedCalls: restartedPrompts.map((prompt) => norm.json(promptView(prompt))),
   };

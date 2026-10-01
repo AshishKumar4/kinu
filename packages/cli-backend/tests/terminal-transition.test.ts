@@ -2,10 +2,9 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Process-death recovery for the terminal transition: cut at a named effect and phase (TerminalEffectInterrupt),
 // reopen a second session over the same database, and check every effect ran exactly once.
 import { describe, test, expect } from 'bun:test';
-import { EventEmitter, once } from 'node:events';
 import * as v from 'valibot';
 import type { Database } from 'bun:sqlite';
-import { handClock, scratchPath, scriptedAdvisorPort, type ScriptedAdvisorPort } from '@kinu.run/test-utils';
+import { AwaitedList, handClock, scratchPath, scriptedAdvisorPort, type ScriptedAdvisorPort } from '@kinu.run/test-utils';
 import type { SqlExecutor, SqlValue } from '@kinu.run/core';
 import {
   TerminalEffectInterrupt,
@@ -28,21 +27,6 @@ const advisors = new WeakMap<CLIRuntime, TemporaryAgentPort>();
 /** `terminalEffectFault` is protected with no production setter, so the test subclasses, as the DO's harness does. */
 class ProbeSession extends LocalAgentSession {
   private readonly probeRt: CLIRuntime;
-
-  private readonly wakes = new EventEmitter();
-
-  override async recoverTerminalTransitions(): Promise<void> {
-    await super.recoverTerminalTransitions();
-    this.wakes.emit('replayed');
-  }
-
-  async nextReplay(): Promise<void> {
-    await once(this.wakes, 'replayed');
-  }
-
-  async replayUntil(condition: () => boolean): Promise<void> {
-    while (!condition()) await this.nextReplay();
-  }
 
   constructor(opts: ConstructorParameters<typeof LocalAgentSession>[0]) {
     super(opts);
@@ -69,11 +53,6 @@ class ProbeSession extends LocalAgentSession {
   skipBackoff(generation = 1): void {
     this.terminalClockSkewMs = TERMINAL_EFFECT_RETRY_CEILING_MS * generation;
   }
-
-  /** Skew the clock back so the five-second wake is due as armed: this makes the timer fire, the skew above makes rows due. */
-  armWakeImmediately(): void {
-    this.terminalClockSkewMs = -TERMINAL_EFFECT_RETRY_CEILING_MS;
-  }
 }
 
 /** One in-memory database shared by sessions: the restart the fault hooks reach. */
@@ -97,7 +76,7 @@ interface RestartOptions {
   rt: CLIRuntime;
   db: Database;
   model: TestLanguageModelV2;
-  events: SessionEvent[];
+  events: { push(event: SessionEvent): void };
   oneShot?: boolean;
   generation?: number;
 }
@@ -614,19 +593,17 @@ describe('a recovery reads the record, not the session that finds it', () => {
 
     const gated: CLIRuntime = { ...rt, shell };
     // The confirming turn holds inside its model call, where a five-second retry timer finds it before its message row exists.
-    const inGateTurn = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
 
     const { model } = scriptedModel('I renamed them', {
       toolCall: { name: 'fact', input: { action: 'recall', key: 'probe' } },
       onStream: async (prompt) => {
         if (!JSON.stringify(prompt).includes('output of ')) return;
-        inGateTurn.resolve();
         await release.promise;
       },
     });
 
-    const events: SessionEvent[] = [];
+    const events = new AwaitedList<SessionEvent>();
 
     const session = new ProbeSession({
       rt: gated, db, model, oneShot: true, onEvent: (e) => events.push(e),
@@ -635,7 +612,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
     session.cutAt('completion_gate', 'before');
     await session.send('rename the columns', { id: crypto.randomUUID() });
 
-    const asked = () => events.filter(
+    const asked = () => events.items.filter(
       (e) => e.type === 'turn-start' && e.event === COMPLETION_GATE_EVENT,
     ).length;
 
@@ -650,7 +627,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
 
     next.skipBackoff();
     const replay = next.recoverBackgroundJobs();
-    await inGateTurn.promise;
+    await events.until((frames) => frames.filter((e) => e.type === 'run-event' && e.event.type === 'model_operation' && e.event.phase === 'start' && e.event.source === 'agent').length === 2);
     await replay;
     // A retry finding the confirming turn queued or running reports the row held: no second turn, no doubled backoff.
     const attemptsBefore = gateAttempts(gated);
@@ -738,7 +715,7 @@ const gateAttempts = (rt: CLIRuntime) =>
     SELECT attempts FROM terminal_effects WHERE effect_name = 'completion_gate'`[0]?.attempts ?? 0;
 
 describe('a terminal close that fails leaves a way back', () => {
-  test('a close whose settle throws re-arms its own wake', async () => {
+  test('a close whose settle throws is recoverable through the public API', async () => {
     const { db, rt } = workspace();
     // The claim settle fails once: the last durable act of the close, after which no owed row can derive the wake.
     const real: SqlExecutor = rt.storage.sql;
@@ -763,32 +740,26 @@ describe('a terminal close that fails leaves a way back', () => {
     const storage: { sql: SqlExecutor } = rt.storage;
     storage.sql = cutting;
 
-    const titling = Promise.withResolvers<void>();
     const titled = Promise.withResolvers<void>();
 
-    const { model } = scriptedModel('answered', { onGenerate: () => {
-      titling.resolve();
-
-      return titled.promise;
-    } });
+    const { model } = scriptedModel('answered', { onGenerate: () => titled.promise });
 
     const events: SessionEvent[] = [];
     const session = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
-    session.armWakeImmediately();
 
-    const earlyWake = session.nextReplay();
     const turning = session.send('write the migration', { id: crypto.randomUUID() });
-    await titling.promise;
-    await earlyWake;
+    await session.recoverTerminalTransitions();
     titled.resolve();
     await turning;
     await session.settleBackgroundWork();
 
-    // Nothing is owed; only the wake the catch armed can close the sequence.
+    // The turn completed; recovery finishes the unsettled close.
     expect(completedTurns(rt)).toBe(1);
     expect(stillOwed(rt)).toEqual([]);
-    await session.replayUntil(() => openTerminalClaims(rt) === 0);
-    // Two attempts: the close's own, which threw, and the re-armed wake's.
+    session.skipBackoff();
+    await session.recoverTerminalTransitions();
+    expect(openTerminalClaims(rt)).toBe(0);
+    // Two attempts: the close's own, which threw, and the recovery call's.
     expect(settleAttempts).toBe(2);
     await session.end();
     db.close();
@@ -799,16 +770,13 @@ describe('a one-shot exit waits on the turn\'s own close', () => {
   test('with no background job running, the wait announces none', async () => {
     const { db, rt } = workspace();
     const clock = handClock();
-    const titling = Promise.withResolvers<void>();
     const titled = Promise.withResolvers<void>();
-    const { model } = scriptedModel('answered', { onGenerate: async () => { titling.resolve(); await titled.promise; } });
+    const { model } = scriptedModel('answered', { onGenerate: async () => { await titled.promise; } });
     const events: SessionEvent[] = [];
     const session = new ProbeSession({ rt, db, model, clock, onEvent: (e) => events.push(e) });
 
     await session.send('write the migration', { id: crypto.randomUUID() });
-    await titling.promise;
     const settling = session.settleBackgroundWork();
-    await clock.whenArmed(1);
     titled.resolve();
     await settling;
 

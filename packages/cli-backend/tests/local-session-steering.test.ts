@@ -1,7 +1,7 @@
 import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: steering, durable sends, branches and the run-event log.
 import { describe, test, expect } from 'bun:test';
-import { present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, unobservedSearchSeams } from '@kinu.run/test-utils';
+import { AwaitedList, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, unobservedSearchSeams } from '@kinu.run/test-utils';
 import { KinuError } from '@kinu.run/core/obs';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
@@ -19,7 +19,7 @@ import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } 
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import { nodeSeatFactory } from './actor-fixture';
 import * as v from 'valibot';
-import { recordSessionEvent, resolverRest, namedSpec, textStream, gatedFactCallStream, abortableTextStream, headStreamFrames, DUMMY_LLM, type PromptMessage, fakeModel, historyCapturingModel, systemCapturingModel, workspaceRuntime, failAssistantEntryWrite, transcript, setup, hub, fireTimer, codemodeModel, toolSequenceModel, searchingModel, SEARCH_ASK, codingSearchModel, setupWithResolver, waitFor, jobResult, turnStarts, steerStatuses, writeFocusedSkill, messageText, runThenAnswerModel, gateTurn, } from './helpers/local-session';
+import { resolverRest, namedSpec, textStream, gatedFactCallStream, abortableTextStream, headStreamFrames, DUMMY_LLM, type PromptMessage, fakeModel, historyCapturingModel, systemCapturingModel, workspaceRuntime, failAssistantEntryWrite, transcript, setup, hub, fireTimer, codemodeModel, toolSequenceModel, searchingModel, SEARCH_ASK, codingSearchModel, setupWithResolver, jobResult, turnStarts, steerStatuses, writeFocusedSkill, messageText, runThenAnswerModel, gateTurn, } from './helpers/local-session';
 
 describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', () => {
   /** Call #1 streams a gated `fact` call so a test can steer before the step boundary; call #2 answers. Captures every prompt. */
@@ -108,7 +108,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const { rt, session, events } = setup('unused', model);
 
     const turn = session.send('main question', { id: crypto.randomUUID() });
-    await waitFor(events, () => events.some((e) => e.type === 'tool-call'));
+    await events.until((frames) => frames.some((e) => e.type === 'tool-call'));
     const steerX = session.send('also check X', { id: crypto.randomUUID() });
     const steerY = session.send('and Y', { id: crypto.randomUUID() });
     release();
@@ -157,7 +157,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     await writeFocusedSkill(rt);
 
     const turn = session.send('/focused remember this', { id: crypto.randomUUID() });
-    await waitFor(events, () => events.some((e) => e.type === 'tool-call'));
+    await events.until((frames) => frames.some((e) => e.type === 'tool-call'));
     const steer = session.send('/focused remember this', { id: crypto.randomUUID() });
     gate.resolve();
     await turn;
@@ -181,7 +181,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const { db, rt, session, events } = setup('unused', model);
 
     const turn = session.send('main question', { id: crypto.randomUUID() });
-    await waitFor(events, () => events.some((e) => e.type === 'tool-call'));
+    await events.until((frames) => frames.some((e) => e.type === 'tool-call'));
     expect(session.turnInFlight()).toBe(true);
     const steer = session.send('also check X', { id: crypto.randomUUID() });
     await fireTimer(session, 'mail from bob');
@@ -216,7 +216,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
     await fireTimer(session, 'arrived after the turn');
     await session.flushPendingDrains();
-    await waitFor(events, () => turnStarts(events).length >= 2);
+    await events.until(() => turnStarts(events).length >= 2);
     expect(turnStarts(events)[1].kind).toBe('programmatic');
     await session.end();
   });
@@ -226,11 +226,11 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const { rt, session, events } = setup('unused', model);
 
     const turn = session.send('first question', { id: crypto.randomUUID() });
-    await waitFor(events, () => events.some((e) => e.type === 'text-delta'));
+    await events.until((frames) => frames.some((e) => e.type === 'text-delta'));
     const steer = session.send('follow up please', { id: crypto.randomUUID() });
     release();
     await turn;
-    await waitFor(events, () => events.filter((e) => e.type === 'turn-end').length >= 2);
+    await events.until(() => events.items.filter((e) => e.type === 'turn-end').length >= 2);
     expect(await steer).toBe('turn');
 
     const starts = turnStarts(events);
@@ -253,9 +253,9 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const { session, events } = setup('unused', model);
 
     const turn = session.send('long task', { id: crypto.randomUUID() });
-    await waitFor(events, () => events.some((e) => e.type === 'text-delta'));
+    await events.until((frames) => frames.some((e) => e.type === 'text-delta'));
     const steer = session.send('change of plans', { id: crypto.randomUUID() });
-    await waitFor(events, () => steerStatuses(events).some((s) => s.status === 'queued'));
+    await events.until(() => steerStatuses(events).some((s) => s.status === 'queued'));
     // Surfaces already showed the steer as sent; the dropped text returns so they can restore the composer.
     expect(session.interrupt()).toEqual(['change of plans']);
     await expect(steer).rejects.toThrow(/stopped before the agent read this message/);
@@ -263,7 +263,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     await session.settleBackgroundWork();
 
     expect(turnStarts(events)).toHaveLength(1);
-    expect(events.some((e) => e.type === 'error')).toBe(true);
+    expect(events.items.some((e) => e.type === 'error')).toBe(true);
     await session.end();
   });
 
@@ -307,17 +307,17 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
     const { rt, session, events } = setup('unused', model);
     const turn = session.send('main question', { id: crypto.randomUUID() });
-    await waitFor(events, () => events.some((e) => e.type === 'tool-call'));
+    await events.until((frames) => frames.some((e) => e.type === 'tool-call'));
 
     const steer = session.send('also check X', { id: crypto.randomUUID() });
-    await waitFor(events, () => steerStatuses(events).length > 0);
+    await events.until(() => steerStatuses(events).length > 0);
     expect(steerStatuses(events).map((s) => [s.status, s.text]))
       .toEqual([['queued', 'also check X']]);
     const steerId = steerStatuses(events)[0]?.steerId;
     expect(steerId).toBeTruthy();
 
     toolStep.resolve();
-    await waitFor(events, () => steerStatuses(events).some((s) => s.status === 'landed'));
+    await events.until(() => steerStatuses(events).some((s) => s.status === 'landed'));
     const landed = steerStatuses(events).find((s) => s.status === 'landed');
 
     if (!landed) throw new Error('the landed steer was never announced');
@@ -327,9 +327,9 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     expect(landed.atStep).toBeDefined();
     expect(landed.atStep).toBeGreaterThanOrEqual(0);
 
-    await waitFor(events, () => events.some((e) => e.type === 'text-delta'));
+    await events.until((frames) => frames.some((e) => e.type === 'text-delta'));
     const second = session.send('and Y', { id: crypto.randomUUID() });
-    await waitFor(events, () => steerStatuses(events).filter((s) => s.status === 'queued').length === 2);
+    await events.until(() => steerStatuses(events).filter((s) => s.status === 'queued').length === 2);
     expect(session.interrupt()).toEqual(['and Y']);
     await expect(second).rejects.toThrow(/stopped before the agent read this message/);
     await turn;
@@ -389,11 +389,11 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
     const { session, events } = setup('unused', model);
     const turn = session.send('check the repo', { id: crypto.randomUUID() });
-    await waitFor(events, () => events.some((e) => e.type === 'tool-call'));
+    await events.until((frames) => frames.some((e) => e.type === 'tool-call'));
     session.interrupt();
     release();
     await turn;
-    expect(events.some((e) => e.type === 'error')).toBe(true);
+    expect(events.items.some((e) => e.type === 'error')).toBe(true);
 
     const before = prompts.length;
     await session.send('what did you find?', { id: crypto.randomUUID() });
@@ -453,12 +453,12 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
     const { session, events } = setup('unused', model);
     const turn = session.send('main question', { id: crypto.randomUUID() });
-    await waitFor(events, () => events.some((e) => e.type === 'tool-call'));
+    await events.until((frames) => frames.some((e) => e.type === 'tool-call'));
     const steer = session.send('do it differently', { id: crypto.randomUUID() });
     release();
     await turn;
     expect(await steer).toBe('mid-turn');
-    expect(events.some((e) => e.type === 'error')).toBe(true);
+    expect(events.items.some((e) => e.type === 'error')).toBe(true);
 
     await session.send('follow-up', { id: crypto.randomUUID() });
     const last = present(prompts.at(-1), 'the last model prompt');
@@ -473,7 +473,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const { session, events } = setup('unused', model);
 
     const turn = session.send('main question', { id: crypto.randomUUID() });
-    await waitFor(events, () => events.some((e) => e.type === 'tool-call'));
+    await events.until((frames) => frames.some((e) => e.type === 'tool-call'));
 
     const programTurn = session.enqueueTurn({ text: 'background fact', metadata: { kinuEvent: 'event_drain' } });
 
@@ -485,7 +485,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
 
     release();
     await turn;
-    await waitFor(events, () => turnStarts(events).length >= 3);
+    await events.until(() => turnStarts(events).length >= 3);
 
     expect(turnStarts(events).map((s) => [s.kind, s.text])).toEqual([
       ['user', 'main question'],
@@ -614,7 +614,7 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
     const { db, rt, session, events } = setup('unused', model);
 
     const turn = session.send('main question', { id: crypto.randomUUID() });
-    await waitFor(events, () => events.some((e) => e.type === 'tool-call'));
+    await events.until((frames) => frames.some((e) => e.type === 'tool-call'));
 
     // The write is the acceptance: read it at this microtask boundary so order, not timing, is asserted.
     const steer = session.send('also check X', { id: crypto.randomUUID() });
@@ -627,7 +627,7 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
 
     stepGate.resolve();
     expect(await steer).toBe('mid-turn');
-    await waitFor(events, () => steerStatuses(events).some((s) => s.status === 'landed'));
+    await events.until(() => steerStatuses(events).some((s) => s.status === 'landed'));
     endGate.resolve();
     await turn;
 
@@ -644,13 +644,13 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
     const { db, rt, session, events } = setup('unused', model);
 
     const turn = session.send('main question', { id: crypto.randomUUID() });
-    await waitFor(events, () => events.some((e) => e.type === 'tool-call'));
+    await events.until((frames) => frames.some((e) => e.type === 'tool-call'));
     const steer = session.send('also check X', { id: crypto.randomUUID() });
     stepGate.resolve();
     expect(await steer).toBe('mid-turn');
 
     // The drain ran and the turn is parked on endGate: a process dying here must not lose the landed row.
-    await waitFor(events, () => steerStatuses(events).some((s) => s.status === 'landed'));
+    await events.until(() => steerStatuses(events).some((s) => s.status === 'landed'));
     const landed = present(steerStatuses(events).find((s) => s.status === 'landed'), 'the landed steer status');
     const landedId = present(landed.steerId, 'the landed steer id');
 
@@ -668,21 +668,21 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
     const { db, rt, session, events } = setup('unused', model);
 
     const turn = session.send('main question', { id: crypto.randomUUID() });
-    await waitFor(events, () => events.some((e) => e.type === 'tool-call'));
+    await events.until((frames) => frames.some((e) => e.type === 'tool-call'));
     const lost = session.send('lost mid-turn', { id: crypto.randomUUID() });
-    await waitFor(events, () => pendingSends(db).length === 2);
+    await events.until(() => steerStatuses(events).some((s) => s.status === 'queued' && s.text === 'lost mid-turn'));
     expect(pendingSends(db).map((row) => row.text)).toEqual(['main question', 'lost mid-turn']);
 
-    const nextEvents: SessionEvent[] = [];
+    const nextEvents = new AwaitedList<SessionEvent>();
     const nextPrompts: PromptMessage[][] = [];
 
     const next = new LocalAgentSession({
       rt, db, model: historyCapturingModel('the next answer', (m) => { nextPrompts.push(m); }),
-      noAutoEvolve: true, onEvent: (e) => recordSessionEvent(nextEvents, e),
+      noAutoEvolve: true, onEvent: (e) => nextEvents.push(e),
     });
 
     await next.send('the next turn', { id: crypto.randomUUID() });
-    await waitFor(nextEvents, () => nextEvents.some((e) => e.type === 'turn-end'));
+    await nextEvents.until((frames) => frames.some((e) => e.type === 'turn-end'));
     expect(turnStarts(nextEvents).map((s) => [s.kind, s.text])).toEqual([
       ['user', 'main question'],
     ]);
@@ -714,22 +714,22 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
     const { db, rt, session, events } = setup('unused', model);
 
     const turn = session.send('queued behind nothing', { id: crypto.randomUUID() });
-    await waitFor(events, () => events.some((e) => e.type === 'turn-start'));
+    await events.until((frames) => frames.some((e) => e.type === 'turn-start'));
     const pending = pendingSends(db);
     expect(pending).toHaveLength(1);
     expect(pending[0].text).toBe('queued behind nothing');
     expect(pending[0].turn_id).toBeNull();
 
     // Process death: the gate never releases; the next session re-enters the message in seq order as its own turn.
-    const nextEvents: SessionEvent[] = [];
+    const nextEvents = new AwaitedList<SessionEvent>();
 
     const next = new LocalAgentSession({
       rt, db, model: fakeModel('re-run answer'), noAutoEvolve: true,
-      onEvent: (e) => recordSessionEvent(nextEvents, e),
+      onEvent: (e) => nextEvents.push(e),
     });
 
     const followUp = next.send('the follow-up', { id: crypto.randomUUID() });
-    await waitFor(nextEvents, () => nextEvents.some((e) => e.type === 'turn-end'));
+    await nextEvents.until((frames) => frames.some((e) => e.type === 'turn-end'));
     expect(await followUp).toBe('mid-turn');
     expect(turnStarts(nextEvents).map((s) => [s.kind, s.text])).toEqual([
       ['user', 'queued behind nothing'],
@@ -752,9 +752,9 @@ describe('LocalAgentSession — a pending send is durable before it is acknowled
     const { db, rt, session, events } = setup('unused', model);
 
     const turn = session.send('long task', { id: crypto.randomUUID() });
-    await waitFor(events, () => events.some((e) => e.type === 'text-delta'));
+    await events.until((frames) => frames.some((e) => e.type === 'text-delta'));
     const steer = session.send('change of plans', { id: crypto.randomUUID() });
-    await waitFor(events, () => pendingSends(db).length === 2);
+    await events.until(() => steerStatuses(events).some((s) => s.status === 'queued' && s.text === 'change of plans'));
     expect(pendingSends(db).map((row) => row.text)).toEqual(['long task', 'change of plans']);
 
     expect(session.interrupt()).toEqual(['change of plans']);
@@ -871,11 +871,11 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
 
     expect(row).toMatchObject({ outcome: 'corrected', source: 'take_pick', followup: 'go with approach B', turn_id: set.turnId });
 
-    await waitFor(events, () => turnStarts(events).some((s) => s.kind === 'programmatic' && s.event === 'take_pick'));
+    await events.until(() => turnStarts(events).some((s) => s.kind === 'programmatic' && s.event === 'take_pick'));
     const continuation = present(turnStarts(events).find((s) => s.event === 'take_pick'), 'the take_pick continuation turn');
 
     expect(continuation.text).toContain('go with approach B');
-    await waitFor(events, () => events.filter((e) => e.type === 'turn-end').length === 2);
+    await events.until(() => events.items.filter((e) => e.type === 'turn-end').length === 2);
     await session.end();
   });
 
@@ -960,9 +960,8 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
 
   type BranchStatus = { type: 'branch_status'; status: string; branchId: string; task: string; message?: string; takeSetId?: string; turnId?: string };
 
-  const branchEvents = (events: SessionEvent[]): BranchStatus[] =>
-    events
-      .filter((e): e is Extract<SessionEvent, { type: 'broadcast' }> => e.type === 'broadcast')
+  const branchEvents = (events: readonly SessionEvent[]): BranchStatus[] =>
+    events.filter((e): e is Extract<SessionEvent, { type: 'broadcast' }> => e.type === 'broadcast')
       .map((e) => e.event)
       .filter((e): e is BranchStatus => e.type === 'branch_status');
 
@@ -971,18 +970,18 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     const { rt, session, events } = setup('unused', model);
 
     const turn = session.send('original question', { id: crypto.randomUUID() });
-    await waitFor(events, () => events.some((e) => e.type === 'text-delta'));
+    await events.until((frames) => frames.some((e) => e.type === 'text-delta'));
     expect(session.branch('what about the other approach?')).toBe(true);
     await session.flushEvents();
-    expect(branchEvents(events)).toMatchObject([{ status: 'running', task: 'what about the other approach?' }]);
+    expect(branchEvents(events.items)).toMatchObject([{ status: 'running', task: 'what about the other approach?' }]);
 
     release();
     await turn;
-    await waitFor(events, () => branchEvents(events).some((e) => e.status === 'settled'));
+    await events.until(() => branchEvents(events.items).some((e) => e.status === 'settled'));
 
     expect(turnStarts(events)).toHaveLength(1);
-    expect(events.some((e) => e.type === 'error')).toBe(false);
-    const turnEnd = events.find((event) => event.type === 'turn-end');
+    expect(events.items.some((e) => e.type === 'error')).toBe(false);
+    const turnEnd = events.items.find((event) => event.type === 'turn-end');
 
     if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
     expect(turnEnd.turn.assistantResponse).toBe('the live answer');
@@ -998,7 +997,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     if (!assistant) throw new Error('assistant entry is missing');
     const assistantId = assistant.id;
     expect(set.turnId).toBe(assistantId);
-    const settled = present(branchEvents(events).find((e) => e.status === 'settled'), 'the settled branch event');
+    const settled = present(branchEvents(events.items).find((e) => e.status === 'settled'), 'the settled branch event');
 
     expect(settled).toMatchObject({ takeSetId: set.id, turnId: assistantId });
     await session.end();
@@ -1009,11 +1008,11 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     const { rt, session, events } = setup('unused', model);
 
     const turn = session.send('original question', { id: crypto.randomUUID() });
-    await waitFor(events, () => events.some((e) => e.type === 'text-delta'));
+    await events.until((frames) => frames.some((e) => e.type === 'text-delta'));
     session.branch('try it the other way');
     release();
     await turn;
-    await waitFor(events, () => branchEvents(events).some((e) => e.status === 'settled'));
+    await events.until(() => branchEvents(events.items).some((e) => e.status === 'settled'));
 
     const set = present(session.latestAlternateTakes(), 'the alternate takes set');
     const branchCandidate = present(set.candidates.find((c) => c.origin === 'branch'), 'the branch candidate take');
@@ -1025,10 +1024,10 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
 
     expect(ledger).toMatchObject({ outcome: 'corrected', source: 'take_pick', followup: 'the branch answer' });
 
-    await waitFor(events, () => turnStarts(events).some((s) => s.kind === 'programmatic' && s.event === 'take_pick'));
+    await events.until(() => turnStarts(events).some((s) => s.kind === 'programmatic' && s.event === 'take_pick'));
     expect(present(turnStarts(events).find((s) => s.event === 'take_pick'), 'the take_pick continuation turn').text)
       .toContain('the branch answer');
-    await waitFor(events, () => events.filter((e) => e.type === 'turn-end').length === 2);
+    await events.until(() => events.items.filter((e) => e.type === 'turn-end').length === 2);
     await session.end();
   });
 
@@ -1037,16 +1036,16 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     const { session, events } = setup('unused', model);
 
     const turn = session.send('original question', { id: crypto.randomUUID() });
-    await waitFor(events, () => events.some((e) => e.type === 'text-delta'));
+    await events.until((frames) => frames.some((e) => e.type === 'text-delta'));
     expect(session.branch('redirect')).toBe(true);
     release();
     await turn;
-    await waitFor(events, () => branchEvents(events).some((e) => e.status === 'error'));
+    await events.until(() => branchEvents(events.items).some((e) => e.status === 'error'));
 
-    expect(present(branchEvents(events).find((e) => e.status === 'error'), 'the branch error event').message)
+    expect(present(branchEvents(events.items).find((e) => e.status === 'error'), 'the branch error event').message)
       .toContain('head model exploded');
     expect(session.latestAlternateTakes()).toBeNull();
-    const turnEnd = events.find((event) => event.type === 'turn-end');
+    const turnEnd = events.items.find((event) => event.type === 'turn-end');
 
     if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
     expect(turnEnd.turn.assistantResponse).toBe('the live answer');
@@ -1071,14 +1070,14 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     const { session, events } = setup('unused', model);
 
     const turn = session.send('long task', { id: crypto.randomUUID() });
-    await waitFor(events, () => events.some((e) => e.type === 'text-delta'));
+    await events.until((frames) => frames.some((e) => e.type === 'text-delta'));
     expect(session.branch('redirect')).toBe(true);
     session.interrupt();
     await turn;
-    await waitFor(events, () => branchEvents(events).some((e) => e.status === 'error'));
+    await events.until(() => branchEvents(events.items).some((e) => e.status === 'error'));
     releaseBranch();
 
-    expect(present(branchEvents(events).find((e) => e.status === 'error'), 'the branch error event').message)
+    expect(present(branchEvents(events.items).find((e) => e.status === 'error'), 'the branch error event').message)
       .toContain('did not complete');
     expect(session.latestAlternateTakes()).toBeNull();
     await session.end();
@@ -1099,10 +1098,10 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     const fireAt = Date.now() + 60_000;
     await session.createTimerTrigger({ atMs: fireAt, label: 'nightly review', trust: 'owner', missionLabel: 'q3' });
     await session.fireDueTriggers(fireAt);
-    await waitFor(events, () => events.some((e) => e.type === 'text-delta'));
+    await events.until((frames) => frames.some((e) => e.type === 'text-delta'));
     expect(session.branch('check the release notes instead')).toBe(true);
     release();
-    await waitFor(events, () => branchEvents(events).some((e) => e.status === 'settled'));
+    await events.until(() => branchEvents(events.items).some((e) => e.status === 'settled'));
 
     // The live turn's call and the branch head's: a fork of a budgeted turn cannot spend outside its budget.
     expect(session.budget.snapshot('q3').map((mission) => mission.calls)).toEqual([2]);
@@ -1190,13 +1189,12 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
 
       await session.send('hi from the device', { id: crypto.randomUUID() });
 
-      const streamed = events
-        .filter((event): event is Extract<SessionEvent, { type: 'text-delta' }> => event.type === 'text-delta')
+      const streamed = events.items.filter((event): event is Extract<SessionEvent, { type: 'text-delta' }> => event.type === 'text-delta')
         .map((event) => event.delta)
         .join('');
 
       expect(streamed).toBe('local cloud turn');
-      const turnEnd = events.find((event) => event.type === 'turn-end');
+      const turnEnd = events.items.find((event) => event.type === 'turn-end');
 
       if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
       expect(turnEnd.turn.assistantResponse).toBe('local cloud turn');
@@ -1227,8 +1225,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
 
     const runId = session.listRuns().items[0].runId;
 
-    const streamed = events
-      .filter((e): e is Extract<SessionEvent, { type: 'run-event' }> => e.type === 'run-event')
+    const streamed = events.items.filter((e): e is Extract<SessionEvent, { type: 'run-event' }> => e.type === 'run-event')
       .map((e) => e.event);
 
     expect(streamed).toEqual(session.getRunEvents(runId));
@@ -1245,7 +1242,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
 
     const streams = headStreamFrames(liveEvents);
 
-    const activity = liveEvents.flatMap((event) => event.type === 'broadcast' && event.event.type === 'head_activity'
+    const activity = liveEvents.items.flatMap((event) => event.type === 'broadcast' && event.event.type === 'head_activity'
       ? [v.parse(v.object({ headId: v.string() }), event.event).headId]
       : []);
 
@@ -1328,20 +1325,20 @@ describe('LocalAgentSession — the durable run-event log', () => {
       },
     };
 
-    const events: SessionEvent[] = [];
+    const events = new AwaitedList<SessionEvent>();
 
     const session = new LocalAgentSession({
       rt: failing, db, model: fakeModel('never reached'),
-      onEvent: (e) => recordSessionEvent(events, e), noAutoEvolve: true,
+      onEvent: (e) => events.push(e), noAutoEvolve: true,
     });
 
     await session.send('write the target file', { id: crypto.randomUUID() });
 
-    const errors = events.filter((e) => e.type === 'error');
+    const errors = events.items.filter((e) => e.type === 'error');
     expect(errors).toHaveLength(1);
     expect(errors[0].type === 'error' && errors[0].message).toContain('Too Many Requests');
 
-    const ends = events.filter((e) => e.type === 'turn-end');
+    const ends = events.items.filter((e) => e.type === 'turn-end');
     expect(ends).toHaveLength(1);
     expect(ends[0].type === 'turn-end' && ends[0].turn.hadError).toBe(true);
 
@@ -1388,27 +1385,27 @@ describe('LocalAgentSession — the durable run-event log', () => {
   test('a turn whose persistence fails publishes no answer', async () => {
     // KINU-022: a persist failure must not still hand observers a final result no restart can read.
     const { db, rt } = workspaceRuntime();
-    const events: SessionEvent[] = [];
+    const events = new AwaitedList<SessionEvent>();
 
     failAssistantEntryWrite(db);
 
     const session = new LocalAgentSession({
       rt,
       db, model: fakeModel('the rollback step is in the runbook'),
-      onEvent: (e) => recordSessionEvent(events, e), noAutoEvolve: true,
+      onEvent: (e) => events.push(e), noAutoEvolve: true,
     });
 
     await session.send('where is the rollback step?', { id: crypto.randomUUID() });
 
-    expect(events.filter((e) => e.type === 'text-delta').length).toBeGreaterThan(0);
-    const ends = events.filter((e) => e.type === 'turn-end');
+    expect(events.items.filter((e) => e.type === 'text-delta').length).toBeGreaterThan(0);
+    const ends = events.items.filter((e) => e.type === 'turn-end');
     expect(ends).toHaveLength(1);
     const end = ends[0];
 
     if (!end || end.type !== 'turn-end') throw new Error('turn-end is missing');
     expect(end.turn.assistantResponse).toBe('');
     expect(end.turn.hadError).toBe(true);
-    const errors = events.filter((e) => e.type === 'error');
+    const errors = events.items.filter((e) => e.type === 'error');
     expect(errors).toHaveLength(1);
     expect(errors[0].type === 'error' && errors[0].message).toContain('disk image is malformed');
 
@@ -1486,10 +1483,10 @@ describe('LocalAgentSession — the durable run-event log', () => {
   });
 
   test('a programmatic turn records its trigger, and each turn is its own run', async () => {
-    const { session, events } = setup('done');
+    const { session } = setup('done');
     await session.send('first', { id: crypto.randomUUID() });
     await session.enqueueTurn({ text: 'job finished', metadata: { kinuEvent: 'background_job' } });
-    await waitFor(events, () => session.listRuns().items.length === 2);
+    await session.flushPendingDrains();
 
     const runs = session.listRuns().items;
     expect(new Set(runs.map((r) => r.runId)).size).toBe(2);
@@ -1534,7 +1531,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
 
     const { session, events } = setup('unused', stalling);
     const turn = session.send('long task', { id: crypto.randomUUID() });
-    await waitFor(events, () => events.some((e) => e.type === 'text-delta'));
+    await events.until((frames) => frames.some((e) => e.type === 'text-delta'));
     session.interrupt();
     await turn;
 
@@ -1546,7 +1543,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     if (!end || end.type !== 'run_end') throw new Error('run_end event is missing');
     expect(end.reason).toBe('aborted');
     expect(end.error).toBeUndefined();
-    expect(events.some((e) => e.type === 'error')).toBe(true);
+    expect(events.items.some((e) => e.type === 'error')).toBe(true);
 
     await session.end();
   });
@@ -1706,18 +1703,18 @@ describe('LocalAgentSession — the durable run-event log', () => {
       authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog,
     };
 
-    const events: SessionEvent[] = [];
+    const events = new AwaitedList<SessionEvent>();
 
     const session = new LocalAgentSession({
       rt, db, model: fakeModel('fallback'), modelResolver: resolver, profileAuthority: () => envelope,
-      onEvent: (event) => recordSessionEvent(events, event), noAutoEvolve: true,
+      onEvent: (event) => events.push(event), noAutoEvolve: true,
     });
 
     session.budget.declare('q3', {});
     const fireAt = Date.now() + 60_000;
     await session.createTimerTrigger({ atMs: fireAt, label: 'nightly review', trust: 'owner', missionLabel: 'q3' });
     await session.fireDueTriggers(fireAt);
-    await waitFor(events, () => events.some((event) => event.type === 'turn-end'));
+    await events.until((frames) => frames.some((event) => event.type === 'turn-end'));
 
     const runId = session.listRuns().items[0].runId;
     const rows = session.getRunEvents(runId);
@@ -1756,15 +1753,15 @@ describe('LocalAgentSession — the durable run-event log', () => {
       authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog,
     };
 
-    const events: SessionEvent[] = [];
+    const events = new AwaitedList<SessionEvent>();
 
     const session = new LocalAgentSession({
       rt, db, model: fakeModel('fallback'), modelResolver: resolver, profileAuthority: () => envelope,
-      onEvent: (event) => recordSessionEvent(events, event), noAutoEvolve: true,
+      onEvent: (event) => events.push(event), noAutoEvolve: true,
     });
 
     await session.send('hi', { id: crypto.randomUUID() });
-    const turnEnd = events.find((event) => event.type === 'turn-end');
+    const turnEnd = events.items.find((event) => event.type === 'turn-end');
 
     if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
     expect(turnEnd.turn.assistantResponse).toBe('from the house');
@@ -1932,7 +1929,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     `));
 
     await session.send('what can you delegate to?', { id: crypto.randomUUID() });
-    expect(events.some((e) => e.type === 'tool-result' && e.toolName === 'eval' && e.success)).toBe(true);
+    expect(events.items.some((e) => e.type === 'tool-result' && e.toolName === 'eval' && e.success)).toBe(true);
     const probe = await readText(rt.storage.vfs, 'probe/agents.json');
     expect(JSON.parse(String(probe))).toEqual({
       members: ['swarm'], swarm: 'function', hire: 'undefined',
@@ -1949,7 +1946,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     // Admitted: this session is the review surface (`submit_plan`, `decidePlanReview`).
     const plan = setup('done', codemodeModel(probeCode('probe/plan-tools.json')));
     await plan.session.send('research a plan', { id: crypto.randomUUID(), mode: 'plan' });
-    expect(plan.events.filter((event) => event.type === 'tool-result' && event.toolName === 'eval'))
+    expect(plan.events.items.filter((event) => event.type === 'tool-result' && event.toolName === 'eval'))
       .toMatchObject([{ success: false, reason: 'denied' }]);
     expect(await exists(plan.rt.storage.vfs, 'probe/plan-tools.json')).toBe(false);
     await plan.session.end();
@@ -2080,10 +2077,10 @@ describe('LocalAgentSession — provenance and durable roles reach the model', (
 
   test('a role the agent sets through `tasks` is in the next turn\'s system prompt', async () => {
     const { db, rt } = workspaceRuntime();
-    const events: SessionEvent[] = [];
+    const events = new AwaitedList<SessionEvent>();
 
     const setter = new LocalAgentSession({
-      rt, db, noAutoEvolve: true, onEvent: (e) => recordSessionEvent(events, e),
+      rt, db, noAutoEvolve: true, onEvent: (e) => events.push(e),
       model: toolSequenceModel([{ name: 'tasks', input: { action: 'mode', role: 'researcher' } }]),
     });
 
@@ -2093,7 +2090,7 @@ describe('LocalAgentSession — provenance and durable roles reach the model', (
     let system = '';
 
     const next = new LocalAgentSession({
-      rt, db, noAutoEvolve: true, onEvent: (e) => recordSessionEvent(events, e),
+      rt, db, noAutoEvolve: true, onEvent: (e) => events.push(e),
       model: systemCapturingModel('ok', (s) => { system = s; }),
     });
 
@@ -2181,7 +2178,7 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
     expect(frames.length).toBeGreaterThan(0);
     expect(frames.every((frame) => frame.headId === 'h-fork' && frame.kind === 'text')).toBe(true);
     expect(frames.map((frame) => frame.delta).join('')).toBe(MERGE_ANSWER);
-    expect(events.some((event) => event.type === 'broadcast' && event.event.type === 'head_activity')).toBe(true);
+    expect(events.items.some((event) => event.type === 'broadcast' && event.event.type === 'head_activity')).toBe(true);
     // Without `resolveModel` every fork ran the session's model.
     expect(asked).toContain('local/fork');
 
@@ -2191,7 +2188,7 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
     expect(asked[0]).not.toBe('local/fork');
 
     await session.flushEvents();
-    const rows = events.flatMap((event) => event.type === 'run-event' ? [event.event] : []);
+    const rows = events.items.flatMap((event) => event.type === 'run-event' ? [event.event] : []);
     expect(rows.some((row) => row.type === 'model_call' && row.source === 'judge')).toBe(true);
     expect(rows.some((row) => row.type === 'model_operation' && row.source === 'judge')).toBe(true);
     await session.end();
@@ -2233,7 +2230,7 @@ test('an authorized Build turn queued behind Plan regains native file authority'
   await plan;
   await session.send('Now implement the change.', { id: crypto.randomUUID() });
   expect(await readText(rt.storage.vfs, '/home/main/queued-build.txt')).toBe('authorized Build');
-  const writes = events.filter((event) => event.type === 'tool-result' && event.toolName === 'file');
+  const writes = events.items.filter((event) => event.type === 'tool-result' && event.toolName === 'file');
   expect(writes).toHaveLength(2);
   expect(writes[0]).toMatchObject({ success: false, reason: 'denied' });
   expect(writes[1]).toMatchObject({ success: true });
@@ -2256,7 +2253,7 @@ test('the actual local turn executes its selected version instead of the mutable
 
   try {
     await session.send('run the selected program', { id: crypto.randomUUID() });
-    expect(events.filter(event => event.type === 'text-delta').map(event => event.delta).join('')).toBe('selected version one');
+    expect(events.items.filter(event => event.type === 'text-delta').map(event => event.delta).join('')).toBe('selected version one');
     expect(model.doStreamCalls).toHaveLength(0);
   } finally {
     await session.end();
