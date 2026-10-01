@@ -871,6 +871,8 @@ describe('cloud agent ownership safety', () => {
 
     expect(naming.filter((column) => !WORKSPACE_KEYED_ROWS.some(({ table, column: declared }) => `${table}.${declared}` === column))).toEqual([]);
     expect(naming.length).toBeGreaterThan(5);
+    console.log('  blind: a column is found by its name (agent_name, workspace, workspace_name, or `name` in a workspace table); '
+      + 'one naming a workspace under any other name passes unlisted, and its rows outlive the workspace.');
     harness.close();
   });
 
