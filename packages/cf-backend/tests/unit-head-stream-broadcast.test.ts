@@ -8,7 +8,7 @@ import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { catalogTurn, gatewayWorkspace, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 import {
-  chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun,
+  chatCompletion, openingOf, requestOf, stubAiBinding, toolCallCompletion, wordByWordCompletion, type RecordedGatewayRun,
 } from './helpers/platform-gateway';
 
 const ASK = 'Find a way to speed up the parser.';
@@ -30,20 +30,24 @@ function stepOf(run: RecordedGatewayRun): number {
   return requestOf(run).messages.filter((message) => message.role === 'tool').length;
 }
 
-/** The main actor starts a one-node search; the node runs code once, then answers. */
-const searching = stubAiBinding((run) => {
-  if (fromTheOwner(run)) {
-    return stepOf(run) === 0
-      ? toolCallCompletion(run, {
-        tool: 'agents', args: { action: 'swarm', task: 'Name one way to tokenize faster.', preset: 'ideate', branches: 1, depth: 1 },
-      }, 'swarm_0')
-      : chatCompletion(run, 'Searching.');
-  }
+/** The main actor starts a one-node search; the node runs code once, then answers as `answer` streams it. */
+function searchingWith(answer: (run: RecordedGatewayRun) => Response) {
+  return stubAiBinding((run) => {
+    if (fromTheOwner(run)) {
+      return stepOf(run) === 0
+        ? toolCallCompletion(run, {
+          tool: 'agents', args: { action: 'swarm', task: 'Name one way to tokenize faster.', preset: 'ideate', branches: 1, depth: 1 },
+        }, 'swarm_0')
+        : chatCompletion(run, 'Searching.');
+    }
 
-  return stepOf(run) === 0
-    ? toolCallCompletion(run, { tool: 'eval', args: { code: 'return 6 * 7;' } }, 'eval_0')
-    : chatCompletion(run, ANSWER);
-});
+    return stepOf(run) === 0
+      ? toolCallCompletion(run, { tool: 'eval', args: { code: 'return 6 * 7;' } }, 'eval_0')
+      : answer(run);
+  });
+}
+
+const searching = searchingWith((run) => chatCompletion(run, ANSWER));
 
 function captureFrames(agent: HarnessOrchestratorAgent): unknown[] {
   const sent: unknown[] = [];
@@ -71,4 +75,30 @@ test("a node's streamed words go out as frames the client validator accepts, and
   expect(new Set(frames.map((frame) => frame.headId)).size).toBe(1);
   // Two model steps (the eval call, then the answer): the trace holds those, whatever the stream sent.
   expect(steps.filter((step) => step.head_id === frames[0]?.headId)).toHaveLength(2);
+});
+
+// staging f75f06932, 2026-10-01 06:04-06:10Z: the agent relay (AgentWorkspaceRPC) took 15,519 invocations, 69% of a
+// 2,000-call sample one `traceTurn` per streamed word, and 6,003 ended exceededMemory, failing every hosted call in
+// flight with them; a search's nodes and its re-drive lost their calls that way.
+test("a node's streamed words cost the workspace no call each", async () => {
+  async function liveCalls(words: readonly string[]): Promise<readonly string[]> {
+    const { agent } = gatewayWorkspace(searchingWith((run) => wordByWordCompletion(run, words)));
+    const sent = captureFrames(agent);
+
+    await catalogTurn(agent, ASK);
+    await agent.harnessJoinDetachedFibers();
+
+    const frames = sent.filter((frame) => v.is(v.looseObject({ type: v.literal('head_stream') }), frame))
+      .map((frame) => v.parse(FrameSchema, frame));
+
+    expect(frames.map((frame) => frame.delta).join('')).toBe(words.join(''));
+
+    return agent.harnessAgentTraceCalls();
+  }
+
+  const words = ANSWER.split(/(?<= )/u);
+  const few = await liveCalls(words);
+
+  // Ten times the words: the calls a step costs stay those of its record and its stream.
+  expect(await liveCalls(Array.from({ length: 10 }, () => words).flat())).toEqual(few);
 });

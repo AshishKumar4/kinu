@@ -179,8 +179,6 @@ export async function admitHostedTask(
       seams.announce(actor);
     }
 
-    // Arm the wake, not the reactor: an assignment is not a `wakesADrain` row, and its runner
-    // The delegation runners must not start in this request.
     if (result.admitted) seams.armWake();
 
     return {

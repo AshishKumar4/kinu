@@ -99,6 +99,10 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     this.harnessAgentFacets.reset(storageKey);
   }
 
+  harnessAgentTraceCalls(): readonly string[] {
+    return this.harnessAgentFacets.traceCalls();
+  }
+
   protected override dropAgentFacet(storageKey: string): void {
     this.harnessAgentFacets.drop(storageKey);
   }
