@@ -1,5 +1,7 @@
 import { resolveCloudOrigin } from './config';
 import {
+  ARCHIVE_SNAPSHOT_ENDED,
+  ArchiveCursorSchema,
   decodeJsonValue,
   DEVICE_SANDBOX_CAPABILITIES,
   DEVICE_SANDBOX_REASONS,
@@ -24,6 +26,8 @@ import {
   type AgentRpcMethod,
   ModelTestResultSchema,
   type ModelTestResult,
+  type ArchiveCursor,
+  type ArchivePage,
 } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
@@ -216,6 +220,24 @@ export async function callAgentRpc<Input, T = Input>(
   });
 
   return v.parse(schema, body.result);
+}
+
+const ArchivePageSchema: v.GenericSchema<ArchivePage> = v.object({
+  lines: v.array(v.string()),
+  next: v.nullable(ArchiveCursorSchema),
+});
+
+export async function cloudArchivePage(
+  origin: string, token: string, name: string, cursor: ArchiveCursor | null,
+): Promise<ArchivePage | 'snapshot-ended'> {
+  const { status, body } = await cloudRequest(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/rpc`, {
+    method: 'POST', token, body: { method: 'exportWorkspaceArchive', args: [cursor === null ? null : decodeJsonValue({ value: cursor })] },
+  });
+
+  if (cloudErrorMessage(status, body) === ARCHIVE_SNAPSHOT_ENDED) return 'snapshot-ended';
+  assertCloudOk(status, body);
+
+  return v.parse(v.object({ result: ArchivePageSchema }), body).result;
 }
 
 export async function startCliAuth(origin: string, deviceName: string): Promise<CliAuthStart> {

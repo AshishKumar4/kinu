@@ -210,8 +210,13 @@ separate site; a Worker-only flag cannot deliver it.
 - Forking establishes destination ownership and registry state before copying
   files, and on failure rolls back only the reservation it created
   (`user/workspace-fork.ts`).
-- Export streams Nimbus files into the workspace archive
-  (`exportWorkspaceArchive`). A SQL-only archive does not count as complete.
+- Export carries the Nimbus store as its own pages, never as rows of its tables
+  (`exportWorkspaceArchive`): one `archive:` pin per export, `exportPage` over
+  each carried tree, each page's chunks after it. Restore imports each tree with
+  `importPage({ lazy: true })`, hydrates the chunks, and refuses an archive that
+  leaves a chunk owed. Every boot drops the `archive:` and `fork:` pins the last
+  activation held, so a page after a restart is refused by name and `kinu export`
+  starts again from page 0.
 - Deletion (`destroyAgent`, `cf-backend/src/orchestrator.ts`) revokes the
   container's preview exposures, then tears the optional container down in
   two ordered calls: `discardState()` drops its durable bytes and the record

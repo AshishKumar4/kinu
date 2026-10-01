@@ -1,11 +1,13 @@
 /**
  * The one portable JSON Lines workspace archive, written and read by both backends as a logical dump
  * (a Worker cannot hand out its DO's SQLite file). The `end` record's row, file and actor counts make
- * truncation detectable. Pages are not a point-in-time snapshot. Secrets are excluded (EXCLUDED_TABLES).
+ * truncation detectable. SQL pages are not a point-in-time snapshot. Secrets are excluded (EXCLUDED_TABLES).
  */
 
 import { Effect } from 'effect';
 import * as v from 'valibot';
+import type { VfsExportChunk, VfsExportPage } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
 import type { AgentDatabase } from './inline-primitives';
 import type { SqlExec } from '../types/primitives';
@@ -13,6 +15,10 @@ import type { JsonPrimitive } from '../utils/json';
 import { SCHEMA_GENESIS } from './schema-genesis';
 import { requireSchemaGenesis } from './schema-stamp';
 import { settle } from '../obs/effect';
+import { KinuError } from '../obs/error';
+import { VfsExportPageSchema } from '../vfs/export-page';
+import { SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
+import { SOUL_PATH } from './soul';
 
 type ArchiveDatabaseValue = JsonPrimitive | ArrayBuffer;
 
@@ -57,7 +63,7 @@ export function archiveSqlFromDatabase(db: AgentDatabase): SqlExec {
 }
 
 /** Bumped only when a reader would misread an older archive. */
-const WORKSPACE_ARCHIVE_VERSION = 2;
+const WORKSPACE_ARCHIVE_VERSION = 3;
 
 export const WORKSPACE_ARCHIVE_EXTENSION = '.kinu.jsonl';
 
@@ -72,6 +78,14 @@ const EXCLUDED_TABLES = {
 function isInternalTable(name: string): boolean {
   return name.startsWith('sqlite_') || name.startsWith('_cf_');
 }
+
+function isStoreTable(name: string): boolean {
+  return name.startsWith('vfs_') || name.startsWith('nimbus_');
+}
+
+export const ARCHIVE_PIN_PREFIX = 'archive:';
+
+export const ARCHIVE_SNAPSHOT_ENDED = "This export's snapshot ended when the workspace restarted.";
 
 export interface ArchiveSqlCursor {
   phase: 'sql';
@@ -97,7 +111,17 @@ export interface ArchiveAgentsCursor {
   rows: number;
 }
 
-export type ArchiveCursor = ArchiveSqlCursor | ArchiveAgentsCursor | ArchiveFilesCursor;
+export interface ArchiveStoreCursor {
+  phase: 'store';
+  pin: string;
+  root: number;
+  after: string | null;
+  sent: number;
+  rows: number;
+  files: number;
+}
+
+export type ArchiveCursor = ArchiveSqlCursor | ArchiveAgentsCursor | ArchiveFilesCursor | ArchiveStoreCursor;
 
 /** The only cursor wire schema: a copy's `v.object` would silently strip unknown keys such as `tables`. */
 export const ArchiveCursorSchema: v.GenericSchema<ArchiveCursor> = v.variant('phase', [
@@ -126,6 +150,15 @@ export const ArchiveCursorSchema: v.GenericSchema<ArchiveCursor> = v.variant('ph
     rows: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
     files: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
   }),
+  v.object({
+    phase: v.literal('store'),
+    pin: v.pipe(v.string(), v.startsWith(ARCHIVE_PIN_PREFIX)),
+    root: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+    after: v.nullable(v.string()),
+    sent: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+    rows: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+    files: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+  }),
 ]);
 
 export interface ArchiveFileEntry {
@@ -143,6 +176,26 @@ export interface ArchiveFileTarget {
   mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
 }
 
+export interface ArchivePinnedStore {
+  readdir(path: string): readonly string[];
+  exportPage(root: string, after: string | null): VfsExportPage;
+  /** At least one chunk. */
+  exportChunks(hashes: readonly string[], maxBytes: number): { chunks: VfsExportChunk[]; rest: string[] };
+  release(): Promise<void>;
+}
+
+export interface ArchiveStoreSource {
+  pin(name: string): Promise<ArchivePinnedStore>;
+  /** Null once a restart dropped the pin. */
+  pinned(name: string): Promise<ArchivePinnedStore | null>;
+}
+
+export interface ArchiveStoreTarget {
+  /** A first page replaces the tree. */
+  importPage(page: VfsExportPage): Promise<{ pending: readonly string[] }>;
+  hydrateChunks(chunks: readonly VfsExportChunk[]): Promise<{ stored: readonly string[]; invalid: readonly string[] }>;
+}
+
 export interface ArchivePage {
   lines: string[];
   next: ArchiveCursor | null;
@@ -157,9 +210,15 @@ export interface ArchiveExportOptions {
   now?: number;
   /** Authoritative files outside `sql`; null declares a SQL-only workspace. */
   files?: ArchiveFileSource | null;
-  /** Agents with databases of their own; absent when every actor's rows are in `sql`. */
+}
+
+/** Cloud-only: a local workspace keeps its files on disk and every actor's rows in `sql`. */
+export interface CloudArchiveSources {
+  store?: ArchiveStoreSource | null;
   agents?: ArchiveAgentSource | null;
 }
+
+type ExportOptions = ArchiveExportOptions & CloudArchiveSources;
 
 /** One page of an agent's own rows: row records, then its section's close once `next` is null. */
 export interface ArchiveAgentPage {
@@ -227,6 +286,16 @@ interface DirectoryRecord {
   path: string;
 }
 
+interface PageRecord {
+  t: 'page';
+  page: VfsExportPage;
+}
+
+interface ChunksRecord {
+  t: 'chunks';
+  chunks: { hash: string; data: string }[];
+}
+
 interface EndRecord {
   t: 'end';
   rows: number;
@@ -235,7 +304,7 @@ interface EndRecord {
   actors: number;
 }
 
-type ArchiveRecord = ArchiveHeader | SchemaRecord | RowRecord | AgentRecord | FileRecord | DirectoryRecord | EndRecord;
+type ArchiveRecord = ArchiveHeader | SchemaRecord | RowRecord | AgentRecord | FileRecord | DirectoryRecord | PageRecord | ChunksRecord | EndRecord;
 
 const EncodedSqlValueSchema: v.GenericSchema<EncodedSqlValue> = v.union([
   v.string(), v.number(), v.boolean(), v.null(), v.object({ $b64: v.string() }),
@@ -268,6 +337,8 @@ const ArchiveRecordSchema: v.GenericSchema<ArchiveRecord> = v.variant('t', [
   v.object({ t: v.literal('agent'), actor: v.string(), rows: v.number() }),
   v.object({ t: v.literal('file'), path: v.string(), data: v.string() }),
   v.object({ t: v.literal('directory'), path: v.string() }),
+  v.object({ t: v.literal('page'), page: VfsExportPageSchema }),
+  v.object({ t: v.literal('chunks'), chunks: v.array(v.object({ hash: v.string(), data: v.string() })) }),
   v.object({ t: v.literal('end'), rows: v.number(), files: v.number(), actors: v.number() }),
 ]);
 
@@ -284,6 +355,7 @@ const ROWID_ALIAS = '__kinu_rowid';
 interface SchemaObject {
   kind: SchemaKind;
   name: string;
+  table: string;
   sql: string;
   virtual: boolean;
   derived: boolean;
@@ -297,10 +369,11 @@ function readSchema(sql: SqlExec): SchemaObject[] {
     name: v.string(),
     type: v.picklist(['table', 'index', 'trigger', 'view']),
     sql: v.string(),
+    tbl_name: v.string(),
   });
 
   const rows = sql.exec(
-    `SELECT name, type, sql FROM sqlite_master
+    `SELECT name, type, sql, tbl_name FROM sqlite_master
       WHERE sql IS NOT NULL AND type IN ('table', 'index', 'trigger', 'view')`,
   ).toArray().map((row) => v.parse(SchemaRowSchema, row));
 
@@ -327,6 +400,7 @@ function readSchema(sql: SqlExec): SchemaObject[] {
     objects.push({
       kind: row.type,
       name: row.name,
+      table: row.tbl_name,
       sql: row.sql,
       virtual,
       derived,
@@ -613,7 +687,7 @@ interface PageState {
   readonly walk: TableWalk;
 }
 
-function emitHeader(sink: PageSink, schema: readonly SchemaObject[], opts: ArchiveExportOptions, agents: readonly string[]): void {
+function emitHeader(sink: PageSink, schema: readonly SchemaObject[], opts: ExportOptions, agents: readonly string[]): void {
   emitTo(sink, {
     t: 'header',
     kinu_workspace_archive: WORKSPACE_ARCHIVE_VERSION,
@@ -709,37 +783,85 @@ function filesPhase(source: ArchiveFileSource, { sink, walk }: PageState, page: 
   });
 }
 
-/** Call with `cursor: null`, then each page's `next` until it is null. */
-export function readWorkspaceArchivePage(
-  sql: SqlExec,
-  opts: ArchiveExportOptions,
-): Promise<ArchivePage> {
-  return settle(Effect.gen(function* () {
-    const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
-    const cursor = opts.cursor ?? null;
-    const schema = readSchema(sql);
-    const live = schema.filter((o) => o.dumpRows);
-    const agents = opts.agents?.list() ?? [];
-    const state: PageState = { sink: { lines: [], bytes: 0 }, walk: { index: 0, after: null, rows: cursor?.rows ?? 0 } };
-    const count = { files: cursor?.phase === 'files' ? cursor.files : 0 };
+/** The soul is a row a boot seals into the file; runtimes reinstall on use. */
+const MAIN_HOME_NOT_CARRIED = { [SOUL_PATH]: true, '.nimbus': true } satisfies Record<string, true>;
 
-    if (cursor === null) emitHeader(state.sink, schema, opts, agents);
+function carriedRoots(pinned: ArchivePinnedStore): string[] {
+  const under = (parent: string, carried: (name: string) => boolean): string[] => pinned.readdir(parent)
+    .filter(carried).sort().map((name) => `${parent}/${name}`);
 
-    if (cursor === null || cursor.phase === 'sql') {
-      const full = yield* sqlPhase(sql, live, state, { cursor, maxBytes });
+  return [
+    ...under(WORKSPACE_ROOT, (name) => !Object.hasOwn(MAIN_HOME_NOT_CARRIED, name)),
+    ...under('/home', (name) => `/home/${name}` !== WORKSPACE_ROOT),
+    ...under(SLATES_ROOT, () => true),
+  ];
+}
 
-      if (full !== null) return full;
-    }
+/** A restore writes nowhere `carriedRoots` could not name. */
+function isCarriedRoot(stored: string): boolean {
+  // Nimbus roots have no leading slash.
+  const root = `/${normalizeVfsPath(stored)}`;
+  const parent = root.slice(0, Math.max(0, root.lastIndexOf('/')));
+  const name = root.slice(parent.length + 1);
 
-    if (cursor?.phase !== 'files') {
-      if (opts.agents) {
-        const full = yield* agentsPhase(opts.agents, agents, state, { cursor: cursor?.phase === 'agents' ? cursor : null, maxBytes });
+  if (name === '' || name === '.' || name === '..') return false;
 
-        if (full !== null) return full;
-      } else if (cursor?.phase === 'agents') {
-        return yield* cannotResume('its agent source is unavailable');
+  if (parent === WORKSPACE_ROOT) return !Object.hasOwn(MAIN_HOME_NOT_CARRIED, name);
+
+  return parent === SLATES_ROOT || (parent === '/home' && root !== WORKSPACE_ROOT);
+}
+
+function storePhase(source: ArchiveStoreSource, { sink, walk }: PageState, page: {
+  readonly cursor: ArchiveStoreCursor | null; readonly maxBytes: number; readonly count: { files: number };
+}): Effect.Effect<ArchivePage | null, KinuError> {
+  return Effect.gen(function* () {
+    const pin = page.cursor?.pin ?? `${ARCHIVE_PIN_PREFIX}${crypto.randomUUID()}`;
+    const pinned = page.cursor === null ? yield* Effect.promise(() => source.pin(pin)) : yield* Effect.promise(() => source.pinned(pin));
+
+    if (pinned === null) return yield* Effect.fail(new KinuError('missing', ARCHIVE_SNAPSHOT_ENDED));
+    const roots = carriedRoots(pinned);
+    let { root, after, sent } = page.cursor ?? { root: 0, after: null, sent: 0 };
+
+    const stopped = (): ArchivePage => ({
+      lines: sink.lines, next: { phase: 'store', pin, root, after, sent, rows: walk.rows, files: page.count.files },
+    });
+
+    while (root < roots.length) {
+      const exported = pinned.exportPage(roots[root], after);
+      let owed = [...new Set(exported.rows.flatMap((row) => row.pieces.map(([hash]) => hash)))].slice(sent);
+
+      if (sent === 0) {
+        emitTo(sink, { t: 'page', page: exported });
+        page.count.files += exported.rows.length;
       }
+
+      while (owed.length > 0) {
+        // base64: 4 characters per 3 bytes.
+        const { chunks, rest } = pinned.exportChunks(owed, Math.max(1, Math.floor((page.maxBytes - sink.bytes) * 3 / 4)));
+
+        emitTo(sink, { t: 'chunks', chunks: chunks.map((chunk) => ({ hash: chunk.hash, data: bytesToBase64(chunk.data) })) });
+        sent += chunks.length;
+        owed = rest;
+
+        if (owed.length > 0 && sink.bytes >= page.maxBytes) return stopped();
+      }
+
+      [root, after, sent] = exported.next === null ? [root + 1, null, 0] : [root, exported.next, 0];
+
+      if (root < roots.length && sink.bytes >= page.maxBytes) return stopped();
     }
+
+    yield* Effect.promise(() => pinned.release());
+
+    return null;
+  });
+}
+
+function treePhases(opts: ExportOptions, state: PageState, page: {
+  readonly cursor: ArchiveCursor | null; readonly maxBytes: number; readonly count: { files: number };
+}): Effect.Effect<ArchivePage | null, KinuError> {
+  return Effect.gen(function* () {
+    const { cursor, maxBytes, count } = page;
 
     if (opts.files) {
       const full = yield* filesPhase(opts.files, state, { cursor: cursor?.phase === 'files' ? cursor : null, maxBytes, count });
@@ -749,6 +871,47 @@ export function readWorkspaceArchivePage(
       return yield* cannotResume('its workspace file source is unavailable');
     }
 
+    if (opts.store) return yield* storePhase(opts.store, state, { cursor: cursor?.phase === 'store' ? cursor : null, maxBytes, count });
+
+    return cursor?.phase === 'store' ? yield* cannotResume('its workspace store is unavailable') : null;
+  });
+}
+
+/** Call with `cursor: null`, then each page's `next` until it is null. */
+export function readWorkspaceArchivePage(
+  sql: SqlExec,
+  opts: ExportOptions,
+): Promise<ArchivePage> {
+  return settle(Effect.gen(function* () {
+    const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
+    const cursor = opts.cursor ?? null;
+    const schema = readSchema(sql).filter((o) => !opts.store || !isStoreTable(o.table));
+    const live = schema.filter((o) => o.dumpRows);
+    const agents = opts.agents?.list() ?? [];
+    const state: PageState = { sink: { lines: [], bytes: 0 }, walk: { index: 0, after: null, rows: cursor?.rows ?? 0 } };
+    const count = { files: cursor?.phase === 'files' || cursor?.phase === 'store' ? cursor.files : 0 };
+
+    if (cursor === null) emitHeader(state.sink, schema, opts, agents);
+
+    if (cursor === null || cursor.phase === 'sql') {
+      const full = yield* sqlPhase(sql, live, state, { cursor, maxBytes });
+
+      if (full !== null) return full;
+    }
+
+    if (cursor?.phase !== 'files' && cursor?.phase !== 'store') {
+      if (opts.agents) {
+        const full = yield* agentsPhase(opts.agents, agents, state, { cursor: cursor?.phase === 'agents' ? cursor : null, maxBytes });
+
+        if (full !== null) return full;
+      } else if (cursor?.phase === 'agents') {
+        return yield* cannotResume('its agent source is unavailable');
+      }
+    }
+
+    const full = yield* treePhases(opts, state, { cursor, maxBytes, count });
+
+    if (full !== null) return full;
     emitTo(state.sink, { t: 'end', rows: state.walk.rows, files: count.files, actors: countArchivedActors(sql) });
 
     return { lines: state.sink.lines, next: null };
@@ -756,7 +919,7 @@ export function readWorkspaceArchivePage(
 }
 
 /** Whole archive in one call, for callers with no transport in between. */
-export async function writeWorkspaceArchive(sql: SqlExec, opts: ArchiveExportOptions): Promise<string[]> {
+export async function writeWorkspaceArchive(sql: SqlExec, opts: ExportOptions): Promise<string[]> {
   const lines: string[] = [];
   let cursor: ArchiveCursor | null = null;
 
@@ -767,6 +930,47 @@ export async function writeWorkspaceArchive(sql: SqlExec, opts: ArchiveExportOpt
   } while (cursor);
 
   return lines;
+}
+
+function storeRestore(open: (() => ArchiveStoreTarget) | undefined) {
+  let target: ArchiveStoreTarget | null = null;
+  const owed = new Set<string>();
+
+  const page = (exported: VfsExportPage): Effect.Effect<void> => Effect.gen(function* () {
+    if (!isCarriedRoot(exported.root)) {
+      return yield* Effect.die(new Error(`This archive names a tree no archive carries: ${JSON.stringify(exported.root)}.`));
+    }
+
+    const opened = target ??= open?.() ?? null;
+
+    if (!opened) return yield* Effect.die(new Error(NO_STORE_TARGET));
+
+    for (const hash of (yield* Effect.promise(() => opened.importPage(exported))).pending) owed.add(hash);
+  });
+
+  const chunks = (records: ChunksRecord['chunks']): Effect.Effect<void> => Effect.gen(function* () {
+    const opened = target;
+
+    if (!opened) return yield* Effect.die(new Error('This archive has chunks before any page that names them.'));
+    const hydrated = yield* Effect.promise(() => opened.hydrateChunks(records.map((chunk) => ({ hash: chunk.hash, data: base64ToBytes(chunk.data) }))));
+
+    if (hydrated.invalid.length > 0) {
+      return yield* Effect.die(new Error(`This archive is damaged: chunk ${hydrated.invalid[0]} does not hash to its name.`));
+    }
+
+    for (const hash of hydrated.stored) owed.delete(hash);
+  });
+
+  return {
+    take: (record: PageRecord | ChunksRecord): Effect.Effect<{ entries: number; files: number }> => (record.t === 'page'
+      ? page(record.page).pipe(Effect.as({
+        entries: record.page.rows.length, files: record.page.rows.filter((row) => row.kind === 'file').length,
+      }))
+      : chunks(record.chunks).pipe(Effect.as({ entries: 0, files: 0 }))),
+    finish: (): Effect.Effect<void> => (owed.size > 0
+      ? Effect.die(new Error(`This archive is damaged: ${String(owed.size)} chunks its files name never arrived.`))
+      : Effect.void),
+  };
 }
 
 export interface ArchiveRestoreResult {
@@ -782,6 +986,7 @@ export interface ArchiveRestoreResult {
 export interface ArchiveRestoreOptions {
   /** Opened lazily at the first file record, after SQL has landed; required if the archive carries files. */
   files?: () => ArchiveFileTarget;
+  store?: () => ArchiveStoreTarget;
 }
 
 /** Streams into an empty database; dependent objects (indexes, FTS, triggers, views) apply after the rows. */
@@ -805,6 +1010,8 @@ function matchesEnd(sql: SqlExec, end: EndRecord | null, carried: { rows: number
 }
 
 const NO_FILE_TARGET = 'This archive contains workspace files, but no filesystem target was provided.';
+
+const NO_STORE_TARGET = 'This archive contains a workspace store, but no store target was provided.';
 
 /** The first record, refused unless it is this format's header under this Kinu's schema genesis. */
 function archiveHeader(record: ArchiveRecord): Effect.Effect<ArchiveHeader> {
@@ -833,6 +1040,14 @@ export function restoreWorkspaceArchive(
     let fileRecords = 0;
     let files = 0;
     let fileTarget: ArchiveFileTarget | null = null;
+    const store = storeRestore(opts.store);
+
+    const openFiles = (): Effect.Effect<ArchiveFileTarget> => {
+      fileTarget ??= opts.files?.() ?? null;
+
+      return fileTarget ? Effect.succeed(fileTarget) : Effect.die(new Error(NO_FILE_TARGET));
+    };
+
     const writer = new ArchiveRowWriter(sql);
 
     const finishSql = (): void => {
@@ -891,9 +1106,7 @@ export function restoreWorkspaceArchive(
         case 'directory': {
           const path = yield* archivePath(record.path);
           finishSql();
-          const target = fileTarget ??= opts.files?.() ?? null;
-
-          if (!target) return yield* Effect.die(new Error(NO_FILE_TARGET));
+          const target = yield* openFiles();
           yield* Effect.promise(() => target.mkdir(path, { recursive: true }));
           fileRecords++;
           break;
@@ -902,9 +1115,7 @@ export function restoreWorkspaceArchive(
         case 'file': {
           const path = yield* archivePath(record.path);
           finishSql();
-          const target = fileTarget ??= opts.files?.() ?? null;
-
-          if (!target) return yield* Effect.die(new Error(NO_FILE_TARGET));
+          const target = yield* openFiles();
           const slash = path.lastIndexOf('/');
 
           if (slash > 0) yield* Effect.promise(() => target.mkdir(path.slice(0, slash), { recursive: true }));
@@ -914,11 +1125,22 @@ export function restoreWorkspaceArchive(
           break;
         }
 
+        case 'page':
+        case 'chunks': {
+          finishSql();
+          const taken = yield* store.take(record);
+          fileRecords += taken.entries;
+          files += taken.files;
+          break;
+        }
+
         case 'end':
           end = record;
           break;
       }
     }
+
+    yield* store.finish();
 
     if (!header) return yield* Effect.die(new Error('This file is not a Kinu workspace archive (no header).'));
     yield* writer.requireSections(header.agents ?? []);

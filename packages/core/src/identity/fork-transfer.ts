@@ -5,7 +5,8 @@
  */
 
 import * as v from 'valibot';
-import type { VfsExportChunk, VfsExportPage, VfsExportRow } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import type { VfsExportChunk, VfsExportPage } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+import { VfsExportPageSchema } from '../vfs/export-page';
 import { SHELL_APPROVAL_AUTHORITY_KEYS } from '../config/store';
 import { KinuError } from '../obs/error';
 import { PLATFORM_CATALOG } from '../platform-catalog';
@@ -110,33 +111,6 @@ const ForkImportTargetSchema = v.variant('in', [
 
 export type ForkImportTarget = v.InferOutput<typeof ForkImportTargetSchema>;
 
-/** Nimbus's export row, checked on the wire as every frame is; Nimbus checks it again as it imports. */
-const ForkExportRowSchema: v.GenericSchema<VfsExportRow> = v.object({
-  path: v.string(),
-  ino: v.number(),
-  kind: v.picklist(['file', 'directory', 'symlink']),
-  size: v.number(),
-  mode: v.number(),
-  uid: v.number(),
-  gid: v.number(),
-  defaultAcl: v.nullable(v.number()),
-  atime: v.number(),
-  mtime: v.number(),
-  contentKey: v.nullable(v.string()),
-  pieceOffset: v.number(),
-  manifest: v.boolean(),
-  pieces: v.array(v.tuple([v.string(), v.number()])),
-});
-
-const ForkExportPageSchema: v.GenericSchema<VfsExportPage> = v.object({
-  schema: v.number(),
-  root: v.string(),
-  nextIno: v.number(),
-  after: v.nullable(v.string()),
-  rows: v.array(ForkExportRowSchema),
-  next: v.nullable(v.string()),
-});
-
 const ForkExportChunkSchema: v.GenericSchema<VfsExportChunk> = v.object({ hash: v.string(), data: v.instance(Uint8Array) });
 
 /** One frame of one fork transfer; the canonical wire authority every type on both sides is inferred from. */
@@ -159,7 +133,7 @@ const ForkFrameSchema = v.variant('kind', [
   /** Chunks a page names that the target lacked, stored ahead of that page. */
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('chunks'), target: ForkImportTargetSchema, chunks: v.array(ForkExportChunkSchema) }),
   /** One page of one import. */
-  v.object({ ...FRAME_ENVELOPE, kind: v.literal('page'), target: ForkImportTargetSchema, page: ForkExportPageSchema }),
+  v.object({ ...FRAME_ENVELOPE, kind: v.literal('page'), target: ForkImportTargetSchema, page: VfsExportPageSchema }),
   /** Closes the transfer. `stream` is the rolling hash over every preceding frame's `digest`, so a
      *  dropped, reordered or substituted frame cannot reach a matching commit. */
   v.object({ ...FRAME_ENVELOPE, kind: v.literal('commit'), stream: v.string() }),
