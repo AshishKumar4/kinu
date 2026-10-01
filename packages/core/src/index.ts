@@ -638,7 +638,6 @@ export {
   type SubordinateLiveStatus,
   type SubordinateReportOrigin,
   type SubordinateRuntime,
-  type SubordinatesChangedEvent,
 } from './subordinates/support';
 
 export {
@@ -1898,7 +1897,7 @@ export type {
 } from './read-models/workspace-diff';
 
 export {
-  LIVE_READS, LiveReadsNotice, PAGE_KEEPALIVE, READS_CHANGED_EVENT, readsMovedByFiles, readsWrittenBy,
+  LIVE_READS, LiveReadsNotice, PAGE_KEEPALIVE, READS_CHANGED_EVENT, ROSTER_READS, readsMovedByFiles, readsWrittenBy,
   type LiveRead, type ReadsChangedFrame,
 } from './read-models/live-reads';
 

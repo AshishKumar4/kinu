@@ -54,7 +54,7 @@ export interface ExecutorCommandResult {
 
 export type SubordinateStatus = "idle" | "working" | "awaiting_input" | "dismissed";
 
-/** Parent-owned roster from listSubordinates and the subordinates_changed socket event. */
+/** Parent-owned roster from listSubordinates. */
 export interface SubordinateRosterEntry {
 	name: string;
 	/** Actor whose conversation `getChatHistoryPage({ actor })` pages; null until birth confirms one. */

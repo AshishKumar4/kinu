@@ -10,7 +10,10 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import {
   EventLog,
+  LiveReadsNotice,
+  readsWrittenBy,
   ReplyChannelStore,
+  ROSTER_READS,
   SubordinateRosterStore,
   admitSubordinateTask,
   dismissOrphanedAssignments,
@@ -58,7 +61,6 @@ import {
   type SubordinateEventResult,
   type SubordinateReportHandoff,
   type SubordinateReportStatus,
-  type SubordinatesChangedEvent,
   type AgentConfigStore,
   type JsonObject,
   type HostedAgentRef,
@@ -81,6 +83,7 @@ import {
 } from '@kinu.run/core';
 import { Effect, Result } from 'effect';
 import { KinuError, attempt, diagnostics, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
+import { watchStatements } from '@kinu.run/core/identity';
 import {
   createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, shareLocalWorkspacePlane,
   buildLocalActorRuntime, cleanupFacetCwdScratch, writeTransaction,
@@ -148,6 +151,8 @@ export interface LocalAgentHostOptions {
    * Defaults to `interactive`; the daemon declares itself.
    */
   driverKind?: DriverKind;
+  /** When a tick's `reads_changed` frame goes out: the next task unless a suite ends its ticks itself. */
+  deferLiveReads?(flush: () => void): void;
 }
 
 /** What one {@link LocalAgentHost.tick} did; `ran` distinguishes a deferred pass from an idle one. */
@@ -174,6 +179,8 @@ interface HostTree {
   readonly runtimes: Map<string, CLIRuntime>;
   /** Kept so the actor's session gets the same engine, governor and event rail as its `ActorSession`. */
   readonly orchestrations: Map<string, LocalOrchestration>;
+  /** Every write to the file names the reads it moves, to the root's clients. */
+  readonly liveReads: LiveReadsNotice;
 }
 
 interface HostEntry {
@@ -431,11 +438,18 @@ export class LocalAgentHost {
     const dbPath = this.opts.dbPath(name);
 
     if (!existsSync(dbPath)) throw new Error(`agent "${name}" does not exist at ${dbPath}`);
+
+    const liveReads = new LiveReadsNotice((frame) => { this.entries.get(name)?.session.host.broadcast(frame); }, (flush) => {
+      if (this.opts.deferLiveReads) this.opts.deferLiveReads(flush);
+      else setImmediate(flush);
+    });
+
     const db = new Database(dbPath);
+    watchStatements(db, (query) => { liveReads.moved(readsWrittenBy(query)); });
 
     try {
       const ws = await this.opts.open(ref, db, dbPath);
-      const tree = this.createTree(ref, db, ws);
+      const tree = this.createTree(ref, db, ws, liveReads);
       this.trees.set(name, tree);
 
       try {
@@ -467,6 +481,7 @@ export class LocalAgentHost {
     ref: HostedAgentRef,
     db: Database,
     ws: LocalHostedAgent,
+    liveReads: LiveReadsNotice,
   ): HostTree {
     const { directory } = localActorDirectory(ws.rt.actor);
     const sql = makeSql(db);
@@ -534,7 +549,7 @@ export class LocalAgentHost {
     });
 
     return {
-      db, host, directory, runtimes, orchestrations, driving: 0,
+      db, host, directory, runtimes, orchestrations, liveReads, driving: 0,
       hold: new DriverLeaseHold({ sql, execRaw: makeExecRaw(db), proc: OS_LEASE_PROCESS }, this.driverKind),
     };
   }
@@ -1003,10 +1018,7 @@ export class LocalAgentHost {
       owed: async (ending, assistantText, narration) => {
         const parent = this.requireActorEntry(child.actor.record.parentActorId ?? '');
 
-        if (parent.roster.finishTurn(child.name, ending, Date.now())) {
-          const event: SubordinatesChangedEvent = { type: 'subordinates_changed', subordinates: parent.roster.list() };
-          parent.session.host.broadcast(event);
-        }
+        parent.roster.finishTurn(child.name, ending, Date.now());
 
         const state = child.relay;
 
@@ -1135,7 +1147,7 @@ export class LocalAgentHost {
       originContext: async () => parent.actor.session.history,
       ownMission: () => readMission(makeSql(parent.tree.db)) ?? '',
       createName: mintSubordinateName,
-      broadcast: (event) => parent.session.host.broadcast(event),
+      rosterMoved: () => { parent.tree.liveReads.moved(ROSTER_READS); },
       broadcastTask: (event) => parent.session.host.broadcast(metadataBroadcastEvent(
         'subordinate_event',
         { subordinate: event.subordinate, timestamp: event.timestamp },

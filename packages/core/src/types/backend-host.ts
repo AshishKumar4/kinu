@@ -30,6 +30,8 @@ export interface BroadcastEvent {
   readonly plan?: PlanReview;
   readonly contextTokens?: number;
   readonly contextWindow?: number;
+  /** `reads_changed`: what a write moved. */
+  readonly reads?: readonly string[];
 }
 
 /** A programmatic turn in the same serialized loop the user drives; `metadata.kinuEvent` renders

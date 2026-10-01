@@ -52,6 +52,7 @@ async function liveRead(agent: HarnessOrchestratorAgent, read: LiveRead): Promis
     getActivePlanReview: () => agent.getActivePlanReview(),
     listWorkspaceWork: () => agent.listWorkspaceWork(),
     listWorkspaceAgents: () => agent.listWorkspaceAgents(),
+    listSubordinates: () => agent.listSubordinates(),
   };
 
   await reads[read]();
@@ -190,7 +191,7 @@ test('a crafted tool and the changelog seen mark each name what they move', asyn
   await turns.settle({ messageId: 'a-tool', text: 'made' });
 });
 
-test('an agent dismissed names the Agents panel', async () => {
+test('an agent dismissed names the Agents panel and the roster', async () => {
   const { agent } = orchestratorHarness();
   await agent.setSoul('# Purpose\n\nShip the coupon fix.');
   const { name } = await agent.createSubordinateAgent();
@@ -201,7 +202,7 @@ test('an agent dismissed names the Agents panel', async () => {
   await agent.dismissSubordinate(name);
   endTick(agent);
 
-  expect(named()).toContain('listWorkspaceAgents');
+  expect([...named()]).toEqual(expect.arrayContaining(['listWorkspaceAgents', 'listSubordinates']));
 });
 
 // eval-site-preview-1-2ypddc, staging f75f06932, 2026-10-01: the eval's settle read the jobs every second because it

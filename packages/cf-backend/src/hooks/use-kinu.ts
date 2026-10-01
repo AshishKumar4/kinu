@@ -360,7 +360,6 @@ const SocketMessageSchema = v.variant("type", [
   v.looseObject({ type: v.literal("signal_card"), actorId: v.optional(v.string()) }),
   v.object({ type: v.literal("plan_updated"), plan: PlanReviewSchema }),
   WorkspacePlanUpdatedFrameSchema,
-  v.object({ type: v.literal("subordinates_changed"), subordinates: v.array(SubordinateRosterEntrySchema) }),
   TurnClaimFrameSchema,
   SubordinateActivityEventSchema,
   v.object({
@@ -1445,10 +1444,6 @@ export function useKinu(target?: string | KinuActorAddress) {
           }
         } else if (msg.type === TURN_CLAIM_FRAME) {
           setTurnClaim(msg.claim);
-        } else if (msg.type === "subordinates_changed") {
-          const roster = parseSubordinateRoster({ value: msg.subordinates });
-
-          if (roster) await writeRoster(roster);
         } else if (msg.type === "subordinate_event") {
           const subordinateEvent = parseSubordinateActivityEvent({ value: msg });
 
@@ -1469,7 +1464,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     };
   }, [
     agent, bumpHeadActivity, forgetDeltas, refreshBackgroundJobs, refreshSlates,
-    retireDelta, setConsentResolutionError, setMctsTreeFromProgress, isSubordinate, writeRoster,
+    retireDelta, setConsentResolutionError, setMctsTreeFromProgress, isSubordinate,
   ]);
 
   const resolveConsent = useCallback((consentId: string, decision: ConsentDecision) => resolvePendingConsent({
@@ -1521,6 +1516,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     getMemoryContent: () => refreshCurrentLiveResource("memoryContent", () => rpc<string>("getMemoryContent", []), setMemoryContent),
     getExecutors: () => refreshCurrentLiveResource("executors", () => rpc<ExecutorInfo[]>("getExecutors", []), setExecutors),
     listWorkspaceAgents: () => refreshCurrentLiveResource("agents", () => rpc<PanelAgent[]>("listWorkspaceAgents", []), setWorkspaceAgents),
+    listSubordinates: refreshRoster,
     listBackgroundJobs: refreshBackgroundJobs,
     listPendingActions: refreshPendingActions,
     getWorkspaceTabPresence: refreshTabPresence,
@@ -1531,7 +1527,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       (plan) => setActivePlan(parseActivePlanReview({ value: plan })),
     ),
   }), [
-    refreshBackgroundJobs, refreshCurrentLiveResource, refreshExposedPorts, refreshPendingActions, refreshSlates,
+    refreshBackgroundJobs, refreshCurrentLiveResource, refreshExposedPorts, refreshPendingActions, refreshRoster, refreshSlates,
     refreshTabPresence, rpc,
   ]);
 

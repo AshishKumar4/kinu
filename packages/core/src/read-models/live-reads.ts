@@ -4,7 +4,7 @@ import { workspacePath } from '../vfs/workspace-path';
 export const LIVE_READS = [
   'getExposedPorts', 'getToolDescriptions', 'listSlates', 'getEvolutionChangelog', 'listPendingActions',
   'getMemoryContent', 'getExecutors', 'listBackgroundJobs', 'getWorkspaceTabPresence', 'getActivePlanReview',
-  'listWorkspaceWork', 'listWorkspaceAgents',
+  'listWorkspaceWork', 'listWorkspaceAgents', 'listSubordinates',
 ] as const;
 
 export type LiveRead = typeof LIVE_READS[number];
@@ -26,6 +26,8 @@ const WORK: readonly LiveRead[] = ['listWorkspaceWork', 'getWorkspaceTabPresence
 
 const AGENTS: readonly LiveRead[] = ['listWorkspaceAgents'];
 
+export const ROSTER_READS: readonly LiveRead[] = [...AGENTS, 'listSubordinates'];
+
 /** Every write to one of these tables moves the reads that select from it. */
 const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string, readonly LiveRead[]>([
   ['agent_facts', LEDGER],
@@ -43,8 +45,8 @@ const READS_BY_TABLE: ReadonlyMap<string, readonly LiveRead[]> = new Map<string,
   ['background_jobs', ['listBackgroundJobs', 'getWorkspaceTabPresence']],
   ['background_job_serves', ['listBackgroundJobs', 'getWorkspaceTabPresence']],
   ['agent_tasks', WORK],
-  ['actor_subordinates', AGENTS],
-  ['actor_config', AGENTS],
+  ['actor_subordinates', ROSTER_READS],
+  ['actor_config', ROSTER_READS],
   ['actor_turn_claims', AGENTS],
   ['agent_log', AGENTS],
   ['head_journal', AGENTS],
@@ -86,7 +88,7 @@ export function readsMovedByFiles(paths: readonly string[]): readonly LiveRead[]
 export class LiveReadsNotice {
   private pending: Set<LiveRead> | null = null;
 
-  constructor(private readonly send: (frame: string) => void, private readonly defer: (flush: () => void) => void) {}
+  constructor(private readonly send: (frame: ReadsChangedFrame) => void, private readonly defer: (flush: () => void) => void) {}
 
   moved(reads: readonly LiveRead[]): void {
     if (reads.length === 0) return;
@@ -102,6 +104,6 @@ export class LiveReadsNotice {
   private flush(): void {
     const reads = [...this.pending ?? []];
     this.pending = null;
-    this.send(JSON.stringify({ type: READS_CHANGED_EVENT, reads } satisfies ReadsChangedFrame));
+    this.send({ type: READS_CHANGED_EVENT, reads });
   }
 }

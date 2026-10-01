@@ -1,13 +1,13 @@
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import * as v from 'valibot';
-import type { JsonValue } from '@kinu.run/core';
+import { READS_CHANGED_EVENT, type JsonValue } from '@kinu.run/core';
 
 export const HireRosterSchema = v.array(v.looseObject({ name: v.string(), status: v.picklist(['idle', 'working', 'awaiting_input', 'dismissed']), lifetime: v.string() }));
 
 const FrameSchema = v.looseObject({
   type: v.string(), id: v.optional(v.string()), body: v.optional(v.string()), done: v.optional(v.boolean()),
   error: v.optional(v.unknown()), success: v.optional(v.boolean()), result: v.optional(v.unknown()),
-  subordinates: v.optional(HireRosterSchema),
+  reads: v.optional(v.array(v.string())),
 });
 
 export async function hireSocket(app: Fetcher, path: string, reply: string) {
@@ -21,6 +21,21 @@ export async function hireSocket(app: Fetcher, path: string, reply: string) {
   const finished = new Set<string>();
   let roster: v.InferOutput<typeof HireRosterSchema> = [];
   let nextId = 0;
+
+  const rpc = async <T>(method: string, args: JsonValue[], schema: v.GenericSchema<T>): Promise<T> => {
+    const id = `client-rpc-${nextId++}`;
+    const response = Promise.withResolvers<unknown>();
+
+    requests.set(id, response);
+    socket.send(JSON.stringify({ type: 'rpc', id, method, args }));
+
+    return v.parse(schema, await response.promise);
+  };
+
+  // What the page does: the reply streamed to its end, and a durable child the roster no longer shows working.
+  const settled = (): void => {
+    if ([...replyStreams].some((id) => finished.has(id)) && roster.some((child) => child.lifetime === 'durable' && child.status !== 'working')) completion.resolve();
+  };
 
   socket.addEventListener('message', (event) => {
     const raw = v.parse(v.string(), event.data);
@@ -38,7 +53,9 @@ export async function hireSocket(app: Fetcher, path: string, reply: string) {
       else if (frame.success === true) pending?.resolve(frame.result);
     }
 
-    if (frame.type === 'subordinates_changed' && frame.subordinates !== undefined) roster = frame.subordinates;
+    if (frame.type === READS_CHANGED_EVENT && frame.reads?.includes('listSubordinates') === true) {
+      void rpc('listSubordinates', [], HireRosterSchema).then((read) => { roster = read; settled(); }, completion.reject);
+    }
 
     if (frame.type === CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE && frame.id !== undefined) {
       if (frame.error === true) completion.reject(new Error(frame.body ?? 'The product chat turn failed'));
@@ -48,7 +65,7 @@ export async function hireSocket(app: Fetcher, path: string, reply: string) {
       if (frame.done === true) finished.add(frame.id);
     }
 
-    if ([...replyStreams].some((id) => finished.has(id)) && roster.some((child) => child.lifetime === 'durable' && child.status !== 'working')) completion.resolve();
+    settled();
   });
   socket.addEventListener('close', () => {
     completion.reject(new Error('Workspace socket closed before its reply and roster completion'));
@@ -58,15 +75,7 @@ export async function hireSocket(app: Fetcher, path: string, reply: string) {
   socket.accept();
 
   return {
-    async rpc<T>(method: string, args: JsonValue[], schema: v.GenericSchema<T>): Promise<T> {
-      const id = `client-rpc-${nextId++}`;
-      const response = Promise.withResolvers<unknown>();
-
-      requests.set(id, response);
-      socket.send(JSON.stringify({ type: 'rpc', id, method, args }));
-
-      return v.parse(schema, await response.promise);
-    },
+    rpc,
     send(prompt: string) {
       socket.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST, id: 'hire-msg-client', init: {
         method: 'POST', body: JSON.stringify({ messages: [{ id: 'hire-msg-input', role: 'user', parts: [{ type: 'text', text: prompt }] }], trigger: 'submit-message' }),

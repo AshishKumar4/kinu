@@ -73,7 +73,7 @@ import {
 } from './overlays';
 import { useDeviceConnectPrompt, type DeviceConnectPromptState } from './use-device-connect';
 import { useShellApproval } from './use-shell-approval';
-import type { BroadcastEvent, ShellApprovalRequest, WorkMode } from '@kinu.run/core';
+import { READS_CHANGED_EVENT, ROSTER_READS, type BroadcastEvent, type LiveRead, type ShellApprovalRequest, type WorkMode } from '@kinu.run/core';
 import { useComposerPaste } from './use-composer-paste';
 import { useDraftEditing } from './use-draft-editing';
 import { composerHelp } from './help-view';
@@ -143,6 +143,8 @@ export type ActiveSurface =
   | { kind: 'takes'; set: AlternateTakeSet }
   | { kind: 'subagent'; path: readonly string[]; label: string; actorId: string | null }
   | null;
+
+const HUB_READS: ReadonlySet<string> = new Set<LiveRead>([...ROSTER_READS, 'listWorkspaceWork']);
 
 function surfaceTitleFor(surface: ActiveSurface, walkbackOpen: boolean): string | null {
   if (surface === null) return walkbackOpen ? 'Walk back ›' : null;
@@ -849,6 +851,8 @@ function ChatScene({
   }, [hub, roster.page.items, client, status?.name, isProcessing, projectRoot]);
 
   const answered = useMemo(() => answeredHelpers(messages, hub?.data.helpers ?? []), [messages, hub]);
+  // Bumped by each frame naming a read the hub shows, so the hub reads again.
+  const [hubReadsMoved, setHubReadsMoved] = useState(0);
 
   useEffect(() => {
     if (hubView !== 'agents') return;
@@ -866,7 +870,7 @@ function ChatScene({
     })();
 
     return () => { live = false; };
-  }, [client, hubView]);
+  }, [client, hubView, hubReadsMoved]);
 
   const openSubagent = useCallback((entry: TuiHubRow) => {
     if (entry.path === undefined) return;
@@ -1345,6 +1349,12 @@ function ChatScene({
   }, [addMessage, dispatchInput, hintAlternateTakes, runInputEffects, sealSegment, sealThinking, setTurnPhase, stream]);
 
   const handleBroadcast = useCallback((event: Extract<AgentClientEvent, { type: 'broadcast' }>) => {
+    if (event.event.type === READS_CHANGED_EVENT) {
+      if (event.event.reads?.some((read) => HUB_READS.has(read)) === true) setHubReadsMoved((moves) => moves + 1);
+
+      return;
+    }
+
     if (event.event.type === 'context_fill') {
       const measured = contextNumberOf(event.event);
       setLiveContext(measured);

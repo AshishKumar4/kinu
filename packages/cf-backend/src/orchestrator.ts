@@ -178,7 +178,7 @@ import {
   getRunTimeline, type TimelineSpan,
   getRunEvents, getRunEventText, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
   turnRequestIndex, turnRequestPage, type TurnRequestIndex, type TurnRequestPage, type AgentStores,
-  LiveReadsNotice, readsMovedByFiles, readsWrittenBy, sameDeviceStatus, type LiveRead,
+  LiveReadsNotice, readsMovedByFiles, readsWrittenBy, ROSTER_READS, sameDeviceStatus, type LiveRead,
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes,
@@ -464,7 +464,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Lazy: the base constructor writes through `sql` before any field of this class exists. */
   private get liveReads(): LiveReadsNotice {
-    this._liveReads ??= new LiveReadsNotice((frame) => { this.broadcastToActor(null, frame); }, (flush) => { this.deferLiveReads(flush); });
+    this._liveReads ??= new LiveReadsNotice((frame) => { this.broadcastToActor(null, JSON.stringify(frame)); }, (flush) => { this.deferLiveReads(flush); });
 
     return this._liveReads;
   }
@@ -948,7 +948,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       priceAs: (actor, spec) => this.priceHostedModel(actor.handle, spec),
       suggestTitle: (mission) => this.suggestTitle(mission),
       taskProfile: (turn) => this.hostedTaskProfile(turn),
-      announce: () => { this.broadcastSubordinatesChanged(); },
+      announce: () => { this.liveReadsMoved(ROSTER_READS); },
       // The root's turns run on this object's own chat loop, not its hosted slot.
       scheduleDrain: (actor) => {
         if (actor.record.parentActorId === null) {
@@ -1152,7 +1152,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // The workspace's purpose, shared by every actor in it.
       ownMission: () => this.ownMission(),
       createName: mintSubordinateName,
-      broadcast: (event) => this.broadcastSubordinatesChanged(event),
+      rosterMoved: () => { this.liveReadsMoved(ROSTER_READS); },
       broadcastTask: (event) => this.broadcastSubordinateEvent({
         kind: 'task',
         ...event,

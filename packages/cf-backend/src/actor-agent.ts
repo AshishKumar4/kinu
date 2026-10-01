@@ -38,7 +38,7 @@ import {
   type CliSocketBearer,
   type RpcFrame,
 } from "./cli/rpc-gate";
-import { hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
+import { hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, ROSTER_READS, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
@@ -139,7 +139,7 @@ import {
   type SubordinateRuntime, type TemporaryAgentPort,
   SubordinateRosterStore, subordinateTitle,
   createTeamToolDeps, createTemporaryAgentPort, receiveSubordinateEvent,
-  type SubordinatesChangedEvent, type SubordinateReportStatus, type SubordinateReportOrigin,
+  type SubordinateReportStatus, type SubordinateReportOrigin,
   type SubordinateEventResult,
   // One minting rule for every subordinate, on either backend
   mintSubordinateName,
@@ -834,38 +834,6 @@ export abstract class ActorAgent extends Agent<Env> {
     ));
   }
 
-  private _subordinateRosterBroadcast: AsyncTaskOwner | null = null;
-  private _subordinateRosterBroadcastPending = false;
-
-  protected broadcastSubordinatesChanged(_event?: SubordinatesChangedEvent): void {
-    this._subordinateRosterBroadcastPending = true;
-
-    if (this._subordinateRosterBroadcast !== null) return;
-    const owner: AsyncTaskOwner = { promise: null };
-    this._subordinateRosterBroadcast = owner;
-    owner.promise = (async () => {
-      try {
-        while (this._subordinateRosterBroadcastPending) {
-          this._subordinateRosterBroadcastPending = false;
-          const subordinates = await this.subordinateViews();
-          this.broadcastToActor(null, JSON.stringify({ type: 'subordinates_changed', subordinates }));
-        }
-      } catch (cause) {
-        diagnostics.failure('subordinate.roster_broadcast_failed', toKinuError({
-          doing: 'building the subordinate roster read model',
-          cause,
-          otherwise: 'unavailable',
-        }));
-      } finally {
-        if (this._subordinateRosterBroadcast === owner) {
-          this._subordinateRosterBroadcast = null;
-
-          if (this._subordinateRosterBroadcastPending) this.broadcastSubordinatesChanged();
-        }
-      }
-    })();
-  }
-
   protected broadcastSubordinateEvent(
     event: Omit<SubordinateActivityEvent, 'type' | 'id'> & { id?: string },
   ): void {
@@ -931,7 +899,7 @@ export abstract class ActorAgent extends Agent<Env> {
       originContext: () => this.turnOriginContext(),
       ownMission: () => this.ownMission(),
       createName: mintSubordinateName,
-      broadcast: (event) => this.broadcastSubordinatesChanged(event),
+      rosterMoved: () => { this.liveReadsMoved(ROSTER_READS); },
       broadcastTask: (event) => this.broadcastSubordinateEvent({
         kind: 'task',
         ...event,
@@ -940,7 +908,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
-   * Called by a child after it wrote its naming state; only fans `subordinates_changed`.
+   * Called by a child after it wrote its naming state; only names the roster's reads.
    * Must not call the child back (it is mid-turn). Not `@callable`: stub possession authorizes.
    */
   async recordSubordinateTitle(
@@ -1011,7 +979,7 @@ export abstract class ActorAgent extends Agent<Env> {
       vfs: this.rt.storage.vfs,
       transaction: (body) => this.ctx.storage.transactionSync(body),
       announce: (report) => {
-        this.broadcastSubordinatesChanged();
+        this.liveReadsMoved(ROSTER_READS);
         this.broadcastSubordinateEvent({ ...report, kind: 'report' });
       },
       onAdmitted: () => { this.orch.scheduleDrain(); },
