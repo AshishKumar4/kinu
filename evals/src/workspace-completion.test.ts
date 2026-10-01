@@ -5,10 +5,9 @@ import {
 } from '@kinu.run/core';
 import { createTestActorsOver, createTestSql, handClock, type HandClock } from '@kinu.run/test-utils';
 import type { BackendHost } from '../../packages/core/src/types/backend-host';
-import { trialBudgetMs } from './budget';
 import type { PublicBackgroundJob, PublicSubordinate } from './session';
 import {
-  answered, HUNG_AFTER_MS, settle, TrialOverBudget, TurnWatch, type WatchClock, type WatchedWorkspace, WorkspaceHang, type WorkspaceHeld,
+  answered, HUNG_AFTER_MS, settle, TurnWatch, type WatchClock, type WatchedWorkspace, WorkspaceHang, type WorkspaceHeld,
 } from './workspace-completion';
 
 const START = Date.parse('2026-10-01T06:00:00.000Z');
@@ -67,7 +66,7 @@ type Snapshot = {
   inFlight?: string[]; heard?: number;
 };
 
-/** Past every trial's budget: a watch still reading a fixture this far in never gave a verdict. */
+/** Far past any bound: a watch still reading a fixture this far in never gave a verdict. */
 const UNANSWERED_MS = 120 * MINUTE;
 
 /**
@@ -355,16 +354,14 @@ function detachedCommand(hand: HandClock, never: boolean): DetachedCommand {
   };
 }
 
-describe('a job is waited on until it settles, never judged by its silence; the trial budget bounds what never ends', () => {
-  const budget = { task: 'site-preview', ms: trialBudgetMs('site-preview'), startedAt: START };
-
+describe('a job is waited on until it settles, never judged by its silence', () => {
   // A detached `sleep 600; make` was graded hung at 420 s (2026-10-01): a job publishes nothing while it runs.
   test("a quiet ten-minute job the product's runner detached settles green, the trial saying each minute what it waits on", async () => {
     const hand = handClock(START);
     const { workspace, store, lead } = detachedCommand(hand, false);
     const lines: string[] = [];
 
-    expect(await settle(new TurnWatch(workspace, { clock: overHand(hand), budget, waiting: (line) => { lines.push(line); } }))).toBeUndefined();
+    expect(await settle(new TurnWatch(workspace, { clock: overHand(hand), waiting: (line) => { lines.push(line); } }))).toBeUndefined();
     await lead;
 
     const [job] = listBackgroundJobs(store, 50);
@@ -373,23 +370,6 @@ describe('a job is waited on until it settles, never judged by its silence; the 
     expect(job.status).toBe('completed');
     expect(hand.now() - START).toBeGreaterThan(10 * MINUTE);
     expect(lines).toEqual(Array.from({ length: 10 }, () => `waiting on job ${job.id} (workspace: sleep 600; make) since ${new Date(job.createdAt).toISOString()}`));
-  });
-
-  test('a job that never ends fails the trial over budget, naming the job, never as hung', async () => {
-    const hand = handClock(START);
-    const { workspace, store, lead } = detachedCommand(hand, true);
-    const lines: string[] = [];
-
-    const over = await ended(settle(new TurnWatch(workspace, { clock: overHand(hand), budget, waiting: (line) => { lines.push(line); } })), TrialOverBudget);
-    await lead;
-    const [job] = listBackgroundJobs(store, 50);
-    const budgetS = budget.ms / 1000;
-
-    expect(job?.status).toBe('running');
-    expect(over.message).toBe(`over budget, held by running shell job ${job?.id ?? ''} (workspace: sleep 600; make): `
-      + `the trial ran ${String(budgetS + 1)} s, past the site-preview budget of ${String(budgetS)} s`);
-    expect(over.heldBy).toEqual(['running shell job']);
-    expect(lines).toHaveLength(Math.floor(budgetS / 60));
   });
 
   // A task helper whose turn ended with a job running stays working until the job settles (core `finishTurn`).
@@ -406,17 +386,5 @@ describe('a job is waited on until it settles, never judged by its silence; the 
 
     expect(await settle(new TurnWatch(delegated, { clock, waiting: (line) => { lines.push(line); } }))).toBeUndefined();
     expect(lines[0]).toBe(`waiting on helper task-helper's job bgjob-tests (workspace: npm test) since ${at(MINUTE)}`);
-  });
-
-  // Staging, 2026-10-01: two Ling site-preview trials stepped for 55 minutes without ending turn 1.
-  test("a run that never stops streaming ends at the trial's budget, held by its run, never as hung", async () => {
-    const clock = watchClock();
-    const looping = fixtureWorkspace(clock, (elapsed) => ({ events: [start('run-1')], heard: words(elapsed, Infinity) }));
-    const memory = { task: 'memory-recall', ms: trialBudgetMs('memory-recall'), startedAt: START };
-
-    const over = await ended(answered(new TurnWatch(looping, { clock, budget: memory }), new Promise<never>(() => undefined)), TrialOverBudget);
-
-    expect(over.message).toContain(`over budget, held by open run run-1, its last row run_start at ${at(0)}: the trial ran`);
-    expect(over.heldBy).toEqual(['open run']);
   });
 });

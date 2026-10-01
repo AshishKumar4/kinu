@@ -2490,8 +2490,7 @@ export const LADDER: readonly Gate[] = [
     seconds: 420,
     catches: 'an eval task that fails outright on the build that just shipped: a trial whose workspace, turn or '
       + 'checks break on the deployment, reported in that deploy\'s own report with the trial\'s evidence beside '
-      + 'it, a trial that stops advancing, which its silence bound ends, and one that never finishes, which its task\'s '
-      + 'trial budget ends (evals/src/budget.ts).',
+      + 'it, and a trial that stops advancing, which its silence bound ends.',
     blind: 'a pass rate. One trial says nothing about a task that fails one time in three: the statistics are '
       + '.github/workflows/evals.yml\'s, which the deploy dispatches against the same deployment and whose '
       + 'Verdict a promotion waits for.',

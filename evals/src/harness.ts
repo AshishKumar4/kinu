@@ -17,7 +17,6 @@ import { redact } from './redact';
 import { cutButCompleted, measure, toTranscript } from './transcript';
 import { TrialTimeline } from './timeline';
 import { EvalVerifier } from './verifier';
-import { trialBudgetMs } from './budget';
 import { answered, repliesTo, settle, TurnWatch, type WatchOptions, WorkspaceHeld } from './workspace-completion';
 
 /** How long a trial whose workspace keeps streaming may go without a line before it says so. */
@@ -136,7 +135,7 @@ function outcomeOf(events: readonly RunEvent[], before: ReadonlySet<string>): Ev
 }
 
 /** What a turn tells its trial while it waits: how many steps its runs have recorded (a stream that dropped shows no
- *  more, and the ledger does), and through `watching` the trial's budget and the jobs it waits on. */
+ *  more, and the ledger does), and through `watching` the jobs it waits on. */
 type TurnHooks = { readonly stepped: (steps: number) => void; readonly watching: WatchOptions };
 
 /** One turn: its seeded files, the prompt, the wait until the workspace settles, and the checks. */
@@ -341,7 +340,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
             stepped: (recorded) => {
               if (recorded > steps) say(`turn ${String(turnNumber)}, step ${String(steps = recorded)}, off the ledger`);
             },
-            watching: { budget: { task: task.id, ms: trialBudgetMs(task.id), startedAt }, waiting: say },
+            watching: { waiting: say },
           });
 
           say(`turn ${String(turnNumber)} ${result.outcome.status} in ${String(Math.round(result.turnWallMs / 1000))}s, `

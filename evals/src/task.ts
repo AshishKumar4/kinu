@@ -71,12 +71,10 @@ export type EvalRunInput = { model: string; arm: string; trial: number };
  * and the comparison also counts resets apart and compares their rate. `hung`: it never ended the
  * turn, a run or helper of its workspace silent past the bound (`workspace-completion.ts`); the
  * build's result like a refusal, its message naming the open run or the helper that held it.
- * `over-budget`: the trial ran past its task's budget (`budget.ts`) with its workspace still held,
- * by a job that never settled or a run that never stopped; it fails like a refusal, naming the holder.
  */
-export const TURN_OUTCOMES = ['completed', 'error', 'refused', 'reset', 'hung', 'over-budget'] as const;
+export const TURN_OUTCOMES = ['completed', 'error', 'refused', 'reset', 'hung'] as const;
 
-/** `heldBy`: for a turn that hung or ran over budget, the kinds of what held it (`WorkspaceHeld`). */
+/** `heldBy`: for a turn that hung, the kinds of what held it (`WorkspaceHeld`). */
 export type EvalTurnOutcome = { status: (typeof TURN_OUTCOMES)[number]; message?: string; heldBy?: string[] };
 
 export type EvalTurnResult = {

@@ -35,8 +35,7 @@ ${SIMPLE_CAUSES.map((kind) => JSON.stringify({ kind })).join(' | ')}
 
 agent means the agent misread the spec, misused a tool, orchestrated badly, left work incomplete, or answered wrong.
 product means a tool failed despite correct use, the product refused a call, its workspace reset/stream dropped, or
-it hung: a turn whose outcome is "hung" (busy, its ledger silent) is product:hang, and nothing else is. A turn whose
-outcome is "over-budget" ran past its task's budget, held by what its message names: diagnose why that never ended.
+it hung: a turn whose outcome is "hung" (busy, its ledger silent) is product:hang, and nothing else is.
 provider means the model provider refused or throttled the inference. harness means the eval itself failed.
 A recorded refusal alone does not distinguish tool misuse from a product defect: inspect its input and explanation.
 Helper runs null means not recorded, NOT idle. An idle status with no runs is recorded idle. Duplicate identical

@@ -244,11 +244,10 @@ function stats({ assertions }: Cohort): EvalStats {
   const metrics = runs.map((run) => run.output.metrics);
   const cost = totalCostUsd(runs);
 
-  // A turn the deployment refused, reset, hung or held past the budget failed on the build, so it is listed with the
-  // checks, its answer as the evidence; a hang or an overrun under what held it, so a job left running is not read as a
-  // model gone silent.
+  // A turn the deployment refused, reset or hung failed on the build, so it is listed with the checks, its answer as the
+  // evidence; a hang under what held it, so a job left running is not read as a model gone silent.
   const failedChecks = countBy(runs.flatMap((run) => run.output.turns.flatMap((turn, index) => [
-    ...turn.outcome.status !== 'completed' && turn.outcome.status !== 'error'
+    ...turn.outcome.status === 'refused' || turn.outcome.status === 'reset' || turn.outcome.status === 'hung'
       ? [{ id: `deployment.${turn.outcome.status}${turn.outcome.heldBy === undefined ? '' : ` (held by ${turn.outcome.heldBy.join(', ')})`}`,
         evidence: turn.outcome.message }]
       : [],

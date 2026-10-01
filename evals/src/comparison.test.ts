@@ -6,8 +6,8 @@ import { compareEvalResults, evalGateVerdict, fisherExact, renderEvalComparison,
  * `reset`: it answered that the workspace's isolate was reset for memory. `hung`: the watch's account of what held it.
  */
 type Trial = {
-  pass: boolean; infra?: boolean; refused?: string; reset?: string; hung?: string; overBudget?: string; heldBy?: string[]; productSha?: string;
-  taskVersion?: string; failed?: string; trial?: number;
+  pass: boolean; infra?: boolean; refused?: string; reset?: string; hung?: string; heldBy?: string[]; productSha?: string; taskVersion?: string;
+  failed?: string; trial?: number;
   inputTokens?: number; cacheReadTokens?: number; costUsd?: number; model?: string; durationMs?: number; harnessInfra?: boolean;
 };
 
@@ -17,8 +17,6 @@ function outcomeOf(trial: Trial) {
   if (trial.reset !== undefined) return { status: 'reset', message: trial.reset };
 
   if (trial.hung !== undefined) return { status: 'hung', message: trial.hung, ...trial.heldBy !== undefined && { heldBy: trial.heldBy } };
-
-  if (trial.overBudget !== undefined) return { status: 'over-budget', message: trial.overBudget, ...trial.heldBy !== undefined && { heldBy: trial.heldBy } };
 
   return trial.refused === undefined ? { status: 'completed' } : { status: 'refused', message: trial.refused };
 }
@@ -47,7 +45,7 @@ function fileResult(taskId: string, trials: readonly Trial[], side: { productSha
             metrics: { modelTurns: 4, toolCalls: 6, toolErrors: 0, providerWaits: 2, providerWaitMs: 30_000 },
             turns: [{
               outcome: outcomeOf(trial),
-              checks: trial.refused === undefined && trial.reset === undefined && trial.hung === undefined && trial.overBudget === undefined
+              checks: trial.refused === undefined && trial.reset === undefined && trial.hung === undefined
                 ? [{ id: trial.failed ?? 'builds', pass: trial.pass, evidence: trial.pass ? { calls: 3 } : { answered: 1 } }]
                 : [],
             }],
@@ -137,16 +135,6 @@ describe('compareEvalResults', () => {
 
     expect(markdown).toContain('`t1 deployment.hung (held by running shell job)` | 0 | 1 |');
     expect(markdown).toContain('`t1 deployment.hung (held by open run)` | 0 | 1 |');
-  });
-
-  test('a trial held past its budget fails on the build under what held it, never as infrastructure', () => {
-    const overBudget = 'over budget, held by running shell job bgjob-make (workspace: sleep 600; make): the trial ran 3175 s';
-    const overrunning = report('t', [...trialsOf(1, 9), { pass: false, overBudget, heldBy: ['running shell job'] }], NEXT);
-    const comparison = compareEvalResults(report('t', trialsOf(9, 10), BASE), overrunning);
-
-    expect(validateEvalResults(overrunning, 10)).toHaveLength(1);
-    expect([comparison.verdict, comparison.rows[0]?.reason]).toEqual(['regressed', null]);
-    expect(renderEvalComparison(comparison)).toContain('`t1 deployment.over-budget (held by running shell job)` | 0 | 1 |');
   });
 
   // A reset may be the build's own regression: never infrastructure, and a build that resets more is red even when
