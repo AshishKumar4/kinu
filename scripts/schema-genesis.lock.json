@@ -189,11 +189,13 @@
     "user_id TEXT",
     "email TEXT",
     "invite_hash TEXT",
+    "reset_hash TEXT",
     "setup_proven INTEGER NOT NULL",
     "expires_at INTEGER NOT NULL"
   ],
   "builtin_invites@packages/core/src/identity/builtin-accounts.ts": [
     "token_hash TEXT PRIMARY KEY",
+    "purpose TEXT NOT NULL CHECK (purpose IN ('join', 'reset'))",
     "email TEXT NOT NULL",
     "created_by TEXT NOT NULL",
     "created_at INTEGER NOT NULL",

@@ -11,7 +11,7 @@ import {
 import { escapeHtml, json, KINU_USER_AGENT, sha256Hex } from '@kinu.run/core';
 import { authDocument, loginDocument, type BuiltinSignIn } from '@kinu.run/core';
 import { builtinAccounts, setupProven } from './builtin';
-import { builtinSignInOn, type SignInDeclarationEnv } from './sign-in-declaration';
+import { builtinSignInOn, type SignInDeclarationEnv } from '@kinu.run/core/identity';
 import { publicHtmlHeaders } from '@kinu.run/core';
 import {
   clientAuth, getAuthorizationServer, getOAuthProvider, listConfiguredOAuthProviders,
@@ -64,7 +64,7 @@ interface MutableTokenEndpointResponse {
 }
 
 export type AuthRoutesAuthority = SessionAuthority
-  & Pick<UserDO, 'setCredential' | 'listActiveWorkspaces' | 'builtinHasOwner' | 'builtinInvitedEmail'>;
+  & Pick<UserDO, 'setCredential' | 'listActiveWorkspaces' | 'builtinHasOwner' | 'builtinInvitedEmail' | 'builtinResetAccount'>;
 
 /** Nothing optional that the session port leaves optional: sign-out revokes through `AUTH_KV` unguarded. */
 export interface AuthRoutesEnv<Id = DurableObjectId> extends SignInDeclarationEnv, OwnerCapabilityEnv {
@@ -148,6 +148,16 @@ async function builtinSignIn<Id>(env: AuthRoutesEnv<Id>, url: URL, returnTo: str
 
   const accounts = builtinAccounts(env);
   const caller = await ownerCaller(env);
+
+  const reset = url.searchParams.get('reset');
+
+  if (reset !== null && reset !== '') {
+    const account = await accounts.builtinResetAccount(caller, await sha256Hex(reset));
+
+    return account === null
+      ? { mode: 'sign-in', notice: 'This reset link was already used or has expired. Ask the owner for a new one.', returnTo }
+      : { mode: 'reset', reset, email: account.email, returnTo };
+  }
 
   if (invite !== null && invite !== '') {
     const email = await accounts.builtinInvitedEmail(caller, await sha256Hex(invite));

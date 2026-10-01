@@ -163,9 +163,9 @@ import { deletePictures, picturePrefix } from '../slates/pictures';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import {
   builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, invitedEmail, isBuiltinOwner,
-  issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, reserveAttempt, clearAttempts, replacePassword,
+  issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, reserveAttempt, clearAttempts, replacePassword, applyReset, listBuiltinAccounts, resetAccount,
   type Admission, type AttemptBucket, type BuiltinSql, type ChallengePurpose, type NewBuiltinAccount, type NewInvite, type PasskeyAccount,
-  type PasswordAccount, type PasswordHash, type PendingChallenge,
+  type PasswordAccount, type PasswordHash, type PendingChallenge, type ListedAccount, type Reset, type ResetAccount,
 } from '@kinu.run/core/identity';
 import {
   CLOUDFLARE_AI_GATEWAY_CRED_KEY,
@@ -1518,6 +1518,30 @@ export class UserDO extends Agent<Env> {
     replacePassword(this.builtinSql(), userId, password);
   }
 
+  async builtinResetAccount(caller: UserCaller, resetHash: string): Promise<ResetAccount | null> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return resetAccount(this.builtinSql(), resetHash, Date.now());
+  }
+
+  async builtinApplyReset(caller: UserCaller, reset: Reset): Promise<ResetAccount | null> {
+    return this.builtinWrite(caller, (sql, now) => applyReset(sql, reset, now));
+  }
+
+  /** A write that must happen once, as one transaction on the accounts object. */
+  private async builtinWrite<Result>(caller: UserCaller, write: (sql: BuiltinSql, now: number) => Result): Promise<Result> {
+    await this.requireTier(caller, 'builtin_accounts');
+    const sql = this.builtinSql();
+
+    return this.ctx.storage.transactionSync(() => write(sql, Date.now()));
+  }
+
+  async builtinListAccounts(caller: UserCaller): Promise<ListedAccount[]> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return listBuiltinAccounts(this.builtinSql());
+  }
+
   async builtinClearAttempts(caller: UserCaller, keys: readonly string[]): Promise<void> {
     await this.requireTier(caller, 'builtin_accounts');
     clearAttempts(this.builtinSql(), keys);
@@ -1530,10 +1554,7 @@ export class UserDO extends Agent<Env> {
   }
 
   async builtinRegister(caller: UserCaller, account: NewBuiltinAccount): Promise<Admission> {
-    await this.requireTier(caller, 'builtin_accounts');
-    const sql = this.builtinSql();
-
-    return this.ctx.storage.transactionSync(() => registerBuiltinAccount(sql, account, Date.now()));
+    return this.builtinWrite(caller, (sql, now) => registerBuiltinAccount(sql, account, now));
   }
 
   async builtinPasswordAccount(caller: UserCaller, email: string): Promise<PasswordAccount | null> {
@@ -1697,6 +1718,17 @@ export class UserDO extends Agent<Env> {
 
   /** Revoke every active CLI session token, for orphans the caller cannot name.
    * One generation rise covers every socket at once. */
+  /** Every browser session and CLI token of this account ends: a credential reset leaves nothing signed in. */
+  async endAllSessions(caller: UserCaller): Promise<void> {
+    await this.requireTier(caller, 'auth_tokens');
+    const sessions = this.sqlx<{ token_hash: string }>(`SELECT token_hash FROM user_browser_sessions`).map((row) => row.token_hash);
+
+    this.sqlx(`DELETE FROM user_browser_sessions`);
+    await this.revokeAllCliTokens(caller);
+
+    for (const tokenHash of sessions) await this.pushSessionSocketRevocation(tokenHash);
+  }
+
   async revokeAllCliTokens(caller: UserCaller): Promise<{ revoked: number }> {
     await this.requireTier(caller, 'auth_tokens');
 

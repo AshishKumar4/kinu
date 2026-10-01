@@ -2,7 +2,7 @@
  * Built-in sign-in where no OAuth app is configured: password or passkey. The first account is the owner; later
  * ones need its invite. A success mints the OAuth callback's session (`createSession`).
  */
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { generateAuthenticationOptions, generateRegistrationOptions } from '@simplewebauthn/server';
 import { AssertionSchema, AttestationSchema, answeredChallenge, verifyNewPasskey, verifyPasskeyAnswer } from './passkeys';
 import { base64Url, hmacSha256Hex, json, ownerCaller, randomToken, sha256Hex, timingSafeEqual } from '@kinu.run/core';
@@ -10,10 +10,10 @@ import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { SESSION_COOKIE_NAME, setCookie } from './session';
 import { createSession, deriveBuiltinUserId, sanitizeReturnTo, type OAuthProfile } from './store';
-import { builtinSignInOn } from './sign-in-declaration';
+import { builtinSignInOn } from '@kinu.run/core/identity';
 import type { AuthRoutesAuthority, AuthRoutesEnv } from './routes';
 import {
-  BUILTIN_ACCOUNTS_OBJECT, NOT_ADMITTED, type AttemptBucket, type ChallengePurpose, type PasswordAccount, type PasswordHash,
+  BUILTIN_ACCOUNTS_OBJECT, NOT_ADMITTED, type AttemptBucket, type ChallengePurpose, type InvitePurpose, type PasswordAccount, type PasswordHash, type Reset,
 } from '@kinu.run/core/identity';
 import type { UserDO } from '../user/user-do';
 import type { ApiVariables, FamilyEnv } from '../api/context';
@@ -22,7 +22,8 @@ import type { ObjectNamespace } from '@kinu.run/core';
 export type BuiltinAuthority = AuthRoutesAuthority & Pick<UserDO,
   | 'builtinAdmissible' | 'builtinCreateInvite' | 'builtinInvitedEmail' | 'builtinIsOwner' | 'builtinIssueChallenge' | 'builtinPasskeyAccount'
   | 'builtinPasswordAccount' | 'builtinRecordPasskeyUse' | 'builtinRegister' | 'builtinSpendChallenge'
-  | 'builtinReserveAttempt' | 'builtinClearAttempts' | 'builtinReplacePassword'>;
+  | 'builtinReserveAttempt' | 'builtinClearAttempts' | 'builtinReplacePassword'
+  | 'builtinResetAccount' | 'builtinApplyReset' | 'builtinListAccounts' | 'endAllSessions'>;
 
 export interface BuiltinAuthEnv<Id = DurableObjectId> extends Omit<AuthRoutesEnv<Id>, 'UserDO'> {
   UserDO: ObjectNamespace<Id, BuiltinAuthority>;
@@ -159,6 +160,8 @@ const misread = (issues: readonly v.BaseIssue<unknown>[]): Response => refuse(is
 
 const NO_ROOT_SECRET = 'This deployment has no CREDENTIAL_ENCRYPTION_KEY, so password sign-in is unavailable.';
 
+const RESET_SPENT = 'This reset link was already used or has expired. Ask the owner for a new one.';
+
 const SPENT = 'This sign-in request was already used or has expired. Start again.';
 
 type BuiltinEnv = FamilyEnv<BuiltinAuthEnv<unknown>, object>;
@@ -249,7 +252,7 @@ builtinAuthRoutes.post('/api/auth/builtin/passkey/register/options', async (c) =
   });
 
   await accounts(c.env).builtinIssueChallenge(
-    await ownerCaller(c.env), options.challenge, { purpose: 'register', userId, ...request }, Date.now() + CHALLENGE_TTL_MS,
+    await ownerCaller(c.env), options.challenge, { purpose: 'register', userId, resetHash: null, ...request }, Date.now() + CHALLENGE_TTL_MS,
   );
 
   return json({ body: options });
@@ -271,10 +274,12 @@ builtinAuthRoutes.post('/api/auth/builtin/passkey/register', async (c) => {
 
   if (!verified.verified) return refuse('The passkey could not be verified. Try again.', 403);
   const { credential } = verified.registrationInfo;
+  const passkey = { credentialId: credential.id, publicKey: base64Url(credential.publicKey), counter: credential.counter, transports: credential.transports ?? [] };
+
+  if (pending.resetHash !== null) return resetTo(c.env, c.req.raw, { resetHash: pending.resetHash, passkey }, input.returnTo);
 
   const admission = await accounts(c.env).builtinRegister(caller, {
-    userId: pending.userId, email: pending.email, inviteHash: pending.inviteHash, setupProven: pending.setupProven,
-    passkey: { credentialId: credential.id, publicKey: base64Url(credential.publicKey), counter: credential.counter, transports: credential.transports ?? [] },
+    userId: pending.userId, email: pending.email, inviteHash: pending.inviteHash, setupProven: pending.setupProven, passkey,
   });
 
   if (!admission.admitted) return refuse(admission.reason, 403);
@@ -290,7 +295,7 @@ builtinAuthRoutes.post('/api/auth/builtin/passkey/sign-in/options', async (c) =>
 
   await accounts(c.env).builtinIssueChallenge(
     await ownerCaller(c.env), options.challenge,
-    { purpose: 'authenticate', userId: null, email: null, inviteHash: null, setupProven: false }, Date.now() + CHALLENGE_TTL_MS,
+    { purpose: 'authenticate', userId: null, email: null, inviteHash: null, setupProven: false, resetHash: null }, Date.now() + CHALLENGE_TTL_MS,
   );
 
   return json({ body: options });
@@ -324,6 +329,56 @@ builtinAuthRoutes.post('/api/auth/builtin/passkey/sign-in', async (c) => {
   return signedIn(c.env, c.req.raw, builtinProfile('passkey', passkey.userId, passkey.email), input.returnTo);
 });
 
+async function resetTo<Id>(env: BuiltinAuthEnv<Id>, request: Request, reset: Reset, returnTo: string): Promise<Response> {
+  const caller = await ownerCaller(env);
+  const account = await accounts(env).builtinApplyReset(caller, reset);
+
+  if (account === null) return refuse(RESET_SPENT, 403);
+  await env.UserDO.get(env.UserDO.idFromName(account.userId)).endAllSessions(caller);
+
+  return signedIn(env, request, builtinProfile(reset.passkey ? 'passkey' : 'password', account.userId, account.email), returnTo);
+}
+
+builtinAuthRoutes.post('/api/auth/builtin/password/reset', async (c) => {
+  const parsed = await body(c.req.raw, v.object({ reset: v.string(), password: PasswordSchema, returnTo: ReturnToSchema }));
+
+  if (!parsed.success) return misread(parsed.issues);
+  const limited = await reserve(c.env, [buckets.register(addressKey(c.req.raw))]);
+
+  if (limited) return limited;
+  const root = c.env.CREDENTIAL_ENCRYPTION_KEY;
+
+  if (!root) return refuse(NO_ROOT_SECRET, 503);
+
+  return resetTo(c.env, c.req.raw, { resetHash: await sha256Hex(parsed.output.reset), password: await hashPassword(root, parsed.output.password) }, parsed.output.returnTo);
+});
+
+builtinAuthRoutes.post('/api/auth/builtin/passkey/reset/options', async (c) => {
+  const parsed = await body(c.req.raw, v.object({ reset: v.string() }));
+
+  if (!parsed.success) return misread(parsed.issues);
+  const limited = await reserve(c.env, [buckets.challenge(addressKey(c.req.raw)), buckets.register(addressKey(c.req.raw))]);
+
+  if (limited) return limited;
+  const caller = await ownerCaller(c.env);
+  const resetHash = await sha256Hex(parsed.output.reset);
+  const account = await accounts(c.env).builtinResetAccount(caller, resetHash);
+
+  if (account === null) return refuse(RESET_SPENT, 403);
+  const url = new URL(c.req.url);
+
+  const options = await generateRegistrationOptions({
+    rpName: RP_NAME, rpID: url.hostname, userName: account.email, userID: new TextEncoder().encode(account.userId),
+    attestationType: 'none', authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+  });
+
+  await accounts(c.env).builtinIssueChallenge(caller, options.challenge, {
+    purpose: 'register', userId: account.userId, email: account.email, inviteHash: null, setupProven: false, resetHash,
+  }, Date.now() + CHALLENGE_TTL_MS);
+
+  return json({ body: options });
+});
+
 async function spend<Id>(env: BuiltinAuthEnv<Id>, clientDataJSON: string, purpose: ChallengePurpose) {
   const challenge = answeredChallenge(clientDataJSON);
 
@@ -341,7 +396,8 @@ builtinAccountRoutes.get('/api/user/builtin-auth', async (c) => {
   return json({ body: { enabled: true, owner } });
 });
 
-builtinAccountRoutes.post('/api/user/builtin-auth/invites', async (c) => {
+/** An owner's link: `join` for an address without an account (`?invite=`), `reset` for one with (`?reset=`). */
+async function ownerLink(c: Context<SettingsEnv>, purpose: InvitePurpose): Promise<Response> {
   if (!builtinSignInOn(c.env)) return refuse('This deployment does not offer built-in sign-in.', 404);
   const parsed = await body(c.req.raw, v.object({ email: EmailSchema }));
 
@@ -349,16 +405,31 @@ builtinAccountRoutes.post('/api/user/builtin-auth/invites', async (c) => {
   const token = randomToken(32);
   const expiresAt = Date.now() + INVITE_TTL_MS;
 
-  const created = await accounts(c.env).builtinCreateInvite(
-    await ownerCaller(c.env), { ownerUserId: c.get('identity').userId, email: parsed.output.email, tokenHash: await sha256Hex(token), expiresAt },
-  );
+  const created = await accounts(c.env).builtinCreateInvite(await ownerCaller(c.env), {
+    ownerUserId: c.get('identity').userId, purpose, email: parsed.output.email, tokenHash: await sha256Hex(token), expiresAt,
+  });
 
-  if (!created) return refuse('Only the owner of this deployment can invite people.', 403);
+  if (!created) return refuse('Only the owner makes these links: an invite for an address without an account, a reset for one with.', 403);
   const url = new URL('/login', c.req.url);
 
-  url.searchParams.set('invite', token);
+  url.searchParams.set(purpose === 'join' ? 'invite' : 'reset', token);
 
   return json({ body: { url: url.toString(), email: parsed.output.email, expiresAt } });
-});
+}
+
+builtinAccountRoutes.post('/api/user/builtin-auth/invites', async (c) => ownerLink(c, 'join'));
+
+builtinAccountRoutes.post('/api/user/builtin-auth/resets', async (c) => ownerLink(c, 'reset'));
 
 export { NOT_ADMITTED };
+
+
+builtinAccountRoutes.get('/api/user/builtin-auth/accounts', async (c) => {
+  if (!builtinSignInOn(c.env)) return refuse('This deployment does not offer built-in sign-in.', 404);
+  const caller = await ownerCaller(c.env);
+
+  if (!await accounts(c.env).builtinIsOwner(caller, c.get('identity').userId)) return refuse('Only the owner of this deployment sees its accounts.', 403);
+
+  return json({ body: { accounts: await accounts(c.env).builtinListAccounts(caller) } });
+});
+

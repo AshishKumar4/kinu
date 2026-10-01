@@ -26,7 +26,7 @@ export interface NewBuiltinAccount {
   readonly userId: string;
   readonly email: string;
   readonly inviteHash: string | null;
-  /** Carried the setup token: only such a request takes the owner seat. */
+  /** Only a request with the setup token takes the owner seat. */
   readonly setupProven: boolean;
   readonly password?: PasswordHash;
   readonly passkey?: StoredPasskey;
@@ -42,6 +42,7 @@ export interface PendingChallenge {
   readonly email: string | null;
   readonly inviteHash: string | null;
   readonly setupProven: boolean;
+  readonly resetHash: string | null;
 }
 
 export interface AttemptBucket {
@@ -70,6 +71,7 @@ export function initBuiltinAccounts(sql: BuiltinSql): void {
   )`;
   void sql`CREATE TABLE IF NOT EXISTS builtin_invites (
     token_hash TEXT PRIMARY KEY,
+    purpose TEXT NOT NULL CHECK (purpose IN ('join', 'reset')),
     email TEXT NOT NULL,
     created_by TEXT NOT NULL,
     created_at INTEGER NOT NULL,
@@ -83,6 +85,7 @@ export function initBuiltinAccounts(sql: BuiltinSql): void {
     user_id TEXT,
     email TEXT,
     invite_hash TEXT,
+    reset_hash TEXT,
     setup_proven INTEGER NOT NULL,
     expires_at INTEGER NOT NULL
   )`;
@@ -104,7 +107,7 @@ export function isBuiltinOwner(sql: BuiltinSql, userId: string): boolean {
 
 export const NOT_ADMITTED = 'This sign-up link is not valid. Ask the owner of this deployment for an invite.';
 
-/** Reads only. No email lookup until a seat or invite admits. */
+/** No email lookup until a seat or invite admits. */
 export function builtinAdmission(sql: BuiltinSql, request: Pick<NewBuiltinAccount, 'email' | 'inviteHash' | 'setupProven'>, now: number): Admission {
   if (!hasBuiltinOwner(sql)) return request.setupProven ? { admitted: true, role: 'owner' } : { admitted: false, reason: NOT_ADMITTED };
 
@@ -123,10 +126,11 @@ export function builtinAdmission(sql: BuiltinSql, request: Pick<NewBuiltinAccoun
 
 const InviteRowSchema = v.object({ email: v.string() });
 
-/** The address a live, unused invite was made for; null when there is none. */
-export function invitedEmail(sql: BuiltinSql, inviteHash: string, now: number): string | null {
-  const parsed = v.safeParse(InviteRowSchema,
-    sql`SELECT email FROM builtin_invites WHERE token_hash = ${inviteHash} AND used_by IS NULL AND expires_at > ${now}`[0]);
+export type InvitePurpose = 'join' | 'reset';
+
+export function invitedEmail(sql: BuiltinSql, inviteHash: string, now: number, purpose: InvitePurpose = 'join'): string | null {
+  const parsed = v.safeParse(InviteRowSchema, sql`SELECT email FROM builtin_invites
+    WHERE token_hash = ${inviteHash} AND purpose = ${purpose} AND used_by IS NULL AND expires_at > ${now}`[0]);
 
   return parsed.success ? parsed.output.email : null;
 }
@@ -138,7 +142,8 @@ export function registerBuiltinAccount(sql: BuiltinSql, account: NewBuiltinAccou
   if (!admission.admitted) return admission;
 
   if (admission.role === 'member') {
-    void sql`UPDATE builtin_invites SET used_by = ${account.userId}, used_at = ${now} WHERE token_hash = ${account.inviteHash}`;
+    void sql`UPDATE builtin_invites SET used_by = ${account.userId}, used_at = ${now}
+      WHERE token_hash = ${account.inviteHash} AND purpose = 'join'`;
   }
 
   void sql`INSERT INTO builtin_accounts (user_id, email, role, password_hash, password_salt, password_iterations, created_at)
@@ -201,29 +206,30 @@ export function recordPasskeyUse(sql: BuiltinSql, credentialId: string, counter:
 
 export function issuePasskeyChallenge(sql: BuiltinSql, challenge: string, pending: PendingChallenge, expiresAt: number): void {
   void sql`DELETE FROM builtin_challenges WHERE expires_at <= ${Date.now()}`;
-  void sql`INSERT INTO builtin_challenges (challenge, purpose, user_id, email, invite_hash, setup_proven, expires_at)
-      VALUES (${challenge}, ${pending.purpose}, ${pending.userId}, ${pending.email}, ${pending.inviteHash},
+  void sql`INSERT INTO builtin_challenges (challenge, purpose, user_id, email, invite_hash, reset_hash, setup_proven, expires_at)
+      VALUES (${challenge}, ${pending.purpose}, ${pending.userId}, ${pending.email}, ${pending.inviteHash}, ${pending.resetHash},
               ${pending.setupProven ? 1 : 0}, ${expiresAt})`;
 }
 
 const ChallengeRowSchema = v.object({
   purpose: v.picklist(['register', 'authenticate']), user_id: v.nullable(v.string()), email: v.nullable(v.string()),
-  invite_hash: v.nullable(v.string()), setup_proven: v.number(), expires_at: v.number(),
+  invite_hash: v.nullable(v.string()), reset_hash: v.nullable(v.string()), setup_proven: v.number(), expires_at: v.number(),
 });
 
 /** Deleted as it is read: a challenge answers one ceremony. */
 export function spendPasskeyChallenge(sql: BuiltinSql, challenge: string, purpose: ChallengePurpose, now: number): PendingChallenge | null {
   const parsed = v.safeParse(ChallengeRowSchema, sql`DELETE FROM builtin_challenges WHERE challenge = ${challenge}
-    RETURNING purpose, user_id, email, invite_hash, setup_proven, expires_at`[0]);
+    RETURNING purpose, user_id, email, invite_hash, reset_hash, setup_proven, expires_at`[0]);
 
   if (!parsed.success || parsed.output.purpose !== purpose || parsed.output.expires_at <= now) return null;
   const row = parsed.output;
 
-  return { purpose, userId: row.user_id, email: row.email, inviteHash: row.invite_hash, setupProven: row.setup_proven === 1 };
+  return { purpose, userId: row.user_id, email: row.email, inviteHash: row.invite_hash, resetHash: row.reset_hash, setupProven: row.setup_proven === 1 };
 }
 
 export interface NewInvite {
   readonly ownerUserId: string;
+  readonly purpose: InvitePurpose;
   readonly email: string;
   readonly tokenHash: string;
   readonly expiresAt: number;
@@ -231,8 +237,11 @@ export interface NewInvite {
 
 export function createBuiltinInvite(sql: BuiltinSql, invite: NewInvite, now: number): boolean {
   if (!isBuiltinOwner(sql, invite.ownerUserId)) return false;
-  void sql`INSERT INTO builtin_invites (token_hash, email, created_by, created_at, expires_at)
-      VALUES (${invite.tokenHash}, ${invite.email}, ${invite.ownerUserId}, ${now}, ${invite.expiresAt})`;
+  const exists = sql`SELECT 1 FROM builtin_accounts WHERE email = ${invite.email}`.length > 0;
+
+  if (exists !== (invite.purpose === 'reset')) return false;
+  void sql`INSERT INTO builtin_invites (token_hash, purpose, email, created_by, created_at, expires_at)
+      VALUES (${invite.tokenHash}, ${invite.purpose}, ${invite.email}, ${invite.ownerUserId}, ${now}, ${invite.expiresAt})`;
 
   return true;
 }
@@ -243,7 +252,7 @@ const MAX_WAIT_MS = 15 * 60 * 1000;
 
 const AttemptRowSchema = v.object({ count: v.number(), window_start: v.number(), locked_until: v.number() });
 
-/** Counted before the work, in one step: 0, or ms to wait. Past `free`, waits double up to 15 min. */
+/** Counted before the work: 0, or ms to wait (doubling past `free`). */
 export function reserveAttempt(sql: BuiltinSql, buckets: readonly AttemptBucket[], now: number): number {
   const rows = buckets.map((bucket) => {
     const parsed = v.safeParse(AttemptRowSchema, sql`SELECT count, window_start, locked_until FROM builtin_attempts WHERE bucket = ${bucket.key}`[0]);
@@ -274,4 +283,56 @@ export function clearAttempts(sql: BuiltinSql, keys: readonly string[]): void {
 export function replacePassword(sql: BuiltinSql, userId: string, password: PasswordHash): void {
   void sql`UPDATE builtin_accounts SET password_hash = ${password.hash}, password_salt = ${password.salt},
     password_iterations = ${password.iterations} WHERE user_id = ${userId}`;
+}
+
+export interface ResetAccount {
+  readonly userId: string;
+  readonly email: string;
+}
+
+const AccountRowSchema = v.object({ user_id: v.string(), email: v.string() });
+
+export function resetAccount(sql: BuiltinSql, resetHash: string, now: number): ResetAccount | null {
+  const email = invitedEmail(sql, resetHash, now, 'reset');
+  const parsed = v.safeParse(AccountRowSchema, email === null ? undefined : sql`SELECT user_id, email FROM builtin_accounts WHERE email = ${email}`[0]);
+
+  return parsed.success ? { userId: parsed.output.user_id, email: parsed.output.email } : null;
+}
+
+export interface Reset {
+  readonly resetHash: string;
+  readonly password?: PasswordHash;
+  readonly passkey?: StoredPasskey;
+}
+
+export function applyReset(sql: BuiltinSql, reset: Reset, now: number): ResetAccount | null {
+  const account = resetAccount(sql, reset.resetHash, now);
+
+  if (account === null) return null;
+  void sql`UPDATE builtin_invites SET used_by = ${account.userId}, used_at = ${now} WHERE token_hash = ${reset.resetHash}`;
+  void sql`DELETE FROM builtin_passkeys WHERE user_id = ${account.userId}`;
+  void sql`UPDATE builtin_accounts SET password_hash = ${reset.password?.hash ?? null}, password_salt = ${reset.password?.salt ?? null},
+    password_iterations = ${reset.password?.iterations ?? null} WHERE user_id = ${account.userId}`;
+
+  if (reset.passkey) {
+    const { credentialId, publicKey, counter, transports } = reset.passkey;
+
+    void sql`INSERT INTO builtin_passkeys (credential_id, user_id, public_key, counter, transports, created_at)
+        VALUES (${credentialId}, ${account.userId}, ${publicKey}, ${counter}, ${JSON.stringify(transports)}, ${now})`;
+  }
+
+  return account;
+}
+
+export interface ListedAccount {
+  readonly email: string;
+  readonly role: BuiltinRole;
+  readonly createdAt: number;
+}
+
+const ListedRowSchema = v.object({ email: v.string(), role: v.picklist(['owner', 'member']), created_at: v.number() });
+
+export function listBuiltinAccounts(sql: BuiltinSql): ListedAccount[] {
+  return v.parse(v.array(ListedRowSchema), sql`SELECT email, role, created_at FROM builtin_accounts ORDER BY created_at`)
+    .map((row) => ({ email: row.email, role: row.role, createdAt: row.created_at }));
 }

@@ -6,6 +6,8 @@ import { builtinAccountRoutes, builtinAuthRoutes, type BuiltinAuthEnv } from '..
 import type { AuthIdentity } from '../src/auth/session';
 import { deriveBuiltinUserId, deriveUserId, verifySession } from '../src/auth/store';
 import { readCookie, SESSION_COOKIE_NAME } from '../src/auth/session';
+import { listConfiguredOAuthProviders } from '../src/auth/providers';
+import { builtinSignInOn, OAUTH_PROVIDER_ENV } from '@kinu.run/core/identity';
 import { serveFamily } from './helpers/api';
 import { makeKv } from './helpers/kv';
 import { createTestUserDO, TEST_CREDENTIAL_ENCRYPTION_KEY, type TestUserDO } from './helpers/user-do';
@@ -140,7 +142,7 @@ describe('the owner seat and the namespace', () => {
   test("a built-in account is not its address's OAuth account, and its session ends once OAuth is declared", async () => {
     const { env, registerOwner } = deployment();
     const answer = await registerOwner('owner@example.com');
-    const token = readCookie(new Request(ORIGIN, { headers: { cookie: answer.headers.get('set-cookie') ?? '' } }), SESSION_COOKIE_NAME) ?? '';
+    const token = sessionOf(answer);
 
     const identity = await verifySession(env, token);
 
@@ -149,6 +151,43 @@ describe('the owner seat and the namespace', () => {
 
     Object.assign(env, { GOOGLE_OAUTH_CLIENT_ID: 'now-oauth', GOOGLE_OAUTH_CLIENT_SECRET: 'secret' });
     expect(await verifySession(env, token)).toBeNull();
+  });
+});
+
+test('every provider sign-in can parse is declared by its own env names, so built-in sign-in is off beside it', () => {
+  for (const [id, names] of Object.entries(OAUTH_PROVIDER_ENV)) {
+    const env = { [names.clientId]: 'client', [names.clientSecret]: 'secret' };
+
+    expect(listConfiguredOAuthProviders(env).map((provider): string => provider.id)).toEqual([id]);
+    expect(builtinSignInOn(env)).toBe(false);
+  }
+});
+
+const sessionOf = (answer: Response): string =>
+  readCookie(new Request(ORIGIN, { headers: { cookie: answer.headers.get('set-cookie') ?? '' } }), SESSION_COOKIE_NAME) ?? '';
+
+describe('a reset link', () => {
+  test("replaces a member's password once, and ends the sessions it had", async () => {
+    const { env, post, register, registerOwner } = deployment();
+    const owner = await identityOf('owner@example.com');
+
+    await registerOwner('owner@example.com');
+    const invited = await post('/api/user/builtin-auth/invites', { email: 'member@example.com' }, owner);
+    const invite = new URL(v.parse(InviteSchema, await invited.json()).url).searchParams.get('invite') ?? '';
+    const before = sessionOf(await register('member@example.com', invite));
+
+    expect(await verifySession(env, before)).not.toBeNull();
+    const made = await post('/api/user/builtin-auth/resets', { email: 'member@example.com' }, owner);
+    const reset = new URL(v.parse(InviteSchema, await made.json()).url).searchParams.get('reset') ?? '';
+    const used = await post('/api/auth/builtin/password/reset', { reset, password: 'a brand new password' });
+    const again = await post('/api/auth/builtin/password/reset', { reset, password: 'yet another password' });
+
+    expect(used.status).toBe(200);
+    expect(again.status).toBe(403);
+    expect(await verifySession(env, before)).toBeNull();
+    expect(await verifySession(env, sessionOf(used))).not.toBeNull();
+    expect((await post('/api/auth/builtin/password/sign-in', { email: 'member@example.com', password: 'a brand new password' })).status).toBe(200);
+    expect((await post('/api/auth/builtin/password/sign-in', { email: 'member@example.com', password: 'a long enough password' })).status).toBe(401);
   });
 });
 

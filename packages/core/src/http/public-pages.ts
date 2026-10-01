@@ -15,12 +15,13 @@ export interface LoginProvider {
 /** Built-in sign-in, offered where no OAuth app is configured (`auth/builtin.ts`). */
 export interface BuiltinSignIn {
   /** `setup`: no owner and no setup link, so no form. */
-  readonly mode: 'owner' | 'invite' | 'sign-in' | 'setup';
+  readonly mode: 'owner' | 'invite' | 'reset' | 'sign-in' | 'setup';
+  readonly reset?: string;
   readonly setup?: string;
   /** `invite` mode: the token, and the one address it admits. */
   readonly invite?: string;
   readonly email?: string;
-  /** Replaces the mode's own line, e.g. why an invite no longer works. */
+  /** Replaces the mode's own line. */
   readonly notice?: string;
   readonly returnTo: string;
 }
@@ -40,11 +41,15 @@ export function loginDocument(providers: readonly LoginProvider[], builtin: Buil
 const BUILTIN_COPY = {
   owner: { lede: 'Create the first account. It becomes the owner of this deployment.', password: 'Create account', passkey: 'Create account with a passkey' },
   invite: { lede: 'You were invited. Create your account for this address.', password: 'Create account', passkey: 'Create account with a passkey' },
+  reset: {
+    lede: 'Set a new password or register a new passkey. It replaces this account\'s old ones and signs it out everywhere.',
+    password: 'Set new password', passkey: 'Register a new passkey',
+  },
   'sign-in': { lede: null, password: 'Sign in', passkey: 'Sign in with a passkey' },
   setup: { lede: null, password: '', passkey: '' },
 } as const;
 
-function builtinBody({ mode, invite, email, setup, notice, returnTo }: BuiltinSignIn): string {
+function builtinBody({ mode, invite, reset, email, setup, notice, returnTo }: BuiltinSignIn): string {
   const copy = BUILTIN_COPY[mode];
   const registering = mode !== 'sign-in';
   const lede = notice ?? copy.lede;
@@ -52,10 +57,10 @@ function builtinBody({ mode, invite, email, setup, notice, returnTo }: BuiltinSi
   if (mode === 'setup') return `<p class="lede">${escapeHtml(lede ?? '')}</p>`;
 
   return `${lede === null ? '' : `<p class="lede">${escapeHtml(lede)}</p>`}
-  <form id="builtin-sign-in" class="fields" data-mode="${registering ? 'register' : 'sign-in'}" data-return-to="${escapeHtml(returnTo)}" data-invite="${escapeHtml(invite ?? '')}" data-setup="${escapeHtml(setup ?? '')}" novalidate>
+  <form id="builtin-sign-in" class="fields" data-mode="${registering ? 'register' : 'sign-in'}" data-return-to="${escapeHtml(returnTo)}" data-invite="${escapeHtml(invite ?? '')}" data-setup="${escapeHtml(setup ?? '')}" data-reset="${escapeHtml(reset ?? '')}" novalidate>
     <label>Email<input type="email" name="email" autocomplete="${registering ? 'email' : 'username webauthn'}" required${email === undefined ? '' : ` value="${escapeHtml(email)}" readonly`} /></label>
     <label>Password<input type="password" name="password" autocomplete="${registering ? 'new-password' : 'current-password'}"${registering ? ' minlength="10" aria-describedby="password-rule"' : ''} /></label>
-    ${registering ? '<p id="password-rule" class="muted">At least 10 characters. Not needed with a passkey.</p>' : ''}
+    ${registering ? `<p id="password-rule" class="muted">At least 10 characters.${mode === 'reset' ? '' : ' Not needed with a passkey.'}</p>` : ''}
     <button type="submit">${copy.password}</button>
   </form>
   <div class="or" aria-hidden="true">or</div>
@@ -72,6 +77,7 @@ const passkey = document.getElementById('passkey');
 const registering = form.dataset.mode === 'register';
 const invite = form.dataset.invite || null;
 const setup = form.dataset.setup || null;
+const reset = form.dataset.reset || null;
 const returnTo = form.dataset.returnTo || '/';
 const bytes = (value) => Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
 const text = (buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer))).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
@@ -93,15 +99,17 @@ async function run(work) {
 form.addEventListener('submit', (event) => {
   event.preventDefault();
   if (!form.elements.email.checkValidity()) return say('Enter an email address.');
-  run(async () => done(await post(registering ? 'password/register' : 'password/sign-in',
-    { email: email(), password: form.elements.password.value, invite, setup, returnTo })));
+  run(async () => done(await post(reset ? 'password/reset' : registering ? 'password/register' : 'password/sign-in',
+    reset ? { reset, password: form.elements.password.value, returnTo }
+      : { email: email(), password: form.elements.password.value, invite, setup, returnTo })));
 });
 passkey.addEventListener('click', () => {
   if (!window.PublicKeyCredential) return say('This browser does not support passkeys.');
   if (registering && !form.elements.email.checkValidity()) return say('Enter your email first: it names the account.');
   run(async () => {
     if (registering) {
-      const options = await post('passkey/register/options', { email: email(), invite, setup });
+      const options = reset ? await post('passkey/reset/options', { reset })
+        : await post('passkey/register/options', { email: email(), invite, setup });
       const created = await navigator.credentials.create({ publicKey: { ...options, challenge: bytes(options.challenge),
         user: { ...options.user, id: bytes(options.user.id) },
         excludeCredentials: (options.excludeCredentials || []).map((c) => ({ ...c, id: bytes(c.id) })) } });

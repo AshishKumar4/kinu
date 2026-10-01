@@ -9,8 +9,8 @@
 // unverified address is not an identity.
 
 import type { AuthIdentity } from './session';
-import type { OAuthProviderId } from './providers';
-import { builtinSignInOn, type SignInDeclarationEnv } from './sign-in-declaration';
+import type { OAuthProviderId } from '@kinu.run/core/identity';
+import { builtinSignInOn, type SignInDeclarationEnv } from '@kinu.run/core/identity';
 import type { BrowserSessionIdentity, LiveBrowserSession, UserDO } from '../user/user-do';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { randomToken, sha256Hex } from '@kinu.run/core';
@@ -388,8 +388,7 @@ async function resolveIdentity<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile,
 export function sanitizeReturnTo(input: string, origin: string): string {
   const raw = input.trim();
 
-  // oxlint-disable-next-line no-control-regex -- refusing them is the point
-  if (!raw.startsWith('/') || /[\u0000-\u001f\u007f\\]/u.test(raw)) return '/';
+  if (!raw.startsWith('/') || Array.from(raw, (ch) => ch.codePointAt(0) ?? 0).some((code) => code < 0x20 || code === 0x7f || code === 0x5c)) return '/';
   const resolved = new URL(raw, origin);
 
   if (resolved.origin !== new URL(origin).origin) return '/';
