@@ -260,10 +260,25 @@ export function validateEvalResults(text: string, expectedTrials: number): { tas
   });
 }
 
-/** Why `text` cannot be a baseline of `expectedTrials` trials a cohort (`validateEvalResults`), or null when it can. */
-export function whyNotABaseline(text: string, expectedTrials: number): string | null {
+/**
+ * Why `text` is not a complete report, or null when it is: `validateEvalResults` with `trials` a cohort, then, when
+ * given, every one of `taskFiles` ran (a task missing from a report would read as removed) and the report is of
+ * `build`, the build its leg was planned to measure. Builds are compared as `/api/health` names them, by prefix.
+ */
+export function whyIncomplete(text: string, expected: { trials: number; taskFiles?: readonly string[]; build?: string }): string | null {
   try {
-    validateEvalResults(text, expectedTrials);
+    validateEvalResults(text, expected.trials);
+    const files = parseResults('report', text);
+    const ran = new Set(files.map((file) => basename(file.name)));
+    const missing = (expected.taskFiles ?? []).filter((file) => !ran.has(basename(file)));
+
+    if (missing.length > 0) return `${missing.join(', ')} did not run`;
+    const { productSha } = sideOf('report', trials(files));
+    const build = expected.build;
+
+    if (build !== undefined && !productSha.startsWith(build) && !build.startsWith(productSha)) {
+      return `its trials ran on build ${productSha}, not the planned ${build}`;
+    }
 
     return null;
   } catch (error) {
@@ -489,16 +504,16 @@ function verdictReason(comparison: EvalComparison, shared: Shared): string {
 export type EvalGateVerdict = { pass: boolean; reason: string };
 
 /**
- * Whether a run stands as its build's eval verdict, the question a promote asks: its report is a complete baseline, a
- * baseline was compared with it, and no cohort regressed. Otherwise the reason it cannot stand. `incomplete` is why
- * the report is not a complete baseline (`validateEvalResults`), or null when it is.
+ * Whether a run stands as its candidate build's eval verdict, the question a promote asks: both legs, the baseline
+ * deployment's and the candidate's, are complete reports (`validateEvalResults`), they were compared, and no cohort
+ * regressed. Otherwise the reason it cannot stand. `incomplete` holds why each leg is not complete, or null when it is.
  */
-export function evalGateVerdict(comparison: EvalComparison, incomplete: string | null): EvalGateVerdict {
-  if (incomplete !== null) return { pass: false, reason: `The report is not a complete baseline: ${incomplete}` };
+export function evalGateVerdict(comparison: EvalComparison, incomplete: { baseline: string | null; candidate: string | null }): EvalGateVerdict {
+  if (incomplete.candidate !== null) return { pass: false, reason: `The candidate's report is not complete: ${incomplete.candidate}` };
 
-  if (comparison.baseline === null) {
-    return { pass: false, reason: 'No baseline: no complete report of an earlier build this one descends from is stored, so nothing was compared.' };
-  }
+  if (incomplete.baseline !== null) return { pass: false, reason: `The baseline's report is not complete: ${incomplete.baseline}` };
+
+  if (comparison.baseline === null) return { pass: false, reason: 'No baseline: no baseline report was compared with the candidate.' };
 
   const said = `${VERDICT[comparison.verdict]}. ${verdictReason(comparison, sharedBy(comparison.rows))}`;
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { compareEvalResults, evalGateVerdict, fisherExact, renderEvalComparison, validateEvalResults } from './comparison';
+import { compareEvalResults, evalGateVerdict, fisherExact, renderEvalComparison, validateEvalResults, whyIncomplete } from './comparison';
 
 /**
  * `infra`: the deployment ended the turn in error. `refused`: it answered the turn's request with this failure.
@@ -141,22 +141,17 @@ describe('validateEvalResults', () => {
 });
 
 describe('evalGateVerdict, what a promote reads', () => {
-  const complete = (text: string) => {
-    validateEvalResults(text, 10);
+  /** Both legs of one run: the baseline and the candidate deployment, measured under the same definitions. */
+  const complete = { baseline: null, candidate: null };
 
-    return null;
-  };
-
-  test('a complete report compared with a baseline stands when nothing fell, and says what it found', () => {
-    const candidate = report('order-book', trialsOf(6, 10), NEXT);
-    const verdict = evalGateVerdict(compareEvalResults(report('order-book', trialsOf(6, 10), BASE), candidate), complete(candidate));
+  test('two complete legs stand when nothing fell, and say what they found', () => {
+    const verdict = evalGateVerdict(compareEvalResults(report('order-book', trialsOf(6, 10), BASE), report('order-book', trialsOf(6, 10), NEXT)), complete);
 
     expect(verdict).toEqual({ pass: true, reason: expect.stringContaining('Unchanged') });
   });
 
   test('a significant fall fails it, naming the task and both pass counts', () => {
-    const candidate = report('order-book', trialsOf(2, 10), NEXT);
-    const verdict = evalGateVerdict(compareEvalResults(report('order-book', trialsOf(9, 10), BASE), candidate), complete(candidate));
+    const verdict = evalGateVerdict(compareEvalResults(report('order-book', trialsOf(9, 10), BASE), report('order-book', trialsOf(2, 10), NEXT)), complete);
 
     expect(verdict.pass).toBe(false);
     expect(verdict.reason).toContain('order-book');
@@ -164,24 +159,56 @@ describe('evalGateVerdict, what a promote reads', () => {
     expect(verdict.reason).toContain('2/10');
   });
 
-  test('no baseline fails it: nothing was compared', () => {
-    const candidate = report('order-book', trialsOf(10, 10), NEXT);
+  test('a baseline leg that is not a complete report fails it, naming the baseline and why', () => {
+    const verdict = evalGateVerdict(
+      compareEvalResults(report('order-book', trialsOf(6, 10), BASE), report('order-book', trialsOf(6, 10), NEXT)),
+      { baseline: 'order-book has 10 infrastructure failures', candidate: null },
+    );
 
-    expect(evalGateVerdict(compareEvalResults(null, candidate), complete(candidate))).toEqual({ pass: false, reason: expect.stringMatching(/^No baseline/) });
+    expect(verdict).toEqual({ pass: false, reason: expect.stringMatching(/^The baseline's report is not complete: order-book has 10 infrastructure failures/) });
   });
 
-  test('a baseline that could not be compared fails it, with the reason each task could not be', () => {
-    const candidate = report('order-book', trialsOf(6, 10, { taskVersion: 'v2' }), NEXT);
-    const verdict = evalGateVerdict(compareEvalResults(report('order-book', trialsOf(6, 10), BASE), candidate), complete(candidate));
+  test('a candidate leg that is not a complete report fails it, naming the candidate and why, whatever the comparison says', () => {
+    const verdict = evalGateVerdict(
+      compareEvalResults(report('order-book', trialsOf(6, 10), BASE), report('order-book', trialsOf(6, 9), NEXT)),
+      { baseline: null, candidate: 'order-book holds trials [1..9]' },
+    );
+
+    expect(verdict).toEqual({ pass: false, reason: expect.stringMatching(/^The candidate's report is not complete: order-book holds trials \[1\.\.9\]/) });
+  });
+
+  test('no baseline report fails it: nothing was compared', () => {
+    expect(evalGateVerdict(compareEvalResults(null, report('order-book', trialsOf(10, 10), NEXT)), complete))
+      .toEqual({ pass: false, reason: expect.stringMatching(/^No baseline/) });
+  });
+
+  test('legs that could not be compared fail it, with the reason each task could not be', () => {
+    const verdict = evalGateVerdict(
+      compareEvalResults(report('order-book', trialsOf(6, 10), BASE), report('order-book', trialsOf(6, 10, { taskVersion: 'v2' }), NEXT)), complete,
+    );
 
     expect(verdict.pass).toBe(false);
     expect(verdict.reason).toContain('task version changed');
   });
+});
 
-  test('a report that is not a complete baseline fails it, with the reason it is not, whatever the comparison says', () => {
-    const candidate = report('order-book', trialsOf(6, 9), NEXT);
+describe('whyIncomplete, whether a leg can stand in a verdict', () => {
+  const leg = report('order-book', trialsOf(6, 10), NEXT);
 
-    expect(evalGateVerdict(compareEvalResults(report('order-book', trialsOf(6, 10), BASE), candidate), 'order-book holds trials [1..9]'))
-      .toEqual({ pass: false, reason: expect.stringContaining('order-book holds trials [1..9]') });
+  test('a leg with every task, every trial, no infrastructure failure and the planned build is complete', () => {
+    expect(whyIncomplete(leg, { trials: 10, taskFiles: ['order-book.eval.ts'], build: 'bbbbbbbb2' })).toBeNull();
+    expect(whyIncomplete(leg, { trials: 10, build: 'bbbbbbb' })).toBeNull();
+  });
+
+  test('a task of these definitions missing from the leg is named', () => {
+    expect(whyIncomplete(leg, { trials: 10, taskFiles: ['order-book.eval.ts', 'launch-prep.eval.ts'] })).toBe('launch-prep.eval.ts did not run');
+  });
+
+  test('a leg that ran on another build than the one planned for it is named, with both builds', () => {
+    expect(whyIncomplete(leg, { trials: 10, build: 'aaaaaaaa1' })).toBe('its trials ran on build bbbbbbbb2, not the planned aaaaaaaa1');
+  });
+
+  test('missing trials are named as validateEvalResults names them', () => {
+    expect(whyIncomplete(report('order-book', trialsOf(6, 9), NEXT), { trials: 10 })).toContain('holds trials [1, 2, 3, 4, 5, 6, 7, 8, 9]');
   });
 });

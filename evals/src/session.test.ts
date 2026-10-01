@@ -385,6 +385,54 @@ test('sends one run absorbed share one follower of that run', async () => {
   }
 });
 
+test("the promoted build's ledger reads without the row types it still writes, and paging counts them", async () => {
+  // The eval verdict's baseline leg runs the promoted build: kinu.run's 2f660875cc writes `step_partial` rows
+  // (measured 2026-09-30), a type the candidate's harness no longer knows. Unfixed, the first read of a turn's ledger
+  // throws. A page is full at 500 rows, and the left-out rows count toward it.
+  const at = '2000-01-01T00:00:00.000Z';
+  const partial = (eventIndex: number) => ({ type: 'step_partial', runId: 'r1', eventIndex, timestamp: at, stepIndex: 0, text: '', toolCalls: [] });
+  const sinces: string[] = [];
+
+  const pages = new Map<string, readonly object[]>([
+    ['0', [{ type: 'run_start', runId: 'r1', eventIndex: 0, timestamp: at, agentId: 'root' }, ...Array.from({ length: 499 }, (_, i) => partial(i + 1))]],
+    ['500', [partial(500), { type: 'run_end', runId: 'r1', eventIndex: 501, timestamp: at }]],
+  ]);
+
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1',
+    fetch(request) {
+      const url = new URL(request.url);
+
+      if (url.pathname.endsWith('/runs')) return Response.json({ status: 'end', items: [{ runId: 'r1' }] });
+
+      if (url.pathname.endsWith('/events')) {
+        sinces.push(url.searchParams.get('since') ?? '');
+
+        return Response.json(pages.get(url.searchParams.get('since') ?? '') ?? []);
+      }
+
+      return new Response('Not found', { status: 404 });
+    },
+  });
+
+  const session = new KinuPublicSession({
+    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'an older build',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  try {
+    expect((await session.runEvents()).map((event) => [event.type, event.eventIndex])).toEqual([['run_start', 0], ['run_end', 501]]);
+    expect(sinces).toEqual(['0', '500']);
+
+    pages.set('0', [{ type: 'run_start', runId: 'r1', eventIndex: 0, timestamp: at }]);
+    await expect(new KinuPublicSession({
+      origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'a broken row',
+      llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+    }, 'probe').runEvents()).rejects.toThrow();
+  } finally {
+    await server.stop(true);
+  }
+});
+
 describe('the public session speaks the frames the web client speaks', () => {
   test('the chat request carries the message, the trigger, and no one-shot flag', () => {
     const frame = decodeFrame(encodeChatRequest({ requestId: 'turn-1', text: 'write note.txt' }));

@@ -189,16 +189,14 @@ AI_GATEWAY_BASE_URL=… AI_GATEWAY_AUTH=…     # an AI Gateway, for models the 
 ```bash
 bun run evals                                  # every task, 10 trials each, all at once, on kinu.run
 bun run evals evals/tasks/order-book.eval.ts   # one task
+KINU_EVAL_ORIGIN=https://staging.kinu.run bun run evals   # one leg, on staging
 KINU_EVAL_TRIALS=3 bun run evals               # a pilot
 bun run evals:ui                               # the report in the vitest-evals UI
-bun evals/scripts/compare.ts --candidate bench-artifacts/evals/results.json --out /tmp/cmp [--baseline <results.json>]
-bun evals/scripts/gate.ts [--digest <artifact digest>] [--gate]   # every task at once, unchanged results reused
+bun evals/scripts/compare.ts --candidate <results.json> [--baseline <results.json>] --out /tmp/cmp   # two legs' reports
 bun evals/scripts/timing.ts bench-artifacts/evals-<task>-<time> [--steps]   # where each trial's time went
 ```
 
 **All at once.** Every task file runs in its own worker and every trial of it at once (`evals/vitest.config.ts`), so a run takes as long as its slowest trial. `KINU_EVAL_CONCURRENCY` caps the trials a file holds at once for a provider that cannot take them all: Workers AI put all of twelve trials into 429 backoff on 2026-09-24. While it runs, each trial prints a line to stdout as each model step finishes, as each turn is sent and settles with its checks, and when an unexpected socket close hits it, all prefixed `[evals] <task> | <model> | <arm> | trial <n>:`. A step a dropped stream did not show is printed off the ledger while the turn settles. The longest silence of one trial is its longest step or its checks: 13 s across a run of one trial per task on 2026-09-30.
-
-**On this machine.** `evals/scripts/gate.ts` runs every task at once, each in its own process with all its trials at once, against the deployment `KINU_EVAL_ORIGIN` names. A task's report is stored under `~/.cache/kinu-evals` keyed by everything it measured: the served build (its artifact digest when given, else its build sha), the origin, the `evals/` tree, the task file and the matrix. A later run with the same key reuses it instead of running the task. Only a report that is complete and free of infrastructure failures is stored for reuse, and the joined report is stored as a baseline only when `validateEvalResults` accepts it: every task, trials 1 to N once each, one build, one eval commit, no infrastructure failure. The run is compared with the newest baseline of a strict ancestor build and written to `bench-artifacts/evals/<sha>/` with each trial's evidence; `--gate` exits 1 when the run does not stand as the build's verdict, by the same rule as CI's `Verdict` job.
 
 A run needs `KINU_EVAL_WEB_IDENTITY` (production's `DEV_IDENTITY_SECRET`, in `.dev.vars`; on staging, `KINU_EVAL_STAGING_WEB_IDENTITY`, which `.dev.vars` holds as `STAGING_DEV_IDENTITY_SECRET`), which makes each trial the `eval-service` identity. Every trial deletes its workspace when it ends. Nothing ends a trial on a clock: a turn ends when the deployment says so.
 
@@ -214,7 +212,7 @@ A run needs `KINU_EVAL_WEB_IDENTITY` (production's `DEV_IDENTITY_SECRET`, in `.d
 
 **Comparison.** `evals/src/comparison.ts` compares two reports cohort by cohort: pass counts under a two-sided Fisher exact test, a verdict (`regressed` when any comparable task fell with p < 0.05, `improved`, `unchanged`, `inconclusive`), the failed checks with their first evidence, the most common tool error, and how the agent worked per model (steps, tokens, the share of tool calls that were `eval`). Cohorts are not compared across a change to `evals/` itself, a different task version, different trial counts, or infrastructure failures.
 
-**In CI.** `.github/workflows/evals.yml` runs after production takes a build (`bun run deploy --promote` dispatches it): every task against the build kinu.run serves, in one job, every trial at once, compared with the latest complete report of an earlier build it descends from. The job uploads the report and every trial's evidence, scrubbed like the report (`evals/scripts/scrub-evidence.ts`), for 30 days. The last job, `Verdict`, is what a promote reads: it succeeds only when the report is a complete baseline, a baseline was compared with it, and no cohort regressed (`evalGateVerdict` in `evals/src/comparison.ts`, which `compare.ts` writes to `verdict.json`), and otherwise fails naming why. The results comment and a Kinu workspace's "why the evals failed" go on the pull request that merged the deployed commit, or on the commit; earlier ones are deleted. The deployed commit has to be on GitHub.
+**In CI.** `.github/workflows/evals.yml` decides whether a candidate may be promoted. The deploy dispatches it with the build staging serves (`build`), and it runs every task, ten trials each, against two deployments at once, both with the candidate's own definitions: the candidate on staging.kinu.run and the baseline, the promoted build, on kinu.run. The same definitions, hour and provider conditions on both sides, so no report is stored between runs and an edit under `evals/` moves no baseline. The harness reads the promoted build's ledger without the row types only it still writes. Each leg uploads its report and every trial's evidence, scrubbed like the report (`evals/scripts/scrub-evidence.ts`), for 30 days. The last job, `Verdict`, is what a promote reads: it succeeds only when both legs are complete (`whyIncomplete`: every task of the definitions, trials 1 to N once each, no infrastructure failure, only the build planned for the leg), they were compared, and no cohort regressed (`evalGateVerdict` in `evals/src/comparison.ts`, which `compare.ts` writes to `verdict.json`), and otherwise fails naming why. The results comment and a Kinu workspace's "why the evals failed" go on the pull request that merged the deployed commit, or on the commit; earlier ones are deleted. The deployed commit has to be on GitHub.
 
 **Adding a task.** Copy the shape of an existing file. Prove the checker before any model runs: build a correct slate by hand and planted-defect variants, run the turn's `verify` against them on the deployment, and see the correct build pass every check and each defect fail exactly its own. Then run a 3-trial pilot and read the failed trajectories (`bun evals/scripts/trajectories.ts <results.json> <out.md> --failed`): change the prompt only where the agent's reading was defensible and the checker rejected it.
 
@@ -276,7 +274,7 @@ tests/
 evals/
 ├─ tasks/               (the eval suite: one `*.eval.ts` per task)
 ├─ src/                 (the framework: task, verifier, harness, session, comparison, report)
-└─ scripts/             (compare, validate, baseline, trajectories, diagnose, post-comment)
+└─ scripts/             (compare, validate, trajectories, diagnose, post-comment, timing, scrub-evidence)
 bench/
 ├─ corpus/              (the seeded-defect corpus `scripts/bench.ts` measures; data, no suites)
 └─ harbor/, clbench/    (the external-benchmark adapters, Python)
