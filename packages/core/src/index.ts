@@ -115,7 +115,7 @@ export {
 export {
   WORKSPACE_ARCHIVE_EXTENSION,
   archiveSqlFromDatabase, readAgentArchivePage, readWorkspaceArchivePage, type ArchiveAgentSource, restoreWorkspaceArchive, writeWorkspaceArchive,
-  ArchiveCursorSchema,
+  ArchiveCursorSchema, ARCHIVE_SNAPSHOT_ENDED,
   type ArchiveCursor, type ArchiveSqlCursor, type ArchiveAgentsCursor, type ArchiveFilesCursor, type ArchiveAgentPage,
   type ArchiveExportOptions, type ArchivePage,
   type ArchiveFileEntry, type ArchiveFileSource, type ArchiveFileTarget,
@@ -465,7 +465,7 @@ export {
 export type { Usage } from './usage';
 
 export {
-  contextWindowForModel, stepContextLimit, outputReserveTokens,
+  contextWindowForModel, resolveModelWindow, stepContextLimit, outputReserveTokens,
   type ContextWindowEstimate, type ModelWindow, type ResolvedModelWindow,
 } from './context-window';
 
@@ -1120,7 +1120,7 @@ export type {
 
 export {
   settledWorkspaceSoul, writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource,
-  workspaceArchiveFiles, workspaceArchiveTarget, archiveFileTree,
+  workspaceArchiveStore, workspaceArchiveTarget, archiveFileTree,
 } from './vfs/workspace-planes';
 
 

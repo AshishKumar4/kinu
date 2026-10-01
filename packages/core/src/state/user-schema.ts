@@ -282,6 +282,13 @@ export function initUserTables(sql: SqlExec): void {
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_browser_sessions_exp
             ON user_browser_sessions (expires_at)`);
 
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS user_credential_floor (
+      id         INTEGER PRIMARY KEY CHECK (id = 1),
+      generation INTEGER NOT NULL
+    )
+  `);
+
   // Only SHA-256 hashes are stored. The UNIQUE `authorization_hash` makes one mint per device-flow
   // approval unrepresentable twice (KV has no CAS); NULLs never collide.
   sql.exec(`

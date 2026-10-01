@@ -416,7 +416,7 @@ export function mockAgentsSdk(): void {
 
         return { fiberId, name, status: 'running', createdAt: now, accepted: true };
       }
-      /** The managed-fiber ledger read `sandboxInUse` asks. */
+      /** The managed-fiber ledger. */
       async listFibers(options?: { status?: string | string[] }): Promise<HarnessFiber[]> {
         const wanted = options?.status === undefined
           ? null

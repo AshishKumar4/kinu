@@ -46,20 +46,56 @@ const EvolutionSchema = v.looseObject({ advisorEnabled: v.boolean() });
 
 const ArchivePageSchema = v.object({ lines: v.array(v.string()), next: v.nullable(JsonValueSchema) });
 
-/** One file record of the archive: its bytes travel base64 (`identity/archive.ts`). */
-const ArchiveFileSchema = v.object({ t: v.literal('file'), path: v.string(), data: v.string() });
+/** The archive's records a cloud export carries the workspace in (`identity/archive.ts`): its rows, then its store's
+ *  trees, each page of files followed by the chunks those files name. */
+const ArchiveRecordSchema = v.variant('t', [
+  v.object({ t: v.literal('row'), table: v.string(), values: v.record(v.string(), JsonValueSchema) }),
+  v.object({
+    t: v.literal('page'),
+    page: v.object({ root: v.string(), rows: v.array(v.object({ path: v.string(), kind: v.string(), pieces: v.array(v.tuple([v.string(), v.number()])) })) }),
+  }),
+  v.object({ t: v.literal('chunks'), chunks: v.array(v.object({ hash: v.string() })) }),
+]);
 
-/** The text of every file the archive lines carry, by path. */
-function archivedFiles(lines: readonly string[]): ReadonlyMap<string, string> {
-  const files = new Map<string, string>();
+/** What the archive lines carry: the table of each row holding `text`, every file's path, and the chunks its files name
+ *  that no `chunks` record brought. */
+function archived(lines: readonly string[], text: string) {
+  const carriers: string[] = [];
+  const files: string[] = [];
+  const named = new Set<string>();
+  const brought = new Set<string>();
 
   for (const line of lines) {
-    const record = v.safeParse(ArchiveFileSchema, JSON.parse(line));
+    const record = v.safeParse(ArchiveRecordSchema, JSON.parse(line));
 
-    if (record.success) files.set(record.output.path, Buffer.from(record.output.data, 'base64').toString('utf8'));
+    if (!record.success) continue;
+    const { output } = record;
+
+    if (output.t === 'row') {
+      if (Object.values(output.values).some((value) => value === text || value === text.trim())) carriers.push(output.table);
+    } else if (output.t === 'page') {
+      for (const row of output.page.rows) {
+        if (row.kind === 'file') files.push(`${output.page.root}/${row.path}`);
+
+        for (const [hash] of row.pieces) named.add(hash);
+      }
+    } else {
+      for (const chunk of output.chunks) brought.add(chunk.hash);
+    }
   }
 
-  return files;
+  return { carriers, files, owed: [...named].filter((hash) => !brought.has(hash)) };
+}
+
+function archiveSubgoal(lines: readonly string[], soul: string, lastPage: string): EvalSubgoal {
+  const { carriers, files, owed } = archived(lines, soul);
+
+  return {
+    what: 'archive-exports-the-workspace',
+    reached: carriers.length > 0 && files.length > 0 && owed.length === 0,
+    detail: `${String(lines.length)} archive line(s); the soul written above in ${carriers.length === 0 ? 'no row' : `row(s) of ${carriers.join(', ')}`}; `
+      + `${String(files.length)} file(s) (${files.slice(0, 8).join(', ')}), ${String(owed.length)} chunk(s) they name never carried; last page: ${lastPage}`,
+  };
 }
 
 type ArchivePage = v.InferOutput<typeof ArchivePageSchema>;
@@ -134,7 +170,7 @@ describe(SUITE, () => {
             detail: `${advisor.detail}; then ${reread.detail}`,
           });
 
-          // The archive is paged; the soul just written is one of its files.
+          // The archive is paged: the soul just written travels as its row, the files as the store's pages and chunks.
           const lines: string[] = [];
           let cursor: JsonValue | null = null;
           let detail = '';
@@ -153,16 +189,7 @@ describe(SUITE, () => {
             cursor = page.value.next;
           }
 
-          const files = archivedFiles(lines);
-          const carrier = [...files].find(([, text]) => text.trim() === soul.trim())?.[0];
-
-          subgoals.push({
-            what: 'archive-exports-the-workspace',
-            reached: carrier !== undefined,
-            detail: carrier !== undefined
-              ? `${String(lines.length)} archive line(s); ${carrier} carries the soul written above`
-              : `${String(lines.length)} archive line(s), ${String(files.size)} file(s) (${[...files.keys()].slice(0, 8).join(', ')}), none the soul written above; last page: ${detail}`,
-          });
+          subgoals.push(archiveSubgoal(lines, soul, detail));
 
           return subgoals;
         } finally {

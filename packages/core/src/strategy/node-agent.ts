@@ -16,6 +16,7 @@ import { HeadCapture, runHeadInference, withHeadCaptureRecording } from '../head
 import type { PublishHeadStream, ReportHeadDelta } from '../heads/head-stream';
 import type { HeadInferenceDeps } from '../heads/head-inference';
 import type { HostedActor } from '../state/actor-host';
+import type { ResolvedModelWindow } from '../context-window';
 import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles';
 import type { DynamicContext } from '../prompting/volatile-context';
 import { buildToolSurface, type ReportToolDeps } from '../tools/builtins';
@@ -174,6 +175,8 @@ export interface HostedNodeSeat {
   /** This node's own live per-step block (its jobs, tasks, approvals). */
   readonly dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
   readonly conversations: ConversationRecall;
+  /** The window a turn on `spec` is admitted against, from the backend's catalog; null is the caller's own model. */
+  readonly windowOf: (spec: string | null) => Promise<ResolvedModelWindow>;
 }
 
 export interface NodeLoopDeps {
@@ -189,6 +192,7 @@ export interface NodeLoopDeps {
   dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
   conversations: ConversationRecall;
   model: LanguageModel;
+  window: ResolvedModelWindow;
   logger: Logger;
   signal?: AbortSignal;
   clock: Clock;
@@ -457,6 +461,7 @@ async function runNodeLoop(
     dynamic: deps.dynamic,
     clock: deps.clock,
     model: deps.model,
+    window: deps.window,
     tools,
     // Must match what `isolationDisclosure` tells the node.
     workspaceLayout: spec.isolation === 'private-home' ? 'private-scratch' : 'shared-workspace',
@@ -568,7 +573,7 @@ export function runNodeAgent(
         // The loop runs as the node: only the backend can build the node's credentialed runtime.
         const rt = deps.runtimeForWorkspace ? await deps.runtimeForWorkspace(home, input) : seat.actor.runtime;
 
-        return await runNodeLoop(spec, nodeLoopDeps(input, deps, seat, rt));
+        return await runNodeLoop(spec, { ...nodeLoopDeps(input, deps, seat, rt), window: await seat.windowOf(deps.modelSpec ?? null) });
       },
       catch: (cause) => toKinuError({ doing: `run node ${input.nodeId} of this search`, cause, otherwise: 'unavailable' }),
     }).pipe(Effect.catch((failure): Effect.Effect<NodeLoopResult, KinuError> => {
@@ -645,8 +650,8 @@ function unreportedNode(
 }
 
 /** In-isolate seams: the search's own journal and arbiter, called directly. */
-function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps, seat: HostedNodeSeat, rt: AgentRuntime): NodeLoopDeps {
-  const loop: NodeLoopDeps = {
+function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps, seat: HostedNodeSeat, rt: AgentRuntime): Omit<NodeLoopDeps, 'window'> {
+  const loop: Omit<NodeLoopDeps, 'window'> = {
     // Same actor, with the rebuilt runtime when the provisioner made one.
     actor: rt === seat.actor.runtime ? seat.actor : { ...seat.actor, runtime: rt },
     runId: seat.runId,

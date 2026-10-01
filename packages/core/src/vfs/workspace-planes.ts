@@ -1,8 +1,8 @@
-/** SOUL write, fork transfer halves (a pin of the source's store, imports into the target's), and archive walk. */
+/** SOUL write, and the store's fork and archive transfers. */
 
 import type { ForkFileSink } from '../identity/fork-sink';
-import { FORK_PIN_PREFIX, type ForkFileSource } from '../identity/fork';
-import type { ArchiveFileSource, ArchiveFileTarget } from '../identity/archive';
+import type { ForkFileSource } from '../identity/fork';
+import type { ArchiveFileSource, ArchiveFileTarget, ArchivePinnedStore, ArchiveStoreSource, ArchiveStoreTarget } from '../identity/archive';
 import { SOUL_PATH, storeDurableSoulDb, summarizeSoul } from '../identity/soul';
 import { tolerate } from '../obs/index';
 import { resealWorkspaceSoul, sealWorkspaceSoul } from './agent-home';
@@ -13,10 +13,6 @@ import { normalizeVfsPath } from '@nimbus-sh/core/vfs/path.js';
 import type { CredentialedVfs, SqliteVFS, VfsExportPage, VfsStat } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 
 type FileSessionSource = { session(): Promise<Pick<WorkspaceSession, 'vfs' | 'sql'>> };
-
-async function sessionPlane(bundle: WorkspaceBundle): Promise<CredentialedVfs> {
-  return (await bundle.session()).vfs.as(CRED_SESSION_USER);
-}
 
 /** The prompt's soul; reseals the file. */
 export async function settledWorkspaceSoul(bundle: WorkspaceBundle): Promise<string | null> {
@@ -111,24 +107,10 @@ export function createWorkspaceForkSink(bundle: FileSessionSource): ForkFileSink
   return forkSinkOver(async () => (await bundle.session()).vfs, (bytes) => writeWorkspaceSoul(bundle, bytes));
 }
 
-/** Stores whose leftover pins this activation dropped: a fork runs inside its source, so none survives a restart. */
-const sweptForkPins = new WeakSet<SqliteVFS>();
-
-/**
- * One store's files as a pinned instant, read as the kernel, so no file's mode hides it from the copy. The first pin
- * an activation takes drops the ones an earlier activation left behind.
- */
+/** One store's files as a pinned instant, read as the kernel, so no file's mode hides it from the copy. */
 function forkSourceOver(store: SqliteVFS): ForkFileSource {
   return {
     async pin(name) {
-      if (!sweptForkPins.has(store)) {
-        sweptForkPins.add(store);
-
-        for (const leftover of store.snapshots()) {
-          if (leftover.name.startsWith(FORK_PIN_PREFIX)) await store.dropSnapshotAsync(leftover.name);
-        }
-      }
-
       store.snapshot(name);
       const at = store.at(name, CRED_KERNEL);
 
@@ -160,35 +142,59 @@ function lstatOrNull(plane: CredentialedVfs, path: string): VfsStat | null {
   return tolerate(() => plane.lstat(path), 'enoent') ?? null;
 }
 
-/** An unsupported node kind fails the backup. */
-/** An import's target; SOUL.md is an owner write. */
-export function workspaceArchiveTarget(bundle: WorkspaceBundle): ArchiveFileTarget {
+export function workspaceArchiveStore(bundle: FileSessionSource): ArchiveStoreSource {
+  const pinnedOver = (store: SqliteVFS, name: string): ArchivePinnedStore => {
+    const at = store.at(name, CRED_KERNEL);
+
+    return {
+      readdir: (path) => (lstatOrNull(at, path)?.type === 'directory' ? at.readdir(path).map((entry) => entry.name) : []),
+      exportPage: (root, after) => store.exportPage({ at: name, root, after }),
+      exportChunks: (hashes, maxBytes) => store.exportChunks(hashes, maxBytes),
+      release: async () => { await store.dropSnapshotAsync(name); },
+    };
+  };
+
+  return {
+    async pin(name) {
+      const store = (await bundle.session()).vfs;
+
+      store.snapshot(name);
+
+      return pinnedOver(store, name);
+    },
+    async pinned(name) {
+      const store = (await bundle.session()).vfs;
+
+      return store.snapshots().some((pin) => pin.name === name) ? pinnedOver(store, name) : null;
+    },
+  };
+}
+
+/** Store trees import as the kernel with owners unchanged: the archive's rows bring the actors they name. */
+export function workspaceArchiveTarget(bundle: WorkspaceBundle): ArchiveFileTarget & ArchiveStoreTarget {
+  const store = async (): Promise<SqliteVFS> => (await bundle.session()).vfs;
+
   return {
     writeFile: async (path, data) => (normalizeVfsPath(workspacePath(path)) === normalizeVfsPath(workspacePath(SOUL_PATH))
       ? await writeWorkspaceSoul(bundle, data)
       : await bundle.vfs.writeFile(path, data)),
     mkdir: async (path, opts) => { await bundle.vfs.mkdir(path, opts); },
+    async importPage(page) {
+      const vfs = await store();
+      const kernel = vfs.as(CRED_KERNEL);
+
+      if (page.after === null) {
+        const root = `/${page.root}`;
+        const born = lstatOrNull(kernel, root);
+
+        if (born?.type === 'directory') kernel.removeRecursive(root);
+        else if (born !== null) kernel.unlink(root);
+      }
+
+      return { pending: vfs.importPage(page.root, page, [], { lazy: true }).pending };
+    },
+    hydrateChunks: async (chunks) => (await store()).hydrateChunks(chunks),
   };
-}
-
-export function workspaceArchiveFiles(bundle: WorkspaceBundle): ArchiveFileSource {
-  // One reseal per export: the walk calls back per entry, and each must see the same sealed soul.
-  let plane: Promise<CredentialedVfs> | null = null;
-  const sealed = (): Promise<CredentialedVfs> => (plane ??= soulPlane(bundle));
-
-  return archiveFileTree({
-    readdir: async (path) => [...(await sealed()).readdir(workspacePath(path))],
-    readFile: async (path) => (await sealed()).readFile(workspacePath(path)),
-  });
-}
-
-/** Files with SOUL.md resealed first. */
-async function soulPlane(bundle: WorkspaceBundle): Promise<CredentialedVfs> {
-  const session = await bundle.session();
-
-  resealWorkspaceSoul(session.vfs.as(CRED_KERNEL), session.sql);
-
-  return sessionPlane(bundle);
 }
 
 export function archiveFileTree(source: {

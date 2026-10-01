@@ -263,7 +263,8 @@ commit e7dc69b685, on ironwood-cairn-6dbcb8de: from 18:04Z to 18:18Z the
 devbox heartbeat's ask started the resting object once a minute, and each start
 booted its files and armed the wake that retried its owed effects at the next
 second. Pinned by `unit-activation-boot-failure` (the ask waited on the start
-and failed with the boot's cause; now it answers false).
+and failed with the boot's cause; now it answers false). Superseded
+2026-10-01 by devbox D56: the box no longer asks; the workspace tells it.
 
 ## Chat loop
 

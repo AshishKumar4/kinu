@@ -1,7 +1,7 @@
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: its host lifecycle and turn review.
 import { describe, test, expect } from 'bun:test';
-import { createMockFetch, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
+import { AwaitedList, createMockFetch, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync, realpathSync } from 'node:fs';
@@ -17,7 +17,7 @@ import { LocalAgentSession, type LocalAgentSessionOpts, type SessionEvent } from
 import { type LocalModelResolver } from '../src/model-resolver';
 import { createNodeCodemodeToolFactory } from '../src/codemode-tool-factory';
 import * as v from 'valibot';
-import { recordSessionEvent, resolverRest, namedSpec, listLocalAB, tierAuthority, agentSelfRest, DUMMY_LLM, type PromptMessage, fakeModel, hangingModel, capturingModel, historyCapturingModel, transcript, setup, hub, fireTimer, codemodeModel, toolSequenceModel, setupWithResolver, waitFor, joining, passGrace, captureSettleTimings, jobColumn, turnStarts, FOCUSED_SKILL, FOCUSED_PATH, writeFocusedSkill, messageText, runThenAnswerModel, } from './helpers/local-session';
+import { resolverRest, namedSpec, listLocalAB, tierAuthority, agentSelfRest, DUMMY_LLM, type PromptMessage, fakeModel, hangingModel, capturingModel, historyCapturingModel, transcript, setup, hub, fireTimer, codemodeModel, toolSequenceModel, setupWithResolver, joining, passGrace, captureSettleTimings, jobColumn, turnStarts, FOCUSED_SKILL, FOCUSED_PATH, writeFocusedSkill, messageText, runThenAnswerModel, } from './helpers/local-session';
 
 const jobStatus = (db: Database, id: string) => jobColumn(db, id, 'status');
 
@@ -77,10 +77,10 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     if (!sandboxAction) throw new Error('sandbox command was not queued');
 
     expect(executed).toEqual([]);
-    expect(events).toContainEqual({ type: 'broadcast', event: { type: 'pending_actions_changed' } });
+    expect(events.items).toContainEqual({ type: 'broadcast', event: { type: 'pending_actions_changed' } });
     await session.end();
 
-    const reopened = new LocalAgentSession({ rt, db, model: fakeModel('noted'), noAutoEvolve: true, onEvent: (event) => recordSessionEvent(events, event) });
+    const reopened = new LocalAgentSession({ rt, db, model: fakeModel('noted'), noAutoEvolve: true, onEvent: (event) => events.push(event) });
 
     try {
       expect(await reopened.listDeferredApprovals()).toEqual([parked, sandboxAction]);
@@ -251,8 +251,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // Without the signal, the stale-but-complete listing makes `local/b` unlisted, which resolution refuses.
     expect(sweeps).toBe(2);
 
-    const answers = events
-      .filter((event) => event.type === 'turn-end')
+    const answers = events.items.filter((event) => event.type === 'turn-end')
       .map((event) => event.type === 'turn-end' ? event.turn.assistantResponse : '');
 
     expect(answers).toEqual(['from a', 'from a', 'from b']);
@@ -282,7 +281,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     });
 
     await session.send('first', { id: crypto.randomUUID() });
-    const firstTurn = events.find((event) => event.type === 'turn-end');
+    const firstTurn = events.items.find((event) => event.type === 'turn-end');
 
     if (!firstTurn || firstTurn.type !== 'turn-end') throw new Error('first turn-end event was not emitted');
     expect(firstTurn.turn.assistantResponse).toBe('from b');
@@ -314,7 +313,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     expect(session.setModel('local/b')).toEqual({ ok: true, spec: 'local/b' });
     await session.send('hello', { id: crypto.randomUUID() });
-    const turn = events.find((event) => event.type === 'turn-end');
+    const turn = events.items.find((event) => event.type === 'turn-end');
 
     if (!turn || turn.type !== 'turn-end') throw new Error('turn-end event was not emitted');
     expect(turn.turn.assistantResponse).toBe('from b');
@@ -572,7 +571,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     return { ...opened, sent };
   };
 
-  const errorsOf = (events: readonly SessionEvent[]) => events.flatMap((event) => (event.type === 'error' ? [event.message] : []));
+  const errorsOf = (events: AwaitedList<SessionEvent>) => events.items.flatMap((event) => (event.type === 'error' ? [event.message] : []));
 
   test('a workspace pinned to a model its provider no longer lists is refused, naming the pin, and nothing is sent to it', async () => {
     const { session, events, sent } = listedAs([{ provider: 'openai', id: 'gpt-live' }], { pin: 'openai/retired' });
@@ -587,7 +586,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const { session, events, sent } = listedAs([{ provider: 'openai', id: 'gpt-live' }], { defaults: 'openai/retired' });
     await session.send('hello', { id: crypto.randomUUID() });
 
-    const told = events.flatMap((event) => (event.type === 'broadcast' && event.event.type === 'model_fallback' ? [event.event] : []));
+    const told = events.items.flatMap((event) => (event.type === 'broadcast' && event.event.type === 'model_fallback' ? [event.event] : []));
 
     expect(told).toEqual([{ type: 'model_fallback', message: `${DEFAULT_WORKERS_AI_MODEL_SPEC} took over from openai/retired: its provider no longer lists it` }]);
     expect(session.getRunEvents(session.listRuns().items[0].runId).filter((row) => row.type === 'model_fallback'))
@@ -636,7 +635,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await session.send('deep once', { id: crypto.randomUUID(), tier: 'deep' });
     await session.send('then default', { id: crypto.randomUUID() });
 
-    const turns = events.filter((event) => event.type === 'turn-end');
+    const turns = events.items.filter((event) => event.type === 'turn-end');
     expect(turns.map((event) => event.type === 'turn-end' ? event.turn.assistantResponse : null))
       .toEqual(['from b', 'from a']);
   });
@@ -645,7 +644,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const { session, events } = setup();
     session.host.broadcast({ type: 'job_update', jobId: 'x' });
     await session.flushEvents();
-    const b = events.find((event) => event.type === 'broadcast');
+    const b = events.items.find((event) => event.type === 'broadcast');
 
     if (!b || b.type !== 'broadcast') throw new Error('broadcast event was not emitted');
     expect(b.event.type).toBe('job_update');
@@ -668,7 +667,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     const outcome = await session.fireDueTriggers(fireAt);
     expect(outcome.fired).toBe(1);
-    await waitFor(events, () => events.some((e) => e.type === 'turn-start' && e.kind === 'programmatic'));
+    await events.until((frames) => frames.some((e) => e.type === 'turn-start' && e.kind === 'programmatic'));
 
     const recent = hub(db).recent({ variant: 'timer', limit: 5 });
     expect(recent).toHaveLength(1);
@@ -702,7 +701,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     const starts = turnStarts(events);
     expect(starts.some((s) => s.kind === 'programmatic')).toBe(true);
-    expect(events.some((e) => e.type === 'turn-end')).toBe(true);
+    expect(events.items.some((e) => e.type === 'turn-end')).toBe(true);
     expect(hub(db).pending()).toEqual([]);
     await session.end();
   });
@@ -712,9 +711,9 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await session.createTimerTrigger({ atMs: Date.now() + 60_000, label: 'wake', trust: 'owner' });
     await session.fireDueTriggers(Date.now() + 60_000);
     await session.end();
-    events.length = 0;
+    const endedAt = events.items.length;
     await session.flushPendingDrains();
-    expect(events).toEqual([]);
+    expect(events.items.slice(endedAt)).toEqual([]);
   });
 
   // KINU-020 (local): a drain binds events to a synthetic `evt-…` turn under a recovery lease, the only durable record
@@ -733,7 +732,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const { db, session, events } = setup('handled event');
     await fireTimer(session, 'external wake');
     await session.flushPendingDrains();
-    await waitFor(events, () => events.some((e) => e.type === 'turn-end'));
+    await events.until((frames) => frames.some((e) => e.type === 'turn-end'));
 
     const row = eventRow(db);
     expect(row.turn_id).toMatch(/^evt-/u);
@@ -749,10 +748,10 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     db.query(`UPDATE agent_log SET turn_id = 'evt-dead', step_idx = 0, consumed_at = 5 WHERE id = ?`)
       .run(published);
 
-    const events: SessionEvent[] = [];
+    const events = new AwaitedList<SessionEvent>();
 
     const next = new LocalAgentSession({
-      rt, db, model: fakeModel('recovered event'), onEvent: (e) => recordSessionEvent(events, e), noAutoEvolve: true,
+      rt, db, model: fakeModel('recovered event'), onEvent: (e) => events.push(e), noAutoEvolve: true,
     });
 
     expect(hub(db).pending()).toEqual([]);
@@ -760,7 +759,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     next.reclaimStrandedEventDeliveries();
     expect(hub(db).pending().map((e) => e.id)).toEqual([published]);
     await next.flushEvents();
-    expect(events.some((e) => e.type === 'background' && e.event === 'events_reclaimed')).toBe(true);
+    expect(events.items.some((e) => e.type === 'background' && e.event === 'events_reclaimed')).toBe(true);
 
     await next.flushPendingDrains();
     expect(turnStarts(events).some((s) => s.kind === 'programmatic')).toBe(true);
@@ -775,13 +774,13 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const { db, rt, session, events } = setup('handled event');
     await fireTimer(session, 'external wake');
     await session.flushPendingDrains();
-    await waitFor(events, () => events.some((e) => e.type === 'turn-end'));
+    await events.until((frames) => frames.some((e) => e.type === 'turn-end'));
     await session.end();
 
-    const nextEvents: SessionEvent[] = [];
+    const nextEvents = new AwaitedList<SessionEvent>();
 
     const next = new LocalAgentSession({
-      rt, db, model: fakeModel('should not run'), onEvent: (e) => recordSessionEvent(nextEvents, e), noAutoEvolve: true,
+      rt, db, model: fakeModel('should not run'), onEvent: (e) => nextEvents.push(e), noAutoEvolve: true,
     });
 
     next.reclaimStrandedEventDeliveries();
@@ -803,7 +802,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     const outcome = await session.fireDueTriggers(nextFireAt);
     expect(outcome.fired).toBe(1);
-    await waitFor(events, () => events.some((e) => e.type === 'turn-start' && e.kind === 'programmatic'));
+    await events.until((frames) => frames.some((e) => e.type === 'turn-start' && e.kind === 'programmatic'));
 
     const trigger = present(hub(db).triggers().find((t) => t.id === created.id), 'the created trigger row');
 
@@ -976,12 +975,13 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     await session.recoverBackgroundJobs();
 
-    await waitFor(events, () => jobStatus(db, 'bgjob-x') === 'failed');
-    expect(jobError(db, 'bgjob-x')).toContain('interrupted');
     await session.settleBackgroundWork();
+    await session.flushPendingDrains();
+    expect(jobStatus(db, 'bgjob-x')).toBe('failed');
+    expect(jobError(db, 'bgjob-x')).toContain('interrupted');
     expect(db.query<{ c: number }, []>(`SELECT COUNT(*) c FROM fibers`).get()?.c).toBe(0);
     expect(db.query(`SELECT COUNT(*) c FROM fibers WHERE id='f1'`).get()).toEqual({ c: 0 });
-    await waitFor(events, () => events.some((e) => e.type === 'turn-start' && e.kind === 'programmatic' && e.event === 'background_job'));
+    expect(events.items.some((e) => e.type === 'turn-start' && e.kind === 'programmatic' && e.event === 'background_job')).toBe(true);
   });
 
   test('recoverBackgroundJobs fails an orphaned agents job whose row names an action the tool no longer has', async () => {
@@ -1025,14 +1025,14 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await session.recoverBackgroundJobs();
     await session.settleBackgroundWork();
 
-    const order = events.filter((e) => e.type === 'turn-start' || e.type === 'turn-end');
+    const order = events.items.filter((e) => e.type === 'turn-start' || e.type === 'turn-end');
     const wakeStartIdx = order.findIndex((e) => e.type === 'turn-start' && e.kind === 'programmatic' && e.event === 'background_job');
     expect(wakeStartIdx).toBeGreaterThanOrEqual(0);
-    const noticeAt = events.findIndex((event) => event.type === 'background' && event.event === 'background_job_notice');
-    const wakeAt = events.findIndex((event) => event.type === 'turn-start' && event.event === 'background_job');
+    const noticeAt = events.items.findIndex((event) => event.type === 'background' && event.event === 'background_job_notice');
+    const wakeAt = events.items.findIndex((event) => event.type === 'turn-start' && event.event === 'background_job');
     expect(noticeAt).toBeGreaterThanOrEqual(0);
     expect(noticeAt).toBeLessThan(wakeAt);
-    expect(JSON.stringify(events[noticeAt])).toContain('bgjob-w failed');
+    expect(JSON.stringify(events.items[noticeAt])).toContain('bgjob-w failed');
     expect(order.slice(wakeStartIdx + 1).some((e) => e.type === 'turn-end')).toBe(true);
     expect(db.query(`SELECT COUNT(*) c FROM fibers`).get()).toEqual({ c: 0 });
   });
@@ -1058,7 +1058,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await settled;
 
     expect(jobStatus(db, 'bgjob-hang')).toBe('running');
-    expect(events.some((e) => e.type === 'background' && e.event === 'bg_jobs_abandoned')).toBe(true);
+    expect(events.items.some((e) => e.type === 'background' && e.event === 'bg_jobs_abandoned')).toBe(true);
   });
 
   test('abandoning work says it will be resumed on this machine, unattended, and how to stop it', async () => {
@@ -1082,7 +1082,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       console.error = originalError;
     }
 
-    const notice = events.find((e) => e.type === 'background' && e.event === 'bg_jobs_abandoned');
+    const notice = events.items.find((e) => e.type === 'background' && e.event === 'bg_jobs_abandoned');
     const message = notice?.type === 'background' ? notice.message : '';
     expect(message).toContain('bgjob-quiet');
     expect(message).toContain('mcts: edit the target file');
@@ -1142,9 +1142,9 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     await session.send('do the long thing', { id: crypto.randomUUID() });
 
-    expect(events.some((e) => e.type === 'background' && e.event === 'bg_job_started')).toBe(false);
+    expect(events.items.some((e) => e.type === 'background' && e.event === 'bg_job_started')).toBe(false);
     expect(db.query(`SELECT COUNT(*) c FROM background_jobs`).get()).toEqual({ c: 0 });
-    const result = events.find((event) => event.type === 'tool-result');
+    const result = events.items.find((event) => event.type === 'tool-result');
     expect(JSON.stringify(result?.result)).toContain('computed inline');
   });
 
@@ -1157,7 +1157,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     );
 
     await session.send('remember this', { id: crypto.randomUUID() });
-    const result = events.find((event) => event.type === 'tool-result');
+    const result = events.items.find((event) => event.type === 'tool-result');
     expect(JSON.stringify(result?.result)).toContain('found');
   });
 
@@ -1171,13 +1171,13 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await session.send('do the long thing', { id: crypto.randomUUID() });
     await session.settleBackgroundWork();
 
-    expect(events.some((e) => e.type === 'background' && e.event === 'bg_job_started')).toBe(true);
+    expect(events.items.some((e) => e.type === 'background' && e.event === 'bg_job_started')).toBe(true);
     expect(db.query(`SELECT COUNT(*) c FROM background_jobs`).get()).toEqual({ c: 1 });
     const [job] = new BackgroundJobStore(rt.storage.sql, rt.actor).list(2);
 
     if (!job) throw new Error('detached job is missing');
 
-    const notices = events.filter((event) => event.type === 'background' && event.event === 'background_job_notice');
+    const notices = events.items.filter((event) => event.type === 'background' && event.event === 'background_job_notice');
     expect(notices).toEqual([{ type: 'background', event: 'background_job_notice', message: backgroundJobNotice(job).body }]);
     expect(JSON.stringify(notices)).toContain('computed late');
   });
@@ -1196,9 +1196,9 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await session.send('start another one', { id: crypto.randomUUID() });
 
     expect(db.query(`SELECT COUNT(*) c FROM background_jobs`).get()).toEqual({ c: MAX_CONCURRENT_DETACHED_JOBS });
-    expect(events.some((e) => e.type === 'background' && e.event === 'bg_job_started')).toBe(false);
-    expect(events.some((e) => e.type === 'background' && e.event === 'bg_job_refused')).toBe(true);
-    const result = events.find((event) => event.type === 'tool-result');
+    expect(events.items.some((e) => e.type === 'background' && e.event === 'bg_job_started')).toBe(false);
+    expect(events.items.some((e) => e.type === 'background' && e.event === 'bg_job_refused')).toBe(true);
+    const result = events.items.find((event) => event.type === 'tool-result');
     const text = JSON.stringify(result?.result);
     expect(text).toContain('never detached');
     expect(text).not.toContain('CANCELLED');
@@ -1350,12 +1350,12 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
 
     // runs without a network LLM.
     Object.defineProperty(rt, 'llm', { value: reviewLlm });
-    const events: SessionEvent[] = [];
+    const events = new AwaitedList<SessionEvent>();
 
     const sessionOpts: LocalAgentSessionOpts = {
       rt, db,
       model: opts.model ?? fakeModel('rotated the production keys'),
-      onEvent: (e) => recordSessionEvent(events, e),
+      onEvent: (e) => events.push(e),
     };
 
     if (opts.oneShot) {
@@ -1464,10 +1464,10 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     expect(owed).toBeGreaterThanOrEqual(1);
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_outcomes`).get()?.c).toBe(0);
 
-    const events: SessionEvent[] = [];
+    const events = new AwaitedList<SessionEvent>();
 
     const next = new LocalAgentSession({
-      rt, db, model: fakeModel('here is the runbook'), onEvent: (e) => recordSessionEvent(events, e),
+      rt, db, model: fakeModel('here is the runbook'), onEvent: (e) => events.push(e),
     });
 
     await next.recoverBackgroundJobs();
@@ -1478,7 +1478,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
 
     expect(row).toEqual({ outcome: 'accepted', source: 'execution', followup: null });
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM completed_turns WHERE review = 'queued'`).get()?.c).toBe(0);
-    expect(events.some((e) => e.type === 'evolution' && e.event === 'deferred_reviews_drained')).toBe(true);
+    expect(events.items.some((e) => e.type === 'evolution' && e.event === 'deferred_reviews_drained')).toBe(true);
     await next.end();
   });
 
@@ -1489,10 +1489,10 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     db.query(`INSERT INTO completed_turns (actor_id, id, turn, followup, in_window, review, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
       .run(rt.actor.actorId, 'rev-corrupt', '{truncated', null, 0, 'queued', 1);
 
-    const events: SessionEvent[] = [];
+    const events = new AwaitedList<SessionEvent>();
 
     const next = new LocalAgentSession({
-      rt, db, model: fakeModel('ok'), onEvent: (e) => recordSessionEvent(events, e),
+      rt, db, model: fakeModel('ok'), onEvent: (e) => events.push(e),
     });
 
     await next.recoverBackgroundJobs();
@@ -1500,7 +1500,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_outcomes`).get()?.c).toBe(0);
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM completed_turns WHERE review = 'queued'`).get()?.c).toBe(0);
 
-    const drained = events.flatMap((e) =>
+    const drained = events.items.flatMap((e) =>
       e.type === 'evolution' && e.event === 'deferred_reviews_drained' ? [e.message] : []);
 
     expect(drained).toEqual(['0 deferred turn review(s) run, 1 unreadable row(s) dropped']);

@@ -692,7 +692,9 @@ function pageOf<Item extends v.GenericSchema>(item: Item) {
 
 /** The inspector's answers a check reads (`inspectSubordinate`): the lead's helpers and each helper's runs. */
 const InspectionAnswerSchema = v.variant('view', [
-  v.object({ view: v.literal('children'), page: pageOf(v.object({ name: v.string(), status: v.string(), lifetime: v.string() })) }),
+  v.object({ view: v.literal('children'), page: pageOf(v.object({
+    name: v.string(), status: v.string(), lifetime: v.string(), actorReference: v.nullable(v.object({ actorId: v.string() })),
+  })) }),
   v.object({ view: v.literal('runs'), page: pageOf(v.object({ status: v.nullable(v.string()), userMessage: v.nullable(v.string()) })) }),
   v.object({ view: v.literal('missing'), reason: v.string(), error: v.string() }),
 ]);

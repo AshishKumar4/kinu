@@ -12,7 +12,7 @@ import { KINU_TIMER_JOB } from "./wake-jobs";
 import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
   ArchiveCursorSchema,
-  createWorkspaceForkSink, createWorkspaceForkSource, settledWorkspaceSoul, workspaceArchiveFiles, writeWorkspaceSoul,
+  createWorkspaceForkSink, createWorkspaceForkSource, settledWorkspaceSoul, workspaceArchiveStore, writeWorkspaceSoul,
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
   createReportCodemodeProvider, HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
   recoverActorTurns, EventLog, dismissOrphanedAssignments, actorReferenceOf, subordinateDescendants, TEMPORARY_LIFETIME,
@@ -694,6 +694,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       holds: async (reference, turnId) => await (await this.agentCalls(reference.actorId)).holds(turnId),
       dynamic: (actor, profile, tools) => this.hostedActorDynamicContext(actor, profile, tools),
       pricing: (spec) => this.modelCatalog.pricing(spec),
+      window: (spec) => this.modelCatalog.windowFor(spec),
       accounts: () => this.config.getProviderAccounts(),
       live: (actorId) => this.liveActor(actorId),
     });
@@ -890,7 +891,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       pricing: (spec) => this.modelCatalog.pricing(spec),
       hostedModel: (actor) => this.hostedModelOf(actor),
       broadcast: (actorId, event) => { this.broadcastToActor(actorId, JSON.stringify({ ...event, actorId })); },
-      turnClaimChanged: () => { this.overviewChanged(); },
+      turnClaimChanged: () => {
+        this.overviewChanged();
+        this.sandboxUsed();
+      },
       enqueueTurn: (actor, input) => this.enqueueHostedTurn(actor, input),
       // Use the reference the host issued, never one rebuilt from an id: the root's parent is
       // null, and a synthesized reference makes `hosted()` refuse the root's liveness read.
@@ -930,6 +934,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       exec: this.boundExec(),
       directory: this.workspaceActors(),
       turnInFlight: (reference) => this.hostedTurnInFlight(reference),
+      windowOf: (spec) => (spec === null ? this.modelCatalog.resolved() : this.modelCatalog.windowFor(spec)),
       infer: (reference, input, inference) => this.agentTurns.run(reference, input, inference),
       transaction: (body) => this.ctx.storage.transactionSync(body),
       roster: (actor) => new SubordinateRosterStore(this.watchedExec, actor.handle),
@@ -3096,18 +3101,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   private readonly activationStartedAt = Date.now();
 
-  /**
-   * Whether the workspace container is in use, asked by its box before it may rest: a live turn of
-   * any actor here, or a job this activation's runner drives, re-drives included. Work the root owes
-   * itself (sends, claims, fibers to re-drive) is its own wake's business; a process an earlier
-   * activation left running is the box's own check.
-   */
-  override async sandboxInUse(): Promise<boolean> {
-    if (this._inFlight || this.jobRunner.inFlight > 0) return true;
-    const host = this.actorHost();
-
-    return host.list().some((reference) => this.hostedTurnInFlight(reference));
-  }
 
   /**
    * In-memory on purpose: fork-journal recovery runs once per isolate; a second pass could retire
@@ -4126,7 +4119,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       workspace: this.name,
       source: 'cloud',
       cursor: parseArchiveCursor(cursor),
-      files: workspaceArchiveFiles(workspace),
+      store: workspaceArchiveStore(workspace),
       agents: this.agentArchiveSource(),
     });
   }
@@ -4951,6 +4944,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected override turnClaimChanged(): void {
     this.broadcastToActor(null, this.turnClaimFrame());
     this.overviewChanged();
+    this.sandboxUsed();
   }
 
   protected override turnClaimFrame(): string {

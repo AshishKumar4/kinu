@@ -13,10 +13,9 @@ import { runHeadInference, HeadCapture, buildHeadAccumulatorTools } from '../src
 import { usageTotal } from '../src/usage';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 import { hostedSeatsOver } from './helpers-actor-host';
-import type { HostedNodeSeat } from '../src/strategy/node-agent';
 
 /** The hosted actor one head's turn runs on, via the production `hostedSeatsOver` path. */
-async function hostedHead(): Promise<HostedNodeSeat> {
+async function hostedHead() {
   const { rt, testSql } = createTestRuntime();
 
   return hostedSeatsOver({ rt, db: testSql.db }).seat('head-envelope', 'swarm');

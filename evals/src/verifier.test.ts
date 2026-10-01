@@ -125,6 +125,48 @@ describe('EvalVerifier', () => {
   });
 });
 
+/**
+ * An inspector over one live helper and one released, as core subordinates/inspection-path.ts answers: a path reaches
+ * live children only, and a released helper is reached by its actor.
+ */
+function inspecting(): VerifierSession {
+  const runs = (status: string, userMessage: string) => ({ view: 'runs' as const, page: { status: 'end' as const, items: [{ status, userMessage }] } });
+  const missing = { view: 'missing' as const, reason: 'missing', error: 'The requested subordinate or retained history is unavailable.' };
+
+  return {
+    ...session({}),
+    inspect: (request) => {
+      if (request.view === 'children') {
+        return Promise.resolve({ view: 'children', page: { status: 'end', items: [
+          { name: 'ask-task-live', status: 'working', lifetime: 'task', actorReference: { actorId: 'actor-live' } },
+          { name: 'ask-task-done', status: 'dismissed', lifetime: 'task', actorReference: { actorId: 'actor-done' } },
+        ] } });
+      }
+
+      if (request.view !== 'runs') return Promise.resolve(missing);
+
+      if (request.actor === 'actor-done' && request.path.length === 0) return Promise.resolve(runs('completed', 'Write the totals'));
+
+      if (request.actor === undefined && request.path.join('/') === 'ask-task-live') return Promise.resolve(runs('running', 'Write the ratings'));
+
+      return Promise.resolve(missing);
+    },
+  };
+}
+
+describe("a helper's runs", () => {
+  // Staging f75f06932, 2026-10-01: both task helpers of a capture were dismissed once they answered, and their runs
+  // read by name answered missing (kinu-logs/evals-fast/FINDINGS.md F3B), as every task helper's do.
+  test('a released helper is read by its actor, a live one by its name', async () => {
+    const work = await new EvalVerifier(inspecting(), []).helperWork();
+
+    expect(work).toEqual([
+      { name: 'ask-task-live', status: 'working', runs: [{ status: 'running', userMessage: 'Write the ratings' }] },
+      { name: 'ask-task-done', status: 'dismissed', runs: [{ status: 'completed', userMessage: 'Write the totals' }] },
+    ]);
+  });
+});
+
 describe('matchesReference', () => {
   test('passes when every answer matches the reference once normalized, extra fields and all', async () => {
     expect(await matchesReference({ slate: counter(2), reference: counter(2), script, normalize })).toEqual({ pass: true, evidence: { calls: 3 } });

@@ -4,6 +4,7 @@ import * as v from 'valibot';
 import { diagnostics, KinuError, tolerate, toKinuError } from '../obs/index';
 import { fmtSpan } from '../utils/format';
 import { abortableSleep, providerPacer, type ProviderPacer } from './pacing';
+import { retryAfterOf } from './fallback-cooldown';
 import type { ProviderWaitInfo } from './types';
 
 
@@ -100,6 +101,8 @@ export function withRateLimitRetry(
 
     // Announce only cooldowns another request declared.
     const ownedCooldownUntil = { ms: 0 };
+    // A sibling's cooldown spends a retry as this call's own refusal does: a lane siblings keep cooling ends here.
+    let waits = 0;
 
     for (let attempt = 1; ; attempt++) {
       await pacer.admit(lane, signal, {
@@ -108,9 +111,9 @@ export function withRateLimitRetry(
             throw waitTooLong({ input, provider: opts.provider ?? host, untilMs, nowMs: now(), longestMs: MAX_RETRY_DELAY_MS, reason });
           }
 
-          if (retries === 0) throw handedOver(null, waitMs);
-
           if (untilMs === ownedCooldownUntil.ms) return;
+
+          if (++waits > retries) throw handedOver(null, waitMs);
 
           reportWait(waitMs, 0, 'cooldown');
         },
@@ -123,13 +126,13 @@ export function withRateLimitRetry(
 
       if ('spent' in limit) throw allowanceSpent({ input, response, body: limit.body, host, exhausted: limit.spent });
 
-      const retryAfterMs = parseRetryAfter(response.headers.get('retry-after'), now());
+      const retryAfter = retryAfterOf(response.headers, now());
 
-      if (retryAfterMs !== null && retryAfterMs > MAX_RETRY_DELAY_MS) {
+      if (retryAfter !== null && retryAfter > MAX_RETRY_DELAY_MS) {
         const reason = providerMessage({ body: limit.body });
-        const untilMs = now() + retryAfterMs;
+        const untilMs = now() + retryAfter;
 
-        pacer.declareWait(lane, retryAfterMs, reason);
+        pacer.declareWait(lane, retryAfter, reason);
 
         throw waitTooLong({
           input, provider: opts.provider ?? host, untilMs, nowMs: now(), longestMs: MAX_RETRY_DELAY_MS, reason, status: limit.status, response,
@@ -141,18 +144,18 @@ export function withRateLimitRetry(
         BASE_DELAY_MS * BACKOFF_FACTOR ** Math.min(attempt - 1, 32),
       );
 
-      const waitMs = retryAfterMs ?? Math.floor(random() * backoffCeilingMs);
+      const waitMs = retryAfter ?? Math.floor(random() * backoffCeilingMs);
 
       const untilMs = now() + waitMs;
       pacer.declareWait(lane, waitMs);
 
-      if (attempt > retries) throw handedOver(limit.status, retryAfterMs ?? waitMs);
+      if (++waits > retries) throw handedOver(limit.status, retryAfter ?? waitMs);
       ownedCooldownUntil.ms = untilMs;
       warn(
         `[kinu] ${host} rate-limited: waiting ${fmtSpan(waitMs)} `
         + `(attempt ${String(attempt)})`,
       );
-      reportWait(waitMs, attempt, retryAfterMs !== null ? 'header' : 'backoff', limit.status);
+      reportWait(waitMs, attempt, retryAfter !== null ? 'header' : 'backoff', limit.status);
       await sleep(waitMs, signal);
     }
   });
@@ -321,16 +324,6 @@ function waitTooLong(input: {
       `${input.provider} declared a wait until ${resetsAt}, past the ${fmtSpan(input.longestMs)} a call waits`,
     ),
   });
-}
-
-function parseRetryAfter(value: string | null, nowMs: number): number | null {
-  if (value === null || !value.trim()) return null;
-  const seconds = Number(value);
-
-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000;
-  const at = Date.parse(value);
-
-  return Number.isNaN(at) ? null : Math.max(0, at - nowMs);
 }
 
 function providerHost(input: RequestInfo | URL): string {

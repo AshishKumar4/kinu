@@ -204,7 +204,7 @@ const GATED_CALLS: GatedCall[] = [
     run: (u, c) => u.verifySocketSession(c, TOKEN_HASH),
   },
   { capability: 'auth_tokens', name: 'revokeAllCliTokens', run: (u, c) => u.revokeAllCliTokens(c) },
-  { capability: 'auth_tokens', name: 'endAllSessions', run: (u, c) => u.endAllSessions(c) },
+  { capability: 'auth_tokens', name: 'raiseCredentialFloor', run: (u, c) => u.raiseCredentialFloor(c, 1) },
   {
     capability: 'credentials.model',
     name: 'getCredentialsRevision',
@@ -233,6 +233,7 @@ interface OwnerOnlyCall {
 const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
   { capability: 'account', name: 'completeOnboarding', run: (u, c) => u.completeOnboarding(c) },
   { capability: 'account', name: 'setDisplayName', run: (u, c) => u.setDisplayName(c, 'Owner') },
+  { capability: 'account', name: 'heldRows', run: (u, c) => u.heldRows(c) },
   { name: 'getProfileCatalog', run: (userDO, caller) => userDO.getProfileCatalog(caller) },
   // A workspace that could turn its own Sandbox off would be granting itself the whole machine (F5/F6).
   {
@@ -305,7 +306,7 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
     run: (u, c) => u.builtinReplacePassword(c, USER_ID, { hash: 'h', salt: 's', iterations: 1 }),
   },
   { capability: 'builtin_accounts', name: 'builtinResetAccount', run: (u, c) => u.builtinResetAccount(c, { kind: 'none' }) },
-  { capability: 'builtin_accounts', name: 'builtinApplyReset', run: (u, c) => u.builtinApplyReset(c, { grant: { kind: 'none' } }) },
+  { capability: 'builtin_accounts', name: 'builtinApplyReset', run: (u, c) => u.builtinApplyReset(c, { grant: { kind: 'none' }, ended: 1 }) },
   { capability: 'builtin_accounts', name: 'builtinListAccounts', run: (u, c) => u.builtinListAccounts(c) },
   { capability: 'builtin_accounts', name: 'builtinClearAttempts', run: (u, c) => u.builtinClearAttempts(c, ['k']) },
   { capability: 'builtin_accounts', name: 'builtinInvitedEmail', run: (u, c) => u.builtinInvitedEmail(c, 'h') },

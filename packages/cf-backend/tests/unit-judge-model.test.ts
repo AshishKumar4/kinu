@@ -1,11 +1,11 @@
-/** Adapter half of cross-family judge selection (policy is core's): candidates track connected credentials. */
+/** Adapter half of cross-family judge panels (policy is core's): candidates track connected credentials. */
 
 import { describe, test, expect } from 'bun:test';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu.run/core';
 import { userCredentialSource } from './helpers/user-credentials';
 import { createMockFetch } from '@kinu.run/test-utils';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
-import { resolveReviewingModelSelection } from '../src/providers/judge-model';
+import { resolveEnsembleJudgeSelection } from '../src/providers/judge-model';
 
 const CLOUDFLARE_BASE = 'https://api.cloudflare.com/client/v4/accounts/acct';
 
@@ -29,68 +29,34 @@ function registryWith(...keys: string[]) {
   });
 }
 
-describe('resolveReviewingModelSelection', () => {
-  test('a Cloudflare-only owner gets the documented same-vendor fallback', async () => {
-    const selection = await resolveReviewingModelSelection({
-      registry: registryWith('cloudflare.oauth'),
-      pinned: null,
-      chatSpec: null, // unset → the workers-ai default
-    });
+describe('resolveEnsembleJudgeSelection', () => {
+  test('candidates come from connected credentials, in registry order', async () => {
+    const panel = async (...keys: string[]) => (await resolveEnsembleJudgeSelection({
+      registry: registryWith(...keys), specs: null, chatSpec: DEFAULT_WORKERS_AI_MODEL_SPEC,
+    })).specs;
 
-    expect(selection).toEqual({
-      spec: DEFAULT_WORKERS_AI_MODEL_SPEC,
-      source: 'same-family-fallback',
-    });
-  });
-
-  test('connecting a second vendor moves judging off the agent\'s own model', async () => {
-    const selection = await resolveReviewingModelSelection({
-      registry: registryWith('cloudflare.oauth', 'anthropic.bearer'),
-      pinned: null,
-      chatSpec: null,
-    });
-
-    expect(selection.source).toBe('cross-family');
-    expect(selection.spec).toBe('anthropic/claude-opus-4-7');
-  });
-
-  test('candidates come from connected credentials, not from the static roster', async () => {
-    const selection = await resolveReviewingModelSelection({
-      registry: registryWith('cloudflare.oauth', 'anthropic.bearer'),
-      pinned: null,
-      chatSpec: DEFAULT_WORKERS_AI_MODEL_SPEC,
-    });
-
-    expect(selection.spec).toBe('anthropic/claude-opus-4-7');
-
-    const withOpenAI = await resolveReviewingModelSelection({
-      registry: registryWith('cloudflare.oauth', 'anthropic.bearer', 'openai.bearer'),
-      pinned: null,
-      chatSpec: DEFAULT_WORKERS_AI_MODEL_SPEC,
-    });
-
-    // Registry preference order: openai before anthropic.
-    expect(withOpenAI.spec).toBe('openai/gpt-5.5');
+    expect(await panel('cloudflare.oauth')).toEqual([]);
+    expect(await panel('cloudflare.oauth', 'anthropic.bearer')).toEqual(['anthropic/claude-opus-4-7']);
+    expect(await panel('cloudflare.oauth', 'anthropic.bearer', 'openai.bearer')).toEqual(['openai/gpt-5.5', 'anthropic/claude-opus-4-7']);
   });
 
   test('a GPT chat model refuses the Codex reseller and keeps looking', async () => {
-    const selection = await resolveReviewingModelSelection({
+    const selection = await resolveEnsembleJudgeSelection({
       registry: registryWith('cloudflare.oauth', 'codex.oauth', 'openai.bearer', 'anthropic.bearer'),
-      pinned: null,
+      specs: null,
       chatSpec: 'openai/gpt-5.5',
     });
 
-    expect(selection.spec).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
-    expect(selection.source).toBe('cross-family');
+    expect(selection.specs).toEqual([DEFAULT_WORKERS_AI_MODEL_SPEC, 'anthropic/claude-opus-4-7']);
   });
 
-  test('an explicit review model is honoured and normalized', async () => {
-    const selection = await resolveReviewingModelSelection({
+  test('named judges are normalized', async () => {
+    const selection = await resolveEnsembleJudgeSelection({
       registry: registryWith('cloudflare.oauth', 'anthropic.bearer'),
-      pinned: '@cf/openai/gpt-oss-120b',
+      specs: ['@cf/openai/gpt-oss-120b'],
       chatSpec: KIMI,
     });
 
-    expect(selection).toEqual({ spec: 'workers-ai/@cf/openai/gpt-oss-120b', source: 'configured' });
+    expect(selection).toEqual({ specs: ['workers-ai/@cf/openai/gpt-oss-120b'], source: 'configured' });
   });
 });

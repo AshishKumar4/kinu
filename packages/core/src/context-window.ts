@@ -63,6 +63,17 @@ export interface ResolvedModelWindow extends ModelWindow {
   readonly windowMeasured: boolean;
 }
 
+/** The window a request is admitted against: as resolved, else as the catalog reports it, else the table's. */
+export function resolveModelWindow(spec: string, known: Partial<ResolvedModelWindow> | null): ResolvedModelWindow {
+  const table = contextWindowForModel(spec);
+
+  return {
+    contextWindow: known?.contextWindow ?? table.window,
+    modelOutputLimit: known?.modelOutputLimit ?? null,
+    windowMeasured: known?.windowMeasured ?? (known?.contextWindow !== undefined || table.measured),
+  };
+}
+
 /**
  * Tokens held back for the answer: its reported maximum, bounded by half the
  * window (a published maximum can equal the whole window and admit no input).
