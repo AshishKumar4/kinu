@@ -349,7 +349,7 @@ export function createChatGptProvider(opts: ChatGptProviderOptions = {}): ModelP
     },
     async unavailableReason() {
       return device === undefined
-        ? 'Sign in with ChatGPT on this machine (kinu provider connect chatgpt) to use your ChatGPT plan.'
+        ? "ChatGPT isn't signed in on this machine."
         : device.unavailableReason();
     },
 

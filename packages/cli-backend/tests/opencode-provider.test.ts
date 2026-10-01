@@ -268,7 +268,7 @@ describe('OpenCode provider', () => {
       hasCredential: async () => false,
     });
 
-    expect(reason).toContain('Install opencode');
+    expect(reason).toBe("opencode isn't installed on this machine.");
   });
 
   test('unavailableReason gives login hint when not authenticated', async () => {
@@ -284,7 +284,7 @@ describe('OpenCode provider', () => {
       hasCredential: async () => false,
     });
 
-    expect(reason).toContain('opencode auth login');
+    expect(reason).toBe("opencode isn't signed in on this machine.");
   });
 
   test('createModel returns a LanguageModel', async () => {

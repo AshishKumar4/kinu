@@ -25,8 +25,7 @@ const CODEX_DEFAULT_MODEL = 'gpt-5.5';
 const CODEX_FAST_MODEL = 'gpt-6-luna';
 
 /** A dead ChatGPT login's remedy. */
-const CODEX_DEAD_LOGIN =
-  'Your ChatGPT login is no longer valid. Reconnect ChatGPT in User settings, or run `kinu setup` on this machine.';
+const CODEX_DEAD_LOGIN = 'Your ChatGPT login is no longer valid.';
 
 const CODEX_MAX_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
@@ -172,7 +171,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
           );
 
           return new Response(
-            JSON.stringify({ error: { message: 'Codex credentials not configured. Connect ChatGPT in User settings, or run `kinu setup` on this machine.' } }),
+            JSON.stringify({ error: { message: 'ChatGPT credentials are not configured for this account.' } }),
             { status: 401, headers: { 'Content-Type': 'application/json' } },
           );
         }
