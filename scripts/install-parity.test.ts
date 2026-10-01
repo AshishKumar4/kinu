@@ -11,8 +11,8 @@ import { MOSSAIC_SDK } from './sources';
 const LOCK = `{
   "lockfileVersion": 1,
   "workspaces": {
-    "": { "name": "fixture" },
-    "packages/app": { "name": "@fx/app" },
+    "": { "name": "fixture", "devDependencies": { "tool": "2.0.0", "native-elsewhere": "1.0.0" } },
+    "packages/app": { "name": "@fx/app", "dependencies": { "dep": "^3" } },
     "${MOSSAIC_SDK}": { "name": "@mossaic/sdk" },
   },
   "packages": {
@@ -103,6 +103,16 @@ describe('the installed tree is the one bun.lock names', () => {
     rmSync(join(root, 'node_modules/lib/node_modules/dep'));
 
     expect(installDrift(root)).toEqual(['lib/dep@3.0.0 is missing: bun.lock places it under lib, which resolves another copy without it']);
+  });
+
+  // 2026-10-01: a deploy worktree installed before chess.js joined the lock ran every gate without it, and the old
+  // check, reading only what is installed, called the tree clean.
+  test('a package a workspace declares, absent from the tree, is drift; one the lock skips on this platform is not', () => {
+    const root = checkout('install-parity-undeclared');
+
+    rmSync(join(root, 'node_modules/tool'), { recursive: true });
+
+    expect(installDrift(root)).toEqual(['tool is missing: fixture declares it and bun.lock installs it']);
   });
 
   test('the SDK build\'s compiler link is part of the tree while it reaches the pinned compiler', () => {
