@@ -91,7 +91,7 @@ import * as v from 'valibot';
 import { Hono } from 'hono';
 import { rawPath, rethrow } from '../api/context';
 import {
-  initUserTables, PROFILE_CATALOG_CONFIG_KEY,
+  initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS,
   CapabilityDeniedError,
   armCapabilityReconcile,
   clearCapabilityReconcile,
@@ -1286,7 +1286,7 @@ export class UserDO extends Agent<Env> {
     revokeWorkspaceCapability(this.ctx.storage.sql, name);
     this.rosterChanged(name);
     // Grants are read by name, so a surviving row would grant full_filesystem to a same-name recreate.
-    this.sqlx(`DELETE FROM device_consent WHERE agent_name = ?`, name);
+    this.deleteWorkspaceRows(name, 'before-destroy');
 
     try {
       const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name));
@@ -1297,12 +1297,15 @@ export class UserDO extends Agent<Env> {
     }
 
     if (this.env.SLATE_PICTURES !== undefined) await deletePictures(this.env.SLATE_PICTURES, picturePrefix(name));
-    this.sqlx(`DELETE FROM user_workspaces WHERE name = ?`, name);
-    this.sqlx(`DELETE FROM workspace_overviews WHERE name = ?`, name);
-    this.sqlx(`DELETE FROM workspace_overview_nudges WHERE name = ?`, name);
-    this.sqlx(`DELETE FROM device_status_watchers WHERE agent_name = ?`, name);
+    this.deleteWorkspaceRows(name, 'after-destroy');
     // Re-run for a resumed row whose identity a pre-fence delete could have left registered.
     revokeWorkspaceCapability(this.ctx.storage.sql, name);
+  }
+
+  private deleteWorkspaceRows(name: string, when: 'before-destroy' | 'after-destroy'): void {
+    for (const { table, column, removal } of WORKSPACE_KEYED_ROWS) {
+      if (removal === when) this.sqlx(`DELETE FROM ${table} WHERE ${column} = ?`, name);
+    }
   }
 
   /**
