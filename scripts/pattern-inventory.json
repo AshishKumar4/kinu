@@ -445,7 +445,14 @@
       "file": "packages/core/src/skills/parse.ts",
       "kind": "hand-parser",
       "owner": "parseSkillFile",
-      "sourceSha256": "127508da4c12dfdd6ee5c3cda6f8b28ff6043632b99950472b55683e2bb8dfef",
+      "sourceSha256": "bb0d79647cc3dfe3e24de8f586dbcea6a319de234ce9b0e7491d23abc9255083",
+      "decision": "lexical"
+    },
+    {
+      "file": "packages/core/src/skills/parse.ts",
+      "kind": "hand-parser",
+      "owner": "parseSkillFile",
+      "sourceSha256": "9954655a58f76f9edc3baa43a0824d8784a00434f2b263f2d0074a4283889048",
       "decision": "lexical"
     },
     {

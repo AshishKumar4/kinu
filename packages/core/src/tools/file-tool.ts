@@ -23,7 +23,8 @@ import { readFileHead, readFileText, scanFileWindow, type ScannedFile } from './
 import { TurnFileLedger, type FileEditOutcomeReason, type FileSeenNeed } from '../vfs/file-ledger';
 import { DEFAULT_TOOL_RESULT_MAX_CHARS, clampSerializedToolResult } from './clamp';
 import type { JsonObject, JsonValue } from '../utils/json';
-import { KinuError, renderErrorMessage, renderThrownChain } from '../obs/index';
+import { Effect } from 'effect';
+import { KinuError, renderErrorMessage, renderThrownChain, settle } from '../obs/index';
 import { permitInPlan, requireBuild } from '../execution/work-mode';
 import { uncheckpointedSentence } from '../execution/exec-result';
 import { RESIDENT_TEXT_MAX_BYTES } from '../vfs/mounts';
@@ -99,10 +100,13 @@ const QuerySchema = z.string().min(1);
 export type FileToolFailureReason = FileEditOutcomeReason | 'bad_input';
 
 /** Fail at the operation that made the decision; callers choose the native or namespace boundary. */
-function failure(reason: FileToolFailureReason, error: string): never {
-  if (v.is(v.picklist(FILE_REFUSAL_REASONS), reason)) throw new FileRefusalError(reason, error);
-  throw new KinuError(reason, error);
+function failure(reason: FileToolFailureReason, error: string): Effect.Effect<never, KinuError> {
+  return Effect.fail(v.is(v.picklist(FILE_REFUSAL_REASONS), reason) ? new FileRefusalError(reason, error) : new KinuError(reason, error));
 }
+
+interface Failed { readonly cause: unknown }
+
+const tried = <A>(run: () => A | PromiseLike<A>): Effect.Effect<A, Failed> => Effect.tryPromise({ try: async () => run(), catch: (cause) => ({ cause }) });
 
 /** Which refusal a VFS errno is: absent path, permission wall, or filesystem failure. */
 function editOutcomeReason(code: VfsErrorCode): FileEditOutcomeReason {
@@ -113,35 +117,37 @@ function editOutcomeReason(code: VfsErrorCode): FileEditOutcomeReason {
   return 'io';
 }
 
-async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, path: string): Promise<{
+function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, path: string): Effect.Effect<{
   reason: FileEditOutcomeReason;
   error: string;
-}> {
+}, KinuError> {
   const err = input.error;
 
-  if (err instanceof FileRefusalError) return { reason: err.verdict, error: err.message };
+  if (err instanceof FileRefusalError) return Effect.succeed({ reason: err.verdict, error: err.message });
 
   if (err instanceof KinuError) {
     if (err.code === 'denied' || err.code === 'missing' || err.code === 'io') {
-      return { reason: err.code, error: err.message };
+      return Effect.succeed({ reason: err.code, error: err.message });
     }
 
     // `bad_input` never became an edit attempt; counting it would inflate attempts.
-    throw err;
+    return Effect.fail(err);
   }
 
   if (!isVfsError(err)) {
-    return { reason: 'io', error: `${action} ${path} failed: ${renderThrownChain({ cause: err })}` };
+    return Effect.succeed({ reason: 'io', error: `${action} ${path} failed: ${renderThrownChain({ cause: err })}` });
   }
 
   const reason = editOutcomeReason(err.code);
 
   // Only addressing mistakes get the roots hint; other errors carry their own reason.
-  const hint = err.code === 'ENOENT' || err.code === 'EISDIR'
-    ? `: ${await vfsAddressingHint(vfs, 'the `file` tool\'s path')}`
-    : '';
+  if (err.code !== 'ENOENT' && err.code !== 'EISDIR') return Effect.succeed({ reason, error: renderErrorMessage(err) });
 
-  return { reason, error: `${renderErrorMessage(err)}${hint}` };
+  return Effect.map(Effect.promise(() => vfsAddressingHint(vfs, 'the `file` tool\'s path')), (hint) => ({ reason, error: `${renderErrorMessage(err)}: ${hint}` }));
+}
+
+function vfsRefused(vfs: VFS, failed: Failed, action: string, path: string): Effect.Effect<never, KinuError> {
+  return Effect.flatMap(vfsFailure(vfs, { error: failed.cause }, action, path), (refused) => failure(refused.reason, refused.error));
 }
 
 /** Shared by the native `file` tool and codemode's `workspace.writeFile`/`editFile`: one ledger, one refusal. */
@@ -149,53 +155,51 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
   const { vfs, ledger, budget } = deps;
 
   /** A Plan-safe inspection: the VFS answer, bounded like a read. */
-  const inspect = async (action: 'list' | 'stat' | 'search', path: string, read: () => Promise<JsonValue | null>): Promise<JsonValue> => {
-    let output: JsonValue | null;
+  const inspect = (action: 'list' | 'stat' | 'search', path: string, read: () => Promise<JsonValue | null>): Effect.Effect<JsonValue, KinuError> => Effect.gen(function* () {
+    const output = yield* Effect.catch(tried(read), (failed) => vfsRefused(vfs, failed, action, path));
 
-    try { output = await read(); }
-    catch (cause) {
-      const refused = await vfsFailure(vfs, { error: cause }, action, path);
+    if (output === null) return yield* failure('missing', 'No path at ' + path);
+    const bounded = yield* Effect.promise(() => clampSerializedToolResult({ output }, { vfs, budget, producer: 'file_read' }));
 
-      return failure(refused.reason, refused.error);
-    }
-
-    if (output === null) return failure('missing', 'No path at ' + path);
-    const bounded = await clampSerializedToolResult({ output }, { vfs, budget, producer: 'file_read' });
-
-    return bounded ?? failure('io', 'File inspection produced no serializable result');
-  };
+    return bounded ?? (yield* failure('io', 'File inspection produced no serializable result'));
+  });
 
   const searchLines = (content: string, query: string): { line: number; text: string }[] =>
     content.split('\n').flatMap((text, index) => text.includes(query) ? [{ line: index + 1, text }] : []);
 
   /** The one write path. `observe` runs as soon as the bytes land, so a later failure
    *  cannot leave the ledger denying content already on disk. */
-  const persist = async (
+  const persist = (
     path: string, content: string, observe: (revision?: VfsRevision) => void, expected?: VfsRevision,
-  ): Promise<VfsWriteReport | null> => {
+  ): Effect.Effect<VfsWriteReport | null, Failed> => Effect.gen(function* () {
     const dir = vfsDirname(path);
     let report: VfsWriteReport | null = null;
 
-    if (dir) await ensureDir(vfs, dir);
+    if (dir) yield* tried(() => ensureDir(vfs, dir));
 
     if (expected === undefined) {
-      if (vfs.writeFileWithReport) report = await vfs.writeFileWithReport(path, new TextEncoder().encode(content));
-      else await writeText(vfs, path, content);
-      observe();
-    } else {
-      if (!vfs.writeFileIfRevision) throw new KinuError('unsupported', 'versioned edits require revision-checked writes');
-      const result = await vfs.writeFileIfRevision(path, new TextEncoder().encode(content), expected);
+      const reporting = vfs.writeFileWithReport?.bind(vfs);
 
-      if (!result.ok) throw new FileRefusalError('stale', `${path} changed since the observed revision`);
-      observe(result.revision);
+      if (reporting) report = yield* tried(() => reporting(path, new TextEncoder().encode(content)));
+      else yield* tried(() => writeText(vfs, path, content));
+      yield* Effect.try({ try: () => observe(), catch: (cause) => ({ cause }) });
+    } else {
+      const checked = vfs.writeFileIfRevision?.bind(vfs);
+
+      if (!checked) return yield* Effect.fail({ cause: new KinuError('unsupported', 'versioned edits require revision-checked writes') });
+      const result = yield* tried(() => checked(path, new TextEncoder().encode(content), expected));
+
+      if (!result.ok) return yield* Effect.fail({ cause: new FileRefusalError('stale', `${path} changed since the observed revision`) });
+      yield* Effect.try({ try: () => observe(result.revision), catch: (cause) => ({ cause }) });
     }
 
     const indexed = memoryIndexPath(path);
+    const memory = deps.memory;
 
-    if (deps.memory && indexed) await deps.memory.index(indexed);
+    if (memory && indexed) yield* tried(() => memory.index(indexed));
 
     return report;
-  };
+  });
 
   const answered = (written: JsonObject, report: VfsWriteReport | null): JsonObject => {
     if (report) written.undo = uncheckpointedSentence(report.uncheckpointed, 'this write');
@@ -232,16 +236,16 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
   /** How a result names its file: the reference the live table gives it. */
   const referenceOf = (path: string): string => formatReference(path, deps.roots?.() ?? []);
 
-  return async (args: FileToolInput): Promise<JsonValue> => {
+  return (args: FileToolInput): Promise<JsonValue> => settle(Effect.gen(function* () {
     const { path } = args;
 
     if (args.action === 'write' || args.action === 'edit') requireBuild('file.' + args.action);
 
     switch (args.action) {
       case 'list':
-        return inspect('list', path, async () => boundListing(path, (await vfs.readdir(path)).map(({ name }) => name)));
+        return yield* inspect('list', path, async () => boundListing(path, (await vfs.readdir(path)).map(({ name }) => name)));
       case 'stat':
-        return inspect('stat', path, async () => {
+        return yield* inspect('stat', path, async () => {
           const stat = await vfs.stat(path);
 
           return stat === null ? null : { path, size: stat.size, mtimeMs: stat.mtimeMs, isDir: (stat.type === 'directory') };
@@ -249,9 +253,9 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
       case 'search': {
         const query = QuerySchema.safeParse(args.query);
 
-        if (!query.success) return failure('bad_input', 'file search requires a non-empty literal query');
+        if (!query.success) return yield* failure('bad_input', 'file search requires a non-empty literal query');
 
-        return inspect('search', path, async (): Promise<JsonValue> => {
+        return yield* inspect('search', path, async (): Promise<JsonValue> => {
           const head = await readFileHead(vfs, path, FILE_SEARCH_MAX_BYTES);
           const matches = searchLines(head.text, query.data);
 
@@ -263,17 +267,13 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
 
       case 'read': {
         const maxChars = DEFAULT_TOOL_RESULT_MAX_CHARS;
-        let scanned: ScannedFile;
 
         // Reads every byte (the ledger keys on the whole-content fingerprint) but retains
         // only this window and the running hash.
-        try {
-          scanned = await scanFileWindow(vfs, path, { offset: args.offset, limit: args.limit, maxChars });
-        } catch (err) {
-          const vfsFail = await vfsFailure(vfs, { error: err }, 'read', path);
-
-          return failure(vfsFail.reason, vfsFail.error);
-        }
+        const scanned: ScannedFile = yield* Effect.catch(
+          tried(() => scanFileWindow(vfs, path, { offset: args.offset, limit: args.limit, maxChars })),
+          (failed) => vfsRefused(vfs, failed, 'read', path),
+        );
 
         const slice = formatFileSlice(scanned.window, { path, limit: args.limit, maxChars });
 
@@ -291,35 +291,20 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
       }
 
       case 'write': {
-        if (args.content === undefined) return failure('bad_input', 'file action=write requires `content`.');
-        let existing: string | null = null;
+        if (args.content === undefined) return yield* failure('bad_input', 'file action=write requires `content`.');
 
-        try {
-          existing = await readFileText(vfs, path);
-        } catch (err) {
-          if (!isVfsError(err) || err.code !== 'ENOENT') {
-            const vfsFail = await vfsFailure(vfs, { error: err }, 'write', path);
-
-            return failure(vfsFail.reason, vfsFail.error);
-          }
-        }
+        const existing = yield* Effect.catch(tried(() => readFileText(vfs, path)), (failed) => (isVfsError(failed.cause) && failed.cause.code === 'ENOENT'
+          ? Effect.succeed(null)
+          : vfsRefused(vfs, failed, 'write', path)));
 
         if (existing !== null) {
           const { refusal, reason } = gate(path, existing, 'overwrite');
 
-          if (refusal && reason) return failure(reason, refusal);
+          if (refusal && reason) return yield* failure(reason, refusal);
         }
 
         const content = args.content;
-        let report: VfsWriteReport | null;
-
-        try {
-          report = await persist(path, content, () => ledger.observeWhole(path, content));
-        } catch (err) {
-          const vfsFail = await vfsFailure(vfs, { error: err }, 'write', path);
-
-          return failure(vfsFail.reason, vfsFail.error);
-        }
+        const report = yield* Effect.catch(persist(path, content, () => ledger.observeWhole(path, content)), (failed) => vfsRefused(vfs, failed, 'write', path));
 
         return answered({
           ok: true, path, reference: referenceOf(path), bytes: args.content.length, action: existing === null ? 'created' : 'replaced',
@@ -330,35 +315,31 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         const raw = args.edits ?? [];
 
         if (raw.length === 0) {
-          return failure('bad_input', 'file action=edit requires `edits`: [{ old_text, new_text }].');
+          return yield* failure('bad_input', 'file action=edit requires `edits`: [{ old_text, new_text }].');
         }
 
         const edits: FileEdit[] = raw.map((edit) => ({ oldText: edit.old_text, newText: edit.new_text }));
-
-        let current: string;
         let revision = ledger.readRevision(path);
 
-        try {
-          try {
-            current = await readFileText(vfs, path, revision);
-          } catch (cause) {
-            if (!isVfsError(cause) || cause.code !== 'ENOTSUP') throw cause;
-            revision = undefined;
-            current = await readFileText(vfs, path);
-          }
-        } catch (err) {
-          const vfsFail = await vfsFailure(vfs, { error: err }, 'edit', path);
-          ledger.recordEdit(path, vfsFail.reason);
+        const refusedEdit = (failed: Failed): Effect.Effect<never, KinuError> => Effect.flatMap(
+          vfsFailure(vfs, { error: failed.cause }, 'edit', path),
+          (vfsFail) => Effect.andThen(Effect.sync(() => ledger.recordEdit(path, vfsFail.reason)), failure(vfsFail.reason, vfsFail.error)),
+        );
 
-          return failure(vfsFail.reason, vfsFail.error);
-        }
+        const readAtRevision = Effect.catch(tried(() => readFileText(vfs, path, revision)), (failed) => {
+          if (!isVfsError(failed.cause) || failed.cause.code !== 'ENOTSUP') return Effect.fail(failed);
+          revision = undefined;
 
+          return tried(() => readFileText(vfs, path));
+        });
+
+        const current = yield* Effect.catch(readAtRevision, refusedEdit);
         const { refusal, reason } = gate(path, current, 'edit');
 
         if (refusal && reason) {
           ledger.recordEdit(path, reason);
 
-          return failure(reason, refusal);
+          return yield* failure(reason, refusal);
         }
 
         const outcome = applyFileEdits(current, edits, path);
@@ -366,20 +347,14 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         if (!outcome.ok) {
           ledger.recordEdit(path, outcome.reason);
 
-          return failure(outcome.reason, outcome.message);
+          return yield* failure(outcome.reason, outcome.message);
         }
 
-        let report: VfsWriteReport | null;
-
-        try {
-          // Coverage carries across the edit: only the named span changed.
-          report = await persist(path, outcome.content, writtenRevision => ledger.observeEdited(path, current, outcome.content, writtenRevision), revision);
-        } catch (err) {
-          const vfsFail = await vfsFailure(vfs, { error: err }, 'edit', path);
-          ledger.recordEdit(path, vfsFail.reason);
-
-          return failure(vfsFail.reason, vfsFail.error);
-        }
+        // Coverage carries across the edit: only the named span changed.
+        const report = yield* Effect.catch(
+          persist(path, outcome.content, writtenRevision => ledger.observeEdited(path, current, outcome.content, writtenRevision), revision),
+          refusedEdit,
+        );
 
         ledger.recordEdit(path, null);
 
@@ -391,7 +366,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         }, report);
       }
     }
-  };
+  }));
 }
 
 export function createFileTool(deps: FileToolDeps): ToolSet[string] {

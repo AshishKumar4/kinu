@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-01",
   "files": 2931,
-  "functions": 74433,
+  "functions": 74637,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -203,10 +203,6 @@
     },
     {
       "key": "packages/core/src/scaffold/chat-transform.ts#scaffoldTurn",
-      "complexity": 31
-    },
-    {
-      "key": "packages/core/src/tools/file-tool.ts#createFileDispatcher>fn",
       "complexity": 31
     },
     {

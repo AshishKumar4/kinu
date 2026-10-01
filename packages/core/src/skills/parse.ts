@@ -12,7 +12,8 @@ import {
 import type { SkillParseResult, SkillSource } from './types';
 import * as v from 'valibot';
 import type { JsonObject, JsonValue } from '../utils/json';
-import { renderThrownChain } from '../obs/index';
+import { Effect, Result } from 'effect';
+import { renderThrownChain, settleSync } from '../obs/index';
 
 const NAME_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 
@@ -29,62 +30,67 @@ export function parseSkillFile(
   source: SkillSource = 'vfs',
   fallbackName?: string,
 ): SkillParseResult {
-  let doc;
+  return settleSync<SkillParseResult>(Effect.gen(function* () {
+    const parsed = yield* Effect.result(Effect.try({ try: () => parseMarkdownFrontmatter(src), catch: (cause) => ({ cause }) }));
 
-  try { doc = parseMarkdownFrontmatter(src); }
-  catch (err) {
-    if (err instanceof MarkdownFrontmatterError) {
-      return { ok: false, error: err.detail.message, line: err.detail.line };
+    if (Result.isFailure(parsed)) {
+      const err = parsed.failure.cause;
+
+      if (err instanceof MarkdownFrontmatterError) {
+        return { ok: false, error: err.detail.message, line: err.detail.line };
+      }
+
+      return { ok: false, error: renderThrownChain(parsed.failure) };
     }
 
-    return { ok: false, error: renderThrownChain({ cause: err }) };
-  }
+    const doc = parsed.success;
 
-  if (Object.keys(doc.frontmatter).length === 0) {
-    return { ok: false, error: 'missing front-matter (file must start with `---`)' };
-  }
+    if (Object.keys(doc.frontmatter).length === 0) {
+      return { ok: false, error: 'missing front-matter (file must start with `---`)' };
+    }
 
-  const fm = doc.frontmatter;
+    const fm = doc.frontmatter;
 
-  let name = asString(fm.name).trim();
+    let name = asString(fm.name).trim();
 
-  if (!name && fallbackName) name = fallbackName.trim();
+    if (!name && fallbackName) name = fallbackName.trim();
 
-  if (!name) {
-    return { ok: false, error: 'front-matter `name` is required when no fallback name (filename) is supplied' };
-  }
+    if (!name) {
+      return { ok: false, error: 'front-matter `name` is required when no fallback name (filename) is supplied' };
+    }
 
-  const nameProblem = skillNameProblem(name);
+    const nameProblem = skillNameProblem(name);
 
-  if (nameProblem) return { ok: false, error: `front-matter \`name\` ${nameProblem}` };
+    if (nameProblem) return { ok: false, error: `front-matter \`name\` ${nameProblem}` };
 
-  const description = asString(fm.description).trim();
+    const description = asString(fm.description).trim();
 
-  if (!description) return { ok: false, error: 'front-matter `description` is required' };
+    if (!description) return { ok: false, error: 'front-matter `description` is required' };
 
-  if (description.length > DESCRIPTION_MAX_LEN) {
-    return { ok: false, error: `front-matter \`description\` exceeds ${DESCRIPTION_MAX_LEN} characters (${description.length})` };
-  }
+    if (description.length > DESCRIPTION_MAX_LEN) {
+      return { ok: false, error: `front-matter \`description\` exceeds ${DESCRIPTION_MAX_LEN} characters (${description.length})` };
+    }
 
-  if (/<[a-zA-Z][^>]*>/.test(description)) {
-    return { ok: false, error: 'front-matter `description` must not contain XML tags' };
-  }
+    if (/<[a-zA-Z][^>]*>/.test(description)) {
+      return { ok: false, error: 'front-matter `description` must not contain XML tags' };
+    }
 
-  const allowed_tools = asStringArray(fm['allowed-tools'] ?? fm.allowed_tools ?? []);
-  const user_invocable = userInvocable(fm);
+    const allowed_tools = asStringArray(fm['allowed-tools'] ?? fm.allowed_tools ?? []);
+    const user_invocable = userInvocable(fm);
 
-  const known = new Set([
-    'name', 'description', 'allowed-tools', 'allowed_tools', 'user-invocable', 'user_invocable',
-  ]);
+    const known = new Set([
+      'name', 'description', 'allowed-tools', 'allowed_tools', 'user-invocable', 'user_invocable',
+    ]);
 
-  const ext: JsonObject = {};
+    const ext: JsonObject = {};
 
-  for (const [key, value] of Object.entries(fm)) if (!known.has(key)) ext[key] = value;
+    for (const [key, value] of Object.entries(fm)) if (!known.has(key)) ext[key] = value;
 
-  return {
-    ok: true,
-    skill: { name, description, allowed_tools, user_invocable, body: doc.body, ext, source },
-  };
+    return {
+      ok: true,
+      skill: { name, description, allowed_tools, user_invocable, body: doc.body, ext, source },
+    };
+  }));
 }
 
 /** Why `name` is not a legal skill name, or null. Shared by the parser and discovery. */

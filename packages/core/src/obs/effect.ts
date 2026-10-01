@@ -12,12 +12,17 @@ export function attempt<A>(
   return Effect.tryPromise({ try: run, catch: (cause) => toKinuError({ ...input, cause }) });
 }
 
+const worded = (otherwise: ErrorCode, { cause }: { readonly cause: unknown }): KinuError =>
+  (cause instanceof KinuError ? cause : new KinuError(classifyErrorCode({ cause }) ?? otherwise, renderThrownChain({ cause }), { cause }));
+
 /** {@link attempt} for a callee whose refusal is already worded for its reader: its message is kept, not replaced. */
 export function attemptInItsWords<A>(otherwise: ErrorCode, run: () => PromiseLike<A>): Effect.Effect<A, KinuError> {
-  return Effect.tryPromise({
-    try: run,
-    catch: (cause) => (cause instanceof KinuError ? cause : new KinuError(classifyErrorCode({ cause }) ?? otherwise, renderThrownChain({ cause }), { cause })),
-  });
+  return Effect.tryPromise({ try: run, catch: (cause) => worded(otherwise, { cause }) });
+}
+
+/** {@link attemptInItsWords} for a thrown defect. */
+export function inItsWords<A>(otherwise: ErrorCode, effect: Effect.Effect<A>): Effect.Effect<A, KinuError> {
+  return Effect.catchDefect(effect, (cause) => Effect.fail(worded(otherwise, { cause })));
 }
 
 interface SettleOptions {
@@ -84,7 +89,6 @@ export function sharedBy<I, A>(keyOf: (input: I) => string | number | null, run:
 
     if (held !== undefined) return held;
     let started: Promise<A> | undefined;
-    // A run can fail before `settle` returns; it is then never held.
     let holding = true;
 
     started = settle(Effect.onError(run(input), () => Effect.sync(() => {

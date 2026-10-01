@@ -84,6 +84,16 @@ export const DECLARED = new Map<string, Declaration>([
     within: ['forkTransferFrames', 'carriedPayloads'],
     reason: 'the fork-frame stream is an async generator: its receiver learns a refused frame from next()',
   }],
+  ['packages/core/src/tools/file-tool.ts', {
+    mechanisms: ['result-literal'],
+    within: ['createFileDispatcher'],
+    reason: 'the `file` tool\'s JSON answer, read by the model and by codemode\'s `workspace.writeFile`; `ok` is its field',
+  }],
+  ['packages/core/src/tools/inline-executor.ts', {
+    mechanisms: ['result-literal'],
+    within: ['createTool', 'slateRefusal'],
+    reason: 'codemode\'s `workspace.createTool` and `workspace.slates` answers, read by the program the model wrote',
+  }],
   ['packages/core/src/tools/outcome.ts', {
     mechanisms: ['result-literal', 'result-type'],
     reason: '`ToolOutcome`, the recorded outcome of a native tool invocation; `success` is its stored field',

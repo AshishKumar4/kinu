@@ -4,7 +4,7 @@ import { exists, readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
  * skipped; reads stay under the `admissionBytes` ceiling and the budget's file count.
  */
 import { admissionBytes, estimateTokens } from '../llm';
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import { classify, diagnostics, renderThrownChain, settle, toKinuError } from '../obs/index';
 
 
@@ -94,40 +94,37 @@ function refusalText(name: string, refusal: SkillFileRefusal): string {
   return `"${name}" is shadowed by ${refusal.by}`;
 }
 
-async function takeSkillFiles(
+function takeSkillFiles(
   vfs: VFS,
   root: { readonly dir: string; readonly source: SkillFile['source'] },
   taken: Map<string, SkillFile>,
   refuse: (file: { readonly name: string; readonly path: string }, refusal: SkillFileRefusal) => void,
-): Promise<void> {
-  for (const { name, path, folder } of await listSkillCandidates(vfs, root.dir)) {
-    const refusal = skillFileRefusal(name, taken.get(name));
+): Effect.Effect<void> {
+  return Effect.map(listSkillCandidates(vfs, root.dir), (candidates) => {
+    for (const { name, path, folder } of candidates) {
+      const refusal = skillFileRefusal(name, taken.get(name));
 
-    if (refusal === null) taken.set(name, { name, source: root.source, path, folder });
-    else refuse({ name, path }, refusal);
-  }
+      if (refusal === null) taken.set(name, { name, source: root.source, path, folder });
+      else refuse({ name, path }, refusal);
+    }
+  });
 }
 
 /** Every file-backed skill in precedence order; each refused candidate goes to `refuse`. */
-export async function listSkillFiles(
+export function listSkillFiles(
   vfs: VFS,
   refuse?: (path: string, reason: string) => void,
 ): Promise<SkillFile[]> {
   const winners = new Map<string, SkillFile>();
 
-  for (const root of SKILL_ROOTS) {
-    await takeSkillFiles(vfs, root, winners, (file, refusal) => refuse?.(file.path, refusalText(file.name, refusal)));
-  }
-
-  return [...winners.values()];
+  return settle(Effect.map(Effect.forEach(SKILL_ROOTS, (root) => takeSkillFiles(vfs, root, winners,
+    (file, refusal) => refuse?.(file.path, refusalText(file.name, refusal))), { discard: true }), () => [...winners.values()]));
 }
 
-export async function refusedSkillFiles(vfs: VFS, dir: string): Promise<ReadonlyMap<string, SkillFileRefusal>> {
+export function refusedSkillFiles(vfs: VFS, dir: string): Promise<ReadonlyMap<string, SkillFileRefusal>> {
   const refused = new Map<string, SkillFileRefusal>();
 
-  await takeSkillFiles(vfs, { dir, source: 'shared' }, new Map(), (file, refusal) => refused.set(file.path, refusal));
-
-  return refused;
+  return settle(Effect.as(takeSkillFiles(vfs, { dir, source: 'shared' }, new Map(), (file, refusal) => refused.set(file.path, refusal)), refused));
 }
 
 /** One name's file by the same precedence; null for a built-in or an unmounted optional root. */
@@ -158,96 +155,98 @@ export function resolveSkillFile(vfs: VFS, name: string): Promise<SkillFile | nu
   }));
 }
 
-export async function discoverSkills(
+export function discoverSkills(
   vfs: VFS,
   opts: DiscoverOpts,
 ): Promise<SkillsDiscovery> {
-  const onErr = (file: string, err: string): void => diagnostics.failure(
-    'skills.parse_failed',
-    toKinuError({ doing: 'parse a skill file', cause: err, otherwise: 'bad_input' }),
-    { file },
-  );
+  return settle(Effect.gen(function* () {
+    const onErr = (file: string, err: string): void => diagnostics.failure(
+      'skills.parse_failed',
+      toKinuError({ doing: 'parse a skill file', cause: err, otherwise: 'bad_input' }),
+      { file },
+    );
 
-  const byName = new Map<string, DiscoveredSkill>();
+    const byName = new Map<string, DiscoveredSkill>();
 
-  for (const s of BUILTIN_SKILL_HEADERS) byName.set(s.name, s);
-  const unread: UnreadSkillFile[] = [];
-  let omitted = 0;
-  // The file's byte size can refuse it before the bounded text read.
-  const ceiling = admissionBytes(opts.admissionTokens);
+    for (const s of BUILTIN_SKILL_HEADERS) byName.set(s.name, s);
+    const unread: UnreadSkillFile[] = [];
+    let omitted = 0;
+    // The file's byte size can refuse it before the bounded text read.
+    const ceiling = admissionBytes(opts.admissionTokens);
 
-  // Count bound: how many of the cheapest workspace header lines the budget could carry.
-  let slots = Math.floor(
-    opts.admissionTokens / estimateTokens(workspaceSkillIndexLine('a').length + 1),
-  );
+    // Count bound: how many of the cheapest workspace header lines the budget could carry.
+    let slots = Math.floor(
+      opts.admissionTokens / estimateTokens(workspaceSkillIndexLine('a').length + 1),
+    );
 
-  for (const { name, source, path } of await listSkillFiles(vfs, onErr)) {
-    if (slots <= 0) { omitted += 1; continue; }
+    for (const { name, source, path } of yield* Effect.promise(() => listSkillFiles(vfs, onErr))) {
+      if (slots <= 0) { omitted += 1; continue; }
 
-    slots -= 1;
+      slots -= 1;
 
-    try {
-      const size = (await vfs.stat(path))?.size;
+      const read = yield* Effect.result(Effect.tryPromise({
+        try: async (): Promise<{ readonly unread: number } | { readonly error: string } | { readonly skill: DiscoveredSkill }> => {
+          const size = (await vfs.stat(path))?.size;
 
-      if (size !== undefined && size > ceiling) {
-        unread.push({ name, path, bytes: size });
-        continue;
-      }
+          if (size !== undefined && size > ceiling) return { unread: size };
 
-      const text = await readTextFile(vfs, path, ceiling);
-      // The stem is the fallback `name`; an explicit `name:` must still match it.
-      const parsed = parseSkillFile(text, source, name);
+          const text = await readTextFile(vfs, path, ceiling);
+          // The stem is the fallback `name`; an explicit `name:` must still match it.
+          const parsed = parseSkillFile(text, source, name);
 
-      if (!parsed.ok) { onErr(path, parsed.error); continue; }
+          if (!parsed.ok) return { error: parsed.error };
 
-      if (parsed.skill.name !== name) {
-        onErr(path, `"${path}" does not match front-matter name "${parsed.skill.name}"`);
-        continue;
-      }
+          if (parsed.skill.name !== name) return { error: `"${path}" does not match front-matter name "${parsed.skill.name}"` };
 
-      byName.set(name, discovered(parsed.skill, { kind: 'file', path, chars: parsed.skill.body.length }));
-    } catch (error) {
-      onErr(path, renderThrownChain({ cause: error }));
+          return { skill: discovered(parsed.skill, { kind: 'file', path, chars: parsed.skill.body.length }) };
+        },
+        catch: (cause) => ({ cause }),
+      }));
+
+      if (Result.isFailure(read)) { onErr(path, renderThrownChain(read.failure)); continue; }
+
+      const verdict = read.success;
+
+      if ('unread' in verdict) unread.push({ name, path, bytes: verdict.unread });
+      else if ('error' in verdict) onErr(path, verdict.error);
+      else byName.set(name, verdict.skill);
     }
-  }
 
-  return {
-    skills: [...byName.values()].sort((a, b) => compareSkillNames(a.name, b.name)),
-    unread: unread.sort((a, b) => compareSkillNames(a.name, b.name)),
-    omitted,
-  };
+    return {
+      skills: [...byName.values()].sort((a, b) => compareSkillNames(a.name, b.name)),
+      unread: unread.sort((a, b) => compareSkillNames(a.name, b.name)),
+      omitted,
+    };
+  }));
 }
 
 /** One root's unopened candidates in name order; a missing directory or mount is empty. */
-async function listSkillCandidates(vfs: VFS, dir: string): Promise<Omit<SkillFile, 'source'>[]> {
-  let entries: string[] = [];
+function listSkillCandidates(vfs: VFS, dir: string): Effect.Effect<Omit<SkillFile, 'source'>[]> {
+  return Effect.gen(function* () {
+    const entries = yield* Effect.tryPromise({ try: async () => (await vfs.readdir(dir)).map(({ name }) => name), catch: (cause) => ({ cause }) }).pipe(
+      Effect.catch((failed) => (classify(failed) === 'enoent' || (isVfsError(failed.cause) && failed.cause.code === 'ENXIO')
+        ? Effect.succeed<string[]>([])
+        : Effect.die(failed.cause))),
+    );
 
-  try {
-    entries = (await vfs.readdir(dir)).map(({ name }) => name);
-  } catch (error) {
-    if (classify({ cause: error }) === 'enoent') return [];
+    const candidates: Omit<SkillFile, 'source'>[] = [];
 
-    if (isVfsError(error) && error.code === 'ENXIO') return [];
-    throw error;
-  }
+    for (const entry of entries) {
+      if (entry.endsWith('.md')) {
+        candidates.push({ name: entry.slice(0, -'.md'.length), path: `${dir}/${entry}`, folder: null });
+        continue;
+      }
 
-  const candidates: Omit<SkillFile, 'source'>[] = [];
+      const folder = `${dir}/${entry}`;
 
-  for (const entry of entries) {
-    if (entry.endsWith('.md')) {
-      candidates.push({ name: entry.slice(0, -'.md'.length), path: `${dir}/${entry}`, folder: null });
-      continue;
+      if (yield* Effect.promise(() => exists(vfs, `${folder}/${SKILL_FOLDER_FILE}`))) {
+        candidates.push({ name: entry, path: `${folder}/${SKILL_FOLDER_FILE}`, folder });
+      }
     }
 
-    const folder = `${dir}/${entry}`;
-
-    if (await exists(vfs, `${folder}/${SKILL_FOLDER_FILE}`)) {
-      candidates.push({ name: entry, path: `${folder}/${SKILL_FOLDER_FILE}`, folder });
-    }
-  }
-
-  // Sorted before anything opens: the bound decides what is read.
-  return candidates.sort((a, b) => compareSkillNames(a.name, b.name) || Number(a.folder === null) - Number(b.folder === null));
+    // Sorted before anything opens: the bound decides what is read.
+    return candidates.sort((a, b) => compareSkillNames(a.name, b.name) || Number(a.folder === null) - Number(b.folder === null));
+  });
 }
 
 /**
