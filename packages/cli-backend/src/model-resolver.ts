@@ -15,6 +15,8 @@ import {
   streamTextReported,
   parseModelSpec,
   workersAiSpec,
+  sessionAffinityOf,
+  SESSION_AFFINITY_HEADER,
   createModelRegistry,
   normalizeModelSpec,
   isProxyDeniedCredentialKey,
@@ -362,11 +364,9 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
 /** A Cloudflare-shaped endpoint takes the same replica pin as the proxy path; a pin its own headers set wins. */
 function withAffinity(llm: LLMProviderConfig, sessionAffinity: string): LLMProviderConfig {
-  for (const header in llm.headers) {
-    if (header.toLowerCase() === 'x-session-affinity') return llm;
-  }
+  if (sessionAffinityOf(llm.headers) !== undefined) return llm;
 
-  return { ...llm, headers: { ...llm.headers, 'x-session-affinity': sessionAffinity } };
+  return { ...llm, headers: { ...llm.headers, [SESSION_AFFINITY_HEADER]: sessionAffinity } };
 }
 
 function createGatewayBackedProvider(opts: {
@@ -564,7 +564,7 @@ function createCloudProxyProvider(opts: {
         kind: 'openai-compat',
         name: opts.id,
         baseURL,
-        headers: { Authorization: `Bearer ${opts.cloud.token}`, 'x-session-affinity': deps.sessionAffinity },
+        headers: { Authorization: `Bearer ${opts.cloud.token}`, [SESSION_AFFINITY_HEADER]: deps.sessionAffinity },
         modelId,
         fetch: opts.fetch,
         onWait: deps.onProviderWait,

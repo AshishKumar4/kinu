@@ -10,6 +10,7 @@ import * as v from 'valibot';
 import { errorResponse } from './cloudflare-ai-fetch';
 import { createCachedUsageRepair } from './stream-usage-repair';
 import { watchSseTerminal } from './sse-terminal';
+import { SESSION_AFFINITY_HEADER, sessionAffinityOf } from './workers-ai';
 
 /** The routed fields; a validating parse of the rest copied the transcript. */
 const ChatCompletionRouteSchema = v.object({
@@ -18,13 +19,6 @@ const ChatCompletionRouteSchema = v.object({
 });
 
 type ChatCompletionRoute = v.InferOutput<typeof ChatCompletionRouteSchema>;
-
-/** SDK record, or proxy `Headers`. */
-function sessionAffinity(headers: RequestInit['headers']): string | undefined {
-  if (v.is(v.instance(Headers), headers)) return headers.get('x-session-affinity') ?? undefined;
-
-  return v.parse(v.optional(v.record(v.string(), v.string())), headers)?.['x-session-affinity'];
-}
 
 /** `response` and `tool_calls` are nullable because a usage-only streamed delta sets neither. */
 const NativeOutputSchema = v.looseObject({
@@ -124,9 +118,9 @@ function startRun(
     returnRawResponse: true,
   };
 
-  const affinity = sessionAffinity(request?.headers ?? init?.headers);
+  const affinity = sessionAffinityOf(request?.headers ?? init?.headers);
 
-  if (affinity) options.extraHeaders = { 'x-session-affinity': affinity };
+  if (affinity) options.extraHeaders = { [SESSION_AFFINITY_HEADER]: affinity };
   const inputs = bindingInputs(body, route, messages);
 
   return { route, running: Promise.resolve().then(() => binding.run(route.model, inputs, options)) };
