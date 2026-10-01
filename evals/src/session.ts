@@ -698,6 +698,24 @@ const WorkBoardSchema = v.object({ plans: v.array(WorkEntrySchema), tasks: v.arr
 
 export type WorkBoard = v.InferOutput<typeof WorkBoardSchema>;
 
+/**
+ * One swarm the lead ran, as the Swarms pane draws it (`getExplorationCanvas`): the run, its search's dispatch
+ * parameters, and each node's journalled row. `head.rationale` is the preset, or a `custom` run's label (core
+ * `swarm-setup.ts`); a search scored by its verifier requested no judge samples (core `swarm-run.ts`).
+ */
+const SwarmRunSchema = v.object({
+  run: v.object({ id: v.string(), status: v.string(), startedAt: v.number(), winnerScore: v.nullable(v.number()) }),
+  params: v.nullable(v.object({ search: v.nullable(v.object({ judgeSamplesRequested: v.nullable(v.number()) })) })),
+  head: v.nullable(v.object({
+    rationale: v.string(),
+    heads: v.array(v.object({ depth: v.number(), status: v.string(), spawnedAt: v.number(), wallClockMs: v.number() })),
+  })),
+});
+
+export type PublicSwarmRun = v.InferOutput<typeof SwarmRunSchema>;
+
+const SwarmPageSchema = pageOf(SwarmRunSchema);
+
 /** A turn frame's body is one AI SDK UI message chunk. */
 const ChunkTypeSchema = v.object({ type: v.string() });
 
@@ -1493,6 +1511,25 @@ export class KinuPublicSession {
       `listWorkspaceWork on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('listWorkspaceWork', []),
     ));
+  }
+
+  /** Every swarm the lead ran, newest first, as the Swarms pane pages them (`getExplorationCanvas`). */
+  async swarmRuns(): Promise<PublicSwarmRun[]> {
+    const runs: PublicSwarmRun[] = [];
+
+    for (let cursor: { after: string } | undefined; ;) {
+      const request: JsonValue = cursor === undefined ? {} : { cursor };
+
+      const page = v.parse(SwarmPageSchema, await this.boundary(
+        `getExplorationCanvas on ${this.input.origin}/${this.workspace}`,
+        () => this.rpc('getExplorationCanvas', [request]),
+      ));
+
+      runs.push(...page.items);
+
+      if (page.status === 'end') return runs;
+      cursor = page.next;
+    }
   }
 
   /** A subordinate's children, transcript, runs or events, as the Agents surface's inspector reads them

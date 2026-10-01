@@ -21,6 +21,8 @@ function session(methods: Record<string, (input: JsonValue) => JsonValue>): Veri
     writeFile: () => Promise.resolve(),
     workspaceWork: () => Promise.reject(new Error('no work board here')),
     inspect: () => Promise.reject(new Error('no inspector here')),
+    swarmRuns: () => Promise.resolve([]),
+    execute: () => Promise.reject(new Error('no shell here')),
     exposedPorts: () => Promise.resolve([]),
   };
 }
