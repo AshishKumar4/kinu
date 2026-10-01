@@ -3,6 +3,7 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import * as v from 'valibot';
 import { builtinAccountRoutes, builtinAuthRoutes, type BuiltinAuthEnv } from '../src/auth/builtin';
+import { authPageRoutes } from '../src/auth/routes';
 import type { AuthIdentity } from '../src/auth/session';
 import { deriveBuiltinUserId, deriveUserId, verifySession } from '../src/auth/store';
 import { readCookie, SESSION_COOKIE_NAME } from '../src/auth/session';
@@ -65,11 +66,19 @@ function deployment() {
   const register = (email: string, invite?: string) =>
     post('/api/auth/builtin/password/register', { email, password: 'a long enough password', invite: invite ?? null });
 
-  /** The owner's sign-up, through the deployer's setup link. */
+  /** The owner's sign-up, with the deployer's setup token in the body. */
   const registerOwner = (email: string, setup: string | null = SETUP_TOKEN) =>
     post('/api/auth/builtin/password/register', { email, password: 'a long enough password', setup });
 
-  return { env, post, register, registerOwner };
+  const page = async (path: string): Promise<string> => {
+    const answer = await serveFamily(authPageRoutes)(new Request(`${ORIGIN}${path}`), env);
+
+    if (!answer) throw new Error(`no route answered ${path}`);
+
+    return answer.text();
+  };
+
+  return { env, page, post, register, registerOwner };
 }
 
 const ErrorSchema = v.object({ error: v.string() });
@@ -189,6 +198,21 @@ describe('a reset link', () => {
     expect((await post('/api/auth/builtin/password/sign-in', { email: 'member@example.com', password: 'a brand new password' })).status).toBe(200);
     expect((await post('/api/auth/builtin/password/sign-in', { email: 'member@example.com', password: 'a long enough password' })).status).toBe(401);
   });
+});
+
+test('the setup token never rides in a URL: /login takes it in a password field and never renders it back', async () => {
+  const { page, registerOwner } = deployment();
+  const owner = await page(`/login?setup=${encodeURIComponent(SETUP_TOKEN)}`);
+
+  expect(owner).toContain('<input type="password" name="setup"');
+  expect(owner).not.toContain(SETUP_TOKEN);
+  expect(owner).not.toContain(encodeURIComponent(SETUP_TOKEN));
+  await registerOwner('owner@example.com');
+  const signIn = await page(`/login?setup=${encodeURIComponent(SETUP_TOKEN)}`);
+
+  expect(signIn).toContain('Set up or recover the owner');
+  expect(signIn).not.toContain('owner@example.com');
+  expect(signIn).not.toContain(encodeURIComponent(SETUP_TOKEN));
 });
 
 test("the deployer's setup token resets the owner's sign-in and ends the owner's sessions", async () => {

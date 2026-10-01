@@ -167,25 +167,14 @@ async function builtinSignIn<Id>(env: AuthRoutesEnv<Id>, url: URL, returnTo: str
       : { mode: 'invite', invite, email, returnTo };
   }
 
-  const setup = url.searchParams.get('setup');
-  const proven = grantOf({ setup }, env.KINU_SETUP_TOKEN).kind === 'setup';
+  if (await accounts.builtinHasOwner(caller)) return { mode: 'sign-in', returnTo };
 
-  if (await accounts.builtinHasOwner(caller)) {
-    const owner = proven ? await accounts.builtinResetAccount(caller, { kind: 'setup' }) : null;
-
-    return owner !== null
-      ? { mode: 'reset', setup: setup ?? '', email: owner.email, notice: "Reset the owner's sign-in. It replaces the owner's password and passkeys and signs the owner out everywhere.", returnTo }
-      : { mode: 'sign-in', returnTo };
-  }
-
-  if (proven) return { mode: 'owner', setup: setup ?? '', returnTo };
+  if ((env.KINU_SETUP_TOKEN ?? '').trim() !== '') return { mode: 'owner', returnTo };
 
   return {
     mode: 'setup', returnTo,
-    notice: (env.KINU_SETUP_TOKEN ?? '').trim() === ''
-      ? 'This deployment has no owner yet. Its deployer sets a setup token first: '
-        + 'openssl rand -base64 32 | npx wrangler secret put KINU_SETUP_TOKEN, then opens /login?setup=<that token>.'
-      : 'This deployment has no owner yet. Its deployer creates the owner account from the setup link: /login?setup=<KINU_SETUP_TOKEN>.',
+    notice: 'This deployment has no owner yet. Its deployer sets a setup token as the KINU_SETUP_TOKEN secret, '
+      + 'keeps it in a password manager, and types it here.',
   };
 }
 

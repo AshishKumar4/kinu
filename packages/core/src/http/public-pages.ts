@@ -14,10 +14,9 @@ export interface LoginProvider {
 
 /** Built-in sign-in, offered where no OAuth app is configured (`auth/builtin.ts`). */
 export interface BuiltinSignIn {
-  /** `setup`: no owner and no setup link, so no form. */
+  /** `setup`: no owner and no setup token, so no form. */
   readonly mode: 'owner' | 'invite' | 'reset' | 'sign-in' | 'setup';
   readonly reset?: string;
-  readonly setup?: string;
   /** `invite` mode: the token, and the one address it admits. */
   readonly invite?: string;
   readonly email?: string;
@@ -39,7 +38,10 @@ export function loginDocument(providers: readonly LoginProvider[], builtin: Buil
 }
 
 const BUILTIN_COPY = {
-  owner: { lede: 'Create the first account. It becomes the owner of this deployment.', password: 'Create account', passkey: 'Create account with a passkey' },
+  owner: {
+    lede: 'Create the first account. It becomes the owner of this deployment. Enter the setup token its deployer set.',
+    password: 'Create account', passkey: 'Create account with a passkey',
+  },
   invite: { lede: 'You were invited. Create your account for this address.', password: 'Create account', passkey: 'Create account with a passkey' },
   reset: {
     lede: 'Set a new password or register a new passkey. It replaces this account\'s old ones and signs it out everywhere.',
@@ -49,7 +51,21 @@ const BUILTIN_COPY = {
   setup: { lede: null, password: '', passkey: '' },
 } as const;
 
-function builtinBody({ mode, invite, reset, email, setup, notice, returnTo }: BuiltinSignIn): string {
+const SETUP_FIELD = '<label>Setup token<input type="password" name="setup" autocomplete="off" required /></label>';
+
+const OWNER_RECOVERY = `<details class="recovery">
+    <summary>Set up or recover the owner</summary>
+    <form id="owner-recovery" class="fields" novalidate>
+      <p class="muted">The setup token replaces the owner's password and passkeys and signs the owner out everywhere.</p>
+      ${SETUP_FIELD}
+      <label>New password<input type="password" name="password" autocomplete="new-password" minlength="10" aria-describedby="recovery-rule" /></label>
+      <p id="recovery-rule" class="muted">At least 10 characters, or register a passkey instead.</p>
+      <button type="submit">Set the owner's password</button>
+      <button type="button" class="provider" id="recovery-passkey">Register a new owner passkey</button>
+    </form>
+  </details>`;
+
+function builtinBody({ mode, invite, reset, email, notice, returnTo }: BuiltinSignIn): string {
   const copy = BUILTIN_COPY[mode];
   const registering = mode !== 'sign-in';
   const lede = notice ?? copy.lede;
@@ -57,8 +73,9 @@ function builtinBody({ mode, invite, reset, email, setup, notice, returnTo }: Bu
   if (mode === 'setup') return `<p class="lede">${escapeHtml(lede ?? '')}</p>`;
 
   return `${lede === null ? '' : `<p class="lede">${escapeHtml(lede)}</p>`}
-  <form id="builtin-sign-in" class="fields" data-mode="${registering ? 'register' : 'sign-in'}" data-return-to="${escapeHtml(returnTo)}" data-invite="${escapeHtml(invite ?? '')}" data-setup="${escapeHtml(setup ?? '')}" data-reset="${escapeHtml(reset ?? '')}" data-resetting="${mode === 'reset' ? '1' : ''}" novalidate>
+  <form id="builtin-sign-in" class="fields" data-mode="${registering ? 'register' : 'sign-in'}" data-return-to="${escapeHtml(returnTo)}" data-invite="${escapeHtml(invite ?? '')}" data-reset="${escapeHtml(reset ?? '')}" data-resetting="${mode === 'reset' ? '1' : ''}" novalidate>
     <label>Email<input type="email" name="email" autocomplete="${registering ? 'email' : 'username webauthn'}" required${email === undefined ? '' : ` value="${escapeHtml(email)}" readonly`} /></label>
+    ${mode === 'owner' ? SETUP_FIELD : ''}
     <label>Password<input type="password" name="password" autocomplete="${registering ? 'new-password' : 'current-password'}"${registering ? ' minlength="10" aria-describedby="password-rule"' : ''} /></label>
     ${registering ? `<p id="password-rule" class="muted">At least 10 characters.${mode === 'reset' ? '' : ' Not needed with a passkey.'}</p>` : ''}
     <button type="submit">${copy.password}</button>
@@ -66,7 +83,8 @@ function builtinBody({ mode, invite, reset, email, setup, notice, returnTo }: Bu
   <div class="or" aria-hidden="true">or</div>
   <div class="providers"><button type="button" class="provider" id="passkey">${copy.passkey}</button></div>
   <p class="status" id="status" role="alert" aria-live="assertive"></p>
-  ${registering ? '' : '<p class="muted">New here? Ask the owner of this deployment for an invite link.</p>'}`;
+  ${registering ? '' : `<p class="muted">New here? Ask the owner of this deployment for an invite link.</p>
+  ${OWNER_RECOVERY}`}`;
 }
 
 /** Posts to `/api/auth/builtin/*` and follows the session it sets; passkeys through `navigator.credentials`. */
@@ -76,7 +94,6 @@ const status = document.getElementById('status');
 const passkey = document.getElementById('passkey');
 const registering = form.dataset.mode === 'register';
 const invite = form.dataset.invite || null;
-const setup = form.dataset.setup || null;
 const reset = form.dataset.reset || null;
 const resetting = form.dataset.resetting === '1';
 const returnTo = form.dataset.returnTo || '/';
@@ -92,6 +109,16 @@ async function post(path, body) {
 }
 const done = (answer) => { location.assign(answer.returnTo || returnTo); };
 const email = () => form.elements.email.value.trim();
+const setup = () => (form.elements.setup ? form.elements.setup.value : null);
+async function createPasskey(options) {
+  const created = await navigator.credentials.create({ publicKey: { ...options, challenge: bytes(options.challenge),
+    user: { ...options.user, id: bytes(options.user.id) },
+    excludeCredentials: (options.excludeCredentials || []).map((c) => ({ ...c, id: bytes(c.id) })) } });
+  done(await post('passkey/register', { returnTo, response: { id: created.id, rawId: text(created.rawId), type: created.type,
+    clientExtensionResults: created.getClientExtensionResults(),
+    response: { clientDataJSON: text(created.response.clientDataJSON), attestationObject: text(created.response.attestationObject),
+      transports: created.response.getTransports ? created.response.getTransports() : [] } } }));
+}
 async function run(work) {
   say('');
   busy(true);
@@ -100,24 +127,18 @@ async function run(work) {
 form.addEventListener('submit', (event) => {
   event.preventDefault();
   if (!form.elements.email.checkValidity()) return say('Enter an email address.');
+  if (form.elements.setup && !setup()) return say('Enter the setup token.');
   run(async () => done(await post(resetting ? 'password/reset' : registering ? 'password/register' : 'password/sign-in',
-    resetting ? { reset, setup, password: form.elements.password.value, returnTo }
-      : { email: email(), password: form.elements.password.value, invite, setup, returnTo })));
+    resetting ? { reset, password: form.elements.password.value, returnTo }
+      : { email: email(), password: form.elements.password.value, invite, setup: setup(), returnTo })));
 });
 passkey.addEventListener('click', () => {
   if (!window.PublicKeyCredential) return say('This browser does not support passkeys.');
   if (registering && !form.elements.email.checkValidity()) return say('Enter your email first: it names the account.');
   run(async () => {
     if (registering) {
-      const options = resetting ? await post('passkey/reset/options', { reset, setup })
-        : await post('passkey/register/options', { email: email(), invite, setup });
-      const created = await navigator.credentials.create({ publicKey: { ...options, challenge: bytes(options.challenge),
-        user: { ...options.user, id: bytes(options.user.id) },
-        excludeCredentials: (options.excludeCredentials || []).map((c) => ({ ...c, id: bytes(c.id) })) } });
-      done(await post('passkey/register', { returnTo, response: { id: created.id, rawId: text(created.rawId), type: created.type,
-        clientExtensionResults: created.getClientExtensionResults(),
-        response: { clientDataJSON: text(created.response.clientDataJSON), attestationObject: text(created.response.attestationObject),
-          transports: created.response.getTransports ? created.response.getTransports() : [] } } }));
+      await createPasskey(resetting ? await post('passkey/reset/options', { reset })
+        : await post('passkey/register/options', { email: email(), invite, setup: setup() }));
     } else {
       const options = await post('passkey/sign-in/options', {});
       const got = await navigator.credentials.get({ publicKey: { ...options, challenge: bytes(options.challenge),
@@ -128,7 +149,21 @@ passkey.addEventListener('click', () => {
           signature: text(got.response.signature), ...(got.response.userHandle ? { userHandle: text(got.response.userHandle) } : {}) } } }));
     }
   });
-});`;
+});
+const recovery = document.getElementById('owner-recovery');
+if (recovery) {
+  const token = () => recovery.elements.setup.value;
+  recovery.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!token()) return say('Enter the setup token.');
+    run(async () => done(await post('password/reset', { setup: token(), password: recovery.elements.password.value, returnTo })));
+  });
+  document.getElementById('recovery-passkey').addEventListener('click', () => {
+    if (!window.PublicKeyCredential) return say('This browser does not support passkeys.');
+    if (!token()) return say('Enter the setup token.');
+    run(async () => createPasskey(await post('passkey/reset/options', { setup: token() })));
+  });
+}`;
 
 export function authDocument(title: string, body: string, script?: string): string {
   return publicPage({
@@ -202,6 +237,11 @@ button.provider{width:100%;font:inherit;font-size:14.5px;font-weight:600;cursor:
 button:disabled{opacity:.6;cursor:progress}
 .status{min-height:0;color:var(--c-danger)!important}
 .status:empty{display:none}
+.recovery{margin-top:18px;border-top:var(--rule);padding-top:14px}
+.recovery summary{width:max-content;color:var(--c-text-3);font-size:13px;cursor:pointer;border-radius:var(--r-row)}
+.recovery summary:hover{color:var(--c-text)}
+.recovery summary:focus-visible{outline:2px solid var(--c-accent);outline-offset:2px}
+.recovery .fields{margin-top:12px}
 button[type="submit"]{display:inline-flex;align-items:center;justify-content:center;
 width:100%;min-height:40px;padding:0 15px;border:1px solid transparent;border-radius:var(--r-row);
 background:var(--c-accent);color:var(--c-accent-on);font:inherit;font-size:14px;
