@@ -4,10 +4,12 @@ import { execFileSync } from 'node:child_process';
  * The models a run measures unless `KINU_EVAL_MODELS` names others, each its own cohort: fast models off Workers AI,
  * the owner's choice for evals (2026-09-18, 09-19). The product default, GLM-5.3 on Workers AI, spent 26 to 66 minutes
  * a trial in the 2026-09-24 pilot (~100k output tokens at ~40 tok/s, 4-17% of it in 429 waits); Muse Spark spent 2 to
- * 6 (2026-09-30, `kinu-logs/evals-fast`). OpenRouter's Mercury 2.5 and Ling 3.0 Flash VL join once the eval accounts
- * hold an OpenRouter key.
+ * 6 (2026-09-30, `kinu-logs/evals-fast`). Each runs on the eval account's own provider key, which both deployments'
+ * eval accounts hold for all three since 2026-10-01.
  */
-export const DEFAULT_MODELS: readonly [string, ...string[]] = ['opencode-go/muse-spark-1.3-contributor'];
+export const DEFAULT_MODELS: readonly [string, ...string[]] = [
+  'opencode-go/muse-spark-1.3-contributor', 'openrouter/inception/mercury-2.5', 'openrouter/inclusionai/ling-3.0-flash-vl',
+];
 
 /** The product as deployed, with no workspace setting changed. */
 export const DEFAULT_ARM = 'product';

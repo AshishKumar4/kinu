@@ -16,6 +16,8 @@ const { afterEach, describe, expect, test } = require('bun:test');
 
 const { AwaitedList, awaitExit } = require('@kinu.run/test-utils');
 
+const { shellQuote } = require('@kinu.run/core');
+
 const { createSessions, MAX_AXIS, TERMINAL_NAME, parseSessionName } = require('../src/pty.js');
 
 
@@ -106,6 +108,12 @@ describe('a device terminal is a real one', () => {
     const painted = await h.until(() => /load average|%Cpu|Tasks:/.test(h.output()));
     expect(painted).toBe(true);
     expect(h.output()).toContain('\u001b[');
+    process.stderr.write('PTY contract: top painted; sending Ctrl-C and awaiting PTY_EXIT\n');
+    h.sessions.write('pane-1', Buffer.from('\u0003').toString('base64'));
+
+    const exited = await h.until(() => h.frames.find((frame) => frame.type === 'PTY_EXIT' && frame.session === 'pane-1'));
+    expect(exited.session).toBe('pane-1');
+    expect(h.sessions.size()).toBe(0);
 
     // The other half of the claim, on the same machine, this second: the
     // daemon's one-shot path gives this program a pipe and it refuses.
@@ -119,24 +127,38 @@ describe('a device terminal is a real one', () => {
 
   test('the terminal is the shell\'s controlling terminal, so it has job control', async () => {
     const h = harness();
-    h.sessions.open({ session: 'pane-jobs', cols: 80, rows: 24, argv: shellArgv(), env: shellEnv(), send: h.send });
-    await ready(h, 'pane-jobs');
-    const prompts = () => h.output().match(/\b12831\b/g)?.length ?? 0;
-    h.sessions.write('pane-jobs', Buffer.from("PS1=; PROMPT_COMMAND='echo $((987 * 13))'\r").toString('base64'));
-    await h.until(() => prompts() === 1);
+    h.sessions.open({ session: 'pane-jobs', cols: 80, rows: 24, argv: shellArgv(), env: { ...shellEnv(), LC_ALL: 'C' }, send: h.send });
+    h.sessions.write('pane-jobs', Buffer.from('groups=$(ps -o pgid=,tpgid= -p $$); printf "\nJOB_CONTROL flags=%s groups=%s\n" "$-" "$groups"\r').toString('base64'));
 
-    h.sessions.write('pane-jobs', Buffer.from("sh -c 'echo $((311 * 7)); exec sleep 300'\r").toString('base64'));
-    await h.until(() => /\b2177\b/.test(h.output()));
+    const answer = await h.until(() => /(?:^|\n)JOB_CONTROL flags=([a-zA-Z]+) groups=\s*(\d+)\s+(-?\d+)\r?(?:\n|$)/.exec(h.output())
+      ?? h.frames.find((frame) => frame.type === 'PTY_EXIT'));
+
+    if (!Array.isArray(answer)) throw new Error('the shell exited before answering its terminal-ownership query: ' + h.output());
+
+    const [, flags, group, foreground] = answer;
+    const facts = 'flags=' + flags + ', pgid=' + group + ', foreground=' + foreground;
+
+    if (!flags.includes('m') || group !== foreground) throw new Error('Bun terminal spawn did not give bash job control and its controlling foreground group: ' + facts);
+    process.stderr.write('PTY contract: bash owns the foreground; ' + facts + '\n');
+
+    const program = [
+      'import signal, sys',
+      'def resumed(sig, frame):',
+      '    print(f"RESUMED:{313 * 17}", flush=True)',
+      '    sys.exit(0)',
+      'signal.signal(signal.SIGCONT, resumed)',
+      'print(f"READY:{313 * 17}", flush=True)',
+      'signal.pause()',
+    ].join('\n');
+
+    // Parse fg in the original command: a Stopped line is not readline's input-admission completion.
+    h.sessions.write('pane-jobs', Buffer.from('python3 -c ' + shellQuote(program) + '; fg\r').toString('base64'));
+    await h.until(() => /(?:^|[\r\n])READY:5321(?=[\r\n]|$)/.test(Bun.stripANSI(h.output())));
+    process.stderr.write('PTY contract: foreground program reported READY; sending Ctrl-Z\n');
     h.sessions.write('pane-jobs', Buffer.from('\u001a').toString('base64'));
-    await h.until(() => /Stopped|suspended/.test(h.output()) && prompts() >= 2);
-
-    h.sessions.write('pane-jobs', Buffer.from('bg; jobs -l\r').toString('base64'));
-    await h.until(() => /Running/.test(h.output()) && prompts() >= 3);
-    h.sessions.write('pane-jobs', Buffer.from('\u0003').toString('base64'));
-    await h.until(() => prompts() >= 4);
-    h.sessions.write('pane-jobs', Buffer.from('echo $((123 * 29))\r').toString('base64'));
-    await h.until(() => /\b3567\b/.test(h.output()));
-    expect(h.output()).not.toContain('no job control in this shell');
+    await h.until(() => /Stopped/.test(h.output()));
+    process.stderr.write('PTY contract: bash reported Stopped; awaiting the already-admitted fg response\n');
+    await h.until(() => /(?:^|[\r\n])RESUMED:5321(?=[\r\n]|$)/.test(Bun.stripANSI(h.output())));
   });
 
   test('a resize reaches the program on the terminal', async () => {

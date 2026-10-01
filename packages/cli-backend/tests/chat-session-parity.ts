@@ -12,6 +12,7 @@ import type { LLMProviderConfig, SessionTranscriptReader } from '@kinu.run/core'
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session';
 import { TestLanguageModelV2 } from './test-language-model';
+import { recordSessionEvent, waitFor } from './helpers/local-session';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -163,16 +164,6 @@ function pendingSteerTexts(db: Database): string[] {
   return db.query<{ text: string }, []>('SELECT text FROM pending_steers ORDER BY seq').all().map((row) => row.text);
 }
 
-async function waitFor(pred: () => boolean, timeoutMs = 5000): Promise<void> {
-  const until = Date.now() + timeoutMs;
-
-  while (!pred()) {
-    if (Date.now() > until) throw new Error('waitFor: condition not met');
-    const tick = Promise.withResolvers<void>();
-    setTimeout(tick.resolve, 5);
-    await tick.promise;
-  }
-}
 
 /** Harness-authored blocks beside the conversation; their wording is not a loop decision. */
 const HARNESS_BLOCK = /^<(dynamic_context|workspace_instructions|unverified_instructions)\b/u;
@@ -333,7 +324,7 @@ export async function runParityScenario(interruptRecovery = false): Promise<Pari
     ...(interruptRecovery ? [four.model] : []),
   ]);
 
-  const a = new LocalAgentSession({ rt, db, model: modelA, noAutoEvolve: true, onEvent: (event) => eventsA.push(event) });
+  const a = new LocalAgentSession({ rt, db, model: modelA, noAutoEvolve: true, onEvent: (event) => recordSessionEvent(eventsA, event) });
   const norm = parityNormalizer();
 
   // 1. An idle send runs as a turn of its own.
@@ -341,20 +332,20 @@ export async function runParityScenario(interruptRecovery = false): Promise<Pari
 
   // 2. A send mid-turn with a file lands and is answered at the next step boundary (the drain's, not admission's).
   const turnTwo = a.send('two', { id: crypto.randomUUID() });
-  await waitFor(() => turnEvents(eventsA, 2).some((event) => event.type === 'tool-call'));
+  await waitFor(eventsA, () => turnEvents(eventsA, 2).some((event) => event.type === 'tool-call'));
   const steerTwo = a.send({ text: 'two-steer', files: [NOTE_FILE] }, { id: crypto.randomUUID() });
   two.stepGate.resolve();
   const landingTwo = await steerTwo;
-  await waitFor(() => two.prompts.length === 2);
+  await waitFor(eventsA, () => two.prompts.length === 2);
   two.endGate.resolve();
   await turnTwo;
   const afterTwo = await durableRows(db, norm, transcript);
 
   // 3. An interrupt hands the steer back and cuts the turn: the send is refused, never landed.
   const turnThree = a.send('three', { id: crypto.randomUUID() });
-  await waitFor(() => turnEvents(eventsA, 3).some((event) => event.type === 'text-delta'));
+  await waitFor(eventsA, () => turnEvents(eventsA, 3).some((event) => event.type === 'text-delta'));
   const steerThree = a.send('three-steer', { id: crypto.randomUUID() });
-  await waitFor(() => pendingSteerTexts(db).includes('three-steer'));
+  await waitFor(eventsA, () => pendingSteerTexts(db).includes('three-steer'));
   const returned = a.interrupt();
   const landingThree = await refusalCode(steerThree);
   await turnThree;
@@ -362,19 +353,19 @@ export async function runParityScenario(interruptRecovery = false): Promise<Pari
 
   // 4. A send with a file is acknowledged mid-turn, then the process dies before the drain; its producers stay parked.
   const turnFour = a.send('four', { id: crypto.randomUUID() });
-  await waitFor(() => turnEvents(eventsA, 4).some((event) => event.type === 'tool-call'));
+  await waitFor(eventsA, () => turnEvents(eventsA, 4).some((event) => event.type === 'tool-call'));
   const steerFour = a.send({ text: 'four-steer', files: [NOTE_FILE] }, { id: crypto.randomUUID() });
-  await waitFor(() => pendingSteerTexts(db).includes('four-steer'));
+  await waitFor(eventsA, () => pendingSteerTexts(db).includes('four-steer'));
   const landingFour = 'acknowledged';
   const beforeRestart = await durableRows(db, norm, transcript);
 
   if (interruptRecovery) {
     four.stepGate.resolve();
-    await waitFor(() => four.prompts.length === 2);
+    await waitFor(eventsA, () => four.prompts.length === 2);
     const recoveryEvents: SessionEvent[] = [];
     const recovery = gatedTextModel('recovery paused');
-    new LocalAgentSession({ rt, db, model: recovery.model, noAutoEvolve: true, onEvent: (event) => recoveryEvents.push(event) });
-    await waitFor(() => recoveryEvents.some((event) => event.type === 'text-delta'));
+    new LocalAgentSession({ rt, db, model: recovery.model, noAutoEvolve: true, onEvent: (event) => recordSessionEvent(recoveryEvents, event) });
+    await waitFor(recoveryEvents, () => recoveryEvents.some((event) => event.type === 'text-delta'));
   }
 
   // 5. The restart: the next process replays what the dead one acknowledged,
@@ -382,8 +373,8 @@ export async function runParityScenario(interruptRecovery = false): Promise<Pari
   const eventsB: SessionEvent[] = [];
   const restartedPrompts: PromptMessage[][] = [];
   const modelB = sequencedModel([answeringModel('answer four again', restartedPrompts), answeringModel('answer five', restartedPrompts)]);
-  const b = new LocalAgentSession({ rt, db, model: modelB, noAutoEvolve: true, onEvent: (event) => eventsB.push(event) });
-  await waitFor(() => eventsB.some((event) => event.type === 'turn-end'));
+  const b = new LocalAgentSession({ rt, db, model: modelB, noAutoEvolve: true, onEvent: (event) => recordSessionEvent(eventsB, event) });
+  await waitFor(eventsB, () => eventsB.some((event) => event.type === 'turn-end'));
   const landingFive = await b.send('five', { id: crypto.randomUUID() });
 
   const record: ParitySnapshot = {

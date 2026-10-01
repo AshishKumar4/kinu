@@ -24,6 +24,8 @@ const posts: { key: string; identity: string | null }[] = [];
 
 let refuseStores = false;
 
+let catalogueDown = false;
+
 const deployment = Bun.serve({
   port: 0,
   hostname: '127.0.0.1',
@@ -46,9 +48,11 @@ const deployment = Bun.serve({
         return Response.json({ ok: true });
       },
     },
+    '/api/user/credentials': () => Response.json([...store.keys()].map((key) => ({ key, kind: 'bearer' }))),
+    // A provider whose catalogue probe fails is absent with a failure beside it, its key still stored (registry.ts).
     '/api/user/models': () => Response.json({
-      models: [{ spec: MODEL, provider: 'opencode-go' }].filter((model) => store.has(catalogCredKey(model.provider))),
-      failures: [],
+      models: [{ spec: MODEL, provider: 'opencode-go' }].filter((model) => !catalogueDown && store.has(catalogCredKey(model.provider))),
+      failures: catalogueDown ? [{ provider: 'opencode-go', error: 'catalogue probe failed' }] : [],
     }),
   },
 });
@@ -59,6 +63,7 @@ beforeEach(() => {
   store.clear();
   posts.length = 0;
   refuseStores = false;
+  catalogueDown = false;
 });
 
 const origin = `http://127.0.0.1:${String(deployment.port)}`;
@@ -89,6 +94,18 @@ describe('eval-service provider keys on every deployment it drives', () => {
     // Every deploy runs it: a key whose provider is already listed is not stored again.
     expect(await provisionEvalProviderKeys(input)).toEqual({ stored: [], findings: [] });
     expect(posts).toHaveLength(1);
+  });
+
+  // Review 2026-10-01: a stored key whose provider's catalogue probe failed was absent from the model list, and the
+  // next deploy replaced it with whatever the operator's file held.
+  test('a held key is never replaced, even while its provider lists no models', async () => {
+    store.set('opencode-go.bearer', { kind: 'bearer', token: 'the-working-key' });
+    catalogueDown = true;
+    const input = { origin, keysPath: keysPathOf(homeWithKeys({ 'opencode-go.bearer': KEY })), identity: IDENTITY, identityEnv: 'KINU_EVAL_WEB_IDENTITY', models: [MODEL] };
+
+    expect((await provisionEvalProviderKeys(input)).stored).toEqual([]);
+    expect(posts).toEqual([]);
+    expect(store.get('opencode-go.bearer')).toEqual({ kind: 'bearer', token: 'the-working-key' });
   });
 
   test('an eval model no stored key unlocks, a missing key file and a missing identity are findings, not crashes', async () => {

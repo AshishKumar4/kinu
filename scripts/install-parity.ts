@@ -41,17 +41,21 @@ const PlatformField = v.optional(v.pipe(v.union([v.string(), v.array(v.string())
 
 const LockMeta = v.looseObject({ os: PlatformField, cpu: PlatformField });
 
+const Declared = v.optional(v.record(v.string(), v.string()), {});
+
 const LockSchema = v.looseObject({
-  workspaces: v.record(v.string(), v.looseObject({ name: v.optional(v.string()) })),
+  workspaces: v.record(v.string(), v.looseObject({ name: v.optional(v.string()), dependencies: Declared, devDependencies: Declared })),
   packages: v.record(v.string(), LockRow),
 });
 
 const PackageVersion = v.looseObject({ version: v.optional(v.string()) });
 
-/** What the lock installs on this machine: each install key's version, and each workspace's name by its path. */
+/** What the lock installs on this machine: each install key's version, each workspace's name by its path, and each
+ *  package a workspace declares, by the keys that may hold it (its own nested one, then the hoisted one). */
 export interface LockedTree {
   readonly versions: ReadonlyMap<string, string>;
   readonly workspaces: ReadonlyMap<string, string>;
+  readonly declared: readonly { readonly by: string; readonly keys: readonly string[] }[];
 }
 
 /** Whether a lock row's `os` or `cpu` admits `value`: absent admits all, `none` admits nothing, `!x` excludes. */
@@ -85,7 +89,16 @@ export function lockedTree(lockText: string, platform: { readonly os: string; re
   const workspaces = new Map(Object.entries(lock.workspaces)
     .flatMap(([path, entry]) => (path === '' || entry.name === undefined ? [] : [[path, entry.name] as const])));
 
-  return { versions, workspaces };
+  // A declared package bun must install; one the lock leaves out on this platform is not declared here.
+  const declared = Object.entries(lock.workspaces).flatMap(([path, entry]) => {
+    const by = entry.name ?? (path === '' ? 'the root' : path);
+
+    return Object.keys({ ...entry.dependencies, ...entry.devDependencies })
+      .map((dep) => ({ by, keys: [...(path === '' || entry.name === undefined ? [] : [`${entry.name}/${dep}`]), dep] }))
+      .filter((wanted) => wanted.keys.some((key) => versions.has(key) || [...workspaces.values()].includes(key)));
+  });
+
+  return { versions, workspaces, declared };
 }
 
 /** One package directory found under a `node_modules`: its install key, where it is, and the version it holds. */
@@ -188,6 +201,11 @@ export function drift(locked: LockedTree, installed: readonly InstalledPackage[]
     } else if (entry.version !== wanted) {
       lines.push(`${entry.path} holds ${entry.version ?? 'no readable package'} where bun.lock names ${wanted}`);
     }
+  }
+
+  // bun never removes what is installed; a package added to the lock since the last install is simply absent.
+  for (const { by, keys } of locked.declared) {
+    if (!keys.some((key) => present.has(key))) lines.push(`${keys.at(-1) ?? ''} is missing: ${by} declares it and bun.lock installs it`);
   }
 
   for (const [key, wanted] of locked.versions) {

@@ -10,7 +10,7 @@ import {
   type ChainServedWord,
   DELTA_BLOCK_BYTES,
   DELTA_MANIFEST_NAME,
-  DELTA_OPS_PER_COMMAND,
+  deltaOpCommands,
   DELTA_TREE_DIR,
   type DeltaBaseFact,
   type DeltaFileHashes,
@@ -853,10 +853,6 @@ function commitWord(rebasing: boolean, first: boolean): string {
 
 /** `set -e` stays inside the batch's own subshell: the SDK runs all commands in one persistent
  *  bash session, where a top-level `set -e` ends it on any later failure (D18). */
-function opsBatchCommand(header: string, ops: readonly string[]): string {
-  return [header, '(', 'set -e', ...ops, ')'].join('\n');
-}
-
 export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   const shell = chainShell(ports.exec, ports.storeRoot());
   const root = ports.storeRoot();
@@ -1456,14 +1452,12 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     return await publishStagedArchive(key, staged, storeHeld, short !== null);
   };
 
-  /** Batches of {@link DELTA_OPS_PER_COMMAND} keep round trips per checkpoint far below one per file;
-   *  each batch repeats the `# devbox-…` header and runs under a scoped `set -e` (D18). */
-  const runOpsBatched = async (doing: string, [header = '', ...ops]: readonly string[]): Promise<void> => {
-    for (let at = 0; at < ops.length; at += DELTA_OPS_PER_COMMAND) {
-      const result = await ports.exec(opsBatchCommand(header, ops.slice(at, at + DELTA_OPS_PER_COMMAND)));
+  const runOpsBatched = async (doing: string, ops: readonly string[]): Promise<void> => {
+    for (const [at, command] of deltaOpCommands(ops).entries()) {
+      const result = await ports.exec(command);
 
       if (result.exitCode !== 0) {
-        throw new DevboxError("io", `${doing} failed in batch ${at / DELTA_OPS_PER_COMMAND + 1} (${result.exitCode}): ${result.stderr || result.stdout}`);
+        throw new DevboxError("io", `${doing} failed in batch ${at + 1} (${result.exitCode}): ${result.stderr || result.stdout}`);
       }
     }
   };

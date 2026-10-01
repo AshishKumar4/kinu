@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { addAbortListener } from 'node:events';
 
 const server = new McpServer({ name: 'echo-server', version: '0.0.1' });
 
@@ -12,14 +13,26 @@ server.registerTool(
     : { content: [{ type: 'text', text: `echo: ${text}` }] },
 );
 
-// Slower than the connect/list startup budget: a tool call is not held to it.
-server.registerTool(
-  'slow',
-  { description: 'Sleep, then report.', inputSchema: { ms: z.number() } },
-  async ({ ms }) => {
-    await new Promise((resolve) => setTimeout(resolve, ms));
+const heldEntered = Promise.withResolvers();
 
-    return { content: [{ type: 'text', text: `slept ${ms}ms` }] };
+server.registerTool(
+  'held',
+  { description: 'Wait for the caller to cancel.', inputSchema: {} },
+  async (_input, extra) => {
+    heldEntered.resolve();
+    await new Promise((resolve) => { addAbortListener(extra.signal, resolve); });
+
+    return { content: [{ type: 'text', text: 'cancelled' }] };
+  },
+);
+
+server.registerTool(
+  'heldEntered',
+  { description: 'Observe entry into the held call.', inputSchema: {} },
+  async () => {
+    await heldEntered.promise;
+
+    return { content: [{ type: 'text', text: 'entered' }] };
   },
 );
 

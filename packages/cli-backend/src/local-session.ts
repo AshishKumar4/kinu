@@ -2534,7 +2534,7 @@ export class LocalAgentSession {
       reportModelCall: this.modelCallSink,
       nodeCodemode: (actor) => hostedCodemodeTool(actor, this.headCodemodeExtras()),
       webSearch: this.getWebSearchProvider(),
-      originContext: () => this.actorSession.history,
+      originContext: async () => this.actorSession.history,
       // Only the runner knows which profile snapshot applies (caller's, or frozen on re-drive), so it
       // picks the spec; a swarm with a profile refuses rather than run the caller's model.
       resolveModel: (spec: string) => this.resolveModelForSpec(spec),

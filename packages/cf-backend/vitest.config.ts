@@ -570,6 +570,7 @@ export default defineConfig({
         // protocol runs in-pool.
         serviceBindings: {
           PUBLIC_SURFACE: { name: 'public-surface-probe' },
+          HIRE_APP: { name: 'hire-probe' },
           // Node-side fake state is shared across workers; these entrypoints reset and read it.
           SURFACE_CONTROL: { name: 'public-surface-probe', entrypoint: 'SurfaceControl' },
           DEPLOY_FAKE: { name: 'deploy-probe', entrypoint: 'DeployFakeControl' },

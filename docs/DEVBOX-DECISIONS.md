@@ -957,6 +957,18 @@ reads the partial from the transcript frame. The answer's one durable copy is
 `stream_parts`. The cadence stays: first content, every ten, each settled result.
 Pins: `packages/cf-backend/tests/unit-chat-transport.test.ts` "a tab that reconnects
 mid-turn".
+(7) 2026-09-30 (lane/staging-fix-resume): (6)'s "after an eviction it reads the
+partial from the transcript frame" was never measured and does not hold: an open
+turn's transcript frame carries its user row alone, since the answer row is written
+at the commit (74cc1eea6), measured through the actor harness on 5f49adf4e. The
+re-drive streamed under a request id the next activation minted and nothing named,
+so the client that sent the turn never heard the rest (F2: staging a4e564ce1, a
+12-step turn reset after step 2 failed at its run's end). No replay store returns:
+RESUMING names the turn (`turnId`, its opening message's id), a client follows its
+turn by that id, and a tab that reconnects before the re-drive opens is told
+STREAM_PENDING (the SDK's #1784 frame) and RESUMING once it opens. A tab still sees
+the dead activation's steps only from the commit. Pins:
+`packages/cf-backend/tests/unit-chat-reopened-turn.test.ts`.
 
 D23-N. Every instance of the host namespace answers `supervisorOp` with the
 hosted runtime (2026-09-21, this commit; the Nimbus upgrade to core 0.12.0,

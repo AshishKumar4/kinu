@@ -2,9 +2,9 @@
 /**
  * EVAL-SERVICE'S PROVIDER KEYS, ON EVERY DEPLOYMENT IT DRIVES. A reset deletes every Durable Object of a deployment,
  * eval-service's provider credentials with them, and a deploy can reach a deployment whose reset ran in another
- * run; so before the tiers and the evals, every staging and promotion deploy asks the deployment which models
- * eval-service can run, stores through the product's own route each key whose provider it does not list, and asks
- * again: every model the eval pass runs must then be listed.
+ * run; so before the tiers and the evals, every staging and promotion deploy asks the deployment which credentials
+ * eval-service holds, stores through the product's own route each key it does not hold, and asks which models it
+ * can run: every model the eval pass runs must then be listed.
  *
  *   bun scripts/eval-provider-keys.ts <origin>
  *
@@ -23,7 +23,6 @@ import { DEV_IDENTITY_HEADER } from '@kinu.run/core';
 import { evalWebIdentityEnv } from '@kinu.run/test-utils';
 import { evalMatrix } from '../evals/src/config';
 import { ARMS } from '../evals/src/target';
-import { catalogCredKey } from '../packages/core/src/providers/catalog';
 import { recordStep } from './deploy-report';
 
 /** Where the operator keeps eval-service's provider keys: outside every checkout, mode 600. */
@@ -31,7 +30,7 @@ export const EVAL_PROVIDER_KEYS = join(homedir(), '.config', 'kinu', 'eval-provi
 
 const KeysSchema = v.record(v.pipe(v.string(), v.regex(/^[a-z0-9][a-z0-9._-]*\.bearer$/u)), v.pipe(v.string(), v.minLength(1)));
 
-const ModelsSchema = v.looseObject({ models: v.array(v.looseObject({ spec: v.string(), provider: v.string() })) });
+const ModelsSchema = v.looseObject({ models: v.array(v.looseObject({ spec: v.string() })) });
 
 /** How long one call to the deployment may take, as the deploy's smoke test bounds its own with `curl --max-time`. */
 const CALL_MS = 30_000;
@@ -46,9 +45,8 @@ export interface Provisioning {
   readonly models: readonly string[];
 }
 
-/** What eval-service lists: the providers it can run, and every model spec. */
+/** What eval-service lists: every model spec it can run. */
 interface Listed {
-  readonly providers: ReadonlySet<string>;
   readonly specs: ReadonlySet<string>;
 }
 
@@ -58,7 +56,22 @@ async function listed(input: Provisioning, headers: Record<string, string>): Pro
   if (!answer.ok) return { why: `listing eval-service's models answered ${String(answer.status)}` };
   const { models } = v.parse(ModelsSchema, await answer.json());
 
-  return { providers: new Set(models.map((model) => model.provider)), specs: new Set(models.map((model) => model.spec)) };
+  return { specs: new Set(models.map((model) => model.spec)) };
+}
+
+const CredentialsSchema = v.array(v.object({ key: v.string() }));
+
+/**
+ * The credential keys eval-service holds, read from its credential inventory. Not inferred from the model list:
+ * a provider whose catalogue probe fails is absent there while its key is stored, and storing again would
+ * replace a working key with the operator's file (review, 2026-10-01).
+ */
+async function heldKeys(input: Provisioning, headers: Record<string, string>): Promise<ReadonlySet<string> | { readonly why: string }> {
+  const answer = await fetch(`${input.origin}/api/user/credentials`, { headers, signal: AbortSignal.timeout(CALL_MS) });
+
+  if (!answer.ok) return { why: `listing eval-service's credentials answered ${String(answer.status)}` };
+
+  return new Set(v.parse(CredentialsSchema, await answer.json()).map((credential) => credential.key));
 }
 
 /** The keys in the operator's file, or why there are none to store. */
@@ -78,20 +91,19 @@ export interface Provisioned {
   readonly findings: readonly string[];
 }
 
-/** Stores each key whose provider eval-service does not list, then checks every eval model is listed. */
+/** Stores each key eval-service does not hold, then checks every eval model is listed. */
 export async function provisionEvalProviderKeys(input: Provisioning): Promise<Provisioned> {
   if (input.identity === undefined || input.identity === '') {
     return { stored: [], findings: [`${input.identityEnv} is not set, so nothing can act as eval-service at ${input.origin}`] };
   }
 
   const headers = { [DEV_IDENTITY_HEADER]: input.identity };
-  const before = await listed(input, headers);
+  const held = await heldKeys(input, headers);
 
-  if ('why' in before) return { stored: [], findings: [before.why] };
+  if ('why' in held) return { stored: [], findings: [held.why] };
   const file = keysIn(input.keysPath);
   const findings: string[] = 'why' in file ? [file.why] : [];
   const stored: string[] = [];
-  const held = new Set([...before.providers].map((provider) => catalogCredKey(provider)));
 
   for (const [key, token] of Object.entries('why' in file ? {} : file.keys)) {
     if (held.has(key)) continue;
@@ -107,7 +119,7 @@ export async function provisionEvalProviderKeys(input: Provisioning): Promise<Pr
     else findings.push(`storing ${key} for eval-service answered ${String(answer.status)}`);
   }
 
-  const after = stored.length === 0 ? before : await listed(input, headers);
+  const after = await listed(input, headers);
 
   if ('why' in after) return { stored, findings: [...findings, after.why] };
 

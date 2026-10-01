@@ -1,11 +1,12 @@
 import { join } from 'node:path';
 import * as v from 'valibot';
-import { attachHarnessRunToError, createHarness, normalizeHarnessRun, type TranscriptEvent } from 'vitest-evals';
+import { attachHarnessRunToError, createHarness, normalizeHarnessRun } from 'vitest-evals/harness';
+import type { TranscriptEvent } from 'vitest-evals';
 import { platformFact, type RunEvent } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { DeploymentAnswer, evalNameSlug, INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
 import { gatherEvidence, writeEvidence, type WorkspaceEvidence } from './evidence';
-import { HarnessRunSchema } from './results';
+import { HarnessRunSchema, type StepUsage, type UsageMetadata } from './results';
 import type { KinuPublicSession, PublicMessage } from './session';
 import { ARMS, deployedBuild, openWorkspace, type EvalArm, type EvalTarget } from './target';
 import type {
@@ -23,6 +24,40 @@ const IDLE_POLL_MS = 1_000;
 /** Polls in a row the deployment's transport may fail before the trial fails as infrastructure. */
 const DROPPED_POLLS = 3;
 
+/**
+ * Trials of one process opening their workspaces at once, at most. Opening is where a trial makes its new connections
+ * (the build read, the workspace create, the socket, the model pin), and this workstation's limit on new connections
+ * at once is the bound: it sends everything through Cloudflare WARP, which answers a burst of new connections with
+ * ICMP host-unreachable, and Bun 1.4's fetch fails such a connect outright where Node's tries the host's next address.
+ * Measured 2026-10-01 from twelve processes, as two legs of six task files make: 15 opening per process (180 in all)
+ * failed 0 of 540 connects, 20 (240) failed 238 of 720 (kinu-logs/evals-fast/proofs/connect-cause). Once open, a
+ * trial runs unbounded.
+ */
+const MAX_OPENING = 15;
+
+let openingNow = 0;
+
+const waitingToOpen: (() => void)[] = [];
+
+/** Take an opening slot, waiting for one while MAX_OPENING trials of this process are opening. */
+function admit(): Promise<void> {
+  if (openingNow < MAX_OPENING) {
+    openingNow += 1;
+
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve) => { waitingToOpen.push(resolve); });
+}
+
+/** Hand the slot to the next trial waiting for one, or give it back. */
+function release(): void {
+  const next = waitingToOpen.shift();
+
+  if (next === undefined) openingNow -= 1;
+  else next();
+}
+
 /** The check a turn fails when the deployment cut a run mid-work and reported it completed. */
 const CUT_REPORTED_COMPLETED = 'deployment.cut-reported-completed';
 
@@ -35,6 +70,46 @@ const MEMORY_RESETS = platformFact('do.isolate.oom_reported').observable.map((ob
 /** Whether a failure the deployment reported is its workspace's isolate reset for memory. */
 function memoryReset(message: string): boolean {
   return MEMORY_RESETS.some((reset) => message.includes(reset));
+}
+
+/** Prompt usage from the public ledger, complete totals only: a partial denominator would overstate cache hits. */
+export function measurePromptUsage(events: readonly RunEvent[]) {
+  const steps: StepUsage[] = [];
+
+  for (const event of events) {
+    if (event.type !== 'step_finish') continue;
+    steps.push({
+      runId: event.runId, stepIndex: event.stepIndex,
+      inputTokens: event.usage?.input ?? null,
+      cacheReadTokens: event.usage?.cacheRead ?? null,
+      cacheWriteTokens: event.usage?.cacheWrite ?? null,
+    });
+  }
+
+  const total = (field: 'inputTokens' | 'cacheReadTokens' | 'cacheWriteTokens'): number | undefined => {
+    if (steps.length === 0) return undefined;
+
+    let tokens = 0;
+
+    for (const step of steps) {
+      const count = step[field];
+
+      if (count === null) return undefined;
+      tokens += count;
+    }
+
+    return tokens;
+  };
+
+  const metadata: UsageMetadata = { steps };
+
+  for (const field of ['cacheReadTokens', 'cacheWriteTokens'] as const) {
+    const tokens = total(field);
+
+    if (tokens !== undefined) metadata[field] = tokens;
+  }
+
+  return { inputTokens: total('inputTokens'), metadata };
 }
 
 function openRuns(events: readonly RunEvent[]): string[] {
@@ -106,6 +181,15 @@ function outcomeOf(events: readonly RunEvent[], before: ReadonlySet<string>): Ev
  * many steps the turn's runs have recorded while it settles: a stream that dropped shows no more, and the ledger does.
  */
 async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: TrialTimeline, stepped: (steps: number) => void): Promise<EvalTurnResult> {
+  if (turn.fresh) {
+    await timeline.span('evict', async () => {
+      await session.abortActivation();
+      session.disconnect();
+      await session.connect();
+    });
+    await timeline.span('clear', () => session.clearConversation());
+  }
+
   await timeline.span('seed', async () => {
     for (const file of turn.seed ?? []) await session.writeFile(file.path, file.content);
   });
@@ -143,7 +227,9 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
   const verifiedAt = Date.now();
   const cut = cutButCompleted(events, before);
   const checks: EvalCheck[] = cut.length === 0 ? [] : [{ id: CUT_REPORTED_COMPLETED, pass: false, evidence: { runs: cut } }];
-  checks.push(...await timeline.span('verify', () => new EvalVerifier(session, replies).collect(turn.verify)));
+  const verify = turn.verify;
+
+  if (verify !== undefined) checks.push(...await timeline.span('verify', () => new EvalVerifier(session, replies).collect(verify)));
   const afterEviction = turn.verifyAfterEviction;
 
   if (afterEviction !== undefined && checks.every((check) => check.pass)) {
@@ -218,25 +304,35 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       let turnStartedAt = Date.now();
 
       try {
-        productSha = (await timeline.span('build', () => deployedBuild(target))).sha;
+        await timeline.span('admit', admit);
 
-        const opened = await timeline.span('open', () => openWorkspace(target, {
-          subject: `${task.id}-${String(input.trial)}`, mission: task.mission, model: input.model,
-        }));
+        const opened = await (async () => {
+          try {
+            productSha = (await timeline.span('build', () => deployedBuild(target))).sha;
 
-        session = opened;
-        say(`workspace ${opened.workspace} open`);
-        opened.onChunk = (type) => {
-          timeline.chunk(type);
+            const created = await timeline.span('open', () => openWorkspace(target, {
+              subject: `${task.id}-${String(input.trial)}`, mission: task.mission, model: input.model,
+            }));
 
-          if (type === 'finish-step') say(`turn ${String(turnNumber)}, step ${String(steps += 1)}`);
-          else if (type.startsWith('closed')) say(`the workspace socket ${type}`);
-        };
+            session = created;
+            say(`workspace ${created.workspace} open`);
+            created.onChunk = (type) => {
+              timeline.chunk(type);
 
-        const arm: EvalArm | undefined = ARMS.find((declared) => declared.id === input.arm);
+              if (type === 'finish-step') say(`turn ${String(turnNumber)}, step ${String(steps += 1)}`);
+              else if (type.startsWith('closed')) say(`the workspace socket ${type}`);
+            };
 
-        if (arm === undefined) throw new Error(`no arm is declared as ${input.arm}`);
-        await timeline.span('arm', () => arm.apply(opened));
+            const arm: EvalArm | undefined = ARMS.find((declared) => declared.id === input.arm);
+
+            if (arm === undefined) throw new Error(`no arm is declared as ${input.arm}`);
+            await timeline.span('arm', () => arm.apply(created));
+
+            return created;
+          } finally {
+            release();
+          }
+        })();
 
         for (const [index, turn] of task.turns.entries()) {
           if (signal?.aborted === true) throw new Error('the eval run was cancelled', { cause: signal.reason });
@@ -289,9 +385,11 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       }
 
       const metrics = measure(events);
-      const usageMetadata: Record<string, number> = {};
+      const promptUsage = measurePromptUsage(events);
+      const usageMetadata = promptUsage.metadata;
 
       if (costUsd !== undefined) usageMetadata.costUsd = costUsd;
+
       const checks = turns.flatMap((turn) => turn.checks);
 
       const success = errors.length === 0 && turns.length === task.turns.length
@@ -322,7 +420,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
         events: transcript,
         usage: {
           provider: input.model.split('/')[0] ?? 'unknown', model: input.model, toolCalls: metrics.toolCalls,
-          inputTokens: metrics.inputTokens, outputTokens: metrics.outputTokens,
+          inputTokens: promptUsage.inputTokens, outputTokens: metrics.outputTokens,
           metadata: usageMetadata,
         },
         errors: scrubbed,

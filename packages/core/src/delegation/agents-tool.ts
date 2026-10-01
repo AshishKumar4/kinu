@@ -259,7 +259,7 @@ export interface AgentsSwarmDeps {
    */
   resolveModel?: (spec: string) => LanguageModel;
   /** Caller conversation at dispatch, frozen into the search ledger so `context:'inherit'` survives re-drive. */
-  originContext?: () => readonly ModelMessage[];
+  originContext?: () => Promise<readonly ModelMessage[]>;
   /** Host-owned async provisioner for one node's private home, resolved per swarm call.
    *  Absent: no credentialed home, and nodes report the shared plane. */
   provisionNodeHome?: () => NodeWorkspaceProvisioner;
@@ -1000,7 +1000,7 @@ async function runSwarmAction({ deps, input, mode, toolOptions, budget }: SwarmA
   }
 
   // Each backend factory call is a real event, so resolve them once, before the bag.
-  const origin = swarm.originContext?.();
+  const origin = await swarm.originContext?.();
   const signal = toolOptions?.abortSignal;
   const publishHeadStream = swarm.reportNodeDelta?.();
   const announceHeadActivity = swarm.announceHeadActivity?.();

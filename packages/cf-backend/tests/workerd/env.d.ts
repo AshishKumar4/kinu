@@ -138,7 +138,6 @@ interface HireProbeRpc extends Rpc.DurableObjectBranded {
   childSpoke(): Promise<void>;
   callerObserved(): Promise<void>;
   openHire(workspace: string, prompt: string): Promise<void>;
-  msgSent(): Promise<void>;
   reenter(workspace: string): Promise<void>;
   wakeReturned(workspace: string): Promise<void>;
   /** Every delegated turn ended and every answered task agent retired. */
@@ -358,6 +357,7 @@ declare global {
       LOADER: WorkerLoader;
       /** The production Worker entry hosted by `public-surface-probe`, WebSocket upgrades included. */
       PUBLIC_SURFACE: Fetcher;
+      HIRE_APP: Fetcher;
       SURFACE_CONTROL: Service<SurfaceControlRpc>;
       /** Production deploy run, hosted by `deploy-probe` as a subclass with read-only storage windows. */
       DEPLOY_RUN_PROBE: DurableObjectNamespace<DeployRunProbeRpc>;

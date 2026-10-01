@@ -92,11 +92,17 @@ const NON_BUN_RUNNERS: readonly {
  */
 const AFTER_CI_SUITES = {
   'evals/tasks/budget-board.eval.ts': 'bun run evals',
+  'evals/tasks/chess.eval.ts': 'bun run evals',
+  'evals/tasks/freight-desk.eval.ts': 'bun run evals',
   'evals/tasks/launch-prep.eval.ts': 'bun run evals',
-  'evals/tasks/lending-library.eval.ts': 'bun run evals',
+  'evals/tasks/memory-recall.eval.ts': 'bun run evals',
   'evals/tasks/order-book.eval.ts': 'bun run evals',
   'evals/tasks/request-logs.eval.ts': 'bun run evals',
   'evals/tasks/site-preview.eval.ts': 'bun run evals',
+  'evals/tasks/swarm-audit.eval.ts': 'bun run evals',
+  'evals/tasks/swarm-optimise.eval.ts': 'bun run evals',
+  'evals/tasks/swarm-research.eval.ts': 'bun run evals',
+  'evals/tasks/true-myth-combinators.eval.ts': 'bun run evals',
   'scripts/deadline-capability.test.ts': 'bun test --timeout=0 scripts/deadline-capability.test.ts',
   'tests/browser/live-app-layout.test.ts': 'bun test --timeout=0 tests/browser/live-app-layout.test.ts',
   'tests/browser/live-app-plans.test.ts': 'bun test --timeout=0 tests/browser/live-app-plans.test.ts',

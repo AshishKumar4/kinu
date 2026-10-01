@@ -7,6 +7,7 @@ import { compareEvalResults, evalGateVerdict, fisherExact, renderEvalComparison,
  */
 type Trial = {
   pass: boolean; infra?: boolean; refused?: string; reset?: string; productSha?: string; taskVersion?: string; failed?: string; trial?: number;
+  inputTokens?: number; cacheReadTokens?: number; costUsd?: number; model?: string; durationMs?: number; harnessInfra?: boolean;
 };
 
 function outcomeOf(trial: Trial) {
@@ -17,11 +18,12 @@ function outcomeOf(trial: Trial) {
   return trial.refused === undefined ? { status: 'completed' } : { status: 'refused', message: trial.refused };
 }
 
-/** A vitest JSON report of one task's trials, as the reporter writes it, cut to the fields the comparison reads. */
-function report(taskId: string, trials: readonly Trial[], side: { productSha: string; evalCommit: string }): string {
+/** One task file's vitest JSON result, cut to the fields the comparison reads. */
+function fileResult(taskId: string, trials: readonly Trial[], side: { productSha: string; evalCommit: string },
+  timing?: { startTime?: number; endTime?: number }) {
   const assertionResults = trials.map((trial, index) => ({
     status: trial.pass ? 'passed' : 'failed',
-    duration: 60_000,
+    duration: trial.durationMs ?? 60_000,
     meta: {
       harness: {
         run: {
@@ -32,7 +34,10 @@ function report(taskId: string, trials: readonly Trial[], side: { productSha: st
             },
             events: [],
           },
-          usage: { model: 'workers-ai/@cf/zai-org/glm-5.3', metadata: {} },
+          usage: {
+            model: trial.model ?? 'workers-ai/@cf/zai-org/glm-5.3', inputTokens: trial.inputTokens,
+            metadata: { cacheReadTokens: trial.cacheReadTokens, costUsd: trial.costUsd },
+          },
           output: {
             metrics: { modelTurns: 4, toolCalls: 6, toolErrors: 0, providerWaits: 2, providerWaitMs: 30_000 },
             turns: [{
@@ -42,13 +47,17 @@ function report(taskId: string, trials: readonly Trial[], side: { productSha: st
                 : [],
             }],
           },
-          errors: [],
+          errors: trial.harnessInfra === true ? [{ name: 'InfraError', message: 'the public request disconnected' }] : [],
         },
       },
     },
   }));
 
-  return JSON.stringify({ testResults: [{ name: `/repo/evals/tasks/${taskId}.eval.ts`, assertionResults }] });
+  return { name: `/repo/evals/tasks/${taskId}.eval.ts`, ...timing, assertionResults };
+}
+
+function report(taskId: string, trials: readonly Trial[], side: { productSha: string; evalCommit: string }): string {
+  return JSON.stringify({ testResults: [fileResult(taskId, trials, side)] });
 }
 
 function trialsOf(passed: number, total: number, extra: Partial<Trial> = {}): Trial[] {
@@ -122,6 +131,109 @@ describe('compareEvalResults', () => {
     const mixed = report('t', [...trialsOf(5, 5), { pass: true, productSha: 'cccccccc3' }], BASE);
 
     expect(() => compareEvalResults(null, mixed)).toThrow(/mix builds/);
+  });
+});
+
+describe('metric accounting', () => {
+  test('cache rates weight prompt tokens within cohorts and across unequal tasks, separately on each model and side', () => {
+    const model = 'opencode-go/muse-spark-1.3-contributor';
+
+    const leg = (side: { productSha: string; evalCommit: string }, reads: readonly [number, number, number]) => JSON.stringify({
+      testResults: [
+        fileResult('alpha', [
+          { pass: true, model, inputTokens: 100, cacheReadTokens: reads[0] },
+          { pass: false, model, inputTokens: 900, cacheReadTokens: reads[1] },
+        ], side),
+        fileResult('beta', [
+          { pass: true, model, inputTokens: 2000, cacheReadTokens: reads[2] },
+          { pass: true, model: 'openrouter/inception/mercury-2.5', inputTokens: 10_000, cacheReadTokens: 0 },
+        ], side),
+      ],
+    });
+
+    const comparison = compareEvalResults(leg(BASE, [60, 360, 1800]), leg(NEXT, [20, 180, 600]));
+    const cohort = comparison.rows.find((row) => row.taskId === 'alpha' && row.model === model);
+    const pooled = comparison.profiles.find((profile) => profile.model === model);
+
+    expect(cohort?.baseline?.cacheHitRate).toBe(0.42);
+    expect(cohort?.candidate?.cacheHitRate).toBe(0.2);
+    expect(pooled?.baseline?.cacheHitRate).toBe(0.74);
+    expect(pooled?.candidate.cacheHitRate).toBeCloseTo(0.2666666667, 10);
+  });
+
+  test('a missing prompt or cache-read count invalidates the whole non-infra cohort and pooled model', () => {
+    for (const missing of [{ inputTokens: 900 }, { cacheReadTokens: 360 }, {}]) {
+      const comparison = compareEvalResults(null, report('t', [
+        { pass: true, inputTokens: 100, cacheReadTokens: 60 },
+        { pass: false, ...missing },
+      ], NEXT));
+
+      expect(comparison.rows[0]?.candidate?.cacheHitRate).toBeNull();
+      expect(comparison.profiles[0]?.candidate.cacheHitRate).toBeNull();
+    }
+  });
+
+  test('infra trials do not enter cache rates, resets do, and all attempted trials still enter spend', () => {
+    const infra: Trial[] = [
+      { pass: false, infra: true, inputTokens: 100_000, cacheReadTokens: 0, costUsd: 0.1 },
+      { pass: false, harnessInfra: true, costUsd: 0.2 },
+    ];
+
+    const comparison = compareEvalResults(null, report('t', [
+      { pass: true, inputTokens: 100, cacheReadTokens: 60, costUsd: 0.01 },
+      { pass: false, reset: 'the isolate was reset for memory', inputTokens: 100, cacheReadTokens: 0, costUsd: 0.03 },
+      ...infra,
+    ], NEXT));
+
+    expect(comparison.rows[0]?.candidate?.cacheHitRate).toBe(0.3);
+    expect(comparison.profiles[0]?.candidate.cacheHitRate).toBe(0.3);
+    expect(comparison.totals.candidate.costUsd).toBeCloseTo(0.34, 10);
+    expect(compareEvalResults(null, report('t', infra, NEXT)).rows[0]?.candidate?.cacheHitRate).toBeNull();
+  });
+
+  test('the report distinguishes an unreported cache count from a reported cold cache', () => {
+    const comparison = compareEvalResults(
+      report('t', [{ pass: true, inputTokens: 100 }], BASE),
+      report('t', [{ pass: true, inputTokens: 100, cacheReadTokens: 0 }], NEXT),
+    );
+
+    expect(renderEvalComparison(comparison)).toContain('— → 0.0%');
+  });
+
+  test('one unreported cost makes cohort, model and suite cost unknown, but a reported zero remains measured', () => {
+    const compare = (lastCost?: number) => compareEvalResults(null, report('t', [
+      { pass: true, costUsd: 0.01 }, { pass: false, costUsd: lastCost },
+    ], NEXT));
+
+    const unknown = compare();
+    const known = compare(0);
+
+    expect(unknown.rows[0]?.candidate?.meanCostUsd).toBeNull();
+    expect(unknown.profiles[0]?.candidate.meanCostUsd).toBeNull();
+    expect(unknown.totals.candidate.costUsd).toBeNull();
+    expect(known.rows[0]?.candidate?.meanCostUsd).toBe(0.005);
+    expect(known.profiles[0]?.candidate.meanCostUsd).toBe(0.005);
+    expect(known.totals.candidate.costUsd).toBe(0.01);
+  });
+
+  test('suite wall spans the earliest start to the latest end, not summed concurrent durations or file order', () => {
+    const baseline = JSON.stringify({ testResults: [
+      fileResult('late', [{ pass: true, durationMs: 180_000 }], BASE, { startTime: 61_000, endTime: 241_000 }),
+      fileResult('early', [{ pass: true, durationMs: 120_000 }, { pass: true, durationMs: 90_000 }], BASE,
+        { startTime: 1000, endTime: 121_000 }),
+    ] });
+
+    const candidate = JSON.stringify({ testResults: [
+      fileResult('late', [{ pass: true, durationMs: 180_000 }], NEXT, { startTime: 101_000, endTime: 281_000 }),
+      fileResult('early', [{ pass: true, durationMs: 120_000 }, { pass: true, durationMs: 90_000 }], NEXT,
+        { startTime: 21_000, endTime: 141_000 }),
+    ] });
+
+    const comparison = compareEvalResults(baseline, candidate);
+
+    expect(comparison.totals.baseline?.wallTimeMs).toBe(240_000);
+    expect(comparison.totals.candidate.wallTimeMs).toBe(260_000);
+    expect(compareEvalResults(null, report('t', [{ pass: true }], NEXT)).totals.candidate.wallTimeMs).toBeNull();
   });
 });
 

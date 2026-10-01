@@ -27,6 +27,16 @@ const CheckSchema = v.looseObject({ id: v.string(), pass: v.boolean(), evidence:
 
 const Count = v.pipe(v.number(), v.integer(), v.minValue(0));
 
+const StepUsageSchema = v.object({
+  runId: v.string(),
+  stepIndex: Count,
+  inputTokens: v.nullable(Count),
+  cacheReadTokens: v.nullable(Count),
+  cacheWriteTokens: v.nullable(Count),
+});
+
+export type StepUsage = v.InferOutput<typeof StepUsageSchema>;
+
 /** One trial as the harness reported it, normalized by vitest-evals (`normalizeHarnessRun`). */
 export const HarnessRunSchema = v.looseObject({
   session: v.looseObject({
@@ -42,9 +52,14 @@ export const HarnessRunSchema = v.looseObject({
   }),
   usage: v.looseObject({
     model: v.pipe(v.string(), v.minLength(1)),
-    inputTokens: v.optional(Count, 0),
+    inputTokens: v.optional(Count),
     outputTokens: v.optional(Count, 0),
-    metadata: v.optional(v.looseObject({ costUsd: v.optional(v.pipe(v.number(), v.minValue(0))) }), {}),
+    metadata: v.optional(v.looseObject({
+      costUsd: v.optional(v.pipe(v.number(), v.minValue(0))),
+      cacheReadTokens: v.optional(Count),
+      cacheWriteTokens: v.optional(Count),
+      steps: v.optional(v.array(StepUsageSchema), []),
+    }), { steps: [] }),
   }),
   output: v.looseObject({
     metrics: v.object({ modelTurns: Count, toolCalls: Count, toolErrors: Count, providerWaits: Count, providerWaitMs: v.pipe(v.number(), v.minValue(0)) }),
@@ -57,6 +72,8 @@ export const HarnessRunSchema = v.looseObject({
 });
 
 export type HarnessRun = v.InferOutput<typeof HarnessRunSchema>;
+
+export type UsageMetadata = Pick<HarnessRun['usage']['metadata'], 'costUsd' | 'cacheReadTokens' | 'cacheWriteTokens' | 'steps'>;
 
 const AssertionSchema = v.looseObject({
   status: v.picklist(['passed', 'failed']),

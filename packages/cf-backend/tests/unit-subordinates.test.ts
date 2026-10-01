@@ -20,10 +20,10 @@ import { nestedAgent } from '../src/pages/nested-agent';
 import type { UIMessage } from 'ai';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import {
-  chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, runDelegatedTask, workspaceFiles,
+  agentSql, chatSessionTurns, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, rosterOver, runDelegatedTask, workspaceFiles,
 } from './helpers/actor-harness';
 import { socketConnection } from './helpers/bindings';
-import { answeringGateway, chatCompletion, offeredTools, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
+import { answeringGateway, chatCompletion, offeredTools, openingOf, requestOf, stubAiBinding, toolCallCompletion } from './helpers/platform-gateway';
 
 mockAgentsSdk();
 
@@ -119,6 +119,46 @@ describe('subordinate wiring', () => {
     expect(ungated).toEqual([]);
     // Non-empty, or the line above passes vacuously.
     expect(DEPS_GATED_TOOLS.length).toBeGreaterThan(0);
+  });
+});
+
+describe("a delegated run settles its hirer's roster", () => {
+  test.each([
+    { path: 'with a final answer', answer: 'The evidence is complete.' },
+    { path: 'with an empty final answer', answer: '' },
+  ])('a durable hire completes after a progress report $path and reads idle', async ({ answer }) => {
+    const brief = 'Map the market.';
+
+    const gateway = stubAiBinding((run) => {
+      if (!openingOf(run).includes(brief)) return chatCompletion(run, 'Noted.');
+
+      return !requestOf(run).messages.some((message) => message.role === 'tool')
+        ? toolCallCompletion(run, { tool: 'report', args: { status: 'progress', content: 'Reading the evidence.' } }, 'call_progress')
+        : chatCompletion(run, answer);
+    });
+
+    const workspace = gatewayWorkspace(gateway);
+
+    const child = await hostedSubordinateHarness(workspace, {
+      name: 'researcher', displayName: 'Researcher', nameOrigin: 'user', mission: brief,
+    });
+
+    const roster = rosterOver(workspace.db);
+
+    roster.create({
+      name: 'researcher', actorReference: child.actor.reference, birth: null, deleteRequested: false,
+      lifetime: 'durable', status: 'idle', currentTask: null, taskEventId: null, createdAt: Date.now(), dismissedAt: null,
+    });
+    roster.assign('researcher', brief);
+    await runDelegatedTask(workspace, child.actor.handle.actorId, brief);
+
+    const endings = agentSql(child.actor.handle.actorId)<{ reason: string }>`
+      SELECT json_extract(payload, '$.reason') AS reason FROM run_events WHERE type = 'run_end'`;
+
+    expect(endings).toEqual([{ reason: 'completed' }]);
+    expect(roster.requireActive('researcher')).toMatchObject({ status: 'idle', currentTask: brief });
+    expect((await workspace.agent.listSubordinates()).find((entry) => entry.name === 'researcher'))
+      .toMatchObject({ status: 'idle', currentTask: brief });
   });
 });
 

@@ -37,9 +37,10 @@ import {
   type PublicTurnRecorder,
   KinuPublicSession, openPublicSession, WORKSPACE_LEASE_MS,
 } from './session';
+import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
   BROADCAST_FRAME, FILE_TURN_CHUNKS, FIXTURE_REQUEST_ID,
-  RECOVERY_TURN_CHUNKS, chatErrorFrame, chatTerminalFrame, chatTurnFrames, rpcReplyFrame,
+  RECOVERY_TURN_CHUNKS, chatChunkFrame, chatErrorFrame, chatTerminalFrame, chatTurnFrames, rpcReplyFrame,
   streamResumingFrame,
 } from './fixtures/session-frames';
 
@@ -138,6 +139,57 @@ test('executor RPC decoding preserves refusal provenance and successful refusal-
   } finally { await session.teardown(); await server.stop(true); }
 });
 
+test('clearing a conversation waits for the clear the deployment tells another socket, not the sender', async () => {
+  const requested = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const connections = new Set<ServerWebSocket>();
+  let messages = [{ id: 'old', role: 'user', parts: [{ type: 'text', text: 'previous conversation' }] }];
+
+  const server = Bun.serve({
+    port: 0, hostname: '127.0.0.1',
+    fetch(request, upgrading) {
+      if (new URL(request.url).pathname.endsWith('/get-messages')) return Response.json(messages);
+
+      return socketOnly(request, upgrading);
+    },
+    websocket: {
+      open(socket) { connections.add(socket); },
+      close(socket) { connections.delete(socket); },
+      async message(socket, data) {
+        if (v.parse(v.object({ type: v.string() }), JSON.parse(data.toString())).type !== 'cf_agent_chat_clear') return;
+        requested.resolve();
+        await release.promise;
+        messages = [];
+
+        for (const peer of connections) {
+          if (peer !== socket) peer.send(JSON.stringify({ type: 'cf_agent_chat_clear' }));
+        }
+      },
+    },
+  });
+
+  const session = new KinuPublicSession({
+    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'fresh conversation',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  try {
+    let cleared = false;
+    const clear = session.clearConversation().then(() => { cleared = true; });
+
+    await requested.promise;
+    expect(await session.history()).toEqual([{ role: 'user', text: 'previous conversation' }]);
+    expect(cleared).toBe(false);
+    release.resolve();
+    await clear;
+    expect(await session.history()).toEqual([]);
+  } finally {
+    release.resolve();
+    await session.teardown();
+    await server.stop(true);
+  }
+});
+
 test('an rpc after the platform closed the idle socket redials and answers, never hangs', async () => {
   // The incident: the runtime deactivated the instance and closed the idle socket (1006); the next
   // rpc was written into the CLOSED socket, which discards a frame without an error, and waited
@@ -219,7 +271,7 @@ test('a turn survives a dropped socket: the redial resumes its stream and the an
     },
     websocket: {
       open(socket) {
-        if (socket.data.connection === 2) socket.send(streamResumingFrame(requestId));
+        if (socket.data.connection === 2) socket.send(streamResumingFrame(requestId, requestId));
       },
       message(socket, message) {
         if (socket.data.connection === 1) {
@@ -247,6 +299,92 @@ test('a turn survives a dropped socket: the redial resumes its stream and the an
 
     if (result.landed !== 'turn') throw new Error('expected the turn itself to land');
     expect(result.text).toBe('Wrote note.txt.');
+    expect(upgrades).toBe(2);
+  } finally { await session.teardown(); await server.stop(true); }
+});
+
+test('a turn survives an ended activation: the redial follows it onto the stream the next activation re-opened', async () => {
+  // F2 on staging a4e564ce1 (2026-09-30): the object's activation ended after step 1 and its wake re-drove the turn
+  // under a request id the new activation minted. The redial is told the turn is pending, then resuming under that id,
+  // named for the turn by the message the request carried. Unfixed, the session ignored it and failed at the run's end:
+  // "the turn's run ended before its stream could be resumed, so its answer was never observed".
+  let upgrades = 0;
+  let requestId = '';
+  let messageId = '';
+  const resumed = Promise.withResolvers<void>();
+  const cut = 5;
+  const reopened = 'stream-of-the-next-activation';
+
+  const start: RunEvent = {
+    type: 'run_start', runId: 'turn-run', eventIndex: 0, timestamp: '2000-01-01T00:00:00.000Z', agentId: 'root',
+  };
+
+  const end: RunEvent = {
+    type: 'run_end', runId: 'turn-run', eventIndex: 1, timestamp: '9999-01-01T00:00:00.000Z', reason: 'completed',
+  };
+
+  // Step 1 streamed before the cut; the next activation's own stream opens with its first call's `start`.
+  const rest = [{ type: 'start' } as const, ...FILE_TURN_CHUNKS.slice(cut)];
+
+  const server = Bun.serve<{ connection: number }>({ port: 0, hostname: '127.0.0.1',
+    async fetch(request, upgrading) {
+      if (request.method === 'DELETE') return Response.json({ ok: true });
+
+      if (upgrading.upgrade(request, { data: { connection: upgrades + 1 } })) {
+        upgrades += 1;
+
+        return;
+      }
+
+      // The ledger answers only once the next activation's stream went out, so the turn settles from the stream.
+      await resumed.promise;
+      const path = new URL(request.url).pathname;
+
+      if (path.endsWith('/runs')) return Response.json({ status: 'end', items: [{ runId: 'turn-run' }] });
+
+      if (path.endsWith('/events')) return Response.json([start, end]);
+
+      return new Response('Not found', { status: 404 });
+    },
+    websocket: {
+      open(socket) {
+        if (socket.data.connection !== 2) return;
+        // What a following client hears: the replay its ack is answered with, then the live chunks and the end. The
+        // replay is as long as the first stream was, so a count the two streams shared would swallow all of it.
+        socket.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_PENDING }));
+        socket.send(streamResumingFrame(reopened, messageId));
+
+        for (const chunk of rest.slice(0, cut)) socket.send(chatChunkFrame({ requestId: reopened, chunk, replay: true }));
+        socket.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE, id: reopened, body: '', done: false, replay: true, replayComplete: true }));
+
+        for (const chunk of rest.slice(cut)) socket.send(chatChunkFrame({ requestId: reopened, chunk }));
+        socket.send(chatTerminalFrame({ requestId: reopened }));
+        resumed.resolve();
+      },
+      message(socket, message) {
+        if (socket.data.connection !== 1) return;
+        const frame = v.parse(ChatRequestFrameSchema, JSON.parse(message.toString()));
+        requestId = frame.id;
+        messageId = v.parse(v.object({ messages: v.tuple([v.object({ id: v.string() })]) }), JSON.parse(frame.init.body)).messages[0].id;
+
+        for (const chunk of FILE_TURN_CHUNKS.slice(0, cut)) socket.send(chatChunkFrame({ requestId, chunk }));
+        socket.close(1012, 'the activation ended');
+      },
+    },
+  });
+
+  const session = new KinuPublicSession({
+    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'ended activation',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  try {
+    await session.connect();
+    const result = await session.submit('Write note.txt.').settled;
+
+    if (result.landed !== 'turn') throw new Error('expected the turn itself to land');
+    expect({ text: result.text, tools: result.toolCalls.map((call) => [call.name, call.result]), steps: result.steps })
+      .toEqual({ text: 'Wrote note.txt.', tools: [['file', 'Wrote note.txt']], steps: 2 });
     expect(upgrades).toBe(2);
   } finally { await session.teardown(); await server.stop(true); }
 });
@@ -579,7 +717,7 @@ describe('the public session speaks the frames the web client speaks', () => {
   });
 
   test('the resume and RPC frames are recognised, and a broadcast is not a fault', () => {
-    expect(decodeFrame(streamResumingFrame('turn-9'))).toEqual({ kind: 'resuming', id: 'turn-9' });
+    expect(decodeFrame(streamResumingFrame('turn-9', 'turn-1'))).toEqual({ kind: 'resuming', id: 'turn-9', turnId: 'turn-1' });
     expect(decodeFrame(rpcReplyFrame({ requestId: 'rpc-1', result: { spec: '@cf/x' } })))
       .toEqual({ kind: 'rpc', id: 'rpc-1', result: { spec: '@cf/x' }, error: null });
     expect(decodeFrame(rpcReplyFrame({ requestId: 'rpc-1', error: 'no such method' })))
