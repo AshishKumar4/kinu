@@ -350,6 +350,8 @@ A title-join regression waits on the title's real model-operation start and obse
 
 A terminal request completes with its own answer or `PTY_EXIT`, not a prompt count. The signal regression asks bash for monitor mode and foreground-group ownership, interrupts `top` and observes its public exit, then stops and resumes a program that reports its own progress. The program blocks `SIGCONT` before READY and consumes it with `sigwait`: an early continuation cannot be lost before the blocking wait. `fg` is sent only after bash reports Stopped. The red mutation uses Bun's pre-created `Terminal` instance shape, which carries bytes but has no controlling terminal.
 
+A test browser closes its transport before its native process group is ended: a wedged browser cannot acknowledge a protocol close. The real-browser regression stops Chrome and proves a pending selector is rejected, every owned process ends and its profile is removed. While the sidebar's contended mount cause is investigated, failed gallery waits passively report their last native pointer target, coordinates and hit-test element alongside the screenshot; this is instrumentation, not a fixture-ready signal.
+
 ## Flakes
 
 A test that passes and fails on one tree is a flake. A row runs each suite once, so only a repeat can show one.
