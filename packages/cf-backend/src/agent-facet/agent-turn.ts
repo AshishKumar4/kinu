@@ -68,7 +68,7 @@ class StepWords implements UnderlyingDefaultSource<Uint8Array> {
   }
 }
 
-/** A step's words on one stream, then its record; a call per word filled the relay's isolate (AGENTS.md Waste). */
+/** A step's words on one stream, then its record (AGENTS.md Waste). */
 class HeadTrace {
   private live: { readonly words: StepWords; readonly sent: Promise<void> } | null = null;
 
@@ -267,7 +267,8 @@ async function runTurn(
     turnIndex: actor.session.orchestrator.sessionTurnIndex,
   });
 
-  const report = await runHeadInference(prepared.input, inference);
+  // Every end closes the stream; an open one holds the relay.
+  const report = await runHeadInference(prepared.input, inference).finally(() => trace?.flush());
 
   closeTurnRun(actor.stores.eventRecorder, runId, {
     turnIndex: actor.session.orchestrator.sessionTurnIndex,
@@ -286,7 +287,6 @@ async function runTurn(
 
   if (completion !== undefined) await database.answer(completion, await workspace.answerMetadata(completion.turnId, narration));
 
-  await trace?.flush();
   await workspace.finishTurn(task.sequenceId, {
     ...report,
     activity: database.takeActivity(),

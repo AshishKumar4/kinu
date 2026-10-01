@@ -309,7 +309,7 @@ export class AgentTurns {
     await this.turn(actorId, turnId).request.run?.inference.reportStep?.(event.sequence, event.step);
   }
 
-  /** Drained even with no reader: the isolate's step record waits on it. */
+  /** Drained with no reader too: the step record waits on it. */
   async traceStream(actorId: string, turnId: string, deltas: ReadableStream<AgentHeadDelta>): Promise<void> {
     const inference = this.turn(actorId, turnId).request.run?.inference;
 
