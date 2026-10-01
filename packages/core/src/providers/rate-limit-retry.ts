@@ -20,7 +20,7 @@ const MAX_DELAY_MS = 60_000;
  *  time: the account is spent until then. */
 const MAX_RETRY_DELAY_MS = 60_000;
 
-/** This call's 429 retries; never sent upstream. */
+/** This call's retries; never sent upstream. */
 export const PROVIDER_RETRIES_HEADER = 'x-kinu-retries';
 
 const StreamRequestSchema = v.looseObject({ stream: v.literal(true) });
@@ -74,7 +74,7 @@ export function withRateLimitRetry(
       message: `${opts.provider ?? host} sent nothing for ${fmtSpan(silenceBoundMs('provider.stream.idle_ms'))}`,
       url: input instanceof Request ? input.url : input.toString(),
       requestBodyValues: undefined,
-      isRetryable: true,
+      isRetryable: false,
       cause: new KinuError('timeout', `the ${opts.provider ?? host} stream stalled`),
     });
 
@@ -113,8 +113,12 @@ export function withRateLimitRetry(
 
     // Announce only cooldowns another request declared.
     let owned: number | null = null;
-    // A sibling's cooldown spends a retry as this call's own refusal does.
+    // A 429, a sibling's cooldown, a silent start: each spends a retry.
     let waits = 0;
+
+    const spendRetry = (spent: () => APICallError): void => {
+      if (++waits > retries) throw spent();
+    };
 
     for (let attempt = 1; ; attempt++) {
       await pacer.admit(lane, signal, {
@@ -125,17 +129,27 @@ export function withRateLimitRetry(
 
           if (untilMs === owned) return;
 
-          if (++waits > retries) throw handedOver(null, waitMs);
+          spendRetry(() => handedOver(null, waitMs));
 
           reportWait(waitMs, 0, 'cooldown');
         },
       });
 
-      const live = streams ? new LiveStream(stalled) : null;
-      const response = await (live === null ? fetchImpl(input, init) : live.open(fetchImpl, input, init));
-      const limit = await rateLimitOf(response);
+      const reading = streams ? new LiveStream(stalled) : UNTIMED;
+      const response = await reading.open(fetchImpl, input, init);
+      const limit = response === null ? null : await rateLimitOf(response);
+      const answered = response !== null && limit === null ? await reading.body(response) : null;
 
-      if (limit === null) return live === null ? response : await live.body(response);
+      if (answered !== null) return answered;
+
+      if (response === null || limit === null) {
+        spendRetry(stalled);
+        const waitMs = Math.floor(random() * backoffCeiling(attempt));
+
+        reportWait(waitMs, attempt, 'stall');
+        await sleep(waitMs, signal);
+        continue;
+      }
 
       if ('spent' in limit) throw allowanceSpent({ input, response, body: limit.body, host, exhausted: limit.spent });
 
@@ -152,16 +166,11 @@ export function withRateLimitRetry(
         });
       }
 
-      const backoffCeilingMs = Math.min(
-        MAX_DELAY_MS,
-        BASE_DELAY_MS * BACKOFF_FACTOR ** Math.min(attempt - 1, 32),
-      );
-
-      const waitMs = retryAfter ?? Math.floor(random() * backoffCeilingMs);
+      const waitMs = retryAfter ?? Math.floor(random() * backoffCeiling(attempt));
 
       const declared = pacer.declareWait(lane, waitMs);
 
-      if (++waits > retries) throw handedOver(limit.status, retryAfter ?? waitMs);
+      spendRetry(() => handedOver(limit.status, retryAfter ?? waitMs));
       owned = declared;
       warn(
         `[kinu] ${host} rate-limited: waiting ${fmtSpan(waitMs)} `
@@ -173,24 +182,42 @@ export function withRateLimitRetry(
   });
 }
 
-/** Fails retryable once silent; a silent start fails the fetch. */
-class LiveStream {
+function backoffCeiling(attempt: number): number {
+  return Math.min(MAX_DELAY_MS, BASE_DELAY_MS * BACKOFF_FACTOR ** Math.min(attempt - 1, 32));
+}
+
+/** Null: silent before a byte. */
+interface AttemptReading {
+  open(fetchImpl: typeof globalThis.fetch, input: RequestInfo | URL, init: RequestInit | undefined): Promise<Response | null>;
+  body(response: Response): Promise<Response | null>;
+}
+
+const UNTIMED: AttemptReading = {
+  open: (fetchImpl, input, init) => fetchImpl(input, init),
+  body: async (response) => response,
+};
+
+class LiveStream implements AttemptReading {
   private readonly cut = new AbortController();
 
   constructor(private readonly stalled: () => APICallError) {}
 
-  open(fetchImpl: typeof globalThis.fetch, input: RequestInfo | URL, init: RequestInit | undefined): Promise<Response> {
+  open(fetchImpl: typeof globalThis.fetch, input: RequestInfo | URL, init: RequestInit | undefined): Promise<Response | null> {
     const own = init?.signal ?? undefined;
 
-    return this.unlessStalled(fetchImpl(input, { ...init, signal: own === undefined ? this.cut.signal : AbortSignal.any([own, this.cut.signal]) }));
+    return this.within(fetchImpl(input, { ...init, signal: own === undefined ? this.cut.signal : AbortSignal.any([own, this.cut.signal]) }));
   }
 
-  async body(response: Response): Promise<Response> {
+  async body(response: Response): Promise<Response | null> {
     if (response.body === null) return response;
     const reader = response.body.getReader();
     const first = reader.read();
 
-    await this.unlessStalled(Promise.allSettled([first]));
+    if (await this.within(Promise.allSettled([first])) === null) {
+      await reader.cancel();
+
+      return null;
+    }
 
     const body = new ReadableStream<Uint8Array>({
       start: async (controller) => {
@@ -200,9 +227,10 @@ class LiveStream {
         else controller.enqueue(read.value);
       },
       pull: async (controller) => {
-        const next = await this.unlessStalled(reader.read());
+        const next = await this.within(reader.read());
 
-        if (next.done) controller.close();
+        if (next === null) controller.error(this.stalled());
+        else if (next.done) controller.close();
         else controller.enqueue(next.value);
       },
       cancel: (reason) => reader.cancel(reason),
@@ -211,13 +239,13 @@ class LiveStream {
     return new Response(body, response);
   }
 
-  private unlessStalled<T>(work: Promise<T>): Promise<T> {
-    const stall = Promise.withResolvers<never>();
+  /** Null once silent; cuts the call. */
+  private within<T>(work: Promise<T>): Promise<T | null> {
+    const stall = Promise.withResolvers<null>();
 
     const timer = setTimeout(() => {
-      const error = this.stalled();
-      this.cut.abort(error);
-      stall.reject(error);
+      this.cut.abort(this.stalled());
+      stall.resolve(null);
     }, silenceBoundMs('provider.stream.idle_ms'));
 
     return Promise.race([work, stall.promise]).finally(() => { clearTimeout(timer); });

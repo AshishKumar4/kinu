@@ -1931,11 +1931,13 @@ export const PLATFORM_CATALOG = {
     notes: 'Twice the longest silence a completed stream showed across 427 eval trials (7,665 steps) on kinu.run and '
       + 'staging, 2026-09-30..10-01: opencode-go Muse thinking between reasoning-start and reasoning-end. Measured as '
       + 'SDK events reached the eval client, an upper bound on raw-byte silence: OpenRouter documents ": OPENROUTER '
-      + 'PROCESSING" keep-alive comments, which are bytes and re-arm the bound. Live stalls it ends: Muse 40+ min '
+      + 'PROCESSING" keep-alive comments, which are bytes and re-arm the bound; opencode-go sends no byte at all while '
+      + 'Muse thinks (probes/raw-bytes-muse-2026-10-01.log). Live stalls it ends: Muse 40+ min '
       + '(t34) and OpenRouter Ling heads 38+ min (t33), staging f75f06932.',
     measurements: [
       { scenario: 'opencode-go/muse-spark-1.3: longest silence inside a completed step (n=4,018, p99 52.3s)', value: 181_800, unit: 'ms' },
       { scenario: 'opencode-go/muse-spark-1.3: request to first content, waits out (p99 26.5s)', value: 136_100, unit: 'ms' },
+      { scenario: 'opencode-go/muse-spark-1.3 raw socket, effort high: no byte while the reasoning item is open', value: 55_718, unit: 'ms' },
       { scenario: 'openrouter/ling-3.0-flash-vl: request to first content (n=2,206, p99 6.1s)', value: 94_900, unit: 'ms' },
       { scenario: 'workers-ai/glm-5.3: request to first content, 429 waits out (n=127, p99 45.5s)', value: 73_100, unit: 'ms' },
       { scenario: 'openrouter/mercury-2.5: request to first content (n=1,298, p99 13.0s)', value: 27_300, unit: 'ms' },
