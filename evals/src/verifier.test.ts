@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import { INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
-import { EvalVerifier, matchesReference, type SlateClient, type VerifierSession } from './verifier';
+import { EvalVerifier, finishedWork, matchesReference, type SlateClient, type VerifierSession } from './verifier';
 
 const CallSchema = v.object({ method: v.string(), args: v.array(JsonValueSchema) });
 
@@ -165,6 +165,18 @@ describe("a helper's runs", () => {
       { name: 'ask-task-live', status: 'working', runs: [{ status: 'running', userMessage: 'Write the ratings' }] },
       { name: 'ask-task-done', status: 'dismissed', runs: [{ status: 'completed', userMessage: 'Write the totals' }] },
     ]);
+  });
+
+  test('a reused helper must finish the assigned run, not just an earlier unrelated run', () => {
+    const work = [
+      { name: 'earlier-completion', status: 'dismissed', runs: [
+        { status: 'completed', userMessage: 'Build src/maybe.ts' },
+        { status: 'error', userMessage: 'Build test-results' },
+      ] },
+      { name: 'finished-dashboard', status: 'dismissed', runs: [{ status: 'completed', userMessage: 'Build test-results' }] },
+    ];
+
+    expect(finishedWork(work, 'test-results')).toEqual(['finished-dashboard']);
   });
 });
 

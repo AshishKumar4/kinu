@@ -42,14 +42,13 @@ export type VerifierSession = {
 export type HelperWork = { name: string; status: string; runs: { status: string | null; userMessage: string | null }[] };
 
 /**
- * The helpers that finished the work naming `subject`: a message naming it started one of their runs, and a run of
- * their own completed. Told is not done: on 2026-10-01 every helper's model call on staging was refused, the lead
+ * The helpers whose run naming `subject` completed. Told is not done: on 2026-10-01 every helper's model call
+ * on staging was refused, the lead
  * did the helpers' work itself, and the helpers' transcripts still held the work they were given.
  */
 export function finishedWork(helpers: readonly HelperWork[], subject: string): string[] {
   return helpers
-    .filter((helper) => helper.runs.some((run) => run.status === 'completed')
-      && helper.runs.some((run) => (run.userMessage ?? '').includes(subject)))
+    .filter((helper) => helper.runs.some((run) => run.status === 'completed' && (run.userMessage ?? '').includes(subject)))
     .map((helper) => helper.name);
 }
 
