@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-09-30",
-  "files": 2869,
-  "functions": 71992,
+  "measuredAt": "2026-10-01",
+  "files": 2890,
+  "functions": 72579,
   "ceiling": 87,
   "line": 29,
   "inventory": [
@@ -142,10 +142,6 @@
       "complexity": 32
     },
     {
-      "key": "packages/cli/src/cloud-agent-client.ts#CloudAgentClient.handleMessage",
-      "complexity": 32
-    },
-    {
       "key": "packages/core/src/events/hub/visibility.ts#briefForVariant",
       "complexity": 32
     },
@@ -191,6 +187,10 @@
     },
     {
       "key": "packages/cli/src/chat-loop.ts#applySlashOutcome",
+      "complexity": 31
+    },
+    {
+      "key": "packages/cli/src/cloud-agent-client.ts#CloudAgentClient.handleMessage",
       "complexity": 31
     },
     {

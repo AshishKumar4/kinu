@@ -35,6 +35,8 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
   const sent = new AwaitedList<{ text: string; files: readonly { url: string }[]; id: string; mode: string }>();
   let interrupts = 0;
   let clears = 0;
+  /** Whether the ledger holds a turn no activation has opened here yet: one an eviction left open. */
+  let owed = false;
   const connections = new Map<string, Connection>();
   const frames = new Map<string, string[]>();
   /** Everything a socket was handed, in order: its sends and broadcasts that included it. */
@@ -54,6 +56,7 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
 
   const wire: ChatWire = {
     resumes: true,
+    turnOwed: () => owed,
     broadcast: (message, exclude) => {
       broadcasts.push({ frame: v.parse(FrameSchema, JSON.parse(message)), exclude });
 
@@ -84,8 +87,12 @@ function harness(landing: HarnessLanding = 'turn', loadHistory?: () => Promise<U
 
 
   return {
-    /** The object after an eviction: a fresh transport over the same database and sockets. */
-    afterEviction: () => new ChatWireTransport(wire),
+    /** The object after an eviction mid-turn: a fresh transport over the same database and sockets, the turn owed. */
+    afterEviction: () => {
+      owed = true;
+
+      return new ChatWireTransport(wire);
+    },
     transport, broadcasts, history, reserved, sent: sent.items, taken: (count: number) => sent.until((items) => items.length >= count), connection, db,
     interrupts: () => interrupts, clears: () => clears,
     responses: () => broadcasts.filter((b) => b.frame.type === 'cf_agent_use_chat_response').map((b) => b.frame),
@@ -499,7 +506,7 @@ describe('ChatWireTransport', () => {
     const second = h.connection('c2');
     h.history.push({ id: 'input-req-1', role: 'user', parts: [{ type: 'text', text: 'hello' }] });
     await h.transport.onConnect(second);
-    expect(JSON.parse(h.connectionFrames('c2')[0] ?? '{}')).toEqual({ type: 'cf_agent_stream_resuming', id: 'req-1' });
+    expect(JSON.parse(h.connectionFrames('c2')[0] ?? '{}')).toEqual({ type: 'cf_agent_stream_resuming', id: 'req-1', turnId: 'input-req-1' });
     expect(v.parse(v.looseObject({ type: v.string(), messages: v.array(v.object({ id: v.string() })) }), JSON.parse(h.connectionFrames('c2')[1] ?? '{}'))).toMatchObject({
       type: 'cf_agent_chat_messages', messages: [{ id: 'input-req-1' }],
     });
@@ -517,9 +524,9 @@ describe('ChatWireTransport', () => {
   // cannot carry it; skipped for a joining tab, it was lost, and that tab's send waited on it for good.
   // 2026-09-26 (chat-session-parity red): a tab that connects after an eviction was told to resume the stream the
   // evicted turn left active; the resumed turn opened a new stream and the tab, pending for the old one, missed it.
-  // 2026-09-28: no relay outlives its object, so the tab is told nothing is resuming and reads the partial from the
-  // transcript frame; the loop's re-drive streams afresh.
-  test('a tab that connects after an eviction is told nothing resumes, and hears the re-driven stream whole', async () => {
+  // 2026-09-30 (F2, staging a4e564ce1): told nothing resumes, a tab had no partial to read (the transcript holds an
+  // answer from its commit), and the re-drive streamed under an id no client held, so the eval client never heard it.
+  test('a tab that connects after an eviction waits on the owed turn, then follows its re-drive by the turn\'s id', async () => {
     const h = harness();
     const first = h.connection('c1');
     await h.transport.onMessage(first, chatRequest('req-1', 'hello'));
@@ -530,17 +537,35 @@ describe('ChatWireTransport', () => {
     const second = h.connection('c2');
     await revived.onConnect(second);
     await revived.onMessage(second, JSON.stringify({ type: 'cf_agent_stream_resume_request', probeId: 'p-1' }));
-    expect(h.connectionFrames('c2').map((frame) => v.parse(FrameSchema, JSON.parse(frame)).type))
-      .toEqual(['cf_agent_chat_messages', 'cf_agent_stream_resume_none']);
+    await revived.deliver(turnStart('input-req-1', 'msg-1'));
+    const told = h.connectionFrames('c2').map((frame) => v.parse(FrameSchema, JSON.parse(frame)));
+    const resuming = told.at(-1);
 
-    await revived.deliver(turnStart('input-req-1', 'msg-2'));
+    expect(told.map((frame) => frame.type))
+      .toEqual(['cf_agent_stream_pending', 'cf_agent_chat_messages', 'cf_agent_stream_pending', 'cf_agent_stream_resuming']);
+    expect(resuming).toMatchObject({ turnId: 'input-req-1', probeId: 'p-1' });
+
+    await revived.onMessage(second, JSON.stringify({ type: 'cf_agent_stream_resume_ack', id: resuming?.id }));
     await revived.observe(chunks([{ type: 'start' }, { type: 'text-start', id: 'text-0' }, { type: 'text-delta', id: 'text-0', delta: 'resumed' }]), { index: 0 });
 
     const bodies = h.received('c2').map((text) => v.parse(FrameSchema, JSON.parse(text)))
-      .filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.done === false && frame.body !== undefined)
+      .filter((frame) => frame.type === 'cf_agent_use_chat_response' && frame.id === resuming?.id && frame.body !== undefined && frame.body !== '')
       .map((frame) => v.parse(v.looseObject({ type: v.string() }), JSON.parse(frame.body ?? '')).type);
 
     expect(bodies).toEqual(['start', 'text-start', 'text-delta']);
+  });
+
+  test('a tab waiting on an owed turn hears nothing resumes when the loop goes quiet without opening it', async () => {
+    const h = harness();
+    const revived = h.afterEviction();
+    const tab = h.connection('c1');
+    await revived.onMessage(tab, JSON.stringify({ type: 'cf_agent_stream_resume_request', probeId: 'p-1' }));
+    revived.quiet();
+
+    expect(h.connectionFrames('c1').map((frame) => JSON.parse(frame))).toEqual([
+      { type: 'cf_agent_stream_pending', probeId: 'p-1' },
+      { type: 'cf_agent_stream_resume_none', reason: 'idle', probeId: 'p-1' },
+    ]);
   });
 
   test('a tab still in its handshake that sends a message spliced into the live turn hears its landing', async () => {

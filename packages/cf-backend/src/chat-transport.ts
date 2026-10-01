@@ -2,8 +2,10 @@
  * Core's {@link ChatTransport} over the SDK's `cf_agent_*` protocol, one room per actor tag. It writes no
  * row; the loop does, and the answer's one durable copy is the loop's `stream_parts`. A tab that reconnects
  * mid-turn is replayed the chunks this relay sent for the turn in progress, over the SDK's documented resume
- * handshake (RESUME_REQUEST, RESUMING, ACK, replay frames, replayComplete); an evicted turn has no relay
- * left, so the tab reads the partial from the transcript frame and the loop's re-drive streams afresh.
+ * handshake (RESUME_REQUEST, RESUMING, ACK, replay frames, replayComplete). A turn an ended activation left
+ * open is re-driven by a later one under a request id that activation mints, so RESUMING names the turn too:
+ * the client whose message opened it follows the turn there. A tab that reconnects before the re-drive opens
+ * is told the turn is pending (STREAM_PENDING, the SDK's #1784 frame) and told it is resuming once it opens.
  */
 import type { Connection } from 'agents';
 import {
@@ -21,9 +23,12 @@ import { diagnostics, KinuError, refusalOf, toKinuError } from '@kinu.run/core/o
 
 export type ChatSocket = Pick<Connection, 'id'>;
 
-export interface ChatWire {
-  /** False for a wire whose turns stream live only: a hosted actor's tab reads its partial from the transcript. */
-  readonly resumes: boolean;
+/** `resumes` is false for a wire whose turns stream live only: a hosted actor's tab reads its partial from the
+ *  transcript. A resuming wire says whether a turn is owed that has not opened in this activation: the one an ended
+ *  activation left open, or an acknowledged send. */
+export type ChatWire = ChatWireBase & ({ readonly resumes: false } | { readonly resumes: true; turnOwed(): boolean });
+
+interface ChatWireBase {
   broadcast(message: string, exclude?: string[]): void;
   /** The handshake asks by id before it replays to a replacement. */
   getConnection(id: string): Connection | undefined;
@@ -60,6 +65,8 @@ const ChatInputSchema = v.object({
 
 interface LiveStream {
   readonly requestId: string;
+  /** The id of the message that opened the turn: durable, where `requestId` is this activation's alone. */
+  readonly turnId: string;
   /** Requests of the other messages a rerun carried, answered when it closes. */
   readonly carried: readonly string[];
   /** Renewed per provider call against the turn's parts, so the answer stays one message under one id. */
@@ -127,6 +134,8 @@ function doneFrame(requestId: string, extra: { landed?: SendLanding; error?: str
 export class ChatWireTransport implements ChatTransport, ChatRoom {
   /** Tabs told a stream is resuming and not yet acknowledged: live chunks skip them until their replay. */
   private readonly pendingResume = new Set<string>();
+  /** Tabs told an owed turn is pending, each with the probe it asked under: told it is resuming when it opens. */
+  private readonly parked = new Map<string, { readonly connection: Connection; readonly probeId: string | undefined }>();
   private readonly requests = new Map<string, string>();
   private live: LiveStream | null = null;
 
@@ -141,25 +150,48 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
   async onConnect(connection: Connection): Promise<void> {
     const history = await this.wire.history(TRANSCRIPT_WINDOW);
 
-    this.notifyResuming(connection);
+    this.announce(connection);
     sendIfOpen(connection, transcriptFrame(history));
   }
 
   onClose(connection: ChatSocket): void {
     this.pendingResume.delete(connection.id);
+    this.parked.delete(connection.id);
   }
 
-  /** Told proactively on connect and again on the tab's own request; the client acknowledges once. */
-  private notifyResuming(connection: Connection, probeId?: string): boolean {
+  /** Told proactively on connect and again on the tab's own request; the client acknowledges once. False when no
+   *  turn streams here and none is owed. */
+  private announce(connection: Connection, probeId?: string): boolean {
     const live = this.resumable;
 
-    if (live === null) return false;
+    if (live !== null) {
+      this.notifyResuming(connection, live, probeId);
 
-    if (sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_STREAM_RESUMING, id: live.requestId, ...(probeId !== undefined && { probeId }) }))) {
-      this.pendingResume.add(connection.id);
+      return true;
     }
 
+    const { wire } = this;
+
+    if (!wire.resumes || !wire.turnOwed()) return false;
+    this.parked.set(connection.id, { connection, probeId });
+    sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_STREAM_PENDING, ...(probeId !== undefined && { probeId }) }));
+
     return true;
+  }
+
+  private notifyResuming(connection: Connection, live: LiveStream, probeId: string | undefined): void {
+    const frame = { type: MessageType.CF_AGENT_STREAM_RESUMING, id: live.requestId, turnId: live.turnId, ...(probeId !== undefined && { probeId }) };
+
+    if (sendIfOpen(connection, JSON.stringify(frame))) this.pendingResume.add(connection.id);
+  }
+
+  /** The loop went idle without opening the turn a parked tab waits on: nothing is resuming. */
+  quiet(): void {
+    for (const { connection, probeId } of this.parked.values()) {
+      sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_STREAM_RESUME_NONE, reason: 'idle', probeId }));
+    }
+
+    this.parked.clear();
   }
 
   /** What this relay sent for the turn, then `replayComplete`; the live chunks that follow continue it. */
@@ -197,7 +229,7 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     switch (event.type) {
       case 'stream-resume-request':
         // `idle` is load-bearing: the hook keeps waiting on a probe answered with anything weaker.
-        if (!this.notifyResuming(connection, event.probeId)) {
+        if (!this.announce(connection, event.probeId)) {
           sendIfOpen(connection, JSON.stringify({ type: MessageType.CF_AGENT_STREAM_RESUME_NONE, reason: 'idle', probeId: event.probeId }));
         }
 
@@ -284,7 +316,8 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     this.wire.broadcast(doneFrame(requestId, extra));
   }
 
-  /** The stream answers under the admitting request (`turnId` is the opening row id), else a minted id. */
+  /** The stream answers under the admitting request (`turnId` is the opening row id), else under an id minted here:
+   *  a turn this activation re-drives or opened itself, which a client follows by `turnId`. */
   async openTurn(turn: { readonly turnId: string; readonly messageId: string; readonly userTurn: boolean; readonly carried: readonly string[] }): Promise<void> {
     const requestId = this.requests.get(turn.turnId) ?? crypto.randomUUID();
     this.requests.delete(turn.turnId);
@@ -299,7 +332,15 @@ export class ChatWireTransport implements ChatTransport, ChatRoom {
     }
 
     this.releaseWaiters();
-    this.live = { requestId, carried, accumulator: new StreamAccumulator({ messageId: turn.messageId }), open: new OpenParts(), relayed: [], broken: false, failure: null };
+
+    const live: LiveStream = {
+      requestId, turnId: turn.turnId, carried, accumulator: new StreamAccumulator({ messageId: turn.messageId }), open: new OpenParts(), relayed: [], broken: false, failure: null,
+    };
+
+    this.live = live;
+
+    for (const { connection, probeId } of this.parked.values()) this.notifyResuming(connection, live, probeId);
+    this.parked.clear();
 
     if (turn.userTurn) this.wire.broadcast(transcriptFrame(await this.wire.history(TRANSCRIPT_WINDOW)));
   }

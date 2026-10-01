@@ -1838,6 +1838,7 @@ export abstract class ActorAgent extends Agent<Env> {
           // that re-drives what it owed.
           armTurnWake: async (atMs) => { await this.scheduleTerminalRetry(atMs); },
           quiet: () => {
+            this.chatTransport.quiet();
             this.overviewChanged();
             this.detachOwned(() => this.restWhenIdle());
           },
@@ -1861,6 +1862,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected get chatTransport(): ChatWireTransport {
     this._chatTransport ??= new ChatWireTransport({
       resumes: true,
+      turnOwed: () => this.chatLoopOwesWork(),
       broadcast: (message, exclude) => { this.broadcastToActor(null, message, exclude); },
       getConnection: (id) => this.getConnection(id),
       history: (limit) => this.chatTranscript.history(limit),

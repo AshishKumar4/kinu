@@ -1,7 +1,7 @@
 /**
  * Parity net: the hosted root on core's ChatSession changes no durable row or frame against `fixtures/chat-session-parity.json`,
  * normalized like the local backend's parity test. Re-record from the logged `chat-session-parity snapshot` line only for a
- * change meant to alter the record, read field by field against the previous fixture (last: 2026-09-30, a step cut mid-text is written again: the answer and later requests lose the cut text).
+ * change meant to alter the record, read field by field against the previous fixture (last: 2026-09-30, socket B reconnecting after the eviction is told the owed turn is pending, then resuming; never acking, it hears that stream's end alone).
  */
 import { abortAllDurableObjects, env } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
