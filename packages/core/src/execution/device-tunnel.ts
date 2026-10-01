@@ -1,6 +1,8 @@
 // DeviceTunnel: JSON-RPC over one reverse-WebSocket to a user's device daemon,
 // owned by the UserDO; agents reach it via a DO RPC forward.
 
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import * as v from 'valibot';
 import { JsonValueSchema, parseJsonValue, type JsonObject, type JsonValue } from '../utils/json';
 import { renderThrownChain, tolerate } from '../obs/index';
@@ -141,15 +143,17 @@ export const DEVICE_CANCEL_MISPAIRED = 'device answered a cancellation for anoth
 export function parseDeviceCancelAnswer(
   requestId: string, answer: JsonValue | undefined,
 ): DeviceCancelResult {
-  const parsed = v.parse(DeviceCancelResultSchema, answer);
+  return settleSync(Effect.gen(function* () {
+    const parsed = v.parse(DeviceCancelResultSchema, answer);
 
-  if (parsed.requestId !== requestId) {
-    throw new Error(
-      `${DEVICE_CANCEL_MISPAIRED}: asked about ${requestId}, answered for ${parsed.requestId}`,
-    );
-  }
+    if (parsed.requestId !== requestId) {
+      return yield* Effect.die(new Error(
+        `${DEVICE_CANCEL_MISPAIRED}: asked about ${requestId}, answered for ${parsed.requestId}`,
+      ));
+    }
 
-  return parsed;
+    return parsed;
+  }));
 }
 
 export const DEVICE_DUPLICATE_REQUEST = 'device RPC id is already in flight';
@@ -223,25 +227,33 @@ export class DeviceTunnel {
         )));
       } else {
         this.openEnded.add(id);
-        this.armHeartbeat();
+
+        if (!this.heartbeat) {
+          this.probeSentAt = 0;
+          this.heartbeat = every(this.clock, this.probeMs, () => settleSync(this.probeLiveness()));
+        }
+
         stop = () => { this.openEnded.delete(id); this.disarmIdleHeartbeat(); };
       }
 
       this.pending.set(id, { resolve, reject, stop, onTerminal: opts?.onTerminal });
 
-      try {
-        this.socket.send(JSON.stringify({ ...opts?.extra, id, method, params }));
-      } catch (err) {
+      return settleSync(Effect.try({
+        try: () => this.socket.send(JSON.stringify({ ...opts?.extra, id, method, params })),
+        catch: (err) => (err instanceof Error ? err : new Error(String(err))),
+      }).pipe(Effect.catch((error) => Effect.sync(() => {
         this.pending.delete(id);
         stop();
-        reject(err instanceof Error ? err : new Error(String(err)));
-      }
+        reject(error);
+      }))));
     });
   }
 
   notify(frame: JsonObject): void {
-    if (!this.isConnected()) throw new Error(TUNNEL_DISCONNECTED);
-    this.socket.send(JSON.stringify(frame));
+    return settleSync(Effect.gen({ self: this }, function* () {
+      if (!this.isConnected()) return yield* Effect.die(new Error(TUNNEL_DISCONNECTED));
+      this.socket.send(JSON.stringify(frame));
+    }));
   }
 
   handleMessage(raw: string): void {
@@ -280,12 +292,6 @@ export class DeviceTunnel {
     this.disarmIdleHeartbeat();
   }
 
-  private armHeartbeat(): void {
-    if (this.heartbeat) return;
-    this.probeSentAt = 0;
-    this.heartbeat = every(this.clock, this.probeMs, () => this.probeLiveness());
-  }
-
   private disarmIdleHeartbeat(): void {
     if (this.openEnded.size > 0 || !this.heartbeat) return;
     this.heartbeat();
@@ -294,32 +300,18 @@ export class DeviceTunnel {
   }
 
   /** Fails deadline-free calls when a probe got no frame of any kind before the next tick. */
-  private probeLiveness(): void {
-    if (this.openEnded.size === 0) {
-      this.disarmIdleHeartbeat();
+  private probeLiveness(): Effect.Effect<void> {
+    if (this.openEnded.size === 0) return Effect.sync(() => this.disarmIdleHeartbeat());
 
-      return;
-    }
+    if (!this.isConnected()) return Effect.sync(() => this.failOpenEnded(TUNNEL_DISCONNECTED));
 
-    if (!this.isConnected()) {
-      this.failOpenEnded(TUNNEL_DISCONNECTED);
-
-      return;
-    }
-
-    if (this.probeSentAt > 0 && this.lastFrameAt < this.probeSentAt) {
-      this.failOpenEnded(DEVICE_UNRESPONSIVE);
-
-      return;
-    }
+    if (this.probeSentAt > 0 && this.lastFrameAt < this.probeSentAt) return Effect.sync(() => this.failOpenEnded(DEVICE_UNRESPONSIVE));
 
     this.probeSentAt = this.clock.now();
 
-    try {
-      this.notify({ id: nextDeviceRequestId(), method: LIVENESS_METHOD, params: [] });
-    } catch (cause) {
-      this.failOpenEnded(TUNNEL_DISCONNECTED, { cause });
-    }
+    return Effect.try({ try: () => this.notify({ id: nextDeviceRequestId(), method: LIVENESS_METHOD, params: [] }), catch: (cause) => ({ cause }) }).pipe(
+      Effect.catch((failed) => Effect.sync(() => this.failOpenEnded(TUNNEL_DISCONNECTED, failed))),
+    );
   }
 
   private failOpenEnded(reason: string, options?: ErrorOptions): void {

@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settle, settleSync } from '../obs/effect';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ToolSet } from 'ai';
 import * as v from 'valibot';
@@ -45,9 +47,11 @@ export function workModeRefusal(mode: WorkMode, planAllowed: boolean, operation:
 }
 
 export function requireWorkModePermission(mode: WorkMode, planAllowed: boolean, operation: string): void {
-  const refusal = workModeRefusal(mode, planAllowed, operation);
+  return settleSync(Effect.gen(function* () {
+    const refusal = workModeRefusal(mode, planAllowed, operation);
 
-  if (refusal !== null) throw new KinuError(refusal.reason, refusal.error);
+    if (refusal !== null) return yield* new KinuError(refusal.reason, refusal.error);
+  }));
 }
 
 export function requireBuild(operation: string): void {
@@ -87,18 +91,14 @@ export function providersInWorkMode(mode: WorkMode, providers: CodemodeProvider[
     for (const [name, entry] of Object.entries(provider.tools)) {
       tools[name] = {
         ...entry,
-        execute: (...args) => inWorkMode(mode, async () => {
-          try {
+        execute: (...args) => inWorkMode(mode, () => settle(Effect.tryPromise({
+          try: async () => {
             requireWorkModePermission(mode, entry.planAllowed === true, provider.name + '.' + name);
 
             return await entry.execute(...args);
-          }
-          catch (cause) {
-            if (!(cause instanceof KinuError)) throw cause;
-
-            return refusalOf(cause);
-          }
-        }),
+          },
+          catch: (cause) => ({ cause }),
+        }).pipe(Effect.catch((failed) => (failed.cause instanceof KinuError ? Effect.succeed(refusalOf(failed.cause)) : Effect.die(failed.cause)))))),
       };
     }
 

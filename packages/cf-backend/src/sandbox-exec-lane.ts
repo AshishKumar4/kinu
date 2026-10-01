@@ -4,7 +4,7 @@
  * and an abort kills the process, not just the wait. See `SandboxHandle.exec`.
  */
 
-import { jsonResultOrVoid, SandboxPending, WORKSPACE_BACKUP_DIR, type SandboxHandle } from '@kinu.run/core';
+import { jsonResultOrVoid, WORKSPACE_BACKUP_DIR, type SandboxHandle } from '@kinu.run/core';
 import { classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
 import { devboxFailure, type DevboxErrorCode } from '@kinu.run/devbox';
 import { Effect } from 'effect';
@@ -123,7 +123,7 @@ export function adaptCloudflareSandbox(
       await configured();
       const readiness = await handle.resolveReadiness();
 
-      if (readiness.kind === 'pending') throw new SandboxPending(readiness.reason);
+      if (readiness.kind === 'pending') throw new KinuError('unavailable', readiness.reason);
 
       return await run();
     },

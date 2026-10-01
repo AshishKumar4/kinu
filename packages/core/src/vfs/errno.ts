@@ -1,4 +1,6 @@
 /** File-plane error presentation over Nimbus's POSIX error type. */
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import { isVfsError, toVfsError, VfsError, VFS_ERRNO, VFS_STRERROR, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
 
 function knownCode(code: string): code is VfsErrorCode {
@@ -21,14 +23,12 @@ export function withVfsErrorHint(error: VfsError, hint: string): VfsError {
 }
 
 /** Names the file-plane path instead of Nimbus's internal storage key. */
-export async function atVfsPath<T>(absolute: string, syscall: string, call: () => T | Promise<T>): Promise<T> {
-  try {
-    return await call();
-  } catch (error) {
+export function atVfsPath<T>(absolute: string, syscall: string, call: () => T | Promise<T>): Promise<T> {
+  return settle(Effect.tryPromise({ try: async () => call(), catch: (cause) => cause }).pipe(Effect.catch((error) => {
     const failure = toVfsError(error, absolute);
 
-    if (!isVfsError(failure)) throw error;
-
-    throw new VfsError(failure.code, `${VFS_STRERROR[failure.code]}, ${syscall}`, absolute, { cause: error });
-  }
+    return isVfsError(failure)
+      ? Effect.fail(new VfsError(failure.code, `${VFS_STRERROR[failure.code]}, ${syscall}`, absolute, { cause: error }))
+      : Effect.die(error);
+  })));
 }

@@ -56,8 +56,9 @@ export function settleSync<A>(effect: Effect.Effect<A, KinuError | VfsError>, op
   return fail(exit.cause, options);
 }
 
-function passing<A>(effect: Effect.Effect<A>, expected: ExpectedFailure): Effect.Effect<A | undefined> {
-  return Effect.catchDefect(effect, (cause) => (classify({ cause }) === expected ? Effect.undefined : Effect.die(cause)));
+/** `effect` with the named failure passed as `undefined`. */
+export function tolerated<A, E>(effect: Effect.Effect<A, E>, expected: ExpectedFailure): Effect.Effect<A | undefined, E> {
+  return Effect.catchCause(effect, (cause) => (classify({ cause: Cause.squash(cause) }) === expected ? Effect.undefined : Effect.failCause(cause)));
 }
 
 /**
@@ -65,10 +66,58 @@ function passing<A>(effect: Effect.Effect<A>, expected: ExpectedFailure): Effect
  * as-is, unwrapped, to keep the failing frame on top.
  */
 export function tolerate<T>(operation: () => T, expected: ExpectedFailure): T | undefined {
-  return settleSync(passing(Effect.sync(operation), expected));
+  return settleSync(tolerated(Effect.sync(operation), expected));
 }
 
 /** `tolerate` for an operation that rejects rather than throws. */
 export function tolerateAsync<T>(operation: () => Promise<T>, expected: ExpectedFailure): Promise<T | undefined> {
-  return settle(passing(Effect.promise(operation), expected));
+  return settle(tolerated(Effect.promise(operation), expected));
+}
+
+/** One run per key, shared until it settles; after a failure the next call runs afresh. */
+export function sharedBy<I, A>(keyOf: (input: I) => string | number | null, run: (input: I) => Effect.Effect<A, KinuError | VfsError>): (input: I) => Promise<A> {
+  const pending = new Map<string | number | null, Promise<A>>();
+
+  return (input) => {
+    const key = keyOf(input);
+    const held = pending.get(key);
+
+    if (held !== undefined) return held;
+    let started: Promise<A> | undefined;
+    // A run can fail before `settle` returns; it is then never held.
+    let holding = true;
+
+    started = settle(Effect.onError(run(input), () => Effect.sync(() => {
+      if (started === undefined) holding = false;
+      else if (pending.get(key) === started) pending.delete(key);
+    })));
+
+    if (holding) pending.set(key, started);
+
+    return started;
+  };
+}
+
+export function shared<A>(run: () => Effect.Effect<A, KinuError | VfsError>): () => Promise<A> {
+  return sharedBy<void, A>(() => null, run);
+}
+
+/** One run at a time; a call after it settles runs afresh. */
+export function deduped<A>(run: () => Effect.Effect<A, KinuError | VfsError>): () => Promise<A> {
+  let running: Promise<A> | undefined;
+
+  return () => {
+    if (running !== undefined) return running;
+    let started: Promise<A> | undefined;
+    let live = true;
+
+    started = settle(Effect.ensuring(run(), Effect.sync(() => {
+      if (started === undefined) live = false;
+      else if (running === started) running = undefined;
+    })));
+
+    if (live) running = started;
+
+    return started;
+  };
 }

@@ -48,7 +48,7 @@ export {
   type Refusal,
 } from './error';
 
-export { attempt, attemptInItsWords, settle, settleSync, tolerate, tolerateAsync } from './effect';
+export { attempt, attemptInItsWords, deduped, settle, settleSync, shared, sharedBy, tolerate, tolerateAsync, tolerated } from './effect';
 
 export {
   createCompositeLogger,

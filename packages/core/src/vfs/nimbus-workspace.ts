@@ -29,7 +29,8 @@ import type { Shell, ShellExecOptions } from '../types/primitives';
 import { WORKSPACE_ROOT, workspacePath } from './workspace-path';
 import { FORK_PIN_PREFIX } from '../identity/fork';
 import { ARCHIVE_PIN_PREFIX } from '../identity/archive';
-import { diagnostics, KinuError, tolerate, toKinuError } from '../obs/index';
+import { Cause, Effect } from 'effect';
+import { diagnostics, KinuError, shared, sharedBy, tolerate, toKinuError } from '../obs/index';
 import { atVfsPath } from './errno';
 import type { MountedVfs } from './mounts';
 import { shellMounts, type ShellMounts, type ShellMountTable } from './shell-mounts';
@@ -221,7 +222,6 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
   const mountTables = new Map<number, MountedVfs>();
   const tableFor: ShellMountTable = (cred) => mountTables.get(cred.uid) ?? null;
   let shellMountPoints: ShellMounts | undefined;
-  let booting: Promise<NimbusWorkspace> | undefined;
 
   const shellOver = async (creation: NimbusCreation): Promise<NimbusWorkspace> => {
     const { NimbusWorkspace } = await import('@nimbus-sh/core/workspace');
@@ -229,85 +229,68 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     return await NimbusWorkspace.create(creation);
   };
 
-  const boot = async (): Promise<NimbusWorkspace> => {
-    // Boot revokes append writers at or below `generation * PID_GEN_STRIDE`, so the pid base must be
-    // this generation.
-    const generationNow = takeWorkspaceGeneration(opts);
+  const boot = (): Effect.Effect<NimbusWorkspace, KinuError> => Effect.gen(function* () {
+      // Boot revokes append writers at or below `generation * PID_GEN_STRIDE`, so the pid base must be
+      // this generation.
+      const generationNow = yield* takeWorkspaceGeneration(opts);
 
-    processes.setPidBase(generationNow * PID_GEN_STRIDE);
+      processes.setPidBase(generationNow * PID_GEN_STRIDE);
 
-    let creation: NimbusCreation = {
-      sql: opts.sql,
-      transactions: opts.transactions,
-      generation: generationNow,
-      cwd: WORKSPACE_ROOT,
-      env: { HOME: WORKSPACE_ROOT, TMPDIR: agentTmpRoot(MAIN_AGENT) },
-      processes,
-      fabric: opts.fabric,
-      // Each supplied runtime's bins are stubs that install it on first use; a reopened workspace rehydrates it.
-      runtimes: opts.runtimes ?? [],
-      runtimeInstall: 'on-demand',
-    };
+      let creation: NimbusCreation = {
+        sql: opts.sql,
+        transactions: opts.transactions,
+        generation: generationNow,
+        cwd: WORKSPACE_ROOT,
+        env: { HOME: WORKSPACE_ROOT, TMPDIR: agentTmpRoot(MAIN_AGENT) },
+        processes,
+        fabric: opts.fabric,
+        // Each supplied runtime's bins are stubs that install it on first use; a reopened workspace rehydrates it.
+        runtimes: opts.runtimes ?? [],
+        runtimeInstall: 'on-demand',
+      };
 
-    if (opts.runtimeFacets !== undefined) creation = { ...creation, facets: opts.runtimeFacets };
+      if (opts.runtimeFacets !== undefined) creation = { ...creation, facets: opts.runtimeFacets };
 
-    if (opts.runtimeSource !== undefined) creation = { ...creation, runtimeSource: opts.runtimeSource };
+      if (opts.runtimeSource !== undefined) creation = { ...creation, runtimeSource: opts.runtimeSource };
 
-    const workspace = await shellOver(creation);
+      const workspace = yield* Effect.promise(() => shellOver(creation));
 
-    // A transfer pin lives for its activation: a restart ends the forks and exports it served.
-    for (const pin of workspace.vfs.snapshots()) {
-      if (pin.name.startsWith(FORK_PIN_PREFIX) || pin.name.startsWith(ARCHIVE_PIN_PREFIX)) await workspace.vfs.dropSnapshotAsync(pin.name);
-    }
-
-    shellMountPoints = shellMounts(workspace.filesystem, tableFor);
-
-    for (const plane of mountTables.values()) shellMountPoints.add(plane);
-    settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
-    // Trusted host init, once per engine boot: a registration is not stored with the tree.
-    settleWorkspaceSlates(workspace.vfs.as(CRED_KERNEL), (path) => { workspace.vfs.registerSharedDirectory(path); });
-    resealWorkspaceSoul(workspace.vfs.as(CRED_KERNEL), opts.sql);
-
-    await registerNpm(workspace);
-    const root = workspace.vfs.as(CRED_KERNEL);
-    const main = agentIdentity(opts.sql, MAIN_AGENT);
-    provisionAgentHome(root, MAIN_AGENT, main);
-    confineAgentTmp(workspace.vfs, MAIN_AGENT, main);
-    restoreAgentTmpConfinements(opts.sql, root, workspace.vfs);
-    workspace.vfs.events.on((batch) => {
-      if (fileListeners.size === 0) return;
-      // A rename names where the file left as well as where it went.
-      const paths = batch.flatMap((event) => (event.oldPath === undefined ? [event.path] : [event.path, event.oldPath]));
-
-      for (const listener of fileListeners) listener(paths);
-    });
-
-    return workspace;
-  };
-
-  const open = async (): Promise<NimbusWorkspace> => {
-    const attempt = (booting ??= boot());
-
-    try {
-      return await attempt;
-    } catch (cause) {
-      // The first waiter to see this attempt fail clears it, so the next call boots afresh instead of
-      // re-awaiting a cached rejection for the isolate's life; a newer attempt stays cached.
-      if (booting === attempt) {
-        booting = undefined;
-        diagnostics.failure(
-          'workspace.boot_failed',
-          toKinuError({ doing: 'boot the Nimbus workspace', cause, otherwise: 'unavailable' }),
-        );
+      // A transfer pin lives for its activation: a restart ends the forks and exports it served.
+      for (const pin of workspace.vfs.snapshots()) {
+        if (pin.name.startsWith(FORK_PIN_PREFIX) || pin.name.startsWith(ARCHIVE_PIN_PREFIX)) yield* Effect.promise(() => workspace.vfs.dropSnapshotAsync(pin.name));
       }
 
-      throw cause;
-    }
-  };
+      shellMountPoints = shellMounts(workspace.filesystem, tableFor);
+
+      for (const plane of mountTables.values()) shellMountPoints.add(plane);
+      settleWorkspaceRoot(workspace.vfs.as(CRED_KERNEL));
+      // Trusted host init, once per engine boot: a registration is not stored with the tree.
+      settleWorkspaceSlates(workspace.vfs.as(CRED_KERNEL), (path) => { workspace.vfs.registerSharedDirectory(path); });
+      resealWorkspaceSoul(workspace.vfs.as(CRED_KERNEL), opts.sql);
+
+      yield* Effect.promise(() => registerNpm(workspace));
+      const root = workspace.vfs.as(CRED_KERNEL);
+      const main = agentIdentity(opts.sql, MAIN_AGENT);
+      provisionAgentHome(root, MAIN_AGENT, main);
+      confineAgentTmp(workspace.vfs, MAIN_AGENT, main);
+      restoreAgentTmpConfinements(opts.sql, root, workspace.vfs);
+      workspace.vfs.events.on((batch) => {
+        if (fileListeners.size === 0) return;
+        // A rename names where the file left as well as where it went.
+        const paths = batch.flatMap((event) => (event.oldPath === undefined ? [event.path] : [event.path, event.oldPath]));
+
+        for (const listener of fileListeners) listener(paths);
+      });
+
+      return workspace;
+  }).pipe(Effect.tapCause((cause) => Effect.sync(() => {
+    diagnostics.failure('workspace.boot_failed', toKinuError({ doing: 'boot the Nimbus workspace', cause: Cause.squash(cause), otherwise: 'unavailable' }));
+  })));
+
+  const open = shared(boot);
 
   // One supervisor for this filesystem so no two shells share a pid; `open` sets its pid base.
   const processes = new SessionProcessSupervisor();
-  const planes = new Map<number, Promise<WorkspaceAgentPlane>>();
 
   return {
     vfs: workspaceVfs(open),
@@ -345,73 +328,59 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
       };
     },
     async destroy() { (await open()).destroy(); },
-    async asAgent(agent) {
-      const held = planes.get(agent.cred.uid);
+    asAgent: sharedBy((agent) => agent.cred.uid, (agent) => Effect.gen(function* () {
+      const origin = yield* Effect.promise(() => open());
+      const process = processes.spawn('agent', [agent.home], agent.home, { cred: agent.cred });
 
-      if (held) return await held;
+      // Second shell over the same `SqliteVFS`, never a second filesystem (stale cache).
+      // `runAs` is the origin's so `sudo`/`su` keep working.
+      const asAgent = yield* Effect.promise(() => shellOver({
+        sql: opts.sql,
+        transactions: opts.transactions,
+        vfs: origin.vfs,
+        cwd: agent.home,
+        env: { HOME: agent.home, TMPDIR: agent.tmp },
+        identity: {
+          pid: process.pid,
+          cred: processes.cred(process.pid),
+          setUmask: (mask: number) => { processes.setUmask(process.pid, mask); },
+          runAs: origin.shell.getRunAsHost(),
+        },
+        fabric: opts.fabric,
+        // The origin's namespace, so this shell serves the same mount points.
+        filesystem: origin.filesystem,
+      }));
 
-      const opening = (async (): Promise<WorkspaceAgentPlane> => {
-        try {
-          const origin = await open();
-          const process = processes.spawn('agent', [agent.home], agent.home, { cred: agent.cred });
-
-          // Second shell over the same `SqliteVFS`, never a second filesystem (stale cache).
-          // `runAs` is the origin's so `sudo`/`su` keep working.
-          const asAgent = await shellOver({
-            sql: opts.sql,
-            transactions: opts.transactions,
-            vfs: origin.vfs,
-            cwd: agent.home,
-            env: { HOME: agent.home, TMPDIR: agent.tmp },
-            identity: {
-              pid: process.pid,
-              cred: processes.cred(process.pid),
-              setUmask: (mask: number) => { processes.setUmask(process.pid, mask); },
-              runAs: origin.shell.getRunAsHost(),
-            },
-            fabric: opts.fabric,
-            // The origin's namespace, so this shell serves the same mount points.
-            filesystem: origin.filesystem,
-          });
-
-          return {
-            vfs: agentVfs(origin.vfs.as(agent.cred)),
-            shell: workspaceShell(() => Promise.resolve(asAgent)),
-          };
-        } catch (cause) {
-          // Same rule as `booting`: never cache a rejection.
-          planes.delete(agent.cred.uid);
-          throw cause;
-        }
-      })();
-
-      planes.set(agent.cred.uid, opening);
-
-      return await opening;
-    },
+      return {
+        vfs: agentVfs(origin.vfs.as(agent.cred)),
+        shell: workspaceShell(() => Promise.resolve(asAgent)),
+      };
+    })),
   };
 }
 
 const GENERATION_TABLE = 'kinu_workspace_generation';
 
 /** One past the persisted generation, in one write transaction (ADR W1). */
-function takeWorkspaceGeneration(opts: Pick<WorkspaceOptions, 'sql' | 'transactions' | 'generation'>): number {
+function takeWorkspaceGeneration(opts: Pick<WorkspaceOptions, 'sql' | 'transactions' | 'generation'>): Effect.Effect<number, KinuError> {
   const adopted = generation(opts.generation);
 
-  if (adopted !== 0) return adopted;
+  if (adopted !== 0) return Effect.succeed(adopted);
   const transactions = opts.transactions.storage;
 
-  if (transactions === undefined) throw new KinuError('unsupported', 'a workspace takes its generation in a transaction, and this host has none');
+  if (transactions === undefined) return Effect.fail(new KinuError('unsupported', 'a workspace takes its generation in a transaction, and this host has none'));
 
-  const next = transactions.transactionSync(() => {
-    opts.sql.exec(`INSERT INTO ${GENERATION_TABLE} (id, value) VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET value = value + 1`);
+  return Effect.sync(() => {
+    const next = transactions.transactionSync(() => {
+      opts.sql.exec(`INSERT INTO ${GENERATION_TABLE} (id, value) VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET value = value + 1`);
 
-    return v.parse(v.pipe(v.number(), v.integer(), v.minValue(1)), Number([...opts.sql.exec(`SELECT value FROM ${GENERATION_TABLE} WHERE id = 1`)][0]?.value));
+      return v.parse(v.pipe(v.number(), v.integer(), v.minValue(1)), Number([...opts.sql.exec(`SELECT value FROM ${GENERATION_TABLE} WHERE id = 1`)][0]?.value));
+    });
+
+    assumeGeneration(opts.generation, next);
+
+    return next;
   });
-
-  assumeGeneration(opts.generation, next);
-
-  return next;
 }
 
 export interface WorkspaceGeneration {

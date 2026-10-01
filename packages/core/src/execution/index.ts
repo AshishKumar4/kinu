@@ -36,7 +36,7 @@ export { DefaultExecutionRouter } from './router';
 export { withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, shellCwd, type FileReach, type ShellReach } from './approval';
 
 export {
-  createSandboxExecutor, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending,
+  createSandboxExecutor, type SandboxHandle, type SandboxResize, isSandboxTransientError,
   WORKSPACE_BACKUP_DIR, sandboxSizeLabel,
 } from './sandbox';
 

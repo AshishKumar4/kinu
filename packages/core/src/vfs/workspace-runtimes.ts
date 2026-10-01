@@ -10,7 +10,8 @@ import type { ShellExecuteFn } from '@nimbus-sh/core/substrate/lifo/commands/sys
 import type { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import * as v from 'valibot';
 import type { ExecutorCapability } from '../execution/types';
-import { KinuError, refusalOf, renderCauseChain, toKinuError, type Refusal } from '../obs/index';
+import { Effect } from 'effect';
+import { KinuError, refusalOf, renderCauseChain, settle, toKinuError, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
 
 /**
@@ -59,26 +60,30 @@ const NimbusRuntimeCatalogSchema = v.union([
 ]);
 
 /** Bins a hosted session box can put on PATH: installed bins plus available runtime names. */
-export async function sessionRuntimeBins(list: () => Promise<JsonValue | undefined>): Promise<ReadonlySet<string> | { readonly unreadable: KinuError }> {
-  try {
-    const parsed = v.safeParse(NimbusRuntimeCatalogSchema, await list());
+export function sessionRuntimeBins(list: () => Promise<JsonValue | undefined>): Promise<ReadonlySet<string> | { readonly unreadable: KinuError }> {
+  return settle(Effect.tryPromise({
+    try: list,
+    catch: (cause) => toKinuError({ doing: 'reading the session box runtime catalog', cause, otherwise: 'io' }),
+  }).pipe(
+    Effect.map((listed) => {
+      const parsed = v.safeParse(NimbusRuntimeCatalogSchema, listed);
 
-    if (!parsed.success) return new Set();
+      if (!parsed.success) return new Set<string>();
 
-    const rows = Array.isArray(parsed.output) ? parsed.output : parsed.output.installed;
-    const names = new Set<string>();
+      const rows = Array.isArray(parsed.output) ? parsed.output : parsed.output.installed;
+      const names = new Set<string>();
 
-    for (const runtime of rows) for (const bin of runtime.bins) names.add(bin);
+      for (const runtime of rows) for (const bin of runtime.bins) names.add(bin);
 
-    if (!Array.isArray(parsed.output)) {
-      for (const available of parsed.output.available) names.add(available.name);
-    }
+      if (!Array.isArray(parsed.output)) {
+        for (const available of parsed.output.available) names.add(available.name);
+      }
 
-    return names;
-  } catch (cause) {
+      return names;
+    }),
     // Distinct from a catalog that parsed and named no bins.
-    return { unreadable: toKinuError({ doing: 'reading the session box runtime catalog', cause, otherwise: 'io' }) };
-  }
+    Effect.catch((unreadable) => Effect.succeed({ unreadable })),
+  ));
 }
 
 /**

@@ -1,5 +1,7 @@
 /** SOUL write, and the store's fork and archive transfers. */
 
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import type { ForkFileSink } from '../identity/fork-sink';
 import type { ForkFileSource } from '../identity/fork';
 import type { ArchiveFileSource, ArchiveFileTarget, ArchivePinnedStore, ArchiveStoreSource, ArchiveStoreTarget } from '../identity/archive';
@@ -22,18 +24,20 @@ export async function settledWorkspaceSoul(bundle: WorkspaceBundle): Promise<str
 }
 
 /** The owner's SOUL write, then sealed. */
-export async function writeWorkspaceSoul(
+export function writeWorkspaceSoul(
   bundle: FileSessionSource, content: string | Uint8Array,
 ): Promise<void> {
-  const session = await bundle.session();
-  const kernel = session.vfs.as(CRED_KERNEL);
+  return settle(Effect.gen(function* () {
+    const session = yield* Effect.promise(() => bundle.session());
+    const kernel = session.vfs.as(CRED_KERNEL);
 
-  if (!kernel.exists(WORKSPACE_ROOT) || !kernel.isDirectory(WORKSPACE_ROOT)) {
-    throw new Error(`the workspace root ${WORKSPACE_ROOT} does not exist`);
-  }
+    if (!kernel.exists(WORKSPACE_ROOT) || !kernel.isDirectory(WORKSPACE_ROOT)) {
+      return yield* Effect.die(new Error(`the workspace root ${WORKSPACE_ROOT} does not exist`));
+    }
 
-  sealWorkspaceSoul(kernel, content);
-  storeDurableSoulDb(session.sql, content instanceof Uint8Array ? new TextDecoder().decode(content) : content);
+    sealWorkspaceSoul(kernel, content);
+    storeDurableSoulDb(session.sql, content instanceof Uint8Array ? new TextDecoder().decode(content) : content);
+  }));
 }
 
 /** Source principal numbers cannot cross without their registry. Keep root ownership; other files belong to
@@ -202,34 +206,36 @@ export function archiveFileTree(source: {
   readFile(path: string): Promise<Uint8Array>;
 }): ArchiveFileSource {
   return {
-    async listEntries() {
-      const entries: Array<{ path: string; type: 'file' | 'directory' }> = [];
+    listEntries() {
+      return settle(Effect.gen(function* () {
+        const entries: Array<{ path: string; type: 'file' | 'directory' }> = [];
 
-      const walk = async (relative: string): Promise<void> => {
-        const children = [...await source.readdir(relative)].sort((a, b) => a.name.localeCompare(b.name));
+        const walk = (relative: string): Effect.Effect<void> => Effect.gen(function* () {
+          const children = [...yield* Effect.promise(() => source.readdir(relative))].sort((a, b) => a.name.localeCompare(b.name));
 
-        for (const child of children) {
-          if (!child.name || child.name === '.' || child.name === '..' || child.name.includes('/')) {
-            throw new Error(
-              `Workspace archive encountered an invalid entry name: ${JSON.stringify(child.name)}.`,
-            );
+          for (const child of children) {
+            if (!child.name || child.name === '.' || child.name === '..' || child.name.includes('/')) {
+              return yield* Effect.die(new Error(
+                `Workspace archive encountered an invalid entry name: ${JSON.stringify(child.name)}.`,
+              ));
+            }
+
+            const path = relative ? `${relative}/${child.name}` : child.name;
+
+            if (child.type !== 'file' && child.type !== 'directory') {
+              return yield* Effect.die(new Error(`Workspace archive cannot preserve ${child.type} entry ${JSON.stringify(path)}.`));
+            }
+
+            entries.push({ path, type: child.type });
+
+            if (child.type === 'directory') yield* walk(path);
           }
+        });
 
-          const path = relative ? `${relative}/${child.name}` : child.name;
+        yield* walk('');
 
-          if (child.type !== 'file' && child.type !== 'directory') {
-            throw new Error(`Workspace archive cannot preserve ${child.type} entry ${JSON.stringify(path)}.`);
-          }
-
-          entries.push({ path, type: child.type });
-
-          if (child.type === 'directory') await walk(path);
-        }
-      };
-
-      await walk('');
-
-      return entries;
+        return entries;
+      }));
     },
     readFile: (path) => source.readFile(path),
   };

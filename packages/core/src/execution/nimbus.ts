@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settle, settleSync } from '../obs/effect';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Nimbus executor adapter: maps a backend-supplied workspace box onto Kinu's ExecutorProvider contract. */
 
@@ -33,36 +35,38 @@ interface NimbusOriginRangeRead {
 
 /** One window of a file's bytes. Prefers the box's native ranged read; the `node -e` shell reader is a fallback
  *  only for handles lacking the op (Workers forbid `new Function`, so it would fail hosted). */
-async function readNimbusOriginRange(read: NimbusOriginRangeRead): Promise<Uint8Array> {
-  const { box, files, path, offset, length, cred } = read;
+function readNimbusOriginRange(read: NimbusOriginRangeRead): Effect.Effect<Uint8Array, VfsError> {
+  return Effect.gen(function* () {
+    const { box, files, path, offset, length, cred } = read;
 
-  if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
-    throw new VfsError('EIO', 'range offset and length must be positive safe integers', path);
-  }
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
+      return yield* Effect.fail(new VfsError('EIO', 'range offset and length must be positive safe integers', path));
+    }
 
-  const absolute = workspacePath(path);
-  const native = files.readRange;
+    const absolute = workspacePath(path);
+    const native = files.readRange;
 
-  if (native) {
-    const bytes = await native.call(files, absolute, offset, length);
+    if (native) {
+      const bytes = yield* Effect.promise(() => native.call(files, absolute, offset, length));
 
-    if (bytes === null) throw new VfsError('ENOENT', 'no such file or directory, open', path);
+      if (bytes === null) return yield* Effect.fail(new VfsError('ENOENT', 'no such file or directory, open', path));
 
-    return bytes;
-  }
+      return bytes;
+    }
 
-  const result = await box.exec(`node -e ${shellQuote(NIMBUS_RANGE_READER)}`, {
-    env: { [NIMBUS_RANGE_ENV]: JSON.stringify({ path: absolute, offset, length }) },
-    ...asCred(cred),
+    const result = yield* Effect.promise(() => box.exec(`node -e ${shellQuote(NIMBUS_RANGE_READER)}`, {
+      env: { [NIMBUS_RANGE_ENV]: JSON.stringify({ path: absolute, offset, length }) },
+      ...asCred(cred),
+    }));
+
+    if (!result.success || result.exitCode !== 0) {
+      return yield* Effect.fail(new VfsError('EIO',
+      `this file's bytes could not be read right now: try opening it again, or download it instead`,
+      path,));
+    }
+
+    return base64ToBytes(result.stdout.trim());
   });
-
-  if (!result.success || result.exitCode !== 0) {
-    throw new VfsError('EIO',
-    `this file's bytes could not be read right now: try opening it again, or download it instead`,
-    path,);
-  }
-
-  return base64ToBytes(result.stdout.trim());
 }
 
 export interface NimbusExecOptions {
@@ -273,14 +277,26 @@ function parseInput<TSchema extends v.GenericSchema>(
 }
 
 
-function stringifyResult(input: { value: unknown }): string {
+interface Failed { readonly cause: unknown }
+
+function surfaced<T>(call: Effect.Effect<T, Failed>): Effect.Effect<T> {
+  return Effect.catch(call, (failed) => Effect.die(failed.cause));
+}
+
+function answered<A, B>(call: Effect.Effect<A, Failed>, answer: (value: A) => B, refusal: (failed: Failed) => KinuError): Effect.Effect<B | Refusal> {
+  return Effect.match(call, { onSuccess: answer, onFailure: (failed) => refusalOf(refusal(failed)) });
+}
+
+function rendered(input: { readonly value: unknown }): Effect.Effect<string> {
   const text = v.safeParse(v.string(), input.value);
 
-  if (text.success) return text.output;
+  if (text.success) return Effect.succeed(text.output);
 
-  if (input.value == null) return '';
+  if (input.value == null) return Effect.succeed('');
 
-  try { return JSON.stringify(input.value, null, 2); } catch (error) { return `unserializable process result: ${renderThrownChain({ cause: error })}`; }
+  return Effect.try({ try: () => JSON.stringify(input.value, null, 2), catch: (cause) => ({ cause }) }).pipe(
+    Effect.catch((failed) => Effect.succeed(`unserializable process result: ${renderThrownChain(failed)}`)),
+  );
 }
 
 /** Render a startProcess result stating the process is still running and which calls observe or stop it. */
@@ -321,41 +337,34 @@ export function nimbusSession(opts: NimbusSessionOpts) {
   let active = false;
   let lastError: string | undefined;
 
-  const touch = async <T>(fn: () => Promise<T>): Promise<T> => {
+  const touch = <T>(fn: () => Promise<T>): Effect.Effect<T, Failed> => Effect.suspend(() => {
     active = true;
 
-    try {
-      const result = await fn();
-      lastError = undefined;
+    return Effect.tryPromise({ try: fn, catch: (cause) => ({ cause }) }).pipe(
+      Effect.tap(() => Effect.sync(() => { lastError = undefined; })),
+      Effect.tapError((failed) => Effect.sync(() => { lastError = renderThrownChain(failed); })),
+    );
+  });
 
-      return result;
-    } catch (err) {
-      lastError = renderThrownChain({ cause: err });
-      throw err;
-    }
-  };
-
-  const exposeOn = async (port: number): Promise<PortExposureResult> => {
+  const exposeOn = (port: number): Effect.Effect<PortExposureResult, Failed> => {
     const ports = box.ports;
 
-    if (!ports?.expose) return { supported: false, reason: 'Nimbus port exposure is not available' };
+    if (!ports?.expose) return Effect.succeed({ supported: false, reason: 'Nimbus port exposure is not available' });
     const expose = ports.expose.bind(ports);
 
-    try {
-      const result = await touch(() => expose(port));
-      // A blank url is the SDK declining to name one, same as omitting it.
-      const url = result.url === undefined || result.url === '' ? ports.url?.(port) : result.url;
+    return touch(() => expose(port)).pipe(
+      Effect.map((result): PortExposureResult => {
+        // A blank url is the SDK declining to name one, same as omitting it.
+        const url = result.url === undefined || result.url === '' ? ports.url?.(port) : result.url;
 
-      if (!url) return { supported: false, reason: `nimbus exposePort ${port}: exposed but no preview URL is available` };
+        if (!url) return { supported: false, reason: `nimbus exposePort ${port}: exposed but no preview URL is available` };
 
-      return { supported: true, port, url, route: result.route };
-    } catch (err) {
-      if (renderThrownChain({ cause: err }).includes(NO_LISTENER_MARK)) {
-        return { supported: false, reason: workspaceNoListenerReason(port) };
-      }
-
-      throw err;
-    }
+        return { supported: true, port, url, route: result.route };
+      }),
+      Effect.catch((failed) => (renderThrownChain(failed).includes(NO_LISTENER_MARK)
+        ? Effect.succeed({ supported: false as const, reason: workspaceNoListenerReason(port) })
+        : Effect.fail(failed))),
+    );
   };
 
   const tools: ExecutorProvider['tools'] = {
@@ -373,11 +382,8 @@ export function nimbusSession(opts: NimbusSessionOpts) {
 
         const options = parseInput(NimbusRunCodeOptionsSchema, { value: args[1] });
 
-        try {
-          return normalizeExec(await touch(() => runCode(code, options)));
-        } catch (err) {
-          return refusalOf(workspaceExecFailure({ doing: 'nimbus runCode', cause: err }));
-        }
+        return settle(answered(touch(() => runCode(code, options)), normalizeExec,
+          (failed) => workspaceExecFailure({ doing: 'nimbus runCode', cause: failed.cause })));
       },
     },
     startProcess: {
@@ -394,11 +400,8 @@ export function nimbusSession(opts: NimbusSessionOpts) {
 
         const options = parseInput(NimbusExecOptionsSchema, { value: args[1] });
 
-        try {
-          return formatStartResult(await touch(() => startProcess(command, options)));
-        } catch (err) {
-          return refusalOf(workspaceExecFailure({ doing: `nimbus startProcess \`${command}\``, cause: err, command }));
-        }
+        return settle(answered(touch(() => startProcess(command, options)), formatStartResult,
+          (failed) => workspaceExecFailure({ doing: `nimbus startProcess \`${command}\``, cause: failed.cause, command })));
       },
     },
     killProcess: {
@@ -413,15 +416,11 @@ export function nimbusSession(opts: NimbusSessionOpts) {
         const pid = v.is(v.number(), input) ? input : input?.pid;
 
         if (pid === undefined || !Number.isFinite(pid)) {
-          return refusalOf(new KinuError('bad_input',
-            `nimbus killProcess: invalid pid ${stringifyResult({ value: args[0] })}`));
+          return settle(Effect.map(rendered({ value: args[0] }), (text) => refusalOf(new KinuError('bad_input', `nimbus killProcess: invalid pid ${text}`))));
         }
 
-        try {
-          return stringifyResult({ value: await touch(() => kill(pid)) });
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: `nimbus killProcess ${pid}`, cause: err }));
-        }
+        return settle(answered(Effect.flatMap(touch(() => kill(pid)), (value) => rendered({ value })), (text) => text,
+          (failed) => nimbusFailure({ doing: `nimbus killProcess ${pid}`, cause: failed.cause })));
       },
     },
     logs: {
@@ -435,19 +434,15 @@ export function nimbusSession(opts: NimbusSessionOpts) {
         const pid = v.is(v.number(), input) ? input : input?.pid;
 
         if (pid === undefined || !Number.isFinite(pid)) {
-          return refusalOf(new KinuError('bad_input',
-            `nimbus logs: invalid pid ${stringifyResult({ value: args[0] })}`));
+          return settle(Effect.map(rendered({ value: args[0] }), (text) => refusalOf(new KinuError('bad_input', `nimbus logs: invalid pid ${text}`))));
         }
 
         const options = input !== undefined && !v.is(v.number(), input)
           ? { lines: input.lines, bytes: input.bytes }
           : undefined;
 
-        try {
-          return stringifyResult({ value: await touch(() => readLogs(pid, options)) });
-        } catch (err) {
-          return refusalOf(workspaceExecFailure({ doing: `nimbus logs ${pid}`, cause: err }));
-        }
+        return settle(answered(Effect.flatMap(touch(() => readLogs(pid, options)), (value) => rendered({ value })), (text) => text,
+          (failed) => workspaceExecFailure({ doing: `nimbus logs ${pid}`, cause: failed.cause })));
       },
     },
     exposePort: {
@@ -460,19 +455,12 @@ export function nimbusSession(opts: NimbusSessionOpts) {
         const port = v.is(v.number(), input) ? input : input?.port;
 
         if (port === undefined || !Number.isFinite(port) || port <= 0 || port > 65535) {
-          return refusalOf(new KinuError('bad_input',
-            `nimbus exposePort: invalid port ${stringifyResult({ value: args[0] })}`));
+          return settle(Effect.map(rendered({ value: args[0] }), (text) => refusalOf(new KinuError('bad_input', `nimbus exposePort: invalid port ${text}`))));
         }
 
-        try {
-          const exposed = await exposeOn(port);
-
-          return exposed.supported
-            ? exposedPortText(exposed.url, port, exposed.route)
-            : refusalOf(new KinuError('unsupported', exposed.reason));
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: `nimbus exposePort ${port}`, cause: err }));
-        }
+        return settle(answered(exposeOn(port), (exposed) => (exposed.supported
+          ? exposedPortText(exposed.url, port, exposed.route)
+          : refusalOf(new KinuError('unsupported', exposed.reason))), (failed) => nimbusFailure({ doing: `nimbus exposePort ${port}`, cause: failed.cause })));
       },
     },
     unexposePort: {
@@ -486,17 +474,11 @@ export function nimbusSession(opts: NimbusSessionOpts) {
         const port = v.is(v.number(), input) ? input : input?.port;
 
         if (port === undefined || !Number.isFinite(port)) {
-          return refusalOf(new KinuError('bad_input',
-            `nimbus unexposePort: invalid port ${stringifyResult({ value: args[0] })}`));
+          return settle(Effect.map(rendered({ value: args[0] }), (text) => refusalOf(new KinuError('bad_input', `nimbus unexposePort: invalid port ${text}`))));
         }
 
-        try {
-          await touch(() => unexpose(port));
-
-          return `unexposed ${port}`;
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: `nimbus unexposePort ${port}`, cause: err }));
-        }
+        return settle(answered(touch(() => unexpose(port)), () => `unexposed ${port}`,
+          (failed) => nimbusFailure({ doing: `nimbus unexposePort ${port}`, cause: failed.cause })));
       },
     },
     listPorts: {
@@ -508,13 +490,8 @@ export function nimbusSession(opts: NimbusSessionOpts) {
         if (!ports?.list) return handleLacks('ports');
         const list = ports.list.bind(ports);
 
-        try {
-          const exposed = await touch(() => list());
-
-          return JSON.stringify(exposed.map((p) => ({ ...p, url: p.url ?? ports.url?.(p.port) })));
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: 'nimbus listPorts', cause: err }));
-        }
+        return settle(answered(touch(() => list()), (exposed) => JSON.stringify(exposed.map((p) => ({ ...p, url: p.url ?? ports.url?.(p.port) }))),
+          (failed) => nimbusFailure({ doing: 'nimbus listPorts', cause: failed.cause })));
       },
     },
     installRuntime: {
@@ -530,15 +507,12 @@ export function nimbusSession(opts: NimbusSessionOpts) {
         const install = runtimes?.install?.bind(runtimes);
         const ensure = runtimes?.ensure?.bind(runtimes);
 
-        try {
-          if (install) await touch(() => install(spec));
-          else if (ensure) await touch(() => ensure(spec));
-          else return handleLacks('runtime installation');
+        const installing = install ?? ensure;
 
-          return `installed ${spec}`;
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: `nimbus installRuntime ${spec}`, cause: err }));
-        }
+        if (!installing) return handleLacks('runtime installation');
+
+        return settle(answered(touch(() => installing(spec)), () => `installed ${spec}`,
+          (failed) => nimbusFailure({ doing: `nimbus installRuntime ${spec}`, cause: failed.cause })));
       },
     },
     listRuntimes: {
@@ -549,11 +523,8 @@ export function nimbusSession(opts: NimbusSessionOpts) {
         if (!runtimes?.list) return handleLacks('runtime listing');
         const list = runtimes.list.bind(runtimes);
 
-        try {
-          return stringifyResult({ value: await touch(() => list()) });
-        } catch (err) {
-          return refusalOf(nimbusFailure({ doing: 'nimbus listRuntimes', cause: err }));
-        }
+        return settle(answered(Effect.flatMap(touch(() => list()), (value) => rendered({ value })), (text) => text,
+          (failed) => nimbusFailure({ doing: 'nimbus listRuntimes', cause: failed.cause })));
       },
     },
   };
@@ -575,35 +546,38 @@ export function nimbusSession(opts: NimbusSessionOpts) {
     getStatus: (): ExecutorStatus => (lastError === undefined
       ? { configured: true, available: true, active, status: active ? 'active' : 'idle' }
       : { configured: true, available: true, active, status: 'error', reason: lastError }),
-    connect: async () => { await touch(() => box.ready()); },
+    connect: () => settle(Effect.asVoid(surfaced(touch(() => box.ready())))),
     disconnect: async () => { active = false; },
-    exposePort: exposeOn,
+    exposePort: (port: number) => settle(surfaced(exposeOn(port))),
     unexposePort: async (port: number) => {
       const ports = box.ports;
 
       if (!ports?.unexpose) return;
       const unexpose = ports.unexpose.bind(ports);
-      await touch(() => unexpose(port));
+
+      return settle(Effect.asVoid(surfaced(touch(() => unexpose(port)))));
     },
     // Exposed ports without a URL are kept, carrying the host's reason as a refusal.
-    listExposedPorts: async () => {
-      const ports = box.ports;
+    listExposedPorts: () => {
+      return settle(Effect.gen(function* () {
+        const ports = box.ports;
 
-      if (!ports?.list) return [];
-      const list = ports.list.bind(ports);
-      const exposed = await touch(() => list());
-      const unaddressed = exposed.find((p) => p.url === undefined && p.unavailable !== undefined);
+        if (!ports?.list) return [];
+        const list = ports.list.bind(ports);
+        const exposed = yield* surfaced(touch(() => list()));
+        const unaddressed = exposed.find((p) => p.url === undefined && p.unavailable !== undefined);
 
-      if (unaddressed?.unavailable !== undefined) {
-        throw new KinuError('unsupported',
-          `workspace port ${unaddressed.port} is listening and has no preview URL: ${unaddressed.unavailable}`);
-      }
+        if (unaddressed?.unavailable !== undefined) {
+          return yield* new KinuError('unsupported',
+            `workspace port ${unaddressed.port} is listening and has no preview URL: ${unaddressed.unavailable}`);
+        }
 
-      return exposed.map((p) => ({
-        port: p.port,
-        url: p.url ?? ports.url?.(p.port) ?? '',
-        status: 'unknown' as const,
-      })).filter((p) => p.url);
+        return exposed.map((p) => ({
+          port: p.port,
+          url: p.url ?? ports.url?.(p.port) ?? '',
+          status: 'unknown' as const,
+        })).filter((p) => p.url);
+      }));
     },
   };
 }
@@ -664,113 +638,128 @@ function asCred(cred: VfsCred | undefined): { cred: VfsCred } | Record<string, n
 }
 
 export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VFS & Required<Pick<VFS, 'readlink' | 'removeRecursive' | 'rename' | 'readRange'>> {
-  let files = box.files;
+  return settleSync(Effect.gen(function* () {
+    let files = box.files;
 
-  if (cred !== undefined) {
-    if (files.as === undefined) {
-      throw new KinuError('unsupported', 'this workspace handle has no credential-bound file plane, so it cannot act as the agent');
+    if (cred !== undefined) {
+      if (files.as === undefined) {
+        return yield* new KinuError('unsupported', 'this workspace handle has no credential-bound file plane, so it cannot act as the agent');
+      }
+
+      files = files.as(cred);
     }
 
-    files = files.as(cred);
-  }
+    return {
+      readFile(path) {
+        return settle(Effect.gen(function* () {
+          const absolute = workspacePath(path);
 
-  return {
-    async readFile(path) {
-      const absolute = workspacePath(path);
+          if (files.readBytes) {
+            const bytes = yield* Effect.promise(() => atVfsPath(absolute, 'open', () => files.readBytes?.(absolute) ?? null));
 
-      if (files.readBytes) {
-        const bytes = await atVfsPath(absolute, 'open', () => files.readBytes?.(absolute) ?? null);
+            if (bytes === null) return yield* Effect.fail(new VfsError('ENOENT', 'no such file or directory, open', absolute));
 
-        if (bytes === null) throw new VfsError('ENOENT', 'no such file or directory, open', absolute);
+            return bytes;
+          }
 
-        return bytes;
-      }
+          const content = yield* Effect.promise(() => atVfsPath(absolute, 'open', () => files.read(absolute)));
 
-      const content = await atVfsPath(absolute, 'open', () => files.read(absolute));
+          if (content === null) return yield* Effect.fail(new VfsError('ENOENT', 'no such file or directory, open', absolute));
 
-      if (content === null) throw new VfsError('ENOENT', 'no such file or directory, open', absolute);
+          return new TextEncoder().encode(content);
+        }));
+      },
+      /** Prefix the origin's fixed Node reader reads; the SDK file methods cannot express a range. */
+      readRange(path, offset, length) {
+        return settle(Effect.gen(function* () {
+          return yield* readNimbusOriginRange({ box, files, path, offset, length, cred });
+        }));
+      },
+      async writeFile(path, data) {
+        const absolute = workspacePath(path);
 
-      return new TextEncoder().encode(content);
-    },
-    /** Prefix the origin's fixed Node reader reads; the SDK file methods cannot express a range. */
-    async readRange(path, offset, length) {
-      return readNimbusOriginRange({ box, files, path, offset, length, cred });
-    },
-    async writeFile(path, data) {
-      const absolute = workspacePath(path);
+        await atVfsPath(absolute, 'open', () => files.write(absolute, data));
+      },
+      // No `writeFileIfRevision`: the SDK write takes no precondition and stat has no revision, so
+      // `writeExecutorFileOp` answers `unsupported`.
+      async readdir(path) {
+        const absolute = workspacePath(path);
 
-      await atVfsPath(absolute, 'open', () => files.write(absolute, data));
-    },
-    // No `writeFileIfRevision`: the SDK write takes no precondition and stat has no revision, so
-    // `writeExecutorFileOp` answers `unsupported`.
-    async readdir(path) {
-      const absolute = workspacePath(path);
+        return (await atVfsPath(absolute, 'scandir', () => files.list(absolute))).map((entry) => {
+          if (entry.type === 'symlink') return { name: entry.name, type: 'symlink' as const };
 
-      return (await atVfsPath(absolute, 'scandir', () => files.list(absolute))).map((entry) => {
-        if (entry.type === 'symlink') return { name: entry.name, type: 'symlink' as const };
+          return { name: entry.name, type: entry.type === 'directory' || entry.isDir === true ? 'directory' as const : 'file' as const };
+        });
+      },
+      readlink(path) {
+        return settle(Effect.gen(function* () {
+          const absolute = workspacePath(path);
 
-        return { name: entry.name, type: entry.type === 'directory' || entry.isDir === true ? 'directory' as const : 'file' as const };
-      });
-    },
-    async readlink(path) {
-      const absolute = workspacePath(path);
+          if (files.readlink) {
+            const target = yield* Effect.promise(() => atVfsPath(absolute, 'readlink', () => files.readlink?.(absolute) ?? null));
 
-      if (files.readlink) {
-        const target = await atVfsPath(absolute, 'readlink', () => files.readlink?.(absolute) ?? null);
+            if (target === null) return yield* Effect.fail(new VfsError('ENOENT', 'no such file or directory, readlink', absolute));
 
-        if (target === null) throw new VfsError('ENOENT', 'no such file or directory, readlink', absolute);
+            return target;
+          }
 
-        return target;
-      }
+          // Like the `stat` fallback, a failed readlink reads as an absent link; its stderr says why.
+          const r = yield* Effect.promise(() => box.exec(`readlink -- ${shellQuote(absolute)}`, asCred(cred)));
 
-      // Like the `stat` fallback, a failed readlink reads as an absent link; its stderr says why.
-      const r = await box.exec(`readlink -- ${shellQuote(absolute)}`, asCred(cred));
+          if (!r.success || r.exitCode !== 0) return yield* Effect.fail(new VfsError('ENOENT', `readlink: ${r.stderr.trim()}`, absolute));
 
-      if (!r.success || r.exitCode !== 0) throw new VfsError('ENOENT', `readlink: ${r.stderr.trim()}`, absolute);
+          return r.stdout.replace(/\n$/, '');
+        }));
+      },
+      async stat(path, options) {
+        const absolute = workspacePath(path);
+        const native = options?.follow === false ? files.lstat?.bind(files) : files.stat?.bind(files);
 
-      return r.stdout.replace(/\n$/, '');
-    },
-    async stat(path, options) {
-      const absolute = workspacePath(path);
-      const native = options?.follow === false ? files.lstat?.bind(files) : files.stat?.bind(files);
+        if (native) {
+          const stat = await native.call(files, absolute);
 
-      if (native) {
-        const stat = await native.call(files, absolute);
+          if (stat === null) return null;
+          const type = stat.type === 'symlink' ? 'symlink' as const : 'file' as const;
 
-        if (stat === null) return null;
-        const type = stat.type === 'symlink' ? 'symlink' as const : 'file' as const;
+          return { size: stat.size, mtimeMs: stat.mtime, type: stat.type === 'directory' ? 'directory' : type };
+        }
 
-        return { size: stat.size, mtimeMs: stat.mtime, type: stat.type === 'directory' ? 'directory' : type };
-      }
+        const result = await box.exec(`stat -c '%s %Y %F' ${shellQuote(absolute)}`, asCred(cred));
 
-      const result = await box.exec(`stat -c '%s %Y %F' ${shellQuote(absolute)}`, asCred(cred));
+        if (!result.success || result.exitCode !== 0) return null;
+        const [size, seconds, ...kind] = result.stdout.trim().split(/\s+/);
+        const type = kind.join(' ');
 
-      if (!result.success || result.exitCode !== 0) return null;
-      const [size, seconds, ...kind] = result.stdout.trim().split(/\s+/);
-      const type = kind.join(' ');
+        const entryType = type === 'symbolic link' ? 'symlink' as const : 'file' as const;
 
-      const entryType = type === 'symbolic link' ? 'symlink' as const : 'file' as const;
+        return { size: Number(size), mtimeMs: Number(seconds) * 1_000, type: type === 'directory' ? 'directory' : entryType };
+      },
+      async unlink(path) { await files.delete(workspacePath(path)); },
+      async removeRecursive(path) { await files.delete(workspacePath(path), { recursive: true }); },
+      rename(from, to) {
+        const rename = files.rename?.bind(files);
 
-      return { size: Number(size), mtimeMs: Number(seconds) * 1_000, type: type === 'directory' ? 'directory' : entryType };
-    },
-    async unlink(path) { await files.delete(workspacePath(path)); },
-    async removeRecursive(path) { await files.delete(workspacePath(path), { recursive: true }); },
-    async rename(from, to) {
-      if (!files.rename) throw new VfsError('EIO', 'Nimbus SDK handle does not expose rename', from);
-      await files.rename(workspacePath(from), workspacePath(to));
-    },
-    async mkdir(path, opts) {
-      if (files.mkdir) {
-        await files.mkdir(workspacePath(path));
+        return settle(rename === undefined
+          ? Effect.fail(new VfsError('EIO', 'Nimbus SDK handle does not expose rename', from))
+          : Effect.promise(() => rename(workspacePath(from), workspacePath(to))));
+      },
+      mkdir(path, opts) {
+        const native = files.mkdir?.bind(files);
 
-        return;
-      }
+        return settle(Effect.gen(function* () {
+          if (native) {
+            yield* Effect.promise(() => native(workspacePath(path)));
 
-      const r = await box.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(workspacePath(path))}`, asCred(cred));
+            return;
+          }
 
-      if (!r.success || r.exitCode !== 0) {
-        throw new VfsError('EIO', `${r.stderr.trim() || 'operation failed'}, mkdir`, path);
-      }
-    },
-  };
+          const r = yield* Effect.promise(() => box.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(workspacePath(path))}`, asCred(cred)));
+
+          if (!r.success || r.exitCode !== 0) {
+            return yield* Effect.fail(new VfsError('EIO', `${r.stderr.trim() || 'operation failed'}, mkdir`, path));
+          }
+        }));
+      },
+    };
+  }));
 }
