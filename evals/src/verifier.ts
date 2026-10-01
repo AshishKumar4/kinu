@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import { JsonValueSchema, projectJsonValue, type JsonValue, type SubordinateInspectionRequest } from '@kinu.run/core';
-import type { InspectionAnswer, PublicExecutorResult, PublicSwarmRun, WorkBoard } from './session';
+import type { InspectionAnswer, PublicCraftedTool, PublicDirEntry, PublicExecutorResult, PublicSwarmRun, WorkBoard } from './session';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER, TRANSIENT_PLATFORM_ERRORS } from '@kinu.run/test-utils';
 import { redact, redactJson } from './redact';
@@ -26,7 +26,9 @@ function lostByThePlatform(call: string, answer: { reason: string; error: string
 export type VerifierSession = {
   slateOp(operation: JsonValue): Promise<JsonValue>;
   readFile(path: string, options?: { allowMissing?: boolean }): Promise<string>;
-  writeFile(path: string, content: string): Promise<void>;
+  writeFile(path: string, content: string | Uint8Array<ArrayBuffer>): Promise<void>;
+  listFiles(dir: string, options: { allowMissing: true }): Promise<readonly PublicDirEntry[]>;
+  craftedTools(): Promise<readonly PublicCraftedTool[]>;
   workspaceWork(): Promise<WorkBoard>;
   inspect(request: SubordinateInspectionRequest): Promise<InspectionAnswer>;
   swarmRuns(): Promise<PublicSwarmRun[]>;
@@ -215,8 +217,18 @@ export class EvalVerifier {
   }
 
   /** Change the workspace's data mid-check, the way a person drops in a new file. */
-  writeFile(path: string, content: string): Promise<void> {
+  writeFile(path: string, content: string | Uint8Array<ArrayBuffer>): Promise<void> {
     return this.#session.writeFile(path, content);
+  }
+
+  /** One folder as the Files tab lists it; nothing for a folder that is not there. */
+  files(dir: string): Promise<readonly PublicDirEntry[]> {
+    return this.#session.listFiles(dir, { allowMissing: true });
+  }
+
+  /** The tools the agent built for itself, as the Tools pane lists them. */
+  tools(): Promise<readonly PublicCraftedTool[]> {
+    return this.#session.craftedTools();
   }
 
   /** Every agent's plans and tasks, as the Work tab shows them. */
