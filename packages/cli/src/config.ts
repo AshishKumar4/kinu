@@ -28,6 +28,7 @@ import {
   createFileOAuthStore,
   ensureSecretDir,
   kinuHome,
+  openAiCompatHeaders,
   stripProvider,
   withConfigLock,
   writeSecretFile,
@@ -867,14 +868,6 @@ function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string 
   }
 
   return null;
-}
-
-function openAiCompatHeaders(compat: v.InferOutput<typeof OpenAiCompatConfigSchema>): Record<string, string> {
-  const headers = { ...compat.headers };
-
-  if (compat.apiKey) headers.Authorization = `Bearer ${compat.apiKey}`;
-
-  return Object.assign(headers, compat.extraHeaders);
 }
 
 export async function firstOpenAiCompatModel(): Promise<string | null> {
