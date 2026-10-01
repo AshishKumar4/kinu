@@ -886,39 +886,23 @@ fi
 export KINU_EVAL_ORIGIN="${KINU_URL%/}"
 export KINU_ORIGIN="${KINU_URL%/}"
 
-# THE STATISTICS, on GitHub. .github/workflows/evals.yml runs every eval task
-# ten times on staging, which must be serving this build, and on production,
-# the baseline, and its Verdict job fails on a regression between the two.
-# Dispatched and not awaited: the report names the run and the record keeps its
-# id, since a promotion waits for its verdict (scripts/promote.ts check). The
-# workflow runs from the default branch, and the API version that answers a
-# dispatch with the run it started is asked for by name.
+# THE STATISTICS, on GitHub (L19). scripts/evals-dispatch.ts starts
+# .github/workflows/evals.yml for this build from the branch on GitHub that
+# holds it: every eval task ten times on staging, which must be serving this
+# build, and on production, the baseline, and its Verdict job fails on a
+# regression between the two. Not awaited: the report names the run and the
+# record keeps its id, since a promotion waits for its verdict.
 KINU_EVALS_RUN=""
 KINU_EVALS_URL=""
 KINU_EVALS_WHY=""
 dispatch_evals() {
-  local answer
-  if ! command -v gh >/dev/null 2>&1; then
-    KINU_EVALS_WHY="gh is not installed"
+  local answer branch
+  if ! answer="$(bun "$KINU_ROOT/scripts/evals-dispatch.ts" "$KINU_SHA")"; then
+    KINU_EVALS_WHY="$answer"
     return 1
   fi
-  if ! gh api "repos/{owner}/{repo}/commits/$KINU_SHA" --silent >/dev/null 2>&1; then
-    KINU_EVALS_WHY="build $KINU_SHA is not on GitHub, so no run can check it out: push it"
-    return 1
-  fi
-  if ! answer="$(gh api -X POST -H 'X-GitHub-Api-Version: 2026-03-10' \
-    "repos/{owner}/{repo}/actions/workflows/evals.yml/dispatches" \
-    -f ref=main -f "inputs[build]=$KINU_SHA" 2>&1)"; then
-    KINU_EVALS_WHY="GitHub refused the dispatch: ${answer:0:300}"
-    return 1
-  fi
-  KINU_EVALS_RUN="$(printf '%s' "$answer" | json_field workflow_run_id)"
-  KINU_EVALS_URL="$(printf '%s' "$answer" | json_field html_url)"
-  if [ -z "$KINU_EVALS_RUN" ]; then
-    KINU_EVALS_WHY="GitHub named no run for the dispatch: ${answer:0:300}"
-    return 1
-  fi
-  report dispatched "the evals, every task ten times on staging against production" "$KINU_EVALS_URL"
+  read -r KINU_EVALS_RUN KINU_EVALS_URL branch <<<"$answer"
+  report dispatched "the evals of $KINU_SHA from $branch, every task ten times on staging against production" "$KINU_EVALS_URL"
 }
 
 if [ "$KINU_PROMOTE" = "1" ]; then

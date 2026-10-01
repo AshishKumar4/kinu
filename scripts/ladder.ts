@@ -1091,20 +1091,21 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts',
+    run: 'bun test --timeout=0 scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts',
     label: 'Production deploy contract',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 86.8/86.5s (33 tests). The 1s
     // predates the archive unpack-and-install tests; the suite really installs.
     // Replaces 1s. promote.test.ts joined 2026-09-26 at 0.4 s (13 tests); the
-    // report and provider-key suites joined 2026-09-30 at about 3 s (6 tests).
+    // report and provider-key suites joined 2026-09-30 at about 3 s (6 tests), and
+    // the evals dispatch suite at 0.2 s (3 tests).
     seconds: 90,
     catches: 'a deploy gate deleted, reordered, or made skippable, and a deploy from a '
       + 'dirty checkout. Cut-the-wire proven: remove one gate line and it fails. And a promotion '
       + 'that ships bytes staging never verified or that production cannot return from: each '
       + 'promote guard removed in turn fails its own test. And a deploy report that marks a red new '
       + 'or carried over against the wrong previous deploy, and a provider key printed by the step '
-      + 'that stores it after a reset.',
+      + 'that stores it after a reset, and evals dispatched from a branch that does not hold the build.',
     blind: 'whether the gates it enumerates pass, and whether Cloudflare serves what a '
       + 'promotion uploaded: that is its smoke test\'s, against the deployment.',
     inputs: AMBIENT_BY_NAME,
