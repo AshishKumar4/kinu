@@ -10,7 +10,8 @@ import type { HeadRuntime } from './heads/controller';
 import type { HeadJournal } from './heads/journal';
 import { recordBranchTakeSet, type AlternateTakeSet } from './mcts/takes';
 import { nanoid } from './utils/nanoid';
-import { renderThrownChain } from './obs/index';
+import { Effect, Result } from 'effect';
+import { renderThrownChain, settle } from './obs/index';
 import { defaultLoopOrigin } from './scaffold/loop-origin';
 import type { ActorHandle } from './identity/actor-handle';
 
@@ -157,55 +158,54 @@ export interface BranchSettlement {
 }
 
 /** Detached turn-end settle for both backends; a dead live turn aborts the branch instead. */
-export async function settlePendingBranch(
+export function settlePendingBranch(
   deps: BranchSettleDeps, pending: BranchSettlement,
 ): Promise<BranchSettleOutcome> {
-  const { entry, turnId, liveText, settlementKey } = pending;
+  return settle(Effect.gen(function* () {
+    const { entry, turnId, liveText, settlementKey } = pending;
 
-  const fail = (reason: string): BranchSettleOutcome => {
+    const fail = (reason: string): BranchSettleOutcome => {
+      deps.broadcast({
+        type: 'branch_status', status: 'error', branchId: entry.id, task: entry.task, message: reason,
+      });
+
+      return { ok: false, reason };
+    };
+
+    const held = yield* Effect.result(Effect.tryPromise({ try: () => entry.handle, catch: (cause) => ({ cause }) }));
+
+    if (Result.isFailure(held)) return fail(renderThrownChain(held.failure));
+    const handle = held.success;
+
+    if (!turnId || !liveText.trim()) {
+      // Broadcast first so the terminal status lands whatever the abort does; an abort rejection propagates.
+      const failed = fail('the live turn did not complete, so there is nothing to compare against');
+      yield* Effect.promise(() => handle.abort('the live turn did not complete'));
+
+      return failed;
+    }
+
+    const report = yield* Effect.promise(() => handle.result);
+
+    const settlement = {
+      task: entry.task, report, turnId, sessionId: deps.sessionId, liveText,
+    };
+
+    const outcome = settleBranchIntoTakes(
+      deps.sql,
+      deps.actor,
+      settlementKey === undefined ? settlement : { ...settlement, settlementKey },
+    );
+
+    if (!outcome.ok) return fail(outcome.reason);
+
     deps.broadcast({
-      type: 'branch_status', status: 'error', branchId: entry.id, task: entry.task, message: reason,
+      type: 'branch_status', status: 'settled', branchId: entry.id, task: entry.task,
+      takeSetId: outcome.set.id, turnId,
     });
 
-    return { ok: false, reason };
-  };
-
-  let handle: SteerBranchHandle;
-
-  try {
-    handle = await entry.handle;
-  } catch (err) {
-    return fail(renderThrownChain({ cause: err }));
-  }
-
-  if (!turnId || !liveText.trim()) {
-    // Broadcast first so the terminal status lands whatever the abort does; an abort rejection propagates.
-    const failed = fail('the live turn did not complete, so there is nothing to compare against');
-    await handle.abort('the live turn did not complete');
-
-    return failed;
-  }
-
-  const report = await handle.result;
-
-  const settlement = {
-    task: entry.task, report, turnId, sessionId: deps.sessionId, liveText,
-  };
-
-  const outcome = settleBranchIntoTakes(
-    deps.sql,
-    deps.actor,
-    settlementKey === undefined ? settlement : { ...settlement, settlementKey },
-  );
-
-  if (!outcome.ok) return fail(outcome.reason);
-
-  deps.broadcast({
-    type: 'branch_status', status: 'settled', branchId: entry.id, task: entry.task,
-    takeSetId: outcome.set.id, turnId,
-  });
-
-  return outcome;
+    return outcome;
+  }));
 }
 
 /** Narrow so a recovery can settle from the head journal's view, which lacks a full `HeadReport`. */

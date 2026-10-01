@@ -58,6 +58,7 @@ export {
   diagnostics,
   setDiagnosticsSink,
   settleLogged,
+  settleLoggedSync,
   RESERVED_LOG_FIELDS,
   type LogEventName,
   type LogFields,

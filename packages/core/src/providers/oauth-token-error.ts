@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+
 const SPENT_REFRESH_CODES: readonly string[] = [
   'invalid_grant', 'invalid_refresh_token', 'token_expired', 'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused',
 ];
@@ -14,4 +16,9 @@ export class OAuthTokenError extends Error {
   get revoked(): boolean {
     return SPENT_REFRESH_CODES.includes(this.oauthError);
   }
+}
+
+export function unlessRevoked<A>(read: () => Promise<A>): Effect.Effect<A | 'revoked'> {
+  return Effect.tryPromise({ try: read, catch: (cause) => ({ cause }) }).pipe(Effect.catch((failed) => (
+    failed.cause instanceof OAuthTokenError && failed.cause.revoked ? Effect.succeed('revoked' as const) : Effect.die(failed.cause))));
 }

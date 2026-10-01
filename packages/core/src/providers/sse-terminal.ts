@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import { asFetchFunction } from './fetch-shim';
 
 /** End an SSE stream at its `data: [DONE]` message (producers may never close after it), forwarding original bytes.
@@ -33,14 +35,14 @@ export function watchSseTerminal(body: ReadableStream<Uint8Array>, read?: Uint8A
     }
   };
 
-  const takeBytes = (n: number): Uint8Array => {
+  const takeBytes = (n: number): Effect.Effect<Uint8Array> => {
     const out = new Uint8Array(n);
     let at = 0;
 
     while (at < n) {
       const head = chunks.shift();
 
-      if (head === undefined) throw new Error('sse-terminal: takeBytes past buffered end');
+      if (head === undefined) return Effect.die(new Error('sse-terminal: takeBytes past buffered end'));
 
       const want = Math.min(head.length, n - at);
 
@@ -52,7 +54,7 @@ export function watchSseTerminal(body: ReadableStream<Uint8Array>, read?: Uint8A
 
     buffered -= n;
 
-    return out;
+    return Effect.succeed(out);
   };
 
   const indexOfNewline = (): number => {
@@ -95,51 +97,47 @@ export function watchSseTerminal(body: ReadableStream<Uint8Array>, read?: Uint8A
   };
 
   return new ReadableStream<Uint8Array>({
-    async pull(controller) {
-      if (settled) return;
-
-      let newline = indexOfNewline();
-
-      while (newline < 0) {
-        let next: Awaited<ReturnType<typeof reader.read>>;
-
-        try {
-          next = await reader.read();
-        } catch (cause) {
-          // Release the lock before propagating the read failure.
-          settled = true;
-          release();
-
-          throw cause;
-        }
-
+    pull(controller) {
+      return settle(Effect.gen(function* () {
         if (settled) return;
 
-        if (next.done) {
-          if (buffered > 0) controller.enqueue(takeBytes(buffered));
+        let newline = indexOfNewline();
 
-          controller.close();
-          settled = true;
-          release();
+        while (newline < 0) {
+          // Release the lock before propagating a read failure.
+          const next = yield* Effect.onError(Effect.promise(() => reader.read()), () => Effect.sync(() => {
+            settled = true;
+            release();
+          }));
 
-          return;
+          if (settled) return;
+
+          if (next.done) {
+            if (buffered > 0) controller.enqueue(yield* takeBytes(buffered));
+
+            controller.close();
+            settled = true;
+            release();
+
+            return;
+          }
+
+          chunks.push(next.value);
+          buffered += next.value.length;
+          newline = indexOfNewline();
         }
 
-        chunks.push(next.value);
-        buffered += next.value.length;
-        newline = indexOfNewline();
-      }
+        const raw = yield* takeBytes(newline + 1);
+        const terminal = messageLine(raw.subarray(0, newline));
 
-      const raw = takeBytes(newline + 1);
-      const terminal = messageLine(raw.subarray(0, newline));
+        controller.enqueue(raw);
 
-      controller.enqueue(raw);
-
-      if (terminal) {
-        // Cancel before close: a closed stream swallows the rejection as success.
-        await cancelUpstream();
-        controller.close();
-      }
+        if (terminal) {
+          // Cancel before close: a closed stream swallows the rejection as success.
+          yield* Effect.promise(cancelUpstream);
+          controller.close();
+        }
+      }));
     },
     async cancel(reason) {
       if (settled) return;

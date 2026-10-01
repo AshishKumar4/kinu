@@ -46,7 +46,8 @@ import type { FallbackCooldowns } from './providers/fallback-cooldown';
 import { FallbackRoute, type CallFailure } from './providers/fallback-route';
 import { callAccountOf, type CallAccount } from './providers/quota';
 import { EGRESS_ROUTE_HEADER } from './execution/device-relay';
-import { diagnostics, renderThrownChain, toKinuError, type TurnTrace } from './obs/index';
+import { Effect, Result } from 'effect';
+import { diagnostics, renderThrownChain, settle, toKinuError, type TurnTrace } from './obs/index';
 import { beginModelOperation, type ModelOperation, type ModelOperationSink } from './events/model-call';
 import { failedToolOutcome, successfulToolOutcome, type ToolOutcome } from './tools/outcome';
 import { invalidToolCallRefusal, toolSchemaDialect, withToolSchemaDialect } from './tools/tool-schema';
@@ -741,25 +742,25 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           controller.enqueue(part);
         },
       }),
-      onStepFinish: async (step) => {
+      onStepFinish: (step) => settle(Effect.gen(function* () {
         stepSpans.finish(step);
 
-        try {
-          stepCount++;
-          await opts.persistStep?.(step.response.messages);
-          call.stepFinished(step, stepCount, meter?.take());
-        } catch (cause) {
-          call.stepFailure ??= { doing: 'recording a finished model step', cause };
-        }
+        const recorded = yield* Effect.result(Effect.tryPromise({
+          try: async () => {
+            stepCount++;
+            await opts.persistStep?.(step.response.messages);
+            call.stepFinished(step, stepCount, meter?.take());
+          },
+          catch: (cause) => ({ cause }),
+        }));
+
+        if (Result.isFailure(recorded)) call.stepFailure ??= { doing: 'recording a finished model step', cause: recorded.failure.cause };
 
         if (call.stepFailure !== null) return;
+        const hooked = yield* Effect.result(Effect.tryPromise({ try: async () => opts.onStep?.(step), catch: (cause) => ({ cause }) }));
 
-        try {
-          await opts.onStep?.(step);
-        } catch (cause) {
-          call.stepFailure ??= { doing: 'run the step hook', cause };
-        }
-      },
+        if (Result.isFailure(hooked)) call.stepFailure ??= { doing: 'run the step hook', cause: hooked.failure.cause };
+      })),
     });
 
     suppressDeferredRejections(result, () => call.interrupted || (opts.signal?.aborted ?? false));

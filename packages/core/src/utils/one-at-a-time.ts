@@ -22,7 +22,7 @@ export function oneAtATime<T>(load: () => Promise<T>): () => Promise<T> {
       return start();
     };
 
-    next ??= running.then(after, after);
+    next ??= Promise.allSettled([running]).then(after);
 
     return next;
   };

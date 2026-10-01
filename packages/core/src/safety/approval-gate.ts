@@ -595,7 +595,7 @@ export function createShellSession({ home, userRoots, keepsCwd, stored }: ShellS
     home,
     userRoots,
     serial<R>(call: () => Promise<R>, detach?: AbortSignal): Promise<R> {
-      const next = tail.then(call, call);
+      const next = Promise.allSettled([tail]).then(() => call());
       tail = detach === undefined ? next : Promise.race([next, aborted(detach)]);
 
       return next;

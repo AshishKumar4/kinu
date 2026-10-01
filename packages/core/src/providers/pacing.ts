@@ -8,7 +8,7 @@ import { abortCause } from '../utils/abort';
 
 /** Sleep that an abort ends, rejecting with the signal's reason. */
 export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) return Promise.reject(abortCause(signal));
+  if (signal?.aborted) return settle(Effect.die(abortCause(signal)));
   const { promise, resolve, reject } = Promise.withResolvers<void>();
 
   const timer = setTimeout(() => {

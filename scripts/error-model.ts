@@ -68,6 +68,22 @@ export const DECLARED = new Map<string, Declaration>([
     within: ['ModelTestResult', 'ModelTestResultSchema', 'testModel', 'failed'],
     reason: '`ModelTestResult`, the model picker\'s test verdict over HTTP and the CLI; `ok` is its wire field',
   }],
+  ['packages/core/src/chat.ts', {
+    mechanisms: ['throw', 'catch', 'promise-rejection'],
+    within: ['runChat', 'settleModelOperation', 'suppressDeferredRejections'],
+    reason: '`runChat` is an async generator: its consumer receives a failure from next(), the iterator protocol; '
+      + 'the AI SDK\'s deferred accessors are observed detached, so a rejection there is never unhandled',
+  }],
+  ['packages/core/src/providers/model-invocation.ts', {
+    mechanisms: ['throw', 'catch'],
+    within: ['streamTextReported'],
+    reason: 'an async generator: its consumer receives the stream\'s failure from next(), the iterator protocol',
+  }],
+  ['packages/core/src/identity/fork-transfer.ts', {
+    mechanisms: ['throw'],
+    within: ['forkTransferFrames', 'carriedPayloads'],
+    reason: 'the fork-frame stream is an async generator: its receiver learns a refused frame from next()',
+  }],
   ['packages/core/src/tools/outcome.ts', {
     mechanisms: ['result-literal', 'result-type'],
     reason: '`ToolOutcome`, the recorded outcome of a native tool invocation; `success` is its stored field',

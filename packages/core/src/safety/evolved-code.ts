@@ -1,4 +1,6 @@
 import * as acorn from 'acorn';
+import { Effect, Result } from 'effect';
+import { settleSync } from '../obs/effect';
 import * as v from 'valibot';
 
 /** Evolved code runs as the body of an async function in the sandbox, so a script form comes first. */
@@ -9,15 +11,17 @@ const SCRIPT: acorn.Options = {
 const MODULE: acorn.Options = { ecmaVersion: 'latest', sourceType: 'module', allowAwaitOutsideFunction: true };
 
 export function parseEvolvedCode(source: string): acorn.Program | null {
-  for (const options of [SCRIPT, MODULE]) {
-    try {
-      return acorn.parse(source, options);
-    } catch (cause) {
-      if (!(cause instanceof SyntaxError)) throw cause;
-    }
-  }
+  return settleSync(Effect.gen(function* () {
+    for (const options of [SCRIPT, MODULE]) {
+      const parsed = yield* Effect.result(Effect.try({ try: () => acorn.parse(source, options), catch: (cause) => ({ cause }) }));
 
-  return null;
+      if (Result.isSuccess(parsed)) return parsed.success;
+
+      if (!(parsed.failure.cause instanceof SyntaxError)) return yield* Effect.die(parsed.failure.cause);
+    }
+
+    return null;
+  }));
 }
 
 /** Every acorn node carries a type and its span. */

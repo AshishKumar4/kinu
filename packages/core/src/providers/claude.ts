@@ -4,13 +4,13 @@ import { APICallError, type LanguageModel } from 'ai';
 import * as v from 'valibot';
 import { listAnthropicModels, ANTHROPIC_DEFAULT_MODEL, ANTHROPIC_FAST_MODEL, ANTHROPIC_MAX_BREAKPOINTS } from './anthropic';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
-import { OAuthTokenError } from './oauth-token-error';
+import { unlessRevoked } from './oauth-token-error';
 import { quotaWindowText, withCallAccount } from './quota';
 import { withRateLimitRetry } from './rate-limit-retry';
 import type { AuthResolution, ModelProvider, ProviderDeps } from './types';
 import { accountOf } from '../credentials/accounts';
 import { Effect } from 'effect';
-import { diagnostics, KinuError, settleSync, tolerate } from '../obs/index';
+import { diagnostics, KinuError, settle, settleSync, tolerate } from '../obs/index';
 import { sha256Hex } from '../safety/argument-digest';
 import { JsonObjectSchema, JsonValueSchema, parseJsonObject, parseJsonValue } from '../utils/json';
 import { xxHash64 } from '../utils/xxhash64';
@@ -288,15 +288,15 @@ function claudeCodeBody(body: SdkBody, version: string, sessionId: string) {
 type WireBody = ReturnType<typeof claudeCodeBody>;
 
 /** A string, so the rate-limit wrapper can replay it. */
-function attested(body: WireBody): string {
+function attested(body: WireBody): Effect.Effect<string, KinuError> {
   const text = JSON.stringify(body);
   const marker = text.indexOf(BILLING_MARKER);
   const placeholder = marker === -1 ? -1 : text.indexOf(CCH_PLACEHOLDER, marker + BILLING_MARKER.length);
 
-  if (placeholder === -1) throw new KinuError('bad_input', 'a Claude Code body carries its billing block first in system');
+  if (placeholder === -1) return Effect.fail(new KinuError('bad_input', 'a Claude Code body carries its billing block first in system'));
   const cch = (xxHash64(new TextEncoder().encode(text), CCH_SEED) & 0xfffffn).toString(16).padStart(5, '0');
 
-  return `${text.slice(0, placeholder)}cch=${cch}${text.slice(placeholder + CCH_PLACEHOLDER.length)}`;
+  return Effect.succeed(`${text.slice(0, placeholder)}cch=${cch}${text.slice(placeholder + CCH_PLACEHOLDER.length)}`);
 }
 
 function claudeSessionId(affinity: string): string {
@@ -337,28 +337,30 @@ function streamWithLocalToolNames(body: ReadableStream<Uint8Array>): ReadableStr
   }));
 }
 
-async function withLocalToolNames(response: Response): Promise<Response> {
-  if (!response.ok || response.body === null) return response;
+function withLocalToolNames(response: Response): Effect.Effect<Response, KinuError> {
+  const body = response.body;
+
+  if (!response.ok || body === null) return Effect.succeed(response);
   const init = { status: response.status, statusText: response.statusText, headers: response.headers };
 
   if ((response.headers.get('content-type') ?? '').includes('text/event-stream')) {
-    return new Response(streamWithLocalToolNames(response.body), init);
+    return Effect.succeed(new Response(streamWithLocalToolNames(body), init));
   }
 
-  const reply = parseJsonObject(await response.text());
+  return Effect.flatMap(Effect.promise(() => response.text()), (text) => {
+    const reply = parseJsonObject(text);
 
-  if (!v.is(MessageReplySchema, reply)) throw new KinuError('io', 'api.anthropic.com answered a message without its content blocks');
-  const content = reply.content.map((block) => block.type === 'tool_use' && block.name !== undefined ? { ...block, name: localToolName(block.name) } : block);
+    if (!v.is(MessageReplySchema, reply)) return Effect.fail(new KinuError('io', 'api.anthropic.com answered a message without its content blocks'));
+    const content = reply.content.map((block) => block.type === 'tool_use' && block.name !== undefined ? { ...block, name: localToolName(block.name) } : block);
 
-  return new Response(JSON.stringify({ ...reply, content }), init);
+    return Effect.succeed(new Response(JSON.stringify({ ...reply, content }), init));
+  });
 }
 
-function authorizationOf(auth: AuthResolution): string {
+function authorizationOf(auth: AuthResolution): Effect.Effect<string, KinuError> {
   const entry = Object.entries(auth.headers).find(([name]) => name.toLowerCase() === 'authorization');
 
-  if (entry === undefined) throw new KinuError('bad_input', 'a Claude login resolves to an Authorization header');
-
-  return entry[1];
+  return entry === undefined ? Effect.fail(new KinuError('bad_input', 'a Claude login resolves to an Authorization header')) : Effect.succeed(entry[1]);
 }
 
 function refusedResponse(message: string): Response {
@@ -373,6 +375,7 @@ interface ClaudeCall {
   readonly modelId: string;
   readonly version: ClaudeCodeVersion;
   readonly sessionId: string;
+  readonly refusingSpentUsage: (paid: string) => typeof fetch;
 }
 
 interface SdkRequest {
@@ -381,13 +384,8 @@ interface SdkRequest {
   readonly signal: AbortSignal | null;
 }
 
-async function resolveLogin(deps: ProviderDeps, rejected: AuthResolution | null): Promise<AuthResolution | 'revoked' | null> {
-  try {
-    return await deps.getAuth(CLAUDE_CRED_KEY, rejected === null ? undefined : { rejected: rejected.headers });
-  } catch (cause) {
-    if (cause instanceof OAuthTokenError && cause.revoked) return 'revoked';
-    throw cause;
-  }
+function resolveLogin(deps: ProviderDeps, rejected: AuthResolution | null): Effect.Effect<AuthResolution | 'revoked' | null> {
+  return unlessRevoked(() => deps.getAuth(CLAUDE_CRED_KEY, rejected === null ? undefined : { rejected: rejected.headers }));
 }
 
 function deadLogin(call: ClaudeCall, reason: string): Response {
@@ -439,79 +437,77 @@ async function usageLimitReached(call: ClaudeCall, response: Response, paid: str
   });
 }
 
-async function sendClaudeCode(call: ClaudeCall, request: SdkRequest, auth: AuthResolution): Promise<Response> {
-  const { body } = request;
-  const version = call.version.current();
-  const betas = claudeCodeBetas(body, request.betas);
-  const headers = claudeCodeHeaders({ authorization: authorizationOf(auth), version, betas, sessionId: call.sessionId });
-  const paid = auth.credentialKey ?? CLAUDE_CRED_KEY;
-  const transport = call.deps.fetch ?? fetch;
+function sendClaudeCode(call: ClaudeCall, request: SdkRequest, auth: AuthResolution): Effect.Effect<Response, KinuError> {
+  return Effect.gen(function* () {
+    const { body } = request;
+    const version = call.version.current();
+    const betas = claudeCodeBetas(body, request.betas);
+    const headers = claudeCodeHeaders({ authorization: yield* authorizationOf(auth), version, betas, sessionId: call.sessionId });
+    const paid = auth.credentialKey ?? CLAUDE_CRED_KEY;
 
-  const refusingSpentUsage = asFetchFunction(async (input, init) => {
-    const response = await transport(input, init);
-    const reached = await usageLimitReached(call, response, paid);
+    const retrying = withRateLimitRetry(call.refusingSpentUsage(paid), {
+      provider: 'claude',
+      modelId: call.modelId,
+      lane: paid,
+      ...(call.deps.onProviderWait !== undefined && { onWait: call.deps.onProviderWait }),
+    });
 
-    if (reached !== null) throw reached;
+    const attestedBody = yield* attested(claudeCodeBody(body, version, call.sessionId));
 
-    return response;
+    const sent = yield* Effect.promise(() => retrying(CLAUDE_MESSAGES_URL, {
+      method: 'POST',
+      headers,
+      body: attestedBody,
+      signal: request.signal,
+    }));
+
+    return withCallAccount(sent, 'claude', paid);
   });
-
-  const retrying = withRateLimitRetry(refusingSpentUsage, {
-    provider: 'claude',
-    modelId: call.modelId,
-    lane: paid,
-    ...(call.deps.onProviderWait !== undefined && { onWait: call.deps.onProviderWait }),
-  });
-
-  const sent = await retrying(CLAUDE_MESSAGES_URL, {
-    method: 'POST',
-    headers,
-    body: attested(claudeCodeBody(body, version, call.sessionId)),
-    signal: request.signal,
-  });
-
-  return withCallAccount(sent, 'claude', paid);
 }
 
-async function sendAtAcceptedVersion(call: ClaudeCall, request: SdkRequest, auth: AuthResolution): Promise<Response> {
-  const response = await sendClaudeCode(call, request, auth);
+function sendAtAcceptedVersion(call: ClaudeCall, request: SdkRequest, auth: AuthResolution): Effect.Effect<Response, KinuError> {
+  return Effect.gen(function* () {
+    const response = yield* sendClaudeCode(call, request, auth);
 
-  if (response.ok || response.status === 401) return response;
+    if (response.ok || response.status === 401) return response;
 
-  return call.version.adopt(await response.clone().text()) ? sendClaudeCode(call, request, auth) : response;
+    return call.version.adopt(yield* Effect.promise(() => response.clone().text())) ? yield* sendClaudeCode(call, request, auth) : response;
+  });
 }
 
-async function claudeCall(call: ClaudeCall, init: RequestInit): Promise<Response> {
-  const login = await resolveLogin(call.deps, null);
+function claudeCall(call: ClaudeCall, init: RequestInit): Effect.Effect<Response, KinuError> {
+  return Effect.gen(function* () {
+    const login = yield* resolveLogin(call.deps, null);
 
-  if (login === 'revoked') return deadLogin(call, 'the Claude login\'s refresh token was revoked');
+    if (login === 'revoked') return deadLogin(call, 'the Claude login\'s refresh token was revoked');
 
-  if (login === null) {
-    diagnostics.failure('credential.claude_absent', new KinuError('missing', 'no Claude login; the call was refused before it left'), { model: call.modelId });
+    if (login === null) {
+      diagnostics.failure('credential.claude_absent', new KinuError('missing', 'no Claude login; the call was refused before it left'), { model: call.modelId });
 
-    return refusedResponse(NOT_CONNECTED);
-  }
+      return refusedResponse(NOT_CONNECTED);
+    }
 
-  const text = v.safeParse(v.string(), init.body);
-  const body = text.success ? parseJsonObject(text.output) : null;
+    const text = v.safeParse(v.string(), init.body);
+    const body = text.success ? parseJsonObject(text.output) : null;
 
-  if (!v.is(SdkBodySchema, body)) throw new KinuError('bad_input', 'the AI SDK sent a body that is not a Messages request');
+    if (!v.is(SdkBodySchema, body)) return yield* new KinuError('bad_input', 'the AI SDK sent a body that is not a Messages request');
 
-  const request: SdkRequest = {
-    body,
-    betas: (copyHeaders(init.headers).get('anthropic-beta') ?? '').split(','),
-    signal: init.signal ?? null,
-  };
+    const request: SdkRequest = {
+      body,
+      betas: (copyHeaders(init.headers).get('anthropic-beta') ?? '').split(','),
+      signal: init.signal ?? null,
+    };
 
-  const first = await sendAtAcceptedVersion(call, request, login);
+    const first = yield* sendAtAcceptedVersion(call, request, login);
 
-  if (first.status !== 401) return withLocalToolNames(first);
-  const refreshed = await resolveLogin(call.deps, login);
+    if (first.status !== 401) return yield* withLocalToolNames(first);
+    const refreshed = yield* resolveLogin(call.deps, login);
 
-  if (refreshed === 'revoked' || refreshed === null) return deadLogin(call, 'the Claude login was refused and could not be refreshed');
-  const second = await sendAtAcceptedVersion(call, request, refreshed);
+    if (refreshed === 'revoked' || refreshed === null) return deadLogin(call, 'the Claude login was refused and could not be refreshed');
+    const second = yield* sendAtAcceptedVersion(call, request, refreshed);
 
-  return second.status === 401 ? deadLogin(call, 'api.anthropic.com refused the refreshed Claude login') : withLocalToolNames(second);
+    return second.status === 401 ? deadLogin(call, 'api.anthropic.com refused the refreshed Claude login') : yield* withLocalToolNames(second);
+  });
 }
 
 export function createClaudeProvider(): ModelProvider {
@@ -530,8 +526,19 @@ export function createClaudeProvider(): ModelProvider {
       return settleSync(RETIRED_CLI_MODELS.has(modelId)
         ? Effect.fail(new KinuError('bad_input', `Claude has no model ${modelId}: that name came from the retired claude binary. Pick a Claude model with /model.`))
         : Effect.sync(() => {
-          const call: ClaudeCall = { deps, modelId, version, sessionId: claudeSessionId(deps.sessionAffinity) };
-          const provider = createAnthropic({ apiKey: 'oauth-placeholder', fetch: asFetchFunction((_input, init) => claudeCall(call, init ?? {})) });
+          const transport = deps.fetch ?? fetch;
+
+          const call: ClaudeCall = {
+            deps, modelId, version, sessionId: claudeSessionId(deps.sessionAffinity),
+            refusingSpentUsage: (paid) => asFetchFunction((input, init) => settle(Effect.gen(function* () {
+              const response = yield* Effect.promise(() => transport(input, init));
+              const reached = yield* Effect.promise(() => usageLimitReached(call, response, paid));
+
+              return reached === null ? response : yield* Effect.die(reached);
+            }))),
+          };
+
+          const provider = createAnthropic({ apiKey: 'oauth-placeholder', fetch: asFetchFunction((_input, init) => settle(claudeCall(call, init ?? {}))) });
 
           return provider.languageModel(modelId);
         }));
