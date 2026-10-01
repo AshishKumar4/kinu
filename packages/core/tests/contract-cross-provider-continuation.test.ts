@@ -10,7 +10,7 @@ import {
   isPortableToolCallId,
   ANTHROPIC_CRED_KEY,
   parseJsonObject,
-  type ChatEvent, type JsonObject, type ProviderDeps, type AuthResolution,
+  type ChatEvent, type JsonObject, type ModelCallDeps, type AuthResolution,
 } from '../src/index';
 import { createMockFetch, type MockFetchHandle, type RecordedRequest } from '@kinu.run/test-utils';
 
@@ -36,11 +36,12 @@ const COMPAT_REASONING = 'I should use the lookup tool.';
 
 const COMPAT_BASE = 'https://compat.example/v1';
 
-function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ProviderDeps {
+function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ModelCallDeps {
   const store = new Map(Object.entries(creds));
 
   return {
     env: {},
+    sessionAffinity: 'kinu-test',
     fetch: fetchFn,
     async getAuth(key) { return store.get(key) ?? null; },
     async hasCredential(key) { return store.has(key); },

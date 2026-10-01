@@ -2,18 +2,24 @@ import { generateText, streamText } from 'ai';
 import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials';
 import {
+  asFetchFunction,
   buildSystemPromptSync,
   DEFAULT_WORKERS_AI_MODEL_ID,
   DEFAULT_WORKERS_AI_MODEL_SPEC,
   defaultSpecFor,
   parseModelSpec,
   KINU_USER_AGENT,
+  requestUrl,
 } from '@kinu.run/core';
 import { createMockFetch, createTestRuntime, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, present } from '@kinu.run/test-utils';
 import { createAgentProviderRegistry, type AgentProviderRegistry } from '../src/providers/agent-registry';
 import type { ModelMenuEntry } from '../src/user/available-models';
 import type { CredentialSummary } from '../src/user/user-do';
+import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
+import { serveFamily } from './helpers/api';
+import { unreachableNamespace, workerContext } from './helpers/bindings';
 import { platformGatewayEnv, stubAiBinding, TEST_GATEWAY_URL } from './helpers/platform-gateway';
+import { createTestUserDO, TEST_CREDENTIAL_ENCRYPTION_KEY, testOwner } from './helpers/user-do';
 
 /** Minimal in-memory UserDO stub satisfying the methods agent-registry calls. */
 function fakeUserDOStub(
@@ -42,10 +48,10 @@ describe('AgentProviderRegistry composition', () => {
 
     const reg = createAgentProviderRegistry({
       env: {}, userDO: fakeUserDOStub({ 'opencode-go.bearer': { Authorization: 'Bearer hosted-key' } }),
-      fetch: mock.fetch, sessionAffinity: 'kinu-hosted-conversation',
+      fetch: mock.fetch,
     });
 
-    const model = reg.resolveModel('opencode-go/muse-spark-1.3-contributor');
+    const model = reg.resolveModel('opencode-go/muse-spark-1.3-contributor', 'kinu-hosted-conversation');
 
     await generateText({ model, prompt: 'hello' });
     await generateText({ model, prompt: 'continue' });
@@ -145,7 +151,7 @@ describe('AgentProviderRegistry composition', () => {
     // KINU-001(b): a bound AI alone routes nothing directly; the eval identity's email is not even an input.
     const unflagged = createAgentProviderRegistry({ env: { AI: directBinding }, userDO: fakeUserDOStub() });
 
-    await expect(generateText({ model: unflagged.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6'), prompt: 'reply' })).rejects.toThrow();
+    await expect(generateText({ model: unflagged.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', 'kinu-test'), prompt: 'reply' })).rejects.toThrow();
     expect(calls).toEqual([]);
 
     const env = {
@@ -155,7 +161,7 @@ describe('AgentProviderRegistry composition', () => {
 
     const reg = createAgentProviderRegistry({ env, userDO: fakeUserDOStub() });
     expect(await present(reg.registry.get('workers-ai'), 'the workers-ai provider').isAvailable(reg.deps)).toBe(true);
-    const model = reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6');
+    const model = reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6', 'kinu-test');
     const generated = await generateText({ model, prompt: 'reply' });
     expect(generated.text).toBe('direct binding');
     const streamed = streamText({ model, prompt: 'reply again' });
@@ -328,5 +334,47 @@ describe('the model a new workspace starts on', () => {
   test('no native model and no choice resolves to nothing rather than a BYO guess', () => {
     expect(defaultSpecFor(null, servable([byo]))).toBeNull();
     expect(defaultSpecFor('workers-ai/@cf/meta/llama-4', servable([byo]))).toBeNull();
+  });
+});
+
+describe("Settings' model test", () => {
+  test('a test of an OpenCode Go model names a conversation, as OpenCode Go requires', async () => {
+    const userId = '0123456789abcdef0123456789abcdef';
+    const user = createTestUserDO({ durableObjectId: userId });
+    const owner = await testOwner();
+    const original = globalThis.fetch;
+    const sessions: (string | null)[] = [];
+
+    await user.userDO.ensureProfile(owner, 'owner@example.test');
+    await user.userDO.setCredential(owner, 'opencode-go.bearer', { kind: 'bearer', token: 'go-key' });
+    globalThis.fetch = asFetchFunction(async (input, init) => {
+      if (requestUrl(input).includes('models.dev')) return Response.json(OPENCODE_GO_CATALOG);
+      sessions.push(new Headers(init?.headers).get('x-opencode-session'));
+
+      return new Response('refused by the test', { status: 400 });
+    });
+
+    try {
+      const env: UserRoutesEnv<string> = {
+        CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+        UserDO: { idFromName: (name) => name, get: () => user.userDO },
+        OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
+      };
+
+      const response = await serveFamily(userRoutes, { identity: { userId, email: 'owner@example.test', sub: 'model-test' }, ctx: workerContext() })(
+        new Request('https://kinu.example.com/api/user/models/test', {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ spec: 'opencode-go/muse-spark-1.3-contributor' }),
+        }),
+        env,
+      );
+
+      expect(response?.status).toBe(200);
+      expect(sessions).toHaveLength(1);
+      expect(sessions[0]).toStartWith('kinu-');
+    } finally {
+      globalThis.fetch = original;
+      await user.joinFibers();
+      user.close();
+    }
   });
 });

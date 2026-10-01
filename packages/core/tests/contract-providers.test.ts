@@ -11,7 +11,7 @@ import {
   OAuthTokenError,
   CODEX_CRED_KEY,
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY,
-  type ProviderDeps, type AuthResolution,
+  type ModelCallDeps, type ProviderDeps, type AuthResolution,
 } from '../src/index';
 import {
   createMockFetch, ANTHROPIC_MESSAGE_BODY, CHAT_COMPLETION_BODY, OPENAI_RESPONSES_BODY, present } from '@kinu.run/test-utils';
@@ -34,11 +34,12 @@ const CodexFailureSurfaceSchema = v.object({
 });
 
 
-function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ProviderDeps {
+function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ModelCallDeps {
   const store = new Map(Object.entries(creds));
 
   return {
     env: {},
+    sessionAffinity: 'kinu-test',
     fetch: fetchFn,
     async getAuth(key) { return store.get(key) ?? null; },
     async hasCredential(key) { return store.has(key); },
@@ -297,8 +298,9 @@ describe('Codex provider contract', () => {
     let calls = 0;
     const refusedNamed: string[] = [];
 
-    const deps: ProviderDeps = {
+    const deps: ModelCallDeps = {
       env: {},
+      sessionAffinity: 'kinu-test',
       async getAuth(key, opts) {
         if (key !== CODEX_CRED_KEY) return null;
 
@@ -338,8 +340,9 @@ describe('Codex provider contract', () => {
     // reconnect remedy.
     let wireCalls = 0;
 
-    const deps: ProviderDeps = {
+    const deps: ModelCallDeps = {
       env: {},
+      sessionAffinity: 'kinu-test',
       fetch: asFetchFunction(async () => {
         wireCalls += 1;
 

@@ -18,6 +18,7 @@ import { requestUrl } from '@kinu.run/core';
 
 const providerDeps = (env: Parameters<typeof resolvePlatformGateway>[0]) => ({
   env,
+  sessionAffinity: 'kinu-test',
   getAuth: async () => null,
   hasCredential: async () => false,
 });
@@ -282,7 +283,7 @@ describe('user-billed providers stay off the platform binding', () => {
 
     for (const provider of [createWorkersAIProvider(), createMyGatewayProvider()]) {
       const model = provider.createModel('@cf/test/model', {
-        env, getAuth: async () => null, hasCredential: async () => false,
+        env, sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false,
       });
 
       // No user credential: the credential path answers 401, never falls back to the platform
@@ -298,6 +299,7 @@ describe('user-billed providers stay off the platform binding', () => {
 
     const deps = {
       env: platformGatewayEnv(stub),
+      sessionAffinity: 'kinu-test',
       getAuth: async () => userAuth,
       hasCredential: async () => true,
       fetch: asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {

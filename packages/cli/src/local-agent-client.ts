@@ -89,7 +89,7 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
     throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
   }
 
-  const { llmConfig, resolver } = createConfiguredLocalModelResolver({ ...opts, agentName: name });
+  const { llmConfig, resolver } = createConfiguredLocalModelResolver(opts);
   const providerCredentials = resolveProviderCredentials();
   const oauthStore = createOAuthStore();
   const db = new Database(dbPath);

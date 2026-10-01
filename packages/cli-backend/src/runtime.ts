@@ -336,7 +336,7 @@ export function createCLIRuntime(
 
   let modelRouteFactory = (resolution: ModelRouteResolution): LLM => createLocalProviderLLM({
     llm: config.llm,
-    sessionAffinity: agentAffinityKey(actor.name),
+    conversation: agentAffinityKey(actor.name),
     credentials: config.providerCredentials,
     oauthStore: config.oauthStore,
     spec: resolution.model,

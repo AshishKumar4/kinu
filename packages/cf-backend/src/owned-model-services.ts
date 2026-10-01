@@ -88,7 +88,6 @@ export class OwnedModelServices<Id = DurableObjectId> {
       ownerUserId: userId,
       userDO: userDOStub ? { stub: userDOStub, caller: this.options.getUserCaller } : null,
       appTitle: this.options.appTitle,
-      sessionAffinity: this.affinityKey,
       onProviderWait: this.options.onProviderWait,
       accountFor: this.options.accountFor,
       ...(this.options.currentTurn !== undefined && { currentTurn: this.options.currentTurn }),
@@ -103,7 +102,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
     const normalized = registry.normalizeSpecSync(spec);
 
     if (this.modelCache?.spec === normalized) return this.modelCache.model;
-    const model = registry.resolveModel(normalized);
+    const model = registry.resolveModel(normalized, this.affinityKey);
     this.modelCache = { spec: normalized, model };
 
     return model;
@@ -179,7 +178,7 @@ export class OwnedModelServices<Id = DurableObjectId> {
       this.judgeSpecCache = { key, spec };
     }
 
-    return registry.resolveModel(this.judgeSpecCache.spec);
+    return registry.resolveModel(this.judgeSpecCache.spec, this.affinityKey);
   }
 
   /** Key-less by default; a stored `tavily` credential upgrades search. */

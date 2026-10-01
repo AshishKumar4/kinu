@@ -38,7 +38,7 @@ export interface UserCredentialSource {
 
 /** Taken from the consuming provider: the direct path calls `run`, which a gateway-only env lacks. */
 type DirectAiBinding =
-  NonNullable<ProviderEnv['AI']> & NonNullable<Parameters<typeof createWorkersAIProvider>[1]>;
+  NonNullable<ProviderEnv['AI']> & NonNullable<Parameters<typeof createWorkersAIProvider>[0]>;
 
 function isDirectAiBinding(binding: NonNullable<ProviderEnv['AI']>): binding is DirectAiBinding {
   return 'run' in binding;
@@ -53,7 +53,6 @@ export interface AgentProviderDeps {
   /** Fires before a provider-mandated wait; the actor emits `provider_wait` so a rate-limited turn reads as waiting. */
   onProviderWait?: (info: ProviderWaitInfo) => void;
   appTitle?: string;
-  sessionAffinity?: string;
   accountFor?: (providerId: string) => string | undefined;
   currentTurn?: (actor: ActorReference) => string | null;
   codexContainer?: typeof fetch;
@@ -62,7 +61,8 @@ export interface AgentProviderDeps {
 export interface AgentProviderRegistry {
   registry: ProviderRegistry;
   deps: ProviderDeps;
-  resolveModel(spec: string): LanguageModel;
+  /** `conversation`: the affinity key (`agentAffinityKey`) the calls are routed and cached under. */
+  resolveModel(spec: string, conversation: string): LanguageModel;
   /** Empty input is the platform default (native Workers AI), never a survey of stored BYO credentials. Also accepts bare `@cf/...` and bare model ids. */
   normalizeSpecSync(specOrNull?: string | null): string;
 }
@@ -103,7 +103,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     deploymentBinding = opts.env.AI;
   }
 
-  registry.register(createWorkersAIProvider({ sessionAffinity: opts.sessionAffinity }, deploymentBinding));
+  registry.register(createWorkersAIProvider(deploymentBinding));
   registry.register(createMyGatewayProvider());
   registry.register(createAIGatewayProvider());
 
@@ -155,7 +155,6 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
 
   const deps: ProviderDeps = {
     env: opts.env,
-    sessionAffinity: opts.sessionAffinity,
     getAuth,
     hasCredential: async (key: string) => (await credentialKeys()).includes(key),
     listCredentialKeys: credentialKeys,
@@ -191,8 +190,8 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     registry,
     deps,
 
-    resolveModel(spec): LanguageModel {
-      return registry.resolve(spec, deps);
+    resolveModel(spec, conversation): LanguageModel {
+      return registry.resolve(spec, { ...deps, sessionAffinity: conversation });
     },
 
     normalizeSpecSync(specOrNull): string {

@@ -292,6 +292,7 @@ describe('OpenCode provider', () => {
 
     const model = provider.createModel('openai/gpt-5.6-sol', {
       env: {},
+      sessionAffinity: 'kinu-test',
       getAuth: async () => null,
       hasCredential: async () => false,
     });
@@ -308,7 +309,8 @@ describe('OpenCode provider', () => {
     await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
 
     const model = provider.createModel('openai/gpt-5.6-sol', {
-      env: {}, getAuth: async () => null, hasCredential: async () => false,
+      env: {},
+      sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false,
     });
 
     await tryCall(model);
@@ -336,7 +338,8 @@ describe('OpenCode provider', () => {
     await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
 
     const model = provider.createModel('openai/gpt-5.6-sol', {
-      env: {}, getAuth: async () => null, hasCredential: async () => false,
+      env: {},
+      sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false,
     });
 
     await generateText({ model, prompt: 'hello', maxOutputTokens: 16, maxRetries: 0 });
@@ -372,7 +375,7 @@ describe('OpenCode provider', () => {
     }), '']).join('\n');
 
     const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl, spawn: makeSpawn(listed) }));
-    const deps = { env: {}, getAuth: async () => null, hasCredential: async () => false };
+    const deps = { env: {}, sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false };
 
     await expect(generateText({ model: provider.createModel('opencode-go/glm-5', deps), prompt: 'hi', maxRetries: 0 })).rejects.toThrow(/rate-limited until/);
     const zen = await generateText({ model: provider.createModel('opencode/glm-5', deps), prompt: 'hi', maxRetries: 0 });
@@ -390,7 +393,8 @@ describe('OpenCode provider', () => {
     await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
 
     const model = provider.createModel('openai/gpt-5.6-sol', {
-      env: {}, getAuth: async () => null, hasCredential: async () => false,
+      env: {},
+      sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false,
     });
 
     // An endpoint with storage off resolves no item id, so a step sent by reference reaches the model as nothing.
@@ -427,7 +431,8 @@ describe('OpenCode provider', () => {
     await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
 
     const model = provider.createModel('openai/gpt-5.4-nano', {
-      env: {}, getAuth: async () => null, hasCredential: async () => false,
+      env: {},
+      sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false,
     });
 
     await tryCall(model);
@@ -458,7 +463,8 @@ describe('OpenCode provider', () => {
     await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
 
     const model = provider.createModel('openai/sdk-routed-model', {
-      env: {}, getAuth: async () => null, hasCredential: async () => false,
+      env: {},
+      sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false,
     });
 
     await tryCall(model);
@@ -485,7 +491,8 @@ describe('OpenCode provider', () => {
       const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
 
       const model = provider.createModel(c.id, {
-        env: {}, getAuth: async () => null, hasCredential: async () => false,
+        env: {},
+        sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false,
       });
 
       await tryCall(model);
@@ -498,6 +505,7 @@ describe('OpenCode provider', () => {
     const provider = createOpenCodeProvider(makeProviderOpts());
     expect(() => provider.createModel('invalid-no-slash', {
       env: {},
+      sessionAffinity: 'kinu-test',
       getAuth: async () => null,
       hasCredential: async () => false,
     })).toThrow('Invalid opencode model id: invalid-no-slash');

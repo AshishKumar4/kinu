@@ -3979,7 +3979,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       judge: (spec) => ({
         spec,
         llm: createCompletionLLM({
-          model: registry.resolveModel(spec), spec, stage: 'judge',
+          model: registry.resolveModel(spec, this.ownedModelServices.affinityKey), spec, stage: 'judge',
           // Cross-vendor judge spend: the actor's catalog rate cannot price it and step telemetry
           // never saw it.
           spend: {

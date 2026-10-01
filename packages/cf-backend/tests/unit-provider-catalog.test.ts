@@ -57,7 +57,7 @@ describe('agent registry × models.dev catalog', () => {
     });
 
     expect(reg.normalizeSpecSync('groq/llama-3.3-70b-versatile')).toBe('groq/llama-3.3-70b-versatile');
-    expect(reg.resolveModel('groq/llama-3.3-70b-versatile')).toBeDefined();
+    expect(reg.resolveModel('groq/llama-3.3-70b-versatile', 'kinu-test')).toBeDefined();
   });
 });
 

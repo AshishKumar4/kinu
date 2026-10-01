@@ -422,7 +422,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const spec = 'opencode-go/muse-spark-1.3-contributor';
 
     const model = registry.resolve(spec, {
-      env: {}, fetch: mock.fetch,
+      env: {}, sessionAffinity: 'kinu-test', fetch: mock.fetch,
       getAuth: async () => ({ headers: { Authorization: 'Bearer key' } }),
       hasCredential: async () => true,
       listCredentialKeys: async () => ['opencode-go.bearer'],
