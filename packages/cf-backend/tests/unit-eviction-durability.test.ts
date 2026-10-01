@@ -467,20 +467,33 @@ describe('a sandbox lifecycle failure', () => {
 });
 
 // Devbox D56: a box decides its own rest. The workspace's work reaches it as use, told as a turn's claim moves,
-// so a box whose workspace is idle never calls it (its old once-a-minute ask rebuilt the workspace each time).
+// so a box whose workspace is idle never calls it (its old once-a-minute ask rebuilt the workspace each time). Only
+// a box this activation reached hears it: every notice is an activation of the box's object.
 describe("the workspace's work reaches its box as use", () => {
-  test('a turn tells its box when it is admitted and when it settles, and an idle workspace tells it nothing', async () => {
-    const boxesTold: string[] = [];
-    const harness = orchestratorHarness(undefined, { container: true, boxesTold });
-    const idle = [...boxesTold];
+  async function tenTurns(harness: ReturnType<typeof orchestratorHarness>): Promise<void> {
     const turns = chatSessionTurns(harness.agent);
 
-    await turns.prepare({ messages: [{ role: 'user', content: 'list the workspace' }] });
-    const admitted = boxesTold.length;
-    await turns.settle({ messageId: 'answer', text: 'listed', requestId: 'response-answer' });
+    for (let turn = 1; turn <= 10; turn += 1) {
+      await turns.prepare({ messages: [{ role: 'user', content: `list the workspace, turn ${String(turn)}` }] });
+      await turns.settle({ messageId: `answer-${String(turn)}`, text: 'listed', requestId: `response-${String(turn)}` });
+    }
+  }
 
-    expect({ idle, admitted, settled: boxesTold.length > admitted, boxes: [...new Set(boxesTold)] })
-      .toEqual({ idle: [], admitted: 1, settled: true, boxes: [sandboxIdForWorkspace(harness.agent.name)] });
+  test('a workspace whose activation never reached its sandbox tells no box anything over ten turns', async () => {
+    const boxesTold: string[] = [];
+    await tenTurns(orchestratorHarness(undefined, { container: true, boxesTold }));
+
+    expect(boxesTold).toEqual([]);
+  });
+
+  test('once the activation reached its sandbox, each turn tells its box when it is admitted and when it settles', async () => {
+    const boxesTold: string[] = [];
+    const harness = orchestratorHarness(undefined, { container: true, boxesTold });
+    await harness.agent.prepareTerminal('sandbox');
+    await tenTurns(harness);
+
+    expect({ told: boxesTold.length, boxes: [...new Set(boxesTold)] })
+      .toEqual({ told: 20, boxes: [sandboxIdForWorkspace(harness.agent.name)] });
   });
 });
 

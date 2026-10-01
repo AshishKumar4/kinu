@@ -3099,14 +3099,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   private readonly activationStartedAt = Date.now();
 
-  /** A turn's claim moving or a job settling is the box's use too, so it rests only once neither the
-   *  workspace nor a caller has used it for its idle window (devbox D56); the box never asks. */
-  protected override sandboxUsed(): void {
-    const namespace = this.env.KinuDevbox;
-
-    if (namespace === undefined) return;
-    this.detachOwned(async () => { await namespace.getByName(sandboxIdForWorkspace(this.name)).noteHostWork(); });
-  }
 
   /**
    * In-memory on purpose: fork-journal recovery runs once per isolate; a second pass could retire

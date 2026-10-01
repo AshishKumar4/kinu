@@ -2757,7 +2757,12 @@ that kept one object.
 Now `Devbox.noteHostWork()` stamps the box's use, as a caller does, when its
 container runs, and does nothing when it is stopped. Kinu's workspace calls
 it whenever a turn's claim moves (admitted or settled, the root's and every
-hosted actor's) and when a background job settles. The beat reads only the
+hosted actor's) and when a background job settles, but only once its current
+activation has called its sandbox: each notice activates the box's object, so
+a workspace that never used a sandbox made 20 of them over ten turns before
+this gate and makes none after (`bench-artifacts/host-push/gate-red.log`,
+`gate-green.log`). A box this activation reached and that has since stopped
+still hears two notices a turn, each answered at once. The beat reads only the
 box's own record. `hasBackgroundWork`, its in-memory answer and the
 workspace's `sandboxInUse` RPC are gone, and W2's startless exception with
 them. Its first and second hold reasons stand: own lanes, and a process the
