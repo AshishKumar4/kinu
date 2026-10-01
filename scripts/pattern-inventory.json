@@ -431,7 +431,7 @@
       "file": "packages/core/src/session/message-codec.ts",
       "kind": "hand-parser",
       "owner": "decodeValue",
-      "sourceSha256": "4a6a0478c28ab155c75d6c8dfabead45b6377cdff12c8f8a9712303edcf2c907",
+      "sourceSha256": "909c062fbf7b48b6a7df98b84ae33cf7207583c2e9f69ea14a1e44ed72ddd1a2",
       "decision": "traversal"
     },
     {

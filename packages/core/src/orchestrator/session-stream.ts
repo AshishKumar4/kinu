@@ -175,7 +175,7 @@ export class SessionStream {
     for (const part of this.assistant.parts.values()) {
       const text = part.kind !== 'text' || part.buffered === '' ? null : this.window(part, null, false, false);
 
-      if (text !== null && text !== '') this.history.atomic(() => this.history.messages.streamAppend(this.assistant.id, part.number, text, this.claim));
+      if (text !== null && text !== '') this.history.transactionSync(() => this.history.messages.streamAppend(this.assistant.id, part.number, text, this.claim));
     }
   }
 
@@ -451,7 +451,7 @@ export class SessionStream {
   }
 
   private fenced<T>(write: () => T): T {
-    return this.history.atomic(() => {
+    return this.history.transactionSync(() => {
       this.history.assertEpoch(this.turnId, this.epoch);
 
       return write();
@@ -594,7 +594,7 @@ export class SessionStream {
         part.buffered = '';
         part.bufferedDeltas = 0;
         part.bufferedBytes = 0;
-        this.history.atomic(() => this.history.messages.streamAppend(container.id, part.number, window, this.claim));
+        this.history.transactionSync(() => this.history.messages.streamAppend(container.id, part.number, window, this.claim));
       }
 
       const value = { ...part.descriptor };

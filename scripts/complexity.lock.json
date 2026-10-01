@@ -1,9 +1,9 @@
 {
   "measuredAt": "2026-10-01",
-  "files": 2927,
-  "functions": 73593,
+  "files": 2930,
+  "functions": 73951,
   "ceiling": 87,
-  "line": 29,
+  "line": 28,
   "inventory": [
     {
       "key": "packages/core/src/strategy/swarm-run.ts#runSwarm",
@@ -278,10 +278,6 @@
       "complexity": 29
     },
     {
-      "key": "packages/core/src/session/transcript.ts#SessionTranscriptReader.materializeEntry",
-      "complexity": 29
-    },
-    {
       "key": "packages/core/src/slates/capability-graph.ts#riskOf",
       "complexity": 29
     },
@@ -300,6 +296,94 @@
     {
       "key": "tests/first-run/agent-tab.first-run.ts#describe>liveTest>run",
       "complexity": 29
+    },
+    {
+      "key": "packages/cf-backend/src/components/ModelPicker.tsx#ModelPicker",
+      "complexity": 28
+    },
+    {
+      "key": "packages/cf-backend/src/components/slates/BlueprintShareForm.tsx#BlueprintShareForm",
+      "complexity": 28
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/changelog-entries.tsx#ChangelogEntryCard",
+      "complexity": 28
+    },
+    {
+      "key": "packages/cf-backend/src/components/surfaces/WorkSurface.tsx#WorkSurface",
+      "complexity": 28
+    },
+    {
+      "key": "packages/cf-backend/src/hooks/use-kinu.ts#useKinu>useEffect#6>handler",
+      "complexity": 28
+    },
+    {
+      "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage>prop#2",
+      "complexity": 28
+    },
+    {
+      "key": "packages/cli/src/commands/debug.ts#writeDebugBundle",
+      "complexity": 28
+    },
+    {
+      "key": "packages/cli/src/config.ts#resolveLLMConfig",
+      "complexity": 28
+    },
+    {
+      "key": "packages/core/src/heads/head-inference.ts#runHeadInference",
+      "complexity": 28
+    },
+    {
+      "key": "packages/core/src/identity/workspace-actors.ts#WorkspaceActorDirectory.apply>gen",
+      "complexity": 28
+    },
+    {
+      "key": "packages/core/src/memory/hybrid-search.ts#fused>forEach>gen",
+      "complexity": 28
+    },
+    {
+      "key": "packages/core/src/orchestrator/terminal-roster.ts#declareTerminalRoster",
+      "complexity": 28
+    },
+    {
+      "key": "packages/core/src/strategy/swarm-resume.ts#outcomeFacts",
+      "complexity": 28
+    },
+    {
+      "key": "packages/core/src/vfs/diff.ts#diffLines",
+      "complexity": 28
+    },
+    {
+      "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>stageChunkedDelta",
+      "complexity": 28
+    },
+    {
+      "key": "scripts/agents-fields.ts#collectReads>walkExcept",
+      "complexity": 28
+    },
+    {
+      "key": "scripts/bench-devbox-block-attach.ts#measureLarge",
+      "complexity": 28
+    },
+    {
+      "key": "scripts/bench-devbox-fixture.test.ts#driverC3Proof>answer",
+      "complexity": 28
+    },
+    {
+      "key": "scripts/egress-interception.ts#containerUseReasons>walk",
+      "complexity": 28
+    },
+    {
+      "key": "scripts/error-model.ts#mechanismOf",
+      "complexity": 28
+    },
+    {
+      "key": "scripts/infra-verify.ts#observe",
+      "complexity": 28
+    },
+    {
+      "key": "scripts/syntax.ts#importUses>visit",
+      "complexity": 28
     }
   ]
 }

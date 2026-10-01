@@ -43,15 +43,15 @@ export class ForkConversation {
     this.actor = openWorkspaceMainActor(workspace.sql);
     this.payloads = new SessionPayloads(async () => ({ vfs: workspace.vfs, artifactDirectory }));
     this.messages = new SessionMessages(workspace.sql, this.actor, this.payloads);
-    this.context = new SessionContext(workspace.sql, this.actor, (write) => this.atomic(write), this.messages);
+    this.context = new SessionContext(workspace.sql, this.actor, (write) => this.transactionSync(write), this.messages);
 
     this.transcript = new SessionTranscript({
       sql: workspace.sql, actor: this.actor, sessionId: CHAT_SESSION_ID, messages: this.messages, payloads: this.payloads,
-      atomic: (write) => this.atomic(write), selection: () => this.context.selected(),
+      transactionSync: (write) => this.transactionSync(write), selection: () => this.context.selected(),
     });
   }
 
-  atomic<T>(write: () => T): T {
+  transactionSync<T>(write: () => T): T {
     return this.workspace.db.transaction(write)();
   }
 
@@ -81,7 +81,7 @@ export class ForkConversation {
         return [...entries, { ...reference, entryId: input.id, position: entries.length }];
       } });
     } else {
-      reference = this.atomic(() => this.messages.insert(prepared, origin));
+      reference = this.transactionSync(() => this.messages.insert(prepared, origin));
     }
 
     if (reference === null) throw new Error('seeded message did not return its identity');

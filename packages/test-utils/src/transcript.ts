@@ -34,7 +34,7 @@ export async function seedTranscriptEntry(
   const prepared = await history.messages.prepare(input.message, input.id);
   const metadata = input.metadata === undefined ? null : await history.messages.payloads.prepare(input.metadata);
 
-  history.atomic(() => {
+  history.transactionSync(() => {
     const reference = history.messages.insert(prepared, input.origin);
     history.transcript(sessionId).record({
       id: input.id, role: input.message.role, turnId: null, runId: null, metadata, context: null,
