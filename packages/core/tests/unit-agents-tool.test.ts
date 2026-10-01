@@ -64,6 +64,7 @@ function testProfile(): AgentsProfileContext {
     provider: { revision: 'test-1', availableModels: [DEFAULT_WORKERS_AI_MODEL_SPEC] },
     roleId: 'task',
     availableTools: [],
+    pins: {},
   };
 }
 

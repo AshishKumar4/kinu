@@ -13,7 +13,7 @@ import { insertSearchNode } from '../src/mcts/record-node';
 import { readStartedSwarmProfile } from '../src/strategy/swarm-resume';
 import { configDigestOf, resolveSwarm } from '../src/strategy/swarm';
 import {
-  createAgentsTool, profileCatalogDigest, resolveTurnProfile,
+  agentsProfileContext, createAgentsTool, profileCatalogDigest, resolveTurnProfile,
   type AgentsSwarmDeps, type AgentsProfileContext, type AgentsToolDeps, type AgentsToolInput,
   type ProfileCatalogEnvelope, type ProviderCatalogSnapshot, type ResolvedTurnProfile,
   type RoleDefinition, type SwarmProfileSnapshot, type TierAssignments,
@@ -52,7 +52,7 @@ const AUDITOR: RoleDefinition = {
 
 const PROVIDER: ProviderCatalogSnapshot = {
   revision: 'rev-routing',
-  availableModels: ['m-default', 'm-deep-v1', 'm-deep-v2'],
+  availableModels: ['m-default', 'm-deep-v1', 'm-deep-v2', 'm-pinned'],
 };
 
 function envelopeOf(tiers: TierAssignments, version: number): ProfileCatalogEnvelope {
@@ -102,16 +102,20 @@ interface Harness {
   readonly callerCalls: () => number;
   readonly deepV1Calls: () => number;
   readonly deepV2Calls: () => number;
+  readonly pinnedCalls: () => number;
 }
 
 function harness(input: {
   readonly envelope: ProfileCatalogEnvelope;
   readonly roleId: string;
+  /** The caller's own turn, resolved as production resolves it; absent, the context is the bare catalog's. */
+  readonly caller?: ResolvedTurnProfile;
 }): Harness {
   const { rt, testSql } = createTestRuntime({ llm: createJSONLLM('a verdict in prose, not a score') });
   const caller = countingModel('m-default');
   const deepV1 = countingModel('m-deep-v1');
   const deepV2 = countingModel('m-deep-v2');
+  const pinned = countingModel('m-pinned');
   const resolvedSpecs: string[] = [];
 
   const swarm: AgentsSwarmDeps = {
@@ -127,16 +131,15 @@ function harness(input: {
       if (spec === 'm-deep-v1') return deepV1.model;
 
       if (spec === 'm-deep-v2') return deepV2.model;
+
+      if (spec === 'm-pinned') return pinned.model;
       throw new Error(`test fixture has no model for ${spec}`);
     },
   };
 
-  const profile = (): AgentsProfileContext => ({
-    envelope: input.envelope,
-    provider: PROVIDER,
-    roleId: input.roleId,
-    availableTools: [],
-  });
+  const profile = (): AgentsProfileContext => (input.caller === undefined
+    ? { envelope: input.envelope, provider: PROVIDER, roleId: input.roleId, availableTools: [], pins: {} }
+    : agentsProfileContext(input.caller, { envelope: input.envelope, provider: PROVIDER }) ?? unreachable());
 
   const deps: AgentsToolDeps = { mode: 'build', swarm, profile };
   const entry = createAgentsTool(deps);
@@ -150,7 +153,12 @@ function harness(input: {
     callerCalls: caller.calls,
     deepV1Calls: deepV1.calls,
     deepV2Calls: deepV2.calls,
+    pinnedCalls: pinned.calls,
   };
+}
+
+function unreachable(): never {
+  throw new Error('a resolved caller profile with its authority always yields a context');
 }
 
 /** The re-drive marker is a property of the call: the input is the stored row. */
@@ -274,6 +282,31 @@ describe('a delegated tier routes the model its nodes run', () => {
 
     expect(result.preset).toBe('ideate');
     expect(caller.calls()).toBeGreaterThan(0);
+  });
+});
+
+// staging df49f4cc5 swarm-audit, 2026-10-01: each lead was pinned with setModel, and every swarm node ran on the
+// account's Workers AI default and failed on its 429 (kinu-logs/evals-fast/FINDINGS.md F9). MODEL_ROUTE_POLICY routes a
+// swarm as `invocation`: the turn's model, which a workspace pin overrides.
+describe('a swarm runs on its turn\'s model', () => {
+  test('a workspace pin is the model its nodes run, and the ledger names it', async () => {
+    const envelope = envelopeOf(TIERS_V1, 1);
+
+    const caller = resolveTurnProfile({
+      envelope, provider: PROVIDER, roleId: 'auditor', workspaceModel: 'm-pinned', workMode: 'build', availableTools: [], activeSkills: [],
+    });
+
+    const h = harness({ envelope, roleId: 'auditor', caller });
+
+    const result = v.parse(RoutedResultSchema, await h.execute({
+      action: 'swarm', preset: 'ideate', task: 'where does this design break', branches: 1, depth: 1,
+    }));
+
+    expect(h.resolvedSpecs).toEqual(['m-pinned']);
+    expect(h.pinnedCalls()).toBeGreaterThan(0);
+    expect(h.deepV1Calls()).toBe(0);
+    expect(result.profile.profile.tier.model).toBe('m-pinned');
+    expect(result.profile.sources.tierSource).toBe('workspace');
   });
 });
 
