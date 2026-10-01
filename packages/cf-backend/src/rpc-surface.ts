@@ -114,7 +114,7 @@ const USER_DO_METHODS = [
   'deviceRpc',
   'deviceRuntimeStatus',
   'disconnectCodex',
-  'endAllSessions',
+  'raiseCredentialFloor',
   'ensureProfile',
   'ensureWorkspaceCapability',
   'finishClaudeSignIn',

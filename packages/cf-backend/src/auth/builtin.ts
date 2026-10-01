@@ -14,7 +14,7 @@ import { builtinSignInOn } from '@kinu.run/core/identity';
 import type { AuthRoutesAuthority, AuthRoutesEnv } from './routes';
 import {
   attemptBuckets as buckets, BUILTIN_ACCOUNTS_OBJECT, CHALLENGE_TTL_MS, checkPassword, grantOf, hashPassword, INVITE_TTL_MS, NOT_ADMITTED,
-  type AttemptBucket, type ChallengePurpose, type Grant, type InvitePurpose, type PasswordAccount, type Reset,
+  type AttemptBucket, type ChallengePurpose, type Grant, type InvitePurpose, type PasswordAccount, type Reset, type SigningAccount,
 } from '@kinu.run/core/identity';
 import type { UserDO } from '../user/user-do';
 import type { ApiVariables, FamilyEnv } from '../api/context';
@@ -24,7 +24,7 @@ export type BuiltinAuthority = AuthRoutesAuthority & Pick<UserDO,
   | 'builtinAdmissible' | 'builtinCreateInvite' | 'builtinInvitedEmail' | 'builtinIsOwner' | 'builtinIssueChallenge' | 'builtinPasskeyAccount'
   | 'builtinPasswordAccount' | 'builtinRecordPasskeyUse' | 'builtinRegister' | 'builtinSpendChallenge'
   | 'builtinReserveAttempt' | 'builtinClearAttempts' | 'builtinReplacePassword'
-  | 'builtinResetAccount' | 'builtinApplyReset' | 'builtinListAccounts' | 'endAllSessions'>;
+  | 'builtinResetAccount' | 'builtinApplyReset' | 'builtinListAccounts' | 'raiseCredentialFloor'>;
 
 export interface BuiltinAuthEnv<Id = DurableObjectId> extends Omit<AuthRoutesEnv<Id>, 'UserDO'> {
   UserDO: ObjectNamespace<Id, BuiltinAuthority>;
@@ -83,9 +83,13 @@ async function signedIn<Id>(env: BuiltinAuthEnv<Id>, request: Request, profile: 
   return json({ body: { returnTo: sanitizeReturnTo(returnTo, new URL(request.url).origin) } }, { headers });
 }
 
-const builtinProfile = (method: 'password' | 'passkey', userId: string, email: string): OAuthProfile => ({
-  provider: method, providerSub: userId, email, emailVerified: false,
-});
+function builtinProfile(method: 'password' | 'passkey', account: SigningAccount): OAuthProfile {
+  const profile: OAuthProfile = {
+    provider: method, providerSub: account.userId, email: account.email, emailVerified: false, credentialGeneration: account.generation,
+  };
+
+  return profile;
+}
 
 function fromThisSite(request: Request): boolean {
   return request.headers.get('origin') === new URL(request.url).origin;
@@ -157,7 +161,7 @@ builtinAuthRoutes.post('/api/auth/builtin/password/register', async (c) => {
   if (!admission.admitted) return refuse(admission.reason, 403);
   await accounts(c.env).builtinClearAttempts(await ownerCaller(c.env), [buckets.register(addressKey(c.req.raw)).key]);
 
-  return signedIn(c.env, c.req.raw, builtinProfile('password', userId, input.email), input.returnTo);
+  return signedIn(c.env, c.req.raw, builtinProfile('password', { userId, email: input.email, generation: 0 }), input.returnTo);
 });
 
 builtinAuthRoutes.post('/api/auth/builtin/password/sign-in', async (c) => {
@@ -181,7 +185,7 @@ builtinAuthRoutes.post('/api/auth/builtin/password/sign-in', async (c) => {
   if (account === null || !matched) return refuse('That email and password do not match an account.', 401);
   await accounts(c.env).builtinClearAttempts(caller, attempt.map((bucket) => bucket.key));
 
-  return signedIn(c.env, c.req.raw, builtinProfile('password', account.userId, account.email), input.returnTo);
+  return signedIn(c.env, c.req.raw, builtinProfile('password', account), input.returnTo);
 });
 
 builtinAuthRoutes.post('/api/auth/builtin/passkey/register/options', async (c) => {
@@ -233,7 +237,7 @@ builtinAuthRoutes.post('/api/auth/builtin/passkey/register', async (c) => {
 
   if (!admission.admitted) return refuse(admission.reason, 403);
 
-  return signedIn(c.env, c.req.raw, builtinProfile('passkey', pending.userId, pending.email), input.returnTo);
+  return signedIn(c.env, c.req.raw, builtinProfile('passkey', { userId: pending.userId, email: pending.email, generation: 0 }), input.returnTo);
 });
 
 builtinAuthRoutes.post('/api/auth/builtin/passkey/sign-in/options', async (c) => {
@@ -275,17 +279,22 @@ builtinAuthRoutes.post('/api/auth/builtin/passkey/sign-in', async (c) => {
   await store.builtinRecordPasskeyUse(caller, passkey.credentialId, verified.authenticationInfo.newCounter);
   await store.builtinClearAttempts(caller, attempt.map((bucket) => bucket.key));
 
-  return signedIn(c.env, c.req.raw, builtinProfile('passkey', passkey.userId, passkey.email), input.returnTo);
+  return signedIn(c.env, c.req.raw, builtinProfile('passkey', passkey), input.returnTo);
 });
 
-async function resetTo<Id>(env: BuiltinAuthEnv<Id>, request: Request, reset: Reset, returnTo: string): Promise<Response> {
+async function resetTo<Id>(env: BuiltinAuthEnv<Id>, request: Request, reset: Omit<Reset, 'ended'>, returnTo: string): Promise<Response> {
   const caller = await ownerCaller(env);
-  const account = await accounts(env).builtinApplyReset(caller, reset);
+  const current = await accounts(env).builtinResetAccount(caller, reset.grant);
+
+  if (current === null) return resetRefused(reset.grant);
+  const ended = current.generation + 1;
+
+  await env.UserDO.get(env.UserDO.idFromName(current.userId)).raiseCredentialFloor(caller, ended);
+  const account = await accounts(env).builtinApplyReset(caller, { ...reset, ended });
 
   if (account === null) return resetRefused(reset.grant);
-  await env.UserDO.get(env.UserDO.idFromName(account.userId)).endAllSessions(caller);
 
-  return signedIn(env, request, builtinProfile(reset.passkey ? 'passkey' : 'password', account.userId, account.email), returnTo);
+  return signedIn(env, request, builtinProfile(reset.passkey ? 'passkey' : 'password', account), returnTo);
 }
 
 const resetGrant = <Id>(env: BuiltinAuthEnv<Id>, tokens: { reset: string | null; setup: string | null }): Grant =>
@@ -351,7 +360,7 @@ builtinAccountRoutes.get('/api/user/builtin-auth', async (c) => {
   return json({ body: { enabled: true, owner } });
 });
 
-/** An owner's link: `join` for an address without an account (`?invite=`), `reset` for one with (`?reset=`). */
+/** `join` for an address without an account, `reset` for one with. */
 async function ownerLink(c: Context<SettingsEnv>, purpose: InvitePurpose): Promise<Response> {
   if (!builtinSignInOn(c.env)) return refuse('This deployment does not offer built-in sign-in.', 404);
   const parsed = await body(c.req.raw, v.object({ email: EmailSchema }));
