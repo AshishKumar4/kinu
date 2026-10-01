@@ -235,9 +235,14 @@ jobs:
 
       - name: Stand or fall on the comparison
         env:
+          PLAN: ${{ needs.plan.result }}
           EVALS: ${{ needs.evals.result }}
           COMPARE: ${{ needs.compare.result }}
         run: |
+          if [[ "$PLAN" != success ]]; then
+            echo "::error::No verdict: the plan ended $PLAN, so no leg ran (its log names the build staging serves, or the commit not on GitHub)"
+            exit 1
+          fi
           if [[ "$COMPARE" != success ]]; then
             echo "::error::No verdict: the legs' jobs ended $EVALS and the comparison $COMPARE, so the legs were not compared"
             exit 1

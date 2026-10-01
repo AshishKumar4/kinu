@@ -189,16 +189,14 @@ AI_GATEWAY_BASE_URL=… AI_GATEWAY_AUTH=…     # an AI Gateway, for models the 
 ```bash
 bun run evals                                  # every task, 10 trials each, all at once, on kinu.run
 bun run evals evals/tasks/order-book.eval.ts   # one task
+KINU_EVAL_ORIGIN=https://staging.kinu.run bun run evals   # one leg, on staging
 KINU_EVAL_TRIALS=3 bun run evals               # a pilot
 bun run evals:ui                               # the report in the vitest-evals UI
 bun evals/scripts/compare.ts --candidate <results.json> [--baseline <results.json>] --out /tmp/cmp   # two legs' reports
-bun evals/scripts/gate.ts [--digest <artifact digest>] [--gate]   # every task at once, unchanged results reused
 bun evals/scripts/timing.ts bench-artifacts/evals-<task>-<time> [--steps]   # where each trial's time went
 ```
 
 **All at once.** Every task file runs in its own worker and every trial of it at once (`evals/vitest.config.ts`), so a run takes as long as its slowest trial. `KINU_EVAL_CONCURRENCY` caps the trials a file holds at once for a provider that cannot take them all: Workers AI put all of twelve trials into 429 backoff on 2026-09-24. While it runs, each trial prints a line to stdout as each model step finishes, as each turn is sent and settles with its checks, and when an unexpected socket close hits it, all prefixed `[evals] <task> | <model> | <arm> | trial <n>:`. A step a dropped stream did not show is printed off the ledger while the turn settles. The longest silence of one trial is its longest step or its checks: 13 s across a run of one trial per task on 2026-09-30.
-
-**On this machine.** `evals/scripts/gate.ts` runs every task at once, each in its own process with all its trials at once, against the deployment `KINU_EVAL_ORIGIN` names. A task's report is stored under `~/.cache/kinu-evals` keyed by everything it measured: the served build (its artifact digest when given, else its build sha), the origin, the `evals/` tree, the task file and the matrix. A later run with the same key reuses it instead of running the task. Only a report that is complete and free of infrastructure failures is stored for reuse, and the joined report is stored as a baseline only when `validateEvalResults` accepts it: every task, trials 1 to N once each, one build, one eval commit, no infrastructure failure. The run is compared with the newest baseline of a strict ancestor build and written to `bench-artifacts/evals/<sha>/` with each trial's evidence; `--gate` exits 1 when the run does not stand as the build's verdict, by the same rule as CI's `Verdict` job.
 
 A run needs `KINU_EVAL_WEB_IDENTITY` (production's `DEV_IDENTITY_SECRET`, in `.dev.vars`; on staging, `KINU_EVAL_STAGING_WEB_IDENTITY`, which `.dev.vars` holds as `STAGING_DEV_IDENTITY_SECRET`), which makes each trial the `eval-service` identity. Every trial deletes its workspace when it ends. Nothing ends a trial on a clock: a turn ends when the deployment says so.
 
@@ -276,7 +274,7 @@ tests/
 evals/
 ├─ tasks/               (the eval suite: one `*.eval.ts` per task)
 ├─ src/                 (the framework: task, verifier, harness, session, comparison, report)
-└─ scripts/             (compare, validate, trajectories, diagnose, post-comment, gate, timing, scrub-evidence)
+└─ scripts/             (compare, validate, trajectories, diagnose, post-comment, timing, scrub-evidence)
 bench/
 ├─ corpus/              (the seeded-defect corpus `scripts/bench.ts` measures; data, no suites)
 └─ harbor/, clbench/    (the external-benchmark adapters, Python)
