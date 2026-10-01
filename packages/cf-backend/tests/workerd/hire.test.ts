@@ -205,6 +205,8 @@ describe('hire', () => {
 
     await probe(workspace).setup(workspace, 'hire-root-durable', 'park');
     await probe(workspace).openHire(workspace, 'Hire one durable auditor; the owner will dismiss it.');
+    // The child's request reaching the model is the turn parked; Dismiss before it would retire an unstarted child.
+    await probe(workspace).childSpoke();
     // Hangs while the retirement waits on the parked turn: nothing below releases it.
     const dismissed = await probe(workspace).dismissChild(workspace);
 
@@ -216,7 +218,8 @@ describe('hire', () => {
 
     expect(observed.roster.find((row) => row.name === dismissed)?.status).toBe('dismissed');
     expect(observed.reports.join(' ')).not.toContain(CHILD_ANSWER);
-    expect(childTurns.reduce((sum, row) => sum + row.runs, 0)).toBeLessThanOrEqual(1);
+    expect(childTurns).toHaveLength(1);
+    expect(childTurns[0]?.runs).toBe(1);
   });
 
   it('an eviction while the child works still delivers its answer', async () => {
