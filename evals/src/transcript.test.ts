@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { encodeModelMessageValues, type RunEvent } from '@kinu.run/core';
-import { cutButCompleted, toTranscript } from './transcript';
+import { cutButCompleted, measure, toTranscript } from './transcript';
 
 let index = 0;
 
@@ -61,4 +61,13 @@ describe('the step-cap probe', () => {
   test('only the runs this turn opened count: an earlier turn\'s run is not this turn\'s finding', () => {
     expect(cutButCompleted(run('earlier', 10, 'tool-calls', 'completed'), new Set(['earlier']))).toEqual([]);
   });
+});
+
+// A provider silent from its start is declared a `stall` wait at each retry (core `rate-limit-retry.ts`, 3817d2ca9): the
+// provider failing, not the eval account's rate limit that the report's 429 waits measure.
+test("a provider's declared stall is not a 429 wait", () => {
+  const wait = (source: 'backoff' | 'stall', waitMs: number): RunEvent => ({ type: 'provider_wait', runId: 'run', eventIndex: 1,
+    timestamp: '2026-10-01T16:00:00.000Z', provider: 'opencode-go', waitMs, attempt: 1, source });
+
+  expect(measure([wait('backoff', 30_000), wait('stall', 2_000)])).toMatchObject({ providerWaits: 1, providerWaitMs: 30_000 });
 });
