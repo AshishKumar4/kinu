@@ -2774,10 +2774,44 @@ Tests:
 - The concurrent-flush image test's store answers with R2's digests.
 - devbox suite: 523 pass.
 
-Image `a41e4a11…`, sync.js `fc469296…`. The small-path and live runs used
-`6bea205d…`, whose script is the same, before the publisher moved into its own
-module. Owed: the live green for the same 10 GiB fixture (5 boxes; run
-`sbs10011615nsgreen` in progress at this commit).
+Image `a41e4a11…`, sync.js `fc469296…`. The small-path runs used `6bea205d…`,
+whose script is the same, before the publisher moved into its own module.
+
+Live on `a41e4a11…`, the same 10 GiB fixture saved and woke exactly, 3 of 3:
+- One box alone (`sbs10011701nsg3`): the quiesce committed 10,737,442,816
+  bytes in 893 s. The wake took 4.4 s at the driver, with 1.9 s attaching the
+  base. The first 256 MiB read in 4.7 s, and the whole workspace in 209 s.
+- Five boxes at once (`sbs10011738nsg5b`): box 1 committed in 893 s and woke
+  twice, in 5.2 and 10.0 s, reading everything in 238 and 195 s.
+For most of each save, mksquashfs sat stopped by the window: the upload was
+the bound, about 13 MiB/s per box with four 5 MiB parts in flight.
+
+The other four boxes reported "skipped: nothing has been written since the
+attach", and their records still named their 10 GiB bases. The trace (ps,
+the stage and the box's state every 30 s) shows why:
+- The bench drives the quiesce from an alarm. The platform cut the alarm
+  handler at 900 s and delivered it again.
+- The second delivery started a second flush at exactly 900 s on each of
+  those boxes. It waited on D54's lock until the first had committed and
+  reseated the upper, then truthfully found the upper empty.
+So a quiesce flush longer than 15 minutes is delivered twice. D54's lock
+makes that safe, but the answer was wrong: it said "skipped" for a workspace
+the first flush had just made durable.
+
+The fix: the lock file holds one small record, the last holder's token and
+outcome, overwritten by every flush. A flush that had to wait for the lock,
+and then finds nothing to save, reports the commit it waited behind: kind
+`committed`, the record's durable bytes, `movedBytes` 0, and a reason naming
+the flush ahead of it. `afterWaiting` in `sync.ts`; the test in `sync.test.ts`
+was red before it (`bench-artifacts/stream-base/waited-red.log`). The
+real-image test checks that the lock stays one file under 2 KiB. Image
+`648726e8…`, sync.js `22c7f1af…`.
+
+Platform time on a new image: the first deploy of `a41e4a11…` polled
+`containers/image-preparations` 296 times in 12 minutes (16:48:55 to
+17:00:43Z) before it was stopped. The retry polled 179 times in 7 minutes
+(17:01:49 to 17:08:49Z), then deployed. That is about 20 minutes, which any
+deploy of a new image may pay.
 
 ## Measurement contract for a strategy comparison
 

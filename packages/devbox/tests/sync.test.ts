@@ -7,7 +7,7 @@ import {
   baseObjectKey, deltaObjectKey, type ChainState, type SnapshotChainPorts,
 } from '../src/snapshot-chain';
 import type { CheckpointKind, CheckpointOutcome } from '../src/storage';
-import { serveSync, syncCaller, syncWorker } from '../src/sync';
+import { afterWaiting, serveSync, syncCaller, syncWorker } from '../src/sync';
 import { ChainTestBox, chainBox } from './support/chain-box';
 import { wakeWhileArmed } from './support/devbox-harness';
 
@@ -149,6 +149,26 @@ test('a flush that arrives during a tick runs after it, never beside it', async 
   release();
   await Promise.all([tick, flush]);
   expect(order).toEqual(['start:tick', 'end:tick', 'start:quiesce', 'end:quiesce']);
+});
+
+// D57: an alarm cut at 900 s re-delivered a quiesce; its second flush waited for the first's commit, found the
+// upper empty, and reported "skipped" for a workspace the first had just made durable.
+test('a flush that waited behind a commit and found nothing left reports that commit; one that did not wait reports itself', () => {
+  const ahead: CheckpointOutcome = { kind: 'committed', reason: undefined, bytes: 10_737_442_816, movedBytes: 10_737_442_816 };
+  const empty: CheckpointOutcome = { kind: 'skipped', reason: 'nothing has been written since the attach', bytes: undefined, movedBytes: 0 };
+  const broken: CheckpointOutcome = { kind: 'failed', reason: 'the store refused', bytes: undefined, movedBytes: undefined };
+
+  expect({
+    waited: afterWaiting(empty, ahead),
+    notWaited: afterWaiting(empty, undefined),
+    aheadFailed: afterWaiting(empty, broken),
+    ownFailed: afterWaiting(broken, ahead),
+  }).toEqual({
+    waited: { kind: 'committed', reason: 'committed by the flush this one waited behind; nothing has been written since the attach', bytes: 10_737_442_816, movedBytes: 0 },
+    notWaited: empty,
+    aheadFailed: empty,
+    ownFailed: broken,
+  });
 });
 
 test('a checkpoint that throws is a failed outcome, and the next one still runs', async () => {

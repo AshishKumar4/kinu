@@ -166,7 +166,7 @@
       "scheduling_policy": "durable_object",
       "images": {
         "devbox": {
-          "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:a41e4a11811b3fe3b67a3643eed7f0e11ada0b06f54abf03db1e9164c7d4cbc3"
+          "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:648726e8746acc9f8868649e6769cab0450bcb6a8390963cc436ace105d72148"
         }
       }
     },
@@ -492,7 +492,7 @@
         {
           "class_name": "KinuDevbox",
           "scheduling_policy": "durable_object",
-          "images": { "devbox": { "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:a41e4a11811b3fe3b67a3643eed7f0e11ada0b06f54abf03db1e9164c7d4cbc3" } }
+          "images": { "devbox": { "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:648726e8746acc9f8868649e6769cab0450bcb6a8390963cc436ace105d72148" } }
         },
         {
           "class_name": "CodexEgress",
