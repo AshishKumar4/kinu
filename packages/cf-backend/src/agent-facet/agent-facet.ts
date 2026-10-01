@@ -1,11 +1,13 @@
+import { type VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 /** One non-main agent in its own loader isolate (D9). */
 import { DurableObject, RpcTarget } from 'cloudflare:workers';
 import { Nimbus, type NimbusSandbox, type NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import type { ModelMessage, UIMessage } from 'ai';
 import {
-  decodeJsonValue, readAgentArchivePage,
-  type AgentOwnInspection, type AnsweredEvolutionHelper, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage, type JsonValue,
-  type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type VfsRevision, type SerializedMessage, type SubordinateInspectionResult,
+  jsonResultOrVoid, readAgentArchivePage,
+  type AgentFigures,
+  type AgentOwnInspection, type AnsweredEvolutionHelper, type ArchiveAgentPage, type ArchiveSqlCursor, type ChatHistoryPage,
+  type NimbusSandboxHandle, type PositionPageRequest, type ProviderEnv, type SerializedMessage, type SubordinateInspectionResult,
   servedContextTree, type ContextEditor, type ContextTreeRemote, type SpendLedger, type StepSpendSource, type TurnRequestIndex, type TurnRequestPage, type ConversationSearchHit, type ConversationScrollResult, type ConversationSummary,
 } from '@kinu.run/core';
 import { AgentDatabase } from './agent-database';
@@ -25,12 +27,6 @@ export interface AgentFacetEnv {
   readonly WORKERS_AI_VIA_BINDING?: string;
 }
 
-async function json(result: Promise<unknown>): Promise<JsonValue | undefined> {
-  const value = await result;
-
-  return value === undefined ? undefined : decodeJsonValue({ value });
-}
-
 function sandboxHandle(sandbox: NimbusSandbox): NimbusSandboxHandle {
   return {
     ready: () => sandbox.ready(),
@@ -39,14 +35,14 @@ function sandboxHandle(sandbox: NimbusSandbox): NimbusSandboxHandle {
     runCode: (code, options) => sandbox.runCode(code, options),
     files: sandbox.files,
     runtimes: {
-      ensure: (specs, options) => json(sandbox.runtimes.ensure(specs, options)),
-      install: (spec, options) => json(sandbox.runtimes.install(spec, options)),
-      list: () => json(sandbox.runtimes.list()),
+      ensure: (specs, options) => jsonResultOrVoid(sandbox.runtimes.ensure(specs, options)),
+      install: (spec, options) => jsonResultOrVoid(sandbox.runtimes.install(spec, options)),
+      list: () => jsonResultOrVoid(sandbox.runtimes.list()),
     },
     processes: {
-      list: () => json(sandbox.processes.list()),
-      kill: (pid) => json(sandbox.processes.kill(pid)),
-      logs: (pid, options) => json(sandbox.processes.logs(pid, options)),
+      list: () => jsonResultOrVoid(sandbox.processes.list()),
+      kill: (pid) => jsonResultOrVoid(sandbox.processes.kill(pid)),
+      logs: (pid, options) => jsonResultOrVoid(sandbox.processes.logs(pid, options)),
     },
   };
 }
@@ -58,9 +54,8 @@ class AgentContextTree extends RpcTarget implements ContextTreeRemote {
   readFileAtRevision(path: string, revision: VfsRevision, range?: { readonly offset: number; readonly length: number }) { return this.served.readFileAtRevision(path, revision, range); }
   readRange(path: string, offset: number, length: number) { return this.served.readRange(path, offset, length); }
   readdir(path: string) { return this.served.readdir(path); }
-  stat(path: string) { return this.served.stat(path); }
-  exists(path: string) { return this.served.exists(path); }
-  writeFile(path: string, data: string | Uint8Array) { return this.served.writeFile(path, data); }
+  stat(path: string, options?: { follow?: boolean }) { return this.served.stat(path, options); }
+  writeFile(path: string, data: Uint8Array) { return this.served.writeFile(path, data); }
   writeFileIfRevision(path: string, data: Uint8Array, expected: VfsRevision) { return this.served.writeFileIfRevision(path, data, expected); }
 }
 
@@ -70,12 +65,14 @@ export interface AgentFacetCalls {
   openTurn(snapshot: AgentSnapshot, opening: AgentTurnOpening): Promise<void>;
   history(snapshot: AgentSnapshot, limit?: number): Promise<UIMessage[]>;
   historyPage(snapshot: AgentSnapshot, page: PositionPageRequest): Promise<ChatHistoryPage>;
+  messageCount(snapshot: AgentSnapshot): Promise<number>;
   inspect(snapshot: AgentSnapshot, request: AgentOwnInspection): Promise<SubordinateInspectionResult>;
   inheritedContext(snapshot: AgentSnapshot): Promise<SerializedMessage[]>;
   workingContext(snapshot: AgentSnapshot): Promise<readonly ModelMessage[]>;
   turnRequests(snapshot: AgentSnapshot, turnId: string): Promise<TurnRequestIndex>;
   turnRequest(snapshot: AgentSnapshot, at: TurnRequestAt): Promise<TurnRequestPage>;
   spend(snapshot: AgentSnapshot, steps: readonly StepSpendSource[]): Promise<SpendLedger>;
+  figures(snapshot: AgentSnapshot): Promise<AgentFigures>;
   context(snapshot: AgentSnapshot, editor: ContextEditor): Promise<ContextTreeRemote>;
   searchConversations(snapshot: AgentSnapshot, query: string, limit?: number): Promise<ConversationSearchHit[]>;
   scrollConversation(snapshot: AgentSnapshot, around: string, window?: number, maxChars?: number): Promise<ConversationScrollResult | null>;
@@ -173,6 +170,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
     return await this.open(snapshot).turnRequest(at);
   }
 
+  async messageCount(snapshot: AgentSnapshot): Promise<number> {
+    return this.open(snapshot).messageCount();
+  }
+
   async searchConversations(snapshot: AgentSnapshot, query: string, limit?: number): Promise<ConversationSearchHit[]> {
     return await this.open(snapshot).conversations().search(query, limit);
   }
@@ -191,6 +192,10 @@ export class AgentFacet extends DurableObject<AgentFacetEnv> implements AgentFac
 
   async spend(snapshot: AgentSnapshot, steps: readonly StepSpendSource[]): Promise<SpendLedger> {
     return this.open(snapshot).spend(steps);
+  }
+
+  async figures(snapshot: AgentSnapshot): Promise<AgentFigures> {
+    return this.open(snapshot).figures();
   }
 
   async admitted(snapshot: AgentSnapshot, id: string): Promise<boolean> {

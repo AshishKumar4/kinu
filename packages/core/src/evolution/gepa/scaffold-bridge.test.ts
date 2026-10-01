@@ -1,3 +1,4 @@
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * GEPA → scaffold bridge: an improved candidate passes the constraints, lands as a
  * pending row at v+1, and live `scaffold/agent.js` keeps the current content. Plus
@@ -65,10 +66,7 @@ describe('runScaffoldGepa', () => {
     // The pending code is in scaffold/agent.js.v{pendingVersion}.
     if (result.pendingVersion === null) throw new Error('expected a pending scaffold version');
 
-    const pending = await rt.storage.vfs.readFile(
-      `scaffold/agent.js.v${result.pendingVersion}`,
-      { encoding: 'utf8' },
-    );
+    const pending = await readText(rt.storage.vfs, `scaffold/agent.js.v${result.pendingVersion}`);
 
     expect(v.parse(v.string(), pending)).toContain('improved');
 

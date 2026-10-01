@@ -1,3 +1,4 @@
+import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
@@ -111,11 +112,11 @@ describe('hosted Nimbus workspace provider', () => {
 
     const plane = present(provider.files, 'the workspace file plane');
 
-    await plane.writeFile('/home/main/proof.txt', 'same bytes');
+    await writeText(plane, '/home/main/proof.txt', 'same bytes');
     expect(await plane.stat('/home/main/proof.txt')).toEqual({
       size: 10,
       mtimeMs: 1,
-      isDir: false,
+      type: 'file',
     });
     expect(await provider.tools.exec.execute('cat /home/main/proof.txt')).toBe('same bytes');
 
@@ -411,15 +412,15 @@ describe('the embedded workspace removes a tree natively', () => {
     try {
       // `/home` is outside the kernel's in-memory nodes.
       await bundle.vfs.mkdir('home/main/tree/a/b', { recursive: true });
-      await bundle.vfs.writeFile('home/main/tree/a/b/leaf.txt', 'leaf');
-      await bundle.vfs.writeFile('home/main/tree/top.txt', 'top');
-      await bundle.vfs.writeFile('home/main/keep.txt', 'keep');
+      await writeText(bundle.vfs, 'home/main/tree/a/b/leaf.txt', 'leaf');
+      await writeText(bundle.vfs, 'home/main/tree/top.txt', 'top');
+      await writeText(bundle.vfs, 'home/main/keep.txt', 'keep');
 
       await bundle.vfs.removeRecursive('home/main/tree');
 
-      expect(await bundle.vfs.exists('home/main/tree')).toBe(false);
-      expect(await bundle.vfs.exists('home/main/tree/a/b/leaf.txt')).toBe(false);
-      expect(await bundle.vfs.readFile('home/main/keep.txt', { encoding: 'utf8' })).toBe('keep');
+      expect(await exists(bundle.vfs, 'home/main/tree')).toBe(false);
+      expect(await exists(bundle.vfs, 'home/main/tree/a/b/leaf.txt')).toBe(false);
+      expect(await readText(bundle.vfs, 'home/main/keep.txt')).toBe('keep');
       await expect(bundle.vfs.removeRecursive('home/main/tree')).rejects.toThrow(expect.objectContaining({ code: 'ENOENT' }));
     } finally {
       await bundle.destroy();

@@ -1,8 +1,9 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Report ingress for durable and task-lifetime children: a live waiter consumes its answer;
  *  every other admitted report enters the parent event rail, except an evolution helper's. */
 
 import type { EventLog } from '../events/hub/log';
-import type { VFS } from '../types/primitives';
+
 import { spillEventContent } from '../events/hub/content-spill';
 import { subordinateReportDedupeKey } from '../events/hub/dedupe';
 import { renderSubordinateHandoff } from '../events/hub/visibility';

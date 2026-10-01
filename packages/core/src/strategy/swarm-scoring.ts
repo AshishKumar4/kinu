@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Scoring one candidate: the report gate, the instrument path (`measureChild`) and the
  * judged path (`judgeChild`). Measurement policy only; the per-candidate loop is the runner's.
@@ -49,7 +50,7 @@ export function reportGate(input: {
 
       try {
         // The write sits inside the try so the returned promise never rejects.
-        await ctx.vfs.writeFile(verifier.artifact, candidate);
+        await writeText(ctx.vfs, verifier.artifact, candidate);
         measurement = await verifier.verify(ctx);
       } catch (error) {
         return `the verifier could not run over what you reported: `
@@ -86,7 +87,7 @@ export async function measureChild(input: {
   readonly artifact: string;
 }): Promise<ChildOutcome> {
   const { ctx, verifier, witnessVerifier, measured, baseline } = input;
-  await ctx.vfs.writeFile(verifier.artifact, input.artifact);
+  await writeText(ctx.vfs, verifier.artifact, input.artifact);
   let measurement: Measurement;
 
   try {
@@ -106,7 +107,7 @@ export async function measureChild(input: {
     }
 
     try {
-      await ctx.vfs.writeFile(witnessVerifier.artifact, input.artifact);
+      await writeText(ctx.vfs, witnessVerifier.artifact, input.artifact);
       const witness = await witnessVerifier.verify(ctx);
       witnessFound = witness.kind === 'measured' && witness.value === 1;
     } catch (error) {
@@ -157,7 +158,7 @@ async function measureParetoChild(input: {
 
   for (const instrument of input.pareto.instruments) {
     try {
-      await input.pareto.ctx.vfs.writeFile(instrument.verifier.artifact, input.artifact);
+      await writeText(input.pareto.ctx.vfs, instrument.verifier.artifact, input.artifact);
       const measurement = await instrument.verifier.verify(input.pareto.ctx);
 
       if (measurement.kind === 'unmeasurable') {

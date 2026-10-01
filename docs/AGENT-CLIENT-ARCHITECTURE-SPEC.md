@@ -9,7 +9,7 @@
 Kinu has two agent backends:
 
 - Cloud: an `OrchestratorAgent` Durable Object owning chat, storage, callable
-  RPC, tools, background jobs, memory, exploration, release changes, device
+  RPC, tools, background jobs, memory, exploration, device
   consent and execution providers.
 - Local: a `LocalAgentSession` over SQLite and a local runtime
   (`packages/cli-backend/src/local-session.ts`).

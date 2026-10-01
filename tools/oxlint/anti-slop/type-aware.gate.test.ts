@@ -190,7 +190,7 @@ assert.deepEqual(
 /**
  * Where a test drives the Worker entry or constructs a Durable Object class, the value it hands over
  * is typed by the vendor as a whole stub (`DurableObjectStub<UserDO>` has 249 required members,
- * `DurableObjectStub<KinuSandbox>` 112, `AgentContext` the platform state plus the SDK's; measured
+ * `DurableObjectStub<KinuDevbox>` 112, `AgentContext` the platform state plus the SDK's; measured
  * 2026-09-22 with @cloudflare/workers-types and agents 0.3), and a recording double cannot satisfy
  * it without lying. Sixteen such sites remained after every narrowable parameter was narrowed
  * (`Pick<Env, …>`, `ObjectNamespace<Id, Pick<Class, …>>`, injected resolvers). So in TEST code the

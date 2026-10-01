@@ -1,6 +1,7 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { DefaultExecutionRouter, agentArtifactDirectory, createAgentStores, contextMount, localContextTree, createInlineExecutor, createShellSession, shellCwd, observeWrites, skillsMount, withApprovalGatedFiles, withApprovalGatedShell, withMountTable, sharedDriveMount, SHARED_DRIVE_UNBOUND } from '@kinu.run/core';
 import { KinuError } from '@kinu.run/core/obs';
-import type { ActorHandle, AgentRuntime, NodeWorkspace, ShellApprovalPolicy, VFS, WriteObserver } from '@kinu.run/core';
+import type { ActorHandle, AgentRuntime, NodeWorkspace, ShellApprovalPolicy, WriteObserver } from '@kinu.run/core';
 import type { WorkspaceBundle } from '@kinu.run/core/workspace';
 import type { CLIRuntime } from './runtime';
 import { requireLocalActorWorkspace } from '@kinu.run/core';

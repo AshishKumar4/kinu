@@ -1,3 +1,4 @@
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, setSystemTime, test } from 'bun:test';
 import { KinuError } from '@kinu.run/core/obs';
 import {
@@ -392,11 +393,11 @@ describe('turn-pipeline correctness wiring', () => {
     const workspace = orchestratorHarness();
     await hostedMainActor(workspace);
     const rootFiles = workspaceFiles(workspace.agent);
-    await rootFiles.writeFile('/home/main/shared-proof.md', 'registered workspace bytes');
+    await writeText(rootFiles, '/home/main/shared-proof.md', 'registered workspace bytes');
     const head = await hostedExplorationHarness(workspace, 'head-a1');
     expect(head.actor.record.origin).toBe('swarm');
     const headFiles = head.actor.runtime.storage.vfs;
-    expect(await headFiles.readFile('/home/main/shared-proof.md', { encoding: 'utf8' }))
+    expect(await readText(headFiles, '/home/main/shared-proof.md'))
       .toBe('registered workspace bytes');
   });
 

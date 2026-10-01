@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The `eval` codemode tool, shared by every CF actor with a runtime. Crafted tools are re-read
  * from the CraftStore on every call, so a tool saved mid-turn is callable on the next program.
@@ -7,16 +8,7 @@ import * as v from 'valibot';
 import { createCodeTool } from "@cloudflare/codemode/ai";
 import { type Tool, type ToolSet } from 'ai';
 import type { ActorHandle, AgentsToolDeps, DeviceRequestChannel, SqlExecutor, CraftStore, ExecutionRouter } from "@kinu.run/core";
-import {
-  createAgentsCodemodeProvider, createWebCodemodeProvider, createStateCodemodeProvider,
-  renderCodemodeDescription, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE,
-  type BrowserSessions, type WebSearchProvider, type CodemodeProvider, type VFS, type WorkMode,
-  currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode,
-  selectInjectableCraftedTools,
-  withCraftedToolDeclarations, codemodeInputSchema,
-  withCodemodeProgram, craftedFailureFunctions,
-  codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing,
-} from "@kinu.run/core";
+import { createAgentsCodemodeProvider, createWebCodemodeProvider, createStateCodemodeProvider, renderCodemodeDescription, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE, type BrowserSessions, type WebSearchProvider, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode, selectInjectableCraftedTools, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, craftedFailureFunctions, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
 import { KinuError } from '@kinu.run/core/obs';
 import {
   KinuSandboxExecutor, renderToolsPrelude, type ProgramLaunch,
@@ -135,7 +127,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
         : Object.fromEntries(Object.entries(native).filter(([name]) => options.reach?.allowsTool(name)));
 
       const build = (mode: WorkMode): Tool => {
-        const executor = new KinuSandboxExecutor({ launch: options.launch(mode !== 'plan') });
+        const executor = new KinuSandboxExecutor(options.launch(mode !== 'plan'));
 
         // No prelude here: createCodeTool drops every one; the per-call executor below restores them.
         const toolsProvider: CodemodeProvider = {

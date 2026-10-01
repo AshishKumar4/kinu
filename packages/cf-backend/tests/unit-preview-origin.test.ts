@@ -38,7 +38,7 @@ import { appProbe, concretePath, PROBE_ORIGIN } from './helpers/app-probe';
 import type { NimbusPreviewEnv, WorkspacePreviewHost } from '../src/nimbus-route';
 import type { SandboxPreviewEnv } from '../src/preview-proxy';
 import { PreviewFrame } from '../src/components/PreviewFrame';
-import type { KinuSandbox } from "../src/kinu-sandbox";
+import type { KinuDevbox } from "../src/kinu-devbox";
 import { present } from '@kinu.run/test-utils';
 
 let containerResponse: Response | Error | null = null;
@@ -122,7 +122,7 @@ if (!configuredNimbusUrl) throw new Error('Nimbus preview test URL is not config
 
 const NIMBUS_URL = configuredNimbusUrl;
 
-const CONTAINERS = { ...ENV, Sandbox: Object.assign(unreachableObjects<KinuSandbox>("Sandbox"), {
+const CONTAINERS = { ...ENV, KinuDevbox: Object.assign(unreachableObjects<KinuDevbox>("KinuDevbox"), {
   getByName: (id: string) => {
     sandboxesOpened++;
     selectedSandbox = id;
@@ -721,7 +721,7 @@ async function served(url: string, zone: Partial<Env>, headers: Record<string, s
     CLI_PUBLIC_ORIGIN: APP,
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     ASSETS: { fetch: async () => new Response('<!doctype html><head></head>', { headers: { 'content-type': 'text/html' } }) },
-    Sandbox: CONTAINERS.Sandbox,
+    KinuDevbox: CONTAINERS.KinuDevbox,
   });
 
   // SAFETY: every member the routes under test read is constructed above: the preview host, the public app
@@ -759,7 +759,7 @@ async function signedInBrowser() {
     UserDO: { idFromName: (name: string) => name, get: (id: string) => account(id).userDO },
     OrchestratorAgent: unreachableNamespace('OrchestratorAgent'),
     ASSETS: { fetch: async () => new Response(APP_DOCUMENT, { headers: { 'content-type': 'text/html' } }) },
-    Sandbox: CONTAINERS.Sandbox,
+    KinuDevbox: CONTAINERS.KinuDevbox,
   });
 
   // SAFETY: the session store reads AUTH_KV, the user objects and the encryption key, all constructed above.

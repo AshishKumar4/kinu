@@ -1,8 +1,7 @@
 /**
  * The product flows (`scripts/product-flows.ts`) in real Chrome against ONE
- * origin, `KINU_ORIGIN`: the local dev server before a deploy
- * (`bun scripts/with-dev-server.ts bun test …`) and the deployment after it
- * (`scripts/product-flows-tier.sh`). Nothing here reads which one it is.
+ * origin, `KINU_ORIGIN`: the deployment a deploy has just published
+ * (`scripts/product-flows-tier.sh`, in its post-publish wave).
  *
  * Every row runs in `beforeAll` and leaves a verdict or the reason it has none;
  * the tests below read only what the page showed.
@@ -12,10 +11,12 @@ import { resolveWebIdentity } from '../../evals/src/session';
 import { withBrowser } from '../../scripts/live-app-harness';
 import {
   DRIVE_SLATE, INSPECTOR_SHUT_PX,
-  agentIsThereOnReturn, driveKeepsWhatIsDone, driveOpens, reachesHome, slateOpensFromMyStuff, slateSharesWithNoBindings,
-  slateShowsItsPreview, workspaceGetsFirstAnswer, writtenFileShowsInFilesAndChanges,
+  agentIsThereOnReturn, driveKeepsWhatIsDone, driveOpens, eachPaneKeepsItsTranscript, reachesHome, rightPanelKeepsItsState,
+  slateOpensFromMyStuff, slateSharesWithNoBindings, slateShowsItsPreview, workspaceGetsFirstAnswer,
+  writtenFileShowsInFilesAndChanges,
   type AgentReturnVerdict, type DriveOpensVerdict, type DriveVerdict, type WelcomeVerdict, type FirstAnswerVerdict,
-  type FlowTarget, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict, type WrittenFileVerdict,
+  type FlowTarget, type PanelVerdict, type SlateOpensVerdict, type SlatePreviewVerdict, type SlateShareVerdict,
+  type StampedCardVerdict, type WrittenFileVerdict,
 } from '../../scripts/product-flows';
 import { FLOW_PROBE, FLOW_SLATE } from '../../scripts/flows-script';
 import { rowVerdicts } from '../../scripts/row-verdicts';
@@ -24,6 +25,8 @@ interface FlowVerdicts {
   welcome: WelcomeVerdict | null;
   firstAnswer: FirstAnswerVerdict | null;
   agentReturn: AgentReturnVerdict | null;
+  panel: PanelVerdict | null;
+  stamped: StampedCardVerdict | null;
   writtenFile: WrittenFileVerdict | null;
   slate: SlatePreviewVerdict | null;
   drive: DriveVerdict | null;
@@ -33,7 +36,7 @@ interface FlowVerdicts {
 }
 
 const observed: FlowVerdicts = {
-  welcome: null, firstAnswer: null, agentReturn: null, writtenFile: null, slate: null, drive: null,
+  welcome: null, firstAnswer: null, agentReturn: null, panel: null, stamped: null, writtenFile: null, slate: null, drive: null,
   driveOpens: null, slateOpens: null, slateShare: null,
 };
 
@@ -46,8 +49,8 @@ beforeAll(async () => {
   const origin = process.env.KINU_ORIGIN;
 
   if (origin === undefined || origin === '') {
-    setup = 'KINU_ORIGIN is unset: these rows drive the product at that origin — the local dev server '
-      + '(`bun scripts/with-dev-server.ts`) or the deployment (`scripts/product-flows-tier.sh`).';
+    setup = 'KINU_ORIGIN is unset: these rows drive the deployment at that origin '
+      + '(`scripts/product-flows-tier.sh`, after a deploy publishes).';
 
     return;
   }
@@ -67,6 +70,8 @@ beforeAll(async () => {
     observed.welcome = await attempt('welcome', () => reachesHome(target));
     observed.firstAnswer = await attempt('first-answer', () => workspaceGetsFirstAnswer(target));
     observed.agentReturn = await attempt('agent-return', () => agentIsThereOnReturn(target));
+    observed.panel = await attempt('panel', () => rightPanelKeepsItsState(target));
+    observed.stamped = await attempt('stamped', () => eachPaneKeepsItsTranscript(target));
     observed.writtenFile = await attempt('written-file', () => writtenFileShowsInFilesAndChanges(target));
     observed.slate = await attempt('slate-preview', () => slateShowsItsPreview(target));
     observed.drive = await attempt('drive', () => driveKeepsWhatIsDone(target));
@@ -113,6 +118,36 @@ describe("an agent made with '+', messaged and renamed is all there on return", 
     const back = verdictOf(observed.agentReturn, 'agent-return');
 
     expect(back.conversation).toContain(back.said);
+  });
+});
+
+describe('the right panel keeps its Work, Files and Env state when the chat tab changes', () => {
+  test('the Files surface DOM node identity and scroll position survive', () => {
+    const panel = verdictOf(observed.panel, 'panel');
+
+    expect(panel.nodeSurvives).toBe(true);
+    expect(panel.scrollSurvives).toBe(true);
+  });
+
+  test('no refetch of the workspace-scoped reads occurs on either switch', () => {
+    const panel = verdictOf(observed.panel, 'panel');
+
+    expect(panel.workspaceReadsOnSwitch).toBe(0);
+    expect(panel.workspaceReadsOnBack).toBe(0);
+  });
+
+  test("the '+' tab's own actor socket answered its pane", () => {
+    expect(verdictOf(observed.panel, 'panel').agentSocketFrames).toBeGreaterThan(0);
+  });
+});
+
+describe("a pane renders its own transcript and no other actor's", () => {
+  test("the root's own turn stays out of a new actor's pane", () => {
+    expect(verdictOf(observed.stamped, 'stamped').rootMarkerInActorPane).toBe(0);
+  });
+
+  test("words sent on the actor's tab stay out of the root transcript", () => {
+    expect(verdictOf(observed.stamped, 'stamped').actorMarkerInRootPane).toBe(0);
   });
 });
 

@@ -1,9 +1,11 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { diffLines, fileDiff, type FileDiff, type FileStatus, type Omitted } from '../vfs/diff';
 import { BODY_MAX_BYTES } from './workspace-diff';
 import { sha256Hex } from '../safety/argument-digest';
 import { currentBytes, type WriteSubject } from '../safety/bound-write';
 import type { DeferredApprovalQueue } from '../safety/deferred-approval';
-import type { VFS } from '../types/primitives';
+import { Effect } from 'effect';
+import { KinuError, settle } from '../obs/index';
 
 export interface WritePreview {
   readonly path: string;
@@ -37,10 +39,10 @@ export interface ParkedWriteReview extends WritePreview {
 
 export async function reviewParkedWrite(
   queue: Pick<DeferredApprovalQueue, 'parkedWrite'>, plane: VFS, id: string,
-): Promise<ParkedWriteReview | null> {
+): Promise<ParkedWriteReview> {
   const parked = await queue.parkedWrite(id);
 
-  if (parked === null) return null;
+  if (parked === null) return settle(Effect.fail(new KinuError('missing', 'This change is no longer waiting: it was decided, or its content is gone.')));
   const current = await currentBytes(plane, parked.write.path);
 
   return {

@@ -15,6 +15,7 @@ import type { SubordinateRosterEntry } from '../src/delegation/agents-tool';
 import { agentActive, readWorkspaceAgents, type PanelAgent } from '../src/read-models/workspace-agents';
 import { OWNER_STOPPED } from '../src/heads/types';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
+import { readAgentFigures } from '../src/read-models/agent-figures';
 
 function workspace() {
   const db = new Database(':memory:');
@@ -42,8 +43,9 @@ function workspace() {
     return child;
   };
 
-  const read = (): PanelAgent[] => readWorkspaceAgents({
+  const read = (): Promise<PanelAgent[]> => readWorkspaceAgents({
     sql, exec, root: actors.main, rootLabel: 'Kinu', actors: actors.directory.list({ retired: true }),
+    figures: (actorIds) => readAgentFigures(sql, actorIds),
   });
 
   const openTurn = (actor: ActorHandle): void => {
@@ -74,7 +76,7 @@ const byLabel = <T extends { label: string }>(rows: T[]): T[] => rows.sort((a, b
 const row = ({ label, category, activity, parent, tab, input, open }: PanelAgent) => ({ label, category, activity, parent, tab, input, open });
 
 describe('the Agents panel lists every agent in the workspace', () => {
-  test('the owner\'s own, one an agent hired, and a background helper, each placed as the design says', () => {
+  test('the owner\'s own, one an agent hired, and a background helper, each placed as the design says', async () => {
     const { db, main, hire, read, openTurn } = workspace();
     const alice = hire(main, 'alice', { origin: 'user' });
     openTurn(hire(alice, 'scout-1', {}));
@@ -82,17 +84,17 @@ describe('the Agents panel lists every agent in the workspace', () => {
     openTurn(hire(main, 'lookup-1', { lifetime: 'task' }));
     db.query('UPDATE workspace_actors SET created_at = 0 WHERE name = ?').run('scout-1');
 
-    expect(byLabel(read().map(row))).toEqual(byLabel([
+    expect(byLabel((await read()).map(row))).toEqual(byLabel([
       { label: 'Kinu', category: 'main', activity: 'idle', parent: null, tab: true, input: true, open: { kind: 'chat', path: null } },
       { label: 'alice', category: 'user', activity: 'idle', parent: 'Kinu', tab: true, input: true, open: { kind: 'chat', path: 'alice' } },
       { label: 'scout-1', category: 'hired', activity: 'working', parent: 'alice', tab: false, input: true, open: { kind: 'chat', path: 'alice/scout-1' } },
       { label: 'refiner-1', category: 'background', activity: 'idle', parent: 'Kinu', tab: false, input: false, open: { kind: 'chat', path: 'refiner-1' } },
       { label: 'lookup-1', category: 'hired', activity: 'working', parent: 'Kinu', tab: false, input: true, open: { kind: 'chat', path: 'lookup-1' } },
     ]));
-    expect(read().filter((agent) => agentActive(agent) && !agent.tab).map((agent) => agent.label).sort()).toEqual(['lookup-1', 'scout-1']);
+    expect((await read()).filter((agent) => agentActive(agent) && !agent.tab).map((agent) => agent.label).sort()).toEqual(['lookup-1', 'scout-1']);
   });
 
-  test('a swarm\'s workers are listed under the agent that started it: working while the run runs, read-only', () => {
+  test('a swarm\'s workers are listed under the agent that started it: working while the run runs, read-only', async () => {
     const { db, main, read } = workspace();
     db.query('INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES (?, ?, ?, ?)').run(main.actorId, 'run-1', 'compare two parsers', 10);
 
@@ -102,16 +104,16 @@ describe('the Agents panel lists every agent in the workspace', () => {
     head.run(main.actorId, 'h-a', 'Try the PEG parser', 'running', 11);
     head.run(main.actorId, 'h-b', 'Try the Pratt parser', 'completed', 12);
 
-    const workers = read().filter((agent) => agent.category === 'swarm').map(row);
+    const workers = (await read()).filter((agent) => agent.category === 'swarm').map(row);
 
     expect(workers).toEqual([
       { label: 'Try the PEG parser', category: 'swarm', activity: 'working', parent: 'Kinu', tab: false, input: false, open: { kind: 'node', runId: 'run-1', nodeId: 'h-a', owner: null } },
       { label: 'Try the Pratt parser', category: 'swarm', activity: 'done', parent: 'Kinu', tab: false, input: false, open: { kind: 'node', runId: 'run-1', nodeId: 'h-b', owner: null } },
     ]);
-    expect(read().filter(agentActive).map((agent) => agent.label)).toEqual(['Try the PEG parser']);
+    expect((await read()).filter(agentActive).map((agent) => agent.label)).toEqual(['Try the PEG parser']);
   });
 
-  test('only a worker its owner stopped reads stopped; one cut off with its search or that errored reads failed', () => {
+  test('only a worker its owner stopped reads stopped; one cut off with its search or that errored reads failed', async () => {
     const { db, main, read } = workspace();
     db.query('INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES (?, ?, ?, ?)').run(main.actorId, 'run-1', 'compare two parsers', 10);
 
@@ -122,25 +124,25 @@ describe('the Agents panel lists every agent in the workspace', () => {
     head.run(main.actorId, 'h-b', 'Try the Pratt parser', 'aborted', 'the search was aborted', 12);
     head.run(main.actorId, 'h-c', 'Try a hand-written parser', 'errored', 'the model refused', 13);
 
-    expect(read().filter((agent) => agent.category === 'swarm').map((agent) => [agent.label, agent.activity])).toEqual([
+    expect((await read()).filter((agent) => agent.category === 'swarm').map((agent) => [agent.label, agent.activity])).toEqual([
       ['Try the PEG parser', 'stopped'],
       ['Try the Pratt parser', 'failed'],
       ['Try a hand-written parser', 'failed'],
     ]);
   });
 
-  test('an agent is working while it holds an open turn, whatever its roster row last said', () => {
+  test('an agent is working while it holds an open turn, whatever its roster row last said', async () => {
     const { db, main, hire, read, openTurn } = workspace();
     const chatting = hire(main, 'chatting', { origin: 'user', status: 'idle' });
     openTurn(chatting);
 
-    expect(read().find((agent) => agent.label === 'chatting')?.activity).toBe('working');
+    expect((await read()).find((agent) => agent.label === 'chatting')?.activity).toBe('working');
 
     db.query("UPDATE actor_turn_claims SET outcome = 'indeterminate' WHERE turn_id = 'turn-chatting'").run();
-    expect(read().find((agent) => agent.label === 'chatting')?.activity).toBe('idle');
+    expect((await read()).find((agent) => agent.label === 'chatting')?.activity).toBe('idle');
   });
 
-  test('a worker still running in an old swarm stays listed past the newest twenty runs', () => {
+  test('a worker still running in an old swarm stays listed past the newest twenty runs', async () => {
     const { db, main, read } = workspace();
     const run = db.query('INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES (?, ?, ?, ?)');
 
@@ -155,13 +157,13 @@ describe('the Agents panel lists every agent in the workspace', () => {
       head.run(main.actorId, `h-${String(i)}`, `run-${String(i)}`, `Finished ${String(i)}`, 'completed', 100 + i);
     }
 
-    const workers = read().filter((agent) => agent.category === 'swarm');
+    const workers = (await read()).filter((agent) => agent.category === 'swarm');
 
     expect(workers.find((agent) => agent.label === 'Still grinding')?.activity).toBe('working');
     expect(workers.filter((agent) => agent.label.startsWith('Finished'))).toHaveLength(20);
   });
 
-  test('each agent shows what its own turns cost: tokens, dollars, time and the prompt-cache EMA', () => {
+  test('each agent shows what its own turns cost: tokens, dollars, time and the prompt-cache EMA', async () => {
     const { main, hire, read, turn } = workspace();
     const alice = hire(main, 'alice', { origin: 'user' });
 
@@ -171,17 +173,18 @@ describe('the Agents panel lists every agent in the workspace', () => {
     ]);
     turn(main, 'run-m', 1, [{ input: 500, output: 50, cacheRead: 400, usd: 0.005 }]);
 
-    const figures = (label: string) => read().find((agent) => agent.label === label)?.figures;
+    const listed = await read();
+    const figures = (label: string) => listed.find((agent) => agent.label === label)?.figures;
 
     // The EMA seeds on the first rate (0) and moves α = 0.2 toward the second (0.9).
     expect(figures('alice')).toEqual({ tokens: 3300, usd: 0.03, activeMs: 180_000, cacheEma: 0.2 * 0.9 });
     expect(figures('Kinu')).toEqual({ tokens: 550, usd: 0.005, activeMs: 60_000, cacheEma: 0.8 });
   });
 
-  test('an agent that has not run shows no figures, not zeros', () => {
+  test('an agent that has not run shows no figures, not zeros', async () => {
     const { main, hire, read } = workspace();
     hire(main, 'idle-one', { origin: 'user' });
 
-    expect(read().find((agent) => agent.label === 'idle-one')?.figures).toEqual({ activeMs: 0, cacheEma: null });
+    expect((await read()).find((agent) => agent.label === 'idle-one')?.figures).toEqual({ activeMs: 0, cacheEma: null });
   });
 });

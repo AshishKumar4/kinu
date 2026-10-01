@@ -1,5 +1,5 @@
 /** The agent bundle: `src/agent-facet/agent-facet.ts` alone, built apart from the Worker and served from assets (D9). */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { builtinModules } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { buildSync, stop } from 'esbuild';
@@ -35,6 +35,17 @@ export function buildAgentBundle(entry: string = AGENT_BUNDLE_ENTRY): string {
   return text.replace(/[^\0-\x7f]/g, (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, '0')}`);
 }
 
+/**
+ * Replaces a generated file whole. Concurrent builds and test runs in one checkout rewrite these files while others
+ * read them; written in place, a reader caught one empty (a deploy wave's workerd rows, 2026-09-30).
+ */
+export function writeWhole(path: string, text: string): void {
+  const draft = `${path}.${String(process.pid)}`;
+
+  writeFileSync(draft, text);
+  renameSync(draft, path);
+}
+
 export function agentBundle(): Plugin {
   let built = false;
 
@@ -43,8 +54,8 @@ export function agentBundle(): Plugin {
     async buildStart() {
       if (built) return;
       mkdirSync(dirname(AGENT_BUNDLE_OUTPUT), { recursive: true });
-      writeFileSync(AGENT_BUNDLE_OUTPUT, buildAgentBundle());
-      writeFileSync(resolve(dirname(AGENT_BUNDLE_OUTPUT), 'compatibility.json'), JSON.stringify(workerCompatibility));
+      writeWhole(AGENT_BUNDLE_OUTPUT, buildAgentBundle());
+      writeWhole(resolve(dirname(AGENT_BUNDLE_OUTPUT), 'compatibility.json'), JSON.stringify(workerCompatibility));
       // buildSync leaves esbuild's service process running for the life of the process that ran the build.
       await stop();
       built = true;

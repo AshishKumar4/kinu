@@ -43,7 +43,7 @@ export { readActivityLog, writeActivityLog, type ActivityLogEntry } from './iden
 export { ChatHistoryEntrySchema } from './types/chat';
 
 // Every composition root calls this and nothing else (tests/contract-workspace-schema.test.ts).
-export { initActorTables, initAllTables, initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
+export { initAllTables, initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
 
 export { resetGuardedExec, StoragePredatesResetError } from './state/store-reset';
 
@@ -384,7 +384,6 @@ export {
   type PrepareStepContext,
   type TransformContext,
   type CompactionTrigger,
-  type ArmedCompaction,
 } from './extension';
 
 export {
@@ -1036,7 +1035,7 @@ export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict'
 export {
   DefaultExecutionRouter,
   withApprovalGatedShell, withApprovalGatedFiles, gateProviderExec, shellCwd, type FileReach, type ShellReach,
-  createSandboxExecutor, type SandboxHandle, isSandboxTransientError, SandboxPending,
+  createSandboxExecutor, type SandboxHandle, type SandboxResize, isSandboxTransientError, SandboxPending, sandboxSizeLabel,
   WORKSPACE_BACKUP_DIR,
   createDeviceTunnelExecutor, type DeviceTransport,
   deviceToolchainAnswer, freshDeviceToolchain,
@@ -1079,6 +1078,7 @@ export {
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
   type ExecutorLifecycleStatus, type ExecutorStatus,
   type ExecutorInfo, type ExecutionRouter, type ResourceLimits, type PreviewRouteCheck,
+  type SandboxSize, type SandboxSizes,
   commandResult, CommandResultSchema, type CommandResult, formatExecResult, answeredRefusal, type ExecOutcome,
   BoundedOutput, COMMAND_OUTPUT_LIMITS, type OutputSpill, type SpillOutcome,
   unsandboxedCommandEnvironment,
@@ -1115,7 +1115,7 @@ export {
 
 export type {
   WorkspaceAgent, WorkspaceAgentPlane, WorkspaceBundle, WorkspaceOptions,
-  WorkspaceSession, WorkspaceVFS,
+  WorkspaceSession,
 } from './vfs/nimbus-workspace';
 
 export {
@@ -1154,7 +1154,7 @@ export {
   withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS, RESERVED_REFERENCE_ROOTS,
   readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps,
   type VfsMount, type MountableProvider, type MountedVfs,
-  type VfsNativeMutations, type VfsNativeReads, type VfsListedEntry,
+  type VfsListedEntry,
 } from './vfs/mounts';
 
 // File checkpoints
@@ -1222,7 +1222,7 @@ export {
 
 export {
   JsonValueSchema, JsonObjectSchema, JsonArraySchema,
-  parseJsonValue, parseJsonObject, parseJsonArray, safeJsonParse, decodeJsonValue, projectJsonValue, nonEmptyString,
+  parseJsonValue, parseJsonObject, parseJsonArray, safeJsonParse, decodeJsonValue, jsonResultOrVoid, projectJsonValue, nonEmptyString,
   type JsonPrimitive, type JsonObject, type JsonValue,
 } from './utils/json';
 
@@ -1642,7 +1642,7 @@ export {
   type PanelAgent, type AgentCategory, type AgentActivity, type AgentOpening,
 } from './read-models/workspace-agents';
 
-export type { AgentFigures } from './read-models/agent-figures';
+export { readAgentFigures, NO_FIGURES, type AgentFigures } from './read-models/agent-figures';
 
 export type { WorkspaceWork, OwnedPlan, OwnedTask, WorkspaceWorkOwner } from './read-models/workspace-work';
 
@@ -1755,7 +1755,7 @@ export type {
   SkillHeader, ParsedSkill, DiscoveredSkill, ActiveSkill, SkillBodyRef,
   SkillsIndex, SkillSource, ActiveSkillSet, ActivationReason,
   SkillParseResult,
-  SkillsVfs, DiscoverOpts, SkillsDiscovery, UnreadSkillFile, SkillFileRefusal,
+  DiscoverOpts, SkillsDiscovery, UnreadSkillFile, SkillFileRefusal,
   LoadActiveSkillsOpts, ActivatedSkill,
 } from './skills/index';
 

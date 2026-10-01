@@ -1,3 +1,4 @@
+import { exists, readText } from '@nimbus-sh/core/vfs/vfs.js';
 /** The fork-copy pipeline end to end: the source's frame stream, each frame structuredClone'd across the wire
  *  (as DO RPC), the target's receiver. Both halves are core's, so no second definition of the copy can drift. */
 
@@ -54,7 +55,7 @@ describe('fork pipeline (end-to-end)', () => {
 
     expect(tgt.sql<{ name: string }>`SELECT name FROM crafted_tools`).toEqual([{ name: 'helper' }]);
     // The memory arrived as a FILE the fork can open, not as copied rows.
-    expect(await tgt.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' })).toBe('key insight');
+    expect(await readText(tgt.vfs, 'memory/MEMORY.md')).toBe('key insight');
 
     const lineage = readForkLineage(tgt.sql);
     expect(lineage?.sourceWorkspaceId).toBe('SRC-1');
@@ -117,7 +118,7 @@ describe('fork pipeline (end-to-end)', () => {
     await deliver(receiverFor(tgt, TARGET), frames);
 
     for (const artifact of artifacts) {
-      expect(await tgt.vfs.exists(`${TARGET_ARTIFACTS}/${artifact.path}`)).toBe(true);
+      expect(await exists(tgt.vfs, `${TARGET_ARTIFACTS}/${artifact.path}`)).toBe(true);
     }
 
     // The production reader resolves the re-rooted path and refuses a digest mismatch.

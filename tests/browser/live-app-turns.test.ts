@@ -5,7 +5,7 @@ import { SCRATCH_ROOT_PREFIX } from '../../packages/test-utils/src/scratch';
 import { PACED_SILENCE_MS, RECONNECT_STEPS } from '../../scripts/scripted-model';
 import { liveRows } from '../../scripts/live-app-rows';
 
-const { observed, verdictOf, boot } = liveRows('live-app-turns', ['live-indicator', 'opened-mid-turn', 'reconnect', 'answered', 'stamped', 'state']);
+const { observed, verdictOf, boot } = liveRows('live-app-turns', ['live-indicator', 'opened-mid-turn', 'reconnect', 'answered', 'state']);
 
 beforeAll(boot);
 
@@ -69,16 +69,6 @@ describe('a page whose socket drops mid-turn keeps its answer in order', () => {
     expect(told.filter((text) => text.startsWith('Step ') || text === 'Done.')).toEqual([
       'Step 1: listing the workspace.', 'Step 2: listing scaffold.', 'Step 3: listing the workspace.', 'Done.',
     ]);
-  });
-});
-
-describe("a pane renders its own transcript and no other actor's", () => {
-  test("the root's own turn stays out of a new actor's pane", () => {
-    expect(verdictOf(observed.stamped, 'stamped').rootMarkerInActorPane).toBe(0);
-  });
-
-  test("words sent on the actor's tab stay out of the root transcript", () => {
-    expect(verdictOf(observed.stamped, 'stamped').actorMarkerInRootPane).toBe(0);
   });
 });
 

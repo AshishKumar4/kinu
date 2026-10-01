@@ -1,3 +1,4 @@
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Scaffold gate validation and rollback. */
 
 import { describe, test, expect } from 'bun:test';
@@ -102,12 +103,9 @@ describe('Scaffold modification (4-gate)', () => {
     const liveAfter = await rt.identity.scaffold.read();
     expect(liveAfter).toBe(before);
 
-    const pending = await rt.storage.vfs.readFile(
-      `scaffold/agent.js.v${result.version}`,
-      { encoding: 'utf8' },
-    );
+    const pending = await readText(rt.storage.vfs, `scaffold/agent.js.v${result.version}`);
 
-    const pendingText = pending instanceof Uint8Array ? new TextDecoder().decode(pending) : pending;
+    const pendingText = pending;
     expect(pendingText).toBe(pendingCode);
   });
 });
@@ -118,7 +116,7 @@ describe('Scaffold rollback', () => {
     initScaffoldTables(rt.storage.execRaw);
 
     // A version needs its metadata row to be the current pointer.
-    await rt.storage.vfs.writeFile('scaffold/agent.js.v0', 'original code');
+    await writeText(rt.storage.vfs, 'scaffold/agent.js.v0', 'original code');
     void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale)
                    VALUES (${rt.actor.actorId}, 0, ${Date.now()}, ${'original'})`;
 

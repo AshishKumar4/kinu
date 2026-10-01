@@ -47,9 +47,11 @@ import * as v from 'valibot';
 import type { DevboxExecOptions } from "../src/contracts";
 
 import {
+  BoxSizeSchema,
   Devbox,
   describeThrown,
   parseDevboxStrategyName,
+  type BoxSize,
   type CheckpointKind,
   type CheckpointOutcome,
   type DevboxPolicy,
@@ -87,6 +89,8 @@ interface BenchEnv {
   BENCH_TOKEN?: string;
   /** The arm whose bindings the generated fixture config declares. */
   BENCH_SELECTED_ARMS?: string;
+  /** This run's box size, from `wrangler deploy --var`; absent is Devbox's default (D50). */
+  BENCH_SIZE?: string;
   /** '1' runs the container's own sync at the shipped period, as production does, for the
    *  loss-window measurement (`scripts/bench-devbox-sync-window.ts`); absent, `checkpointNow`
    *  is the only tick source. */
@@ -440,7 +444,7 @@ export class BenchOpCounter extends DurableObject<BenchEnv> {
 }
 
 /**
- * S3Mounts builds each store route's gateway from `ctx.exports.DevboxStoreGateway`, so this class is
+ * S3Mount builds each store route's gateway from `ctx.exports.DevboxStoreGateway`, so this class is
  * exported under that name. It serves the store from the counting binding, which puts s3fs traffic
  * and the container's publication on the meter. Request settlement flushes this isolate's batch;
  * /ops cannot drain a different isolate's under-threshold batch.
@@ -557,6 +561,12 @@ class BenchBox extends Devbox<BenchEnv> {
     // constructor's signature identical to the base's rather than restating a
     // platform type that can drift.
     flushEnv = args[1];
+  }
+
+  protected override get defaultSize(): BoxSize {
+    const chosen = v.safeParse(BoxSizeSchema, this.env.BENCH_SIZE);
+
+    return chosen.success ? chosen.output : super.defaultSize;
   }
   /** The probe of the attempt in flight on this activation. */
   #probe: RestoreProbe | undefined;

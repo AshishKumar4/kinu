@@ -1,3 +1,4 @@
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { expect, test } from 'bun:test';
 import * as v from 'valibot';
 import {
@@ -18,7 +19,7 @@ async function authorIssuesSlate(files: AgentRuntime['storage']['vfs'], extra: R
   const root = '/slates/issues';
   await files.mkdir(root + '/src', { recursive: true });
   await files.mkdir(root + '/scratch', { recursive: true });
-  await files.writeFile(root + '/package.json', JSON.stringify({
+  await writeText(files, root + '/package.json', JSON.stringify({
     name: 'issues', description: 'Triage the open issues', main: 'src/server.ts',
     slate: { title: 'Issue triage', bindings: {
       GITHUB: { kind: 'mcp', server: 'connection-id', tools: ['read_issue'] },
@@ -27,10 +28,10 @@ async function authorIssuesSlate(files: AgentRuntime['storage']['vfs'], extra: R
       PEER: { kind: 'app', id: 'other' },
     } },
   }));
-  await files.writeFile(root + '/src/server.ts', 'export default { fetch() { return new Response("issues"); } };');
-  await files.writeFile(root + '/scratch/notes.txt', 'owner scratch, not for the blueprint');
+  await writeText(files, root + '/src/server.ts', 'export default { fetch() { return new Response("issues"); } };');
+  await writeText(files, root + '/scratch/notes.txt', 'owner scratch, not for the blueprint');
 
-  for (const [path, content] of Object.entries(extra)) await files.writeFile(root + '/' + path, content);
+  for (const [path, content] of Object.entries(extra)) await writeText(files, root + '/' + path, content);
 }
 
 test('a blueprint admits with every requirement unsatisfied and carries nothing of the owner\'s (S8)', async () => {
@@ -97,9 +98,9 @@ test('a blueprint admits with every requirement unsatisfied and carries nothing 
     ]);
     const forkerFiles = workspaceFiles(forker.agent);
     const landed = '/slates/' + fork.slate;
-    expect(await forkerFiles.readFile(landed + '/src/server.ts', { encoding: 'utf8' })).toContain('"issues"');
+    expect(await readText(forkerFiles, landed + '/src/server.ts')).toContain('"issues"');
     expect(await forkerFiles.stat(landed + '/scratch')).toBeNull();
-    const admittedTree = JSON.stringify(await forkerFiles.readFile(landed + '/package.json', { encoding: 'utf8' })) + await forkerFiles.readFile(landed + '/src/server.ts', { encoding: 'utf8' });
+    const admittedTree = JSON.stringify(await readText(forkerFiles, landed + '/package.json')) + await readText(forkerFiles, landed + '/src/server.ts');
 
     for (const secret of [mcpHeader, providerKey, vaultSecret, vault.placeholder]) expect(admittedTree).not.toContain(secret);
 
@@ -133,7 +134,7 @@ test('the export warns about secret-shaped text and stays silent on a clean tree
   expect(flagged.warnings).toEqual([{ path: 'src/config.ts', line: 1, pattern: 'aws-access-key', message: 'AWS access key id' }]);
   expect(JSON.stringify(flagged)).not.toContain(pasted);
 
-  await files.writeFile('/slates/issues/src/config.ts', 'export const AWS = process.env.AWS_KEY;\n');
+  await writeText(files, '/slates/issues/src/config.ts', 'export const AWS = process.env.AWS_KEY;\n');
   const clean = answered(await owner.agent.slate({ op: 'commit', id: 'issues' }), v.object({ id: v.string() }));
   expect(answered(await owner.agent.slate({ op: 'inspect', id: 'issues', version: clean.id }), BlueprintInspectionSchema).warnings).toEqual([]);
   // Published bytes are scanned: the warning follows the version, not the working tree.

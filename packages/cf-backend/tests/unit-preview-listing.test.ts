@@ -9,18 +9,18 @@ import { isPreviewUrl, reconcilePreviewPorts, type ExposedPortList, type PinnedP
 import { mockAgentsSdk } from './helpers/agents-sdk';
 import { socketConnection, unreachableObjects } from "./helpers/bindings";
 import type { RecordedUserPlaneCalls } from './helpers/actor-harness';
-import type { KinuSandbox } from '../src/kinu-sandbox';
+import type { KinuDevbox } from '../src/kinu-devbox';
 
 mockAgentsSdk();
 
 const SUFFIX = 'previews.example';
 
-const TERMINAL = 'this devbox has no attached work directory: the mount refused. That recovery class is terminal: call attachNow() to attempt the attach again.';
+const TERMINAL = 'this devbox has no attached work directory: the mount refused. That failure is terminal, so nothing retries it.';
 
 const PORT = 8788;
 
 /** What the devbox answers as data, the shape that survives the Durable Object RPC. */
-type Readiness = Awaited<ReturnType<KinuSandbox['resolveReadiness']>>;
+type Readiness = Awaited<ReturnType<KinuDevbox['resolveReadiness']>>;
 
 /** What the container's readiness answers now; each test moves it. */
 let readiness: () => Promise<Readiness> = async () => ({ kind: 'restored' });
@@ -48,7 +48,7 @@ const sandboxFor = (id: string) => ({
     }],
 });
 
-const sandboxes = Object.assign(unreachableObjects<KinuSandbox>("Sandbox"), { getByName: sandboxFor });
+const sandboxes = Object.assign(unreachableObjects<KinuDevbox>("KinuDevbox"), { getByName: sandboxFor });
 
 // Must follow the sandbox double: both helpers' module graphs reach the sandbox SDK.
 const { makeEnv, orchestratorHarness, until } = await import('./helpers/actor-harness');
@@ -62,7 +62,7 @@ async function usedSandbox() {
   const world = { container: true };
 
   const { agent } = orchestratorHarness(userPlane, world, {
-    ...makeEnv(undefined, userPlane, world), Sandbox: sandboxes, PREVIEW_HOST_SUFFIX: SUFFIX, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    ...makeEnv(undefined, userPlane, world), KinuDevbox: sandboxes, PREVIEW_HOST_SUFFIX: SUFFIX, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
 
   expect(await agent.executeInExecutor('sandbox', 'true')).toMatchObject({ exitCode: 0 });

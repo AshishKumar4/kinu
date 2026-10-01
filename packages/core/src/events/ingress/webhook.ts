@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Webhook ingress. hmac: `X-Kinu-Signature` = HMAC-SHA256(secret, `<ts>.<body>`), timestamp within
  * ±5 min, signature claimed once for that window. bearer: constant-time compare. mtls: edge-verified.
@@ -10,7 +11,7 @@ import { spillEventContent } from '../hub/content-spill';
 import { Effect } from 'effect';
 import { settleSync } from '../../obs/index';
 import { safeJsonParse } from '../../utils/json';
-import type { SqlExec, VFS } from '../../types/primitives';
+import type { SqlExec } from '../../types/primitives';
 import { hmacSha256Hex, timingSafeEqual } from '../../utils/crypto';
 import {
   initWebhookRateLimitTables, normalizeWebhookRateLimitPerMin, tryConsumeWebhookRateLimit,

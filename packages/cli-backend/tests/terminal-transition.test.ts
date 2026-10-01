@@ -1,3 +1,4 @@
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Process-death recovery for the terminal transition: cut at a named effect and phase (TerminalEffectInterrupt),
 // reopen a second session over the same database, and check every effect ran exactly once.
 import { describe, test, expect } from 'bun:test';
@@ -291,9 +292,9 @@ test('a managed context edit reaches the local request and retained trial togeth
     // Armed after the first turn: a drain still running that turn's trial re-reads the queue between laps and
     // would take the follow-up's trial with it, however fast the workspace files answer.
     await armShadowTrials(rt);
-    const document = v.parse(v.string(), await rt.storage.vfs.readFile('/context/working.jsonl', { encoding: 'utf8' }));
-    await rt.storage.vfs.writeFile('/context/working.jsonl', document.replace('OLD premise', 'NEW premise'));
-    await expect(rt.storage.vfs.writeFile('/context/working.jsonl', document)).rejects.toThrow(/revision|stale|changed/i);
+    const document = v.parse(v.string(), await readText(rt.storage.vfs, '/context/working.jsonl'));
+    await writeText(rt.storage.vfs, '/context/working.jsonl', document.replace('OLD premise', 'NEW premise'));
+    await expect(writeText(rt.storage.vfs, '/context/working.jsonl', document)).rejects.toThrow(/revision|stale|changed/i);
     await session.send('follow-up input', { id: crypto.randomUUID() });
     await session.settleBackgroundWork();
     const trial = listQueuedShadowTrials(rt.storage.sql, rt.actor, 1).find((row) => row.task === 'follow-up input');

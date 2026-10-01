@@ -1,3 +1,4 @@
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: its host lifecycle and turn review.
 import { describe, test, expect } from 'bun:test';
 import { createMockFetch, handClock, present, scratchDir, scratchPath, toolExecute, scriptedTurnModel } from '@kinu.run/test-utils';
@@ -441,7 +442,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     };
 
     const { rt, session } = setupWithResolver(resolver, { profileAuthority: () => envelope });
-    await rt.storage.vfs.writeFile('notes.md', 'hello\nworld\n');
+    await writeText(rt.storage.vfs, 'notes.md', 'hello\nworld\n');
     await session.send('What is the first line of notes.md?', { id: crypto.randomUUID() });
 
     expect(requests).toHaveLength(2);
@@ -922,7 +923,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     if (reviewed === null) throw new Error('expected focused skill');
 
-    await rt.storage.vfs.writeFile(path, `${FOCUSED_SKILL}\n# changed after review\n`);
+    await writeText(rt.storage.vfs, path, `${FOCUSED_SKILL}\n# changed after review\n`);
     const result = await session.approveInstruction(path, reviewed.digest);
 
     expect(result.ok).toBe(false);
@@ -1224,11 +1225,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     ]);
 
     const { rt, session } = setup('unused', model);
-    await rt.storage.vfs.writeFile('shared.txt', 'original');
+    await writeText(rt.storage.vfs, 'shared.txt', 'original');
 
     await session.send('read it natively, then replace it through codemode', { id: crypto.randomUUID() });
 
-    expect(await rt.storage.vfs.readFile('shared.txt', { encoding: 'utf8' }))
+    expect(await readText(rt.storage.vfs, 'shared.txt'))
       .toBe('changed by codemode');
   });
 
@@ -1245,11 +1246,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     ]);
 
     const { rt, session } = setup('unused', model);
-    await rt.storage.vfs.writeFile('shared.txt', 'original');
+    await writeText(rt.storage.vfs, 'shared.txt', 'original');
 
     await session.send('read it through codemode, then replace it natively', { id: crypto.randomUUID() });
 
-    expect(await rt.storage.vfs.readFile('shared.txt', { encoding: 'utf8' }))
+    expect(await readText(rt.storage.vfs, 'shared.txt'))
       .toBe('changed by native file');
   });
 

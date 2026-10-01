@@ -1,14 +1,12 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { statSync, chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { cpus, tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { childEnv, scratchDir } from "@kinu.run/test-utils";
 import { parseReleaseManifest } from "@kinu.run/core/deploy";
 import { generateReleaseSigningKey } from "../packages/core/src/http/release-signing";
 import {
-  DEPLOY_PHASES, GATE_DEADLINE_SECONDS, LADDER, SHARED_RESOURCES, deployPlan,
-  printPlan,
+  DEPLOY_PHASES, GATE_DEADLINE_SECONDS, LADDER, deployPlan, type DeployPhase,
 } from "./ladder";
 import { costRssMb, costThreads, readCosts } from "./gate-cost";
 import { CONTROL_PLANE_ACCESS_PATHS, deriveInfrastructure } from "./infra-manifest";
@@ -21,37 +19,24 @@ import { BUILTIN_TUI_THEMES, createThemeRegistry, DEFAULT_TUI_THEME_SELECTION } 
 const REPO_ROOT = resolve(import.meta.dir, "..");
 
 
-/** The runner passes each plan command unchanged to `ladder.ts --gate`; argv and globs resolve inside the ladder. */
+/** The deploy's plan: which gate runs in which phase. deploy.sh runs a phase as one ladder call. */
 const PLAN = deployPlan();
 
-const PLAN_TEXT = printPlan(PLAN);
+/** How deploy.sh runs one phase: the ladder runs that phase's plan rows through its wave. */
+function phaseRun(phase: DeployPhase, all = false): string {
+  return `bun scripts/ladder.ts --deploy-phase=${phase}${all ? " --all" : ""}`;
+}
 
+/** The phases before the upload, in the order a deploy runs them, as the fixture's event log spells them. */
+const PRE_PUBLISH: readonly string[] = DEPLOY_PHASES.filter((phase) => phase !== "post-publish").map((phase) => phaseRun(phase));
 
-/** Every pre-publish gate in plan order, as the fixture's event log spells it. */
-const REQUIRED_GATES: readonly string[] = PLAN.filter((row) => row.phase !== "post-publish").map((row) => row.run);
-
-/** The gates that run AFTER the upload. The fixture's build stub exits
- *  non-zero on purpose, so no run here reaches them; what is asserted about
- *  them is structural: they are the plan's last phase. */
-const POST_DEPLOY_GATES: readonly string[] = phaseGates("post-publish");
-
-/** The pre-publish waves, in order: each phase before `post-publish` is one. */
-const PRE_PUBLISH_WAVES: readonly (readonly string[])[] = DEPLOY_PHASES
-  .filter((phase) => phase !== "post-publish")
-  .map(phaseGates);
-
-/** The commands one phase of the plan runs, as the deploy expands them. */
+/** The commands one phase of the plan runs. */
 function phaseGates(phase: string): string[] {
   return PLAN.filter((row) => row.phase === phase).map((row) => row.run);
 }
 
 /** A staging deploy's own step before its build: HEAD's record on staging withdrawn (scripts/promote.ts). */
 const WITHDRAW = "bun scripts/promote.ts forget";
-
-/** The gates among a run's events: all but the build and the step the script takes itself. */
-function gatesOf(events: readonly string[]): string[] {
-  return events.filter((event) => !event.startsWith("MUTATE ") && event !== WITHDRAW);
-}
 
 function executable(path: string, source: string): void {
   writeFileSync(path, source);
@@ -84,45 +69,23 @@ function launchFailure(result: Bun.SyncSubprocess): string {
 }
 
 function commandStub(name: string): string {
-  // A command is recorded as the plan writes it, relative to the repository: deploy.sh names its own
-  // steps by their path under KINU_ROOT.
+  // A command is recorded as deploy.sh writes it, relative to the repository: deploy.sh names its own
+  // steps by their path under KINU_ROOT. A phase is one event: the ladder runs its gates.
   return `#!/usr/bin/bash
 command_line="${name} $*"
 command_line="\${command_line//$KINU_DEPLOY_ROOT\\//}"
-# The planner, answered from the file the fixture wrote: the plan is the
-# ladder's, and the stub only carries it. Not logged as an event, because it
-# is not a gate.
-if [ "$command_line" = "bun scripts/ladder.ts --plan" ]; then
-  cat "$KINU_DEPLOY_PLAN"
-  exit 0
-fi
-if [ "$1" = "scripts/ladder.ts" ] && [ "$2" = "--gate" ]; then
-  command_line="$3"
-fi
 printf '%s\\n' "$command_line" >> "$KINU_DEPLOY_GATE_LOG"
-# WHAT THE INFRASTRUCTURE GATE ACTUALLY SAW. The phase travels in the
-# environment because the gate line has to stay one string for ladder.ts to
-# parse, so the only way to assert which phase a deploy ran is to record it from
-# inside the gate. Written to its own file: the log above is compared for set
-# equality against REQUIRED_GATES and an extra line there is a dropped gate.
-if [ "$command_line" = "bun run gate:infra" ]; then
+# WHAT THE INFRASTRUCTURE PHASE ACTUALLY SAW. The account gate reads its phase
+# and account from the environment deploy.sh hands the ladder, so the only way to
+# assert which a deploy ran is to record them where the ladder would start it.
+if [ "$1" = "scripts/ladder.ts" ] && [ "$2" = "--deploy-phase=infra" ]; then
   printf '%s\\n' "\${KINU_INFRA_PHASE:-unset}" > "$KINU_DEPLOY_PHASE_LOG"
   printf '%s\\n' "\${KINU_INFRA_ENVIRONMENT:-unset}" > "$KINU_DEPLOY_INFRA_ENV_LOG"
 fi
-# WHEN EACH GATE RAN, for the one question a launch log cannot answer: did two
-# rows holding the same resource overlap. Written only when a run asks for it,
-# because it costs every stub a sleep long enough to be measurable against the
-# clock, and every other test here spawns the whole tier per gate.
-if [ -n "$KINU_DEPLOY_SPAN_LOG" ]; then
-  printf 'start\\t%s\\t%s\\n' "$(date +%s%N)" "$command_line" >> "$KINU_DEPLOY_SPAN_LOG"
-  sleep "$KINU_DEPLOY_SPAN_SLEEP"
-  printf 'end\\t%s\\t%s\\n' "$(date +%s%N)" "$command_line" >> "$KINU_DEPLOY_SPAN_LOG"
-fi
 if [ "$KINU_DEPLOY_KILL" = "$command_line" ]; then
-  # SIGKILL the process the runner is waiting on, which is this stub: the
-  # runner execs the gate's runner directly. The gate then ends having
-  # published nothing about itself, which is the OOM-kill shape — the runner
-  # has to settle it from the child's fate alone.
+  # SIGKILL this stub, the phase's runner: it then ends having published
+  # nothing about itself, which is the OOM-kill shape, and deploy.sh has to
+  # settle it from the child's fate alone.
   kill -9 "$$"
 fi
 if [ "$KINU_DEPLOY_FAIL" = "$command_line" ]; then
@@ -132,71 +95,17 @@ exit 0
 `;
 }
 
-/** How long a stub gate holds its slot in a span run. Long enough that two
- *  rows launched together overlap by more than the clock's own resolution,
- *  short enough that the whole tier is a few seconds: the wave admits most
- *  rows in parallel, so the run's wall is the shared lane's chain. */
-const SPAN_SLEEP_SECONDS = 0.4;
-
-/** One gate's run, as the span log records it: nanoseconds, from the stub's
- *  own clock, so the two ends of one row are comparable with another row's. */
-interface Span {
-  readonly run: string;
-  readonly start: number;
-  readonly end: number;
-}
-
-function readSpans(text: string): Span[] {
-  const started = new Map<string, number>();
-  const spans: Span[] = [];
-
-  for (const line of text.trim().split("\n").filter(Boolean)) {
-    const [edge, stamp, run] = line.split("\t");
-
-    if (edge === undefined || stamp === undefined || run === undefined) continue;
-
-    if (edge === "start") {
-      started.set(run, Number(stamp));
-      continue;
-    }
-
-    const start = started.get(run);
-
-    if (start === undefined) continue;
-    started.delete(run);
-    spans.push({ run, start, end: Number(stamp) });
-  }
-
-  return spans;
-}
-
-/** Two runs of the wave that were in flight at the same moment. */
-function overlapping(spans: readonly Span[]): [Span, Span][] {
-  const pairs: [Span, Span][] = [];
-
-  for (const [index, left] of spans.entries()) {
-    for (const right of spans.slice(index + 1)) {
-      if (left.start < right.end && right.start < left.end) pairs.push([left, right]);
-    }
-  }
-
-  return pairs;
-}
-
-/** One deploy run against stub gates.
+/** One deploy run against stub commands.
  *
- *  `failingGate` exits 47; `killGate` SIGKILLs the process the runner waits on,
- *  so that gate settles with no verdict of its own. `tmpdir` points the gate log
- *  directory somewhere, including somewhere that cannot exist. `option` is the
- *  script's second word, and `ambientPhase` is a KINU_INFRA_PHASE already on the
- *  environment — the one thing that must never decide how strictly a deploy is
+ *  `failingGate` names a command (a phase, or a step deploy.sh takes itself) that exits 47; `killGate` SIGKILLs one,
+ *  so it settles with no verdict of its own. `option` is the script's second word, and `ambientPhase` is a
+ *  KINU_INFRA_PHASE already on the environment — the one thing that must never decide how strictly a deploy is
  *  checked. */
 interface DeployRun {
   readonly failingGate?: string;
   readonly killGate?: string;
   readonly dirty?: boolean;
   readonly environment?: string;
-  readonly tmpdir?: string;
   readonly option?: string;
   /** Further options after `option`, for the combinations the script accepts. */
   readonly options?: readonly string[];
@@ -204,13 +113,6 @@ interface DeployRun {
   /** A KINU_INFRA_ENVIRONMENT already on the environment, which must never decide
    *  which account's resources the gate checks. */
   readonly ambientEnvironment?: string;
-  /** The thread cap the wave schedules against; the box's count when absent. */
-  readonly threads?: number;
-  /** The resident-set cap in MiB; derived from MemAvailable when absent. */
-  readonly rssMb?: number;
-  /** Record when each gate started and ended, each stub holding its slot for
-   *  `spanSleep` seconds: the only way to see whether two rows overlapped. */
-  readonly spans?: boolean;
   /** The scripted model Worker's bearer; empty is the deploy that has none. */
   readonly scriptedKey?: string;
 }
@@ -219,14 +121,10 @@ function runDeploy({
   failingGate = "",
   killGate = "",
   dirty = false,
-  tmpdir: temporaryRoot,
   option,
   options = [],
   ambientPhase = "",
   ambientEnvironment = "",
-  threads,
-  rssMb,
-  spans = false,
   scriptedKey = "fixture-scripted-key",
 }: DeployRun = {}) {
   const fixture = scratchDir("deploy-gate");
@@ -234,15 +132,10 @@ function runDeploy({
   const buildEnvironmentLog = join(fixture, "build-environment.log");
   const phaseLog = join(fixture, "infra-phase.log");
   const infraEnvironmentLog = join(fixture, "infra-environment.log");
-  const spanLog = join(fixture, "spans.log");
 
   mkdirSync(join(fixture, "scripts"));
   mkdirSync(join(fixture, "node_modules"));
   mkdirSync(join(fixture, "packages", "cf-backend"), { recursive: true });
-
-  const planFile = join(fixture, "plan.tsv");
-  writeFileSync(planFile, `${PLAN_TEXT}\n`);
-
 
   executable(
     join(fixture, "scripts", "deploy.sh"),
@@ -276,11 +169,6 @@ exit 87
 
   if (option !== undefined) argv.push(option);
   argv.push(...options);
-  const budget: Record<string, string> = {};
-
-  if (threads !== undefined) budget.KINU_DEPLOY_THREADS = String(threads);
-
-  if (rssMb !== undefined) budget.KINU_DEPLOY_RSS_MB = String(rssMb);
 
   const run = Bun.spawnSync(argv, {
     cwd: fixture,
@@ -288,24 +176,16 @@ exit 87
       PATH: `${fixture}:/usr/bin:/bin`,
       KINU_DEPLOY_FAIL: failingGate,
       KINU_DEPLOY_KILL: killGate,
-      // Always explicit. The gate runner creates its log directory under TMPDIR,
-      // and one test points it somewhere that cannot exist.
-      TMPDIR: temporaryRoot ?? fixture,
+      TMPDIR: fixture,
       KINU_DEPLOY_GATE_LOG: log,
       KINU_DEPLOY_ROOT: fixture,
-      KINU_DEPLOY_PLAN: planFile,
       KINU_DEPLOY_BUILD_ENV_LOG: buildEnvironmentLog,
       KINU_DEPLOY_PHASE_LOG: phaseLog,
       KINU_DEPLOY_INFRA_ENV_LOG: infraEnvironmentLog,
-      // A span run only: every other run leaves both empty, and the stub then
-      // writes no span and sleeps not at all.
-      KINU_DEPLOY_SPAN_LOG: spans ? spanLog : "",
-      KINU_DEPLOY_SPAN_SLEEP: spans ? String(SPAN_SLEEP_SECONDS) : "0",
       // Always set, so the assertion that the script overrides it is about the
       // script rather than about whichever shell ran the suite.
       KINU_INFRA_PHASE: ambientPhase,
       KINU_INFRA_ENVIRONMENT: ambientEnvironment,
-      ...budget,
       KINU_DEPLOY_DIRTY: dirty ? "1" : "0",
       KINU_SCRIPTED_MODEL_KEY: scriptedKey,
       SKIP_E2E: "1",
@@ -333,29 +213,24 @@ exit 87
     buildEnvironment,
     infraPhase,
     infraEnvironment,
-    spans: existsSync(spanLog) ? readSpans(readFileSync(spanLog, "utf8")) : [],
   };
 }
 
 describe("deploy gate", () => {
-  // WHY THESE ARE SET PROPERTIES AND NOT AN ORDERED COMPARE.
+  // AT THE DEPLOY BOUNDARY. deploy.sh runs each phase as one ladder call, which
+  // runs that phase's gates through the ladder's wave (scripts/ladder.ts,
+  // `tierWave`, whose admission ladder.test.ts holds). What is asserted here is
+  // what deploy.sh itself decides: the phases, in order, each a barrier, the
+  // options it hands them, and that a red phase stops the deploy before the
+  // next phase, the build or any publish.
   //
-  // deploy.sh runs the middle gates concurrently, so the order they reach the
-  // event log is scheduling noise. `events == REQUIRED_GATES` — or, per failing
-  // gate, `events == REQUIRED_GATES.slice(0, n + 1)` — reads a total order off
-  // that log and pins the noise.
-  //
-  // Every property a total order stands in for is asserted directly, and one
-  //   - every SERIAL_GATE that runs pre-publish sits in its own wave at the
-  //     position it declares;
   // Review job 150, P1: a staging re-deploy of a verified commit replaces what staging serves for it, so it withdraws
   // that commit's record first, after its gates and before anything it builds can be published.
-  test("runs every declared gate, withdraws HEAD's record, then builds for staging", () => {
+  test("runs every pre-publish phase in order, withdraws HEAD's record, then builds for staging", () => {
     const run = runDeploy();
 
     expect(run.status).not.toBe(0);
-    expect([...run.events].sort()).toEqual([...REQUIRED_GATES, WITHDRAW, "MUTATE bunx vite build"].sort());
-    expect(run.events.slice(-2)).toEqual([WITHDRAW, "MUTATE bunx vite build"]);
+    expect(run.events).toEqual([...PRE_PUBLISH, WITHDRAW, "MUTATE bunx vite build"]);
     expect(run.buildEnvironment).toBe("staging");
     expect(run.infraEnvironment).toBe("staging");
   });
@@ -378,9 +253,7 @@ describe("deploy gate", () => {
     const run = runDeploy({ option: "--promote" });
 
     expect(run.status).not.toBe(0);
-    expect([...run.events].sort())
-      .toEqual([...phaseGates("preflight"), PROMOTION_CHECK, ...phaseGates("infra"), "MUTATE bunx vite build"].sort());
-    expect(run.events.indexOf(PROMOTION_CHECK)).toBeLessThan(run.events.indexOf("bun run gate:infra"));
+    expect(run.events).toEqual([phaseRun("preflight"), PROMOTION_CHECK, phaseRun("infra"), "MUTATE bunx vite build"]);
     expect(run.buildEnvironment).toBe("root");
     expect(run.infraEnvironment).toBe("production");
   });
@@ -389,7 +262,7 @@ describe("deploy gate", () => {
     const run = runDeploy({ option: "--promote", failingGate: PROMOTION_CHECK });
 
     expect(run.status).not.toBe(0);
-    expect(run.events).toEqual([...phaseGates("preflight"), PROMOTION_CHECK]);
+    expect(run.events).toEqual([phaseRun("preflight"), PROMOTION_CHECK]);
     expect(run.infraEnvironment).toBeNull();
   });
 
@@ -437,7 +310,7 @@ describe("deploy gate", () => {
     expect(failedBuild.events).toContain("MUTATE bunx vite build");
     expect(wiped(failedBuild.events)).toEqual([]);
 
-    const redGate = runDeploy({ option: "--reset", failingGate: REQUIRED_GATES[REQUIRED_GATES.length - 1] });
+    const redGate = runDeploy({ option: "--reset", failingGate: PRE_PUBLISH.at(-1) });
 
     expect(redGate.status).not.toBe(0);
     expect(redGate.events.some((event) => event.startsWith("MUTATE "))).toBe(false);
@@ -451,15 +324,13 @@ describe("deploy gate", () => {
     expect(runDeploy({ option: "--promote", ambientEnvironment: "staging" }).infraEnvironment).toBe("production");
   });
 
-  // STRUCTURAL, over the plan the runner consumes: every phase but `source`
-  // holds gates that run alone, one wave each, in DEPLOY_PHASES order; the
-  // runner walks the phases in that order and puts a barrier after each. The
-  // preflight is first because nothing may report on a machine the preflight
-  // has not passed; the hammer and the account gate follow the source wave so
-  // a cheap source red fails first; the post-publish phase runs after the
-  // upload against the build that just shipped. Reading this off the stub log
-  // could not see a missing barrier, since the scheduler launches index 0
-  // first either way; the plan's phase column can.
+  // STRUCTURAL, over the plan each phase runs: every phase but `source` holds
+  // gates that run alone, one wave each, in DEPLOY_PHASES order; deploy.sh runs
+  // the phases in that order, each a barrier. The preflight is first because
+  // nothing may report on a machine the preflight has not passed; the hammer
+  // and the account gate follow the source wave so a cheap source red fails
+  // first; the post-publish phase runs after the upload against the build that
+  // just shipped.
   test("every gate outside the source wave declares its phase and why it runs alone", () => {
     expect(DEPLOY_PHASES).toEqual(["preflight", "source", "hammer", "infra", "post-publish"]);
     const byPhase = Object.fromEntries(DEPLOY_PHASES.map((phase) => [phase, PLAN.filter((row) => row.phase === phase).map((row) => row.run)]));
@@ -492,70 +363,32 @@ describe("deploy gate", () => {
     }
   });
 
-  // A gate can end without saying anything about itself: the OOM killer takes it,
-  // or something outside its process tree SIGKILLs it. The runner settles that
-  // from the child's exit status, which the kernel supplies whether the gate
-  // cooperates or not.
-  //
-  // The previous runner published each verdict into a status FILE and, when the
-  // file was missing, probed `kill -0` on a pid it had already reaped. A recycled
-  // pid answers that probe as somebody else's live process, so the gate never
-  // settled, nothing was left to wait on, and the wave spun at 100% CPU with the
-  // deploy unable to finish. Asserted through a real run rather than by reading
-  // the script: the source-text version of this test passed over a runner that
-  // could not report.
-  // ONE SOURCE. deploy.sh consumes the plan the ladder prints and names no
-  // gate itself: a `bun test`, `bun run gate:` or `bun scripts/` command in
-  // the runner would be a second list, which is the defect this replaced
-  // (fifteen suites named by hand in three files on 2026-09-14).
-  test("deploy.sh names no gate; it consumes the ladder's plan", () => {
+  // ONE SOURCE. deploy.sh names no gate itself: a `bun test`, `bun run gate:` or
+  // `bun scripts/` command in the runner would be a second list, which is the
+  // defect this replaced (fifteen suites named by hand in three files on
+  // 2026-09-14), and a second scheduler over the ladder's cost table is the one
+  // L16 removed.
+  test("deploy.sh names no gate; the ladder runs each phase", () => {
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
-    const commands = source.split("\n").filter((line) => /^\s*(?:bun test |bun run gate:|bun scripts\/(?!ladder\.ts --plan))/.test(line));
+    const commands = source.split("\n").filter((line) => /^\s*(?:bun test |bun run gate:|bun scripts\/(?!ladder\.ts "\$\{flags\[@\]\}"))/.test(line));
+
     expect(commands).toEqual([]);
-    expect(source).toContain('plan="$(bun scripts/ladder.ts --plan)"');
-    expect(source).toContain("run_phase preflight");
-    expect(source).toContain("run_phase source");
-    expect(source).toContain("run_phase post-publish");
+
+    for (const phase of DEPLOY_PHASES) expect(source).toContain(`run_phase ${phase}`);
     expect(source).not.toContain("run_required_gate");
-
-    // The plan is machine-readable and complete: one line per gate, seven
-    // tab-separated fields, no quotes, and every command a plain argv.
-    for (const line of PLAN_TEXT.split("\n")) {
-      const fields = line.split("\t");
-      expect(fields).toHaveLength(6);
-      const phases: readonly string[] = DEPLOY_PHASES;
-      expect(phases).toContain(fields[0] ?? "");
-      expect(Number(fields[2])).toBeGreaterThan(0);
-      expect(Number(fields[3])).toBeGreaterThan(0);
-      const resources: readonly string[] = [...SHARED_RESOURCES, "none"];
-      expect(resources).toContain(fields[4] ?? "");
-      expect(fields[5]).not.toMatch(/['"]/u);
-    }
   });
 
-  test("a gate killed without a verdict of its own fails the deploy", () => {
-    const run = runDeploy({ killGate: "bun run lint" });
+  // A phase's runner can end without saying anything about itself: the OOM
+  // killer takes it, or something outside its process tree SIGKILLs it.
+  // deploy.sh settles that from the child's exit status, which the kernel
+  // supplies whether the runner cooperates or not.
+  test("a phase killed without a verdict of its own fails the deploy", () => {
+    const run = runDeploy({ killGate: phaseRun("source") });
 
     expect(run.status).not.toBe(0);
-    // 128 + SIGKILL. The status is the child's fate, not a claim the gate made.
-    expect(run.stdout).toContain("Anti-slop lint failed (exit 137)");
-    expect(run.events, "the killed gate never launched").toContain("bun run lint");
-    expect(
-      run.events.some((event) => event.startsWith("MUTATE ")),
-      "a gate died unreported and the build ran anyway",
-    ).toBe(false);
-  });
-
-  // Every gate's output lands in one temp directory and every failure is reported
-  // out of it, so a directory that cannot be created is a wave that cannot be
-  // reported on. With the creation unchecked, `$dir` is empty, each gate writes to
-  // `/0.log`, and a box out of inodes deploys on the strength of logs nobody has.
-  test("a gate log directory that cannot be created deploys nothing", () => {
-    const run = runDeploy({ tmpdir: join(tmpdir(), "kinu-deploy-no-such-root", "nowhere") });
-
-    expect(run.status).not.toBe(0);
-    expect(run.stdout).toContain("cannot create a gate log directory");
-    expect(run.events).toEqual([]);
+    // 128 + SIGKILL. The status is the child's fate, not a claim the runner made.
+    expect(run.stdout).toContain("the source phase failed (exit 137)");
+    expect(run.events).toEqual([phaseRun("preflight"), phaseRun("source")]);
   });
 
   // THE WAVE IS SCHEDULED BY MEASURED COST IN TWO DIMENSIONS. A count of gates
@@ -564,33 +397,9 @@ describe("deploy gate", () => {
   // one of them at 137, a SIGKILL no thread budget can predict — while each
   // passed alone. The three workerd rows declared one thread each and no
   // memory at all. Nothing declares a cost now; scripts/gate-cost.json holds
-  // what each row was measured to take, and the runner admits against both
-  // figures under a cap read from the box.
-  test("the wave admits on measured threads AND resident set, both under a machine cap", () => {
-    // BOTH CAPS, AS THE RUNNER ANNOUNCES THEM, given both figures. This was a
-    // grep over deploy.sh for `nproc` and `MemAvailable` and NOT `MemTotal`,
-    // which the script's own comment — "MemAvailable, not MemTotal: MemTotal
-    // includes memory nothing can have" — defeated the day it was written. A
-    // source-text assertion over a file that explains itself is the class of
-    // check that goes stale; the two dimensions being load-bearing is proved
-    // by the two rows below, which serialise the wave on each cap in turn.
-    const named = runDeploy({ threads: 7, rssMb: 1234 });
-    expect(named.stdout).toContain("within 7 threads and 1234 MiB of measured cost");
-
-    // DERIVED FROM THE BOX when neither is given: the thread cap is `nproc`
-    // exactly, and the memory cap is a reserve fraction of what the kernel
-    // says can be handed out right now — never of MemTotal, which includes
-    // memory nothing can have and would cap the wave above the available
-    // figure. Bounds rather than an equality, because MemAvailable moves
-    // while other lanes work on the same box.
-    const derived = runDeploy();
-    const announced = /within (\d+) threads and (\d+) MiB of measured cost/u.exec(derived.stdout);
-    const availableMb = Number(/^MemAvailable:\s+(\d+) kB$/mu.exec(readFileSync("/proc/meminfo", "utf8"))?.[1] ?? 0) / 1024;
-    expect(availableMb).toBeGreaterThan(0);
-    expect(announced?.[1]).toBe(String(cpus().length));
-    expect(Number(announced?.[2])).toBeGreaterThan(availableMb * 0.5);
-    expect(Number(announced?.[2])).toBeLessThan(availableMb);
-
+  // what each row was measured to take, and the wave admits against both
+  // figures under the box's caps (ladder.test.ts holds the admission itself).
+  test("each source row is admitted on its measured threads and resident set, and no Chrome or worker row is free", () => {
     const costs = readCosts();
 
     for (const row of PLAN) {
@@ -624,6 +433,8 @@ describe("deploy gate", () => {
     const browserRows = PLAN.filter((row) => row.shared === "browser").map((row) => row.run);
 
     for (const row of PLAN) {
+      // A live probe against the deployment has no measured cost to admit it by, as above.
+      if (row.phase === "post-publish") continue;
       const opensChrome = browserRows.includes(row.run);
       const multiWorker = row.run.includes("--parallel=") || row.run === "bun run test:core" || row.run === "bun run test:cli";
 
@@ -635,131 +446,18 @@ describe("deploy gate", () => {
     }
   });
 
-  // THE MEMORY DIMENSION DECIDES, not just the thread one. The gate self-tests
-  // row settled at 137 on 2026-09-16 — the kernel's status for a SIGKILL — and
-  // a wave that counts only threads cannot see that coming. With a cap of one
-  // MiB no row fits beside a running row, so the event log is the declared
-  // order: the same observation as the thread test, through the other figure.
-  test("a resident-set cap of one MiB runs the wave one gate at a time", () => {
-    const run = runDeploy({ rssMb: 1 });
-    const gates = gatesOf(run.events);
+  // A red phase TRUNCATES the run: no later phase starts, nothing is built and
+  // nothing is published, whichever phase it is, with the former skip variable
+  // (SKIP_E2E, on every run here) set.
+  test("every phase fails closed: a red one stops the deploy before the next phase, the build or a publish", () => {
+    for (const [index, phase] of PRE_PUBLISH.entries()) {
+      const run = runDeploy({ failingGate: phase });
 
-    expect(gates).toEqual([...REQUIRED_GATES]);
-    expect(run.stdout).toContain("1 MiB");
-  });
-
-  test("a budget of one thread runs the wave in declared order, one gate at a time", () => {
-    const run = runDeploy({ threads: 1 });
-    const gates = gatesOf(run.events);
-    // With one thread nothing fits beside a running gate, so the scheduler
-    // launches the first unlaunched gate only after the previous settled: the
-    // event log IS the declared order. A count-based width would need six
-    // gates in flight to be observable at all.
-    expect(gates).toEqual([...REQUIRED_GATES]);
-    expect(run.stdout).toContain("within 1 threads and");
-  });
-
-  // ONE BROWSER ROW AT A TIME, WHICH NO COST FIGURE CAN EXPRESS. The nine rows
-  // that boot Chrome are admitted at 1 to 3 threads and 0.5 to 6.4 GiB, so no
-  // value of either cap refuses the overlap — the lane is the only admission
-  // that can. Whether the overlap HARMS them is unproved and written as a
-  // hypothesis: measured 2026-09-18 on the 24-thread workstation, quiet box,
-  // the three browser rows of that day's red wave ran 480.1 s/124, 480.1 s/124
-  // and 152.8 s/1 concurrently and 480.2 s/124, 480.2 s/124 and 149.7 s/1
-  // serially — red either way, on one product defect (L9 in
-  // docs/ARCHITECTURE-DECISIONS.md).
-  //
-  // Read off SPANS rather than the launch log, because the launch log cannot
-  // see an overlap at all: it records the order rows started, and the
-  // scheduler starts them in plan order whether they overlap or not. Each stub
-  // holds its slot for SPAN_SLEEP_SECONDS, which is longer than the clock's
-  // resolution by three orders of magnitude. RED on the pre-mutex scheduler:
-  // with the resource check taken out of the admission loop (measured
-  // 2026-09-18) this reports twelve overlapping browser-row pairs.
-  test("two rows holding the browser never overlap, and the rest of the wave still does", () => {
-    const run = runDeploy({ spans: true });
-    const sharedRuns = PLAN.filter((row) => row.shared === "browser").map((row) => row.run);
-
-    expect(sharedRuns.length, "no row holds the browser; the derivation stopped deriving").toBeGreaterThan(1);
-    const shared = run.spans.filter((span) => sharedRuns.includes(span.run));
-    expect(shared.map((span) => span.run).sort()).toEqual([...sharedRuns].sort());
-
-    expect(
-      overlapping(shared).map(([left, right]) => `${left.run} || ${right.run}`),
-      "two rows held the browser at the same moment",
-    ).toEqual([]);
-
-    // AND THE WAVE IS STILL A WAVE. A mutex that serialised everything would
-    // pass the assertion above and cost the deploy its concurrency, so the
-    // rows that hold nothing are held to the opposite property.
-    const free = run.spans.filter((span) => !sharedRuns.includes(span.run));
-    expect(overlapping(free).length, "no two unshared rows overlapped; the wave ran serially").toBeGreaterThan(0);
-  });
-
-  test("the serial gates are the ends of the real run", () => {
-    const run = runDeploy();
-    const gates = gatesOf(run.events);
-
-    expect(gates[0]).toBe("bun scripts/preflight.ts");
-    // The fixture's build stub fails on purpose, so the last gate to RUN is
-    // the last pre-publish one — the post-publish wave is unreachable here.
-    expect(gates.at(-1)).toBe("bun run gate:infra");
-  });
-
-  // The budget is EXPLICIT because the work is quadratic and bun's 5000ms
-  // default is not a decision anybody made about this test. One deploy run per
-  // gate, each running every earlier gate's stub: the per-gate count below is
-  // ~3,200 process spawns.
-  test("every gate fails closed even when the former skip variable is set", () => {
-    const last = REQUIRED_GATES.at(-1);
-    // WHICH WAVE EACH GATE IS IN, BY POSITION: the plan's phase index. The
-    // plan spells one gate with a glob and REQUIRED_GATES carries what that
-    // glob expands to in the fixture, so the mapping is positional rather
-    // than by text, and both lists are the plan in plan order.
-    const waveOfGate = PLAN.map((row) => DEPLOY_PHASES.indexOf(row.phase));
-    expect(waveOfGate).toHaveLength(REQUIRED_GATES.length + POST_DEPLOY_GATES.length);
-
-    for (const gate of REQUIRED_GATES) {
-      const run = runDeploy({ failingGate: gate });
-
-      expect(run.status, `${gate} did not fail the deploy`).not.toBe(0);
-      expect(run.events, `${gate} failed and never ran\n${run.stdout}`).toContain(gate);
-      expect(
-        run.events.some((event) => event.startsWith("MUTATE ")),
-        `${gate} failed and the build ran anyway`,
-      ).toBe(false);
-      // A failure TRUNCATES the run. Only the final gate can fail with every
-      // other gate already behind it.
-      //
-      // Expressed over WAVES, which is what the runner actually orders: gates
-      // inside one wave run concurrently and finish in no fixed order, so the
-      // checkable property is that no gate from a LATER wave ran at all. This
-      // was written as "the Cloudflare gate never ran", which said the same
-      // thing only while that gate happened to be last — and silently stopped
-      // saying anything about the wave that followed it.
-      const failedWave = waveOfGate[REQUIRED_GATES.indexOf(gate)] ?? -1;
-
-      const downstream = REQUIRED_GATES.filter(
-        (_gate, index) => (waveOfGate[index] ?? -1) > failedWave,
-      );
-
-      for (const later of downstream) {
-        expect(run.events, `${gate} failed and ${later} ran anyway`).not.toContain(later);
-      }
-
-      if (gate !== last) {
-        expect(run.events.length, `${gate} failed and the whole tier ran anyway`)
-          .toBeLessThan(REQUIRED_GATES.length);
-      }
+      expect(run.status, `${phase} did not fail the deploy`).not.toBe(0);
+      expect(run.events, `${phase} failed and a later step ran\n${run.stdout}`).toEqual(PRE_PUBLISH.slice(0, index + 1));
+      expect(run.stdout).toContain("(exit 47). The build and publish steps did not start.");
     }
-    // BUDGETED PER GATE, not as a literal. This spawns one real `deploy.sh`
-    // per required gate, so its cost is linear in the tier and a fixed number
-    // silently tightens every time a gate is added — which is exactly what
-    // happened on 2026-09-10, when moving `gate:wired` and `gate:dead-code` to
-    // the commit tier pushed a 60s literal into a timeout. Measured that day on
-    // the reference box: 55.2 s and 55.4 s for 23 gates, so ~2.4 s per gate.
-    // 4 s is declared, because a loaded box must not read as a broken deploy.
-  }, REQUIRED_GATES.length * 4_000);
+  });
 
 
   test("a dirty checkout is rejected before verification or mutation", () => {
@@ -799,11 +497,10 @@ describe("deploy gate", () => {
   test("bootstrap changes the phase and not one gate", () => {
     const bootstrap = runDeploy({ option: "--bootstrap" });
 
-    // Same gates, same set, same failure semantics as any other deploy. This is
-    // the assertion that would catch a future `--bootstrap` that skipped a check
-    // rather than re-scoping one.
-    expect([...bootstrap.events].sort())
-      .toEqual([...REQUIRED_GATES, WITHDRAW, "MUTATE bunx vite build"].sort());
+    // Same phases, same order, same failure semantics as any other deploy. This
+    // is the assertion that would catch a future `--bootstrap` that skipped a
+    // check rather than re-scoping one.
+    expect(bootstrap.events).toEqual([...PRE_PUBLISH, WITHDRAW, "MUTATE bunx vite build"]);
     expect(bootstrap.infraPhase).toBe("bootstrap");
     // The operator is told what is deferred and what is not, before the gates run.
     expect(bootstrap.stdout).toContain("BOOTSTRAP");
@@ -811,7 +508,7 @@ describe("deploy gate", () => {
 
     const normal = runDeploy();
     expect(normal.infraPhase).toBe("full");
-    expect([...normal.events].sort()).toEqual([...bootstrap.events].sort());
+    expect(normal.events).toEqual(bootstrap.events);
     expect(normal.stdout).not.toContain("BOOTSTRAP");
   });
 
@@ -845,38 +542,30 @@ describe("deploy gate", () => {
     expect(run.infraPhase).toBeNull();
   });
 
-  // The rehearsal path: every pre-publish gate, no build, no upload. It is how
-  // the wave's wall time is measured for the width figures in scripts/ladder.ts,
-  // so it has to run exactly the gates a deploy runs and touch nothing after.
-  // FAIL FAST, WITH A FULL AUDIT ON REQUEST. The default wave stops launching
-  // at its first red and lets what is running finish; `--all` keeps launching
-  // so one run reports every red. Proved at budget 1 so the order is
-  // deterministic and the difference is exactly "the gates after the red".
-  test("the first red stops new launches by default, and --all runs every gate anyway", () => {
-    const second = REQUIRED_GATES[2];
+  // FAIL FAST, WITH A FULL AUDIT ON REQUEST. Inside a phase the wave stops
+  // launching at its first red and lets what is running finish; `--all` keeps
+  // launching so one run reports every red (ladder.test.ts holds the wave).
+  // Either way a red phase ends the deploy before the next barrier.
+  test("the first red stops the deploy at its phase, and --all asks each phase for every gate anyway", () => {
+    const stopped = runDeploy({ failingGate: phaseRun("source") });
 
-    if (second === undefined) throw new Error("no third gate");
-    const stopped = runDeploy({ failingGate: second, threads: 1 });
     expect(stopped.status).not.toBe(0);
-    expect(stopped.events).toEqual(REQUIRED_GATES.slice(0, 3));
-    expect(stopped.stdout).toContain("stopping new launches at the first failure");
+    expect(stopped.events).toEqual([phaseRun("preflight"), phaseRun("source")]);
 
-    // The WHOLE WAVE, and only the wave: a red wave still ends the pipeline
-    // before the next barrier, so the hammer and the account gate never run.
-    const audited = runDeploy({ failingGate: second, threads: 1, option: "--gates-only", options: ["--all"] });
+    const audited = runDeploy({ failingGate: phaseRun("source", true), option: "--gates-only", options: ["--all"] });
+
     expect(audited.status).not.toBe(0);
-    const prePublish = (PRE_PUBLISH_WAVES[0]?.length ?? 0) + (PRE_PUBLISH_WAVES[1]?.length ?? 0);
-    expect(audited.events).toEqual(REQUIRED_GATES.slice(0, prePublish));
-    expect(audited.stdout).toContain("every gate regardless of failures (--all)");
-    expect(audited.events.some((event) => event.startsWith("MUTATE ")), "--all published on a red").toBe(false);
+    expect(audited.events).toEqual([phaseRun("preflight", true), phaseRun("source", true)]);
   });
 
-  test("gates-only runs every pre-publish gate and mutates nothing", () => {
+  // The rehearsal path: every pre-publish phase, no build, no upload. It is how
+  // the wave's wall time is measured for the figures in scripts/ladder.ts, so it
+  // has to run exactly the phases a deploy runs and touch nothing after.
+  test("gates-only runs every pre-publish phase and mutates nothing", () => {
     const run = runDeploy({ option: "--gates-only" });
 
     expect(run.status).toBe(0);
-    expect([...run.events].sort()).toEqual([...REQUIRED_GATES].sort());
-    expect(run.events.some((event) => event.startsWith("MUTATE ")), "gates-only built or published").toBe(false);
+    expect(run.events).toEqual([...PRE_PUBLISH]);
     expect(run.stdout).toContain("Gates only: stopping before the build");
   });
 
@@ -956,15 +645,15 @@ describe("deploy gate", () => {
     // running in its own wave after every source gate. Both halves matter: a
     // declared-and-unobserved resource proves nothing, and an observed-but-
     // optional gate is a warning.
-    expect(REQUIRED_GATES).toContain('bun run gate:infra');
     // ITS OWN WAVE, AFTER EVERY SOURCE GATE, so an account that cannot be
     // proved never reaches Wrangler deployment; and THE LAST WAVE BEFORE THE
     // UPLOAD, which is what the property has always meant: a live gate against
     // the deployment runs after the publish, beside first-run, because a
     // pre-publish live gate can only measure the previous build and refuses
     // the deploy carrying its fix.
-    expect(PRE_PUBLISH_WAVES.at(-1)).toEqual(['bun run gate:infra']);
-    expect(POST_DEPLOY_GATES).toContain('bun run gate:first-run');
+    expect(phaseGates('infra')).toEqual(['bun run gate:infra']);
+    expect(PRE_PUBLISH.at(-1)).toBe(phaseRun('infra'));
+    expect(phaseGates('post-publish')).toContain('bun run gate:first-run');
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
     expect(source.indexOf('run_phase infra')).toBeLessThan(source.indexOf('Step 2: Building Kinu'));
     expect(source.indexOf('run_phase post-publish')).toBeGreaterThan(source.indexOf('Step 4: Post-deploy smoke test'));

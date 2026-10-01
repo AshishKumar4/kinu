@@ -1,13 +1,13 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Native container executor, one durable workspace per agent, exposed as sandbox.*. */
 
 import * as v from 'valibot';
-import type { ExecutorProvider, ExecutorCapability, PortExposureResult, PreviewRouteCheck } from './types';
+import { Effect } from 'effect';
+import type { ExecutorProvider, ExecutorCapability, ExecutorStatus, PortExposureResult, PreviewRouteCheck, SandboxSize, SandboxSizes } from './types';
 import { readExecSignal } from './signal';
 import { commandResult, exposedPortText, type CommandResult } from './exec-result';
-import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
-import type { VFS } from '../types/primitives';
+import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
 import { isVfsError, VfsError, VFS_ERRNO, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
-import type { VfsNativeReads } from '../vfs/mounts';
 import { shellQuote } from '../utils/shell';
 import { vfsDirname } from '../utils/vfs-helpers';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
@@ -78,11 +78,64 @@ export interface SandboxHandle {
   /** Asked before the first exposure: restarts re-expose with the stored token, so the first URL must use it too. */
   portToken(port: number, name?: string): Promise<{ urlToken: string }>;
   notePortRemoved(port: number): Promise<void>;
+  /** Records the size; a container running at another size restarts at it, and one not running stays so. */
+  resize(size: string): Promise<SandboxResize>;
+}
+
+/** `failed`: the final checkpoint failed, so the container runs on at `previous` until its next start. */
+export type SandboxResize =
+  | { readonly kind: 'recorded' | 'unchanged'; readonly size: string }
+  | { readonly kind: 'restarted'; readonly size: string; readonly previous: string | undefined; readonly endedCommands: number }
+  | { readonly kind: 'failed'; readonly size: string; readonly previous: string | undefined; readonly reason: string };
+
+/** Everything but the lifecycle word, which each branch of `getStatus` names. */
+type ExecutorStatusBase = Omit<ExecutorStatus, 'status'>;
+
+/** `Medium (2 vCPU, 8 GiB)`: what the prompt, the types and a resize's answer call a size. */
+export function sandboxSizeLabel(row: SandboxSize): string {
+  return `${row.label} (${String(row.vcpu)} vCPU, ${String(Math.round(row.memoryMib / 102.4) / 10)} GiB)`;
+}
+
+function labelOf(sizes: SandboxSizes, size: string | undefined): string {
+  const row = sizes.sizes.find((candidate) => candidate.size === size);
+
+  return row === undefined ? String(size) : sandboxSizeLabel(row);
+}
+
+/** The answer to `sandbox.resize`, in the terms its declaration uses. */
+function resizedText(resized: SandboxResize, sizes: SandboxSizes): string | Refusal {
+  const size = labelOf(sizes, resized.size);
+
+  switch (resized.kind) {
+    case 'recorded':
+      return `The sandbox is not running; it starts at ${size}.`;
+    case 'unchanged':
+      return `The sandbox already runs at ${size}.`;
+    case 'restarted': {
+      const ended = resized.endedCommands === 0 ? '' : `; ${String(resized.endedCommands)} running command${resized.endedCommands === 1 ? '' : 's'} ended`;
+
+      return `The sandbox restarted at ${size}${resized.previous === undefined ? '' : `, from ${labelOf(sizes, resized.previous)}`}. `
+        + `Files are kept, and supervised servers and exposed ports came back${ended}.`;
+    }
+
+    case 'failed':
+      return refusalOf(new KinuError('io', `The sandbox still runs at ${labelOf(sizes, resized.previous)}: its final checkpoint failed `
+        + `(${resized.reason}). It starts at ${size} next time.`));
+  }
+}
+
+/** The declaration codemode shows for `sandbox.resize`, from the host's table. */
+function resizeDeclaration(sizes: SandboxSizes | undefined): string {
+  if (sizes === undefined) return '';
+  const choices = sizes.sizes.map((row) => `${row.size}: ${String(row.vcpu)} vCPU, ${String(Math.round(row.memoryMib / 102.4) / 10)} GiB`).join('; ');
+
+  return `\n  /** ${choices}. A running sandbox restarts at the new size: files stay, supervised servers and ports come back, a running command ends. */`
+    + `\n  function resize(size: ${sizes.sizes.map((row) => `'${row.size}'`).join(' | ')}): Promise<string | Refusal>;`;
 }
 
 const NOT_CONFIGURED =
-  'Sandbox executor not configured. Add the @cloudflare/sandbox binding ' +
-  'and Container to wrangler.jsonc (see docs/EXECUTION-LAYER-SPEC.md).';
+  'Sandbox executor not configured. Add the KinuDevbox binding ' +
+  'and its container to wrangler.jsonc (see docs/EXECUTION-LAYER-SPEC.md).';
 
 const PREVIEWS_NOT_CONFIGURED =
   'Sandbox previews are off: PREVIEW_HOST_SUFFIX is unset, so there is no zone to mint preview ' +
@@ -187,11 +240,13 @@ function notDispatched(): Error {
   );
 }
 
-/** Pass `undefined` for a "not configured" stub. Without `previewHostSuffix` only port exposure refuses. */
+/** Pass `undefined` for a "not configured" stub. Without `previewHostSuffix` only port exposure refuses;
+ *  without `sizes` there is no `resize`. */
 export function createSandboxExecutor(
   handle?: SandboxHandle,
   previewHostSuffix?: string,
   activated?: () => void,
+  sizes?: SandboxSizes,
 ): ExecutorProvider {
   const connected = handle != null;
   const previews = previewHostSuffix !== undefined && previewHostSuffix.length > 0;
@@ -564,10 +619,31 @@ export function createSandboxExecutor(
     },
   };
 
+  if (sizes !== undefined) {
+    tools.resize = {
+      description: 'Change the sandbox\'s size. A running sandbox at another size restarts: files stay, '
+        + 'supervised servers and exposed ports come back, and a running command ends.',
+      execute: async (...args: unknown[]): Promise<string | Refusal> => {
+        if (!handle) return notConfigured();
+        const size = parseInput(v.picklist(sizes.sizes.map((row) => row.size)), { value: args[0] });
+
+        if (size === undefined) {
+          return refusalOf(new KinuError('bad_input', `sandbox resize: size must be one of ${sizes.sizes.map((row) => row.size).join(', ')}`));
+        }
+
+        // Retried: a resize repeated after a lost answer finds its size already applied.
+        return settle(Effect.match(Effect.tryPromise({
+          try: () => withSandboxRetry(() => touch(() => handle.resize(size))),
+          catch: (cause) => sandboxFailure({ doing: `sandbox resize ${size}`, cause }),
+        }), { onSuccess: (resized) => resizedText(resized, sizes), onFailure: refusalOf }));
+      },
+    };
+  }
+
   const types = `
 /**
- * A Linux container of your own (2 vCPU, about 6 GB) with its own files. Relative paths resolve in
- * /workspace. It has no docker, python3, make, gcc, clang or tsc. It refuses past 10 instances (503)
+ * A Linux container of your own with its own files. Relative paths resolve in /workspace. It has no
+ * docker, python3, make, gcc, clang or tsc. A start can be refused when the platform has no room (503)
  * or on a burst of starts (429); \`unavailable\` means this deployment has no container. A server
  * started with startProcess comes back when the container restarts; a nohup job does not.
  */
@@ -589,7 +665,7 @@ declare namespace sandbox {
   function listProcesses(): Promise<string | Refusal>;
   function exposePort(port: number, name?: string): Promise<string | Refusal>;
   function unexposePort(port: number): Promise<string | Refusal>;
-  function listPorts(): Promise<string | Refusal>;
+  function listPorts(): Promise<string | Refusal>;${resizeDeclaration(sizes)}
 }
 `.trim();
 
@@ -610,9 +686,11 @@ declare namespace sandbox {
     filesOwner: 'agent',
     isAvailable: () => connected,
     getStatus: () => {
-      const seen = { configured: connected, available: connected, active };
+      const seen: ExecutorStatusBase = { configured: connected, available: connected, active };
 
       if (!connected) return { ...seen, status: 'not_configured', reason: NOT_CONFIGURED };
+
+      if (sizes !== undefined) seen.sizes = sizes;
 
       if (!previews) return { ...seen, status: active ? 'active' : 'idle', reason: PREVIEWS_NOT_CONFIGURED };
 
@@ -665,8 +743,8 @@ declare namespace sandbox {
 }
 
 /** Container files at absolute paths. stat is synthesized from the parent listing (mtime 0);
- *  `readdirStats` avoids one relisting per child. */
-export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 'readdirStats' | 'readRange'> {
+ *  dirent stats avoid one relisting per child. */
+export function sandboxFiles(handle: SandboxHandle): VFS & Required<Pick<VFS, 'readRange'>> {
   const isDir = (f: { type?: string; isDirectory?: boolean }): boolean =>
     f.isDirectory ?? (f.type === 'directory' || f.type === 'dir');
 
@@ -713,17 +791,14 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
   };
 
   return {
-    async readFile(path, opts) {
-      const r = await serving(path, () => handle.readFile(path, { encoding: 'base64' }));
+    async readFile(path) {
+      const result = await serving(path, () => handle.readFile(path, { encoding: 'base64' }));
 
-      if (r.exitCode != null && r.exitCode !== 0) {
-        throw new VfsError('ENOENT', `no such file or directory, open '${path}' (exit ${r.exitCode})`, path);
+      if (result.exitCode != null && result.exitCode !== 0) {
+        throw new VfsError('ENOENT', `no such file or directory, open '${path}' (exit ${result.exitCode})`, path);
       }
 
-      // base64: the only exact read.
-      const bytes = r.encoding === 'base64' ? base64ToBytes(r.content ?? '') : new TextEncoder().encode(r.content ?? '');
-
-      return opts?.encoding === 'utf8' ? new TextDecoder().decode(bytes) : bytes;
+      return result.encoding === 'base64' ? base64ToBytes(result.content ?? '') : new TextEncoder().encode(result.content ?? '');
     },
 
     /** Bounded window via `dd` + base64; the SDK's `readFile` has no offset/length. Bounds validated before use. */
@@ -744,45 +819,38 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
     },
 
     async writeFile(path, data) {
-      await serving(path, () => v.is(v.string(), data)
-        ? handle.writeFile(path, data)
-        : handle.writeFile(path, bytesToBase64(data), { encoding: 'base64' }));
+      await serving(path, () => handle.writeFile(path, bytesToBase64(data), { encoding: 'base64' }));
     },
 
     async readdir(path) {
-      const r = await serving(path, () => handle.listFiles(path, { recursive: false }));
+      const result = await serving(path, () => handle.listFiles(path, { recursive: false }));
 
-      return (r.files ?? []).map(nameOf).filter((n) => n.length > 0);
-    },
-
-    async readdirStats(path) {
-      const r = await serving(path, () => handle.listFiles(path, { recursive: false }));
-
-      return (r.files ?? [])
-        .map((f) => ({ name: nameOf(f), entry: f }))
+      return (result.files ?? [])
+        .map((entry) => ({ name: nameOf(entry), entry }))
         .filter(({ name }) => name.length > 0)
-        .map(({ name, entry }) => ({
-          name,
-          stat: { size: entry.size ?? 0, mtimeMs: 0, isDir: isDir(entry) },
-        }));
+        .map(({ name, entry }) => {
+          const type = isDir(entry) ? 'directory' as const : 'file' as const;
+
+          return { name, type, stat: { size: entry.size ?? 0, mtimeMs: 0, type } };
+        });
     },
 
     async stat(path) {
       const clean = path.length > 1 ? path.replace(/\/+$/, '') : path;
 
-      if (clean === '/' || clean === '') return { size: 0, mtimeMs: 0, isDir: true };
+      if (clean === '/' || clean === '') return { size: 0, mtimeMs: 0, type: 'directory' };
 
       const name = clean.slice(clean.lastIndexOf('/') + 1);
 
-      // null is reserved for "no such entry"; an unlistable parent propagates.
-      const files = (await serving(clean, () =>
-        handle.listFiles(vfsDirname(clean), { recursive: false }))).files ?? [];
+      const listing = await tolerateAsync(() => serving(clean, () =>
+        handle.listFiles(vfsDirname(clean), { recursive: false })), 'enoent');
 
-      const entry = files.find((f) => nameOf(f) === name);
+      if (listing === undefined) return null;
+      const entry = (listing.files ?? []).find((file) => nameOf(file) === name);
 
       if (!entry) return null;
 
-      return { size: entry.size ?? 0, mtimeMs: 0, isDir: isDir(entry) };
+      return { size: entry.size ?? 0, mtimeMs: 0, type: isDir(entry) ? 'directory' : 'file' };
     },
 
     async unlink(path) { await serving(path, () => handle.deleteFile(path)); },
@@ -795,10 +863,5 @@ export function sandboxFiles(handle: SandboxHandle): VFS & Pick<VfsNativeReads, 
       }
     },
 
-    async exists(path) {
-      const r = await handle.exec(`test -e ${shellQuote(path)} && echo true || echo false`);
-
-      return (r.stdout ?? r.output ?? '').includes('true');
-    },
   };
 }

@@ -1,3 +1,4 @@
+import { exists, readText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Read models through public entry points over real storage, asserting the shapes surfaces
  *  consume. */
 
@@ -6,7 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 
-import { present, testActorHandle } from '@kinu.run/test-utils';
+import { seedTranscriptEntry, present, testActorHandle } from '@kinu.run/test-utils';
 import {
   createTestActor, createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql, makeSqlExec,
 } from './helpers';
@@ -28,7 +29,7 @@ import { PositionPageRequestSchema, type PositionCursor } from '../src/session/p
 import { getWorkspaceDiff, resetWorkspaceBaseline } from '../src/read-models/workspace-diff';
 import { CRED_SESSION_USER } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { getExecutorFiles, readExecutorFile, writeExecutorFileOp } from '../src/read-models/files';
-import type { SqlExecutor, VFS } from '../src/types/primitives';
+import type { SqlExecutor } from '../src/types/primitives';
 import {
   cancelCurrentWork, clearBackgroundJobs, dismissBackgroundJob, jobResult,
   listBackgroundJobs, retryBackgroundJob, type BackgroundJobControl,
@@ -72,7 +73,7 @@ function chatStore(w: { db: Database; sql: SqlExecutor; actor: ActorHandle; vfs:
 /** Appended in order, as a real turn writes. */
 async function seedTranscript(history: SessionHistory, rows: readonly SeedRow[]): Promise<void> {
   for (const row of rows) {
-    await history.record(CHAT_SESSION_ID, {
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, {
       id: row.id, message: { role: row.role, content: row.content },
       origin: row.role === 'user' ? 'input' : 'output',
     });
@@ -279,7 +280,7 @@ describe('agent status', () => {
     await writeSoul(sql, '# Mine\n\n## Mission\n\nread the room and update it', (content) => writeWorkspaceSoul(bundle, content));
 
     try {
-      await vfs.writeFile('SOUL.md', 'forged');
+      await writeText(vfs, 'SOUL.md', 'forged');
     } catch (cause) {
       expect(String(cause)).toContain('EACCES');
     }
@@ -309,11 +310,11 @@ describe('agent status', () => {
   test('chat history flattens multi-part content and drops non-chat roles', async () => {
     const w = workspace();
     const { history, transcript } = chatStore(w);
-    await history.record(CHAT_SESSION_ID, {
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, {
       id: 'a', origin: 'input',
       message: { role: 'user', content: [{ type: 'text', text: 'hel' }, { type: 'text', text: 'lo' }] },
     });
-    await history.record(CHAT_SESSION_ID, {
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, {
       id: 'b', origin: 'output',
       message: { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'probe', output: { type: 'text', value: 'not a chat role' } }] },
     });
@@ -486,16 +487,16 @@ describe('workspace change-set', () => {
   test('work completed before the first read remains visible against the birth baseline', async () => {
     const { rt, db, workspace: bundle } = createTestRuntime();
     // The runtime writes its scaffold on its first file call, before the birth review.
-    await rt.storage.vfs.exists('scaffold/agent.js');
+    await exists(rt.storage.vfs, 'scaffold/agent.js');
     const baselines = { store: (await bundle.session()).vfs, cred: CRED_SESSION_USER };
     await resetWorkspaceBaseline(rt, baselines);
-    await rt.storage.vfs.writeFile('notes.md', 'one\n');
+    await writeText(rt.storage.vfs, 'notes.md', 'one\n');
 
     const first = await getWorkspaceDiff(rt, baselines);
     expect(first.files.map((f) => [f.path, f.status, f.added])).toEqual([['notes.md', 'added', 2]]);
 
     expect(await resetWorkspaceBaseline(rt, baselines)).toMatchObject({ ok: true });
-    await rt.storage.vfs.writeFile('notes.md', 'one\ntwo\n');
+    await writeText(rt.storage.vfs, 'notes.md', 'one\ntwo\n');
     const after = await getWorkspaceDiff(rt, baselines);
     expect(after.files.map((f) => [f.path, f.status, f.added])).toEqual([['notes.md', 'changed', 1]]);
 
@@ -518,7 +519,7 @@ describe('executor file plane', () => {
   test('workspace listings are typed, sized and directories-first', async () => {
     const { rt, db } = createTestRuntime();
     await rt.storage.vfs.mkdir('/home/main/proj/sub', { recursive: true });
-    await rt.storage.vfs.writeFile('/home/main/proj/a.txt', 'aa');
+    await writeText(rt.storage.vfs, '/home/main/proj/a.txt', 'aa');
 
     const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/home/main/proj');
     expect(listed.entries?.map((e) => [e.name, e.type])).toEqual([['sub', 'dir'], ['a.txt', 'file']]);
@@ -528,7 +529,7 @@ describe('executor file plane', () => {
 
   test('an empty path lists where the environment itself says it starts', async () => {
     const { rt, db } = createTestRuntime();
-    await rt.storage.vfs.writeFile('/home/main/notes.md', 'me');
+    await writeText(rt.storage.vfs, '/home/main/notes.md', 'me');
 
     const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '');
     expect(listed.path).toBe('/home/main');
@@ -540,7 +541,7 @@ describe('executor file plane', () => {
     const { rt, db } = createTestRuntime();
     await rt.storage.vfs.mkdir('/home/main/proj/.nimbus/runtimes', { recursive: true });
     await rt.storage.vfs.mkdir('/home/main/proj/.kinu/tool-output', { recursive: true });
-    await rt.storage.vfs.writeFile('/home/main/proj/hello.py', 'print(42)\n');
+    await writeText(rt.storage.vfs, '/home/main/proj/hello.py', 'print(42)\n');
 
     const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/home/main/proj');
     expect(listed.entries?.map((e) => e.name)).toEqual(['hello.py']);
@@ -549,7 +550,7 @@ describe('executor file plane', () => {
 
   test('the listed directory comes back absolute and resolved, so the caller can walk up', async () => {
     const { rt, db } = createTestRuntime();
-    await rt.storage.vfs.writeFile('/home/main/notes.md', 'me');
+    await writeText(rt.storage.vfs, '/home/main/notes.md', 'me');
 
     // `..` from the agent's home is /home, not the filesystem root: the old root's link sits beside it.
     const up = await getExecutorFiles(router(rt.storage.vfs), 'workspace', '/home/main/..');
@@ -573,8 +574,8 @@ describe('executor file plane', () => {
     const { rt, db } = createTestRuntime();
     const r = router(rt.storage.vfs);
     await rt.storage.vfs.mkdir('dir', { recursive: true });
-    await rt.storage.vfs.writeFile('bin', `x\u0000y`);
-    await rt.storage.vfs.writeFile('big', 'z'.repeat(512 * 1024 + 10));
+    await writeText(rt.storage.vfs, 'bin', `x\u0000y`);
+    await writeText(rt.storage.vfs, 'big', 'z'.repeat(512 * 1024 + 10));
 
     expect(await readExecutorFile(r, 'workspace', 'dir')).toEqual({ error: 'path is a directory' });
     expect(await readExecutorFile(r, 'workspace', 'bin')).toEqual({ error: 'binary file, not previewable' });
@@ -592,8 +593,8 @@ describe('executor file plane', () => {
         files: {
           ...rt.storage.vfs,
           readRange: async (path: string, offset: number, length: number) => {
-            const whole = await rt.storage.vfs.readFile(path, { encoding: 'utf8' });
-            const bytes = whole instanceof Uint8Array ? whole : new TextEncoder().encode(whole);
+            const whole = await readText(rt.storage.vfs, path);
+            const bytes = new TextEncoder().encode(whole);
 
             return bytes.subarray(offset, offset + length);
           },

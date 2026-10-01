@@ -1,3 +1,4 @@
+import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Workspace archive, driven against the real production schema: BLOB fidelity, FTS rebuilt not dumped,
  *  the capability secret never exported, and a paged export equal to an unpaged one. */
 
@@ -27,10 +28,10 @@ import { writeSoul } from '../src/identity/soul';
 import { writeWorkspaceSoul } from '../src/vfs/workspace-planes';
 import { ConversationSearchStore } from '../src/memory/conversation-search';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
-import type { WorkspaceBundle, WorkspaceVFS } from '../src/vfs/nimbus-workspace';
+import type { WorkspaceBundle } from '../src/vfs/nimbus-workspace';
 import { workspaceArchiveTarget } from '../src/vfs/workspace-planes';
 import type { RawSqlExec, SqlExec, SqlExecutor } from '../src/types/primitives';
-import { testActorHandle, present } from '@kinu.run/test-utils';
+import { seedTranscriptEntry, testActorHandle, present } from '@kinu.run/test-utils';
 
 /** One in-memory database with every handle this suite drives it through. */
 interface Workspace {
@@ -38,7 +39,7 @@ interface Workspace {
   readonly sql: SqlExecutor;
   readonly execRaw: RawSqlExec;
   readonly archive: SqlExec;
-  readonly vfs: WorkspaceVFS;
+  readonly vfs: WorkspaceBundle['vfs'];
   readonly bundle: WorkspaceBundle;
 }
 
@@ -90,7 +91,7 @@ async function seeded() {
   const history = historyOver(ws, actor);
 
   for (let i = 0; i < 5; i++) {
-    await history.record(CHAT_SESSION_ID, {
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, {
       id: `m${i}`, origin: 'input',
       message: { role: 'user', content: `hello sqlite ${i}` },
     });
@@ -103,7 +104,7 @@ async function seeded() {
   await ws.vfs.mkdir('artifacts', { recursive: true });
   await ws.vfs.writeFile('artifacts/logo.bin', bytes);
   await ws.vfs.mkdir('notes', { recursive: true });
-  await ws.vfs.writeFile('notes/plan.md', 'a plan with a "quote" and a \\ backslash');
+  await writeText(ws.vfs, 'notes/plan.md', 'a plan with a "quote" and a \\ backslash');
   await new ConversationSearchStore(ws.sql, actor, (sessionId) => history.transcript(sessionId)).search('sqlite');
 
   return { ...ws, bytes, actor, history };
@@ -119,7 +120,7 @@ describe('workspace archive', () => {
 
     expect(restored.files).toBeGreaterThan(0);
     expect(await target.vfs.readFile('artifacts/logo.bin')).toEqual(source.bytes);
-    expect(await target.vfs.readFile('notes/plan.md', { encoding: 'utf8' })).toBe('a plan with a "quote" and a \\ backslash');
+    expect(await readText(target.vfs, 'notes/plan.md')).toBe('a plan with a "quote" and a \\ backslash');
   });
 
   test('SQL cannot arrive after the destination filesystem has opened', async () => {
@@ -158,7 +159,7 @@ describe('workspace archive', () => {
     ]);
 
     expect(await target.vfs.readFile('artifacts/logo.bin')).toEqual(source.bytes);
-    expect(await target.vfs.readFile('notes/plan.md', { encoding: 'utf8' }))
+    expect(await readText(target.vfs, 'notes/plan.md'))
       .toBe('a plan with a "quote" and a \\ backslash');
   });
 
@@ -177,7 +178,7 @@ describe('workspace archive', () => {
     expect(lines.some((l) => l.includes('"table":"conversation_fts_data"'))).toBe(false);
 
     // A local archive carries no disposable trigger/state pair, so the next durable mutation stays valid.
-    await history.record(CHAT_SESSION_ID, {
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, {
       id: 'm5', origin: 'input', message: { role: 'user', content: 'local post-import' },
     });
     const after = await new ConversationSearchStore(target.sql, restored, (sessionId) => history.transcript(sessionId)).search('post-import');
@@ -411,10 +412,10 @@ const OWNER_TEXT = '# the owner wrote this\n';
     // Every transcript row names its writer, so a restore files it under that owner, not the archive's main actor.
     const cloudActor = createTestActor(source.sql, source.execRaw, 'cloud', 'cloud');
     const cloud = historyOver(source, cloudActor);
-    await cloud.record(CHAT_SESSION_ID, {
+    await seedTranscriptEntry(cloud, CHAT_SESSION_ID, {
       id: 'u1', origin: 'input', message: { role: 'user', content: 'cloud question' },
     });
-    await cloud.record(CHAT_SESSION_ID, {
+    await seedTranscriptEntry(cloud, CHAT_SESSION_ID, {
       id: 'a1', origin: 'output', message: { role: 'assistant', content: 'cloud answer' },
     });
     await new ConversationSearchStore(source.sql, openWorkspaceMainActor(source.sql), (sessionId) => cloud.transcript(sessionId)).search('cloud');
@@ -435,7 +436,7 @@ const OWNER_TEXT = '# the owner wrote this\n';
     const landed = openWorkspaceMainActor(target.sql);
     const history = historyOver(target, landed);
     expect(await transcriptText(history.transcript(CHAT_SESSION_ID))).toEqual(['cloud question', 'cloud answer']);
-    await history.record(CHAT_SESSION_ID, {
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, {
       id: 'u2', origin: 'input', message: { role: 'user', content: 'local continuation' },
     });
     const continued = await new ConversationSearchStore(target.sql, landed, (sessionId) => history.transcript(sessionId)).search('local continuation');
@@ -470,7 +471,7 @@ async function withAgentDatabase() {
   source.db.query('DELETE FROM conversation_entries WHERE actor_id = ?').run(agent.actorId);
 
   for (let i = 0; i < 12; i++) {
-    await history.record(CHAT_SESSION_ID, {
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, {
       id: `a${i}`, origin: 'input',
       message: { role: 'user', content: `said in the agent's own database ${i} ${'x'.repeat(400)}` },
     });
@@ -544,7 +545,7 @@ describe('the table set an export walks is pinned by its first page', () => {
     const history = historyOver(source, actor);
 
     for (let i = 0; i < 5; i++) {
-      await history.record(CHAT_SESSION_ID, {
+      await seedTranscriptEntry(history, CHAT_SESSION_ID, {
         id: `m${i}`, origin: 'input',
         message: { role: 'user', content: `page boundary ${i}` },
       });

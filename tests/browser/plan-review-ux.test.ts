@@ -85,8 +85,10 @@ interface CodePathHover {
   readonly codeBlocks: readonly string[];
 }
 
-interface SettledPlan extends ActionStrip {
+interface SettledPlan {
   readonly status: string;
+  /** Whether the document draws an action strip at all. */
+  readonly strip: boolean;
 }
 
 interface ObservedPlan {
@@ -357,10 +359,10 @@ async function observeSettled(newPage: Gallery['newPage'], origin: string): Prom
 
   await page.waitForSelector('[data-plan-document] [data-block-id]');
   const status = await page.$eval('[data-plan-status]', (badge) => badge.textContent ?? '');
-  const strip = await readActionStrip(page, ACTION_STRIP);
+  const strip = await page.$(ACTION_STRIP);
   await page.close();
 
-  return { status, ...strip };
+  return { status, strip: strip !== null };
 }
 
 /**
@@ -452,9 +454,8 @@ describe('the plan review document, as a browser lays it out', () => {
       expect(plan.codeBorder).toBe('solid');
       expect(plan.codeOverflow).toBe('auto');
       expect(plan.overflow).toBe(0);
-      // An editable plan keeps the global-comment control, so the strip is
-      // still a strip: the collapse rule below must not reach this state.
-      expect(plan.actionStripButtons).toBe(2);
+      // An editable plan keeps the global-comment control; Copy lives in the header.
+      expect(plan.actionStripButtons).toBe(1);
       expect(plan.actionStripDisplay).not.toBe('none');
       // Wide enough for the rail to sit BESIDE the document, so there is
       // nothing to dim and nothing to click through.
@@ -510,13 +511,9 @@ describe('the plan review document, as a browser lays it out', () => {
     expect(observed.annotatedHeading.titleHighlights).toBeGreaterThan(0);
   });
 
-  test('a settled plan collapses the action strip instead of leaving its gap', () => {
-    // Read-only hides the copy button but leaves it in the DOM, so `:empty`
-    // never matched and a zero-height strip kept spending its bottom margin
-    // above the first block.
+  test('a settled plan draws no action strip, so no gap sits above its first block', () => {
     expect(observed.settled.status).toBe('Superseded');
-    expect(observed.settled.actionStripButtons).toBe(1);
-    expect(observed.settled.actionStripDisplay).toBe('none');
+    expect(observed.settled.strip).toBe(false);
   });
 });
 

@@ -21,6 +21,7 @@ import { CliInstallCard } from "@/components/account/CliInstallCard";
 import { DeleteAccountCard } from "@/components/account/DeleteAccountCard";
 import { DevicesCard } from "@/components/devices/DevicesCard";
 import { AccountUsageCard } from "@/components/account/AccountUsageCard";
+import { SandboxSizeSettings } from "@/components/SandboxSize";
 import { renderThrownChain } from '@kinu.run/core/obs';
 
 function ProfileNameEditor({ profile, onSaved }: {
@@ -145,6 +146,8 @@ export default function UserSettingsPage() {
         )}
 
         {section === "models" && <ProfileCatalogSettings />}
+
+        {section === "sandbox" && <SandboxSizeSettings />}
 
         {section === "usage" && <AccountUsageCard />}
             </div>

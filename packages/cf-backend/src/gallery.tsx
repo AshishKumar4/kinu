@@ -144,6 +144,7 @@ const GALLERY_ROSTER: { entries: WorkspaceEntry[]; total: number } =
   : STOCK_ROSTER;
 
 const STUB_DATA = v.parse(JsonObjectSchema, {
+  "/api/user/config/sandbox_size": { key: "sandbox_size", value: null },
   // Every field the client's `UserProfileSchema` requires; a fixture that type-checks can still fail that parse.
   "/api/user/profile": {
     email: "ashish@example.com", displayName: "Ashish",
@@ -310,6 +311,19 @@ function accountProfileFixture(path: string, method: string, body: BodyInit | nu
   return null;
 }
 
+const CHATGPT_DEVICE = new URLSearchParams(location.search).get("chatgpt") === "device";
+
+const GALLERY_DEVICE = { id: "dev-1", label: "Owner's laptop" };
+
+let settingsChatGptSignedIn = false;
+
+function galleryChatGptStatus() {
+  return {
+    signedIn: settingsChatGptSignedIn, email: settingsChatGptSignedIn ? "owner@example.com" : null, planEnabled: settingsChatGptSignedIn,
+    pending: false, lastFailure: null, firstSignIn: false,
+  };
+}
+
 /** Flips when the gallery's Claude sign-in finishes with the fixture's code. */
 let settingsClaudeConnected = false;
 
@@ -368,8 +382,16 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
       : fixtureJson({ error: "Codex status fixture failed" }, 503);
   }
 
-  // No machine connected: the ChatGPT entry offers the Codex device code.
-  if (path === "/api/user/chatgpt") return fixtureJson({ device: null, status: null });
+  // `&chatgpt=device`: a machine that signs in; without, the Codex device code.
+  if (path === "/api/user/chatgpt") {
+    return fixtureJson(CHATGPT_DEVICE ? { device: GALLERY_DEVICE, status: galleryChatGptStatus() } : { device: null, status: null });
+  }
+
+  if (path === "/api/user/chatgpt/sign-in" && method === "POST") {
+    settingsChatGptSignedIn = true;
+
+    return fixtureJson({ authorizeUrl: "about:blank", device: GALLERY_DEVICE });
+  }
 
   if (path === "/api/user/models") {
     // Different effort lists per model: the tier levels are the model's, never a fixed three.
@@ -377,6 +399,7 @@ async function settingsSectionsFixture(path: string, method: string, body: BodyI
       models: [
         { spec: "workers-ai/llama-4", label: "Llama 4", provider: "workers-ai", reasoningEfforts: [] },
         { spec: "anthropic/claude-opus-4-7", label: "Claude Opus 4.7", provider: "anthropic", reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+        ...settingsChatGptSignedIn ? [{ spec: "chatgpt/gpt-5.5", label: "GPT-5.5", provider: "chatgpt", reasoningEfforts: [] }] : [],
       ],
       failures: [],
       accounts: { anthropic: ["main", "work"] },
@@ -1040,6 +1063,7 @@ const NO_HEAD_ACTIVITY: ReadonlyMap<string, number> = new Map();
  * Non-agent sockets (vite HMR) fall through to the real WebSocket.
  */
 const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
+  getSandboxSize: { account: null, chosen: null, size: "medium", running: "medium", startRefused: null },
   getWorkspaceSnapshot: {
     status: {
       id: "agent_01j9x7q2m4checkoutfixes", name: "checkout-coupon-bug-9935d3",
@@ -1778,8 +1802,8 @@ function historyRow(index: number): ChatHistoryEntry {
   return { id, position: index, role: "assistant", content, createdAt };
 }
 
-function galleryReadFault(flag: string | undefined): void {
-  if (flag === "1") throw new Error("Network connection lost");
+function galleryReadFault(flag: string | undefined, message = "Network connection lost"): void {
+  if (flag === "1") throw new Error(message);
 }
 
 async function galleryHistoryPage(args?: unknown[]): Promise<JsonValue> {
@@ -4565,6 +4589,12 @@ const approvalsRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<
   if (method === "getShellApprovalGrants") return rpcResult({ grants: SHELL_GRANTS }).json<T>();
 
   if (method === "revokeShellApprovalGrants") return rpcResult({ ok: true, grants: SHELL_GRANTS }).json<T>();
+
+  // `&parked=gone`: decided elsewhere.
+  if (method === "reviewParkedWrite") {
+    galleryReadFault(new URLSearchParams(location.search).get("parked") === "gone" ? "1" : undefined,
+      "This change is no longer waiting: it was decided, or its content is gone.");
+  }
 
   if (method === "reviewParkedWrite") return rpcResult(v.parse(JsonValueSchema, PARKED_WRITE_REVIEW)).json<T>();
 

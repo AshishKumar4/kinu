@@ -22,7 +22,7 @@ import type { ScaffoldArchiveEntry } from '../src/scaffold/archive';
 import { RunEventRecorder } from '../src/events/recorder';
 import type { ToolCallRecord } from '../src/evolution/types';
 import { jsonObjectOnlyInstruction } from '../src/providers/structured';
-import { present } from '@kinu.run/test-utils';
+import { seedTranscriptEntry, present } from '@kinu.run/test-utils';
 
 /** The production schema: the eval split reads the message and run-event ledgers too. */
 function setup() {
@@ -392,9 +392,9 @@ describe('real-outcome scaffold rates (route into R2 archive priors)', () => {
 describe('advisor negatives read the canonical conversation', () => {
   test('a note resolves its turn through the transcript', async () => {
     const ws = setup();
-    await ws.history.record(CHAT_SESSION_ID, { id: 'u-chat', origin: 'input',
+    await seedTranscriptEntry(ws.history, CHAT_SESSION_ID, { id: 'u-chat', origin: 'input',
       message: { role: 'user', content: 'inspect the deploy' } });
-    await ws.history.record(CHAT_SESSION_ID, { id: 'a-chat', origin: 'output',
+    await seedTranscriptEntry(ws.history, CHAT_SESSION_ID, { id: 'a-chat', origin: 'output',
       message: { role: 'assistant', content: 'I only guessed' } });
     void ws.sql`INSERT INTO evolution_events (actor_id, id, type, message, data, created_at)
       VALUES (${ws.actor.actorId}, ${'advisor-chat'}, ${'advisor_note'}, ${'should have delegated'},
@@ -498,7 +498,7 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
   test('instances carry process evidence reconstructed from the existing run ledger', async () => {
     const { sql, actor, history, transcript } = setup();
     // The ask is recorded before the run and the answer after, bracketing the evidence window.
-    await history.record(CHAT_SESSION_ID, { id: 'u0', origin: 'input',
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, { id: 'u0', origin: 'input',
       message: { role: 'user', content: 'fix task 0' } });
     const recorder = new RunEventRecorder(sql, actor);
     recorder.emit('run-1', { type: 'run_start', agentId: 'agent', caused_by: 'chat', userMessage: 'fix task 0' });
@@ -523,7 +523,7 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
     });
     recorder.emit('run-1', { type: 'tool_call_end', name: 'eval', toolCallId: 'tc-2', result: 'done', outcome: { success: true } });
     recorder.emit('run-1', { type: 'run_end', reason: 'completed' });
-    await history.record(CHAT_SESSION_ID, { id: 'n0', origin: 'output',
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, { id: 'n0', origin: 'output',
       message: { role: 'assistant', content: 'bad answer 0' } });
     seed(sql, actor, 1, 0);
 

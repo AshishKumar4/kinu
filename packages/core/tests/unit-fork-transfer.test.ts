@@ -1,3 +1,4 @@
+import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Fork transfer receiver, driven with hand-built frames, including ones no correct sender makes.
  * Every refusal also asserts no half-fork is left behind.
@@ -54,7 +55,7 @@ async function source(opts: { files?: Array<{ path: string; content: string }>; 
   await chat.say({ id: 'm2', role: 'assistant', text: opts.spill ? 'p'.repeat(SPILLED_BYTES) : 'second' });
   await chat.say({ id: 'm3', role: 'user', text: 'third' });
 
-  for (const file of opts.files ?? []) await src.vfs.writeFile(file.path, file.content);
+  for (const file of opts.files ?? []) await writeText(src.vfs, file.path, file.content);
 
   return src;
 }
@@ -206,8 +207,8 @@ function renumber(frames: readonly ForkFrame[]) {
 async function twoPageSource() {
   const src = await source();
 
-  for (let index = 0; index < 260; index += 1) await src.vfs.writeFile(`memory/n${String(index).padStart(3, '0')}.md`, `note ${index}\n`);
-  await src.vfs.writeFile('notes/after.md', 'after');
+  for (let index = 0; index < 260; index += 1) await writeText(src.vfs, `memory/n${String(index).padStart(3, '0')}.md`, `note ${index}\n`);
+  await writeText(src.vfs, 'notes/after.md', 'after');
 
   return src;
 }
@@ -243,7 +244,7 @@ describe('fork transfer receiver', () => {
     });
 
     expect(rowsOf(rebatched)).toEqual(rowsOf(native));
-    expect(await rebatched.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' })).toBe('key insight');
+    expect(await readText(rebatched.vfs, 'memory/MEMORY.md')).toBe('key insight');
     expect(rowsOf(rebatched).entries.map((row) => row.id)).not.toContain('m3');
   });
 
@@ -259,9 +260,9 @@ describe('fork transfer receiver', () => {
     await drain(receiver, frames.slice(0, -1));
 
     expect(frames.at(-1)?.kind).toBe('commit');
-    expect(writer.staged).toEqual(begin.counts);
+    expect(writer.staging.read()?.staged).toEqual(begin.counts);
     await drain(receiver, frames.slice(-1));
-    expect(writer.published).not.toBeNull();
+    expect(isFork(tgt)).toBe(true);
   });
 
   test('a target mid-transfer holds staged rows and is still not a fork', async () => {
@@ -273,7 +274,7 @@ describe('fork transfer receiver', () => {
 
     expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM conversation_entries`[0]?.c).toBe(3);
     expect(tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM context_memberships`[0]?.c).toBe(3);
-    expect(await tgt.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' })).toBe('key insight');
+    expect(await readText(tgt.vfs, 'memory/MEMORY.md')).toBe('key insight');
     expect(isFork(tgt)).toBe(false);
     expect(readForkLineage(tgt.sql)).toBeNull();
   });
@@ -290,10 +291,10 @@ describe('fork transfer receiver', () => {
     await drain(receiverFor(tgt), framesFor(recorded));
 
     for (const artifact of snapshot.artifacts) {
-      expect(await tgt.vfs.readFile(`${TARGET_ARTIFACTS}/${artifact.path}`, { encoding: 'utf8' }))
+      expect(await readText(tgt.vfs, `${TARGET_ARTIFACTS}/${artifact.path}`))
         .toBe(artifact.content);
       // The path the SOURCE used is not the path the fork reads.
-      expect(await tgt.vfs.exists(`${SOURCE_ARTIFACTS}/${artifact.path}`)).toBe(false);
+      expect(await exists(tgt.vfs, `${SOURCE_ARTIFACTS}/${artifact.path}`)).toBe(false);
     }
 
     expect(tgt.sql<{ content_path: string }>`
@@ -304,12 +305,12 @@ describe('fork transfer receiver', () => {
   test('a file the target was born with is replaced by the source\'s copy', async () => {
     const src = await source();
     const tgt = fresh();
-    await src.vfs.writeFile('.nimbusrc', 'the source\'s own settings\n');
-    const born = await tgt.vfs.readFile('.nimbusrc', { encoding: 'utf8' });
+    await writeText(src.vfs, '.nimbusrc', 'the source\'s own settings\n');
+    const born = await readText(tgt.vfs, '.nimbusrc');
 
     expect(born).not.toBe('the source\'s own settings\n');
     await drain(receiverFor(tgt), framesFor(await sourceFrames(src, 'm3')));
-    expect(await tgt.vfs.readFile('.nimbusrc', { encoding: 'utf8' })).toBe('the source\'s own settings\n');
+    expect(await readText(tgt.vfs, '.nimbusrc')).toBe('the source\'s own settings\n');
   });
 
   test('SOUL.md lands through the owner\'s protected write, and its mission is the fork\'s', async () => {
@@ -342,11 +343,11 @@ describe('fork transfer receiver', () => {
       const receiver = receiverFor(tgt);
       const at = frames.indexOf(page);
       await drain(receiver, frames.slice(0, at));
-      const before = await tgt.vfs.exists(name);
+      const before = await exists(tgt.vfs, name);
 
       await expect(receiver.accept(sealForkFrame({ ...page, target: { in: 'home', name } })))
         .rejects.toThrow(/does not carry/);
-      expect(await tgt.vfs.exists(name)).toBe(before);
+      expect(await exists(tgt.vfs, name)).toBe(before);
       expect(isFork(tgt)).toBe(false);
     }
   });
@@ -418,7 +419,7 @@ describe('fork transfer receiver', () => {
     if (page === undefined) throw new Error('expected the page after the chunks');
     await expect(receiver.accept(corrupt)).rejects.toThrow(/does not hash to its name/);
     await expect(receiver.accept(page)).rejects.toThrow(/arrived where frame \d+ was expected/);
-    expect(await tgt.vfs.exists('notes/a.md')).toBe(false);
+    expect(await exists(tgt.vfs, 'notes/a.md')).toBe(false);
     expect(isFork(tgt)).toBe(false);
   });
 
@@ -439,7 +440,7 @@ describe('fork transfer receiver', () => {
     expect(isFork(tgt)).toBe(false);
     const completed = await drain(receiver, frames.slice(first.at + 1));
     expect(completed.at(-1)?.status).toBe('published');
-    expect(await tgt.vfs.readFile('notes/after.md', { encoding: 'utf8' })).toBe('after');
+    expect(await readText(tgt.vfs, 'notes/after.md')).toBe('after');
   });
 
   test('a commit while an import is incomplete is refused', async () => {
@@ -457,8 +458,8 @@ describe('fork transfer receiver', () => {
     const files = imports.size + prefix.filter(frame => frame.kind === 'soul').length;
     const prepared = renumber([{ ...begin, counts: { ...begin.counts, files } }, ...rest]);
     await drain(receiver, prepared.frames);
-    expect(await tgt.vfs.exists('memory/n000.md')).toBe(true);
-    expect(await tgt.vfs.exists('memory/n259.md')).toBe(false);
+    expect(await exists(tgt.vfs, 'memory/n000.md')).toBe(true);
+    expect(await exists(tgt.vfs, 'memory/n259.md')).toBe(false);
 
     await expect(receiver.accept(sealForkFrame({
       version: FORK_TRANSFER_VERSION, transferId: 'tx-1', seq: prepared.frames.length, kind: 'commit', stream: prepared.stream,
@@ -477,8 +478,8 @@ describe('fork transfer receiver', () => {
     const outcomes = await drain(receiverFor(tgt), frames.slice(first.at + 1));
 
     expect(outcomes.at(-1)?.status).toBe('published');
-    expect((await tgt.vfs.readdir('memory')).length).toBe(261);
-    expect(await tgt.vfs.readFile('memory/n259.md', { encoding: 'utf8' })).toBe('note 259\n');
+    expect(((await tgt.vfs.readdir('memory')).map(({ name }) => name)).length).toBe(261);
+    expect(await readText(tgt.vfs, 'memory/n259.md')).toBe('note 259\n');
   });
 
   test('a chain that never carried the cut entry the head names is refused at publication', async () => {
@@ -583,26 +584,26 @@ describe('fork transfer receiver', () => {
     const receiver = receiverFor(tgt);
     const memory = first.findIndex((frame) => frame.kind === 'page' && frame.target.in === 'home' && frame.target.name === 'memory');
     await drain(receiver, first.slice(0, memory + 1));
-    expect(await tgt.vfs.readFile('memory/abandoned.md', { encoding: 'utf8' })).toBe('old bytes');
+    expect(await readText(tgt.vfs, 'memory/abandoned.md')).toBe('old bytes');
 
     // Frame 0 is the reset: it clears unpublished paths so a failed first transfer cannot donate a
     // file to the fork that later wins this target.
     await drain(receiver, second);
-    expect(await tgt.vfs.exists('memory/abandoned.md')).toBe(false);
-    expect(await tgt.vfs.readFile('memory/replacement.md', { encoding: 'utf8' })).toBe('new bytes');
+    expect(await exists(tgt.vfs, 'memory/abandoned.md')).toBe(false);
+    expect(await readText(tgt.vfs, 'memory/replacement.md')).toBe('new bytes');
     expect(readForkLineage(tgt.sql)?.sourceMessageId).toBe('m1');
   });
 
   test('a reset removes the directories and symlinks an abandoned transfer placed', async () => {
     const abandoned = await source();
-    await abandoned.vfs.writeFile('app/src/main.ts', 'export {};');
+    await writeText(abandoned.vfs, 'app/src/main.ts', 'export {};');
     (await abandoned.bundle.session()).vfs.as(CRED_SESSION_USER).symlink('src/main.ts', `${WORKSPACE_ROOT}/app/entry.ts`);
     const replacement = await source();
     const tgt = fresh();
     const receiver = receiverFor(tgt);
     const first = await sourceFrames(abandoned, 'm3', { transferId: 'tx-first' });
     await drain(receiver, first.slice(0, first.findIndex((frame) => frame.kind === 'commit')));
-    expect(await tgt.vfs.exists('app/src/main.ts')).toBe(true);
+    expect(await exists(tgt.vfs, 'app/src/main.ts')).toBe(true);
 
     await drain(receiver, await sourceFrames(replacement, 'm1', { transferId: 'tx-second' }));
 
@@ -719,7 +720,7 @@ describe('fork transfer receiver', () => {
     }
 
     await src.vfs.mkdir('memory', { recursive: true });
-    await src.vfs.writeFile('memory/large.md', 'f'.repeat(8 * 1024 * 1024));
+    await writeText(src.vfs, 'memory/large.md', 'f'.repeat(8 * 1024 * 1024));
 
     const tgt = fresh();
     const { frames, result } = await transfer(src, receiverFor(tgt), { untilMessageId: 'm99', transferId: 'tx-long', frameBytes: 1024 * 1024 });
@@ -728,7 +729,7 @@ describe('fork transfer receiver', () => {
     expect(frames.length).toBeGreaterThan(100);
     expect(tgt.sql<{ c: number }>`
       SELECT COUNT(*) AS c FROM conversation_entries WHERE role != 'system'`[0]?.c).toBe(100);
-    expect(await tgt.vfs.readFile('memory/large.md', { encoding: 'utf8' })).toHaveLength(8 * 1024 * 1024);
+    expect(await readText(tgt.vfs, 'memory/large.md')).toHaveLength(8 * 1024 * 1024);
   });
 
   test('a frame whose content and digest disagree is refused before staging', async () => {

@@ -1,3 +1,4 @@
+import type { VfsDirent } from '@nimbus-sh/core/vfs/vfs.js';
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import type { SqlExecutor, SqlValue } from "../src/types";
 
@@ -32,13 +33,13 @@ export function createTestDb(): TestDb {
 	return { db, sql, execRaw: (ddl: string) => db.exec(ddl) };
 }
 
-/** Map-backed `ReadWriteVFS`; the real filesystem lives in `@kinu.run/core`, a layer up. */
+/** A map-backed byte filesystem; the production filesystem lives in Nimbus. */
 export function createMemoryVfs(seed: Record<string, string> = {}) {
 	const files = new Map<string, string>(Object.entries(seed));
 
 	return {
 		files,
-		async readFile(path: string, options?: { encoding?: "utf8" }): Promise<Uint8Array | string> {
+		async readFile(path: string): Promise<Uint8Array> {
 			const content = files.get(path);
 
 			if (content === undefined) {
@@ -48,12 +49,12 @@ export function createMemoryVfs(seed: Record<string, string> = {}) {
 				);
 			}
 
-			return options?.encoding === "utf8" ? content : new TextEncoder().encode(content);
+			return new TextEncoder().encode(content);
 		},
-		async writeFile(path: string, data: Uint8Array | string): Promise<void> {
-			files.set(path, data instanceof Uint8Array ? new TextDecoder().decode(data) : data);
+		async writeFile(path: string, data: Uint8Array): Promise<void> {
+			files.set(path, new TextDecoder().decode(data));
 		},
-		async readdir(path: string): Promise<string[]> {
+		async readdir(path: string): Promise<VfsDirent[]> {
 			const prefix = path === "" || path === "." ? "" : `${path}/`;
 			const names = new Set<string>();
 
@@ -64,7 +65,7 @@ export function createMemoryVfs(seed: Record<string, string> = {}) {
 				if (name) names.add(name);
 			}
 
-			return [...names];
+			return [...names].map((name) => ({ name, type: files.has(`${prefix}${name}`) ? 'file' : 'directory' }));
 		},
 	};
 }

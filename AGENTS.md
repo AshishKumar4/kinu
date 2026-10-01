@@ -75,7 +75,7 @@ The main agent orchestrates; lanes build. Main plans each change in a loop with 
 - A commit body is not where a decision lives; it is where the change is explained. The log entry is the durable record, and the body cites it.
 
 ## Packages
-`core` (interfaces, swarm search, evolution, scaffold, craft) · `cf-backend` (Agents SDK DOs, React UI, Vite+Wrangler) · `agent-utils` (stores, VFS types) · `cli` · `cli-backend` · `compaction` · `devbox` · `test-utils` · `tests/` (E2E) · `bench/clbench/`.
+`core` (interfaces, swarm search, evolution, scaffold, craft) · `cf-backend` (Agents SDK DOs, React UI, Vite+Wrangler) · `agent-utils` (stores, SQL types) · `cli` · `cli-backend` · `compaction` · `devbox` · `test-utils` · `tests/` (E2E) · `bench/clbench/`.
 
 ## Architecture
 - One Durable Object per workspace owns the shared files, roster, ledgers and memory index. Every non-main agent (hired, background, head, swarm node or steer branch) runs `runHeadInference` in its own `AgentFacet` Worker Loader isolate and SQLite, calling tools back through workspace RPC (D9). Main stays in the workspace object; non-main turns do not feed the evolution window. Export includes each retained facet database.

@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Cloud workspace export: the paging contract over DO-style positional SQL (cursor claimed, not trusted), and the access class
  * (interactive-session-only, so exec-scoped CI tokens are refused). Format is core's `unit-workspace-archive`.
@@ -5,11 +6,8 @@
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import {
-  archiveSqlFromDatabase, CHAT_SESSION_ID, readWorkspaceArchivePage, restoreWorkspaceArchive,
-  SessionHistory, AGENT_RPC_ACCESS, requiredRpcAccess, type ActorHandle, type ArchiveCursor, type SqlExec, type VFS,
-} from '@kinu.run/core';
-import { readTranscriptRows, sqlOver } from '@kinu.run/test-utils';
+import { archiveSqlFromDatabase, CHAT_SESSION_ID, readWorkspaceArchivePage, restoreWorkspaceArchive, SessionHistory, AGENT_RPC_ACCESS, requiredRpcAccess, type ActorHandle, type ArchiveCursor, type SqlExec } from '@kinu.run/core';
+import { seedTranscriptEntry, readTranscriptRows, sqlOver } from '@kinu.run/test-utils';
 import { createTestActor, createTestWorkspace } from '../../core/tests/helpers';
 import { cliScopesConnectionTag, rejectOutOfScopeRpc } from '../src/cli/rpc-gate';
 
@@ -41,7 +39,7 @@ async function workspace(): Promise<WorkspaceFixture> {
 
   for (let i = 0; i < MESSAGES; i++) {
     const content = `message ${i}`;
-    await history.record(CHAT_SESSION_ID, {
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, {
       id: `m${i}`, message: { role: 'user', content }, origin: 'input',
     });
     said.push(content);

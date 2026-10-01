@@ -9,7 +9,7 @@ import {
   type ChatEvent, type JsonValue, type OperationProfile,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
-import { mergePolicyProfile, requestBodyText } from '@kinu.run/test-utils';
+import { mergePolicyProfile } from '@kinu.run/test-utils';
 import { createTestUserDO, testOwner, type DeviceFrame, type TestUserDO } from './helpers/user-do';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 import type { CodexEgressNamespace } from '../src/egress/codex-egress-route';
@@ -166,7 +166,7 @@ describe('Codex egress: the owner\'s machine first, the container when none is o
     refreshes = [];
     globalThis.fetch = asFetchFunction(async (input, init) => {
       if (requestUrl(input) !== CODEX_TOKEN_URL) throw new Error(`unexpected network call to ${requestUrl(input)}`);
-      refreshes.push(new URLSearchParams(await requestBodyText(input, init)).get('refresh_token') ?? '');
+      refreshes.push(new URLSearchParams(await new Request(input, init).text()).get('refresh_token') ?? '');
 
       return Response.json({ access_token: ACCESS_2, refresh_token: 'refresh-2', expires_in: 3600 });
     });

@@ -9,8 +9,8 @@ import {
 import {
   liveMcpTransport, queueMcpAuthUrl, recordedMcpServers, resetRecordedMcp, seedSdkMcpServer,
 } from './helpers/agents-sdk';
-import { auth } from '@modelcontextprotocol/sdk/client/auth.js';
-import { requestBodyText } from '@kinu.run/test-utils';
+import { auth } from '@modelcontextprotocol/client';
+
 import { durableObjectStorage } from './helpers/programmatic-host';
 
 // Imported after `mockAgentsSdk` registers: mcp.ts binds the provider class at load.
@@ -338,7 +338,7 @@ describe('the registered-app provider against the real SDK auth flow', () => {
       }
 
       if (entry.url === 'https://mcp.example/token') {
-        entry.body = new URLSearchParams(await requestBodyText(url, init));
+        entry.body = new URLSearchParams(await new Request(url, init).text());
         entry.authHeader = new Headers(init?.headers).get('authorization');
 
         return new Response(JSON.stringify({

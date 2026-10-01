@@ -1,3 +1,4 @@
+import { exists, readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // Layer decomposition of the turn pipeline plus each layer's deterministic assertion slice: literal fixtures,
 // injected clock/RNG, no model calls or I/O, so every slice is byte-reproducible.
 
@@ -1415,7 +1416,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
           /** Seven bytes per ranged read to cross chunk boundaries; `readFile` throws because a bounded read
            *  must never fetch the whole file. */
-          const plane = (content: string) => {
+          const plane = (content: string): VFS => {
             const bytes = new TextEncoder().encode(content);
 
             return {
@@ -1423,10 +1424,9 @@ export const LAYERS: readonly Layer[] = Object.freeze([
               readRange: async (_path: string, at: number, length: number) => bytes.subarray(at, at + Math.min(length, 7)),
               writeFile: async () => {},
               readdir: async () => [],
-              stat: async () => ({ size: bytes.byteLength, mtimeMs: 0, isDir: false }),
+              stat: async () => ({ size: bytes.byteLength, mtimeMs: 0, type: 'file' }),
               unlink: async () => {},
               mkdir: async () => {},
-              exists: async () => true,
             };
           };
 
@@ -1466,7 +1466,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'file-plane/mount-routes-to-the-owning-machine',
         asserts: 'a live mount serves its machine\'s entries through the one plane; an absent mount refuses with its stated absence; the workspace tree stays canonical',
         observe: async (s) => {
-          const tree = (files: Record<string, string>) => {
+          const tree = (files: Record<string, string>): VFS => {
             const byPath = new Map(Object.entries(files));
 
             return {
@@ -1475,14 +1475,13 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
                 if (content === undefined) throw new VfsError('ENOENT', 'no such file', path);
 
-                return content;
+                return new TextEncoder().encode(content);
               },
               writeFile: async () => {},
-              readdir: async (path: string) => [...byPath.keys()].filter((k) => k.startsWith(`${path}/`)).map((k) => k.slice(path.length + 1)),
-              stat: async (path: string) => (byPath.has(path) ? { size: 0, mtimeMs: 0, isDir: false } : null),
+              readdir: async (path: string) => [...byPath.keys()].filter((key) => key.startsWith(`${path}/`)).map((key) => ({ name: key.slice(path.length + 1), type: 'file' })),
+              stat: async (path: string) => (byPath.has(path) ? { size: 0, mtimeMs: 0, type: 'file' } : null),
               unlink: async () => {},
               mkdir: async () => {},
-              exists: async (path: string) => byPath.has(path),
             };
           };
 
@@ -1493,9 +1492,9 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             { name: 'sandbox', files: () => null, absentReason: sandboxAbsence, filesOwner: 'agent' },
           ]);
 
-          const absentReaddir = await (async () => {
+          const absenceOf = async (read: () => Promise<void>) => {
             try {
-              await mounted.readdir('/sandbox');
+              await read();
 
               return { code: 'served an absent mount', path: null, explainsAbsence: false };
             } catch (caught) {
@@ -1503,14 +1502,17 @@ export const LAYERS: readonly Layer[] = Object.freeze([
                 ? { code: caught.code, path: caught.path ?? null, explainsAbsence: caught.message.includes(sandboxAbsence()) }
                 : { code: 'unclassified', path: null, explainsAbsence: false };
             }
-          })();
+          };
+
+          const absentReaddir = await absenceOf(async () => { await mounted.readdir('/sandbox'); });
+          const absentExists = await absenceOf(async () => { await exists(mounted, '/sandbox/x'); });
 
           return [
-            ['mounted-read', await mounted.readFile('/pc/home/dev/a.txt', { encoding: 'utf8' })],
-            ['root-listing', await mounted.readdir('/')],
+            ['mounted-read', await readText(mounted, '/pc/home/dev/a.txt')],
+            ['root-listing', (await mounted.readdir('/')).map(({ name }) => name)],
             ['absent-readdir', absentReaddir],
-            ['absent-exists', await mounted.exists('/sandbox/x')],
-            ['foreign-path-stays-base', await mounted.exists('/etc/foreign')],
+            ['absent-exists', absentExists],
+            ['foreign-path-stays-base', await exists(mounted, '/etc/foreign')],
           ];
         },
       },

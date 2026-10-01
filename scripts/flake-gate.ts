@@ -159,7 +159,7 @@ function claimsOf(run: string, tracked: readonly string[]): ReadonlySet<string> 
 export function planFor(
   file: string,
   tracked: readonly string[],
-  rows: readonly Pick<Gate, 'run' | 'label' | 'tier' | 'deadline'>[] = LADDER,
+  rows: readonly Pick<Gate, 'run' | 'label' | 'tier' | 'deadline' | 'phase'>[] = LADDER,
   browsers: ReadonlySet<string> = sharedBrowserModules(),
 ): Plan {
   if (isFirstRunSuite(file)) {
@@ -174,13 +174,15 @@ export function planFor(
   if (row === undefined) return { kind: 'unrunnable', file, why: 'no ladder row claims it, so nothing runs it' };
 
   if (row.tier === 'evals') return { kind: 'elsewhere', file, why: `its only runner, "${row.label}", spends a model or a credential` };
+
+  if (row.phase === 'post-publish') return { kind: 'elsewhere', file, why: `its only runner, "${row.label}", drives the deployment a deploy publishes` };
   const argv = narrowedTo(row.run, subject, tracked);
 
   if (argv === undefined) return { kind: 'unrunnable', file, why: `\`${row.run}\` does not narrow to ${subject} alone` };
 
   if (browsers.has(subject)) return { kind: 'repeat', file, argv, runs: BROWSER_REPEATS, lane: 'browser', row };
 
-  const pool = argv.includes('vitest') || argv.some((word) => word.endsWith('with-dev-server.ts'));
+  const pool = argv.includes('vitest');
 
   return { kind: 'repeat', file, argv, runs: REPEATS, lane: pool ? 'pool' : 'plain', row };
 }

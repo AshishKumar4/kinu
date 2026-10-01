@@ -1,3 +1,4 @@
+import { exists, readText as nimbusReadText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Proposed skills: staging, showing, and the owner's decision. Only the owner
 // may grant instructions, so nothing else may shorten this path.
 //
@@ -10,7 +11,7 @@
 import { instructionDigest } from '../safety/instruction-trust';
 import { BUILTIN_SKILL_NAMES, workspaceSkillPath } from '../skills/discover';
 import { parseSkillFile, skillNameProblem } from '../skills/parse';
-import type { VFS } from '../types/primitives';
+
 import { vfsDirname } from '../utils/vfs-helpers';
 import { renderThrownChain } from '../obs/index';
 import {
@@ -25,10 +26,10 @@ function planeOf(deps: RefinementDeps): VFS {
 }
 
 async function readText(vfs: VFS, path: string): Promise<string | null> {
-  if (!await vfs.exists(path)) return null;
-  const read = await vfs.readFile(path, { encoding: 'utf8' });
+  if (!await exists(vfs, path)) return null;
+  const read = await nimbusReadText(vfs, path);
 
-  return read instanceof Uint8Array ? new TextDecoder().decode(read) : read;
+  return read;
 }
 
 /**
@@ -83,7 +84,7 @@ export async function routeSkill(
 
   const vfs = planeOf(deps);
 
-  if (await vfs.exists(canonical)) {
+  if (await exists(vfs, canonical)) {
     return refused(`${canonical} already exists: those bytes are the owner's or another `
       + "author's, and a promotion that overwrote them would not be a promotion. Propose a "
       + 'differently-named skill');
@@ -91,7 +92,7 @@ export async function routeSkill(
 
   const staged = refinementStagingPath(request.id, parsed.skill.name);
   await vfs.mkdir(vfsDirname(staged), { recursive: true });
-  await vfs.writeFile(staged, edit.source);
+  await writeText(vfs, staged, edit.source);
 
   const route: RefinementRoute = {
     kind: 'skill',
@@ -266,7 +267,7 @@ export async function decideRefinementRoute(
   const staged = stagedPathFor(request, route);
 
   if (input.decision === 'reject') {
-    if (await vfs.exists(staged)) await vfs.unlink(staged);
+    if (await exists(vfs, staged)) await vfs.unlink(staged);
 
     return patch(deps, {
       request,
@@ -398,7 +399,7 @@ async function promoteStagedSkill(
 
     try {
       await vfs.mkdir(vfsDirname(route.target), { recursive: true });
-      await vfs.writeFile(route.target, source);
+      await writeText(vfs, route.target, source);
     } catch (err) {
       // Staging is untouched, so the next settle retries.
       return { ok: false, error: `could not write ${route.target}: ${renderThrownChain({ cause: err })}` };
@@ -431,7 +432,7 @@ async function discardSkillStaging(
   const vfs = planeOf(deps);
   const staged = stagedPathFor(request, route);
 
-  if (await vfs.exists(staged)) await vfs.unlink(staged);
+  if (await exists(vfs, staged)) await vfs.unlink(staged);
 }
 
 /**

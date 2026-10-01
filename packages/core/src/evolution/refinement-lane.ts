@@ -1,3 +1,4 @@
+import { exists } from '@nimbus-sh/core/vfs/vfs.js';
 // The refinement lane: turns a captured trajectory into typed edits in the
 // authorities that already own them.
 //
@@ -331,7 +332,7 @@ async function presentContextRefs(deps: RefinementDeps): Promise<string[]> {
   const present: string[] = [];
 
   for (const path of REFINER_CONTEXT_CANDIDATES) {
-    if (await vfs.exists(path)) present.push(path);
+    if (await exists(vfs, path)) present.push(path);
   }
 
   return present;

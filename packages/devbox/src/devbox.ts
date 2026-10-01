@@ -1,5 +1,6 @@
 /** Native container owner: start, restore and admission share one generation. */
 import { DurableObject } from 'cloudflare:workers';
+import * as v from 'valibot';
 import { Files, SandboxFileError } from '@cloudflare/sandbox';
 import { Processes, CONTAINER_TRUST_ENV } from "./processes";
 import { nativeStartClock } from './native-clock';
@@ -45,11 +46,12 @@ import {
   type StartClock,
 } from './lifecycle';
 import { DevboxError, attempt, attemptSync, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
+import { BOX_SIZE_ORDER, BoxSizeSchema, DEFAULT_BOX_SIZE, instanceOf, type BoxSize, type ResizeOutcome } from './sizes';
 import type { RestorePhase, RestorePhaseStamps } from './durability/contracts';
 import {
-  admissionOf, isSettledRestoration, recoveryRow, settledRestoration, terminalRefusal, unreadyOf,
+  admissionOf, isSettledRestoration, recoveryRow, refusedStart, settledRestoration, terminalRefusal, unreadyOf,
   type RecoveryClaim, type RestoreAdmission, type RestoreClockPhase, type RestoreReadiness, type RestoreStatus,
-  type Restoration, type SettledRestoration, type StampOutcome,
+  type Restoration, type SettledRestoration, type StampOutcome, type StartInputs,
 } from './restoration';
 import type { DevboxReport, HeartbeatTick, IncidentReasonRow, SupervisedProcessRow } from './report';
 import {
@@ -93,12 +95,6 @@ import {
 /** Bounded wait for `running` to clear after an acknowledged stop: an unbounded wait pins the
  *  attempt, and `#armStartup` early-returns on a pinned attempt, so nothing re-arms. */
 const CONTAINER_STOP_ATTEMPTS = 50;
-
-export interface UntimedResult {
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly exitCode: number;
-}
 
 interface UntimedExecution {
   cancelled: boolean;
@@ -151,6 +147,16 @@ const REPLACED_COUNT_KEY = 'devbox:replaced-count';
 
 /** Idle origin for a box no caller has used. */
 const STARTED_AT_KEY = 'devbox:started-at';
+
+const SIZE_KEY = 'devbox:size';
+
+const DEFAULT_SIZE_KEY = 'devbox:default-size';
+
+const RUNNING_SIZE_KEY = 'devbox:running-size';
+
+const START_REFUSED_KEY = 'devbox:start-refused';
+
+const NO_START_IMAGE = 'no image to start: name it `devbox` in the container `images` map';
 
 /** Scheduled-callback names. Each MUST name a public method on the class:
  *  `Container.schedule` rejects anything it cannot call back. */
@@ -447,7 +453,10 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   start(): Promise<void> {
-    return settle(this.#reopening(() => this.#startContainer()));
+    return settle(this.#reopening(async () => {
+      this.ctx.storage.kv.delete(START_REFUSED_KEY);
+      await this.#startContainer();
+    }));
   }
 
   /** A caller asking reopens a destroyed box once a quiesce in flight has settled. */
@@ -473,7 +482,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     });
   }
 
-  async #startNative(): Promise<void> {
+  async #startNative(inputs: StartInputs): Promise<void> {
     if (this.#closed) throw new DevboxError("io", DESTROYED_START);
     const container = this.#container();
     const generation = this.#generation;
@@ -481,7 +490,9 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     const wasRunning = container.running;
 
     if (!wasRunning) {
-      container.start({ enableInternet: this.enableInternet });
+      // D50: the one start boundary.
+      this.ctx.storage.kv.put(RUNNING_SIZE_KEY, inputs.size);
+      container.start({ image: inputs.image, instance: instanceOf(inputs.size), enableInternet: this.enableInternet });
       this.#routes().started();
     }
 
@@ -943,6 +954,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** All delivered startup doors share admission and destructive recovery. */
   async #startContainer(): Promise<void> {
+    const refused = this.#refusedStart();
+
+    if (refused !== undefined) {
+      await this.#settle({ phase: 'unattached', reason: refused, retry: false });
+
+      return;
+    }
+
     if (this.ctx.container?.running !== true
       && (this.#restoration.phase !== 'unstarted' || this.#gateRestore !== undefined)) {
       this.#invalidateGeneration();
@@ -1004,17 +1023,29 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     await this.#admitExecution();
   }
 
+  #startInputs(): StartInputs {
+    return { image: this.containerImage ?? '', size: this.#size(), internet: this.enableInternet };
+  }
+
+  #refusedStart(): string | undefined {
+    return this.ctx.container?.running === true ? undefined : refusedStart(this.ctx.storage.kv.get(START_REFUSED_KEY), this.#startInputs());
+  }
+
   async #admitExecution(): Promise<void> {
     const generation = this.#generation;
     const since = Date.now();
-    this.#trace('startup.admit.enter', { generation, running: this.ctx.container?.running === true });
+    const inputs = this.#startInputs();
+    const startsContainer = this.ctx.container?.running !== true;
+    this.#trace('startup.admit.enter', { generation, running: !startsContainer });
 
     try {
-      await this.#startNative();
+      await this.#startNative(inputs);
 
       this.#refused = undefined;
+      this.ctx.storage.kv.delete(START_REFUSED_KEY);
       this.#trace('startup.admit.exit', { generation, ms: Date.now() - since, admitted: true, owned: this.#owns(generation) });
-    } catch (cause) {
+    } catch (thrown) {
+      const cause = this.containerImage === undefined ? new DevboxError('configuration', NO_START_IMAGE, { cause: thrown }) : thrown;
       const reason = describe({ cause });
       this.#trace('startup.admit.exit', {
         generation, ms: Date.now() - since, admitted: false, owned: this.#owns(generation),
@@ -1025,10 +1056,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         const failure = classifyRecovery({ cause });
 
         // Classified first, as the ladder does: a start that fails the same way every time (an
-        // S3Mounts marker this box cannot route, D40) is refused once, not re-armed each second (D47).
+        // S3Mount marker this box cannot route, D40) is refused once, not re-armed each second (D47).
         if (isTerminalRecovery(failure)) {
           const refusal = `[${failure} -> refuse] ${reason}`;
           this.#adoptionPending = false;
+
+          if (startsContainer) this.ctx.storage.kv.put(START_REFUSED_KEY, { reason: refusal, ...inputs });
           await this.#settle({ phase: 'unattached', reason: refusal, retry: false });
 
           if (this.#owns(generation)) {
@@ -1452,7 +1485,80 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     if (held.phase === 'unattached' && !held.retry
       && await this.ctx.storage.get(RECOVERY_ACTION_KEY) === undefined) return;
+
+    if (this.#refusedStart() !== undefined) return;
     await this.armAlarm(STARTUP_CALLBACK, 1);
+  }
+
+  protected get containerImage(): string | undefined {
+    return this.ctx.container?.images['devbox'];
+  }
+
+  protected get defaultSize(): BoxSize {
+    return DEFAULT_BOX_SIZE;
+  }
+
+  #stored(key: string): BoxSize | undefined {
+    const stored = v.safeParse(BoxSizeSchema, this.ctx.storage.kv.get(key));
+
+    return stored.success ? stored.output : undefined;
+  }
+
+  #size(): BoxSize {
+    return this.#stored(SIZE_KEY) ?? this.#stored(DEFAULT_SIZE_KEY) ?? this.defaultSize;
+  }
+
+  #runningSize(): BoxSize | undefined {
+    return this.ctx.container?.running === true ? this.#stored(RUNNING_SIZE_KEY) : undefined;
+  }
+
+  #parseSize(size: string): Effect.Effect<BoxSize, DevboxError> {
+    const parsed = v.safeParse(BoxSizeSchema, size);
+
+    return parsed.success
+      ? Effect.succeed(parsed.output)
+      : Effect.fail(new DevboxError('invalid-input', `no box size ${size}; the sizes are ${BOX_SIZE_ORDER.join(', ')}`));
+  }
+
+  boxSize(): Promise<{
+    readonly size: BoxSize; readonly chosen: BoxSize | undefined; readonly running: BoxSize | undefined; readonly startRefused: string | undefined;
+  }> {
+    return settle(Effect.sync(() => ({
+      size: this.#size(), chosen: this.#stored(SIZE_KEY), running: this.#runningSize(), startRefused: this.#refusedStart(),
+    })));
+  }
+
+  useDefaultSize(size: string | null): Promise<BoxSize> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (size === null) this.ctx.storage.kv.delete(DEFAULT_SIZE_KEY);
+      else this.ctx.storage.kv.put(DEFAULT_SIZE_KEY, yield* this.#parseSize(size));
+
+      return this.#size();
+    }));
+  }
+
+  resize(size: string | null): Promise<ResizeOutcome> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (size === null) this.ctx.storage.kv.delete(SIZE_KEY);
+      else this.ctx.storage.kv.put(SIZE_KEY, yield* this.#parseSize(size));
+      const target = this.#size();
+      const running = this.ctx.container?.running === true;
+      const previous = this.#runningSize();
+
+      if (!running) return { kind: 'recorded', size: target, previous: undefined } as const;
+
+      if (previous === target) return { kind: 'unchanged', size: target, previous } as const;
+      const endedCommands = this.#untimed.size;
+      const committed = yield* attempt('io', () => this.#quiesce(true));
+
+      if (committed.kind === 'failed') {
+        return { kind: 'failed', size: target, previous, reason: committed.reason ?? 'the final checkpoint failed' } as const;
+      }
+
+      yield* attempt('io', () => this.start());
+
+      return { kind: 'restarted', size: target, previous, endedCommands, checkpoint: committed } as const;
+    }));
   }
 
   /** Requests may start a stopped box, then adopt the hook's settled generation (D26). */
@@ -1486,7 +1592,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     await this.#armStartup();
 
     if (this.#restoration.phase === 'unattached' && !this.#restoration.retry) {
-      throw new DevboxError("io", terminalRefusal(this.#restoration.reason));
+      throw new DevboxError('refused', terminalRefusal(this.#restoration.reason));
     }
 
     return {
@@ -1553,7 +1659,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /** No deadline; the SDK's process lane lost output (D37). */
-  execUntimed(command: string, options: { readonly cwd?: string; readonly execId: string }): Promise<UntimedResult> {
+  execUntimed(command: string, options: { readonly cwd?: string; readonly execId: string }): Promise<ExecResult> {
     const pending: UntimedExecution = { cancelled: false };
     this.#untimed.set(options.execId, pending);
 
@@ -1573,21 +1679,23 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** False when the command had already exited. */
   killUntimed(execId: string): Promise<boolean> {
-    return settle(attempt('io', async () => {
-      const pending = this.#untimed.get(execId);
+    return settle(attempt('io', () => this.#endUntimed(execId)));
+  }
 
-      if (pending === undefined) return false;
-      pending.cancelled = true;
+  async #endUntimed(execId: string): Promise<boolean> {
+    const pending = this.#untimed.get(execId);
 
-      if (pending.started === undefined) return true;
-      const container = this.ctx.container;
+    if (pending === undefined) return false;
+    pending.cancelled = true;
 
-      if (container?.running !== true) return false;
-      const { pid } = await pending.started;
-      const ended = await (await container.exec(['sh', '-c', KILL_TREE, 'kill-tree', String(pid)])).output();
+    if (pending.started === undefined) return true;
+    const container = this.ctx.container;
 
-      return ended.exitCode !== KILL_TREE_GONE;
-    }));
+    if (container?.running !== true) return false;
+    const { pid } = await pending.started;
+    const ended = await (await container.exec(['sh', '-c', KILL_TREE, 'kill-tree', String(pid)])).output();
+
+    return ended.exitCode !== KILL_TREE_GONE;
   }
 
   readonly #untimed = new Map<string, UntimedExecution>();
@@ -1608,6 +1716,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           await this.#repairAttached(this.#generation);
         } else {
           if (this.#unready() !== undefined) {
+            this.ctx.storage.kv.delete(START_REFUSED_KEY);
             await this.#settle({ phase: 'unstarted' });
             await this.#startContainer();
 
@@ -1665,23 +1774,27 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
   /** Fence admissions, drain owned work, release resident holders, then commit and detach. */
   quiesce(): Promise<CheckpointOutcome> {
-    const pending = this.#quiescing ??= Promise.resolve().then(async () => {
+    return settle(attempt('io', () => this.#quiesce(false)));
+  }
+
+  #quiesce(ending: boolean): Promise<CheckpointOutcome> {
+    return this.#quiescing ??= Promise.resolve().then(async () => {
       try {
-        return await this.#quiesceAdmitted();
+        return await this.#quiesceAdmitted(ending);
       } finally {
         this.#quiescing = undefined;
 
         if (this.ctx.container?.running === true) await this.#armContainerSchedules();
       }
     });
-
-    return settle(attempt('io', () => pending));
   }
 
-  async #quiesceAdmitted(): Promise<CheckpointOutcome> {
+  async #quiesceAdmitted(ending: boolean): Promise<CheckpointOutcome> {
     const starting = this.#startup;
 
     if (starting !== undefined) await Promise.allSettled([starting.run]);
+
+    if (ending) await Promise.allSettled([...this.#untimed.keys()].map((execId) => this.#endUntimed(execId)));
 
     if (this.#activeCallers !== 0) {
       this.#callersDrained = Promise.withResolvers<void>();
@@ -1717,14 +1830,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       listed = await this.#processes().list();
       const residents = new Set((await this.#procSpecs()).map(spec => spec.processId));
 
-      if (listed.some(process => isProcessLive(process.status) && !residents.has(process.id))) {
+      if (!ending && listed.some(process => isProcessLive(process.status) && !residents.has(process.id))) {
         return { kind: 'failed', reason: 'the stop is refused: unmanaged commands are still running', bytes: undefined, movedBytes: undefined };
       }
     } catch (cause) {
       const reason = describe({ cause });
       const beats = await this.ctx.storage.get<number>(UNREADABLE_PROCESS_BEATS_KEY) ?? 0;
 
-      if (beats < this.#processListGraceBeats) {
+      if (!ending && beats < this.#processListGraceBeats) {
         return { kind: 'failed', reason: 'the stop is held while the process list is unreadable: ' + reason, bytes: undefined, movedBytes: undefined };
       }
 
@@ -2042,6 +2155,8 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
         lastTick: await this.ctx.storage.get<HeartbeatTick>(LAST_TICK_KEY),
         bootId: await this.ctx.storage.get<string>(BOOT_ID_KEY),
         replacedCount: await this.ctx.storage.get<number>(REPLACED_COUNT_KEY) ?? 0,
+        size: this.#size(),
+        runningSize: this.#runningSize(),
         supervised,
         ports,
         incidents: incidentTotals(incidents.values()),

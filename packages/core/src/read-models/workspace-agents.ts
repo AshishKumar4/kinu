@@ -12,7 +12,7 @@ import type { HeadRunView } from '../heads/types';
 import { actorReadHandle } from './workspace-work';
 import { explorationActorKey } from '../identity/actor-key';
 import { usageTotal } from '../usage';
-import { NO_FIGURES, readAgentFigures, type AgentFigures } from './agent-figures';
+import { NO_FIGURES, type AgentFigures } from './agent-figures';
 
 export type AgentCategory = 'main' | 'user' | 'hired' | 'swarm' | 'background';
 
@@ -173,13 +173,14 @@ function swarmAgents({ sql, root, actors, labels, paths, handleOf }: Walk): Pane
   return agents;
 }
 
-export function readWorkspaceAgents(input: {
+export async function readWorkspaceAgents(input: {
   readonly sql: SqlExecutor;
   readonly exec: SqlExec;
   readonly root: ActorHandle;
   readonly rootLabel: string;
   readonly actors: readonly WorkspaceActor[];
-}): PanelAgent[] {
+  readonly figures: (actorIds: readonly string[]) => ReadonlyMap<string, AgentFigures> | Promise<ReadonlyMap<string, AgentFigures>>;
+}): Promise<PanelAgent[]> {
   const { sql, root } = input;
   root.assertCurrent();
   const handles = new Map<string, ActorHandle>([[root.actorId, root]]);
@@ -198,7 +199,7 @@ export function readWorkspaceAgents(input: {
   };
 
   const listed = [main, ...hired, ...swarms];
-  const figures = readAgentFigures(sql, listed.flatMap((agent) => (agent.actorId === undefined ? [] : [agent.actorId])));
+  const figures = await input.figures(listed.flatMap((agent) => (agent.actorId === undefined ? [] : [agent.actorId])));
 
   return listed.map((agent) => {
     const logged = (agent.actorId === undefined ? undefined : figures.get(agent.actorId)) ?? NO_FIGURES;

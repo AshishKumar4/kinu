@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // System prompt stays byte-stable; live state rides the DynamicContextLedger as blocks frozen at
 // their birth index; turn-local state renders as a per-turn tail.
 import { describe, test, expect } from 'bun:test';
@@ -27,7 +28,7 @@ import { admitActiveSkills } from '../src/skills/loader';
 import { skillViewPath, WORKSPACE_SKILLS_DIR } from '../src/skills/types';
 import { estimateTokens } from '../src/llm';
 import type {
-  ActiveSkill, ActiveSkillSet, DiscoveredSkill, InstructionTrustResolver, SkillsVfs,
+  ActiveSkill, ActiveSkillSet, DiscoveredSkill, InstructionTrustResolver,
 } from '../src/index';
 import { createTestRuntime, present } from '@kinu.run/test-utils';
 
@@ -84,7 +85,7 @@ function header(name: string, chars: number) {
 }
 
 /** A VFS serving each skill as discovery read it, counting reads so a deferred body is provably never opened. */
-function skillsVfsOf(bodies: Readonly<Record<string, string>>): SkillsVfs & { reads: string[] } {
+function skillsVfsOf(bodies: Readonly<Record<string, string>>): VFS & { reads: string[] } {
   const sourceOf = (path: string, body: string): string => {
     const name = path.slice(path.lastIndexOf('/') + 1).replace(/\.md$/, '');
 
@@ -95,17 +96,19 @@ function skillsVfsOf(bodies: Readonly<Record<string, string>>): SkillsVfs & { re
 
   return {
     reads,
-    exists: async (path: string) => bodies[path] !== undefined,
+    stat: async (path: string) => bodies[path] === undefined ? null : { type: 'file', size: new TextEncoder().encode(sourceOf(path, bodies[path])).byteLength, mtimeMs: 0 },
     readFile: async (path: string) => {
       reads.push(path);
       const body = bodies[path];
 
       if (body === undefined) throw new Error(`no such skill file: ${path}`);
 
-      return sourceOf(path, body);
+      return new TextEncoder().encode(sourceOf(path, body));
     },
     writeFile: async () => undefined,
     readdir: async () => [],
+    unlink: async () => undefined,
+    mkdir: async () => undefined,
   };
 }
 
@@ -1854,6 +1857,8 @@ describe('active-skill budget priority (activation precedence, stable render ord
       [invoked.bodyRef.path]: invokedBody,
     });
 
+    const invokedSize = present(await vfs.stat(invoked.bodyRef.path), 'the invoked skill metadata').size;
+
     // The invoked skill activated first; the allocation pays for one of the two.
     const admitted = await admitActiveSkills({
       vfs,
@@ -1861,7 +1866,7 @@ describe('active-skill budget priority (activation precedence, stable render ord
         { skill: invoked, reason: { kind: 'explicit', matched_token: 'zzz-invoked' } },
         { skill: giant, reason: { kind: 'always_active', via: 'config' } },
       ],
-      admissionTokens: estimateTokens(invokedBody.length) + 1,
+      admissionTokens: estimateTokens(invokedSize) + 1,
       trust: APPROVED,
     });
 

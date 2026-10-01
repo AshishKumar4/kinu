@@ -38,6 +38,23 @@
 # 16,000-line tier.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
+
+# The tier proves the checked-out tree, so it must be the tree being pushed: a push of
+# another branch from this worktree once ran the tier on main and refused a green commit.
+head="$(git rev-parse HEAD)"
+while read -r _ local_sha _ _; do
+  if [ "$local_sha" != "0000000000000000000000000000000000000000" ] && [ "$local_sha" != "$head" ]; then
+    printf 'pre-push: this push sends %s, but the push tier proves the checked-out %s.\n' "$local_sha" "$head" >&2
+    printf 'Push from a worktree that has that commit checked out.\n' >&2
+    exit 1
+  fi
+done
+# Untracked files count: the gates' corpus includes untracked, non-ignored files (scripts/sources.ts).
+if [ -n "$(git status --porcelain=v1)" ]; then
+  printf 'pre-push: the working tree has uncommitted or untracked changes, so the tier would not prove the pushed commit.\n' >&2
+  exit 1
+fi
+
 log="$(git rev-parse --git-dir)/push-tier.log"
 if bun scripts/ladder.ts --tier=push > "$log" 2>&1; then
   tail -n 1 "$log"

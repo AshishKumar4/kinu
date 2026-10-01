@@ -1,20 +1,21 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, test } from 'bun:test';
 import { openInstructionSource } from '../src/read-models/instruction-approvals';
 import type { InstructionApproval } from '../src/safety/instruction-trust';
 import {
   admitActiveSkills, admitSkillsIndex, discoverSkills, renderSkillsIndexSection,
   resolveActiveSkills, skillViewPath, WORKSPACE_SKILLS_DIR,
-  type SkillsVfs,
 } from '../src/skills/index';
 import { instructionDigest } from '../src/safety/instruction-trust';
 
-function vfs(source: string): SkillsVfs {
+function vfs(source: string): VFS {
   return {
-    async exists() { return true; },
-    async readFile() { return source; },
+    async readFile() { return new TextEncoder().encode(source); },
     async writeFile() {},
-    async readdir() { return ['deploy.md']; },
-    async stat() { return { size: source.length, mtimeMs: 0, isDir: false }; },
+    async readdir() { return [{ name: 'deploy.md', type: 'file' }]; },
+    async stat() { return { size: new TextEncoder().encode(source).byteLength, mtimeMs: 0, type: 'file' }; },
+    async unlink() {},
+    async mkdir() {},
   };
 }
 
@@ -141,16 +142,17 @@ body`;
   test('a source change between discovery and admission derives policy and trust from one later snapshot', async () => {
     let reads = 0;
 
-    const changing: SkillsVfs = {
-      async exists() { return true; },
+    const changing: VFS = {
       async readFile() {
         reads += 1;
 
-        return reads === 1 ? REVIEWED : POLICY_CHANGED;
+        return new TextEncoder().encode(reads === 1 ? REVIEWED : POLICY_CHANGED);
       },
       async writeFile() {},
-      async readdir() { return ['deploy.md']; },
-      async stat() { return { size: REVIEWED.length, mtimeMs: 0, isDir: false }; },
+      async readdir() { return [{ name: 'deploy.md', type: 'file' }]; },
+      async stat() { return { size: new TextEncoder().encode(REVIEWED).byteLength, mtimeMs: 0, type: 'file' }; },
+      async unlink() {},
+      async mkdir() {},
     };
 
     const discovery = await discoverSkills(changing, { admissionTokens: 10_000 });
@@ -190,16 +192,17 @@ body`;
 
     let reads = 0;
 
-    const changing: SkillsVfs = {
-      async exists() { return true; },
+    const changing: VFS = {
       async readFile() {
         reads += 1;
 
-        return reads === 1 ? discoverySource : currentSource;
+        return new TextEncoder().encode(reads === 1 ? discoverySource : currentSource);
       },
       async writeFile() {},
-      async readdir() { return ['deploy.md']; },
-      async stat() { return { size: discoverySource.length, mtimeMs: 0, isDir: false }; },
+      async readdir() { return [{ name: 'deploy.md', type: 'file' }]; },
+      async stat() { return { size: new TextEncoder().encode(discoverySource).byteLength, mtimeMs: 0, type: 'file' }; },
+      async unlink() {},
+      async mkdir() {},
     };
 
     const discovery = await discoverSkills(changing, { admissionTokens: 10_000 });

@@ -4,7 +4,7 @@ import * as v from 'valibot';
 export const DevboxErrorCode = v.picklist([
   'io', 'configuration', 'invalid-input', 'not-ready', 'cancelled', 'missing',
   'file', 'process', 'start-overrun', 'start-interrupted', 'container-changed',
-  'layer-unreadable', 'chain-advanced', 'delta-namespace', 'mount-marker',
+  'layer-unreadable', 'chain-advanced', 'delta-namespace', 'mount-marker', 'refused',
 ]);
 
 export type DevboxErrorCode = v.InferOutput<typeof DevboxErrorCode>;

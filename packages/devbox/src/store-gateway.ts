@@ -1,5 +1,5 @@
 /** A store mount's S3 requests, answered from the Worker's own R2 binding: no key pair exists (D41).
- *  S3Mounts runs `s3fs` in the guest with the shim's placeholder password and routes each mount's
+ *  S3Mount runs `s3fs` in the guest with the shim's placeholder password and routes each mount's
  *  host here, as 0.12.9's R2 mount did; the SDK's `S3Gateway` would sign them for R2's S3 API. */
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import type { S3GatewayBinding, S3MountRequest } from '@cloudflare/sandbox';
@@ -9,8 +9,8 @@ import { storeRouteHost } from './snapshot-chain';
 
 export type StoreGatewayProps = Parameters<S3GatewayBinding>[0]['props'];
 
-/** What S3Mounts records for a store. The bucket names the R2 binding the gateway reads; nothing
- *  contacts the endpoint and nothing checks the key pair, which S3Mounts requires to be present. */
+/** What S3Mount records for a store. The bucket names the R2 binding the gateway reads; nothing
+ *  contacts the endpoint and nothing checks the key pair, which S3Mount requires to be present. */
 export function storeSource(binding: string): S3MountRequest['source'] {
   return {
     type: 's3', endpoint: 'http://r2-binding.devbox.internal/', region: 'auto', bucket: binding,
@@ -232,7 +232,7 @@ function serveObject({ request, bucket, root }: StoreCall, key: string): Effect.
   });
 }
 
-/** Holds each route to the bucket and access S3Mounts recorded for it, rooted at the box's prefix
+/** Holds each route to the bucket and access S3Mount recorded for it, rooted at the box's prefix
  *  Devbox set on it: a key the guest names is a path under that root (D46), as 0.12.9's Worker
  *  rooted its mount, so it reaches no other binding and no other box's keys. */
 export function serveStore(request: Request, props: StoreGatewayProps, bucketOf: (name: string) => R2Bucket | undefined): Effect.Effect<Response, DevboxError> {
@@ -291,7 +291,7 @@ export function serveStore(request: Request, props: StoreGatewayProps, bucketOf:
   });
 }
 
-/** Handed to S3Mounts as its gateway binding in place of the SDK's signing `S3Gateway`. */
+/** Handed to S3Mount as its gateway binding in place of the SDK's signing `S3Gateway`. */
 export class DevboxStoreGateway extends WorkerEntrypoint<Record<string, R2Bucket | undefined>, StoreGatewayProps> {
   override fetch(request: Request): Promise<Response> {
     return settle(serveStore(request, this.ctx.props, (name) => this.env[name]));

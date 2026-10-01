@@ -1,7 +1,8 @@
+import type { Awaitable, VFS, VfsDirent } from '@nimbus-sh/core/vfs/vfs.js';
 /** `/agent`: the agent's memory, SOUL.md and scaffold, read-only, where the file plane is a directory. */
 
 import { Effect } from 'effect';
-import type { VFS } from '../types/primitives';
+
 import type { VfsMount } from './mounts';
 import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { settle } from '../obs/effect';
@@ -34,8 +35,8 @@ export function agentViewMount(state: VFS, scaffoldDir: string): VfsMount {
       : Effect.succeed(source);
   };
 
-  const fromState = <A>(doing: string, run: () => Promise<A>): Effect.Effect<A, KinuError | VfsError> => Effect.tryPromise({
-    try: run,
+  const fromState = <A>(doing: string, run: () => Awaitable<A>): Effect.Effect<A, KinuError | VfsError> => Effect.tryPromise({
+    try: async () => run(),
     catch: (cause) => (isVfsError(cause)
       ? cause
       : toKinuError({ doing, cause, otherwise: 'io' })),
@@ -46,31 +47,30 @@ export function agentViewMount(state: VFS, scaffoldDir: string): VfsMount {
     + 'the scaffold through self-modification',
   `${AGENT_VIEW}${path}`,));
 
-  const present = async (): Promise<string[]> => {
-    const names: string[] = [];
+  const present = async (): Promise<VfsDirent[]> => {
+    const entries: VfsDirent[] = [];
 
-    for (const [name, root] of roots) if (await state.exists(root)) names.push(name);
+    for (const [name, root] of roots) {
+      const stat = await state.stat(root, { follow: false });
 
-    return names;
+      if (stat !== null) entries.push({ name, type: stat.type, stat });
+    }
+
+    return entries;
   };
 
   const files: VFS = {
-    readFile: (path, opts) => settle(Effect.flatMap(shown(path), (source) => (source === null
+    readFile: (path) => settle(Effect.flatMap(shown(path), (source) => (source === null
       ? Effect.fail(new VfsError('EISDIR', 'illegal operation on a directory, read', AGENT_VIEW))
-      : fromState(`reading ${AGENT_VIEW}${path}`, () => state.readFile(source, opts))))),
+      : fromState(`reading ${AGENT_VIEW}${path}`, () => state.readFile(source))))),
     readdir: (path) => settle(Effect.flatMap(shown(path), (source) =>
       fromState(`listing ${AGENT_VIEW}${path}`, () => (source === null ? present() : state.readdir(source))))),
-    async stat(path) {
+    async stat(path, options) {
       const source = sourceOf(path);
 
       if (source === undefined) return null;
 
-      return source === null ? { size: 0, mtimeMs: 0, isDir: true } : state.stat(source);
-    },
-    async exists(path) {
-      const source = sourceOf(path);
-
-      return source !== undefined && (source === null || state.exists(source));
+      return source === null ? { size: 0, mtimeMs: 0, type: 'directory' } : state.stat(source, options);
     },
     writeFile: (path) => settle(readOnly(path)),
     unlink: (path) => settle(readOnly(path)),

@@ -1,3 +1,4 @@
+import { readText, type VFS, type VfsDirent, type VfsStat, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The `parent` executor: a fork's window onto the workspace it forked, in the parent's own paths.
  * An executor rather than a mount, like the sandbox and device: `parent.exec` runs the parent's real shell.
@@ -6,7 +7,7 @@
 import * as v from 'valibot';
 import { raceAbort } from '@kinu.run/agent-utils';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types';
-import type { VFS } from '../types/primitives';
+
 import { isVfsError, toVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { readExecSignal } from './signal';
@@ -14,11 +15,9 @@ import { commandResult, existsTool } from './exec-result';
 import { Effect } from 'effect';
 import { attempt, KinuError, refusalOf, renderThrownChain, settle } from '../obs/index';
 
-type Stat = { size: number; mtimeMs: number; isDir: boolean } | null;
-
 /** `write` is a closed command union covering file write and mkdir. */
 export type ParentRpcWrite =
-  | { kind: 'file'; path: string; data: string | Uint8Array }
+  | { kind: 'file'; path: string; data: Uint8Array }
   | { kind: 'directory'; path: string; recursive: boolean };
 
 export interface ParentExecResult {
@@ -31,8 +30,8 @@ export interface ParentExecResult {
 export interface ParentWorkspaceHandle {
   read(path: string): Promise<Uint8Array>;
   write(input: ParentRpcWrite): Promise<null>;
-  list(path: string): Promise<string[]>;
-  stat(path: string): Promise<Stat>;
+  list(path: string): Promise<VfsDirent[]>;
+  stat(path: string, options?: { follow?: boolean }): Promise<VfsStat | null>;
   delete(path: string): Promise<null>;
   /** The parent's real workspace shell. */
   exec(command: string): Promise<ParentExecResult>;
@@ -74,18 +73,14 @@ function parseInput<TSchema extends v.GenericSchema>(
 /** A `VFS` over the parent workspace in the parent's own paths; never merged into this agent's `Storage.vfs`. */
 export function createParentWorkspaceVfs(handle: ParentWorkspaceHandle): VFS {
   return {
-    readFile(path, opts) {
-      return settle(Effect.map(parentCall(path, () => handle.read(path)), (content) =>
-        opts?.encoding === 'utf8' ? new TextDecoder().decode(content) : content));
-    },
+    readFile(path) { return settle(parentCall(path, () => handle.read(path))); },
     writeFile(path, data) { return settle(Effect.asVoid(parentCall(path, () => handle.write({ kind: 'file', path, data })))); },
     readdir(path) { return settle(parentCall(path, () => handle.list(path))); },
-    stat(path) { return settle(parentCall(path, () => handle.stat(path))); },
+    stat(path, options) { return settle(parentCall(path, () => handle.stat(path, options))); },
     unlink(path) { return settle(Effect.asVoid(parentCall(path, () => handle.delete(path)))); },
     mkdir(path, opts) {
       return settle(Effect.asVoid(parentCall(path, () => handle.write({ kind: 'directory', path, recursive: opts?.recursive ?? false }))));
     },
-    exists(path) { return settle(Effect.map(parentCall(path, () => handle.stat(path)), (stat) => stat !== null)); },
   };
 }
 
@@ -146,9 +141,7 @@ export function createParentExecutor(deps: {
             return refusalOf(new KinuError('bad_input', 'parent readFile: path must be a string'));
           }
 
-          const content = await vfs.readFile(path, { encoding: 'utf8' });
-
-          return content instanceof Uint8Array ? new TextDecoder().decode(content) : content;
+          return readText(vfs, path);
         },
       },
       writeFile: {
@@ -161,7 +154,7 @@ export function createParentExecutor(deps: {
           }
 
           const text = String(args[1]);
-          await vfs.writeFile(path, text);
+          await writeText(vfs, path, text);
 
           return `Written ${text.length} bytes to ${path}`;
         },
@@ -176,7 +169,7 @@ export function createParentExecutor(deps: {
             return refusalOf(new KinuError('bad_input', 'parent readdir: path must be a string'));
           }
 
-          return vfs.readdir(path);
+          return Promise.resolve(vfs.readdir(path)).then(entries => entries.map(({ name }) => name));
         },
       },
       exists: existsTool(vfs, { description: 'Check whether a path exists in the parent workspace.', operation: 'parent exists' }),

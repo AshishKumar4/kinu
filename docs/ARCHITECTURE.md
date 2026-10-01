@@ -37,7 +37,7 @@ graph TB
         Files["Workspace filesystem, in the owning DO's own SQLite<br/>(workspace-host.ts + execution/nimbus.ts), durable, real shell"]
         subgraph Execs["ExecutionRouter, target-native exec, each its own filesystem"]
             W["workspace.*: the file plane above (default runtime)"]
-            S["sandbox.*: Linux container, KinuSandbox (when configured)"]
+            S["sandbox.*: Linux container, KinuDevbox (when configured)"]
             P["device.*: the user's own machine (connect + consent)"]
         end
         State["Workspace SQL: main session · roster · shared ledgers<br/>Nimbus files: SOUL.md · memory · actor scaffolds"]
@@ -57,7 +57,7 @@ filesystem: its namespace prefix, whether it is live, and its declared policy
 your machine. `sandbox` is a Cloudflare container. Containers are spot
 capacity, so `@kinu.run/devbox` (`packages/devbox`) presents one as a machine
 that stays: files survive, supervised processes come back, and preview URLs
-keep their hostnames. `KinuSandbox` (`packages/cf-backend/src/kinu-sandbox.ts`)
+keep their hostnames. `KinuDevbox` (`packages/cf-backend/src/kinu-devbox.ts`)
 is a thin subclass that supplies four things: the backup bucket, the preview
 zone, the two questions Devbox asks the owning workspace, and egress
 interception. [WORKSPACES.md](./WORKSPACES.md) holds the noun model;
@@ -474,7 +474,7 @@ graph TB
         Agents["agents (Agents SDK) ^0.22.0"]
         AISDK["ai (Vercel AI SDK) 6.0.214"]
         Nimbus["@nimbus-sh/core 0.12.0: the workspace filesystem"]
-        Sandbox["@cloudflare/sandbox 0.12.8 + @cloudflare/containers 0.3.7"]
+        Sandbox["@cloudflare/sandbox 1.0.0 (Files and S3Mount, under packages/devbox)"]
     end
 
     CF --> Agents

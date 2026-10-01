@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # The product flows (scripts/product-flows.ts) in real Chrome against the
 # deployment that just went up, as the `scripted` eval account on the tiers'
-# scripted model (scripts/tier-model.ts), which plays each row's calls. The same
-# file runs before the deploy against the local dev server
-# (scripts/with-dev-server.ts) on that model; the origin arrives as KINU_ORIGIN
-# either way. On the account's real model the rows measured the model instead:
+# scripted model (scripts/tier-model.ts), which plays each row's calls. This is
+# the one run of these rows, against the deployment each deploy publishes: under
+# `vite dev` no agent facet loads, and a Worker that implements Durable Objects
+# has no version preview URL, so staging's run is the check before production.
+# A red fails the deploy before staging's record, so the build is never
+# promoted. On the account's real model the rows measured the model instead:
 # on staging 7dd73e1ac9 (2026-09-27) the slate row spent 425 s in 47
 # rate-limit backoffs and 32 steps and was killed. Whether a real model makes the
 # calls a row names is the evals' question (evals/).

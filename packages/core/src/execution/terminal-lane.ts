@@ -399,7 +399,7 @@ export function writeOutputRow(term: TerminalWriter, out: TerminalPaneOutput) {
 
 /**
  * Per-environment terminal capability:
- * `sandbox` — @cloudflare/sandbox runs a real PTY (`sandbox-container/src/pty.ts`).
+ * `sandbox` — the devbox container runs a real PTY (`@kinu.run/devbox` `terminal.ts`).
  * `workspace` — Nimbus `WebSocketTerminal`, a line editor with no raw mode (no real TTY in the substrate).
  * `device` — a real PTY per session via `packages/pc-agent/src/pty.js`, gated by `UserDO.deviceRpc`.
  * `parent` — a fork's origin exec plane, one call per command, no session.

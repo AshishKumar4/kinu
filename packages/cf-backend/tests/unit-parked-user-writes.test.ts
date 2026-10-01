@@ -199,8 +199,8 @@ test('a review says when the file changed since the ask, and a binary rewrite sh
   });
 });
 
-test('an id that names no parked write reviews as nothing', async () => {
+test('an id that names no parked write is refused as missing, not answered as nothing', async () => {
   const { agent } = await workspaceWithMachine();
 
-  expect(await agent.reviewParkedWrite('defer-none')).toBeNull();
+  expect(agent.reviewParkedWrite('defer-none')).rejects.toThrow('no longer waiting');
 });

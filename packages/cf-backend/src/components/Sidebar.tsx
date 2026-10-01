@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef, type FormEvent, type ReactNode } from "react";
+import { useState, useCallback, useRef, type FormEvent, type ReactNode } from "react";
 import { Link, NavLink, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon, ShieldCheckIcon, SidebarSimpleIcon,
 } from "@phosphor-icons/react";
@@ -13,10 +13,8 @@ import { useWorkspaceRoster } from "../hooks/use-workspace-roster";
 import { lastValue } from "../hooks/use-async-resource";
 import { ModeToggle } from "./theme-toggle";
 import { FeedbackButton } from "./FeedbackButton";
-import { agentTitle } from "./SubordinateTabs";
 import { isPlaceholderWorkspaceTitle, shortAge, workspaceDisplayTitle } from "@kinu.run/core";
 import { Modal } from "./ui/Modal";
-import * as v from "valibot";
 import { renderCauseChain, renderThrownChain } from "@kinu.run/core/obs";
 import { SidebarAgents } from "./SidebarAgents";
 import { navActive, navRowCls, PRIMARY_NAV } from "./nav";
@@ -42,20 +40,6 @@ function PrimaryNavRow(item: (typeof PRIMARY_NAV)[number]) {
 // Deleting an agent must first leave all of these: a mounted socket auto-reconnects and resurrects the DO.
 const WORKSPACE_SCOPED_SECTIONS = ["workspace", "swarm", "settings", "triggers"];
 
-const SidebarAgentSchema = v.object({
-  name: v.string(),
-  displayName: v.string(),
-  status: v.string(),
-});
-
-function subordinateDot(status: string): string {
-  if (status === "working") return "p-dot-success p-dot-pulse";
-
-  if (status === "awaiting_input") return "p-dot-warning";
-
-  return "bg-[var(--c-fill)] border p-border";
-}
-
 function connectionWait(status: ConnectionStatus): string {
   if (status === "connecting") return "Connecting…";
 
@@ -63,16 +47,6 @@ function connectionWait(status: ConnectionStatus): string {
 
   return "Could not connect";
 }
-
-type WorkspaceActivity = Omit<v.InferOutput<typeof WorkspaceActivityEventSchema>, 'name'>;
-
-const WorkspaceActivityEventSchema = v.object({
-  name: v.string(),
-  running: v.boolean(),
-  unseenChangelog: v.number(),
-  agents: v.array(SidebarAgentSchema),
-});
-
 
 function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
   workspace: WorkspaceEntry;
@@ -165,7 +139,6 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
   const account = useAccount();
   const profile = lastValue(account.profile);
   const profileFailed = account.profile.status === "error";
-  const [activity, setActivity] = useState<Record<string, WorkspaceActivity>>({});
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [editingWorkspace, setEditingWorkspace] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<WorkspaceEntry | null>(null);
@@ -173,22 +146,6 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const userMenuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const h = (e: Event) => {
-      if (!(e instanceof CustomEvent)) return;
-      const parsed = v.safeParse(WorkspaceActivityEventSchema, e.detail);
-
-      if (!parsed.success) return;
-      const { name, running, unseenChangelog, agents } = parsed.output;
-      setActivity((prev) => ({ ...prev, [name]: { running, unseenChangelog, agents } }));
-    };
-
-    window.addEventListener("kinu:workspace-activity", h);
-
-    return () => window.removeEventListener("kinu:workspace-activity", h);
-  }, []);
-
 
   const closeUserMenu = useCallback(() => setShowUserMenu(false), []);
   useCloseOnOutsideClick(showUserMenu, userMenuRef, closeUserMenu);
@@ -211,8 +168,6 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
       setDeleteBusy(false);
     }
   }, [deleteTarget, agentId, navigate, removeFromRoster]);
-
-  const activeAgents = agentId ? activity[agentId]?.agents : undefined;
 
 
   return (
@@ -269,17 +224,17 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
         <ul className="space-y-1" aria-busy={listLoading && !listError}>
           {workspaces.map((a) => {
             const age = shortAge(a.lastVisited);
-            const live = activity[a.name];
+            const overview = a.overview;
             const editing = editingWorkspace === a.name;
             const isActive = a.name === agentId;
             const shown = workspaceDisplayTitle(a);
 
             let dot: ReactNode = null;
 
-            if (live?.running) {
+            if (overview?.activity === "working") {
               dot = <span className="block size-1.5 rounded-full p-dot-success p-dot-pulse" title="Working now" />;
-            } else if (live !== undefined && live.unseenChangelog > 0) {
-              dot = <span className="block size-1.5 rounded-full p-dot-accent" title={`${live.unseenChangelog} new self-change${live.unseenChangelog === 1 ? "" : "s"}`} />;
+            } else if (overview?.hasUpdates === true) {
+              dot = <span className="block size-1.5 rounded-full p-dot-accent" title="Updated" />;
             } else if (isActive) {
               dot = <span className="block size-1.5 rounded-full p-dot-accent" />;
             }
@@ -331,37 +286,6 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
                   )}
                 </div>
 
-                {isActive && activeAgents && activeAgents.length > 0 && (
-                  <div className="ml-[21px] mt-1 space-y-1 border-l p-border pl-2.5">
-                    {activeAgents.map((sub) => (
-                      <NavLink
-                        key={sub.name}
-                        to={`/workspace/${a.name}/agents/${sub.name}`}
-                        className={({ isActive: agentOpen }) => `flex items-center gap-2 rounded-lg px-2.5 py-[5px] transition-colors ${navRowCls(agentOpen)}`}
-                        title={agentTitle(sub)}
-                      >
-                        <span className={`size-1.5 shrink-0 rounded-full ${subordinateDot(sub.status)}`} />
-                        <span className="min-w-0 flex-1 truncate p-row-text">{agentTitle(sub)}</span>
-                      </NavLink>
-                    ))}
-                    <button
-                      onClick={() => window.dispatchEvent(new CustomEvent("kinu:new-agent"))}
-                      className="w-full rounded-lg px-2.5 py-[5px] text-left p-t-control p-text-4 transition-colors hover:p-accent"
-                    >
-                      + New agent
-                    </button>
-                  </div>
-                )}
-                {isActive && activeAgents && activeAgents.length === 0 && (
-                  <div className="ml-[21px] mt-1 border-l p-border pl-2.5">
-                    <button
-                      onClick={() => window.dispatchEvent(new CustomEvent("kinu:new-agent"))}
-                      className="w-full rounded-lg px-2.5 py-[5px] text-left p-t-control p-text-4 transition-colors hover:p-accent"
-                    >
-                      + New agent
-                    </button>
-                  </div>
-                )}
               </li>
             );
           })}

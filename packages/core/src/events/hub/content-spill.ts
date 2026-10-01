@@ -1,8 +1,9 @@
+import { exists, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Oversize event bodies are written to the receiver's file plane and the path rides the payload.
  *  Content-addressed, so a redelivered event renders a byte-identical brief. */
 
 import { sha256Hex } from '../../safety/argument-digest';
-import type { VFS } from '../../types/primitives';
+
 import { EVENT_BRIEF_MAX_CHARS } from './visibility';
 import { Effect } from 'effect';
 import { diagnostics, renderCauseChain, settle, toKinuError } from '../../obs/index';
@@ -25,9 +26,9 @@ export function spillEventContent(vfs: VFS, content: string): Promise<SpilledCon
 
   return settle(Effect.tryPromise({
     try: async (): Promise<SpilledContent> => {
-      if (!(await vfs.exists(path))) {
+      if (!(await exists(vfs, path))) {
         await ensureDir(vfs, EVENT_CONTENT_DIR);
-        await vfs.writeFile(path, content);
+        await writeText(vfs, path, content);
       }
 
       return { path };

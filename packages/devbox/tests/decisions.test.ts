@@ -50,8 +50,6 @@ import { requireShellAccepts } from "./support/container-shell";
 import {
   baseObjectKey,
   chainStoreRoot,
-  chainBackupOptions,
-  CHAIN_EXCLUDES,
   deltaObjectKey,
   metadataObjectKey,
   normalizeChainState,
@@ -895,26 +893,6 @@ describe('chain identity — UUID keys refuse traversal by construction', () => 
     // A non-UUID fallback id nulls the whole row, as a bad `base` does: object keys derive from it.
     expect(normalizeChainState({ ...sound, fallback: { base: { id: 'nope', bytes: 7 } } }))
       .toBeNull();
-  });
-});
-
-describe('archive options', () => {
-  test('derived trees never travel, git metadata always does, and the archive '
-    + 'outlives a long weekend', () => {
-    const options = chainBackupOptions(false, CHAIN_EXCLUDES);
-    expect(options.dir).toBe('/workspace');
-    expect(options.excludes).toContain('node_modules');
-    // `.git` holds unpushed commits and makes a linked worktree a repository; excludes
-    // cover only what a lockfile reproduces.
-    expect(options.excludes).not.toContain('.git');
-    // The SDK's own default is three days and it is enforced at restore time,
-    // so a shorter TTL is a box that refuses to come back after a break.
-    expect(options.ttl).toBeGreaterThanOrEqual(7 * 24 * 60 * 60);
-    expect(chainBackupOptions(true, CHAIN_EXCLUDES).localBucket).toBe(true);
-  });
-
-  test('the excludes come from the caller, so both modes obey one policy', () => {
-    expect(chainBackupOptions(false, ['only-this']).excludes).toEqual(['only-this']);
   });
 });
 

@@ -1,3 +1,4 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * An overwrite of the user's file parked on the owner and approved, on real Durable Object storage. Its bytes go
  * through Nimbus's own writeFile, which stages a large file in bounded transactions; one synchronous turn holding
@@ -7,11 +8,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
-import {
-  DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, initWorkspaceSchema, ParkedWriteFiles,
-  performBoundWrite, sha256Hex, withApprovalGatedFiles, WorkspaceActorDirectory,
-  type SqlExec, type SqlExecutor, type SqlValue, type VFS,
-} from '@kinu.run/core';
+import { DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable, initWorkspaceSchema, ParkedWriteFiles, performBoundWrite, sha256Hex, withApprovalGatedFiles, WorkspaceActorDirectory, type SqlExec, type SqlExecutor, type SqlValue } from '@kinu.run/core';
 
 /** The owner's machine as the agent's plane mounts it. */
 const MACHINE = '/pc/studio';
@@ -39,18 +36,17 @@ function pattern(size: number, seed: number): Uint8Array {
 /** The file plane as the agent's tools reach it, over the kernel's view of this object's workspace. */
 function planeOver(files: CredentialedVfs): VFS {
   return {
-    readFile: async (path, opts) => (opts?.encoding === undefined ? files.readFileUncached(path) : files.readFileString(path)),
+    readFile: async (path) => files.readFileUncached(path),
     writeFile: async (path, data) => { files.writeFile(path, data); },
-    readdir: async (path) => files.readdir(path).map((entry) => entry.name),
+    readdir: async (path) => files.readdir(path),
     stat: async (path) => {
       if (!files.exists(path)) return null;
       const stat = files.lstat(path);
 
-      return { size: stat.size, mtimeMs: stat.mtime, isDir: stat.type === 'directory' };
+      return { size: stat.size, mtimeMs: stat.mtime, type: stat.type };
     },
     unlink: async (path) => { files.unlink(path); },
     mkdir: async (path, opts) => { files.mkdir(path, opts); },
-    exists: async (path) => files.exists(path),
   };
 }
 

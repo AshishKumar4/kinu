@@ -1,13 +1,8 @@
+import { readText } from '@nimbus-sh/core/vfs/vfs.js';
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import { describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import {
-  initWorkspaceSchema,
-  type SqlExec,
-  type SqlExecRow,
-  type SqlExecutor,
-  type SqlValue,
-  type VFS,
-} from '@kinu.run/core';
+import { initWorkspaceSchema, type SqlExec, type SqlExecRow, type SqlExecutor, type SqlValue } from '@kinu.run/core';
 import { createTestActorsOver } from '@kinu.run/test-utils';
 import {
   compactionTranscriptPath,
@@ -106,13 +101,19 @@ function memoryVfs(): MemoryVfs {
 
       if (content === undefined) throw new Error(`ENOENT: ${path}`);
 
-      return content;
+      return new TextEncoder().encode(content);
     },
     writeFile: async (path, data) => {
       files.set(path, data instanceof Uint8Array ? new TextDecoder().decode(data) : data);
     },
     readdir: async () => [],
-    stat: async () => null,
+    stat: async (path) => {
+      const content = files.get(path);
+
+      if (content !== undefined) return { type: 'file', size: new TextEncoder().encode(content).byteLength, mtimeMs: 0 };
+
+      return dirs.has(path) ? { type: 'directory', size: 0, mtimeMs: 0 } : null;
+    },
     unlink: async (path) => {
       files.delete(path);
     },
@@ -120,7 +121,6 @@ function memoryVfs(): MemoryVfs {
       if (dirs.has(path)) throw new Error(`EEXIST: directory exists ${path}`);
       dirs.add(path);
     },
-    exists: async (path) => files.has(path) || dirs.has(path),
   };
 
   return { vfs, files };
@@ -145,7 +145,7 @@ describe('createVfsTranscriptStore', () => {
     const { absolutePath } = await store.write(path, '# transcript');
     expect(absolutePath).toBe(path);
     expect(files.get(path)).toBe('# transcript');
-    expect(await vfs.readFile(path)).toBe('# transcript');
+    expect(await readText(vfs, path)).toBe('# transcript');
   });
 
   test('citablePath survives unbound invocation (the engine passes it around bare)', () => {
@@ -158,7 +158,7 @@ describe('createVfsTranscriptStore', () => {
     const store = createVfsTranscriptStore(() => vfs);
     await store.write(store.citablePath('a', 'h1'), 'one');
     await store.write(store.citablePath('a', 'h2'), 'two');
-    expect(await vfs.readFile(store.citablePath('a', 'h2'))).toBe('two');
+    expect(await readText(vfs, store.citablePath('a', 'h2'))).toBe('two');
   });
 });
 
@@ -222,11 +222,11 @@ describe('createCompactionStateStore', () => {
 
   test('an armed compaction is consumed exactly once, in its own session (never loops)', () => {
     const { store } = stateRig();
-    expect(store.takeArmedCompaction('s1')).toBeNull();
-    store.armCompaction('s1', 'force');
-    expect(store.takeArmedCompaction('s2')).toBeNull();
-    expect(store.takeArmedCompaction('s1')).toBe('force');
-    expect(store.takeArmedCompaction('s1')).toBeNull();
+    expect(store.takeArmedCompaction('s1')).toBe(false);
+    store.armCompaction('s1');
+    expect(store.takeArmedCompaction('s2')).toBe(false);
+    expect(store.takeArmedCompaction('s1')).toBe(true);
+    expect(store.takeArmedCompaction('s1')).toBe(false);
   });
 
   test('arming force-compaction never clobbers the plan or the token signal', async () => {
@@ -234,10 +234,10 @@ describe('createCompactionStateStore', () => {
     const snap = snapshot('s1');
     await store.plans.save('s1', snap);
     store.savePromptTokens('s1', 9_000, 30);
-    store.armCompaction('s1', 'force');
+    store.armCompaction('s1');
     expect(store.plans.load('s1')).toEqual(snap);
     expect(store.loadPromptTokens('s1', 30)).toBe(9_000);
-    expect(store.takeArmedCompaction('s1')).toBe('force');
+    expect(store.takeArmedCompaction('s1')).toBe(true);
     expect(store.plans.load('s1')).toEqual(snap);
     expect(store.loadPromptTokens('s1', 30)).toBe(9_000);
   });

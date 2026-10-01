@@ -2,12 +2,12 @@
  * THE PRODUCT'S OWN FLOWS, IN A BROWSER, AS A USER SEES THEM.
  *
  * Every row here drives real Chrome against a real product origin and asserts
- * only what the page shows: a tab, a link, an answer, a preview. The same rows
- * run twice: before the deploy against the local dev server
- * (`scripts/with-dev-server.ts`: the real Worker and Durable Objects in workerd,
- * on the scripted model `flowsModel` below, so they test the product and not a
- * model's compliance) and after it against the deployment on its real model
- * (`scripts/product-flows-tier.sh`). The origin arrives as `KINU_ORIGIN`, the
+ * only what the page shows: a tab, a link, an answer, a preview. The rows run
+ * once per deploy, after the publish, against the deployment
+ * (`scripts/product-flows-tier.sh`) on the tiers' scripted model (`tierModel`,
+ * scripts/tier-model.ts), so they test the product and not a model's
+ * compliance. Only a real Worker deployment runs the whole product: under
+ * `vite dev` no agent facet loads. The origin arrives as `KINU_ORIGIN`, the
  * model is the account's default, and the identity is resolved from that origin
  * by the eval plane's own resolver, so a row never asks where it runs.
  *
@@ -22,7 +22,7 @@
  */
 import type { Browser, ElementHandle, Page } from 'puppeteer';
 import * as v from 'valibot';
-import { SLATES_ROOT } from '@kinu.run/core';
+import { hostedActorSocketPath, SLATES_ROOT } from '@kinu.run/core';
 import { tolerate } from '@kinu.run/core/obs';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -31,6 +31,7 @@ import { beatWorkspace, webHeaders, type PublicWebIdentity } from '../evals/src/
 import { holdForRelease } from '../packages/test-utils/src/scratch';
 import { DESKTOP } from './live-app-harness';
 import { FLOW_SLATE, SLATE_ASK, WRITE_FILE_ASK } from './flows-script';
+import { FALLBACK_ANSWER } from './scripted-protocol';
 import {
   documentScriptFailures, explained, FAILED_APP_SCRIPT, recordScriptFailures, SCRIPT_FAILED, type ScriptFailure,
 } from './script-failures';
@@ -214,16 +215,23 @@ const DEAD_END = `(() => {
  *  the row's deadline, whose SIGTERM runs the hold below, so the run ends naming the wait and not only the row. */
 const openWaits = new Set<{ readonly what: string }>();
 
+/** Each live frame ledger's account of the traffic since its restart, printed with the open waits it may hold. */
+const liveLedgers = new Set<() => string>();
+
 let dropWaitsHold: (() => void) | null = null;
 
-/** `wait`, logged by what it waits for when it opens and when it is reached, and named while it is open. */
-async function named<Value>(what: string, wait: () => Promise<Value>): Promise<Value> {
+/** `wait`, logged by what it waits for when it opens and when it is reached, and named while it is open. A step
+ *  that is not a wait on a page (a create through the API, a navigation) is named through it too, so a slow run's
+ *  log accounts for every second, not only the page waits. */
+export async function named<Value>(what: string, wait: () => Promise<Value>): Promise<Value> {
   const open = { what };
   const started = performance.now();
 
   openWaits.add(open);
   dropWaitsHold ??= holdForRelease('the open waits', () => {
     process.stderr.write(`ended while waiting for ${[...openWaits].map((pending) => pending.what).join('; ')}\n`);
+
+    for (const account of liveLedgers) process.stderr.write(`  the page's traffic since its ledger's last restart: ${account()}\n`);
   });
   process.stderr.write(`  waiting for ${what}\n`);
 
@@ -354,7 +362,10 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
 
   await cdp.send('Network.enable');
 
-  const asked = new Map<string, string>();
+  /** An ask is keyed by its socket and its id: ids restart per socket, so two sockets or two loads reuse them. */
+  interface Ask { readonly socket: string; readonly method: string }
+
+  const asked = new Map<string, Ask>();
   const answered = new Set<string>();
   const arrived = new Set<string>();
   let closed = false;
@@ -384,12 +395,26 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
     return promise;
   };
 
-  cdp.on('Network.webSocketFrameSent', (event: { response?: { payloadData?: string } }) => {
+  /** Each socket's path by CDP request id, and what the page sent over each since the restart. */
+  const socketPaths = new Map<string, string>();
+  const framesSent = new Map<string, number>();
+  const requests = new Map<string, number>();
+
+  const pathOf = (url: string | undefined): string => new URL(url ?? 'ws://unknown/').pathname;
+  const tally = (into: Map<string, number>, key: string): void => { into.set(key, (into.get(key) ?? 0) + 1); };
+
+  cdp.on('Network.webSocketCreated', (event: { requestId: string; url?: string }) => { socketPaths.set(event.requestId, pathOf(event.url)); });
+  cdp.on('Network.requestWillBeSent', (event: { request?: { url?: string } }) => { tally(requests, pathOf(event.request?.url)); });
+  cdp.on('Network.webSocketFrameSent', (event: { requestId: string; response?: { payloadData?: string } }) => {
     const sent = frame(event.response?.payloadData);
 
-    if (sent?.type === 'rpc' && sent.id !== undefined && sent.method !== undefined) asked.set(sent.id, sent.method);
+    tally(framesSent, socketPaths.get(event.requestId) ?? event.requestId);
+
+    if (sent?.type === 'rpc' && sent.id !== undefined && sent.method !== undefined) {
+      asked.set(`${event.requestId} ${sent.id}`, { socket: event.requestId, method: sent.method });
+    }
   });
-  cdp.on('Network.webSocketFrameReceived', (event: { response?: { payloadData?: string } }) => {
+  cdp.on('Network.webSocketFrameReceived', (event: { requestId: string; response?: { payloadData?: string } }) => {
     const received = frame(event.response?.payloadData);
 
     if (received === null) return;
@@ -398,22 +423,51 @@ export async function frameLedger(page: Page): Promise<FrameLedger> {
 
     // A streamed answer's chunks carry `done: false`; only its last frame, or
     // a plain answer, ends the ask.
-    if (received.type === 'rpc' && received.id !== undefined && received.done !== false) answered.add(received.id);
+    if (received.type === 'rpc' && received.id !== undefined && received.done !== false) answered.add(`${event.requestId} ${received.id}`);
+    check();
+  });
+  // A socket that closed will answer nothing more: its open asks are retired, as the page's own client rejects them.
+  cdp.on('Network.webSocketClosed', (event: { requestId: string }) => {
+    for (const [key, ask] of asked) if (ask.socket === event.requestId && !answered.has(key)) asked.delete(key);
+
     check();
   });
 
+  /** What the page asked and sent since the restart: each method's count and the asks still unanswered with their
+   *  socket, the frames sent per socket, and the requests sent per path. */
+  const account = (): string => {
+    const counts = new Map<string, number>();
+
+    for (const ask of asked.values()) tally(counts, ask.method);
+
+    const counted = (from: Map<string, number>): string => [...from].sort((a, b) => b[1] - a[1]).slice(0, 12)
+      .map(([name, times]) => `${name} ×${String(times)}`).join(', ') || 'none';
+
+    const open = [...asked].filter(([key]) => !answered.has(key))
+      .map(([key, ask]) => `${ask.method} #${key.split(' ')[1] ?? ''} on ${socketPaths.get(ask.socket) ?? ask.socket}`);
+
+    return `rpc: ${counted(counts)}; unanswered: ${open.join(', ') || 'none'}; frames sent: ${counted(framesSent)}; requests: ${counted(requests)}`;
+  };
+
+  liveLedgers.add(account);
+
   return {
-    quietAfter: (...methods) => wait(() => methods.every((method) => [...asked].some(([id, name]) => name === method && answered.has(id)))
-      && [...asked.keys()].every((id) => answered.has(id))),
-    quiet: () => [...asked.keys()].every((id) => answered.has(id)),
+    quietAfter: (...methods) => wait(() => methods.every((method) => [...asked].some(([key, ask]) => ask.method === method && answered.has(key)))
+      && [...asked.keys()].every((key) => answered.has(key))),
+    quiet: () => [...asked.keys()].every((key) => answered.has(key)),
     received: (type) => wait(() => arrived.has(type)),
     turnClosed: () => wait(() => closed),
     restart() {
       asked.clear();
       answered.clear();
       arrived.clear();
+      framesSent.clear();
+      requests.clear();
     },
-    stop: async () => { await cdp.detach(); },
+    stop: async () => {
+      liveLedgers.delete(account);
+      await cdp.detach();
+    },
   };
 }
 
@@ -598,6 +652,398 @@ export async function agentIsThereOnReturn(target: FlowTarget): Promise<AgentRet
   } finally {
     await removeFlowWorkspace(target, workspace);
     await removeFlowWorkspace(target, elsewhere);
+  }
+}
+
+/** Which tab of the agent strip is current, by index: 0 is Main, the
+ *  subordinates follow in roster order, -1 while none is marked. */
+export const ACTIVE_TAB_INDEX = `(() => {
+  const tabs = [...document.querySelectorAll('nav[aria-label="Workspace agents"] [data-agent-tab]')];
+  // The mark sits ON the Main link and INSIDE an open agent tab (whose own
+  // element is the rename host), so both shapes answer here.
+  return tabs.findIndex((tab) => tab.matches('[aria-current="page"]') || tab.querySelector('[aria-current="page"]') !== null);
+})()`;
+
+/** Click the control; an absent control throws, and that is the finding. */
+const ClickScripts = {
+  lastAgentTab: `(() => {
+    // Tabs by their own hook, not by element: the OPEN tab is a div (it hosts
+    // the rename editor), so counting links saw one fewer tab than exists and
+    // this row's wait never finished.
+    const tabs = [...document.querySelectorAll('nav[aria-label="Workspace agents"] [data-agent-tab]')];
+    const target = tabs.pop();
+    if (target === undefined) throw new Error('no agent tab to open');
+    (target.querySelector('a') ?? target).click();
+  })()`,
+  mainTab: `(() => {
+    const first = [...document.querySelectorAll('nav[aria-label="Workspace agents"] [data-agent-tab]')][0];
+    if (first === undefined) throw new Error('no Main tab to return to');
+    first.click();
+  })()`,
+  filesTab: `(() => {
+    const files = [...document.querySelectorAll('.p-tabstrip')]
+      .flatMap((el) => [...el.querySelectorAll('button')])
+      .find((b) => b.textContent?.trim() === 'Files');
+    if (files === undefined) throw new Error('no Files tab');
+    files.click();
+  })()`,
+} as const;
+
+/** Where a send landed: the path, the current tab's index, and whether the chat
+ *  column still held a live composer as the words went. */
+export interface SendSite {
+  readonly path: string;
+  readonly tabIndex: number;
+  readonly composerInChat: boolean;
+}
+
+const SendSiteSchema = v.object({ path: v.string(), tabIndex: v.number(), composerInChat: v.boolean() });
+
+/** Type words into the ACTIVE pane's composer, press that pane's own Send, and
+ *  wait for the pane to echo them. Scoped to `#chat` throughout: a page-wide
+ *  textarea query reaches the inspector column's inputs and a page-wide Send
+ *  reaches whatever else is mounted, so the site returned is the honest answer
+ *  to which pane the words went into. */
+export async function sendInChat(page: Page, text: string): Promise<SendSite> {
+  await typeIntoComposer(page, text);
+
+  const site = v.parse(SendSiteSchema, await page.evaluate(`(() => {
+    const send = [...document.querySelectorAll('#chat button')]
+      .find((el) => el.getClientRects().length > 0
+        && /send$|steer the running turn/iu.test((el.getAttribute('aria-label') ?? '').trim()));
+    if (send === undefined) throw new Error('no Send control in the chat column');
+    send.click();
+    return {
+      path: location.pathname,
+      tabIndex: ${ACTIVE_TAB_INDEX},
+      composerInChat: ${CHAT_COMPOSER_LIVE},
+    };
+  })()`));
+
+  await until(page, 'the sent words in the chat column', `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(text)})`);
+
+  return site;
+}
+
+/** RPC method counts over the socket via CDP, split by direction, beside what
+ *  a hosted actor's own socket carried. */
+export interface RpcCounts {
+  readonly sent: Readonly<Record<string, number>>;
+  readonly received: Readonly<Record<string, number>>;
+  /** Frames received on an `actor/<name>` socket. Zero after the '+' flow means
+   *  the subordinate pane's transport never answered — the shape the hosted
+   *  actor socket defect left behind, where the composer stays disabled. */
+  readonly actorFrames: number;
+}
+
+const SocketFrameSchema = v.object({ method: v.optional(v.string()), type: v.optional(v.string()) });
+
+/** The path segment a hosted actor's socket carries, taken from the builder the
+ *  client itself calls rather than a copy of the string. */
+const ACTOR_SEGMENT = hostedActorSocketPath('probe').split('/')[0] ?? '';
+
+export interface RpcCounter {
+  counts(): RpcCounts;
+  stop(): Promise<void>;
+}
+
+export async function countRpc(page: Page): Promise<RpcCounter> {
+  const cdp = await page.createCDPSession();
+
+  await cdp.send('Network.enable');
+
+  const sent: Record<string, number> = {};
+  const received: Record<string, number> = {};
+  const actorSockets = new Set<string>();
+
+  let actorFrames = 0;
+
+  const bump = (table: Record<string, number>, payload: string): void => {
+    // A frame that is not the JSON envelope is counted as such: parsing it
+    // straight would throw inside the CDP handler and take the run with it.
+    const parsed = v.safeParse(SocketFrameSchema, tolerate<unknown>(() => JSON.parse(payload), 'malformed-input'));
+    const key = parsed.success ? (parsed.output.method ?? parsed.output.type ?? '?') : 'nonjson';
+
+    table[key] = (table[key] ?? 0) + 1;
+  };
+
+  cdp.on('Network.webSocketCreated', (event: { requestId?: string; url?: string }) => {
+    if (event.requestId === undefined || !(event.url ?? '').includes(`/${ACTOR_SEGMENT}/`)) return;
+
+    actorSockets.add(event.requestId);
+  });
+
+  cdp.on('Network.webSocketFrameSent', (event: { response?: { payloadData?: string } }) => {
+    bump(sent, event.response?.payloadData ?? '');
+  });
+  cdp.on('Network.webSocketFrameReceived', (event: { requestId?: string; response?: { payloadData?: string } }) => {
+    bump(received, event.response?.payloadData ?? '');
+
+    if (event.requestId !== undefined && actorSockets.has(event.requestId)) actorFrames += 1;
+  });
+
+  return {
+    counts: (): RpcCounts => ({ sent: { ...sent }, received: { ...received }, actorFrames }),
+    stop: async (): Promise<void> => { await cdp.detach(); },
+  };
+}
+
+/** Workspace-scoped reads the right panel owns; Agent and Activity are per
+ *  agent. `getEvolutionChangelog` belongs here by ownership even though
+ *  `rpc-gate` classifies it `interactive` rather than `workspace.read` — that
+ *  axis is authorization, and the Journal it feeds is the workspace's. */
+const WORKSPACE_READS = [
+  'getWorkspaceSnapshot', 'getExposedPorts', 'listPendingActions', 'getMemoryContent',
+  'getToolDescriptions', 'getExecutors', 'listBackgroundJobs', 'listSlates',
+  'listPendingConsents', 'getActivePlanReview', 'getEvolutionChangelog',
+] as const;
+
+/** One of the reads above, as a type: the delta table below is keyed by the
+ *  same closed set the gate measures, not by an open dictionary. */
+type WorkspaceRead = (typeof WORKSPACE_READS)[number];
+
+/** The workspace-scoped reads re-sent between two counts, by method. The total
+ *  is the row's verdict; the names are what a fix has to act on. */
+function readsBetween(
+  before: Readonly<Record<string, number>>, after: Readonly<Record<string, number>>,
+): Partial<Record<WorkspaceRead, number>> {
+  const delta: Partial<Record<WorkspaceRead, number>> = {};
+
+  for (const method of WORKSPACE_READS) {
+    const count = (after[method] ?? 0) - (before[method] ?? 0);
+
+    if (count > 0) delta[method] = count;
+  }
+
+  return delta;
+}
+
+export interface PanelVerdict {
+  readonly nodeSurvives: boolean;
+  readonly scrollSurvives: boolean;
+  readonly scrollMarked: number;
+  readonly scrollValue: number;
+  /** Which workspace-scoped reads were re-sent, and how often, per direction. */
+  readonly readsOnSwitch: Readonly<Partial<Record<WorkspaceRead, number>>>;
+  readonly readsOnBack: Readonly<Partial<Record<WorkspaceRead, number>>>;
+  readonly workspaceReadsOnSwitch: number;
+  readonly workspaceReadsOnBack: number;
+  /** Frames the '+' tab's own `actor/<name>` socket answered with. */
+  readonly agentSocketFrames: number;
+}
+
+/**
+ * Row (B6): the right panel keeps its Work, Files and Env state across a switch
+ * to a new agent's tab and back: the same DOM node, the same scroll offset, and
+ * no workspace-scoped read re-sent in either direction. The new agent's pane is
+ * live only once its own actor socket answers, which needs its agent facet, so
+ * this row runs on a deployment: under `vite dev` no facet loads (2026-09-30).
+ */
+export async function rightPanelKeepsItsState(target: FlowTarget): Promise<PanelVerdict> {
+  const workspace = await createFlowWorkspace(target, 'panel');
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
+
+    await page.evaluate(NEW_AGENT);
+    await until(page, 'an agent tab after Main, current', `${ACTIVE_TAB_INDEX} > 0`);
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+    await page.evaluate(ClickScripts.mainTab);
+    await until(page, "Main's tab, current", `${ACTIVE_TAB_INDEX} === 0`);
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+
+    await openInspector(page);
+
+    const counter = await countRpc(page);
+
+    await page.evaluate(ClickScripts.filesTab);
+    await until(page, 'the Files tab, active',
+      `[...document.querySelectorAll('.p-tabstrip')].flatMap(el => [...el.querySelectorAll('button')]).some(b => b.textContent.trim() === 'Files' && b.className.includes('p-tab-active'))`);
+
+    const marked = v.parse(
+      v.object({ ok: v.literal(true), scrollTop: v.number() }),
+      await page.evaluate(() => {
+        const strip = document.querySelector('#inspector .p-tabstrip');
+        const content = strip?.parentElement?.parentElement?.children[1];
+
+        if (!content) return { ok: false as const, scrollTop: -1 };
+
+        content.setAttribute('data-live-probe', 'work-surface');
+        content.scrollTop = 53;
+
+        return { ok: true as const, scrollTop: content.scrollTop };
+      }),
+    );
+
+    const beforeSwitch = counter.counts();
+
+    await page.evaluate(ClickScripts.lastAgentTab);
+    await until(page, 'an agent tab after Main, current', `${ACTIVE_TAB_INDEX} > 0`);
+
+    // The '+' flow: the subordinate column mounts a composer its own socket has
+    // enabled. The hosted-actor socket defect left that pane connecting forever,
+    // so this row's number is the frames that socket answered with.
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+
+    const afterSwitch = counter.counts();
+
+    await page.evaluate(ClickScripts.mainTab);
+    await until(page, "Main's tab, current", `${ACTIVE_TAB_INDEX} === 0`);
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+    // Let the switch back land before the node is read: a remount replaces the
+    // marked element, and the count of marked nodes settles at 0 when it does.
+    await settled(page, `document.querySelectorAll('[data-live-probe="work-surface"]').length`);
+
+    const afterBack = counter.counts();
+
+    const survives = v.parse(
+      v.object({ same: v.boolean(), scrollTop: v.number() }),
+      await page.evaluate(() => {
+        const node = document.querySelector('[data-live-probe="work-surface"]');
+
+        return { same: node !== null, scrollTop: node?.scrollTop ?? -1 };
+      }),
+    );
+
+    await counter.stop();
+    await page.close();
+
+    const onSwitch = readsBetween(beforeSwitch.sent, afterSwitch.sent);
+    const onBack = readsBetween(afterSwitch.sent, afterBack.sent);
+
+    return {
+      nodeSurvives: survives.same,
+      scrollSurvives: survives.scrollTop === marked.scrollTop,
+      scrollMarked: marked.scrollTop,
+      scrollValue: survives.scrollTop,
+      readsOnSwitch: onSwitch,
+      readsOnBack: onBack,
+      workspaceReadsOnSwitch: Object.values(onSwitch).reduce((sum, count) => sum + count, 0),
+      workspaceReadsOnBack: Object.values(onBack).reduce((sum, count) => sum + count, 0),
+      agentSocketFrames: afterSwitch.actorFrames - beforeSwitch.actorFrames,
+    };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
+  }
+}
+
+/** What a pane shows of a given phrase and of its cards, in one read: the
+ *  leafmost visible carriers of the phrase (an element whose text holds it
+ *  while no child does — one per rendered entry) and the kinds of the cards
+ *  that carry a kind attribute at all. */
+async function paneHolds(page: Page, phrase: string): Promise<{ carriers: number; cards: string[] }> {
+  return v.parse(
+    v.object({ carriers: v.number(), cards: v.array(v.string()) }),
+    await page.evaluate((needle: string) => {
+      const visible = (el: Element): boolean => el.getClientRects().length > 0;
+
+      const carriers = [...document.querySelectorAll('#chat [data-agent-pane] *')]
+        .filter(visible)
+        .filter((el) => (el.textContent ?? '').includes(needle))
+        .filter((el) => ![...el.children].some((child) => (child.textContent ?? '').includes(needle)));
+
+      const cards = [...document.querySelectorAll('#chat [data-agent-pane] [data-system-event], #chat [data-agent-pane] [data-advisor-severity]')]
+        .filter(visible)
+        .map((el) => el.getAttribute('data-system-event') ?? el.getAttribute('data-advisor-severity') ?? '?');
+
+      return { carriers: carriers.length, cards };
+    }, phrase),
+  );
+}
+
+/** Each pane renders its own transcript and no other actor's. Measured with a
+ *  marker per side — words this run sent into the root and words it sent into
+ *  the actor — rather than by card markup: a `signal_card` frame carries no
+ *  actor id at all (`SignalCardEvent`), which is the defect's own mechanism,
+ *  and the workspace-created card carries no attribute either
+ *  (`WorkspaceCreatedCard` is a styled pill), so the card kinds below are
+ *  evidence beside the two counts, never the verdict. */
+export interface StampedCardVerdict {
+  /** Carriers of the ROOT's own message inside the ACTOR's pane. */
+  readonly rootMarkerInActorPane: number;
+  /** Carriers of the ACTOR's message inside the ROOT's pane. */
+  readonly actorMarkerInRootPane: number;
+  /** Card kinds each pane showed, by the attributes the cards that have one
+   *  carry — `data-system-event`, `data-advisor-severity`. */
+  readonly actorCards: readonly string[];
+  readonly rootCards: readonly string[];
+  /** `signal_card` frames the page's sockets carried, and how many of all
+   *  received frames arrived on the actor's own socket. */
+  readonly signalCardFrames: number;
+  readonly actorSocketFrames: number;
+  /** Where the actor-pane send landed. */
+  readonly sentOn: SendSite;
+}
+
+/**
+ * Row (B3's symptom): each pane renders its own transcript and no other
+ * actor's. Driven through the real flow — a turn on Main, the '+' tab, a turn
+ * on the new agent — and measured in both directions with one marker per side.
+ * The new agent's turn runs in its agent facet, so this row runs on a
+ * deployment: under `vite dev` no facet loads (2026-09-30).
+ */
+export async function eachPaneKeepsItsTranscript(target: FlowTarget): Promise<StampedCardVerdict> {
+  const workspace = await createFlowWorkspace(target, 'stamped');
+
+  try {
+    const page = await openWorkspacePage(target, `/workspace/${encodeURIComponent(workspace)}`);
+    const counter = await countRpc(page);
+
+    // The root gets a turn of its own first, so the actor's pane below has
+    // something it could leak: a transcript with words in it. Without this the
+    // actor-side direction of the row could not go red at all.
+    const rootMarker = `root opening ${crypto.randomUUID().slice(0, 8)}`;
+
+    await sendInChat(page, rootMarker);
+    await until(page, "the root turn's answer", `(document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(FALLBACK_ANSWER)})`);
+
+    await page.evaluate(NEW_AGENT);
+    await until(page, 'a second agent tab',
+      `[...document.querySelectorAll('nav[aria-label="Workspace agents"] [data-agent-tab]')].length > 1`);
+    await page.evaluate(ClickScripts.lastAgentTab);
+    await until(page, 'an agent tab after Main, current', `${ACTIVE_TAB_INDEX} > 0`);
+    // The actor's pane is live when ITS column holds an enabled composer: a pane
+    // still connecting renders the notice and no composer at all.
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+    await settled(page, `document.querySelectorAll('#chat *').length`);
+
+    const actorPane = await paneHolds(page, rootMarker);
+
+    const actorMarker = `stamp probe ${crypto.randomUUID().slice(0, 8)}`;
+    const sentOn = await sendInChat(page, actorMarker);
+
+    // The pane echoed the words inside `sendInChat`. The turn has then run its
+    // course when the model's answer shows in this pane, or the marker is
+    // rendered inside a card — the system-card attribute or the drained-events
+    // list, never the composer's echo. One predicate for both, so no wait is left
+    // dangling on a page that then closes.
+    await until(page, "the agent turn's answer, or its words in a card",
+      `[...document.querySelectorAll('#chat [data-system-event] *, #chat .divide-dashed *')]`
+      + `.some(el => (el.textContent ?? '').includes(${JSON.stringify(actorMarker)}))`
+      + ` || (document.querySelector('#chat')?.textContent ?? '').includes(${JSON.stringify(FALLBACK_ANSWER)})`);
+
+    await page.evaluate(ClickScripts.mainTab);
+    await until(page, "Main's tab, current", `${ACTIVE_TAB_INDEX} === 0`);
+    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+    await settled(page, `document.querySelectorAll('#chat *').length`);
+
+    const rootPane = await paneHolds(page, actorMarker);
+    const counts = counter.counts();
+
+    await counter.stop();
+    await page.close();
+
+    return {
+      rootMarkerInActorPane: actorPane.carriers,
+      actorMarkerInRootPane: rootPane.carriers,
+      actorCards: actorPane.cards,
+      rootCards: rootPane.cards,
+      signalCardFrames: counts.received['signal_card'] ?? 0,
+      actorSocketFrames: counts.actorFrames,
+      sentOn,
+    };
+  } finally {
+    await removeFlowWorkspace(target, workspace);
   }
 }
 

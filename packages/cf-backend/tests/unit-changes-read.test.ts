@@ -1,3 +1,4 @@
+import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The Changes surface polls `getExecutorDiff('workspace')`, which walks the workspace only after a file event or a
  * review moved what it shows. Driven through the orchestrator's own RPCs and file plane, as the page drives them.
@@ -19,7 +20,7 @@ test('the Changes read shows a file write and a shell write once they land, and 
   await workspace.agent.resetWorkspaceBaseline();
   expect(await listed(workspace)).toEqual([]);
 
-  await workspaceFiles(workspace.agent).writeFile('notes.md', 'one\n');
+  await writeText(workspaceFiles(workspace.agent), 'notes.md', 'one\n');
   expect(await listed(workspace)).toEqual(['added notes.md']);
 
   await workspace.agent.executeInExecutor('workspace', 'echo from the shell > shell.txt');
@@ -49,7 +50,7 @@ test("a hire's write tells the workspace's pages that Changes moved, so a tab no
   expect(await listed(workspace)).toEqual([]);
   frames.length = 0;
 
-  await hire.actor.runtime.storage.vfs.writeFile(`${home}/notes.md`, 'mine\n');
+  await writeText(hire.actor.runtime.storage.vfs, `${home}/notes.md`, 'mine\n');
 
   expect(moved()).toEqual([{ type: 'changes_moved' }]);
   expect(await listed(workspace)).toEqual([`added ${home}/notes.md`]);

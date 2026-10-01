@@ -1,3 +1,4 @@
+import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Local environments and the mount table: a directory-bound session works on the real bytes through one `workspace`
 // executor, with no `/pc` or `/sandbox` mount.
 import { describe, expect, test } from 'bun:test';
@@ -40,11 +41,11 @@ describe('the local backend file plane', () => {
     const mounted = rt.storage.vfs;
 
     // The absolute path and the plane-relative name are one file; nothing is copied.
-    expect(await mounted.readFile(join(dir, 'existing.txt'), { encoding: 'utf8' })).toBe('from the host');
-    expect(await mounted.readFile('existing.txt', { encoding: 'utf8' })).toBe('from the host');
-    expect(await mounted.readdir('/')).toContain('existing.txt');
+    expect(await readText(mounted, join(dir, 'existing.txt'))).toBe('from the host');
+    expect(await readText(mounted, 'existing.txt')).toBe('from the host');
+    expect((await mounted.readdir('/')).map(({ name }) => name)).toContain('existing.txt');
 
-    await mounted.writeFile('written.txt', 'from the agent');
+    await writeText(mounted, 'written.txt', 'from the agent');
     expect(readFileSync(join(dir, 'written.txt'), 'utf8')).toBe('from the agent');
 
     const workspace = present(routerOf(rt).getProvider('workspace'), 'the workspace executor');
@@ -59,7 +60,7 @@ describe('the local backend file plane', () => {
       for (const path of ['/pc', '/sandbox']) {
         let code: string | null = null;
 
-        try { await rt.storage.vfs.readdir(path); } catch (caught) { code = isVfsError(caught) ? caught.code : 'unclassified'; }
+        try { (await rt.storage.vfs.readdir(path)).map(({ name }) => name); } catch (caught) { code = isVfsError(caught) ? caught.code : 'unclassified'; }
 
         expect(code).not.toBe('ENXIO');
       }
@@ -70,7 +71,7 @@ describe('the local backend file plane', () => {
 
     const writing = async (path: string) => {
       try {
-        await unbound.writeFile(path, 'a folder of the workspace');
+        await writeText(unbound, path, 'a folder of the workspace');
 
         return 'written';
       } catch (caught) {
@@ -87,9 +88,9 @@ describe('the local backend file plane', () => {
     writeFileSync(join(dir, 'host-only.txt'), 'on the machine');
     const mounted = rt.storage.vfs;
 
-    expect(await mounted.exists(join(dir, 'host-only.txt'))).toBe(false);
+    expect(await exists(mounted, join(dir, 'host-only.txt'))).toBe(false);
 
-    await mounted.writeFile('notes.md', 'in the workspace');
-    expect(await mounted.readFile('notes.md', { encoding: 'utf8' })).toBe('in the workspace');
+    await writeText(mounted, 'notes.md', 'in the workspace');
+    expect(await readText(mounted, 'notes.md')).toBe('in the workspace');
   });
 });

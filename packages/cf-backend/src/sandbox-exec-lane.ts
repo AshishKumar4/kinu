@@ -1,21 +1,21 @@
 /**
- * `KinuSandbox` presented as core's `SandboxHandle`. No `timeout` means no work deadline, so such
+ * `KinuDevbox` presented as core's `SandboxHandle`. No `timeout` means no work deadline, so such
  * commands run on the runtime's own exec (plain `exec` is bounded by the container and the request path),
  * and an abort kills the process, not just the wait. See `SandboxHandle.exec`.
  */
 
-import { decodeJsonValue, SandboxPending, WORKSPACE_BACKUP_DIR, type SandboxHandle } from '@kinu.run/core';
+import { jsonResultOrVoid, SandboxPending, WORKSPACE_BACKUP_DIR, type SandboxHandle } from '@kinu.run/core';
 import { classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
 import { devboxFailure, type DevboxErrorCode } from '@kinu.run/devbox';
 import { Effect } from 'effect';
-import type { KinuSandbox } from "./kinu-sandbox";
+import type { KinuDevbox } from "./kinu-devbox";
 import { sandboxPreviewLabelOf } from "@kinu.run/core";
 import type { SandboxPreviewExposures } from "@kinu.run/core";
 
-type ContainerOperations = Pick<KinuSandbox,
+type ContainerOperations = Pick<KinuDevbox,
   "execUntimed" | "killUntimed" | "resolveReadiness" | "readFile" | "writeFile" | "listFiles"
   | "deleteFile" | "exposePort" | "getExposedPorts" | "unexposePort" | "startSupervised"
-  | "stopSupervised" | "listSupervised" | "portToken" | "notePortRemoved">;
+  | "stopSupervised" | "listSupervised" | "portToken" | "notePortRemoved" | "resize">;
 
 /** Without AUTH_KV the edge cannot verify a preview hostname, so a minted URL would be dead. */
 const PREVIEWS_UNPUBLISHABLE =
@@ -27,7 +27,11 @@ const DEVBOX_FAILURE_CODES: Readonly<Record<DevboxErrorCode, ErrorCode>> = {
   cancelled: 'cancelled', missing: 'missing', file: 'io', process: 'io',
   'start-overrun': 'timeout', 'start-interrupted': 'unavailable', 'container-changed': 'unavailable',
   'layer-unreadable': 'io', 'chain-advanced': 'io', 'delta-namespace': 'io', 'mount-marker': 'unsupported',
+  refused: 'unavailable',
 };
+
+/** A terminal refusal names what its reader can do; the owner's own is on the Environment card (D52). */
+const REFUSED_NEXT = 'refused until something changes (choose another size with sandbox.resize(...), or ask the owner to start the sandbox again)';
 
 /** The one conversion from the standalone library's failures to the application's channel. An
  *  unclassified failure, a transport one included, is `io`: `unavailable` is a verdict
@@ -38,19 +42,13 @@ function fromDevbox(thrown: { readonly cause: unknown }): KinuError {
   if (cause instanceof KinuError) return cause;
   const failure = devboxFailure(thrown);
 
-  return failure === undefined
-    ? new KinuError(classifyErrorCode(thrown) ?? 'io', renderThrownChain(thrown), { cause })
-    : new KinuError(DEVBOX_FAILURE_CODES[failure.code], failure.message, { cause });
+  if (failure === undefined) return new KinuError(classifyErrorCode(thrown) ?? 'io', renderThrownChain(thrown), { cause });
+
+  return new KinuError(DEVBOX_FAILURE_CODES[failure.code], failure.code === 'refused' ? `${REFUSED_NEXT}: ${failure.message}` : failure.message, { cause });
 }
 
 function callDevbox<A>(run: () => PromiseLike<A>): Effect.Effect<A, KinuError> {
   return Effect.tryPromise({ try: run, catch: (cause) => fromDevbox({ cause }) });
-}
-
-async function jsonResultOrVoid<Result>(result: Promise<Result>) {
-  const value = await result;
-
-  return value === undefined ? undefined : decodeJsonValue({ value });
 }
 
 /**
@@ -59,7 +57,7 @@ async function jsonResultOrVoid<Result>(result: Promise<Result>) {
  * since the process is still running, and a command that finished first is returned as finished.
  */
 async function execWithoutDeadline(
-  handle: Pick<KinuSandbox, "execUntimed" | "killUntimed">,
+  handle: Pick<KinuDevbox, "execUntimed" | "killUntimed">,
   command: string,
   cwd?: string,
   signal?: AbortSignal,
@@ -100,7 +98,7 @@ async function execWithoutDeadline(
  */
 export function adaptCloudflareSandbox(
   handle: ContainerOperations,
-  configureEgress: () => Promise<void>,
+  configure: () => Promise<void>,
   previews: SandboxPreviewExposures | null,
   portsMoved?: () => void,
 ): SandboxHandle {
@@ -109,7 +107,7 @@ export function adaptCloudflareSandbox(
 
   const configured = async (): Promise<void> => {
     if (inFlight !== null) return await inFlight;
-    const attempt = configureEgress();
+    const attempt = configure();
     inFlight = attempt;
 
     try {
@@ -210,6 +208,11 @@ export function adaptCloudflareSandbox(
         processId: row.processId, pid: row.pid, status: row.status,
         command: row.command, restartable: row.restartable,
       })))),
+    resize: (size) => settle(callDevbox(async () => {
+      await configured();
+
+      return await handle.resize(size);
+    })),
     // DO rows only: no egress, no attach wait, since the token must be mintable before its exposure.
     portToken: (port, name) => settle(callDevbox(() => handle.portToken(port, name))),
     notePortRemoved: (port) => settle(callDevbox(async () => {

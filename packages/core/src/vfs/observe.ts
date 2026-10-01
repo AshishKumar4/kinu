@@ -1,6 +1,7 @@
+import type { VFS, VfsRevision } from '@nimbus-sh/core/vfs/vfs.js';
 /** Write attribution happens where a write lands: sibling heads run concurrently over the same files. */
 
-import type { VFS, VfsRevision } from '../types/primitives';
+
 import { diagnostics, toKinuError } from '../obs/index';
 
 export interface WriteEvent {
@@ -61,7 +62,7 @@ export function observeWrites<T extends VFS>(vfs: T, observer: WriteObserver): T
 
       if (stat === null) return { before: null };
 
-      if (stat.isDir) return { unread: 'directory' };
+      if ((stat.type === 'directory')) return { unread: 'directory' };
 
       return { before: (await vfs.readFile(path)) ?? null };
     } catch (err) {
@@ -81,11 +82,10 @@ export function observeWrites<T extends VFS>(vfs: T, observer: WriteObserver): T
 
   const wrapped: T = {
     ...vfs,
-    readFile: (path, opts) => vfs.readFile(path, opts),
+    readFile: (path) => vfs.readFile(path),
     readdir: (path) => vfs.readdir(path),
-    stat: (path) => vfs.stat(path),
+    stat: (path, options) => vfs.stat(path, options),
     mkdir: (path, opts) => vfs.mkdir(path, opts),
-    exists: (path) => vfs.exists(path),
     async writeFile(path, data) {
       const baseline = await baselineFor(path);
       await vfs.writeFile(path, data);

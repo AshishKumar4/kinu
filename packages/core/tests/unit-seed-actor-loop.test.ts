@@ -1,3 +1,4 @@
+import { exists, readText, type VFS, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // seedActorLoop: every created actor has an explicit `LoopOrigin`, checked against
 // real bytes and a real pointer.
 import { describe, test, expect } from 'bun:test';
@@ -6,14 +7,14 @@ import { sqlOver, createMemoryVfs, createTestRuntime } from '@kinu.run/test-util
 import { INITIAL_SCAFFOLD_SOURCE, defaultLoopOrigin, seedActorLoop } from '../src/scaffold/bootstrap';
 import { initScaffoldTables } from '../src/scaffold/schemas';
 import { getCurrentScaffoldVersion } from '../src/scaffold/shadow';
-import { readScaffoldFileText } from '../src/scaffold/surface';
+
 import { WORKSPACE_IDENTITY_DDL } from '../src/identity/schema';
 import { initWorkspaceActorTable, WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { initAgentConfigTable } from '../src/config/store';
 import { initCodemodeStateTable } from '../src/identity/program-state';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 // Not the barrel: this suite must run without the context plane.
-import type { Identity, SqlExecutor, VFS } from '../src/types/primitives';
+import type { Identity, SqlExecutor } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 
 const PARENT_V1 = '// parent v1 — the promoted loop\nasync function* run(rt, task) { yield "v1"; }\n';
@@ -35,9 +36,9 @@ function scaffoldIdentity(name: string, vfs: VFS, sql: SqlExecutor, actorId: str
     name,
     scaffold: {
       path,
-      exists: () => vfs.exists(path),
-      read: () => readScaffoldFileText(vfs, path),
-      write: (source: string) => vfs.writeFile(path, source),
+      exists: () => exists(vfs, path),
+      read: () => readText(vfs, path),
+      write: (source: string) => writeText(vfs, path, source),
       version: async () => sql<{ version: number | null }>`
         SELECT MAX(version) AS version FROM scaffold_versions WHERE actor_id = ${actorId}`[0]?.version ?? 0,
     },
@@ -80,7 +81,7 @@ async function parentAtV1(fx: Fixture): Promise<AgentRuntime> {
   const parent = fx.actorRuntime(fx.main, 'main');
   await seedActorLoop(parent, null, { kind: 'builtin' });
   const vfs = parent.agentStateVfs ?? parent.storage.vfs;
-  await vfs.writeFile(`${parent.identity.scaffold.path}.v1`, PARENT_V1);
+  await writeText(vfs, `${parent.identity.scaffold.path}.v1`, PARENT_V1);
   void fx.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status, parent_version)
     VALUES (${parent.actor.actorId}, 1, ${Date.now()}, 'promoted in test', 'current', 0)`;
   void fx.sql`UPDATE scaffold_versions SET status = 'historical'
@@ -118,7 +119,7 @@ describe('seedActorLoop', () => {
     expect(getCurrentScaffoldVersion(fx.sql, child)).toBe(1);
     expect(await rt.identity.scaffold.read()).toBe(PARENT_V1);
     const versioned = rt.agentStateVfs ?? rt.storage.vfs;
-    expect(await versioned.readFile(`${rt.identity.scaffold.path}.v1`, { encoding: 'utf8' })).toBe(PARENT_V1);
+    expect(await readText(versioned, `${rt.identity.scaffold.path}.v1`)).toBe(PARENT_V1);
 
     // Lineage gives the child's evolution a parent to diff against.
     const row = fx.sql<{ parent_version: number | null; rationale: string }>`
@@ -137,7 +138,7 @@ describe('seedActorLoop', () => {
     await seedActorLoop(rt, parent, defaultLoopOrigin('swarm'));
 
     const parentVfs = parent.agentStateVfs ?? parent.storage.vfs;
-    await parentVfs.writeFile(`${parent.identity.scaffold.path}.v2`, PARENT_V2);
+    await writeText(parentVfs, `${parent.identity.scaffold.path}.v2`, PARENT_V2);
     void fx.sql`UPDATE scaffold_versions SET status = 'historical'
       WHERE actor_id = ${parent.actor.actorId} AND status = 'current'`;
     void fx.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status, parent_version)
@@ -158,7 +159,7 @@ describe('seedActorLoop', () => {
 
     const childVfs = rt.agentStateVfs ?? rt.storage.vfs;
     const own = '// the child own loop\nasync function* run() {}\n';
-    await childVfs.writeFile(`${rt.identity.scaffold.path}.v2`, own);
+    await writeText(childVfs, `${rt.identity.scaffold.path}.v2`, own);
     void fx.sql`UPDATE scaffold_versions SET status = 'historical'
       WHERE actor_id = ${child.actorId} AND status = 'current'`;
     void fx.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status, parent_version)

@@ -1,3 +1,4 @@
+import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // LocalAgentSession over the real CLI runtime and a fake model: steering, durable sends, branches and the run-event log.
 import { describe, test, expect } from 'bun:test';
 import { present, scratchDir, scratchPath, toolExecute, scriptedTurnModel, unobservedSearchSeams } from '@kinu.run/test-utils';
@@ -1932,7 +1933,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
 
     await session.send('what can you delegate to?', { id: crypto.randomUUID() });
     expect(events.some((e) => e.type === 'tool-result' && e.toolName === 'eval' && e.success)).toBe(true);
-    const probe = await rt.storage.vfs.readFile('probe/agents.json', { encoding: 'utf8' });
+    const probe = await readText(rt.storage.vfs, 'probe/agents.json');
     expect(JSON.parse(String(probe))).toEqual({
       members: ['swarm'], swarm: 'function', hire: 'undefined',
     });
@@ -1950,16 +1951,13 @@ describe('agents.* codemode namespace — node sandbox', () => {
     await plan.session.send('research a plan', { id: crypto.randomUUID(), mode: 'plan' });
     expect(plan.events.filter((event) => event.type === 'tool-result' && event.toolName === 'eval'))
       .toMatchObject([{ success: false, reason: 'denied' }]);
-    expect(await plan.rt.storage.vfs.exists('probe/plan-tools.json')).toBe(false);
+    expect(await exists(plan.rt.storage.vfs, 'probe/plan-tools.json')).toBe(false);
     await plan.session.end();
 
     const build = setup('done', codemodeModel(probeCode('probe/build-tools.json')));
     await build.session.send('implement the change', { id: crypto.randomUUID() });
 
-    const buildProbe = JSON.parse(String(await build.rt.storage.vfs.readFile(
-      'probe/build-tools.json',
-      { encoding: 'utf8' },
-    )));
+    const buildProbe = JSON.parse(String(await readText(build.rt.storage.vfs, 'probe/build-tools.json')));
 
     expect(buildProbe).toEqual({ workspaceType: 'object' });
     await build.session.end();
@@ -2234,7 +2232,7 @@ test('an authorized Build turn queued behind Plan regains native file authority'
   release.resolve();
   await plan;
   await session.send('Now implement the change.', { id: crypto.randomUUID() });
-  expect(await rt.storage.vfs.readFile('/home/main/queued-build.txt', { encoding: 'utf8' })).toBe('authorized Build');
+  expect(await readText(rt.storage.vfs, '/home/main/queued-build.txt')).toBe('authorized Build');
   const writes = events.filter((event) => event.type === 'tool-result' && event.toolName === 'file');
   expect(writes).toHaveLength(2);
   expect(writes[0]).toMatchObject({ success: false, reason: 'denied' });
@@ -2249,7 +2247,7 @@ test('the actual local turn executes its selected version instead of the mutable
   const selected = 'async function run() { await host.emit({ type: "text_delta", text: "selected version one" }); }';
   const changed = 'async function run() { await host.emit({ type: "text_delta", text: "wrong live alias" }); }';
   await files.mkdir('scaffold', { recursive: true });
-  await files.writeFile(rt.identity.scaffold.path + '.v1', selected);
+  await writeText(files, rt.identity.scaffold.path + '.v1', selected);
   db.query("UPDATE scaffold_versions SET status = 'historical' WHERE actor_id = ? AND status = 'current'")
     .run(rt.actor.actorId);
   db.query("INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status) VALUES (?, 1, 1, 'selected source proof', 'current')")

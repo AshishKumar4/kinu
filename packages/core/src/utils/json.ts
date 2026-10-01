@@ -104,6 +104,12 @@ export function decodeJsonValue(input: { value: unknown }): JsonValue {
   return v.parse(JsonValueSchema, input.value);
 }
 
+export async function jsonResultOrVoid<Result>(result: Promise<Result>): Promise<JsonValue | undefined> {
+  const value = await result;
+
+  return value === undefined ? undefined : decodeJsonValue({ value });
+}
+
 export function assertJsonValue(
   input: { value: unknown },
 ): asserts input is { value: JsonValue } {

@@ -1,10 +1,11 @@
+import { exists, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // MEMORY.md note headings: `appendMemoryNote` writes them, `parseMemoryNotes` reads
 // them. Rows go through the writer; only headingless hand-edited documents are typed in.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createWorkspaceBundle, createMemoryMemory } from './helpers';
 import { appendMemoryNote, memoryIndexPath, parseMemoryNotes, readMemoryTail } from '../src/memory/note';
-import type { Memory, VFS } from '../src/types/primitives';
+import type { Memory } from '../src/types/primitives';
 
 
 function store() {
@@ -16,7 +17,7 @@ function store() {
 
 /** The note's path is a real, indexed memory file, asked of the writer's filesystem. */
 async function namesTheWrittenFile(vfs: VFS, path: string): Promise<boolean> {
-  return await vfs.exists(path) && memoryIndexPath(path) !== null;
+  return await exists(vfs, path) && memoryIndexPath(path) !== null;
 }
 
 describe('parseMemoryNotes', () => {
@@ -75,7 +76,7 @@ async function memoryWritablePath(memory: Memory, vfs: VFS): Promise<string> {
   await appendMemoryNote(memory, 'seed', { date: '2026-09-18' });
   const [seeded] = parseMemoryNotes(await readMemoryTail(memory) ?? '');
 
-  if (seeded === undefined || !await vfs.exists(seeded.path)) {
+  if (seeded === undefined || !await exists(vfs, seeded.path)) {
     throw new Error('appendMemoryNote wrote no readable note');
   }
 

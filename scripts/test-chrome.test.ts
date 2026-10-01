@@ -121,8 +121,16 @@ test('a dead launcher\'s profile stays while a process still runs from it, and g
   mkdirSync(join(root, 'profile'));
   writeFileSync(join(root, OWNER_RECORD), JSON.stringify({ ...owner, startTicks: owner.startTicks - 1 }));
 
-  // A browser a SIGKILLed launcher left: its launcher is gone, and its profile is still in its command line.
-  const survivor = Bun.spawn(['bash', '-c', 'exec -a "$0" sleep 30', `browser --user-data-dir=${join(root, 'profile')}`]);
+  // A browser a SIGKILLed launcher left: its launcher is gone, and its profile is still in its command line. It says
+  // `ready` once it runs under that command line: a child read at once has none yet (2026-09-30, CI run 36761423135
+  // reaped this root; here 99 of 100 reads of a just-spawned child's /proc cmdline came back empty, 0 of 100 after
+  // `ready`). It waits on its stdin, so a SIGKILL leaves no child of its own behind.
+  const survivor = Bun.spawn(
+    ['bash', '-c', 'exec -a "$0" bash -c "echo ready; read -r"', `browser --user-data-dir=${join(root, 'profile')}`],
+    { stdin: 'pipe', stdout: 'pipe' },
+  );
+
+  await survivor.stdout.getReader().read();
 
   expect(reapAbandonedRoots(BROWSER_PROFILE_PARENT, '').reaped).not.toContain(root);
   expect(existsSync(root)).toBe(true);

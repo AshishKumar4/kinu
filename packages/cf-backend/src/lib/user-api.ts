@@ -15,6 +15,8 @@ import {
 import { tolerateAsync } from '@kinu.run/core/obs';
 import { DEFAULT_CALL_TIMEOUT_MS } from 'agents/client';
 import * as v from 'valibot';
+import type { BoxSize } from '@kinu.run/devbox/sizes';
+import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from '../sandbox-size';
 
 export type UserProfile = NonNullable<v.InferOutput<typeof UserProfileSchema>>;
 
@@ -268,16 +270,10 @@ export const revokeDeviceConsent = (deviceId: string, agentName: string) =>
 export const listCredentials  = () => api(v.array(CredentialSummarySchema), 'GET', '/credentials');
 
 export const setCredential    = (key: string, value: Credential) =>
-  api(OkSchema, 'POST', `/credentials/${encodeURIComponent(key)}`, value)
-    .then((r) => { invalidateModelsCache();
-
- return r; });
+  api(OkSchema, 'POST', `/credentials/${encodeURIComponent(key)}`, value);
 
 export const deleteCredential = (key: string) =>
-  api(OkSchema, 'DELETE', `/credentials/${encodeURIComponent(key)}`)
-    .then((r) => { invalidateModelsCache();
-
- return r; });
+  api(OkSchema, 'DELETE', `/credentials/${encodeURIComponent(key)}`);
 
 const DeviceFlowStartSchema = v.object({
   userCode: v.string(), deviceAuthId: v.string(), pollIntervalSec: v.number(), portalURL: v.string(),
@@ -296,10 +292,7 @@ export const codexStatus      = () => api(CodexStatusSchema, 'GET', '/codex');
 
 export const startCodexFlow   = () => api(DeviceFlowStartSchema, 'POST', '/codex/start');
 
-export const pollCodexFlow    = () => api(PollResultSchema, 'POST', '/codex/poll')
-  .then((r) => { if (r.connected) invalidateModelsCache();
-
- return r; });
+export const pollCodexFlow    = () => api(PollResultSchema, 'POST', '/codex/poll');
 
 /** Where the owner reviews and limits what Kinu spends of their ChatGPT plan. */
 export const CHATGPT_USAGE_URL = 'https://chatgpt.com/settings/usage';
@@ -319,18 +312,12 @@ export const chatgptPlan = () => api(ChatGptPlanSchema, 'GET', '/chatgpt');
 /** The URL is for a browser on that device: the sign-in comes back to a port there. */
 export const startChatGptSignIn = () => api(v.object({ authorizeUrl: v.string(), device: v.object({ id: v.string(), label: v.string() }) }), 'POST', '/chatgpt/sign-in');
 
-export const signOutChatGpt = () => api(v.object({ unconfirmed: v.nullable(v.string()) }), 'DELETE', '/chatgpt')
-  .then((r) => { invalidateModelsCache();
-
- return r; });
+export const signOutChatGpt = () => api(v.object({ unconfirmed: v.nullable(v.string()) }), 'DELETE', '/chatgpt');
 
 export const startClaudeSignIn = () => api(v.object({ url: v.string() }), 'POST', '/claude/start');
 
 /** `code` is what Claude showed: the code, or the address it sent the browser to. */
-export const finishClaudeSignIn = (code: string) => api(PollResultSchema, 'POST', '/claude/finish', { code })
-  .then((r) => { if (r.connected) invalidateModelsCache();
-
- return r; });
+export const finishClaudeSignIn = (code: string) => api(PollResultSchema, 'POST', '/claude/finish', { code });
 
 const UnrevokedGrantSchema = v.object({ key: v.string(), reasons: v.array(v.string()), recordedAt: v.number() });
 
@@ -340,10 +327,7 @@ export const listUnrevokedGrants = () => api(v.array(UnrevokedGrantSchema), 'GET
 
 export const dismissUnrevokedGrant = (key: string) => api(OkSchema, 'DELETE', `/unrevoked-grants/${encodeURIComponent(key)}`);
 
-export const disconnectCodex  = () => api(OkSchema, 'DELETE', '/codex')
-  .then((r) => { invalidateModelsCache();
-
- return r; });
+export const disconnectCodex  = () => api(OkSchema, 'DELETE', '/codex');
 
 export const getAccountUsage = (refresh = false) => api(AccountUsageSchema, 'GET', refresh ? '/usage?refresh=1' : '/usage');
 
@@ -356,23 +340,14 @@ export const updateProfileCatalog = (
 ): Promise<ProfileCatalogEnvelope> =>
   api(ProfileCatalogEnvelopeSchema, 'PUT', '/profile-catalog', { catalog, expectedVersion });
 
-// Cached for the SPA session; the provider mutators above invalidate it.
-let _modelsCache: Promise<ModelMenu> | null = null;
+export const listAvailableModels = (): Promise<ModelMenu> => api(ModelMenuSchema, 'GET', '/models');
 
-export function listAvailableModels(): Promise<ModelMenu> {
-  _modelsCache ??= (async () => {
-    try {
-      return await api(ModelMenuSchema, 'GET', '/models');
-    } catch (cause) {
-      _modelsCache = null;
-      throw cause;
-    }
-  })();
+const SANDBOX_SIZE_PATH = `/config/${SANDBOX_SIZE_CONFIG_KEY}`;
 
-  return _modelsCache;
-}
+export const getAccountSandboxSize = async (): Promise<BoxSize | null> =>
+  accountSandboxSize((await api(v.object({ key: v.string(), value: v.nullable(v.string()) }), 'GET', SANDBOX_SIZE_PATH)).value);
 
-function invalidateModelsCache(): void { _modelsCache = null; }
+export const setAccountSandboxSize = (size: BoxSize) => api(OkSchema, 'PUT', SANDBOX_SIZE_PATH, { value: size });
 
 export type { ModelTestResult };
 
@@ -410,10 +385,7 @@ export const listCloudflareAccounts = () =>
   api(CloudflareAccountStatusSchema, 'GET', '/cloudflare/accounts');
 
 const putCloudflareSelection = (path: string, id: string | null) =>
-  api(OkSchema, 'PUT', path, { id })
-    .then((r) => { invalidateModelsCache();
-
- return r; });
+  api(OkSchema, 'PUT', path, { id });
 
 export const selectCloudflareAccount = (id: string) => putCloudflareSelection('/cloudflare/account', id);
 

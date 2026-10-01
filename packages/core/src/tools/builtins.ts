@@ -158,7 +158,7 @@ function shellInputSchema(runtimes: readonly string[]) {
       enum: [...runtimes],
       description: 'Default: workspace. A user\'s machine goes by its nickname from the execution status, which is required when several are connected.',
     }).optional(),
-    why: z.string().describe('Required for any runtime but workspace: what it gives that the workspace shell lacks (a long-running process, an inbound port, parallelism, resources). Recorded with the outcome.').optional(),
+    why: z.string().describe('Optional, for a runtime other than workspace: what it gives that the workspace shell lacks. Recorded with the outcome.').optional(),
   });
 }
 

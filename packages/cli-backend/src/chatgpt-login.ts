@@ -39,7 +39,7 @@ export function chatgptLoginIssuer(): SubscriptionIssuer {
           accessToken: tokens.accessToken,
           refreshToken: tokens.refreshToken ?? refreshToken,
           expiresAt: tokens.expiresAt,
-          metadata: { ...credential.metadata, scopes: [...tokens.scopes], savedAt: tokens.savedAt },
+          metadata: { ...credential.metadata, scopes: [...tokens.scopes] },
         } satisfies OAuthCredential;
       }));
     },

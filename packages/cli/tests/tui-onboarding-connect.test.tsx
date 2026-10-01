@@ -80,7 +80,7 @@ test('the theme step stands until a theme is stored, and closes once one is', as
 
 test('a check that never answers shows until Esc skips it, which aborts it and moves on to the question', async () => {
   const endpoint: ProviderConnectionState = {
-    descriptor: { id: 'openai-compatible', label: 'OpenAI-compatible', blurb: 'Any /v1 endpoint.', credential: 'api-key' },
+    descriptor: { id: 'openai-compatible', label: 'OpenAI-compatible', blurb: 'Any /v1 endpoint.' },
     connected: false,
     detail: 'kinu provider connect openai-compatible',
   };

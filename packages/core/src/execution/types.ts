@@ -1,10 +1,12 @@
+import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Execution layer types: executors are codemode ToolProviders. docs/EXECUTION-LAYER-SPEC.md
  * Lean formalization: lean/Kinu/Execution/Capabilities.lean
  */
 
-import type { VFS } from '../types/primitives';
+
 import type { JsonValue } from '../utils/json';
+import type { CheckpointFiles } from '../types/primitives';
 import type { DeviceSandboxStatus } from './device-status';
 import type { FilesOwner, ShellSession } from '../safety/approval-gate';
 
@@ -68,6 +70,21 @@ export interface ResourceLimits {
   readonly memBytes?: number;
 }
 
+/** One size a container can run at, as its host's table names it. */
+export interface SandboxSize {
+  readonly size: string;
+  readonly label: string;
+  readonly vcpu: number;
+  readonly memoryMib: number;
+  readonly diskMb: number;
+}
+
+/** The host's sizes, smallest first, and the one a container starts at unless someone chose another. */
+export interface SandboxSizes {
+  readonly sizes: readonly SandboxSize[];
+  readonly defaultSize: string;
+}
+
 export interface ExecutorStatus {
   configured: boolean;
   available: boolean;
@@ -81,6 +98,8 @@ export interface ExecutorStatus {
   granted?: boolean;
   /** Device sandbox mode; absent for non-device environments. */
   sandbox?: DeviceSandboxStatus;
+  /** The sizes `sandbox.resize` offers; absent for every other environment. */
+  sizes?: SandboxSizes;
 }
 
 /** An executor registered as a named codemode provider; matches @cloudflare/codemode's ToolProvider shape. */
@@ -93,7 +112,7 @@ export interface ExecutorProvider {
    * This environment's files in its own native paths, over the raw handle (not its lossy LLM tools).
    * Mounted into the workspace via vfs/mounts.ts, so consent and path scoping hold on mounted paths.
    */
-  readonly files?: VFS;
+  readonly files?: VFS & CheckpointFiles;
 
   /**
    * Absolute directory relative paths resolve against; asked, never guessed. A multi-machine plane
@@ -190,6 +209,7 @@ export interface ExecutorInfo {
   label?: string;
   granted?: boolean;
   sandbox?: DeviceSandboxStatus;
+  sizes?: SandboxSizes;
 }
 
 /** Manages the provider set passed to createExecuteTool; codemode does the namespace routing. */

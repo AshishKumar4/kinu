@@ -1,3 +1,4 @@
+import { type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /** Attachment sanitizer: unacceptable parts become content-addressed VFS references,
  *  small text inlines, accepted media passes through, persisted history is never mutated. */
 
@@ -10,7 +11,7 @@ import {
   sanitizeAttachmentsForModel,
   type MediaModality,
 } from '../src/prompting/attachment-sanitizer';
-import type { VFS } from '../src/types/primitives';
+
 import { TurnContextBudget } from '../src/context-budget';
 import { createMemoryVFS } from './helpers';
 import { KinuError, renderCauseChain } from '../src/obs/index';
@@ -27,7 +28,7 @@ function countingVfs(): CountingVfs {
   return {
     vfs: {
       ...inner,
-      readFile: (p, o) => inner.readFile(p, o),
+      readFile: (p) => inner.readFile(p),
       writeFile: (p, d) => {
         writes += 1;
 
@@ -37,7 +38,6 @@ function countingVfs(): CountingVfs {
       stat: (p) => inner.stat(p),
       unlink: (p) => inner.unlink(p),
       mkdir: (p, o) => inner.mkdir(p, o),
-      exists: (p) => inner.exists(p),
     },
     writes: () => writes,
   };
@@ -118,7 +118,7 @@ describe('sanitizeAttachmentsForModel', () => {
     const second = await sanitizeAttachmentsForModel([pdfMessage()], policy);
     expect(JSON.stringify(second)).toBe(JSON.stringify(first));
     expect(writes()).toBe(1);
-    expect(await vfs.readdir('attachments')).toHaveLength(1);
+    expect((await vfs.readdir('attachments')).map(({ name }) => name)).toHaveLength(1);
   });
 
   test('a spill path that does not hold the attachment bytes is not reused', async () => {
@@ -383,10 +383,9 @@ describe('the spill-directory mkdir failure is classified, not substring-matched
 
     return {
       ...inner,
-      readFile: (p, o) => inner.readFile(p, o),
+      readFile: (p) => inner.readFile(p),
       writeFile: (p, d) => inner.writeFile(p, d),
       mkdir: async () => { throw failure; },
-      exists: (p) => inner.exists(p),
     };
   }
 

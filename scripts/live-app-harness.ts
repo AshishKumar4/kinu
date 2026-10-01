@@ -19,7 +19,7 @@
  */
 
 import { X509Certificate, createHash, randomBytes } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { git } from '@kinu.run/test-utils';
 import type { Subprocess } from 'bun';
@@ -50,6 +50,11 @@ process.once('exit', releaseScratch);
  *  used to leave a bare status behind and the one account of why it failed in
  *  a buffer nobody read. */
 const devServerOutput = new Map<string, readonly string[]>();
+
+/** Where a failing run keeps its dev server's output, one file per boot, outside the worktree beside the other runs'
+ *  logs. The buffer above dies with the process: on 2026-09-30 reading why a row's agent turn failed under `vite dev`
+ *  took a throwaway patch that printed it. */
+const DEV_SERVER_LOGS = join(REPO, '..', 'kinu-logs', 'dev-server');
 
 /** What the dev server said about the last failure it served. The LAST block
  *  is this request's: the harness runs one row at a time against its own
@@ -152,6 +157,8 @@ export interface LiveApp {
    *  root minted for this boot, never the checkout's. The plugin writes its
    *  `v3/do/<namespace>` tree under it. */
   readonly statePath: string;
+  /** See {@link DevServer.keepOutput}. */
+  readonly keepOutput: () => string;
 }
 
 /** Wait until the dev server ANSWERS its port — the banner line is decoration
@@ -297,6 +304,9 @@ export interface DevServer {
   readonly statePath: string;
   /** The https port its preview zone answers on (vite-preview-zone.ts). */
   readonly previewPort: number;
+  /** Writes everything the server has printed so far to its file under `kinu-logs/dev-server` and returns the path,
+   *  for a failure to name. A boot or a body that fails and a row killed at its bound call it themselves. */
+  readonly keepOutput: () => string;
 }
 
 /** The desktop viewport every browser row reads at: the inspector column, its
@@ -347,6 +357,14 @@ export async function withDevServer<T>(body: (server: DevServer) => Promise<T>, 
   // leftovers. Released with the rest of this run's scratch.
   const statePath = scratchDir('live-app-state');
   const previewPort = freePort();
+  const outputFile = join(DEV_SERVER_LOGS, `${String(process.pid)}-${String(port)}.log`);
+
+  const keepOutput = (): string => {
+    mkdirSync(DEV_SERVER_LOGS, { recursive: true });
+    writeFileSync(outputFile, output.join(''));
+
+    return outputFile;
+  };
 
   const child = Bun.spawn(
     ['bun', 'x', 'vite', 'dev', '--host', '127.0.0.1', '--port', String(port), '--strictPort'],
@@ -379,6 +397,8 @@ export async function withDevServer<T>(body: (server: DevServer) => Promise<T>, 
   // its own re-raise, so the `finally` below never opens
   // (scripts/test-scratch-home.ts; gallery-harness.ts says the same).
   const held = holdForRelease('the live app dev server', () => {
+    // A row killed at its bound ends here, not in the `catch` below: what the server said is kept all the same.
+    process.stderr.write(`live-app-harness: the dev server's output: ${keepOutput()}\n`);
     signalGroup(child.pid, 'SIGTERM');
     signalGroup(child.pid, 'SIGKILL');
   });
@@ -390,10 +410,12 @@ export async function withDevServer<T>(body: (server: DevServer) => Promise<T>, 
     devServerOutput.set(origin, output);
 
     try {
-      return await body({ origin, statePath, previewPort });
+      return await body({ origin, statePath, previewPort, keepOutput });
     } finally {
       devServerOutput.delete(origin);
     }
+  } catch (cause) {
+    throw new Error(`the dev server's output: ${keepOutput()}`, { cause });
   } finally {
     held();
     // The group, not just vite: workerd outlives a lone-parent kill. SIGTERM
@@ -413,7 +435,7 @@ export async function withBrowser<T>(body: (browser: Browser) => Promise<T>, ext
 
 /** Boot vite dev, launch the browser, run `body`, tear both down entirely. */
 export async function withLiveApp<T>(body: (app: LiveApp) => Promise<T>, options: LiveAppOptions = {}): Promise<T> {
-  return withDevServer(({ origin, statePath }) => withBrowser((browser) => {
+  return withDevServer(({ origin, statePath, keepOutput }) => withBrowser((browser) => {
     const newPage = async (): Promise<Page> => {
       const page = await browser.newPage();
 
@@ -423,6 +445,6 @@ export async function withLiveApp<T>(body: (app: LiveApp) => Promise<T>, options
       return page;
     };
 
-    return body({ browser, newPage, origin, statePath });
+    return body({ browser, newPage, origin, statePath, keepOutput });
   }, options.browserArgs), options);
 }

@@ -385,8 +385,8 @@ describe("executor lifecycle state", () => {
     const executor = createSandboxExecutor(handle, "kinu.example.test");
     const files = present(executor.files, "the sandbox file plane");
 
-    expect(await files.stat("/mydir")).toMatchObject({ isDir: true });
-    expect(await files.stat("/mydir/")).toMatchObject({ isDir: true });
+    expect(await files.stat("/mydir")).toMatchObject({ type: 'directory' });
+    expect(await files.stat("/mydir/")).toMatchObject({ type: 'directory' });
     expect(seen).toContain("/");
   });
 });
