@@ -290,6 +290,24 @@ type Aggregate = v.InferOutput<typeof Aggregate>;
 
 type TelemetryEvent = v.InferOutput<typeof TelemetryEvent>;
 
+/** One event of a version's signal as a fixer reads it: what was thrown or owed, by which object, in which request. */
+const SampleEvent = v.looseObject({
+  source: v.fallback(v.looseObject({
+    message: v.optional(v.string()),
+    code: v.optional(v.string()),
+    cause: v.optional(v.string()),
+    fields: v.optional(v.looseObject({ sequence: v.optional(v.string()), owed: v.optional(v.string()), effect: v.optional(v.string()) }), {}),
+  }), { fields: {} }),
+  $workers: v.optional(v.looseObject({ durableObjectId: v.optional(v.string()), entrypoint: v.optional(v.string()) }), {}),
+  $metadata: v.optional(v.looseObject({ error: v.optional(v.string()), requestId: v.optional(v.string()), traceId: v.optional(v.string()) }), {}),
+});
+
+type SampleEvent = v.InferOutput<typeof SampleEvent>;
+
+const SampleResult = v.looseObject({
+  result: v.looseObject({ events: v.optional(v.looseObject({ events: v.optional(v.array(SampleEvent), []) }), { events: [] }) }),
+});
+
 async function readToken(): Promise<string> {
   const tokenFile = `${process.env['HOME']}/.config/kinu/obs-token`;
 
@@ -411,6 +429,13 @@ class Telemetry {
       hour: Math.floor(Date.parse(`${bucket.time.replace(' ', 'T')}Z`) / HOUR_MS) * HOUR_MS,
       count: a.value,
     })));
+  }
+
+  /** Events as {@link SampleEvent}s, the fields a fixer reads kept: what was thrown or owed, where, in which request. */
+  async sampleEvents(filters: readonly Filter[], limit: number): Promise<SampleEvent[]> {
+    const text = await this.raw({ view: 'events', limit, parameters: { datasets: ['cloudflare-workers'], filters: this.filters(filters) } });
+
+    return v.parse(SampleResult, JSON.parse(text)).result.events.events;
   }
 
   /** `from` narrows the window: a sampled events view drops rows, and gaps between kept rows are fiction. */
@@ -715,11 +740,32 @@ async function wakes(t: Telemetry, args: Args): Promise<void> {
 
 // ---- one deployed version (L18) -----------------------------------------------
 
+/** An uncaught exception of the version, as its fixer starts from it: its text, the request it ended, and the
+ *  Durable Object whose invocation, or whose call, it was (empty when its trace names none). */
+export interface ExceptionSample {
+  readonly entrypoint: string;
+  readonly message: string;
+  readonly object: string;
+  readonly request: string;
+}
+
+/** A terminal effect the version failed or left owed: its object, its turn, and what it says. */
+export interface EffectSample {
+  readonly object: string;
+  readonly sequence: string;
+  readonly detail: string;
+}
+
 /** What one version did, as `version` reads it. */
 export interface VersionRead {
   /** Its invocations that did not end `ok`, by outcome and entrypoint. */
   readonly ended: readonly { readonly outcome: string; readonly entrypoint: string; readonly count: number; readonly objects: number }[];
-  readonly effects: { readonly failed: number; readonly failedTurns: number; readonly owed: number };
+  /** One exception per entrypoint whose invocations ended in one. */
+  readonly thrown: readonly ExceptionSample[];
+  readonly effects: {
+    readonly failed: number; readonly failedTurns: number; readonly owed: number;
+    readonly failedSample?: EffectSample; readonly owedSample?: EffectSample;
+  };
   readonly startups: readonly StartupHour[];
   readonly alarms: readonly { readonly object: string; readonly hour: number; readonly count: number }[];
 }
@@ -730,6 +776,14 @@ export interface VersionFinding {
   readonly finding: string;
 }
 
+function exceptionText(sample: ExceptionSample): string {
+  return `"${sample.message}", in request ${sample.request}${sample.object === '' ? '' : ` of object ${sample.object}`}`;
+}
+
+function effectText(sample: EffectSample | undefined): string {
+  return sample === undefined ? '' : `; e.g. object ${sample.object}, turn ${sample.sequence}: ${sample.detail}`;
+}
+
 /** Each signal `read` holds that a deploy reports whatever its tests said. A canceled or aborted invocation is the
  *  caller going away, not the version failing. */
 export function versionFindings(read: VersionRead): VersionFinding[] {
@@ -737,17 +791,27 @@ export function versionFindings(read: VersionRead): VersionFinding[] {
 
   for (const row of read.ended) {
     if (row.outcome === 'exception') {
-      findings.push({ what: `uncaught exceptions in ${row.entrypoint}`, finding: `${String(row.count)} invocation(s) of ${row.entrypoint} ended in an uncaught exception, on ${String(row.objects)} object(s)` });
+      const sample = read.thrown.find((thrown) => thrown.entrypoint === row.entrypoint);
+
+      findings.push({
+        what: `uncaught exceptions in ${row.entrypoint}`,
+        finding: `${String(row.count)} invocation(s) of ${row.entrypoint} ended in an uncaught exception${sample === undefined ? ', and none left its text' : `: ${exceptionText(sample)}`}`,
+      });
     } else if (row.outcome.startsWith('exceeded')) {
       findings.push({ what: `${row.entrypoint} ended by the platform (${row.outcome})`, finding: `${String(row.count)} invocation(s) of ${row.entrypoint} ended with ${row.outcome}, resetting ${String(row.objects)} object(s)` });
     }
   }
 
   if (read.effects.failed > 0) {
-    findings.push({ what: 'failed terminal effects', finding: `${String(read.effects.failed)} terminal effect run(s) failed, in ${String(read.effects.failedTurns)} turn(s)` });
+    findings.push({
+      what: 'failed terminal effects',
+      finding: `${String(read.effects.failed)} terminal effect run(s) failed, in ${String(read.effects.failedTurns)} turn(s)${effectText(read.effects.failedSample)}`,
+    });
   }
 
-  if (read.effects.owed > 0) findings.push({ what: 'owed terminal effects', finding: `${String(read.effects.owed)} turn(s) ended with terminal effects still owed` });
+  if (read.effects.owed > 0) {
+    findings.push({ what: 'owed terminal effects', finding: `${String(read.effects.owed)} turn(s) ended with terminal effects still owed${effectText(read.effects.owedSample)}` });
+  }
 
   for (const loop of findWakeLoops(read.startups)) {
     findings.push({ what: 'a wake loop', finding: `object ${loop.object} started ${String(loop.peakPerHour)} times in an hour, ${String(loop.loopHours)} such hour(s)` });
@@ -758,6 +822,45 @@ export function versionFindings(read: VersionRead): VersionFinding[] {
   }
 
   return findings;
+}
+
+/** One exception per entrypoint whose invocations ended in one: the text the runtime logged for that request, and the
+ *  object of the invocation, or, for an RPC entrypoint, of the call in its trace that has one. */
+async function exceptionSamples(t: Telemetry, scope: readonly Filter[]): Promise<ExceptionSample[]> {
+  const ended = await t.sampleEvents([...scope, eq('$metadata.type', 'cf-worker-event'), eq('$workers.outcome', 'exception')], 50);
+  const samples: ExceptionSample[] = [];
+
+  for (const entrypoint of new Set(ended.map((event) => event.$workers.entrypoint ?? ''))) {
+    const first = ended.find((event) => (event.$workers.entrypoint ?? '') === entrypoint);
+    const request = first?.$metadata.requestId ?? '';
+    const trace = first?.$metadata.traceId ?? '';
+    const thrown = request === '' ? [] : await t.sampleEvents([eq('$metadata.requestId', request), eq('$metadata.type', 'cf-worker')], 5);
+    const own = first?.$workers.durableObjectId ?? '';
+    const traced = own !== '' || trace === '' ? [] : await t.sampleEvents([eq('$metadata.traceId', trace), eq('$metadata.type', 'cf-worker-event')], 20);
+
+    samples.push({
+      entrypoint,
+      message: thrown.map((event) => event.$metadata.error ?? event.source.message ?? '').find((text) => text !== '') ?? '',
+      object: own !== '' ? own : traced.map((event) => event.$workers.durableObjectId ?? '').find((id) => id !== '') ?? '',
+      request,
+    });
+  }
+
+  return samples;
+}
+
+/** The first event of `event` for the version, as an effect sample. */
+async function effectSample(t: Telemetry, scope: readonly Filter[], event: string): Promise<EffectSample | undefined> {
+  const [first] = await t.sampleEvents([...scope, eq('event', event)], 1);
+
+  if (first === undefined) return undefined;
+  const { fields, code, cause } = first.source;
+
+  return {
+    object: first.$workers.durableObjectId ?? '',
+    sequence: fields.sequence ?? '',
+    detail: fields.effect === undefined ? `owed ${fields.owed ?? ''}` : `${fields.effect} (${code ?? ''}): ${cause ?? ''}`,
+  };
 }
 
 async function versionRead(t: Telemetry, versionId: string): Promise<VersionRead> {
@@ -772,7 +875,12 @@ async function versionRead(t: Telemetry, versionId: string): Promise<VersionRead
 
   return {
     ended: ended.map((row) => ({ outcome: row.groups[0] ?? '', entrypoint: row.groups[1] ?? '', count: row.count, objects: row.distinct })),
-    effects: { failed: total(failed), failedTurns: failed.length, owed: total(owed) },
+    thrown: ended.some((row) => row.groups[0] === 'exception') ? await exceptionSamples(t, scope) : [],
+    effects: {
+      failed: total(failed), failedTurns: failed.length, owed: total(owed),
+      failedSample: failed.length === 0 ? undefined : await effectSample(t, scope, 'turn.terminal_effect_failed'),
+      owedSample: owed.length === 0 ? undefined : await effectSample(t, scope, 'turn.terminal_effects_owed'),
+    },
     startups: await startupHours(t, scope),
     alarms: alarms.map((row) => ({ object: row.groups[0] ?? '', hour: row.hour, count: row.count })),
   };

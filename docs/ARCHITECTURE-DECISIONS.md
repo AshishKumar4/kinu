@@ -1261,6 +1261,15 @@ packed ref still fires. deploy.sh holds a lock per environment for its run
 (exit 75 when held), which is how "no deploy runs" is known, for a person's
 deploy as much as the loop's.
 
+L22. Production promotes whichever build staging verified, by itself, through
+`deploy.sh --promote`. Decided 2026-09-30 by the owner, the policy 2026-10-01
+by Main. A timer every 15 minutes takes the last staged tip and runs
+`promote.ts check` at it, which refuses until staging's record and the evals'
+green Verdict are both there; only then does it promote. Nothing rolls back by
+itself: a red promotion is never retried, its report and the rollback hint
+stand, and the next verified tip deploys forward. A tip passed by a newer
+staging deploy before its verdict lands is never promoted.
+
 ## Providers
 
 P1. The ChatGPT plan is Sign in with ChatGPT's open-source token sharing

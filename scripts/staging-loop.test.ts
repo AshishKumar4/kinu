@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { childEnv, scratchDir } from '@kinu.run/test-utils';
-import { DEPLOY_BUSY, runLoop } from './staging-loop';
+import { DEPLOY_BUSY, promoteRound, runLoop } from './staging-loop';
 
 const BRANCH = 'integration/0965';
 
@@ -110,5 +110,71 @@ describe('continuous staging deploys the newest tip, once', () => {
 
     expect(deployed).toEqual([newest]);
     expect(git(worktree, 'rev-parse', 'HEAD')).toBe(newest);
+  });
+});
+
+// The owner's rule (decided with Main, 2026-10-01): production takes the last tip staging deployed once `promote.ts
+// check` passes for it, through `deploy.sh --promote`; a red promotion is never tried again, and the next verified tip
+// deploys forward.
+describe('auto-promotion takes the last staged tip once it is verified, once', () => {
+  const round = (overrides: Partial<Parameters<typeof promoteRound>[0]> = {}) => {
+    const promoted: string[] = [];
+
+    const input = {
+      stagedFile: stateFile, triedFile: `${stateFile}.tried`, worktree,
+      productionBuild: async () => '',
+      verified: () => 0,
+      promote: (where: string) => {
+        promoted.push(git(where, 'rev-parse', 'HEAD'));
+
+        return 0;
+      },
+      ...overrides,
+    };
+
+    return { promoted, run: () => promoteRound(input) };
+  };
+
+  test('an unverified tip waits, a verified one is promoted from a checkout at it, and is not promoted twice', async () => {
+    const staged = land(work, 'a staged build');
+    let verdict = 1;
+    const { promoted, run } = round({ verified: () => verdict });
+
+    await Bun.write(stateFile, `${staged}\n`);
+    expect(await run()).toBe(`${staged} is not verified yet`);
+    expect(promoted).toEqual([]);
+
+    verdict = 0;
+    expect(await run()).toBe(`promoted ${staged}`);
+    expect(promoted).toEqual([staged]);
+    expect(await run()).toBe(`${staged} was tried already`);
+    expect(promoted).toEqual([staged]);
+  });
+
+  test('a red promotion is not tried again, and the next staged tip is', async () => {
+    const red = land(work, 'a build whose promotion goes red');
+    const { promoted, run } = round({ promote: (where) => (promoted.push(git(where, 'rev-parse', 'HEAD')) === 1 ? 1 : 0) });
+
+    await Bun.write(stateFile, `${red}\n`);
+    expect(await run()).toBe(`promoting ${red} went red (exit 1); it is not tried again`);
+    expect(await run()).toBe(`${red} was tried already`);
+
+    const next = land(work, 'the next build');
+
+    await Bun.write(stateFile, `${next}\n`);
+    expect(await run()).toBe(`promoted ${next}`);
+    expect(promoted).toEqual([red, next]);
+  });
+
+  test('a tip production serves already, or a promotion refused for another running, is not marked tried', async () => {
+    const staged = land(work, 'a staged build');
+
+    await Bun.write(stateFile, `${staged}\n`);
+    expect(await round({ productionBuild: async () => staged.slice(0, 9) }).run()).toBe(`production serves ${staged} already`);
+
+    const busy = round({ promote: () => DEPLOY_BUSY });
+
+    expect(await busy.run()).toBe('another production deploy is running');
+    expect(await round().run()).toBe(`promoted ${staged}`);
   });
 });
