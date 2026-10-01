@@ -595,10 +595,11 @@ describe('a task answer finds its row wherever its hire started', () => {
     }]);
   });
 
-  test('a mid-work report_tool progress note leaves the task row working', async () => {
+  test('a task agent stays working until its settling report, even after a turn ends', async () => {
     const scene = makeScene();
     scene.roster.create({ name: TEMP_NAME, actorReference: scene.hired(TEMP_NAME), birth: null, deleteRequested: false, status: 'working', currentTask: 'Audit the ledger.', createdAt: NOW, dismissedAt: null, lifetime: 'task', taskEventId: 'evt-1' });
     await scene.report({ status: 'progress', origin: 'report_tool', content: 'Reading March.' });
+    scene.roster.finishTurn(TEMP_NAME, 'answered', NOW);
     expect(scene.roster.list()).toMatchObject([{
       name: TEMP_NAME, lifetime: 'task', status: 'working',
     }]);

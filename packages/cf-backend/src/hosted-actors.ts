@@ -200,6 +200,16 @@ export async function admitHostedTask(
   ));
 }
 
+function hostedHirer(seams: HostedActorSeams, child: BoundActor): BoundActor {
+  const parent = registeredParent(seams.host, child.record, {
+    orphan: 'The workspace main actor was not hired by anyone.',
+    unregistered: 'The hiring actor is no longer registered.',
+  });
+
+  // Neither the hirer's queue (it may wait on this child's) nor its session (an idle hirer holds none).
+  return seams.host.hosted(parent) ?? seams.host.bindStores(parent);
+}
+
 /** A child's report to its hiring parent, in-process; `sequenceId` remains the ingress dedupe key. */
 export async function relayHostedReport(
   seams: HostedActorSeams,
@@ -218,11 +228,7 @@ export async function relayHostedReport(
     readonly quiet?: true;
   },
 ): Promise<SubordinateEventResult> {
-  // Past depth 1 the hiring parent is not the workspace.
-  const parent = registeredParent(seams.host, child.record, {
-    orphan: 'The workspace main actor was not hired by anyone.',
-    unregistered: 'The hiring actor is no longer registered.',
-  });
+  const hirer = hostedHirer(seams, child);
 
   const name = child.record.name;
   const { answers, ...event } = report;
@@ -230,9 +236,6 @@ export async function relayHostedReport(
   const answered = (): void => {
     if (answers !== undefined) new EventLog(seams.exec, child.handle).markAnswered(answers);
   };
-
-  // Neither the hirer's queue (it may wait on this child's) nor its session (an idle hirer holds none).
-  const hirer = seams.host.hosted(parent) ?? seams.host.bindStores(parent);
 
   return await receiveSubordinateEvent({
     log: new EventLog(seams.exec, hirer.handle),
@@ -245,7 +248,7 @@ export async function relayHostedReport(
       return written;
     }),
     announce: () => { seams.announce(hirer); },
-    onAdmitted: () => { if (!seams.turnInFlight(parent)) seams.scheduleDrain(hirer); },
+    onAdmitted: () => { if (!seams.turnInFlight(hirer.reference)) seams.scheduleDrain(hirer); },
     evolutionAnswerStored: () => seams.oweAdvice(hirer),
     onEvolutionAnswer: () => { seams.rederiveWake(); },
     temporary: seams.temporary(hirer),
@@ -395,6 +398,9 @@ export function settleHostedTask(
   };
 
   return settle(Effect.gen(function* () {
+    const hirer = hostedHirer(seams, actor);
+
+    if (seams.roster(hirer).finishTurn(actor.record.name, ending, Date.now())) seams.announce(hirer);
     yield* titled;
     const relayed = yield* Effect.promise(owedReport);
 

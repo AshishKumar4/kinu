@@ -1064,6 +1064,45 @@ describe('LocalAgentHost', () => {
     expect(reports).toBe(1);
   });
 
+  test('a durable hire that reports progress reads idle after its run completes', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+
+    const { host } = makeHost(state, progressThenChildModel('answer'), [
+      { name: 'root', cwd: project, workspaceId: 'proj' },
+    ]);
+
+    const brief = 'Audit the ledger.';
+
+    try {
+      const team = await host.team('root');
+      const hired = await team.spawn({ role: 'researcher', mission: brief, mode: 'build' });
+      const name = v.parse(v.object({ name: v.string() }), hired).name;
+      const child = await host.acquire(`root/${name}`);
+
+      await host.tick(`root/${name}`);
+      await child.settleBackgroundWork();
+      await host.tick('root');
+      await (await host.acquire('root')).settleBackgroundWork();
+      const view = new Database(dbPath, { readonly: true });
+
+      try {
+        const ending = view.query<{ reason: string }, [string]>(
+          "SELECT json_extract(payload, '$.reason') AS reason FROM run_events WHERE actor_id = ? AND type = 'run_end'",
+        ).all(childActorId(dbPath, name));
+
+        expect(ending).toEqual([{ reason: 'completed' }]);
+      } finally {
+        view.close();
+      }
+
+      expect((await team.list()).find((entry) => entry.name === name))
+        .toMatchObject({ status: 'idle', currentTask: brief, lifetime: 'durable' });
+    } finally {
+      await host.close();
+    }
+  });
+
   test('a hire in the same roster keeps lifetime durable and still reports onto the rail', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
