@@ -122,9 +122,30 @@ tester.run("anti-slop/no-elapsed-work-deadline", noElapsedWorkDeadlineRule, {
       code: "setTimeout(() => reject(new Error('liveness capture timeout')), timeoutMs);",
       filename: "scripts/liveness-capture.ts",
     },
+    // A silence bound, re-armed by every chunk: a stream that keeps sending is never cut.
+    {
+      code: `function unlessStalled<T>(work: Promise<T>): Promise<T> {
+  const timer = setTimeout(() => { cut.abort(stalled()); stall.reject(stalled()); }, silenceBoundMs('provider.stream.idle_ms'));
+  return Promise.race([work, stall.promise]).finally(() => { clearTimeout(timer); });
+}`,
+      filename: llmSource,
+    },
   ],
 
   invalid: [
+    // Only `silenceBoundMs` reads a silence bound: a raw number or a catalog number read directly is a deadline.
+    // `silenceBoundMs` refuses a fact not declared a silence bound by type (unit-stream-idle.test.ts).
+    { code: "setTimeout(() => reject(stalled()), 300_000);", filename: llmSource, errors: [armError] },
+    {
+      code: "setTimeout(() => reject(stalled()), PLATFORM_CATALOG['browser.session.keep_alive_ms'].limit.value);",
+      filename: llmSource,
+      errors: [armError],
+    },
+    {
+      code: "setTimeout(() => reject(stalled()), PLATFORM_CATALOG['provider.stream.idle_ms'].limit.value);",
+      filename: llmSource,
+      errors: [armError],
+    },
     {
       name: "arm 1 — a callback that throws ends work the same way",
       code: `setTimeout(() => {

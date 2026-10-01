@@ -6,8 +6,7 @@ import { fmtSpan } from '../utils/format';
 import { abortableSleep, providerPacer, type ProviderPacer } from './pacing';
 import { retryAfterOf } from './fallback-cooldown';
 import type { ProviderWaitInfo } from './types';
-
-
+import { silenceBoundMs } from '../platform-catalog';
 import { DEFAULT_PROVIDER_RETRIES } from '../types/profile';
 
 /** Full-jitter backoff when a 429 lacks `Retry-After`; BASE and MAX are unmeasured. */
@@ -23,6 +22,8 @@ const MAX_RETRY_DELAY_MS = 60_000;
 
 /** This call's 429 retries; never sent upstream. */
 export const PROVIDER_RETRIES_HEADER = 'x-kinu-retries';
+
+const StreamRequestSchema = v.looseObject({ stream: v.literal(true) });
 
 export interface RateLimitRetryOptions {
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
@@ -66,6 +67,17 @@ export function withRateLimitRetry(
     const lane = opts.lane === undefined ? host : `${host} ${opts.lane}`;
     const signal = init?.signal ?? undefined;
 
+    const body = v.safeParse(v.string(), init?.body);
+    const streams = body.success && v.is(StreamRequestSchema, tolerate<unknown>(() => JSON.parse(body.output), 'malformed-input'));
+
+    const stalled = (): APICallError => new APICallError({
+      message: `${opts.provider ?? host} sent nothing for ${fmtSpan(silenceBoundMs('provider.stream.idle_ms'))}`,
+      url: input instanceof Request ? input.url : input.toString(),
+      requestBodyValues: undefined,
+      isRetryable: true,
+      cause: new KinuError('timeout', `the ${opts.provider ?? host} stream stalled`),
+    });
+
     const handedOver = (status: number | null, resetsInMs: number | null): APICallError => new APICallError({
       message: `${host} is rate-limiting this account${status === null ? '' : ` (HTTP ${String(status)})`}`
         + `${resetsInMs === null ? '' : `; it resets in ${fmtSpan(resetsInMs)}`}`,
@@ -100,8 +112,8 @@ export function withRateLimitRetry(
     };
 
     // Announce only cooldowns another request declared.
-    const ownedCooldownUntil = { ms: 0 };
-    // A sibling's cooldown spends a retry as this call's own refusal does: a lane siblings keep cooling ends here.
+    let owned: number | null = null;
+    // A sibling's cooldown spends a retry as this call's own refusal does.
     let waits = 0;
 
     for (let attempt = 1; ; attempt++) {
@@ -111,7 +123,7 @@ export function withRateLimitRetry(
             throw waitTooLong({ input, provider: opts.provider ?? host, untilMs, nowMs: now(), longestMs: MAX_RETRY_DELAY_MS, reason });
           }
 
-          if (untilMs === ownedCooldownUntil.ms) return;
+          if (untilMs === owned) return;
 
           if (++waits > retries) throw handedOver(null, waitMs);
 
@@ -119,10 +131,11 @@ export function withRateLimitRetry(
         },
       });
 
-      const response = await fetchImpl(input, init);
+      const live = streams ? new LiveStream(stalled) : null;
+      const response = await (live === null ? fetchImpl(input, init) : live.open(fetchImpl, input, init));
       const limit = await rateLimitOf(response);
 
-      if (limit === null) return response;
+      if (limit === null) return live === null ? response : await live.body(response);
 
       if ('spent' in limit) throw allowanceSpent({ input, response, body: limit.body, host, exhausted: limit.spent });
 
@@ -146,11 +159,10 @@ export function withRateLimitRetry(
 
       const waitMs = retryAfter ?? Math.floor(random() * backoffCeilingMs);
 
-      const untilMs = now() + waitMs;
-      pacer.declareWait(lane, waitMs);
+      const declared = pacer.declareWait(lane, waitMs);
 
       if (++waits > retries) throw handedOver(limit.status, retryAfter ?? waitMs);
-      ownedCooldownUntil.ms = untilMs;
+      owned = declared;
       warn(
         `[kinu] ${host} rate-limited: waiting ${fmtSpan(waitMs)} `
         + `(attempt ${String(attempt)})`,
@@ -159,6 +171,57 @@ export function withRateLimitRetry(
       await sleep(waitMs, signal);
     }
   });
+}
+
+/** Fails retryable once silent; a silent start fails the fetch. */
+class LiveStream {
+  private readonly cut = new AbortController();
+
+  constructor(private readonly stalled: () => APICallError) {}
+
+  open(fetchImpl: typeof globalThis.fetch, input: RequestInfo | URL, init: RequestInit | undefined): Promise<Response> {
+    const own = init?.signal ?? undefined;
+
+    return this.unlessStalled(fetchImpl(input, { ...init, signal: own === undefined ? this.cut.signal : AbortSignal.any([own, this.cut.signal]) }));
+  }
+
+  async body(response: Response): Promise<Response> {
+    if (response.body === null) return response;
+    const reader = response.body.getReader();
+    const first = reader.read();
+
+    await this.unlessStalled(Promise.allSettled([first]));
+
+    const body = new ReadableStream<Uint8Array>({
+      start: async (controller) => {
+        const read = await first;
+
+        if (read.done) controller.close();
+        else controller.enqueue(read.value);
+      },
+      pull: async (controller) => {
+        const next = await this.unlessStalled(reader.read());
+
+        if (next.done) controller.close();
+        else controller.enqueue(next.value);
+      },
+      cancel: (reason) => reader.cancel(reason),
+    });
+
+    return new Response(body, response);
+  }
+
+  private unlessStalled<T>(work: Promise<T>): Promise<T> {
+    const stall = Promise.withResolvers<never>();
+
+    const timer = setTimeout(() => {
+      const error = this.stalled();
+      this.cut.abort(error);
+      stall.reject(error);
+    }, silenceBoundMs('provider.stream.idle_ms'));
+
+    return Promise.race([work, stall.promise]).finally(() => { clearTimeout(timer); });
+  }
 }
 
 function hasReplayableBody(input: RequestInfo | URL, init: RequestInit | undefined): boolean {
