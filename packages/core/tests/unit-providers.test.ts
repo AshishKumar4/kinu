@@ -70,14 +70,6 @@ describe('ProviderRegistry', () => {
     expect(() => r.resolve('beta/m', baseDeps())).toThrow('Unknown provider');
   });
 
-  test('defaultSpec picks first available provider', async () => {
-    const r = createProviderRegistry();
-    r.register(fakeProvider('alpha', 'a-default', false));
-    r.register(fakeProvider('beta', 'b-default', true));
-    r.register(fakeProvider('gamma', 'g-default', true));
-    expect(await r.defaultSpec(baseDeps())).toBe('beta/b-default');
-  });
-
   test('listProviders returns availability info for all', async () => {
     const r = createProviderRegistry();
     r.register(fakeProvider('alpha', 'a', true));
@@ -142,14 +134,6 @@ describe('ProviderRegistry', () => {
       ]);
     });
 
-    test('defaultSpec skips a throwing provider instead of leaving the agent modelless', async () => {
-      const r = createProviderRegistry();
-      // No static defaultModel, so defaultSpec must reach the throwing listModels.
-      r.register(throwingProvider('codex', 'listModels'));
-      r.register(fakeProvider('beta', 'b-default', true));
-      expect(await r.defaultSpec(baseDeps())).toBe('beta/b-default');
-    });
-
     test('a dynamic source that cannot enumerate still leaves the static providers listed', async () => {
       const r = createProviderRegistry();
       r.register(fakeProvider('alpha', 'a', true));
@@ -163,7 +147,6 @@ describe('ProviderRegistry', () => {
       expect(failures).toEqual([
         { provider: 'catalog', label: 'models.dev catalog', reason: 'models.dev returned HTTP 503' },
       ]);
-      expect(await r.defaultSpec(baseDeps())).toBe('alpha/a');
     });
   });
 

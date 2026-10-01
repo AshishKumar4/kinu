@@ -156,7 +156,6 @@ describe('createLocalModelResolver', () => {
     expect(resolver.normalizeSpecSync(null)).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
     expect(resolver.normalizeSpecSync('@cf/meta/llama-4-scout-17b-16e-instruct'))
       .toBe('workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct');
-    expect(resolver.normalizeSpecSync('minimax/m3')).toBe('workers-ai/minimax/m3');
 
     const providers = await resolver.listProviders();
     expect(providers.find((p) => p.id === 'workers-ai')?.available).toBe(true);

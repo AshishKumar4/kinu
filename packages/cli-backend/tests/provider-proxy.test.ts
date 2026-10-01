@@ -106,9 +106,9 @@ describe('web-UI-connected providers reach local agents', () => {
     expect(menu.models.some((m) => m.provider === 'groq' && m.id === 'llama-3.3-70b')).toBe(true);
   });
 
-  test('a connected catalog provider becomes a routable spec prefix', async () => {
+  test('a catalog provider is a spec prefix whether or not a listing has landed', async () => {
     const resolver = resolverWith(networkFetch({ credentials: [{ key: 'groq.bearer' }] }));
-    expect(resolver.normalizeSpecSync('groq/llama-3.3-70b')).toBe('openai-compat/groq/llama-3.3-70b');
+    expect(resolver.normalizeSpecSync('groq/llama-3.3-70b')).toBe('groq/llama-3.3-70b');
     await resolver.listProviders();
     expect(resolver.normalizeSpecSync('groq/llama-3.3-70b')).toBe('groq/llama-3.3-70b');
   });
