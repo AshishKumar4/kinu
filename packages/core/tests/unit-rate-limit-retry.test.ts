@@ -96,6 +96,24 @@ describe('withRateLimitRetry', () => {
     expect({ joined, sent }).toEqual({ joined: DEFAULT_PROVIDER_RETRIES, sent: 0 });
   });
 
+  test('its own declared wait is never counted as a sibling\'s, whichever clock read it', async () => {
+    let clock = 1_000_000;
+    let calls = 0;
+    const limited = () => new Response('limited', { status: 429, headers: { 'retry-after': '1' } });
+    const answers = [limited(), limited(), new Response('ok')];
+
+    // The pacer reads its clock a millisecond after the wrapper read its own, and waiting passes no time here.
+    const wrapped = withRateLimitRetry(asFetchFunction(async () => answers[calls++]), {
+      now: () => clock - 1,
+      sleep: async () => {},
+      pacer: new ProviderPacer({ now: () => clock, sleep: async (ms) => { clock += ms; } }),
+      warn: () => {},
+    });
+
+    expect(await (await wrapped('https://api.example.com/v1/chat', { body: '{}' })).text()).toBe('ok');
+    expect(calls).toBe(3);
+  });
+
   test('honors Retry-After HTTP dates against the injected clock', async () => {
     const retryAt = new Date(1_005_000).toUTCString();
 
