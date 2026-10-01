@@ -34,8 +34,14 @@ const KeysDeletedSchema = v.object({ success: v.literal(true), result: v.array(v
 /** The keys one list call and one delete call carry. */
 const PAGE = 1_000;
 
-function apiToken(): string {
-  return (process.env['CLOUDFLARE_API_TOKEN'] ?? process.env['CF_API_TOKEN'] ?? '').trim();
+/**
+ * The deploy's Cloudflare REST token. KINU_CLOUDFLARE_API_TOKEN first, ON PURPOSE: wrangler honours both generic
+ * names (CLOUDFLARE_API_TOKEN and CF_API_TOKEN), so a REST token exported under either hijacks every wrangler
+ * subcommand the deploy also runs (measured: `wrangler vectorize list` refusing under an Access-only token). A name
+ * wrangler never reads keeps the deploy's OAuth login serving wrangler.
+ */
+export function restApiToken(): string {
+  return (process.env['KINU_CLOUDFLARE_API_TOKEN'] ?? process.env['CLOUDFLARE_API_TOKEN'] ?? process.env['CF_API_TOKEN'] ?? '').trim();
 }
 
 /** Only the REST API deletes an application whose id has this shape. */
@@ -46,10 +52,10 @@ export function deletedByRest(applicationId: string): boolean {
 /** `DELETE /accounts/{account}/containers/applications/{id}` with CLOUDFLARE_API_TOKEN. The token goes to
  *  curl on stdin, never in its arguments. */
 export function deleteApplicationByRest(accountId: string, applicationId: string): { readonly ok: true } | { readonly ok: false; readonly reason: string } {
-  const token = apiToken();
+  const token = restApiToken();
 
   if (token === '') {
-    return { ok: false, reason: `container application ${applicationId} is deleted only through the REST API, and CLOUDFLARE_API_TOKEN is unset` };
+    return { ok: false, reason: `container application ${applicationId} is deleted only through the REST API, and no REST token is set (KINU_CLOUDFLARE_API_TOKEN)` };
   }
 
   const answered = spawnSync('curl', [
@@ -99,9 +105,9 @@ async function restCall<TSchema extends v.GenericSchema>(request: { method: stri
 /** Deletes every object under `prefix` and answers how many; it lists again from the start after each page, so
  *  a key it deleted can never hold a cursor it still needs. */
 export async function deleteR2Prefix(deletion: PrefixDeletion): Promise<number> {
-  const token = deletion.token ?? apiToken();
+  const token = deletion.token ?? restApiToken();
 
-  if (token === '') throw new Error(`the objects under ${deletion.bucket}/${deletion.prefix} are deleted only through the REST API, and CLOUDFLARE_API_TOKEN is unset`);
+  if (token === '') throw new Error(`the objects under ${deletion.bucket}/${deletion.prefix} are deleted only through the REST API, and no REST token is set (KINU_CLOUDFLARE_API_TOKEN)`);
   const objects = `${deletion.api ?? API}/accounts/${deletion.accountId}/r2/buckets/${deletion.bucket}/objects`;
   let deleted = 0;
 

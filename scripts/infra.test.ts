@@ -30,7 +30,7 @@ import {
   type AuditRequest, type Phase, type Row, PHASES, audit, environmentOf, observedRow, phaseFrom, supplyDrift,
   supplyRows, supplySummary, unobservableDrift,
 } from './infra-verify';
-import { deleteR2Prefix, deletedByRest } from './cloudflare-rest';
+import { deleteR2Prefix, deletedByRest, restApiToken } from './cloudflare-rest';
 import { confirmationPhrase, partition } from './infra-teardown';
 import { POLL_SECONDS, settle, type SettleClock } from './edge-settled';
 import { plan, putSecret, type SecretIo } from './infra-provision';
@@ -1222,6 +1222,24 @@ describe('the Cloudflare REST calls wrangler cannot make', () => {
   afterAll(async () => { await server.stop(true); });
 
   const prefix = { accountId: 'acct', bucket: 'store', prefix: 'boxes/', api: `http://127.0.0.1:${String(server.port)}`, token: 't' };
+
+  test('the REST calls read the token under the name wrangler never reads, ahead of the generic names', () => {
+    // 2026-09-30: the reset read only CLOUDFLARE_API_TOKEN while the deploy exports its REST token under the
+    // name infra verify reads, so a staging reset stopped half done; one reader now serves both.
+    const saved = { kinu: process.env['KINU_CLOUDFLARE_API_TOKEN'], generic: process.env['CLOUDFLARE_API_TOKEN'] };
+
+    process.env['KINU_CLOUDFLARE_API_TOKEN'] = 'rest';
+    process.env['CLOUDFLARE_API_TOKEN'] = 'wrangler';
+
+    try {
+      expect(restApiToken()).toBe('rest');
+    } finally {
+      for (const [name, value] of [['KINU_CLOUDFLARE_API_TOKEN', saved.kinu], ['CLOUDFLARE_API_TOKEN', saved.generic]] as const) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+  });
 
   test('only a 32-hex application id is deleted through the REST API', () => {
     expect([deletedByRest('12578b1d379a4c1fb861e8b7b80bf21b'), deletedByRest('a03086a8-4134-4503-a7f6-52c3b8a0d1df')]).toEqual([true, false]);
