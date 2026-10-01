@@ -130,6 +130,8 @@ export interface Identity {
 export interface ShellExecOptions {
   stdin?: string;
   signal?: AbortSignal;
+  /** The caller stopped waiting: later commands run, and this one keeps no `cd`. */
+  detach?: AbortSignal;
 }
 
 export interface ShellExecResult {
