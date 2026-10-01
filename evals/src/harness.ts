@@ -24,24 +24,37 @@ const IDLE_POLL_MS = 1_000;
 const DROPPED_POLLS = 3;
 
 /**
- * Trials of one process begin this far apart. A trial opens its connections as it begins, and Bun 1.4's fetch refuses
- * new connections opened in a burst (`ConnectionRefused`; curl's 200 at once all connect). Measured 2026-10-01 from
- * one machine, twelve processes of 30 starts, as two legs of six task files make: 114 of 360 refused unpaced, none
- * at this spacing (kinu-logs/evals-fast/proofs/connect-burst.log); the two-leg run that began 360 trials together
- * lost 32 at their first request. A start is paced, never a trial bounded: once begun, it runs as long as its turns.
+ * Trials of one process opening their workspaces at once, at most. Opening is where a trial makes its new connections
+ * (the build read, the workspace create, the socket, the model pin), and this workstation's limit on new connections
+ * at once is the bound: it sends everything through Cloudflare WARP, which answers a burst of new connections with
+ * ICMP host-unreachable, and Bun 1.4's fetch fails such a connect outright where Node's tries the host's next address.
+ * Measured 2026-10-01 from twelve processes, as two legs of six task files make: 15 opening per process (180 in all)
+ * failed 0 of 540 connects, 20 (240) failed 238 of 720 (kinu-logs/evals-fast/proofs/connect-cause). Once open, a
+ * trial runs unbounded.
  */
-const START_SPACING_MS = 100;
+const MAX_OPENING = 15;
 
-let nextStart = 0;
+let openingNow = 0;
 
-/** Wait for this trial's turn to begin. */
-async function begin(): Promise<void> {
-  const now = Date.now();
-  const at = Math.max(now, nextStart);
+const waitingToOpen: (() => void)[] = [];
 
-  nextStart = at + START_SPACING_MS;
+/** Take an opening slot, waiting for one while MAX_OPENING trials of this process are opening. */
+function admit(): Promise<void> {
+  if (openingNow < MAX_OPENING) {
+    openingNow += 1;
 
-  if (at > now) await new Promise<void>((resolve) => { setTimeout(resolve, at - now); });
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve) => { waitingToOpen.push(resolve); });
+}
+
+/** Hand the slot to the next trial waiting for one, or give it back. */
+function release(): void {
+  const next = waitingToOpen.shift();
+
+  if (next === undefined) openingNow -= 1;
+  else next();
 }
 
 /** The check a turn fails when the deployment cut a run mid-work and reported it completed. */
@@ -221,8 +234,6 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
   return createHarness<EvalRunInput, EvalRunOutput>({
     name: 'kinu-agent',
     run: async ({ input, signal }) => {
-      await begin();
-
       const startedAt = Date.now();
       const timeline = new TrialTimeline();
 
@@ -241,25 +252,35 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       let turnStartedAt = Date.now();
 
       try {
-        productSha = (await timeline.span('build', () => deployedBuild(target))).sha;
+        await timeline.span('admit', admit);
 
-        const opened = await timeline.span('open', () => openWorkspace(target, {
-          subject: `${task.id}-${String(input.trial)}`, mission: task.mission, model: input.model,
-        }));
+        const opened = await (async () => {
+          try {
+            productSha = (await timeline.span('build', () => deployedBuild(target))).sha;
 
-        session = opened;
-        say(`workspace ${opened.workspace} open`);
-        opened.onChunk = (type) => {
-          timeline.chunk(type);
+            const created = await timeline.span('open', () => openWorkspace(target, {
+              subject: `${task.id}-${String(input.trial)}`, mission: task.mission, model: input.model,
+            }));
 
-          if (type === 'finish-step') say(`turn ${String(turnNumber)}, step ${String(steps += 1)}`);
-          else if (type.startsWith('closed')) say(`the workspace socket ${type}`);
-        };
+            session = created;
+            say(`workspace ${created.workspace} open`);
+            created.onChunk = (type) => {
+              timeline.chunk(type);
 
-        const arm: EvalArm | undefined = ARMS.find((declared) => declared.id === input.arm);
+              if (type === 'finish-step') say(`turn ${String(turnNumber)}, step ${String(steps += 1)}`);
+              else if (type.startsWith('closed')) say(`the workspace socket ${type}`);
+            };
 
-        if (arm === undefined) throw new Error(`no arm is declared as ${input.arm}`);
-        await timeline.span('arm', () => arm.apply(opened));
+            const arm: EvalArm | undefined = ARMS.find((declared) => declared.id === input.arm);
+
+            if (arm === undefined) throw new Error(`no arm is declared as ${input.arm}`);
+            await timeline.span('arm', () => arm.apply(created));
+
+            return created;
+          } finally {
+            release();
+          }
+        })();
 
         for (const [index, turn] of task.turns.entries()) {
           if (signal?.aborted === true) throw new Error('the eval run was cancelled', { cause: signal.reason });
