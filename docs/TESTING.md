@@ -191,7 +191,7 @@ bun run evals                                  # every task, 10 trials each, all
 bun run evals evals/tasks/order-book.eval.ts   # one task
 KINU_EVAL_TRIALS=3 bun run evals               # a pilot
 bun run evals:ui                               # the report in the vitest-evals UI
-bun evals/scripts/compare.ts --candidate bench-artifacts/evals/results.json --out /tmp/cmp [--baseline <results.json>]
+bun evals/scripts/compare.ts --candidate <results.json> [--baseline <results.json>] --out /tmp/cmp   # two legs' reports
 bun evals/scripts/gate.ts [--digest <artifact digest>] [--gate]   # every task at once, unchanged results reused
 bun evals/scripts/timing.ts bench-artifacts/evals-<task>-<time> [--steps]   # where each trial's time went
 ```
@@ -214,7 +214,7 @@ A run needs `KINU_EVAL_WEB_IDENTITY` (production's `DEV_IDENTITY_SECRET`, in `.d
 
 **Comparison.** `evals/src/comparison.ts` compares two reports cohort by cohort: pass counts under a two-sided Fisher exact test, a verdict (`regressed` when any comparable task fell with p < 0.05, `improved`, `unchanged`, `inconclusive`), the failed checks with their first evidence, the most common tool error, and how the agent worked per model (steps, tokens, the share of tool calls that were `eval`). Cohorts are not compared across a change to `evals/` itself, a different task version, different trial counts, or infrastructure failures.
 
-**In CI.** `.github/workflows/evals.yml` runs after production takes a build (`bun run deploy --promote` dispatches it): every task against the build kinu.run serves, in one job, every trial at once, compared with the latest complete report of an earlier build it descends from. The job uploads the report and every trial's evidence, scrubbed like the report (`evals/scripts/scrub-evidence.ts`), for 30 days. The last job, `Verdict`, is what a promote reads: it succeeds only when the report is a complete baseline, a baseline was compared with it, and no cohort regressed (`evalGateVerdict` in `evals/src/comparison.ts`, which `compare.ts` writes to `verdict.json`), and otherwise fails naming why. The results comment and a Kinu workspace's "why the evals failed" go on the pull request that merged the deployed commit, or on the commit; earlier ones are deleted. The deployed commit has to be on GitHub.
+**In CI.** `.github/workflows/evals.yml` decides whether a candidate may be promoted. The deploy dispatches it with the build staging serves (`build`), and it runs every task, ten trials each, against two deployments at once, both with the candidate's own definitions: the candidate on staging.kinu.run and the baseline, the promoted build, on kinu.run. The same definitions, hour and provider conditions on both sides, so no report is stored between runs and an edit under `evals/` moves no baseline. The harness reads the promoted build's ledger without the row types only it still writes. Each leg uploads its report and every trial's evidence, scrubbed like the report (`evals/scripts/scrub-evidence.ts`), for 30 days. The last job, `Verdict`, is what a promote reads: it succeeds only when both legs are complete (`whyIncomplete`: every task of the definitions, trials 1 to N once each, no infrastructure failure, only the build planned for the leg), they were compared, and no cohort regressed (`evalGateVerdict` in `evals/src/comparison.ts`, which `compare.ts` writes to `verdict.json`), and otherwise fails naming why. The results comment and a Kinu workspace's "why the evals failed" go on the pull request that merged the deployed commit, or on the commit; earlier ones are deleted. The deployed commit has to be on GitHub.
 
 **Adding a task.** Copy the shape of an existing file. Prove the checker before any model runs: build a correct slate by hand and planted-defect variants, run the turn's `verify` against them on the deployment, and see the correct build pass every check and each defect fail exactly its own. Then run a 3-trial pilot and read the failed trajectories (`bun evals/scripts/trajectories.ts <results.json> <out.md> --failed`): change the prompt only where the agent's reading was defensible and the checker rejected it.
 
@@ -276,7 +276,7 @@ tests/
 evals/
 ├─ tasks/               (the eval suite: one `*.eval.ts` per task)
 ├─ src/                 (the framework: task, verifier, harness, session, comparison, report)
-└─ scripts/             (compare, validate, baseline, trajectories, diagnose, post-comment)
+└─ scripts/             (compare, validate, trajectories, diagnose, post-comment, gate, timing, scrub-evidence)
 bench/
 ├─ corpus/              (the seeded-defect corpus `scripts/bench.ts` measures; data, no suites)
 └─ harbor/, clbench/    (the external-benchmark adapters, Python)

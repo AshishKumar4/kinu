@@ -646,7 +646,26 @@ const RunPageSchema = v.variant('status', [
   v.object({ status: v.literal('end'), items: v.array(v.object({ runId: v.string() })) }),
 ]);
 
-const RunEventsSchema = v.array(RunEventSchema);
+/** Every ledger row type this harness reads. A row of another type is another build's (`LedgerPageSchema`). */
+const RUN_EVENT_TYPES: ReadonlySet<string> = new Set(RunEventSchema.options.map((option) => option.entries.type.literal));
+
+/** A ledger row as far as paging needs it: its type and its index. */
+const LedgerRowSchema = v.looseObject({ type: v.string(), eventIndex: v.number() });
+
+/**
+ * A page of a run's ledger, less the rows of a type this harness does not know: those are another build's. The eval
+ * verdict's baseline leg runs the promoted build, which can still write a type the candidate retired (2f660875cc
+ * writes `step_partial`). A row of a known type that does not parse is a broken contract, and fails the read.
+ */
+const LedgerPageSchema = v.pipe(
+  v.array(LedgerRowSchema),
+  v.transform((rows) => ({
+    rows: rows.length,
+    highest: rows.reduce((max, row) => Math.max(max, row.eventIndex), -1),
+    events: rows.filter((row) => RUN_EVENT_TYPES.has(row.type)),
+  })),
+  v.object({ rows: v.number(), highest: v.number(), events: v.array(RunEventSchema) }),
+);
 
 /** A turn frame's body is one AI SDK UI message chunk. */
 const ChunkTypeSchema = v.object({ type: v.string() });
@@ -1553,10 +1572,15 @@ export class KinuPublicSession {
 
       for await (const message of sseMessages(response.body)) {
         if (message.event === 'error') break;
-        const event = v.parse(RunEventSchema, JSON.parse(message.data));
+        const row = v.parse(LedgerRowSchema, JSON.parse(message.data));
 
-        if (event.eventIndex <= cursor) continue;
-        cursor = event.eventIndex;
+        if (row.eventIndex <= cursor) continue;
+        cursor = row.eventIndex;
+
+        // Another build's row type, as `LedgerPageSchema` leaves out of a page.
+        if (!RUN_EVENT_TYPES.has(row.type)) continue;
+        const event = v.parse(RunEventSchema, row);
+
         yield event;
 
         if (event.type === 'run_end') return;
@@ -1801,26 +1825,27 @@ export class KinuPublicSession {
       const page = await this.getJson(
         `/api/workspaces/${encodeURIComponent(this.workspace)}/runs/`
         + `${encodeURIComponent(runId)}/events?since=${String(since)}&limit=${String(EVENT_PAGE)}`,
-        RunEventsSchema,
+        LedgerPageSchema,
         `read the events of run ${runId}`,
       );
 
-      if (page.length === 0) break;
-      events.push(...page);
+      if (page.rows === 0) break;
+      events.push(...page.events);
       // The route's `since` is an INCLUSIVE lower bound (recorder.ts:169-171),
       // so the next read starts one past the highest index this one returned.
       // Advancing by `page.length` instead would re-read a run whose indices
-      // are not contiguous, and stall on one whose page ended mid-index.
-      const highest = page.reduce((max, event) => Math.max(max, event.eventIndex), since);
+      // are not contiguous, and stall on one whose page ended mid-index. Both
+      // count the rows the route sent, the ones left out included.
+      const highest = Math.max(page.highest, since);
 
-      if (page.length < EVENT_PAGE) break;
+      if (page.rows < EVENT_PAGE) break;
       since = highest + 1;
     }
 
     return events;
   }
 
-  private getJson<T>(path: string, schema: v.GenericSchema<T>, doing: string): Promise<T> {
+  private getJson<T>(path: string, schema: v.GenericSchema<unknown, T>, doing: string): Promise<T> {
     return this.boundary(`GET ${this.input.origin}${path.split('?')[0] ?? path}`, async () => {
       const response = await fetch(`${this.input.origin}${path}`, {
         headers: webHeaders(this.input.identity),

@@ -1500,11 +1500,12 @@ export const LADDER: readonly Gate[] = [
       + 'RPC and compares every answer with its own reference implementation of the contract, so '
       + 'any correct build passes, and reads what a person would: the files, the task board, each '
       + 'helper\'s transcript, and each preview address fetched with no credential. Ten trials per '
-      + 'task, all at once, compared with the latest complete report '
-      + 'of an earlier deployed build by a two-sided Fisher exact test (evals/src/comparison.ts), '
-      + 'with infrastructure failures and 429 waits reported apart from the agent\'s results.',
+      + 'task, all at once. In CI (.github/workflows/evals.yml) the candidate on staging and the '
+      + 'promoted build on kinu.run run at once under the candidate\'s definitions, compared by a '
+      + 'two-sided Fisher exact test (evals/src/comparison.ts), with infrastructure failures and '
+      + '429 waits reported apart from the agent\'s results; its Verdict job is what a promote reads.',
     blind: 'anything the tasks do not exercise, and a change smaller than ten trials can tell '
-      + 'apart from noise. Its subject is the build kinu.run serves, not this checkout: '
+      + 'apart from noise. Its subject is the build the origin serves, not this checkout: '
       + '`bun run deploy:preflight` is what says whether the two are the same.',
     inputs: { kind: 'live', why: 'drives the DEPLOYED product as the eval identity and spends live model turns.' },
   },
@@ -1515,13 +1516,14 @@ export const LADDER: readonly Gate[] = [
     seconds: 1,
     catches: 'the eval framework\'s own logic, credential-free: the Fisher exact test and the '
       + 'verdict it feeds, a comparison refused across changed definitions, task versions, trial '
-      + 'counts or infrastructure failures, a baseline refused when a trial is missing or a build '
-      + 'changed under it, a check that throws failing alone, a slate call the deployment could '
+      + 'counts or infrastructure failures, a leg refused when a task or trial is missing or it ran on '
+      + 'another build than planned, the verdict a promote reads, another build\'s ledger rows read '
+      + 'without the types it alone writes, a check that throws failing alone, a slate call the deployment could '
       + 'not carry failing the trial as infrastructure rather than a check, and the session '
       + 'client\'s frame and socket handling. Plus the preflight that refuses to measure a '
       + 'deployment serving another revision.',
     blind: 'anything a model does, and whether a task\'s checker is right about its task. That '
-      + 'is proved per task, before a baseline, against hand-written reference slates on the '
+      + 'is proved per task, before its first run, against hand-written reference slates on the '
       + 'deployment: a correct build passes every check and each planted defect fails its own.',
     inputs: AMBIENT_BY_NAME,
   },

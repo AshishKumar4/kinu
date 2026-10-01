@@ -19,7 +19,7 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import * as v from 'valibot';
-import { compareEvalResults, evalGateVerdict, renderEvalComparison, whyNotABaseline } from '../src/comparison';
+import { compareEvalResults, evalGateVerdict, renderEvalComparison, whyIncomplete } from '../src/comparison';
 import { DEFINITION_PATHS, EXERCISED_PATHS, evalCommit, evalMatrix } from '../src/config';
 import { ARMS, deployedBuild, resolveEvalTarget } from '../src/target';
 import { diffBetween, ensureCommit, git } from './git';
@@ -163,7 +163,7 @@ async function main(): Promise<number> {
 
     await runTask(task, out, env);
     const report = readFileSync(out, 'utf8');
-    const problem = whyNotABaseline(report, matrix.trials);
+    const problem = whyIncomplete(report, { trials: matrix.trials });
 
     reports.set(task, report);
 
@@ -172,7 +172,7 @@ async function main(): Promise<number> {
   }));
 
   const joined = joinReports(tasks, reports);
-  const problem = whyNotABaseline(joined, matrix.trials);
+  const problem = whyIncomplete(joined, { trials: matrix.trials });
 
   writeFileSync(join(run, 'results.json'), joined);
 
@@ -194,7 +194,8 @@ async function main(): Promise<number> {
     },
   );
 
-  const verdict = evalGateVerdict(comparison, problem);
+  // A stored baseline was complete when it was stored.
+  const verdict = evalGateVerdict(comparison, { baseline: null, candidate: problem });
 
   writeFileSync(join(run, 'comparison.json'), `${JSON.stringify(comparison, null, 2)}\n`);
   writeFileSync(join(run, 'comparison.md'), `${renderEvalComparison(comparison)}\n`);

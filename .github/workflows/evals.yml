@@ -1,15 +1,17 @@
 name: Evals
 
-# Measures the build kinu.run is serving: every task in evals/tasks, ten trials each, run as the
-# eval-service identity against production itself, so a pull request cannot be measured before it
-# ships; the comparison is deploy to deploy. scripts/deploy.sh dispatches this after a promotion,
-# and anyone with write access can dispatch it by hand.
+# Whether a candidate build may be promoted. Every task in evals/tasks, ten trials each, runs as the
+# eval-service identity against two deployments at once, both legs with the candidate's own task
+# definitions: the candidate (staging.kinu.run, serving the build to promote) and the baseline
+# (kinu.run, serving the promoted build). The same definitions, the same hour and the same provider
+# conditions on both sides, so no report is stored between runs and an edit to the evals moves no
+# baseline. The last job, Verdict, is what a promote reads (scripts/promote.ts): it succeeds only
+# when both legs are complete reports and no cohort regressed (evalGateVerdict). scripts/deploy.sh
+# dispatches this with the build staging serves; anyone with write access can dispatch it by hand.
 #
-# The candidate is the deployed build. The baseline is the latest complete report of an earlier
-# deployed build that is an ancestor of it, not always the previous deploy: the next deploy's run
-# cancels one still in flight. The results comment goes on the pull request that merged the
-# deployed commit, else on the commit itself, and a Kinu workspace then posts why the evals failed.
-# Earlier comments of either kind on the same pull request or commit are deleted first.
+# The results comment goes on the pull request that merged the candidate's commit, else on the
+# commit itself, and a Kinu workspace then posts why the evals failed. Earlier comments of either
+# kind on the same pull request or commit are deleted first.
 #
 # The repository is public. Trials run on eval-service workspaces with seeded data only, and every
 # string a trial produced is scrubbed (evals/src/redact.ts) before it is stored or posted.
@@ -17,13 +19,13 @@ name: Evals
 on:
   workflow_dispatch:
     inputs:
-      baseline:
-        description: 'Baseline build sha. Blank: the latest complete report of an ancestor build.'
-        required: false
+      build:
+        description: 'The build staging serves, as staging.kinu.run/api/health names it: the candidate.'
+        required: true
 
 permissions: {}
 
-# A newer build's run cancels an older one's: its trials would see the deployment change under them.
+# A newer candidate's run cancels an older one's: staging serves one build at a time.
 concurrency:
   group: evals
   cancel-in-progress: true
@@ -36,83 +38,52 @@ jobs:
     name: Plan
     runs-on: ubuntu-latest
     permissions:
-      actions: read
       contents: read
     outputs:
-      sha: ${{ steps.build.outputs.sha }}
-      baseline-sha: ${{ steps.baseline.outputs.sha }}
-      baseline-artifact: ${{ steps.baseline.outputs.artifact-id }}
+      sha: ${{ steps.builds.outputs.sha }}
+      candidate: ${{ steps.builds.outputs.candidate }}
+      baseline: ${{ steps.builds.outputs.baseline }}
     steps:
-      - name: Read the deployed build
-        id: build
-        run: |
-          sha=$(curl -fsS https://kinu.run/api/health | jq -r '.build.sha // empty')
-          if [[ ! "$sha" =~ ^[0-9a-f]{7,40}$ ]]; then
-            echo "::error::kinu.run/api/health names no build sha"
-            exit 1
-          fi
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-
-      # A deploy publishes the local checkout; the commit is only here once someone pushes it.
-      - name: Check the build is on GitHub
+      # Each leg's build as its deployment names it, and the candidate's full commit, whose definitions
+      # both legs run. A deploy publishes the local checkout; a commit is only here once someone pushes it.
+      - name: Read both deployments' builds
+        id: builds
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          SHA: ${{ steps.build.outputs.sha }}
+          BUILD: ${{ inputs.build }}
         run: |
-          if ! gh api "repos/$GH_REPO/commits/$SHA" --silent; then
-            echo "::error::kinu.run serves build $SHA, which is not on GitHub: push it, then dispatch again"
+          serving() {
+            local sha
+            sha=$(curl -fsS "$1/api/health" | jq -r '.build.sha // empty')
+            if [[ ! "$sha" =~ ^[0-9a-f]{7,40}$ ]]; then
+              echo "::error::$1/api/health names no build sha" >&2
+              return 1
+            fi
+            echo "$sha"
+          }
+          candidate=$(serving https://staging.kinu.run)
+          baseline=$(serving https://kinu.run)
+          if [[ "$candidate" != "$BUILD"* && "$BUILD" != "$candidate"* ]]; then
+            echo "::error::staging.kinu.run serves $candidate, not the build $BUILD this run was dispatched to measure"
             exit 1
           fi
-
-      # The deployed commit's own tasks and harness: what was deployed is what is measured.
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.build.outputs.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-
-      # Stored complete reports are artifacts named kinu-evals-<sha>-<trials>-per-task.
-      - name: Find the baseline
-        id: baseline
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          CANDIDATE: ${{ steps.build.outputs.sha }}
-          REQUESTED: ${{ inputs.baseline }}
-        run: |
-          stored=$(gh api --paginate "repos/$GH_REPO/actions/artifacts?per_page=100" \
-            --jq ".artifacts[] | select(.expired == false) | select(.name | test(\"^kinu-evals-[0-9a-f]+-${EVAL_TRIALS}-per-task$\")) | [.created_at, .id, .name] | @tsv" |
-            sort -r)
-          mapfile -t shas < <(cut -f3 <<<"$stored" | sed -E "s/^kinu-evals-([0-9a-f]+)-.*/\1/" | awk 'NF && !seen[$0]++')
-          if [[ -n "$REQUESTED" ]]; then
-            baseline=$(printf '%s\n' "${shas[@]}" | grep -x "$REQUESTED" || true)
-            if [[ -z "$baseline" ]]; then
-              echo "::error::no complete report is stored for build $REQUESTED"
+          for leg in candidate baseline; do
+            if ! full=$(gh api "repos/$GH_REPO/commits/${!leg}" --jq .sha); then
+              echo "::error::the $leg build ${!leg} is not on GitHub: push it, then dispatch again"
               exit 1
             fi
-          else
-            baseline=$(bun evals/scripts/baseline.ts "$CANDIDATE" "${shas[@]}")
-          fi
-          if [[ -n "$baseline" ]]; then
-            artifact=$(awk -F'\t' -v name="kinu-evals-$baseline-${EVAL_TRIALS}-per-task" '$3 == name { print $2; exit }' <<<"$stored")
-            echo "sha=$baseline" >> "$GITHUB_OUTPUT"
-            echo "artifact-id=$artifact" >> "$GITHUB_OUTPUT"
-            echo "Baseline: build $baseline (artifact $artifact)"
-          else
-            echo "No stored report of an earlier build: this run stands alone and becomes the first baseline."
-          fi
+            if [[ $leg == candidate ]]; then echo "sha=$full" >> "$GITHUB_OUTPUT"; fi
+          done
+          echo "candidate=$candidate" >> "$GITHUB_OUTPUT"
+          echo "baseline=$baseline" >> "$GITHUB_OUTPUT"
+          echo "Candidate: staging.kinu.run serves $candidate. Baseline: kinu.run serves $baseline." | tee -a "$GITHUB_STEP_SUMMARY"
 
-  # Every task, and every trial of it, at once in one process (evals/vitest.config.ts): a trial waits on
-  # the deployment and its model, so the job takes as long as the slowest trial, minutes on the default
-  # models (evals/src/config.ts).
+  # Both legs at once, each in one process holding every task and every trial at once
+  # (evals/vitest.config.ts): a trial waits on its deployment and its model, so a leg takes as long as
+  # its slowest trial. Each leg holds only its own deployment's eval identity.
   evals:
-    name: Evals
+    name: Evals (${{ matrix.leg }})
     needs: plan
     runs-on: ubuntu-latest
     # No timeout-minutes: a trial ends when the deployment says its turns ended, never on a clock
@@ -120,6 +91,14 @@ jobs:
     environment: eval
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: candidate
+            origin: https://staging.kinu.run
+          - leg: baseline
+            origin: https://kinu.run
     steps:
       - uses: actions/checkout@v4
         with:
@@ -134,46 +113,26 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # A failed trial is data, so the step goes on to upload; a report missing trials is refused
-      # by validate.ts below.
-      - name: Run every task
+      # A failed trial is data, so the step goes on to upload; compare.ts names a leg that is not a
+      # complete report, and the verdict fails on it.
+      - name: Run every task against ${{ matrix.origin }}
         continue-on-error: true
         env:
-          KINU_EVAL_WEB_IDENTITY: ${{ secrets.KINU_EVAL_WEB_IDENTITY }}
+          KINU_EVAL_ORIGIN: ${{ matrix.origin }}
+          KINU_EVAL_WEB_IDENTITY: ${{ matrix.leg == 'baseline' && secrets.KINU_EVAL_WEB_IDENTITY || '' }}
+          KINU_EVAL_STAGING_WEB_IDENTITY: ${{ matrix.leg == 'candidate' && secrets.KINU_EVAL_STAGING_WEB_IDENTITY || '' }}
           KINU_EVAL_TRIALS: ${{ env.EVAL_TRIALS }}
           KINU_EVAL_COMMIT: ${{ needs.plan.outputs.sha }}
         run: bun run evals
 
-      # Every task file once: a task missing from the report would otherwise read as removed.
-      - name: Check every task ran
-        run: |
-          expected=$(find evals/tasks -name '*.eval.ts' | sort | jq -Rsc 'split("\n") | map(select(. != ""))')
-          actual=$(jq -c '[.testResults[].name | sub("^.*/evals/tasks/"; "evals/tasks/")] | sort' bench-artifacts/evals/results.json)
-          if [[ "$actual" != "$expected" ]]; then
-            echo "::error::expected task files $expected, got $actual"
-            exit 1
-          fi
-
-      # Only a complete, infrastructure-clean report becomes a baseline. An incomplete one is still
-      # compared and posted, with its infrastructure failures named.
-      - name: Check the report is a complete baseline
-        id: complete
+      - name: Summarize the report
         continue-on-error: true
         run: bun evals/scripts/validate.ts bench-artifacts/evals/results.json --trials "$EVAL_TRIALS" | tee -a "$GITHUB_STEP_SUMMARY"
-
-      - name: Store the baseline for build ${{ needs.plan.outputs.sha }}
-        if: steps.complete.outcome == 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: kinu-evals-${{ needs.plan.outputs.sha }}-${{ env.EVAL_TRIALS }}-per-task
-          path: bench-artifacts/evals/results.json
-          if-no-files-found: error
-          retention-days: 90
 
       - name: Upload the report
         uses: actions/upload-artifact@v4
         with:
-          name: kinu-evals-results
+          name: kinu-evals-results-${{ matrix.leg }}
           path: bench-artifacts/evals/results.json
           if-no-files-found: error
           retention-days: 30
@@ -188,18 +147,19 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: kinu-evals-evidence
+          name: kinu-evals-evidence-${{ matrix.leg }}
           path: bench-artifacts/evals-*/
           if-no-files-found: error
           retention-days: 30
 
+  # Runs whatever the legs' jobs ended: a leg with no report, or an incomplete one, is named in the
+  # verdict rather than skipping it.
   compare:
     name: Compare
     needs: [plan, evals]
-    if: ${{ !cancelled() && needs.evals.result == 'success' }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     permissions:
-      actions: read
       contents: read
     steps:
       - uses: actions/checkout@v4
@@ -216,28 +176,27 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Download the report
+      - name: Download the candidate's report
         uses: actions/download-artifact@v4
         with:
-          name: kinu-evals-results
+          name: kinu-evals-results-candidate
           path: artifacts/candidate
 
-      - name: Download the baseline
-        if: needs.plan.outputs.baseline-artifact != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          ARTIFACT_ID: ${{ needs.plan.outputs.baseline-artifact }}
-        run: |
-          mkdir -p artifacts/baseline
-          gh api "repos/$GH_REPO/actions/artifacts/$ARTIFACT_ID/zip" > "$RUNNER_TEMP/baseline.zip"
-          unzip -q "$RUNNER_TEMP/baseline.zip" -d artifacts/baseline
+      - name: Download the baseline's report
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: kinu-evals-results-baseline
+          path: artifacts/baseline
 
-      - name: Compare with the baseline
+      - name: Compare the legs
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          CANDIDATE: ${{ needs.plan.outputs.candidate }}
+          BASELINE: ${{ needs.plan.outputs.baseline }}
         run: |
-          args=(--candidate artifacts/candidate/results.json --out artifacts/comparison --trials "$EVAL_TRIALS")
+          args=(--candidate artifacts/candidate/results.json --candidate-build "$CANDIDATE" --baseline-build "$BASELINE"
+            --out artifacts/comparison --trials "$EVAL_TRIALS")
           if [[ -f artifacts/baseline/results.json ]]; then args+=(--baseline artifacts/baseline/results.json); fi
           bun evals/scripts/compare.ts "${args[@]}"
           bun evals/scripts/trajectories.ts artifacts/candidate/results.json artifacts/comparison/trajectories.md
@@ -257,16 +216,15 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  # What a promote reads: it finds this job by its name, `Verdict`, and requires it completed with success. It
-  # succeeds only when the report is a complete baseline, a baseline was compared with it, and no cohort regressed
-  # (evalGateVerdict, written by compare.ts); anything else fails it, saying why.
+  # What a promote reads: it finds this job by its name, `Verdict`, and requires it completed with
+  # success. It succeeds only when both legs are complete reports, they were compared, and no cohort
+  # regressed (evalGateVerdict, written by compare.ts); anything else fails it, saying why.
   verdict:
     name: Verdict
     needs: [plan, evals, compare]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    permissions:
-      actions: read
+    permissions: {}
     steps:
       - name: Download the comparison
         if: needs.compare.result == 'success'
@@ -281,7 +239,7 @@ jobs:
           COMPARE: ${{ needs.compare.result }}
         run: |
           if [[ "$COMPARE" != success ]]; then
-            echo "::error::No verdict: the eval job ended $EVALS and the comparison $COMPARE, so no report was compared"
+            echo "::error::No verdict: the legs' jobs ended $EVALS and the comparison $COMPARE, so the legs were not compared"
             exit 1
           fi
           reason=$(jq -r .reason artifacts/comparison/verdict.json)
@@ -318,10 +276,10 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: Download the report
+      - name: Download the candidate's report
         uses: actions/download-artifact@v4
         with:
-          name: kinu-evals-results
+          name: kinu-evals-results-candidate
           path: artifacts/candidate
 
       - name: Download the comparison
