@@ -4,8 +4,8 @@
  */
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import {
-  ActorSession, ADVISOR_HEADER, BACKGROUND_FIBER_PREFIX, CHAT_SESSION_ID, PendingSendStore, PROGRAMMATIC_MESSAGE_ID_PREFIX,
-  TERMINAL_EFFECT_RETRY_CEILING_MS, type JsonValue,
+  ActorSession, ADVISOR_HEADER, BACKGROUND_FIBER_PREFIX, CHAT_SESSION_ID, PROGRAMMATIC_MESSAGE_ID_PREFIX,
+  sandboxIdForWorkspace, TERMINAL_EFFECT_RETRY_CEILING_MS, type JsonValue,
 } from '@kinu.run/core';
 import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 import {
@@ -15,7 +15,6 @@ import {
 } from './helpers/actor-harness';
 import { answeringGateway, chatCompletion, stubAiBinding } from './helpers/platform-gateway';
 import { joinHarnessFibers } from './helpers/agents-sdk';
-import { makeSql } from '../../core/tests/helpers';
 import {
   SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
 } from '../src/sandbox-lifecycle';
@@ -467,37 +466,21 @@ describe('a sandbox lifecycle failure', () => {
   });
 });
 
-describe('whether the container is in use', () => {
-  test('idle means idle', async () => {
-    const { agent } = orchestratorHarness();
-    expect(await agent.sandboxInUse()).toBe(false);
-  });
+// Devbox D56: a box decides its own rest. The workspace's work reaches it as use, told as a turn's claim moves,
+// so a box whose workspace is idle never calls it (its old once-a-minute ask rebuilt the workspace each time).
+describe("the workspace's work reaches its box as use", () => {
+  test('a turn tells its box when it is admitted and when it settles, and an idle workspace tells it nothing', async () => {
+    const boxesTold: string[] = [];
+    const harness = orchestratorHarness(undefined, { container: true, boxesTold });
+    const idle = [...boxesTold];
+    const turns = chatSessionTurns(harness.agent);
 
-  test('work the root owes itself does not hold the container: an admitted send waits for the root wake', async () => {
-    // warm-forge-4d6acc02 kept its container running 30+ h on 2026-09-25/26 while its root owed work it
-    // could not finish (unfinished arms), and every beat woke the root to ask.
-    const { agent, db } = orchestratorHarness();
-    const sends = new PendingSendStore(makeSql(db), workspaceMainActor(db).actorId);
-    sends.reserve({ id: 'accepted-before-reset', turnId: null, mode: 'build', text: 'inspect the container' });
+    await turns.prepare({ messages: [{ role: 'user', content: 'list the workspace' }] });
+    const admitted = boxesTold.length;
+    await turns.settle({ messageId: 'answer', text: 'listed', requestId: 'response-answer' });
 
-    expect(await agent.sandboxInUse()).toBe(false);
-  });
-
-  test('a running job row nothing drives (deferred, or left by a dead activation) does not', async () => {
-    const { agent, db } = orchestratorHarness();
-    jobsOver(db).create({
-      // Started by an earlier activation: nothing in this one drives it.
-      id: 'bgjob-orphan', kind: 'shell', workMode: 'build',
-      input: JSON.stringify({ command: 'npm test' }), now: Date.now() - 60_000, label: 'npm test',
-    });
-
-    expect(await agent.sandboxInUse()).toBe(false);
-  });
-
-  test('a live turn counts — it is the most likely caller of a container tool', async () => {
-    const { agent } = orchestratorHarness();
-    await agent.declareTurnInFlight(true);
-    expect(await agent.sandboxInUse()).toBe(true);
+    expect({ idle, admitted, settled: boxesTold.length > admitted, boxes: [...new Set(boxesTold)] })
+      .toEqual({ idle: [], admitted: 1, settled: true, boxes: [sandboxIdForWorkspace(harness.agent.name)] });
   });
 });
 

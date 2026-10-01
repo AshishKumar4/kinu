@@ -890,7 +890,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       pricing: (spec) => this.modelCatalog.pricing(spec),
       hostedModel: (actor) => this.hostedModelOf(actor),
       broadcast: (actorId, event) => { this.broadcastToActor(actorId, JSON.stringify({ ...event, actorId })); },
-      turnClaimChanged: () => { this.overviewChanged(); },
+      turnClaimChanged: () => {
+        this.overviewChanged();
+        this.sandboxUsed();
+      },
       enqueueTurn: (actor, input) => this.enqueueHostedTurn(actor, input),
       // Use the reference the host issued, never one rebuilt from an id: the root's parent is
       // null, and a synthesized reference makes `hosted()` refuse the root's liveness read.
@@ -3096,17 +3099,13 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    */
   private readonly activationStartedAt = Date.now();
 
-  /**
-   * Whether the workspace container is in use, asked by its box before it may rest: a live turn of
-   * any actor here, or a job this activation's runner drives, re-drives included. Work the root owes
-   * itself (sends, claims, fibers to re-drive) is its own wake's business; a process an earlier
-   * activation left running is the box's own check.
-   */
-  override async sandboxInUse(): Promise<boolean> {
-    if (this._inFlight || this.jobRunner.inFlight > 0) return true;
-    const host = this.actorHost();
+  /** A turn's claim moving or a job settling is the box's use too, so it rests only once neither the
+   *  workspace nor a caller has used it for its idle window (devbox D56); the box never asks. */
+  protected override sandboxUsed(): void {
+    const namespace = this.env.KinuDevbox;
 
-    return host.list().some((reference) => this.hostedTurnInFlight(reference));
+    if (namespace === undefined) return;
+    this.detachOwned(async () => { await namespace.getByName(sandboxIdForWorkspace(this.name)).noteHostWork(); });
   }
 
   /**
@@ -4951,6 +4950,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected override turnClaimChanged(): void {
     this.broadcastToActor(null, this.turnClaimFrame());
     this.overviewChanged();
+    this.sandboxUsed();
   }
 
   protected override turnClaimFrame(): string {

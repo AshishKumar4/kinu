@@ -2740,6 +2740,47 @@ in the tarball); the slow whole read after a 10 GiB restore (93 MiB/s against
 404 after a snapshot wake, cause not traced); and these figures with fewer
 boxes at once.
 
+D56. The box decides its own rest; the host tells it when its work moves
+(2026-10-01). This replaces D35's third hold reason, the root's
+`sandboxInUse`, and keeps the other two. While a box ran, every beat with no
+work of its own asked the workspace whether it was busy. The answer was kept
+for one quiet-confirm window, but only in the box object's memory, so a box
+object that restarted asked again. On staging (`f62dfcb9`,
+eval-site-preview-5, 01:00 to 02:47Z) each ask rebuilt the idle workspace
+once a minute, and its runtime read the owner's device status as it did.
+
+Two causes. The rule asked across objects on every beat for something the
+box could be told once. And nothing counted the box's calls to its host
+beat by beat, so a cache that lived in one object's memory passed every test
+that kept one object.
+
+Now `Devbox.noteHostWork()` stamps the box's use, as a caller does, when its
+container runs, and does nothing when it is stopped. Kinu's workspace calls
+it whenever a turn's claim moves (admitted or settled, the root's and every
+hosted actor's) and when a background job settles. The beat reads only the
+box's own record. `hasBackgroundWork`, its in-memory answer and the
+workspace's `sandboxInUse` RPC are gone, and W2's startless exception with
+them. Its first and second hold reasons stand: own lanes, and a process the
+box started that is still running.
+
+What changes: a box now rests `idleMs + quietConfirmMs` (40 min) after the
+last use by a caller or by the workspace's work. A turn that runs longer than
+that without touching the sandbox no longer holds it; its next sandbox call
+wakes the box. Work inside the container is unaffected, because a running
+process still holds the box (D35).
+
+Measured both shapes in the harness. On the old shape, a running box used a
+minute before each beat, with a fresh box object per beat, asked its idle
+workspace 5 times in 5 beats; the new shape has no call to make. A turn told
+its box nothing before (0 notices) and tells it on admission and settlement
+now; an idle workspace tells it nothing (`bench-artifacts/host-push/red.log`).
+Tests: `cf-backend/tests/unit-eviction-durability.test.ts` ("the workspace's
+work reaches its box as use") and `devbox/tests/terminal-activity.test.ts`
+("a host's work is the box's use": the hold depends on the host's word, and
+without it the box quiesces a window early). Deployed re-proof owed: no
+`sandboxInUse` RPC to a workspace in Workers Logs, and boxes resting 40 min
+after their last use.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q
