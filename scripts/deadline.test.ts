@@ -5,6 +5,7 @@ import { describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { tolerate } from '@kinu.run/core/obs';
+import { scratchPath } from '@kinu.run/test-utils';
 import { DEADLINE_EXIT_CODE, deadlineLine, leftoverLine, runUnderDeadline } from './deadline';
 import { GATE_DEADLINE_SECONDS, LADDER, scriptDeadline } from './ladder';
 
@@ -111,9 +112,13 @@ describe('a run under a deadline', () => {
     expect(outcome.leftovers.map((line) => line.replace(/^\d+ /u, ''))).toEqual(['/bin/sleep 3600']);
   });
 
+  // The shell exits only once the holder has dropped the mark: its fork, still marked, must not be what the exit sees.
   test('a holder that left the run\'s session and dropped its mark is cut off at the bound, not waited for', async () => {
+    const dropped = scratchPath('deadline-escape', 'dropped');
+
     const outcome = await runUnderDeadline({
-      argv: ['sh', '-c', 'setsid env -i /bin/sleep 30 & exit 0'], seconds: 1, label: 'escaped', stdio: 'pipe',
+      argv: ['sh', '-c', 'mkfifo "$0" && setsid env -i sh -c \'echo > "$0"; exec /bin/sleep 30\' "$0" & read _ < "$0"; exit 0', dropped],
+      seconds: 1, label: 'escaped', stdio: 'pipe',
     });
 
     expect(outcome).toMatchObject({ killed: true, exitCode: DEADLINE_EXIT_CODE });
