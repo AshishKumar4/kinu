@@ -70,6 +70,19 @@ describe('a run under a deadline', () => {
     expect(failed.stderr).not.toContain('KILLED');
   });
 
+  // A deploy's live status reads each row's last line as it comes (scripts/deploy-live.ts).
+  test('a run\'s output is told as it arrives, with the stream it came on, and then its end', async () => {
+    const told: string[] = [];
+
+    const outcome = await runUnderDeadline({
+      argv: [process.execPath, '-e', 'console.log("to stdout"); console.error("to stderr")'], seconds: 30, label: 'told', stdio: 'pipe',
+      status: { output: (text, from) => { told.push(`${from}: ${text}`); }, ended: () => { told.push('ended'); } },
+    });
+
+    expect(outcome.exitCode).toBe(0);
+    expect([told.slice(0, -1).sort(), told.at(-1)]).toEqual([['stderr: to stderr\n', 'stdout: to stdout\n'], 'ended']);
+  });
+
   // A deploy phase's lone row: its output reaches the terminal as it comes, and the deploy's report still quotes it.
   test('a tee\'d run passes its output on as it comes and keeps it too', () => {
     const probe = `import { runUnderDeadline } from ${JSON.stringify(join(import.meta.dir, 'deadline.ts'))};\n`
@@ -198,7 +211,8 @@ function watchRow(name: string): WatchedRow {
 function runner(rows: readonly (readonly string[])[]) {
   const probe = `import { runUnderDeadline } from ${JSON.stringify(join(import.meta.dir, 'deadline.ts'))};\n`
     + `const rows = ${JSON.stringify(rows)};\n`
-    + 'const runs = rows.map((argv, index) => runUnderDeadline({ argv, seconds: 60, label: `row ${String(index)}`, stdio: \'pipe\' }));\n'
+    + 'const ended = (index) => () => { require(\'node:fs\').writeSync(1, `ENDED row ${String(index)}\\n`); };\n'
+    + 'const runs = rows.map((argv, index) => runUnderDeadline({ argv, seconds: 60, label: `row ${String(index)}`, stdio: \'pipe\', status: { output: () => undefined, ended: ended(index) } }));\n'
     + 'process.on(\'SIGINT\', () => { runUnderDeadline({ argv: [process.execPath, \'-e\', \'console.log("started after the cancel")\'], seconds: 60, label: \'late\', stdio: \'tee\' }).catch(() => undefined); });\n'
     + 'console.log(`RETURNED ${JSON.stringify((await Promise.all(runs)).map((outcome) => outcome.exitCode))}`);\n';
 
@@ -217,8 +231,10 @@ describe("a runner that is cancelled, as a person's Ctrl-C or a stop of its serv
       process.kill(-running.pid, 'SIGINT');
       const [code, stdout, stderr] = await Promise.all([running.exited, new Response(running.stdout).text(), new Response(running.stderr).text()]);
 
-      // Every run, not the first one alone: a wave runs many, and each is a session no Ctrl-C reaches.
-      expect([code, stdout.split('\n').filter((line) => line.startsWith('recorded')).sort()], stderr).toEqual([130, ['recorded 0', 'recorded 1']]);
+      // Every run, not the first one alone: a wave runs many, and each is a session no Ctrl-C reaches. Each end is told
+      // before the exit, so a deploy's live status does not name a run that ended in its grace as still running.
+      expect([code, stdout.split('\n').filter((line) => /^(recorded|ENDED)/u.test(line)).sort()], stderr)
+        .toEqual([130, ['ENDED row 0', 'ENDED row 1', 'recorded 0', 'recorded 1']]);
       expect(stdout).not.toContain('RETURNED');
       expect(stdout).not.toContain('started after the cancel');
       await Promise.all(rows.map((row) => row.ended));
@@ -227,6 +243,7 @@ describe("a runner that is cancelled, as a person's Ctrl-C or a stop of its serv
     }
   });
 
+  // Its end is never told: a deploy's live status names it as still running when the runner exits.
   test('kills a run that does not end on SIGTERM once its grace has passed, and still exits', async () => {
     const row = watchRow('row-stubborn');
     const running = runner([cancellable(row.fifo, "console.log('ignored SIGTERM');")]);

@@ -84,6 +84,15 @@ export interface DeadlineRun {
    *  process's; the ladder passes a derived gate exactly the names its cache
    *  key hashes (`gateEnvironment` in `ladder-cache.ts`). */
   readonly env?: Record<string, string>;
+  /** Told the run's output as it arrives and the run's end: a deploy's live status (`deploy-live.ts`). */
+  readonly status?: RunStatus;
+}
+
+/** What a run's watcher is told: each piece of its output as it arrives, with the stream it came on, and its end. The
+ *  end is told before a cancel's exit waits on it, so what is still running then is what the cancel killed. */
+export interface RunStatus {
+  readonly output: (text: string, from: 'stdout' | 'stderr') => void;
+  readonly ended: () => void;
 }
 
 export interface DeadlineOutcome {
@@ -336,14 +345,18 @@ async function watched(run: DeadlineRun): Promise<DeadlineOutcome> {
 
   const readers = [child.stdout.getReader(), child.stderr.getReader()] as const;
 
-  const pump = async (reader: ReadableStreamDefaultReader<Uint8Array>, onward: NodeJS.WriteStream): Promise<string> => {
+  const decoding = stdio !== 'inherit' || run.status !== undefined;
+
+  const pump = async (reader: ReadableStreamDefaultReader<Uint8Array>, onward: NodeJS.WriteStream, from: 'stdout' | 'stderr'): Promise<string> => {
     const decoder = new TextDecoder();
     let text = '';
 
     for (let read = await reader.read(); !read.done; read = await reader.read()) {
       heard();
+      const piece = decoding ? decoder.decode(read.value, { stream: true }) : '';
 
-      if (stdio !== 'inherit') text += decoder.decode(read.value, { stream: true });
+      if (stdio !== 'inherit') text += piece;
+      run.status?.output(piece, from);
 
       // A cancelled run's piped output is passed on too: what it says while it ends is what it was doing.
       if (stdio !== 'pipe' || cancelledBy !== null) await writeFully(onward, read.value);
@@ -352,7 +365,7 @@ async function watched(run: DeadlineRun): Promise<DeadlineOutcome> {
     return text + decoder.decode();
   };
 
-  const output = Promise.all([pump(readers[0], process.stdout), pump(readers[1], process.stderr)]);
+  const output = Promise.all([pump(readers[0], process.stdout, 'stdout'), pump(readers[1], process.stderr, 'stderr')]);
   let killed = false;
   // The leftover search waits out a process caught inside its exec, which is this runner's time, not the run's:
   // the bound is not judged while it runs, and after it counts from its end.
@@ -397,6 +410,7 @@ async function watched(run: DeadlineRun): Promise<DeadlineOutcome> {
   clearInterval(watchdog);
   rmSync(noticeDir, { recursive: true, force: true });
   release();
+  run.status?.ended();
   done.resolve();
   longestSilence = Math.max(longestSilence, performance.now() - lastOutput);
   const seconds = (performance.now() - started) / 1000;
