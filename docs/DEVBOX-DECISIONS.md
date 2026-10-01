@@ -2632,159 +2632,78 @@ the crash after each round restored that round's new state, 5 of 5
 
 Image `ea5d88ee…`, sync.js `cf631788…`.
 
-D55. Plan, a hypothesis until built: the whole filesystem in the platform's
-snapshot, with a full copy in R2 behind it (2026-10-01). The owner's answer
-to D53: no compromise on performance for big workspaces, and the whole
-filesystem kept where possible, so installed packages and setup survive.
-Measured for this entry on Medium, `durable_object` policy, image
-`ea5d88ee…`, internet disabled except for package installs, every Worker,
-container, bucket and registry tag deleted after
-(`bench-artifacts/storage-designs/d55.ts`; runs `d5510010444`,
-`d5510010451sc`, `d5510010504dc`; the chain's `sbs10010452ndab2` and
-`sbs10010452ndab10`). The 2 and 10 GiB runs had all twenty boxes running at
-once, which loaded the store and is the likely cause of the chain's two
-publish timeouts.
+D55. Full-disk snapshots against today's chain, head to head under R1 and R2
+(2026-10-01; the measurements are in progress). The owner's refinement of
+D53: DirectoryBackup is out, because its fallback downloads everything
+(72 to 401 s at 10 to 17.5 GiB, and the 30 s gate cut it off 10 of 10), which
+breaks R2. Two candidates remain:
+- The chain alone, with its 10 GiB save defect fixed.
+- Snapshot-first, with the chain as its only fallback.
 
-What a box changes. The root is a btrfs subvolume on a 20 GB device
-(`/dev/vdc[/rootfs] btrfs compress=zstd:3`; 278 MB used at start). A typical
-setup (`apt-get install build-essential python3-pip python3-venv`, `npm i -g
-typescript`, `pip install requests`, one dotfile) changed 5,519 files
-outside `/workspace` by ctime; tar and zstd pack them to 110.5 MB in 1.4 s.
-Restored and applied onto a fresh container of the same image, they took
-0.8 to 1.6 s plus 2.8 to 3.1 s, and gcc compiled and ran, tsc and `requests`
-loaded, the dotfile was there (n=5). Selected by mtime, the same delta was
-1,201 files and 16.4 MB and gcc was missing, since dpkg keeps each file's
-package mtime. `snapshotContainer()` holds all of it already: it saves the
-whole subvolume, and its `size` is the blocks changed since the parent. The
-chain cannot serve the root lazily: the root is the platform's mount, not an
-overlay the chain owns.
+Snapshots replace the chain only if they are much more performant. The bar
+below was set and committed before any head-to-head figure was taken. It
+compares medians of at least 5. Snapshot-first replaces the chain only if
+all of these hold:
+1. At 10 GiB and at 17.5 GiB of random data, with 1 and with 5 boxes at
+   once: wake to first exec, the first 256 MiB read and the whole read are
+   each at least 3x faster than the chain's.
+2. Its checkpoint, a snapshot, is no slower than the chain's checkpoint after
+   a small edit and after 100 MiB, at every size; its base save is no slower
+   than the chain's base save. Its quiesce also writes the chain, so the
+   fallback is never older than the last quiesce; that cost is reported
+   beside it.
+3. On the realistic workspace (a clone of `microsoft/vscode` with a Next.js
+   app's `node_modules`), no figure in 1 or 2 reverses.
+4. With 20 boxes at once, its slowest tenth of wakes is no slower than the
+   chain's slowest tenth.
+5. Each snapshot failure costs no more than detecting it plus the chain's
+   own wake, and none loses work silently. The failures are a slow
+   placement, a lost id, a start that never runs, and a missing or expired
+   snapshot.
+If any of these fails, the chain stays (R3).
 
-| Medium, n=5 unless noted | 2 GiB | 10 GiB |
-| --- | --- | --- |
-| Snapshot save, whole filesystem | 18.0 s (17.1 to 19.6) | 91.8 s (68.3 to 96.8) |
-| Snapshot save after a 64 KiB edit | 4.1 s at 224 MiB (D51) | 3.3 s, 66,295 B (n=1) |
-| Snapshot wake, first after the save | 1,330 ms (322 to 16,141) | 403 ms (276 to 589) |
-| Snapshot wake, second | 641 ms (252 to 1,650) | 303 ms (234 to 1,038) |
-| First 256 MiB read after a snapshot wake, n=10 | 371 MiB/s (180 to 1,076) | 552 MiB/s (60 to 818) |
-| Whole workspace read after a snapshot wake, n=10 | 6.5 s (3.6 to 15.9) | 25.4 s (15.8 to 56.0) |
-| DirectoryBackup save | 30.1 s (17.1 to 32.4) | 140 s (100 to 146) |
-| DirectoryBackup restore into a fresh container | 12.3 s (11.2 to 14.1) | 79.7 s (72.1 to 122.8, n=4) |
-| Whole read right after that restore | 1.9 to 2.3 s | 102 to 155 s, n=4 |
-| Today's chain: save | 222 s (200 to 230, n=3); 2 of 5 timed out publishing after 414 s | failed 5 of 5: no space to stage the squashfs |
-| Today's chain: lazy wake, n=6 | 2.6 s (2.5 to 3.2); caller 4.1 s | nothing saved to wake |
-| Today's chain: first 256 MiB, n=6 | 52 MiB/s (30 to 89) | |
-| Today's chain: whole read, n=6 | 39.2 s (23.4 to 60.8) | |
+D56. The box decides its own rest from its own use; the workspace neither
+asks nor tells it (2026-10-01, corrected the same day). This replaces D35's
+third hold reason, the root's `sandboxInUse`, and keeps the other two. While a
+box ran, every beat with no work of its own asked the workspace whether it was
+busy. The answer was kept for one quiet-confirm window, but only in the box
+object's memory, so a box object that restarted asked again. On staging
+(`f62dfcb9`, eval-site-preview-5, 01:00 to 02:47Z) each ask rebuilt the idle
+workspace once a minute, and its runtime read the owner's device status as it
+did.
 
-The fifth 10 GiB restore lost its Worker RPC connection at 79 s. The chain
-stages the whole base on the container's disk before upload, so a workspace
-whose squashfs does not fit in the free disk cannot be saved; random data
-does not compress, so 10 GiB on a 20 GB disk fails. That is a defect of
-today's product, and it is the same for any design that packs a base on the
-disk (D53's B and E). Snapshot wakes at 2 GiB or more over D53 and this
-entry: 3 of 40 took over 10 s (14.0, 16.1 and 351 s).
+Two causes. The rule asked across objects on every beat. And nothing counted
+the box's calls to its host beat by beat, so a cache that lived in one
+object's memory passed every test that kept one object. On the old shape, a
+running box used a minute before each beat, with a fresh box object per beat,
+asked its idle workspace 5 times in 5 beats (`bench-artifacts/host-push/red.log`).
 
-Candidates:
+The first fix (`fe1a920dc`, `f521bd212`) turned the ask into a push: the
+workspace called `Devbox.noteHostWork()` whenever a turn's claim moved and
+when a background job settled, so a turn kept its box alive. The owner
+corrected it: a turn that does not touch the sandbox must not keep the box
+alive, and the sandbox stays lazily provisioned. So the push is gone too:
+`noteHostWork`, the workspace's turn-claim and job-settle notices,
+`sandboxUsed` and the runtime's `sandboxReached`. With them went
+`hasBackgroundWork`, its in-memory answer, the workspace's `sandboxInUse` RPC
+and W2's startless exception. The box rests on its own use only: commands,
+files, the terminal, ports, previews, and its own lanes. A process it started
+that is still running holds it, as before (D35).
 
-1. Snapshot first, DirectoryBackup behind it. The workspace and the root
-   live on the container's disk. A checkpoint is a `snapshotContainer()`. A
-   quiesce also writes a DirectoryBackup of `/workspace`, `/root` and
-   `/home`, and the root's ctime delta as one tarball. A wake starts the
-   latest snapshot; a missing or expired one (refused in 144 to 334 ms,
-   D53) restores the backup onto the box's pinned image. Deletes the chain,
-   the block-lower crate, the store gateway and the mount routing (about
-   5,400 lines; squashfuse, fuse-overlayfs and s3fs leave the image) and
-   adds about 700.
-2. Snapshot first, a lazy chain behind it for `/workspace`. As 1, but the
-   R2 copy is mounted lazily on fallback (2.6 s at 2 GiB instead of 12.3 s).
-   It keeps about 3,000 lines and adds about 900, its saves take 200 s or
-   more at 2 GiB, and it cannot save 10 GiB.
-3. Today's chain plus the root's delta. Adds about 200 lines and no platform
-   beta, but every first read runs at about 50 MiB/s and 10 GiB cannot be
-   saved.
+What changes: a box rests `idleMs + quietConfirmMs` (40 min) after its own
+last use, whatever its workspace is doing. A turn that runs longer than that
+between sandbox calls loses nothing: its next call wakes the box.
 
-Images. A start may name any registry digest, not only those in the config:
-one no config named started with its own `sync.js` (n=1). A snapshot also
-carries its image (D51). So a box keeps the image it was created on, stored
-in its record, until its owner upgrades it. An upgrade backs up `/workspace`,
-`/root` and `/home`, starts the new image, restores them, and leaves package
-installs to the owner's setup, because the root's delta may not match the
-new image's libraries. It costs one backup and one restore (12 s at 2 GiB,
-80 s at 10 GiB) plus the setup's own time (17 s for the apt step above), and
-the registry must keep every digest a box pins.
-
-The record (Durable Object storage): `{ image, snapshot: { id, at },
-backup: { record, at } }`. A snapshot's id is stored only after
-`snapshotContainer()` returns. An eviction mid-save loses it (D51); the
-record keeps the previous id, and the next checkpoint of the running
-container saves again. A wake uses the snapshot unless the backup is newer.
-A snapshot lasts 30 days from its last restore, so a box idle that long falls
-back to the backup its last quiesce wrote. Nothing deletes a snapshot. Each
-leaves two registry tags; deleting both left the snapshot restorable 5 s
-later (n=1).
-
-Recommendation: candidate 1. On the normal path it is the fastest measured
-at both sizes: a 10 GiB box wakes in 0.2 to 1.0 s and reads its first file
-at a median 552 MiB/s; at 2 GiB the chain reads it at 52 MiB/s. It keeps packages and home with
-no code of ours. It is the only candidate that saves 10 GiB, and it deletes
-the most code. Its cost is the fallback, a full download: 12 s at 2 GiB and
-80 s at 10 GiB, for a box whose snapshot is gone. Its risks are the
-platform's: snapshots are a beta, a few wakes take 14 s to 6 min, and every
-save adds registry tags.
-
-Still open: the cause of the slow snapshot wakes; whether the registry tags
-count against the account's 50 GB image limit, and whether deleting them
-shortens a snapshot's life beyond minutes (a cleanup would need an account
-API token in the Worker, which D41 removed); a workspace near the 20 GB disk
-and snapshot limit; a root delta after a package removal (deletions are not
-in the tarball); the slow whole read after a 10 GiB restore (93 MiB/s against
-404 after a snapshot wake, cause not traced); and these figures with fewer
-boxes at once.
-
-D56. The box decides its own rest; the host tells it when its work moves
-(2026-10-01). This replaces D35's third hold reason, the root's
-`sandboxInUse`, and keeps the other two. While a box ran, every beat with no
-work of its own asked the workspace whether it was busy. The answer was kept
-for one quiet-confirm window, but only in the box object's memory, so a box
-object that restarted asked again. On staging (`f62dfcb9`,
-eval-site-preview-5, 01:00 to 02:47Z) each ask rebuilt the idle workspace
-once a minute, and its runtime read the owner's device status as it did.
-
-Two causes. The rule asked across objects on every beat for something the
-box could be told once. And nothing counted the box's calls to its host
-beat by beat, so a cache that lived in one object's memory passed every test
-that kept one object.
-
-Now `Devbox.noteHostWork()` stamps the box's use, as a caller does, when its
-container runs, and does nothing when it is stopped. Kinu's workspace calls
-it whenever a turn's claim moves (admitted or settled, the root's and every
-hosted actor's) and when a background job settles, but only once its current
-activation has called its sandbox: each notice activates the box's object, so
-a workspace that never used a sandbox made 20 of them over ten turns before
-this gate and makes none after (`bench-artifacts/host-push/gate-red.log`,
-`gate-green.log`). A box this activation reached and that has since stopped
-still hears two notices a turn, each answered at once. The beat reads only the
-box's own record. `hasBackgroundWork`, its in-memory answer and the
-workspace's `sandboxInUse` RPC are gone, and W2's startless exception with
-them. Its first and second hold reasons stand: own lanes, and a process the
-box started that is still running.
-
-What changes: a box now rests `idleMs + quietConfirmMs` (40 min) after the
-last use by a caller or by the workspace's work. A turn that runs longer than
-that without touching the sandbox no longer holds it; its next sandbox call
-wakes the box. Work inside the container is unaffected, because a running
-process still holds the box (D35).
-
-Measured both shapes in the harness. On the old shape, a running box used a
-minute before each beat, with a fresh box object per beat, asked its idle
-workspace 5 times in 5 beats; the new shape has no call to make. A turn told
-its box nothing before (0 notices) and tells it on admission and settlement
-now; an idle workspace tells it nothing (`bench-artifacts/host-push/red.log`).
-Tests: `cf-backend/tests/unit-eviction-durability.test.ts` ("the workspace's
-work reaches its box as use") and `devbox/tests/terminal-activity.test.ts`
-("a host's work is the box's use": the hold depends on the host's word, and
-without it the box quiesces a window early). Deployed re-proof owed: no
-`sandboxInUse` RPC to a workspace in Workers Logs, and boxes resting 40 min
-after their last use.
+Tests. `cf-backend/tests/unit-eviction-durability.test.ts` ("a workspace's
+turns are not its box's use") runs ten turns in a workspace that never reached
+its sandbox and ten after it did, and counts every call on any box: 0 and 0.
+On `f521bd212` the second case made 22
+(`bench-artifacts/host-push/reversal-red.log`, `reversal-green.log`).
+`devbox/tests/terminal-activity.test.ts` ("only the box's own use holds it")
+holds a box last used a minute ago through its idle window and rests it once
+the quiet is confirmed. Deployed re-proof owed: no call from a workspace to
+its box in Workers Logs while turns run, and boxes resting 40 minutes after
+their own last use.
 
 ## Measurement contract for a strategy comparison
 

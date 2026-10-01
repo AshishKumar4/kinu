@@ -15,7 +15,7 @@ import {
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
   type RunEventInput, type SubordinateInspectionAuthority, ConversationSearchStore, type ConversationRecall,
-  isSubordinateOrigin, sandboxIdForWorkspace,
+  isSubordinateOrigin,
 } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
@@ -2633,7 +2633,6 @@ export abstract class ActorAgent extends Agent<Env> {
       onSettled: (job) => {
         const notice = backgroundJobNotice(job);
         this.notifyOwner(notice.subject, notice.body);
-        this.sandboxUsed();
       },
       // Evict-resume (B6): re-drive from the durable checkpoint. Side-effecting kinds (eval / run)
       // decline and fall back to the eviction failure.
@@ -2687,15 +2686,6 @@ export abstract class ActorAgent extends Agent<Env> {
       + unconfirmed.map((o) => `${o.requestId} (${o.detail ?? 'no detail'})`).join('; '));
   }
 
-  /** A turn's claim moving or a job settling is the box's use too, so it rests only once neither the
-   *  workspace nor a caller has used it for its idle window (devbox D56); the box never asks. Each notice
-   *  activates the box's object, so only a box this activation reached hears it. */
-  protected sandboxUsed(): void {
-    const namespace = this.env.KinuDevbox;
-
-    if (namespace === undefined || this._rt?.sandboxReached() !== true) return;
-    this.detachOwned(async () => { await namespace.getByName(sandboxIdForWorkspace(this.name)).noteHostWork(); });
-  }
   /** Controllers for foreground long tools; once detached, BackgroundJobRunner owns cancellation. */
   protected readonly _activeToolControllers = new Set<AbortController>();
 

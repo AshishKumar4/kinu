@@ -49,43 +49,30 @@ describe('noteTerminalActivity refuses before it stamps', () => {
   });
 });
 
-// D56: the box decides its own rest. Its host's work reaches it as use (`noteHostWork`), never as a question a
-// beat asks: the ask rebuilt an idle workspace once a minute (eval-site-preview-5, staging, 2026-10-01).
-describe("a host's work is the box's use", () => {
-  test('a box whose host worked inside the idle window holds; once the window and the quiet confirmation pass, it rests', async () => {
+// D56, as the owner corrected it: a box rests on its own use only. Its workspace's turns never reach it, so a box
+// whose workspace keeps working without touching it rests one idle window after its own last use.
+describe("only the box's own use holds it", () => {
+  test('a box last used a minute ago holds through its idle window and rests once the quiet is confirmed', async () => {
     const start = Date.now();
     const { box, rows } = harness(TestBox);
 
     try {
       await box.devboxStartup();
-      rows.set(LAST_INTERACTION_KEY, start - DEFAULT_DEVBOX_POLICY.idleMs - 60_000);
-      setSystemTime(start - 60_000);
-      box.noteHostWork();
+      rows.set(LAST_INTERACTION_KEY, start - 60_000);
       setSystemTime(start);
-      await box.devboxHeartbeat();
-      // Without the host's word the quiet stretch would start at the first beat and be confirmed here.
-      setSystemTime(start + DEFAULT_DEVBOX_POLICY.idleMs);
       await box.devboxHeartbeat();
       const holding = (await box.devboxState()).lastTick?.decision;
 
-      setSystemTime(start + DEFAULT_DEVBOX_POLICY.idleMs + DEFAULT_DEVBOX_POLICY.quietConfirmMs);
+      setSystemTime(start - 60_000 + DEFAULT_DEVBOX_POLICY.idleMs);
       await box.devboxHeartbeat();
-
+      setSystemTime(start - 60_000 + DEFAULT_DEVBOX_POLICY.idleMs + DEFAULT_DEVBOX_POLICY.quietConfirmMs);
+      await box.devboxHeartbeat();
       const resting = (await box.devboxState()).lastTick?.decision;
 
       expect({ holding, resting }).toEqual({ holding: 'hold', resting: 'quiesce' });
     } finally {
       setSystemTime();
     }
-  });
-
-  test('a stopped box records nothing for its host, so the next start rests on its own clock', async () => {
-    const { box, container } = harness(TestBox);
-    await container.stop();
-
-    box.noteHostWork();
-
-    expect((await box.devboxState()).lastInteractionAt).toBeUndefined();
   });
 });
 

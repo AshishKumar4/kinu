@@ -13,11 +13,11 @@
  */
 
 import {
+  BOUNDS_KINDS,
   PLATFORM_FACT_IDS,
   injectableFaults,
   platformFact,
   platformFactEntries,
-  type BoundsKind,
   type EvidenceLabel,
   type PlatformFactEntry,
 } from '../packages/core/src/platform-catalog';
@@ -36,11 +36,6 @@ const EVIDENCE_LABELS: readonly EvidenceLabel[] = [
 ];
 
 const UNITS: readonly string[] = ['bytes', 'ms', 'count'];
-
-const BOUNDS_KINDS: readonly BoundsKind[] = [
-  'peak-resident', 'wire', 'row', 'query', 'response',
-  'storage', 'bundle', 'duration', 'concurrency', 'count',
-];
 
 /**
  * A followable within-file anchor, which is what a non-documented provenance must
@@ -174,7 +169,7 @@ export function auditSchema(entries: readonly PlatformFactEntry[]): SchemaAudit 
     }
 
     if (fact.bounds !== null && !BOUNDS_KINDS.includes(fact.bounds)) {
-      fail(`bounds "${fact.bounds}" is not one of the ten kinds`);
+      fail(`bounds "${fact.bounds}" is not one of the ${BOUNDS_KINDS.length} kinds`);
     }
 
     if (fact.knownBreachPath !== undefined && fact.knownBreachPath.trim().length === 0) {

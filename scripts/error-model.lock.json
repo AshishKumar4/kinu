@@ -560,8 +560,6 @@
     "packages/core/src/providers/models-dev.ts#throw": 2,
     "packages/core/src/providers/oauth-token-error.ts#error-class": 1,
     "packages/core/src/providers/pacing.ts#promise-rejection": 1,
-    "packages/core/src/providers/rate-limit-retry.ts#catch": 1,
-    "packages/core/src/providers/rate-limit-retry.ts#throw": 3,
     "packages/core/src/providers/sse-terminal.ts#catch": 1,
     "packages/core/src/providers/sse-terminal.ts#throw": 2,
     "packages/core/src/providers/usage-limits.ts#throw": 2,

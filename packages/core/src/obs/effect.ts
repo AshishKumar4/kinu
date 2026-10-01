@@ -74,7 +74,7 @@ export function tolerateAsync<T>(operation: () => Promise<T>, expected: Expected
   return settle(tolerated(Effect.promise(operation), expected));
 }
 
-/** One run per key, shared until it settles; after a failure the next call runs afresh. */
+/** One run per key until it settles; a failure frees the key. */
 export function sharedBy<I, A>(keyOf: (input: I) => string | number | null, run: (input: I) => Effect.Effect<A, KinuError | VfsError>): (input: I) => Promise<A> {
   const pending = new Map<string | number | null, Promise<A>>();
 
@@ -102,7 +102,7 @@ export function shared<A>(run: () => Effect.Effect<A, KinuError | VfsError>): ()
   return sharedBy<void, A>(() => null, run);
 }
 
-/** One run at a time; a call after it settles runs afresh. */
+/** One run at a time. */
 export function deduped<A>(run: () => Effect.Effect<A, KinuError | VfsError>): () => Promise<A> {
   let running: Promise<A> | undefined;
 

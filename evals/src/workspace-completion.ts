@@ -1,4 +1,4 @@
-import type { RunEvent } from '@kinu.run/core';
+import { silenceBoundMs, type RunEvent } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
 import type { KinuPublicSession, PublicBackgroundJob, PublicMessage, PublicSubordinate } from './session';
@@ -15,13 +15,13 @@ const STREAMING_POLL_MS = 30_000;
 const DROPPED_POLLS = 3;
 
 /**
- * How long a workspace may stay busy with its ledger silent, no tool call in flight and no provider wait declared,
- * before its turn fails as a product hang. Measured 2026-10-01 inside the turns of the 68 passing trials of 405 kept
- * with a timeline (both legs of the full run, the 40-trial production run, two staging deploys' passes): the longest
- * silence was 183 s, one Muse Spark step of 6k tokens with 180 trials running. Twice that, and inside the deploy's 480 s
- * silence bound (`GATE_DEADLINE_SECONDS`), so a hung trial says so before the deploy kills the run.
+ * How long a busy workspace may say nothing (no ledger row, no byte in any room it relays, no tool call in flight, no
+ * provider wait declared) before its turn fails as a product hang. A provider that sends nothing for its own bound
+ * fails the call and writes the failed `model_operation` row (`provider.stream.idle_ms`), and a minute more, which
+ * outlasts a 30 s look while a turn streams, lets that row land first: a provider's stall is its failure, never a
+ * product hang. Inside the deploy's 480 s silence bound (`GATE_DEADLINE_SECONDS`), so a hung trial says so first.
  */
-const HUNG_AFTER_MS = 360_000;
+export const HUNG_AFTER_MS = silenceBoundMs('provider.stream.idle_ms') + 60_000;
 
 /** The time a watch reads and the waits between its looks, which `stop` ends early: the wall clock, or a test's own. */
 export type WatchClock = { now(): number; sleep(ms: number, stop?: AbortSignal): Promise<void> };
@@ -41,8 +41,8 @@ const WALL_CLOCK: WatchClock = {
   }),
 };
 
-/** What a watch reads of a workspace. */
-export type WatchedWorkspace = Pick<KinuPublicSession, 'runEvents' | 'backgroundJobs' | 'subordinates' | 'toolCallsInFlight'>;
+/** What a watch reads of a workspace, and the helpers' rooms it asks to hear. */
+export type WatchedWorkspace = Pick<KinuPublicSession, 'runEvents' | 'backgroundJobs' | 'subordinates' | 'toolCallsInFlight' | 'heard' | 'listen'>;
 
 /** A turn whose workspace stayed busy and silent past the bound: the build hung, and the message names what held it. */
 export class WorkspaceHang extends Error {
@@ -69,16 +69,20 @@ function holders(events: readonly RunEvent[], jobs: readonly PublicBackgroundJob
 
 /**
  * One turn's look at its workspace, kept across polls: whether it is busy (a run open, a background job running, a
- * helper working), and since when its ledger has been silent with no tool call in flight and no provider wait
- * declared. The product writes a call's row only at its end, so its own stream is where a call is seen running.
+ * helper working), and since when it has said nothing. The ledger writes a step and a call only at their ends, so the
+ * rooms the session hears are where a model is seen streaming and a call running: the turn's own, the turns the product
+ * opens on its own, and each working helper's, which the watch asks the session to listen to.
  */
 export class TurnWatch {
   private rows = 0;
+
+  private frames: number;
 
   private heardAt: number;
 
   constructor(readonly workspace: WatchedWorkspace, readonly clock: WatchClock = WALL_CLOCK) {
     this.heardAt = clock.now();
+    this.frames = workspace.heard();
   }
 
   /** Read the workspace once. Throws {@link WorkspaceHang} when it has been busy and silent past the bound. */
@@ -88,9 +92,13 @@ export class TurnWatch {
     const running = jobs.filter((job) => job.status === 'running');
     const working = helpers.filter((helper) => helper.status === 'working');
     const busy = openRuns(events).length > 0 || running.length > 0 || working.length > 0;
+    const frames = this.workspace.heard();
 
-    if (!busy || events.length > this.rows || this.workspace.toolCallsInFlight().length > 0) this.heardAt = now;
+    this.workspace.listen(working.map((helper) => helper.name));
+
+    if (!busy || events.length > this.rows || frames > this.frames || this.workspace.toolCallsInFlight().length > 0) this.heardAt = now;
     this.rows = events.length;
+    this.frames = frames;
 
     const waits = events.flatMap((event) => (event.type === 'provider_wait' ? [Date.parse(event.timestamp) + event.waitMs] : []));
     const silentMs = now - Math.max(this.heardAt, ...waits);
@@ -98,7 +106,7 @@ export class TurnWatch {
     if (silentMs > HUNG_AFTER_MS) {
       const last = events.at(-1);
 
-      throw new WorkspaceHang(`the workspace stayed busy with its ledger silent for ${String(Math.round(silentMs / 1000))} s, `
+      throw new WorkspaceHang(`the workspace stayed busy for ${String(Math.round(silentMs / 1000))} s with no ledger row, no stream byte, `
         + `no tool call in flight and no provider wait declared${last === undefined ? '' : ` (its last row ${last.type} at ${last.timestamp})`}: `
         + `held by ${holders(events, running, working).join('; ')}`);
     }

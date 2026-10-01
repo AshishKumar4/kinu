@@ -1,4 +1,4 @@
-import { createTestUserDO, TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { createTestUserDO, provisionTestWorkspace, TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { serveFamily } from './helpers/api';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -14,7 +14,7 @@ import { claimOwnedWorkspace } from '../src/user/workspace-ownership';
 import {
   unstartedOrchestratorHarness, orchestratorHarness, reactivateOrchestratorHarness, workspaceFiles,
 } from './helpers/actor-harness';
-import type { UserCaller } from '@kinu.run/core';
+import { WORKSPACE_KEYED_ROWS, type UserCaller } from '@kinu.run/core';
 import type { NameOrigin } from '@kinu.run/core';
 import type { WorkspaceRegistrationSource } from '../src/user/user-do';
 import type { PresentedCaller } from '@kinu.run/core/control-plane';
@@ -837,6 +837,43 @@ describe('cloud agent ownership safety', () => {
       .toEqual(['200 {"ok":true}', '200 {"ok":true}']);
     expect(workspace.tableNames().filter((name) => name !== 'sqlite_sequence')).toEqual([]);
     expect(userDO.sql.exec(`SELECT name FROM user_workspaces`).toArray()).toEqual([]);
+  });
+
+  test('a deleted workspace leaves no row its removal declares deleted: watchers and pending device notices among them', async () => {
+    const workspace = orchestratorHarness(undefined, { workspace: 'jarvis', ownerUserId: USER_ID });
+    const { userDO, remove } = await deletesReaching(workspace);
+
+    await userDO.userDO.ensureWorkspaceCapability('jarvis', null);
+    await userDO.userDO.watchDeviceStatus({ workspaceToken: userDO.installed.get('jarvis') ?? '' }, true);
+    // Left by a device that went offline while the workspace was not reachable.
+    userDO.sql.exec(`INSERT INTO device_notice_pending (agent_name) VALUES ('jarvis')`);
+
+    expect((await remove())?.status).toBe(200);
+
+    const left = WORKSPACE_KEYED_ROWS.filter(({ removal }) => removal === 'before-destroy' || removal === 'after-destroy')
+      .filter(({ table, column }) => userDO.sql.exec(`SELECT 1 FROM ${table} WHERE ${column} = 'jarvis'`).toArray().length > 0)
+      .map(({ table }) => table);
+
+    expect(left).toEqual([]);
+  });
+
+  test("every column of the account object's schema that names a workspace says what removing the workspace does to it", async () => {
+    const harness = createTestUserDO({ durableObjectId: USER_ID });
+
+    await provisionTestWorkspace(harness, 'jarvis');
+
+    const names = (query: string, ...values: string[]): string[] =>
+      harness.db.query<{ name: string }, string[]>(query).all(...values).map((row) => row.name);
+
+    const naming = names(`SELECT name FROM sqlite_master WHERE type = 'table'`).flatMap((table) => names(`SELECT name FROM pragma_table_info(?)`, table)
+      .filter((name) => /(^|_)(agent_name|workspace|workspace_name)$/u.test(name) || (name === 'name' && table.includes('workspace')))
+      .map((name) => `${table}.${name}`));
+
+    expect(naming.filter((column) => !WORKSPACE_KEYED_ROWS.some(({ table, column: declared }) => `${table}.${declared}` === column))).toEqual([]);
+    expect(naming.length).toBeGreaterThan(5);
+    console.log('  blind: a column is found by its name (agent_name, workspace, workspace_name, or `name` in a workspace table); '
+      + 'one naming a workspace under any other name passes unlisted, and its rows outlive the workspace.');
+    harness.close();
   });
 
   test('a healthy workspace whose owner does not match is still refused, row and storage intact', async () => {
