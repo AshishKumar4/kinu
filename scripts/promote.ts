@@ -32,7 +32,7 @@ import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { deployment, environmentArgs, why, wrangler } from './infra-cloudflare';
 import { type InfraEnvironment, deriveInfrastructure } from './infra-manifest';
-import { LATEST_RESET_KEY, type Reset, ResetSchema } from './reset';
+import { type Reset, ResetSchema, latestReset } from './reset';
 
 const REPO = new URL('..', import.meta.url).pathname;
 
@@ -453,17 +453,6 @@ function promotions(bucket: string): Promotion[] {
   if (`${run.stderr}\n${run.stdout}`.includes('The specified key does not exist.')) return [];
 
   throw new Error(`wrangler r2 object get ${bucket}/${HISTORY_KEY} failed: ${why(run)}`);
-}
-
-/** The latest reset `scripts/reset.ts wipe` recorded in `bucket`, or none. */
-function latestReset(bucket: string): Reset | undefined {
-  const run = wrangler(['r2', 'object', 'get', `${bucket}/${LATEST_RESET_KEY}`, '--pipe', '--remote'], 600_000);
-
-  if (run.ok) return v.parse(ResetSchema, JSON.parse(run.stdout));
-
-  if (`${run.stderr}\n${run.stdout}`.includes('The specified key does not exist.')) return undefined;
-
-  throw new Error(`wrangler r2 object get ${bucket}/${LATEST_RESET_KEY} failed: ${why(run)}`);
 }
 
 /** Refused unless `origin` serves `sha` with this very signed stamp: a record or a history entry names what a

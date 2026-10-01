@@ -232,7 +232,7 @@ cleanup() {
     echo -e "${RED}Production serves this red promotion. Return it to the build it took before: bun run deploy --rollback${NC}"
   fi
   if [ "$status" -ne 0 ] && [ -n "$KINU_RESET_RECORD" ] && [ "${DEPLOY_PUBLISHED:-0}" != "1" ]; then
-    echo -e "${RED}The reset ran and the build never uploaded: the reset lines above say what $KINU_WORKER serves and what was deleted. Deploy again without --reset.${NC}"
+    echo -e "${RED}The reset ran and the build never uploaded: the reset lines above say what $KINU_WORKER serves and what was deleted. Deploy again with --reset: it finishes the reset from its record, or finds it done, and uploads the build.${NC}"
   fi
 }
 trap cleanup EXIT INT TERM
@@ -586,7 +586,7 @@ if [ "$KINU_RESET" = "1" ]; then
   echo -e "${BOLD}Step 2b: Resetting $KINU_WORKER${NC}"
   KINU_RESET_RECORD="$(mktemp -t kinu-reset.XXXXXX.json)"
   bun "$KINU_ROOT/scripts/reset.ts" wipe "$KINU_ENV" "$KINU_RESET_RECORD" \
-    || { publish_red "the reset failed; its lines in the deploy's output say what it deleted before it stopped"; return 1; }
+    || { publish_red "the reset failed; its lines in the deploy's output say what it deleted before it stopped, and a deploy with --reset finishes it from its record"; return 1; }
   KINU_RECORD_ARGS=("$KINU_RESET_RECORD")
 fi
 
@@ -785,17 +785,19 @@ else
 fi
 cd "$KINU_ROOT" || { step_red publish "the checkout" "cannot cd to $KINU_ROOT"; finish; }
 
-# ── Step 4a: eval-service's provider keys, after a reset ─────────────────
+# ── Step 4a: eval-service's provider keys ─────────────────────────────────
 #
-# A reset deleted every Durable Object, eval-service's provider credentials
-# with them, so the eval pass would find no model. Before the tiers and the
-# evals, scripts/eval-provider-keys.ts stores each key from the operator's
-# ~/.config/kinu/eval-provider-keys.json again through the product's own route,
-# as eval-service, and checks the deployment lists every eval model. It prints
-# no key; whatever is missing is a finding in the report, not a stop.
-if [ "$KINU_RESET" = "1" ] && [ "$KINU_SERVING" = "1" ]; then
+# A reset deletes every Durable Object, eval-service's provider credentials
+# with them, and it may have run in another deploy than this one, so the eval
+# pass could find no model. Before the tiers and the evals, on every deploy
+# the deployment serves, scripts/eval-provider-keys.ts asks it which models
+# eval-service can run, stores through the product's own route each key of the
+# operator's ~/.config/kinu/eval-provider-keys.json whose provider it does not
+# list, and checks it then lists every eval model. It prints no key; whatever
+# is missing is a finding in the report, not a stop.
+if [ "$KINU_SERVING" = "1" ]; then
   echo ""
-  echo -e "${BOLD}Step 4a: Storing eval-service's provider keys after the reset${NC}"
+  echo -e "${BOLD}Step 4a: eval-service's provider keys${NC}"
   bun "$KINU_ROOT/scripts/eval-provider-keys.ts" "${KINU_URL%/}" || KINU_REDS=1
 fi
 
