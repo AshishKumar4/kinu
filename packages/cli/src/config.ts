@@ -91,12 +91,6 @@ export type LocalApiKeyProvider = v.InferOutput<typeof LocalApiKeyProviderSchema
 
 export type LocalOAuthSession = v.InferOutput<typeof LocalOAuthSessionSchema>;
 
-export interface CloudAuthConfig {
-  origin: string;
-  token: string;
-  user?: KinuConfig['user'];
-}
-
 const StringMapSchema = v.record(v.string(), v.string());
 
 const KinuAgentConfigSchema = v.object({
@@ -497,20 +491,15 @@ export function resolveCloudOrigin(opts?: { origin?: string }): string {
   return (opts?.origin ?? process.env.KINU_ORIGIN ?? loadConfigFile().origin ?? DEFAULT_ORIGIN).replace(/\/+$/, '');
 }
 
-export function requireAuthConfig(): CloudAuthConfig {
-  // CI: `KINU_TOKEN` (usually a scoped `pta_…` token) wins over the stored session; the server decides validity.
-  const envToken = process.env.KINU_TOKEN?.trim();
-
-  if (envToken) return { origin: resolveCloudOrigin(), token: envToken };
-
-  return storedAuthConfig('Not authenticated. Run: kinu auth (or set KINU_TOKEN)');
+export function requireAuthConfig(): LocalCloudSession {
+  return resolveCloudSession() ?? storedAuthConfig('Not authenticated. Run: kinu auth (or set KINU_TOKEN)');
 }
 
-export function requireStoredAuthConfig(): CloudAuthConfig {
+export function requireStoredAuthConfig(): LocalCloudSession {
   return storedAuthConfig('No interactive CLI session found. Run: kinu auth');
 }
 
-function storedAuthConfig(missingTokenMessage: string): CloudAuthConfig {
+function storedAuthConfig(missingTokenMessage: string): LocalCloudSession {
   const config = loadConfigFile();
   const token = config.accessToken;
 
@@ -522,7 +511,7 @@ function storedAuthConfig(missingTokenMessage: string): CloudAuthConfig {
     throw new Error('Your Kinu CLI session has expired. Run: kinu auth');
   }
 
-  return { origin: resolveCloudOrigin(), token, user: config.user };
+  return { origin: resolveCloudOrigin(), token };
 }
 
 export function sessionExpired(config: KinuConfig): boolean {
@@ -532,7 +521,8 @@ export function sessionExpired(config: KinuConfig): boolean {
   return Number.isFinite(expiresAt) && expiresAt <= Date.now();
 }
 
-/** `KINU_TOKEN` wins, as in requireAuthConfig. An unreadable config throws: it is not a signed-out user. */
+/** CI's `KINU_TOKEN` (usually a scoped `pta_…` token) wins over the stored session; the server decides validity.
+ *  An unreadable config throws: it is not a signed-out user. */
 export function resolveCloudSession(): LocalCloudSession | null {
   const envToken = process.env.KINU_TOKEN?.trim();
 
@@ -540,9 +530,7 @@ export function resolveCloudSession(): LocalCloudSession | null {
   const config = loadConfigFile();
   const token = config.accessToken;
 
-  if (!token || sessionExpired(config)) return null;
-
-  return { origin: resolveCloudOrigin(), token };
+  return token && !sessionExpired(config) ? { origin: resolveCloudOrigin(), token } : null;
 }
 
 export function resolveAgentRef(input: string): KinuAgentConfig | null {
