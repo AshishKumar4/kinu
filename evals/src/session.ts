@@ -1861,7 +1861,7 @@ export class KinuPublicSession {
 
   /** Seed one file through the same route, so a case's inputs arrive on the
    *  plane the agent's own tools read. */
-  writeFile(path: string, content: string): Promise<void> {
+  writeFile(path: string, content: string | Uint8Array<ArrayBuffer>): Promise<void> {
     return this.boundary(`PUT files ${path}`, async () => {
       const response = await fetch(this.filesUrl(path), {
         method: 'PUT',

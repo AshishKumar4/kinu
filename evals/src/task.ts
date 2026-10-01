@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import type { JsonValue } from 'vitest-evals';
 import type { EvalVerifier } from './verifier';
 
-/** A file the harness writes into the workspace before a prompt: data a person would drop in. */
-export type SeedFile = { readonly path: string; readonly content: string };
+/** A file the harness writes into the workspace before a prompt: data a person would drop in, text or bytes. */
+export type SeedFile = { readonly path: string; readonly content: string | Uint8Array<ArrayBuffer> };
 
 export type EvalTurn = {
   /** Before the prompt, end the workspace's activation and clear its chat: what the agent knows here, it kept. */
@@ -49,7 +49,11 @@ export function defineEvalTask(task: EvalTask): EvalTask {
 export function taskVersion(task: EvalTask): string {
   const given = {
     mission: task.mission,
-    turns: task.turns.map((turn) => ({ ...(turn.fresh && { fresh: true }), seed: turn.seed ?? [], prompt: turn.prompt })),
+    turns: task.turns.map((turn) => ({
+      ...(turn.fresh && { fresh: true }),
+      seed: (turn.seed ?? []).map((file) => (file.content instanceof Uint8Array ? { ...file, content: { base64: Buffer.from(file.content).toString('base64') } } : file)),
+      prompt: turn.prompt,
+    })),
   };
 
   return createHash('sha256').update(JSON.stringify(given)).digest('hex');
