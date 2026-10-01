@@ -17,7 +17,7 @@
   "account_id": "f44999d1ddda7012e9a87729eba250f1",
   "main": "worker.ts",
 
-  "compatibility_date": "2026-09-28",
+  "compatibility_date": "2026-09-30",
   // `nodejs_compat` for the same reason the product sets it. A different runtime
   // is a different measurement.
   "compatibility_flags": ["nodejs_compat"],

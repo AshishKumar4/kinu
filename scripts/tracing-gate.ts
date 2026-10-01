@@ -62,6 +62,7 @@ import { assertMeasured, finding } from './gate-ratchet';
 import { parseJsonc } from './jsonc';
 import { isProductSource, readMatching } from './sources';
 import { parse, walk } from './syntax';
+import { workerCompatibility } from '../packages/cf-backend/vite-agent-bundle';
 
 const REPO = new URL('..', import.meta.url).pathname;
 
@@ -181,8 +182,7 @@ export async function observeSpans(): Promise<SpanObservations> {
     const options: WorkerOptions = {
       config: {
         name,
-        compatibilityDate: '2025-12-01',
-        compatibilityFlags: ['nodejs_compat'],
+        ...workerCompatibility,
         manifest: {
           mainModule: 'index.mjs',
           modulesRoot: '/',

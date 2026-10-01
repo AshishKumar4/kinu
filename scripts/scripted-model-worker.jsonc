@@ -10,7 +10,7 @@
   "name": "kinu-scripted-model",
   "account_id": "f44999d1ddda7012e9a87729eba250f1",
   "main": "scripted-model-worker.ts",
-  "compatibility_date": "2026-09-28",
+  "compatibility_date": "2026-09-30",
   "workers_dev": false,
   "routes": [
     { "pattern": "scripted-model.kinu.run", "custom_domain": true },
