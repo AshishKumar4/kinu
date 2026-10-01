@@ -222,6 +222,7 @@ test("the deployer's setup token resets the owner's sign-in and ends the owner's
   const reset = await post('/api/auth/builtin/password/reset', { setup: SETUP_TOKEN, password: 'a brand new password' });
 
   expect(guessed.status).toBe(403);
+  expect(v.parse(ErrorSchema, await guessed.json()).error).toBe('That is not the setup token.');
   expect(reset.status).toBe(200);
   expect(await verifySession(env, before)).toBeNull();
   expect((await post('/api/auth/builtin/password/sign-in', { email: 'owner@example.com', password: 'a brand new password' })).status).toBe(200);

@@ -109,6 +109,8 @@ const NO_ROOT_SECRET = 'This deployment has no CREDENTIAL_ENCRYPTION_KEY, so pas
 
 const RESET_SPENT = 'This reset link was already used or has expired. Ask the owner for a new one.';
 
+const resetRefused = (grant: Grant): Response => refuse(grant.kind === 'reset' ? RESET_SPENT : 'That is not the setup token.', 403);
+
 const SPENT = 'This sign-in request was already used or has expired. Start again.';
 
 type BuiltinEnv = FamilyEnv<BuiltinAuthEnv<unknown>, object>;
@@ -280,7 +282,7 @@ async function resetTo<Id>(env: BuiltinAuthEnv<Id>, request: Request, reset: Res
   const caller = await ownerCaller(env);
   const account = await accounts(env).builtinApplyReset(caller, reset);
 
-  if (account === null) return refuse(RESET_SPENT, 403);
+  if (account === null) return resetRefused(reset.grant);
   await env.UserDO.get(env.UserDO.idFromName(account.userId)).endAllSessions(caller);
 
   return signedIn(env, request, builtinProfile(reset.passkey ? 'passkey' : 'password', account.userId, account.email), returnTo);
@@ -317,7 +319,7 @@ builtinAuthRoutes.post('/api/auth/builtin/passkey/reset/options', async (c) => {
   const grant = resetGrant(c.env, parsed.output);
   const account = await accounts(c.env).builtinResetAccount(caller, grant);
 
-  if (account === null) return refuse(RESET_SPENT, 403);
+  if (account === null) return resetRefused(grant);
   const url = new URL(c.req.url);
 
   const options = await generateRegistrationOptions({
