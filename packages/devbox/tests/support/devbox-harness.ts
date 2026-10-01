@@ -1153,7 +1153,7 @@ export class FakeSandbox {
       setInactivityTimeout: async () => { this.activityRenewals++; },
       interceptOutboundHttp: async (host) => { this.outboundHosts.set(host, host); },
       interceptAllOutboundHttp: async () => { this.outboundHosts.set(DEVBOX_SYNC_HOST, DEVBOX_SYNC_HOST); },
-      interceptOutboundHttps: async () => undefined,
+      interceptOutboundHttps: async () => { this.sequence.push('intercept:https'); },
       snapshotContainer: () => unreached('container.snapshotContainer'),
       inspect: () => unreached('container.inspect'),
       exec: (args, options) => this.#native(args, options),
@@ -1207,6 +1207,12 @@ export class FakeSandbox {
     }
 
     if (PROCESS_SCRIPTS.has(args[3] ?? '')) return await this.#processScript(args, pid);
+
+    if (args[3] === 'devbox-trust') {
+      this.sequence.push('trust');
+
+      return processResult(Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }), pid);
+    }
 
     const command = args[2] ?? '';
 

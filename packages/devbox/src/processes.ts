@@ -6,8 +6,16 @@ import { TERM_GRACE_MS } from './lifecycle';
 
 const CA_PATH = "/etc/cloudflare/certs/cloudflare-containers-ca.crt";
 
+const BUNDLE = '/etc/ssl/certs/ca-certificates.crt';
+
+const SYSTEM_BUNDLE = '/etc/ssl/certs/ca-certificates.system.crt';
+
 // Native exec does not inherit start() env; the upstream coding-agents example passes this per process.
-export const CONTAINER_TRUST_ENV = { NODE_EXTRA_CA_CERTS: CA_PATH, GIT_SSL_CAINFO: CA_PATH, CURL_CA_BUNDLE: CA_PATH, SSL_CERT_FILE: CA_PATH };
+export const CONTAINER_TRUST_ENV = { NODE_EXTRA_CA_CERTS: CA_PATH, REQUESTS_CA_BUNDLE: BUNDLE };
+
+/** The SDK docs' trust step; it keeps no earlier container's CA. */
+export const TRUST = ['/bin/sh', '-c', `[ -e ${SYSTEM_BUNDLE} ] || { cp ${BUNDLE} ${SYSTEM_BUNDLE}.tmp && mv ${SYSTEM_BUNDLE}.tmp ${SYSTEM_BUNDLE}; }
+timeout 10 sh -c 'until [ -s ${CA_PATH} ]; do sleep 0.1; done' && cat ${SYSTEM_BUNDLE} ${CA_PATH} >${BUNDLE}.tmp && mv ${BUNDLE}.tmp ${BUNDLE}`, 'devbox-trust'] as const;
 
 const ROOT = '/var/tmp/devbox/processes';
 
