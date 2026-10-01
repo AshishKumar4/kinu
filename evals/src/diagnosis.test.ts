@@ -1,19 +1,13 @@
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
 import * as v from 'valibot';
-import { JsonValueSchema } from '@kinu.run/core';
 import { parseDiagnosis, renderDiagnosis } from './diagnosis';
 import { extractInsights } from './insights';
-import { parseResults, trials, type Assertion } from './results';
+import { assertion as makeAssertion, end, evidence as makeEvidence, missingFile, start } from './fixtures/insight-evidence';
+import type { Assertion } from './results';
 
-const fixture = v.parse(v.object({ tool: v.object({ ledger: v.array(JsonValueSchema), timeline: v.array(JsonValueSchema),
-  transcript: v.string(), assertion: JsonValueSchema }) }), JSON.parse(readFileSync(new URL('./fixtures/insights.json', import.meta.url), 'utf8'))).tool;
+const assertion = makeAssertion();
 
-const assertion = trials(parseResults('fixture', JSON.stringify({ testResults: [{ name: 'order-book.eval.ts', assertionResults: [fixture.assertion] }] })))[0];
-
-if (assertion === undefined) throw new Error('fixture has no trial');
-
-const evidence = { ledger: fixture.ledger.map((row) => JSON.stringify(row)).join('\n'), timeline: fixture.timeline.map((row) => JSON.stringify(row)).join('\n'), transcript: fixture.transcript };
+const evidence = makeEvidence([start, missingFile, end]);
 
 const reviews = [{ id: 'trial-1', insights: extractInsights(assertion, evidence) }];
 
