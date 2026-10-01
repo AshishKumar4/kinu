@@ -890,10 +890,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       pricing: (spec) => this.modelCatalog.pricing(spec),
       hostedModel: (actor) => this.hostedModelOf(actor),
       broadcast: (actorId, event) => { this.broadcastToActor(actorId, JSON.stringify({ ...event, actorId })); },
-      turnClaimChanged: () => {
-        this.overviewChanged();
-        this.sandboxUsed();
-      },
+      turnClaimChanged: () => { this.overviewChanged(); },
       enqueueTurn: (actor, input) => this.enqueueHostedTurn(actor, input),
       // Use the reference the host issued, never one rebuilt from an id: the root's parent is
       // null, and a synthesized reference makes `hosted()` refuse the root's liveness read.
@@ -4942,7 +4939,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected override turnClaimChanged(): void {
     this.broadcastToActor(null, this.turnClaimFrame());
     this.overviewChanged();
-    this.sandboxUsed();
   }
 
   protected override turnClaimFrame(): string {

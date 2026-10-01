@@ -2662,51 +2662,48 @@ all of these hold:
    snapshot.
 If any of these fails, the chain stays (R3).
 
-D56. The box decides its own rest; the host tells it when its work moves
-(2026-10-01). This replaces D35's third hold reason, the root's
-`sandboxInUse`, and keeps the other two. While a box ran, every beat with no
-work of its own asked the workspace whether it was busy. The answer was kept
-for one quiet-confirm window, but only in the box object's memory, so a box
-object that restarted asked again. On staging (`f62dfcb9`,
-eval-site-preview-5, 01:00 to 02:47Z) each ask rebuilt the idle workspace
-once a minute, and its runtime read the owner's device status as it did.
+D56. The box decides its own rest from its own use; the workspace neither
+asks nor tells it (2026-10-01, corrected the same day). This replaces D35's
+third hold reason, the root's `sandboxInUse`, and keeps the other two. While a
+box ran, every beat with no work of its own asked the workspace whether it was
+busy. The answer was kept for one quiet-confirm window, but only in the box
+object's memory, so a box object that restarted asked again. On staging
+(`f62dfcb9`, eval-site-preview-5, 01:00 to 02:47Z) each ask rebuilt the idle
+workspace once a minute, and its runtime read the owner's device status as it
+did.
 
-Two causes. The rule asked across objects on every beat for something the
-box could be told once. And nothing counted the box's calls to its host
-beat by beat, so a cache that lived in one object's memory passed every test
-that kept one object.
+Two causes. The rule asked across objects on every beat. And nothing counted
+the box's calls to its host beat by beat, so a cache that lived in one
+object's memory passed every test that kept one object. On the old shape, a
+running box used a minute before each beat, with a fresh box object per beat,
+asked its idle workspace 5 times in 5 beats (`bench-artifacts/host-push/red.log`).
 
-Now `Devbox.noteHostWork()` stamps the box's use, as a caller does, when its
-container runs, and does nothing when it is stopped. Kinu's workspace calls
-it whenever a turn's claim moves (admitted or settled, the root's and every
-hosted actor's) and when a background job settles, but only once its current
-activation has called its sandbox: each notice activates the box's object, so
-a workspace that never used a sandbox made 20 of them over ten turns before
-this gate and makes none after (`bench-artifacts/host-push/gate-red.log`,
-`gate-green.log`). A box this activation reached and that has since stopped
-still hears two notices a turn, each answered at once. The beat reads only the
-box's own record. `hasBackgroundWork`, its in-memory answer and the
-workspace's `sandboxInUse` RPC are gone, and W2's startless exception with
-them. Its first and second hold reasons stand: own lanes, and a process the
-box started that is still running.
+The first fix (`fe1a920dc`, `f521bd212`) turned the ask into a push: the
+workspace called `Devbox.noteHostWork()` whenever a turn's claim moved and
+when a background job settled, so a turn kept its box alive. The owner
+corrected it: a turn that does not touch the sandbox must not keep the box
+alive, and the sandbox stays lazily provisioned. So the push is gone too:
+`noteHostWork`, the workspace's turn-claim and job-settle notices,
+`sandboxUsed` and the runtime's `sandboxReached`. With them went
+`hasBackgroundWork`, its in-memory answer, the workspace's `sandboxInUse` RPC
+and W2's startless exception. The box rests on its own use only: commands,
+files, the terminal, ports, previews, and its own lanes. A process it started
+that is still running holds it, as before (D35).
 
-What changes: a box now rests `idleMs + quietConfirmMs` (40 min) after the
-last use by a caller or by the workspace's work. A turn that runs longer than
-that without touching the sandbox no longer holds it; its next sandbox call
-wakes the box. Work inside the container is unaffected, because a running
-process still holds the box (D35).
+What changes: a box rests `idleMs + quietConfirmMs` (40 min) after its own
+last use, whatever its workspace is doing. A turn that runs longer than that
+between sandbox calls loses nothing: its next call wakes the box.
 
-Measured both shapes in the harness. On the old shape, a running box used a
-minute before each beat, with a fresh box object per beat, asked its idle
-workspace 5 times in 5 beats; the new shape has no call to make. A turn told
-its box nothing before (0 notices) and tells it on admission and settlement
-now; an idle workspace tells it nothing (`bench-artifacts/host-push/red.log`).
-Tests: `cf-backend/tests/unit-eviction-durability.test.ts` ("the workspace's
-work reaches its box as use") and `devbox/tests/terminal-activity.test.ts`
-("a host's work is the box's use": the hold depends on the host's word, and
-without it the box quiesces a window early). Deployed re-proof owed: no
-`sandboxInUse` RPC to a workspace in Workers Logs, and boxes resting 40 min
-after their last use.
+Tests. `cf-backend/tests/unit-eviction-durability.test.ts` ("a workspace's
+turns are not its box's use") runs ten turns in a workspace that never reached
+its sandbox and ten after it did, and counts every call on any box: 0 and 0.
+On `f521bd212` the second case made 22
+(`bench-artifacts/host-push/reversal-red.log`, `reversal-green.log`).
+`devbox/tests/terminal-activity.test.ts` ("only the box's own use holds it")
+holds a box last used a minute ago through its idle window and rests it once
+the quiet is confirmed. Deployed re-proof owed: no call from a workspace to
+its box in Workers Logs while turns run, and boxes resting 40 minutes after
+their own last use.
 
 ## Measurement contract for a strategy comparison
 

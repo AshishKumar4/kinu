@@ -264,7 +264,7 @@ devbox heartbeat's ask started the resting object once a minute, and each start
 booted its files and armed the wake that retried its owed effects at the next
 second. Pinned by `unit-activation-boot-failure` (the ask waited on the start
 and failed with the boot's cause; now it answers false). Superseded
-2026-10-01 by devbox D56: the box no longer asks; the workspace tells it.
+2026-10-01 by devbox D56: the box no longer asks; it rests on its own use.
 
 ## Chat loop
 

@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import {
   ActorSession, ADVISOR_HEADER, BACKGROUND_FIBER_PREFIX, CHAT_SESSION_ID, PROGRAMMATIC_MESSAGE_ID_PREFIX,
-  sandboxIdForWorkspace, TERMINAL_EFFECT_RETRY_CEILING_MS, type JsonValue,
+  TERMINAL_EFFECT_RETRY_CEILING_MS, type JsonValue,
 } from '@kinu.run/core';
 import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 import {
@@ -466,10 +466,10 @@ describe('a sandbox lifecycle failure', () => {
   });
 });
 
-// Devbox D56: a box decides its own rest. The workspace's work reaches it as use, told as a turn's claim moves,
-// so a box whose workspace is idle never calls it (its old once-a-minute ask rebuilt the workspace each time). Only
-// a box this activation reached hears it: every notice is an activation of the box's object.
-describe("the workspace's work reaches its box as use", () => {
+// Devbox D56, as the owner corrected it: a box rests on its own use only. A turn that does not touch the sandbox
+// must not keep it alive or start it, so the workspace calls no box while its turns run, whether or not this
+// activation has reached its sandbox.
+describe("a workspace's turns are not its box's use", () => {
   async function tenTurns(harness: ReturnType<typeof orchestratorHarness>): Promise<void> {
     const turns = chatSessionTurns(harness.agent);
 
@@ -479,21 +479,21 @@ describe("the workspace's work reaches its box as use", () => {
     }
   }
 
-  test('a workspace whose activation never reached its sandbox tells no box anything over ten turns', async () => {
-    const boxesTold: string[] = [];
-    await tenTurns(orchestratorHarness(undefined, { container: true, boxesTold }));
+  test('ten turns in a workspace that never reached its sandbox call no box', async () => {
+    const boxCalls: string[] = [];
+    await tenTurns(orchestratorHarness(undefined, { container: true, boxCalls }));
 
-    expect(boxesTold).toEqual([]);
+    expect(boxCalls).toEqual([]);
   });
 
-  test('once the activation reached its sandbox, each turn tells its box when it is admitted and when it settles', async () => {
-    const boxesTold: string[] = [];
-    const harness = orchestratorHarness(undefined, { container: true, boxesTold });
+  test('ten turns after the activation reached its sandbox call no box either', async () => {
+    const boxCalls: string[] = [];
+    const harness = orchestratorHarness(undefined, { container: true, boxCalls });
     await harness.agent.prepareTerminal('sandbox');
+    const before = boxCalls.length;
     await tenTurns(harness);
 
-    expect({ told: boxesTold.length, boxes: [...new Set(boxesTold)] })
-      .toEqual({ told: 20, boxes: [sandboxIdForWorkspace(harness.agent.name)] });
+    expect(boxCalls.slice(before)).toEqual([]);
   });
 });
 
