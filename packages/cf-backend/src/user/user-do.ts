@@ -163,8 +163,8 @@ import { deletePictures, picturePrefix } from '../slates/pictures';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import {
   builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, invitedEmail, isBuiltinOwner,
-  issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, reserveAttempt, clearAttempts, replacePassword, applyReset, listBuiltinAccounts, ownerAccount, resetAccount,
-  type Admission, type AttemptBucket, type BuiltinSql, type ChallengePurpose, type NewBuiltinAccount, type NewInvite, type PasskeyAccount,
+  issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, reserveAttempt, clearAttempts, replacePassword, applyReset, listBuiltinAccounts, resetAccount,
+  type Admission, type AttemptBucket, type BuiltinSql, type ChallengePurpose, type Grant, type NewBuiltinAccount, type NewInvite, type PasskeyAccount,
   type PasswordAccount, type PasswordHash, type PendingChallenge, type ListedAccount, type Reset, type ResetAccount,
 } from '@kinu.run/core/identity';
 import {
@@ -1500,7 +1500,7 @@ export class UserDO extends Agent<Env> {
     return isBuiltinOwner(this.builtinSql(), userId);
   }
 
-  async builtinAdmissible(caller: UserCaller, request: Pick<NewBuiltinAccount, 'email' | 'inviteHash' | 'setupProven'>): Promise<Admission> {
+  async builtinAdmissible(caller: UserCaller, request: Pick<NewBuiltinAccount, 'email' | 'grant'>): Promise<Admission> {
     await this.requireTier(caller, 'builtin_accounts');
 
     return builtinAdmission(this.builtinSql(), request, Date.now());
@@ -1518,16 +1518,10 @@ export class UserDO extends Agent<Env> {
     replacePassword(this.builtinSql(), userId, password);
   }
 
-  async builtinResetAccount(caller: UserCaller, resetHash: string): Promise<ResetAccount | null> {
+  async builtinResetAccount(caller: UserCaller, grant: Grant): Promise<ResetAccount | null> {
     await this.requireTier(caller, 'builtin_accounts');
 
-    return resetAccount(this.builtinSql(), resetHash, Date.now());
-  }
-
-  async builtinOwnerAccount(caller: UserCaller): Promise<ResetAccount | null> {
-    await this.requireTier(caller, 'builtin_accounts');
-
-    return ownerAccount(this.builtinSql());
+    return resetAccount(this.builtinSql(), grant, Date.now());
   }
 
   async builtinApplyReset(caller: UserCaller, reset: Reset): Promise<ResetAccount | null> {
@@ -1585,10 +1579,10 @@ export class UserDO extends Agent<Env> {
     issuePasskeyChallenge(this.builtinSql(), challenge, pending, expiresAt);
   }
 
-  async builtinSpendChallenge(caller: UserCaller, challenge: string, purpose: ChallengePurpose): Promise<PendingChallenge | null> {
+  async builtinSpendChallenge(caller: UserCaller, challenge: string, purposes: readonly ChallengePurpose[]): Promise<PendingChallenge | null> {
     await this.requireTier(caller, 'builtin_accounts');
 
-    return spendPasskeyChallenge(this.builtinSql(), challenge, purpose, Date.now());
+    return spendPasskeyChallenge(this.builtinSql(), challenge, purposes, Date.now());
   }
 
   async builtinCreateInvite(caller: UserCaller, invite: NewInvite): Promise<boolean> {

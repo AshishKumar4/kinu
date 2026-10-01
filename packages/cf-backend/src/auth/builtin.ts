@@ -5,7 +5,7 @@
 import { Hono, type Context } from 'hono';
 import { generateAuthenticationOptions, generateRegistrationOptions } from '@simplewebauthn/server';
 import { AssertionSchema, AttestationSchema, answeredChallenge, verifyNewPasskey, verifyPasskeyAnswer } from './passkeys';
-import { base64Url, hmacSha256Hex, json, ownerCaller, randomToken, sha256Hex, timingSafeEqual } from '@kinu.run/core';
+import { base64Url, json, ownerCaller, randomToken, sha256Hex } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { SESSION_COOKIE_NAME, setCookie } from './session';
@@ -13,7 +13,8 @@ import { createSession, deriveBuiltinUserId, sanitizeReturnTo, type OAuthProfile
 import { builtinSignInOn } from '@kinu.run/core/identity';
 import type { AuthRoutesAuthority, AuthRoutesEnv } from './routes';
 import {
-  BUILTIN_ACCOUNTS_OBJECT, NOT_ADMITTED, OWNER_RESET, type AttemptBucket, type ChallengePurpose, type InvitePurpose, type PasswordAccount, type PasswordHash, type Reset,
+  attemptBuckets as buckets, BUILTIN_ACCOUNTS_OBJECT, CHALLENGE_TTL_MS, checkPassword, grantOf, hashPassword, INVITE_TTL_MS, NOT_ADMITTED,
+  type AttemptBucket, type ChallengePurpose, type Grant, type InvitePurpose, type PasswordAccount, type Reset,
 } from '@kinu.run/core/identity';
 import type { UserDO } from '../user/user-do';
 import type { ApiVariables, FamilyEnv } from '../api/context';
@@ -23,19 +24,13 @@ export type BuiltinAuthority = AuthRoutesAuthority & Pick<UserDO,
   | 'builtinAdmissible' | 'builtinCreateInvite' | 'builtinInvitedEmail' | 'builtinIsOwner' | 'builtinIssueChallenge' | 'builtinPasskeyAccount'
   | 'builtinPasswordAccount' | 'builtinRecordPasskeyUse' | 'builtinRegister' | 'builtinSpendChallenge'
   | 'builtinReserveAttempt' | 'builtinClearAttempts' | 'builtinReplacePassword'
-  | 'builtinResetAccount' | 'builtinApplyReset' | 'builtinListAccounts' | 'builtinOwnerAccount' | 'endAllSessions'>;
+  | 'builtinResetAccount' | 'builtinApplyReset' | 'builtinListAccounts' | 'endAllSessions'>;
 
 export interface BuiltinAuthEnv<Id = DurableObjectId> extends Omit<AuthRoutesEnv<Id>, 'UserDO'> {
   UserDO: ObjectNamespace<Id, BuiltinAuthority>;
   KINU_SETUP_TOKEN?: string;
   CREDENTIAL_ENCRYPTION_KEY_PREVIOUS?: string;
 }
-
-const PASSWORD_ITERATIONS = 100_000;
-
-const CHALLENGE_TTL_MS = 5 * 60 * 1000;
-
-const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 const RP_NAME = 'Kinu';
 
@@ -45,51 +40,13 @@ export function builtinAccounts<Id, Authority>(env: { UserDO: ObjectNamespace<Id
 
 const accounts = <Id>(env: BuiltinAuthEnv<Id>): BuiltinAuthority => builtinAccounts(env);
 
-export async function setupProven(env: { KINU_SETUP_TOKEN?: string }, presented: string | null): Promise<boolean> {
-  const secret = (env.KINU_SETUP_TOKEN ?? '').trim();
-
-  if (secret === '' || presented === null) return false;
-
-  return timingSafeEqual(await sha256Hex(presented), await sha256Hex(secret));
-}
-
-const pepper = (root: string): Promise<string> => hmacSha256Hex(root, 'kinu.builtin-password-pepper.v1');
-
-async function derive(password: string, salt: string, root: string): Promise<string> {
-  const peppered = await hmacSha256Hex(await pepper(root), password);
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(peppered), 'PBKDF2', false, ['deriveBits']);
-
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', hash: 'SHA-256', salt: new TextEncoder().encode(salt), iterations: PASSWORD_ITERATIONS }, key, 256,
-  );
-
-  return base64Url(new Uint8Array(bits));
-}
-
-
-async function hashPassword(root: string, password: string): Promise<PasswordHash> {
-  const salt = randomToken(16);
-
-  return { hash: await derive(password, salt, root), salt, iterations: PASSWORD_ITERATIONS };
-}
-
 async function passwordMatches<Id>(env: BuiltinAuthEnv<Id>, root: string, password: string, stored: PasswordAccount | null): Promise<boolean> {
-  // Unknown emails cost the same hash.
-  const current = await derive(password, stored?.salt ?? 'no-such-account', root);
-
-  if (stored === null) return false;
-
-  if (timingSafeEqual(current, stored.hash)) return true;
   const previous = (env.CREDENTIAL_ENCRYPTION_KEY_PREVIOUS ?? '').split(',').map((key) => key.trim()).filter((key) => key !== '');
+  const check = await checkPassword({ current: root, previous }, password, stored);
 
-  for (const key of previous) {
-    if (!timingSafeEqual(await derive(password, stored.salt, key), stored.hash)) continue;
-    await accounts(env).builtinReplacePassword(await ownerCaller(env), stored.userId, await hashPassword(root, password));
+  if (stored !== null && check.rehash) await accounts(env).builtinReplacePassword(await ownerCaller(env), stored.userId, check.rehash);
 
-    return true;
-  }
-
-  return false;
+  return check.matched;
 }
 
 function addressKey(request: Request): string {
@@ -105,14 +62,6 @@ function addressKey(request: Request): string {
 
   return `${groups.slice(0, 4).map((group) => group.toLowerCase().replace(/^0+(?=.)/u, '')).join(':')}::/64`;
 }
-
-const buckets = {
-  passwordEmail: (email: string): AttemptBucket => ({ key: `password-email:${email}`, free: 5 }),
-  passwordAddress: (address: string): AttemptBucket => ({ key: `password-address:${address}`, free: 20 }),
-  passkey: (address: string): AttemptBucket => ({ key: `passkey-address:${address}`, free: 20 }),
-  register: (address: string): AttemptBucket => ({ key: `register-address:${address}`, free: 10 }),
-  challenge: (address: string): AttemptBucket => ({ key: `challenge-address:${address}`, free: 30 }),
-};
 
 const refuse = (message: string, status = 400, headers: HeadersInit = {}): Response => json({ body: { error: message } }, { status, headers });
 
@@ -150,8 +99,6 @@ const ReturnToSchema = v.optional(v.string(), '/');
 
 const TokenSchema = v.optional(v.nullable(v.string()), null);
 
-const inviteHashOf = async (invite: string | null): Promise<string | null> => (invite === null || invite === '' ? null : sha256Hex(invite));
-
 async function body<Schema extends v.GenericSchema>(request: Request, schema: Schema): Promise<v.SafeParseResult<Schema>> {
   return v.safeParse(schema, await tolerateAsync(() => request.json(), 'malformed-input'));
 }
@@ -182,7 +129,7 @@ async function admitted<Id>(env: BuiltinAuthEnv<Id>, request: Request, input: v.
   const limited = await reserve(env, [buckets.register(addressKey(request))]);
 
   if (limited) return limited;
-  const request_ = { email: input.email, inviteHash: await inviteHashOf(input.invite), setupProven: await setupProven(env, input.setup) };
+  const request_ = { email: input.email, grant: grantOf({ invite: input.invite, setup: input.setup }, env.KINU_SETUP_TOKEN) };
   const admission = await accounts(env).builtinAdmissible(await ownerCaller(env), request_);
 
   return admission.admitted ? request_ : refuse(admission.reason, 403);
@@ -227,7 +174,9 @@ builtinAuthRoutes.post('/api/auth/builtin/password/sign-in', async (c) => {
   const caller = await ownerCaller(c.env);
   const account = await accounts(c.env).builtinPasswordAccount(caller, input.email);
 
-  if (account === null || !await passwordMatches(c.env, root, input.password, account)) return refuse('That email and password do not match an account.', 401);
+  const matched = await passwordMatches(c.env, root, input.password, account);
+
+  if (account === null || !matched) return refuse('That email and password do not match an account.', 401);
   await accounts(c.env).builtinClearAttempts(caller, attempt.map((bucket) => bucket.key));
 
   return signedIn(c.env, c.req.raw, builtinProfile('password', account.userId, account.email), input.returnTo);
@@ -252,7 +201,7 @@ builtinAuthRoutes.post('/api/auth/builtin/passkey/register/options', async (c) =
   });
 
   await accounts(c.env).builtinIssueChallenge(
-    await ownerCaller(c.env), options.challenge, { purpose: 'register', userId, resetHash: null, ...request }, Date.now() + CHALLENGE_TTL_MS,
+    await ownerCaller(c.env), options.challenge, { purpose: 'register', userId, ...request }, Date.now() + CHALLENGE_TTL_MS,
   );
 
   return json({ body: options });
@@ -264,7 +213,7 @@ builtinAuthRoutes.post('/api/auth/builtin/passkey/register', async (c) => {
   if (!parsed.success) return misread(parsed.issues);
   const input = parsed.output;
   const caller = await ownerCaller(c.env);
-  const pending = await spend(c.env, input.response.response.clientDataJSON, 'register');
+  const pending = await spend(c.env, input.response.response.clientDataJSON, ['register', 'reset']);
 
   if (pending === null || pending.userId === null || pending.email === null) return refuse(SPENT, 403);
   const url = new URL(c.req.url);
@@ -276,11 +225,9 @@ builtinAuthRoutes.post('/api/auth/builtin/passkey/register', async (c) => {
   const { credential } = verified.registrationInfo;
   const passkey = { credentialId: credential.id, publicKey: base64Url(credential.publicKey), counter: credential.counter, transports: credential.transports ?? [] };
 
-  if (pending.resetHash !== null) return resetTo(c.env, c.req.raw, { resetHash: pending.resetHash, passkey }, input.returnTo);
+  if (pending.purpose === 'reset') return resetTo(c.env, c.req.raw, { grant: pending.grant, passkey }, input.returnTo);
 
-  const admission = await accounts(c.env).builtinRegister(caller, {
-    userId: pending.userId, email: pending.email, inviteHash: pending.inviteHash, setupProven: pending.setupProven, passkey,
-  });
+  const admission = await accounts(c.env).builtinRegister(caller, { userId: pending.userId, email: pending.email, grant: pending.grant, passkey });
 
   if (!admission.admitted) return refuse(admission.reason, 403);
 
@@ -295,7 +242,7 @@ builtinAuthRoutes.post('/api/auth/builtin/passkey/sign-in/options', async (c) =>
 
   await accounts(c.env).builtinIssueChallenge(
     await ownerCaller(c.env), options.challenge,
-    { purpose: 'authenticate', userId: null, email: null, inviteHash: null, setupProven: false, resetHash: null }, Date.now() + CHALLENGE_TTL_MS,
+    { purpose: 'authenticate', userId: null, email: null, grant: { kind: 'none' } }, Date.now() + CHALLENGE_TTL_MS,
   );
 
   return json({ body: options });
@@ -311,7 +258,7 @@ builtinAuthRoutes.post('/api/auth/builtin/passkey/sign-in', async (c) => {
 
   if (limited) return limited;
 
-  if (await spend(c.env, input.response.response.clientDataJSON, 'authenticate') === null) return refuse(SPENT, 403);
+  if (await spend(c.env, input.response.response.clientDataJSON, ['authenticate']) === null) return refuse(SPENT, 403);
   const caller = await ownerCaller(c.env);
   const store = accounts(c.env);
   const passkey = await store.builtinPasskeyAccount(caller, input.response.id);
@@ -339,11 +286,8 @@ async function resetTo<Id>(env: BuiltinAuthEnv<Id>, request: Request, reset: Res
   return signedIn(env, request, builtinProfile(reset.passkey ? 'passkey' : 'password', account.userId, account.email), returnTo);
 }
 
-async function resetHashOf<Id>(env: BuiltinAuthEnv<Id>, reset: string | null, setup: string | null): Promise<string | null> {
-  if (reset !== null && reset !== '') return sha256Hex(reset);
-
-  return await setupProven(env, setup) ? OWNER_RESET : null;
-}
+const resetGrant = <Id>(env: BuiltinAuthEnv<Id>, tokens: { reset: string | null; setup: string | null }): Grant =>
+  grantOf({ reset: tokens.reset, setup: tokens.setup }, env.KINU_SETUP_TOKEN);
 
 const ResetSchema = { reset: TokenSchema, setup: TokenSchema };
 
@@ -357,11 +301,9 @@ builtinAuthRoutes.post('/api/auth/builtin/password/reset', async (c) => {
   const root = c.env.CREDENTIAL_ENCRYPTION_KEY;
 
   if (!root) return refuse(NO_ROOT_SECRET, 503);
-  const resetHash = await resetHashOf(c.env, parsed.output.reset, parsed.output.setup);
+  const grant = resetGrant(c.env, parsed.output);
 
-  if (resetHash === null) return refuse(RESET_SPENT, 403);
-
-  return resetTo(c.env, c.req.raw, { resetHash, password: await hashPassword(root, parsed.output.password) }, parsed.output.returnTo);
+  return resetTo(c.env, c.req.raw, { grant, password: await hashPassword(root, parsed.output.password) }, parsed.output.returnTo);
 });
 
 builtinAuthRoutes.post('/api/auth/builtin/passkey/reset/options', async (c) => {
@@ -372,11 +314,8 @@ builtinAuthRoutes.post('/api/auth/builtin/passkey/reset/options', async (c) => {
 
   if (limited) return limited;
   const caller = await ownerCaller(c.env);
-  const resetHash = await resetHashOf(c.env, parsed.output.reset, parsed.output.setup);
-
-  if (resetHash === null) return refuse(RESET_SPENT, 403);
-  const store = accounts(c.env);
-  const account = resetHash === OWNER_RESET ? await store.builtinOwnerAccount(caller) : await store.builtinResetAccount(caller, resetHash);
+  const grant = resetGrant(c.env, parsed.output);
+  const account = await accounts(c.env).builtinResetAccount(caller, grant);
 
   if (account === null) return refuse(RESET_SPENT, 403);
   const url = new URL(c.req.url);
@@ -387,16 +326,16 @@ builtinAuthRoutes.post('/api/auth/builtin/passkey/reset/options', async (c) => {
   });
 
   await accounts(c.env).builtinIssueChallenge(caller, options.challenge, {
-    purpose: 'register', userId: account.userId, email: account.email, inviteHash: null, setupProven: false, resetHash,
+    purpose: 'reset', userId: account.userId, email: account.email, grant,
   }, Date.now() + CHALLENGE_TTL_MS);
 
   return json({ body: options });
 });
 
-async function spend<Id>(env: BuiltinAuthEnv<Id>, clientDataJSON: string, purpose: ChallengePurpose) {
+async function spend<Id>(env: BuiltinAuthEnv<Id>, clientDataJSON: string, purposes: readonly ChallengePurpose[]) {
   const challenge = answeredChallenge(clientDataJSON);
 
-  return challenge === null ? null : accounts(env).builtinSpendChallenge(await ownerCaller(env), challenge, purpose);
+  return challenge === null ? null : accounts(env).builtinSpendChallenge(await ownerCaller(env), challenge, purposes);
 }
 
 type SettingsEnv = FamilyEnv<BuiltinAuthEnv<unknown>, ApiVariables>;

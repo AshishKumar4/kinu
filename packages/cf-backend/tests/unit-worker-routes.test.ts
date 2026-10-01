@@ -61,7 +61,6 @@ function env(assets: string[]): Env {
       async ensureWorkspaceCapability() {},
       // No OAuth app is configured, so /login asks whether the deployment has its first account.
       async builtinHasOwner() { return false; },
-      async builtinOwnerAccount() { return null; },
     }),
     OrchestratorAgent: objects({
       async claimOwner() { return { owner: 'owner', capabilityHash: null }; },

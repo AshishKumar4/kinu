@@ -22,27 +22,28 @@ export interface StoredPasskey {
   readonly transports: readonly string[];
 }
 
+/** A hashed link, the setup token, or none. */
+export type Grant =
+  | { readonly kind: 'invite' | 'reset'; readonly hash: string }
+  | { readonly kind: 'setup' | 'none' };
+
 export interface NewBuiltinAccount {
   readonly userId: string;
   readonly email: string;
-  readonly inviteHash: string | null;
-  /** Only a request with the setup token takes the owner seat. */
-  readonly setupProven: boolean;
+  readonly grant: Grant;
   readonly password?: PasswordHash;
   readonly passkey?: StoredPasskey;
 }
 
 export type Admission = { readonly admitted: true; readonly role: BuiltinRole } | { readonly admitted: false; readonly reason: string };
 
-export type ChallengePurpose = 'register' | 'authenticate';
+export type ChallengePurpose = 'register' | 'reset' | 'authenticate';
 
 export interface PendingChallenge {
   readonly purpose: ChallengePurpose;
   readonly userId: string | null;
   readonly email: string | null;
-  readonly inviteHash: string | null;
-  readonly setupProven: boolean;
-  readonly resetHash: string | null;
+  readonly grant: Grant;
 }
 
 export interface AttemptBucket {
@@ -73,20 +74,16 @@ export function initBuiltinAccounts(sql: BuiltinSql): void {
     token_hash TEXT PRIMARY KEY,
     purpose TEXT NOT NULL CHECK (purpose IN ('join', 'reset')),
     email TEXT NOT NULL,
-    created_by TEXT NOT NULL,
     created_at INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL,
-    used_by TEXT,
-    used_at INTEGER
+    expires_at INTEGER NOT NULL
   )`;
   void sql`CREATE TABLE IF NOT EXISTS builtin_challenges (
     challenge TEXT PRIMARY KEY,
-    purpose TEXT NOT NULL CHECK (purpose IN ('register', 'authenticate')),
+    purpose TEXT NOT NULL CHECK (purpose IN ('register', 'reset', 'authenticate')),
     user_id TEXT,
     email TEXT,
-    invite_hash TEXT,
-    reset_hash TEXT,
-    setup_proven INTEGER NOT NULL,
+    grant_kind TEXT NOT NULL CHECK (grant_kind IN ('invite', 'reset', 'setup', 'none')),
+    grant_hash TEXT,
     expires_at INTEGER NOT NULL
   )`;
   void sql`CREATE TABLE IF NOT EXISTS builtin_attempts (
@@ -108,10 +105,12 @@ export function isBuiltinOwner(sql: BuiltinSql, userId: string): boolean {
 export const NOT_ADMITTED = 'This sign-up link is not valid. Ask the owner of this deployment for an invite.';
 
 /** No email lookup until a seat or invite admits. */
-export function builtinAdmission(sql: BuiltinSql, request: Pick<NewBuiltinAccount, 'email' | 'inviteHash' | 'setupProven'>, now: number): Admission {
-  if (!hasBuiltinOwner(sql)) return request.setupProven ? { admitted: true, role: 'owner' } : { admitted: false, reason: NOT_ADMITTED };
+export function builtinAdmission(sql: BuiltinSql, request: Pick<NewBuiltinAccount, 'email' | 'grant'>, now: number): Admission {
+  const { grant } = request;
 
-  const invited = request.inviteHash === null ? null : invitedEmail(sql, request.inviteHash, now);
+  if (!hasBuiltinOwner(sql)) return grant.kind === 'setup' ? { admitted: true, role: 'owner' } : { admitted: false, reason: NOT_ADMITTED };
+
+  const invited = grant.kind === 'invite' ? invitedEmail(sql, grant.hash, now) : null;
 
   if (invited === null) return { admitted: false, reason: NOT_ADMITTED };
 
@@ -128,9 +127,18 @@ const InviteRowSchema = v.object({ email: v.string() });
 
 export type InvitePurpose = 'join' | 'reset';
 
-export function invitedEmail(sql: BuiltinSql, inviteHash: string, now: number, purpose: InvitePurpose = 'join'): string | null {
+export function invitedEmail(sql: BuiltinSql, tokenHash: string, now: number, purpose: InvitePurpose = 'join'): string | null {
   const parsed = v.safeParse(InviteRowSchema, sql`SELECT email FROM builtin_invites
-    WHERE token_hash = ${inviteHash} AND purpose = ${purpose} AND used_by IS NULL AND expires_at > ${now}`[0]);
+    WHERE token_hash = ${tokenHash} AND purpose = ${purpose} AND expires_at > ${now}`[0]);
+
+  return parsed.success ? parsed.output.email : null;
+}
+
+function spendLink(sql: BuiltinSql, tokenHash: string, purpose: InvitePurpose, now: number): string | null {
+  void sql`DELETE FROM builtin_invites WHERE expires_at <= ${now}`;
+
+  const parsed = v.safeParse(InviteRowSchema, sql`DELETE FROM builtin_invites
+    WHERE token_hash = ${tokenHash} AND purpose = ${purpose} RETURNING email`[0]);
 
   return parsed.success ? parsed.output.email : null;
 }
@@ -141,10 +149,7 @@ export function registerBuiltinAccount(sql: BuiltinSql, account: NewBuiltinAccou
 
   if (!admission.admitted) return admission;
 
-  if (admission.role === 'member') {
-    void sql`UPDATE builtin_invites SET used_by = ${account.userId}, used_at = ${now}
-      WHERE token_hash = ${account.inviteHash} AND purpose = 'join'`;
-  }
+  if (account.grant.kind === 'invite') spendLink(sql, account.grant.hash, 'join', now);
 
   void sql`INSERT INTO builtin_accounts (user_id, email, role, password_hash, password_salt, password_iterations, created_at)
       VALUES (${account.userId}, ${account.email}, ${admission.role}, ${account.password?.hash ?? null},
@@ -205,26 +210,32 @@ export function recordPasskeyUse(sql: BuiltinSql, credentialId: string, counter:
 }
 
 export function issuePasskeyChallenge(sql: BuiltinSql, challenge: string, pending: PendingChallenge, expiresAt: number): void {
+  const hash = 'hash' in pending.grant ? pending.grant.hash : null;
+
   void sql`DELETE FROM builtin_challenges WHERE expires_at <= ${Date.now()}`;
-  void sql`INSERT INTO builtin_challenges (challenge, purpose, user_id, email, invite_hash, reset_hash, setup_proven, expires_at)
-      VALUES (${challenge}, ${pending.purpose}, ${pending.userId}, ${pending.email}, ${pending.inviteHash}, ${pending.resetHash},
-              ${pending.setupProven ? 1 : 0}, ${expiresAt})`;
+  void sql`INSERT INTO builtin_challenges (challenge, purpose, user_id, email, grant_kind, grant_hash, expires_at)
+      VALUES (${challenge}, ${pending.purpose}, ${pending.userId}, ${pending.email}, ${pending.grant.kind}, ${hash}, ${expiresAt})`;
 }
 
+const GrantSchema = v.union([
+  v.object({ kind: v.picklist(['invite', 'reset']), hash: v.string() }),
+  v.object({ kind: v.picklist(['setup', 'none']) }),
+]);
+
 const ChallengeRowSchema = v.object({
-  purpose: v.picklist(['register', 'authenticate']), user_id: v.nullable(v.string()), email: v.nullable(v.string()),
-  invite_hash: v.nullable(v.string()), reset_hash: v.nullable(v.string()), setup_proven: v.number(), expires_at: v.number(),
+  purpose: v.picklist(['register', 'reset', 'authenticate']), user_id: v.nullable(v.string()), email: v.nullable(v.string()),
+  grant: v.pipe(v.string(), v.parseJson(), GrantSchema), expires_at: v.number(),
 });
 
 /** Deleted as it is read: a challenge answers one ceremony. */
-export function spendPasskeyChallenge(sql: BuiltinSql, challenge: string, purpose: ChallengePurpose, now: number): PendingChallenge | null {
+export function spendPasskeyChallenge(sql: BuiltinSql, challenge: string, purposes: readonly ChallengePurpose[], now: number): PendingChallenge | null {
   const parsed = v.safeParse(ChallengeRowSchema, sql`DELETE FROM builtin_challenges WHERE challenge = ${challenge}
-    RETURNING purpose, user_id, email, invite_hash, reset_hash, setup_proven, expires_at`[0]);
+    RETURNING purpose, user_id, email, json_object('kind', grant_kind, 'hash', grant_hash) AS grant, expires_at`[0]);
 
-  if (!parsed.success || parsed.output.purpose !== purpose || parsed.output.expires_at <= now) return null;
+  if (!parsed.success || !purposes.includes(parsed.output.purpose) || parsed.output.expires_at <= now) return null;
   const row = parsed.output;
 
-  return { purpose, userId: row.user_id, email: row.email, inviteHash: row.invite_hash, resetHash: row.reset_hash, setupProven: row.setup_proven === 1 };
+  return { purpose: row.purpose, userId: row.user_id, email: row.email, grant: row.grant };
 }
 
 export interface NewInvite {
@@ -240,8 +251,8 @@ export function createBuiltinInvite(sql: BuiltinSql, invite: NewInvite, now: num
   const exists = sql`SELECT 1 FROM builtin_accounts WHERE email = ${invite.email}`.length > 0;
 
   if (exists !== (invite.purpose === 'reset')) return false;
-  void sql`INSERT INTO builtin_invites (token_hash, purpose, email, created_by, created_at, expires_at)
-      VALUES (${invite.tokenHash}, ${invite.purpose}, ${invite.email}, ${invite.ownerUserId}, ${now}, ${invite.expiresAt})`;
+  void sql`INSERT INTO builtin_invites (token_hash, purpose, email, created_at, expires_at)
+      VALUES (${invite.tokenHash}, ${invite.purpose}, ${invite.email}, ${now}, ${invite.expiresAt})`;
 
   return true;
 }
@@ -292,36 +303,31 @@ export interface ResetAccount {
 
 const AccountRowSchema = v.object({ user_id: v.string(), email: v.string() });
 
-export function resetAccount(sql: BuiltinSql, resetHash: string, now: number): ResetAccount | null {
-  const email = invitedEmail(sql, resetHash, now, 'reset');
-  const parsed = v.safeParse(AccountRowSchema, email === null ? undefined : sql`SELECT user_id, email FROM builtin_accounts WHERE email = ${email}`[0]);
+function accountWhere(rows: unknown[]): ResetAccount | null {
+  const parsed = v.safeParse(AccountRowSchema, rows[0]);
 
   return parsed.success ? { userId: parsed.output.user_id, email: parsed.output.email } : null;
 }
 
+export function resetAccount(sql: BuiltinSql, grant: Grant, now: number): ResetAccount | null {
+  if (grant.kind === 'setup') return accountWhere(sql`SELECT user_id, email FROM builtin_accounts WHERE role = 'owner'`);
+  const email = grant.kind === 'reset' ? invitedEmail(sql, grant.hash, now, 'reset') : null;
+
+  return email === null ? null : accountWhere(sql`SELECT user_id, email FROM builtin_accounts WHERE email = ${email}`);
+}
+
 export interface Reset {
-  readonly resetHash: string;
+  readonly grant: Grant;
   readonly password?: PasswordHash;
   readonly passkey?: StoredPasskey;
 }
 
-export const OWNER_RESET = 'owner-by-setup-token';
-
-export function ownerAccount(sql: BuiltinSql): ResetAccount | null {
-  const parsed = v.safeParse(AccountRowSchema, sql`SELECT user_id, email FROM builtin_accounts WHERE role = 'owner'`[0]);
-
-  return parsed.success ? { userId: parsed.output.user_id, email: parsed.output.email } : null;
-}
-
 export function applyReset(sql: BuiltinSql, reset: Reset, now: number): ResetAccount | null {
-  const account = reset.resetHash === OWNER_RESET ? ownerAccount(sql) : resetAccount(sql, reset.resetHash, now);
+  const account = resetAccount(sql, reset.grant, now);
 
   if (account === null) return null;
 
-  if (reset.resetHash !== OWNER_RESET) {
-    void sql`UPDATE builtin_invites SET used_by = ${account.userId}, used_at = ${now} WHERE token_hash = ${reset.resetHash}`;
-  }
-
+  if (reset.grant.kind === 'reset') spendLink(sql, reset.grant.hash, 'reset', now);
   void sql`DELETE FROM builtin_passkeys WHERE user_id = ${account.userId}`;
   void sql`UPDATE builtin_accounts SET password_hash = ${reset.password?.hash ?? null}, password_salt = ${reset.password?.salt ?? null},
     password_iterations = ${reset.password?.iterations ?? null} WHERE user_id = ${account.userId}`;

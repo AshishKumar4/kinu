@@ -96,7 +96,6 @@ const USER_DO_METHODS = [
   'builtinIsOwner',
   'builtinIssueChallenge',
   'builtinListAccounts',
-  'builtinOwnerAccount',
   'builtinPasskeyAccount',
   'builtinPasswordAccount',
   'builtinRecordPasskeyUse',

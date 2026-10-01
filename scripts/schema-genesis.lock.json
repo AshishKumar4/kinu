@@ -185,23 +185,19 @@
   ],
   "builtin_challenges@packages/core/src/identity/builtin-accounts.ts": [
     "challenge TEXT PRIMARY KEY",
-    "purpose TEXT NOT NULL CHECK (purpose IN ('register', 'authenticate'))",
+    "purpose TEXT NOT NULL CHECK (purpose IN ('register', 'reset', 'authenticate'))",
     "user_id TEXT",
     "email TEXT",
-    "invite_hash TEXT",
-    "reset_hash TEXT",
-    "setup_proven INTEGER NOT NULL",
+    "grant_kind TEXT NOT NULL CHECK (grant_kind IN ('invite', 'reset', 'setup', 'none'))",
+    "grant_hash TEXT",
     "expires_at INTEGER NOT NULL"
   ],
   "builtin_invites@packages/core/src/identity/builtin-accounts.ts": [
     "token_hash TEXT PRIMARY KEY",
     "purpose TEXT NOT NULL CHECK (purpose IN ('join', 'reset'))",
     "email TEXT NOT NULL",
-    "created_by TEXT NOT NULL",
     "created_at INTEGER NOT NULL",
-    "expires_at INTEGER NOT NULL",
-    "used_by TEXT",
-    "used_at INTEGER"
+    "expires_at INTEGER NOT NULL"
   ],
   "builtin_passkeys@packages/core/src/identity/builtin-accounts.ts": [
     "credential_id TEXT PRIMARY KEY",

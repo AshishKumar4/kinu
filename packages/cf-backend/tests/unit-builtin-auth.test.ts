@@ -1,5 +1,5 @@
 // Built-in sign-in's security contracts, through its routes and the real UserDO that holds the accounts.
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import * as v from 'valibot';
 import { builtinAccountRoutes, builtinAuthRoutes, type BuiltinAuthEnv } from '../src/auth/builtin';
@@ -216,6 +216,23 @@ describe('signing in', () => {
     expect(wrong.headers.get('set-cookie')).toBeNull();
     expect(right.status).toBe(200);
     expect(right.headers.get('set-cookie')).toContain('Secure');
+  });
+
+  test("an unknown email costs the same password derivation as a known one, so timing does not say which exist", async () => {
+    const { post, registerOwner } = deployment();
+
+    await registerOwner('owner@example.com');
+    const derivations = spyOn(crypto.subtle, 'deriveBits');
+
+    await post('/api/auth/builtin/password/sign-in', { email: 'owner@example.com', password: 'not the password' });
+    const known = derivations.mock.calls.length;
+
+    await post('/api/auth/builtin/password/sign-in', { email: 'nobody@example.com', password: 'not the password' });
+    const unknown = derivations.mock.calls.length - known;
+
+    derivations.mockRestore();
+    expect(known).toBeGreaterThan(0);
+    expect(unknown).toBe(known);
   });
 
   test('a passkey sign-in answered once cannot be replayed: its challenge is spent', async () => {

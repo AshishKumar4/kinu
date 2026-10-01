@@ -10,8 +10,8 @@ import {
 } from './store';
 import { escapeHtml, json, KINU_USER_AGENT, sha256Hex } from '@kinu.run/core';
 import { authDocument, loginDocument, type BuiltinSignIn } from '@kinu.run/core';
-import { builtinAccounts, setupProven } from './builtin';
-import { builtinSignInOn, type SignInDeclarationEnv } from '@kinu.run/core/identity';
+import { builtinAccounts } from './builtin';
+import { builtinSignInOn, grantOf, type SignInDeclarationEnv } from '@kinu.run/core/identity';
 import { publicHtmlHeaders } from '@kinu.run/core';
 import {
   clientAuth, getAuthorizationServer, getOAuthProvider, listConfiguredOAuthProviders,
@@ -64,7 +64,7 @@ interface MutableTokenEndpointResponse {
 }
 
 export type AuthRoutesAuthority = SessionAuthority
-  & Pick<UserDO, 'setCredential' | 'listActiveWorkspaces' | 'builtinHasOwner' | 'builtinInvitedEmail' | 'builtinResetAccount' | 'builtinOwnerAccount'>;
+  & Pick<UserDO, 'setCredential' | 'listActiveWorkspaces' | 'builtinHasOwner' | 'builtinInvitedEmail' | 'builtinResetAccount'>;
 
 /** Nothing optional that the session port leaves optional: sign-out revokes through `AUTH_KV` unguarded. */
 export interface AuthRoutesEnv<Id = DurableObjectId> extends SignInDeclarationEnv, OwnerCapabilityEnv {
@@ -152,7 +152,7 @@ async function builtinSignIn<Id>(env: AuthRoutesEnv<Id>, url: URL, returnTo: str
   const reset = url.searchParams.get('reset');
 
   if (reset !== null && reset !== '') {
-    const account = await accounts.builtinResetAccount(caller, await sha256Hex(reset));
+    const account = await accounts.builtinResetAccount(caller, grantOf({ reset }, undefined));
 
     return account === null
       ? { mode: 'sign-in', notice: 'This reset link was already used or has expired. Ask the owner for a new one.', returnTo }
@@ -168,11 +168,12 @@ async function builtinSignIn<Id>(env: AuthRoutesEnv<Id>, url: URL, returnTo: str
   }
 
   const setup = url.searchParams.get('setup');
-  const proven = await setupProven(env, setup);
-  const owner = await accounts.builtinOwnerAccount(caller);
+  const proven = grantOf({ setup }, env.KINU_SETUP_TOKEN).kind === 'setup';
 
-  if (owner !== null) {
-    return proven
+  if (await accounts.builtinHasOwner(caller)) {
+    const owner = proven ? await accounts.builtinResetAccount(caller, { kind: 'setup' }) : null;
+
+    return owner !== null
       ? { mode: 'reset', setup: setup ?? '', email: owner.email, notice: "Reset the owner's sign-in. It replaces the owner's password and passkeys and signs the owner out everywhere.", returnTo }
       : { mode: 'sign-in', returnTo };
   }
