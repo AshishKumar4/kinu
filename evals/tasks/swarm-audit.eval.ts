@@ -422,7 +422,7 @@ const ProbeLine = v.pipe(v.string(), v.regex(/^PROBES /), v.transform((line) => 
 /** Run probes in the workspace's shell and read back each one's answer, or why none came. */
 async function runProbes(verifier: EvalVerifier, probes: readonly Probe[]): Promise<Record<string, true | string>> {
   await verifier.writeFile(PROBE, probeModule(probes));
-  const ran = await verifier.shell(`node ${PROBE}`);
+  const ran = await verifier.run('workspace', `node ${PROBE}`);
   const line = (ran.stdout ?? '').split('\n').find((candidate) => candidate.startsWith('PROBES '));
   const parsed = v.safeParse(ProbeLine, line);
 

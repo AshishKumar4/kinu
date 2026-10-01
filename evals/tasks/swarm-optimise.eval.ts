@@ -227,7 +227,7 @@ console.log('BENCH ' + JSON.stringify(results));
 `;
 
   await verifier.writeFile(`${BENCH_DIR}/bench.mjs`, source);
-  const ran = await verifier.shell(`node ${BENCH_DIR}/bench.mjs`);
+  const ran = await verifier.run('workspace', `node ${BENCH_DIR}/bench.mjs`);
   const line = (ran.stdout ?? '').split('\n').find((candidate) => candidate.startsWith('BENCH '));
   const parsed = v.safeParse(BenchLine, line);
 
