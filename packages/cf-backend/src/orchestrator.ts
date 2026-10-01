@@ -4162,10 +4162,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // No owner: a creation that died before its claim, or storage from before a reset. The caller
     // `removeWorkspace` already verified ownership through the user's roster.
-    const ownerUserId = this.storageRefusal === undefined ? this.getOwnerUserId() : null;
+    let ownerUserId = this.wipe?.ownerUserId ?? null;
+
+    if (this.wipe === undefined && this.storageRefusal === undefined) ownerUserId = this.getOwnerUserId();
 
     if (ownerUserId !== null && ownerUserId !== expectedOwnerUserId) throw new KinuError('denied', 'Agent owner mismatch; refusing to destroy.');
 
+    if (this.wipe === undefined) await this.releaseOutsideState();
+
+    this.wipe ??= { ownerUserId, done: this.wipeStorage() };
+    await this.wipe.done;
+
+    return { ok: true };
+  }
+
+  private async releaseOutsideState(): Promise<void> {
     // First: revoke all preview URLs, else answering a stale one would create a fresh container object.
     // The watermark outranks every earlier record (core preview/preview-exposures.ts).
     if (this.env.AUTH_KV) {
@@ -4182,7 +4193,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       await sb.discardState();
       await sb.destroy();
     }
+  }
 
+  private wipe: { readonly ownerUserId: string | null; readonly done: Promise<void> } | undefined;
+
+  private async wipeStorage(): Promise<void> {
     // deleteAll misses facet storage.
     if (this.storageRefusal === undefined && this.ctx.storage.sql.exec('SELECT 1 FROM workspace_identity').toArray().length > 0) {
       for (const record of this.actorDirectoryStore().list({ retired: true })) {
@@ -4190,10 +4205,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }
     }
 
-    // agents base: drops SDK tables, deleteAlarm, deleteAll (takes the filesystem), aborts the isolate.
+    // Drops SDK tables, alarms and storage; the isolate resets later, so a concurrent delete joins `wipe`.
     await this.destroy();
-
-    return { ok: true };
   }
 
   @callable()

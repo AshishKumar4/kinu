@@ -814,69 +814,68 @@ describe('cloud agent ownership safety', () => {
   test('a workspace whose create died before its owner claim is deleted: roster row and object storage go together', async () => {
     // Registered on the user, never claimed by the object: no owner to compare.
     const halfBorn = unstartedOrchestratorHarness({ workspace: 'jarvis' });
+    const { userDO, remove } = await deletesReaching(halfBorn);
 
-    const userDO = createTestUserDO({
-      durableObjectId: USER_ID,
-      destroyWorkspaceGate: async (_name, ownerUserId) => {
-        await halfBorn.agent.destroyAgent(ownerUserId);
-      },
-    });
-
-    const env = {
-      UserDO: { idFromName: (name: string) => name, get: () => userDO.userDO },
-      OrchestratorAgent: { idFromName: (name: string) => name, get: () => workspaceObject({}) },
-      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    };
-
-    const owner = await testOwner();
-    await userDO.userDO.registerWorkspace(owner, 'jarvis');
-
-    const identity: AuthIdentity = {
-      userId: USER_ID, email: 'owner@example.com', sub: 'sub', provider: 'test', authTime: Date.now(),
-    };
-
-    const response = await serveFamily(userRoutes, { identity, ctx: workerContext() })(new Request(
-      'https://kinu.example.com/api/user/workspaces/jarvis', { method: 'DELETE' },
-    ), env);
-
-    expect(response?.status).toBe(200);
-    expect(userDO.destroyedWorkspaces).toEqual(['jarvis']);
+    // The second reaches the instance the first wiped, as a concurrent one does.
+    expect([(await remove())?.status, (await remove())?.status]).toEqual([200, 200]);
+    expect(userDO.destroyedWorkspaces).toEqual(['jarvis', 'jarvis']);
     expect(halfBorn.tableNames().filter((name) => name !== 'sqlite_sequence')).toEqual([]);
     // Out of the registry, not parked `delete_pending`.
     expect(userDO.sql.exec(`SELECT name FROM user_workspaces`).toArray()).toEqual([]);
   });
 
+  // staging df49f4cc5, 2026-10-01 03:16:51Z: nine DELETEs of one workspace within 2 ms; one wiped the object and eight answered
+  // 500 "no such table: workspace_identity" (kinu-logs/evals-fast/FINDINGS.md F11), while a delete of a missing workspace
+  // answers 200. The eight ran on the wiped instance: agents 0.24 `destroy()` empties storage, then resets the isolate on a
+  // timer. This harness never resets it, so a second delete meets the instance those eight met.
+  test('a delete that reaches the workspace after another wiped it answers ok, and it is gone', async () => {
+    const workspace = orchestratorHarness(undefined, { workspace: 'jarvis', ownerUserId: USER_ID });
+    const { userDO, remove } = await deletesReaching(workspace);
+    const answers = [await remove(), await remove()];
+
+    expect(await Promise.all(answers.map(async (answer) => `${String(answer?.status)} ${await answer?.text() ?? ''}`)))
+      .toEqual(['200 {"ok":true}', '200 {"ok":true}']);
+    expect(workspace.tableNames().filter((name) => name !== 'sqlite_sequence')).toEqual([]);
+    expect(userDO.sql.exec(`SELECT name FROM user_workspaces`).toArray()).toEqual([]);
+  });
+
   test('a healthy workspace whose owner does not match is still refused, row and storage intact', async () => {
     // The unclaimed skip must not widen: a claimed workspace with another owner is not destroyed.
-    const OTHER = 'b'.repeat(32);
-    const healthy = orchestratorHarness(undefined, { workspace: 'jarvis', ownerUserId: OTHER });
+    const healthy = orchestratorHarness(undefined, { workspace: 'jarvis', ownerUserId: 'b'.repeat(32) });
+    const { remove } = await deletesReaching(healthy);
 
-    const userDO = createTestUserDO({
-      durableObjectId: USER_ID,
-      destroyWorkspaceGate: async (_name, ownerUserId) => {
-        await healthy.agent.destroyAgent(ownerUserId);
-      },
-    });
-
-    const env = {
-      UserDO: { idFromName: (name: string) => name, get: () => userDO.userDO },
-      OrchestratorAgent: { idFromName: (name: string) => name, get: () => workspaceObject({}) },
-      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-    };
-
-    const owner = await testOwner();
-    await userDO.userDO.registerWorkspace(owner, 'jarvis');
-
-    const response = await serveFamily(userRoutes, { identity: {
-      userId: USER_ID, email: 'owner@example.com', sub: 'sub', provider: 'test', authTime: Date.now(),
-    }, ctx: workerContext() })(new Request(
-      'https://kinu.example.com/api/user/workspaces/jarvis', { method: 'DELETE' },
-    ), env);
-
-    expect(response?.status).toBe(403);
+    expect((await remove())?.status).toBe(403);
     expect(healthy.tableNames()).toContain('workspace_identity');
   });
 });
+
+/** The owner's account with `jarvis` registered, and its DELETE route, whose destroy reaches `workspace`'s real object. */
+async function deletesReaching(workspace: { readonly agent: { destroyAgent(ownerUserId: string): Promise<{ ok: true }> } }) {
+  const userDO = createTestUserDO({
+    durableObjectId: USER_ID,
+    destroyWorkspaceGate: async (_name, ownerUserId) => {
+      await workspace.agent.destroyAgent(ownerUserId);
+    },
+  });
+
+  const env = {
+    UserDO: { idFromName: (name: string) => name, get: () => userDO.userDO },
+    OrchestratorAgent: { idFromName: (name: string) => name, get: () => workspaceObject({}) },
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+  };
+
+  await userDO.userDO.registerWorkspace(await testOwner(), 'jarvis');
+
+  const identity: AuthIdentity = {
+    userId: USER_ID, email: 'owner@example.com', sub: 'sub', provider: 'test', authTime: Date.now(),
+  };
+
+  const remove = () => serveFamily(userRoutes, { identity, ctx: workerContext() })(new Request(
+    'https://kinu.example.com/api/user/workspaces/jarvis', { method: 'DELETE' },
+  ), env);
+
+  return { userDO, remove };
+}
 
 /** `user_workspaces` as accounts created before the 2026-09-22 deploy hold it; `IF NOT EXISTS` keeps this CHECK live. */
 const GENESIS_USER_WORKSPACES_DDL = `
