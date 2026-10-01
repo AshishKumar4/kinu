@@ -6,7 +6,7 @@ import { describe, expect, test } from 'bun:test';
 import { generateText, type LanguageModel, type ModelMessage } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModelV3CallOptions, LanguageModelV3Message } from '@ai-sdk/provider';
-import { createProviderRegistry, type ModelInputModality, type ProviderDeps } from '../src/index';
+import { createProviderRegistry, type ModelInputModality, type ModelCallDeps } from '../src/index';
 import { withToolResultImages } from '../src/providers/tool-result-images';
 
 const IMAGE = { type: 'image-data' as const, data: 'iVBORw0KGgo=', mediaType: 'image/png' };
@@ -41,7 +41,7 @@ async function sentPrompt(provider: string, accepts?: ReadonlySet<ModelInputModa
 
   const registry = createProviderRegistry();
   registry.register({ id: 'probe', isAvailable: () => true, listModels: () => [], createModel: (): LanguageModel => model });
-  const deps: ProviderDeps = { env: {}, getAuth: async () => null, hasCredential: async () => false };
+  const deps: ModelCallDeps = { env: {}, sessionAffinity: 'kinu-test', getAuth: async () => null, hasCredential: async () => false };
   const resolved = registry.resolve('probe/m', deps);
 
   await generateText({ model: accepts === undefined ? resolved : withToolResultImages(resolved, accepts), messages: HISTORY });

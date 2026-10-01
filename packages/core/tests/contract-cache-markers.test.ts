@@ -11,15 +11,16 @@ import {
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY,
   JsonObjectSchema, JsonValueSchema, parseJsonObject,
   type JsonObject, type JsonValue,
-  type ProviderDeps, type AuthResolution, type CacheRetention,
+  type ModelCallDeps, type AuthResolution, type CacheRetention,
 } from '../src/index';
 import { createMockFetch, type MockFetchHandle } from '@kinu.run/test-utils';
 
-function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ProviderDeps {
+function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ModelCallDeps {
   const store = new Map(Object.entries(creds));
 
   return {
     env: {},
+    sessionAffinity: 'kinu-test',
     fetch: fetchFn,
     async getAuth(key) { return store.get(key) ?? null; },
     async hasCredential(key) { return store.has(key); },

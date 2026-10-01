@@ -16,7 +16,7 @@ import { createClaudeProvider, CLAUDE_CRED_KEY } from '../src/providers/claude';
 import { cacheableSystem, resolvePromptCacheStrategy } from '../src/prompting/cache-breakpoints';
 import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 import { OAuthTokenError } from '../src/providers/oauth-token-error';
-import type { AuthResolution, ProviderDeps, ProviderWaitInfo } from '../src/providers/types';
+import type { AuthResolution, ModelCallDeps, ProviderWaitInfo } from '../src/providers/types';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 import { parseJsonObject, type JsonObject } from '../src/utils/json';
 import { callAccountOf, quotaWindowText } from '../src/providers/quota';
@@ -94,14 +94,14 @@ function only(sent: readonly Sent[], index = 0): Sent {
 }
 
 /** `asked`: per call, the Authorization it named as refused, or null for a plain read. */
-function deps(fetchFn: typeof fetch, logins: (AuthResolution | 'revoked')[], affinity?: string): ProviderDeps & { asked: (string | null)[] } {
+function deps(fetchFn: typeof fetch, logins: (AuthResolution | 'revoked')[], affinity = 'kinu-agent-1'): ModelCallDeps & { asked: (string | null)[] } {
   const asked: (string | null)[] = [];
 
   return {
     env: {},
     fetch: fetchFn,
     asked,
-    ...(affinity !== undefined && { sessionAffinity: affinity }),
+    sessionAffinity: affinity,
     async getAuth(key, opts) {
       expect(key).toBe(CLAUDE_CRED_KEY);
       asked.push(opts?.rejected?.Authorization ?? null);
@@ -126,7 +126,7 @@ const HISTORY: ModelMessage[] = [
 ];
 
 /** One streamed turn; a failed call rejects with the error the stream carried, as a turn shows it. */
-async function turn(provider: ReturnType<typeof createClaudeProvider>, providerDeps: ProviderDeps) {
+async function turn(provider: ReturnType<typeof createClaudeProvider>, providerDeps: ModelCallDeps) {
   let failure: unknown;
 
   const result = streamText({
@@ -169,7 +169,7 @@ function billing(firstUserMessage: string, version: string, cch: string): string
 describe('the Claude subscription wire', () => {
   test('headers, URL, system blocks and body are Claude Code\'s, and the reply\'s tool name is the declared one', async () => {
     const { sent, fetchFn } = wire([sse]);
-    const { calls } = await turn(createClaudeProvider(), deps(fetchFn, [login('sk-ant-oat01-first')], 'kinu-agent-1'));
+    const { calls } = await turn(createClaudeProvider(), deps(fetchFn, [login('sk-ant-oat01-first')]));
 
     expect(calls.map((call) => [call.toolName, call.input])).toEqual([['read', { path: 'src/parser.ts' }]]);
     const request = only(sent);
@@ -219,7 +219,7 @@ describe('the Claude subscription wire', () => {
   test('the cch attestation is XXH64 of the sent bytes with the placeholder in place, seed 0x4d659218e32a3268', async () => {
     const { sent, fetchFn } = wire([sse]);
 
-    await turn(createClaudeProvider(), deps(fetchFn, [login('sk-ant-oat01-first')], 'kinu-agent-1'));
+    await turn(createClaudeProvider(), deps(fetchFn, [login('sk-ant-oat01-first')]));
     const { text } = only(sent);
     const cch = /cch=([0-9a-f]{5});/.exec(text)?.[1];
     const unattested = new TextEncoder().encode(text.replace(`cch=${cch ?? ''};`, 'cch=00000;'));
@@ -231,8 +231,8 @@ describe('the Claude subscription wire', () => {
   test('one conversation keeps one session id across providers; another conversation gets its own', async () => {
     const { sent, fetchFn } = wire([sse, sse, sse]);
 
-    await turn(createClaudeProvider(), deps(fetchFn, [login('t')], 'kinu-agent-1'));
-    await turn(createClaudeProvider(), deps(fetchFn, [login('t')], 'kinu-agent-1'));
+    await turn(createClaudeProvider(), deps(fetchFn, [login('t')]));
+    await turn(createClaudeProvider(), deps(fetchFn, [login('t')]));
     await turn(createClaudeProvider(), deps(fetchFn, [login('t')], 'kinu-agent-2'));
     const ids = sent.map((request) => new Map(request.headers).get('X-Claude-Code-Session-Id'));
 
@@ -245,7 +245,7 @@ describe('the Claude subscription wire', () => {
     const marked = { anthropic: { cacheControl: { type: 'ephemeral', ttl: '1h' } } } as const;
 
     const result = streamText({
-      model: createClaudeProvider().createModel('claude-opus-4-7', deps(fetchFn, [login('t')], 'kinu-agent-1')),
+      model: createClaudeProvider().createModel('claude-opus-4-7', deps(fetchFn, [login('t')])),
       system: cacheableSystem('You are Kinu.', resolvePromptCacheStrategy('claude')),
       messages: [
         { role: 'user', content: 'Please refactor the parser module into two files.', providerOptions: marked },
@@ -271,8 +271,8 @@ describe('the Claude subscription wire', () => {
     const provider = createClaudeProvider();
 
     try {
-      const first = await turn(provider, deps(fetchFn, [login('t')], 'kinu-agent-1'));
-      const second = await turn(provider, deps(fetchFn, [login('t')], 'kinu-agent-1'));
+      const first = await turn(provider, deps(fetchFn, [login('t')]));
+      const second = await turn(provider, deps(fetchFn, [login('t')]));
 
       expect([first.calls.length, second.calls.length]).toEqual([1, 1]);
     } finally {
@@ -291,7 +291,7 @@ describe('the Claude subscription wire', () => {
     const tooOld = () => anthropicError(400, 'invalid_request_error', 'claude_code_version_too_old: Claude Code version 2.9.0 or newer is required.');
     const { sent, fetchFn } = wire([tooOld, tooOld]);
 
-    await expect(turn(createClaudeProvider(), deps(fetchFn, [login('t')], 'kinu-agent-1')))
+    await expect(turn(createClaudeProvider(), deps(fetchFn, [login('t')])))
       .rejects.toThrow('Claude Code version 2.9.0 or newer is required');
     expect(sent.length).toBe(2);
   });
@@ -301,7 +301,7 @@ describe('the Claude subscription wire', () => {
     const restore = setDiagnosticsSink(recorded);
     const refused = () => anthropicError(401, 'authentication_error', 'Invalid bearer token');
     const { sent, fetchFn } = wire([refused, refused]);
-    const providerDeps = deps(fetchFn, [login('sk-ant-oat01-stale'), login('sk-ant-oat01-fresh')], 'kinu-agent-1');
+    const providerDeps = deps(fetchFn, [login('sk-ant-oat01-stale'), login('sk-ant-oat01-fresh')]);
 
     try {
       await expect(turn(createClaudeProvider(), providerDeps))
@@ -326,7 +326,7 @@ describe('the Claude subscription wire', () => {
     });
 
     const { fetchFn } = wire([windows]);
-    const providerDeps = deps(fetchFn, [{ headers: { Authorization: 'Bearer t' }, credentialKey: 'claude.oauth@work' }], 'kinu-agent-1');
+    const providerDeps = deps(fetchFn, [{ headers: { Authorization: 'Bearer t' }, credentialKey: 'claude.oauth@work' }]);
     const result = streamText({ model: createClaudeProvider().createModel('claude-opus-4-7', providerDeps), prompt: 'hello' });
 
     await result.consumeStream();
@@ -347,7 +347,7 @@ describe('the Claude subscription wire', () => {
 
     const { sent, fetchFn } = wire([busy, sse]);
     const waits: ProviderWaitInfo[] = [];
-    const { calls } = await turn(createClaudeProvider(), { ...deps(fetchFn, [login('t')], 'kinu-agent-1'), onProviderWait: (info) => waits.push(info) });
+    const { calls } = await turn(createClaudeProvider(), { ...deps(fetchFn, [login('t')]), onProviderWait: (info) => waits.push(info) });
 
     expect([calls.length, sent.length]).toEqual([1, 2]);
     expect(only(sent, 1).text).toBe(only(sent).text);
@@ -372,7 +372,7 @@ describe('the Claude subscription wire', () => {
     });
 
     const { sent, fetchFn } = wire([spent]);
-    const providerDeps = deps(fetchFn, [{ headers: { Authorization: 'Bearer t' }, credentialKey: 'claude.oauth@work' }], 'kinu-agent-1');
+    const providerDeps = deps(fetchFn, [{ headers: { Authorization: 'Bearer t' }, credentialKey: 'claude.oauth@work' }]);
 
     try {
       const failed = turn(createClaudeProvider(), providerDeps);
@@ -394,7 +394,7 @@ describe('the Claude subscription wire', () => {
     });
 
     const { sent, fetchFn } = wire([credits]);
-    const failed = turn(createClaudeProvider(), deps(fetchFn, [login('t')], 'kinu-agent-1'));
+    const failed = turn(createClaudeProvider(), deps(fetchFn, [login('t')]));
 
     await expect(failed).rejects.toThrow('Claude usage limit reached on the account main: Usage credits are required for this model.');
     await expect(failed).rejects.toHaveProperty('cause.code', 'budget');
@@ -404,7 +404,7 @@ describe('the Claude subscription wire', () => {
   test('a revoked refresh token is the same remedy, with nothing sent', async () => {
     const { sent, fetchFn } = wire([]);
 
-    await expect(turn(createClaudeProvider(), deps(fetchFn, ['revoked'], 'kinu-agent-1'))).rejects.toThrow('Your Claude login is no longer valid.');
+    await expect(turn(createClaudeProvider(), deps(fetchFn, ['revoked']))).rejects.toThrow('Your Claude login is no longer valid.');
     expect(sent).toEqual([]);
   });
 

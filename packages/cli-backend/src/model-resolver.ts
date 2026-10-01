@@ -100,10 +100,7 @@ export {
 
 type PerCloudSession<T> = Map<string, { base: typeof fetch | undefined; value: T }>;
 
-/**
- * One value per session + base fetch. Not keyed on sessionAffinity: that header pins a Workers AI
- * replica, is not sent to third parties, and keying on it would re-download the catalog per agent.
- */
+/** One value per session + base fetch, shared by every conversation the session runs. */
 function perCloudSession<T>(cache: PerCloudSession<T>, cloud: LocalCloudSession, base: typeof fetch | undefined, make: () => T): T {
   const cacheKey = `${cloud.origin} ${cloud.token}`;
   const cached = cache.get(cacheKey);
@@ -120,7 +117,8 @@ const proxyFetches: PerCloudSession<typeof fetch> = new Map();
 
 export interface LocalModelResolver {
   normalizeSpecSync(specOrNull?: string | null): string;
-  resolveModel(specOrNull?: string | null): LanguageModel;
+  /** `conversation`: the affinity key (`agentAffinityKey`) the calls are routed and cached under. */
+  resolveModel(specOrNull: string | null | undefined, conversation: string): LanguageModel;
   credentialFor(specOrNull?: string | null): Promise<string | null>;
   listProviders(): Promise<ProviderInfo[]>;
   /** One broken credential never empties the menu. */
@@ -150,7 +148,6 @@ export interface LocalModelResolverConfig {
   /** When present, workers-ai + my-gateway resolve through the worker's AI proxy;
    *  when absent they list as unavailable with a `kinu auth` hint. */
   cloud?: LocalCloudSession;
-  sessionAffinity?: string;
   fetch?: typeof fetch;
   /** Read per call so {@link LocalModelResolver.setProviderWaitSink} can install
    *  the session's sink after construction. */
@@ -164,6 +161,7 @@ export interface LocalModelResolverConfig {
  */
 export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
   spec?: string | null;
+  conversation: string;
   /** Sink and producer label together: only the consumer knows which producer
    *  a call belongs to. */
   spend: ModelCallSpend;
@@ -171,7 +169,7 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
   const resolver = createLocalModelResolver(opts);
   // Normalized per call: an unresolvable id fails at the call, not at construction.
   const spec = () => resolver.normalizeSpecSync(opts.spec ?? null);
-  const model = (resolved: string) => resolver.resolveModel(resolved);
+  const model = (resolved: string) => resolver.resolveModel(resolved, opts.conversation);
   const spend = opts.spend;
   const effortOptions = (resolved: string) => reasoningEffortOptions('low', parseModelSpec(resolved).provider);
 
@@ -233,13 +231,11 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   const defaultProvider = defaultProviderFor(localEndpoint);
 
   if (localEndpoint !== null && defaultProvider === 'workers-ai' && !llmIsCloudProxy) {
-    // Cloudflare-shaped endpoint, so it takes the same replica pin as the proxy path.
-    const pinned = withAffinity(localEndpoint, opts.sessionAffinity);
     registry.register(createGatewayBackedProvider({
       id: 'workers-ai',
       label: 'Cloudflare Workers AI (local gateway)',
       defaultModel: localEndpoint.model,
-      llm: pinned,
+      llm: localEndpoint,
       catalogProviderId: 'cloudflare-workers-ai',
       fetch: opts.fetch,
     }));
@@ -247,7 +243,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       id: 'ai-gateway',
       label: 'Cloudflare AI Gateway (local)',
       defaultModel: workersAiSpec(localEndpoint.model),
-      llm: pinned,
+      llm: localEndpoint,
       catalogProviderId: 'cloudflare-workers-ai',
       catalogModelPrefix: 'workers-ai/',
       fetch: opts.fetch,
@@ -262,7 +258,6 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
         id: 'workers-ai',
         label: 'Cloudflare Workers AI (your account)',
         cloud,
-        sessionAffinity: opts.sessionAffinity,
         menu,
         defaultModel: DEFAULT_WORKERS_AI_MODEL_ID,
         unavailableReason: 'Connect Cloudflare in Account settings in the Kinu app to use Workers AI.',
@@ -274,7 +269,6 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       id: 'my-gateway',
       label: 'Your AI Gateway',
       cloud,
-      sessionAffinity: opts.sessionAffinity,
       menu,
       unavailableReason: 'Connect Cloudflare and pick an AI Gateway in Account settings in the Kinu app.',
       fetch: opts.fetch,
@@ -306,7 +300,6 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
   const depsFor = (accountFor?: (providerId: string) => string | undefined): ProviderDeps => ({
     env: {},
-    sessionAffinity: opts.sessionAffinity,
     fetch: cloud
       ? perCloudSession(proxyFetches, cloud, opts.fetch, () => createProviderProxyFetch({
         forwardURL: providerProxyForwardURL(cloud.origin), authorization: `Bearer ${cloud.token}`, fetch: opts.fetch,
@@ -397,8 +390,8 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
   const resolverWith = (own: ProviderDeps): LocalModelResolver => ({
     normalizeSpecSync,
-    resolveModel(specOrNull) {
-      return registry.resolve(normalizeSpecSync(specOrNull), own);
+    resolveModel(specOrNull, conversation) {
+      return registry.resolve(normalizeSpecSync(specOrNull), { ...own, sessionAffinity: conversation });
     },
     credentialFor(specOrNull) {
       return registry.credentialFor(normalizeSpecSync(specOrNull), own);
@@ -436,9 +429,8 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   return resolverWith(deps);
 }
 
-function withAffinity(llm: LLMProviderConfig, sessionAffinity: string | undefined): LLMProviderConfig {
-  if (!sessionAffinity) return llm;
-
+/** A Cloudflare-shaped endpoint takes the same replica pin as the proxy path; a pin its own headers set wins. */
+function withAffinity(llm: LLMProviderConfig, sessionAffinity: string): LLMProviderConfig {
   for (const header in llm.headers) {
     if (header.toLowerCase() === 'x-session-affinity') return llm;
   }
@@ -482,7 +474,7 @@ function createGatewayBackedProvider(opts: {
         kind: 'openai-compat',
         name: opts.id,
         baseURL: opts.llm.baseURL,
-        headers: opts.llm.headers,
+        headers: withAffinity(opts.llm, deps.sessionAffinity).headers,
         modelId,
         fetch: opts.fetch,
         onWait: deps.onProviderWait,
@@ -497,11 +489,6 @@ interface CloudMenu {
   entries: AgentModelEntry[];
   /** Per-provider listing failure, reported verbatim instead of a canned hint. */
   failures: Map<string, string>;
-}
-
-interface CloudProxyHeaders {
-  [header: string]: string;
-  Authorization: string;
 }
 
 const EMPTY_CLOUD_MENU: CloudMenu = { entries: [], failures: new Map() };
@@ -618,16 +605,12 @@ function createCloudProxyProvider(opts: {
   id: 'workers-ai' | 'my-gateway';
   label: string;
   cloud: LocalCloudSession;
-  sessionAffinity: string | undefined;
   menu: () => Promise<CloudMenu>;
   defaultModel?: string;
   unavailableReason: string;
   fetch?: typeof fetch;
 }): ModelProvider {
   const baseURL = cloudProxyBaseURL(opts.cloud.origin);
-  const headers: CloudProxyHeaders = { Authorization: `Bearer ${opts.cloud.token}` };
-
-  if (opts.sessionAffinity) headers['x-session-affinity'] = opts.sessionAffinity;
   const prefix = `${opts.id}/`;
 
   return {
@@ -656,7 +639,7 @@ function createCloudProxyProvider(opts: {
         kind: 'openai-compat',
         name: opts.id,
         baseURL,
-        headers,
+        headers: { Authorization: `Bearer ${opts.cloud.token}`, 'x-session-affinity': deps.sessionAffinity },
         modelId,
         fetch: opts.fetch,
         onWait: deps.onProviderWait,

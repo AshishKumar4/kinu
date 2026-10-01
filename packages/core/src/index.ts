@@ -2276,10 +2276,7 @@ export {
   createMyGatewayProvider,
 } from './providers/my-gateway';
 
-export {
-  type WorkersAIOptions,
-  createWorkersAIProvider,
-} from './providers/workers-ai-provider';
+export { createWorkersAIProvider } from './providers/workers-ai-provider';
 
 export {
   type AnyToolPart,

@@ -4,6 +4,7 @@ import { describeProviderError, providerFailureFacts, toProviderError } from './
 import { abortCause } from '../utils/abort';
 import { renderThrownChain } from '../obs/index';
 import { streamTextReported } from './model-invocation';
+import { agentAffinityKey } from './workers-ai';
 import type { ModelCallSink } from '../events/model-call';
 
 export type ModelTestFailure = 'signed-out' | 'spent' | 'unknown-model' | 'unreachable' | 'refused';
@@ -22,10 +23,10 @@ export const ModelTestResultSchema: v.GenericSchema<ModelTestResult> = v.union([
   }),
 ]);
 
-/** Unretried; output uncapped by rule. */
+/** Unretried; output uncapped by rule. Each test is a conversation of its own. */
 export async function testModel(input: {
   readonly spec: string;
-  readonly resolve: (spec: string) => LanguageModel;
+  readonly resolve: (spec: string, conversation: string) => LanguageModel;
   readonly report?: ModelCallSink;
   readonly signal?: AbortSignal;
   readonly now?: () => number;
@@ -34,7 +35,7 @@ export async function testModel(input: {
   let model: LanguageModel;
 
   try {
-    model = input.resolve(input.spec);
+    model = input.resolve(input.spec, agentAffinityKey(`model-test-${crypto.randomUUID()}`));
   } catch (cause) {
     return { ok: false, failure: 'unknown-model', message: renderThrownChain({ cause }) };
   }

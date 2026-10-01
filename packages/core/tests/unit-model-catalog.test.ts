@@ -11,14 +11,15 @@ import {
   createProviderRegistry,
   toProviderError,
   type AuthResolution,
-  type ProviderDeps,
+  type ModelCallDeps,
 } from '../src/index';
 
-function deps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ProviderDeps {
+function deps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ModelCallDeps {
   const store = new Map(Object.entries(creds));
 
   return {
     env: {},
+    sessionAffinity: 'kinu-test',
     fetch: fetchFn,
     async getAuth(key) { return store.get(key) ?? null; },
     async hasCredential(key) { return store.has(key); },

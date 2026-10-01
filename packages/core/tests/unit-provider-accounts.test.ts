@@ -25,7 +25,7 @@ import {
   validateCredentialKey,
   type AuthResolution,
   type ModelProvider,
-  type ProviderDeps,
+  type ModelCallDeps, type ProviderDeps,
 } from '../src/index';
 
 describe('account specs', () => {
@@ -132,8 +132,9 @@ describe('which account a call spends', () => {
     const registry = createProviderRegistry();
     registry.register(provider);
 
-    const deps: ProviderDeps = {
+    const deps: ModelCallDeps = {
       env: {},
+      sessionAffinity: 'kinu-test',
       async getAuth(key) { return stored.includes(key) ? { headers: { authorization: `Bearer ${key}` } } : null; },
       async hasCredential(key) { return stored.includes(key); },
       async listCredentialKeys() { return [...stored]; },
@@ -204,8 +205,9 @@ describe('what a call tells the ledger about its account', () => {
       }),
     });
 
-    const deps: ProviderDeps = {
+    const deps: ModelCallDeps = {
       env: {},
+      sessionAffinity: 'kinu-test',
       async getAuth(key) {
         return key === 'openai-compat.default@work'
           ? { headers: { Authorization: 'Bearer key-work' }, baseURL: `http://localhost:${String(server.port)}/v1` }
@@ -250,8 +252,9 @@ describe('what a call tells the ledger about its account', () => {
     registry.register(createAnthropicProvider());
     registry.register(createCodexProvider());
 
-    const deps: ProviderDeps = {
+    const deps: ModelCallDeps = {
       env: {},
+      sessionAffinity: 'kinu-test',
       fetch: asFetchFunction(async () => new Response(body, { headers: { 'content-type': 'text/event-stream', ...headers } })),
       async getAuth(key) { return stored[key] ?? null; },
       async hasCredential(key) { return key in stored; },

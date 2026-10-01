@@ -323,8 +323,7 @@ async function openDaemonAgent(
   db: Database,
   dbPath: string,
 ): Promise<LocalHostedAgent> {
-  const { llmConfig, resolver: modelResolver } =
-    createConfiguredLocalModelResolver({ agentName: ref.name });
+  const { llmConfig, resolver: modelResolver } = createConfiguredLocalModelResolver();
 
   const openConfig = {
     llm: llmConfig,

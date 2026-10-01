@@ -586,8 +586,8 @@ function buildVectorStore(
 
 /** Resolved at call time so a newly connected provider applies without redeploy; not via
  * `OwnedModelServices`, which memoizes under one fixed title. */
-function actorProviderRegistry(lane: Pick<ProfileLaneOptions, 'agent' | 'env' | 'actor' | 'currentTurn'>, title: string): AgentProviderRegistry {
-  const { agent, env, actor, currentTurn } = lane;
+function actorProviderRegistry(lane: Pick<ProfileLaneOptions, 'env' | 'actor' | 'currentTurn'>, title: string): AgentProviderRegistry {
+  const { env, actor, currentTurn } = lane;
 
   return createAgentProviderRegistry({
     ...(currentTurn !== undefined && { currentTurn }),
@@ -595,7 +595,6 @@ function actorProviderRegistry(lane: Pick<ProfileLaneOptions, 'agent' | 'env' | 
     ownerUserId: actor.ownerUserId(),
     userDO: userCredentialSourceFor(env, actor),
     appTitle: title,
-    sessionAffinity: agentAffinityKey(agent.name),
   });
 }
 
@@ -639,7 +638,7 @@ function createProfileLaneLLM(options: ProfileLaneOptions): LLM | undefined {
         );
 
         const request: GenerateRequest = {
-          model: registry.resolveModel(route.model),
+          model: registry.resolveModel(route.model, agentAffinityKey(options.agent.name)),
           prompt,
         };
 

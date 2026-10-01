@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test';
 import { APICallError, generateText, jsonSchema, streamText, tool, type LanguageModel } from 'ai';
 import * as v from 'valibot';
 import {
-  asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider, JsonObjectSchema, type AuthRequest, type JsonObject, type ProviderDeps,
+  asFetchFunction, CHATGPT_CRED_KEY, createChatGptProvider, JsonObjectSchema, type AuthRequest, type JsonObject, type ModelCallDeps,
 } from '../src/index';
 import { KinuError } from '../src/obs/index';
 
@@ -87,8 +87,9 @@ function refusal(status: number, code: string, param?: string): Response {
 function signedIn(fetch: typeof globalThis.fetch) {
   const asked: (AuthRequest | undefined)[] = [];
 
-  const deps: ProviderDeps = {
+  const deps: ModelCallDeps = {
     env: {},
+    sessionAffinity: 'kinu-test',
     fetch,
     async getAuth(key, opts) {
       if (key !== CHATGPT_CRED_KEY) return null;
@@ -354,8 +355,9 @@ describe('on the web, through the machine that signed in', () => {
     const api = openai(Response.json({ error: { code: 'chatgpt_signed_out', message: 'studio holds no ChatGPT sign-in with plan usage' } }, { status: 401 }));
     const asked: string[] = [];
 
-    const deps: ProviderDeps = {
+    const deps: ModelCallDeps = {
       env: {},
+      sessionAffinity: 'kinu-test',
       async getAuth(key) {
         asked.push(key);
 

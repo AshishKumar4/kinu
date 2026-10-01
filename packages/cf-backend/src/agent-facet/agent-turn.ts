@@ -1,7 +1,7 @@
 /** One delegated turn in the agent's isolate: its model loop here, every tool call back in the workspace. */
 import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessageChunk } from 'ai';
 import {
-  CHAT_SESSION_ID, HeadCapture, decodeJsonValue, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan,
+  CHAT_SESSION_ID, HeadCapture, agentAffinityKey, decodeJsonValue, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan,
   type AuthRequest, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type ObservedCall, type ProviderEnv, type WorkMode,
   type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
 } from '@kinu.run/core';
@@ -172,7 +172,7 @@ async function runTurn(
     actor,
     runId,
     clock: REAL_CLOCK,
-    model: registry.resolveModel(prepared.model),
+    model: registry.resolveModel(prepared.model, agentAffinityKey(prepared.input.rootId)),
     tools: withEffectClaims(workspaceTools(workspace, prepared, { id: task.sequenceId, live, capture, database }), {
       actor: actor.handle,
       sql: actor.runtime.storage.sql,

@@ -4,6 +4,7 @@ import { generateText } from 'ai';
 import {
   WORKSPACE_TITLE_SYSTEM_PROMPT,
   workspaceTitlePrompt,
+  agentAffinityKey,
   changeRoleAsOwner, openWorkspaceMainActor,
   DEFAULT_ROLE_ID,
   fallbackWorkspaceIdentity,
@@ -99,7 +100,7 @@ export async function suggestAgentIdentityFromMission(
   try {
     const raw = opts.generate
       ? await opts.generate(mission, opts.signal)
-      : await generateTitleJson(mission, opts);
+      : await generateTitleJson(mission, opts, agentAffinityKey(fallback.name));
 
     const title = parseWorkspaceTitle(raw);
 
@@ -385,11 +386,12 @@ function nameTaken(name: string, dbPath: string, held: { cwd?: string; workspace
   return `Workspace "${name}" already exists at ${dbPath}.${placement} Choose another name.`;
 }
 
-async function generateTitleJson(mission: string, opts: SuggestAgentIdentityOptions): Promise<string> {
+/** `conversation`: the new workspace's, as its first model call. */
+async function generateTitleJson(mission: string, opts: SuggestAgentIdentityOptions, conversation: string): Promise<string> {
   const { resolver } = createConfiguredLocalModelResolver(opts);
 
   const result = await generateText({
-    model: resolver.resolveModel(opts.model ?? null),
+    model: resolver.resolveModel(opts.model ?? null, conversation),
     system: WORKSPACE_TITLE_SYSTEM_PROMPT,
     prompt: workspaceTitlePrompt(mission),
     abortSignal: opts.signal,
