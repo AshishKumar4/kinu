@@ -275,7 +275,7 @@ const ORCHESTRATOR_METHODS = [
   'readBlueprint',
   'shareBlueprintWith',
   'acceptEmailDelivery',
-  'acceptSandboxLifecycleFailure',
+  'acceptSandboxLifecycleIncident',
   'sandboxStopped',
   'acceptWebhookDelivery',
   'accountSpend',

@@ -44,6 +44,12 @@ import {
   QUIET_SINCE_KEY,
   racedRestoreSteps, runRestoreStep, type RestoreSteps,
   type StartClock,
+  restAskText,
+  type RestAnswer,
+  type RestAnswered,
+  type RestDetail,
+  type RestProcess,
+  type RunningForRest,
 } from './lifecycle';
 import { DevboxError, attempt, attemptSync, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
 import { BOX_SIZE_ORDER, BoxSizeSchema, DEFAULT_BOX_SIZE, instanceOf, type BoxSize, type ResizeOutcome } from './sizes';
@@ -185,7 +191,7 @@ const ATTACH_RECOVERY_KEY = 'devbox:attach-recovery';
 
 const LAST_TICK_KEY = 'devbox:last-tick';
 
-const UNREADABLE_PROCESS_BEATS_KEY = 'devbox:unreadable-process-beats';
+const REST_ASK_KEY = 'devbox:rest-ask';
 
 const BOOT_ID_KEY = 'devbox:boot-id';
 
@@ -1892,14 +1898,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       }
     } catch (cause) {
       const reason = describe({ cause });
-      const beats = await this.ctx.storage.get<number>(UNREADABLE_PROCESS_BEATS_KEY) ?? 0;
 
-      if (!ending && beats < this.#processListGraceBeats) {
+      // Never on a guess (D59).
+      if (!ending) {
         return { kind: 'failed', reason: 'the stop is held while the process list is unreadable: ' + reason, bytes: undefined, movedBytes: undefined };
       }
 
-      warning = 'D35: the process list stayed unreadable past the quiet-confirm window; an unobservable detached command may be stopped: ' + reason;
-      this.#trace('quiesce.processes.unreadable', { reason, beats });
+      warning = 'the process list was unreadable, so an unobservable command may be stopped: ' + reason;
+      this.#trace('quiesce.processes.unreadable', { reason });
       await this.#record('quiesce', warning);
       listed = [];
     }
@@ -2450,16 +2456,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
         // Each busy lane covers its own tail: claims include draining streams, checkpoints queued runs,
         // startup restore/repair; shell commands and supervised starts count only via `#activeCallers`.
-        let backgroundWork = this.#quiescing !== undefined || this.#activeCallers !== 0
+        const backgroundWork = this.#quiescing !== undefined || this.#activeCallers !== 0
           || this.#resources.busy()
           || this.#lane.busy()
           || this.#startup !== undefined
-          || this.#gateRestore !== undefined
-          || await this.isKeptAlive();
-
-        let note: string | undefined;
-
-        if (!backgroundWork) ({ running: backgroundWork, note } = await this.#commandRunning());
+          || this.#gateRestore !== undefined;
 
         const decision = quiesceStep({
           now,
@@ -2479,16 +2480,24 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           await this.ctx.storage.put(QUIET_SINCE_KEY, decision.quietSince);
         }
 
-        await this.#tick({
-          running: true,
-          ping: 'ok',
-          // A quiesce deliberately arms nothing: see `quiesce`.
-          armedNext: decision.action !== 'quiesce',
-          decision: decision.action,
-          ...(note !== undefined && { note }),
-        });
+        if (decision.action !== 'quiesce') {
+          await this.#tick({ running: true, ping: 'ok', armedNext: true, decision: decision.action });
 
-        if (decision.action !== 'quiesce') return beat;
+          return beat;
+        }
+
+        const running = await this.#runningForRest();
+
+        if (running.unreadable !== undefined || running.live.length > 0) {
+          const note = await this.#askToRest(running, now);
+          await this.#tick({ running: true, ping: 'ok', armedNext: true, decision: 'ask', ...(note !== undefined && { note }) });
+
+          return beat;
+        }
+
+        // A quiesce deliberately arms nothing: see `quiesce`.
+        await this.#tick({ running: true, ping: 'ok', armedNext: false, decision: 'quiesce' });
+        await this.ctx.storage.delete(REST_ASK_KEY);
 
         // The next beat retries a refused stop with fresh evidence.
         return (await this.quiesce()).kind === 'failed' ? beat : null;
@@ -2496,36 +2505,70 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
-  get #processListGraceBeats(): number {
-    return Math.ceil(this.policy.quietConfirmMs / (this.policy.heartbeatSeconds * 1000));
-  }
-
-  /** See D35. */
-  async #commandRunning(): Promise<{ readonly running: boolean; readonly note?: string }> {
-    let running: boolean;
-
+  async #runningForRest(): Promise<RunningForRest> {
     try {
       const supervised = new Set((await this.#procSpecs()).map((spec) => spec.processId));
-      running = (await this.#processes().list()).some((live) => isProcessLive(live.status) && !supervised.has(live.id));
+      const live = (await this.#processes().list()).filter((row) => isProcessLive(row.status));
+
+      return { live: live.map((row) => ({ ...row, supervised: supervised.has(row.id) })), unreadable: undefined };
     } catch (error) {
-      const beats = (await this.ctx.storage.get<number>(UNREADABLE_PROCESS_BEATS_KEY) ?? 0) + 1;
-      await this.ctx.storage.put(UNREADABLE_PROCESS_BEATS_KEY, beats);
-      const reason = describe({ cause: error });
-      const cap = this.#processListGraceBeats;
-
-      if (beats === 1) await this.#record('quiesce', `process list unreadable; holding up to ${String(cap)} beats: ${reason}`);
-
-      if (beats < cap) return { running: true };
-      const note = `process list unreadable for ${String(beats)} beats; the idle gate decides: ${reason}`;
-
-      if (beats === cap) await this.#record('quiesce', note);
-
-      return { running: false, note };
+      return { live: [], unreadable: describe({ cause: error }) };
     }
+  }
 
-    await this.ctx.storage.delete(UNREADABLE_PROCESS_BEATS_KEY);
+  async #askToRest(running: RunningForRest, now: number): Promise<string | undefined> {
+    const window = this.policy.idleMs + this.policy.quietConfirmMs;
+    const asked = await this.ctx.storage.get<number>(REST_ASK_KEY);
 
-    return { running };
+    if (asked !== undefined && now - asked < window) return running.unreadable;
+    await this.ctx.storage.put(REST_ASK_KEY, now);
+    await this.#record('rest', restAskText(running, await this.#restDetails(running.live), Math.round(window / 60_000)));
+
+    return running.unreadable;
+  }
+
+  async #restDetails(live: readonly RestProcess[]): Promise<ReadonlyMap<number, RestDetail>> {
+    const pids = live.flatMap((row) => (row.pid === undefined ? [] : [row.pid]));
+
+    if (pids.length === 0) return new Map();
+
+    try {
+      const listeners = await this.portListeners('') ?? [];
+      const read = await this.#execute(`ps -o pid=,pgid=,etimes= -p ${[...pids, ...listeners.map((row) => row.pid)].join(',')} || true`);
+      const groups = new Map(read.stdout.trim().split('\n').map((line) => line.trim().split(/\s+/).map(Number)).map(([pid = 0, pgid = 0, age = 0]) => [pid, { pgid, age }] as const));
+
+      return new Map(pids.map((pid) => [pid, {
+        ageSeconds: groups.get(pid)?.age,
+        ports: [...new Set(listeners.filter((row) => row.pid === pid || groups.get(row.pid)?.pgid === pid).map((row) => row.port))],
+      }]));
+    } catch (error) {
+      console.error(`[devbox] the rest ask lists processes without ages or ports: ${describe({ cause: error })}`);
+
+      return new Map();
+    }
+  }
+
+  /** D59: refused with no ask pending. */
+  answerRest(answer: RestAnswer): Promise<RestAnswered> {
+    return settle(attempt('io', async (): Promise<RestAnswered> => {
+      if (await this.ctx.storage.get<number>(REST_ASK_KEY) === undefined) {
+        return { kind: 'refused', reason: 'no rest ask is pending: the sandbox is in use or already resting' };
+      }
+
+      await this.ctx.storage.delete(REST_ASK_KEY);
+
+      if (answer === 'keep') {
+        const now = Date.now();
+        this.stampInteraction();
+        await this.ctx.storage.put(LAST_INTERACTION_KEY, now);
+
+        return { kind: 'kept', askAgainAfterMs: this.policy.idleMs + this.policy.quietConfirmMs };
+      }
+
+      const outcome = await this.#quiesce(true);
+
+      return outcome.kind === 'failed' ? { kind: 'failed', reason: outcome.reason ?? 'the final checkpoint failed' } : { kind: 'resting' };
+    }));
   }
 
   /** One durable row per heartbeat, so a stopped box shows when and why: it tells apart an
@@ -2854,18 +2897,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       return resetTerminal(container);
     })));
-  }
-
-  setKeepAlive(enabled: boolean): Promise<void> {
-    return settle(attempt('io', async () => {
-      await this.ctx.storage.put('devbox:keep-alive', enabled);
-    }));
-  }
-
-  isKeptAlive(): Promise<boolean> {
-    return settle(attempt('io', async () => {
-      return await this.ctx.storage.get('devbox:keep-alive') === true;
-    }));
   }
 
 

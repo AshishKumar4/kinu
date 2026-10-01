@@ -1510,6 +1510,10 @@ did confirm D34: each stopped box took one heartbeat that armed nothing
 (`devbox.schedule.exit` with no `nextSeconds`). There were 81 `KinuSandbox`
 alarm invocations in all, and none of the 58 boxes looped.
 
+Superseded in part by D59 (2026-10-01): a process still running no longer
+holds a box on its own, a supervised server no longer rests it silently, and
+an unreadable process list never lets the box rest without an answer.
+
 D36. A destroyed box starts nothing of its own, a refused box says so, and a
 box no caller used rests (2026-09-28). Staging's first-run case
 `sandbox-mount-write` failed on 2026-09-27 and 2026-09-28 with `this devbox
@@ -2687,8 +2691,8 @@ alive, and the sandbox stays lazily provisioned. So the push is gone too:
 `sandboxUsed` and the runtime's `sandboxReached`. With them went
 `hasBackgroundWork`, its in-memory answer, the workspace's `sandboxInUse` RPC
 and W2's startless exception. The box rests on its own use only: commands,
-files, the terminal, ports, previews, and its own lanes. A process it started
-that is still running holds it, as before (D35).
+files, the terminal, ports, previews, and its own lanes. A process still
+running in it does not decide alone: the box asks its agent first (D59).
 
 What changes: a box rests `idleMs + quietConfirmMs` (40 min) after its own
 last use, whatever its workspace is doing. A turn that runs longer than that
@@ -2812,6 +2816,89 @@ Platform time on a new image: the first deploy of `a41e4a11…` polled
 17:00:43Z) before it was stopped. The retry polled 179 times in 7 minutes
 (17:01:49 to 17:08:49Z), then deployed. That is about 20 minutes, which any
 deploy of a new image may pay.
+
+D59. A box idle long enough to rest, with anything still running in it,
+asks its agent and holds until the agent answers (2026-10-01). Before this:
+- A process the box started that was not supervised held the box for as long
+  as it ran, with nobody told. A long build or a background shell job could
+  keep a box up indefinitely.
+- A supervised server did not hold it. The box rested after 40 idle minutes
+  and stopped the server without telling anyone.
+- A process list that could not be read held the box for one quiet-confirm
+  window of beats. After that the box rested anyway, with an empty list
+  (D35's give-way), so it could stop a command nobody could see.
+
+The owner's rule (m1937): when the sandbox has gone unused long enough and any
+long-running process is up, dev servers included, wake the agent and let it
+confirm whether resting is safe. A box with nothing running rests as before.
+
+The rule now:
+- A process no longer counts as the box's work in `quiesceStep`. Only the
+  box's own lanes and callers do.
+- When the step reaches `quiesce`, the box reads its process registry. If
+  nothing live is in it, the box rests silently, as before.
+- If any process is live, supervised or not, or the list cannot be read, the
+  box records a rest ask, holds, and ticks `decision: 'ask'`. The ask goes
+  out on the existing incident path as stage `rest`: the incident ledger, then
+  `KinuDevbox.onIncident`, the root's `acceptSandboxLifecycleIncident`, and
+  one inbox signal.
+- The ask lists each process: its command, pid, age, the ports it listens on
+  (from `portListeners`, matched by process group), and what resting does to
+  it. An unsupervised process ends and does not come back; a supervised
+  server stops and restarts cold on its next use, without its in-memory
+  state. The ask also says that 'keep' means another ask in about 40 minutes.
+  An unreadable list says so, and that resting could end a command nobody can
+  see.
+- The agent answers with `sandbox.rest('now' | 'keep')`. This is a binding on
+  the sandbox namespace that eval programs reach, not a native tool, so
+  `BUILTIN_TOOLS` stays at eight. It is declared only in that namespace's
+  types. It calls `SandboxHandle.answerRest`, then the adapter's DO-only call
+  (which never starts a resting container), then `Devbox.answerRest`.
+- 'now' saves the workspace and stops the container. That is an ending, so
+  untimed commands end and an unread list does not hold it.
+- 'keep' stamps use, so the box asks again only after its next idle window
+  and quiet confirmation.
+- Either answer with no ask pending is refused, so it cannot stop a box in
+  use. An ask nobody answers is recorded again once per idle window, and the
+  box keeps holding.
+- `devbox:rest-ask` holds when the box last asked. An answer deletes it, and
+  so does a rest.
+
+Removed:
+- `setKeepAlive`, `isKeptAlive` and `devbox:keep-alive`, which had no caller
+  in cf-backend or core. 'keep' is the one way to keep a box running, and it
+  is a stamp of use.
+- `devbox:unreadable-process-beats` and the give-way. A stop that the agent
+  did not answer for is now always held while the list is unreadable.
+- `acceptSandboxLifecycleFailure` is renamed `acceptSandboxLifecycleIncident`,
+  and its types with it, because it now carries an ask. The persisted signal
+  kind, `sandbox_lifecycle_failure`, is unchanged, so rows already written
+  still read.
+
+D35's measurement, re-run under both rules: the process list throws on every
+read, and the box is idle.
+- D35's rule held for 9 beats, then rested the box at beat 10, with no ask.
+  The new test, run against those sources, found the box rested and nothing
+  asked (`bench-artifacts/rest-ask/devbox-red.log`).
+- The new rule held 10 beats while the quiet was confirmed, asked once at
+  beat 11, and held the next 29 beats as `ask`. In 40 beats it stopped the box
+  0 times.
+
+Tests (`devbox/tests/terminal-activity.test.ts`, "a box with work still
+running asks before it rests"; red before the change, 6 of 7):
+- a command still running is listed in one ask over three beats, and the box
+  holds;
+- a supervised server alone asks, and its line says it restarts cold;
+- a box with nothing running rests without asking;
+- an unreadable list asks and never rests;
+- 'keep' holds, then asks again one idle window later, and 'now' stops the
+  box;
+- an answer with no ask pending is refused;
+- an unreadable supervised-spec store asks rather than throwing.
+In cf-backend, a `rest` incident lands as one signal that names the process
+and both answers and does not read as a failure. In core, `sandbox.rest`
+reaches the box once per answer and renders each outcome. Both were red on the
+old sources (`cf-core-red.log`).
 
 ## Measurement contract for a strategy comparison
 

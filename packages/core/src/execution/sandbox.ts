@@ -91,6 +91,25 @@ export interface SandboxHandle {
   notePortRemoved(port: number): Promise<void>;
   /** Records the size; a container running at another size restarts at it, and one not running stays so. */
   resize(size: string): Promise<SandboxResize>;
+  answerRest(answer: 'now' | 'keep'): Promise<SandboxRestAnswer>;
+}
+
+export type SandboxRestAnswer =
+  | { readonly kind: 'resting' }
+  | { readonly kind: 'kept'; readonly askAgainAfterMs: number }
+  | { readonly kind: 'refused' | 'failed'; readonly reason: string };
+
+function restText(answered: SandboxRestAnswer): string | Refusal {
+  switch (answered.kind) {
+    case 'resting':
+      return 'The sandbox saved its workspace and stopped. The next sandbox call starts it again.';
+    case 'kept':
+      return `The sandbox keeps running. It asks again after about ${String(Math.round(answered.askAgainAfterMs / 60_000))} minutes without use.`;
+    case 'refused':
+      return refusalOf(new KinuError('bad_input', `sandbox rest: ${answered.reason}`));
+    case 'failed':
+      return refusalOf(new KinuError('io', `sandbox rest: the sandbox could not save its workspace, so it keeps running: ${answered.reason}`));
+  }
 }
 
 /** `failed`: the final checkpoint failed, so the container runs on at `previous` until its next start. */
@@ -418,7 +437,6 @@ export function createSandboxExecutor(
           return refusalOf(new KinuError('bad_input', 'sandbox listFiles: path must be a string'));
         }
 
-        // Absent path means the executor's working directory.
         const dir = path === undefined || path === '' ? WORKSPACE_BACKUP_DIR : path;
 
         try {
@@ -610,6 +628,23 @@ export function createSandboxExecutor(
         }
       },
     },
+    rest: {
+      description:
+        'Answer the sandbox\'s rest ask. When it has gone unused while processes still run in it, it asks you: ' +
+        '"now" saves it and stops it, ending what runs (supervised servers restart cold on their next use); ' +
+        '"keep" leaves it running until it asks again.',
+      execute: async (...args: unknown[]): Promise<string | Refusal> => {
+        if (!handle) return notConfigured();
+        const answer = parseInput(v.picklist(['now', 'keep']), { value: args[0] });
+
+        if (answer === undefined) return refusalOf(new KinuError('bad_input', 'sandbox rest: the answer must be "now" or "keep"'));
+
+        return settle(Effect.match(Effect.tryPromise({
+          try: () => handle.answerRest(answer),
+          catch: (cause) => sandboxFailure({ doing: `sandbox rest ${answer}`, cause }),
+        }), { onSuccess: restText, onFailure: refusalOf }));
+      },
+    },
     listProcesses: {
       description:
         'List sandbox processes as JSON rows {processId,pid,status,restartable,command}. ' +
@@ -676,6 +711,8 @@ declare namespace sandbox {
   function stopProcess(processId: string): Promise<string | Refusal>;
   /** JSON rows {processId,pid,status,restartable,command}. */
   function listProcesses(): Promise<string | Refusal>;
+  /** 'now' saves and stops it, ending what runs; 'keep' runs on until it asks again. */
+  function rest(answer: 'now' | 'keep'): Promise<string | Refusal>;
   function exposePort(port: number, name?: string): Promise<string | Refusal>;
   function unexposePort(port: number): Promise<string | Refusal>;
   function listPorts(): Promise<string | Refusal>;${resizeDeclaration(sizes)}

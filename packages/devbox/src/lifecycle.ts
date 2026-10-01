@@ -826,9 +826,67 @@ export function createCheckpointLane(): CheckpointLane {
 
 /** A runtime list, not a bare type union: the receiving host validates stages against it,
  *  so producer and consumer share this one list or incidents get rejected unseen. */
-export const INCIDENT_STAGES = ['attach', 'checkpoint', 'process', 'port', 'quiesce'] as const;
+export const INCIDENT_STAGES = ['attach', 'checkpoint', 'process', 'port', 'quiesce', 'rest'] as const;
 
 export type IncidentStage = (typeof INCIDENT_STAGES)[number];
+
+export interface RestProcess {
+  readonly id: string;
+  readonly command: string;
+  readonly pid: number | undefined;
+  readonly supervised: boolean;
+}
+
+export interface RunningForRest {
+  readonly live: readonly RestProcess[];
+  readonly unreadable: string | undefined;
+}
+
+export interface RestDetail {
+  readonly ageSeconds: number | undefined;
+  readonly ports: readonly number[];
+}
+
+export type RestAnswer = 'now' | 'keep';
+
+export type RestAnswered =
+  | { readonly kind: 'resting' }
+  | { readonly kind: 'kept'; readonly askAgainAfterMs: number }
+  | { readonly kind: 'refused' | 'failed'; readonly reason: string };
+
+function ageText(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+
+  return minutes < 60 ? `${String(minutes)} min` : `${String(Math.floor(minutes / 60))} h ${String(minutes % 60)} min`;
+}
+
+export function restAskText(running: RunningForRest, details: ReadonlyMap<number, RestDetail>, windowMinutes: number): string {
+  const head = `The sandbox has not been used for ${String(windowMinutes)} minutes and would rest now`;
+  const again = `sandbox.rest('keep') leaves it running, and it asks again after about ${String(windowMinutes)} minutes without use.`;
+
+  if (running.unreadable !== undefined) {
+    return `${head}, but its process list could not be read (${running.unreadable}), so it cannot tell whether a command `
+      + `is still running, and resting could end one. ${again}`;
+  }
+
+  const lines = running.live.map((row) => {
+    const detail = row.pid === undefined ? undefined : details.get(row.pid);
+
+    const facts = [
+      ...(row.pid === undefined ? [] : [`pid ${String(row.pid)}`]),
+      ...(detail?.ageSeconds === undefined ? [] : [`running ${ageText(detail.ageSeconds)}`]),
+      ...(detail === undefined || detail.ports.length === 0 ? [] : [`listening on ${detail.ports.join(', ')}`]),
+    ];
+
+    const fate = row.supervised
+      ? 'supervised: resting stops it, and it restarts cold on its next use, without its in-memory state'
+      : 'resting ends it, and it does not come back';
+
+    return `- \`${row.command.slice(0, 160)}\` (${[...facts, fate].join('; ')})`;
+  });
+
+  return `${head}, but these processes still run in it:\n${lines.join('\n')}\n${again}`;
+}
 
 /** Recorded durably before anyone is told. `reason` carries ids and stages only: never an
  *  object key, bucket name, token or presigned value, since incidents get forwarded. */

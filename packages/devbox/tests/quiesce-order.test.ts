@@ -1,4 +1,5 @@
 import { expect, setSystemTime, test } from 'bun:test';
+import { INCIDENT_PREFIX } from '../src/incidents';
 import { normalizeChainState } from '../src/snapshot-chain';
 import { chainBox, chainHead } from './support/chain-box';
 import { gate } from './support/devbox-harness';
@@ -77,7 +78,7 @@ test('a readable unmanaged command refuses stop and remains running', async () =
   } finally { await box.destroy(); }
 });
 
-test('D35 bounds unreadable-process holding and names the risk on the stop result', async () => {
+test('an unreadable process list holds every stop until the agent answers, and the answered stop names the risk', async () => {
   const { box, container, rows } = chainBox();
   await box.start();
   container.fileFaults.set('/var/tmp/devbox/processes', { errno: 13, message: 'process directory unavailable' });
@@ -85,17 +86,19 @@ test('D35 bounds unreadable-process holding and names the risk on the stop resul
 
   try {
     expect((await box.quiesce()).kind).toBe('failed');
-    expect(container.running.running).toBe(true);
     rows.set(LAST_INTERACTION_KEY, start - DEFAULT_DEVBOX_POLICY.idleMs - 60_000);
 
-    for (let beat = 1; beat <= DEFAULT_DEVBOX_POLICY.quietConfirmMs / (DEFAULT_DEVBOX_POLICY.heartbeatSeconds * 1000); beat++) {
+    for (let beat = 1; beat <= 2 * DEFAULT_DEVBOX_POLICY.quietConfirmMs / (DEFAULT_DEVBOX_POLICY.heartbeatSeconds * 1000); beat++) {
       setSystemTime(start + beat * DEFAULT_DEVBOX_POLICY.heartbeatSeconds * 1000);
       await box.devboxHeartbeat();
     }
 
-    const stopped = await box.quiesce();
-    expect(stopped.kind).toBe('skipped');
-    expect(stopped.reason).toContain('process directory unavailable');
-    expect(container.running.running).toBe(false);
+    const unanswered = { stop: (await box.quiesce()).kind, running: container.running.running };
+    const answered = await box.answerRest('now');
+    const reasons = [...rows.entries()].filter(([key]) => key.startsWith(INCIDENT_PREFIX)).map(([, row]) => JSON.stringify(row));
+
+    expect({ unanswered, answered: answered.kind, running: container.running.running })
+      .toEqual({ unanswered: { stop: 'failed', running: true }, answered: 'resting', running: false });
+    expect(reasons.some((row) => row.includes('process directory unavailable') && row.includes('quiesce'))).toBe(true);
   } finally { container.fileFaults.clear(); setSystemTime(); await box.destroy(); }
 });
