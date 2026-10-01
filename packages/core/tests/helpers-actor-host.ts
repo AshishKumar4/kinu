@@ -18,12 +18,17 @@ import {
   type ProfileCatalogEnvelope, type RoleDefinition, type TierAssignments,
 } from '../src/profiles/catalog';
 import type { HostedNodeSeat } from '../src/strategy/node-agent';
+import type { HeadInferenceDeps } from '../src/heads/head-inference';
+import { resolveModelWindow } from '../src/context-window';
 import type { NodeIdentity } from '../src/strategy/node-workspace';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import type { BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host';
 import type { Identity } from '../src/types/primitives';
 import type { TemporaryAgentPort } from '../src/types/subordinates';
+
+/** A fixture seat also carries the window its heads are admitted against: no catalog here, so the table's. */
+type FixtureSeat = HostedNodeSeat & Pick<HeadInferenceDeps, 'window'>;
 
 /** The one role a fixture actor resolves under; no `allowedTools`, so it never narrows a suite's surface. */
 const TESTER: RoleDefinition = {
@@ -53,7 +58,7 @@ export interface HostedSeats {
   readonly broadcasts: readonly BroadcastEvent[];
   readonly enqueued: readonly ProgrammaticTurn[];
   /** The seat one logical actor's turn runs on; idempotent per name, so a re-hosted node keeps its actor. */
-  seat(name: string, origin: 'agent' | 'swarm'): Promise<HostedNodeSeat>;
+  seat(name: string, origin: 'agent' | 'swarm'): Promise<FixtureSeat>;
   /** `hostNode` over these seats: one actor per node id, all over the one database. */
   readonly hostNode: (node: NodeIdentity) => Promise<HostedNodeSeat>;
 }
@@ -88,7 +93,7 @@ export function hostedSeatsOver(input: {
   const enqueued: ProgrammaticTurn[] = [];
   /** Timers the orchestration scheduled, held rather than fired. */
   const timers: Array<{ readonly fn: () => Promise<void>; readonly ms: number }> = [];
-  const seats = new Map<string, HostedNodeSeat>();
+  const seats = new Map<string, FixtureSeat>();
 
   /** The caller's runtime, re-addressed: same database and executor, but its own handle and SCAFFOLD path,
    *  since `seedActorLoop` writes a per-actor version file. */
@@ -150,7 +155,7 @@ export function hostedSeatsOver(input: {
   const seat = async (
     name: string,
     origin: 'agent' | 'swarm',
-  ): Promise<HostedNodeSeat> => {
+  ): Promise<FixtureSeat> => {
     const known = seats.get(name);
 
     if (known) return known;
@@ -169,9 +174,11 @@ export function hostedSeatsOver(input: {
       actorId: handle.actorId, workspaceId: handle.workspaceId, parentActorId: handle.parentActorId,
     });
 
-    const seated: HostedNodeSeat = {
+    const seated: FixtureSeat = {
       actor,
       runId,
+      windowOf: async (spec) => resolveModelWindow(spec ?? '', null),
+      window: resolveModelWindow('', null),
       conversations: new ConversationSearchStore(actor.runtime.storage.sql, actor.handle, (sessionId) => actor.stores.history.transcript(sessionId)),
       // The real resolver over a real catalog envelope, so role narrowing is applied, not assumed.
       profile: async ({ availableTools, workMode }) => ({

@@ -147,7 +147,7 @@ import {
   delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
   readSoul, bootstrapScaffold,
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
-  accountDeps, parseModelSpec, catalogModelInfo, countRequestInputTokens,
+  accountDeps, parseModelSpec, specModelInfo, countRequestInputTokens,
   ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead, type ModelInfo,
   // Shared turn-context assembly: the same ordering runChat runs on the CLI
   measureCompactionTrigger,
@@ -3953,10 +3953,9 @@ export abstract class ActorAgent extends Agent<Env> {
   });
 
   protected async catalogEntry(spec: string): Promise<ModelInfo | null> {
-    const { provider, modelId, account } = parseModelSpec(spec);
     const reg = this.providerRegistry();
 
-    return catalogModelInfo(reg.registry.get(provider), accountDeps(reg.deps, provider, account), modelId);
+    return specModelInfo(reg.registry, reg.deps, spec);
   }
 
   private readonly hostedModels = new Map<string, string>();

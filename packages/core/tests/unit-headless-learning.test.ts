@@ -111,7 +111,7 @@ describe('a headless actor runs the step clock only', () => {
         const asked = requests.length;
 
         const report = await runHeadInference(headInput(), {
-          actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
+          actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic, window: seat.window,
           model, tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false,
           workspaceLayout: 'shared-workspace',
         });
@@ -155,7 +155,7 @@ describe('a headless actor runs the step clock only', () => {
     const seat = await seats.seat('node', 'swarm');
 
     const report = await runHeadInference(headInput(), {
-      actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
+      actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic, window: seat.window,
       model: scriptedTurnModel({ doGenerate: async () => ({
         content: [{ type: 'text', text: 'done' }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [],
       }) }),
@@ -175,7 +175,7 @@ describe('a headless actor runs the step clock only', () => {
     const capture = new HeadCapture();
 
     const report = await runHeadInference(headInput(), {
-      actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
+      actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic, window: seat.window,
       model: probingHead(1),
       tools: { probe: tool({ inputSchema: PROBE_SCHEMA, execute: async (): Promise<{ ok: boolean }> => { throw new Error('probe exploded'); } }) },
       capture, clock: REAL_CLOCK, isAborted: () => false, workspaceLayout: 'shared-workspace',
@@ -219,7 +219,7 @@ describe('a headless actor runs the step clock only', () => {
     const failing = CONSECUTIVE_FAILURES_BEFORE_STEER;
 
     const report = await runHeadInference(headInput(), {
-      actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
+      actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic, window: seat.window,
       model: probingHead(failing + 1),
       tools: { probe: tool({ inputSchema: PROBE_SCHEMA, execute: async ({ n }) => {
         if (n < failing) throw new Error(`probe ${String(n)} exploded`);

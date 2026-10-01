@@ -40,6 +40,7 @@ export function spawnSeatedHead(input: HeadInput, deps: SeatedHeadDeps): Spawned
       runId: seat.runId,
       clock: REAL_CLOCK,
       model,
+      window: await seat.windowOf(spec),
       tools: buildHeadToolSet({
         input, capture, rt: seat.actor.runtime, conversations: seat.conversations,
         codemodeTool: deps.codemodeTool(seat), webSearch: deps.webSearch, split: deps.split(seat, input),

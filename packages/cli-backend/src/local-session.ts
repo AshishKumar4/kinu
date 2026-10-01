@@ -8,10 +8,7 @@ import { realpathSync } from 'node:fs';
 import { ConversationSearchStore, sameActorReference, testModel, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
 import type { ActorHandle, JsonObject } from '@kinu.run/core';
 import { resolve } from 'node:path';
-import {
-  stepCountIs,
-  type LanguageModel, type ToolSet,
-} from 'ai';
+import type { LanguageModel, ToolSet } from 'ai';
 import type { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
@@ -61,7 +58,7 @@ import { TierIdSchema,
   type HeadInput,
   type HeadJournal, LiveHeadJournal, type AnnounceHeadActivity, type PublishHeadStream, reconcileInterruptedForks,
   jobRedriveResumeGate, resumableForkRoots,
-  resolveTurnSkills, steerSkillsBlock, filterToolSetBySkills, renderFactsForTurn,
+  resolveTurnSkills, steerSkillsBlock, filterToolSetBySkills,
   inheritedContextFromTranscript,
   ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
@@ -79,7 +76,7 @@ import { TierIdSchema,
   type ActorToolsetDeps,
   activePromptSectionOverrides,
   turnReasonForMetadata, type TurnReason,
-  runChat, type CountableRequest,
+  type CountableRequest,
   parseModelSpec, agentAffinityKey,
   generateReported, type GenerateRequest,
   measureCompactionTrigger,
@@ -91,14 +88,14 @@ import { TierIdSchema,
   agentRoleSwitch, createMemoryCodemodeProvider, createTasksCodemodeProvider,
   createReportCodemodeProvider, REPORT_TOOL, type ReportToolDeps,
   MissionGovernor,
-  DynamicContextLedger, renderUnverifiedInstructions,
+  renderUnverifiedInstructions,
   observeSystemPromptHash,
   type DynamicContext,
   initWorkspaceSchema, initPendingSendTables, PendingSendStore,
   InstructionApprovalStore, InstructionApprovalDesk, type AdmittedInstructionDecision,
   type InstructionSourceRow, type InstructionSourceView,
   type InstructionTrustResolver,
-  applyScaffoldDecision, createLlmJsonJudge, getShadowStatus, runScaffoldGepaOptimization,
+  applyScaffoldDecision, createLlmJsonJudge, getShadowStatus, runScaffoldCaptureText, runScaffoldGepaOptimization,
   queueTurnShadowTrial, runQueuedShadowTrials,
   type GepaOptimizationResult, type ScaffoldControl,
   type ScaffoldDecisionResult, createScaffoldCandidateSurface,
@@ -228,8 +225,6 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
     enabled: input.noAutoEvolve !== true,
     // Review calls debit the reviewed turn's mission.
     governor: budget,
-    // Local replay runs with tools disabled: re-running tools would re-execute shell work on the
-    // user's machine, so CLI replay measures prompt/model config only.
     replayTaskRunner: (task) => input.session().runReplayTask(task),
     shadowTrialQueue: (turn, opts) => input.session().queueShadowTrial(turn, opts),
     // A resolved gate swaps the live scaffold, so model-bound state is dropped.
@@ -2348,39 +2343,9 @@ export class LocalAgentSession {
     return createScaffoldHistory(async () => this.actorSession.history);
   }
 
-  /** Replay-eval re-run: current prompt and model, facts block, isolated history, no tools. */
-  async runReplayTask(task: string): Promise<string> {
-    const model = this.ensureModelState();
-    const memoryTail = await readMemoryTail(this.rt.memory);
-
-    const systemPrompt = buildSystemPromptSync(this.rt, {
-      backend: this.rt.cwd ? 'cli-local' : 'cli-vfs',
-      model: { id: this.effectiveModelSpec() },
-      currentDate: currentDateForPrompt(),
-    });
-
-    let text = '';
-
-    for await (const ev of runChat({
-      model,
-      modelContext: {
-        id: this.effectiveModelSpec(),
-        ...await this.modelCatalog.resolved(),
-      },
-      system: systemPrompt,
-      history: [{ role: 'user', content: task }],
-      dynamicContext: {
-        ledger: new DynamicContextLedger(),
-        snapshot: () => ({ factsBlock: this.renderFactsForTurn(), memoryTail }),
-      },
-      tools: {},
-      stopWhen: stepCountIs(1),
-    })) {
-      if (ev.type === 'text-delta') text += ev.delta;
-      else if (ev.type === 'done' && ev.text.trim()) text = ev.text;
-    }
-
-    return text;
+  /** Replay-eval re-run: the live scaffold, as cf runs it (core's `runScaffoldCaptureText`). */
+  runReplayTask(task: string): Promise<string> {
+    return runScaffoldCaptureText(this.scaffoldControl, task);
   }
 
   /** Live state for one model step (DO dynamicContextSnapshot peer). Nothing clock-derived: a
@@ -2501,10 +2466,6 @@ export class LocalAgentSession {
       }),
       contextEvents: (bound) => bound.stores.eventRecorder,
     });
-  }
-
-  private renderFactsForTurn(): string | undefined {
-    return renderFactsForTurn(this.factsStore);
   }
 
   /** Byte-stability telemetry: the system prompt should change only on soul/skill/model events. */
@@ -2874,6 +2835,7 @@ export class LocalAgentSession {
         runId: this.chat.currentRunId ?? WORKSPACE_RUN_ID,
         profile: (profileInput) => this.resolveActorTurnProfile(actor, profileInput),
         dynamic: (profile, tools) => this.actorDynamicContext(actor, profile, tools),
+        windowOf: (spec) => (spec === null ? this.modelCatalog.resolved() : this.modelCatalog.windowFor(spec)),
         conversations: new ConversationSearchStore(actor.runtime.storage.sql, actor.handle, (sessionId) => actor.stores.history.transcript(sessionId)),
       },
     };

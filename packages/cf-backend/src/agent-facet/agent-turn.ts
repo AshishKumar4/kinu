@@ -171,6 +171,7 @@ async function runTurn(
     runId,
     clock: REAL_CLOCK,
     model: registry.resolveModel(prepared.model, agentAffinityKey(prepared.input.rootId)),
+    window: prepared.window,
     tools: withEffectClaims(workspaceTools(workspace, prepared, { id: task.sequenceId, live, capture, database }), {
       actor: actor.handle,
       sql: actor.runtime.storage.sql,
