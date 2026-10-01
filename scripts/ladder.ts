@@ -2240,9 +2240,10 @@ export const LADDER: readonly Gate[] = [
     label: 'Live app in a browser: a running turn',
     tier: 'deploy',
     // Measured 2026-09-26 alone in a quiet window: 133.0 s at load 2.9, its five scenarios 11-34 s each beside the dev server's boot.
-    // 2026-09-30 with the two #30 rows (a watched turn's answer, an unsent turn's): 720 s at load 35-73, all 14 green.
+    // 2026-10-01, interleaved twice at load 9-29: 204 s median without the #30 rows, 289 s with them as two rows of
+    // their own, 220 s with the watched turn run in the answered row's workspace (as now), all 14 green.
     // One of the four files the live-app rows split into when one file outran its 480 s deadline alone.
-    seconds: 720,
+    seconds: 220,
     catches: 'the shipped workspace page as it runs: this row boots the product itself — `vite dev` in cf-backend, which is workerd with real Durable Objects behind the real client — and drives it in Chrome at 1440x900, where the inspector column, its separator and the rail lane exist. No gallery row can: the gallery serves a FROZEN pre-built bundle with fixtures answering `/api/*`. '
       + 'Its rows: a running turn draws exactly one live state through the paced turn\'s four silences, and '
       + 'Stop never stands over a pane drawing nothing; a page opened mid-turn offers Stop while it runs and stops '

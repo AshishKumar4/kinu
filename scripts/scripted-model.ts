@@ -303,10 +303,10 @@ export const RECONNECT_STEPS = RECONNECT_FOLDERS.length;
  * different folder, since a third identical call makes the harness steer the turn (turn-steering.ts). `midAnswer`
  * holds the answer after its first word instead of before it.
  */
-function heldSteps(request: ScriptedRequest, held: HeldCall, midAnswer: boolean): ScriptedAnswer {
+function heldSteps(request: ScriptedRequest, held: HeldCall, midAnswer: boolean, called = request.called): ScriptedAnswer {
   if (!request.available.includes('file')) return { text: FALLBACK_ANSWER };
 
-  const done = request.called.filter((name) => name === 'file').length;
+  const done = called.filter((name) => name === 'file').length;
 
   const folder = RECONNECT_FOLDERS[done];
 
@@ -327,6 +327,11 @@ export function reconnectTurn(request: ScriptedRequest, ask: string, held: HeldC
   return request.userTexts.some((text) => text.includes(ask)) ? heldSteps(request, held, midAnswer) : null;
 }
 
+/** The reconnect turn when the latest ask is `ask`, counting only its own calls: a turn after others in one conversation. */
+export function laterReconnectTurn(request: ScriptedRequest, ask: string, held: HeldCall): ScriptedAnswer | null {
+  return request.userTexts.at(-1)?.includes(ask) === true ? heldSteps(request, held, false, request.turn.map((call) => call.name)) : null;
+}
+
 /** A workspace created with this mission takes its own first turn as the reconnect turn: a turn no page sent. */
 export const UNSENT_TURN_MISSION = 'Take the first turn in steps, then wait: no page sends it.';
 
@@ -335,12 +340,14 @@ export function unsentFirstTurn(request: ScriptedRequest, held: HeldCall): Scrip
   return request.system.includes(UNSENT_TURN_MISSION) ? heldSteps(request, held, false) : null;
 }
 
+export const TOLD_BACK_ANSWER = 'I listed the folders.';
+
 /** Answers {@link TOLD_BACK_ASK}, handing `heard` the request that carried it. */
 export function toldBackTurn(request: ScriptedRequest, heard: (request: ScriptedRequest) => void): ScriptedAnswer | null {
   if (request.userTexts.at(-1)?.includes(TOLD_BACK_ASK) !== true) return null;
   heard(request);
 
-  return { text: 'I listed the folders.' };
+  return { text: TOLD_BACK_ANSWER };
 }
 
 /* ── The plan walkthrough ──────────────────────────────────────────────── */

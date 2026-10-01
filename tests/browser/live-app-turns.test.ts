@@ -6,7 +6,7 @@ import { PACED_SILENCE_MS, RECONNECT_STEPS } from '../../scripts/scripted-model'
 import { liveRows } from '../../scripts/live-app-rows';
 
 const { observed, verdictOf, boot } = liveRows('live-app-turns', [
-  'live-indicator', 'opened-mid-turn', 'reconnect', 'answered', 'watched-answer', 'unsent-answer', 'state',
+  'live-indicator', 'opened-mid-turn', 'reconnect', 'answered', 'unsent-answer', 'state',
 ]);
 
 /** An answer keeps each step's text where it streamed: its steps drawn while it waits, the same blocks and then the
@@ -70,7 +70,7 @@ describe('a page whose socket drops mid-turn keeps its answer in order', () => {
   });
 
   test('so does the answer of a turn another tab sent, on the page that watched it', () => {
-    keepsEachStep(verdictOf(observed.watchedAnswer, 'watched-answer'));
+    keepsEachStep(verdictOf(observed.answered, 'answered').watched);
   });
 
   test('and the answer of a turn no page sent, the workspace\'s own first turn', () => {
