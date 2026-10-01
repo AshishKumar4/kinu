@@ -1,13 +1,12 @@
-diff --git a/packages/core/src/evolution/replay.ts b/packages/core/src/evolution/replay.ts
-index 6982e3dfd..0a7ffb6a0 100644
---- a/packages/core/src/evolution/replay.ts
-+++ b/packages/core/src/evolution/replay.ts
-@@ -182,7 +182,7 @@ export function listReplayEvals(sql: SqlExecutor, actor: ActorHandle, limit = 50
-     scaffold_version: number | null; details: string;
-     score_lo: number | null; score_hi: number | null;
-   }>`SELECT * FROM replay_evals WHERE actor_id = ${actor.actorId}
--      ORDER BY ran_at DESC, id DESC LIMIT ${limit}`;
-+      ORDER BY ran_at ASC, id ASC LIMIT ${limit}`;
+diff --git a/packages/core/src/evolution/scaffold-scores.ts b/packages/core/src/evolution/scaffold-scores.ts
+--- a/packages/core/src/evolution/scaffold-scores.ts
++++ b/packages/core/src/evolution/scaffold-scores.ts
+@@ -140,7 +140,7 @@
+     failure: string | null; details: string;
+   }>`SELECT * FROM scaffold_scores
+     WHERE actor_id = ${actor.actorId} AND promoted_at IS NOT NULL AND scored_at IS NOT NULL
+-    ORDER BY promoted_at DESC, scaffold_version DESC LIMIT ${limit}`;
++    ORDER BY promoted_at ASC, scaffold_version ASC LIMIT ${limit}`;
  
-   return rows.map((r) => {
-     // Tolerable: the summary numbers live in the row's own columns.
+   const oldest = rows.at(-1);
+ 

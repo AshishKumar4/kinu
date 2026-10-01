@@ -143,7 +143,6 @@
   "packages/core/src/evolution/refinement.ts#SettleRefinementPatch.now (unsupplied-field)",
   "packages/core/src/evolution/refinement.ts#SettleRefinementPatch.proposal (unsupplied-field)",
   "packages/core/src/evolution/refinement.ts#SettleRefinementPatch.routes (unsupplied-field)",
-  "packages/core/src/evolution/replay.ts#RunReplayEvalOpts.now (unsupplied-field)",
   "packages/core/src/evolution/scaffold-handbook.ts#indexScaffoldSites (unreached-export)",
   "packages/core/src/execution/code-fence.ts#canonicalLanguage (unreached-export)",
   "packages/core/src/execution/device-status.ts#DEVICE_TOOLCHAIN_TTL_MS (unreached-export)",

@@ -10,7 +10,7 @@ import { listProposedTasks, updateProposedTaskStatus } from '../curriculum/propo
 import { proposeCurriculumTasks } from '../read-models/evolution-views';
 import { jobResult, listBackgroundJobs } from '../read-models/background-jobs';
 import { listScaffoldVersions, proposeScaffold, type ScaffoldControl } from '../evolution/control';
-import { listReplayEvals } from '../evolution/replay';
+import { listScaffoldScores } from '../evolution/scaffold-scores';
 
 /** Stores are read when a tool runs; trigger revocation, forced compaction and the budget governor are backend-specific. */
 export interface AgentSelfPorts {
@@ -42,7 +42,7 @@ export function agentSelfHost(ports: AgentSelfPorts): AgentSelfHost {
     cancelTrigger: ports.cancelTrigger,
     jobResult: async (jobId) => jobResult(ports.jobs(), jobId),
     listBackgroundJobs: async (limit) => listBackgroundJobs(ports.jobs(), limit),
-    getReplayEvals: async (limit) => listReplayEvals(rt.storage.sql, rt.actor, limit),
+    getReplayEvals: async (limit) => listScaffoldScores(rt.storage.sql, rt.actor, limit),
     armCompactNow: ports.armCompactNow,
   };
 }
