@@ -12,6 +12,7 @@ import type { InstructionTrustResolver } from '../types/instruction-trust';
 import { stepContextLimit, type ModelWindow } from '../context-window';
 import { renderFactsBlock, type FactsStore } from '../memory/facts';
 import { diagnostics, toKinuError } from '../obs/index';
+import { STEER_SKILLS_HEADING } from '../utils/prompt-sections';
 
 export interface TurnSkillsConfig {
   getAlwaysActiveSkills(): string[];
@@ -72,8 +73,6 @@ export async function steerSkillsBlock(opts: Parameters<typeof resolveTurnSkills
 
   return rendered === '' ? null : `${STEER_SKILLS_HEADING}\n${rendered}`;
 }
-
-const STEER_SKILLS_HEADING = 'The message above activates these skills; they apply for the rest of this turn.';
 
 async function admitTurnSkills(
   opts: {

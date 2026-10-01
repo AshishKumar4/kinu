@@ -12,7 +12,7 @@
  */
 import * as v from 'valibot';
 import type { ExpectedFailure } from '../packages/core/src/obs/expected-failure';
-import { DYNAMIC_CONTEXT_OPEN_TAG, SYSTEM_REMINDER_TAG, WORKSPACE_INSTRUCTIONS_TAG } from '../packages/core/src/utils/prompt-sections';
+import { DYNAMIC_CONTEXT_OPEN_TAG, STEER_SKILLS_HEADING, SYSTEM_REMINDER_TAG, WORKSPACE_INSTRUCTIONS_TAG } from '../packages/core/src/utils/prompt-sections';
 import { SCRIPTED_MODEL_ID } from '../packages/test-utils/src/scripted-model-spec';
 
 /** What an unscripted request gets. One string, so a row that waits for the
@@ -53,7 +53,7 @@ export interface ScriptedCall {
  *  would answer it with a tool call the request never offered. */
 export interface ScriptedRequest {
   /** What was said to the agent, oldest first: every user-role message's text but the runtime state the
-   *  product sends in that role (a `<dynamic_context>` block, the unapproved workspace files, a stop reminder),
+   *  product sends in that role (dynamic context, workspace instructions, stop reminders, activated skills),
    *  so the last entry is the latest ask. */
   readonly userTexts: readonly string[];
   /** What the agent said, oldest first: every assistant-role message's text. */
@@ -102,10 +102,10 @@ const OutboundBodySchema = v.object({
   stream: v.optional(v.boolean()),
 });
 
-/** A user-role message the product wrote: its live state, the unapproved workspace files
- *  (`prompting/volatile-context.ts`), or a reminder at a turn's stop (`tasks/reminder.ts`). */
+/** Runtime context uses the user role too; it must not replace the latest ask or reset its tool-call cursor. */
 function isRuntimeState(text: string): boolean {
-  return text.startsWith(DYNAMIC_CONTEXT_OPEN_TAG) || [WORKSPACE_INSTRUCTIONS_TAG, SYSTEM_REMINDER_TAG].some((tag) => text.startsWith(`<${tag}>`));
+  return text.startsWith(DYNAMIC_CONTEXT_OPEN_TAG) || text.startsWith(STEER_SKILLS_HEADING)
+    || [WORKSPACE_INSTRUCTIONS_TAG, SYSTEM_REMINDER_TAG].some((tag) => text.startsWith(`<${tag}>`));
 }
 
 type OutboundMessage = v.InferOutput<typeof OutboundMessageSchema>;
