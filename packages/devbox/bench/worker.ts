@@ -91,6 +91,7 @@ interface BenchEnv {
   BENCH_SELECTED_ARMS?: string;
   /** This run's box size, from `wrangler deploy --var`; absent is Devbox's default (D50). */
   BENCH_SIZE?: string;
+  BENCH_INTERNET?: string;
   /** '1' runs the container's own sync at the shipped period, as production does, for the
    *  loss-window measurement (`scripts/bench-devbox-sync-window.ts`); absent, `checkpointNow`
    *  is the only tick source. */
@@ -557,6 +558,7 @@ class BenchBox extends Devbox<BenchEnv> {
    *  its own flush target or those observations never reach the durable total. */
   constructor(...args: ConstructorParameters<typeof Devbox<BenchEnv>>) {
     super(...args);
+    this.enableInternet = args[1].BENCH_INTERNET !== 'off';
     // args[1] is the env the base binds; taking it from the tuple keeps this
     // constructor's signature identical to the base's rather than restating a
     // platform type that can drift.
@@ -745,6 +747,11 @@ class BenchBox extends Devbox<BenchEnv> {
         error: describeThrown({ cause: error }),
       });
     }
+  }
+
+  /** Its container runs on (D40). */
+  evictForBench(): void {
+    this.ctx.abort('bench eviction');
   }
 
   /**
@@ -968,6 +975,12 @@ async function serveInstrumentRoutes(
   { route, env, strategy, box, name, started, url, counter }: InstrumentRequest,
 ): Promise<Response | null> {
   switch (route) {
+    case 'POST /evict': {
+      const [evicted] = await Promise.allSettled([box.evictForBench()]);
+
+      return json({ payload: { ok: evicted.status === 'rejected', strategy, box: name, ms: Date.now() - started } });
+    }
+
     case 'GET /state': {
       const state = await box.devboxState();
 

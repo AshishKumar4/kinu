@@ -20,7 +20,7 @@ import {
 } from "./egress/outbound";
 import type { KinuEgress, KinuEvents } from './server';
 
-/** Owning workspace; without it no root agent can answer Devbox's two questions. */
+/** Owning workspace; without it no root agent hears the box's notices. */
 const WORKSPACE_NAME_KEY = "kinu:workspace-name";
 
 const EGRESS_CONFIG_KEY = 'kinu:egress-config';
@@ -35,7 +35,7 @@ interface KinuState extends DevboxState {
 /** Type-only, so nothing here reaches orchestrator code at runtime. */
 type SandboxRootClient = Pick<
   OrchestratorAgent,
-  "acceptSandboxLifecycleFailure" | "sandboxInUse" | "sandboxStopped" | "sandboxRestore"
+  "acceptSandboxLifecycleFailure" | "sandboxStopped" | "sandboxRestore"
 >;
 
 export class KinuDevbox extends Devbox<Env> {
@@ -68,15 +68,6 @@ export class KinuDevbox extends Devbox<Env> {
   /** Absent turns port publishing off; exec and files keep working. */
   protected override get previewHost(): string | undefined {
     return this.env.PREVIEW_HOST_SUFFIX;
-  }
-
-  /** An unreachable root reads as idle; the heartbeat treats a throwing check as busy. */
-  protected override async hasBackgroundWork(): Promise<boolean> {
-    const root = await this.#rootAgent();
-
-    if (root === null) return false;
-
-    return await root.sandboxInUse();
   }
 
   readonly #restoreNotice = restoreNotices(

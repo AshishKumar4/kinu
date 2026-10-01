@@ -17,18 +17,6 @@ class TestBox extends Devbox<unknown> {
   }
 }
 
-class UnreachableHostBox extends TestBox {
-  protected override async hasBackgroundWork(): Promise<boolean> {
-    throw new Error('the owning workspace cannot be reached');
-  }
-}
-
-class IdleHostBox extends TestBox {
-  protected override async hasBackgroundWork(): Promise<boolean> {
-    return false;
-  }
-}
-
 describe('noteTerminalActivity refuses before it stamps', () => {
   test('a box the platform admitted nothing to stamps no interaction', async () => {
     const { box, container } = harness(TestBox);
@@ -61,82 +49,50 @@ describe('noteTerminalActivity refuses before it stamps', () => {
   });
 });
 
-describe('a throwing host-background check holds the box', () => {
-  test('the beat holds, opens no quiet window, and stops nothing', async () => {
-    const { box, container, rows } = harness(UnreachableHostBox);
-    await box.devboxStartup();
-    // Park the lease so the box is idle AND its quiet window already
-    // confirmed: with the host answering, the next beat must quiesce.
-    const now = Date.now();
-    rows.set(LAST_INTERACTION_KEY, now - DEFAULT_DEVBOX_POLICY.idleMs - 60_000);
-    rows.set(QUIET_SINCE_KEY, now - DEFAULT_DEVBOX_POLICY.quietConfirmMs - 60_000);
-
-    await box.devboxHeartbeat();
-
-    const state = await box.devboxState();
-    // With a confirmed quiet window and an idle lease, `hold` can only come from background
-    // work staying true: the heartbeat's possibly-busy fail-safe for a throwing host check.
-    expect(state.lastTick?.decision).toBe('hold');
-    expect(state.quietSince).toBeUndefined();
-    expect(container.running.running).toBe(true);
-  });
-
-  test('the same seeding quiesces when the host answers idle, so the hold above is not vacuous', async () => {
-    const { box, rows } = harness(IdleHostBox);
-    await box.devboxStartup();
-    const now = Date.now();
-    rows.set(LAST_INTERACTION_KEY, now - DEFAULT_DEVBOX_POLICY.idleMs - 60_000);
-    rows.set(QUIET_SINCE_KEY, now - DEFAULT_DEVBOX_POLICY.quietConfirmMs - 60_000);
-
-    await box.devboxHeartbeat();
-
-    expect((await box.devboxState()).lastTick?.decision).toBe('quiesce');
-  });
-});
-
-/** Busy, and counts how often the beat asks: each ask wakes the owning workspace. */
-class CountingHostBox extends TestBox {
-  asks = 0;
-
-  protected override async hasBackgroundWork(): Promise<boolean> {
-    this.asks += 1;
-
-    return true;
-  }
-}
-
-describe('the beat asks the host at most once per quiet-confirm window', () => {
-  test('beats inside one window reuse the answer, and the next window asks again', async () => {
+// D56: the box decides its own rest. Its host's work reaches it as use (`noteHostWork`), never as a question a
+// beat asks: the ask rebuilt an idle workspace once a minute (eval-site-preview-5, staging, 2026-10-01).
+describe("a host's work is the box's use", () => {
+  test('a box whose host worked inside the idle window holds; once the window and the quiet confirmation pass, it rests', async () => {
     const start = Date.now();
-    const { box, rows } = harness(CountingHostBox);
+    const { box, rows } = harness(TestBox);
 
     try {
       await box.devboxStartup();
       rows.set(LAST_INTERACTION_KEY, start - DEFAULT_DEVBOX_POLICY.idleMs - 60_000);
+      setSystemTime(start - 60_000);
+      box.noteHostWork();
+      setSystemTime(start);
+      await box.devboxHeartbeat();
+      // Without the host's word the quiet stretch would start at the first beat and be confirmed here.
+      setSystemTime(start + DEFAULT_DEVBOX_POLICY.idleMs);
+      await box.devboxHeartbeat();
+      const holding = (await box.devboxState()).lastTick?.decision;
 
-      for (let beat = 0; beat < 5; beat++) {
-        setSystemTime(start + beat * 60_000);
-        await box.devboxHeartbeat();
-      }
-
-      // warm-forge-4d6acc02's box asked its root every minute for 30+ hours (2026-09-25/26).
-      expect(box.asks).toBe(1);
-      expect((await box.devboxState()).lastTick?.decision).toBe('hold');
-
-      setSystemTime(start + DEFAULT_DEVBOX_POLICY.quietConfirmMs + 60_000);
+      setSystemTime(start + DEFAULT_DEVBOX_POLICY.idleMs + DEFAULT_DEVBOX_POLICY.quietConfirmMs);
       await box.devboxHeartbeat();
 
-      expect(box.asks).toBe(2);
+      const resting = (await box.devboxState()).lastTick?.decision;
+
+      expect({ holding, resting }).toEqual({ holding: 'hold', resting: 'quiesce' });
     } finally {
       setSystemTime();
     }
+  });
+
+  test('a stopped box records nothing for its host, so the next start rests on its own clock', async () => {
+    const { box, container } = harness(TestBox);
+    await container.stop();
+
+    box.noteHostWork();
+
+    expect((await box.devboxState()).lastInteractionAt).toBeUndefined();
   });
 });
 
 describe('a box rests only once no command it ran is still running', () => {
   test("an earlier activation's command keeps the box awake, and the box rests once it exits", async () => {
     const start = Date.now();
-    const { box, container, rows } = harness(IdleHostBox);
+    const { box, container, rows } = harness(TestBox);
 
     try {
       await box.devboxStartup();
@@ -162,7 +118,7 @@ describe('a box rests only once no command it ran is still running', () => {
 
   test('a process list that never reads holds for one quiet-confirm window, then lets the box rest', async () => {
     const start = Date.now();
-    const { box, container, rows } = harness(IdleHostBox);
+    const { box, container, rows } = harness(TestBox);
     await box.devboxStartup();
     container.fileFaults.set('/var/tmp/devbox/processes', { errno: 13, message: 'the process directory cannot be read' });
 
@@ -194,7 +150,7 @@ describe('a box rests only once no command it ran is still running', () => {
   });
 
   test('an unreadable supervised-spec store counts as an unreadable list: the beat holds, it does not throw', async () => {
-    const { box, rows, storage } = harness(IdleHostBox);
+    const { box, rows, storage } = harness(TestBox);
     await box.devboxStartup();
     const now = Date.now();
     rows.set(LAST_INTERACTION_KEY, now - DEFAULT_DEVBOX_POLICY.idleMs - 60_000);
@@ -209,7 +165,7 @@ describe('a box rests only once no command it ran is still running', () => {
 
   test('a supervised server does not hold the box: the next start restores it', async () => {
     const start = Date.now();
-    const { box } = harness(IdleHostBox);
+    const { box } = harness(TestBox);
 
     try {
       await box.devboxStartup();

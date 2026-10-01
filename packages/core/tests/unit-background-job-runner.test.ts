@@ -644,8 +644,7 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
   });
 
   test('a re-driven job is in flight for its whole drive, though its row already reads deferred', async () => {
-    // The row names the next attempt's wait before this one starts, so only the runner can say a
-    // container still has this work in it (sandboxInUse).
+    // The row names the next attempt's wait before this one starts, so only the runner can say it drives it.
     const resume: JobResumer = () => new Promise<never>(() => {});
     const { runner, store } = setup({ resume });
     store.create({ id: 'jr2', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });

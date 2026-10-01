@@ -38,7 +38,6 @@ describe('request-owned chat inputs', () => {
     const turn = claims(harness).latestTurn();
 
     if (turn === null) throw new Error('no root turn was admitted');
-    expect(await harness.agent.sandboxInUse()).toBe(true);
 
     await harness.agent.terminalRetryPass();
     expect(claims(harness).read(turn.turnId)?.status).toBe('admitted');
@@ -49,12 +48,12 @@ describe('request-owned chat inputs', () => {
     const harness = await opening();
     const ending = settle(harness, 'answer', 'complete answer');
     const claimed = claims(harness).latestTurn()?.status;
-    const busy = harness.agent.sandboxInUse();
-    await ending;
+    // Alarm recovery mid-conversion would seal a claim nobody owns as indeterminate.
+    const recovered = harness.agent.terminalRetryPass();
+    await Promise.all([ending, recovered]);
 
     expect(claimed).toBe('admitted');
-    expect(await busy).toBe(true);
-    expect(claims(harness).latestTurn()?.status).toBe('settled');
+    expect(claims(harness).latestTurn()).toMatchObject({ status: 'settled', outcome: expect.not.stringMatching(/^indeterminate$/) });
   });
 
   test('alarm recovery still classifies a genuinely idle unverified root claim', async () => {

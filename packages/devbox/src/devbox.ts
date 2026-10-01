@@ -393,12 +393,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return undefined;
   }
 
-  /** Veto on quiescing. A host that queues work must override: a box stopped under a running
-   *  job costs that job an attach and possibly its progress. */
-  protected hasBackgroundWork(): Promise<boolean> {
-    return Promise.resolve(false);
-  }
-
   /** The incident is already durable, so a throw is transient and retried by schedule;
    *  return `rejected` only for a malformed incident, which is a defect and never retried. */
   protected onIncident(incident: DevboxIncident, delivery: number): Promise<IncidentDisposition> {
@@ -1635,6 +1629,12 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return { admission: readiness, container };
   }
 
+  /** The host's own work is use: it calls this as its work starts and settles, so the box rests
+   *  only once neither has used it for the idle window (D56). A stopped box has nothing to hold. */
+  noteHostWork(): void {
+    if (this.ctx.container?.running === true) this.stampInteraction();
+  }
+
   /** Stamps the lease for a caller on a lane it cannot see, e.g. a terminal; the host calls
    *  this only from its caller entry points. Refuses while unready, like every operation. */
   noteTerminalActivity(): Promise<void> {
@@ -2404,8 +2404,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
         if (!backgroundWork) ({ running: backgroundWork, note } = await this.#commandRunning());
 
-        if (!backgroundWork) backgroundWork = await this.#hostBackgroundWork(now);
-
         const decision = quiesceStep({
           now,
           containerRunning: true,
@@ -2471,27 +2469,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     await this.ctx.storage.delete(UNREADABLE_PROCESS_BEATS_KEY);
 
     return { running };
-  }
-
-  /** Reused for a quiet-confirm window: each ask wakes the workspace. */
-  #hostAnswer: { readonly at: number; readonly busy: boolean } | undefined;
-
-  async #hostBackgroundWork(now: number): Promise<boolean> {
-    const held = this.#hostAnswer;
-
-    if (held !== undefined && now - held.at < this.policy.quietConfirmMs) return held.busy;
-    // An unreachable host means POSSIBLY busy, so hold. Never stop on a guess.
-    let busy = true;
-
-    try {
-      busy = await this.hasBackgroundWork();
-    } catch (error) {
-      console.error(`[devbox] background-work check failed, holding: ${describe({ cause: error })}`);
-    }
-
-    this.#hostAnswer = { at: now, busy };
-
-    return busy;
   }
 
   /** One durable row per heartbeat, so a stopped box shows when and why: it tells apart an
