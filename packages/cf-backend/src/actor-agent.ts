@@ -11,7 +11,7 @@ import {
   type WSMessage,
 } from "agents";
 import {
-  TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, JOB_STAMP_ENV,
+  TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, JOB_STAMP_ENV, recordServingJobs,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
   type RunEventInput, type SubordinateInspectionAuthority, ConversationSearchStore, type ConversationRecall,
@@ -2705,11 +2705,11 @@ export abstract class ActorAgent extends Agent<Env> {
     const exposedPorts = rt.executionRouter?.getProvider('sandbox')?.listExposedPorts;
 
     if (handle === null || exposedPorts === undefined) return;
-    const ports = (await exposedPorts()).map((row) => row.port);
-    // No port exposed: nothing serves, and the box is not asked.
-    const listeners = ports.length === 0 ? [] : await handle.portListeners(JOB_STAMP_ENV, ports);
 
-    if (listeners !== null) this.jobs.recordServingInWorkspace(new Map(listeners.flatMap((listener) => (listener.stamp === null ? [] : [[listener.stamp, listener.port] as const]))));
+    await recordServingJobs(this.jobs, {
+      exposedPorts: async () => (await exposedPorts()).map((row) => row.port),
+      holders: (ports) => handle.portListeners(JOB_STAMP_ENV, ports),
+    });
   }
 
   /** A turn's claim moving or a job settling is the box's use too, so it rests only once neither the

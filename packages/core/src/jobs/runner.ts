@@ -5,7 +5,7 @@ import type { Schedule } from '../types/primitives';
 import type { AgentSignal, AgentInbox, SignalUndeliveredReason } from '../types/signals';
 import type { EventLog } from '../events/hub/log';
 import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold';
-import { REAL_CLOCK } from '../types/clock';
+import { REAL_CLOCK, type Clock } from '../types/clock';
 import type { DeviceRequestOwnership } from './device-ownership';
 import { BackgroundJobStore, serializeJobResult, type BackgroundJob, type JobResume } from './store';
 import { nanoid } from '../utils/nanoid';
@@ -88,6 +88,7 @@ export interface BackgroundJobRunnerDeps {
   store: BackgroundJobStore;
   /** Resolved per read: one runner can serve watched and unwatched surfaces. Defaults to interactive. */
   policy?: () => BackgroundPolicy;
+  clock?: Clock;
   fiber: Schedule['fiber'];
   inbox: AgentInbox;
   /** Durable wake retry plane; both or neither. Absent for agents with no later activation (swarm nodes). */
@@ -245,7 +246,7 @@ export class BackgroundJobRunner {
   ): ThresholdDeps {
     return {
       thresholdMs: this.policy.detachAfterMs,
-      clock: REAL_CLOCK,
+      clock: this.deps.clock ?? REAL_CLOCK,
       onThreshold: async (kind, promise) =>
         await this.onThreshold({ kind, input, mode, controller, promise, ownership }),
     };
