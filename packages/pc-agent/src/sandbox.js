@@ -347,7 +347,6 @@ const OUTSIDE_THE_SANDBOX = 'outside what this device\'s sandbox exposes, which 
 
 const INSIDE_KINU = 'inside Kinu\'s own directory, which the tunnel never serves';
 
-
 /**
  * The policy, as one object, in one layout on Linux and macOS.
  *
@@ -383,7 +382,6 @@ function viewFor(options) {
 
   const linux = platform !== 'darwin';
   const scope = { home, deviceHome, own: [agentHome, agentTmp], writable: roots };
-
 
   const readMounts = linux ? linuxReadMounts() : [];
   const readTrees = readMounts.map((mount) => mount.real);
@@ -423,7 +421,6 @@ function viewFor(options) {
     }
 
     if (within(deviceHome, target)) return { access: VIEW_INVISIBLE, path: target, why: INSIDE_KINU };
-
 
     if (roots.some((root) => within(root, target))) return { access: VIEW_WRITABLE, path: target };
 
@@ -691,7 +688,6 @@ function buildLinuxArgv(view, options) {
   // its parent, or the parent's bind hides it. `-try`, because a directory the
   // owner shared and later deleted is no reason to refuse every command.
   for (const root of [...view.roots].reverse()) argv.push('--bind-try', root, root);
-
 
   for (const dir of view.hiddenDirs) argv.push('--tmpfs', dir);
 
