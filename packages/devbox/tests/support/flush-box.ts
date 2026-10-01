@@ -3,6 +3,7 @@
 // file, and the publish route stores objects where the store mount shows them (`/backups/<key>`).
 // Bundled and started by `tests/concurrent-flush-image.test.ts`; it runs nowhere else.
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync, appendFileSync, readdirSync, openSync, writeSync, closeSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { chainAdvanced } from '../../src/errors';
 import { CHAIN_STORE_MOUNT, normalizeChainState, type ChainState } from '../../src/snapshot-chain';
@@ -59,8 +60,13 @@ function boxPorts(root: string): BoxSyncPorts {
   };
 }
 
-/** An object becomes visible whole, as an R2 PUT or a completed multipart upload does. */
-function complete(target: string, bytes: Uint8Array): void {
+const md5 = (bytes: Uint8Array): Buffer => createHash('md5').update(bytes).digest();
+
+const md5Hex = (bytes: Uint8Array): string => createHash('md5').update(bytes).digest('hex');
+
+/** An object becomes visible whole, as an R2 PUT or a completed multipart upload does; its etag is R2's:
+ *  the bytes' MD5, or for parts the MD5 of the parts' MD5s and their count. */
+function complete(target: string, bytes: Uint8Array, etag: string): void {
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(`${target}.part`, bytes);
 
@@ -71,6 +77,7 @@ function complete(target: string, bytes: Uint8Array): void {
   }
 
   renameSync(`${target}.part`, target);
+  writeFileSync(`${target}.etag`, etag);
   appendFileSync(FLUSH_BOX_PUBLISHED, `${target} ${String(bytes.byteLength)}\n`);
 }
 
@@ -80,7 +87,9 @@ async function store(request: Request, url: URL): Promise<Response> {
   const uploadId = url.searchParams.get('uploadId');
 
   if (request.method === 'HEAD') {
-    return existsSync(target) ? new Response(null, { headers: { 'content-length': String(statSync(target).size) } }) : new Response(null, { status: 404 });
+    return existsSync(target)
+      ? new Response(null, { headers: { 'content-length': String(statSync(target).size), etag: `"${readFileSync(`${target}.etag`, 'utf8')}"` } })
+      : new Response(null, { status: 404 });
   }
 
   if (request.method === 'POST' && url.searchParams.has('uploads')) {
@@ -92,14 +101,15 @@ async function store(request: Request, url: URL): Promise<Response> {
 
   if (request.method === 'PUT' && uploadId !== null) {
     const part = url.searchParams.get('partNumber') ?? '';
-    writeFileSync(join(UPLOADS, uploadId, part.padStart(6, '0')), new Uint8Array(await request.arrayBuffer()));
+    const bytes = new Uint8Array(await request.arrayBuffer());
+    writeFileSync(join(UPLOADS, uploadId, part.padStart(6, '0')), bytes);
 
-    return new Response(null, { headers: { etag: `"${part}"` } });
+    return new Response(null, { headers: { etag: `"${md5Hex(bytes)}"` } });
   }
 
   if (request.method === 'POST' && uploadId !== null) {
     const parts = readdirSync(join(UPLOADS, uploadId)).sort().map((part) => readFileSync(join(UPLOADS, uploadId, part)));
-    complete(target, Buffer.concat(parts));
+    complete(target, Buffer.concat(parts), `${createHash('md5').update(Buffer.concat(parts.map(md5))).digest('hex')}-${String(parts.length)}`);
     rmSync(join(UPLOADS, uploadId), { recursive: true, force: true });
 
     return new Response(`<CompleteMultipartUploadResult><ETag>"${uploadId}"</ETag></CompleteMultipartUploadResult>`);
@@ -112,9 +122,10 @@ async function store(request: Request, url: URL): Promise<Response> {
   }
 
   if (request.method === 'PUT') {
-    complete(target, new Uint8Array(await request.arrayBuffer()));
+    const bytes = new Uint8Array(await request.arrayBuffer());
+    complete(target, bytes, md5Hex(bytes));
 
-    return new Response(null, { headers: { etag: '"whole"' } });
+    return new Response(null, { headers: { etag: `"${md5Hex(bytes)}"` } });
   }
 
   return new Response(`unmodelled ${request.method} ${url.pathname}${url.search}`, { status: 501 });

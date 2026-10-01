@@ -72,8 +72,7 @@ export function accountDeps<Deps extends ProviderDeps>(deps: Deps, providerId: s
     if (only === undefined || only === MAIN_ACCOUNT) return null;
 
     if (others.length > 0) {
-      return yield* new KinuError('bad_input', `${providerId} has the accounts ${accounts.join(', ')} and no default: `
-        + `choose one in the providers settings or with \`kinu provider default ${providerId} <name>\`.`);
+      return yield* new KinuError('bad_input', `${providerId} has the accounts ${accounts.join(', ')} and none is its default.`);
     }
 
     return accountCredentialKey(key, only);

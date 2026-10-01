@@ -102,12 +102,16 @@ test('a second flush waits for the first, then reads the record it wrote and pub
   freshBox();
 
   const outcomes = await Promise.all([flush(), flush()]);
+  // One small file beside the stage: the last holder's token and outcome, overwritten by every flush (D57).
+  const lock = run(['cat', `${DEVBOX_RUNTIME_DIR}/stage.lock`]);
+  const last = parseSyncOutcome(lock.split('\n')[1] ?? '', '', 0);
 
   expect({
     committed: outcomes.filter((outcome) => outcome.kind === 'committed').length,
     published: published().length,
     record: recordedBase(),
-  }).toEqual({ committed: 1, published: 1, record: { named: true, reads: true, stamped: true } });
+    lock: { small: lock.length < 2048, holdsAnOutcome: outcomes.some((outcome) => outcome.kind === last.kind && outcome.reason === last.reason) },
+  }).toEqual({ committed: 1, published: 1, record: { named: true, reads: true, stamped: true }, lock: { small: true, holdsAnOutcome: true } });
 });
 
 test('a layer that lands unreadable is never named by the record', async () => {

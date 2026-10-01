@@ -305,7 +305,7 @@ describe('the Claude subscription wire', () => {
 
     try {
       await expect(turn(createClaudeProvider(), providerDeps))
-        .rejects.toThrow('Your Claude login is no longer valid. Reconnect Claude in User settings, or run `kinu provider connect claude`.');
+        .rejects.toThrow('Your Claude login is no longer valid.');
     } finally {
       restore();
     }

@@ -186,7 +186,7 @@ The archive keeps every version: a read model over `scaffold_versions` joined to
 
 CraftStore consolidation (`periodicCraftConsolidation`, `core/src/craft/consolidation.ts`) computes `effectiveScore` with the EMA (α = 0.3) and time decay on a 30-day half-life. It retires tools below 0.1 that have been used at least twice. Unscored tools are skipped. The whole pass aborts if it would empty the store: a workspace whose every tool went stale keeps a low-quality toolbox rather than an empty one.
 
-Replay eval (`runReplayEval`, `core/src/evolution/replay.ts`) re-scores labeled past turns into a loss curve, so a scaffold change is judged against a number. Every point on the curve is a mean of `DEFAULT_REPLAY_SAMPLE_SIZE` (20) judge verdicts, reported and persisted in `replay_evals.score_lo` and `score_hi` with the 95% Wilson interval around it (`core/src/utils/stats.ts`). The changelog calls a move "improved" or "declined" only when the two intervals do not overlap.
+The quality curve (`core/src/evolution/scaffold-scores.ts`) holds one point per promoted scaffold version: its mean score on outcome-labeled turns with the 95% Wilson interval (`core/src/utils/stats.ts`), in `scaffold_scores`. A promotion (`applyPromotionDecision`) adds the version to the curve. When a GEPA run proposed that version, the point is the score GEPA measured on held-out turns. Otherwise the evolution lane's `runDueScaffoldEvaluations` replays up to `REPLAY_SAMPLE_SIZE` (20) labeled turns on the version's code, scored by the same rollout, criterion and judge GEPA uses. A replay that fails is recorded as a point with its reason and is not retried. A point whose interval sits wholly below the previous point's is a regression in the changelog and the Quality panel; nothing rolls back on it.
 
 GEPA train/val split (`buildOutcomeEvalSplit`, `core/src/evolution/eval-split.ts`). The reflection minibatch draws from older corrected and frustrated turns, while the newest failures are held out and scored alongside the accepted-turn regression guards. The two sets are disjoint, so a winning candidate was never optimised against the instances that picked it. When the ledger holds too few failures to hold any out, the split returns a `degeneracy` reason, and the caller reports the selection as exploratory rather than overlapping the sets.
 
@@ -210,7 +210,7 @@ Every self-modification shows up as a human-readable card (`core/src/evolution/c
 | `tool` | `crafted_tools` joined to `craft_scores` | `craft_retire` |
 | `fact` | `agent_facts`, collapsed into one card with children | `fact_forget` / `fact_forget_many` |
 | `gepa` | completed GEPA runs | not revertable |
-| `replay` | replay-eval scores with their intervals, plus the direction against the previous run when the intervals separate | not revertable |
+| `replay` | `scaffold_scores`: one point per promoted scaffold version with its interval, the direction against the previous point when the intervals separate, or why scoring failed | not revertable |
 | `outcomes` | aggregated `turn_outcomes` counts | not revertable |
 | `prompt_section` | `prompt_section_versions`, keyed `<sectionId>:<version>` because versions are numbered per section | `prompt_section_rollback` |
 | `refinement` | `refinement_requests`, one card per request with one child per routed edit | the children carry the owner's own revert |
@@ -351,6 +351,6 @@ Evolution activity is persisted to the `evolution_events` SQL table:
 | `data` | TEXT | JSON payload (optional) |
 | `created_at` | INTEGER | Epoch milliseconds |
 
-The engine emits nine types (`EvolutionEvent`, `core/src/evolution/types.ts`): `reflection`, `craft_discovered`, `scaffold_proposed`, `consolidation`, `turn_complete`, `replay_eval`, `changelog_digest`, `experience_import` and `advisor_note`. `recordMisevolutionVeto` writes a tenth, `misevolution_veto`, directly (`core/src/safety/misevolution.ts`).
+The engine emits eight types (`EvolutionEvent`, `core/src/evolution/types.ts`): `reflection`, `craft_discovered`, `scaffold_proposed`, `consolidation`, `turn_complete`, `changelog_digest`, `experience_import` and `advisor_note`. `recordMisevolutionVeto` writes a ninth, `misevolution_veto`, directly (`core/src/safety/misevolution.ts`).
 
 This table is one of four sources the Run Timeline read model merges (`getRunTimeline`, `core/src/read-models/timeline.ts`); the others are the per-run `run_events` log, the MCTS `search_nodes` table, and detached background jobs. The merge runs server-side and does not depend on the platform, so every backend has the timeline. `kinu status` reads the same table locally.

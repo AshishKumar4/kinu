@@ -143,7 +143,7 @@ export interface LocalModelResolverConfig {
   credentials?: LocalProviderCredentials;
   oauthStore?: LocalOAuthStore;
   /** When present, workers-ai + my-gateway resolve through the worker's AI proxy;
-   *  when absent they list as unavailable with a `kinu auth` hint. */
+   *  when absent they list as unavailable, signed out. */
   cloud?: LocalCloudSession;
   fetch?: typeof fetch;
   /** Read per call so {@link LocalModelResolver.setProviderWaitSink} can install
@@ -571,9 +571,9 @@ function createCloudProxyProvider(opts: {
   };
 }
 
-/** Signed out: providers stay visible in /model with the step that unlocks them. */
+/** Signed out: providers stay visible in /model, saying what they lack. */
 function createSignedOutCloudProvider(id: CloudProxyProviderId, label: string): ModelProvider {
-  const reason = 'Sign in with `kinu auth` to use Workers AI in your Cloudflare account from local workspaces.';
+  const reason = "This machine isn't signed in to Kinu, so your Cloudflare account's models aren't reachable.";
 
   return {
     id,
@@ -587,12 +587,9 @@ function createSignedOutCloudProvider(id: CloudProxyProviderId, label: string): 
   };
 }
 
-/** Per-backend copy: the CLI and cloud name different remedies. */
+/** Per-backend copy: the CLI and cloud lack different things. */
 function noDefaultModelMessage(): string {
-  return 'No default model is set.'
-    + ' Run kinu auth to use Workers AI in your Cloudflare account, run kinu setup to pick a model provider,'
-    + ' or name a model with --model'
-    + ' (for example --model claude/claude-opus-4-7 once kinu provider connect claude has signed you in).';
+  return 'No default model is set, and this machine is neither signed in to Kinu nor connected to a model provider.';
 }
 
 type CliProviderId =

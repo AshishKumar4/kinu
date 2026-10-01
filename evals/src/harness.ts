@@ -17,7 +17,8 @@ import { redact } from './redact';
 import { cutButCompleted, measure, toTranscript } from './transcript';
 import { TrialTimeline } from './timeline';
 import { EvalVerifier } from './verifier';
-import { answered, repliesTo, settle, TurnWatch, WorkspaceHang } from './workspace-completion';
+import { duringTrial, trialCancel } from './cancel';
+import { answered, repliesTo, settle, TrialCancelled, TurnWatch, type WatchOptions, WorkspaceHeld } from './workspace-completion';
 
 /** How long a trial whose workspace keeps streaming may go without a line before it says so. */
 const STREAMING_LINE_MS = 60_000;
@@ -134,11 +135,37 @@ function outcomeOf(events: readonly RunEvent[], before: ReadonlySet<string>): Ev
   return { status: memoryReset(message) ? 'reset' : 'error', message: redact(message) };
 }
 
+/** What a turn tells its trial while it waits: how many steps its runs have recorded (a stream that dropped shows no
+ *  more, and the ledger does), and through `watching` the jobs it waits on. */
+type TurnHooks = { readonly stepped: (steps: number) => void; readonly watching: WatchOptions };
+
+/** Where a trial records what stopped it early, and how long the turn it stopped had run. */
+type StopRecord = { readonly turns: EvalTurnResult[]; readonly errors: HarnessError[]; readonly turnWallMs: number };
+
 /**
- * One turn: its seeded files, the prompt, the wait until the workspace settles, and the checks. `stepped` hears how
- * many steps the turn's runs have recorded while it settles: a stream that dropped shows no more, and the ledger does.
+ * What stopped a trial before its turns were done, recorded where it counts: a turn the watch or the run's cancel ended,
+ * a turn the build refused or reset, or else a failure of the harness's own, infrastructure when the transport made it.
  */
-async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: TrialTimeline, stepped: (steps: number) => void): Promise<EvalTurnResult> {
+function recordStop(thrown: { readonly cause: unknown }, { turns, errors, turnWallMs }: StopRecord): void {
+  const error = thrown.cause;
+  const message = renderThrownChain(thrown);
+
+  if (error instanceof WorkspaceHeld) {
+    turns.push({ outcome: { status: error.outcome, message: redact(error.message), heldBy: [...error.heldBy] }, checks: [], turnWallMs: 0, verificationWallMs: 0 });
+  } else if (error instanceof DeploymentAnswer) {
+    // The build answered one of this turn's requests with a failure of its own, a memory reset among them: the
+    // turn failed on the build.
+    const status = memoryReset(error.message) ? 'reset' : 'refused';
+
+    turns.push({ outcome: { status, message: redact(message) }, checks: [], turnWallMs, verificationWallMs: 0 });
+  } else {
+    // infraBoundary marks a failure of the deployment's transport; anything else is the harness's own.
+    errors.push({ name: message.includes(INFRA_FAILURE_MARKER) ? 'InfraError' : 'EvalRunError', message });
+  }
+}
+
+/** One turn: its seeded files, the prompt, the wait until the workspace settles, and the checks. */
+async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: TrialTimeline, { stepped, watching }: TurnHooks): Promise<EvalTurnResult> {
   if (turn.fresh) {
     await timeline.span('evict', async () => {
       await session.abortActivation();
@@ -154,7 +181,7 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
 
   const before = new Set((await timeline.span('ledger', () => session.runEvents())).map((event) => event.runId));
   const startedAt = Date.now();
-  const watch = new TurnWatch(session);
+  const watch = new TurnWatch(session, watching);
   let lost: Error | undefined;
 
   try {
@@ -163,7 +190,7 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
     } catch (error) {
       // A socket the deployment drops loses the turn's stream, not the turn: the run goes on up there
       // and the ledger records its end. The history below says whether the prompt ever arrived.
-      if (error instanceof WorkspaceHang || !renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER)) throw error;
+      if (error instanceof WorkspaceHeld || !renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER)) throw error;
       lost = error instanceof Error ? error : new Error(renderThrownChain({ cause: error }));
     }
 
@@ -172,9 +199,9 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
       stepped(events.filter((event) => event.type === 'step_finish' && !before.has(event.runId)).length);
     }));
   } catch (error) {
-    if (!(error instanceof WorkspaceHang)) throw error;
+    if (!(error instanceof WorkspaceHeld)) throw error;
 
-    return { outcome: { status: 'hung', message: redact(error.message) }, checks: [], turnWallMs: Date.now() - startedAt, verificationWallMs: 0 };
+    return { outcome: { status: error.outcome, message: redact(error.message), heldBy: [...error.heldBy] }, checks: [], turnWallMs: Date.now() - startedAt, verificationWallMs: 0 };
   }
 
   const turnWallMs = Date.now() - startedAt;
@@ -214,9 +241,10 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
 /**
  * What a trial's workspace holds at its end, then its deletion: the ledger and spend, the evidence, the
  * teardown. A failure of any is recorded in `errors`, or, for the evidence, said in it, and never
- * thrown over the verdict the trial's checks gave.
+ * thrown over the verdict the trial's checks gave. `evidence` is null for a trial the run's cancel
+ * ended: nothing grades it, and the deploy's kill follows its cancel within seconds.
  */
-async function closeWorkspace(session: KinuPublicSession, task: EvalTask, errors: HarnessError[], timeline: TrialTimeline): Promise<{
+async function closeWorkspace(session: KinuPublicSession, evidence: EvalTask['evidence'] | null, errors: HarnessError[], timeline: TrialTimeline): Promise<{
   events: RunEvent[]; costUsd: number | undefined; workspace: WorkspaceEvidence;
 }> {
   let events: RunEvent[] = [];
@@ -229,7 +257,9 @@ async function closeWorkspace(session: KinuPublicSession, task: EvalTask, errors
     errors.push({ name: 'InfraError', message: `the trial's ledger could not be read: ${renderThrownChain({ cause: error })}` });
   }
 
-  const workspace = await timeline.span('evidence', () => gatherEvidence(session, task.evidence));
+  const workspace = evidence === null
+    ? { files: new Map(), slates: null, data: [], unread: ['the run was cancelled before the workspace was read'] }
+    : await timeline.span('evidence', () => gatherEvidence(session, evidence));
 
   try {
     await timeline.span('teardown', () => session.teardown());
@@ -251,9 +281,10 @@ async function closeWorkspace(session: KinuPublicSession, task: EvalTask, errors
 export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: TrialIdentity, evidenceRoot: string) {
   return createHarness<EvalRunInput, EvalRunOutput>({
     name: 'kinu-agent',
-    run: async ({ input, signal }) => {
+    run: ({ input, signal }) => duringTrial(async () => {
       const startedAt = Date.now();
       const timeline = new TrialTimeline();
+      const stop = trialCancel(signal);
 
       // A line per step, straight to stdout: a run's reader sees every trial move, and the longest silence is a step, or a
       // minute of one that streams longer. The deploy ends a run that writes nothing for 480 s, and a step streaming for
@@ -280,6 +311,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       let turnStartedAt = Date.now();
 
       try {
+        if (stop.aborted) throw new TrialCancelled(`cancelled by ${String(stop.reason)} before its workspace opened`, []);
         await timeline.span('admit', admit);
 
         const opened = await (async () => {
@@ -327,7 +359,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
         })();
 
         for (const [index, turn] of task.turns.entries()) {
-          if (signal?.aborted === true) throw new Error('the eval run was cancelled', { cause: signal.reason });
+          if (stop.aborted) throw new TrialCancelled(`cancelled by ${String(stop.reason)} before turn ${String(index + 1)} was sent`, []);
           attempted = turn.prompt;
           turnStartedAt = Date.now();
           turnNumber = index + 1;
@@ -335,36 +367,29 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
           timeline.mark('turn', { index });
           say(`turn ${String(turnNumber)} of ${String(task.turns.length)} sent`);
 
-          const result = await runTurn(opened, turn, timeline, (recorded) => {
-            if (recorded > steps) say(`turn ${String(turnNumber)}, step ${String(steps = recorded)}, off the ledger`);
+          const result = await runTurn(opened, turn, timeline, {
+            stepped: (recorded) => {
+              if (recorded > steps) say(`turn ${String(turnNumber)}, step ${String(steps = recorded)}, off the ledger`);
+            },
+            watching: { waiting: say, cancelled: stop },
           });
 
           say(`turn ${String(turnNumber)} ${result.outcome.status} in ${String(Math.round(result.turnWallMs / 1000))}s, `
-            + `${String(result.checks.filter((check) => check.pass).length)} of ${String(result.checks.length)} checks passed`);
+            + `${String(result.checks.filter((check) => check.pass).length)} of ${String(result.checks.length)} checks passed`
+            + `${result.outcome.message === undefined ? '' : `: ${result.outcome.message}`}`);
           turns.push(result);
 
           if (result.outcome.status !== 'completed' || result.checks.some((check) => !check.pass)) break;
         }
       } catch (error) {
-        const message = renderThrownChain({ cause: error });
-
-        if (error instanceof DeploymentAnswer) {
-          // The build answered one of this turn's requests with a failure of its own, a memory reset among them: the
-          // turn failed on the build.
-          const status = memoryReset(error.message) ? 'reset' : 'refused';
-
-          turns.push({ outcome: { status, message: redact(message) }, checks: [], turnWallMs: Date.now() - turnStartedAt, verificationWallMs: 0 });
-        } else {
-          // infraBoundary marks a failure of the deployment's transport; anything else is the harness's own.
-          errors.push({ name: message.includes(INFRA_FAILURE_MARKER) ? 'InfraError' : 'EvalRunError', message });
-        }
+        recordStop({ cause: error }, { turns, errors, turnWallMs: Date.now() - turnStartedAt });
       }
 
       timeline.mark('close');
 
       const { events, costUsd, workspace } = session === undefined
         ? { events: [], costUsd: undefined, workspace: { files: new Map(), slates: null, data: [], unread: ['no workspace was opened'] } }
-        : await closeWorkspace(session, task, errors, timeline);
+        : await closeWorkspace(session, stop.aborted ? null : task.evidence, errors, timeline);
 
       try {
         const after = (await timeline.span('build', () => deployedBuild(target))).sha;
@@ -436,6 +461,6 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       }
 
       return result;
-    },
+    }),
   });
 }

@@ -332,6 +332,14 @@ function countEntriesCommand(dir: string): string {
 }
 
 /** Ticks and flushes never overlap; a checkpoint that throws is a failed outcome, not an exit. */
+/** A flush that waited for another program's commit and then found nothing left to save reports that commit:
+ *  the workspace it was asked to save is durable, by the flush ahead of it (D57). */
+export function afterWaiting(own: CheckpointOutcome, ahead: CheckpointOutcome | undefined): CheckpointOutcome {
+  if (own.kind !== 'skipped' || ahead?.kind !== 'committed') return own;
+
+  return { kind: 'committed', reason: `committed by the flush this one waited behind; ${own.reason ?? 'nothing was left to save'}`, bytes: ahead.bytes, movedBytes: 0 };
+}
+
 export function syncWorker(storage: Pick<DevboxStorage, 'checkpoint'>): SyncWorker {
   const checkpoint = async (kind: CheckpointKind): Promise<CheckpointOutcome> => {
     try {

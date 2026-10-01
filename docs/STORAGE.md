@@ -437,7 +437,7 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Events hub | `agent_log`, `reply_channels`, `triggers` | `core/src/events/hub/schema.ts` |
 | Run-event log | `run_events` | `core/src/events/recorder.ts` |
 | Turn outcomes | `turn_outcomes`, `lessons`, `outcome_labels`, `outcome_ensemble_labels`, `pattern_extractions` | `core/src/evolution/outcomes.ts` |
-| Replay eval | `replay_evals` | `core/src/evolution/replay.ts` |
+| Quality curve | `scaffold_scores` | `core/src/evolution/scaffold-scores.ts` |
 | Refinement | `refinement_requests` | `core/src/evolution/refinement.ts` |
 | GEPA | `gepa_runs`, `gepa_candidates` | `core/src/evolution/gepa/persistence.ts` |
 | Branching heads | `head_runs`, `head_journal`, `head_evidence`, `head_steps`, `head_merge_results` | `core/src/heads/schema.ts` |

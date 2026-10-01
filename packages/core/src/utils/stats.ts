@@ -49,11 +49,6 @@ export function scoreInterval(scores: ReadonlyArray<number>): ScoreInterval {
   return wilsonInterval(scores.reduce((sum, s) => sum + s, 0), scores.length);
 }
 
-/** The interval as loss (1 − score); bounds swap and flip. */
-export function lossInterval(score: ScoreInterval): ScoreInterval {
-  return { mean: 1 - score.mean, lo: 1 - score.hi, hi: 1 - score.lo, n: score.n };
-}
-
 /** `0.75 (95% CI 0.30 to 0.95)`: the one rendering of a reported score. */
 export function formatScoreInterval(interval: ScoreInterval, digits = 2): string {
   return `${interval.mean.toFixed(digits)} (95% CI ${interval.lo.toFixed(digits)} to ${interval.hi.toFixed(digits)})`;

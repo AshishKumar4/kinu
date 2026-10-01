@@ -29,6 +29,7 @@ import {
   type ChainState,
   type SnapshotChainPorts,
 } from '../../src/snapshot-chain';
+import { PLATFORM_TMPFS_BYTES } from '../../src/stream-archive';
 import {
   DEVBOX_RUNTIME_DIR,
   DEVBOX_WORKDIR,
@@ -363,12 +364,20 @@ export class ContainerDisk {
     this.mountServed.clear();
     this.whiteouts.clear();
     this.usedBytes = 0;
+    this.shmBytes = 0;
   }
+
+  shmBytes = 0;
 
   charge(delta: number, path = '(tree)'): void {
     // tmpfs lives in memory and layer mounts read through the store, so neither costs disk quota;
     // decided here so no writer needs to know which paths are disk.
-    if (path.startsWith('/dev/shm/') || path === '/dev/shm') return;
+    if (path.startsWith('/dev/shm/') || path === '/dev/shm') {
+      if (delta > 0 && this.shmBytes + delta > PLATFORM_TMPFS_BYTES) throw new DiskFull(path, delta, Math.max(0, PLATFORM_TMPFS_BYTES - this.shmBytes));
+      this.shmBytes += delta;
+
+      return;
+    }
 
     if (path.startsWith('/var/tmp/devbox/lower-base') || path.startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`) || path.startsWith('/var/tmp/devbox/lower-empty') || path === '/var/tmp/devbox/block-lower') return;
 
@@ -1140,8 +1149,28 @@ function checkpointCommand(
   command: string,
   disk: ContainerDisk,
   publish: (archivePath: string, mountedPath: string) => number | undefined,
-  publishEgress: (archivePath: string, objectUrl: string) => { landed: number } | { refused: string } | undefined,
+  publishEgress: (archive: Uint8Array, objectUrl: string) => { landed: number } | { refused: string },
 ): ShellReply | undefined {
+  // The archive streams as it is built (D57): only a window of it needs room.
+  const streamed = /devbox-stream\.mjs' '(?<url>[^']+)' \d+ \d+ (?<window>\d+) '(?<archive>[^']+)' -- \/usr\/bin\/nice -n 10 \/usr\/bin\/mksquashfs '(?<source>[^']+)'/
+    .exec(command)?.groups;
+
+  if (streamed !== undefined) {
+    const archive = disk.pack(streamed.source);
+    const diskFree = disk.quotaBytes === null ? Number.MAX_SAFE_INTEGER : disk.quotaBytes - disk.usedBytes;
+    const free = streamed.archive.startsWith('/dev/shm/') ? PLATFORM_TMPFS_BYTES - disk.shmBytes : diskFree;
+
+    if (free < Math.min(archive.byteLength, Number(streamed.window))) {
+      return { stdout: '4 ', stderr: 'mksquashfs exited 1: FATAL ERROR: Failed to write to output filesystem: No space left on device', exitCode: 0 };
+    }
+
+    const landed = publishEgress(archive, streamed.url);
+
+    if ('refused' in landed) return { stdout: '1 ', stderr: landed.refused, exitCode: 0 };
+
+    return shellOk(`0 ${landed.landed} etag-${landed.landed}`);
+  }
+
   const squash = /mksquashfs '(?<source>[^']+)' '(?<archive>[^']+)'/.exec(command)?.groups;
 
   if (squash !== undefined) {
@@ -1179,29 +1208,6 @@ function checkpointCommand(
     }
 
     return shellOk(`0 ${landed}`);
-  }
-
-  // Answers the egress PUT (D15) the way the publisher's wrapper reports it:
-  // `<rc> <bytes> <etag>` on stdout, the store's words on stderr.
-  const egress = /bun '(?<script>[^']*devbox-publish\.mjs)' '(?<archive>[^']+)' '(?<url>[^']+)' \d+/
-    .exec(command)?.groups;
-
-  if (egress !== undefined) {
-    const landed = publishEgress(egress.archive, egress.url);
-
-    if (landed !== undefined && 'refused' in landed) {
-      return { stdout: '1 ', stderr: landed.refused, exitCode: 0 };
-    }
-
-    if (landed === undefined) {
-      return {
-        stdout: '2 ',
-        stderr: `no archive at ${egress.archive}`,
-        exitCode: 0,
-      };
-    }
-
-    return shellOk(`0 ${landed.landed} "etag-${landed.landed}"`);
   }
 
   // The read-back before a record names a layer: `unsquashfs -l` reads the tables a mount reads.
@@ -1324,9 +1330,8 @@ function chainExec(
   /** Publish a staged archive through the s3fs mount and answer what landed,
    *  or undefined when the source is not there for `dd` to read. */
   publish: (archivePath: string, mountedPath: string) => number | undefined,
-  /** Publishes a staged archive via the mount's egress host; answers the byte count, the
-   *  refusal's stderr words, or undefined when the archive is absent. */
-  publishEgress: (archivePath: string, objectUrl: string) => { landed: number } | { refused: string } | undefined,
+  /** Publishes an archive via the mount's egress host; answers the byte count or the refusal's stderr words. */
+  publishEgress: (archive: Uint8Array, objectUrl: string) => { landed: number } | { refused: string },
 ) {
   const unquote = (value: string): string => value.replace(/^'|'$/g, '');
 
@@ -1675,7 +1680,7 @@ function snapshotChainArm(): ConformanceArm {
 
       /** One PUT through the mount's egress host (D15); the mount's registration routes the URL,
        *  so an unmounted box refuses exactly as the handler's 403 would. */
-      const publishEgress = (archivePath: string, objectUrl: string): { landed: number } | { refused: string } | undefined => {
+      const publishEgress = (bytes: Uint8Array, objectUrl: string): { landed: number } | { refused: string } => {
         deaths.at('before-payload');
         const mount = this.#publishing;
 
@@ -1689,9 +1694,6 @@ function snapshotChainArm(): ConformanceArm {
           return { refused: `PUT answered 403 for ${objectUrl}` };
         }
 
-        const bytes = this.disk.readFile(archivePath);
-
-        if (bytes === undefined) return undefined;
         // The egress handler prepends the mount's prefix, so the object lands at `${prefix}${key}`.
         this.disk.serveFromMount(`${mount.at}/${relative}`, bytes);
         mounted.put(`${mount.prefix}${relative}`, bytes);

@@ -42,10 +42,10 @@ describe('classifyTurnFailure', () => {
       // The bare upstream word Cloudflare answers a rejected credential with (audit 2.15).
       'Unauthorized',
       'Your Cloudflare login is no longer valid. Reconnect Cloudflare in User settings.',
-      'Your ChatGPT login is no longer valid. Reconnect ChatGPT in User settings, or run `kinu setup` on this machine.',
+      'Your ChatGPT login is no longer valid.',
       'Codex token refresh failed: 400 {"error":"invalid_grant","error_description":"The provided authorization grant is invalid"}',
       'Invalid API key provided',
-      'Codex credentials not configured. Connect ChatGPT in User settings, or run `kinu setup` on this machine.',
+      'ChatGPT credentials are not configured for this account.',
     ]) {
       expect(classifyTurnFailure(error)).toBe('auth');
     }

@@ -61,7 +61,7 @@ import {
   type ScaffoldRunOptions,
   initActorClaimTables, ActorClaimStore, initPendingSendTables, PendingSendStore,
   createScaffoldCandidateSurface, createScaffoldCallTool, createScaffoldHistory, type ScaffoldCandidateBinding,
-  queueTurnShadowTrial, runQueuedShadowTrials, createJsonJudge, type ScaffoldControl,
+  queueTurnShadowTrial, runDueScaffoldEvaluations, createJsonJudge, type ScaffoldControl,
   refinementPass, type RefinementDeps,
   type CompletedTurn, type TurnContinuity, UNBOUNDED_STEPS,
   type AdvisorRecoverySnapshot,
@@ -662,7 +662,7 @@ export abstract class ActorAgent extends Agent<Env> {
   protected get shadowTrialPorts(): Pick<EvolutionConfig, 'shadowTrialQueue' | 'shadowTrialRunner'> {
     return {
       shadowTrialQueue: (turn, opts) => queueTurnShadowTrial(this.scaffoldControl, turn, opts),
-      shadowTrialRunner: () => runQueuedShadowTrials(this.scaffoldControl),
+      shadowTrialRunner: () => runDueScaffoldEvaluations(this.scaffoldControl),
     };
   }
 

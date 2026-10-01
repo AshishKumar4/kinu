@@ -865,6 +865,25 @@ const CELLS: readonly Cell[] = [
     },
   },
   {
+    id: '6.25',
+    title: 'a base larger than the free disk commits and wakes exact',
+    async run(arm) {
+      await attach(arm);
+      // More than the free disk and the platform's 64 MiB tmpfs, less than the stream's window (D57).
+      const large = { 'large.txt': 'large workspace line\n'.repeat(4 * 1024 * 1024), 'small.txt': 'beside it' };
+
+      for (const [path, text] of Object.entries(large)) await arm.workspace.write(path, text);
+      const disk = arm.disk();
+      disk.quotaBytes = disk.usedBytes + 70 * 1024 * 1024;
+      const outcome = await arm.storage().checkpoint('quiesce');
+      const woken = await wake(arm);
+      const served = await tree(arm);
+
+      expect({ outcome: outcome.kind, woken: woken.kind, exact: served['large.txt'] === large['large.txt'] && served['small.txt'] === large['small.txt'] })
+        .toEqual({ outcome: 'committed', woken: 'attached', exact: true });
+    },
+  },
+  {
     id: '6.20',
     title: 'GC never deletes a reachable object',
     async run(arm) {

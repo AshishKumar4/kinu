@@ -64,9 +64,9 @@ const STAINLESS_ARCH = new Map([['x64', 'x64'], ['amd64', 'x64'], ['arm64', 'arm
 
 const HOST = v.parse(v.fallback(v.object({ platform: v.string(), arch: v.string() }), { platform: 'linux', arch: 'x64' }), globalThis.process);
 
-const DEAD_LOGIN = 'Your Claude login is no longer valid. Reconnect Claude in User settings, or run `kinu provider connect claude`.';
+const DEAD_LOGIN = 'Your Claude login is no longer valid.';
 
-const NOT_CONNECTED = 'Claude is not connected. Connect Claude in User settings, or run `kinu provider connect claude`.';
+const NOT_CONNECTED = "Claude isn't connected for this account.";
 
 /** The retired `claude -p` provider's aliases, which api.anthropic.com does not serve. */
 const RETIRED_CLI_MODELS = new Set(['claude-opus-4-x', 'claude-sonnet-4-x', 'claude-haiku-4-x']);

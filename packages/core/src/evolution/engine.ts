@@ -52,7 +52,6 @@ import {
 import {
   bindPendingImports, settleImportsForTurn, type ImportedExperienceRow,
 } from '../experience/imports';
-import { initReplayTables, runReplayEval, type ReplayEvalSummary } from './replay';
 import {
   initCompletedTurnTable, createCompletedTurnStore, type CompletedTurnStore,
   MAX_TURN_REVIEWS_PER_OPEN,
@@ -60,7 +59,6 @@ import {
 } from './session-window';
 import { initRefinementTables } from './refinement';
 import { MissionBudgetExhausted } from '../mission-budget';
-import { formatScoreInterval, lossInterval } from '../utils/stats';
 import { buildChangelog } from './changelog';
 import { DELEGATION_RUBRIC, delegationFeatures, renderDelegationFeatures } from './delegation-features';
 import { renderScaffoldHandbook } from './scaffold-handbook';
@@ -266,7 +264,6 @@ export class EvolutionEngine {
 
     // Created here so every backend gets the engine's ledgers without schema wiring.
     initTurnOutcomeTables(rt.storage.execRaw);
-    initReplayTables(rt.storage.execRaw);
     this.agentConfig = rt.actor.config;
     initCompletedTurnTable(rt.storage.execRaw);
     this.sessionWindow = createCompletedTurnStore(rt.storage.sql, rt.actor);
@@ -934,43 +931,10 @@ export class EvolutionEngine {
     });
   }
 
-  /** Lifetime cycle, automatic every N windows. No replay eval here: GEPA's seed scoring already
-   *  re-executes the same ledger, and no decision reads the replay curve. */
+  /** Lifetime cycle, automatic every N windows. */
   async onLifetimeEvolution(): Promise<void> {
     await periodicCraftConsolidation(this.rt);
     this.emit({ type: 'consolidation', message: 'CraftStore consolidation complete' });
-  }
-
-  /**
-     * Re-run a sample of outcome-labeled turns against the current config and score
-     * against the recorded outcome, persisted to replay_evals. On demand only. Null
-     * without a runner or labeled turns. A failed re-run or verdict scores 0.
-     */
-  async runReplayEval(sampleSize?: number): Promise<ReplayEvalSummary | null> {
-    const runTask = this.config.replayTaskRunner;
-
-    if (!runTask) return null;
-
-    const summary = await runReplayEval({
-      sql: this.rt.storage.sql,
-      actor: this.rt.actor,
-      judge: this.rt.judgeModel ?? this.rt.llm,
-      runTask,
-      sampleSize,
-      scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql, this.rt.actor),
-    });
-
-    if (summary) {
-      this.emit({
-        type: 'replay_eval',
-        message: `Replay eval: loss ${formatScoreInterval(lossInterval(summary.interval))} ` +
-          `over ${summary.sampleSize} labeled turns ` +
-          `(${summary.acceptedCount} accepted / ${summary.negativeCount} corrected)`,
-        data: summary,
-      });
-    }
-
-    return summary;
   }
 
   /** The user's correction is the strongest context when present. The answer is
