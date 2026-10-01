@@ -131,6 +131,8 @@ interface DeployRun {
   readonly ambientEnvironment?: string;
   /** The scripted model Worker's bearer; empty is the deploy that has none. */
   readonly scriptedKey?: string;
+  /** Another deploy of the environment holds its lock for the whole run. */
+  readonly lockHeld?: boolean;
 }
 
 function runDeploy({
@@ -142,8 +144,12 @@ function runDeploy({
   ambientPhase = "",
   ambientEnvironment = "",
   scriptedKey = "fixture-scripted-key",
+  lockHeld = false,
 }: DeployRun = {}) {
   const fixture = scratchDir("deploy-gate");
+  // The deploy lock lives in the runtime directory: the fixture's own, so a real deploy on this machine never blocks
+  // a run here, nor one here a real deploy. Another deploy holding it is `flock` holding it around this one's whole run.
+  const held = lockHeld ? ["flock", join(fixture, `kinu-deploy-${option === "--promote" ? "production" : "staging"}.lock`)] : [];
   const log = join(fixture, "events.log");
   const buildEnvironmentLog = join(fixture, "build-environment.log");
   const phaseLog = join(fixture, "infra-phase.log");
@@ -181,7 +187,7 @@ printf 'MUTATE npx %s\\n' "$*" >> "$KINU_DEPLOY_GATE_LOG"
 exit 87
 `);
 
-  const argv = ["/usr/bin/bash", "scripts/deploy.sh"];
+  const argv = [...held, "/usr/bin/bash", "scripts/deploy.sh"];
 
   if (option !== undefined) argv.push(option);
   argv.push(...options);
@@ -205,10 +211,12 @@ exit 87
       KINU_DEPLOY_DIRTY: dirty ? "1" : "0",
       KINU_SCRIPTED_MODEL_KEY: scriptedKey,
       SKIP_E2E: "1",
+      XDG_RUNTIME_DIR: fixture,
     }),
     stdout: "pipe",
     stderr: "pipe",
   });
+
 
   const logged = existsSync(log)
     ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean)
@@ -508,6 +516,18 @@ describe("deploy gate", () => {
       expect(run.stdout).toContain("phase is red, so nothing was built or uploaded.");
       expect(run.report.slice(-2)).toEqual(["mark end", "render"]);
     }
+  });
+
+  // ONE AT A TIME (L21). Continuous staging deploys only when no staging deploy runs, and two deploys of one
+  // environment would race on its Worker, record and report index.
+  test("a deploy while another of its environment runs does nothing and exits 75, and the other environment's runs", () => {
+    const blocked = runDeploy({ lockHeld: true });
+
+    expect([blocked.status, blocked.events, blocked.report]).toEqual([75, [], []]);
+    expect(blocked.stdout).toContain("Another staging deploy is running on this machine");
+
+    expect(runDeploy({ lockHeld: true, option: "--promote" }).status).toBe(75);
+    expect(runDeploy().events).toEqual([...STOPS, WITHDRAW, "MUTATE bunx vite build", ...AFTER_A_FAILED_BUILD]);
   });
 
   // REPORT-ALL. After the upload gates nothing stops a deploy: every phase runs

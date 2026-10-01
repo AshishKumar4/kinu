@@ -1239,6 +1239,41 @@ name, to have completed green, and says "no eval verdict yet" while the run has
 none. The deploy's own one-trial pass (`eval-pass-tier.sh`) reports a task that
 fails outright the same day, as a red of that deploy.
 
+L20. A staging deploy reads what its version did, and each signal is a red.
+Decided 2026-09-30 by the owner: with zero users, staging's traffic is our own
+tiers and evals, so its own telemetry for the version is evidence beyond them.
+`prod-logs.ts version` (the existing reader, not a new one) counts that
+version's uncaught exceptions, platform-ended invocations, failed and owed
+terminal effects, and objects woken by startups or alarms at the product's
+wake-loop rate. Measured on staging that day: one version passed every test
+with 19 uncaught exceptions in SupervisorRPC; alarms peaked at 16 in an
+object-hour, under the 30 a loop takes. A canceled or aborted invocation is a
+caller going away and is not counted.
+
+L21. Continuous staging: the release branch's newest tip is deployed whenever it
+moves and no staging deploy runs. Decided 2026-09-30 by the owner, the design
+by Main. A systemd path unit on the branch's remote-tracking ref (it moves
+when the release is pushed) starts a oneshot that deploys from a dedicated
+clean worktree and reads the tip again when each deploy ends, so a tip passed
+meanwhile is dropped and the newest is never lost. Measured 2026-10-01 with a
+real push: pushes during a run start exactly one more run, and a push onto a
+packed ref still fires. deploy.sh holds a lock per environment for its run
+(exit 75 when held), which is how "no deploy runs" is known, for a person's
+deploy as much as the loop's. Each checkout's install is its own revision's:
+when install-parity.ts does not hold, every node_modules tree is removed and
+installed from the frozen lock, then parity is required; a frozen install over
+the old tree updates what the lock names and keeps what it dropped (measured
+with bun 1.4, 2026-10-01).
+
+L22. Production promotes whichever build staging verified, by itself, through
+`deploy.sh --promote`. Decided 2026-09-30 by the owner, the policy 2026-10-01
+by Main. A timer every 15 minutes takes the last staged tip and runs
+`promote.ts check` at it, which refuses until staging's record and the evals'
+green Verdict are both there; only then does it promote. Nothing rolls back by
+itself: a red promotion is never retried, its report and the rollback hint
+stand, and the next verified tip deploys forward. A tip passed by a newer
+staging deploy before its verdict lands is never promoted.
+
 ## Providers
 
 P1. The ChatGPT plan is Sign in with ChatGPT's open-source token sharing

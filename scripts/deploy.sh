@@ -179,6 +179,24 @@ if [ "$KINU_PROMOTE" = "1" ]; then
 else
   KINU_ENV="staging"
 fi
+
+# ONE DEPLOY OF AN ENVIRONMENT AT A TIME on this machine (L21): two would race
+# on one Worker, one record and one report index, and continuous staging
+# (scripts/staging-loop.ts) starts a deploy only when none runs. The script runs
+# again under `flock`, which holds the environment's lock for the whole run and
+# drops it however the run ends; with `-o` nothing the deploy starts inherits
+# it, so a process it leaves behind cannot keep it. KINU_DEPLOY_LOCKED names the
+# environment that re-run holds. A deploy that finds the lock held does nothing
+# and exits 75, which the loop reads as "wait for that one".
+if [ "${KINU_DEPLOY_LOCKED:-}" != "$KINU_ENV" ]; then
+  KINU_DEPLOY_LOCK="${XDG_RUNTIME_DIR:-/tmp}/kinu-deploy-$KINU_ENV.lock"
+  KINU_DEPLOY_LOCKED="$KINU_ENV" flock -n -o -E 75 "$KINU_DEPLOY_LOCK" "$BASH" "$0" "$@"
+  status=$?
+  if [ "$status" -eq 75 ]; then
+    echo -e "${RED}Another $KINU_ENV deploy is running on this machine ($KINU_DEPLOY_LOCK is held), so this one did nothing.${NC}"
+  fi
+  exit "$status"
+fi
 # The environment `gate:infra` checks before the upload and step 5 after it,
 # beside the command like the phase, and ALWAYS ASSIGNED for the same reason:
 # an ambient value must never point a staging deploy's account check at
@@ -599,6 +617,8 @@ echo "Running: npx wrangler deploy ${KINU_WRANGLER_ARGS[*]} (log → $KINU_DEPLO
 echo ""
 if npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}" 2>&1 | tee "$KINU_DEPLOY_LOG"; then
   DEPLOY_PUBLISHED=1
+  # From when the version could answer: the start of what Step 5b reads.
+  KINU_LIVE_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo ""
   echo -e "${GREEN}Kinu deploy succeeded.${NC}"
 else
@@ -964,6 +984,22 @@ if [ "${DEPLOY_PUBLISHED:-0}" = "1" ]; then
     echo ""
     step_red publish "post-deploy infrastructure" "a resource the version $KINU_ENV serves declares is not in its account; the verification's findings in the deploy's output name each one"
   fi
+fi
+
+# ── Step 5b: What the version did on staging ─────────────────────
+#
+# Every red above is a test's. These are staging's own signals for the version
+# this deploy published, read through `scripts/prod-logs.ts version` once the
+# tiers and the eval pass have driven it, with zero users the traffic being our
+# own: an invocation that ended in an uncaught exception or that the platform
+# ended, a terminal effect that failed or was left owed, an object woken as
+# often as the product calls a wake loop, by startups or by alarms. Each is a
+# red of this deploy whatever its tests said, in the report under `telemetry`
+# (L18); so is telemetry it cannot read.
+if [ "$KINU_ENV" = "staging" ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ -n "$KINU_VERSION" ]; then
+  echo ""
+  echo -e "${BOLD}Step 5b: What version $KINU_VERSION did on staging${NC}"
+  bun "$KINU_ROOT/scripts/prod-logs.ts" version "$KINU_VERSION" --worker "$KINU_WORKER" --since "$KINU_LIVE_AT" || KINU_REDS=1
 fi
 
 # ── Step 6: The record, or the history and the evals ─────────────
