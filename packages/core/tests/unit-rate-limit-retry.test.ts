@@ -80,6 +80,14 @@ describe('withRateLimitRetry', () => {
     expect(harness.waits).toEqual([5_000]);
   });
 
+  test('a negative Retry-After is no stated wait, so the backoff applies', async () => {
+    const harness = retryHarness([new Response('limited', { status: 429, headers: { 'Retry-After': '-1' } }), new Response('ok')], { random: () => 0.999 });
+
+    await harness.wrapped('https://api.example.com/v1/chat', { body: '{}' });
+
+    expect(harness.waits).toEqual([1_998]);
+  });
+
   test('uses exponential full jitter bounded by the per-wait cap', async () => {
     const harness = retryHarness(
       [...Array.from({ length: 8 }, () => new Response('limited', { status: 429 })), new Response('ok')],

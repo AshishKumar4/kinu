@@ -56,7 +56,8 @@ export function retryAfterOf(headers: Headers, nowMs: number): number | null {
   if (!after) return null;
   const seconds = Number(after);
 
-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  // A number is never a date: `Date.parse('-1')` is the year 2001, which would read as no wait.
+  if (Number.isFinite(seconds)) return seconds >= 0 ? seconds * 1000 : null;
   const date = Date.parse(after);
 
   return Number.isNaN(date) ? null : Math.max(0, date - nowMs);
