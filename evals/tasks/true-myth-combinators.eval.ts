@@ -3,13 +3,15 @@ import { infraBoundary } from '@kinu.run/test-utils';
 import { defineTaskEval } from '../src/eval';
 import { defineEvalTask } from '../src/task';
 import { finishedWork, type EvalCheckOutcome, type EvalVerifier } from '../src/verifier';
+import { combinatorsJourney } from './combinators-journey';
 
 // DeepSWE v1.1's true-myth-iterable-collection-combinators, worked the way a lead would: the library cloned and
 // installed in the sandbox, three helpers adding the Maybe, Result and Task combinators at once while the lead plans
-// them on its task board, then the cross-type toolbelt helpers as a change request, then a question about the commit
-// that holds the work. Every grade is the benchmark's own verifier, run in the trial's sandbox the way DeepSWE v1.1
-// runs it: a pristine checkout at the base commit with its dependencies, the agent's commits applied as a patch, the
-// held-out tests applied over them, and the node-id whitelists read off the reports.
+// them on its task board, then the cross-type toolbelt helpers as a change request. The same trial continues through
+// a live release desk, its two slates, reusable calculator, dual previews, independent review branches, web
+// provenance, archive handoff and remembered release code before naming the commit that holds the work.
+// The library grades remain the benchmark's own verifier: a pristine checkout at the base commit, the agent's
+// commits applied as a patch, then the held-out tests and their node-id whitelists.
 //
 // From DeepSWE (https://github.com/datacurve-ai/deep-swe, Datacurve AI Inc., Apache-2.0, at DEEPSWE_COMMIT): the
 // prompt is the task's instruction.md, changed only in that its toolbelt paragraph is the second turn; the verifier
@@ -191,7 +193,7 @@ Add it to your task board as src/toolbelt.ts, mark it done once it works, and co
 
       await verifier.check('deepswe-verifier-passes', () => graded(verifier, 'whole'));
     },
-  }, {
+  }, ...combinatorsJourney(CHECKOUT), {
     prompt: 'Which commit holds the finished work? Reply with just its full 40-character sha.',
     verify: async (verifier) => {
       await verifier.check('names-the-commit-that-holds-the-work', async () => {

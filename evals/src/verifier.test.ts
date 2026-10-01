@@ -18,6 +18,7 @@ function session(methods: Record<string, (input: JsonValue) => JsonValue>): Veri
       return Promise.resolve({ ok: true, value: method(call.args[0] ?? null) });
     },
     readFile: () => Promise.resolve(''),
+    readBytes: () => Promise.resolve(new Uint8Array()),
     writeFile: () => Promise.resolve(),
     listFiles: () => Promise.resolve([]),
     craftedTools: () => Promise.resolve([]),

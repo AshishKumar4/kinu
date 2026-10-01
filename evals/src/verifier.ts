@@ -27,6 +27,7 @@ function lostByThePlatform(call: string, answer: { reason: string; error: string
 export type VerifierSession = {
   slateOp(operation: JsonValue): Promise<JsonValue>;
   readFile(path: string, options?: { allowMissing?: boolean }): Promise<string>;
+  readBytes(path: string): Promise<Uint8Array>;
   writeFile(path: string, content: string | Uint8Array<ArrayBuffer>): Promise<void>;
   listFiles(dir: string): Promise<readonly PublicDirEntry[]>;
   craftedTools(): Promise<readonly PublicCraftedTool[]>;
@@ -225,9 +226,21 @@ export class EvalVerifier {
     throw new SlateRefusal(answer.reason, answer.error);
   }
 
+  /** Remove an authored app through the same public slate lifecycle operation. */
+  async removeSlate(id: string): Promise<void> {
+    const answer = v.parse(SlateAnswerSchema, await this.#session.slateOp({ op: 'remove', id }));
+
+    if (!answer.ok) throw new SlateRefusal(answer.reason, answer.error);
+  }
+
   /** A workspace file, or '' when it does not exist. */
   readFile(path: string): Promise<string> {
     return this.#session.readFile(path, { allowMissing: true });
+  }
+
+  /** A binary file through the same Files route the UI downloads from. */
+  readBytes(path: string): Promise<Uint8Array> {
+    return this.#session.readBytes(path);
   }
 
   /** Change the workspace's data mid-check, the way a person drops in a new file. */
