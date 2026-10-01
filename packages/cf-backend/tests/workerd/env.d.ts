@@ -180,6 +180,7 @@ interface AgentFacetProbeRpc extends Rpc.DurableObjectBranded {
   agentWorkspaceAnswer(workspace: string, agent: string): Promise<RelayedAnswer<Readonly<Record<string, string>> | null>>;
   agentWorkspaceListing(workspace: string, agent: string): Promise<RelayedAnswer<readonly { readonly key: string; readonly kind: string }[]>>;
   slateBindingAnswer(workspace: string): Promise<RelayedAnswer<SlateCallResult>>;
+  programHostAnswer(workspace: string): Promise<RelayedAnswer<Readonly<Record<string, string>> | null>>;
 }
 
 interface AddressedNameProbeRpc extends Rpc.DurableObjectBranded {
