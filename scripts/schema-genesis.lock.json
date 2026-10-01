@@ -168,6 +168,45 @@
     "session_id TEXT PRIMARY KEY",
     "actor_id TEXT NOT NULL"
   ],
+  "builtin_accounts@packages/core/src/identity/builtin-accounts.ts": [
+    "user_id TEXT PRIMARY KEY",
+    "email TEXT NOT NULL UNIQUE",
+    "role TEXT NOT NULL CHECK (role IN ('owner', 'member'))",
+    "password_hash TEXT",
+    "password_salt TEXT",
+    "password_iterations INTEGER",
+    "created_at INTEGER NOT NULL"
+  ],
+  "builtin_attempts@packages/core/src/identity/builtin-accounts.ts": [
+    "bucket TEXT PRIMARY KEY",
+    "count INTEGER NOT NULL",
+    "window_start INTEGER NOT NULL",
+    "locked_until INTEGER NOT NULL"
+  ],
+  "builtin_challenges@packages/core/src/identity/builtin-accounts.ts": [
+    "challenge TEXT PRIMARY KEY",
+    "purpose TEXT NOT NULL CHECK (purpose IN ('register', 'reset', 'authenticate'))",
+    "user_id TEXT",
+    "email TEXT",
+    "grant_kind TEXT NOT NULL CHECK (grant_kind IN ('invite', 'reset', 'setup', 'none'))",
+    "grant_hash TEXT",
+    "expires_at INTEGER NOT NULL"
+  ],
+  "builtin_invites@packages/core/src/identity/builtin-accounts.ts": [
+    "token_hash TEXT PRIMARY KEY",
+    "purpose TEXT NOT NULL CHECK (purpose IN ('join', 'reset'))",
+    "email TEXT NOT NULL",
+    "created_at INTEGER NOT NULL",
+    "expires_at INTEGER NOT NULL"
+  ],
+  "builtin_passkeys@packages/core/src/identity/builtin-accounts.ts": [
+    "credential_id TEXT PRIMARY KEY",
+    "user_id TEXT NOT NULL",
+    "public_key TEXT NOT NULL",
+    "counter INTEGER NOT NULL",
+    "transports TEXT NOT NULL",
+    "created_at INTEGER NOT NULL"
+  ],
   "cache_warm@packages/core/src/providers/cache-warming.ts": [
     "actor_id TEXT PRIMARY KEY",
     "requests INTEGER NOT NULL",

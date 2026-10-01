@@ -8,12 +8,14 @@ import {
   consumeOAuthState, createOAuthState, createSession, revokeSession, sanitizeReturnTo,
   type OAuthProfile, type SessionAuthority,
 } from './store';
-import { escapeHtml, json, KINU_USER_AGENT } from '@kinu.run/core';
-import { authDocument, loginDocument } from '@kinu.run/core';
+import { escapeHtml, json, KINU_USER_AGENT, sha256Hex } from '@kinu.run/core';
+import { authDocument, loginDocument, type BuiltinSignIn } from '@kinu.run/core';
+import { builtinAccounts } from './builtin';
+import { builtinSignInOn, grantOf, type SignInDeclarationEnv } from '@kinu.run/core/identity';
 import { publicHtmlHeaders } from '@kinu.run/core';
 import {
   clientAuth, getAuthorizationServer, getOAuthProvider, listConfiguredOAuthProviders,
-  type OAuthProviderConfig, type OAuthProviderEnv,
+  type OAuthProviderConfig,
 } from './providers';
 import {
   CLOUDFLARE_OAUTH_CRED_KEY,
@@ -62,10 +64,11 @@ interface MutableTokenEndpointResponse {
 }
 
 export type AuthRoutesAuthority = SessionAuthority
-  & Pick<UserDO, 'setCredential' | 'listActiveWorkspaces'>;
+  & Pick<UserDO, 'setCredential' | 'listActiveWorkspaces' | 'builtinHasOwner' | 'builtinInvitedEmail' | 'builtinResetAccount'>;
 
 /** Nothing optional that the session port leaves optional: sign-out revokes through `AUTH_KV` unguarded. */
-export interface AuthRoutesEnv<Id = DurableObjectId> extends OAuthProviderEnv, OwnerCapabilityEnv {
+export interface AuthRoutesEnv<Id = DurableObjectId> extends SignInDeclarationEnv, OwnerCapabilityEnv {
+  KINU_SETUP_TOKEN?: string;
   AUTH_KV: KvStore;
   UserDO: ObjectNamespace<Id, AuthRoutesAuthority>;
   OrchestratorAgent: ObjectNamespace<Id, ModelSettingsFanoutTarget>;
@@ -106,7 +109,7 @@ authPageRoutes.get('/auth/:provider/callback', noHead<AuthPagesEnv>(async (c) =>
 
 async function renderLogin<Id>(request: Request, env: AuthRoutesEnv<Id>): Promise<Response> {
   const url = new URL(request.url);
-  const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/');
+  const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/', url.origin);
   const prompt = url.searchParams.get('prompt') === 'login' ? 'login' : null;
 
   try {
@@ -117,6 +120,12 @@ async function renderLogin<Id>(request: Request, env: AuthRoutesEnv<Id>): Promis
     if (prompt === null) return redirect(new URL(returnTo, url.origin).toString());
   } catch (e) {
     if (!(e instanceof AuthError) || e.status !== 401) throw e;
+  }
+
+  if (builtinSignInOn(env)) {
+    return new Response(loginDocument([], await builtinSignIn(env, url, returnTo)), {
+      headers: { ...publicHtmlHeaders(), 'cache-control': 'no-store' },
+    });
   }
 
   const providers = listConfiguredOAuthProviders(env).map((provider) => {
@@ -133,6 +142,41 @@ async function renderLogin<Id>(request: Request, env: AuthRoutesEnv<Id>): Promis
   });
 }
 
+async function builtinSignIn<Id>(env: AuthRoutesEnv<Id>, url: URL, returnTo: string): Promise<BuiltinSignIn> {
+  const invite = url.searchParams.get('invite');
+
+  const accounts = builtinAccounts(env);
+  const caller = await ownerCaller(env);
+
+  const reset = url.searchParams.get('reset');
+
+  if (reset !== null && reset !== '') {
+    const account = await accounts.builtinResetAccount(caller, grantOf({ reset }, undefined));
+
+    return account === null
+      ? { mode: 'sign-in', notice: 'This reset link was already used or has expired. Ask the owner for a new one.', returnTo }
+      : { mode: 'reset', reset, email: account.email, returnTo };
+  }
+
+  if (invite !== null && invite !== '') {
+    const email = await accounts.builtinInvitedEmail(caller, await sha256Hex(invite));
+
+    return email === null
+      ? { mode: 'sign-in', notice: 'This invite link was already used or has expired. Ask for a new one.', returnTo }
+      : { mode: 'invite', invite, email, returnTo };
+  }
+
+  if (await accounts.builtinHasOwner(caller)) return { mode: 'sign-in', returnTo };
+
+  if ((env.KINU_SETUP_TOKEN ?? '').trim() !== '') return { mode: 'owner', returnTo };
+
+  return {
+    mode: 'setup', returnTo,
+    notice: 'This deployment has no owner yet. Its deployer sets a setup token as the KINU_SETUP_TOKEN secret, '
+      + 'keeps it in a password manager, and types it here.',
+  };
+}
+
 async function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: string): Promise<Response> {
   const provider = getOAuthProvider(env, providerId);
 
@@ -141,7 +185,7 @@ async function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, provider
   if (!env.AUTH_KV) return html('Sign in unavailable', '<p>This deployment has no sign-in storage (<code>AUTH_KV</code>) set up, so no one can sign in yet.</p>', { status: 503 });
 
   const url = new URL(request.url);
-  const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/');
+  const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/', url.origin);
   const redirectUri = new URL(`/auth/${provider.id}/callback`, url.origin).toString();
   const as = await getAuthorizationServer(provider);
 
@@ -316,7 +360,7 @@ async function processOAuthTokenResponse(
  *  the only handle that can still revoke this session. Other sessions are untouched. */
 async function logout<Id>(request: Request, env: AuthRoutesEnv<Id>): Promise<Response> {
   const url = new URL(request.url);
-  const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/');
+  const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/', url.origin);
   const token = readSessionToken(request);
 
   if (token) {

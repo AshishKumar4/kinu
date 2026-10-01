@@ -204,6 +204,7 @@ const GATED_CALLS: GatedCall[] = [
     run: (u, c) => u.verifySocketSession(c, TOKEN_HASH),
   },
   { capability: 'auth_tokens', name: 'revokeAllCliTokens', run: (u, c) => u.revokeAllCliTokens(c) },
+  { capability: 'auth_tokens', name: 'endAllSessions', run: (u, c) => u.endAllSessions(c) },
   {
     capability: 'credentials.model',
     name: 'getCredentialsRevision',
@@ -290,6 +291,33 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
   { capability: 'drive', name: 'drive_startDownload', run: (u, c) => u.drive_startDownload(c, '/x', 't') },
   { capability: 'drive', name: 'drive_readChunk', run: (u, c) => u.drive_readChunk(c, 't', 0, 1) },
   { capability: 'drive', name: 'drive_abortDownload', run: (u, c) => u.drive_abortDownload(c, 't') },
+
+  { capability: 'builtin_accounts', name: 'builtinHasOwner', run: (u, c) => u.builtinHasOwner(c) },
+  { capability: 'builtin_accounts', name: 'builtinIsOwner', run: (u, c) => u.builtinIsOwner(c, USER_ID) },
+  { capability: 'builtin_accounts', name: 'builtinAdmissible', run: (u, c) => u.builtinAdmissible(c, { email: 'a@example.com', grant: { kind: 'none' } }) },
+  {
+    capability: 'builtin_accounts', name: 'builtinRegister',
+    run: (u, c) => u.builtinRegister(c, { userId: USER_ID, email: 'a@example.com', grant: { kind: 'none' } }),
+  },
+  { capability: 'builtin_accounts', name: 'builtinReserveAttempt', run: (u, c) => u.builtinReserveAttempt(c, [{ key: 'k', free: 1 }]) },
+  {
+    capability: 'builtin_accounts', name: 'builtinReplacePassword',
+    run: (u, c) => u.builtinReplacePassword(c, USER_ID, { hash: 'h', salt: 's', iterations: 1 }),
+  },
+  { capability: 'builtin_accounts', name: 'builtinResetAccount', run: (u, c) => u.builtinResetAccount(c, { kind: 'none' }) },
+  { capability: 'builtin_accounts', name: 'builtinApplyReset', run: (u, c) => u.builtinApplyReset(c, { grant: { kind: 'none' } }) },
+  { capability: 'builtin_accounts', name: 'builtinListAccounts', run: (u, c) => u.builtinListAccounts(c) },
+  { capability: 'builtin_accounts', name: 'builtinClearAttempts', run: (u, c) => u.builtinClearAttempts(c, ['k']) },
+  { capability: 'builtin_accounts', name: 'builtinInvitedEmail', run: (u, c) => u.builtinInvitedEmail(c, 'h') },
+  { capability: 'builtin_accounts', name: 'builtinPasswordAccount', run: (u, c) => u.builtinPasswordAccount(c, 'a@example.com') },
+  { capability: 'builtin_accounts', name: 'builtinPasskeyAccount', run: (u, c) => u.builtinPasskeyAccount(c, 'cred') },
+  { capability: 'builtin_accounts', name: 'builtinRecordPasskeyUse', run: (u, c) => u.builtinRecordPasskeyUse(c, 'cred', 1) },
+  {
+    capability: 'builtin_accounts', name: 'builtinIssueChallenge',
+    run: (u, c) => u.builtinIssueChallenge(c, 'ch', { purpose: 'authenticate', userId: null, email: null, grant: { kind: 'none' } }, Date.now() + 1000),
+  },
+  { capability: 'builtin_accounts', name: 'builtinSpendChallenge', run: (u, c) => u.builtinSpendChallenge(c, 'ch', ['authenticate']) },
+  { capability: 'builtin_accounts', name: 'builtinCreateInvite', run: (u, c) => u.builtinCreateInvite(c, { ownerUserId: USER_ID, purpose: 'join', email: 'a@example.com', tokenHash: 'h', expiresAt: Date.now() + 1000 }) },
 
   // Last: an owner reaching it drops the object's storage and aborts its context.
   { capability: 'account', name: 'deleteAccount', run: (u, c) => u.deleteAccount(c, USER_ID) },

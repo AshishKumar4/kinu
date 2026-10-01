@@ -1553,7 +1553,7 @@ export { nanoid } from './utils/nanoid';
 
 export { abortCause } from './utils/abort';
 
-export { createPkcePair, hmacSha256Hex, randomToken, timingSafeEqual, type PkcePair } from './utils/crypto';
+export { base64Url, createPkcePair, hmacSha256Hex, randomToken, timingSafeEqual, type PkcePair } from './utils/crypto';
 
 export { labelSigner, type LabelSigner, type LabelSignerEnv } from './utils/label-signer';
 
@@ -2215,7 +2215,7 @@ export {
 } from './http/public-shell';
 
 export {
-  approvalDocument, authDocument, installDocument, loginDocument, type LoginProvider,
+  approvalDocument, authDocument, installDocument, loginDocument, type BuiltinSignIn, type LoginProvider,
 } from './http/public-pages';
 
 export {

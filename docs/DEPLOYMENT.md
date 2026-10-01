@@ -233,6 +233,22 @@ openssl rand -base64 32 | bunx wrangler secret put WEBHOOK_ROUTE_SECRET
 
 After it, every external system that posts to a Kinu webhook needs the new URL. I read it from the triggers list: the Supervise Automations block, or `kinu triggers <workspace> list`, which prints the current URL for each webhook row. Trigger rows, secrets and delivery history are untouched; only the URL changes. I rotate on purpose (a leaked URL, an operator handover), not on a schedule.
 
+#### Built-in sign-in (self-hosting without an OAuth app)
+
+A deployment that declares no OAuth provider signs in with its own accounts: a password or a passkey. "Declares" means any of the `*_OAUTH_CLIENT_ID` / `*_OAUTH_CLIENT_SECRET` names set to a non-empty value, or a non-empty `SIGN_IN_PROVIDERS`. A declared provider that is broken (an id without its secret) leaves sign-in unavailable rather than falling back to built-in accounts. The default `wrangler.jsonc` declares Cloudflare (`CLOUDFLARE_OAUTH_CLIENT_ID`, `SIGN_IN_PROVIDERS`), so a self-hosted deployment clears both for built-in sign-in.
+
+The first account becomes the deployment's owner, and only a request carrying the setup token may create it. Generate a long random token in your password manager, keep it there, and set it as a secret:
+
+```bash
+bunx wrangler secret put KINU_SETUP_TOKEN
+```
+
+Then open `https://<your-host>/login`, type the token into the "Setup token" field, and create the owner account. The token is never put in a URL: the page sends it only in the body of the sign-up or reset request.
+
+After that, people join only through invite links the owner makes in Settings → Account → Invite people. Each link names one email address, works once, and expires after 7 days. Keep the token: it is the owner's recovery. With an owner, "Set up or recover the owner" on `/login` takes the token and resets the owner's sign-in (new password or passkey, every owner session ended), throttled like sign-up. Without the token set, `/login` offers sign-in only.
+
+Built-in accounts have their own ids, unrelated to any OAuth login of the same address: configuring OAuth later makes OAuth sign-in a separate account, and built-in sessions stop working once any provider is declared. Passwords are PBKDF2-SHA256 at 100,000 iterations (the most Cloudflare's runtime runs), salted per account and peppered with a key derived from `CREDENTIAL_ENCRYPTION_KEY`. During a key rotation a password still verifies against `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` and is re-hashed under the new key at that sign-in. For a forgotten password, a lost passkey, or an account that did not sign in during a rotation, the owner makes a reset link in Settings → Account → Accounts: it works once, within 7 days, for that account's address, replaces its password and passkeys with the one set through it, and signs the account out everywhere. Passkeys need a domain: browsers refuse them on an IP address.
+
 ### 3. Build and deploy
 
 ```bash

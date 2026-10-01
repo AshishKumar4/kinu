@@ -19,6 +19,7 @@ import { ProvidersPanel } from "@/components/account/ProvidersPanel";
 import { DisplayNameField } from "@/components/account/DisplayNameField";
 import { CliInstallCard } from "@/components/account/CliInstallCard";
 import { DeleteAccountCard } from "@/components/account/DeleteAccountCard";
+import { InviteCard } from "@/components/account/InviteCard";
 import { DevicesCard } from "@/components/devices/DevicesCard";
 import { AccountUsageCard } from "@/components/account/AccountUsageCard";
 import { SandboxSizeSettings } from "@/components/SandboxSize";
@@ -123,6 +124,8 @@ export default function UserSettingsPage() {
                 )}
               </CardSlot>
             </Card>
+
+            <InviteCard />
 
             {profile.resource.value !== null && <DeleteAccountCard email={profile.resource.value.email} />}
           </>

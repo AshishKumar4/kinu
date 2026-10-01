@@ -162,6 +162,12 @@ import {
 import { deletePictures, picturePrefix } from '../slates/pictures';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import {
+  builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, invitedEmail, isBuiltinOwner,
+  issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, reserveAttempt, clearAttempts, replacePassword, applyReset, listBuiltinAccounts, resetAccount,
+  type Admission, type AttemptBucket, type BuiltinSql, type ChallengePurpose, type Grant, type NewBuiltinAccount, type NewInvite, type PasskeyAccount,
+  type PasswordAccount, type PasswordHash, type PendingChallenge, type ListedAccount, type Reset, type ResetAccount,
+} from '@kinu.run/core/identity';
+import {
   CLOUDFLARE_AI_GATEWAY_CRED_KEY,
   CLOUDFLARE_OAUTH_CRED_KEY,
   accountIdFromCloudflareCredential,
@@ -1488,6 +1494,116 @@ export class UserDO extends Agent<Env> {
 
   /** Revoke exactly this session; the row's absence is the revocation. The write is durable
    * before the fan-out, so a failed push cannot keep a socket authorized (see retireCliAuthority). */
+
+  private builtinSql(): BuiltinSql {
+    const sql: BuiltinSql = this.sql.bind(this);
+
+    initBuiltinAccounts(sql);
+
+    return sql;
+  }
+
+  async builtinHasOwner(caller: UserCaller): Promise<boolean> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return hasBuiltinOwner(this.builtinSql());
+  }
+
+  async builtinIsOwner(caller: UserCaller, userId: string): Promise<boolean> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return isBuiltinOwner(this.builtinSql(), userId);
+  }
+
+  async builtinAdmissible(caller: UserCaller, request: Pick<NewBuiltinAccount, 'email' | 'grant'>): Promise<Admission> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return builtinAdmission(this.builtinSql(), request, Date.now());
+  }
+
+  async builtinReserveAttempt(caller: UserCaller, buckets: readonly AttemptBucket[]): Promise<number> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return reserveAttempt(this.builtinSql(), buckets, Date.now());
+  }
+
+  async builtinReplacePassword(caller: UserCaller, userId: string, password: PasswordHash): Promise<void> {
+    await this.requireTier(caller, 'builtin_accounts');
+    replacePassword(this.builtinSql(), userId, password);
+  }
+
+  async builtinResetAccount(caller: UserCaller, grant: Grant): Promise<ResetAccount | null> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return resetAccount(this.builtinSql(), grant, Date.now());
+  }
+
+  async builtinApplyReset(caller: UserCaller, reset: Reset): Promise<ResetAccount | null> {
+    return this.builtinWrite(caller, (sql, now) => applyReset(sql, reset, now));
+  }
+
+  private async builtinWrite<Result>(caller: UserCaller, write: (sql: BuiltinSql, now: number) => Result): Promise<Result> {
+    await this.requireTier(caller, 'builtin_accounts');
+    const sql = this.builtinSql();
+
+    return this.ctx.storage.transactionSync(() => write(sql, Date.now()));
+  }
+
+  async builtinListAccounts(caller: UserCaller): Promise<ListedAccount[]> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return listBuiltinAccounts(this.builtinSql());
+  }
+
+  async builtinClearAttempts(caller: UserCaller, keys: readonly string[]): Promise<void> {
+    await this.requireTier(caller, 'builtin_accounts');
+    clearAttempts(this.builtinSql(), keys);
+  }
+
+  async builtinInvitedEmail(caller: UserCaller, inviteHash: string): Promise<string | null> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return invitedEmail(this.builtinSql(), inviteHash, Date.now());
+  }
+
+  async builtinRegister(caller: UserCaller, account: NewBuiltinAccount): Promise<Admission> {
+    return this.builtinWrite(caller, (sql, now) => registerBuiltinAccount(sql, account, now));
+  }
+
+  async builtinPasswordAccount(caller: UserCaller, email: string): Promise<PasswordAccount | null> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return findPasswordAccount(this.builtinSql(), email);
+  }
+
+  async builtinPasskeyAccount(caller: UserCaller, credentialId: string): Promise<PasskeyAccount | null> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return findPasskeyAccount(this.builtinSql(), credentialId);
+  }
+
+  async builtinRecordPasskeyUse(caller: UserCaller, credentialId: string, counter: number): Promise<void> {
+    await this.requireTier(caller, 'builtin_accounts');
+    recordPasskeyUse(this.builtinSql(), credentialId, counter);
+  }
+
+  async builtinIssueChallenge(caller: UserCaller, challenge: string, pending: PendingChallenge, expiresAt: number): Promise<void> {
+    await this.requireTier(caller, 'builtin_accounts');
+    issuePasskeyChallenge(this.builtinSql(), challenge, pending, expiresAt);
+  }
+
+  async builtinSpendChallenge(caller: UserCaller, challenge: string, purposes: readonly ChallengePurpose[]): Promise<PendingChallenge | null> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return spendPasskeyChallenge(this.builtinSql(), challenge, purposes, Date.now());
+  }
+
+  async builtinCreateInvite(caller: UserCaller, invite: NewInvite): Promise<boolean> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return createBuiltinInvite(this.builtinSql(), invite, Date.now());
+  }
+
   async revokeBrowserSession(caller: UserCaller, tokenHash: string): Promise<void> {
     await this.requireTier(caller, 'auth_tokens');
     this.sqlx(`DELETE FROM user_browser_sessions WHERE token_hash = ?`, tokenHash);
@@ -1615,6 +1731,17 @@ export class UserDO extends Agent<Env> {
 
   /** Revoke every active CLI session token, for orphans the caller cannot name.
    * One generation rise covers every socket at once. */
+  /** Every browser session and CLI token of this account ends: a credential reset leaves nothing signed in. */
+  async endAllSessions(caller: UserCaller): Promise<void> {
+    await this.requireTier(caller, 'auth_tokens');
+    const sessions = this.sqlx<{ token_hash: string }>(`SELECT token_hash FROM user_browser_sessions`).map((row) => row.token_hash);
+
+    this.sqlx(`DELETE FROM user_browser_sessions`);
+    await this.revokeAllCliTokens(caller);
+
+    for (const tokenHash of sessions) await this.pushSessionSocketRevocation(tokenHash);
+  }
+
   async revokeAllCliTokens(caller: UserCaller): Promise<{ revoked: number }> {
     await this.requireTier(caller, 'auth_tokens');
 
