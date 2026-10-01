@@ -11,7 +11,7 @@ import {
   type WSMessage,
 } from "agents";
 import {
-  TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, JOB_STAMP_ENV, recordServingJobs,
+  TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, recordServingJobs,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
   type RunEventInput, type SubordinateInspectionAuthority, ConversationSearchStore, type ConversationRecall,
@@ -2665,22 +2665,13 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /**
    * Records which running job's command holds each exposed sandbox port when that can move (a port exposed or
-   * withdrawn, a job detached or settled), so a listing reads a row and never the box. A box that is down is not
-   * read: the next exposure reads again.
+   * withdrawn, a job detached or settled), so a listing reads a row and never the box. Only a box this activation
+   * used is asked, and one that is down is not read: the next exposure reads again.
    */
   protected async servingMoved(): Promise<void> {
-    const rt = this._rt;
+    const holders = this._rt?.sandboxPortHolders() ?? null;
 
-    if (rt === null) return;
-    const handle = rt.sandboxHandle;
-    const exposedPorts = rt.executionRouter?.getProvider('sandbox')?.listExposedPorts;
-
-    if (handle === null || exposedPorts === undefined) return;
-
-    await recordServingJobs(this.jobs, {
-      exposedPorts: async () => (await exposedPorts()).map((row) => row.port),
-      holders: (ports) => handle.portListeners(JOB_STAMP_ENV, ports),
-    });
+    if (holders !== null) await recordServingJobs(this.jobs, holders);
   }
   /** Controllers for foreground long tools; once detached, BackgroundJobRunner owns cancellation. */
   protected readonly _activeToolControllers = new Set<AbortController>();

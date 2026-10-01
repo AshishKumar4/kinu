@@ -74,6 +74,17 @@ describe("only the box's own use holds it", () => {
       setSystemTime();
     }
   });
+
+  // What its workspace reads when a job settles or a port moves, to record which job serves an exposed port.
+  test('reading its exposed ports and the listeners on them is not use', async () => {
+    const { box } = harness(TestBox);
+    await box.devboxStartup();
+
+    await box.getExposedPorts('previews.example');
+    await box.portListeners('KINU_JOB_ID', [8001]);
+
+    expect((await box.devboxState()).lastInteractionAt).toBeUndefined();
+  });
 });
 
 describe('a box rests only once no command it ran is still running', () => {
