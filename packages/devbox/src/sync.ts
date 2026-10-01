@@ -105,8 +105,11 @@ type SyncValue = ChainState | { readonly status: ChangeStatus; readonly version:
 
 type SyncReply = { readonly ok: true; readonly value: SyncValue } | v.InferOutput<typeof RefusalSchema>;
 
+export type BoxSyncPorts = Pick<SnapshotChainPorts,
+  'storeRoot' | 'readState' | 'writeState' | 'checkChanges' | 'mountStore' | 'unmountStore' | 'objectFacts' | 'deleteObjects'>;
+
 interface SyncHost {
-  readonly ports: SnapshotChainPorts;
+  readonly ports: BoxSyncPorts;
   readonly generation: () => Promise<string | undefined>;
 }
 
@@ -156,7 +159,7 @@ export async function serveSync(host: SyncHost, body: string): Promise<SyncAnswe
   }
 }
 
-async function dispatch(ports: SnapshotChainPorts, request: ReceivedRequest): Promise<SyncValue> {
+async function dispatch(ports: BoxSyncPorts, request: ReceivedRequest): Promise<SyncValue> {
   const root = ports.storeRoot();
 
   const inRoot = (key: string): string => {
@@ -201,7 +204,7 @@ async function dispatch(ports: SnapshotChainPorts, request: ReceivedRequest): Pr
   }
 }
 
-async function assertLayersHeld(ports: SnapshotChainPorts, root: string, next: ChainState): Promise<void> {
+async function assertLayersHeld(ports: BoxSyncPorts, root: string, next: ChainState): Promise<void> {
   if (next.mode !== 'chain') throw new DevboxError("io", 'the container proposes chain records only');
   const stored = await ports.readState();
 
@@ -329,7 +332,7 @@ function countEntriesCommand(dir: string): string {
 }
 
 /** Ticks and flushes never overlap; a checkpoint that throws is a failed outcome, not an exit. */
-export function syncWorker(storage: DevboxStorage): SyncWorker {
+export function syncWorker(storage: Pick<DevboxStorage, 'checkpoint'>): SyncWorker {
   const checkpoint = async (kind: CheckpointKind): Promise<CheckpointOutcome> => {
     try {
       return await storage.checkpoint(kind);

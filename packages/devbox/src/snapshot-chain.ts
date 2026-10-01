@@ -554,14 +554,12 @@ export interface SnapshotChainPorts {
   /** Writable, yet credentials never leave the DO: s3fs holds a dummy password and a Worker
    *  resolves its requests. The mount serves reads and registers the route `storeObjectUrl` uses. */
   mountStore(at: string): Promise<void>;
-  /** Release through the SDK: a raw `fusermount3` leaves the SDK registry claiming the path.
-   *  A release is not a flush; publication reads the store (HEAD, `objectFacts`), not the mount. */
+  /** Release through the SDK: a raw `fusermount3` leaves the SDK registry claiming the path. */
   unmountStore(at: string): Promise<void>;
   /** A phase of the attach landed. The host keeps the clock; the strategy must call this
    *  because only it knows which of its commands was the mount. */
   stamp(phase: StoragePhase): void;
-  /** The store's own `digest`/`objectVersion` (either may be undefined): the only way a
-   *  publication learns what landed, since the container writes through a mount. */
+  /** The store's own `digest`/`objectVersion`; either may be undefined. */
   objectFacts(key: string): Promise<ChainLayer | undefined>;
   deleteObjects(keys: readonly string[]): Promise<void>;
   /** Records which delta the upper on this container disk holds; lives beside the upper so no archive
@@ -765,6 +763,11 @@ function chainShell(exec: ContainerExec, root: string) {
       }
 
       return bytes;
+    },
+    /** `-l` reads every table a mount reads; `-s` passes a torn archive (D54). */
+    layerReads: async (key: string): Promise<void> => {
+      await must(`reading ${key} back as a squashfs before the record names it`,
+        `/usr/bin/unsquashfs -l ${shellPath(mountedLayerPath(CHAIN_STORE_MOUNT, root, key))} >/dev/null`);
     },
     /** The final name directly: a rename is a server-side copy, and a PUT is visible only whole. */
     publishArchive: async (archivePath: string, objectUrl: string): Promise<number> => {
@@ -1427,6 +1430,8 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       + `${published}. Refusing to record a layer whose upload did not carry every byte.`, );
     }
 
+    await shell.layerReads(key);
+
     return landed;
   };
 
@@ -2027,7 +2032,7 @@ export function archiveCommand(input: {
 
   return `mkdir -p ${shellPath(parent)} && printf %s ${shellPath(encoded)} | base64 -d > ${shellPath(input.excludeFile)} `
     + `&& /usr/bin/mksquashfs ${shellPath(input.sourceDir)} ${shellPath(input.archivePath)} `
-    + `-comp zstd -no-progress -wildcards -ef ${shellPath(input.excludeFile)} >/dev/null; `
+    + `-noappend -comp zstd -no-progress -wildcards -ef ${shellPath(input.excludeFile)} >/dev/null; `
     + `rc=$?; printf '%s %s' "$rc" `
     + `"$(stat -c %s ${shellPath(input.archivePath)} 2>/dev/null || echo 0)"`;
 }

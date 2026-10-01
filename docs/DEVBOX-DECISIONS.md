@@ -2456,6 +2456,62 @@ names later, another size, another internet setting, `attachNow()` and
 `start()` each start the box again. The agent's and the owner's words:
 `packages/cf-backend/tests/unit-sandbox-size-settings.test.ts`.
 
+D54. One commit at a time in a container, and a record names only a layer
+that reads back (2026-10-01). D53's eviction rounds on today's chain (run
+`sbs10010327nda`, integration `8316a55e3`, image `c072f8f5…`) evicted the
+object 1 s into a quiesce checkpoint. Its `sync.js flush` ran on in the
+container, which outlives the object (D30), and the successor's re-driven
+checkpoint started a second flush in the same `/var/tmp/devbox/stage`. In
+rounds 1 to 4 the second flush failed on the first's files: mksquashfs found
+the other's half-written `layer.sqsh` ("Can't find a SQUASHFS superblock ...
+will not overwrite"), or `rm` met a directory the other was filling. In round
+5 both published, 216 ms apart (03:32:24.050Z and .266Z). Delta `54b3aa1c`
+fails `unsquashfs -l` ("Bad xattr_ids count in super block") though
+`unsquashfs -s` passes it. Delta `b7788c09` reads, but holds part of its tree
+under `.devbox-delta_1/`: mksquashfs appended to the other flush's file. The
+record named `54b3aa1c`, so every later start refused ("squashfuse mount
+failed ... The record names no earlier generation to fall back to"), and the
+workspace was lost (`bench-artifacts/flush-lock/corrupt-delta.log`). A second
+run that let both flushes end (240 s) and then saved again (`sbs10010333ndae`)
+lost data with no error: in rounds 2 to 5 that save found the workspace
+unchanged, and the crash after it restored the state before the round.
+
+Two causes. Nothing kept two flushes in one container apart. And publication
+checked only the landed size, which a torn or interleaved archive keeps.
+
+The fix:
+- `sync.js` holds an exclusive `flock` for each checkpoint, so a second flush
+  waits. The lock is `/var/tmp/devbox/stage.lock`, beside the stage and not on
+  it: each commit deletes the stage, and a lock on a deleted directory
+  excludes nobody. `flock` holds it while its stdin is open, so a program
+  killed mid-commit releases it. A program that finds another held the lock
+  since it last did reads the record again; otherwise it keeps the record it
+  remembers, so an idle tick still asks the box nothing.
+- mksquashfs runs with `-noappend`.
+- Every publication reads the stored object back through the store mount
+  with `unsquashfs -l`, which reads every table a mount reads, before the
+  record names it.
+
+Why nothing caught it: no test ran two flushes at once.
+`tests/concurrent-flush-image.test.ts` runs the image's own `sync.js flush`
+twice at once against a box and a store served inside the container
+(`tests/support/flush-box.ts`, the shipped `serveSync`). On `8316a55e3` both
+cases were red: two flushes overlapped and published two bases (one run) or
+the loser failed on the winner's stage with no stamp (others), and a layer
+that landed with torn tables was named by the record. After the fix both
+pass, 3 runs of 3 (`bench-artifacts/flush-lock/image-red.log`,
+`image-green.log`). The strategy machine answers the read-back from its own
+squashfs model, which refuses a truncated archive as a mount does.
+
+Live on the new image, the same shape as `sbs10010327nda` (bench fixture,
+5 rounds, run `sbs10010353ndafix`): each re-driven checkpoint waited 18 to
+62 s for the evicted object's flush to end, read the record that flush wrote,
+and found the workspace unchanged. The next save found it unchanged too, and
+the crash after each round restored that round's new state, 5 of 5
+(`bench-artifacts/flush-lock/live-green.log`).
+
+Image `ea5d88ee…`, sync.js `cf631788…`.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q
