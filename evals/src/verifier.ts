@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import { JsonValueSchema, projectJsonValue, type JsonValue, type SubordinateInspectionRequest } from '@kinu.run/core';
-import type { InspectionAnswer, WorkBoard } from './session';
+import type { InspectionAnswer, PublicExecutorResult, PublicSwarmRun, WorkBoard } from './session';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER, TRANSIENT_PLATFORM_ERRORS } from '@kinu.run/test-utils';
 import { redact, redactJson } from './redact';
@@ -29,6 +29,8 @@ export type VerifierSession = {
   writeFile(path: string, content: string): Promise<void>;
   workspaceWork(): Promise<WorkBoard>;
   inspect(request: SubordinateInspectionRequest): Promise<InspectionAnswer>;
+  swarmRuns(): Promise<PublicSwarmRun[]>;
+  execute(executor: string, command: string): Promise<PublicExecutorResult>;
   exposedPorts(executor: string): Promise<readonly { port: number; url: string }[]>;
 };
 
@@ -235,6 +237,16 @@ export class EvalVerifier {
       if (answer.page.status === 'end') return runs;
       cursor = answer.page.next;
     }
+  }
+
+  /** The swarms the lead ran, newest first, as the Swarms pane draws them. */
+  swarms(): Promise<PublicSwarmRun[]> {
+    return this.#session.swarmRuns();
+  }
+
+  /** One command in the workspace's shell, typed the way a person types it in the Env pane. */
+  shell(command: string): Promise<PublicExecutorResult> {
+    return this.#session.execute('workspace', command);
   }
 
   /** The preview addresses an executor serves, as the ports panel lists them. */
