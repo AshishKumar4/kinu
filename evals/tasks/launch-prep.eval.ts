@@ -261,19 +261,33 @@ const task = defineEvalTask({
 
 Tell me when all three are done.`,
     verify: async (verifier) => {
-      await verifier.check('two-helpers-took-a-tally-each', async () => {
+      await verifier.check('two-helpers-each-finished-a-tally', async () => {
         const helpers = await verifier.helpers();
 
-        const told = await Promise.all(helpers.map(async (helper) => ({
-          name: helper.name, transcript: (await verifier.transcriptOf(helper.name)).join('\n'),
+        const worked = await Promise.all(helpers.map(async (helper) => ({
+          name: helper.name, status: helper.status, runs: await verifier.runsOf(helper.name),
         })));
 
-        const counters = told.filter((helper) => helper.transcript.includes('signups-by-country.json')).map((helper) => helper.name);
-        const averagers = told.filter((helper) => helper.transcript.includes('ratings-by-theme.json')).map((helper) => helper.name);
+        // Told is not done: a helper counts for a tally it was given only when a run of its own completed. On
+        // 2026-10-01 every helper's model call on staging was refused, the lead wrote both tallies itself, and the
+        // helpers' transcripts still held the tallies they were given.
+        const finished = (file: string) => worked
+          .filter((helper) => helper.runs.some((run) => run.status === 'completed')
+            && helper.runs.some((run) => (run.userMessage ?? '').includes(file)))
+          .map((helper) => helper.name);
+
+        const counters = finished('signups-by-country.json');
+        const averagers = finished('ratings-by-theme.json');
 
         return {
-          pass: helpers.length >= 2 && counters.some((counter) => averagers.some((averager) => averager !== counter)),
-          evidence: { helpers: helpers.map((helper) => ({ name: helper.name, status: helper.status, lifetime: helper.lifetime })), counters, averagers },
+          pass: counters.some((counter) => averagers.some((averager) => averager !== counter)),
+          evidence: {
+            helpers: worked.map((helper) => ({
+              name: helper.name, status: helper.status,
+              runs: helper.runs.map((run) => ({ status: run.status, asked: (run.userMessage ?? '').slice(0, 160) })),
+            })),
+            counters, averagers,
+          },
         };
       });
 
@@ -290,10 +304,12 @@ Tell me when all three are done.`,
       });
 
       await verifier.check('launch-day-is-on-the-task-board', async () => {
-        const work = await verifier.workspaceWork();
+        const [work, helpers] = await Promise.all([verifier.workspaceWork(), verifier.helpers()]);
+        const helperNames = new Set(helpers.map((helper) => helper.name));
 
+        // The lead's own board: its path is empty, or, on a build whose owners carry no path, it is none of its helpers.
         const titles = [...work.plans, ...work.tasks]
-          .filter((entry) => entry.owner.path === null || entry.owner.path.length === 0)
+          .filter((entry) => (entry.owner.path === undefined ? !helperNames.has(entry.owner.name) : entry.owner.path === null || entry.owner.path.length === 0))
           .flatMap((entry) => entry.tasks.flatMap((item) => [item.title, ...item.subtasks.map((subtask) => subtask.title)]));
 
         const missing = CHECKLIST.filter((item) => !titles.some((title) => plainTitle(title) === plainTitle(item)));

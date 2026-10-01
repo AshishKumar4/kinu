@@ -1499,7 +1499,7 @@ export const LADDER: readonly Gate[] = [
       + 'turn is checked black-box: the checker calls the slates the agent built over the slate '
       + 'RPC and compares every answer with its own reference implementation of the contract, so '
       + 'any correct build passes, and reads what a person would: the files, the task board, each '
-      + 'helper\'s transcript, and each preview address fetched with no credential. Ten trials per '
+      + 'helper\'s runs, and each preview address fetched with no credential. Ten trials per '
       + 'task, all at once. In CI (.github/workflows/evals.yml) the candidate on staging and the '
       + 'promoted build on kinu.run run at once under the candidate\'s definitions, compared by a '
       + 'two-sided Fisher exact test (evals/src/comparison.ts), with infrastructure failures and '

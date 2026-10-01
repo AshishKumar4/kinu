@@ -1,8 +1,6 @@
 import * as v from 'valibot';
-import {
-  JsonValueSchema, projectJsonValue, type JsonValue, type SubordinateChild, type SubordinateInspectionRequest,
-  type SubordinateInspectionResult, type WorkspaceWork,
-} from '@kinu.run/core';
+import { JsonValueSchema, projectJsonValue, type JsonValue, type SubordinateInspectionRequest } from '@kinu.run/core';
+import type { InspectionAnswer, WorkBoard } from './session';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER, TRANSIENT_PLATFORM_ERRORS } from '@kinu.run/test-utils';
 import { redact, redactJson } from './redact';
@@ -29,8 +27,8 @@ export type VerifierSession = {
   slateOp(operation: JsonValue): Promise<JsonValue>;
   readFile(path: string, options?: { allowMissing?: boolean }): Promise<string>;
   writeFile(path: string, content: string): Promise<void>;
-  workspaceWork(): Promise<WorkspaceWork>;
-  inspect(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult>;
+  workspaceWork(): Promise<WorkBoard>;
+  inspect(request: SubordinateInspectionRequest): Promise<InspectionAnswer>;
   exposedPorts(executor: string): Promise<readonly { port: number; url: string }[]>;
 };
 
@@ -205,13 +203,13 @@ export class EvalVerifier {
   }
 
   /** Every agent's plans and tasks, as the Work tab shows them. */
-  workspaceWork(): Promise<WorkspaceWork> {
+  workspaceWork(): Promise<WorkBoard> {
     return this.#session.workspaceWork();
   }
 
   /** The lead's helpers, retired ones included, as the Agents surface lists them. */
-  async helpers(): Promise<SubordinateChild[]> {
-    const helpers: SubordinateChild[] = [];
+  async helpers(): Promise<{ name: string; status: string; lifetime: string }[]> {
+    const helpers: { name: string; status: string; lifetime: string }[] = [];
 
     for (let cursor: { after: string } | undefined; ;) {
       const answer = await this.#session.inspect({ path: [], view: 'children', page: cursor === undefined ? {} : { cursor } });
@@ -224,13 +222,19 @@ export class EvalVerifier {
     }
   }
 
-  /** One helper's transcript as its inspector shows it: what it was told and what it said. */
-  async transcriptOf(helper: string): Promise<string[]> {
-    const answer = await this.#session.inspect({ path: [helper], view: 'history', page: { limit: 200 } });
+  /** One helper's runs as its inspector lists them: how each ended, and the message that started it. */
+  async runsOf(helper: string): Promise<{ status: string | null; userMessage: string | null }[]> {
+    const runs: { status: string | null; userMessage: string | null }[] = [];
 
-    if (answer.view !== 'history') throw new Error(`${helper}'s transcript could not be read: ${JSON.stringify(answer)}`);
+    for (let cursor: { after: string } | undefined; ;) {
+      const answer = await this.#session.inspect({ path: [helper], view: 'runs', page: cursor === undefined ? {} : { cursor } });
 
-    return answer.page.items.map((entry) => entry.content);
+      if (answer.view !== 'runs') throw new Error(`${helper}'s runs could not be listed: ${JSON.stringify(answer)}`);
+      runs.push(...answer.page.items);
+
+      if (answer.page.status === 'end') return runs;
+      cursor = answer.page.next;
+    }
   }
 
   /** The preview addresses an executor serves, as the ports panel lists them. */

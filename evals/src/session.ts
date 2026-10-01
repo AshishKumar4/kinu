@@ -98,10 +98,9 @@ import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 
 import {
   DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema,
-  STEER_STEP_METADATA_KEY, SubordinateInspectionResultSchema, WorkspaceWorkSchema, parseJsonValue, renderSoulMarkdown,
-  rowText, CommandResultSchema,
+  STEER_STEP_METADATA_KEY, parseJsonValue, renderSoulMarkdown, rowText, CommandResultSchema,
   type EvalAccount, type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent,
-  type SubordinateInspectionRequest, type SubordinateInspectionResult, type WorkspaceSpend, type WorkspaceWork,
+  type SubordinateInspectionRequest, type WorkspaceSpend,
 } from '../../packages/core/src/index';
 import { renderThrownChain, tolerate } from '../../packages/core/src/obs/index';
 import { CloudTurnStream } from '../../packages/cli/src/cloud-turn-stream';
@@ -666,6 +665,38 @@ const LedgerPageSchema = v.pipe(
   })),
   v.object({ rows: v.number(), highest: v.number(), events: v.array(RunEventSchema) }),
 );
+
+/**
+ * A page of an inspector or work-board answer, read as far as a check reads it. These answers come from both legs of
+ * the eval verdict, and the baseline leg runs the promoted build, whose rows can lack a field the candidate added or
+ * renamed: 2f660875cc's roster rows carry `createdBy` where the candidate's carry `origin`, and its work-board owners
+ * have no `path`. So the harness reads only what a check reads, and nothing it does not.
+ */
+function pageOf<Item extends v.GenericSchema>(item: Item) {
+  return v.variant('status', [
+    v.object({ status: v.literal('more'), items: v.array(item), next: v.object({ after: v.string() }) }),
+    v.object({ status: v.literal('end'), items: v.array(item) }),
+  ]);
+}
+
+/** The inspector's answers a check reads (`inspectSubordinate`): the lead's helpers and each helper's runs. */
+const InspectionAnswerSchema = v.variant('view', [
+  v.object({ view: v.literal('children'), page: pageOf(v.object({ name: v.string(), status: v.string(), lifetime: v.string() })) }),
+  v.object({ view: v.literal('runs'), page: pageOf(v.object({ status: v.nullable(v.string()), userMessage: v.nullable(v.string()) })) }),
+  v.object({ view: v.literal('missing'), reason: v.string(), error: v.string() }),
+]);
+
+export type InspectionAnswer = v.InferOutput<typeof InspectionAnswerSchema>;
+
+/** The work board's owners and their task titles (`listWorkspaceWork`); an owner's `path` is absent on 2f660875cc. */
+const WorkEntrySchema = v.object({
+  owner: v.object({ name: v.string(), path: v.optional(v.nullable(v.array(v.string()))) }),
+  tasks: v.array(v.object({ title: v.string(), subtasks: v.optional(v.array(v.object({ title: v.string() })), []) })),
+});
+
+const WorkBoardSchema = v.object({ plans: v.array(WorkEntrySchema), tasks: v.array(WorkEntrySchema) });
+
+export type WorkBoard = v.InferOutput<typeof WorkBoardSchema>;
 
 /** A turn frame's body is one AI SDK UI message chunk. */
 const ChunkTypeSchema = v.object({ type: v.string() });
@@ -1457,8 +1488,8 @@ export class KinuPublicSession {
   }
 
   /** Every agent's plans and tasks, retired agents' included, as the Work tab reads them (`listWorkspaceWork`). */
-  async workspaceWork(): Promise<WorkspaceWork> {
-    return v.parse(WorkspaceWorkSchema, await this.boundary(
+  async workspaceWork(): Promise<WorkBoard> {
+    return v.parse(WorkBoardSchema, await this.boundary(
       `listWorkspaceWork on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('listWorkspaceWork', []),
     ));
@@ -1466,8 +1497,8 @@ export class KinuPublicSession {
 
   /** A subordinate's children, transcript, runs or events, as the Agents surface's inspector reads them
    *  (`inspectSubordinate`). */
-  async inspect(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
-    return v.parse(SubordinateInspectionResultSchema, await this.boundary(
+  async inspect(request: SubordinateInspectionRequest): Promise<InspectionAnswer> {
+    return v.parse(InspectionAnswerSchema, await this.boundary(
       `inspectSubordinate on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('inspectSubordinate', [v.parse(JsonValueSchema, request)]),
     ));
