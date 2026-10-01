@@ -68,7 +68,7 @@ export function wranglerContainerClasses(declared: v.InferOutput<typeof Wrangler
  * class that extends Sandbox is a container whether or not it is bound yet, so
  * the two sources fail in opposite directions and the union survives both.
  *
- * THE LINEAGE, not one hop. `KinuSandbox extends Devbox extends Sandbox` after
+ * THE LINEAGE, not one hop. `KinuDevbox extends Devbox extends DurableObject` after
  * the devbox extraction, and a matcher reading only the direct superclass lost
  * the deployment's ONLY container class — it failed closed, loudly, which is
  * how this sentence got written. The lineage is computed repo-wide to a
@@ -693,7 +693,7 @@ function dispatcherReasons(router: ContainerClass): string[] {
 export function nativeRoutingReasons(sources: ReadonlyMap<string, string>, entry: string): string[] {
   const classes = containerClasses(sources);
   const base = classes.get('Devbox');
-  const kinu = classes.get('KinuSandbox');
+  const kinu = classes.get('KinuDevbox');
   const routes = classes.get('ContainerRoutes');
   const router = classes.get('DevboxOutbound');
   const vault = classes.get('KinuEgress');

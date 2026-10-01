@@ -51,8 +51,6 @@ export type ProviderConnectId =
   | 'openai-compatible'
   | 'opencode';
 
-type ProviderCredentialKind = 'browser' | 'api-key' | 'binary';
-
 interface ProviderAsk {
   readonly label: string;
   readonly fallback?: string;
@@ -75,7 +73,6 @@ interface ProviderDescriptor {
   readonly id: ProviderConnectId;
   readonly label: string;
   readonly blurb: string;
-  readonly credential: ProviderCredentialKind;
 }
 
 export interface ProviderConnectionState {
@@ -104,34 +101,29 @@ export const PROVIDER_CONNECTORS: readonly ProviderDescriptor[] = Object.freeze(
     id: 'cloudflare',
     label: 'Cloudflare',
     blurb: 'Sign in with your browser to use Workers AI and AI Gateway in your Cloudflare account.',
-    credential: 'browser',
   },
   {
     id: 'claude',
     label: 'Claude subscription',
     blurb: 'Your Claude Pro or Max subscription. You sign in with your browser.',
-    credential: 'browser',
   },
   {
     id: 'chatgpt',
     label: 'ChatGPT',
     blurb: 'Your ChatGPT plan. You continue with ChatGPT in your browser, and eligible requests use your plan.',
-    credential: 'browser',
   },
-  { id: 'openai', label: 'OpenAI', blurb: 'An OpenAI API key.', credential: 'api-key' },
-  { id: 'openrouter', label: 'OpenRouter', blurb: 'An OpenRouter API key.', credential: 'api-key' },
-  { id: 'anthropic', label: 'Anthropic', blurb: 'An Anthropic API key.', credential: 'api-key' },
+  { id: 'openai', label: 'OpenAI', blurb: 'An OpenAI API key.' },
+  { id: 'openrouter', label: 'OpenRouter', blurb: 'An OpenRouter API key.' },
+  { id: 'anthropic', label: 'Anthropic', blurb: 'An Anthropic API key.' },
   {
     id: 'openai-compatible',
     label: 'OpenAI-compatible',
     blurb: 'Any endpoint that speaks the OpenAI API: Ollama, vLLM, or your own proxy.',
-    credential: 'api-key',
   },
   {
     id: 'opencode',
     label: 'OpenCode',
     blurb: 'Uses the providers and sign-ins from the opencode CLI on this computer.',
-    credential: 'binary',
   },
 ] satisfies readonly ProviderDescriptor[]).map((descriptor) => Object.freeze(descriptor)));
 

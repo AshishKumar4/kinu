@@ -10,14 +10,12 @@ export interface SiwcRecord {
   readonly subject: string;
   readonly email: string | null;
   readonly clientId: string;
-  readonly idToken: string;
   /** Absent when ChatGPT plan usage was not granted, or the session ended. */
   readonly accessToken?: string;
   readonly refreshToken?: string;
   /** Epoch milliseconds. */
   readonly expiresAt?: number;
   readonly scopes: readonly string[];
-  readonly savedAt: string;
 }
 
 /** What a later sign-in to the same account reuses. */
@@ -36,7 +34,6 @@ export interface SiwcTokens {
   readonly refreshToken?: string;
   readonly expiresAt?: number;
   readonly scopes: readonly string[];
-  readonly savedAt: string;
 }
 
 export declare class SiwcError extends Error {
@@ -58,8 +55,6 @@ export declare const DYNAMIC_AGENT_CLIENT: string;
 export declare const AGENT_NAME_HINT: string;
 
 export declare const CALLBACK_PATH: string;
-
-export declare const USAGE_URL: string;
 
 export declare const DEVICE_RECORD_FILE: string;
 

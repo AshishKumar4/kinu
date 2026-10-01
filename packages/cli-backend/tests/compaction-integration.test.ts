@@ -13,7 +13,7 @@ import {
   ExtensionHost,
   initWorkspaceSchema,
   runChat,
-  type ArmedCompaction,
+  type CompactionTrigger,
   type ChatOptions,
 } from '@kinu.run/core';
 import {
@@ -162,7 +162,7 @@ describe('default compaction over the real storage plane', () => {
 
     const { model, prompts } = capturingModel();
 
-    const drive = async (messages: ModelMessage[], transformTrigger?: ArmedCompaction) => {
+    const drive = async (messages: ModelMessage[], transformTrigger?: CompactionTrigger) => {
       const options: ChatOptions = {
         model,
         modelContext: { id: 'fake/fake-model', contextWindow: 10_000 },
@@ -181,7 +181,7 @@ describe('default compaction over the real storage plane', () => {
     };
 
     const driveForced = (messages: ModelMessage[]) =>
-      drive(messages, state.takeArmedCompaction(SESSION) ?? undefined);
+      drive(messages, state.takeArmedCompaction(SESSION) ? 'force' : undefined);
 
     const small = history(2, 100);
     await drive(small);
@@ -251,10 +251,10 @@ describe('default compaction over the real storage plane', () => {
 
     // Turn 3: `agent.compactNow` only arms the one-shot force flag; turn assembly consumes it and folds early.
     const grown = [...overflowing, ...history(8, 3_000)];
-    state.armCompaction(SESSION, 'force');
+    state.armCompaction(SESSION);
     await driveForced(grown);
     expect(outcomes.at(-1)?.outcome).toBe('planned');
-    expect(state.takeArmedCompaction(SESSION)).toBeNull();
+    expect(state.takeArmedCompaction(SESSION)).toBe(false);
 
     const ranges = state.archive.list(SESSION);
     expect(ranges).toHaveLength(2);
@@ -266,7 +266,7 @@ describe('default compaction over the real storage plane', () => {
     expect(foldedJson).toContain(ranges[1].path);
 
     // Turn 4: refolding with nothing new rebuilds the same range; the index stays idempotent.
-    state.armCompaction(SESSION, 'force');
+    state.armCompaction(SESSION);
     await driveForced(grown);
     expect(state.archive.list(SESSION)).toEqual(ranges);
     expect(JSON.stringify(prompts.at(-1))).toBe(foldedJson);
@@ -294,8 +294,8 @@ describe('default compaction over the real storage plane', () => {
 
       const { model, prompts } = capturingModel();
 
-      if (kind === 'force') state.armCompaction(SESSION, kind);
-      const trigger = kind === 'force' ? state.takeArmedCompaction(SESSION) : kind;
+      if (kind === 'force') state.armCompaction(SESSION);
+      const trigger = kind === 'force' && !state.takeArmedCompaction(SESSION) ? undefined : kind;
 
       const options: ChatOptions = {
         model,
@@ -308,11 +308,11 @@ describe('default compaction over the real storage plane', () => {
         cache: { sessionKey: SESSION },
       };
 
-      if (trigger !== null) options.transformTrigger = trigger;
+      if (trigger !== undefined) options.transformTrigger = trigger;
 
       for await (const _ of runChat(options)) { /* drain */ }
 
-      expect(state.takeArmedCompaction(SESSION)).toBeNull();
+      expect(state.takeArmedCompaction(SESSION)).toBe(false);
 
       return JSON.stringify(prompts.at(-1));
     };

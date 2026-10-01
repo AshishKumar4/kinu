@@ -56,6 +56,8 @@ import {
 } from './prompting/section-templates';
 import { WORKSPACE_ROOT } from './vfs/workspace-path';
 import { PLATFORM_CATALOG } from './platform-catalog';
+import { sandboxSizeLabel } from './execution/sandbox';
+import type { SandboxSizes } from './execution/types';
 import { CRAFTED_TOOL_NAMESPACE } from './tools/sandbox-contract';
 
 export type { TurnReason, WorkMode } from './types/turn';
@@ -171,6 +173,19 @@ function renderToolsSection(surface: PromptSurface, render: RenderSection): stri
 /** From `worker.isolate.memory`, so prose cannot drift from the catalog. */
 const WORKSPACE_MEMORY_MB = PLATFORM_CATALOG['worker.isolate.memory'].limit.value / (1000 * 1000);
 
+/** `Small (1 vCPU, 4 GiB), Medium (2 vCPU, 8 GiB) and Large (4 vCPU, 12 GiB)`, from the host's table. */
+function sandboxSizeSlots(sizes: SandboxSizes | undefined) {
+  if (sizes === undefined || sizes.sizes.length === 0) return { sized: false, defaultSize: '', sizes: '' };
+  const labels = sizes.sizes.map(sandboxSizeLabel);
+  const named = sizes.sizes.find((row) => row.size === sizes.defaultSize);
+
+  return {
+    sized: true,
+    defaultSize: named === undefined ? sizes.defaultSize : named.label,
+    sizes: labels.length === 1 ? labels.join('') : `${labels.slice(0, -1).join(', ')} and ${labels.at(-1) ?? ''}`,
+  };
+}
+
 /** The user's own name for the device, else a neutral phrase ("device" reads as an API namespace). */
 function deviceDisplayName(exec: PromptExecutorInfo): string {
   const label = exec.label?.trim();
@@ -189,7 +204,7 @@ function renderExecutorLine(
           cliLocal: backend === 'cli-local', cliVfs: backend === 'cli-vfs', memoryMb: String(WORKSPACE_MEMORY_MB),
         });
       case 'sandbox':
-        return render(SANDBOX_EXECUTOR_LINE, {});
+        return render(SANDBOX_EXECUTOR_LINE, sandboxSizeSlots(exec.sizes));
       case 'device':
         return render(DEVICE_EXECUTOR_LINE, {});
       default:

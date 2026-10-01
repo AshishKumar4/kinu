@@ -1,7 +1,7 @@
 // runHeadInference: the backend-agnostic head loop, driven through the real generateText loop.
 import { REAL_CLOCK } from '../src/types/clock';
 import { describe, test, expect } from 'bun:test';
-import { createTestActors, createTestRuntime, scriptedTurnModel, toolExecute, type ScriptedTurnOptions } from '@kinu.run/test-utils';
+import { seedTranscriptEntry, createTestActors, createTestRuntime, scriptedTurnModel, toolExecute, type ScriptedTurnOptions } from '@kinu.run/test-utils';
 import { createTestWorkspace, conversationsFor } from './helpers';
 import { buildHeadToolSet } from '../src/heads/head-tools';
 import type { LanguageModel, ModelMessage } from 'ai';
@@ -529,7 +529,7 @@ async function seededTranscript(count: number, extra?: (history: SessionHistory)
   });
 
   for (let i = 0; i < count; i++) {
-    await history.record(CHAT_SESSION_ID, {
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, {
       id: `m${i}`, origin: i % 2 === 0 ? 'input' : 'output',
       message: { role: i % 2 === 0 ? 'user' : 'assistant', content: `body ${i}` },
     });
@@ -566,7 +566,7 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
   const bound = cap + 80;
 
   const seededStoredBody = async (content: string) => seededTranscript(0, async (history) => {
-    await history.record(CHAT_SESSION_ID, { id: 'r1', origin: 'output', message: { role: 'assistant', content } });
+    await seedTranscriptEntry(history, CHAT_SESSION_ID, { id: 'r1', origin: 'output', message: { role: 'assistant', content } });
   });
 
   test('the transcript read caps each stored body as it builds the digest', async () => {
@@ -584,7 +584,7 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
 
   test('a body within budget passes through byte-identical', async () => {
     const seeded = await seededTranscript(0, async (history) => {
-      await history.record(CHAT_SESSION_ID, { id: 'r1', origin: 'input', message: { role: 'user', content: 'short body' } });
+      await seedTranscriptEntry(history, CHAT_SESSION_ID, { id: 'r1', origin: 'input', message: { role: 'user', content: 'short body' } });
     });
 
     expect((await inheritedContextFromTranscript(seeded.transcript))[0].content).toBe('short body');
@@ -623,7 +623,7 @@ describe('inheritedContextFromTranscript — the canonical store, read once for 
 
     // Another session's row: neither inherited nor counted as omitted.
     const seeded = await seededTranscript(cap + 5, async (history) => {
-      await history.record('side', { id: 'other', origin: 'input', message: { role: 'user', content: 'elsewhere' } });
+      await seedTranscriptEntry(history, 'side', { id: 'other', origin: 'input', message: { role: 'user', content: 'elsewhere' } });
     });
 
     const ctx = await inheritedContextFromTranscript(seeded.transcript);

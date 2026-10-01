@@ -5,7 +5,7 @@ import { askWhileStarting, execInBox, writeFileInBox, type Fixture } from './ben
 
 const ASK_AGAIN = 'this devbox is not ready: no restoration has run for this container yet. A startup is armed, so ask again.';
 
-const TERMINAL = 'this devbox has no attached work directory: overlay refused. That recovery class is terminal: call attachNow() to attempt the attach again.';
+const TERMINAL = 'this devbox has no attached work directory: overlay refused. That failure is terminal, so nothing retries it.';
 
 function bootWindowBox(refusals: number, refusal = ASK_AGAIN) {
   const asks: Record<string, number> = {};

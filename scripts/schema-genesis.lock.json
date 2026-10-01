@@ -139,7 +139,6 @@
     "turn_id TEXT",
     "session_id TEXT",
     "task TEXT NOT NULL",
-    "winner_node_id TEXT NOT NULL",
     "chosen_node_id TEXT",
     "candidates TEXT NOT NULL",
     "settlement_key TEXT",

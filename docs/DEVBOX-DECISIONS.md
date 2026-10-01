@@ -1235,6 +1235,10 @@ are: DBX-5 moves backup and sync into the container (m712: that machinery
 "should live inside the docker image/container itself, and NOT be issued via
 the DO"), which takes them off the Durable Object entirely.
 
+The SDK-specific census was removed by `37a8d6c10` on 2026-09-30, after
+native Container.exec replaced sandbox.exec logging. Restore
+`scripts/bench-devbox-exec-census.ts` from `98f64cde610869efc60ff072ff89e866bb5fd116`.
+
 D29. Checkpoint payloads do not cross the Durable Object; DBX-5 moves the
 orchestration, not the bytes (2026-09-23). The chain's publish (D15) and its
 layer reads go to `r2.internal`, which the SDK serves in its `ContainerProxy`
@@ -2149,6 +2153,269 @@ D49. Three boundary defects from the same review (2026-09-30, review 3f6).
   read (`tests/file-bytes.test.ts`) are each held to the exact bytes. The
   `readFile` tool still returns text for the model: 0.12.9 returned base64 for
   a file it detected as binary, and the native box returns it decoded.
+
+D50. Boxes run on the `durable_object` scheduling policy, each at a size it
+records, on Sandbox SDK 1.0 (2026-09-30). The container application no longer
+names an image or an instance type: `containers[].images.devbox` names the
+image, and every start passes `ctx.container.start({ image, instance, ... })`
+at the one start boundary (`#startContainer`), whichever path woke the box: a
+request, an alarm, a file call on the `/sandbox` mount, `start()`. The sizes
+are one table, `src/sizes.ts`: Small 1 vCPU, 4 GiB; Medium 2 vCPU, 8 GiB;
+Large 4 vCPU, 12 GiB; each a 20 GB disk. A box stores the key (`devbox:size`,
+absent means the default its host stored with `useDefaultSize(size)`, else
+the class's `defaultSize`, Medium) and the size its running container got
+(`devbox:running-size`); `boxSize()` and `devboxState()` report both, and
+`resize(null)` drops the choice. `resize(size)` is one call: a box that is not
+running only records the size, so its first start comes up at it; one
+running at another size commits in D39's order and starts again at the new
+size, supervised processes and exposed ports come back from their specs, and
+a running command ends (`tests/box-size.test.ts`). A resize is the owner's
+explicit ask, so it goes ahead over a live unmanaged command, which D35 still
+makes a rest refuse. `@cloudflare/sandbox` moves from 1.0.0-rc.1 to 1.0.0:
+`S3Mounts` is `S3Mount`, and the shim's mount marker and inspection are
+unchanged (`sandbox-tools/src/s3_mount/{marker_store,model,observation}.rs`
+at the `@cloudflare/sandbox@1.0.0` tag are byte-identical to rc.1). The
+image moves to 1.0.0's shim (`sha256:5db34cc1…`, `block-lower/upstream.json`).
+
+In Kinu the owner's default is the `sandbox_size` config key, set in User
+settings under Sandbox, and a workspace chooses its own size on its
+Environment card, which applies at once, as `sandbox.resize(size)` does from
+codemode. Before a box's first operation in each turn, the runtime hands it
+the owner's default through `useDefaultSize`. The codemode declaration of
+`resize` and the prompt's sandbox line come from the size table and replace
+the stale "2 vCPU, about 6 GB"; a sandbox executor given no table has no
+`resize`. The boundary tests: `packages/core/tests/unit-sandbox-resize.test.ts`
+and `packages/cf-backend/tests/unit-sandbox-size-settings.test.ts`.
+
+What the policy removes. There is no application-wide rollout, so the
+fixtures no longer wait for one (`awaitApplicationRollout`, D5's 38 s), and a
+deploy changes the image a box starts next: a running box keeps its image
+until it next starts. There is no `max_instances`; running instances count
+against the account's limits.
+
+The account's limits, measured with throwaway Workers (2026-09-30): 8 vCPU,
+24 GiB and 16 vCPU, 48 GiB are refused, as an instance type at deploy
+(`SURPASSED_BASE_LIMITS`, "No more than 4", "No more than 12GiB") and as a
+runtime instance at start (`monitor()` rejects about 750 ms in, `Container
+exceeds account limits (vcpu: no more than 4; memory_mib: no more than
+12288)`). `GET /accounts/{id}/containers/me` says the same: 4 vCPU, 12 GiB and
+20 GB per instance. Under this policy memory is hot-plugged: a Large box
+reported 6.7 GiB at its first exec and 12.2 GiB a minute later, and an 11 GiB
+allocation succeeded.
+
+Platform note: wrangler cannot delete a durable_object application. Its id
+is 32 hex digits, which `wrangler containers delete` refuses before any
+request ("Expected a container ID but got 12578b1d…", wrangler 4.143.0 and
+4.145.0), and the dashed form it accepts answers `APPLICATION_NOT_FOUND`.
+`DELETE /accounts/{id}/containers/applications/{id}` deletes it
+(`scripts/cloudflare-rest.ts`, used by the fixtures' teardown and the reset).
+
+The wake before and after, the D43 fixture with the internet disabled as
+Kinu runs, 9 stop and wake cycles each (`bench-artifacts/side-by-side/`
+`policy-a-summary.txt`; runs `sbs09302041npb` on the old shape at
+integration `d59a30999`, `sbs09302041npm` and `sbs09302041nps`):
+
+| | default policy, 2 vCPU, 6 GiB, 8 GB | Medium | Small |
+| --- | --- | --- | --- |
+| Wake as the caller sees it, median | 12,259 ms (11,525 to 12,414) | 4,873 ms (4,597 to 5,125) | 5,695 ms (5,263 to 6,237) |
+| Restore inside the gate, median | 6,493 ms | 4,135 ms | 4,333 ms |
+| Container start phase, median | 116 ms | 34 ms | 34 ms |
+| Store mount phase, median | 1,540 ms | 676 ms | 760 ms |
+| Cold read, 160 MiB, median | 32.2 MiB/s | 34.8 MiB/s | 36.6 MiB/s |
+| Warm read, median | 829 MiB/s | 982 MiB/s | 1,006 MiB/s |
+| Delta checkpoint, 64 KiB overwrite | 7.3 s, 69,632 B | 7.5 s, 69,632 B | 10.9 s, 69,632 B |
+| First start of a fresh application | 2,146 ms, after the rollout | 6,159 ms | 6,616 ms |
+| Uncached 64 MiB read after the owner's eviction | 91 MiB/s | 73 MiB/s | 61 MiB/s |
+
+Every read was byte-exact, and the evicted owner rebound its running
+container (D47) on all three shapes.
+
+One figure is worse: the base checkpoint of 224 MiB. Five fresh boxes per
+shape (`bench-artifacts/side-by-side/base-commit-summary.txt`; runs
+`sbs09302059ncb`, `ncm`, `ncs` and `ncss`), each committed as soon as its
+files were written:
+
+| | default policy | Medium | Small |
+| --- | --- | --- | --- |
+| Base commit, median of 5 | 39,983 ms (37,849 to 40,747) | 53,232 ms (48,146 to 62,120) | 74,644 ms (62,781 to 77,410) |
+| The same pack alone, median of 5 | 8,180 ms | 17,016 ms | 43,391 ms |
+| The rest: upload and bookkeeping | 31,803 ms | 37,223 ms | 29,677 ms |
+
+It is not memory hot-plug: every box already reported its whole size when
+it committed (8,595,728 kB on Medium, 4,401,424 kB on Small), and five Small
+boxes held until their memory had arrived committed in a median 70,010 ms.
+It is a real regression, mostly in the pack. Direct probes of the same pack
+(`bench-artifacts/snapshot-probe/`: `pack09302111o.json` on a Medium
+container, `pack09302111d.json` on the default policy's) found a btrfs root
+with transparent zstd:3 compression where the default policy has ext4, 8
+processors online of which 2 are allowed, and a single thread about 20%
+slower at `zstd -15` (6.4 to 7.2 s for 160 MiB against 5.1 to 6.2 s). The
+pack is no faster with `-processors $(nproc)` (`pack09302106.json`) nor
+written into a directory with compression off (`chattr +m`, 12.3 to 15.8 s
+against 12.5 to 14.3 s, `pack09302116o.json`), so the rest of the doubling was
+not explained then. The checkpoint is off the wake path.
+
+Where the time goes, measured the same evening (22:51 to 23:33 UTC).
+`bench-artifacts/side-by-side/phases.ts` samples the container every 200 ms
+without forking: the VM's CPU jiffies, the whole disks' sectors and busy
+time, the network bytes, Dirty and Writeback, and which of the flush's
+programs runs. Each interval is charged to the phase its opening sample
+names: the pack (`mksquashfs`), the upload (`devbox-publish.mjs`) and the
+rest of the flush (the sync's round trips to the box). Base commits of the
+same 224 MiB, as written (runs `sbs09302251opb`, `sbs09302257opb2`,
+`sbs09302308opub` and `sbs09302316othb` on the default policy;
+`sbs09302257npm2`, `sbs09302314npum2`, `sbs09302316nthm` and
+`sbs09302327nps1` on Medium):
+
+| | default policy, 7 boxes | Medium, 13 boxes |
+| --- | --- | --- |
+| Base commit, median | 59.4 s (33.0 to 63.8) | 66.1 s (50.2 to 93.2) |
+| Pack | 7.8 s, 14.1 CPU-s | 15.2 s, 29.7 CPU-s |
+| Upload, one 5 MiB part at a time | 44.7 s (19.9 to 51.8) | 43.5 s (35.0 to 71.7) |
+| Rest of the flush | 4.9 s | 3.9 s |
+
+The pack is where the policies differ, and it is the platform's CPU. It is
+CPU-bound on both (its two threads keep the two usable CPUs busy, and no
+disk wait runs under it) and does identical work, yet costs 2.1 times the
+CPU-seconds on Medium. The same pack with one thread and with two
+(`-processors 1` and `2`, runs `sbs09302316othb` and `sbs09302316nthm`): one
+thread 12.3 to 13.8 s on the default policy and 18.5 to 29.8 s on Medium,
+two threads 5.8 to 6.9 s and 10.4 to 14.9 s. The vCPUs are separate cores
+(`core_id` 0 and 1, no siblings) and both policies gain from the second
+thread, so a Medium vCPU does about half a default one's work, and it varies
+within one box (one thread took 20.2 s, then 29.8 s). The kernel reports
+steal under the pack on Medium, 0.7 to 7.6 s (median 1.9 s) against under
+0.1 s on the default policy, too little to account for the doubling alone.
+The shapes: the default policy's `instance_type`
+of 2 vCPU, 6,144 MiB and 8,000 MB, 2 CPUs online, an ext4 root, image
+`649439b5…`; Medium on `durable_object`, 2 vCPU, 8,192 MiB and 20,000 MB, 8
+CPUs online of which the process may use 2, a btrfs root with zstd:3, image
+`5db34cc1…`; both "AMD EPYC". This is recorded for the owner to raise with
+the Containers team. Medium's disk is slower too: a `sync` of 226 MiB of
+dirty data took 2.5 to 5.9 s there and 0.2 to 1.1 s on the default policy,
+and that writeback shows as iowait under the pack and the upload.
+
+The upload was ours. The publisher sent one 5 MiB part at a time, and its
+rate moved with the hour on both policies (10 MiB/s at 22:51, 3 to 6 MiB/s by
+23:16). The same 224 MiB, synced to disk, through the store gateway with one
+to eight parts in flight, median of 3 boxes each:
+
+| Parts in flight | 1 | 2 | 4 | 8 |
+| --- | --- | --- | --- | --- |
+| default policy | 37.9 s | 26.9 s | 21.5 s | 22.2 s |
+| Medium | 39.1 s | 23.6 s | 20.9 s | 20.9 s |
+
+The publisher now keeps four parts in flight (`PUBLISH_PARTS_IN_FLIGHT`;
+`tests/publish-script.test.ts`, red on e0dc4195a,
+`bench-artifacts/parallel-publish/`). On Medium in the same hour, 3 boxes
+each: the base commit took 62.5 s (61.4 to 76.9) with one part in flight
+(`sbs09302327nps1`) and 30.6 s (30.6 to 37.8) with four (`sbs09302323npf`,
+image `7e0f8359…`); its upload fell from 43.5 s to 17.3 s.
+
+D51. The platform's container snapshots are faster than the chain on every
+measure and cannot replace it: a snapshot never follows a new image, and it
+expires 30 days after its last restore (2026-09-30). `snapshotContainer()`
+and `start({ containerSnapshot })` exist only under D50's policy. Measured on
+the D43 fixture with the internet disabled, on a Medium container driven
+directly on `ctx.container` by throwaway Workers
+(`bench-artifacts/snapshot-probe/`, `drive.ts` to `drive3.ts`; runs
+`snap09302043`, `snap09302048b2`, `snap09302053b3`), beside the chain on the
+same policy and size (D50's Medium column):
+
+| | chain, Medium | native snapshot, Medium |
+| --- | --- | --- |
+| Save, 224 MiB base | 55.9 s, 234,885,120 B published | 9.5 s, `size` 235,050,844 |
+| Save after a 64 KiB overwrite | 7.5 s, 69,632 B moved | 4.1 s, `size` 65,917 |
+| Save with nothing changed | skipped | 4.5 s, `size` 141 |
+| Wake as the caller sees it | 4,873 ms, median of 9 | 1,747 ms, median of 5 (937 to 2,565; the first 448) |
+| Cold read, 160 MiB | 34.8 MiB/s | 181 MiB/s, median of 5 (83 to 333) |
+| Warm read | 982 MiB/s | 1,119 MiB/s |
+| Uncached 64 MiB read after the owner's eviction | 875 ms | 670 ms |
+| Every read byte-exact | yes | yes |
+
+`size` counts what a save adds over its parent (141 B for an unchanged save),
+and a 64 KiB overwrite inside a 160 MiB file adds 65,917 B, so the platform
+stores blocks, not files. It does not say what it transfers; a save costs
+about 4 s plus about 25 ms per MiB added.
+
+On failure it was sound. A missing or malformed id: `start()` returns and
+`monitor()` rejects about 220 ms later with `Snapshot "<id>" was not found.`
+A save taken while a writer appended 4 KiB records, each carrying its own
+hash: the restore held 43,329 records, every one intact, none torn or zeroed,
+a crash-consistent point at the save's start, while the writer went on to
+82,880 during the 9.3 s save. `destroy()` 1 s into a save waits for it, and
+that snapshot restores whole. An owner evicted 1 s into a save never gets
+the id, yet the save completes on the platform: an orphan nobody can list or
+delete. A Medium snapshot restores at Large in 0.4 s and at Small in 1.9 s.
+With the image's tag deleted from the registry, the restore still works.
+
+Why the chain stays. After the Worker moved to another image, a restore
+still ran the snapshot's own image (its shim's hash and `inspect().image`
+say so), while a fresh start ran the new image with an empty `/workspace`;
+the docs agree ("tied to the Container image version it was created from
+and is not portable to a different image"). Every image change would need
+each box's files copied out of the old image and into the new one, which is
+the chain's job. A snapshot's time-to-live is 30 days from creation or its
+last restore and cannot be set, so a box idle for 30 days would lose its
+files. There is no delete and no list: an orphan and every superseded save
+live out their 30 days. Each save also appears in the account's container
+registry, as a `rootfs-set-<hash>` and a `rootfs-snapshot-<hash>` tag under
+the image's repository (26 tags for 13 saves), which is the storage the
+documented 50 GB per-account image limit governs; the probes' 28 tags were
+deleted by hand. A native-only store would have removed about 5,190 lines
+(`snapshot-chain.ts`, `chunked-delta.ts`, `delta-index.ts`,
+`store-gateway.ts`, `sync.ts`, `sync-main.ts`, `native-archives.ts`, the
+block-lower crate) and squashfuse and s3fs from the image. The chain stays
+the record of truth.
+
+D52. A start that fails the same way every time is refused once, from a
+record of what it was made with (2026-09-30). D47 settles a terminal
+admission failure and files one incident, but that settled phase held only
+while a container ran. A start the platform refuses leaves none running,
+such as one for a host that names no image (D50), so every later request,
+every startup row a `kickStartup()` or a `devboxState()` poll armed, and
+every request after an eviction started the box again and filed another
+incident: one start and three asks made four starts and four incidents
+(`bench-artifacts/start-refusal/red.log`, on 719c2d1ac).
+
+A terminal refusal of a start this box made is now stored with that start's
+inputs (`devbox:start-refused`): the image, the size and the internet
+setting, which is everything `ctx.container.start()` receives. While the
+container is stopped and those inputs are unchanged, the one start boundary
+answers the recorded refusal and starts nothing, `#armStartup` arms nothing,
+and nothing is filed; an evicted object's successor reads the same row. A
+changed input asks again, as does a caller's explicit ask (`start()`,
+`attachNow()`), and an admitted start deletes the row. A terminal refusal
+over a container the box found running (D47's marker) is not stored: a later
+start gets a fresh container, which can come up clean. `boxSize()` reports
+a recorded start refusal (`startRefused`).
+
+A refusal names only actions its reader can take. D47's text told every
+reader to call `attachNow()`, which Kinu never exposes, so devbox's terminal
+refusal now states the failure and names no action, under its own code
+(`refused`), and the host adds its readers' actions. Kinu's adapter maps it to
+`unavailable`, which `withSandboxRetry` never re-enters, and tells the agent
+to choose another size with `sandbox.resize(...)` or ask the owner. The
+owner's try-again is "Start again" on the sandbox's Environment card, shown
+only while a start refusal is recorded; it calls `startSandbox`, which runs
+the box's one start path and so clears the record. Agents get no retry: a
+start with the same inputs fails the same way, and a resize is theirs.
+
+A capacity answer is not terminal. The platform's "There is no container
+instance that can be provided to this Durable Object, try again later"
+(three times for Medium on the old path, `c-before.log`) is a plain error
+with no code, which the ladder classes `unclassified`, so it retries: the
+caller gets `pending` with the platform's words, a startup row is armed,
+nothing is recorded, and a successor starts the box once the platform has
+room (`tests/box-size.test.ts`).
+
+Red then green: `tests/box-size.test.ts`
+(`bench-artifacts/start-refusal/red.log`, `green.log`). After one refused
+start, two requests, a successor's `kickStartup()` and its request answer the
+refusal with one start, one incident and no startup row. An image the host
+names later, another size, another internet setting, `attachNow()` and
+`start()` each start the box again. The agent's and the owner's words:
+`packages/cf-backend/tests/unit-sandbox-size-settings.test.ts`.
 
 ## Measurement contract for a strategy comparison
 

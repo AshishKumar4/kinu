@@ -37,7 +37,7 @@ const MANIFEST: ReleaseManifest = {
     { binding: 'BACKUP_BUCKET', kind: 'r2', resource: 'kinu-backups', required: false },
     { binding: 'MEMORY_VECTORS', kind: 'vectorize', resource: 'kinu-memory', required: false },
     { binding: 'OrchestratorAgent', kind: 'durable-object', resource: 'OrchestratorAgent', required: true },
-    { binding: 'Sandbox', kind: 'durable-object', resource: 'KinuSandbox', required: false },
+    { binding: 'KinuDevbox', kind: 'durable-object', resource: 'KinuDevbox', required: false },
     { binding: 'AGENT_METRICS', kind: 'analytics-engine', resource: 'kinu_agent_metrics', required: false },
     { binding: 'AI', kind: 'ai', resource: '', required: false },
     { binding: 'BROWSER', kind: 'browser', resource: '', required: false },
@@ -45,7 +45,7 @@ const MANIFEST: ReleaseManifest = {
     { binding: 'LOADER', kind: 'worker-loader', resource: '', required: true },
   ],
   vectorIndexes: [{ name: 'kinu-memory', dimensions: 384, metric: 'cosine' }],
-  migrations: [{ tag: 'v1', newSqliteClasses: ['OrchestratorAgent', 'KinuSandbox'] }],
+  migrations: [{ tag: 'v1', newSqliteClasses: ['OrchestratorAgent', 'KinuDevbox'] }],
   secrets: [
     { name: 'CREDENTIAL_ENCRYPTION_KEY', handling: 'prompted', required: true, prompt: '32 random bytes' },
     { name: 'WEBHOOK_ROUTE_SECRET', handling: 'prompted', required: true, prompt: '32 random bytes' },
@@ -570,13 +570,13 @@ describe('a guided run', () => {
     expect(named).toContain('ASSETS');
     expect(named).toContain('LOADER');
     // The sandbox needs Workers Paid; unrequested, its class must not be bound.
-    expect(named).not.toContain('Sandbox');
+    expect(named).not.toContain('KinuDevbox');
     expect(bindings.find((binding) => binding.name === 'AUTH_KV')).toMatchObject({
       type: 'kv_namespace', namespace_id: 'id-kinu-auth-kv',
     });
     // Wrangler's own metadata for a `browser` block; an unknown type fails the whole upload.
     expect(bindings.find((binding) => binding.name === 'BROWSER')).toEqual({ type: 'browser', name: 'BROWSER' });
-    expect(upload?.body?.migrations).toEqual({ new_tag: 'v1', new_sqlite_classes: ['OrchestratorAgent', 'KinuSandbox'] });
+    expect(upload?.body?.migrations).toEqual({ new_tag: 'v1', new_sqlite_classes: ['OrchestratorAgent', 'KinuDevbox'] });
     expect(upload?.body?.compatibility_date).toBe('2025-12-01');
   });
 
@@ -851,10 +851,10 @@ describe('the workerd configuration for a local instance', () => {
 
     // workerd keys a class's on-disk database by the derived key.
     expect(config).toContain('(className = "OrchestratorAgent", uniqueKey = "kinu-local-OrchestratorAgent", enableSql = true),');
-    expect(config).toContain('(className = "KinuSandbox", uniqueKey = "kinu-local-KinuSandbox", enableSql = true),');
+    expect(config).toContain('(className = "KinuDevbox", uniqueKey = "kinu-local-KinuDevbox", enableSql = true),');
     expect(config).toContain('durableObjectStorage = (localDisk = "do-state"),');
     expect(config).toContain('(name = "OrchestratorAgent", durableObjectNamespace = "OrchestratorAgent"),');
-    expect(config).toContain('(name = "Sandbox", durableObjectNamespace = "KinuSandbox"),');
+    expect(config).toContain('(name = "KinuDevbox", durableObjectNamespace = "KinuDevbox"),');
 
     expect(config).toContain('(name = "SANDBOX_TRANSPORT", text = "rpc"),');
     expect(config).not.toContain('CLI_PUBLIC_ORIGIN');

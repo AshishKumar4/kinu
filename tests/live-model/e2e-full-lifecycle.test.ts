@@ -34,11 +34,9 @@ import {
   buildEvalAgentSurface, createStepToolCallLog,
 } from './harness';
 import { provisionLocalTarget } from './target-local';
-import {
-  finalIntegerAnswer,
-  liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, toolExecute,
-  UNCONFIGURED_LLM,
-} from '@kinu.run/test-utils';
+import { seedTranscriptEntry, finalIntegerAnswer,
+liveChatModel, liveModelTarget, recordLiveModelSpend, reportLiveModelSpend, toolExecute,
+UNCONFIGURED_LLM, } from '@kinu.run/test-utils';
 
 // Proof against a real model, so a target is required. `liveModelTarget` states
 // which target and cost basis this run used, or why it is skipping — and throws
@@ -132,8 +130,8 @@ async function chatTurn(
   const responseText = collectStepText(result);
 
   const id = crypto.randomUUID();
-  await rt.stores.history.record('e2e-full', { id, message: { role: 'user', content: userMessage }, origin: 'input' });
-  await rt.stores.history.record('e2e-full', {
+  await seedTranscriptEntry(rt.stores.history, 'e2e-full', { id, message: { role: 'user', content: userMessage }, origin: 'input' });
+  await seedTranscriptEntry(rt.stores.history, 'e2e-full', {
     id: crypto.randomUUID(), message: { role: 'assistant', content: responseText }, origin: 'output',
   });
 

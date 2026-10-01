@@ -32,13 +32,12 @@ on:
 jobs:
   gate-ladder:
     runs-on: ubuntu-latest
-    # Run 36750629917 (2026-09-30) was the first all-green tier on this runner:
-    # 69 of 82 rows had finished at 23.7 min when a 25 min cap cancelled it, and
-    # the 13 left measure 191 s alone (474 s CPU), so the whole tier is about
-    # 28 min here. Earlier runs fit only because a red stops new launches. The
-    # cap holds that tier plus one row's 480 s silence bound, and still ends a
-    # job that hangs outside any row.
-    timeout-minutes: 45
+    # The green CI tier took 2214.8 s in run 36765759362 and 1974.9 s in
+    # 36768770762 (2026-09-30); the first job took 44m42s against a 45 min cap.
+    # Runner speed varies by about a fifth between runs, so the cap holds a
+    # green tier of about 44 min on a slow runner, one row's 480 s silence
+    # bound and the setup, and still ends a job that hangs outside any row.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,12 +50,33 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install system prerequisites
+      # bubblewrap: the device sandbox suite. ffmpeg: the plan demo film's recorder
+      # tests (ffmpeg and ffprobe), absent from the runner image in CI 36754331407.
+      # No recommends: 200 packages and 133 MB instead of 291 and 209 MB. The key
+      # is the exact set of archives apt would fetch, so it moves when a version
+      # does.
+      - name: Resolve the system prerequisites
+        id: apt
         run: |
           sudo apt-get update
-          # bubblewrap: the device sandbox suite. ffmpeg: the plan demo film's recorder tests
-          # (ffmpeg and ffprobe), absent from the runner image in CI 36754331407.
-          sudo apt-get install --yes bubblewrap ffmpeg
+          echo "key=$(sudo apt-get install --yes --no-install-recommends --print-uris bubblewrap ffmpeg | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      # Kept between runs. Run 36765759362 spent 6m32s of its 6m45s prerequisite
+      # step fetching these from the runner's mirror at 268 kB/s (36768770762
+      # fetched the same 105 MB in 11 s). With the archives restored, apt fetches
+      # nothing: "Need to get 0 B/133 MB", measured on ubuntu:24.04.
+      - name: Cache the system prerequisites' packages
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-archives/*.deb
+          key: apt-${{ runner.os }}-${{ steps.apt.outputs.key }}
+          restore-keys: |
+            apt-${{ runner.os }}-
+
+      - name: Install system prerequisites
+        run: |
+          mkdir -p ~/apt-archives/partial
+          sudo apt-get install --yes --no-install-recommends -o Dir::Cache::Archives="$HOME/apt-archives" bubblewrap ffmpeg
           # Ubuntu 24.04's AppArmor userns restriction refused bwrap after install
           # in CI 36673378254 (2026-09-30); the sandboxed suite needs namespaces.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0

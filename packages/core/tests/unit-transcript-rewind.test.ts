@@ -1,6 +1,6 @@
 /** A rewind deletes the entry it names and everything after it, and records that it did. */
 import { describe, test, expect, afterEach } from 'bun:test';
-import { present } from '@kinu.run/test-utils';
+import { seedTranscriptEntry, present } from '@kinu.run/test-utils';
 import { createRecordingLogger, setDiagnosticsSink, type RecordedLog } from '../src/obs/index';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import { SessionHistory } from '../src/session/history';
@@ -30,11 +30,11 @@ async function seeded(): Promise<Fixture> {
     files: async () => ({ vfs: ws.vfs, artifactDirectory: '/actor/.kinu/context' }),
   });
 
-  await history.record(CHAT_SESSION_ID, { id: 'u1', origin: 'input',
+  await seedTranscriptEntry(history, CHAT_SESSION_ID, { id: 'u1', origin: 'input',
     message: { role: 'user', content: 'build the chess app' } });
-  await history.record(CHAT_SESSION_ID, { id: 'a1', origin: 'output',
+  await seedTranscriptEntry(history, CHAT_SESSION_ID, { id: 'a1', origin: 'output',
     message: { role: 'assistant', content: 'on it' } });
-  await history.record(CHAT_SESSION_ID, { id: 'u2', origin: 'input',
+  await seedTranscriptEntry(history, CHAT_SESSION_ID, { id: 'u2', origin: 'input',
     message: { role: 'user', content: 'add a clock' } });
 
   return { ...ws, actor, history, transcript: history.transcript(CHAT_SESSION_ID) };

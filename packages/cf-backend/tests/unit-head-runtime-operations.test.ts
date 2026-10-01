@@ -79,7 +79,6 @@ const neverHost: HostedActorSeams = {
   vfs() { throw new Error('mergeLLM read the file plane'); },
   suggestTitle() { throw new Error('mergeLLM asked for a title'); },
   taskProfile() { throw new Error('mergeLLM built a hire profile'); },
-  dynamic() { throw new Error('mergeLLM read the dynamic context'); },
   announce() { throw new Error('mergeLLM announced a roster change'); },
   scheduleDrain() { throw new Error('mergeLLM scheduled a drain'); },
   armWake() { throw new Error('mergeLLM armed a wake'); },

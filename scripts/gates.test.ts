@@ -651,7 +651,7 @@ export const doc = "class AlsoFake extends Devbox";`],
 describe('native egress constraints — red in every governed direction', () => {
   const sources = readInterceptionSources();
   const base = 'packages/devbox/src/devbox.ts';
-  const kinu = 'packages/cf-backend/src/kinu-sandbox.ts';
+  const kinu = 'packages/cf-backend/src/kinu-devbox.ts';
   const router = 'packages/devbox/src/gateway.ts';
   const vault = 'packages/cf-backend/src/egress/outbound.ts';
   const worker = 'packages/cf-backend/src/server.ts';
@@ -659,16 +659,21 @@ describe('native egress constraints — red in every governed direction', () => 
   const generic = ['Devbox', 'BenchBox', 'SnapshotChainBox', 'ExampleBox'];
   const entry = sources.get(worker) ?? '';
 
+  // A subject that occurs twice would mutate whichever comes first, which need not be the edge its constraint names:
+  // on 2026-09-30 a second `internet: this.enableInternet` (the start inputs) took the router's mutation, and the
+  // audit rightly found nothing broken. So a subject must name exactly one place.
   function changed(file: string, before: string, after: string): Map<string, string> {
     const original = sources.get(file);
 
     if (original === undefined || !original.includes(before)) throw new Error('mutation has no subject: ' + file + ' / ' + before);
 
+    if (original.indexOf(before) !== original.lastIndexOf(before)) throw new Error('mutation subject is not unique: ' + file + ' / ' + before);
+
     return new Map(sources).set(file, original.replace(before, after));
   }
 
   test('the actual private and public hosts retain their declared network policies', () => {
-    expect(auditInterception(sources, ['KinuSandbox']).violations).toEqual([]);
+    expect(auditInterception(sources, ['KinuDevbox']).violations).toEqual([]);
     expect(auditInterception(sources, generic, true).violations).toEqual([]);
     expect(nativeRoutingReasons(sources, entry)).toEqual([]);
   });
@@ -676,7 +681,7 @@ describe('native egress constraints — red in every governed direction', () => 
   test('giving Kinu raw internet or dropping its override is refused', () => {
     for (const replacement of ['enableInternet = true;', '']) {
       const mutated = changed(kinu, 'enableInternet = false;', replacement);
-      expect(auditInterception(mutated, ['KinuSandbox']).violations.map(issue => issue.owner)).toEqual(['KinuSandbox']);
+      expect(auditInterception(mutated, ['KinuDevbox']).violations.map(issue => issue.owner)).toEqual(['KinuDevbox']);
     }
   });
 
@@ -691,10 +696,10 @@ describe('native egress constraints — red in every governed direction', () => 
   });
 
   const paths = [
-    [base, 'container.start({ enableInternet: this.enableInternet })', 'container.start({ enableInternet: true })', 'declared internet policy'],
+    [base, 'container.start({ image: inputs.image, instance: instanceOf(inputs.size), enableInternet: this.enableInternet })', 'container.start({ image: inputs.image, instance: instanceOf(inputs.size), enableInternet: true })', 'declared internet policy'],
     [router, '.interceptAllOutboundHttp(router)', '.removedHttpRoute(router)', 'HTTP has no total'],
     [router, ".interceptOutboundHttps('*', router)", ".interceptOutboundHttps('api.example.com', router)", 'HTTPS has no total'],
-    [base, 'internet: this.enableInternet', 'internet: true', 'router does not receive'],
+    [base, 'id: this.ctx.id.toString() }, internet: this.enableInternet', 'id: this.ctx.id.toString() }, internet: true', 'router does not receive'],
     [router, 'internet: this.host.internet', 'internet: true', 'router does not receive'],
     [kinu, 'outboundPolicy()', 'removedVaultPolicy()', 'does not bind the vault'],
     [kinu, 'this.#nativeExports.KinuEgress({ props: params })', 'this.#nativeExports.KinuEvents({ props: params })', 'does not bind the vault'],

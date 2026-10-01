@@ -85,12 +85,22 @@ const WorkerSchema = v.object({
   durable_objects: v.optional(v.object({
     bindings: v.array(v.object({ name: v.string(), class_name: v.string() })),
   })),
-  containers: v.optional(v.array(v.object({
-    name: v.optional(v.string()),
-    class_name: v.string(),
-    image: v.string(),
-    max_instances: v.optional(v.number()),
-  }))),
+  // One application-wide image (the `default` scheduling policy), or named images an object starts by name
+  // (`durable_object`, which takes no instance cap).
+  containers: v.optional(v.array(v.union([
+    v.object({
+      name: v.optional(v.string()),
+      class_name: v.string(),
+      image: v.string(),
+      max_instances: v.optional(v.number()),
+    }),
+    v.object({
+      name: v.optional(v.string()),
+      class_name: v.string(),
+      scheduling_policy: v.literal('durable_object'),
+      images: v.record(v.string(), v.object({ image: v.string() })),
+    }),
+  ]))),
   exports: v.optional(v.record(v.string(), v.union([
     v.object({ type: v.literal('durable-object'), state: v.optional(v.literal('created')), storage: v.literal('sqlite') }),
     v.object({ type: v.literal('durable-object'), state: v.literal('deleted') }),
@@ -125,10 +135,13 @@ type WorkerConfig = v.InferOutput<typeof WorkerSchema>;
 
 type Container = NonNullable<WorkerConfig['containers']>[number];
 
-/** A container with the name of the application it runs under. */
-interface NamedContainer extends Container {
-  readonly name: string;
+/** The images a container's application can run, whichever scheduling policy names them. */
+export function containerImages(container: Container): string[] {
+  return 'images' in container ? Object.values(container.images).map((entry) => entry.image) : [container.image];
 }
+
+/** A container with the name of the application it runs under. */
+type NamedContainer = Container & { readonly name: string };
 
 /** What one environment deploys, each container under its application's name. */
 export type DeployedConfig = Omit<WorkerConfig, 'containers'> & { readonly containers?: readonly NamedContainer[] };
@@ -136,7 +149,7 @@ export type DeployedConfig = Omit<WorkerConfig, 'containers'> & { readonly conta
 /**
  * The application a container runs under, named as Wrangler names it (config validation, wrangler 4.129): its own
  * `name`, or the TOP-LEVEL Worker name and its class, with `-<environment>` for a named environment, lower-cased and
- * with spaces as dashes. So staging's KinuSandbox runs as `kinu-kinusandbox-staging`, not under the staging Worker's
+ * with spaces as dashes. So staging's KinuDevbox runs as `kinu-kinudevbox-staging`, not under the staging Worker's
  * name, and a deploy creates the application of this name unless one is already bound to the class's namespace.
  */
 function applicationOf(container: Container, topLevel: string | undefined, environment: InfraEnvironment): string {
@@ -468,7 +481,7 @@ export const UNCAPTURED: readonly Uncaptured[] = [
       + '`@cloudflare/sandbox` release devbox imports. Nothing compares the two when a container starts: '
       + 'a mismatch first shows as a refused file or mount call.',
     evidence: 'a container application is named after the top-level Worker name and its class — '
-      + '`kinu-kinusandbox`, and `kinu-kinusandbox-staging` for staging — and it does not exist until the Worker is '
+      + '`kinu-kinudevbox`, and `kinu-kinudevbox-staging` for staging — and it does not exist until the Worker is '
       + 'deployed. The image is reconciled only by a deploy. What IS captured, by '
       + '`scripts/release-config.test.ts`: the config names one immutable digest rather '
       + 'than a re-pointable tag, and the release that digest was built for equals the '
@@ -894,7 +907,7 @@ function workerRow(config: DeployedConfig): InfraWorker {
     vars: new Map(Object.entries(config.vars ?? {})),
     bindings,
     routes: (config.routes ?? []).map((route) => route.pattern),
-    images: new Map((config.containers ?? []).map((container) => [container.class_name, container.image])),
+    images: new Map((config.containers ?? []).map((container) => [container.class_name, containerImages(container).join(' ')])),
   };
 }
 
@@ -977,7 +990,7 @@ function containerDrafts(config: DeployedConfig): Draft[] {
       name: container.name,
       origin: 'wrangler-deploy',
       required: true,
-      purpose: `container application for ${container.class_name}, image ${container.image}`,
+      purpose: `container application for ${container.class_name}, image ${containerImages(container).join(', ')}`,
     },
     {
       kind: 'container-namespace',

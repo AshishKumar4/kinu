@@ -75,8 +75,9 @@ export interface DeadlineRun {
    *  with the kill so the reader knows which bound ended the run. */
   readonly label: string;
   readonly cwd?: string;
-  /** Where the child's output goes; the tier runner inherits, a test pipes. */
-  readonly stdio?: 'inherit' | 'pipe';
+  /** Where the child's output goes; the tier runner inherits, a test pipes. `tee` passes it on as it comes and keeps
+   *  it too: a deploy's one-row phase stays live, and its report can still quote a red row's output. */
+  readonly stdio?: 'inherit' | 'pipe' | 'tee';
   /** The child's WHOLE environment. Absent, the child inherits this
    *  process's; the ladder passes a derived gate exactly the names its cache
    *  key hashes (`gateEnvironment` in `ladder-cache.ts`). */
@@ -278,8 +279,9 @@ export async function runUnderDeadline(run: DeadlineRun): Promise<DeadlineOutcom
     for (let read = await reader.read(); !read.done; read = await reader.read()) {
       heard();
 
-      if (stdio === 'inherit') await writeFully(onward, read.value);
-      else text += decoder.decode(read.value, { stream: true });
+      if (stdio !== 'inherit') text += decoder.decode(read.value, { stream: true });
+
+      if (stdio !== 'pipe') await writeFully(onward, read.value);
     }
 
     return text + decoder.decode();
@@ -338,17 +340,17 @@ export async function runUnderDeadline(run: DeadlineRun): Promise<DeadlineOutcom
   if (killed) {
     const line = deadlineLine(run, seconds);
 
-    if (stdio === 'inherit') console.error(`\n${line}`);
+    if (stdio !== 'pipe') console.error(`\n${line}`);
 
-    return { ...measured, exitCode: DEADLINE_EXIT_CODE, killed, stderr: stdio === 'pipe' ? `${stderr}\n${line}` : stderr };
+    return { ...measured, exitCode: DEADLINE_EXIT_CODE, killed, stderr: stdio === 'inherit' ? stderr : `${stderr}\n${line}` };
   }
 
   if (leftovers.length > 0) {
     const line = leftoverLine(run, leftovers);
 
-    if (stdio === 'inherit') console.error(`\n${line}`);
+    if (stdio !== 'pipe') console.error(`\n${line}`);
 
-    return { ...measured, exitCode: exitCode === 0 ? 1 : exitCode, killed, stderr: stdio === 'pipe' ? `${stderr}\n${line}` : stderr };
+    return { ...measured, exitCode: exitCode === 0 ? 1 : exitCode, killed, stderr: stdio === 'inherit' ? stderr : `${stderr}\n${line}` };
   }
 
   return { ...measured, exitCode, killed, stderr };

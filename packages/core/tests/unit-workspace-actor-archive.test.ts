@@ -1,3 +1,4 @@
+import { seedTranscriptEntry } from '@kinu.run/test-utils';
 // One SQL snapshot is the workspace for every actor (open-38); the archive declares its roster's actor
 // count and restore refuses a rebuilt roster that disagrees.
 import { describe, test, expect } from 'bun:test';
@@ -68,7 +69,7 @@ async function seedActorState({ ws, actor, text, runId, version }: SeededActorSt
     sql: ws.sql, actor, transactionSync: (write) => ws.db.transaction(write)(), files: noFilePlane,
   });
 
-  await history.record(CHAT_SESSION_ID, {
+  await seedTranscriptEntry(history, CHAT_SESSION_ID, {
     id: `m-${actor.actorId}`, origin: 'input', message: { role: 'user', content: text },
   });
   void ws.sql`INSERT INTO actor_turn_claims (

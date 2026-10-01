@@ -88,7 +88,7 @@ export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
     const tool = createCodeTool({
       description: 'probe',
       tools: [provider],
-      executor: new KinuSandboxExecutor({ launch: codemodeLauncher({ kinuNode: true, egress: null }) }),
+      executor: new KinuSandboxExecutor(codemodeLauncher({ kinuNode: true, egress: null })),
     });
 
     const execute = tool.execute;

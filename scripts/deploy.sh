@@ -2,7 +2,8 @@
 # Kinu deploy pipeline — THE deploy path. Every deploy lands on staging,
 # https://staging.kinu.run, and production, https://kinu.run, gets only a build
 # staging verified.
-#   bun run deploy              staging: every gate, the build, the tiers, the record
+#   bun run deploy              staging: the upload gates, the upload, then every tier
+#                               and every local gate to its end, and the record
 #   bun run deploy --promote    production: HEAD's build, as staging verified it
 #   bun run deploy --rollback   production: back to the build it took before
 #
@@ -13,11 +14,22 @@
 # uploaded" and "the product works".
 #
 # Deploys the cf-backend Worker (`kinu-staging`, or `kinu` under `--promote`)
-# with the @cloudflare/sandbox Sandbox DO + Container binding and the
-# local-device executor routes. Pipeline: strict repository gates → vite build
-# → CLI source archive → wrangler deploy → smoke test → post-deploy tiers → the
-# record. Promotion: the record → vite build → staging's downloads → wrangler
-# deploy → smoke test → post-deploy tiers.
+# with the KinuDevbox Durable Object and its container, and the
+# local-device executor routes. Pipeline: preflight → the upload gates (the
+# account and the secret scan) → vite build → CLI source archive → wrangler
+# deploy → smoke test → the tiers against staging beside every local gate, in
+# one wave → the hammer → the record. Promotion: the record → the upload gates →
+# vite build → staging's downloads → wrangler deploy → smoke test → post-deploy
+# tiers.
+#
+# REPORT-ALL (L18). Every phase after the upload runs to its end whatever goes
+# red, so one deploy captures every failure, and the deploy ends with one report
+# file, every red row with its finding, grouped by phase, whose path it prints
+# (scripts/deploy-report.ts). Only the preflight, the precondition for any
+# verdict, and the two upload gates, whose damage the next deploy cannot undo,
+# stop a deploy early. A red build on staging is fine: staging is the test
+# environment and the next deploy replaces it. The record production promotes
+# from is written only when every phase is green.
 #
 # Where the static assets come from (settled by reading wrangler 4.97 source +
 # `wrangler deploy --dry-run`, 2026-08-07):
@@ -34,7 +46,7 @@
 #
 # Usage:
 #   bun run deploy [--promote | --rollback] [--reset]
-#   bash scripts/deploy.sh [--promote] [--reset] [--bootstrap] [--gates-only] [--all]
+#   bash scripts/deploy.sh [--promote] [--reset] [--bootstrap] [--gates-only]
 #   bash scripts/deploy.sh --rollback
 #
 # `--promote` deploys production, and only the build staging verified: the
@@ -66,7 +78,7 @@
 # record names what was deleted. On production it asks for a typed confirmation
 # before anything runs.
 #
-# Idempotent: safe to re-run. Exits on first failure.
+# Idempotent: safe to re-run.
 set -uo pipefail
 
 GREEN='\033[0;32m'
@@ -112,12 +124,6 @@ KINU_BOOTSTRAP=0
 # argv and never from the environment, so no ambient variable can turn a
 # deploy into a rehearsal.
 KINU_GATES_ONLY=0
-# `--all` is the full audit: a wave keeps LAUNCHING after its first red, so
-# every red in the tier is reported in one run rather than the first few. The
-# default stops launching on the first red — the fastest path to the first
-# finding — and still lets every running gate finish and report. Neither
-# changes what a red means: a deploy with any red gate publishes nothing.
-KINU_GATES_ALL=0
 # `--promote` is on the argv only, like `--gates-only`: no ambient variable can
 # turn a staging deploy into a production one. So is `--reset`.
 KINU_PROMOTE=0
@@ -129,11 +135,10 @@ for option in "$@"; do
     --rollback) KINU_ROLLBACK=1 ;;
     --bootstrap) KINU_BOOTSTRAP=1 ;;
     --gates-only) KINU_GATES_ONLY=1 ;;
-    --all) KINU_GATES_ALL=1 ;;
     --reset) KINU_RESET=1 ;;
     *)
       echo -e "${RED}Unknown option '$option'.${NC}"
-      echo "Usage: scripts/deploy.sh [--promote] [--reset] [--bootstrap] [--gates-only] [--all] | --rollback"
+      echo "Usage: scripts/deploy.sh [--promote] [--reset] [--bootstrap] [--gates-only] | --rollback"
       exit 2
       ;;
   esac
@@ -240,379 +245,87 @@ json_field() {
   node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=process.argv[1].split(".").reduce((o,k)=>o?.[k],JSON.parse(s));process.stdout.write(v==null?"":String(v))}catch{}})' "$1"
 }
 
-# `wait -n -p`, which the gate runner takes every verdict from, is bash 5.1
-# (December 2020). Refused here rather than at the first flush: an unsupported
-# shell is a fact about the machine, not a gate result. The associative arrays
-# below already ruled out bash 3.
-if ((BASH_VERSINFO[0] < 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] < 1))); then
-  echo -e "${RED}bash $BASH_VERSION cannot run the gate wave: 'wait -n -p' needs bash 5.1 or newer.${NC}"
-  exit 1
-fi
-
-# ── The gate plan ────────────────────────────────────────────────
+# ── The gate phases ──────────────────────────────────────────────
 #
-# WHAT RUNS IS READ, NOT WRITTEN HERE. `bun scripts/ladder.ts --plan` prints
-# every deploy-tier gate as one tab-separated line — phase, label, measured
-# threads, measured resident MiB, shared resource, command — in the order the phases
-# run. This script loads that once and `run_phase <name>` schedules the phase's
-# gates concurrently under the machine cap, then waits: a barrier. Until
-# 2026-09-15 this file held a second copy of every row (the command lines, a
-# weight table, a deadline table, an exclusion table) that deploy.test.ts held
-# equal to the ladder, and every new suite was a hand edit in three files.
-# There is one copy now.
+# WHAT RUNS IS READ, NOT WRITTEN HERE, AND SCHEDULED THERE TOO. `run_phase
+# <name>` is `bun scripts/ladder.ts --deploy-phase=<name>`: the ladder runs its
+# plan's rows of that phase through its one wave runner (`tierWave`), the same
+# one the CI tier runs through. Admission is by each row's measured threads and
+# resident set (scripts/gate-cost.json) under this box's caps (the CPU count
+# and three quarters of MemAvailable, or KINU_DEPLOY_THREADS and
+# KINU_DEPLOY_RSS_MB), one row at a time per shared resource such as the
+# browser, and every row to its end whatever goes red. The command returns once
+# every row it launched has ended: the phase's barrier. Each row's output is
+# printed whole when it ends, under its own hang detector (scripts/deadline.ts),
+# every red row is written into this deploy's report, and a red names every
+# failed row at the end. Until 2026-09-15 this file held a second copy of every
+# row, and until 2026-09-30 a second scheduler in Bash over the same cost table
+# (L16).
 #
 # Phases, in the ladder's DEPLOY_PHASES order: `preflight` alone before
-# anything; `source`, the one concurrent wave; `hammer` and `infra` alone after
-# it; `post-publish` after the upload and the smoke test. A gate's row in
-# scripts/ladder.ts declares which, and why it runs alone.
+# anything; `upload`, the account gate and the secret scan, before any upload;
+# `post-publish`, the tiers against the deployment, in one wave with `source`,
+# every local gate, after the upload and the smoke test; `hammer` alone, last.
+# A gate's row in scripts/ladder.ts declares which, and why.
 #
-# The runner passes each command unchanged to `ladder.ts --gate`; the ladder
-# resolves its argv and globs against the tracked corpus.
-PLAN_PHASE=()
-PLAN_LABEL=()
-PLAN_THREADS=()
-PLAN_RSS=()
-PLAN_SHARED=()
-PLAN_CMD=()
-
-load_plan() {
-  local plan
-  plan="$(bun scripts/ladder.ts --plan)" || {
-    echo -e "${RED}❌ the ladder printed no plan; nothing is scheduled without one.${NC}"
-    exit 1
-  }
-  local phase label threads rss shared cmd
-  while IFS=$'\t' read -r phase label threads rss shared cmd; do
-    [ -n "$cmd" ] || continue
-    PLAN_PHASE+=("$phase")
-    PLAN_LABEL+=("$label")
-    PLAN_THREADS+=("$threads")
-    PLAN_RSS+=("$rss")
-    PLAN_SHARED+=("$shared")
-    PLAN_CMD+=("$cmd")
-  done <<< "$plan"
-  if [ "${#PLAN_CMD[@]}" -eq 0 ]; then
-    echo -e "${RED}❌ the plan holds no gate. A deploy that schedules nothing publishes nothing.${NC}"
-    exit 1
-  fi
-}
-
-# The gates of one phase, as the queue flush_gates runs.
-GATE_LABELS=()
-GATE_CMDS=()
-GATE_THREADS=()
-GATE_RSS=()
-GATE_SHARED=()
-
+# `run_phase <phase[,phase]>` runs to the end and says whether anything went red;
+# `stop_phase <phase>` ends the deploy on a red, for the phases nothing may pass:
+# the preflight, the precondition for any verdict, and the upload gates.
 run_phase() {
-  local wanted="$1" index
-  GATE_LABELS=(); GATE_CMDS=(); GATE_THREADS=(); GATE_RSS=(); GATE_SHARED=()
-  for ((index = 0; index < ${#PLAN_CMD[@]}; index++)); do
-    if [ "${PLAN_PHASE[index]}" != "$wanted" ]; then continue; fi
-    GATE_LABELS+=("${PLAN_LABEL[index]}")
-    GATE_CMDS+=("${PLAN_CMD[index]}")
-    GATE_THREADS+=("${PLAN_THREADS[index]}")
-    GATE_RSS+=("${PLAN_RSS[index]}")
-    GATE_SHARED+=("${PLAN_SHARED[index]}")
-  done
-  if [ "${#GATE_CMDS[@]}" -eq 0 ]; then
-    echo -e "${RED}❌ phase '$wanted' holds no gate in the plan.${NC}"
-    exit 1
+  local status
+  bun scripts/ladder.ts "--deploy-phase=$1"
+  status=$?
+  if [ "$status" -eq 0 ]; then return 0; fi
+  KINU_REDS=1
+  echo -e "${RED}❌ the $1 phase failed (exit $status).${NC}"
+  # 1 is the ladder's own verdict, every red it found already in the report.
+  # Any other status is a runner that ended without one: a signal (the OOM
+  # killer's 137) or a crash, which the kernel reports whether it cooperated
+  # or not, so the report names the phase itself.
+  if [ "$status" -ne 1 ]; then
+    report note "$1" "the $1 phase's runner" "it ended with exit $status and no verdict of its own, so a row it had not reported on may be red and unnamed"
   fi
-  flush_gates
+  return 1
 }
 
-# THE WAVE IS SCHEDULED BY MEASURED COST, IN TWO DIMENSIONS, UNDER A CAP THIS
-# BOX ANSWERS FOR. A row carries what it was measured to take when it ran alone
-# (scripts/gate-cost.json, written by `bun scripts/gate-cost-measure.ts`):
-# the threads it burns at peak and the resident set it holds at peak. A row
-# launches only while BOTH the running threads plus its own fit `nproc` and the
-# running resident set plus its own fits the memory the kernel says is
-# available. A row heavier than the whole cap still launches when nothing else
-# is running, so the cap can never wedge.
-#
-# Measured 2026-08-23: a half-thread rule launched 12 outer gates and up to 48
-# inner workers here, turned a 23.67s CLI file into a 173.54s run and produced
-# nine false timeout failures. Measured 2026-09-16: a six-gate width — the rule
-# that replaced it — put the eleven-suite UI row beside two `--parallel=4`
-# package suites and failed every deploy that day on a puppeteer wall, while
-# the same row passed alone in 361s. The DECLARED thread figure that replaced
-# the width then failed the same way for the same reason: five rows died on
-# their per-row deadline across the two deploys of 2026-09-16, one of them at
-# 137 — the kernel's status for a SIGKILL, which no thread budget can predict —
-# and the three rows that run workerd had each declared one thread and no
-# memory at all. A count of gates is not a measure of load; neither is a
-# number a row wrote about itself.
-#
-# MemAvailable, not MemTotal: MemTotal includes memory nothing can have, and a
-# cap taken from it is a cap that admits rows onto swap. The reserve is the
-# fraction of what is available that the wave does not claim — page cache for
-# the suites' own I/O, and whatever else on this box grows while the wave runs.
-# Measured 2026-09-17: the source wave's summed admitted peaks ran 5.9 GiB
-# under the machine's own MemAvailable floor at a 75% reserve line, and no row
-# was killed under either loaded run.
-#
-# AND ONE ROW AT A TIME PER SHARED RESOURCE, WHICH NO COST FIGURE CAN EXPRESS.
-# A row that boots a headless browser takes the box's browser lane whole — the
-# Chrome tree, the dev server behind it, and the workerd the Cloudflare vite
-# plugin runs the product in. The plan carries the resource per row (`shared`,
-# derived in scripts/ladder.ts from the modules each row claims) and the wave
-# holds at most one row of it in flight; every row's declared seconds were
-# measured alone, so serial admission is what those declarations assumed.
-#
-# A HYPOTHESIS, AND THE MEASUREMENT THAT SAYS SO. Measured 2026-09-18 on this
-# box, quiet (load 1.04 concurrent, 0.45 serial, 41,197 MiB available), the
-# three browser rows of that day's red wave: concurrently 480.1s/124,
-# 480.1s/124 and 152.8s/1; serially 480.2s/124, 480.2s/124 and 149.7s/1. The
-# overlap is NOT what reddened them — all three are red alone on one product
-# defect (L9). What IS measured is that no cap can refuse the overlap: those
-# rows are admitted at 1, 1 and 3 threads and 2,534, 2,458 and 6,446 MiB
-# against 24 threads and 30.7 GiB. L9 in docs/ARCHITECTURE-DECISIONS.md.
-GATE_RESERVE_PERCENT=75
-
-gate_thread_cap() {
-  echo "${KINU_DEPLOY_THREADS:-$(nproc 2>/dev/null || echo 4)}"
+stop_phase() {
+  run_phase "$1" && return 0
+  echo -e "${RED}❌ the $1 phase is red, so nothing was built or uploaded.${NC}"
+  finish
 }
 
-# Prints nothing it cannot read: the CALLER refuses, because an `exit` inside a
-# command substitution ends only the subshell and would leave the wave running
-# with an empty cap.
-gate_rss_cap() {
-  if [ -n "${KINU_DEPLOY_RSS_MB:-}" ]; then
-    echo "$KINU_DEPLOY_RSS_MB"
-    return 0
-  fi
-  awk -v reserve="$GATE_RESERVE_PERCENT" \
-    '/^MemAvailable:/ { print int($2 / 1024 * reserve / 100) }' /proc/meminfo 2>/dev/null
+# skip_phase <phase> <why>: the report names every row of <phase>, not run, and
+# why, for rows that read a deployment this build never reached.
+skip_phase() {
+  bun scripts/ladder.ts "--deploy-phase=$1" "--skip=$2"
 }
 
-# Run everything enqueued, then clear the queue. Each gate's output goes to its
-# own file and is printed ONLY if it fails: a wave's concurrent streams interleaved
-# into one terminal is not a log anybody can read, and the output a reader wants
-# is the failing gate's.
+# ── The failure report ─────────────────────────────────────────────
 #
-# WHERE A GATE'S VERDICT COMES FROM: `wait -n -p`, which hands back the pid that
-# terminated and its exit status together. That is the whole reaping story, and
-# it is deliberately not a status file. A status file is written by the gate, so
-# a gate whose process dies before it can write one — an OOM kill, a `kill -9`
-# from outside the gate's own tree — leaves no verdict at all, and the only way
-# left to notice is probing `kill -0` on a pid the shell has already reaped. A
-# recycled pid answers that probe as somebody else's process, and a loop built
-# that way has nothing left to wait on: it spins at 100% CPU and the deploy
-# never ends. The kernel already knows every child's fate, so asking it removes
-# the status files, the atomic-rename dance, the liveness probe and the poll in
-# one move.
-#
-# A gate killed by a signal therefore settles as 128+signal, a gate its hang
-# detector ended as 124, and a gate whose command does not exist as 127.
-# None of those can be read as a pass, and none depends on the gate cooperating.
-#
-# On the first failure it stops LAUNCHING and lets the running gates finish. That
-# is deliberate rather than tidy — a wave usually holds more than one real
-# failure, and reporting "these three failed" beats reporting the first one and
-# discarding two diagnostics that have already been paid for.
-flush_gates() {
-  local total=${#GATE_LABELS[@]}
-  if [ "$total" -eq 0 ]; then return 0; fi
-
-  local thread_cap rss_cap
-  thread_cap="$(gate_thread_cap)"
-  rss_cap="$(gate_rss_cap)"
-  if [ -z "$rss_cap" ] || [ "$rss_cap" -le 0 ]; then
-    # A cap nobody can read is a wave with no memory dimension at all, which is
-    # the defect this scheduling came from. Refused rather than defaulted.
-    echo -e "${RED}❌ cannot read MemAvailable from /proc/meminfo; the wave has no memory cap to schedule under.${NC}"
-    echo "   Set KINU_DEPLOY_RSS_MB to schedule against a figure you name instead."
-    exit 1
-  fi
-
-  # Every gate writes its output here and every failure is reported out of it, so
-  # a directory that could not be created is a wave that cannot be reported on.
-  # Refused rather than worked around: with `$dir` empty the redirections below
-  # would write to `/0.log`, and a box out of space or inodes would present as a
-  # clean pass.
-  local dir=""
-  dir="$(mktemp -d "${TMPDIR:-/tmp}/kinu-gates.XXXXXX" 2>/dev/null)" || dir=""
-  if [ -z "$dir" ] || [ ! -d "$dir" ]; then
-    echo -e "${RED}❌ cannot create a gate log directory under ${TMPDIR:-/tmp}.${NC}"
-    echo "   Nothing can be reported without it, so nothing is built or published."
-    echo "   Free space or inodes, or set TMPDIR."
-    exit 1
-  fi
-
-  local index
-  for ((index = 0; index < total; index++)); do
-    # The ladder parses plain words without shell quoting, so refuse a command
-    # that could not round-trip through that argv grammar.
-    case "${GATE_CMDS[index]}" in
-      *\"*|*\'*)
-        echo -e "${RED}❌ gate ${index}: '${GATE_CMDS[index]}' carries a quote.${NC}"
-        echo "   Gate commands must be plain words. scripts/ladder.ts parses these lines"
-        echo "   and this runner splits them; a quoted argument would not survive either."
-        rm -rf "$dir"
-        exit 1
-        ;;
-    esac
-  done
-
-  local -a launched=() statuses=() started=()
-  local -A gate_of_pid=()
-  local -A resource_held=()
-  local pick finished status threads rss resource wall pid live_pids
-  local running=0 load=0 held=0 settled=0 failures=0 cached=0
-  local wave_started=$SECONDS
-  for ((index = 0; index < total; index++)); do launched[index]=0; statuses[index]=-1; done
-
-  if [ "$KINU_GATES_ALL" = "1" ]; then
-    echo "Running $total gate(s) within $thread_cap threads and $rss_cap MiB of measured cost, every gate regardless of failures (--all)"
-  else
-    echo "Running $total gate(s) within $thread_cap threads and $rss_cap MiB of measured cost, stopping new launches at the first failure"
-  fi
-  local lanes=0
-  for ((index = 0; index < total; index++)); do
-    if [ "${GATE_SHARED[index]}" != "none" ]; then lanes=$((lanes + 1)); fi
-  done
-  if [ "$lanes" -gt 0 ]; then
-    echo "  $lanes of them hold a shared resource (a browser and the dev server behind it) and run one at a time"
-  fi
-  while [ "$settled" -lt "$total" ]; do
-    # Take the FIRST gate that is not launched, whose shared resource is free,
-    # and whose MEASURED cost fits what is left of both caps — or, when nothing
-    # is running, the first gate regardless of the caps, so a gate heavier than
-    # the whole cap still runs and the cap can never wedge. A plain queue
-    # pointer would stall the whole wave behind a gallery gate waiting for its
-    # turn.
-    #
-    # The RESOURCE check is not part of that bypass: it is the one admission a
-    # row cannot be let past, and with nothing running no resource is held, so
-    # it cannot wedge either.
-    while [ "$failures" -eq 0 ] || [ "$KINU_GATES_ALL" = "1" ]; do
-      pick=-1
-      for ((index = 0; index < total; index++)); do
-        if [ "${launched[index]}" -eq 1 ]; then continue; fi
-        threads="${GATE_THREADS[index]}"
-        rss="${GATE_RSS[index]}"
-        resource="${GATE_SHARED[index]}"
-        if [ "$resource" != "none" ] && [ -n "${resource_held[$resource]:-}" ]; then continue; fi
-        if [ "$running" -gt 0 ]; then
-          if [ $((load + threads)) -gt "$thread_cap" ] || [ $((held + rss)) -gt "$rss_cap" ]; then continue; fi
-        fi
-        pick=$index
-        break
-      done
-      if [ "$pick" -lt 0 ]; then break; fi
-      launched[pick]=1
-      load=$((load + GATE_THREADS[pick]))
-      held=$((held + GATE_RSS[pick]))
-      if [ "${GATE_SHARED[pick]}" != "none" ]; then resource_held["${GATE_SHARED[pick]}"]="$pick"; fi
-      # `ladder.ts --gate` runs the row under its hang detector: killed once
-      # it has written nothing for the row's bound (scripts/deadline.ts). Not
-      # a `timeout` on wall time here, which killed the CLI suite at 480 s
-      # after 484 tests had passed in 476 s (ci-0965z): slow is not hung. A
-      # child that calls setsid (a detached dev server, a daemonized browser
-      # helper) leaves the gate's process group; the run's KINU_RUN mark is
-      # what finds and ends it after the gate exits.
-      #
-      # `exec` so the tracked pid IS the gate's runner: one process fewer per
-      # gate, and the status `wait` reports below is the gate's own.
-      (
-        exec bun scripts/ladder.ts --gate "${GATE_CMDS[pick]}" > "$dir/$pick.log" 2>&1
-      ) &
-      gate_of_pid[$!]=$pick
-      started[pick]=$SECONDS
-      running=$((running + 1))
-    done
-
-    if [ "$running" -eq 0 ]; then
-      # Nothing running and nothing launchable: after a failure that is the
-      # planned end of the wave, and with nothing running every unlaunched gate
-      # fits both caps by construction, so anything else here is a scheduler
-      # defect and fails rather than looping over a queue that cannot move.
-      if [ "$failures" -ne 0 ]; then break; fi
-      echo -e "${RED}❌ $((total - settled)) gate(s) can never launch with nothing running.${NC}"
-      rm -rf "$dir"
-      exit 1
-    fi
-
-    # Bash 5.3.9, measured 2026-09-30: wait -n ignores a child already done
-    # before the call (127, no pid), while wait <pid> still returns its status.
-    # Collect those cached completions first so their resource credits cannot
-    # strand later rows. Restrict wait -n to this wave's tracked children.
-    finished=""
-    live_pids=" $(jobs -pr) "
-    live_pids="${live_pids//$'\n'/ }"
-    for pid in "${!gate_of_pid[@]}"; do
-      if [[ "$live_pids" == *" $pid "* ]]; then continue; fi
-      finished="$pid"
-      break
-    done
-    if [ -n "$finished" ]; then
-      wait "$finished"; status=$?
-    else
-      wait -n -p finished "${!gate_of_pid[@]}"; status=$?
-      if [ -z "${finished:-}" ] && [ "$status" -eq 127 ]; then
-        # Every child can finish between jobs and wait -n; its status is cached.
-        for finished in "${!gate_of_pid[@]}"; do break; done
-        wait "$finished"; status=$?
-      fi
-    fi
-    if [ -z "${finished:-}" ] || [ -z "${gate_of_pid[$finished]:-}" ]; then
-      # `wait` came back without naming a child of this wave, so the status
-      # cannot be attributed to a gate. Stop rather than credit it to one.
-      echo -e "${RED}❌ a gate wait returned no child of this wave (status $status).${NC}"
-      echo "Gate logs retained at $dir" >&2
-      exit 1
-    fi
-    index="${gate_of_pid[$finished]}"
-    unset "gate_of_pid[$finished]"
-    running=$((running - 1))
-    load=$((load - GATE_THREADS[index]))
-    held=$((held - GATE_RSS[index]))
-    if [ "${GATE_SHARED[index]}" != "none" ]; then unset "resource_held[${GATE_SHARED[index]}]"; fi
-    settled=$((settled + 1))
-    statuses[index]=$status
-    # Wall seconds since launch, on the line itself: which row a wave waits on
-    # is otherwise unanswerable once the gate dir is gone.
-    wall=$((SECONDS - started[index]))
-    if [ "$status" -eq 0 ]; then
-      # scripts/ladder.ts prints `skip  <run>  hit …` when its cache proves the
-      # gate's inputs unchanged since a green run: a reused verdict reads as one.
-      if grep -q '^skip  ' "$dir/$index.log" 2>/dev/null; then
-        cached=$((cached + 1))
-        echo -e "${GREEN}✅ ${GATE_LABELS[index]}${NC} ${wall}s (cached)"
-      else
-        echo -e "${GREEN}✅ ${GATE_LABELS[index]}${NC} ${wall}s"
-      fi
-    else
-      failures=$((failures + 1))
-      echo -e "${RED}❌ ${GATE_LABELS[index]} failed (exit $status)${NC} ${wall}s"
-    fi
-  done
-
-  if [ "$failures" -ne 0 ]; then
-    for ((index = 0; index < total; index++)); do
-      if [ "${statuses[index]}" -le 0 ]; then continue; fi
-      echo ""
-      echo -e "${BOLD}── ${GATE_LABELS[index]} ──${NC}"
-      echo "Reproduce: ${GATE_CMDS[index]}"
-      if [ -f "$dir/$index.log" ]; then
-        cat "$dir/$index.log"
-      else
-        echo "(the gate left no log file: its output went with the process)"
-      fi
-    done
-    echo ""
-    if [ "${DEPLOY_PUBLISHED:-0}" -eq 1 ]; then
-      echo -e "${RED}❌ $failures gate(s) failed AFTER publish: the build is live and this tier is red against it.${NC}"
-    else
-      echo -e "${RED}❌ $failures gate(s) failed. The build and publish steps did not start.${NC}"
-    fi
-    rm -rf "$dir"
-    exit 1
-  fi
-
-  echo "Wave done: $total gate(s), $cached cached, in $((SECONDS - wave_started))s"
-  rm -rf "$dir"
+# ONE FILE FOR THE WHOLE DEPLOY (scripts/deploy-report.ts): every red row with
+# its finding, grouped by phase, marked new or carried over from the previous
+# report of this environment, with the merges between the two deployed commits.
+# The ladder writes each red row into it; this script writes its own steps that
+# went red, the rows it could not run and why, the work it started and does not
+# wait for, and when it reached each mark. `finish` renders it, prints its path
+# and ends the deploy with its verdict.
+KINU_DEPLOY_REPORT=""
+KINU_REDS=0
+report() {
+  bun "$KINU_ROOT/scripts/deploy-report.ts" "$1" "$KINU_DEPLOY_REPORT" "${@:2}"
+}
+mark() {
+  report mark "$1" "$SECONDS"
+}
+step_red() {
+  KINU_REDS=1
+  echo -e "${RED}❌ $3${NC}"
+  report note "$1" "$2" "$3"
+}
+finish() {
+  mark end
+  report render
+  exit "$KINU_REDS"
 }
 
 echo -e "${BOLD}Kinu Deploy Pipeline${NC}"
@@ -621,7 +334,7 @@ echo "Environment:  $KINU_ENV"
 echo "Kinu root: $KINU_ROOT"
 echo "Account:      $CLOUDFLARE_ACCOUNT_ID"
 echo "Build sha:    $KINU_SHA"
-# The tiers' scripted model answers only this bearer (Step 4a); without it every
+# The tiers' scripted model answers only this bearer (Step 4b); without it every
 # post-publish tier would fail after the upload, so it is asked for before any.
 # Trimmed here, once: the Worker's secret and the key the tiers store are both
 # this exported value, so whitespace in a key file cannot split them.
@@ -636,23 +349,34 @@ if [ -n "$(git -C "$KINU_ROOT" status --porcelain 2>/dev/null)" ]; then
   echo "Commit the verified tree before deploying."
   exit 1
 fi
+if [ "$KINU_PROMOTE" = "1" ]; then KINU_MODE=promote
+elif [ "$KINU_GATES_ONLY" = "1" ]; then KINU_MODE=gates-only
+elif [ "$KINU_RESET" = "1" ]; then KINU_MODE=reset
+else KINU_MODE=deploy
+fi
+KINU_DEPLOY_REPORT="$(bun "$KINU_ROOT/scripts/deploy-report.ts" open "$KINU_ENV" "$KINU_MODE" "$KINU_SHA")" \
+  || { echo -e "${RED}❌ this deploy's report directory could not be opened, so nothing could report on it. Nothing was deployed.${NC}"; exit 1; }
+export KINU_DEPLOY_REPORT
+echo "Report:       $KINU_DEPLOY_REPORT"
 echo ""
 # Preflight FIRST — before the tool checks, before `bun install`, before any
 # gate. Its whole job is to refuse to report on a poisoned environment, so it
 # has to run before anything that could be poisoned: an exhausted $TMPDIR inode
 # table surfaces later as a 5-second timeout inside an unrelated filesystem
 # test, which reads as a code regression and is not one. It repairs nothing;
-# `--reclaim` is explicit and separate. The plan is loaded first because the
-# preflight is its first phase.
-load_plan
-run_phase preflight
+# `--reclaim` is explicit and separate. A red here ends the deploy: every later
+# verdict presumes the machine it checks.
+stop_phase preflight
+mark preflight
 
 # ── Pre-flight: verify npx + wrangler auth ───────────────────────
 if ! command -v npx >/dev/null 2>&1; then
-  echo -e "${RED}npx not found — install Node.js${NC}"
-  exit 1
+  step_red preflight "npx" "npx not found — install Node.js"
+  finish
 fi
 if ! npx wrangler whoami >/dev/null 2>&1; then
+  report note preflight "wrangler auth" "Wrangler is not authenticated, so nothing could be uploaded."
+  KINU_REDS=1
   echo -e "${RED}Wrangler is not authenticated. Nothing was deployed.${NC}"
   echo "  On your own machine:  npx wrangler login"
   echo "  In CI: set the CLOUDFLARE_API_TOKEN secret. Cloudflare dashboard →"
@@ -661,7 +385,7 @@ if ! npx wrangler whoami >/dev/null 2>&1; then
   echo "  Vectorize: Edit, scoped to account $CLOUDFLARE_ACCOUNT_ID."
   echo "  Only a person with dashboard access can mint it; this script will not"
   echo "  deploy part of the way without it."
-  exit 1
+  finish
 fi
 
 # The strict gates need the locked dependency graph, but dependency setup is
@@ -670,11 +394,11 @@ fi
 if [ ! -d "$KINU_ROOT/node_modules" ]; then
   echo "Installing Kinu dependencies (root node_modules missing)..."
   bun install --frozen-lockfile \
-    || { echo -e "${RED}bun install failed in Kinu${NC}"; exit 1; }
+    || { step_red preflight "bun install" "bun install --frozen-lockfile failed, so no gate could run."; finish; }
 fi
 
-# ── Step 1: Required pre-deploy gates ────────────────────────────
-echo -e "${BOLD}Step 1: Required pre-deploy gates${NC}"
+# ── Step 1: The upload gates ─────────────────────────────────────
+echo -e "${BOLD}Step 1: The upload gates${NC}"
 if [ "$KINU_BOOTSTRAP" = "1" ]; then
   echo -e "${BOLD}BOOTSTRAP: the pre-deploy infrastructure phase will DEFER resources this deploy creates.${NC}"
   echo "  Deferred: only what the manifest marks \`wrangler-deploy\` — Durable Object namespaces,"
@@ -687,54 +411,65 @@ fi
 
 if [ "$KINU_PROMOTE" = "1" ]; then
   # THE RECORD IS THE SOURCE GATE. Staging's deploy of HEAD wrote it after every
-  # gate, the upload and every post-deploy tier passed there, and staging must
+  # phase there passed, the plan's every gate and every tier, and staging must
   # still be serving that build. Without both, nothing is built.
   bun "$KINU_ROOT/scripts/promote.ts" check \
-    || { echo -e "${RED}❌ staging has not verified $KINU_SHA; deploy it to staging first.${NC}"; exit 1; }
-else
-  # The source wave: every gate the plan marks `source`, concurrent under the
-  # thread budget, unconditional. No environment variable may skip one; a gate
-  # that should not be here leaves the ladder, never this script.
-  run_phase source
-
-  # ALONE, and deliberately so: the hammer's SUBJECT is contention. It saturates
-  # half the machine's threads on purpose, so a gate running beside it would fail
-  # for a reason unrelated to the change under test. Its row says so.
-  run_phase hammer
+    || { step_red promote "staging's record" "staging has not verified $KINU_SHA with every phase green; deploy it to staging first."; finish; }
 fi
 
-# Alone, and last before the build. Everything above proves the SOURCE is
-# deployable; this proves the ACCOUNT is, for the environment and in the phase
-# KINU_INFRA_ENVIRONMENT and KINU_INFRA_PHASE name (`full` normally,
-# `bootstrap` under `--bootstrap`), travelling in the environment so the gate's
-# command stays one string in the plan.
-run_phase infra
+# THE ONLY GATES THAT HOLD THE UPLOAD, and the only phase besides the preflight
+# whose red ends the deploy: the account gate, which proves the ACCOUNT is
+# deployable for the environment and in the phase KINU_INFRA_ENVIRONMENT and
+# KINU_INFRA_PHASE name (`full` normally, `bootstrap` under `--bootstrap`),
+# travelling in the environment so the gate's command stays one string in the
+# plan; and the secret scan, since a credential in a published asset cannot be
+# withdrawn. Every other gate's red is recoverable on staging, so it runs after
+# the upload and gates the promotion instead.
+stop_phase upload
+mark upload
 
-# The agent tiers run AFTER the publish, in Step 4b — where first-run already
-# is. A tier whose subject is the agent on a deployed build can only measure a
-# build that exists, and the only honest one to measure is the one this deploy
-# just shipped.
-
-echo ""
-echo -e "${GREEN}All required pre-deploy gates passed.${NC}"
 if [ "$KINU_GATES_ONLY" = "1" ]; then
+  # A rehearsal of the local gates: every one to its end, then the hammer, and
+  # the report. Nothing is built, uploaded or recorded.
+  run_phase source
+  mark source
+  run_phase hammer
+  mark hammer
   echo "Gates only: stopping before the build, as asked."
-  exit 0
+  finish
 fi
 
-# ── Step 2: Build Kinu ────────────────────────────────────────
+# ── Steps 2 to 4: build, upload, and prove the deployment serves it ──
+#
+# `publish_build` returns non-zero at the first step that went red, with
+# KINU_PUBLISH_FINDING saying which and why. After that nothing that reads the
+# deployment can test this build, while every local gate still can: the deploy
+# records the step, skips only the rows that read the deployment, and runs the
+# local wave and the hammer to the end (L18).
+KINU_PUBLISH_FINDING=""
+publish_red() {
+  KINU_PUBLISH_FINDING="$1"
+  echo -e "${RED}❌ $1${NC}"
+}
+smoke_red() {
+  echo -e "${RED}❌ $1${NC}"
+  KINU_SMOKE_FINDINGS+=("$1")
+  SMOKE_FAIL=1
+}
+
+publish_build() {
 echo ""
 echo -e "${BOLD}Step 2: Building Kinu for $KINU_ENV${NC}"
 
 # A staging deploy is about to replace what staging serves for HEAD, so HEAD's
-# record goes first: until this run's tiers pass and write it again, nothing it
-# publishes, and nothing a red run of it leaves behind, can be promoted.
+# record goes first: until this run's phases all pass and write it again, nothing
+# it publishes, and nothing a red run of it leaves behind, can be promoted.
 if [ "$KINU_ENV" = "staging" ]; then
   bun "$KINU_ROOT/scripts/promote.ts" forget \
-    || { echo -e "${RED}❌ $KINU_SHA's record on staging could not be withdrawn, so this deploy will not replace what it verified${NC}"; exit 1; }
+    || { publish_red "$KINU_SHA's record on staging could not be withdrawn, so this deploy will not replace what it verified"; return 1; }
 fi
 
-cd "$KINU_ROOT/packages/cf-backend" || { echo -e "${RED}cannot cd to cf-backend${NC}"; exit 1; }
+cd "$KINU_ROOT/packages/cf-backend" || { publish_red "cannot cd to cf-backend"; return 1; }
 
 # Build the client bundle into dist/client (used by wrangler's assets directive),
 # for this deploy's environment. Production is the config's top level, so its
@@ -743,10 +478,10 @@ KINU_BUILD_ENV=()
 if [ "$KINU_ENV" = "staging" ]; then KINU_BUILD_ENV=(CLOUDFLARE_ENV=staging); fi
 if [ -f ./node_modules/.bin/vite ]; then
   echo "Running: vite build"
-  env "${KINU_BUILD_ENV[@]}" ./node_modules/.bin/vite build || { echo -e "${RED}vite build failed${NC}"; exit 1; }
+  env "${KINU_BUILD_ENV[@]}" ./node_modules/.bin/vite build || { publish_red "vite build failed"; return 1; }
 else
   echo "Running: bunx vite build"
-  env "${KINU_BUILD_ENV[@]}" bunx vite build || { echo -e "${RED}vite build failed${NC}"; exit 1; }
+  env "${KINU_BUILD_ENV[@]}" bunx vite build || { publish_red "vite build failed"; return 1; }
 fi
 
 # The Worker and origin this build is FOR, read from the config the Vite plugin
@@ -754,15 +489,15 @@ fi
 # A build of the other environment is refused before anything leaves this box.
 KINU_BUILT_CONFIG="$KINU_ROOT/packages/cf-backend/dist/kinu/wrangler.json"
 if [ ! -s "$KINU_BUILT_CONFIG" ]; then
-  echo -e "${RED}❌ Missing build output: $KINU_BUILT_CONFIG${NC}"
-  exit 1
+  publish_red "Missing build output: $KINU_BUILT_CONFIG"
+  return 1
 fi
 KINU_BUILT_ENV="$(json_field targetEnvironment < "$KINU_BUILT_CONFIG")"
 KINU_WORKER="$(json_field name < "$KINU_BUILT_CONFIG")"
 KINU_URL="$(json_field vars.CLI_PUBLIC_ORIGIN < "$KINU_BUILT_CONFIG")/"
 if [ "${KINU_BUILT_ENV:-production}" != "$KINU_ENV" ] || [ -z "$KINU_WORKER" ] || [ "$KINU_URL" = "/" ]; then
-  echo -e "${RED}❌ $KINU_BUILT_CONFIG is ${KINU_WORKER:-no Worker} for ${KINU_BUILT_ENV:-production} at '${KINU_URL%/}', not a $KINU_ENV build.${NC}"
-  exit 1
+  publish_red "$KINU_BUILT_CONFIG is ${KINU_WORKER:-no Worker} for ${KINU_BUILT_ENV:-production} at '${KINU_URL%/}', not a $KINU_ENV build."
+  return 1
 fi
 echo -e "${GREEN}✅ Built $KINU_WORKER, served at $KINU_URL${NC}"
 
@@ -780,7 +515,7 @@ if [ "$KINU_PROMOTE" = "1" ]; then
   # production's bucket: what a user downloads is what staging's tiers ran.
   echo "Adopting staging's downloads and worker release artifact"
   bun "$KINU_ROOT/scripts/promote.ts" adopt \
-    || { echo -e "${RED}❌ this build is not the one staging verified, or its downloads did not check out${NC}"; exit 1; }
+    || { publish_red "this build is not the one staging verified, or its downloads did not check out"; return 1; }
 else
   # The worker release artifact, BEFORE the CLI distribution: `build-cli-dist.sh`
   # signs every artifact it finds in the downloads directory, so writing this one
@@ -791,10 +526,10 @@ else
   # so a drift between them fails this deploy (docs/SELF-DEPLOY.md).
   echo "Building the worker release artifact ($KINU_RELEASE_VERSION)"
   bun "$KINU_ROOT/scripts/build-worker-release.ts" "$KINU_RELEASE_VERSION" "$KINU_SHA" \
-    || { echo -e "${RED}worker release artifact build failed${NC}"; exit 1; }
+    || { publish_red "worker release artifact build failed"; return 1; }
 
   echo "Building the CLI distribution"
-  bash "$KINU_ROOT/scripts/build-cli-dist.sh" || { echo -e "${RED}CLI distribution build failed${NC}"; exit 1; }
+  bash "$KINU_ROOT/scripts/build-cli-dist.sh" || { publish_red "CLI distribution build failed"; return 1; }
 fi
 
 # No deploy may ship without every CLI download asset sitting in the
@@ -807,8 +542,8 @@ done
 for file in kinu-version.json release.json "$KINU_WORKER_ARTIFACT.sha256" \
   "${KINU_CLI_ARTIFACTS[@]}" "${KINU_CLI_ARTIFACTS[@]/%/.sha256}"; do
   if [ ! -s "$KINU_ASSETS_DIR/downloads/$file" ]; then
-    echo -e "${RED}❌ Missing build output: $KINU_ASSETS_DIR/downloads/$file${NC}"
-    exit 1
+    publish_red "Missing build output: $KINU_ASSETS_DIR/downloads/$file"
+    return 1
   fi
 done
 echo -e "${GREEN}✅ CLI and worker release assets staged in $KINU_ASSETS_DIR/downloads${NC}"
@@ -821,24 +556,24 @@ echo -e "${GREEN}✅ CLI and worker release assets staged in $KINU_ASSETS_DIR/do
 # copied staging's there above.
 if [ "$KINU_PROMOTE" != "1" ]; then
   if [ ! -s "$KINU_WORKER_ARTIFACT_PATH" ]; then
-    echo -e "${RED}❌ Missing build output: $KINU_WORKER_ARTIFACT_PATH${NC}"
-    exit 1
+    publish_red "Missing build output: $KINU_WORKER_ARTIFACT_PATH"
+    return 1
   fi
   KINU_RELEASES_BUCKET="$(bun -e '
     const config = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
     process.stdout.write(config.r2_buckets?.find((bucket) => bucket.binding === "RELEASES_BUCKET")?.bucket_name ?? "");
   ' "$KINU_BUILT_CONFIG")"
   if [ -z "$KINU_RELEASES_BUCKET" ]; then
-    echo -e "${RED}❌ $KINU_BUILT_CONFIG binds no RELEASES_BUCKET${NC}"
-    exit 1
+    publish_red "$KINU_BUILT_CONFIG binds no RELEASES_BUCKET"
+    return 1
   fi
   echo "Publishing $KINU_WORKER_ARTIFACT to r2://$KINU_RELEASES_BUCKET"
   npx wrangler r2 object put "$KINU_RELEASES_BUCKET/$KINU_WORKER_ARTIFACT" \
     --file "$KINU_WORKER_ARTIFACT_PATH" --content-type application/gzip --remote \
-    || { echo -e "${RED}❌ uploading the worker release artifact failed${NC}"; exit 1; }
+    || { publish_red "uploading the worker release artifact failed"; return 1; }
   npx wrangler r2 object put "$KINU_RELEASES_BUCKET/$KINU_WORKER_ARTIFACT.sha256" \
     --file "$KINU_ASSETS_DIR/downloads/$KINU_WORKER_ARTIFACT.sha256" --content-type text/plain --remote \
-    || { echo -e "${RED}❌ uploading the worker release checksum failed${NC}"; exit 1; }
+    || { publish_red "uploading the worker release checksum failed"; return 1; }
   echo -e "${GREEN}✅ Worker release artifact published to R2${NC}"
 fi
 
@@ -851,7 +586,7 @@ if [ "$KINU_RESET" = "1" ]; then
   echo -e "${BOLD}Step 2b: Resetting $KINU_WORKER${NC}"
   KINU_RESET_RECORD="$(mktemp -t kinu-reset.XXXXXX.json)"
   bun "$KINU_ROOT/scripts/reset.ts" wipe "$KINU_ENV" "$KINU_RESET_RECORD" \
-    || { echo -e "${RED}❌ the reset failed; its lines above say what it deleted before it stopped${NC}"; exit 1; }
+    || { publish_red "the reset failed; its lines in the deploy's output say what it deleted before it stopped"; return 1; }
   KINU_RECORD_ARGS=("$KINU_RESET_RECORD")
 fi
 
@@ -868,22 +603,21 @@ if npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}" 2>&1 | tee "$KINU_DEPLOY_LOG";
   echo -e "${GREEN}Kinu deploy succeeded.${NC}"
 else
   echo ""
-  echo -e "${RED}Kinu deploy failed — see log above.${NC}"
-  exit 1
+  publish_red "wrangler deploy failed; its log is $KINU_DEPLOY_LOG"
+  return 1
 fi
 
 KINU_VERSION="$(grep -oE 'Version ID:[[:space:]]*[a-f0-9-]+' "$KINU_DEPLOY_LOG" | head -1 | awk '{print $NF}')"
 
-# Verify wrangler echoed the Sandbox binding (proves @cloudflare/sandbox is wired).
-# Binding name is "Sandbox" (capital S) — the SDK hardcodes env.Sandbox lookup.
-if grep -qE 'KinuSandbox' "$KINU_DEPLOY_LOG"; then
-  echo -e "${GREEN}✅ Kinu bound Sandbox (KinuSandbox DO + Container)${NC}"
+# Verify wrangler echoed the workspace container's binding.
+if grep -qE 'KinuDevbox' "$KINU_DEPLOY_LOG"; then
+  echo -e "${GREEN}✅ Kinu bound KinuDevbox (Durable Object + container)${NC}"
 else
-  echo -e "${RED}❌ wrangler output did not mention the Sandbox binding${NC}"
+  publish_red "wrangler output did not mention the KinuDevbox binding"
   echo "   Check that packages/cf-backend/wrangler.jsonc includes:"
-  echo "     { \"class_name\": \"KinuSandbox\", \"name\": \"Sandbox\" }"
+  echo "     { \"class_name\": \"KinuDevbox\", \"name\": \"KinuDevbox\" }"
   echo "   and a \"containers\" block."
-  exit 1
+  return 1
 fi
 
 # Wrangler names the assets directory it actually read. Assert it is the one we
@@ -893,14 +627,14 @@ DEPLOYED_ASSETS_DIR="$(grep -oE 'Read [0-9]+ files from the assets directory .*'
 if [ "$DEPLOYED_ASSETS_DIR" = "$KINU_ASSETS_DIR" ]; then
   echo -e "${GREEN}✅ Wrangler published assets from $KINU_ASSETS_DIR${NC}"
 else
-  echo -e "${RED}❌ Wrangler published assets from '${DEPLOYED_ASSETS_DIR:-<not reported>}'${NC}"
+  publish_red "Wrangler published assets from '${DEPLOYED_ASSETS_DIR:-<not reported>}', not $KINU_ASSETS_DIR"
   echo "   Expected: $KINU_ASSETS_DIR (the directory the CLI downloads were staged into)."
   echo "   Reconcile packages/cf-backend/wrangler.jsonc, the vite plugin's"
   echo "   .wrangler/deploy/config.json redirect, and this script's header."
-  exit 1
+  return 1
 fi
 
-cd "$KINU_ROOT" || exit 1
+cd "$KINU_ROOT" || { publish_red "cannot cd to $KINU_ROOT"; return 1; }
 
 # ── Step 4: Post-deploy smoke test ───────────────────────────────
 echo ""
@@ -909,14 +643,14 @@ echo "Waiting 10s for deployments to propagate..."
 sleep 10
 
 SMOKE_FAIL=0
+KINU_SMOKE_FINDINGS=()
 
 # The deployment's own route.
 LIVE_STATUS=$(curl -so /dev/null -w '%{http_code}' --max-time 15 "$KINU_URL" 2>/dev/null || echo "000")
 if [ "$LIVE_STATUS" = "200" ]; then
   echo -e "${GREEN}✅ Kinu live site returns 200${NC} ($KINU_URL)"
 else
-  echo -e "${RED}❌ Kinu live site returns $LIVE_STATUS${NC} ($KINU_URL)"
-  SMOKE_FAIL=1
+  smoke_red "Kinu live site returns $LIVE_STATUS ($KINU_URL)"
 fi
 
 if [ "$LIVE_STATUS" = "200" ]; then
@@ -925,8 +659,7 @@ if [ "$LIVE_STATUS" = "200" ]; then
     && grep -q '<script type="module"' <<< "$LIVE_HTML"; then
     echo -e "${GREEN}✅ Kinu live site serves the application shell${NC}"
   else
-    echo -e "${RED}❌ Kinu live site returned 200 without the application shell${NC}"
-    SMOKE_FAIL=1
+    smoke_red "Kinu live site returned 200 without the application shell"
   fi
 fi
 
@@ -946,9 +679,8 @@ done
 if [ "$HEALTH_SHA" = "$KINU_SHA" ]; then
   echo -e "${GREEN}✅ /api/health reports the deployed build ($KINU_SHA)${NC}"
 else
-  echo -e "${RED}❌ /api/health build stamp is '${HEALTH_SHA:-<none>}', expected '$KINU_SHA'${NC}"
+  smoke_red "/api/health build stamp is '${HEALTH_SHA:-<none>}', expected '$KINU_SHA'"
   echo "   Body: ${HEALTH_JSON:0:200}"
-  SMOKE_FAIL=1
 fi
 
 # The §0 regression: this asset once came back as the SPA shell wearing an
@@ -962,8 +694,7 @@ done
 if [ "$VERSION_SHA" = "$KINU_SHA" ]; then
   echo -e "${GREEN}✅ Published kinu-version.json is real JSON for this build${NC}"
 else
-  echo -e "${RED}❌ Published kinu-version.json sha is '${VERSION_SHA:-<unparseable>}', expected '$KINU_SHA'${NC}"
-  SMOKE_FAIL=1
+  smoke_red "Published kinu-version.json sha is '${VERSION_SHA:-<unparseable>}', expected '$KINU_SHA'"
 fi
 
 # The self-deploy channel. Same SPA-shell hazard as the stamp above, and worse
@@ -983,16 +714,14 @@ if [ "$RELEASE_SHA" = "$KINU_SHA" ] && [ -n "$RELEASE_ARTIFACT_SHA" ] \
   && [ "$RELEASE_ARTIFACT_SHA" = "$SIGNED_ARTIFACT_SHA" ] && [ "$ARTIFACT_STATUS" = "200" ]; then
   echo -e "${GREEN}✅ release.json names this build, the artifact route answers, and its checksum is the signed one${NC}"
 else
-  echo -e "${RED}❌ release.json sha is '${RELEASE_SHA:-<unparseable>}' (expected '$KINU_SHA'); worker artifact checksum '${RELEASE_ARTIFACT_SHA:-<none>}' vs signed '${SIGNED_ARTIFACT_SHA:-<none>}'; artifact route answered ${ARTIFACT_STATUS:-<none>}${NC}"
-  SMOKE_FAIL=1
+  smoke_red "release.json sha is '${RELEASE_SHA:-<unparseable>}' (expected '$KINU_SHA'); worker artifact checksum '${RELEASE_ARTIFACT_SHA:-<none>}' vs signed '${SIGNED_ARTIFACT_SHA:-<none>}'; artifact route answered ${ARTIFACT_STATUS:-<none>}"
 fi
 
 CLI_SHIM=$(curl -s --max-time 15 "${KINU_URL}downloads/kinu" 2>/dev/null)
 if echo "$CLI_SHIM" | grep -q 'downloads/kinu-cli-' && ! echo "$CLI_SHIM" | grep -q 'github.com'; then
   echo -e "${GREEN}✅ Kinu CLI launcher uses the deployed build artifacts${NC}"
 else
-  echo -e "${RED}❌ Kinu CLI launcher is not using the deployed build artifacts${NC}"
-  SMOKE_FAIL=1
+  smoke_red "Kinu CLI launcher is not using the deployed build artifacts"
 fi
 
 # Every artifact the launcher can ask for, downloaded and hashed the way the
@@ -1016,8 +745,7 @@ for artifact in "${KINU_CLI_ARTIFACTS[@]}"; do
     [ "$attempt" = "6" ] || sleep 5
   done
   if [ "$CLI_ARTIFACT_OK" != "1" ]; then
-    echo -e "${RED}❌ $artifact is missing, unreadable, or carries no $MEMBER${NC}"
-    SMOKE_FAIL=1
+    smoke_red "$artifact is missing, unreadable, or carries no $MEMBER"
     continue
   fi
   PUBLISHED_SHA="$(curl -fsSL --max-time 15 "${KINU_URL}downloads/$artifact.sha256" 2>/dev/null | awk '{print $1}')"
@@ -1025,8 +753,7 @@ for artifact in "${KINU_CLI_ARTIFACTS[@]}"; do
   if [ -n "$PUBLISHED_SHA" ] && [ "$PUBLISHED_SHA" = "$ACTUAL_SHA" ]; then
     echo -e "${GREEN}✅ $artifact downloads and matches its published .sha256${NC}"
   else
-    echo -e "${RED}❌ $artifact checksum is missing or does not match the download${NC}"
-    SMOKE_FAIL=1
+    smoke_red "$artifact checksum is missing or does not match the download"
   fi
 done
 rm -f "$CLI_ARTIFACT_TMP" "$CLI_ARTIFACT_LIST"
@@ -1038,17 +765,41 @@ rm -f "$CLI_ARTIFACT_TMP" "$CLI_ARTIFACT_LIST"
 if bun scripts/edge-settled.ts "$KINU_ENV"; then
   echo -e "${GREEN}✅ Every name $KINU_WORKER serves answers over verified TLS${NC}"
 else
-  echo -e "${RED}❌ A name $KINU_WORKER serves never answered over verified TLS; the lines above name it${NC}"
-  SMOKE_FAIL=1
+  smoke_red "A name $KINU_WORKER serves never answered over verified TLS; the lines above name it"
 fi
 
 if [ "$SMOKE_FAIL" -ne 0 ]; then
   echo ""
-  echo -e "${RED}Smoke test failed.${NC}"
-  exit 1
+  publish_red "the smoke test failed: $(IFS=';'; printf '%s' "${KINU_SMOKE_FINDINGS[*]}")"
+  return 1
+fi
+}
+
+KINU_SERVING=0
+if publish_build; then
+  KINU_SERVING=1
+  mark live
+else
+  KINU_REDS=1
+  report note publish "build, upload and smoke" "$KINU_PUBLISH_FINDING"
+fi
+cd "$KINU_ROOT" || { step_red publish "the checkout" "cannot cd to $KINU_ROOT"; finish; }
+
+# ── Step 4a: eval-service's provider keys, after a reset ─────────────────
+#
+# A reset deleted every Durable Object, eval-service's provider credentials
+# with them, so the eval pass would find no model. Before the tiers and the
+# evals, scripts/eval-provider-keys.ts stores each key from the operator's
+# ~/.config/kinu/eval-provider-keys.json again through the product's own route,
+# as eval-service, and checks the deployment lists every eval model. It prints
+# no key; whatever is missing is a finding in the report, not a stop.
+if [ "$KINU_RESET" = "1" ] && [ "$KINU_SERVING" = "1" ]; then
+  echo ""
+  echo -e "${BOLD}Step 4a: Storing eval-service's provider keys after the reset${NC}"
+  bun "$KINU_ROOT/scripts/eval-provider-keys.ts" "${KINU_URL%/}" || KINU_REDS=1
 fi
 
-# ── Step 4a: The tiers' scripted model ────────────────────────────────────
+# ── Step 4b: The tiers' scripted model ────────────────────────────────────
 #
 # The product tiers below check the product, not a model's choices: their
 # workspaces run on the scripted model (scripts/tier-model.ts), served by its own
@@ -1071,16 +822,28 @@ fi
 # holds: uploaded with it as SCRIPTED_MODEL_KEY through a 0600 file this step
 # removes, never on an argv or in the log, and stored by the tiers as the
 # scripted account's API key.
-echo ""
-echo -e "${BOLD}Step 4a: Publishing the tiers' scripted model${NC}"
-KINU_SCRIPTED_SECRETS="$(umask 077 && mktemp -t kinu-scripted-secrets.XXXXXX.json)"
-bun -e 'require("fs").writeFileSync(process.argv[1], JSON.stringify({ SCRIPTED_MODEL_KEY: process.env.KINU_SCRIPTED_MODEL_KEY }))' "$KINU_SCRIPTED_SECRETS"
-bunx wrangler deploy -c scripts/scripted-model-worker.jsonc --secrets-file "$KINU_SCRIPTED_SECRETS"
-KINU_SCRIPTED_PUBLISHED=$?
-rm -f "$KINU_SCRIPTED_SECRETS"
-[ "$KINU_SCRIPTED_PUBLISHED" = "0" ] || { echo -e "${RED}❌ publishing the scripted model Worker failed${NC}"; exit 1; }
+#
+# The rows that read the deployment run only against a deployment serving this
+# build, on the model their assertions were written against: KINU_TIERS_WHY
+# says why not, and those rows are then named in the report as not run.
+KINU_TIERS_WHY=""
+if [ "$KINU_SERVING" != "1" ]; then
+  KINU_TIERS_WHY="$KINU_ENV does not serve this build: $KINU_PUBLISH_FINDING"
+else
+  echo ""
+  echo -e "${BOLD}Step 4b: Publishing the tiers' scripted model${NC}"
+  KINU_SCRIPTED_SECRETS="$(umask 077 && mktemp -t kinu-scripted-secrets.XXXXXX.json)"
+  bun -e 'require("fs").writeFileSync(process.argv[1], JSON.stringify({ SCRIPTED_MODEL_KEY: process.env.KINU_SCRIPTED_MODEL_KEY }))' "$KINU_SCRIPTED_SECRETS"
+  bunx wrangler deploy -c scripts/scripted-model-worker.jsonc --secrets-file "$KINU_SCRIPTED_SECRETS"
+  KINU_SCRIPTED_PUBLISHED=$?
+  rm -f "$KINU_SCRIPTED_SECRETS"
+  if [ "$KINU_SCRIPTED_PUBLISHED" != "0" ]; then
+    step_red publish "the tiers' scripted model" "publishing the scripted model Worker failed"
+    KINU_TIERS_WHY="the tiers' scripted model Worker did not publish"
+  fi
+fi
 
-# ── Step 4b: The post-publish tiers ─────────────────────────────────────────
+# ── Step 4c: The tiers against the deployment, beside every local gate ──────
 #
 # AGAINST THE DEPLOYMENT THIS RUN PUBLISHED, every deploy: staging's, and
 # production's again when a build is promoted. It acts as the eval service
@@ -1090,8 +853,8 @@ rm -f "$KINU_SCRIPTED_SECRETS"
 # (control-plane/admin-caller.ts). Every workspace a case creates carries the
 # eval prefix and is torn down by the run.
 #
-# WHY IT EXISTS. Every gate above this line ran BEFORE the upload, on this tree,
-# over inputs their authors wrote. The owner found product defects by hand that
+# WHY IT EXISTS. Every local gate runs on this tree, over inputs its author
+# wrote. The owner found product defects by hand that
 # those gates never touched — a crafted tool that would not run, an Approve
 # button that re-ticked every box, two machines flapping on one slot, Enter not
 # sending in the TUI, and on 2026-09-10 every workspace open failing on a query
@@ -1101,7 +864,7 @@ rm -f "$KINU_SCRIPTED_SECRETS"
 # it four times in one day. It is unconditional now.
 #
 # So this tier drives the DEPLOYED product the way a person does: a fresh
-# workspace per case over the public REST, the scripted model (Step 4a) on the
+# workspace per case over the public REST, the scripted model (Step 4b) on the
 # deployment's own provider path, a real click in Chrome, two real daemons, real
 # pty bytes. One case per defect, hard assertions only, red on any of them.
 #
@@ -1109,19 +872,38 @@ rm -f "$KINU_SCRIPTED_SECRETS"
 # did the deploy land at all. Running this against an origin that is not serving
 # would report six product failures for one deployment failure.
 #
-# ONE WAVE, every gate the plan marks `post-publish`: their rows say why each
-# stays clear of the source wave (all drive the account as the same identity
-# `gate:infra` authenticates with — real machines, a real browser, live model
-# turns). They share a wave because they measure the same thing — the build
-# that just shipped — and none perturbs what another asserts. A red here is a
-# red on what that deployment serves NOW, and the runner says so.
+# ONE WAVE WITH THE SOURCE GATES, on staging: every gate the plan marks
+# `post-publish` and every gate it marks `source`, admitted together by the
+# ladder's wave. The tiers mostly wait on the network and start first; the local
+# gates fill the box beside them under its measured caps; a tier's Chrome takes
+# its own lane (`deployment-browser`), apart from the local browser rows'. Each
+# runs to its end whatever the other side does, so the report holds every red of
+# both (L18). A promotion runs only the tiers, against production.
 #
 # The tiers take the deployment from these two, and its secret from the
 # variable `evalWebIdentityEnv` names for its origin
 # (packages/test-utils/src/eval-identity.ts): each deployment has its own.
 export KINU_EVAL_ORIGIN="${KINU_URL%/}"
 export KINU_ORIGIN="${KINU_URL%/}"
-run_phase post-publish
+if [ "$KINU_PROMOTE" = "1" ]; then
+  if [ -z "$KINU_TIERS_WHY" ]; then run_phase post-publish; else skip_phase post-publish "$KINU_TIERS_WHY"; fi
+  mark tiers
+else
+  if [ -z "$KINU_TIERS_WHY" ]; then
+    run_phase post-publish,source
+  else
+    skip_phase post-publish "$KINU_TIERS_WHY"
+    run_phase source
+  fi
+  mark wave
+
+  # ALONE, and last: the hammer's SUBJECT is contention. It saturates half the
+  # machine's threads on purpose, so a gate running beside it would fail for a
+  # reason unrelated to the change under test. Its row says so. It runs whatever
+  # the wave did: its verdict is part of what production's promotion needs.
+  run_phase hammer
+  mark hammer
+fi
 
 # ── Step 5: Post-deploy infrastructure verification ──────────────
 #
@@ -1141,26 +923,28 @@ run_phase post-publish
 # the bindings it already had, and a namespace the new version declares while the
 # account never created it throws on the FIRST request down its own path, which
 # no public route touches.
-echo ""
-echo -e "${BOLD}Step 5: Post-deploy infrastructure verification${NC}"
-if bun scripts/infra-verify.ts --phase=post-deploy; then
-  echo -e "${GREEN}✅ Every declared resource exists and is bound${NC}"
-else
+#
+# Whenever the upload happened, whatever the smoke test said: the version is
+# live either way, and a red here is a red of the deploy, which then writes no
+# record.
+if [ "${DEPLOY_PUBLISHED:-0}" = "1" ]; then
   echo ""
-  echo -e "${RED}❌ Post-deploy infrastructure verification failed for $KINU_ENV.${NC}"
-  echo "   The Worker uploaded and the smoke test passed, and a resource the deployed version"
-  echo "   declares is not in this account. The findings above name each one. Whatever the"
-  echo "   public route answers, this deployment is not good."
-  exit 1
+  echo -e "${BOLD}Step 5: Post-deploy infrastructure verification${NC}"
+  if bun scripts/infra-verify.ts --phase=post-deploy; then
+    echo -e "${GREEN}✅ Every declared resource exists and is bound${NC}"
+  else
+    echo ""
+    step_red publish "post-deploy infrastructure" "a resource the version $KINU_ENV serves declares is not in its account; the verification's findings in the deploy's output name each one"
+  fi
 fi
 
 # ── Step 6: The record, or the history and the evals ─────────────
 #
-# ON STAGING, THE RECORD: every step above passed for this commit, so promotion
-# may take it (scripts/promote.ts). It lists every download this run published
-# by its hash, and promotion takes those bytes and no others. Written last, so a
-# red anywhere above leaves none, and a record that could not be written fails
-# the deploy: without it this build can never be promoted.
+# ON STAGING, THE RECORD: every phase and step above passed for this commit, so
+# promotion may take it (scripts/promote.ts). It lists every download this run
+# published by its hash, and promotion takes those bytes and no others. Written
+# last and only on a deploy with no red anywhere, and a record that could not be
+# written is a red of its own: without it this build can never be promoted.
 #
 # ON PRODUCTION, THE HISTORY: the build it took, which a later rollback may
 # return to. Then the evals: .github/workflows/evals.yml runs every eval task
@@ -1169,13 +953,19 @@ fi
 # unpushed commit cannot be measured. Non-blocking: the deploy is done whatever
 # this prints.
 echo ""
-if [ "$KINU_ENV" = "staging" ]; then
+if [ "$KINU_REDS" != "0" ] && [ "$KINU_ENV" = "staging" ]; then
+  echo -e "${RED}❌ This deploy has a red, so no record is written: $KINU_SHA cannot be promoted.${NC}"
+  finish
+elif [ "$KINU_REDS" != "0" ]; then
+  echo -e "${RED}❌ This promotion has a red, so production's history does not take $KINU_SHA.${NC}"
+  finish
+elif [ "$KINU_ENV" = "staging" ]; then
   echo -e "${BOLD}Step 6: Recording $KINU_SHA as verified on staging${NC}"
   bun "$KINU_ROOT/scripts/promote.ts" record "${KINU_VERSION:-unknown}" "${KINU_RECORD_ARGS[@]}" \
-    || { echo -e "${RED}❌ the record was not written, so this build cannot be promoted${NC}"; exit 1; }
+    || { step_red record "the record" "the record was not written, so this build cannot be promoted"; finish; }
 elif ! bun "$KINU_ROOT/scripts/promote.ts" promoted "${KINU_VERSION:-}" "${KINU_RECORD_ARGS[@]}"; then
-  echo -e "${RED}❌ production serves $KINU_SHA, and its history does not hold it, so no rollback can return to it${NC}"
-  exit 1
+  step_red record "production's history" "production serves $KINU_SHA, and its history does not hold it, so no rollback can return to it"
+  finish
 elif ! command -v gh >/dev/null 2>&1; then
   echo "⚠ Evals not dispatched: gh is not installed. Once build $KINU_SHA is on GitHub: gh workflow run evals.yml"
 elif ! gh api "repos/{owner}/{repo}/commits/$KINU_SHA" --silent >/dev/null 2>&1; then
@@ -1200,3 +990,4 @@ if [ "$KINU_ENV" = "staging" ]; then
 else
   echo "Return production to the build it took before with: bun run deploy --rollback"
 fi
+finish

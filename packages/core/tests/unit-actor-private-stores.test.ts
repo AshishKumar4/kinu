@@ -404,8 +404,7 @@ describe('two actors, one database: the search ledger', () => {
     a.converge('search-b', 0, 2_000);
     a.fail('search-b', 0, 2_000);
     a.supersede('search-b', 2_000);
-    expect(b.get('search-b')?.status).toBe('running');
-    expect(b.get('search-b')?.epoch).toBe(0);
+    expect(b.list().find((run) => run.rootId === 'search-b')).toMatchObject({ status: 'running', epoch: 0 });
     w.close();
   });
 
@@ -418,7 +417,7 @@ describe('two actors, one database: the search ledger', () => {
     b.begin({ rootId: 'swarm-b', task: 'x', config, now: 1_000 });
 
     expect(a.closeUnclaimed(new Set(), 5_000)).toEqual(['swarm-a']);
-    expect(b.get('swarm-b')?.status).toBe('running');
+    expect(b.list().find((run) => run.rootId === 'swarm-b')?.status).toBe('running');
     w.close();
   });
 });

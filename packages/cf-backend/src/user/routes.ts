@@ -5,6 +5,8 @@ import { ROSTER_SOCKET_PATH } from './roster';
 import { pictureKey, type PictureBucket } from '../slates/pictures';
 import { SlateDirectoryName } from '@kinu.run/core/slates';
 import { PROFILE_CATALOG_CONFIG_KEY } from '@kinu.run/core';
+import { BOX_SIZE_ORDER } from '@kinu.run/devbox/sizes';
+import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from '../sandbox-size';
 import { DEVICE_TIERS, JsonValueSchema } from '@kinu.run/core';
 import { diagnostics, authoredRefusal, toKinuError } from '@kinu.run/core/obs';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '@kinu.run/core';
@@ -440,6 +442,11 @@ userRoutes.put('/api/user/config/:key', async (c) => {
   const body = await safeJson(c.req.raw, v.object({ value: v.string() }));
 
   if (!body) return err(400, 'value (string) required');
+
+  if (c.get('key') === SANDBOX_SIZE_CONFIG_KEY && accountSandboxSize(body.value) === null) {
+    return err(400, `${SANDBOX_SIZE_CONFIG_KEY} must be one of ${BOX_SIZE_ORDER.join(', ')}.`);
+  }
+
   await c.get('stub').setConfig(c.get('owner'), c.get('key'), body.value);
 
   return json({ body: { ok: true } });
