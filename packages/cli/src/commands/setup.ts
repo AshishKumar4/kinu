@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settle } from '@kinu.run/core/obs';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@kinu.run/core';
 import { stripProvider } from '@kinu.run/cli-backend';
 import { loadConfigFile } from '../config';
@@ -34,28 +36,30 @@ export function connectOptions(opts: {
   return opts.model === undefined ? withOrigin : { ...withOrigin, model: opts.model };
 }
 
-export async function connectProviderOnConsole(
+export function connectProviderOnConsole(
   id: ProviderConnectId,
   opts: Parameters<typeof connectProvider>[2] = {},
 ): Promise<ProviderConnectOutcome> {
-  const descriptor = PROVIDER_CONNECTORS.find((candidate) => candidate.id === id);
+  return settle(Effect.gen(function* () {
+    const descriptor = PROVIDER_CONNECTORS.find((candidate) => candidate.id === id);
 
-  if (descriptor === undefined) throw new Error(`Unknown provider: ${id}`);
-  console.log('');
-  console.log(ACCENT(descriptor.label));
-  console.log(DIM(descriptor.blurb));
-  const outcome = await connectProvider(id, consoleProviderPort(), opts);
+    if (descriptor === undefined) return yield* Effect.die(new Error(`Unknown provider: ${id}`));
+    console.log('');
+    console.log(ACCENT(descriptor.label));
+    console.log(DIM(descriptor.blurb));
+    const outcome = yield* Effect.promise(async () => connectProvider(id, consoleProviderPort(), opts));
 
-  if (outcome.kind === 'connected') {
-    console.log(`${OK('✓')} ${outcome.summary}`);
+    if (outcome.kind === 'connected') {
+      console.log(`${OK('✓')} ${outcome.summary}`);
 
-    if (outcome.detail !== undefined) console.log(DIM(outcome.detail));
-  } else {
-    console.log(`${WARN('!')} ${outcome.reason}`);
-    console.log(DIM(outcome.hint));
-  }
+      if (outcome.detail !== undefined) console.log(DIM(outcome.detail));
+    } else {
+      console.log(`${WARN('!')} ${outcome.reason}`);
+      console.log(DIM(outcome.hint));
+    }
 
-  return outcome;
+    return outcome;
+  }));
 }
 
 interface SetupPreflightContext {

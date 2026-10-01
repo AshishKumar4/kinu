@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 import {
   ADVISOR_SEVERITIES,
@@ -17,7 +18,7 @@ import {
   type StagedSkillResult,
   type ModelTestResult,
 } from '@kinu.run/core';
-import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
+import { renderThrownChain, tolerate, settle } from '@kinu.run/core/obs';
 import {
   AlternateTakeCandidateSchema, CheckpointAvailabilitySchema, FileCheckpointEntrySchema, FileRestorePlanSchema,
   FileRestoreResultSchema, type FileCheckpointListing, type PlanReviewResult, type WorkspaceSpend,
@@ -481,15 +482,17 @@ export class CloudAgentClient implements AgentClient {
     });
   }
 
-  async fork(point: ForkPoint): Promise<AgentForkResult> {
-    if (this.activeTurns.size > 0) throw new Error('Cannot fork while a turn is running.');
-    const rows = await this.history();
-    const pivotRow = rows[findForkPivot(rows, point)];
+  fork(point: ForkPoint): Promise<AgentForkResult> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (this.activeTurns.size > 0) return yield* Effect.die(new Error('Cannot fork while a turn is running.'));
+      const rows = yield* Effect.promise(async () => this.history());
+      const pivotRow = rows[findForkPivot(rows, point)];
 
-    if (pivotRow === undefined) throw new Error("Could not locate that message in the agent's chat history.");
-    await this.callRpc('revertConversation', [pivotRow.id]);
+      if (pivotRow === undefined) return yield* Effect.die(new Error("Could not locate that message in the agent's chat history."));
+      yield* Effect.promise(async () => this.callRpc('revertConversation', [pivotRow.id]));
 
-    return { client: this, label: `before ${pivotRow.id}` };
+      return { client: this, label: `before ${pivotRow.id}` };
+    }));
   }
 
   /** For surfaces that must not force a websocket open; live-session ops use callRpc. */
@@ -823,15 +826,17 @@ export class CloudAgentClient implements AgentClient {
     return await this.callHttp('setEvolutionConfig', EvolutionConfigSchema, [decodeJsonValue({ value: view })]);
   }
 
-  async listModels(): Promise<AgentModelMenu> {
-    const menu = await listCloudAvailableModels(this.origin, this.token);
+  listModels(): Promise<AgentModelMenu> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const menu = yield* Effect.promise(async () => listCloudAvailableModels(this.origin, this.token));
 
-    // Only an empty menu with no failures is an error; provider failures are reported to the picker.
-    if (menu.models.length === 0 && menu.failures.length === 0) {
-      throw new Error('No cloud models are available.');
-    }
+      // Only an empty menu with no failures is an error; provider failures are reported to the picker.
+      if (menu.models.length === 0 && menu.failures.length === 0) {
+        return yield* Effect.die(new Error('No cloud models are available.'));
+      }
 
-    return menu;
+      return menu;
+    }));
   }
 
   async testModel(spec: string, signal: AbortSignal): Promise<ModelTestResult> {
@@ -917,19 +922,19 @@ export class CloudAgentClient implements AgentClient {
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error('Timed out connecting to cloud workspace.')), 15_000);
 
-      const settle = (outcome: () => void): void => {
+      const finish = (outcome: () => void): void => {
         clearTimeout(timeout);
         outcome();
       };
 
       ws.addEventListener('open', () => {
-        settle(resolve);
+        finish(resolve);
       }, { once: true });
       ws.addEventListener('error', () => {
-        settle(() => reject(new Error('Could not connect to cloud agent.')));
+        finish(() => reject(new Error('Could not connect to cloud agent.')));
       }, { once: true });
       ws.addEventListener('close', () => {
-        settle(() => reject(new Error('Cloud workspace connection closed before it opened.')));
+        finish(() => reject(new Error('Cloud workspace connection closed before it opened.')));
       }, { once: true });
     });
 

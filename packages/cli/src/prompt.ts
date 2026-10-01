@@ -2,6 +2,8 @@
  * Prompt input via blocking canonical-mode reads on the terminal fd; never readline or raw mode: macOS kqueue cannot
  * poll /dev/tty, so under `kinu setup </dev/tty` keys never arrive. No terminal raises NonInteractiveError.
  */
+import { Effect } from 'effect';
+import { settleSync } from '@kinu.run/core/obs';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { closeSync, openSync, readSync } from 'node:fs';
@@ -43,8 +45,11 @@ export function canPrompt(): boolean {
 
 /** opentui cannot reopen /dev/tty; refuse instead of a frozen screen. */
 export function requireInteractiveTerminal(): void {
-  if (process.stdin.isTTY && process.stdout.isTTY) return;
-  throw new Error('The Kinu TUI needs an interactive terminal. Re-run from a terminal, or use kinu run/exec (or chat --classic).');
+  return settleSync(Effect.gen(function* () {
+    if (process.stdin.isTTY && process.stdout.isTTY) return;
+
+    return yield* Effect.die(new Error('The Kinu TUI needs an interactive terminal. Re-run from a terminal, or use kinu run/exec (or chat --classic).'));
+  }));
 }
 
 /** opentui's handlers free only the renderer; the TUI ends itself on these. */

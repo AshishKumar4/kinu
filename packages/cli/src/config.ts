@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import {
   chmodSync, existsSync, readFileSync, mkdirSync, readdirSync, realpathSync, statSync,
   writeFileSync, unlinkSync,
@@ -21,7 +22,7 @@ import {
   type ProfileCatalogEnvelope,
   shellQuote,
 } from '@kinu.run/core';
-import { tolerate } from '@kinu.run/core/obs';
+import { tolerate, settle, settleSync } from '@kinu.run/core/obs';
 import {
   makeSql, CLOUD_PROXY_PROVIDER_IDS,
   cloudProxyBaseURL,
@@ -353,35 +354,37 @@ interface AdoptUnplacedAgentOptions {
 }
 
 /** Binds one named workspace, keyed on its own identity, so nothing sweeps every unplaced directory. Placed refs return unchanged. */
-export async function adoptUnplacedLocalAgent(name: string, opts: AdoptUnplacedAgentOptions = {}): Promise<LocalAgentRef> {
-  const dbPath = agentDbPath(name);
+export function adoptUnplacedLocalAgent(name: string, opts: AdoptUnplacedAgentOptions = {}): Promise<LocalAgentRef> {
+  return settle(Effect.gen(function* () {
+    const dbPath = agentDbPath(name);
 
-  if (!existsSync(dbPath)) {
-    throw new Error(`Workspace "${name}" not found at ${dbPath}.`);
-  }
+    if (!existsSync(dbPath)) {
+      return yield* Effect.die(new Error(`Workspace "${name}" not found at ${dbPath}.`));
+    }
 
-  const existing = loadConfigFile().agents?.[name];
+    const existing = loadConfigFile().agents?.[name];
 
-  if (existing && existing.mode !== 'local') {
-    throw new Error(`"${name}" is already configured as a cloud workspace.`);
-  }
+    if (existing && existing.mode !== 'local') {
+      return yield* Effect.die(new Error(`"${name}" is already configured as a cloud workspace.`));
+    }
 
-  const already = existing ? placedRef(existing) : null;
+    const already = existing ? placedRef(existing) : null;
 
-  if (already) return already;
-  const cwd = canonicalProjectRoot(opts.cwd);
-  const workspaceId = opts.workspaceId ?? defaultVirtualWorkspaceId(cwd);
-  await upsertAgentConfig({
-    ...existing,
-    name,
-    mode: 'local',
-    localName: name,
-    cwd,
-    workspaceId,
-    identityId: readWorkspaceIdentityId(dbPath) ?? undefined,
-  });
+    if (already) return already;
+    const cwd = canonicalProjectRoot(opts.cwd);
+    const workspaceId = opts.workspaceId ?? defaultVirtualWorkspaceId(cwd);
+    yield* Effect.promise(async () => upsertAgentConfig({
+      ...existing,
+      name,
+      mode: 'local',
+      localName: name,
+      cwd,
+      workspaceId,
+      identityId: readWorkspaceIdentityId(dbPath) ?? undefined,
+    }));
 
-  return { name, cwd, workspaceId, dbPath };
+    return { name, cwd, workspaceId, dbPath };
+  }));
 }
 
 export class MissingLocalWorkspaceError extends Error {
@@ -402,33 +405,35 @@ export interface ResolveLocalAgentOptions {
 }
 
 /** The one local resolution, so the placement a peer group depends on cannot drift between call sites. */
-export async function resolveLocalAgent(input: string, opts: ResolveLocalAgentOptions = {}): Promise<ResolvedLocalAgent> {
-  const ref = resolveAgentRef(input);
+export function resolveLocalAgent(input: string, opts: ResolveLocalAgentOptions = {}): Promise<ResolvedLocalAgent> {
+  return settle(Effect.gen(function* () {
+    const ref = resolveAgentRef(input);
 
-  if (ref && ref.mode !== 'local') {
-    throw new Error(`"${input}" is a cloud workspace; this needs a local one.`);
-  }
+    if (ref && ref.mode !== 'local') {
+      return yield* Effect.die(new Error(`"${input}" is a cloud workspace; this needs a local one.`));
+    }
 
-  const name = ref?.localName ?? ref?.name ?? input;
-  const dbPath = agentDbPath(name);
+    const name = ref?.localName ?? ref?.name ?? input;
+    const dbPath = agentDbPath(name);
 
-  if (!existsSync(dbPath)) throw new MissingLocalWorkspaceError(name);
-  const placed = ref ? placedRef(ref) : null;
+    if (!existsSync(dbPath)) return yield* Effect.die(new MissingLocalWorkspaceError(name));
+    const placed = ref ? placedRef(ref) : null;
 
-  if (ref && placed) {
-    assertIdentityUnchanged(ref, placed);
+    if (ref && placed) {
+      assertIdentityUnchanged(ref, placed);
 
-    return { ...placed, placement: 'recorded' };
-  }
+      return { ...placed, placement: 'recorded' };
+    }
 
-  const cwd = canonicalProjectRoot(opts.cwd);
-  const workspaceId = opts.workspaceId ?? defaultVirtualWorkspaceId(cwd);
+    const cwd = canonicalProjectRoot(opts.cwd);
+    const workspaceId = opts.workspaceId ?? defaultVirtualWorkspaceId(cwd);
 
-  if (opts.adopt === false) {
-    return { name, cwd, workspaceId, dbPath, placement: 'unplaced' };
-  }
+    if (opts.adopt === false) {
+      return { name, cwd, workspaceId, dbPath, placement: 'unplaced' };
+    }
 
-  return { ...(await adoptUnplacedLocalAgent(name, { cwd, workspaceId })), placement: 'adopted' };
+    return { ...(yield* Effect.promise(async () => adoptUnplacedLocalAgent(name, { cwd, workspaceId }))), placement: 'adopted' };
+  }));
 }
 
 /** A changed identity means the name was reused; continuing would attach history to a different workspace. */
@@ -688,80 +693,85 @@ export function resolveLLMConfig(opts?: {
   auth?: string;
   defaultModel?: string;
 }): LLMProviderConfig | null {
-  const file = loadConfigFile();
+  return settleSync(Effect.gen(function* () {
+    const file = loadConfigFile();
 
-  const baseURL = opts?.baseUrl
-    ?? process.env.KINU_BASE_URL
-    ?? process.env.AI_GATEWAY_BASE_URL;
+    const baseURL = opts?.baseUrl
+      ?? process.env.KINU_BASE_URL
+      ?? process.env.AI_GATEWAY_BASE_URL;
 
-  const auth = opts?.auth
-    ?? process.env.KINU_AUTH
-    ?? process.env.AI_GATEWAY_AUTH;
+    const auth = opts?.auth
+      ?? process.env.KINU_AUTH
+      ?? process.env.AI_GATEWAY_AUTH;
 
-  const named = opts?.model
-    ?? process.env.KINU_MODEL
-    ?? process.env.AI_GATEWAY_MODEL
-    ?? opts?.defaultModel;
+    const named = opts?.model
+      ?? process.env.KINU_MODEL
+      ?? process.env.AI_GATEWAY_MODEL
+      ?? opts?.defaultModel;
 
-  const model = named === undefined ? undefined : specWithoutAccount(named);
+    const model = named === undefined ? undefined : specWithoutAccount(named);
 
-  if (baseURL && auth) {
-    return {
-      name: model?.startsWith('@cf/') ? 'workers-ai' : 'openai-compat',
-      baseURL,
-      headers: { 'Authorization': auth },
-      model: directEndpointModelId(model ?? DEFAULT_WORKERS_AI_MODEL_ID),
-    };
-  }
+    if (baseURL && auth) {
+      return {
+        name: model?.startsWith('@cf/') ? 'workers-ai' : 'openai-compat',
+        baseURL,
+        headers: { 'Authorization': auth },
+        model: directEndpointModelId(model ?? DEFAULT_WORKERS_AI_MODEL_ID),
+      };
+    }
 
-  const cloud = resolveCloudSession();
+    const cloud = resolveCloudSession();
 
-  // The signed-in account is the default path and owns native model families (`workers-ai`, `my-gateway`, `@cf/`);
-  // a local endpoint would accept those ids and serve something else. Explicitly picked BYO models still win.
-  const cloudConfig: LLMProviderConfig | null = cloud
-    ? {
-        name: 'workers-ai',
-        baseURL: cloudProxyBaseURL(cloud.origin),
-        headers: { Authorization: `Bearer ${cloud.token}` },
-        model: workersAIModelId(model),
-      }
-    : null;
+    // The signed-in account is the default path and owns native model families (`workers-ai`, `my-gateway`, `@cf/`);
+    // a local endpoint would accept those ids and serve something else. Explicitly picked BYO models still win.
+    const cloudConfig: LLMProviderConfig | null = cloud
+      ? {
+          name: 'workers-ai',
+          baseURL: cloudProxyBaseURL(cloud.origin),
+          headers: { Authorization: `Bearer ${cloud.token}` },
+          model: workersAIModelId(model),
+        }
+      : null;
 
-  if (cloudConfig && (!model || isNativeCloudSpec(model))) return cloudConfig;
+    if (cloudConfig && (!model || isNativeCloudSpec(model))) return cloudConfig;
 
-  // An explicit registry-only spec resolves to that family ahead of any credential default.
-  const family = registryFamilyMarker(model ?? preferredModelFromCredentials(file));
+    // An explicit registry-only spec resolves to that family ahead of any credential default.
+    const family = registryFamilyMarker(model ?? preferredModelFromCredentials(file));
 
-  if (family) return family;
+    if (family) return family;
 
-  const derived = deriveLLMConfigFromProviderCredentials(file, model);
+    const derived = deriveLLMConfigFromProviderCredentials(file, model);
 
-  if (derived) return derived;
+    if (derived) return derived;
 
-  if (cloudConfig) return cloudConfig;
+    if (cloudConfig) return cloudConfig;
 
-  if (baseURL && !auth) {
-    throw new Error(
-      'A base URL is set (--base-url or KINU_BASE_URL) but no auth header (--auth or KINU_AUTH).\n' +
-      '  Set both, or unset the base URL and run kinu setup to pick a model provider.'
-    );
-  }
+    if (baseURL && !auth) {
+      return yield* Effect.die(new Error(
+        'A base URL is set (--base-url or KINU_BASE_URL) but no auth header (--auth or KINU_AUTH).\n' +
+        '  Set both, or unset the base URL and run kinu setup to pick a model provider.'
+      ));
+    }
 
-  return null;
+    return null;
+  }));
 }
 
 /** For seams that must hand core an endpoint object (workspace creation, evolution); the failure names every fix. */
 export function requireLLMConfig(opts?: Parameters<typeof resolveLLMConfig>[0]): LLMProviderConfig {
-  const config = resolveLLMConfig(opts);
+  return settleSync(Effect.gen(function* () {
+    const config = resolveLLMConfig(opts);
 
-  if (config) return config;
-  throw new Error(
-    'No model is set up.\n' +
-    '  Run kinu auth to use Workers AI in your Cloudflare account,\n' +
-    '  run kinu setup to pick a model provider,\n' +
-    '  run kinu provider connect claude to use your Claude subscription,\n' +
-    '  or pass --base-url and --auth to use your own endpoint.'
-  );
+    if (config) return config;
+
+    return yield* Effect.die(new Error(
+      'No model is set up.\n' +
+      '  Run kinu auth to use Workers AI in your Cloudflare account,\n' +
+      '  run kinu setup to pick a model provider,\n' +
+      '  run kinu provider connect claude to use your Claude subscription,\n' +
+      '  or pass --base-url and --auth to use your own endpoint.'
+    ));
+  }));
 }
 
 export function resolveProviderCredentials(): LocalProviderCredentials {

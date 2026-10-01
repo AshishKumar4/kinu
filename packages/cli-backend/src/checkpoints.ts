@@ -4,6 +4,7 @@
  * Snapshots are parentless commits; the user's own `.git/` and git config are never touched.
  */
 
+import { Effect } from 'effect';
 import { createHash } from 'node:crypto';
 import { execFile, type ExecFileException } from 'node:child_process';
 import { promises as fs, existsSync, realpathSync, statSync } from 'node:fs';
@@ -19,7 +20,7 @@ import {
   type FileCheckpointEntry, type FileRestoreChange, type FileRestoreKind,
   type FileRestorePlan, type FileRestoreResult,
 } from '@kinu.run/core';
-import { classify, tolerate, tolerateAsync } from '@kinu.run/core/obs';
+import { classify, tolerate, tolerateAsync, settle } from '@kinu.run/core/obs';
 
 const SHA_RE = /^[0-9a-f]{4,64}$/i;
 
@@ -332,40 +333,44 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       return entries.slice(0, Math.max(1, query.limit ?? 50));
     },
 
-    async plan(dir: string, id: string): Promise<FileRestorePlan> {
-      if (!(await probeGit())) throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT);
-      const { gitDir, abs } = await requireCheckpoint(dir, id);
-      const files = await diffToCheckpoint(gitDir, abs, id);
+    plan(dir: string, id: string): Promise<FileRestorePlan> {
+      return settle(Effect.gen(function* () {
+        if (!(yield* Effect.promise(async () => probeGit()))) return yield* Effect.die(new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT));
+        const { gitDir, abs } = yield* Effect.promise(async () => requireCheckpoint(dir, id));
+        const files = yield* Effect.promise(async () => diffToCheckpoint(gitDir, abs, id));
 
-      return { dir: abs, id, files };
+        return { dir: abs, id, files };
+      }));
     },
 
-    async restore(dir: string, id: string): Promise<FileRestoreResult> {
-      if (!(await probeGit())) throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT);
-      const { gitDir, abs, env } = await requireCheckpoint(dir, id);
+    restore(dir: string, id: string): Promise<FileRestoreResult> {
+      return settle(Effect.gen(function* () {
+        if (!(yield* Effect.promise(async () => probeGit()))) return yield* Effect.die(new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT));
+        const { gitDir, abs, env } = yield* Effect.promise(async () => requireCheckpoint(dir, id));
 
-      if (!existsSync(abs)) throw new Error(`working directory no longer exists: ${abs}`);
-      const files = await diffToCheckpoint(gitDir, abs, id);
+        if (!existsSync(abs)) return yield* Effect.die(new Error(`working directory no longer exists: ${abs}`));
+        const files = yield* Effect.promise(async () => diffToCheckpoint(gitDir, abs, id));
 
-      // Safety snapshot so the restore is undoable; null turn meta keeps it out of the armed turn's /undo group.
-      const preRestoreId = await snapshot(abs, null, 'pre-restore');
+        // Safety snapshot so the restore is undoable; null turn meta keeps it out of the armed turn's /undo group.
+        const preRestoreId = yield* Effect.promise(async () => snapshot(abs, null, 'pre-restore'));
 
-      for (const change of files) {
-        if (change.kind !== 'delete') continue;
-        const target = resolve(abs, change.path);
+        for (const change of files) {
+          if (change.kind !== 'delete') continue;
+          const target = resolve(abs, change.path);
 
-        if (!target.startsWith(abs)) continue; // defense: git emits relative paths only
-        await tolerateAsync(() => fs.unlink(target), 'enoent');
-      }
+          if (!target.startsWith(abs)) continue; // defense: git emits relative paths only
+          yield* Effect.promise(async () => tolerateAsync(() => fs.unlink(target), 'enoent'));
+        }
 
-      const read = await runGit(['read-tree', id], abs, env);
+        const read = yield* Effect.promise(async () => runGit(['read-tree', id], abs, env));
 
-      if (read.code !== 0) throw new Error(`checkpoint read-tree failed: ${read.stderr.trim()}`);
-      const checkout = await runGit(['checkout-index', '-a', '-f'], abs, env);
+        if (read.code !== 0) return yield* Effect.die(new Error(`checkpoint read-tree failed: ${read.stderr.trim()}`));
+        const checkout = yield* Effect.promise(async () => runGit(['checkout-index', '-a', '-f'], abs, env));
 
-      if (checkout.code !== 0) throw new Error(`checkpoint restore failed: ${checkout.stderr.trim()}`);
+        if (checkout.code !== 0) return yield* Effect.die(new Error(`checkpoint restore failed: ${checkout.stderr.trim()}`));
 
-      return { dir: abs, id, files, preRestoreId };
+        return { dir: abs, id, files, preRestoreId };
+      }));
     },
 
     async status(): Promise<CheckpointAvailability> {

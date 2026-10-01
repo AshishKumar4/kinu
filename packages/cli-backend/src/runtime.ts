@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Local CLI runtime factory. Two file planes: agent state always lives in the
@@ -40,7 +41,7 @@ import {
   workspaceGenerationStorage,
   workspaceToolchainCapabilities,
 } from '@kinu.run/core/workspace';
-import { tolerate, tolerateAsync } from '@kinu.run/core/obs';
+import { tolerate, tolerateAsync, settleSync, settle } from '@kinu.run/core/obs';
 import { localNodeRuntime } from './node-runtime';
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 import { localFacetHost } from '@nimbus-sh/core/runtime/local-facet-host.js';
@@ -240,317 +241,319 @@ export function createCLIRuntime(
   db: Database,
   config: CLIRuntimeConfig,
 ): CLIRuntime {
-  waitOnSharedWrites(db);
-  db.exec('PRAGMA foreign_keys = ON');
-  const sql = makeSql(db);
-  const execRaw = makeExecRaw(db);
+  return settleSync(Effect.gen(function* () {
+    waitOnSharedWrites(db);
+    db.exec('PRAGMA foreign_keys = ON');
+    const sql = makeSql(db);
+    const execRaw = makeExecRaw(db);
 
-  initFiberTable(execRaw);
+    initFiberTable(execRaw);
 
-  let actor: ActorHandle;
-  let agentId: string;
-  let agentName: string;
+    let actor: ActorHandle;
+    let agentId: string;
+    let agentName: string;
 
-  if (config.facet !== undefined) {
-    if (!config.actorBinding) throw new KinuError('missing', 'A local facet requires its root-issued actor binding.');
-    initActorStateSchema(makeWorkspaceSchemaSql(db));
-    actor = config.actor ?? bindLocalActor(sql, config.actorBinding);
-    agentId = actor.actorId;
-    agentName = config.actorBinding.name;
-  } else {
-    execRaw(WORKSPACE_IDENTITY_DDL);
-    execRaw(WORKSPACE_SOUL_DDL);
-    const existing = sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity LIMIT 1`[0];
-
-    if (existing) {
-      agentId = existing.id;
-      agentName = existing.name;
+    if (config.facet !== undefined) {
+      if (!config.actorBinding) return yield* new KinuError('missing', 'A local facet requires its root-issued actor binding.');
+      initActorStateSchema(makeWorkspaceSchemaSql(db));
+      actor = config.actor ?? bindLocalActor(sql, config.actorBinding);
+      agentId = actor.actorId;
+      agentName = config.actorBinding.name;
     } else {
-      agentId = crypto.randomUUID();
-      agentName = config.agentName ?? 'agent';
-      void sql`INSERT INTO workspace_identity (id, name) VALUES (${agentId}, ${agentName})`;
-      stampSchemaGenesis(db);
-      initWorkspaceActorTable(execRaw);
-      new WorkspaceActorDirectory(sql, { workspaceId: agentId, ownerUserId: '' }).createMain({ name: agentName });
+      execRaw(WORKSPACE_IDENTITY_DDL);
+      execRaw(WORKSPACE_SOUL_DDL);
+      const existing = sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity LIMIT 1`[0];
+
+      if (existing) {
+        agentId = existing.id;
+        agentName = existing.name;
+      } else {
+        agentId = crypto.randomUUID();
+        agentName = config.agentName ?? 'agent';
+        void sql`INSERT INTO workspace_identity (id, name) VALUES (${agentId}, ${agentName})`;
+        stampSchemaGenesis(db);
+        initWorkspaceActorTable(execRaw);
+        new WorkspaceActorDirectory(sql, { workspaceId: agentId, ownerUserId: '' }).createMain({ name: agentName });
+      }
+
+      actor = openLocalRootActor(sql);
     }
 
-    actor = openLocalRootActor(sql);
-  }
+    // After the branch binds an actor: an unscoped sweep would resume a sibling's lane.
+    const orphans = detectOrphanedFibers(sql, actor);
 
-  // After the branch binds an actor: an unscoped sweep would resume a sibling's lane.
-  const orphans = detectOrphanedFibers(sql, actor);
+    if (orphans.length > 0) {
+      diagnostics.failure(
+        'fiber.orphans_detected',
+        new KinuError('cancelled', 'fibers from a previous run were interrupted by its exit'),
+        { orphans: orphans.length },
+      );
+    }
 
-  if (orphans.length > 0) {
-    diagnostics.failure(
-      'fiber.orphans_detected',
-      new KinuError('cancelled', 'fibers from a previous run were interrupted by its exit'),
-      { orphans: orphans.length },
-    );
-  }
+    // Built before any session, so each seam reports through a slot the session
+    // fills (setModelCallSink). Unbound means unattributed spend, never free spend.
+    let modelCallSink: ModelCallSink | null = null;
+    const report: ModelCallSink = (call) => modelCallSink?.(call);
+    let modelOperations: ModelOperationSink | null = null;
+    const operations: ModelOperationSink = (event) => modelOperations?.(event);
+    // DDL here too: a runtime built without `initWorkspaceSchema` (branch worker,
+    // `kinu evolve`, fixture) still reads the table on its first gated command.
+    initAgentConfigTable(execRaw);
+    initCodemodeStateTable(execRaw);
+    initScaffoldTables(execRaw);
+    const agentConfig = actor.config;
+    // Same endpoint and credentials as the routed-lane factory, so a tier's model is spelled one way.
+    let specResolver: LocalModelResolver | null = null;
 
-  // Built before any session, so each seam reports through a slot the session
-  // fills (setModelCallSink). Unbound means unattributed spend, never free spend.
-  let modelCallSink: ModelCallSink | null = null;
-  const report: ModelCallSink = (call) => modelCallSink?.(call);
-  let modelOperations: ModelOperationSink | null = null;
-  const operations: ModelOperationSink = (event) => modelOperations?.(event);
-  // DDL here too: a runtime built without `initWorkspaceSchema` (branch worker,
-  // `kinu evolve`, fixture) still reads the table on its first gated command.
-  initAgentConfigTable(execRaw);
-  initCodemodeStateTable(execRaw);
-  initScaffoldTables(execRaw);
-  const agentConfig = actor.config;
-  // Same endpoint and credentials as the routed-lane factory, so a tier's model is spelled one way.
-  let specResolver: LocalModelResolver | null = null;
+    const localResolver = (): LocalModelResolver => {
+      specResolver ??= createLocalModelResolver({
+        llm: config.llm,
+        credentials: config.providerCredentials,
+        oauthStore: config.oauthStore,
+      });
 
-  const localResolver = (): LocalModelResolver => {
-    specResolver ??= createLocalModelResolver({
-      llm: config.llm,
-      credentials: config.providerCredentials,
-      oauthStore: config.oauthStore,
+      return specResolver;
+    };
+
+    const profilePlane: LocalProfileModelPlane = {
+      normalizeSpec: (spec) => localResolver().normalizeSpecSync(spec),
+      // Claims nothing it did not look up; a session that can list refines it.
+      listModels: () => Promise.resolve({ models: [], failures: [] }),
+    };
+
+    const profiles = createLocalProfileAuthority({ config: agentConfig, plane: profilePlane });
+
+    // Every local runtime routes, session-less ones included.
+    let profileResolver: (() => Promise<ResolvedTurnProfile>) | null =
+      () => profiles.resolvePreTurn();
+
+    const ensureProfile = (): Promise<ResolvedTurnProfile> => resolveRoutingProfile({
+      actor,
+      resolve: () => {
+        if (!profileResolver) throw new Error('this runtime has no profile resolver: model lanes cannot route before a turn');
+
+        return profileResolver();
+      },
     });
 
-    return specResolver;
-  };
+    let modelRouteFactory = (resolution: ModelRouteResolution): LLM => createLocalProviderLLM({
+      llm: config.llm,
+      conversation: agentAffinityKey(actor.name),
+      credentials: config.providerCredentials,
+      oauthStore: config.oauthStore,
+      route: resolution,
+      spend: { source: resolution.source, report, operations },
+    });
 
-  const profilePlane: LocalProfileModelPlane = {
-    normalizeSpec: (spec) => localResolver().normalizeSpecSync(spec),
-    // Claims nothing it did not look up; a session that can list refines it.
-    listModels: () => Promise.resolve({ models: [], failures: [] }),
-  };
+    const modelForRoute = (resolution: ModelRouteResolution): LLM =>
+      modelRouteFactory(resolution);
 
-  const profiles = createLocalProfileAuthority({ config: agentConfig, plane: profilePlane });
+    const credentialOf = (spec: string): Promise<string | null> => localResolver().credentialFor(spec);
+    // A local session reads the owner's model settings as it opens; nothing changes them under it.
+    const refusals = tierRefusals({ sql, actor, config: agentConfig, now: Date.now, settings: LOCAL_MODEL_SETTINGS, changes: () => 0 });
 
-  // Every local runtime routes, session-less ones included.
-  let profileResolver: (() => Promise<ResolvedTurnProfile>) | null =
-    () => profiles.resolvePreTurn();
+    const modelLanes = {
+      resolveProfile: ensureProfile,
+      llm: modelForRoute,
+      credentialOf,
+      refusals,
+    };
 
-  const ensureProfile = (): Promise<ResolvedTurnProfile> => resolveRoutingProfile({
-    actor,
-    resolve: () => {
-      if (!profileResolver) throw new Error('this runtime has no profile resolver: model lanes cannot route before a turn');
+    const llm = createRoutedModelLane(actor, 'reflection', modelLanes);
 
-      return profileResolver();
-    },
-  });
+    const schedule: Schedule = {
+      // Unreferenced so a one-shot `kinu` command still exits with a timer pending.
+      after: async (ms, fn) => {
+        // No caller remains when this runs; a rejection is recorded as a domain failure.
+        const deferred = (): Promise<void> => settleLogged('schedule.deferred_failed', {
+          doing: 'running work this session deferred', otherwise: 'io',
+        }, fn);
 
-  let modelRouteFactory = (resolution: ModelRouteResolution): LLM => createLocalProviderLLM({
-    llm: config.llm,
-    conversation: agentAffinityKey(actor.name),
-    credentials: config.providerCredentials,
-    oauthStore: config.oauthStore,
-    route: resolution,
-    spend: { source: resolution.source, report, operations },
-  });
+        const timer = setTimeout(deferred, Math.max(0, ms));
+        timer.unref?.();
+      },
+      cron: async () => {},
+      fiber: createSqlFiber(sql, actor),
+    };
 
-  const modelForRoute = (resolution: ModelRouteResolution): LLM =>
-    modelRouteFactory(resolution);
+    const storage = inlineWorkspaceStorage(db);
 
-  const credentialOf = (spec: string): Promise<string | null> => localResolver().credentialFor(spec);
-  // A local session reads the owner's model settings as it opens; nothing changes them under it.
-  const refusals = tierRefusals({ sql, actor, config: agentConfig, now: Date.now, settings: LOCAL_MODEL_SETTINGS, changes: () => 0 });
+    const workspace = createWorkspaceFilesystem({
+      ...storage,
+      generation: workspaceGenerationStorage(storage.sql),
+      runtimes: WORKSPACE_RUNTIMES,
+      runtimeFacets: localFacetHost(),
+    } satisfies WorkspaceOptions);
 
-  const modelLanes = {
-    resolveProfile: ensureProfile,
-    llm: modelForRoute,
-    credentialOf,
-    refusals,
-  };
+    const agentStateVfs = workspace.vfs;
+    const checkpoints = createHostCheckpoints({ agent: agentName, keep: config.checkpointKeep });
+    const cwd = config.cwd ? resolvePath(config.cwd) : null;
 
-  const llm = createRoutedModelLane(actor, 'reflection', modelLanes);
+    const memoryStore = new MemoryStore(agentStateVfs, sql);
+    memoryStore.ensureSchema();
+    const memory = adaptMemory(memoryStore, agentStateVfs);
 
-  const schedule: Schedule = {
-    // Unreferenced so a one-shot `kinu` command still exits with a timer pending.
-    after: async (ms, fn) => {
-      // No caller remains when this runs; a rejection is recorded as a domain failure.
-      const deferred = (): Promise<void> => settleLogged('schedule.deferred_failed', {
-        doing: 'running work this session deferred', otherwise: 'io',
-      }, fn);
+    const craftStore = new CraftStore(sql);
+    craftStore.ensureSchema();
+    let approvalChannel: RequestShellApproval | null = null;
+    let approvalDeferrals: DeferredApprovalChannel | null = null;
+    let turnFileLedgerProvider: Parameters<NonNullable<AgentRuntime['setTurnFileLedgerProvider']>>[0] = null;
 
-      const timer = setTimeout(deferred, Math.max(0, ms));
-      timer.unref?.();
-    },
-    cron: async () => {},
-    fiber: createSqlFiber(sql, actor),
-  };
+    const approvalPolicy: ShellApprovalPolicy = {
+      mode: () => agentConfig.getShellApprovalMode(),
+      granted: (grant) => holdsGrant(agentConfig.getShellApprovalGrants(), grant),
+      requestApproval: (request) => approvalChannel?.(request) ?? Promise.resolve(null),
+      get deferrals() { return approvalDeferrals ?? undefined; },
+    };
 
-  const storage = inlineWorkspaceStorage(db);
+    const fileVfs = cwd ? createCwdPlaneVFS(cwd, checkpoints) : agentStateVfs;
 
-  const workspace = createWorkspaceFilesystem({
-    ...storage,
-    generation: workspaceGenerationStorage(storage.sql),
-    runtimes: WORKSPACE_RUNTIMES,
-    runtimeFacets: localFacetHost(),
-  } satisfies WorkspaceOptions);
+    // A directory-bound shell runs on the user's machine and may mutate the tree, so it
+    // snapshots first; the in-SQLite shell is the agent's own and serves the mount table.
+    const filesOwner: FilesOwner = cwd === null ? 'agent' : 'user';
 
-  const agentStateVfs = workspace.vfs;
-  const checkpoints = createHostCheckpoints({ agent: agentName, keep: config.checkpointKeep });
-  const cwd = config.cwd ? resolvePath(config.cwd) : null;
+    const facetShell = cwd === null ? null : (facet: string | undefined): Shell => withApprovalGatedShell(
+      withCheckpointedShell(
+        createHostShell(cwd, facet === undefined ? process.env : facetShellEnv(cwd, facet)),
+        checkpoints,
+        cwd,
+      ),
+      // The host shell serves no mount table: `/pc` there is the machine's own path.
+      { filesOwner },
+      approvalPolicy,
+    );
 
-  const memoryStore = new MemoryStore(agentStateVfs, sql);
-  memoryStore.ensureSchema();
-  const memory = adaptMemory(memoryStore, agentStateVfs);
+    const shell: Shell = facetShell
+      ? facetShell(config.facet)
+      : withApprovalGatedShell(workspace.shell, {
+        filesOwner,
+        shellSession: createShellSession({
+          home: WORKSPACE_ROOT, userRoots: () => agentVfs.userRoots(), keepsCwd: true, stored: () => shellCwd(workspace.shell),
+        }),
+      }, approvalPolicy);
 
-  const craftStore = new CraftStore(sql);
-  craftStore.ensureSchema();
-  let approvalChannel: RequestShellApproval | null = null;
-  let approvalDeferrals: DeferredApprovalChannel | null = null;
-  let turnFileLedgerProvider: Parameters<NonNullable<AgentRuntime['setTurnFileLedgerProvider']>>[0] = null;
+    const executionRouter = new DefaultExecutionRouter(approvalPolicy);
 
-  const approvalPolicy: ShellApprovalPolicy = {
-    mode: () => agentConfig.getShellApprovalMode(),
-    granted: (grant) => holdsGrant(agentConfig.getShellApprovalGrants(), grant),
-    requestApproval: (request) => approvalChannel?.(request) ?? Promise.resolve(null),
-    get deferrals() { return approvalDeferrals ?? undefined; },
-  };
+    const filesForActor = async (target: ActorHandle): Promise<SessionFilePlane> => {
+      const record = localActorDirectory(actor).directory.describe(target);
+      adoptLocalActorHandle(actor, actorReferenceOf(target), target);
+      requireLocalActorWorkspace(actor, target);
 
-  const fileVfs = cwd ? createCwdPlaneVFS(cwd, checkpoints) : agentStateVfs;
+      if (cwd !== null) {
+        const home = target.actorId === actor.actorId ? cwd : join(cwd, '.kinu', 'actors', target.actorId);
+        const artifactDirectory = agentArtifactDirectory(home);
+        mkdirSync(artifactDirectory, { recursive: true, mode: 0o700 });
+        chmodSync(artifactDirectory, 0o700);
+        target.assertCurrent();
 
-  // A directory-bound shell runs on the user's machine and may mutate the tree, so it
-  // snapshots first; the in-SQLite shell is the agent's own and serves the mount table.
-  const filesOwner: FilesOwner = cwd === null ? 'agent' : 'user';
+        return { vfs: fileVfs, artifactDirectory };
+      }
 
-  const facetShell = cwd === null ? null : (facet: string | undefined): Shell => withApprovalGatedShell(
-    withCheckpointedShell(
-      createHostShell(cwd, facet === undefined ? process.env : facetShellEnv(cwd, facet)),
-      checkpoints,
-      cwd,
-    ),
-    // The host shell serves no mount table: `/pc` there is the machine's own path.
-    { filesOwner },
-    approvalPolicy,
-  );
+      const home = await facetHomeProvisioner((async () => ({ ...await workspace.privileged(), sql: storage.sql }))(), () => target.assertCurrent())(actorFacetName(record));
 
-  const shell: Shell = facetShell
-    ? facetShell(config.facet)
-    : withApprovalGatedShell(workspace.shell, {
-      filesOwner,
-      shellSession: createShellSession({
-        home: WORKSPACE_ROOT, userRoots: () => agentVfs.userRoots(), keepsCwd: true, stored: () => shellCwd(workspace.shell),
-      }),
-    }, approvalPolicy);
-
-  const executionRouter = new DefaultExecutionRouter(approvalPolicy);
-
-  const filesForActor = async (target: ActorHandle): Promise<SessionFilePlane> => {
-    const record = localActorDirectory(actor).directory.describe(target);
-    adoptLocalActorHandle(actor, actorReferenceOf(target), target);
-    requireLocalActorWorkspace(actor, target);
-
-    if (cwd !== null) {
-      const home = target.actorId === actor.actorId ? cwd : join(cwd, '.kinu', 'actors', target.actorId);
-      const artifactDirectory = agentArtifactDirectory(home);
-      mkdirSync(artifactDirectory, { recursive: true, mode: 0o700 });
-      chmodSync(artifactDirectory, 0o700);
+      if (home.isolation !== 'private-home') throw new KinuError('io', 'actor home provisioner returned a shared plane');
+      const plane = await workspace.asAgent(home);
       target.assertCurrent();
 
-      return { vfs: fileVfs, artifactDirectory };
+      return { vfs: plane.vfs, artifactDirectory: agentArtifactDirectory(home.home) };
+    };
+
+    const stores = createAgentStores(() => sql, () => actor, (write) => writeTransaction(db, write), () => filesForActor(actor));
+    let childContext: ChildContextResolver | null = null;
+
+    const agentVfs = withMountTable(fileVfs, [
+      sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
+      skillsMount((): VFS => agentVfs),
+      ...(cwd === null ? [] : [agentViewMount(agentStateVfs, 'scaffold')]),
+      // `/context`: this actor's own working history, keyed on its own id.
+      contextMount({
+        actorId: actor.actorId,
+        own: ownContextTree(actor, stores),
+        children: {
+          list: () => childContext?.list() ?? [],
+          tree: (storageKey, author) => childContext?.tree(storageKey, author) ?? null,
+        },
+      }),
+    ]);
+
+    if (cwd === null) workspace.mountTable(agentVfs);
+    // Only the agent's tools: the shell and the owner's views keep `agentVfs`.
+    const toolFiles = withApprovalGatedFiles(agentVfs, 'workspace', directoryFileReach(cwd, agentVfs), approvalPolicy);
+
+    const limits = hostResourceLimits();
+
+    const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
+      vfs: toolFiles,
+      files: agentVfs,
+      memory,
+      craftStore,
+      shell,
+      filesOwner,
+      sql,
+      ledger: () => turnFileLedgerProvider?.(),
+      // A directory-bound shell declares what this machine's PATH proves.
+      toolchain: cwd === null ? workspaceToolchainCapabilities(WORKSPACE_RUNTIMES) : hostToolchainCapabilities(),
+    };
+
+    if (cwd !== null) inlineOptions.unmeasured = HOST_UNMEASURED_CAPABILITIES;
+
+    if (limits) inlineOptions.resourceLimits = limits;
+    executionRouter.register(createInlineExecutor(inlineOptions));
+
+    const runtime: CLIRuntime = Object.assign(buildRuntime({
+      transactionSync: write => writeTransaction(db, write),
+      workspaceIsMachine: cwd !== null,
+      actor, sql,
+      execRaw,
+      vfs: agentVfs,
+      agentStateVfs,
+      toolFiles,
+      llm,
+      executor: createSandboxedExecutor(),
+      schedule,
+      memory,
+      craftStore,
+      modelLanes,
+      executionRouter, shell, checkpoints,
+      setShellApprovalChannel: (fn) => { approvalChannel = fn; },
+      setTurnFileLedgerProvider: (provider) => { turnFileLedgerProvider = provider; },
+    }), {
+      stores,
+      filesForActor,
+      approvalPolicy,
+      setApprovalDeferrals: (channel: DeferredApprovalChannel | null) => { approvalDeferrals = channel; },
+      setChildContext: (resolver: ChildContextResolver | null) => { childContext = resolver; },
+      cwd,
+      setModelCallSink: (sink: ModelCallSink | null) => { modelCallSink = sink; },
+      setModelOperations: (sink: ModelOperationSink | null) => { modelOperations = sink; },
+      profiles,
+      modelForRoute,
+      credentialOf,
+      refusals,
+      setModelForRoute: (factory: (resolution: ModelRouteResolution) => LLM) => {
+        modelRouteFactory = factory;
+      },
+      setProfileResolver: (resolve: (() => Promise<ResolvedTurnProfile>) | null) => {
+        profileResolver = resolve;
+      },
+      ensureProfile,
+    });
+
+    // A physical directory has no principal registry, so the node home is withheld
+    // and nodes report `shared-origin-plane`.
+    if (facetShell) {
+      runtime.facetShell = facetShell;
+    } else {
+      runtime.nodeHome = async () => ({ ...await workspace.privileged(), sql: storage.sql });
+      runtime.ownerSoul = () => settledWorkspaceSoul(workspace);
     }
 
-    const home = await facetHomeProvisioner((async () => ({ ...await workspace.privileged(), sql: storage.sql }))(), () => target.assertCurrent())(actorFacetName(record));
+    runtime.nodeRuntime = localNodeRuntime({
+      workspace, origin: runtime, approvalPolicy, inline: inlineOptions,
+    });
 
-    if (home.isolation !== 'private-home') throw new KinuError('io', 'actor home provisioner returned a shared plane');
-    const plane = await workspace.asAgent(home);
-    target.assertCurrent();
-
-    return { vfs: plane.vfs, artifactDirectory: agentArtifactDirectory(home.home) };
-  };
-
-  const stores = createAgentStores(() => sql, () => actor, (write) => writeTransaction(db, write), () => filesForActor(actor));
-  let childContext: ChildContextResolver | null = null;
-
-  const agentVfs = withMountTable(fileVfs, [
-    sharedDriveMount(() => null, () => SHARED_DRIVE_UNBOUND),
-    skillsMount((): VFS => agentVfs),
-    ...(cwd === null ? [] : [agentViewMount(agentStateVfs, 'scaffold')]),
-    // `/context`: this actor's own working history, keyed on its own id.
-    contextMount({
-      actorId: actor.actorId,
-      own: ownContextTree(actor, stores),
-      children: {
-        list: () => childContext?.list() ?? [],
-        tree: (storageKey, author) => childContext?.tree(storageKey, author) ?? null,
-      },
-    }),
-  ]);
-
-  if (cwd === null) workspace.mountTable(agentVfs);
-  // Only the agent's tools: the shell and the owner's views keep `agentVfs`.
-  const toolFiles = withApprovalGatedFiles(agentVfs, 'workspace', directoryFileReach(cwd, agentVfs), approvalPolicy);
-
-  const limits = hostResourceLimits();
-
-  const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
-    vfs: toolFiles,
-    files: agentVfs,
-    memory,
-    craftStore,
-    shell,
-    filesOwner,
-    sql,
-    ledger: () => turnFileLedgerProvider?.(),
-    // A directory-bound shell declares what this machine's PATH proves.
-    toolchain: cwd === null ? workspaceToolchainCapabilities(WORKSPACE_RUNTIMES) : hostToolchainCapabilities(),
-  };
-
-  if (cwd !== null) inlineOptions.unmeasured = HOST_UNMEASURED_CAPABILITIES;
-
-  if (limits) inlineOptions.resourceLimits = limits;
-  executionRouter.register(createInlineExecutor(inlineOptions));
-
-  const runtime: CLIRuntime = Object.assign(buildRuntime({
-    transactionSync: write => writeTransaction(db, write),
-    workspaceIsMachine: cwd !== null,
-    actor, sql,
-    execRaw,
-    vfs: agentVfs,
-    agentStateVfs,
-    toolFiles,
-    llm,
-    executor: createSandboxedExecutor(),
-    schedule,
-    memory,
-    craftStore,
-    modelLanes,
-    executionRouter, shell, checkpoints,
-    setShellApprovalChannel: (fn) => { approvalChannel = fn; },
-    setTurnFileLedgerProvider: (provider) => { turnFileLedgerProvider = provider; },
-  }), {
-    stores,
-    filesForActor,
-    approvalPolicy,
-    setApprovalDeferrals: (channel: DeferredApprovalChannel | null) => { approvalDeferrals = channel; },
-    setChildContext: (resolver: ChildContextResolver | null) => { childContext = resolver; },
-    cwd,
-    setModelCallSink: (sink: ModelCallSink | null) => { modelCallSink = sink; },
-    setModelOperations: (sink: ModelOperationSink | null) => { modelOperations = sink; },
-    profiles,
-    modelForRoute,
-    credentialOf,
-    refusals,
-    setModelForRoute: (factory: (resolution: ModelRouteResolution) => LLM) => {
-      modelRouteFactory = factory;
-    },
-    setProfileResolver: (resolve: (() => Promise<ResolvedTurnProfile>) | null) => {
-      profileResolver = resolve;
-    },
-    ensureProfile,
-  });
-
-  // A physical directory has no principal registry, so the node home is withheld
-  // and nodes report `shared-origin-plane`.
-  if (facetShell) {
-    runtime.facetShell = facetShell;
-  } else {
-    runtime.nodeHome = async () => ({ ...await workspace.privileged(), sql: storage.sql });
-    runtime.ownerSoul = () => settledWorkspaceSoul(workspace);
-  }
-
-  runtime.nodeRuntime = localNodeRuntime({
-    workspace, origin: runtime, approvalPolicy, inline: inlineOptions,
-  });
-
-  return runtime;
+    return runtime;
+  }));
 }
 
 /**
@@ -558,22 +561,26 @@ export function createCLIRuntime(
  * joining beyond shared checkpoints; the in-SQLite plane gets the child its own
  * uid-credentialed home in the one tree, as a swarm node does.
  */
-export async function shareLocalWorkspacePlane(actor: CLIRuntime, workspace: CLIRuntime, facet: string): Promise<CLIRuntime> {
-  requireLocalActorWorkspace(workspace.actor, actor.actor);
+export function shareLocalWorkspacePlane(actor: CLIRuntime, workspace: CLIRuntime, facet: string): Promise<CLIRuntime> {
+  return settle(Effect.gen(function* () {
+    requireLocalActorWorkspace(workspace.actor, actor.actor);
 
-  if (workspace.cwd && actor.cwd === workspace.cwd) {
-    return Object.assign(actor, { checkpoints: workspace.checkpoints, nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell });
-  }
+    if (workspace.cwd && actor.cwd === workspace.cwd) {
+      return Object.assign(actor, { checkpoints: workspace.checkpoints, nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell });
+    }
 
-  if (!workspace.nodeHome || !workspace.nodeRuntime) throw new KinuError('missing', 'The workspace has no actor file-plane owner.');
-  const home = await facetHomeProvisioner(workspace.nodeHome(), () => requireLocalActorWorkspace(workspace.actor, actor.actor))(facet);
-  const plane = await workspace.nodeRuntime(home, actor.actor, actor);
+    const { nodeHome, nodeRuntime } = workspace;
 
-  return Object.assign(actor, {
-    storage: { ...actor.storage, vfs: plane.storage.vfs }, toolFiles: plane.toolFiles, memory: workspace.memory, craftStore: workspace.craftStore,
-    executionRouter: plane.executionRouter, shell: plane.shell, checkpoints: workspace.checkpoints, cwd: workspace.cwd ?? null,
-    nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell,
-  });
+    if (!nodeHome || !nodeRuntime) return yield* new KinuError('missing', 'The workspace has no actor file-plane owner.');
+    const home = yield* Effect.promise(async () => facetHomeProvisioner(nodeHome(), () => requireLocalActorWorkspace(workspace.actor, actor.actor))(facet));
+    const plane = yield* Effect.promise(async () => nodeRuntime(home, actor.actor, actor));
+
+    return Object.assign(actor, {
+      storage: { ...actor.storage, vfs: plane.storage.vfs }, toolFiles: plane.toolFiles, memory: workspace.memory, craftStore: workspace.craftStore,
+      executionRouter: plane.executionRouter, shell: plane.shell, checkpoints: workspace.checkpoints, cwd: workspace.cwd ?? null,
+      nodeHome: workspace.nodeHome, nodeRuntime: workspace.nodeRuntime, facetShell: workspace.facetShell,
+    });
+  }));
 }
 
 /**
@@ -604,39 +611,43 @@ export function cleanupFacetCwdScratch(cwd: string, facet: string): void {
  * workspace's one database. Hires are not built here: they need the opener's
  * provider and auth wiring.
  */
-export async function buildLocalActorRuntime(
+export function buildLocalActorRuntime(
   parent: CLIRuntime,
   bound: { readonly reference: ActorReference; readonly handle: ActorHandle },
   writeObserver?: WriteObserver,
   swarmSeat?: boolean,
 ): Promise<AgentRuntime> {
-  // Carry the host's own handle: `ActorHost` refuses a runtime bound anew, since
-  // release must revoke every statement the runtime can make.
-  const binding = bindLocalActorReference(parent.actor, bound.reference);
-  adoptLocalActorHandle(parent.actor, bound.reference, bound.handle);
+  return settle(Effect.gen(function* () {
+    // Carry the host's own handle: `ActorHost` refuses a runtime bound anew, since
+    // release must revoke every statement the runtime can make.
+    const binding = bindLocalActorReference(parent.actor, bound.reference);
+    adoptLocalActorHandle(parent.actor, bound.reference, bound.handle);
 
-  const run = binding.origin === 'swarm';
+    const run = binding.origin === 'swarm';
 
-  if (run && swarmSeat === true) {
-    if (!parent.nodeRuntime) throw new KinuError('missing', 'This workspace has no actor file-plane owner for a node.');
+    if (run && swarmSeat === true) {
+      const nodeRuntime = parent.nodeRuntime;
 
-    return await parent.nodeRuntime(
-      { isolation: 'shared-origin-plane', home: '.', tmp: undefined, cred: undefined },
-      bound.handle, parent, writeObserver,
-    );
-  }
+      if (!nodeRuntime) return yield* new KinuError('missing', 'This workspace has no actor file-plane owner for a node.');
 
-  if (run) {
-    const opts: Parameters<typeof buildCLIHeadRuntime>[0] = {
-      parentRuntime: parent, actorBinding: binding, actor: bound.handle,
-    };
+      return yield* Effect.promise(async () => nodeRuntime(
+        { isolation: 'shared-origin-plane', home: '.', tmp: undefined, cred: undefined },
+        bound.handle, parent, writeObserver,
+      ));
+    }
 
-    if (writeObserver) opts.writeObserver = writeObserver;
+    if (run) {
+      const opts: Parameters<typeof buildCLIHeadRuntime>[0] = {
+        parentRuntime: parent, actorBinding: binding, actor: bound.handle,
+      };
 
-    return await buildCLIHeadRuntime(opts);
-  }
+      if (writeObserver) opts.writeObserver = writeObserver;
 
-  throw new KinuError('denied', `A ${binding.origin} actor's runtime is not built by this workspace's own session.`);
+      return yield* Effect.promise(async () => buildCLIHeadRuntime(opts));
+    }
+
+    return yield* new KinuError('denied', `A ${binding.origin} actor's runtime is not built by this workspace's own session.`);
+  }));
 }
 
 

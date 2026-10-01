@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { existsSync } from 'node:fs';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import {
@@ -99,7 +100,7 @@ import {
   type WorkspaceSpend,
   type AccountSpend,
 } from '@kinu.run/core';
-import { classify } from '@kinu.run/core/obs';
+import { classify, settle } from '@kinu.run/core/obs';
 import {
   makeSql, makeSqlExec, schemaGenesisOf, createHostShell, createLocalProfileAuthority, hostToolchainCapabilities, inspectionFiles,
   resolverModelPlane, type LocalModelResolver,
@@ -754,18 +755,20 @@ export async function cancelLocalJob(name: string, id: string): Promise<{ ok: bo
   });
 }
 
-export async function executeLocalExecutor(name: string, executorId: string, command: string): Promise<LocalExecResult> {
-  ensureLocalAgent(name);
-  const normalized = executorId.toLowerCase();
+export function executeLocalExecutor(name: string, executorId: string, command: string): Promise<LocalExecResult> {
+  return settle(Effect.gen(function* () {
+    ensureLocalAgent(name);
+    const normalized = executorId.toLowerCase();
 
-  if (!['workspace', 'device', 'local', 'your-pc'].includes(normalized)) {
-    throw new Error(`Executor "${executorId}" is not available for local agents.`);
-  }
+    if (!['workspace', 'device', 'local', 'your-pc'].includes(normalized)) {
+      return yield* Effect.die(new Error(`Executor "${executorId}" is not available for local agents.`));
+    }
 
-  // createHostShell owns group kill on abort and settles when the command exits, not when a grandchild closes the pipe.
-  const result = await createHostShell(process.cwd()).exec(command);
+    // createHostShell owns group kill on abort and settles when the command exits, not when a grandchild closes the pipe.
+    const result = yield* Effect.promise(async () => createHostShell(process.cwd()).exec(command));
 
-  return { executor: executorId, command, ...result };
+    return { executor: executorId, command, ...result };
+  }));
 }
 
 export async function markLocalBackgroundJobsCancelled(name: string): Promise<string[]> {

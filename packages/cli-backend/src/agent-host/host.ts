@@ -80,7 +80,7 @@ import {
   isSubordinateOrigin, type SubordinateSeed,
 } from '@kinu.run/core';
 import { Effect, Result } from 'effect';
-import { KinuError, attempt, diagnostics, refusalOf, settle, toKinuError } from '@kinu.run/core/obs';
+import { KinuError, attempt, diagnostics, refusalOf, settle, toKinuError, settleSync, settleLogged, settleLoggedSync } from '@kinu.run/core/obs';
 import {
   createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, shareLocalWorkspacePlane,
   buildLocalActorRuntime, cleanupFacetCwdScratch, writeTransaction,
@@ -282,10 +282,12 @@ export class LocalAgentHost {
   }
 
   subscribe(listener: AgentEventListener): () => void {
-    if (this.closed) throw new Error('LocalAgentHost is closed.');
-    this.listeners.add(listener);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      if (this.closed) return yield* Effect.die(new Error('LocalAgentHost is closed.'));
+      this.listeners.add(listener);
 
-    return () => this.listeners.delete(listener);
+      return () => this.listeners.delete(listener);
+    }));
   }
 
   /** Open once, recover once, keep alive until close(). Accepts a root or a roster path. */
@@ -350,15 +352,7 @@ export class LocalAgentHost {
     }
 
     for (const entry of [...this.entries.values()].reverse()) {
-      try {
-        await entry.session.end();
-      } catch (error) {
-        diagnostics.failure(
-          'host.session_teardown_failed',
-          toKinuError({ doing: 'ending a hosted local session', cause: error, otherwise: 'io' }),
-          { agent: entry.key },
-        );
-      }
+      await settleLogged('host.session_teardown_failed', { doing: 'ending a hosted local session', otherwise: 'io' }, () => entry.session.end(), { agent: entry.key });
     }
 
     // Runtime objects, then lease, then file, once per tree. The lease is released before the handle
@@ -445,13 +439,9 @@ export class LocalAgentHost {
       } catch (error) {
         // This path discards the tree without reaching close(), so release its lease here or the
         // `driver_lease` row names a holder that no longer exists.
-        try { tree.hold.release(); }
-        catch (cause) {
-          // Recorded, not thrown: it must not replace the open failure below, but must stay visible.
-          diagnostics.failure('driver.lease_release_failed', toKinuError({
-            doing: 'releasing the discarded tree\'s driver lease', cause, otherwise: 'io',
-          }), { workspace: name });
-        }
+        settleLoggedSync('driver.lease_release_failed', { doing: 'releasing the discarded tree\'s driver lease', otherwise: 'io' }, () => {
+ tree.hold.release();
+        }, { workspace: name });
 
         this.trees.delete(name);
         throw error;
@@ -765,15 +755,7 @@ export class LocalAgentHost {
     for (const roster of parent.roster.list()) {
       if (roster.birth !== null || roster.deleteRequested || parent.children.has(roster.name)) continue;
 
-      try {
-        await this.openChildEntry(parent, roster.name);
-      } catch (error) {
-        diagnostics.failure(
-          'host.subordinate_recovery_failed',
-          toKinuError({ doing: 'recovering a local subordinate', cause: error, otherwise: 'io' }),
-          { parent: parent.key, subordinate: roster.name },
-        );
-      }
+      await settleLogged('host.subordinate_recovery_failed', { doing: 'recovering a local subordinate', otherwise: 'io' }, async () => { await this.openChildEntry(parent, roster.name); }, { parent: parent.key, subordinate: roster.name });
     }
   }
 
@@ -1596,20 +1578,14 @@ export class LocalAgentHost {
   }
 
   private async drain(entry: HostEntry, source: string): Promise<void> {
-    try {
+    await settleLogged('host.event_drain_failed', { doing: 'draining hosted local events', otherwise: 'io' }, async () => {
       // A pass another process holds is reported by `drive`; its own pass drains and routes the same work.
       await this.drive(entry, async () => {
         await entry.session.flushPendingDrains();
         await this.drainAssignedWork(entry);
         await entry.session.runEvolutionAnswer(Date.now());
       });
-    } catch (cause) {
-      diagnostics.failure(
-        'host.event_drain_failed',
-        toKinuError({ doing: 'draining hosted local events', cause, otherwise: 'io' }),
-        { agent: entry.key, source },
-      );
-    }
+    }, { agent: entry.key, source });
   }
 }
 

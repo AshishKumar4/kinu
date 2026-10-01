@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settle } from '@kinu.run/core/obs';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // Map-backed VFS; `mkdir` surfaces EEXIST on repeat unless recursive, like the real backends.
 
@@ -13,22 +15,26 @@ export function createMemoryVfs(): MemoryVfs {
   const dirs = new Set<string>();
 
   const vfs: VFS & Required<Pick<VFS, 'readRange'>> = {
-    readFile: async (path) => {
-      const content = files.get(path);
+    readFile: (path) => {
+      return settle(Effect.gen(function* () {
+        const content = files.get(path);
 
-      if (content === undefined) throw new Error(`ENOENT: ${path}`);
+        if (content === undefined) return yield* Effect.die(new Error(`ENOENT: ${path}`));
 
-      return content instanceof Uint8Array ? content.slice() : new TextEncoder().encode(content);
+        return content instanceof Uint8Array ? content.slice() : new TextEncoder().encode(content);
+      }));
     },
     /** Real prefix read, so callers exercise the ranged-read branch, not the no-ranged-read one. */
-    readRange: async (path, offset, length) => {
-      const content = files.get(path);
+    readRange: (path, offset, length) => {
+      return settle(Effect.gen(function* () {
+        const content = files.get(path);
 
-      if (content === undefined) throw new Error(`ENOENT: ${path}`);
+        if (content === undefined) return yield* Effect.die(new Error(`ENOENT: ${path}`));
 
-      const bytes = content instanceof Uint8Array ? content : new TextEncoder().encode(content);
+        const bytes = content instanceof Uint8Array ? content : new TextEncoder().encode(content);
 
-      return bytes.slice(offset, offset + length);
+        return bytes.slice(offset, offset + length);
+      }));
     },
     writeFile: async (path, data) => {
       files.set(path, data instanceof Uint8Array ? data.slice() : data);
@@ -44,11 +50,13 @@ export function createMemoryVfs(): MemoryVfs {
       return { size: content instanceof Uint8Array ? content.byteLength : new TextEncoder().encode(content).byteLength, mtimeMs: 0, type: 'file' };
     },
     unlink: async (path) => { files.delete(path); },
-    mkdir: async (path, opts) => {
-      if (dirs.has(path) && opts?.recursive === true) return;
+    mkdir: (path, opts) => {
+      return settle(Effect.gen(function* () {
+        if (dirs.has(path) && opts?.recursive === true) return;
 
-      if (dirs.has(path)) throw new Error(`EEXIST: directory exists ${path}`);
-      dirs.add(path);
+        if (dirs.has(path)) return yield* Effect.die(new Error(`EEXIST: directory exists ${path}`));
+        dirs.add(path);
+      }));
     },
 
   };

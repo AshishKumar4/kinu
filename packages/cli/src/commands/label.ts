@@ -4,6 +4,8 @@
  * Claude Code history, which license no corrected rate (see evolution/behavior-labels.ts).
  */
 
+import { Effect } from 'effect';
+import { settle } from '@kinu.run/core/obs';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -125,30 +127,32 @@ const EnsembleReportSchema: v.GenericSchema<EnsembleReport> = v.object({
   gap: v.nullable(EnsembleGapSchema),
 });
 
-export async function labelCommand(
+export function labelCommand(
   action: string | undefined,
   name: string | undefined,
   file: string | undefined,
   opts: LabelOpts = {},
 ): Promise<void> {
-  // `mine` reads transcripts, not a ledger, so it names no agent.
-  if (action === 'mine') return mineCorpus(opts);
+  return settle(Effect.gen(function* () {
+    // `mine` reads transcripts, not a ledger, so it names no agent.
+    if (action === 'mine') return yield* Effect.promise(async () => mineCorpus(opts));
 
-  if (!name) throw new Error(USAGE);
-  const target = resolveAgentTarget(name);
+    if (!name) return yield* Effect.die(new Error(USAGE));
+    const target = resolveAgentTarget(name);
 
-  switch (action) {
-    case 'export': return exportLabels(target, opts);
-    case 'ingest': return ingestLabels(target, file, opts);
-    case 'ensemble': return ensembleLabels(target, opts);
-    case 'report': return reportLabels(target, opts);
-    case 'score': return scoreCorpus(target, opts);
-    case undefined:
-    default:
-      throw new Error(
-        `Unknown action "${action ?? ''}". Use export, ingest, ensemble, report, mine, or score.`,
-      );
-  }
+    switch (action) {
+      case 'export': return yield* Effect.promise(async () => exportLabels(target, opts));
+      case 'ingest': return yield* Effect.promise(async () => ingestLabels(target, file, opts));
+      case 'ensemble': return yield* Effect.promise(async () => ensembleLabels(target, opts));
+      case 'report': return yield* Effect.promise(async () => reportLabels(target, opts));
+      case 'score': return yield* Effect.promise(async () => scoreCorpus(target, opts));
+      case undefined:
+      default:
+        return yield* Effect.die(new Error(
+          `Unknown action "${action ?? ''}". Use export, ingest, ensemble, report, mine, or score.`,
+        ));
+    }
+  }));
 }
 
 async function exportLabels(target: AgentTarget, opts: LabelOpts): Promise<void> {

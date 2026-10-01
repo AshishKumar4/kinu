@@ -1,4 +1,5 @@
-import { classify, tolerate } from '@kinu.run/core/obs';
+import { Effect } from 'effect';
+import { classify, tolerate, settle } from '@kinu.run/core/obs';
 import { lstatSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, unlinkSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { dirname } from 'node:path';
@@ -195,15 +196,17 @@ export function createProcessIdentityBoundary(
   read: (pid: number) => ProcessIdentityProbe | Promise<ProcessIdentityProbe>,
 ): ProcessIdentityBoundary {
   return {
-    async self(pid): Promise<ProcessIdentity> {
-      const probe = await read(pid);
+    self(pid): Promise<ProcessIdentity> {
+      return settle(Effect.gen(function* () {
+        const probe = yield* Effect.promise(async () => read(pid));
 
-      if (probe.state !== 'read') {
-        throw new Error(`Refusing to take the config lock: cannot read this ${platform} process's `
-          + `identity for pid ${String(pid)}, so a lock it takes could never be proven abandoned.`);
-      }
+        if (probe.state !== 'read') {
+          return yield* Effect.die(new Error(`Refusing to take the config lock: cannot read this ${platform} process's `
+            + `identity for pid ${String(pid)}, so a lock it takes could never be proven abandoned.`));
+        }
 
-      return { platform, pid, identity: probe.identity };
+        return { platform, pid, identity: probe.identity };
+      }));
     },
     async liveness(owner): Promise<Liveness> {
       if (owner.platform !== platform) return 'unknown';

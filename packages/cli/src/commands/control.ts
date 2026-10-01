@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { requireAuthConfig } from '../config';
 import { isReasoningEffort, projectJsonValue, REASONING_EFFORTS, type JsonValue, type ModelMenu, type ReasoningEffort, type TimerTrigger, type TimerTriggerOpts } from '@kinu.run/core';
 import { resolveAgentTarget } from '../agent-target';
@@ -33,7 +34,7 @@ import {
   type AgentModelEntry,
   type AgentModelMenu,
 } from '@kinu.run/core';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { renderThrownChain, settle } from '@kinu.run/core/obs';
 
 interface ControlOpts {
   model?: string;
@@ -118,46 +119,48 @@ interface EffortResult {
   readonly effort: ReasoningEffort | null;
 }
 
-export async function effortCommand(name: string, level: string | undefined): Promise<void> {
-  const target = resolveAgentTarget(name);
+export function effortCommand(name: string, level: string | undefined): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const target = resolveAgentTarget(name);
 
-  if (level !== undefined && !isReasoningEffort(level)) {
-    throw new Error(`Reasoning effort must be one of ${REASONING_EFFORTS.join(', ')}.`);
-  }
+    if (level !== undefined && !isReasoningEffort(level)) {
+      return yield* Effect.die(new Error(`Reasoning effort must be one of ${REASONING_EFFORTS.join(', ')}.`));
+    }
 
-  let result: EffortResult;
+    let result: EffortResult;
 
-  if (target.mode === 'cloud') {
-    const auth = requireAuthConfig();
-    result = level
-      ? await callAgentRpc({
-        origin: auth.origin,
-        token: auth.token,
-        name: target.cloudName,
-        method: 'setReasoningEffort',
-        schema: EffortSetResultSchema,
-        args: [level],
-      })
-      : await callAgentRpc({
-        origin: auth.origin,
-        token: auth.token,
-        name: target.cloudName,
-        method: 'getReasoningEffort',
-        schema: StoredEffortSchema,
-      });
-  } else {
-    result = level
-      ? await setLocalWorkspaceReasoningEffort(target.localName, level)
-      : { effort: (await readLocalWorkspacePins(target.localName)).reasoningEffort };
-  }
+    if (target.mode === 'cloud') {
+      const auth = requireAuthConfig();
+      result = level
+        ? (yield* Effect.promise(async () => callAgentRpc({
+          origin: auth.origin,
+          token: auth.token,
+          name: target.cloudName,
+          method: 'setReasoningEffort',
+          schema: EffortSetResultSchema,
+          args: [level],
+        })))
+        : (yield* Effect.promise(async () => callAgentRpc({
+          origin: auth.origin,
+          token: auth.token,
+          name: target.cloudName,
+          method: 'getReasoningEffort',
+          schema: StoredEffortSchema,
+        })));
+    } else {
+      result = level
+        ? (yield* Effect.promise(async () => setLocalWorkspaceReasoningEffort(target.localName, level)))
+        : { effort: (yield* Effect.promise(async () => readLocalWorkspacePins(target.localName))).reasoningEffort };
+    }
 
-  if (level) {
-    console.log(`${OK('set')} ${result.effort}`);
+    if (level) {
+      console.log(`${OK('set')} ${result.effort}`);
 
-    return;
-  }
+      return;
+    }
 
-  console.log(`${DIM('reasoning effort')} ${result.effort ?? `${readDefaultTier()?.reasoningEffort ?? 'medium'} (the default tier's)`}`);
+    console.log(`${DIM('reasoning effort')} ${result.effort ?? `${readDefaultTier()?.reasoningEffort ?? 'medium'} (the default tier's)`}`);
+  }));
 }
 
 /** Validation is advisory: an unreachable catalog must say why rather than read as an empty menu. */
@@ -267,94 +270,96 @@ export async function toolsCommand(name: string, _opts: ControlOpts): Promise<vo
   ]);
 }
 
-export async function triggersCommand(
+export function triggersCommand(
   name: string,
   action: string | undefined,
   value: string | undefined,
   opts: ControlOpts,
 ): Promise<void> {
-  const target = resolveAgentTarget(name);
-  const normalized = action ?? 'list';
+  return settle(Effect.gen(function* () {
+    const target = resolveAgentTarget(name);
+    const normalized = action ?? 'list';
 
-  if (target.mode === 'cloud') {
-    const auth = requireAuthConfig();
+    if (target.mode === 'cloud') {
+      const auth = requireAuthConfig();
 
-    if (normalized === 'list') {
-      const { triggers } = await callAgentRpc({
-        origin: auth.origin,
-        token: auth.token,
-        name: target.cloudName,
-        method: 'listTriggers',
-        schema: CloudTriggerListSchema,
-      });
+      if (normalized === 'list') {
+        const { triggers } = yield* Effect.promise(async () => callAgentRpc({
+          origin: auth.origin,
+          token: auth.token,
+          name: target.cloudName,
+          method: 'listTriggers',
+          schema: CloudTriggerListSchema,
+        }));
 
-      present(triggers, opts, (rows) => printTriggers(rows, auth.origin));
+        present(triggers, opts, (rows) => printTriggers(rows, auth.origin));
 
-      return;
+        return;
+      }
+
+      if (normalized === 'cancel') {
+        if (!value) return yield* Effect.die(new Error('trigger id required'));
+        // `'owner'`: a CLI token is the account holder's, so it may close an owner-created ingress; the model's
+        // `agent.cancelSchedule` reaches the same RPC as `'self'` and may not.
+
+        const cancelled = yield* Effect.promise(async () => callAgentRpc({
+          origin: auth.origin,
+          token: auth.token,
+          name: target.cloudName,
+          method: 'cancelTrigger',
+          schema: CancelTriggerSchema,
+          args: [value, 'owner'],
+        }));
+
+        present({ id: value, ...cancelled }, opts, () =>
+          console.log(`${OK('cancelled')} ${cancelled.changed ? value : `${value} (already inactive)`}`));
+
+        return;
+      }
+
+      if (normalized === 'webhook') {
+        if (!value) return yield* Effect.die(new Error('webhook label required'));
+
+        const webhookInput: CloudWebhookTriggerInput = {
+          label: value,
+          auth_mode: normalizeWebhookAuthMode(opts.authMode),
+        };
+
+        if (opts.secret) webhookInput.secret = opts.secret;
+
+        if (opts.contentType) webhookInput.accepted_content_type = opts.contentType;
+
+        if (opts.rateLimit) webhookInput.rate_limit_per_min = parsePositiveInt(opts.rateLimit, 'rate limit');
+        const created = yield* Effect.promise(async () => createCloudWebhookTrigger(auth.origin, auth.token, target.cloudName, webhookInput));
+        present(created, opts, (webhook) => printCreatedWebhook(webhook, auth.origin));
+
+        return;
+      }
+    } else {
+      if (normalized === 'webhook') return yield* Effect.die(new Error('Webhook triggers require a cloud workspace.'));
+
+      if (normalized === 'list') {
+        present(listLocalTriggers(target.localName).triggers, opts, printTriggers);
+
+        return;
+      }
+
+      if (normalized === 'cancel') {
+        if (!value) return yield* Effect.die(new Error('trigger id required'));
+        const cancelled = yield* Effect.promise(async () => cancelLocalTrigger(target.localName, value));
+        present({ id: value, ...cancelled }, opts, () =>
+          console.log(`${OK('cancelled')} ${cancelled.changed ? value : `${value} (already inactive)`}`));
+
+        return;
+      }
     }
 
-    if (normalized === 'cancel') {
-      if (!value) throw new Error('trigger id required');
-      // `'owner'`: a CLI token is the account holder's, so it may close an owner-created ingress; the model's
-      // `agent.cancelSchedule` reaches the same RPC as `'self'` and may not.
+    const created = target.mode === 'cloud'
+      ? (yield* Effect.promise(async () => createCloudTimerTrigger(target.cloudName, normalized, value)))
+      : (yield* Effect.promise(async () => createLocalTimerTrigger(target.localName, timerInput(normalized, value))));
 
-      const cancelled = await callAgentRpc({
-        origin: auth.origin,
-        token: auth.token,
-        name: target.cloudName,
-        method: 'cancelTrigger',
-        schema: CancelTriggerSchema,
-        args: [value, 'owner'],
-      });
-
-      present({ id: value, ...cancelled }, opts, () =>
-        console.log(`${OK('cancelled')} ${cancelled.changed ? value : `${value} (already inactive)`}`));
-
-      return;
-    }
-
-    if (normalized === 'webhook') {
-      if (!value) throw new Error('webhook label required');
-
-      const webhookInput: CloudWebhookTriggerInput = {
-        label: value,
-        auth_mode: normalizeWebhookAuthMode(opts.authMode),
-      };
-
-      if (opts.secret) webhookInput.secret = opts.secret;
-
-      if (opts.contentType) webhookInput.accepted_content_type = opts.contentType;
-
-      if (opts.rateLimit) webhookInput.rate_limit_per_min = parsePositiveInt(opts.rateLimit, 'rate limit');
-      const created = await createCloudWebhookTrigger(auth.origin, auth.token, target.cloudName, webhookInput);
-      present(created, opts, (webhook) => printCreatedWebhook(webhook, auth.origin));
-
-      return;
-    }
-  } else {
-    if (normalized === 'webhook') throw new Error('Webhook triggers require a cloud workspace.');
-
-    if (normalized === 'list') {
-      present(listLocalTriggers(target.localName).triggers, opts, printTriggers);
-
-      return;
-    }
-
-    if (normalized === 'cancel') {
-      if (!value) throw new Error('trigger id required');
-      const cancelled = await cancelLocalTrigger(target.localName, value);
-      present({ id: value, ...cancelled }, opts, () =>
-        console.log(`${OK('cancelled')} ${cancelled.changed ? value : `${value} (already inactive)`}`));
-
-      return;
-    }
-  }
-
-  const created = target.mode === 'cloud'
-    ? await createCloudTimerTrigger(target.cloudName, normalized, value)
-    : await createLocalTimerTrigger(target.localName, timerInput(normalized, value));
-
-  present(created, opts, () => printScheduled(created));
+    present(created, opts, () => printScheduled(created));
+  }));
 }
 
 async function createCloudTimerTrigger(cloudName: string, action: string, value: string | undefined): Promise<TimerTrigger> {
@@ -376,55 +381,57 @@ function printScheduled(trigger: { id: string; kind: string; nextFireAt: number 
   console.log(`${OK('scheduled')} ${trigger.id} ${DIM(trigger.kind)} ${formatTime(trigger.nextFireAt)}`);
 }
 
-export async function jobsCommand(name: string, action: string | undefined, id: string | undefined, opts: ControlOpts): Promise<void> {
-  const target = resolveAgentTarget(name);
-  const normalized = action ?? 'list';
+export function jobsCommand(name: string, action: string | undefined, id: string | undefined, opts: ControlOpts): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const target = resolveAgentTarget(name);
+    const normalized = action ?? 'list';
 
-  if (target.mode === 'cloud') {
-    const auth = requireAuthConfig();
+    if (target.mode === 'cloud') {
+      const auth = requireAuthConfig();
 
-    if (normalized === 'cancel') {
-      if (!id) throw new Error('job id required');
+      if (normalized === 'cancel') {
+        if (!id) return yield* Effect.die(new Error('job id required'));
 
-      const cancelled = await callAgentRpc({
+        const cancelled = yield* Effect.promise(async () => callAgentRpc({
+          origin: auth.origin,
+          token: auth.token,
+          name: target.cloudName,
+          method: 'cancelBackgroundJob',
+          schema: CancelJobSchema,
+          args: [id],
+        }));
+
+        present({ id, ...cancelled }, opts, () =>
+          console.log(`${OK('cancelled')} ${cancelled.ok ? id : `${id} (not running)`}`));
+
+        return;
+      }
+
+      const jobs = yield* Effect.promise(async () => callAgentRpc({
         origin: auth.origin,
         token: auth.token,
         name: target.cloudName,
-        method: 'cancelBackgroundJob',
-        schema: CancelJobSchema,
-        args: [id],
-      });
+        method: 'listBackgroundJobs',
+        schema: v.array(CloudBackgroundJobSchema),
+        args: [20],
+      }));
 
+      present(jobs, opts, printJobs);
+
+      return;
+    }
+
+    if (normalized === 'cancel') {
+      if (!id) return yield* Effect.die(new Error('job id required'));
+      const cancelled = yield* Effect.promise(async () => cancelLocalJob(target.localName, id));
       present({ id, ...cancelled }, opts, () =>
         console.log(`${OK('cancelled')} ${cancelled.ok ? id : `${id} (not running)`}`));
 
       return;
     }
 
-    const jobs = await callAgentRpc({
-      origin: auth.origin,
-      token: auth.token,
-      name: target.cloudName,
-      method: 'listBackgroundJobs',
-      schema: v.array(CloudBackgroundJobSchema),
-      args: [20],
-    });
-
-    present(jobs, opts, printJobs);
-
-    return;
-  }
-
-  if (normalized === 'cancel') {
-    if (!id) throw new Error('job id required');
-    const cancelled = await cancelLocalJob(target.localName, id);
-    present({ id, ...cancelled }, opts, () =>
-      console.log(`${OK('cancelled')} ${cancelled.ok ? id : `${id} (not running)`}`));
-
-    return;
-  }
-
-  present(listLocalJobs(target.localName), opts, printJobs);
+    present(listLocalJobs(target.localName), opts, printJobs);
+  }));
 }
 
 /** Raw JSON under `--json`, human rendering otherwise; shared by every read/mutate command. */

@@ -1,7 +1,8 @@
+import { Effect } from 'effect';
 import { SyntaxStyle } from '@opentui/core';
 import { createContext, createElement, useContext, useMemo, type ReactNode } from 'react';
 import * as v from 'valibot';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, toKinuError, settleSync } from '@kinu.run/core/obs';
 
 export type ThemeAppearance = 'dark' | 'light';
 
@@ -428,11 +429,13 @@ export function createThemeRegistry(themes: readonly TuiThemeDefinition[]): Them
   return Object.freeze({
     themes: Object.freeze(validated),
     get(themeId: string) {
-      const theme = byId[themeId];
+      return settleSync(Effect.gen(function* () {
+        const theme = byId[themeId];
 
-      if (theme === undefined) throw new Error(`Unknown TUI theme: ${themeId}`);
+        if (theme === undefined) return yield* Effect.die(new Error(`Unknown TUI theme: ${themeId}`));
 
-      return theme;
+        return theme;
+      }));
     },
   });
 }

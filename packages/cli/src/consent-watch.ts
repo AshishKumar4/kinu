@@ -9,7 +9,7 @@ import type {
   PendingDeviceConsent,
 } from './agent-client';
 import { DIM, ERR, MUTED, WARN } from './display';
-import { diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { renderThrownChain, settleLogged } from '@kinu.run/core/obs';
 import { waitForAnswer } from '@kinu.run/core';
 import { literalText } from '@kinu.run/core/tui';
 
@@ -84,18 +84,13 @@ export function watchDeviceConsents(
 
   // Runs until `stop`; a failure past the tick's own reporting ends the loop and is recorded, never an unhandled rejection.
   const done = (async () => {
-    try {
+    await settleLogged('consent.poll_failed', { doing: 'polling pending device consents', otherwise: 'io' }, async () => {
       await waitForAnswer(async () => {
         await tick();
 
         return undefined;
       }, { intervalMs: CONSENT_POLL_MS, signal: abort.signal });
-    } catch (cause) {
-      diagnostics.failure(
-        'consent.poll_failed',
-        toKinuError({ doing: 'polling pending device consents', cause, otherwise: 'io' }),
-      );
-    }
+    });
   })();
 
   return {

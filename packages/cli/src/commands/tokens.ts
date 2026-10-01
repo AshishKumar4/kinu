@@ -1,4 +1,6 @@
 /** `kinu tokens`: scoped CI access tokens (`pta_…`). Minting requires a session signed in within the step-up window. */
+import { Effect } from 'effect';
+import { settle } from '@kinu.run/core/obs';
 import {
   createCliAccessToken,
   listCliAccessTokens,
@@ -17,15 +19,18 @@ interface TokensOpts {
   json?: boolean;
 }
 
-export async function tokensCommand(action: string | undefined, name: string | undefined, opts: TokensOpts): Promise<void> {
-  const sub = action ?? 'list';
+export function tokensCommand(action: string | undefined, name: string | undefined, opts: TokensOpts): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const sub = action ?? 'list';
 
-  if (sub === 'list') return listTokens(opts);
+    if (sub === 'list') return yield* Effect.promise(async () => listTokens(opts));
 
-  if (sub === 'create') return createToken(name, opts);
+    if (sub === 'create') return yield* Effect.promise(async () => createToken(name, opts));
 
-  if (sub === 'revoke') return revokeToken(name ?? opts.name);
-  throw new Error('Usage: kinu tokens [list | create --name <name> --scopes <scopes> | revoke <name>]');
+    if (sub === 'revoke') return yield* Effect.promise(async () => revokeToken(name ?? opts.name));
+
+    return yield* Effect.die(new Error('Usage: kinu tokens [list | create --name <name> --scopes <scopes> | revoke <name>]'));
+  }));
 }
 
 async function listTokens(opts: TokensOpts): Promise<void> {

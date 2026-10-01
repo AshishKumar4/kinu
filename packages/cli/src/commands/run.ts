@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import * as readline from 'node:readline';
 import { callAgentRpc, createCloudWebhookTrigger, type CloudWebhookTriggerInput } from '../cloud-api';
 import { listConfiguredAgentRefs, requireAuthConfig } from '../config';
@@ -30,7 +31,7 @@ import {
   readLocalMemory,
   searchLocalMemory,
 } from '../local-inspection';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { renderThrownChain, settle } from '@kinu.run/core/obs';
 import { installTurnDiagnostics } from '../turn-log';
 
 /** `--no-transcript` arrives as `transcript: false`, not `noTranscript: true`. */
@@ -84,27 +85,29 @@ export interface ExecOptions extends Omit<AgentClientFlags, 'noAutoEvolve'> {
 }
 
 /** `kinu exec`: headless for CI. Consents fail closed; exit 0 only when the turn completed without errors or denied consents. */
-export async function execCommand(promptParts: string[], opts: ExecOptions): Promise<void> {
-  const rawPrompt = await buildPrompt(promptParts);
+export function execCommand(promptParts: string[], opts: ExecOptions): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const rawPrompt = yield* Effect.promise(async () => buildPrompt(promptParts));
 
-  if (!rawPrompt) {
-    throw new Error('A task prompt is required. Usage: kinu exec "task" [--workspace <name>] [--json]');
-  }
+    if (!rawPrompt) {
+      return yield* Effect.die(new Error('A task prompt is required. Usage: kinu exec "task" [--workspace <name>] [--json]'));
+    }
 
-  const target = resolveAgentTarget(resolveExecWorkspaceName(opts.workspace));
+    const target = resolveAgentTarget(resolveExecWorkspaceName(opts.workspace));
 
-  const failed = await runOneShot(target, rawPrompt, {
-    model: opts.model,
-    baseUrl: opts.baseUrl,
-    auth: opts.auth,
-    noAutoEvolve: opts.autoEvolve === false,
-    ...transcriptOptions(opts),
-  }, {
-    json: opts.json === true,
-    headless: true,
-  });
+    const failed = yield* Effect.promise(async () => runOneShot(target, rawPrompt, {
+      model: opts.model,
+      baseUrl: opts.baseUrl,
+      auth: opts.auth,
+      noAutoEvolve: opts.autoEvolve === false,
+      ...transcriptOptions(opts),
+    }, {
+      json: opts.json === true,
+      headless: true,
+    }));
 
-  await exitOneShot(failed);
+    return yield* Effect.promise(async () => exitOneShot(failed));
+  }));
 }
 
 /**
@@ -214,7 +217,7 @@ function askLineOnce(question: string, signal: AbortSignal): Promise<string | nu
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     let settled = false;
 
-    const settle = (answer: string | null) => {
+    const finish = (answer: string | null) => {
       if (settled) return;
       settled = true;
       signal.removeEventListener('abort', onAbort);
@@ -222,10 +225,10 @@ function askLineOnce(question: string, signal: AbortSignal): Promise<string | nu
       resolve(answer);
     };
 
-    const onAbort = () => settle(null);
+    const onAbort = () => finish(null);
     signal.addEventListener('abort', onAbort, { once: true });
-    rl.once('close', () => settle(null));
-    rl.question(question, settle);
+    rl.once('close', () => finish(null));
+    rl.question(question, finish);
   });
 }
 

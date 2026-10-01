@@ -2,6 +2,8 @@
  * A small AgentRuntime fixture over a fresh in-memory database. Work it cannot perform faithfully
  * refuses by name until a test supplies it, so no test passes on work nothing performed.
  */
+import { Effect } from 'effect';
+import { settleSync } from '@kinu.run/core/obs';
 import type {
   AgentRuntime, LLM, Memory, Executor, Schedule, Identity, ExecutionRouter,
   CraftStore, AgentStores, AgentsSwarmDeps, ModelCallSink,
@@ -169,24 +171,26 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
  * on it measures an undefined workspace surface. Call before the first turn, upstream of every write.
  */
 export function assertExecutableRuntime(rt: AgentRuntime, context: string): void {
-  const router = rt.executionRouter;
+  return settleSync(Effect.gen(function* () {
+    const router = rt.executionRouter;
 
-  if (!router) {
-    throw new Error(
-      `${context}: this runtime has NO executionRouter, so nothing the agent does can execute. `
-      + 'That is the signature of createWorkspace\'s birth runtime; open the workspace with '
-      + 'openWorkspaceCLI (createCLIRuntime) to get one that can run commands.',
-    );
-  }
+    if (!router) {
+      return yield* Effect.die(new Error(
+        `${context}: this runtime has NO executionRouter, so nothing the agent does can execute. `
+        + 'That is the signature of createWorkspace\'s birth runtime; open the workspace with '
+        + 'openWorkspaceCLI (createCLIRuntime) to get one that can run commands.',
+      ));
+    }
 
-  const providers = router.getProviders();
+    const providers = router.getProviders();
 
-  if (providers.length === 0) {
-    throw new Error(
-      `${context}: the executionRouter has ZERO registered providers, so every workspace and `
-      + 'codemode call will fail with "is not a function" and any rate measured over them is '
-      + 'meaningless. Expected the inline provider ({vfs, memory, craftStore, shell, sql}) that '
-      + 'createCLIRuntime registers.',
-    );
-  }
+    if (providers.length === 0) {
+      return yield* Effect.die(new Error(
+        `${context}: the executionRouter has ZERO registered providers, so every workspace and `
+        + 'codemode call will fail with "is not a function" and any rate measured over them is '
+        + 'meaningless. Expected the inline provider ({vfs, memory, craftStore, shell, sql}) that '
+        + 'createCLIRuntime registers.',
+      ));
+    }
+  }));
 }

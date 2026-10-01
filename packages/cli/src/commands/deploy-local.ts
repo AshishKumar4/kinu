@@ -4,6 +4,7 @@
  * so a pid is only a hint: its argv must name `workerd` and this layout's capnp file before it is signalled, and
  * startup is proved by `/api/health`, not by the port accepting.
  */
+import { Effect } from 'effect';
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { connect } from 'node:net';
 import { get } from 'node:http';
@@ -14,7 +15,7 @@ import {
   renderLocalConfig, renderWorkerdConfig, unhostedBindings, workerdDirectories,
   type LocalConfig, type LocalLayout,
 } from '@kinu.run/core/deploy';
-import { tolerate } from '@kinu.run/core/obs';
+import { tolerate, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { AGENT_HOME, ensureAgentHome } from '../config';
 import { ACCENT, DIM, OK, WARN } from '../display';
@@ -42,34 +43,36 @@ interface LocalInstance {
   readonly address: string;
 }
 
-export async function localDoor(action: string | undefined, opts: { origin?: string; port?: string }): Promise<void> {
-  if (action === 'stop') {
-    const stopped = await stopLocalInstance();
+export function localDoor(action: string | undefined, opts: { origin?: string; port?: string }): Promise<void> {
+  return settle(Effect.gen(function* () {
+    if (action === 'stop') {
+      const stopped = yield* Effect.promise(async () => stopLocalInstance());
 
-    console.log(stopped === null
-      ? DIM('No local Kinu is running')
-      : `${OK('✓')} Local Kinu stopped ${DIM(`pid ${String(stopped)}`)}`);
+      console.log(stopped === null
+        ? DIM('No local Kinu is running')
+        : `${OK('✓')} Local Kinu stopped ${DIM(`pid ${String(stopped)}`)}`);
 
-    return;
-  }
+      return;
+    }
 
-  if (action === 'status') {
-    await report();
+    if (action === 'status') {
+      yield* Effect.promise(async () => report());
 
-    return;
-  }
+      return;
+    }
 
-  if (action !== undefined && action !== 'start') {
-    throw new Error('Usage: kinu deploy local [start|stop|status]');
-  }
+    if (action !== undefined && action !== 'start') {
+      return yield* Effect.die(new Error('Usage: kinu deploy local [start|stop|status]'));
+    }
 
-  if (action === undefined) await install(opts);
+    if (action === undefined) yield* Effect.promise(async () => install(opts));
 
-  const started = await startLocalInstance();
+    const started = yield* Effect.promise(async () => startLocalInstance());
 
-  console.log(started === null
-    ? `${DIM('A local Kinu is already running')} ${DIM(localConfig().address)}`
-    : `${OK('✓')} Local Kinu on ${ACCENT(started.address)} ${DIM(`pid ${String(started.pid)}`)}`);
+    console.log(started === null
+      ? `${DIM('A local Kinu is already running')} ${DIM(localConfig().address)}`
+      : `${OK('✓')} Local Kinu on ${ACCENT(started.address)} ${DIM(`pid ${String(started.pid)}`)}`);
+  }));
 }
 
 /** A release directory is written once; an update is a new directory plus a `current` swap. */

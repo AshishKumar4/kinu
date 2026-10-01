@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settle } from '@kinu.run/core/obs';
 import {
   decodeJsonValue, formatScoreInterval, JsonArraySchema, JsonValueSchema,
   renderAlignmentConvergence, renderCalibrationReport, SPEND_SOURCE_LABEL, usageTotal,
@@ -132,26 +134,28 @@ export async function stopCommand(name: string, opts: InspectOpts = {}): Promise
  * Local only: no deployment RPC returns the actor directory.
  */
 // `async` only for `wrapAction`; both reads are synchronous.
-export async function actorsCommand(name: string, actorId?: string, opts: InspectOpts = {}): Promise<void> {
-  const target = resolveAgentTarget(name);
+export function actorsCommand(name: string, actorId?: string, opts: InspectOpts = {}): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const target = resolveAgentTarget(name);
 
-  if (target.mode === 'cloud') {
-    throw new Error(
-      'kinu actors reads the local workspace database directly; the deployment exposes no actor-directory RPC. '
-      + 'Use the web workspace view for a cloud agent.',
-    );
-  }
+    if (target.mode === 'cloud') {
+      return yield* Effect.die(new Error(
+        'kinu actors reads the local workspace database directly; the deployment exposes no actor-directory RPC. '
+        + 'Use the web workspace view for a cloud agent.',
+      ));
+    }
 
-  if (actorId !== undefined) {
-    const info = getLocalActorInfo(target.localName, actorId);
+    if (actorId !== undefined) {
+      const info = getLocalActorInfo(target.localName, actorId);
 
-    if (!info) throw new Error(`No actor ${actorId} was ever issued in workspace ${target.name}.`);
-    printData(decodeJsonValue({ value: info }), opts);
+      if (!info) return yield* Effect.die(new Error(`No actor ${actorId} was ever issued in workspace ${target.name}.`));
+      printData(decodeJsonValue({ value: info }), opts);
 
-    return;
-  }
+      return;
+    }
 
-  printData(decodeJsonValue({ value: listLocalActors(target.localName) }), opts);
+    printData(decodeJsonValue({ value: listLocalActors(target.localName) }), opts);
+  }));
 }
 
 export async function stateCommand(name: string, opts: InspectOpts = {}): Promise<void> {
@@ -518,31 +522,33 @@ export async function alignmentCommand(name: string, opts: InspectOpts = {}): Pr
   console.log(renderCalibrationReport(calibration));
 }
 
-export async function webhookCommand(name: string, label: string | undefined, opts: InspectOpts & {
+export function webhookCommand(name: string, label: string | undefined, opts: InspectOpts & {
   authMode?: string;
   secret?: string;
   contentType?: string;
   rateLimit?: string;
 } = {}): Promise<void> {
-  if (!label) throw new Error('webhook label required');
-  const target = resolveAgentTarget(name);
+  return settle(Effect.gen(function* () {
+    if (!label) return yield* Effect.die(new Error('webhook label required'));
+    const target = resolveAgentTarget(name);
 
-  if (target.mode !== 'cloud') throw new Error('Webhook triggers require a cloud workspace.');
-  const auth = requireAuthConfig();
-  const authMode = normalizeWebhookAuthMode(opts.authMode);
+    if (target.mode !== 'cloud') return yield* Effect.die(new Error('Webhook triggers require a cloud workspace.'));
+    const auth = requireAuthConfig();
+    const authMode = normalizeWebhookAuthMode(opts.authMode);
 
-  const input: CloudWebhookTriggerInput = {
-    label,
-    auth_mode: authMode,
-  };
+    const input: CloudWebhookTriggerInput = {
+      label,
+      auth_mode: authMode,
+    };
 
-  if (opts.secret) input.secret = opts.secret;
+    if (opts.secret) input.secret = opts.secret;
 
-  if (opts.contentType) input.accepted_content_type = opts.contentType;
+    if (opts.contentType) input.accepted_content_type = opts.contentType;
 
-  if (opts.rateLimit) input.rate_limit_per_min = parsePositiveInt(opts.rateLimit, 'rate limit');
-  const created = await createCloudWebhookTrigger(auth.origin, auth.token, target.cloudName, input);
-  printData(decodeJsonValue({ value: created }), opts);
+    if (opts.rateLimit) input.rate_limit_per_min = parsePositiveInt(opts.rateLimit, 'rate limit');
+    const created = yield* Effect.promise(async () => createCloudWebhookTrigger(auth.origin, auth.token, target.cloudName, input));
+    printData(decodeJsonValue({ value: created }), opts);
+  }));
 }
 
 function cloudRead(

@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-01",
   "files": 2931,
-  "functions": 75052,
+  "functions": 75218,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -322,7 +322,7 @@
       "complexity": 28
     },
     {
-      "key": "packages/cli/src/config.ts#resolveLLMConfig",
+      "key": "packages/cli/src/config.ts#resolveLLMConfig>gen",
       "complexity": 28
     },
     {

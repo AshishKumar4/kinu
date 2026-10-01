@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { deleteCloudCredential, listCloudCredentials } from '../cloud-api';
 import { API_KEY_PROVIDERS, CONFIG_PATH, bumpProviderRevision, resolveCloudSession, updateConfigFile, type KinuConfig } from '../config';
 import { readDefaultAccounts, readDefaultTier } from '../profiles';
@@ -7,7 +8,7 @@ import { holdsAccounts, readProviderConnections } from './provider-connect';
 import { canonicalProviderName, connectOptions, connectProviderOnConsole } from './setup';
 import * as v from 'valibot';
 import { MAIN_ACCOUNT, accountCredentialKey, catalogCredKey, isAccountName } from '@kinu.run/core';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { renderThrownChain, settle } from '@kinu.run/core/obs';
 import { signOutChatGptLogin } from '@kinu.run/cli-backend';
 
 type ProviderAction = 'list' | 'connect' | 'disconnect' | 'default';
@@ -38,43 +39,45 @@ interface LocalCredential {
   credKey?: string;
 }
 
-export async function providersCommand(
+export function providersCommand(
   actionOrProvider: string | undefined,
   providerArg: string | undefined,
   accountArg: string | undefined,
   opts: { origin?: string; model?: string; local?: boolean },
 ): Promise<void> {
-  const { action, provider, raw, account } = parseArgs(actionOrProvider, providerArg, accountArg);
+  return settle(Effect.gen(function* () {
+    const { action, provider, raw, account } = parseArgs(actionOrProvider, providerArg, accountArg);
 
-  if (action === 'list') {
-    await printProviders();
+    if (action === 'list') {
+      yield* Effect.promise(async () => printProviders());
 
-    return;
-  }
+      return;
+    }
 
-  if (action === 'default') {
-    await setDefaultAccount(raw, account);
+    if (action === 'default') {
+      yield* Effect.promise(async () => setDefaultAccount(raw, account));
 
-    return;
-  }
+      return;
+    }
 
-  if (action === 'disconnect' && !provider && raw) {
-    await disconnectAccountProvider(raw, account);
+    if (action === 'disconnect' && !provider && raw) {
+      yield* Effect.promise(async () => disconnectAccountProvider(raw, account));
 
-    return;
-  }
+      return;
+    }
 
-  if (!provider) {
-    throw new Error(`Choose a provider to ${action}: cloudflare, claude, chatgpt, openai, openrouter, anthropic, openai-compatible, or opencode.`);
-  }
+    if (!provider) {
+      return yield* Effect.die(new Error(`Choose a provider to ${action}: cloudflare, claude, chatgpt, openai, openrouter, anthropic, openai-compatible, or opencode.`));
+    }
 
-  if (action === 'disconnect') {
-    await (account === MAIN_ACCOUNT ? disconnectProvider(provider) : disconnectAccount(provider, account));
+    if (action === 'disconnect') {
+      yield* Effect.promise(async () => (account === MAIN_ACCOUNT ? disconnectProvider(provider) : disconnectAccount(provider, account)));
 
-    return;
-  }
+      return;
+    }
 
-  await connectProviderOnConsole(provider, { ...connectOptions(opts), account });
+    yield* Effect.promise(async () => connectProviderOnConsole(provider, { ...connectOptions(opts), account }));
+  }));
 }
 
 function parseArgs(

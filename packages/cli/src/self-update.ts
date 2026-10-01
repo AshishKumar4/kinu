@@ -2,6 +2,7 @@
  * Atomic replacement of `$KINU_HOME/cli`: `current` runs, `prev` is kept one launch for rollback, `next-<stamp>` is
  * staged and verified before two renames swap it in. Never touches `bin/kinu`, which belongs to `kinu update`.
  */
+import { Effect } from 'effect';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -13,7 +14,7 @@ import {
   RELEASE_SIGNING_PUBLIC_KEY, RELEASE_SIGNING_PUBLIC_KEY_ENV, SignedReleaseSchema, verifyRelease, type SignedRelease,
 } from '@kinu.run/core';
 import * as v from 'valibot';
-import { KinuError, toKinuError, tolerate } from '@kinu.run/core/obs';
+import { KinuError, toKinuError, tolerate, settleSync } from '@kinu.run/core/obs';
 import { AGENT_HOME } from './config';
 
 const CLI_ROOT = join(AGENT_HOME, 'cli');
@@ -260,15 +261,17 @@ export async function refreshCliTree(origin: string, served: string, seams: Refr
 
 /** Detached, so a command exits without waiting for a download. */
 export function spawnBackgroundRefresh(): void {
-  const entry = process.argv[1];
+  return settleSync(Effect.gen(function* () {
+    const entry = process.argv[1];
 
-  if (entry === undefined) throw new KinuError('unsupported', 'the CLI entry file is unknown, so no background refresh can start');
+    if (entry === undefined) return yield* new KinuError('unsupported', 'the CLI entry file is unknown, so no background refresh can start');
 
-  const child = spawnKinuScript(entry, ['update', '--background'], {
-    detached: true,
-    stdio: 'ignore',
-    env: { ...process.env, KINU_HOME: AGENT_HOME },
-  });
+    const child = spawnKinuScript(entry, ['update', '--background'], {
+      detached: true,
+      stdio: 'ignore',
+      env: { ...process.env, KINU_HOME: AGENT_HOME },
+    });
 
-  child.unref();
+    child.unref();
+  }));
 }

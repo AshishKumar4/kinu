@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import { generateText } from 'ai';
@@ -18,7 +19,7 @@ import {
 import { ensureDefaultTier, loadActiveProfile } from './default-model';
 import { readDefaultTier } from './profiles';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { diagnostics, renderThrownChain } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain, settle } from '@kinu.run/core/obs';
 import { makeSql, makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
 import {
   agentDbPath,
@@ -294,37 +295,39 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
 
 /** Join the virtual workspace here with no name, mission or role: inherits a peer's mission, gets a stable
  * slug and a blank `auto` title. Refuses when there is no peer to inherit from. */
-export async function createLocalPeerAgent(
+export function createLocalPeerAgent(
   input: { cwd?: string; workspaceId?: string; role?: string } = {},
 ): Promise<CreatedCliAgent> {
-  ensureAgentHome();
-  const cwd = canonicalProjectRoot(input.cwd);
-  const workspaceId = input.workspaceId ?? defaultVirtualWorkspaceId(cwd);
-  validateWorkspaceId(workspaceId);
-  const peers = localWorkspaceMembers(workspaceId, cwd);
-  const purpose = inheritedPeerMission(peers);
+  return settle(Effect.gen(function* () {
+    ensureAgentHome();
+    const cwd = canonicalProjectRoot(input.cwd);
+    const workspaceId = input.workspaceId ?? defaultVirtualWorkspaceId(cwd);
+    validateWorkspaceId(workspaceId);
+    const peers = localWorkspaceMembers(workspaceId, cwd);
+    const purpose = inheritedPeerMission(peers);
 
-  if (!purpose) {
-    throw new Error(
-      `No agent in workspace "${workspaceId}" to inherit a mission from. `
-      + 'Create the first one with: kinu create',
-    );
-  }
+    if (!purpose) {
+      return yield* Effect.die(new Error(
+        `No agent in workspace "${workspaceId}" to inherit a mission from. `
+        + 'Create the first one with: kinu create',
+      ));
+    }
 
-  const created: CreateCliAgentInput = {
-    // Neutral memorable pair plus id digits, never mission text.
-    name: workspaceSlug(crypto.randomUUID()),
-    displayName: '',
-    nameOrigin: 'auto',
-    purpose,
-    mode: 'local',
-    cwd,
-    workspaceId,
-  };
+    const created: CreateCliAgentInput = {
+      // Neutral memorable pair plus id digits, never mission text.
+      name: workspaceSlug(crypto.randomUUID()),
+      displayName: '',
+      nameOrigin: 'auto',
+      purpose,
+      mode: 'local',
+      cwd,
+      workspaceId,
+    };
 
-  if (input.role) created.role = input.role;
+    if (input.role) created.role = input.role;
 
-  return createCliAgent(created);
+    return yield* Effect.promise(async () => createCliAgent(created));
+  }));
 }
 
 /** First peer with a mission. Placeholder missions count; otherwise a missionless workspace looks empty. */

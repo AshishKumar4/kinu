@@ -3,10 +3,11 @@
  * {@link EVAL_IDENTITY_ENV.token}, never a person's stored session; no credential means skip. Target: an
  * allowlist of the two deployments, production and staging, plus loopback, failing closed. Pure over its environment.
  */
+import { Effect } from 'effect';
 import { homedir } from 'node:os';
 import * as v from 'valibot';
 import { EVAL_ACCOUNTS, USER_AI_PROXY_PATH, type EvalAccount } from '@kinu.run/core';
-import { classify, renderThrownChain } from '@kinu.run/core/obs';
+import { classify, renderThrownChain, settleSync } from '@kinu.run/core/obs';
 import { ambientByName, LIVE_MODEL_ENV } from './ambient-env';
 
 export const EVAL_IDENTITY_ENV = {
@@ -28,14 +29,16 @@ export const EVAL_ACCOUNT_ENV = 'KINU_EVAL_ACCOUNT';
 /** The named eval account `env` asks for, if any. A name that is no eval account throws: it must never fall back
  *  to the eval service's own. */
 export function evalAccount(env: EnvSource = process.env): EvalAccount | undefined {
-  const name = env[EVAL_ACCOUNT_ENV]?.trim();
+  return settleSync(Effect.gen(function* () {
+    const name = env[EVAL_ACCOUNT_ENV]?.trim();
 
-  if (name === undefined || name === '') return undefined;
-  const named = v.safeParse(v.picklist(EVAL_ACCOUNTS), name);
+    if (name === undefined || name === '') return undefined;
+    const named = v.safeParse(v.picklist(EVAL_ACCOUNTS), name);
 
-  if (!named.success) throw new Error(`${EVAL_ACCOUNT_ENV}=${name} names no eval account: one of ${EVAL_ACCOUNTS.join(', ')}`);
+    if (!named.success) return yield* Effect.die(new Error(`${EVAL_ACCOUNT_ENV}=${name} names no eval account: one of ${EVAL_ACCOUNTS.join(', ')}`));
 
-  return named.output;
+    return named.output;
+  }));
 }
 
 /** Whether `email` is the named eval account's own user: the server plus-addresses the eval identity's email by
@@ -159,11 +162,13 @@ export function evalTargetVerdict(origin: string): EvalTargetVerdict {
  * staging run expects staging and a production run production.
  */
 export function deploymentPublicOrigin(target: string): string {
-  const verdict = evalTargetVerdict(target);
+  return settleSync(Effect.gen(function* () {
+    const verdict = evalTargetVerdict(target);
 
-  if (verdict.kind === 'refused') throw new Error(verdict.reason);
+    if (verdict.kind === 'refused') return yield* Effect.die(new Error(verdict.reason));
 
-  return verdict.why === 'deployment' ? verdict.origin : EVAL_DEPLOYMENT_ORIGIN;
+    return verdict.why === 'deployment' ? verdict.origin : EVAL_DEPLOYMENT_ORIGIN;
+  }));
 }
 
 export type EvalModelEndpointVerdict =

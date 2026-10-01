@@ -1,10 +1,11 @@
+import { Effect } from 'effect';
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import type { AgentConfigStore, AgentRuntime, EvolutionConfigView, InvocationSurface, ShellApprovalMode, ReasoningEffort, JsonObject, RefinementDecisionInput, RefinementDecisionResult, RefinementRequestView, StagedSkillResult, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspaceSpend, WorkspaceWork, ModelTestResult } from '@kinu.run/core';
 import type { WorkspaceInfo } from '@kinu.run/cli-backend';
 import { applyWorkspaceTitle, getChatHistoryPage, persistAutoTitle, canonicalConversationId, getEvolutionConfig, initAgentConfigTable, readLatestSearchTree, setEvolutionConfig, BACKGROUND_POLICY, REAL_CLOCK, decodeJsonValue, usageReported, renderToolResult, type GepaOptimizationResult } from '@kinu.run/core';
-import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, toKinuError, settle } from '@kinu.run/core/obs';
 import {
   DriverLeaseHold,
   OS_LEASE_PROCESS,
@@ -82,42 +83,44 @@ interface LocalAgentClientOptions {
   cwd?: string;
 }
 
-export async function openLocalAgentClient(name: string, opts: LocalAgentClientOptions = {}): Promise<LocalAgentClient> {
-  const dbPath = agentDbPath(name);
+export function openLocalAgentClient(name: string, opts: LocalAgentClientOptions = {}): Promise<LocalAgentClient> {
+  return settle(Effect.gen(function* () {
+    const dbPath = agentDbPath(name);
 
-  if (!existsSync(dbPath)) {
-    throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
-  }
+    if (!existsSync(dbPath)) {
+      return yield* Effect.die(new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`));
+    }
 
-  const { llmConfig, resolver } = createConfiguredLocalModelResolver(opts);
-  const providerCredentials = resolveProviderCredentials();
-  const oauthStore = createOAuthStore();
-  const db = new Database(dbPath);
+    const { llmConfig, resolver } = createConfiguredLocalModelResolver(opts);
+    const providerCredentials = resolveProviderCredentials();
+    const oauthStore = createOAuthStore();
+    const db = new Database(dbPath);
 
-  const openConfig = {
-    llm: llmConfig, providerCredentials, oauthStore,
-    checkpointKeep: loadConfigFile().checkpointKeep,
-    cwd: opts.cwd,
-  };
+    const openConfig = {
+      llm: llmConfig, providerCredentials, oauthStore,
+      checkpointKeep: loadConfigFile().checkpointKeep,
+      cwd: opts.cwd,
+    };
 
-  const { rt, info } = await openWorkspaceCLI(db, dbPath, openConfig);
+    const { rt, info } = yield* Effect.promise(async () => openWorkspaceCLI(db, dbPath, openConfig));
 
-  const client = new LocalAgentClient({
-    agentName: name,
-    rt,
-    db,
-    dbPath,
-    info,
-    refreshInfo: async () => (await openWorkspaceCLI(db, dbPath, openConfig)).info,
-    modelResolver: resolver,
-    mcpServers: resolveMcpServers(),
-    noAutoEvolve: opts.noAutoEvolve ?? false,
-    transcript: opts.transcript ?? {},
-    naming: opts,
-    surface: opts.surface ?? 'interactive',
-  });
+    const client = new LocalAgentClient({
+      agentName: name,
+      rt,
+      db,
+      dbPath,
+      info,
+      refreshInfo: async () => (await openWorkspaceCLI(db, dbPath, openConfig)).info,
+      modelResolver: resolver,
+      mcpServers: resolveMcpServers(),
+      noAutoEvolve: opts.noAutoEvolve ?? false,
+      transcript: opts.transcript ?? {},
+      naming: opts,
+      surface: opts.surface ?? 'interactive',
+    });
 
-  return client;
+    return client;
+  }));
 }
 
 /** Core's evolution control plane, the same one the cloud backend drives. */
@@ -319,19 +322,21 @@ export class LocalAgentClient implements AgentClient {
   }
 
   /** The lease is taken before any pump, so the person learns the conversation is taken before typing. */
-  async connect(): Promise<void> {
-    const refusal = this.driverLease.acquire();
+  connect(): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const refusal = this.driverLease.acquire();
 
-    if (refusal) {
-      throw new KinuError(
-        refusal.refused.reason,
-        `${refusal.refused.error}. Close that session, or continue the conversation there.`,
-      );
-    }
+      if (refusal) {
+        return yield* new KinuError(
+          refusal.refused.reason,
+          `${refusal.refused.error}. Close that session, or continue the conversation there.`,
+        );
+      }
 
-    if (Object.keys(this.deps.mcpServers).length > 0) {
-      await this.session.connectMcp(this.deps.mcpServers);
-    }
+      if (Object.keys(this.deps.mcpServers).length > 0) {
+        yield* Effect.promise(async () => this.session.connectMcp(this.deps.mcpServers));
+      }
+    }));
   }
 
   subscribe(listener: (event: AgentClientEvent) => void): () => void {
@@ -395,22 +400,24 @@ export class LocalAgentClient implements AgentClient {
   }
 
   /** A fresh transcript artifact takes the entries recorded after the walk-back. */
-  async fork(point: ForkPoint): Promise<AgentForkResult> {
-    if (this.awaiting.size > 0) throw new Error('Cannot fork while a turn is running.');
-    const rows = await this.history();
-    const pivotRow = rows[findForkPivot(rows, point)];
+  fork(point: ForkPoint): Promise<AgentForkResult> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (this.awaiting.size > 0) return yield* Effect.die(new Error('Cannot fork while a turn is running.'));
+      const rows = yield* Effect.promise(async () => this.history());
+      const pivotRow = rows[findForkPivot(rows, point)];
 
-    if (pivotRow === undefined) throw new Error('Could not locate that message in the durable conversation.');
-    await this.session.revertConversation(pivotRow.id);
-    await this.session.end();
-    this.activeCliSession = createCliSession(this.agentName, {
-      ...this.deps.transcript,
-      conversationId: this.canonicalConversation,
-    });
-    this.session = this.createAgentSession();
-    await this.connect();
+      if (pivotRow === undefined) return yield* Effect.die(new Error('Could not locate that message in the durable conversation.'));
+      yield* Effect.promise(async () => this.session.revertConversation(pivotRow.id));
+      yield* Effect.promise(async () => this.session.end());
+      this.activeCliSession = createCliSession(this.agentName, {
+        ...this.deps.transcript,
+        conversationId: this.canonicalConversation,
+      });
+      this.session = this.createAgentSession();
+      yield* Effect.promise(async () => this.connect());
 
-    return { client: this, label: `branch ${this.activeCliSession.id}` };
+      return { client: this, label: `branch ${this.activeCliSession.id}` };
+    }));
   }
 
   stop(): string[] {

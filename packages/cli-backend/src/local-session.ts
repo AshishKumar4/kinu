@@ -3,6 +3,7 @@
  * orchestration through the BackendHost seam. Both CLI frontends drive one via send()/end().
  */
 
+import { Effect } from 'effect';
 import { lookup } from 'node:dns/promises';
 import { realpathSync } from 'node:fs';
 import { ConversationSearchStore, sameActorReference, testModel, type ConversationRecall, type ModelTestResult, whenActorTakesInput } from '@kinu.run/core';
@@ -150,9 +151,7 @@ import { TierIdSchema,
   ChatSession, CHAT_SESSION_ID, checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore,
   type ChatTurnInput, type ComposedRequest, type ContextFill, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
-import {
-  diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal,
-} from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal, settle, settleSync, settleLogged, settleLoggedSync } from '@kinu.run/core/obs';
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, writeTransaction, type CLIRuntime } from './runtime';
 import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, type LocalActorBinding } from '@kinu.run/core';
 import { discoverAgentsMd } from './agents-md';
@@ -942,12 +941,14 @@ export class LocalAgentSession {
     return this.modelResolver?.listModels() ?? Promise.resolve({ models: [], failures: [] });
   }
 
-  async testModel(spec: string, signal: AbortSignal): Promise<ModelTestResult> {
-    if (this.modelResolver === null) throw new KinuError('missing', 'this session has no model resolver to test through');
+  testModel(spec: string, signal: AbortSignal): Promise<ModelTestResult> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (this.modelResolver === null) return yield* new KinuError('missing', 'this session has no model resolver to test through');
 
-    const resolver = this.modelResolver;
+      const resolver = this.modelResolver;
 
-    return testModel({ spec, resolve: (named, conversation) => resolver.resolveModel(named, conversation), report: this.modelCallSink, signal });
+      return yield* Effect.promise(async () => testModel({ spec, resolve: (named, conversation) => resolver.resolveModel(named, conversation), report: this.modelCallSink, signal }));
+    }));
   }
 
   /** `caller` has no default: the model passes `'self'`, and core refuses a self cancel of an
@@ -1104,14 +1105,7 @@ export class LocalAgentSession {
     setTimeout(async () => {
       if (this.chat.closed) return;
 
-      try {
-        await fn();
-      } catch (cause) {
-        diagnostics.failure(
-          'drain.timer_callback_failed',
-          toKinuError({ doing: 'running the drain-debounce timer callback', cause, otherwise: 'io' }),
-        );
-      }
+      await settleLogged('drain.timer_callback_failed', { doing: 'running the drain-debounce timer callback', otherwise: 'io' }, () => fn());
     }, ms);
   }
 
@@ -1289,7 +1283,7 @@ export class LocalAgentSession {
     return this.settleDeadline ??= this.clock.now() + this.jobRunner.policy.settleGraceMs;
   }
   /** Hold one settlement in the join set; it resolves only after removal so joiners terminate. */
-  private tracked(settle: () => Promise<void>): void {
+  private tracked(observe: () => Promise<void>): void {
     const { promise, resolve: markPruned } = Promise.withResolvers<void>();
     this.backgroundFibers.add(promise);
 
@@ -1299,14 +1293,14 @@ export class LocalAgentSession {
       markPruned();
     };
 
-    settle().then(prune, prune);
+    observe().then(prune, prune);
   }
 
   private trackFiber<T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> {
     const running = this.rt.schedule.fiber(name, fn);
     // Only a fiber that could not record its own outcome (database closed at teardown) reaches here.
     this.tracked(async () => {
-      try {
+      await settleLogged('fiber.settle_observer_failed', { doing: 'recording a durable background fiber settlement', otherwise: 'io' }, async () => {
         for (const outcome of await Promise.allSettled([running])) {
           if (outcome.status !== 'rejected') continue;
           diagnostics.failure(
@@ -1315,13 +1309,7 @@ export class LocalAgentSession {
             { fiber: name },
           );
         }
-      } catch (cause) {
-        diagnostics.failure(
-          'fiber.settle_observer_failed',
-          toKinuError({ doing: 'recording a durable background fiber settlement', cause, otherwise: 'io' }),
-          { fiber: name },
-        );
-      }
+      }, { fiber: name });
     });
 
     return running;
@@ -1584,13 +1572,9 @@ export class LocalAgentSession {
 
     if (!id) return;
 
-    try { recorder.emit(id, input); }
-    catch (err) {
-      diagnostics.failure(
-        'event.run_row_write_failed',
-        toKinuError({ doing: 'appending a row to the durable run-event log', cause: err, otherwise: 'io' }),
-      );
-    }
+    settleLoggedSync('event.run_row_write_failed', { doing: 'appending a row to the durable run-event log', otherwise: 'io' }, () => {
+ recorder.emit(id, input);
+    });
   }
 
   /** One run's durable events (DO getRunEvents peer); `since` is the SSE resume index. */
@@ -2042,13 +2026,7 @@ export class LocalAgentSession {
 
       // Job sweep first, in its own try: this timer is also a deferred job's wake, and only
       // `recoverBackgroundJobs` reaches `recoverOrphans` otherwise.
-      try {
-        await this.jobRunner.recoverDueResumes();
-      } catch (cause) {
-        diagnostics.failure('jobs.due_resume_failed', toKinuError({
-          doing: 'resuming a background job whose next attempt came due', cause, otherwise: 'unavailable',
-        }));
-      }
+      await settleLogged('jobs.due_resume_failed', { doing: 'resuming a background job whose next attempt came due', otherwise: 'unavailable' }, () => this.jobRunner.recoverDueResumes());
 
       try {
         await this.recoverTerminalTransitions();
@@ -2390,20 +2368,22 @@ export class LocalAgentSession {
   }
 
   reportActorRunEvent(actor: ActorHandle, event: Extract<RunEventInput, { type: 'tool_call_end' | 'step_finish' }>): void {
-    if (sameActorReference(actor, this.rt.actor)) {
-      this.recordRunEvent(event);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      if (sameActorReference(actor, this.rt.actor)) {
+        this.recordRunEvent(event);
 
-      return;
-    }
+        return;
+      }
 
-    const hosted = this.actorHost.hosted(actor);
-    const claim = hosted?.session.turnClaim;
+      const hosted = this.actorHost.hosted(actor);
+      const claim = hosted?.session.turnClaim;
 
-    if (hosted === null || claim === undefined || claim === null) {
-      throw new KinuError('missing', 'A reporting actor has no active turn for its event.');
-    }
+      if (hosted === null || claim === undefined || claim === null) {
+        return yield* new KinuError('missing', 'A reporting actor has no active turn for its event.');
+      }
 
-    this.recordRunEvent(event, claim.runId, hosted.stores.eventRecorder);
+      this.recordRunEvent(event, claim.runId, hosted.stores.eventRecorder);
+    }));
   }
 
   reportEvolutionEvent(event: { readonly type: string; readonly message: string }): void {

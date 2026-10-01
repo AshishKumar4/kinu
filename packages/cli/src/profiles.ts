@@ -3,6 +3,7 @@
  * is, mirrored by a per-account read-only cache file. Nothing merges or falls back between the stores.
  */
 
+import { Effect } from 'effect';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -17,7 +18,7 @@ import * as v from 'valibot';
 import { ensureSecretDir, withConfigLock, writeSecretFile, type ProfileEnvelopeSource } from '@kinu.run/cli-backend';
 import { AGENT_HOME, loadConfigFile, requireStoredAuthConfig, updateConfigFile, sessionExpired } from './config';
 import { getCloudProfile, updateCloudProfile } from './cloud-api';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, toKinuError, settleSync, settle } from '@kinu.run/core/obs';
 
 type ProfileAuthoritySource = { kind: 'local' } | { kind: 'account'; accountId: string };
 
@@ -33,19 +34,21 @@ export function resolveProfileAuthority(): ProfileAuthoritySource {
 
 /** Null if never imported; account-kind content here throws. */
 export function loadLocalProfileAuthority(): ProfileCatalogEnvelope | null {
-  const local = loadConfigFile().localProfile;
+  return settleSync(Effect.gen(function* () {
+    const local = loadConfigFile().localProfile;
 
-  if (!local) return null;
+    if (!local) return null;
 
-  if (local.authority.kind !== 'local') {
-    throw new Error(
-      `config.json localProfile carries authority kind "${local.authority.kind}"; the local slot holds only locally authored catalogs`,
-    );
-  }
+    if (local.authority.kind !== 'local') {
+      return yield* Effect.die(new Error(
+        `config.json localProfile carries authority kind "${local.authority.kind}"; the local slot holds only locally authored catalogs`,
+      ));
+    }
 
-  assertDigestMatches(local);
+    assertDigestMatches(local);
 
-  return local;
+    return local;
+  }));
 }
 
 /** Replaces whole; the version counts replacements. */
@@ -216,24 +219,26 @@ function reportResolution(source: ProfileReadSource, startedAt: number): void {
   diagnostics.event('profile.authority_read', { source, durationMs: Date.now() - startedAt });
 }
 
-export async function writeAccountProfile(
+export function writeAccountProfile(
   accountId: string,
   expectedVersion: number,
   catalog: ProfileCatalog,
 ): Promise<ProfileCatalogEnvelope> {
-  const auth = requireStoredAuthConfig();
-  const result = await updateCloudProfile(auth.origin, auth.token, { catalog, expectedVersion });
+  return settle(Effect.gen(function* () {
+    const auth = requireStoredAuthConfig();
+    const result = yield* Effect.promise(async () => updateCloudProfile(auth.origin, auth.token, { catalog, expectedVersion }));
 
-  if ('conflict' in result) {
-    throw new Error(
-      `the account profile changed while this edit was open `
-      + `(current version ${result.currentVersion}, digest ${result.currentDigest}); run the same command again`,
-    );
-  }
+    if ('conflict' in result) {
+      return yield* Effect.die(new Error(
+        `the account profile changed while this edit was open `
+        + `(current version ${result.currentVersion}, digest ${result.currentDigest}); run the same command again`,
+      ));
+    }
 
-  await cacheAccountProfile(accountId, result.envelope);
+    yield* Effect.promise(async () => cacheAccountProfile(accountId, result.envelope));
 
-  return result.envelope;
+    return result.envelope;
+  }));
 }
 
 function assertDigestMatches(envelope: ProfileCatalogEnvelope): void {
