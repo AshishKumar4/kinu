@@ -45,6 +45,11 @@ export class CloudTurnStream {
     this.replayed = 0;
   }
 
+  follow(): void {
+    this.applied = 0;
+    this.replayed = 0;
+  }
+
   apply(body: string, replay: boolean): void {
     if (!this.admit(replay)) return;
 
@@ -164,6 +169,36 @@ export class CloudTurnStream {
         return;
       }
     }
+  }
+}
+
+/** A re-opened turn's stream, to its request: the turn's id is the request's own. */
+export class TurnStreams {
+  private readonly moved = new Map<string, string>();
+
+  requestOf(stream: string): string {
+    return this.moved.get(stream) ?? stream;
+  }
+
+  resuming<T>(stream: string, turnId: string | undefined, open: ReadonlyMap<string, T>): { readonly turn: T; readonly moved: boolean } | null {
+    const turn = open.get(this.requestOf(stream));
+
+    if (turn !== undefined) return { turn, moved: false };
+
+    const named = turnId === undefined ? undefined : open.get(turnId);
+
+    if (turnId === undefined || named === undefined) return null;
+    this.moved.set(stream, turnId);
+
+    return { turn: named, moved: true };
+  }
+
+  ended(stream: string): void {
+    this.moved.delete(stream);
+  }
+
+  clear(): void {
+    this.moved.clear();
   }
 }
 

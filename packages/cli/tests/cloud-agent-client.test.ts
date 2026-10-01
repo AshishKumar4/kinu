@@ -1075,6 +1075,47 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
     await client.close();
   });
 
+  test('a turn the next activation re-opened is followed onto its stream, by the turn the request opened', async () => {
+    // F2 (staging a4e564ce1, 2026-09-30): the object's activation ended mid-turn and its wake re-drove the turn under
+    // a request id the new activation minted. Unfixed, the client never acked it and the rest of the answer was lost.
+    const mock = startMockAgentServer();
+    const client = newClient(mock);
+    const events: AgentClientEvent[] = [];
+    client.subscribe((event) => events.push(event));
+
+    const turn = client.send('count to two');
+
+    const request = await firstChatRequest(mock);
+
+    mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'one, ' }));
+    mock.reply(responseChunk(request.id, { type: 'finish-step' }));
+    await waitFor(() => events.find((e) => e.type === 'step-finish'), 'the first step');
+
+    await dropAndProbe(mock);
+    mock.reply({ type: CHAT_MESSAGE_TYPES.STREAM_PENDING });
+    mock.reply({ type: CHAT_MESSAGE_TYPES.STREAM_RESUMING, id: 'reopened', turnId: request.id });
+
+    // The socket is FIFO both ways: a reply after the resuming frame means the client read it, and a call it sends
+    // after that reply reaches the server behind any ack it sent.
+    for (let call = 0; call < 2; call++) {
+      const barrier = client.latestTakes();
+      const rpc = await waitFor(() => mock.frames.filter((frame) => frame.type === 'rpc' && frame.method === 'latestAlternateTakes')[call], 'resuming barrier');
+      mock.reply({ type: 'rpc', id: rpc.id, success: true, done: true, result: null });
+      await barrier;
+    }
+
+    expect(resumeAcks(mock).map((frame) => frame.id)).toEqual(['reopened']);
+
+    // As long as the first stream was: a count the two streams shared would swallow the replay whole.
+    mock.reply({ ...responseChunk('reopened', { type: 'text-delta', delta: 'two' }), replay: true });
+    mock.reply({ ...responseChunk('reopened', { type: 'finish-step' }), replay: true });
+    mock.reply(responseChunk('reopened', { type: 'text-delta', delta: '' }, true));
+
+    await expect(turn).resolves.toMatchObject({ text: 'one, two', steps: 2, hadError: false });
+    expect(chatRequests(mock)).toHaveLength(1);
+    await client.close();
+  });
+
   test('stream-pending is a wait, not a settle: the client holds the turn until the DO names its outcome', async () => {
     const mock = startMockAgentServer();
     const client = newClient(mock);
