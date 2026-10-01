@@ -2900,6 +2900,82 @@ and both answers and does not read as a failure. In core, `sandbox.rest`
 reaches the box once per answer and renders each outcome. Both were red on the
 old sources (`cf-core-red.log`).
 
+D60. The Cloudflare SDK audit's four items, each red first (2026-10-01).
+The audit (agent BewilderedSalamander) confirmed we ship the latest stable
+releases: sandbox 1.0.0, agents 0.24, wrangler 4.145. It found four places
+where the SDK docs do better than the box did.
+
+(a) A process pid counts only in the boot that started it (`4ecacaa7f`). The
+process registry lives in the container, so a snapshot or the chain restores
+it into a new boot, where its pids name whatever process the new boot gave
+that number. Status read such a pid as running, and a stop signalled it. The
+wrapper now writes `/proc/sys/kernel/random/boot_id` beside the pid, as the
+docs' RUN and STATUS scripts do. Status and stop believe a pid only from this
+boot. A record in the old form counts only if its pid file was written since
+boot. In the real image (`devbox/tests/processes-image.test.ts`), the old
+scripts recorded no boot, and a stop of a restored record naming PID 1 went
+on to `kill -s TERM -- -1` and failed (`bench-artifacts/sdk-audit/boot-red.log`). With the change,
+the restored and foreign records read lost, PID 1 is never signalled, and an
+old-form record from this boot still reads running (`boot-green.log`).
+
+(b) An open preview socket is the box's use (`bb928c7fa`). A preview
+WebSocket went straight from the port to the visitor, so the box saw only the
+upgrade and rested 40 minutes later under a socket still in use. The box now
+holds both ends, as the SDK's `bridge()` does. It relays both ways, counts each
+open socket as work at the heartbeat, and stamps its use when either end
+closes. Red on the old box: a box with an open preview socket rested at the
+end of its quiet window (`preview-socket-red.log`). Green: it holds while the
+socket is open, relays a message each way, closes the app's end with the
+visitor's code, and rests one idle window after the close
+(`terminal-activity.test.ts`, "an open preview socket is the box's use").
+Preview tokens now compare in constant time. A unit test cannot observe the
+timing, so `preview-route.test.ts` pins only the answers, and it passed on the
+old compare too: a same-length wrong token, a prefix and another port's token
+get 404. The port comes from the hostname. The Worker builds
+`/_devbox/preview/<label port>/<token>` ahead of the visitor's path, and
+nothing reads `X-Sandbox-Port`. A visitor's header or a path naming another
+port reaches the label's port, with that path left as a path; the Worker test
+and the box test pin both.
+
+(c) The container trusts the intercept CA in its own bundle (`1622c3a9e`). The
+box named the CA only in env vars (`SSL_CERT_FILE`, `CURL_CA_BUNDLE`,
+`GIT_SSL_CAINFO` and `NODE_EXTRA_CA_CERTS`, all naming the CA alone). A tool
+that reads none of them, such as apt, Java or a process with a cleared env,
+refused every intercepted site. The box now runs the docs' TRUST step once its
+HTTPS intercept is registered. The step keeps a copy of the image's bundle,
+waits up to 10 s for the CA, and writes the bundle as that copy plus this
+container's CA. A snapshot's next container so keeps no earlier container's
+CA. Commands carry the docs' env, `NODE_EXTRA_CA_CERTS` and
+`REQUESTS_CA_BUNDLE`. In the real image with a stand-in CA
+(`trust-image.test.ts`), the old shape failed a curl that read no env, and
+held no trust step for the next container (`trust-red.log`). Public roots did
+not break under the old env, because curl, git and Python also read the hashed
+`/etc/ssl/certs`; the test pins them anyway. Green: curl, git, Python and Node
+reach the intercepted site, curl, git and Python reach a public root, a curl
+with no env reaches both, and the next container trusts its own CA only, with
+one CA beyond the image's bundle (`trust-green.log`). A configure whose CA
+never appears fails, and the start awaits the configure, so the start fails as
+the docs' `startContainer()` does (read from the code, not tested). The cost
+is one exec in the start path; its live time is unmeasured until a deploy.
+The order item needed no change. Every hostname route, S3Mount's included,
+is an entry in `DevboxOutbound`'s exact-first table rather than a platform
+intercept registered beside the catch-all, so no route can be shadowed (D38).
+
+(d) The platform lifecycle, evaluated; nothing adopted. The box already sets
+`setInactivityTimeout` to `idleMs + quietConfirmMs + 60 s` on every use and
+every beat, and it awaits `monitor()` when it stops the container. Letting the
+platform's timeout or a `monitor()` watch replace the beat would remove no
+code without breaking a rule:
+- The platform stops a container without the quiesce checkpoint, and without
+  D59's ask. Container CPU is not activity to it, so it would stop a box that
+  D59 holds for a running build at 41 minutes.
+- A constructor re-arm covers at most the 60 s until the next beat re-arms it,
+  at one extra call per object construction.
+- `monitor()` keeps the object resident while it waits and ends on a restart.
+  The beat still has to run for the quiet window and the ask, so the watch
+  would add a path and remove none.
+So the timeout stays a backstop that only fires when the beat itself stops.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q
