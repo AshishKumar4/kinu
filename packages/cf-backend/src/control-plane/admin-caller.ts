@@ -3,9 +3,10 @@
  * first; `authorizeAdmin` then requires an allowlisted session email EQUAL to the
  * Access email, so one person must pass both gates. Worker-code trust is `capability.ts`.
  */
+import { Effect } from 'effect';
 import type { MiddlewareHandler } from 'hono';
 import { err, hmacSha256Hex } from '@kinu.run/core';
-import { diagnostics } from '@kinu.run/core/obs';
+import { diagnostics, settleSync } from '@kinu.run/core/obs';
 import { isFreshAuthTime, type AuthIdentity } from '../auth/session';
 import type { FamilyEnv } from '../api/context';
 import {
@@ -146,12 +147,14 @@ export function adminDenialAnswer(denial: AdminDenial): AdminDenialAnswer {
 
 /** Non-reversible operator stand-in for analytics only; the audit row keeps the real email. */
 export function actorDigest(env: ControlSecretEnv, email: string): Promise<string> {
-  const secret = (env.CREDENTIAL_ENCRYPTION_KEY ?? '').trim();
+  return settleSync(Effect.gen(function* () {
+    const secret = (env.CREDENTIAL_ENCRYPTION_KEY ?? '').trim();
 
-  if (!secret) throw new ControlPlaneUnconfiguredError();
+    if (!secret) return yield* Effect.die(new ControlPlaneUnconfiguredError());
 
-  return hmacSha256Hex(secret, `kinu.control-plane.actor.v1\u0000${email.trim().toLowerCase()}`)
-    .then((hex) => hex.slice(0, 32));
+    return hmacSha256Hex(secret, `kinu.control-plane.actor.v1\u0000${email.trim().toLowerCase()}`)
+      .then((hex) => hex.slice(0, 32));
+  }));
 }
 
 /** The only place `access_*` denials are visible. `reason`/`outcome` are the

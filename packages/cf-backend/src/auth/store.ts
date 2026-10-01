@@ -8,6 +8,7 @@
 // The userId is derived from the verified email (`deriveUserId`), so the email is the account and an
 // unverified address is not an identity.
 
+import { Effect } from 'effect';
 import type { AuthIdentity } from './session';
 import type { OAuthProviderId } from '@kinu.run/core/identity';
 import { builtinSignInOn, type SignInDeclarationEnv } from '@kinu.run/core/identity';
@@ -17,7 +18,7 @@ import { randomToken, sha256Hex } from '@kinu.run/core';
 import { readKvJson, writeKvJson, type KvStore } from '@kinu.run/agent-utils';
 import { ownerCaller, type OwnerCapabilityEnv } from '@kinu.run/core';
 import { timingSafeEqual } from '@kinu.run/core';
-import { classify, diagnostics, toKinuError, type KinuError } from '@kinu.run/core/obs';
+import { classify, diagnostics, toKinuError, type KinuError, settle, settleLogged } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -133,27 +134,29 @@ export async function createOAuthState(
 
 /** Deleted before it is judged, so a concurrent second callback finds nothing. A callback whose
  *  `binding` cookie is missing or wrong is refused before anything in the record is acted on. */
-export async function consumeOAuthState(
+export function consumeOAuthState(
   kv: KvStore,
   state: string,
   provider: OAuthProviderId,
   binding: string | null,
 ): Promise<OAuthStateRecord> {
-  const key = `oauth-state:${await sha256Hex(state)}`;
-  const record = await readKvJson(kv, key, OAuthStateSchema);
-  await kv.delete(key);
+  return settle(Effect.gen(function* () {
+    const key = `oauth-state:${yield* Effect.promise(async () => sha256Hex(state))}`;
+    const record = yield* Effect.promise(async () => readKvJson(kv, key, OAuthStateSchema));
+    yield* Effect.promise(async () => kv.delete(key));
 
-  if (!record) throw new Error('OAuth state is invalid or already used.');
+    if (!record) return yield* Effect.die(new Error('OAuth state is invalid or already used.'));
 
-  if (!binding || !timingSafeEqual(await sha256Hex(binding), record.bindingHash)) {
-    throw new Error('OAuth state was not issued to this browser. Start sign-in again.');
-  }
+    if (!binding || !timingSafeEqual(yield* Effect.promise(async () => sha256Hex(binding)), record.bindingHash)) {
+      return yield* Effect.die(new Error('OAuth state was not issued to this browser. Start sign-in again.'));
+    }
 
-  if (record.provider !== provider) throw new Error('OAuth state provider mismatch.');
+    if (record.provider !== provider) return yield* Effect.die(new Error('OAuth state provider mismatch.'));
 
-  if (record.expiresAt <= Date.now()) throw new Error('OAuth state expired. Start sign-in again.');
+    if (record.expiresAt <= Date.now()) return yield* Effect.die(new Error('OAuth state expired. Start sign-in again.'));
 
-  return { ...record, returnTo: sanitizeReturnTo(record.returnTo, new URL(record.redirectUri).origin) };
+    return { ...record, returnTo: sanitizeReturnTo(record.returnTo, new URL(record.redirectUri).origin) };
+  }));
 }
 
 /** The id is in the token, not KV, so logout always reaches the authority even before KV propagates. */
@@ -192,15 +195,7 @@ export async function createSession<Id>(env: AuthStoreEnv<Id>, profile: OAuthPro
     }, SESSION_TTL_MS);
   } catch (writeFailed) {
     // This token is never returned; withdraw the row rather than leave it holding a slot.
-    try {
-      await authority.revokeBrowserSession(caller, tokenHash);
-    } catch (withdrawFailed) {
-      diagnostics.failure('auth.browser_session_row_stranded', toKinuError({
-        doing: 'withdrawing the session row a failed sign-in left behind',
-        cause: withdrawFailed,
-        otherwise: 'unavailable',
-      }));
-    }
+    await settleLogged('auth.browser_session_row_stranded', { doing: 'withdrawing the session row a failed sign-in left behind', otherwise: 'unavailable' }, () => authority.revokeBrowserSession(caller, tokenHash));
 
     throw new SessionAuthorityUnavailableError({ cause: writeFailed });
   }
@@ -305,25 +300,11 @@ async function discardCorruptSession<Id>(
 ): Promise<void> {
   diagnostics.failure('auth.browser_session_record_malformed', fault);
 
-  try {
+  await settleLogged('auth.browser_session_row_left', { doing: 'revoking the session row of a record that no longer decodes', otherwise: 'unavailable' }, async () => {
     await sessionAuthority(env, userId).revokeBrowserSession(await ownerCaller(env), tokenHash);
-  } catch (rowFailed) {
-    diagnostics.failure('auth.browser_session_row_left', toKinuError({
-      doing: 'revoking the session row of a record that no longer decodes',
-      cause: rowFailed,
-      otherwise: 'unavailable',
-    }));
-  }
+  });
 
-  try {
-    await env.AUTH_KV.delete(sessionKey(tokenHash));
-  } catch (recordFailed) {
-    diagnostics.failure('auth.browser_session_record_left', toKinuError({
-      doing: 'removing a browser session record that no longer decodes',
-      cause: recordFailed,
-      otherwise: 'unavailable',
-    }));
-  }
+  await settleLogged('auth.browser_session_record_left', { doing: 'removing a browser session record that no longer decodes', otherwise: 'unavailable' }, () => env.AUTH_KV.delete(sessionKey(tokenHash)));
 }
 
 /** Deletes the authority row first so the cookie is refused at every colo; throws if that fails.
@@ -336,15 +317,7 @@ export async function revokeSession<Id>(env: AuthStoreEnv<Id>, token: string): P
   const caller = await ownerCaller(env);
   await sessionAuthority(env, userId).revokeBrowserSession(caller, tokenHash);
 
-  try {
-    await env.AUTH_KV.delete(sessionKey(tokenHash));
-  } catch (cleanupFailed) {
-    diagnostics.failure('auth.browser_session_record_left', toKinuError({
-      doing: 'removing the KV record of a session that is already revoked',
-      cause: cleanupFailed,
-      otherwise: 'unavailable',
-    }));
-  }
+  await settleLogged('auth.browser_session_record_left', { doing: 'removing the KV record of a session that is already revoked', otherwise: 'unavailable' }, () => env.AUTH_KV.delete(sessionKey(tokenHash)));
 }
 
 function sessionKey(tokenHash: string): string {

@@ -7,7 +7,7 @@
  */
 
 import type { AuthIdentity } from '../auth/session';
-import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, toKinuError, settleLogged } from '@kinu.run/core/obs';
 import { err, json, readBounded } from '@kinu.run/core';
 import { sanitizePng, type PngFault } from '@kinu.run/core';
 import {
@@ -327,15 +327,7 @@ async function handleFeedbackSubmission(
     const store = deps.store;
 
     if (screenshot !== null && store !== null) {
-      try {
-        await store.delete(screenshot.key);
-      } catch (cause) {
-        diagnostics.failure('feedback.orphan_retained', toKinuError({
-          doing: 'deleting the screenshot of a feedback row that failed to write',
-          cause,
-          otherwise: 'unavailable',
-        }), { objectKey: screenshot.key, feedbackId: id });
-      }
+      await settleLogged('feedback.orphan_retained', { doing: 'deleting the screenshot of a feedback row that failed to write', otherwise: 'unavailable' }, () => store.delete(screenshot.key), { objectKey: screenshot.key, feedbackId: id });
     }
 
     return refuse({ deps, status: 500, message: 'Feedback could not be saved. Try sending it again.', reason: 'row_write_failed', observed });

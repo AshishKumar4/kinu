@@ -8,7 +8,7 @@ import { routeAgentRequest } from "agents";
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { containerEventResolver, handleContainerEgress, handleContainerEvent, parseEgressParams, type KinuEgressParams } from './egress/outbound';
 import { ORCHESTRATOR_AGENT_SLUG } from "@kinu.run/core";
-import { diagnostics, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
+import { diagnostics, toKinuError, type ErrorCode, settleLogged } from "@kinu.run/core/obs";
 import {
   extractOrchestratorAgentName,
   extractTicketOrchestratorAgentName,
@@ -206,7 +206,7 @@ export default {
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
     installAnalyticsDiagnostics(env);
     ctx.waitUntil((async () => {
-      try {
+      await settleLogged('monitor.check_failed', { doing: 'running the synthetic monitoring tick', otherwise: 'unavailable' }, async () => {
         const monitor = env.MonitorDO.get(env.MonitorDO.idFromName(MONITOR_SINGLETON));
         const result = await monitor.check();
 
@@ -219,13 +219,7 @@ export default {
             emailSkipped: result.skipped !== undefined,
           });
         }
-      } catch (e) {
-        diagnostics.failure('monitor.check_failed', toKinuError({
-          doing: 'running the synthetic monitoring tick',
-          cause: e,
-          otherwise: 'unavailable',
-        }));
-      }
+      });
     })());
   },
 } satisfies ExportedHandler<Env>;

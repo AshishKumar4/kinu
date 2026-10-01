@@ -3,6 +3,7 @@
  * `MCPClientManager`. Descriptors are serialized because `execute` closures can't cross DO RPC.
  */
 
+import { Effect } from 'effect';
 import { sha256Hex } from '@kinu.run/core';
 import {
   JsonArraySchema, JsonObjectSchema,
@@ -11,7 +12,7 @@ import {
   type JsonObject, type JsonValue, type ListedMcpTools, type McpPreset, type McpPresetId, type McpToolRefusal,
   type SerializableToolDescriptor, type McpSurfaceBudget,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, renderCauseChain, tolerate, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderCauseChain, tolerate, toKinuError, settleSync } from '@kinu.run/core/obs';
 import { SdkHttpError, SseError, UnauthorizedError, type Client } from '@modelcontextprotocol/client';
 import { ResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import * as v from 'valibot';
@@ -138,103 +139,105 @@ function canonicalMcpUrl(serverUrl: string): string {
  * A preset add takes name, URL and transport from the catalog; `serverUrl` is optional there.
  */
 export function validateMcpServerInput(input: JsonValue): McpServerInput {
-  const parsedInput = v.safeParse(RawMcpServerInputSchema, input);
+  return settleSync(Effect.gen(function* () {
+    const parsedInput = v.safeParse(RawMcpServerInputSchema, input);
 
-  if (!parsedInput.success) {
-    throw new KinuError('bad_input', 'Body must be a JSON object.');
-  }
-
-  const obj = parsedInput.output;
-
-  const preset = validateMcpPresetId(obj.presetId);
-
-  const name = preset ? preset.title : validateMcpServerName(obj.name);
-
-  const parsedServerUrl = v.safeParse(v.string(), obj.serverUrl);
-
-  if (!preset && (!parsedServerUrl.success || !parsedServerUrl.output.trim())) {
-    throw new KinuError('bad_input', '`serverUrl` is required.');
-  }
-
-  const serverUrl = preset ? preset.serverUrl : v.parse(v.string(), obj.serverUrl);
-
-  if (!URL.canParse(serverUrl)) throw new KinuError('bad_input', '`serverUrl` is not a valid URL.');
-  const parsed = new URL(serverUrl);
-  const isHttps = parsed.protocol === 'https:';
-
-  const isLocalDev = parsed.protocol === 'http:' && (
-    parsed.hostname === 'localhost'
-    || parsed.hostname === '127.0.0.1'
-    || parsed.hostname === '[::1]'
-    || parsed.hostname === '::1'
-  );
-
-  if (!isHttps && !isLocalDev) {
-    throw new KinuError('bad_input', '`serverUrl` must use https:// (http:// allowed only for localhost).');
-  }
-
-  // Credentials belong in sealed `headers`; `serverUrl` is plaintext and Workers `fetch`
-  // rejects URLs with userinfo.
-  if (parsed.username !== '' || parsed.password !== '') {
-    throw new KinuError('bad_input', '`serverUrl` must not carry a username or password: put credentials in `headers`.');
-  }
-
-  const parsedTransport = v.safeParse(v.nullish(McpTransportSchema), obj.transport);
-
-  if (!parsedTransport.success) {
-    throw new KinuError('bad_input', "`transport` must be one of 'auto', 'sse', 'streamable-http'.");
-  }
-
-  const transport = preset ? preset.transport : (parsedTransport.output ?? 'auto');
-
-  let headers: Record<string, string> | undefined;
-
-  if (obj.headers !== undefined && obj.headers !== null) {
-    const parsedHeaderObject = v.safeParse(RawMcpServerInputSchema, obj.headers);
-
-    if (!parsedHeaderObject.success) {
-      throw new KinuError('bad_input', '`headers` must be a flat object of string->string.');
+    if (!parsedInput.success) {
+      return yield* new KinuError('bad_input', 'Body must be a JSON object.');
     }
 
-    const collected: Record<string, string> = {};
+    const obj = parsedInput.output;
 
-    for (const [k, value] of Object.entries(parsedHeaderObject.output)) {
-      if (k.length === 0 || k.length > 128) throw new KinuError('bad_input', `headers.${k}: key length out of range.`);
-      const parsedValue = v.safeParse(v.string(), value);
+    const preset = validateMcpPresetId(obj.presetId);
 
-      if (!parsedValue.success) throw new KinuError('bad_input', `headers.${k} must be a string.`);
-      collected[k] = parsedValue.output;
+    const name = preset ? preset.title : validateMcpServerName(obj.name);
+
+    const parsedServerUrl = v.safeParse(v.string(), obj.serverUrl);
+
+    if (!preset && (!parsedServerUrl.success || !parsedServerUrl.output.trim())) {
+      return yield* new KinuError('bad_input', '`serverUrl` is required.');
     }
 
-    if (Object.keys(collected).length > 0) headers = collected;
-  }
+    const serverUrl = preset ? preset.serverUrl : v.parse(v.string(), obj.serverUrl);
 
-  let allowedTools: string[] | undefined;
+    if (!URL.canParse(serverUrl)) return yield* new KinuError('bad_input', '`serverUrl` is not a valid URL.');
+    const parsed = new URL(serverUrl);
+    const isHttps = parsed.protocol === 'https:';
 
-  if (obj.allowedTools !== undefined && obj.allowedTools !== null) {
-    const parsedAllowedTools = v.safeParse(JsonArraySchema, obj.allowedTools);
+    const isLocalDev = parsed.protocol === 'http:' && (
+      parsed.hostname === 'localhost'
+      || parsed.hostname === '127.0.0.1'
+      || parsed.hostname === '[::1]'
+      || parsed.hostname === '::1'
+    );
 
-    if (!parsedAllowedTools.success) {
-      throw new KinuError('bad_input', '`allowedTools` must be a string[] (or omitted to allow all).');
+    if (!isHttps && !isLocalDev) {
+      return yield* new KinuError('bad_input', '`serverUrl` must use https:// (http:// allowed only for localhost).');
     }
 
-    allowedTools = [];
+    // Credentials belong in sealed `headers`; `serverUrl` is plaintext and Workers `fetch`
+    // rejects URLs with userinfo.
+    if (parsed.username !== '' || parsed.password !== '') {
+      return yield* new KinuError('bad_input', '`serverUrl` must not carry a username or password: put credentials in `headers`.');
+    }
 
-    for (const toolName of parsedAllowedTools.output) {
-      const parsedToolName = v.safeParse(v.pipe(v.string(), v.nonEmpty()), toolName);
+    const parsedTransport = v.safeParse(v.nullish(McpTransportSchema), obj.transport);
 
-      if (!parsedToolName.success) {
-        throw new KinuError('bad_input', '`allowedTools` entries must be non-empty strings.');
+    if (!parsedTransport.success) {
+      return yield* new KinuError('bad_input', "`transport` must be one of 'auto', 'sse', 'streamable-http'.");
+    }
+
+    const transport = preset ? preset.transport : (parsedTransport.output ?? 'auto');
+
+    let headers: Record<string, string> | undefined;
+
+    if (obj.headers !== undefined && obj.headers !== null) {
+      const parsedHeaderObject = v.safeParse(RawMcpServerInputSchema, obj.headers);
+
+      if (!parsedHeaderObject.success) {
+        return yield* new KinuError('bad_input', '`headers` must be a flat object of string->string.');
       }
 
-      allowedTools.push(parsedToolName.output);
-    }
-  }
+      const collected: Record<string, string> = {};
 
-  return {
-    name, serverUrl: canonicalMcpUrl(serverUrl), transport, headers, allowedTools,
-    presetId: preset?.id,
-  };
+      for (const [k, value] of Object.entries(parsedHeaderObject.output)) {
+        if (k.length === 0 || k.length > 128) return yield* new KinuError('bad_input', `headers.${k}: key length out of range.`);
+        const parsedValue = v.safeParse(v.string(), value);
+
+        if (!parsedValue.success) return yield* new KinuError('bad_input', `headers.${k} must be a string.`);
+        collected[k] = parsedValue.output;
+      }
+
+      if (Object.keys(collected).length > 0) headers = collected;
+    }
+
+    let allowedTools: string[] | undefined;
+
+    if (obj.allowedTools !== undefined && obj.allowedTools !== null) {
+      const parsedAllowedTools = v.safeParse(JsonArraySchema, obj.allowedTools);
+
+      if (!parsedAllowedTools.success) {
+        return yield* new KinuError('bad_input', '`allowedTools` must be a string[] (or omitted to allow all).');
+      }
+
+      allowedTools = [];
+
+      for (const toolName of parsedAllowedTools.output) {
+        const parsedToolName = v.safeParse(v.pipe(v.string(), v.nonEmpty()), toolName);
+
+        if (!parsedToolName.success) {
+          return yield* new KinuError('bad_input', '`allowedTools` entries must be non-empty strings.');
+        }
+
+        allowedTools.push(parsedToolName.output);
+      }
+    }
+
+    return {
+      name, serverUrl: canonicalMcpUrl(serverUrl), transport, headers, allowedTools,
+      presetId: preset?.id,
+    };
+  }));
 }
 
 /** Absent → custom server; a non-catalog id is an error. The preset's fields can't be overridden. */
@@ -254,14 +257,16 @@ function validateMcpPresetId(presetId: JsonValue | undefined): McpPreset | undef
 
 /** Shared by add and update: non-blank, at most 64 chars after trim (the stored, indexed value). */
 export function validateMcpServerName(name: JsonValue): string {
-  const parsed = v.safeParse(v.string(), name);
+  return settleSync(Effect.gen(function* () {
+    const parsed = v.safeParse(v.string(), name);
 
-  if (!parsed.success || !parsed.output.trim()) throw new KinuError('bad_input', '`name` is required.');
-  const trimmed = parsed.output.trim();
+    if (!parsed.success || !parsed.output.trim()) return yield* new KinuError('bad_input', '`name` is required.');
+    const trimmed = parsed.output.trim();
 
-  if (trimmed.length > 64) throw new KinuError('bad_input', '`name` must be <= 64 characters.');
+    if (trimmed.length > 64) return yield* new KinuError('bad_input', '`name` must be <= 64 characters.');
 
-  return trimmed;
+    return trimmed;
+  }));
 }
 
 /** Null when the column is unset or fails the schema. */

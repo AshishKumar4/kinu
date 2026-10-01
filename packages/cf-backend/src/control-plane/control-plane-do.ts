@@ -3,8 +3,9 @@
  * capability gate and storage; logic lives in `store.ts`, actions proxy owners' `@callable`s (`actions.ts`).
  * Not an `Agent`: its surface is exactly these methods, each gated before touching storage.
  */
+import { Effect } from 'effect';
 import { DurableObject } from 'cloudflare:workers';
-import { diagnostics, KinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, settle } from '@kinu.run/core/obs';
 import type { Page, PageRequest } from '@kinu.run/core';
 import type { FeedbackRecord } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
@@ -154,20 +155,22 @@ export class ControlPlaneDO extends DurableObject<Env> {
   }
 
   /** Throws when no pending row matched: returning a row would let a lost settlement read as written. */
-  async settleAudit(
+  settleAudit(
     caller: PresentedCaller,
     settlement: { id: string; outcome: AuditSettlement; detail: string } & OperationMarker,
   ): Promise<ControlAuditRow> {
-    await this.gate(caller, 'audit.write');
-    const row = cpStore.settleAudit(this.store, settlement);
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(async () => this.gate(caller, 'audit.write'));
+      const row = cpStore.settleAudit(this.store, settlement);
 
-    if (row === null) {
-      throw new KinuError('missing', `no pending audit row ${settlement.id} to settle as ${settlement.outcome}`);
-    }
+      if (row === null) {
+        return yield* new KinuError('missing', `no pending audit row ${settlement.id} to settle as ${settlement.outcome}`);
+      }
 
-    this.publish(row, settlement);
+      this.publish(row, settlement);
 
-    return row;
+      return row;
+    }));
   }
 
   /**

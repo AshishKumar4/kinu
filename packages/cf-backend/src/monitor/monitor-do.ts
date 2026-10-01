@@ -3,6 +3,7 @@
  * Not an `Agent` subclass: its reachable surface is exactly the methods declared here, and only the Worker holds its stub.
  */
 
+import { Effect } from 'effect';
 import { DurableObject } from 'cloudflare:workers';
 import { EmailOutbox } from '@kinu.run/core';
 import { ensureMonitorSchema, listIncidents, recordProbeRun, type MonitorRunResult } from './incidents';
@@ -10,7 +11,7 @@ import { sampleFleet, settleFleet } from '@kinu.run/core/control-plane';
 import { declaredSignInProviders, runSyntheticProbes } from '@kinu.run/core';
 import { installAnalyticsDiagnostics } from '@kinu.run/core/analytics';
 import { openAnalyticsWindow } from '@kinu.run/core/analytics';
-import { KinuError } from '@kinu.run/core/obs';
+import { KinuError, settle } from '@kinu.run/core/obs';
 import { listConfiguredOAuthProviders } from '../auth/providers';
 
 export const MONITOR_SINGLETON = 'site';
@@ -41,37 +42,39 @@ export class MonitorDO extends DurableObject<Env> {
    * Run every probe against the public origin and alert on what changed.
    * Opens the analytics write window: the budget is per invocation, the constructor's install is per activation.
    */
-  async check(): Promise<MonitorRunResult> {
-    openAnalyticsWindow(this.env);
-    const now = Date.now();
-    const origin = this.env.CLI_PUBLIC_ORIGIN;
+  check(): Promise<MonitorRunResult> {
+    return settle(Effect.gen({ self: this }, function* () {
+      openAnalyticsWindow(this.env);
+      const now = Date.now();
+      const origin = this.env.CLI_PUBLIC_ORIGIN;
 
-    if (!origin) {
-      throw new KinuError('unavailable', 'CLI_PUBLIC_ORIGIN is not configured; there is no origin to probe.');
-    }
+      if (!origin) {
+        return yield* new KinuError('unavailable', 'CLI_PUBLIC_ORIGIN is not configured; there is no origin to probe.');
+      }
 
-    const probes = await runSyntheticProbes({
-      origin,
-      fetch: (input, init) => fetch(input, init),
-      signIn: {
-        declared: declaredSignInProviders(this.env.SIGN_IN_PROVIDERS),
-        configured: listConfiguredOAuthProviders(this.env).map((provider) => provider.id),
-      },
-    });
+      const probes = yield* Effect.promise(async () => runSyntheticProbes({
+        origin,
+        fetch: (input, init) => fetch(input, init),
+        signIn: {
+          declared: declaredSignInProviders(this.env.SIGN_IN_PROVIDERS),
+          configured: listConfiguredOAuthProviders(this.env).map((provider) => provider.id),
+        },
+      }));
 
-    const fleet = await sampleFleet(this.env, now, (input, init) => fetch(input, init));
-    const open = new Map(listIncidents(this.ctx.storage.sql).map((row) => [row.probe, row.detail]));
-    const outcomes = [...probes, ...settleFleet(this.ctx.storage.sql, fleet, open)];
+      const fleet = yield* Effect.promise(async () => sampleFleet(this.env, now, (input, init) => fetch(input, init)));
+      const open = new Map(listIncidents(this.ctx.storage.sql).map((row) => [row.probe, row.detail]));
+      const outcomes = [...probes, ...settleFleet(this.ctx.storage.sql, fleet, open)];
 
-    return recordProbeRun({
-      sql: this.ctx.storage.sql,
-      outbox: this.outbox,
-      email: this.env.EMAIL,
-      emailDomain: this.env.EMAIL_DOMAIN,
-      alertEmail: this.env.OPS_ALERT_EMAIL ?? null,
-      origin,
-      now,
-    }, outcomes);
+      return yield* Effect.promise(async () => recordProbeRun({
+        sql: this.ctx.storage.sql,
+        outbox: this.outbox,
+        email: this.env.EMAIL,
+        emailDomain: this.env.EMAIL_DOMAIN,
+        alertEmail: this.env.OPS_ALERT_EMAIL ?? null,
+        origin,
+        now,
+      }, outcomes));
+    }));
   }
 
   /**

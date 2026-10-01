@@ -7,7 +7,7 @@ import {
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderThrownChain, toKinuError, settleLogged } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import type { UserCredentialClient } from '../providers/agent-registry';
 import type { UserCaller } from '@kinu.run/core';
@@ -126,15 +126,7 @@ export async function createCloudWorkspaceForUser<Id>(
   } catch (err) {
     // Only reached for a row this create inserted (`active` returned above), so undo is safe.
     // A rollback failure is recorded separately; the original fault still propagates.
-    try {
-      await rollbackRegistration({ env, userId, userDO, caller, entry, cause: err });
-    } catch (rollbackFailure) {
-      diagnostics.failure('workspace.create_rollback_unexpected', toKinuError({
-        doing: 'undoing a failed workspace create',
-        cause: rollbackFailure,
-        otherwise: 'unavailable',
-      }), { workspace: entry.name });
-    }
+    await settleLogged('workspace.create_rollback_unexpected', { doing: 'undoing a failed workspace create', otherwise: 'unavailable' }, () => rollbackRegistration({ env, userId, userDO, caller, entry, cause: err }), { workspace: entry.name });
 
     throw err;
   }

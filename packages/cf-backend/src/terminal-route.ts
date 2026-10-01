@@ -6,7 +6,7 @@
 
 import { Hono, type Context } from "hono";
 import { getAgentByName } from "agents";
-import { diagnostics, renderThrownChain, toKinuError, type KinuError } from "@kinu.run/core/obs";
+import { diagnostics, renderThrownChain, toKinuError, type KinuError, settleLogged } from "@kinu.run/core/obs";
 import type { OrchestratorAgent } from "./orchestrator";
 
 import { err, json } from "@kinu.run/core";
@@ -314,17 +314,11 @@ async function sandboxAttach(sandbox: TerminalSandbox, call: TerminalCall, ctx: 
       // Release the orphaned upgrade, else the PTY stream stays open until the edge idle reap
       // (PLATFORM_CATALOG `edge.websocket_idle_reap_ms`). `waitUntil` retains it past the response.
       ctx.waitUntil((async () => {
-        try {
+        await settleLogged("terminal.abandoned_upgrade_not_released", { doing: "releasing the terminal upgrade a departed client left behind", otherwise: "unavailable" }, async () => {
           const response = await upgrade;
           response.webSocket?.accept();
           response.webSocket?.close(1001, "terminal client went away");
-        } catch (cause) {
-          diagnostics.failure("terminal.abandoned_upgrade_not_released", toKinuError({
-            doing: "releasing the terminal upgrade a departed client left behind",
-            cause,
-            otherwise: "unavailable",
-          }), scope);
-        }
+        }, scope);
       })());
 
       return abandonedAttach();

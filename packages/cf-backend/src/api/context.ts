@@ -1,9 +1,10 @@
+import { Effect } from 'effect';
 import type { Context, Env as HonoEnv, MiddlewareHandler } from 'hono';
 import { routePath } from 'hono/route';
 import {
   err, OwnerCapabilityUnavailableError, ownerCaller, PUBLIC_MESSAGE, publicError, type OwnerCapabilityEnv, type UserCaller,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, toKinuError, settleSync } from '@kinu.run/core/obs';
 import type { AuthIdentity } from '../auth/session';
 import type { AccessIdentity } from '../control-plane/access-gate';
 
@@ -37,12 +38,14 @@ export function noHead<E extends HonoEnv>(handler: MiddlewareHandler<E>): Middle
 
 /** A segment as spelled; routes decode it with `decodeURIComponent`, which throws on a bad escape, as before. */
 export function rawParam(c: Context, name: string): string {
-  const at = patternSegments(routePath(c)).findIndex((part) => part === `:${name}` || part.startsWith(`:${name}{`));
-  const segment = at < 0 ? undefined : c.req.path.split('/')[at];
+  return settleSync(Effect.gen(function* () {
+    const at = patternSegments(routePath(c)).findIndex((part) => part === `:${name}` || part.startsWith(`:${name}{`));
+    const segment = at < 0 ? undefined : c.req.path.split('/')[at];
 
-  if (segment === undefined) throw new Error(`route ${routePath(c)} has no :${name} segment`);
+    if (segment === undefined) return yield* Effect.die(new Error(`route ${routePath(c)} has no :${name} segment`));
 
-  return segment;
+    return segment;
+  }));
 }
 
 /** A `{regex}` may hold `/`. */
@@ -101,5 +104,5 @@ export function routeError(cause: Error, c: Context): Response {
 
 /** A Durable Object router's `onError`: the caller sees the throw. */
 export function rethrow(error: Error): never {
-  throw error;
+  return settleSync(Effect.die(error));
 }

@@ -8,7 +8,7 @@ import {
   err, ERROR_STATUS, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, fileResponseHeaders, json,
   pumpUploadChunks, retryTransientDO, safeJson, type DriveFailure, type DriveUploadTarget, type UserCaller,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, toKinuError, settleLogged } from '@kinu.run/core/obs';
 import type { DriveAnswer, UserDO } from '../user/user-do';
 import { ownerGate, type ApiVariables, type FamilyEnv } from '../api/context';
 
@@ -122,15 +122,7 @@ async function upload(request: Request, ctx: DriveContext, target: DriveUploadTa
   const transferId = crypto.randomUUID();
 
   const abandon = async (): Promise<void> => {
-    try {
-      await ctx.object.drive_abortUpload(ctx.owner, transferId);
-    } catch (abortCause) {
-      diagnostics.failure('drive.upload_abort_failed', toKinuError({
-        doing: 'aborting a failed chunked Drive upload',
-        cause: abortCause,
-        otherwise: 'unavailable',
-      }), { kind: target.kind });
-    }
+    await settleLogged('drive.upload_abort_failed', { doing: 'aborting a failed chunked Drive upload', otherwise: 'unavailable' }, () => ctx.object.drive_abortUpload(ctx.owner, transferId), { kind: target.kind });
   };
 
   try {

@@ -2,6 +2,8 @@
  * The landing walkthrough as data: cues and cursor positions with pure time-indexed
  * functions. `LandingWorkspaceFrame` paints it onto the real workspace components.
  */
+import { Effect } from 'effect';
+import { settleSync } from '@kinu.run/core/obs';
 import type { UIMessage } from 'ai';
 
 import type { PlanReview, SlateSummary, JsonObject, JsonValue } from '@kinu.run/core';
@@ -51,39 +53,41 @@ function easeInOutCubic(x: number): number {
 }
 
 export function cursorAt(t: number): MovieCursor {
-  const first = CURSOR_WAYPOINTS[0];
-  const last = CURSOR_WAYPOINTS[CURSOR_WAYPOINTS.length - 1];
+  return settleSync(Effect.gen(function* () {
+    const first = CURSOR_WAYPOINTS[0];
+    const last = CURSOR_WAYPOINTS[CURSOR_WAYPOINTS.length - 1];
 
-  if (first === undefined || last === undefined) throw new Error('empty cursor waypoints');
+    if (first === undefined || last === undefined) return yield* Effect.die(new Error('empty cursor waypoints'));
 
-  if (t < first.at || t >= MOVIE_END) {
-    return { visible: false, from: first.target, to: first.target, progress: 1, pressed: null, ripple: null };
-  }
+    if (t < first.at || t >= MOVIE_END) {
+      return { visible: false, from: first.target, to: first.target, progress: 1, pressed: null, ripple: null };
+    }
 
-  let from = first;
-  let to = first;
+    let from = first;
+    let to = first;
 
-  for (const waypoint of CURSOR_WAYPOINTS) {
-    if (waypoint.at <= t) { from = waypoint; to = waypoint; continue; }
+    for (const waypoint of CURSOR_WAYPOINTS) {
+      if (waypoint.at <= t) { from = waypoint; to = waypoint; continue; }
 
-    to = waypoint;
-    break;
-  }
+      to = waypoint;
+      break;
+    }
 
-  const dwelling = to === from || t <= to.at - CURSOR_TRAVEL_MS;
+    const dwelling = to === from || t <= to.at - CURSOR_TRAVEL_MS;
 
-  const progress = dwelling
-    ? 1
-    : easeInOutCubic(Math.min(1, (t - (to.at - CURSOR_TRAVEL_MS)) / CURSOR_TRAVEL_MS));
+    const progress = dwelling
+      ? 1
+      : easeInOutCubic(Math.min(1, (t - (to.at - CURSOR_TRAVEL_MS)) / CURSOR_TRAVEL_MS));
 
-  return {
-    visible: true,
-    from: from.target,
-    to: dwelling ? from.target : to.target,
-    progress,
-    pressed: from.click && t - from.at < CURSOR_PRESS_MS ? from.target : null,
-    ripple: from.click && t - from.at < CURSOR_RIPPLE_MS ? (t - from.at) / CURSOR_RIPPLE_MS : null,
-  };
+    return {
+      visible: true,
+      from: from.target,
+      to: dwelling ? from.target : to.target,
+      progress,
+      pressed: from.click && t - from.at < CURSOR_PRESS_MS ? from.target : null,
+      ripple: from.click && t - from.at < CURSOR_RIPPLE_MS ? (t - from.at) / CURSOR_RIPPLE_MS : null,
+    };
+  }));
 }
 
 const MOVIE_ASK

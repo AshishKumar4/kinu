@@ -77,16 +77,7 @@ import {
   autoTitleMayReplace, nameOriginOf,
   type NameOrigin,
 } from '@kinu.run/core';
-import {
-  attempt,
-  authoredRefusal,
-  diagnostics,
-  KinuError,
-  renderThrownChain,
-  settle,
-  tolerate,
-  toKinuError,
-} from '@kinu.run/core/obs';
+import { attempt, authoredRefusal, diagnostics, KinuError, renderThrownChain, settle, tolerate, toKinuError, settleSync, settleLogged } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { Hono } from 'hono';
 import { rawPath, rethrow } from '../api/context';
@@ -732,15 +723,17 @@ export class UserDO extends Agent<Env> {
    * Reconcile a workspace's identity; any mismatch with `presentedHash` is repaired by minting anew.
    * The only ungated method (it bootstraps identity), so it opens the analytics window itself.
    */
-  async ensureWorkspaceCapability(workspaceName: string, presentedHash: string | null): Promise<void> {
-    openAnalyticsWindow(this.env);
-    validateWorkspaceName(workspaceName);
+  ensureWorkspaceCapability(workspaceName: string, presentedHash: string | null): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      openAnalyticsWindow(this.env);
+      validateWorkspaceName(workspaceName);
 
-    if (!this.workspaceRegistered(workspaceName)) {
-      throw new KinuError('missing', `Workspace ${workspaceName} is not in your registry.`);
-    }
+      if (!this.workspaceRegistered(workspaceName)) {
+        return yield* new KinuError('missing', `Workspace ${workspaceName} is not in your registry.`);
+      }
 
-    return this.reconcileWorkspaceCapability(workspaceName, presentedHash);
+      return yield* Effect.promise(async () => this.reconcileWorkspaceCapability(workspaceName, presentedHash));
+    }));
   }
 
   /**
@@ -874,35 +867,39 @@ export class UserDO extends Agent<Env> {
   // The 'account' capability is floored at owner_only, so no workspace token reaches these methods.
 
   /** Idempotent: the first completion wins; a retry returns the original timestamp. */
-  async completeOnboarding(caller: UserCaller): Promise<{ onboardedAt: number }> {
-    await this.requireTier(caller, 'account');
+  completeOnboarding(caller: UserCaller): Promise<{ onboardedAt: number }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(async () => this.requireTier(caller, 'account'));
 
-    this.sqlx(
-      `INSERT INTO user_onboarding (id, completed_at) VALUES (1, ?) ON CONFLICT (id) DO NOTHING`,
-      Date.now(),
-    );
+      this.sqlx(
+        `INSERT INTO user_onboarding (id, completed_at) VALUES (1, ?) ON CONFLICT (id) DO NOTHING`,
+        Date.now(),
+      );
 
-    const stamped = this.onboardingCompletedAt();
+      const stamped = this.onboardingCompletedAt();
 
-    if (stamped === null) throw new KinuError('io', 'user_onboarding has no row after the insert');
+      if (stamped === null) return yield* new KinuError('io', 'user_onboarding has no row after the insert');
 
-    return { onboardedAt: stamped };
+      return { onboardedAt: stamped };
+    }));
   }
 
-  async setDisplayName(caller: UserCaller, displayName: string): Promise<UserProfile> {
-    await this.requireTier(caller, 'account');
-    const name = displayName.trim();
-    const problem = displayNameProblem(name);
+  setDisplayName(caller: UserCaller, displayName: string): Promise<UserProfile> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(async () => this.requireTier(caller, 'account'));
+      const name = displayName.trim();
+      const problem = displayNameProblem(name);
 
-    if (problem !== null) throw new KinuError('bad_input', problem);
+      if (problem !== null) return yield* new KinuError('bad_input', problem);
 
-    this.sqlx(`UPDATE user_profile SET display_name = ? WHERE id = 1`, name);
+      this.sqlx(`UPDATE user_profile SET display_name = ? WHERE id = 1`, name);
 
-    const profile = await this.getProfile(caller);
+      const profile = yield* Effect.promise(async () => this.getProfile(caller));
 
-    if (!profile) throw new KinuError('missing', 'No profile row to rename');
+      if (!profile) return yield* new KinuError('missing', 'No profile row to rename');
 
-    return profile;
+      return profile;
+    }));
   }
 
   async listWorkspaces(caller: UserCaller, query?: RosterQuery): Promise<RosterPage> {
@@ -968,26 +965,28 @@ export class UserDO extends Agent<Env> {
   }
 
   /** A repeat writes and sends nothing. */
-  async putWorkspaceOverview(caller: UserCaller, name: string, overview: WorkspaceOverview): Promise<void> {
-    const resolved = await this.requireTier(caller, 'workspaces.overview_self');
-    validateWorkspaceName(name);
+  putWorkspaceOverview(caller: UserCaller, name: string, overview: WorkspaceOverview): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const resolved = yield* Effect.promise(async () => this.requireTier(caller, 'workspaces.overview_self'));
+      validateWorkspaceName(name);
 
-    if (resolved.kind === 'workspace' && resolved.workspace !== name) {
-      throw new KinuError('denied', `Workspace "${resolved.workspace}" may only push its own overview.`);
-    }
+      if (resolved.kind === 'workspace' && resolved.workspace !== name) {
+        return yield* new KinuError('denied', `Workspace "${resolved.workspace}" may only push its own overview.`);
+      }
 
-    const parsed = v.parse(WorkspaceOverviewSchema, overview);
+      const parsed = v.parse(WorkspaceOverviewSchema, overview);
 
-    const changed = this.sqlx(
-      `INSERT INTO workspace_overviews (name, overview, activity, decisions) VALUES (?, ?, ?, ?)
-       ON CONFLICT (name) DO UPDATE SET overview = excluded.overview, activity = excluded.activity,
-         decisions = excluded.decisions
-       WHERE workspace_overviews.overview <> excluded.overview
-       RETURNING name`,
-      name, JSON.stringify(parsed), parsed.activity, parsed.decisionsWaiting,
-    );
+      const changed = this.sqlx(
+        `INSERT INTO workspace_overviews (name, overview, activity, decisions) VALUES (?, ?, ?, ?)
+         ON CONFLICT (name) DO UPDATE SET overview = excluded.overview, activity = excluded.activity,
+           decisions = excluded.decisions
+         WHERE workspace_overviews.overview <> excluded.overview
+         RETURNING name`,
+        name, JSON.stringify(parsed), parsed.activity, parsed.decisionsWaiting,
+      );
 
-    if (changed.length > 0) this.rosterChanged(name);
+      if (changed.length > 0) this.rosterChanged(name);
+    }));
   }
 
   /** Uncapped enumeration of the active roster for server-side fans, where a page would drop targets. */
@@ -1173,55 +1172,49 @@ export class UserDO extends Agent<Env> {
     );
 
     for (const row of stale) {
-      try {
-        await this.reclaimForkReservation(row.name);
-      } catch (err) {
-        diagnostics.failure('workspace.fork_reservation_reclaim_failed', toKinuError({
-          doing: 'reclaiming a fork reservation whose transfer stopped renewing it',
-          cause: err,
-          otherwise: 'io',
-        }), { workspace: row.name });
-      }
+      await settleLogged('workspace.fork_reservation_reclaim_failed', { doing: 'reclaiming a fork reservation whose transfer stopped renewing it', otherwise: 'io' }, () => this.reclaimForkReservation(row.name), { workspace: row.name });
     }
   }
 
   /** Commit a reservation; the only place `create_pending` is cleared. */
-  async publishWorkspaceReservation(
+  publishWorkspaceReservation(
     caller: UserCaller,
     name: string,
     createdAt: number,
     capabilityHash: string | null,
   ): Promise<void> {
-    await this.requireTier(caller, 'workspaces.write');
-    validateWorkspaceName(name);
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(async () => this.requireTier(caller, 'workspaces.write'));
+      validateWorkspaceName(name);
 
-    // Match on timestamp too: by name alone a late reply could publish a later reservation.
-    // Rows with teardown started (`delete_pending`) may not be committed.
-    const reserved = v.safeParse(v.object({ create_pending: v.picklist([0, 1]) }), this.sqlx(
-      `SELECT create_pending FROM user_workspaces
-       WHERE name = ? AND created_at = ? AND delete_pending = 0`,
-      name, createdAt,
-    )[0]);
-
-    if (!reserved.success) {
-      throw new WorkspaceReservationNotPendingError(name, 'no reservation of that name is open under that timestamp');
-    }
-
-    if (reserved.output.create_pending === 0) {
-      throw new WorkspaceReservationNotPendingError(name, 'it is already published');
-    }
-
-    // Install (cross-DO await) must precede the transaction: `transactionSync` commits when its
-    // synchronous body returns. A failed install leaves the row unpublished and releasable.
-    await this.reconcileWorkspaceCapability(name, capabilityHash);
-    this.ctx.storage.transactionSync(() => {
-      this.ctx.storage.sql.exec(
-        `UPDATE user_workspaces SET create_pending = 0, fork_lease_expires_at = NULL
-         WHERE name = ? AND created_at = ? AND create_pending = 1`,
+      // Match on timestamp too: by name alone a late reply could publish a later reservation.
+      // Rows with teardown started (`delete_pending`) may not be committed.
+      const reserved = v.safeParse(v.object({ create_pending: v.picklist([0, 1]) }), this.sqlx(
+        `SELECT create_pending FROM user_workspaces
+         WHERE name = ? AND created_at = ? AND delete_pending = 0`,
         name, createdAt,
-      );
-    });
-    this.rosterChanged(name);
+      )[0]);
+
+      if (!reserved.success) {
+        return yield* Effect.die(new WorkspaceReservationNotPendingError(name, 'no reservation of that name is open under that timestamp'));
+      }
+
+      if (reserved.output.create_pending === 0) {
+        return yield* Effect.die(new WorkspaceReservationNotPendingError(name, 'it is already published'));
+      }
+
+      // Install (cross-DO await) must precede the transaction: `transactionSync` commits when its
+      // synchronous body returns. A failed install leaves the row unpublished and releasable.
+      yield* Effect.promise(async () => this.reconcileWorkspaceCapability(name, capabilityHash));
+      this.ctx.storage.transactionSync(() => {
+        this.ctx.storage.sql.exec(
+          `UPDATE user_workspaces SET create_pending = 0, fork_lease_expires_at = NULL
+           WHERE name = ? AND created_at = ? AND create_pending = 1`,
+          name, createdAt,
+        );
+      });
+      this.rosterChanged(name);
+    }));
   }
 
   /** Drop only the exact row a failed fork reservation inserted; never contacts the target DO
@@ -1268,12 +1261,14 @@ export class UserDO extends Agent<Env> {
    * Row is marked before teardown and removed after, so a failed teardown is resumed by the next
    * read (`resumePendingDeletions`); `destroyAgent` is idempotent.
    */
-  async removeWorkspace(caller: UserCaller, name: string, ownerUserId: string): Promise<void> {
-    await this.requireTier(caller, 'workspaces.write');
-    validateWorkspaceName(name);
+  removeWorkspace(caller: UserCaller, name: string, ownerUserId: string): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(async () => this.requireTier(caller, 'workspaces.write'));
+      validateWorkspaceName(name);
 
-    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new KinuError('bad_input', 'invalid owner user id');
-    await this.tearDownWorkspace(name, ownerUserId);
+      if (!/^[a-f0-9]{32}$/.test(ownerUserId)) return yield* new KinuError('bad_input', 'invalid owner user id');
+      yield* Effect.promise(async () => this.tearDownWorkspace(name, ownerUserId));
+    }));
   }
 
   /**
@@ -1331,15 +1326,7 @@ export class UserDO extends Agent<Env> {
     }
 
     for (const row of pending) {
-      try {
-        await this.tearDownWorkspace(row.name, ownerUserId);
-      } catch (err) {
-        diagnostics.failure('workspace.cleanup_retry_failed', toKinuError({
-          doing: 'finishing a workspace teardown a previous attempt left unfinished',
-          cause: err,
-          otherwise: 'io',
-        }), { workspace: row.name });
-      }
+      await settleLogged('workspace.cleanup_retry_failed', { doing: 'finishing a workspace teardown a previous attempt left unfinished', otherwise: 'io' }, () => this.tearDownWorkspace(row.name, ownerUserId), { workspace: row.name });
     }
   }
 
@@ -1361,32 +1348,34 @@ export class UserDO extends Agent<Env> {
    * Root title authority: an 'auto' write is refused when the owner has named the workspace.
    * Returns whether the write applied; the workspace actor mirrors only after this succeeds.
    */
-  async setWorkspaceDisplayName(
+  setWorkspaceDisplayName(
     caller: UserCaller, name: string, displayName: string, origin: NameOrigin,
   ): Promise<{ applied: boolean }> {
-    const resolved = await this.requireTier(caller, 'workspaces.rename_self');
-    validateWorkspaceName(name);
+    return settle(Effect.gen({ self: this }, function* () {
+      const resolved = yield* Effect.promise(async () => this.requireTier(caller, 'workspaces.rename_self'));
+      validateWorkspaceName(name);
 
-    // An agent renames only itself; this is what makes rename safe at the `shared` tier.
-    if (resolved.kind === 'workspace' && resolved.workspace !== name) {
-      throw new KinuError('denied', `Workspace "${resolved.workspace}" may only rename itself.`);
-    }
+      // An agent renames only itself; this is what makes rename safe at the `shared` tier.
+      if (resolved.kind === 'workspace' && resolved.workspace !== name) {
+        return yield* new KinuError('denied', `Workspace "${resolved.workspace}" may only rename itself.`);
+      }
 
-    const current = this.sqlx<{ name_origin: string }>(
-      `SELECT name_origin FROM user_workspaces
-       WHERE name = ? AND delete_pending = 0 AND create_pending = 0`, name,
-    )[0];
+      const current = this.sqlx<{ name_origin: string }>(
+        `SELECT name_origin FROM user_workspaces
+         WHERE name = ? AND delete_pending = 0 AND create_pending = 0`, name,
+      )[0];
 
-    if (!current) return { applied: false };
+      if (!current) return { applied: false };
 
-    if (origin !== 'user' && !autoTitleMayReplace(nameOriginOf(current.name_origin))) return { applied: false };
-    this.sqlx(
-      `UPDATE user_workspaces SET display_name = ?, name_origin = ? WHERE name = ?`,
-      displayName, origin, name,
-    );
-    this.rosterChanged(name);
+      if (origin !== 'user' && !autoTitleMayReplace(nameOriginOf(current.name_origin))) return { applied: false };
+      this.sqlx(
+        `UPDATE user_workspaces SET display_name = ?, name_origin = ? WHERE name = ?`,
+        displayName, origin, name,
+      );
+      this.rosterChanged(name);
 
-    return { applied: true };
+      return { applied: true };
+    }));
   }
 
   /** Null when no row exists; actors hydrate their activation cache from this. */
@@ -2628,7 +2617,7 @@ export class UserDO extends Agent<Env> {
     return null;
   }
 
-  async deviceRpc(
+  deviceRpc(
     caller: UserCaller,
     method: string,
     params: JsonValue[],
@@ -2637,97 +2626,99 @@ export class UserDO extends Agent<Env> {
       timeoutMs?: number; requestId?: string; backgroundJobId?: string;
     },
   ): Promise<string | undefined> {
-    const resolved = await this.requireTier(caller, 'device.rpc');
-    const proven = resolved.kind === 'workspace' ? resolved.workspace : null;
+    return settle(Effect.gen({ self: this }, function* () {
+      const resolved = yield* Effect.promise(async () => this.requireTier(caller, 'device.rpc'));
+      const proven = resolved.kind === 'workspace' ? resolved.workspace : null;
 
-    if (proven !== null && Object.hasOwn(CHECKPOINT_STORE_METHODS, method) && params[0] !== proven) {
-      throw new KinuError('denied', `workspace ${proven} reads and restores only its own device checkpoints`);
-    }
-
-    // Cancellation is never consent-gated: it only ends a command already allowed, and
-    // gating it could leave a live process waiting on an unanswered card.
-    const stopping = method === DEVICE_CANCEL_METHOD;
-    const ownerRead = opts?.agentName === undefined && Object.hasOwn(CONSENT_FREE_DEVICE_METHODS, method);
-
-    const consentAgent = consentAgentFor(resolved, opts?.agentName, { stopping, ownerRead });
-
-    const deviceId = await this.resolveDeviceForCall(opts?.deviceId, consentAgent);
-
-    if (!stopping && !this.isActiveDevice(deviceId)) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
-
-    if (consentAgent !== undefined) {
-      // Consent is keyed on the proven workspace, never the claimed name, so an agent cannot
-      // ride a sibling workspace's grant.
-      const consent = await this.checkDeviceConsent({
-        agentName: consentAgent, deviceId, method, params,
-        workspaceName: resolved.kind === 'workspace' ? resolved.workspace : undefined,
-      });
-
-      if (!consent.allowed) throw new KinuError('denied', consent.reason);
-    }
-
-    const frameSandbox = Object.hasOwn(DEVICE_VIEW_METHODS, method) ? this.frameSandboxFor(method, deviceId, proven) : null;
-
-    if (!stopping && !this.isActiveDevice(deviceId)) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
-    const tunnel = this._devices.tunnel(deviceId);
-
-    if (!tunnel) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
-    const rpcOptions: NonNullable<Parameters<typeof tunnel.rpc>[2]> = { extra: { deviceId } };
-
-    if (opts?.checkpoint) {
-      rpcOptions.extra = {
-        ...rpcOptions.extra,
-        checkpoint: {
-          agent: proven ?? opts.checkpoint.agent,
-          turnId: opts.checkpoint.turnId,
-          sessionId: opts.checkpoint.sessionId,
-          dir: opts.checkpoint.dir,
-        },
-      };
-    }
-
-    if (frameSandbox !== null) rpcOptions.extra = { ...rpcOptions.extra, sandbox: frameSandbox };
-
-    if (opts?.timeoutMs !== undefined) rpcOptions.timeoutMs = opts.timeoutMs;
-
-    if (opts?.requestId !== undefined) rpcOptions.requestId = opts.requestId;
-
-    // Persist before sending: an insert after send races with eviction. Only a proven
-    // workspace command carries a durable turn identity.
-    const requestId = opts?.requestId;
-    const durableExec = method === 'exec' && requestId !== undefined && resolved.kind === 'workspace';
-
-    if (durableExec) {
-      // Probe with a fresh id, never the command's own: ACKing a retry's id before replay
-      // would delete its retained terminal result.
-      await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [nextDeviceRequestId(), DEVICE_CANCEL_PROTOCOL]);
-
-      // A revocation sweep can land during the probe await; recheck so no command runs
-      // with nothing left to cancel or count it.
-      if (!this.isActiveDevice(deviceId)) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
-      // A command inside a detached scope belongs to the background job from insert.
-      // A blank owner is refused: neither turn nor job sweep could ever select that row.
-      const backgroundJobId = opts?.backgroundJobId ?? null;
-
-      if (backgroundJobId === '') {
-        throw new KinuError('bad_input', 'A background job id must name a job.');
+      if (proven !== null && Object.hasOwn(CHECKPOINT_STORE_METHODS, method) && params[0] !== proven) {
+        return yield* new KinuError('denied', `workspace ${proven} reads and restores only its own device checkpoints`);
       }
 
-      this._inflight.insert({
-        requestId,
-        deviceId,
-        workspace: resolved.workspace,
-        turnId: opts?.checkpoint?.turnId ?? null,
-        backgroundJobId,
-      });
-    }
+      // Cancellation is never consent-gated: it only ends a command already allowed, and
+      // gating it could leave a live process waiting on an unanswered card.
+      const stopping = method === DEVICE_CANCEL_METHOD;
+      const ownerRead = opts?.agentName === undefined && Object.hasOwn(CONSENT_FREE_DEVICE_METHODS, method);
 
-    const result = await tunnel.rpc(method, params, rpcOptions);
+      const consentAgent = consentAgentFor(resolved, opts?.agentName, { stopping, ownerRead });
 
-    // A tool's own cancel is recorded where a sweep would put it; the first answer wins.
-    if (stopping) this.recordToolPathCancellation(params, result);
+      const deviceId = yield* Effect.promise(async () => this.resolveDeviceForCall(opts?.deviceId, consentAgent));
 
-    return result === undefined ? undefined : JSON.stringify(result);
+      if (!stopping && !this.isActiveDevice(deviceId)) return yield* new KinuError('unavailable', NO_DEVICE_CONNECTED);
+
+      if (consentAgent !== undefined) {
+        // Consent is keyed on the proven workspace, never the claimed name, so an agent cannot
+        // ride a sibling workspace's grant.
+        const consent = yield* Effect.promise(async () => this.checkDeviceConsent({
+          agentName: consentAgent, deviceId, method, params,
+          workspaceName: resolved.kind === 'workspace' ? resolved.workspace : undefined,
+        }));
+
+        if (!consent.allowed) return yield* new KinuError('denied', consent.reason);
+      }
+
+      const frameSandbox = Object.hasOwn(DEVICE_VIEW_METHODS, method) ? this.frameSandboxFor(method, deviceId, proven) : null;
+
+      if (!stopping && !this.isActiveDevice(deviceId)) return yield* new KinuError('unavailable', NO_DEVICE_CONNECTED);
+      const tunnel = this._devices.tunnel(deviceId);
+
+      if (!tunnel) return yield* new KinuError('unavailable', NO_DEVICE_CONNECTED);
+      const rpcOptions: NonNullable<Parameters<typeof tunnel.rpc>[2]> = { extra: { deviceId } };
+
+      if (opts?.checkpoint) {
+        rpcOptions.extra = {
+          ...rpcOptions.extra,
+          checkpoint: {
+            agent: proven ?? opts.checkpoint.agent,
+            turnId: opts.checkpoint.turnId,
+            sessionId: opts.checkpoint.sessionId,
+            dir: opts.checkpoint.dir,
+          },
+        };
+      }
+
+      if (frameSandbox !== null) rpcOptions.extra = { ...rpcOptions.extra, sandbox: frameSandbox };
+
+      if (opts?.timeoutMs !== undefined) rpcOptions.timeoutMs = opts.timeoutMs;
+
+      if (opts?.requestId !== undefined) rpcOptions.requestId = opts.requestId;
+
+      // Persist before sending: an insert after send races with eviction. Only a proven
+      // workspace command carries a durable turn identity.
+      const requestId = opts?.requestId;
+      const durableExec = method === 'exec' && requestId !== undefined && resolved.kind === 'workspace';
+
+      if (durableExec) {
+        // Probe with a fresh id, never the command's own: ACKing a retry's id before replay
+        // would delete its retained terminal result.
+        yield* Effect.promise(async () => tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [nextDeviceRequestId(), DEVICE_CANCEL_PROTOCOL]));
+
+        // A revocation sweep can land during the probe await; recheck so no command runs
+        // with nothing left to cancel or count it.
+        if (!this.isActiveDevice(deviceId)) return yield* new KinuError('unavailable', NO_DEVICE_CONNECTED);
+        // A command inside a detached scope belongs to the background job from insert.
+        // A blank owner is refused: neither turn nor job sweep could ever select that row.
+        const backgroundJobId = opts?.backgroundJobId ?? null;
+
+        if (backgroundJobId === '') {
+          return yield* new KinuError('bad_input', 'A background job id must name a job.');
+        }
+
+        this._inflight.insert({
+          requestId,
+          deviceId,
+          workspace: resolved.workspace,
+          turnId: opts?.checkpoint?.turnId ?? null,
+          backgroundJobId,
+        });
+      }
+
+      const result = yield* Effect.promise(async () => tunnel.rpc(method, params, rpcOptions));
+
+      // A tool's own cancel is recorded where a sweep would put it; the first answer wins.
+      if (stopping) this.recordToolPathCancellation(params, result);
+
+      return result === undefined ? undefined : JSON.stringify(result);
+    }));
   }
 
   /** The machine carrying `provider` for a web session: for Codex the first daemon with the relay, for the
@@ -2861,20 +2852,22 @@ export class UserDO extends Agent<Env> {
    * Cloud-side acceptance of one exec result: acks the daemon, then removes the durable row.
    * A claimed row belongs to an in-flight cancellation, which owns the terminal outcome and ack.
    */
-  async acknowledgeDeviceRequest(caller: UserCaller, requestId: string): Promise<void> {
-    const resolved = await this.requireTier(caller, 'device.rpc');
+  acknowledgeDeviceRequest(caller: UserCaller, requestId: string): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const resolved = yield* Effect.promise(async () => this.requireTier(caller, 'device.rpc'));
 
-    if (resolved.kind !== 'workspace' || requestId === '') return;
-    const held = this._inflight.acknowledgeable(requestId, resolved.workspace);
+      if (resolved.kind !== 'workspace' || requestId === '') return;
+      const held = this._inflight.acknowledgeable(requestId, resolved.workspace);
 
-    if (!held) return;
-    const tunnel = this._devices.tunnel(held.deviceId);
+      if (!held) return;
+      const tunnel = this._devices.tunnel(held.deviceId);
 
-    if (!tunnel) throw new KinuError('unavailable', NO_DEVICE_CONNECTED);
-    await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL]);
-    this._inflight.deleteAcknowledged({
-      requestId, workspace: resolved.workspace, deviceId: held.deviceId,
-    });
+      if (!tunnel) return yield* new KinuError('unavailable', NO_DEVICE_CONNECTED);
+      yield* Effect.promise(async () => tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL]));
+      this._inflight.deleteAcknowledged({
+        requestId, workspace: resolved.workspace, deviceId: held.deviceId,
+      });
+    }));
   }
 
   /**
@@ -3031,24 +3024,26 @@ export class UserDO extends Agent<Env> {
   }
 
   /** Owner session only: a workspace holding `device.manage` must not turn off its own sandbox. */
-  async setDeviceTier(caller: UserCaller, deviceId: string, tier: DeviceTier): Promise<{ ok: boolean }> {
-    const resolved = await this.requireTier(caller, 'device.manage');
+  setDeviceTier(caller: UserCaller, deviceId: string, tier: DeviceTier): Promise<{ ok: boolean }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const resolved = yield* Effect.promise(async () => this.requireTier(caller, 'device.manage'));
 
-    if (resolved.kind !== 'owner_session') {
-      throw new CapabilityDeniedError('Only the account owner can change a device\'s Sandbox setting.');
-    }
+      if (resolved.kind !== 'owner_session') {
+        return yield* Effect.die(new CapabilityDeniedError('Only the account owner can change a device\'s Sandbox setting.'));
+      }
 
-    if (!v.is(v.picklist(DEVICE_TIERS), tier)) return { ok: false };
+      if (!v.is(v.picklist(DEVICE_TIERS), tier)) return { ok: false };
 
-    const row = this.sqlx<{ id: string }>(
-      `SELECT id FROM user_devices WHERE id = ? AND revoked_at IS NULL LIMIT 1`, deviceId,
-    )[0];
+      const row = this.sqlx<{ id: string }>(
+        `SELECT id FROM user_devices WHERE id = ? AND revoked_at IS NULL LIMIT 1`, deviceId,
+      )[0];
 
-    if (!row) return { ok: false };
-    this.sqlx(`UPDATE user_devices SET tier = ? WHERE id = ?`, tier, deviceId);
-    await this.devicesMoved();
+      if (!row) return { ok: false };
+      this.sqlx(`UPDATE user_devices SET tier = ? WHERE id = ?`, tier, deviceId);
+      yield* Effect.promise(async () => this.devicesMoved());
 
-    return { ok: true };
+      return { ok: true };
+    }));
   }
 
   /** No tier here: what a bound workspace may touch is the device's Sandbox switch, owner-set. */
@@ -3413,17 +3408,7 @@ export class UserDO extends Agent<Env> {
           this._inflight.settleRevoked(row.requestId, answer);
         }
 
-        try {
-          await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL]);
-        } catch (err) {
-          // Kill confirmation is already truthful; this is local replay cleanup, recorded separately so a
-          // failed ACK never reads as a possibly running process.
-          diagnostics.failure('device.revocation_ack_cleanup_failed', toKinuError({
-            doing: 'releasing the cancelled device command supervisor on revocation',
-            cause: err,
-            otherwise: 'unavailable',
-          }), { device: deviceId, request: row.requestId });
-        }
+        await settleLogged('device.revocation_ack_cleanup_failed', { doing: 'releasing the cancelled device command supervisor on revocation', otherwise: 'unavailable' }, async () => { await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL]); }, { device: deviceId, request: row.requestId });
       } catch (err) {
         unstoppedCommands += 1;
         diagnostics.failure('device.revocation_cancel_unconfirmed', toKinuError({
@@ -3493,14 +3478,16 @@ export class UserDO extends Agent<Env> {
   /**
    * Source workspace comes from the proven caller, never the argument; owner sessions cannot publish.
    */
-  async publishExperience(caller: UserCaller, candidate: PublishableCandidate): Promise<ExperienceEntry> {
-    const resolved = await this.requireTier(caller, 'experience.write');
+  publishExperience(caller: UserCaller, candidate: PublishableCandidate): Promise<ExperienceEntry> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const resolved = yield* Effect.promise(async () => this.requireTier(caller, 'experience.write'));
 
-    if (resolved.kind !== 'workspace') {
-      throw new KinuError('denied', 'Only a workspace can publish experience; it publishes under its own name.');
-    }
+      if (resolved.kind !== 'workspace') {
+        return yield* new KinuError('denied', 'Only a workspace can publish experience; it publishes under its own name.');
+      }
 
-    return this.experienceLibrary().publish(candidate, resolved.workspace);
+      return this.experienceLibrary().publish(candidate, resolved.workspace);
+    }));
   }
 
   /** Excludes the calling workspace's own entries. */
@@ -3536,25 +3523,27 @@ export class UserDO extends Agent<Env> {
     return this.requireTier(caller, isModelInferenceCredentialKey(key) ? 'credentials.model' : 'credentials.other');
   }
 
-  async setCredential(caller: UserCaller, key: string, credentialJson: Credential | JsonValue): Promise<void> {
-    await this.requireTier(caller, 'credentials.other');
-    validateCredentialKey(key);
+  setCredential(caller: UserCaller, key: string, credentialJson: Credential | JsonValue): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(async () => this.requireTier(caller, 'credentials.other'));
+      validateCredentialKey(key);
 
-    if (key === CLOUDFLARE_AI_GATEWAY_CRED_KEY) {
-      throw new KinuError('bad_input', `${CLOUDFLARE_AI_GATEWAY_CRED_KEY} is derived from your Cloudflare login and cannot be stored directly.`);
-    }
+      if (key === CLOUDFLARE_AI_GATEWAY_CRED_KEY) {
+        return yield* new KinuError('bad_input', `${CLOUDFLARE_AI_GATEWAY_CRED_KEY} is derived from your Cloudflare login and cannot be stored directly.`);
+      }
 
-    const cred = validateCredential({ key, value: credentialJson });
+      const cred = validateCredential({ key, value: credentialJson });
 
-    const refusal = unrenewable(key, cred);
+      const refusal = unrenewable(key, cred);
 
-    if (refusal !== null) throw new KinuError('bad_input', refusal);
+      if (refusal !== null) return yield* new KinuError('bad_input', refusal);
 
-    await this.writeCredential(key, cred);
+      yield* Effect.promise(async () => this.writeCredential(key, cred));
 
-    // Discover AI Gateways right after Cloudflare login so my-gateway works without a settings visit.
-    // listAIGateways never throws.
-    if (key === CLOUDFLARE_OAUTH_CRED_KEY) await this.listAIGateways(await ownerCaller(this.env));
+      // Discover AI Gateways right after Cloudflare login so my-gateway works without a settings visit.
+      // listAIGateways never throws.
+      if (key === CLOUDFLARE_OAUTH_CRED_KEY) yield* Effect.promise(async () => this.listAIGateways(await ownerCaller(this.env)));
+    }));
   }
 
   async deleteCredential(caller: UserCaller, key: string): Promise<void> {
@@ -4060,17 +4049,19 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  async selectAIGateway(caller: UserCaller, gatewayId: string | null): Promise<void> {
-    await this.requireTier(caller, 'ai_gateway.admin');
+  selectAIGateway(caller: UserCaller, gatewayId: string | null): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(async () => this.requireTier(caller, 'ai_gateway.admin'));
 
-    if (gatewayId === null) {
-      this.sqlx(`DELETE FROM user_config WHERE key = ?`, UserDO.AI_GATEWAY_CONFIG_KEY);
+      if (gatewayId === null) {
+        this.sqlx(`DELETE FROM user_config WHERE key = ?`, UserDO.AI_GATEWAY_CONFIG_KEY);
 
-      return;
-    }
+        return;
+      }
 
-    if (!isCloudflareAIGatewayId(gatewayId)) throw new KinuError('bad_input', 'Invalid AI Gateway id.');
-    await this.setConfig(await ownerCaller(this.env), UserDO.AI_GATEWAY_CONFIG_KEY, gatewayId);
+      if (!isCloudflareAIGatewayId(gatewayId)) return yield* new KinuError('bad_input', 'Invalid AI Gateway id.');
+      yield* Effect.promise(async () => this.setConfig(await ownerCaller(this.env), UserDO.AI_GATEWAY_CONFIG_KEY, gatewayId));
+    }));
   }
 
   /** Reads the stored credential only, no API call, so it cannot fail for a reason the user
@@ -4094,15 +4085,17 @@ export class UserDO extends Agent<Env> {
 
   /** Point Workers AI at another of this login's accounts. The AI Gateway selection belongs
    * to the old account, so it is dropped and rediscovered. */
-  async selectCloudflareAccount(caller: UserCaller, accountId: string): Promise<void> {
-    await this.requireTier(caller, 'ai_gateway.admin');
-    const cred = await this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY);
+  selectCloudflareAccount(caller: UserCaller, accountId: string): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(async () => this.requireTier(caller, 'ai_gateway.admin'));
+      const cred = yield* Effect.promise(async () => this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY));
 
-    if (cred?.kind !== 'oauth') throw new KinuError('bad_input', 'Cloudflare is not connected.');
-    await this.writeCredential(CLOUDFLARE_OAUTH_CRED_KEY, withCloudflareAccount(cred, accountId));
-    const owner = await ownerCaller(this.env);
-    await this.selectAIGateway(owner, null);
-    await this.listAIGateways(owner);
+      if (cred?.kind !== 'oauth') return yield* new KinuError('bad_input', 'Cloudflare is not connected.');
+      yield* Effect.promise(async () => this.writeCredential(CLOUDFLARE_OAUTH_CRED_KEY, withCloudflareAccount(cred, accountId)));
+      const owner = yield* Effect.promise(async () => ownerCaller(this.env));
+      yield* Effect.promise(async () => this.selectAIGateway(owner, null));
+      yield* Effect.promise(async () => this.listAIGateways(owner));
+    }));
   }
 
   /** `'revoked'` on `invalid_grant` or a disconnect mid-refresh; `{ failed }` when the issuer could not be asked. One
@@ -4365,29 +4358,33 @@ export class UserDO extends Agent<Env> {
     };
   }
 
-  async getConfig(caller: UserCaller, key: string): Promise<string | null> {
-    await this.requireTier(caller, 'config');
+  getConfig(caller: UserCaller, key: string): Promise<string | null> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(async () => this.requireTier(caller, 'config'));
 
-    if (key === PROFILE_CATALOG_CONFIG_KEY) {
-      throw new KinuError('bad_input', 'profile_catalog has a dedicated typed CAS route.');
-    }
+      if (key === PROFILE_CATALOG_CONFIG_KEY) {
+        return yield* new KinuError('bad_input', 'profile_catalog has a dedicated typed CAS route.');
+      }
 
-    const row = this.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, key)[0];
+      const row = this.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, key)[0];
 
-    return row?.value ?? null;
+      return row?.value ?? null;
+    }));
   }
 
-  async setConfig(caller: UserCaller, key: string, value: string): Promise<void> {
-    await this.requireTier(caller, 'config');
+  setConfig(caller: UserCaller, key: string, value: string): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(async () => this.requireTier(caller, 'config'));
 
-    if (key === PROFILE_CATALOG_CONFIG_KEY) {
-      throw new KinuError('bad_input', 'profile_catalog has a dedicated typed CAS route.');
-    }
+      if (key === PROFILE_CATALOG_CONFIG_KEY) {
+        return yield* new KinuError('bad_input', 'profile_catalog has a dedicated typed CAS route.');
+      }
 
-    this.sqlx(
-      `INSERT INTO user_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
-      key, value,
-    );
+      this.sqlx(
+        `INSERT INTO user_config (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        key, value,
+      );
+    }));
   }
 
   async listConfig(caller: UserCaller): Promise<Record<string, string>> {
@@ -4744,35 +4741,37 @@ export class UserDO extends Agent<Env> {
    * Delete everything under this account, then the object itself; the step order is the contract.
    * Each step leaves no rows, so a failed sweep resumes on retry; errors propagate to the owner.
    */
-  async deleteAccount(caller: UserCaller, ownerUserId: string): Promise<{ ok: true; workspaces: number }> {
-    await this.requireTier(caller, 'account');
+  deleteAccount(caller: UserCaller, ownerUserId: string): Promise<{ ok: true; workspaces: number }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      yield* Effect.promise(async () => this.requireTier(caller, 'account'));
 
-    if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new KinuError('bad_input', 'invalid owner user id');
+      if (!/^[a-f0-9]{32}$/.test(ownerUserId)) return yield* new KinuError('bad_input', 'invalid owner user id');
 
-    const workspaces = this.sqlx<{ name: string }>(`SELECT name FROM user_workspaces`);
+      const workspaces = this.sqlx<{ name: string }>(`SELECT name FROM user_workspaces`);
 
-    for (const { name } of workspaces) {
-      await this.tearDownWorkspace(name, ownerUserId);
-    }
+      for (const { name } of workspaces) {
+        yield* Effect.promise(async () => this.tearDownWorkspace(name, ownerUserId));
+      }
 
-    const devices = this.sqlx<{ id: string }>(`SELECT id FROM user_devices WHERE revoked_at IS NULL`);
+      const devices = this.sqlx<{ id: string }>(`SELECT id FROM user_devices WHERE revoked_at IS NULL`);
 
-    for (const { id } of devices) {
-      await this.revokeDevice(caller, id);
-    }
+      for (const { id } of devices) {
+        yield* Effect.promise(async () => this.revokeDevice(caller, id));
+      }
 
-    const servers = this.sqlx<{ id: string }>(`SELECT id FROM user_mcp_servers`);
+      const servers = this.sqlx<{ id: string }>(`SELECT id FROM user_mcp_servers`);
 
-    for (const { id } of servers) {
-      await this.userMcp_remove(caller, id);
-    }
+      for (const { id } of servers) {
+        yield* Effect.promise(async () => this.userMcp_remove(caller, id));
+      }
 
-    await this.destroy();
-    // The isolate abort is a tick away, and a request can land in that tick: it meets the tables made
-    // again, empty, and answers as the new account.
-    this.initTables();
+      yield* Effect.promise(async () => this.destroy());
+      // The isolate abort is a tick away, and a request can land in that tick: it meets the tables made
+      // again, empty, and answers as the new account.
+      this.initTables();
 
-    return { ok: true, workspaces: workspaces.length };
+      return { ok: true, workspaces: workspaces.length };
+    }));
   }
 
   /**
@@ -4926,17 +4925,11 @@ export class UserDO extends Agent<Env> {
     const rows = this.sqlx<{ n: number }>(`SELECT COUNT(*) AS n FROM user_mcp_servers`)[0];
     const servers = rows?.n ?? 0;
 
-    try {
+    await settleLogged('mcp.connection_warmup_failed', { doing: 'restoring the user MCP connections on warmup', otherwise: 'unavailable' }, async () => {
       await this.hydrateUserMcp();
       await this.mcp.waitForConnections();
       await this.readMcpToolLists();
-    } catch (err) {
-      diagnostics.failure('mcp.connection_warmup_failed', toKinuError({
-        doing: 'restoring the user MCP connections on warmup',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { servers });
-    }
+    }, { servers });
 
     return { servers };
   }
@@ -5128,14 +5121,7 @@ export class UserDO extends Agent<Env> {
 
     if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new KinuError('bad_input', 'Invalid server id.');
 
-    try { await this.mcp.removeServer(id); }
-    catch (err) {
-      diagnostics.failure('mcp.live_server_removal_failed', toKinuError({
-        doing: 'removing a server from the live MCP manager',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { serverId: id });
-    }
+    await settleLogged('mcp.live_server_removal_failed', { doing: 'removing a server from the live MCP manager', otherwise: 'unavailable' }, () => this.mcp.removeServer(id), { serverId: id });
 
     this.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
     this._mcpToolLists.delete(id);
@@ -5194,14 +5180,7 @@ export class UserDO extends Agent<Env> {
     else this.claimMcpServerName(renamed, id, write);
 
     if (p.headers !== undefined) {
-      try { await this.hydrateUserMcp(); }
-      catch (err) {
-        diagnostics.failure('mcp.header_rotation_hydration_failed', toKinuError({
-          doing: 'hydrating an MCP server after a header change',
-          cause: err,
-          otherwise: 'unavailable',
-        }), { serverId: id });
-      }
+      await settleLogged('mcp.header_rotation_hydration_failed', { doing: 'hydrating an MCP server after a header change', otherwise: 'unavailable' }, () => this.hydrateUserMcp(), { serverId: id });
     }
   }
 
@@ -5211,13 +5190,15 @@ export class UserDO extends Agent<Env> {
 
     try {
       this.ctx.storage.transactionSync(() => {
-        const taken = this.ctx.storage.sql.exec(
-          `SELECT 1 AS held FROM user_mcp_servers WHERE lower(name) = lower(?) AND id <> ? LIMIT 1`,
-          name, serverId,
-        ).toArray().length > 0;
+        return settleSync(Effect.gen({ self: this }, function* () {
+          const taken = this.ctx.storage.sql.exec(
+            `SELECT 1 AS held FROM user_mcp_servers WHERE lower(name) = lower(?) AND id <> ? LIMIT 1`,
+            name, serverId,
+          ).toArray().length > 0;
 
-        if (taken) throw new KinuError('bad_input', mcpNameTakenMessage(name));
-        write();
+          if (taken) return yield* new KinuError('bad_input', mcpNameTakenMessage(name));
+          write();
+        }));
       });
     } catch (err) {
       rethrowMcpNameCollision({ cause: err, name });
@@ -5395,14 +5376,7 @@ export class UserDO extends Agent<Env> {
     if (!isMcpTransportUnauthorized(input)) return;
     const { serverId } = input;
 
-    try { await this.mcp.discoverIfConnected(serverId); }
-    catch (err) {
-      diagnostics.failure('mcp.auth_state_convergence_failed', toKinuError({
-        doing: 'reprobing an MCP connection that failed to authorize',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { serverId });
-    }
+    await settleLogged('mcp.auth_state_convergence_failed', { doing: 'reprobing an MCP connection that failed to authorize', otherwise: 'unavailable' }, async () => { await this.mcp.discoverIfConnected(serverId); }, { serverId });
   }
 
   async userMcp_handleOAuthCallback(caller: UserCaller, url: string): Promise<{ ok: boolean; serverId: string | null; error: string | null }> {

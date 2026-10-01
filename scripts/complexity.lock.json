@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-01",
   "files": 2931,
-  "functions": 74837,
+  "functions": 75052,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -50,10 +50,6 @@
       "complexity": 40
     },
     {
-      "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc",
-      "complexity": 39
-    },
-    {
       "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
       "complexity": 38
     },
@@ -62,11 +58,11 @@
       "complexity": 38
     },
     {
-      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission",
+      "key": "packages/cf-backend/src/gallery.tsx#DriveFrame>filesRpc",
       "complexity": 37
     },
     {
-      "key": "packages/cf-backend/src/gallery.tsx#DriveFrame>filesRpc",
+      "key": "packages/cf-backend/src/user/user-do.ts#UserDO.deviceRpc>gen",
       "complexity": 37
     },
     {
@@ -80,6 +76,10 @@
     {
       "key": "packages/pc-agent/src/index.js#handle",
       "complexity": 37
+    },
+    {
+      "key": "packages/cf-backend/src/feedback/submit.ts#handleFeedbackSubmission",
+      "complexity": 36
     },
     {
       "key": "packages/core/src/bench/stats.ts#pairedBinaryComparison>gen",
@@ -122,7 +122,7 @@
       "complexity": 34
     },
     {
-      "key": "packages/cf-backend/src/user/mcp.ts#validateMcpServerInput",
+      "key": "packages/cf-backend/src/user/mcp.ts#validateMcpServerInput>gen",
       "complexity": 33
     },
     {

@@ -4,13 +4,14 @@
  * Nimbus's hosted runtime (`composeHostedRuntime`); facets reach it through {@link createWorkspaceBoxClient}.
  */
 
+import { Effect } from 'effect';
 import { createWorkspace, workspaceBoxFiles, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import type { RuntimeSource, SupervisorOpResult, WorkspaceBundle } from '@kinu.run/core/workspace';
 import { jsonResultOrVoid } from '@kinu.run/core';
 import type {
   NimbusExecResult, NimbusPortInfo, NimbusSandboxHandle, NimbusStartResult, PreviewRouteCheck, WorkspacePreviewUrl,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, toKinuError, type Refusal } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, type Refusal, settle, settleLogged } from '@kinu.run/core/obs';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import type { SupervisorOpEnvelope } from '@nimbus-sh/core/workspace/supervisor-op.js';
 import type { FabricComposition } from '@nimbus-sh/fabric/composition.js';
@@ -179,17 +180,13 @@ function routeCheck(gates: PreviewGates): PreviewRouteCheck {
  * released by answering null. An interpreter resident is never an embedder's launch. */
 /** A throw inside `waitUntil` would otherwise vanish. */
 async function redriveSlate(ensuring: Promise<Refusal | null>, owner: string): Promise<void> {
-  try {
+  await settleLogged('workspace.facet.redrive_failed', { doing: 're-driving a slate launch a hibernation interrupted', otherwise: 'io' }, async () => {
     const refusal = await ensuring;
 
     if (refusal !== null) {
       diagnostics.event('workspace.facet.redrive_refused', { owner, reason: refusal.reason, error: refusal.error });
     }
-  } catch (cause) {
-    diagnostics.failure('workspace.facet.redrive_failed', toKinuError({
-      doing: 're-driving a slate launch a hibernation interrupted', cause, otherwise: 'io',
-    }), { owner });
-  }
+  }, { owner });
 }
 
 function resolveSlateLaunch<Id>(deps: HostedWorkspaceDeps<Id>, recipe: WorkerRecipe): Promise<null> {
@@ -352,22 +349,24 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
       return { attachTerminal, terminalFrame, terminalClose };
     },
     apps: {
-      async ensure({ owner, preferredPort }) {
-        const { facets } = await compose();
-        const held = await readPortReservationByOwner(deps.ctx, owner);
+      ensure({ owner, preferredPort }) {
+        return settle(Effect.gen(function* () {
+          const { facets } = yield* Effect.promise(async () => compose());
+          const held = yield* Effect.promise(async () => readPortReservationByOwner(deps.ctx, owner));
 
-        // The declaration moved: release the old reservation; the facet slot (and its storage) is kept.
-        if (held !== null && preferredPort !== undefined && held.port !== preferredPort) {
-          await releasePortReservation(deps.ctx, { owner, port: held.port });
-        }
+          // The declaration moved: release the old reservation; the facet slot (and its storage) is kept.
+          if (held !== null && preferredPort !== undefined && held.port !== preferredPort) {
+            yield* Effect.promise(async () => releasePortReservation(deps.ctx, { owner, port: held.port }));
+          }
 
-        const reserved = await facets.apps.ensureDurableApp({ owner, preferredPort, visibility: 'scoped' });
+          const reserved = yield* Effect.promise(async () => facets.apps.ensureDurableApp({ owner, preferredPort, visibility: 'scoped' }));
 
-        if (reserved.capability === null) {
-          throw new KinuError('io', `Nimbus reserved workspace port ${reserved.port} for ${owner} without a capability`);
-        }
+          if (reserved.capability === null) {
+            return yield* new KinuError('io', `Nimbus reserved workspace port ${reserved.port} for ${owner} without a capability`);
+          }
 
-        return { port: reserved.port, capability: reserved.capability };
+          return { port: reserved.port, capability: reserved.capability };
+        }));
       },
       async remove(owner) {
         const removed = await (await runtime()).removeApp({ owner });

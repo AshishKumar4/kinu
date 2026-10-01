@@ -5,7 +5,7 @@ import { Hono } from 'hono';
 import { FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, pumpUploadChunks, VfsRevisionSchema, type ExecutorWriteResult } from "@kinu.run/core";
 import * as v from 'valibot';
 import type { ExecutorFileChunkRead, ExecutorFileChunkWrite } from "./orchestrator";
-import { diagnostics, KinuError, toKinuError } from "@kinu.run/core/obs";
+import { diagnostics, KinuError, toKinuError, settleLogged } from "@kinu.run/core/obs";
 import { err, fileResponseHeaders, json } from "@kinu.run/core";
 import type { FamilyEnv } from './api/context';
 import { LITERAL_WORKSPACE, type WorkspaceVariables } from './api/workspace';
@@ -85,15 +85,7 @@ async function upload(transfer: {
   const transferId = crypto.randomUUID();
 
   const abandon = async (): Promise<void> => {
-    try {
-      await agent.abortExecutorFileWrite(transferId);
-    } catch (abortCause) {
-      diagnostics.failure('files.upload_abort_failed', toKinuError({
-        doing: 'aborting a failed chunked file upload',
-        cause: abortCause,
-        otherwise: 'unavailable',
-      }), { executorId, path });
-    }
+    await settleLogged('files.upload_abort_failed', { doing: 'aborting a failed chunked file upload', otherwise: 'unavailable' }, () => agent.abortExecutorFileWrite(transferId), { executorId, path });
   };
 
   let sent = 0;

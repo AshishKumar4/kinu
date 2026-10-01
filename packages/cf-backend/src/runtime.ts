@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import type { VFS as CoreVFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * CF runtime adapter: bridges the Agents DO context to core's AgentRuntime. One Durable Object per
@@ -31,7 +32,7 @@ import { mountActorFiles } from './workspace-host';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
-import { diagnostics, toKinuError } from "@kinu.run/core/obs";
+import { diagnostics, toKinuError, settle, settleLogged } from "@kinu.run/core/obs";
 import { kinuEgressParams } from "./egress/configure";
 import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE, type BoxSize } from "@kinu.run/devbox/sizes";
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from "./sandbox-size";
@@ -292,8 +293,8 @@ export function createCFRuntime(
   // The one required lane: `AgentRuntime.llm` is not optional.
   const llm: LLM = profileLane('reflection') ?? {
     async *stream() { yield ""; },
-    async complete(): Promise<string> {
-      throw new Error('reflection model lane has no active profile');
+    complete(): Promise<string> {
+      return settle(Effect.die(new Error('reflection model lane has no active profile')));
     },
   };
 
@@ -455,26 +456,10 @@ export function createCFRuntime(
   const startupWork: Promise<void> = (async () => {
     await Promise.all([
       (async (): Promise<void> => {
-        try {
-          await backfillMemoryVectors(memoryStore, memoryConfig, vectorStore);
-        } catch (cause) {
-          diagnostics.failure('memory.vector_backfill_detached_failed', toKinuError({
-            doing: 'backfilling semantic-memory vectors at runtime construction',
-            cause,
-            otherwise: 'unavailable',
-          }), { workspace: actor.workspaceName });
-        }
+        await settleLogged('memory.vector_backfill_detached_failed', { doing: 'backfilling semantic-memory vectors at runtime construction', otherwise: 'unavailable' }, () => backfillMemoryVectors(memoryStore, memoryConfig, vectorStore), { workspace: actor.workspaceName });
       })(),
       (async (): Promise<void> => {
-        try {
-          await deviceTransport.refreshStatus();
-        } catch (cause) {
-          diagnostics.failure('device.status_warmup_failed', toKinuError({
-            doing: 'warming the device hub presence at runtime construction',
-            cause,
-            otherwise: 'unavailable',
-          }), { workspace: actor.workspaceName });
-        }
+        await settleLogged('device.status_warmup_failed', { doing: 'warming the device hub presence at runtime construction', otherwise: 'unavailable' }, async () => { await deviceTransport.refreshStatus(); }, { workspace: actor.workspaceName });
       })(),
     ]);
   })();

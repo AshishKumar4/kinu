@@ -9,7 +9,7 @@ import {
   type IncidentDisposition, type RestoreClockPhase,
 } from "@kinu.run/devbox";
 import { getAgentByName } from "agents";
-import { diagnostics, toKinuError } from "@kinu.run/core/obs";
+import { settleLogged } from "@kinu.run/core/obs";
 import { sandboxIdForWorkspace } from '@kinu.run/core';
 import type { OrchestratorAgent } from "./orchestrator";
 import { restoreNotices, SANDBOX_LIFECYCLE_ENVELOPE_VERSION } from "./sandbox-lifecycle";
@@ -81,13 +81,9 @@ export class KinuDevbox extends Devbox<Env> {
   override async onStop(): Promise<void> {
     await super.onStop();
 
-    try {
+    await settleLogged("sandbox.stop_notice_failed", { doing: "telling the workspace its sandbox stopped", otherwise: "unavailable" }, async () => {
       await (await this.#rootAgent())?.sandboxStopped();
-    } catch (cause) {
-      diagnostics.failure("sandbox.stop_notice_failed", toKinuError({
-        doing: "telling the workspace its sandbox stopped", cause, otherwise: "unavailable",
-      }));
-    }
+    });
   }
 
   /** Devbox re-delivers until `queued`. `attempt` is Devbox's delivery count, which an evicted

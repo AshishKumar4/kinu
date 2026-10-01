@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import type { LanguageModel } from 'ai';
 import {
   agentAffinityKey, parseModelSpec, reasoningEffortOptions,
@@ -7,7 +8,7 @@ import {
   type WebSearchProvider,
   type ProviderEnv, type WorkersAIBinding,
 } from '@kinu.run/core';
-import { diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, toKinuError, settleSync } from '@kinu.run/core/obs';
 import { buildCfWebSearchProvider, type BrowserRunQuickActions } from '@kinu.run/core';
 import {
   createAgentProviderRegistry,
@@ -69,29 +70,31 @@ export class OwnedModelServices<Id = DurableObjectId> {
   }
 
   providerRegistry(): AgentProviderRegistry {
-    if (this.providerRegistryCache) return this.providerRegistryCache;
+    return settleSync(Effect.gen({ self: this }, function* () {
+      if (this.providerRegistryCache) return this.providerRegistryCache;
 
-    const userId = this.options.getOwnerUserId();
+      const userId = this.options.getOwnerUserId();
 
-    if (!userId && this.options.ownerRequired) {
-      throw new Error('Agent has no owner_user_id yet: Worker must call claimOwner before any model use.');
-    }
+      if (!userId && this.options.ownerRequired) {
+        return yield* Effect.die(new Error('Agent has no owner_user_id yet: Worker must call claimOwner before any model use.'));
+      }
 
-    const userDOStub = userId
-      ? this.options.env.UserDO.get(this.options.env.UserDO.idFromName(userId))
-      : null;
+      const userDOStub = userId
+        ? this.options.env.UserDO.get(this.options.env.UserDO.idFromName(userId))
+        : null;
 
-    this.providerRegistryCache = createAgentProviderRegistry({
-      env: this.options.env,
-      ownerUserId: userId,
-      userDO: userDOStub ? { stub: userDOStub, caller: this.options.getUserCaller } : null,
-      appTitle: this.options.appTitle,
-      onProviderWait: this.options.onProviderWait,
-      accountFor: this.options.accountFor,
-      ...(this.options.currentTurn !== undefined && { currentTurn: this.options.currentTurn }),
-    });
+      this.providerRegistryCache = createAgentProviderRegistry({
+        env: this.options.env,
+        ownerUserId: userId,
+        userDO: userDOStub ? { stub: userDOStub, caller: this.options.getUserCaller } : null,
+        appTitle: this.options.appTitle,
+        onProviderWait: this.options.onProviderWait,
+        accountFor: this.options.accountFor,
+        ...(this.options.currentTurn !== undefined && { currentTurn: this.options.currentTurn }),
+      });
 
-    return this.providerRegistryCache;
+      return this.providerRegistryCache;
+    }));
   }
 
   /** Memoized on the normalized spec: heads ask once per step. `invalidate()` drops it. */

@@ -238,7 +238,7 @@ import {
 } from "@kinu.run/core";
 import type { CodemodeProvider, MctsSearchRunSummary, SubordinateInspectionRequest, SubordinateInspectionResult, WorkspacePlanReference } from "@kinu.run/core";
 import { Effect } from 'effect';
-import { attempt, authoredRefusal, classify, diagnostics, KinuError, refusalOf, renderCauseChain, renderThrownChain, settle, settleSync, toKinuError, type Refusal } from "@kinu.run/core/obs";
+import { attempt, authoredRefusal, classify, diagnostics, KinuError, refusalOf, renderCauseChain, renderThrownChain, settle, settleSync, toKinuError, type Refusal, settleLogged } from "@kinu.run/core/obs";
 import { ownerContainer, type CodexContainer } from "./egress/codex-egress-route";
 import { createCloudWorkspaceForUser } from "./user/workspace-create";
 import type { NameOrigin } from "@kinu.run/core";
@@ -1625,7 +1625,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // (which closes the same leases when it finishes a transition).
     let owed: ReadonlyMap<string, string> = new Map<string, string>();
 
-    try {
+    await settleLogged('event.stale_delivery_unbind_failed', { doing: 'unbinding event deliveries a dead activation left leased', otherwise: 'io' }, async () => {
       owed = await this.owedDrainReplies();
 
       const reconciledEventIds = this.eventLog.unbindStale(
@@ -1636,27 +1636,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         diagnostics.event('event.deliveries_repended', { workspace: this.name, events: reconciledEventIds.length });
         this.orch.scheduleDrain();
       }
-    } catch (err) {
-      diagnostics.failure('event.stale_delivery_unbind_failed', toKinuError({
-        doing: 'unbinding event deliveries a dead activation left leased',
-        cause: err,
-        otherwise: 'io',
-      }), { workspace: this.name });
-    }
+    }, { workspace: this.name });
 
     // One reply's failure leaves only its lease open (keeping the wake armed for it);
     // the other owed replies and the terminal replay below still run.
     for (const [drainTurnId, answer] of owed) {
-      try {
+      await settleLogged('event.owed_reply_failed', { doing: 'finishing an event reply a drained turn still owes', otherwise: 'io' }, async () => {
         const closed = await this.completeEventBatch(drainTurnId, answer);
         diagnostics.event('event.owed_reply_resumed', { drainTurnId, closed });
-      } catch (err) {
-        diagnostics.failure('event.owed_reply_failed', toKinuError({
-          doing: 'finishing an event reply a drained turn still owes',
-          cause: err,
-          otherwise: 'io',
-        }), { drainTurnId });
-      }
+      }, { drainTurnId });
     }
 
     await this.agentTurns.reconcile();
@@ -1840,13 +1828,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     const failure = WAKE_ARM_FAILURE[reason];
 
     this.detachOwned(async () => {
-      try {
-        await this.scheduleTerminalRetry(Date.now());
-      } catch (cause) {
-        diagnostics.failure(failure.event, toKinuError({
-          doing: failure.doing, cause, otherwise: 'io',
-        }), { workspace: this.name });
-      }
+      await settleLogged(failure.event, { doing: failure.doing, otherwise: 'io' }, () => this.scheduleTerminalRetry(Date.now()), { workspace: this.name });
     });
   }
 
@@ -1863,13 +1845,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (next === null) return;
     this.detachOwned(async () => {
-      try {
-        await this.wakes.arm(KINU_TIMER_JOB, next);
-      } catch (cause) {
-        diagnostics.failure('schedule.durable_wake_arm_failed', toKinuError({
-          doing: 'arming the wake a pending reaction needs', cause, otherwise: 'io',
-        }), { workspace: this.name });
-      }
+      await settleLogged('schedule.durable_wake_arm_failed', { doing: 'arming the wake a pending reaction needs', otherwise: 'io' }, () => this.wakes.arm(KINU_TIMER_JOB, next), { workspace: this.name });
     });
   }
 
@@ -2221,40 +2197,42 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Called by the Worker on every authenticated request before any other RPC; 403s on cross-user collision. */
-  async claimOwner(userId: string): Promise<{ owner: string; capabilityHash: string | null }> {
-    if (!userId) throw new KinuError('bad_input', 'userId required');
+  claimOwner(userId: string): Promise<{ owner: string; capabilityHash: string | null }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (!userId) return yield* new KinuError('bad_input', 'userId required');
 
-    // A hash, not a boolean: the UserDO compares it to its registration so any mismatch gets repaired.
-    const capabilityHash = await this.workspaceCapabilityHash();
-    const current = this.getOwnerUserId();
+      // A hash, not a boolean: the UserDO compares it to its registration so any mismatch gets repaired.
+      const capabilityHash = yield* Effect.promise(async () => this.workspaceCapabilityHash());
+      const current = this.getOwnerUserId();
 
-    if (current === null) {
-      const exists = this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`;
+      if (current === null) {
+        const exists = this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`;
 
-      if (exists.length === 0) {
-        this.bearWorkspace(this.name, userId);
-      } else {
-        this.actorHandle();
-        void this.sql`UPDATE workspace_identity SET owner_user_id = ${userId}`;
+        if (exists.length === 0) {
+          this.bearWorkspace(this.name, userId);
+        } else {
+          this.actorHandle();
+          void this.sql`UPDATE workspace_identity SET owner_user_id = ${userId}`;
+        }
+
+        this._ownerUserId = userId;
+        this.invalidateModelCaches();
+        yield* Effect.promise(async () => this.ensureOwnedScaffold());
+
+        // Detached: the loop is never built inside the init gate.
+        if (exists.length === 0) this.detachOwned(async () => { this.chatLoop.measureSessionStart(); });
+
+        return { owner: userId, capabilityHash };
       }
 
-      this._ownerUserId = userId;
-      this.invalidateModelCaches();
-      await this.ensureOwnedScaffold();
+      if (current !== userId) {
+        return yield* new KinuError('denied', `Agent owned by a different user (stored=${current.slice(0, 8)}..., caller=${userId.slice(0, 8)}...)`);
+      }
 
-      // Detached: the loop is never built inside the init gate.
-      if (exists.length === 0) this.detachOwned(async () => { this.chatLoop.measureSessionStart(); });
-
-      return { owner: userId, capabilityHash };
-    }
-
-    if (current !== userId) {
-      throw new KinuError('denied', `Agent owned by a different user (stored=${current.slice(0, 8)}..., caller=${userId.slice(0, 8)}...)`);
-    }
-
-    // No scaffold probe here: this runs on every authenticated request. An interrupted bootstrap
-    // is finished by beforeTurn, which awaits ensureOwnedScaffold before reading workspace files.
-    return { owner: current, capabilityHash };
+      // No scaffold probe here: this runs on every authenticated request. An interrupted bootstrap
+      // is finished by beforeTurn, which awaits ensureOwnedScaffold before reading workspace files.
+      return { owner: current, capabilityHash };
+    }));
   }
 
   // The reactor lives on the core AgentOrchestrator. Ingress uses the debounced
@@ -2558,13 +2536,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     if (this.config.get(SANDBOX_STARTING) == null && this.config.get(SANDBOX_REFUSED) == null) return;
     this.detachOwned(async () => {
-      try {
+      await settleLogged('sandbox.restore_recheck_failed', { doing: "reading the sandbox's restore state", otherwise: 'unavailable' }, async () => {
         await this.sandboxRestore(await namespace.getByName(sandboxIdForWorkspace(this.name)).restoreStatus());
-      } catch (cause) {
-        diagnostics.failure('sandbox.restore_recheck_failed', toKinuError({
-          doing: "reading the sandbox's restore state", cause, otherwise: 'unavailable',
-        }), { workspace: this.name });
-      }
+      }, { workspace: this.name });
     });
   }
 
@@ -2702,17 +2676,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private async hydrateTitle(): Promise<void> {
     if (!this.getOwnerUserId()) return;
 
-    try {
-      const { stub, caller } = await this.userHub();
-      this._titleCache = await stub.getWorkspaceTitle(caller, this.name);
-      this._titleHydrated = true;
-    } catch (err) {
-      diagnostics.failure('workspace.title_hydration_failed', toKinuError({
-        doing: 'reading the root registry title for this workspace',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { workspace: this.name });
-    }
+    await settleLogged('workspace.title_hydration_failed', { doing: 'reading the root registry title for this workspace', otherwise: 'unavailable' },
+      () => this.hydrateTitleInputs(), { workspace: this.name });
   }
 
   private titleState(): { displayName: string; nameOrigin: NameOrigin } {
@@ -3138,7 +3103,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // The alarm owns recovery authority. Core retains verified claims as owed,
     // settles unverified ones indeterminate, and leaves live actors untouched.
 
-    try {
+    await settleLogged('actor.turn_recovery_failed', { doing: 'rebuilding the hosted turns an eviction interrupted', otherwise: 'io' }, async () => {
       const host = this.actorHost();
       const rootActorId = this.actorHandle().actorId;
       const rootIsLive = () => this._inFlight || this.actorSession.turnOpen;
@@ -3163,12 +3128,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           };
         },
       });
-
-    } catch (cause) {
-      diagnostics.failure('actor.turn_recovery_failed', toKinuError({
-        doing: 'rebuilding the hosted turns an eviction interrupted', cause, otherwise: 'io',
-      }), { workspace: this.name });
-    }
+    }, { workspace: this.name });
 
     await this.recoverAgentTurns();
     // Retained claims still fence new work; verification alone is not execution.
@@ -3183,7 +3143,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     ).length > 0) return true;
     this.activationRecoveryPending = false;
 
-    try {
+    await settleLogged('head.journal_reconcile_failed', { doing: 'reconciling fork-journal heads a dead activation left running', otherwise: 'io' }, async () => {
       await reconcileInterruptedForks({
         now: this.activationStartedAt,
         journal: this.headJournal,
@@ -3211,13 +3171,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         logActivity: (event, detail) => this.logActivity(event, detail),
       });
       await this.reclaimSettledExplorationActors();
-    } catch (cause) {
-      diagnostics.failure('head.journal_reconcile_failed', toKinuError({
-        doing: 'reconciling fork-journal heads a dead activation left running',
-        cause,
-        otherwise: 'io',
-      }), { workspace: this.name });
-    }
+    }, { workspace: this.name });
 
     return await super.maintenanceWork();
   }
@@ -3226,20 +3180,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Must run after `reconcileInterruptedForks` so an `interrupted` head reads as resumable, not terminal.
    */
   protected async reclaimSettledExplorationActors(): Promise<void> {
-    try {
+    await settleLogged('actor.reconciliation_failed', { doing: 'retiring exploration actors left behind by a reset', otherwise: 'unavailable' }, async () => {
       const { retired } = await reclaimSettledExplorationActors(this.hostedSeams(), {
         readHead: (id) => this.headJournal.readHead(id),
         hasLiveExploration: () => this.hasLiveExploration(),
       });
 
       if (retired > 0) diagnostics.event('actor.settled_retired', { retired });
-    } catch (err) {
-      diagnostics.failure('actor.reconciliation_failed', toKinuError({
-        doing: 'retiring exploration actors left behind by a reset',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { workspace: this.name });
-    }
+    }, { workspace: this.name });
   }
 
   /**
@@ -3610,39 +3558,41 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * The pair settles into Alternate Takes on this turn; progress streams as 'branch_status'.
    */
   @callable()
-  async branchTurn(text: string): Promise<{ accepted: boolean; branchId?: string; reason?: string }> {
-    const task = text.trim();
+  branchTurn(text: string): Promise<{ accepted: boolean; branchId?: string; reason?: string }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const task = text.trim();
 
-    if (!task) throw new KinuError('bad_input', 'branchTurn requires the redirect text');
+      if (!task) return yield* new KinuError('bad_input', 'branchTurn requires the redirect text');
 
-    if (!this._inFlight) {
-      return { accepted: false, reason: 'No turn is running: send it as a normal message instead.' };
-    }
+      if (!this._inFlight) {
+        return { accepted: false, reason: 'No turn is running: send it as a normal message instead.' };
+      }
 
-    if (this.turnWorkMode() === 'plan') {
-      return { accepted: false, reason: 'Plan turns cannot start mutating branches. Review or finish the plan first.' };
-    }
+      if (this.turnWorkMode() === 'plan') {
+        return { accepted: false, reason: 'Plan turns cannot start mutating branches. Review or finish the plan first.' };
+      }
 
-    const runtime = this.getCFHeadRuntime();
+      const runtime = this.getCFHeadRuntime();
 
-    if (!runtime) {
-      return { accepted: false, reason: 'Branching needs an agent owner (heads require UserDO access).' };
-    }
+      if (!runtime) {
+        return { accepted: false, reason: 'Branching needs an agent owner (heads require UserDO access).' };
+      }
 
-    const id = newBranchId();
-    // Read before the await: the branch charges the turn the owner redirected, not whichever runs next.
-    const missionLabels = this.budget.scope;
-    const inheritedContext = await this.readInheritedContext();
-    this._pendingBranches.push({
-      id, task,
-      handle: startBranchHead(runtime, this.headJournal, {
-        id, task, inheritedContext, missionLabels,
-      }),
-    });
-    this.broadcastBranchStatus({ type: 'branch_status', status: 'running', branchId: id, task });
-    this.logActivity('branch_start', task.slice(0, 120));
+      const id = newBranchId();
+      // Read before the await: the branch charges the turn the owner redirected, not whichever runs next.
+      const missionLabels = this.budget.scope;
+      const inheritedContext = yield* Effect.promise(async () => this.readInheritedContext());
+      this._pendingBranches.push({
+        id, task,
+        handle: startBranchHead(runtime, this.headJournal, {
+          id, task, inheritedContext, missionLabels,
+        }),
+      });
+      this.broadcastBranchStatus({ type: 'branch_status', status: 'running', branchId: id, task });
+      this.logActivity('branch_start', task.slice(0, 120));
 
-    return { accepted: true, branchId: id };
+      return { accepted: true, branchId: id };
+    }));
   }
 
   private broadcastBranchStatus(event: BranchStatusEvent): void {
@@ -3857,15 +3807,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // The explicit verdict overrides any classifier row for this turn and, when negative,
     // corroborates provisional lessons.
-    try {
-      await this.engine.applyExplicitFeedback(messageId, feedback);
-    } catch (err) {
-      diagnostics.failure('feedback.explicit_apply_failed', toKinuError({
-        doing: 'recording an explicit turn verdict in the outcome ledger',
-        cause: err,
-        otherwise: 'io',
-      }), { messageId });
-    }
+    await settleLogged('feedback.explicit_apply_failed', { doing: 'recording an explicit turn verdict in the outcome ledger', otherwise: 'io' }, () => this.engine.applyExplicitFeedback(messageId, feedback), { messageId });
 
     return { ok: true, messageId, feedback, rescored };
   }
@@ -4107,19 +4049,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Owner-scoped ('interactive'); workspace capability tiers do not gate it.
    */
   @callable()
-  async exportWorkspaceArchive(cursor?: ArchiveCursor): Promise<ArchivePage> {
-    const ownerUserId = this.getOwnerUserId();
+  exportWorkspaceArchive(cursor?: ArchiveCursor): Promise<ArchivePage> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const ownerUserId = this.getOwnerUserId();
 
-    if (!ownerUserId) throw new KinuError('unavailable', 'Cannot export an unclaimed workspace.');
-    const workspace = this.hostedWorkspace().bundle;
+      if (!ownerUserId) return yield* new KinuError('unavailable', 'Cannot export an unclaimed workspace.');
+      const workspace = this.hostedWorkspace().bundle;
 
-    return readWorkspaceArchivePage(this.ctx.storage.sql, {
-      workspace: this.name,
-      source: 'cloud',
-      cursor: parseArchiveCursor(cursor),
-      store: workspaceArchiveStore(workspace),
-      agents: this.agentArchiveSource(),
-    });
+      return yield* Effect.promise(async () => readWorkspaceArchivePage(this.ctx.storage.sql, {
+        workspace: this.name,
+        source: 'cloud',
+        cursor: parseArchiveCursor(cursor),
+        store: workspaceArchiveStore(workspace),
+        agents: this.agentArchiveSource(),
+      }));
+    }));
   }
 
   /** Retired ones hold their stores until destroyed. */
@@ -4148,23 +4092,25 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Tear down per-agent resources (Sandbox first), then wipe this DO; called by UserDO.removeWorkspace.
    * Not @callable: destruction must go through UserDO's ownership check.
    */
-  async destroyAgent(expectedOwnerUserId: string): Promise<{ ok: true }> {
-    if (!/^[a-f0-9]{32}$/.test(expectedOwnerUserId)) throw new KinuError('bad_input', 'invalid expected owner user id');
+  destroyAgent(expectedOwnerUserId: string): Promise<{ ok: true }> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (!/^[a-f0-9]{32}$/.test(expectedOwnerUserId)) return yield* new KinuError('bad_input', 'invalid expected owner user id');
 
-    // No owner: a creation that died before its claim, or storage from before a reset. The caller
-    // `removeWorkspace` already verified ownership through the user's roster.
-    let ownerUserId = this.wipe?.ownerUserId ?? null;
+      // No owner: a creation that died before its claim, or storage from before a reset. The caller
+      // `removeWorkspace` already verified ownership through the user's roster.
+      let ownerUserId = this.wipe?.ownerUserId ?? null;
 
-    if (this.wipe === undefined && this.storageRefusal === undefined) ownerUserId = this.getOwnerUserId();
+      if (this.wipe === undefined && this.storageRefusal === undefined) ownerUserId = this.getOwnerUserId();
 
-    if (ownerUserId !== null && ownerUserId !== expectedOwnerUserId) throw new KinuError('denied', 'Agent owner mismatch; refusing to destroy.');
+      if (ownerUserId !== null && ownerUserId !== expectedOwnerUserId) return yield* new KinuError('denied', 'Agent owner mismatch; refusing to destroy.');
 
-    if (this.wipe === undefined) await this.releaseOutsideState();
+      if (this.wipe === undefined) yield* Effect.promise(async () => this.releaseOutsideState());
 
-    this.wipe ??= { ownerUserId, done: this.wipeStorage() };
-    await this.wipe.done;
+      const wipe = this.wipe ??= { ownerUserId, done: this.wipeStorage() };
+      yield* Effect.promise(() => wipe.done);
 
-    return { ok: true };
+      return { ok: true };
+    }));
   }
 
   private async releaseOutsideState(): Promise<void> {
@@ -4271,12 +4217,14 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable()
-  async inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
-    const owner = this.getOwnerUserId();
+  inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const owner = this.getOwnerUserId();
 
-    if (!owner) throw new KinuError('denied', 'The workspace has no owner.');
+      if (!owner) return yield* new KinuError('denied', 'The workspace has no owner.');
 
-    return this.inspectSubordinateStorage(request, { owner, workspace: this.name });
+      return yield* Effect.promise(async () => this.inspectSubordinateStorage(request, { owner, workspace: this.name }));
+    }));
   }
 
   /**
@@ -4326,15 +4274,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * facets must not reach. A hint: readers re-verify via owner-gated `inspectSubordinate`; a stub
    * call carries no caller identity.
    */
-  async announceSubordinatePlan(reference: WorkspacePlanReference): Promise<void> {
-    const parsed = v.parse(WorkspacePlanReferenceSchema, reference);
-    const name = parsed.path[0];
+  announceSubordinatePlan(reference: WorkspacePlanReference): Promise<void> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const parsed = v.parse(WorkspacePlanReferenceSchema, reference);
+      const name = parsed.path[0];
 
-    if (!name || !this.subordinateRoster.get(name)) {
-      throw new KinuError('denied', 'This workspace has no such plan actor.');
-    }
+      if (!name || !this.subordinateRoster.get(name)) {
+        return yield* new KinuError('denied', 'This workspace has no such plan actor.');
+      }
 
-    this.broadcastToActor(null, JSON.stringify({ type: 'workspace_plan_updated', reference: parsed }));
+      this.broadcastToActor(null, JSON.stringify({ type: 'workspace_plan_updated', reference: parsed }));
+    }));
   }
 
   @callable()
@@ -4412,29 +4362,33 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Delivers a task signal through the same seam as the event→turn reactor and background-job wake.
    * The words come from the MCP client's operator, so the signal names its author. */
-  async runTaskFromMcp(text: string): Promise<EnqueueTurnResult> {
-    const trimmed = text.trim();
+  runTaskFromMcp(text: string): Promise<EnqueueTurnResult> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const trimmed = text.trim();
 
-    if (!trimmed) throw new KinuError('bad_input', 'run_task requires non-empty text');
+      if (!trimmed) return yield* new KinuError('bad_input', 'run_task requires non-empty text');
 
-    const outcome = await this.orch.inbox.send({
-      kind: 'mcp', text: trimmed,
-      metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator' },
-    });
+      const outcome = yield* Effect.promise(async () => this.orch.inbox.send({
+        kind: 'mcp', text: trimmed,
+        metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator' },
+      }));
 
-    return { status: outcome === 'undelivered' ? 'skipped' : 'queued' };
+      return { status: outcome === 'undelivered' ? 'skipped' : 'queued' };
+    }));
   }
 
   /** Fire-and-forget over the peer-deps transport; owner + same-owner roster gate is enforced there. */
-  async sendPeerFromMcp(input: { agent: string; topic?: string; message: string }): Promise<PeerSendOutcome> {
-    if (!input?.agent || !input?.message) throw new KinuError('bad_input', 'send_peer requires agent and message');
+  sendPeerFromMcp(input: { agent: string; topic?: string; message: string }): Promise<PeerSendOutcome> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (!input?.agent || !input?.message) return yield* new KinuError('bad_input', 'send_peer requires agent and message');
 
-    return this.getPeersToolDeps().send({
-      agent: input.agent,
-      topic: (input.topic ?? '').trim() || 'message',
-      message: input.message,
-      mode: 'build',
-    });
+      return yield* Effect.promise(async () => this.getPeersToolDeps().send({
+        agent: input.agent,
+        topic: (input.topic ?? '').trim() || 'message',
+        message: input.message,
+        mode: 'build',
+      }));
+    }));
   }
 
   /** The owner's other agents, self excluded. */
@@ -4718,13 +4672,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     // The send admits the turn before its first await; only the wait is detached.
     const sent = this.orch.inbox.send(signal);
     this.detachOwned(async () => {
-      try {
-        await this.keepAliveWhile(() => sent);
-      } catch (cause) {
-        diagnostics.failure('genesis.turn_failed', toKinuError({
-          doing: "taking the workspace's first turn", cause, otherwise: 'unavailable',
-        }), { workspace: this.name });
-      }
+      await settleLogged('genesis.turn_failed', { doing: "taking the workspace's first turn", otherwise: 'unavailable' }, async () => { await this.keepAliveWhile(() => sent); }, { workspace: this.name });
     });
 
     return { started: true };
@@ -5440,18 +5388,20 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return (await settledWorkspaceSoul(this.hostedWorkspace().bundle)) ?? '';
   }
 
-  @callable() async setSoul(soul: string) {
-    const text = soul.trim();
+  @callable() setSoul(soul: string) {
+    return settle(Effect.gen({ self: this }, function* () {
+      const text = soul.trim();
 
-    if (!text) throw new KinuError('bad_input', 'SOUL.md cannot be empty.');
-    const ownerUserId = this.getOwnerUserId();
+      if (!text) return yield* new KinuError('bad_input', 'SOUL.md cannot be empty.');
+      const ownerUserId = this.getOwnerUserId();
 
-    if (!ownerUserId) throw new KinuError('unavailable', 'SOUL.md is unavailable until the workspace owner claim completes.');
-    await writeSoul(this.boundSql, text, (content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content));
-    // The next turn re-reads the soul from its row.
-    this._cachedSoulText = null;
+      if (!ownerUserId) return yield* new KinuError('unavailable', 'SOUL.md is unavailable until the workspace owner claim completes.');
+      yield* Effect.promise(async () => writeSoul(this.boundSql, text, (content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content)));
+      // The next turn re-reads the soul from its row.
+      this._cachedSoulText = null;
 
-    return { soul: text, purpose: summarizeSoul(text) };
+      return { soul: text, purpose: summarizeSoul(text) };
+    }));
   }
 
   @callable() async getEvolutionConfig(): Promise<EvolutionConfigView> {
@@ -5571,44 +5521,46 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Receive one bounded frame from the source DO. Not callable from public WS/HTTP; only the
    * source cross-DO stub reaches this. */
-  async rawCopyFromFork(
+  rawCopyFromFork(
     forkName: string,
     frame: ForkFrame,
     ownerUserId: string,
   ): Promise<ForkFrameAck> {
-    if (!ownerUserId) throw new KinuError('bad_input', 'fork owner is required');
-    const currentOwner = this.getOwnerUserId();
+    return settle(Effect.gen({ self: this }, function* () {
+      if (!ownerUserId) return yield* new KinuError('bad_input', 'fork owner is required');
+      const currentOwner = this.getOwnerUserId();
 
-    if (currentOwner && currentOwner !== ownerUserId) return { ok: false, reason: 'owned_by_another_user' };
+      if (currentOwner && currentOwner !== ownerUserId) return { ok: false, reason: 'owned_by_another_user' };
 
-    // Owner is the only identity datum written before commit (Nimbus file-plane precondition);
-    // the rest publishes together in the writer transaction.
-    const identity = this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`;
+      // Owner is the only identity datum written before commit (Nimbus file-plane precondition);
+      // the rest publishes together in the writer transaction.
+      const identity = this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`;
 
-    if (identity.length === 0) {
-      this.bearWorkspace(forkName, ownerUserId);
-    } else {
-      void this.sql`UPDATE workspace_identity SET owner_user_id = ${ownerUserId}`;
-    }
+      if (identity.length === 0) {
+        this.bearWorkspace(forkName, ownerUserId);
+      } else {
+        void this.sql`UPDATE workspace_identity SET owner_user_id = ${ownerUserId}`;
+      }
 
-    this._ownerUserId = ownerUserId;
-    this.invalidateModelCaches();
+      this._ownerUserId = ownerUserId;
+      this.invalidateModelCaches();
 
-    const receiver = this.#forkReceiverFor(forkName, frame.transferId, ownerUserId);
-    const outcome = await receiver.accept(frame);
+      const receiver = this.#forkReceiverFor(forkName, frame.transferId, ownerUserId);
+      const outcome = yield* Effect.promise(async () => receiver.accept(frame));
 
-    // Publication does this once; an already-settled transfer only answers with the fork that landed.
-    if (outcome.status === 'published') {
-      await this.ensureOwnedScaffold();
-      await this.resetWorkspaceBaseline();
-    }
+      // Publication does this once; an already-settled transfer only answers with the fork that landed.
+      if (outcome.status === 'published') {
+        yield* Effect.promise(async () => this.ensureOwnedScaffold());
+        yield* Effect.promise(async () => this.resetWorkspaceBaseline());
+      }
 
-    const accepted = outcome.status === 'staged' || outcome.status === 'want' ? outcome : {
-      status: 'published' as const, agentId: this.ctx.id.toString(),
-      capabilityHash: await this.workspaceCapabilityHash(), forkPointMs: outcome.result.forkPointMs,
-    };
+      const accepted = outcome.status === 'staged' || outcome.status === 'want' ? outcome : {
+        status: 'published' as const, agentId: this.ctx.id.toString(),
+        capabilityHash: yield* Effect.promise(async () => this.workspaceCapabilityHash()), forkPointMs: outcome.result.forkPointMs,
+      };
 
-    return { ok: true, ...accepted };
+      return { ok: true, ...accepted };
+    }));
   }
 
 
@@ -5636,30 +5588,32 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   /** Not @callable: creation is step-up gated in the web and CLI trigger routes only. */
-  async createDurableWebhook(opts: {
+  createDurableWebhook(opts: {
     label: string;
     auth_mode: 'hmac' | 'bearer' | 'mtls';
     secret?: string;
     accepted_content_type?: string;
     rate_limit_per_min?: number;
   }) {
-    // Read before the row is written: a trigger whose URL cannot be signed is unreachable.
-    const routeSecret = webhookRouteSecret(this.env);
+    return settle(Effect.gen({ self: this }, function* () {
+      // Read before the row is written: a trigger whose URL cannot be signed is unreachable.
+      const routeSecret = webhookRouteSecret(this.env);
 
-    if (routeSecret === null) throw new KinuError('unavailable', WEBHOOK_ROUTE_UNAVAILABLE);
-    const now = Date.now();
-    // Core decides and stores the secret; an hmac/bearer trigger without one refuses every delivery.
-    const webhook = await registerDurableWebhook(this.triggerRegistry, this.webhookSecrets, opts, now);
+      if (routeSecret === null) return yield* new KinuError('unavailable', WEBHOOK_ROUTE_UNAVAILABLE);
+      const now = Date.now();
+      // Core decides and stores the secret; an hmac/bearer trigger without one refuses every delivery.
+      const webhook = yield* Effect.promise(async () => registerDurableWebhook(this.triggerRegistry, this.webhookSecrets, opts, now));
 
-    return {
-      trigger_id: webhook.trigger_id,
-      url: await webhookRoutePath(routeSecret, {
-        workspaceName: this.name, triggerId: webhook.trigger_id,
-      }),
-      auth_mode: webhook.auth_mode,
-      // The secret is returned once here and never again.
-      secret: webhook.secret,
-    };
+      return {
+        trigger_id: webhook.trigger_id,
+        url: yield* Effect.promise(async () => webhookRoutePath(routeSecret, {
+          workspaceName: this.name, triggerId: webhook.trigger_id,
+        })),
+        auth_mode: webhook.auth_mode,
+        // The secret is returned once here and never again.
+        secret: webhook.secret,
+      };
+    }));
   }
 
   /** Revoke a trigger and delete its plaintext secret in the same host call.
@@ -5730,15 +5684,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   protected async advancePromptSections(): Promise<void> {
     // Awaited so the cadence effect holds its row open; a detached lane could be cancelled by eviction.
     // Failure is absorbed: the lane is opportunistic and the next cadence tick retries it.
-    try {
-      await advancePromptSectionLane(this.scaffoldControl);
-    } catch (err) {
-      diagnostics.failure('prompt_section.lane_failed', toKinuError({
-        doing: 'advancing the prompt-section evolution lane',
-        cause: err,
-        otherwise: 'unavailable',
-      }), { workspace: this.name });
-    }
+    await settleLogged('prompt_section.lane_failed', { doing: 'advancing the prompt-section evolution lane', otherwise: 'unavailable' }, async () => { await advancePromptSectionLane(this.scaffoldControl); }, { workspace: this.name });
   }
 
   /**

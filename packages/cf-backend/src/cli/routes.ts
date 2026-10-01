@@ -44,7 +44,7 @@ import { claimOwnedWorkspace } from '../user/workspace-ownership';
 import { OwnerCapabilityUnavailableError, ownerCaller } from '@kinu.run/core';
 import { noHead, rawParam, type ApiVariables, type FamilyEnv } from '../api/context';
 import * as v from 'valibot';
-import { authoredRefusal, classify, diagnostics, renderThrownChain, toKinuError } from '@kinu.run/core/obs';
+import { authoredRefusal, classify, diagnostics, renderThrownChain, toKinuError, settleLogged } from '@kinu.run/core/obs';
 
 const DeviceRegistrationRequestSchema = v.object({ label: v.optional(v.string()), replaces: v.optional(v.string()) });
 
@@ -478,13 +478,7 @@ async function handleAgentRpc(c: CliContext, name: string): Promise<Response> {
 
   // A failed fold leaves the write answered.
   if (rpcMovesOverview(rpcMethod)) {
-    try {
-      await agent.requestOverviewPush();
-    } catch (cause) {
-      diagnostics.failure('cli.overview_fold_failed', toKinuError({
-        doing: 'asking a workspace to fold its tile after a CLI write', cause, otherwise: 'unavailable',
-      }), { workspace: name, method: rpcMethod });
-    }
+    await settleLogged('cli.overview_fold_failed', { doing: 'asking a workspace to fold its tile after a CLI write', otherwise: 'unavailable' }, () => agent.requestOverviewPush(), { workspace: name, method: rpcMethod });
   }
 
   return json({ body: { result: result ?? null } });

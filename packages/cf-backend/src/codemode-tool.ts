@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * The `eval` codemode tool, shared by every CF actor with a runtime. Crafted tools are re-read
@@ -9,7 +10,7 @@ import { createCodeTool } from "@cloudflare/codemode/ai";
 import { type Tool, type ToolSet } from 'ai';
 import type { ActorHandle, AgentsToolDeps, DeviceRequestChannel, SqlExecutor, CraftStore, ExecutionRouter } from "@kinu.run/core";
 import { createAgentsCodemodeProvider, createWebCodemodeProvider, createStateCodemodeProvider, renderCodemodeDescription, nativeToolFunctions, CRAFTED_TOOL_NAMESPACE, type BrowserSessions, type WebSearchProvider, type CodemodeProvider, type WorkMode, currentWorkMode, permitInPlan, toolsInWorkMode, providersInWorkMode, selectInjectableCraftedTools, withCraftedToolDeclarations, codemodeInputSchema, withCodemodeProgram, craftedFailureFunctions, codemodeFunction, JsonValueSchema, type JsonObject, type JsonValue, type ToolSurfaceNarrowing } from "@kinu.run/core";
-import { KinuError } from '@kinu.run/core/obs';
+import { KinuError, settleSync } from '@kinu.run/core/obs';
 import {
   KinuSandboxExecutor, renderToolsPrelude, type ProgramLaunch,
 } from "./codemode-sandbox";
@@ -183,14 +184,16 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
       return withCraftedToolDeclarations(permitInPlan({
         ...unrestricted,
         execute: (input, context) => {
-          const selected = currentWorkMode() === 'plan' ? (planning ??= build('plan')) : unrestricted;
-          const execute = selected.execute;
+          return settleSync(Effect.gen(function* () {
+            const selected = currentWorkMode() === 'plan' ? (planning ??= build('plan')) : unrestricted;
+            const execute = selected.execute;
 
-          if (execute === undefined) throw new Error('Codemode executor is not callable');
+            if (execute === undefined) return yield* Effect.die(new Error('Codemode executor is not callable'));
 
-          return withCodemodeProgram(async () => v.parse(v.object({
-            result: v.optional(v.unknown()), logs: v.optional(v.array(v.string())),
-          }), await execute(input, context)));
+            return withCodemodeProgram(async () => v.parse(v.object({
+              result: v.optional(v.unknown()), logs: v.optional(v.array(v.string())),
+            }), await execute(input, context)));
+          }));
         },
       }), craftedTools);
     },

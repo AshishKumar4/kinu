@@ -1,4 +1,5 @@
 /** Typed client for `/api/user/*`; the session rides the HttpOnly cookie (dev synthesizes DEV_USER_EMAIL server-side). */
+import { Effect } from 'effect';
 import {
   DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
   AccountUsageSchema, ProfileCatalogEnvelopeSchema, REASONING_EFFORTS,
@@ -12,7 +13,7 @@ import {
   type RosterBucket,
   WorkspaceOverviewSchema,
 } from '@kinu.run/core';
-import { tolerateAsync } from '@kinu.run/core/obs';
+import { tolerateAsync, settle } from '@kinu.run/core/obs';
 import { DEFAULT_CALL_TIMEOUT_MS } from 'agents/client';
 import * as v from 'valibot';
 import type { BoxSize } from '@kinu.run/devbox/sizes';
@@ -360,17 +361,19 @@ export const setAccountSandboxSize = (size: BoxSize) => api(OkSchema, 'PUT', SAN
 
 export type { ModelTestResult };
 
-export async function testModel(spec: string, signal: AbortSignal): Promise<ModelTestResult> {
-  const res = await fetch('/api/user/models/test', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ spec }),
-    signal,
-  });
+export function testModel(spec: string, signal: AbortSignal): Promise<ModelTestResult> {
+  return settle(Effect.gen(function* () {
+    const res = yield* Effect.promise(async () => fetch('/api/user/models/test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ spec }),
+      signal,
+    }));
 
-  if (!res.ok) throw new Error(`POST /api/user/models/test → ${res.status} ${await errorDetail(res)}`);
+    if (!res.ok) return yield* Effect.die(new Error(`POST /api/user/models/test → ${res.status} ${yield* Effect.promise(async () => errorDetail(res))}`));
 
-  return v.parse(ModelTestResultSchema, await res.json());
+    return v.parse(ModelTestResultSchema, yield* Effect.promise(async () => res.json()));
+  }));
 }
 
 export type ProviderCatalogEntry = v.InferOutput<typeof ProviderCatalogEntrySchema>;

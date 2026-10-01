@@ -5,7 +5,7 @@
  */
 
 import { jsonResultOrVoid, WORKSPACE_BACKUP_DIR, type SandboxHandle } from '@kinu.run/core';
-import { classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
+import { classifyErrorCode, KinuError, renderThrownChain, settle, type ErrorCode, settleLogged } from "@kinu.run/core/obs";
 import { devboxFailure, type DevboxErrorCode } from '@kinu.run/devbox';
 import { Effect } from 'effect';
 import type { KinuDevbox } from "./kinu-devbox";
@@ -186,15 +186,7 @@ export function adaptCloudflareSandbox(
 
           if (label === null || label.port !== row.port) return;
 
-          try {
-            await index.refresh(row.port, label.token);
-          } catch (cause) {
-            diagnostics.failure('preview.refresh_failed', toKinuError({
-              doing: 'refreshing a published sandbox preview',
-              cause,
-              otherwise: 'unavailable',
-            }), { port: row.port });
-          }
+          await settleLogged('preview.refresh_failed', { doing: 'refreshing a published sandbox preview', otherwise: 'unavailable' }, () => index.refresh(row.port, label.token), { port: row.port });
         }));
       }
 

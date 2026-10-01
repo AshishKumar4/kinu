@@ -183,19 +183,21 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
     installedBuild: seams.installedBuild(),
     workspace: seams.workspaceName,
     tracing: () => seams.tracing(),
-    filesFor: async (bound) => {
-      const provisioning = seams.homes.get(bound.record, bound.reference);
-      const box = seams.workspaceBox(hostedActorPlacement(bound.record).shellId);
+    filesFor: (bound) => {
+      return settle(Effect.gen(function* () {
+        const provisioning = seams.homes.get(bound.record, bound.reference);
+        const box = seams.workspaceBox(hostedActorPlacement(bound.record).shellId);
 
-      if (provisioning === null) {
-        if (bound.record.origin !== 'system') throw new KinuError('denied', 'Actor has no credentialed artifact home');
+        if (provisioning === null) {
+          if (bound.record.origin !== 'system') return yield* new KinuError('denied', 'Actor has no credentialed artifact home');
 
-        return { vfs: nimbusSessionFiles(box), artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)) };
-      }
+          return { vfs: nimbusSessionFiles(box), artifactDirectory: agentArtifactDirectory(agentHome(MAIN_AGENT)) };
+        }
 
-      const home = await provisioning;
+        const home = yield* Effect.promise(async () => provisioning);
 
-      return { vfs: nimbusSessionFiles(box, home.cred), artifactDirectory: agentArtifactDirectory(home.home) };
+        return { vfs: nimbusSessionFiles(box, home.cred), artifactDirectory: agentArtifactDirectory(home.home) };
+      }));
     },
 
     runtimeFor: async (bound: BoundActor): Promise<AgentRuntime> => {

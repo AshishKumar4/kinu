@@ -27,7 +27,7 @@ import {
   appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas,
 } from "@kinu.run/core";
 import { looksLikeSecretField, parseMemoryNotes, type InlineSteer } from "@kinu.run/core";
-import { diagnostics, KinuError, renderThrownChain, toKinuError, tolerate } from "@kinu.run/core/obs";
+import { diagnostics, KinuError, renderThrownChain, toKinuError, tolerate, settleLogged } from "@kinu.run/core/obs";
 import {
   reconcilePreviewPorts,
   type ExecutorPortRefresh,
@@ -1125,13 +1125,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       sessionRecovery.socketOpened(isFirst);
 
       if (!isFirst) {
-        try {
-          await refreshDeployedBuild();
-        } catch (cause) {
-          diagnostics.failure('session.build_check_failed', toKinuError({
-            doing: 'check the deployed build after reconnect', cause, otherwise: 'io',
-          }));
-        }
+        await settleLogged('session.build_check_failed', { doing: 'check the deployed build after reconnect', otherwise: 'io' }, () => refreshDeployedBuild());
       }
     };
 
@@ -1308,15 +1302,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     } finally {
       abandonTurnIfOwner(sendLatch.current, aborting);
 
-      try {
-        await refreshBackgroundJobs();
-      } catch (cause) {
-        diagnostics.failure('workspace.abort_refresh_failed', toKinuError({
-          doing: 'refreshing live workspace data',
-          cause,
-          otherwise: 'io',
-        }));
-      }
+      await settleLogged('workspace.abort_refresh_failed', { doing: 'refreshing live workspace data', otherwise: 'io' }, () => refreshBackgroundJobs());
     }
   }, [stop, rpc, refreshBackgroundJobs]);
 
@@ -1327,11 +1313,7 @@ export function useKinu(target?: string | KinuActorAddress) {
 
     // The server pushes the fact, not the rows; one re-read updates every open tab.
     const reread = async (resource: string, refresh: () => Promise<void>): Promise<void> => {
-      try {
-        await refresh();
-      } catch (cause) {
-        diagnostics.failure('workspace.live_refresh_failed', toKinuError({ doing: 'refreshing live workspace data', cause, otherwise: 'io' }), { resource });
-      }
+      await settleLogged('workspace.live_refresh_failed', { doing: 'refreshing live workspace data', otherwise: 'io' }, () => refresh(), { resource });
     };
 
     const adoptPlan = (plan: PlanReview | null): void => {
@@ -1663,18 +1645,12 @@ export function useKinu(target?: string | KinuActorAddress) {
     })));
     setTurnClaim(snap.turnClaim);
 
-    try {
+    await settleLogged('workspace.snapshot_followup_refresh_failed', { doing: 'refreshing live workspace data', otherwise: 'io' }, async () => {
       await Promise.all([
         refreshExposedPorts(), refreshPendingActions(), refreshRoster(), refreshBackgroundJobs(), refreshPendingConsents(),
         ...(isSubordinate ? [] : [liveReads.listWorkspaceAgents?.()]),
       ]);
-    } catch (cause) {
-      diagnostics.failure('workspace.snapshot_followup_refresh_failed', toKinuError({
-        doing: 'refreshing live workspace data',
-        cause,
-        otherwise: 'io',
-      }));
-    }
+    });
   }
 
   async function loadSubordinateData(isCurrent: () => boolean): Promise<void> {
