@@ -34,7 +34,7 @@ export interface WorkspaceEvidence {
 }
 
 async function walk(session: EvidenceSession, dir: string, files: Map<string, Uint8Array>): Promise<void> {
-  for (const entry of await session.listFiles(dir, { allowMissing: true })) {
+  for (const entry of await session.listFiles(dir)) {
     const path = `${dir}/${entry.name}`;
 
     if (entry.type === 'file') files.set(path, await session.readBytes(path));

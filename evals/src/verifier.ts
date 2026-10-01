@@ -27,7 +27,7 @@ export type VerifierSession = {
   slateOp(operation: JsonValue): Promise<JsonValue>;
   readFile(path: string, options?: { allowMissing?: boolean }): Promise<string>;
   writeFile(path: string, content: string | Uint8Array<ArrayBuffer>): Promise<void>;
-  listFiles(dir: string, options: { allowMissing: true }): Promise<readonly PublicDirEntry[]>;
+  listFiles(dir: string): Promise<readonly PublicDirEntry[]>;
   craftedTools(): Promise<readonly PublicCraftedTool[]>;
   workspaceWork(): Promise<WorkBoard>;
   inspect(request: SubordinateInspectionRequest): Promise<InspectionAnswer>;
@@ -223,7 +223,7 @@ export class EvalVerifier {
 
   /** One folder as the Files tab lists it; nothing for a folder that is not there. */
   files(dir: string): Promise<readonly PublicDirEntry[]> {
-    return this.#session.listFiles(dir, { allowMissing: true });
+    return this.#session.listFiles(dir);
   }
 
   /** The tools the agent built for itself, as the Tools pane lists them. */

@@ -1635,10 +1635,9 @@ export class KinuPublicSession {
     return v.parse(SubordinateRosterSchema, rows);
   }
 
-  /** One folder of the workspace as the Files tab lists it. With
-   *  `allowMissing`, a folder that does not exist lists nothing; any other
+  /** One folder of the workspace as the Files tab lists it. A folder that does not exist lists nothing; any other
    *  refusal is the build's answer. */
-  async listFiles(dir: string, options: { allowMissing?: boolean } = {}): Promise<readonly PublicDirEntry[]> {
+  async listFiles(dir: string): Promise<readonly PublicDirEntry[]> {
     const listing = v.parse(DirectorySchema, await this.boundary(
       `getExecutorFiles ${dir} on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('getExecutorFiles', [WORKSPACE_EXECUTOR, dir]),
@@ -1646,7 +1645,7 @@ export class KinuPublicSession {
 
     if (listing.error === undefined) return listing.entries ?? [];
 
-    if (options.allowMissing === true && /\bENOENT\b/.test(listing.error)) return [];
+    if (/\bENOENT\b/.test(listing.error)) return [];
 
     throw new DeploymentAnswer(`could not list ${dir}: ${listing.error.slice(0, 200)}`, 500);
   }
