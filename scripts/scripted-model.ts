@@ -285,6 +285,8 @@ export const WATCHED_SLEPT_TURN_ASK = 'Watched sleep probe: take your steps, the
 
 export const ANSWERED_TURN_ASK = 'Answer probe: take your steps, then wait.';
 
+export const WATCHED_ANSWER_TURN_ASK = 'Watched answer probe: take your steps, then wait.';
+
 /** The ask after an answered turn, whose request carries what that turn said. */
 export const TOLD_BACK_ASK = 'Answer probe: what did you just do?';
 
@@ -299,11 +301,9 @@ export const RECONNECT_STEPS = RECONNECT_FOLDERS.length;
  * The reconnect turn: {@link RECONNECT_STEPS} steps that each say what they do and list a folder, then a call held on
  * `held` whose answer closes the turn, so the turn is still running whatever the row does meanwhile. Each lists a
  * different folder, since a third identical call makes the harness steer the turn (turn-steering.ts). `midAnswer`
- * holds the answer after its first word instead of before it. Null for any request that did not send `ask`.
+ * holds the answer after its first word instead of before it.
  */
-export function reconnectTurn(request: ScriptedRequest, ask: string, held: HeldCall, midAnswer = false): ScriptedAnswer | null {
-  if (!request.userTexts.some((text) => text.includes(ask))) return null;
-
+function heldSteps(request: ScriptedRequest, held: HeldCall, midAnswer: boolean): ScriptedAnswer {
   if (!request.available.includes('file')) return { text: FALLBACK_ANSWER };
 
   const done = request.called.filter((name) => name === 'file').length;
@@ -320,6 +320,19 @@ export function reconnectTurn(request: ScriptedRequest, ask: string, held: HeldC
   if (midAnswer) return { text: 'ne.', pace: { firstTokenMs: 0, lead: 'Do', leadMs: 0, rest: held.hold() } };
 
   return { text: 'Done.', pace: { firstTokenMs: 0, lead: '', leadMs: 0, hold: held.hold() } };
+}
+
+/** The reconnect turn for a request that sent `ask`, else null. */
+export function reconnectTurn(request: ScriptedRequest, ask: string, held: HeldCall, midAnswer = false): ScriptedAnswer | null {
+  return request.userTexts.some((text) => text.includes(ask)) ? heldSteps(request, held, midAnswer) : null;
+}
+
+/** A workspace created with this mission takes its own first turn as the reconnect turn: a turn no page sent. */
+export const UNSENT_TURN_MISSION = 'Take the first turn in steps, then wait: no page sends it.';
+
+/** The reconnect turn for every turn of a workspace made with {@link UNSENT_TURN_MISSION}; its row runs only the first. */
+export function unsentFirstTurn(request: ScriptedRequest, held: HeldCall): ScriptedAnswer | null {
+  return request.system.includes(UNSENT_TURN_MISSION) ? heldSteps(request, held, false) : null;
 }
 
 /** Answers {@link TOLD_BACK_ASK}, handing `heard` the request that carried it. */

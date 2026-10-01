@@ -27,7 +27,7 @@ import { rowVerdicts, type RowVerdicts } from './row-verdicts';
 import {
   KEPT_TAB_FORGET, KEPT_TAB_NOTE, PACED_FIRST_TURN_MISSION, PACED_TURN_ANSWER,
   ANSWERED_TURN_ASK, OBSERVED_TURN_ASK, PACED_TURN_ASK, RECONNECT_STEPS, RECONNECT_TURN_ASK,
-  SLEPT_TURN_ASK, TOLD_BACK_ASK, WATCHED_SLEPT_TURN_ASK, toldBackTurn,
+  SLEPT_TURN_ASK, TOLD_BACK_ASK, UNSENT_TURN_MISSION, WATCHED_ANSWER_TURN_ASK, WATCHED_SLEPT_TURN_ASK, toldBackTurn, unsentFirstTurn,
   heldCall, keptTabProbe, pacedFirstTurn, thinkingTurn, THINKING_TURN_ASK, THINKING_TURN_ANSWER, pacedTurn, planWalkthrough, reconnectTurn, registerScriptedModel,
   startScriptedModel, type HeldCall,
 } from './scripted-model';
@@ -111,12 +111,15 @@ interface SleptVerdict {
   readonly stopAfter: boolean;
 }
 
-/** One answered turn's blocks while it ran, once it ended and after a reload; `told` is what the model's next
- *  request says the agent said. */
-interface AnsweredVerdict {
+/** A turn's answer on one page: while it waits after its steps, once it ends, and after a reload. */
+interface AnsweredThroughVerdict {
   readonly live: readonly string[];
   readonly ended: readonly string[];
   readonly reloaded: readonly string[];
+}
+
+/** `told` is what the model's next request says the agent said. */
+interface AnsweredVerdict extends AnsweredThroughVerdict {
   readonly told: readonly string[];
 }
 
@@ -184,6 +187,8 @@ export interface TierVerdicts {
   slept: SleptVerdict | null;
   watchedSlept: SleptVerdict | null;
   answered: AnsweredVerdict | null;
+  watchedAnswer: AnsweredThroughVerdict | null;
+  unsentAnswer: AnsweredThroughVerdict | null;
   planTabs: PlanTabsVerdict | null;
   geometry: GeometryVerdict | null;
   controls: ControlsVerdict | null;
@@ -1036,6 +1041,26 @@ async function measureWatchedSlept(newPage: LiveApp['newPage'], origin: string, 
   }
 }
 
+/** The answer `page` draws while its turn waits on `held` after its steps, once it ends, and after a reload. */
+async function answeredThrough(page: Page, held: HeldCall, shot: string): Promise<AnsweredThroughVerdict> {
+  const live = await answerMidTurn(page);
+
+  held.release();
+  await until(page, 'the turn to end', TURN_ANSWERED);
+  await painted(page);
+  const ended = await answerOf(page);
+
+  await page.reload({ waitUntil: 'load' });
+  await until(page, 'the answer after the reload', TURN_ANSWERED);
+  await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
+  await painted(page);
+  const reloaded = await answerOf(page);
+
+  await shoot(page, shot);
+
+  return { live, ended, reloaded };
+}
+
 /** Row 13 (#30): an answer keeps each step's text where it streamed: while it runs, once it ends, after a reload, and
  *  in the model's next request. */
 async function measureAnswered(
@@ -1048,23 +1073,48 @@ async function measureAnswered(
 
   try {
     await sendInChat(page, ANSWERED_TURN_ASK);
-    const live = await answerMidTurn(page);
+    const answer = await answeredThrough(page, held, 'answered-reloaded');
 
-    held.release();
-    await until(page, 'the turn to end', TURN_ANSWERED);
-    await painted(page);
-    const ended = await answerOf(page);
-
-    await page.reload({ waitUntil: 'load' });
-    await until(page, 'the answer after the reload', TURN_ANSWERED);
-    await until(page, "the chat column's live composer", CHAT_COMPOSER_LIVE);
-    await painted(page);
-    const reloaded = await answerOf(page);
-
-    await shoot(page, 'answered-reloaded');
     await sendInChat(page, TOLD_BACK_ASK);
 
-    return { live, ended, reloaded, told: (await told).assistantTexts };
+    return { ...answer, told: (await told).assistantTexts };
+  } finally {
+    held.release();
+    await page.close();
+  }
+}
+
+/** Row 15 (#30): so does a turn another tab sent, on the page that watched it from before it began to its end. */
+async function measureWatchedAnswer(newPage: LiveApp['newPage'], origin: string, held: HeldCall): Promise<AnsweredThroughVerdict> {
+  const workspace = await createWorkspace(
+    origin, { name: `live-row-watched-ans-${RUN_ID}`, purpose: 'watched answer probe', model: SCRIPTED_MODEL_SPEC });
+
+  const watcher = await openRecorded(newPage, origin, workspace);
+  const sender = await openRecorded(newPage, origin, workspace);
+
+  try {
+    await sendInChat(sender, WATCHED_ANSWER_TURN_ASK);
+    // A hidden tab never paints, so the page being read is the one in front.
+    await watcher.bringToFront();
+
+    return await answeredThrough(watcher, held, 'watched-answer-reloaded');
+  } finally {
+    held.release();
+    await sender.close();
+    await watcher.close();
+  }
+}
+
+/** Row 16 (#30): and a turn no page sent, the workspace's own first turn, on a page open while it runs. */
+async function measureUnsentAnswer(newPage: LiveApp['newPage'], origin: string, held: HeldCall): Promise<AnsweredThroughVerdict> {
+  const workspace = await createWorkspace(
+    origin, { name: `live-row-unsent-${RUN_ID}`, purpose: UNSENT_TURN_MISSION, model: SCRIPTED_MODEL_SPEC });
+
+  // Not `openRecorded`, which waits for the first turn to end: here that turn is the one held.
+  const page = await openWorkspace(newPage, origin, workspace);
+
+  try {
+    return await answeredThrough(page, held, 'unsent-answer-reloaded');
   } finally {
     held.release();
     await page.close();
@@ -1339,7 +1389,7 @@ async function measureState(app: LiveApp): Promise<StateVerdict> {
 /** A row a file can run, by the name its log line carries, in the order the suite ran them. */
 export const LIVE_ROWS = [
   'live-indicator', 'opened-mid-turn', 'reconnect', 'observed-reconnect', 'slept', 'watched-slept', 'answered',
-  'plan-tabs', 'geometry', 'controls', 'walkthrough', 'kept-tab', 'chat-scroll', 'mid-thought', 'state',
+  'watched-answer', 'unsent-answer', 'plan-tabs', 'geometry', 'controls', 'walkthrough', 'kept-tab', 'chat-scroll', 'mid-thought', 'state',
 ] as const;
 
 export type LiveRow = (typeof LIVE_ROWS)[number];
@@ -1360,7 +1410,7 @@ export interface LiveRows extends Pick<RowVerdicts, 'verdictOf'> {
 export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
   const observed: TierVerdicts = {
     liveIndicator: null, openedMidTurn: null, reconnect: null, observedReconnect: null, slept: null, watchedSlept: null, answered: null,
-    bootFailure: null, planTabs: null, geometry: null,
+    watchedAnswer: null, unsentAnswer: null, bootFailure: null, planTabs: null, geometry: null,
     controls: null, walkthrough: null, keptTab: null, chatScroll: null, midThought: null, state: null,
   };
 
@@ -1377,12 +1427,15 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
     const sleptHeld = heldCall();
     const answeredHeld = heldCall();
     const watchedSleptHeld = heldCall();
+    const watchedAnswerHeld = heldCall();
+    const unsentHeld = heldCall();
     const toldBack = Promise.withResolvers<ScriptedRequest>();
 
     const model = await startScriptedModel((request) => toldBackTurn(request, toldBack.resolve) ?? pacedTurn(request)
       ?? pacedFirstTurn(request, firstTurn) ?? reconnectTurn(request, ANSWERED_TURN_ASK, answeredHeld)
       ?? reconnectTurn(request, RECONNECT_TURN_ASK, reconnectHeld) ?? reconnectTurn(request, OBSERVED_TURN_ASK, observedHeld)
       ?? reconnectTurn(request, SLEPT_TURN_ASK, sleptHeld) ?? reconnectTurn(request, WATCHED_SLEPT_TURN_ASK, watchedSleptHeld, true)
+      ?? reconnectTurn(request, WATCHED_ANSWER_TURN_ASK, watchedAnswerHeld) ?? unsentFirstTurn(request, unsentHeld)
       ?? keptTabProbe(request) ?? thinkingTurn(request) ?? planWalkthrough(request));
 
     await withLiveApp(async (app) => {
@@ -1400,6 +1453,10 @@ export function liveRows(suite: string, rows: readonly LiveRow[]): LiveRows {
         'slept': async () => { observed.slept = await attempt('slept', () => measureSlept(newPage, origin, sleptHeld)); },
         'watched-slept': async () => { observed.watchedSlept = await attempt('watched-slept', () => measureWatchedSlept(newPage, origin, watchedSleptHeld)); },
         'answered': async () => { observed.answered = await attempt('answered', () => measureAnswered(newPage, origin, answeredHeld, toldBack.promise)); },
+        'watched-answer': async () => {
+          observed.watchedAnswer = await attempt('watched-answer', () => measureWatchedAnswer(newPage, origin, watchedAnswerHeld));
+        },
+        'unsent-answer': async () => { observed.unsentAnswer = await attempt('unsent-answer', () => measureUnsentAnswer(newPage, origin, unsentHeld)); },
         'plan-tabs': async () => { observed.planTabs = await attempt('plan-tabs', () => measurePlanTabs(newPage, origin)); },
         'geometry': async () => { observed.geometry = await attempt('geometry', () => measureGeometry(newPage, origin)); },
         'controls': async () => { observed.controls = await attempt('controls', () => measureControls(newPage, origin)); },

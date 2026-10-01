@@ -2240,14 +2240,16 @@ export const LADDER: readonly Gate[] = [
     label: 'Live app in a browser: a running turn',
     tier: 'deploy',
     // Measured 2026-09-26 alone in a quiet window: 133.0 s at load 2.9, its five scenarios 11-34 s each beside the dev server's boot.
+    // 2026-09-30 with the two #30 rows (a watched turn's answer, an unsent turn's): 720 s at load 35-73, all 14 green.
     // One of the four files the live-app rows split into when one file outran its 480 s deadline alone.
-    seconds: 133,
+    seconds: 720,
     catches: 'the shipped workspace page as it runs: this row boots the product itself — `vite dev` in cf-backend, which is workerd with real Durable Objects behind the real client — and drives it in Chrome at 1440x900, where the inspector column, its separator and the rail lane exist. No gallery row can: the gallery serves a FROZEN pre-built bundle with fixtures answering `/api/*`. '
       + 'Its rows: a running turn draws exactly one live state through the paced turn\'s four silences, and '
       + 'Stop never stands over a pane drawing nothing; a page opened mid-turn offers Stop while it runs and stops '
       + 'showing it once it ends, its header never disagreeing with its composer; a page whose socket drops mid-turn '
       + 'replays the answer as it stood; an answer keeps each step\'s text where it streamed after the turn ends and '
-      + 'after a reload, the model\'s next request carrying it; and a marker sent in each pane stays out of the '
+      + 'after a reload, the model\'s next request carrying it, and so does a turn another tab sent, on the page that '
+      + 'watched it, and the workspace\'s own first turn, which no page sent; and a marker sent in each pane stays out of the '
       + 'other, the transcript leak a shared store shows as green.',
     blind: 'one workspace, one viewport, one model. The rows drive 1440x900 in two themes on '
       + 'the workspace route: every other route, width and theme is the gallery rows\' subject '

@@ -5,7 +5,16 @@ import { SCRATCH_ROOT_PREFIX } from '../../packages/test-utils/src/scratch';
 import { PACED_SILENCE_MS, RECONNECT_STEPS } from '../../scripts/scripted-model';
 import { liveRows } from '../../scripts/live-app-rows';
 
-const { observed, verdictOf, boot } = liveRows('live-app-turns', ['live-indicator', 'opened-mid-turn', 'reconnect', 'answered', 'state']);
+const { observed, verdictOf, boot } = liveRows('live-app-turns', [
+  'live-indicator', 'opened-mid-turn', 'reconnect', 'answered', 'watched-answer', 'unsent-answer', 'state',
+]);
+
+/** An answer keeps each step's text where it streamed: its steps drawn while it waits, the same blocks and then the
+ *  answer once it ends and after a reload. */
+function keepsEachStep({ live, ended, reloaded }: { live: readonly string[]; ended: readonly string[]; reloaded: readonly string[] }): void {
+  expect(live.filter((block) => block.startsWith('P:Step'))).toHaveLength(RECONNECT_STEPS);
+  expect({ ended, reloaded }).toEqual({ ended: [...live, 'P:Done.'], reloaded: [...live, 'P:Done.'] });
+}
 
 beforeAll(boot);
 
@@ -57,10 +66,15 @@ describe('a page whose socket drops mid-turn keeps its answer in order', () => {
   });
 
   test('an answer keeps each step\'s text where it streamed, once the turn ends and after a reload', () => {
-    const { live, ended, reloaded } = verdictOf(observed.answered, 'answered');
+    keepsEachStep(verdictOf(observed.answered, 'answered'));
+  });
 
-    expect(live.filter((block) => block.startsWith('P:Step'))).toHaveLength(RECONNECT_STEPS);
-    expect({ ended, reloaded }).toEqual({ ended: [...live, 'P:Done.'], reloaded: [...live, 'P:Done.'] });
+  test('so does the answer of a turn another tab sent, on the page that watched it', () => {
+    keepsEachStep(verdictOf(observed.watchedAnswer, 'watched-answer'));
+  });
+
+  test('and the answer of a turn no page sent, the workspace\'s own first turn', () => {
+    keepsEachStep(verdictOf(observed.unsentAnswer, 'unsent-answer'));
   });
 
   test('the model\'s next request carries each step\'s text and the answer', () => {
