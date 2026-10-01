@@ -2632,6 +2632,114 @@ the crash after each round restored that round's new state, 5 of 5
 
 Image `ea5d88ee…`, sync.js `cf631788…`.
 
+D55. Plan, a hypothesis until built: the whole filesystem in the platform's
+snapshot, with a full copy in R2 behind it (2026-10-01). The owner's answer
+to D53: no compromise on performance for big workspaces, and the whole
+filesystem kept where possible, so installed packages and setup survive.
+Measured for this entry on Medium, `durable_object` policy, image
+`ea5d88ee…`, internet disabled except for package installs, every Worker,
+container, bucket and registry tag deleted after
+(`bench-artifacts/storage-designs/d55.ts`; runs `d5510010444`,
+`d5510010451sc`, `d5510010504dc`; the chain's `sbs10010452ndab2` and
+`sbs10010452ndab10`). The 2 and 10 GiB runs had all twenty boxes running at
+once, which loaded the store and is the likely cause of the chain's two
+publish timeouts.
+
+What a box changes. The root is a btrfs subvolume on a 20 GB device
+(`/dev/vdc[/rootfs] btrfs compress=zstd:3`; 278 MB used at start). A typical
+setup (`apt-get install build-essential python3-pip python3-venv`, `npm i -g
+typescript`, `pip install requests`, one dotfile) changed 5,519 files
+outside `/workspace` by ctime; tar and zstd pack them to 110.5 MB in 1.4 s.
+Restored and applied onto a fresh container of the same image, they took
+0.8 to 1.6 s plus 2.8 to 3.1 s, and gcc compiled and ran, tsc and `requests`
+loaded, the dotfile was there (n=5). Selected by mtime, the same delta was
+1,201 files and 16.4 MB and gcc was missing, since dpkg keeps each file's
+package mtime. `snapshotContainer()` holds all of it already: it saves the
+whole subvolume, and its `size` is the blocks changed since the parent. The
+chain cannot serve the root lazily: the root is the platform's mount, not an
+overlay the chain owns.
+
+| Medium, n=5 unless noted | 2 GiB | 10 GiB |
+| --- | --- | --- |
+| Snapshot save, whole filesystem | 18.0 s (17.1 to 19.6) | 91.8 s (68.3 to 96.8) |
+| Snapshot save after a 64 KiB edit | 4.1 s at 224 MiB (D51) | 3.3 s, 66,295 B (n=1) |
+| Snapshot wake, first after the save | 1,330 ms (322 to 16,141) | 403 ms (276 to 589) |
+| Snapshot wake, second | 641 ms (252 to 1,650) | 303 ms (234 to 1,038) |
+| First 256 MiB read after a snapshot wake, n=10 | 371 MiB/s (180 to 1,076) | 552 MiB/s (60 to 818) |
+| Whole workspace read after a snapshot wake, n=10 | 6.5 s (3.6 to 15.9) | 25.4 s (15.8 to 56.0) |
+| DirectoryBackup save | 30.1 s (17.1 to 32.4) | 140 s (100 to 146) |
+| DirectoryBackup restore into a fresh container | 12.3 s (11.2 to 14.1) | 79.7 s (72.1 to 122.8, n=4) |
+| Whole read right after that restore | 1.9 to 2.3 s | 102 to 155 s, n=4 |
+| Today's chain: save | 222 s (200 to 230, n=3); 2 of 5 timed out publishing after 414 s | failed 5 of 5: no space to stage the squashfs |
+| Today's chain: lazy wake, n=6 | 2.6 s (2.5 to 3.2); caller 4.1 s | nothing saved to wake |
+| Today's chain: first 256 MiB, n=6 | 52 MiB/s (30 to 89) | |
+| Today's chain: whole read, n=6 | 39.2 s (23.4 to 60.8) | |
+
+The fifth 10 GiB restore lost its Worker RPC connection at 79 s. The chain
+stages the whole base on the container's disk before upload, so a workspace
+whose squashfs does not fit in the free disk cannot be saved; random data
+does not compress, so 10 GiB on a 20 GB disk fails. That is a defect of
+today's product, and it is the same for any design that packs a base on the
+disk (D53's B and E). Snapshot wakes at 2 GiB or more over D53 and this
+entry: 3 of 40 took over 10 s (14.0, 16.1 and 351 s).
+
+Candidates:
+
+1. Snapshot first, DirectoryBackup behind it. The workspace and the root
+   live on the container's disk. A checkpoint is a `snapshotContainer()`. A
+   quiesce also writes a DirectoryBackup of `/workspace`, `/root` and
+   `/home`, and the root's ctime delta as one tarball. A wake starts the
+   latest snapshot; a missing or expired one (refused in 144 to 334 ms,
+   D53) restores the backup onto the box's pinned image. Deletes the chain,
+   the block-lower crate, the store gateway and the mount routing (about
+   5,400 lines; squashfuse, fuse-overlayfs and s3fs leave the image) and
+   adds about 700.
+2. Snapshot first, a lazy chain behind it for `/workspace`. As 1, but the
+   R2 copy is mounted lazily on fallback (2.6 s at 2 GiB instead of 12.3 s).
+   It keeps about 3,000 lines and adds about 900, its saves take 200 s or
+   more at 2 GiB, and it cannot save 10 GiB.
+3. Today's chain plus the root's delta. Adds about 200 lines and no platform
+   beta, but every first read runs at about 50 MiB/s and 10 GiB cannot be
+   saved.
+
+Images. A start may name any registry digest, not only those in the config:
+one no config named started with its own `sync.js` (n=1). A snapshot also
+carries its image (D51). So a box keeps the image it was created on, stored
+in its record, until its owner upgrades it. An upgrade backs up `/workspace`,
+`/root` and `/home`, starts the new image, restores them, and leaves package
+installs to the owner's setup, because the root's delta may not match the
+new image's libraries. It costs one backup and one restore (12 s at 2 GiB,
+80 s at 10 GiB) plus the setup's own time (17 s for the apt step above), and
+the registry must keep every digest a box pins.
+
+The record (Durable Object storage): `{ image, snapshot: { id, at },
+backup: { record, at } }`. A snapshot's id is stored only after
+`snapshotContainer()` returns. An eviction mid-save loses it (D51); the
+record keeps the previous id, and the next checkpoint of the running
+container saves again. A wake uses the snapshot unless the backup is newer.
+A snapshot lasts 30 days from its last restore, so a box idle that long falls
+back to the backup its last quiesce wrote. Nothing deletes a snapshot. Each
+leaves two registry tags; deleting both left the snapshot restorable 5 s
+later (n=1).
+
+Recommendation: candidate 1. On the normal path it is the fastest measured
+at both sizes: a 10 GiB box wakes in 0.2 to 1.0 s and reads its first file
+at a median 552 MiB/s; at 2 GiB the chain reads it at 52 MiB/s. It keeps packages and home with
+no code of ours. It is the only candidate that saves 10 GiB, and it deletes
+the most code. Its cost is the fallback, a full download: 12 s at 2 GiB and
+80 s at 10 GiB, for a box whose snapshot is gone. Its risks are the
+platform's: snapshots are a beta, a few wakes take 14 s to 6 min, and every
+save adds registry tags.
+
+Still open: the cause of the slow snapshot wakes; whether the registry tags
+count against the account's 50 GB image limit, and whether deleting them
+shortens a snapshot's life beyond minutes (a cleanup would need an account
+API token in the Worker, which D41 removed); a workspace near the 20 GB disk
+and snapshot limit; a root delta after a package removal (deletions are not
+in the tarball); the slow whole read after a 10 GiB restore (93 MiB/s against
+404 after a snapshot wake, cause not traced); and these figures with fewer
+boxes at once.
+
 ## Measurement contract for a strategy comparison
 
 Vary stored bytes B, file count N, changed bytes D and demanded bytes Q
