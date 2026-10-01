@@ -233,6 +233,7 @@ interface OwnerOnlyCall {
 const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
   { capability: 'account', name: 'completeOnboarding', run: (u, c) => u.completeOnboarding(c) },
   { capability: 'account', name: 'setDisplayName', run: (u, c) => u.setDisplayName(c, 'Owner') },
+  { capability: 'account', name: 'heldRows', run: (u, c) => u.heldRows(c) },
   { name: 'getProfileCatalog', run: (userDO, caller) => userDO.getProfileCatalog(caller) },
   // A workspace that could turn its own Sandbox off would be granting itself the whole machine (F5/F6).
   {
