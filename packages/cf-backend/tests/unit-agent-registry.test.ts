@@ -12,7 +12,7 @@ import {
   requestUrl,
 } from '@kinu.run/core';
 import { createMockFetch, createTestRuntime, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, present } from '@kinu.run/test-utils';
-import { createAgentProviderRegistry, type AgentProviderRegistry } from '../src/providers/agent-registry';
+import { createAgentProviderRegistry, type AgentProviderRegistry, type UserCredentialClient } from '../src/providers/agent-registry';
 import type { ModelMenuEntry } from '../src/user/available-models';
 import type { CredentialSummary } from '../src/user/user-do';
 import { userRoutes, type UserRoutesEnv } from '../src/user/routes';
@@ -334,6 +334,49 @@ describe('the model a new workspace starts on', () => {
   test('no native model and no choice resolves to nothing rather than a BYO guess', () => {
     expect(defaultSpecFor(null, servable([byo]))).toBeNull();
     expect(defaultSpecFor('workers-ai/@cf/meta/llama-4', servable([byo]))).toBeNull();
+  });
+});
+
+describe('what a model call asks of the account', () => {
+  // Every model call read its credential in two UserDO round trips, headers then base URL: 633 + 518 of the UserDO
+  // calls sampled on staging while 180 workspaces of one account ran (2026-10-01 01:06:40-01:07:20Z).
+  test('its credential arrives in one round trip', async () => {
+    const user = createTestUserDO({ durableObjectId: '0123456789abcdef0123456789abcdef' });
+    const owner = await testOwner();
+    const asked: string[] = [];
+
+    await user.userDO.setCredential(owner, 'openai.bearer', { kind: 'bearer', token: 'sk-one-trip' });
+    const account = user.userDO;
+
+    function recorded<Args extends unknown[], Answer>(member: string, call: (...args: Args) => Promise<Answer>) {
+      return async (...args: Args): Promise<Answer> => {
+        asked.push(member);
+
+        return await call(...args);
+      };
+    }
+
+    // Every member a registry can reach on the account, each call recorded.
+    const counted: UserCredentialClient = {
+      getAuth: recorded('getAuth', account.getAuth.bind(account)),
+      listCredentials: recorded('listCredentials', account.listCredentials.bind(account)),
+      relayDevice: recorded('relayDevice', account.relayDevice.bind(account)),
+      relayModelCall: recorded('relayModelCall', account.relayModelCall.bind(account)),
+      cancelModelRelay: recorded('cancelModelRelay', account.cancelModelRelay.bind(account)),
+    };
+
+    const mock = createMockFetch([{ match: 'api.openai.com', respond: { body: OPENAI_RESPONSES_BODY } }]);
+    const reg = createAgentProviderRegistry({ env: {}, userDO: { stub: counted, caller: owner }, fetch: mock.fetch });
+
+    try {
+      await generateText({ model: reg.resolveModel('openai/gpt-5.5', 'kinu-test'), prompt: 'hello' });
+
+      expect(asked).toHaveLength(1);
+      expect(mock.requests[0]?.headers.authorization).toBe('Bearer sk-one-trip');
+    } finally {
+      await user.joinFibers();
+      user.close();
+    }
   });
 });
 

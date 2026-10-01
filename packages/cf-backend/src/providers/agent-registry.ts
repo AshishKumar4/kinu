@@ -4,7 +4,7 @@ import {
   createProviderRegistry, createChatGptProvider, createCodexProvider, createOpenAIProvider,
   createOpenRouterProvider, createOpenAICompatProvider, createAnthropicProvider, createClaudeProvider,
   createModelsDevCatalogSource,
-  type ProviderRegistry, type ProviderDeps, type ProviderEnv, type AuthResolver, type AuthRequest,
+  type ProviderRegistry, type ProviderDeps, type ProviderEnv, type AuthResolver, type AuthRequest, type AuthResolution,
   type ProviderWaitInfo,
   specProvider,
 } from '@kinu.run/core';
@@ -22,13 +22,8 @@ import { codexEgressFetch, deviceRouteFetch, type CodexEgressNamespace, type Mod
  * so no context holds the stub without saying who it is.
  */
 export interface UserCredentialClient extends ModelRelayHub {
-  getAuthHeaders(
-    caller: UserCaller,
-    key: string,
-    opts?: AuthRequest,
-  ): Promise<Record<string, string> | null>;
+  getAuth(caller: UserCaller, key: string, opts?: AuthRequest): Promise<AuthResolution | null>;
   listCredentials(caller: UserCaller): Promise<CredentialSummary[]>;
-  getCredentialBaseURL(caller: UserCaller, key: string): Promise<string | null>;
 }
 
 export interface UserCredentialSource {
@@ -77,16 +72,8 @@ export function createUserDOAuthResolver(source: UserCredentialSource | null): A
     if (!source) return null;
     const caller = await resolveCaller(source);
 
-    // Both reads are retry-safe: the conditional OAuth refresh persists before returning.
-    const headers = await retryTransientDO('credential auth',
-      () => source.stub.getAuthHeaders(caller, key, opts));
-
-    if (!headers) return null;
-
-    const baseURL = await retryTransientDO('credential baseURL',
-      () => source.stub.getCredentialBaseURL(caller, key));
-
-    return baseURL ? { headers, baseURL } : { headers };
+    // Retry-safe: the conditional OAuth refresh persists before returning.
+    return await retryTransientDO('credential auth', () => source.stub.getAuth(caller, key, opts));
   };
 }
 

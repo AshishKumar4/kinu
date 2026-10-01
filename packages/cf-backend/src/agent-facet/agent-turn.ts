@@ -2,7 +2,7 @@
 import { jsonSchema, tool, type ModelMessage, type ToolSet, type UIMessageChunk } from 'ai';
 import {
   CHAT_SESSION_ID, HeadCapture, agentAffinityKey, decodeJsonValue, withEffectClaims, REAL_CLOCK, answerParts, classifyRunEnd, closeTurnRun, openTurnRun, runHeadInference, permitInPlan,
-  type AuthRequest, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type ObservedCall, type ProviderEnv, type WorkMode,
+  type AuthRequest, type AuthResolution, type RelayedProvider, type EnqueueTurnResult, type HeadInferenceDeps, type ProgrammaticTurn, type JsonObject, type ObservedCall, type ProviderEnv, type WorkMode,
   type Executor, type Memory, type MissionBudgetPort, type HeadStep, type HeadStreamKind, type AgentSignal, type SendOutcome,
 } from '@kinu.run/core';
 import { attempt, diagnostics, renderCauseChain, settle } from '@kinu.run/core/obs';
@@ -31,8 +31,7 @@ export interface AgentWorkspace {
   answerMetadata(turnId: string, narration: readonly string[]): Promise<JsonObject | null>;
   finishTurn(turnId: string, end: AgentTurnEnd): Promise<void>;
   failTurn(turnId: string, failure: string): Promise<void>;
-  getAuthHeaders(key: string, opts?: AuthRequest): Promise<Record<string, string> | null>;
-  getCredentialBaseURL(key: string): Promise<string | null>;
+  getAuth(key: string, opts?: AuthRequest): Promise<AuthResolution | null>;
   listCredentials(): ReturnType<UserCredentialClient['listCredentials']>;
   relayDevice(provider: RelayedProvider): ReturnType<UserCredentialClient['relayDevice']>;
   relayModelCall(deviceId: string, callId: string, request: Request): Promise<Response>;
@@ -73,8 +72,7 @@ const AGENT_CALLER = { workspaceToken: '' };
 
 function brokeredCredentials(workspace: AgentWorkspace): UserCredentialClient {
   return {
-    getAuthHeaders: (_caller, key, opts) => workspace.getAuthHeaders(key, opts),
-    getCredentialBaseURL: (_caller, key) => workspace.getCredentialBaseURL(key),
+    getAuth: (_caller, key, opts) => workspace.getAuth(key, opts),
     listCredentials: () => workspace.listCredentials(),
     relayDevice: (_caller, provider) => workspace.relayDevice(provider),
     relayModelCall: (_caller, deviceId, callId, request) => workspace.relayModelCall(deviceId, callId, request),

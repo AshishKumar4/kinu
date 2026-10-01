@@ -98,8 +98,7 @@ describe('listProviderCatalog', () => {
         get: () => ({
           ...NO_RELAY_MACHINE,
           listCredentials: async () => list,
-          getAuthHeaders: async () => null,
-          getCredentialBaseURL: async () => null,
+          getAuth: async () => null,
         }),
       },
     };
