@@ -7,7 +7,6 @@ import {
 import { createAgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { ProviderEnv } from '@kinu.run/core';
-import { retryTransientDO } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
 import type { CodexEgressNamespace } from '../egress/codex-egress-route';
 
@@ -60,10 +59,9 @@ export async function listAvailableModels<Id>(
   }));
 
   // openai-compat providers are user-named; each surfaces as one entry (`openai-compat:<name>/<modelId>`).
-  // Retried: a dropped read would show no connected accounts and prompt needless re-authorisation.
-  const creds = await retryTransientDO('listCredentials', () => stub.listCredentials(caller));
+  const keys = await deps.listCredentialKeys?.() ?? [];
 
-  const compatNames = new Set(creds.flatMap((c) => openAICompatNameOf(c.key) ?? []));
+  const compatNames = new Set(keys.flatMap((key) => openAICompatNameOf(key) ?? []));
 
   for (const name of compatNames) {
     out.push({
@@ -116,17 +114,17 @@ export async function listProviderCatalog<Id>(
   env: AvailableModelsEnv<Id>, userId: string, caller: UserCaller,
 ): Promise<ProviderCatalogEntry[]> {
   const stub = env.UserDO.get(env.UserDO.idFromName(userId));
-  const { registry } = createAgentProviderRegistry({ env, ownerUserId: userId, userDO: { stub, caller }, fetch });
+  const { registry, deps } = createAgentProviderRegistry({ env, ownerUserId: userId, userDO: { stub, caller }, fetch });
 
-  const [providers, creds] = await Promise.all([
+  const [providers, keys] = await Promise.all([
     listModelsDevProviders({ fetch }),
-    retryTransientDO('listCredentials', () => stub.listCredentials(caller)),
+    deps.listCredentialKeys?.() ?? [],
   ]);
 
   return buildProviderCatalog(
     providers,
     new Set(registry.list().map((p) => p.id)),
-    new Set(creds.map((c) => c.key)),
+    new Set(keys),
   );
 }
 
