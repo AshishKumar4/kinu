@@ -23,6 +23,27 @@ const IDLE_POLL_MS = 1_000;
 /** Polls in a row the deployment's transport may fail before the trial fails as infrastructure. */
 const DROPPED_POLLS = 3;
 
+/**
+ * Trials of one process begin this far apart. A trial opens its connections as it begins, and Bun 1.4's fetch refuses
+ * new connections opened in a burst (`ConnectionRefused`; curl's 200 at once all connect). Measured 2026-10-01 from
+ * one machine, twelve processes of 30 starts, as two legs of six task files make: 114 of 360 refused unpaced, none
+ * at this spacing (kinu-logs/evals-fast/proofs/connect-burst.log); the two-leg run that began 360 trials together
+ * lost 32 at their first request. A start is paced, never a trial bounded: once begun, it runs as long as its turns.
+ */
+const START_SPACING_MS = 100;
+
+let nextStart = 0;
+
+/** Wait for this trial's turn to begin. */
+async function begin(): Promise<void> {
+  const now = Date.now();
+  const at = Math.max(now, nextStart);
+
+  nextStart = at + START_SPACING_MS;
+
+  if (at > now) await new Promise<void>((resolve) => { setTimeout(resolve, at - now); });
+}
+
 /** The check a turn fails when the deployment cut a run mid-work and reported it completed. */
 const CUT_REPORTED_COMPLETED = 'deployment.cut-reported-completed';
 
@@ -200,6 +221,8 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
   return createHarness<EvalRunInput, EvalRunOutput>({
     name: 'kinu-agent',
     run: async ({ input, signal }) => {
+      await begin();
+
       const startedAt = Date.now();
       const timeline = new TrialTimeline();
 
