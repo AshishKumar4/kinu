@@ -7,7 +7,7 @@ import { createTestActorsOver, createTestSql, handClock, type HandClock } from '
 import type { BackendHost } from '../../packages/core/src/types/backend-host';
 import type { PublicBackgroundJob, PublicSubordinate } from './session';
 import {
-  answered, HUNG_AFTER_MS, settle, TurnWatch, type WatchClock, type WatchedWorkspace, WorkspaceHang, type WorkspaceHeld,
+  answered, HUNG_AFTER_MS, settle, TrialCancelled, TurnWatch, type WatchClock, type WatchedWorkspace, WorkspaceHang, type WorkspaceHeld,
 } from './workspace-completion';
 
 const START = Date.parse('2026-10-01T06:00:00.000Z');
@@ -369,7 +369,9 @@ describe('a job is waited on until it settles, never judged by its silence', () 
     if (job === undefined) throw new Error('the runner made no job');
     expect(job.status).toBe('completed');
     expect(hand.now() - START).toBeGreaterThan(10 * MINUTE);
-    expect(lines).toEqual(Array.from({ length: 10 }, () => `waiting on job ${job.id} (workspace: sleep 600; make) since ${new Date(job.createdAt).toISOString()}`));
+    // One a minute while it ran: nine or ten, as the look at the tenth minute lands before or after the job settles.
+    expect(new Set(lines)).toEqual(new Set([`waiting on job ${job.id} (workspace: sleep 600; make) since ${new Date(job.createdAt).toISOString()}`]));
+    expect([9, 10]).toContain(lines.length);
   });
 
   // A task helper whose turn ended with a job running stays working until the job settles (core `finishTurn`).
@@ -386,5 +388,87 @@ describe('a job is waited on until it settles, never judged by its silence', () 
 
     expect(await settle(new TurnWatch(delegated, { clock, waiting: (line) => { lines.push(line); } }))).toBeUndefined();
     expect(lines[0]).toBe(`waiting on helper task-helper's job bgjob-tests (workspace: npm test) since ${at(MINUTE)}`);
+  });
+});
+
+// Nothing ends a turn on elapsed time: a job that never ends, or a run that never stops streaming, holds it until the
+// run is cancelled, and the cancel is the trial's last word on what held it.
+describe("the run's cancel ends a held turn, naming what held it", () => {
+  test('a job that never ends holds the turn until the cancel, which names the job, what it runs and for how long', async () => {
+    const hand = handClock(START);
+    const { workspace, store } = detachedCommand(hand, true);
+    const run = new AbortController();
+
+    const cancelling = waitOn(hand, 45 * MINUTE).then(() => { run.abort('SIGTERM'); });
+
+    const cancelled = await ended(settle(new TurnWatch(workspace, { clock: overHand(hand), cancelled: run.signal })), TrialCancelled);
+    const [job] = listBackgroundJobs(store, 50);
+
+    await cancelling;
+
+    if (job === undefined) throw new Error('the runner made no job');
+    expect(job.status).toBe('running');
+    expect(cancelled.message).toBe(`cancelled by SIGTERM, held by running shell job ${job.id} (workspace: sleep 600; make) `
+      + `for ${String(Math.round((hand.now() - job.createdAt) / 1000))} s`);
+    expect(cancelled.heldBy).toEqual(['running shell job']);
+    expect(hand.now() - START).toBeGreaterThanOrEqual(45 * MINUTE);
+  });
+
+  // Staging, 2026-10-01: two Ling site-preview trials stepped for 55 minutes without ending turn 1.
+  test('a run that never stops streaming is never cut, and the cancel names its open run', async () => {
+    const clock = watchClock();
+    const looping = fixtureWorkspace(clock, (elapsed) => ({ events: [start('run-1')], heard: words(elapsed, Infinity) }));
+    const run = new AbortController();
+
+    const cancelling = clock.reached(90 * MINUTE).then(() => { run.abort('SIGINT'); });
+
+    const cancelled = await ended(answered(new TurnWatch(looping, { clock, cancelled: run.signal }), new Promise<never>(() => undefined)), TrialCancelled);
+
+    await cancelling;
+
+    expect(cancelled.message).toBe(`cancelled by SIGINT, held by open run run-1, its last row run_start at ${at(0)}`);
+    expect(cancelled.heldBy).toEqual(['open run']);
+  });
+
+  test("a working helper's own job is named with the helper, and a helper that only works as itself", async () => {
+    const clock = watchClock();
+    const tests: PublicBackgroundJob = { id: 'bgjob-tests', kind: 'shell', status: 'running', label: 'workspace: npm test', createdAt: START + MINUTE };
+    const helper = (name: string): PublicSubordinate => ({ name, status: 'working', lifetime: 'task' });
+    const run = new AbortController();
+
+    // The writer streams the whole time; the tester waits on its tests, which never end.
+    const delegated = fixtureWorkspace(clock, (elapsed) => ({
+      events: [start('run-1'), end('run-1', MINUTE, 1)],
+      helpers: [helper('task-tester'), helper('task-writer')],
+      helperJobs: { 'task-tester': [tests] },
+      heard: words(elapsed, Infinity),
+    }));
+
+    const cancelling = clock.reached(10 * MINUTE).then(() => { run.abort('SIGTERM'); });
+
+    const cancelled = await ended(settle(new TurnWatch(delegated, { clock, cancelled: run.signal })), TrialCancelled);
+
+    await cancelling;
+
+    expect(cancelled.message).toBe('cancelled by SIGTERM, held by working helper task-writer; '
+      + `running shell job bgjob-tests (workspace: npm test) of helper task-tester for ${String((clock.elapsed() - MINUTE) / 1000)} s`);
+    expect(cancelled.heldBy).toEqual(['working helper', 'running shell job']);
+  });
+
+  test('a cancel that finds the workspace free says nothing held it, and one that cannot read it says why', async () => {
+    const clock = watchClock();
+    const run = new AbortController();
+
+    run.abort('SIGTERM');
+    const free = fixtureWorkspace(clock, () => ({ events: [start('run-1'), end('run-1', 1_000, 1)] }));
+    const nothing = await ended(settle(new TurnWatch(free, { clock, cancelled: run.signal })), TrialCancelled);
+
+    expect([nothing.message, nothing.heldBy]).toEqual(['cancelled by SIGTERM; nothing held the workspace', []]);
+
+    const unreachable = { ...free, runEvents: () => Promise.reject(new Error('the deployment answered 502')) };
+    const unread = await ended(settle(new TurnWatch(unreachable, { clock, cancelled: run.signal })), TrialCancelled);
+
+    expect(unread.message).toStartWith('cancelled by SIGTERM; what held the workspace could not be read: ');
+    expect(unread.message).toContain('the deployment answered 502');
   });
 });

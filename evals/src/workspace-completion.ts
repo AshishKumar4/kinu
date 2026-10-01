@@ -52,15 +52,15 @@ const WALL_CLOCK: WatchClock = {
 /** What a watch reads of a workspace, and the helpers' rooms it asks to hear. */
 export type WatchedWorkspace = Pick<KinuPublicSession, 'runEvents' | 'backgroundJobs' | 'subordinates' | 'toolCallsInFlight' | 'heard' | 'listen'>;
 
-/** How a turn is watched: its clock, and where to say, once a minute, which jobs it waits on. */
-export type WatchOptions = { readonly clock?: WatchClock; readonly waiting?: (line: string) => void };
+/** How a turn is watched: its clock, where to say once a minute which jobs it waits on, and the run's cancel. */
+export type WatchOptions = { readonly clock?: WatchClock; readonly waiting?: (line: string) => void; readonly cancelled?: AbortSignal };
 
 /**
  * What a watch ended a turn on: `outcome`, the message naming what held the workspace, and `heldBy`, the kinds of what
  * held it (`open run`, `working helper`, `running shell job`), which the report counts the failure under.
  */
 export abstract class WorkspaceHeld extends Error {
-  abstract readonly outcome: 'hung';
+  abstract readonly outcome: 'hung' | 'cancelled';
 
   constructor(message: string, readonly heldBy: readonly string[]) {
     super(message);
@@ -75,6 +75,13 @@ export class WorkspaceHang extends WorkspaceHeld {
   override readonly name = 'WorkspaceHang';
 
   override readonly outcome = 'hung';
+}
+
+/** A turn the run's cancel ended, SIGTERM or SIGINT, naming what held its workspace then: the trial did not finish. */
+export class TrialCancelled extends WorkspaceHeld {
+  override readonly name = 'TrialCancelled';
+
+  override readonly outcome = 'cancelled';
 }
 
 /** A job the workspace waits on: the lead's, or one of a helper waiting on its own. */
@@ -97,7 +104,7 @@ function jobName({ job, helper }: HeldJob): string {
   return `${job.kind} job ${job.id}${job.label === undefined || job.label === null ? '' : ` (${job.label})`}${helper === null ? '' : ` of helper ${helper}`}`;
 }
 
-function described(events: readonly RunEvent[], held: Holders): string[] {
+function described(events: readonly RunEvent[], held: Holders, age: (job: PublicBackgroundJob) => string = () => ''): string[] {
   return [
     ...held.runs.map((runId) => {
       const last = events.filter((event) => event.runId === runId).at(-1);
@@ -105,7 +112,7 @@ function described(events: readonly RunEvent[], held: Holders): string[] {
       return `open run ${runId}${last === undefined ? '' : `, its last row ${last.type} at ${last.timestamp}`}`;
     }),
     ...held.helpers.map((helper) => `working helper ${helper.name}`),
-    ...held.jobs.map((job) => `running ${jobName(job)}`),
+    ...held.jobs.map((job) => `running ${jobName(job)}${age(job.job)}`),
   ];
 }
 
@@ -146,19 +153,15 @@ export class TurnWatch {
     this.frames = workspace.heard();
   }
 
+  /** The run's cancel this watch heeds, if any. */
+  get cancelSignal(): AbortSignal | undefined {
+    return this.options.cancelled;
+  }
+
   /** Read the workspace once. Throws a {@link WorkspaceHang} when what streams has been silent past the bound. */
   async poll(): Promise<{ busy: boolean; events: readonly RunEvent[] }> {
-    const [events, jobs, helpers] = await Promise.all([this.workspace.runEvents(), this.workspace.backgroundJobs(), this.workspace.subordinates()]);
-    const working = helpers.filter((helper) => helper.status === 'working');
-    const theirs = await this.jobsOfHelpers(working);
+    const { events, working, held } = await this.read();
     const now = this.clock.now();
-
-    const held: Holders = {
-      runs: openRuns(events),
-      helpers: working.filter((helper) => (theirs.get(helper.name) ?? []).length === 0),
-      jobs: [...jobs.filter(running).map((job) => ({ job, helper: null })), ...[...theirs].flatMap(([helper, own]) => own.map((job) => ({ job, helper })))],
-    };
-
     const busy = held.runs.length > 0 || working.length > 0 || held.jobs.length > 0;
     const frames = this.workspace.heard();
 
@@ -174,6 +177,51 @@ export class TurnWatch {
     this.waitingOn(now, held.jobs);
 
     return { busy, events };
+  }
+
+  /** Once the run is cancelled, end the turn: throws its {@link TrialCancelled}, what holds the workspace read once more. */
+  async whenCancelled(): Promise<void> {
+    const cancelled = this.options.cancelled;
+
+    if (cancelled?.aborted !== true) return;
+    throw await this.cancellation(String(cancelled.reason));
+  }
+
+  private async cancellation(by: string): Promise<TrialCancelled> {
+    try {
+      const { events, held } = await this.read(true);
+      const now = this.clock.now();
+
+      const holders = described(events, held, (job) => {
+        const since = job.createdAt ?? this.firstSeen.get(job.id);
+
+        return since === undefined ? '' : ` for ${String(Math.round((now - since) / 1000))} s`;
+      });
+
+      return holders.length === 0
+        ? new TrialCancelled(`cancelled by ${by}; nothing held the workspace`, [])
+        : new TrialCancelled(`cancelled by ${by}, held by ${holders.join('; ')}`, kinds(held));
+    } catch (error) {
+      return new TrialCancelled(`cancelled by ${by}; what held the workspace could not be read: ${renderThrownChain({ cause: error })}`, []);
+    }
+  }
+
+  /** The ledger and what holds the workspace: its open runs, its working helpers, and the jobs it waits on. `fresh`
+   *  reads each helper's own jobs now rather than as last read. */
+  private async read(fresh = false): Promise<{ events: readonly RunEvent[]; working: readonly PublicSubordinate[]; held: Holders }> {
+    const [events, jobs, helpers] = await Promise.all([this.workspace.runEvents(), this.workspace.backgroundJobs(), this.workspace.subordinates()]);
+    const working = helpers.filter((helper) => helper.status === 'working');
+    const theirs = await this.jobsOfHelpers(working, fresh);
+
+    return {
+      events,
+      working,
+      held: {
+        runs: openRuns(events),
+        helpers: working.filter((helper) => (theirs.get(helper.name) ?? []).length === 0),
+        jobs: [...jobs.filter(running).map((job) => ({ job, helper: null })), ...[...theirs].flatMap(([helper, own]) => own.map((job) => ({ job, helper })))],
+      },
+    };
   }
 
   private silence(now: number, events: readonly RunEvent[], held: Holders): void {
@@ -206,7 +254,7 @@ export class TurnWatch {
 
   /** Each working helper's own running jobs: a task helper whose turn ended with one running stays working until it
    *  settles (core `finishTurn`), streaming nothing meanwhile. */
-  private async jobsOfHelpers(working: readonly PublicSubordinate[]): Promise<ReadonlyMap<string, readonly PublicBackgroundJob[]>> {
+  private async jobsOfHelpers(working: readonly PublicSubordinate[], fresh: boolean): Promise<ReadonlyMap<string, readonly PublicBackgroundJob[]>> {
     const now = this.clock.now();
 
     for (const name of this.helperJobs.keys()) {
@@ -216,7 +264,7 @@ export class TurnWatch {
     await Promise.all(working.map(async ({ name }) => {
       const read = this.helperJobs.get(name);
 
-      if (read !== undefined && now - read.at < HELPER_JOBS_MS) return;
+      if (!fresh && read !== undefined && now - read.at < HELPER_JOBS_MS) return;
       this.helperJobs.set(name, { at: now, running: (await this.workspace.backgroundJobs(name)).filter(running) });
     }));
 
@@ -226,16 +274,19 @@ export class TurnWatch {
 
 /**
  * The turn's own answer, watched while its stream is open: a run that goes silent mid-answer holds its stream open with
- * it, so the workspace is looked at until the answer lands or fails, or the workspace hangs.
+ * it, so the workspace is looked at until the answer lands or fails, the workspace hangs, or the run is cancelled.
  */
 export async function answered<T>(watch: TurnWatch, sent: Promise<T>): Promise<T> {
   const landing = new AbortController();
   const answer = sent.finally(() => { landing.abort(); });
+  const cancelled = watch.cancelSignal;
+  const wake = cancelled === undefined ? landing.signal : AbortSignal.any([landing.signal, cancelled]);
 
   for (;;) {
-    await Promise.race([answer, watch.clock.sleep(STREAMING_POLL_MS, landing.signal)]);
+    await Promise.race([answer, watch.clock.sleep(STREAMING_POLL_MS, wake)]);
 
     if (landing.signal.aborted) return answer;
+    await watch.whenCancelled();
 
     try {
       await watch.poll();
@@ -254,13 +305,15 @@ export type SettlePoll = (busy: boolean, events: readonly RunEvent[]) => void;
  * Wait until the workspace has nothing left to do for this turn: no run open, no background job
  * running, no helper working, seen on two polls in a row. A background job's completion wakes the
  * agent in a run of its own, and that run answers the prompt too. A workspace whose runs and helpers
- * stay silent fails the turn as a {@link WorkspaceHang}.
+ * stay silent fails the turn as a {@link WorkspaceHang}, and the run's cancel ends it as a
+ * {@link TrialCancelled}.
  */
 export async function settle(watch: TurnWatch, polled?: SettlePoll): Promise<void> {
   let quiet = 0;
   let dropped = 0;
 
   for (;;) {
+    await watch.whenCancelled();
     let busy = true;
 
     try {
@@ -281,7 +334,7 @@ export async function settle(watch: TurnWatch, polled?: SettlePoll): Promise<voi
     quiet = busy ? 0 : quiet + 1;
 
     if (quiet >= 2) return;
-    await watch.clock.sleep(IDLE_POLL_MS);
+    await watch.clock.sleep(IDLE_POLL_MS, watch.cancelSignal);
   }
 }
 

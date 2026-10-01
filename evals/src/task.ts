@@ -71,10 +71,12 @@ export type EvalRunInput = { model: string; arm: string; trial: number };
  * and the comparison also counts resets apart and compares their rate. `hung`: it never ended the
  * turn, a run or helper of its workspace silent past the bound (`workspace-completion.ts`); the
  * build's result like a refusal, its message naming the open run or the helper that held it.
+ * `cancelled`: the run was cancelled (SIGTERM, SIGINT) while the trial was open, its message naming
+ * what held the workspace then; no result for or against the build, and its report is incomplete.
  */
-export const TURN_OUTCOMES = ['completed', 'error', 'refused', 'reset', 'hung'] as const;
+export const TURN_OUTCOMES = ['completed', 'error', 'refused', 'reset', 'hung', 'cancelled'] as const;
 
-/** `heldBy`: for a turn that hung, the kinds of what held it (`WorkspaceHeld`). */
+/** `heldBy`: for a turn that hung or was cancelled, the kinds of what held it (`WorkspaceHeld`). */
 export type EvalTurnOutcome = { status: (typeof TURN_OUTCOMES)[number]; message?: string; heldBy?: string[] };
 
 export type EvalTurnResult = {
