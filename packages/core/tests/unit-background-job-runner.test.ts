@@ -653,6 +653,8 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
 
     expect(store.get('jr2')?.resumeAfter).not.toBeNull();
     expect(runner.inFlight).toBe(1);
+    // The wait is the next activation's: this one's wake must not fire at it (unit-alarm-wake-chain).
+    expect(runner.nextResumeAt()).toBeNull();
   });
 
   test('a job this runner is already driving is never re-driven out from under itself', async () => {
@@ -976,7 +978,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
 
     await runner.recoverOrphans();
     expect(runner.inFlight).toBe(MAX_CONCURRENT_DETACHED_JOBS);
-    expect(store.resumeOwedIdsInWorkspace(Date.now())).toHaveLength(MAX_CONCURRENT_DETACHED_JOBS);
+    expect(store.resumesInWorkspace()).toHaveLength(MAX_CONCURRENT_DETACHED_JOBS);
 
     const outcome = await runner.thresholdDeps({}, 'build', new AbortController())
       .onThreshold('shell', new Promise(() => { /* still running */ }));

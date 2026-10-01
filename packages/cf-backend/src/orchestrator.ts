@@ -30,7 +30,7 @@ import {
   whenActorTakesInput,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
-import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, uiChunks, type AgentFacetPlacement } from "./agent-facets";
+import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, headDeltas, uiChunks, type AgentFacetPlacement } from "./agent-facets";
 import { providerBindingsOf } from "./providers/agent-registry";
 import { AgentTurns } from "./agent-turns";
 import type { AgentTurnActivity, AgentSnapshot, StoredRow } from '@kinu.run/core';
@@ -725,6 +725,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       memory: () => new AgentMemory(async () => (await this.actorHost().acquire(actorReferenceOf(this.liveAgentOf(actorId)))).runtime.memory),
       program: (turnId, ...args) => this.agentTurns.program(actorId, turnId, ...args),
       traceTurn: (turnId, event) => this.agentTurns.trace(actorId, turnId, event),
+      traceStream: (turnId, lines) => this.agentTurns.traceStream(actorId, turnId, headDeltas(lines)),
       resume: (turnId) => this.agentTurns.resume(actorId, turnId),
       guard: (turnId, ...args) => this.agentTurns.guard(actorId, turnId, ...args),
       debit: (turnId, ...args) => this.agentTurns.debit(actorId, turnId, ...args),

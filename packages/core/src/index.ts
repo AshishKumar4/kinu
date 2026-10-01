@@ -2532,5 +2532,5 @@ export { MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId } from './
 
 export type {
   AgentTurnActivity, AgentCaptureDelta, AgentTurnOpening, AgentRecovery, AgentReview, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
-  AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn, StoredRow, TurnRequestAt,
+  AgentToolCall, AgentToolDescriptor, AgentHeadDelta, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn, StoredRow, TurnRequestAt,
 } from './subordinates/agent-isolate';

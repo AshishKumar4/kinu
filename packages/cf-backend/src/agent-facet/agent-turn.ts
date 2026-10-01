@@ -11,7 +11,7 @@ import type { NimbusSessionSurface } from '@nimbus-sh/sdk/sandbox';
 import { createAgentProviderRegistry, type UserCredentialClient } from '../providers/agent-registry';
 import { codexContainerFetch } from '../egress/codex-egress-route';
 import type { AgentDatabase } from './agent-database';
-import type { AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn } from '@kinu.run/core';
 
 export interface AgentWorkspace {
   session(): NimbusSessionSurface;
@@ -19,6 +19,7 @@ export interface AgentWorkspace {
   memory(): Memory;
   program(turnId: string, ...args: Parameters<Executor['execute']>): ReturnType<Executor['execute']>;
   traceTurn(turnId: string, event: AgentTrace): Promise<void>;
+  traceStream(turnId: string, lines: ReadableStream<Uint8Array>): Promise<void>;
   resume(turnId: string): Promise<readonly ModelMessage[] | null>;
   guard(turnId: string, ...args: Parameters<MissionBudgetPort['guard']>): ReturnType<MissionBudgetPort['guard']>;
   debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>): Promise<void>;
@@ -41,20 +42,44 @@ export interface AgentWorkspace {
   cancelCodex(callId: string): Promise<void>;
 }
 
+class StepWords implements UnderlyingDefaultSource<Uint8Array> {
+  private words: ReadableStreamDefaultController<Uint8Array> | null = null;
+
+  private open = true;
+
+  readonly stream: ReadableStream<Uint8Array> = new ReadableStream<Uint8Array>(this);
+
+  start(words: ReadableStreamDefaultController<Uint8Array>): void {
+    this.words = words;
+  }
+
+  cancel(): void {
+    this.open = false;
+  }
+
+  write(bytes: Uint8Array): void {
+    if (this.open) this.words?.enqueue(bytes);
+  }
+
+  end(): void {
+    if (!this.open) return;
+    this.open = false;
+    this.words?.close();
+  }
+}
+
+/** A step's words on one stream, then its record (AGENTS.md Waste). */
 class HeadTrace {
-  private readonly pending: Promise<void>[] = [];
+  private live: { readonly words: StepWords; readonly sent: Promise<void> } | null = null;
+
+  private readonly encoder = new TextEncoder();
 
   constructor(private readonly workspace: AgentWorkspace, private readonly turnId: string) {}
 
-  send(kind: HeadStreamKind, delta: string): Promise<void> {
-    return settle(attempt({ doing: "relaying an agent's live head output", otherwise: 'io' },
-      () => this.workspace.traceTurn(this.turnId, { kind, delta })).pipe(Effect.catch((failure) => Effect.sync(() => {
-        diagnostics.failure('agent.head_output_failed', failure, { turn: this.turnId });
-      }))));
-  }
-
   delta(kind: HeadStreamKind, delta: string): void {
-    this.pending.push(this.send(kind, delta));
+    const line: AgentHeadDelta = { kind, delta };
+
+    (this.live ?? this.openStep()).words.write(this.encoder.encode(`${JSON.stringify(line)}\n`));
   }
 
   async step(sequence: number, step: HeadStep): Promise<void> {
@@ -63,8 +88,27 @@ class HeadTrace {
   }
 
   async flush(): Promise<void> {
-    await Promise.all(this.pending);
-    this.pending.length = 0;
+    const live = this.live;
+
+    if (live === null) return;
+    this.live = null;
+    live.words.end();
+    await live.sent;
+  }
+
+  relay(words: StepWords): Promise<void> {
+    return settle(attempt({ doing: "relaying an agent's live head output", otherwise: 'io' },
+      () => this.workspace.traceStream(this.turnId, words.stream)).pipe(Effect.catch((failure) => Effect.sync(() => {
+        diagnostics.failure('agent.head_output_failed', failure, { turn: this.turnId });
+      }))));
+  }
+
+  private openStep(): { readonly words: StepWords; readonly sent: Promise<void> } {
+    const words = new StepWords();
+
+    this.live = { words, sent: this.relay(words) };
+
+    return this.live;
   }
 }
 
@@ -224,7 +268,8 @@ async function runTurn(
     turnIndex: actor.session.orchestrator.sessionTurnIndex,
   });
 
-  const report = await runHeadInference(prepared.input, inference);
+  // Every end closes the stream; an open one holds the relay.
+  const report = await runHeadInference(prepared.input, inference).finally(() => trace?.flush());
 
   closeTurnRun(actor.stores.eventRecorder, runId, {
     turnIndex: actor.session.orchestrator.sessionTurnIndex,
@@ -243,7 +288,6 @@ async function runTurn(
 
   if (completion !== undefined) await database.answer(completion, await workspace.answerMetadata(completion.turnId, narration));
 
-  await trace?.flush();
   await workspace.finishTurn(task.sequenceId, {
     ...report,
     activity: database.takeActivity(),
