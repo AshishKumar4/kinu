@@ -3,12 +3,13 @@
 // on a workspace's first turn; long-conversation summarization belongs to Session compaction.
 
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import type { LLM } from '../types/primitives';
 import type { FactsStore } from './facts';
 import { normalizeFactKey } from './facts';
 import type { ConversationProjection } from '../session/transcript';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../providers/structured';
-import { tolerate } from '../obs/index';
+import { KinuError, settleSync } from '../obs/index';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 
@@ -173,13 +174,13 @@ export const SleepTimeUpdateSchema: v.GenericSchema<SleepTimeUpdate> = v.object(
 export async function runSleepTimeCompute(
   judge: LLM,
   input: SleepTimeInput,
-): Promise<SleepTimeUpdate | null> {
-  // Judge-call failures propagate; only an unusable answer maps to null.
+): Promise<SleepTimeUpdate> {
   const text = await judge.complete(PROMPT(input));
-  const object = tolerate(() => extractJsonObject(text), 'malformed-input');
-  const update = v.safeParse(SleepTimeUpdateSchema, object);
 
-  return update.success ? update.output : null;
+  return settleSync(Effect.try({
+    try: () => v.parse(SleepTimeUpdateSchema, extractJsonObject(text)),
+    catch: (cause) => new KinuError('bad_input', 'the sleep-time compute returned no usable update', { cause }),
+  }));
 }
 
 export function applySleepTimeUpdate(

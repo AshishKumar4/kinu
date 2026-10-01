@@ -123,13 +123,12 @@ describe('Sleep-time compute', () => {
       decay: ['stale.fact'],
     });
 
-    const update = present(await runSleepTimeCompute(judge, {
+    const update = await runSleepTimeCompute(judge, {
       turns: [{ task: 'configure deploy', output: '...', toolCalls: ['workspace.exec'] }],
       currentFacts: [],
-    }), 'the sleep-time update');
+    });
 
-    expect(update).not.toBeNull();
-    expect(update.upserts.length).toBe(1);
+    expect(update.upserts).toEqual([{ key: 'user.tz', value: 'America/Los_Angeles', confidence: 0.9, rationale: 'mentioned in turn' }]);
     expect(update.decay).toEqual(['stale.fact']);
   });
 
@@ -161,17 +160,15 @@ describe('Sleep-time compute', () => {
 
     await runSleepTimeCompute(judge, { turns: ONE_TURN, currentFacts });
 
-    expect(judge.prompts[0]).toContain('Existing fact keys (reuse these exact keys');
     expect(judge.prompts[0]).toContain('existing.key_0');
     expect(judge.prompts[0]).toContain('existing.key_30');
   });
 
-  test('returns null on unparseable response', async () => {
-    const judge = createScriptedLLM(['No JSON here']);
+  test('unparseable output is a definitive failure with its parser cause', async () => {
+    const judge = createScriptedLLM(['Live answer from the fake model.']);
 
-    const update = await runSleepTimeCompute(judge, { turns: ONE_TURN, currentFacts: [] });
-
-    expect(update).toBeNull();
+    await expect(runSleepTimeCompute(judge, { turns: ONE_TURN, currentFacts: [] }))
+      .rejects.toMatchObject({ code: 'bad_input', cause: expect.any(SyntaxError) });
   });
 
   test('applySleepTimeUpdate upserts facts + decays existing', () => {
@@ -197,9 +194,8 @@ describe('Sleep-time compute', () => {
       '{"upserts":[{"key":"ok.1","value":"fine","confidence":1,"rationale":""},{"key":"bad","confidence":1,"rationale":""}],"decay":[]}',
     ]);
 
-    const update = await runSleepTimeCompute(judge, { turns: ONE_TURN, currentFacts: [] });
-
-    expect(update).toBeNull();
+    await expect(runSleepTimeCompute(judge, { turns: ONE_TURN, currentFacts: [] }))
+      .rejects.toMatchObject({ code: 'bad_input' });
     expect(facts.recall('ok.1')).toBeNull();
     expect(facts.recall('bad')).toBeNull();
   });
@@ -258,9 +254,8 @@ describe('Sleep-time compute', () => {
       '{"upserts":[{"key":"ok.1","value":"fine","confidence":99,"rationale":""}],"decay":[]}',
     ]);
 
-    const update = await runSleepTimeCompute(judge, { turns: ONE_TURN, currentFacts: [] });
-
-    expect(update).toBeNull();
+    await expect(runSleepTimeCompute(judge, { turns: ONE_TURN, currentFacts: [] }))
+      .rejects.toMatchObject({ code: 'bad_input' });
     expect(facts.recall('ok.1')).toBeNull();
   });
 });

@@ -279,9 +279,8 @@ const LeasedRowSchema = v.object({ id: v.string() });
  * answers truncated and the wake drains the rest on the next frame.
  */
 
-/** Tombstone scope marking a turn's sleep-time update applied; survives pruning of
- *  its `sleep_time_updates` row. */
-const SLEEP_TIME_APPLIED = 'sleep_time';
+/** Tombstone scope marking a turn's sleep-time window consumed, by an update or a definitive failure. */
+const SLEEP_TIME_PROCESSED = 'sleep_time';
 
 /** Tombstone scope for the prompt-section lane: separate from the GEPA pass so
  *  replaying the tick does not rotate the section twice. */
@@ -2419,8 +2418,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       sleep_time: terminalEffect({
         // No recorded input: evidence is the transcript, read at run time.
         input: v.object({}),
-        // Failures must throw, not be swallowed, so the ledger keeps the row owed until the compute
-        // actually finishes.
+        // The ledger distinguishes definitive failure from work that remains owed.
         run: async () => {
           if (!this.config.getSleepTimeComputeEnabled()) return { status: 'completed', detail: 'the lane is off' };
           const window = await this.sleepTimeWindow();
@@ -2477,7 +2475,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private async sleepTimeWindow(): Promise<SleepTimeWindow> {
     return sleepTimeWindow(
       await this.chatTranscript.newestFirst(SLEEP_TIME_READ_ROWS),
-      (answerId) => effectAlreadyDone(this.boundSql, this.actorHandle(), SLEEP_TIME_APPLIED, answerId),
+      (answerId) => effectAlreadyDone(this.boundSql, this.actorHandle(), SLEEP_TIME_PROCESSED, answerId),
     );
   }
 
@@ -2620,42 +2618,28 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private async runSleepTimeCompute(window: SleepTimeWindow): Promise<void> {
+    const key = window.newestId;
+
+    if (key === null) return;
+
     try {
-      // Key on the newest answer the window read, not the effect's scope: a later turn committed
-      // before replay would otherwise sit unprocessed behind the tombstone.
-      const key = window.newestId;
-
-      if (key === null) return;
-      // The update is persisted before applying so a replay after eviction reuses the same answer
-      // instead of paying for another model call.
+      // The newest answer keys the window even if a later turn committed before replay.
       const stored = this.recordedSleepTimeUpdate(key);
-
-      const currentFacts = this.facts.all()
-        .sort((a, b) => b.lastObservedAt - a.lastObservedAt)
-        .map(f => ({ key: f.key, value: f.value, confidence: f.confidence }));
 
       const update = stored ?? await runSleepTimeCompute(this.rt.fastLlm ?? this.rt.llm, {
         turns: window.turns,
-        currentFacts,
+        currentFacts: this.facts.all()
+          .sort((a, b) => b.lastObservedAt - a.lastObservedAt)
+          .map(f => ({ key: f.key, value: f.value, confidence: f.confidence })),
       });
-
-      // Null means extraction/validation failed; a no-change answer is empty arrays, not null.
-      if (update === null) {
-        throw new KinuError('unavailable', 'the sleep-time compute returned no usable update');
-      }
 
       if (stored === undefined) this.persistSleepTimeUpdate(key, update);
 
-      // One transaction over the non-idempotent fact writes and their tombstone, so a replay never
-      // repeats a prefix. The body must not await: `transactionSync` commits when it returns.
+      // The fact writes and consumed-window marker commit together; replay never repeats a prefix.
       const summary = this.ctx.storage.transactionSync(() => {
         const applied = applySleepTimeUpdate(this.facts, update);
 
-        recordEffectDone(this.boundSql, this.actorHandle(), { scope: SLEEP_TIME_APPLIED, key: key });
-        void this.sql`DELETE FROM sleep_time_updates WHERE effect_key = ${key}`;
-        // Nothing is unprocessed, so no timed trigger is owed; a tab close earns one run only.
-        this.config.delete(SLEEP_TIME_SETTLED_AT);
-        this.config.delete(SLEEP_TIME_CLOSED_AT);
+        this.finishSleepTimeWindow(key);
 
         return applied;
       });
@@ -2672,10 +2656,20 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         otherwise: 'unavailable',
       });
 
+      if (failure.code === 'bad_input' || failure.code === 'missing') {
+        this.ctx.storage.transactionSync(() => { this.finishSleepTimeWindow(key); });
+      }
+
       diagnostics.failure('memory.fact_compression_failed', failure);
-      // Rethrown so the terminal effect stays owed instead of recording `completed`.
       throw failure;
     }
+  }
+
+  private finishSleepTimeWindow(key: string): void {
+    recordEffectDone(this.boundSql, this.actorHandle(), { scope: SLEEP_TIME_PROCESSED, key });
+    void this.sql`DELETE FROM sleep_time_updates WHERE effect_key = ${key}`;
+    this.config.delete(SLEEP_TIME_SETTLED_AT);
+    this.config.delete(SLEEP_TIME_CLOSED_AT);
   }
 
   /** The update a previous attempt already paid for, so a replay applies it without a new call. */
@@ -3416,6 +3410,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           });
 
           span.fail(failure);
+
+          if (failure.code === 'bad_input' || failure.code === 'missing') {
+            this.logActivity('terminal_effect_abandoned', `memory compression failed: ${failure.message}, so it is not retried`);
+          }
+
           diagnostics.failure('memory.sleep_time_wake_failed', failure);
         }
       });
