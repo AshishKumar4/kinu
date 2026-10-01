@@ -5,6 +5,9 @@
  * can still be reported.
  */
 
+import { Effect } from 'effect';
+import { settleSync } from '../effect';
+
 /** "Analytics Engine will accept up to twenty blobs, twenty doubles, and one index per call to
  *  `writeDataPoint`." */
 const MAX_BLOBS = 20;
@@ -36,44 +39,46 @@ export interface SlotCensus {
 
 /** Refuse, at module load, a dataset the platform would silently truncate or drop. */
 export function assertWithinPlatformLimits(census: SlotCensus): void {
-  const { dataset } = census;
+  return settleSync(Effect.gen(function* () {
+    const { dataset } = census;
 
-  if (census.blobBytes.length > MAX_BLOBS) {
-    throw new RangeError(
-      `${dataset}: ${census.blobBytes.length} blob slots exceeds the platform's ${MAX_BLOBS}`,
-    );
-  }
-
-  if (census.doubles > MAX_DOUBLES) {
-    throw new RangeError(
-      `${dataset}: ${census.doubles} double slots exceeds the platform's ${MAX_DOUBLES}`,
-    );
-  }
-
-  for (const index of census.indexes) {
-    if (index.maxBytes > MAX_INDEX_BYTES) {
-      throw new RangeError(
-        `${dataset}: index "${index.name}" declares ${index.maxBytes} bytes, `
-        + `over the platform's ${MAX_INDEX_BYTES}`,
-      );
+    if (census.blobBytes.length > MAX_BLOBS) {
+      return yield* Effect.die(new RangeError(
+        `${dataset}: ${census.blobBytes.length} blob slots exceeds the platform's ${MAX_BLOBS}`,
+      ));
     }
-  }
 
-  // A second index slot would be silently dropped on the wire.
-  if (census.indexes.length !== MAX_INDEXES) {
-    throw new RangeError(
-      `${dataset}: ${census.indexes.length} index slots, but the platform takes ${MAX_INDEXES}`,
-    );
-  }
+    if (census.doubles > MAX_DOUBLES) {
+      return yield* Effect.die(new RangeError(
+        `${dataset}: ${census.doubles} double slots exceeds the platform's ${MAX_DOUBLES}`,
+      ));
+    }
 
-  let budget = 0;
+    for (const index of census.indexes) {
+      if (index.maxBytes > MAX_INDEX_BYTES) {
+        return yield* Effect.die(new RangeError(
+          `${dataset}: index "${index.name}" declares ${index.maxBytes} bytes, `
+          + `over the platform's ${MAX_INDEX_BYTES}`,
+        ));
+      }
+    }
 
-  for (const bytes of census.blobBytes) budget += bytes;
+    // A second index slot would be silently dropped on the wire.
+    if (census.indexes.length !== MAX_INDEXES) {
+      return yield* Effect.die(new RangeError(
+        `${dataset}: ${census.indexes.length} index slots, but the platform takes ${MAX_INDEXES}`,
+      ));
+    }
 
-  if (budget > MAX_BLOB_BYTES) {
-    throw new RangeError(
-      `${dataset}: blob slots declare ${budget} bytes in total, `
-      + `over the platform's ${MAX_BLOB_BYTES} per data point`,
-    );
-  }
+    let budget = 0;
+
+    for (const bytes of census.blobBytes) budget += bytes;
+
+    if (budget > MAX_BLOB_BYTES) {
+      return yield* Effect.die(new RangeError(
+        `${dataset}: blob slots declare ${budget} bytes in total, `
+        + `over the platform's ${MAX_BLOB_BYTES} per data point`,
+      ));
+    }
+  }));
 }

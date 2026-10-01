@@ -3,6 +3,8 @@
  * than an installed sink because a DO is a separate isolate where the Worker's sink is absent.
  */
 import type { Usage } from '../../usage';
+import { Effect } from 'effect';
+import { settleSync } from '../effect';
 import { toKinuError, type ErrorCode } from '../error';
 import { diagnostics } from '../log';
 import { boundaryOf, eventFamily } from './boundaries';
@@ -82,20 +84,15 @@ function agentRow(input: AgentRowInput): AgentRow {
   };
 }
 
-function emit<S extends AnalyticsSchema>(writer: AnalyticsWriter<S>, row: AnalyticsRow<S>): void {
-  try {
-    writer.write(row);
-  } catch (err) {
-    diagnostics.failure('analytics.write_failed', toKinuError({
-      doing: 'writing an analytics data point',
-      cause: err,
-      otherwise: 'unavailable',
-    }));
-  }
+function emit<S extends AnalyticsSchema>(writer: AnalyticsWriter<S>, row: AnalyticsRow<S>): Effect.Effect<void> {
+  return Effect.try({
+    try: () => writer.write(row),
+    catch: (cause) => toKinuError({ doing: 'writing an analytics data point', cause, otherwise: 'unavailable' }),
+  }).pipe(Effect.catch((failure) => Effect.sync(() => diagnostics.failure('analytics.write_failed', failure))));
 }
 
-function recordAgentRow(env: AnalyticsEnv, row: AgentRowInput): void {
-  emit(analyticsPlane(env).agent, agentRow(row));
+function recordAgentRow(env: AnalyticsEnv, row: AgentRowInput): Effect.Effect<void> {
+  return emit(analyticsPlane(env).agent, agentRow(row));
 }
 
 export interface TurnRowInput {
@@ -114,7 +111,7 @@ export interface TurnRowInput {
 }
 
 export function recordTurnRow(env: AnalyticsEnv, input: TurnRowInput): void {
-  recordAgentRow(env, { kind: 'turn', event: 'turn.settled', ...input });
+  return settleSync(recordAgentRow(env, { kind: 'turn', event: 'turn.settled', ...input }));
 }
 
 /** Its own row, so a turn that never streamed is absent rather than a zero. */
@@ -127,7 +124,7 @@ export interface TtftRowInput {
 }
 
 export function recordTtftRow(env: AnalyticsEnv, input: TtftRowInput): void {
-  recordAgentRow(env, { kind: 'ttft', event: 'turn.first_token', ...input });
+  return settleSync(recordAgentRow(env, { kind: 'ttft', event: 'turn.first_token', ...input }));
 }
 
 export interface ModelRowInput {
@@ -141,7 +138,7 @@ export interface ModelRowInput {
 }
 
 export function recordModelRow(env: AnalyticsEnv, input: ModelRowInput): void {
-  recordAgentRow(env, { kind: 'model', event: 'model.call', ...input });
+  return settleSync(recordAgentRow(env, { kind: 'model', event: 'model.call', ...input }));
 }
 
 /** Never arguments or results: those carry workspace content. */
@@ -154,7 +151,7 @@ export interface ToolRowInput {
 }
 
 export function recordToolRow(env: AnalyticsEnv, input: ToolRowInput): void {
-  emit(analyticsPlane(env).agent, agentRow({
+  return settleSync(emit(analyticsPlane(env).agent, agentRow({
     kind: 'tool',
     event: 'tool.settled',
     workspace: input.workspace,
@@ -163,7 +160,7 @@ export function recordToolRow(env: AnalyticsEnv, input: ToolRowInput): void {
     outcome: input.failed ? 'failed' : 'ok',
     durationMs: input.durationMs,
     toolCalls: 1,
-  }));
+  })));
 }
 
 export interface JobRowInput {
@@ -175,14 +172,14 @@ export interface JobRowInput {
 }
 
 export function recordJobSettled(env: AnalyticsEnv, input: JobRowInput): void {
-  emit(analyticsPlane(env).agent, agentRow({
+  return settleSync(emit(analyticsPlane(env).agent, agentRow({
     kind: 'event',
     event: 'job.settled',
     workspace: input.workspace,
     agentKind: input.agentKind,
     source: input.operation,
     outcome: input.outcome,
-  }));
+  })));
 }
 
 /** One delivery of a durable container-failure announcement; success is a row too. */
@@ -199,7 +196,7 @@ export interface RecoveryRowInput {
 }
 
 export function recordSandboxRecovery(env: AnalyticsEnv, input: RecoveryRowInput): void {
-  emit(analyticsPlane(env).agent, agentRow({
+  return settleSync(emit(analyticsPlane(env).agent, agentRow({
     kind: 'event',
     event: 'sandbox.recovery_settled',
     workspace: input.workspace,
@@ -209,5 +206,5 @@ export function recordSandboxRecovery(env: AnalyticsEnv, input: RecoveryRowInput
     code: input.code,
     attempts: input.attempts,
     durationMs: input.durationMs,
-  }));
+  })));
 }

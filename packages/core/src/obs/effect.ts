@@ -1,6 +1,7 @@
 import { Cause, Effect, Exit, Fiber, Scheduler } from 'effect';
 import type { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { classifyErrorCode, KinuError, renderThrownChain, toKinuError, type ErrorCode } from './error';
+import { classify, type ExpectedFailure } from './expected-failure';
 
 const WITHIN_ONE_EVENT = new Scheduler.MixedScheduler('sync');
 
@@ -53,4 +54,21 @@ export function settleSync<A>(effect: Effect.Effect<A, KinuError | VfsError>, op
   if (Cause.isAsyncFiberError(defect)) Effect.runFork(Fiber.interrupt(defect.fiber));
 
   return fail(exit.cause, options);
+}
+
+function passing<A>(effect: Effect.Effect<A>, expected: ExpectedFailure): Effect.Effect<A | undefined> {
+  return Effect.catchDefect(effect, (cause) => (classify({ cause }) === expected ? Effect.undefined : Effect.die(cause)));
+}
+
+/**
+ * Runs `operation`, returning `undefined` only for the named failure; anything else is rethrown
+ * as-is, unwrapped, to keep the failing frame on top.
+ */
+export function tolerate<T>(operation: () => T, expected: ExpectedFailure): T | undefined {
+  return settleSync(passing(Effect.sync(operation), expected));
+}
+
+/** `tolerate` for an operation that rejects rather than throws. */
+export function tolerateAsync<T>(operation: () => Promise<T>, expected: ExpectedFailure): Promise<T | undefined> {
+  return settle(passing(Effect.promise(operation), expected));
 }

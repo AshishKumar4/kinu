@@ -8,7 +8,7 @@ spend. `AGENTS.md` § Errors and Logs points here. The source of truth is
 
 | Piece | State | Where |
 | --- | --- | --- |
-| `tolerate` / `tolerateAsync` / `classify`: the tolerable-failure signatures | built | `obs/expected-failure.ts` |
+| `tolerate` / `tolerateAsync` / `classify`: the tolerable-failure signatures | built | `obs/effect.ts`, `obs/expected-failure.ts` |
 | `Tracer` / `ScopedSpan`: the span interface | built | `obs/tracer.ts` |
 | `AgentTracing` / `TracedInvocation`: the scoping rules | built, wired at two invocation sites and every actor turn | `obs/agent-tracing.ts`, `cf-backend/src/obs/cf-tracer.ts` |
 | `ErrorCode` / `KinuError` / `toKinuError` | built; `KinuError` is an Effect `Data.TaggedError` since 2026-09-23 | `obs/error.ts` |

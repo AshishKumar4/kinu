@@ -3,7 +3,7 @@
  * Both sockets are hibernatable, so live terminals are found from socket attachments; memory holds only
  * the open-to-attach window. Authorization happens earlier, in `deviceRpc`.
  */
-import { tolerate } from '../obs/expected-failure';
+import { tolerate } from '../obs/effect';
 import { diagnostics } from '../obs/log';
 import { KinuError } from '../obs/error';
 import * as v from 'valibot';

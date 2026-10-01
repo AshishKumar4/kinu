@@ -3,7 +3,9 @@
  * Logging & Traceability). Failing cases are proven in `unit-obs-log-ban.test.ts`.
  */
 
-import { renderCauseChain, toKinuError, type ErrorCode, type KinuError } from './error';
+import { Effect, Exit } from 'effect';
+import { attempt, settle, settleSync } from './effect';
+import { renderCauseChain, type ErrorCode, type KinuError } from './error';
 
 /**
  * Field names that may never appear on a log line (AGENTS.md § Errors). `content`, `body` and
@@ -97,27 +99,18 @@ export function createLineLogger(write: (line: string) => void): Logger {
  * every member receives the line, then the first thrown value propagates.
  */
 export function createCompositeLogger(members: readonly Logger[]): Logger {
-  const fan = (deliver: (member: Logger) => void): void => {
-    let thrown: { value: unknown } | null = null;
-
-    for (const member of members) {
-      try {
-        deliver(member);
-      } catch (error) {
-        thrown ??= { value: error };
-      }
-    }
-
-    if (thrown) throw thrown.value;
-  };
+  const fan = (deliver: (member: Logger) => void): Effect.Effect<void> => Effect.flatMap(
+    Effect.forEach(members, (member) => Effect.exit(Effect.sync(() => deliver(member)))),
+    (exits) => exits.find(Exit.isFailure) ?? Effect.void,
+  );
 
   // Unannotated params: contextual typing keeps `fields` as the caller's checked generic.
   return {
     event(name, fields) {
-      fan((member) => member.event(name, fields));
+      return settleSync(fan((member) => member.event(name, fields)));
     },
     failure(name, error, fields) {
-      fan((member) => member.failure(name, error, fields));
+      return settleSync(fan((member) => member.failure(name, error, fields)));
     },
   };
 }
@@ -157,16 +150,12 @@ export const diagnostics: Logger = {
 };
 
 /** A rejection is logged under `event`, for work nobody awaits. */
-export async function settleLogged(
+export function settleLogged(
   event: LogEventName,
   failure: { readonly doing: string; readonly otherwise: ErrorCode },
   work: () => Promise<void>,
 ): Promise<void> {
-  try {
-    await work();
-  } catch (cause) {
-    diagnostics.failure(event, toKinuError({ ...failure, cause }));
-  }
+  return settle(attempt(failure, work).pipe(Effect.catch((error) => Effect.sync(() => diagnostics.failure(event, error)))));
 }
 
 export interface RecordedLog {
