@@ -1,11 +1,12 @@
 import { join } from 'node:path';
 import * as v from 'valibot';
-import { attachHarnessRunToError, createHarness, normalizeHarnessRun, type TranscriptEvent } from 'vitest-evals';
+import { attachHarnessRunToError, createHarness, normalizeHarnessRun } from 'vitest-evals/harness';
+import type { TranscriptEvent } from 'vitest-evals';
 import { platformFact, type RunEvent } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { DeploymentAnswer, evalNameSlug, INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
 import { gatherEvidence, writeEvidence, type WorkspaceEvidence } from './evidence';
-import { HarnessRunSchema } from './results';
+import { HarnessRunSchema, type StepUsage, type UsageMetadata } from './results';
 import type { KinuPublicSession, PublicMessage } from './session';
 import { ARMS, deployedBuild, openWorkspace, type EvalArm, type EvalTarget } from './target';
 import type {
@@ -69,6 +70,46 @@ const MEMORY_RESETS = platformFact('do.isolate.oom_reported').observable.map((ob
 /** Whether a failure the deployment reported is its workspace's isolate reset for memory. */
 function memoryReset(message: string): boolean {
   return MEMORY_RESETS.some((reset) => message.includes(reset));
+}
+
+/** Prompt usage from the public ledger, complete totals only: a partial denominator would overstate cache hits. */
+export function measurePromptUsage(events: readonly RunEvent[]) {
+  const steps: StepUsage[] = [];
+
+  for (const event of events) {
+    if (event.type !== 'step_finish') continue;
+    steps.push({
+      runId: event.runId, stepIndex: event.stepIndex,
+      inputTokens: event.usage?.input ?? null,
+      cacheReadTokens: event.usage?.cacheRead ?? null,
+      cacheWriteTokens: event.usage?.cacheWrite ?? null,
+    });
+  }
+
+  const total = (field: 'inputTokens' | 'cacheReadTokens' | 'cacheWriteTokens'): number | undefined => {
+    if (steps.length === 0) return undefined;
+
+    let tokens = 0;
+
+    for (const step of steps) {
+      const count = step[field];
+
+      if (count === null) return undefined;
+      tokens += count;
+    }
+
+    return tokens;
+  };
+
+  const metadata: UsageMetadata = { steps };
+
+  for (const field of ['cacheReadTokens', 'cacheWriteTokens'] as const) {
+    const tokens = total(field);
+
+    if (tokens !== undefined) metadata[field] = tokens;
+  }
+
+  return { inputTokens: total('inputTokens'), metadata };
 }
 
 function openRuns(events: readonly RunEvent[]): string[] {
@@ -333,9 +374,11 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       }
 
       const metrics = measure(events);
-      const usageMetadata: Record<string, number> = {};
+      const promptUsage = measurePromptUsage(events);
+      const usageMetadata = promptUsage.metadata;
 
       if (costUsd !== undefined) usageMetadata.costUsd = costUsd;
+
       const checks = turns.flatMap((turn) => turn.checks);
 
       const success = errors.length === 0 && turns.length === task.turns.length
@@ -366,7 +409,7 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
         events: transcript,
         usage: {
           provider: input.model.split('/')[0] ?? 'unknown', model: input.model, toolCalls: metrics.toolCalls,
-          inputTokens: metrics.inputTokens, outputTokens: metrics.outputTokens,
+          inputTokens: promptUsage.inputTokens, outputTokens: metrics.outputTokens,
           metadata: usageMetadata,
         },
         errors: scrubbed,

@@ -1,7 +1,7 @@
 import { basename } from 'node:path';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { redact } from './redact';
-import { parseResults, trials, type Assertion } from './results';
+import { parseResults, trials, type Assertion, type EvalFile, type HarnessRun } from './results';
 import { HARNESS_ERRORS } from './task';
 
 export type EvalStats = {
@@ -11,6 +11,7 @@ export type EvalStats = {
   resets: number;
   /** A trial's wall time less its waits on the model provider, which measure the account's rate limit. */
   meanDurationMs: number;
+  meanWallTimeMs: number;
   /** The slowest trial: trials of a task run at once, so this is the task's wall time. */
   slowestTrialMs: number;
   meanModelTurns: number;
@@ -18,6 +19,8 @@ export type EvalStats = {
   meanToolErrors: number;
   /** Null when any trial lacks a cost: a mean over a subset would not compare across sides. */
   meanCostUsd: number | null;
+  /** Token-weighted over non-infrastructure trials; null if any of those trials lacks prompt or cache-read counts. */
+  cacheHitRate: number | null;
   /** Each failed check as `t<turn> <check id>`, with how many trials failed it and the first evidence. Most frequent first. */
   failedChecks: { check: string; trials: number; evidence: string | null }[];
   /** Tool errors by tool and the first line of their message, most frequent first. */
@@ -56,11 +59,16 @@ export type EvalSide = { productSha: string; evalCommit: string };
 export type AgentProfile = {
   runs: number;
   meanModelTurns: number;
-  meanInputTokens: number;
+  meanInputTokens: number | null;
   meanOutputTokens: number;
+  meanWallTimeMs: number;
+  meanCostUsd: number | null;
+  cacheHitRate: number | null;
   /** The share of tool calls that were `eval` (code mode) rather than a native tool; null with no calls. */
   evalCallShare: number | null;
 };
+
+export type EvalSuiteTotals = { costUsd: number | null; wallTimeMs: number | null };
 
 export type EvalComparison = {
   baseline: EvalSide | null;
@@ -69,6 +77,7 @@ export type EvalComparison = {
   /** Files changed between the two deployed builds that the evals exercise. */
   changedFiles: string[];
   rows: EvalComparisonRow[];
+  totals: { baseline: EvalSuiteTotals | null; candidate: EvalSuiteTotals };
   /** Per model, both sides pooled over every task. */
   profiles: { model: string; baseline: AgentProfile | null; candidate: AgentProfile }[];
 };
@@ -112,12 +121,17 @@ function group(assertions: readonly Assertion[]): Map<string, Cohort> {
 function profile(assertions: readonly Assertion[]): AgentProfile {
   const runs = assertions.map((assertion) => assertion.meta.harness.run);
   const calls = runs.flatMap((run) => run.session.events.flatMap((event) => event.type === 'tool_call' ? [event.name] : []));
+  const inputs = runs.flatMap((run) => run.usage.inputTokens === undefined ? [] : [run.usage.inputTokens]);
+  const cost = totalCostUsd(runs);
 
   return {
     runs: runs.length,
     meanModelTurns: mean(runs.map((run) => run.output.metrics.modelTurns)),
-    meanInputTokens: mean(runs.map((run) => run.usage.inputTokens)),
+    meanInputTokens: inputs.length === runs.length ? mean(inputs) : null,
     meanOutputTokens: mean(runs.map((run) => run.usage.outputTokens)),
+    meanWallTimeMs: mean(assertions.map((assertion) => assertion.duration)),
+    meanCostUsd: cost === null ? null : cost / runs.length,
+    cacheHitRate: cacheHitRate(assertions),
     evalCallShare: calls.length === 0 ? null : calls.filter((name) => name === 'eval').length / calls.length,
   };
 }
@@ -153,6 +167,49 @@ function mean(values: readonly number[]): number {
   return values.length === 0 ? 0 : values.reduce((sum, value) => sum + value, 0) / values.length;
 }
 
+function totalCostUsd(runs: readonly HarnessRun[]): number | null {
+  let total = 0;
+
+  for (const run of runs) {
+    const cost = run.usage.metadata.costUsd;
+
+    if (cost === undefined) return null;
+    total += cost;
+  }
+
+  return total;
+}
+
+function cacheHitRate(assertions: readonly Assertion[]): number | null {
+  let prompt = 0, cached = 0;
+
+  for (const assertion of assertions) {
+    if (hasInfrastructureFailure(assertion)) continue;
+
+    const { inputTokens, metadata } = assertion.meta.harness.run.usage;
+
+    if (inputTokens === undefined || metadata.cacheReadTokens === undefined) return null;
+    prompt += inputTokens;
+    cached += metadata.cacheReadTokens;
+  }
+
+  return prompt > 0 ? cached / prompt : null;
+}
+
+function suiteTotals(files: readonly EvalFile[], assertions: readonly Assertion[]): EvalSuiteTotals {
+  const costUsd = totalCostUsd(assertions.map((assertion) => assertion.meta.harness.run));
+  let first = Infinity, last = -Infinity;
+
+  // Trials overlap, so their durations cannot be added to get the suite's wall time.
+  for (const file of files) {
+    if (file.startTime === undefined || file.endTime === undefined) return { costUsd, wallTimeMs: null };
+    first = Math.min(first, file.startTime);
+    last = Math.max(last, file.endTime);
+  }
+
+  return { costUsd, wallTimeMs: last - first };
+}
+
 /** How many items share each key, most frequent first, keeping the first item for each key. */
 function countBy<T>(items: readonly T[], key: (item: T) => string): { item: T; count: number }[] {
   const counts = new Map<string, { item: T; count: number }>();
@@ -185,7 +242,7 @@ function infrastructureMessage(assertion: Assertion): string {
 function stats({ assertions }: Cohort): EvalStats {
   const runs = assertions.map((assertion) => assertion.meta.harness.run);
   const metrics = runs.map((run) => run.output.metrics);
-  const costs = runs.flatMap((run) => run.usage.metadata.costUsd === undefined ? [] : [run.usage.metadata.costUsd]);
+  const cost = totalCostUsd(runs);
 
   // A turn the deployment refused or reset failed on the build, so it is listed with the checks, its answer as the evidence.
   const failedChecks = countBy(runs.flatMap((run) => run.output.turns.flatMap((turn, index) => [
@@ -210,11 +267,13 @@ function stats({ assertions }: Cohort): EvalStats {
     passed: assertions.filter((assertion) => assertion.status === 'passed').length,
     resets: runs.filter((run) => run.output.turns.some((turn) => turn.outcome.status === 'reset')).length,
     meanDurationMs: mean(assertions.map((assertion) => Math.max(0, assertion.duration - assertion.meta.harness.run.output.metrics.providerWaitMs))),
+    meanWallTimeMs: mean(assertions.map((assertion) => assertion.duration)),
     slowestTrialMs: Math.max(0, ...assertions.map((assertion) => assertion.duration)),
     meanModelTurns: mean(metrics.map((value) => value.modelTurns)),
     meanToolCalls: mean(metrics.map((value) => value.toolCalls)),
     meanToolErrors: mean(metrics.map((value) => value.toolErrors)),
-    meanCostUsd: costs.length === assertions.length ? mean(costs) : null,
+    meanCostUsd: cost === null ? null : cost / runs.length,
+    cacheHitRate: cacheHitRate(assertions),
     failedChecks: failedChecks.map(({ item, count }) => ({ ...item, trials: count })),
     toolErrors: toolErrors.map(({ item, count }) => ({ ...item, count })),
     infrastructureErrors: infrastructureErrors.map(({ item, count }) => ({ message: item, trials: count })),
@@ -340,10 +399,12 @@ function verdictOf(rows: readonly EvalComparisonRow[]): EvalVerdict {
 
 /** Compare two reports. With no baseline, every row is the candidate's alone and the verdict is inconclusive. */
 export function compareEvalResults(baselineText: string | null, candidateText: string, questions: CommitQuestions = {}): EvalComparison {
-  const candidateAssertions = trials(parseResults('candidate', candidateText));
+  const candidateFiles = parseResults('candidate', candidateText);
+  const candidateAssertions = trials(candidateFiles);
   const candidate = sideOf('candidate', candidateAssertions);
   const next = group(candidateAssertions);
-  const baselineAssertions = baselineText === null ? [] : trials(parseResults('baseline', baselineText));
+  const baselineFiles = baselineText === null ? [] : parseResults('baseline', baselineText);
+  const baselineAssertions = trials(baselineFiles);
   const baseline = baselineText === null ? null : sideOf('baseline', baselineAssertions);
   const base = group(baselineAssertions);
   const changed = baseline !== null && (questions.definitionsChanged?.(baseline.evalCommit, candidate.evalCommit) ?? false);
@@ -384,6 +445,10 @@ export function compareEvalResults(baselineText: string | null, candidateText: s
     baseline, candidate, verdict: verdictOf(rows),
     changedFiles: baseline === null ? [] : questions.changedFiles?.(baseline.productSha, candidate.productSha) ?? [],
     rows,
+    totals: {
+      baseline: baselineText === null ? null : suiteTotals(baselineFiles, baselineAssertions),
+      candidate: suiteTotals(candidateFiles, candidateAssertions),
+    },
     profiles: profiles(baselineAssertions, candidateAssertions),
   };
 }
@@ -456,6 +521,29 @@ function tokens(count: number): string {
 
 function minutes(ms: number): string {
   return `${(ms / 60_000).toFixed(0)} min`;
+}
+
+function usd(cost: number | null): string {
+  return cost === null ? '—' : `$${cost.toFixed(4)}`;
+}
+
+function rate(hit: number | null): string {
+  return hit === null ? '—' : `${(hit * 100).toFixed(1)}%`;
+}
+
+function seconds(ms: number): string {
+  return `${(ms / 1000).toFixed(1)} s`;
+}
+
+function totalsTable(totals: EvalComparison['totals']): string[] {
+  const row = (leg: string, side: EvalSuiteTotals | null) => `| ${leg} | ${usd(side?.costUsd ?? null)} | `
+    + `${side?.wallTimeMs === undefined || side.wallTimeMs === null ? '—' : seconds(side.wallTimeMs)} |`;
+
+  return [
+    'Suite totals (all trials; wall spans the earliest start to the latest finish):', '',
+    '| Leg | Cost (USD) | Wall time |', '| --- | --- | --- |',
+    row('Baseline', totals.baseline), row('Candidate', totals.candidate),
+  ];
 }
 
 /** What every row shares, said once above the table rather than on every row; null when rows differ. */
@@ -540,12 +628,12 @@ function buildsLine({ baseline, candidate }: EvalComparison, shared: Shared): st
 }
 
 const SCORE_TABLE = [
-  '| Task | Baseline | Candidate | \u0394 pass | \u0394 duration | \u0394 tool errors | \u0394 cost | Wall | 429 waits |',
-  '| --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+  '| Task | Baseline | Candidate | Δ pass | Cache hit | Mean wall | Δ duration | Δ tool errors | Mean cost (USD) | Δ cost | Wall | 429 waits |',
+  '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
 ];
 
 function scoreRow(row: EvalComparisonRow, shared: Shared): string {
-  const deltas = row.reason !== null ? [`_not compared: ${row.reason}_`, '\u2014', '\u2014', '\u2014'] : [
+  const [passes, duration, toolErrors, cost] = row.reason !== null ? [`_not compared: ${row.reason}_`, '—', '—', '—'] : [
     passChange(row),
     signed((row.candidate.meanDurationMs - row.baseline.meanDurationMs) / 1000, 1, ' s'),
     signed(row.candidate.meanToolErrors - row.baseline.meanToolErrors, 1),
@@ -555,23 +643,33 @@ function scoreRow(row: EvalComparisonRow, shared: Shared): string {
   const wall = row.candidate === null ? '\u2014' : minutes(row.candidate.slowestTrialMs);
   const waits = row.candidate === null ? '\u2014' : `${minutes(row.candidate.providerWaitMs)} (\u00d7${String(row.candidate.providerWaits)})`;
 
-  return `| ${[rowName(row, shared), bar(row.baseline), bar(row.candidate), ...deltas, wall, waits].join(' | ')} |`;
+  const cell = (value: (side: EvalStats) => string) => `${row.baseline === null ? '—' : value(row.baseline)} → `
+    + `${row.candidate === null ? '—' : value(row.candidate)}`;
+
+  return `| ${[rowName(row, shared), bar(row.baseline), bar(row.candidate), passes, cell((side) => rate(side.cacheHitRate)),
+    cell((side) => seconds(side.meanWallTimeMs)), duration, toolErrors, cell((side) => usd(side.meanCostUsd)), cost, wall, waits].join(' | ')} |`;
 }
 
 const WAITS_NOTE = '_Durations leave out time the product spent waiting on the model provider; 429 waits are the '
   + 'candidate\u2019s total over all runs: the eval account\u2019s rate limit, infrastructure, never a task failure._';
 
+const METRICS_NOTE = '_Mean wall, mean cost and cache hits show baseline → candidate. Wall time includes provider waits; '
+  + 'cache hits are cache-read tokens / prompt tokens, excluding infrastructure trials. A dash means a count is missing, '
+  + 'not zero or a rate over a subset._';
+
 /** How the agent worked per model, the baseline in parentheses: information for a prompt or tool change. */
 function profileTable(profiled: EvalComparison['profiles']): string[] {
   const lines = ['How the agent worked, per run over every task (information, not scored; the baseline in parentheses):', '',
-    '| Model | Runs | Model steps | Input tokens | Output tokens | `eval` share of tool calls |', '| --- | --- | --- | --- | --- | --- |'];
+    '| Model | Runs | Model steps | Input tokens | Output tokens | Cache hit | Mean wall | Mean cost (USD) | `eval` share of tool calls |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- |'];
 
   for (const { model, baseline: before, candidate: after } of profiled) {
     const cell = (value: (side: AgentProfile) => string) => `${value(after)}${before === null ? '' : ` (${value(before)})`}`;
     const share = (side: AgentProfile) => side.evalCallShare === null ? '\u2014' : `${(side.evalCallShare * 100).toFixed(0)}%`;
 
     lines.push(`| ${[model, String(after.runs), cell((side) => side.meanModelTurns.toFixed(1)),
-      cell((side) => tokens(side.meanInputTokens)), cell((side) => tokens(side.meanOutputTokens)), cell(share)].join(' | ')} |`);
+      cell((side) => side.meanInputTokens === null ? '—' : tokens(side.meanInputTokens)), cell((side) => tokens(side.meanOutputTokens)),
+      cell((side) => rate(side.cacheHitRate)), cell((side) => seconds(side.meanWallTimeMs)), cell((side) => usd(side.meanCostUsd)), cell(share)].join(' | ')} |`);
   }
 
   return lines;
@@ -638,9 +736,11 @@ export function renderEvalComparison(comparison: EvalComparison): string {
 
   return [
     ...header,
+    ...totalsTable(comparison.totals), '',
     ...SCORE_TABLE,
     ...comparison.rows.map((row) => scoreRow(row, shared)), '',
     WAITS_NOTE, '',
+    METRICS_NOTE, '',
     ...profileTable(comparison.profiles), '',
     ...comparison.rows.flatMap((row) => failureSection(row, shared)),
   ].join('\n');

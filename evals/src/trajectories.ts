@@ -5,7 +5,7 @@ import { basename } from 'node:path';
 import * as v from 'valibot';
 import type { JsonValue } from '@kinu.run/core';
 import { redact } from './redact';
-import { parseResults, trials, type HarnessRun, type TranscriptEntry } from './results';
+import { parseResults, trials, type HarnessRun, type StepUsage, type TranscriptEntry } from './results';
 
 const LINE_LIMIT = 1_900;
 
@@ -53,6 +53,18 @@ function entry(event: TranscriptEntry): string {
   }
 }
 
+function count(tokens: number | null | undefined): string {
+  return tokens === null || tokens === undefined ? '—' : String(tokens);
+}
+
+function stepTokens(step: StepUsage): string {
+  const uncached = step.inputTokens === null || step.cacheReadTokens === null || step.cacheWriteTokens === null
+    ? null : step.inputTokens - step.cacheReadTokens - step.cacheWriteTokens;
+
+  return `- Run ${value(step.runId)}, step ${String(step.stepIndex + 1)}: ${count(uncached)} uncached · `
+    + `${count(step.cacheReadTokens)} cache read · ${count(step.cacheWriteTokens)} cache write`;
+}
+
 /** One trial's section: its checks turn by turn, its errors, and its whole transcript. */
 export function renderTrial(run: HarnessRun, verdict: { status: 'passed' | 'failed'; durationMs: number }): string {
   const { taskId, arm } = run.session.metadata;
@@ -63,7 +75,10 @@ export function renderTrial(run: HarnessRun, verdict: { status: 'passed' | 'fail
       + `(${(verdict.durationMs / 60_000).toFixed(1)} min)`,
     '',
     `Model steps ${String(run.output.metrics.modelTurns)} \u00b7 tool calls ${String(run.output.metrics.toolCalls)} \u00b7 `
-      + `tool errors ${String(run.output.metrics.toolErrors)}${cost === undefined ? '' : ` \u00b7 cost $${cost.toFixed(4)}`}`,
+      + `tool errors ${String(run.output.metrics.toolErrors)} · trial cost ${cost === undefined ? '—' : `$${cost.toFixed(4)}`} `
+      + `· wall time ${(verdict.durationMs / 1000).toFixed(1)} s`,
+    `Prompt tokens ${count(run.usage.inputTokens)} · cache read ${count(run.usage.metadata.cacheReadTokens)} `
+      + `· cache write ${count(run.usage.metadata.cacheWriteTokens)}`,
   ];
 
   for (const [index, { outcome, checks }] of run.output.turns.entries()) {
@@ -76,6 +91,10 @@ export function renderTrial(run: HarnessRun, verdict: { status: 'passed' | 'fail
 
   if (run.errors.length > 0) {
     lines.push('', 'Errors:', ...run.errors.map((error) => `- ${error.name}: ${value(error.message)}`));
+  }
+
+  if (run.usage.metadata.steps.length > 0) {
+    lines.push('', '### Prompt tokens by model step', '', ...run.usage.metadata.steps.map(stepTokens));
   }
 
   lines.push('', '### Transcript', '', run.session.events.map(entry).join('\n\n'));
