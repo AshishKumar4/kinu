@@ -118,7 +118,7 @@ Over-engineering that cost CPU, storage or latency and delivered nothing is name
 - No catch discards its error: do not catch; or wrap and rethrow with `cause`; or handle a domain value and say so. One catch spans one condition. Ask (`tableExists`, `PRAGMA`) instead of catching; no DDL in a catch; no production catch for a test-only condition. `tolerate(op, 'enoent')` / `classify({ cause })` from `@kinu.run/core/obs` for expected absences.
 - Never log a secret or an object you have not looked inside; `ReservedLogField` makes that a compile error. Every log carries a stable dotted event name. `toKinuError` requires an `otherwise`; unknown causes are values, not guessed codes.
 - Executor commands return `CommandResult` (output or a structured refusal via `commandResult`/`refusalOf`); native tool failures use the SDK error channel through `ToolOutcome`. See `docs/OBSERVABILITY.md`.
-- No elapsed deadlines on LLM, turn, delegation, swarm, or compaction work; work ends on completion, definitive failure, or cancellation.
+- No elapsed deadlines on LLM, turn, delegation, swarm, or compaction work; work ends on completion, definitive failure, or cancellation. A stream that sends nothing for `PLATFORM_CATALOG['provider.stream.idle_ms']` fails as a provider failure (owner, 2026-10-01): silence re-armed by every chunk, never a total-time limit.
 
 ## Code Style
 - TypeScript strict, ES2022, ESNext modules, bundler resolution, `verbatimModuleSyntax`. Relative imports carry no extension (`tools/oxlint/anti-slop/**`, `scripts/sources.ts` and `scripts/syntax.ts` run under raw Node and keep `.ts`; `import-extension.gate.test.ts` pins that closure). Extensions only for real `.json`/`.mjs`/`.cjs`/`.js` files.
