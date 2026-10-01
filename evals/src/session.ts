@@ -688,10 +688,13 @@ const InspectionAnswerSchema = v.variant('view', [
 
 export type InspectionAnswer = v.InferOutput<typeof InspectionAnswerSchema>;
 
-/** The work board's owners and their task titles (`listWorkspaceWork`); an owner's `path` is absent on 2f660875cc. */
+/** The work board's owners and their tasks (`listWorkspaceWork`); an owner's `path` is absent on 2f660875cc. */
 const WorkEntrySchema = v.object({
   owner: v.object({ name: v.string(), path: v.optional(v.nullable(v.array(v.string()))) }),
-  tasks: v.array(v.object({ title: v.string(), subtasks: v.optional(v.array(v.object({ title: v.string() })), []) })),
+  tasks: v.array(v.object({
+    title: v.string(), status: v.string(),
+    subtasks: v.optional(v.array(v.object({ title: v.string(), status: v.string() })), []),
+  })),
 });
 
 const WorkBoardSchema = v.object({ plans: v.array(WorkEntrySchema), tasks: v.array(WorkEntrySchema) });

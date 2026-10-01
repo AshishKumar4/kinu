@@ -97,6 +97,7 @@ const AFTER_CI_SUITES = {
   'evals/tasks/order-book.eval.ts': 'bun run evals',
   'evals/tasks/request-logs.eval.ts': 'bun run evals',
   'evals/tasks/site-preview.eval.ts': 'bun run evals',
+  'evals/tasks/true-myth-combinators.eval.ts': 'bun run evals',
   'scripts/deadline-capability.test.ts': 'bun test --timeout=0 scripts/deadline-capability.test.ts',
   'tests/browser/live-app-layout.test.ts': 'bun test --timeout=0 tests/browser/live-app-layout.test.ts',
   'tests/browser/live-app-plans.test.ts': 'bun test --timeout=0 tests/browser/live-app-plans.test.ts',

@@ -22,6 +22,7 @@ function session(methods: Record<string, (input: JsonValue) => JsonValue>): Veri
     workspaceWork: () => Promise.reject(new Error('no work board here')),
     inspect: () => Promise.reject(new Error('no inspector here')),
     exposedPorts: () => Promise.resolve([]),
+    execute: () => Promise.reject(new Error('no executor here')),
   };
 }
 

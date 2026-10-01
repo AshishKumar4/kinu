@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import { JsonValueSchema, projectJsonValue, type JsonValue, type SubordinateInspectionRequest } from '@kinu.run/core';
-import type { InspectionAnswer, WorkBoard } from './session';
+import type { InspectionAnswer, PublicExecutorResult, WorkBoard } from './session';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER, TRANSIENT_PLATFORM_ERRORS } from '@kinu.run/test-utils';
 import { redact, redactJson } from './redact';
@@ -30,7 +30,23 @@ export type VerifierSession = {
   workspaceWork(): Promise<WorkBoard>;
   inspect(request: SubordinateInspectionRequest): Promise<InspectionAnswer>;
   exposedPorts(executor: string): Promise<readonly { port: number; url: string }[]>;
+  execute(executor: string, command: string): Promise<PublicExecutorResult>;
 };
+
+/** A helper and its runs, as the inspector lists them: how each run ended, and the message that started it. */
+export type HelperWork = { name: string; status: string; runs: { status: string | null; userMessage: string | null }[] };
+
+/**
+ * The helpers that finished the work naming `subject`: a message naming it started one of their runs, and a run of
+ * their own completed. Told is not done: on 2026-10-01 every helper's model call on staging was refused, the lead
+ * did the helpers' work itself, and the helpers' transcripts still held the work they were given.
+ */
+export function finishedWork(helpers: readonly HelperWork[], subject: string): string[] {
+  return helpers
+    .filter((helper) => helper.runs.some((run) => run.status === 'completed')
+      && helper.runs.some((run) => (run.userMessage ?? '').includes(subject)))
+    .map((helper) => helper.name);
+}
 
 /** What a check saw: JSON-like data, projected to JSON when it is recorded. */
 export type Evidence = string | number | boolean | null | undefined | readonly Evidence[] | { readonly [key: string]: Evidence };
@@ -222,9 +238,30 @@ export class EvalVerifier {
     }
   }
 
+  /** Every helper the lead hired, with its runs. */
+  async helperWork(): Promise<HelperWork[]> {
+    return Promise.all((await this.helpers()).map(async (helper) => ({
+      name: helper.name, status: helper.status, runs: await this.runsOf(helper.name),
+    })));
+  }
+
+  /**
+   * The lead's own tasks and their subtasks, in one list. Its board entries are those whose owner's path is empty,
+   * or, on a build whose owners carry no path, whose owner is none of its helpers.
+   */
+  async leadTasks(): Promise<{ title: string; status: string }[]> {
+    const [work, helpers] = await Promise.all([this.workspaceWork(), this.helpers()]);
+    const helperNames = new Set(helpers.map((helper) => helper.name));
+
+    return [...work.plans, ...work.tasks]
+      .filter((entry) => (entry.owner.path === undefined ? !helperNames.has(entry.owner.name) : entry.owner.path === null || entry.owner.path.length === 0))
+      .flatMap((entry) => entry.tasks.flatMap((task) => [task, ...task.subtasks]))
+      .map(({ title, status }) => ({ title, status }));
+  }
+
   /** One helper's runs as its inspector lists them: how each ended, and the message that started it. */
-  async runsOf(helper: string): Promise<{ status: string | null; userMessage: string | null }[]> {
-    const runs: { status: string | null; userMessage: string | null }[] = [];
+  async runsOf(helper: string): Promise<HelperWork['runs']> {
+    const runs: HelperWork['runs'] = [];
 
     for (let cursor: { after: string } | undefined; ;) {
       const answer = await this.#session.inspect({ path: [helper], view: 'runs', page: cursor === undefined ? {} : { cursor } });
@@ -240,6 +277,19 @@ export class EvalVerifier {
   /** The preview addresses an executor serves, as the ports panel lists them. */
   previews(executor: string): Promise<readonly { port: number; url: string }[]> {
     return this.#session.exposedPorts(executor);
+  }
+
+  /**
+   * One command on an executor, the call the Env pane makes: what it printed. A refusal, a non-zero exit among
+   * them, throws with the product's words, so the check that ran it fails with them.
+   */
+  async execute(executor: string, command: string): Promise<string> {
+    const answer = await this.#session.execute(executor, command);
+    const refused = answer.refusal?.error ?? answer.error;
+
+    if (refused !== undefined) throw new Error(`${executor} refused the command: ${refused}`);
+
+    return answer.stdout ?? '';
   }
 
   /** A preview opened the way a person's browser opens it: no credential, the status and the page. */

@@ -2,7 +2,7 @@ import * as v from 'valibot';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 import { defineTaskEval } from '../src/eval';
 import { defineEvalTask, type SeedFile } from '../src/task';
-import { matchesReference, type EvalVerifier, type Script, type SlateClient } from '../src/verifier';
+import { finishedWork, matchesReference, type EvalVerifier, type Script, type SlateClient } from '../src/verifier';
 import { Seeded } from './seeded';
 
 // A studio's launch week, worked the way its lead would: two tallies handed to helpers, launch day
@@ -262,22 +262,9 @@ const task = defineEvalTask({
 Tell me when all three are done.`,
     verify: async (verifier) => {
       await verifier.check('two-helpers-each-finished-a-tally', async () => {
-        const helpers = await verifier.helpers();
-
-        const worked = await Promise.all(helpers.map(async (helper) => ({
-          name: helper.name, status: helper.status, runs: await verifier.runsOf(helper.name),
-        })));
-
-        // Told is not done: a helper counts for a tally it was given only when a run of its own completed. On
-        // 2026-10-01 every helper's model call on staging was refused, the lead wrote both tallies itself, and the
-        // helpers' transcripts still held the tallies they were given.
-        const finished = (file: string) => worked
-          .filter((helper) => helper.runs.some((run) => run.status === 'completed')
-            && helper.runs.some((run) => (run.userMessage ?? '').includes(file)))
-          .map((helper) => helper.name);
-
-        const counters = finished('signups-by-country.json');
-        const averagers = finished('ratings-by-theme.json');
+        const worked = await verifier.helperWork();
+        const counters = finishedWork(worked, 'signups-by-country.json');
+        const averagers = finishedWork(worked, 'ratings-by-theme.json');
 
         return {
           pass: counters.some((counter) => averagers.some((averager) => averager !== counter)),
@@ -304,14 +291,7 @@ Tell me when all three are done.`,
       });
 
       await verifier.check('launch-day-is-on-the-task-board', async () => {
-        const [work, helpers] = await Promise.all([verifier.workspaceWork(), verifier.helpers()]);
-        const helperNames = new Set(helpers.map((helper) => helper.name));
-
-        // The lead's own board: its path is empty, or, on a build whose owners carry no path, it is none of its helpers.
-        const titles = [...work.plans, ...work.tasks]
-          .filter((entry) => (entry.owner.path === undefined ? !helperNames.has(entry.owner.name) : entry.owner.path === null || entry.owner.path.length === 0))
-          .flatMap((entry) => entry.tasks.flatMap((item) => [item.title, ...item.subtasks.map((subtask) => subtask.title)]));
-
+        const titles = (await verifier.leadTasks()).map((item) => item.title);
         const missing = CHECKLIST.filter((item) => !titles.some((title) => plainTitle(title) === plainTitle(item)));
 
         return { pass: missing.length === 0, evidence: { missing, titles } };
