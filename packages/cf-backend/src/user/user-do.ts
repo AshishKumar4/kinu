@@ -165,7 +165,7 @@ import {
   builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, invitedEmail, isBuiltinOwner,
   issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge, reserveAttempt, clearAttempts, replacePassword, applyReset, listBuiltinAccounts, resetAccount,
   type Admission, type AttemptBucket, type BuiltinSql, type ChallengePurpose, type Grant, type NewBuiltinAccount, type NewInvite, type PasskeyAccount,
-  type PasswordAccount, type PasswordHash, type PendingChallenge, type ListedAccount, type Reset, type ResetAccount,
+  type PasswordAccount, type PasswordHash, type PendingChallenge, type ListedAccount, type Reset, type SigningAccount,
 } from '@kinu.run/core/identity';
 import {
   CLOUDFLARE_AI_GATEWAY_CRED_KEY,
@@ -1425,15 +1425,16 @@ export class UserDO extends Agent<Env> {
     caller: UserCaller,
     tokenHash: string,
     expiresAt: number,
-    identity: BrowserSessionIdentity,
+    identity: BrowserSessionIdentity & { credentialGeneration?: number },
   ): Promise<void> {
     await this.requireTier(caller, 'auth_tokens');
     this.sqlx(
       `INSERT INTO user_browser_sessions
          (token_hash, expires_at, email, display_name, provider, provider_sub, auth_time)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       SELECT ?, ?, ?, ?, ?, ?, ?
+        WHERE ? >= COALESCE((SELECT generation FROM user_credential_floor WHERE id = 1), 0)`,
       tokenHash, expiresAt,
-      identity.email, identity.displayName, identity.provider, identity.sub, identity.authTime,
+      identity.email, identity.displayName, identity.provider, identity.sub, identity.authTime, identity.credentialGeneration ?? 0,
     );
   }
 
@@ -1518,13 +1519,13 @@ export class UserDO extends Agent<Env> {
     replacePassword(this.builtinSql(), userId, password);
   }
 
-  async builtinResetAccount(caller: UserCaller, grant: Grant): Promise<ResetAccount | null> {
+  async builtinResetAccount(caller: UserCaller, grant: Grant): Promise<SigningAccount | null> {
     await this.requireTier(caller, 'builtin_accounts');
 
     return resetAccount(this.builtinSql(), grant, Date.now());
   }
 
-  async builtinApplyReset(caller: UserCaller, reset: Reset): Promise<ResetAccount | null> {
+  async builtinApplyReset(caller: UserCaller, reset: Reset): Promise<SigningAccount | null> {
     return this.builtinWrite(caller, (sql, now) => applyReset(sql, reset, now));
   }
 
@@ -1719,11 +1720,21 @@ export class UserDO extends Agent<Env> {
   /** Revoke every active CLI session token, for orphans the caller cannot name.
    * One generation rise covers every socket at once. */
   /** Every browser session and CLI token of this account ends: a credential reset leaves nothing signed in. */
-  async endAllSessions(caller: UserCaller): Promise<void> {
+  /** Ends every session, and refuses any of a lower generation. */
+  async raiseCredentialFloor(caller: UserCaller, generation: number): Promise<void> {
     await this.requireTier(caller, 'auth_tokens');
-    const sessions = this.sqlx<{ token_hash: string }>(`SELECT token_hash FROM user_browser_sessions`).map((row) => row.token_hash);
 
-    this.sqlx(`DELETE FROM user_browser_sessions`);
+    const sessions = this.ctx.storage.transactionSync(() => {
+      this.sqlx(`INSERT INTO user_credential_floor (id, generation) VALUES (1, ?)
+        ON CONFLICT (id) DO UPDATE SET generation = MAX(generation, excluded.generation)`, generation);
+
+      const ended = this.sqlx<{ token_hash: string }>(`SELECT token_hash FROM user_browser_sessions`).map((row) => row.token_hash);
+
+      this.sqlx(`DELETE FROM user_browser_sessions`);
+
+      return ended;
+    });
+
     await this.revokeAllCliTokens(caller);
 
     for (const tokenHash of sessions) await this.pushSessionSocketRevocation(tokenHash);

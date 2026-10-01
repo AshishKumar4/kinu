@@ -202,7 +202,7 @@ const GATED_CALLS: GatedCall[] = [
     run: (u, c) => u.verifySocketSession(c, TOKEN_HASH),
   },
   { capability: 'auth_tokens', name: 'revokeAllCliTokens', run: (u, c) => u.revokeAllCliTokens(c) },
-  { capability: 'auth_tokens', name: 'endAllSessions', run: (u, c) => u.endAllSessions(c) },
+  { capability: 'auth_tokens', name: 'raiseCredentialFloor', run: (u, c) => u.raiseCredentialFloor(c, 1) },
   {
     capability: 'credentials.model',
     name: 'getCredentialsRevision',
@@ -303,7 +303,7 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
     run: (u, c) => u.builtinReplacePassword(c, USER_ID, { hash: 'h', salt: 's', iterations: 1 }),
   },
   { capability: 'builtin_accounts', name: 'builtinResetAccount', run: (u, c) => u.builtinResetAccount(c, { kind: 'none' }) },
-  { capability: 'builtin_accounts', name: 'builtinApplyReset', run: (u, c) => u.builtinApplyReset(c, { grant: { kind: 'none' } }) },
+  { capability: 'builtin_accounts', name: 'builtinApplyReset', run: (u, c) => u.builtinApplyReset(c, { grant: { kind: 'none' }, ended: 1 }) },
   { capability: 'builtin_accounts', name: 'builtinListAccounts', run: (u, c) => u.builtinListAccounts(c) },
   { capability: 'builtin_accounts', name: 'builtinClearAttempts', run: (u, c) => u.builtinClearAttempts(c, ['k']) },
   { capability: 'builtin_accounts', name: 'builtinInvitedEmail', run: (u, c) => u.builtinInvitedEmail(c, 'h') },

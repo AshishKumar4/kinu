@@ -41,9 +41,17 @@ function deployment() {
     return created;
   };
 
+  const unreachable = new Set<string>();
+
+  const reach = (name: string): TestUserDO['userDO'] => {
+    if (unreachable.has(name)) throw new Error(`${name} is unreachable`);
+
+    return objectFor(name).userDO;
+  };
+
   const env: BuiltinAuthEnv<string> = {
     AUTH_KV: makeKv(),
-    UserDO: { idFromName: (name) => name, get: (name) => objectFor(name).userDO },
+    UserDO: { idFromName: (name) => name, get: reach },
     OrchestratorAgent: { idFromName: (name) => name, get: () => workspaceObject({}) },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     KINU_SETUP_TOKEN: SETUP_TOKEN,
@@ -78,7 +86,7 @@ function deployment() {
     return answer.text();
   };
 
-  return { env, page, post, register, registerOwner };
+  return { env, objectFor, page, post, register, registerOwner, unreachable };
 }
 
 const ErrorSchema = v.object({ error: v.string() });
@@ -197,6 +205,51 @@ describe('a reset link', () => {
     expect(await verifySession(env, sessionOf(used))).not.toBeNull();
     expect((await post('/api/auth/builtin/password/sign-in', { email: 'member@example.com', password: 'a brand new password' })).status).toBe(200);
     expect((await post('/api/auth/builtin/password/sign-in', { email: 'member@example.com', password: 'a long enough password' })).status).toBe(401);
+  });
+});
+
+describe('a reset and the sessions it ends are one transition', () => {
+  const OWNER = 'owner@example.com';
+  const reset = (post: ReturnType<typeof deployment>['post'], password: string) => post('/api/auth/builtin/password/reset', { setup: SETUP_TOKEN, password });
+  const signIn = (post: ReturnType<typeof deployment>['post'], password: string) => post('/api/auth/builtin/password/sign-in', { email: OWNER, password });
+
+  test("a reset whose session ending fails never leaves an old session beside the new password, and can be retried", async () => {
+    const { env, post, registerOwner, unreachable } = deployment();
+    const before = sessionOf(await registerOwner(OWNER));
+    const owner = await deriveBuiltinUserId(OWNER);
+
+    unreachable.add(owner);
+    const [failed] = await Promise.allSettled([reset(post, 'a brand new password')]);
+
+    unreachable.clear();
+    const newPasswordWorks = (await signIn(post, 'a brand new password')).status === 200;
+
+    expect(failed?.status === 'fulfilled' && failed.value.status === 200).toBe(false);
+    expect(newPasswordWorks && await verifySession(env, before) !== null).toBe(false);
+    expect((await reset(post, 'a brand new password')).status).toBe(200);
+    expect(await verifySession(env, before)).toBeNull();
+  });
+
+  test('a sign-in that read the old password before a reset does not outlive the reset', async () => {
+    const { env, objectFor, post, registerOwner } = deployment();
+
+    await registerOwner(OWNER);
+    const target = objectFor(await deriveBuiltinUserId(OWNER)).userDO;
+    const register = target.registerBrowserSession.bind(target);
+    let after: Response | null = null;
+
+    target.registerBrowserSession = async (...args) => {
+      target.registerBrowserSession = register;
+      after = await reset(post, 'a brand new password');
+
+      return register(...args);
+    };
+
+    const racing = await signIn(post, 'a long enough password');
+
+    expect(after).not.toBeNull();
+    expect(await verifySession(env, sessionOf(after ?? racing))).not.toBeNull();
+    expect(await verifySession(env, sessionOf(racing))).toBeNull();
   });
 });
 

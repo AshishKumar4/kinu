@@ -59,6 +59,7 @@ export function initBuiltinAccounts(sql: BuiltinSql): void {
     password_hash TEXT,
     password_salt TEXT,
     password_iterations INTEGER,
+    generation INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
   )`;
   void sql`CREATE UNIQUE INDEX IF NOT EXISTS builtin_accounts_one_owner ON builtin_accounts (role) WHERE role = 'owner'`;
@@ -165,44 +166,46 @@ export function registerBuiltinAccount(sql: BuiltinSql, account: NewBuiltinAccou
   return admission;
 }
 
-export interface PasswordAccount extends PasswordHash {
+export interface SigningAccount {
   readonly userId: string;
   readonly email: string;
+  readonly generation: number;
 }
 
+export interface PasswordAccount extends PasswordHash, SigningAccount {}
+
 const PasswordRowSchema = v.object({
-  user_id: v.string(), email: v.string(), password_hash: v.string(), password_salt: v.string(), password_iterations: v.number(),
+  user_id: v.string(), email: v.string(), password_hash: v.string(), password_salt: v.string(), password_iterations: v.number(), generation: v.number(),
 });
 
 /** Null when no account has this email, or it signs in only with a passkey. */
 export function findPasswordAccount(sql: BuiltinSql, email: string): PasswordAccount | null {
-  const parsed = v.safeParse(PasswordRowSchema, sql`SELECT user_id, email, password_hash, password_salt, password_iterations
+  const parsed = v.safeParse(PasswordRowSchema, sql`SELECT user_id, email, password_hash, password_salt, password_iterations, generation
     FROM builtin_accounts WHERE email = ${email} AND password_hash IS NOT NULL`[0]);
 
   if (!parsed.success) return null;
   const row = parsed.output;
 
-  return { userId: row.user_id, email: row.email, hash: row.password_hash, salt: row.password_salt, iterations: row.password_iterations };
+  return {
+    userId: row.user_id, email: row.email, generation: row.generation, hash: row.password_hash, salt: row.password_salt, iterations: row.password_iterations,
+  };
 }
 
-export interface PasskeyAccount extends StoredPasskey {
-  readonly userId: string;
-  readonly email: string;
-}
+export interface PasskeyAccount extends StoredPasskey, SigningAccount {}
 
 const PasskeyRowSchema = v.object({
-  user_id: v.string(), email: v.string(), public_key: v.string(), counter: v.number(),
+  user_id: v.string(), email: v.string(), generation: v.number(), public_key: v.string(), counter: v.number(),
   transports: v.pipe(v.string(), v.parseJson(), v.array(v.string())),
 });
 
 export function findPasskeyAccount(sql: BuiltinSql, credentialId: string): PasskeyAccount | null {
-  const parsed = v.safeParse(PasskeyRowSchema, sql`SELECT p.user_id, a.email, p.public_key, p.counter, p.transports
+  const parsed = v.safeParse(PasskeyRowSchema, sql`SELECT p.user_id, a.email, a.generation, p.public_key, p.counter, p.transports
     FROM builtin_passkeys p JOIN builtin_accounts a ON a.user_id = p.user_id WHERE p.credential_id = ${credentialId}`[0]);
 
   if (!parsed.success) return null;
   const row = parsed.output;
 
-  return { userId: row.user_id, email: row.email, credentialId, publicKey: row.public_key, counter: row.counter, transports: row.transports };
+  return { userId: row.user_id, email: row.email, generation: row.generation, credentialId, publicKey: row.public_key, counter: row.counter, transports: row.transports };
 }
 
 export function recordPasskeyUse(sql: BuiltinSql, credentialId: string, counter: number): void {
@@ -296,41 +299,37 @@ export function replacePassword(sql: BuiltinSql, userId: string, password: Passw
     password_iterations = ${password.iterations} WHERE user_id = ${userId}`;
 }
 
-export interface ResetAccount {
-  readonly userId: string;
-  readonly email: string;
-}
+const AccountRowSchema = v.object({ user_id: v.string(), email: v.string(), generation: v.number() });
 
-const AccountRowSchema = v.object({ user_id: v.string(), email: v.string() });
-
-function accountWhere(rows: unknown[]): ResetAccount | null {
+function accountWhere(rows: unknown[]): SigningAccount | null {
   const parsed = v.safeParse(AccountRowSchema, rows[0]);
 
-  return parsed.success ? { userId: parsed.output.user_id, email: parsed.output.email } : null;
+  return parsed.success ? { userId: parsed.output.user_id, email: parsed.output.email, generation: parsed.output.generation } : null;
 }
 
-export function resetAccount(sql: BuiltinSql, grant: Grant, now: number): ResetAccount | null {
-  if (grant.kind === 'setup') return accountWhere(sql`SELECT user_id, email FROM builtin_accounts WHERE role = 'owner'`);
+export function resetAccount(sql: BuiltinSql, grant: Grant, now: number): SigningAccount | null {
+  if (grant.kind === 'setup') return accountWhere(sql`SELECT user_id, email, generation FROM builtin_accounts WHERE role = 'owner'`);
   const email = grant.kind === 'reset' ? invitedEmail(sql, grant.hash, now, 'reset') : null;
 
-  return email === null ? null : accountWhere(sql`SELECT user_id, email FROM builtin_accounts WHERE email = ${email}`);
+  return email === null ? null : accountWhere(sql`SELECT user_id, email, generation FROM builtin_accounts WHERE email = ${email}`);
 }
 
 export interface Reset {
   readonly grant: Grant;
+  readonly ended: number;
   readonly password?: PasswordHash;
   readonly passkey?: StoredPasskey;
 }
 
-export function applyReset(sql: BuiltinSql, reset: Reset, now: number): ResetAccount | null {
+export function applyReset(sql: BuiltinSql, reset: Reset, now: number): SigningAccount | null {
   const account = resetAccount(sql, reset.grant, now);
 
-  if (account === null) return null;
+  if (account === null || account.generation + 1 !== reset.ended) return null;
 
   if (reset.grant.kind === 'reset') spendLink(sql, reset.grant.hash, 'reset', now);
   void sql`DELETE FROM builtin_passkeys WHERE user_id = ${account.userId}`;
   void sql`UPDATE builtin_accounts SET password_hash = ${reset.password?.hash ?? null}, password_salt = ${reset.password?.salt ?? null},
-    password_iterations = ${reset.password?.iterations ?? null} WHERE user_id = ${account.userId}`;
+    password_iterations = ${reset.password?.iterations ?? null}, generation = ${reset.ended} WHERE user_id = ${account.userId}`;
 
   if (reset.passkey) {
     const { credentialId, publicKey, counter, transports } = reset.passkey;
@@ -339,7 +338,7 @@ export function applyReset(sql: BuiltinSql, reset: Reset, now: number): ResetAcc
         VALUES (${credentialId}, ${account.userId}, ${publicKey}, ${counter}, ${JSON.stringify(transports)}, ${now})`;
   }
 
-  return account;
+  return { ...account, generation: reset.ended };
 }
 
 export interface ListedAccount {
