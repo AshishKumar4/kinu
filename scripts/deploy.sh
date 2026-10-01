@@ -179,6 +179,24 @@ if [ "$KINU_PROMOTE" = "1" ]; then
 else
   KINU_ENV="staging"
 fi
+
+# ONE DEPLOY OF AN ENVIRONMENT AT A TIME on this machine (L21): two would race
+# on one Worker, one record and one report index, and continuous staging
+# (scripts/staging-loop.ts) starts a deploy only when none runs. The script runs
+# again under `flock`, which holds the environment's lock for the whole run and
+# drops it however the run ends; with `-o` nothing the deploy starts inherits
+# it, so a process it leaves behind cannot keep it. KINU_DEPLOY_LOCKED names the
+# environment that re-run holds. A deploy that finds the lock held does nothing
+# and exits 75, which the loop reads as "wait for that one".
+if [ "${KINU_DEPLOY_LOCKED:-}" != "$KINU_ENV" ]; then
+  KINU_DEPLOY_LOCK="${XDG_RUNTIME_DIR:-/tmp}/kinu-deploy-$KINU_ENV.lock"
+  KINU_DEPLOY_LOCKED="$KINU_ENV" flock -n -o -E 75 "$KINU_DEPLOY_LOCK" "$BASH" "$0" "$@"
+  status=$?
+  if [ "$status" -eq 75 ]; then
+    echo -e "${RED}Another $KINU_ENV deploy is running on this machine ($KINU_DEPLOY_LOCK is held), so this one did nothing.${NC}"
+  fi
+  exit "$status"
+fi
 # The environment `gate:infra` checks before the upload and step 5 after it,
 # beside the command like the phase, and ALWAYS ASSIGNED for the same reason:
 # an ambient value must never point a staging deploy's account check at

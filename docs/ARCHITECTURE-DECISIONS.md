@@ -1250,6 +1250,17 @@ with 19 uncaught exceptions in SupervisorRPC; alarms peaked at 16 in an
 object-hour, under the 30 a loop takes. A canceled or aborted invocation is a
 caller going away and is not counted.
 
+L21. Continuous staging: the release branch's newest tip is deployed whenever it
+moves and no staging deploy runs. Decided 2026-09-30 by the owner, the design
+by Main. A systemd path unit on the branch's remote-tracking ref (it moves
+when the release is pushed) starts a oneshot that deploys from a dedicated
+clean worktree and reads the tip again when each deploy ends, so a tip passed
+meanwhile is dropped and the newest is never lost. Measured 2026-10-01 with a
+real push: pushes during a run start exactly one more run, and a push onto a
+packed ref still fires. deploy.sh holds a lock per environment for its run
+(exit 75 when held), which is how "no deploy runs" is known, for a person's
+deploy as much as the loop's.
+
 ## Providers
 
 P1. The ChatGPT plan is Sign in with ChatGPT's open-source token sharing

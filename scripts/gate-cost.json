@@ -1004,15 +1004,15 @@
       "loadAtStart": 31.51,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/reset.test.ts scripts/prod-logs.test.ts": {
-      "wallSeconds": 58.01,
-      "cpuSeconds": 32.76,
-      "peakRssMb": 891.16,
-      "peakRunnable": 11,
-      "peakCpuThreads": 1.95,
-      "meanThreads": 0.56,
-      "samples": 241,
-      "loadAtStart": 46.77,
+    "bun test --timeout=0 scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/reset.test.ts scripts/prod-logs.test.ts scripts/staging-loop.test.ts": {
+      "wallSeconds": 49.33,
+      "cpuSeconds": 30.55,
+      "peakRssMb": 968.44,
+      "peakRunnable": 9,
+      "peakCpuThreads": 1.81,
+      "meanThreads": 0.62,
+      "samples": 209,
+      "loadAtStart": 41.23,
       "exit": 0
     }
   }
