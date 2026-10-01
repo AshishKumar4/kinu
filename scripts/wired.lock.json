@@ -310,7 +310,6 @@
   "packages/devbox/src/lifecycle.ts#scopesOverlap (unreached-export)",
   "packages/devbox/src/snapshot-chain.ts#archiveSizeCommand (unreached-export)",
   "packages/devbox/src/snapshot-chain.ts#metadataObjectKey (unreached-export)",
-  "packages/devbox/src/snapshot-chain.ts#publishCommand (unreached-export)",
   "packages/devbox/src/snapshot-chain.ts#shouldRebase (unreached-export)",
   "packages/devbox/src/snapshot-chain.ts#supersedeGeneration (unreached-export)",
   "packages/devbox/src/storage.ts#ATTACH_OUTCOME_KINDS (unreached-export)"
