@@ -28,7 +28,8 @@ import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
 import { delivered, deliveredInLedger, finalAnswer, taskHires, type TaskHire } from './delegation-observation';
-import { helperEvents, hirerHeard } from './hires';
+import { ROOT } from '../../evals/src/helper-address';
+import { helperRecord, hirerHeard } from './hires';
 import { openPublicSocket, type PublicSocket } from './public-socket';
 import {
   RELAY_MISSION, TREE_ASK as ASK, TREE_DEEP_WORD as DEEP, TREE_SHALLOW_WORD as SHALLOW, sayWordMission,
@@ -73,10 +74,11 @@ interface TreeRead {
 async function readTree(room: PublicSocket, top: readonly TaskHire[], history: readonly PublicMessage[]): Promise<TreeRead> {
   const relay = top.find((hire) => hire.mission === RELAY_MISSION);
   const shallow = top.find((hire) => hire.mission === sayWordMission(SHALLOW));
-  const relayEvents = relay === undefined ? [] : await helperEvents(room, [], relay.agent);
+  const relayRecord = relay === undefined ? null : await helperRecord(room, ROOT, relay.agent);
+  const relayEvents = relayRecord?.events ?? [];
   const [deep] = taskHires(relayEvents);
-  const deepAnswer = relay === undefined || deep === undefined ? '' : finalAnswer(await helperEvents(room, [relay.agent], deep.agent));
-  const shallowAnswer = shallow === undefined ? '' : finalAnswer(await helperEvents(room, [], shallow.agent));
+  const deepAnswer = relayRecord === null || deep === undefined ? '' : finalAnswer((await helperRecord(room, relayRecord.address, deep.agent)).events);
+  const shallowAnswer = shallow === undefined ? '' : finalAnswer((await helperRecord(room, ROOT, shallow.agent)).events);
 
   return { top, relay, shallow, deep, relayEvents, deepAnswer, shallowAnswer, history };
 }
