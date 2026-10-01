@@ -262,7 +262,7 @@ import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import type { ExposedPortList } from "@kinu.run/core";
 import {
-  terminalEffect, keyedScope, declareTerminalRoster, owesShadowTrial,
+  terminalEffect, keyedScope, declareTerminalRoster, owesShadowTrial, isDefinitiveTerminalFailure,
   branchesTerminalEffect,
   type OwedEffect, type OwedTerminalEffectsInput, type TerminalEffectTable, type TerminalTurnFacts,
   type TerminalTurnParts,
@@ -2656,7 +2656,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         otherwise: 'unavailable',
       });
 
-      if (failure.code === 'bad_input' || failure.code === 'missing') {
+      if (isDefinitiveTerminalFailure(failure.code)) {
         this.ctx.storage.transactionSync(() => { this.finishSleepTimeWindow(key); });
       }
 
@@ -3411,7 +3411,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
           span.fail(failure);
 
-          if (failure.code === 'bad_input' || failure.code === 'missing') {
+          if (isDefinitiveTerminalFailure(failure.code)) {
             this.logActivity('terminal_effect_abandoned', `memory compression failed: ${failure.message}, so it is not retried`);
           }
 

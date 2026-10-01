@@ -58,6 +58,10 @@ export const TERMINAL_EFFECT_RETRY_CEILING_MS = 600_000;
 /** A retry cannot repair a missing route, malformed request, or unusable model answer. */
 const DEFINITIVE_FAILURES: ReadonlySet<ErrorCode> = new Set(['missing', 'bad_input']);
 
+export function isDefinitiveTerminalFailure(code: ErrorCode): boolean {
+  return DEFINITIVE_FAILURES.has(code);
+}
+
 /** The owner reads an abandoned effect in the Activity log, by what it was doing. */
 const EFFECT_ACTIVITY: Partial<Record<TerminalEffectName, string>> = {
   sleep_time: 'memory compression', auto_title: 'naming the chat', auto_gepa: 'prompt tuning',
@@ -725,7 +729,7 @@ export class TerminalEffectLedger {
       const refused = providerRefusalCode({ cause: err });
       const code = refused ?? failure.code;
 
-      if (DEFINITIVE_FAILURES.has(code)) {
+      if (isDefinitiveTerminalFailure(code)) {
         const status = providerStatusOf({ cause: err });
         const detail = status === undefined ? failure.message : `the model provider answered HTTP ${String(status)}`;
         diagnostics.event('turn.terminal_effect_abandoned', { sequence: sequenceId, effect: row.key, attempts, code });

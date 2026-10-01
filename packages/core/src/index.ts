@@ -24,7 +24,7 @@ export {
   outputLimitContinuationTerminalEffect, taskReminderTerminalEffect,
   branchesTerminalEffect, turnRecordTerminalEffect,
   eventDrainTerminalEffect, shadowTrialTerminalEffect,
-  terminalEffectKey, keyedScope, TerminalEffectInterrupt,
+  terminalEffectKey, keyedScope, TerminalEffectInterrupt, isDefinitiveTerminalFailure,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
   RunEndReasonSchema,
   type TerminalEffect, type TerminalEffectTable, type TerminalEffectName,
