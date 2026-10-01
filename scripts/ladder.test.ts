@@ -94,6 +94,7 @@ const AFTER_CI_SUITES = {
   'evals/tasks/budget-board.eval.ts': 'bun run evals',
   'evals/tasks/chess.eval.ts': 'bun run evals',
   'evals/tasks/launch-prep.eval.ts': 'bun run evals',
+  'evals/tasks/memory-recall.eval.ts': 'bun run evals',
   'evals/tasks/order-book.eval.ts': 'bun run evals',
   'evals/tasks/request-logs.eval.ts': 'bun run evals',
   'evals/tasks/site-preview.eval.ts': 'bun run evals',

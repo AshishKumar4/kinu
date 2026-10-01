@@ -138,6 +138,57 @@ test('executor RPC decoding preserves refusal provenance and successful refusal-
   } finally { await session.teardown(); await server.stop(true); }
 });
 
+test('clearing a conversation waits for the clear the deployment tells another socket, not the sender', async () => {
+  const requested = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const connections = new Set<ServerWebSocket>();
+  let messages = [{ id: 'old', role: 'user', parts: [{ type: 'text', text: 'previous conversation' }] }];
+
+  const server = Bun.serve({
+    port: 0, hostname: '127.0.0.1',
+    fetch(request, upgrading) {
+      if (new URL(request.url).pathname.endsWith('/get-messages')) return Response.json(messages);
+
+      return socketOnly(request, upgrading);
+    },
+    websocket: {
+      open(socket) { connections.add(socket); },
+      close(socket) { connections.delete(socket); },
+      async message(socket, data) {
+        if (v.parse(v.object({ type: v.string() }), JSON.parse(data.toString())).type !== 'cf_agent_chat_clear') return;
+        requested.resolve();
+        await release.promise;
+        messages = [];
+
+        for (const peer of connections) {
+          if (peer !== socket) peer.send(JSON.stringify({ type: 'cf_agent_chat_clear' }));
+        }
+      },
+    },
+  });
+
+  const session = new KinuPublicSession({
+    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'fresh conversation',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  try {
+    let cleared = false;
+    const clear = session.clearConversation().then(() => { cleared = true; });
+
+    await requested.promise;
+    expect(await session.history()).toEqual([{ role: 'user', text: 'previous conversation' }]);
+    expect(cleared).toBe(false);
+    release.resolve();
+    await clear;
+    expect(await session.history()).toEqual([]);
+  } finally {
+    release.resolve();
+    await session.teardown();
+    await server.stop(true);
+  }
+});
+
 test('an rpc after the platform closed the idle socket redials and answers, never hangs', async () => {
   // The incident: the runtime deactivated the instance and closed the idle socket (1006); the next
   // rpc was written into the CLOSED socket, which discards a frame without an error, and waited

@@ -181,6 +181,15 @@ function outcomeOf(events: readonly RunEvent[], before: ReadonlySet<string>): Ev
  * many steps the turn's runs have recorded while it settles: a stream that dropped shows no more, and the ledger does.
  */
 async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: TrialTimeline, stepped: (steps: number) => void): Promise<EvalTurnResult> {
+  if (turn.fresh) {
+    await timeline.span('evict', async () => {
+      await session.abortActivation();
+      session.disconnect();
+      await session.connect();
+    });
+    await timeline.span('clear', () => session.clearConversation());
+  }
+
   await timeline.span('seed', async () => {
     for (const file of turn.seed ?? []) await session.writeFile(file.path, file.content);
   });
@@ -218,7 +227,9 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
   const verifiedAt = Date.now();
   const cut = cutButCompleted(events, before);
   const checks: EvalCheck[] = cut.length === 0 ? [] : [{ id: CUT_REPORTED_COMPLETED, pass: false, evidence: { runs: cut } }];
-  checks.push(...await timeline.span('verify', () => new EvalVerifier(session, replies).collect(turn.verify)));
+  const verify = turn.verify;
+
+  if (verify !== undefined) checks.push(...await timeline.span('verify', () => new EvalVerifier(session, replies).collect(verify)));
   const afterEviction = turn.verifyAfterEviction;
 
   if (afterEviction !== undefined && checks.every((check) => check.pass)) {
