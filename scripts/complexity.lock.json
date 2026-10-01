@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-01",
-  "files": 2927,
-  "functions": 73593,
+  "files": 2928,
+  "functions": 73616,
   "ceiling": 87,
   "line": 29,
   "inventory": [
@@ -238,10 +238,6 @@
       "complexity": 30
     },
     {
-      "key": "packages/core/src/chat.ts#ProviderCall.consume",
-      "complexity": 30
-    },
-    {
       "key": "packages/devbox/src/snapshot-chain.ts#snapshotChainStorage>checkpoint",
       "complexity": 30
     },
@@ -271,6 +267,10 @@
     },
     {
       "key": "packages/cli/src/tui/onboarding.tsx#GuidedOnboarding>useKeyboard",
+      "complexity": 29
+    },
+    {
+      "key": "packages/core/src/chat.ts#ProviderCall.consume",
       "complexity": 29
     },
     {

@@ -11,6 +11,7 @@ import type { MissionBudgetRefusal } from '../mission-budget';
 import type { HeadFileChangeSet } from '../types/heads';
 import type { Usage } from '../usage';
 import type { CallAccount } from '../providers/quota';
+import type { ProviderWaitInfo } from '../providers/types';
 import type { ToolOutcome } from '../types/tool-outcome';
 import type { WorkMode } from '../types/turn';
 import type {
@@ -147,7 +148,7 @@ export type RunEvent =
       /** 1-based; 0 for a pacer cooldown join before the first attempt. */
       attempt: number;
       status?: number;
-      source: 'header' | 'backoff' | 'cooldown';
+      source: ProviderWaitInfo['source'];
     })
   | (RunEventBase & { type: 'model_fallback'; from: string; to: string; reason: string })
   /** Null `tokens`: the next request could not be measured, so no true number exists. */

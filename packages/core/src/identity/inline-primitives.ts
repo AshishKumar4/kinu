@@ -34,7 +34,7 @@ const SqlBindingSchema = v.union([
 
 const watchers = new WeakMap<Pick<AgentDatabase, 'query'>, (query: string) => void>();
 
-/** `watch` hears each statement these adapters ran over `db`, as a Durable Object's `sql` would. */
+/** `watch` hears each statement these adapters ran over `db`. */
 export function watchStatements(db: Pick<AgentDatabase, 'query'>, watch: (query: string) => void): void {
   watchers.set(db, watch);
 }

@@ -15,7 +15,7 @@ import {
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
   type RunEventInput, type SubordinateInspectionAuthority, ConversationSearchStore, type ConversationRecall,
-  isSubordinateOrigin, sandboxIdForWorkspace,
+  isSubordinateOrigin,
 } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
@@ -2609,7 +2609,6 @@ export abstract class ActorAgent extends Agent<Env> {
       onSettled: (job) => {
         const notice = backgroundJobNotice(job);
         this.notifyOwner(notice.subject, notice.body);
-        this.sandboxUsed();
         this.detachOwned(() => this.servingMoved());
       },
       // Evict-resume (B6): re-drive from the durable checkpoint. Side-effecting kinds (eval / run)
@@ -2666,13 +2665,13 @@ export abstract class ActorAgent extends Agent<Env> {
 
   /**
    * Records which running job's command holds each exposed sandbox port when that can move (a port exposed or
-   * withdrawn, a job detached or settled), so a listing reads a row and never the box. Only a box this activation
-   * reached is asked, and one that is down is not read: the next exposure reads again.
+   * withdrawn, a job detached or settled), so a listing reads a row and never the box. A box that is down is not
+   * read: the next exposure reads again.
    */
   protected async servingMoved(): Promise<void> {
     const rt = this._rt;
 
-    if (rt?.sandboxReached() !== true) return;
+    if (rt === null) return;
     const handle = rt.sandboxHandle;
     const exposedPorts = rt.executionRouter?.getProvider('sandbox')?.listExposedPorts;
 
@@ -2682,16 +2681,6 @@ export abstract class ActorAgent extends Agent<Env> {
       exposedPorts: async () => (await exposedPorts()).map((row) => row.port),
       holders: (ports) => handle.portListeners(JOB_STAMP_ENV, ports),
     });
-  }
-
-  /** A turn's claim moving or a job settling is the box's use too, so it rests only once neither the
-   *  workspace nor a caller has used it for its idle window (devbox D56); the box never asks. Each notice
-   *  activates the box's object, so only a box this activation reached hears it. */
-  protected sandboxUsed(): void {
-    const namespace = this.env.KinuDevbox;
-
-    if (namespace === undefined || this._rt?.sandboxReached() !== true) return;
-    this.detachOwned(async () => { await namespace.getByName(sandboxIdForWorkspace(this.name)).noteHostWork(); });
   }
   /** Controllers for foreground long tools; once detached, BackgroundJobRunner owns cancellation. */
   protected readonly _activeToolControllers = new Set<AbortController>();

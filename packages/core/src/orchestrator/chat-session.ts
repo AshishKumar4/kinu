@@ -215,7 +215,7 @@ export interface ChatSessionPorts {
   driverGate(): Refusal | null;
   /** Called at the turn's synchronous open; soonest-wins. A backend whose process is the wake arms nothing. */
   armTurnWake(atMs: number): Promise<void>;
-  /** A turn is owed until {@link quiet}. */
+  /** Owed until {@link quiet}. */
   owed?(): void;
   /** The queue drained and no turn runs. */
   quiet?(): void;

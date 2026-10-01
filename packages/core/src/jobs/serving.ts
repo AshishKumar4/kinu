@@ -5,7 +5,6 @@ export interface PortHolders {
   holders(ports: readonly number[]): Promise<readonly { readonly port: number; readonly stamp: string | null }[] | null>;
 }
 
-/** Call on exposure, detach or settle. */
 export async function recordServingJobs(store: BackgroundJobStore, runtime: PortHolders): Promise<void> {
   const ports = await runtime.exposedPorts();
   const held = ports.length === 0 ? [] : await runtime.holders(ports);

@@ -1679,12 +1679,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return { admission: readiness, container };
   }
 
-  /** The host's own work is use: it calls this as its work starts and settles, so the box rests
-   *  only once neither has used it for the idle window (D56). A stopped box has nothing to hold. */
-  noteHostWork(): void {
-    if (this.ctx.container?.running === true) this.stampInteraction();
-  }
-
   /** Stamps the lease for a caller on a lane it cannot see, e.g. a terminal; the host calls
    *  this only from its caller entry points. Refuses while unready, like every operation. */
   noteTerminalActivity(): Promise<void> {

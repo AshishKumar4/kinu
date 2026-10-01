@@ -50,11 +50,13 @@ export function trialAccounts(taskFiles: readonly string[], matrix: TrialPlace['
 /**
  * The tables a trial account may hold rows in when its trial opens: its provider keys and what keeps them (the
  * revision counters, grants a disconnect could not revoke), and the account's own bookkeeping (its profile, onboarding,
- * schema version, token generation, and the agents SDK's state row, which the account never writes).
+ * schema version, token generation, and the agents SDK's state row, which the account never writes). A device-status
+ * watcher names the workspace that registered it, which the account keeps after the workspace is deleted until a
+ * device moves: no later trial opens a workspace of that name.
  */
 const KEEPS: ReadonlySet<string> = new Set([
   'user_credentials', 'user_credential_revisions', 'user_credentials_revision', 'user_unrevoked_grants',
-  'user_schema_meta', 'user_profile', 'user_onboarding', 'user_auth_generation', 'cf_agents_state',
+  'user_schema_meta', 'user_profile', 'user_onboarding', 'user_auth_generation', 'cf_agents_state', 'device_status_watchers',
 ]);
 
 /** Of an account's rows by table, the ones a trial would inherit from the trial before it in the slot. */
