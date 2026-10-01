@@ -131,6 +131,7 @@ const USER_DO_METHODS = [
   'getWorkspaceProfileCatalog',
   'hasPeerGrant',
   'hasWorkspace',
+  'heldRows',
   'issueCliAgentConnectTicket',
   'issueDeviceConnectTicket',
   'listAIGateways',

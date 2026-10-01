@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import * as v from 'valibot';
 import { validateCredential, validateCredentialKey } from '@kinu.run/core';
 import { childEnv, scratchDir } from '@kinu.run/test-utils';
 import { catalogCredKey } from '../packages/core/src/providers/catalog';
@@ -49,6 +50,8 @@ const deployment = Bun.serve({
       },
     },
     '/api/user/credentials': () => Response.json([...store.keys()].map((key) => ({ key, kind: 'bearer' }))),
+    // A deployment from before trial accounts answers any account as eval-service, so its trials share eval-service.
+    '/api/user/profile': () => Response.json({ email: 'eval-service@kinu.run' }),
     // A provider whose catalogue probe fails is absent with a failure beside it, its key still stored (registry.ts).
     '/api/user/models': () => Response.json({
       models: [{ spec: MODEL, provider: 'opencode-go' }].filter((model) => !catalogueDown && store.has(catalogCredKey(model.provider))),
@@ -138,6 +141,109 @@ describe('eval-service provider keys on every deployment it drives', () => {
       expect(status).toBe(refused ? 1 : 0);
       expect(`${stdout}${stderr}`).toContain(refused ? 'storing opencode-go.bearer for eval-service answered 500' : `lists every eval model: ${MODEL}`);
       expect(`${stdout}${stderr}`).not.toContain(KEY);
+    }
+  });
+});
+
+/**
+ * A deployment that keeps each eval account apart, by the account header: its keys, its rows a trial could inherit,
+ * its workspaces, and the account delete that empties it.
+ */
+function accountsDeployment() {
+  type Account = { keys: Map<string, unknown>; inherited: Record<string, number>; workspaces: { name: string; lastVisited: number }[] };
+
+  const accounts = new Map<string, Account>();
+  const resets: string[] = [];
+
+  const of = (request: Request): Account => {
+    const name = request.headers.get('x-kinu-dev-identity-account') ?? 'eval-service';
+    const account = accounts.get(name) ?? { keys: new Map(), inherited: {}, workspaces: [] };
+
+    accounts.set(name, account);
+
+    return account;
+  };
+
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1',
+    routes: {
+      '/api/user/credentials/:key': { POST: async (request) => {
+        of(request).keys.set(decodeURIComponent(request.params.key), await request.json());
+
+        return Response.json({ ok: true });
+      } },
+      '/api/user/credentials': (request) => Response.json([...of(request).keys.keys()].map((key) => ({ key, kind: 'bearer' }))),
+      '/api/user/models': (request) => Response.json({ models: of(request).keys.has('opencode-go.bearer') ? [{ spec: MODEL }] : [], failures: [] }),
+      '/api/user/held-rows': (request) => Response.json({ user_credentials: of(request).keys.size, ...of(request).inherited }),
+      '/api/user/workspaces': (request) => Response.json({ entries: of(request).workspaces, nextCursor: null }),
+      '/api/user/profile': (request) => {
+        const account = request.headers.get('x-kinu-dev-identity-account');
+
+        return Response.json({ email: `eval-service${account === null ? '' : `+${account}`}@kinu.run` });
+      },
+      '/api/user/account': { DELETE: async (request) => {
+        const account = request.headers.get('x-kinu-dev-identity-account') ?? 'eval-service';
+        const { confirm } = v.parse(v.object({ confirm: v.string() }), await request.json());
+
+        if (confirm !== `eval-service+${account}@kinu.run`) return Response.json({ error: 'Type the account email to confirm.' }, { status: 400 });
+        resets.push(account);
+        accounts.delete(account);
+
+        return Response.json({ deleted: true });
+      } },
+    },
+  });
+
+  return { server, accounts, resets, at: `http://127.0.0.1:${String(server.port)}` };
+}
+
+describe('every trial account a run acts as', () => {
+  test('each trial account is given the keys it does not hold, as itself, and the first one lists the eval models', async () => {
+    const { server, accounts, at } = accountsDeployment();
+
+    try {
+      const input = {
+        origin: at, keysPath: keysPathOf(homeWithKeys({ 'opencode-go.bearer': KEY })), identity: IDENTITY,
+        identityEnv: 'KINU_EVAL_WEB_IDENTITY', models: [MODEL], trialAccounts: ['trial-1', 'trial-2', 'trial-3'] as const,
+      };
+
+      expect(await provisionEvalProviderKeys(input)).toEqual({ stored: ['opencode-go.bearer'], findings: [], trials: { given: 3, reset: [] }, notes: [] });
+      expect([...accounts.keys()].sort()).toEqual(['eval-service', 'trial-1', 'trial-2', 'trial-3']);
+      expect([...accounts.values()].every((account) => account.keys.has('opencode-go.bearer'))).toBe(true);
+      expect(await provisionEvalProviderKeys(input)).toEqual({ stored: [], findings: [], trials: { given: 0, reset: [] }, notes: [] });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test('a trial account holding a row a trial would inherit is reset and given its keys again, unless a run is on it', async () => {
+    const { server, accounts, resets, at } = accountsDeployment();
+
+    try {
+      const input = {
+        origin: at, keysPath: keysPathOf(homeWithKeys({ 'opencode-go.bearer': KEY })), identity: IDENTITY,
+        identityEnv: 'KINU_EVAL_WEB_IDENTITY', models: [MODEL], trialAccounts: ['trial-1', 'trial-2'] as const,
+      };
+
+      await provisionEvalProviderKeys(input);
+
+      const [one, two] = [accounts.get('trial-1'), accounts.get('trial-2')];
+
+      if (one === undefined || two === undefined) throw new Error('the trial accounts were never reached');
+      one.inherited = { experience_library: 2 };
+      two.inherited = { user_mcp_servers: 1 };
+      two.workspaces = [{ name: 'eval-order-book-2-live22', lastVisited: Date.now() }];
+
+      const provisioned = await provisionEvalProviderKeys(input);
+
+      expect(resets).toEqual(['trial-1']);
+      expect(provisioned.trials).toEqual({ given: 1, reset: ['trial-1'] });
+      expect(provisioned.findings).toEqual([]);
+      expect(provisioned.notes).toEqual([
+        `trial-2 at ${at} holds rows a trial would inherit (user_mcp_servers 1), and a run is on it (eval-order-book-2-live22): not reset`,
+      ]);
+      expect(accounts.get('trial-1')?.keys.has('opencode-go.bearer')).toBe(true);
+    } finally {
+      await server.stop(true);
     }
   });
 });

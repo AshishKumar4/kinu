@@ -286,6 +286,9 @@ export const isBunDiscoverableSuite = (file: string): boolean => BUN_DISCOVERED.
 export const isVitestEvalSuite = (file: string): boolean =>
   isRunnableSuite(file) && !isBunDiscoverableSuite(file);
 
+/** An eval task: what `bun run evals` runs, and the matrix every trial's account is a slot of (evals/src/slot.ts). */
+export const isEvalTask = (file: string): boolean => isVitestEvalSuite(file) && file.startsWith('evals/tasks/');
+
 /** A Python suite `unittest discover` selects. The ladder's Python denominator,
  *  so `bun scripts/python-suites.ts` is measured against the files on disk
  *  rather than against the discovery roots someone remembered to name. */

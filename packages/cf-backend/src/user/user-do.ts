@@ -4704,6 +4704,28 @@ export class UserDO extends Agent<Env> {
     this.driveDownloads.delete(transferId);
   }
 
+  async heldRows(caller: UserCaller): Promise<Record<string, number>> {
+    await this.requireTier(caller, 'account');
+
+    const tables = this.sqlx<{ name: string; sql: string | null }>(
+      `SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'
+         AND name NOT LIKE '\\_cf\\_%' ESCAPE '\\' ORDER BY name`,
+    );
+
+    const indexes = tables.filter((table) => /^\s*create\s+virtual\s+table/iu.test(table.sql ?? '')).map((table) => table.name);
+    const held: Record<string, number> = {};
+
+    for (const { name } of tables) {
+      if (indexes.some((index) => name === index || name.startsWith(`${index}_`))) continue;
+
+      const rows = this.sqlx<{ n: number }>(`SELECT COUNT(*) AS n FROM "${name.replaceAll('"', '""')}"`)[0]?.n ?? 0;
+
+      if (rows > 0) held[name] = rows;
+    }
+
+    return held;
+  }
+
   /**
    * Delete everything under this account, then the object itself; the step order is the contract.
    * Each step leaves no rows, so a failed sweep resumes on retry; errors propagate to the owner.

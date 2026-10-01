@@ -14,6 +14,7 @@ import { parseArgs } from 'node:util';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { DEFAULT_TRIALS, DEFINITION_PATHS, EXERCISED_PATHS } from '../src/config';
 import { compareEvalResults, evalGateVerdict, renderEvalComparison, whyIncomplete } from '../src/comparison';
+import { sharedAccounts } from '../src/slot';
 import { diffBetween, ensureCommit, git } from './git';
 
 const USAGE = 'Usage: bun evals/scripts/compare.ts --candidate <results.json> [--baseline <results.json>] --out <dir> '
@@ -82,9 +83,21 @@ const verdict = comparison === undefined ? { pass: false, reason: uncompared() }
 
 writeFileSync(join(values.out, 'comparison.json'), `${JSON.stringify(comparison ?? { refused }, null, 2)}\n`);
 
-writeFileSync(join(values.out, 'comparison.md'), `${comparison === undefined ? `The legs were not compared: ${verdict.reason}` : renderEvalComparison(comparison)}\n`);
+// A leg on a deployment that predates trial accounts ran its trials on eval-service, where they could reach each
+// other (evals/src/slot.ts): said beside the comparison, not counted against the verdict.
+const shared = [['baseline', baseline], ['candidate', candidate] as const]
+  .flatMap(([leg, report]) => {
+    const why = report === null ? undefined : sharedAccounts(report);
+
+    return why === undefined ? [] : [`The ${leg} leg ran without trial accounts: ${why}.`];
+  });
+
+const rendered = comparison === undefined ? `The legs were not compared: ${verdict.reason}` : renderEvalComparison(comparison);
+
+writeFileSync(join(values.out, 'comparison.md'), `${[rendered, ...shared].join('\n\n')}\n`);
 
 writeFileSync(join(values.out, 'verdict.json'), `${JSON.stringify(verdict)}\n`);
 
 process.stdout.write(`${comparison === undefined ? 'Not compared' : `Compared ${String(comparison.rows.length)} cohorts: ${comparison.verdict}`}. `
-  + `The run ${verdict.pass ? 'stands' : 'does not stand'}: ${verdict.reason} Wrote ${values.out}/{comparison.json,comparison.md,verdict.json}\n`);
+  + `The run ${verdict.pass ? 'stands' : 'does not stand'}: ${verdict.reason}${shared.map((line) => ` ${line}`).join('')} `
+  + `Wrote ${values.out}/{comparison.json,comparison.md,verdict.json}\n`);
