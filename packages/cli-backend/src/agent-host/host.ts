@@ -1616,8 +1616,8 @@ function childRef(parent: HostEntry, childName: string): HostedAgentRef {
 }
 
 /**
- * When this process must next wake, over every actor in the workspace. Unscoped by design, like
- * `hasUntimedLiveJobsInWorkspace()`: scoping to the root would sleep through a subordinate's trigger.
+ * When this process must next wake, over every actor in the workspace. Unscoped by design: scoping to the root would
+ * sleep through a subordinate's trigger.
  */
 function nextTriggerAt(db: Database): number | null {
   const table = db.query(`SELECT name FROM sqlite_master WHERE type='table' AND name='triggers'`).get();
