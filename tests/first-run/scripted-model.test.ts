@@ -1,8 +1,15 @@
 import { describe, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { steerSkillsBlock, workspaceGenesisSignal, type JsonObject } from '@kinu.run/core';
+import {
+  buildDrainBatch, EventLog, initEventsHubTables, steerSkillsBlock, workspaceGenesisSignal, type JsonObject,
+} from '@kinu.run/core';
+import { createTestActorsOver } from '@kinu.run/test-utils';
+import { makeSqlExec } from '../../packages/core/tests/helpers';
 import { createMemoryVfs } from '../../packages/test-utils/src/vfs';
-import { HELLO_SLATE_ASK, HELLO_SLATE_ID } from './asks';
+import {
+  DELEGATION_TASK_ASK, DELEGATION_WORD, HELLO_SLATE_ASK, HELLO_SLATE_ID, RELAY_MISSION, TREE_ASK, TREE_DEEP_WORD, sayWordMission,
+} from './asks';
 import worker, { MAX_BODY_BYTES } from '../../scripts/scripted-model-worker';
 import { SCRIPTED_CREDENTIAL, startScriptedModel } from '../../scripts/scripted-model';
 import { FALLBACK_ANSWER } from '../../scripts/scripted-protocol';
@@ -199,5 +206,91 @@ describe('the tier model behind background memory compression', () => {
     } finally {
       await server.stop();
     }
+  });
+});
+
+/** The message a helper's answer opens its hirer's next turn with, rendered by the product's own drain. */
+function answerArrives(agent: string, task: string, content: string): string {
+  const db = new Database(':memory:');
+  const sql = makeSqlExec(db);
+  initEventsHubTables(sql);
+  const log = new EventLog(sql, createTestActorsOver(db).main);
+
+  log.publish({
+    descriptor: {
+      ingress: 'subordinate', variant: 'subordinate_report',
+      payload: { from_subordinate: agent, status: 'completed', content, sequence_id: `settle:${agent}`, task, kinu_mode: 'build' },
+    },
+    now: 1_000,
+  });
+
+  const batch = buildDrainBatch(log.pending());
+
+  if (batch === null) throw new Error('a published answer must drain');
+
+  return batch.text;
+}
+
+const ReplySchema = v.object({ choices: v.tuple([v.object({ message: v.object({
+  content: v.nullish(v.string()),
+  tool_calls: v.optional(v.array(v.object({ id: v.string(), function: v.object({ name: v.string(), arguments: v.string() }) }))),
+}) })]) });
+
+/** One request to the deployed tiers' Worker, as a hosted turn makes it: the conversation so far and the agent's tools. */
+async function reply(messages: readonly JsonObject[]): Promise<v.InferOutput<typeof ReplySchema>['choices'][0]['message']> {
+  const tools = ['agents'].map((name) => ({ type: 'function', function: { name } }));
+  const response = await worker.fetch(asked(COMPLETIONS, JSON.stringify({ messages, tools })), ENV);
+
+  return v.parse(ReplySchema, await response.json()).choices[0].message;
+}
+
+/** The conversation after a turn that hired one helper, which answered at once that the helper is working. */
+function hiredAndWaiting(ask: string, hired: { readonly id: string; readonly agent: string; readonly mission: string }): JsonObject[] {
+  return [
+    { role: 'user', content: ask },
+    { role: 'assistant', content: 'Calling agents.', tool_calls: [{
+      id: hired.id, type: 'function',
+      function: { name: 'agents', arguments: JSON.stringify({ action: 'hire', lifetime: 'task', role: 'task', mission: hired.mission }) },
+    }] },
+    { role: 'tool', tool_call_id: hired.id, content: JSON.stringify({ status: 'working', agent: hired.agent, lifetime: 'task', role: 'task' }) },
+    { role: 'assistant', content: 'WAITING' },
+  ];
+}
+
+// A hire returns at once (cafab2bfc): each answer opens its hirer's next turn, and the cases' scripts answer that turn.
+describe('the first-run scripts answer the turn a helper\'s answer opens', () => {
+  test('the delegation lead relays the word its helper answered', async () => {
+    const mission = sayWordMission(DELEGATION_WORD);
+
+    const messages = [
+      ...hiredAndWaiting(DELEGATION_TASK_ASK, { id: 'call_hire', agent: 'ask-task-ymhu3n', mission }),
+      { role: 'user', content: answerArrives('ask-task-ymhu3n', mission, DELEGATION_WORD) },
+    ];
+
+    expect((await reply(messages)).content).toBe(`HIRED ${DELEGATION_WORD}`);
+  });
+
+  test('the relay hires its own helper first, and relays the answer that helper sends', async () => {
+    const hired = await reply([{ role: 'user', content: RELAY_MISSION }]);
+
+    expect(hired.tool_calls?.map((made) => made.function.arguments)).toEqual([
+      JSON.stringify({ action: 'hire', lifetime: 'task', role: 'task', mission: sayWordMission(TREE_DEEP_WORD) }),
+    ]);
+
+    const messages = [
+      ...hiredAndWaiting(RELAY_MISSION, { id: 'call_deep', agent: 'ask-task-deep01', mission: sayWordMission(TREE_DEEP_WORD) }),
+      { role: 'user', content: answerArrives('ask-task-deep01', sayWordMission(TREE_DEEP_WORD), TREE_DEEP_WORD) },
+    ];
+
+    expect((await reply(messages)).content).toBe(TREE_DEEP_WORD);
+  });
+
+  test('the tree root answers each arrival with the word it carries', async () => {
+    const messages = [
+      ...hiredAndWaiting(TREE_ASK, { id: 'call_relay', agent: 'ask-task-relay1', mission: RELAY_MISSION }),
+      { role: 'user', content: answerArrives('ask-task-relay1', RELAY_MISSION, TREE_DEEP_WORD) },
+    ];
+
+    expect((await reply(messages)).content).toBe(`TREE ${TREE_DEEP_WORD}`);
   });
 });
