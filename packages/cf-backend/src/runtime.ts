@@ -207,6 +207,8 @@ export type CFRuntime = AgentRuntime & {
   vectorStore: import("@kinu.run/core").VectorStore;
   startupWork: Promise<void>;
   sandboxHandle: SandboxHandle | null;
+  /** Whether this activation has called its sandbox, which is what starts its box on its behalf. */
+  sandboxReached(): boolean;
 };
 
 /** Every runtime this backend builds carries a vector store (noop when unbound). */
@@ -388,6 +390,7 @@ export function createCFRuntime(
   const previewSuffix = previewHostSuffix(env) ?? undefined;
   const sandboxId = sandboxIdForWorkspace(actor.workspaceName);
   let sandboxHandle: SandboxHandle | null = null;
+  let sandboxReached = false;
 
   if (env.KinuDevbox) {
     try {
@@ -396,6 +399,7 @@ export function createCFRuntime(
       // Egress is configured before the container runs anything, not in `onStart` (too late); until then
       // the container has no network, so it fails closed. Only the owning workspace configures.
       const handle = adaptCloudflareSandbox(sdk, async () => {
+        sandboxReached = true;
         const userId = actor.ownerUserId();
 
         if (!userId) return;
@@ -538,6 +542,7 @@ export function createCFRuntime(
     deviceTransport,
     vectorStore,
     sandboxHandle,
+    sandboxReached: () => sandboxReached,
   };
 
   if (unmount !== undefined) runtime.release = unmount;

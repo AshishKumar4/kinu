@@ -2,7 +2,8 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Shipped workspace and facet bundles: isolated turns over one shared Nimbus file plane. */
 import { getAgentByName, type AgentContext } from 'agents';
 import { DurableObject } from 'cloudflare:workers';
-import { agentHome, ownerCaller, runNodeAgent } from '@kinu.run/core';
+import * as v from 'valibot';
+import { agentHome, JsonValueSchema, ownerCaller, runNodeAgent } from '@kinu.run/core';
 import { diagnostics } from '@kinu.run/core/obs';
 import { hostNodeSeat, nodeCodemodeTool } from '../../src/hosted-actors';
 import { HIRE_CHILD_MODEL, hireModelsBaseUrl } from './hire-shapes';
@@ -11,6 +12,7 @@ import { hostedActorPlacement } from '../../src/actor-hosting';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import { AgentWorkspaceRPC } from '../../src/agent-facets';
 import { ROOT_SLATE_CALLER, SlateBinding } from '../../src/slates/bindings';
+import { createRuntimeExecutor } from '../../src/codemode-sandbox';
 import { SLATE_STORAGE_BINDING, type SlateCallResult } from '@kinu.run/core';
 import type { AgentFacet } from './agent-facet-probe-agent';
 import type { AgentFacetAnswer, OnePlaneObservation, RelayedAnswer, SwarmFacetObservation } from './agent-facet-shapes';
@@ -186,6 +188,36 @@ export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
     const answer = await binding.call('get', ['seen'], null);
 
     return { answer: { ...answer }, carriesDisposer: Symbol.dispose in answer };
+  }
+
+  /** A program's host call answering with what the host got over RPC, as a tool call's result reaches it. */
+  async programHostAnswer(workspace: string): Promise<RelayedAnswer<Readonly<Record<string, string>> | null>> {
+    await this.target(workspace);
+    const owner = await ownerCaller(this.env);
+    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(PROBE_OWNER_ID));
+    await userDO.setCredential(owner, 'openai-compat.default', {
+      kind: 'openai-compat', baseURL: hireModelsBaseUrl(workspace), apiKey: 'relay-probe-key',
+    });
+    let handed: unknown;
+
+    // In place of the launcher: the program's host call, made as the launcher's call reaches the bridge.
+    const executor = createRuntimeExecutor({
+      run: async (_source, providers) => {
+        handed = await providers[0]?.fns.answer?.();
+
+        return { result: undefined, logs: [] };
+      },
+    });
+
+    await executor.execute('', [{ name: 'host', fns: { answer: async () => {
+      const received = await userDO.getAuth(owner, 'openai-compat.default');
+
+      return v.is(JsonValueSchema, received) ? received : undefined;
+    } } }]);
+
+    const auth = v.parse(v.nullish(v.object({ headers: v.record(v.string(), v.string()) })), handed);
+
+    return { answer: auth?.headers ?? null, carriesDisposer: v.is(v.looseObject({}), handed) && Symbol.dispose in handed };
   }
 
   async swarmNode(workspace: string): Promise<ReadableStream<Uint8Array>> {

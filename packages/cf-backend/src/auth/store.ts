@@ -46,6 +46,7 @@ export interface OAuthProfile {
   email: string;
   emailVerified: boolean;
   displayName?: string | null;
+  credentialGeneration?: number;
 }
 
 export interface BrowserSession {
@@ -181,7 +182,7 @@ export async function createSession<Id>(env: AuthStoreEnv<Id>, profile: OAuthPro
   };
 
   // Authority first: a cookie is never outstanding against a session nothing can revoke.
-  await authority.registerBrowserSession(caller, tokenHash, expiresAt, minted);
+  await authority.registerBrowserSession(caller, tokenHash, expiresAt, { ...minted, credentialGeneration: profile.credentialGeneration ?? 0 });
 
   try {
     await writeKvJson(env.AUTH_KV, sessionKey(tokenHash), {
