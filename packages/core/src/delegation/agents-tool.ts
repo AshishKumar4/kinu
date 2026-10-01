@@ -46,7 +46,7 @@ import {
   effectiveRoleCatalog,
   resolveTurnProfile,
   type ProfileAuthorityInputs, type ProfileProvenance,
-  type ResolvedTurnProfile, type RoleId, type TierId,
+  type ResolvedTurnProfile, type ResolveTurnProfileInput, type RoleId, type TierId,
 } from '../profiles';
 import { VERIFIER_KIND_DOC, VERIFIER_KINDS } from '../strategy/objective';
 import type { Objective } from '../strategy/objective';
@@ -279,6 +279,8 @@ export interface AgentsSwarmDeps {
 export interface AgentsProfileContext extends ProfileAuthorityInputs {
   readonly roleId: RoleId;
   readonly availableTools: readonly string[];
+  /** The model the caller's turn was pinned to: a delegated invocation runs on its turn's model (MODEL_ROUTE_POLICY). */
+  readonly pins: Pick<ResolveTurnProfileInput, 'workspaceModel' | 'actorModel'>;
 }
 
 export function agentsProfileContext(
@@ -286,11 +288,13 @@ export function agentsProfileContext(
   authority: ProfileAuthorityInputs | null,
 ): AgentsProfileContext | null {
   if (!profile || !authority) return null;
+  const { source, model } = profile.tier;
 
   return {
     ...authority,
     roleId: profile.role.id,
     availableTools: profile.allowedTools,
+    pins: { workspaceModel: source === 'workspace' ? model : null, actorModel: source === 'actor' ? model : null },
   };
 }
 
@@ -873,6 +877,7 @@ function resolveDelegatedProfile(
       provider: ctx.provider,
       roleId: role ?? ctx.roleId,
       explicitTier: tier,
+      ...ctx.pins,
       workMode: 'build',
       availableTools: ctx.availableTools,
       activeSkills: [],
