@@ -1,20 +1,13 @@
-// Per-agent provider registry: Cloudflare providers, core providers, then the models.dev catalog (static ids win).
-// Registration order is the model picker's listing order. Auth goes through the UserDO stub.
+// Per-agent provider registry over core's (`createModelRegistry`); auth goes through the UserDO stub.
 import {
-  createProviderRegistry, createChatGptProvider, createCodexProvider, createOpenAIProvider,
-  createOpenRouterProvider, createOpenAICompatProvider, createAnthropicProvider, createClaudeProvider,
-  createModelsDevCatalogSource,
-  type ProviderRegistry, type ProviderDeps, type ProviderEnv, type AuthResolver, type AuthRequest, type AuthResolution,
-  type ProviderWaitInfo,
-  specProvider,
+  AI_GATEWAY_PROVIDER_ID, DEFAULT_WORKERS_AI_MODEL_SPEC,
+  createAIGatewayProvider, createChatGptProvider, createCodexProvider, createModelRegistry, createMyGatewayProvider,
+  createWorkersAIProvider, normalizeModelSpec, resolvePlatformGateway, retryTransientDO,
+  type ActorReference, type AuthRequest, type AuthResolution, type AuthResolver, type ProviderDeps, type ProviderEnv,
+  type ProviderRegistry, type ProviderWaitInfo, type SpecDefault, type UserCaller,
 } from '@kinu.run/core';
 import type { LanguageModel } from 'ai';
-import { createWorkersAIProvider } from '@kinu.run/core';
-import { createMyGatewayProvider } from '@kinu.run/core';
-import { AI_GATEWAY_PROVIDER_ID, createAIGatewayProvider, resolvePlatformGateway } from '@kinu.run/core';
 import type { CredentialSummary } from '../user/user-do';
-import type { ActorReference, UserCaller } from '@kinu.run/core';
-import { retryTransientDO } from '@kinu.run/core';
 import { codexEgressFetch, deviceRouteFetch, type CodexEgressNamespace, type ModelRelayHub } from '../egress/codex-egress-route';
 
 /**
@@ -82,17 +75,11 @@ export function providerBindingsOf(env: ProviderEnv): ProviderEnv {
 }
 
 export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProviderRegistry {
-  const registry = createProviderRegistry();
-
   let deploymentBinding: DirectAiBinding | undefined;
 
   if (opts.env.WORKERS_AI_VIA_BINDING === 'on' && opts.env.AI && isDirectAiBinding(opts.env.AI)) {
     deploymentBinding = opts.env.AI;
   }
-
-  registry.register(createWorkersAIProvider(deploymentBinding));
-  registry.register(createMyGatewayProvider());
-  registry.register(createAIGatewayProvider());
 
   const source = opts.userDO ?? null;
 
@@ -106,28 +93,24 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
 
   const codexEgress = relayed === null ? container : deviceRouteFetch({ ...relayed, provider: 'codex', container: container ?? opts.fetch ?? fetch });
 
-  // The ChatGPT plan's token never leaves the machine that signed in, so the web reaches it only through that machine.
-  if (relayed !== null) {
-    registry.register(createChatGptProvider({
+  const registry = createModelRegistry({
+    workersAi: createWorkersAIProvider(deploymentBinding),
+    myGateway: createMyGatewayProvider(),
+    aiGateway: createAIGatewayProvider(),
+    // The ChatGPT plan's token never leaves the machine that signed in, so the web reaches it only through that machine.
+    chatgpt: relayed === null ? undefined : createChatGptProvider({
       device: {
         fetch: deviceRouteFetch({ ...relayed, provider: 'chatgpt' }),
         unavailableReason: async () => (await relayed.hub.relayDevice(await relayed.caller(), 'chatgpt') === null
           ? 'Continue with ChatGPT on a connected machine to use your ChatGPT plan.'
           : undefined),
       },
-    }));
-  }
-
-  registry.register(createCodexProvider(codexEgress === undefined ? {} : { egress: codexEgress }));
-  registry.register(createClaudeProvider());
-  registry.register(createOpenAIProvider());
-  registry.register(createAnthropicProvider());
-  registry.register(createOpenRouterProvider({
+    }),
+    codex: createCodexProvider(codexEgress === undefined ? {} : { egress: codexEgress }),
+    opencode: undefined,
     appTitle: opts.appTitle,
-  }));
-  registry.register(createOpenAICompatProvider());
-  // `cloudflare-workers-ai` aliases the bespoke workers-ai provider; excluded so it has one resolution path.
-  registry.registerDynamic(createModelsDevCatalogSource({ exclude: ['cloudflare-workers-ai'] }));
+  });
+
   const getAuth = createUserDOAuthResolver(source);
   // Read once per registry: a listing asks about every provider, and a registry lives one call, or until the
   // account's credentials change (`OwnedModelServices.invalidate`).
@@ -158,27 +141,14 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
   };
 
   // Without a UserDO stub, workers-ai is a guaranteed 401, so the default falls back to the env-bound ai-gateway.
-  function defaultProvider(): string {
-    if (source && registry.get('workers-ai')) return 'workers-ai';
-    // Same predicate as the provider's isAvailable(), so the default never names a gateway it would refuse.
-    const platform = resolvePlatformGateway(opts.env);
+  const platform = resolvePlatformGateway(opts.env);
+  const gatewayDefault = 'reason' in platform ? null : `${AI_GATEWAY_PROVIDER_ID}/${DEFAULT_WORKERS_AI_MODEL_SPEC}`;
 
-    if (!('reason' in platform)) return AI_GATEWAY_PROVIDER_ID;
-    throw new Error(
-      'No default provider available (need a UserDO credential stub for workers-ai, '
-      + `or a usable platform gateway: ${platform.reason})`,
-    );
-  }
-
-  function defaultModelIdFor(provider: string): string {
-    const native = registry.get('workers-ai')?.defaultModel ?? '';
-
-    if (!native) throw new Error('workers-ai provider missing defaultModel.');
-
-    if (provider === AI_GATEWAY_PROVIDER_ID) return `workers-ai/${native}`;
-
-    return registry.get(provider)?.defaultModel ?? native;
-  }
+  const fallback: SpecDefault = {
+    spec: source === null ? gatewayDefault : DEFAULT_WORKERS_AI_MODEL_SPEC,
+    missing: 'No default provider available (need a UserDO credential stub for workers-ai, '
+      + `or a usable platform gateway: ${'reason' in platform ? platform.reason : ''})`,
+  };
 
   return {
     registry,
@@ -188,28 +158,6 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
       return registry.resolve(spec, { ...deps, sessionAffinity: conversation });
     },
 
-    normalizeSpecSync(specOrNull): string {
-      const s = (specOrNull ?? '').trim();
-
-      if (!s) {
-        const provider = defaultProvider();
-
-        return `${provider}/${defaultModelIdFor(provider)}`;
-      }
-
-      if (s.startsWith('@cf/')) return `workers-ai/${s}`;
-
-      if (s.includes('/')) {
-        const first = specProvider(s) ?? '';
-
-        // Optimistic for catalog-shaped ids: the catalog cannot be consulted synchronously; typos surface at request time.
-        if (registry.canResolve(first)) return s;
-
-        if (first === 'workers-ai') return s;
-        throw new Error(`Unknown provider in model spec ${JSON.stringify(s)}.`);
-      }
-
-      return `${defaultProvider()}/${s}`;
-    },
+    normalizeSpecSync: (specOrNull) => normalizeModelSpec(specOrNull, registry, fallback),
   };
 }

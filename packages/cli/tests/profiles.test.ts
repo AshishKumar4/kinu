@@ -223,12 +223,12 @@ describe('local profile authority', () => {
   test('every writer stores a model spelled as the provider listing names it', async () => {
     const steps = await runScenario(`
       const { adoptDefaultModel, updateDefaultTier } = await import('./packages/cli/src/default-model.ts');
-      await step('adopted', async () => adoptDefaultModel('picked/model'));
-      await step('edited', async () => (await updateDefaultTier({ model: 'other/model' })).catalog.tiers.default);
+      await step('adopted', async () => adoptDefaultModel('picked-model'));
+      await step('edited', async () => (await updateDefaultTier({ model: 'other-model' })).catalog.tiers.default);
     `, { env: ENDPOINT_ENV });
 
-    expect(expectOk(steps.adopted)).toEqual({ model: 'openai-compat/picked/model' });
-    expect(expectOk(steps.edited)).toEqual({ model: 'openai-compat/other/model' });
+    expect(expectOk(steps.adopted)).toEqual({ model: 'openai-compat/picked-model' });
+    expect(expectOk(steps.edited)).toEqual({ model: 'openai-compat/other-model' });
   });
 
   test('a later edit supersedes the envelope wholesale and bumps its version', async () => {
