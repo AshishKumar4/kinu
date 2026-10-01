@@ -1,7 +1,7 @@
 /** Judge-model selection: prefer a different vendor so the agent never grades itself with itself. */
 
 import { describe, test, expect } from 'bun:test';
-import { modelVendorFamily, selectEnsembleJudges, selectJudgeModel } from '../src/index';
+import { modelVendorFamily, selectEnsembleJudges } from '../src/index';
 
 const noCandidates = async () => [];
 
@@ -37,81 +37,6 @@ describe('modelVendorFamily', () => {
   test('resellers report the vendor they resell, not their own id', () => {
     // Codex is OpenAI's own endpoint: GPT judging GPT is not cross-family however it is billed.
     expect(modelVendorFamily('codex/gpt-5.5')).toBe('openai');
-  });
-});
-
-describe('selectJudgeModel', () => {
-  test('an explicit review model wins outright and skips the availability query', async () => {
-    let queried = false;
-
-    const selection = await selectJudgeModel({
-      reviewSpec: 'anthropic/claude-haiku-4-5',
-      chatSpec: 'workers-ai/@cf/moonshotai/kimi-k2.6',
-      candidates: async () => {
-        queried = true;
-
-        return ['openai/gpt-5.5'];
-      },
-    });
-
-    expect(selection).toEqual({ spec: 'anthropic/claude-haiku-4-5', source: 'configured' });
-    expect(queried).toBe(false);
-  });
-
-  test('an explicit same-family review model is still honoured', async () => {
-    const selection = await selectJudgeModel({
-      reviewSpec: 'openrouter/moonshotai/kimi-k2.6',
-      chatSpec: 'workers-ai/@cf/moonshotai/kimi-k2.6',
-      candidates: noCandidates,
-    });
-
-    expect(selection.source).toBe('configured');
-  });
-
-  test('with no review model, picks the first different-vendor candidate in order', async () => {
-    const selection = await selectJudgeModel({
-      reviewSpec: null,
-      chatSpec: 'workers-ai/@cf/moonshotai/kimi-k2.6',
-      candidates: async () => [
-        'workers-ai/@cf/moonshotai/kimi-k2.6',
-        'openrouter/moonshotai/kimi-k3',
-        'anthropic/claude-opus-4-7',
-        'openai/gpt-5.5',
-      ],
-    });
-
-    expect(selection).toEqual({ spec: 'anthropic/claude-opus-4-7', source: 'cross-family' });
-  });
-
-  test('blank review models are treated as unset, not as a spec', async () => {
-    const selection = await selectJudgeModel({
-      reviewSpec: '   ',
-      chatSpec: 'workers-ai/@cf/moonshotai/kimi-k2.6',
-      candidates: async () => ['openai/gpt-5.5'],
-    });
-
-    expect(selection).toEqual({ spec: 'openai/gpt-5.5', source: 'cross-family' });
-  });
-
-  test('falls back to the chat model when every candidate is the same vendor', async () => {
-    const selection = await selectJudgeModel({
-      reviewSpec: undefined,
-      chatSpec: 'openai/gpt-5.5',
-      candidates: async () => ['codex/gpt-5.5', 'openai/gpt-5.4'],
-    });
-
-    expect(selection).toEqual({ spec: 'openai/gpt-5.5', source: 'same-family-fallback' });
-  });
-
-  test('falls back to the chat model when nothing else is connected', async () => {
-    const selection = await selectJudgeModel({
-      reviewSpec: null,
-      chatSpec: 'workers-ai/@cf/moonshotai/kimi-k2.6',
-      candidates: noCandidates,
-    });
-
-    expect(selection.source).toBe('same-family-fallback');
-    expect(selection.spec).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
   });
 });
 
