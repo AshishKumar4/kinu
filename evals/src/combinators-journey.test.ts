@@ -37,7 +37,7 @@ const TestReportSchema = v.object({ testResults: v.array(v.object({ assertionRes
 
 type Defect = 'helper' | 'board' | 'invented-report' | 'skipped' | 'copied-calculator' | 'stale-dashboard' | 'stale-review'
   | 'workspace-preview' | 'sandbox-preview' | 'invisible-preview' | 'swarm' | 'audit' | 'npm-version' | 'npm-integrity'
-  | 'export-missing' | 'export-changed' | 'export-duplicate' | 'export-extra' | 'memory-code' | 'memory-coordinator' | 'escaped-preview';
+  | 'export-missing' | 'export-changed' | 'export-duplicate' | 'export-extra' | 'memory-code' | 'memory-coordinator' | 'escaped-preview' | 'reopened-module';
 
 /** Independent fixture implementation: flatten assertions, then count each status separately. */
 function calculate(text: string, defect?: Defect) {
@@ -87,7 +87,7 @@ function desk(defect?: Defect) {
     },
   });
 
-  const titles = ['/slates/test-results', '/slates/release-review', 'report_totals', 'previews', 'boundary-review', 'release-provenance', 'export'];
+  const titles = ['src/maybe.ts', 'src/result.ts', 'src/task.ts', 'src/toolbelt.ts', '/slates/test-results', '/slates/release-review', 'report_totals', 'previews', 'boundary-review', 'release-provenance', 'export'];
 
   const session: VerifierSession = {
     readFile: (path) => Promise.resolve(read(path)),
@@ -117,7 +117,7 @@ function desk(defect?: Defect) {
     },
     craftedTools: () => Promise.resolve([{ name: 'report_totals', description: 'Count assertions in a report' }]),
     workspaceWork: () => Promise.resolve({ plans: [], tasks: [{ owner: { name: 'main', path: [] },
-      tasks: titles.map((title) => ({ title, status: defect === 'board' ? 'in_progress' : 'done', subtasks: [] })) }] }),
+      tasks: titles.map((title) => ({ title, status: defect === 'board' || (defect === 'reopened-module' && title === 'src/maybe.ts') ? 'in_progress' : 'done', subtasks: [] })) }] }),
     inspect: (request) => {
       if (request.view === 'children') return Promise.resolve({ view: 'children', page: { status: 'end', items: [
         { name: 'dashboard-author', status: 'dismissed', lifetime: 'task', actorReference: { actorId: 'dashboard' } },
@@ -260,6 +260,7 @@ const defects: readonly { defect: Defect; turn: number; checks: readonly string[
   { defect: 'export-changed', turn: 2, checks: ['handoff-reimports-with-no-missing-or-changed-file'] },
   { defect: 'export-duplicate', turn: 2, checks: ['handoff-reimports-with-no-missing-or-changed-file'] },
   { defect: 'export-extra', turn: 2, checks: ['handoff-reimports-with-no-missing-or-changed-file'] },
+  { defect: 'reopened-module', turn: 2, checks: ['the-whole-handoff-board-is-done'] },
   { defect: 'board', turn: 2, checks: ['the-whole-handoff-board-is-done'] },
   { defect: 'stale-dashboard', turn: 2, checks: ['dashboard-reads-a-report-changed-outside-the-chat'] },
   { defect: 'skipped', turn: 2, checks: ['the-kept-calculator-handles-unseen-data'] },

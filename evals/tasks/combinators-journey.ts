@@ -92,8 +92,6 @@ const UNSEEN_CONTENT = report([
   [{ status: 'passed', duration: 1.875 }, { status: 'todo', duration: null }, { status: 'skipped', duration: 3.125 }],
 ]);
 
-const reviewAnswer = () => CASES.map(({ path, content }) => ({ path, summary: summaryOf(content) }));
-
 const json = <T>(schema: v.GenericSchema<unknown, T>, text: string): T => v.parse(v.pipe(v.string(), v.parseJson(), schema), text);
 
 async function sameSummary(verifier: EvalVerifier, id: string, path: string): Promise<void> {
@@ -335,7 +333,7 @@ Keep the corrected code for the new conversation, not the cancelled one.`,
       });
       await verifier.check('boundary-review-records-the-actual-answers', async () => {
         const actual = json(ReviewSchema, await verifier.readFile(REVIEW)).sort((a, b) => a.path.localeCompare(b.path));
-        const expected = reviewAnswer().sort((a, b) => a.path.localeCompare(b.path));
+        const expected = CASES.map(({ path, content }) => ({ path, summary: summaryOf(content) })).sort((a, b) => a.path.localeCompare(b.path));
 
         return { pass: JSON.stringify(actual) === JSON.stringify(expected), evidence: { actual, expected } };
       });
@@ -357,7 +355,7 @@ Keep the working previews and live tabs available: another CI file edit must sho
 Track the handoff as export on the board, close it after checking the archive, and keep the earlier tasks closed.`,
     verify: async (verifier) => {
       await archive(verifier, checkout);
-      await board(verifier, 'the-whole-handoff-board-is-done', ['/slates/test-results', '/slates/release-review', CALCULATOR, 'previews', 'boundary-review', 'release-provenance', 'export']);
+      await board(verifier, 'the-whole-handoff-board-is-done', ['src/maybe.ts', 'src/result.ts', 'src/task.ts', 'src/toolbelt.ts', '/slates/test-results', '/slates/release-review', CALCULATOR, 'previews', 'boundary-review', 'release-provenance', 'export']);
       const oldReport = await verifier.readFile(RERUN), oldRelease = await verifier.readFile(RELEASE);
       const mirror = `${MIRROR}/reports/rerun.json`;
       const oldMirror = await verifier.readFile(mirror);

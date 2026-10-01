@@ -195,7 +195,7 @@ AI_GATEWAY_BASE_URL=… AI_GATEWAY_AUTH=…     # an AI Gateway, for models the 
 
 ## Evals: whether the deployed product does the work
 
-`evals/` measures what a user of kinu.run gets. Each file in `evals/tasks/` is one multi-turn task: its mission, seeded data, requested contracts and the checker's independent answers. One trial creates one eval-service workspace; every turn continues there unless it explicitly starts a new conversation. The harness waits for the product's completion and grades from outside, through public slate calls, files, executor commands, previews and the same read models the UI shows. It does not grade an agent's claim that its work succeeded.
+`evals/` measures what a user of kinu.run gets. Each file in `evals/tasks/` is one multi-turn task: its mission, seeded data, requested contracts and the checker's independent answers. One trial creates one eval-service workspace, and every turn runs there. A fresh conversation ends its activation and clears its chat, not its files. The harness waits for the product's completion and grades from outside, through public slate calls, files, executor commands, previews and the same read models the UI shows. It does not grade an agent's claim that its work succeeded.
 
 | Task | Turns | What it checks |
 |---|---|---|
@@ -221,6 +221,28 @@ bun run evals:ui                               # the report in the vitest-evals 
 bun evals/scripts/compare.ts --candidate <results.json> [--baseline <results.json>] --out /tmp/cmp   # two legs' reports
 bun evals/scripts/timing.ts bench-artifacts/evals-<task>-<time> [--steps]   # where each trial's time went
 ```
+
+**Combined-journey Muse pilot, 2026-10-01.** One trial of definitions `41bc1a011b2b`, on staging `f75f06932`,
+ran as `eval-service`'s `trial-12` account with `opencode-go/muse-spark-1.3-contributor`. The command took
+22m 7.7s; the trial itself took 21m 57.8s. No provider waits or infrastructure errors were recorded.
+
+| Turn | Work and settle, excluding grading | Grading | Result |
+|---|---:|---:|---|
+| 1: library modules | 8m 13.0s | 35.6s | 3/3 checks; DeepSWE 85/85 f2p and 561/561 p2p |
+| 2: toolbelt | 4m 58.0s | 25.8s | 2/2 checks; DeepSWE 96/96 f2p and 561/561 p2p |
+| 3: live review desk | 7m 22.1s | 8.8s | 6/8 checks |
+| 4–7 | Not reached | Not reached | The harness stops after a failed turn |
+
+The lead changed the requested `summary({path})` and `snapshot({path})` interfaces to string arguments
+when briefing its helpers. The dashboard then threw `path.trim is not a function` on the grader's object
+argument, and the review caught that error and returned a null summary. Helpers, board, real reports,
+the crafted calculator and both previews passed. No prompt workaround, relaxed check or repeat trial
+was made. The retained transcript, files and timings are under
+`bench-artifacts/evals-true-myth-combinators-1790879476907/`.
+
+Expected successful seven-turn duration: **about 30–40 minutes on Muse [INFERENCE]**, extrapolating
+from this measured prefix and the fast-model measurements in `evals/src/config.ts`. The full journey's
+duration is **unmeasured**, not 22 minutes; this planning estimate is not a runtime limit.
 
 **Each trial its own account.** Every trial acts as an eval account of its own, `trial-<n>` (`evals/src/slot.ts`; core `parseEvalAccount`, the rule the deployment's dev identity follows too), so no trial reaches another: peers, messages, spawned workspaces, swarm publications and the experience library are all the account's. A trial's slot is its place in the run's whole matrix (every task file, sorted, by model, arm and trial), which every worker process works out alone; a matrix past 512 fails at collection. Before a trial opens, a workspace another run marks live on its account fails it as taken, one a stopped run left is deleted, and a row in any table but its provider keys and the account's own bookkeeping (`GET /api/user/held-rows`) fails it, naming each table; after it opens, of two runs that opened on one account at once the earlier workspace name keeps it. The deploy's `scripts/eval-provider-keys.ts` gives every slot of the full matrix the eval provider keys, and resets a slot holding such rows when no run is on it. A deployment that predates trial accounts runs its trials on eval-service, and the comparison says so for its leg.
 
