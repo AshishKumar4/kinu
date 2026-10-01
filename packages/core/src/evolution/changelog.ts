@@ -18,7 +18,7 @@ import {
   applyPromptSectionDecision, getPendingPromptSection,
   listPromptSectionVersions,
 } from '../prompting/section-store';
-import { listReplayEvals } from './replay';
+import { listScaffoldScores, type ScoreDirection } from './scaffold-scores';
 import {
   listTurnOutcomes, TURN_OUTCOMES, TURN_OUTCOME_SOURCES,
   type TurnOutcomeSource, type TurnOutcomeRow,
@@ -28,7 +28,7 @@ import {
   type RefinementDisposition, type RefinementStage,
 } from './refinement';
 import { describePathology } from './pathology';
-import { formatScoreInterval, lossInterval, type ScoreInterval } from '../utils/stats';
+import { formatScoreInterval } from '../utils/stats';
 import { parseJsonValue } from '../utils/json';
 import { renderThrownChain, tolerate } from '../obs/index';
 
@@ -421,41 +421,29 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
   });
 }
 
-type ReplayDirection = 'improved' | 'declined' | 'held' | 'reached';
-
-/** Improved/declined only when the intervals don't overlap. */
-function replayDirection(current: ScoreInterval, previous: ScoreInterval | undefined): ReplayDirection {
-  if (previous === undefined) return 'reached';
-
-  if (current.lo > previous.hi) return 'improved';
-
-  if (current.hi < previous.lo) return 'declined';
-
-  return 'held';
-}
-
-const REPLAY_MOVE: Record<ReplayDirection, string> = {
+const SCORE_MOVE: Record<ScoreDirection, string> = {
   improved: 'improved to',
-  declined: 'declined to',
+  declined: 'regressed to',
   held: 'held within noise at',
   reached: 'reached',
 };
 
+/** One entry per promoted scaffold version's point; a failed scoring says why. */
 function replayEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
-  const rows = listReplayEvals(sql, actor, limit + 1);
-
-  return rows.slice(0, limit).map((r, index) => {
-    const direction = replayDirection(r.interval, rows.at(index + 1)?.interval);
+  return listScaffoldScores(sql, actor, limit).map((point) => {
+    const scored = `scaffold v${String(point.version)}`;
+    const by = point.source === 'gepa' ? 'GEPA, on held-out labeled turns' : 'a replay of labeled turns';
 
     return {
-      id: `replay:${r.id}`,
+      id: `replay:v${String(point.version)}`,
       kind: 'replay' as const,
-      at: r.ranAt,
-      summary: `Self-test score ${REPLAY_MOVE[direction]} ${formatScoreInterval(r.interval)}`,
-      evidence: `Replay eval: score ${formatScoreInterval(r.interval)} · ` +
-        `loss ${formatScoreInterval(lossInterval(r.interval))}` +
-        (r.scaffoldVersion != null ? ` on scaffold v${r.scaffoldVersion}` : '') +
-        ` · ${r.sampleSize} labeled turns · ${r.acceptedCount} accepted / ${r.negativeCount} corrected`,
+      at: point.scoredAt,
+      summary: point.interval === null || point.direction === null
+        ? `Could not score ${scored}`
+        : `Self-test score ${SCORE_MOVE[point.direction]} ${formatScoreInterval(point.interval)} on ${scored}`,
+      evidence: point.interval === null
+        ? `Scoring ${scored} failed: ${point.failure ?? 'no reason recorded'}`
+        : `Scored by ${by}: ${formatScoreInterval(point.interval)} over ${String(point.interval.n)} turns`,
     };
   });
 }

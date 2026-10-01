@@ -1284,7 +1284,7 @@ export class LocalAgentHost {
     const llm = parent.ws.openConfig.llm;
 
     if (!llm) {
-      throw new Error('No model provider is connected, so this workspace cannot create agents. Connect one: kinu provider connect <provider>.');
+      throw new Error('No model provider is connected, so this workspace cannot create agents.');
     }
 
     const tree = parent.tree;

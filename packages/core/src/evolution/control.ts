@@ -61,7 +61,11 @@ import {
 } from './gepa/types';
 import { scoreInterval, type ScoreInterval } from '../utils/stats';
 import { nanoid } from '../utils/nanoid';
-import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { attempt, diagnostics, renderThrownChain, settle, toKinuError } from '../obs/index';
+import { Effect } from 'effect';
+import {
+  REPLAY_SAMPLE_SIZE, dueScaffoldScores, recordReplayScore, type ScoredInstance,
+} from './scaffold-scores';
 
 export type { ScaffoldVersionView } from '../types/scaffold';
 
@@ -140,14 +144,13 @@ function scaffoldRunOptions(
 }
 
 /**
- * Run a scaffold and return its text: with `candidateCode`, the GEPA metric's
- * rollout; without it, the live scaffold. No deadline: a candidate cut off early
- * would score as a bad candidate rather than be measured.
+ * Run `candidateCode` on a task and return its text, the rollout {@link scaffoldOnTurn} judges. No deadline: a
+ * candidate cut off early would score as a bad candidate rather than be measured.
  */
-export async function runScaffoldCaptureText(
+async function runScaffoldCaptureText(
   control: ScaffoldControl,
   task: string,
-  candidateCode?: string,
+  candidateCode: string,
 ): Promise<string> {
   let text = '';
 
@@ -182,7 +185,7 @@ export async function runScaffoldOnce(
  * {@link shadowTrialPlan} decides which candidate a turn is sampled against;
  * {@link queueTurnShadowTrial} records that plan. Split so a replay records the
  * same plan instead of deciding again against a moved rate or candidate.
- * The trial itself runs on the cadence lane ({@link runQueuedShadowTrials}), never
+ * The trial itself runs on the cadence lane ({@link runDueScaffoldEvaluations}), never
  * on the user's turn. The auto-evolution gate lives in EvolutionEngine.
  */
 export function shadowTrialPlan(control: ScaffoldControl, turnKey: string): number | null {
@@ -250,12 +253,49 @@ export function queueTurnShadowTrial(
   }
 }
 
+/** The cadence lane's scaffold work: queued shadow trials for the pending version, then a curve point for each promoted
+ *  version that has none (`scaffold-scores.ts`). */
+export function runDueScaffoldEvaluations(control: ScaffoldControl): Promise<ShadowTrialDrain> {
+  const metric = scaffoldOnTurn(control);
+
+  return settle(Effect.gen(function* () {
+    const drain = yield* Effect.promise(() => runQueuedShadowTrials(control));
+
+    for (const version of dueScaffoldScores(control.sql, control.rt.actor)) {
+      const scored = yield* attempt({ doing: `replay scaffold v${String(version)}`, otherwise: 'unavailable' }, () => replayScaffold(control, metric, version))
+        .pipe(Effect.catch((failed) => Effect.succeed({ failure: renderThrownChain({ cause: failed }) })));
+
+      recordReplayScore(control.sql, control.rt.actor, { version, ...scored });
+    }
+
+    return drain;
+  }));
+}
+
+/** Up to {@link REPLAY_SAMPLE_SIZE} labeled turns run on the version's code and judged as GEPA judges them. */
+async function replayScaffold(
+  control: ScaffoldControl, metric: GepaMetric<string, OutcomeEvalExpectation>, version: number,
+): Promise<{ results: ScoredInstance[] } | { failure: string }> {
+  const code = await readScaffoldVersion(control.rt, version);
+
+  if (code == null) return { failure: `no scaffold code found for v${String(version)}` };
+  const split = await buildOutcomeEvalSplit(control.sql, control.rt.actor, controlTranscript(control), REPLAY_SAMPLE_SIZE);
+  const results: ScoredInstance[] = [];
+
+  for (const instance of [...split.val, ...split.train]) {
+    const { score, feedback } = await metric(code, instance);
+    results.push({ id: instance.id, score, feedback });
+  }
+
+  return results.length === 0 ? { failure: 'no outcome-labeled turns to replay' } : { results };
+}
+
 /**
  * Run every trial queued for the pending scaffold, then let the promotion gate read
  * the result. Cadence-lane only; the queue is durable across hosts. Trials for a
  * version no longer pending are discarded, and the loop stops once a decision applies.
  */
-export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<ShadowTrialDrain> {
+async function runQueuedShadowTrials(control: ScaffoldControl): Promise<ShadowTrialDrain> {
   const pending = getPendingScaffold(control.sql, control.rt.actor);
   purgeQueuedShadowTrials(control.sql, control.rt.actor, pending?.version ?? null);
 
@@ -558,16 +598,12 @@ async function gepaPass<R extends { readonly gepa: GepaResult | null }, O extend
   return output;
 }
 
-/** A strictly better winner goes to modifyScaffold and the normal shadow-eval pipeline. */
-export async function runScaffoldGepaOptimization(
-  control: ScaffoldControl,
-  opts?: { maxIterations?: number; evalSize?: number; maxMetricCalls?: number },
-): Promise<GepaOptimizationResult> {
-  // Accepted turns are regression checks against the approved response; negatives
-  // score on whether the candidate addresses the complaint.
-  const metric = async (
-    candidate: string, instance: EvalInstance<string, OutcomeEvalExpectation>,
-  ): Promise<MetricOutcome> => {
+/**
+ * The one score of a scaffold on one labeled turn, for GEPA's search and the quality curve alike: accepted turns are
+ * regression checks against the approved response, negatives score on whether it addresses the complaint.
+ */
+function scaffoldOnTurn(control: ScaffoldControl): GepaMetric<string, OutcomeEvalExpectation> {
+  return async (candidate, instance) => {
     let output: string;
 
     try {
@@ -586,6 +622,14 @@ export async function runScaffoldGepaOptimization(
         renderOutcomeCriterion(instance.expected, FRESH_RESPONSE_RULE),
     );
   };
+}
+
+/** A strictly better winner goes to modifyScaffold and the normal shadow-eval pipeline. */
+export async function runScaffoldGepaOptimization(
+  control: ScaffoldControl,
+  opts?: { maxIterations?: number; evalSize?: number; maxMetricCalls?: number },
+): Promise<GepaOptimizationResult> {
+  const metric = scaffoldOnTurn(control);
 
   return gepaPass(control, opts ?? {}, {
     run: { target: 'scaffold' }, metric,

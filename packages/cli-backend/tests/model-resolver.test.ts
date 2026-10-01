@@ -679,12 +679,12 @@ describe('createLocalModelResolver — claude subscription provider', () => {
 
     const claude = (await resolver.listProviders()).find((p) => p.id === 'claude');
 
-    expect([claude?.available, claude?.unavailableReason]).toEqual([false, expect.stringContaining('kinu provider connect claude')]);
+    expect([claude?.available, claude?.unavailableReason]).toEqual([false, "Claude isn't connected for this account."]);
   });
 });
 
 describe('createLocalModelResolver — signed out', () => {
-  test('cloud providers stay visible but honestly unavailable with the auth hint', async () => {
+  test('cloud providers stay visible but honestly unavailable, saying they are signed out', async () => {
     const resolver = createLocalModelResolver({
       llm: {
         name: 'openai',
@@ -701,9 +701,9 @@ describe('createLocalModelResolver — signed out', () => {
     for (const id of ['workers-ai', 'my-gateway']) {
       const provider = providers.find((p) => p.id === id);
       expect(provider?.available).toBe(false);
-      expect(provider?.unavailableReason).toContain('kinu auth');
+      expect(provider?.unavailableReason).toBe("This machine isn't signed in to Kinu, so your Cloudflare account's models aren't reachable.");
     }
 
-    expect(() => resolver.resolveModel('my-gateway/openai/gpt-4.1', 'kinu-test')).toThrow(/kinu auth/);
+    expect(() => resolver.resolveModel('my-gateway/openai/gpt-4.1', 'kinu-test')).toThrow("isn't signed in to Kinu");
   });
 });

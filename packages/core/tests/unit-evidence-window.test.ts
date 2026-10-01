@@ -2,20 +2,18 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // The evolution loop's evidence budget: the end of a long turn must reach the judge.
 import type { ChatEvent } from '../src/chat';
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';
 import {
-  EVIDENCE_BUDGETS, evidenceWindow,
+  EVIDENCE_BUDGETS, evidenceWindow, applyScaffoldDecision,
   initScaffoldTables, initShadowTables, runAutoShadowEval, queueTurnShadowTrial,
-  runQueuedShadowTrials, type JudgeOutput, type ScaffoldControl,
+  runDueScaffoldEvaluations, type JudgeOutput, type ScaffoldControl,
 } from '../src/index';
 import { renderReflectionPrompt } from '../src/evolution/gepa/mutate';
 import type { GepaCandidate } from '../src/evolution/gepa/types';
-import { initReplayTables, runReplayEval } from '../src/evolution/replay';
-import { buildOutcomeClassifierPrompt, initTurnOutcomeTables, recordTurnOutcome } from '../src/evolution/outcomes';
-import { createTestRuntime, makeExecRaw, makeSql, storesFor } from './helpers';
-import { createTestActors, unobservedSpend } from '@kinu.run/test-utils';
+import { buildOutcomeClassifierPrompt, recordTurnOutcome } from '../src/evolution/outcomes';
+import { createEvalExecutor, createTestRuntime, storesFor } from './helpers';
+import { unobservedSpend } from '@kinu.run/test-utils';
 import { RunEventRecorder } from '../src/events/recorder';
 
 /** A seed candidate carrying `source`, the only field these prompts read. */
@@ -156,7 +154,7 @@ describe('the readers can see the end of a long turn', () => {
     expect(queueTurnShadowTrial(control, {
       task: 'short task', currentOutput, context: [{ role: 'user', content: 'short task' }],
     }, { pendingVersion: 1 })).toBe('queued');
-    await runQueuedShadowTrials(control);
+    await runDueScaffoldEvaluations(control);
 
     expect(prompts.length).toBeGreaterThan(0);
     const prompt = prompts[0];
@@ -179,14 +177,17 @@ describe('the readers can see the end of a long turn', () => {
     expect(prompt).toContain(`FOLLOWUP-${ending}`);
   });
 
-  test('the replay judge sees the end of the response it is scoring against', async () => {
-    const db = new Database(':memory:');
-    const sql = makeSql(db);
-    initTurnOutcomeTables(makeExecRaw(db));
-    initReplayTables(makeExecRaw(db));
-    // One actor for seed and pass, or the replay samples an empty ledger.
-    const actor = createTestActors(sql, makeExecRaw(db)).main;
-    recordTurnOutcome(sql, actor, {
+  test('the scaffold judge, for GEPA and the quality curve, sees the end of the response it scores', async () => {
+    const { rt } = createTestRuntime();
+    rt.executor = createEvalExecutor();
+    initShadowTables(rt.storage.execRaw);
+    await rt.identity.scaffold.write('async function* run(rt, task) {\n  await host.defaultInference();\n}');
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+      VALUES (${rt.actor.actorId}, 0, ${Date.now()}, 'initial', 'current')`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status)
+      VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'alternative', 'pending')`;
+    await writeText(rt.storage.vfs, 'scaffold/agent.js.v1', 'async function* run(rt, task) {\n  await host.defaultInference();\n}');
+    recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId: 'good', outcome: 'accepted', confidence: 1, source: 'classifier',
       userMessage: trajectory(20_000, `ASK-${ending}`),
       assistantResponse: trajectory(40_000, `REFERENCE-${ending}`),
@@ -194,26 +195,33 @@ describe('the readers can see the end of a long turn', () => {
     });
 
     const prompts: string[] = [];
-    await runReplayEval({
-      sql,
-      actor,
-      judge: {
-        async *stream() { yield '{"score": 1.0, "note": "ok"}'; },
-        complete: async (prompt: string) => {
-          prompts.push(prompt);
 
-          return '{"score": 1.0, "note": "ok"}';
-        },
+    const control: ScaffoldControl = {
+      reportModelCall: unobservedSpend,
+      events: new RunEventRecorder(rt.storage.sql, rt.actor),
+      rt,
+      sql: rt.storage.sql,
+      history: storesFor(rt).history,
+      config: { getShadowSampleRate: () => 1, getAutoPromoteScaffold: () => false, getGepaEvalBudget: () => 1 },
+      surface: () => ({
+        llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
+        defaultInference: async function* () { yield { value: { type: 'text-delta', delta: trajectory(40_000, `FRESH-${ending}`) } }; },
+      }),
+      model: () => new MockLanguageModelV3(),
+      judge: async ({ prompt, schema }) => {
+        prompts.push(prompt);
+
+        return v.parse(schema, { score: 1, feedback: 'ok' });
       },
-      runTask: async () => trajectory(40_000, `FRESH-${ending}`),
-      sampleSize: 1,
-    });
+    };
+
+    expect(await applyScaffoldDecision(control, 'promote')).toMatchObject({ ok: true, action: 'promote' });
+    await runDueScaffoldEvaluations(control);
 
     expect(prompts).toHaveLength(1);
     expect(prompts[0]).toContain(`ASK-${ending}`);
     expect(prompts[0]).toContain(`FRESH-${ending}`);
     expect(prompts[0]).toContain(`REFERENCE-${ending}`);
-    db.close();
   });
 
   test('the GEPA reflector sees how each rollout ended', () => {

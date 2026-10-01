@@ -12,6 +12,9 @@ const cf = createAgentProviderRegistry({
   }),
 });
 
+/** A shell command a message would send the reader to run. */
+const COMMAND = /\b(?:kinu|opencode|wrangler) (?:auth|setup|provider|login|create)\b/;
+
 /** A machine whose default is Workers AI behind its own gateway endpoint. */
 const cli = createLocalModelResolver({
   llm: { name: 'workers-ai', baseURL: 'http://127.0.0.1:9/v1', headers: { Authorization: 'Bearer t' }, model: DEFAULT_WORKERS_AI_MODEL_ID },
@@ -35,5 +38,17 @@ describe('a model spec on both backends', () => {
     const cliOrder = (await cli.listProviders()).map((provider) => provider.id);
 
     expect(cliOrder.filter((id) => cfOrder.includes(id))).toEqual(cfOrder.filter((id) => cliOrder.includes(id)));
+  });
+
+  test('says what is missing when a provider is unavailable, never a command to run', async () => {
+    // A cf workspace with no relayed machine, and a machine signed out of Kinu with nothing connected.
+    const signedOut = createLocalModelResolver({ llm: null, credentials: {} });
+
+    const reasons = [...await cf.registry.listProviders(cf.deps), ...await signedOut.listProviders()]
+      .flatMap((provider) => (provider.unavailableReason === undefined ? [] : [`${provider.id}: ${provider.unavailableReason}`]));
+
+    expect(reasons.length).toBeGreaterThan(0);
+    expect(reasons.filter((reason) => COMMAND.test(reason))).toEqual([]);
+    expect(() => signedOut.normalizeSpecSync(null)).toThrow(expect.objectContaining({ message: expect.not.stringMatching(COMMAND) }));
   });
 });
