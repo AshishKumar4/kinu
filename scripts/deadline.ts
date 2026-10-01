@@ -26,7 +26,9 @@
 // The kill is SIGTERM to the child: `bun test` and vitest both end their
 // workers on it, and a SIGKILL after `KILL_AFTER_SECONDS` covers a child that
 // does not. Which bound applies is the ladder's knowledge (`scriptDeadline` in
-// ladder.ts); this module only enforces one.
+// ladder.ts); this module only enforces one. A cancel of the runner itself (a
+// terminal's Ctrl-C, a stop of its service) ends its runs the same way, SIGTERM
+// then SIGKILL, so a run that records what it was doing when cancelled gets to.
 //
 // Before the kill, the run is told: at three quarters of its bound of silence a line is appended to the file named
 // by `KINU_SILENCE_NOTICE`, so a run that can say what it is stuck on (the gallery harness's open waits) says it
@@ -205,8 +207,69 @@ async function endWhere(matches: (fields: readonly string[]) => boolean): Promis
 /** How often the watchdog asks how long the run has been silent. */
 const WATCH_MS = 250;
 
-/** Signals whose default ends this process; a run's session no longer hears the terminal, so each is passed on. */
+/** Signals whose default ends this process, and the code it exits with on one: a run leads a session of its own, so
+ *  neither a terminal's Ctrl-C nor a stop of this process reaches it, and each is passed on. */
 const PASSED_ON = { SIGINT: 130, SIGTERM: 143, SIGHUP: 129 } as const;
+
+type PassedOn = keyof typeof PASSED_ON;
+
+/** A run of this process still running: how to signal its process group, and when its runner is done with it. */
+interface LiveRun {
+  readonly signal: (signal: NodeJS.Signals) => void;
+  readonly done: Promise<void>;
+}
+
+/** Every run of this process still running. */
+const live = new Set<LiveRun>();
+
+/** The signal that cancelled this process's runs, once one has: no run starts after it, and none returns. */
+let cancelledBy: PassedOn | null = null;
+
+/**
+ * End every run as the hang detector ends one, SIGTERM then SIGKILL {@link KILL_AFTER_SECONDS} later, then this
+ * process. Until 2026-10-01 a cancel was SIGKILL at once, and only of the first run: the eval pass's trials were lost
+ * unrecorded, and every other run of a deploy wave kept running with nothing left to end it.
+ */
+function cancel(signal: PassedOn): void {
+  if (cancelledBy !== null) return;
+  cancelledBy = signal;
+  const running = [...live];
+  const grace = Promise.withResolvers<void>();
+
+  for (const run of running) run.signal('SIGTERM');
+  setTimeout(grace.resolve, KILL_AFTER_SECONDS * 1000);
+
+  const exit = (): void => {
+    for (const run of live) run.signal('SIGKILL');
+    process.exit(PASSED_ON[signal]);
+  };
+
+  Promise.race([Promise.all(running.map(async (run) => { await run.done; })), grace.promise]).then(exit, exit);
+}
+
+const onSignal: Readonly<Record<PassedOn, () => void>> = {
+  SIGINT: () => { cancel('SIGINT'); },
+  SIGTERM: () => { cancel('SIGTERM'); },
+  SIGHUP: () => { cancel('SIGHUP'); },
+};
+
+/** Watch the signals while a run is running, and only then: with none, each ends this process as it would alone. */
+function enlist(run: LiveRun): () => void {
+  if (live.size === 0) for (const [signal, listener] of Object.entries(onSignal)) process.on(signal, listener);
+  live.add(run);
+
+  return () => {
+    live.delete(run);
+
+    if (live.size === 0 && cancelledBy === null) for (const [signal, listener] of Object.entries(onSignal)) process.off(signal, listener);
+  };
+}
+
+/** What a run of a cancelled runner gives its caller: nothing, as the process ends from {@link cancel}. A caller's next
+ *  step, the next row of a wave or a red recorded for a row it cancelled, is no step of a cancelled runner. */
+function unended(): Promise<never> {
+  return new Promise<never>(() => undefined);
+}
 
 /** A record is not drained at the reader's EOF: process.exit can discard pending stream writes. */
 export function writeFully(onward: NodeJS.WriteStream, value: string | Uint8Array): Promise<void> {
@@ -229,6 +292,15 @@ export function writeFully(onward: NodeJS.WriteStream, value: string | Uint8Arra
  * rather than a busy wait, and so the SIGKILL grace can run after the SIGTERM.
  */
 export async function runUnderDeadline(run: DeadlineRun): Promise<DeadlineOutcome> {
+  if (cancelledBy !== null) return await unended();
+  const outcome = await watched(run);
+
+  if (cancelledBy !== null) return await unended();
+
+  return outcome;
+}
+
+async function watched(run: DeadlineRun): Promise<DeadlineOutcome> {
   const started = performance.now();
   const stdio = run.stdio ?? 'inherit';
   const mark = crypto.randomUUID();
@@ -250,16 +322,8 @@ export async function runUnderDeadline(run: DeadlineRun): Promise<DeadlineOutcom
     tolerate(() => process.kill(-child.pid, signal), 'esrch');
   };
 
-  const passOn = Object.entries(PASSED_ON).map(([signal, code]) => {
-    const handler = (): void => {
-      signalGroup('SIGKILL');
-      process.exit(code);
-    };
-
-    process.once(signal, handler);
-
-    return () => process.off(signal, handler);
-  });
+  const done = Promise.withResolvers<void>();
+  const release = enlist({ signal: signalGroup, done: done.promise });
 
   let lastOutput = started;
   let longestSilence = 0;
@@ -281,7 +345,8 @@ export async function runUnderDeadline(run: DeadlineRun): Promise<DeadlineOutcom
 
       if (stdio !== 'inherit') text += decoder.decode(read.value, { stream: true });
 
-      if (stdio !== 'pipe') await writeFully(onward, read.value);
+      // A cancelled run's piped output is passed on too: what it says while it ends is what it was doing.
+      if (stdio !== 'pipe' || cancelledBy !== null) await writeFully(onward, read.value);
     }
 
     return text + decoder.decode();
@@ -331,8 +396,8 @@ export async function runUnderDeadline(run: DeadlineRun): Promise<DeadlineOutcom
   const [stdout, stderr] = await output;
   clearInterval(watchdog);
   rmSync(noticeDir, { recursive: true, force: true });
-
-  for (const release of passOn) release();
+  release();
+  done.resolve();
   longestSilence = Math.max(longestSilence, performance.now() - lastOutput);
   const seconds = (performance.now() - started) / 1000;
   const measured = { leftovers, seconds, longestSilence: longestSilence / 1000, stdout };
