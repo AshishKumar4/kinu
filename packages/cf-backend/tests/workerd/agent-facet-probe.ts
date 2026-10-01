@@ -9,14 +9,17 @@ import { HIRE_CHILD_MODEL, hireModelsBaseUrl } from './hire-shapes';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { hostedActorPlacement } from '../../src/actor-hosting';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
+import { AgentWorkspaceRPC } from '../../src/agent-facets';
+import { ROOT_SLATE_CALLER, SlateBinding } from '../../src/slates/bindings';
+import { SLATE_STORAGE_BINDING, type SlateCallResult } from '@kinu.run/core';
 import type { AgentFacet } from './agent-facet-probe-agent';
-import type { AgentFacetAnswer, OnePlaneObservation, SwarmFacetObservation } from './agent-facet-shapes';
+import type { AgentFacetAnswer, OnePlaneObservation, RelayedAnswer, SwarmFacetObservation } from './agent-facet-shapes';
 
 export * from '../../src/server';
 
 const PROBE_OWNER_ID = 'a9e1c0de5eed0000a9e1c0de5eed0000';
 
-const PROBE_RPC = ['onePlane', 'swarmNode'];
+const PROBE_RPC = ['onePlane', 'swarmNode', 'agentFor'];
 
 let bootId: string | null = null;
 
@@ -52,6 +55,12 @@ export class OrchestratorAgent extends ProductionOrchestrator {
       mainCat: { exitCode: mainCat.exitCode, stdout: mainCat.stdout, stderr: mainCat.stderr },
       sameIsolate: (await facet.boot()) === bootId,
     };
+  }
+
+  async agentFor(name: string): Promise<string> {
+    const directory = this.actorDirectoryStore();
+
+    return directory.create({ parent: directory.main(), name, creationId: name, origin: 'user', lifetime: 'durable' }).actorId;
   }
 
   async swarmNode(): Promise<ReadableStream<Uint8Array>> {
@@ -124,7 +133,7 @@ interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
 }
 
 export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
-  private async target(workspace: string): Promise<Pick<OrchestratorAgent, 'onePlane' | 'swarmNode' | 'setModel' | 'setSoul'>> {
+  private async target(workspace: string): Promise<Pick<OrchestratorAgent, 'onePlane' | 'swarmNode' | 'agentFor' | 'setModel' | 'setSoul'>> {
     const owner = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(PROBE_OWNER_ID));
     await userDO.ensureProfile(owner, 'owner@probe.local', 'Owner');
@@ -138,6 +147,45 @@ export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
 
   async onePlane(workspace: string, agent: string): Promise<OnePlaneObservation> {
     return await (await this.target(workspace)).onePlane(agent);
+  }
+
+  // Each relay is built here, in this isolate, so the answer read is the one it hands the platform.
+  async agentWorkspaceAnswer(workspace: string, agent: string): Promise<RelayedAnswer<Readonly<Record<string, string>> | null>> {
+    const root = await this.target(workspace);
+    const owner = await ownerCaller(this.env);
+    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(PROBE_OWNER_ID));
+    await userDO.setCredential(owner, 'openai-compat.default', {
+      kind: 'openai-compat', baseURL: hireModelsBaseUrl(workspace), apiKey: 'relay-probe-key',
+    });
+    const props = { workspace: this.env.OrchestratorAgent.idFromName(workspace).toString(), actorId: await root.agentFor(agent) };
+    const relay = new AgentWorkspaceRPC(Object.create(this.ctx, { props: { value: props } }), this.env);
+    const headers = await relay.getAuthHeaders('openai-compat.default');
+
+    return { answer: headers === null ? null : { ...headers }, carriesDisposer: headers !== null && Symbol.dispose in headers };
+  }
+
+  async agentWorkspaceListing(workspace: string, agent: string): Promise<RelayedAnswer<readonly { readonly key: string; readonly kind: string }[]>> {
+    const root = await this.target(workspace);
+    const owner = await ownerCaller(this.env);
+    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(PROBE_OWNER_ID));
+    await userDO.setCredential(owner, 'openai-compat.default', {
+      kind: 'openai-compat', baseURL: hireModelsBaseUrl(workspace), apiKey: 'relay-probe-key',
+    });
+    const props = { workspace: this.env.OrchestratorAgent.idFromName(workspace).toString(), actorId: await root.agentFor(agent) };
+    const relay = new AgentWorkspaceRPC(Object.create(this.ctx, { props: { value: props } }), this.env);
+    const listing = await relay.listCredentials();
+
+    return { answer: listing.map(({ key, kind }) => ({ key, kind })), carriesDisposer: Symbol.dispose in listing };
+  }
+
+  async slateBindingAnswer(workspace: string): Promise<RelayedAnswer<SlateCallResult>> {
+    await this.target(workspace);
+    const props = { workspace, id: 'relay-probe', name: SLATE_STORAGE_BINDING, caller: ROOT_SLATE_CALLER };
+    const binding = new SlateBinding(Object.create(this.ctx, { props: { value: props } }), this.env);
+    await binding.call('put', ['seen', 'kept'], null);
+    const answer = await binding.call('get', ['seen'], null);
+
+    return { answer: { ...answer }, carriesDisposer: Symbol.dispose in answer };
   }
 
   async swarmNode(workspace: string): Promise<ReadableStream<Uint8Array>> {
