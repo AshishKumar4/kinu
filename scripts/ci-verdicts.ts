@@ -4,7 +4,7 @@
  * each part's verdicts even on red. Their union must contain every planned row exactly once; absence is never green.
  * Only this repository's push of the exact full SHA is eligible, never a PR's merge commit or another revision.
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as v from 'valibot';
 
@@ -12,6 +12,7 @@ const Sha = v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/u));
 
 const RowSchema = v.object({
   run: v.string(), exitCode: v.number(), seconds: v.number(), output: v.optional(v.string(), ''),
+  timings: v.optional(v.record(v.string(), v.number())),
 });
 
 export type CIVerdict = v.InferOutput<typeof RowSchema>;
@@ -19,6 +20,53 @@ export type CIVerdict = v.InferOutput<typeof RowSchema>;
 export const VerdictFileSchema = v.object({ sha: Sha, part: v.string(), rows: v.array(RowSchema) });
 
 export type CIVerdictFile = v.InferOutput<typeof VerdictFileSchema>;
+
+const HostedCostsSchema = v.object({ version: v.literal(1), sha: Sha, runUrl: v.string(), seconds: v.record(v.string(), v.number()), files: v.record(v.string(), v.number()) });
+
+export type HostedCosts = v.InferOutput<typeof HostedCostsSchema>;
+
+/** The hosted run, never this workstation, determines CI placement. These are scheduling observations, not verdicts. */
+export function readHostedCosts(): HostedCosts {
+  return v.parse(HostedCostsSchema, JSON.parse(readFileSync(new URL('./ci-cost.json', import.meta.url), 'utf8')));
+}
+
+/** Bun's first-party --timings/--update-timings report, measured per file rather than inferred from its console. */
+export function readFileTimings(path: string): Record<string, number> | undefined {
+  if (!existsSync(path)) return undefined;
+
+  return v.parse(v.object({ version: v.literal(1), files: v.record(v.string(), v.number()) }), JSON.parse(readFileSync(path, 'utf8'))).files;
+}
+
+/** Each split suite still measures its declared files exactly once. A green exit does not excuse an omitted file. */
+export function checkFileCoverage(file: CIVerdictFile, split: readonly { readonly run: string; readonly files: readonly string[] }[]): void {
+  for (const unit of split) {
+    const measured = Object.keys(file.rows.find((row) => row.run === unit.run)?.timings ?? {});
+
+    if (measured.length !== unit.files.length || unit.files.some((name) => !measured.includes(name))) {
+      throw new Error('CI file coverage differs for ' + unit.run);
+    }
+  }
+}
+
+/** Keep the next plan grounded in a complete hosted artifact, including red resource measurements. */
+export function writeHostedCosts(file: CIVerdictFile, runUrl: string, labels: ReadonlyMap<string, string>): HostedCosts {
+  const seconds: Record<string, number> = {};
+  const files: Record<string, number> = {};
+
+  for (const row of file.rows) {
+    const label = labels.get(row.run);
+
+    if (label === undefined) throw new Error('no current ladder row names hosted measurement ' + row.run);
+    seconds[label] = row.seconds;
+    Object.assign(files, row.timings);
+  }
+
+  const costs: HostedCosts = { version: 1, sha: file.sha, runUrl, seconds, files };
+
+  writeFileSync(new URL('./ci-cost.json', import.meta.url), JSON.stringify(costs, null, 2) + '\n');
+
+  return costs;
+}
 
 const RunSchema = v.looseObject({
   id: v.number(), run_attempt: v.number(), head_sha: Sha, event: v.string(), status: v.string(), html_url: v.string(),

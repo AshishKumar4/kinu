@@ -1279,8 +1279,8 @@ L23. Prove a clean revision once in push CI, then take its verdict at deploy.
 Decided 2026-10-01 by the owner, replacing L18's repeated source wave and
 L17's local serial hammer tail. Exact full SHA is the proof identity; no
 second input digest or transferred checkout-specific ladder cache is needed.
-CI's measured-cost matrix has four source parts, a separate upload scan and
-an isolated hammer runner. Its uncached row artifacts must cover every CI
+CI's hosted-cost matrix has eight source parts, a separate upload scan and
+six isolated hammer runners. Its uncached row artifacts must cover every CI
 row exactly once. No push-CI run, incomplete coverage or a CI red means no
 verification; the deploy never automatically reruns source rows until green.
 The machine preflight and deployment/account checks remain local. Push-tier
@@ -1292,10 +1292,11 @@ setup. With today's remaining local row walls, the first unmeasured-live
 deploy estimates about 28 minutes; once their footprints permit overlap,
 the local browser lane's 561 s plus upload/tail estimates about 14–15
 minutes. These are scheduling estimates, not green-run claims: first-run
-and the one-trial eval pass were red. The four-vCPU hosted hammer is not
-yet measured and can bound completion; the statistical eval Verdict still
+and the one-trial eval pass were red. The four-vCPU hammer's first hosted
+measurement took 24m47s; the statistical eval Verdict still
 gates production independently.
 The first hosted run (70464f439, 2026-10-01) took 24m47s for the hammer job; all six runs passed 3,672 tests, but its coverage parser recognized zero files. Bun’s Actions reporter prefixes each file heading with ::group::. The reader now normalizes that supported prefix and terminal decoration before reading filenames or failures, and coverage-red runs keep output even when the child exits zero.
+Amended after that hosted measurement, 2026-10-01: local costs misbalanced the source runners (7m15s against 18m21s), and six sequential four-minute hammer runs became the critical path. CI now plans from recorded hosted wall times, splits the devbox suite by file, balances eight source runners, and gives each of the six hammer runs its own runner and burners. The complete collector still needs every unit and every split file. The under-15-minute push-to-verdict target, including queues, is not yet observed on this shape.
 
 ## Providers
 

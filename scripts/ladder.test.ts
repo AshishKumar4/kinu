@@ -18,15 +18,16 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { cpus } from 'node:os';
-import { relative, resolve } from 'node:path';
-import { childEnv } from '@kinu.run/test-utils';
+import { join, relative, resolve } from 'node:path';
+import { childEnv, scratchDir } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts, phaseWave,
   ciParts, localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
+  HAMMER_REPEATS, ciUnits, splitCIGate, type Gate,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
@@ -37,7 +38,7 @@ import { declaredName, parse, walk } from './syntax';
 import { auditClosure } from './ladder-audit';
 import { gateEnvironment } from './ladder-cache';
 import { deriveClosure, repoAt } from './ladder-closure';
-import { checkCoverage, pushRun, requireCIGreen } from './ci-verdicts';
+import { checkCoverage, checkFileCoverage, pushRun, readFileTimings, requireCIGreen } from './ci-verdicts';
 import { COST_TABLE, readCosts } from './gate-cost';
 import { costTableFaults } from './cost-table';
 
@@ -1158,25 +1159,30 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
     expect(() => requireCIGreen(run)).toThrow('in_progress');
     expect(() => requireCIGreen({ ...run, status: 'completed', conclusion: 'failure' })).toThrow('failure');
     expect(() => requireCIGreen({ ...run, status: 'completed', conclusion: 'cancelled' })).toThrow('cancelled');
-    const expected = tierRun('ci').map((gate) => gate.run);
-    const proved = expected.map((command) => ({ run: command, exitCode: command === 'bun run gate:hammer' ? 1 : 0, seconds: 1, output: '' }));
+    const expected = ciUnits().map((unit) => unit.gate.run);
+    const hammer = ciUnits().find((unit) => unit.gate.phase === 'hammer')?.gate.run ?? '';
+    const proved = expected.map((command) => ({ run: command, exitCode: command === hammer ? 1 : 0, seconds: 1, output: '' }));
 
-    expect(() => checkCoverage({ sha, part: 'all', rows: proved.filter((row) => row.run !== 'bun run gate:hammer') }, sha, expected)).toThrow('missing is not green');
+    expect(() => checkCoverage({ sha, part: 'all', rows: proved.filter((row) => row.run !== hammer) }, sha, expected)).toThrow('missing is not green');
     expect(reportCIVerdicts({ sha, part: 'all', rows: proved }, run.html_url, '')).toBe(false);
   });
 
   test('the cost shards cover every CI row once, isolate the hammer, and leave no CI source work in the deploy', () => {
     const parts = ciParts();
-    const expected = tierRun('ci').map((gate) => gate.run);
+    const expected = ciUnits().map((unit) => unit.gate.run);
     const runs = parts.flatMap((part) => part.runs);
 
     expect([...runs].sort()).toEqual([...expected].sort());
     expect(new Set(runs).size).toBe(runs.length);
-    expect(parts.find((part) => part.name === 'hammer')?.runs).toEqual(['bun run gate:hammer']);
-    expect(parts.filter((part) => part.name !== 'hammer').some((part) => part.runs.includes('bun run gate:hammer'))).toBe(false);
+    const hammer = parts.filter((part) => part.name.startsWith('hammer-')).flatMap((part) => part.runs);
+
+    expect(hammer).toEqual(Array.from({ length: HAMMER_REPEATS }, (_, index) => 'bun scripts/hammer.ts --run=' + String(index + 1)));
+    expect(parts.filter((part) => !part.name.startsWith('hammer-')).some((part) => part.runs.some((run) => hammer.includes(run)))).toBe(false);
     const local = localDeployGates(deployOrder());
 
-    expect(local.filter((gate) => gate.phase !== 'preflight').some((gate) => expected.includes(gate.run))).toBe(false);
+    const canonical = new Set(tierRun('ci').map((gate) => gate.run));
+
+    expect(local.filter((gate) => gate.phase !== 'preflight').some((gate) => canonical.has(gate.run))).toBe(false);
     expect(local.some((gate) => gate.run === 'bun run gate:first-run')).toBe(true);
     expect(local.some((gate) => gate.run === 'bash scripts/eval-pass-tier.sh')).toBe(true);
     expect(reportCIVerdicts({ sha, part: 'all', rows }, 'https://github.com/o/r/actions/runs/17', '')).toBe(false);
@@ -1194,5 +1200,46 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
     expect(live?.row.rssMb).toBe(2048);
     expect(live?.row.threads).toBe(1);
     expect(reportCIVerdicts({ sha, part: 'all', rows: [{ run, exitCode: 1, seconds: 30, output: 'failed live case' }] }, 'https://github.com/o/r/actions/runs/17', '')).toBe(false);
+  });
+
+  test('all six contended runs have independent runners instead of a sequential hammer tail', () => {
+    const parts = ciParts();
+
+    expect(parts.filter((part) => part.name.startsWith('hammer')).length).toBe(6);
+  });
+
+  test('file partitions execute every original suite file once and missing timing evidence refuses collection', () => {
+    const directory = scratchDir('ci-file-partitions');
+    const files = Array.from({ length: 5 }, (_, index) => join(directory, String(index) + '.test.ts'));
+
+    for (const file of files) writeFileSync(file, 'import { test, expect } from "bun:test"; test("a settled case", () => expect(2 + 2).toBe(4));');
+    const source = LADDER.find((gate) => gate.ciShards !== undefined);
+
+    if (source === undefined) throw new Error('there is no hosted split-suite row');
+    const gate: Gate = { ...source, run: 'bun test --timeout=0 ' + directory + '/', ciShards: 2 };
+    const units = splitCIGate(gate, files, {});
+    const seed = join(directory, 'seed.json');
+
+    writeFileSync(seed, JSON.stringify({ version: 1, files: { 'scripts/not-selected.test.ts': 4000 } }));
+
+    const observed = units.map((unit, index) => {
+      const path = join(directory, 'timings-' + String(index) + '.json');
+      const child = Bun.spawnSync([...runnableArgv(unit.run, files), '--shard=1/1', '--timings=' + path, '--timings=' + seed, '--update-timings'], { cwd: root, env: childEnv(), stdout: 'pipe', stderr: 'pipe' });
+
+      expect(child.exitCode, child.stderr.toString()).toBe(0);
+
+      return { run: unit.run, exitCode: child.exitCode, seconds: 1, output: '', timings: readFileTimings(path) ?? {} };
+    });
+
+    const measured = observed.flatMap((row) => Object.keys(row.timings));
+    const expected = files.map((file) => relative(root, file));
+
+    expect(measured.sort()).toEqual(expected.sort());
+    expect(new Set(measured).size).toBe(expected.length);
+    const file = { sha, part: 'all', rows: observed };
+    const coverage = units.map((unit) => ({ run: unit.run, files: claims(unit.run, files).map((name) => relative(root, name)) }));
+
+    checkFileCoverage(file, coverage);
+    expect(() => checkFileCoverage({ ...file, rows: observed.map((row) => ({ ...row, timings: {} })) }, coverage)).toThrow('file coverage differs');
   });
 });

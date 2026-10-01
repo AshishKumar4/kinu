@@ -55,7 +55,7 @@ import { stripVTControlCharacters } from 'node:util';
 
 import { runUnderDeadline, writeFully } from './deadline';
 import { assertMeasured, finding } from './gate-ratchet';
-import { claims, GATE_DEADLINE_SECONDS, LADDER } from './ladder';
+import { claims, GATE_DEADLINE_SECONDS, HAMMER_REPEATS, LADDER } from './ladder';
 import { trackedFiles } from './sources';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -70,11 +70,6 @@ if (hammerRow === undefined) throw new Error(`hammer: no ladder row is labelled 
 
 /** The suite under the hammer: the row's command, verbatim. */
 export const HAMMER_SUITE = hammerRow.run;
-
-/** How many times, by default. Six is the smallest N that has caught a 1-in-3
- *  flake here with margin; it is a floor on confidence, never a proof of
- *  absence, and the green path says so. */
-export const DEFAULT_RUNS = 6;
 
 /** What one run executes, and the longest it may write nothing. */
 export interface HammerCommand {
@@ -302,8 +297,15 @@ export function completeRun(run: HammerRun, governed: readonly string[]): boolea
 /* ── The verdict ──────────────────────────────────────────────────────── */
 
 if (import.meta.main) {
-  const declared = (process.env.KINU_HAMMER_RUNS ?? '').trim();
-  const runs = declared === '' ? DEFAULT_RUNS : Number(declared);
+  const selected = process.argv.find((argument) => argument.startsWith('--run='))?.slice('--run='.length);
+
+  if (selected !== undefined && (!Number.isInteger(Number(selected)) || Number(selected) < 1 || Number(selected) > HAMMER_REPEATS)) {
+    console.error('hammer: --run must name one of the ' + String(HAMMER_REPEATS) + ' required CI runs');
+    process.exit(2);
+  }
+
+  const declared = selected === undefined ? (process.env.KINU_HAMMER_RUNS ?? '').trim() : '1';
+  const runs = declared === '' ? HAMMER_REPEATS : Number(declared);
 
   if (!Number.isInteger(runs) || runs < 1) {
     console.error(
@@ -323,6 +325,8 @@ if (import.meta.main) {
   ]);
 
   console.log(`hammer: ${String(runs)} run(s) of \`${HAMMER_SUITE}\` under ${String(workers)} CPU burner(s)`);
+
+  if (selected !== undefined) console.log('hammer: independent CI run ' + selected + '/' + String(HAMMER_REPEATS));
   const started = performance.now();
   const results = await hammer(runs, workers);
   const elapsed = (performance.now() - started) / 1000;
@@ -407,6 +411,7 @@ if (import.meta.main) {
     ranAt: new Date().toISOString(),
     suite: HAMMER_SUITE,
     runs,
+    runIndex: selected === undefined ? undefined : Number(selected),
     contentionWorkers: workers,
     cores: cpus().length,
     seconds: Number(elapsed.toFixed(1)),
