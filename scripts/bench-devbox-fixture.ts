@@ -212,7 +212,7 @@ export function fixtureConfigForArms(
     ...config,
     $schema: join(REPO_ROOT, 'node_modules/wrangler/config-schema.json'),
     name: names.worker,
-    vars: { ...config.vars, BENCH_SELECTED_ARMS: arms.join(',') },
+    vars: { ...config.vars, BENCH_SELECTED_ARMS: arms.join(','), BENCH_INTERNET: process.env['BENCH_INTERNET'] ?? 'on' },
     main: join(BENCH_DIR, 'worker.ts'),
     durable_objects: {
       ...config.durable_objects,

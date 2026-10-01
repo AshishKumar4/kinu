@@ -114,17 +114,17 @@ describe('BackgroundJobStore', () => {
     const s = newStore();
     s.create({ id: 'w', kind: 'agents', workMode: 'build', now: 1 });
     expect(s.get('w')?.resumeAfter).toBeNull();
-    expect(s.nextResumeAtInWorkspace()).toBeNull();
+    expect(s.resumesInWorkspace()).toEqual([]);
 
     s.deferResume('w', 5_000);
     expect(s.get('w')?.resumeAfter).toBe(5_000);
-    expect(s.nextResumeAtInWorkspace()).toBe(5_000);
+    expect(s.resumesInWorkspace()).toEqual([{ id: 'w', at: 5_000 }]);
     expect(s.listRunning().items[0]?.resumeAfter).toBe(5_000);
     expect(s.list()[0]?.resumeAfter).toBe(5_000);
 
     expect(s.reclaim('w', 6_000)).toEqual({ epoch: 1, attempts: 1 });
     expect(s.get('w')?.resumeAfter).toBeNull();
-    expect(s.nextResumeAtInWorkspace()).toBeNull();
+    expect(s.resumesInWorkspace()).toEqual([]);
   });
 
   test('a wait is only ever owed by a RUNNING job', () => {
@@ -133,10 +133,10 @@ describe('BackgroundJobStore', () => {
     s.settle('settled', 0, '"done"', 2);
     s.deferResume('settled', 9_000);
     expect(s.get('settled')?.resumeAfter).toBeNull();
-    expect(s.nextResumeAtInWorkspace()).toBeNull();
+    expect(s.resumesInWorkspace()).toEqual([]);
   });
 
-  test('resumeOwedIdsInWorkspace names only the jobs whose next attempt is still in the future', () => {
+  test('resumesInWorkspace names every running job with an armed next attempt, due or not', () => {
     const s = newStore();
 
     for (const id of ['due', 'waiting', 'never']) {
@@ -146,9 +146,7 @@ describe('BackgroundJobStore', () => {
     s.deferResume('due', 1_000);
     s.deferResume('waiting', 10_000);
 
-    expect(s.resumeOwedIdsInWorkspace(5_000)).toEqual(['waiting']);
-    expect(s.resumeOwedIdsInWorkspace(50_000)).toEqual([]);
-    expect(s.nextResumeAtInWorkspace()).toBe(1_000);
+    expect(s.resumesInWorkspace()).toEqual([{ id: 'due', at: 1_000 }, { id: 'waiting', at: 10_000 }]);
   });
 
   test('create stores input_json; getInput round-trips it for retry', () => {

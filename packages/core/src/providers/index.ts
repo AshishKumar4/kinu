@@ -20,7 +20,7 @@ export * from './util';
 
 export * from './workers-ai';
 
-export * from './default-spec';
+export * from './model-registry';
 
 export * from './models-dev';
 

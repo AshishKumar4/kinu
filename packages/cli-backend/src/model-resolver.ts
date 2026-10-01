@@ -3,26 +3,22 @@ import {
   DEFAULT_WORKERS_AI_MODEL_ID,
   credentialToHeaders,
   normalizeModelMenu,
-  createAnthropicProvider,
   createChatGptProvider,
-  createClaudeProvider,
   availableJudgeSpecs,
   accountDeps,
-  catalogModelInfo,
-  createModelsDevCatalogSource,
+  specModelInfo,
   createOpenAICompatProvider,
-  createOpenAIProvider,
-  createOpenRouterProvider,
   createProviderProxyFetch,
-  createProviderRegistry,
   listModelsDevProviderModels,
   generateReported,
   mapModelList,
   streamTextReported,
   parseModelSpec,
-  specProvider,
-  workersAiSpec, WORKERS_AI_MODEL_ID_PREFIX,
-  catalogProviderOfKey,
+  workersAiSpec,
+  sessionAffinityOf,
+  SESSION_AFFINITY_HEADER,
+  createModelRegistry,
+  normalizeModelSpec,
   isProxyDeniedCredentialKey,
   providerProxyCredentialsURL,
   providerProxyForwardURL,
@@ -41,6 +37,7 @@ import {
   type ProviderInfo,
   type ProviderWaitInfo,
   type ModelCallSpend,
+  type ModelRouteResolution,
   type GenerateRequest,
   type StreamRequest,
   countRequestInputTokens,
@@ -155,12 +152,12 @@ export interface LocalModelResolverConfig {
 }
 
 /**
- * The workspace LLM seam over the local registry. `spec` overrides the model
- * (chosen by the turn profile's tier route); omitted = configured chat model.
+ * The workspace LLM seam over the local registry. `route` is the turn profile's
+ * model and effort; omitted = configured chat model at its own effort.
  * Only completed calls report spend: a thrown call yields no usage.
  */
 export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
-  spec?: string | null;
+  route?: Pick<ModelRouteResolution, 'model' | 'reasoningEffort'>;
   conversation: string;
   /** Sink and producer label together: only the consumer knows which producer
    *  a call belongs to. */
@@ -168,10 +165,10 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
 }): LLM {
   const resolver = createLocalModelResolver(opts);
   // Normalized per call: an unresolvable id fails at the call, not at construction.
-  const spec = () => resolver.normalizeSpecSync(opts.spec ?? null);
+  const spec = () => resolver.normalizeSpecSync(opts.route?.model ?? null);
   const model = (resolved: string) => resolver.resolveModel(resolved, opts.conversation);
   const spend = opts.spend;
-  const effortOptions = (resolved: string) => reasoningEffortOptions('low', parseModelSpec(resolved).provider);
+  const effortOptions = (resolved: string) => reasoningEffortOptions(opts.route?.reasoningEffort, parseModelSpec(resolved).provider);
 
   return {
     stream(input) {
@@ -215,7 +212,6 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
  * config/env credentials, keeping the KINU_BASE_URL / KINU_AUTH override.
  */
 export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalModelResolver {
-  const registry = createProviderRegistry();
   const localEndpoint = opts.llm;
   const credentials = opts.credentials ?? {};
   const authStore = buildAuthStore(localEndpoint, credentials, opts.oauthStore);
@@ -228,75 +224,50 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     && localEndpoint !== null
     && localEndpoint.baseURL.replace(/\/+$/, '') === cloudProxyBaseURL(cloud.origin);
 
-  const defaultProvider = defaultProviderFor(localEndpoint);
+  const defaultSpec = defaultSpecForEndpoint(localEndpoint);
+  const gateway = defaultProviderFor(localEndpoint) === 'workers-ai' && !llmIsCloudProxy ? localEndpoint : null;
+  const menu = cloud ? createCloudModelMenu(cloud, opts.fetch) : null;
 
-  if (localEndpoint !== null && defaultProvider === 'workers-ai' && !llmIsCloudProxy) {
-    registry.register(createGatewayBackedProvider({
-      id: 'workers-ai',
-      label: 'Cloudflare Workers AI (local gateway)',
-      defaultModel: localEndpoint.model,
-      llm: localEndpoint,
-      catalogProviderId: 'cloudflare-workers-ai',
-      fetch: opts.fetch,
-    }));
-    registry.register(createGatewayBackedProvider({
+  const cloudProvider = (id: CloudProxyProviderId, label: string, unavailableReason: string, defaultModel?: string): ModelProvider => {
+    if (!cloud || !menu) return createSignedOutCloudProvider(id, label);
+
+    return createCloudProxyProvider({ id, label, cloud, menu, defaultModel, unavailableReason, fetch: opts.fetch });
+  };
+
+  const registry = createModelRegistry({
+    workersAi: gateway === null
+      ? cloudProvider('workers-ai', 'Cloudflare Workers AI (your account)',
+        'Connect Cloudflare in Account settings in the Kinu app to use Workers AI.', DEFAULT_WORKERS_AI_MODEL_ID)
+      : createGatewayBackedProvider({
+        id: 'workers-ai',
+        label: 'Cloudflare Workers AI (local gateway)',
+        defaultModel: gateway.model,
+        llm: gateway,
+        catalogProviderId: 'cloudflare-workers-ai',
+        fetch: opts.fetch,
+      }),
+    myGateway: cloudProvider('my-gateway', 'Your AI Gateway',
+      'Connect Cloudflare and pick an AI Gateway in Account settings in the Kinu app.'),
+    aiGateway: gateway === null ? undefined : createGatewayBackedProvider({
       id: 'ai-gateway',
       label: 'Cloudflare AI Gateway (local)',
-      defaultModel: workersAiSpec(localEndpoint.model),
-      llm: localEndpoint,
+      defaultModel: workersAiSpec(gateway.model),
+      llm: gateway,
       catalogProviderId: 'cloudflare-workers-ai',
       catalogModelPrefix: 'workers-ai/',
       fetch: opts.fetch,
-    }));
-  }
-
-  if (cloud) {
-    const menu = createCloudModelMenu(cloud, opts.fetch);
-
-    if (!registry.get('workers-ai')) {
-      registry.register(createCloudProxyProvider({
-        id: 'workers-ai',
-        label: 'Cloudflare Workers AI (your account)',
-        cloud,
-        menu,
-        defaultModel: DEFAULT_WORKERS_AI_MODEL_ID,
-        unavailableReason: 'Connect Cloudflare in Account settings in the Kinu app to use Workers AI.',
-        fetch: opts.fetch,
-      }));
-    }
-
-    registry.register(createCloudProxyProvider({
-      id: 'my-gateway',
-      label: 'Your AI Gateway',
-      cloud,
-      menu,
-      unavailableReason: 'Connect Cloudflare and pick an AI Gateway in Account settings in the Kinu app.',
-      fetch: opts.fetch,
-    }));
-  } else {
-    if (!registry.get('workers-ai')) {
-      registry.register(createSignedOutCloudProvider('workers-ai', 'Cloudflare Workers AI (your account)'));
-    }
-
-    registry.register(createSignedOutCloudProvider('my-gateway', 'Your AI Gateway'));
-  }
-
-  registry.register(createClaudeProvider());
-  registry.register(createOpenCodeProvider());
-  registry.register(createChatGptProvider());
-  registry.register(createOpenAIProvider());
-  registry.register(createAnthropicProvider());
-  registry.register(createOpenRouterProvider({ appTitle: 'Kinu CLI' }));
-  registry.register(createOpenAICompatProvider());
-
-  for (const name of Object.keys(credentials.openaiCompat ?? {}).sort()) {
-    if (name !== 'default') registry.register(createOpenAICompatProvider(`openai-compat:${name}`));
-  }
+    }),
+    chatgpt: createChatGptProvider(),
+    codex: undefined,
+    opencode: createOpenCodeProvider(),
+    compat: Object.keys(credentials.openaiCompat ?? {}).sort().flatMap((name) => (name === 'default' ? []
+      : [createOpenAICompatProvider(`openai-compat:${name}`)])),
+    appTitle: 'Kinu CLI',
+  });
 
   // Web-UI-connected providers resolve through the worker's proxy. A local
   // credential always wins: offline use and explicit override.
   const proxied = cloud ? perCloudSession(proxyCredentialSources, cloud, opts.fetch, () => createProxyCredentialSource(cloud, opts.fetch)) : null;
-  registry.registerDynamic(createModelsDevCatalogSource({ exclude: ['cloudflare-workers-ai'] }));
 
   const depsFor = (accountFor?: (providerId: string) => string | undefined): ProviderDeps => ({
     env: {},
@@ -348,45 +319,8 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
   const deps = depsFor();
 
-  /** Null endpoint = no default; fixes live in `noDefaultModelMessage`. */
-  const fallback: { provider: string; model: string } | null = localEndpoint
-    ? {
-      provider: defaultProvider !== null && registry.get(defaultProvider) ? defaultProvider : 'openai-compat',
-      model: localEndpoint.model,
-    }
-    : null;
-
-  function normalizeSpecSync(specOrNull?: string | null): string {
-    const s = (specOrNull ?? '').trim();
-
-    if (!s) {
-      if (!fallback) throw new Error(noDefaultModelMessage());
-
-      return `${fallback.provider}/${fallback.model}`;
-    }
-
-    if (s.startsWith(WORKERS_AI_MODEL_ID_PREFIX)) return workersAiSpec(s);
-
-    const first = specProvider(s);
-
-    if (first !== null) {
-      if (registry.get(first)) return s;
-
-      // Account-connected models.dev providers count here. The snapshot is empty
-      // until a listing lands; every model-picking path lists first.
-      if (proxied?.providerIds().has(first)) return s;
-
-      // Slashful model IDs (e.g. minimax/m3) belong to the configured endpoint
-      // unless the first segment is a provider.
-      if (!fallback) throw new Error(noDefaultModelMessage());
-
-      return `${fallback.provider}/${s}`;
-    }
-
-    if (!fallback) throw new Error(noDefaultModelMessage());
-
-    return `${fallback.provider}/${s}`;
-  }
+  const normalizeSpecSync = (specOrNull?: string | null): string =>
+    normalizeModelSpec(specOrNull, registry, { spec: defaultSpec, missing: noDefaultModelMessage() });
 
   const resolverWith = (own: ProviderDeps): LocalModelResolver => ({
     normalizeSpecSync,
@@ -405,11 +339,8 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     listModels() {
       return registry.listAllModels(own);
     },
-    async modelInfo(specOrNull) {
-      const spec = normalizeSpecSync(specOrNull);
-      const { provider, modelId, account } = parseModelSpec(spec);
-
-      return catalogModelInfo(registry.get(provider), accountDeps(own, provider, account), modelId);
+    modelInfo(specOrNull) {
+      return specModelInfo(registry, own, normalizeSpecSync(specOrNull));
     },
     async countInputTokens(specOrNull, request) {
       const spec = normalizeSpecSync(specOrNull);
@@ -431,11 +362,9 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
 /** A Cloudflare-shaped endpoint takes the same replica pin as the proxy path; a pin its own headers set wins. */
 function withAffinity(llm: LLMProviderConfig, sessionAffinity: string): LLMProviderConfig {
-  for (const header in llm.headers) {
-    if (header.toLowerCase() === 'x-session-affinity') return llm;
-  }
+  if (sessionAffinityOf(llm.headers) !== undefined) return llm;
 
-  return { ...llm, headers: { ...llm.headers, 'x-session-affinity': sessionAffinity } };
+  return { ...llm, headers: { ...llm.headers, [SESSION_AFFINITY_HEADER]: sessionAffinity } };
 }
 
 function createGatewayBackedProvider(opts: {
@@ -537,12 +466,9 @@ const PROXIED_CREDENTIALS_TTL_MS = 60_000;
 
 interface ProxyCredentialSource {
   load(): Promise<ProxiedCredentials>;
-  /** Synchronous: `normalizeSpecSync` must decide whether `groq/llama-3.3` starts
-   *  with a provider and cannot await. Empty until a listing lands. */
-  providerIds(): ReadonlySet<string>;
 }
 
-/** Shared across resolvers so a picker listing also warms the spec normalizer. */
+/** Shared across resolvers so one listing serves every conversation. */
 const proxyCredentialSources: PerCloudSession<ProxyCredentialSource> = new Map();
 
 function createProxyCredentialSource(
@@ -551,7 +477,6 @@ function createProxyCredentialSource(
 ): ProxyCredentialSource {
   const baseFetch = fetchImpl ?? fetch;
   let cached: { at: number; value: ProxiedCredentials } | null = null;
-  let providerIds: ReadonlySet<string> = new Set();
 
   const load = async (): Promise<ProxiedCredentials> => {
     if (cached && Date.now() - cached.at < PROXIED_CREDENTIALS_TTL_MS) return cached.value;
@@ -565,7 +490,6 @@ function createProxyCredentialSource(
       if (res.status === 401 || res.status === 403) {
         const value: ProxiedCredentials = { byKey: new Map(), error: null };
         cached = { at: Date.now(), value };
-        providerIds = new Set();
 
         return value;
       }
@@ -583,7 +507,6 @@ function createProxyCredentialSource(
 
       const value: ProxiedCredentials = { byKey, error: null };
       cached = { at: Date.now(), value };
-      providerIds = new Set([...byKey.keys()].flatMap((key) => catalogProviderOfKey(key) ?? []));
 
       return value;
     } catch (err) {
@@ -596,7 +519,7 @@ function createProxyCredentialSource(
     }
   };
 
-  return { load, providerIds: () => providerIds };
+  return { load };
 }
 
 /** The model id is the proxy wire id (`@cf/…` or `{author}/{model}`), so specs
@@ -639,7 +562,7 @@ function createCloudProxyProvider(opts: {
         kind: 'openai-compat',
         name: opts.id,
         baseURL,
-        headers: { Authorization: `Bearer ${opts.cloud.token}`, 'x-session-affinity': deps.sessionAffinity },
+        headers: { Authorization: `Bearer ${opts.cloud.token}`, [SESSION_AFFINITY_HEADER]: deps.sessionAffinity },
         modelId,
         fetch: opts.fetch,
         onWait: deps.onProviderWait,
@@ -722,10 +645,6 @@ interface LocalAuthStore {
   get(key: string, authOpts?: AuthRequest): Promise<AuthResolution | null>;
 }
 
-interface OpenAICompatHeaders {
-  [header: string]: string;
-}
-
 function buildAuthStore(
   localEndpoint: LLMProviderConfig | null,
   credentials: LocalProviderCredentials,
@@ -733,43 +652,15 @@ function buildAuthStore(
 ): LocalAuthStore {
   const store = new Map<string, AuthResolution>();
 
-  if (credentials.openaiApiKey) {
-    store.set('openai.bearer', bearer(credentials.openaiApiKey));
-  }
+  const apiKeys = {
+    'openai.bearer': credentials.openaiApiKey,
+    'anthropic.bearer': credentials.anthropicApiKey,
+    'openrouter.bearer': credentials.openrouterApiKey,
+    ...credentials.apiKeyAccounts,
+  };
 
-  if (!store.has('openai.bearer') && localEndpoint?.name === 'openai') {
-    const auth = localEndpoint.headers.Authorization ?? localEndpoint.headers.authorization;
-
-    if (auth) store.set('openai.bearer', { headers: { Authorization: auth } });
-  }
-
-  if (credentials.anthropicApiKey) {
-    store.set('anthropic.bearer', {
-      headers: credentialToHeaders('anthropic.bearer', { kind: 'bearer', token: credentials.anthropicApiKey }),
-    });
-  }
-
-  if (!store.has('anthropic.bearer') && localEndpoint?.name === 'anthropic') {
-    const key = localEndpoint.headers['x-api-key'] ?? localEndpoint.headers['X-Api-Key'];
-
-    if (key) {
-      store.set('anthropic.bearer', {
-        headers: {
-          'x-api-key': key,
-          'anthropic-version': localEndpoint.headers['anthropic-version'] ?? '2023-06-01',
-        },
-      });
-    }
-  }
-
-  if (credentials.openrouterApiKey) {
-    store.set('openrouter.bearer', bearer(credentials.openrouterApiKey));
-  }
-
-  if (!store.has('openrouter.bearer') && localEndpoint?.name === 'openrouter') {
-    const auth = localEndpoint.headers.Authorization ?? localEndpoint.headers.authorization;
-
-    if (auth) store.set('openrouter.bearer', { headers: { Authorization: auth } });
+  for (const [key, token] of Object.entries(apiKeys)) {
+    if (token) store.set(key, { headers: credentialToHeaders(key, { kind: 'bearer', token }) });
   }
 
   if (localEndpoint?.name === 'openai-compat') {
@@ -780,20 +671,7 @@ function buildAuthStore(
   }
 
   for (const [name, compat] of Object.entries(credentials.openaiCompat ?? {})) {
-    const headers: OpenAICompatHeaders = {
-      ...compat.headers,
-      ...compat.extraHeaders,
-    };
-
-    if (compat.apiKey) headers.Authorization = `Bearer ${compat.apiKey}`;
-    store.set(`openai-compat.${name}`, {
-      headers,
-      baseURL: compat.baseURL,
-    });
-  }
-
-  for (const [key, token] of Object.entries(credentials.apiKeyAccounts ?? {})) {
-    store.set(key, { headers: credentialToHeaders(key, { kind: 'bearer', token }) });
+    store.set(`openai-compat.${name}`, { headers: openAiCompatHeaders(compat), baseURL: compat.baseURL });
   }
 
   return {
@@ -813,6 +691,11 @@ function buildAuthStore(
   };
 }
 
-function bearer(token: string): AuthResolution {
-  return { headers: { Authorization: token.startsWith('Bearer ') ? token : `Bearer ${token}` } };
+/** Core's openai-compat order (`credentialToHeaders`): the key's Authorization, then the extra headers over it. */
+export function openAiCompatHeaders(compat: LocalOpenAICompatCredential) {
+  const headers = { ...compat.headers };
+
+  if (compat.apiKey) headers.Authorization = `Bearer ${compat.apiKey}`;
+
+  return { ...headers, ...compat.extraHeaders };
 }

@@ -16,7 +16,7 @@ function sseData(payload: string): string {
 
 describe('openai-compat cancellation', () => {
   test('aborting the turn aborts the in-flight provider request', async () => {
-    const seen: Array<{ live: boolean; fired: boolean; same: boolean }> = [];
+    const seen: Array<{ live: boolean; fired: boolean }> = [];
     const controller = new AbortController();
 
     const fetchImpl = asFetchFunction(async (_input, init) => {
@@ -25,7 +25,6 @@ describe('openai-compat cancellation', () => {
       const entry = {
         live: signal instanceof AbortSignal,
         fired: false,
-        same: signal === controller.signal,
       };
 
       seen.push(entry);
@@ -96,10 +95,9 @@ describe('openai-compat cancellation', () => {
       failureMessage = cause instanceof Error ? cause.message : String(cause);
     }
 
-    // The fetch saw the identical signal the turn was given, and it fired.
+    // The fetch's signal, the turn's joined with the transport's silence bound, fired with the turn.
     expect(seen).toHaveLength(1);
     expect(seen[0]?.live).toBe(true);
-    expect(seen[0]?.same).toBe(true);
     expect(seen[0]?.fired).toBe(true);
 
     expect(failureMessage.length).toBeGreaterThan(0);

@@ -26,7 +26,7 @@ import * as v from 'valibot';
 import {
   CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts, phaseWave,
-  runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
+  ciParts, localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
@@ -37,6 +37,7 @@ import { declaredName, parse, walk } from './syntax';
 import { auditClosure } from './ladder-audit';
 import { gateEnvironment } from './ladder-cache';
 import { deriveClosure, repoAt } from './ladder-closure';
+import { checkCoverage, pushRun, requireCIGreen } from './ci-verdicts';
 import { COST_TABLE, readCosts } from './gate-cost';
 import { costTableFaults } from './cost-table';
 
@@ -705,7 +706,6 @@ describe('CI is not a silent subset of deploy', () => {
     // independently, because that is how it came to skip five packages.
     const commands = workflowCommands(readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8'));
 
-    expect(commands).toContain('bun scripts/ladder.ts --tier=ci');
     expect(commands.filter(enumerates)).toEqual([]);
   });
 
@@ -1124,5 +1124,75 @@ describe('a tier runs its gates as a wave', () => {
     const { started } = await waved([row(8), row(8), row(8)], 1);
 
     expect(started).toEqual([0]);
+  });
+});
+
+describe('CI verdicts belong to the exact pushed revision and the complete row plan', () => {
+  const sha = 'a'.repeat(40);
+  const first = { run: 'bun test a.test.ts', exitCode: 0, seconds: 1, output: '' };
+  const second = { run: 'bun test b.test.ts', exitCode: 1, seconds: 2, output: 'a real failure' };
+  const rows = [first, second];
+
+  test('another SHA, duplicate rows, missing rows and unknown commands cannot stand for the plan', () => {
+    const file = { sha, part: 'all', rows };
+    const expected = rows.map((row) => row.run);
+
+    expect(() => checkCoverage({ ...file, sha: 'b'.repeat(40) }, sha, expected)).toThrow('not the deployed revision');
+    expect(() => checkCoverage({ ...file, rows: [first, first] }, sha, expected)).toThrow('twice');
+    expect(() => checkCoverage({ ...file, rows: [first] }, sha, expected)).toThrow('missing is not green');
+    expect(() => checkCoverage(file, sha, [first.run])).toThrow('outside this plan');
+    checkCoverage(file, sha, expected);
+    expect(file.rows.find((row) => row.exitCode !== 0)?.output).toBe('a real failure');
+  });
+
+  test('only a push of this full SHA, never a PR merge or another revision, is accepted', () => {
+    const run = { id: 17, run_attempt: 1, head_sha: sha, event: 'push', status: 'in_progress', html_url: 'https://github.com/o/r/actions/runs/17' };
+
+    expect(() => pushRun({ ...run, event: 'pull_request' }, sha)).toThrow('not a push');
+    expect(() => pushRun({ ...run, head_sha: 'b'.repeat(40) }, sha)).toThrow('not a push');
+  });
+
+  test('pending, failed or canceled CI and a missing or red hammer never verify the revision', () => {
+    const run = pushRun({ id: 17, run_attempt: 1, head_sha: sha, event: 'push', status: 'in_progress', html_url: 'https://github.com/o/r/actions/runs/17' }, sha);
+
+    expect(() => requireCIGreen(run)).toThrow('in_progress');
+    expect(() => requireCIGreen({ ...run, status: 'completed', conclusion: 'failure' })).toThrow('failure');
+    expect(() => requireCIGreen({ ...run, status: 'completed', conclusion: 'cancelled' })).toThrow('cancelled');
+    const expected = tierRun('ci').map((gate) => gate.run);
+    const proved = expected.map((command) => ({ run: command, exitCode: command === 'bun run gate:hammer' ? 1 : 0, seconds: 1, output: '' }));
+
+    expect(() => checkCoverage({ sha, part: 'all', rows: proved.filter((row) => row.run !== 'bun run gate:hammer') }, sha, expected)).toThrow('missing is not green');
+    expect(reportCIVerdicts({ sha, part: 'all', rows: proved }, run.html_url, '')).toBe(false);
+  });
+
+  test('the cost shards cover every CI row once, isolate the hammer, and leave no CI source work in the deploy', () => {
+    const parts = ciParts();
+    const expected = tierRun('ci').map((gate) => gate.run);
+    const runs = parts.flatMap((part) => part.runs);
+
+    expect([...runs].sort()).toEqual([...expected].sort());
+    expect(new Set(runs).size).toBe(runs.length);
+    expect(parts.find((part) => part.name === 'hammer')?.runs).toEqual(['bun run gate:hammer']);
+    expect(parts.filter((part) => part.name !== 'hammer').some((part) => part.runs.includes('bun run gate:hammer'))).toBe(false);
+    const local = localDeployGates(deployOrder());
+
+    expect(local.filter((gate) => gate.phase !== 'preflight').some((gate) => expected.includes(gate.run))).toBe(false);
+    expect(local.some((gate) => gate.run === 'bun run gate:first-run')).toBe(true);
+    expect(local.some((gate) => gate.run === 'bash scripts/eval-pass-tier.sh')).toBe(true);
+    expect(reportCIVerdicts({ sha, part: 'all', rows }, 'https://github.com/o/r/actions/runs/17', '')).toBe(false);
+  });
+
+  test('a red live run provides resource admission but remains a red correctness verdict', () => {
+    const costs = readCosts();
+    const run = 'bash scripts/product-flows-tier.sh';
+    const measured = costs.rows[run];
+
+    if (measured === undefined) throw new Error('the product-flow resource measurement is absent');
+    const red = { ...measured, exit: 1, cpuSeconds: 20, wallSeconds: 30, peakRssMb: 2048 };
+    const live = phaseWave(['post-publish'], { ...costs, rows: { ...costs.rows, [run]: red } }).find((entry) => entry.gate.run === run);
+
+    expect(live?.row.rssMb).toBe(2048);
+    expect(live?.row.threads).toBe(1);
+    expect(reportCIVerdicts({ sha, part: 'all', rows: [{ run, exitCode: 1, seconds: 30, output: 'failed live case' }] }, 'https://github.com/o/r/actions/runs/17', '')).toBe(false);
   });
 });

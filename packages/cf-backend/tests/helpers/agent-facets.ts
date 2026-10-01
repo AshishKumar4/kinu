@@ -12,6 +12,8 @@ export interface InProcessAgentFacets {
   open(placement: AgentFacetPlacement, workspace: AgentWorkspaceHost): Promise<AgentFacet>;
   drop(storageKey: string): void;
   reset(storageKey: string): void;
+  /** Every live-output call an agent's isolate made to the workspace, in order: each is an RPC in production. */
+  traceCalls(): readonly string[];
 }
 
 function unreachable(): never {
@@ -46,6 +48,7 @@ export function agentDatabase(storageKey: string): Database {
 
 export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => AgentContext): InProcessAgentFacets {
   const live = new Map<string, AgentFacet>();
+  const traceCalls: string[] = [];
 
   contextOver = makeCtx;
 
@@ -64,7 +67,16 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
           stateSession,
           memory: () => host.memory(),
           program: (...args) => host.program(...args),
-          traceTurn: (...args) => host.traceTurn(...args),
+          traceTurn: (...args) => {
+            traceCalls.push('traceTurn');
+
+            return host.traceTurn(...args);
+          },
+          traceStream: (...args) => {
+            traceCalls.push('traceStream');
+
+            return host.traceStream(...args);
+          },
           resume: (turnId) => host.resume(turnId),
           guard: (...args) => host.guard(...args),
           debit: (...args) => host.debit(...args),
@@ -100,6 +112,7 @@ export function inProcessAgentFacets(makeCtx: (db: Database, id: string) => Agen
       return facet;
     },
     reset: (storageKey) => { live.delete(storageKey); },
+    traceCalls: () => traceCalls,
     drop: (storageKey) => {
       live.delete(storageKey);
       databases.get(storageKey)?.close();

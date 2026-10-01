@@ -339,7 +339,7 @@ export function createCLIRuntime(
     conversation: agentAffinityKey(actor.name),
     credentials: config.providerCredentials,
     oauthStore: config.oauthStore,
-    spec: resolution.model,
+    route: resolution,
     spend: { source: resolution.source, report, operations },
   });
 

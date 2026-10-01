@@ -97,7 +97,7 @@ import * as v from 'valibot';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 
 import {
-  DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema,
+  DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, hostedActorSocketPath, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema,
   STEER_STEP_METADATA_KEY, parseJsonValue, renderSoulMarkdown, rowText, CommandResultSchema,
   type EvalAccount, type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent,
   type SubordinateInspectionRequest, type WorkspaceSpend,
@@ -692,7 +692,9 @@ function pageOf<Item extends v.GenericSchema>(item: Item) {
 
 /** The inspector's answers a check reads (`inspectSubordinate`): the lead's helpers and each helper's runs. */
 const InspectionAnswerSchema = v.variant('view', [
-  v.object({ view: v.literal('children'), page: pageOf(v.object({ name: v.string(), status: v.string(), lifetime: v.string() })) }),
+  v.object({ view: v.literal('children'), page: pageOf(v.object({
+    name: v.string(), status: v.string(), lifetime: v.string(), actorReference: v.nullable(v.object({ actorId: v.string() })),
+  })) }),
   v.object({ view: v.literal('runs'), page: pageOf(v.object({ status: v.nullable(v.string()), userMessage: v.nullable(v.string()) })) }),
   v.object({ view: v.literal('missing'), reason: v.string(), error: v.string() }),
 ]);
@@ -730,8 +732,60 @@ export type PublicSwarmRun = v.InferOutput<typeof SwarmRunSchema>;
 
 const SwarmPageSchema = pageOf(SwarmRunSchema);
 
-/** A turn frame's body is one AI SDK UI message chunk. */
-const ChunkTypeSchema = v.object({ type: v.string() });
+/** A turn frame's body is one AI SDK UI message chunk; the chunks of a tool call's run carry its id. */
+const ChunkTypeSchema = v.object({ type: v.string(), toolCallId: v.optional(v.string()), preliminary: v.optional(v.boolean()) });
+
+/** A chunk as far as hearing needs it: its type, and the call it belongs to. */
+export type HeardChunk = v.InferOutput<typeof ChunkTypeSchema>;
+
+/** One frame as a socket heard it: its chunk, and whether it is live output rather than a replay of what was sent. */
+export type HeardFrame = { readonly live: boolean; readonly chunk: HeardChunk | null };
+
+/** A helper's room: the socket on its path, and the streams it hears. */
+type HelperRoom = { readonly socket: WebSocket; readonly heard: HeardStreams };
+
+function chunkOf(body: string | undefined): HeardChunk | null {
+  const chunk = body === undefined ? null : v.safeParse(ChunkTypeSchema, decodeSocketJson(body));
+
+  return chunk?.success === true ? chunk.output : null;
+}
+
+/** The broadcasts a head's live output rides, to every socket: its words, and each step its journal lands
+ *  (`publishHeadStreamFrame`, `announceHeadActivity` in cf-backend `actor-agent.ts`). Swarm nodes speak only here. */
+const HEAD_FRAMES: ReadonlySet<string> = new Set(['head_stream', 'head_activity']);
+
+/** How soon a helper's room that closed is opened again: a room the edge refuses is not dialled at every poll. */
+const ROOM_REDIAL_MS = 30_000;
+
+/**
+ * The streams one socket hears, and the tool calls each has started and not ended. A call runs from its input to its
+ * last output; one parked for a person's approval is not running. A replay sends a stream again from its start, so the
+ * calls it leaves running are the stream's; a stream's `done` ends them all.
+ */
+export class HeardStreams {
+  private readonly calls = new Map<string, Set<string>>();
+
+  /** Hear one frame of `stream`. */
+  hear(stream: string, frame: PublicResponseFrame): HeardFrame {
+    const chunk = chunkOf(frame.body);
+
+    if (chunk?.toolCallId !== undefined) {
+      const running = this.calls.get(stream) ?? new Set<string>();
+
+      if (chunk.type === 'tool-input-available') running.add(chunk.toolCallId);
+      else if ((chunk.type.startsWith('tool-output-') && chunk.preliminary !== true) || chunk.type === 'tool-approval-request') running.delete(chunk.toolCallId);
+      this.calls.set(stream, running);
+    }
+
+    if (frame.done === true) this.calls.delete(stream);
+
+    return { live: frame.replay !== true, chunk };
+  }
+
+  running(): string[] {
+    return [...this.calls.values()].flatMap((running) => [...running]);
+  }
+}
 
 const SetModelSchema = v.object({ spec: v.string() });
 
@@ -1165,6 +1219,23 @@ export class KinuPublicSession {
    *  deployment sends again after a redial, `done` at a turn's last frame, and `closed <code>` when the socket drops. */
   onChunk: (type: string) => void = () => undefined;
 
+  /** Told of each live chunk heard outside this session's own turns: a turn the product opened in the workspace's room
+   *  (`room` null), a helper's turn in its own room, a head's words (`head_stream`) and each step it lands (`head_activity`). */
+  onHeard: (room: string | null, type: string) => void = () => undefined;
+
+  /** Live frames heard so far in every room this session hears. The ledger writes a step only when it ends, so a model
+   *  streaming one step for minutes is heard working only here. */
+  private framesHeard = 0;
+
+  /** The streams each open socket hears: the workspace's room from `dial`, each helper's from `listen`. The ledger writes
+   *  a call only when it ends (`tool_call_end`), so a call that runs for minutes, a helper's task, is seen running only here. */
+  private readonly hearing = new Set<HeardStreams>();
+
+  /** The helpers' rooms this session listens to, by helper name, and when each one that closed last closed. */
+  private readonly rooms = new Map<string, HelperRoom>();
+
+  private readonly roomsClosedAt = new Map<string, number>();
+
   /** The ledger read so far, by run. Its rows are never rewritten, so a later read asks each run only for what it
    *  added: a settle poll that walked every row of a long trial again was the harness's heaviest read. */
   private readonly ledger = new Map<string, readonly RunEvent[]>();
@@ -1251,9 +1322,10 @@ export class KinuPublicSession {
     });
   }
 
-  private newSocket(): WebSocket {
+  /** A socket on the workspace's room, or on a helper's when `room` is its path tail (`hostedActorSocketPath`). */
+  private newSocket(room?: string): WebSocket {
     const url = new URL(
-      `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.workspace)}`,
+      `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.workspace)}${room === undefined ? '' : `/${room}`}`,
       this.input.origin,
     );
 
@@ -1267,15 +1339,19 @@ export class KinuPublicSession {
   private async dial(): Promise<void> {
     const socket = this.newSocket();
     const where = new URL(socket.url);
+    const heard = new HeardStreams();
 
     this.socket = socket;
+    this.hearing.add(heard);
     socket.addEventListener('message', (event: MessageEvent) => {
-      this.handleFrame(event.data);
+      this.handleFrame(event.data, heard);
     });
     // The platform closes an idle socket when it deactivates the instance (1006, "no longer active,
     // reconnect"); the next send redials rather than writing into a CLOSED socket, which discards the
     // frame without an error and leaves its caller waiting forever.
     socket.addEventListener('close', (event: CloseEvent) => {
+      this.hearing.delete(heard);
+
       // A socket this session let go of (`disconnect`, `teardown`) is no longer `this.socket`; any other close is news.
       if (this.socket === socket) {
         this.socket = null;
@@ -1521,6 +1597,67 @@ export class KinuPublicSession {
     return v.parse(DecideApprovalsSchema, answer).decided;
   }
 
+  /** The tool calls running in every stream this session hears, by id: its own turns', the product's own, and the
+   *  rooms of the helpers it listens to. */
+  toolCallsInFlight(): string[] {
+    return [...this.hearing].flatMap((streams) => streams.running());
+  }
+
+  /** How many live frames this session has heard, in every room it hears: a count that moved is the workspace working. */
+  heard(): number {
+    return this.framesHeard;
+  }
+
+  /**
+   * Listen to exactly these helpers' rooms. A helper's turn streams to its own window alone (`broadcastToActor`), so it
+   * is heard only on a socket opened on its path, as its window opens one. A room relays no replay: a call that started
+   * before its socket opened is not known to run.
+   */
+  listen(helpers: readonly string[]): void {
+    for (const [name, room] of this.rooms) {
+      if (helpers.includes(name)) continue;
+      this.rooms.delete(name);
+      this.hearing.delete(room.heard);
+      room.socket.close();
+    }
+
+    for (const name of helpers) {
+      if (this.rooms.has(name) || Date.now() - (this.roomsClosedAt.get(name) ?? -Infinity) < ROOM_REDIAL_MS) continue;
+      this.rooms.set(name, this.openRoom(name));
+    }
+  }
+
+  private openRoom(name: string): HelperRoom {
+    const socket = this.newSocket(hostedActorSocketPath(name));
+    const heard = new HeardStreams();
+
+    this.hearing.add(heard);
+    socket.addEventListener('message', (event: MessageEvent) => {
+      const frame = decodeFrame(event.data);
+
+      // A head's broadcasts reach every socket, and the workspace's own hears them.
+      if (frame?.kind !== 'response') return;
+      const { live, chunk } = heard.hear(frame.frame.id, frame.frame);
+
+      if (live) this.hearElsewhere(name, chunk?.type ?? 'done');
+    });
+    socket.addEventListener('close', () => {
+      this.hearing.delete(heard);
+
+      // A room this session let go of closed on purpose; one the deployment closed or refused waits out its redial.
+      if (this.rooms.get(name)?.socket !== socket) return;
+      this.rooms.delete(name);
+      this.roomsClosedAt.set(name, Date.now());
+    });
+
+    return { socket, heard };
+  }
+
+  private hearElsewhere(room: string | null, type: string): void {
+    this.framesHeard += 1;
+    this.onHeard(room, type);
+  }
+
   /**
    * The workspace's background jobs, as the Work tab's Supervise pane reads
    *   them — `listBackgroundJobs`, the `@callable` the pane's own rpc is bound
@@ -1712,6 +1849,7 @@ export class KinuPublicSession {
   disconnect(): void {
     this.turns.clear();
     this.midTurnLandings.clear();
+    this.listen([]);
     this.socket?.close();
     this.socket = null;
   }
@@ -1904,6 +2042,7 @@ export class KinuPublicSession {
       await deleteWorkspace(this.input.origin, this.input.identity, this.workspace);
     } finally {
       this.failInFlight('the session was torn down');
+      this.listen([]);
       this.socket?.close();
       this.socket = null;
     }
@@ -2002,7 +2141,7 @@ export class KinuPublicSession {
     return `${kind}-${String(this.nextId)}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
-  private handleFrame(data: SocketPayload): void {
+  private handleFrame(data: SocketPayload, heard: HeardStreams): void {
     const frame = decodeFrame(data);
 
     if (frame === null) return;
@@ -2034,36 +2173,52 @@ export class KinuPublicSession {
     if (frame.kind === 'resuming') {
       // The DO holds a stream for a turn this session started, on whatever stream
       // carries it now: ack it so the buffered chunks are replayed. The accumulator
-      // is replay-idempotent, so an ack cannot double an answer.
+      // is replay-idempotent, so an ack cannot double an answer. A turn the product
+      // opened on its own is acked too: until then the DO keeps its live chunks from
+      // this socket, and they are the workspace working.
       const resuming = this.streams.resuming(frame.id, frame.turnId, this.turns);
 
-      if (resuming === null) return;
-
-      if (resuming.moved) resuming.turn.recorder.follow();
-      resuming.turn.recorder.beginReplay();
+      if (resuming?.moved === true) resuming.turn.recorder.follow();
+      resuming?.turn.recorder.beginReplay();
       this.socket?.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK, id: frame.id }));
 
       return;
     }
 
-    if (frame.kind !== 'response') return;
-    const requestId = this.streams.requestOf(frame.frame.id);
+    if (frame.kind === 'other') {
+      if (HEAD_FRAMES.has(frame.type)) this.hearElsewhere(null, frame.type);
+
+      return;
+    }
+
+    if (frame.kind === 'response') this.handleResponse(frame.frame, heard);
+  }
+
+  /** One frame of a stream in the workspace's room: heard whoever opened the stream, recorded when it is a turn of ours. */
+  private handleResponse(frame: PublicResponseFrame, heard: HeardStreams): void {
+    const { live, chunk } = heard.hear(frame.id, frame);
+    const requestId = this.streams.requestOf(frame.id);
     const turn = this.turns.get(requestId);
 
-    // A stream nobody here submitted: a turn the product opened on its own. Its bodies belong to no
-    // request of ours.
-    if (!turn) return;
+    // A stream nobody here submitted: a turn the product opened on its own. Heard, but its bodies
+    // belong to no request of ours.
+    if (!turn) {
+      if (live) this.hearElsewhere(null, chunk?.type ?? 'done');
 
-    if (frame.frame.done === true && frame.frame.landed === 'mid-turn') {
+      return;
+    }
+
+    if (live) this.framesHeard += 1;
+
+    if (frame.done === true && frame.landed === 'mid-turn') {
       this.midTurnLandings.set(requestId, new Date().toISOString());
     }
 
-    const body = frame.frame.body;
+    const body = frame.body;
 
     if (body !== undefined) {
-      const chunk = v.safeParse(ChunkTypeSchema, decodeSocketJson(body));
+      if (chunk !== null) this.onChunk(frame.replay === true ? 'replay' : chunk.type);
 
-      if (chunk.success) this.onChunk(frame.frame.replay === true ? 'replay' : chunk.output.type);
       const watchers = this.chunkWatchers.get(requestId) ?? [];
 
       const remaining = watchers.filter((watcher) => {
@@ -2077,13 +2232,13 @@ export class KinuPublicSession {
       else this.chunkWatchers.delete(requestId);
     }
 
-    if (frame.frame.done === true) this.onChunk('done');
-    turn.recorder.apply(frame.frame);
+    if (frame.done === true) this.onChunk('done');
+    turn.recorder.apply(frame);
     const done = turn.recorder.settled();
 
     if (done === null) return;
     this.turns.delete(requestId);
-    this.streams.ended(frame.frame.id);
+    this.streams.ended(frame.id);
     turn.resolve(done);
   }
 

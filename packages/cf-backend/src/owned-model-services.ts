@@ -13,7 +13,6 @@ import {
   createAgentProviderRegistry,
   type AgentProviderRegistry, type UserCredentialClient,
 } from './providers/agent-registry';
-import { resolveReviewingModelSelection } from './providers/judge-model';
 import type { ActorReference, ModelCallSink, UserCaller } from '@kinu.run/core';
 import type { ObjectNamespace } from '@kinu.run/core';
 import type { CodexEgressNamespace } from './egress/codex-egress-route';
@@ -54,7 +53,6 @@ export interface OwnedModelServicesOptions<Id> {
 export class OwnedModelServices<Id = DurableObjectId> {
   private providerRegistryCache: AgentProviderRegistry | null = null;
   private webSearchProviderCache: WebSearchProvider | null = null;
-  private judgeSpecCache: { key: string; spec: string } | null = null;
   private modelCache: { spec: string; model: LanguageModel } | null = null;
   /** Revision the listing was swept under; a differing live revision invalidates it without a clock. */
   private cachedCredentialsRevision: number | null = null;
@@ -168,19 +166,6 @@ export class OwnedModelServices<Id = DurableObjectId> {
     return listing;
   }
 
-  /** Judge model per core's selectJudgeModel; cached per (review, chat) pair because the search lists credentials. */
-  async resolveJudgeModel(opts: { reviewSpec: string | null; chatSpec: string | null }): Promise<LanguageModel> {
-    const registry = this.providerRegistry();
-    const key = `${opts.reviewSpec ?? ''}\n${opts.chatSpec ?? ''}`;
-
-    if (this.judgeSpecCache?.key !== key) {
-      const { spec } = await resolveReviewingModelSelection({ registry, pinned: opts.reviewSpec, chatSpec: opts.chatSpec });
-      this.judgeSpecCache = { key, spec };
-    }
-
-    return registry.resolveModel(this.judgeSpecCache.spec, this.affinityKey);
-  }
-
   /** Key-less by default; a stored `tavily` credential upgrades search. */
   getWebSearchProvider(): WebSearchProvider {
     if (this.webSearchProviderCache) return this.webSearchProviderCache;
@@ -196,7 +181,6 @@ export class OwnedModelServices<Id = DurableObjectId> {
   /** Drop owner-bound provider/auth state; the provider listing's only expiry (in-flight sweep included, per core). */
   invalidate(): void {
     this.providerRegistryCache = null;
-    this.judgeSpecCache = null;
     this.modelCache = null;
     this.providerListings.invalidate();
   }

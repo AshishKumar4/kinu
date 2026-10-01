@@ -19,6 +19,7 @@ import { settle } from '../obs/effect';
 const ShellExecOptionsSchema: v.GenericSchema<ShellExecOptions | undefined> = v.optional(v.object({
   stdin: v.optional(v.string()),
   signal: v.optional(v.instance(AbortSignal)),
+  detach: v.optional(v.instance(AbortSignal)),
 }));
 
 function parseShellExecOptions(input: { value: unknown }): string | ShellExecOptions | undefined {
@@ -31,6 +32,10 @@ function parseShellExecOptions(input: { value: unknown }): string | ShellExecOpt
 }
 
 export type ShellReach = Pick<GatedExecutor, 'filesOwner' | 'shellSession'>;
+
+function detachOf(stdinOrOptions: string | ShellExecOptions | undefined): AbortSignal | undefined {
+  return v.is(v.string(), stdinOrOptions) ? undefined : stdinOrOptions?.detach;
+}
 
 /** A shell's cwd, read ungated; a durable one outlives its process. Null: unreadable. */
 export async function shellCwd(shell: Shell): Promise<string | null> {
@@ -59,7 +64,7 @@ export function withApprovalGatedShell(
   const run = async (command: string, stdinOrOptions?: string | ShellExecOptions): Promise<ShellExecResult> => {
     const result = await execute(command, stdinOrOptions);
 
-    if (result.refusal === undefined) session?.ran(command, result.exitCode);
+    if (result.refusal === undefined && detachOf(stdinOrOptions)?.aborted !== true) session?.ran(command, result.exitCode);
 
     return result;
   };
@@ -68,7 +73,9 @@ export function withApprovalGatedShell(
     exec: (command, stdinOrOptions) => {
       requireBuild('Workspace shell execution');
 
-      return session === undefined ? run(command, stdinOrOptions) : session.serial(() => run(command, stdinOrOptions));
+      return session === undefined
+        ? run(command, stdinOrOptions)
+        : session.serial(() => run(command, stdinOrOptions), detachOf(stdinOrOptions));
     },
   };
 }
@@ -187,7 +194,6 @@ function ranExitCode(result: ExecutorToolResult): number | null {
 /** Already-wrapped executes, so a provider shared across routers is gated once (idempotent). */
 const GATED_EXECUTES = new WeakSet<ExecutorTool['execute']>();
 
-/** Gate an ExecutorProvider's shell-reaching tools; no-op on re-registration. */
 export function gateProviderExec(provider: ExecutorProvider, policy: ShellApprovalPolicy): ExecutorProvider {
   let changed = false;
   const tools = { ...provider.tools };

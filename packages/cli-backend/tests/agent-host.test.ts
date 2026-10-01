@@ -1346,6 +1346,7 @@ describe('LocalAgentHost', () => {
     }, {
       actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
       model: streamingModel('The probe succeeded.', (options) => { reviews.push(isReview(options)); }),
+      window: await seat.windowOf(null),
       clock: REAL_CLOCK, tools: {}, capture: new HeadCapture(), isAborted: () => false, workspaceLayout: 'shared-workspace',
     });
 

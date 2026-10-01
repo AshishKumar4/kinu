@@ -3,6 +3,7 @@ import { JsonValueSchema, projectJsonValue, type JsonValue, type SubordinateInsp
 import type { InspectionAnswer, PublicCraftedTool, PublicDirEntry, PublicExecutorResult, PublicSwarmRun, WorkBoard } from './session';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER, TRANSIENT_PLATFORM_ERRORS } from '@kinu.run/test-utils';
+import { helperAddress, ROOT, type RosterHelper } from './helper-address';
 import { redact, redactJson } from './redact';
 import type { EvalCheck } from './task';
 
@@ -237,8 +238,8 @@ export class EvalVerifier {
   }
 
   /** The lead's helpers, retired ones included, as the Agents surface lists them. */
-  async helpers(): Promise<{ name: string; status: string; lifetime: string }[]> {
-    const helpers: { name: string; status: string; lifetime: string }[] = [];
+  async helpers(): Promise<(RosterHelper & { lifetime: string })[]> {
+    const helpers: (RosterHelper & { lifetime: string })[] = [];
 
     for (let cursor: { after: string } | undefined; ;) {
       const answer = await this.#session.inspect({ path: [], view: 'children', page: cursor === undefined ? {} : { cursor } });
@@ -254,7 +255,7 @@ export class EvalVerifier {
   /** Every helper the lead hired, with its runs. */
   async helperWork(): Promise<HelperWork[]> {
     return Promise.all((await this.helpers()).map(async (helper) => ({
-      name: helper.name, status: helper.status, runs: await this.runsOf(helper.name),
+      name: helper.name, status: helper.status, runs: await this.runsOf(helper),
     })));
   }
 
@@ -272,14 +273,16 @@ export class EvalVerifier {
       .map(({ title, status }) => ({ title, status }));
   }
 
-  /** One helper's runs as its inspector lists them: how each ended, and the message that started it. */
-  async runsOf(helper: string): Promise<HelperWork['runs']> {
+  /** One of the lead's helpers' runs as its inspector lists them: how each ended, and the message that started it. */
+  async runsOf(helper: RosterHelper): Promise<HelperWork['runs']> {
     const runs: HelperWork['runs'] = [];
+    const { path, actor } = helperAddress(ROOT, helper);
 
     for (let cursor: { after: string } | undefined; ;) {
-      const answer = await this.#session.inspect({ path: [helper], view: 'runs', page: cursor === undefined ? {} : { cursor } });
+      const page = cursor === undefined ? {} : { cursor };
+      const answer = await this.#session.inspect(actor === undefined ? { path: [...path], view: 'runs', page } : { path: [...path], actor, view: 'runs', page });
 
-      if (answer.view !== 'runs') throw new Error(`${helper}'s runs could not be listed: ${JSON.stringify(answer)}`);
+      if (answer.view !== 'runs') throw new Error(`${helper.name}'s runs could not be listed: ${JSON.stringify(answer)}`);
       runs.push(...answer.page.items);
 
       if (answer.page.status === 'end') return runs;

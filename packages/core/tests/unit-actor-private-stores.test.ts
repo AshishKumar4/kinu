@@ -205,8 +205,7 @@ describe('two actors, one database: background_jobs', () => {
     a.deferResume('a1', 9_000);
     b.deferResume('b1', 4_000);
 
-    expect(a.nextResumeAtInWorkspace()).toBe(4_000);
-    expect(a.resumeOwedIdsInWorkspace(0).sort()).toEqual(['a1', 'b1']);
+    expect(a.resumesInWorkspace().map((resume) => resume.id).sort()).toEqual(['a1', 'b1']);
     w.close();
   });
 

@@ -5,9 +5,9 @@ import type {
   AuthResolution, ModelCallDeps, ModelProvider, ProviderDeps, ProviderInfo, ModelInfo,
 } from './types';
 import { parseModelSpec } from './types';
-import { settleModelList, StaleModelList } from './util';
+import { StaleModelList } from './util';
 import { Effect } from 'effect';
-import { diagnostics, KinuError, renderThrownChain, settle, settleSync } from '../obs/index';
+import { KinuError, renderThrownChain, settleSync } from '../obs/index';
 import { accountCredentialKey, MAIN_ACCOUNT, storedAccounts } from '../credentials/accounts';
 
 export interface DynamicProviderSource {
@@ -45,10 +45,8 @@ export interface ProviderRegistry {
   resolve(spec: string, deps: ModelCallDeps): LanguageModel;
   /** The stored credential `spec` authenticates with, found without authenticating; null when none would serve. */
   credentialFor(spec: string, deps: ProviderDeps): Promise<string | null>;
-  defaultSpec(deps: ProviderDeps): Promise<string | null>;
 }
 
-/** Id for a failure of the dynamic source itself. */
 const CATALOG_SOURCE_ID = 'catalog';
 
 /** As {@link accountDeps} picks, without authenticating; null where it finds none or refuses. */
@@ -61,15 +59,6 @@ async function chosenCredentialKey(deps: ProviderDeps, providerId: string, key: 
   const [only, ...others] = storedAccounts(key, await deps.listCredentialKeys?.() ?? []);
 
   return only === undefined || only === MAIN_ACCOUNT || others.length > 0 ? null : accountCredentialKey(key, only);
-}
-
-async function defaultSpecOf(p: ModelProvider, deps: ProviderDeps): Promise<string | null> {
-  const own = accountDeps(deps, p.id);
-
-  if (!(await p.isAvailable(own))) return null;
-  const modelId = p.defaultModel ?? (await settleModelList(p.listModels(own))).models[0]?.id;
-
-  return modelId ? `${p.id}/${modelId}` : null;
 }
 
 /** `named`, else `accountFor`'s, else `main`, else the only one; several unchosen: refused. */
@@ -294,25 +283,6 @@ export function createProviderRegistry(): ProviderRegistry {
       const key = providerFor(parsed.provider)?.credentialKey;
 
       return key === undefined ? null : chosenCredentialKey(deps, parsed.provider, key, parsed.account);
-    },
-
-    async defaultSpec(deps) {
-      // Sequential first-match scan in preference order; a throwing provider is skipped.
-      return settle(Effect.gen(function* () {
-        for (const p of (yield* Effect.promise(() => allProviders(deps))).providers) {
-          const spec = yield* Effect.tryPromise({ try: () => defaultSpecOf(p, deps), catch: (cause) => ({ cause }) }).pipe(
-            Effect.catch((failed) => {
-              diagnostics.event('providers.default_model_unavailable', { error: renderThrownChain(failed) });
-
-              return Effect.succeed(null);
-            }),
-          );
-
-          if (spec !== null) return spec;
-        }
-
-        return null;
-      }));
     },
   };
 }

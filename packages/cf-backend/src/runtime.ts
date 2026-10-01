@@ -4,7 +4,7 @@ import type { VFS as CoreVFS } from '@nimbus-sh/core/vfs/vfs.js';
  * workspace; VFS, shell, memory and craft stores all live in the owning actor's `ctx.storage.sql`.
  */
 
-import type { AgentRuntime, ActorHandle, LLM, Schedule, Identity, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, TurnAccumulator, DeferredApprovalChannel, WriteObserver, ModelCallSink, ResolvedTurnProfile, GenerateRequest, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
+import type { AgentRuntime, ActorHandle, LLM, Schedule, Identity, SqlExecutor, SqlValue, RawSqlExec, FiberCtx, ExecutionRouter, TurnAccumulator, DeferredApprovalChannel, WriteObserver, ModelCallSink, ModelOperationSink, ResolvedTurnProfile, GenerateRequest, SlateCallResult, SlateOperation, ChildContextResolver, ContextTree } from "@kinu.run/core";
 import {
   nimbusSessionFiles, nimbusSessionShell, shellCwd, createShellSession,
   observeWrites,
@@ -207,6 +207,8 @@ export type CFRuntime = AgentRuntime & {
   vectorStore: import("@kinu.run/core").VectorStore;
   startupWork: Promise<void>;
   sandboxHandle: SandboxHandle | null;
+  /** Whether this activation has called its sandbox, which is what starts its box on its behalf. */
+  sandboxReached(): boolean;
 };
 
 /** Every runtime this backend builds carries a vector store (noop when unbound). */
@@ -224,6 +226,7 @@ export interface CFRuntimeHooks {
   /** Where non-turn model seams (judge, fast tier, reflection, embedder) report cost; turn spend arrives
      *  as `step_finish`. */
   reportModelCall: ModelCallSink;
+  modelOperations: ModelOperationSink;
   resolveProfile?: () => Promise<ResolvedTurnProfile>;
   currentTurn?: (actor: ActorReference) => string | null;
   /** The actor's one notice state for its object's life; the root's titling and settings changes use it too. */
@@ -285,6 +288,7 @@ export function createCFRuntime(
   const profileLane = (source: FixedTierSource): LLM | undefined => createProfileLaneLLM({
     agent, env, actor, resolveProfile: hooks.resolveProfile, source, report: hooks.reportModelCall, currentTurn: hooks.currentTurn,
     refusals: hooks.refusals,
+    modelOperations: hooks.modelOperations,
   });
 
   // The one required lane: `AgentRuntime.llm` is not optional.
@@ -388,6 +392,7 @@ export function createCFRuntime(
   const previewSuffix = previewHostSuffix(env) ?? undefined;
   const sandboxId = sandboxIdForWorkspace(actor.workspaceName);
   let sandboxHandle: SandboxHandle | null = null;
+  let sandboxReached = false;
 
   if (env.KinuDevbox) {
     try {
@@ -396,6 +401,7 @@ export function createCFRuntime(
       // Egress is configured before the container runs anything, not in `onStart` (too late); until then
       // the container has no network, so it fails closed. Only the owning workspace configures.
       const handle = adaptCloudflareSandbox(sdk, async () => {
+        sandboxReached = true;
         const userId = actor.ownerUserId();
 
         if (!userId) return;
@@ -538,6 +544,7 @@ export function createCFRuntime(
     deviceTransport,
     vectorStore,
     sandboxHandle,
+    sandboxReached: () => sandboxReached,
   };
 
   if (unmount !== undefined) runtime.release = unmount;
@@ -609,6 +616,7 @@ export interface ProfileLaneOptions {
   readonly resolveProfile: (() => Promise<ResolvedTurnProfile>) | undefined;
   readonly source: FixedTierSource;
   readonly report: ModelCallSink;
+  readonly modelOperations: ModelOperationSink;
   readonly currentTurn: ((reference: ActorReference) => string | null) | undefined;
   readonly refusals: TierRefusals;
 }
@@ -644,7 +652,7 @@ function createProfileLaneLLM(options: ProfileLaneOptions): LLM | undefined {
 
         if (providerOptions) request.providerOptions = providerOptions;
 
-        return (await generateReported(request, { spend: { source, report }, spec: route.model })).text.trim();
+        return (await generateReported(request, { spend: { source, report, operations: options.modelOperations }, spec: route.model })).text.trim();
       },
     }),
   });

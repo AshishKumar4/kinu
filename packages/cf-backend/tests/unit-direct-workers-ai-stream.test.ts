@@ -112,7 +112,6 @@ function manualStream() {
   let sink: ReadableStreamDefaultController<Uint8Array> | undefined;
   let closed = false;
   let cancelled = false;
-  const cancellation = Promise.withResolvers<void>();
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -120,7 +119,6 @@ function manualStream() {
     },
     cancel() {
       cancelled = true;
-      cancellation.resolve();
     },
   });
 
@@ -136,7 +134,6 @@ function manualStream() {
     },
     closed: () => closed,
     cancelled: () => cancelled,
-    whenCancelled: cancellation.promise,
   };
 }
 
@@ -441,14 +438,16 @@ describe('direct Workers AI binding — incremental streaming', () => {
     const reader = frames((await pending).body);
     await reader.next();
 
-    expect(runs[0]?.options?.signal).toBe(controller.signal);
+    const seen = runs[0]?.options?.signal;
+    expect(seen?.aborted).toBe(false);
     expect(upstream.cancelled()).toBe(false);
 
     // Cancelling the delivered body must reach the upstream reader or the model keeps generating.
     controller.abort();
     await reader.cancel();
 
-    await upstream.whenCancelled;
+    expect(seen?.aborted).toBe(true);
+
 
     expect(upstream.cancelled()).toBe(true);
   });

@@ -7,7 +7,7 @@ import { DynamicWorkerExecutor } from '@cloudflare/codemode';
 import { normalizeCode } from '@cloudflare/codemode/normalize';
 import {
   explainNativeToolReferenceError, parsesAsExpression,
-  NO_TIMER_DEADLINE_MS, bindTaskPlan, codemodeFunction, decodeJsonValue,
+  NO_TIMER_DEADLINE_MS, bindTaskPlan, codemodeFunction, decodeJsonValue, relayedAnswer,
   type CraftedToolSource, type ExecuteResult, type Executor, type ResolvedProvider as HostProvider,
 } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
@@ -157,7 +157,7 @@ export function createRuntimeExecutor(launch: ProgramLaunch): Executor {
           name: provider.name,
           fns: Object.fromEntries(Object.entries(provider.fns).map(([name, fn]) => [
             name,
-            async (...args: unknown[]) => fn(...args.map((value) => decodeJsonValue({ value }))),
+            async (...args: unknown[]) => await relayedAnswer(fn(...args.map((value) => decodeJsonValue({ value })))),
           ])),
         }));
 

@@ -1,6 +1,7 @@
 import { readFileSync, watch } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { toKinuError, tolerate } from '@kinu.run/core/obs';
+import { AwaitedList } from '@kinu.run/test-utils';
 
 function observeFile<T>(file: string, read: (text: string) => T | undefined, exited?: Promise<unknown>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -54,53 +55,25 @@ export interface ProcessOutput {
 
 export function readProcessOutput(stdout: ReadableStream<Uint8Array>, normalise: (text: string) => string = (text) => text): ProcessOutput {
   const decoder = new TextDecoder();
-  const waiting = new Set<{ text: string; resolve: () => void; reject: (cause: Error) => void }>();
-  let output = '';
-  let ended = false;
-  let failure: unknown;
-
-  const observed = (): string => normalise(output);
-
-  const changed = (): void => {
-    const text = observed();
-
-    for (const read of waiting) {
-      if (text.includes(read.text)) {
-        waiting.delete(read);
-        read.resolve();
-      } else if (ended) {
-        waiting.delete(read);
-        read.reject(new Error(`stdout ended before ${JSON.stringify(read.text)} in:\n${output}`, { cause: failure }));
-      }
-    }
-  };
+  const chunks = new AwaitedList<string>();
+  const output = (): string => normalise(chunks.items.join(''));
 
   const drained = (async () => {
-    try {
-      for await (const chunk of stdout) {
-        output += decoder.decode(chunk, { stream: true });
-        changed();
-      }
+    for await (const chunk of stdout) chunks.push(decoder.decode(chunk, { stream: true }));
 
-      output += decoder.decode();
-    } catch (cause) {
-      failure = cause;
-      throw cause;
-    } finally {
-      ended = true;
-      changed();
-    }
+    const tail = decoder.decode();
+
+    if (tail !== '') chunks.push(tail);
   })();
 
   return {
     drained,
-    output: observed,
-    waitFor: (text) => {
-      if (observed().includes(text)) return Promise.resolve();
-
-      if (ended) return Promise.reject(new Error(`stdout ended before ${JSON.stringify(text)} in:\n${output}`, { cause: failure }));
-
-      return new Promise<void>((resolve, reject) => { waiting.add({ text, resolve, reject }); });
-    },
+    output,
+    waitFor: (text) => Promise.race([
+      chunks.until(() => output().includes(text)),
+      drained.then(() => {
+        if (!output().includes(text)) throw new Error(`stdout ended before ${JSON.stringify(text)} in:\n${output()}`);
+      }),
+    ]),
   };
 }

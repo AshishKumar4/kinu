@@ -99,6 +99,22 @@ export function chatCompletion(run: RecordedGatewayRun, text: string): Response 
   return assistantCompletion(run, text, []);
 }
 
+/** The gateway's streamed answer, one chunk per word, as a provider streams tokens. */
+export function wordByWordCompletion(run: RecordedGatewayRun, words: readonly string[]): Response {
+  if (v.parse(StreamedQuerySchema, run.query).stream !== true) return chatCompletion(run, words.join(''));
+  const head = { id: 'chatcmpl-harness', created: 0, model: 'harness', object: 'chat.completion.chunk' };
+  const usage = { prompt_tokens: 1, completion_tokens: words.length, total_tokens: words.length + 1 };
+
+  const chunks = [
+    ...words.map((word, index) => ({ ...head, choices: [{ index: 0, delta: { ...(index === 0 && { role: 'assistant' }), content: word }, finish_reason: null }] })),
+    { ...head, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage },
+  ];
+
+  return new Response(`${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join('')}data: [DONE]\n\n`, {
+    headers: { 'content-type': 'text/event-stream' },
+  });
+}
+
 /** A tool call the model makes, as the gateway returns it. */
 export interface GatewayToolCall {
   readonly tool: string;

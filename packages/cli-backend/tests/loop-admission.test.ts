@@ -1,4 +1,4 @@
-import { recordSessionEvent, waitFor } from './helpers/local-session';
+
 /**
  * A send reaching the loop while the slot is held is admitted by the loop's durable re-drive (turn-close recheck,
  * wake-time ledger drain), with both one-shot kicks dead. Red if the re-drive is removed.
@@ -6,7 +6,7 @@ import { recordSessionEvent, waitFor } from './helpers/local-session';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
-import { scratchPath } from '@kinu.run/test-utils';
+import { AwaitedList, scratchPath } from '@kinu.run/test-utils';
 import { initWorkspaceSchema, type LLMProviderConfig } from '@kinu.run/core';
 import type { LanguageModelV2Usage } from '@ai-sdk/provider';
 import { EventLog } from '../../core/src/events/hub/index';
@@ -97,11 +97,11 @@ describe('the loop admits a send queued while the slot is held, with every one-s
     const rt = createCLIRuntime(db, { llm: DUMMY_LLM });
     const gate = Promise.withResolvers<void>();
     const asked: string[] = [];
-    const events: SessionEvent[] = [];
-    const session = new DroppedTimerSession({ rt, db, model: holdingModel(gate.promise, asked), noAutoEvolve: true, onEvent: (event) => recordSessionEvent(events, event) });
+    const events = new AwaitedList<SessionEvent>();
+    const session = new DroppedTimerSession({ rt, db, model: holdingModel(gate.promise, asked), noAutoEvolve: true, onEvent: (event) => events.push(event) });
 
     const userTurn = session.send('hold the slot', { id: crypto.randomUUID() });
-    await waitFor(events, () => events.some((event) => event.type === 'text-delta'));
+    await events.until((frames) => frames.some((event) => event.type === 'text-delta'));
 
     const wake = session.enqueueTurn({
       text: WAKE_TEXT,
@@ -115,9 +115,9 @@ describe('the loop admits a send queued while the slot is held, with every one-s
     await userTurn;
 
     await expect(wake).resolves.toEqual({ status: 'queued' });
-    await waitFor(events, () => events.filter((event) => event.type === 'turn-end').length === 2);
+    await events.until(() => events.items.filter((event) => event.type === 'turn-end').length === 2);
     expect(asked).toEqual(['hold the slot', WAKE_TEXT]);
-    expect(events.filter((event) => event.type === 'turn-start').map((event) => event.kind)).toEqual(['user', 'programmatic']);
+    expect(events.items.filter((event) => event.type === 'turn-start').map((event) => event.kind)).toEqual(['user', 'programmatic']);
     expect(runs(db).map((row) => row.type)).toEqual(['run_start', 'run_end', 'run_start', 'run_end']);
 
     await session.end();
@@ -147,14 +147,14 @@ describe('the loop admits a send queued while the slot is held, with every one-s
     const gate = Promise.withResolvers<void>();
     gate.resolve();
     const asked: string[] = [];
-    const events: SessionEvent[] = [];
-    const session = new DroppedTimerSession({ rt, db, model: holdingModel(gate.promise, asked), noAutoEvolve: true, onEvent: (event) => recordSessionEvent(events, event) });
+    const events = new AwaitedList<SessionEvent>();
+    const session = new DroppedTimerSession({ rt, db, model: holdingModel(gate.promise, asked), noAutoEvolve: true, onEvent: (event) => events.push(event) });
     await session.flushPendingDrains();
-    await waitFor(events, () => events.some((event) => event.type === 'turn-end'));
+    await events.until((frames) => frames.some((event) => event.type === 'turn-end'));
 
     expect(asked).toHaveLength(1);
     expect(asked[0]).toContain(WAKE_TEXT);
-    expect(events.filter((event) => event.type === 'turn-start').map((event) => event.kind)).toEqual(['programmatic']);
+    expect(events.items.filter((event) => event.type === 'turn-start').map((event) => event.kind)).toEqual(['programmatic']);
     expect(runs(db).map((row) => row.type)).toEqual(['run_start', 'run_end']);
 
     await session.end();

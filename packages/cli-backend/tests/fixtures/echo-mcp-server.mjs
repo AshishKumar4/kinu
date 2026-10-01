@@ -13,28 +13,16 @@ server.registerTool(
     : { content: [{ type: 'text', text: `echo: ${text}` }] },
 );
 
-const heldEntered = Promise.withResolvers();
-
 server.registerTool(
   'held',
   { description: 'Wait for the caller to cancel.', inputSchema: {} },
   async (_input, extra) => {
-    heldEntered.resolve();
     await new Promise((resolve) => { addAbortListener(extra.signal, resolve); });
 
     return { content: [{ type: 'text', text: 'cancelled' }] };
   },
 );
 
-server.registerTool(
-  'heldEntered',
-  { description: 'Observe entry into the held call.', inputSchema: {} },
-  async () => {
-    await heldEntered.promise;
-
-    return { content: [{ type: 'text', text: 'entered' }] };
-  },
-);
 
 // Larger than the test session's whole step allocation (128k stand-in window); prose and schema each exceed it
 // (600k chars is ~150k tokens), and the atomic schema defers whole instead of arriving clamped.

@@ -17,8 +17,8 @@
 # with the KinuDevbox Durable Object and its container, and the
 # local-device executor routes. Pipeline: preflight → the upload gates (the
 # account and the secret scan) → vite build → CLI source archive → wrangler
-# deploy → smoke test → the tiers against staging beside every local gate, in
-# one wave → the hammer → the record. Promotion: the record → the upload gates →
+# deploy → smoke test → staging tiers beside the rows CI cannot host → CI's
+# exact-SHA verdicts (including its isolated hammer) → the record. Promotion: the record → the upload gates →
 # vite build → staging's downloads → wrangler deploy → smoke test → post-deploy
 # tiers.
 #
@@ -282,8 +282,8 @@ json_field() {
 #
 # Phases, in the ladder's DEPLOY_PHASES order: `preflight` alone before
 # anything; `upload`, the account gate and the secret scan, before any upload;
-# `post-publish`, the tiers against the deployment, in one wave with `source`,
-# every local gate, after the upload and the smoke test; `hammer` alone, last.
+# 'post-publish', the tiers against the deployment, in one wave with 'source',
+# only what CI cannot host. The isolated hammer runs on GitHub, not after this wave (L23).
 # A gate's row in scripts/ladder.ts declares which, and why.
 #
 # `run_phase <phase[,phase]>` runs to the end and says whether anything went red;
@@ -387,6 +387,12 @@ echo ""
 stop_phase preflight
 mark preflight
 
+KINU_CI_RUN="$KINU_DEPLOY_REPORT/ci-run.json"
+if [ "$KINU_PROMOTE" != "1" ]; then
+  KINU_CI_SHA="$(git -C "$KINU_ROOT" rev-parse HEAD)"
+  bun "$KINU_ROOT/scripts/ladder.ts" --ci-find="$KINU_CI_SHA" --ci-run="$KINU_CI_RUN" || { step_red ci "push-CI" "No push-CI proof for $KINU_CI_SHA. Push the branch holding this clean revision; nothing was built or uploaded."; finish; }
+fi
+
 # ── Pre-flight: verify npx + wrangler auth ───────────────────────
 if ! command -v npx >/dev/null 2>&1; then
   step_red preflight "npx" "npx not found — install Node.js"
@@ -443,16 +449,18 @@ fi
 # plan; and the secret scan, since a credential in a published asset cannot be
 # withdrawn. Every other gate's red is recoverable on staging, so it runs after
 # the upload and gates the promotion instead.
+if [ "$KINU_PROMOTE" != "1" ]; then
+  # The secret scan has its own cheap CI part. Its red still holds the upload; other CI parts need not finish.
+  bun "$KINU_ROOT/scripts/ladder.ts" --ci-upload --ci-run="$KINU_CI_RUN" || { KINU_REDS=1; finish; }
+fi
 stop_phase upload
 mark upload
 
 if [ "$KINU_GATES_ONLY" = "1" ]; then
-  # A rehearsal of the local gates: every one to its end, then the hammer, and
-  # the report. Nothing is built, uploaded or recorded.
   run_phase source
   mark source
-  run_phase hammer
-  mark hammer
+  bun "$KINU_ROOT/scripts/ladder.ts" --ci-await --ci-run="$KINU_CI_RUN" || KINU_REDS=1
+  mark ci
   echo "Gates only: stopping before the build, as asked."
   finish
 fi
@@ -463,7 +471,7 @@ fi
 # KINU_PUBLISH_FINDING saying which and why. After that nothing that reads the
 # deployment can test this build, while every local gate still can: the deploy
 # records the step, skips only the rows that read the deployment, and runs the
-# local wave and the hammer to the end (L18).
+# remaining local wave to the end, then imports CI's verdict, including the isolated hammer (L23).
 KINU_PUBLISH_FINDING=""
 publish_red() {
   KINU_PUBLISH_FINDING="$1"
@@ -945,12 +953,10 @@ else
   fi
   mark wave
 
-  # ALONE, and last: the hammer's SUBJECT is contention. It saturates half the
-  # machine's threads on purpose, so a gate running beside it would fail for a
-  # reason unrelated to the change under test. Its row says so. It runs whatever
-  # the wave did: its verdict is part of what production's promotion needs.
-  run_phase hammer
-  mark hammer
+  # CI's source shards and isolated hammer ran concurrently with this build and the live tiers. Their exact-SHA
+  # verdicts are part of this deploy: no local repeat, no retry of a red, no record without the complete proof.
+  bun "$KINU_ROOT/scripts/ladder.ts" --ci-await --ci-run="$KINU_CI_RUN" || KINU_REDS=1
+  mark ci
 fi
 
 # ── Step 5: Post-deploy infrastructure verification ──────────────

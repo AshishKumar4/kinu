@@ -15,7 +15,7 @@ import {
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
   type RunEventInput, type SubordinateInspectionAuthority, ConversationSearchStore, type ConversationRecall,
-  isSubordinateOrigin,
+  isSubordinateOrigin, sandboxIdForWorkspace,
 } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type { SubordinateActivityEvent } from '@kinu.run/core';
@@ -147,7 +147,7 @@ import {
   delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
   readSoul, bootstrapScaffold,
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
-  accountDeps, parseModelSpec, catalogModelInfo, countRequestInputTokens,
+  accountDeps, parseModelSpec, specModelInfo, countRequestInputTokens,
   ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead, type ModelInfo,
   // Shared turn-context assembly: the same ordering runChat runs on the CLI
   measureCompactionTrigger,
@@ -2633,6 +2633,7 @@ export abstract class ActorAgent extends Agent<Env> {
       onSettled: (job) => {
         const notice = backgroundJobNotice(job);
         this.notifyOwner(notice.subject, notice.body);
+        this.sandboxUsed();
       },
       // Evict-resume (B6): re-drive from the durable checkpoint. Side-effecting kinds (eval / run)
       // decline and fall back to the eviction failure.
@@ -2686,8 +2687,15 @@ export abstract class ActorAgent extends Agent<Env> {
       + unconfirmed.map((o) => `${o.requestId} (${o.detail ?? 'no detail'})`).join('; '));
   }
 
-  /** Asked by the workspace container's box before it may rest. */
-  abstract sandboxInUse(): Promise<boolean>;
+  /** A turn's claim moving or a job settling is the box's use too, so it rests only once neither the
+   *  workspace nor a caller has used it for its idle window (devbox D56); the box never asks. Each notice
+   *  activates the box's object, so only a box this activation reached hears it. */
+  protected sandboxUsed(): void {
+    const namespace = this.env.KinuDevbox;
+
+    if (namespace === undefined || this._rt?.sandboxReached() !== true) return;
+    this.detachOwned(async () => { await namespace.getByName(sandboxIdForWorkspace(this.name)).noteHostWork(); });
+  }
   /** Controllers for foreground long tools; once detached, BackgroundJobRunner owns cancellation. */
   protected readonly _activeToolControllers = new Set<AbortController>();
 
@@ -2928,6 +2936,7 @@ export abstract class ActorAgent extends Agent<Env> {
         deferrals: () => this.deferralChannel(),
         slate: (operation) => this.slate(operation),
         reportModelCall: (report) => this.reportModelCall(report),
+        modelOperations: this.modelOperations,
         liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
         resolveProfile: () => this.routingProfile(),
         currentTurn: (reference) => this.currentTurnOf(reference),
@@ -3945,10 +3954,9 @@ export abstract class ActorAgent extends Agent<Env> {
   });
 
   protected async catalogEntry(spec: string): Promise<ModelInfo | null> {
-    const { provider, modelId, account } = parseModelSpec(spec);
     const reg = this.providerRegistry();
 
-    return catalogModelInfo(reg.registry.get(provider), accountDeps(reg.deps, provider, account), modelId);
+    return specModelInfo(reg.registry, reg.deps, spec);
   }
 
   private readonly hostedModels = new Map<string, string>();

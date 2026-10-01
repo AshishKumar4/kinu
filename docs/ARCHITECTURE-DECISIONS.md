@@ -263,7 +263,8 @@ commit e7dc69b685, on ironwood-cairn-6dbcb8de: from 18:04Z to 18:18Z the
 devbox heartbeat's ask started the resting object once a minute, and each start
 booted its files and armed the wake that retried its owed effects at the next
 second. Pinned by `unit-activation-boot-failure` (the ask waited on the start
-and failed with the boot's cause; now it answers false).
+and failed with the boot's cause; now it answers false). Superseded
+2026-10-01 by devbox D56: the box no longer asks; the workspace tells it.
 
 ## Chat loop
 
@@ -1273,6 +1274,27 @@ green Verdict are both there; only then does it promote. Nothing rolls back by
 itself: a red promotion is never retried, its report and the rollback hint
 stand, and the next verified tip deploys forward. A tip passed by a newer
 staging deploy before its verdict lands is never promoted.
+
+L23. Prove a clean revision once in push CI, then take its verdict at deploy.
+Decided 2026-10-01 by the owner, replacing L18's repeated source wave and
+L17's local serial hammer tail. Exact full SHA is the proof identity; no
+second input digest or transferred checkout-specific ladder cache is needed.
+CI's measured-cost matrix has four source parts, a separate upload scan and
+an isolated hammer runner. Its uncached row artifacts must cover every CI
+row exactly once. No push-CI run, incomplete coverage or a CI red means no
+verification; the deploy never automatically reruns source rows until green.
+The machine preflight and deployment/account checks remain local. Push-tier
+rows are proved by CI too. Live rows record CPU/PSS even on red, for resource
+admission only, outside the tracked checkout.
+Measured df49f4cc5 deploy: live at 259 s, wave at 2,880 s and hammer at
+3,546 s. Table-based source CI packing estimates 10–15 minutes including
+setup. With today's remaining local row walls, the first unmeasured-live
+deploy estimates about 28 minutes; once their footprints permit overlap,
+the local browser lane's 561 s plus upload/tail estimates about 14–15
+minutes. These are scheduling estimates, not green-run claims: first-run
+and the one-trial eval pass were red. The four-vCPU hosted hammer is not
+yet measured and can bound completion; the statistical eval Verdict still
+gates production independently.
 
 ## Providers
 

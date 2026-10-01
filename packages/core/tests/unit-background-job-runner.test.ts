@@ -644,8 +644,7 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
   });
 
   test('a re-driven job is in flight for its whole drive, though its row already reads deferred', async () => {
-    // The row names the next attempt's wait before this one starts, so only the runner can say a
-    // container still has this work in it (sandboxInUse).
+    // The row names the next attempt's wait before this one starts, so only the runner can say it drives it.
     const resume: JobResumer = () => new Promise<never>(() => {});
     const { runner, store } = setup({ resume });
     store.create({ id: 'jr2', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
@@ -654,6 +653,8 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
 
     expect(store.get('jr2')?.resumeAfter).not.toBeNull();
     expect(runner.inFlight).toBe(1);
+    // The wait is the next activation's: this one's wake must not fire at it (unit-alarm-wake-chain).
+    expect(runner.nextResumeAt()).toBeNull();
   });
 
   test('a job this runner is already driving is never re-driven out from under itself', async () => {
@@ -977,7 +978,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
 
     await runner.recoverOrphans();
     expect(runner.inFlight).toBe(MAX_CONCURRENT_DETACHED_JOBS);
-    expect(store.resumeOwedIdsInWorkspace(Date.now())).toHaveLength(MAX_CONCURRENT_DETACHED_JOBS);
+    expect(store.resumesInWorkspace()).toHaveLength(MAX_CONCURRENT_DETACHED_JOBS);
 
     const outcome = await runner.thresholdDeps({}, 'build', new AbortController())
       .onThreshold('shell', new Promise(() => { /* still running */ }));

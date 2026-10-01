@@ -192,9 +192,9 @@ describe('cloud agent ownership safety', () => {
       expect(calls).toContain('register:' + entry.name + ':Build a hello world app in react:auto');
       expect(calls).toContain('initial-title:Build a hello world app in react:auto');
       expect(calls).toContain('soul');
-      // Genesis runs after soul, model and effort are durable.
+      // Genesis runs after the soul is durable; no model was named, so none is pinned.
       expect(calls.indexOf('genesis')).toBeGreaterThan(calls.indexOf('soul'));
-      expect(calls.indexOf('genesis')).toBeGreaterThan(calls.indexOf('model:@cf/zai-org/glm-5.3'));
+      expect(calls.filter((call) => call.startsWith('model:'))).toEqual([]);
       // Nothing detached to name it: the genesis turn owns naming for every caller, with a durable retry.
       expect(background).toHaveLength(0);
 
@@ -646,7 +646,7 @@ describe('cloud agent ownership safety', () => {
     // A workspace can run turns without being opened, so its identity must exist before first visit.
     expect(calls).toEqual([
       'register:jarvis', `claim:${USER_ID}`, 'ensure:jarvis:none',
-      'initial-title:user', 'soul', 'baseline', 'model', 'genesis',
+      'initial-title:user', 'soul', 'baseline', 'genesis',
     ]);
   });
 

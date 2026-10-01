@@ -4,9 +4,9 @@ import * as v from 'valibot';
 import { diagnostics, KinuError, tolerate, toKinuError } from '../obs/index';
 import { fmtSpan } from '../utils/format';
 import { abortableSleep, providerPacer, type ProviderPacer } from './pacing';
+import { retryAfterOf } from './fallback-cooldown';
 import type { ProviderWaitInfo } from './types';
-
-
+import { silenceBoundMs } from '../platform-catalog';
 import { DEFAULT_PROVIDER_RETRIES } from '../types/profile';
 
 /** Full-jitter backoff when a 429 lacks `Retry-After`; BASE and MAX are unmeasured. */
@@ -20,8 +20,10 @@ const MAX_DELAY_MS = 60_000;
  *  time: the account is spent until then. */
 const MAX_RETRY_DELAY_MS = 60_000;
 
-/** This call's 429 retries; never sent upstream. */
+/** This call's retries; never sent upstream. */
 export const PROVIDER_RETRIES_HEADER = 'x-kinu-retries';
+
+const StreamRequestSchema = v.looseObject({ stream: v.literal(true) });
 
 export interface RateLimitRetryOptions {
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
@@ -65,6 +67,17 @@ export function withRateLimitRetry(
     const lane = opts.lane === undefined ? host : `${host} ${opts.lane}`;
     const signal = init?.signal ?? undefined;
 
+    const body = v.safeParse(v.string(), init?.body);
+    const streams = body.success && v.is(StreamRequestSchema, tolerate<unknown>(() => JSON.parse(body.output), 'malformed-input'));
+
+    const stalled = (): APICallError => new APICallError({
+      message: `${opts.provider ?? host} sent nothing for ${fmtSpan(silenceBoundMs('provider.stream.idle_ms'))}`,
+      url: input instanceof Request ? input.url : input.toString(),
+      requestBodyValues: undefined,
+      isRetryable: false,
+      cause: new KinuError('timeout', `the ${opts.provider ?? host} stream stalled`),
+    });
+
     const handedOver = (status: number | null, resetsInMs: number | null): APICallError => new APICallError({
       message: `${host} is rate-limiting this account${status === null ? '' : ` (HTTP ${String(status)})`}`
         + `${resetsInMs === null ? '' : `; it resets in ${fmtSpan(resetsInMs)}`}`,
@@ -99,7 +112,13 @@ export function withRateLimitRetry(
     };
 
     // Announce only cooldowns another request declared.
-    const ownedCooldownUntil = { ms: 0 };
+    let owned: number | null = null;
+    // A 429, a sibling's cooldown, a silent start: each spends a retry.
+    let waits = 0;
+
+    const spendRetry = (spent: () => APICallError): void => {
+      if (++waits > retries) throw spent();
+    };
 
     for (let attempt = 1; ; attempt++) {
       await pacer.admit(lane, signal, {
@@ -108,54 +127,129 @@ export function withRateLimitRetry(
             throw waitTooLong({ input, provider: opts.provider ?? host, untilMs, nowMs: now(), longestMs: MAX_RETRY_DELAY_MS, reason });
           }
 
-          if (retries === 0) throw handedOver(null, waitMs);
+          if (untilMs === owned) return;
 
-          if (untilMs === ownedCooldownUntil.ms) return;
+          spendRetry(() => handedOver(null, waitMs));
 
           reportWait(waitMs, 0, 'cooldown');
         },
       });
 
-      const response = await fetchImpl(input, init);
-      const limit = await rateLimitOf(response);
+      const reading = streams ? new LiveStream(stalled) : UNTIMED;
+      const response = await reading.open(fetchImpl, input, init);
+      const limit = response === null ? null : await rateLimitOf(response);
+      const answered = response !== null && limit === null ? await reading.body(response) : null;
 
-      if (limit === null) return response;
+      if (answered !== null) return answered;
+
+      if (response === null || limit === null) {
+        spendRetry(stalled);
+        const waitMs = Math.floor(random() * backoffCeiling(attempt));
+
+        reportWait(waitMs, attempt, 'stall');
+        await sleep(waitMs, signal);
+        continue;
+      }
 
       if ('spent' in limit) throw allowanceSpent({ input, response, body: limit.body, host, exhausted: limit.spent });
 
-      const retryAfterMs = parseRetryAfter(response.headers.get('retry-after'), now());
+      const retryAfter = retryAfterOf(response.headers, now());
 
-      if (retryAfterMs !== null && retryAfterMs > MAX_RETRY_DELAY_MS) {
+      if (retryAfter !== null && retryAfter > MAX_RETRY_DELAY_MS) {
         const reason = providerMessage({ body: limit.body });
-        const untilMs = now() + retryAfterMs;
+        const untilMs = now() + retryAfter;
 
-        pacer.declareWait(lane, retryAfterMs, reason);
+        pacer.declareWait(lane, retryAfter, reason);
 
         throw waitTooLong({
           input, provider: opts.provider ?? host, untilMs, nowMs: now(), longestMs: MAX_RETRY_DELAY_MS, reason, status: limit.status, response,
         });
       }
 
-      const backoffCeilingMs = Math.min(
-        MAX_DELAY_MS,
-        BASE_DELAY_MS * BACKOFF_FACTOR ** Math.min(attempt - 1, 32),
-      );
+      const waitMs = retryAfter ?? Math.floor(random() * backoffCeiling(attempt));
 
-      const waitMs = retryAfterMs ?? Math.floor(random() * backoffCeilingMs);
+      const declared = pacer.declareWait(lane, waitMs);
 
-      const untilMs = now() + waitMs;
-      pacer.declareWait(lane, waitMs);
-
-      if (attempt > retries) throw handedOver(limit.status, retryAfterMs ?? waitMs);
-      ownedCooldownUntil.ms = untilMs;
+      spendRetry(() => handedOver(limit.status, retryAfter ?? waitMs));
+      owned = declared;
       warn(
         `[kinu] ${host} rate-limited: waiting ${fmtSpan(waitMs)} `
         + `(attempt ${String(attempt)})`,
       );
-      reportWait(waitMs, attempt, retryAfterMs !== null ? 'header' : 'backoff', limit.status);
+      reportWait(waitMs, attempt, retryAfter !== null ? 'header' : 'backoff', limit.status);
       await sleep(waitMs, signal);
     }
   });
+}
+
+function backoffCeiling(attempt: number): number {
+  return Math.min(MAX_DELAY_MS, BASE_DELAY_MS * BACKOFF_FACTOR ** Math.min(attempt - 1, 32));
+}
+
+/** Null: silent before a byte. */
+interface AttemptReading {
+  open(fetchImpl: typeof globalThis.fetch, input: RequestInfo | URL, init: RequestInit | undefined): Promise<Response | null>;
+  body(response: Response): Promise<Response | null>;
+}
+
+const UNTIMED: AttemptReading = {
+  open: (fetchImpl, input, init) => fetchImpl(input, init),
+  body: async (response) => response,
+};
+
+class LiveStream implements AttemptReading {
+  private readonly cut = new AbortController();
+
+  constructor(private readonly stalled: () => APICallError) {}
+
+  open(fetchImpl: typeof globalThis.fetch, input: RequestInfo | URL, init: RequestInit | undefined): Promise<Response | null> {
+    const own = init?.signal ?? undefined;
+
+    return this.within(fetchImpl(input, { ...init, signal: own === undefined ? this.cut.signal : AbortSignal.any([own, this.cut.signal]) }));
+  }
+
+  async body(response: Response): Promise<Response | null> {
+    if (response.body === null) return response;
+    const reader = response.body.getReader();
+    const first = reader.read();
+
+    if (await this.within(Promise.allSettled([first])) === null) {
+      await reader.cancel();
+
+      return null;
+    }
+
+    const body = new ReadableStream<Uint8Array>({
+      start: async (controller) => {
+        const read = await first;
+
+        if (read.done) controller.close();
+        else controller.enqueue(read.value);
+      },
+      pull: async (controller) => {
+        const next = await this.within(reader.read());
+
+        if (next === null) controller.error(this.stalled());
+        else if (next.done) controller.close();
+        else controller.enqueue(next.value);
+      },
+      cancel: (reason) => reader.cancel(reason),
+    });
+
+    return new Response(body, response);
+  }
+
+  /** Null once silent; cuts the call. */
+  private within<T>(work: Promise<T>): Promise<T | null> {
+    const stall = Promise.withResolvers<null>();
+
+    const timer = setTimeout(() => {
+      this.cut.abort(this.stalled());
+      stall.resolve(null);
+    }, silenceBoundMs('provider.stream.idle_ms'));
+
+    return Promise.race([work, stall.promise]).finally(() => { clearTimeout(timer); });
+  }
 }
 
 function hasReplayableBody(input: RequestInfo | URL, init: RequestInit | undefined): boolean {
@@ -321,16 +415,6 @@ function waitTooLong(input: {
       `${input.provider} declared a wait until ${resetsAt}, past the ${fmtSpan(input.longestMs)} a call waits`,
     ),
   });
-}
-
-function parseRetryAfter(value: string | null, nowMs: number): number | null {
-  if (value === null || !value.trim()) return null;
-  const seconds = Number(value);
-
-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000;
-  const at = Date.parse(value);
-
-  return Number.isNaN(at) ? null : Math.max(0, at - nowMs);
 }
 
 function providerHost(input: RequestInfo | URL): string {

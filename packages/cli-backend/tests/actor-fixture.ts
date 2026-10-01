@@ -11,7 +11,7 @@ import {
 } from '@kinu.run/core';
 import { ConversationSearchStore, bindLocalActor, localActorDirectory, registerLocalActor, registerLocalNode, retireLocalActor } from '@kinu.run/core';
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, type CLIRuntime } from '../src/runtime';
-import type { HeadSeat } from '@kinu.run/core';
+import { resolveModelWindow, type HeadInferenceDeps, type HeadSeat } from '@kinu.run/core';
 
 /** A head's runtime over its parent's database; a head has no store of its own. */
 export async function createHeadRuntime(parent: CLIRuntime, id: string, observer?: WriteObserver) {
@@ -115,6 +115,7 @@ export function headSeatFactory(
         subordinateDelegates: () => [],
         approvals: () => ({ items: [], total: 0 }),
       }),
+      windowOf: async (spec) => resolveModelWindow(spec ?? '', null),
       release: async () => {
         host.release(binding.reference);
         writes?.delete(binding.reference.actorId);
@@ -210,7 +211,10 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
       approvals: () => ({ items: [], total: 0 }),
     }),
     conversations: new ConversationSearchStore(runtime.storage.sql, runtime.actor, (sessionId) => stores.history.transcript(sessionId)),
-  } satisfies Omit<HeadSeat, 'release'>;
+    // No catalog in a fixture: every spec is admitted against the static table.
+    windowOf: async (spec) => resolveModelWindow(spec ?? '', null),
+    window: resolveModelWindow('', null),
+  } satisfies Omit<HeadSeat, 'release'> & Pick<HeadInferenceDeps, 'window'>;
 }
 
 /** Per-node seat factory: each call registers its own node actor, so wave children never share a claim ledger. */
@@ -221,6 +225,6 @@ export function nodeSeatFactory(rt: CLIRuntime, runId = 'fixture-run'): (node: N
     const runtime = await buildLocalActorRuntime(rt, { reference: actorReferenceOf(handle), handle }, undefined, true);
     const seams = headLoopSeams(rt, runId, handle, runtime);
 
-    return { actor: seams.actor, runId: seams.runId, profile: seams.profile, dynamic: seams.dynamic, conversations: seams.conversations };
+    return { actor: seams.actor, runId: seams.runId, profile: seams.profile, dynamic: seams.dynamic, conversations: seams.conversations, windowOf: seams.windowOf };
   };
 }

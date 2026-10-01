@@ -34,17 +34,11 @@ export interface PlatformObservable {
 }
 
 /** What a threshold actually protects; a number with a scope must carry it in the type. */
-export type BoundsKind =
-  | 'peak-resident'
-  | 'wire'
-  | 'row'
-  | 'query'
-  | 'response'
-  | 'storage'
-  | 'bundle'
-  | 'duration'
-  | 'concurrency'
-  | 'count';
+export const BOUNDS_KINDS = [
+  'peak-resident', 'wire', 'row', 'query', 'response', 'storage', 'bundle', 'duration', 'concurrency', 'count', 'silence',
+] as const;
+
+export type BoundsKind = (typeof BOUNDS_KINDS)[number];
 
 export interface PlatformMeasurement {
   readonly scenario: string;
@@ -1922,6 +1916,34 @@ export const PLATFORM_CATALOG = {
       + 'of the three, and only the observable tells them apart.',
   },
 
+  'provider.stream.idle_ms': {
+    subject: 'Longest a model provider\'s stream may send no byte (before its headers, before its first chunk, or between two) before the call fails',
+    limit: { value: 360_000, unit: 'ms' },
+    origin: 'self-imposed',
+    bounds: 'silence',
+    evidence: 'observed-in-production',
+    provenance: '/mnt/scratch/kinu/kinu-logs/evals-fast/stream-silence/measurements.txt:3-10',
+    date: '2026-10-01',
+    trigger: 'a streamed model request whose provider sends no byte for the bound',
+    onBreach: 'the fetch or its body fails with a retryable APICallError (cause KinuError timeout): the owner\'s retries, then the fallback chain, take over',
+    observable: [{ context: 'the turn\'s provider failure', message: 'sent nothing for' }],
+    firstPartySignal: true,
+    notes: 'Twice the longest silence a completed stream showed across 427 eval trials (7,665 steps) on kinu.run and '
+      + 'staging, 2026-09-30..10-01: opencode-go Muse thinking between reasoning-start and reasoning-end. Measured as '
+      + 'SDK events reached the eval client, an upper bound on raw-byte silence: OpenRouter documents ": OPENROUTER '
+      + 'PROCESSING" keep-alive comments, which are bytes and re-arm the bound; opencode-go sends no byte at all while '
+      + 'Muse thinks (probes/raw-bytes-muse-2026-10-01.log). Live stalls it ends: Muse 40+ min '
+      + '(t34) and OpenRouter Ling heads 38+ min (t33), staging f75f06932.',
+    measurements: [
+      { scenario: 'opencode-go/muse-spark-1.3: longest silence inside a completed step (n=4,018, p99 52.3s)', value: 181_800, unit: 'ms' },
+      { scenario: 'opencode-go/muse-spark-1.3: request to first content, waits out (p99 26.5s)', value: 136_100, unit: 'ms' },
+      { scenario: 'opencode-go/muse-spark-1.3 raw socket, effort high: no byte while the reasoning item is open', value: 55_718, unit: 'ms' },
+      { scenario: 'openrouter/ling-3.0-flash-vl: request to first content (n=2,206, p99 6.1s)', value: 94_900, unit: 'ms' },
+      { scenario: 'workers-ai/glm-5.3: request to first content, 429 waits out (n=127, p99 45.5s)', value: 73_100, unit: 'ms' },
+      { scenario: 'openrouter/mercury-2.5: request to first content (n=1,298, p99 13.0s)', value: 27_300, unit: 'ms' },
+    ],
+  },
+
   'browser.session.keep_alive_ms': {
     subject: 'Longest a Browser Run Chrome session may sit idle, with no connection, before it closes',
     limit: { value: 1_200_000, unit: 'ms' },
@@ -1959,6 +1981,15 @@ export function platformFactEntries(): readonly PlatformFactEntry[] {
 /** The predicate narrows rather than casts, restoring the key union `Object.keys` loses. */
 export const PLATFORM_FACT_IDS: readonly PlatformFactId[] = Object.keys(PLATFORM_CATALOG)
   .filter((id): id is PlatformFactId => id in PLATFORM_CATALOG);
+
+/** Since the last byte, never a total. */
+export type SilenceBoundId = {
+  [Id in PlatformFactId]: (typeof PLATFORM_CATALOG)[Id]['bounds'] extends 'silence' ? Id : never;
+}[PlatformFactId];
+
+export function silenceBoundMs(id: SilenceBoundId): number {
+  return PLATFORM_CATALOG[id].limit.value;
+}
 
 /** The faults a deterministic-simulation lane may inject: the catalog filtered to proven evidence. */
 export function injectableFaults(): readonly PlatformFactId[] {

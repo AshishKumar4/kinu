@@ -42,42 +42,6 @@ export function modelVendorFamily(spec: string): string {
   return PROVIDER_VENDOR[p] ?? p;
 }
 
-export interface JudgeModelSelection {
-  /** `<provider>/<modelId>` the judge should run on. */
-  spec: string;
-  /** How it was chosen; `same-family-fallback` means only one vendor is connected. */
-  source: 'configured' | 'cross-family' | 'same-family-fallback';
-}
-
-export interface SelectJudgeModelOpts {
-  /** The operator's explicit `review_model`, if any. */
-  reviewSpec: string | null | undefined;
-  /** The resolved `<provider>/<modelId>` the agent chats with. */
-  chatSpec: string;
-  /** Available specs in registry preference order; lazy so an explicit review model skips the query. */
-  candidates: () => Promise<readonly string[]>;
-}
-
-/**
- * Pick the model that judges this agent's own output: the explicit `review_model`, else the first available
- * model from another family, else the chat model itself.
- */
-export async function selectJudgeModel(opts: SelectJudgeModelOpts): Promise<JudgeModelSelection> {
-  const configured = opts.reviewSpec?.trim();
-
-  if (configured) return { spec: configured, source: 'configured' };
-
-  const chatFamily = modelVendorFamily(opts.chatSpec);
-
-  for (const candidate of await opts.candidates()) {
-    if (modelVendorFamily(candidate) !== chatFamily) {
-      return { spec: candidate, source: 'cross-family' };
-    }
-  }
-
-  return { spec: opts.chatSpec, source: 'same-family-fallback' };
-}
-
 /** Judges in a calibration ensemble: two is the smallest panel that can disagree; a third would outvote the split. */
 const ENSEMBLE_JUDGE_COUNT = 2;
 
@@ -97,7 +61,7 @@ export interface SelectEnsembleJudgesOpts {
 }
 
 /**
- * Pick the calibration panel in `selectJudgeModel` order, with no two judges nor the classifier sharing a family,
+ * Pick the calibration panel in candidate order, with no two judges nor the classifier sharing a family,
  * and no single-vendor fallback: too few families returns a short list.
  */
 export async function selectEnsembleJudges(

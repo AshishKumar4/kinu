@@ -4,7 +4,7 @@
  * and reads through {@link ModelCatalogSession.at}; the live reads resolve it per call.
  */
 
-import { contextWindowForModel, type ModelWindow, type ResolvedModelWindow } from '../context-window';
+import { resolveModelWindow, type ModelWindow, type ResolvedModelWindow } from '../context-window';
 import { acceptedMediaForModel, type MediaModality } from '../prompting/attachment-sanitizer';
 import type { ModelInfo, ModelPricing } from '../providers/types';
 import type { PromptModelContext } from '../prompting/model-profile';
@@ -73,7 +73,12 @@ export class ModelCatalogSession {
 
   /** Await the selected operation's catalog, independent of the live chat cache. */
   async contextFor(spec: string): Promise<PromptModelContext & ResolvedModelWindow> {
-    return Object.freeze({ id: spec, ...ModelCatalogSession.windowFrom(spec, await this.lookup(spec)) });
+    return Object.freeze({ id: spec, ...await this.windowFor(spec) });
+  }
+
+  /** As {@link contextFor}, the window alone: what a head or swarm node on `spec` is admitted against. */
+  async windowFor(spec: string): Promise<ResolvedModelWindow> {
+    return resolveModelWindow(spec, await this.lookup(spec));
   }
 
   /** The window pair every producer divides (`stepContextLimit`), read now. */
@@ -131,7 +136,7 @@ export class ModelCatalogSession {
   }
 
   private windowOf(spec: string): ResolvedModelWindow {
-    return ModelCatalogSession.windowFrom(spec, this.armed(spec).info);
+    return resolveModelWindow(spec, this.armed(spec).info);
   }
 
   private windowPairOf(spec: string): ModelWindow {
@@ -145,16 +150,6 @@ export class ModelCatalogSession {
     await this.armed(spec).lookup;
 
     return this.windowOf(spec);
-  }
-
-  private static windowFrom(spec: string, info: ModelInfo | null): ResolvedModelWindow {
-    const table = contextWindowForModel(spec);
-
-    return {
-      contextWindow: info?.contextWindow ?? table.window,
-      modelOutputLimit: info?.modelOutputLimit ?? null,
-      windowMeasured: info?.contextWindow !== undefined || table.measured,
-    };
   }
 
   private async armLookup(spec: string): Promise<void> {

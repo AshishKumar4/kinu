@@ -99,6 +99,10 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     this.harnessAgentFacets.reset(storageKey);
   }
 
+  harnessAgentTraceCalls(): readonly string[] {
+    return this.harnessAgentFacets.traceCalls();
+  }
+
   protected override dropAgentFacet(storageKey: string): void {
     this.harnessAgentFacets.drop(storageKey);
   }
@@ -1511,6 +1515,8 @@ export interface HarnessActorWorld {
   /** The container binding at `env.KinuDevbox`: the runtime registers the sandbox executor over it.
    *  Unset, the workspace has no container. */
   container?: boolean;
+  /** Each box the workspace told it worked (`noteHostWork`), by name, in call order. */
+  boxesTold?: string[];
   /** Every method this object served over its own namespace's stub, in call order. */
   rpcServed?: string[];
   /** This activation's isolate stops once in its terminal sequence, at that effect, before or after
@@ -1551,7 +1557,9 @@ export function makeEnv(
     ...platformGatewayEnv(world?.aiGateway),
     ...(world?.versionId !== undefined && { CF_VERSION_METADATA: { id: world.versionId, tag: '', timestamp: '' } }),
     ...(world?.email !== undefined && { EMAIL: world.email }),
-    ...(world?.container === true && { KinuDevbox: { getByName: () => ({}) } }),
+    ...(world?.container === true && {
+      KinuDevbox: { getByName: (name: string) => ({ noteHostWork: () => { world.boxesTold?.push(name); } }) },
+    }),
     UserDO: {
       idFromName: (n: string) => ({ toString: () => n }),
       // Recording when asked, refusing otherwise, so an unannounced user-plane path fails

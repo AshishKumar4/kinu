@@ -57,7 +57,7 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
   const runtime: HeadRuntime = {
     spawnHead: async (input) => spawnSeatedHead(input, {
       seat: deps.hostHead,
-      model: async () => ({ model: headModel(input, deps), spec: null }),
+      model: async () => headModel(input, deps),
       codemodeTool: (seat) => hostedCodemodeTool(seat.actor, deps.codemodeExtras()),
       webSearch: deps.webSearch,
       split: () => (request) => runHeadSplit(new HeadController(createCLIHeadRuntime(deps), deps.journal(), REAL_CLOCK), input, request),
@@ -76,12 +76,12 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
   return deps.grounding ? { ...runtime, grounding: deps.grounding } : runtime;
 }
 
-/** A bad spec degrades to the session model rather than failing the head. */
-function headModel(input: HeadInput, deps: CLIHeadRuntimeDeps): LanguageModel {
-  if (!input.model || !deps.resolveModel) return deps.model();
+/** A bad spec degrades to the session model (spec null) rather than failing the head. */
+function headModel(input: HeadInput, deps: CLIHeadRuntimeDeps) {
+  if (!input.model || !deps.resolveModel) return { model: deps.model(), spec: null };
 
   try {
-    return deps.resolveModel(input.model);
+    return { model: deps.resolveModel(input.model), spec: input.model };
   } catch (err) {
     diagnostics.failure(
       'head.model_resolve_failed',
@@ -93,7 +93,7 @@ function headModel(input: HeadInput, deps: CLIHeadRuntimeDeps): LanguageModel {
       { headId: input.id, model: input.model },
     );
 
-    return deps.model();
+    return { model: deps.model(), spec: null };
   }
 }
 

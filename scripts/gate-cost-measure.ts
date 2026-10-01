@@ -57,16 +57,19 @@
  *     [--quiet-wait=<s>] [--shared-wait=<s>] [--deployment=<origin>]
  */
 
-import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, statSync } from 'node:fs';
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, readdirSync, readlinkSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { tolerate } from '@kinu.run/core/obs';
+import { writeFully } from './deadline';
+import { writeResourceCost } from './gate-cost';
 import { procFile } from './process-owner';
 import {
   COST_TABLE, KINU_WORK, QUIET_LOAD, type RowCost, costRssMb, costThreads, holdsCheckoutResource, machineName, readCosts, writeCosts,
 } from './gate-cost';
 import {
   LADDER, SHARED_POOL, gatesFor, packageScripts, sharedOf, trackedTestFiles,
+  runnableArgv,
 } from './ladder';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -333,8 +336,6 @@ function contention(own: number): Contention | undefined {
 }
 
 interface MeasureRequest {
-  /** The row's command, exactly as the plan carries it. */
-  readonly run: string;
   /** Where the row's own output goes, so a failed measurement is readable. */
   readonly logPath: string;
   readonly rusagePath: string;
@@ -343,6 +344,8 @@ interface MeasureRequest {
   readonly dumpMembers: boolean;
   /** The row's whole environment. */
   readonly env: Record<string, string | undefined>;
+  readonly argv: readonly string[];
+  readonly live: boolean;
 }
 
 function round(value: number): number {
@@ -358,18 +361,37 @@ async function measureRow(request: MeasureRequest): Promise<RowCost> {
   const loadAtStart = Number(readFileSync('/proc/loadavg', 'utf8').split(' ')[0]);
   const started = performance.now();
 
-  // One open file description shares its offset; opening the path twice overwrites one stream with the other.
   const log = openSync(request.logPath, 'w');
   let child: ReturnType<typeof Bun.spawn>;
+  const pumps: Promise<void>[] = [];
+
+  const forward = async (stream: ReadableStream<Uint8Array>, onward: NodeJS.WriteStream): Promise<void> => {
+    for await (const chunk of stream) await writeFully(onward, chunk);
+  };
+
+  const argv = ['setsid', '/usr/bin/time', '-v', '-o', request.rusagePath, ...request.argv];
 
   try {
-    child = Bun.spawn([
-      'setsid',
-      '/usr/bin/time', '-v', '-o', request.rusagePath,
-      'bun', 'scripts/ladder.ts', '--gate', request.run, '--no-cache',
-    ], { cwd: root, env: request.env, stdout: log, stderr: log });
+    if (request.live) {
+      const piped = Bun.spawn(argv, { cwd: root, env: request.env, stdout: 'pipe', stderr: 'pipe' });
+
+      child = piped;
+      pumps.push(forward(piped.stdout, process.stdout), forward(piped.stderr, process.stderr));
+    } else {
+      child = Bun.spawn(argv, { cwd: root, env: request.env, stdout: log, stderr: log });
+    }
   } finally {
     closeSync(log);
+  }
+
+  // The inner --run owns the same hang checks. Forwarding termination keeps its separate session from escaping.
+  const forwards = new Map<NodeJS.Signals, () => void>();
+
+  if (request.live) for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+    const handler = (): void => { tolerate(() => process.kill(-child.pid, signal), 'esrch'); };
+
+    process.once(signal, handler);
+    forwards.set(signal, handler);
   }
 
   let peakPssKb = 0;
@@ -421,7 +443,9 @@ async function measureRow(request: MeasureRequest): Promise<RowCost> {
 
   const exit = await child.exited;
   sampling = false;
-  await loop;
+  await Promise.all([loop, ...pumps]);
+
+  for (const [signal, handler] of forwards) process.off(signal, handler);
   const wallSeconds = (performance.now() - started) / 1000;
   // TWO SOURCES FOR ONE FIGURE, and the larger wins. `/usr/bin/time` reports
   // getrusage, which counts children the sampler never saw — but a report that
@@ -458,7 +482,38 @@ function configured(name: string): number {
   return Number(Bun.spawnSync(['getconf', name], { stdout: 'pipe' }).stdout.toString().trim());
 }
 
+
+/** The live deploy's own run, measured once while it runs. Red measures resources too; the verdict stays red. */
+async function captureRow(command: string): Promise<number> {
+  const gate = LADDER.find((candidate) => candidate.run === command && candidate.phase === 'post-publish');
+
+  if (gate === undefined) throw new Error('only a post-publish row can be captured during a deploy');
+
+  const scratch = mkdtempSync(join(tmpdir(), 'kinu-row-resources-'));
+
+  try {
+    const cost = await measureRow({
+      argv: ['bun', 'scripts/ladder.ts', '--run', ...runnableArgv(command, trackedTestFiles())], live: true,
+      logPath: join(scratch, 'output'), rusagePath: join(scratch, 'usage'), ticksPerSecond: configured('CLK_TCK'),
+      dumpMembers: false, env: { ...process.env },
+    });
+
+    const path = process.argv.find((argument) => argument.startsWith('--cost-file='))?.slice('--cost-file='.length);
+
+    writeResourceCost(command, cost, path);
+    console.log('resources: ' + command + ': ' + String(cost.cpuSeconds) + ' CPU s, ' + String(cost.peakRssMb) + ' MiB PSS, exit ' + String(cost.exit));
+
+    return cost.exit;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 if (import.meta.main) {
+  const capture = process.argv.find((argument) => argument.startsWith('--capture='))?.slice('--capture='.length);
+
+  if (capture !== undefined) process.exit(await captureRow(capture));
+
   const only = process.argv.find((argument) => argument.startsWith('--only='))?.slice('--only='.length);
   const existing = existsSync(COST_TABLE) ? readCosts().rows : {};
   const contendedOnly = process.argv.includes('--contended');
@@ -554,12 +609,12 @@ if (import.meta.main) {
     }
 
     const cost = await measureRow({
-      run: gate.run,
       logPath: join(scratch, `${String(index)}.log`),
       ticksPerSecond,
       rusagePath: join(scratch, `${String(index)}.rusage`),
       dumpMembers,
       env,
+      argv: ['bun', 'scripts/ladder.ts', '--gate', gate.run, '--no-cache'], live: false,
     });
 
     // A run that failed stopped early, so its figure is short by whatever it never ran: it is
