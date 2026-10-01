@@ -3,7 +3,7 @@ import { Effect } from 'effect';
 import { attempt, classifyErrorCode, diagnostics, KinuError, settle } from '../obs/index';
 import { DEFAULT_PROVIDER_RETRIES } from '../types/profile';
 import { createFallbackCooldowns, statedRetryAfterMs, type FallbackCooldowns } from './fallback-cooldown';
-import { describeProviderError, providerFailureFacts } from './util';
+import { codeForStatus, describeProviderError, providerFailureFacts } from './util';
 
 export interface CallFailure {
   readonly cause: unknown;
@@ -30,7 +30,12 @@ function handsOver(failure: CallFailure): boolean {
   if (failure.streamed) return false;
   const { status } = providerFailureFacts({ cause: failure.cause });
 
-  if (status !== undefined) return [401, 402, 403, 404, 408, 429].includes(status) || status >= 500;
+  if (status !== undefined) {
+    const said = codeForStatus(status);
+
+    return said !== null && said !== 'bad_input';
+  }
+
   const code = classifyErrorCode({ cause: failure.error });
 
   return code === null || code === 'unavailable' || code === 'timeout' || code === 'budget';

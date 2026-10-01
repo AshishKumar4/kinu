@@ -38,23 +38,26 @@ export function statedRetryAfterMs(failure: { readonly cause: unknown }, nowMs: 
   let at = v.safeParse(WithHeadersSchema, failure.cause);
 
   for (let depth = 0; at.success && depth < 4; depth += 1) {
-    const headers = new Headers(at.output.responseHeaders ?? {});
-    const ms = Number(headers.get('retry-after-ms') ?? Number.NaN);
+    const ms = retryAfterOf(new Headers(at.output.responseHeaders ?? {}), nowMs);
 
-    if (Number.isFinite(ms)) return ms;
-    const after = headers.get('retry-after');
-
-    if (after !== null) {
-      const seconds = Number(after);
-
-      if (Number.isFinite(seconds)) return seconds * 1000;
-      const date = Date.parse(after);
-
-      if (!Number.isNaN(date)) return Math.max(0, date - nowMs);
-    }
-
+    if (ms !== null) return ms;
     at = v.safeParse(WithHeadersSchema, at.output.cause);
   }
 
   return null;
+}
+
+export function retryAfterOf(headers: Headers, nowMs: number): number | null {
+  const ms = Number(headers.get('retry-after-ms') ?? Number.NaN);
+
+  if (Number.isFinite(ms) && ms >= 0) return ms;
+  const after = headers.get('retry-after')?.trim();
+
+  if (!after) return null;
+  const seconds = Number(after);
+
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const date = Date.parse(after);
+
+  return Number.isNaN(date) ? null : Math.max(0, date - nowMs);
 }
