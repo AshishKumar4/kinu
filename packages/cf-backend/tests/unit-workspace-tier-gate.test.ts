@@ -296,6 +296,7 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
     capability: 'builtin_accounts', name: 'builtinRegister',
     run: (u, c) => u.builtinRegister(c, { userId: USER_ID, email: 'a@example.com', inviteHash: null }),
   },
+  { capability: 'builtin_accounts', name: 'builtinInvitedEmail', run: (u, c) => u.builtinInvitedEmail(c, 'h') },
   { capability: 'builtin_accounts', name: 'builtinPasswordAccount', run: (u, c) => u.builtinPasswordAccount(c, 'a@example.com') },
   { capability: 'builtin_accounts', name: 'builtinPasskeyAccount', run: (u, c) => u.builtinPasskeyAccount(c, 'cred') },
   { capability: 'builtin_accounts', name: 'builtinRecordPasskeyUse', run: (u, c) => u.builtinRecordPasskeyUse(c, 'cred', 1) },
@@ -304,7 +305,7 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
     run: (u, c) => u.builtinIssueChallenge(c, 'ch', { purpose: 'authenticate', userId: null, email: null, inviteHash: null }, Date.now() + 1000),
   },
   { capability: 'builtin_accounts', name: 'builtinSpendChallenge', run: (u, c) => u.builtinSpendChallenge(c, 'ch', 'authenticate') },
-  { capability: 'builtin_accounts', name: 'builtinCreateInvite', run: (u, c) => u.builtinCreateInvite(c, { ownerUserId: USER_ID, tokenHash: 'h', expiresAt: Date.now() + 1000 }) },
+  { capability: 'builtin_accounts', name: 'builtinCreateInvite', run: (u, c) => u.builtinCreateInvite(c, { ownerUserId: USER_ID, email: 'a@example.com', tokenHash: 'h', expiresAt: Date.now() + 1000 }) },
 
   // Last: an owner reaching it drops the object's storage and aborts its context.
   { capability: 'account', name: 'deleteAccount', run: (u, c) => u.deleteAccount(c, USER_ID) },

@@ -8,7 +8,7 @@ import {
   consumeOAuthState, createOAuthState, createSession, revokeSession, sanitizeReturnTo,
   type OAuthProfile, type SessionAuthority,
 } from './store';
-import { escapeHtml, json, KINU_USER_AGENT } from '@kinu.run/core';
+import { escapeHtml, json, KINU_USER_AGENT, sha256Hex } from '@kinu.run/core';
 import { authDocument, loginDocument, type BuiltinSignIn } from '@kinu.run/core';
 import { builtinAccounts, builtinAuthEnabled } from './builtin';
 import { publicHtmlHeaders } from '@kinu.run/core';
@@ -63,7 +63,7 @@ interface MutableTokenEndpointResponse {
 }
 
 export type AuthRoutesAuthority = SessionAuthority
-  & Pick<UserDO, 'setCredential' | 'listActiveWorkspaces' | 'builtinHasOwner'>;
+  & Pick<UserDO, 'setCredential' | 'listActiveWorkspaces' | 'builtinHasOwner' | 'builtinInvitedEmail'>;
 
 /** Nothing optional that the session port leaves optional: sign-out revokes through `AUTH_KV` unguarded. */
 export interface AuthRoutesEnv<Id = DurableObjectId> extends OAuthProviderEnv, OwnerCapabilityEnv {
@@ -144,11 +144,18 @@ async function renderLogin<Id>(request: Request, env: AuthRoutesEnv<Id>): Promis
 async function builtinSignIn<Id>(env: AuthRoutesEnv<Id>, url: URL, returnTo: string): Promise<BuiltinSignIn> {
   const invite = url.searchParams.get('invite');
 
-  if (invite !== null && invite !== '') return { mode: 'invite', invite, returnTo };
   const accounts = builtinAccounts(env);
-  const owned = await accounts.builtinHasOwner(await ownerCaller(env));
+  const caller = await ownerCaller(env);
 
-  return { mode: owned ? 'sign-in' : 'owner', returnTo };
+  if (invite !== null && invite !== '') {
+    const email = await accounts.builtinInvitedEmail(caller, await sha256Hex(invite));
+
+    return email === null
+      ? { mode: 'sign-in', notice: 'This invite link was already used or has expired. Ask for a new one.', returnTo }
+      : { mode: 'invite', invite, email, returnTo };
+  }
+
+  return { mode: await accounts.builtinHasOwner(caller) ? 'sign-in' : 'owner', returnTo };
 }
 
 async function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: string): Promise<Response> {

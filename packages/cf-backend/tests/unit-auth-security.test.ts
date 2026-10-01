@@ -493,6 +493,7 @@ function cloudflareCallbackEnv() {
   const userDO: AuthRoutesAuthority = {
     // OAuth is configured, so the built-in sign-in this would answer for is never asked.
     async builtinHasOwner() { return true; },
+    async builtinInvitedEmail() { return null; },
     async ensureProfile(_caller: UserCaller, email: string) { return bootstrappedProfile(email); },
     async registerBrowserSession(
       _caller: UserCaller, tokenHash: string, expiresAt: number, identity: BrowserSessionIdentity,

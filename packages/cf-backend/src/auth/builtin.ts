@@ -19,7 +19,7 @@ import type { ApiVariables, FamilyEnv } from '../api/context';
 import type { ObjectNamespace } from '@kinu.run/core';
 
 export type BuiltinAuthority = AuthRoutesAuthority & Pick<UserDO,
-  | 'builtinAdmissible' | 'builtinCreateInvite' | 'builtinIsOwner' | 'builtinIssueChallenge' | 'builtinPasskeyAccount'
+  | 'builtinAdmissible' | 'builtinCreateInvite' | 'builtinInvitedEmail' | 'builtinIsOwner' | 'builtinIssueChallenge' | 'builtinPasskeyAccount'
   | 'builtinPasswordAccount' | 'builtinRecordPasskeyUse' | 'builtinRegister' | 'builtinSpendChallenge'>;
 
 export interface BuiltinAuthEnv<Id = DurableObjectId> extends Omit<AuthRoutesEnv<Id>, 'UserDO'> {
@@ -317,11 +317,14 @@ builtinAccountRoutes.get('/api/user/builtin-auth', async (c) => {
 
 builtinAccountRoutes.post('/api/user/builtin-auth/invites', async (c) => {
   if (!builtinAuthEnabled(c.env)) return refuse('This deployment signs in with OAuth.', 404);
+  const parsed = await body(c.req.raw, v.object({ email: EmailSchema }));
+
+  if (!parsed.success) return misread(parsed.issues);
   const token = randomToken(32);
   const expiresAt = Date.now() + INVITE_TTL_MS;
 
   const created = await accounts(c.env).builtinCreateInvite(
-    await ownerCaller(c.env), { ownerUserId: c.get('identity').userId, tokenHash: await sha256Hex(token), expiresAt },
+    await ownerCaller(c.env), { ownerUserId: c.get('identity').userId, email: parsed.output.email, tokenHash: await sha256Hex(token), expiresAt },
   );
 
   if (!created) return refuse('Only the owner of this deployment can invite people.', 403);
@@ -329,5 +332,5 @@ builtinAccountRoutes.post('/api/user/builtin-auth/invites', async (c) => {
 
   url.searchParams.set('invite', token);
 
-  return json({ body: { url: url.toString(), expiresAt } });
+  return json({ body: { url: url.toString(), email: parsed.output.email, expiresAt } });
 });

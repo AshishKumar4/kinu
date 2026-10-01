@@ -85,18 +85,25 @@ describe('who may register', () => {
     expect(forged.status).toBe(403);
   });
 
-  test("an owner's invite admits one account and no second", async () => {
+  test("an owner's invite admits its one address, once", async () => {
     const { post, register } = deployment();
 
     await register('owner@example.com');
-    const made = await post('/api/user/builtin-auth/invites', {}, await identityOf('owner@example.com'));
+    const made = await post('/api/user/builtin-auth/invites', { email: 'First@Example.com' }, await identityOf('owner@example.com'));
     const invite = new URL(v.parse(InviteSchema, await made.json()).url).searchParams.get('invite') ?? '';
 
+    // The invite names its address: any other is refused, and the invite stays unspent for its own.
+    const elsewhere = await register('victim@example.com', invite);
+
+    expect(elsewhere.status).toBe(403);
+    expect(v.parse(ErrorSchema, await elsewhere.json()).error).toContain('different email');
     expect((await register('first@example.com', invite)).status).toBe(200);
-    const again = await register('second@example.com', invite);
+    const again = await register('first@example.com', invite);
+    const another = await register('second@example.com', invite);
 
     expect(again.status).toBe(403);
-    expect(v.parse(ErrorSchema, await again.json()).error).toContain('already used');
+    expect(another.status).toBe(403);
+    expect(v.parse(ErrorSchema, await another.json()).error).toContain('already used');
   });
 });
 

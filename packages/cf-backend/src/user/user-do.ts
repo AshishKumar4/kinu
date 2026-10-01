@@ -162,7 +162,7 @@ import {
 import { deletePictures, picturePrefix } from '../slates/pictures';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import {
-  builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, isBuiltinOwner,
+  builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, invitedEmail, isBuiltinOwner,
   issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge,
   type Admission, type BuiltinSql, type ChallengePurpose, type NewBuiltinAccount, type NewInvite, type PasskeyAccount,
   type PasswordAccount, type PendingChallenge,
@@ -1504,6 +1504,12 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'builtin_accounts');
 
     return builtinAdmission(this.builtinSql(), email, inviteHash, Date.now());
+  }
+
+  async builtinInvitedEmail(caller: UserCaller, inviteHash: string): Promise<string | null> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return invitedEmail(this.builtinSql(), inviteHash, Date.now());
   }
 
   async builtinRegister(caller: UserCaller, account: NewBuiltinAccount): Promise<Admission> {

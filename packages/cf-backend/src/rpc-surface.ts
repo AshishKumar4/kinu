@@ -90,6 +90,7 @@ const USER_DO_METHODS = [
   'builtinAdmissible',
   'builtinCreateInvite',
   'builtinHasOwner',
+  'builtinInvitedEmail',
   'builtinIsOwner',
   'builtinIssueChallenge',
   'builtinPasskeyAccount',

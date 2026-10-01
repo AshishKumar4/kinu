@@ -6,18 +6,19 @@ import { Effect } from "effect";
 import { attempt, renderThrownChain, settle } from "@kinu.run/core/obs";
 import { builtinAuthStatus, createBuiltinInvite } from "@/lib/user-api";
 import { useAsyncResource } from "@/hooks/use-async-resource";
-import { Card, Field } from "@/components/ui/form";
+import { Card, Field, inputCls } from "@/components/ui/form";
 import { CardSlot } from "@/components/ui/CardSlot";
 import { CopyButton } from "@/components/ui/CopyButton";
 
 export function InviteCard() {
   const status = useAsyncResource(builtinAuthStatus);
-  const [invite, setInvite] = useState<{ url: string; expiresAt: number } | null>(null);
+  const [email, setEmail] = useState("");
+  const [invite, setInvite] = useState<{ url: string; email: string; expiresAt: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const create = () => Effect.sync(() => { setBusy(true); setError(null); }).pipe(
-    Effect.andThen(attempt({ doing: "creating an invite link", otherwise: "io" }, createBuiltinInvite)),
+    Effect.andThen(attempt({ doing: "creating an invite link", otherwise: "io" }, () => createBuiltinInvite(email.trim()))),
     Effect.map(setInvite),
     Effect.catch((failure) => Effect.sync(() => { setError(renderThrownChain({ cause: failure.cause ?? failure })); })),
     Effect.ensuring(Effect.sync(() => { setBusy(false); })),
@@ -27,10 +28,14 @@ export function InviteCard() {
     <CardSlot resource={status.resource} what="whether you can invite people" onRetry={status.reload}>
       {({ enabled, owner }) => (!enabled || !owner ? null : (
         <Card title="Invite people" icon={UserPlusIcon}>
-          <Field inline label="Invite link" hint="One person can sign up with each link. It expires after 7 days.">
-            <Button variant="secondary" size="sm" onClick={() => settle(create())} disabled={busy}>
-              {busy ? <Loader size="sm" /> : null} {invite === null ? "Create invite link" : "Create another"}
-            </Button>
+          <Field label="Invite by email" hint="The link signs up this address only, once, within 7 days.">
+            <form className="flex flex-wrap gap-2" onSubmit={(event) => { event.preventDefault(); }}>
+              <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com"
+                aria-label="Email to invite" autoComplete="off" className={`${inputCls} min-w-0 flex-1`} />
+              <Button type="submit" variant="secondary" size="sm" disabled={busy || email.trim() === ""} onClick={() => settle(create())}>
+                {busy ? <Loader size="sm" /> : null} Create invite link
+              </Button>
+            </form>
           </Field>
           {invite !== null && (
             <div className="mt-3 flex items-center gap-2" data-invite-link>
@@ -38,7 +43,7 @@ export function InviteCard() {
               <CopyButton value={invite.url} what="the invite link" size={14} className="p-btn-quiet inline-flex size-8 shrink-0 items-center justify-center" />
             </div>
           )}
-          {invite !== null && <p className="mt-2 p-meta p-text-3">Valid until {new Date(invite.expiresAt).toLocaleString()}. Send it to one person.</p>}
+          {invite !== null && <p className="mt-2 p-meta p-text-3">For {invite.email}, until {new Date(invite.expiresAt).toLocaleString()}.</p>}
           {error && <p role="alert" className="mt-2 text-xs p-danger">{error}</p>}
         </Card>
       ))}

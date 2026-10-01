@@ -187,6 +187,7 @@
   ],
   "builtin_invites@packages/core/src/identity/builtin-accounts.ts": [
     "token_hash TEXT PRIMARY KEY",
+    "email TEXT NOT NULL",
     "created_by TEXT NOT NULL",
     "created_at INTEGER NOT NULL",
     "expires_at INTEGER NOT NULL",

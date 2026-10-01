@@ -62,6 +62,7 @@ export function initBuiltinAccounts(sql: BuiltinSql): void {
   )`;
   void sql`CREATE TABLE IF NOT EXISTS builtin_invites (
     token_hash TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
     created_by TEXT NOT NULL,
     created_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL,
@@ -96,9 +97,24 @@ export function builtinAdmission(sql: BuiltinSql, email: string, inviteHash: str
 
   if (inviteHash === null) return { admitted: false, reason: 'This deployment already has an owner. Ask them for an invite link.' };
 
-  const live = sql`SELECT 1 FROM builtin_invites WHERE token_hash = ${inviteHash} AND used_by IS NULL AND expires_at > ${now}`.length > 0;
+  const invited = invitedEmail(sql, inviteHash, now);
 
-  return live ? { admitted: true, role: 'member' } : { admitted: false, reason: 'This invite link was already used or has expired. Ask for a new one.' };
+  if (invited === null) return { admitted: false, reason: 'This invite link was already used or has expired. Ask for a new one.' };
+
+  // An OAuth login of the invited address later lands in this account: no other address may take it.
+  return invited === email
+    ? { admitted: true, role: 'member' }
+    : { admitted: false, reason: 'This invite is for a different email address.' };
+}
+
+const InviteRowSchema = v.object({ email: v.string() });
+
+/** The address a live, unused invite was made for; null when there is none. */
+export function invitedEmail(sql: BuiltinSql, inviteHash: string, now: number): string | null {
+  const parsed = v.safeParse(InviteRowSchema,
+    sql`SELECT email FROM builtin_invites WHERE token_hash = ${inviteHash} AND used_by IS NULL AND expires_at > ${now}`[0]);
+
+  return parsed.success ? parsed.output.email : null;
 }
 
 /** One step: the owner seat or the invite goes to exactly this account, or nothing is written. */
@@ -193,14 +209,15 @@ export function spendPasskeyChallenge(sql: BuiltinSql, challenge: string, purpos
 
 export interface NewInvite {
   readonly ownerUserId: string;
+  readonly email: string;
   readonly tokenHash: string;
   readonly expiresAt: number;
 }
 
 export function createBuiltinInvite(sql: BuiltinSql, invite: NewInvite, now: number): boolean {
   if (!isBuiltinOwner(sql, invite.ownerUserId)) return false;
-  void sql`INSERT INTO builtin_invites (token_hash, created_by, created_at, expires_at)
-      VALUES (${invite.tokenHash}, ${invite.ownerUserId}, ${now}, ${invite.expiresAt})`;
+  void sql`INSERT INTO builtin_invites (token_hash, email, created_by, created_at, expires_at)
+      VALUES (${invite.tokenHash}, ${invite.email}, ${invite.ownerUserId}, ${now}, ${invite.expiresAt})`;
 
   return true;
 }
