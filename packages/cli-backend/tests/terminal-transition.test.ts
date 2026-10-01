@@ -2,6 +2,7 @@ import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // Process-death recovery for the terminal transition: cut at a named effect and phase (TerminalEffectInterrupt),
 // reopen a second session over the same database, and check every effect ran exactly once.
 import { describe, test, expect } from 'bun:test';
+import { EventEmitter, once } from 'node:events';
 import * as v from 'valibot';
 import type { Database } from 'bun:sqlite';
 import { handClock, scratchPath, scriptedAdvisorPort, type ScriptedAdvisorPort } from '@kinu.run/test-utils';
@@ -27,6 +28,21 @@ const advisors = new WeakMap<CLIRuntime, TemporaryAgentPort>();
 /** `terminalEffectFault` is protected with no production setter, so the test subclasses, as the DO's harness does. */
 class ProbeSession extends LocalAgentSession {
   private readonly probeRt: CLIRuntime;
+
+  private readonly wakes = new EventEmitter();
+
+  override async recoverTerminalTransitions(): Promise<void> {
+    await super.recoverTerminalTransitions();
+    this.wakes.emit('replayed');
+  }
+
+  async nextReplay(): Promise<void> {
+    await once(this.wakes, 'replayed');
+  }
+
+  async replayUntil(condition: () => boolean): Promise<void> {
+    while (!condition()) await this.nextReplay();
+  }
 
   constructor(opts: ConstructorParameters<typeof LocalAgentSession>[0]) {
     super(opts);
@@ -747,19 +763,31 @@ describe('a terminal close that fails leaves a way back', () => {
     const storage: { sql: SqlExecutor } = rt.storage;
     storage.sql = cutting;
 
-    // The title lane spans a macrotask, so the pre-armed wake fires mid-sequence, finds it held, and is spent.
-    const { model } = scriptedModel('answered', { onGenerate: () => Bun.sleep(5) });
+    const titling = Promise.withResolvers<void>();
+    const titled = Promise.withResolvers<void>();
+
+    const { model } = scriptedModel('answered', { onGenerate: () => {
+      titling.resolve();
+
+      return titled.promise;
+    } });
+
     const events: SessionEvent[] = [];
     const session = new ProbeSession({ rt, db, model, onEvent: (e) => events.push(e) });
     session.armWakeImmediately();
 
-    await session.send('write the migration', { id: crypto.randomUUID() });
+    const earlyWake = session.nextReplay();
+    const turning = session.send('write the migration', { id: crypto.randomUUID() });
+    await titling.promise;
+    await earlyWake;
+    titled.resolve();
+    await turning;
     await session.settleBackgroundWork();
 
     // Nothing is owed; only the wake the catch armed can close the sequence.
     expect(completedTurns(rt)).toBe(1);
     expect(stillOwed(rt)).toEqual([]);
-    await waitForClose(() => openTerminalClaims(rt) === 0);
+    await session.replayUntil(() => openTerminalClaims(rt) === 0);
     // Two attempts: the close's own, which threw, and the re-armed wake's.
     expect(settleAttempts).toBe(2);
     await session.end();
@@ -790,8 +818,3 @@ describe('a one-shot exit waits on the turn\'s own close', () => {
   });
 });
 
-/** Polls for the close: production arms an unref'd five-second wake with nothing to await, and the stood-back
- *  ledger clock makes it due at once. A close that never comes is the runner's hang, not a poll count. */
-async function waitForClose(condition: () => boolean): Promise<void> {
-  while (!condition()) await Bun.sleep(10);
-}

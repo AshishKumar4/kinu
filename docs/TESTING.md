@@ -308,9 +308,9 @@ Test public behavior, not a source file's spelling. `test-census` follows source
 
 The reconnect snapshot tests call the real RPCs and mount `useKinu` behind the gallery transport. A held snapshot is released after newer reads land, and the client must retain the newer memory, executors, plan, tab presence and slates. Prompt prose hashes, decorative SVG/GIF checks and stylesheet ordering are not contracts. Section overrides, resource loading, preference precedence, permissions and data integrity are.
 
-Wait for the effect being asserted. A theme control waits for the applied mode, not a fixed number of sleeps. CLI protocol waits are notified by the socket or RPC callback. Daemon waits observe stdout, file changes, process exit or the owning hub's frames. OpenTUI fixtures use the upstream frame and scheduler APIs; rendered text is checked with an independent WCAG contrast calculation, not the theme's own hex values. The flake gate below repeats the real suites without synthetic load.
+Tests await the public completion of the work they actually invoked, or the product's existing settle/close API. They do not invent fixture-ready events, notification counters or completion latches. Missing product completion is an API problem to report, not a reason to build a second scheduler in tests. UI renderers may use their existing public frame/flush completion; domain expiry uses a controlled clock, not an elapsed machine-speed cutoff.
 
-Escape has a decoder stage before rendering. The keyboard fixture awaits its native key event, then proves that focus returns by typing into the visible composer; visual idle alone does not prove the input was decoded.
+A terminal request completes with its own answer or `PTY_EXIT`, not a prompt count. The signal regression asks bash for monitor mode and foreground-group ownership, interrupts `top` and observes its public exit, then stops and resumes a program that reports its own progress. The red mutation uses Bun's pre-created `Terminal` instance shape, which carries bytes but has no controlling terminal. These checks keep signal coverage without guessing which prompt redraw occurred.
 
 ## Flakes
 
