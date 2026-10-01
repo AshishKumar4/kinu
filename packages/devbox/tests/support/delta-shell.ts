@@ -56,7 +56,9 @@ const OP = {
   cpOrEmpty: new RegExp(String.raw`^cp ${Q} ${Q} 2>/dev/null \|\| : > ${Q}$`),
   dd: new RegExp(String.raw`^dd if=(?:${Q}|(/dev/zero)) of=${Q} bs=(\d+) (skip|seek)=(\d+) count=1( conv=notrunc)? 2>/dev/null$`),
   truncate: new RegExp(String.raw`^truncate -s (\d+) ${Q}$`),
-  manifest: new RegExp(String.raw`^printf %s ${Q} \| base64 -d > ${Q}$`),
+  payload: new RegExp(String.raw`^printf %s ${Q} (>>?) ${Q}$`),
+  decode: new RegExp(String.raw`^base64 -d ${Q} > ${Q}$`),
+  rm: new RegExp(String.raw`^rm ${Q}$`),
   cat: new RegExp(String.raw`^cat ${Q} 2>/dev/null$`),
   base64: new RegExp(String.raw`^base64 ${Q}$`),
   mknod: new RegExp(String.raw`^: > ${Q}$`),
@@ -295,7 +297,9 @@ class DeltaShell {
 
     if ((m = OP.truncate.exec(line)) !== null) return this.#truncate(Number(m[1]), unquote(m[2]));
 
-    if ((m = OP.manifest.exec(line)) !== null) return this.#manifest(unquote(m[1]), unquote(m[2]));
+    const staged = this.#stagedPayload(line);
+
+    if (staged !== undefined) return staged;
 
     if ((m = OP.cat.exec(line)) !== null) return this.#cat(unquote(m[1]));
 
@@ -610,9 +614,40 @@ class DeltaShell {
     return 0;
   }
 
-  #manifest(encoded: string, path: string): number {
+  /** A payload's three ops: base64 pieces written to a staged file, decoded to their target, then removed. */
+  #stagedPayload(line: string): number | undefined {
+    let m: RegExpExecArray | null;
+
+    if ((m = OP.payload.exec(line)) !== null) return this.#payload(unquote(m[1]), m[2] === '>>', unquote(m[3]));
+
+    if ((m = OP.decode.exec(line)) !== null) return this.#decode(unquote(m[1]), unquote(m[2]));
+
+    if ((m = OP.rm.exec(line)) !== null) return this.#rm(unquote(m[1]));
+
+    return undefined;
+  }
+
+  #payload(piece: string, append: boolean, path: string): number {
     const { tree, relative } = this.#dest(path);
-    tree.writeFile(relative, Buffer.from(encoded, 'base64'), ROOT_METADATA);
+    const held = append ? this.disk.readFile(path) ?? new Uint8Array(0) : new Uint8Array(0);
+    tree.writeFile(relative, Buffer.concat([held, Buffer.from(piece)]), ROOT_METADATA);
+
+    return 0;
+  }
+
+  #decode(from: string, to: string): number {
+    const encoded = this.disk.readFile(from);
+
+    if (encoded === undefined) throw new Error(`base64 -d reads a file that does not exist: ${from}`);
+    const { tree, relative } = this.#dest(to);
+    tree.writeFile(relative, Buffer.from(Buffer.from(encoded).toString('utf8'), 'base64'), ROOT_METADATA);
+
+    return 0;
+  }
+
+  #rm(path: string): number {
+    const { tree, relative } = this.#dest(path);
+    tree.remove(relative);
 
     return 0;
   }

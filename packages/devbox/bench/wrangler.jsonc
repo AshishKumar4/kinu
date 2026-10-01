@@ -57,7 +57,7 @@
     {
       "class_name": "SnapshotChainBox",
       "scheduling_policy": "durable_object",
-      "images": { "devbox": { "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:7e0f8359ee78d1a486c02224cfa07a9d32d7533bfbd1070fc74411242a40d265" } }
+      "images": { "devbox": { "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:434b11d62e000844e2a22dab3071542b88e85af839a743077c61a9205d48de3b" } }
     }
   ],
 
