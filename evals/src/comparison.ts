@@ -654,8 +654,9 @@ const WAITS_NOTE = '_Durations leave out time the product spent waiting on the m
   + 'candidate\u2019s total over all runs: the eval account\u2019s rate limit, infrastructure, never a task failure._';
 
 const METRICS_NOTE = '_Mean wall, mean cost and cache hits show baseline → candidate. Wall time includes provider waits; '
-  + 'cache hits are cache-read tokens / prompt tokens, excluding infrastructure trials. A dash means a count is missing, '
-  + 'not zero or a rate over a subset._';
+  + 'cache hits are cache-read tokens / prompt tokens, excluding infrastructure trials. Tokens and cache hits count the lead '
+  + 'agent\u2019s own model calls only; helpers and swarm nodes are not in them yet. Cost is the whole workspace\u2019s spend, '
+  + 'every agent included. A dash means a count is missing, not zero or a rate over a subset._';
 
 /** How the agent worked per model, the baseline in parentheses: information for a prompt or tool change. */
 function profileTable(profiled: EvalComparison['profiles']): string[] {
