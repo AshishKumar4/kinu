@@ -212,6 +212,12 @@ const OOM_SIGNATURES: readonly RegExp[] = [
 ];
 
 /**
+ * The runtime's refusal of a call to an overloaded object, platform-catalog.ts do.requests_per_second_soft. It refuses
+ * before the object runs the call, so the class is `unavailable`; retrying at once only adds to the load.
+ */
+export const OVERLOADED_SIGNATURE = /Durable Object is overloaded/iu;
+
+/**
  * Class of a caught value, or null when nothing pinned recognises it; callers supply the fallback.
  * Reads the cause chain outermost first; the first recognised class wins.
  */
@@ -242,7 +248,9 @@ export function classifyErrorCode(input: { cause: unknown }): ErrorCode | null {
   if (!(input.cause instanceof Error)) return null;
   const chain = renderCauseChain(input.cause);
 
-  return OOM_SIGNATURES.some((signature) => signature.test(chain)) ? 'oom' : null;
+  if (OOM_SIGNATURES.some((signature) => signature.test(chain))) return 'oom';
+
+  return OVERLOADED_SIGNATURE.test(chain) ? 'unavailable' : null;
 }
 
 /**
