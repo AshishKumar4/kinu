@@ -11,7 +11,7 @@ import { boundedInt } from '../utils/bounds';
 import type { SubordinateReportStatus } from '../events/hub/types';
 import type { SubordinateReportOrigin } from './support';
 import type { SubordinateRosterEntry, SubordinateStatus } from '../delegation/agents-tool';
-import { SUBORDINATE_LIFETIMES, TEMPORARY_LIFETIME, temporaryRunSettles } from './temporary';
+import { SUBORDINATE_LIFETIMES, TEMPORARY_LIFETIME, temporaryRunSettles, type TaskTurnEnding } from './temporary';
 import { ActorReferenceSchema, sameActorReference, type ActorReference } from '../identity/actor-handle';
 import { SubordinateBirthSchema } from './birth';
 import { parseJsonValue } from '../utils/json';
@@ -338,6 +338,17 @@ export class SubordinateRosterStore {
       this.actorId,
       name,
     );
+  }
+
+  /** End durable activity independently of report delivery; an explicit answer or block stands. */
+  finishTurn(name: string, ending: TaskTurnEnding, now: number): boolean {
+    const entry = this.get(name);
+
+    // Task agents may owe a later turn's answer while their own helpers or inbox still hold work.
+    if (entry === null || entry.lifetime !== 'durable' || entry.status !== 'working') return false;
+    this.applyReport(name, ending === 'answered' ? 'progress' : 'blocked', 'turn_end', now);
+
+    return true;
   }
 
   /**

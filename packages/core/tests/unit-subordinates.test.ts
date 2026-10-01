@@ -253,12 +253,19 @@ describe('workspace subordinate roster', () => {
     roster.applyReport('hello', 'progress', 'report_tool', NOW);
     expect(roster.requireActive('hello').status).toBe('working');
 
-    roster.applyReport('hello', 'progress', 'turn_end', NOW);
+    roster.finishTurn('hello', 'answered', NOW);
     expect(roster.requireActive('hello')).toMatchObject({ status: 'idle', currentTask: 'Say hello to the team.' });
 
     roster.assign('hello', 'And again.');
-    roster.applyReport('hello', 'blocked', 'turn_end', NOW);
-    expect(roster.requireActive('hello').status).toBe('awaiting_input');
+    roster.applyReport('hello', 'blocked', 'report_tool', NOW);
+    roster.finishTurn('hello', 'answered', NOW);
+    expect(roster.requireActive('hello')).toMatchObject({ status: 'awaiting_input', currentTask: 'And again.' });
+
+    for (const ending of ['errored', 'interrupted'] as const) {
+      roster.assign('hello', ending);
+      roster.finishTurn('hello', ending, NOW);
+      expect(roster.requireActive('hello')).toMatchObject({ status: 'awaiting_input', currentTask: ending });
+    }
   });
 });
 
