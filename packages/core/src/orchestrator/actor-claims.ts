@@ -1,9 +1,11 @@
+import { Effect } from 'effect';
+import { settleSync, settle } from '../obs/effect';
 import type { ModelMessage } from 'ai';
 import type { WorkMode } from '../types/turn';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { KinuError } from '../obs/error';
-import { diagnostics, toKinuError } from '../obs/index';
+import { settleLoggedSync } from '../obs/index';
 import { nowMs } from '../utils/date';
 import { RUN_END_REASONS } from './turn-lifecycle';
 import { initSessionContextTables } from '../session/schema';
@@ -104,24 +106,26 @@ export class ActorClaimStore {
     });
 
     const claim = this.transactionSync(() => {
-      this.actor.assertCurrent();
-      const now = this.read(input.turnId);
+      return settleSync(Effect.gen({ self: this }, function* () {
+        this.actor.assertCurrent();
+        const now = this.read(input.turnId);
 
-      if ((now?.epoch ?? 0) !== (previous?.epoch ?? 0)) throw new KinuError('denied', 'claim changed during admission preparation');
-      const selected = this.history.context.selected();
+        if ((now?.epoch ?? 0) !== (previous?.epoch ?? 0)) return yield* new KinuError('denied', 'claim changed during admission preparation');
+        const selected = this.history.context.selected();
 
-      if (selected?.contextId !== input.context.contextId || selected.revision !== input.context.revision) throw new KinuError('denied', 'working selection changed during admission preparation');
+        if (selected?.contextId !== input.context.contextId || selected.revision !== input.context.revision) return yield* new KinuError('denied', 'working selection changed during admission preparation');
 
-      const admitted: ActorTurnClaim = Object.freeze({ actorId: this.actorId, runId: input.runId, turnId: input.turnId, epoch,
-        workMode: input.workMode, program: Object.freeze({ ...input.program }), workingRevision: input.context.revision, workingContextId: input.context.contextId });
+        const admitted: ActorTurnClaim = Object.freeze({ actorId: this.actorId, runId: input.runId, turnId: input.turnId, epoch,
+          workMode: input.workMode, program: Object.freeze({ ...input.program }), workingRevision: input.context.revision, workingContextId: input.context.contextId });
 
-      void this.sql`INSERT INTO actor_turn_claims(actor_id,turn_id,run_id,epoch,work_mode,program_kind,program_version,program_digest,program_build,outcome,claimed_at)
-        VALUES(${this.actorId},${input.turnId},${input.runId},${epoch},${input.workMode},${input.program.kind},${input.program.version},${input.program.digest},${input.program.build},NULL,${nowMs()})
-        ON CONFLICT(actor_id,turn_id) DO UPDATE SET run_id=excluded.run_id,epoch=excluded.epoch,work_mode=excluded.work_mode,program_kind=excluded.program_kind,
-          program_version=excluded.program_version,program_digest=excluded.program_digest,program_build=excluded.program_build,outcome=NULL,claimed_at=excluded.claimed_at`;
-      this.history.requests.record(admission);
+        void this.sql`INSERT INTO actor_turn_claims(actor_id,turn_id,run_id,epoch,work_mode,program_kind,program_version,program_digest,program_build,outcome,claimed_at)
+          VALUES(${this.actorId},${input.turnId},${input.runId},${epoch},${input.workMode},${input.program.kind},${input.program.version},${input.program.digest},${input.program.build},NULL,${nowMs()})
+          ON CONFLICT(actor_id,turn_id) DO UPDATE SET run_id=excluded.run_id,epoch=excluded.epoch,work_mode=excluded.work_mode,program_kind=excluded.program_kind,
+            program_version=excluded.program_version,program_digest=excluded.program_digest,program_build=excluded.program_build,outcome=NULL,claimed_at=excluded.claimed_at`;
+        this.history.requests.record(admission);
 
-      return admitted;
+        return admitted;
+      }));
     });
 
     // Seal messages left open under a superseded epoch only after this admission holds the turn.
@@ -131,32 +135,34 @@ export class ActorClaimStore {
     return claim;
   }
 
-  async consume(claim: ActorTurnClaim, input: { readonly index: number; readonly messages: readonly ModelMessage[]; readonly cache?: PromptCacheRoute | undefined }): Promise<ConsumedContext> {
-    const source = this.history.context.selected();
+  consume(claim: ActorTurnClaim, input: { readonly index: number; readonly messages: readonly ModelMessage[]; readonly cache?: PromptCacheRoute | undefined }): Promise<ConsumedContext> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const source = this.history.context.selected();
 
-    if (source === null || source.contextId !== claim.workingContextId) throw new KinuError('denied', 'claimed working context is not selected');
-    const latest = this.sql<{ revision: number | null }>`SELECT MAX(revision) AS revision FROM actor_requests WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`[0]?.revision ?? 0;
+      if (source === null || source.contextId !== claim.workingContextId) return yield* new KinuError('denied', 'claimed working context is not selected');
+      const latest = this.sql<{ revision: number | null }>`SELECT MAX(revision) AS revision FROM actor_requests WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`[0]?.revision ?? 0;
 
-    const prepared = await this.history.requests.prepareRendered({ id: crypto.randomUUID(), turnId: claim.turnId, runId: claim.runId,
-      epoch: claim.epoch, revision: latest + 1, step: input.index, source, messages: input.messages,
-      metadata: { program: { ...claim.program }, workMode: claim.workMode, ...(input.cache !== undefined && { cache: { ...input.cache } }) } });
+      const prepared = yield* Effect.promise(() => this.history.requests.prepareRendered({ id: crypto.randomUUID(), turnId: claim.turnId, runId: claim.runId,
+        epoch: claim.epoch, revision: latest + 1, step: input.index, source, messages: input.messages,
+        metadata: { program: { ...claim.program }, workMode: claim.workMode, ...(input.cache !== undefined && { cache: { ...input.cache } }) } }));
 
-    const consumed = this.transactionSync(() => {
-      this.assertLive(claim);
-      const currentRevision = this.sql<{ revision: number | null }>`SELECT MAX(revision) AS revision FROM actor_requests WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`[0]?.revision ?? 0;
+      const consumed = this.transactionSync(() => {
+        this.assertLive(claim);
+        const currentRevision = this.sql<{ revision: number | null }>`SELECT MAX(revision) AS revision FROM actor_requests WHERE actor_id=${this.actorId} AND turn_id=${claim.turnId} AND epoch=${claim.epoch}`[0]?.revision ?? 0;
 
-      if (currentRevision !== latest) throw new KinuError('denied', 'another request consumed this claim during preparation');
-      const selected = this.history.context.selected();
+        if (currentRevision !== latest) throw new KinuError('denied', 'another request consumed this claim during preparation');
+        const selected = this.history.context.selected();
 
-      if (selected?.contextId !== source.contextId || selected.revision !== source.revision) throw new KinuError('denied', 'working selection changed during request preparation');
-      this.history.requests.recordPrepared(prepared);
+        if (selected?.contextId !== source.contextId || selected.revision !== source.revision) throw new KinuError('denied', 'working selection changed during request preparation');
+        this.history.requests.recordPrepared(prepared);
 
-      return { requestId: prepared.request.id, revision: prepared.request.revision };
-    });
+        return { requestId: prepared.request.id, revision: prepared.request.revision };
+      });
 
-    this.history.requests.remember(prepared);
+      this.history.requests.remember(prepared);
 
-    return consumed;
+      return consumed;
+    }));
   }
 
   async consumedContext(turnId: string, stepIndex?: number): Promise<ContextRevision | null> {
@@ -222,10 +228,9 @@ export class ActorClaimStore {
   }
   private notify<T>(listeners: ReadonlySet<(value: T) => void>, value: T): void {
     for (const listener of listeners) {
-      try { listener(value); } catch (cause) {
-        diagnostics.failure('actor.claim_listener_failed',
-          toKinuError({ doing: 'notify a turn-claim listener', cause, otherwise: 'io' }), { actorId: this.actorId });
-      }
+      settleLoggedSync('actor.claim_listener_failed', { doing: 'notify a turn-claim listener', otherwise: 'io' }, () => {
+ listener(value);
+      }, { actorId: this.actorId });
     }
   }
   private claimOf(row: ClaimRow): StoredActorClaim {
@@ -246,13 +251,15 @@ export type ClaimRecovery =
   | { readonly kind: 'verified' | 'build_unknown'; readonly claim: StoredActorClaim }
   | { readonly kind: 'source_changed'; readonly claim: StoredActorClaim; readonly found: string | null };
 
-export async function verifyClaimedProgram(claim: StoredActorClaim, readVersionedSource: (version: number) => Promise<string | null>, digestOf: (source: string) => string,
+export function verifyClaimedProgram(claim: StoredActorClaim, readVersionedSource: (version: number) => Promise<string | null>, digestOf: (source: string) => string,
   context: ContextRevision | null): Promise<ClaimRecovery> {
-  if (context === null) throw new KinuError('missing', 'claimed request evidence is missing');
+  return settle(Effect.gen(function* () {
+    if (context === null) return yield* new KinuError('missing', 'claimed request evidence is missing');
 
-  if (claim.program.kind === 'builtin') return { kind: claim.program.build === null ? 'build_unknown' : 'verified', claim };
-  const source = await readVersionedSource(claim.program.version);
-  const found = source === null ? null : digestOf(source);
+    if (claim.program.kind === 'builtin') return { kind: claim.program.build === null ? 'build_unknown' : 'verified', claim };
+    const source = yield* Effect.promise(() => readVersionedSource(claim.program.version));
+    const found = source === null ? null : digestOf(source);
 
-  return found === null || found !== claim.program.digest ? { kind: 'source_changed', claim, found } : { kind: 'verified', claim };
+    return found === null || found !== claim.program.digest ? { kind: 'source_changed', claim, found } : { kind: 'verified', claim };
+  }));
 }

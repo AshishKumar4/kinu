@@ -25,7 +25,7 @@ import type {
 } from './types';
 import { DEFAULT_EVOLUTION_CONFIG } from './types';
 import { extractJsonObject, jsonObjectOnlyInstruction, stripMarkdownFences } from '../providers/structured';
-import { tolerate } from '../obs/index';
+import { tolerate, settleLogged } from '../obs/index';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../utils/evidence-window';
 import { upsertCraftedTool } from '../craft/conflict';
 import { periodicCraftConsolidation } from '../craft/consolidation';
@@ -783,16 +783,11 @@ export class EvolutionEngine {
      * Gated on `enabled`; the queue is durable for the next enabled host.
      */
   async runDueShadowTrials(): Promise<void> {
-    if (!this.config.enabled || !this.config.shadowTrialRunner) return;
+    const runner = this.config.shadowTrialRunner;
 
-    try {
-      await this.config.shadowTrialRunner();
-    } catch (err) {
-      diagnostics.failure(
-        'evolution.shadow_trial_drain_failed',
-        toKinuError({ doing: 'drain the due shadow trials', cause: err, otherwise: 'unavailable' }),
-      );
-    }
+    if (!this.config.enabled || !runner) return;
+
+    await settleLogged('evolution.shadow_trial_drain_failed', { doing: 'drain the due shadow trials', otherwise: 'unavailable' }, async () => { await runner(); });
   }
 
   private emitChangelogDigest(since: number): void {

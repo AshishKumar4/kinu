@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import * as v from 'valibot';
 import { TierIdSchema, isValidRoleId } from '../types/profile';
 import { isWorkMode, type WorkMode } from '../types/turn';
@@ -62,22 +64,26 @@ export async function finishSubordinateBirth(
 
   if (existing) return await existing;
 
-  const work = (async (): Promise<ActorReference> => {
-    const reference = await runtime.spawn({ ...birth.seed, creationId: birth.creationId });
-    roster.attachActor(name, birth.creationId, reference);
+  const work = ((): Promise<ActorReference> => {
+    return settle(Effect.gen(function* () {
+      const reference = yield* Effect.promise(() => runtime.spawn({ ...birth.seed, creationId: birth.creationId }));
+      roster.attachActor(name, birth.creationId, reference);
 
-    if (roster.requireExisting(name).deleteRequested) throw new KinuError('cancelled', 'The admitted actor birth is cancelled.');
+      if (roster.requireExisting(name).deleteRequested) return yield* new KinuError('cancelled', 'The admitted actor birth is cancelled.');
 
-    if (birth.assignment) {
-      const handoff = await runtime.assign(name, { ...birth.assignment, creationId: birth.creationId });
+      const assignment = birth.assignment;
 
-      if (roster.requireExisting(name).birth?.creationId !== birth.creationId) throw new KinuError('denied', 'The birth admission no longer owns this assignment.');
-      roster.recordAssignmentEvent(name, handoff.eventId);
-    }
+      if (assignment) {
+        const handoff = yield* Effect.promise(() => runtime.assign(name, { ...assignment, creationId: birth.creationId }));
 
-    roster.finishBirth(name, birth.creationId);
+        if (roster.requireExisting(name).birth?.creationId !== birth.creationId) return yield* new KinuError('denied', 'The birth admission no longer owns this assignment.');
+        roster.recordAssignmentEvent(name, handoff.eventId);
+      }
 
-    return reference;
+      roster.finishBirth(name, birth.creationId);
+
+      return reference;
+    }));
   })();
 
   pending.set(birth.creationId, work);

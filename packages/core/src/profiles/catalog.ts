@@ -1,5 +1,7 @@
 // Profile catalogs: pure data, validation and hashing. Resolution lives in ./resolve.ts.
 // Role ids live only as record keys; version and digest live on the envelope.
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import task from "../prompts/role-task.md" with { type: 'text' };
 import researcher from "../prompts/role-researcher.md" with { type: 'text' };
 import planner from "../prompts/role-planner.md" with { type: 'text' };
@@ -133,17 +135,19 @@ export const ProfileCatalogEnvelopeSchema = v.strictObject({
 
 /** Throws, naming up to three offending paths, on any shape violation of `what`. */
 export function parseProfileValue<T>(schema: v.GenericSchema<unknown, T>, what: string, input: { value: unknown }): T {
-  const parsed = v.safeParse(schema, input.value);
+  return settleSync(Effect.gen(function* () {
+    const parsed = v.safeParse(schema, input.value);
 
-  if (parsed.success) return parsed.output;
+    if (parsed.success) return parsed.output;
 
-  const issues = parsed.issues.slice(0, 3).map((issue) => {
-    const path = issue.path?.map((item) => String(item.key)).join('.') ?? '(root)';
+    const issues = parsed.issues.slice(0, 3).map((issue) => {
+      const path = issue.path?.map((item) => String(item.key)).join('.') ?? '(root)';
 
-    return `${path}: ${issue.message}`;
-  }).join('; ');
+      return `${path}: ${issue.message}`;
+    }).join('; ');
 
-  throw new KinuError('bad_input', `invalid ${what}: ${issues}`);
+    return yield* new KinuError('bad_input', `invalid ${what}: ${issues}`);
+  }));
 }
 
 export function validateProfileCatalog(input: { value: unknown }): ProfileCatalog {

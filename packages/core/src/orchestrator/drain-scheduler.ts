@@ -2,7 +2,7 @@
 // Fixed window, not sliding: a steady stream must not starve the drain.
 // A lost timer only delays the drain; events stay in the EventLog until markConsumed.
 
-import { diagnostics, toKinuError } from '../obs/index';
+import { settleLogged } from '../obs/index';
 
 /** Coalescing window. */
 export const DRAIN_DEBOUNCE_MS = 250;
@@ -25,15 +25,7 @@ export class DrainScheduler {
     this.setTimer(async () => {
       this.armed = false;
 
-      try {
-        await this.drain();
-      } catch (err) {
-        // Window already disarmed; the next schedule() re-arms.
-        diagnostics.failure(
-          'orchestrator.debounced_drain_failed',
-          toKinuError({ doing: 'run the debounced event drain', cause: err, otherwise: 'unavailable' }),
-        );
-      }
+      await settleLogged('orchestrator.debounced_drain_failed', { doing: 'run the debounced event drain', otherwise: 'unavailable' }, () => this.drain());
     }, DRAIN_DEBOUNCE_MS);
   }
 }

@@ -14,7 +14,7 @@ import { recoveryBackoffMs } from '../utils/recovery-backoff';
 import type { WorkMode } from '../types/turn';
 import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '../utils/json';
-import { classify, diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { classify, diagnostics, renderThrownChain, toKinuError, settleLoggedSync } from '../obs/index';
 
 /** Stamped by Kinu: `do.evict.no_signal` means the platform delivers no eviction notice. */
 const EVICTION_INTERRUPT_ERROR = 'interrupted by Durable Object eviction before completion';
@@ -550,14 +550,9 @@ export class BackgroundJobRunner {
       throw err;
     }
 
-    try { scheduleDrain(); }
-    catch (err) {
-      diagnostics.failure(
-        'jobs.retry_drain_schedule_failed',
-        toKinuError({ doing: 'schedule the drain for a background-job wake retry', cause: err, otherwise: 'io' }),
-        { jobId: job.id },
-      );
-    }
+    settleLoggedSync('jobs.retry_drain_schedule_failed', { doing: 'schedule the drain for a background-job wake retry', otherwise: 'io' }, () => {
+ scheduleDrain();
+    }, { jobId: job.id });
   }
 
   /** Abort, mark cancelled, and wake the agent, which was told to wait for this result. */
@@ -761,13 +756,7 @@ export class BackgroundJobRunner {
 
     if (!job) return;
 
-    try { this.deps.onSettled(job); }
-    catch (err) {
-      diagnostics.failure(
-        'jobs.settle_sink_failed',
-        toKinuError({ doing: 'deliver the job settle notification', cause: err, otherwise: 'io' }),
-        { jobId },
-      );
-    }
+    settleLoggedSync('jobs.settle_sink_failed', { doing: 'deliver the job settle notification', otherwise: 'io' }, () => this.deps.onSettled?.(job), { jobId });
   }
+
 }

@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 import * as v from 'valibot';
 import type { WorkMode } from '../types/turn';
@@ -376,31 +378,33 @@ export function validatePlanEdits(existingLines: readonly string[], edits: reado
 }
 
 export function applyPlanEdits(existingLines: readonly string[], edits: readonly PlanEdit[]): string[] {
-  const invalid = validatePlanEdits(existingLines, edits);
+  return settleSync(Effect.gen(function* () {
+    const invalid = validatePlanEdits(existingLines, edits);
 
-  if (invalid) throw new Error(invalid);
+    if (invalid) return yield* Effect.die(new Error(invalid));
 
-  const lines = [...existingLines];
-  let offset = 0;
+    const lines = [...existingLines];
+    let offset = 0;
 
-  for (const edit of [...edits].sort((a, b) => a.start - b.start)) {
-    const start = edit.start - 1 + offset;
-    const end = edit.end != null ? edit.end + offset : lines.length;
-    const replacement = edit.content ? edit.content.split('\n') : [];
-    const removed = end - start;
-    lines.splice(start, removed, ...replacement);
-    offset += replacement.length - removed;
-  }
+    for (const edit of [...edits].sort((a, b) => a.start - b.start)) {
+      const start = edit.start - 1 + offset;
+      const end = edit.end != null ? edit.end + offset : lines.length;
+      const replacement = edit.content ? edit.content.split('\n') : [];
+      const removed = end - start;
+      lines.splice(start, removed, ...replacement);
+      offset += replacement.length - removed;
+    }
 
-  const content = lines.join('\n');
+    const content = lines.join('\n');
 
-  if (!content.trim()) throw new Error('plan content is empty after applying edits');
+    if (!content.trim()) return yield* Effect.die(new Error('plan content is empty after applying edits'));
 
-  if (byteLength(content) > MAX_PLAN_CONTENT_BYTES) {
-    throw new Error('plan content exceeds the maximum size of 1.5 MiB');
-  }
+    if (byteLength(content) > MAX_PLAN_CONTENT_BYTES) {
+      return yield* Effect.die(new Error('plan content exceeds the maximum size of 1.5 MiB'));
+    }
 
-  return lines;
+    return lines;
+  }));
 }
 
 export function formatPlanWithLineNumbers(content: string): string {
@@ -503,18 +507,20 @@ export class PlanReviewStore {
   }
 
   listPage(sessionId: string, request: PageRequest = {}): Page<PlanReview> {
-    this.actor.assertCurrent();
-    const limit = boundedInt(request.limit, 20, 1, 50);
-    const after = request.cursor?.after;
-    const anchor = after === undefined ? null : this.sql<{ rowid: number }>`SELECT rowid FROM plan_reviews WHERE actor_id=${this.actorId} AND session_id=${sessionId} AND id || ':' || revision=${after}`[0];
+    return settleSync(Effect.gen({ self: this }, function* () {
+      this.actor.assertCurrent();
+      const limit = boundedInt(request.limit, 20, 1, 50);
+      const after = request.cursor?.after;
+      const anchor = after === undefined ? null : this.sql<{ rowid: number }>`SELECT rowid FROM plan_reviews WHERE actor_id=${this.actorId} AND session_id=${sessionId} AND id || ':' || revision=${after}`[0];
 
-    if (after !== undefined && !anchor) throw new StaleCursorError('plan history', after);
+      if (after !== undefined && !anchor) return yield* Effect.die(new StaleCursorError('plan history', after));
 
-    const rows = anchor
-      ? this.sql<PlanReviewRow>`SELECT * FROM plan_reviews WHERE actor_id=${this.actorId} AND session_id=${sessionId} AND rowid<${anchor.rowid} ORDER BY rowid DESC LIMIT ${limit + 1}`
-      : this.sql<PlanReviewRow>`SELECT * FROM plan_reviews WHERE actor_id=${this.actorId} AND session_id=${sessionId} ORDER BY rowid DESC LIMIT ${limit + 1}`;
+      const rows = anchor
+        ? this.sql<PlanReviewRow>`SELECT * FROM plan_reviews WHERE actor_id=${this.actorId} AND session_id=${sessionId} AND rowid<${anchor.rowid} ORDER BY rowid DESC LIMIT ${limit + 1}`
+        : this.sql<PlanReviewRow>`SELECT * FROM plan_reviews WHERE actor_id=${this.actorId} AND session_id=${sessionId} ORDER BY rowid DESC LIMIT ${limit + 1}`;
 
-    return seekPage(rows.map(toPlanReview), limit, plan => plan.id + ':' + plan.revision);
+      return seekPage(rows.map(toPlanReview), limit, plan => plan.id + ':' + plan.revision);
+    }));
   }
 
   get(id: string, revision: number): PlanReview | null {
@@ -715,23 +721,25 @@ export class PlanReviewStore {
   }
 
   handoffAttempt(id: string, revision: number): number {
-    const current = this.get(id, revision);
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const current = this.get(id, revision);
 
-    if (!current || (current.status !== 'approved' && current.status !== 'changes_requested')) {
-      throw new Error(`plan revision ${id}/${revision} has no decided handoff`);
-    }
+      if (!current || (current.status !== 'approved' && current.status !== 'changes_requested')) {
+        return yield* Effect.die(new Error(`plan revision ${id}/${revision} has no decided handoff`));
+      }
 
-    const rows = this.sql<{ handoff_attempt: number }>`SELECT handoff_attempt FROM plan_reviews
-      WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} LIMIT 1`;
+      const rows = this.sql<{ handoff_attempt: number }>`SELECT handoff_attempt FROM plan_reviews
+        WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} LIMIT 1`;
 
-    const attempt = rows[0]?.handoff_attempt ?? 0;
+      const attempt = rows[0]?.handoff_attempt ?? 0;
 
-    if (attempt > 0) return attempt;
-    void this.sql`UPDATE plan_reviews SET handoff_attempt=1
-      WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND handoff_attempt=0`;
-    markStoreChanged(this.sql);
+      if (attempt > 0) return attempt;
+      void this.sql`UPDATE plan_reviews SET handoff_attempt=1
+        WHERE actor_id=${this.actorId} AND id=${id} AND revision=${revision} AND handoff_attempt=0`;
+      markStoreChanged(this.sql);
 
-    return 1;
+      return 1;
+    }));
   }
 }
 

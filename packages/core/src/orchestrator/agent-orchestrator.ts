@@ -32,7 +32,7 @@ import { nanoid } from '../utils/nanoid';
 import { workModeForTurnMetadata } from '../prompting/surface';
 import { type WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
-import { diagnostics, toKinuError } from '../obs/index';
+import { diagnostics, toKinuError, settleLogged, settleLoggedSync } from '../obs/index';
 
 /**
  * Whether an arriving user message is a genuine follow-up or an independent task invocation.
@@ -244,17 +244,8 @@ export class AgentOrchestrator {
 
       const cadence = this.runDueSessionEvolution();
       const previousCadence = this.cadencePasses;
-      this.cadencePasses = (async (): Promise<void> => {
-        try {
-          await Promise.all([previousCadence, cadence]);
-        } catch (cause) {
-          diagnostics.failure(
-            'orchestrator.detached_work_failed',
-            toKinuError({ doing: 'run detached post-turn work', cause, otherwise: 'unavailable' }),
-            { work: 'Session evolution' },
-          );
-        }
-      })();
+      this.cadencePasses = settleLogged('orchestrator.detached_work_failed', { doing: 'run detached post-turn work', otherwise: 'unavailable' },
+        async () => { await Promise.all([previousCadence, cadence]); }, { work: 'Session evolution' });
     }
   }
 
@@ -328,19 +319,12 @@ export class AgentOrchestrator {
     await this.drainDueShadowTrials();
 
     if (claimed) {
-      try {
-        await this.deps.engine.onSessionComplete({
+      await settleLogged('evolution.session_pass_failed', { doing: 'run the session evolution pass', otherwise: 'unavailable' }, () => this.deps.engine.onSessionComplete({
           sessionId: `sess-${nanoid()}`,
           turns: claimed.turns,
           startedAt: claimed.startedAt,
           endedAt: Date.now(),
-        });
-      } catch (err) {
-        diagnostics.failure(
-          'evolution.session_pass_failed',
-          toKinuError({ doing: 'run the session evolution pass', cause: err, otherwise: 'unavailable' }),
-        );
-      }
+        }));
 
       // Settled either way: retrying a persistently failing window would livelock. Carry-forward is for a dead host.
       claimed.settle();
@@ -355,14 +339,7 @@ export class AgentOrchestrator {
 
     if (!lane) return;
 
-    try {
-      await lane();
-    } catch (err) {
-      diagnostics.failure(
-        'evolution.refinement_lane_failed',
-        toKinuError({ doing: 'advance the continual-refinement lane', cause: err, otherwise: 'unavailable' }),
-      );
-    }
+    await settleLogged('evolution.refinement_lane_failed', { doing: 'advance the continual-refinement lane', otherwise: 'unavailable' }, () => lane());
   }
 
   private drainDueShadowTrials(): Promise<void> {
@@ -433,14 +410,9 @@ export class AgentOrchestrator {
 
   /** Absent on a host whose next wake is its own next start (see BackendHost.reconcileDurableWake). */
   private reconcileDurableWake(): void {
-    try {
+    settleLoggedSync('event.durable_wake_arm_failed', { doing: 'arming the durable wake a pending reaction needs', otherwise: 'io' }, () => {
       this.deps.host.reconcileDurableWake?.();
-    } catch (err) {
-      diagnostics.failure(
-        'event.durable_wake_arm_failed',
-        toKinuError({ doing: 'arming the durable wake a pending reaction needs', cause: err, otherwise: 'io' }),
-      );
-    }
+    });
   }
 
   /**
@@ -449,15 +421,9 @@ export class AgentOrchestrator {
    */
   private returnEventsToPending(ids: readonly string[]): void {
     for (const id of ids) {
-      try {
+      settleLoggedSync('event.unbind_failed', { doing: 'return a bound event to pending', otherwise: 'io' }, () => {
         this.deps.eventLog.unbind(id);
-      } catch (err) {
-        diagnostics.failure(
-          'event.unbind_failed',
-          toKinuError({ doing: 'return a bound event to pending', cause: err, otherwise: 'io' }),
-          { eventId: id },
-        );
-      }
+      }, { eventId: id });
     }
 
     this.reconcileDurableWake();
@@ -489,15 +455,9 @@ export class AgentOrchestrator {
     } catch (err) {
       // Unbind the prefix so the retry sees the whole batch; otherwise it strands with no signal or wake.
       for (const id of bound) {
-        try {
+        settleLoggedSync('orchestrator.drain_unbind_failed', { doing: 'release an event bound by a drain that failed', otherwise: 'io' }, () => {
           this.deps.eventLog.unbind(id);
-        } catch (undo) {
-          diagnostics.failure(
-            'orchestrator.drain_unbind_failed',
-            toKinuError({ doing: 'release an event bound by a drain that failed', cause: undo, otherwise: 'io' }),
-            { turnId, event: id },
-          );
-        }
+        }, { turnId, event: id });
       }
 
       const failure = toKinuError({

@@ -153,10 +153,10 @@ export const diagnostics: Logger = {
 export function settleLogged<Fields>(
   event: LogEventName,
   failure: { readonly doing: string; readonly otherwise: ErrorCode },
-  work: () => Promise<void>,
+  work: () => PromiseLike<void> | void,
   fields?: Fields & LoggableFields<Fields>,
 ): Promise<void> {
-  return settle(attempt(failure, work).pipe(Effect.catch((error) => Effect.sync(() => diagnostics.failure<Fields>(event, error, fields)))));
+  return settle(attempt(failure, async () => { await work(); }).pipe(Effect.catch((error) => Effect.sync(() => diagnostics.failure<Fields>(event, error, fields)))));
 }
 
 export function settleLoggedSync<Fields>(

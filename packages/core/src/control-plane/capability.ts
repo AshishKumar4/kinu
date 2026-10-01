@@ -4,6 +4,8 @@
  * graph (the workerd test project cannot compile the production `Env`).
  * Derived from the user plane's root secret under a distinct label.
  */
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import { hmacSha256Hex } from '../utils/crypto';
 import * as v from 'valibot';
 
@@ -90,22 +92,24 @@ class ControlDeniedError extends Error {
 }
 
 /** Fails closed. Both derivations are computed before comparing, so branch order leaks nothing. */
-export async function requireControl(
+export function requireControl(
   env: ControlSecretEnv,
   caller: PresentedCaller,
   capability: ControlCapability,
 ): Promise<ControlGrade> {
-  const grade = await resolveGrade(env, caller);
-  const required = CONTROL_PLANE_CAPABILITIES[capability];
+  return settle(Effect.gen(function* () {
+    const grade = yield* Effect.promise(() => resolveGrade(env, caller));
+    const required = CONTROL_PLANE_CAPABILITIES[capability];
 
-  if (grade === null || GRADE_RANK[grade] < GRADE_RANK[required]) {
-    throw new ControlDeniedError(
-      `${capability} requires the control plane's ${required} capability. `
-      + `This caller ${grade === null ? 'presented no recognized capability' : `holds only ${grade}`}.`,
-    );
-  }
+    if (grade === null || GRADE_RANK[grade] < GRADE_RANK[required]) {
+      return yield* Effect.die(new ControlDeniedError(
+        `${capability} requires the control plane's ${required} capability. `
+        + `This caller ${grade === null ? 'presented no recognized capability' : `holds only ${grade}`}.`,
+      ));
+    }
 
-  return grade;
+    return grade;
+  }));
 }
 
 /** Wider than `ControlCaller`: the RPC caller chooses what to send, and the gate must refuse it. */

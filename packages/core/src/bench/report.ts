@@ -1,4 +1,6 @@
 // Bench report shapes and the acceptance rule. Pure: no LLM, no IO.
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import { fnv1a64 } from '../utils/fnv1a';
 import { computeGain, fmtPp, pairedBinaryComparison } from './stats';
 import type { BootstrapOptions, GainStats, PairedBinaryStats, PairedOutcome } from './stats';
@@ -150,80 +152,82 @@ function foldRepeats(attempts: readonly AttemptOutcome[]) {
 }
 
 export function buildBenchReport(input: BuildBenchReportInput): BenchReport {
-  const { config } = input;
-  const byTask = new Map<string, { a: AttemptOutcome[]; b: AttemptOutcome[] }>();
-  const seen = new Set<string>();
+  return settleSync(Effect.gen(function* () {
+    const { config } = input;
+    const byTask = new Map<string, { a: AttemptOutcome[]; b: AttemptOutcome[] }>();
+    const seen = new Set<string>();
 
-  for (const attempt of input.devAttempts) {
-    const entry = byTask.get(attempt.taskId) ?? { a: [], b: [] };
+    for (const attempt of input.devAttempts) {
+      const entry = byTask.get(attempt.taskId) ?? { a: [], b: [] };
 
-    if (attempt.variantId === config.variantA) entry.a.push(attempt);
-    else if (attempt.variantId === config.variantB) entry.b.push(attempt);
-    else throw new Error(`attempt for unknown variant "${attempt.variantId}" on task ${attempt.taskId}`);
+      if (attempt.variantId === config.variantA) entry.a.push(attempt);
+      else if (attempt.variantId === config.variantB) entry.b.push(attempt);
+      else return yield* Effect.die(new Error(`attempt for unknown variant "${attempt.variantId}" on task ${attempt.taskId}`));
 
-    if (!Number.isInteger(attempt.repeat) || attempt.repeat < 0 || attempt.repeat >= config.repeats) {
-      throw new Error(`out-of-range repeat ${attempt.repeat} for ${attempt.taskId} (variant ${attempt.variantId}): expected 0..${config.repeats - 1}`);
+      if (!Number.isInteger(attempt.repeat) || attempt.repeat < 0 || attempt.repeat >= config.repeats) {
+        return yield* Effect.die(new Error(`out-of-range repeat ${attempt.repeat} for ${attempt.taskId} (variant ${attempt.variantId}): expected 0..${config.repeats - 1}`));
+      }
+
+      const key = `${attempt.variantId}:${attempt.taskId}:${attempt.repeat}`;
+      const slotKey = `${attempt.slot}:${attempt.taskId}:${attempt.repeat}`;
+
+      if (seen.has(key)) return yield* Effect.die(new Error(`duplicate repeat attempt ${key} (slot ${slotKey})`));
+      seen.add(key);
+      byTask.set(attempt.taskId, entry);
     }
 
-    const key = `${attempt.variantId}:${attempt.taskId}:${attempt.repeat}`;
-    const slotKey = `${attempt.slot}:${attempt.taskId}:${attempt.repeat}`;
+    const cases: BenchCaseScore[] = [];
+    const outcomes: PairedOutcome[] = [];
+    let budgetBreaches = 0;
 
-    if (seen.has(key)) throw new Error(`duplicate repeat attempt ${key} (slot ${slotKey})`);
-    seen.add(key);
-    byTask.set(attempt.taskId, entry);
-  }
+    for (const [taskId, { a, b }] of byTask) {
+      if (a.length !== config.repeats || b.length !== config.repeats) {
+        return yield* Effect.die(new Error(`unpaired task ${taskId}: expected ${config.repeats} attempt(s) per variant, got ${a.length} and ${b.length}: a paired design cannot drop half a pair`));
+      }
 
-  const cases: BenchCaseScore[] = [];
-  const outcomes: PairedOutcome[] = [];
-  let budgetBreaches = 0;
-
-  for (const [taskId, { a, b }] of byTask) {
-    if (a.length !== config.repeats || b.length !== config.repeats) {
-      throw new Error(`unpaired task ${taskId}: expected ${config.repeats} attempt(s) per variant, got ${a.length} and ${b.length}: a paired design cannot drop half a pair`);
+      // Sorted so the report is byte-identical regardless of runner order.
+      const byRepeat = (x: AttemptOutcome, y: AttemptOutcome) => x.repeat - y.repeat;
+      a.sort(byRepeat);
+      b.sort(byRepeat);
+      const foldA = foldRepeats(a);
+      const foldB = foldRepeats(b);
+      budgetBreaches += foldA.breachCount + foldB.breachCount;
+      cases.push({
+        taskId,
+        attempts: config.repeats,
+        passesA: foldA.passes, passesB: foldB.passes,
+        durationMsA: foldA.durationMs, durationMsB: foldB.durationMs,
+        tokensA: foldA.tokens, tokensB: foldB.tokens,
+        modelCallsA: foldA.modelCalls, modelCallsB: foldB.modelCalls,
+        peakPromptTokensA: foldA.peakPromptTokens, peakPromptTokensB: foldB.peakPromptTokens,
+        breachA: foldA.breach, breachB: foldB.breach,
+        errorA: foldA.error,
+        errorB: foldB.error,
+      });
+      outcomes.push({ taskId, a: a.map((x) => x.passed), b: b.map((x) => x.passed) });
     }
 
-    // Sorted so the report is byte-identical regardless of runner order.
-    const byRepeat = (x: AttemptOutcome, y: AttemptOutcome) => x.repeat - y.repeat;
-    a.sort(byRepeat);
-    b.sort(byRepeat);
-    const foldA = foldRepeats(a);
-    const foldB = foldRepeats(b);
-    budgetBreaches += foldA.breachCount + foldB.breachCount;
-    cases.push({
-      taskId,
-      attempts: config.repeats,
-      passesA: foldA.passes, passesB: foldB.passes,
-      durationMsA: foldA.durationMs, durationMsB: foldB.durationMs,
-      tokensA: foldA.tokens, tokensB: foldB.tokens,
-      modelCallsA: foldA.modelCalls, modelCallsB: foldB.modelCalls,
-      peakPromptTokensA: foldA.peakPromptTokens, peakPromptTokensB: foldB.peakPromptTokens,
-      breachA: foldA.breach, breachB: foldB.breach,
-      errorA: foldA.error,
-      errorB: foldB.error,
-    });
-    outcomes.push({ taskId, a: a.map((x) => x.passed), b: b.map((x) => x.passed) });
-  }
+    cases.sort((x, y) => x.taskId.localeCompare(y.taskId));
 
-  cases.sort((x, y) => x.taskId.localeCompare(y.taskId));
+    const stats = pairedBinaryComparison(outcomes, { seed: config.seed, ...input.bootstrap });
+    const decision = decideBenchOutcome(input.sealed);
+    const sealedStats = input.sealed?.stats;
 
-  const stats = pairedBinaryComparison(outcomes, { seed: config.seed, ...input.bootstrap });
-  const decision = decideBenchOutcome(input.sealed);
-  const sealedStats = input.sealed?.stats;
-
-  return {
-    ranAt: input.ranAt ?? Date.now(),
-    runId: input.runId,
-    config,
-    configHash: benchConfigHash(config),
-    dev: { tasks: outcomes.length, stats, cases },
-    sealed: input.sealed,
-    sealAccessOrdinal: input.sealAccessOrdinal,
-    budgetBreaches,
-    decision,
-    headline: sealedStats
-      ? `held-out ${fmtPp(sealedStats.effect)} (${sealedStats.verdict})`
-      : `dev-only ${fmtPp(stats.effect)}: no held-out measurement`,
-  };
+    return {
+      ranAt: input.ranAt ?? Date.now(),
+      runId: input.runId,
+      config,
+      configHash: benchConfigHash(config),
+      dev: { tasks: outcomes.length, stats, cases },
+      sealed: input.sealed,
+      sealAccessOrdinal: input.sealAccessOrdinal,
+      budgetBreaches,
+      decision,
+      headline: sealedStats
+        ? `held-out ${fmtPp(sealedStats.effect)} (${sealedStats.verdict})`
+        : `dev-only ${fmtPp(stats.effect)}: no held-out measurement`,
+    };
+  }));
 }
 
 export function renderBenchSummary(report: BenchReport): string {

@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { WorkMode } from '../types/turn';
 import { readVersionedScaffoldSource } from '../scaffold/shadow';
@@ -14,18 +16,20 @@ export type ActorTurnProgram =
 const BUILTIN_PROGRAM: ActorTurnProgram = Object.freeze({ kind: 'builtin', version: 0 });
 
 /** Pin only the selected immutable version. Neither transform reads a live alias. */
-export async function prepareActorProgram(input: ScaffoldRunControl & {
+export function prepareActorProgram(input: ScaffoldRunControl & {
   readonly runtime: AgentRuntime;
   readonly mode: WorkMode;
   readonly version: number;
 }): Promise<ActorTurnProgram> {
-  assertScaffoldActive(input);
+  return settle(Effect.gen(function* () {
+    assertScaffoldActive(input);
 
-  if (input.mode === 'plan' || input.version <= 0) return BUILTIN_PROGRAM;
-  const source = await readVersionedScaffoldSource(input.runtime, input.version);
-  assertScaffoldActive(input);
+    if (input.mode === 'plan' || input.version <= 0) return BUILTIN_PROGRAM;
+    const source = yield* Effect.promise(() => readVersionedScaffoldSource(input.runtime, input.version));
+    assertScaffoldActive(input);
 
-  if (source === null) throw new KinuError('missing', 'scaffold version ' + input.version + ' has no source');
+    if (source === null) return yield* new KinuError('missing', 'scaffold version ' + input.version + ' has no source');
 
-  return Object.freeze({ kind: 'scaffold', version: input.version, source, digest: sha256Hex(source) });
+    return Object.freeze({ kind: 'scaffold', version: input.version, source, digest: sha256Hex(source) });
+  }));
 }

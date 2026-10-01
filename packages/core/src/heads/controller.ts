@@ -3,6 +3,8 @@
  * Heads settle independently (Promise.allSettled).
  */
 
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import * as v from 'valibot';
 import { nanoid } from '../utils/nanoid';
 import { REAL_CLOCK, type Clock } from '../types/clock';
@@ -142,7 +144,7 @@ export class HeadController {
   }
 
   /** Full split, await, merge cycle; fires `onPhase` on split (real head IDs) and on merge. */
-  async run(opts: ({ parentHeadId: null } | { parentHeadId: HeadId; parentDepth: number }) & {
+  run(opts: ({ parentHeadId: null } | { parentHeadId: HeadId; parentDepth: number }) & {
     rootId?: HeadId;
     inheritedContext: SerializedMessage[];
     request: SplitRequest;
@@ -153,126 +155,76 @@ export class HeadController {
     missionLabels?: readonly string[];
     onPhase?: (event: SplitPhaseEvent) => void;
   }): Promise<MergeResult> {
-    const rootId = opts.rootId ?? opts.parentHeadId ?? this.resolveTopLevelRun(opts.request.rationale);
-    const strategy: MergeStrategy = opts.request.mergeStrategy ?? DEFAULT_MERGE_STRATEGY;
+    return settle(Effect.gen({ self: this }, function* () {
+      const rootId = opts.rootId ?? opts.parentHeadId ?? this.resolveTopLevelRun(opts.request.rationale);
+      const strategy: MergeStrategy = opts.request.mergeStrategy ?? DEFAULT_MERGE_STRATEGY;
 
-    const parentBudget = opts.parentBudget;
+      const parentBudget = opts.parentBudget;
 
-    if (parentBudget.maxDepth <= 0) {
-      throw new Error('Cannot split: max depth reached');
-    }
+      if (parentBudget.maxDepth <= 0) {
+        return yield* Effect.die(new Error('Cannot split: max depth reached'));
+      }
 
-    if (opts.request.heads.length === 0) {
-      throw new Error('Cannot split: no head tasks provided');
-    }
+      if (opts.request.heads.length === 0) {
+        return yield* Effect.die(new Error('Cannot split: no head tasks provided'));
+      }
 
-    const childBudget = deriveChildBudget(parentBudget);
+      const childBudget = deriveChildBudget(parentBudget);
 
-    // Only the root owns run identity and final settlement. Nested reports share its journal.
-    if (opts.parentHeadId === null) {
-      const splitRecorded = this.journal.recordSplit(rootId, opts.request.rationale, parentBudget.spawnedAt);
+      // Only the root owns run identity and final settlement. Nested reports share its journal.
+      if (opts.parentHeadId === null) {
+        const splitRecorded = this.journal.recordSplit(rootId, opts.request.rationale, parentBudget.spawnedAt);
 
-      if (splitRecorded !== undefined) await splitRecorded;
-    }
+        if (splitRecorded !== undefined) yield* Effect.promise(() => splitRecorded);
+      }
 
-    // A spawn that throws settles only its own head and never reaches Promise.all.
-    const spawnPromises = opts.request.heads.map(async (h, idx): Promise<SpawnedHead | HeadReport> => {
-      // Derived from the parent and slot, never minted: a re-drive re-opens the same row via
-      // `HeadJournal.insertSpawn`. Keyed on the parent, which is unique, not the root.
-      const id = `${opts.parentHeadId ?? rootId}-d${childBudget.maxDepth + 1}-${idx}`;
+      // A spawn that throws settles only its own head and never reaches Promise.all.
+      const spawnPromises = opts.request.heads.map(async (h, idx): Promise<SpawnedHead | HeadReport> => {
+        // Derived from the parent and slot, never minted: a re-drive re-opens the same row via
+        // `HeadJournal.insertSpawn`. Keyed on the parent, which is unique, not the root.
+        const id = `${opts.parentHeadId ?? rootId}-d${childBudget.maxDepth + 1}-${idx}`;
 
-      const input: HeadInput = {
-        id,
-        rootId,
-        parentId: opts.parentHeadId,
-        depth: opts.parentHeadId === null ? 1 : opts.parentDepth + 1,
-        task: h.task,
-        mode: opts.mode,
-        rationale: h.rationale,
-        inheritedContext: opts.inheritedContext,
-        budget: childBudget,
-        // Per-head model wins over the parent default.
-        model: h.model ?? opts.model,
-        allowedTools: h.allowedTools,
-        mergeStrategy: strategy,
-        // A fork explores under the loop it forks from, via the per-kind default.
-        loop: defaultLoopOrigin('swarm'),
-        ...forkMission(opts.missionLabels),
-      };
-
-      // A local journal writes the row before this returns; nothing may push that write behind a microtask.
-      const spawnRecorded = this.journal.insertSpawn(input);
-
-      if (spawnRecorded !== undefined) await spawnRecorded;
-
-      try {
-        return await this.runtime.spawnHead(input);
-      } catch (err) {
-        // Nothing ran: usage is unknown (`{}`), and the reason travels in `errorMessage`.
-        const failed: HeadReport = {
+        const input: HeadInput = {
           id,
-          status: 'errored',
-          summary: 'Head failed to spawn before producing a report.',
-          evidence: [],
-          decisions: [],
-          artifactRefs: [],
-          fileChanges: [],
-          childHeadIds: [],
-          toolCalls: [],
-          stepCount: 0,
-          usage: {},
-          wallClockMs: 0,
-          errorMessage: renderThrownChain({ cause: err }),
+          rootId,
+          parentId: opts.parentHeadId,
+          depth: opts.parentHeadId === null ? 1 : opts.parentDepth + 1,
+          task: h.task,
+          mode: opts.mode,
+          rationale: h.rationale,
+          inheritedContext: opts.inheritedContext,
+          budget: childBudget,
+          // Per-head model wins over the parent default.
+          model: h.model ?? opts.model,
+          allowedTools: h.allowedTools,
+          mergeStrategy: strategy,
+          // A fork explores under the loop it forks from, via the per-kind default.
+          loop: defaultLoopOrigin('swarm'),
+          ...forkMission(opts.missionLabels),
         };
 
-        await this.journal.recordReport(failed);
+        // A local journal writes the row before this returns; nothing may push that write behind a microtask.
+        const spawnRecorded = this.journal.insertSpawn(input);
 
-        return failed;
-      }
-    });
-
-    const settled = await Promise.all(spawnPromises);
-    // Only heads that spawned hold a handle; the split event carries exactly these ids.
-    const handles: SpawnedHead[] = [];
-
-    for (const s of settled) {
-      if ('run' in s) handles.push(s);
-    }
-
-    const startedAt = this.clock.now();
-
-    opts.onPhase?.({
-      kind: 'split',
-      rootId,
-      headIds: handles.map((h) => h.id),
-      rationale: opts.request.rationale,
-    });
-
-    const reports = await Promise.all(
-      settled.map(async (s): Promise<HeadReport> => {
-        // A failed-spawn head rejoins in its original slot so the merge still sees every head.
-        if (!('run' in s)) return s;
-        const h = s;
+        if (spawnRecorded !== undefined) await spawnRecorded;
 
         try {
-          const report = await h.run();
-          await this.journal.recordReport(report);
-
-          return report;
+          return await this.runtime.spawnHead(input);
         } catch (err) {
+          // Nothing ran: usage is unknown (`{}`), and the reason travels in `errorMessage`.
           const failed: HeadReport = {
-            id: h.id,
+            id,
             status: 'errored',
-            summary: 'Head failed before producing a report.',
+            summary: 'Head failed to spawn before producing a report.',
             evidence: [],
             decisions: [],
             artifactRefs: [],
             fileChanges: [],
             childHeadIds: [],
-            toolCalls: [], stepCount: 0,
-            // The head never reported, so its usage is unknown: `{}`, not zeros.
+            toolCalls: [],
+            stepCount: 0,
             usage: {},
-            wallClockMs: this.clock.now() - startedAt,
+            wallClockMs: 0,
             errorMessage: renderThrownChain({ cause: err }),
           };
 
@@ -280,33 +232,85 @@ export class HeadController {
 
           return failed;
         }
-      }),
-    );
+      });
 
-    const headScores = await this.scoreHeads(rootId, reports, opts.request.rationale, opts.mode);
+      const settled = yield* Effect.promise(() => Promise.all(spawnPromises));
+      // Only heads that spawned hold a handle; the split event carries exactly these ids.
+      const handles: SpawnedHead[] = [];
 
-    const mergeResult = await this.merge({
-      reports,
-      rationale: opts.request.rationale,
-      strategy,
-      inheritedContext: opts.inheritedContext,
-      parentBudget,
-      mode: opts.mode,
-      headIds: reports.map((r) => r.id),
-      headScores,
-    });
+      for (const s of settled) {
+        if ('run' in s) handles.push(s);
+      }
 
-    if (opts.parentHeadId === null) await this.journal.cacheMerge(rootId, mergeResult.mergedNarrative);
-    opts.onPhase?.({
-      kind: 'merge',
-      rootId,
-      cost: mergeResult.costSummary,
-      mergedNarrative: mergeResult.mergedNarrative,
-      fileChanges: mergeResult.fileChanges,
-      blindSpots: mergeResult.blindSpots,
-    });
+      const startedAt = this.clock.now();
 
-    return mergeResult;
+      opts.onPhase?.({
+        kind: 'split',
+        rootId,
+        headIds: handles.map((h) => h.id),
+        rationale: opts.request.rationale,
+      });
+
+      const reports = yield* Effect.promise(() => Promise.all(
+        settled.map(async (s): Promise<HeadReport> => {
+          // A failed-spawn head rejoins in its original slot so the merge still sees every head.
+          if (!('run' in s)) return s;
+          const h = s;
+
+          try {
+            const report = await h.run();
+            await this.journal.recordReport(report);
+
+            return report;
+          } catch (err) {
+            const failed: HeadReport = {
+              id: h.id,
+              status: 'errored',
+              summary: 'Head failed before producing a report.',
+              evidence: [],
+              decisions: [],
+              artifactRefs: [],
+              fileChanges: [],
+              childHeadIds: [],
+              toolCalls: [], stepCount: 0,
+              // The head never reported, so its usage is unknown: `{}`, not zeros.
+              usage: {},
+              wallClockMs: this.clock.now() - startedAt,
+              errorMessage: renderThrownChain({ cause: err }),
+            };
+
+            await this.journal.recordReport(failed);
+
+            return failed;
+          }
+        }),
+      ));
+
+      const headScores = yield* Effect.promise(() => this.scoreHeads(rootId, reports, opts.request.rationale, opts.mode));
+
+      const mergeResult = yield* Effect.promise(() => this.merge({
+        reports,
+        rationale: opts.request.rationale,
+        strategy,
+        inheritedContext: opts.inheritedContext,
+        parentBudget,
+        mode: opts.mode,
+        headIds: reports.map((r) => r.id),
+        headScores,
+      }));
+
+      if (opts.parentHeadId === null) yield* Effect.promise(async () => this.journal.cacheMerge(rootId, mergeResult.mergedNarrative));
+      opts.onPhase?.({
+        kind: 'merge',
+        rootId,
+        cost: mergeResult.costSummary,
+        mergedNarrative: mergeResult.mergedNarrative,
+        fileChanges: mergeResult.fileChanges,
+        blindSpots: mergeResult.blindSpots,
+      });
+
+      return mergeResult;
+    }));
   }
 
   /**

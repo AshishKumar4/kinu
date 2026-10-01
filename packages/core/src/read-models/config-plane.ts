@@ -1,5 +1,7 @@
 /** Agent config writes validate here because each is a trust boundary; `onChanged` is the per-backend part. */
 
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import * as v from 'valibot';
 import type { AgentConfigStore, ShellApprovalMode } from '../config/store';
 import type { ApprovalGrant } from '../safety/approval-gate';
@@ -58,12 +60,14 @@ export function getProviderAccounts(config: AgentConfigStore) {
 }
 
 export function setProviderAccount(config: AgentConfigStore, provider: JsonValue, account: JsonValue) {
-  const parsed = v.safeParse(v.tuple([v.string(), v.nullable(v.string())]), [provider, account]);
+  return settleSync(Effect.gen(function* () {
+    const parsed = v.safeParse(v.tuple([v.string(), v.nullable(v.string())]), [provider, account]);
 
-  if (!parsed.success) throw new Error('setProviderAccount takes a provider id and an account name or null');
-  config.setProviderAccount(parsed.output[0], parsed.output[1]);
+    if (!parsed.success) return yield* Effect.die(new Error('setProviderAccount takes a provider id and an account name or null'));
+    config.setProviderAccount(parsed.output[0], parsed.output[1]);
 
-  return { ok: true as const, accounts: config.getProviderAccounts() };
+    return { ok: true as const, accounts: config.getProviderAccounts() };
+  }));
 }
 
 export interface ReasoningEffortWrite<Effort extends ReasoningEffort | null> { ok: true; effort: Effort }
@@ -73,18 +77,20 @@ export function setReasoningEffort(config: AgentConfigStore, effort: null): Reas
 /** Wire input: the parameter stays as wide as a transport can deliver, so this setter validates. */
 export function setReasoningEffort(config: AgentConfigStore, effort: JsonValue): ReasoningEffortWrite<ReasoningEffort>;
 export function setReasoningEffort(config: AgentConfigStore, effort: JsonValue): ReasoningEffortWrite<ReasoningEffort | null> {
-  if (effort === null) {
-    config.setReasoningEffort(null);
+  return settleSync(Effect.gen(function* () {
+    if (effort === null) {
+      config.setReasoningEffort(null);
 
-    return { ok: true, effort: null };
-  }
+      return { ok: true, effort: null };
+    }
 
-  const parsed = v.safeParse(ReasoningEffortSchema, effort);
+    const parsed = v.safeParse(ReasoningEffortSchema, effort);
 
-  if (!parsed.success) throw new Error(`Invalid reasoning effort: ${v.is(v.string(), effort) ? effort : JSON.stringify(effort)}`);
-  config.setReasoningEffort(parsed.output);
+    if (!parsed.success) return yield* Effect.die(new Error(`Invalid reasoning effort: ${v.is(v.string(), effort) ? effort : JSON.stringify(effort)}`));
+    config.setReasoningEffort(parsed.output);
 
-  return { ok: true, effort: parsed.output };
+    return { ok: true, effort: parsed.output };
+  }));
 }
 
 export function getShellApprovalMode(config: AgentConfigStore) {
@@ -99,13 +105,15 @@ export function setShellApprovalMode(
   deps: { config: AgentConfigStore; onChanged: () => void },
   mode: string,
 ) {
-  const parsed = v.safeParse(ShellApprovalModeSchema, mode);
+  return settleSync(Effect.gen(function* () {
+    const parsed = v.safeParse(ShellApprovalModeSchema, mode);
 
-  if (!parsed.success) throw new Error(`invalid mode: ${mode}`);
-  deps.config.setShellApprovalMode(parsed.output);
-  deps.onChanged();
+    if (!parsed.success) return yield* Effect.die(new Error(`invalid mode: ${mode}`));
+    deps.config.setShellApprovalMode(parsed.output);
+    deps.onChanged();
 
-  return { ok: true, mode: parsed.output };
+    return { ok: true, mode: parsed.output };
+  }));
 }
 
 /** Standing grants (rule + executor): the revoke surface. Grants never widen reach; they only stop
@@ -116,12 +124,14 @@ export function getShellApprovalGrants(config: AgentConfigStore) {
 
 /** No `onChanged`: the gate reads grants live, so a revocation applies to the next command. */
 export function revokeShellApprovalGrants(config: AgentConfigStore, grants: readonly ApprovalGrant[]) {
-  const parsed = v.safeParse(v.array(v.object({ rule: v.string(), executor: v.string() })), grants);
+  return settleSync(Effect.gen(function* () {
+    const parsed = v.safeParse(v.array(v.object({ rule: v.string(), executor: v.string() })), grants);
 
-  if (!parsed.success) throw new Error('grants must be an array of { rule, executor }');
-  config.revokeShellApproval(parsed.output);
+    if (!parsed.success) return yield* Effect.die(new Error('grants must be an array of { rule, executor }'));
+    config.revokeShellApproval(parsed.output);
 
-  return { ok: true, grants: config.getShellApprovalGrants() };
+    return { ok: true, grants: config.getShellApprovalGrants() };
+  }));
 }
 
 export function getAlwaysActiveSkills(config: AgentConfigStore) {
@@ -130,15 +140,17 @@ export function getAlwaysActiveSkills(config: AgentConfigStore) {
 
 /** An empty list clears the pin. */
 export function setAlwaysActiveSkills(config: AgentConfigStore, names: JsonValue | readonly JsonValue[]) {
-  const array = v.safeParse(ArrayBoundarySchema, names);
+  return settleSync(Effect.gen(function* () {
+    const array = v.safeParse(ArrayBoundarySchema, names);
 
-  if (!array.success) throw new Error('names must be a string array');
-  const parsed = v.safeParse(SkillNamesSchema, array.output);
+    if (!array.success) return yield* Effect.die(new Error('names must be a string array'));
+    const parsed = v.safeParse(SkillNamesSchema, array.output);
 
-  if (!parsed.success) throw new Error('names must contain only strings');
-  config.setAlwaysActiveSkills(parsed.output);
+    if (!parsed.success) return yield* Effect.die(new Error('names must contain only strings'));
+    config.setAlwaysActiveSkills(parsed.output);
 
-  return { ok: true, names: config.getAlwaysActiveSkills() };
+    return { ok: true, names: config.getAlwaysActiveSkills() };
+  }));
 }
 
 export function getEvolutionConfig(config: AgentConfigStore): EvolutionConfigView {

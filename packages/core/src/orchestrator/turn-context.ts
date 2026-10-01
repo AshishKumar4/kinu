@@ -5,6 +5,8 @@
  * admission measures the unapproved instructions with the request.
  */
 
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import type { ModelMessage, ToolSet } from 'ai';
 import { sanitizeAttachmentsForModel, type AttachmentPolicy } from '../prompting/attachment-sanitizer';
 import { settleUnpairedToolCalls } from '../prompting/interrupted-tool-calls';
@@ -97,89 +99,93 @@ export function measureCompactionTrigger(
   return measured;
 }
 
-export async function assembleTurnMessages(input: TurnContextInput): Promise<AssembledTurn> {
-  const history = input.attachments
-    ? await sanitizeAttachmentsForModel(input.history, input.attachments)
-    : input.history;
+export function assembleTurnMessages(input: TurnContextInput): Promise<AssembledTurn> {
+  return settle(Effect.gen(function* () {
+    const attachments = input.attachments;
 
-  // Sanitizing keeps indices and a transform keeps untouched messages, so the input is found by reference.
-  const opening = input.turnStart === undefined ? undefined : history[input.turnStart];
+    const history = attachments
+      ? (yield* Effect.promise(() => sanitizeAttachmentsForModel(input.history, attachments)))
+      : input.history;
 
-  const located = (messages: ModelMessage[]): AssembledTurn => {
-    const at = opening === undefined ? -1 : messages.indexOf(opening);
+    // Sanitizing keeps indices and a transform keeps untouched messages, so the input is found by reference.
+    const opening = input.turnStart === undefined ? undefined : history[input.turnStart];
 
-    return { messages, turnStart: at < 0 ? turnInputStart(messages) : at };
-  };
+    const located = (messages: ModelMessage[]): AssembledTurn => {
+      const at = opening === undefined ? -1 : messages.indexOf(opening);
 
-  await input.extensions?.emitTurnStart({ system: input.system, history });
+      return { messages, turnStart: at < 0 ? turnInputStart(messages) : at };
+    };
 
-  // One closure: admission may re-run it with trigger:'force' and the ordering must match.
-  const assemble = async (trigger: CompactionTrigger): Promise<AssembledTurn> => {
-    const transformed = await input.extensions?.runTransformContext({
-      sessionKey: input.sessionKey,
-      messages: history,
-      system: input.system,
-      contextWindow: input.contextWindow,
-      providerReportedTokens: input.providerReportedTokens,
-      trigger,
-      abortSignal: input.abortSignal,
-    });
+    yield* Effect.promise(async () => input.extensions?.emitTurnStart({ system: input.system, history }));
 
-    const assembled = [...(transformed ?? history)];
-
-    return located(settleUnpairedToolCalls(assembled, input.lostToolCall) ?? assembled);
-  };
-
-  const assembled = await assemble(input.trigger);
-  const admission = input.admission;
-
-  if (!admission) return assembled;
-
-  const limit = stepContextLimit(admission.limits);
-
-  const measure = async (turn: AssembledTurn): Promise<number> => {
-    const instructions = admission.instructions ?? null;
-    const messages = instructions === null ? turn.messages : [...turn.messages, { role: 'user' as const, content: instructions }];
-
-    if (admission.count) {
-      const counted = await admission.count({
+    // One closure: admission may re-run it with trigger:'force' and the ordering must match.
+    const assemble = async (trigger: CompactionTrigger): Promise<AssembledTurn> => {
+      const transformed = await input.extensions?.runTransformContext({
+        sessionKey: input.sessionKey,
+        messages: history,
         system: input.system,
-        messages,
-        tools: admission.tools,
+        contextWindow: input.contextWindow,
+        providerReportedTokens: input.providerReportedTokens,
+        trigger,
+        abortSignal: input.abortSignal,
       });
 
-      if (counted.kind === 'counted') return counted.tokens;
-      // Uncounted requests are gated on the estimate, never ungated.
-      diagnostics.event('admission.uncounted', {
-        provider: counted.provider, reason: counted.reason, sessionKey: input.sessionKey,
+      const assembled = [...(transformed ?? history)];
+
+      return located(settleUnpairedToolCalls(assembled, input.lostToolCall) ?? assembled);
+    };
+
+    const assembled = yield* Effect.promise(() => assemble(input.trigger));
+    const admission = input.admission;
+
+    if (!admission) return assembled;
+
+    const limit = stepContextLimit(admission.limits);
+
+    const measure = async (turn: AssembledTurn): Promise<number> => {
+      const instructions = admission.instructions ?? null;
+      const messages = instructions === null ? turn.messages : [...turn.messages, { role: 'user' as const, content: instructions }];
+
+      if (admission.count) {
+        const counted = await admission.count({
+          system: input.system,
+          messages,
+          tools: admission.tools,
+        });
+
+        if (counted.kind === 'counted') return counted.tokens;
+        // Uncounted requests are gated on the estimate, never ungated.
+        diagnostics.event('admission.uncounted', {
+          provider: counted.provider, reason: counted.reason, sessionKey: input.sessionKey,
+        });
+      }
+
+      return estimateTokens(JSON.stringify({
+        system: input.system, messages, tools: admission.tools,
+      }).length);
+    };
+
+    const tokens = yield* Effect.promise(() => measure(assembled));
+
+    if (tokens <= limit) return { ...assembled, admittedTokens: tokens };
+
+    // An unmeasured window neither refuses nor spends the forced compaction; the provider answers.
+    if (!admission.limits.windowMeasured) {
+      diagnostics.event('admission.unmeasured_window', {
+        sessionKey: input.sessionKey, tokens, limit, contextWindow: admission.limits.contextWindow,
       });
+
+      return { ...assembled, admittedTokens: tokens };
     }
 
-    return estimateTokens(JSON.stringify({
-      system: input.system, messages, tools: admission.tools,
-    }).length);
-  };
+    // An armed compaction already rewrote this assembly.
+    if (input.trigger !== 'auto') return yield* Effect.die(refuseOversizedRequest(tokens, limit));
 
-  const tokens = await measure(assembled);
+    const compacted = yield* Effect.promise(() => assemble('force'));
+    const recounted = yield* Effect.promise(() => measure(compacted));
 
-  if (tokens <= limit) return { ...assembled, admittedTokens: tokens };
+    if (recounted > limit) return yield* Effect.die(refuseOversizedRequest(recounted, limit));
 
-  // An unmeasured window neither refuses nor spends the forced compaction; the provider answers.
-  if (!admission.limits.windowMeasured) {
-    diagnostics.event('admission.unmeasured_window', {
-      sessionKey: input.sessionKey, tokens, limit, contextWindow: admission.limits.contextWindow,
-    });
-
-    return { ...assembled, admittedTokens: tokens };
-  }
-
-  // An armed compaction already rewrote this assembly.
-  if (input.trigger !== 'auto') throw refuseOversizedRequest(tokens, limit);
-
-  const compacted = await assemble('force');
-  const recounted = await measure(compacted);
-
-  if (recounted > limit) throw refuseOversizedRequest(recounted, limit);
-
-  return { ...compacted, admittedTokens: recounted };
+    return { ...compacted, admittedTokens: recounted };
+  }));
 }

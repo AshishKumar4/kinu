@@ -30,7 +30,7 @@ import { HeadFileChanges } from './file-changes';
 import type { ReportHeadDelta } from './head-stream';
 import * as v from 'valibot';
 import { isJsonObject, projectJsonValue, type JsonObject, type JsonValue } from '../utils/json';
-import { diagnostics, renderThrownChain, toKinuError, type KinuError } from '../obs/index';
+import { renderThrownChain, toKinuError, type KinuError, settleLogged } from '../obs/index';
 import type { BuiltinToolName } from '../tools/registry';
 import { agentAffinityKey } from '../providers/workers-ai';
 import type { ActorTurnClaim, ClaimOutcome } from '../orchestrator/actor-claims';
@@ -657,15 +657,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       const seq = recorded++;
 
       // A failed trace write must not kill the work; the sink can be an RPC.
-      try {
-        await deps.reportStep?.(seq, traced);
-      } catch (err) {
-        diagnostics.failure(
-          'head.step_trace_failed',
-          toKinuError({ doing: 'record a head step trace', cause: err, otherwise: 'io' }),
-          { headId: input.id, seq },
-        );
-      }
+      await settleLogged('head.step_trace_failed', { doing: 'record a head step trace', otherwise: 'io' }, () => deps.reportStep?.(seq, traced), { headId: input.id, seq });
     }
 
     const usage = normalizeUsage(step.usage);

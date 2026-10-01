@@ -5,6 +5,8 @@
  * Swarm call contract: docs/EXPLORATION.md "Presets", "Validity over the resolved configuration",
  * "Accepted and ignored".
  */
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import { REAL_CLOCK } from '../types/clock';
 import { tool, jsonSchema } from 'ai';
 import { currentWorkMode, inWorkMode, permitInPlan, workModeRefusal } from '../execution/work-mode';
@@ -737,11 +739,13 @@ function agentsFieldRefusal(call: { input: unknown }): string | undefined {
 
 /** The one parse for the `agents` tool and its codemode namespace. */
 export function parseAgentsToolInput(call: { input: unknown }): AgentsToolInput {
-  const refusal = agentsFieldRefusal(call);
+  return settleSync(Effect.gen(function* () {
+    const refusal = agentsFieldRefusal(call);
 
-  if (refusal) throw new Error(refusal);
+    if (refusal) return yield* Effect.die(new Error(refusal));
 
-  return v.parse(AgentsToolInputSchema, call.input);
+    return v.parse(AgentsToolInputSchema, call.input);
+  }));
 }
 
 type StoredAgentsRow = v.InferOutput<typeof StoredAgentsInputSchema>;

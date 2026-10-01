@@ -1,5 +1,7 @@
 /** Host bridges (llmStream, callTool, history) an evolved scaffold uses from the codemode sandbox. */
 
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import type { LanguageModel, ModelMessage, ToolSet } from 'ai';
 import { runChat, type ChatOptions } from '../chat';
 import { ExtensionHost, type KinuExtension } from '../extension';
@@ -231,21 +233,23 @@ export function createScaffoldCallTool(
   const nonce = nanoid();
   const control = { signal, assertActive };
 
-  return async (name, args) => {
-    assertScaffoldActive(control);
-    const t = tools()[name];
+  return (name, args) => {
+    return settle(Effect.gen(function* () {
+      assertScaffoldActive(control);
+      const execute = tools()[name]?.execute;
 
-    if (!t?.execute) throw new KinuError('missing', `tool not found: ${name}`);
+      if (!execute) return yield* new KinuError('missing', `tool not found: ${name}`);
 
-    const options: Parameters<NonNullable<ToolSet[string]['execute']>>[1] = {
-      messages: [],
-      toolCallId: callScope === undefined ? `scaffold-${nonce}#${seq++}` : `${callScope}#${seq++}`,
-    };
+      const options: Parameters<NonNullable<ToolSet[string]['execute']>>[1] = {
+        messages: [],
+        toolCallId: callScope === undefined ? `scaffold-${nonce}#${seq++}` : `${callScope}#${seq++}`,
+      };
 
-    if (signal !== undefined) options.abortSignal = signal;
-    assertScaffoldActive(control);
-    const result = await t.execute(args, options);
+      if (signal !== undefined) options.abortSignal = signal;
+      assertScaffoldActive(control);
+      const result = yield* Effect.promise(async () => execute(args, options));
 
-    return result === undefined ? undefined : decodeJsonValue({ value: result });
+      return result === undefined ? undefined : decodeJsonValue({ value: result });
+    }));
   };
 }

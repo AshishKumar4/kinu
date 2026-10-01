@@ -1,6 +1,8 @@
 /** The scaffold evolution control plane: backend-neutral drivers over the evolution primitives. A backend
  *  supplies only a {@link ScaffoldSurface}. */
 
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import type { LanguageModel, ModelMessage } from 'ai';
 import * as v from 'valibot';
 
@@ -61,7 +63,7 @@ import {
 } from './gepa/types';
 import { scoreInterval, type ScoreInterval } from '../utils/stats';
 import { nanoid } from '../utils/nanoid';
-import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+import { diagnostics, renderThrownChain, toKinuError, settleLogged } from '../obs/index';
 
 export type { ScaffoldVersionView } from '../types/scaffold';
 
@@ -144,21 +146,23 @@ function scaffoldRunOptions(
  * rollout; without it, the live scaffold. No deadline: a candidate cut off early
  * would score as a bad candidate rather than be measured.
  */
-export async function runScaffoldCaptureText(
+export function runScaffoldCaptureText(
   control: ScaffoldControl,
   task: string,
   candidateCode?: string,
 ): Promise<string> {
-  let text = '';
+  return settle(Effect.gen(function* () {
+    let text = '';
 
-  const result = await runScaffold(scaffoldRunOptions(control, task, {
-    emit: (ev) => { text += scaffoldEventText(ev) ?? ''; },
-    scaffoldCodeOverride: candidateCode,
+    const result = yield* Effect.promise(() => runScaffold(scaffoldRunOptions(control, task, {
+      emit: (ev) => { text += scaffoldEventText(ev) ?? ''; },
+      scaffoldCodeOverride: candidateCode,
+    })));
+
+    if (!result.ok && result.error) return yield* Effect.die(new Error(result.error));
+
+    return text;
   }));
-
-  if (!result.ok && result.error) throw new Error(result.error);
-
-  return text;
 }
 
 /**
@@ -279,7 +283,7 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
       const surface = control.surface(trial.task, trial.context, trial.id);
       let applied: 'promote' | 'rollback' | null = null;
 
-      try {
+      await settleLogged('evolution.shadow_trial_failed', { doing: 'run a queued shadow trial', otherwise: 'unavailable' }, async () => {
         const result = await runAutoShadowEval({
           rt: control.rt,
           events: control.events,
@@ -299,14 +303,7 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
         applied = result.applied ?? null;
 
         if (!result.skipped) trials++;
-      } catch (err) {
-        // An unscorable trial is dropped, not a reason to wedge the queue.
-        diagnostics.failure(
-          'evolution.shadow_trial_failed',
-          toKinuError({ doing: 'run a queued shadow trial', cause: err, otherwise: 'unavailable' }),
-          { trialId: trial.id },
-        );
-      }
+      }, { trialId: trial.id });
 
       dropQueuedShadowTrial(control.sql, control.rt.actor, trial.id);
 
@@ -322,19 +319,21 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
 }
 
 /** Preview a scaffold version from its VFS `agent.js.vN` backup. */
-export async function previewScaffoldLive(
+export function previewScaffoldLive(
   control: ScaffoldControl,
   version: number,
   task: string,
 ): Promise<ScaffoldRunResult> {
-  const codeOverride = await readScaffoldVersion(control.rt, version);
+  return settle(Effect.gen(function* () {
+    const codeOverride = yield* Effect.promise(() => readScaffoldVersion(control.rt, version));
 
-  if (codeOverride == null) {
-    throw new Error(`previewScaffoldLive: no scaffold code found for v${version}`);
-  }
+    if (codeOverride == null) {
+      return yield* Effect.die(new Error(`previewScaffoldLive: no scaffold code found for v${version}`));
+    }
 
-  return runScaffold(scaffoldRunOptions(control, task, {
-    scaffoldCodeOverride: codeOverride,
+    return yield* Effect.promise(() => runScaffold(scaffoldRunOptions(control, task, {
+      scaffoldCodeOverride: codeOverride,
+    })));
   }));
 }
 

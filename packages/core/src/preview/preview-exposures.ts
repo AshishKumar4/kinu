@@ -1,6 +1,8 @@
 // KV projection of published sandbox previews: `proxyToSandbox` creates the Durable Object before checking the
 // token, so the edge must prove the label was published without touching any per-name object. Tokens stored hashed.
 
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import * as v from 'valibot';
 import { timingSafeEqual } from '../utils/crypto';
 import { sha256Hex } from '../safety/argument-digest';
@@ -84,14 +86,16 @@ export function sandboxPreviewExposures(
   };
 
   return {
-    async publish(port, token) {
-      const revocation = await readRevocation();
+    publish(port, token) {
+      return settle(Effect.gen(function* () {
+        const revocation = yield* Effect.promise(() => readRevocation());
 
-      if (revocation !== null && revocation.revokedBefore >= born) {
-        throw new Error(`sandbox previews for ${sandboxId} were revoked: the workspace is being destroyed`);
-      }
+        if (revocation !== null && revocation.revokedBefore >= born) {
+          return yield* Effect.die(new Error(`sandbox previews for ${sandboxId} were revoked: the workspace is being destroyed`));
+        }
 
-      await write(port, token);
+        yield* Effect.promise(() => write(port, token));
+      }));
     },
     async refresh(port, token) {
       const [held, revocation] = await Promise.all([
