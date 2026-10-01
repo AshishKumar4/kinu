@@ -10,7 +10,10 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { asFetchFunction } from '@kinu.run/core';
 import * as v from 'valibot';
-import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir, unobservedSpend } from '@kinu.run/test-utils';
+import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir, scratchPath, unobservedSpend } from '@kinu.run/test-utils';
+import { Database } from 'bun:sqlite';
+import { initWorkspaceSchema } from '@kinu.run/core';
+import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 
 const UNOBSERVED: ModelCallSpend = { source: 'reflection', report: unobservedSpend };
 
@@ -127,6 +130,44 @@ describe('createLocalModelResolver', () => {
     // `cacheRead` and `reasoning` arrive as the openai-compatible adapter's fabricated zeros; not this seam's to fix.
     expect(usageTotal(reports[0]?.usage ?? {})).toBe(48);
     expect(usageTotal(reports[1]?.usage ?? {})).toBeUndefined();
+  });
+
+  test('a runtime lane sends its route\'s reasoning effort, as the cf lane does', async () => {
+    const bodies: JsonObject[] = [];
+
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      async fetch(request) {
+        const body = v.parse(JsonObjectSchema, await request.json());
+        bodies.push(body);
+
+        return Response.json({
+          id: 'chatcmpl-1', object: 'chat.completion', created: 0, model: v.parse(v.string(), body.model),
+          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        });
+      },
+    });
+
+    const db = new Database(scratchPath('model-resolver', 'agent.db'));
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+
+    const rt = createCLIRuntime(db, {
+      llm: { name: 'workers-ai', baseURL: `http://127.0.0.1:${server.port}/v1`, headers: { Authorization: 'Bearer test' }, model: '@cf/test/model' },
+    });
+
+    try {
+      for (const reasoningEffort of ['high', null] as const) {
+        await rt.modelForRoute?.({ source: 'judge', tier: 'deep', model: 'workers-ai/@cf/test/model', reasoningEffort, fallbacks: [] })
+          .complete('grade');
+      }
+    } finally {
+      await server.stop(true);
+      db.close();
+    }
+
+    expect(bodies.map((body) => body.reasoning_effort ?? null)).toEqual(['high', null]);
   });
 
   test('normalizes Workers AI model ids to provider-style specs', async () => {

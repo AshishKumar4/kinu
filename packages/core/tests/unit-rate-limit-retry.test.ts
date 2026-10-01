@@ -4,6 +4,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { PROVIDER_RETRIES_HEADER, withRateLimitRetry } from '../src/providers/rate-limit-retry';
 import { DEFAULT_PROVIDER_RETRIES } from '../src/types/profile';
 import { ProviderPacer } from '../src/providers/pacing';
+import { statedRetryAfterMs } from '../src/providers/fallback-cooldown';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 import { describeProviderError, toProviderError } from '../src/providers/util';
 import { classifyErrorCode } from '../src/obs/index';
@@ -54,6 +55,16 @@ describe('withRateLimitRetry', () => {
 
     expect(await response.text()).toBe('ok');
     expect(harness.waits).toEqual([30_000]);
+  });
+
+  test('honors retry-after-ms, as the fallback cooldown reads the same answer', async () => {
+    const limited = new Response('limited', { status: 429, headers: { 'retry-after-ms': '1500' } });
+    const harness = retryHarness([limited, new Response('ok')]);
+
+    await harness.wrapped('https://api.example.com/v1/chat', { body: '{}' });
+
+    expect(harness.waits).toEqual([1_500]);
+    expect(statedRetryAfterMs({ cause: { responseHeaders: Object.fromEntries(limited.headers) } })).toBe(1_500);
   });
 
   test('honors Retry-After HTTP dates against the injected clock', async () => {

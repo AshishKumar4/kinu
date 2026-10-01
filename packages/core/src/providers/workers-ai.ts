@@ -1,3 +1,5 @@
+import { copyHeaders } from './fetch-shim';
+
 export const DEFAULT_WORKERS_AI_MODEL_ID = '@cf/zai-org/glm-5.3';
 
 export const DEFAULT_WORKERS_AI_MODEL_SPEC = `workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`;
@@ -18,4 +20,10 @@ export function workersAiSpec(modelOrSpec: string): string {
 /** Per-agent session-affinity key pinning turns to one replica so the prefix cache hits. */
 export function agentAffinityKey(name: string): string {
   return `kinu-${name}`;
+}
+
+export const SESSION_AFFINITY_HEADER = 'x-session-affinity';
+
+export function sessionAffinityOf(headers: HeadersInit | undefined): string | undefined {
+  return copyHeaders(headers).get(SESSION_AFFINITY_HEADER) ?? undefined;
 }

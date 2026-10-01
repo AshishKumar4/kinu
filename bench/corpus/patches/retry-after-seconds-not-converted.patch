@@ -1,13 +1,13 @@
-diff --git a/packages/core/src/providers/rate-limit-retry.ts b/packages/core/src/providers/rate-limit-retry.ts
-index 7a8b8d5ed..74233754f 100644
---- a/packages/core/src/providers/rate-limit-retry.ts
-+++ b/packages/core/src/providers/rate-limit-retry.ts
-@@ -155,7 +155,7 @@ function parseRetryAfter(value: string | null, nowMs: number): number | null {
-   if (value === null || !value.trim()) return null;
-   const seconds = Number(value);
+diff --git a/packages/core/src/providers/fallback-cooldown.ts b/packages/core/src/providers/fallback-cooldown.ts
+index 700b0dde7..561237e59 100644
+--- a/packages/core/src/providers/fallback-cooldown.ts
++++ b/packages/core/src/providers/fallback-cooldown.ts
+@@ -56,7 +56,7 @@ export function retryAfterOf(headers: Headers, nowMs: number): number | null {
+   if (!after) return null;
+   const seconds = Number(after);
  
--  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000;
+-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
 +  if (Number.isFinite(seconds) && seconds >= 0) return seconds;
-   const at = Date.parse(value);
+   const date = Date.parse(after);
  
-   return Number.isNaN(at) ? null : Math.max(0, at - nowMs);
+   return Number.isNaN(date) ? null : Math.max(0, date - nowMs);

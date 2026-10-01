@@ -3,7 +3,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
 import { type ModelProvider, type ModelInfo } from './types';
 
-import { DEFAULT_WORKERS_AI_MODEL_ID } from './workers-ai';
+import { DEFAULT_WORKERS_AI_MODEL_ID, SESSION_AFFINITY_HEADER } from './workers-ai';
 import { listModelsDevProviderModels } from './models-dev';
 import { createCloudflareAIFetch } from './cloudflare-ai-fetch';
 import { createDirectWorkersAIFetch } from './direct-workers-ai-fetch';
@@ -27,7 +27,7 @@ export function createWorkersAIProvider(deploymentBinding?: Parameters<typeof cr
       preferredIds: WORKERS_AI_PREFERRED_MODEL_IDS,
     }),
     createModel(modelId, deps): LanguageModel {
-      const requestHeaders = { 'x-session-affinity': deps.sessionAffinity };
+      const requestHeaders = { [SESSION_AFFINITY_HEADER]: deps.sessionAffinity };
 
       if (deploymentBinding) {
         return createOpenAICompatible({
