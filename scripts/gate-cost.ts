@@ -24,8 +24,10 @@
  * against one, takes the whole box until it is measured.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
-import { arch, cpus, platform as osPlatform } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { dirname, join } from 'node:path';
+import { arch, cpus, homedir, platform as osPlatform } from 'node:os';
 import * as v from 'valibot';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -118,6 +120,32 @@ export function writeCosts(table: CostTable, path = COST_TABLE): number {
   writeFileSync(path, `${JSON.stringify(table, null, 2)}\n`);
 
   return Object.keys(table.rows).length;
+}
+
+/** Live rows measure their process tree on every deploy, red or green. This is resource evidence, not a verdict or
+ *  a tracked-tree edit: it survives disposable deploy checkouts and never changes the SHA being verified. */
+export function resourceCostFile(run: string): string {
+  return join(homedir(), '.cache', 'kinu-ladder', 'resources', createHash('sha256').update(run).digest('hex') + '.json');
+}
+
+export function withResourceCosts(table: CostTable, runs: readonly string[]): CostTable {
+  const rows = { ...table.rows };
+
+  for (const run of runs) {
+    const path = resourceCostFile(run);
+
+    if (!existsSync(path)) continue;
+    const measured = readCosts(path).rows[run];
+
+    if (measured !== undefined && measured.samples > 0) rows[run] = measured;
+  }
+
+  return { ...table, rows };
+}
+
+export function writeResourceCost(run: string, cost: RowCost, path = resourceCostFile(run)): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeCosts({ measuredAt: new Date().toISOString().slice(0, 10), machine: machineName(), method: 'Process-tree resource use during a deployment row, including red runs; not a correctness verdict.', rows: { [run]: cost } }, path);
 }
 
 /**

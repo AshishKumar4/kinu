@@ -56,6 +56,12 @@ import type { ModuleEdges } from './import-graph';
 import { identifierCalleeName, literalString, walk, type Parsed } from './syntax';
 import { AMBIENT_CREDENTIAL_ENV, AMBIENT_DECORATION_ENV, EVAL_IDENTITY_ENV, LIVE_MODEL_ENV } from '../packages/test-utils/src/index';
 import { COST_TABLE, type CostTable, costRssMb, costThreads, readCosts } from './gate-cost';
+import { resourceCostFile, withResourceCosts } from './gate-cost';
+import {
+  awaitCI, awaitUploadCI, checkCoverage, collectVerdicts, downloadVerdicts, findPushCI, readCIRun,
+  writeCIRun, writeVerdicts, type CIPart, type CIVerdict, type CIVerdictFile,
+  requireCIGreen,
+} from './ci-verdicts';
 
 /** DERIVED, because it was hardcoded as 21 while the config carried 22 — a stale count in the
  *  document that tells a reader what a rung catches. Read from the enabled rules rather than from the
@@ -92,15 +98,11 @@ export const HOOKS_DIR = '.githooks';
 export const TIERS = ['commit', 'push', 'ci', 'deploy', 'evals'] as const;
 
 /**
- * The deploy's phases, in the order a staging deploy reaches them (L18).
- * `preflight` alone first, the precondition for any verdict; `upload`, the
- * account gate and the secret scan, the only gates that hold the upload since
- * their damage cannot be undone; then, after the upload and the smoke test,
- * `post-publish`, the rows that read the deployment, in ONE wave with `source`,
- * every local gate; `hammer` alone and last. The preflight and the upload stop a
- * deploy on a red; every phase after the upload runs to its end whatever goes
- * red, so one deploy reports every failure. deploy.sh runs each as
- * `--deploy-phase`.
+ * The deploy plan still names every required gate (L18, L23). The local machine preflight and account gate run
+ * locally; CI proves its rows once on the clean full SHA, including the upload scan and an isolated hammer.
+ * After upload, deployment tiers share one measured wave with the source rows CI cannot host. Every local and
+ * imported red is reported, and no verified record is written until CI and the live rows are all green.
+ * The hammer phase identifies its isolated CI part, not a local serial tail.
  */
 export const DEPLOY_PHASES = ['preflight', 'upload', 'post-publish', 'source', 'hammer'] as const;
 
@@ -2153,10 +2155,10 @@ export const LADDER: readonly Gate[] = [
       + 'purpose, so every gate beside it would be measured on a machine this one is '
       + 'deliberately starving: the five-suite UI batch is 198.5s solo against a 480s '
       + 'per-gate deadline, and a browser gate that times out under someone else\'s load '
-      + 'fails for a reason unrelated to the change under test. It runs LAST, after the wave of '
-      + 'staging tiers and source gates has ended, whatever that wave\'s verdict: its own is part '
-      + 'of what a promotion needs.',
-    tier: 'deploy',
+      + 'fails for a reason unrelated to the change under test. CI gives it a dedicated runner, '
+      + 'concurrent with its source shards and the staging deploy; its exact-SHA verdict is part '
+      + 'of what a promotion needs (L23).',
+    tier: 'ci',
     // 403.96 s measured 2026-09-30 (24 threads, 12 burners): six runs of 61.9 to
     // 77.5 s, each 3,624 pass and 0 fail. The 1-minute load was 8.4 at the start,
     // from other work on the box, so this wall is a loaded one. Alone by
@@ -2569,7 +2571,7 @@ export function deployPlan(costs: CostTable = readCosts()): PlanRow[] {
 function planRow(gate: Gate, costs: CostTable, tracked: readonly string[], browsers: ReadonlySet<string>): PlanRow {
   const phase = gate.phase ?? 'source';
   const recorded = costs.rows[gate.run];
-  const cost = recorded?.exit === 0 ? recorded : undefined;
+  const cost = phase === 'post-publish' || recorded?.exit === 0 ? recorded : undefined;
 
   if (cost === undefined && phase !== 'post-publish') {
     throw new Error(
@@ -2903,11 +2905,6 @@ export const CI_EXEMPT = {
     + 'non-zero rather than skipping, so it cannot be run there and read as a pass — which is '
     + 'why it lives at the deploy tier, immediately after `wrangler whoami` has proved there is '
     + 'a session to use.',
-  'bun run gate:hammer':
-    'is minutes of deliberate CPU starvation. On a shared CI runner it would both take far '
-    + 'longer than its 66s here and perturb every other job on the box, and its findings '
-    + 'would be indistinguishable from runner noise — a gate whose reds cannot be trusted is '
-    + 'a gate somebody disables. It runs at deploy, alone, on a machine whose load is known.',
   'bun run gate:mutation-fences':
     'materialises a `git worktree add --detach` copy and runs eight `bun test` processes '
     + 'inside it. On a CI runner with no local object store that checkout is a fresh clone '
@@ -2951,6 +2948,42 @@ export function gatesFor(tier: Tier): Gate[] {
  *  exemptions, which CI cannot host. */
 export function tierRun(tier: Tier): Gate[] {
   return gatesFor(tier).filter((gate) => tier === 'deploy' || !(gate.run in CI_EXEMPT));
+}
+
+/** Whole-row CI parts, packed longest-first from the measured wall and CPU work on a four-vCPU runner. The upload
+ *  scan finishes independently and the hammer owns its runner; no suite list lives in the workflow. */
+export function ciParts(costs: CostTable = readCosts()): CIPart[] {
+  const gates = tierRun('ci');
+  const upload = gates.filter((gate) => gate.phase === 'preflight' || gate.phase === 'upload');
+  const hammer = gates.filter((gate) => gate.phase === 'hammer');
+  const source = gates.filter((gate) => !upload.includes(gate) && !hammer.includes(gate));
+  const parts: { name: string; runs: string[]; seconds: number }[] = Array.from({ length: 4 }, (_, index) => ({ name: 'source-' + String(index + 1), runs: [], seconds: 0 }));
+
+  const seconds = (gate: Gate): number => {
+    const cost = costs.rows[gate.run];
+
+    return cost === undefined ? gate.seconds : Math.max(cost.wallSeconds, cost.cpuSeconds / 4);
+  };
+
+  for (const gate of [...source].sort((left, right) => seconds(right) - seconds(left))) {
+    const part = parts.reduce((least, candidate) => candidate.seconds < least.seconds ? candidate : least);
+
+    part.runs.push(gate.run);
+    part.seconds += seconds(gate);
+  }
+
+  return [
+    { name: 'upload', runs: upload.map((gate) => gate.run) },
+    ...parts.map(({ name, runs }) => ({ name, runs })),
+    { name: 'hammer', runs: hammer.map((gate) => gate.run) },
+  ];
+}
+
+/** A deploy runs only what CI cannot, and the preflight of this machine, not CI's inode/temp check. */
+export function localDeployGates(gates: readonly Gate[]): Gate[] {
+  const ci = new Set(tierRun('ci').map((gate) => gate.run));
+
+  return gates.filter((gate) => gate.phase === 'preflight' || !ci.has(gate.run));
 }
 
 /** Every file changed since `ref`, committed or not, and every addition not yet tracked. */
@@ -3332,9 +3365,123 @@ function recordProof(
  *  disk, where every hook and `bun run gate:*` wrote its scratch until 2026-09-27. */
 const SCRATCH_TMPDIR = '/mnt/scratch/kinu/tmp';
 
+
+function fullRevision(): string {
+  return Bun.spawnSync(['git', 'rev-parse', 'HEAD'], { cwd: root, stdout: 'pipe' }).stdout.toString().trim();
+}
+
+function rowArgv(gate: Gate, tracked: readonly string[], deploying: boolean): string[] {
+  if (deploying && gate.phase === 'post-publish') {
+    return ['bun', 'scripts/gate-cost-measure.ts', '--capture=' + gate.run, '--cost-file=' + resourceCostFile(gate.run)];
+  }
+
+  return runnableArgv(gate.run, tracked);
+}
+
+/** CI's exact-SHA rows stay visible in the deploy's report; a red is imported as red and never run until green. */
+export function reportCIVerdicts(file: CIVerdictFile, url: string, report: string): boolean {
+  let green = true;
+
+  for (const row of file.rows) {
+    const gate = LADDER.find((candidate) => candidate.run === row.run);
+
+    if (row.exitCode === 0) {
+      console.log('CI proved ' + row.run + ' on ' + file.sha + ' (' + url + ')');
+      continue;
+    }
+
+    green = false;
+    console.error('CI RED ' + row.run + ' — ' + url);
+
+    if (report !== '') recordRed(report, {
+      phase: 'ci', what: gate?.label ?? row.run, command: row.run, verdict: 'CI exit ' + String(row.exitCode),
+      finding: 'CI proved this row red on ' + file.sha + ': ' + url, reproduce: row.run, output: row.output,
+    });
+  }
+
+  if (report !== '') recordNotice(report, {
+    phase: 'ci', what: 'Source and push-tier rows',
+    notice: String(file.rows.length) + ' row verdicts taken from ' + url + ' for ' + file.sha + '; push-tier rows are proved by CI too, not repeated in this deploy checkout.',
+  });
+
+  return green;
+}
+
+/** CI planning, collection and the deploy's one Actions proof path. No artifact means refusal, never a local rerun. */
+async function ciCommand(): Promise<number | undefined> {
+  const option = (name: string): string | undefined => process.argv.find((argument) => argument.startsWith('--' + name + '='))?.slice(name.length + 3);
+  const find = option('ci-find');
+  const collect = option('ci-collect');
+  const upload = process.argv.includes('--ci-upload');
+  const take = process.argv.includes('--ci-await');
+
+  if (process.argv.includes('--ci-matrix')) {
+    console.log(JSON.stringify({ include: ciParts().map((part) => ({ part: part.name })) }));
+
+    return 0;
+  }
+
+  if (find === undefined && collect === undefined && !upload && !take) return undefined;
+  const report = process.env['KINU_DEPLOY_REPORT'] ?? '';
+  let url = '';
+
+  try {
+    const sha = fullRevision();
+
+    if (find !== undefined) {
+      if (find !== sha) throw new Error('the deployed revision is not HEAD');
+      const run = findPushCI(root, sha);
+
+      writeCIRun(option('ci-run') ?? '', run);
+      console.log('CI: ' + run.html_url + ' for ' + sha);
+
+      return 0;
+    }
+
+    if (collect !== undefined) {
+      const file = collectVerdicts({ directory: collect, sha, attempt: Number(process.env['GITHUB_RUN_ATTEMPT'] ?? '1'), parts: ciParts() });
+
+      writeVerdicts(option('verdicts') ?? '', file);
+
+      return file.rows.some((row) => row.exitCode !== 0) ? 1 : 0;
+    }
+
+    const run = readCIRun(option('ci-run') ?? '', sha);
+
+    url = run.html_url;
+
+    if (upload) await awaitUploadCI(root, run);
+    const ended = take ? awaitCI(root, run) : run;
+    const part = upload ? 'upload' : 'all';
+    const file = downloadVerdicts(root, run, part, resolve(report, 'ci', part));
+    const expected = upload ? ciParts().find((candidate) => candidate.name === 'upload')?.runs ?? [] : tierRun('ci').map((gate) => gate.run);
+
+    checkCoverage(file, sha, expected);
+    // The upload proof was already reported before publishing, and this machine's preflight is its own prerequisite.
+    const rows = file.rows.filter((row) => !take || LADDER.find((gate) => gate.run === row.run)?.phase !== 'upload');
+    const green = reportCIVerdicts({ ...file, rows }, url, report);
+
+    if (take) requireCIGreen(ended);
+
+    return green ? 0 : 1;
+  } catch (cause) {
+    const found = cause instanceof Error ? cause.message : String(cause);
+
+    console.error('CI refused: ' + found);
+
+    if (report !== '') recordStep(report, { phase: 'ci', what: 'CI proof', finding: found + (url === '' ? '' : ' — ' + url) });
+
+    return 1;
+  }
+}
+
 if (import.meta.main) {
   // Before any gate spawns: TMPDIR is a base name of every gate's environment (ladder-cache.ts), so each inherits it.
   if (process.env.TMPDIR === undefined && existsSync(SCRATCH_TMPDIR)) process.env.TMPDIR = SCRATCH_TMPDIR;
+
+  const ciStatus = await ciCommand();
+
+  if (ciStatus !== undefined) process.exit(ciStatus);
 
   // A CLOSED REPORTING CHANNEL IS NOT A FAILED TIER.
   //
@@ -3531,13 +3678,31 @@ if (import.meta.main) {
   }
 
   const repo = repoAt(root, (run, files) => claims(run, files));
-  const phaseRows = deployPhase === undefined ? undefined : phaseWave(deployPhase);
+  const phaseRows = deployPhase === undefined ? undefined : phaseWave(deployPhase, withResourceCosts(readCosts(), deployOrder().filter((gate) => gate.phase === 'post-publish').map((gate) => gate.run)));
 
-  const declared = selectedGate !== undefined
-    ? [selectedGate]
-    : phaseRows?.map(({ gate }) => gate) ?? tierRun(tier);
+  const phaseGates = phaseRows === undefined ? tierRun(tier) : localDeployGates(phaseRows.map(({ gate }) => gate));
+  const declared = selectedGate === undefined ? phaseGates : [selectedGate];
 
-  const gates = affectedFrom === undefined ? declared : affectedSince(affectedFrom, repo);
+  const ciPart = process.argv.find((argument) => argument.startsWith('--ci-part='))?.slice('--ci-part='.length);
+  const verdictPath = process.argv.find((argument) => argument.startsWith('--verdicts='))?.slice('--verdicts='.length);
+
+  if (verdictPath !== undefined && Bun.spawnSync(['git', 'status', '--porcelain'], { cwd: root, stdout: 'pipe' }).stdout.toString().trim() !== '') {
+    throw new Error('CI row verdicts require a clean full SHA; commit the tree first');
+  }
+
+  const part = ciPart === undefined ? undefined : ciParts().find((candidate) => candidate.name === ciPart);
+
+  if (ciPart !== undefined && (tier !== 'ci' || part === undefined)) throw new Error('unknown CI part or a non-CI tier');
+  const chosen = part === undefined ? declared : declared.filter((gate) => part.runs.includes(gate.run));
+  const gates = affectedFrom === undefined ? chosen : affectedSince(affectedFrom, repo);
+
+  if (ciPart !== undefined && ciPart !== 'upload') {
+    // This runner's prerequisite, not another source verdict or another row in the collected proof.
+    const ready = await runUnderDeadline({ argv: ['bun', 'scripts/preflight.ts'], cwd: root, seconds: GATE_DEADLINE_SECONDS, label: 'Runner preflight', stdio: 'inherit' });
+
+    if (ready.exitCode !== 0) process.exit(ready.exitCode);
+  }
+
   const name = deployPhase === undefined ? `--tier=${tier}` : `--deploy-phase=${deployPhase.join(',')}`;
 
   const measured = assertMeasured(`ladder ${name}`, [
@@ -3608,10 +3773,13 @@ if (import.meta.main) {
   // quiet one. A derived gate runs under exactly the environment its key
   // hashes, cache or `--no-cache`, so a recorded verdict and a fresh one are
   // taken in one environment.
-  const caching = !process.argv.includes('--no-cache');
+  const caching = ciPart === undefined && !process.argv.includes('--no-cache');
   const tools = toolVersions(root);
   const store = storeAt(defaultStoreDirectory());
-  const revision = Bun.spawnSync(['git', 'rev-parse', '--short', 'HEAD'], { cwd: root, stdout: 'pipe' }).stdout.toString().trim();
+  const revision = fullRevision();
+  const ciRows: CIVerdict[] = [];
+
+  if (verdictPath !== undefined) writeVerdicts(verdictPath, { sha: revision, part: ciPart ?? 'all', rows: [] });
   const skipped: string[] = [];
   const uncached: string[] = [];
   const recorded: string[] = [];
@@ -3641,13 +3809,17 @@ if (import.meta.main) {
   // tier, a gate that declares a phase runs alone first, as the deploy's preflight does. One gate, or `--serial`, runs
   // in order with its output live, which is how `--gate` reads it.
   const concurrent = pending.length > 1 && !process.argv.includes('--serial');
+  let stdio: 'inherit' | 'pipe' | 'tee' = 'inherit';
+
+  if (concurrent) stdio = 'pipe';
+  else if (deployPhase !== undefined || ciPart !== undefined) stdio = 'tee';
   const failed: string[] = [];
   // A tier stops launching at its first red: the fastest path to a finding. A deploy phase never does (L18).
-  const stopped = (): boolean => deployPhase === undefined && failed.length > 0;
+  const stopped = (): boolean => deployPhase === undefined && ciPart === undefined && failed.length > 0;
 
   // A red run ends here, naming every gate that failed: the reds of a wave are spread over its output.
   const finish = (): void => {
-    if (failed.length === 0) return;
+    if (failed.length === 0 || (ciPart !== undefined && ciRows.length < gates.length)) return;
     console.error(`\nladder ${name}: ${String(failed.length)} of ${String(gates.length)} gate(s) failed: ${failed.join(', ')}`);
     process.exit(1);
   };
@@ -3673,22 +3845,24 @@ if (import.meta.main) {
 
     if (!concurrent) console.log([header, ...lines].join('\n'));
 
-    // A lone row's output is passed on live; under a deploy phase it is kept as well, since the report quotes a red
-    // row's output.
-    const lone = deployPhase === undefined ? 'inherit' : 'tee';
 
     // Under the row's own silence bound: the one hang detector this tier has,
     // now that no test carries a clock. A row that hangs is killed and named
     // here instead of holding the hook — and `git push` — open forever.
     const outcome = await runUnderDeadline({
-      argv: runnableArgv(gate.run, tracked), cwd: root,
+      argv: rowArgv(gate, tracked, deployPhase !== undefined), cwd: root,
       seconds: gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS, label: gate.label,
       env: closure.kind === 'derived' ? gateEnvironment(closure) : undefined,
-      stdio: concurrent ? 'pipe' : lone,
+      stdio,
     });
 
     if (concurrent) await writeFully(process.stdout, `${[header, ...lines, `${outcome.stdout}${outcome.stderr}`.trimEnd()].join('\n')}\n`);
     const { seconds } = outcome;
+
+    if (verdictPath !== undefined) {
+      ciRows.push({ run: gate.run, exitCode: outcome.exitCode, seconds, output: outcome.exitCode === 0 ? '' : outcome.stdout + outcome.stderr });
+      writeVerdicts(verdictPath, { sha: revision, part: ciPart ?? 'all', rows: ciRows });
+    }
 
     if (outcome.exitCode === 0) {
       console.log(`ok  ${gate.run}  (${seconds.toFixed(1)}s, silent at most ${outcome.longestSilence.toFixed(1)}s)`);
@@ -3771,7 +3945,7 @@ if (import.meta.main) {
     );
   } else if (concurrent) {
     const schedule = tierSchedule(pending.map((entry) => entry.gate));
-    const entriesOf = (part: readonly Gate[]) => pending.filter((entry) => part.includes(entry.gate));
+    const entriesOf = (section: readonly Gate[]) => pending.filter((entry) => section.includes(entry.gate));
 
     for (const entry of entriesOf(schedule.first)) {
       await runPending(entry);
