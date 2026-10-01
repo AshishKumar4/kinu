@@ -8,7 +8,7 @@ import { readMemoryTail, MEMORY_TAIL_MAX_CHARS } from '../src/memory/note';
 import type { WorkspaceBundle } from '../src/vfs/nimbus-workspace';
 
 /** The file as the agent's shell and the owner's Files view address it; the product names it relative to the workspace. */
-const PATH = '/home/user/memory/MEMORY.md';
+const PATH = '/home/main/memory/MEMORY.md';
 
 function seeded(content: string | null) {
   const db = new Database(':memory:');

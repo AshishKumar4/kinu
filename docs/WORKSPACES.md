@@ -87,13 +87,16 @@ A workspace holds the state. Agents are the actors that work inside it.
   of that state (`core/src/vfs/agent-view.ts`), and the `file` tool reaches an
   absolute path outside the directory as the shell does: each operation is
   reviewed as the command it amounts to (`cat`, `tee`, `rm -rf`, ...) under the
-  shell's approval mode and grants. A relative or aliased path that climbs out,
-  or any path with a `..` segment, stays refused. Relative paths resolve at
-  `/home/main` (`WORKSPACE_ROOT`, `packages/core/src/vfs/workspace-path.ts:2`). A
-  workspace made when the root was `/home/user` has its tree moved there on its
-  first boot, and `/home/user` stays a link to `/home/main`, so a path written
-  before still reaches its file (`settleWorkspaceRoot`, `core/src/vfs/agent-home.ts`).
-  `git clone` refuses a destination reached through that link; name `/home/main`.
+  shell's approval mode and grants. Relative and home-rooted file paths normalize
+  at `/home/main` (`WORKSPACE_ROOT`, `core/src/vfs/workspace-path.ts`). They
+  cannot climb above that home; `/slates` has the same boundary at its own root.
+  `/home/user` (`NIMBUS_WORKSPACE_ROOT`) links to the home only because Nimbus
+  0.13.1 still names it in PATH, XDG and `/etc/passwd`, even with HOME set to
+  `/home/main` (measured 2026-10-01; values in [Storage](STORAGE.md)). Delete the
+  alias once Nimbus derives those defaults from HOME, not after a compatibility
+  period. `/workspace` is not a workspace-file alias; it is the container's
+  native working directory. `git clone` destinations use `/home/main`, not
+  a symbolic link.
   The mount table adds each connected device at `/pc/<name>`, a container at
   `/sandbox`, and each actor's own working context at `/context`.
 

@@ -16,7 +16,7 @@ async function loopbackWorkspace(): Promise<{ database: Database; workspace: Nim
     sql,
     transactions,
     generation: 1,
-    cwd: '/home/user',
+    cwd: '/home/main',
   });
 
   return { database, workspace };
@@ -34,7 +34,7 @@ describe('the workspace loopback', () => {
       });
 
       const hit = await workspace.shell.execute('curl -sS http://127.0.0.1:4891/', {
-        cwd: '/home/user',
+        cwd: '/home/main',
       });
 
       expect(hit.exitCode).toBe(0);
@@ -50,7 +50,7 @@ describe('the workspace loopback', () => {
 
     try {
       const missed = await workspace.shell.execute('curl -sS http://127.0.0.1:4892/', {
-        cwd: '/home/user',
+        cwd: '/home/main',
       });
 
       expect(missed.exitCode).toBe(7);
@@ -66,7 +66,7 @@ describe('the workspace loopback', () => {
 
     try {
       const result = await workspace.shell.execute('node -e \'console.log("node-loops")\'', {
-        cwd: '/home/user',
+        cwd: '/home/main',
       });
 
       expect(result.exitCode).toBe(0);

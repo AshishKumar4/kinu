@@ -14,7 +14,7 @@ import * as v from 'valibot';
 import { CommandResultSchema } from '../execution/exec-result';
 import { attempt, diagnostics, KinuError, renderThrownChain, settle, tolerate, type ErrorCode } from '../obs/index';
 import { shellQuote } from '../utils/shell';
-import { LEGACY_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
+import { NIMBUS_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from '../vfs/workspace-path';
 
 /**
  * A side past one SQLite row is listed as large, without a body (a write's preview too). Nimbus's diff does not say
@@ -41,8 +41,8 @@ const REVIEWED_UNDER_ROOT = ['home', SLATES_ROOT.slice(1)];
 /** Where the change-set names a path relative to the working directory, as the shell starting there does. */
 const WORKING_DIRECTORY = `${WORKSPACE_ROOT.slice(1)}/`;
 
-/** The legacy home is a link to the working directory: its own entry, and anything under it, is never reviewed. */
-const LEGACY_HOME = LEGACY_WORKSPACE_ROOT.slice(1);
+/** Nimbus's home is a link to the working directory, not a second reviewed tree. */
+const NIMBUS_HOME = NIMBUS_WORKSPACE_ROOT.slice(1);
 
 /** Repository scan depth below an executor's working directory, as VS Code bounds its scan. */
 const REPOSITORY_SCAN_DEPTH = 3;
@@ -104,7 +104,7 @@ function reviewedPath(path: string): string | null {
 
   if (!REVIEWED_UNDER_ROOT.includes(names[0] ?? '') || !names.every(reviewed)) return null;
 
-  if (path === LEGACY_HOME || path.startsWith(`${LEGACY_HOME}/`) || !path.includes('/')) return null;
+  if (path === NIMBUS_HOME || path.startsWith(`${NIMBUS_HOME}/`) || !path.includes('/')) return null;
 
   return path.startsWith(WORKING_DIRECTORY) ? path.slice(WORKING_DIRECTORY.length) : `/${path}`;
 }

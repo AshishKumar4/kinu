@@ -7,8 +7,8 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as fs from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { FileCheckpoints, FileReach, MountedVfs } from '@kinu.run/core';
-import { LEGACY_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from '@kinu.run/core';
-import { toVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { SLATES_ROOT, WORKSPACE_ROOT, workspacePath } from '@kinu.run/core';
+import { toVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { tolerateAsync } from '@kinu.run/core/obs';
 
 function throwVfsError(input: { error: unknown; path: string }): never {
@@ -69,24 +69,27 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
   };
 }
 
-/** Relative paths and aliases (`/workspace`, `/home/main`, `/`, `/slates`) stay in the tree, or EACCES; any other
- *  absolute path is that host path. Not a sandbox. */
+/** The native directory wins over virtual home/slate paths. Other absolute paths name the host, not a sandbox. */
 function cwdPlaneLocator(cwd: string): (path: string) => { readonly hostPath: string; readonly outside: boolean } {
   const root = resolve(cwd);
 
   return (path) => {
     const direct = isAbsolute(path) ? resolve(path) : resolve(root, path || '.');
 
-    // A real path inside the directory wins over every alias.
-    if (withinRoot(root, direct)) return { hostPath: direct, outside: false };
-    const inner = isAbsolute(path) ? planeRootRelative(path) : null;
+    if (isAbsolute(path) && withinRoot(root, direct)) return { hostPath: direct, outside: false };
+    const canonical = workspacePath(path);
 
-    if (inner === null && isAbsolute(path)) return { hostPath: direct, outside: true };
-    const mapped = inner === null ? null : resolve(root, inner || '.');
+    if (canonical === '/' || canonical === WORKSPACE_ROOT) return { hostPath: root, outside: false };
 
-    if (mapped !== null && withinRoot(root, mapped)) return { hostPath: mapped, outside: false };
+    if (canonical.startsWith(`${WORKSPACE_ROOT}/`)) {
+      return { hostPath: resolve(root, canonical.slice(WORKSPACE_ROOT.length + 1)), outside: false };
+    }
 
-    throw new VfsError('EACCES', `path escapes the workspace directory ${root}: ${path}; name a file outside it by its absolute path`, path);
+    if (canonical === SLATES_ROOT || canonical.startsWith(`${SLATES_ROOT}/`)) {
+      return { hostPath: resolve(root, `.${canonical}`), outside: false };
+    }
+
+    return { hostPath: direct, outside: true };
   };
 }
 
@@ -117,27 +120,6 @@ export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | un
   };
 }
 
-/** One table, so a new spelling cannot be honoured by only some operations: each root and the directory it names. */
-const PLANE_ROOTS: readonly (readonly [root: string, directory: string])[] = [
-  ['/', ''], [WORKSPACE_ROOT, ''], [LEGACY_WORKSPACE_ROOT, ''], ['/workspace', ''],
-  // The workspace's slates are the project's own.
-  [SLATES_ROOT, 'slates'],
-];
-
-function planeRootRelative(path: string): string | null {
-  for (const [planeRoot, directory] of PLANE_ROOTS) {
-    if (path === planeRoot) return directory;
-
-    // `/` names the root only: `/etc/passwd` is never `<cwd>/etc/passwd`.
-    if (planeRoot !== '/' && path.startsWith(`${planeRoot}/`)) {
-      const inner = path.slice(planeRoot.length + 1);
-
-      return directory === '' ? inner : `${directory}/${inner}`;
-    }
-  }
-
-  return null;
-}
 
 function withinRoot(root: string, candidate: string): boolean {
   const distance = relative(root, candidate);

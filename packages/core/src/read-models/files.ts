@@ -17,7 +17,7 @@ import { Effect } from 'effect';
 import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, type Refusal } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { readBoundedStream } from '../http/http';
-import { canonicalWorkspacePath, workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
+import { workspacePath, WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { SOUL_PATH } from '../identity/soul';
 
 export interface ExecutorFileLookup {
@@ -138,7 +138,7 @@ export class ExecutorFileUpload {
 }
 
 function isWorkspaceSoul(executorId: string, path: string): boolean {
-  return executorId === 'workspace' && canonicalWorkspacePath(workspacePath(path)) === `${WORKSPACE_ROOT}/${SOUL_PATH}`;
+  return executorId === 'workspace' && workspacePath(path) === `${WORKSPACE_ROOT}/${SOUL_PATH}`;
 }
 
 /** In-order chunk assembly; `assembled` is answered exactly once, on the final chunk. */

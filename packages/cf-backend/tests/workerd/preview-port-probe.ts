@@ -16,6 +16,8 @@ export class PreviewPortProbeDO extends DurableObject<Cloudflare.Env> {
       const workspace = await NimbusWorkspace.create({
         sql: this.ctx.storage.sql,
         transactions: { storage: this.ctx.storage },
+        cwd: '/home/main',
+        env: { HOME: '/home/main' },
       });
 
       return workspace;
@@ -46,7 +48,7 @@ export class PreviewPortProbeDO extends DurableObject<Cloudflare.Env> {
   /** A user-invoked long-lived program; its exit code is the program's own. */
   async outlast(seconds: number): Promise<ShellProbeReport> {
     const workspace = await this.workspace();
-    const result = await workspace.shell.execute(`sleep ${String(seconds)} && echo outlasted`, { cwd: '/home/user' });
+    const result = await workspace.shell.execute(`sleep ${String(seconds)} && echo outlasted`, { cwd: '/home/main' });
 
     return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };
   }
@@ -55,7 +57,7 @@ export class PreviewPortProbeDO extends DurableObject<Cloudflare.Env> {
     const workspace = await this.workspace();
 
     const result = await workspace.shell.execute(`curl -sS http://127.0.0.1:${port}/`, {
-      cwd: '/home/user',
+      cwd: '/home/main',
     });
 
     return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };

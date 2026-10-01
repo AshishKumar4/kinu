@@ -204,14 +204,12 @@ describe('addressing the bound directory', () => {
 
     await writeText(rt.storage.vfs, 'notes/one.md', 'one');
 
-    // Relative, the advertised workspace root, the skills-style /workspace root, and the real host path.
+    // Relative, the advertised workspace root, and the real host path.
     expect(await readText(rt, 'notes/one.md')).toBe('one');
     expect(await readText(rt, `${WORKSPACE_ROOT}/notes/one.md`)).toBe('one');
-    expect(await readText(rt, '/workspace/notes/one.md')).toBe('one');
     expect(await readText(rt, join(project, 'notes/one.md'))).toBe('one');
 
     expect((await rt.storage.vfs.readdir('/')).map(({ name }) => name)).toContain('notes');
-    expect((await rt.storage.vfs.readdir('/workspace')).map(({ name }) => name)).toContain('notes');
     expect((await rt.storage.vfs.readdir(WORKSPACE_ROOT)).map(({ name }) => name)).toContain('notes');
   });
 
@@ -232,11 +230,9 @@ describe('addressing the bound directory', () => {
     const outside = join(project, '..', 'outside.txt');
     const rt = agentRuntime(state, 'solo', project);
 
-    expect(await refusalOf(() => rt.storage.vfs.readFile('/workspace/../outside.txt'))).toBe('EACCES');
-    expect(await refusalOf(() => writeText(rt.storage.vfs, '/workspace/../outside.txt', 'escaped'))).toBe('EACCES');
     expect(await refusalOf(() => writeText(rt.storage.vfs, '../outside.txt', 'escaped'))).toBe('EACCES');
     expect(await refusalOf(() => writeText(rt.storage.vfs, `${WORKSPACE_ROOT}/../outside.txt`, 'escaped'))).toBe('EACCES');
-    expect(await refusalOf(() => rt.storage.vfs.mkdir('/workspace/../sneaky', { recursive: true }))).toBe('EACCES');
+    expect(await refusalOf(() => rt.storage.vfs.mkdir(`${WORKSPACE_ROOT}/../sneaky`, { recursive: true }))).toBe('EACCES');
 
     expect(existsSync(outside)).toBe(false);
     expect(existsSync(join(project, '..', 'sneaky'))).toBe(false);
