@@ -12,7 +12,7 @@ import { KINU_TIMER_JOB } from "./wake-jobs";
 import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
   ArchiveCursorSchema,
-  createWorkspaceForkSink, createWorkspaceForkSource, settledWorkspaceSoul, workspaceArchiveFiles, writeWorkspaceSoul,
+  createWorkspaceForkSink, createWorkspaceForkSource, settledWorkspaceSoul, workspaceArchiveStore, writeWorkspaceSoul,
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
   createReportCodemodeProvider, HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
   recoverActorTurns, EventLog, dismissOrphanedAssignments, actorReferenceOf, subordinateDescendants, TEMPORARY_LIFETIME,
@@ -4126,7 +4126,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       workspace: this.name,
       source: 'cloud',
       cursor: parseArchiveCursor(cursor),
-      files: workspaceArchiveFiles(workspace),
+      store: workspaceArchiveStore(workspace),
       agents: this.agentArchiveSource(),
     });
   }

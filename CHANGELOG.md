@@ -46,6 +46,7 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- **A cloud export takes the workspace's files from one snapshot.** Before, each page of the export walked the live files again. Now the files come from one snapshot of the workspace's store, and travel once: the store's own tables no longer travel as rows beside them. If the workspace restarts while you export it, the snapshot ends, the next page is refused, and `kinu export` starts again from the beginning. An archive an older Kinu wrote is refused by its version.
 - **Less redundant state in the runtime.** Fork reception reuses its staged snapshot, overflow compaction keeps one consumable arm, and alternate takes derive their current winner from the chosen answer. Retired test-only store methods, duplicate credential writers and server facades leave the public behavior unchanged.
 - **An overlay checkpoint reads its upper once.** Its fingerprint already gates publication; the extra whole-workspace change scan is gone. Extraction still keeps its own change watermark. Native archives no longer carry SDK backup flags they do not read, and obsolete ergonomics and SDK-exec probes are archived by restore commit.
 - **Local ChatGPT sign-in no longer saves the unused ID token or save timestamp.** Sign-in still verifies the transient ID token and retains its issuer, registration and active tokens.

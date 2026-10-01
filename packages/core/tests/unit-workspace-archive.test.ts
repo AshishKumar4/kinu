@@ -13,7 +13,6 @@ import {
   readWorkspaceArchivePage,
   restoreWorkspaceArchive,
   writeWorkspaceArchive,
-  workspaceArchiveFiles,
   CHAT_SESSION_ID,
   SessionHistory,
   type ActorHandle,
@@ -29,7 +28,7 @@ import { writeWorkspaceSoul } from '../src/vfs/workspace-planes';
 import { ConversationSearchStore } from '../src/memory/conversation-search';
 import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import type { WorkspaceBundle } from '../src/vfs/nimbus-workspace';
-import { workspaceArchiveTarget } from '../src/vfs/workspace-planes';
+import { workspaceArchiveStore, workspaceArchiveTarget } from '../src/vfs/workspace-planes';
 import type { RawSqlExec, SqlExec, SqlExecutor } from '../src/types/primitives';
 import { seedTranscriptEntry, testActorHandle, present } from '@kinu.run/test-utils';
 
@@ -111,22 +110,53 @@ async function seeded() {
 }
 
 describe('workspace archive', () => {
-  test('the hosted workspace file tree restores binary and nested text through the shared archive', async () => {
+  test('the hosted workspace\'s files travel once, as pages of its store, and restore binary and nested text', async () => {
     const source = await seeded();
-    const files = workspaceArchiveFiles(createWorkspaceBundle(source.db));
-    const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud', files });
+    const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud', store: workspaceArchiveStore(source.bundle) });
     const target = fresh();
-    const restored = await restoreWorkspaceArchive(target.archive, lines, { files: () => workspaceArchiveTarget(target.bundle) });
+    const restored = await restoreWorkspaceArchive(target.archive, lines, { store: () => workspaceArchiveTarget(target.bundle) });
 
     expect(restored.files).toBeGreaterThan(0);
+    expect(lines.map((line) => v.parse(v.looseObject({ t: v.string(), name: v.optional(v.string()) }), JSON.parse(line)))
+      .filter((record) => record.t === 'schema' && /^(vfs|nimbus)_/.test(record.name ?? ''))).toEqual([]);
     expect(await target.vfs.readFile('artifacts/logo.bin')).toEqual(source.bytes);
     expect(await readText(target.vfs, 'notes/plan.md')).toBe('a plan with a "quote" and a \\ backslash');
   });
 
+  test('a page after a workspace restart refuses its export, and the restart dropped every transfer pin', async () => {
+    const source = await seeded();
+    let cursor: ArchiveCursor | null = null;
+
+    do {
+      cursor = (await readWorkspaceArchivePage(source.archive, {
+        workspace: 'scout', source: 'cloud', cursor, store: workspaceArchiveStore(source.bundle), maxBytes: 1,
+      })).next;
+    } while (cursor !== null && cursor.phase !== 'store');
+
+    if (cursor === null) throw new Error('expected the export to stop inside its store');
+    (await source.bundle.session()).vfs.snapshot('fork:left-behind');
+    const restarted = createWorkspaceBundle(source.db);
+    const pins = (await restarted.session()).vfs.snapshots().map((pin) => pin.name);
+
+    expect(pins.filter((name) => name.startsWith('archive:') || name.startsWith('fork:'))).toEqual([]);
+    await expect(readWorkspaceArchivePage(source.archive, {
+      workspace: 'scout', source: 'cloud', cursor, store: workspaceArchiveStore(restarted), maxBytes: 1,
+    })).rejects.toThrow("This export's snapshot ended when the workspace restarted.");
+  });
+
+  test('a restore whose archive lost a chunk its pages name is refused before it finishes', async () => {
+    const source = await seeded();
+    const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud', store: workspaceArchiveStore(source.bundle) });
+    const target = fresh();
+
+    await expect(restoreWorkspaceArchive(target.archive, lines.filter((line) => !line.startsWith('{"t":"chunks"')), {
+      store: () => workspaceArchiveTarget(target.bundle),
+    })).rejects.toThrow('never arrived');
+  });
+
   test('SQL cannot arrive after the destination filesystem has opened', async () => {
     const source = await seeded();
-    const files = workspaceArchiveFiles(createWorkspaceBundle(source.db));
-    const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud', files });
+    const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud', store: workspaceArchiveStore(source.bundle) });
     const end = lines.at(-1);
 
     if (!end) throw new Error('archive has no end record');
@@ -136,7 +166,7 @@ describe('workspace archive', () => {
       ...lines.slice(0, -1),
       JSON.stringify({ t: 'schema', kind: 'table', name: 'late_table', sql: 'CREATE TABLE late_table (id INTEGER)' }),
       end,
-    ], { files: () => workspaceArchiveTarget(target.bundle) })).rejects.toThrow('SQL records after its workspace files');
+    ], { store: () => workspaceArchiveTarget(target.bundle) })).rejects.toThrow('SQL records after its workspace files');
   });
 
   test('round-trips a workspace into an empty database, byte-exactly', async () => {
@@ -232,21 +262,21 @@ describe('workspace archive', () => {
 
 const OWNER_TEXT = '# the owner wrote this\n';
 
-  test('an export carries the owner\'s soul, not a file swapped since the seal', async () => {
+  test('a restore carries the owner\'s soul, not a file swapped since the seal', async () => {
     const source = await seeded();
-    const bundle = createWorkspaceBundle(source.db);
-    await writeSoul(source.sql, OWNER_TEXT, (content) => writeWorkspaceSoul(bundle, content));
-    // A mid-turn swap (the file's bytes, not the row): the export must still carry the row.
-    const kernel = (await bundle.session()).vfs.as(CRED_KERNEL);
+    await writeSoul(source.sql, OWNER_TEXT, (content) => writeWorkspaceSoul(source.bundle, content));
+    // A mid-turn swap (the file's bytes, not the row): the restore must still read the row.
+    const kernel = (await source.bundle.session()).vfs.as(CRED_KERNEL);
     kernel.unlink('/home/main/SOUL.md');
     kernel.writeFile('/home/main/SOUL.md', 'forged');
     kernel.chown('/home/main/SOUL.md', 1000, 1000);
     kernel.chmod('/home/main/SOUL.md', 0o644);
 
-    const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud', files: workspaceArchiveFiles(bundle) });
-    const soul = lines.find((line) => line.includes('"path":"SOUL.md"'));
+    const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud', store: workspaceArchiveStore(source.bundle) });
+    const target = fresh();
+    await restoreWorkspaceArchive(target.archive, lines, { store: () => workspaceArchiveTarget(target.bundle) });
 
-    expect(present(soul, 'the exported SOUL.md')).toContain(Buffer.from(OWNER_TEXT).toString('base64'));
+    expect(await readText(target.vfs, 'SOUL.md')).toBe(OWNER_TEXT);
   });
 
   test('external workspace files page in the same stream and restore byte-exactly', async () => {

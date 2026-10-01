@@ -1,4 +1,4 @@
-import { exists, readText } from '@nimbus-sh/core/vfs/vfs.js';
+import { exists, readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * `kinu export` / `kinu import` end to end: a cloud workspace exported over the paged
  * RPC restores through the same `kinu import` as a local export.
@@ -10,16 +10,15 @@ import { Database } from 'bun:sqlite';
 import { mkdirSync, readFileSync, writeFileSync, symlinkSync } from 'node:fs';
 
 import { join, resolve } from 'node:path';
-import { archiveSqlFromDatabase, initActorClaimTables, readWorkspaceArchivePage, type ArchiveCursor } from '@kinu.run/core';
+import {
+  ArchiveCursorSchema, archiveSqlFromDatabase, initActorClaimTables, readWorkspaceArchivePage, workspaceArchiveStore,
+  type ArchiveCursor,
+} from '@kinu.run/core';
 import { JsonArraySchema, JsonObjectSchema, parseJsonObject } from '@kinu.run/core';
 import { createInlineWorkspace } from '@kinu.run/core/identity';
+import { createWorkspace } from '@kinu.run/core/workspace-birth';
 import { stampSchemaGenesis } from '@kinu.run/cli-backend';
 import * as v from 'valibot';
-
-const ArchiveCursorSchema: v.GenericSchema<ArchiveCursor> = v.variant('phase', [
-  v.object({ phase: v.literal('sql'), table: v.string(), after: v.nullable(v.number()), rows: v.number() }),
-  v.object({ phase: v.literal('files'), after: v.string(), rows: v.number(), files: v.number() }),
-]);
 
 const repoRoot = resolve(__dirname, '../../..');
 
@@ -252,6 +251,70 @@ describe('kinu export / import', () => {
       db.close();
     } finally {
       await server.stop(true);
+    }
+  });
+
+  test('a cloud export restarts at page zero once a restart ended its snapshot, and imports the files as they then were', async () => {
+    const db = new Database(':memory:');
+
+    const runtime = await createWorkspace(db, {
+      name: 'skywriter', purpose: 'archive restart proof',
+      llm: { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' },
+    });
+
+    await writeText(runtime.storage.vfs, 'version.txt', 'before restart');
+    let bundle = createInlineWorkspace(db);
+    let restarted = false;
+    let starts = 0;
+    const sql = archiveSqlFromDatabase(db);
+
+    const server = Bun.serve({
+      hostname: '127.0.0.1', port: 0,
+      async fetch(request) {
+        const args = v.parse(JsonArraySchema, v.parse(JsonObjectSchema, await request.json()).args);
+        const cursor = v.parse(v.nullable(ArchiveCursorSchema), args[0] ?? null);
+
+        if (cursor === null) starts++;
+
+        // The workspace restarts once its export has reached the store: a new activation over the same database.
+        if (!restarted && cursor?.phase === 'store') {
+          restarted = true;
+          bundle = createInlineWorkspace(db);
+          await writeText(bundle.vfs, 'version.txt', 'after restart');
+        }
+
+        try {
+          return Response.json({ result: await readWorkspaceArchivePage(sql, {
+            workspace: 'skywriter', source: 'cloud', store: workspaceArchiveStore(bundle), cursor, maxBytes: 512,
+          }) });
+        } catch (error) {
+          return Response.json({ error: error instanceof Error ? error.message : String(error) }, { status: 404 });
+        }
+      },
+    });
+
+    const home = scratch('kinu-export-restart-');
+    const archive = join(scratch('kinu-export-restart-out-'), 'skywriter.kinu.jsonl');
+    writeFileSync(join(home, 'config.json'), JSON.stringify({
+      origin: `http://127.0.0.1:${server.port}`, accessToken: 'ptc_stored_session',
+      agents: { skywriter: { name: 'skywriter', mode: 'cloud', cloudName: 'skywriter', createdAt: '', updatedAt: '' } }, aliases: {},
+    }));
+
+    try {
+      const exported = await result(runCli(home, ['export', 'skywriter', '-o', archive]));
+
+      expect(exported.exitCode).toBe(0);
+      expect({ restarted, starts }).toEqual({ restarted: true, starts: 2 });
+      const imported = await result(runCli(home, ['import', archive, '--name', 'after-restart']));
+
+      expect(imported.exitCode).toBe(0);
+      const restored = new Database(join(home, 'after-restart', 'agent.db'));
+
+      expect(await readText(createInlineWorkspace(restored).vfs, 'version.txt')).toBe('after restart');
+      restored.close();
+    } finally {
+      await server.stop(true);
+      db.close();
     }
   });
 
