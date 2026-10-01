@@ -67,6 +67,35 @@ describe('withRateLimitRetry', () => {
     expect(statedRetryAfterMs({ cause: { responseHeaders: Object.fromEntries(limited.headers) } })).toBe(1_500);
   });
 
+  test('a sibling\'s cooldowns spend this call\'s retries, so it hands over instead of waiting without end', async () => {
+    let nowMs = 1_000_000;
+    let joined = 0;
+    let sent = 0;
+
+    // Every wait this call joins, another request extends: the lane never clears.
+    const pacer: ProviderPacer = new ProviderPacer({
+      now: () => nowMs,
+      sleep: async (ms) => {
+        nowMs += ms;
+        joined += 1;
+
+        if (joined > 10) throw new Error('still parked behind its siblings');
+        pacer.declareWait('api.example.com', 1_000);
+      },
+    });
+
+    pacer.declareWait('api.example.com', 1_000);
+
+    const wrapped = withRateLimitRetry(asFetchFunction(async () => {
+      sent += 1;
+
+      return new Response('ok');
+    }), { now: () => nowMs, pacer });
+
+    await expect(wrapped('https://api.example.com/v1/chat', { body: '{}' })).rejects.toThrow('rate-limiting this account');
+    expect({ joined, sent }).toEqual({ joined: DEFAULT_PROVIDER_RETRIES, sent: 0 });
+  });
+
   test('honors Retry-After HTTP dates against the injected clock', async () => {
     const retryAt = new Date(1_005_000).toUTCString();
 

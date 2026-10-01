@@ -101,6 +101,8 @@ export function withRateLimitRetry(
 
     // Announce only cooldowns another request declared.
     const ownedCooldownUntil = { ms: 0 };
+    // A sibling's cooldown spends a retry as this call's own refusal does: a lane siblings keep cooling ends here.
+    let waits = 0;
 
     for (let attempt = 1; ; attempt++) {
       await pacer.admit(lane, signal, {
@@ -109,9 +111,9 @@ export function withRateLimitRetry(
             throw waitTooLong({ input, provider: opts.provider ?? host, untilMs, nowMs: now(), longestMs: MAX_RETRY_DELAY_MS, reason });
           }
 
-          if (retries === 0) throw handedOver(null, waitMs);
-
           if (untilMs === ownedCooldownUntil.ms) return;
+
+          if (++waits > retries) throw handedOver(null, waitMs);
 
           reportWait(waitMs, 0, 'cooldown');
         },
@@ -147,7 +149,7 @@ export function withRateLimitRetry(
       const untilMs = now() + waitMs;
       pacer.declareWait(lane, waitMs);
 
-      if (attempt > retries) throw handedOver(limit.status, retryAfter ?? waitMs);
+      if (++waits > retries) throw handedOver(limit.status, retryAfter ?? waitMs);
       ownedCooldownUntil.ms = untilMs;
       warn(
         `[kinu] ${host} rate-limited: waiting ${fmtSpan(waitMs)} `
