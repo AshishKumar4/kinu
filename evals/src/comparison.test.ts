@@ -3,10 +3,10 @@ import { compareEvalResults, evalGateVerdict, fisherExact, renderEvalComparison,
 
 /**
  * `infra`: the deployment ended the turn in error. `refused`: it answered the turn's request with this failure.
- * `reset`: it answered that the workspace's isolate was reset for memory.
+ * `reset`: it answered that the workspace's isolate was reset for memory. `hung`: the watch's account of what held it.
  */
 type Trial = {
-  pass: boolean; infra?: boolean; refused?: string; reset?: string; productSha?: string; taskVersion?: string; failed?: string; trial?: number;
+  pass: boolean; infra?: boolean; refused?: string; reset?: string; hung?: string; productSha?: string; taskVersion?: string; failed?: string; trial?: number;
   inputTokens?: number; cacheReadTokens?: number; costUsd?: number; model?: string; durationMs?: number; harnessInfra?: boolean;
 };
 
@@ -14,6 +14,8 @@ function outcomeOf(trial: Trial) {
   if (trial.infra === true) return { status: 'error' };
 
   if (trial.reset !== undefined) return { status: 'reset', message: trial.reset };
+
+  if (trial.hung !== undefined) return { status: 'hung', message: trial.hung };
 
   return trial.refused === undefined ? { status: 'completed' } : { status: 'refused', message: trial.refused };
 }
@@ -42,7 +44,7 @@ function fileResult(taskId: string, trials: readonly Trial[], side: { productSha
             metrics: { modelTurns: 4, toolCalls: 6, toolErrors: 0, providerWaits: 2, providerWaitMs: 30_000 },
             turns: [{
               outcome: outcomeOf(trial),
-              checks: trial.refused === undefined && trial.reset === undefined
+              checks: trial.refused === undefined && trial.reset === undefined && trial.hung === undefined
                 ? [{ id: trial.failed ?? 'builds', pass: trial.pass, evidence: trial.pass ? { calls: 3 } : { answered: 1 } }]
                 : [],
             }],
@@ -113,6 +115,16 @@ describe('compareEvalResults', () => {
     expect(validateEvalResults(refused, 10)).toHaveLength(1);
     expect([comparison.verdict, comparison.rows[0]?.reason]).toEqual(['regressed', null]);
     expect(renderEvalComparison(comparison)).toContain('`t1 deployment.refused` | 0 | 1 |');
+  });
+
+  test('a turn that hung fails on the build: counted, compared and named, never infrastructure', () => {
+    const hung = 'the workspace stayed busy with its ledger silent for 361 s: held by working helper task-helper';
+    const hanging = report('t', [...trialsOf(1, 9), { pass: false, hung }], NEXT);
+    const comparison = compareEvalResults(report('t', trialsOf(9, 10), BASE), hanging);
+
+    expect(validateEvalResults(hanging, 10)).toHaveLength(1);
+    expect([comparison.verdict, comparison.rows[0]?.reason]).toEqual(['regressed', null]);
+    expect(renderEvalComparison(comparison)).toContain('`t1 deployment.hung` | 0 | 1 |');
   });
 
   // A reset may be the build's own regression: never infrastructure, and a build that resets more is red even when

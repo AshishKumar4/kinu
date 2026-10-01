@@ -38,6 +38,7 @@ import {
   KinuPublicSession, openPublicSession, WORKSPACE_LEASE_MS,
 } from './session';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
+import type { UIMessageChunk } from 'ai';
 import {
   BROADCAST_FRAME, FILE_TURN_CHUNKS, FIXTURE_REQUEST_ID,
   RECOVERY_TURN_CHUNKS, chatChunkFrame, chatErrorFrame, chatTerminalFrame, chatTurnFrames, rpcReplyFrame,
@@ -300,6 +301,68 @@ test('a turn survives a dropped socket: the redial resumes its stream and the an
     if (result.landed !== 'turn') throw new Error('expected the turn itself to land');
     expect(result.text).toBe('Wrote note.txt.');
     expect(upgrades).toBe(2);
+  } finally { await session.teardown(); await server.stop(true); }
+});
+
+test('a tool call is in flight from its input to its last output, and only while its turn is heard', async () => {
+  // The ledger writes a call only at its end: on 2026-10-01 a lead's `agents` hire ran 840 s with nothing written.
+  const opened = Promise.withResolvers<(frames: readonly string[]) => void>();
+  let requestId = '';
+
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1',
+    fetch(request, upgrading) {
+      if (request.method === 'DELETE') return Response.json({ ok: true });
+
+      if (upgrading.upgrade(request)) return;
+
+      return new Response('Not found', { status: 404 });
+    },
+    websocket: {
+      message(socket, message) {
+        requestId = v.parse(ChatRequestFrameSchema, JSON.parse(message.toString())).id;
+        opened.resolve((frames) => { for (const frame of frames) socket.send(frame); });
+      },
+    },
+  });
+
+  const session = new KinuPublicSession({
+    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'tool calls in flight',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  // A stage is over once its last frame reached the session.
+  const stage = async (send: (frames: readonly string[]) => void, chunks: readonly UIMessageChunk[], done = false) => {
+    const heard = Promise.withResolvers<void>();
+    const last = done ? 'done' : chunks.at(-1)?.type;
+
+    session.onChunk = (type) => { if (type === last) heard.resolve(); };
+
+    send([...chunks.map((chunk) => chatChunkFrame({ requestId, chunk })), ...done ? [chatTerminalFrame({ requestId })] : []]);
+    await heard.promise;
+  };
+
+  try {
+    await session.connect();
+    const turn = session.submit('Hire a helper.').settled;
+    const send = await opened.promise;
+
+    await stage(send, [{ type: 'start' }, { type: 'start-step' }, { type: 'tool-input-available', toolCallId: 'call-hire', toolName: 'agents', input: {} }]);
+    expect(session.toolCallsInFlight()).toEqual(['call-hire']);
+    await stage(send, [{ type: 'tool-output-available', toolCallId: 'call-hire', output: 'hired', preliminary: true }]);
+    expect(session.toolCallsInFlight()).toEqual(['call-hire']);
+    await stage(send, [
+      { type: 'tool-output-available', toolCallId: 'call-hire', output: 'the helper answered' },
+      { type: 'tool-input-available', toolCallId: 'call-shell', toolName: 'shell', input: {} },
+    ]);
+    expect(session.toolCallsInFlight()).toEqual(['call-shell']);
+    await stage(send, [
+      { type: 'tool-approval-request', approvalId: 'approval-1', toolCallId: 'call-shell' },
+      { type: 'tool-input-available', toolCallId: 'call-file', toolName: 'file', input: {} },
+    ]);
+    expect(session.toolCallsInFlight()).toEqual(['call-file']);
+    await stage(send, [{ type: 'finish-step' }, { type: 'finish' }], true);
+    await turn;
+    expect(session.toolCallsInFlight()).toEqual([]);
   } finally { await session.teardown(); await server.stop(true); }
 });
 

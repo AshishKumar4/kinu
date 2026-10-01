@@ -1,19 +1,133 @@
 import type { RunEvent } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
-import type { KinuPublicSession, PublicMessage } from './session';
+import type { KinuPublicSession, PublicBackgroundJob, PublicMessage, PublicSubordinate } from './session';
 
-/** How often an unsettled workspace is looked at. A poll, not a deadline: nothing here ends a turn. A poll reads only
- *  what the ledger added since the last one, so a short interval costs the deployment little. */
+/** How often an unsettled workspace is looked at. A poll, not a deadline: only a hang ends a turn here. A poll reads
+ *  only what the ledger added since the last one, so a short interval costs the deployment little. */
 const IDLE_POLL_MS = 1_000;
+
+/** How often the workspace is looked at while the turn's own stream is open, for a hang alone. Each look reads every
+ *  run's new rows over HTTP: once a second for 180 trials at once is hundreds of requests a second at the build. */
+const STREAMING_POLL_MS = 30_000;
 
 /** Polls in a row the deployment's transport may fail before the trial fails as infrastructure. */
 const DROPPED_POLLS = 3;
+
+/**
+ * How long a workspace may stay busy with its ledger silent, no tool call in flight and no provider wait declared,
+ * before its turn fails as a product hang. Measured 2026-10-01 inside the turns of the 68 passing trials of 405 kept
+ * with a timeline (both legs of the full run, the 40-trial production run, two staging deploys' passes): the longest
+ * silence was 183 s, one Muse Spark step of 6k tokens with 180 trials running. Twice that, and inside the deploy's 480 s
+ * silence bound (`GATE_DEADLINE_SECONDS`), so a hung trial says so before the deploy kills the run.
+ */
+const HUNG_AFTER_MS = 360_000;
+
+/** The time a watch reads and the waits between its looks, which `stop` ends early: the wall clock, or a test's own. */
+export type WatchClock = { now(): number; sleep(ms: number, stop?: AbortSignal): Promise<void> };
+
+const WALL_CLOCK: WatchClock = {
+  now: () => Date.now(),
+  sleep: (ms, stop) => new Promise<void>((resolve) => {
+    const wake = () => {
+      clearTimeout(timer);
+      stop?.removeEventListener('abort', wake);
+      resolve();
+    };
+
+    const timer = setTimeout(wake, ms);
+
+    stop?.addEventListener('abort', wake, { once: true });
+  }),
+};
+
+/** What a watch reads of a workspace. */
+export type WatchedWorkspace = Pick<KinuPublicSession, 'runEvents' | 'backgroundJobs' | 'subordinates' | 'toolCallsInFlight'>;
+
+/** A turn whose workspace stayed busy and silent past the bound: the build hung, and the message names what held it. */
+export class WorkspaceHang extends Error {
+  override readonly name = 'WorkspaceHang';
+}
 
 function openRuns(events: readonly RunEvent[]): string[] {
   const ended = new Set(events.filter((event) => event.type === 'run_end').map((event) => event.runId));
 
   return events.filter((event) => event.type === 'run_start' && !ended.has(event.runId)).map((event) => event.runId);
+}
+
+function holders(events: readonly RunEvent[], jobs: readonly PublicBackgroundJob[], helpers: readonly PublicSubordinate[]): string[] {
+  return [
+    ...openRuns(events).map((runId) => {
+      const last = events.filter((event) => event.runId === runId).at(-1);
+
+      return `open run ${runId}${last === undefined ? '' : `, its last row ${last.type} at ${last.timestamp}`}`;
+    }),
+    ...jobs.map((job) => `running ${job.kind} job ${job.id}`),
+    ...helpers.map((helper) => `working helper ${helper.name}`),
+  ];
+}
+
+/**
+ * One turn's look at its workspace, kept across polls: whether it is busy (a run open, a background job running, a
+ * helper working), and since when its ledger has been silent with no tool call in flight and no provider wait
+ * declared. The product writes a call's row only at its end, so its own stream is where a call is seen running.
+ */
+export class TurnWatch {
+  private rows = 0;
+
+  private heardAt: number;
+
+  constructor(readonly workspace: WatchedWorkspace, readonly clock: WatchClock = WALL_CLOCK) {
+    this.heardAt = clock.now();
+  }
+
+  /** Read the workspace once. Throws {@link WorkspaceHang} when it has been busy and silent past the bound. */
+  async poll(): Promise<{ busy: boolean; events: readonly RunEvent[] }> {
+    const [events, jobs, helpers] = await Promise.all([this.workspace.runEvents(), this.workspace.backgroundJobs(), this.workspace.subordinates()]);
+    const now = this.clock.now();
+    const running = jobs.filter((job) => job.status === 'running');
+    const working = helpers.filter((helper) => helper.status === 'working');
+    const busy = openRuns(events).length > 0 || running.length > 0 || working.length > 0;
+
+    if (!busy || events.length > this.rows || this.workspace.toolCallsInFlight().length > 0) this.heardAt = now;
+    this.rows = events.length;
+
+    const waits = events.flatMap((event) => (event.type === 'provider_wait' ? [Date.parse(event.timestamp) + event.waitMs] : []));
+    const silentMs = now - Math.max(this.heardAt, ...waits);
+
+    if (silentMs > HUNG_AFTER_MS) {
+      const last = events.at(-1);
+
+      throw new WorkspaceHang(`the workspace stayed busy with its ledger silent for ${String(Math.round(silentMs / 1000))} s, `
+        + `no tool call in flight and no provider wait declared${last === undefined ? '' : ` (its last row ${last.type} at ${last.timestamp})`}: `
+        + `held by ${holders(events, running, working).join('; ')}`);
+    }
+
+    return { busy, events };
+  }
+}
+
+/**
+ * The turn's own answer, watched while its stream is open: a run that goes silent mid-answer holds its stream open with
+ * it, so the workspace is looked at for a hang until the answer lands or fails.
+ */
+export async function answered<T>(watch: TurnWatch, sent: Promise<T>): Promise<T> {
+  const landing = new AbortController();
+  const answer = sent.finally(() => { landing.abort(); });
+
+  for (;;) {
+    await Promise.race([answer, watch.clock.sleep(STREAMING_POLL_MS, landing.signal)]);
+
+    if (landing.signal.aborted) return answer;
+
+    try {
+      await watch.poll();
+    } catch (error) {
+      // The stream carries this turn, and its own redial answers a dropped socket: a look the transport lost waits for
+      // the next one.
+      if (error instanceof WorkspaceHang || !renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER)) throw error;
+    }
+  }
 }
 
 /** What one poll of {@link settle} saw: whether the workspace was busy, and the ledger it read. */
@@ -22,9 +136,10 @@ export type SettlePoll = (busy: boolean, events: readonly RunEvent[]) => void;
 /**
  * Wait until the workspace has nothing left to do for this turn: no run open, no background job
  * running, no helper working, seen on two polls in a row. A background job's completion wakes the
- * agent in a run of its own, and that run answers the prompt too.
+ * agent in a run of its own, and that run answers the prompt too. A workspace that stays busy and
+ * silent fails the turn as a {@link WorkspaceHang}.
  */
-export async function settle(session: KinuPublicSession, polled?: SettlePoll): Promise<void> {
+export async function settle(watch: TurnWatch, polled?: SettlePoll): Promise<void> {
   let quiet = 0;
   let dropped = 0;
 
@@ -32,14 +147,13 @@ export async function settle(session: KinuPublicSession, polled?: SettlePoll): P
     let busy = true;
 
     try {
-      const [events, jobs, helpers] = await Promise.all([session.runEvents(), session.backgroundJobs(), session.subordinates()]);
+      const seen = await watch.poll();
 
-      busy = openRuns(events).length > 0 || jobs.some((job) => job.status === 'running')
-        || helpers.some((helper) => helper.status === 'working');
-
+      busy = seen.busy;
       dropped = 0;
-      polled?.(busy, events);
+      polled?.(busy, seen.events);
     } catch (error) {
+      if (error instanceof WorkspaceHang) throw error;
       // An eviction closes the socket under the polls in flight, and the next poll redials. Three
       // failed polls in a row is a deployment that is not answering, and fails the trial as that.
       dropped += 1;
@@ -50,7 +164,7 @@ export async function settle(session: KinuPublicSession, polled?: SettlePoll): P
     quiet = busy ? 0 : quiet + 1;
 
     if (quiet >= 2) return;
-    await new Promise<void>((resolve) => { setTimeout(resolve, IDLE_POLL_MS); });
+    await watch.clock.sleep(IDLE_POLL_MS);
   }
 }
 

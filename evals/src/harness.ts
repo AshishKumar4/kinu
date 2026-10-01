@@ -17,7 +17,7 @@ import { redact } from './redact';
 import { cutButCompleted, measure, toTranscript } from './transcript';
 import { TrialTimeline } from './timeline';
 import { EvalVerifier } from './verifier';
-import { repliesTo, settle } from './workspace-completion';
+import { answered, repliesTo, settle, TurnWatch, WorkspaceHang } from './workspace-completion';
 
 /**
  * Trials of one process opening their workspaces at once, at most. Opening is where a trial makes its new connections
@@ -144,21 +144,29 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
 
   const before = new Set((await timeline.span('ledger', () => session.runEvents())).map((event) => event.runId));
   const startedAt = Date.now();
+  const watch = new TurnWatch(session);
   let lost: Error | undefined;
 
   try {
-    await timeline.span('prompt', () => session.prompt(turn.prompt));
+    try {
+      await timeline.span('prompt', () => answered(watch, session.prompt(turn.prompt)));
+    } catch (error) {
+      // A socket the deployment drops loses the turn's stream, not the turn: the run goes on up there
+      // and the ledger records its end. The history below says whether the prompt ever arrived.
+      if (error instanceof WorkspaceHang || !renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER)) throw error;
+      lost = error instanceof Error ? error : new Error(renderThrownChain({ cause: error }));
+    }
+
+    await timeline.span('settle', () => settle(watch, (busy, events) => {
+      timeline.mark('poll', { busy });
+      stepped(events.filter((event) => event.type === 'step_finish' && !before.has(event.runId)).length);
+    }));
   } catch (error) {
-    // A socket the deployment drops loses the turn's stream, not the turn: the run goes on up there
-    // and the ledger records its end. The history below says whether the prompt ever arrived.
-    if (!renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER)) throw error;
-    lost = error instanceof Error ? error : new Error(renderThrownChain({ cause: error }));
+    if (!(error instanceof WorkspaceHang)) throw error;
+
+    return { outcome: { status: 'hung', message: redact(error.message) }, checks: [], turnWallMs: Date.now() - startedAt, verificationWallMs: 0 };
   }
 
-  await timeline.span('settle', () => settle(session, (busy, events) => {
-    timeline.mark('poll', { busy });
-    stepped(events.filter((event) => event.type === 'step_finish' && !before.has(event.runId)).length);
-  }));
   const turnWallMs = Date.now() - startedAt;
   const [events, history] = await timeline.span('read', () => Promise.all([session.runEvents(), session.history()]));
 

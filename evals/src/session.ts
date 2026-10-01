@@ -732,8 +732,8 @@ export type PublicSwarmRun = v.InferOutput<typeof SwarmRunSchema>;
 
 const SwarmPageSchema = pageOf(SwarmRunSchema);
 
-/** A turn frame's body is one AI SDK UI message chunk. */
-const ChunkTypeSchema = v.object({ type: v.string() });
+/** A turn frame's body is one AI SDK UI message chunk; the chunks of a tool call's run carry its id. */
+const ChunkTypeSchema = v.object({ type: v.string(), toolCallId: v.optional(v.string()), preliminary: v.optional(v.boolean()) });
 
 const SetModelSchema = v.object({ spec: v.string() });
 
@@ -1167,6 +1167,10 @@ export class KinuPublicSession {
    *  deployment sends again after a redial, `done` at a turn's last frame, and `closed <code>` when the socket drops. */
   onChunk: (type: string) => void = () => undefined;
 
+  /** The tool calls each open turn's stream started and has not ended, by request. The ledger records a call only
+   *  when it ends (`tool_call_end`), so a call that runs for minutes, a helper's task, is seen running only here. */
+  private readonly toolCalls = new Map<string, Set<string>>();
+
   /** The ledger read so far, by run. Its rows are never rewritten, so a later read asks each run only for what it
    *  added: a settle poll that walked every row of a long trial again was the harness's heaviest read. */
   private readonly ledger = new Map<string, readonly RunEvent[]>();
@@ -1521,6 +1525,16 @@ export class KinuPublicSession {
     );
 
     return v.parse(DecideApprovalsSchema, answer).decided;
+  }
+
+  /** The tool calls running in the turns this session sent and is still hearing, by id. A turn the product opened
+   *  on its own (a background job's wake) streams to no request of ours, so its calls are not here. */
+  toolCallsInFlight(): string[] {
+    for (const requestId of this.toolCalls.keys()) {
+      if (!this.turns.has(requestId)) this.toolCalls.delete(requestId);
+    }
+
+    return [...this.toolCalls.values()].flatMap((running) => [...running]);
   }
 
   /**
@@ -2065,7 +2079,11 @@ export class KinuPublicSession {
     if (body !== undefined) {
       const chunk = v.safeParse(ChunkTypeSchema, decodeSocketJson(body));
 
-      if (chunk.success) this.onChunk(frame.frame.replay === true ? 'replay' : chunk.output.type);
+      if (chunk.success) {
+        this.trackToolCall(requestId, chunk.output);
+        this.onChunk(frame.frame.replay === true ? 'replay' : chunk.output.type);
+      }
+
       const watchers = this.chunkWatchers.get(requestId) ?? [];
 
       const remaining = watchers.filter((watcher) => {
@@ -2087,6 +2105,17 @@ export class KinuPublicSession {
     this.turns.delete(requestId);
     this.streams.ended(frame.frame.id);
     turn.resolve(done);
+  }
+
+  /** A call runs from its input to its last output. A replayed stream replays the calls too, so the set it leaves is
+   *  the stream's; a call parked for a person's approval is not running. */
+  private trackToolCall(requestId: string, chunk: v.InferOutput<typeof ChunkTypeSchema>): void {
+    if (chunk.toolCallId === undefined) return;
+    const running = this.toolCalls.get(requestId) ?? new Set<string>();
+
+    if (chunk.type === 'tool-input-available') running.add(chunk.toolCallId);
+    else if ((chunk.type.startsWith('tool-output-') && chunk.preliminary !== true) || chunk.type === 'tool-approval-request') running.delete(chunk.toolCallId);
+    this.toolCalls.set(requestId, running);
   }
 
   /**

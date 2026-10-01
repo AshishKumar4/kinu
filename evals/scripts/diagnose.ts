@@ -7,7 +7,7 @@ import { DEFAULT_MODELS, EXERCISED_PATHS } from '../src/config';
 import { ORCHESTRATION_CAUSES, SIMPLE_CAUSES, parseDiagnosis, renderDiagnosis } from '../src/diagnosis';
 import { evidenceDirectories, evidenceDirectory, extractInsights, readTrialEvidence, resultsRow } from '../src/insights';
 import { redact } from '../src/redact';
-import { repliesTo, settle } from '../src/workspace-completion';
+import { answered, repliesTo, settle, TurnWatch } from '../src/workspace-completion';
 import { parseResults, trials } from '../src/results';
 import { openWorkspace, resolveEvalTarget } from '../src/target';
 import { renderTrajectories } from '../src/trajectories';
@@ -34,7 +34,8 @@ ${SIMPLE_CAUSES.map((kind) => JSON.stringify({ kind })).join(' | ')}
 {"kind":"agent:orchestration","problem":"<one of: ${ORCHESTRATION_CAUSES.join(' | ')}>"}
 
 agent means the agent misread the spec, misused a tool, orchestrated badly, left work incomplete, or answered wrong.
-product means a tool failed despite correct use, the product refused a call, or its workspace reset/stream dropped.
+product means a tool failed despite correct use, the product refused a call, its workspace reset/stream dropped, or
+it hung: a turn whose outcome is "hung" (busy, its ledger silent) is product:hang, and nothing else is.
 provider means the model provider refused or throttled the inference. harness means the eval itself failed.
 A recorded refusal alone does not distinguish tool misuse from a product defect: inspect its input and explanation.
 Helper runs null means not recorded, NOT idle. An idle status with no runs is recorded idle. Duplicate identical
@@ -114,8 +115,10 @@ try {
     await session.writeFile(`${REVIEW}/tasks/${file}`, readFileSync(join(TASKS, file), 'utf8'));
   }
 
-  await session.prompt(PROMPT);
-  await settle(session);
+  const watch = new TurnWatch(session);
+
+  await answered(watch, session.prompt(PROMPT));
+  await settle(watch);
   const reply = repliesTo(await session.history(), PROMPT).at(-1)?.trim() ?? '';
   const diagnosis = parseDiagnosis(reply, comparison.verdict, reviews);
   const comment = renderDiagnosis(diagnosis, reviews, assertions);
