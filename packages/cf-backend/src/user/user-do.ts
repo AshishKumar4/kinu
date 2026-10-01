@@ -1300,6 +1300,7 @@ export class UserDO extends Agent<Env> {
     this.sqlx(`DELETE FROM user_workspaces WHERE name = ?`, name);
     this.sqlx(`DELETE FROM workspace_overviews WHERE name = ?`, name);
     this.sqlx(`DELETE FROM workspace_overview_nudges WHERE name = ?`, name);
+    this.sqlx(`DELETE FROM device_status_watchers WHERE agent_name = ?`, name);
     // Re-run for a resumed row whose identity a pre-fence delete could have left registered.
     revokeWorkspaceCapability(this.ctx.storage.sql, name);
   }

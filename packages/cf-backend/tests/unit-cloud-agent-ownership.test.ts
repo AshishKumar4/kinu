@@ -839,6 +839,18 @@ describe('cloud agent ownership safety', () => {
     expect(userDO.sql.exec(`SELECT name FROM user_workspaces`).toArray()).toEqual([]);
   });
 
+  test('a deleted workspace leaves no device-status watcher behind', async () => {
+    const workspace = orchestratorHarness(undefined, { workspace: 'jarvis', ownerUserId: USER_ID });
+    const { userDO, remove } = await deletesReaching(workspace);
+
+    await userDO.userDO.ensureWorkspaceCapability('jarvis', null);
+    await userDO.userDO.watchDeviceStatus({ workspaceToken: userDO.installed.get('jarvis') ?? '' }, true);
+    expect(userDO.sql.exec(`SELECT agent_name FROM device_status_watchers`).toArray()).toEqual([{ agent_name: 'jarvis' }]);
+
+    expect((await remove())?.status).toBe(200);
+    expect(userDO.sql.exec(`SELECT agent_name FROM device_status_watchers`).toArray()).toEqual([]);
+  });
+
   test('a healthy workspace whose owner does not match is still refused, row and storage intact', async () => {
     // The unclaimed skip must not widen: a claimed workspace with another owner is not destroyed.
     const healthy = orchestratorHarness(undefined, { workspace: 'jarvis', ownerUserId: 'b'.repeat(32) });
