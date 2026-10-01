@@ -47,8 +47,8 @@ export function sayWordMission(word: string): string {
 
 export const DELEGATION_TASK_ASK = 'Use your agents tool to hire one helper: action hire, lifetime task, role task, '
   + `mission "${sayWordMission(DELEGATION_WORD)}" `
-  + 'The hire waits for its single answer and returns it in the call result. '
-  + 'When it answers, reply with one line: HIRED <its answer>.';
+  + 'Its answer arrives later, as a message that opens your next turn; '
+  + 'when it does, reply with one line: HIRED <its answer>.';
 
 /** delegation: the durable helper's mission. */
 export const STANDBY_MISSION = 'Stand by for one question.';
@@ -92,7 +92,8 @@ export const RELAY_MISSION = 'Use your agents tool to hire one helper with actio
 export const TREE_ASK = 'Use your agents tool to hire two helpers, each with action hire, lifetime task and role task. '
   + `The first helper's mission: "${RELAY_MISSION}" `
   + `The second helper's mission: "${sayWordMission(TREE_SHALLOW_WORD)}" `
-  + 'When both have answered, reply with one line: TREE <first helper\'s answer> <second helper\'s answer>.';
+  + 'Their answers arrive later, each as a message that opens your next turn; '
+  + 'reply to each with one line: TREE <the answer it carries>.';
 
 /** exploration: what every node of the swarm is asked. */
 export const SWARM_TASK = 'Name one fruit whose skin is yellow. Report only the fruit\'s name.';

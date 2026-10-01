@@ -48,17 +48,8 @@ function namesIn(result: string): string[] {
   return [...result.matchAll(/"name"\s*:\s*"([^"]+)"/g)].map(([, name]) => name ?? '');
 }
 
-const HireAnswerSchema = v.pipe(v.string(), v.parseJson(), v.looseObject({ answer: v.string() }));
-
 /** A name as the dismiss ask quotes it: a JSON string. */
 const QuotedNameSchema = v.pipe(v.string(), v.parseJson(), v.string());
-
-/** What a task hire's helper answered: its result's `answer`, else the result's own text. */
-function hireAnswer(result: string | undefined): string {
-  const parsed = v.safeParse(HireAnswerSchema, result);
-
-  return parsed.success ? parsed.output.answer.trim() : oneLine(result);
-}
 
 const hire = (mission: string): ScriptedAnswer => call('agents', { action: 'hire', lifetime: 'task', role: 'task', mission });
 
@@ -142,11 +133,14 @@ const capabilityIsolation: Script = (request) => latest(request) !== ISOLATION_A
   hire(INTERNAL_FETCH_MISSION),
 ], (turn) => `DONE ${turn.map((made) => `${made.name}: ${oneLine(made.result).slice(0, 160)}`).join(' | ')}`);
 
+/** A hire returns at once; its helper's answer arrives as the message that opens the hirer's next turn. */
 const delegation: Script = (request) => {
   const ask = latest(request);
 
-  if (ask === DELEGATION_TASK_ASK) {
-    return steps(request, [hire(sayWordMission(DELEGATION_WORD))], ([hired]) => `HIRED ${hireAnswer(hired?.result)}`);
+  if (ask === DELEGATION_TASK_ASK) return steps(request, [hire(sayWordMission(DELEGATION_WORD))], () => 'WAITING');
+
+  if (request.userTexts[0] === DELEGATION_TASK_ASK && request.turn.length === 0 && ask.includes(DELEGATION_WORD)) {
+    return { text: `HIRED ${DELEGATION_WORD}` };
   }
 
   if (ask === DELEGATION_ROSTER_ASK) {
@@ -166,10 +160,17 @@ const delegation: Script = (request) => {
   ], () => 'RETIRED');
 };
 
-const delegationTree: Script = (request) => latest(request) !== TREE_ASK ? null : steps(request, [
-  hire(RELAY_MISSION),
-  hire(sayWordMission(TREE_SHALLOW_WORD)),
-], ([first, second]) => `TREE ${hireAnswer(first?.result)} ${hireAnswer(second?.result)}`);
+/** The root hires both helpers and ends its turn; each answer opens a turn of its own, answered with the words it carries. */
+const delegationTree: Script = (request) => {
+  const ask = latest(request);
+
+  if (ask === TREE_ASK) return steps(request, [hire(RELAY_MISSION), hire(sayWordMission(TREE_SHALLOW_WORD))], () => 'WAITING');
+
+  if (request.userTexts[0] !== TREE_ASK || request.turn.length > 0) return null;
+  const words = [TREE_DEEP_WORD, TREE_SHALLOW_WORD].filter((word) => ask.includes(word));
+
+  return words.length === 0 ? null : { text: `TREE ${words.join(' ')}` };
+};
 
 const exploration: Script = (request) => latest(request) !== SWARM_ASK ? null : steps(request, [
   call('agents', { action: 'swarm', preset: 'ideate', task: SWARM_TASK }),
@@ -291,7 +292,10 @@ const CASE_ASKS: readonly string[] = [
 
 /** What a hired helper or a swarm node does, by the mission it was given. */
 const MISSIONS: readonly (readonly [string, Script])[] = [
-  [RELAY_MISSION, (request) => steps(request, [hire(sayWordMission(TREE_DEEP_WORD))], ([hired]) => hireAnswer(hired?.result))],
+  // The relay hires and ends its turn; the answer its helper sends opens its next turn, which relays the word.
+  [RELAY_MISSION, (request) => request.turn.length === 0 && request.called.includes('agents') && latest(request).includes(TREE_DEEP_WORD)
+    ? { text: TREE_DEEP_WORD }
+    : steps(request, [hire(sayWordMission(TREE_DEEP_WORD))], () => 'WAITING')],
   [INTERNAL_FETCH_MISSION, (request) => steps(request, [call('web', { action: 'fetch', url: INTERNAL_URL })], ([fetched]) => oneLine(fetched?.result))],
   ...[DELEGATION_WORD, TREE_DEEP_WORD, TREE_SHALLOW_WORD].map((word): readonly [string, Script] => [sayWordMission(word), () => ({ text: word })]),
   [SWARM_TASK, () => ({ text: 'Banana' })],
