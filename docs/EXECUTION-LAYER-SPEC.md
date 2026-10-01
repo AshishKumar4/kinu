@@ -206,7 +206,7 @@ instruments validate against.
 
 `KinuDevbox` names `BACKUP_BUCKET` and `PREVIEW_HOST_SUFFIX`, delivers
 its notices and `acceptSandboxLifecycleFailure` through the root-agent stub
-(the workspace tells the box when its work moves, `noteHostWork`; devbox D56), and installs egress interception. `enableInternet` false plus
+(the box rests on its own use and never asks the workspace; devbox D56), and installs egress interception. `enableInternet` false plus
 `interceptHttps` true means only HTTP/S and DNS leave, through the
 vault-substituting handler (`cf-backend/src/egress/outbound.ts`). `/workspace`
 is command cwd (`DEVBOX_WORKDIR`, `devbox/src/storage.ts`).

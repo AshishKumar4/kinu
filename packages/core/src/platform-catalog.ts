@@ -1982,7 +1982,7 @@ export function platformFactEntries(): readonly PlatformFactEntry[] {
 export const PLATFORM_FACT_IDS: readonly PlatformFactId[] = Object.keys(PLATFORM_CATALOG)
   .filter((id): id is PlatformFactId => id in PLATFORM_CATALOG);
 
-/** Since the last byte, never a total (AGENTS.md). */
+/** Since the last byte, never a total. */
 export type SilenceBoundId = {
   [Id in PlatformFactId]: (typeof PLATFORM_CATALOG)[Id]['bounds'] extends 'silence' ? Id : never;
 }[PlatformFactId];
