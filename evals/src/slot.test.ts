@@ -37,6 +37,13 @@ test('a trial account may hold its provider keys and its own bookkeeping, and no
   })).toEqual({ experience_library: 3, user_mcp_servers: 1 });
 });
 
+// Every trial's workspace registers on its account as a device-status watcher, and deleting the workspace leaves the
+// row, which the account prunes only when a device moves: on staging f75f06932 the next run's trial on trial-4 refused
+// to open on it (2026-10-01).
+test("a removed workspace's device-status watcher is no row a trial inherits: it names a workspace no trial opens", () => {
+  expect(inheritedRows({ user_profile: 1, device_status_watchers: 1, experience_library: 2 })).toEqual({ experience_library: 2 });
+});
+
 /** One deployment as the slot rules read it: the profile, the roster, workspace deletes and the held rows. */
 function deployment(state: {
   readonly takesTrials: 'yes' | 'refuses' | 'ignores';
