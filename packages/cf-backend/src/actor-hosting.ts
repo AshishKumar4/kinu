@@ -206,6 +206,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
 
       const hooks: CFRuntimeHooks = {
         reportModelCall: (report) => { seams.reportModelCall(report); },
+        modelOperations: seams.modelOperations,
         currentTurn: (reference) => seams.currentTurn(reference),
         // Built with the runtime, which lives as long as this actor stays bound.
         refusals: seams.refusals(bound.handle),

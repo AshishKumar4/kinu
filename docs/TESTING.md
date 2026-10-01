@@ -344,7 +344,11 @@ The reconnect snapshot tests call the real RPCs and mount `useKinu` behind the g
 
 Tests await the public completion of the work they actually invoked, or the product's existing settle/close API. They do not invent fixture-ready events, notification counters or completion latches. Missing product completion is an API problem to report, not a reason to build a second scheduler in tests. UI renderers may use their existing public frame/flush completion; domain expiry uses a controlled clock, not an elapsed machine-speed cutoff.
 
-A terminal request completes with its own answer or `PTY_EXIT`, not a prompt count. The signal regression asks bash for monitor mode and foreground-group ownership, interrupts `top` and observes its public exit, then stops and resumes a program that reports its own progress. The red mutation uses Bun's pre-created `Terminal` instance shape, which carries bytes but has no controlling terminal. These checks keep signal coverage without guessing which prompt redraw occurred.
+For an active operation, tests read the frontend's real session, daemon or terminal frames with the shared frame buffer fed directly by the public output callback. A model-operation start spans a whole streamed turn, not each SDK step. Restart probes cut an actual text stream instead of waiting on a fixture's prompt counter. Native process output completes with stdout EOF or process exit; pidfiles and logs are observed through filesystem events.
+
+A title-join regression waits on the title's real model-operation start and observes the public settle promise still pending before releasing the model. Routed non-turn calls in both backends pass their operation sink to core's shared invocation writer; a completed fast call retains its start/end pair and usage in the workspace timeline.
+
+A terminal request completes with its own answer or `PTY_EXIT`, not a prompt count. The signal regression asks bash for monitor mode and foreground-group ownership, interrupts `top` and observes its public exit, then stops and resumes a program that reports its own progress. The program blocks `SIGCONT` before READY and consumes it with `sigwait`: an early continuation cannot be lost before the blocking wait. `fg` is sent only after bash reports Stopped. The red mutation uses Bun's pre-created `Terminal` instance shape, which carries bytes but has no controlling terminal.
 
 ## Flakes
 

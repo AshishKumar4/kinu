@@ -1,7 +1,6 @@
 import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { expect } from 'bun:test';
-import { EventEmitter, once } from 'node:events';
-import { createTestActorsOver, createTestSql, readTranscriptRows, scratchPath, type HandClock, type TranscriptRow } from '@kinu.run/test-utils';
+import { AwaitedList, createTestActorsOver, createTestSql, readTranscriptRows, scratchPath, type HandClock, type TranscriptRow } from '@kinu.run/test-utils';
 import { MissionGovernor } from '@kinu.run/core';
 import { initWorkspaceSchema } from '@kinu.run/core';
 import { Database } from 'bun:sqlite';
@@ -96,8 +95,8 @@ export function tierAuthority(tierModel: () => string): () => ProfileCatalogEnve
   };
 }
 
-export function headStreamFrames(events: SessionEvent[]) {
-  return events.flatMap((event) => event.type === 'broadcast' && event.event.type === 'head_stream'
+export function headStreamFrames(events: AwaitedList<SessionEvent>) {
+  return events.items.flatMap((event) => event.type === 'broadcast' && event.event.type === 'head_stream'
     ? [v.parse(v.object({ headId: v.string(), kind: v.picklist(['text', 'reasoning']), delta: v.string() }), event.event)]
     : []);
 }
@@ -244,10 +243,10 @@ export function transcript(rt: CLIRuntime, sessionId = CHAT_SESSION_ID): Promise
 
 export function setup(answer = 'hello there', model?: LanguageModel, extra?: Partial<LocalAgentSessionOpts>) {
   const { db, rt } = workspaceRuntime();
-  const events: SessionEvent[] = [];
+  const events = new AwaitedList<SessionEvent>();
 
   const session = new LocalAgentSession({
-    rt, db, model: model ?? fakeModel(answer), onEvent: (event) => recordSessionEvent(events, event), noAutoEvolve: true,
+    rt, db, model: model ?? fakeModel(answer), onEvent: (event) => events.push(event), noAutoEvolve: true,
     ...extra,
   });
 
@@ -439,45 +438,20 @@ export function setupWithResolver(
   extra: Partial<LocalAgentSessionOpts> = {},
 ) {
   const { db, rt } = workspaceRuntime();
-  const events: SessionEvent[] = [];
+  const events = new AwaitedList<SessionEvent>();
 
   const session = new LocalAgentSession({
     rt, db, model: fakeModel('fallback'), modelResolver: resolver,
-    onEvent: (event) => recordSessionEvent(events, event), noAutoEvolve: true,
+    onEvent: (event) => events.push(event), noAutoEvolve: true,
     ...extra,
   });
 
   return { db, rt, session, events };
 }
 
-const eventSignals = new WeakMap<readonly SessionEvent[], EventEmitter>();
-
-function changesFor(events: readonly SessionEvent[]): EventEmitter {
-  let changes = eventSignals.get(events);
-
-  if (!changes) {
-    changes = new EventEmitter();
-    eventSignals.set(events, changes);
-  }
-
-  return changes;
-}
-
-export function recordSessionEvent(events: SessionEvent[], event: SessionEvent): void {
-  events.push(event);
-  const changes = changesFor(events);
-  queueMicrotask(() => changes.emit('changed'));
-}
-
-export async function waitFor(events: readonly SessionEvent[], pred: () => boolean): Promise<void> {
-  const changes = changesFor(events);
-
-  while (!pred()) await once(changes, 'changed');
-}
-
 /** The session has begun waiting on its background fibers; the grace, if any, is armed by now. */
-export function joining(events: readonly SessionEvent[]): Promise<void> {
-  return waitFor(events, () => events.some((e) => e.type === 'background' && e.event === 'bg_jobs_settling'));
+export function joining(events: AwaitedList<SessionEvent>): Promise<void> {
+  return events.until((frames) => frames.some((e) => e.type === 'background' && e.event === 'bg_jobs_settling'));
 }
 
 /** The grace armed on `clock` holds through its last millisecond and fires on it. */
@@ -545,12 +519,12 @@ export function jobColumn(db: Database, id: string, column: 'status' | 'error' |
 
 export const jobResult = (db: Database, id: string) => jobColumn(db, id, 'result');
 
-export const kinds = (events: SessionEvent[]) => events.map((e) => e.type);
+export const kinds = (events: AwaitedList<SessionEvent>) => events.items.map((e) => e.type);
 
-export const turnStarts = (events: SessionEvent[]) =>
-  events.filter((e): e is Extract<SessionEvent, { type: 'turn-start' }> => e.type === 'turn-start');
+export const turnStarts = (events: AwaitedList<SessionEvent>) =>
+  events.items.filter((e): e is Extract<SessionEvent, { type: 'turn-start' }> => e.type === 'turn-start');
 
-export const steerStatuses = (events: SessionEvent[]) => events.flatMap((event) =>
+export const steerStatuses = (events: AwaitedList<SessionEvent>) => events.items.flatMap((event) =>
   event.type === 'broadcast' && event.event.type === 'steer_status' ? [event.event] : []);
 
 export function isDynamicBlock(text: string): boolean {
@@ -623,5 +597,5 @@ export function runThenAnswerModel(confirmWith: 'text' | 'tool' = 'text'): Langu
   });
 }
 
-export const gateTurn = (events: SessionEvent[]) =>
+export const gateTurn = (events: AwaitedList<SessionEvent>) =>
   turnStarts(events).find((t) => t.event === 'completion_gate');

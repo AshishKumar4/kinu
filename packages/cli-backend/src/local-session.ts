@@ -2615,7 +2615,7 @@ export class LocalAgentSession {
         if (providerOptions) request.providerOptions = providerOptions;
 
         return (await generateReported(request, {
-          spend: { source: resolution.source, report: this.modelCallSink },
+          spend: { source: resolution.source, report: this.modelCallSink, operations: this.modelOperations },
           spec: resolution.model,
         })).text.trim();
       },
