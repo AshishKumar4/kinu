@@ -342,6 +342,8 @@ Test public behavior, not a source file's spelling. `test-census` follows source
 
 The reconnect snapshot tests call the real RPCs and mount `useKinu` behind the gallery transport. A held snapshot is released after newer reads land, and the client must retain the newer memory, executors, plan, tab presence and slates. Prompt prose hashes, decorative SVG/GIF checks and stylesheet ordering are not contracts. Section overrides, resource loading, preference precedence, permissions and data integrity are.
 
+A screenshot is evidence only when it is judged, not when a test counts the files it wrote. The account, sharing and preset gates keep their interaction, access and viewport/theme checks but write no uninspected image matrix. They await the actual page or control, not a 500 ms network-idle interval. On 2026-10-01 the same seven account/share tests took 112.98 s before and 57.68 s after this cut on the workstation; the three affected files passed all eleven tests.
+
 Tests await the public completion of the work they actually invoked, or the product's existing settle/close API. They do not invent fixture-ready events, notification counters or completion latches. Missing product completion is an API problem to report, not a reason to build a second scheduler in tests. UI renderers may use their existing public frame/flush completion; domain expiry uses a controlled clock, not an elapsed machine-speed cutoff.
 
 For an active operation, tests read the frontend's real session, daemon or terminal frames with the shared frame buffer fed directly by the public output callback. A model-operation start spans a whole streamed turn, not each SDK step. Restart probes cut an actual text stream instead of waiting on a fixture's prompt counter. Native process output completes with stdout EOF or process exit; pidfiles and logs are observed through filesystem events.
@@ -349,6 +351,8 @@ For an active operation, tests read the frontend's real session, daemon or termi
 A title-join regression waits on the title's real model-operation start and observes the public settle promise still pending before releasing the model. Routed non-turn calls in both backends pass their operation sink to core's shared invocation writer; a completed fast call retains its start/end pair and usage in the workspace timeline.
 
 A terminal request completes with its own answer or `PTY_EXIT`, not a prompt count. The signal regression asks bash for monitor mode and foreground-group ownership, interrupts `top` and observes its public exit, then stops and resumes a program that reports its own progress. The program blocks `SIGCONT` before READY and consumes it with `sigwait`: an early continuation cannot be lost before the blocking wait. `fg` is sent only after bash reports Stopped. The red mutation uses Bun's pre-created `Terminal` instance shape, which carries bytes but has no controlling terminal.
+
+A test browser closes its transport before its native process group is ended: a wedged browser cannot acknowledge a protocol close. The real-browser regression stops Chrome and proves a pending selector is rejected, every owned process ends and its profile is removed. While the sidebar's contended mount cause is investigated, failed gallery waits passively report their last native pointer target, coordinates and hit-test element alongside the screenshot; this is instrumentation, not a fixture-ready signal.
 
 ## Flakes
 
