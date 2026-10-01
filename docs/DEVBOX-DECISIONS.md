@@ -2456,6 +2456,126 @@ names later, another size, another internet setting, `attachNow()` and
 `start()` each start the box again. The agent's and the owner's words:
 `packages/cf-backend/tests/unit-sandbox-size-settings.test.ts`.
 
+D53. Five storage designs on one fixture, and the one to build (2026-10-01).
+The owner asked for today's chain beside four designs that keep the
+workspace on the container's own disk. Each ran on the D43 fixture (160 MiB
+and 64 MiB of random data and 200 small files: a 234,885,120-byte base),
+Medium on the `durable_object` policy with the internet disabled, on
+integration `8316a55e3` and image `c072f8f5…`, with `434b11d6…` as the
+changed image. All five ran at once, each on its own throwaway Worker,
+container and bucket, from 03:27 to 03:45Z; every one was deleted after (the
+`teardown` field of each record), and the 220 registry tags the snapshots
+left (two per save, D51) were deleted by hand.
+
+- A, today's chain mounted lazily: the product on the bench fixture
+  (`bench-artifacts/side-by-side/probe.ts` with `designA.ts`; runs
+  `sbs10010327nda`, `sbs10010327npa` for five fresh-box base saves,
+  `sbs10010336ndai` for the image change, `sbs10010333ndae` and
+  `sbs10010353ndafix` for the eviction).
+- B to E: a throwaway Worker over `ctx.container`
+  (`bench-artifacts/storage-designs/worker.ts`, `drive.ts`, run
+  `sd10010327`). B and C wake from the latest `snapshotContainer()`. C and D
+  back up with SDK 1.0's `DirectoryBackup`. B and E back up with the chain
+  packed from disk (`chain.mjs`: the chain's own mksquashfs base, a delta of
+  the 16 KiB blocks that changed, through `DevboxStoreGateway`, four 5 MiB
+  parts at once). E′ is E with zstd level 1 and sixteen 16 MiB parts
+  (`sd10010327ev`).
+
+A wake is the time from the start to a workspace the box can serve: A's
+restore probe (the caller's figure beside it), the first exec after a
+snapshot start (B, C), or a fresh start plus the restore (D, E). Medians with
+ranges, n=5 unless noted. Every read was byte-exact: 78 checks for B to E
+and E′, 13 for A.
+
+| 224 MiB workspace | A chain, lazy | B disk, snapshot, chain | C disk, snapshot, DirectoryBackup | D DirectoryBackup alone | E chain alone |
+| --- | --- | --- | --- | --- | --- |
+| Wake | 4,343 ms (3,193 to 5,135); caller 5,202 | 2,798 ms (926 to 3,531) | 820 ms (258 to 5,377) | 4,146 ms (1,533 to 5,191) | 3,736 ms (3,280 to 7,482) |
+| Wake after an image change | 1,956 ms (1,555 to 2,251, n=6); caller 2,646 | 4,560 ms (2,761 to 5,218) | 2,205 ms (1,718 to 3,939) | 1,401 ms (1,090 to 7,952) | 5,231 ms (4,187 to 6,383) |
+| Wake with the snapshot missing | no snapshot | 4,742 ms (3,128 to 8,565) | 3,407 ms (2,247 to 4,845) | no snapshot | no snapshot |
+| Cold read, 160 MiB, after a wake | 42.7 MiB/s (35.1 to 55.0) | 114 MiB/s (84 to 216) | 124 MiB/s (107 to 909) | 1,096 MiB/s | 1,111 MiB/s |
+| Cold read after a fallback | 69 MiB/s (46 to 84, n=6) | 1,260 MiB/s (n=10) | 1,050 MiB/s (n=10) | 1,060 MiB/s | 1,260 MiB/s |
+| Warm read | 1,096 MiB/s | 1,240 MiB/s | 1,356 MiB/s | 1,212 MiB/s | 1,127 MiB/s |
+| Small-edit save, n=9 | 4,502 ms; 69,632 to 598,016 B | 5,005 ms: chain 688 ms, 66,883 B; snapshot 4,272 ms, 317,181 B | 7,848 ms: backup 2,708 ms, 234,957,346 B; snapshot 4,254 ms, 66,043 B | 2,430 ms, 234,891,281 B | 657 ms, 66,883 B |
+| Base save, 224 MiB | 27,449 ms (25,852 to 31,579): pack 8.1 s, upload 15.3 s | 21,517 ms: chain 13,060 (pack 7.2 s), snapshot 7,691 | 11,766 ms: backup 2,653, snapshot 7,432 | 2,125 ms (2,016 to 5,082) | 11,945 ms (pack 6.2 s); E′ 4,288 ms |
+| Stored after 10 saves (a base, 9 edits; one sequence) | 235,483,136 B | 235,967,325 B, and 238,163,075 B of snapshots | 234,891,450 B (2,348,912,551 B kept), and 235,651,046 B of snapshots | 234,891,345 B (2,348,912,276 B kept) | 235,967,325 B |
+
+The snapshot missing: the platform refused the start in 144 to 334 ms
+(`Snapshot "<id>" was not found.`), and the R2 copy restored. D's wake is
+mostly the container's start (240 to 3,404 ms); its restore took 1,131 to
+2,063 ms. A's edit saves grow because its chunked delta carries every edit
+since the base. "Kept" is every DirectoryBackup left in place; the first
+figure deletes each one the next save supersedes, which
+`DirectoryBackup.delete` does. Snapshot bytes are the platform's: no delete,
+no list, 30 days from the last restore (D51).
+
+A again with D54, alone, on image `ea5d88ee…` (`sbs10010434ndafull2`, and
+`sbs10010433npafix` for five fresh-box base saves): wake 2,046 ms (1,840 to
+2,756; caller 2,578), 1,991 ms after a change to `c072f8f5…`, cold read
+48.7 MiB/s, small-edit save 5,682 ms (5,380 to 6,315, n=9), base save
+22,473 ms (21,324 to 27,477). The read-back D54 adds costs about 1.2 s a
+save. A's wake ran 2.0 s alone and 4.3 s beside four other designs, so a
+wake moves by 2 s with the hour and the load.
+
+A save interrupted by an eviction 1 s in, five rounds each:
+
+| Design | What the store held after | The next save |
+| --- | --- | --- |
+| A before D54 | rounds 1 to 4 of `sbs10010327nda` kept the previous state; round 5 named a delta that does not mount, and the box refused every start | in `sbs10010333ndae` it reported the workspace unchanged, and 4 of 5 crashes restored the state before the round |
+| A with D54 | 5 of 5 restored the round's new state (`sbs10010353ndafix`, `sbs10010434ndafull2`): the re-driven save waited 17 to 62 s for the evicted object's flush, then found nothing left to save | nothing left to save, 10 of 10 |
+| B, E (chain) | the chain's save is a container process: 5 of 5 finished after the object died, and 5 of 5 restored the new state | nothing left to save (E); a new snapshot (B) |
+| C, D (DirectoryBackup) | the backup ended with its object and nothing was recorded; 5 of 5 restored the backup before it; each round left one incomplete multipart upload, which R2 aborts after 7 days | worked: D 3.0 to 5.1 s, C 8.0 to 12.0 s |
+| B, C (snapshot) | the snapshot's id was lost with the object, 10 of 10; the container ran on, and the previous snapshot woke the box 10 of 10 | |
+
+The 2 GiB workspace (eight 256 MiB random files and 2,000 small files), one
+box per design. These are single observations, not settled figures: each
+save ran once (n=1), each restore twice, once onto the changed image and once
+onto the same one (n=2), A's lazy wake twice, and only the snapshot wakes five
+times. D55 repeats them at n≥5.
+
+| 2 GiB | A | B | C | D | E | E′ |
+| --- | --- | --- | --- | --- | --- | --- |
+| Base save | 197 s | 166 s: chain 143 s (pack 81, upload 56), snapshot 23 s | 58.6 s: backup 11.7 s, snapshot 46.8 s | 13.7 s | 136 s: pack 80, upload 51 | 24.6 s: pack 7.0, upload 11.8 |
+| Restore into a fresh container, image changed, then the same image | lazy: wake 2.7 s, the first 256 MiB at 47 to 68 MiB/s, all 2 GiB read in 28 to 53 s | 85.0 s, 83.2 s (download 54, 40; unsquashfs 28, 35) | 18.4 s, 12.0 s | 18.6 s, 11.8 s | 100.1 s, 102.6 s (download 68, 52; unsquashfs 25, 36) | 101.4 s, 52.0 s |
+| Snapshot wake, n=5 | | 1,842 ms (1,784 to 1,929) | 278 ms (211 ms to 351 s) | | | |
+
+C's first wake from its 2 GiB snapshot ran its first exec 351,380 ms after
+the start; the next four took 211 to 1,951 ms. Of 17 wakes from 2 GiB
+snapshots across this run and the two before it (`sd10010138`,
+`sd10010155bs`), two took 14.0 s and 351 s. The chain prototype downloads the
+whole archive, hashes it and then unpacks it, where DirectoryBackup streams,
+so B's and E's restores are not the fastest a chain from disk could reach.
+
+The code each design adds or deletes, estimated from line counts at
+`8316a55e3` (nothing was built):
+
+| | A | B | C | D | E |
+| --- | --- | --- | --- | --- | --- |
+| Deleted | none | about 3,300: the lazy attach in `snapshot-chain.ts` (about 750), `chunked-delta.ts` (744), `delta-index.ts` (113), the chunked stage (about 135), the store-mount routing (about 190), and the block-lower crate (1,362 lines of Rust); squashfuse, fuse-overlayfs and s3fs leave the image | about 5,400: the whole chain (`snapshot-chain.ts` 2,079, `chunked-delta.ts` 744, `delta-index.ts` 113, `store-gateway.ts` 299, `sync.ts` 435, `sync-main.ts` 137, `native-archives.ts` 70), the mount routing and the crate | about 5,400, as C | about 3,300, as B |
+| Added | none | about 650: a disk delta and block index, a full restore, the snapshot's record, wake and fallback, and a registry-tag cleanup outside the box | about 450: save, record, delete and restore with DirectoryBackup; the snapshot's record, wake and fallback | about 200 | about 400 |
+| Tests | | most of about 9,500 lines of chain tests rewritten | about 10,000 lines deleted, about 800 added | as C | as B |
+
+Recommendation, for the owner: D, DirectoryBackup alone. It is the SDK's own
+code and deletes about 5,400 lines and three FUSE programs. On this fixture
+its wake is in today's range (4.1 s; A 2.0 to 4.3 s), and then it reads at
+disk speed (1,096 against 43 to 49 MiB/s). Its saves take 2.1 to 2.4 s
+against 5.7 to 22 s. A new image costs it nothing, and an interrupted save
+fails cleanly. Its price is that every save uploads, and every wake
+downloads, the whole workspace: 13.7 s (n=1) and 12 to 19 s (n=2) at 2 GiB,
+where the chain wakes lazily in 2.7 s and then reads at 47 to 68 MiB/s (n=2). C puts
+snapshots in front of D for faster wakes (0.8 s at 224 MiB, 0.2 to 2 s at
+2 GiB). With them come saves three times as long (7.8 s against 2.4 s), an
+image-bound copy that cannot be listed or deleted and leaves two registry
+tags per save against the account's 50 GB image limit, an id lost on
+eviction, and one wake of 351 s. B and E keep the chain's code and restore a
+2 GiB workspace in 83 to 103 s against D's 12 to 19 s (n=2 each). Nothing is built
+until the owner chooses; A stays, with D54.
+
+The owner's answer (2026-10-01): no compromise on performance for big
+workspaces, and the whole filesystem kept where possible, not only
+`/workspace`, so installed packages and setup survive. That rules D out (it
+downloads the whole workspace on every wake) and asks for more than any of
+the five; D55 takes it up.
+
 D54. One commit at a time in a container, and a record names only a layer
 that reads back (2026-10-01). D53's eviction rounds on today's chain (run
 `sbs10010327nda`, integration `8316a55e3`, image `c072f8f5…`) evicted the
