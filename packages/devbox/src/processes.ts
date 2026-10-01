@@ -29,7 +29,7 @@ export interface ProcessRecord {
 // An exec whose answer is lost may or may not have spawned the wrapper, so one symlink decides the
 // launch: the wrapper makes `launch -> launched` before anything runs, and a caller that finds no pid
 // and no exit makes `launch -> unlaunched`, after which nothing runs (D48). The wrapper enters the cwd
-// itself, as 0.12.9's session shell did, so a missing one is the launch's own recorded failure.
+// itself, so a missing one is the launch's own recorded failure.
 const RUN = `dir=$1; cwd=$2; shift 2
 ln -s launched "$dir/launch" 2>/dev/null || exit 0
 if ! cd -- "$cwd" 2>/dev/null; then
@@ -37,19 +37,30 @@ if ! cd -- "$cwd" 2>/dev/null; then
   echo 1 >"$dir/exit.tmp" && mv "$dir/exit.tmp" "$dir/exit"
   exit 0
 fi
-setsid sh -c 'echo "$$" >"$0/pid"; exec "$@"' "$dir" "$@" >"$dir/stdout.log" 2>"$dir/stderr.log"
+setsid sh -c 'echo "$$ $(cat /proc/sys/kernel/random/boot_id)" >"$0/pid"; exec "$@"' "$dir" "$@" >"$dir/stdout.log" 2>"$dir/stderr.log"
 echo "$?" >"$dir/exit.tmp" && mv "$dir/exit.tmp" "$dir/exit"`;
 
-/** Exits 0 when the launch in `$1` never ran: nothing claimed it, so this claims it for nobody. */
+/** `$1/pid`'s pid if alive and from this boot (an old record: if written since boot). */
+const LIVE = `live() {
+  [ -f "$1/pid" ] || return 1
+  read -r p b < "$1/pid"
+  if [ -n "$b" ]; then [ "$b" = "$(cat /proc/sys/kernel/random/boot_id)" ] || return 1
+  else [ "$(stat -c %Y "$1/pid")" -ge "$(awk '/^btime/ {print $2}' /proc/stat)" ] || return 1
+  fi
+  kill -0 "$p" 2>/dev/null && echo "$p"
+}`;
+
+/** Exits 0 when the launch in `$1` never ran, claiming it for nobody. */
 const UNLAUNCH = `[ -f "$1/pid" ] || [ -f "$1/exit" ] || ln -s unlaunched "$1/launch" 2>/dev/null
 [ "$(readlink "$1/launch")" = unlaunched ]`;
 
-const STATUS = `for dir in "$@"; do
+const STATUS = `${LIVE}
+for dir in "$@"; do
   [ -f "$dir/process.json" ] || continue
   if [ -f "$dir/exit" ]; then state="exit $(cat "$dir/exit")"
   elif [ "$(readlink "$dir/launch")" = unlaunched ]; then state=unlaunched
   elif [ ! -f "$dir/pid" ]; then state=starting
-  elif kill -0 "$(cat "$dir/pid")" 2>/dev/null; then state="running $(cat "$dir/pid")"
+  elif p=$(live "$dir"); then state="running $p"
   else state=lost
   fi
   printf '%s\\n' "$state"
@@ -78,7 +89,7 @@ export class Processes {
 
         if (held === undefined) return yield* Effect.fail(made.failure);
 
-        // A launch with no pid yet is live only if its wrapper claimed it; one nobody claimed never ran.
+        // A launch with no pid yet is live only if its wrapper claimed it.
         if (held.status === 'running' || (held.status === 'starting' && !(yield* this.#unlaunched(dir)))) return held;
         yield* attempt('file', () => this.#files.remove(dir, { recursive: true }));
         yield* attempt('file', () => this.#files.mkdir(dir));
@@ -135,7 +146,7 @@ export class Processes {
     return settle(Effect.gen({ self: this }, function* () {
       const dir = yield* directory(id);
 
-      // TERM, then KILL whatever of the group outlives the grace, as 0.12.9 did; it returns when
+      // TERM, then KILL whatever of the group outlives the grace; it returns when
       // the group has exited, not at a deadline. `kill -0 -- -N` is a usage error in dash.
       const ended = yield* attempt('process', () => this.container.exec(['/bin/sh', '-c', `dir=$1
 [ -f "$dir/process.json" ] || exit 0
@@ -143,8 +154,8 @@ set -- "$dir"
 ${UNLAUNCH} && exit 0
 while [ ! -f "$dir/pid" ] && [ ! -f "$dir/exit" ]; do sleep 0.1; done
 [ -f "$dir/exit" ] && exit 0
-pid=$(cat "$dir/pid")
-kill -0 "$pid" 2>/dev/null || exit 0
+${LIVE}
+pid=$(live "$dir") || exit 0
 kill -s TERM -- "-$pid" || exit $?
 waited=0
 while kill -s 0 -- "-$pid" 2>/dev/null; do
