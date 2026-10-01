@@ -99,9 +99,16 @@ export interface AgentToolAnswer {
   readonly dynamic: DynamicContext;
 }
 
-export type AgentTrace =
-  | { readonly kind: 'step'; readonly sequence: number; readonly step: HeadStep }
-  | { readonly kind: HeadStreamKind; readonly delta: string };
+export interface AgentTrace {
+  readonly kind: 'step';
+  readonly sequence: number;
+  readonly step: HeadStep;
+}
+
+export interface AgentHeadDelta {
+  readonly kind: HeadStreamKind;
+  readonly delta: string;
+}
 
 export interface AgentTurnEnd extends Omit<HeadReport, 'errorMessage'> {
   readonly activity: readonly AgentTurnActivity[];

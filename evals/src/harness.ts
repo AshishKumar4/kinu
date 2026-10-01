@@ -17,7 +17,17 @@ import { redact } from './redact';
 import { cutButCompleted, measure, toTranscript } from './transcript';
 import { TrialTimeline } from './timeline';
 import { EvalVerifier } from './verifier';
-import { repliesTo, settle } from './workspace-completion';
+import { answered, repliesTo, settle, TurnWatch, WorkspaceHang } from './workspace-completion';
+
+/** How long a trial whose workspace keeps streaming may go without a line before it says so. */
+const STREAMING_LINE_MS = 60_000;
+
+/** Who spoke in a room the session heard outside the trial's own turns (`KinuPublicSession.onHeard`). */
+function speakerOf(room: string | null, type: string): string {
+  if (type.startsWith('head_')) return 'a head';
+
+  return room === null ? 'a turn the product opened' : `helper ${room}`;
+}
 
 /**
  * Trials of one process opening their workspaces at once, at most. Opening is where a trial makes its new connections
@@ -144,21 +154,29 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
 
   const before = new Set((await timeline.span('ledger', () => session.runEvents())).map((event) => event.runId));
   const startedAt = Date.now();
+  const watch = new TurnWatch(session);
   let lost: Error | undefined;
 
   try {
-    await timeline.span('prompt', () => session.prompt(turn.prompt));
+    try {
+      await timeline.span('prompt', () => answered(watch, session.prompt(turn.prompt)));
+    } catch (error) {
+      // A socket the deployment drops loses the turn's stream, not the turn: the run goes on up there
+      // and the ledger records its end. The history below says whether the prompt ever arrived.
+      if (error instanceof WorkspaceHang || !renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER)) throw error;
+      lost = error instanceof Error ? error : new Error(renderThrownChain({ cause: error }));
+    }
+
+    await timeline.span('settle', () => settle(watch, (busy, events) => {
+      timeline.mark('poll', { busy });
+      stepped(events.filter((event) => event.type === 'step_finish' && !before.has(event.runId)).length);
+    }));
   } catch (error) {
-    // A socket the deployment drops loses the turn's stream, not the turn: the run goes on up there
-    // and the ledger records its end. The history below says whether the prompt ever arrived.
-    if (!renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER)) throw error;
-    lost = error instanceof Error ? error : new Error(renderThrownChain({ cause: error }));
+    if (!(error instanceof WorkspaceHang)) throw error;
+
+    return { outcome: { status: 'hung', message: redact(error.message) }, checks: [], turnWallMs: Date.now() - startedAt, verificationWallMs: 0 };
   }
 
-  await timeline.span('settle', () => settle(session, (busy, events) => {
-    timeline.mark('poll', { busy });
-    stepped(events.filter((event) => event.type === 'step_finish' && !before.has(event.runId)).length);
-  }));
   const turnWallMs = Date.now() - startedAt;
   const [events, history] = await timeline.span('read', () => Promise.all([session.runEvents(), session.history()]));
 
@@ -237,9 +255,18 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
       const startedAt = Date.now();
       const timeline = new TrialTimeline();
 
-      // A line per step, straight to stdout: a run's reader sees every trial move, and the longest silence is a step.
+      // A line per step, straight to stdout: a run's reader sees every trial move, and the longest silence is a step, or a
+      // minute of one that streams longer. The deploy ends a run that writes nothing for 480 s, and a step streaming for
+      // minutes is the workspace working.
+      let saidAt = Date.now();
+
       const say = (line: string): void => {
+        saidAt = Date.now();
         process.stdout.write(`[evals] ${task.id} | ${input.model} | ${input.arm} | trial ${String(input.trial)}: ${line}\n`);
+      };
+
+      const streaming = (who: string): void => {
+        if (Date.now() - saidAt >= STREAMING_LINE_MS) say(`${who} still streaming`);
       };
 
       let turnNumber = 0;
@@ -278,6 +305,14 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
 
               if (type === 'finish-step') say(`turn ${String(turnNumber)}, step ${String(steps += 1)}`);
               else if (type.startsWith('closed')) say(`the workspace socket ${type}`);
+              else streaming(`turn ${String(turnNumber)}`);
+            };
+
+            created.onHeard = (room, type) => {
+              const who = speakerOf(room, type);
+
+              if (type === 'finish-step' || type === 'head_activity') say(`${who}, step done`);
+              else streaming(who);
             };
 
             const arm: EvalArm | undefined = ARMS.find((declared) => declared.id === input.arm);

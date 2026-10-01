@@ -13,7 +13,7 @@ import {
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import { present } from '@kinu.run/test-utils';
-import { answeringGateway } from './helpers/platform-gateway';
+import { answeringGateway, chatCompletion, openingOf, stubAiBinding } from './helpers/platform-gateway';
 import { KINU_TIMER_JOB, TERMINAL_RETRY_JOB, type WakeJob } from '../src/wake-jobs';
 
 /** Journal, job registry and search ledger are actor-private: seeds must carry the owner the agent resolves. */
@@ -297,6 +297,40 @@ describe('the workspace keeps exactly one wake per job', () => {
     await agent.terminalRetryPass();
 
     expect(armedWakes(db)).toEqual([]);
+  });
+
+  // eval-request-logs-8-0f9ck0, production 2f660875cc, 2026-10-01: a restart at 01:22:13Z re-drove the workspace's search
+  // job (fiber.job_lane_redriven), and from then until the workspace was deleted at 01:33:54Z the object took an alarm a
+  // second: 2 a minute before the re-drive, 60 after. A re-drive writes the job's next-attempt instant before it runs, for
+  // the activation after a death, and every pass armed the wake at that instant while this activation drove the job.
+  test('a re-driven job owes the workspace no wake while it runs', async () => {
+    const task = 'Name one way to tokenize faster.';
+
+    // The search's model calls wait on the gateway until their signal stops them; the cancel's wake turn is answered.
+    const { agent, db } = gatewayWorkspace(stubAiBinding((run) => openingOf(run).includes(task)
+      ? new Promise<Response>((_resolve, reject) => { run.signal?.addEventListener('abort', () => { reject(run.signal?.reason); }); })
+      : chatCompletion(run, 'The search was cancelled.')));
+
+    // Started by a dead activation: this one's first pass re-drives it.
+    jobsOver(db).create({
+      id: 'bgjob-search', kind: 'agents', workMode: 'build', now: Date.now() - 60_000, label: 'search: tokenize faster',
+      input: JSON.stringify({ action: 'swarm', task, preset: 'ideate', branches: 1, depth: 1 }),
+    });
+    await agent.activateActor();
+    await agent.terminalRetryPass();
+    const redriven = present(jobsOver(db).get('bgjob-search'), 'the re-driven job');
+    expect(redriven).toMatchObject({ status: 'running', resumeAttempts: 1 });
+
+    // The next wake's pass, a second after the instant the re-drive wrote.
+    const passAt = present(redriven.resumeAfter, "the re-drive's next-attempt instant") + 1_000;
+    setSystemTime(new Date(passAt));
+    await agent.terminalRetryPass();
+
+    // A wake armed at or before the pass fires at once, and its pass arms it again.
+    expect(armedWakes(db).filter((wake) => wake.time <= passAt)).toEqual([]);
+
+    expect(await agent.cancelBackgroundJob('bgjob-search')).toEqual({ ok: true });
+    await joinHarnessFibers();
   });
 
   test('a failed re-arm leaves the previous wake in place', async () => {

@@ -7,7 +7,7 @@ import type { ESTree } from "@oxlint/plugins";
  * Reject elapsed timers that end LLM, turn, delegation, swarm, head, job, or compaction work.
  *
  * AGENTS.md requires work to end on provider completion, a definitive failure, or explicit
- * cancellation. The deleted `BRANCH_RPC_TIMEOUT_MS` family made a branch failure silent: a timer
+ * cancellation; a silence is a definitive failure (owner, 2026-10-01). The deleted `BRANCH_RPC_TIMEOUT_MS` family made a branch failure silent: a timer
  * rejected the RPC, MCTS stored zero, and convergence selected from a false signal.
  *
  * The exported scope is the policy boundary. Transport, scripts, and process-liveness code have
@@ -21,7 +21,9 @@ import type { ESTree } from "@oxlint/plugins";
  *   2. `AbortSignal.timeout(ms)` placed directly in a `Promise.race` array.
  *
  * A callback that only resolves bounds a wait without ending live work. An opt-in timer with a
- * same-value no-timer branch is also outside the rule because the caller selected that bound.
+ * same-value no-timer branch is also outside the rule because the caller selected that bound. A
+ * silence bound is not a deadline: its delay is `silenceBoundMs('<id>')`, typed to admit only a catalog
+ * fact declared `bounds: 'silence'`, which ends only work that stopped sending. Any other number is one.
  *
  * Deliberate limits: this does not infer an ending through an identifier callback, does not catch a
  * `Date.now()` delta checked elsewhere, and does not follow an `AbortSignal.timeout` binding into a
@@ -154,6 +156,14 @@ function mentionsDelay(test: ESTree.Expression, delayName: string): boolean {
   return test.type === "UnaryExpression" && mentionsDelay(test.argument, delayName);
 }
 
+/** `silenceBoundMs('<id>')`, whose parameter type admits only a fact the catalog declares a silence bound. */
+function isSilenceBound(delay: ESTree.Node | undefined): boolean {
+  if (delay?.type !== "CallExpression" || delay.callee.type !== "Identifier"
+    || delay.callee.name !== "silenceBoundMs" || delay.arguments.length !== 1) return false;
+  const [id] = delay.arguments;
+  return id?.type === "Literal" && typeof id.value === "string";
+}
+
 /** A return branch provides the no-timer alternative to an opt-in deadline. */
 function returnsWithoutArmingTimer(node: ESTree.Statement | null): boolean {
   if (node?.type === "ReturnStatement") return true;
@@ -249,7 +259,7 @@ export const noElapsedWorkDeadlineRule = defineRule({
           || callback.body === null) {
           return;
         }
-        if (!endsWork(callback.body) || hasNoTimerAlternative(node)) {
+        if (!endsWork(callback.body) || hasNoTimerAlternative(node) || isSilenceBound(node.arguments[1])) {
           return;
         }
 

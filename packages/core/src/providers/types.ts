@@ -132,8 +132,10 @@ export interface ProviderWaitInfo {
   /** 1-based refused attempt; 0 for a `cooldown` join. */
   readonly attempt: number;
   readonly status?: number;
-  readonly source: 'header' | 'backoff' | 'cooldown';
+  readonly source: (typeof PROVIDER_WAIT_SOURCES)[number];
 }
+
+export const PROVIDER_WAIT_SOURCES = ['header', 'backoff', 'cooldown', 'stall'] as const;
 
 export interface ProviderDeps {
   env: ProviderEnv;

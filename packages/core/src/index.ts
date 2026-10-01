@@ -47,7 +47,7 @@ export { initAllTables, initWorkspaceSchema, initActorStateSchema, type Workspac
 
 export { resetGuardedExec, StoragePredatesResetError } from './state/store-reset';
 
-export { initUserTables, PROFILE_CATALOG_CONFIG_KEY } from './state/user-schema';
+export { initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS, type WorkspaceKeyedRows } from './state/user-schema';
 
 export {
   DEFAULT_SOUL_MD,
@@ -1400,11 +1400,13 @@ export {
 
 // Platform facts: prose cites an entry by its id and never restates the number.
 export {
+  BOUNDS_KINDS,
   PLATFORM_CATALOG,
   PLATFORM_FACT_IDS,
   injectableFaults,
   platformFact,
   platformFactEntries,
+  silenceBoundMs,
   type BoundsKind,
   type EvidenceLabel,
   type LimitUnit,
@@ -1414,6 +1416,7 @@ export {
   type PlatformMeasurement,
   type PlatformObservable,
   type PlatformQuantity,
+  type SilenceBoundId,
 } from './platform-catalog';
 
 // Safety
@@ -2532,5 +2535,5 @@ export { MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId } from './
 
 export type {
   AgentTurnActivity, AgentCaptureDelta, AgentTurnOpening, AgentRecovery, AgentReview, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
-  AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn, StoredRow, TurnRequestAt,
+  AgentToolCall, AgentToolDescriptor, AgentHeadDelta, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn, StoredRow, TurnRequestAt,
 } from './subordinates/agent-isolate';

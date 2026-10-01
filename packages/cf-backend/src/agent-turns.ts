@@ -11,7 +11,7 @@ import {
   prepareHostedTurn, settleHostedTask,
   type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn,
 } from './hosted-actors';
-import type { AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn, StoredRow } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn, StoredRow } from '@kinu.run/core';
 
 export interface AgentTurnsDeps {
   readonly sql: SqlExecutor;
@@ -308,10 +308,14 @@ export class AgentTurns {
   }
 
   async trace(actorId: string, turnId: string, event: AgentTrace): Promise<void> {
+    await this.turn(actorId, turnId).request.run?.inference.reportStep?.(event.sequence, event.step);
+  }
+
+  /** Drained with no reader too: the step record waits on it. */
+  async traceStream(actorId: string, turnId: string, deltas: ReadableStream<AgentHeadDelta>): Promise<void> {
     const inference = this.turn(actorId, turnId).request.run?.inference;
 
-    if (event.kind === 'step') await inference?.reportStep?.(event.sequence, event.step);
-    else inference?.reportDelta?.(event.kind, event.delta);
+    for await (const { kind, delta } of deltas) inference?.reportDelta?.(kind, delta);
   }
 
   async resume(actorId: string, turnId: string) {

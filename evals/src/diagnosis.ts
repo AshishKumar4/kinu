@@ -5,7 +5,7 @@ import { redact } from './redact';
 import type { Assertion } from './results';
 
 export const SIMPLE_CAUSES = ['agent:spec-misread', 'agent:gave-up/incomplete', 'agent:wrong-answer',
-  'product:tool-error', 'product:refusal', 'product:reset/stream-drop', 'provider:refused', 'provider:throttled', 'harness'] as const;
+  'product:tool-error', 'product:refusal', 'product:reset/stream-drop', 'product:hang', 'provider:refused', 'provider:throttled', 'harness'] as const;
 
 export const ORCHESTRATION_CAUSES = ['idle helpers', 'duplicated work', 'lead did the delegated work', 'never waited for a report'] as const;
 
@@ -31,6 +31,11 @@ export type Diagnosis = v.InferOutput<typeof ReplySchema>;
 
 export type ReviewTrial = { id: string; insights: TrialInsights };
 
+/** The harness ended a turn as `hung` only when its workspace stayed busy and silent, so that cause is computed. */
+function hung(insights: TrialInsights | undefined): boolean {
+  return insights?.facts.some((fact) => fact.kind === 'turn-outcome' && v.is(v.object({ status: v.literal('hung') }), fact.data)) === true;
+}
+
 /** The schema covers exactly the failed trials, without inventing tools or source lines. */
 export function parseDiagnosis(text: string, verdict: EvalVerdict, reviews: readonly ReviewTrial[]): Diagnosis {
   const expected = new Map(reviews.map((review) => [review.id, review.insights]));
@@ -55,6 +60,8 @@ export function parseDiagnosis(text: string, verdict: EvalVerdict, reviews: read
         return data.success && data.output.tool === tool;
       });
     }), 'the diagnosis names a tool that trial did not call'),
+    v.check((diagnosis) => diagnosis.trials.every((trial) => (trial.cause.kind === 'product:hang') === hung(expected.get(trial.id))),
+      'a trial is a product hang exactly when one of its turns hung'),
     v.check((diagnosis) => diagnosis.trials.every((trial) => {
       const observed = expected.get(trial.id);
 

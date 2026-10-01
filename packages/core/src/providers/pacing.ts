@@ -59,12 +59,15 @@ export class ProviderPacer {
     }
   }
 
-  /** Record a host cooldown of `ms`; the deadline only moves forward. */
-  declareWait(host: string, ms: number, reason?: string): void {
-    if (!(ms > 0)) return;
+  /** Record a cooldown of `ms`; its deadline, null if a later one holds. */
+  declareWait(host: string, ms: number, reason?: string): number | null {
+    if (!(ms > 0)) return null;
     const untilMs = this.now() + ms;
 
-    if (untilMs > (this.cooldowns.get(host)?.untilMs ?? 0)) this.cooldowns.set(host, { untilMs, reason });
+    if (untilMs <= (this.cooldowns.get(host)?.untilMs ?? 0)) return null;
+    this.cooldowns.set(host, { untilMs, reason });
+
+    return untilMs;
   }
 }
 

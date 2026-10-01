@@ -30,7 +30,7 @@ export interface ShellSession {
   readonly home: string;
   readonly userRoots: () => readonly string[];
   /** Behind earlier calls, so a review sees their `cd`s. */
-  serial<R>(call: () => Promise<R>): Promise<R>;
+  serial<R>(call: () => Promise<R>, detach?: AbortSignal): Promise<R>;
   /** Where a call without its own `cwd` starts. */
   at(): Promise<ShellCwd>;
   /** A foreground call without a `cwd` exited. */
@@ -577,6 +577,15 @@ export function sessionAt(home: string, cwd: string | undefined): ShellCwd {
   return at === null ? { cwd: home, home, mayBeUsers: true } : { cwd: at, home, mayBeUsers: false };
 }
 
+function aborted(signal: AbortSignal): Promise<void> {
+  const fired = Promise.withResolvers<void>();
+
+  if (signal.aborted) fired.resolve();
+  else signal.addEventListener('abort', () => { fired.resolve(); }, { once: true });
+
+  return fired.promise;
+}
+
 export function createShellSession({ home, userRoots, keepsCwd, stored }: ShellSessionOptions): ShellSession {
   const atHome: ShellCwd = { home, cwd: home, mayBeUsers: false };
   let known: ShellCwd | null = keepsCwd && stored !== undefined ? null : atHome;
@@ -585,9 +594,9 @@ export function createShellSession({ home, userRoots, keepsCwd, stored }: ShellS
   return {
     home,
     userRoots,
-    serial<R>(call: () => Promise<R>): Promise<R> {
+    serial<R>(call: () => Promise<R>, detach?: AbortSignal): Promise<R> {
       const next = tail.then(call, call);
-      tail = next;
+      tail = detach === undefined ? next : Promise.race([next, aborted(detach)]);
 
       return next;
     },

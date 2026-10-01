@@ -2,6 +2,7 @@
 
 import { withToolResultImages } from './providers/tool-result-images';
 import {
+  APICallError,
   NoOutputGeneratedError,
   streamText,
   type ModelMessage,
@@ -383,8 +384,7 @@ class ProviderCall {
       }
 
       case 'error':
-        this.streamError = chunk.error;
-        this.streamedBeforeError = this.stepContent.length > 0 || this.dispatchedCalls.size > 0;
+        this.failed({ cause: chunk.error });
 
         return null;
 
@@ -410,6 +410,11 @@ class ProviderCall {
       default:
         return null;
     }
+  }
+
+  failed({ cause }: { readonly cause: unknown }): void {
+    this.streamError = cause;
+    this.streamedBeforeError = this.stepContent.length > 0 || this.dispatchedCalls.size > 0;
   }
 
   private toolDuration(toolCallId: string): { durationMs: number } | undefined {
@@ -777,12 +782,12 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       }
     } catch (err) {
       // The signal is authoritative: a provider may throw its abort reason before `onAbort` runs.
-      if (!opts.signal?.aborted) {
+      if (opts.signal?.aborted) call.interrupted = true;
+      else if (APICallError.isInstance(err)) call.failed({ cause: err });
+      else {
         operation.failed({ cause: err });
         throw err;
       }
-
-      call.interrupted = true;
     } finally {
       // Drained to its end before the turn settles, so the persisted answer is not short of what the client saw.
       await observed;
