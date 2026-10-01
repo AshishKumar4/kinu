@@ -60,8 +60,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   answerMetadata(turnId: string, narration: readonly string[]) { return this.answers.answerMetadata(turnId, narration); }
   finishTurn(turnId: string, end: AgentTurnEnd) { return this.answers.finishTurn(turnId, end); }
   failTurn(turnId: string, failure: string) { return this.answers.failTurn(turnId, failure); }
-  getAuthHeaders(key: string, opts?: AuthRequest) { return this.answers.getAuthHeaders(key, opts); }
-  getCredentialBaseURL(key: string) { return this.answers.getCredentialBaseURL(key); }
+  getAuth(key: string, opts?: AuthRequest) { return this.answers.getAuth(key, opts); }
   listCredentials() { return this.answers.listCredentials(); }
   relayDevice(provider: RelayedProvider) { return this.answers.relayDevice(provider); }
   relayModelCall(deviceId: string, callId: string, request: Request) { return this.answers.relayModelCall(deviceId, callId, request); }
@@ -125,8 +124,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   answerMetadata(turnId: string, narration: readonly string[]) { return this.host().answerMetadata(turnId, narration); }
   finishTurn(turnId: string, end: AgentTurnEnd) { return this.host().finishTurn(turnId, end); }
   failTurn(turnId: string, failure: string) { return this.host().failTurn(turnId, failure); }
-  getAuthHeaders(key: string, opts?: AuthRequest) { return this.host().getAuthHeaders(key, opts); }
-  getCredentialBaseURL(key: string) { return this.host().getCredentialBaseURL(key); }
+  getAuth(key: string, opts?: AuthRequest) { return this.host().getAuth(key, opts); }
   listCredentials() { return this.host().listCredentials(); }
   relayDevice(provider: RelayedProvider) { return this.host().relayDevice(provider); }
   relayModelCall(deviceId: string, callId: string, request: Request) { return this.host().relayModelCall(deviceId, callId, request); }

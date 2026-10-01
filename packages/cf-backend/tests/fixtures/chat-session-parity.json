@@ -1917,7 +1917,16 @@
       },
       {
         "socket": "B",
-        "type": "cf_agent_stream_resume_none"
+        "type": "cf_agent_stream_pending"
+      },
+      {
+        "socket": "B",
+        "type": "cf_agent_stream_pending"
+      },
+      {
+        "socket": "B",
+        "type": "cf_agent_stream_resuming",
+        "id": "<uuid#14>"
       },
       {
         "socket": "B",
@@ -1929,78 +1938,9 @@
       },
       {
         "socket": "B",
-        "type": "cf_agent_use_chat_response",
-        "id": "<uuid#14>",
-        "done": false,
-        "body": {
-          "type": "start",
-          "messageId": "<uuid#11>"
-        }
-      },
-      {
-        "socket": "B",
         "type": "steer_status",
         "steerId": "input-PARITY-FOUR-STEER",
         "status": "landed"
-      },
-      {
-        "socket": "B",
-        "type": "cf_agent_use_chat_response",
-        "id": "<uuid#14>",
-        "done": false,
-        "body": {
-          "type": "start-step"
-        }
-      },
-      {
-        "socket": "B",
-        "type": "cf_agent_use_chat_response",
-        "id": "<uuid#14>",
-        "done": false,
-        "body": {
-          "type": "text-start",
-          "id": "txt-0"
-        }
-      },
-      {
-        "socket": "B",
-        "type": "cf_agent_use_chat_response",
-        "id": "<uuid#14>",
-        "done": false,
-        "body": {
-          "type": "text-delta",
-          "id": "txt-0",
-          "delta": "echo:helloPARITY-FOUR-STEER"
-        }
-      },
-      {
-        "socket": "B",
-        "type": "cf_agent_use_chat_response",
-        "id": "<uuid#14>",
-        "done": false,
-        "body": {
-          "type": "text-end",
-          "id": "txt-0"
-        }
-      },
-      {
-        "socket": "B",
-        "type": "cf_agent_use_chat_response",
-        "id": "<uuid#14>",
-        "done": false,
-        "body": {
-          "type": "finish-step"
-        }
-      },
-      {
-        "socket": "B",
-        "type": "cf_agent_use_chat_response",
-        "id": "<uuid#14>",
-        "done": false,
-        "body": {
-          "type": "finish",
-          "finishReason": "stop"
-        }
       },
       {
         "socket": "B",

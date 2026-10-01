@@ -96,9 +96,8 @@ function registryStub(): CloudWorkspaceRegistry {
   return {
     ...NO_RELAY_MACHINE,
     async getProfileCatalog(_caller: UserCaller) { return DEFAULT_ENVELOPE; },
-    async getAuthHeaders(_caller: UserCaller) { return { authorization: 'Bearer token' }; },
-    async getCredentialBaseURL(_caller: UserCaller) {
-      return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
+    async getAuth(_caller: UserCaller) {
+      return { headers: { authorization: 'Bearer token' }, baseURL: 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1' };
     },
     async listCredentials(_caller: UserCaller) { return []; },
     async ensureWorkspaceCapability() {},

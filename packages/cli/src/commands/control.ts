@@ -77,7 +77,6 @@ export async function modelCommand(name: string, spec: string | undefined, opts:
         model: opts.model,
         baseUrl: opts.baseUrl,
         auth: opts.auth,
-        agentName: target.localName,
       });
 
       const catalog = await loadModelCatalog(() => configured.resolver.listModels());

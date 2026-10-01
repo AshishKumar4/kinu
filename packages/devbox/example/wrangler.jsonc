@@ -4,7 +4,7 @@
   "$schema": "../../../node_modules/wrangler/config-schema.json",
   "name": "kinu-devbox-example",
   "main": "worker.ts",
-  "compatibility_date": "2026-09-28",
+  "compatibility_date": "2026-09-30",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "observability": { "enabled": true },
@@ -19,7 +19,7 @@
     {
       "class_name": "ExampleBox",
       "scheduling_policy": "durable_object",
-      "images": { "devbox": { "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:ef5580e6959f839ca307df020c778f616c05769aaf2f7354f448e6a1175326e1" } }
+      "images": { "devbox": { "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-devbox-native@sha256:c072f8f5755700d26bc962e2eefa9fa8daeb8d4da498ce04440b54a5adcfb5cd" } }
     }
   ],
   "r2_buckets": [{ "binding": "WORKSPACES", "bucket_name": "kinu-devbox-example" }]

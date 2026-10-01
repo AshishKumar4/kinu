@@ -149,7 +149,7 @@ interface ClaudeCodeHeaderInput {
   readonly authorization: string;
   readonly version: string;
   readonly betas: readonly string[];
-  readonly sessionId: string | undefined;
+  readonly sessionId: string;
 }
 
 function claudeCodeHeaders(input: ClaudeCodeHeaderInput) {
@@ -157,7 +157,7 @@ function claudeCodeHeaders(input: ClaudeCodeHeaderInput) {
     Accept: 'application/json',
     'Content-Type': 'application/json',
     'User-Agent': `claude-cli/${input.version} (external, cli)`,
-    ...(input.sessionId !== undefined && { 'X-Claude-Code-Session-Id': input.sessionId }),
+    'X-Claude-Code-Session-Id': input.sessionId,
     'X-Stainless-Arch': STAINLESS_ARCH.get(HOST.arch) ?? `other::${HOST.arch}`,
     'X-Stainless-Lang': 'js',
     'X-Stainless-OS': STAINLESS_OS.get(HOST.platform) ?? `Other::${HOST.platform}`,
@@ -373,7 +373,6 @@ interface ClaudeCall {
   readonly modelId: string;
   readonly version: ClaudeCodeVersion;
   readonly sessionId: string;
-  readonly headerSessionId: string | undefined;
 }
 
 interface SdkRequest {
@@ -444,7 +443,7 @@ async function sendClaudeCode(call: ClaudeCall, request: SdkRequest, auth: AuthR
   const { body } = request;
   const version = call.version.current();
   const betas = claudeCodeBetas(body, request.betas);
-  const headers = claudeCodeHeaders({ authorization: authorizationOf(auth), version, betas, sessionId: call.headerSessionId });
+  const headers = claudeCodeHeaders({ authorization: authorizationOf(auth), version, betas, sessionId: call.sessionId });
   const paid = auth.credentialKey ?? CLAUDE_CRED_KEY;
   const transport = call.deps.fetch ?? fetch;
 
@@ -531,9 +530,7 @@ export function createClaudeProvider(): ModelProvider {
       return settleSync(RETIRED_CLI_MODELS.has(modelId)
         ? Effect.fail(new KinuError('bad_input', `Claude has no model ${modelId}: that name came from the retired claude binary. Pick a Claude model with /model.`))
         : Effect.sync(() => {
-          const affinity = deps.sessionAffinity;
-          const headerSessionId = affinity === undefined ? undefined : claudeSessionId(affinity);
-          const call: ClaudeCall = { deps, modelId, version, sessionId: headerSessionId ?? crypto.randomUUID(), headerSessionId };
+          const call: ClaudeCall = { deps, modelId, version, sessionId: claudeSessionId(deps.sessionAffinity) };
           const provider = createAnthropic({ apiKey: 'oauth-placeholder', fetch: asFetchFunction((_input, init) => claudeCall(call, init ?? {})) });
 
           return provider.languageModel(modelId);

@@ -348,6 +348,7 @@ type AgentUiMessagePart =
   | { type: 'text'; text: string };
 
 export function createUserUiMessage(
+  id: string,
   text: string,
   files: ReadonlyArray<PromptFile> = [],
   mode?: WorkMode,
@@ -359,7 +360,7 @@ export function createUserUiMessage(
   if (text || files.length === 0) parts.push({ type: 'text', text });
 
   return {
-    id: crypto.randomUUID(),
+    id,
     role: 'user',
     parts,
     ...(mode !== undefined && { metadata: { kinuMode: mode } }),

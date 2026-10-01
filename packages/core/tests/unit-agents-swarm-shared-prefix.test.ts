@@ -119,7 +119,7 @@ describe('compactShared wiring through runSwarmAction', () => {
       mode: 'build',
       // Without the barrier's compactor the grandchild request is refused at admission.
       swarm: swarmDeps({ rt, db }, capturingModel(prompts), {
-        originContext: () => origin,
+        originContext: async () => origin,
         compactShared: async () => [{ role: 'user' as const, content: MARKER }],
       }),
     });

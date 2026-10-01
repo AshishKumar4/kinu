@@ -1,7 +1,7 @@
 /**
  * One durable row per side effect a settled turn owes, all claimed before any runs, so an interruption
  * leaves a replayable suffix. Every effect must be idempotent or keyed. Rows carry a versioned key
- * (mismatch: blocked), the recorded input, and a disposition plus schedule; only a provider's lasting refusal ends one unrun.
+ * (mismatch: blocked), the recorded input, and a disposition plus schedule; definitive failures end one unrun.
  * `TerminalTransitions.end` settles only when no row is owed.
  */
 import * as v from 'valibot';
@@ -55,8 +55,12 @@ export const TERMINAL_EFFECT_RETRY_BASE_MS = 5_000;
 
 export const TERMINAL_EFFECT_RETRY_CEILING_MS = 600_000;
 
-/** Provider answers a retry cannot change (a 404 route, a request refused as malformed). */
-const LASTING_REFUSALS: ReadonlySet<ErrorCode> = new Set(['missing', 'bad_input']);
+/** A retry cannot repair a missing route, malformed request, or unusable model answer. */
+const DEFINITIVE_FAILURES: ReadonlySet<ErrorCode> = new Set(['missing', 'bad_input']);
+
+export function isDefinitiveTerminalFailure(code: ErrorCode): boolean {
+  return DEFINITIVE_FAILURES.has(code);
+}
 
 /** The owner reads an abandoned effect in the Activity log, by what it was doing. */
 const EFFECT_ACTIVITY: Partial<Record<TerminalEffectName, string>> = {
@@ -451,7 +455,7 @@ export class TerminalEffectLedger {
   /**
    * Claims land first, synchronously, read before insert. Each effect runs from the decoded recording,
    * never the live value; an existing row routes as {@link replayOwed} routes it. `reported` rejects only
-   * on an injected interruption; real failures stay owed on their rows.
+   * on an injected interruption; unfinished work stays owed and definitive failures end.
    */
   async run(sequenceId: string, owed: readonly OwedEffect[]): Promise<TerminalSequenceRun> {
     this.claim(sequenceId, owed);
@@ -714,21 +718,24 @@ export class TerminalEffectLedger {
 
       // A real synchronous failure rolled back its body, not its right to back off.
       if (inline) this.recordAttempt(sequenceId, row, nextAttemptAt);
-      diagnostics.failure('turn.terminal_effect_failed', toKinuError({
+
+      const failure = toKinuError({
         doing: `running the ${name} effect a settled turn owed`,
         cause: err,
         otherwise: 'unavailable',
-      }), { sequence: sequenceId, effect: row.key, attempts });
-      const refused = providerRefusalCode({ cause: err });
+      });
 
-      // A refusal that will answer the same way again ends the effect, its row deleted; anything else stays owed.
-      if (refused !== null && LASTING_REFUSALS.has(refused)) {
+      diagnostics.failure('turn.terminal_effect_failed', failure, { sequence: sequenceId, effect: row.key, attempts });
+      const refused = providerRefusalCode({ cause: err });
+      const code = refused ?? failure.code;
+
+      if (isDefinitiveTerminalFailure(code)) {
         const status = providerStatusOf({ cause: err });
-        const answered = status === undefined ? `refused it (${refused})` : `answered HTTP ${String(status)}`;
-        diagnostics.event('turn.terminal_effect_abandoned', { sequence: sequenceId, effect: row.key, attempts, code: refused });
+        const detail = status === undefined ? failure.message : `the model provider answered HTTP ${String(status)}`;
+        diagnostics.event('turn.terminal_effect_abandoned', { sequence: sequenceId, effect: row.key, attempts, code });
         writeActivityLog(() => ({ sql: this.deps.sql, actor: this.deps.actor }), {
           event: 'terminal_effect_abandoned',
-          detail: `${EFFECT_ACTIVITY[name] ?? name} failed: the model provider ${answered}, so it is not retried`,
+          detail: `${EFFECT_ACTIVITY[name] ?? name} failed: ${detail}, so it is not retried`,
           elapsedMs: 0, createdAt: this.deps.now(),
         });
         void this.deps.sql`DELETE FROM terminal_effects

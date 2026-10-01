@@ -27,9 +27,83 @@ const DELTA_WHOLE_FILE_THRESHOLD = 64 * 1024;
  *  inode would, and a whole sparse file round-trips its exact hole geometry. */
 const DELTA_SPARSE_WHOLE_FRACTION = 1 / 2;
 
-/** Shell operations per container command. Bounds the round trips of a
- *  many-file checkpoint without changing what any operation does. */
-export const DELTA_OPS_PER_COMMAND = 250;
+/**
+ * Bytes per container command. Linux refuses any one argument over MAX_ARG_STRLEN (128 KiB), and a
+ * batch reaches the shell as the single argument of `bash -c`; measured 2026-10-01, a 12 MiB new file's
+ * index made one stage command 136,117 B and every checkpoint after it failed with E2BIG.
+ */
+const DELTA_COMMAND_BYTES = 96 * 1024;
+
+/** Base64 per append: a multiple of 4, so the appended pieces decode as one stream. */
+const PAYLOAD_PIECE_CHARS = 48 * 1024;
+
+/**
+ * Ops packed into as few commands as fit {@link DELTA_COMMAND_BYTES}, each repeating the header under a
+ * scoped `set -e` (D18). Every op is bounded: a path, or a packed run or payload piece of {@link PAYLOAD_PIECE_CHARS}.
+ */
+export function deltaOpCommands([header = '', ...ops]: readonly string[]): string[] {
+  const commands: string[] = [];
+  const wrap = (body: readonly string[]) => [header, '(', 'set -e', ...body, ')'].join('\n');
+  const room = DELTA_COMMAND_BYTES - Buffer.byteLength(wrap([]));
+  let batch: string[] = [];
+  let bytes = 0;
+
+  for (const op of ops) {
+    const size = Buffer.byteLength(op) + 1;
+
+    if (batch.length > 0 && bytes + size > room) {
+      commands.push(wrap(batch));
+      batch = [];
+      bytes = 0;
+    }
+
+    batch.push(op);
+    bytes += size;
+  }
+
+  if (batch.length > 0) commands.push(wrap(batch));
+
+  return commands;
+}
+
+/** One `command` per run of quoted `args` that fits a payload piece, so no single op outgrows a command. */
+function packedOps(command: string, args: readonly string[]): string[] {
+  const ops: string[] = [];
+  let run: string[] = [];
+  let bytes = 0;
+
+  for (const arg of args) {
+    const size = Buffer.byteLength(arg) + 1;
+
+    if (run.length > 0 && bytes + size > PAYLOAD_PIECE_CHARS) {
+      ops.push(`${command} ${run.join(' ')}`);
+      run = [];
+      bytes = 0;
+    }
+
+    run.push(arg);
+    bytes += size;
+  }
+
+  if (run.length > 0) ops.push(`${command} ${run.join(' ')}`);
+
+  return ops;
+}
+
+/** Writes `bytes` to `target` as base64 data, never shell syntax, in appends that each fit a command. */
+function payloadOps(bytes: Uint8Array, target: string): string[] {
+  const encoded = Buffer.from(bytes).toString('base64');
+  const staged = shellPath(`${target}.b64`);
+  const ops: string[] = [];
+
+  for (let at = 0; at === 0 || at < encoded.length; at += PAYLOAD_PIECE_CHARS) {
+    ops.push(`printf %s ${shellPath(encoded.slice(at, at + PAYLOAD_PIECE_CHARS))} ${at === 0 ? '>' : '>>'} ${staged}`);
+  }
+
+  ops.push(`base64 -d ${staged} > ${shellPath(target)}`, `rm ${staged}`);
+
+  return ops;
+}
 
 /** Staged package layout, mirrored at materialize time. A workspace file collides only by
  *  living under `.devbox-delta` AND validating as a manifest. */
@@ -526,11 +600,6 @@ export function planDeltaPublication(input: DeltaPlanInput): DeltaPlan {
   return { manifest: { v: 2, files, dirs, deleted, treplace, links }, chunks, indexes };
 }
 
-/** Base64 of the manifest JSON: data, never shell syntax. */
-function encodeDeltaManifest(manifest: DeltaManifest): string {
-  return Buffer.from(JSON.stringify(manifest), 'utf8').toString('base64');
-}
-
 /** Publication may enumerate a retained index. The block server never does. */
 export function readDeltaIndex(ref: DeltaIndexRef, size: number, bytes: Uint8Array): DeltaOverride[] {
   if (bytes.byteLength !== ref.count * DELTA_INDEX_PAGE_BYTES || createHash('sha256').update(bytes).digest('hex') !== ref.index) {
@@ -637,11 +706,9 @@ export function buildDeltaStageOps(plan: DeltaPlan, layout: DeltaStageLayout): s
       + `bs=${DELTA_BLOCK_BYTES} skip=${chunk.block} count=1 2>/dev/null`);
   }
 
-  for (const [digest, bytes] of plan.indexes) {
-    ops.push(`printf %s ${shellPath(Buffer.from(bytes).toString('base64'))} | base64 -d > ${shellPath(`${layout.pkgDir}/.devbox-delta/${digest}`)}`);
-  }
+  for (const [digest, bytes] of plan.indexes) ops.push(...payloadOps(bytes, `${layout.pkgDir}/.devbox-delta/${digest}`));
 
-  ops.push(`printf %s ${shellPath(encodeDeltaManifest(plan.manifest))} | base64 -d > ${shellPath(`${layout.pkgDir}/${DELTA_MANIFEST_NAME}`)}`);
+  ops.push(...payloadOps(Buffer.from(JSON.stringify(plan.manifest), 'utf8'), `${layout.pkgDir}/${DELTA_MANIFEST_NAME}`));
 
   return ops;
 }
@@ -656,7 +723,7 @@ function directoryOps(manifest: DeltaManifest, root: string): string[] {
   for (const dir of manifest.dirs) wanted.add(dir.p);
   const ops: string[] = [];
 
-  if (wanted.size > 0) ops.push(`mkdir -p ${[...wanted].map((dir) => shellPath(`${root}/${dir}`)).join(' ')}`);
+  ops.push(...packedOps('mkdir -p', [...wanted].map((dir) => shellPath(`${root}/${dir}`))));
 
   for (const dir of manifest.dirs) {
     ops.push(`chown ${dir.uid}:${dir.gid} ${shellPath(`${root}/${dir.p}`)}`, `chmod ${dir.mode.toString(8)} ${shellPath(`${root}/${dir.p}`)}`);

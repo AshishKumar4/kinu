@@ -109,8 +109,7 @@ function createCatalogProvider(providerId: string): ModelProvider {
             // OpenCode Go's documented client contract requires these routing headers.
             if (providerId === 'opencode' || providerId === 'opencode-go') {
               headers.set('user-agent', KINU_USER_AGENT);
-
-              if (deps.sessionAffinity) headers.set('x-opencode-session', deps.sessionAffinity);
+              headers.set('x-opencode-session', deps.sessionAffinity);
             }
 
             return auth.baseURL && url.startsWith(baseURL)

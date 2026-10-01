@@ -109,7 +109,7 @@ import {
   DeviceTerminalHub, terminalFromSocket,
   DeviceRequestLedger,
   type ClaimedDeviceRequest, type DeviceCancelOutcome,
-  credentialToHeaders, refusedLogin, type AuthRequest,
+  credentialToHeaders, refusedLogin, type AuthRequest, type AuthResolution,
   validateCredential, validateCredentialKey, validateWorkspaceName,
   createCredentialCipher, isSealedCredential, type CredentialCipher,
   listEgressSecrets, putEgressSecret, resolveEgressInjection,
@@ -648,6 +648,22 @@ function retireActivationRestore(
   };
 
   return restore;
+}
+
+/** The endpoint a stored credential names; null where its provider's own endpoint applies. */
+function credentialBaseURL(storedKey: string, cred: Credential): string | null {
+  if (cred.kind === 'openai-compat') return cred.baseURL;
+
+  if (cred.kind === 'bearer' && cred.baseURL !== undefined) return cred.baseURL;
+
+  if (storedKey === CLOUDFLARE_OAUTH_CRED_KEY && cred.kind === 'oauth') {
+    if (!isCloudflareCredentialUsable(cred)) return null;
+    const accountId = accountIdFromCloudflareCredential(cred);
+
+    return accountId ? cloudflareWorkersAIBaseURL(accountId) : null;
+  }
+
+  return null;
 }
 
 export class UserDO extends Agent<Env> {
@@ -3759,7 +3775,7 @@ export class UserDO extends Agent<Env> {
     return resolveEgressInjection(this.egressVaultDeps(await this.cipher()), facts, active);
   }
 
-  /** baseURL is not a secret and is absent from listCredentials(); provider deps need it. */
+  /** baseURL is not a secret and is absent from listCredentials(); the provider proxy reads it without the login. */
   async getCredentialBaseURL(caller: UserCaller, key: string): Promise<string | null> {
     await this.requireCredentialAccess(caller, key);
     validateCredentialKey(key);
@@ -3768,21 +3784,15 @@ export class UserDO extends Agent<Env> {
     const storedKey = key === CLOUDFLARE_AI_GATEWAY_CRED_KEY ? CLOUDFLARE_OAUTH_CRED_KEY : key;
     const cred = await this.readCredential(storedKey);
 
-    if (cred?.kind === 'openai-compat') return cred.baseURL;
-
-    if (cred?.kind === 'bearer' && cred.baseURL !== undefined) return cred.baseURL;
-
-    if (storedKey === CLOUDFLARE_OAUTH_CRED_KEY && cred?.kind === 'oauth') {
-      if (!isCloudflareCredentialUsable(cred)) return null;
-      const accountId = accountIdFromCloudflareCredential(cred);
-
-      return accountId ? cloudflareWorkersAIBaseURL(accountId) : null;
-    }
-
-    return null;
+    return cred === null ? null : credentialBaseURL(storedKey, cred);
   }
 
   async getAuthHeaders(caller: UserCaller, key: string, opts?: AuthRequest): Promise<Record<string, string> | null> {
+    return (await this.getAuth(caller, key, opts))?.headers ?? null;
+  }
+
+  /** What a model call needs of a credential, headers and endpoint, in one round trip. */
+  async getAuth(caller: UserCaller, key: string, opts?: AuthRequest): Promise<AuthResolution | null> {
     await this.requireCredentialAccess(caller, key);
     validateCredentialKey(key);
     // `cloudflare.ai-gateway` is a derived view of the Cloudflare login: same bearer and refresh,
@@ -3839,7 +3849,9 @@ export class UserDO extends Agent<Env> {
       headers['cf-aig-gateway-id'] = this.selectedAIGatewayId() ?? cloudflareAIGatewayId(this.env);
     }
 
-    return headers;
+    const baseURL = credentialBaseURL(storedKey, cred);
+
+    return baseURL === null ? { headers } : { headers, baseURL };
   }
 
   private static readonly AI_GATEWAY_CONFIG_KEY = 'cloudflare_ai_gateway';

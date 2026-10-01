@@ -137,8 +137,6 @@ export interface ProviderWaitInfo {
 
 export interface ProviderDeps {
   env: ProviderEnv;
-  /** Stable conversation identity for provider routing and prompt caching. */
-  sessionAffinity?: string;
   getAuth: AuthResolver;
   hasCredential: (key: string) => Promise<boolean>;
   /** Stored credential keys; without it the dynamic source lists nothing. */
@@ -147,6 +145,12 @@ export interface ProviderDeps {
   /** Called before each rate-limit sleep, including joined sibling cooldowns. */
   onProviderWait?: (info: ProviderWaitInfo) => void;
   accountFor?: (providerId: string) => string | undefined;
+}
+
+/** A model is made for one conversation: providers route and cache on it, and OpenCode Go refuses a call without it. */
+export interface ModelCallDeps extends ProviderDeps {
+  /** Stable conversation identity (`agentAffinityKey`). */
+  readonly sessionAffinity: string;
 }
 
 export interface ModelProvider {
@@ -162,7 +166,7 @@ export interface ModelProvider {
   unavailableReason?(deps: ProviderDeps): Promise<string | undefined> | string | undefined;
   listModels(deps: ProviderDeps): Promise<ModelInfo[]> | ModelInfo[];
 
-  createModel(modelId: string, deps: ProviderDeps): LanguageModel;
+  createModel(modelId: string, deps: ModelCallDeps): LanguageModel;
 
   /** Pre-request token count via the provider's documented endpoint; absent means none.
    *  Report `unsupported` rather than drop an unrepresentable part. */

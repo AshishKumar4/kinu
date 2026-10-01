@@ -17,7 +17,7 @@ import { createOpenAIProvider } from '../src/providers/openai';
 import { createOpenRouterProvider } from '../src/providers/openrouter';
 import { createCodexProvider } from '../src/providers/codex';
 import { createOpenAICompatProvider } from '../src/providers/openai-compat';
-import type { ProviderDeps } from '../src/providers/types';
+import type { ModelCallDeps } from '../src/providers/types';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 
 function bodyText(init: RequestInit | undefined): string {
@@ -308,8 +308,9 @@ describe('exact turn admission', () => {
   });
 });
 
-const NO_DEPS: ProviderDeps = {
+const NO_DEPS: ModelCallDeps = {
   env: {},
+  sessionAffinity: 'kinu-test',
   getAuth: async () => ({ headers: { 'x-api-key': 'k' } }),
   hasCredential: async () => true,
 };
@@ -337,7 +338,7 @@ describe('provider count support', () => {
     let body: unknown;
     let url = '';
 
-    const deps: ProviderDeps = {
+    const deps: ModelCallDeps = {
       ...NO_DEPS,
       fetch: asFetchFunction(async (input, init) => {
         url = input instanceof Request ? input.url : String(input);
@@ -388,7 +389,7 @@ describe('provider count support', () => {
   });
 
   test('a request carrying a part the count body cannot represent is reported, not silently shrunk', async () => {
-    const deps: ProviderDeps = {
+    const deps: ModelCallDeps = {
       ...NO_DEPS,
       fetch: asFetchFunction(async () => { throw new Error('the endpoint must not be asked'); }),
     };
@@ -403,7 +404,7 @@ describe('provider count support', () => {
   });
 
   test('an endpoint that refuses the count does not fail the turn', async () => {
-    const deps: ProviderDeps = {
+    const deps: ModelCallDeps = {
       ...NO_DEPS,
       // A status the shared transport does not retry (429/529 go through the rate-limit ladder).
       fetch: asFetchFunction(async () => new Response('{"error":{"message":"bad body"}}', { status: 400 })),
@@ -444,7 +445,7 @@ describe('provider count support', () => {
     let vendorBody: unknown;
     let countBody: unknown;
 
-    const vendorDeps: ProviderDeps = {
+    const vendorDeps: ModelCallDeps = {
       ...NO_DEPS,
       fetch: asFetchFunction(async (_input, init) => {
         vendorBody = JSON.parse(bodyText(init));
@@ -453,7 +454,7 @@ describe('provider count support', () => {
       }),
     };
 
-    const countDeps: ProviderDeps = {
+    const countDeps: ModelCallDeps = {
       ...NO_DEPS,
       fetch: asFetchFunction(async (_input, init) => {
         countBody = JSON.parse(bodyText(init));

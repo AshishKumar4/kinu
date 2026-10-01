@@ -57,7 +57,7 @@ describe('agent registry × models.dev catalog', () => {
     });
 
     expect(reg.normalizeSpecSync('groq/llama-3.3-70b-versatile')).toBe('groq/llama-3.3-70b-versatile');
-    expect(reg.resolveModel('groq/llama-3.3-70b-versatile')).toBeDefined();
+    expect(reg.resolveModel('groq/llama-3.3-70b-versatile', 'kinu-test')).toBeDefined();
   });
 });
 
@@ -98,8 +98,7 @@ describe('listProviderCatalog', () => {
         get: () => ({
           ...NO_RELAY_MACHINE,
           listCredentials: async () => list,
-          getAuthHeaders: async () => null,
-          getCredentialBaseURL: async () => null,
+          getAuth: async () => null,
         }),
       },
     };

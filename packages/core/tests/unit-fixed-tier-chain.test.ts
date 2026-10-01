@@ -112,6 +112,7 @@ test('a spent plan on the tier is said once, where a busy one says nothing', asy
 
   const spent = createChatGptProvider().createModel('gpt-6.1-sol', {
     env: {},
+    sessionAffinity: 'kinu-test',
     fetch: asFetchFunction(async () => Response.json(
       { error: { code: 'subscription_sharing_usage_limit_exceeded', message: 'usage limit reached', param: null, type: 'rate_limit_error' } },
       { status: 429 },

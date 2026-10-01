@@ -1,5 +1,5 @@
 import { createLocalModelResolver, type LocalModelResolver } from '@kinu.run/cli-backend';
-import { agentAffinityKey, parseModelSpec, type LLMProviderConfig } from '@kinu.run/core';
+import { parseModelSpec, type LLMProviderConfig } from '@kinu.run/core';
 import {
   createOAuthStore,
   resolveCloudSession,
@@ -13,8 +13,6 @@ interface LocalModelResolverOptions {
   model?: string;
   baseUrl?: string;
   auth?: string;
-  /** Pins signed-in proxy turns to one Workers AI replica (x-session-affinity). */
-  agentName?: string;
 }
 
 interface ConfiguredLocalModelResolver {
@@ -64,7 +62,6 @@ export function createConfiguredLocalModelResolver(opts: LocalModelResolverOptio
     credentials: resolveProviderCredentials(),
     oauthStore: createOAuthStore(),
     cloud: cloud ?? undefined,
-    sessionAffinity: opts.agentName ? agentAffinityKey(opts.agentName) : undefined,
   });
 
   return { llmConfig, resolver };

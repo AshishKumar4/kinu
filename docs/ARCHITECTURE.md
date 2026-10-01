@@ -148,6 +148,14 @@ parent. A delegated turn is never owner-driven and is never cancelled by a
 disconnect. `retire` with `destroy` drops the actor's rows and its home; without
 it the rows and the home stay with the workspace.
 
+Core settles a durable hire's roster at every turn end, before deciding
+whether to relay a report. A successful turn reads `idle` with its assignment
+kept; failure or Stop reads `awaiting_input`. An explicit `blocked` report
+keeps that state, and `completed` clears the assignment. A progress note can
+suppress a redundant report, not the activity transition. A `task` child
+keeps working until its settling report, including while it awaits its own
+helpers or queued input. Both backends use this roster policy.
+
 Locally, `LocalAgentHost` (`packages/cli-backend/src/agent-host/host.ts`) holds
 one `LocalAgentSession` per bound agent for the daemon's whole life: every root
 it has a ref for, plus every live subordinate beneath one. Roots are not

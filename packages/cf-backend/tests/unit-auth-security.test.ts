@@ -622,26 +622,25 @@ async function cloudflareSignInSteps(
   });
 
   test('Cloudflare OAuth token variants survive the callback into the stored credential', async () => {
-    const { env, credentials } = cloudflareCallbackEnv();
+    const issuedAt = Date.UTC(2026, 8, 30, 12);
+    setSystemTime(issuedAt);
 
-    const done = await cloudflareSignIn(env, {
-      access_token: 'cf-access',
-      token_type: 'bearer',
-      expires_in: '900',
-      scope: ['user-details.read'],
-    }, {
-      id: 'cf-user-1',
-      email: 'ashish@example.com',
-      username: 'ashish',
-    });
+    try {
+      const { env, credentials } = cloudflareCallbackEnv();
 
-    expect(done.status).toBe(302);
-    expect(credentials).toHaveLength(1);
-    // Normalized: seconds of lifetime minus clock skew, one scope string.
-    expect(credentials[0].credential.metadata?.scopes).toEqual(['user-details.read']);
-    const lifetime = (credentials[0].credential.expiresAt ?? 0) - Date.now();
-    expect(lifetime).toBeGreaterThan(800_000);
-    expect(lifetime).toBeLessThanOrEqual(900_000);
+      const done = await cloudflareSignIn(env, {
+        access_token: 'cf-access', token_type: 'bearer', expires_in: '900', scope: ['user-details.read'],
+      }, { id: 'cf-user-1', email: 'ashish@example.com', username: 'ashish' });
+
+      expect(done.status).toBe(302);
+      expect(credentials).toHaveLength(1);
+      expect(credentials[0].credential.metadata?.scopes).toEqual(['user-details.read']);
+      const expiresAt = credentials[0].credential.expiresAt;
+      expect(expiresAt).toBeGreaterThan(issuedAt + 800_000);
+      expect(expiresAt).toBeLessThanOrEqual(issuedAt + 900_000);
+    } finally {
+      setSystemTime();
+    }
   });
 
   test('sign-in returns the browser where it was going, and logout ends the session', async () => {

@@ -154,9 +154,10 @@ export function chatTurnFrames(input: {
   ];
 }
 
-/** The DO announcing it holds a resumable stream for `requestId`. */
-export function streamResumingFrame(requestId: string): string {
-  return JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUMING, id: requestId });
+/** The DO announcing it holds a resumable stream for `requestId`, the turn whose opening message is `turnId`
+ *  (`packages/cf-backend/src/chat-transport.ts`, `notifyResuming`). */
+export function streamResumingFrame(requestId: string, turnId: string): string {
+  return JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUMING, id: requestId, turnId });
 }
 
 /** One `{type:'rpc'}` reply, in the two shapes the socket carries: an answered

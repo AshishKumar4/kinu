@@ -262,6 +262,8 @@ export class ActorSession {
   }
   /** A host settles the claim under the outcome it named. */
   get turnClaim(): ActorTurnClaim | null { return this.active?.claim ?? null; }
+  /** The revision the open turn's input was placed on. */
+  get turnContext(): ContextSelection | null { return this.active?.context?.selection ?? null; }
 
   get advisorEnabled(): boolean {
     return (this.options.advisor?.config ?? this.runtime.actor.config).getAdvisorEnabled();

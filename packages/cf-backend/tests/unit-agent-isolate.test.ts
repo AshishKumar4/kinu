@@ -1,8 +1,10 @@
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { afterEach, expect, test } from 'bun:test';
-import { accountCredentialKey, asFetchFunction, requestUrl } from '@kinu.run/core';
+import { accountCredentialKey, agentAffinityKey, asFetchFunction, requestUrl } from '@kinu.run/core';
+import { OPENCODE_GO_CATALOG } from '@kinu.run/test-utils';
 import {
-  agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedMainActor, hostedSubordinateHarness, makeEnv, orchestratorHarness, wakeForDelegatedTask,
+  agentSql, catalogTurn, driveUntil, gatewayWorkspace, hostedMainActor, hostedSubordinateHarness, makeEnv, orchestratorHarness, runDelegatedTask,
+  wakeForDelegatedTask,
 } from './helpers/actor-harness';
 import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do';
 import { chatCompletion, requestOf, stubAiBinding, toolCallCompletion, type RecordedGatewayRun, type StubbedAiBinding } from './helpers/platform-gateway';
@@ -107,6 +109,35 @@ test("a hired agent's model call authenticates with the provider account the own
 
   expect(used.join(' ')).toContain('sk-work');
   expect(used.join(' ')).not.toContain('sk-main');
+  await user.joinFibers();
+  user.close();
+});
+
+test("a hired agent's model call to OpenCode Go names the agent's own conversation", async () => {
+  const OWNER = 'abcdef0123456789abcdef0123456789';
+  const MODEL = 'opencode-go/muse-spark-1.3-contributor';
+  const user = createTestUserDO({ durableObjectId: OWNER });
+  const owner = await testOwner();
+
+  await user.userDO.setCredential(owner, 'opencode-go.bearer', { kind: 'bearer', token: 'go-key' });
+  const token = await provisionTestWorkspace(user, 'go-hire', 'Go hire');
+  const world = { userDO: user.userDO, workspace: 'go-hire', ownerUserId: OWNER };
+  const workspace = orchestratorHarness(undefined, world, makeEnv(undefined, undefined, world));
+  const sessions: (string | null)[] = [];
+
+  globalThis.fetch = asFetchFunction(async (input, init) => {
+    if (requestUrl(input).includes('models.dev')) return Response.json(OPENCODE_GO_CATALOG);
+    sessions.push(new Headers(init?.headers).get('x-opencode-session'));
+
+    return new Response('refused by the test', { status: 400 });
+  });
+  workspace.agent.harnessHoldsCapability(token);
+  workspace.agent.harnessInstallCatalog({ tiers: { default: { model: MODEL }, deep: { model: MODEL }, fast: { model: MODEL } }, availableModels: [MODEL] });
+  const hire = await hostedSubordinateHarness(workspace, { name: 'writer', displayName: 'Writer', nameOrigin: 'user', mission: 'write' });
+
+  await runDelegatedTask(workspace, hire.actor.handle.actorId, 'Write it.');
+
+  expect(new Set(sessions)).toEqual(new Set([agentAffinityKey(hire.actor.record.name)]));
   await user.joinFibers();
   user.close();
 });

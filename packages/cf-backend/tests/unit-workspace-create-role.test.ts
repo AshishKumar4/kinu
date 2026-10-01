@@ -53,9 +53,8 @@ async function postCreate(
 
   const userDO = userAccount({
     async getProfileCatalog(_caller: UserCaller) { return envelope; },
-    async getAuthHeaders(_caller: UserCaller) { return authHeaders; },
-    async getCredentialBaseURL(_caller: UserCaller) {
-      return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
+    async getAuth(_caller: UserCaller) {
+      return authHeaders === null ? null : { headers: authHeaders, baseURL: 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1' };
     },
     async listCredentials(_caller: UserCaller) { return []; },
     async ensureWorkspaceCapability() {},

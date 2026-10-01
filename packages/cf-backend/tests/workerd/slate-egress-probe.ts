@@ -12,6 +12,7 @@ import { ROOT_SLATE_CALLER, slateCallerKey } from '../../src/slates/bindings';
 import { initWorkspaceSchema, type SqlValue, type WorkMode } from '@kinu.run/core';
 import { ContentRef } from '@agent-core/core';
 import { processes } from '@nimbus-sh/fabric/workerd-facet-host.js';
+import { workerCompatibility } from 'virtual:kinu-slate-vendor';
 
 export * from '../../src/server';
 
@@ -101,7 +102,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
       () => ({ readFile: async () => { throw new Error('This fixture has inline modules only'); } }),
       { doId: this.ctx.id.toString(), pid: 900000, writerId },
       { pid: 900000, writerId, workerKey: key, startArgs: {}, boot: { kind: 'code', code: {
-        compatibilityDate: '2025-12-01', compatibilityFlags: ['nodejs_compat'], mainModule: 'unmediated.js', env: {},
+        ...workerCompatibility, mainModule: 'unmediated.js', env: {},
         modules: { 'unmediated.js': `import { DurableObject } from 'cloudflare:workers';
           export class NimbusProcess extends DurableObject {
             calls = 0;

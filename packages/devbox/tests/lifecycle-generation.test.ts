@@ -955,7 +955,7 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
     expect({ armed: armed(container), stamps: stamps(container) }).toEqual({ armed: 1, stamps: 1 });
   });
 
-  test('a terminal class is never re-driven, and its refusal names the repair', async () => {
+  test('a terminal class is never re-driven, and its refusal is coded terminal, naming no action (D52)', async () => {
     // Exhaustion arms no row, so nothing blocks a re-drive; the box must still refuse
     // rather than repeat work the ladder refused.
     const harnessed = harness(TestBox);
@@ -967,7 +967,7 @@ describe('a promised retry is delivered even when the row carrying it is gone', 
     await expect(box.exec('ls')).rejects.toMatchObject(
       { message: expect.stringContaining('exhausted -> refuse') });
     await expect(box.exec('ls')).rejects.toMatchObject(
-      { message: expect.stringContaining('terminal: call attachNow()') });
+      { code: 'refused', message: expect.stringMatching(/That failure is terminal, so nothing retries it\.$/) });
     expect(stamps(container)).toBe(1);
   });
 

@@ -4,7 +4,7 @@ import {
   createProviderRegistry, createChatGptProvider, createCodexProvider, createOpenAIProvider,
   createOpenRouterProvider, createOpenAICompatProvider, createAnthropicProvider, createClaudeProvider,
   createModelsDevCatalogSource,
-  type ProviderRegistry, type ProviderDeps, type ProviderEnv, type AuthResolver, type AuthRequest,
+  type ProviderRegistry, type ProviderDeps, type ProviderEnv, type AuthResolver, type AuthRequest, type AuthResolution,
   type ProviderWaitInfo,
   specProvider,
 } from '@kinu.run/core';
@@ -22,13 +22,8 @@ import { codexEgressFetch, deviceRouteFetch, type CodexEgressNamespace, type Mod
  * so no context holds the stub without saying who it is.
  */
 export interface UserCredentialClient extends ModelRelayHub {
-  getAuthHeaders(
-    caller: UserCaller,
-    key: string,
-    opts?: AuthRequest,
-  ): Promise<Record<string, string> | null>;
+  getAuth(caller: UserCaller, key: string, opts?: AuthRequest): Promise<AuthResolution | null>;
   listCredentials(caller: UserCaller): Promise<CredentialSummary[]>;
-  getCredentialBaseURL(caller: UserCaller, key: string): Promise<string | null>;
 }
 
 export interface UserCredentialSource {
@@ -38,7 +33,7 @@ export interface UserCredentialSource {
 
 /** Taken from the consuming provider: the direct path calls `run`, which a gateway-only env lacks. */
 type DirectAiBinding =
-  NonNullable<ProviderEnv['AI']> & NonNullable<Parameters<typeof createWorkersAIProvider>[1]>;
+  NonNullable<ProviderEnv['AI']> & NonNullable<Parameters<typeof createWorkersAIProvider>[0]>;
 
 function isDirectAiBinding(binding: NonNullable<ProviderEnv['AI']>): binding is DirectAiBinding {
   return 'run' in binding;
@@ -53,7 +48,6 @@ export interface AgentProviderDeps {
   /** Fires before a provider-mandated wait; the actor emits `provider_wait` so a rate-limited turn reads as waiting. */
   onProviderWait?: (info: ProviderWaitInfo) => void;
   appTitle?: string;
-  sessionAffinity?: string;
   accountFor?: (providerId: string) => string | undefined;
   currentTurn?: (actor: ActorReference) => string | null;
   codexContainer?: typeof fetch;
@@ -62,7 +56,8 @@ export interface AgentProviderDeps {
 export interface AgentProviderRegistry {
   registry: ProviderRegistry;
   deps: ProviderDeps;
-  resolveModel(spec: string): LanguageModel;
+  /** `conversation`: the affinity key (`agentAffinityKey`) the calls are routed and cached under. */
+  resolveModel(spec: string, conversation: string): LanguageModel;
   /** Empty input is the platform default (native Workers AI), never a survey of stored BYO credentials. Also accepts bare `@cf/...` and bare model ids. */
   normalizeSpecSync(specOrNull?: string | null): string;
 }
@@ -77,16 +72,8 @@ export function createUserDOAuthResolver(source: UserCredentialSource | null): A
     if (!source) return null;
     const caller = await resolveCaller(source);
 
-    // Both reads are retry-safe: the conditional OAuth refresh persists before returning.
-    const headers = await retryTransientDO('credential auth',
-      () => source.stub.getAuthHeaders(caller, key, opts));
-
-    if (!headers) return null;
-
-    const baseURL = await retryTransientDO('credential baseURL',
-      () => source.stub.getCredentialBaseURL(caller, key));
-
-    return baseURL ? { headers, baseURL } : { headers };
+    // Retry-safe: the conditional OAuth refresh persists before returning.
+    return await retryTransientDO('credential auth', () => source.stub.getAuth(caller, key, opts));
   };
 }
 
@@ -103,7 +90,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     deploymentBinding = opts.env.AI;
   }
 
-  registry.register(createWorkersAIProvider({ sessionAffinity: opts.sessionAffinity }, deploymentBinding));
+  registry.register(createWorkersAIProvider(deploymentBinding));
   registry.register(createMyGatewayProvider());
   registry.register(createAIGatewayProvider());
 
@@ -142,20 +129,26 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
   // `cloudflare-workers-ai` aliases the bespoke workers-ai provider; excluded so it has one resolution path.
   registry.registerDynamic(createModelsDevCatalogSource({ exclude: ['cloudflare-workers-ai'] }));
   const getAuth = createUserDOAuthResolver(source);
+  // Read once per registry: a listing asks about every provider, and a registry lives one call, or until the
+  // account's credentials change (`OwnedModelServices.invalidate`).
+  let keys: string[] | undefined;
 
   const credentialKeys = async (): Promise<string[]> => {
     if (!source) return [];
+
+    if (keys !== undefined) return keys;
     const caller = await resolveCaller(source);
 
     const credentials = await retryTransientDO('credential listing',
       () => source.stub.listCredentials(caller));
 
-    return credentials.map((c) => c.key);
+    keys = credentials.map((c) => c.key);
+
+    return keys;
   };
 
   const deps: ProviderDeps = {
     env: opts.env,
-    sessionAffinity: opts.sessionAffinity,
     getAuth,
     hasCredential: async (key: string) => (await credentialKeys()).includes(key),
     listCredentialKeys: credentialKeys,
@@ -191,8 +184,8 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     registry,
     deps,
 
-    resolveModel(spec): LanguageModel {
-      return registry.resolve(spec, deps);
+    resolveModel(spec, conversation): LanguageModel {
+      return registry.resolve(spec, { ...deps, sessionAffinity: conversation });
     },
 
     normalizeSpecSync(specOrNull): string {

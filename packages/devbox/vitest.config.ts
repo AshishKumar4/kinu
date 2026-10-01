@@ -1,13 +1,13 @@
 import { cloudflareTest } from '@cloudflare/vitest-plugin';
 import { defineConfig } from 'vitest/config';
+import { workerCompatibility } from '../cf-backend/vite-agent-bundle';
 
 export default defineConfig({
   plugins: [
     cloudflareTest({
       main: './bench/worker.ts',
       miniflare: {
-        compatibilityDate: '2026-09-28',
-        compatibilityFlags: ['nodejs_compat'],
+        ...workerCompatibility,
         bindings: {
           BENCH_TOKEN: 'test-token',
           // AN ARM THIS RUN DOES NOT DEPLOY, deliberately: the guard in

@@ -952,7 +952,7 @@ export class LocalAgentSession {
 
     const resolver = this.modelResolver;
 
-    return testModel({ spec, resolve: (named) => resolver.resolveModel(named), report: this.modelCallSink, signal });
+    return testModel({ spec, resolve: (named, conversation) => resolver.resolveModel(named, conversation), report: this.modelCallSink, signal });
   }
 
   /** `caller` has no default: the model passes `'self'`, and core refuses a self cancel of an
@@ -1785,7 +1785,7 @@ export class LocalAgentSession {
         bind: () => {
           const { provider } = parseModelSpec(normalize(spec));
 
-          return { model: resolver.resolveModel(spec), provider, providerOptions: reasoningEffortOptions(reasoningEffort, provider) };
+          return { model: resolver.resolveModel(spec, this.conversation()), provider, providerOptions: reasoningEffortOptions(reasoningEffort, provider) };
         },
       }));
     }
@@ -1806,7 +1806,7 @@ export class LocalAgentSession {
   private async composeNextRequest(): Promise<ComposedRequest> {
     const resolved = await this.resolveTurnProfile(NEXT_OWNER_TURN);
     const spec = this.profiles().normalizeSpec(resolved.profile.tier.model);
-    const model = this.modelResolver ? this.modelResolver.resolveModel(spec) : this.defaultModel('the next request\'s measure');
+    const model = this.modelResolver ? this.modelResolver.resolveModel(spec, this.conversation()) : this.defaultModel('the next request\'s measure');
 
     return this.composeTurnRequest(resolved, model);
   }
@@ -2167,10 +2167,14 @@ export class LocalAgentSession {
     }
   }
 
-  /** Prompt-cache identity: provider/model, a per-conversation key (the `kinu-<name>` scheme Workers AI
-   *  affinity pins with), and configured retention. */
+  /** The conversation every model call of this workspace is routed and cached under (`kinu-<name>`). */
+  private conversation(): string {
+    return agentAffinityKey(this.agentName());
+  }
+
+  /** Prompt-cache identity: provider/model, the conversation with this session's id, and configured retention. */
   private cacheIdentity(spec = this.effectiveModelSpec()): PromptCacheIdentity {
-    const sessionKey = `${agentAffinityKey(this.agentName())}:${this.sessionId}`;
+    const sessionKey = `${this.conversation()}:${this.sessionId}`;
     const retention = this.config.getCacheRetention();
 
     try {
@@ -2237,7 +2241,7 @@ export class LocalAgentSession {
       surface: (task, context, callScope) => createScaffoldCandidateSurface({
         rt: this.rt,
         profile: () => this.routingProfile([...Object.keys(this.tools), ...codemodeCapabilitiesFor(this.codemodeProviders('build'))]),
-        bindModel: spec => this.modelResolver?.resolveModel(spec) ?? this.defaultModel('scaffold model lane'),
+        bindModel: spec => this.modelResolver?.resolveModel(spec, this.conversation()) ?? this.defaultModel('scaffold model lane'),
         modelContext: spec => this.modelCatalog.contextFor(spec),
         tools: () => this.rolloutTools(callScope ?? currentOperationProfile(this.rt.actor)?.turnId ?? WORKSPACE_RUN_ID),
         callScope,
@@ -2530,7 +2534,7 @@ export class LocalAgentSession {
       reportModelCall: this.modelCallSink,
       nodeCodemode: (actor) => hostedCodemodeTool(actor, this.headCodemodeExtras()),
       webSearch: this.getWebSearchProvider(),
-      originContext: () => this.actorSession.history,
+      originContext: async () => this.actorSession.history,
       // Only the runner knows which profile snapshot applies (caller's, or frozen on re-drive), so it
       // picks the spec; a swarm with a profile refuses rather than run the caller's model.
       resolveModel: (spec: string) => this.resolveModelForSpec(spec),
@@ -2661,7 +2665,7 @@ export class LocalAgentSession {
    *  `headMergeLLM`). A resolver-less session resolves every lane to its one model. */
   private bindRouteModel(resolution: ModelRouteResolution): HeadMergeModelBinding {
     const model = this.modelResolver
-      ? this.modelResolver.resolveModel(resolution.model)
+      ? this.modelResolver.resolveModel(resolution.model, this.conversation())
       : this.defaultModel(`${resolution.source} model lane`);
 
     const providerOptions = reasoningEffortOptions(
@@ -2701,7 +2705,7 @@ export class LocalAgentSession {
 
   /** A static-model session answers only for its own model; other specs are refused by name. */
   private resolveModelForSpec(spec: string): LanguageModel {
-    if (this.modelResolver) return this.modelResolver.resolveModel(spec);
+    if (this.modelResolver) return this.modelResolver.resolveModel(spec, this.conversation());
 
     if (this.profiles().normalizeSpec(spec) === STATIC_MODEL_SPEC) {
       return this.defaultModel(`the ${spec} model`);
@@ -2743,7 +2747,7 @@ export class LocalAgentSession {
     const spec = this.actorSession.profile?.tier.model ?? this.profiles().normalizeSpec(this.config.getModel());
 
     if (this.cachedModel && this.cachedModelSpec === spec) return this.cachedModel;
-    const model = this.modelResolver ? this.modelResolver.resolveModel(spec) : this.defaultModel("this static-model session");
+    const model = this.modelResolver ? this.modelResolver.resolveModel(spec, this.conversation()) : this.defaultModel("this static-model session");
     this.cachedModel = model;
     this.cachedModelSpec = spec;
     // Start the lookup at claim time: `kinu exec` runs one turn, and a lazy lookup would never land in time.
@@ -2818,7 +2822,7 @@ export class LocalAgentSession {
 
     if (this.modelResolver) {
       const modelResolver = this.modelResolver;
-      options.resolveModel = (spec) => modelResolver.resolveModel(spec);
+      options.resolveModel = (spec) => modelResolver.resolveModel(spec, this.conversation());
     }
 
     return options;

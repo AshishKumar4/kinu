@@ -60,7 +60,7 @@ import { isPreviewHostRequest, previewHostSuffix } from '../packages/core/src/pr
 import { parseJsonc } from './jsonc';
 import { CONTAINER_IMAGES, imageReference, readSource, sourceHash, type ContainerImage } from './container-images';
 import { allCommands, invocation, parseShell, type ShellScript } from './shell-words';
-import { readRepositoryFile, trackedFiles } from './sources';
+import { isWorkerConfig, readRepositoryFile, trackedFiles } from './sources';
 import { type ContextPath, contextPaths } from './workflow-expressions';
 // The config module itself, not its text: the failure being guarded is a hook
 // that exists and decides the wrong thing, which no source-text assertion sees.
@@ -164,6 +164,7 @@ const ContainerHostSchema = v.object({ containers: v.array(ContainerSchema) });
  *  and a key present but wrongly shaped fails the parse instead of reading as
  *  absent — a config this cannot read is not a config it may pass. */
 const WranglerSchema = v.object({
+  compatibility_date: v.string(),
   upload_source_maps: v.optional(v.boolean()),
   containers: v.optional(v.array(ContainerSchema)),
   assets: v.object({ run_worker_first: v.union([v.boolean(), v.array(v.string())]) }),
@@ -174,6 +175,25 @@ const WranglerSchema = v.object({
 });
 
 const CONFIG = parseJsonc(readFileSync(join(REPO_ROOT, WRANGLER), 'utf8'), WranglerSchema, WRANGLER);
+
+test('every Worker manifest uses the canonical deployment compatibility date', () => {
+  const schema = v.object({
+    compatibility_date: v.string(),
+    env: v.optional(v.record(v.string(), v.object({ compatibility_date: v.optional(v.string()) }))),
+  });
+
+  for (const file of trackedFiles().filter(isWorkerConfig)) {
+    const config = parseJsonc(readRepositoryFile(REPO_ROOT, file), schema, file);
+
+    expect(config.compatibility_date, `${file} differs from the deployed runtime`).toBe(CONFIG.compatibility_date);
+
+    for (const [name, environment] of Object.entries(config.env ?? {})) {
+      if (environment.compatibility_date !== undefined) {
+        expect(environment.compatibility_date, `${file} env.${name} differs from the deployed runtime`).toBe(CONFIG.compatibility_date);
+      }
+    }
+  }
+});
 
 describe('the sandbox container image is pinned', () => {
   test('the Worker runs the pinned digest and names no tag', () => {

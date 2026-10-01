@@ -17,6 +17,10 @@ export function workspaceSizeOptions(account: BoxSize | null): Array<{ value: Bo
   ];
 }
 
+export function startRefusedNote(reason: string): string {
+  return `The sandbox did not start: ${reason}. It stays stopped until you start it again or choose another size.`;
+}
+
 export function workspaceSizeNote(state: SandboxSizeState, pending: boolean): string | null {
   if (pending) return state.running === null ? 'Saving…' : 'Restarting at the new size…';
 

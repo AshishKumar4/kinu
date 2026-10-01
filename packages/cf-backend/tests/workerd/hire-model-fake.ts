@@ -30,11 +30,6 @@ interface HireRun {
   /** Resolved when the root's turn opens on its hire's settling report; one waiter per arm. */
   readonly rootSaw: PromiseWithResolvers<void>;
   readonly childSpoke: PromiseWithResolvers<void>;
-  /** Resolved when the durable lane's `msg` call was authored. */
-  readonly durableMsgSent: PromiseWithResolvers<void>;
-  /** Resolved when the child's model has been asked for both durable turns. A delegated turn writes
-   *  `run_start` before calling the model, so the second request means both runs are open. */
-  readonly childAskedTwice: PromiseWithResolvers<void>;
   readonly childPark: PromiseWithResolvers<void>;
   childCalls: number;
   childScript: ChildScript;
@@ -47,8 +42,6 @@ function freshRun(script: ChildScript): HireRun {
     log: [],
     rootSaw: Promise.withResolvers<void>(),
     childSpoke: Promise.withResolvers<void>(),
-    durableMsgSent: Promise.withResolvers<void>(),
-    childAskedTwice: Promise.withResolvers<void>(),
     childPark: Promise.withResolvers<void>(),
     childCalls: 0,
     childScript: script,
@@ -155,7 +148,7 @@ interface AgentsToolArgs {
 
 /** The `nest-progress` grandchild's mid-work note. */
 interface ReportToolArgs {
-  readonly status: 'progress';
+  readonly status: 'progress' | 'completed';
   readonly content: string;
 }
 
@@ -263,7 +256,7 @@ function rootLane(run: HireRun, body: OutboundBody, results: readonly string[]):
 async function durableLane(run: HireRun, body: OutboundBody, results: readonly string[]): Promise<Response> {
   const model = body.model ?? HIRE_DURABLE_MODEL;
 
-  if (onReport(body)) return textBody(model, 'ROOT-NOTED');
+  if (onReport(body)) return textBody(model, `ROOT-NOTED ${CHILD_ANSWER}`);
   const name = mintedName(results);
 
   if (name === null) {
@@ -275,8 +268,8 @@ async function durableLane(run: HireRun, body: OutboundBody, results: readonly s
     });
   }
 
-  // Keyed on the delivery receipt a `msg` call returns: `{"status":"delivered",...}`.
-  const sent = results.some((result) => result.includes('"status":"delivered"'));
+  // Queued is a successful durable admission, not a reason to send again.
+  const sent = results.some((result) => result.includes('"status":"delivered"') || result.includes('"status":"queued"'));
 
   if (!sent) {
     return toolCallBody(model, 'call_durable_2', 'agents', {
@@ -286,9 +279,6 @@ async function durableLane(run: HireRun, body: OutboundBody, results: readonly s
     });
   }
 
-  // The receipt means the message's row is written; the caller's turn is still open while this call waits.
-  run.durableMsgSent.resolve();
-  await run.childAskedTwice.promise;
   run.rootSaw.resolve();
 
   return textBody(model, `ROOT-SAW-DURABLE ${name}`);
@@ -316,10 +306,14 @@ async function childLane(run: HireRun, body: OutboundBody, results: readonly str
     });
   }
 
+  if (run.childScript === 'answer' && allUsers(body).includes('HIRE-MSG-BODY')
+    && !results.some((result) => result.includes('"disposition":'))) {
+    return toolCallBody(model, 'call_message_reply', 'report', { status: 'completed', content: CHILD_ANSWER });
+  }
+
   run.childCalls += 1;
   run.childSpoke.resolve();
 
-  if (run.childCalls >= 2) run.childAskedTwice.resolve();
 
   // 'park' is consumed by the call that parks; the recovery re-run must be answered,
   // or the hang is the fake's own doing.
@@ -400,12 +394,6 @@ async function hireControl(url: URL, request: Request): Promise<Response> {
 
   if (op === 'child-spoke' && request.method === 'GET') {
     await run.childSpoke.promise;
-
-    return Response.json({ ok: true });
-  }
-
-  if (op === 'msg-sent' && request.method === 'GET') {
-    await run.durableMsgSent.promise;
 
     return Response.json({ ok: true });
   }

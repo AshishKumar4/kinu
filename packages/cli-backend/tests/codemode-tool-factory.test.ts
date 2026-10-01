@@ -187,7 +187,7 @@ describe('createNodeCodemodeToolFactory — a failing host call can never kill t
 
     expect(calls).toEqual(['/app']);
     expect(out.result).toBe('kept going');
-    await new Promise((r) => setTimeout(r, 20));
+    await new Promise<void>((resolve) => setImmediate(resolve));
   });
 
   test('an AWAITED rejecting provider call still returns the real error to the model', async () => {

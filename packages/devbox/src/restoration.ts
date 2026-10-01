@@ -32,8 +32,7 @@ export interface RestoreStatus {
 }
 
 export function terminalRefusal(reason: string): string {
-  return `this devbox has no attached work directory: ${reason}. `
-    + 'That recovery class is terminal: call attachNow() to attempt the attach again.';
+  return `this devbox has no attached work directory: ${reason}. That failure is terminal, so nothing retries it.`;
 }
 
 export interface StartInputs {

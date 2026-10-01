@@ -11,10 +11,11 @@ export function accountSandboxSize(value: string | null): BoxSize | null {
   return parsed.success ? parsed.output : null;
 }
 
-/** `size` is what the next start uses. */
+/** `size` is what the next start uses; `startRefused`, why that start is refused until something changes. */
 export interface SandboxSizeState {
   readonly account: BoxSize | null;
   readonly chosen: BoxSize | null;
   readonly size: BoxSize;
   readonly running: BoxSize | null;
+  readonly startRefused: string | null;
 }

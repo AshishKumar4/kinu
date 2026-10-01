@@ -7,7 +7,7 @@ import { streamText } from 'ai';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 import {
   createOpenAICompatProvider,
-  type ProviderDeps, type AuthResolution,
+  type ModelCallDeps, type AuthResolution,
 } from '../src/index';
 
 function sseData(payload: string): string {
@@ -62,8 +62,9 @@ describe('openai-compat cancellation', () => {
       baseURL: 'http://fake.invalid',
     };
 
-    const deps: ProviderDeps = {
+    const deps: ModelCallDeps = {
       env: {},
+      sessionAffinity: 'kinu-test',
       fetch: fetchImpl,
       getAuth: async () => auth,
       hasCredential: async () => true,
