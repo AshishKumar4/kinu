@@ -3,6 +3,8 @@
  * Hooks are optional and run in registration order.
  */
 
+import { Effect } from 'effect';
+import { settleSync } from './obs/effect';
 import type { ModelMessage, ToolSet } from 'ai';
 import type { JsonObject } from './utils/json';
 import { diagnostics, KinuError, toKinuError } from './obs/index';
@@ -119,27 +121,29 @@ export class ExtensionHost {
 
   /** Throws on a name collision so a plugin never silently shadows another's tool. */
   tools(): ToolSet {
-    const merged: ToolSet = {};
-    const owners = new Map<string, string>();
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const merged: ToolSet = {};
+      const owners = new Map<string, string>();
 
-    for (const ext of this.extensions) {
-      const contributed = ext.registerTools?.();
+      for (const ext of this.extensions) {
+        const contributed = ext.registerTools?.();
 
-      if (!contributed) continue;
+        if (!contributed) continue;
 
-      for (const [name, tool] of Object.entries(contributed)) {
-        const prior = owners.get(name);
+        for (const [name, tool] of Object.entries(contributed)) {
+          const prior = owners.get(name);
 
-        if (prior) {
-          throw new Error(`extension "${ext.name}" registers tool "${name}" already registered by "${prior}"`);
+          if (prior) {
+            return yield* Effect.die(new Error(`extension "${ext.name}" registers tool "${name}" already registered by "${prior}"`));
+          }
+
+          owners.set(name, ext.name);
+          merged[name] = tool;
         }
-
-        owners.set(name, ext.name);
-        merged[name] = tool;
       }
-    }
 
-    return merged;
+      return merged;
+    }));
   }
 
   /** Stays synchronous until a hook returns a Promise, which promotes only this invocation to the awaited path. */

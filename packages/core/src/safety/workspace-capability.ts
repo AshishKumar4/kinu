@@ -3,7 +3,9 @@
  * calls it, so both caller kinds are secrets; the owner capability does not defend against other DOs in this Worker.
  */
 
+import { Data, Effect } from 'effect';
 import * as v from 'valibot';
+import { settle } from '../obs/effect';
 import { diagnostics } from '../obs/log';
 import type { SqlExec } from '../types/primitives';
 import { hmacSha256Hex, timingSafeEqual } from '../utils/crypto';
@@ -89,25 +91,24 @@ const OWNER_CAPABILITY_LABEL = 'kinu.owner-capability.v1';
 const ownerTokens = new Map<string, Promise<string>>();
 
 /** Caller for Worker routes acting for the signed-in owner; env-bound because owner authority is a deployment secret. */
-export async function ownerCaller(env: OwnerCapabilityEnv): Promise<UserCaller> {
-  return { ownerToken: await ownerToken(env) };
+export function ownerCaller(env: OwnerCapabilityEnv): Promise<UserCaller> {
+  return settle(Effect.map(ownerToken(env), (token) => ({ ownerToken: token })));
 }
 
 /** The deployment holds no root secret; browser and CLI planes map it to a deliberate answer, not a 500. */
-export class OwnerCapabilityUnavailableError extends Error {
+export class OwnerCapabilityUnavailableError extends Data.TaggedError('OwnerCapabilityUnavailableError')<{ readonly message: string }> {
   constructor() {
-    super(
-      'This deployment is not configured to serve signed-in users: CREDENTIAL_ENCRYPTION_KEY is not set. '
-      + 'See docs/DEPLOYMENT.md.',
-    );
-    this.name = 'OwnerCapabilityUnavailableError';
+    super({
+      message: 'This deployment is not configured to serve signed-in users: CREDENTIAL_ENCRYPTION_KEY is not set. '
+        + 'See docs/DEPLOYMENT.md.',
+    });
   }
 }
 
-function ownerToken(env: OwnerCapabilityEnv): Promise<string> {
+function ownerToken(env: OwnerCapabilityEnv): Effect.Effect<string> {
   const secret = (env.CREDENTIAL_ENCRYPTION_KEY ?? '').trim();
 
-  if (!secret) throw new OwnerCapabilityUnavailableError();
+  if (!secret) return Effect.die(new OwnerCapabilityUnavailableError());
   let pending = ownerTokens.get(secret);
 
   if (!pending) {
@@ -115,14 +116,15 @@ function ownerToken(env: OwnerCapabilityEnv): Promise<string> {
     ownerTokens.set(secret, pending);
   }
 
-  return pending;
+  const token = pending;
+
+  return Effect.promise(() => token);
 }
 
 /** Thrown by `requireTier`; crosses the Worker→DO RPC boundary as its message. */
-export class CapabilityDeniedError extends Error {
+export class CapabilityDeniedError extends Data.TaggedError('CapabilityDeniedError')<{ readonly message: string }> {
   constructor(message: string) {
-    super(message);
-    this.name = 'CapabilityDeniedError';
+    super({ message });
   }
 }
 
@@ -140,11 +142,14 @@ function denyCapability(
   reason: CapabilityDenialReason,
   capability: WorkspaceCapability,
   message: string,
-): never {
-  diagnostics.event('capability.denied', {
-    reason, capability, outcome: 'denied', source: 'workspace_capability',
+): Effect.Effect<never> {
+  return Effect.suspend(() => {
+    diagnostics.event('capability.denied', {
+      reason, capability, outcome: 'denied', source: 'workspace_capability',
+    });
+
+    return Effect.die(new CapabilityDeniedError(message));
   });
-  throw new CapabilityDeniedError(message);
 }
 
 export function initWorkspaceCapabilityTables(sql: SqlExec): void {
@@ -236,65 +241,70 @@ const UserCallerSchema = v.union([
   v.object({ workspaceToken: v.string() }),
 ]);
 
-async function resolveCaller(
+function resolveCaller(
   sql: SqlExec,
   env: OwnerCapabilityEnv,
   presented: { caller: unknown },
   capability: WorkspaceCapability,
-): Promise<ResolvedCaller> {
-  const parsedCaller = v.safeParse(UserCallerSchema, presented.caller);
+): Effect.Effect<ResolvedCaller> {
+  return Effect.gen(function* () {
+    const parsedCaller = v.safeParse(UserCallerSchema, presented.caller);
 
-  if (!parsedCaller.success) {
-    denyCapability('no_caller_identity', capability,
-      'This call carried no valid caller identity. Privileged user-level calls must present a capability token.');
-  }
+    if (!parsedCaller.success) {
+      return yield* denyCapability('no_caller_identity', capability,
+        'This call carried no valid caller identity. Privileged user-level calls must present a capability token.');
+    }
 
-  if ('ownerToken' in parsedCaller.output) {
-    const presentedOwner = parsedCaller.output.ownerToken;
+    if ('ownerToken' in parsedCaller.output) {
+      const presentedOwner = parsedCaller.output.ownerToken;
 
-    if (timingSafeEqual(presentedOwner, await ownerToken(env))) return { kind: 'owner_session' };
-    denyCapability('unrecognized_owner', capability, 'Unrecognized owner capability.');
-  }
+      if (timingSafeEqual(presentedOwner, yield* ownerToken(env))) return { kind: 'owner_session' };
 
-  const token = parsedCaller.output.workspaceToken;
+      return yield* denyCapability('unrecognized_owner', capability, 'Unrecognized owner capability.');
+    }
 
-  if (token === '') {
-    denyCapability('no_workspace_identity', capability,
-      'This call carried no workspace identity. Privileged user-level calls must present a workspace capability token.');
-  }
+    const token = parsedCaller.output.workspaceToken;
 
-  const tokenHash = await sha256Hex(token);
+    if (token === '') {
+      return yield* denyCapability('no_workspace_identity', capability,
+        'This call carried no workspace identity. Privileged user-level calls must present a workspace capability token.');
+    }
 
-  const row = v.safeParse(v.object({ workspace_name: v.string() }), sql.exec(
-    `SELECT workspace_name FROM workspace_capability_tokens WHERE token_hash = ? LIMIT 1`, tokenHash,
-  ).toArray()[0]);
+    const tokenHash = sha256Hex(token);
 
-  const workspace = row.success ? row.output.workspace_name : null;
+    const row = v.safeParse(v.object({ workspace_name: v.string() }), sql.exec(
+      `SELECT workspace_name FROM workspace_capability_tokens WHERE token_hash = ? LIMIT 1`, tokenHash,
+    ).toArray()[0]);
 
-  if (!workspace) {
-    denyCapability('unrecognized_workspace', capability, 'Unrecognized workspace capability token.');
-  }
+    const workspace = row.success ? row.output.workspace_name : null;
 
-  return { kind: 'workspace', workspace };
+    if (!workspace) {
+      return yield* denyCapability('unrecognized_workspace', capability, 'Unrecognized workspace capability token.');
+    }
+
+    return { kind: 'workspace', workspace };
+  });
 }
 
 /** Called first in every privileged UserDO method; returns the principal for further scoping. */
-export async function requireTier(
+export function requireTier(
   sql: SqlExec,
   env: OwnerCapabilityEnv,
   presented: { caller: unknown },
   capability: WorkspaceCapability,
 ): Promise<ResolvedCaller> {
-  const resolved = await resolveCaller(sql, env, presented, capability);
+  return settle(Effect.gen(function* () {
+    const resolved = yield* resolveCaller(sql, env, presented, capability);
 
-  if (resolved.kind === 'owner_session') return resolved;
+    if (resolved.kind === 'owner_session') return resolved;
 
-  if (WORKSPACE_CAPABILITY_TIERS[capability] === 'owner_only') {
-    denyCapability('owner_only', capability,
-      `"${capability}" is an account authority and is reachable only by the signed-in owner. `
-      + `Workspace "${resolved.workspace}" presented a workspace capability token, which never carries `
-      + 'owner authority.');
-  }
+    if (WORKSPACE_CAPABILITY_TIERS[capability] === 'owner_only') {
+      return yield* denyCapability('owner_only', capability,
+        `"${capability}" is an account authority and is reachable only by the signed-in owner. `
+        + `Workspace "${resolved.workspace}" presented a workspace capability token, which never carries `
+        + 'owner authority.');
+    }
 
-  return resolved;
+    return resolved;
+  }));
 }

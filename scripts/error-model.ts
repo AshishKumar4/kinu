@@ -41,6 +41,8 @@ export type Mechanism = (typeof MECHANISMS)[number];
 interface Declaration {
   readonly mechanisms: readonly Mechanism[];
   readonly reason: string;
+  /** Only sites inside these named functions, methods, types or interfaces; absent, the whole file. */
+  readonly within?: readonly string[];
 }
 
 /** Files whose mechanisms are the target model's boundary, not a legacy site. */
@@ -60,6 +62,11 @@ export const DECLARED = new Map<string, Declaration>([
   ['packages/core/src/slates/store.ts', {
     mechanisms: ['throw'],
     reason: 'a vendored `SlateStore`: its failures are the vendored package\'s `AgentCoreError` codes, its contract',
+  }],
+  ['packages/core/src/providers/model-test.ts', {
+    mechanisms: ['result-literal', 'result-type'],
+    within: ['ModelTestResult', 'ModelTestResultSchema', 'testModel', 'failed'],
+    reason: '`ModelTestResult`, the model picker\'s test verdict over HTTP and the CLI; `ok` is its wire field',
   }],
   ['packages/core/src/tools/outcome.ts', {
     mechanisms: ['result-literal', 'result-type'],
@@ -257,13 +264,29 @@ function mechanismOf(node: SyntaxNode): Mechanism | undefined {
   return undefined;
 }
 
+function isDeclared(file: string, mechanism: Mechanism, node: SyntaxNode): boolean {
+  const declaration = DECLARED.get(file);
+
+  if (declaration?.mechanisms.includes(mechanism) !== true) return false;
+
+  if (declaration.within === undefined) return true;
+
+  for (let up = node.parent; up !== undefined; up = up.parent) {
+    const name = declaredName(up);
+
+    if (name !== undefined && declaration.within.includes(name)) return true;
+  }
+
+  return false;
+}
+
 /** Sites per `path#mechanism`, declared boundary mechanisms left out. */
 export function measure(sources: ReadonlyMap<string, string>): LockedNumber[] {
   const counts = new Map<string, number>();
-  const classes: { readonly file: string; readonly name: string | undefined; readonly base: string }[] = [];
+  const classes: { readonly file: string; readonly name: string | undefined; readonly base: string; readonly node: SyntaxNode }[] = [];
 
-  const count = (file: string, mechanism: Mechanism): void => {
-    if (DECLARED.get(file)?.mechanisms.includes(mechanism) === true) return;
+  const count = (file: string, mechanism: Mechanism, node: SyntaxNode): void => {
+    if (isDeclared(file, mechanism, node)) return;
     const key = `${file}#${mechanism}`;
 
     counts.set(key, (counts.get(key) ?? 0) + 1);
@@ -273,10 +296,10 @@ export function measure(sources: ReadonlyMap<string, string>): LockedNumber[] {
     walk(parse(file, text).root, (node) => {
       const base = superClassName(node);
 
-      if (base !== undefined) classes.push({ file, name: declaredName(node), base });
+      if (base !== undefined) classes.push({ file, name: declaredName(node), base, node });
       const mechanism = mechanismOf(node);
 
-      if (mechanism !== undefined) count(file, mechanism);
+      if (mechanism !== undefined) count(file, mechanism, node);
     });
   }
 
@@ -292,7 +315,7 @@ export function measure(sources: ReadonlyMap<string, string>): LockedNumber[] {
     }
   }
 
-  for (const { file, base } of classes) if (errorish.has(base)) count(file, 'error-class');
+  for (const { file, base, node } of classes) if (errorish.has(base)) count(file, 'error-class', node);
 
   return [...counts].map(([key, value]) => ({ key, value })).sort((a, b) => a.key.localeCompare(b.key));
 }
@@ -458,8 +481,8 @@ if (import.meta.main) {
     console.log(`  stale: ${key} locked at ${String(was)}, now ${String(now)}; \`bun scripts/error-model.ts --lock\` lowers it`);
   }
 
-  for (const [file, { mechanisms, reason }] of DECLARED) {
-    console.log(`  declared: ${file} (${mechanisms.join(', ')}): ${reason}`);
+  for (const [file, { mechanisms, reason, within }] of DECLARED) {
+    console.log(`  declared: ${file} (${mechanisms.join(', ')}${within === undefined ? '' : ` within ${within.join(', ')}`}): ${reason}`);
   }
 
   const { bridges, findings } = bridgeSites(sources);

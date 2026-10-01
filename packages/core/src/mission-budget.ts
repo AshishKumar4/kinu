@@ -12,7 +12,7 @@ import type { JsonObject, JsonValue } from './utils/json';
 import { usageReported, usageTotal, type Usage } from './usage';
 import { Effect } from 'effect';
 import { KinuError } from './obs/error';
-import { settleSync } from './obs/effect';
+import { settle, settleSync } from './obs/effect';
 
 /** A label with neither cap meters but never refuses. */
 export interface MissionBudgetLimits {
@@ -379,25 +379,21 @@ export class MissionGovernor {
   govern(llm: LLM, labels: readonly string[] = this.active): LLM {
     if (labels.length === 0) return llm;
 
-    const guard = (): void => {
+    const admitted = (): Effect.Effect<void, KinuError> => Effect.suspend(() => {
       const refusal = this.guard('model_call', labels);
 
-      if (refusal) throw new MissionBudgetExhausted(refusal);
-    };
+      return refusal ? Effect.fail(new MissionBudgetExhausted(refusal)) : Effect.void;
+    });
 
     return {
-      stream: (opts) => {
-        guard();
-
-        return llm.stream(opts);
-      },
-      complete: async (prompt) => {
-        guard();
-        const text = await llm.complete(prompt);
+      stream: (opts) => settleSync(Effect.andThen(admitted(), Effect.sync(() => llm.stream(opts)))),
+      complete: (prompt) => settle(Effect.gen({ self: this }, function* () {
+        yield* admitted();
+        const text = yield* Effect.promise(() => llm.complete(prompt));
         this.debit(estimateTokens(prompt.length + text.length), { labels, calls: 1 });
 
         return text;
-      },
+      })),
     };
   }
 

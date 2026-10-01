@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import { APICallError } from 'ai';
 import { asFetchFunction, copyHeaders } from './fetch-shim';
 import * as v from 'valibot';
@@ -107,15 +109,17 @@ export function withRateLimitRetry(
     for (let attempt = 1; ; attempt++) {
       await pacer.admit(lane, signal, {
         onCooldown: (waitMs, untilMs, reason) => {
-          if (waitMs > MAX_RETRY_DELAY_MS) {
-            throw waitTooLong({ input, provider: opts.provider ?? host, untilMs, nowMs: now(), longestMs: MAX_RETRY_DELAY_MS, reason });
-          }
+          return settleSync(Effect.gen(function* () {
+            if (waitMs > MAX_RETRY_DELAY_MS) {
+              return yield* Effect.die(waitTooLong({ input, provider: opts.provider ?? host, untilMs, nowMs: now(), longestMs: MAX_RETRY_DELAY_MS, reason }));
+            }
 
-          if (untilMs === ownedCooldownUntil.ms) return;
+            if (untilMs === ownedCooldownUntil.ms) return;
 
-          if (++waits > retries) throw handedOver(null, waitMs);
+            if (++waits > retries) return yield* Effect.die(handedOver(null, waitMs));
 
-          reportWait(waitMs, 0, 'cooldown');
+            reportWait(waitMs, 0, 'cooldown');
+          }));
         },
       });
 

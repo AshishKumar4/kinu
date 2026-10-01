@@ -170,15 +170,17 @@ export async function listModelsDevProviderModels(
 }
 
 /** Provider metadata, or null when not in the catalog; an unreadable catalog throws rather than returning null. */
-export async function getModelsDevProvider(
+export function getModelsDevProvider(
   providerId: string,
   deps: Pick<ProviderDeps, 'fetch'>,
   ttlMs: number = DEFAULT_TTL_MS,
 ): Promise<ModelsDevProviderInfo | null> {
-  const data = await getModelsDevCatalog(deps.fetch, ttlMs);
-  const provider = data[providerId];
+  return settle(Effect.gen(function* () {
+    const data = yield* Effect.promise(() => getModelsDevCatalog(deps.fetch, ttlMs));
+    const provider = data[providerId];
 
-  return provider ? providerInfoFromModelsDev(providerId, provider) : null;
+    return provider ? providerInfoFromModelsDev(providerId, provider) : null;
+  }));
 }
 
 export interface ModelsDevModelEndpoint {
@@ -188,36 +190,40 @@ export interface ModelsDevModelEndpoint {
 }
 
 /** A model can override its provider's SDK and endpoint in models.dev. */
-export async function getModelsDevModelEndpoint(
+export function getModelsDevModelEndpoint(
   providerId: string,
   modelId: string,
   deps: Pick<ProviderDeps, 'fetch'>,
 ): Promise<ModelsDevModelEndpoint | null> {
-  const data = await getModelsDevCatalog(deps.fetch, DEFAULT_TTL_MS);
-  const provider = data[providerId];
+  return settle(Effect.gen(function* () {
+    const data = yield* Effect.promise(() => getModelsDevCatalog(deps.fetch, DEFAULT_TTL_MS));
+    const provider = data[providerId];
 
-  if (!provider) return null;
+    if (!provider) return null;
 
-  const model = Object.entries(provider.models ?? {})
-    .find(([key, entry]) => (nonEmptyString({ value: entry.id }) ?? key) === modelId)?.[1];
+    const model = Object.entries(provider.models ?? {})
+      .find(([key, entry]) => (nonEmptyString({ value: entry.id }) ?? key) === modelId)?.[1];
 
-  const info = providerInfoFromModelsDev(providerId, provider);
-  const npm = model?.provider?.npm ?? info.npm;
-  const baseURL = concreteAPI(model?.provider?.api) ?? modelsDevCompatBaseURL(info);
+    const info = providerInfoFromModelsDev(providerId, provider);
+    const npm = model?.provider?.npm ?? info.npm;
+    const baseURL = concreteAPI(model?.provider?.api) ?? modelsDevCompatBaseURL(info);
 
-  if (baseURL === null) return null;
+    if (baseURL === null) return null;
 
-  return { baseURL, protocol: npm === '@ai-sdk/openai' ? 'responses' : 'chat-completions', reasoning: model?.reasoning === true };
+    return { baseURL, protocol: npm === '@ai-sdk/openai' ? 'responses' : 'chat-completions', reasoning: model?.reasoning === true };
+  }));
 }
 
 /** Metadata for every provider; throws when the catalog cannot be read rather than returning an empty list. */
-export async function listModelsDevProviders(
+export function listModelsDevProviders(
   deps: Pick<ProviderDeps, 'fetch'>,
   ttlMs: number = DEFAULT_TTL_MS,
 ): Promise<ModelsDevProviderInfo[]> {
-  const data = await getModelsDevCatalog(deps.fetch, ttlMs);
+  return settle(Effect.gen(function* () {
+    const data = yield* Effect.promise(() => getModelsDevCatalog(deps.fetch, ttlMs));
 
-  return Object.entries(data).map(([id, provider]) => providerInfoFromModelsDev(id, provider));
+    return Object.entries(data).map(([id, provider]) => providerInfoFromModelsDev(id, provider));
+  }));
 }
 
 /** OpenAI-compatible endpoints for providers whose SDK embeds the URL (unloadable in a Worker);

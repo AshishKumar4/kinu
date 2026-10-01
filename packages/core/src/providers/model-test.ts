@@ -2,7 +2,8 @@ import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
 import { describeProviderError, providerFailureFacts, toProviderError } from './util';
 import { abortCause } from '../utils/abort';
-import { renderThrownChain } from '../obs/index';
+import { Effect, Result } from 'effect';
+import { renderThrownChain, settle } from '../obs/index';
 import { streamTextReported } from './model-invocation';
 import { agentAffinityKey } from './workers-ai';
 import type { ModelCallSink } from '../events/model-call';
@@ -24,51 +25,58 @@ export const ModelTestResultSchema: v.GenericSchema<ModelTestResult> = v.union([
 ]);
 
 /** Unretried; output uncapped by rule. Each test is a conversation of its own. */
-export async function testModel(input: {
+export function testModel(input: {
   readonly spec: string;
   readonly resolve: (spec: string, conversation: string) => LanguageModel;
   readonly report?: ModelCallSink;
   readonly signal?: AbortSignal;
   readonly now?: () => number;
 }): Promise<ModelTestResult> {
-  const now = input.now ?? performance.now.bind(performance);
-  let model: LanguageModel;
+  return settle(Effect.gen(function* () {
+    const now = input.now ?? performance.now.bind(performance);
 
-  try {
-    model = input.resolve(input.spec, agentAffinityKey(`model-test-${crypto.randomUUID()}`));
-  } catch (cause) {
-    return { ok: false, failure: 'unknown-model', message: renderThrownChain({ cause }) };
-  }
+    const resolved = yield* Effect.result(Effect.try({
+      try: () => input.resolve(input.spec, agentAffinityKey(`model-test-${crypto.randomUUID()}`)),
+      catch: (cause) => ({ cause }),
+    }));
 
-  const started = now();
-  let firstTokenMs: number | null = null;
-  const spend = { source: 'test', report: input.report ?? ((): void => {}) } as const;
-  // The stream then throws a generic "no output" in place of this.
-  const streamed: Array<{ readonly error: unknown }> = [];
+    if (Result.isFailure(resolved)) return { ok: false, failure: 'unknown-model', message: renderThrownChain(resolved.failure) };
+    const model = resolved.success;
+    const started = now();
+    let firstTokenMs: number | null = null;
+    const spend = { source: 'test', report: input.report ?? ((): void => {}) } as const;
+    // The stream then throws a generic "no output" in place of this.
+    const streamed: Array<{ readonly error: unknown }> = [];
 
-  try {
-    const stream = streamTextReported({
-      model,
-      prompt: 'Reply with the word OK.',
-      maxRetries: 0,
-      ...(input.signal !== undefined && { abortSignal: input.signal }),
-      onError: (event) => { streamed.push(event); },
-    }, { spend, spec: input.spec }, (part) => {
-      if (firstTokenMs === null && (part.type === 'text-delta' || part.type === 'reasoning-delta')) firstTokenMs = now() - started;
-    });
+    const drained = yield* Effect.result(Effect.tryPromise({
+      try: async () => {
+        const stream = streamTextReported({
+          model,
+          prompt: 'Reply with the word OK.',
+          maxRetries: 0,
+          ...(input.signal !== undefined && { abortSignal: input.signal }),
+          onError: (event) => { streamed.push(event); },
+        }, { spend, spec: input.spec }, (part) => {
+          if (firstTokenMs === null && (part.type === 'text-delta' || part.type === 'reasoning-delta')) firstTokenMs = now() - started;
+        });
 
-    for await (const chunk of stream) void chunk;
-  } catch (cause) {
-    if (input.signal?.aborted) throw abortCause(input.signal);
+        for await (const chunk of stream) void chunk;
+      },
+      catch: (cause) => ({ cause }),
+    }));
 
-    return failed({ cause: streamed[0]?.error ?? cause });
-  }
+    if (Result.isFailure(drained)) {
+      if (input.signal?.aborted) return yield* Effect.die(abortCause(input.signal));
 
-  if (streamed[0] !== undefined) return failed({ cause: streamed[0].error });
+      return failed({ cause: streamed[0]?.error ?? drained.failure.cause });
+    }
 
-  const totalMs = now() - started;
+    if (streamed[0] !== undefined) return failed({ cause: streamed[0].error });
 
-  return { ok: true, firstTokenMs: firstTokenMs ?? totalMs, totalMs };
+    const totalMs = now() - started;
+
+    return { ok: true, firstTokenMs: firstTokenMs ?? totalMs, totalMs };
+  }));
 }
 
 function failed({ cause }: { readonly cause: unknown }): ModelTestResult {

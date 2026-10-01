@@ -3,6 +3,8 @@
  * only toward the bound host, and scrubs secrets from anything coming back. Consent is per binding, not per request.
  */
 
+import { Effect } from 'effect';
+import { settleSync } from '../obs/effect';
 import type { ApprovalGrant } from './approval-gate';
 
 /** Version tag, so a stored binding from an older build is not mistaken for a secret. */
@@ -242,10 +244,12 @@ export function createScrubStream(
 
   return new TransformStream({
     transform(chunk, controller) {
-      drain(chunk, false, controller);
+      return settleSync(Effect.gen(function* () {
+        drain(chunk, false, controller);
 
-      // The retained window never grows past one needle.
-      if (carry.length > longest) throw new Error('scrub stream retained more than one needle');
+        // The retained window never grows past one needle.
+        if (carry.length > longest) return yield* Effect.die(new Error('scrub stream retained more than one needle'));
+      }));
     },
     flush(controller) {
       drain(new Uint8Array(0), true, controller);

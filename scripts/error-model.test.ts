@@ -111,6 +111,13 @@ test('the boundary file grows in the mechanisms it declares and in no other', ()
   expect(keysOf(outcome)).toEqual([{ key: `${outcome}#throw`, value: 1 }]);
 });
 
+test('a declaration scoped `within` names covers sites inside those names and no others', () => {
+  const file = 'packages/core/src/providers/model-test.ts';
+  const body = 'export function testModel() { return { ok: true }; }\nexport function other() { return { ok: false }; }\n';
+
+  expect(measured(LEGACY, [[file, body]]).filter(({ key }) => key.startsWith(file))).toEqual([{ key: `${file}#result-literal`, value: 1 }]);
+});
+
 test('`settleSync` as a transactionSync callback\'s whole return is a bridge; anywhere else in the callback it is a finding', () => {
   const source = `
 import { settle, settleSync } from '../obs/index';
