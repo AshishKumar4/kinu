@@ -30,7 +30,8 @@
  * full roster: the page's reset effect bumped the roster read's generation after
  * its sibling effect had sent that read, so a reopened workspace drew Main alone
  * until a new agent's broadcast arrived. So the last subgoal loads the deployed
- * page and reads its tab strip and sidebar once every read the page sent has answered.
+ * page and, once every read the page sent has answered, reads its tab strip and
+ * the sidebar's Agents panel, opened from the chat's Agents control as a person does.
  *
  * NO WALL CLOCK. A read that never answers is bounded by the case's own BUDGET
  * (the `budgetMs` the harness aborts on), so each verdict is "answered" or
@@ -126,8 +127,15 @@ function rpcFrame(payload: string): RpcFrame | null {
   return sent.success ? { kind: 'sent', id: sent.output.id, method: sent.output.method } : null;
 }
 
-/** What the page drew for the roster: agent tabs in the strip, agent links in the sidebar. */
-interface DrawnRoster { readonly tabs: string[]; readonly links: string[] }
+/** Two frames: what the page drew for the state it holds. */
+async function painted(page: Page): Promise<void> {
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  }));
+}
+
+/** What the page drew for the roster: agent tabs in the strip by name, the Agents panel's rows by actor id. */
+interface DrawnRoster { readonly tabs: string[]; readonly rows: string[] }
 
 /**
  * Load the workspace in Chrome and read the agents it draws once the page is
@@ -179,23 +187,23 @@ async function drawnRoster(page: Page, plan: PublicSessionPlan, workspace: strin
 
   for (;;) {
     await Promise.race([quiet.promise, aborted]);
-    await page.evaluate(() => new Promise<void>((resolve) => {
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-    }));
+    await painted(page);
 
     if (pending.size === 0) break;
     quiet = Promise.withResolvers<void>();
     check();
   }
 
-  return page.evaluate((path: string) => ({
+  // The sidebar lists a workspace's agents once its Agents panel is opened from the chat's control.
+  await page.click('[data-agents-counter]');
+  await painted(page);
+
+  return page.evaluate((name: string) => ({
     tabs: [...document.querySelectorAll<HTMLElement>('nav[aria-label="Workspace agents"] [data-agent-tab]')]
-      .map((tab) => tab.dataset.agentTab ?? '').filter((name) => name !== 'main'),
-    links: [...document.querySelectorAll<HTMLAnchorElement>('aside a[href]')]
-      .map((link) => new URL(link.href).pathname)
-      .filter((href) => href.startsWith(path))
-      .map((href) => decodeURIComponent(href.slice(path.length))),
-  }), `/workspace/${encodeURIComponent(workspace)}/agents/`);
+      .map((tab) => tab.dataset.agentTab ?? '').filter((tab) => tab !== 'main'),
+    rows: [...document.querySelectorAll<HTMLElement>(`[data-sidebar-agents="${name}"] [data-agent-row]`)]
+      .map((row) => row.dataset.agentRow ?? ''),
+  }), workspace);
 }
 
 describe(SUITE, () => {
@@ -382,16 +390,16 @@ describe(SUITE, () => {
           });
 
           // ── The page, loaded from nothing, draws both agents with no new
-          //    event: a tab in the strip and a link in the sidebar. ─────────
+          //    event: a tab in the strip and a row in the Agents panel. ─────
           browser = await openBrowser();
           const drawn = await drawnRoster(await signedInPage(browser.browser, plan.identity), plan, session.workspace, budget);
-          const undrawn = names.filter((name) => !drawn.tabs.includes(name) || !drawn.links.includes(name));
+          const undrawn = names.filter((name, index) => !drawn.tabs.includes(name) || !drawn.rows.includes(actorIds[index] ?? ''));
 
           subgoals.push({
             what: 'page-shows-agents',
             reached: undrawn.length === 0,
-            detail: `with every read answered the strip drew ${JSON.stringify(drawn.tabs)} and the sidebar `
-              + `${JSON.stringify(drawn.links)} for created ${JSON.stringify(names)}`,
+            detail: `with every read answered the strip drew ${JSON.stringify(drawn.tabs)} and the Agents panel `
+              + `${JSON.stringify(drawn.rows)} for created ${JSON.stringify(names)} (${JSON.stringify(actorIds)})`,
           });
 
           return announce(subgoals);
