@@ -4,6 +4,8 @@
  */
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
+import { SCRIPTED_MODEL_SPEC } from '../../packages/test-utils/src/scripted-model-spec';
+import { readScriptedRequest, SCRIPTED_MODELS_BODY, scriptedBody as compatBody, type ScriptedAnswer } from '../scripted-protocol';
 
 /** The product RPC setup calls, as the account plane calls it; the classes live in the built bundle. */
 interface WorkspaceRpc extends Rpc.DurableObjectBranded {
@@ -21,11 +23,14 @@ interface AccountRpc extends Rpc.DurableObjectBranded {
   ensureProfile(caller: { ownerToken: string }, email: string, name: string): Promise<void>;
   registerWorkspace(caller: { ownerToken: string }, name: string, displayName: string): Promise<void>;
   ensureWorkspaceCapability(workspace: string, capabilityHash: string): Promise<void>;
+  setCredential(caller: { ownerToken: string }, key: string, credential: { kind: 'openai-compat'; baseURL: string; apiKey: string }): Promise<void>;
 }
 
 interface DriverEnv {
   /** `ownerCaller`'s token for the product's key, computed by the gate. */
   readonly OWNER_TOKEN: string;
+  /** Where the product reaches its OpenAI-compatible endpoint: the gate routes this host's requests here. */
+  readonly COMPAT_HOST: string;
   readonly OrchestratorAgent: DurableObjectNamespace<WorkspaceRpc>;
   readonly UserDO: DurableObjectNamespace<AccountRpc>;
 }
@@ -33,7 +38,8 @@ interface DriverEnv {
 const OWNER = 'fedcba9876543210fedcba9876543211';
 
 export class HeapDriver extends DurableObject<DriverEnv> {
-  async setUp(workspace: string): Promise<void> {
+  /** `compat`: the workspace runs on the OpenAI-compatible path, the one the hosted providers (OpenRouter, OpenCode Go) take. */
+  async setUp(workspace: string, compat: boolean): Promise<void> {
     const caller = { ownerToken: this.env.OWNER_TOKEN };
     const users = this.env.UserDO.get(this.env.UserDO.idFromName(OWNER));
     const agent = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspace));
@@ -42,7 +48,9 @@ export class HeapDriver extends DurableObject<DriverEnv> {
     const claim = await agent.claimOwner(OWNER);
     await users.ensureWorkspaceCapability(workspace, claim.capabilityHash);
     await agent.setSoul('# Heap\n\nAnswer.');
-    await agent.setModel('workers-ai/@cf/zai-org/glm-5.3');
+
+    if (compat) await users.setCredential(caller, 'openai-compat.default', { kind: 'openai-compat', baseURL: `http://${this.env.COMPAT_HOST}`, apiKey: 'heap' });
+    await agent.setModel(compat ? SCRIPTED_MODEL_SPEC : 'workers-ai/@cf/zai-org/glm-5.3');
   }
 
   /** One root turn through the product's MCP entry, as a caller outside the page runs one. */
@@ -60,7 +68,12 @@ export class HeapDriver extends DurableObject<DriverEnv> {
 }
 
 /** What the model answers and whether it answers yet; module state, which the entrypoint and fetch share. */
-const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepping: false, arrived: 0, released: 0, hires: 0, helpersAnswered: 0, holdHelper: false, helperParked: false, nest: false };
+const model = { answerBytes: 0, holding: false, parked: 0, calls: 0, wide: new Set<string>(), toolSteps: 0, stepBytes: 0, stepping: false, arrived: 0, released: 0, hires: 0, helpersAnswered: 0, holdHelper: false, helperParked: false, nest: false };
+
+/** Each character above U+00FF in `request`, with the text before it: one of them stores the whole request two bytes each. */
+function noteWide(request: string): void {
+  for (const match of request.matchAll(/[\u{100}-\u{10ffff}]/gu)) model.wide.add(request.slice(Math.max(0, match.index - 48), match.index + 1));
+}
 
 /** The text of every user message a request carries. */
 function userTexts(messages: readonly object[]): string[] {
@@ -87,10 +100,7 @@ async function scriptedBody(inputs: { readonly stream?: boolean; readonly messag
 
   if (inputs.stream !== true) return JSON.stringify({ response: '{"upserts":[],"decay":[]}' });
 
-  const request = JSON.stringify(inputs);
-
-  // Each character above U+00FF, with the text before it: one of them stores the whole request two bytes each.
-  for (const match of request.matchAll(/[\u{100}-\u{10ffff}]/gu)) model.wide.add(request.slice(Math.max(0, match.index - 48), match.index + 1));
+  noteWide(JSON.stringify(inputs));
   model.parked += 1;
   // Stepping: each call waits until the gate has read the heap at it.
   const seq = model.stepping ? ++model.arrived : 0;
@@ -182,6 +192,37 @@ async function scriptedAnswer(inputs: Parameters<typeof scriptedBody>[0]): Promi
   }), { headers: { 'content-type': 'text/event-stream' } });
 }
 
+/** The OpenAI-compatible endpoint: each step of the long turn writes a page through the file tool, as an agent writing
+ *  files does, so every later request carries that page again in the call's arguments. */
+async function compatAnswer(body: string): Promise<Response> {
+  const read = readScriptedRequest(body);
+
+  if ('refusal' in read) return new Response(read.refusal.body, { status: read.refusal.status, headers: { 'content-type': 'application/json' } });
+  const asked = read.request;
+  let answer: ScriptedAnswer = { text: 'Heap' };
+
+  if (asked.streamed) {
+    model.calls += 1;
+    noteWide(body);
+    model.parked += 1;
+    const seq = model.stepping ? ++model.arrived : 0;
+
+    while (model.holding || model.released < seq) await scheduler.wait(seq > 0 ? 2 : 20);
+    model.parked -= 1;
+    const page = 'word '.repeat(Math.ceil(model.stepBytes / 5)).slice(0, model.stepBytes);
+
+    answer = model.toolSteps > 0
+      ? { toolCall: { name: 'file', arguments: { action: 'write', path: `notes/step-${String(seq)}.md`, content: page } } }
+      : { text: 'done' };
+
+    if (model.toolSteps > 0) model.toolSteps -= 1;
+  }
+
+  const out = compatBody(answer, asked);
+
+  return new Response(out.body, { headers: { 'content-type': out.contentType } });
+}
+
 const AIRequestSchema = v.object({
   inputs: v.looseObject({ stream: v.optional(v.boolean()), messages: v.optional(v.array(v.record(v.string(), v.unknown()))) }),
 });
@@ -189,6 +230,10 @@ const AIRequestSchema = v.object({
 export default {
   async fetch(request: Request, env: DriverEnv & { readonly HEAP_DRIVER: DurableObjectNamespace<HeapDriver> }): Promise<Response> {
     const url = new URL(request.url);
+
+    if (url.hostname === env.COMPAT_HOST) {
+      return url.pathname === '/models' ? new Response(SCRIPTED_MODELS_BODY, { headers: { 'content-type': 'application/json' } }) : compatAnswer(await request.text());
+    }
 
     if (url.pathname === '/ai') return scriptedAnswer(v.parse(AIRequestSchema, await request.json()).inputs);
     const workspace = url.searchParams.get('workspace') ?? 'heap';
@@ -200,6 +245,7 @@ export default {
 
       if (url.searchParams.has('toolSteps')) {
         model.toolSteps = Number(url.searchParams.get('toolSteps'));
+        model.stepBytes = Number(url.searchParams.get('stepBytes') ?? 0);
         model.stepping = model.toolSteps > 0;
         model.arrived = 0;
         model.released = 0;
@@ -228,7 +274,7 @@ export default {
 
     if (url.pathname === '/turn') await driver.turn(workspace, url.searchParams.get('text') ?? 'hello');
     else if (url.pathname === '/heads') await driver.heads(workspace, url.searchParams.get('tag') ?? 'head', Number(url.searchParams.get('count')));
-    else await driver.setUp(workspace);
+    else await driver.setUp(workspace, url.searchParams.get('compat') === '1');
 
     return new Response(null, { status: 204 });
   },
