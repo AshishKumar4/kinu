@@ -1400,11 +1400,13 @@ export {
 
 // Platform facts: prose cites an entry by its id and never restates the number.
 export {
+  BOUNDS_KINDS,
   PLATFORM_CATALOG,
   PLATFORM_FACT_IDS,
   injectableFaults,
   platformFact,
   platformFactEntries,
+  silenceBoundMs,
   type BoundsKind,
   type EvidenceLabel,
   type LimitUnit,
@@ -1414,6 +1416,7 @@ export {
   type PlatformMeasurement,
   type PlatformObservable,
   type PlatformQuantity,
+  type SilenceBoundId,
 } from './platform-catalog';
 
 // Safety
