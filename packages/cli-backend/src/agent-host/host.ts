@@ -439,9 +439,9 @@ export class LocalAgentHost {
       } catch (error) {
         // This path discards the tree without reaching close(), so release its lease here or the
         // `driver_lease` row names a holder that no longer exists.
-        settleLoggedSync('driver.lease_release_failed', { doing: 'releasing the discarded tree\'s driver lease', otherwise: 'io' }, () => {
- tree.hold.release();
-        }, { workspace: name });
+        // Recorded, not thrown: it must not replace the open failure below, but must stay visible.
+        settleLoggedSync('driver.lease_release_failed', { doing: 'releasing the discarded tree\'s driver lease', otherwise: 'io' },
+          () => tree.hold.release(), { workspace: name });
 
         this.trees.delete(name);
         throw error;

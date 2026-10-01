@@ -25,6 +25,7 @@ export class DrainScheduler {
     this.setTimer(async () => {
       this.armed = false;
 
+      // Window already disarmed; the next schedule() re-arms.
       await settleLogged('orchestrator.debounced_drain_failed', { doing: 'run the debounced event drain', otherwise: 'unavailable' }, () => this.drain());
     }, DRAIN_DEBOUNCE_MS);
   }

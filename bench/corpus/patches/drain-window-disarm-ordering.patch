@@ -1,12 +1,13 @@
 diff --git a/packages/core/src/orchestrator/drain-scheduler.ts b/packages/core/src/orchestrator/drain-scheduler.ts
 --- a/packages/core/src/orchestrator/drain-scheduler.ts
 +++ b/packages/core/src/orchestrator/drain-scheduler.ts
-@@ -24,9 +24,8 @@ export class DrainScheduler {
+@@ -24,10 +24,9 @@ export class DrainScheduler {
      if (this.armed) return;
      this.armed = true;
      this.setTimer(async () => {
 -      this.armed = false;
 -
+       // Window already disarmed; the next schedule() re-arms.
        await settleLogged('orchestrator.debounced_drain_failed', { doing: 'run the debounced event drain', otherwise: 'unavailable' }, () => this.drain());
 +      this.armed = false;
      }, DRAIN_DEBOUNCE_MS);

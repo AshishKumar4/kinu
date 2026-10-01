@@ -228,9 +228,8 @@ export class ActorClaimStore {
   }
   private notify<T>(listeners: ReadonlySet<(value: T) => void>, value: T): void {
     for (const listener of listeners) {
-      settleLoggedSync('actor.claim_listener_failed', { doing: 'notify a turn-claim listener', otherwise: 'io' }, () => {
- listener(value);
-      }, { actorId: this.actorId });
+      settleLoggedSync('actor.claim_listener_failed', { doing: 'notify a turn-claim listener', otherwise: 'io' },
+        () => listener(value), { actorId: this.actorId });
     }
   }
   private claimOf(row: ClaimRow): StoredActorClaim {

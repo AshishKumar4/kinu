@@ -550,9 +550,8 @@ export class BackgroundJobRunner {
       throw err;
     }
 
-    settleLoggedSync('jobs.retry_drain_schedule_failed', { doing: 'schedule the drain for a background-job wake retry', otherwise: 'io' }, () => {
- scheduleDrain();
-    }, { jobId: job.id });
+    settleLoggedSync('jobs.retry_drain_schedule_failed', { doing: 'schedule the drain for a background-job wake retry', otherwise: 'io' },
+      () => scheduleDrain(), { jobId: job.id });
   }
 
   /** Abort, mark cancelled, and wake the agent, which was told to wait for this result. */

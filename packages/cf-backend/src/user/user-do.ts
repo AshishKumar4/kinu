@@ -3408,6 +3408,8 @@ export class UserDO extends Agent<Env> {
           this._inflight.settleRevoked(row.requestId, answer);
         }
 
+        // Kill confirmation is already truthful; this is local replay cleanup, recorded separately so a
+        // failed ACK never reads as a possibly running process.
         await settleLogged('device.revocation_ack_cleanup_failed', { doing: 'releasing the cancelled device command supervisor on revocation', otherwise: 'unavailable' }, async () => { await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL]); }, { device: deviceId, request: row.requestId });
       } catch (err) {
         unstoppedCommands += 1;

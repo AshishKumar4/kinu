@@ -1571,9 +1571,8 @@ export class LocalAgentSession {
 
     if (!id) return;
 
-    settleLoggedSync('event.run_row_write_failed', { doing: 'appending a row to the durable run-event log', otherwise: 'io' }, () => {
- recorder.emit(id, input);
-    });
+    settleLoggedSync('event.run_row_write_failed', { doing: 'appending a row to the durable run-event log', otherwise: 'io' },
+      () => recorder.emit(id, input));
   }
 
   /** One run's durable events (DO getRunEvents peer); `since` is the SSE resume index. */
