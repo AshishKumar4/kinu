@@ -92,6 +92,8 @@ interface BenchEnv {
   /** This run's box size, from `wrangler deploy --var`; absent is Devbox's default (D50). */
   BENCH_SIZE?: string;
   BENCH_INTERNET?: string;
+  /** 'none' keeps every path, as a snapshot does (D55's head to head). */
+  BENCH_EXCLUDES?: string;
   /** '1' runs the container's own sync at the shipped period, as production does, for the
    *  loss-window measurement (`scripts/bench-devbox-sync-window.ts`); absent, `checkpointNow`
    *  is the only tick source. */
@@ -563,6 +565,10 @@ class BenchBox extends Devbox<BenchEnv> {
     // constructor's signature identical to the base's rather than restating a
     // platform type that can drift.
     flushEnv = args[1];
+  }
+
+  protected override get archiveExcludes(): readonly string[] {
+    return this.env.BENCH_EXCLUDES === 'none' ? [] : super.archiveExcludes;
   }
 
   protected override get defaultSize(): BoxSize {
