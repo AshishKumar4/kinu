@@ -2,7 +2,8 @@ import { Effect } from 'effect';
 import type { Files } from '@cloudflare/sandbox';
 import type { BackupOptions, DirectoryBackup, ExecResult } from './contracts';
 import { DevboxError, attempt, layerUnreadable, settle } from './errors';
-import { archiveCommand, baseObjectKey } from './snapshot-chain';
+import { baseObjectKey } from './snapshot-chain';
+import { archiveCommand } from './stream-archive';
 import { shellPath } from './chunked-delta';
 import { DEVBOX_RUNTIME_DIR, type DevboxStore } from './storage';
 
