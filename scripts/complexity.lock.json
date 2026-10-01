@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-09-30",
-  "files": 2869,
-  "functions": 71992,
+  "measuredAt": "2026-10-01",
+  "files": 2900,
+  "functions": 72868,
   "ceiling": 87,
   "line": 29,
   "inventory": [
@@ -299,10 +299,6 @@
     },
     {
       "key": "tests/first-run/agent-tab.first-run.ts#describe>liveTest>run",
-      "complexity": 29
-    },
-    {
-      "key": "tests/first-run/workspace-settings.first-run.ts#describe>liveTest>run",
       "complexity": 29
     }
   ]
