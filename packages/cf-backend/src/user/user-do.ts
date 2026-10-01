@@ -162,6 +162,12 @@ import {
 import { deletePictures, picturePrefix } from '../slates/pictures';
 import { RegisteredAppOAuthClientProvider } from './mcp-registered-app';
 import {
+  builtinAdmission, createBuiltinInvite, findPasskeyAccount, findPasswordAccount, hasBuiltinOwner, initBuiltinAccounts, isBuiltinOwner,
+  issuePasskeyChallenge, recordPasskeyUse, registerBuiltinAccount, spendPasskeyChallenge,
+  type Admission, type BuiltinSql, type ChallengePurpose, type NewBuiltinAccount, type NewInvite, type PasskeyAccount,
+  type PasswordAccount, type PendingChallenge,
+} from '@kinu.run/core/identity';
+import {
   CLOUDFLARE_AI_GATEWAY_CRED_KEY,
   CLOUDFLARE_OAUTH_CRED_KEY,
   accountIdFromCloudflareCredential,
@@ -1472,6 +1478,75 @@ export class UserDO extends Agent<Env> {
 
   /** Revoke exactly this session; the row's absence is the revocation. The write is durable
    * before the fan-out, so a failed push cannot keep a socket authorized (see retireCliAuthority). */
+  // Built-in accounts: only on `BUILTIN_ACCOUNTS_OBJECT`.
+
+  private builtinSql(): BuiltinSql {
+    const sql: BuiltinSql = this.sql.bind(this);
+
+    initBuiltinAccounts(sql);
+
+    return sql;
+  }
+
+  async builtinHasOwner(caller: UserCaller): Promise<boolean> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return hasBuiltinOwner(this.builtinSql());
+  }
+
+  async builtinIsOwner(caller: UserCaller, userId: string): Promise<boolean> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return isBuiltinOwner(this.builtinSql(), userId);
+  }
+
+  async builtinAdmissible(caller: UserCaller, email: string, inviteHash: string | null): Promise<Admission> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return builtinAdmission(this.builtinSql(), email, inviteHash, Date.now());
+  }
+
+  async builtinRegister(caller: UserCaller, account: NewBuiltinAccount): Promise<Admission> {
+    await this.requireTier(caller, 'builtin_accounts');
+    const sql = this.builtinSql();
+
+    return this.ctx.storage.transactionSync(() => registerBuiltinAccount(sql, account, Date.now()));
+  }
+
+  async builtinPasswordAccount(caller: UserCaller, email: string): Promise<PasswordAccount | null> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return findPasswordAccount(this.builtinSql(), email);
+  }
+
+  async builtinPasskeyAccount(caller: UserCaller, credentialId: string): Promise<PasskeyAccount | null> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return findPasskeyAccount(this.builtinSql(), credentialId);
+  }
+
+  async builtinRecordPasskeyUse(caller: UserCaller, credentialId: string, counter: number): Promise<void> {
+    await this.requireTier(caller, 'builtin_accounts');
+    recordPasskeyUse(this.builtinSql(), credentialId, counter);
+  }
+
+  async builtinIssueChallenge(caller: UserCaller, challenge: string, pending: PendingChallenge, expiresAt: number): Promise<void> {
+    await this.requireTier(caller, 'builtin_accounts');
+    issuePasskeyChallenge(this.builtinSql(), challenge, pending, expiresAt);
+  }
+
+  async builtinSpendChallenge(caller: UserCaller, challenge: string, purpose: ChallengePurpose): Promise<PendingChallenge | null> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return spendPasskeyChallenge(this.builtinSql(), challenge, purpose, Date.now());
+  }
+
+  async builtinCreateInvite(caller: UserCaller, invite: NewInvite): Promise<boolean> {
+    await this.requireTier(caller, 'builtin_accounts');
+
+    return createBuiltinInvite(this.builtinSql(), invite, Date.now());
+  }
+
   async revokeBrowserSession(caller: UserCaller, tokenHash: string): Promise<void> {
     await this.requireTier(caller, 'auth_tokens');
     this.sqlx(`DELETE FROM user_browser_sessions WHERE token_hash = ?`, tokenHash);

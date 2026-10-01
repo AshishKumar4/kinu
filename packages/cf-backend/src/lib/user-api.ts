@@ -161,6 +161,10 @@ export const completeOnboarding = () => api(v.object({ onboardedAt: v.number() }
 export const setDisplayName = (displayName: string) => api(UserProfileSchema, 'PATCH', '/profile', { displayName });
 
 /** The confirmation phrase is the account's own email, checked again server-side. */
+export const builtinAuthStatus = () => api(v.object({ enabled: v.boolean(), owner: v.boolean() }), 'GET', '/builtin-auth');
+
+export const createBuiltinInvite = () => api(v.object({ url: v.string(), expiresAt: v.number() }), 'POST', '/builtin-auth/invites');
+
 export const deleteAccount = (confirm: string) =>
   api(v.object({ deleted: v.literal(true) }), 'DELETE', '/account', { confirm });
 

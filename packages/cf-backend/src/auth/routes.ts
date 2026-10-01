@@ -9,7 +9,8 @@ import {
   type OAuthProfile, type SessionAuthority,
 } from './store';
 import { escapeHtml, json, KINU_USER_AGENT } from '@kinu.run/core';
-import { authDocument, loginDocument } from '@kinu.run/core';
+import { authDocument, loginDocument, type BuiltinSignIn } from '@kinu.run/core';
+import { builtinAccounts, builtinAuthEnabled } from './builtin';
 import { publicHtmlHeaders } from '@kinu.run/core';
 import {
   clientAuth, getAuthorizationServer, getOAuthProvider, listConfiguredOAuthProviders,
@@ -62,7 +63,7 @@ interface MutableTokenEndpointResponse {
 }
 
 export type AuthRoutesAuthority = SessionAuthority
-  & Pick<UserDO, 'setCredential' | 'listActiveWorkspaces'>;
+  & Pick<UserDO, 'setCredential' | 'listActiveWorkspaces' | 'builtinHasOwner'>;
 
 /** Nothing optional that the session port leaves optional: sign-out revokes through `AUTH_KV` unguarded. */
 export interface AuthRoutesEnv<Id = DurableObjectId> extends OAuthProviderEnv, OwnerCapabilityEnv {
@@ -119,6 +120,12 @@ async function renderLogin<Id>(request: Request, env: AuthRoutesEnv<Id>): Promis
     if (!(e instanceof AuthError) || e.status !== 401) throw e;
   }
 
+  if (builtinAuthEnabled(env)) {
+    return new Response(loginDocument([], await builtinSignIn(env, url, returnTo)), {
+      headers: { ...publicHtmlHeaders(), 'cache-control': 'no-store' },
+    });
+  }
+
   const providers = listConfiguredOAuthProviders(env).map((provider) => {
     const start = new URL(`/auth/${provider.id}/start`, url.origin);
     start.searchParams.set('return_to', returnTo);
@@ -131,6 +138,17 @@ async function renderLogin<Id>(request: Request, env: AuthRoutesEnv<Id>): Promis
   return new Response(loginDocument(providers), {
     headers: { ...publicHtmlHeaders(), 'cache-control': 'no-store' },
   });
+}
+
+/** The page's state: the first account to make, an invite to accept, or a sign-in. */
+async function builtinSignIn<Id>(env: AuthRoutesEnv<Id>, url: URL, returnTo: string): Promise<BuiltinSignIn> {
+  const invite = url.searchParams.get('invite');
+
+  if (invite !== null && invite !== '') return { mode: 'invite', invite, returnTo };
+  const accounts = builtinAccounts(env);
+  const owned = await accounts.builtinHasOwner(await ownerCaller(env));
+
+  return { mode: owned ? 'sign-in' : 'owner', returnTo };
 }
 
 async function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: string): Promise<Response> {

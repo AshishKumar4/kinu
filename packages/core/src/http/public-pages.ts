@@ -12,7 +12,18 @@ export interface LoginProvider {
   readonly label: string;
 }
 
-export function loginDocument(providers: readonly LoginProvider[]): string {
+/** Built-in sign-in, offered where no OAuth app is configured (`auth/builtin.ts`). */
+export interface BuiltinSignIn {
+  /** `owner`: no account yet, so this one becomes the owner. `invite`: an invite link was opened. */
+  readonly mode: 'owner' | 'invite' | 'sign-in';
+  /** The invite token from the link; only in `invite` mode. */
+  readonly invite?: string;
+  readonly returnTo: string;
+}
+
+export function loginDocument(providers: readonly LoginProvider[], builtin: BuiltinSignIn | null = null): string {
+  if (builtin !== null) return authDocument('Sign in to Kinu.run', builtinBody(builtin), BUILTIN_SCRIPT);
+
   const body = providers.length === 0
     ? '<p class="lede">Sign-in is unavailable.</p><div class="providers"><a class="provider" href="/install">Run Kinu locally</a></div>'
     : `<div class="providers">${providers.map((provider) => (
@@ -22,7 +33,86 @@ export function loginDocument(providers: readonly LoginProvider[]): string {
   return authDocument('Sign in to Kinu.run', body);
 }
 
-export function authDocument(title: string, body: string): string {
+const BUILTIN_COPY = {
+  owner: { lede: 'Create the first account. It becomes the owner of this deployment.', password: 'Create account', passkey: 'Create account with a passkey' },
+  invite: { lede: 'You were invited. Create your account.', password: 'Create account', passkey: 'Create account with a passkey' },
+  'sign-in': { lede: null, password: 'Sign in', passkey: 'Sign in with a passkey' },
+} as const;
+
+function builtinBody({ mode, invite, returnTo }: BuiltinSignIn): string {
+  const copy = BUILTIN_COPY[mode];
+  const registering = mode !== 'sign-in';
+
+  return `${copy.lede === null ? '' : `<p class="lede">${copy.lede}</p>`}
+  <form id="builtin-sign-in" class="fields" data-mode="${registering ? 'register' : 'sign-in'}" data-return-to="${escapeHtml(returnTo)}" data-invite="${escapeHtml(invite ?? '')}" novalidate>
+    <label>Email<input type="email" name="email" autocomplete="${registering ? 'email' : 'username webauthn'}" required /></label>
+    <label>Password<input type="password" name="password" autocomplete="${registering ? 'new-password' : 'current-password'}"${registering ? ' minlength="10" aria-describedby="password-rule"' : ''} /></label>
+    ${registering ? '<p id="password-rule" class="muted">At least 10 characters. Not needed with a passkey.</p>' : ''}
+    <button type="submit">${copy.password}</button>
+  </form>
+  <div class="or" aria-hidden="true">or</div>
+  <div class="providers"><button type="button" class="provider" id="passkey">${copy.passkey}</button></div>
+  <p class="status" id="status" role="alert" aria-live="assertive"></p>
+  ${registering ? '' : '<p class="muted">New here? Ask the owner of this deployment for an invite link.</p>'}`;
+}
+
+/** Posts to `/api/auth/builtin/*` and follows the session it sets; passkeys through `navigator.credentials`. */
+const BUILTIN_SCRIPT = `
+const form = document.getElementById('builtin-sign-in');
+const status = document.getElementById('status');
+const passkey = document.getElementById('passkey');
+const registering = form.dataset.mode === 'register';
+const invite = form.dataset.invite || null;
+const returnTo = form.dataset.returnTo || '/';
+const bytes = (value) => Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+const text = (buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer))).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+const say = (message) => { status.textContent = message; };
+const busy = (on) => { for (const control of document.querySelectorAll('button, input')) control.disabled = on; };
+async function post(path, body) {
+  const response = await fetch('/api/auth/builtin/' + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const answer = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(answer.error || 'Sign-in failed (' + response.status + ').');
+  return answer;
+}
+const done = (answer) => { location.assign(answer.returnTo || returnTo); };
+const email = () => form.elements.email.value.trim();
+async function run(work) {
+  say('');
+  busy(true);
+  try { await work(); } catch (error) { say(error.name === 'NotAllowedError' ? 'The passkey request was cancelled.' : error.message); busy(false); }
+}
+form.addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (!form.elements.email.checkValidity()) return say('Enter an email address.');
+  run(async () => done(await post(registering ? 'password/register' : 'password/sign-in',
+    { email: email(), password: form.elements.password.value, invite, returnTo })));
+});
+passkey.addEventListener('click', () => {
+  if (!window.PublicKeyCredential) return say('This browser does not support passkeys.');
+  if (registering && !form.elements.email.checkValidity()) return say('Enter your email first: it names the account.');
+  run(async () => {
+    if (registering) {
+      const options = await post('passkey/register/options', { email: email(), invite });
+      const created = await navigator.credentials.create({ publicKey: { ...options, challenge: bytes(options.challenge),
+        user: { ...options.user, id: bytes(options.user.id) },
+        excludeCredentials: (options.excludeCredentials || []).map((c) => ({ ...c, id: bytes(c.id) })) } });
+      done(await post('passkey/register', { returnTo, response: { id: created.id, rawId: text(created.rawId), type: created.type,
+        clientExtensionResults: created.getClientExtensionResults(),
+        response: { clientDataJSON: text(created.response.clientDataJSON), attestationObject: text(created.response.attestationObject),
+          transports: created.response.getTransports ? created.response.getTransports() : [] } } }));
+    } else {
+      const options = await post('passkey/sign-in/options', {});
+      const got = await navigator.credentials.get({ publicKey: { ...options, challenge: bytes(options.challenge),
+        allowCredentials: (options.allowCredentials || []).map((c) => ({ ...c, id: bytes(c.id) })) } });
+      done(await post('passkey/sign-in', { returnTo, response: { id: got.id, rawId: text(got.rawId), type: got.type,
+        clientExtensionResults: got.getClientExtensionResults(),
+        response: { clientDataJSON: text(got.response.clientDataJSON), authenticatorData: text(got.response.authenticatorData),
+          signature: text(got.response.signature), ...(got.response.userHandle ? { userHandle: text(got.response.userHandle) } : {}) } } }));
+    }
+  });
+});`;
+
+export function authDocument(title: string, body: string, script?: string): string {
   return publicPage({
     title: title.includes('Kinu') ? title : `${title} - Kinu.run`,
     styles: CARD_CSS,
@@ -32,6 +122,7 @@ export function authDocument(title: string, body: string): string {
   <h1 id="auth-title">${escapeHtml(title)}</h1>
   ${body}
 </section></main>\n`,
+    ...(script !== undefined && { script }),
   });
 }
 
@@ -80,6 +171,19 @@ border-bottom:var(--rule);font-size:14px}
 dt{color:var(--c-text-3)}
 dd{margin:0;text-align:right}
 form{margin-top:20px}
+.fields{display:grid;gap:14px;margin-top:24px}
+.fields label{display:grid;gap:6px;color:var(--c-text-2);font-size:13px;font-weight:560}
+.fields input{min-height:42px;padding:0 13px;border:1px solid var(--c-input-border);border-radius:var(--r-row);
+background:var(--c-bg);color:var(--c-text);font:inherit;font-size:14.5px}
+.fields input:focus-visible{outline:2px solid var(--c-accent);outline-offset:1px;border-color:var(--c-accent)}
+.fields .muted{margin:-6px 0 0}
+.or{display:flex;align-items:center;gap:12px;margin-top:22px;color:var(--c-text-3);font-size:12.5px}
+.or::before,.or::after{content:"";flex:1;border-top:var(--rule)}
+.or+.providers{margin-top:16px}
+button.provider{width:100%;font:inherit;font-size:14.5px;font-weight:600;cursor:pointer;text-align:left}
+button:disabled{opacity:.6;cursor:progress}
+.status{min-height:0;color:var(--c-danger)!important}
+.status:empty{display:none}
 button[type="submit"]{display:inline-flex;align-items:center;justify-content:center;
 width:100%;min-height:40px;padding:0 15px;border:1px solid transparent;border-radius:var(--r-row);
 background:var(--c-accent);color:var(--c-accent-on);font:inherit;font-size:14px;

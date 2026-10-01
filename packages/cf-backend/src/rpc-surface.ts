@@ -87,6 +87,16 @@ export function sealRpcSurface(instance: RpcSurfaceSubject, surface: readonly st
 
 /** The RPC counterpart of the `requireTier` gate: every entry gates itself on a `UserCaller`. */
 const USER_DO_METHODS = [
+  'builtinAdmissible',
+  'builtinCreateInvite',
+  'builtinHasOwner',
+  'builtinIsOwner',
+  'builtinIssueChallenge',
+  'builtinPasskeyAccount',
+  'builtinPasswordAccount',
+  'builtinRecordPasskeyUse',
+  'builtinRegister',
+  'builtinSpendChallenge',
   'cancelModelRelay',
   'chatgptPlan',
   'completeOnboarding',

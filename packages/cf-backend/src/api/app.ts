@@ -5,6 +5,7 @@ import type { OrchestratorAgent } from '../orchestrator';
 import { healthResponse, REAL_CLOCK, serveApp } from '@kinu.run/core';
 import { AuthError, authenticateRequest, crossSiteRejection } from '../auth/session';
 import { authApiRoutes } from '../auth/routes';
+import { builtinAccountRoutes, builtinAuthRoutes } from '../auth/builtin';
 import { CONTROL_PLANE_API_ROUTE } from '../control-plane/access-gate';
 import { controlPlaneAccess } from '../control-plane/admin-caller';
 import { observeIdentity } from '../control-plane/index-feed';
@@ -44,6 +45,8 @@ function mount<Bindings extends object, Variables extends object>(
 app.use(CONTROL_PLANE_API_ROUTE, controlPlaneAccess);
 
 mount(authApiRoutes);
+
+mount(builtinAuthRoutes);
 
 mount(aiProxyRoutes);
 
@@ -96,6 +99,8 @@ mount(controlRoutes);
 
 // Ahead of userRoutes: owner_only account methods.
 mount(accountRoutes);
+
+mount(builtinAccountRoutes);
 
 mount(userRoutes);
 

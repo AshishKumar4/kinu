@@ -138,6 +138,7 @@ function fleet(): Fleet {
       return jsrpcStub({
         setCredential: (): never => { throw new Error('setCredential: not reachable in this test'); },
         listActiveWorkspaces: (): never => { throw new Error('listActiveWorkspaces: not reachable in this test'); },
+        builtinHasOwner: (): never => { throw new Error('builtinHasOwner: not reachable in this test'); },
         ensureProfile: (...args: Parameters<UserDO['ensureProfile']>) => real.ensureProfile(...args),
         registerBrowserSession: (...args: Parameters<UserDO['registerBrowserSession']>) =>
           refuse('registerBrowserSession') ?? real.registerBrowserSession(...args),

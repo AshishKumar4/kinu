@@ -40,7 +40,7 @@ export interface OAuthHandoff {
 }
 
 export interface OAuthProfile {
-  provider: OAuthProviderId;
+  provider: OAuthProviderId | 'password' | 'passkey';
   providerSub: string;
   email: string;
   emailVerified: boolean;
