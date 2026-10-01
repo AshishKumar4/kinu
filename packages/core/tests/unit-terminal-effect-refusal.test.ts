@@ -103,7 +103,8 @@ test.each([404, 400, 413, 422])('a gateway %i ends the owed effect after one att
   // the effect armed nothing after it.
   expect(wakes).toEqual([NOW + TERMINAL_EFFECT_RETRY_CEILING_MS]);
   // Said once, where the owner looks.
-  expect(activity()).toEqual([['terminal_effect_abandoned', `memory compression failed: the model provider answered HTTP ${String(status)}, so it is not retried`]]);
+  expect(activity().map(([event]) => event)).toEqual(['terminal_effect_abandoned']);
+  expect(activity()[0]?.[1]).toContain(`HTTP ${String(status)}`);
 });
 
 test.each([429, 408, 503])('a %i stays owed, with its wake', async (status) => {

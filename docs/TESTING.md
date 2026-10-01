@@ -92,6 +92,10 @@ Measured on staging, 2026-10-01: the slate ask landed at genesis step 0 and acti
 
 This is a terminal tier, never a commit, push, CI, or deploy gate. The tier prints target and cost basis before spending. With a target resolved, a run that reports no model call exits non-zero; before that check existed, a run reported `TOTAL: 0 model call(s)` with every live test skipped and passed a deploy gate.
 
+### Scripted background memory
+
+`scripts/tier-model.ts` answers the background memory-compression prompt before the conversation scripts, using the shared opening in `packages/core/src/utils/prompt-sections.ts`. Its no-change reply is `{"upserts":[],"decay":[]}`; an ordinary unclaimed chat request still receives the fake model's prose answer. `tests/first-run/scripted-model.test.ts` sends the core lane's real prompt through the local HTTP model server and validates the resulting update. The deployed scripted Worker shares this chain and must be redeployed with a script change.
+
 ### What it runs
 
 `scripts/live-tier.sh` runs `bun test ./tests/live-model/` once:

@@ -536,9 +536,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     };
   }
 
-  /** Turn the lane on behind a scripted fast model (`rt.fastLlm ?? rt.llm`) answering
-   *  `answer`; returns the prompts it received. */
-  harnessScriptSleepTimeModel(answer: SleepTimeUpdate, prompts: string[]): void {
+  /** Turn the lane on behind a scripted fast model answering an update or raw text;
+   *  prompts land in the supplied array. */
+  harnessScriptSleepTimeModel(answer: SleepTimeUpdate | string, prompts: string[]): void {
     this.config.setSleepTimeComputeEnabled(true);
 
     Object.defineProperty(this.rt, 'fastLlm', {
@@ -548,7 +548,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
         complete: async (prompt: string) => {
           prompts.push(prompt);
 
-          return JSON.stringify(answer);
+          const raw = v.safeParse(v.string(), answer);
+
+          return raw.success ? raw.output : JSON.stringify(answer);
         },
       },
     });
@@ -1711,8 +1713,8 @@ export function orchestratorHarness(
   env?: Env,
   opts?: {
     /** Leave the sleep-time lane on behind a scripted fast model answering this
-     *  update; prompts land in `sleepTimePrompts`. Absent, the lane is off. */
-    readonly sleepTimeModel?: SleepTimeUpdate;
+     *  reply; prompts land in `sleepTimePrompts`. Absent, the lane is off. */
+    readonly sleepTimeModel?: SleepTimeUpdate | string;
   },
 ): StartedHarness {
   const harness = instantiate(HarnessOrchestratorAgent, { db: new Database(':memory:'), userPlane, world, env });
@@ -1725,11 +1727,10 @@ export function orchestratorHarness(
 
   if (world?.freshScaffold !== true) harness.agent.declareScaffoldPresent();
 
-  if (opts?.sleepTimeModel) {
+  if (opts?.sleepTimeModel !== undefined) {
     harness.agent.harnessScriptSleepTimeModel(opts.sleepTimeModel, harness.sleepTimePrompts);
   } else {
-    // The production switch: the lane's effect keeps its row owed until the compute lands, and no
-    // model is behind the harness.
+    // Without a scripted reply, the harness switches the lane off.
     workspaceMainActor(harness.db).config.setSleepTimeComputeEnabled(false);
   }
 
