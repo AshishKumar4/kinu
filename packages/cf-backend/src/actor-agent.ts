@@ -455,13 +455,15 @@ function actorAgentsActions(deps: ActorToolDeps): AgentsToolAction[] {
 /** The codemode tool whose script keeps issuing device execs even after its call has detached. */
 const CODEMODE_TOOL_TOOL = 'eval' satisfies BuiltinToolName;
 
-/** Ledgers that can owe work with no instant. */
+/**
+ * Ledgers that can owe work with no instant and nothing else to watch it. A running background job is not one: its
+ * `bg:` fiber holds the object while it runs and re-drives it after a death, and a deferred one is timed (`nextOwedAt`).
+ */
 export interface UntimedArms {
   readonly openDrainLease?: boolean;
   readonly terminalIncomplete?: boolean;
   readonly unfinishedHeads?: boolean;
   readonly runningSwarms?: boolean;
-  readonly untimedJobs?: boolean;
   readonly retirements?: boolean;
   readonly pendingBirths?: boolean;
   readonly pendingDeletions?: boolean;

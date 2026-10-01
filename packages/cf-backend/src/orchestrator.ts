@@ -1309,9 +1309,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       terminalIncomplete: this.terminal.hasIncomplete() && this.terminal.nextRetryAt() === null,
       unfinishedHeads: this.headJournal.hasUnfinishedHeads(),
       runningSwarms: this.mctsSearchStore.hasRunningSwarms(),
-      // A running job with no resume instant (live or orphaned); jobs waiting on an instant are timed
-      // and read by `nextOwedAt`, so a lone deferred job costs one wake at its instant.
-      untimedJobs: this.jobs.hasUntimedLiveJobsInWorkspace(),
       retirements: this.workspaceActors().hasRetirements(),
       pendingBirths: this.subordinateRoster.hasPendingBirths(),
       pendingDeletions: this.subordinateRoster.hasPendingDeletions(),

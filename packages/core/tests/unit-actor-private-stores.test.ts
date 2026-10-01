@@ -190,12 +190,6 @@ describe('two actors, one database: background_jobs', () => {
     expect(b.listRunning().total).toBe(1);
     expect(a.countRunningInWorkspace()).toBe(3);
     expect(b.countRunningInWorkspace()).toBe(3);
-    expect(a.hasUntimedLiveJobsInWorkspace()).toBe(true);
-    a.deferResume('a1', 5);
-    expect(a.hasUntimedLiveJobsInWorkspace()).toBe(true);
-    a.deferResume('a2', 5);
-    b.deferResume('b1', 5);
-    expect(a.hasUntimedLiveJobsInWorkspace()).toBe(false);
 
     expect(a.runningIds()).toEqual(['a1', 'a2']);
     expect(b.runningIds()).toEqual(['b1']);
