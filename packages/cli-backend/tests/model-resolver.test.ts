@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { generateText } from 'ai';
 import {
-  DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, KINU_USER_AGENT, usageTotal,
+  DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, KINU_USER_AGENT, credentialToHeaders, usageTotal,
 } from '@kinu.run/core';
 import type { JsonObject, JsonValue, LLMProviderConfig, ModelCallReport, ModelCallSpend } from '@kinu.run/core';
 import { cloudProxyBaseURL, createLocalModelResolver, createLocalProviderLLM } from '../src/model-resolver';
@@ -292,6 +292,20 @@ describe('createLocalModelResolver', () => {
     expect(sent).toEqual(['sk-ant-work', 'sk-ant-main', 'sk-ant-work']);
   });
 
+  test('a stored key sends the headers core maps for the hosted backend', async () => {
+    const compat = { baseURL: 'https://api.example.com/v1', apiKey: 'sk-compat', extraHeaders: { Authorization: 'Bearer gateway' } };
+
+    const resolver = createLocalModelResolver({
+      llm: null,
+      credentials: { openaiApiKey: 'sk-openai', openaiCompat: { groq: compat } },
+    });
+
+    expect((await resolver.getAuth('openai.bearer'))?.headers)
+      .toEqual(credentialToHeaders('openai.bearer', { kind: 'bearer', token: 'sk-openai' }));
+    expect((await resolver.getAuth('openai-compat.groq'))?.headers)
+      .toEqual(credentialToHeaders('openai-compat.groq', { kind: 'openai-compat', ...compat }));
+  });
+
   test('uses Anthropic as the default provider when the resolved local config is direct Anthropic', async () => {
     const resolver = createLocalModelResolver({
       llm: {
@@ -300,7 +314,7 @@ describe('createLocalModelResolver', () => {
         headers: { 'x-api-key': 'sk-ant', 'anthropic-version': '2023-06-01' },
         model: 'claude-sonnet-4-5',
       },
-      credentials: {},
+      credentials: { anthropicApiKey: 'sk-ant' },
       fetch: asFetchFunction(async () => new Response('{}')),
     });
 

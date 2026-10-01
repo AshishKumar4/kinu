@@ -648,10 +648,6 @@ interface LocalAuthStore {
   get(key: string, authOpts?: AuthRequest): Promise<AuthResolution | null>;
 }
 
-interface OpenAICompatHeaders {
-  [header: string]: string;
-}
-
 function buildAuthStore(
   localEndpoint: LLMProviderConfig | null,
   credentials: LocalProviderCredentials,
@@ -659,43 +655,15 @@ function buildAuthStore(
 ): LocalAuthStore {
   const store = new Map<string, AuthResolution>();
 
-  if (credentials.openaiApiKey) {
-    store.set('openai.bearer', bearer(credentials.openaiApiKey));
-  }
+  const apiKeys = {
+    'openai.bearer': credentials.openaiApiKey,
+    'anthropic.bearer': credentials.anthropicApiKey,
+    'openrouter.bearer': credentials.openrouterApiKey,
+    ...credentials.apiKeyAccounts,
+  };
 
-  if (!store.has('openai.bearer') && localEndpoint?.name === 'openai') {
-    const auth = localEndpoint.headers.Authorization ?? localEndpoint.headers.authorization;
-
-    if (auth) store.set('openai.bearer', { headers: { Authorization: auth } });
-  }
-
-  if (credentials.anthropicApiKey) {
-    store.set('anthropic.bearer', {
-      headers: credentialToHeaders('anthropic.bearer', { kind: 'bearer', token: credentials.anthropicApiKey }),
-    });
-  }
-
-  if (!store.has('anthropic.bearer') && localEndpoint?.name === 'anthropic') {
-    const key = localEndpoint.headers['x-api-key'] ?? localEndpoint.headers['X-Api-Key'];
-
-    if (key) {
-      store.set('anthropic.bearer', {
-        headers: {
-          'x-api-key': key,
-          'anthropic-version': localEndpoint.headers['anthropic-version'] ?? '2023-06-01',
-        },
-      });
-    }
-  }
-
-  if (credentials.openrouterApiKey) {
-    store.set('openrouter.bearer', bearer(credentials.openrouterApiKey));
-  }
-
-  if (!store.has('openrouter.bearer') && localEndpoint?.name === 'openrouter') {
-    const auth = localEndpoint.headers.Authorization ?? localEndpoint.headers.authorization;
-
-    if (auth) store.set('openrouter.bearer', { headers: { Authorization: auth } });
+  for (const [key, token] of Object.entries(apiKeys)) {
+    if (token) store.set(key, { headers: credentialToHeaders(key, { kind: 'bearer', token }) });
   }
 
   if (localEndpoint?.name === 'openai-compat') {
@@ -706,20 +674,7 @@ function buildAuthStore(
   }
 
   for (const [name, compat] of Object.entries(credentials.openaiCompat ?? {})) {
-    const headers: OpenAICompatHeaders = {
-      ...compat.headers,
-      ...compat.extraHeaders,
-    };
-
-    if (compat.apiKey) headers.Authorization = `Bearer ${compat.apiKey}`;
-    store.set(`openai-compat.${name}`, {
-      headers,
-      baseURL: compat.baseURL,
-    });
-  }
-
-  for (const [key, token] of Object.entries(credentials.apiKeyAccounts ?? {})) {
-    store.set(key, { headers: credentialToHeaders(key, { kind: 'bearer', token }) });
+    store.set(`openai-compat.${name}`, { headers: openAiCompatHeaders(compat), baseURL: compat.baseURL });
   }
 
   return {
@@ -739,6 +694,11 @@ function buildAuthStore(
   };
 }
 
-function bearer(token: string): AuthResolution {
-  return { headers: { Authorization: token.startsWith('Bearer ') ? token : `Bearer ${token}` } };
+/** Core's openai-compat order (`credentialToHeaders`): the key's Authorization, then the extra headers over it. */
+export function openAiCompatHeaders(compat: LocalOpenAICompatCredential) {
+  const headers = { ...compat.headers };
+
+  if (compat.apiKey) headers.Authorization = `Bearer ${compat.apiKey}`;
+
+  return { ...headers, ...compat.extraHeaders };
 }

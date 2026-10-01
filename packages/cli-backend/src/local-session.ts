@@ -2365,7 +2365,7 @@ export class LocalAgentSession {
       model,
       modelContext: {
         id: this.effectiveModelSpec(),
-        ...this.modelCatalog.window(),
+        ...await this.modelCatalog.resolved(),
       },
       system: systemPrompt,
       history: [{ role: 'user', content: task }],

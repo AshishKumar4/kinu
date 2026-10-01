@@ -7,7 +7,8 @@ import { compareRunEventOrder } from '@kinu.run/test-utils';
 import {
   ActivitySpendSchema, callAgentRpc, createCloudAgentConnectTicket, deleteCloudAgent, listCloudAgents,
 } from '../../packages/cli/src/cloud-api';
-import { sessionExpired, type CloudAuthConfig } from '../../packages/cli/src/config';
+import { sessionExpired } from '../../packages/cli/src/config';
+import type { LocalCloudSession } from '@kinu.run/cli-backend';
 import type { FirstRunPlan, FirstRunSession } from './first-run';
 
 const StoredSession = v.pipe(v.string(), v.parseJson(), v.object({
@@ -43,7 +44,7 @@ export function operatorFirstRunPlan(): FirstRunPlan<OperatorFirstRunSession> | 
   if (config.output.origin !== origin) throw new Error('Operator config origin does not match the requested deployment');
 
   if (sessionExpired(config.output)) throw new Error('Interactive CLI session expired; run kinu auth');
-  const auth: CloudAuthConfig = { origin, token: config.output.accessToken };
+  const auth: LocalCloudSession = { origin, token: config.output.accessToken };
 
   return { open: ({ purpose }) => OperatorFirstRunSession.open(auth, sha, purpose) };
 }
@@ -53,12 +54,12 @@ export class OperatorFirstRunSession implements FirstRunSession {
   private readonly owned = new Set<string>();
   private client: AgentClient | null = null;
 
-  private constructor(private readonly auth: CloudAuthConfig, readonly workspace: string,
+  private constructor(private readonly auth: LocalCloudSession, readonly workspace: string,
     readonly deployedSha: string, private readonly baseline: ReadonlySet<string>) {
     this.describe = `CLI REST + AgentClient ${auth.origin}/${workspace}, deployed ${deployedSha}, no model`;
   }
 
-  static async open(auth: CloudAuthConfig, sha: string, purpose: string): Promise<OperatorFirstRunSession> {
+  static async open(auth: LocalCloudSession, sha: string, purpose: string): Promise<OperatorFirstRunSession> {
     const response = await fetch(auth.origin + '/api/health');
 
     if (!response.ok) throw new Error('Deployment health returned HTTP ' + response.status);

@@ -72,14 +72,14 @@ export async function createCloudWorkspaceForUser<Id>(
 
   const menu = await listAvailableModels(env, userId, caller);
 
-  // Core picks the model (`defaultSpecFor`): default tier if servable, else native Workers AI,
-  // never the first menu entry (could be a paid BYO provider). The error copy is surface-specific.
-  const model = defaultSpecFor(
+  // Refused when no first turn could run (`defaultSpecFor`). Only a named model is pinned: an unpinned workspace
+  // follows the account's default tier, as on the CLI. The error copy is surface-specific.
+  const servable = defaultSpecFor(
     input.model ?? (await userDO.getProfileCatalog(caller)).catalog.tiers.default.model,
     menu.models.map((entry) => entry.spec),
   );
 
-  if (!model) {
+  if (!servable) {
     throw new KinuError('unavailable', 'Cloudflare Workers AI is not connected. Reconnect Cloudflare with Workers AI permissions, or choose a default model in your user settings, then create the workspace again.');
   }
 
@@ -104,7 +104,7 @@ export async function createCloudWorkspaceForUser<Id>(
   try {
     const initialization: InitializeOrchestratorInput<Id> = {
       env, userId, userDO, agentName: entry.name, displayName: entry.displayName,
-      nameOrigin: identity.nameOrigin, model,
+      nameOrigin: identity.nameOrigin, model: input.model,
     };
 
     if (purpose) initialization.mission = purpose;

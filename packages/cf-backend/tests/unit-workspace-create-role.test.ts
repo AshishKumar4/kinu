@@ -164,7 +164,7 @@ describe('the role a create request asks for', () => {
     const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.' });
 
     expect(created.status).toBe(201);
-    expect(created.calls).toEqual([`model:${DEFAULT_WORKERS_AI_MODEL_SPEC}`, 'genesis']);
+    expect(created.calls).toEqual(['genesis']);
   });
 
   test('selects nothing when the request names the default role', async () => {
@@ -172,7 +172,7 @@ describe('the role a create request asks for', () => {
     const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.', role: 'task' });
 
     expect(created.status).toBe(201);
-    expect(created.calls).toEqual([`model:${DEFAULT_WORKERS_AI_MODEL_SPEC}`, 'genesis']);
+    expect(created.calls).toEqual(['genesis']);
   });
 });
 
@@ -187,13 +187,13 @@ describe('the model and effort a create request asks for', () => {
     expect(created.calls).toContain(`model:${DEFAULT_WORKERS_AI_MODEL_SPEC}`);
   });
 
-  test('the catalog default tier is the model a new workspace starts on, and the one its turns resolve', async () => {
-    // One default, read from one place (#6): a new workspace starts on the model the resolver hands every turn.
+  test('a workspace that names no model pins none, so it follows the account default tier as the CLI does', async () => {
+    // One default, read from one place (#6): a copy pinned at birth would outlive the owner's next default.
     const envelope = envelopeWithDefault(CATALOG_DEFAULT);
     const created = await postCreate({ name: AGENT, purpose: 'Review the checkout flow.' }, envelope);
 
     expect(created.status).toBe(201);
-    expect(created.calls).toContain(`model:${CATALOG_DEFAULT}`);
+    expect(created.calls.filter((call) => call.startsWith('model:'))).toEqual([]);
 
     const turn = resolveTurnProfile({
       envelope,
