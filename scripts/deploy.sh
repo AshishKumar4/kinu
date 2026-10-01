@@ -599,6 +599,8 @@ echo "Running: npx wrangler deploy ${KINU_WRANGLER_ARGS[*]} (log → $KINU_DEPLO
 echo ""
 if npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}" 2>&1 | tee "$KINU_DEPLOY_LOG"; then
   DEPLOY_PUBLISHED=1
+  # From when the version could answer: the start of what Step 5b reads.
+  KINU_LIVE_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo ""
   echo -e "${GREEN}Kinu deploy succeeded.${NC}"
 else
@@ -964,6 +966,22 @@ if [ "${DEPLOY_PUBLISHED:-0}" = "1" ]; then
     echo ""
     step_red publish "post-deploy infrastructure" "a resource the version $KINU_ENV serves declares is not in its account; the verification's findings in the deploy's output name each one"
   fi
+fi
+
+# ── Step 5b: What the version did on staging ─────────────────────
+#
+# Every red above is a test's. These are staging's own signals for the version
+# this deploy published, read through `scripts/prod-logs.ts version` once the
+# tiers and the eval pass have driven it, with zero users the traffic being our
+# own: an invocation that ended in an uncaught exception or that the platform
+# ended, a terminal effect that failed or was left owed, an object woken as
+# often as the product calls a wake loop, by startups or by alarms. Each is a
+# red of this deploy whatever its tests said, in the report under `telemetry`
+# (L18); so is telemetry it cannot read.
+if [ "$KINU_ENV" = "staging" ] && [ "${DEPLOY_PUBLISHED:-0}" = "1" ] && [ -n "$KINU_VERSION" ]; then
+  echo ""
+  echo -e "${BOLD}Step 5b: What version $KINU_VERSION did on staging${NC}"
+  bun "$KINU_ROOT/scripts/prod-logs.ts" version "$KINU_VERSION" --worker "$KINU_WORKER" --since "$KINU_LIVE_AT" || KINU_REDS=1
 fi
 
 # ── Step 6: The record, or the history and the evals ─────────────

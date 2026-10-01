@@ -1239,6 +1239,17 @@ name, to have completed green, and says "no eval verdict yet" while the run has
 none. The deploy's own one-trial pass (`eval-pass-tier.sh`) reports a task that
 fails outright the same day, as a red of that deploy.
 
+L20. A staging deploy reads what its version did, and each signal is a red.
+Decided 2026-09-30 by the owner: with zero users, staging's traffic is our own
+tiers and evals, so its own telemetry for the version is evidence beyond them.
+`prod-logs.ts version` (the existing reader, not a new one) counts that
+version's uncaught exceptions, platform-ended invocations, failed and owed
+terminal effects, and objects woken by startups or alarms at the product's
+wake-loop rate. Measured on staging that day: one version passed every test
+with 19 uncaught exceptions in SupervisorRPC; alarms peaked at 16 in an
+object-hour, under the 30 a loop takes. A canceled or aborted invocation is a
+caller going away and is not counted.
+
 ## Providers
 
 P1. The ChatGPT plan is Sign in with ChatGPT's open-source token sharing

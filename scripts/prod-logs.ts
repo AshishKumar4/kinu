@@ -20,6 +20,12 @@
  *  - `errors`: fleet failures by event and code, with the objects each touched,
  *    and invocations that did not end `ok`.
  *  - `wakes`: objects ranked by startups per hour; `findWakeLoops` flags loops.
+ *  - `version <version-id>`: what one deployed version did on its own (L18), each a finding however its tests went:
+ *    an invocation that ended in an uncaught exception or that the platform ended (a reset), a terminal effect that
+ *    failed or was left owed, and an object woken {@link ALERT_THRESHOLDS}.startupsPerHour or more times in an hour,
+ *    by startups (a wake loop) or alarms (a storm). Exits 1 on a finding, and writes each into the deploy's report
+ *    when KINU_DEPLOY_REPORT names one. Staging, under the tiers and the evals on 2026-09-30, took a median of 2
+ *    alarms per object-hour, p90 4, at most 16.
  *
  * A startup is counted by `actor.startup` (one per workspace object
  * activation). Hours before that event shipped fall back to
@@ -55,12 +61,14 @@
  *   bun scripts/prod-logs.ts timeline <name|do-id> [--since 24h] [--until ISO] [--json]
  *   bun scripts/prod-logs.ts errors [--since 24h] [--until ISO] [--json]
  *   bun scripts/prod-logs.ts wakes [--since 24h] [--until ISO] [--json]
+ *   bun scripts/prod-logs.ts version <version-id> [--since ISO] [--json]
  * `--since` takes 30m / 6h / 7d or an ISO instant; `--worker` works everywhere.
  */
 import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import * as v from 'valibot';
 import { ALERT_THRESHOLDS, findWakeLoops, type StartupHour, type WakeLoop } from '@kinu.run/core/analytics';
+import { recordStep } from './deploy-report';
 import { parseJsonc } from './jsonc';
 
 /** The account this queries and the default worker, read off the manifest this
@@ -76,7 +84,7 @@ const ACCOUNT = WRANGLER.account_id;
 
 const HOUR_MS = 3_600_000;
 
-const MODES = ['live', 'query', 'timeline', 'errors', 'wakes'] as const;
+const MODES = ['live', 'query', 'timeline', 'errors', 'wakes', 'version'] as const;
 
 type Mode = (typeof MODES)[number];
 
@@ -91,7 +99,7 @@ interface Args {
   readonly json: boolean;
 }
 
-const USAGE = 'usage: prod-logs.ts <live|query|timeline <name|do-id>|errors|wakes> '
+const USAGE = 'usage: prod-logs.ts <live|query|timeline <name|do-id>|errors|wakes|version <version-id>> '
   + '[--worker kinu] [--seconds 120] [--since 6h|7d|ISO] [--until ISO] [--grep text] [--json]';
 
 function instant(raw: string, flag: string): number {
@@ -113,9 +121,10 @@ function parseArgs(argv: readonly string[]): Args {
     return at >= 0 && argv[at + 1] !== undefined ? argv[at + 1] : null;
   };
 
-  const target = mode === 'timeline' ? argv[1] ?? null : null;
+  const named = mode === 'timeline' || mode === 'version';
+  const target = named ? argv[1] ?? null : null;
 
-  if (mode === 'timeline' && (target === null || target.startsWith('--'))) throw new Error(USAGE);
+  if (named && (target === null || target.startsWith('--'))) throw new Error(USAGE);
   const to = opt('until') === null ? Date.now() : instant(opt('until') ?? '', '--until');
   const sinceRaw = opt('since') ?? (mode === 'query' ? '6h' : '24h');
   const relative = /^(\d+)([mhd])$/.exec(sinceRaw);
@@ -704,12 +713,112 @@ async function wakes(t: Telemetry, args: Args): Promise<void> {
   ].join('\n'));
 }
 
-const args = parseArgs(process.argv.slice(2));
+// ---- one deployed version (L18) -----------------------------------------------
 
-if (args.mode === 'live') {
-  await live(args);
-} else {
-  const t = new Telemetry(await readToken(), args);
-  const run = { query, timeline, errors, wakes }[args.mode];
-  await run(t, args);
+/** What one version did, as `version` reads it. */
+export interface VersionRead {
+  /** Its invocations that did not end `ok`, by outcome and entrypoint. */
+  readonly ended: readonly { readonly outcome: string; readonly entrypoint: string; readonly count: number; readonly objects: number }[];
+  readonly effects: { readonly failed: number; readonly failedTurns: number; readonly owed: number };
+  readonly startups: readonly StartupHour[];
+  readonly alarms: readonly { readonly object: string; readonly hour: number; readonly count: number }[];
+}
+
+/** One finding: `what` names its kind, stable from deploy to deploy, so a report can say whether it is new. */
+export interface VersionFinding {
+  readonly what: string;
+  readonly finding: string;
+}
+
+/** Each signal `read` holds that a deploy reports whatever its tests said. A canceled or aborted invocation is the
+ *  caller going away, not the version failing. */
+export function versionFindings(read: VersionRead): VersionFinding[] {
+  const findings: VersionFinding[] = [];
+
+  for (const row of read.ended) {
+    if (row.outcome === 'exception') {
+      findings.push({ what: `uncaught exceptions in ${row.entrypoint}`, finding: `${String(row.count)} invocation(s) of ${row.entrypoint} ended in an uncaught exception, on ${String(row.objects)} object(s)` });
+    } else if (row.outcome.startsWith('exceeded')) {
+      findings.push({ what: `${row.entrypoint} ended by the platform (${row.outcome})`, finding: `${String(row.count)} invocation(s) of ${row.entrypoint} ended with ${row.outcome}, resetting ${String(row.objects)} object(s)` });
+    }
+  }
+
+  if (read.effects.failed > 0) {
+    findings.push({ what: 'failed terminal effects', finding: `${String(read.effects.failed)} terminal effect run(s) failed, in ${String(read.effects.failedTurns)} turn(s)` });
+  }
+
+  if (read.effects.owed > 0) findings.push({ what: 'owed terminal effects', finding: `${String(read.effects.owed)} turn(s) ended with terminal effects still owed` });
+
+  for (const loop of findWakeLoops(read.startups)) {
+    findings.push({ what: 'a wake loop', finding: `object ${loop.object} started ${String(loop.peakPerHour)} times in an hour, ${String(loop.loopHours)} such hour(s)` });
+  }
+
+  for (const storm of read.alarms.filter((row) => row.count >= ALERT_THRESHOLDS.startupsPerHour)) {
+    findings.push({ what: 'an alarm storm', finding: `object ${storm.object} took ${String(storm.count)} alarms in the hour from ${iso(storm.hour)}` });
+  }
+
+  return findings;
+}
+
+async function versionRead(t: Telemetry, versionId: string): Promise<VersionRead> {
+  const scope = [eq('$workers.scriptVersion.id', versionId)];
+  const invocations = [...scope, eq('$metadata.type', 'cf-worker-event')];
+  const notOk: Filter = { key: '$workers.outcome', operation: 'neq', value: 'ok', type: 'string' };
+  const ended = await t.count({ filters: [...invocations, notOk], groupBy: ['$workers.outcome', '$workers.entrypoint'], distinct: DO_ID, limit: 100 });
+  const failed = await t.count({ filters: [...scope, eq('event', 'turn.terminal_effect_failed')], groupBy: ['fields.sequence'], limit: 500 });
+  const owed = await t.count({ filters: [...scope, eq('event', 'turn.terminal_effects_owed')], groupBy: ['fields.sequence'], limit: 500 });
+  const alarms = await t.hourly({ filters: [...invocations, eq('$workers.eventType', 'alarm')], groupBy: [DO_ID], limit: 500 });
+  const total = (rows: readonly { readonly count: number }[]): number => rows.reduce((sum, row) => sum + row.count, 0);
+
+  return {
+    ended: ended.map((row) => ({ outcome: row.groups[0] ?? '', entrypoint: row.groups[1] ?? '', count: row.count, objects: row.distinct })),
+    effects: { failed: total(failed), failedTurns: failed.length, owed: total(owed) },
+    startups: await startupHours(t, scope),
+    alarms: alarms.map((row) => ({ object: row.groups[0] ?? '', hour: row.hour, count: row.count })),
+  };
+}
+
+/** `version`: its findings printed and, under a deploy, written into its report. A window that cannot be read is a
+ *  finding of its own: a deploy cannot say what its version did. */
+async function versionCommand(args: Args): Promise<number> {
+  const subject = args.target ?? '';
+  let findings: VersionFinding[];
+  let sampling = 1;
+
+  try {
+    const t = new Telemetry(await readToken(), args);
+
+    findings = versionFindings(await versionRead(t, subject));
+    sampling = t.sampling;
+  } catch (cause) {
+    findings = [{ what: 'the telemetry', finding: `${args.worker}'s telemetry for version ${subject} could not be read: ${cause instanceof Error ? cause.message : String(cause)}` }];
+  }
+
+  const dir = process.env['KINU_DEPLOY_REPORT'] ?? '';
+
+  for (const found of findings) if (dir !== '') recordStep(dir, { phase: 'telemetry', what: found.what, finding: found.finding });
+
+  const window = { from: iso(args.from), to: iso(args.to) };
+
+  console.log(args.json
+    ? JSON.stringify({ window, version: subject, worker: args.worker, findings, sampling }, null, 1)
+    : [`${args.worker} version ${subject}, ${window.from} .. ${window.to}:`, ...findings.length === 0 ? ['  nothing to report'] : findings.map((found) => `  ${found.finding}`),
+      ...sampling > 1 ? [`note: the API sampled this window (level ${String(sampling)}); counts are estimates.`] : []].join('\n'));
+
+  return findings.length === 0 ? 0 : 1;
+}
+
+if (import.meta.main) {
+  const args = parseArgs(process.argv.slice(2));
+
+  if (args.mode === 'live') {
+    await live(args);
+  } else if (args.mode === 'version') {
+    process.exitCode = await versionCommand(args);
+  } else {
+    const t = new Telemetry(await readToken(), args);
+    const run = { query, timeline, errors, wakes }[args.mode];
+
+    await run(t, args);
+  }
 }
