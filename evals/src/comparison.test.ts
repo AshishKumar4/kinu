@@ -6,7 +6,8 @@ import { compareEvalResults, evalGateVerdict, fisherExact, renderEvalComparison,
  * `reset`: it answered that the workspace's isolate was reset for memory. `hung`: the watch's account of what held it.
  */
 type Trial = {
-  pass: boolean; infra?: boolean; refused?: string; reset?: string; hung?: string; productSha?: string; taskVersion?: string; failed?: string; trial?: number;
+  pass: boolean; infra?: boolean; refused?: string; reset?: string; hung?: string; heldBy?: string[]; productSha?: string; taskVersion?: string;
+  failed?: string; trial?: number;
   inputTokens?: number; cacheReadTokens?: number; costUsd?: number; model?: string; durationMs?: number; harnessInfra?: boolean;
 };
 
@@ -15,7 +16,7 @@ function outcomeOf(trial: Trial) {
 
   if (trial.reset !== undefined) return { status: 'reset', message: trial.reset };
 
-  if (trial.hung !== undefined) return { status: 'hung', message: trial.hung };
+  if (trial.hung !== undefined) return { status: 'hung', message: trial.hung, ...trial.heldBy !== undefined && { heldBy: trial.heldBy } };
 
   return trial.refused === undefined ? { status: 'completed' } : { status: 'refused', message: trial.refused };
 }
@@ -125,6 +126,15 @@ describe('compareEvalResults', () => {
     expect(validateEvalResults(hanging, 10)).toHaveLength(1);
     expect([comparison.verdict, comparison.rows[0]?.reason]).toEqual(['regressed', null]);
     expect(renderEvalComparison(comparison)).toContain('`t1 deployment.hung` | 0 | 1 |');
+  });
+
+  test('a hang is counted by what held it, so a silent job is never read as a model hang', () => {
+    const job = { pass: false, hung: 'held by running shell job bgjob-server (workspace: node server.js)', heldBy: ['running shell job'] };
+    const run = { pass: false, hung: 'held by open run run-1', heldBy: ['open run'] };
+    const markdown = renderEvalComparison(compareEvalResults(report('t', trialsOf(10, 10), BASE), report('t', [...trialsOf(7, 8), job, run], NEXT)));
+
+    expect(markdown).toContain('`t1 deployment.hung (held by running shell job)` | 0 | 1 |');
+    expect(markdown).toContain('`t1 deployment.hung (held by open run)` | 0 | 1 |');
   });
 
   // A reset may be the build's own regression: never infrastructure, and a build that resets more is red even when

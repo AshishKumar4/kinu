@@ -98,22 +98,27 @@ describe('a turn that stays busy and silent fails as a product hang, never holds
     // Polled each second from the first row the watch saw: the first look past the bound is a second past it.
     expect(hang.message).toContain(`busy for ${String(BOUND_S + 1)} s with no ledger row, no stream byte, no tool call in flight and no provider wait declared`);
     expect(hang.message).toContain(`held by open run run-1, its last row step_finish at ${at(1_000)}`);
+    expect(hang.heldBy).toEqual(['open run']);
   });
 
+  // A job publishes no output while it runs, so one that runs silent holds its turn as a model would: the hang says which
+  // it was, the job by its id and what it runs, never a model hang (staging f75f06932: the agent's own Node server).
   test('the running job and the working helper that hold it are named, and nothing that is done', async () => {
     const clock = watchClock();
 
     const held = fixtureWorkspace(clock, () => ({
       events: [start('run-1'), end('run-1', 5_000, 1)],
-      jobs: [{ id: 'bgjob-server', kind: 'shell', status: 'running' }, { id: 'bgjob-install', kind: 'shell', status: 'completed' }],
+      jobs: [{ id: 'bgjob-server', kind: 'shell', status: 'running', label: 'workspace: node server.js' },
+        { id: 'bgjob-install', kind: 'shell', status: 'completed', label: 'workspace: npm install' }],
       helpers: [{ name: 'task-helper', status: 'working', lifetime: 'task' }, { name: 'done-helper', status: 'idle', lifetime: 'task' }],
     }));
 
     const hang = await hangOf(settle(new TurnWatch(held, clock)));
 
-    expect(hang.message).toContain('held by running shell job bgjob-server; working helper task-helper');
+    expect(hang.message).toContain('held by running shell job bgjob-server (workspace: node server.js); working helper task-helper');
     expect(hang.message).not.toContain('bgjob-install');
     expect(hang.message).not.toContain('done-helper');
+    expect(hang.heldBy).toEqual(['running shell job', 'working helper']);
   });
 
   // Measured 2026-10-01: a lead's `agents` hire ran 840 s with nothing in the ledger while its helper worked, and the

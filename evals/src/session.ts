@@ -840,6 +840,8 @@ const DecideApprovalsSchema = v.object({ decided: v.array(v.string()) });
 const PublicBackgroundJobSchema = v.object({
   id: v.string(),
   kind: v.string(),
+  /** What the job runs, as the Supervise pane names it (`workspace: node server.js`). */
+  label: v.optional(v.nullable(v.string())),
   status: v.string(),
   result: v.optional(v.nullable(v.string())),
   error: v.optional(v.nullable(v.string())),

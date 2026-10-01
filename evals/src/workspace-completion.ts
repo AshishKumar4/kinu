@@ -44,9 +44,17 @@ const WALL_CLOCK: WatchClock = {
 /** What a watch reads of a workspace, and the helpers' rooms it asks to hear. */
 export type WatchedWorkspace = Pick<KinuPublicSession, 'runEvents' | 'backgroundJobs' | 'subordinates' | 'toolCallsInFlight' | 'heard' | 'listen'>;
 
-/** A turn whose workspace stayed busy and silent past the bound: the build hung, and the message names what held it. */
+/**
+ * A turn whose workspace stayed busy and silent past the bound: the build hung. The message names what held it, and
+ * `heldBy` its kinds (`open run`, `running shell job`, `working helper`), which the report counts a hang under: a job
+ * publishes no output while it runs, so one left running is told apart from a model that fell silent only here.
+ */
 export class WorkspaceHang extends Error {
   override readonly name = 'WorkspaceHang';
+
+  constructor(message: string, readonly heldBy: readonly string[]) {
+    super(message);
+  }
 }
 
 function openRuns(events: readonly RunEvent[]): string[] {
@@ -62,9 +70,17 @@ function holders(events: readonly RunEvent[], jobs: readonly PublicBackgroundJob
 
       return `open run ${runId}${last === undefined ? '' : `, its last row ${last.type} at ${last.timestamp}`}`;
     }),
-    ...jobs.map((job) => `running ${job.kind} job ${job.id}`),
+    ...jobs.map((job) => `running ${job.kind} job ${job.id}${job.label === undefined || job.label === null ? '' : ` (${job.label})`}`),
     ...helpers.map((helper) => `working helper ${helper.name}`),
   ];
+}
+
+function holderKinds(events: readonly RunEvent[], jobs: readonly PublicBackgroundJob[], helpers: readonly PublicSubordinate[]): string[] {
+  return [...new Set([
+    ...openRuns(events).map(() => 'open run'),
+    ...jobs.map((job) => `running ${job.kind} job`),
+    ...helpers.map(() => 'working helper'),
+  ])];
 }
 
 /**
@@ -108,7 +124,7 @@ export class TurnWatch {
 
       throw new WorkspaceHang(`the workspace stayed busy for ${String(Math.round(silentMs / 1000))} s with no ledger row, no stream byte, `
         + `no tool call in flight and no provider wait declared${last === undefined ? '' : ` (its last row ${last.type} at ${last.timestamp})`}: `
-        + `held by ${holders(events, running, working).join('; ')}`);
+        + `held by ${holders(events, running, working).join('; ')}`, holderKinds(events, running, working));
     }
 
     return { busy, events };

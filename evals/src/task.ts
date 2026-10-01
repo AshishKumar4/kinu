@@ -74,7 +74,8 @@ export type EvalRunInput = { model: string; arm: string; trial: number };
  */
 export const TURN_OUTCOMES = ['completed', 'error', 'refused', 'reset', 'hung'] as const;
 
-export type EvalTurnOutcome = { status: (typeof TURN_OUTCOMES)[number]; message?: string };
+/** `heldBy`: for a turn that hung, the kinds of what held it (`WorkspaceHang`). */
+export type EvalTurnOutcome = { status: (typeof TURN_OUTCOMES)[number]; message?: string; heldBy?: string[] };
 
 export type EvalTurnResult = {
   outcome: EvalTurnOutcome;
@@ -91,6 +92,23 @@ export type EvalTurnResult = {
 export type EvalMetrics = { modelTurns: number; toolCalls: number; toolErrors: number; providerWaits: number; providerWaitMs: number };
 
 export type EvalRunOutput = { success: boolean; turns: EvalTurnResult[]; metrics: EvalMetrics };
+
+/**
+ * Why a run failed, in the one line its reporter prints: the turn the deployment did not end as completed, with what held
+ * it and the deployment's own account, else the checks that failed. A trial stops at its first failed turn.
+ */
+export function failureRationale(output: EvalRunOutput): string {
+  const stopped = output.turns.findIndex((turn) => turn.outcome.status !== 'completed');
+  const turn = output.turns[stopped];
+
+  if (turn === undefined) {
+    return `failed: ${output.turns.flatMap((each) => each.checks).filter((check) => !check.pass).map((check) => check.id).join(', ') || 'a turn did not complete'}`;
+  }
+
+  const { status, message, heldBy } = turn.outcome;
+
+  return `failed: turn ${String(stopped + 1)} ${status}${heldBy === undefined ? '' : ` (held by ${heldBy.join(', ')})`}${message === undefined ? '' : `: ${message}`}`;
+}
 
 /**
  * Harness-level failures, by name. None is the agent's result: the comparison counts a trial

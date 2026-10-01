@@ -174,7 +174,7 @@ async function runTurn(session: KinuPublicSession, turn: EvalTurn, timeline: Tri
   } catch (error) {
     if (!(error instanceof WorkspaceHang)) throw error;
 
-    return { outcome: { status: 'hung', message: redact(error.message) }, checks: [], turnWallMs: Date.now() - startedAt, verificationWallMs: 0 };
+    return { outcome: { status: 'hung', message: redact(error.message), heldBy: [...error.heldBy] }, checks: [], turnWallMs: Date.now() - startedAt, verificationWallMs: 0 };
   }
 
   const turnWallMs = Date.now() - startedAt;
@@ -340,7 +340,8 @@ export function createKinuHarness(task: EvalTask, target: EvalTarget, identity: 
           });
 
           say(`turn ${String(turnNumber)} ${result.outcome.status} in ${String(Math.round(result.turnWallMs / 1000))}s, `
-            + `${String(result.checks.filter((check) => check.pass).length)} of ${String(result.checks.length)} checks passed`);
+            + `${String(result.checks.filter((check) => check.pass).length)} of ${String(result.checks.length)} checks passed`
+            + `${result.outcome.message === undefined ? '' : `: ${result.outcome.message}`}`);
           turns.push(result);
 
           if (result.outcome.status !== 'completed' || result.checks.some((check) => !check.pass)) break;
