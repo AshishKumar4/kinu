@@ -12,7 +12,7 @@ import { KINU_TIMER_JOB } from "./wake-jobs";
 import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
   ArchiveCursorSchema,
-  createWorkspaceForkSink, createWorkspaceForkSource, settledWorkspaceSoul, workspaceArchiveFiles, writeWorkspaceSoul,
+  createWorkspaceForkSink, createWorkspaceForkSource, settledWorkspaceSoul, workspaceArchiveStore, writeWorkspaceSoul,
   explorationActorKey, collectDynamicContext, subordinateDelegatesOf,
   createReportCodemodeProvider, HeadController, REAL_CLOCK, runHeadSplit, SubordinateRosterStore,
   recoverActorTurns, EventLog, dismissOrphanedAssignments, actorReferenceOf, subordinateDescendants, TEMPORARY_LIFETIME,
@@ -262,7 +262,7 @@ import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import type { ExposedPortList } from "@kinu.run/core";
 import {
-  terminalEffect, keyedScope, declareTerminalRoster, owesShadowTrial,
+  terminalEffect, keyedScope, declareTerminalRoster, owesShadowTrial, isDefinitiveTerminalFailure,
   branchesTerminalEffect,
   type OwedEffect, type OwedTerminalEffectsInput, type TerminalEffectTable, type TerminalTurnFacts,
   type TerminalTurnParts,
@@ -279,9 +279,8 @@ const LeasedRowSchema = v.object({ id: v.string() });
  * answers truncated and the wake drains the rest on the next frame.
  */
 
-/** Tombstone scope marking a turn's sleep-time update applied; survives pruning of
- *  its `sleep_time_updates` row. */
-const SLEEP_TIME_APPLIED = 'sleep_time';
+/** Tombstone scope marking a turn's sleep-time window consumed, by an update or a definitive failure. */
+const SLEEP_TIME_PROCESSED = 'sleep_time';
 
 /** Tombstone scope for the prompt-section lane: separate from the GEPA pass so
  *  replaying the tick does not rotate the section twice. */
@@ -1310,9 +1309,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       terminalIncomplete: this.terminal.hasIncomplete() && this.terminal.nextRetryAt() === null,
       unfinishedHeads: this.headJournal.hasUnfinishedHeads(),
       runningSwarms: this.mctsSearchStore.hasRunningSwarms(),
-      // A running job with no resume instant (live or orphaned); jobs waiting on an instant are timed
-      // and read by `nextOwedAt`, so a lone deferred job costs one wake at its instant.
-      untimedJobs: this.jobs.hasUntimedLiveJobsInWorkspace(),
       retirements: this.workspaceActors().hasRetirements(),
       pendingBirths: this.subordinateRoster.hasPendingBirths(),
       pendingDeletions: this.subordinateRoster.hasPendingDeletions(),
@@ -2414,8 +2410,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       sleep_time: terminalEffect({
         // No recorded input: evidence is the transcript, read at run time.
         input: v.object({}),
-        // Failures must throw, not be swallowed, so the ledger keeps the row owed until the compute
-        // actually finishes.
+        // The ledger distinguishes definitive failure from work that remains owed.
         run: async () => {
           if (!this.config.getSleepTimeComputeEnabled()) return { status: 'completed', detail: 'the lane is off' };
           const window = await this.sleepTimeWindow();
@@ -2472,7 +2467,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   private async sleepTimeWindow(): Promise<SleepTimeWindow> {
     return sleepTimeWindow(
       await this.chatTranscript.newestFirst(SLEEP_TIME_READ_ROWS),
-      (answerId) => effectAlreadyDone(this.boundSql, this.actorHandle(), SLEEP_TIME_APPLIED, answerId),
+      (answerId) => effectAlreadyDone(this.boundSql, this.actorHandle(), SLEEP_TIME_PROCESSED, answerId),
     );
   }
 
@@ -2615,42 +2610,28 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   private async runSleepTimeCompute(window: SleepTimeWindow): Promise<void> {
+    const key = window.newestId;
+
+    if (key === null) return;
+
     try {
-      // Key on the newest answer the window read, not the effect's scope: a later turn committed
-      // before replay would otherwise sit unprocessed behind the tombstone.
-      const key = window.newestId;
-
-      if (key === null) return;
-      // The update is persisted before applying so a replay after eviction reuses the same answer
-      // instead of paying for another model call.
+      // The newest answer keys the window even if a later turn committed before replay.
       const stored = this.recordedSleepTimeUpdate(key);
-
-      const currentFacts = this.facts.all()
-        .sort((a, b) => b.lastObservedAt - a.lastObservedAt)
-        .map(f => ({ key: f.key, value: f.value, confidence: f.confidence }));
 
       const update = stored ?? await runSleepTimeCompute(this.rt.fastLlm ?? this.rt.llm, {
         turns: window.turns,
-        currentFacts,
+        currentFacts: this.facts.all()
+          .sort((a, b) => b.lastObservedAt - a.lastObservedAt)
+          .map(f => ({ key: f.key, value: f.value, confidence: f.confidence })),
       });
-
-      // Null means extraction/validation failed; a no-change answer is empty arrays, not null.
-      if (update === null) {
-        throw new KinuError('unavailable', 'the sleep-time compute returned no usable update');
-      }
 
       if (stored === undefined) this.persistSleepTimeUpdate(key, update);
 
-      // One transaction over the non-idempotent fact writes and their tombstone, so a replay never
-      // repeats a prefix. The body must not await: `transactionSync` commits when it returns.
+      // The fact writes and consumed-window marker commit together; replay never repeats a prefix.
       const summary = this.ctx.storage.transactionSync(() => {
         const applied = applySleepTimeUpdate(this.facts, update);
 
-        recordEffectDone(this.boundSql, this.actorHandle(), { scope: SLEEP_TIME_APPLIED, key: key });
-        void this.sql`DELETE FROM sleep_time_updates WHERE effect_key = ${key}`;
-        // Nothing is unprocessed, so no timed trigger is owed; a tab close earns one run only.
-        this.config.delete(SLEEP_TIME_SETTLED_AT);
-        this.config.delete(SLEEP_TIME_CLOSED_AT);
+        this.finishSleepTimeWindow(key);
 
         return applied;
       });
@@ -2667,10 +2648,20 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         otherwise: 'unavailable',
       });
 
+      if (isDefinitiveTerminalFailure(failure.code)) {
+        this.ctx.storage.transactionSync(() => { this.finishSleepTimeWindow(key); });
+      }
+
       diagnostics.failure('memory.fact_compression_failed', failure);
-      // Rethrown so the terminal effect stays owed instead of recording `completed`.
       throw failure;
     }
+  }
+
+  private finishSleepTimeWindow(key: string): void {
+    recordEffectDone(this.boundSql, this.actorHandle(), { scope: SLEEP_TIME_PROCESSED, key });
+    void this.sql`DELETE FROM sleep_time_updates WHERE effect_key = ${key}`;
+    this.config.delete(SLEEP_TIME_SETTLED_AT);
+    this.config.delete(SLEEP_TIME_CLOSED_AT);
   }
 
   /** The update a previous attempt already paid for, so a replay applies it without a new call. */
@@ -3411,6 +3402,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
           });
 
           span.fail(failure);
+
+          if (isDefinitiveTerminalFailure(failure.code)) {
+            this.logActivity('terminal_effect_abandoned', `memory compression failed: ${failure.message}, so it is not retried`);
+          }
+
           diagnostics.failure('memory.sleep_time_wake_failed', failure);
         }
       });
@@ -4130,7 +4126,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       workspace: this.name,
       source: 'cloud',
       cursor: parseArchiveCursor(cursor),
-      files: workspaceArchiveFiles(workspace),
+      store: workspaceArchiveStore(workspace),
       agents: this.agentArchiveSource(),
     });
   }
@@ -4166,10 +4162,21 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
     // No owner: a creation that died before its claim, or storage from before a reset. The caller
     // `removeWorkspace` already verified ownership through the user's roster.
-    const ownerUserId = this.storageRefusal === undefined ? this.getOwnerUserId() : null;
+    let ownerUserId = this.wipe?.ownerUserId ?? null;
+
+    if (this.wipe === undefined && this.storageRefusal === undefined) ownerUserId = this.getOwnerUserId();
 
     if (ownerUserId !== null && ownerUserId !== expectedOwnerUserId) throw new KinuError('denied', 'Agent owner mismatch; refusing to destroy.');
 
+    if (this.wipe === undefined) await this.releaseOutsideState();
+
+    this.wipe ??= { ownerUserId, done: this.wipeStorage() };
+    await this.wipe.done;
+
+    return { ok: true };
+  }
+
+  private async releaseOutsideState(): Promise<void> {
     // First: revoke all preview URLs, else answering a stale one would create a fresh container object.
     // The watermark outranks every earlier record (core preview/preview-exposures.ts).
     if (this.env.AUTH_KV) {
@@ -4186,7 +4193,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       await sb.discardState();
       await sb.destroy();
     }
+  }
 
+  private wipe: { readonly ownerUserId: string | null; readonly done: Promise<void> } | undefined;
+
+  private async wipeStorage(): Promise<void> {
     // deleteAll misses facet storage.
     if (this.storageRefusal === undefined && this.ctx.storage.sql.exec('SELECT 1 FROM workspace_identity').toArray().length > 0) {
       for (const record of this.actorDirectoryStore().list({ retired: true })) {
@@ -4194,10 +4205,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       }
     }
 
-    // agents base: drops SDK tables, deleteAlarm, deleteAll (takes the filesystem), aborts the isolate.
+    // Drops SDK tables, alarms and storage; the isolate resets later, so a concurrent delete joins `wipe`.
     await this.destroy();
-
-    return { ok: true };
   }
 
   @callable()

@@ -46,6 +46,11 @@ function setup(deleteOutcome: 'ok' | 'destroyed' | 'io') {
 
       return [];
     },
+    async heldRows(_caller: UserCaller) {
+      calls.push('held-rows');
+
+      return { user_credentials: 1, experience_library: 2 };
+    },
     async deleteAccount(_caller: UserCaller, ownerUserId: string) {
       calls.push(`account:delete:${ownerUserId}`);
 
@@ -144,6 +149,27 @@ describe('DELETE /api/user/account', () => {
     const response = await account(new Request('https://kinu.test/api/user/account', { method: 'GET' }), env);
 
     expect(response).toBeNull();
+    expect(calls).toEqual([]);
+  });
+});
+
+describe('GET /api/user/held-rows', () => {
+  // An eval trial's account is read before the trial opens, so a row the trial before it left is never inherited.
+  test('the eval identity reads what its account holds, by table', async () => {
+    const { env, calls } = setup('ok');
+    const evals = serveFamily(accountRoutes, { identity: { ...IDENTITY, email: 'eval-service+trial-7@kinu.run', provider: 'dev' } });
+    const response = await evals(new Request('https://kinu.test/api/user/held-rows'), env);
+
+    expect(response?.status).toBe(200);
+    expect(v.parse(v.record(v.string(), v.number()), await response?.json())).toEqual({ user_credentials: 1, experience_library: 2 });
+    expect(calls).toEqual(['held-rows']);
+  });
+
+  test("a person's session is not answered, and the account is not read", async () => {
+    const { env, calls } = setup('ok');
+    const response = await account(new Request('https://kinu.test/api/user/held-rows'), env);
+
+    expect(response?.status).toBe(404);
     expect(calls).toEqual([]);
   });
 });

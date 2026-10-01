@@ -9,10 +9,8 @@ import { basename, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import {
   WORKSPACE_ARCHIVE_EXTENSION,
-  ArchiveCursorSchema,
   archiveSqlFromDatabase,
   archiveFileTree,
-  decodeJsonValue,
   readWorkspaceArchivePage,
   restoreWorkspaceArchive,
   type ArchiveCursor,
@@ -21,13 +19,13 @@ import {
 import { tolerate } from '@kinu.run/core/obs';
 import { requireSchemaGenesis, stampSchemaGenesis } from '@kinu.run/cli-backend';
 import { createInlineWorkspace } from '@kinu.run/core/identity';
-import { workspaceArchiveTarget, type ArchiveFileTarget } from '@kinu.run/core';
+import { workspaceArchiveTarget } from '@kinu.run/core';
 import {
   adoptUnplacedLocalAgent, agentDbPath, agentDir, ensureAgentHome,
   requireStoredAuthConfig, resolveAgentRef, resolveLocalAgent,
 } from '../config';
 import { resolveAgentTarget } from '../agent-target';
-import { callAgentRpc } from '../cloud-api';
+import { cloudArchivePage } from '../cloud-api';
 import { formatBytes, printError, OK, WARN, ACCENT, DIM } from '../display';
 import * as v from 'valibot';
 
@@ -39,11 +37,6 @@ interface RestoredArchiveCounts {
 const ArchiveHeaderSchema = v.object({
   t: v.optional(v.string()),
   workspace: v.optional(v.string()),
-});
-
-const ArchivePageSchema: v.GenericSchema<ArchivePage> = v.object({
-  lines: v.array(v.string()),
-  next: v.nullable(ArchiveCursorSchema),
 });
 
 export async function exportCommand(name: string, opts: { output?: string }): Promise<void> {
@@ -58,6 +51,12 @@ export async function exportCommand(name: string, opts: { output?: string }): Pr
   let lines = 0;
 
   for await (const page of pages) {
+    if (page === 'snapshot-ended') {
+      writeFileSync(output, '');
+      lines = 0;
+      continue;
+    }
+
     appendFileSync(output, page.lines.map((line) => `${line}\n`).join(''));
     lines += page.lines.length;
 
@@ -114,11 +113,10 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
       const db = new Database(partial, { create: true });
 
       try {
-        let files: ArchiveFileTarget | null = null;
+        let workspace: ReturnType<typeof workspaceArchiveTarget> | null = null;
+        const target = () => (workspace ??= workspaceArchiveTarget(createInlineWorkspace(db)));
 
-        const result = await restoreWorkspaceArchive(archiveSqlFromDatabase(db), readLines(file), {
-          files: () => (files ??= workspaceArchiveTarget(createInlineWorkspace(db))),
-        });
+        const result = await restoreWorkspaceArchive(archiveSqlFromDatabase(db), readLines(file), { files: target, store: target });
 
         restored = { rows: result.rows, tables: result.tables };
         stampSchemaGenesis(db);
@@ -151,23 +149,19 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
   console.log(`  ${DIM('workspace:')} ${placed.workspaceId} ${DIM('in')} ${placed.cwd}\n`);
 }
 
-async function* cloudArchivePages(name: string): AsyncGenerator<ArchivePage> {
+async function* cloudArchivePages(name: string): AsyncGenerator<ArchivePage | 'snapshot-ended'> {
   const auth = requireStoredAuthConfig();
   let cursor: ArchiveCursor | null = null;
 
-  do {
-    const page: ArchivePage = await callAgentRpc({
-      origin: auth.origin,
-      token: auth.token,
-      name,
-      method: 'exportWorkspaceArchive',
-      schema: ArchivePageSchema,
-      args: [cursor === null ? null : decodeJsonValue({ value: cursor })],
-    });
+  for (;;) {
+    const page = await cloudArchivePage(auth.origin, auth.token, name, cursor);
 
     yield page;
-    cursor = page.next;
-  } while (cursor);
+
+    if (page === 'snapshot-ended') cursor = null;
+    else if (page.next === null) return;
+    else cursor = page.next;
+  }
 }
 
 async function* localArchivePages(name: string, output: string): AsyncGenerator<ArchivePage> {

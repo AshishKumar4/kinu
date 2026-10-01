@@ -11,7 +11,7 @@ import { SessionProposals } from '../src/session/proposals';
 import { SessionTranscript, readSessionTranscript } from '../src/session/transcript';
 import { rowText } from '../src/utils/ui-message';
 import { SessionHistory } from '../src/session/history';
-import { initSessionTranscriptTables } from '../src/session/transcript-schema';
+import { CHAT_SESSION_ID, initSessionTranscriptTables } from '../src/session/transcript-schema';
 import { getChatHistoryPage } from '../src/read-models/status';
 import { answersForDrainTurns } from '../src/identity/conversation-store';
 import { inheritedContextFromTranscript } from '../src/orchestrator/heads-support';
@@ -195,6 +195,38 @@ test('a context reads what is stored: another reader\'s revision, and one writte
     setSystemTime();
     s.testSql.close();
   }
+});
+
+test('a past revision reads back as it was after a transform and a clear, by a reader that never held it', async () => {
+  const s = setup();
+
+  try {
+    initSessionTranscriptTables(s.rt.storage.execRaw);
+
+    const history = () => new SessionHistory({
+      sql: s.rt.storage.sql, actor: s.rt.actor, transactionSync: write => s.rt.storage.transactionSync(write),
+      files: async () => ({ vfs: s.rt.storage.vfs, artifactDirectory: '/actor' }),
+    });
+
+    const writer = history();
+
+    for (const text of ['one', 'two', 'three']) {
+      await writer.append({ id: text, origin: 'input', turnId: null, assertOwner: () => undefined, message: { role: 'user', content: text } });
+    }
+
+    const origin = (await writer.materialize()).selection;
+
+    writer.context.commit(origin, {
+      cause: 'context_transform', turnId: null, assertEpoch: () => undefined,
+      mutate: current => current.slice(-1).map(entry => ({ ...entry, position: 0 })),
+    });
+    writer.clearConversation(CHAT_SESSION_ID, () => undefined);
+
+    const reader = history();
+
+    expect((await reader.materialize()).messages).toEqual([]);
+    expect((await reader.materializeAt(origin)).messages.map(message => message.content)).toEqual(['one', 'two', 'three']);
+  } finally { s.testSql.close(); }
 });
 
 test('a held turn context follows sealed output, an authored edit and a selected branch', async () => {

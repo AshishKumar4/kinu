@@ -1,6 +1,8 @@
 import { expect, test } from 'bun:test';
 import type { JsonValue, RunEvent } from '../../packages/core/src/index';
-import { observeDelegationHires, observeDelegationRetirement } from './delegation-observation';
+import {
+  delivered, deliveredInLedger, finalAnswer, observeDelegationRetirement, observeDurableHire, taskHires,
+} from './delegation-observation';
 
 function call(runId: string, eventIndex: number, args: JsonValue, result: JsonValue): Extract<RunEvent, { type: 'tool_call_end' }> {
   return {
@@ -10,44 +12,88 @@ function call(runId: string, eventIndex: number, args: JsonValue, result: JsonVa
   };
 }
 
-const taskHire = call('genesis', 20, { action: 'hire', lifetime: 'task' }, {
-  status: 'completed', agent: 'ask-task-bfq4w0', lifetime: 'task', answer: 'bramblelight',
+/** One finished step, as `[runId, eventIndex, timestamp, reason]`, ending on `text`. */
+function finished([runId, eventIndex, timestamp, reason]: readonly [string, number, string, string], text: string): RunEvent {
+  return {
+    type: 'step_finish', runId, eventIndex, timestamp, stepIndex: eventIndex, reason,
+    messages: [{ role: 'assistant', content: [{ type: 'text', text }] }],
+  };
+}
+
+const MISSION = 'Reply with exactly the word bramblelight and nothing else.';
+
+const ASK = 'Hire one helper to say the word.';
+
+// The shape a task hire answers in since cafab2bfc: at once, its helper still at work.
+const taskHire = call('task', 4, { action: 'hire', lifetime: 'task', role: 'task', mission: MISSION }, {
+  status: 'working', agent: 'ask-task-ymhu3n', lifetime: 'task', role: 'task', answer: 'Working.',
 });
 
 const durableHire = call('roster', 4, { action: 'hire' }, { name: 'task-9j4odl' });
 
 const roster = call('roster', 10, { action: 'list' }, { subordinates: [{ name: 'task-9j4odl' }] });
 
-test('the retained delegation sequence selects the task answer and the later durable hire', () => {
-  const observed = observeDelegationHires({
-    taskEvents: [call('genesis', 12, { action: 'hire' }, { name: 'roster-probe' }), taskHire],
-    rosterEvents: [durableHire, roster], reply: 'HIRED bramblelight', word: 'bramblelight',
-  });
-
-  expect(observed.taskHire?.toolCallId).toBe(taskHire.toolCallId);
-  expect(observed.durableName).toBe('task-9j4odl');
-  expect(observed.wordReported).toBe(true);
-  expect(observed.shown).toBe(true);
+test('a task hire is read by the helper it named and the mission it gave', () => {
+  expect(taskHires([durableHire, taskHire]).map((hire) => [hire.agent, hire.mission])).toEqual([['ask-task-ymhu3n', MISSION]]);
 });
 
-test('a later task answer and names in unrelated result fields cannot satisfy the task', () => {
-  const observed = observeDelegationHires({
-    taskEvents: [], rosterEvents: [taskHire, durableHire, roster], reply: 'bramblelight', word: 'bramblelight',
+test('refused, errored and malformed hires are not task hires', () => {
+  for (const hire of [
+    { ...taskHire, error: 'transport failed' },
+    { ...taskHire, outcome: { success: false, reason: 'bad_input' } },
+    call('task', 1, { action: 'hire', lifetime: 'task', mission: MISSION }, { status: 'working', lifetime: 'task' }),
+    call('task', 1, { action: 'hire', mission: MISSION }, { status: 'working', agent: 'durable', lifetime: 'task' }),
+  ] satisfies RunEvent[]) {
+    expect(taskHires([hire])).toEqual([]);
+  }
+});
+
+test('an answer is delivered by the first message after the ask that names its helper, and the reply that follows it', () => {
+  const report = '1 event arrived while you were idle.\n- report from ask-task-ymhu3n: bramblelight';
+
+  expect(delivered([
+    { role: 'user', text: ASK },
+    { role: 'assistant', text: 'WAITING' },
+    { role: 'user', text: report },
+    { role: 'assistant', text: 'HIRED bramblelight' },
+  ], ASK, 'ask-task-ymhu3n')).toEqual({ text: report, reply: 'HIRED bramblelight' });
+});
+
+test('no message names the helper after the ask: nothing was delivered', () => {
+  expect(delivered([
+    { role: 'user', text: 'an earlier mention of ask-task-ymhu3n' },
+    { role: 'user', text: ASK },
+    { role: 'assistant', text: 'ask-task-ymhu3n is working' },
+    { role: 'user', text: 'an unrelated message' },
+  ], ASK, 'ask-task-ymhu3n')).toBeNull();
+
+  expect(delivered([{ role: 'user', text: 'ask-task-ymhu3n answered' }], ASK, 'ask-task-ymhu3n')).toBeNull();
+});
+
+test("a ledger holds a delivery when a turn of its own opened on a message naming the helper", () => {
+  const opened = (text: string): RunEvent => ({
+    type: 'run_start', runId: 'r2', eventIndex: 0, timestamp: '2026-10-01T03:12:34.536Z', agentId: 'relay',
+    turn: { turnId: 'programmatic:evt-1', messageId: 'm', kind: 'programmatic', text },
   });
 
-  expect(observed.taskHire).toBeUndefined();
-  expect(observed.wordReported).toBe(false);
+  expect(deliveredInLedger([opened('- report from ask-task-deep01: emberfall')], 'ask-task-deep01')).toBe(true);
+  expect(deliveredInLedger([opened('- report from ask-task-other: emberfall')], 'ask-task-deep01')).toBe(false);
+});
 
-  const unrelated = observeDelegationHires({
-    taskEvents: [call('task', 1, { action: 'hire', lifetime: 'task' }, {
-      status: 'completed', agent: 'bramblelight', lifetime: 'task', answer: 'wrong',
-    })], rosterEvents: [], reply: 'bramblelight', word: 'bramblelight',
-  });
+test("an actor's final answer is its last finished turn's text, not a tool step's", () => {
+  expect(finalAnswer([
+    finished(['r1', 2, '2026-10-01T03:12:30.000Z', 'stop'], 'WAITING'),
+    finished(['r2', 3, '2026-10-01T03:12:34.900Z', 'tool-calls'], 'Calling agents.'),
+    finished(['r2', 5, '2026-10-01T03:12:34.950Z', 'stop'], 'emberfall'),
+    finished(['r1', 1, '2026-10-01T03:12:29.000Z', 'tool-calls'], 'Calling agents.'),
+  ])).toBe('emberfall');
 
-  expect(unrelated.wordReported).toBe(false);
+  expect(finalAnswer([])).toBe('');
 });
 
 test('the roster must contain the exact subordinate name, not a peer or substring', () => {
+  expect(observeDurableHire([durableHire, roster])).toEqual({ durableName: 'task-9j4odl', shown: true });
+
   const results: JsonValue[] = [
     { subordinates: [], peers: [{ name: 'task-9j4odl' }] },
     { subordinates: [{ name: 'task-9j4odl-extra' }] },
@@ -55,24 +101,7 @@ test('the roster must contain the exact subordinate name, not a peer or substrin
   ];
 
   for (const result of results) {
-    expect(observeDelegationHires({
-      taskEvents: [taskHire], rosterEvents: [durableHire, call('roster', 10, { action: 'list' }, result)],
-      reply: 'HIRED bramblelight', word: 'bramblelight',
-    }).shown).toBe(false);
-  }
-});
-
-test('refused, errored and malformed hires do not satisfy either lifetime', () => {
-  const hires: RunEvent[] = [
-    { ...taskHire, error: 'transport failed' },
-    { ...taskHire, outcome: { success: false, reason: 'bad_input' } },
-    call('task', 1, { action: 'hire', lifetime: 'task' }, { agent: 'missing-answer' }),
-  ];
-
-  for (const hire of hires) {
-    expect(observeDelegationHires({
-      taskEvents: [hire], rosterEvents: [hire], reply: 'bramblelight', word: 'bramblelight',
-    })).toEqual({ taskHire: undefined, durableName: null, wordReported: false, shown: false });
+    expect(observeDurableHire([durableHire, call('roster', 10, { action: 'list' }, result)]).shown).toBe(false);
   }
 });
 

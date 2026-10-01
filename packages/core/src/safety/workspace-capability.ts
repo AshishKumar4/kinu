@@ -53,6 +53,8 @@ const WORKSPACE_CAPABILITY_TIERS = {
   'profile': 'workspace',
   /** The account itself. Owner-only: resetting it could erase every sibling workspace. */
   'account': 'owner_only',
+  /** The deployment's built-in accounts, passwords and passkeys. Owner-only: one write is any account's takeover. */
+  'builtin_accounts': 'owner_only',
   'profile.resolve': 'workspace',
   'config': 'workspace',
   /** CLI bearer tokens, CI access tokens, websocket tickets. Minting one is account takeover. */

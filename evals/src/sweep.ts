@@ -3,9 +3,12 @@
 // dies mid-turn leaves its workspace behind, waking on its own schedule, until something deletes it.
 // Liveness is the deployment's own: a run beats its workspace's roster mark (`beatWorkspace`), and a
 // mark older than the lease belongs to a run that stopped. Holds are the reviewed held-workspaces.json.
+// A delete the deployment fails is reported, not thrown: a workspace left behind does not change what the
+// run measures, and on 2026-10-01 one failed delete cancelled every trial of the task that met it.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
+import { renderThrownChain } from '@kinu.run/core/obs';
 import { EVAL_WORKSPACE_PREFIX } from '@kinu.run/test-utils';
 import { WORKSPACE_LEASE_MS, type RosterRow } from './session';
 
@@ -32,12 +35,15 @@ export interface EvalSweep {
   readonly live: readonly string[];
   /** Held, with the reason the file gives. */
   readonly held: readonly { readonly name: string; readonly reason: string }[];
+  /** Due for deletion, and the deployment would not delete it: why, as it answered. */
+  readonly failed: readonly { readonly name: string; readonly reason: string }[];
 }
 
 export async function sweepEvalWorkspaces(account: SweptAccount): Promise<EvalSweep> {
   const deleted: string[] = [];
   const live: string[] = [];
   const held: { name: string; reason: string }[] = [];
+  const failed: { name: string; reason: string }[] = [];
 
   for (const { name, lastVisited } of await account.list()) {
     if (!name.startsWith(EVAL_WORKSPACE_PREFIX)) continue;
@@ -48,10 +54,14 @@ export async function sweepEvalWorkspaces(account: SweptAccount): Promise<EvalSw
     } else if (account.now - lastVisited < WORKSPACE_LEASE_MS) {
       live.push(name);
     } else {
-      await account.remove(name);
-      deleted.push(name);
+      try {
+        await account.remove(name);
+        deleted.push(name);
+      } catch (error) {
+        failed.push({ name, reason: renderThrownChain({ cause: error }) });
+      }
     }
   }
 
-  return { deleted, live, held };
+  return { deleted, live, held, failed };
 }

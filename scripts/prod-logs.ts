@@ -68,6 +68,7 @@ import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import * as v from 'valibot';
 import { ALERT_THRESHOLDS, findWakeLoops, type StartupHour, type WakeLoop } from '@kinu.run/core/analytics';
+import { PLATFORM_CATALOG } from '../packages/core/src/platform-catalog';
 import { recordStep } from './deploy-report';
 import { parseJsonc } from './jsonc';
 
@@ -760,8 +761,10 @@ export interface EffectSample {
 export interface VersionRead {
   /** Its invocations that did not end `ok`, by outcome and entrypoint. */
   readonly ended: readonly { readonly outcome: string; readonly entrypoint: string; readonly count: number; readonly objects: number }[];
-  /** One exception per entrypoint whose invocations ended in one. */
+  /** One exception per entrypoint whose invocations ended in one a code update did not cause. */
   readonly thrown: readonly ExceptionSample[];
+  /** Its invocations a deploy rolled over: the runtime ended each with {@link CODE_UPDATE_RESET}, by entrypoint. */
+  readonly deployResets: readonly { readonly entrypoint: string; readonly count: number }[];
   readonly effects: {
     readonly failed: number; readonly failedTurns: number; readonly owed: number;
     readonly failedSample?: EffectSample; readonly owedSample?: EffectSample;
@@ -784,18 +787,28 @@ function effectText(sample: EffectSample | undefined): string {
   return sample === undefined ? '' : `; e.g. object ${sample.object}, turn ${sample.sequence}: ${sample.detail}`;
 }
 
+/** The runtime's error for a call a code deploy cut off (platform-catalog.ts do.reset.transient): the deploy, not the version. */
+const CODE_UPDATE_RESET = PLATFORM_CATALOG['do.reset.transient'].observable.find((seen) => seen.context === 'code deploy')?.message ?? '';
+
+/** An entrypoint's uncaught exceptions, less those a code update caused. */
+function versionThrew(deployResets: VersionRead['deployResets'], row: VersionRead['ended'][number]): number {
+  return row.count - (deployResets.find((reset) => reset.entrypoint === row.entrypoint)?.count ?? 0);
+}
+
 /** Each signal `read` holds that a deploy reports whatever its tests said. A canceled or aborted invocation is the
- *  caller going away, not the version failing. */
+ *  caller going away, and one a code update reset is the deploy rolling over, not the version failing. */
 export function versionFindings(read: VersionRead): VersionFinding[] {
   const findings: VersionFinding[] = [];
 
   for (const row of read.ended) {
-    if (row.outcome === 'exception') {
+    const threw = row.outcome === 'exception' ? versionThrew(read.deployResets, row) : 0;
+
+    if (threw > 0) {
       const sample = read.thrown.find((thrown) => thrown.entrypoint === row.entrypoint);
 
       findings.push({
         what: `uncaught exceptions in ${row.entrypoint}`,
-        finding: `${String(row.count)} invocation(s) of ${row.entrypoint} ended in an uncaught exception${sample === undefined ? ', and none left its text' : `: ${exceptionText(sample)}`}`,
+        finding: `${String(threw)} invocation(s) of ${row.entrypoint} ended in an uncaught exception${sample === undefined ? ', and none left its text' : `: ${exceptionText(sample)}`}`,
       });
     } else if (row.outcome.startsWith('exceeded')) {
       findings.push({ what: `${row.entrypoint} ended by the platform (${row.outcome})`, finding: `${String(row.count)} invocation(s) of ${row.entrypoint} ended with ${row.outcome}, resetting ${String(row.objects)} object(s)` });
@@ -824,24 +837,30 @@ export function versionFindings(read: VersionRead): VersionFinding[] {
   return findings;
 }
 
-/** One exception per entrypoint whose invocations ended in one: the text the runtime logged for that request, and the
- *  object of the invocation, or, for an RPC entrypoint, of the call in its trace that has one. */
-async function exceptionSamples(t: Telemetry, scope: readonly Filter[]): Promise<ExceptionSample[]> {
+/** One exception per entrypoint in `entrypoints`: the text the runtime logged for the request, and the object of the
+ *  invocation, or, for an RPC entrypoint, of the call in its trace that has one. The first sampled exception a code
+ *  update did not cause is the one shown. */
+async function exceptionSamples(t: Telemetry, scope: readonly Filter[], entrypoints: ReadonlySet<string>): Promise<ExceptionSample[]> {
   const ended = await t.sampleEvents([...scope, eq('$metadata.type', 'cf-worker-event'), eq('$workers.outcome', 'exception')], 50);
   const samples: ExceptionSample[] = [];
 
-  for (const entrypoint of new Set(ended.map((event) => event.$workers.entrypoint ?? ''))) {
-    const first = ended.find((event) => (event.$workers.entrypoint ?? '') === entrypoint);
-    const request = first?.$metadata.requestId ?? '';
-    const trace = first?.$metadata.traceId ?? '';
-    const thrown = request === '' ? [] : await t.sampleEvents([eq('$metadata.requestId', request), eq('$metadata.type', 'cf-worker')], 5);
-    const own = first?.$workers.durableObjectId ?? '';
+  for (const event of ended) {
+    const entrypoint = event.$workers.entrypoint ?? '';
+    const request = event.$metadata.requestId ?? '';
+
+    if (!entrypoints.has(entrypoint) || request === '' || samples.some((sample) => sample.entrypoint === entrypoint)) continue;
+    const logged = await t.sampleEvents([eq('$metadata.requestId', request), eq('$metadata.type', 'cf-worker')], 5);
+    const message = logged.map((line) => line.$metadata.error ?? line.source.message ?? '').find((text) => text !== '') ?? '';
+
+    if (message === CODE_UPDATE_RESET) continue;
+    const own = event.$workers.durableObjectId ?? '';
+    const trace = event.$metadata.traceId ?? '';
     const traced = own !== '' || trace === '' ? [] : await t.sampleEvents([eq('$metadata.traceId', trace), eq('$metadata.type', 'cf-worker-event')], 20);
 
     samples.push({
       entrypoint,
-      message: thrown.map((event) => event.$metadata.error ?? event.source.message ?? '').find((text) => text !== '') ?? '',
-      object: own !== '' ? own : traced.map((event) => event.$workers.durableObjectId ?? '').find((id) => id !== '') ?? '',
+      message,
+      object: own !== '' ? own : traced.map((call) => call.$workers.durableObjectId ?? '').find((id) => id !== '') ?? '',
       request,
     });
   }
@@ -868,14 +887,29 @@ async function versionRead(t: Telemetry, versionId: string): Promise<VersionRead
   const invocations = [...scope, eq('$metadata.type', 'cf-worker-event')];
   const notOk: Filter = { key: '$workers.outcome', operation: 'neq', value: 'ok', type: 'string' };
   const ended = await t.count({ filters: [...invocations, notOk], groupBy: ['$workers.outcome', '$workers.entrypoint'], distinct: DO_ID, limit: 100 });
+
+  // One runtime error line per invocation the reset ended; their request ids need not be theirs (staging 3fe2aa81: three
+  // KinuDevbox calls ended at 02:41:09.120Z, and all three lines named one request).
+  const deployResets = await t.count({
+    filters: [...scope, eq('$metadata.type', 'cf-worker'), eq('$metadata.error', CODE_UPDATE_RESET)], groupBy: ['$workers.entrypoint'], limit: 100,
+  });
+
   const failed = await t.count({ filters: [...scope, eq('event', 'turn.terminal_effect_failed')], groupBy: ['fields.sequence'], limit: 500 });
   const owed = await t.count({ filters: [...scope, eq('event', 'turn.terminal_effects_owed')], groupBy: ['fields.sequence'], limit: 500 });
   const alarms = await t.hourly({ filters: [...invocations, eq('$workers.eventType', 'alarm')], groupBy: [DO_ID], limit: 500 });
   const total = (rows: readonly { readonly count: number }[]): number => rows.reduce((sum, row) => sum + row.count, 0);
 
-  return {
+  const read = {
     ended: ended.map((row) => ({ outcome: row.groups[0] ?? '', entrypoint: row.groups[1] ?? '', count: row.count, objects: row.distinct })),
-    thrown: ended.some((row) => row.groups[0] === 'exception') ? await exceptionSamples(t, scope) : [],
+    deployResets: deployResets.map((row) => ({ entrypoint: row.groups[0] ?? '', count: row.count })),
+  };
+
+  const threw = new Set(read.ended.filter((row) => row.outcome === 'exception' && versionThrew(read.deployResets, row) > 0)
+    .map((row) => row.entrypoint));
+
+  return {
+    ...read,
+    thrown: threw.size === 0 ? [] : await exceptionSamples(t, scope, threw),
     effects: {
       failed: total(failed), failedTurns: failed.length, owed: total(owed),
       failedSample: failed.length === 0 ? undefined : await effectSample(t, scope, 'turn.terminal_effect_failed'),

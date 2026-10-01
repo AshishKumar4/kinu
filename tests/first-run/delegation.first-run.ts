@@ -1,11 +1,11 @@
 /**
  * FIRST RUN: delegation settles — a hired helper answers, reports back, and retires.
  *
- * THE ASK. Turn one hires a task-lifetime helper to say one specific word and
- * relays its answer; turn two hires a durable helper and lists the roster;
- * turn three dismisses it and lists again. Every check reads durable state —
- * the ledger's `tool_call_end` rows, the stored transcript — never the model's
- * own account of what it did.
+ * THE ASK. Turn one hires a task-lifetime helper to say one specific word, and
+ * the turn its answer opens relays it; turn two hires a durable helper and lists
+ * the roster; turn three dismisses it and lists again. Every check reads durable
+ * state — the ledger's rows, the helper's own ledger, the stored transcript —
+ * never the model's own account of what it did.
  *
  * WHY EVERY GATE STAYED GREEN. `every-tool` deliberately EXCLUDES `hire` and
  * asserts `agents` was never called; unit proofs drive the agents tool against
@@ -13,10 +13,12 @@
  * helper and then read back whether the hire settled, whether the helper's
  * answer reached the parent, and whether the roster retired the row.
  *
- * SYNCHRONOUS BY DESIGN. Every subgoal is checkable the moment its turn
- * closes: a task hire answers inside the call that asked for it, a durable
- * hire/list/dismiss all settle in-turn. Nothing here waits on a subordinate
- * report wake, so this row needs no poll loop and no wall clock of its own.
+ * THE ANSWER ARRIVES AS A MESSAGE. A hire returns at once (cafab2bfc): the
+ * helper's answer opens the hirer's next turn. The row waits on the turns the
+ * workspace room broadcasts closing (`hirerHeard`) until that message is in the
+ * hirer's history, and reads what the helper answered from its own ledger, so it
+ * needs no poll loop and no wall clock of its own. The durable hire, list and
+ * dismiss all settle in-turn.
  *
  * SYSTEM-CARD CEILING, AND ITS BLIND SPOT. The conversation must gain no
  * "system, to be shown to the agent" cards beyond SYSTEM_CARD_CEILING, counted
@@ -30,12 +32,15 @@
  */
 import { afterAll, describe, test } from 'vitest';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
+import { ORCHESTRATOR_AGENT_SLUG } from '../../packages/core/src/index';
 import type { KinuPublicSession } from '../../evals/src/session';
 import {
   DELEGATION_ROSTER_ASK as ROSTER_ASK, DELEGATION_TASK_ASK as TASK_ASK, DELEGATION_WORD as WORD, delegationDismissAsk,
 } from './asks';
-import { observeDelegationHires, observeDelegationRetirement } from './delegation-observation';
-import { firstRunReplyText, firstRunSpliceStep, firstRunTurnEvents } from './turn-settlement';
+import { delivered, finalAnswer, observeDelegationRetirement, observeDurableHire, taskHires } from './delegation-observation';
+import { helperEvents, hirerHeard } from './hires';
+import { openPublicSocket } from './public-socket';
+import { firstRunSpliceStep, firstRunTurnEvents } from './turn-settlement';
 import {
   FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase,
 } from './first-run';
@@ -81,13 +86,10 @@ async function promptEvidence(session: KinuPublicSession, prompt: string) {
   const result = await session.prompt(prompt);
   const [events, history] = await Promise.all([session.runEvents(), session.history()]);
 
-  return {
-    events: firstRunTurnEvents(events, prompt, {
-      absorbedBy: result.landed === 'mid-turn' ? result.absorbedBy : undefined,
-      splicedAtStep: firstRunSpliceStep(history, prompt),
-    }),
-    reply: firstRunReplyText(history, prompt),
-  };
+  return firstRunTurnEvents(events, prompt, {
+    absorbedBy: result.landed === 'mid-turn' ? result.absorbedBy : undefined,
+    splicedAtStep: firstRunSpliceStep(history, prompt),
+  });
 }
 
 describe(SUITE, () => {
@@ -106,35 +108,48 @@ describe(SUITE, () => {
       modelCalls: 'expected',
       purpose: 'A lead that has one helper answer one word, shows a second on the roster, and retires it.',
       budgetMs: 20 * 60_000,
-      async run({ session }) {
+      async run({ session, plan, budget }) {
         const subgoals: EvalSubgoal[] = [];
+        const room = openPublicSocket(plan.origin, plan.identity, `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(session.workspace)}`, budget);
 
-        const task = await promptEvidence(session, TASK_ASK);
-        const roster = await promptEvidence(session, ROSTER_ASK);
+        if (!(await room.opened)) throw new Error(`the workspace room ${room.path} refused the upgrade`);
 
-        const { taskHire, durableName, wordReported, shown } = observeDelegationHires({
-          taskEvents: task.events, rosterEvents: roster.events, reply: task.reply, word: WORD,
-        });
+        try {
+          // Registered before the hire is sent, so the turn the helper's answer opens cannot close unseen.
+          const closed = room.turnClosed();
+          const taskEvents = await promptEvidence(session, TASK_ASK);
+          const [hire] = taskHires(taskEvents);
 
-        subgoals.push({
-          what: 'hire-settles',
-          reached: taskHire !== undefined,
-          detail: taskHire !== undefined
-            ? `agents#${taskHire.toolCallId} (hire) closed with ${excerpt(JSON.stringify(taskHire.result))}`
-            : `no settled task hire in the requested turn's ${String(task.events.length)} events`,
-        });
+          const heard = hire !== undefined
+            && await hirerHeard(room, closed, async () => delivered(await session.history(), TASK_ASK, hire.agent) !== null);
 
-        subgoals.push({
-          what: 'word-reported',
-          reached: wordReported,
-          detail: taskHire === undefined
-            ? 'no settled hire result to read the word off'
-            : `hire result ${excerpt(JSON.stringify(taskHire.result))}; reply ${excerpt(task.reply, 240)}`,
-        });
+          const delivery = hire === undefined ? null : delivered(await session.history(), TASK_ASK, hire.agent);
+          const answer = hire === undefined || !heard ? '' : finalAnswer(await helperEvents(room, [], hire.agent));
+
+          let settled = `no task hire answered at once in the requested turn's ${String(taskEvents.length)} events`;
+
+          if (hire !== undefined) {
+            settled = delivery === null
+              ? `agents#${hire.call.toolCallId} hired ${hire.agent}, whose answer never reached the hirer`
+              : `${hire.agent} answered ${excerpt(answer)}, delivered as ${excerpt(delivery.text)}`;
+          }
+
+          subgoals.push({ what: 'hire-settles', reached: delivery !== null && answer === WORD, detail: settled });
+
+          subgoals.push({
+            what: 'word-reported',
+            reached: delivery !== null && answer === WORD && delivery.reply.includes(WORD),
+            detail: delivery === null ? 'no delivered answer to read the word off' : `the hirer replied ${excerpt(delivery.reply, 240)}`,
+          });
+        } finally {
+          room.close('the row is done');
+        }
+
+        const { durableName, shown } = observeDurableHire(await promptEvidence(session, ROSTER_ASK));
 
         const retirement = durableName === null
           ? { retired: false, dismisses: 0 }
-          : observeDelegationRetirement((await promptEvidence(session, delegationDismissAsk(durableName))).events, durableName);
+          : observeDelegationRetirement(await promptEvidence(session, delegationDismissAsk(durableName)), durableName);
 
         subgoals.push({
           what: 'roster-shows-and-retires',

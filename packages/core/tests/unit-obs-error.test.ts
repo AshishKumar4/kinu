@@ -167,6 +167,20 @@ describe('the memory wall is classified from the catalogue, not from memory', ()
   });
 });
 
+describe("the platform's overload refusal is classified from the catalogue", () => {
+  // Selected by key, not wording: the runtime refuses the call before the object runs it, so it is unavailable, not io.
+  const refusals = PLATFORM_CATALOG['do.requests_per_second_soft'].observable.map((seen) => seen.message);
+
+  test('it classifies as unavailable, bare and wrapped', () => {
+    expect(refusals.length).toBeGreaterThan(0);
+
+    for (const message of refusals) {
+      expect(classifyErrorCode({ cause: new Error(message) })).toBe('unavailable');
+      expect(classifyErrorCode({ cause: new Error('issuing a token', { cause: new Error(`${message}.`) }) })).toBe('unavailable');
+    }
+  });
+});
+
 describe('the cause chain is the language `%w` and is never broken', () => {
   test('Nimbus failures keep the native syscall/path shape through a cause chain', () => {
     const path = "/kinu-does-not-exist/a file with 'quotes'.txt";

@@ -15,6 +15,12 @@ export interface OnePlaneObservation {
   readonly sameIsolate: boolean;
 }
 
+/** What an entrypoint relaying a workspace answer hands the platform, read in the relay's own isolate. */
+export interface RelayedAnswer<T> {
+  readonly answer: T;
+  readonly carriesDisposer: boolean;
+}
+
 export interface AgentFacetClaim {
   readonly actorId: string;
   readonly turnId: string;

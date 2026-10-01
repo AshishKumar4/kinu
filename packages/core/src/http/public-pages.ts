@@ -12,9 +12,21 @@ export interface LoginProvider {
   readonly label: string;
 }
 
-export function loginDocument(providers: readonly LoginProvider[]): string {
+export interface BuiltinSignIn {
+  /** `setup`: no owner and no setup token, so no form. */
+  readonly mode: 'owner' | 'invite' | 'reset' | 'sign-in' | 'setup';
+  readonly reset?: string;
+  readonly invite?: string;
+  readonly email?: string;
+  readonly notice?: string;
+  readonly returnTo: string;
+}
+
+export function loginDocument(providers: readonly LoginProvider[], builtin: BuiltinSignIn | null = null): string {
+  if (builtin !== null) return authDocument('Sign in to Kinu.run', builtinBody(builtin), builtin.mode === 'setup' ? undefined : BUILTIN_SCRIPT);
+
   const body = providers.length === 0
-    ? '<p class="lede">Sign-in is unavailable.</p><div class="providers"><a class="provider" href="/install">Run Kinu locally</a></div>'
+    ? '<p class="lede">Sign-in is unavailable.</p><p>This deployment declares an OAuth provider whose client id or secret is missing, so no one can sign in until it is fixed. Built-in sign-in stays off while any provider is declared.</p><div class="providers"><a class="provider" href="/install">Run Kinu locally</a></div>'
     : `<div class="providers">${providers.map((provider) => (
       `<a class="provider" href="${provider.href}">Continue with ${escapeHtml(provider.label)}</a>`
     )).join('')}</div>`;
@@ -22,7 +34,136 @@ export function loginDocument(providers: readonly LoginProvider[]): string {
   return authDocument('Sign in to Kinu.run', body);
 }
 
-export function authDocument(title: string, body: string): string {
+const BUILTIN_COPY = {
+  owner: {
+    lede: 'Create the first account. It becomes the owner of this deployment. Enter the setup token its deployer set.',
+    password: 'Create account', passkey: 'Create account with a passkey',
+  },
+  invite: { lede: 'You were invited. Create your account for this address.', password: 'Create account', passkey: 'Create account with a passkey' },
+  reset: {
+    lede: 'Set a new password or register a new passkey. It replaces this account\'s old ones and signs it out everywhere.',
+    password: 'Set new password', passkey: 'Register a new passkey',
+  },
+  'sign-in': { lede: null, password: 'Sign in', passkey: 'Sign in with a passkey' },
+  setup: { lede: null, password: '', passkey: '' },
+} as const;
+
+const SETUP_FIELD = '<label>Setup token<input type="password" name="setup" autocomplete="off" required /></label>';
+
+const OWNER_RECOVERY = `<details class="recovery">
+    <summary>Set up or recover the owner</summary>
+    <form id="owner-recovery" class="fields" novalidate>
+      <p class="muted">The setup token replaces the owner's password and passkeys and signs the owner out everywhere.</p>
+      <label>Setup token<input type="password" name="setup" autocomplete="off" required aria-describedby="recovery-status" /></label>
+      <p class="status" id="recovery-status" role="alert" aria-live="assertive"></p>
+      <label>New password<input type="password" name="password" autocomplete="new-password" minlength="10" aria-describedby="recovery-rule" /></label>
+      <p id="recovery-rule" class="muted">At least 10 characters, or register a passkey instead.</p>
+      <button type="submit">Set the owner's password</button>
+      <button type="button" class="provider" id="recovery-passkey">Register a new owner passkey</button>
+    </form>
+  </details>`;
+
+function builtinBody({ mode, invite, reset, email, notice, returnTo }: BuiltinSignIn): string {
+  const copy = BUILTIN_COPY[mode];
+  const registering = mode !== 'sign-in';
+  const lede = notice ?? copy.lede;
+
+  if (mode === 'setup') return `<p class="lede">${escapeHtml(lede ?? '')}</p>`;
+
+  return `${lede === null ? '' : `<p class="lede">${escapeHtml(lede)}</p>`}
+  <form id="builtin-sign-in" class="fields" data-mode="${registering ? 'register' : 'sign-in'}" data-return-to="${escapeHtml(returnTo)}" data-invite="${escapeHtml(invite ?? '')}" data-reset="${escapeHtml(reset ?? '')}" data-resetting="${mode === 'reset' ? '1' : ''}" novalidate>
+    <label>Email<input type="email" name="email" autocomplete="${registering ? 'email' : 'username webauthn'}" required${email === undefined ? '' : ` value="${escapeHtml(email)}" readonly`} /></label>
+    ${mode === 'owner' ? SETUP_FIELD : ''}
+    <label>Password<input type="password" name="password" autocomplete="${registering ? 'new-password' : 'current-password'}"${registering ? ' minlength="10" aria-describedby="password-rule"' : ''} /></label>
+    ${registering ? `<p id="password-rule" class="muted">At least 10 characters.${mode === 'reset' ? '' : ' Not needed with a passkey.'}</p>` : ''}
+    <button type="submit">${copy.password}</button>
+  </form>
+  <div class="or" aria-hidden="true">or</div>
+  <div class="providers"><button type="button" class="provider" id="passkey">${copy.passkey}</button></div>
+  <p class="status" id="status" role="alert" aria-live="assertive"></p>
+  ${registering ? '' : `<p class="muted">New here? Ask the owner of this deployment for an invite link.</p>
+  ${OWNER_RECOVERY}`}`;
+}
+
+const BUILTIN_SCRIPT = `
+const form = document.getElementById('builtin-sign-in');
+const status = document.getElementById('status');
+const passkey = document.getElementById('passkey');
+const registering = form.dataset.mode === 'register';
+const invite = form.dataset.invite || null;
+const reset = form.dataset.reset || null;
+const resetting = form.dataset.resetting === '1';
+const returnTo = form.dataset.returnTo || '/';
+const bytes = (value) => Uint8Array.from(atob(value.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
+const text = (buffer) => btoa(String.fromCharCode(...new Uint8Array(buffer))).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
+const say = (message, slot = status) => { slot.textContent = message; };
+const busy = (on) => { for (const control of document.querySelectorAll('button, input')) control.disabled = on; };
+async function post(path, body) {
+  const response = await fetch('/api/auth/builtin/' + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const answer = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(answer.error || 'Sign-in failed (' + response.status + ').');
+  return answer;
+}
+const done = (answer) => { location.assign(answer.returnTo || returnTo); };
+const email = () => form.elements.email.value.trim();
+const setup = () => (form.elements.setup ? form.elements.setup.value : null);
+async function createPasskey(options) {
+  const created = await navigator.credentials.create({ publicKey: { ...options, challenge: bytes(options.challenge),
+    user: { ...options.user, id: bytes(options.user.id) },
+    excludeCredentials: (options.excludeCredentials || []).map((c) => ({ ...c, id: bytes(c.id) })) } });
+  done(await post('passkey/register', { returnTo, response: { id: created.id, rawId: text(created.rawId), type: created.type,
+    clientExtensionResults: created.getClientExtensionResults(),
+    response: { clientDataJSON: text(created.response.clientDataJSON), attestationObject: text(created.response.attestationObject),
+      transports: created.response.getTransports ? created.response.getTransports() : [] } } }));
+}
+async function run(work, slot = status) {
+  say('', slot);
+  busy(true);
+  try { await work(); } catch (error) { say(error.name === 'NotAllowedError' ? 'The passkey request was cancelled.' : error.message, slot); busy(false); }
+}
+form.addEventListener('submit', (event) => {
+  event.preventDefault();
+  if (!form.elements.email.checkValidity()) return say('Enter an email address.');
+  if (form.elements.setup && !setup()) return say('Enter the setup token.');
+  run(async () => done(await post(resetting ? 'password/reset' : registering ? 'password/register' : 'password/sign-in',
+    resetting ? { reset, password: form.elements.password.value, returnTo }
+      : { email: email(), password: form.elements.password.value, invite, setup: setup(), returnTo })));
+});
+passkey.addEventListener('click', () => {
+  if (!window.PublicKeyCredential) return say('This browser does not support passkeys.');
+  if (registering && !form.elements.email.checkValidity()) return say('Enter your email first: it names the account.');
+  run(async () => {
+    if (registering) {
+      await createPasskey(resetting ? await post('passkey/reset/options', { reset })
+        : await post('passkey/register/options', { email: email(), invite, setup: setup() }));
+    } else {
+      const options = await post('passkey/sign-in/options', {});
+      const got = await navigator.credentials.get({ publicKey: { ...options, challenge: bytes(options.challenge),
+        allowCredentials: (options.allowCredentials || []).map((c) => ({ ...c, id: bytes(c.id) })) } });
+      done(await post('passkey/sign-in', { returnTo, response: { id: got.id, rawId: text(got.rawId), type: got.type,
+        clientExtensionResults: got.getClientExtensionResults(),
+        response: { clientDataJSON: text(got.response.clientDataJSON), authenticatorData: text(got.response.authenticatorData),
+          signature: text(got.response.signature), ...(got.response.userHandle ? { userHandle: text(got.response.userHandle) } : {}) } } }));
+    }
+  });
+});
+const recovery = document.getElementById('owner-recovery');
+if (recovery) {
+  const slot = document.getElementById('recovery-status');
+  const token = () => recovery.elements.setup.value;
+  recovery.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (!token()) return say('Enter the setup token.', slot);
+    run(async () => done(await post('password/reset', { setup: token(), password: recovery.elements.password.value, returnTo })), slot);
+  });
+  document.getElementById('recovery-passkey').addEventListener('click', () => {
+    if (!window.PublicKeyCredential) return say('This browser does not support passkeys.', slot);
+    if (!token()) return say('Enter the setup token.', slot);
+    run(async () => createPasskey(await post('passkey/reset/options', { setup: token() })), slot);
+  });
+}`;
+
+export function authDocument(title: string, body: string, script?: string): string {
   return publicPage({
     title: title.includes('Kinu') ? title : `${title} - Kinu.run`,
     styles: CARD_CSS,
@@ -32,6 +173,7 @@ export function authDocument(title: string, body: string): string {
   <h1 id="auth-title">${escapeHtml(title)}</h1>
   ${body}
 </section></main>\n`,
+    ...(script !== undefined && { script }),
   });
 }
 
@@ -80,6 +222,24 @@ border-bottom:var(--rule);font-size:14px}
 dt{color:var(--c-text-3)}
 dd{margin:0;text-align:right}
 form{margin-top:20px}
+.fields{display:grid;gap:14px;margin-top:24px}
+.fields label{display:grid;gap:6px;color:var(--c-text-2);font-size:13px;font-weight:560}
+.fields input{min-height:42px;padding:0 13px;border:1px solid var(--c-input-border);border-radius:var(--r-row);
+background:var(--c-bg);color:var(--c-text);font:inherit;font-size:14.5px}
+.fields input:focus-visible{outline:2px solid var(--c-accent);outline-offset:1px;border-color:var(--c-accent)}
+.fields .muted,.fields .status{margin:-6px 0 0}
+.or{display:flex;align-items:center;gap:12px;margin-top:22px;color:var(--c-text-3);font-size:12.5px}
+.or::before,.or::after{content:"";flex:1;border-top:var(--rule)}
+.or+.providers{margin-top:16px}
+button.provider{width:100%;font:inherit;font-size:14.5px;font-weight:600;cursor:pointer;text-align:left}
+button:disabled{opacity:.6;cursor:progress}
+.status{min-height:0;color:var(--c-danger)!important}
+.status:empty{display:none}
+.recovery{margin-top:18px;border-top:var(--rule);padding-top:14px}
+.recovery summary{width:max-content;color:var(--c-text-3);font-size:13px;cursor:pointer;border-radius:var(--r-row)}
+.recovery summary:hover{color:var(--c-text)}
+.recovery summary:focus-visible{outline:2px solid var(--c-accent);outline-offset:2px}
+.recovery .fields{margin-top:12px}
 button[type="submit"]{display:inline-flex;align-items:center;justify-content:center;
 width:100%;min-height:40px;padding:0 15px;border:1px solid transparent;border-radius:var(--r-row);
 background:var(--c-accent);color:var(--c-accent-on);font:inherit;font-size:14px;

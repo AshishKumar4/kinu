@@ -2,13 +2,16 @@ import { createHash } from 'node:crypto';
 import type { JsonValue } from 'vitest-evals';
 import type { EvalVerifier } from './verifier';
 
-/** A file the harness writes into the workspace before a prompt: data a person would drop in. */
-export type SeedFile = { readonly path: string; readonly content: string };
+/** A file the harness writes into the workspace before a prompt: data a person would drop in, text or bytes. */
+export type SeedFile = { readonly path: string; readonly content: string | Uint8Array<ArrayBuffer> };
 
 export type EvalTurn = {
+  /** Before the prompt, end the workspace's activation and clear its chat: what the agent knows here, it kept. */
+  readonly fresh?: true;
   readonly seed?: readonly SeedFile[];
   readonly prompt: string;
-  readonly verify: (verifier: EvalVerifier) => Promise<void>;
+  /** Absent on a turn that only sets up what a later turn asks. */
+  readonly verify?: (verifier: EvalVerifier) => Promise<void>;
   /** End the workspace's activation, then run these checks: what the product promises survives an eviction. */
   readonly verifyAfterEviction?: (verifier: EvalVerifier) => Promise<void>;
 };
@@ -44,7 +47,14 @@ export function defineEvalTask(task: EvalTask): EvalTask {
 
 /** Hash what the agent is given: the mission, every prompt and every seeded file. */
 export function taskVersion(task: EvalTask): string {
-  const given = { mission: task.mission, turns: task.turns.map((turn) => ({ seed: turn.seed ?? [], prompt: turn.prompt })) };
+  const given = {
+    mission: task.mission,
+    turns: task.turns.map((turn) => ({
+      ...(turn.fresh && { fresh: true }),
+      seed: (turn.seed ?? []).map((file) => (file.content instanceof Uint8Array ? { ...file, content: { base64: Buffer.from(file.content).toString('base64') } } : file)),
+      prompt: turn.prompt,
+    })),
+  };
 
   return createHash('sha256').update(JSON.stringify(given)).digest('hex');
 }

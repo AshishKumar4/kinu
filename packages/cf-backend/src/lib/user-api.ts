@@ -161,6 +161,15 @@ export const completeOnboarding = () => api(v.object({ onboardedAt: v.number() }
 export const setDisplayName = (displayName: string) => api(UserProfileSchema, 'PATCH', '/profile', { displayName });
 
 /** The confirmation phrase is the account's own email, checked again server-side. */
+export const builtinAuthStatus = () => api(v.object({ enabled: v.boolean(), owner: v.boolean() }), 'GET', '/builtin-auth');
+
+export const listBuiltinAccounts = () => api(v.object({
+  accounts: v.array(v.object({ email: v.string(), role: v.picklist(['owner', 'member']), createdAt: v.number() })),
+}), 'GET', '/builtin-auth/accounts');
+
+export const createBuiltinLink = (kind: 'invites' | 'resets', email: string) =>
+  api(v.object({ url: v.string(), email: v.string(), expiresAt: v.number() }), 'POST', `/builtin-auth/${kind}`, { email });
+
 export const deleteAccount = (confirm: string) =>
   api(v.object({ deleted: v.literal(true) }), 'DELETE', '/account', { confirm });
 

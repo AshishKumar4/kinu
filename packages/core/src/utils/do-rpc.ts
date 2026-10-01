@@ -8,7 +8,7 @@
  */
 
 import { Effect } from 'effect';
-import { diagnostics, renderCauseChain, settle, toKinuError } from '../obs/index';
+import { diagnostics, OVERLOADED_SIGNATURE, renderCauseChain, settle, toKinuError } from '../obs/index';
 
 /** Which platform failure a call hit; `null` means none. */
 export type DOTransientClass =
@@ -49,8 +49,7 @@ export function classifyTransientDO(input: { cause: unknown }): DOTransientClass
     seen.add(link);
     const flagged = 'retryable' in link && link.retryable === true;
 
-    const overloaded = ('overloaded' in link && link.overloaded === true)
-      || /Durable Object is overloaded/i.test(link.message);
+    const overloaded = ('overloaded' in link && link.overloaded === true) || OVERLOADED_SIGNATURE.test(link.message);
 
     if (flagged && !overloaded) return 'retryable_flag';
     const cause: unknown = link.cause;

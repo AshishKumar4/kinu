@@ -30,5 +30,34 @@ test('a run deletes the eval workspaces whose mark outlived the lease and no one
     deleted: ['eval-order-book-2-dead01'],
     live: ['eval-order-book-3-live01', 'eval-order-book-3-edge01'],
     held: [{ name: 'eval-trajectory-evals-pu-eedw1v', reason: 'the reproduction of the 30 s wake loop' }],
+    failed: [],
   });
+});
+
+test('a delete the deployment fails is reported with its reason, and the sweep goes on to the rest', async () => {
+  // Measured 2026-10-01 03:16:51Z on staging: nine task files swept the account at once and sent DELETE for the same
+  // first workspace within 2 ms; one deleted it and eight were answered 500 "no such table: workspace_identity". Each
+  // of those eight sweeps threw, and with it the 24 trials of its task were skipped.
+  const removed: string[] = [];
+  const dead = (name: string) => ({ name, lastVisited: NOW - WORKSPACE_LEASE_MS });
+
+  const sweep = await sweepEvalWorkspaces({
+    list: () => Promise.resolve([dead('eval-budget-board-7-7fo67r'), dead('eval-site-preview-9-s0sgip')]),
+    remove: (name) => {
+      if (name === 'eval-budget-board-7-7fo67r') {
+        return Promise.reject(new Error('could not delete the workspace eval-budget-board-7-7fo67r: 500 Internal Server Error — '
+          + '{"error":"deleting this workspace: no such table: workspace_identity: SQLITE_ERROR","code":"io"}'));
+      }
+
+      removed.push(name);
+
+      return Promise.resolve();
+    },
+    held: new Map(),
+    now: NOW,
+  });
+
+  expect(removed).toEqual(['eval-site-preview-9-s0sgip']);
+  expect(sweep.deleted).toEqual(['eval-site-preview-9-s0sgip']);
+  expect(sweep.failed).toEqual([{ name: 'eval-budget-board-7-7fo67r', reason: expect.stringContaining('no such table: workspace_identity') }]);
 });

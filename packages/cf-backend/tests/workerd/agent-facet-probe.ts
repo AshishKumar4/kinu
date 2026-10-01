@@ -2,21 +2,26 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Shipped workspace and facet bundles: isolated turns over one shared Nimbus file plane. */
 import { getAgentByName, type AgentContext } from 'agents';
 import { DurableObject } from 'cloudflare:workers';
-import { agentHome, ownerCaller, runNodeAgent } from '@kinu.run/core';
+import * as v from 'valibot';
+import { agentHome, JsonValueSchema, ownerCaller, runNodeAgent } from '@kinu.run/core';
 import { diagnostics } from '@kinu.run/core/obs';
 import { hostNodeSeat, nodeCodemodeTool } from '../../src/hosted-actors';
 import { HIRE_CHILD_MODEL, hireModelsBaseUrl } from './hire-shapes';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { hostedActorPlacement } from '../../src/actor-hosting';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
+import { AgentWorkspaceRPC } from '../../src/agent-facets';
+import { ROOT_SLATE_CALLER, SlateBinding } from '../../src/slates/bindings';
+import { createRuntimeExecutor } from '../../src/codemode-sandbox';
+import { SLATE_STORAGE_BINDING, type SlateCallResult } from '@kinu.run/core';
 import type { AgentFacet } from './agent-facet-probe-agent';
-import type { AgentFacetAnswer, OnePlaneObservation, SwarmFacetObservation } from './agent-facet-shapes';
+import type { AgentFacetAnswer, OnePlaneObservation, RelayedAnswer, SwarmFacetObservation } from './agent-facet-shapes';
 
 export * from '../../src/server';
 
 const PROBE_OWNER_ID = 'a9e1c0de5eed0000a9e1c0de5eed0000';
 
-const PROBE_RPC = ['onePlane', 'swarmNode'];
+const PROBE_RPC = ['onePlane', 'swarmNode', 'agentFor'];
 
 let bootId: string | null = null;
 
@@ -52,6 +57,12 @@ export class OrchestratorAgent extends ProductionOrchestrator {
       mainCat: { exitCode: mainCat.exitCode, stdout: mainCat.stdout, stderr: mainCat.stderr },
       sameIsolate: (await facet.boot()) === bootId,
     };
+  }
+
+  async agentFor(name: string): Promise<string> {
+    const directory = this.actorDirectoryStore();
+
+    return directory.create({ parent: directory.main(), name, creationId: name, origin: 'user', lifetime: 'durable' }).actorId;
   }
 
   async swarmNode(): Promise<ReadableStream<Uint8Array>> {
@@ -124,7 +135,7 @@ interface ProbeRootEnv extends Omit<ProbeEnv, 'OrchestratorAgent'> {
 }
 
 export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
-  private async target(workspace: string): Promise<Pick<OrchestratorAgent, 'onePlane' | 'swarmNode' | 'setModel' | 'setSoul'>> {
+  private async target(workspace: string): Promise<Pick<OrchestratorAgent, 'onePlane' | 'swarmNode' | 'agentFor' | 'setModel' | 'setSoul'>> {
     const owner = await ownerCaller(this.env);
     const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(PROBE_OWNER_ID));
     await userDO.ensureProfile(owner, 'owner@probe.local', 'Owner');
@@ -138,6 +149,75 @@ export class AgentFacetProbeRoot extends DurableObject<ProbeRootEnv> {
 
   async onePlane(workspace: string, agent: string): Promise<OnePlaneObservation> {
     return await (await this.target(workspace)).onePlane(agent);
+  }
+
+  // Each relay is built here, in this isolate, so the answer read is the one it hands the platform.
+  async agentWorkspaceAnswer(workspace: string, agent: string): Promise<RelayedAnswer<Readonly<Record<string, string>> | null>> {
+    const root = await this.target(workspace);
+    const owner = await ownerCaller(this.env);
+    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(PROBE_OWNER_ID));
+    await userDO.setCredential(owner, 'openai-compat.default', {
+      kind: 'openai-compat', baseURL: hireModelsBaseUrl(workspace), apiKey: 'relay-probe-key',
+    });
+    const props = { workspace: this.env.OrchestratorAgent.idFromName(workspace).toString(), actorId: await root.agentFor(agent) };
+    const relay = new AgentWorkspaceRPC(Object.create(this.ctx, { props: { value: props } }), this.env);
+    const auth = await relay.getAuth('openai-compat.default');
+
+    return { answer: auth === null ? null : { ...auth.headers }, carriesDisposer: auth !== null && Symbol.dispose in auth };
+  }
+
+  async agentWorkspaceListing(workspace: string, agent: string): Promise<RelayedAnswer<readonly { readonly key: string; readonly kind: string }[]>> {
+    const root = await this.target(workspace);
+    const owner = await ownerCaller(this.env);
+    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(PROBE_OWNER_ID));
+    await userDO.setCredential(owner, 'openai-compat.default', {
+      kind: 'openai-compat', baseURL: hireModelsBaseUrl(workspace), apiKey: 'relay-probe-key',
+    });
+    const props = { workspace: this.env.OrchestratorAgent.idFromName(workspace).toString(), actorId: await root.agentFor(agent) };
+    const relay = new AgentWorkspaceRPC(Object.create(this.ctx, { props: { value: props } }), this.env);
+    const listing = await relay.listCredentials();
+
+    return { answer: listing.map(({ key, kind }) => ({ key, kind })), carriesDisposer: Symbol.dispose in listing };
+  }
+
+  async slateBindingAnswer(workspace: string): Promise<RelayedAnswer<SlateCallResult>> {
+    await this.target(workspace);
+    const props = { workspace, id: 'relay-probe', name: SLATE_STORAGE_BINDING, caller: ROOT_SLATE_CALLER };
+    const binding = new SlateBinding(Object.create(this.ctx, { props: { value: props } }), this.env);
+    await binding.call('put', ['seen', 'kept'], null);
+    const answer = await binding.call('get', ['seen'], null);
+
+    return { answer: { ...answer }, carriesDisposer: Symbol.dispose in answer };
+  }
+
+  /** A program's host call answering with what the host got over RPC, as a tool call's result reaches it. */
+  async programHostAnswer(workspace: string): Promise<RelayedAnswer<Readonly<Record<string, string>> | null>> {
+    await this.target(workspace);
+    const owner = await ownerCaller(this.env);
+    const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(PROBE_OWNER_ID));
+    await userDO.setCredential(owner, 'openai-compat.default', {
+      kind: 'openai-compat', baseURL: hireModelsBaseUrl(workspace), apiKey: 'relay-probe-key',
+    });
+    let handed: unknown;
+
+    // In place of the launcher: the program's host call, made as the launcher's call reaches the bridge.
+    const executor = createRuntimeExecutor({
+      run: async (_source, providers) => {
+        handed = await providers[0]?.fns.answer?.();
+
+        return { result: undefined, logs: [] };
+      },
+    });
+
+    await executor.execute('', [{ name: 'host', fns: { answer: async () => {
+      const received = await userDO.getAuth(owner, 'openai-compat.default');
+
+      return v.is(JsonValueSchema, received) ? received : undefined;
+    } } }]);
+
+    const auth = v.parse(v.nullish(v.object({ headers: v.record(v.string(), v.string()) })), handed);
+
+    return { answer: auth?.headers ?? null, carriesDisposer: v.is(v.looseObject({}), handed) && Symbol.dispose in handed };
   }
 
   async swarmNode(workspace: string): Promise<ReadableStream<Uint8Array>> {

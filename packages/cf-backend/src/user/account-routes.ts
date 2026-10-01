@@ -26,7 +26,7 @@ const ExperienceQuery = v.object({
 });
 
 export type AccountAuthority = Pick<
-  UserDO, 'completeOnboarding' | 'searchExperience' | 'deleteAccount' | 'setDisplayName'
+  UserDO, 'completeOnboarding' | 'searchExperience' | 'deleteAccount' | 'setDisplayName' | 'heldRows'
 >;
 
 export interface AccountRoutesEnv<Id> extends SharesGivenEnv<Id> {
@@ -60,6 +60,12 @@ accountRoutes.get('/api/user/experience', ownerGate(), async (c) => {
   if (!query.success) return err(400, `kind must be one of ${EXPERIENCE_KINDS.join(', ')} and limit an integer from 1 to 100.`);
 
   return json({ body: await account(c).searchExperience(c.get('owner'), query.output) });
+});
+
+accountRoutes.get('/api/user/held-rows', ownerGate(), async (c) => {
+  if (c.get('identity').provider !== 'dev') return Response.json({ error: 'Not found' }, { status: 404 });
+
+  return json({ body: await account(c).heldRows(c.get('owner')) });
 });
 
 // The typed confirmation is the account email, not a password: the session authenticates,

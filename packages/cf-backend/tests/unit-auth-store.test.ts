@@ -296,6 +296,28 @@ describe('the synthetic development identity', () => {
     expect(devices.identity.userId).not.toBe(own.identity.userId);
   });
 
+  // 2026-10-01: concurrent eval trials on eval-service listed each other as peers and messaged each other (F10).
+  test('each eval trial\'s slot is a user of its own, and only slots 1 to 512, written one way, are accounts', async () => {
+    const as = (account: string) => resolve('https://kinu.run/api/user/workspaces', {
+      [DEV_IDENTITY_HEADER]: 'deployment-shared-secret',
+      [DEV_IDENTITY_ACCOUNT_HEADER]: account,
+    });
+
+    const [own, seven, eight, last] = await Promise.all([
+      resolve('https://kinu.run/api/user/workspaces', { [DEV_IDENTITY_HEADER]: 'deployment-shared-secret' }),
+      as('trial-7'), as('trial-8'), as('trial-512'),
+    ]);
+
+    if (!own.granted || !seven.granted || !eight.granted || !last.granted) throw new Error('a trial account was refused');
+    expect(seven.identity).toMatchObject({ email: 'eval-service+trial-7@kinu.run', provider: 'dev' });
+    expect(new Set([own, seven, eight, last].map((granted) => granted.identity.userId)).size).toBe(4);
+
+    // A header value arrives trimmed (the Fetch standard normalizes it), so `trial-7 ` is `trial-7` here.
+    for (const refused of ['trial-0', 'trial-513', 'trial-07', 'trial-x', 'trial-', 'Trial-7', 'trial-7-1']) {
+      expect(await as(refused)).toEqual({ granted: false, status: 400 });
+    }
+  });
+
   test('an account name is no authority: without the secret it grants nothing, and an unknown one is refused', async () => {
     expect(await resolve('https://kinu.run/api/user/workspaces', { [DEV_IDENTITY_ACCOUNT_HEADER]: 'devices' }))
       .toEqual({ granted: false, status: 401 });

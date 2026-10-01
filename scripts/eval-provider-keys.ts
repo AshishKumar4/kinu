@@ -17,13 +17,16 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import * as v from 'valibot';
-import { DEV_IDENTITY_HEADER } from '@kinu.run/core';
+import { DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, type EvalAccount } from '@kinu.run/core';
 import { evalWebIdentityEnv } from '@kinu.run/test-utils';
-import { evalMatrix } from '../evals/src/config';
+import { DEFAULT_TRIALS, evalMatrix } from '../evals/src/config';
+import { WORKSPACE_LEASE_MS } from '../evals/src/session';
+import { inheritedRows, trialAccounts, trialAccountsAt } from '../evals/src/slot';
 import { ARMS } from '../evals/src/target';
 import { recordStep } from './deploy-report';
+import { isEvalTask, trackedFiles } from './sources';
 
 /** Where the operator keeps eval-service's provider keys: outside every checkout, mode 600. */
 export const EVAL_PROVIDER_KEYS = join(homedir(), '.config', 'kinu', 'eval-provider-keys.json');
@@ -43,6 +46,8 @@ export interface Provisioning {
   readonly identityEnv: string;
   /** The models the eval pass runs. */
   readonly models: readonly string[];
+  /** The trial accounts the eval runs act as here (`evals/src/slot.ts`), each given the keys eval-service is. */
+  readonly trialAccounts?: readonly EvalAccount[];
 }
 
 /** What eval-service lists: every model spec it can run. */
@@ -66,10 +71,10 @@ const CredentialsSchema = v.array(v.object({ key: v.string() }));
  * a provider whose catalogue probe fails is absent there while its key is stored, and storing again would
  * replace a working key with the operator's file (review, 2026-10-01).
  */
-async function heldKeys(input: Provisioning, headers: Record<string, string>): Promise<ReadonlySet<string> | { readonly why: string }> {
+async function heldKeys(input: Provisioning, headers: Record<string, string>, who = 'eval-service'): Promise<ReadonlySet<string> | { readonly why: string }> {
   const answer = await fetch(`${input.origin}/api/user/credentials`, { headers, signal: AbortSignal.timeout(CALL_MS) });
 
-  if (!answer.ok) return { why: `listing eval-service's credentials answered ${String(answer.status)}` };
+  if (!answer.ok) return { why: `listing ${who}'s credentials answered ${String(answer.status)}` };
 
   return new Set(v.parse(CredentialsSchema, await answer.json()).map((credential) => credential.key));
 }
@@ -89,6 +94,84 @@ export interface Provisioned {
   readonly stored: readonly string[];
   /** One line each; empty when every eval model is listed. */
   readonly findings: readonly string[];
+  /** With trial accounts: how many were given a key, and the ones reset first for rows a trial would inherit. */
+  readonly trials?: { readonly given: number; readonly reset: readonly string[] };
+  /** With trial accounts: one that holds such rows while a run is on it, left as it is. */
+  readonly notes?: readonly string[];
+}
+
+const JsonRowsSchema = v.record(v.string(), v.number());
+
+const WorkspacesSchema = v.looseObject({ entries: v.array(v.object({ name: v.string(), lastVisited: v.number() })) });
+
+const EmailSchema = v.looseObject({ email: v.string() });
+
+/** What one trial account came to: given a key, reset first, or why not. */
+type TrialOutcome = { readonly given: boolean; readonly reset: boolean; readonly finding?: string; readonly note?: string };
+
+/**
+ * A trial account made ready for the runs that act as it: reset first when it holds a row a trial would inherit and no
+ * run is on it (the product's own account delete, which empties it whole), then given each key it does not hold.
+ */
+async function readyTrialAccount(input: Provisioning & { identity: string }, account: EvalAccount, keys: Readonly<Record<string, string>>): Promise<TrialOutcome> {
+  const headers = { [DEV_IDENTITY_HEADER]: input.identity, [DEV_IDENTITY_ACCOUNT_HEADER]: account };
+  const read = async (path: string) => fetch(`${input.origin}${path}`, { headers, signal: AbortSignal.timeout(CALL_MS) });
+  const held = await read('/api/user/held-rows');
+
+  if (!held.ok) return { given: false, reset: false, finding: `reading what ${account} holds answered ${String(held.status)}` };
+  const inherited = Object.entries(inheritedRows(v.parse(JsonRowsSchema, await held.json())));
+  let reset = false;
+
+  if (inherited.length > 0) {
+    const rows = inherited.map(([table, count]) => `${table} ${String(count)}`).join(', ');
+    const { entries } = v.parse(WorkspacesSchema, await (await read('/api/user/workspaces')).json());
+    const live = entries.find((workspace) => Date.now() - workspace.lastVisited < WORKSPACE_LEASE_MS);
+
+    if (live !== undefined) {
+      return { given: false, reset: false, note: `${account} at ${input.origin} holds rows a trial would inherit (${rows}), and a run is on it (${live.name}): not reset` };
+    }
+
+    const { email } = v.parse(EmailSchema, await (await read('/api/user/profile')).json());
+
+    const deleted = await fetch(`${input.origin}/api/user/account`, {
+      method: 'DELETE', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ confirm: email }),
+      signal: AbortSignal.timeout(CALL_MS),
+    });
+
+    if (!deleted.ok) return { given: false, reset: false, finding: `resetting ${account}, which holds ${rows}, answered ${String(deleted.status)}` };
+    reset = true;
+  }
+
+  const holds = await heldKeys(input, headers, account);
+
+  if ('why' in holds) return { given: false, reset, finding: holds.why };
+  let given = false;
+
+  for (const [key, token] of Object.entries(keys)) {
+    if (holds.has(key)) continue;
+
+    const answer = await fetch(`${input.origin}/api/user/credentials/${encodeURIComponent(key)}`, {
+      method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ kind: 'bearer', token }),
+      signal: AbortSignal.timeout(CALL_MS),
+    });
+
+    if (!answer.ok) return { given, reset, finding: `storing ${key} for ${account} answered ${String(answer.status)}` };
+    given = true;
+  }
+
+  return { given, reset };
+}
+
+/** Trial accounts readied eight at a time: a deploy reaches hundreds, each a first request to an object of its own. */
+async function readyTrialAccounts(input: Provisioning & { identity: string }, keys: Readonly<Record<string, string>>): Promise<TrialOutcome[]> {
+  const accounts = input.trialAccounts ?? [];
+  const outcomes: TrialOutcome[] = [];
+
+  for (let at = 0; at < accounts.length; at += 8) {
+    outcomes.push(...await Promise.all(accounts.slice(at, at + 8).map((account) => readyTrialAccount(input, account, keys))));
+  }
+
+  return outcomes;
 }
 
 /** Stores each key eval-service does not hold, then checks every eval model is listed. */
@@ -127,7 +210,24 @@ export async function provisionEvalProviderKeys(input: Provisioning): Promise<Pr
     if (!after.specs.has(model)) findings.push(`eval-service at ${input.origin} lists no ${model}, so the eval pass cannot run it`);
   }
 
-  return { stored, findings };
+  const first = input.trialAccounts?.[0];
+
+  if (first === undefined) return { stored, findings };
+  const outcomes = await readyTrialAccounts({ ...input, identity: input.identity }, 'why' in file ? {} : file.keys);
+  const theirs = await listed(input, { ...headers, [DEV_IDENTITY_ACCOUNT_HEADER]: first });
+
+  if ('why' in theirs) findings.push(theirs.why);
+  else findings.push(...input.models.filter((model) => !theirs.specs.has(model)).map((model) => `${first} at ${input.origin} lists no ${model}, so its trials cannot run it`));
+
+  return {
+    stored,
+    findings: [...findings, ...outcomes.flatMap((outcome) => outcome.finding ?? [])],
+    trials: {
+      given: outcomes.filter((outcome) => outcome.given).length,
+      reset: outcomes.flatMap((outcome, at) => outcome.reset ? [input.trialAccounts?.[at] ?? ''] : []),
+    },
+    notes: outcomes.flatMap((outcome) => outcome.note ?? []),
+  };
 }
 
 if (import.meta.main) {
@@ -140,11 +240,27 @@ if (import.meta.main) {
 
   const origin = new URL(asked).origin;
   const identityEnv = evalWebIdentityEnv(origin);
-  const models = evalMatrix(process.env, ARMS.map((arm) => arm.id)).models;
+  const matrix = evalMatrix(process.env, ARMS.map((arm) => arm.id));
+  const identity = process.env[identityEnv]?.trim();
+  const taskFiles = trackedFiles().filter(isEvalTask).map((file) => basename(file));
 
-  const { stored, findings } = await provisionEvalProviderKeys({
-    origin, keysPath: EVAL_PROVIDER_KEYS, identity: process.env[identityEnv]?.trim(), identityEnv, models,
+  // Every trial account a run of the full matrix acts as; a deployment that predates them runs its trials as eval-service.
+  const accounts = identity === undefined || identity === '' ? undefined
+    : await trialAccountsAt({ origin, identity: { kind: 'secret', secret: identity } });
+
+  if (accounts?.kind === 'shared') console.log(`eval-provider-keys: ${accounts.why}`);
+
+  const { stored, findings, trials, notes } = await provisionEvalProviderKeys({
+    origin, keysPath: EVAL_PROVIDER_KEYS, identity, identityEnv, models: matrix.models,
+    trialAccounts: accounts?.kind === 'trial' ? trialAccounts(taskFiles, { ...matrix, trials: Math.max(matrix.trials, DEFAULT_TRIALS) }) : undefined,
   });
+
+  for (const note of notes ?? []) console.log(`eval-provider-keys: ${note}`);
+
+  if (trials !== undefined) {
+    console.log(`eval-provider-keys: gave ${String(trials.given)} trial account(s) a key at ${origin}`
+      + `${trials.reset.length === 0 ? '' : `, resetting ${trials.reset.join(', ')} first for rows a trial would inherit`}`);
+  }
 
   const report = process.env['KINU_DEPLOY_REPORT'] ?? '';
 
@@ -155,6 +271,6 @@ if (import.meta.main) {
   }
 
   console.log(`eval-provider-keys: stored ${stored.length === 0 ? 'no key, eval-service holding every one' : stored.join(', ')} at ${origin}`
-    + `${findings.length === 0 ? `; it lists every eval model: ${models.join(', ')}` : ''}`);
+    + `${findings.length === 0 ? `; it lists every eval model: ${matrix.models.join(', ')}` : ''}`);
   process.exit(findings.length === 0 ? 0 : 1);
 }

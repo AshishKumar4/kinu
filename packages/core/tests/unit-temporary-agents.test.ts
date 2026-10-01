@@ -34,6 +34,7 @@ function testProfile(): AgentsProfileContext {
     provider: { revision: 'test-1', availableModels: [TEST_MODEL] },
     roleId: 'auditor',
     availableTools: [],
+    pins: {},
   };
 }
 

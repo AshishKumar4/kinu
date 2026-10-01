@@ -8,7 +8,7 @@ import { openWorkspaceMainActor, recoveryBackoffMs } from '@kinu.run/core';
 import { createRecordingLogger } from '@kinu.run/core/obs';
 import { makeSql } from '../../core/tests/helpers';
 import {
-  armedWakes, catalogTurn, fireSoonestWake, gatewayWorkspace, hostedSubordinateHarness, orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness,
+  armedWakes, catalogTurn, fireSoonestWake, gatewayWorkspace, hostedSubordinateHarness, jobsOver, orchestratorHarness, chatSessionTurns, reactivateOrchestratorHarness,
   runDelegatedTask, tapDiagnostics, until,
 } from './helpers/actor-harness';
 import { joinHarnessFibers } from './helpers/agents-sdk';
@@ -280,6 +280,23 @@ describe('the workspace keeps exactly one wake per job', () => {
     await agent.terminalRetryPass();
 
     expect(armedAt(db, TERMINAL_RETRY_JOB)).toEqual([landing(resumeAt)]);
+  });
+
+  // eval-site-preview-5-xv6uh8, staging f62dfcb9, 2026-10-01: a dev server ran as a background job from 01:08Z, its only
+  // arm was a running job, and the lap woke the object up to once a minute on top of the job fiber's own 30 s keep-alive
+  // (136 alarms in 01:00-02:00Z). The job's `bg:` fiber holds the object while it runs, and after a death the SDK offers
+  // that fiber row back and the job is re-driven (unit-eviction-durability, "a background job whose executor died").
+  test('a running job owes the workspace no lap', async () => {
+    const { agent, db } = orchestratorHarness();
+    await agent.activateActor();
+    // The activation's own pass: the job below starts after it, as one a turn detaches does.
+    await agent.terminalRetryPass();
+    jobsOver(db).create({ id: 'bgjob-serving', kind: 'shell', workMode: 'build', input: JSON.stringify({ command: 'serve' }), now: Date.now(), label: 'serve' });
+    agent.harnessSeedOrphanFiber('bg:shell', { phase: 'running', jobId: 'bgjob-serving', kind: 'shell' });
+
+    await agent.terminalRetryPass();
+
+    expect(armedWakes(db)).toEqual([]);
   });
 
   test('a failed re-arm leaves the previous wake in place', async () => {

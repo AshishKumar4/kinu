@@ -216,6 +216,16 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
       .resolves.toMatchObject({ ok: false, status: 500 });
   });
 
+  // staging f62dfcb9, 2026-10-01 01:07Z: 180 workspaces of one account at once overloaded its UserDO, and ~128 trials died on
+  // "Could not issue this workspace's capability token" with a 500. The platform refused the call before running it.
+  test('an overloaded registry reports 503: not retried, but still try again', async () => {
+    const overloaded = Object.assign(new Error('Durable Object is overloaded.'), { retryable: true, overloaded: true });
+
+    await expect(claimOwnedWorkspace(envWith({ capabilityError: overloaded }), USER, 'reconcile-overloaded'))
+      .resolves.toMatchObject({ ok: false, status: 503 });
+    expect(await claimFailure('claim-overloaded', 'Durable Object is overloaded.')).toMatchObject({ ok: false, status: 503 });
+  });
+
   test('a warm request skips the registry read', async () => {
     const reads: string[] = [];
     const env = envWith({ membershipAnswers: [true], registryReads: reads });

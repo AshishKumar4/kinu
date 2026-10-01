@@ -210,15 +210,6 @@ export class BackgroundJobStore {
       WHERE actor_id=${this.actorId} AND id=${id} AND status != 'running'`;
   }
 
-  /** Any running job in the workspace with no `resume_after`; workspace-wide like {@link nextResumeAtInWorkspace}. */
-  hasUntimedLiveJobsInWorkspace(): boolean {
-    // `assertCurrent` validates the binding, not the scope; this read is workspace-wide.
-    this.actor.assertCurrent();
-
-    return this.sql<{ present: number }>`
-      SELECT 1 AS present FROM background_jobs WHERE status = 'running' AND resume_after IS NULL LIMIT 1`.length > 0;
-  }
-
   /** Remove this actor's settled jobs only. */
   clearSettled(): void {
     this.actor.assertCurrent();

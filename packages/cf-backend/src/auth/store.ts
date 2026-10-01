@@ -9,7 +9,8 @@
 // unverified address is not an identity.
 
 import type { AuthIdentity } from './session';
-import type { OAuthProviderId } from './providers';
+import type { OAuthProviderId } from '@kinu.run/core/identity';
+import { builtinSignInOn, type SignInDeclarationEnv } from '@kinu.run/core/identity';
 import type { BrowserSessionIdentity, LiveBrowserSession, UserDO } from '../user/user-do';
 import type { ObjectNamespace } from '@kinu.run/core';
 import { randomToken, sha256Hex } from '@kinu.run/core';
@@ -40,11 +41,12 @@ export interface OAuthHandoff {
 }
 
 export interface OAuthProfile {
-  provider: OAuthProviderId;
+  provider: OAuthProviderId | 'password' | 'passkey';
   providerSub: string;
   email: string;
   emailVerified: boolean;
   displayName?: string | null;
+  credentialGeneration?: number;
 }
 
 export interface BrowserSession {
@@ -60,7 +62,7 @@ export type SessionAuthority = Pick<
   UserDO, 'ensureProfile' | 'registerBrowserSession' | 'verifyBrowserSession' | 'revokeBrowserSession'
 >;
 
-export interface AuthStoreEnv<Id = DurableObjectId> extends OwnerCapabilityEnv {
+export interface AuthStoreEnv<Id = DurableObjectId> extends OwnerCapabilityEnv, SignInDeclarationEnv {
   AUTH_KV: KvStore;
   UserDO: ObjectNamespace<Id, SessionAuthority>;
 }
@@ -97,6 +99,13 @@ export async function deriveUserId(email: string): Promise<string> {
   return (await sha256Hex(email.trim().toLowerCase())).slice(0, 32);
 }
 
+/** Never the userId an OAuth login of the address gets. */
+export async function deriveBuiltinUserId(email: string): Promise<string> {
+  return deriveUserId(`builtin:${email.trim().toLowerCase()}`);
+}
+
+const BUILTIN_METHODS: ReadonlySet<string> = new Set(['password', 'passkey']);
+
 export async function createOAuthState(
   kv: KvStore,
   input: OAuthStateInput,
@@ -110,7 +119,7 @@ export async function createOAuthState(
     provider: input.provider,
     codeVerifier: input.codeVerifier,
     nonce: input.nonce ?? null,
-    returnTo: sanitizeReturnTo(input.returnTo),
+    returnTo: sanitizeReturnTo(input.returnTo, new URL(input.redirectUri).origin),
     redirectUri: input.redirectUri,
     bindingHash: await sha256Hex(binding),
     createdAt: now,
@@ -144,7 +153,7 @@ export async function consumeOAuthState(
 
   if (record.expiresAt <= Date.now()) throw new Error('OAuth state expired. Start sign-in again.');
 
-  return { ...record, returnTo: sanitizeReturnTo(record.returnTo) };
+  return { ...record, returnTo: sanitizeReturnTo(record.returnTo, new URL(record.redirectUri).origin) };
 }
 
 /** The id is in the token, not KV, so logout always reaches the authority even before KV propagates. */
@@ -173,7 +182,7 @@ export async function createSession<Id>(env: AuthStoreEnv<Id>, profile: OAuthPro
   };
 
   // Authority first: a cookie is never outstanding against a session nothing can revoke.
-  await authority.registerBrowserSession(caller, tokenHash, expiresAt, minted);
+  await authority.registerBrowserSession(caller, tokenHash, expiresAt, { ...minted, credentialGeneration: profile.credentialGeneration ?? 0 });
 
   try {
     await writeKvJson(env.AUTH_KV, sessionKey(tokenHash), {
@@ -259,6 +268,9 @@ export async function verifySession<Id>(env: AuthStoreEnv<Id>, token: string): P
   const snapshot = projected ?? live.identity;
 
   if (!snapshot) return null;
+
+  // Once OAuth is declared, built-in sessions end with built-in sign-in.
+  if (BUILTIN_METHODS.has(snapshot.provider) && !builtinSignInOn(env)) return null;
 
   // Annotated, not inferred, so the field-supply census sees the one site connecting `sessionTokenHash`.
   const identity: AuthIdentity = {
@@ -351,11 +363,14 @@ async function resolveIdentity<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile,
 
   if (!profile.providerSub) throw new Error('OAuth provider did not return a stable subject.');
 
-  if (!profile.emailVerified) {
+  const builtin = BUILTIN_METHODS.has(profile.provider);
+
+  // Unverified: a built-in account keeps its own namespace.
+  if (!profile.emailVerified && !builtin) {
     throw new Error('OAuth provider did not report this email address as verified.');
   }
 
-  const userId = await deriveUserId(email);
+  const userId = builtin ? await deriveBuiltinUserId(email) : await deriveUserId(email);
 
   const stored = await sessionAuthority(env, userId)
     .ensureProfile(await ownerCaller(env), email, profile.displayName ?? undefined);
@@ -370,13 +385,17 @@ async function resolveIdentity<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile,
   };
 }
 
-/** Relative paths only: no protocol-relative or backslash tricks, never back into the auth flow. */
-export function sanitizeReturnTo(input: string): string {
+/** A path on `origin`, never the auth flow. A parser strips tab or newline (`/\t/evil.example` is another host). */
+export function sanitizeReturnTo(input: string, origin: string): string {
   const raw = input.trim();
 
-  if (!raw || !raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\')) return '/';
+  if (!raw.startsWith('/') || Array.from(raw, (ch) => ch.codePointAt(0) ?? 0).some((code) => code < 0x20 || code === 0x7f || code === 0x5c)) return '/';
+  const resolved = new URL(raw, origin);
 
-  if (raw.startsWith('/auth/') || raw === '/login' || raw === '/logout') return '/';
+  if (resolved.origin !== new URL(origin).origin) return '/';
+  const path = `${resolved.pathname}${resolved.search}${resolved.hash}`;
 
-  return raw;
+  if (path.startsWith('/auth/') || resolved.pathname === '/login' || resolved.pathname === '/logout') return '/';
+
+  return path;
 }

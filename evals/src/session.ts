@@ -1226,7 +1226,32 @@ export class KinuPublicSession {
     await this.opening;
   }
 
-  private async dial(): Promise<void> {
+  /**
+   * Clear the chat as its Clear control does. The deployment answers the clear to every socket but the sender's, so a
+   * second socket hears it land: the clear is done once that socket is told, after storage dropped the conversation.
+   */
+  async clearConversation(): Promise<void> {
+    await this.boundary(`clearing the conversation on ${this.workspace}`, async () => {
+      const observer = this.newSocket();
+
+      try {
+        await new Promise<void>((resolve, reject) => {
+          observer.addEventListener('open', () => {
+            this.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.CHAT_CLEAR })).catch(reject);
+          }, { once: true });
+          observer.addEventListener('message', (event: MessageEvent) => {
+            const frame = v.safeParse(FrameSchema, decodeSocketJson(event.data));
+
+            if (frame.success && frame.output.type === CHAT_MESSAGE_TYPES.CHAT_CLEAR) resolve();
+          });
+          observer.addEventListener('error', () => { reject(new Error('the socket that hears the clear failed')); }, { once: true });
+          observer.addEventListener('close', () => { reject(new Error('the socket that hears the clear closed before it was told')); }, { once: true });
+        });
+      } finally { observer.close(); }
+    });
+  }
+
+  private newSocket(): WebSocket {
     const url = new URL(
       `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.workspace)}`,
       this.input.origin,
@@ -1234,9 +1259,14 @@ export class KinuPublicSession {
 
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
 
-    const socket = new HEADER_WEBSOCKET(url.toString(), {
+    return new HEADER_WEBSOCKET(url.toString(), {
       headers: webHeaders(this.input.identity),
     });
+  }
+
+  private async dial(): Promise<void> {
+    const socket = this.newSocket();
+    const where = new URL(socket.url);
 
     this.socket = socket;
     socket.addEventListener('message', (event: MessageEvent) => {
@@ -1256,10 +1286,10 @@ export class KinuPublicSession {
 
       this.survive(reason).catch(this.unrecoverable);
     });
-    await this.boundary(`ws ${url.host}${url.pathname}`, () => new Promise<void>((resolve, reject) => {
+    await this.boundary(`ws ${where.host}${where.pathname}`, () => new Promise<void>((resolve, reject) => {
       socket.addEventListener('open', () => resolve(), { once: true });
       socket.addEventListener('error', () => {
-        reject(new Error(`could not open the public chat socket to ${url.host}${url.pathname}`));
+        reject(new Error(`could not open the public chat socket to ${where.host}${where.pathname}`));
       }, { once: true });
       socket.addEventListener('close', () => {
         reject(new Error('the public chat socket closed before it opened — the deployment '
@@ -1605,10 +1635,9 @@ export class KinuPublicSession {
     return v.parse(SubordinateRosterSchema, rows);
   }
 
-  /** One folder of the workspace as the Files tab lists it. With
-   *  `allowMissing`, a folder that does not exist lists nothing; any other
+  /** One folder of the workspace as the Files tab lists it. A folder that does not exist lists nothing; any other
    *  refusal is the build's answer. */
-  async listFiles(dir: string, options: { allowMissing?: boolean } = {}): Promise<readonly PublicDirEntry[]> {
+  async listFiles(dir: string): Promise<readonly PublicDirEntry[]> {
     const listing = v.parse(DirectorySchema, await this.boundary(
       `getExecutorFiles ${dir} on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('getExecutorFiles', [WORKSPACE_EXECUTOR, dir]),
@@ -1616,7 +1645,7 @@ export class KinuPublicSession {
 
     if (listing.error === undefined) return listing.entries ?? [];
 
-    if (options.allowMissing === true && /\bENOENT\b/.test(listing.error)) return [];
+    if (/\bENOENT\b/.test(listing.error)) return [];
 
     throw new DeploymentAnswer(`could not list ${dir}: ${listing.error.slice(0, 200)}`, 500);
   }
@@ -1844,7 +1873,7 @@ export class KinuPublicSession {
 
   /** Seed one file through the same route, so a case's inputs arrive on the
    *  plane the agent's own tools read. */
-  writeFile(path: string, content: string): Promise<void> {
+  writeFile(path: string, content: string | Uint8Array<ArrayBuffer>): Promise<void> {
     return this.boundary(`PUT files ${path}`, async () => {
       const response = await fetch(this.filesUrl(path), {
         method: 'PUT',

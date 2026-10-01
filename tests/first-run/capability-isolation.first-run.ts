@@ -23,9 +23,12 @@
 import { afterAll, describe, test } from 'vitest';
 import * as v from 'valibot';
 import type { EvalObservation, EvalSubgoal } from '@kinu.run/test-utils';
-import type { JsonValue, RunEvent } from '../../packages/core/src/index';
+import { ORCHESTRATOR_AGENT_SLUG, type JsonValue, type RunEvent } from '../../packages/core/src/index';
 import { INTERNAL_URL as INTERNAL, ISOLATION_ASK as ASK } from './asks';
+import { delivered, taskHires } from './delegation-observation';
 import { FIRST_RUN_DEFECTS, firstRunCasePlan, publishFirstRunRecord, runFirstRunCase } from './first-run';
+import { hirerHeard } from './hires';
+import { openPublicSocket } from './public-socket';
 import { firstRunSpliceStep, firstRunTurnEvents } from './turn-settlement';
 
 const SUITE = 'First-run · capability-isolation';
@@ -49,8 +52,6 @@ const ProbeAnswer = v.object({
   ok: v.literal(true),
   value: v.object({ status: v.optional(v.number()), body: v.optional(v.string()), threw: v.optional(v.string()) }),
 });
-
-const HireResult = v.object({ status: v.string(), answer: v.string() });
 
 type ToolCallEnd = Extract<RunEvent, { type: 'tool_call_end' }>;
 
@@ -90,7 +91,7 @@ describe(SUITE, () => {
       id: CASE,
       modelCalls: 'expected',
       purpose: 'A terse assistant that uses the tool it is asked to use and reports the result in one line.',
-      async run({ session }) {
+      async run({ session, plan, budget }) {
         const goals: EvalSubgoal[] = [];
 
         // ── The slate: resident code, called by the owner, no model. ──────────
@@ -119,25 +120,48 @@ export class Slate extends SlateObject {
         });
 
         // ── The model's three paths, read back from the ledger. ─────────────────
-        const turn = await session.prompt(ASK);
+        const room = openPublicSocket(plan.origin, plan.identity, `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(session.workspace)}`, budget);
 
-        const calls = firstRunTurnEvents(await session.runEvents(), ASK, {
-          splicedAtStep: firstRunSpliceStep(await session.history(), ASK),
-          absorbedBy: turn.landed === 'mid-turn' ? turn.absorbedBy : undefined,
-        }).filter(isToolCallEnd);
+        if (!(await room.opened)) throw new Error(`the workspace room ${room.path} refused the upgrade`);
 
-        goals.push(refusedThrough('native-web-tool-refused', calls.filter((call) => call.name === 'web'),
-          (call) => closedWith(call).includes(REFUSED)));
+        try {
+          // Registered before the hire is sent, so the turn the helper's answer opens cannot close unseen.
+          const closed = room.turnClosed();
+          const turn = await session.prompt(ASK);
 
-        // The program returns what its fetch threw; `reached` would mean the socket opened.
-        goals.push(refusedThrough('eval-fetch-refused', calls.filter((call) => call.name === 'eval'),
-          (call) => !textOf(call.result).includes('reached') && closedWith(call).includes(REFUSED)));
+          const events = firstRunTurnEvents(await session.runEvents(), ASK, {
+            splicedAtStep: firstRunSpliceStep(await session.history(), ASK),
+            absorbedBy: turn.landed === 'mid-turn' ? turn.absorbedBy : undefined,
+          });
 
-        goals.push(refusedThrough('hired-child-web-refused', calls.filter((call) => call.name === 'agents'), (call) => {
-          const hired = v.safeParse(HireResult, call.result);
+          const calls = events.filter(isToolCallEnd);
 
-          return hired.success && hired.output.answer.includes(REFUSED);
-        }));
+          goals.push(refusedThrough('native-web-tool-refused', calls.filter((call) => call.name === 'web'),
+            (call) => closedWith(call).includes(REFUSED)));
+
+          // The program returns what its fetch threw; `reached` would mean the socket opened.
+          goals.push(refusedThrough('eval-fetch-refused', calls.filter((call) => call.name === 'eval'),
+            (call) => !textOf(call.result).includes('reached') && closedWith(call).includes(REFUSED)));
+
+          // A hire returns at once (cafab2bfc): the helper's answer arrives as a message that opens the next turn.
+          const [hire] = taskHires(events);
+
+          const heard = hire !== undefined
+            && await hirerHeard(room, closed, async () => delivered(await session.history(), ASK, hire.agent) !== null);
+
+          const delivery = hire === undefined || !heard ? null : delivered(await session.history(), ASK, hire.agent);
+          let detail = `no task hire answered at once among ${calls.map((call) => `${call.name}#${call.toolCallId}`).join(', ') || 'no calls'}`;
+
+          if (hire !== undefined) {
+            detail = delivery === null
+              ? `agents#${hire.call.toolCallId} hired ${hire.agent}, whose answer never reached the hirer`
+              : `${hire.agent}'s answer arrived as ${JSON.stringify(delivery.text.slice(0, 240))}`;
+          }
+
+          goals.push({ what: 'hired-child-web-refused', reached: delivery?.text.includes(REFUSED) === true, detail });
+        } finally {
+          room.close('the row is done');
+        }
 
         return goals;
       },

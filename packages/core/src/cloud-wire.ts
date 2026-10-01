@@ -18,7 +18,18 @@ export const DEV_IDENTITY_ACCOUNT_HEADER = 'x-kinu-dev-identity-account';
 /** Each its own user: `devices` (the fleet), `scripted` (scripted-model tiers). */
 export const EVAL_ACCOUNTS = ['devices', 'scripted'] as const;
 
-export type EvalAccount = (typeof EVAL_ACCOUNTS)[number];
+export const EVAL_TRIAL_ACCOUNTS = 512;
+
+export type EvalAccount = (typeof EVAL_ACCOUNTS)[number] | `trial-${number}`;
+
+export function parseEvalAccount(name: string): EvalAccount | null {
+  const named = EVAL_ACCOUNTS.find((account) => account === name);
+
+  if (named !== undefined) return named;
+  const slot = Number(/^trial-([1-9]\d{0,2})$/u.exec(name)?.[1]);
+
+  return slot <= EVAL_TRIAL_ACCOUNTS ? `trial-${slot}` : null;
+}
 
 // Cloud chat messages persist as one DO SQLite row (`do.sqlite.row_bytes`); file parts must fit whole under the
 // SDK's 1.8 MB row guard. 1 MiB raw is ~1.4 MB base64; unit-files.test.ts asserts it against the catalog.

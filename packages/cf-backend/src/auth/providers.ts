@@ -1,7 +1,9 @@
 import * as oauth from 'oauth4webapi';
 import { CLOUDFLARE_WORKERS_AI_SCOPES } from '@kinu.run/core';
 
-export type OAuthProviderId = 'google' | 'github' | 'cloudflare';
+import { OAUTH_PROVIDER_ENV, type OAuthProviderEnv, type OAuthProviderId } from '@kinu.run/core/identity';
+
+export type { OAuthProviderEnv, OAuthProviderId };
 
 export interface PublicOAuthProvider {
   id: OAuthProviderId;
@@ -18,25 +20,6 @@ export interface OAuthProviderConfig extends PublicOAuthProvider {
   tokenAuthMethod: 'client_secret_post' | 'client_secret_basic';
 }
 
-export interface OAuthProviderEnv {
-  GOOGLE_OAUTH_CLIENT_ID?: string;
-  GOOGLE_OAUTH_CLIENT_SECRET?: string;
-  GOOGLE_OAUTH_SCOPES?: string;
-  GITHUB_OAUTH_CLIENT_ID?: string;
-  GITHUB_OAUTH_CLIENT_SECRET?: string;
-  GITHUB_OAUTH_SCOPES?: string;
-  CLOUDFLARE_OAUTH_CLIENT_ID?: string;
-  CLOUDFLARE_OAUTH_CLIENT_SECRET?: string;
-  CLOUDFLARE_OAUTH_SCOPES?: string;
-  CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD?: string;
-}
-
-const providerLabels = {
-  google: 'Google',
-  github: 'GitHub',
-  cloudflare: 'Cloudflare',
-} satisfies Record<OAuthProviderId, string>;
-
 const discoveryCache = new Map<string, { as: oauth.AuthorizationServer; expiresAt: number }>();
 
 const DISCOVERY_TTL_MS = 60 * 60 * 1000;
@@ -48,7 +31,7 @@ export function listConfiguredOAuthProviders(env: OAuthProviderEnv): PublicOAuth
 function getConfiguredOAuthProviders(env: OAuthProviderEnv): OAuthProviderConfig[] {
   const out: OAuthProviderConfig[] = [];
 
-  const google = providerFromEnv(env, 'google', 'GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_OAUTH_CLIENT_SECRET');
+  const google = providerFromEnv(env, 'google');
 
   if (google) {
     out.push({
@@ -60,7 +43,7 @@ function getConfiguredOAuthProviders(env: OAuthProviderEnv): OAuthProviderConfig
     });
   }
 
-  const github = providerFromEnv(env, 'github', 'GITHUB_OAUTH_CLIENT_ID', 'GITHUB_OAUTH_CLIENT_SECRET');
+  const github = providerFromEnv(env, 'github');
 
   if (github) {
     out.push({
@@ -78,7 +61,7 @@ function getConfiguredOAuthProviders(env: OAuthProviderEnv): OAuthProviderConfig
     });
   }
 
-  const cloudflare = providerFromEnv(env, 'cloudflare', 'CLOUDFLARE_OAUTH_CLIENT_ID', 'CLOUDFLARE_OAUTH_CLIENT_SECRET');
+  const cloudflare = providerFromEnv(env, 'cloudflare');
 
   if (cloudflare) {
     out.push({
@@ -121,18 +104,14 @@ export function clientAuth(provider: OAuthProviderConfig): oauth.ClientAuth {
     : oauth.ClientSecretPost(provider.clientSecret);
 }
 
-function providerFromEnv(
-  env: OAuthProviderEnv,
-  id: OAuthProviderId,
-  clientIdKey: keyof OAuthProviderEnv,
-  clientSecretKey: keyof OAuthProviderEnv,
-): Pick<OAuthProviderConfig, 'id' | 'label' | 'clientId' | 'clientSecret'> | null {
-  const clientId = cleanEnv(env[clientIdKey]);
-  const clientSecret = cleanEnv(env[clientSecretKey]);
+function providerFromEnv(env: OAuthProviderEnv, id: OAuthProviderId): Pick<OAuthProviderConfig, 'id' | 'label' | 'clientId' | 'clientSecret'> | null {
+  const names = OAUTH_PROVIDER_ENV[id];
+  const clientId = cleanEnv(env[names.clientId]);
+  const clientSecret = cleanEnv(env[names.clientSecret]);
 
   if (!clientId || !clientSecret) return null;
 
-  return { id, label: providerLabels[id], clientId, clientSecret };
+  return { id, label: names.label, clientId, clientSecret };
 }
 
 function cleanEnv(value: string | undefined): string | null {
