@@ -196,7 +196,6 @@
     "token_hash TEXT PRIMARY KEY",
     "purpose TEXT NOT NULL CHECK (purpose IN ('join', 'reset'))",
     "email TEXT NOT NULL",
-    "created_at INTEGER NOT NULL",
     "expires_at INTEGER NOT NULL"
   ],
   "builtin_passkeys@packages/core/src/identity/builtin-accounts.ts": [
@@ -204,8 +203,7 @@
     "user_id TEXT NOT NULL",
     "public_key TEXT NOT NULL",
     "counter INTEGER NOT NULL",
-    "transports TEXT NOT NULL",
-    "created_at INTEGER NOT NULL"
+    "transports TEXT NOT NULL"
   ],
   "cache_warm@packages/core/src/providers/cache-warming.ts": [
     "actor_id TEXT PRIMARY KEY",
