@@ -2123,6 +2123,8 @@ export { fmtPct, fmtSpan, fmtTokens, fmtUsd, formatBytes, shortAge, timeAgo } fr
 
 export { classifyTransientDO, retryTransientDO, type DOTransientClass } from './utils/do-rpc';
 
+export { relayedAnswer } from './utils/relayed-answer';
+
 export { inheritedDescriptor, type RpcSurfaceSubject } from './utils/prototype-members';
 
 export {

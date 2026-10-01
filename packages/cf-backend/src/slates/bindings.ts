@@ -1,7 +1,7 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { workspaceOwner, type WorkspaceOwnerNamespace } from '../workspace-owner-rpc';
-import type { JsonValue, SlateCallResult, WorkMode } from '@kinu.run/core';
+import { relayedAnswer, type JsonValue, type SlateCallResult, type WorkMode } from '@kinu.run/core';
 
 /** A registered actor name: every actor shares one root object, so the name, not a class, is the identity. */
 export interface SlateCallerHop {
@@ -51,6 +51,6 @@ export class SlateBinding extends WorkerEntrypoint<SlateBindingEnv, SlateBinding
   call(member: string, args: JsonValue[], invocation: string | null): Promise<SlateCallResult> {
     const { workspace, id, name, caller } = this.ctx.props;
 
-    return workspaceOwner(this.env, workspace).slateBindingCallAs(caller, id, name, { member, args, invocation });
+    return relayedAnswer(workspaceOwner(this.env, workspace).slateBindingCallAs(caller, id, name, { member, args, invocation }));
   }
 }
