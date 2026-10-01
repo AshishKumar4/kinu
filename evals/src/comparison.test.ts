@@ -312,6 +312,15 @@ describe('whyIncomplete, whether a leg can stand in a verdict', () => {
     expect(whyIncomplete(leg, { trials: 10, build: 'bbbbbbb' })).toBeNull();
   });
 
+  test('a task whose trials were skipped is named with how many did not run, not as a schema error', () => {
+    // The 2026-10-01 staging pass: eight task files' suites failed before their trials, which the report lists as
+    // "skipped" with no harness run. The verdict must say which tasks did not run.
+    const skipped = { name: '/repo/evals/tasks/budget-board.eval.ts', assertionResults: [1, 2, 3].map(() => ({ status: 'skipped', meta: {} })) };
+    const text = leg.replace(/\]\}\s*$/, `,${JSON.stringify(skipped)}]}`);
+
+    expect(whyIncomplete(text, { trials: 10 })).toBe('budget-board.eval.ts: 3 of its trials did not run (skipped)');
+  });
+
   test('a task of these definitions missing from the leg is named', () => {
     expect(whyIncomplete(leg, { trials: 10, taskFiles: ['order-book.eval.ts', 'launch-prep.eval.ts'] })).toBe('launch-prep.eval.ts did not run');
   });
