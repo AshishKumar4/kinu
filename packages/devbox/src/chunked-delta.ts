@@ -39,7 +39,7 @@ const PAYLOAD_PIECE_CHARS = 48 * 1024;
 
 /**
  * Ops packed into as few commands as fit {@link DELTA_COMMAND_BYTES}, each repeating the header under a
- * scoped `set -e` (D18). Every op is bounded: a path, or one payload piece of {@link PAYLOAD_PIECE_CHARS}.
+ * scoped `set -e` (D18). Every op is bounded: a path, or a packed run or payload piece of {@link PAYLOAD_PIECE_CHARS}.
  */
 export function deltaOpCommands([header = '', ...ops]: readonly string[]): string[] {
   const commands: string[] = [];
@@ -64,6 +64,30 @@ export function deltaOpCommands([header = '', ...ops]: readonly string[]): strin
   if (batch.length > 0) commands.push(wrap(batch));
 
   return commands;
+}
+
+/** One `command` per run of quoted `args` that fits a payload piece, so no single op outgrows a command. */
+function packedOps(command: string, args: readonly string[]): string[] {
+  const ops: string[] = [];
+  let run: string[] = [];
+  let bytes = 0;
+
+  for (const arg of args) {
+    const size = Buffer.byteLength(arg) + 1;
+
+    if (run.length > 0 && bytes + size > PAYLOAD_PIECE_CHARS) {
+      ops.push(`${command} ${run.join(' ')}`);
+      run = [];
+      bytes = 0;
+    }
+
+    run.push(arg);
+    bytes += size;
+  }
+
+  if (run.length > 0) ops.push(`${command} ${run.join(' ')}`);
+
+  return ops;
 }
 
 /** Writes `bytes` to `target` as base64 data, never shell syntax, in appends that each fit a command. */
@@ -699,7 +723,7 @@ function directoryOps(manifest: DeltaManifest, root: string): string[] {
   for (const dir of manifest.dirs) wanted.add(dir.p);
   const ops: string[] = [];
 
-  if (wanted.size > 0) ops.push(`mkdir -p ${[...wanted].map((dir) => shellPath(`${root}/${dir}`)).join(' ')}`);
+  ops.push(...packedOps('mkdir -p', [...wanted].map((dir) => shellPath(`${root}/${dir}`))));
 
   for (const dir of manifest.dirs) {
     ops.push(`chown ${dir.uid}:${dir.gid} ${shellPath(`${root}/${dir.p}`)}`, `chmod ${dir.mode.toString(8)} ${shellPath(`${root}/${dir.p}`)}`);

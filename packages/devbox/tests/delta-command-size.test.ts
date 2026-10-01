@@ -4,20 +4,25 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildDeltaStageOps, deltaOpCommands, DELTA_MANIFEST_NAME } from '../src/chunked-delta';
+import { buildDeltaAttachOps, buildDeltaStageOps, deltaOpCommands, DELTA_MANIFEST_NAME } from '../src/chunked-delta';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 
 const MAX_ARG_STRLEN = 128 * 1024;
 
-test('a large delta index stages in commands that each fit one argument, and lands byte-exact', () => {
+test('a large index and a deep tree stage and attach in commands that each fit one argument', () => {
   const root = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}stage-size-`));
   // 2 MiB: the index a ~64 MiB new file's overrides produce; 12 MiB of file already broke the one-argument stage.
   const index = new Uint8Array(2 * 1024 * 1024).map((_, at) => (at * 31 + 7) % 251);
-  const manifest = { v: 2 as const, files: [], dirs: [], deleted: [], treplace: [], links: [] };
+  // 4,000 directories: a node_modules-sized tree, whose paths once rode in one `mkdir -p`.
+  const dirs = Array.from({ length: 4000 }, (_, at) => ({ p: `node_modules/package-${String(at)}/lib`, mode: 0o755, uid: process.getuid?.() ?? 0, gid: process.getgid?.() ?? 0 }));
+  const manifest = { v: 2 as const, files: [], dirs, deleted: [], treplace: [], links: [] };
   const plan = { manifest, chunks: new Map(), indexes: new Map([['digest', index]]) };
 
   try {
-    const commands = deltaOpCommands(buildDeltaStageOps(plan, { upperDir: join(root, 'upper'), pkgDir: join(root, 'pkg') }));
+    const commands = [
+      ...deltaOpCommands(buildDeltaStageOps(plan, { upperDir: join(root, 'upper'), pkgDir: join(root, 'pkg') })),
+      ...deltaOpCommands(buildDeltaAttachOps(manifest, join(root, 'attach'))),
+    ];
 
     for (const command of commands) {
       expect(Buffer.byteLength(command)).toBeLessThan(MAX_ARG_STRLEN);
