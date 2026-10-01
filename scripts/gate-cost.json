@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-09-30",
+  "measuredAt": "2026-10-01",
   "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
   "method": "each row alone under `setsid /usr/bin/time -v bun scripts/ladder.ts --gate <run> --no-cache`; the row's whole process tree — its session plus every descendant by ppid, so a setsid'd dev server or browser counts — sampled every 0.05s for its first 3s and every 0.25s after — summed proportional set (Pss, /proc/<pid>/smaps_rollup) for memory, tasks in state R for parallel demand, Δ(utime+stime+cutime+cstime) over at least 0.25s for parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN); a post-publish row against the deployment `--deployment=<origin>` named, with KINU_ORIGIN and KINU_EVAL_ORIGIN set to it",
   "rows": {
@@ -1004,15 +1004,15 @@
       "loadAtStart": 31.51,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts": {
-      "wallSeconds": 37.7,
-      "cpuSeconds": 25.32,
-      "peakRssMb": 686.11,
-      "peakRunnable": 4,
-      "peakCpuThreads": 2.88,
-      "meanThreads": 0.67,
-      "samples": 179,
-      "loadAtStart": 30.47,
+    "bun test --timeout=0 scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/reset.test.ts": {
+      "wallSeconds": 39.82,
+      "cpuSeconds": 28.27,
+      "peakRssMb": 695.59,
+      "peakRunnable": 9,
+      "peakCpuThreads": 3.43,
+      "meanThreads": 0.71,
+      "samples": 186,
+      "loadAtStart": 33.68,
       "exit": 0
     }
   }

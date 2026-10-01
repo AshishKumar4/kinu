@@ -1225,6 +1225,20 @@ schema rejects, so a row that reads the deployment and has no figure takes the
 whole box: it runs alone, and the report names the command that measures it.
 Every other row with no figure is still refused.
 
+L19. A build is promoted on its evals' verdict, never on a run's conclusion.
+Decided 2026-09-30 with Main. evals.yml's own conclusion is green whenever the
+run finished: its trial step continues on error, and the comparison never
+exits non-zero. So the staging deploy dispatches it naming the build it
+published (the API answers with the run's id, which the record keeps), from
+the branch on origin that holds the build nearest its tip, read from git:
+GitHub runs the evals.yml of the ref it is given, and main, behind the
+release, has none that takes a build. The run measures staging against
+production, and its `Verdict` job fails on an
+incomplete report or a regression. `promote.ts check` requires that job, by
+name, to have completed green, and says "no eval verdict yet" while the run has
+none. The deploy's own one-trial pass (`eval-pass-tier.sh`) reports a task that
+fails outright the same day, as a red of that deploy.
+
 ## Providers
 
 P1. The ChatGPT plan is Sign in with ChatGPT's open-source token sharing
