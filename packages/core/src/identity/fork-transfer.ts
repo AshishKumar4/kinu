@@ -4,6 +4,8 @@
  * chunks they name that the target does not hold.
  */
 
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import * as v from 'valibot';
 import type { VfsExportChunk, VfsExportPage } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import { VfsExportPageSchema } from '../vfs/export-page';
@@ -621,107 +623,112 @@ export class ForkTransferReceiver {
   }
 
   /** One frame, or a refusal. */
-  async accept(wire: ForkFrameWire): Promise<ForkFrameOutcome> {
-    const frame = parseForkFrame(wire);
+  accept(wire: ForkFrameWire): Promise<ForkFrameOutcome> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const frame = yield* parseForkFrame(wire);
 
-    if (frame.kind === 'begin') {
-      await this.files.remove(this.staging.files());
-      this.staging.dropFiles();
-      // The write's reset first: the wire's cursor is declared onto a row that already belongs to this fork.
-      this.writer.begin(frame.head);
-      this.staging.declare({
-        transferId: frame.transferId,
-        declared: frame.counts,
-        expectedSeq: 1,
-        stream: foldForkStream(FORK_STREAM_SEED, frame.digest),
+      if (frame.kind === 'begin') {
+        yield* Effect.promise(() => this.files.remove(this.staging.files()));
+        this.staging.dropFiles();
+        // The write's reset first: the wire's cursor is declared onto a row that already belongs to this fork.
+        this.writer.begin(frame.head);
+        this.staging.declare({
+          transferId: frame.transferId,
+          declared: frame.counts,
+          expectedSeq: 1,
+          stream: foldForkStream(FORK_STREAM_SEED, frame.digest),
+        });
+        // Rows arrive frame by frame from here, so an abandoned attempt's rows must go now.
+        this.writer.clearStagedRows();
+
+        return { status: 'staged' };
+      }
+
+      const staged = this.staging.read();
+
+      if (staged === null || staged.transferId === null) {
+        return yield* Effect.die(new Error(`fork transfer frame ${frame.seq} has no open transfer to continue`));
+      }
+
+      if (frame.transferId !== staged.transferId) {
+        return yield* Effect.die(new Error(
+          `fork transfer frame ${frame.seq} belongs to transfer ${frame.transferId}, `
+          + `and ${staged.transferId} is the transfer open here`,
+        ));
+      }
+
+      if (staged.published && staged.head !== null) {
+        // Already landed: answer a re-delivered frame with the fork.
+        return { status: 'settled', result: forkResultOf(staged.head, staged.staged) };
+      }
+
+      if (frame.seq !== staged.expectedSeq) {
+        return yield* Effect.die(new Error(
+          `fork transfer frame ${frame.seq} arrived where frame ${staged.expectedSeq} was expected`,
+        ));
+      }
+
+      // The commit's own digest is not folded in: the sender computes `stream` before sealing the commit.
+      if (frame.kind === 'commit') {
+        return { status: 'published', result: yield* this.commit(staged, frame.stream) };
+      }
+
+      const taken = yield* this.stage(staged, frame);
+
+      if (taken.status === 'want') return taken;
+
+      this.staging.advance({
+        expectedSeq: frame.seq + 1,
+        sectionCursor: taken.sectionCursor,
+        stream: foldForkStream(staged.stream, frame.digest),
       });
-      // Rows arrive frame by frame from here, so an abandoned attempt's rows must go now.
-      this.writer.clearStagedRows();
 
       return { status: 'staged' };
-    }
-
-    const staged = this.staging.read();
-
-    if (staged === null || staged.transferId === null) {
-      throw new Error(`fork transfer frame ${frame.seq} has no open transfer to continue`);
-    }
-
-    if (frame.transferId !== staged.transferId) {
-      throw new Error(
-        `fork transfer frame ${frame.seq} belongs to transfer ${frame.transferId}, `
-        + `and ${staged.transferId} is the transfer open here`,
-      );
-    }
-
-    if (staged.published && staged.head !== null) {
-      // Already landed: answer a re-delivered frame with the fork.
-      return { status: 'settled', result: forkResultOf(staged.head, staged.staged) };
-    }
-
-    if (frame.seq !== staged.expectedSeq) {
-      throw new Error(
-        `fork transfer frame ${frame.seq} arrived where frame ${staged.expectedSeq} was expected`,
-      );
-    }
-
-    // The commit's own digest is not folded in: the sender computes `stream` before sealing the commit.
-    if (frame.kind === 'commit') {
-      return { status: 'published', result: await this.commit(staged, frame.stream) };
-    }
-
-    const taken = await this.stage(staged, frame);
-
-    if (taken.status === 'want') return taken;
-
-    this.staging.advance({
-      expectedSeq: frame.seq + 1,
-      sectionCursor: taken.sectionCursor,
-      stream: foldForkStream(staged.stream, frame.digest),
-    });
-
-    return { status: 'staged' };
+    }));
   }
 
-  private async stage(
+  private stage(
     staged: ForkStaging, frame: Exclude<ForkFrame, { kind: 'begin' | 'commit' }>,
-  ): Promise<{ status: 'staged'; sectionCursor: number } | { status: 'want'; hashes: string[] }> {
-    if (frame.kind === 'soul') {
-      this.filesPhase(staged);
-      this.writer.stageSoul((await this.files.publishSoul(frame.bytes)).mission);
+  ): Effect.Effect<{ status: 'staged'; sectionCursor: number } | { status: 'want'; hashes: string[] }> {
+    return Effect.gen({ self: this }, function* () {
+      if (frame.kind === 'soul') {
+        yield* this.filesPhase(staged);
+        this.writer.stageSoul((yield* Effect.promise(() => this.files.publishSoul(frame.bytes))).mission);
 
-      return { status: 'staged', sectionCursor: FORK_ROW_SECTIONS.length };
-    }
+        return { status: 'staged', sectionCursor: FORK_ROW_SECTIONS.length };
+      }
 
-    if (frame.kind === 'chunks') {
-      await this.files.importChunks(await this.open(staged, frame.target), frame.chunks);
+      if (frame.kind === 'chunks') {
+        const dst = yield* this.open(staged, frame.target);
+        yield* Effect.promise(() => this.files.importChunks(dst, frame.chunks));
 
-      return { status: 'staged', sectionCursor: FORK_ROW_SECTIONS.length };
-    }
+        return { status: 'staged', sectionCursor: FORK_ROW_SECTIONS.length };
+      }
 
-    if (frame.kind === 'page') {
-      const dst = await this.open(staged, frame.target);
-      const imported = await this.files.importPage(dst, frame.page);
+      if (frame.kind === 'page') {
+        const dst = yield* this.open(staged, frame.target);
+        const imported = yield* Effect.promise(() => this.files.importPage(dst, frame.page));
 
-      if (imported.want.length > 0) return { status: 'want', hashes: imported.want };
+        if (imported.want.length > 0) return { status: 'want', hashes: imported.want };
 
-      if (imported.done) this.staging.importing(null);
+        if (imported.done) this.staging.importing(null);
 
-      return { status: 'staged', sectionCursor: FORK_ROW_SECTIONS.length };
-    }
+        return { status: 'staged', sectionCursor: FORK_ROW_SECTIONS.length };
+      }
 
-    return { status: 'staged', sectionCursor: this.stageRows(staged, frame) };
+      return { status: 'staged', sectionCursor: yield* this.stageRows(staged, frame) };
+    });
   }
 
   /** One batch of one section; a section the cursor has passed cannot come back. */
-  private stageRows(staged: ForkStaging, frame: ForkRowFrame): number {
+  private stageRows(staged: ForkStaging, frame: ForkRowFrame): Effect.Effect<number> {
     const at = FORK_ROW_SECTIONS.indexOf(frame.kind);
 
     if (at < staged.sectionCursor) {
-      throw new Error(
+      return Effect.die(new Error(
         `fork transfer sent section ${frame.kind} after section `
         + `${FORK_ROW_SECTIONS[staged.sectionCursor] ?? 'files'}, out of the order the protocol fixes`,
-      );
+      ));
     }
 
     if (frame.kind === 'agentConfig') this.writer.stageAgentConfig(frame.rows);
@@ -732,14 +739,14 @@ export class ForkTransferReceiver {
     else if (frame.kind === 'conversationEntryParts') this.writer.stageConversationEntryParts(frame.rows);
     else this.writer.stageContextMembers(frame.rows);
 
-    return at;
+    return Effect.succeed(at);
   }
 
   /** Files come once the row sections are done, and one import at a time. */
-  private filesPhase(staged: ForkStaging): void {
-    if (staged.importing !== null) {
-      throw new Error(`fork transfer sent SOUL.md while the import at ${JSON.stringify(staged.importing)} was still incomplete`);
-    }
+  private filesPhase(staged: ForkStaging): Effect.Effect<void> {
+    return staged.importing === null
+      ? Effect.void
+      : Effect.die(new Error(`fork transfer sent SOUL.md while the import at ${JSON.stringify(staged.importing)} was still incomplete`));
   }
 
   /**
@@ -748,79 +755,85 @@ export class ForkTransferReceiver {
    * source's), and records it, so `begin` removes it if this transfer is abandoned; no other may start until it is
    * done. Replacing before recording keeps a frame re-delivered in between from replacing a started import.
    */
-  private async open(staged: ForkStaging, target: ForkImportTarget): Promise<string> {
-    // SOUL.md publishes only through its protected write; the rest are the target's own to make.
-    if (target.in === 'home' && !forkCarries(target.name)) {
-      throw new Error(`fork transfer sent an import of ${JSON.stringify(target.name)}, a name under the home a fork does not carry`);
-    }
+  private open(staged: ForkStaging, target: ForkImportTarget): Effect.Effect<string> {
+    return Effect.gen({ self: this }, function* () {
+      // SOUL.md publishes only through its protected write; the rest are the target's own to make.
+      if (target.in === 'home' && !forkCarries(target.name)) {
+        return yield* Effect.die(new Error(`fork transfer sent an import of ${JSON.stringify(target.name)}, a name under the home a fork does not carry`));
+      }
 
-    const dst = target.in === 'home' ? `${WORKSPACE_ROOT}/${target.name}` : this.writer.artifactPath(target.path);
+      const dst = target.in === 'home' ? `${WORKSPACE_ROOT}/${target.name}` : this.writer.artifactPath(target.path);
 
-    if (staged.importing === dst) return dst;
+      if (staged.importing === dst) return dst;
 
-    if (staged.importing !== null) {
-      throw new Error(`fork transfer began the import at ${JSON.stringify(dst)} while ${JSON.stringify(staged.importing)} was still incomplete`);
-    }
+      if (staged.importing !== null) {
+        return yield* Effect.die(new Error(`fork transfer began the import at ${JSON.stringify(dst)} while ${JSON.stringify(staged.importing)} was still incomplete`));
+      }
 
-    await this.files.remove([dst]);
-    this.staging.addFile(dst);
-    this.staging.importing(dst);
+      yield* Effect.promise(() => this.files.remove([dst]));
+      this.staging.addFile(dst);
+      this.staging.importing(dst);
 
-    return dst;
+      return dst;
+    });
   }
 
   /** Completeness then publication: declared counts must match what was taken, and the rolling digest must match. */
-  private async commit(staged: ForkStaging, declared: string): Promise<ForkResult> {
-    if (staged.importing !== null) {
-      throw new Error(`fork transfer committed while the import at ${JSON.stringify(staged.importing)} was incomplete`);
-    }
-
-    const taken = staged.staged;
-
-    const shortfall = [
-      ['agentConfig', staged.declared.agentConfig, taken.agentConfig],
-      ['craftedTools', staged.declared.craftedTools, taken.craftedTools],
-      ['memoryChunks', staged.declared.memoryChunks, taken.memoryChunks],
-      ['sessionMessages', staged.declared.sessionMessages, taken.sessionMessages],
-      ['conversationEntries', staged.declared.conversationEntries, taken.conversationEntries],
-      ['conversationEntryParts', staged.declared.conversationEntryParts, taken.conversationEntryParts],
-      ['contextMembers', staged.declared.contextMembers, taken.contextMembers],
-      ['files', staged.declared.files, taken.files],
-    ] as const;
-
-    for (const [section, want, got] of shortfall) {
-      if (want !== got) {
-        throw new Error(
-          `fork transfer declared ${want} ${section} and staged ${got}; refusing to publish an incomplete fork`,
-        );
+  private commit(staged: ForkStaging, declared: string): Effect.Effect<ForkResult, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      if (staged.importing !== null) {
+        return yield* Effect.die(new Error(`fork transfer committed while the import at ${JSON.stringify(staged.importing)} was incomplete`));
       }
-    }
 
-    if (staged.stream !== declared) {
-      throw new Error(
-        'fork transfer digest does not match the sequence of frames that arrived; '
-        + 'refusing to publish a fork assembled from a different stream',
-      );
-    }
+      const taken = staged.staged;
 
-    return this.writer.publish();
+      const shortfall = [
+        ['agentConfig', staged.declared.agentConfig, taken.agentConfig],
+        ['craftedTools', staged.declared.craftedTools, taken.craftedTools],
+        ['memoryChunks', staged.declared.memoryChunks, taken.memoryChunks],
+        ['sessionMessages', staged.declared.sessionMessages, taken.sessionMessages],
+        ['conversationEntries', staged.declared.conversationEntries, taken.conversationEntries],
+        ['conversationEntryParts', staged.declared.conversationEntryParts, taken.conversationEntryParts],
+        ['contextMembers', staged.declared.contextMembers, taken.contextMembers],
+        ['files', staged.declared.files, taken.files],
+      ] as const;
+
+      for (const [section, want, got] of shortfall) {
+        if (want !== got) {
+          return yield* Effect.die(new Error(
+            `fork transfer declared ${want} ${section} and staged ${got}; refusing to publish an incomplete fork`,
+          ));
+        }
+      }
+
+      if (staged.stream !== declared) {
+        return yield* Effect.die(new Error(
+          'fork transfer digest does not match the sequence of frames that arrived; '
+          + 'refusing to publish a fork assembled from a different stream',
+        ));
+      }
+
+      return yield* Effect.promise(() => this.writer.publish());
+    });
   }
 }
 
 /** Apply the wire schema to one frame, naming the transfer in any failure. */
-function parseForkFrame(frame: ForkFrameWire): ForkFrame {
-  const parsed = v.safeParse(ForkFrameSchema, frame);
+function parseForkFrame(frame: ForkFrameWire): Effect.Effect<ForkFrame, KinuError> {
+  return Effect.gen(function* () {
+    const parsed = v.safeParse(ForkFrameSchema, frame);
 
-  if (!parsed.success) {
-    throw new Error(`fork transfer frame is not valid for protocol version ${FORK_TRANSFER_VERSION}: `
-      + renderIssues(parsed.issues));
-  }
+    if (!parsed.success) {
+      return yield* Effect.die(new Error(`fork transfer frame is not valid for protocol version ${FORK_TRANSFER_VERSION}: `
+        + renderIssues(parsed.issues)));
+    }
 
-  const { digest, ...body } = parsed.output;
+    const { digest, ...body } = parsed.output;
 
-  if (digest !== sha256Hex(forkFramePreimage(body))) {
-    throw new Error(`fork transfer frame ${parsed.output.seq} digest does not match its content`);
-  }
+    if (digest !== sha256Hex(forkFramePreimage(body))) {
+      return yield* Effect.die(new Error(`fork transfer frame ${parsed.output.seq} digest does not match its content`));
+    }
 
-  return parsed.output;
+    return parsed.output;
+  });
 }

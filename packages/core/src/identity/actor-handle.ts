@@ -1,4 +1,7 @@
+import { Effect } from 'effect';
 import * as v from 'valibot';
+import { settleSync } from '../obs/effect';
+import type { KinuError } from '../obs/error';
 import { createAgentConfigStore, type AgentConfigStore } from '../config/store';
 import { createProgramStateStore, type ProgramStateStore } from './program-state';
 import type { SqlExecutor } from '../types/primitives';
@@ -33,23 +36,26 @@ export interface ActorHandle extends ActorIdentity {
 }
 
 /** Bind an identity to physical storage without exposing its SQL. */
-export function bindActorHandle(sql: SqlExecutor, identity: ActorIdentity, validate: () => void): ActorHandle {
-  validate();
+export function bindActorHandle(sql: SqlExecutor, identity: ActorIdentity, validate: () => Effect.Effect<void, KinuError>): ActorHandle {
   let config: AgentConfigStore | undefined;
   let programState: ProgramStateStore | undefined;
 
-  return Object.freeze({
+  const handle: ActorHandle = Object.freeze({
     ...identity,
-    assertCurrent: validate,
+    assertCurrent: () => settleSync(validate()),
     get config() {
-      validate();
+      handle.assertCurrent();
 
-      return config ??= createAgentConfigStore(sql, identity.actorId, validate);
+      return config ??= createAgentConfigStore(sql, identity.actorId, handle.assertCurrent);
     },
     get programState() {
-      validate();
+      handle.assertCurrent();
 
-      return programState ??= createProgramStateStore(sql, identity.actorId, validate);
+      return programState ??= createProgramStateStore(sql, identity.actorId, handle.assertCurrent);
     },
   });
+
+  handle.assertCurrent();
+
+  return handle;
 }

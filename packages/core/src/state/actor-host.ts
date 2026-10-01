@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 // Runtime objects for each logical actor of one workspace database; its rows live in the workspace because the
 // SQL port is synchronous. State, serialization and `actor_id`-keyed stores are per actor and re-validate the
@@ -183,11 +184,9 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
 
     const fence: ReleaseFence = { released: false };
 
-    const handle = deps.directory.open(reference.actorId, () => {
-      if (fence.released) {
-        throw new KinuError('missing', 'The hosted actor was released by its root.');
-      }
-    });
+    const handle = deps.directory.open(reference.actorId, () => (fence.released
+      ? Effect.fail(new KinuError('missing', 'The hosted actor was released by its root.'))
+      : Effect.void));
 
     const binding = { reference: actorReferenceOf(reference), record, handle };
 

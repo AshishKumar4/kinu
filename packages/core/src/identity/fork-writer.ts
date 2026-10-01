@@ -1,3 +1,5 @@
+import { Effect } from 'effect';
+import { settleSync, settle } from '../obs/effect';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 /** Workspace fork write and its accounting. The target DB must already be initialized (initWorkspaceSchema). */
 
@@ -94,17 +96,19 @@ export class ForkTargetWriter {
   /** Record which fork this is and reset accounting. Separate from {@link clearStagedRows} so row
      *  deletion can run where the caller's transaction can roll it back. */
   begin(head: ForkSnapshotHead): void {
-    const current = this.target<{ id: string; owner_user_id: string }>`SELECT id, owner_user_id FROM workspace_identity`[0];
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const current = this.target<{ id: string; owner_user_id: string }>`SELECT id, owner_user_id FROM workspace_identity`[0];
 
-    if (!current) {
-      void this.target`INSERT INTO workspace_identity(id,name,owner_user_id,created_at) VALUES (${this.opts.workspaceId},${this.opts.workspaceName},${this.opts.ownerUserId ?? ''},${this.now})`;
-      new WorkspaceActorDirectory(this.target, { workspaceId: this.opts.workspaceId, ownerUserId: this.opts.ownerUserId ?? '' }).createMain({ name: this.opts.workspaceName });
-    } else {
-      if (current.id !== this.opts.workspaceId) throw new KinuError('denied', 'The fork target does not match its durable workspace identity.');
-      openWorkspaceMainActor(this.target);
-    }
+      if (!current) {
+        void this.target`INSERT INTO workspace_identity(id,name,owner_user_id,created_at) VALUES (${this.opts.workspaceId},${this.opts.workspaceName},${this.opts.ownerUserId ?? ''},${this.now})`;
+        new WorkspaceActorDirectory(this.target, { workspaceId: this.opts.workspaceId, ownerUserId: this.opts.ownerUserId ?? '' }).createMain({ name: this.opts.workspaceName });
+      } else {
+        if (current.id !== this.opts.workspaceId) return yield* new KinuError('denied', 'The fork target does not match its durable workspace identity.');
+        openWorkspaceMainActor(this.target);
+      }
 
-    this.staging.begin(head);
+      this.staging.begin(head);
+    }));
   }
 
   /**
@@ -236,96 +240,100 @@ export class ForkTargetWriter {
     this.staging.addFile(SOUL_PATH);
   }
 
-  async publish(): Promise<ForkResult> {
-    if (!this.opts.transaction) return this.publishRows();
-    let result: ForkResult | null = null;
-    this.opts.transaction(() => { result = this.publishRows(); });
+  publish(): Promise<ForkResult> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (!this.opts.transaction) return this.publishRows();
+      let result: ForkResult | null = null;
+      this.opts.transaction(() => { result = this.publishRows(); });
 
-    if (result === null) throw new Error('fork publication transaction produced no result');
+      if (result === null) return yield* Effect.die(new Error('fork publication transaction produced no result'));
 
-    return result;
+      return result;
+    }));
   }
 
   /** The publication as one synchronous unit, for a caller's host transaction. */
   publishRows(): ForkResult {
-    const staged = this.staging.read();
-    const head = staged?.head ?? null;
+    return settleSync(Effect.gen({ self: this }, function* () {
+      const staged = this.staging.read();
+      const head = staged?.head ?? null;
 
-    if (staged === null || head === null) {
-      throw new Error('fork publication attempted before the transfer declared its head');
-    }
+      if (staged === null || head === null) {
+        return yield* Effect.die(new Error('fork publication attempted before the transfer declared its head'));
+      }
 
-    const forkPointMs = head.cut.createdAtMs;
-    const actorId = this.actorId;
+      const forkPointMs = head.cut.createdAtMs;
+      const actorId = this.actorId;
 
-    // A target without the cut entry got an incomplete transfer; refuse before the first write.
-    const cut = this.target<{ position: number }>`
-      SELECT position FROM conversation_entries
-      WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${head.cut.messageId}
-    `[0]?.position;
+      // A target without the cut entry got an incomplete transfer; refuse before the first write.
+      const cut = this.target<{ position: number }>`
+        SELECT position FROM conversation_entries
+        WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${head.cut.messageId}
+      `[0]?.position;
 
-    if (cut === undefined) {
-      throw new KinuError('missing', `fork publication has no cut entry ${JSON.stringify(head.cut.messageId)} in the transferred chain`);
-    }
+      if (cut === undefined) {
+        return yield* new KinuError('missing', `fork publication has no cut entry ${JSON.stringify(head.cut.messageId)} in the transferred chain`);
+      }
 
-    // Identity: new id, name, created_at; owner carries through.
-    void this.target`DELETE FROM workspace_identity`;
+      // Identity: new id, name, created_at; owner carries through.
+      void this.target`DELETE FROM workspace_identity`;
 
-    if (this.opts.ownerUserId) {
+      if (this.opts.ownerUserId) {
+        void this.target`
+          INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
+          VALUES (${this.opts.workspaceId}, ${this.opts.workspaceName}, ${this.opts.ownerUserId}, ${this.now})
+        `;
+      } else {
+        void this.target`
+          INSERT INTO workspace_identity (id, name, created_at)
+          VALUES (${this.opts.workspaceId}, ${this.opts.workspaceName}, ${this.now})
+        `;
+      }
+
+      void this.target`UPDATE workspace_identity SET mission = ${staged.mission}`;
+
+      // The search index keyed on old rows is stale (equal counts evade its rowid watermark); invalidate it.
+      invalidateConversationSearchIndex(this.target);
+
+      openWorkspaceMainActor(this.target).config.setDisplayName(this.opts.workspaceName);
+
+      // Lineage: what makes this workspace a fork.
       void this.target`
-        INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
-        VALUES (${this.opts.workspaceId}, ${this.opts.workspaceName}, ${this.opts.ownerUserId}, ${this.now})
+        INSERT INTO fork_lineage
+        (id, source_workspace_id, source_workspace_name, source_message_id, source_message_created_at, forked_at)
+        VALUES
+        (1, ${head.source.workspaceId}, ${head.source.workspaceName},
+         ${head.cut.messageId}, ${forkPointMs}, ${this.now})
       `;
-    } else {
+
+      // The fork's working context; always present, empty if the cut recorded none.
+      const contextId = this.forkContext(actorId);
+
+      // The cut entry names the fork's context so a later fork at this boundary restores the same membership.
       void this.target`
-        INSERT INTO workspace_identity (id, name, created_at)
-        VALUES (${this.opts.workspaceId}, ${this.opts.workspaceName}, ${this.now})
+        UPDATE conversation_entries SET context_id = ${contextId}, context_revision = ${FORK_CONTEXT_REVISION}
+        WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${head.cut.messageId}
       `;
-    }
 
-    void this.target`UPDATE workspace_identity SET mission = ${staged.mission}`;
+      // Fork marker: a system entry just after the cut; a chat entry only, deliberately not a context member.
+      const syntheticText =
+        `You were forked from workspace "${head.source.workspaceName}" at message ${head.cut.messageId} on `
+        + `${new Date(this.now).toISOString()}. The conversation above happened before the fork. Your files are a copy `
+        + `of that workspace's files as they were when the fork was made, so they can hold work from after that message. `
+        + `Your current tool set and memory are authoritative; ignore any tools or context `
+        + `referenced before the fork that you don't see in your active tool list.`;
 
-    // The search index keyed on old rows is stale (equal counts evade its rowid watermark); invalidate it.
-    invalidateConversationSearchIndex(this.target);
+      const markerId = `fork-marker-${this.opts.workspaceId.slice(0, 8)}-${this.now}`;
+      this.writeForkMarker({
+        actorId, markerId, position: cut + 1, text: syntheticText, recordedAt: forkPointMs + 1,
+      });
 
-    openWorkspaceMainActor(this.target).config.setDisplayName(this.opts.workspaceName);
+      // Staged files are the fork's now. The transfer row stays to answer re-delivered frames until the next `begin`.
+      this.staging.dropFiles();
+      this.staging.markPublished();
 
-    // Lineage: what makes this workspace a fork.
-    void this.target`
-      INSERT INTO fork_lineage
-      (id, source_workspace_id, source_workspace_name, source_message_id, source_message_created_at, forked_at)
-      VALUES
-      (1, ${head.source.workspaceId}, ${head.source.workspaceName},
-       ${head.cut.messageId}, ${forkPointMs}, ${this.now})
-    `;
-
-    // The fork's working context; always present, empty if the cut recorded none.
-    const contextId = this.forkContext(actorId);
-
-    // The cut entry names the fork's context so a later fork at this boundary restores the same membership.
-    void this.target`
-      UPDATE conversation_entries SET context_id = ${contextId}, context_revision = ${FORK_CONTEXT_REVISION}
-      WHERE actor_id = ${actorId} AND session_id = ${CHAT_SESSION_ID} AND id = ${head.cut.messageId}
-    `;
-
-    // Fork marker: a system entry just after the cut; a chat entry only, deliberately not a context member.
-    const syntheticText =
-      `You were forked from workspace "${head.source.workspaceName}" at message ${head.cut.messageId} on `
-      + `${new Date(this.now).toISOString()}. The conversation above happened before the fork. Your files are a copy `
-      + `of that workspace's files as they were when the fork was made, so they can hold work from after that message. `
-      + `Your current tool set and memory are authoritative; ignore any tools or context `
-      + `referenced before the fork that you don't see in your active tool list.`;
-
-    const markerId = `fork-marker-${this.opts.workspaceId.slice(0, 8)}-${this.now}`;
-    this.writeForkMarker({
-      actorId, markerId, position: cut + 1, text: syntheticText, recordedAt: forkPointMs + 1,
-    });
-
-    // Staged files are the fork's now. The transfer row stays to answer re-delivered frames until the next `begin`.
-    this.staging.dropFiles();
-    this.staging.markPublished();
-
-    return forkResultOf(head, staged.staged);
+      return forkResultOf(head, staged.staged);
+    }));
   }
 
   /** The marker as canonical rows, written via SQL because publication is synchronous;

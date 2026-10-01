@@ -2,6 +2,7 @@
  * Durable Object shapes reduced to the platform behaviour each defect turned on:
  * `bun test` has no output gate, input gate, or actor-shutdown cancellation.
  */
+import { Effect } from 'effect';
 import { DurableObject } from 'cloudflare:workers';
 
 export { EvictionProbeDO, WitnessDO } from './eviction-probe';
@@ -428,7 +429,7 @@ export class CacheWarmProbeDO extends DurableObject<Cloudflare.Env> {
       const actor = bindActorHandle(sql, {
         actorId: 'cache-warm-probe', workspaceId: 'ws-probe', parentActorId: null,
         name: 'cache-warm-probe', storageKey: 'agent:cache-warm-probe',
-      }, () => {});
+      }, () => Effect.void);
 
       this.lane = new CacheWarmingLane({
         store: new CacheWarmStore(sql, actor),

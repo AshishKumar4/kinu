@@ -2,6 +2,7 @@
  * A real SlateHost in workerd, reached through `routeShare` over Cap'n Web (batch and socket arms).
  * Also bound as `OrchestratorAgent` because the slate's FILES binding resolves `workspaceOwner(...).slateBindingCallAsWire` by `ctx.id.name`.
  */
+import { Effect } from 'effect';
 import { DurableObject, WorkerEntrypoint } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { newWebSocketRpcSession } from 'capnweb';
@@ -125,7 +126,7 @@ export class SlateShareProbeDO extends DurableObject<Cloudflare.Env> {
       actor: bindActorHandle(this.sql, {
         actorId: 'main', workspaceId: this.ctx.id.name ?? this.ctx.id.toString(),
         parentActorId: null, name: 'main', storageKey: 'main',
-      }, () => {}),
+      }, () => Effect.void),
     });
 
     return this._budget;

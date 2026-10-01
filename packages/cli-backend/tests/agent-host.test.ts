@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { readText, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { REAL_CLOCK } from '@kinu.run/core';
@@ -2045,11 +2046,9 @@ function readHandle(sql: SqlExecutor, actorId: string): ActorHandle {
 
   return bindActorHandle(sql, {
     actorId, workspaceId: row.workspace_id, parentActorId: row.parent_actor_id, name: row.name, storageKey: row.storage_key,
-  }, () => {
-    if (sql<{ x: number }>`SELECT 1 AS x FROM workspace_actors WHERE actor_id = ${actorId} LIMIT 1`.length === 0) {
-      throw new Error('The actor left this workspace mid-read.');
-    }
-  });
+  }, () => (sql<{ x: number }>`SELECT 1 AS x FROM workspace_actors WHERE actor_id = ${actorId} LIMIT 1`.length === 0
+    ? Effect.die(new Error('The actor left this workspace mid-read.'))
+    : Effect.void));
 }
 
 async function userMessages(dbPath: string, actorId?: string): Promise<string[]> {

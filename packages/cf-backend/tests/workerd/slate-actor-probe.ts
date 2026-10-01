@@ -2,6 +2,7 @@
  * Hosted Plan/eval probe: crafted-tool declarations are re-read, not cached,
  * and `plan` mode is refused at the seam `build` is admitted at.
  */
+import { Effect } from 'effect';
 import { Agent } from 'agents';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import type { CraftedTool } from '@kinu.run/core';
@@ -55,7 +56,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
       webSearch: createDefaultWebSearchProvider({ fetch, browser: NO_BROWSER_RUN }), reach: slateToolReach(narrowToolSurface(undefined)),
       browserSessions: NO_BROWSERS,
       rt: {
-        actor: bindActorHandle(sql, { actorId: 'binding-probe', workspaceId: 'binding-probe', parentActorId: null, name: 'binding-probe', storageKey: 'binding-probe' }, () => {}),
+        actor: bindActorHandle(sql, { actorId: 'binding-probe', workspaceId: 'binding-probe', parentActorId: null, name: 'binding-probe', storageKey: 'binding-probe' }, () => Effect.void),
         craftStore: { list: () => [crafted] },
         storage: { vfs: createMemoryVfs().vfs },
       },
@@ -119,7 +120,7 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
         actor: bindActorHandle(sql, {
           actorId: 'mode-probe', workspaceId: 'mode-probe', parentActorId: null,
           name: 'mode-probe', storageKey: 'mode-probe',
-        }, () => {}),
+        }, () => Effect.void),
         craftStore: { list: () => [] },
         executionRouter: { getProviders: () => [{
           name: 'workspace', positionalArgs: true,
