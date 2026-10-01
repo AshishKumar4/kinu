@@ -117,7 +117,7 @@ describe('a run under a deadline', () => {
     const dropped = scratchPath('deadline-escape', 'dropped');
 
     const outcome = await runUnderDeadline({
-      argv: ['sh', '-c', 'mkfifo "$0" && setsid env -i sh -c \'echo > "$0"; exec /bin/sleep 30\' "$0" & read _ < "$0"; exit 0', dropped],
+      argv: ['sh', '-c', 'mkfifo "$0" || exit 1; setsid env -i sh -c \'echo > "$0"; exec /bin/sleep 30\' "$0" & read _ < "$0"; exit 0', dropped],
       seconds: 1, label: 'escaped', stdio: 'pipe',
     });
 
