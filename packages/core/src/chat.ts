@@ -29,7 +29,7 @@ import { sanitizeAttachmentsForModel, type AttachmentPolicy, type MediaModality 
 import { assembleTurnMessages } from './orchestrator/turn-context';
 import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls';
 import type { LostToolCall } from './tools/effect-claim';
-import { contextWindowForModel, type ResolvedModelWindow } from './context-window';
+import { resolveModelWindow } from './context-window';
 import type { CountableRequest, InputTokenCount } from './providers/input-tokens';
 import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
 import type { CompactionTrigger, ExtensionHost } from './extension';
@@ -468,19 +468,6 @@ function suppressDeferredRejections(
   for (const deferred of [result.steps, result.finishReason, result.rawFinishReason, result.totalUsage]) deferred.then(undefined, ignore);
 }
 
-/** The window this turn is admitted against, and its provenance; admission refuses only on a measured window
- *  (orchestrator/turn-context.ts). */
-function turnWindow(opts: ChatOptions): ResolvedModelWindow {
-  const table = contextWindowForModel(opts.modelContext?.id ?? '');
-
-  return {
-    contextWindow: opts.modelContext?.contextWindow ?? table.window,
-    windowMeasured: opts.modelContext?.windowMeasured ?? table.measured,
-    // An unreported allowance reserves nothing (prompting/step-prune.ts).
-    modelOutputLimit: opts.modelContext?.modelOutputLimit ?? null,
-  };
-}
-
 /** Provider prompt-cache plan; marker strategies re-roll tail breakpoints each step. Pass-through without opts.cache. */
 function turnCachePlan(opts: ChatOptions, turnMessages: readonly ModelMessage[]): CacheBreakpointPlan {
   return applyCacheBreakpoints({
@@ -533,7 +520,7 @@ async function admitRequest(opts: ChatOptions) {
   // Extension tools never shadow a caller tool of the same name.
   const tools = traceTools(opts.trace, extensions ? { ...extensions.tools(), ...opts.tools } : opts.tools);
   assertToolsSupportedByModel(opts.modelContext, Object.keys(tools));
-  const window = turnWindow(opts);
+  const window = resolveModelWindow(opts.modelContext?.id ?? '', opts.modelContext ?? null);
   const { contextWindow } = window;
 
   // Shared turn-context assembly (orchestrator/turn-context.ts); cf's beforeTurn runs the same function.
