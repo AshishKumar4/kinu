@@ -1,0 +1,78 @@
+import { CHAT_MESSAGE_TYPES } from 'agents/chat';
+import * as v from 'valibot';
+import type { JsonValue } from '@kinu.run/core';
+
+export const HireRosterSchema = v.array(v.looseObject({ name: v.string(), status: v.picklist(['idle', 'working', 'awaiting_input', 'dismissed']), lifetime: v.string() }));
+
+const FrameSchema = v.looseObject({
+  type: v.string(), id: v.optional(v.string()), body: v.optional(v.string()), done: v.optional(v.boolean()),
+  error: v.optional(v.unknown()), success: v.optional(v.boolean()), result: v.optional(v.unknown()),
+  subordinates: v.optional(HireRosterSchema),
+});
+
+export async function hireSocket(app: Fetcher, path: string, reply: string) {
+  const upgraded = await app.fetch(new Request(`http://localhost${path}`, { headers: { Upgrade: 'websocket' } }));
+  const socket = upgraded.webSocket;
+
+  if (upgraded.status !== 101 || socket === null) throw new Error(`Workspace socket refused: ${upgraded.status}`);
+  const requests = new Map<string, ReturnType<typeof Promise.withResolvers<unknown>>>();
+  const completion = Promise.withResolvers<void>();
+  const replyStreams = new Set<string>();
+  const finished = new Set<string>();
+  let roster: v.InferOutput<typeof HireRosterSchema> = [];
+  let nextId = 0;
+
+  socket.addEventListener('message', (event) => {
+    const raw = v.parse(v.string(), event.data);
+
+    if (!raw.startsWith('{')) return;
+    const parsed = v.safeParse(FrameSchema, JSON.parse(raw));
+
+    if (!parsed.success) return;
+    const frame = parsed.output;
+
+    if (frame.type === 'rpc' && frame.id !== undefined) {
+      const pending = requests.get(frame.id);
+
+      if (frame.success === false) pending?.reject(new Error(JSON.stringify(frame.error)));
+      else if (frame.success === true) pending?.resolve(frame.result);
+    }
+
+    if (frame.type === 'subordinates_changed' && frame.subordinates !== undefined) roster = frame.subordinates;
+
+    if (frame.type === CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE && frame.id !== undefined) {
+      if (frame.error === true) completion.reject(new Error(frame.body ?? 'The product chat turn failed'));
+
+      if (frame.body?.includes(reply)) replyStreams.add(frame.id);
+
+      if (frame.done === true) finished.add(frame.id);
+    }
+
+    if ([...replyStreams].some((id) => finished.has(id)) && roster.some((child) => child.lifetime === 'durable' && child.status !== 'working')) completion.resolve();
+  });
+  socket.addEventListener('close', () => {
+    completion.reject(new Error('Workspace socket closed before its reply and roster completion'));
+
+    for (const request of requests.values()) request.reject(new Error('Workspace socket closed before its RPC reply'));
+  });
+  socket.accept();
+
+  return {
+    async rpc<T>(method: string, args: JsonValue[], schema: v.GenericSchema<T>): Promise<T> {
+      const id = `client-rpc-${nextId++}`;
+      const response = Promise.withResolvers<unknown>();
+
+      requests.set(id, response);
+      socket.send(JSON.stringify({ type: 'rpc', id, method, args }));
+
+      return v.parse(schema, await response.promise);
+    },
+    send(prompt: string) {
+      socket.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST, id: 'hire-msg-client', init: {
+        method: 'POST', body: JSON.stringify({ messages: [{ id: 'hire-msg-input', role: 'user', parts: [{ type: 'text', text: prompt }] }], trigger: 'submit-message' }),
+      } }));
+    },
+    completed: () => completion.promise,
+    close: () => { socket.close(); },
+  };
+}
