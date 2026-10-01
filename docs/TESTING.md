@@ -63,6 +63,16 @@ The ten failures depended on the ambient origin, so they moved between runs. `sc
 
 The preload also assigns a throwaway `KINU_HOME`. `createCLIRuntime` builds its shadow-git checkpoints under `$KINU_HOME/checkpoints`. Before this containment, `mount-plane.test.ts` put ~580 checkpoint stores in the developer's real home.
 
+## Deployment browser flows
+
+`scripts/product-flows-tier.sh` runs Chrome against the deployment as the `scripted` eval account. With `KINU_EVAL_STAGING_WEB_IDENTITY` and `KINU_SCRIPTED_MODEL_KEY` set, run staging's tier with:
+
+```bash
+KINU_EVAL_ORIGIN=https://staging.kinu.run KINU_ORIGIN=https://staging.kinu.run bash scripts/product-flows-tier.sh
+```
+
+The agent-return row opens the chat's Agents control before leaving and again in a fresh page. It learns the current sidebar row's actor id from `data-agent-row` and reads that same row after returning, alongside the agent's tab and conversation. Rename completion and outstanding reads settle before the check; the driver does not wait for the expected name. A missing row or an old name still fails the verdict. API presence alone cannot pass this check (#13).
+
 ## The live tier, which calls a real model
 
 ```bash
