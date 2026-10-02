@@ -1125,6 +1125,8 @@ export {
 
 export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observe';
 
+export { isNimbusTable } from './vfs/nimbus-tables';
+
 export { ensureDir, vfsBasename, vfsDirname } from './utils/vfs-helpers';
 
 export { oneAtATime } from './utils/one-at-a-time';
