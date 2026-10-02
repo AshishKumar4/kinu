@@ -3041,8 +3041,6 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     initWebhookIngressTables(this.ctx.storage.sql);
     initSubordinateRosterTable(this.ctx.storage.sql);
 
-    // Keyed (actor_id, message_id): message ids are minted per actor, so a bare message_id
-    // key would let two actors' thumbs silently overwrite each other.
     // Persisting the paid-for answer between model call and fact mutation makes a replay
     // apply the same update instead of buying another.
     execRaw(`CREATE TABLE IF NOT EXISTS sleep_time_updates (

@@ -18,7 +18,7 @@ import {
 } from '../src/index';
 import { getPendingPromptSection, initPromptSectionTables } from '../src/prompting/section-store';
 import { initAllTables } from '../src/state/workspace-schema';
-import { initLessonTables } from '../src/evolution/outcomes';
+import { initLessonTables } from '../src/evolution/lessons';
 import { initTurnRatingTables } from '../src/evolution/ratings';
 import { initGepaTables } from '../src/evolution/gepa/persistence';
 import type { AgentRuntime } from '../src/types/agent-runtime';

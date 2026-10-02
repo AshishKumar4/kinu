@@ -21,7 +21,7 @@ mockAgentsSdk();
 
 /** The run header and idle owed-work probes remain live; only the tile's slow sections are held. */
 function slowReads(queries: readonly string[]): string[] {
-  return queries.filter((query) => /\b(?:FROM|JOIN)\s+(?:actor_config|agent_facts|crafted_tools|gepa_runs|prompt_section_versions|refinement_requests|replay_evals|scaffold_evaluations|scaffold_versions|turn_outcomes|deferred_approvals|proposed_tasks|plan_reviews|device_consent_requests|slate_pictures|slate_shares|slate_share_users|slate_live_shares|slate_live_share_users)\b/i.test(query)
+  return queries.filter((query) => /\b(?:FROM|JOIN)\s+(?:actor_config|agent_facts|crafted_tools|gepa_runs|prompt_section_versions|refinement_requests|scaffold_evaluations|scaffold_versions|deferred_approvals|proposed_tasks|plan_reviews|device_consent_requests|slate_pictures|slate_shares|slate_share_users|slate_live_shares|slate_live_share_users)\b/i.test(query)
     || query.includes("'scaffold_promotion', 'scaffold_rollback'"));
 }
 

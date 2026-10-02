@@ -7,7 +7,7 @@ import { seedTranscriptEntry, createTestActors } from '@kinu.run/test-utils';
 import { EvolutionEngine } from '../src/evolution/engine';
 import type { EvolutionEvent, CompletedTurn, CompletedSession } from '../src/evolution/types';
 import { DELEGATION_RUBRIC } from '../src/evolution/delegation-features';
-import { listLessons, recordLesson, renderRecentLessons } from '../src/evolution/outcomes';
+import { listLessons, recordLesson, renderRecentLessons } from '../src/evolution/lessons';
 import { listTurnRatings, recordTurnRating } from '../src/evolution/ratings';
 import type { DecisionPort } from '../src/providers/decision-model';
 import type { AgentRuntime } from '../src/types/agent-runtime';
@@ -45,11 +45,11 @@ function ratedAs(rt: AgentRuntime, read: keyof typeof READS) {
   const decide: DecisionPort = async () => {
     calls++;
 
-    return {
+    return { answers: {
       satisfaction: { type: 'score', score: answer.score },
       corrected: { type: 'noul', noul: answer.corrected },
       wrong: { type: 'choice', choice: answer.wrong },
-    };
+    }, usage: { input: 400 } };
   };
 
   rt.decide = decide;
@@ -261,7 +261,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
 
   test('a decision model failure records nothing and fails the review, to be retried', async () => {
     const { rt, stores } = createTestRuntime();
-    rt.decide = async () => ({ satisfaction: { type: 'score', score: 2 } });
+    rt.decide = async () => ({ answers: { satisfaction: { type: 'score', score: 2 } }, usage: {} });
     const engine = new EvolutionEngine(rt, stores.history);
     const turn = makeTurn();
 
@@ -270,7 +270,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
     expect(listTurnRatings(rt.storage.sql, rt.actor)).toHaveLength(0);
   });
 
-  test("a thumb beats the decision model (no model call) and rides the same ledger", async () => {
+  test("a thumb beats the decision model's reading, which the ledger keeps beneath it", async () => {
     let llmCalls = 0;
     const { rt, stores } = createTestRuntime();
     const rated = ratedAs(rt, 'corrected');
@@ -287,7 +287,10 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
     await engine.reviewTurn(turn, 'whatever text — the thumb already decided');
     expect(turn.feedback).toBe('positive');
     expect(listTurnRatings(rt.storage.sql, rt.actor)).toMatchObject([{ turnId: 'msg-1', score: 5, source: 'thumbs' }]);
-    expect(llmCalls + rated.calls()).toBe(0);
+    // The reply is read once; a thumbs-up warrants no reflection.
+    expect({ reflections: llmCalls, readings: rated.calls() }).toEqual({ reflections: 0, readings: 1 });
+    expect(rt.storage.sql<{ source: string }>`SELECT source FROM turn_ratings ORDER BY source`.map((r) => r.source))
+      .toEqual(['model', 'thumbs']);
   });
 
   /**
@@ -322,13 +325,14 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
     // This actor's own rating decides.
     expect(turn.feedback).toBe('positive');
     expect(listTurnRatings(rt.storage.sql, rt.actor)).toMatchObject([{ score: 5, source: 'thumbs' }]);
-    // A thumbs-up needs no model; reading the sibling's row would trigger reflection.
-    expect(llmCalls + rated.calls()).toBe(0);
+    // A thumbs-up warrants no reflection; reading the sibling's row would trigger one.
+    expect(llmCalls).toBe(0);
+    expect(rated.calls()).toBe(1);
     // The sibling's row is untouched.
     expect(listTurnRatings(rt.storage.sql, sibling)).toMatchObject([{ score: 1 }]);
   });
 
-  test('an Alternate Takes pick beats the decision model and its rating survives the review', async () => {
+  test("an Alternate Takes pick beats the decision model's reading and survives the review", async () => {
     let llmCalls = 0;
     const { rt, stores } = createTestRuntime();
     const rated = ratedAs(rt, 'accepted');
@@ -349,7 +353,7 @@ describe('EvolutionEngine.reviewTurn — the rating signal', () => {
     await engine.reviewTurn(turn, 'follow-up that would have read as accepted');
     expect(turn.feedback).toBe('negative');
     expect(listTurnRatings(rt.storage.sql, rt.actor)).toMatchObject([{ source: 'take_pick', score: 2 }]);
-    expect(rated.calls()).toBe(0);
+    expect(rated.calls()).toBe(1);
     expect(llmCalls).toBe(1); // the low rating still warrants the reflection call
   });
 

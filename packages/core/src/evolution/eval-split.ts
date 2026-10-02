@@ -14,10 +14,103 @@ import { conversationTurnPair } from '../identity/conversation-store';
 import type { SessionTranscriptReader } from '../session/transcript';
 import { RunEventRecorder } from '../events/recorder';
 import { parseJsonValue, projectJsonValue, JsonObjectSchema, type JsonValue } from '../utils/json';
-import {
-  type EvalVerdict, type OutcomeEvalInstance, type OutcomeEvalSplit, type OutcomeSplitDegeneracy,
-} from './outcomes';
 import { isHighRating, listTurnRatings, type TurnRating } from './ratings';
+import type { EvalInstance } from './gepa/types';
+import { evidenceWindow } from '../utils/evidence-window';
+import { EVIDENCE_BUDGETS } from '../types/evidence';
+
+/** The two sides of a GEPA split: a turn rated high, or one rated low. */
+export type EvalVerdict = 'accepted' | 'corrected';
+
+export interface OutcomeEvalExpectation {
+  outcome: EvalVerdict;
+  recordedResponse: string;
+  /** The user's follow-up on a ledger-drawn negative, the advisor's note on an
+     *  advisor-drawn one. */
+  followup: string | null;
+  /** Who complained, so the scoring prompt does not tell a judge a user corrected a
+     *  turn no user saw. */
+  critic: 'user' | 'advisor';
+}
+
+export type OutcomeEvalInstance = EvalInstance<string, OutcomeEvalExpectation>;
+
+/**
+ * How every scorer names a negative instance's complaint. The `user` wording is the
+ * sentence the prompts carried before advisor notes existed, byte for byte.
+ */
+const CRITIC_PROSE = {
+  user: { verdict: 'the user had to correct it', complaint: "User's correction" },
+  advisor: {
+    verdict: 'no user ever graded it, and a second model reviewing the turn found this',
+    complaint: "Reviewer's note",
+  },
+} as const satisfies Readonly<
+  Record<OutcomeEvalExpectation['critic'], { verdict: string; complaint: string }>
+>;
+
+/**
+ * The 1.0 / 0.0 sentence a scorer states for each recorded outcome. The rest of
+ * the criterion comes from {@link renderOutcomeCriterion}.
+ */
+export interface OutcomeScoringRule {
+  readonly accepted: string;
+  readonly failed: string;
+}
+
+/** For scorers comparing a fresh response with the recorded one. */
+export const FRESH_RESPONSE_RULE: OutcomeScoringRule = {
+  accepted: 'Score 1.0 when the new response is at least as good, 0.0 when it regresses.',
+  failed: 'Score 1.0 when the new response already addresses the correction, 0.0 when it '
+    + 'repeats the failure.',
+};
+
+export function renderOutcomeCriterion(
+  expected: OutcomeEvalExpectation | undefined,
+  rule: OutcomeScoringRule,
+): string {
+  if (expected && expected.outcome === 'accepted') {
+    return `The agent's response below was ACCEPTED by the user. ${rule.accepted}\n\n`
+      + `Accepted response:\n${evidenceWindow(expected.recordedResponse, EVIDENCE_BUDGETS.replayReferenceResponse)}`;
+  }
+
+  const critic = CRITIC_PROSE[expected?.critic ?? 'user'];
+
+  return `The agent's response below FAILED: ${critic.verdict}. ${rule.failed}\n\n`
+    + `Failed response:\n${evidenceWindow(expected?.recordedResponse ?? '', EVIDENCE_BUDGETS.replayFailedResponse)}\n\n`
+    + `${critic.complaint}:\n${evidenceWindow(expected?.followup ?? '(not recorded)', EVIDENCE_BUDGETS.replayCorrection)}`;
+}
+
+export type OutcomeSplitDegeneracy =
+  | 'no_labeled_turns'
+  /** Only accepted turns exist, so `train` is empty. */
+  | 'no_negatives'
+  /** The single failure must be trained on, leaving nothing unseen to score. */
+  | 'no_held_out_negatives';
+
+export function describeSplitDegeneracy(degeneracy: OutcomeSplitDegeneracy): string {
+  switch (degeneracy) {
+    case 'no_labeled_turns':
+      return 'no outcome-labeled turns yet: chat with the agent first';
+    case 'no_negatives':
+      return 'no low-rated turns yet: there is no failure to optimize toward';
+    case 'no_held_out_negatives':
+      return 'only one labeled failure exists, and the optimizer must train on it: ' +
+        'the winner is selected without any unseen failure, so an improvement here is not evidence of one';
+  }
+}
+
+export interface OutcomeEvalSplit {
+  /** Low-rated turns the optimizer must fix. Shares no instance with `val`. */
+  train: OutcomeEvalInstance[];
+  /** Failures held out of `train` plus accepted turns the optimizer must not regress. */
+  val: OutcomeEvalInstance[];
+  /** Selection is evidence of improvement only when this is > 0. */
+  heldOutNegatives: number;
+  /** Non-null means the caller must not trust the winner. */
+  degeneracy: OutcomeSplitDegeneracy | null;
+}
+
 
 interface StoredRunEvent {
   type: string;

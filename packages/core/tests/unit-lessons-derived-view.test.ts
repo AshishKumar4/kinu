@@ -6,7 +6,7 @@ import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers';
 import { EvolutionEngine } from '../src/evolution/engine';
 import type { CompletedTurn } from '../src/evolution/types';
-import { listLessons, renderRecentLessons } from '../src/evolution/outcomes';
+import { listLessons, renderRecentLessons } from '../src/evolution/lessons';
 import { hasLowRating, listTurnRatings, realRatingScaffoldRates, recordTurnRating } from '../src/evolution/ratings';
 
 function makeTurn(overrides: Partial<CompletedTurn> = {}): CompletedTurn {
@@ -28,10 +28,10 @@ function makeTurn(overrides: Partial<CompletedTurn> = {}): CompletedTurn {
 describe('S5 — the corroborated lessons view survives a MEMORY.md reset', () => {
   test('prompt tail, search and session reflection all derive from the ledger', async () => {
     const { rt, stores } = createTestRuntime({ llmResponses: { 'In one sentence': 'check the cluster name before rotating keys' } });
-    rt.decide = async () => ({
+    rt.decide = async () => ({ answers: {
       satisfaction: { type: 'score', score: 0.5 }, corrected: { type: 'noul', noul: 0.95 },
       wrong: { type: 'choice', choice: 'misunderstood' },
-    });
+    }, usage: {} });
 
     const engine = new EvolutionEngine(rt, stores.history);
 

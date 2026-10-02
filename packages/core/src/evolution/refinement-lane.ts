@@ -19,7 +19,7 @@ import { controlTranscript, proposeMeasuredPromptSection } from './control';
 import { buildOutcomeEvalSplit } from './eval-split';
 import {
   describeSplitDegeneracy,
-} from './outcomes';
+} from './eval-split';
 import { listTurnRatings, type TurnRating } from './ratings';
 import {
   MIN_EDIT_RATIONALE, REFINEMENT_EDIT_KINDS, REFINEMENT_PROPOSAL_EXAMPLE,

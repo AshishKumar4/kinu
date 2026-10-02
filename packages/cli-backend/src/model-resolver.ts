@@ -586,6 +586,16 @@ type CliProviderId =
  * adapter's one table, create path included; a copy missing rows would seed the
  * wrong provider.
  */
+/**
+ * Where a Workers AI call from this CLI goes, as the resolver routes one: the configured endpoint when it serves
+ * Workers AI (`KINU_BASE_URL`, a local gateway, a Cloudflare login, the proxy), else the signed-in worker's proxy.
+ */
+export function workersAiEndpoint(llm: LLMProviderConfig | null, cloud: LocalCloudSession | undefined): AuthResolution | null {
+  if (defaultProviderFor(llm) === 'workers-ai' && llm !== null) return { baseURL: llm.baseURL, headers: llm.headers };
+
+  return cloud === undefined ? null : { baseURL: cloudProxyBaseURL(cloud.origin), headers: { Authorization: `Bearer ${cloud.token}` } };
+}
+
 function defaultProviderFor(llm: LLMProviderConfig | null): CliProviderId | null {
   if (llm === null) return null;
 

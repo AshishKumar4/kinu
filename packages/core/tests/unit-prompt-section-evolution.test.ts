@@ -19,7 +19,7 @@ import { buildSystemPromptSync } from '../src/prompt';
 import { buildChangelog, countUnseenChangelog, executeChangelogRevert } from '../src/evolution/changelog';
 import { initScaffoldTables } from '../src/scaffold/schemas';
 import { initShadowTables } from '../src/scaffold/shadow';
-import { initLessonTables } from '../src/evolution/outcomes';
+import { initLessonTables } from '../src/evolution/lessons';
 import { initTurnRatingTables } from '../src/evolution/ratings';
 import { initRefinementTables } from '../src/evolution/refinement';
 import { initFactsTable, createFactsStore, type FactsStore } from '../src/memory/facts';

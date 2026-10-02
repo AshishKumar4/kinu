@@ -15,7 +15,7 @@ import type { ActorHandle } from '../src/identity/actor-handle';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { RawSqlExec, SqlExec, SqlExecutor } from '../src/types/primitives';
 
-import { initLessonTables, recordLesson, listLessons, getLesson, corroborateLessonsForTurn } from '../src/evolution/outcomes';
+import { initLessonTables, recordLesson, listLessons, getLesson, corroborateLessonsForTurn } from '../src/evolution/lessons';
 import { initTurnRatingTables, listTurnRatings, ratingOf, recordTurnRating } from '../src/evolution/ratings';
 import { initCompletedTurnTable, createCompletedTurnStore } from '../src/evolution/session-window';
 import { initRefinementTables, createRefinementStore } from '../src/evolution/refinement';

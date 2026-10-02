@@ -481,7 +481,7 @@ its own DDL, all of it `IF NOT EXISTS`, all of it run from the same
 | Events hub | `agent_log`, `reply_channels`, `triggers` | `core/src/events/hub/schema.ts` |
 | Run-event log | `run_events` | `core/src/events/recorder.ts` |
 | Turn ratings | `turn_ratings` | `core/src/evolution/ratings.ts` |
-| Lessons | `lessons`, `pattern_extractions` | `core/src/evolution/outcomes.ts` |
+| Lessons | `lessons`, `pattern_extractions` | `core/src/evolution/lessons.ts` |
 | Refinement | `refinement_requests` | `core/src/evolution/refinement.ts` |
 | GEPA | `gepa_runs`, `gepa_candidates` | `core/src/evolution/gepa/persistence.ts` |
 | Branching heads | `head_runs`, `head_journal`, `head_evidence`, `head_steps`, `head_merge_results` | `core/src/heads/schema.ts` |

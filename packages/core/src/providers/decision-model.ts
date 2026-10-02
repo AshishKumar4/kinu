@@ -11,15 +11,23 @@ import { asFetchFunction } from './fetch-shim';
 import { CLOUDFLARE_OAUTH_CRED_KEY } from './cloudflare-oauth';
 import { WORKERS_AI_PROVIDER_ID } from './workers-ai';
 import type { AuthResolver, ProviderWaitInfo } from './types';
-import { KinuError, settle, tolerate } from '../obs/index';
+import { KinuError, settle, tolerate, toKinuError } from '../obs/index';
 import { readJsonObjectText, type JsonObject } from '../utils/json';
 import type { ModelCallSink } from '../events/model-call';
+import type { Usage } from '../usage';
+import type { TierRefusals } from '../types/refusals';
+import { codeForStatus, OWNER_FIXABLE_REFUSALS, providerRefusalCode } from './util';
 import { Effect } from 'effect';
 
 export const DEFAULT_DECISION_MODEL = 'workers-ai/@cf/cloudflare/clef';
 
 /** The decision models a catalog may name. */
 export const DECISION_MODELS = [DEFAULT_DECISION_MODEL, 'workers-ai/@cf/cloudflare/clef-flash'] as const;
+
+export type DecisionModel = (typeof DECISION_MODELS)[number];
+
+/** The notice key a refusing decision model is said under, beside the tiers' (`profiles/tier-refusals.ts`). */
+export const DECISION_REFUSALS = 'decision';
 
 export type DecisionQuestion =
   | { readonly type: 'score'; readonly instructions: string; readonly criteria: string[] }
@@ -42,53 +50,71 @@ export type DecisionAnswer = v.InferOutput<typeof DecisionAnswerSchema>;
 
 export type DecisionAnswers = Readonly<Record<string, DecisionAnswer>>;
 
+/** Measured 2026-10-02 (kinu-logs/evals-fast/clef-satisfaction/binding-2026-10-02): the binding answers
+ *  `{ model, answers, usage }` and REST wraps the same in `result`; both report `input_tokens`. */
 const AnswersSchema = v.object({
   answers: v.record(v.string(), DecisionAnswerSchema),
-  usage: v.optional(v.object({ input_tokens: v.optional(v.number()), output_tokens: v.optional(v.number()) })),
+  usage: v.object({ input_tokens: v.number(), output_tokens: v.number() }),
 });
 
-/** The REST endpoint wraps the answers in `result`; the binding returns them bare. */
 const RunAnswerSchema = v.union([v.object({ result: AnswersSchema }), AnswersSchema]);
 
 /** One decision request on a Workers AI model id (`@cf/cloudflare/clef`), answered as the transport returns it. */
 export type DecisionRun = (modelId: string, body: JsonObject) => Promise<JsonObject>;
 
-/** What a runtime carries: the backend chooses the model and the transport. */
-export type DecisionPort = (request: DecisionRequest) => Promise<DecisionAnswers>;
+export interface DecisionResult {
+  readonly answers: DecisionAnswers;
+  readonly usage: Usage;
+}
 
-/** The model is read per call, so a changed setting applies to the next rating; each answer reports its spend. */
-export function createDecisionPort(run: DecisionRun, model: () => Promise<string>, report: ModelCallSink): DecisionPort {
-  return async (request) => {
-    const spec = await model();
+/** What a runtime carries. Null: the model refused for a reason only the owner can fix, already said to them. */
+export type DecisionPort = (request: DecisionRequest) => Promise<DecisionResult | null>;
+
+/**
+ * The model is read per call, so a changed setting applies to the next rating, and each answer reports its spend.
+ * A refusal only the owner can fix is said once through `refusals` and answers null rather than failing, so nothing
+ * retries it; any other failure throws for the caller's retry.
+ */
+export function createDecisionPort(opts: {
+  readonly run: DecisionRun;
+  readonly model: () => Promise<DecisionModel>;
+  readonly report: ModelCallSink;
+  readonly refusals: TierRefusals;
+}): DecisionPort {
+  return (request) => settle(Effect.gen(function* () {
+    const spec = yield* Effect.promise(() => opts.model());
     const modelId = spec.slice(`${WORKERS_AI_PROVIDER_ID}/`.length);
-    // The System One API names the model again in the body, by its last segment: `clef`, `clef-flash`.
-    const selector = modelId.slice(modelId.lastIndexOf('/') + 1);
-    const raw = await run(modelId, { model: selector, state: request.state, questions: { ...request.questions } });
+    const since = opts.refusals.changes();
+
+    const raw = yield* Effect.tryPromise({
+      try: () => opts.run(modelId, { state: request.state, questions: { ...request.questions } }),
+      catch: (cause) => toKinuError({ doing: `rating a turn with ${spec}`, cause, otherwise: 'unavailable' }),
+    }).pipe(Effect.catch((failure) => OWNER_FIXABLE_REFUSALS.has(providerRefusalCode({ cause: failure }) ?? failure.code)
+      ? Effect.sync(() => {
+        opts.refusals.refused({ tier: DECISION_REFUSALS, since, refusals: [{ model: spec, cause: failure.cause }] });
+
+        return null;
+      })
+      : Effect.fail(failure)));
+
+    if (raw === null) return null;
     const parsed = v.safeParse(RunAnswerSchema, raw);
 
-    if (!parsed.success) {
-      return settle(Effect.fail(new KinuError('unavailable', `${spec} answered without typed answers`)));
-    }
+    if (!parsed.success) return yield* Effect.fail(new KinuError('bad_input', `${spec} answered without typed answers`));
 
-    const { answers, usage } = 'result' in parsed.output ? parsed.output.result : parsed.output;
+    const { answers, usage: reported } = 'result' in parsed.output ? parsed.output.result : parsed.output;
+    const usage = { input: reported.input_tokens, output: reported.output_tokens };
 
-    // The binding reports no usage: a row with `{}` is unmeasured spend, never free.
-    report({
-      source: 'rating', spec,
-      usage: {
-        ...(usage?.input_tokens !== undefined && { input: usage.input_tokens }),
-        ...(usage?.output_tokens !== undefined && { output: usage.output_tokens }),
-      },
-    });
+    opts.report({ source: 'rating', spec, usage });
+    opts.refusals.answered(DECISION_REFUSALS);
     const missing = Object.keys(request.questions).filter((id) => answers[id]?.type !== request.questions[id]?.type);
 
-    if (missing.length > 0) {
-      return settle(Effect.fail(new KinuError('unavailable', `${spec} did not answer ${missing.join(', ')}`)));
-    }
+    if (missing.length > 0) return yield* Effect.fail(new KinuError('bad_input', `${spec} did not answer ${missing.join(', ')}`));
 
-    return answers;
-  };
+    return { answers, usage };
+  }));
 }
+
 
 /** Through the deployment's Workers AI binding, which answers a decision as a whole object. */
 export function bindingDecisionRun(binding: Parameters<typeof createDirectWorkersAIFetch>[0]): DecisionRun {
@@ -149,7 +175,7 @@ export function restDecisionRun(opts: {
     const message = detail.success ? detail.output.error?.message ?? detail.output.errors?.[0]?.message : undefined;
 
     return settle(Effect.fail(new KinuError(
-      res.status === 401 || res.status === 403 ? 'denied' : 'unavailable',
+      codeForStatus(res.status) ?? 'unavailable',
       `${modelId} answered ${res.status}${message ? `: ${message}` : ''}`,
     )));
   };

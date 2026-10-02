@@ -10,7 +10,7 @@ import { effectiveScore } from '../craft/ema';
 import { DEFAULT_CONFIG } from '../config';
 import { isoDate, nowMs } from '../utils/date';
 import { parseJsonValue } from '../utils/json';
-import { getLesson, listLessons } from '../evolution/outcomes';
+import { getLesson, listLessons } from '../evolution/lessons';
 import {
   DEFAULT_SHADOW_CONFIG, decidePromotion, getCurrentScaffoldVersion, readShadowVerdict,
   type ScaffoldStatus,

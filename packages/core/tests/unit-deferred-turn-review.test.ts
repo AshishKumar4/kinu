@@ -7,15 +7,15 @@ import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers';
 import { EvolutionEngine } from '../src/evolution/engine';
 import type { CompletedTurn } from '../src/evolution/types';
-import { listLessons } from '../src/evolution/outcomes';
+import { listLessons } from '../src/evolution/lessons';
 import { listTurnRatings, type TurnRating } from '../src/evolution/ratings';
 import type { DecisionPort } from '../src/providers/decision-model';
 import { MAX_TURN_REVIEWS_PER_OPEN } from '../src/evolution/session-window';
 
 /** A reply read as a correction, as Clef answers one. */
-const CORRECTED: DecisionPort = async () => ({
+const CORRECTED: DecisionPort = async () => ({ answers: {
   satisfaction: { type: 'score', score: 0.4 }, corrected: { type: 'noul', noul: 0.95 }, wrong: { type: 'choice', choice: 'misunderstood' },
-});
+}, usage: {} });
 
 function makeTurn(overrides: Partial<CompletedTurn> = {}): CompletedTurn {
   return {

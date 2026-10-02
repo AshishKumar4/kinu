@@ -41,7 +41,7 @@ import { buildOutcomeEvalSplit } from './eval-split';
 import {
   describeSplitDegeneracy, renderOutcomeCriterion, FRESH_RESPONSE_RULE,
   type OutcomeEvalExpectation, type OutcomeEvalSplit, type OutcomeScoringRule,
-} from './outcomes';
+} from './eval-split';
 import { runScaffoldGepa } from './gepa/scaffold-bridge';
 import {
   runSectionGepa, findPromptSectionTarget, PROMPT_SECTION_TARGETS,

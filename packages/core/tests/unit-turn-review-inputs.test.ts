@@ -5,11 +5,11 @@
 import { describe, test, expect } from 'bun:test';
 import { makeSql, createTestActor, createTestWorkspace } from './helpers';
 import type { ActorHandle } from '../src/identity/actor-handle';
+import { recordLesson, listLessons, corroborateLessonsForTurn } from '../src/evolution/lessons';
 import {
-  isTrivialTurn, blendRealOutcomeRates, describeSplitDegeneracy, recordLesson, listLessons, corroborateLessonsForTurn,
-} from '../src/evolution/outcomes';
-import { realRatingScaffoldRates, recordTurnRating, type RecordTurnRatingInput } from '../src/evolution/ratings';
-import { buildOutcomeEvalSplit } from '../src/evolution/eval-split';
+  blendRealOutcomeRates, isTrivialTurn, realRatingScaffoldRates, recordTurnRating, type RecordTurnRatingInput,
+} from '../src/evolution/ratings';
+import { buildOutcomeEvalSplit, describeSplitDegeneracy } from '../src/evolution/eval-split';
 import { SessionHistory } from '../src/session/history';
 import { CHAT_SESSION_ID } from '../src/session/transcript-schema';
 import type { ScaffoldArchiveEntry } from '../src/scaffold/archive';

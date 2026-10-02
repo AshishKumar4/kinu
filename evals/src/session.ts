@@ -101,6 +101,7 @@ import {
   RunEventSchema, STEER_STEP_METADATA_KEY, parseJsonValue, renderSoulMarkdown, rowText, CommandResultSchema,
   type EvalAccount, type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent,
   type SubordinateInspectionRequest, type WorkspaceSpend,
+  QualityDaySchema, type QualityDay,
 } from '../../packages/core/src/index';
 import { renderThrownChain, tolerate } from '../../packages/core/src/obs/index';
 import { CloudTurnStream, TurnStreams } from '../../packages/cli/src/cloud-turn-stream';
@@ -1747,6 +1748,14 @@ export class KinuPublicSession {
     );
 
     return v.parse(ToolDescriptionsSchema, answer).crafted;
+  }
+
+  /** Satisfaction per day as the Quality tab reads it (`getQuality`): rated turns, by thumbs or the decision model. */
+  async quality(days = 1): Promise<readonly QualityDay[]> {
+    return v.parse(v.array(QualityDaySchema), await this.boundary(
+      `getQuality on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('getQuality', [days]),
+    ));
   }
 
   /** Every agent's plans and tasks, retired agents' included, as the Work tab reads them (`listWorkspaceWork`). */

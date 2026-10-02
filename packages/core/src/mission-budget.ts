@@ -397,16 +397,21 @@ export class MissionGovernor {
     };
   }
 
-  /** The decision model under `govern`'s gate and debit; it writes no text, so its input is the spend. */
+  /** The decision model under `govern`'s gate and debit; it writes no text, so its input is the spend: the tokens
+   *  it reported, or the state and questions estimated. A refused call spent nothing. */
   governDecision(decide: DecisionPort, labels: readonly string[] = this.active): DecisionPort {
     if (labels.length === 0) return decide;
 
     return async (request) => {
       this.admitCall(labels);
-      const answers = await decide(request);
-      this.debit(estimateTokens(request.state.length), { labels, calls: 1 });
+      const result = await decide(request);
 
-      return answers;
+      if (result !== null) {
+        const estimated = estimateTokens(request.state.length + JSON.stringify(request.questions).length);
+        this.debit(result.usage.input ?? estimated, { labels, calls: 1 });
+      }
+
+      return result;
     };
   }
 

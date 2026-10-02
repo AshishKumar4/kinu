@@ -20,7 +20,7 @@ import { initRunEventTables } from '../events/recorder';
 import { initActorClaimTables } from '../orchestrator/actor-claims';
 import { resetGuardedExec } from './store-reset';
 import { initGepaTables } from '../evolution/gepa/persistence';
-import { initLessonTables } from '../evolution/outcomes';
+import { initLessonTables } from '../evolution/lessons';
 import { initTurnRatingTables } from '../evolution/ratings';
 import { initRefinementTables } from '../evolution/refinement';
 import { initImportedExperienceTable } from '../experience/imports';

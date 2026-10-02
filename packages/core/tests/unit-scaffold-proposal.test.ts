@@ -3,7 +3,7 @@ import type { ChatEvent } from '../src/chat';
 // prompt must name that real contract, and a proposal written to it must survive shadow eval.
 import { describe, test, expect } from 'bun:test';
 import { buildScaffoldProposalPrompt, EvolutionEngine } from '../src/evolution/engine';
-import { recordLesson } from '../src/evolution/outcomes';
+import { recordLesson } from '../src/evolution/lessons';
 import { renderScaffoldHandbook } from '../src/evolution/scaffold-handbook';
 import { modifyScaffold } from '../src/scaffold/modify';
 import { initScaffoldTables } from '../src/scaffold/schemas';

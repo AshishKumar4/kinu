@@ -17,7 +17,7 @@ import { initEventsHubTables } from '../src/events/hub/schema';
 import { initRunEventTables } from '../src/events/recorder';
 import { initActorClaimTables } from '../src/orchestrator/actor-claims';
 import { initGepaTables } from '../src/evolution/gepa/persistence';
-import { initLessonTables } from '../src/evolution/outcomes';
+import { initLessonTables } from '../src/evolution/lessons';
 import { initTurnRatingTables } from '../src/evolution/ratings';
 import { initRefinementTables } from '../src/evolution/refinement';
 import { initImportedExperienceTable } from '../src/experience/imports';

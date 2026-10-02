@@ -16,7 +16,7 @@ import {
 } from '../src/evolution/recovery';
 import {
   corroborateLessonsForTurn, initLessonTables, listLessons,
-} from '../src/evolution/outcomes';
+} from '../src/evolution/lessons';
 import { composePrepareStep } from '../src/prompting/prepare-step';
 import {
   DynamicContextLedger, agentDynamicContext, renderDynamicContextBlock,

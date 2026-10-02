@@ -26,10 +26,10 @@ describe('a replayed turn review', () => {
     rt.decide = async () => {
       asked++;
 
-      return {
+      return { answers: {
         satisfaction: { type: 'score', score: 0.5 }, corrected: { type: 'noul', noul: 0.95 },
         wrong: { type: 'choice', choice: 'ignored_instruction' },
-      };
+      }, usage: {} };
     };
 
     const counts = () => ({

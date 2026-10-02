@@ -2,7 +2,7 @@
 // runs under the profile it started with instead of today's catalog.
 
 import * as v from 'valibot';
-import { DEFAULT_DECISION_MODEL } from '../providers/decision-model';
+import { DECISION_MODELS } from '../providers/decision-model';
 
 import { NAMED_SWARM_PRESETS } from '../types/swarm';
 import { REASONING_EFFORTS, type ReasoningEffort } from '../providers/effort';
@@ -72,8 +72,7 @@ const ResolvedTurnProfileSchema = v.strictObject({
     deep: TierSlotSchema,
   }),
   retries: v.number(),
-  /** Absent in snapshots taken before turns were rated. */
-  decisionModel: v.optional(v.string(), DEFAULT_DECISION_MODEL),
+  decisionModel: v.picklist(DECISION_MODELS),
   workMode: v.picklist(['plan', 'build']),
   skills: v.array(v.string()),
   allowedTools: v.array(v.string()),

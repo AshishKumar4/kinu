@@ -549,11 +549,12 @@ export function createCFRuntime(
     get judgeModel() { return profileLane('judge'); },
     get fastLlm() { return profileLane('fast'); },
     ...(resolveTurnProfile !== undefined && {
-      decide: createDecisionPort(
-        decisionRunOf({ env, userDO: userCredentialSourceFor(env, actor) }),
-        async () => (await resolveTurnProfile()).decisionModel,
-        hooks.reportModelCall,
-      ),
+      decide: createDecisionPort({
+        run: decisionRunOf({ env, userDO: userCredentialSourceFor(env, actor) }),
+        model: async () => (await resolveTurnProfile()).decisionModel,
+        report: hooks.reportModelCall,
+        refusals: hooks.refusals,
+      }),
     }),
     executionRouter,
     shell,

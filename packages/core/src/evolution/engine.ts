@@ -19,6 +19,7 @@ import type { LLM } from '../types/primitives';
 import type {
   CompletedTurn,
   CompletedSession,
+  ToolCallRecord,
   EvolutionEvent,
   EvolutionListener,
   EvolutionConfig,
@@ -39,14 +40,12 @@ import {
   ADVISOR_DEDUPE_WINDOW, ADVISOR_EVENT_TYPE, AdvisorRowDataSchema, normalizeNote,
   type AdvisorNote, type AdvisorRowData,
 } from '../advisor/review';
-import {
-  initLessonTables, isTrivialTurn, isPureLookupCall,
-  recordLesson, corroborateLessonsForTurn, renderRecentLessons, blendRealOutcomeRates,
-} from './outcomes';
+import { initLessonTables, recordLesson, corroborateLessonsForTurn, renderRecentLessons } from './lessons';
 import {
   initTurnRatingTables, rateTurn, renderActions, recordTurnRating, ratingOf, listTurnRatings, hasLowRating,
   isLowRating, isHighRating, feedbackOf, ratingQuality, thumbsRating, retractThumbs, realRatingScaffoldRates,
-  type RatingSource, type RatingVerdict, type TurnRating,
+  isTrivialTurn, blendRealOutcomeRates,
+  type RatingVerdict, type TurnRating,
 } from './ratings';
 import type { PathologyInput } from './pathology';
 import type { DecisionPort } from '../providers/decision-model';
@@ -217,6 +216,17 @@ const TURN_REVIEW_STEP_SCOPE = 'turn_review_step';
 
 /** A reply the model reads this surely as a correction is the user's own negative, as a thumbs-down is. */
 const CORROBORATING_CORRECTION = 0.8;
+
+/** The rating the review decides by: the ledger's effective row, or an unkeyed turn's own reading. */
+type EffectiveRating = Pick<TurnRating, 'score' | 'corrected' | 'wrong' | 'source'>;
+
+/** Read-only calls prove nothing about whether the turn's work landed, so the
+ *  pattern extractor skips them. `fact` and `memory` name the same recall. */
+function isPureLookupCall(call: Pick<ToolCallRecord, 'name' | 'args'>): boolean {
+  if (call.name === 'memory') return call.args.action === 'search' || call.args.action === 'recall';
+
+  return call.name === 'fact' && call.args.action === 'recall';
+}
 
 /** A low rating as a pathology cell reads it; the very dissatisfied are its `frustrated`. */
 function pathologyInput(rating: TurnRating): PathologyInput {
@@ -402,13 +412,30 @@ export class EvolutionEngine {
     return (rows[0]?.n ?? 0) > 0;
   }
 
+  private announceReview(turn: CompletedTurn, rating: EffectiveRating | null): void {
+    this.emit({
+      type: 'turn_complete',
+      message: `Turn ${rating === null ? 'unrated' : `rated ${rating.score.toFixed(1)}/5 by ${rating.source}`}` +
+        ` | ${turn.toolCalls.length} tool calls | ${turn.steps} steps | ${turn.hadError ? 'had errors' : 'clean'}`,
+      data: {
+        rated: rating !== null,
+        score: rating?.score ?? null,
+        corrected: rating?.corrected ?? null,
+        wrong: rating?.wrong ?? null,
+        source: rating?.source ?? null,
+        quality: rating === null ? null : ratingQuality(rating.score),
+        toolCount: turn.toolCalls.length, steps: turn.steps, durationMs: turn.durationMs,
+      },
+    });
+  }
+
   /**
      * Rate turn N from the user's follow-up and run turn-level evolution. `followup` null means no
-     * conversational follow-up exists (programmatic wakes, `kinu exec`), so the turn stays unrated. A thumb or a
-     * take pick already recorded wins over the decision model; trivial turns skip it.
+     * conversational follow-up exists (programmatic wakes, `kinu exec`), so only a thumb or pick can rate the
+     * turn. Either wins over the decision model's reading; trivial turns are not reviewed.
      */
   async reviewTurn(turn: CompletedTurn, followup: string | null): Promise<void> {
-    if (!this.config.enabled) return;
+    if (!this.config.enabled || isTrivialTurn(turn)) return;
 
     // Keyed on the turn so a retry after eviction or a later refusal does not repeat the rating writes.
     const gradedKey = turn.turnId === undefined || turn.turnId === '' ? null : turn.turnId;
@@ -418,54 +445,33 @@ export class EvolutionEngine {
     const graded = gradedKey !== null
       && effectAlreadyDone(this.rt.storage.sql, this.rt.actor, TURN_GRADED_SCOPE, gradedKey);
 
-    const recorded = gradedKey === null ? null : ratingOf(this.rt.storage.sql, this.rt.actor, gradedKey);
     const decide = this.reviewDecide(turn);
-    let rating: RatingVerdict | null = null;
-    let source: RatingSource = 'model';
-    // The user's own rating is already in the ledger; adopt it.
-    let preRecorded = false;
 
-    if (graded || (recorded !== null && recorded.source !== 'model')) {
-      rating = recorded;
-      source = recorded?.source ?? 'model';
-      preRecorded = true;
-    } else if (isTrivialTurn(turn)) {
-      return;
-    } else if (followup !== null && decide !== undefined) {
-      rating = await rateTurn(decide, {
-        request: turn.userMessage, actions: renderActions(turn.toolCalls), answer: turn.assistantResponse, followup,
-      }, turn.toolCalls.length);
-    }
+    // An answered turn's reading is recorded even under a thumb: the ledger's precedence decides which rating
+    // counts, so a thumb cleared later falls back to it.
+    const reading = graded || followup === null || decide === undefined ? null : await rateTurn(decide, {
+      request: turn.userMessage, actions: renderActions(turn.toolCalls), answer: turn.assistantResponse, followup,
+    }, turn.toolCalls.length);
 
-    const quality = rating === null ? null : ratingQuality(rating.score);
+    const effective = (): EffectiveRating | null => {
+      if (gradedKey !== null) return ratingOf(this.rt.storage.sql, this.rt.actor, gradedKey);
+
+      return reading === null ? null : { ...reading, source: 'model' };
+    };
 
     // Crafted tools are codemode-only, so they come from the turn record, not from the non-builtin tool names.
     const craftedToolNames = turn.craftedToolsUsed ?? [];
 
-    // Announced once, last inside the commit, so a death cannot replay the writes.
-    const announce = (): void => { if (!graded) this.emit({
-      type: 'turn_complete',
-      message: `Turn ${rating === null ? 'unrated' : `rated ${rating.score.toFixed(1)}/5 by ${source}`}` +
-        ` | ${turn.toolCalls.length} tool calls | ${turn.steps} steps | ${turn.hadError ? 'had errors' : 'clean'}`,
-      data: {
-        rated: rating !== null,
-        score: rating?.score ?? null,
-        corrected: rating?.corrected ?? null,
-        wrong: rating?.wrong ?? null,
-        source: rating === null ? null : source,
-        quality,
-        toolCount: turn.toolCalls.length, steps: turn.steps, durationMs: turn.durationMs,
-      },
-    }); };
-
     // One commit for the rating row, craft scores, tombstone and announcement: a synchronous run is atomic
-    // inside a Durable Object but not against a CLI kill.
+    // inside a Durable Object but not against a CLI kill. Announced last, so a death cannot replay the writes.
     this.commit(() => {
-      if (rating !== null && gradedKey !== null && !preRecorded) {
+      if (graded) return;
+
+      if (reading !== null && gradedKey !== null) {
         recordTurnRating(this.rt.storage.sql, this.rt.actor, {
-          ...rating,
+          ...reading,
           turnId: gradedKey,
-          source,
+          source: 'model',
           request: turn.userMessage,
           actions: renderActions(turn.toolCalls),
           answer: turn.assistantResponse,
@@ -474,17 +480,21 @@ export class EvolutionEngine {
         });
       }
 
+      const rated = effective();
+
       // A failed EMA write silences the retirement signal, so it is not swallowed.
-      if (quality !== null && craftedToolNames.length > 0 && !graded) {
-        updateCraftScores(this.rt.storage.sql, craftedToolNames, quality);
+      if (rated !== null && craftedToolNames.length > 0) {
+        updateCraftScores(this.rt.storage.sql, craftedToolNames, ratingQuality(rated.score));
       }
 
-      if (gradedKey !== null && !graded) {
+      if (gradedKey !== null) {
         recordEffectDone(this.rt.storage.sql, this.rt.actor, { scope: TURN_GRADED_SCOPE, key: gradedKey });
       }
 
-      announce();
+      this.announceReview(turn, rated);
     });
+
+    const rating = effective();
 
     if (rating === null) return;
 
@@ -494,7 +504,7 @@ export class EvolutionEngine {
 
     // Only the user's own negative corroborates provisional lessons: a thumb, a pick, or a reply the model reads
     // as a clear correction.
-    const corroborated = low && (source !== 'model' || rating.corrected >= CORROBORATING_CORRECTION);
+    const corroborated = low && (rating.source !== 'model' || rating.corrected >= CORROBORATING_CORRECTION);
 
     if (corroborated) this.corroborateLessons(turn.turnId);
 

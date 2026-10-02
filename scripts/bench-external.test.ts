@@ -51,8 +51,6 @@ interface TrialSpec {
   ratedTurns?: number;
   byThumbs?: number;
   turnsReviewed?: number;
-  /** Historical metadata carries execution grades, not human ratings. */
-  legacyGrading?: number;
   turnsCompleted?: number;
   promptTokens?: number;
   outputTokens?: number;
@@ -85,7 +83,7 @@ function job(name: string, trials: readonly TrialSpec[]): string {
     };
 
     // Shaped as bench/harbor/kinu_agent.py writes it: an unreadable rating probe
-    // is null, not zeroed. Historical results omit turn_ratings entirely.
+    // is null, not zeroed.
     const metadata = {
       evolve: spec.evolve,
       usage_complete: !spec.noUsage && !spec.partialUsage,
@@ -93,10 +91,7 @@ function job(name: string, trials: readonly TrialSpec[]): string {
       evolution_events: event('reflection', spec.evolutionEvents ?? 0),
       activity_events: event('bg_job_started', spec.activityEvents ?? spec.evolutionEvents ?? 0),
       turns_completed: spec.turnsCompleted ?? 1,
-      turn_ratings: spec.legacyGrading === undefined ? turnRatings : undefined,
-      turn_grading: spec.legacyGrading === undefined ? undefined : {
-        user_graded: 0, execution_graded: spec.legacyGrading, abandoned: 0,
-      },
+      turn_ratings: turnRatings,
     };
 
     // A trial with no usage at all carries the metadata and nothing else.
@@ -188,17 +183,6 @@ describe('readHarborJob', () => {
     expect(arm.trials[0]?.ratedTurns).toBe(0);
     expect(armSpend(arm).ratedTurns).toBe(0);
     expect(armSpend(arm).ratingUnreported).toBe(0);
-  });
-
-  test('old execution grades still parse but are not human ratings', () => {
-    const arm = readHarborJob(job('historical', [
-      { task: 'alpha', reward: 1, evolve: true, legacyGrading: 2 },
-    ]));
-
-    expect(arm.trials[0]?.reward).toBe(1);
-    expect(arm.trials[0]?.ratedTurns).toBeNull();
-    expect(armSpend(arm).ratedTurns).toBeNull();
-    expect(armSpend(arm).ratingUnreported).toBe(1);
   });
 
   test('job-level bookkeeping is not counted as a trial', () => {

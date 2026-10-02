@@ -23,11 +23,11 @@ function turn(overrides: Partial<CompletedTurn> = {}): CompletedTurn {
 
 /** Answers as Clef does, 0-based on the score's criteria. */
 function decide(score: number, corrected: number, wrong: string): DecisionPort {
-  return async () => ({
+  return async () => ({ answers: {
     satisfaction: { type: 'score', score },
     corrected: { type: 'noul', noul: corrected },
     wrong: { type: 'choice', choice: wrong },
-  });
+  }, usage: {} });
 }
 
 describe('a turn is judged by the user reply alone', () => {

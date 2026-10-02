@@ -1,6 +1,7 @@
 /**
  * The rating ledger: a thumb or a pick wins over the decision model, a cleared thumb falls back, and the quality
- * series reads satisfaction per day. The decision model's transports read Clef's answers in both shapes.
+ * series reads satisfaction per day. The decision model reads Clef's measured answers on both transports, and a
+ * refusal only the owner can fix is said once and retried by nothing.
  */
 import { describe, expect, test } from 'bun:test';
 import { EvolutionEngine } from '../src/evolution/engine';
@@ -11,6 +12,11 @@ import {
 import {
   createDecisionPort, restDecisionRun, type DecisionAnswers, type DecisionPort, type DecisionQuestion,
 } from '../src/providers/decision-model';
+import { tierRefusals } from '../src/profiles/tier-refusals';
+import { readActivityLog } from '../src/identity/activity-log';
+import { KinuError } from '../src/obs/error';
+import { CLEF_BINDING_ANSWER } from './fixtures/clef-binding-answer';
+import type { AgentRuntime } from '../src/types/agent-runtime';
 import { asFetchFunction } from '../src/providers/fetch-shim';
 import { requestUrl } from '../src/http/http';
 import type { ModelCallReport } from '../src/events/model-call';
@@ -45,7 +51,19 @@ function turn(): CompletedTurn {
 }
 
 function decide(answers: DecisionAnswers): DecisionPort {
-  return async () => answers;
+  return async () => ({ answers, usage: {} });
+}
+
+/** Refusal notices over the runtime's own config and activity log, as both backends build them. */
+function noticesOf(rt: AgentRuntime) {
+  const refusals = tierRefusals({
+    sql: rt.storage.sql, actor: rt.actor, config: rt.actor.config, now: () => 1, settings: 'Settings → Models', changes: () => 0,
+  });
+
+  return {
+    refusals,
+    said: () => readActivityLog(rt.storage.sql, rt.actor, 10).filter((row) => row.event === 'model_tier_refused').map((row) => row.detail),
+  };
 }
 
 const LOW: DecisionAnswers = {
@@ -70,23 +88,26 @@ describe('the rating ledger', () => {
     expect(listThumbs(rt.storage.sql, rt.actor).size).toBe(0);
   });
 
-  test('a thumb recorded before the reply is adopted without asking the model', async () => {
+  test('a reply under a thumb is still read, so clearing the thumb leaves the turn rated', async () => {
     const { rt, stores } = createTestRuntime();
     let asked = 0;
 
     rt.decide = async () => {
       asked++;
 
-      return LOW;
+      return { answers: LOW, usage: {} };
     };
 
     const engine = new EvolutionEngine(rt, stores.history);
 
     await engine.applyExplicitFeedback('u-1', 'negative');
-    await engine.reviewTurn(turn(), 'whatever');
+    await engine.reviewTurn(turn(), 'No, CSV. I said CSV.');
 
-    expect(asked).toBe(0);
-    expect(listTurnRatings(rt.storage.sql, rt.actor).map((rating) => [rating.source, rating.score])).toEqual([['thumbs', 1]]);
+    expect(asked).toBe(1);
+    expect(ratingOf(rt.storage.sql, rt.actor, 'u-1')).toMatchObject({ source: 'thumbs', score: 1 });
+
+    await engine.applyExplicitFeedback('u-1', null);
+    expect(ratingOf(rt.storage.sql, rt.actor, 'u-1')).toMatchObject({ source: 'model', score: 1.3 });
   });
 
   test('without a decision model, an answered turn stays unrated', async () => {
@@ -130,38 +151,85 @@ describe('the rating ledger', () => {
 });
 
 describe('the decision model', () => {
-  test("reads Clef's REST answer and the binding's bare one alike, and reports each call's spend", async () => {
+  const clef = async () => 'workers-ai/@cf/cloudflare/clef' as const;
+
+  test("reads Clef's measured answer from the binding and from REST alike, and reports the tokens each counted", async () => {
     const spent: ModelCallReport[] = [];
     const report = (call: ModelCallReport) => { spent.push(call); };
 
-    const { usage: _usage, ...bare } = CLEF_REST_ANSWER.result;
-    const rest = createDecisionPort(async () => CLEF_REST_ANSWER, async () => 'workers-ai/@cf/cloudflare/clef', report);
-    const binding = createDecisionPort(async () => bare, async () => 'workers-ai/@cf/cloudflare/clef', report);
+    const { refusals } = noticesOf(createTestRuntime().rt);
+    const binding = createDecisionPort({ run: async () => ({ ...CLEF_BINDING_ANSWER }), model: clef, report, refusals });
+    const rest = createDecisionPort({ run: async () => CLEF_REST_ANSWER, model: clef, report, refusals });
 
-    for (const port of [rest, binding]) {
-      expect(await port({ state: 's', questions: QUESTIONS })).toMatchObject({
-        satisfaction: { type: 'score', score: 0.3393 }, corrected: { type: 'noul', noul: 0.9704 }, wrong: { choice: 'misunderstood' },
-      });
-    }
-
-    // The binding reports no usage, so its row is unmeasured rather than free.
+    expect(await binding({ state: 's', questions: QUESTIONS })).toMatchObject({
+      answers: { satisfaction: { type: 'score', score: 0.5407 }, corrected: { noul: 0.9722 }, wrong: { choice: 'misunderstood' } },
+      usage: { input: 406, output: 0 },
+    });
+    expect(await rest({ state: 's', questions: QUESTIONS })).toMatchObject({
+      answers: { satisfaction: { score: 0.3393 } }, usage: { input: 1802, output: 0 },
+    });
     expect(spent).toEqual([
+      { source: 'rating', spec: 'workers-ai/@cf/cloudflare/clef', usage: { input: 406, output: 0 } },
       { source: 'rating', spec: 'workers-ai/@cf/cloudflare/clef', usage: { input: 1802, output: 0 } },
-      { source: 'rating', spec: 'workers-ai/@cf/cloudflare/clef', usage: {} },
     ]);
   });
 
-  test('names the model by its selector in the body, and refuses an answer that skips a question', async () => {
+  test('sends the state and questions only, and refuses an answer that skips a question', async () => {
     const bodies: unknown[] = [];
 
-    const port = createDecisionPort(async (modelId, body) => {
-      bodies.push({ modelId, model: body.model });
+    const port = createDecisionPort({
+      run: async (modelId, body) => {
+        bodies.push({ modelId, keys: Object.keys(body) });
 
-      return { answers: { satisfaction: { type: 'score', score: 1 } } };
-    }, async () => 'workers-ai/@cf/cloudflare/clef-flash', () => {});
+        return { answers: { satisfaction: { type: 'score', score: 1 } }, usage: { input_tokens: 9, output_tokens: 0 } };
+      },
+      model: async () => 'workers-ai/@cf/cloudflare/clef-flash',
+      report: () => {},
+      refusals: noticesOf(createTestRuntime().rt).refusals,
+    });
 
     await expect(port({ state: 's', questions: QUESTIONS })).rejects.toThrow('did not answer corrected, wrong');
-    expect(bodies).toEqual([{ modelId: '@cf/cloudflare/clef-flash', model: 'clef-flash' }]);
+    expect(bodies).toEqual([{ modelId: '@cf/cloudflare/clef-flash', keys: ['state', 'questions'] }]);
+  });
+
+  test('a refusal only the owner can fix is said once, leaves the turn unrated, and fails no review', async () => {
+    const { rt, stores } = createTestRuntime();
+    const { refusals, said } = noticesOf(rt);
+    let asked = 0;
+
+    rt.decide = createDecisionPort({
+      run: async () => {
+        asked++;
+
+        throw new KinuError('denied', '@cf/cloudflare/clef answered 403: Authentication error');
+      },
+      model: clef,
+      report: () => {},
+      refusals,
+    });
+
+    const engine = new EvolutionEngine(rt, stores.history);
+    await engine.reviewTurn(turn(), 'No, CSV.');
+    await engine.reviewTurn({ ...turn(), turnId: 'u-2' }, 'Still JSON.');
+
+    expect(asked).toBe(2);
+    expect(listTurnRatings(rt.storage.sql, rt.actor)).toEqual([]);
+    expect(said()).toEqual(['Your decision model is refusing requests. workers-ai/@cf/cloudflare/clef: '
+      + '@cf/cloudflare/clef answered 403: Authentication error. Change it in Settings → Models.']);
+  });
+
+  test('a failure that may pass fails the review, for its retry', async () => {
+    const { rt, stores } = createTestRuntime();
+
+    rt.decide = createDecisionPort({
+      run: async () => { throw new KinuError('unavailable', '@cf/cloudflare/clef answered 503'); },
+      model: clef,
+      report: () => {},
+      refusals: noticesOf(rt).refusals,
+    });
+
+    await expect(new EvolutionEngine(rt, stores.history).reviewTurn(turn(), 'No, CSV.'))
+      .rejects.toMatchObject({ code: 'unavailable', cause: { message: '@cf/cloudflare/clef answered 503' } });
   });
 
   test("runs at `/ai/run` beside the credential's `/ai/v1`, on Cloudflare and through the worker alike", async () => {
@@ -180,17 +248,19 @@ describe('the decision model', () => {
         }),
       });
 
-      expect(await run('@cf/cloudflare/clef', { model: 'clef', state: 's', questions: {} })).toEqual(CLEF_REST_ANSWER);
+      expect(await run('@cf/cloudflare/clef', { state: 's', questions: {} })).toEqual(CLEF_REST_ANSWER);
       expect(seen).toEqual([{ url: expected, auth: 'Bearer t' }]);
     }
   });
 
-  test("a refusal carries the provider's own words", async () => {
-    const run = restDecisionRun({
+  test("a refusal carries the provider's own words and the status's code", async () => {
+    const run = (status: number) => restDecisionRun({
       getAuth: async () => ({ baseURL: 'https://kinu.run/api/user/ai/v1', headers: {} }),
-      fetch: asFetchFunction(async () => Response.json({ errors: [{ message: 'Rate limited' }] }, { status: 400 })),
-    });
+      fetch: asFetchFunction(async () => Response.json({ errors: [{ message: 'No' }] }, { status })),
+    })('@cf/cloudflare/clef', {});
 
-    await expect(run('@cf/cloudflare/clef', {})).rejects.toThrow('@cf/cloudflare/clef answered 400: Rate limited');
+    await expect(run(400)).rejects.toThrow('@cf/cloudflare/clef answered 400: No');
+    await expect(run(403)).rejects.toMatchObject({ code: 'denied' });
+    await expect(run(402)).rejects.toMatchObject({ code: 'denied' });
   });
 });

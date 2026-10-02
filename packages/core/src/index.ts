@@ -171,21 +171,22 @@ export { QualityDaySchema, type QualityDay } from './types/quality';
 export {
   RATING_SOURCES, rateTurn, renderActions, initTurnRatingTables, recordTurnRating,
   listTurnRatings, ratingOf, hasLowRating, isLowRating, isHighRating, ratingQuality, thumbsRating, takePickRating,
-  retractThumbs, listThumbs, satisfactionInterval, qualitySeries, renderQualitySeries,
+  retractThumbs, listThumbs, satisfactionInterval, qualitySeries, renderQualitySeries, isTrivialTurn,
+  blendRealOutcomeRates, type RealOutcomeRate,
   type RatingSource, type WrongReason, type RatingVerdict, type TurnRating, type RatingQuery,
   type RecordTurnRatingInput,
 } from './evolution/ratings';
 
-// Lessons and the turn shapes the review reads.
 export {
-  isTrivialTurn, blendRealOutcomeRates, describeSplitDegeneracy,
-  recordLesson, listLessons, corroborateLessonsForTurn, isPureLookupCall, initLessonTables,
-  type OutcomeEvalExpectation, type OutcomeEvalInstance, type OutcomeEvalSplit, type EvalVerdict,
-  type OutcomeSplitDegeneracy,
-  type LessonRow, type LessonSource, type LessonStatus, type RealOutcomeRate,
-} from './evolution/outcomes';
+  recordLesson, listLessons, corroborateLessonsForTurn, initLessonTables,
+  type LessonRow, type LessonSource, type LessonStatus,
+} from './evolution/lessons';
 
-export { buildOutcomeEvalSplit, type AdvisorNegativeRow } from './evolution/eval-split';
+export {
+  buildOutcomeEvalSplit, describeSplitDegeneracy,
+  type AdvisorNegativeRow, type OutcomeEvalExpectation, type OutcomeEvalInstance, type OutcomeEvalSplit,
+  type EvalVerdict, type OutcomeSplitDegeneracy,
+} from './evolution/eval-split';
 
 export {
   recordRecoveryFinding, listRecoveryFindings, recoveryFindingText,
@@ -1681,7 +1682,9 @@ export { activeOperationProfile, captureOperationProfile, currentOperationProfil
 
 export { completeOnRoute, createRoutedModelLane, routedCallOptions } from './profiles/model-lane';
 
-export { tierRefusals, type TierRefusals } from './profiles/tier-refusals';
+export { tierRefusals } from './profiles/tier-refusals';
+
+export type { TierRefusals } from './types/refusals';
 
 export {
   BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob, type SwarmHarvestDeps,

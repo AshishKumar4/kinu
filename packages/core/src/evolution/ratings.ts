@@ -8,7 +8,7 @@ import * as v from 'valibot';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
-import type { ToolCallRecord } from './types';
+import type { CompletedTurn, ToolCallRecord } from './types';
 import type { DecisionPort, DecisionQuestion } from '../providers/decision-model';
 import { evidenceWindow } from '../utils/evidence-window';
 import { EVIDENCE_BUDGETS } from '../types/evidence';
@@ -19,7 +19,51 @@ import { scoreInterval, wilsonInterval, type ScoreInterval } from '../utils/stat
 import { KinuError, settle } from '../obs/index';
 import type { QualityDay } from '../types/quality';
 import { Effect } from 'effect';
-import type { RealOutcomeRate } from './outcomes';
+import type { ScaffoldArchiveEntry } from '../scaffold/archive';
+
+const TRIVIAL_MESSAGE = new RegExp(
+  '^\\s*(hi|hiya|hey|hello|yo|sup|thanks?|thank you|thx|ty|ok(ay)?|k|kk|cool|nice|great|awesome|perfect|' +
+  'good (morning|afternoon|evening|night)|gm|gn|bye|goodbye|see ya|cya|lol|haha)[\\s!.\\u2026]*$',
+  'i',
+);
+
+/** A trivial turn is not rated: it ran no tools and the user message is a stock
+ *  pleasantry or too short to be a real request. */
+export function isTrivialTurn(turn: Pick<CompletedTurn, 'userMessage' | 'toolCalls'>): boolean {
+  if (turn.toolCalls.length > 0) return false;
+  const msg = turn.userMessage.trim();
+
+  if (TRIVIAL_MESSAGE.test(msg)) return true;
+
+  return msg.length < 12 && !msg.includes('?');
+}
+
+/** High and low ratings per scaffold version, the archive's real-use evidence. */
+export interface RealOutcomeRate {
+  accepted: number;
+  negative: number;
+}
+
+/** Blends rated outcomes into archive win-rates and trials for branch-base
+ *  selection. Pure; never mutates. */
+export function blendRealOutcomeRates(
+  archive: ReadonlyArray<ScaffoldArchiveEntry>,
+  rates: ReadonlyMap<number, RealOutcomeRate>,
+): ScaffoldArchiveEntry[] {
+  return archive.map((e) => {
+    const real = rates.get(e.version);
+    const realDecisive = real ? real.accepted + real.negative : 0;
+
+    if (!real || realDecisive === 0) return e;
+    const shadowDecisive = e.wins + e.losses;
+
+    return {
+      ...e,
+      trials: e.trials + realDecisive,
+      winRate: (e.wins + real.accepted) / (shadowDecisive + realDecisive),
+    };
+  });
+}
 
 /** Strongest first; the effective rating of a turn is its strongest source's newest row. */
 export const RATING_SOURCES = ['thumbs', 'take_pick', 'model'] as const;
@@ -89,14 +133,18 @@ export interface TurnRating extends RatingVerdict {
   readonly createdAt: number;
 }
 
-/** Rounds to 2 or lower: the user corrected, repeated or gave up. */
+/** Below this a rating rounds to 2 or lower: the user corrected, repeated or gave up. */
+const LOW_BELOW = 2.5;
+
+/** From this a rating rounds to 4 or 5: the user built on the turn or approved it. */
+const HIGH_FROM = 3.5;
+
 export function isLowRating(score: number): boolean {
-  return Math.round(score) <= 2;
+  return score < LOW_BELOW;
 }
 
-/** Rounds to 4 or 5: the user built on the turn or approved it. */
 export function isHighRating(score: number): boolean {
-  return Math.round(score) >= 4;
+  return score >= HIGH_FROM;
 }
 
 /** The turn's feedback as the review hands it on: a neutral rating is none. */
@@ -176,13 +224,19 @@ function renderState(turn: RatedTurnInput, calls: number): string {
   ].join('\n\n');
 }
 
-/** The decision model's rating of one answered turn. Its `score` is 0-based; the scale here is 1-5. */
-export async function rateTurn(decide: DecisionPort, turn: RatedTurnInput, calls: number): Promise<RatingVerdict> {
-  const { satisfaction, corrected, wrong } = await decide({ state: renderState(turn, calls), questions: RATING_QUESTIONS });
+/**
+ * The decision model's rating of one answered turn; its `score` is 0-based, the scale here 1-5. Null when the model
+ * refused for a reason only the owner can fix: the turn stays unrated and nothing retries it.
+ */
+export async function rateTurn(decide: DecisionPort, turn: RatedTurnInput, calls: number): Promise<RatingVerdict | null> {
+  const result = await decide({ state: renderState(turn, calls), questions: RATING_QUESTIONS });
+
+  if (result === null) return null;
+  const { satisfaction, corrected, wrong } = result.answers;
   const reason = wrong?.type === 'choice' ? WRONG_REASONS.find((r) => r === wrong.choice) : undefined;
 
   if (satisfaction?.type !== 'score' || corrected?.type !== 'noul' || reason === undefined) {
-    return settle(Effect.fail(new KinuError('unavailable', 'the decision model left a rating question unanswered')));
+    return settle(Effect.fail(new KinuError('bad_input', 'the decision model left a rating question unanswered')));
   }
 
   return {
@@ -265,40 +319,51 @@ function toRating(row: RawRatingRow): TurnRating {
 export interface RatingQuery {
   /** Newest first; unbounded when absent. */
   readonly limit?: number;
+  /** These turns' ratings, whenever made; `since` bounds only a window. */
   readonly turnIds?: readonly string[];
   readonly since?: number;
   readonly low?: boolean;
   readonly high?: boolean;
 }
 
-/** One effective rating per turn, newest first: the strongest source's newest row. */
+/**
+ * One effective rating per turn, newest first: the row no stronger source and no newer row of its source outranks
+ * (`RATING_SOURCES`). Turn ids lead the join so each probes `idx_turn_ratings_actor_turn`; a window walks
+ * `idx_turn_ratings_actor` in order and stops at the limit.
+ */
 export function listTurnRatings(sql: SqlExecutor, actor: ActorHandle, query: RatingQuery = {}): TurnRating[] {
   actor.assertCurrent();
+  const [p0, p1] = RATING_SOURCES;
+  // Unfiltered bounds sit outside the 1-5 scale.
+  const below = query.low === true ? LOW_BELOW : 6;
+  const from = query.high === true ? HIGH_FROM : 0;
+  const limit = query.limit ?? -1;
 
-  const rows = sql<RawRatingRow>`
-    SELECT * FROM turn_ratings
-    WHERE actor_id = ${actor.actorId} AND created_at >= ${query.since ?? 0}
-    ORDER BY created_at DESC, rowid DESC`;
+  const rows = query.turnIds === undefined
+    ? sql<RawRatingRow>`
+      SELECT r.* FROM turn_ratings r
+      WHERE r.actor_id = ${actor.actorId} AND r.created_at >= ${query.since ?? 0}
+        AND r.score < ${below} AND r.score >= ${from}
+        AND NOT EXISTS (SELECT 1 FROM turn_ratings s
+          WHERE s.actor_id = r.actor_id AND s.turn_id = r.turn_id AND s.rowid != r.rowid
+            AND (CASE s.source WHEN ${p0} THEN 0 WHEN ${p1} THEN 1 ELSE 2 END
+                   < CASE r.source WHEN ${p0} THEN 0 WHEN ${p1} THEN 1 ELSE 2 END
+              OR (s.source = r.source AND (s.created_at > r.created_at
+                OR (s.created_at = r.created_at AND s.rowid > r.rowid)))))
+      ORDER BY r.created_at DESC, r.id DESC LIMIT ${limit}`
+    : sql<RawRatingRow>`
+      SELECT r.* FROM json_each(${JSON.stringify([...new Set(query.turnIds)])}) AS wanted CROSS JOIN turn_ratings r
+      WHERE r.actor_id = ${actor.actorId} AND r.turn_id = wanted.value
+        AND r.score < ${below} AND r.score >= ${from}
+        AND NOT EXISTS (SELECT 1 FROM turn_ratings s
+          WHERE s.actor_id = r.actor_id AND s.turn_id = r.turn_id AND s.rowid != r.rowid
+            AND (CASE s.source WHEN ${p0} THEN 0 WHEN ${p1} THEN 1 ELSE 2 END
+                   < CASE r.source WHEN ${p0} THEN 0 WHEN ${p1} THEN 1 ELSE 2 END
+              OR (s.source = r.source AND (s.created_at > r.created_at
+                OR (s.created_at = r.created_at AND s.rowid > r.rowid)))))
+      ORDER BY r.created_at DESC, r.id DESC LIMIT ${limit}`;
 
-  const effective = new Map<string, RawRatingRow>();
-  const rank = (row: RawRatingRow): number => RATING_SOURCES.indexOf(row.source);
-
-  for (const row of rows) {
-    const held = effective.get(row.turn_id);
-
-    if (held === undefined || rank(row) < rank(held)) effective.set(row.turn_id, row);
-  }
-
-  const wanted = query.turnIds === undefined ? null : new Set(query.turnIds);
-
-  const ratings = [...effective.values()]
-    .sort((a, b) => b.created_at - a.created_at || b.id.localeCompare(a.id))
-    .map(toRating)
-    .filter((rating) => (wanted === null || wanted.has(rating.turnId))
-    && (query.low !== true || isLowRating(rating.score))
-    && (query.high !== true || isHighRating(rating.score)));
-
-  return query.limit === undefined ? ratings : ratings.slice(0, query.limit);
+  return rows.map(toRating);
 }
 
 export function ratingOf(sql: SqlExecutor, actor: ActorHandle, turnId: string): TurnRating | null {

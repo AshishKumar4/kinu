@@ -66,7 +66,6 @@ const TrialSchema = v.object({
       // Ratings come only from a person's reply or explicit thumb/take pick,
       // never a tool exit. `null` is missing probe evidence, not measured zeros;
       // a headless trial with no reactive user normally reports rated=0.
-      // Older results carrying only turn_grading remain parseable but unreported.
       turn_ratings: v.optional(v.nullable(v.object({
         rated: FiniteCount,
         by_thumbs: FiniteCount,
@@ -238,8 +237,8 @@ export interface ArmSpend {
   ratedTurns: number | null;
   /** Completed turns over trials that reported them; missing is not zero. */
   turnsCompleted: number | null;
-  /** Attempts whose rating probe produced no readable answer, including old
-   *  results that carry only turn_grading and attempts with no result file. */
+  /** Attempts whose rating probe produced no readable answer, including attempts
+   *  with no result file. */
   ratingUnreported: number;
   /** Missing or partial usage, including attempts that produced no result file. */
   spendUnreported: number;

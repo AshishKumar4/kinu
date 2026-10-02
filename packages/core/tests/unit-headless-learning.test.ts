@@ -9,7 +9,7 @@ import { hostedSeatsOver } from './helpers-actor-host';
 import { runHeadInference, HeadCapture } from '../src/heads/head-inference';
 import type { HeadInput } from '../src/heads/types';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
-import { listLessons } from '../src/evolution/outcomes';
+import { listLessons } from '../src/evolution/lessons';
 import { listTurnRatings } from '../src/evolution/ratings';
 import { listRecoveryFindings } from '../src/evolution/recovery';
 import { snapshotCompletedTurn } from '../src/orchestrator/turn-lifecycle';
@@ -171,10 +171,10 @@ describe('a headless actor runs the step clock only', () => {
     const { llm, reflections } = reflectingLlm();
     const { rt, testSql } = createTestRuntime({ llm });
     // A reply the decision model reads as a correction.
-    rt.decide = async () => ({
+    rt.decide = async () => ({ answers: {
       satisfaction: { type: 'score', score: 0.5 }, corrected: { type: 'noul', noul: 0.95 },
       wrong: { type: 'choice', choice: 'unrecovered_error' },
-    });
+    }, usage: {} });
     const seats = hostedSeatsOver({ rt, db: testSql.db, autoEvolve: true });
     const seat = await seats.seat('head-under-test', 'swarm');
     const actor = seat.actor.handle;

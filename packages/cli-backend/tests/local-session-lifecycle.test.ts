@@ -1379,9 +1379,10 @@ describe('LocalAgentSession — turn rating review (Hermes-style forked review)'
     rt.decide = async ({ state }) => {
       completions.push(state);
 
-      return reads === 'corrected'
+      return { answers: reads === 'corrected'
         ? { satisfaction: { type: 'score', score: 0.5 }, corrected: { type: 'noul', noul: 0.95 }, wrong: { type: 'choice', choice: 'misunderstood' } }
-        : { satisfaction: { type: 'score', score: 3.6 }, corrected: { type: 'noul', noul: 0.02 }, wrong: { type: 'choice', choice: 'nothing' } };
+        : { satisfaction: { type: 'score', score: 3.6 }, corrected: { type: 'noul', noul: 0.02 }, wrong: { type: 'choice', choice: 'nothing' } },
+      usage: {} };
     };
 
     Object.defineProperty(rt, 'llm', { value: reviewLlm });
