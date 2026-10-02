@@ -1,4 +1,5 @@
 /** Provider connect flows behind a port, shared by the CLI console and the TUI onboarding step; nothing here touches stdout/stdin. */
+import { Effect } from 'effect';
 import { checkOpenCodeAvailability, createOpenCodeProvider } from '@kinu.run/cli-backend';
 import {
   ANTHROPIC_DEFAULT_MODEL,
@@ -21,7 +22,7 @@ import {
   discoverOpenAICompatibleModels,
   type ModelInfo,
 } from '@kinu.run/core';
-import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
+import { renderThrownChain, tolerate, settle } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import { beginSignIn, deviceRegistration, planEnabled, registrationOf, type SiwcRecord } from '../../../pc-agent/src/chatgpt.js';
 import { listCloudCredentials, setCloudCredential } from '../cloud-api';
@@ -307,37 +308,39 @@ export function holdsAccounts(id: string): id is ApiKeyProviderId | 'chatgpt' | 
 }
 
 /** Stores and answers `connected`, or stores nothing and answers `blocked`; failures the person cannot act on throw. */
-export async function connectProvider(
+export function connectProvider(
   id: ProviderConnectId,
   port: ProviderConnectPort,
   opts: { readonly origin?: string; readonly model?: string; readonly local?: boolean; readonly account?: string } = {},
 ): Promise<ProviderConnectOutcome> {
-  const account = opts.account ?? MAIN_ACCOUNT;
+  return settle(Effect.gen(function* () {
+    const account = opts.account ?? MAIN_ACCOUNT;
 
-  if (account !== MAIN_ACCOUNT && !holdsAccounts(id)) {
-    return { kind: 'blocked', reason: `${id} holds one account here.`, hint: 'Accounts are for openai, openrouter, anthropic, chatgpt and claude.' };
-  }
+    if (account !== MAIN_ACCOUNT && !holdsAccounts(id)) {
+      return { kind: 'blocked', reason: `${id} holds one account here.`, hint: 'Accounts are for openai, openrouter, anthropic, chatgpt and claude.' };
+    }
 
-  switch (id) {
-    case 'cloudflare': return await connectCloudflare(port, opts.origin);
-    case 'claude': return await connectClaude(port, opts.model, account);
-    case 'chatgpt': return await connectChatGpt(port, opts.model, account);
-    case 'opencode': return await connectOpenCode(port, opts.model);
-    case 'openai':
-    case 'openrouter':
-    case 'anthropic':
-      return await connectApiKeyProvider(port, {
-        ...API_KEY_CONNECTORS[id],
-        prefix: id,
-        credKey: accountCredentialKey(API_KEY_PROVIDERS[id], account),
-        account,
-        model: opts.model,
-        local: opts.local ?? false,
-        store: async (key) => { await updateConfigFile((config) => withLocalApiKey(config, id, account, key)); },
-        clear: async () => { await updateConfigFile((config) => withLocalApiKey(config, id, account, null)); },
-      });
-    case 'openai-compatible': return await connectOpenAiCompatible(port, opts.model, opts.local ?? false);
-  }
+    switch (id) {
+      case 'cloudflare': return yield* Effect.promise(async () => connectCloudflare(port, opts.origin));
+      case 'claude': return yield* Effect.promise(async () => connectClaude(port, opts.model, account));
+      case 'chatgpt': return yield* Effect.promise(async () => connectChatGpt(port, opts.model, account));
+      case 'opencode': return yield* Effect.promise(async () => connectOpenCode(port, opts.model));
+      case 'openai':
+      case 'openrouter':
+      case 'anthropic':
+        return yield* connectApiKeyProvider(port, {
+          ...API_KEY_CONNECTORS[id],
+          prefix: id,
+          credKey: accountCredentialKey(API_KEY_PROVIDERS[id], account),
+          account,
+          model: opts.model,
+          local: opts.local ?? false,
+          store: async (key) => { await updateConfigFile((config) => withLocalApiKey(config, id, account, key)); },
+          clear: async () => { await updateConfigFile((config) => withLocalApiKey(config, id, account, null)); },
+        });
+      case 'openai-compatible': return yield* Effect.promise(async () => connectOpenAiCompatible(port, opts.model, opts.local ?? false));
+    }
+  }));
 }
 
 function withLocalApiKey(config: KinuConfig, id: ApiKeyProviderId, account: string, key: string | null): KinuConfig {
@@ -508,16 +511,16 @@ interface ApiKeyProvider {
   clear: () => Promise<void>;
 }
 
-async function connectApiKeyProvider(port: ProviderConnectPort, provider: ApiKeyProvider): Promise<ProviderConnectOutcome> {
-  const named = provider.account !== MAIN_ACCOUNT;
-  const key = await port.ask({ label: `${provider.label} API key${named ? ` for ${provider.account}` : ''}`, secret: true });
+function connectApiKeyProvider(port: ProviderConnectPort, provider: ApiKeyProvider): Effect.Effect<ProviderConnectOutcome> {
+  return Effect.gen(function* () {
+    const named = provider.account !== MAIN_ACCOUNT;
+    const key = yield* Effect.promise(async () => port.ask({ label: `${provider.label} API key${named ? ` for ${provider.account}` : ''}`, secret: true }));
 
-  if (key.trim() === '') {
-    return { kind: 'blocked', reason: `No ${provider.label} key was given.`, hint: `Run kinu provider connect ${provider.prefix} when you have one.` };
-  }
+    if (key.trim() === '') {
+      return { kind: 'blocked', reason: `No ${provider.label} key was given.`, hint: `Run kinu provider connect ${provider.prefix} when you have one.` };
+    }
 
-  if (named) {
-    const where = await storeProviderSecret({
+    const storeKey = () => storeProviderSecret({
       local: provider.local,
       credKey: provider.credKey,
       credential: { kind: 'bearer', token: key },
@@ -525,33 +528,31 @@ async function connectApiKeyProvider(port: ProviderConnectPort, provider: ApiKey
       clearLocally: provider.clear,
     });
 
+    if (named) {
+      const where = yield* Effect.promise(storeKey);
+
+      return {
+        kind: 'connected',
+        summary: `Added the ${provider.label} account ${provider.account} to ${where === 'account' ? 'your Kinu account' : 'this machine'}.`,
+        detail: accountDetail(provider.prefix, provider.account),
+      };
+    }
+
+    const current = currentModel(readDefaultTier()?.model, provider.prefix) ?? provider.defaultModel;
+
+    const model = provider.model ?? (yield* Effect.promise(async () => port.ask({ label: 'Default model', fallback: current })));
+    const spec = `${provider.prefix}/${model}`;
+
+    const where = yield* Effect.promise(storeKey);
+
     return {
       kind: 'connected',
-      summary: `Added the ${provider.label} account ${provider.account} to ${where === 'account' ? 'your Kinu account' : 'this machine'}.`,
-      detail: accountDetail(provider.prefix, provider.account),
+      summary: where === 'account'
+        ? `Connected ${provider.label} to your Kinu account. No key stored on this machine.`
+        : `Saved ${provider.label} credentials to this machine.`,
+      detail: yield* Effect.promise(async () => defaultModelDetail(spec)),
     };
-  }
-
-  const current = currentModel(readDefaultTier()?.model, provider.prefix) ?? provider.defaultModel;
-
-  const model = provider.model ?? await port.ask({ label: 'Default model', fallback: current });
-  const spec = `${provider.prefix}/${model}`;
-
-  const where = await storeProviderSecret({
-    local: provider.local,
-    credKey: provider.credKey,
-    credential: { kind: 'bearer', token: key },
-    storeLocally: () => provider.store(key),
-    clearLocally: provider.clear,
   });
-
-  return {
-    kind: 'connected',
-    summary: where === 'account'
-      ? `Connected ${provider.label} to your Kinu account. No key stored on this machine.`
-      : `Saved ${provider.label} credentials to this machine.`,
-    detail: await defaultModelDetail(spec),
-  };
 }
 
 async function connectOpenAiCompatible(port: ProviderConnectPort, requestedModel: string | undefined, local: boolean): Promise<ProviderConnectOutcome> {

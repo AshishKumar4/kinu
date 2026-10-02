@@ -25,9 +25,9 @@ export function tokensCommand(action: string | undefined, name: string | undefin
 
     if (sub === 'list') return yield* Effect.promise(async () => listTokens(opts));
 
-    if (sub === 'create') return yield* Effect.promise(async () => createToken(name, opts));
+    if (sub === 'create') return yield* createToken(name, opts);
 
-    if (sub === 'revoke') return yield* Effect.promise(async () => revokeToken(name ?? opts.name));
+    if (sub === 'revoke') return yield* revokeToken(name ?? opts.name);
 
     return yield* Effect.die(new Error('Usage: kinu tokens [list | create --name <name> --scopes <scopes> | revoke <name>]'));
   }));
@@ -55,35 +55,39 @@ async function listTokens(opts: TokensOpts): Promise<void> {
   }
 }
 
-async function createToken(positionalName: string | undefined, opts: TokensOpts): Promise<void> {
-  const name = opts.name ?? positionalName;
+function createToken(positionalName: string | undefined, opts: TokensOpts): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const name = opts.name ?? positionalName;
 
-  if (!name) throw new Error('Token name required: kinu tokens create --name ci --scopes workspace.exec,workspace.read');
-  const scopes = (opts.scopes ?? '').split(/[\s,]+/).filter(Boolean);
+    if (!name) return yield* Effect.die(new Error('Token name required: kinu tokens create --name ci --scopes workspace.exec,workspace.read'));
+    const scopes = (opts.scopes ?? '').split(/[\s,]+/).filter(Boolean);
 
-  if (scopes.length === 0) throw new Error(`Scopes required: --scopes ${ACCESS_TOKEN_SCOPES.join(',')}`);
+    if (scopes.length === 0) return yield* Effect.die(new Error(`Scopes required: --scopes ${ACCESS_TOKEN_SCOPES.join(',')}`));
 
-  const auth = requireAuthConfig();
-  const created = await createCliAccessToken(auth.origin, auth.token, { name, scopes });
+    const auth = requireAuthConfig();
+    const created = yield* Effect.promise(async () => createCliAccessToken(auth.origin, auth.token, { name, scopes }));
 
-  if (opts.json) {
-    printJson(projectJsonValue({ value: created }));
+    if (opts.json) {
+      printJson(projectJsonValue({ value: created }));
 
-    return;
-  }
+      return;
+    }
 
-  console.log(`${OK('✓')} Access token ${ACCENT(created.name)} created with scopes: ${created.scopes.join(', ')}`);
-  console.log('');
-  console.log(`  ${created.token}`);
-  console.log('');
-  console.log(WARN('This token is shown once. Store it as a CI secret now.'));
-  console.log(DIM('Use it headlessly:'));
-  console.log(DIM(`  KINU_TOKEN=${created.token.slice(0, 12)}… kinu exec --workspace <name> --json "task"`));
+    console.log(`${OK('✓')} Access token ${ACCENT(created.name)} created with scopes: ${created.scopes.join(', ')}`);
+    console.log('');
+    console.log(`  ${created.token}`);
+    console.log('');
+    console.log(WARN('This token is shown once. Store it as a CI secret now.'));
+    console.log(DIM('Use it headlessly:'));
+    console.log(DIM(`  KINU_TOKEN=${created.token.slice(0, 12)}… kinu exec --workspace <name> --json "task"`));
+  });
 }
 
-async function revokeToken(ref: string | undefined): Promise<void> {
-  if (!ref) throw new Error('Token name required: kinu tokens revoke <name>');
-  const auth = requireAuthConfig();
-  await revokeCliAccessToken(auth.origin, auth.token, ref);
-  console.log(`${OK('✓')} Access token ${ACCENT(ref)} revoked`);
+function revokeToken(ref: string | undefined): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    if (!ref) return yield* Effect.die(new Error('Token name required: kinu tokens revoke <name>'));
+    const auth = requireAuthConfig();
+    yield* Effect.promise(async () => revokeCliAccessToken(auth.origin, auth.token, ref));
+    console.log(`${OK('✓')} Access token ${ACCENT(ref)} revoked`);
+  });
 }

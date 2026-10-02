@@ -46,7 +46,7 @@ export function providersCommand(
   opts: { origin?: string; model?: string; local?: boolean },
 ): Promise<void> {
   return settle(Effect.gen(function* () {
-    const { action, provider, raw, account } = parseArgs(actionOrProvider, providerArg, accountArg);
+    const { action, provider, raw, account } = yield* parseArgs(actionOrProvider, providerArg, accountArg);
 
     if (action === 'list') {
       yield* Effect.promise(async () => printProviders());
@@ -55,13 +55,13 @@ export function providersCommand(
     }
 
     if (action === 'default') {
-      yield* Effect.promise(async () => setDefaultAccount(raw, account));
+      yield* setDefaultAccount(raw, account);
 
       return;
     }
 
     if (action === 'disconnect' && !provider && raw) {
-      yield* Effect.promise(async () => disconnectAccountProvider(raw, account));
+      yield* disconnectAccountProvider(raw, account);
 
       return;
     }
@@ -84,53 +84,59 @@ function parseArgs(
   actionOrProvider: string | undefined,
   providerArg: string | undefined,
   accountArg: string | undefined,
-): ParsedProviderArgs {
-  if (!actionOrProvider) return { action: 'list', account: MAIN_ACCOUNT };
+): Effect.Effect<ParsedProviderArgs> {
+  return Effect.gen(function* () {
+    if (!actionOrProvider) return { action: 'list', account: MAIN_ACCOUNT };
 
-  const first = actionOrProvider.trim().toLowerCase();
-  const verbs = ['list', 'ls', 'status', 'default', 'connect', 'login', 'add', 'disconnect', 'remove', 'rm', 'delete'];
-  const named = verbs.includes(first) ? accountArg : providerArg;
-  const account = named?.trim().toLowerCase() ?? MAIN_ACCOUNT;
+    const first = actionOrProvider.trim().toLowerCase();
+    const verbs = ['list', 'ls', 'status', 'default', 'connect', 'login', 'add', 'disconnect', 'remove', 'rm', 'delete'];
+    const named = verbs.includes(first) ? accountArg : providerArg;
+    const account = named?.trim().toLowerCase() ?? MAIN_ACCOUNT;
 
-  if (!isAccountName(account)) throw new Error(`"${named}" is not an account name: use a-z, 0-9 and dashes.`);
+    if (!isAccountName(account)) return yield* Effect.die(new Error(`"${named}" is not an account name: use a-z, 0-9 and dashes.`));
 
-  if (first === 'list' || first === 'ls' || first === 'status') return { action: 'list', account };
+    if (first === 'list' || first === 'ls' || first === 'status') return { action: 'list', account };
 
-  if (first === 'default') return { action: 'default', raw: providerArg, account: named === undefined ? '' : account };
+    if (first === 'default') return { action: 'default', raw: providerArg, account: named === undefined ? '' : account };
 
-  if (first === 'connect' || first === 'login' || first === 'add') {
-    return { action: 'connect', provider: providerArg ? normalizeProvider(providerArg) : undefined, account };
-  }
+    if (first === 'connect' || first === 'login' || first === 'add') {
+      return { action: 'connect', provider: providerArg ? (yield* normalizeProvider(providerArg)) : undefined, account };
+    }
 
-  if (first === 'disconnect' || first === 'remove' || first === 'rm' || first === 'delete') {
-    // May be a models.dev provider connected in the web UI; resolved against the account, not rejected here.
-    return { action: 'disconnect', provider: providerArg ? maybeProvider(providerArg) : undefined, raw: providerArg, account };
-  }
+    if (first === 'disconnect' || first === 'remove' || first === 'rm' || first === 'delete') {
+      // May be a models.dev provider connected in the web UI; resolved against the account, not rejected here.
+      return { action: 'disconnect', provider: providerArg ? maybeProvider(providerArg) : undefined, raw: providerArg, account };
+    }
 
-  return { action: 'connect', provider: normalizeProvider(actionOrProvider), account };
+    return { action: 'connect', provider: yield* normalizeProvider(actionOrProvider), account };
+  });
 }
 
-function specProviderId(name: string): string {
-  const canonical = canonicalProviderName(name);
+function specProviderId(name: string): Effect.Effect<string> {
+  return Effect.gen(function* () {
+    const canonical = canonicalProviderName(name);
 
-  if (canonical === 'openai-compatible' || canonical === 'opencode' || canonical === 'cloudflare') {
-    throw new Error(`${canonical} holds one account: accounts are for openai, openrouter, anthropic, chatgpt, claude and API keys connected in the web app.`);
-  }
+    if (canonical === 'openai-compatible' || canonical === 'opencode' || canonical === 'cloudflare') {
+      return yield* Effect.die(new Error(`${canonical} holds one account: accounts are for openai, openrouter, anthropic, chatgpt, claude and API keys connected in the web app.`));
+    }
 
-  return canonical;
+    return canonical;
+  });
 }
 
-async function setDefaultAccount(name: string | undefined, account: string): Promise<void> {
-  if (!name || account === '') throw new Error('Name the provider and the account: kinu provider default <provider> <account>.');
-  const provider = specProviderId(name);
-  await updateDefaultAccount(provider, account);
-  console.log('');
-  console.log(`${OK('✓')} ${ACCENT(provider)} models that name no account now run on ${ACCENT(account)}.`);
-  const connected = (await readProviderConnections()).states.find((state) => state.descriptor.id === provider);
+function setDefaultAccount(name: string | undefined, account: string): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    if (!name || account === '') return yield* Effect.die(new Error('Name the provider and the account: kinu provider default <provider> <account>.'));
+    const provider = yield* specProviderId(name);
+    yield* Effect.promise(async () => updateDefaultAccount(provider, account));
+    console.log('');
+    console.log(`${OK('✓')} ${ACCENT(provider)} models that name no account now run on ${ACCENT(account)}.`);
+    const connected = (yield* Effect.promise(async () => readProviderConnections())).states.find((state) => state.descriptor.id === provider);
 
-  if (connected !== undefined && account !== MAIN_ACCOUNT && !(connected.accounts ?? []).includes(account)) {
-    console.log(`${WARN('!')} No ${provider} account named ${account} is connected yet: kinu provider connect ${provider} ${account}`);
-  }
+    if (connected !== undefined && account !== MAIN_ACCOUNT && !(connected.accounts ?? []).includes(account)) {
+      console.log(`${WARN('!')} No ${provider} account named ${account} is connected yet: kinu provider connect ${provider} ${account}`);
+    }
+  });
 }
 
 async function disconnectAccount(provider: ProviderName, account: string): Promise<void> {
@@ -317,27 +323,29 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
 }
 
 /** A models.dev provider connected in the web UI: a catalog id, not a named provider. */
-async function disconnectAccountProvider(name: string, account: string): Promise<void> {
-  const cloud = resolveCloudSession();
-  console.log('');
+function disconnectAccountProvider(name: string, account: string): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const cloud = resolveCloudSession();
+    console.log('');
 
-  if (!cloud) {
-    throw new Error(`Unknown provider "${name}". Sign in with \`kinu auth\` to disconnect a provider held by your account.`);
-  }
+    if (!cloud) {
+      return yield* Effect.die(new Error(`Unknown provider "${name}". Sign in with \`kinu auth\` to disconnect a provider held by your account.`));
+    }
 
-  const provider = name.trim().toLowerCase();
-  const credKey = accountCredentialKey(catalogCredKey(provider), account);
-  const connected = (await listCloudCredentials(cloud.origin, cloud.token)).some((c) => c.key === credKey);
+    const provider = name.trim().toLowerCase();
+    const credKey = accountCredentialKey(catalogCredKey(provider), account);
+    const connected = (yield* Effect.promise(async () => listCloudCredentials(cloud.origin, cloud.token))).some((c) => c.key === credKey);
 
-  if (!connected) {
-    throw new Error(`Neither this machine nor your Kinu account has a "${name}" credential. Run \`kinu provider list\` to see what is connected.`);
-  }
+    if (!connected) {
+      return yield* Effect.die(new Error(`Neither this machine nor your Kinu account has a "${name}" credential. Run \`kinu provider list\` to see what is connected.`));
+    }
 
-  await deleteCloudCredential(cloud.origin, cloud.token, credKey);
-  console.log(`${OK('✓')} Removed the ${ACCENT(account === MAIN_ACCOUNT ? name : `${name} ${account}`)} credential from your Kinu account.`);
-  await forgetDefaultAccount(provider, account);
-  warnDefaultModelPrefixes([`${name}/`]);
-  await bumpProviderRevision();
+    yield* Effect.promise(async () => deleteCloudCredential(cloud.origin, cloud.token, credKey));
+    console.log(`${OK('✓')} Removed the ${ACCENT(account === MAIN_ACCOUNT ? name : `${name} ${account}`)} credential from your Kinu account.`);
+    yield* Effect.promise(async () => forgetDefaultAccount(provider, account));
+    warnDefaultModelPrefixes([`${name}/`]);
+    yield* Effect.promise(async () => bumpProviderRevision());
+  });
 }
 
 function warnDefaultModelFor(provider: ProviderName): void {
@@ -357,14 +365,16 @@ function maybeProvider(value: string): ProviderName | undefined {
   return parsed.success ? parsed.output : undefined;
 }
 
-function normalizeProvider(value: string): ProviderName {
-  const provider = maybeProvider(value);
+function normalizeProvider(value: string): Effect.Effect<ProviderName> {
+  return Effect.gen(function* () {
+    const provider = maybeProvider(value);
 
-  if (!provider) {
-    throw new Error('Provider must be cloudflare, claude, chatgpt, openai, openrouter, anthropic, openai-compatible, or opencode.');
-  }
+    if (!provider) {
+      return yield* Effect.die(new Error('Provider must be cloudflare, claude, chatgpt, openai, openrouter, anthropic, openai-compatible, or opencode.'));
+    }
 
-  return provider;
+    return provider;
+  });
 }
 
 async function printProviders(): Promise<void> {

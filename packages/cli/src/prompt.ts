@@ -3,7 +3,7 @@
  * poll /dev/tty, so under `kinu setup </dev/tty` keys never arrive. No terminal raises NonInteractiveError.
  */
 import { Data, Effect } from 'effect';
-import { settleSync } from '@kinu.run/core/obs';
+import { settleSync, settle } from '@kinu.run/core/obs';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { closeSync, openSync, readSync } from 'node:fs';
@@ -75,22 +75,24 @@ function readLineFromTerminal(fd: number): string | null {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-export async function ask(label: string, fallback = ''): Promise<string> {
-  const tty = openTerminal();
+export function ask(label: string, fallback = ''): Promise<string> {
+  return settle(Effect.gen(function* () {
+    const tty = openTerminal();
 
-  if (!tty) throw new NonInteractiveError();
+    if (!tty) return yield* Effect.die(new NonInteractiveError());
 
-  try {
-    const suffix = fallback ? ` ${DIM(`[${fallback}]`)}` : '';
-    process.stdout.write(`${DIM(label)}${suffix} ${ACCENT('›')} `);
-    const line = readLineFromTerminal(tty.fd);
+    return yield* Effect.ensuring(Effect.sync(() => {
+      const suffix = fallback ? ` ${DIM(`[${fallback}]`)}` : '';
+      process.stdout.write(`${DIM(label)}${suffix} ${ACCENT('›')} `);
+      const line = readLineFromTerminal(tty.fd);
 
-    if (line === null) process.stdout.write('\n');
+      if (line === null) process.stdout.write('\n');
 
-    return (line ?? '').trim() || fallback;
-  } finally {
-    tty.close();
-  }
+      return (line ?? '').trim() || fallback;
+    }), Effect.sync(() => {
+      tty.close();
+    }));
+  }));
 }
 
 export async function confirm(label: string, fallback: boolean): Promise<boolean> {
@@ -106,44 +108,49 @@ export async function confirm(label: string, fallback: boolean): Promise<boolean
 /** A `sh` child's EXIT trap restores echo even when Ctrl+C kills the group. */
 const SECRET_READ = `stty -echo 2>/dev/null; trap 'stty echo 2>/dev/null' EXIT; IFS= read -r line; printf %s "$line"`;
 
-export async function askSecret(label: string, fallback = ''): Promise<string> {
-  const tty = openTerminal();
+export function askSecret(label: string, fallback = ''): Promise<string> {
+  return settle(Effect.gen(function* () {
+    const tty = openTerminal();
 
-  if (!tty) throw new NonInteractiveError();
+    if (!tty) return yield* Effect.die(new NonInteractiveError());
 
-  try {
-    process.stdout.write(`${DIM(label)}${fallback ? DIM(' [saved/default]') : ''} ${ACCENT('›')} `);
-    const read = spawn('/bin/sh', ['-c', SECRET_READ], { stdio: [tty.fd, 'pipe', 'ignore'] });
-    const chunks: Buffer[] = [];
+    return yield* Effect.ensuring(Effect.gen(function* () {
+      process.stdout.write(`${DIM(label)}${fallback ? DIM(' [saved/default]') : ''} ${ACCENT('›')} `);
+      const read = spawn('/bin/sh', ['-c', SECRET_READ], { stdio: [tty.fd, 'pipe', 'ignore'] });
+      const chunks: Buffer[] = [];
 
-    if (read.stdout === null) throw new Error('the secret reader has no stdout pipe');
-    read.stdout.on('data', (chunk: Buffer) => { chunks.push(chunk); });
-    await once(read, 'close');
-    process.stdout.write('\n');
+      if (read.stdout === null) return yield* Effect.die(new Error('the secret reader has no stdout pipe'));
+      read.stdout.on('data', (chunk: Buffer) => { chunks.push(chunk); });
+      yield* Effect.promise(async () => once(read, 'close'));
+      process.stdout.write('\n');
 
-    return Buffer.concat(chunks).toString('utf8').trim() || fallback;
-  } finally {
-    tty.close();
-  }
+      return Buffer.concat(chunks).toString('utf8').trim() || fallback;
+    }), Effect.sync(() => {
+      tty.close();
+    }));
+  }));
 }
 
 /** Enter skips; a `sh` child waits for the key. */
-export async function skippableOnEnter<T>(label: string, work: (signal: AbortSignal) => Promise<T>): Promise<T | null> {
-  const controller = new AbortController();
-  const tty = openTerminal();
+export function skippableOnEnter<T>(label: string, work: (signal: AbortSignal) => Promise<T>): Promise<T | null> {
+  return settle(Effect.gen(function* () {
+    const controller = new AbortController();
+    const tty = openTerminal();
 
-  if (!tty) return work(controller.signal);
-  process.stdout.write(`${DIM(`${label} Enter skips.`)}\n`);
-  const reader = spawn('/bin/sh', ['-c', 'IFS= read -r line'], { stdio: [tty.fd, 'ignore', 'ignore'] });
-  reader.on('exit', () => controller.abort());
+    if (!tty) return yield* Effect.promise(async () => work(controller.signal));
+    process.stdout.write(`${DIM(`${label} Enter skips.`)}\n`);
+    const reader = spawn('/bin/sh', ['-c', 'IFS= read -r line'], { stdio: [tty.fd, 'ignore', 'ignore'] });
+    reader.on('exit', () => controller.abort());
 
-  try {
-    return await work(controller.signal);
-  } catch (error) {
-    if (controller.signal.aborted) return null;
-    throw error;
-  } finally {
-    reader.kill();
-    tty.close();
-  }
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      return yield* Effect.promise(async () => work(controller.signal));
+    }), (failed) => Effect.gen(function* () {
+      if (controller.signal.aborted) return null;
+
+      return yield* Effect.failCause(failed);
+    })), Effect.sync(() => {
+      reader.kill();
+      tty.close();
+    }));
+  }));
 }

@@ -142,10 +142,10 @@ export function labelCommand(
 
     switch (action) {
       case 'export': return yield* Effect.promise(async () => exportLabels(target, opts));
-      case 'ingest': return yield* Effect.promise(async () => ingestLabels(target, file, opts));
+      case 'ingest': return yield* ingestLabels(target, file, opts);
       case 'ensemble': return yield* Effect.promise(async () => ensembleLabels(target, opts));
       case 'report': return yield* Effect.promise(async () => reportLabels(target, opts));
-      case 'score': return yield* Effect.promise(async () => scoreCorpus(target, opts));
+      case 'score': return yield* scoreCorpus(target, opts);
       case undefined:
       default:
         return yield* Effect.die(new Error(
@@ -190,51 +190,53 @@ async function exportLabels(target: AgentTarget, opts: LabelOpts): Promise<void>
   console.log(DIM('     could have done this for you next time.'));
 }
 
-async function ingestLabels(target: AgentTarget, file: string | undefined, opts: LabelOpts): Promise<void> {
-  if (!file) throw new Error('Usage: kinu label ingest <agent> <file>');
-  const path = resolve(file);
-  const parsed = parseLabelingFile(readFileSync(path, 'utf8'));
+function ingestLabels(target: AgentTarget, file: string | undefined, opts: LabelOpts): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    if (!file) return yield* Effect.die(new Error('Usage: kinu label ingest <agent> <file>'));
+    const path = resolve(file);
+    const parsed = parseLabelingFile(readFileSync(path, 'utf8'));
 
-  // Nothing is written while any problem remains; every problem is listed at once.
-  if (parsed.errors.length > 0) {
-    throw new Error(
-      `${plural(parsed.errors.length, 'problem')} in ${path}. Nothing was stored:\n` +
-      parsed.errors.map((problem) => `  ${problem}`).join('\n'),
-    );
-  }
+    // Nothing is written while any problem remains; every problem is listed at once.
+    if (parsed.errors.length > 0) {
+      return yield* Effect.die(new Error(
+        `${plural(parsed.errors.length, 'problem')} in ${path}. Nothing was stored:\n` +
+        parsed.errors.map((problem) => `  ${problem}`).join('\n'),
+      ));
+    }
 
-  if (parsed.labels.length === 0) {
-    console.log(`${WARN('no verdicts')} every turn in ${path} was left blank.`);
+    if (parsed.labels.length === 0) {
+      console.log(`${WARN('no verdicts')} every turn in ${path} was left blank.`);
 
-    return;
-  }
+      return;
+    }
 
-  const labeler = opts.labeler ?? process.env.USER ?? 'owner';
+    const labeler = opts.labeler ?? process.env.USER ?? 'owner';
 
-  const result = target.mode === 'cloud'
-    ? await cloudRpc(target, 'recordOutcomeLabeling', LabelIngestResultSchema, [labeler, decodeJsonValue({ value: parsed.labels })])
-    : await recordLocalOutcomeLabels(target.localName, { labeler, labels: parsed.labels });
+    const result = target.mode === 'cloud'
+      ? (yield* Effect.promise(async () => cloudRpc(target, 'recordOutcomeLabeling', LabelIngestResultSchema, [labeler, decodeJsonValue({ value: parsed.labels })])))
+      : (yield* Effect.promise(async () => recordLocalOutcomeLabels(target.localName, { labeler, labels: parsed.labels })));
 
-  if (opts.json) {
-    printJson({ ...result, skipped: parsed.skipped, labeler });
+    if (opts.json) {
+      printJson({ ...result, skipped: parsed.skipped, labeler });
 
-    return;
-  }
+      return;
+    }
 
-  console.log(`${OK('stored')} ${plural(result.stored, 'verdict')} as ${labeler}` +
-    (parsed.skipped > 0 ? DIM(`  (${parsed.skipped} left blank)`) : ''));
+    console.log(`${OK('stored')} ${plural(result.stored, 'verdict')} as ${labeler}` +
+      (parsed.skipped > 0 ? DIM(`  (${parsed.skipped} left blank)`) : ''));
 
-  if (result.stored > 0) {
-    console.log(`  You disagreed with the classifier on ${result.disagreements} of ${result.stored}.`);
-  }
+    if (result.stored > 0) {
+      console.log(`  You disagreed with the classifier on ${result.disagreements} of ${result.stored}.`);
+    }
 
-  if (result.unknown.length > 0) {
-    console.log(`${WARN('skipped')} ${plural(result.unknown.length, 'turn')} ` +
-      `no longer in the ledger: ${result.unknown.slice(0, 3).join(', ')}${result.unknown.length > 3 ? '…' : ''}`);
-  }
+    if (result.unknown.length > 0) {
+      console.log(`${WARN('skipped')} ${plural(result.unknown.length, 'turn')} ` +
+        `no longer in the ledger: ${result.unknown.slice(0, 3).join(', ')}${result.unknown.length > 3 ? '…' : ''}`);
+    }
 
-  console.log('');
-  console.log(renderCalibrationReport(await fetchReport(target)));
+    console.log('');
+    console.log(renderCalibrationReport(yield* Effect.promise(async () => fetchReport(target))));
+  });
 }
 
 async function ensembleLabels(target: AgentTarget, opts: LabelOpts): Promise<void> {
@@ -347,57 +349,59 @@ async function mineCorpus(opts: LabelOpts): Promise<void> {
 /** Small on purpose: the only guard between a typo and a large bill. */
 const DEFAULT_SCORE_LIMIT = 25;
 
-async function scoreCorpus(target: AgentTarget, opts: LabelOpts): Promise<void> {
-  if (target.mode !== 'local') {
-    throw new Error(
-      `"${target.requestedName}" is a cloud agent. Score the corpus with a local one.`,
-    );
-  }
+function scoreCorpus(target: AgentTarget, opts: LabelOpts): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    if (target.mode !== 'local') {
+      return yield* Effect.die(new Error(
+        `"${target.requestedName}" is a cloud agent. Score the corpus with a local one.`,
+      ));
+    }
 
-  const limit = opts.limit === undefined ? DEFAULT_SCORE_LIMIT : parsePositiveInt(opts.limit, 'limit');
-  const specs = (opts.models ?? '').split(',').map((s) => s.trim()).filter((s) => s !== '');
+    const limit = opts.limit === undefined ? DEFAULT_SCORE_LIMIT : parsePositiveInt(opts.limit, 'limit');
+    const specs = (opts.models ?? '').split(',').map((s) => s.trim()).filter((s) => s !== '');
 
-  const { mined, labels } = mineAndLabel(opts);
+    const { mined, labels } = mineAndLabel(opts);
 
-  // Trim labels, not turns, so the report's corpus composition stays accurate.
-  const scored = new Set(labels.filter((label) => label.label !== null).slice(0, limit)
-    .map((label) => label.turnId));
+    // Trim labels, not turns, so the report's corpus composition stays accurate.
+    const scored = new Set(labels.filter((label) => label.label !== null).slice(0, limit)
+      .map((label) => label.turnId));
 
-  const budgeted = labels.map((label) =>
-    scored.has(label.turnId) ? label : { ...label, label: null });
+    const budgeted = labels.map((label) =>
+      scored.has(label.turnId) ? label : { ...label, label: null });
 
-  if (scored.size === 0) {
-    console.log(`${WARN('nothing to score')} no rule fired on any mined turn.`);
+    if (scored.size === 0) {
+      console.log(`${WARN('nothing to score')} no rule fired on any mined turn.`);
 
-    return;
-  }
+      return;
+    }
 
-  if (!opts.json) {
-    console.log(DIM(`Scoring ${plural(scored.size, 'labeled turn')}: one classifier`));
-    console.log(DIM('call, plus one call per judge. Every rater sees only the turn, never a rule.'));
-    console.log('');
-  }
+    if (!opts.json) {
+      console.log(DIM(`Scoring ${plural(scored.size, 'labeled turn')}: one classifier`));
+      console.log(DIM('call, plus one call per judge. Every rater sees only the turn, never a rule.'));
+      console.log('');
+    }
 
-  const report = await runLocalCorpusEval(target.localName, {
-    turns: mined.turns, labels: budgeted, specs: specs.length > 0 ? specs : null,
+    const report = yield* Effect.promise(async () => runLocalCorpusEval(target.localName, {
+      turns: mined.turns, labels: budgeted, specs: specs.length > 0 ? specs : null,
+    }));
+
+    if (opts.json) {
+      printJson(projectJsonValue({ value: { ...report, provenance: mined.skips, versions: mined.versions } }));
+
+      return;
+    }
+
+    const path = corpusReportPath(opts);
+
+    const markdown = renderCorpusReport(report, {
+      title: `Claude Code transcript corpus, scored, ${new Date().toISOString().slice(0, 10)}`,
+      provenance: renderMineSkips(mined),
+    });
+
+    writeReport(path, markdown);
+    console.log(markdown);
+    console.log(`${OK('wrote')} ${ACCENT(path)}`);
   });
-
-  if (opts.json) {
-    printJson(projectJsonValue({ value: { ...report, provenance: mined.skips, versions: mined.versions } }));
-
-    return;
-  }
-
-  const path = corpusReportPath(opts);
-
-  const markdown = renderCorpusReport(report, {
-    title: `Claude Code transcript corpus, scored, ${new Date().toISOString().slice(0, 10)}`,
-    provenance: renderMineSkips(mined),
-  });
-
-  writeReport(path, markdown);
-  console.log(markdown);
-  console.log(`${OK('wrote')} ${ACCENT(path)}`);
 }
 
 async function reportLabels(target: AgentTarget, opts: LabelOpts): Promise<void> {

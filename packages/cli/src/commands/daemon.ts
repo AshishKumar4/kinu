@@ -1,8 +1,9 @@
+import { Effect } from 'effect';
 import { closeSync, existsSync, openSync, readFileSync, unlinkSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { spawnKinuScript } from '../self-spawn';
 import type { Database } from 'bun:sqlite';
-import { renderThrownChain, tolerate } from '@kinu.run/core/obs';
+import { renderThrownChain, tolerate, settle } from '@kinu.run/core/obs';
 import type { HostedAgentRef } from '@kinu.run/core';
 import {
   LocalAgentHost,
@@ -39,95 +40,97 @@ const STOP_GRACE_MS = 5_000;
 
 const STOP_FORCE_MS = 2_000;
 
-export async function daemonCommand(action: string | undefined, agent?: string): Promise<void> {
-  const sub = action ?? 'status';
+export function daemonCommand(action: string | undefined, agent?: string): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const sub = action ?? 'status';
 
-  if (sub === 'start') {
-    const pid = startDaemon();
-    console.log(pid !== null
-      ? `${OK('✓')} Local scheduler daemon started ${DIM(`pid ${pid} · ${LOG_PATH}`)}`
-      : `${DIM('Local scheduler daemon is already running')} ${DIM(LOG_PATH)}`);
+    if (sub === 'start') {
+      const pid = startDaemon();
+      console.log(pid !== null
+        ? `${OK('✓')} Local scheduler daemon started ${DIM(`pid ${pid} · ${LOG_PATH}`)}`
+        : `${DIM('Local scheduler daemon is already running')} ${DIM(LOG_PATH)}`);
 
-    return;
-  }
-
-  if (sub === 'stop') {
-    const pid = await stopDaemon();
-    console.log(pid !== null
-      ? `${OK('✓')} Local scheduler daemon stopped ${DIM(`pid ${pid}`)}`
-      : DIM('Local scheduler daemon is not running'));
-
-    return;
-  }
-
-  if (sub === 'restart') {
-    const stopped = await stopDaemonForRestart();
-    const pid = startDaemon();
-
-    if (pid === null) throw new Error(`Local scheduler daemon failed to start. See ${LOG_PATH}`);
-    console.log(stopped !== null
-      ? `${OK('✓')} Local scheduler daemon restarted ${DIM(`pid ${stopped} → ${pid} · ${LOG_PATH}`)}`
-      : `${OK('✓')} Local scheduler daemon started ${DIM(`pid ${pid} · ${LOG_PATH}`)} ${DIM('(it was not running)')}`);
-
-    return;
-  }
-
-  if (sub === 'status') {
-    const pid = readLivePid();
-    console.log(`${DIM('Local scheduler:')} ${pid ? OK(`running pid ${pid}`) : WARN('stopped')}`);
-    console.log(`${DIM('Log:')} ${LOG_PATH}`);
-
-    return;
-  }
-
-  if (sub === 'logs') {
-    const tail = readDaemonLogTail(LOG_PATH, 120);
-    console.log(tail ?? DIM(`No daemon log at ${LOG_PATH}`));
-
-    return;
-  }
-
-  if (sub === 'shell') {
-    await runDaemonLoop();
-
-    return;
-  }
-
-  // One foreground pass of the daemon-owned host for machines without a resident daemon.
-  if (sub === 'tick') {
-    ensureAgentHome();
-    const host = createDaemonHost();
-    const unsubscribe = host.subscribe(logSessionEvent);
-
-    try {
-      const refs = listLocalRefsAllProjects();
-      const due = agent ? refs.filter((ref) => ref.name === agent) : refs;
-
-      if (agent && due.length === 0) {
-        throw new Error(`No local agent "${agent}" is placed in a project. `
-          + 'Create it with `kinu create`, or open it from `kinu list` to place it in this project.');
-      }
-
-      const now = Date.now();
-
-      for (const ref of due) {
-        const result = await host.tick(ref.name, now);
-        const where = DIM(`${ref.workspaceId} · ${ref.cwd}`);
-        // A pass another driver owns converted nothing here; name the holder instead of printing a tick.
-        console.log(result.ran
-          ? `${OK('✓')} ticked ${ref.name} ${where}`
-          : `${WARN('⋯')} deferred ${ref.name} ${DIM(`the ${result.heldBy?.kind ?? 'other'} driver`
-            + `${result.heldBy ? ` in process ${String(result.heldBy.pid)}` : ''} is running it`)} ${where}`);
-      }
-    } finally {
-      unsubscribe();
-      await host.close();
+      return;
     }
 
-    return;
-  }
+    if (sub === 'stop') {
+      const pid = yield* stopDaemon();
+      console.log(pid !== null
+        ? `${OK('✓')} Local scheduler daemon stopped ${DIM(`pid ${pid}`)}`
+        : DIM('Local scheduler daemon is not running'));
 
-  throw new Error('Usage: kinu daemon [start|stop|restart|status|logs|tick [workspace]]');
+      return;
+    }
+
+    if (sub === 'restart') {
+      const stopped = yield* stopDaemonForRestart();
+      const pid = startDaemon();
+
+      if (pid === null) return yield* Effect.die(new Error(`Local scheduler daemon failed to start. See ${LOG_PATH}`));
+      console.log(stopped !== null
+        ? `${OK('✓')} Local scheduler daemon restarted ${DIM(`pid ${stopped} → ${pid} · ${LOG_PATH}`)}`
+        : `${OK('✓')} Local scheduler daemon started ${DIM(`pid ${pid} · ${LOG_PATH}`)} ${DIM('(it was not running)')}`);
+
+      return;
+    }
+
+    if (sub === 'status') {
+      const pid = readLivePid();
+      console.log(`${DIM('Local scheduler:')} ${pid ? OK(`running pid ${pid}`) : WARN('stopped')}`);
+      console.log(`${DIM('Log:')} ${LOG_PATH}`);
+
+      return;
+    }
+
+    if (sub === 'logs') {
+      const tail = readDaemonLogTail(LOG_PATH, 120);
+      console.log(tail ?? DIM(`No daemon log at ${LOG_PATH}`));
+
+      return;
+    }
+
+    if (sub === 'shell') {
+      yield* Effect.promise(async () => runDaemonLoop());
+
+      return;
+    }
+
+    // One foreground pass of the daemon-owned host for machines without a resident daemon.
+    if (sub === 'tick') {
+      ensureAgentHome();
+      const host = createDaemonHost();
+      const unsubscribe = host.subscribe(logSessionEvent);
+
+      yield* Effect.ensuring(Effect.gen(function* () {
+        const refs = listLocalRefsAllProjects();
+        const due = agent ? refs.filter((ref) => ref.name === agent) : refs;
+
+        if (agent && due.length === 0) {
+          return yield* Effect.die(new Error(`No local agent "${agent}" is placed in a project. `
+            + 'Create it with `kinu create`, or open it from `kinu list` to place it in this project.'));
+        }
+
+        const now = Date.now();
+
+        for (const ref of due) {
+          const result = yield* Effect.promise(async () => host.tick(ref.name, now));
+          const where = DIM(`${ref.workspaceId} · ${ref.cwd}`);
+          // A pass another driver owns converted nothing here; name the holder instead of printing a tick.
+          console.log(result.ran
+            ? `${OK('✓')} ticked ${ref.name} ${where}`
+            : `${WARN('⋯')} deferred ${ref.name} ${DIM(`the ${result.heldBy?.kind ?? 'other'} driver`
+              + `${result.heldBy ? ` in process ${String(result.heldBy.pid)}` : ''} is running it`)} ${where}`);
+        }
+      }), Effect.gen(function* () {
+        unsubscribe();
+        yield* Effect.promise(async () => host.close());
+      }));
+
+      return;
+    }
+
+    return yield* Effect.die(new Error('Usage: kinu daemon [start|stop|restart|status|logs|tick [workspace]]'));
+  }));
 }
 
 export function ensureLocalDaemonRunning(): void {
@@ -178,37 +181,43 @@ function startDaemon(opts: { quiet?: boolean } = {}): number | null {
 
 /** Waits for the reap: the daemon unlinks its pidfile on exit, so a replacement started earlier would lose its
  * pidfile to the old one. */
-async function stopDaemon(): Promise<number | null> {
-  return stopDaemonUntil(isReaped);
+function stopDaemon(): Effect.Effect<number | null> {
+  return Effect.gen(function* () {
+    return yield* stopDaemonUntil(isReaped);
+  });
 }
 
 /** Waits only for the old pidfile unlink, which precedes the reap; fixed reap caps fail under load. A pidfile
  * outliving grace still escalates to SIGKILL. */
-async function stopDaemonForRestart(): Promise<number | null> {
-  return stopDaemonUntil(isReleased);
+function stopDaemonForRestart(): Effect.Effect<number | null> {
+  return Effect.gen(function* () {
+    return yield* stopDaemonUntil(isReleased);
+  });
 }
 
 /** Shared escalation: SIGTERM, grace, SIGKILL, force, then admit defeat. */
-async function stopDaemonUntil(released: (pid: number) => boolean): Promise<number | null> {
-  const pid = readLivePid();
+function stopDaemonUntil(released: (pid: number) => boolean): Effect.Effect<number | null> {
+  return Effect.gen(function* () {
+    const pid = readLivePid();
 
-  if (pid === null) return null;
+    if (pid === null) return null;
 
-  // ESRCH is the one tolerable outcome; EPERM means alive and not ours.
-  tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
+    // ESRCH is the one tolerable outcome; EPERM means alive and not ours.
+    tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
 
-  if (!await waitUntilRelease(pid, released, STOP_GRACE_MS)) {
-    tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch');
+    if (!(yield* Effect.promise(async () => waitUntilRelease(pid, released, STOP_GRACE_MS)))) {
+      tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch');
 
-    if (!await waitUntilRelease(pid, released, STOP_FORCE_MS)) {
-      throw new Error(`Local scheduler daemon (pid ${pid}) did not exit.`);
+      if (!(yield* Effect.promise(async () => waitUntilRelease(pid, released, STOP_FORCE_MS)))) {
+        return yield* Effect.die(new Error(`Local scheduler daemon (pid ${pid}) did not exit.`));
+      }
     }
-  }
 
-  // The daemon unlinks its own pidfile on exit, so it is often already gone.
-  tolerate(() => unlinkSync(PID_PATH), 'enoent');
+    // The daemon unlinks its own pidfile on exit, so it is often already gone.
+    tolerate(() => unlinkSync(PID_PATH), 'enoent');
 
-  return pid;
+    return pid;
+  });
 }
 
 function isReaped(pid: number): boolean {

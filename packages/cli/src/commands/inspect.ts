@@ -305,34 +305,38 @@ export async function memoryCommand(name: string, queryParts: string[] = [], opt
   console.log(content || DIM('(memory is empty)'));
 }
 
-export async function eventsCommand(name: string, opts: InspectOpts = {}): Promise<void> {
-  const target = resolveAgentTarget(name);
-  const limit = parseLimit(opts.limit, 50);
-  const since = opts.since ? parseTime(opts.since, 'time') : undefined;
-  const filter: JsonObject = { limit };
+export function eventsCommand(name: string, opts: InspectOpts = {}): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const target = resolveAgentTarget(name);
+    const limit = parseLimit(opts.limit, 50);
+    const since = opts.since ? parseTime(opts.since, 'time') : undefined;
+    const filter: JsonObject = { limit };
 
-  if (opts.variant) filter.variant = opts.variant;
+    if (opts.variant) filter.variant = opts.variant;
 
-  if (since !== undefined) filter.since = since;
+    if (since !== undefined) filter.since = since;
 
-  const data = await readTarget(target, {
-    cloud: (auth) => cloudRead(auth, target, 'listRecentEvents', [filter]),
-    local: () => decodeJsonValue({ value: listLocalEvents(target.localName, { variant: opts.variant, since, limit }) }),
-  });
+    const data = yield* Effect.promise(async () => readTarget(target, {
+      cloud: (auth) => cloudRead(auth, target, 'listRecentEvents', [filter]),
+      local: () => decodeJsonValue({ value: listLocalEvents(target.localName, { variant: opts.variant, since, limit }) }),
+    }));
 
-  printRows(data, opts, formatEventRow);
+    yield* printRows(data, opts, formatEventRow);
+  }));
 }
 
-export async function timelineCommand(name: string, opts: InspectOpts = {}): Promise<void> {
-  const target = resolveAgentTarget(name);
-  const limit = parseLimit(opts.limit, 100);
+export function timelineCommand(name: string, opts: InspectOpts = {}): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const target = resolveAgentTarget(name);
+    const limit = parseLimit(opts.limit, 100);
 
-  const data = await readTarget(target, {
-    cloud: (auth) => cloudRead(auth, target, 'getRunTimeline', [{ limit }]),
-    local: () => listLocalTimeline(target.localName, limit),
-  });
+    const data = yield* Effect.promise(async () => readTarget(target, {
+      cloud: (auth) => cloudRead(auth, target, 'getRunTimeline', [{ limit }]),
+      local: () => listLocalTimeline(target.localName, limit),
+    }));
 
-  printRows(data, opts, formatTimelineRow);
+    yield* printRows(data, opts, formatTimelineRow);
+  }));
 }
 
 export async function swarmCommand(name: string, nodeId: string | undefined, opts: InspectOpts = {}): Promise<void> {
@@ -356,42 +360,46 @@ export async function swarmCommand(name: string, nodeId: string | undefined, opt
   printData(data, opts);
 }
 
-export async function headsCommand(name: string, opts: InspectOpts = {}): Promise<void> {
-  const target = resolveAgentTarget(name);
-  const limit = parseLimit(opts.limit, 20);
+export function headsCommand(name: string, opts: InspectOpts = {}): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const target = resolveAgentTarget(name);
+    const limit = parseLimit(opts.limit, 20);
 
-  const data = await readTarget(target, {
-    cloud: (auth) => cloudRead(auth, target, 'getHeadRuns', [limit]),
-    local: () => decodeJsonValue({ value: listLocalHeads(target.localName, limit) }),
-  });
+    const data = yield* Effect.promise(async () => readTarget(target, {
+      cloud: (auth) => cloudRead(auth, target, 'getHeadRuns', [limit]),
+      local: () => decodeJsonValue({ value: listLocalHeads(target.localName, limit) }),
+    }));
 
-  printRows(data, opts, (item) => formatRunRow(item, HEAD_RUN_ROW));
+    yield* printRows(data, opts, (item) => formatRunRow(item, HEAD_RUN_ROW));
+  }));
 }
 
-export async function gepaCommand(name: string, runId: string | undefined, opts: GepaOpts = {}): Promise<void> {
-  const target = resolveAgentTarget(name);
+export function gepaCommand(name: string, runId: string | undefined, opts: GepaOpts = {}): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const target = resolveAgentTarget(name);
 
-  if (opts.run) return runGepaPass(name, opts);
-  const limit = parseLimit(opts.limit, 20);
+    if (opts.run) return yield* Effect.promise(async () => runGepaPass(name, opts));
+    const limit = parseLimit(opts.limit, 20);
 
-  // One run is a record, so `printRows` keeps exactly one legal input shape.
-  if (runId) {
-    const detail = await readTarget(target, {
-      cloud: (auth) => cloudRead(auth, target, 'getGepaRun', [runId]),
-      local: () => decodeJsonValue({ value: getLocalGepaRun(target.localName, runId) }),
-    });
+    // One run is a record, so `printRows` keeps exactly one legal input shape.
+    if (runId) {
+      const detail = yield* Effect.promise(async () => readTarget(target, {
+        cloud: (auth) => cloudRead(auth, target, 'getGepaRun', [runId]),
+        local: () => decodeJsonValue({ value: getLocalGepaRun(target.localName, runId) }),
+      }));
 
-    printData(detail, opts);
+      printData(detail, opts);
 
-    return;
-  }
+      return;
+    }
 
-  const data = await readTarget(target, {
-    cloud: (auth) => cloudRead(auth, target, 'getGepaRuns', [limit]),
-    local: () => decodeJsonValue({ value: listLocalGepaRuns(target.localName, limit) }),
-  });
+    const data = yield* Effect.promise(async () => readTarget(target, {
+      cloud: (auth) => cloudRead(auth, target, 'getGepaRuns', [limit]),
+      local: () => decodeJsonValue({ value: listLocalGepaRuns(target.localName, limit) }),
+    }));
 
-  printRows(data, opts, (item) => formatRunRow(item, GEPA_RUN_ROW));
+    yield* printRows(data, opts, (item) => formatRunRow(item, GEPA_RUN_ROW));
+  }));
 }
 
 async function runGepaPass(name: string, opts: GepaOpts): Promise<void> {
@@ -439,59 +447,63 @@ async function runGepaPass(name: string, opts: GepaOpts): Promise<void> {
     : DIM(`  no proposal: ${result.skipReason ?? 'no strictly better candidate'}`));
 }
 
-export async function executorsCommand(
+export function executorsCommand(
   name: string,
   executor: string | undefined,
   commandParts: string[] = [],
   opts: InspectOpts = {},
 ): Promise<void> {
-  if (executor) {
-    await runExecutorCommand(name, executor, commandParts, opts);
+  return settle(Effect.gen(function* () {
+    if (executor) {
+      yield* runExecutorCommand(name, executor, commandParts, opts);
 
-    return;
-  }
+      return;
+    }
 
-  const target = resolveAgentTarget(name);
+    const target = resolveAgentTarget(name);
 
-  const data = await readTarget(target, {
-    cloud: (auth) => cloudRead(auth, target, 'getExecutors'),
-    local: () => decodeJsonValue({ value: listLocalExecutors() }),
-  });
+    const data = yield* Effect.promise(async () => readTarget(target, {
+      cloud: (auth) => cloudRead(auth, target, 'getExecutors'),
+      local: () => decodeJsonValue({ value: listLocalExecutors() }),
+    }));
 
-  printRows(data, opts, formatExecutorRow);
+    yield* printRows(data, opts, formatExecutorRow);
+  }));
 }
 
-async function runExecutorCommand(name: string, executor: string, commandParts: string[] = [], opts: InspectOpts = {}): Promise<void> {
-  const command = commandParts.join(' ').trim();
+function runExecutorCommand(name: string, executor: string, commandParts: string[] = [], opts: InspectOpts = {}): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const command = commandParts.join(' ').trim();
 
-  if (!command) throw new Error('command required');
-  const target = resolveAgentTarget(name);
+    if (!command) return yield* Effect.die(new Error('command required'));
+    const target = resolveAgentTarget(name);
 
-  const data = await readTarget(target, {
-    cloud: (auth) => callAgentRpc({
-      origin: auth.origin,
-      token: auth.token,
-      name: target.cloudName,
-      method: 'executeInExecutor',
-      schema: ExecutorOutputSchema,
-      args: [executor, command],
-    }),
-    local: async () => v.parse(ExecutorOutputSchema, await executeLocalExecutor(target.localName, executor, command)),
+    const data = yield* Effect.promise(async () => readTarget(target, {
+      cloud: (auth) => callAgentRpc({
+        origin: auth.origin,
+        token: auth.token,
+        name: target.cloudName,
+        method: 'executeInExecutor',
+        schema: ExecutorOutputSchema,
+        args: [executor, command],
+      }),
+      local: async () => v.parse(ExecutorOutputSchema, await executeLocalExecutor(target.localName, executor, command)),
+    }));
+
+    if (opts.json) {
+      printJson(decodeJsonValue({ value: data }));
+
+      return;
+    }
+
+    if (data.error) console.log(`${ERR('error')} ${data.error}`);
+
+    if (data.stdout) process.stdout.write(data.stdout);
+
+    if (data.stderr) process.stderr.write(data.stderr);
+
+    if (data.exitCode !== undefined && data.exitCode !== 0) process.exitCode = data.exitCode;
   });
-
-  if (opts.json) {
-    printJson(decodeJsonValue({ value: data }));
-
-    return;
-  }
-
-  if (data.error) console.log(`${ERR('error')} ${data.error}`);
-
-  if (data.stdout) process.stdout.write(data.stdout);
-
-  if (data.stderr) process.stderr.write(data.stderr);
-
-  if (data.exitCode !== undefined && data.exitCode !== 0) process.exitCode = data.exitCode;
 }
 
 /** K_align: user corrections per 100 graded turns, by scaffold version. Always printed with calibration: the rate is the classifier's count. */
@@ -580,26 +592,28 @@ function printData(data: JsonValue, opts: InspectOpts): void {
 }
 
 /** Every producer answers a bare list of rows; any other shape is a backend/formatter mismatch and fails loudly. */
-function printRows(data: JsonValue, opts: InspectOpts, format: (item: JsonValue) => string): void {
-  if (opts.json) {
-    printJson(data);
+function printRows(data: JsonValue, opts: InspectOpts, format: (item: JsonValue) => string): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    if (opts.json) {
+      printJson(data);
 
-    return;
-  }
+      return;
+    }
 
-  const rows = v.safeParse(JsonArraySchema, data);
+    const rows = v.safeParse(JsonArraySchema, data);
 
-  if (!rows.success) {
-    throw new Error('This read answered with something other than a list of rows; re-run with --json to see it.');
-  }
+    if (!rows.success) {
+      return yield* Effect.die(new Error('This read answered with something other than a list of rows; re-run with --json to see it.'));
+    }
 
-  if (rows.output.length === 0) {
-    console.log(DIM('No records.'));
+    if (rows.output.length === 0) {
+      console.log(DIM('No records.'));
 
-    return;
-  }
+      return;
+    }
 
-  for (const item of rows.output) console.log(format(item));
+    for (const item of rows.output) console.log(format(item));
+  });
 }
 
 function printPretty(data: JsonValue): void {

@@ -107,7 +107,7 @@ async function runSetupPreflight(ctx: SetupPreflightContext): Promise<'handled' 
   return 'continue';
 }
 
-export async function setupCommand(opts: {
+export function setupCommand(opts: {
   origin?: string;
   provider?: string;
   model?: string;
@@ -117,63 +117,65 @@ export async function setupCommand(opts: {
   accountOnly?: boolean;
   local?: boolean;
 }): Promise<void> {
-  console.log('');
-  console.log(ACCENT('Kinu setup'));
-  console.log(DIM('Sign in to Kinu, then pick a model provider for local workspaces.'));
-  console.log('');
+  return settle(Effect.gen(function* () {
+    console.log('');
+    console.log(ACCENT('Kinu setup'));
+    console.log(DIM('Sign in to Kinu, then pick a model provider for local workspaces.'));
+    console.log('');
 
-  const config = loadConfigFile();
-  let cloudReady = Boolean(config.accessToken);
+    const config = loadConfigFile();
+    let cloudReady = Boolean(config.accessToken);
 
-  if (cloudReady) {
-    console.log(`${OK('✓')} Signed in${config.user?.email ? ` as ${ACCENT(config.user.email)}` : ''}`);
-    console.log(DIM('While you are signed in, new local workspaces run on Workers AI in your Cloudflare account, with no API key on this machine.'));
-  }
-
-  if (!opts.skipCloud && !config.accessToken) {
-    // Without a terminal, readline would hang on a pipe (the `curl | bash` installer).
-    const shouldLogin = opts.yes === true || (canPrompt() && await confirm('Sign in now and grant Workers AI permissions?', true));
-
-    if (shouldLogin) {
-      await authCommand({ origin: opts.origin });
-      cloudReady = Boolean(loadConfigFile().accessToken);
+    if (cloudReady) {
+      console.log(`${OK('✓')} Signed in${config.user?.email ? ` as ${ACCENT(config.user.email)}` : ''}`);
+      console.log(DIM('While you are signed in, new local workspaces run on Workers AI in your Cloudflare account, with no API key on this machine.'));
     }
-  }
 
-  if (await runSetupPreflight({ opts, cloudReady }) === 'handled') return;
+    if (!opts.skipCloud && !config.accessToken) {
+      // Without a terminal, readline would hang on a pipe (the `curl | bash` installer).
+      const shouldLogin = opts.yes === true || (canPrompt() && (yield* Effect.promise(async () => confirm('Sign in now and grant Workers AI permissions?', true))));
 
-  const provider = normalizeProvider(opts.provider ?? (opts.yes ? 'workers-ai' : await chooseProvider(cloudReady)));
+      if (shouldLogin) {
+        yield* Effect.promise(async () => authCommand({ origin: opts.origin }));
+        cloudReady = Boolean(loadConfigFile().accessToken);
+      }
+    }
 
-  if (provider === 'skip') {
-    console.log(`${WARN('!')} Skipped choosing a model provider.`);
-    console.log(DIM(cloudReady
-      ? 'Cloud workspaces are ready. For local workspaces, run kinu provider connect <provider> later.'
-      : 'Run kinu setup again before you create a workspace.'));
+    if ((yield* Effect.promise(async () => runSetupPreflight({ opts, cloudReady }))) === 'handled') return;
 
-    return;
-  }
+    const provider = yield* normalizeProvider(opts.provider ?? (opts.yes ? 'workers-ai' : (yield* Effect.promise(async () => chooseProvider(cloudReady)))));
 
-  if (provider === 'workers-ai') {
-    if (!cloudReady) {
-      console.log(`${WARN('!')} Workers AI needs a signed-in Kinu account.`);
-      console.log(DIM(`Run kinu auth${opts.origin ? ` --origin ${opts.origin}` : ''}, then kinu setup again.`));
+    if (provider === 'skip') {
+      console.log(`${WARN('!')} Skipped choosing a model provider.`);
+      console.log(DIM(cloudReady
+        ? 'Cloud workspaces are ready. For local workspaces, run kinu provider connect <provider> later.'
+        : 'Run kinu setup again before you create a workspace.'));
 
       return;
     }
 
-    const named = opts.model === undefined ? DEFAULT_WORKERS_AI_MODEL_SPEC : `workers-ai/${stripProvider(opts.model, 'workers-ai')}`;
-    const current = (await adoptDefaultModel(named))?.model;
-    console.log(`${OK('✓')} Using Cloudflare Workers AI`);
+    if (provider === 'workers-ai') {
+      if (!cloudReady) {
+        console.log(`${WARN('!')} Workers AI needs a signed-in Kinu account.`);
+        console.log(DIM(`Run kinu auth${opts.origin ? ` --origin ${opts.origin}` : ''}, then kinu setup again.`));
 
-    if (current !== undefined) console.log(DIM(`Default model: ${current}`));
+        return;
+      }
 
-    if (opts.model !== undefined && current !== named) console.log(DIM(`To use ${named}, pick it under Defaults on kinu's home screen.`));
-    console.log(DIM('No API key on this machine. Requests go through your Kinu account.'));
+      const named = opts.model === undefined ? DEFAULT_WORKERS_AI_MODEL_SPEC : `workers-ai/${stripProvider(opts.model, 'workers-ai')}`;
+      const current = (yield* Effect.promise(async () => adoptDefaultModel(named)))?.model;
+      console.log(`${OK('✓')} Using Cloudflare Workers AI`);
 
-    return;
-  }
+      if (current !== undefined) console.log(DIM(`Default model: ${current}`));
 
-  await connectProviderOnConsole(provider, connectOptions(opts));
+      if (opts.model !== undefined && current !== named) console.log(DIM(`To use ${named}, pick it under Defaults on kinu's home screen.`));
+      console.log(DIM('No API key on this machine. Requests go through your Kinu account.'));
+
+      return;
+    }
+
+    yield* Effect.promise(async () => connectProviderOnConsole(provider, connectOptions(opts)));
+  }));
 }
 
 async function chooseProvider(cloudReady: boolean): Promise<string> {
@@ -223,37 +225,39 @@ export function canonicalProviderName(value: string): string {
   }
 }
 
-function normalizeProvider(value: string): 'workers-ai' | 'claude' | 'chatgpt' | 'openai' | 'openrouter' | 'anthropic' | 'openai-compatible' | 'opencode' | 'skip' {
-  const v = value.trim().toLowerCase();
+function normalizeProvider(value: string): Effect.Effect<'workers-ai' | 'claude' | 'chatgpt' | 'openai' | 'openrouter' | 'anthropic' | 'openai-compatible' | 'opencode' | 'skip'> {
+  return Effect.gen(function* () {
+    const v = value.trim().toLowerCase();
 
-  // Menu positions on the --provider flag, pinned by setup-default-provider.test.ts.
-  if (v === '1') return 'workers-ai';
+    // Menu positions on the --provider flag, pinned by setup-default-provider.test.ts.
+    if (v === '1') return 'workers-ai';
 
-  if (v === '2') return 'chatgpt';
+    if (v === '2') return 'chatgpt';
 
-  if (v === '3') return 'openai';
+    if (v === '3') return 'openai';
 
-  if (v === '4') return 'openrouter';
+    if (v === '4') return 'openrouter';
 
-  if (v === '5') return 'anthropic';
+    if (v === '5') return 'anthropic';
 
-  if (v === '6') return 'openai-compatible';
+    if (v === '6') return 'openai-compatible';
 
-  if (v === '7') return 'opencode';
+    if (v === '7') return 'opencode';
 
-  if (v === '8' || v === 'skip' || v === 'none') return 'skip';
+    if (v === '8' || v === 'skip' || v === 'none') return 'skip';
 
-  // `cloudflare` is `workers-ai`; bare `claude` is the subscription, not the Anthropic API key.
-  switch (canonicalProviderName(value)) {
-    case 'cloudflare': return 'workers-ai';
-    case 'claude': return 'claude';
-    case 'chatgpt': return 'chatgpt';
-    case 'openai': return 'openai';
-    case 'openrouter': return 'openrouter';
-    case 'anthropic': return 'anthropic';
-    case 'openai-compatible': return 'openai-compatible';
-    case 'opencode': return 'opencode';
-    default:
-      throw new Error('Provider must be workers-ai, chatgpt, openai, openrouter, anthropic, openai-compatible, opencode, or skip.');
-  }
+    // `cloudflare` is `workers-ai`; bare `claude` is the subscription, not the Anthropic API key.
+    switch (canonicalProviderName(value)) {
+      case 'cloudflare': return 'workers-ai';
+      case 'claude': return 'claude';
+      case 'chatgpt': return 'chatgpt';
+      case 'openai': return 'openai';
+      case 'openrouter': return 'openrouter';
+      case 'anthropic': return 'anthropic';
+      case 'openai-compatible': return 'openai-compatible';
+      case 'opencode': return 'opencode';
+      default:
+        return yield* Effect.die(new Error('Provider must be workers-ai, chatgpt, openai, openrouter, anthropic, openai-compatible, opencode, or skip.'));
+    }
+  });
 }

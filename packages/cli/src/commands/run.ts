@@ -93,7 +93,7 @@ export function execCommand(promptParts: string[], opts: ExecOptions): Promise<v
       return yield* Effect.die(new Error('A task prompt is required. Usage: kinu exec "task" [--workspace <name>] [--json]'));
     }
 
-    const target = resolveAgentTarget(resolveExecWorkspaceName(opts.workspace));
+    const target = resolveAgentTarget(yield* resolveExecWorkspaceName(opts.workspace));
 
     const failed = yield* Effect.promise(async () => runOneShot(target, rawPrompt, {
       model: opts.model,
@@ -121,14 +121,17 @@ async function exitOneShot(failed: boolean): Promise<never> {
   process.exit(failed ? 1 : 0);
 }
 
-function resolveExecWorkspaceName(explicit?: string): string {
-  if (explicit?.trim()) return explicit.trim();
-  const agents = listConfiguredAgentRefs();
+function resolveExecWorkspaceName(explicit?: string): Effect.Effect<string> {
+  return Effect.gen(function* () {
+    if (explicit?.trim()) return explicit.trim();
+    const agents = listConfiguredAgentRefs();
 
-  if (agents.length === 1) return agents[0].name;
-  throw new Error(agents.length === 0
-    ? 'No workspaces configured. Create one with: kinu create <name>, or pass --workspace <name>.'
-    : `Multiple workspaces configured. Pass --workspace <name>. Configured: ${agents.map((a) => a.name).join(', ')}.`);
+    if (agents.length === 1) return agents[0].name;
+
+    return yield* Effect.die(new Error(agents.length === 0
+      ? 'No workspaces configured. Create one with: kinu create <name>, or pass --workspace <name>.'
+      : `Multiple workspaces configured. Pass --workspace <name>. Configured: ${agents.map((a) => a.name).join(', ')}.`));
+  });
 }
 
 async function runOneShot(

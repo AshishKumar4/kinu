@@ -46,7 +46,7 @@ interface LocalInstance {
 export function localDoor(action: string | undefined, opts: { origin?: string; port?: string }): Promise<void> {
   return settle(Effect.gen(function* () {
     if (action === 'stop') {
-      const stopped = yield* Effect.promise(async () => stopLocalInstance());
+      const stopped = yield* stopLocalInstance();
 
       console.log(stopped === null
         ? DIM('No local Kinu is running')
@@ -56,7 +56,7 @@ export function localDoor(action: string | undefined, opts: { origin?: string; p
     }
 
     if (action === 'status') {
-      yield* Effect.promise(async () => report());
+      yield* report();
 
       return;
     }
@@ -67,10 +67,10 @@ export function localDoor(action: string | undefined, opts: { origin?: string; p
 
     if (action === undefined) yield* Effect.promise(async () => install(opts));
 
-    const started = yield* Effect.promise(async () => startLocalInstance());
+    const started = yield* startLocalInstance();
 
     console.log(started === null
-      ? `${DIM('A local Kinu is already running')} ${DIM(localConfig().address)}`
+      ? `${DIM('A local Kinu is already running')} ${DIM((yield* localConfig()).address)}`
       : `${OK('✓')} Local Kinu on ${ACCENT(started.address)} ${DIM(`pid ${String(started.pid)}`)}`);
   }));
 }
@@ -145,43 +145,45 @@ async function install(opts: { origin?: string; port?: string }): Promise<void> 
 
 /** The address is returned only once the child lives and `/api/health` answered: another process's address
  * printed as ours is worse than an error. */
-async function startLocalInstance(): Promise<LocalInstance | null> {
-  const layout = layoutOf();
-  const config = localConfig();
+function startLocalInstance(): Effect.Effect<LocalInstance | null> {
+  return Effect.gen(function* () {
+    const layout = layoutOf();
+    const config = yield* localConfig();
 
-  if ((await readPidFile(layout)).kind === 'ours') return null;
+    if ((yield* Effect.promise(async () => readPidFile(layout))).kind === 'ours') return null;
 
-  const binary = existsSync(layout.workerd) ? layout.workerd : 'workerd';
-  const log = openSync(layout.log, 'a');
+    const binary = existsSync(layout.workerd) ? layout.workerd : 'workerd';
+    const log = openSync(layout.log, 'a');
 
-  try {
-    const child = spawn(binary, ['serve', layout.capnp], {
-      cwd: layout.root,
-      detached: true,
-      stdio: ['ignore', log, log],
-      env: process.env,
-    });
+    return yield* Effect.ensuring(Effect.gen(function* () {
+      const child = spawn(binary, ['serve', layout.capnp], {
+        cwd: layout.root,
+        detached: true,
+        stdio: ['ignore', log, log],
+        env: process.env,
+      });
 
-    child.unref();
+      child.unref();
 
-    if (child.pid === undefined) throw new Error(`Could not start ${binary}. See ${layout.log}`);
-    writeFileSync(layout.pid, renderPidFile(child.pid, new Date()));
+      if (child.pid === undefined) return yield* Effect.die(new Error(`Could not start ${binary}. See ${layout.log}`));
+      writeFileSync(layout.pid, renderPidFile(child.pid, new Date()));
 
-    // Watched, not polled: workerd that cannot bind the port exits at once.
-    let ended: string | null = null;
+      // Watched, not polled: workerd that cannot bind the port exits at once.
+      let ended: string | null = null;
 
-    child.once('exit', (code, signal) => {
-      ended = signal ?? `status ${String(code ?? 0)}`;
-    });
+      child.once('exit', (code, signal) => {
+        ended = signal ?? `status ${String(code ?? 0)}`;
+      });
 
-    const answer = await ready(config.port, () => ended);
+      const answer = yield* Effect.promise(async () => ready(config.port, () => ended));
 
-    if (answer !== 'serving') throw await unserved(answer, layout, config, () => ended);
+      if (answer !== 'serving') return yield* Effect.die((yield* Effect.promise(async () => unserved(answer, layout, config, () => ended))));
 
-    return { pid: child.pid, address: config.address };
-  } finally {
-    closeSync(log);
-  }
+      return { pid: child.pid, address: config.address };
+    }), Effect.sync(() => {
+      closeSync(log);
+    }));
+  });
 }
 
 /** A dead child's pidfile is cleared here: it names a process nobody may signal. */
@@ -212,55 +214,59 @@ async function unserved(
 }
 
 /** A pidfile naming a process this command does not own is a refusal, not a kill. */
-async function stopLocalInstance(): Promise<number | null> {
-  const layout = layoutOf();
-  const state = await readPidFile(layout);
+function stopLocalInstance(): Effect.Effect<number | null> {
+  return Effect.gen(function* () {
+    const layout = layoutOf();
+    const state = yield* Effect.promise(async () => readPidFile(layout));
 
-  if (state.kind === 'none') return null;
+    if (state.kind === 'none') return null;
 
-  if (state.kind === 'foreign') {
-    throw new Error(`Not stopping pid ${String(state.pid)}: it is alive and it is not this Kinu's workerd. `
-      + `The stale ${layout.pid} is cleared.`);
-  }
+    if (state.kind === 'foreign') {
+      return yield* Effect.die(new Error(`Not stopping pid ${String(state.pid)}: it is alive and it is not this Kinu's workerd. `
+        + `The stale ${layout.pid} is cleared.`));
+    }
 
-  const { pid } = state;
+    const { pid } = state;
 
-  // ESRCH is the one tolerable outcome; EPERM means alive and not ours.
-  tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
+    // ESRCH is the one tolerable outcome; EPERM means alive and not ours.
+    tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
 
-  if (!await reaped(pid, STOP_GRACE_MS)) {
-    tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch');
+    if (!(yield* Effect.promise(async () => reaped(pid, STOP_GRACE_MS)))) {
+      tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch');
 
-    if (!await reaped(pid, STOP_FORCE_MS)) throw new Error(`Local Kinu (pid ${String(pid)}) did not exit.`);
-  }
+      if (!(yield* Effect.promise(async () => reaped(pid, STOP_FORCE_MS)))) return yield* Effect.die(new Error(`Local Kinu (pid ${String(pid)}) did not exit.`));
+    }
 
-  clearPidFile(layout);
+    clearPidFile(layout);
 
-  return pid;
+    return pid;
+  });
 }
 
-async function report(): Promise<void> {
-  const layout = layoutOf();
+function report(): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const layout = layoutOf();
 
-  if (!existsSync(layout.config)) {
-    console.log(`${WARN('!')} No local Kinu here yet: ${ACCENT('kinu deploy local')}`);
+    if (!existsSync(layout.config)) {
+      console.log(`${WARN('!')} No local Kinu here yet: ${ACCENT('kinu deploy local')}`);
 
-    return;
-  }
+      return;
+    }
 
-  const config = localConfig();
-  const state = await readPidFile(layout);
+    const config = yield* localConfig();
+    const state = yield* Effect.promise(async () => readPidFile(layout));
 
-  if (state.kind !== 'ours') {
-    console.log(`${DIM('Local Kinu')} ${ACCENT(config.version)} ${DIM('is installed and not running')} ${DIM(layout.root)}`);
+    if (state.kind !== 'ours') {
+      console.log(`${DIM('Local Kinu')} ${ACCENT(config.version)} ${DIM('is installed and not running')} ${DIM(layout.root)}`);
 
-    return;
-  }
+      return;
+    }
 
-  const since = state.startedAt === null ? '' : ` ${DIM(`since ${state.startedAt}`)}`;
+    const since = state.startedAt === null ? '' : ` ${DIM(`since ${state.startedAt}`)}`;
 
-  console.log(`${OK('✓')} Local Kinu ${ACCENT(config.version)} on ${ACCENT(config.address)} `
-    + `${DIM(`pid ${String(state.pid)}`)}${since}`);
+    console.log(`${OK('✓')} Local Kinu ${ACCENT(config.version)} on ${ACCENT(config.address)} `
+      + `${DIM(`pid ${String(state.pid)}`)}${since}`);
+  });
 }
 
 function layoutOf(): LocalLayout {
@@ -268,14 +274,16 @@ function layoutOf(): LocalLayout {
 }
 
 /** A missing config means the door has not been opened yet, not a read failure. */
-function localConfig(): LocalConfig {
-  const layout = layoutOf();
+function localConfig(): Effect.Effect<LocalConfig> {
+  return Effect.gen(function* () {
+    const layout = layoutOf();
 
-  if (!existsSync(layout.config)) {
-    throw new Error(`No local Kinu is installed. Run \`kinu deploy local\` first (${layout.root}).`);
-  }
+    if (!existsSync(layout.config)) {
+      return yield* Effect.die(new Error(`No local Kinu is installed. Run \`kinu deploy local\` first (${layout.root}).`));
+    }
 
-  return v.parse(LocalConfigSchema, JSON.parse(readFileSync(layout.config, 'utf8')));
+    return v.parse(LocalConfigSchema, JSON.parse(readFileSync(layout.config, 'utf8')));
+  });
 }
 
 function readPort(given: string | undefined): number {

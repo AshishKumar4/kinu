@@ -1,10 +1,11 @@
+import { Effect } from 'effect';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useTransition, type ReactNode, type RefObject } from 'react';
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react';
 
-import { diagnostics, renderThrownChain, settleLogged, toKinuError } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain, settleLogged, toKinuError, settleSync } from '@kinu.run/core/obs';
 import { TUI_MARKS } from '@kinu.run/core/tui';
 
 import { AGENT_HOME, canonicalProjectRoot } from '../config';
@@ -102,10 +103,12 @@ const EMPTY_AGENT_PAGE: TuiAgentPage = Object.freeze({ items: Object.freeze([]),
 export function agentSourceFromList(list: () => readonly ListedAgent[]): TuiAgentSource {
   return {
     load(cursor) {
-      if (cursor !== null) throw new Error('The local agent list has no further page.');
-      const items = list().map((agent) => Object.freeze({ ...agent }));
+      return settleSync(Effect.gen(function* () {
+        if (cursor !== null) return yield* Effect.die(new Error('The local agent list has no further page.'));
+        const items = list().map((agent) => Object.freeze({ ...agent }));
 
-      return Object.freeze({ items: Object.freeze(items), total: items.length, nextCursor: null });
+        return Object.freeze({ items: Object.freeze(items), total: items.length, nextCursor: null });
+      }));
     },
   };
 }
@@ -247,11 +250,13 @@ export function TuiProductProvider(props: {
 }
 
 export function useTuiProduct(): TuiProductContextValue {
-  const context = useContext(TuiProductContext);
+  return settleSync(Effect.gen(function* () {
+    const context = useContext(TuiProductContext);
 
-  if (context === null) throw new Error('TUI product context is not available.');
+    if (context === null) return yield* Effect.die(new Error('TUI product context is not available.'));
 
-  return context;
+    return context;
+  }));
 }
 
 export interface ScrollAnchorController {

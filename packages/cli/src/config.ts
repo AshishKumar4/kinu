@@ -1,4 +1,4 @@
-import { Data, Effect } from 'effect';
+import { Cause, Data, Effect } from 'effect';
 import {
   chmodSync, existsSync, readFileSync, mkdirSync, readdirSync, realpathSync, statSync,
   writeFileSync, unlinkSync,
@@ -419,7 +419,7 @@ export function resolveLocalAgent(input: string, opts: ResolveLocalAgentOptions 
     const placed = ref ? placedRef(ref) : null;
 
     if (ref && placed) {
-      assertIdentityUnchanged(ref, placed);
+      yield* assertIdentityUnchanged(ref, placed);
 
       return { ...placed, placement: 'recorded' };
     }
@@ -436,27 +436,34 @@ export function resolveLocalAgent(input: string, opts: ResolveLocalAgentOptions 
 }
 
 /** A changed identity means the name was reused; continuing would attach history to a different workspace. */
-function assertIdentityUnchanged(agent: KinuAgentConfig, ref: LocalAgentRef): void {
-  if (!agent.identityId) return;
-  const actual = readWorkspaceIdentityId(ref.dbPath);
+function assertIdentityUnchanged(agent: KinuAgentConfig, ref: LocalAgentRef): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    if (!agent.identityId) return;
+    const actual = readWorkspaceIdentityId(ref.dbPath);
 
-  if (actual === null || actual === agent.identityId) return;
-  throw new Error(
-    `Workspace "${ref.name}" at ${ref.dbPath} is not the one recorded for ${ref.cwd}: `
-    + `expected identity ${agent.identityId}, found ${actual}. `
-    + 'Rename one of them, or remove the stale entry from ~/.kinu/config.json.',
-  );
+    if (actual === null || actual === agent.identityId) return;
+
+    return yield* Effect.die(new Error(
+      `Workspace "${ref.name}" at ${ref.dbPath} is not the one recorded for ${ref.cwd}: `
+      + `expected identity ${agent.identityId}, found ${actual}. `
+      + 'Rename one of them, or remove the stale entry from ~/.kinu/config.json.',
+    ));
+  });
 }
 
 export function loadConfigFile(): KinuConfig {
-  if (!existsSync(CONFIG_PATH)) return {};
+  return settleSync(Effect.gen(function* () {
+    if (!existsSync(CONFIG_PATH)) return {};
 
-  try {
-    return v.parse(KinuConfigSchema, JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')));
-  } catch (error) {
-    // Defaulting would discard the whole file over one bad field and look like a first run.
-    throw new Error(`${CONFIG_PATH} is not a valid Kinu config; fix or remove it.`, { cause: error });
-  }
+    return yield* Effect.catchCause(Effect.sync(() => {
+      return v.parse(KinuConfigSchema, JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')));
+    }), (failed) => Effect.gen(function* () {
+      const error = Cause.squash(failed);
+      // Defaulting would discard the whole file over one bad field and look like a first run.
+
+      return yield* Effect.die(new Error(`${CONFIG_PATH} is not a valid Kinu config; fix or remove it.`, { cause: error }));
+    }));
+  }));
 }
 
 function writeConfigFileUnlocked(config: KinuConfig): void {
@@ -634,23 +641,25 @@ function aliasPath(alias: string): string {
   return join(BIN_DIR, alias);
 }
 
-export async function writeAliasShim(agentName: string, alias: string): Promise<string> {
-  validateAgentName(agentName);
-  validateAliasName(alias);
-  ensureBinDir();
-  const path = aliasPath(alias);
+export function writeAliasShim(agentName: string, alias: string): Promise<string> {
+  return settle(Effect.gen(function* () {
+    validateAgentName(agentName);
+    validateAliasName(alias);
+    ensureBinDir();
+    const path = aliasPath(alias);
 
-  const script = `#!/usr/bin/env sh
+    const script = `#!/usr/bin/env sh
 set -eu
 bin_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 exec "$bin_dir/kinu" run ${shellQuote(agentName)} "$@"
 `;
 
-  writeFileSync(path, script, { mode: 0o755 });
-  chmodSync(path, 0o755);
-  await setAliasConfig(agentName, alias);
+    writeFileSync(path, script, { mode: 0o755 });
+    chmodSync(path, 0o755);
+    yield* Effect.promise(async () => setAliasConfig(agentName, alias));
 
-  return path;
+    return path;
+  }));
 }
 
 export async function deleteAliasShim(alias: string): Promise<void> {
@@ -867,24 +876,28 @@ function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string 
   return null;
 }
 
-export async function firstOpenAiCompatModel(): Promise<string | null> {
-  const compat = loadConfigFile().providers?.openaiCompat?.default;
+export function firstOpenAiCompatModel(): Promise<string | null> {
+  return settle(Effect.gen(function* () {
+    const compat = loadConfigFile().providers?.openaiCompat?.default;
 
-  if (compat === undefined) return null;
+    if (compat === undefined) return null;
 
-  let first: ModelInfo | undefined;
+    let first: ModelInfo | undefined;
 
-  try {
-    [first] = await discoverOpenAICompatibleModels({ baseURL: compat.baseURL, headers: openAiCompatHeaders(compat) });
-  } catch (cause) {
-    throw new Error(`Could not list the models of the OpenAI-compatible endpoint at ${compat.baseURL}.`, { cause });
-  }
+    yield* Effect.catchCause(Effect.gen(function* () {
+      [first] = yield* Effect.promise(async () => discoverOpenAICompatibleModels({ baseURL: compat.baseURL, headers: openAiCompatHeaders(compat) }));
+    }), (failed) => Effect.gen(function* () {
+      const cause = Cause.squash(failed);
 
-  if (first === undefined) {
-    throw new Error(`The OpenAI-compatible endpoint at ${compat.baseURL} lists no models and none is named: run kinu provider connect openai-compatible.`);
-  }
+      return yield* Effect.die(new Error(`Could not list the models of the OpenAI-compatible endpoint at ${compat.baseURL}.`, { cause }));
+    }));
 
-  return `openai-compat/${first.id}`;
+    if (first === undefined) {
+      return yield* Effect.die(new Error(`The OpenAI-compatible endpoint at ${compat.baseURL} lists no models and none is named: run kinu provider connect openai-compatible.`));
+    }
+
+    return `openai-compat/${first.id}`;
+  }));
 }
 
 /** Families the registry serves from their own logins (Claude's, opencode's auth.json); the endpoint is only a marker. */

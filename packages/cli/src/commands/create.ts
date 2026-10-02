@@ -1,3 +1,5 @@
+import { Effect, Cause } from 'effect';
+import { settle } from '@kinu.run/core/obs';
 import { ensureAgentHome, pathHint, type AgentMode } from '../config';
 import { createCliAgent, createLocalPeerAgent } from '../agent-create';
 import { ACCENT, DIM, OK, WARN, createSpinner, printCreatedCard, printFailure } from '../display';
@@ -9,74 +11,74 @@ interface ModelWarningInput {
   agentName: string;
 }
 
-export async function createCommand(name: string | undefined, opts: {
+const createFailed = (spinner: ReturnType<typeof createSpinner>) => (failed: Cause.Cause<unknown>) => Effect.sync(() => {
+  spinner.fail('Create failed');
+  printFailure({ cause: Cause.squash(failed) });
+  process.exit(1);
+});
+
+export function createCommand(name: string | undefined, opts: {
   purpose?: string; model?: string; baseUrl?: string; auth?: string;
   mode?: string; alias?: string; aliasShim?: boolean; origin?: string;
   join?: boolean;
 }): Promise<void> {
-  ensureAgentHome();
+  return settle(Effect.gen(function* () {
+    ensureAgentHome();
 
-  // Joining takes nothing: the agent inherits a peer's mission and its first message names it.
-  if (opts.join) {
-    await joinWorkspace(opts);
+    // Joining takes nothing: the agent inherits a peer's mission and its first message names it.
+    if (opts.join) {
+      yield* Effect.promise(async () => joinWorkspace(opts));
 
-    return;
-  }
+      return;
+    }
 
-  const interactive = canPrompt() && (!name || !opts.mode);
+    const interactive = canPrompt() && (!name || !opts.mode);
 
-  const named = name ?? (interactive ? await ask('Workspace name', 'jarvis') : undefined);
+    const named = name ?? (interactive ? (yield* Effect.promise(async () => ask('Workspace name', 'jarvis'))) : undefined);
 
-  if (named === undefined || named === '') throw new Error('Workspace name required.');
-  const mode = await resolveMode(opts.mode, interactive);
-  const purpose = opts.purpose ?? `A helpful AI assistant named ${named}.`;
+    if (named === undefined || named === '') return yield* Effect.die(new Error('Workspace name required.'));
+    const mode = yield* resolveMode(opts.mode, interactive);
+    const purpose = opts.purpose ?? `A helpful AI assistant named ${named}.`;
 
-  const alias = opts.aliasShim === false
-    ? undefined
-    : opts.alias ?? (interactive ? await ask('Alias command', named) : named);
+    const alias = opts.aliasShim === false
+      ? undefined
+      : opts.alias ?? (interactive ? (yield* Effect.promise(async () => ask('Alias command', named))) : named);
 
-  if (mode === 'cloud') {
-    const spinner = createSpinner('Creating cloud workspace…');
+    if (mode === 'cloud') {
+      const spinner = createSpinner('Creating cloud workspace…');
+      spinner.start();
+
+      yield* Effect.catchCause(Effect.gen(function* () {
+        const created = yield* Effect.promise(async () => createCliAgent({ ...opts, name: named, purpose, mode, alias, allowInteractiveAuth: true }));
+        spinner.stop('Cloud workspace created');
+        console.log(`\n${OK('✓')} ${ACCENT(named)} ${DIM('cloud workspace')}`);
+
+        if (alias) console.log(`${DIM('Alias:')} ${ACCENT(alias)} ${DIM(created.aliasPath ?? '')}`);
+        const hint = pathHint();
+
+        if (hint) console.log(DIM(hint));
+        console.log(`\n${DIM('Run:')} ${ACCENT(alias === undefined || alias === '' ? `kinu run ${named}` : alias)} ${DIM('"do something"')}\n`);
+      }), createFailed(spinner));
+
+      return;
+    }
+
+    const spinner = createSpinner('Creating workspace...');
     spinner.start();
 
-    try {
-      const created = await createCliAgent({ ...opts, name: named, purpose, mode, alias, allowInteractiveAuth: true });
-      spinner.stop('Cloud workspace created');
-      console.log(`\n${OK('✓')} ${ACCENT(named)} ${DIM('cloud workspace')}`);
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const created = yield* Effect.promise(async () => createCliAgent({ ...opts, name: named, purpose, mode, alias, allowInteractiveAuth: true }));
+      spinner.stop('Workspace created');
+      printCreatedCard(named, purpose, created.model ?? opts.model ?? 'configured provider', created.dbPath ?? '');
+      const warningInput: ModelWarningInput = { agentName: named };
 
-      if (alias) console.log(`${DIM('Alias:')} ${ACCENT(alias)} ${DIM(created.aliasPath ?? '')}`);
+      if (opts.model) warningInput.model = opts.model;
+      yield* Effect.promise(async () => warnUnusableModel(warningInput));
       const hint = pathHint();
 
       if (hint) console.log(DIM(hint));
-      console.log(`\n${DIM('Run:')} ${ACCENT(alias === undefined || alias === '' ? `kinu run ${named}` : alias)} ${DIM('"do something"')}\n`);
-    } catch (err) {
-      spinner.fail('Create failed');
-      printFailure({ cause: err });
-      process.exit(1);
-    }
-
-    return;
-  }
-
-  const spinner = createSpinner('Creating workspace...');
-  spinner.start();
-
-  try {
-    const created = await createCliAgent({ ...opts, name: named, purpose, mode, alias, allowInteractiveAuth: true });
-    spinner.stop('Workspace created');
-    printCreatedCard(named, purpose, created.model ?? opts.model ?? 'configured provider', created.dbPath ?? '');
-    const warningInput: ModelWarningInput = { agentName: named };
-
-    if (opts.model) warningInput.model = opts.model;
-    await warnUnusableModel(warningInput);
-    const hint = pathHint();
-
-    if (hint) console.log(DIM(hint));
-  } catch (err) {
-    spinner.fail('Create failed');
-    printFailure({ cause: err });
-    process.exit(1);
-  }
+    }), createFailed(spinner));
+  }));
 }
 
 async function joinWorkspace(opts: { model?: string; baseUrl?: string; auth?: string }): Promise<void> {
@@ -108,16 +110,19 @@ async function warnUnusableModel(opts: ModelWarningInput): Promise<void> {
   console.log(DIM(`  Connect one with: kinu provider connect <provider>, then set the model with /model in chat.`));
 }
 
-async function resolveMode(raw: string | undefined, interactive: boolean): Promise<AgentMode> {
-  if (raw) {
-    if (raw === 'local' || raw === 'cloud') return raw;
-    throw new Error('--mode must be local or cloud');
-  }
+function resolveMode(raw: string | undefined, interactive: boolean): Effect.Effect<AgentMode> {
+  return Effect.gen(function* () {
+    if (raw) {
+      if (raw === 'local' || raw === 'cloud') return raw;
 
-  if (!interactive) return 'cloud';
-  const answer = (await ask('Mode (cloud/local)', 'cloud')).toLowerCase();
+      return yield* Effect.die(new Error('--mode must be local or cloud'));
+    }
 
-  if (answer === 'local' || answer === 'l') return 'local';
+    if (!interactive) return 'cloud';
+    const answer = (yield* Effect.promise(async () => ask('Mode (cloud/local)', 'cloud'))).toLowerCase();
 
-  return 'cloud';
+    if (answer === 'local' || answer === 'l') return 'local';
+
+    return 'cloud';
+  });
 }

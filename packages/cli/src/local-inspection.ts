@@ -544,16 +544,16 @@ export function sampleLocalLabeling(name: string, size: number): LabelingItem[] 
 }
 
 /** Tables are ensured first: a workspace can predate the label table. */
-export async function recordLocalOutcomeLabels(
+export function recordLocalOutcomeLabels(
   name: string,
   input: { labeler: string; labels: ReadonlyArray<{ outcomeId: string; label: OutcomeLabel }> },
 ): Promise<LabelIngestResult> {
-  return withLocalWritableDb(name, (db) => {
+  return settle(withLocalWritableDb(name, (db) => {
     const sql = makeSql(db);
     initTurnOutcomeTables((ddl) => { db.exec(ddl); });
 
     return ingestOutcomeLabels(sql, openWorkspaceMainActor(sql), input);
-  });
+  }));
 }
 
 export function getLocalEnsemble(name: string): EnsembleReport {
@@ -571,72 +571,76 @@ function localJudge(resolver: LocalModelResolver, named: string, workspace: stri
 }
 
 /** Holds the database open for the whole pass: verdicts are written as they land, so an interrupted run keeps paid calls. */
-export async function runLocalOutcomeEnsemble(
+export function runLocalOutcomeEnsemble(
   name: string,
   specs: string[] | null,
 ): Promise<EnsembleRunResult> {
-  ensureLocalAgent(name);
-  const db = new Database(agentDbPath(name));
+  return settle(Effect.gen(function* () {
+    yield* ensureLocalAgent(name);
+    const db = new Database(agentDbPath(name));
 
-  try {
-    const sql = makeSql(db);
-    initTurnOutcomeTables((ddl) => { db.exec(ddl); });
-    // Choosing judges reads the catalog; resolving one needs credentials. Deferred so a label-less workspace is told that, not "unauthenticated".
-    const { resolver } = createConfiguredLocalModelResolver();
-    const actor = openWorkspaceMainActor(sql);
-    const report = unpricedLedgerSink(new RunEventRecorder(sql, actor));
+    return yield* Effect.ensuring(Effect.gen(function* () {
+      const sql = makeSql(db);
+      initTurnOutcomeTables((ddl) => { db.exec(ddl); });
+      // Choosing judges reads the catalog; resolving one needs credentials. Deferred so a label-less workspace is told that, not "unauthenticated".
+      const { resolver } = createConfiguredLocalModelResolver();
+      const actor = openWorkspaceMainActor(sql);
+      const report = unpricedLedgerSink(new RunEventRecorder(sql, actor));
 
-    return await runEnsemble(sql, actor, {
-      specs: async () => (await selectEnsembleJudges({
-        specs,
-        chatSpec: () => resolver.normalizeSpecSync(actor.config.getModel()),
-        candidates: () => resolver.judgeCandidates(),
-      })).specs,
-      judge: (named) => localJudge(resolver, named, name, report),
-    });
-  } finally {
-    db.close();
-  }
+      return yield* Effect.promise(async () => runEnsemble(sql, actor, {
+        specs: async () => (await selectEnsembleJudges({
+          specs,
+          chatSpec: () => resolver.normalizeSpecSync(actor.config.getModel()),
+          candidates: () => resolver.judgeCandidates(),
+        })).specs,
+        judge: (named) => localJudge(resolver, named, name, report),
+      }));
+    }), Effect.sync(() => {
+      db.close();
+    }));
+  }));
 }
 
 /** The corpus is not this agent's history: no outcome row is written. */
-export async function runLocalCorpusEval(name: string, input: {
+export function runLocalCorpusEval(name: string, input: {
   turns: ReadonlyArray<CorpusTurn>;
   labels: ReadonlyArray<WeakLabel>;
   specs: string[] | null;
 }): Promise<CorpusEvalReport> {
-  ensureLocalAgent(name);
-  const { resolver } = createConfiguredLocalModelResolver();
-  const db = new Database(agentDbPath(name));
+  return settle(Effect.gen(function* () {
+    yield* ensureLocalAgent(name);
+    const { resolver } = createConfiguredLocalModelResolver();
+    const db = new Database(agentDbPath(name));
 
-  try {
-    const sql = makeSql(db);
-    const actor = openWorkspaceMainActor(sql);
-    const report = unpricedLedgerSink(new RunEventRecorder(sql, actor));
-    const chatSpec = resolver.normalizeSpecSync(actor.config.getModel());
+    return yield* Effect.ensuring(Effect.gen(function* () {
+      const sql = makeSql(db);
+      const actor = openWorkspaceMainActor(sql);
+      const report = unpricedLedgerSink(new RunEventRecorder(sql, actor));
+      const chatSpec = resolver.normalizeSpecSync(actor.config.getModel());
 
-    const selection = await selectEnsembleJudges({
-      specs: input.specs,
-      chatSpec: () => chatSpec,
-      candidates: () => resolver.judgeCandidates(),
-    });
+      const selection = yield* Effect.promise(async () => selectEnsembleJudges({
+        specs: input.specs,
+        chatSpec: () => chatSpec,
+        candidates: () => resolver.judgeCandidates(),
+      }));
 
-    const judges = selection.specs.map((named) => localJudge(resolver, named, name, report));
+      const judges = selection.specs.map((named) => localJudge(resolver, named, name, report));
 
-    return await runCorpusEval({
-      turns: input.turns,
-      labels: input.labels,
-      classifier: {
-        name: `${chatSpec} (turn-outcome classifier)`,
-        llm: createCompletionLLM({
-          model: resolver.resolveModel(chatSpec, agentAffinityKey(name)), spec: chatSpec, stage: 'chat', spend: { source: 'fast', report },
-        }),
-      },
-      judges,
-    });
-  } finally {
-    db.close();
-  }
+      return yield* Effect.promise(async () => runCorpusEval({
+        turns: input.turns,
+        labels: input.labels,
+        classifier: {
+          name: `${chatSpec} (turn-outcome classifier)`,
+          llm: createCompletionLLM({
+            model: resolver.resolveModel(chatSpec, agentAffinityKey(name)), spec: chatSpec, stage: 'chat', spend: { source: 'fast', report },
+          }),
+        },
+        judges,
+      }));
+    }), Effect.sync(() => {
+      db.close();
+    }));
+  }));
 }
 
 export interface LocalGepaRunDetail {
@@ -696,53 +700,55 @@ export function listLocalTriggers(name: string): { triggers: TriggerRow[] } {
   });
 }
 
-export async function cancelLocalTrigger(name: string, id: string): Promise<{ changed: boolean }> {
-  return withLocalWritableDb(name, (db) => {
+export function cancelLocalTrigger(name: string, id: string): Promise<{ changed: boolean }> {
+  return settle(withLocalWritableDb(name, (db) => {
     const actor = mainActor(db);
 
     if (!actor || !tableExists(db, 'triggers')) return { changed: false };
 
     return { changed: new TriggerRegistry(makeSqlExec(db), actor, NOOP_ALARM).revoke(id, Date.now()) };
-  });
+  }));
 }
 
-export async function createLocalTimerTrigger(name: string, input: { cron?: string; atMs?: number; label?: string }): Promise<TimerTrigger> {
-  return withLocalWritableDb(name, (db) => {
+export function createLocalTimerTrigger(name: string, input: { cron?: string; atMs?: number; label?: string }): Promise<TimerTrigger> {
+  return settle(withLocalWritableDb(name, (db) => {
     initEventsHubTables(makeSqlExec(db));
     const actor = openWorkspaceMainActor(makeSql(db));
 
     return createTimerTrigger(new TriggerRegistry(makeSqlExec(db), actor, NOOP_ALARM), { ...input, trust: 'owner' }, Date.now());
-  });
+  }));
 }
 
-export async function setLocalWorkspaceModel(name: string, spec: string): Promise<{ spec: string }> {
-  const { resolver } = createConfiguredLocalModelResolver();
+export function setLocalWorkspaceModel(name: string, spec: string): Promise<{ spec: string }> {
+  return settle(Effect.gen(function* () {
+    const { resolver } = createConfiguredLocalModelResolver();
 
-  return withLocalWritableDb(name, (db) => setModel({
-    config: openWorkspaceMainActor(makeSql(db)).config,
-    normalize: (value) => resolver.normalizeSpecSync(value),
-    onChanged: () => {},
-  }, spec));
+    return yield* withLocalWritableDb(name, (db) => setModel({
+      config: openWorkspaceMainActor(makeSql(db)).config,
+      normalize: (value) => resolver.normalizeSpecSync(value),
+      onChanged: () => {},
+    }, spec));
+  }));
 }
 
-export async function setLocalWorkspaceReasoningEffort(name: string, effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }> {
-  return withLocalWritableDb(name, (db) => setReasoningEffort(openWorkspaceMainActor(makeSql(db)).config, effort));
+export function setLocalWorkspaceReasoningEffort(name: string, effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }> {
+  return settle(withLocalWritableDb(name, (db) => setReasoningEffort(openWorkspaceMainActor(makeSql(db)).config, effort)));
 }
 
-export async function readLocalWorkspacePins(name: string): Promise<{ model: string | null; reasoningEffort: ReasoningEffort | null }> {
-  return withLocalWritableDb(name, (db) => {
+export function readLocalWorkspacePins(name: string): Promise<{ model: string | null; reasoningEffort: ReasoningEffort | null }> {
+  return settle(withLocalWritableDb(name, (db) => {
     const config = openWorkspaceMainActor(makeSql(db)).config;
 
     return { model: config.getModel(), reasoningEffort: config.getReasoningEffort() };
-  });
+  }));
 }
 
 export function listLocalJobs(name: string, limit = 20): BackgroundJob[] {
   return readMainActorTable(name, 'background_jobs', [], (sql, actor) => new BackgroundJobStore(sql, actor).list(limit));
 }
 
-export async function cancelLocalJob(name: string, id: string): Promise<{ ok: boolean }> {
-  return withLocalWritableDb(name, (db) => {
+export function cancelLocalJob(name: string, id: string): Promise<{ ok: boolean }> {
+  return settle(withLocalWritableDb(name, (db) => {
     if (!tableExists(db, 'background_jobs')) return { ok: false };
     const sql = makeSql(db);
     const store = new BackgroundJobStore(sql, openWorkspaceMainActor(sql));
@@ -752,12 +758,12 @@ export async function cancelLocalJob(name: string, id: string): Promise<{ ok: bo
     store.cancel(id, before.epoch, Date.now());
 
     return { ok: true };
-  });
+  }));
 }
 
 export function executeLocalExecutor(name: string, executorId: string, command: string): Promise<LocalExecResult> {
   return settle(Effect.gen(function* () {
-    ensureLocalAgent(name);
+    yield* ensureLocalAgent(name);
     const normalized = executorId.toLowerCase();
 
     if (!['workspace', 'device', 'local', 'your-pc'].includes(normalized)) {
@@ -771,8 +777,8 @@ export function executeLocalExecutor(name: string, executorId: string, command: 
   }));
 }
 
-export async function markLocalBackgroundJobsCancelled(name: string): Promise<string[]> {
-  return withLocalWritableDb(name, (db) => {
+export function markLocalBackgroundJobsCancelled(name: string): Promise<string[]> {
+  return settle(withLocalWritableDb(name, (db) => {
     if (!tableExists(db, 'background_jobs')) return [];
     // Through the store: the registry is actor-private and `cancel` is epoch-fenced; a blanket UPDATE would cancel other actors' jobs.
     const sql = makeSql(db);
@@ -789,7 +795,7 @@ export async function markLocalBackgroundJobsCancelled(name: string): Promise<st
     }
 
     return cancelled.reverse();
-  });
+  }));
 }
 
 function openLocalDb(name: string): SqliteDb {
@@ -836,23 +842,27 @@ async function withLocalDbAsync<T>(name: string, fn: (db: SqliteDb) => Promise<T
 }
 
 /** Closes only after the callback settles: `TriggerRegistry` mutators await the alarm seam. */
-async function withLocalWritableDb<T>(name: string, fn: (db: SqliteDb) => T | Promise<T>): Promise<T> {
-  const dbPath = agentDbPath(name);
+function withLocalWritableDb<T>(name: string, fn: (db: SqliteDb) => T | Promise<T>): Effect.Effect<T, KinuError> {
+  return Effect.gen(function* () {
+    const dbPath = agentDbPath(name);
 
-  if (!existsSync(dbPath)) throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
-  const db = new Database(dbPath);
+    if (!existsSync(dbPath)) return yield* Effect.die(new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`));
+    const db = new Database(dbPath);
 
-  try {
-    return await fn(db);
-  } finally {
-    db.close();
-  }
+    return yield* Effect.ensuring(Effect.gen(function* () {
+      return yield* Effect.promise(async () => fn(db));
+    }), Effect.sync(() => {
+      db.close();
+    }));
+  });
 }
 
-function ensureLocalAgent(name: string): void {
-  const dbPath = agentDbPath(name);
+function ensureLocalAgent(name: string): Effect.Effect<void, KinuError> {
+  return Effect.gen(function* () {
+    const dbPath = agentDbPath(name);
 
-  if (!existsSync(dbPath)) throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
+    if (!existsSync(dbPath)) return yield* Effect.die(new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`));
+  });
 }
 
 function all<T>(db: SqliteDb, sql: string, ...params: SQLQueryBindings[]): T[] {

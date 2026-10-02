@@ -1,8 +1,9 @@
+import { Effect } from 'effect';
 import type { TextareaRenderable } from '@opentui/core';
 import { useKeyboard } from '@opentui/react';
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { renderThrownChain, settle } from '@kinu.run/core/obs';
 
 import type {
   ProviderConnectId,
@@ -191,20 +192,23 @@ export function GuidedOnboarding(props: {
 
       return promise;
     },
-    skippable: async (label, work) => {
-      const controller = new AbortController();
-      skipRef.current = controller;
-      setWaiting(label);
+    skippable: (label, work) => {
+      return settle(Effect.gen(function* () {
+        const controller = new AbortController();
+        skipRef.current = controller;
+        setWaiting(label);
 
-      try {
-        return await work(controller.signal);
-      } catch (cause) {
-        if (controller.signal.aborted) return null;
-        throw cause;
-      } finally {
-        skipRef.current = null;
-        setWaiting(null);
-      }
+        return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+          return yield* Effect.promise(async () => work(controller.signal));
+        }), (failed) => Effect.gen(function* () {
+          if (controller.signal.aborted) return null;
+
+          return yield* Effect.failCause(failed);
+        })), Effect.sync(() => {
+          skipRef.current = null;
+          setWaiting(null);
+        }));
+      }));
     },
   }), []);
 
