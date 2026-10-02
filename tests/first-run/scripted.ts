@@ -12,7 +12,8 @@ import * as v from 'valibot';
 import type { JsonObject } from '@kinu.run/core';
 import type { ScriptedAnswer, ScriptedCall, ScriptedRequest } from '../../scripts/scripted-protocol';
 import {
-  CONSENT_ASK, CRAFT_ASK, CRAFT_INPUT, DELEGATION_ROSTER_ASK, DELEGATION_TASK_ASK, DELEGATION_WORD, FLEET_ALPHA,
+  CONSENT_ASK, CRAFT_ASK, CRAFT_INPUT, DELEGATION_ROSTER_ASK, DELEGATION_TASK_ASK, DELEGATION_WORD, DEVICE_JOB_ASK, DEVICE_JOB_COMMAND,
+  FLEET_ALPHA,
   HELLO_SLATE_ASK, HELLO_SLATE_ID,
   EXEC_OUTPUT_ASK, EXEC_OUTPUT_PROGRAM, INTERNAL_FETCH_MISSION, INTERNAL_FETCH_PROGRAM, INTERNAL_URL, ISOLATION_ASK, MOUNT_ASK, MOUNT_BYTES,
   MOUNT_LISTING_PROGRAM, MOUNT_TARGET, NAMED_MACHINE_ASK, PANES_ASK, PANES_PROBE, RELAY_MISSION, SEARCH_ASK,
@@ -187,6 +188,11 @@ const machineConsent: Script = (request) => latest(request) !== CONSENT_ASK ? nu
   call('shell', { runtime: 'device', command: 'hostname', why }),
 ], ([shell]) => `HOST ${oneLine(shell?.result).slice(0, 300)}`);
 
+/** device-job-output: the one command, answered with the job it detached into. */
+const deviceJob: Script = (request) => latest(request) !== DEVICE_JOB_ASK ? null : steps(request, [
+  call('shell', { runtime: 'device', command: DEVICE_JOB_COMMAND, why }),
+], ([shell]) => `JOB ${/bgjob-[\w-]+/.exec(shell?.result ?? '')?.[0] ?? 'NONE'}`);
+
 const sandboxMountWrite: Script = (request) => latest(request) !== MOUNT_ASK ? null : steps(request, [
   call('file', { action: 'list', path: MOUNT_TARGET.slice(0, MOUNT_TARGET.lastIndexOf('/')) }),
   call('file', { action: 'write', path: MOUNT_TARGET, content: MOUNT_BYTES }),
@@ -286,7 +292,8 @@ const nestedChat: Script = (request) => {
 /** The words every case sends its root agent: a conversation holding one is a case's, never a helper's. */
 const CASE_ASKS: readonly string[] = [
   STEER_TURN, SETTLE_ASK, WAKE_ASK, ISOLATION_ASK, DELEGATION_TASK_ASK, DELEGATION_ROSTER_ASK, TREE_ASK, SWARM_ASK,
-  CONSENT_ASK, MOUNT_ASK, EXEC_OUTPUT_ASK, UNNAMED_MACHINE_ASK, NAMED_MACHINE_ASK, SEARCH_ASK, PANES_ASK, TOOLS_LIST_ASK, TOOLS_USE_ASK,
+  CONSENT_ASK, DEVICE_JOB_ASK, MOUNT_ASK, EXEC_OUTPUT_ASK, UNNAMED_MACHINE_ASK, NAMED_MACHINE_ASK, SEARCH_ASK, PANES_ASK, TOOLS_LIST_ASK,
+  TOOLS_USE_ASK,
   CRAFT_ASK, HELLO_SLATE_ASK,
 ];
 
@@ -321,7 +328,8 @@ const helper: Script = (request) => {
 
 const SCRIPTS: readonly Script[] = [
   steerCorrection, backgroundSettle, backgroundWake, capabilityIsolation, delegation, delegationTree, exploration,
-  machineConsent, sandboxMountWrite, sandboxExecOutput, twoMachines, webSearch, workspacePanes, everyTool, codemodeCraft, helloSlate, jobWake,
+  machineConsent, deviceJob, sandboxMountWrite, sandboxExecOutput, twoMachines, webSearch, workspacePanes, everyTool, codemodeCraft, helloSlate,
+  jobWake,
   nestedChat, helper,
 ];
 

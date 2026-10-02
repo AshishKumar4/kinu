@@ -12,9 +12,9 @@
  * at import time, so a shared helper living inside a case would drag a second
  * case's plan resolution into every run.
  */
-import type { JsonValue } from '../../packages/core/src/index';
+import { READS_CHANGED_EVENT, type JsonValue } from '../../packages/core/src/index';
 import {
-  decodeFrame, encodeChatRequest, encodeRpcRequest, HEADER_WEBSOCKET, recordPublicTurn, webHeaders,
+  decodeFrame, decodeSocketJson, encodeChatRequest, encodeRpcRequest, HEADER_WEBSOCKET, recordPublicTurn, webHeaders,
   type PublicSendResult, type PublicTurnRecorder, type PublicWebIdentity,
 } from '../../evals/src/session';
 
@@ -37,6 +37,12 @@ interface PendingBroadcast {
   readonly resolve: (arrived: boolean) => void;
 }
 
+/** One broadcast as this socket heard it: its type, and the frame for a reader that needs its fields. */
+export interface HeardBroadcast {
+  readonly type: string;
+  readonly frame: JsonValue | undefined;
+}
+
 /** One public socket, and the two frame kinds a browser sends over it. */
 export interface PublicSocket {
   readonly path: string;
@@ -48,6 +54,8 @@ export interface PublicSocket {
    *  the frame the browser renders a card on — and false when the socket or
    *  the case budget ends first. Ask before the action that raises it. */
   broadcast(type: string): Promise<boolean>;
+  /** Every broadcast heard since the socket opened, `reads_changed` included, in the order the room sent them. */
+  heard(): readonly HeardBroadcast[];
   /** True when the next turn this socket did not send closes — a wake, or a
    *  send from another tab — on the done frame the room broadcasts to every
    *  tab; false when the socket or the case budget ends first. */
@@ -72,6 +80,7 @@ export function openPublicSocket(
   const rpcs = new Map<string, PendingRpc>();
   const turns = new Map<string, PendingTurn>();
   const broadcasts = new Set<PendingBroadcast>();
+  const heard: HeardBroadcast[] = [];
   const closings = new Set<(closed: boolean) => void>();
   let nextId = 0;
 
@@ -118,9 +127,12 @@ export function openPublicSocket(
       return;
     }
 
-    if (frame.kind === 'other') {
+    if (frame.kind === 'other' || frame.kind === 'reads') {
+      const type = frame.kind === 'reads' ? READS_CHANGED_EVENT : frame.type;
+      heard.push({ type, frame: decodeSocketJson(event.data) });
+
       for (const watch of broadcasts) {
-        if (watch.type !== frame.type) continue;
+        if (watch.type !== type) continue;
         broadcasts.delete(watch);
         watch.resolve(true);
       }
@@ -209,6 +221,7 @@ export function openPublicSocket(
 
       return promise;
     },
+    heard: () => [...heard],
     turnClosed() {
       const { promise, resolve } = Promise.withResolvers<boolean>();
 

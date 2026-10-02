@@ -556,7 +556,7 @@ function socketText(data: SocketPayload): string | null {
   return null;
 }
 
-function decodeSocketJson(data: SocketPayload): JsonValue | undefined {
+export function decodeSocketJson(data: SocketPayload): JsonValue | undefined {
   const decoded = socketText(data);
 
   if (decoded === null) return undefined;
