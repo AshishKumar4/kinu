@@ -329,6 +329,8 @@ export interface BridgeCensus {
   readonly flights: string[];
   /** Each runner a Hono route handler returns: the handler is the edge, Hono owns the call. */
   readonly routes: string[];
+  /** Each detached root handed straight to a platform holder, which owns its lifetime. */
+  readonly held: string[];
   /** A runner returned from a private helper or a local function: not a bridge, a mistake. */
   readonly findings: string[];
 }
@@ -337,6 +339,7 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
   const bridges: string[] = [];
   const flights: string[] = [];
   const routes: string[] = [];
+  const held: string[] = [];
   const findings: string[] = [];
 
   for (const [file, text] of sources) {
@@ -383,6 +386,13 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
       }
 
       if (!runners.has(raw.callee.name)) return;
+
+      if (heldBy(node)) {
+        held.push(site);
+
+        return;
+      }
+
       // `return settle(…)`, `return await settle(…)`, or an arrow whose whole body is the call: the edge, spelled short.
       const awaited = node.parent?.raw.type === 'AwaitExpression' ? node.parent : node;
       const holder = awaited.parent;
@@ -413,7 +423,24 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
     });
   }
 
-  return { bridges: bridges.sort(), flights: flights.sort(), routes: routes.sort(), findings: findings.sort() };
+  return { bridges: bridges.sort(), flights: flights.sort(), routes: routes.sort(), held: held.sort(), findings: findings.sort() };
+}
+
+/**
+ * Holders that keep a detached run alive: `waitUntil` takes its promise, `keepAliveWhile` and the durable
+ * fiber host take a callback. Nothing awaits such a run, so its own body must answer every failure.
+ */
+const HOLDERS: readonly string[] = ['waitUntil', 'keepAliveWhile', 'fiber', 'runFiber'];
+
+/** Whether a runner is a holder's whole argument, or the whole body of a callback that is one. */
+function heldBy(runner: SyntaxNode): boolean {
+  const callback = runner.parent !== undefined && arrowBody(runner.parent.raw) === runner.raw ? runner.parent : undefined;
+  const argument = callback ?? runner;
+  const holder = argument.parent;
+
+  if (holder?.raw.type !== 'CallExpression' || !holder.raw.arguments.some((given) => given === argument.raw)) return false;
+
+  return HOLDERS.includes(identifierCalleeName(holder) ?? memberCalleeName(holder) ?? '');
 }
 
 /** Whether an expression is, or chains off, `new Hono(…)`. */
@@ -838,7 +865,7 @@ if (import.meta.main) {
     console.log(`  declared: ${file} (${mechanisms.join(', ')}${within === undefined ? '' : ` within ${within.join(', ')}`}): ${reason}`);
   }
 
-  const { bridges, flights, routes, findings } = bridgeSites(sources);
+  const { bridges, flights, routes, held, findings } = bridgeSites(sources);
 
   console.log(`  bridges: ${String(bridges.length)} (the migration ends at zero)`);
 
@@ -849,6 +876,9 @@ if (import.meta.main) {
   console.log(`  routes: ${String(routes.length)} (a Hono route handler's runner: Hono owns the call)`);
 
   for (const site of routes) console.log(`    ${site}`);
+  console.log(`  held: ${String(held.length)} (a detached root a platform holder keeps alive: ${HOLDERS.join(', ')})`);
+
+  for (const site of held) console.log(`    ${site}`);
 
   for (const wrong of findings) console.log(`  finding: ${wrong}`);
 

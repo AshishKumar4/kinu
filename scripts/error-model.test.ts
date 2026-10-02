@@ -150,6 +150,7 @@ function ordinary(): number { const n = settleSync(writeEffect()); return n; }
     bridges: [`${FILE}:5`, `${FILE}:6`],
     flights: [],
     routes: [],
+    held: [],
     findings: [
       `${FILE}:10: a runner returned outside an exported function or public member`,
       `${FILE}:11: a runner called mid-body; the effect is run once, at the edge, as its return`,
@@ -190,6 +191,7 @@ export function done(): number { return settle(1); }
     bridges: [`${FILE}:11`, `${FILE}:13`, `${FILE}:13`, `${FILE}:14`, `${FILE}:3`, `${FILE}:4`, `${FILE}:5`, `${FILE}:7`],
     flights: [],
     routes: [],
+    held: [],
     findings: [
       `${FILE}:10: a runner returned outside an exported function or public member`,
       `${FILE}:12: a runner returned outside an exported function or public member`,
@@ -220,6 +222,7 @@ app.get((c) => settle(read(c)));
     bridges: [],
     flights: [],
     routes: [`${FILE}:10`, `${FILE}:5`, `${FILE}:6`, `${FILE}:7`, `${FILE}:8`, `${FILE}:8`],
+    held: [],
     findings: [
       `${FILE}:10: a runner called mid-body; the effect is run once, at the edge, as its return`,
       `${FILE}:11: a runner returned outside an exported function or public member`,
@@ -251,6 +254,7 @@ export async function mid() { const n = await settle(countEffect()); return n; }
     bridges: [`${FILE}:10`, `${FILE}:6`, `${FILE}:8`, `${FILE}:9`],
     flights: [`${FILE}:3`, `${FILE}:5`, `${FILE}:8`],
     routes: [],
+    held: [],
     findings: [
       `${FILE}:10: a flight called where it is built runs once per call; build it once and hold it`,
       `${FILE}:11: a flight keyed by a fresh value never joins a run; key it by what its callers share`,
@@ -259,5 +263,34 @@ export async function mid() { const n = await settle(countEffect()); return n; }
       `${FILE}:14: a runner called mid-body; the effect is run once, at the edge, as its return`,
       `${FILE}:9: a flight called where it is built runs once per call; build it once and hold it`,
     ],
+  });
+});
+
+test('a runner handed straight to a platform holder is a held root; stored first, chained or wrapped, it is a finding', () => {
+  const source = `
+import { settle } from '../obs/index';
+export class Host {
+  start(ctx: Ctx, deps: Deps) {
+    ctx.waitUntil(settle(warm()));
+    this.keepAliveWhile(() => settle(drain()));
+    deps.fiber('job', (fiberCtx) => settle(run(fiberCtx)), ({ cause }) => settle(failed(cause)));
+    const later = settle(index());
+    ctx.waitUntil(later);
+    ctx.waitUntil(settle(index()).then(done));
+    ctx.waitUntil(Promise.all([settle(a()), settle(b())]));
+    this.keepAliveWhile(async () => { await settle(drain()); });
+    queue.send(settle(other()));
+  }
+}
+`;
+
+  const midBody = 'a runner called mid-body; the effect is run once, at the edge, as its return';
+
+  expect(bridgeSites(new Map([[FILE, source]]))).toEqual({
+    bridges: [],
+    flights: [],
+    routes: [],
+    held: [`${FILE}:5`, `${FILE}:6`, `${FILE}:7`, `${FILE}:7`],
+    findings: [`${FILE}:10`, `${FILE}:11`, `${FILE}:11`, `${FILE}:12`, `${FILE}:13`, `${FILE}:8`].map((site) => `${site}: ${midBody}`),
   });
 });
