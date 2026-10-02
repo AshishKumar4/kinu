@@ -1,5 +1,6 @@
 // openWorkspaceCLI: the local resume path, reading a workspace's identity and SOUL.md.
 import { scratchDir } from '../../test-utils/src/scratch';
+import { spawnTest } from '@kinu.run/test-utils';
 
 import { join } from 'node:path';
 import { describe, expect, test } from 'bun:test';
@@ -34,7 +35,7 @@ describe('openWorkspaceCLI', () => {
     made.close();
 
     // Another process (the daemon) is mid-write when this one opens the workspace.
-    const holder = Bun.spawn([process.execPath, '-e', `
+    const holder = spawnTest([process.execPath, '-e', `
       const { Database } = require('bun:sqlite');
       const daemon = new Database(${JSON.stringify(dbPath)});
       daemon.exec('PRAGMA journal_mode = WAL');

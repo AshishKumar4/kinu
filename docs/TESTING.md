@@ -354,7 +354,11 @@ Measured 2026-10-02: a two-turn pool's serialized configuration fell from 485.44
 
 Tests await the public completion of the work they actually invoked, or the product's existing settle/close API. They do not invent fixture-ready events, notification counters or completion latches. Missing product completion is an API problem to report, not a reason to build a second scheduler in tests. UI renderers may use their existing public frame/flush completion; domain expiry uses a controlled clock, not an elapsed machine-speed cutoff.
 
-For an active operation, tests read the frontend's real session, daemon or terminal frames with the shared frame buffer fed directly by the public output callback. A model-operation start spans a whole streamed turn, not each SDK step. Restart probes cut an actual text stream instead of waiting on a fixture's prompt counter. Native process output completes with stdout EOF or process exit; pidfiles and logs are observed through filesystem events.
+Native process output completes with stdout EOF or process exit; pidfiles and logs are observed through filesystem events.
+
+Test children use `spawnTest` from `@kinu.run/test-utils`, or an explicit environment. Bun's no-env spawn inherits its launch snapshot, not the preload's changed scratch roots; a real child-scratch regression proves this on Bun 1.4.2. The anti-slop rule covers native Bun and child-process calls with red fixtures and no allowlist. Rule registration, suites and enabled severities are checked against the tracked rule corpus, not a copied rule list; disabling the new rule still fails that gate.
+
+Connect creates its pidfile with exclusive mode 0600, without a second chmod that races the daemon's exit unlink. A syscall-stopped connect, resumed only after the real daemon exited and removed the file, now reports that exit instead of a pidfile-write failure. Leaked-child diagnostics retain the command, or its kernel name when cmdline has emptied, and name the parent.
 
 A title-join regression waits on the title's real model-operation start and observes the public settle promise still pending before releasing the model. Routed non-turn calls in both backends pass their operation sink to core's shared invocation writer; a completed fast call retains its start/end pair and usage in the workspace timeline.
 

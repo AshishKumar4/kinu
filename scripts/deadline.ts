@@ -148,11 +148,13 @@ async function laidOut(pid: number, name: 'environ' | 'cmdline'): Promise<string
 /** Kill `pid` and describe it as `<pid> <command>`: as it was when ended, which, between its fork and its exec, is
  *  the program it was forked from. */
 async function end(pid: number): Promise<string> {
-  const command = await laidOut(pid, 'cmdline') ?? '';
+  const command = (await laidOut(pid, 'cmdline'))?.replaceAll('\0', ' ').trim() ?? '';
+  const stat = command === '' ? procFile(pid, 'stat') : undefined;
+  const description = command || (stat === undefined ? '[exited before cmdline was read]' : `[comm: ${stat.slice(stat.indexOf('(') + 1, stat.lastIndexOf(')'))}]`);
 
   tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch');
 
-  return `${String(pid)} ${command.replaceAll('\0', ' ').trim()}`;
+  return `${String(pid)} ${description}`;
 }
 
 /** End every live process whose environment carries `mark` as `KINU_RUN`; each as `<pid> <command>`. */

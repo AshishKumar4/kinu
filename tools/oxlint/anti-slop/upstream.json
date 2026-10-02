@@ -11,6 +11,7 @@
     "effect-restricted-api",
     "effect-run-in-adapter",
     "no-ambient-git-in-tests",
+    "no-ambient-bun-in-tests",
     "no-bare-error-in-durable-object",
     "no-cli-credential-flag",
     "no-copy-rpc-stub",
@@ -50,6 +51,9 @@
     ],
     "no-ambient-git.gate.test.ts": [
       "no-ambient-git-in-tests"
+    ],
+    "no-ambient-bun.gate.test.ts": [
+      "no-ambient-bun-in-tests"
     ],
     "no-copy-rpc-stub.gate.test.ts": [
       "no-copy-rpc-stub"
@@ -100,13 +104,22 @@
     },
     "index.ts": {
       "upstream": "9deed4cb455b9a6251001dc3a525d5b5e2c6ef989dd1c01e804c2edf0a697415",
-      "local": "53a98b30b69b2c0009cabd2a58264c5651b7f673ff4867d80611708cd766cfb2",
+      "local": "08525a1052f33449ff8fbf8a2a2eab1dfc17a796f36aac780730a411c61b06f6",
       "reason": "Registers the Kinu-local rules declared in kinuRules beside the pinned upstream rules. Upstream has no counterpart for these policy rules."
     },
     "live-tree.gate.test.ts": {
       "kinuOnly": true
     },
     "no-ambient-git.gate.test.ts": {
+      "kinuOnly": true
+    },
+    "no-ambient-bun.gate.test.ts": {
+      "kinuOnly": true
+    },
+    "rules/no-ambient-bun-in-tests.ts": {
+      "kinuOnly": true
+    },
+    "rules/no-ambient-bun-in-tests.test.ts": {
       "kinuOnly": true
     },
     "no-copy-rpc-stub.gate.test.ts": {

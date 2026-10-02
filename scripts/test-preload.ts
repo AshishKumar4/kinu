@@ -13,6 +13,7 @@ import * as v from 'valibot';
 import { SlateVendorSchema, type SlateVendor } from '../packages/cf-backend/slate-vendor';
 import { endChildren } from './deadline';
 import { release, runTemp } from './test-scratch-home';
+import { spawnTest } from '../packages/test-utils/src/spawn';
 
 // No per-test clock. Bun's 5 s default is a wall clock racing the machine: on
 // 2026-09-15 it read red on a test that passes alone, under the deploy wave's
@@ -51,7 +52,7 @@ afterAll(async () => {
 
   if (left.length > 0) {
     // Per file under `--parallel`; without it this runs once, so the file named is only the last one.
-    throw new Error(`test files up to ${Bun.main} left ${String(left.length)} process(es) of their own running, now ended: `
+    throw new Error(`test files up to ${Bun.main} left ${String(left.length)} process(es) of their own running, now ended (parent ${String(process.pid)}): `
       + `${left.join('; ')}. A test file ends what it starts and awaits its exit.`);
   }
 });
@@ -184,7 +185,7 @@ async function sharedSlateVendor(): Promise<SlateVendor> {
 
   // Workers that miss at once each build; the build renames into place, so a reader sees a whole file.
   if (!existsSync(file)) {
-    const code = await Bun.spawn([process.execPath, VENDOR_BUILD, file], { stdout: 'inherit', stderr: 'inherit' }).exited;
+    const code = await spawnTest([process.execPath, VENDOR_BUILD, file], { stdout: 'inherit', stderr: 'inherit' }).exited;
 
     if (code !== 0) throw new Error(`building the slate vendor into ${file} exited with ${String(code)}`);
   }

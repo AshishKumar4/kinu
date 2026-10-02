@@ -15,6 +15,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { spawnTest } from '@kinu.run/test-utils';
 
 import {
   BURNER, artifactPath, completeRun, failingTests, hammerOnce, measuredFiles, reportedCounts, type HammerRun,
@@ -135,7 +136,7 @@ describe('contention ends with the gate however the gate ends', () => {
   // A SIGKILLed gate runs no cleanup of its own, and the kernel closing its pipes is all a burner then sees: the end
   // of its stdin. A burner that ended only when killed would spin on after the gate.
   test('a burner exits when its stdin ends', async () => {
-    const burner = Bun.spawn([...BURNER], { stdin: 'pipe', stdout: 'inherit', stderr: 'inherit' });
+    const burner = spawnTest([...BURNER], { stdin: 'pipe', stdout: 'inherit', stderr: 'inherit' });
 
     await burner.stdin.end();
 

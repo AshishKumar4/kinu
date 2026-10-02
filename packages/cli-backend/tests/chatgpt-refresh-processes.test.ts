@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { lstatSync, readFileSync, readlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { scratchDir } from '@kinu.run/test-utils';
+import { spawnTest, scratchDir } from '@kinu.run/test-utils'
 import { decodeLockOwner, withConfigLock } from '../src/config-lock';
 import * as v from 'valibot';
 
@@ -43,26 +43,26 @@ describe('two kinu processes refreshing one ChatGPT plan login', () => {
 
   /** One child is one `kinu` process: `bun -e` gives it its own module state, file handles and view of the lock. */
   function spawnChild(role: string, base: string, configPath: string): Bun.Subprocess<'ignore', 'pipe', 'pipe'> {
-    return Bun.spawn({
+    return spawnTest({
       cmd: [process.execPath, '-e', `
         const { createFileOAuthStore } = await import(${STORE_TS});
         const { asFetchFunction } = await import('@kinu.run/core');
         const role = ${JSON.stringify(role)};
         const base = ${JSON.stringify(base)};
-
+    
         // Announce, and wait to be released. The endpoint decides the order.
         await fetch(base + '/arrive?role=' + role);
-
+    
         const store = createFileOAuthStore(${JSON.stringify(configPath)}, {
           // Every provider request goes to the endpoint this test controls.
           fetch: asFetchFunction(async (input, init) => await fetch(base + '/token', init)),
         });
-
+    
         // The waiter announces itself WITHOUT awaiting the answer, so its first
         // acquisition attempt happens while the holder is still inside the
         // refresh. Awaiting here would hand the holder time to finish.
         if (role === 'waiter') void fetch(base + '/armed');
-
+    
         const auth = await store.getAuth('chatgpt.oauth');
         console.log(JSON.stringify({ role, authorization: auth.headers.Authorization }));
       `],
@@ -198,7 +198,7 @@ describe('two kinu processes refreshing one ChatGPT plan login', () => {
     try {
       const base = `http://127.0.0.1:${String(server.port)}`;
 
-      const victim = Bun.spawn({
+      const victim = spawnTest({
         cmd: [process.execPath, '-e', `
           const { withConfigLock } = await import(${JSON.stringify(join(import.meta.dir, '../src/config-lock.ts'))});
           await withConfigLock(${JSON.stringify(configPath)}, async () => {

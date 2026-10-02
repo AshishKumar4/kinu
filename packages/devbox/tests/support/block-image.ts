@@ -7,7 +7,7 @@ import { dockerBuild } from './docker-build';
  *  bundles, which the Dockerfile copies (D30). */
 export function buildBlockImage(image: string): void {
   const context = join(import.meta.dir, '../../block-lower');
-  const bundled = spawnSync(process.execPath, [join(context, 'bundle-sync.ts')], { encoding: 'utf8' });
+  const bundled = spawnSync(process.execPath, [join(context, 'bundle-sync.ts')], { env: process.env, encoding: 'utf8' });
 
   if (bundled.status !== 0) throw new Error(bundled.stdout + bundled.stderr);
   const result = dockerBuild(image, context);
