@@ -29,7 +29,7 @@ import { join } from 'node:path';
 import type { Server, ServerWebSocket } from 'bun';
 import * as v from 'valibot';
 
-import { isAgentRpcMethod, renderSoulMarkdown, type RunEvent, type JsonValue } from '../../packages/core/src/index';
+import { isAgentRpcMethod, READS_CHANGED_EVENT, renderSoulMarkdown, type RunEvent, type JsonValue } from '../../packages/core/src/index';
 import { DeploymentAnswer, EVAL_WEB_IDENTITY_ENV, INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
 import {
   decodeFrame, encodeChatRequest, encodeRpcRequest,
@@ -266,6 +266,58 @@ test('an rpc after the platform closed the idle socket redials and answers, neve
 
     expect(await session.execute('device', 'after the close')).toEqual(response);
     expect(upgrades).toBe(2);
+  } finally { await session.teardown(); await server.stop(true); }
+});
+
+// What the settle reads again on, and what keeps two reads from counting as quiet (`workspace-completion.ts`).
+test('a frame naming a live read moves that read before the answer to a later call, and a socket opened moves every read', async () => {
+  let firstServerSocket: ServerWebSocket | undefined;
+
+  const lead = {
+    key: 'main', label: 'Main', category: 'main', activity: 'working', parent: null, open: { kind: 'chat', path: null }, tab: true,
+    input: true, actorId: 'actor-main', figures: { tokens: null, usd: null, wallMs: null, cacheEma: null },
+  };
+
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: socketOnly,
+    websocket: {
+      open(socket) { firstServerSocket ??= socket; },
+      message(socket, message) {
+        const request = v.parse(RpcRequestFrameSchema, JSON.parse(message.toString()));
+
+        // Never answered: its rejection is the close landing.
+        if (request.method === 'listSubordinates') return;
+        // The tick that wrote ends with its frame, ahead of the answer to any call after the write.
+        socket.send(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ['listBackgroundJobs', 'getMemoryContent'] }));
+        socket.send(rpcReplyFrame({ requestId: request.id, result: [lead] }));
+      },
+    },
+  });
+
+  const session = new KinuPublicSession({ origin: server.url.origin, identity: { kind: 'loopback' },
+    workspace: 'probe', purpose: 'reads moved probe',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  const moved = () => [session.readsMoved(['listBackgroundJobs']), session.readsMoved(['listWorkspaceAgents'])];
+
+  try {
+    await session.connect();
+    const moving = session.readsMoving;
+
+    // The agents read is one the room serves a workspace socket.
+    expect(isAgentRpcMethod('listWorkspaceAgents')).toBe(true);
+    expect(moved()).toEqual([1, 1]);
+    expect(await session.agents()).toEqual([{ label: 'Main', category: 'main', activity: 'working', open: { kind: 'chat', path: null } }]);
+    expect(moving.aborted).toBe(true);
+    expect(moved()).toEqual([2, 1]);
+
+    const held = session.subordinates();
+    firstServerSocket?.close(1012, 'instance no longer active');
+    await expect(held).rejects.toThrow('the workspace socket closed (code 1012, instance no longer active)');
+
+    // A frame sent while no socket was open is lost: the redial moves every read.
+    await session.agents();
+    expect(moved()).toEqual([4, 2]);
   } finally { await session.teardown(); await server.stop(true); }
 });
 

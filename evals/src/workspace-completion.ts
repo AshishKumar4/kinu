@@ -1,15 +1,16 @@
-import { silenceBoundMs, type RunEvent } from '@kinu.run/core';
+import { silenceBoundMs, type LiveRead, type RunEvent } from '@kinu.run/core';
 import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
-import type { KinuPublicSession, PublicBackgroundJob, PublicMessage, PublicSubordinate } from './session';
+import type { KinuPublicSession, PublicAgent, PublicBackgroundJob, PublicMessage, PublicSubordinate } from './session';
 
-/** How often an unsettled workspace is looked at. A poll, not a deadline: only a hang ends a turn here. A poll reads
- *  only what the ledger added since the last one, so a short interval costs the deployment little. */
-const IDLE_POLL_MS = 1_000;
+/** How often a busy workspace that says nothing moved is looked at, for a hang alone: while the turn's own stream is
+ *  open, and while a run, helper or job holds it. Each look reads every run's new rows over HTTP: once a second for 180
+ *  trials at once is hundreds of requests a second at the build. */
+const LOOK_MS = 30_000;
 
-/** How often the workspace is looked at while the turn's own stream is open, for a hang alone. Each look reads every
- *  run's new rows over HTTP: once a second for 180 trials at once is hundreds of requests a second at the build. */
-const STREAMING_POLL_MS = 30_000;
+/** The reads settle decides on: a frame naming one sends it to read again, and one between two reads makes neither
+ *  count as quiet. */
+const SETTLE_READS: readonly LiveRead[] = ['listWorkspaceAgents', 'listSubordinates', 'listBackgroundJobs'];
 
 /** Polls in a row the deployment's transport may fail before the trial fails as infrastructure. */
 const DROPPED_POLLS = 3;
@@ -49,8 +50,9 @@ const WALL_CLOCK: WatchClock = {
   }),
 };
 
-/** What a watch reads of a workspace, and the helpers' rooms it asks to hear. */
-export type WatchedWorkspace = Pick<KinuPublicSession, 'runEvents' | 'backgroundJobs' | 'subordinates' | 'toolCallsInFlight' | 'heard' | 'listen'>;
+/** What a watch reads of a workspace, the helpers' rooms it asks to hear, and the reads the workspace says moved. */
+export type WatchedWorkspace = Pick<KinuPublicSession,
+  'runEvents' | 'backgroundJobs' | 'subordinates' | 'agents' | 'toolCallsInFlight' | 'heard' | 'listen' | 'readsMoved' | 'readsMoving'>;
 
 /** How a turn is watched: its clock, where to say once a minute which jobs it waits on, and the run's cancel. */
 export type WatchOptions = { readonly clock?: WatchClock; readonly waiting?: (line: string) => void; readonly cancelled?: AbortSignal };
@@ -87,8 +89,11 @@ export class TrialCancelled extends WorkspaceHeld {
 /** A job the workspace waits on: the lead's, or one of a helper waiting on its own. */
 type HeldJob = { readonly job: PublicBackgroundJob; readonly helper: string | null };
 
-/** What holds a workspace busy: its open runs, the helpers that stream, and the jobs it waits on. */
-type Holders = { readonly runs: readonly string[]; readonly helpers: readonly PublicSubordinate[]; readonly jobs: readonly HeldJob[] };
+/** What holds a workspace busy: its open runs, the helpers that stream, the agents working past both (a turn owed and
+ *  not yet run, a hire's hire), and the jobs it waits on. */
+type Holders = {
+  readonly runs: readonly string[]; readonly helpers: readonly PublicSubordinate[]; readonly agents: readonly PublicAgent[]; readonly jobs: readonly HeldJob[];
+};
 
 function openRuns(events: readonly RunEvent[]): string[] {
   const ended = new Set(events.filter((event) => event.type === 'run_end').map((event) => event.runId));
@@ -112,6 +117,7 @@ function described(events: readonly RunEvent[], held: Holders, age: (job: Public
       return `open run ${runId}${last === undefined ? '' : `, its last row ${last.type} at ${last.timestamp}`}`;
     }),
     ...held.helpers.map((helper) => `working helper ${helper.name}`),
+    ...held.agents.map((agent) => `working agent ${agent.label}`),
     ...held.jobs.map((job) => `running ${jobName(job)}${age(job.job)}`),
   ];
 }
@@ -120,16 +126,17 @@ function kinds(held: Holders): string[] {
   return [...new Set([
     ...held.runs.map(() => 'open run'),
     ...held.helpers.map(() => 'working helper'),
+    ...held.agents.map(() => 'working agent'),
     ...held.jobs.map(({ job }) => `running ${job.kind} job`),
   ])];
 }
 
 /**
  * One turn's look at its workspace, kept across polls: whether it is busy (a run open, a background job running, a
- * helper working), and since when what streams has said nothing. The ledger writes a step and a call only at their ends,
- * so the rooms the session hears are where a model is seen streaming and a call running: the turn's own, the turns the
- * product opens on its own, and each working helper's, which the watch asks the session to listen to. A job, the lead's
- * or a helper's waiting on its own, streams nothing: it is judged by whether it settled.
+ * helper or agent working), and since when what streams has said nothing. The ledger writes a step and a call only at
+ * their ends, so the rooms the session hears are where a model is seen streaming and a call running: the turn's own, the
+ * turns the product opens on its own, and each working helper's and agent's, which the watch asks the session to listen
+ * to. A job, the lead's or a helper's waiting on its own, streams nothing: it is judged by whether it settled.
  */
 export class TurnWatch {
   readonly clock: WatchClock;
@@ -162,12 +169,13 @@ export class TurnWatch {
   async poll(): Promise<{ busy: boolean; events: readonly RunEvent[] }> {
     const { events, working, held } = await this.read();
     const now = this.clock.now();
-    const busy = held.runs.length > 0 || working.length > 0 || held.jobs.length > 0;
+    const busy = held.runs.length > 0 || working.length > 0 || held.agents.length > 0 || held.jobs.length > 0;
     const frames = this.workspace.heard();
 
-    this.workspace.listen(working.map((helper) => helper.name));
+    this.workspace.listen([...new Set([...working.map((helper) => helper.name), ...held.agents.flatMap((agent) => agent.open.path ?? [])])]);
 
-    if (held.runs.length + held.helpers.length === 0 || events.length > this.rows || frames > this.frames || this.workspace.toolCallsInFlight().length > 0) {
+    if (held.runs.length + held.helpers.length + held.agents.length === 0 || events.length > this.rows || frames > this.frames
+      || this.workspace.toolCallsInFlight().length > 0) {
       this.heardAt = now;
     }
 
@@ -206,22 +214,46 @@ export class TurnWatch {
     }
   }
 
-  /** The ledger and what holds the workspace: its open runs, its working helpers, and the jobs it waits on. `fresh`
-   *  reads each helper's own jobs now rather than as last read. */
+  /** The ledger and what holds the workspace: its open runs, its working helpers and agents, and the jobs it waits on.
+   *  `fresh` reads each helper's own jobs now rather than as last read. */
   private async read(fresh = false): Promise<{ events: readonly RunEvent[]; working: readonly PublicSubordinate[]; held: Holders }> {
-    const [events, jobs, helpers] = await Promise.all([this.workspace.runEvents(), this.workspace.backgroundJobs(), this.workspace.subordinates()]);
+    const [events, agents, helpers, jobs] = await Promise.all([
+      this.workspace.runEvents(), this.workspace.agents(), this.workspace.subordinates(), this.workspace.backgroundJobs(),
+    ]);
+
     const working = helpers.filter((helper) => helper.status === 'working');
     const theirs = await this.jobsOfHelpers(working, fresh);
+    const runs = openRuns(events);
+    const rostered = new Set(working.map((helper) => helper.name));
 
     return {
       events,
       working,
       held: {
-        runs: openRuns(events),
+        runs,
         helpers: working.filter((helper) => (theirs.get(helper.name) ?? []).length === 0),
+        agents: agents.filter((agent) => agent.activity === 'working'
+          && !(agent.category === 'main' && runs.length > 0) && !rostered.has(agent.open.path ?? '')),
         jobs: [...jobs.filter(running).map((job) => ({ job, helper: null })), ...[...theirs].flatMap(([helper, own]) => own.map((job) => ({ job, helper })))],
       },
     };
+  }
+
+  /** How often the reads {@link settle} decides on have moved, as the workspace said. */
+  moves(): number {
+    return this.workspace.readsMoved(SETTLE_READS);
+  }
+
+  /** Until one of the reads {@link settle} decides on moves after `since`, the next look is due, or the run is cancelled. */
+  async untilMoved(since: number): Promise<void> {
+    const due = this.clock.now() + LOOK_MS;
+    const cancelled = this.options.cancelled;
+
+    while (this.moves() === since && cancelled?.aborted !== true && this.clock.now() < due) {
+      const moving = this.workspace.readsMoving;
+
+      await this.clock.sleep(due - this.clock.now(), cancelled === undefined ? moving : AbortSignal.any([moving, cancelled]));
+    }
   }
 
   private silence(now: number, events: readonly RunEvent[], held: Holders): void {
@@ -283,7 +315,7 @@ export async function answered<T>(watch: TurnWatch, sent: Promise<T>): Promise<T
   const wake = cancelled === undefined ? landing.signal : AbortSignal.any([landing.signal, cancelled]);
 
   for (;;) {
-    await Promise.race([answer, watch.clock.sleep(STREAMING_POLL_MS, wake)]);
+    await Promise.race([answer, watch.clock.sleep(LOOK_MS, wake)]);
 
     if (landing.signal.aborted) return answer;
     await watch.whenCancelled();
@@ -298,43 +330,42 @@ export async function answered<T>(watch: TurnWatch, sent: Promise<T>): Promise<T
   }
 }
 
-/** What one poll of {@link settle} saw: whether the workspace was busy, and the ledger it read. */
+/** What one read of {@link settle} saw: whether the workspace was busy, and the ledger it read. */
 export type SettlePoll = (busy: boolean, events: readonly RunEvent[]) => void;
 
-/**
- * Wait until the workspace has nothing left to do for this turn: no run open, no background job
- * running, no helper working, seen on two polls in a row. A background job's completion wakes the
- * agent in a run of its own, and that run answers the prompt too. A workspace whose runs and helpers
- * stay silent fails the turn as a {@link WorkspaceHang}, and the run's cancel ends it as a
- * {@link TrialCancelled}.
- */
-export async function settle(watch: TurnWatch, polled?: SettlePoll): Promise<void> {
-  let quiet = 0;
-  let dropped = 0;
-
-  for (;;) {
-    await watch.whenCancelled();
-    let busy = true;
-
+/** One read of the workspace, made again at once when the transport lost it: the socket it lost redials on the next
+ *  call, and three reads lost in a row is a deployment that is not answering. */
+async function look(watch: TurnWatch, polled: SettlePoll | undefined): Promise<boolean> {
+  for (let lost = 1; ; lost += 1) {
     try {
       const seen = await watch.poll();
 
-      busy = seen.busy;
-      dropped = 0;
-      polled?.(busy, seen.events);
+      polled?.(seen.busy, seen.events);
+
+      return seen.busy;
     } catch (error) {
-      if (error instanceof WorkspaceHeld) throw error;
-      // An eviction closes the socket under the polls in flight, and the next poll redials. Three
-      // failed polls in a row is a deployment that is not answering, and fails the trial as that.
-      dropped += 1;
-
-      if (!renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER) || dropped >= DROPPED_POLLS) throw error;
+      if (error instanceof WorkspaceHeld || !renderThrownChain({ cause: error }).includes(INFRA_FAILURE_MARKER) || lost >= DROPPED_POLLS) throw error;
     }
+  }
+}
 
-    quiet = busy ? 0 : quiet + 1;
+/**
+ * Wait until the workspace has nothing left to do for this turn: no run open, no job running, no helper or agent
+ * working, on two reads in a row with no frame between them saying a read they made moved. A read's calls are answered
+ * one at a time, so a change can land between two of them and the read see neither side's work; the frame for it
+ * arrives before the next read's answers on the same socket. A busy workspace is read again when such a frame arrives,
+ * or looked at for a hang. A background job's completion wakes the agent in a run of its own, and that run answers the
+ * prompt too. A workspace whose runs, helpers and agents stay silent fails the turn as a {@link WorkspaceHang}, and the
+ * run's cancel ends it as a {@link TrialCancelled}.
+ */
+export async function settle(watch: TurnWatch, polled?: SettlePoll): Promise<void> {
+  for (;;) {
+    await watch.whenCancelled();
+    const since = watch.moves();
 
-    if (quiet >= 2) return;
-    await watch.clock.sleep(IDLE_POLL_MS, watch.cancelSignal);
+    if (!await look(watch, polled) && !await look(watch, polled) && watch.moves() === since) return;
+
+    await watch.untilMoved(since);
   }
 }
 
