@@ -15,7 +15,7 @@ const SourcePath = v.pipe(Name, v.check((path) => !path.startsWith('/') && !path
 const PathPrefix = v.pipe(
   Name,
   v.check((path) => path.startsWith('/') && !path.includes('\0'), 'must name an absolute path'),
-  v.transform(workspacePath),
+  v.transform((path) => workspacePath(path, '/')),
 );
 
 const Binding = v.variant('kind', [

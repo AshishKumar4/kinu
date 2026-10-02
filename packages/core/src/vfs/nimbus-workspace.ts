@@ -51,9 +51,10 @@ function shellExecOptions(input: { value: unknown }): ShellExecOptions | undefin
   return options.success ? options.output : undefined;
 }
 
-function workspaceFiles(vendor: WorkspaceBundle['vfs']): WorkspaceBundle['vfs'] {
+/** A relative path starts at `cwd`, the actor's home. */
+function workspaceFiles(vendor: WorkspaceBundle['vfs'], cwd: string): WorkspaceBundle['vfs'] {
   const at = <T>(path: string, syscall: string, call: (absolute: string) => T | Promise<T>): Promise<T> => {
-    const absolute = workspacePath(path);
+    const absolute = workspacePath(path, cwd);
 
     return atVfsPath(absolute, syscall, () => call(absolute));
   };
@@ -72,7 +73,7 @@ function workspaceFiles(vendor: WorkspaceBundle['vfs']): WorkspaceBundle['vfs'] 
     unlink: (path) => at(path, 'unlink', (absolute) => vendor.unlink(absolute)),
     mkdir: (path, opts) => at(path, 'mkdir', (absolute) => vendor.mkdir(absolute, opts)),
     removeRecursive: (path) => at(path, 'rm', (absolute) => vendor.removeRecursive(absolute)),
-    rename: (oldPath, newPath) => at(oldPath, 'rename', (absolute) => vendor.rename(absolute, workspacePath(newPath))),
+    rename: (oldPath, newPath) => at(oldPath, 'rename', (absolute) => vendor.rename(absolute, workspacePath(newPath, cwd))),
     readRange: (path, offset, length) => at(path, 'read', (absolute) => vendor.readRange(absolute, offset, length)),
   };
 }
@@ -92,7 +93,7 @@ function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceBundle['vf
     mkdir: async (path, opts) => (await fs()).mkdir(path, opts),
     rename: async (from, to) => (await fs()).rename(from, to),
     readRange: async (path, offset, length) => (await fs()).readRange(path, offset, length),
-  });
+  }, WORKSPACE_ROOT);
 }
 
 /** No per-command `cwd`: the shell owns its working directory so `cd` persists. */
@@ -137,7 +138,7 @@ export interface WorkspaceAgent {
 }
 
 /** The same `SqliteVFS`, credentialed as the agent; never the workspace `.fs`, which is pinned to the session user. */
-function agentVfs(vfs: CredentialedVfs): WorkspaceBundle['vfs'] {
+function agentVfs(vfs: CredentialedVfs, home: string): WorkspaceBundle['vfs'] {
   return workspaceFiles({
     readFile: (path) => vfs.readFile(path),
     writeFile: (path, data) => vfs.writeFile(path, data),
@@ -153,7 +154,7 @@ function agentVfs(vfs: CredentialedVfs): WorkspaceBundle['vfs'] {
     mkdir: (path, opts) => vfs.mkdir(path, opts),
     rename: (from, to) => vfs.rename(from, to),
     readRange: (path, offset, length) => vfs.readRange(path, offset, length),
-  });
+  }, home);
 }
 
 /** Uid-0 view of the same bytes plus the principal registry that scopes `/tmp` per uid. */
@@ -376,7 +377,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
           });
 
           return {
-            vfs: agentVfs(origin.vfs.as(agent.cred)),
+            vfs: agentVfs(origin.vfs.as(agent.cred), agent.home),
             shell: workspaceShell(() => Promise.resolve(asAgent)),
           };
         } catch (cause) {

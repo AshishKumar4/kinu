@@ -16,7 +16,7 @@ export function isSystemManaged(name: string): boolean {
   return SYSTEM_MANAGED_DIRECTORIES.has(name);
 }
 
-/** As a process in {@link WORKSPACE_ROOT} names it. Not `resolveVfsPath`: it keeps a leading `..` (NIMBUS-ASKS). */
-export function workspacePath(path: string): string {
-  return normalizePath(path.startsWith('/') ? path : `${WORKSPACE_ROOT}/${path}`);
+/** As a process in `cwd` names it. Not `resolveVfsPath`: it keeps a leading `..` (NIMBUS-ASKS). */
+export function workspacePath(path: string, cwd: string): string {
+  return normalizePath(path.startsWith('/') ? path : `${cwd}/${path}`);
 }

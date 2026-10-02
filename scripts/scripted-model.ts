@@ -13,7 +13,7 @@
 import { createServer as createHttpServer, type ServerResponse } from 'node:http';
 import { setTimeout as sleep } from 'node:timers/promises';
 import * as v from 'valibot';
-import { SLATES_ROOT, workspacePath } from '@kinu.run/core';
+import { SLATES_ROOT, workspacePath, WORKSPACE_ROOT } from '@kinu.run/core';
 import { SCRIPTED_MODEL_SPEC } from '../packages/test-utils/src/scripted-model-spec';
 
 import { apiJson } from './live-app-harness';
@@ -313,7 +313,7 @@ function heldSteps(request: ScriptedRequest, held: HeldCall, midAnswer: boolean,
   if (folder !== undefined) {
     return {
       text: `Step ${String(done + 1)}: listing ${folder === '' ? 'the workspace' : folder}.`,
-      toolCall: { name: 'file', arguments: { action: 'list', path: workspacePath(folder) } },
+      toolCall: { name: 'file', arguments: { action: 'list', path: workspacePath(folder, WORKSPACE_ROOT) } },
     };
   }
 
@@ -472,7 +472,7 @@ export const KEPT_TAB_NOTE = 'Kept-tab probe: save one note.';
 export const KEPT_TAB_FORGET = 'Kept-tab probe: forget every note.';
 
 /** The workspace's notes file, where the agent's file tool finds it. */
-const NOTES_FILE = workspacePath('memory/MEMORY.md');
+const NOTES_FILE = workspacePath('memory/MEMORY.md', WORKSPACE_ROOT);
 
 /**
  * The kept-tab row's turns, or null for any other request: the first saves a

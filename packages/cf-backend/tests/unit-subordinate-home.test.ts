@@ -4,7 +4,9 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
  * (kept on an archive), all through the production seams.
  */
 import { describe, expect, test } from 'bun:test';
-import { agentHome, agentTmpRoot, subordinateAgentName } from '@kinu.run/core';
+import { agentHome, agentTmpRoot, buildBuiltinTools, subordinateAgentName } from '@kinu.run/core';
+import { present, toolExecute } from '@kinu.run/test-utils';
+import { conversationsFor } from '../../core/tests/helpers';
 import { hostedSubordinateHarness, orchestratorHarness, type ActorHarness, type HarnessOrchestratorAgent } from './helpers/actor-harness';
 
 /** An agent the owner adds takes the workspace's mission, which the soul states. */
@@ -53,6 +55,23 @@ describe('a hosted subordinate runs as its own home', () => {
       .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
     expect((await shell.exec('echo s > /tmp/x')).exitCode).toBe(0);
     expect(await parent.agent.statWorkspaceFile('/tmp/x')).toBeNull();
+  });
+
+  // A relative path names the actor's own working directory, its home, as its shell's cwd does.
+  test("a large result of its shell is saved in its own home, and its file tool reads it back from the marker's path", async () => {
+    const parent = orchestratorHarness();
+    const child = await hostedSubordinateHarness(parent, { ...hire, name: 'builder-2' });
+    const tools = buildBuiltinTools({ rt: child.actor.runtime, workMode: 'build', conversations: conversationsFor(child.actor.runtime) });
+    const shell = toolExecute<{ command: string }, string>(present(tools.shell, 'shell'));
+    const file = toolExecute<{ action: 'read'; path: string; offset?: number; limit?: number }, string>(present(tools.file, 'file'));
+
+    const clamped = await shell({ command: 'seq 1 20000' });
+    const saved = /full result at ([^\]]+)\]/u.exec(clamped)?.[1];
+
+    expect(clamped).not.toContain('the full result was not saved');
+    expect(await file({ action: 'read', path: present(saved, 'the saved path'), offset: 19_999, limit: 2 })).toContain('20000');
+    // Not main's: its home is mode 0700 to the helper anyway.
+    expect(await parent.agent.statWorkspaceFile(`/home/main/${saved}`)).toBeNull();
   });
 
   test('an archive keeps the home', async () => {
