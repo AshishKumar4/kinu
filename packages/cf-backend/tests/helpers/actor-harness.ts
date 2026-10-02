@@ -1327,6 +1327,12 @@ export function makeCtx(db: Database, id = 'harness-actor', objectName = id): Ag
   const context = {
     storage: {
       sql: { exec: sqlExec },
+      // The synchronous face of the same pairs, as a SQLite-backed object's: the namespace name a destroy keeps.
+      kv: {
+        get: (key: string): JsonValue | undefined => kv.get(key),
+        put: (key: string, value: JsonValue): void => { kv.set(key, value); },
+        delete: (key: string): boolean => kv.delete(key),
+      },
       // Real: the durable filesystem's atomicity rests on it; Nimbus refuses to boot without it.
       transactionSync: <T>(closure: () => T): T => db.transaction(closure)(),
       get: async (key: string): Promise<JsonValue | undefined> => kv.get(key),
