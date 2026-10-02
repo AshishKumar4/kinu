@@ -458,13 +458,15 @@ export function findMount(procMounts: string, dir: string): MountLine | undefine
 
 /** TERM's grace before KILL, for work-directory holders and supervised processes alike: without
  *  KILL one process that ignores TERM is unstoppable, and a waiting caller's stop runs this. Long
- *  enough to flush, short enough to stop within ceilings; 0.12.9's container gave a command 5 s too. */
+ *  enough to flush, short enough to stop within ceilings. */
 export const TERM_GRACE_MS = 5_000;
 
-/** After admissions drain, release fd and cwd holders. PID 1 and this command
+/** After admissions drain, release fd, mapped-file and cwd holders. PID 1 and this command
  *  ancestor chain are never signalled. */
 export function releaseWorkdirHoldersCommand(workdir: string): string {
   const quoted = `'${workdir.replaceAll("'", `'\\''`)}'`;
+  // A binary or library mapped from the workdir holds it with no fd (D61).
+  const mapped = `' ${workdir.replaceAll("'", `'\\''`)}/'`;
   const termWait = String(Math.ceil(TERM_GRACE_MS / 1_000));
 
   // This shell's parent chain. `comm` can hold spaces and parentheses, so ppid is read after
@@ -478,7 +480,7 @@ export function releaseWorkdirHoldersCommand(workdir: string): string {
   const scan = '__devbox_hold() { fdh=""; cwdh=""; kin=""; '
     + `for pid in $(ls /proc | grep -E '^[0-9]+$' | grep -v '^1$'); do `
     + 'h=""; '
-    + `if ls -l /proc/$pid/fd 2>/dev/null | grep -q -F ${quoted}; then h=fd; `
+    + `if ls -l /proc/$pid/fd 2>/dev/null | grep -q -F ${quoted} || grep -q -F ${mapped} /proc/$pid/maps 2>/dev/null; then h=fd; `
     + `else case "$(readlink /proc/$pid/cwd 2>/dev/null)" in `
     + `${quoted}|${quoted}/*) h=cwd;; esac; fi; `
     + 'if [ -n "$h" ]; then '

@@ -212,7 +212,8 @@ export function fixtureConfigForArms(
     ...config,
     $schema: join(REPO_ROOT, 'node_modules/wrangler/config-schema.json'),
     name: names.worker,
-    vars: { ...config.vars, BENCH_SELECTED_ARMS: arms.join(','), BENCH_INTERNET: process.env['BENCH_INTERNET'] ?? 'on' },
+    vars: { ...config.vars, BENCH_SELECTED_ARMS: arms.join(','), BENCH_INTERNET: process.env['BENCH_INTERNET'] ?? 'on',
+      BENCH_EXCLUDES: process.env['BENCH_EXCLUDES'] ?? 'default' },
     main: join(BENCH_DIR, 'worker.ts'),
     durable_objects: {
       ...config.durable_objects,
@@ -292,11 +293,12 @@ export function createFixtureResources(
 
 const HARNESS = '/workspace/.devbox-bench';
 
-const SANDBOX_IMAGE_DIGEST = blockImage.digest;
+/** `BENCH_IMAGE_DIGEST` runs another pushed digest of the same repository: a before-and-after pair at one hour. */
+const SANDBOX_IMAGE_DIGEST = process.env['BENCH_IMAGE_DIGEST'] ?? blockImage.digest;
 
 /** Fixture configs pin this immutable reference so the provenance row names the bytes that ran,
  *  not a tag another publisher can repoint. */
-export const SANDBOX_IMAGE = blockImage.image;
+export const SANDBOX_IMAGE = blockImage.image.replace(blockImage.digest, SANDBOX_IMAGE_DIGEST);
 
 const PROCESS_DEADLINE_MS = 1_500_000;
 

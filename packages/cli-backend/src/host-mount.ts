@@ -8,7 +8,7 @@ import * as fs from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { FileCheckpoints, FileReach, MountedVfs } from '@kinu.run/core';
 import { SLATES_ROOT, WORKSPACE_ROOT, workspaceScopePath } from '@kinu.run/core';
-import { toVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { syscallError, toVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { tolerateAsync } from '@kinu.run/core/obs';
 
 function throwVfsError(input: { error: unknown; syscall: string; path: string }): never {
@@ -87,8 +87,10 @@ function cwdPlaneLocator(cwd: string): (path: string) => { readonly hostPath: st
 
     if (!withinRoot(root, mapped)) {
       throwVfsError({
-        error: new VfsError('EACCES', `path escapes the workspace directory ${root}: ${path}; name a file outside it by its absolute path`, path),
-        syscall: 'open',
+        error: syscallError('EACCES', 'access', path, {
+          detail: `the path escapes the workspace directory ${root}; name a file outside it by its absolute path`,
+        }),
+        syscall: 'access',
         path,
       });
     }
@@ -119,7 +121,11 @@ export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | un
     const target = hostPath(path);
 
     if (target === root) {
-      throwVfsError({ error: new VfsError('EACCES', 'the workspace directory itself cannot be removed', path), syscall: 'rm', path });
+      throwVfsError({
+        error: syscallError('EACCES', 'unlink', path, { detail: 'the workspace directory itself cannot be removed' }),
+        syscall: 'unlink',
+        path,
+      });
     }
 
     return host.unlink(target);

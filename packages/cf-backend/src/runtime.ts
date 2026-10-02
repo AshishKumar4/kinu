@@ -19,7 +19,7 @@ import {
   type NimbusSandboxHandle,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore, generateReported,
   decodeJsonValue,
-  parseModelSpec, reasoningEffortOptions, createRoutedModelLane,
+  createRoutedModelLane, routedCallOptions,
   createScaffoldSurface,
   type FixedTierSource,
   type VectorStore,
@@ -655,17 +655,11 @@ function createProfileLaneLLM(options: ProfileLaneOptions): LLM | undefined {
       async complete(prompt: string): Promise<string> {
         const registry = actorProviderRegistry(options, `Kinu (${source})`);
 
-        const providerOptions = reasoningEffortOptions(
-          route.reasoningEffort,
-          parseModelSpec(route.model).provider,
-        );
-
         const request: GenerateRequest = {
           model: registry.resolveModel(route.model, agentAffinityKey(options.agent.name)),
           prompt,
+          ...routedCallOptions(route, route.model),
         };
-
-        if (providerOptions) request.providerOptions = providerOptions;
 
         return (await generateReported(request, { spend: { source, report, operations: options.modelOperations }, spec: route.model })).text.trim();
       },

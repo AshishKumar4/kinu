@@ -7,8 +7,10 @@ import { tierIdsOf,
   type SubordinateChild,
   type WorkspaceWork,
   type AgentTaskTree,
-  evolutionHelper, ownerFacingSubordinate,
+  type JobOutputTail,
+  evolutionHelper, jobName, ownerFacingSubordinate,
 } from '@kinu.run/core';
+import type { AgentJobSummary } from '../agent-client';
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { agentWorkspaceKey } from '../agent-list';
 import type { TuiAgentStatus, TuiAgentSummary, TuiSubordinate } from './tui-shell';
@@ -44,6 +46,7 @@ export interface TuiHubRow extends Pick<TuiAgentHubEntry, 'id' | 'label' | 'path
 export interface TuiWorkEntry extends TuiHubRow {
   readonly title: string;
   readonly status: TuiAgentHubEntry['status'];
+  readonly printed?: string;
 }
 
 type WorkEntryDraft = { -readonly [Key in keyof TuiWorkEntry]: TuiWorkEntry[Key] };
@@ -66,6 +69,24 @@ export function workFromWorkspace(work: WorkspaceWork): TuiWorkEntry[] {
   }));
 
   return [...entries.filter((entry) => entry.status !== 'settled'), ...entries.filter((entry) => entry.status === 'settled')];
+}
+
+export function lastPrinted(output: JobOutputTail | undefined): string | undefined {
+  const line = (output?.chunks ?? []).map(({ text }) => text).join('').trimEnd().split('\n').at(-1);
+
+  return line === '' ? undefined : line;
+}
+
+export function jobWork(jobs: readonly AgentJobSummary[]): TuiWorkEntry[] {
+  return jobs.filter((job) => job.status === 'running' || job.status === 'serving').map((job) => {
+    const { title, shortId } = jobName(job);
+    const entry: WorkEntryDraft = { id: `job:${job.id}`, title, label: `${shortId} · ${job.status}`, status: 'running' };
+    const printed = lastPrinted(job.output);
+
+    if (printed !== undefined) entry.printed = printed;
+
+    return entry;
+  });
 }
 
 const HELPER_WORK_STATUS = {
@@ -354,6 +375,7 @@ function AgentHubRows({ data, newAgentHint, selectedAgentId }: {
                 <strong fg={colors.text.strong}>{item.title}</strong>
                 <span fg={colors.text.muted}> · {item.label}</span>
               </text>
+              {item.printed !== undefined && <text><span fg={colors.text.muted}>  {item.printed}</span></text>}
             </box>
           ))}
         </box>

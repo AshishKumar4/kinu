@@ -38,7 +38,7 @@ import { TierIdSchema,
   recoverActorTurns,
   type TurnSteering,
   type AgentStores, collectDynamicContext, subordinateDelegatesOf,
-  type BackgroundJobStore, BackgroundJobRunner, type TaskListStore,
+  type BackgroundJobStore, BackgroundJobRunner, type BackgroundJobRunnerDeps, type TaskListStore,
   backgroundJobNotice,
   DeferredApprovalQueue, DeferredApprovalStore, decideDeferredApprovals,
   wrapToolsForBackground, BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob,
@@ -113,7 +113,7 @@ import { TierIdSchema,
   type AlternateTakeSet, type TakePickOutcome,
   startBranchHead, newBranchId,
   type PendingBranch, type BranchStatusEvent,
-  type AlarmScheduler, type BackgroundJob,
+  type AlarmScheduler, type BackgroundJob, type ListedBackgroundJob,
   type TimerTrigger, type TimerTriggerOpts,
   type CancelTriggerResult, type TrustLevel,
   reasoningEffortOptions,
@@ -702,6 +702,8 @@ export class LocalAgentSession {
       eventLog: this.eventLog,
       scheduleDrain: () => this.actorSession.orchestrator.scheduleDrain(),
       logActivity: (event, detail) => this.emit({ type: 'background', event, message: detail ?? '' }),
+      clock: this.clock,
+      jobOutput: (frame) => { this.host.broadcast(frame); },
       onDetached: null,
       onCancelled: null,
       onSettled: (job) => {
@@ -716,7 +718,7 @@ export class LocalAgentSession {
       )),
       // Arms the session's one terminal-retry timer, which sweeps due jobs before replaying owed effects.
       scheduleResume: (atMs) => this.scheduleTerminalRetry(atMs),
-    });
+    } satisfies BackgroundJobRunnerDeps);
     // Scaffold cold-start heal (DO onStart parity): without scaffold/agent.js,
     // engine.maybeEvolveScaffold silently disables scaffold evolution. Idempotent; tracked for end().
     this.actorSession.orchestrator.track(bootstrapScaffold(this.rt), 'Scaffold bootstrap');
@@ -979,8 +981,8 @@ export class LocalAgentSession {
     return jobResult(this.jobs, jobId);
   }
 
-  async listBackgroundJobs(limit = 20): Promise<BackgroundJob[]> {
-    return listBackgroundJobs(this.jobs, limit);
+  async listBackgroundJobs(limit = 20): Promise<ListedBackgroundJob[]> {
+    return listBackgroundJobs(this.jobs, limit, (jobId) => this.jobRunner.output.tail(jobId));
   }
 
   async cancelBackgroundJob(jobId: string): Promise<{ ok: boolean }> {

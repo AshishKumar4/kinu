@@ -3,6 +3,7 @@
 
 import type { JsonObject } from '../utils/json';
 import type { PlanReview } from './plans';
+import type { OutputChunk } from './primitives';
 
 /** A typed event fanned out to connected clients. Fire-and-forget. */
 export interface BroadcastEvent {
@@ -32,6 +33,9 @@ export interface BroadcastEvent {
   readonly contextWindow?: number;
   /** `reads_changed`: what a write moved. */
   readonly reads?: readonly string[];
+  readonly seq?: number;
+  readonly chunks?: readonly OutputChunk[];
+  readonly dropped?: number;
 }
 
 /** A programmatic turn in the same serialized loop the user drives; `metadata.kinuEvent` renders

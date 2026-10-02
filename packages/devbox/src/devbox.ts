@@ -52,6 +52,7 @@ import {
   type RunningForRest,
 } from './lifecycle';
 import { DevboxError, attempt, attemptSync, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
+import { execRecords } from './exec-stream';
 import { BOX_SIZE_ORDER, BoxSizeSchema, DEFAULT_BOX_SIZE, instanceOf, type BoxSize, type ResizeOutcome } from './sizes';
 import type { RestorePhase, RestorePhaseStamps } from './durability/contracts';
 import {
@@ -105,6 +106,12 @@ const CONTAINER_STOP_ATTEMPTS = 50;
 interface UntimedExecution {
   cancelled: boolean;
   started?: Promise<ExecProcess>;
+}
+
+interface UntimedOptions {
+  readonly cwd?: string;
+  readonly execId: string;
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 /** The SDK's `killCommand` (D37). */
@@ -1719,22 +1726,49 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /** No deadline; the SDK's process lane lost output (D37). */
-  execUntimed(command: string, options: { readonly cwd?: string; readonly execId: string; readonly env?: Readonly<Record<string, string>> }): Promise<ExecResult> {
+  execUntimed(command: string, options: UntimedOptions): Promise<ExecResult> {
     const pending: UntimedExecution = { cancelled: false };
     this.#untimed.set(options.execId, pending);
 
     return settle(this.#withActiveCaller(Effect.gen({ self: this }, function* () {
-      const { container } = yield* attempt('not-ready', () => this.#ensureReady(this.#teardowns));
-
-      if (pending.cancelled) return yield* Effect.fail(new DevboxError('cancelled', 'sandbox exec cancelled before admission'));
-      const started = yield* attemptSync('process', () => container.exec(['bash', '-c', command], { cwd: options.cwd ?? DEVBOX_WORKDIR, env: { ...options.env, ...CONTAINER_TRUST_ENV } }));
-      pending.started = started;
-      const process = yield* attempt('process', () => started);
+      const process = yield* this.#startUntimed(command, options, pending);
       const output = yield* attempt('process', () => process.output());
       const text = new TextDecoder();
 
       return { stdout: text.decode(output.stdout), stderr: text.decode(output.stderr), exitCode: output.exitCode };
     })).pipe(Effect.ensuring(Effect.sync(() => { this.#untimed.delete(options.execId); }))));
+  }
+
+  execUntimedStream(command: string, options: UntimedOptions): Promise<ReadableStream<Uint8Array>> {
+    const pending: UntimedExecution = { cancelled: false };
+    this.#untimed.set(options.execId, pending);
+    const leave = this.#arrive();
+    const gone = Promise.withResolvers<void>();
+    const ended = (): void => { this.#untimed.delete(options.execId); leave(); gone.resolve(); };
+
+    return settle(this.#startUntimed(command, options, pending).pipe(
+      Effect.map((process) => {
+        unawaited(process.exitCode.finally(ended), `untimed exec ${options.execId} ended without its exit code`);
+
+        return execRecords(process, {
+          exited: ended,
+          cancelled: async () => { await this.#endUntimed(options.execId); await gone.promise; },
+        });
+      }),
+      Effect.onError(() => Effect.sync(ended)),
+    ));
+  }
+
+  #startUntimed(command: string, options: UntimedOptions, pending: UntimedExecution): Effect.Effect<ExecProcess, DevboxError> {
+    return Effect.gen({ self: this }, function* () {
+      const { container } = yield* attempt('not-ready', () => this.#ensureReady(this.#teardowns));
+
+      if (pending.cancelled) return yield* Effect.fail(new DevboxError('cancelled', 'sandbox exec cancelled before admission'));
+      const started = yield* attemptSync('process', () => container.exec(['bash', '-c', command], { cwd: options.cwd ?? DEVBOX_WORKDIR, env: { ...options.env, ...CONTAINER_TRUST_ENV } }));
+      pending.started = started;
+
+      return yield* attempt('process', () => started);
+    });
   }
 
   portListeners(stamp: string, ports?: readonly number[]): Promise<readonly PortListener[] | null> {
@@ -2613,17 +2647,26 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
    *  so this counter keeps them live to the heartbeat from call entry through settlement. */
   #withActiveCaller<T>(operation: Effect.Effect<T, DevboxError>): Effect.Effect<T, DevboxError> {
     return Effect.suspend(() => {
-      this.#activeCallers += 1;
-      this.stampInteraction();
+      const leave = this.#arrive();
 
-      return operation.pipe(Effect.ensuring(Effect.sync(() => {
-        this.#activeCallers -= 1;
-
-        if (this.#activeCallers === 0) { this.#callersDrained?.resolve(); this.#callersDrained = undefined; }
-
-        this.stampInteraction();
-      })));
+      return operation.pipe(Effect.ensuring(Effect.sync(leave)));
     });
+  }
+
+  #arrive(): () => void {
+    this.#activeCallers += 1;
+    this.stampInteraction();
+    let left = false;
+
+    return () => {
+      if (left) return;
+      left = true;
+      this.#activeCallers -= 1;
+
+      if (this.#activeCallers === 0) { this.#callersDrained?.resolve(); this.#callersDrained = undefined; }
+
+      this.stampInteraction();
+    };
   }
 
   async #record(

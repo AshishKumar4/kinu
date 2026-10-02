@@ -97,7 +97,7 @@ import * as v from 'valibot';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 
 import {
-  DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, hostedActorSocketPath, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, READS_CHANGED_EVENT,
+  DEV_IDENTITY_ACCOUNT_HEADER, DEV_IDENTITY_HEADER, hostedActorSocketPath, JOB_OUTPUT_EVENT, JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, READS_CHANGED_EVENT,
   RunEventSchema, STEER_STEP_METADATA_KEY, parseJsonValue, renderSoulMarkdown, rowText, CommandResultSchema,
   type EvalAccount, type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent,
   type SubordinateInspectionRequest, type WorkspaceSpend,
@@ -757,9 +757,10 @@ function chunkOf(body: string | undefined): HeardChunk | null {
   return chunk?.success === true ? chunk.output : null;
 }
 
-/** The broadcasts a head's live output rides, to every socket: its words, and each step its journal lands
- *  (`publishHeadStreamFrame`, `announceHeadActivity` in cf-backend `actor-agent.ts`). Swarm nodes speak only here. */
-const HEAD_FRAMES: ReadonlySet<string> = new Set(['head_stream', 'head_activity']);
+/** The broadcasts live output rides, to every socket: a head's words and each step its journal lands
+ *  (`publishHeadStreamFrame`, `announceHeadActivity` in cf-backend `actor-agent.ts`), where swarm nodes speak only,
+ *  and a running job's output (`job_output`, core `jobs/live-output.ts`), where a detached build speaks only. */
+const LIVE_OUTPUT_FRAMES: ReadonlySet<string> = new Set(['head_stream', 'head_activity', JOB_OUTPUT_EVENT]);
 
 /** How soon a helper's room that closed is opened again: a room the edge refuses is not dialled at every poll. */
 const ROOM_REDIAL_MS = 30_000;
@@ -2262,7 +2263,7 @@ export class KinuPublicSession {
     }
 
     if (frame.kind === 'other') {
-      if (HEAD_FRAMES.has(frame.type)) this.hearElsewhere(null, frame.type);
+      if (LIVE_OUTPUT_FRAMES.has(frame.type)) this.hearElsewhere(null, frame.type);
 
       return;
     }

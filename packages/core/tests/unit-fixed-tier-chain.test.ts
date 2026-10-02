@@ -45,8 +45,11 @@ function gateway(answers: ReadonlyMap<string, number>, calls: string[], answerin
   });
 }
 
-function route(model: string, fallbacks: readonly string[] = []): ModelRouteResolution {
-  return { source: 'fast', tier: 'fast', model, reasoningEffort: null, fallbacks: fallbacks.map((spec) => ({ model: spec, reasoningEffort: null })) };
+function route(model: string, fallbacks: readonly string[] = [], retries = 0): ModelRouteResolution {
+  return {
+    source: 'fast', tier: 'fast', model, reasoningEffort: null, retries,
+    fallbacks: fallbacks.map((spec) => ({ model: spec, reasoningEffort: null })),
+  };
 }
 
 function notices() {
@@ -76,6 +79,25 @@ test('a 402 on the tier model hands the call to its configured fallback, as a tu
   expect(text).toBe('answered by gateway/chain-two');
   expect(calls).toEqual(['gateway/chain-one', 'gateway/chain-two']);
   expect(said()).toEqual([]);
+});
+
+test('each call spends the owner\'s retries, none while a fallback follows, as a turn does', async () => {
+  const spent: [string, number][] = [];
+  const answers = new Map([['gateway/first', 429], ['gateway/second', 429]]);
+  const llm = gateway(answers, []);
+
+  const lane = {
+    llm: (resolution: ModelRouteResolution): LLM => {
+      spent.push([resolution.model, resolution.retries]);
+
+      return llm(resolution);
+    },
+  };
+
+  await expect(completeOnRoute(route('gateway/first', ['gateway/second', 'gateway/last'], 3), lane, 'compress')).resolves.toBe('answered by gateway/last');
+  await expect(completeOnRoute(route('gateway/alone', [], 3), lane, 'compress')).resolves.toBe('answered by gateway/alone');
+
+  expect(spent).toEqual([['gateway/first', 0], ['gateway/second', 0], ['gateway/last', 3], ['gateway/alone', 3]]);
 });
 
 test('with no chain configured, a refusal is not re-routed', async () => {

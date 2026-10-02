@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { STREAM_WINDOW_BYTES, streamCommand } from '../src/stream-archive';
+import { streamCommand, type StreamProfile } from '../src/stream-archive';
 import { DEVBOX_RUNTIME_DIR } from '../src/storage';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 
@@ -105,9 +105,12 @@ function r2LikeStore(archive: string, corruptPart?: number) {
 
 const archive = join(root, 'stage', 'layer.sqsh');
 
+/** Small enough that a test archive is many windows long; the product's profiles only scale it. */
+const SMALL: StreamProfile = { partBytes: 5 * 1024 * 1024, partsInFlight: 4, windowBytes: 40 * 1024 * 1024 };
+
 /** Runs the shipped command with its script written under this test's root rather than the box's runtime directory. */
 async function stream(source: string, url: string, archiver?: string) {
-  let command = streamCommand({ sourceDir: source, archivePath: archive, excludeFile: join(root, 'stage', 'excludes.txt'), excludes: [], objectUrl: url, windowBytes: STREAM_WINDOW_BYTES })
+  let command = streamCommand({ sourceDir: source, archivePath: archive, excludeFile: join(root, 'stage', 'excludes.txt'), excludes: [], objectUrl: url, profile: SMALL })
     .replaceAll(`'${DEVBOX_RUNTIME_DIR}/devbox-stream.mjs'`, `'${join(root, 'devbox-stream.mjs')}'`);
 
   if (archiver !== undefined) command = command.replace(/ -- [^)]*\)/, ` -- ${archiver})`);

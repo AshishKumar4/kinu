@@ -3,7 +3,8 @@ import { Effect } from 'effect';
 import { diagnostics, KinuError, settle, toKinuError } from '../obs/index';
 import { accountOf, MAIN_ACCOUNT } from '../credentials/accounts';
 import { credentialOrUnknown, FallbackRoute, type CallFailure } from '../providers/fallback-route';
-import type { ReasoningEffort } from '../providers/effort';
+import { reasoningEffortOptions, type ReasoningEffort } from '../providers/effort';
+import { PROVIDER_RETRIES_HEADER } from '../providers/rate-limit-retry';
 import { formatModelSpec, parseModelSpec } from '../providers/types';
 import { describeProviderError, OWNER_FIXABLE_REFUSALS, providerRefusalCode, toProviderError } from '../providers/util';
 import type { LLM } from '../types/primitives';
@@ -39,11 +40,22 @@ function asCalled(spec: string, credentialOf: RouteCallComponents['credentialOf'
   }));
 }
 
+export function routedCallOptions(call: Pick<ModelRouteResolution, 'reasoningEffort' | 'retries'>, spec: string) {
+  const providerOptions = reasoningEffortOptions(call.reasoningEffort, parseModelSpec(spec).provider);
+
+  return {
+    maxRetries: call.retries,
+    headers: { [PROVIDER_RETRIES_HEADER]: String(call.retries) },
+    ...(providerOptions !== undefined && { providerOptions }),
+  };
+}
+
 /** The route's model, then its configured chain, as a turn walks it. */
 export async function completeOnRoute(route: ModelRouteResolution, lane: RouteCallComponents, prompt: string): Promise<string> {
   const chain = new FallbackRoute<ChainEntry>({
     modelSpec: route.model,
     fallbacks: route.fallbacks.map((fallback) => ({ spec: fallback.model, reasoningEffort: fallback.reasoningEffort })),
+    retries: route.retries,
     ...(lane.credentialOf !== undefined && { credentialOf: lane.credentialOf }),
   });
 
@@ -56,7 +68,7 @@ export async function completeOnRoute(route: ModelRouteResolution, lane: RouteCa
   const since = notices?.changes() ?? 0;
 
   const call = (serving: ChainEntry): Effect.Effect<string, KinuError> => Effect.tryPromise({
-    try: () => lane.llm({ ...route, model: serving.spec, reasoningEffort: serving.reasoningEffort }).complete(prompt),
+    try: () => lane.llm({ ...route, model: serving.spec, reasoningEffort: serving.reasoningEffort, retries: chain.callRetries }).complete(prompt),
     catch: (cause) => toProviderError({ doing: `calling the ${route.tier} tier`, cause, provider: serving.spec }),
   }).pipe(
     Effect.tap(() => Effect.sync(() => { lane.refusals?.answered(route.tier); })),

@@ -11,7 +11,8 @@ import {
   type WSMessage,
 } from "agents";
 import {
-  TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, recordServingJobs,
+  TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, recordServingJobs, REAL_CLOCK,
+  type BackgroundJobRunnerDeps,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
   type RunEventInput, type SubordinateInspectionAuthority, ConversationSearchStore, type ConversationRecall,
@@ -2595,6 +2596,8 @@ export abstract class ActorAgent extends Agent<Env> {
       eventLog: this.eventLog,
       scheduleDrain: () => this.orch.scheduleDrain(),
       logActivity: (event, detail) => this.logActivity(event, detail),
+      clock: REAL_CLOCK,
+      jobOutput: (frame) => { this.broadcastToActor(null, JSON.stringify(frame)); },
       // Transfer by request id, never by turn: only the detaching call's device work changes hands,
       // so parallel foreground commands stay reachable by Stop.
       onDetached: (jobId, requestIds) => {
@@ -2621,7 +2624,7 @@ export abstract class ActorAgent extends Agent<Env> {
       // Arms the actor's single terminal-retry row (soonest-wins); its tick re-enters the job sweep,
       // since the fork reconcile runs at most once per activation and a deferred job outlives that.
       scheduleResume: async (atMs) => { await this.scheduleTerminalRetry(atMs); },
-    });
+    } satisfies BackgroundJobRunnerDeps);
 
     return this._jobRunner;
   }

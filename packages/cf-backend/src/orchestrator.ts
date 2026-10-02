@@ -120,7 +120,7 @@ import {
   AGENT_CONFIG_KEYS,
   listProposedTasks, updateProposedTaskStatus,
   hybridSearch, memorySnippetRehydrator, type HybridHit,
-  type BackgroundJob, TriggerRegistry, ReplyChannelStore,
+  type BackgroundJob, type ListedBackgroundJob, TriggerRegistry, ReplyChannelStore,
   type ReasoningEffort, type ShellApprovalMode, type ResolvedTurnProfile,
   type AlarmScheduler,
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront, type GepaRunSummary,
@@ -2816,8 +2816,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   }
 
   @callable()
-  async listBackgroundJobs(limit = 20, actor?: string): Promise<BackgroundJob[]> {
-    return listBackgroundJobs(actor === undefined ? this.jobs : this.hostedChild(actor).child.stores.jobs, limit);
+  async listBackgroundJobs(limit = 20, actor?: string): Promise<ListedBackgroundJob[]> {
+    if (actor !== undefined) return listBackgroundJobs(this.hostedChild(actor).child.stores.jobs, limit);
+
+    return listBackgroundJobs(this.jobs, limit, (jobId) => this.jobRunner.output.tail(jobId));
   }
 
   /** Wrapped at one boundary so the retry ratio is visible across all four sites.
