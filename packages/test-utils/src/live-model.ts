@@ -3,8 +3,8 @@
  * `/api/user/ai/v1`, origin checked against the eval-identity allowlist; (2) AI Gateway, `AI_GATEWAY_BASE_URL` +
  * `AI_GATEWAY_AUTH` (or `KINU_BASE_URL`/`KINU_AUTH`). No baked-in default; a half-set environment is `misconfigured`, not a skip.
  */
-import { Data, Effect } from 'effect';
-import { settleSync } from '@kinu.run/core/obs';
+import { Cause, Data, Effect } from 'effect';
+import { settleSync, settle } from '@kinu.run/core/obs';
 import {
   addUsage, cloudProxyBaseURL, createChatModel, DEFAULT_WORKERS_AI_MODEL_ID, normalizeUsage,
   RunEventRecorder, USER_AI_PROXY_PATH, usageReported, workspaceSpend, WORKSPACE_RUN_ID,
@@ -233,19 +233,23 @@ function platformAnswer(answer: DeploymentAnswer): boolean {
  * Run a deployment-dependent step and label its failure as infrastructure, preserving the cause,
  * unless the deployment itself answered with the failure: that is the build's result.
  */
-export async function infraBoundary<T>(boundary: string, op: () => Promise<T>): Promise<T> {
-  try {
-    return await op();
-  } catch (err) {
-    if (err instanceof DeploymentAnswer && !platformAnswer(err)) throw err;
+export function infraBoundary<T>(boundary: string, op: () => Promise<T>): Promise<T> {
+  return settle(Effect.gen(function* () {
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      return yield* Effect.promise(async () => op());
+    }), (failed) => Effect.gen(function* () {
+      const err = Cause.squash(failed);
 
-    throw new Error(
-      `${INFRA_FAILURE_MARKER}: ${boundary} did not answer: ${String(err)}. `
-      + "The environment failed here, so nothing about the agent's behaviour was measured; "
-      + 'check the deployment before reading this as a regression.',
-      { cause: err },
-    );
-  }
+      if (err instanceof DeploymentAnswer && !platformAnswer(err)) return yield* Effect.failCause(failed);
+
+      return yield* Effect.die(new Error(
+        `${INFRA_FAILURE_MARKER}: ${boundary} did not answer: ${String(err)}. `
+        + "The environment failed here, so nothing about the agent's behaviour was measured; "
+        + 'check the deployment before reading this as a regression.',
+        { cause: err },
+      ));
+    }));
+  }));
 }
 
 /** Placeholder config for skipped suites (`beforeAll` still runs); the `.invalid` host fails at DNS. */

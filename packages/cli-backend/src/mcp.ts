@@ -1,6 +1,7 @@
 // Local MCP client over stdio child processes. Admission policy lives in core
 // (`admitMcpDescriptors`); the session applies it.
 
+import { Effect, Cause } from 'effect';
 import {
   describeMcpTool, decodeJsonValue, JsonObjectSchema, listMcpToolsLeniently, McpToolError, NO_TIMER_DEADLINE_MS,
   type JsonObject, type ListedMcpTools, type McpToolRefusal, type RemoteMcpTool, type SerializableToolDescriptor,
@@ -9,7 +10,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { ResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import * as v from 'valibot';
-import { diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderThrownChain, settle } from '@kinu.run/core/obs';
 
 /**
  * No wall clock on startup or tool calls; they end on answer, child exit, owner
@@ -142,24 +143,27 @@ export async function connectMcpServers(
 
       return formatMcpResult(res);
     },
-    async close() {
-      // Close every client before throwing; a failed close is a surviving child process.
-      const failures: unknown[] = [];
+    close() {
+      return settle(Effect.gen(function* () {
+        // Close every client before throwing; a failed close is a surviving child process.
+        const failures: unknown[] = [];
 
-      for (const c of clients.values()) {
-        try {
-          await c.close();
-        } catch (error) {
-          failures.push(error);
+        for (const c of clients.values()) {
+          yield* Effect.catchCause(Effect.gen(function* () {
+            yield* Effect.promise(async () => c.close());
+          }), (failed) => Effect.sync(() => {
+            const error = Cause.squash(failed);
+            failures.push(error);
+          }));
         }
-      }
 
-      if (failures.length > 0) {
-        throw new AggregateError(
-          failures,
-          `${failures.length} of ${clients.size} MCP server(s) failed to disconnect`,
-        );
-      }
+        if (failures.length > 0) {
+          return yield* Effect.die(new AggregateError(
+            failures,
+            `${failures.length} of ${clients.size} MCP server(s) failed to disconnect`,
+          ));
+        }
+      }));
     },
   };
 }

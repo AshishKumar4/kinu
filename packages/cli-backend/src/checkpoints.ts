@@ -4,7 +4,7 @@
  * Snapshots are parentless commits; the user's own `.git/` and git config are never touched.
  */
 
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import { createHash } from 'node:crypto';
 import { execFile, type ExecFileException } from 'node:child_process';
 import { promises as fs, existsSync, realpathSync, statSync } from 'node:fs';
@@ -20,7 +20,7 @@ import {
   type FileCheckpointEntry, type FileRestoreChange, type FileRestoreKind,
   type FileRestorePlan, type FileRestoreResult,
 } from '@kinu.run/core';
-import { classify, tolerate, tolerateAsync, settle } from '@kinu.run/core/obs';
+import { classify, tolerate, tolerateAsync, settle, settleSync } from '@kinu.run/core/obs';
 
 const SHA_RE = /^[0-9a-f]{4,64}$/i;
 
@@ -256,39 +256,43 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     await runGit(['prune', '--expire=now'], workdir, env);
   }
 
-  async function requireCheckpoint(dir: string, id: string): Promise<{ gitDir: string; abs: string; env: GitEnvironment }> {
-    if (!SHA_RE.test(id)) throw new Error(`invalid checkpoint id: ${id}`);
-    const abs = resolve(dir);
-    const gitDir = storeDirFor(abs);
+  function requireCheckpoint(dir: string, id: string): Effect.Effect<{ gitDir: string; abs: string; env: GitEnvironment }> {
+    return Effect.gen(function* () {
+      if (!SHA_RE.test(id)) return yield* Effect.die(new Error(`invalid checkpoint id: ${id}`));
+      const abs = resolve(dir);
+      const gitDir = storeDirFor(abs);
 
-    if (!existsSync(join(gitDir, 'HEAD'))) throw new Error(`no checkpoints exist for ${abs}`);
-    const env = storeEnv(gitDir, abs);
-    const verify = await runGit(['rev-parse', '--verify', `${id}^{commit}`], workdirOrBase(abs), env);
+      if (!existsSync(join(gitDir, 'HEAD'))) return yield* Effect.die(new Error(`no checkpoints exist for ${abs}`));
+      const env = storeEnv(gitDir, abs);
+      const verify = yield* Effect.promise(async () => runGit(['rev-parse', '--verify', `${id}^{commit}`], workdirOrBase(abs), env));
 
-    if (verify.code !== 0) throw new Error(`checkpoint not found: ${id}`);
+      if (verify.code !== 0) return yield* Effect.die(new Error(`checkpoint not found: ${id}`));
 
-    return { gitDir, abs, env };
+      return { gitDir, abs, env };
+    });
   }
 
-  async function diffToCheckpoint(gitDir: string, abs: string, id: string): Promise<FileRestoreChange[]> {
-    const env = storeEnv(gitDir, abs);
-    const current = await stageCurrent(gitDir, abs);
-    const diff = await runGit(['diff-tree', '-r', '--name-status', current.tree, `${id}^{tree}`], abs, env);
+  function diffToCheckpoint(gitDir: string, abs: string, id: string): Effect.Effect<FileRestoreChange[]> {
+    return Effect.gen(function* () {
+      const env = storeEnv(gitDir, abs);
+      const current = yield* Effect.promise(async () => stageCurrent(gitDir, abs));
+      const diff = yield* Effect.promise(async () => runGit(['diff-tree', '-r', '--name-status', current.tree, `${id}^{tree}`], abs, env));
 
-    if (diff.code !== 0) throw new Error(`checkpoint diff failed: ${diff.stderr.trim()}`);
-    const files: FileRestoreChange[] = [];
+      if (diff.code !== 0) return yield* Effect.die(new Error(`checkpoint diff failed: ${diff.stderr.trim()}`));
+      const files: FileRestoreChange[] = [];
 
-    for (const line of diff.stdout.split('\n')) {
-      if (!line) continue;
-      const tab = line.indexOf('\t');
+      for (const line of diff.stdout.split('\n')) {
+        if (!line) continue;
+        const tab = line.indexOf('\t');
 
-      if (tab < 0) continue;
-      const status = line.slice(0, tab);
-      const path = line.slice(tab + 1);
-      files.push({ path, kind: restoreKindOf(status) });
-    }
+        if (tab < 0) continue;
+        const status = line.slice(0, tab);
+        const path = line.slice(tab + 1);
+        files.push({ path, kind: restoreKindOf(status) });
+      }
 
-    return files;
+      return files;
+    });
   }
 
   return {
@@ -336,8 +340,8 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     plan(dir: string, id: string): Promise<FileRestorePlan> {
       return settle(Effect.gen(function* () {
         if (!(yield* Effect.promise(async () => probeGit()))) return yield* Effect.die(new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT));
-        const { gitDir, abs } = yield* Effect.promise(async () => requireCheckpoint(dir, id));
-        const files = yield* Effect.promise(async () => diffToCheckpoint(gitDir, abs, id));
+        const { gitDir, abs } = yield* requireCheckpoint(dir, id);
+        const files = yield* diffToCheckpoint(gitDir, abs, id);
 
         return { dir: abs, id, files };
       }));
@@ -346,10 +350,10 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     restore(dir: string, id: string): Promise<FileRestoreResult> {
       return settle(Effect.gen(function* () {
         if (!(yield* Effect.promise(async () => probeGit()))) return yield* Effect.die(new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT));
-        const { gitDir, abs, env } = yield* Effect.promise(async () => requireCheckpoint(dir, id));
+        const { gitDir, abs, env } = yield* requireCheckpoint(dir, id);
 
         if (!existsSync(abs)) return yield* Effect.die(new Error(`working directory no longer exists: ${abs}`));
-        const files = yield* Effect.promise(async () => diffToCheckpoint(gitDir, abs, id));
+        const files = yield* diffToCheckpoint(gitDir, abs, id);
 
         // Safety snapshot so the restore is undoable; null turn meta keeps it out of the armed turn's /undo group.
         const preRestoreId = yield* Effect.promise(async () => snapshot(abs, null, 'pre-restore'));
@@ -380,33 +384,37 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     },
 
     workdirForPath(path: string): string {
-      const abs = resolve(path);
-      let candidate = abs;
+      return settleSync(Effect.gen(function* () {
+        const abs = resolve(path);
+        let candidate = abs;
 
-      try {
-        if (!statSync(abs).isDirectory()) candidate = dirname(abs);
-      } catch (error) {
-        if (classify({ cause: error }) !== 'enoent') throw error;
-        candidate = dirname(abs);
-      }
+        yield* Effect.catchCause(Effect.sync(() => {
+          if (!statSync(abs).isDirectory()) candidate = dirname(abs);
+        }), (failed) => Effect.gen(function* () {
+          const error = Cause.squash(failed);
 
-      const home = resolve(homedir());
-      // Stop at the temp directory (both resolved and real path): a marker there claimed every host write
-      // beneath it, 24,483 ms for one `device.writeFile`, measured 2026-09-02 (scripts/preflight.ts refuses it).
-      const temp = resolve(tmpdir());
-      const realTemp = tolerate(() => realpathSync(temp), 'enoent') ?? temp;
-      let probe = candidate;
+          if (classify({ cause: error }) !== 'enoent') return yield* Effect.failCause(failed);
+          candidate = dirname(abs);
+        }));
 
-      while (probe !== dirname(probe) && probe !== home) {
-        const real = tolerate(() => realpathSync(probe), 'enoent') ?? probe;
+        const home = resolve(homedir());
+        // Stop at the temp directory (both resolved and real path): a marker there claimed every host write
+        // beneath it, 24,483 ms for one `device.writeFile`, measured 2026-09-02 (scripts/preflight.ts refuses it).
+        const temp = resolve(tmpdir());
+        const realTemp = tolerate(() => realpathSync(temp), 'enoent') ?? temp;
+        let probe = candidate;
 
-        if (probe === temp || real === realTemp) break;
+        while (probe !== dirname(probe) && probe !== home) {
+          const real = tolerate(() => realpathSync(probe), 'enoent') ?? probe;
 
-        if (PROJECT_MARKERS.some((marker) => existsSync(join(probe, marker)))) return probe;
-        probe = dirname(probe);
-      }
+          if (probe === temp || real === realTemp) break;
 
-      return candidate;
+          if (PROJECT_MARKERS.some((marker) => existsSync(join(probe, marker)))) return probe;
+          probe = dirname(probe);
+        }
+
+        return candidate;
+      }));
     },
   };
 }
