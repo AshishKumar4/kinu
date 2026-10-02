@@ -1,4 +1,4 @@
-/** Budgeted, disjoint GEPA train/val split drawn from graded `turn_outcomes` turns; advisor notes backfill negatives. */
+/** Budgeted, disjoint GEPA train/val split drawn from rated turns (`turn_ratings`); advisor notes backfill negatives. */
 
 import * as v from 'valibot';
 import type { ModelMessage } from 'ai';
@@ -15,10 +15,9 @@ import type { SessionTranscriptReader } from '../session/transcript';
 import { RunEventRecorder } from '../events/recorder';
 import { parseJsonValue, projectJsonValue, JsonObjectSchema, type JsonValue } from '../utils/json';
 import {
-  listTurnOutcomes, NEGATIVE_TURN_OUTCOMES,
-  type OutcomeEvalInstance, type OutcomeEvalSplit, type OutcomeSplitDegeneracy,
-  type TurnOutcome, type TurnOutcomeRow,
+  type EvalVerdict, type OutcomeEvalInstance, type OutcomeEvalSplit, type OutcomeSplitDegeneracy,
 } from './outcomes';
+import { isHighRating, listTurnRatings, type TurnRating } from './ratings';
 
 interface StoredRunEvent {
   type: string;
@@ -126,7 +125,7 @@ async function turnProcessEvidence(
   }));
 }
 
-/** An advisor-flagged turn the outcome ledger never graded (wakes, one-shots, serial work the ledger cannot see). */
+/** An advisor-flagged turn nobody rated (wakes, one-shots, serial work no user answered). */
 export interface AdvisorNegativeRow {
   readonly id: string;
   readonly turnId: string;
@@ -143,7 +142,7 @@ interface RawAdvisorRow {
 }
 
 /**
- * Advisor notes for turns absent from `turn_outcomes`, newest first. The `NOT EXISTS`
+ * Advisor notes for turns absent from `turn_ratings`, newest first. The `NOT EXISTS`
  * keeps a turn from landing in both train and val; notes with no transcript pair are
  * dropped; a payload failing `AdvisorRowDataSchema` throws.
  */
@@ -160,9 +159,9 @@ async function advisorNegatives(
     WHERE e.actor_id = ${actor.actorId} AND e.type = ${ADVISOR_EVENT_TYPE}
       AND json_extract(e.data, '$.turnId') IS NOT NULL
       AND NOT EXISTS (
-        SELECT 1 FROM turn_outcomes o
-        WHERE o.actor_id = ${actor.actorId}
-          AND o.turn_id = json_extract(e.data, '$.turnId'))
+        SELECT 1 FROM turn_ratings r
+        WHERE r.actor_id = ${actor.actorId}
+          AND r.turn_id = json_extract(e.data, '$.turnId'))
     ORDER BY e.created_at DESC, e.id DESC LIMIT ${limit}`;
 
   const negatives: AdvisorNegativeRow[] = [];
@@ -197,18 +196,18 @@ interface EvalDraw {
   readonly turnId: string | null;
   readonly input: string;
   readonly response: string;
-  readonly outcome: TurnOutcome;
+  readonly outcome: EvalVerdict;
   readonly complaint: string | null;
   readonly critic: 'user' | 'advisor';
   readonly extraEvidence: readonly string[];
 }
 
-function ledgerDraw(row: TurnOutcomeRow): EvalDraw {
+function ledgerDraw(row: TurnRating): EvalDraw {
   return {
     rowId: row.id, createdAt: row.createdAt, turnId: row.turnId,
-    input: row.userMessage, response: row.assistantResponse,
-    outcome: row.outcome, complaint: row.followup, critic: 'user',
-    extraEvidence: [],
+    input: row.request, response: row.answer,
+    outcome: isHighRating(row.score) ? 'accepted' : 'corrected', complaint: row.followup, critic: 'user',
+    extraEvidence: [`Rated ${row.score.toFixed(1)}/5${row.wrong !== null && row.wrong !== 'nothing' ? `: ${row.wrong.replaceAll('_', ' ')}` : ''}`],
   };
 }
 
@@ -241,8 +240,8 @@ export async function buildOutcomeEvalSplit(
   sql: SqlExecutor, actor: ActorHandle, transcript: SessionTranscriptReader, budget: number,
 ): Promise<OutcomeEvalSplit> {
   const size = Math.max(2, Math.floor(budget));
-  const ledgerNegatives = listTurnOutcomes(sql, actor, { limit: size, outcomes: NEGATIVE_TURN_OUTCOMES });
-  const accepted = listTurnOutcomes(sql, actor, { limit: size, outcomes: ['accepted'] });
+  const ledgerNegatives = listTurnRatings(sql, actor, { limit: size, low: true });
+  const accepted = listTurnRatings(sql, actor, { limit: size, high: true });
   const advisorRows = await advisorNegatives(sql, actor, transcript, size - ledgerNegatives.length);
 
   // Array.sort is stable, so equal-age rows keep their query order.

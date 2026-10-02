@@ -2,7 +2,6 @@ import { writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // The evolution loop's evidence budget: the end of a long turn must reach the judge.
 import type { ChatEvent } from '../src/chat';
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';
 import {
@@ -12,10 +11,9 @@ import {
 } from '../src/index';
 import { renderReflectionPrompt } from '../src/evolution/gepa/mutate';
 import type { GepaCandidate } from '../src/evolution/gepa/types';
-import { initReplayTables, runReplayEval } from '../src/evolution/replay';
-import { buildOutcomeClassifierPrompt, initTurnOutcomeTables, recordTurnOutcome } from '../src/evolution/outcomes';
-import { createTestRuntime, makeExecRaw, makeSql, storesFor } from './helpers';
-import { createTestActors, unobservedSpend } from '@kinu.run/test-utils';
+import { rateTurn } from '../src/evolution/ratings';
+import { createTestRuntime, storesFor } from './helpers';
+import { unobservedSpend } from '@kinu.run/test-utils';
 import { RunEventRecorder } from '../src/events/recorder';
 
 /** A seed candidate carrying `source`, the only field these prompts read. */
@@ -58,6 +56,7 @@ describe('the budgets are ordered — a reader never asks for more than was stor
   test('every ledger reader fits inside the ledger row it reads', () => {
     const stored = EVIDENCE_BUDGETS;
     expect(stored.replayTask).toBeLessThanOrEqual(stored.storedUserMessage);
+    expect(stored.outcomeFollowup).toBeLessThanOrEqual(stored.storedFollowup);
     expect(stored.replayReferenceResponse).toBeLessThanOrEqual(stored.storedAssistantResponse);
     expect(stored.replayFailedResponse).toBeLessThanOrEqual(stored.storedAssistantResponse);
     expect(stored.replayCorrection).toBeLessThanOrEqual(stored.storedFollowup);
@@ -167,53 +166,25 @@ describe('the readers can see the end of a long turn', () => {
     expect(omissions).toEqual([currentOutput.length - EVIDENCE_BUDGETS.shadowOutput]);
   });
 
-  test('the outcome classifier sees how the response ended', () => {
-    const prompt = buildOutcomeClassifierPrompt({
-      userMessage: trajectory(20_000, `ASK-${ending}`),
-      assistantResponse: trajectory(40_000, `ANSWER-${ending}`),
+  test('the decision model sees how the request, the answer and the reply ended', async () => {
+    const states: string[] = [];
+
+    await rateTurn(async ({ state }) => {
+      states.push(state);
+
+      return {
+        satisfaction: { type: 'score', score: 2 }, corrected: { type: 'noul', noul: 0 }, wrong: { type: 'choice', choice: 'nothing' },
+      };
+    }, {
+      request: trajectory(20_000, `ASK-${ending}`),
+      actions: '',
+      answer: trajectory(40_000, `ANSWER-${ending}`),
       followup: trajectory(20_000, `FOLLOWUP-${ending}`),
-    });
+    }, 0);
 
-    expect(prompt).toContain(`ASK-${ending}`);
-    expect(prompt).toContain(`ANSWER-${ending}`);
-    expect(prompt).toContain(`FOLLOWUP-${ending}`);
-  });
-
-  test('the replay judge sees the end of the response it is scoring against', async () => {
-    const db = new Database(':memory:');
-    const sql = makeSql(db);
-    initTurnOutcomeTables(makeExecRaw(db));
-    initReplayTables(makeExecRaw(db));
-    // One actor for seed and pass, or the replay samples an empty ledger.
-    const actor = createTestActors(sql, makeExecRaw(db)).main;
-    recordTurnOutcome(sql, actor, {
-      turnId: 'good', outcome: 'accepted', confidence: 1, source: 'classifier',
-      userMessage: trajectory(20_000, `ASK-${ending}`),
-      assistantResponse: trajectory(40_000, `REFERENCE-${ending}`),
-      now: 100,
-    });
-
-    const prompts: string[] = [];
-    await runReplayEval({
-      sql,
-      actor,
-      judge: {
-        async *stream() { yield '{"score": 1.0, "note": "ok"}'; },
-        complete: async (prompt: string) => {
-          prompts.push(prompt);
-
-          return '{"score": 1.0, "note": "ok"}';
-        },
-      },
-      runTask: async () => trajectory(40_000, `FRESH-${ending}`),
-      sampleSize: 1,
-    });
-
-    expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain(`ASK-${ending}`);
-    expect(prompts[0]).toContain(`FRESH-${ending}`);
-    expect(prompts[0]).toContain(`REFERENCE-${ending}`);
-    db.close();
+    expect(states[0]).toContain(`ASK-${ending}`);
+    expect(states[0]).toContain(`ANSWER-${ending}`);
+    expect(states[0]).toContain(`FOLLOWUP-${ending}`);
   });
 
   test('the GEPA reflector sees how each rollout ended', () => {

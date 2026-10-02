@@ -20,7 +20,7 @@ import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import { Effect } from 'effect';
 import { diagnostics, settleSync, toKinuError, tolerate } from '../obs/index';
-import { NEGATIVE_TURN_OUTCOMES, listTurnOutcomes } from './outcomes';
+import { listTurnRatings } from './ratings';
 import { workspaceSkillPath } from '../skills/discover';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 
@@ -203,7 +203,7 @@ export interface RefinementRequest {
   readonly trigger: RefinementTrigger;
   readonly scope: RefinementScope;
   readonly stage: RefinementStage;
-  /** Turns stay in `turn_outcomes`; this is a reference only. */
+  /** Turns stay in `turn_ratings`; this is a reference only. */
   readonly turnIds: readonly string[];
   /** The automatic trigger's idempotency key; null for an explicit request. */
   readonly debtKey: string | null;
@@ -656,10 +656,9 @@ export function evolutionDebt(
   const seen = new Set<string>();
   const unresolved: string[] = [];
 
-  // `listTurnOutcomes` resolves one effective verdict per turn.
-  for (const row of listTurnOutcomes(sql, actor, { limit: -1, outcomes: NEGATIVE_TURN_OUTCOMES })) {
-    // A row without a turn id cannot be excluded later, so counting it would make the debt permanent.
-    if (row.turnId === null || covered.has(row.turnId) || seen.has(row.turnId)) continue;
+  // One effective rating per turn; turns rated 2 or lower are owed.
+  for (const row of listTurnRatings(sql, actor, { low: true })) {
+    if (covered.has(row.turnId) || seen.has(row.turnId)) continue;
     seen.add(row.turnId);
     unresolved.push(row.turnId);
   }
@@ -676,11 +675,11 @@ export function evolutionDebt(
     owed,
     key: batch.length === 0 ? '' : fnv1a64(batch.join('\n')),
     summary: batch.length === 0
-      ? 'no unresolved corrections: nothing is owed a refinement'
+      ? 'no unresolved low-rated turns: nothing is owed a refinement'
       : (owed
-        ? `${String(batch.length)} unresolved correction${batch.length === 1 ? '' : 's'} `
+        ? `${String(batch.length)} unresolved low-rated turn${batch.length === 1 ? '' : 's'} `
           + 'are owed a refinement'
-        : `${String(batch.length)} unresolved correction${batch.length === 1 ? '' : 's'}: `
+        : `${String(batch.length)} unresolved low-rated turn${batch.length === 1 ? '' : 's'}: `
           + `a refinement opens at ${String(MIN_REFINEMENT_DEBT)}`)
       + (backlog > 0 ? `, and ${String(backlog)} more waiting behind this batch` : ''),
   };

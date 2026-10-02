@@ -1,4 +1,4 @@
-"""Tests for reading the `kinu exec --json` NDJSON stream.
+"""Tests for reading the `kinu exec --json` stream and `kinu quality --json` days.
 
 Run from the repo root with no dependencies and no CL-Bench checkout:
 
@@ -346,6 +346,13 @@ class ActivityVersusEvolutionTest(unittest.TestCase):
             ["reflection", "consolidation", "scaffold_promotion"],
         )
 
+    def test_deleted_replay_evaluation_is_not_live_evolution(self) -> None:
+        activity, evolution = events.split_activity([
+            {"type": "evolution", "event": "replay_eval", "message": "historical event"},
+        ])
+        self.assertEqual(len(activity), 1)
+        self.assertEqual(evolution, [])
+
     def test_non_activity_events_are_ignored_entirely(self) -> None:
         activity, evolution = events.split_activity([
             {"type": "tool_call", "toolName": "shell"},
@@ -355,52 +362,82 @@ class ActivityVersusEvolutionTest(unittest.TestCase):
         self.assertEqual(evolution, [])
 
 
-class ReadGrading(unittest.TestCase):
-    """Whether the turn was graded, and the difference between 0 and unknown.
+class ReadRatings(unittest.TestCase):
+    """Human ratings and the difference between measured zero and unknown.
 
-    A benchmark container holds nobody to ask, so ``executionGraded`` is the
-    only count that can be non-zero. Reading ``turns`` instead would report
-    every headless trial as ungraded, which is the shape of the finding this
-    field exists to test for.
+    Headless turns need a reactive user's reply to receive a rating; tool exits
+    never rate them. A readable probe with rated=0 is a finding, not a failure.
     """
 
     def write(self, payload: object) -> Path:
-        path = Path(self.enterContext(tempfile.TemporaryDirectory())) / "alignment.json"
+        path = Path(self.enterContext(tempfile.TemporaryDirectory())) / "quality.json"
         path.write_text(payload if isinstance(payload, str) else json.dumps(payload))
         return path
 
-    def test_an_execution_graded_turn_is_read_from_the_ledger(self) -> None:
-        # Verbatim shape of `kinu alignment <ws> --json` on a live flash turn
-        # that edited a file and ran its own verifier: two graded turns, no user.
-        grading = events.read_grading(self.write({
-            "alignment": {"overall": {"turns": 0, "negatives": 0, "abandoned": 0,
-                                      "executionGraded": 2}},
-            "calibration": {"universe": 0},
-        }))
-        assert grading is not None
-        self.assertEqual(grading.execution_graded, 2)
-        self.assertEqual(grading.user_graded, 0)
-        self.assertEqual(grading.as_dict(),
-                         {"user_graded": 0, "execution_graded": 2, "abandoned": 0})
+    def test_a_populated_quality_array_sums_all_days(self) -> None:
+        ratings = events.read_ratings(self.write([
+            {"day": "2026-10-01",
+             "satisfaction": {"mean": 4.2, "lo": 3.6, "hi": 4.7, "n": 5},
+             "corrected": {"mean": 0.2, "lo": 0.04, "hi": 0.6, "n": 5},
+             "rated": 5, "thumbs": 1, "turns": 7},
+            {"day": "2026-10-02",
+             "satisfaction": {"mean": 4.5, "lo": 3.8, "hi": 5, "n": 2},
+             "corrected": {"mean": 0, "lo": 0, "hi": 0.3, "n": 2},
+             "rated": 2, "thumbs": 2, "turns": 3},
+        ]))
+        assert ratings is not None
+        self.assertEqual(ratings, events.TurnRatings(rated=7, by_thumbs=3, turns=10))
+        self.assertEqual(ratings.as_dict(), {"rated": 7, "by_thumbs": 3, "turns": 10})
 
-    def test_an_inert_arm_reads_as_zero_and_is_not_missing(self) -> None:
-        grading = events.read_grading(self.write({
-            "alignment": {"overall": {"turns": 0, "abandoned": 0, "executionGraded": 0}},
-        }))
-        self.assertIsNotNone(grading)
-        assert grading is not None
-        self.assertEqual(grading.execution_graded, 0)
+    def test_an_empty_array_reads_as_zero_and_is_not_missing(self) -> None:
+        ratings = events.read_ratings(self.write([]))
+        self.assertIsNotNone(ratings)
+        assert ratings is not None
+        self.assertEqual(ratings.as_dict(), {"rated": 0, "by_thumbs": 0, "turns": 0})
 
-    def test_a_probe_that_left_nothing_readable_is_none_and_not_zero(self) -> None:
-        # Each of these is a probe failure, and none of them may look like an
-        # arm that ran and graded nothing: a broken measurement reading as a
-        # healthy inert arm is how an unmeasured claim gets published.
-        self.assertIsNone(events.read_grading(Path("/nonexistent/alignment.json")))
-        self.assertIsNone(events.read_grading(self.write('{"alignment":{"over')))
-        self.assertIsNone(events.read_grading(self.write({"alignment": {}})))
-        self.assertIsNone(events.read_grading(self.write({"alignment": {"overall": {}}})))
-        self.assertIsNone(events.read_grading(self.write(
-            {"alignment": {"overall": {"turns": 0, "abandoned": 0, "executionGraded": None}}})))
+    def test_reviewed_turns_without_a_persons_reply_are_unrated(self) -> None:
+        ratings = events.read_ratings(self.write([{"rated": 0, "thumbs": 0, "turns": 3}]))
+        self.assertIsNotNone(ratings)
+        assert ratings is not None
+        self.assertEqual(ratings.as_dict(), {"rated": 0, "by_thumbs": 0, "turns": 3})
+
+    def test_integer_valued_json_numbers_are_counts(self) -> None:
+        ratings = events.read_ratings(self.write([{"rated": 2.0, "thumbs": 1.0, "turns": 3.0}]))
+        self.assertEqual(ratings, events.TurnRatings(rated=2, by_thumbs=1, turns=3))
+
+    def test_a_missing_or_non_json_probe_is_none_and_not_zero(self) -> None:
+        self.assertIsNone(events.read_ratings(Path("/nonexistent/quality.json")))
+        self.assertIsNone(events.read_ratings(self.write('[{"rated":')))
+        self.assertIsNone(events.read_ratings(self.write("")))
+
+    def test_a_non_array_probe_is_none_and_not_zero(self) -> None:
+        for payload in ({}, {"rated": 1, "thumbs": 0, "turns": 1}, None, True, 1, '"array"'):
+            with self.subTest(payload=payload):
+                self.assertIsNone(events.read_ratings(self.write(payload)))
+
+    def test_a_malformed_day_invalidates_the_whole_reading(self) -> None:
+        for day in (None, [], "day", 1, True):
+            with self.subTest(day=day):
+                self.assertIsNone(events.read_ratings(self.write([
+                    {"rated": 1, "thumbs": 0, "turns": 1}, day,
+                ])))
+
+    def test_each_count_is_required_on_every_day(self) -> None:
+        for key in ("rated", "thumbs", "turns"):
+            day = {"rated": 1, "thumbs": 0, "turns": 1}
+            del day[key]
+            with self.subTest(key=key):
+                self.assertIsNone(events.read_ratings(self.write([
+                    {"rated": 1, "thumbs": 0, "turns": 1}, day,
+                ])))
+
+    def test_non_integer_counts_are_none_and_not_coerced(self) -> None:
+        for key in ("rated", "thumbs", "turns"):
+            for value in (None, "1", True, False, 1.5, [], {}, float("nan"), float("inf")):
+                day = {"rated": 1, "thumbs": 0, "turns": 1}
+                day[key] = value
+                with self.subTest(key=key, value=value):
+                    self.assertIsNone(events.read_ratings(self.write([day])))
 
 
 if __name__ == "__main__":

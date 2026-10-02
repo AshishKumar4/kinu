@@ -38,6 +38,7 @@ import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from "./sandbox-size";
 import { driveBound, tenantDrive } from "./drive/tenant";
 import { adaptCloudflareSandbox } from "./sandbox-exec-lane"
 import { previewHostSuffix } from "@kinu.run/core";
+import { createDecisionPort } from "@kinu.run/core";
 import { sandboxIdForWorkspace } from "@kinu.run/core";
 import { sandboxPreviewExposures } from "@kinu.run/core";
 import { MemoryStore } from "@kinu.run/agent-utils/memory";
@@ -51,6 +52,7 @@ import {
 } from "@kinu.run/core";
 import {
   createAgentProviderRegistry,
+  decisionRunOf,
   type AgentProviderRegistry,
   type UserCredentialClient,
   type UserCredentialSource,
@@ -534,6 +536,8 @@ export function createCFRuntime(
     },
   }, approvalPolicy));
 
+  const resolveTurnProfile = hooks.resolveProfile;
+
   const runtime: CFRuntime = {
     actor: actor.actor,
     storage: { vfs: agentFileVfs, home: hooks.workspaceExecution?.home ?? WORKSPACE_ROOT, sql, execRaw, transactionSync: write => access.ctx.storage.transactionSync(write) },
@@ -544,6 +548,13 @@ export function createCFRuntime(
     memory, executor, llm, schedule, identity, craftStore,
     get judgeModel() { return profileLane('judge'); },
     get fastLlm() { return profileLane('fast'); },
+    ...(resolveTurnProfile !== undefined && {
+      decide: createDecisionPort(
+        decisionRunOf({ env, userDO: userCredentialSourceFor(env, actor) }),
+        async () => (await resolveTurnProfile()).decisionModel,
+        hooks.reportModelCall,
+      ),
+    }),
     executionRouter,
     shell,
     localVfs: baseWorkspaceVfs,

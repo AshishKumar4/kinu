@@ -45,7 +45,7 @@ export interface CompletedSession {
 }
 
 export interface EvolutionEvent {
-  type: 'reflection' | 'craft_discovered' | 'scaffold_proposed' | 'consolidation' | 'turn_complete' | 'replay_eval' | 'changelog_digest' | 'experience_import' | 'advisor_note';
+  type: 'reflection' | 'craft_discovered' | 'scaffold_proposed' | 'consolidation' | 'turn_complete' | 'changelog_digest' | 'experience_import' | 'advisor_note';
   message: string;
   data?: unknown;
 }
@@ -81,8 +81,6 @@ export interface EvolutionConfig {
      *  inside a Durable Object; other backends must supply a real transaction. */
   transaction?: (body: () => void) => void;
   lifetimeEvolutionInterval: number;
-  /** Re-run a task against the current config. Absent = periodic replay eval is skipped. */
-  replayTaskRunner?: (task: string) => Promise<string>;
   shadowTrialQueue?: (turn: ShadowTrialTurn, plan: ShadowTrialPlan) => ShadowTrialQueueOutcome;
   /** Absent = this host runs no trials; the durable queue lets another host run them. */
   shadowTrialRunner?: () => Promise<ShadowTrialDrain>;

@@ -63,14 +63,14 @@ const TrialSchema = v.object({
       // trial in 2026-08-10's 2.1 job; every one of them was `bg_job_started`.
       evolution_events: v.optional(v.array(v.unknown())),
       activity_events: v.optional(v.array(v.unknown())),
-      // How many turns reached a verdict, from the turn_outcomes ledger. `null`
-      // is a probe that left nothing readable and is NOT three zeros: an arm
-      // that graded nothing and a measurement that never ran are different
-      // findings, and only one of them is about the arm.
-      turn_grading: v.optional(v.nullable(v.object({
-        user_graded: FiniteCount,
-        execution_graded: FiniteCount,
-        abandoned: FiniteCount,
+      // Ratings come only from a person's reply or explicit thumb/take pick,
+      // never a tool exit. `null` is missing probe evidence, not measured zeros;
+      // a headless trial with no reactive user normally reports rated=0.
+      // Older results carrying only turn_grading remain parseable but unreported.
+      turn_ratings: v.optional(v.nullable(v.object({
+        rated: FiniteCount,
+        by_thumbs: FiniteCount,
+        turns: FiniteCount,
       }))),
       turns_completed: v.optional(v.number()),
     }))),
@@ -118,10 +118,10 @@ export interface ExternalTrial {
    *  evidence about evolution. Reported so nobody has to reach for the one
    *  above when they wanted this one. */
   activityEvents: number | null;
-  /** Turns the ENVIRONMENT graded, from the turn_outcomes ledger. `null` is a
-   *  probe that left nothing readable, never a zero. */
-  executionGradedTurns: number | null;
-  /** Turns that completed at all — the denominator the count above needs. */
+  /** Turns rated by a person, from the turn_ratings ledger. `null` is missing
+   *  probe evidence; zero is the normal headless finding, not a failure. */
+  ratedTurns: number | null;
+  /** Turns that completed, independently of whether anyone rated them. */
   turnsCompleted: number | null;
   toolCalls: number | null;
   /** What Harbor's own `agent_result` reported, in this repo's one usage shape.
@@ -155,7 +155,7 @@ function readHarborTrial(directory: string): ExternalTrial | null {
     return {
       taskId: basename(pending.task.path), reward: null, passed: null, checksum: null,
       model: pending.agent.model_name ?? null, evolve: pending.agent.kwargs?.evolve ?? null,
-      evolutionEvents: null, activityEvents: null, executionGradedTurns: null, turnsCompleted: null,
+      evolutionEvents: null, activityEvents: null, ratedTurns: null, turnsCompleted: null,
       toolCalls: null, usage: {}, usageComplete: false, errored: false,
     };
   }
@@ -180,7 +180,7 @@ function readHarborTrial(directory: string): ExternalTrial | null {
     evolve: meta?.evolve ?? configuredEvolution ?? null,
     evolutionEvents: events === undefined ? null : events.length,
     activityEvents: meta?.activity_events === undefined ? null : meta.activity_events.length,
-    executionGradedTurns: meta?.turn_grading?.execution_graded ?? null,
+    ratedTurns: meta?.turn_ratings?.rated ?? null,
     turnsCompleted: meta?.turns_completed ?? null,
     toolCalls: meta?.tool_calls ?? null,
     usage: harborUsage(parsed.agent_result),
@@ -232,14 +232,15 @@ export interface ArmSpend {
   /** Trials on which the mechanism was OBSERVED to act, over trials that could
    *  have reported. Configured state is `evolveFlags`; this is what happened. */
   trialsWithEvolution: number;
-  /** Turns the environment graded, and the turns it had to grade. `null` on
-   *  either side is missing evidence — the probe left nothing readable — and is
-   *  reported as missing rather than converted to zero, the same rule the
-   *  harness already applies to model-call counts. */
-  executionGradedTurns: number | null;
+  /** Turns rated by a person, summed over trials that reported ratings. `null`
+   *  means none reported; zero means a measured absence of ratings, as expected
+   *  for headless trials without a reactive user's reply. */
+  ratedTurns: number | null;
+  /** Completed turns over trials that reported them; missing is not zero. */
   turnsCompleted: number | null;
-  /** Trials whose grading probe produced no readable answer. */
-  gradingUnreported: number;
+  /** Attempts whose rating probe produced no readable answer, including old
+   *  results that carry only turn_grading and attempts with no result file. */
+  ratingUnreported: number;
   /** Missing or partial usage, including attempts that produced no result file. */
   spendUnreported: number;
 }
@@ -254,11 +255,11 @@ export function armSpend(arm: ExternalArm): ArmSpend {
       : t.usage.input - (t.usage.cacheRead ?? 0) + t.usage.output
   ));
 
-  const graded = arm.trials.map((t) => t.executionGradedTurns);
+  const rated = arm.trials.map((t) => t.ratedTurns);
   const completed = arm.trials.map((t) => t.turnsCompleted);
 
   // `every === null` means no trial reported at all, which is missing evidence.
-  // Summing over a mix reports what was measured and `gradingUnreported` says
+  // Summing over a mix reports what was measured and `ratingUnreported` says
   // how much of the arm the sum does not cover.
   const total = (xs: readonly (number | null)[]) => (xs.every((n) => n === null)
     ? null
@@ -279,9 +280,9 @@ export function armSpend(arm: ExternalArm): ArmSpend {
     totalEvolutionEvents: total(events),
     errored: arm.trials.filter((t) => t.errored).length,
     trialsWithEvolution: arm.trials.filter((t) => (t.evolutionEvents ?? 0) > 0).length,
-    executionGradedTurns: total(graded),
+    ratedTurns: total(rated),
     turnsCompleted: total(completed),
-    gradingUnreported: arm.declaredTrials - arm.trials.filter((t) => t.executionGradedTurns !== null).length,
+    ratingUnreported: arm.declaredTrials - arm.trials.filter((t) => t.ratedTurns !== null).length,
   };
 }
 
@@ -420,7 +421,7 @@ export function admissibility(
   const candidateEvolves = spendB.evolveFlags.length === 1 && spendB.evolveFlags[0] === true;
   const ratio = billableSpendRatio(a, b);
   const mismatched = paired.filter((p) => p.sameChecksum !== true).map((p) => p.taskId);
-  const gradedB = spendB.executionGradedTurns;
+  const ratedB = spendB.ratedTurns;
 
   const conditions: AdmissibilityCondition[] = [
     {
@@ -467,13 +468,18 @@ export function admissibility(
       detail: `${spendA.trialsWithEvolution}/${spendA.trials} baseline trial(s) emitted an evolution event`,
     },
     {
-      name: 'the candidate turns were GRADED',
-      met: gradedB !== null && gradedB > 0,
-      detail: gradedB === null
-        ? `unreported — ${spendB.gradingUnreported}/${spendB.trials} candidate trial(s) left no readable `
-          + 'grading probe, so this arm cannot say whether its turns were graded'
-        : `${gradedB} execution-graded turn(s) over ${spendB.turnsCompleted ?? 'unreported'} completed`
-          + `${spendB.gradingUnreported > 0 ? `, ${spendB.gradingUnreported} trial(s) unreported` : ''}`,
+      /** Admissibility requires readable ratings evidence, not positive ratings:
+       *  a rating needs a person's reply or explicit thumb/take pick. A headless
+       *  trial with no reactive user is therefore legitimately unrated, and
+       *  rated=0 is a finding, not a failure. A missing probe is still unknown. */
+      name: 'the candidate turn ratings were reported',
+      met: ratedB !== null,
+      detail: ratedB === null
+        ? `unreported — ${spendB.ratingUnreported}/${spendB.trials} candidate trial(s) left no readable `
+          + 'rating probe, so this arm cannot report its turn ratings'
+        : `${ratedB} rated turn(s) over ${spendB.turnsCompleted ?? 'unreported'} completed`
+          + `${ratedB === 0 ? ' (unrated without human feedback, not a failure)' : ''}`
+          + `${spendB.ratingUnreported > 0 ? `, ${spendB.ratingUnreported} trial(s) unreported` : ''}`,
     },
     {
       name: 'both arms scored the identical task',
@@ -544,7 +550,7 @@ function describeSpend(label: string, spend: ArmSpend): string {
     + `evolve=${spend.evolveFlags.map((f) => String(f)).join('/')}  `
     + `evolutionEvents=${spend.totalEvolutionEvents ?? 'not recorded'}  `
     + `firedOn=${spend.trialsWithEvolution}/${spend.trials}  `
-    + `gradedTurns=${spend.executionGradedTurns ?? 'unreported'}/`
+    + `ratedTurns=${spend.ratedTurns ?? 'unreported'}/`
     + `${spend.turnsCompleted ?? 'unreported'}  `
     + `errors=${spend.errored}  models=${spend.models.join(',')}`
     + (spend.spendUnreported > 0
@@ -555,7 +561,7 @@ function describeSpend(label: string, spend: ArmSpend): string {
 
 function describeAdmissibility(verdict: Admissibility): void {
   console.log(verdict.admissible
-    ? 'ADMISSIBLE — the arms differ in the mechanism, the mechanism acted, and the turns were graded.'
+    ? 'ADMISSIBLE — the arms differ in the mechanism, the mechanism acted, and turn ratings were reported.'
     : 'INADMISSIBLE — this pair of arms cannot carry a claim about the mechanism.');
 
   for (const c of verdict.conditions) {

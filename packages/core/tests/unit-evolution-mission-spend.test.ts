@@ -9,10 +9,9 @@ import { createTestRuntime } from './helpers';
 import { EvolutionEngine } from '../src/evolution/engine';
 import { MissionGovernor } from '../src/mission-budget';
 import type { CompletedTurn } from '../src/evolution/types';
-import { listTurnOutcomes } from '../src/evolution/outcomes';
+import { listTurnRatings } from '../src/evolution/ratings';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 
-const CLASSIFY = 'Classify what the follow-up reveals';
 
 const FOLLOWUP = 'No — that rotates production keys. I said STAGING.';
 
@@ -32,11 +31,9 @@ function makeTurn(overrides: Partial<CompletedTurn> = {}): CompletedTurn {
   };
 }
 
-/** Counted fast tier, with the governor wired as a live workspace wires it. */
+/** Counted fast tier and decision model, with the governor wired as a live workspace wires it. */
 function workspace() {
-  const { rt, stores } = createTestRuntime({
-    llmResponses: { [CLASSIFY]: '{"outcome":"corrected","confidence":0.9,"evidence":"test"}' },
-  });
+  const { rt, stores } = createTestRuntime();
 
   let completions = 0;
   const inner = rt.llm.complete.bind(rt.llm);
@@ -48,6 +45,15 @@ function workspace() {
 
       return inner(p);
     } },
+    // The reply reads as a correction, so the review also reflects.
+    decide: async () => {
+      completions++;
+
+      return {
+        satisfaction: { type: 'score', score: 0.4 }, corrected: { type: 'noul', noul: 0.95 },
+        wrong: { type: 'choice', choice: 'misunderstood' },
+      };
+    },
   };
 
   const governor = new MissionGovernor({ storage: rt.storage, actor: rt.actor });
@@ -77,7 +83,7 @@ describe('evolution spend under a mission budget', () => {
 
     const spent = ws.governor.snapshot('checkout-fixes')[0];
     // Same verdict for both, so the ledger difference is the label alone.
-    expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor).map((r) => r.turnId ?? '')
+    expect(listTurnRatings(ws.rt.storage.sql, ws.rt.actor).map((r) => r.turnId)
       .sort((a, b) => a.localeCompare(b)))
       .toEqual(['scoped', 'unscoped']);
     expect(spent.calls).toBeGreaterThan(0);
@@ -94,7 +100,7 @@ describe('evolution spend under a mission budget', () => {
     );
 
     // An undeclared label charges its own absent row, never the nearest real one.
-    expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor)).toHaveLength(1);
+    expect(listTurnRatings(ws.rt.storage.sql, ws.rt.actor)).toHaveLength(1);
     expect(ws.governor.snapshot('checkout-fixes')[0].calls).toBe(0);
   });
 
@@ -111,7 +117,7 @@ describe('evolution spend under a mission budget', () => {
 
     expect(ws.calls()).toBe(before);
     // No verdict from a call that never happened.
-    expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor)).toEqual([]);
+    expect(listTurnRatings(ws.rt.storage.sql, ws.rt.actor)).toEqual([]);
   });
 
   test('an ungoverned turn still runs its review with a mission fully spent beside it', async () => {
@@ -121,7 +127,7 @@ describe('evolution spend under a mission budget', () => {
 
     await ws.engine.reviewTurn(makeTurn(), FOLLOWUP);
 
-    expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor)).toHaveLength(1);
+    expect(listTurnRatings(ws.rt.storage.sql, ws.rt.actor)).toHaveLength(1);
     // The exhausted label was never consulted.
     expect(ws.governor.snapshot('someone-elses-mission')[0].calls).toBe(1);
   });
@@ -155,7 +161,7 @@ describe('a deferred review carries its mission across processes', () => {
     expect(drain.refused.map((r) => r.reason)).toEqual(['budget']);
     // Re-queued: the turn is sound, the mission is just out of money.
     expect(ws.engine.sessionWindow.countQueuedReviews()).toBe(1);
-    expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor)).toEqual([]);
+    expect(listTurnRatings(ws.rt.storage.sql, ws.rt.actor)).toEqual([]);
     // No tombstone: a refusal is not a completion, or recovery would settle the row.
     expect(ws.rt.storage.sql`SELECT key FROM effect_tombstones
       WHERE actor_id = ${ws.rt.actor.actorId} AND scope = 'turn_review'`)
@@ -170,6 +176,6 @@ describe('a deferred review carries its mission across processes', () => {
 
     expect(await ws.engine.runDeferredTurnReviews()).toEqual({ reviewed: 1, refused: [] });
     expect(ws.engine.sessionWindow.countQueuedReviews()).toBe(0);
-    expect(listTurnOutcomes(ws.rt.storage.sql, ws.rt.actor)).toHaveLength(1);
+    expect(listTurnRatings(ws.rt.storage.sql, ws.rt.actor)).toHaveLength(1);
   });
 });

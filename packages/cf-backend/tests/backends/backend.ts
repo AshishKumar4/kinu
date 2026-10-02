@@ -182,7 +182,6 @@ function scriptedResolver(): LocalModelResolver {
     listProviders: () => real.listProviders(),
     listModels: () => real.listModels(),
     modelInfo: () => Promise.resolve(null),
-    judgeCandidates: () => real.judgeCandidates(),
     countInputTokens: () => Promise.resolve({ kind: 'unsupported', provider: 'fake', reason: 'a scripted model has no count endpoint' }),
     getAuth: real.getAuth,
   };

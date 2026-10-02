@@ -329,12 +329,13 @@ through real `oxlint` in `tools/oxlint/anti-slop/no-swallow.gate.test.ts`.
 
 ## Turn-review spend
 
-`EvolutionEngine.reviewTurn` (`evolution/engine.ts`) runs up to three
-fast-model completions: `classifyTurnOutcome` (`evolution/outcomes.ts`),
-`generateTurnReflection`, and generalization of a repeated pattern into a
-reusable function. Each goes through `reviewLlm`, which returns the fast model
-(`this.rt.fastLlm ?? this.rt.llm`), wrapped by the mission governor when the
-turn carries mission labels.
+`EvolutionEngine.reviewTurn` (`evolution/engine.ts`) makes one decision-model
+call, `rateTurn` (`evolution/ratings.ts`), reported under the `rating` spend
+source, and up to two fast-model completions: `generateTurnReflection`, and
+generalization of a repeated pattern into a reusable function. The completions
+go through `reviewLlm`, which returns the fast model (`this.rt.fastLlm ??
+this.rt.llm`); the rating goes through `reviewDecide`. The mission governor
+wraps both when the turn carries mission labels.
 
 This spend is metered. `LLM.complete` returns a bare string
 (`types/primitives.ts`), so `evolution/` sees no tokens. The backends invoke
@@ -414,10 +415,10 @@ stand in for that proof.
 
 `oneShot` queues reviews in `completed_turns`. Only the daemon or an
 interactive session drains them through `runDeferredTurnReviews`. A
-Terminal-Bench container dies after its fresh trial, so
-`ArmSpend.executionGradedTurns` (`scripts/bench-external.ts`, from
-`turn_outcomes`) is 0 for `evolve=true`. That is truthful, but it makes the
-preregistered figure incomparable. `bench-agent-worker.ts` is interactive, so it
+Terminal-Bench container dies after its fresh trial, and nobody replies to its
+turn, so `ArmSpend.ratedTurns` (`scripts/bench-external.ts`, from
+`turn_ratings`) is 0 for `evolve=true`. That is truthful: a turn is rated only
+from a person's reply. `bench-agent-worker.ts` is interactive, so it
 reviews inline.
 
 ## How a finished run is named

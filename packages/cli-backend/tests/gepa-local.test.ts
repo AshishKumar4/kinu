@@ -4,7 +4,7 @@ import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import { TestLanguageModelV2 } from './test-language-model';
 import {
-  bootstrapScaffold, initWorkspaceSchema, listGepaRuns, recordTurnOutcome,
+  bootstrapScaffold, initWorkspaceSchema, listGepaRuns, recordTurnRating,
   type LLMProviderConfig,
 } from '@kinu.run/core';
 import type { ActorHandle } from '@kinu.run/core';
@@ -96,16 +96,16 @@ async function setup(judge: () => Promise<string>) {
   return { db, rt, session, judgeCalls: () => judgeCalls };
 }
 
-function seedOutcomes(sql: ReturnType<typeof makeSql>, actor: ActorHandle, n = 5): void {
+function seedRatings(sql: ReturnType<typeof makeSql>, actor: ActorHandle, n = 5): void {
   for (let i = 0; i < n; i++) {
-    recordTurnOutcome(sql, actor, {
-      turnId: `bad-${i}`, outcome: 'corrected', confidence: 1, source: 'classifier',
-      userMessage: `summarise report ${i}`, assistantResponse: 'wrong summary',
+    recordTurnRating(sql, actor, {
+      turnId: `bad-${i}`, score: 1.5, corrected: 1, wrong: null, source: 'model',
+      request: `summarise report ${i}`, answer: 'wrong summary',
       followup: 'no, summarise the conclusions', now: 1_000 + i,
     });
-    recordTurnOutcome(sql, actor, {
-      turnId: `good-${i}`, outcome: 'accepted', confidence: 1, source: 'classifier',
-      userMessage: `list the files in ${i}`, assistantResponse: 'a.txt, b.txt', now: 2_000 + i,
+    recordTurnRating(sql, actor, {
+      turnId: `good-${i}`, score: 4.5, corrected: 0, wrong: null, source: 'model',
+      request: `list the files in ${i}`, answer: 'a.txt, b.txt', now: 2_000 + i,
     });
   }
 }
@@ -113,7 +113,7 @@ function seedOutcomes(sql: ReturnType<typeof makeSql>, actor: ActorHandle, n = 5
 describe('GEPA runs on the local backend', () => {
   test('a full pass runs, is scored, and is persisted to gepa_runs', async () => {
     const { db, rt, session, judgeCalls } = await setup(risingJudge(4));
-    seedOutcomes(makeSql(db), rt.actor);
+    seedRatings(makeSql(db), rt.actor);
 
     const result = await session.runScaffoldGepaOptimization({ maxIterations: 2, evalSize: 8, maxMetricCalls: 200 });
     await session.end();
@@ -147,9 +147,9 @@ describe('GEPA runs on the local backend', () => {
     const { db, rt, session } = await setup(risingJudge(0));
 
     for (let i = 0; i < 4; i++) {
-      recordTurnOutcome(makeSql(db), rt.actor, {
-        turnId: `ok-${i}`, outcome: 'accepted', confidence: 1, source: 'classifier',
-        userMessage: `q${i}`, assistantResponse: 'a', now: 3_000 + i,
+      recordTurnRating(makeSql(db), rt.actor, {
+        turnId: `ok-${i}`, score: 4.5, corrected: 0, wrong: null, source: 'model',
+        request: `q${i}`, answer: 'a', now: 3_000 + i,
       });
     }
 
@@ -157,7 +157,7 @@ describe('GEPA runs on the local backend', () => {
     await session.end();
 
     expect(result.ok).toBe(false);
-    expect(result.error).toContain('no corrected/frustrated turns yet');
+    expect(result.error).toContain('no low-rated turns yet');
     const runs = db.query<{ c: number }, []>(`SELECT COUNT(*) AS c FROM gepa_runs`).get();
 
     if (!runs) throw new Error('GEPA run count row is missing');

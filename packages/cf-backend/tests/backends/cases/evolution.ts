@@ -65,7 +65,7 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
     },
   },
   {
-    title: 'picking the answer given is an acceptance; picking the other take corrects it and queues a continuation',
+    title: 'picking the answer given rates it high; picking the other take rates it low and queues a continuation',
     covers: ['latestAlternateTakes', 'pickAlternateTake'],
     async run({ surface, sql, actor }) {
       expect(await surface.latestAlternateTakes()).toBeNull();
@@ -82,12 +82,12 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
       });
 
       expect(await surface.pickAlternateTake(set.id, `${set.id}-live`)).toMatchObject({
-        outcome: 'accepted', changedAnswer: false, continuationQueued: false,
+        changedAnswer: false, continuationQueued: false,
       });
       expect(await surface.pickAlternateTake(set.id, `${set.id}-branch`)).toMatchObject({
-        outcome: 'corrected', changedAnswer: true, continuationQueued: true, chosen: { text: 'Call it Borealis.' },
+        changedAnswer: true, continuationQueued: true, chosen: { text: 'Call it Borealis.' },
       });
-      // The picks on a fresh activation were recorded: the turn's effective verdict is the correction.
+      // The picks on a fresh activation were recorded: the turn's effective rating is the low one.
       expect((await surface.listRefinements(5)).debt.turnIds).toEqual(['turn-1']);
       expect(await surface.latestAlternateTakes()).toMatchObject({ chosenNodeId: `${set.id}-branch` });
       await expect(surface.pickAlternateTake(set.id, '')).rejects.toThrow('pickAlternateTake requires takeId and nodeId');
@@ -136,11 +136,11 @@ export const EVOLUTION_CASES: readonly SharedCase[] = [
     },
   },
   {
-    title: 'a refinement with no labelled turns is refused on the record, and an unknown one decides nothing',
+    title: 'a refinement with no rated turns is refused on the record, and an unknown one decides nothing',
     covers: ['requestRefinement', 'listRefinements', 'showRefinement', 'decideRefinement'],
     async run({ surface }) {
       expect(await surface.listRefinements(5)).toMatchObject({
-        requests: [], debt: { owed: false, summary: 'no unresolved corrections: nothing is owed a refinement' },
+        requests: [], debt: { owed: false, summary: 'no unresolved low-rated turns: nothing is owed a refinement' },
       });
 
       const request = await surface.requestRefinement({ turnIds: ['turn-1'] });

@@ -47,8 +47,12 @@ interface TrialSpec {
   evolutionEvents?: number;
   /** Whole-activity-channel events, which are not evidence about evolution. */
   activityEvents?: number;
-  /** `undefined` leaves the grading probe unreported — not zero. */
-  executionGraded?: number;
+  /** `undefined` leaves the rating probe unreported — not zero. */
+  ratedTurns?: number;
+  byThumbs?: number;
+  turnsReviewed?: number;
+  /** Historical metadata carries execution grades, not human ratings. */
+  legacyGrading?: number;
   turnsCompleted?: number;
   promptTokens?: number;
   outputTokens?: number;
@@ -74,9 +78,14 @@ function job(name: string, trials: readonly TrialSpec[]): string {
     const event = (kind: string, count: number) =>
       Array.from({ length: count }, () => ({ event: kind, message: kind }));
 
-    // Shaped exactly as bench/harbor/kinu_agent.py writes it. `turn_grading`
-    // is absent, not zeroed, when the probe reported nothing — which is the
-    // distinction half these tests exist to hold.
+    const turnRatings = spec.ratedTurns === undefined ? null : {
+      rated: spec.ratedTurns,
+      by_thumbs: spec.byThumbs ?? 0,
+      turns: spec.turnsReviewed ?? Math.max(spec.ratedTurns, spec.turnsCompleted ?? 1),
+    };
+
+    // Shaped as bench/harbor/kinu_agent.py writes it: an unreadable rating probe
+    // is null, not zeroed. Historical results omit turn_ratings entirely.
     const metadata = {
       evolve: spec.evolve,
       usage_complete: !spec.noUsage && !spec.partialUsage,
@@ -84,8 +93,9 @@ function job(name: string, trials: readonly TrialSpec[]): string {
       evolution_events: event('reflection', spec.evolutionEvents ?? 0),
       activity_events: event('bg_job_started', spec.activityEvents ?? spec.evolutionEvents ?? 0),
       turns_completed: spec.turnsCompleted ?? 1,
-      turn_grading: spec.executionGraded === undefined ? undefined : {
-        user_graded: 0, execution_graded: spec.executionGraded, abandoned: 0,
+      turn_ratings: spec.legacyGrading === undefined ? turnRatings : undefined,
+      turn_grading: spec.legacyGrading === undefined ? undefined : {
+        user_graded: 0, execution_graded: spec.legacyGrading, abandoned: 0,
       },
     };
 
@@ -117,19 +127,19 @@ const FOUR = ['alpha', 'beta', 'gamma', 'delta'] as const;
 
 function arms(opts: {
   aEvolve: boolean; bEvolve: boolean;
-  bEvolutionEvents?: number; bExecutionGraded?: number;
+  bEvolutionEvents?: number; bRatedTurns?: number;
   aEvolutionEvents?: number; bOutputTokens?: number;
   bChecksumShift?: boolean;
 }) {
   const a = readHarborJob(job('arm-a', FOUR.map((task, i) => ({
     task, reward: i < 2 ? 1 : 0, evolve: opts.aEvolve,
-    evolutionEvents: opts.aEvolutionEvents ?? 0, executionGraded: 1,
+    evolutionEvents: opts.aEvolutionEvents ?? 0, ratedTurns: 1,
   }))));
 
   const b = readHarborJob(job('arm-b', FOUR.map((task, i) => ({
     task, reward: i < 3 ? 1 : 0, evolve: opts.bEvolve,
     evolutionEvents: opts.bEvolutionEvents ?? 0,
-    executionGraded: opts.bExecutionGraded,
+    ratedTurns: opts.bRatedTurns,
     outputTokens: opts.bOutputTokens,
     checksum: opts.bChecksumShift && task === 'alpha' ? 'moved' : undefined,
   }))));
@@ -148,7 +158,7 @@ function condition(verdict: Admissibility, name: string): AdmissibilityCondition
 describe('readHarborJob', () => {
   test('reads the mechanism state the trial recorded, not the flag it was given', () => {
     const arm = readHarborJob(job('arm', [
-      { task: 'alpha', reward: 1, evolve: true, evolutionEvents: 3, activityEvents: 9, executionGraded: 2, turnsCompleted: 2 },
+      { task: 'alpha', reward: 1, evolve: true, evolutionEvents: 3, activityEvents: 9, ratedTurns: 2, byThumbs: 1, turnsReviewed: 3, turnsCompleted: 2 },
     ]));
 
     expect(arm.trials).toHaveLength(1);
@@ -156,24 +166,45 @@ describe('readHarborJob', () => {
     expect(trial?.evolve).toBe(true);
     expect(trial?.evolutionEvents).toBe(3);
     expect(trial?.activityEvents).toBe(9);
-    expect(trial?.executionGradedTurns).toBe(2);
+    expect(trial?.ratedTurns).toBe(2);
     expect(trial?.turnsCompleted).toBe(2);
   });
 
-  test('an unreported grading probe is null, never zero', () => {
+  test('an unreported rating probe is null, never zero', () => {
     // The distinction the arm depends on: a probe that produced no readable
-    // answer and an arm that graded nothing look identical if either becomes 0,
-    // and only one of them is a fact about the arm.
+    // answer differs from a headless turn nobody rated. Tool exits do not rate
+    // turns, so a reported zero is a valid finding, not a broken mechanism.
     const arm = readHarborJob(job('arm', [{ task: 'alpha', reward: 0, evolve: true }]));
-    expect(arm.trials[0]?.executionGradedTurns).toBeNull();
-    expect(armSpend(arm).executionGradedTurns).toBeNull();
-    expect(armSpend(arm).gradingUnreported).toBe(1);
+    expect(arm.trials[0]?.ratedTurns).toBeNull();
+    expect(armSpend(arm).ratedTurns).toBeNull();
+    expect(armSpend(arm).ratingUnreported).toBe(1);
+  });
+
+  test('zero ratings are reported evidence, not a missing probe', () => {
+    const arm = readHarborJob(job('headless', [
+      { task: 'alpha', reward: 1, evolve: true, ratedTurns: 0, turnsReviewed: 1 },
+    ]));
+
+    expect(arm.trials[0]?.ratedTurns).toBe(0);
+    expect(armSpend(arm).ratedTurns).toBe(0);
+    expect(armSpend(arm).ratingUnreported).toBe(0);
+  });
+
+  test('old execution grades still parse but are not human ratings', () => {
+    const arm = readHarborJob(job('historical', [
+      { task: 'alpha', reward: 1, evolve: true, legacyGrading: 2 },
+    ]));
+
+    expect(arm.trials[0]?.reward).toBe(1);
+    expect(arm.trials[0]?.ratedTurns).toBeNull();
+    expect(armSpend(arm).ratedTurns).toBeNull();
+    expect(armSpend(arm).ratingUnreported).toBe(1);
   });
 
   test('job-level bookkeeping is not counted as a trial', () => {
     const arm = readHarborJob(job('arm', [
-      { task: 'alpha', reward: 1, evolve: false, executionGraded: 1 },
-      { task: 'beta', reward: 0, evolve: false, executionGraded: 1 },
+      { task: 'alpha', reward: 1, evolve: false, ratedTurns: 1 },
+      { task: 'beta', reward: 0, evolve: false, ratedTurns: 1 },
     ]));
 
     expect(arm.trials.map((t) => t.taskId)).toEqual(['alpha', 'beta']);
@@ -183,22 +214,35 @@ describe('readHarborJob', () => {
 describe('armSpend', () => {
   test('counts the trials on which the mechanism was observed to act', () => {
     const arm = readHarborJob(job('arm', [
-      { task: 'alpha', reward: 1, evolve: true, evolutionEvents: 2, executionGraded: 1 },
-      { task: 'beta', reward: 0, evolve: true, evolutionEvents: 0, executionGraded: 1 },
-      { task: 'gamma', reward: 0, evolve: true, evolutionEvents: 5, executionGraded: 3 },
+      { task: 'alpha', reward: 1, evolve: true, evolutionEvents: 2, ratedTurns: 1 },
+      { task: 'beta', reward: 0, evolve: true, evolutionEvents: 0, ratedTurns: 1 },
+      { task: 'gamma', reward: 0, evolve: true, evolutionEvents: 5, ratedTurns: 3 },
     ]));
 
     const spend = armSpend(arm);
     expect(spend.trialsWithEvolution).toBe(2);
     expect(spend.totalEvolutionEvents).toBe(7);
-    expect(spend.executionGradedTurns).toBe(5);
+    expect(spend.ratedTurns).toBe(5);
+    expect(spend.ratingUnreported).toBe(0);
+  });
+
+  test('sums measured ratings and keeps missing probe coverage separate', () => {
+    const arm = readHarborJob(job('partial-ratings', [
+      { task: 'alpha', reward: 1, evolve: true, ratedTurns: 2 },
+      { task: 'beta', reward: 0, evolve: true, ratedTurns: 0 },
+      { task: 'gamma', reward: 0, evolve: true },
+    ]));
+
+    const spend = armSpend(arm);
+    expect(spend.ratedTurns).toBe(2);
+    expect(spend.ratingUnreported).toBe(1);
   });
 });
 
 describe('admissibility — asked before any effect is reported', () => {
-  test('a genuine contrast whose mechanism acted and graded is admissible', () => {
+  test('a genuine contrast with an observed mechanism and reported ratings is admissible', () => {
     const { a, b, paired } = arms({
-      aEvolve: false, bEvolve: true, bEvolutionEvents: 2, bExecutionGraded: 2,
+      aEvolve: false, bEvolve: true, bEvolutionEvents: 2, bRatedTurns: 2,
     });
 
     const verdict = admissibility(a, b, paired);
@@ -209,7 +253,7 @@ describe('admissibility — asked before any effect is reported', () => {
   test('two arms that both ran evolve=false are a replication and not a contrast', () => {
     // The literal shape of TB2.0 and TB2.1: both jobs configured evolve=false,
     // read afterwards as a comparison of evolution.
-    const { a, b, paired } = arms({ aEvolve: false, bEvolve: false, bExecutionGraded: 1 });
+    const { a, b, paired } = arms({ aEvolve: false, bEvolve: false, bRatedTurns: 1 });
     const verdict = admissibility(a, b, paired);
     expect(verdict.admissible).toBe(false);
     expect(condition(verdict, 'the two arms differ in that state').met).toBe(false);
@@ -219,7 +263,7 @@ describe('admissibility — asked before any effect is reported', () => {
 
   test('a candidate configured to evolve that never evolved fails on the observation', () => {
     const { a, b, paired } = arms({
-      aEvolve: false, bEvolve: true, bEvolutionEvents: 0, bExecutionGraded: 2,
+      aEvolve: false, bEvolve: true, bEvolutionEvents: 0, bRatedTurns: 2,
     });
 
     const verdict = admissibility(a, b, paired);
@@ -229,36 +273,38 @@ describe('admissibility — asked before any effect is reported', () => {
       .toContain('0/4');
   });
 
-  test('a candidate whose turns were never graded fails — the C14 shape', () => {
-    // Evolution fires on every trial and every turn comes back ungraded. This is
-    // the CL-Bench run that reported mean_gain -0.2 over 14 fired events and 14
-    // ungraded turns, and it must not produce an effect.
+  test('a headless candidate with measured zero ratings is admissible', () => {
+    // Ratings need a person's reply. With no reactive user, a readable zero is
+    // the expected finding and must not make an otherwise valid contrast fail.
     const { a, b, paired } = arms({
-      aEvolve: false, bEvolve: true, bEvolutionEvents: 4, bExecutionGraded: 0,
+      aEvolve: false, bEvolve: true, bEvolutionEvents: 4, bRatedTurns: 0,
     });
 
     const verdict = admissibility(a, b, paired);
-    expect(verdict.admissible).toBe(false);
-    expect(condition(verdict, 'the candidate turns were GRADED').met).toBe(false);
+    expect(verdict.admissible).toBe(true);
+    const ratings = condition(verdict, 'the candidate turn ratings were reported');
+    expect(ratings.met).toBe(true);
+    expect(ratings.detail).toContain('0 rated turn(s)');
+    expect(ratings.detail).toContain('not a failure');
   });
 
-  test('an unreadable grading probe fails loudly instead of reading as ungraded', () => {
+  test('an unreadable rating probe fails loudly instead of reading as unrated', () => {
     const { a, b, paired } = arms({
-      aEvolve: false, bEvolve: true, bEvolutionEvents: 4, bExecutionGraded: undefined,
+      aEvolve: false, bEvolve: true, bEvolutionEvents: 4, bRatedTurns: undefined,
     });
 
     const verdict = admissibility(a, b, paired);
     expect(verdict.admissible).toBe(false);
-    const graded = condition(verdict, 'the candidate turns were GRADED');
-    expect(graded.met).toBe(false);
-    expect(graded.detail).toContain('unreported');
-    expect(graded.detail).toContain('4/4');
+    const ratings = condition(verdict, 'the candidate turn ratings were reported');
+    expect(ratings.met).toBe(false);
+    expect(ratings.detail).toContain('unreported');
+    expect(ratings.detail).toContain('4/4');
   });
 
   test('a baseline that evolved is not a baseline', () => {
     const { a, b, paired } = arms({
       aEvolve: false, bEvolve: true, aEvolutionEvents: 3,
-      bEvolutionEvents: 4, bExecutionGraded: 2,
+      bEvolutionEvents: 4, bRatedTurns: 2,
     });
 
     const verdict = admissibility(a, b, paired);
@@ -268,7 +314,7 @@ describe('admissibility — asked before any effect is reported', () => {
 
   test('arms that scored different task content fail on the checksum', () => {
     const { a, b, paired } = arms({
-      aEvolve: false, bEvolve: true, bEvolutionEvents: 4, bExecutionGraded: 2,
+      aEvolve: false, bEvolve: true, bEvolutionEvents: 4, bRatedTurns: 2,
       bChecksumShift: true,
     });
 
@@ -279,7 +325,7 @@ describe('admissibility — asked before any effect is reported', () => {
 
   test('an arm that spent twice as much is measuring provisioning', () => {
     const { a, b, paired } = arms({
-      aEvolve: false, bEvolve: true, bEvolutionEvents: 4, bExecutionGraded: 2,
+      aEvolve: false, bEvolve: true, bEvolutionEvents: 4, bRatedTurns: 2,
       bOutputTokens: 200_000,
     });
 
@@ -292,7 +338,7 @@ describe('admissibility — asked before any effect is reported', () => {
     // Neither arm was supposed to evolve, so "the mechanism acted" would be the
     // wrong question: what has to hold is that neither arm evolved. The pair is
     // still inadmissible as a CONTRAST, and the condition that fails says which.
-    const { a, b, paired } = arms({ aEvolve: false, bEvolve: false, bExecutionGraded: 1 });
+    const { a, b, paired } = arms({ aEvolve: false, bEvolve: false, bRatedTurns: 1 });
     const verdict = admissibility(a, b, paired);
     expect(condition(verdict, 'the candidate mechanism was OBSERVED to act').met).toBe(true);
     expect(condition(verdict, 'the candidate mechanism was OBSERVED to act').detail)
@@ -305,7 +351,7 @@ describe('admissibility — asked before any effect is reported', () => {
 describe('flipAccounting', () => {
   test('reports both denominators, each named by what it divides by', () => {
     const { a, b, paired } = arms({
-      aEvolve: false, bEvolve: true, bEvolutionEvents: 2, bExecutionGraded: 2,
+      aEvolve: false, bEvolve: true, bEvolutionEvents: 2, bRatedTurns: 2,
     });
 
     expect(armSpend(a).trials).toBe(4);
@@ -323,8 +369,8 @@ describe('spend coverage', () => {
     // — and it is the most expensive trial in the arm. Summing it as 0 and
     // printing the sum as the spend understates exactly the longest trials.
     const arm = readHarborJob(job('arm', [
-      { task: 'alpha', reward: 1, evolve: true, executionGraded: 1, promptTokens: 100, outputTokens: 10 },
-      { task: 'beta', reward: 0, evolve: true, executionGraded: 1, noUsage: true },
+      { task: 'alpha', reward: 1, evolve: true, ratedTurns: 1, promptTokens: 100, outputTokens: 10 },
+      { task: 'beta', reward: 0, evolve: true, ratedTurns: 1, noUsage: true },
     ]));
 
     const spend = armSpend(arm);
@@ -372,6 +418,8 @@ describe('repeated-trial denominators', () => {
     expect(summary.verifiedSuccesses).toBe(1);
     expect(summary.unscoredTrials).toBe(2);
     expect(summary.spendUnreported).toBe(2);
+    expect(summary.ratingUnreported).toBe(3);
+    expect(arm.trials.find((trial) => trial.taskId === 'pending')?.ratedTurns).toBeNull();
     expect(arm.trials.find((trial) => trial.taskId === 'pending')?.reward).toBeNull();
     expect(summary.billableTokens).toBeNull();
   });
@@ -408,7 +456,7 @@ describe('repeated-trial denominators', () => {
     expect(summary.verifierFailures).toBe(1);
     expect(summary.unscoredTrials).toBe(1);
     expect(summary.trials).toBe(3);
-    expect(summary.gradingUnreported).toBe(3);
+    expect(summary.ratingUnreported).toBe(3);
     expect(arm.trials.find((trial) => trial.taskId === 'solved')?.passed).toBe(true);
     expect(arm.trials.find((trial) => trial.taskId === 'failed')?.passed).toBe(false);
     expect(arm.trials.find((trial) => trial.taskId === 'ungraded')?.passed).toBeNull();

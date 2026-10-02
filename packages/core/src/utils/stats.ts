@@ -4,7 +4,7 @@
  */
 
 /** Two-sided 95% z value. */
-export const Z_95 = 1.959964;
+const Z_95 = 1.959964;
 
 /** Deterministic PRNG (mulberry32): resampling must be reproducible, so never `Math.random`. */
 export function seededRandom(seed: number): () => number {
@@ -47,11 +47,6 @@ export function wilsonInterval(successes: number, n: number): ScoreInterval {
 
 export function scoreInterval(scores: ReadonlyArray<number>): ScoreInterval {
   return wilsonInterval(scores.reduce((sum, s) => sum + s, 0), scores.length);
-}
-
-/** The interval as loss (1 − score); bounds swap and flip. */
-export function lossInterval(score: ScoreInterval): ScoreInterval {
-  return { mean: 1 - score.mean, lo: 1 - score.hi, hi: 1 - score.lo, n: score.n };
 }
 
 /** `0.75 (95% CI 0.30 to 0.95)`: the one rendering of a reported score. */

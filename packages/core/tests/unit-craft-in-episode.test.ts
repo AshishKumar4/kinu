@@ -10,7 +10,7 @@ import {
   createCraftLedger,
 } from '../src/craft/in-episode';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
-import { feedbackToQuality } from '../src/evolution/outcomes';
+import { ratingQuality, thumbsRating } from '../src/evolution/ratings';
 
 describe('craftInvocationSites — what the runtime saw called', () => {
   test('finds a call under the one sandbox namespace, and nowhere else', () => {
@@ -192,7 +192,7 @@ describe('the craft ledger — where an in-episode observation lands', () => {
 
   test('machine evidence never reaches the pole a person\'s verdict does', () => {
     // Read from the human band itself, so moving that band cannot leave a stale literal here.
-    expect(CRAFT_INVOCATION_QUALITY.returned).toBeLessThan(feedbackToQuality('positive'));
+    expect(CRAFT_INVOCATION_QUALITY.returned).toBeLessThan(ratingQuality(thumbsRating('positive').score));
     expect(CRAFT_INVOCATION_QUALITY.raised).toBeLessThan(CRAFT_NEUTRAL_PRIOR);
   });
 

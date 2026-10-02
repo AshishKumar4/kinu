@@ -4,7 +4,6 @@ import {
   credentialToHeaders,
   normalizeModelMenu,
   createChatGptProvider,
-  availableJudgeSpecs,
   accountDeps,
   specModelInfo,
   createOpenAICompatProvider,
@@ -122,8 +121,6 @@ export interface LocalModelResolver {
   listModels(): Promise<ModelMenu>;
   /** Per-model metadata (e.g. input modalities); null when unknown or unreachable. */
   modelInfo(specOrNull?: string | null): Promise<ModelInfo | null>;
-  /** One spec per available provider, in registry preference order. */
-  judgeCandidates(): Promise<string[]>;
   /** Pre-request token count (core `providers/input-tokens.ts`); `unsupported`
    *  means the turn is assembled ungated rather than gated on an estimate. */
   countInputTokens(specOrNull: string | null | undefined, request: CountableRequest): Promise<InputTokenCount>;
@@ -323,9 +320,6 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     },
     listProviders() {
       return registry.listProviders(own);
-    },
-    judgeCandidates() {
-      return availableJudgeSpecs(registry, own);
     },
     listModels() {
       return registry.listAllModels(own);

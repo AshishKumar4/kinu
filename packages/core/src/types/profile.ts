@@ -82,6 +82,8 @@ export interface ProfileCatalog {
   accounts?: Readonly<Record<string, string>> | undefined;
   modelFallbacks?: Readonly<Record<string, readonly string[]>> | undefined;
   retries?: number | undefined;
+  /** The decision model that rates turns (`DECISION_MODELS`); absent is `DEFAULT_DECISION_MODEL`. */
+  decisionModel?: string | undefined;
 }
 
 /** The owner's retry count when the catalog names none. */

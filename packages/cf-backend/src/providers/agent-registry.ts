@@ -3,6 +3,7 @@ import {
   AI_GATEWAY_PROVIDER_ID, DEFAULT_WORKERS_AI_MODEL_SPEC,
   createAIGatewayProvider, createChatGptProvider, createCodexProvider, createModelRegistry, createMyGatewayProvider,
   createWorkersAIProvider, normalizeModelSpec, resolvePlatformGateway, retryTransientDO,
+  bindingDecisionRun, restDecisionRun, type DecisionRun,
   type ActorReference, type AuthRequest, type AuthResolution, type AuthResolver, type ProviderDeps, type ProviderEnv,
   type ProviderRegistry, type ProviderWaitInfo, type SpecDefault, type UserCaller,
 } from '@kinu.run/core';
@@ -68,6 +69,15 @@ export function createUserDOAuthResolver(source: UserCredentialSource | null): A
     // Retry-safe: the conditional OAuth refresh persists before returning.
     return await retryTransientDO('credential auth', () => source.stub.getAuth(caller, key, opts));
   };
+}
+
+/** The decision model's transport: the deployment's Workers AI binding when it pays, else the owner's Cloudflare login. */
+export function decisionRunOf(opts: Pick<AgentProviderDeps, 'env' | 'userDO'>): DecisionRun {
+  const binding = opts.env.WORKERS_AI_VIA_BINDING === 'on' && opts.env.AI && isDirectAiBinding(opts.env.AI) ? opts.env.AI : null;
+
+  return binding === null
+    ? restDecisionRun({ getAuth: createUserDOAuthResolver(opts.userDO ?? null) })
+    : bindingDecisionRun(binding);
 }
 
 export function providerBindingsOf(env: ProviderEnv): ProviderEnv {

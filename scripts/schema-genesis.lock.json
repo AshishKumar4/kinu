@@ -1221,6 +1221,22 @@
     "evidence TEXT",
     "PRIMARY KEY (actor_id, id)"
   ],
+  "turn_ratings@packages/core/src/evolution/ratings.ts": [
+    "actor_id TEXT NOT NULL",
+    "id TEXT NOT NULL",
+    "turn_id TEXT NOT NULL",
+    "score REAL NOT NULL CHECK (score >= 1 AND score <= 5)",
+    "corrected REAL NOT NULL CHECK (corrected >= 0 AND corrected <= 1)",
+    "wrong TEXT CHECK (wrong IN (${sqlCheckList(WRONG_REASONS)}))",
+    "source TEXT NOT NULL CHECK (source IN (${sqlCheckList(RATING_SOURCES)}))",
+    "request TEXT NOT NULL",
+    "actions TEXT NOT NULL",
+    "answer TEXT NOT NULL",
+    "followup TEXT",
+    "scaffold_version INTEGER",
+    "created_at INTEGER NOT NULL",
+    "PRIMARY KEY (actor_id, id)"
+  ],
   "user_access_tokens@packages/core/src/cli/access-tokens.ts": [
     "token_hash TEXT PRIMARY KEY",
     "name TEXT NOT NULL",

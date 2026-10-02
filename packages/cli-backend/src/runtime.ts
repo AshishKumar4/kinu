@@ -57,10 +57,11 @@ import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from './host-
 import { createCwdPlaneVFS, directoryFileReach } from './host-mount';
 import { inlineWorkspaceStorage, sqlStorageOver, wrapDatabase } from '@kinu.run/core/identity';
 import { agentViewMount, createSqlFiber, detectOrphanedFibers, settledWorkspaceSoul } from '@kinu.run/core';
+import { cloudProxyBaseURL, createDecisionPort, restDecisionRun } from '@kinu.run/core';
 import { dotenvLoadedNames } from './dotenv-provenance';
 import {
   createLocalModelResolver, createLocalProviderLLM, PROVIDER_CREDENTIAL_ENV, SESSION_CREDENTIAL_ENV,
-  type LocalModelResolver, type LocalProviderCredentials,
+  type LocalCloudSession, type LocalModelResolver, type LocalProviderCredentials,
 } from './model-resolver';
 import {
   createLocalProfileAuthority,
@@ -90,6 +91,8 @@ interface CLIRuntimeOptions {
   agentName?: string;
   providerCredentials?: LocalProviderCredentials;
   oauthStore?: LocalOAuthStore;
+  /** The signed-in Kinu session; its worker runs the decision model that rates turns. Absent: turns stay unrated. */
+  cloud?: LocalCloudSession;
   /** Shadow-git checkpoints kept per working directory. */
   checkpointKeep?: number;
 }
@@ -359,6 +362,17 @@ export function createCLIRuntime(
 
   const llm = createRoutedModelLane(actor, 'reflection', modelLanes);
 
+  // Through the worker the session signed in to, as a Workers AI chat model is: no Cloudflare token is local.
+  const cloud = config.cloud;
+
+  const decide = cloud === undefined ? undefined : createDecisionPort(
+    restDecisionRun({
+      getAuth: async () => ({ baseURL: cloudProxyBaseURL(cloud.origin), headers: { Authorization: `Bearer ${cloud.token}` } }),
+    }),
+    async () => (await ensureProfile()).decisionModel,
+    report,
+  );
+
   const schedule: Schedule = {
     // Unreferenced so a one-shot `kinu` command still exits with a timer pending.
     after: async (ms, fn) => {
@@ -516,6 +530,7 @@ export function createCLIRuntime(
     memory,
     craftStore,
     modelLanes,
+    ...(decide !== undefined && { decide }),
     executionRouter, shell, checkpoints,
     setShellApprovalChannel: (fn) => { approvalChannel = fn; },
     setTurnFileLedgerProvider: (provider) => { turnFileLedgerProvider = provider; },

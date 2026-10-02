@@ -10,7 +10,7 @@ import { MockLanguageModelV3 } from 'ai/test';
 import * as v from 'valibot';
 import {
   activePromptSectionOverrides, buildSystemPromptSync,
-  findPromptSectionTarget, recordTurnOutcome, buildOutcomeEvalSplit,
+  findPromptSectionTarget, recordTurnRating, buildOutcomeEvalSplit,
   EvolutionEngine,
   advancePromptSectionLane, PROMPT_SECTION_TARGETS,
   startGepaRun,
@@ -18,7 +18,8 @@ import {
 } from '../src/index';
 import { getPendingPromptSection, initPromptSectionTables } from '../src/prompting/section-store';
 import { initAllTables } from '../src/state/workspace-schema';
-import { initTurnOutcomeTables } from '../src/evolution/outcomes';
+import { initLessonTables } from '../src/evolution/outcomes';
+import { initTurnRatingTables } from '../src/evolution/ratings';
 import { initGepaTables } from '../src/evolution/gepa/persistence';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { createTestRuntime, storesFor } from './helpers';
@@ -114,7 +115,8 @@ function scriptedControl(rt: AgentRuntime, judgeScore: (candidate: string) => nu
 function evolvableRuntime(): AgentRuntime {
   const { rt } = createTestRuntime();
   initAllTables(rt.storage.execRaw, rt.storage.sql);
-  initTurnOutcomeTables(rt.storage.execRaw);
+  initLessonTables(rt.storage.execRaw);
+  initTurnRatingTables(rt.storage.execRaw);
   initGepaTables(rt.storage.execRaw);
   initPromptSectionTables(rt.storage.execRaw);
 
@@ -127,17 +129,17 @@ const guardTask = (i: number) => `guard #${i}: list the files under docs`;
 
 function seedLedger(rt: AgentRuntime, counts: { failures: number; guards: number }): void {
   for (let i = 0; i < counts.failures; i++) {
-    recordTurnOutcome(rt.storage.sql, rt.actor, {
-      turnId: `bad-${String(i)}`, outcome: 'corrected', confidence: 1, source: 'classifier',
-      userMessage: failureTask(i), assistantResponse: '{"files":["a.txt"]}',
+    recordTurnRating(rt.storage.sql, rt.actor, {
+      turnId: `bad-${String(i)}`, score: 1.5, corrected: 1, wrong: null, source: 'model',
+      request: failureTask(i), answer: '{"files":["a.txt"]}',
       followup: 'just tell me in prose', now: 1_000 + i,
     });
   }
 
   for (let i = 0; i < counts.guards; i++) {
-    recordTurnOutcome(rt.storage.sql, rt.actor, {
-      turnId: `ok-${String(i)}`, outcome: 'accepted', confidence: 1, source: 'classifier',
-      userMessage: guardTask(i), assistantResponse: 'a.txt and b.txt', now: 2_000 + i,
+    recordTurnRating(rt.storage.sql, rt.actor, {
+      turnId: `ok-${String(i)}`, score: 4.5, corrected: 0, wrong: null, source: 'model',
+      request: guardTask(i), answer: 'a.txt and b.txt', now: 2_000 + i,
     });
   }
 }
@@ -206,7 +208,7 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
     const { control } = scriptedControl(rt, () => 0.9);
     const guardsOnly = await lanePass(control);
     expect(guardsOnly.ok).toBe(false);
-    expect(guardsOnly.error).toContain('no corrected/frustrated turns yet');
+    expect(guardsOnly.error).toContain('no low-rated turns yet');
     expect(guardsOnly.error).not.toContain('no outcome-labeled turns yet');
   });
 
@@ -246,9 +248,9 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
     const rt = evolvableRuntime();
     await seedAdvisorNotes(rt, 3);
     // Where the ledger spoke it is the verdict, so the turn appears once, as a ledger row.
-    recordTurnOutcome(rt.storage.sql, rt.actor, {
-      turnId: 'adv-1', outcome: 'corrected', confidence: 1, source: 'classifier',
-      userMessage: failureTask(1), assistantResponse: '{"files":["a.txt"]}',
+    recordTurnRating(rt.storage.sql, rt.actor, {
+      turnId: 'adv-1', score: 1.5, corrected: 1, wrong: null, source: 'model',
+      request: failureTask(1), answer: '{"files":["a.txt"]}',
       followup: 'just tell me in prose', now: 4_000,
     });
 

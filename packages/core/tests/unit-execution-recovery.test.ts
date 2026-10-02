@@ -15,7 +15,7 @@ import {
   type RecoveryFinding,
 } from '../src/evolution/recovery';
 import {
-  corroborateLessonsForTurn, initTurnOutcomeTables, listLessons,
+  corroborateLessonsForTurn, initLessonTables, listLessons,
 } from '../src/evolution/outcomes';
 import { composePrepareStep } from '../src/prompting/prepare-step';
 import {
@@ -45,7 +45,7 @@ function ledgerDb() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
-  initTurnOutcomeTables(execRaw);
+  initLessonTables(execRaw);
   const actors = createTestActors(sql, execRaw);
 
   return { sql, db, actor: actors.main, sibling: (name: string) => actors.sibling(name) };

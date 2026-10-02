@@ -18,7 +18,7 @@ import {
   buildWorkspacePreviewHost,
 } from '@kinu.run/core';
 import { publicHtmlHeaders, withAppSecurityHeaders } from '@kinu.run/core';
-import { PROVIDER_PROXY_PATH, USER_AI_PROXY_PATH } from '@kinu.run/core';
+import { PROVIDER_PROXY_PATH, USER_AI_PROXY_PATH, USER_AI_RUN_PATH } from '@kinu.run/core';
 import { DEPLOY_API } from '@kinu.run/core/deploy';
 import {
   CLI_APPROVAL_CSRF_COOKIE_NAME, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME, crossSiteRejection,
@@ -954,6 +954,7 @@ const PUBLIC_API = [
   '/api/control/', // Cloudflare Access, ahead of every bypass
   '/api/auth/', // the sign-in state reads; every other path there is the app shell
   `${USER_AI_PROXY_PATH}/`, // a CLI bearer holding ai.proxy
+  `${USER_AI_RUN_PATH}/`, // the same, for the decision models
   `${PROVIDER_PROXY_PATH}/`, // the same
   '/api/cli', // a CLI bearer
   `${DEPLOY_API}/`, // the deploy door's run key

@@ -1,14 +1,12 @@
 /**
- * A turn review re-run after a refusal (a replayed lane on a fresh activation) grades the turn once:
- * the grading and the review step are tombstoned in storage, so a second engine over the same rows
- * appends nothing.
+ * A turn review re-run after a refusal (a replayed lane on a fresh activation) rates the turn once:
+ * the rating and the review step are tombstoned in storage, so a second engine over the same rows
+ * appends nothing and asks the decision model nothing.
  */
 import { describe, expect, test } from 'bun:test';
 import { EvolutionEngine } from '../src/evolution/engine';
 import type { CompletedTurn } from '../src/evolution/types';
 import { createTestRuntime } from './helpers';
-
-const CLASSIFY = 'Classify what the follow-up reveals';
 
 const FOLLOWUP = 'no, that is the batch API again';
 
@@ -21,21 +19,30 @@ function reviewedTurn(): CompletedTurn {
 }
 
 describe('a replayed turn review', () => {
-  test('grades the turn once and writes one lesson', async () => {
-    const { rt, stores } = createTestRuntime({
-      llmResponses: { [CLASSIFY]: '{"outcome":"corrected","confidence":0.9,"evidence":"the user restated it"}' },
-    });
+  test('rates the turn once and writes one lesson', async () => {
+    const { rt, stores } = createTestRuntime();
+    let asked = 0;
+
+    rt.decide = async () => {
+      asked++;
+
+      return {
+        satisfaction: { type: 'score', score: 0.5 }, corrected: { type: 'noul', noul: 0.95 },
+        wrong: { type: 'choice', choice: 'ignored_instruction' },
+      };
+    };
 
     const counts = () => ({
-      outcomes: rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM turn_outcomes`[0]?.n,
+      ratings: rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM turn_ratings`[0]?.n,
       lessons: rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM lessons`[0]?.n,
+      asked,
     });
 
     await new EvolutionEngine(rt, stores.history).reviewTurn(reviewedTurn(), FOLLOWUP);
-    expect(counts()).toEqual({ outcomes: 1, lessons: 1 });
+    expect(counts()).toEqual({ ratings: 1, lessons: 1, asked: 1 });
 
     // A second engine over the same rows: what the next activation replaying the lane is.
     await new EvolutionEngine(rt, stores.history).reviewTurn(reviewedTurn(), FOLLOWUP);
-    expect(counts()).toEqual({ outcomes: 1, lessons: 1 });
+    expect(counts()).toEqual({ ratings: 1, lessons: 1, asked: 1 });
   });
 });

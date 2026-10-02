@@ -18,8 +18,9 @@ import * as v from 'valibot';
 import { controlTranscript, proposeMeasuredPromptSection } from './control';
 import { buildOutcomeEvalSplit } from './eval-split';
 import {
-  describeSplitDegeneracy, listTurnOutcomes, type TurnOutcomeRow,
+  describeSplitDegeneracy,
 } from './outcomes';
+import { listTurnRatings, type TurnRating } from './ratings';
 import {
   MIN_EDIT_RATIONALE, REFINEMENT_EDIT_KINDS, REFINEMENT_PROPOSAL_EXAMPLE,
   RefinementProposalSchema, createRefinementStore, evolutionDebt, holdRefinementLane, refinementAnswerStored,
@@ -70,12 +71,8 @@ export async function requestRefinement(
   const store = createRefinementStore(sql, actor);
   const turnIds = input.turnIds ?? evolutionDebt(sql, actor).turnIds;
 
-  // Keep the caller's (reading) order; the ledger only filters to graded turns.
-  const graded = new Set(
-    listTurnOutcomes(sql, actor, { turnIds })
-      .map((row) => row.turnId)
-      .filter((id): id is string => id !== null),
-  );
+  // Keep the caller's (reading) order; the ledger only filters to rated turns.
+  const graded = new Set(listTurnRatings(sql, actor, { turnIds }).map((row) => row.turnId));
 
   const reviewed = turnIds.filter((id) => graded.has(id));
 
@@ -213,18 +210,15 @@ function ownerHasDecided(route: RefinementRoute): boolean {
   return route.disposition === 'applied' || route.disposition === 'rejected';
 }
 
-/** Reading order; `listTurnOutcomes` is newest-first. */
+/** Reading order; `listTurnRatings` is newest-first. */
 function reviewedTrajectory(
   sql: SqlExecutor, actor: ActorHandle, request: RefinementRequest,
-): TurnOutcomeRow[] {
-  const byId = new Map(
-    listTurnOutcomes(sql, actor, { turnIds: request.turnIds })
-      .map((row) => [row.turnId, row] as const),
-  );
+): TurnRating[] {
+  const byId = new Map(listTurnRatings(sql, actor, { turnIds: request.turnIds }).map((row) => [row.turnId, row] as const));
 
   return request.turnIds
     .map((id) => byId.get(id))
-    .filter((row): row is TurnOutcomeRow => row !== undefined);
+    .filter((row): row is TurnRating => row !== undefined);
 }
 
 /**
@@ -418,7 +412,7 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
   const heldOut = new Set(split.val.map((instance) => instance.input));
 
   const reviewed = reviewedTrajectory(sql, actor, request)
-    .filter((row) => !heldOut.has(row.userMessage));
+    .filter((row) => !heldOut.has(row.request));
 
   const withheld = request.turnIds.length - reviewed.length;
   const trajectory = reviewed.map((row, index) => renderReviewedTurn(row, index)).join('\n\n');
@@ -506,17 +500,15 @@ async function renderRefinerBrief(deps: RefinementDeps, request: RefinementReque
   ].join('\n');
 }
 
-function renderReviewedTurn(row: TurnOutcomeRow, index: number): string {
+function renderReviewedTurn(row: TurnRating, index: number): string {
   return [
-    `### Turn ${String(index + 1)}: ${row.outcome} (${row.source})`,
-    `User asked: ${evidenceWindow(row.userMessage, EVIDENCE_BUDGETS.refinerUserMessage)}`,
-    `Agent answered: ${evidenceWindow(row.assistantResponse, EVIDENCE_BUDGETS.refinerAssistantResponse)}`,
+    `### Turn ${String(index + 1)}: rated ${row.score.toFixed(1)}/5 (${row.source})`
+      + (row.wrong !== null && row.wrong !== 'nothing' ? `: ${row.wrong.replaceAll('_', ' ')}` : ''),
+    `User asked: ${evidenceWindow(row.request, EVIDENCE_BUDGETS.refinerUserMessage)}`,
+    `Agent answered: ${evidenceWindow(row.answer, EVIDENCE_BUDGETS.refinerAssistantResponse)}`,
     row.followup === null
       ? 'User follow-up: (none)'
       : `User follow-up: ${evidenceWindow(row.followup, EVIDENCE_BUDGETS.refinerFollowup)}`,
-    row.evidence === null
-      ? ''
-      : `Why it was graded so: ${evidenceWindow(row.evidence, EVIDENCE_BUDGETS.storedEvidence)}`,
   ].filter((line) => line !== '').join('\n');
 }
 
@@ -527,7 +519,7 @@ function routeEdit(
   input: {
     edit: RefinementEdit;
     request: RefinementRequest;
-    reviewed: readonly TurnOutcomeRow[];
+    reviewed: readonly TurnRating[];
   },
 ): Effect.Effect<RefinementRoute> {
   const { edit } = input;
@@ -584,13 +576,13 @@ const MIN_QUOTE_WORDS = 4;
 
 /** User words only (message and follow-up): an agent-sourced preference would
  *  be the agent writing its own instructions. */
-function userEvidence(row: TurnOutcomeRow): string {
-  return `${row.userMessage}\n${row.followup ?? ''}`;
+function userEvidence(row: TurnRating): string {
+  return `${row.request}\n${row.followup ?? ''}`;
 }
 
 type QuoteVerdict = { readonly ok: true } | { readonly ok: false; readonly reason: string };
 
-function checkQuote(quote: string, reviewed: readonly TurnOutcomeRow[]): QuoteVerdict {
+function checkQuote(quote: string, reviewed: readonly TurnRating[]): QuoteVerdict {
   const trimmed = quote.trim();
   const words = trimmed.split(/\s+/u).filter((word) => word !== '');
 
@@ -632,7 +624,7 @@ function routeFact(
   deps: RefinementDeps,
   edit: Extract<RefinementEdit, { kind: 'fact' }>,
   request: RefinementRequest,
-  reviewed: readonly TurnOutcomeRow[],
+  reviewed: readonly TurnRating[],
 ): RefinementRoute {
   const verdict = checkQuote(edit.quote, reviewed);
 

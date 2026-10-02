@@ -5,6 +5,7 @@
 
 import * as v from 'valibot';
 import type { LLM, RawSqlExec, SqlExecutor } from './types/primitives';
+import type { DecisionPort } from './providers/decision-model';
 import type { ActorHandle } from './identity/actor-handle';
 import { estimateTokens, estimateUsdCost } from './llm';
 import type { ModelPricing } from './providers/types';
@@ -378,12 +379,7 @@ export class MissionGovernor {
   /** `stream` is guarded, not metered (turn loops debit it); `complete` is estimated from chars at the blended rate. */
   govern(llm: LLM, labels: readonly string[] = this.active): LLM {
     if (labels.length === 0) return llm;
-
-    const guard = (): void => {
-      const refusal = this.guard('model_call', labels);
-
-      if (refusal) throw new MissionBudgetExhausted(refusal);
-    };
+    const guard = (): void => this.admitCall(labels);
 
     return {
       stream: (opts) => {
@@ -399,6 +395,26 @@ export class MissionGovernor {
         return text;
       },
     };
+  }
+
+  /** The decision model under `govern`'s gate and debit; it writes no text, so its input is the spend. */
+  governDecision(decide: DecisionPort, labels: readonly string[] = this.active): DecisionPort {
+    if (labels.length === 0) return decide;
+
+    return async (request) => {
+      this.admitCall(labels);
+      const answers = await decide(request);
+      this.debit(estimateTokens(request.state.length), { labels, calls: 1 });
+
+      return answers;
+    };
+  }
+
+  /** One model call's admission under `labels`: a spent cap refuses it before the model is reached. */
+  private admitCall(labels: readonly string[]): void {
+    const refusal = this.guard('model_call', labels);
+
+    if (refusal) throw new MissionBudgetExhausted(refusal);
   }
 
   private refusalFor(seam: MissionSeam, scope: string, row: MissionRow): MissionBudgetRefusal {
