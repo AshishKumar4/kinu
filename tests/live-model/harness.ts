@@ -28,7 +28,6 @@ import {
 import type { CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { createNodeCodemodeToolFactory } from '../../packages/cli-backend/src/codemode-tool-factory';
 import { hostedCodemodeTool } from '../../packages/cli-backend/src/head-runtime';
-import { createNodeCraftedExecute } from '../../packages/cli-backend/src/craft-executor';
 import { liveModelCallSink } from '@kinu.run/test-utils';
 
 /**
@@ -59,13 +58,11 @@ import { liveModelCallSink } from '@kinu.run/test-utils';
  * This builds BOTH from the roots `rebuildModelBoundState`
  * (cli-backend/src/local-session.ts:2822) and the turn assembly
  * (local-session.ts:1785) use, with the same deps, so a capability cannot be on
- * one and off the other. `craftedToolExecute` is the load-bearing one and the
- * reason this is a function rather than a literal: measured without it,
- * `workspace.createTool` succeeded, the store grew a row, and
- * `codemode.doubleIt(21)` still failed with "is not a function", because that
- * dep is what makes `craftedTools()` read the store and its absence SKIPS
- * crafted bindings silently rather than erroring. A craft score then recorded a
- * reuse that never executed.
+ * one and off the other. Crafted tools reach the program through the surface's
+ * `craftedTools()`, which reads the store per program; when a seam skipped
+ * them, `workspace.createTool` succeeded, the store grew a row, and
+ * `tools.doubleIt(21)` failed with "is not a function". A craft score then
+ * recorded a reuse that never executed.
  *
  * DECLARED DIFFERENCES FROM A LIVE SESSION, each named rather than left to be
  * discovered. All are documented non-degrading absences on their own
@@ -150,7 +147,6 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
   const tools = buildActorTools({
     rt,
     conversations: new ConversationSearchStore(sql, rt.actor, (sessionId) => rt.stores.history.transcript(sessionId)),
-    craftedToolExecute: createNodeCraftedExecute(),
     codemode: createNodeCodemodeToolFactory({
       extraProviders: [
         createAgentsCodemodeProvider(() => agents),
