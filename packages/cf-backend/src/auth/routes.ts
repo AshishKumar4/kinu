@@ -25,7 +25,7 @@ import {
   type CloudflareTokenPayload,
 } from '@kinu.run/core';
 import { JsonValueSchema, type JsonObject, type JsonValue } from '@kinu.run/core';
-import { diagnostics, renderThrownChain, toKinuError, settle } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderThrownChain, toKinuError, settle } from '@kinu.run/core/obs';
 import { notifyWorkspacesModelSettingsChanged, type ModelSettingsFanoutTarget } from '../user/workspace-access';
 import type { UserDO } from '../user/user-do';
 import type { ObjectNamespace } from '@kinu.run/core';
@@ -103,238 +103,252 @@ type AuthPagesEnv = FamilyEnv<AuthRoutesEnv<unknown>, object>;
 
 export const authPageRoutes = new Hono<AuthPagesEnv>();
 
-authPageRoutes.get('/login', noHead<AuthPagesEnv>(async (c) => renderLogin(c.req.raw, c.env)));
+authPageRoutes.get('/login', noHead<AuthPagesEnv>((c) => renderLogin(c.req.raw, c.env)));
 
-authPageRoutes.on(['GET', 'POST'], '/logout', noHead<AuthPagesEnv>(async (c) => logout(c.req.raw, c.env)));
+authPageRoutes.on(['GET', 'POST'], '/logout', noHead<AuthPagesEnv>((c) => logout(c.req.raw, c.env)));
 
-authPageRoutes.get('/auth/:provider/start', noHead<AuthPagesEnv>(async (c) =>
-  startOAuth(c.req.raw, c.env, decodeURIComponent(rawParam(c, 'provider')))));
+authPageRoutes.get('/auth/:provider/start', noHead<AuthPagesEnv>((c) => Effect.suspend(() =>
+  startOAuth(c.req.raw, c.env, decodeURIComponent(rawParam(c, 'provider'))))));
 
-authPageRoutes.get('/auth/:provider/callback', noHead<AuthPagesEnv>(async (c) =>
-  finishOAuth(c.req.raw, c.env, c.executionCtx, decodeURIComponent(rawParam(c, 'provider')))));
+authPageRoutes.get('/auth/:provider/callback', noHead<AuthPagesEnv>((c) => Effect.suspend(() =>
+  finishOAuth(c.req.raw, c.env, c.executionCtx, decodeURIComponent(rawParam(c, 'provider'))))));
 
-async function renderLogin<Id>(request: Request, env: AuthRoutesEnv<Id>): Promise<Response> {
-  const url = new URL(request.url);
-  const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/', url.origin);
-  const prompt = url.searchParams.get('prompt') === 'login' ? 'login' : null;
+function renderLogin<Id>(request: Request, env: AuthRoutesEnv<Id>): Effect.Effect<Response, KinuError> {
+  return Effect.gen(function* () {
+    const url = new URL(request.url);
+    const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/', url.origin);
+    const prompt = url.searchParams.get('prompt') === 'login' ? 'login' : null;
 
-  try {
-    await authenticateRequest(request, env);
+    const signedIn = yield* Effect.catchCause(Effect.as(Effect.promise(() => authenticateRequest(request, env)), true), (failed) => {
+      const e = Cause.squash(failed);
+
+      return e instanceof AuthError && e.status === 401 ? Effect.succeed(false) : Effect.failCause(failed);
+    });
 
     // `prompt=login` is the step-up recovery URL; redirecting a signed-in caller back to `return_to` would
     // bounce them into the same 401, so fall through and force interactive reauth (addProviderPrompt).
-    if (prompt === null) return redirect(new URL(returnTo, url.origin).toString());
-  } catch (e) {
-    if (!(e instanceof AuthError) || e.status !== 401) throw e;
-  }
+    if (signedIn && prompt === null) return redirect(new URL(returnTo, url.origin).toString());
 
-  if (builtinSignInOn(env)) {
-    return new Response(loginDocument([], await builtinSignIn(env, url, returnTo)), {
+    if (builtinSignInOn(env)) {
+      return new Response(loginDocument([], yield* builtinSignIn(env, url, returnTo)), {
+        headers: { ...publicHtmlHeaders(), 'cache-control': 'no-store' },
+      });
+    }
+
+    const providers = listConfiguredOAuthProviders(env).map((provider) => {
+      const start = new URL(`/auth/${provider.id}/start`, url.origin);
+      start.searchParams.set('return_to', returnTo);
+
+      if (prompt) start.searchParams.set('prompt', prompt);
+
+      return { href: escapeHtml(start.pathname + start.search), label: provider.label, id: provider.id };
+    });
+
+    return new Response(loginDocument(providers), {
       headers: { ...publicHtmlHeaders(), 'cache-control': 'no-store' },
     });
-  }
-
-  const providers = listConfiguredOAuthProviders(env).map((provider) => {
-    const start = new URL(`/auth/${provider.id}/start`, url.origin);
-    start.searchParams.set('return_to', returnTo);
-
-    if (prompt) start.searchParams.set('prompt', prompt);
-
-    return { href: escapeHtml(start.pathname + start.search), label: provider.label, id: provider.id };
-  });
-
-  return new Response(loginDocument(providers), {
-    headers: { ...publicHtmlHeaders(), 'cache-control': 'no-store' },
   });
 }
 
-async function builtinSignIn<Id>(env: AuthRoutesEnv<Id>, url: URL, returnTo: string): Promise<BuiltinSignIn> {
-  const invite = url.searchParams.get('invite');
+function builtinSignIn<Id>(env: AuthRoutesEnv<Id>, url: URL, returnTo: string): Effect.Effect<BuiltinSignIn, KinuError> {
+  return Effect.gen(function* () {
+    const invite = url.searchParams.get('invite');
 
-  const accounts = builtinAccounts(env);
-  const caller = await ownerCaller(env);
+    const accounts = builtinAccounts(env);
+    const caller = yield* Effect.promise(async () => ownerCaller(env));
 
-  const reset = url.searchParams.get('reset');
+    const reset = url.searchParams.get('reset');
 
-  if (reset !== null && reset !== '') {
-    const account = await accounts.builtinResetAccount(caller, grantOf({ reset }, undefined));
+    if (reset !== null && reset !== '') {
+      const account = yield* Effect.promise(async () => accounts.builtinResetAccount(caller, grantOf({ reset }, undefined)));
 
-    return account === null
-      ? { mode: 'sign-in', notice: 'This reset link was already used or has expired. Ask the owner for a new one.', returnTo }
-      : { mode: 'reset', reset, email: account.email, returnTo };
-  }
+      return account === null
+        ? { mode: 'sign-in', notice: 'This reset link was already used or has expired. Ask the owner for a new one.', returnTo }
+        : { mode: 'reset', reset, email: account.email, returnTo };
+    }
 
-  if (invite !== null && invite !== '') {
-    const email = await accounts.builtinInvitedEmail(caller, await sha256Hex(invite));
+    if (invite !== null && invite !== '') {
+      const email = yield* Effect.promise(async () => accounts.builtinInvitedEmail(caller, await sha256Hex(invite)));
 
-    return email === null
-      ? { mode: 'sign-in', notice: 'This invite link was already used or has expired. Ask for a new one.', returnTo }
-      : { mode: 'invite', invite, email, returnTo };
-  }
+      return email === null
+        ? { mode: 'sign-in', notice: 'This invite link was already used or has expired. Ask for a new one.', returnTo }
+        : { mode: 'invite', invite, email, returnTo };
+    }
 
-  if (await accounts.builtinHasOwner(caller)) return { mode: 'sign-in', returnTo };
+    if (yield* Effect.promise(async () => accounts.builtinHasOwner(caller))) return { mode: 'sign-in', returnTo };
 
-  if ((env.KINU_SETUP_TOKEN ?? '').trim() !== '') return { mode: 'owner', returnTo };
+    if ((env.KINU_SETUP_TOKEN ?? '').trim() !== '') return { mode: 'owner', returnTo };
 
-  return {
-    mode: 'setup', returnTo,
-    notice: 'This deployment has no owner yet. Its deployer sets a setup token as the KINU_SETUP_TOKEN secret, '
-      + 'keeps it in a password manager, and types it here.',
-  };
+    return {
+      mode: 'setup', returnTo,
+      notice: 'This deployment has no owner yet. Its deployer sets a setup token as the KINU_SETUP_TOKEN secret, '
+        + 'keeps it in a password manager, and types it here.',
+    };
+  });
 }
 
-async function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: string): Promise<Response> {
-  const provider = getOAuthProvider(env, providerId);
+function startOAuth<Id>(request: Request, env: AuthRoutesEnv<Id>, providerId: string): Effect.Effect<Response, KinuError> {
+  return Effect.gen(function* () {
+    const provider = getOAuthProvider(env, providerId);
 
-  if (!provider) return html('Sign in unavailable', '<p>This deployment has no sign-in set up for that provider. Go back and choose another one.</p>', { status: 404 });
+    if (!provider) return html('Sign in unavailable', '<p>This deployment has no sign-in set up for that provider. Go back and choose another one.</p>', { status: 404 });
 
-  if (!env.AUTH_KV) return html('Sign in unavailable', '<p>This deployment has no sign-in storage (<code>AUTH_KV</code>) set up, so no one can sign in yet.</p>', { status: 503 });
+    if (!env.AUTH_KV) return html('Sign in unavailable', '<p>This deployment has no sign-in storage (<code>AUTH_KV</code>) set up, so no one can sign in yet.</p>', { status: 503 });
 
-  const url = new URL(request.url);
-  const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/', url.origin);
-  const redirectUri = new URL(`/auth/${provider.id}/callback`, url.origin).toString();
-  const as = await getAuthorizationServer(provider);
+    const url = new URL(request.url);
+    const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/', url.origin);
+    const redirectUri = new URL(`/auth/${provider.id}/callback`, url.origin).toString();
+    const as = yield* Effect.promise(async () => getAuthorizationServer(provider));
 
-  if (!as.authorization_endpoint) throw new Error(`${provider.label} OAuth metadata has no authorization endpoint.`);
+    if (!as.authorization_endpoint) return yield* Effect.die(new Error(`${provider.label} OAuth metadata has no authorization endpoint.`));
 
-  const codeVerifier = oauth.generateRandomCodeVerifier();
-  const codeChallenge = await oauth.calculatePKCECodeChallenge(codeVerifier);
-  const nonce = provider.kind === 'oidc' ? oauth.generateRandomNonce() : null;
+    const codeVerifier = oauth.generateRandomCodeVerifier();
+    const codeChallenge = yield* Effect.promise(async () => oauth.calculatePKCECodeChallenge(codeVerifier));
+    const nonce = provider.kind === 'oidc' ? oauth.generateRandomNonce() : null;
 
-  const { state, binding, lifetimeMs } = await createOAuthState(env.AUTH_KV, {
-    provider: provider.id,
-    codeVerifier,
-    nonce,
-    returnTo,
-    redirectUri,
+    const { state, binding, lifetimeMs } = yield* Effect.promise(async () => createOAuthState(env.AUTH_KV, {
+      provider: provider.id,
+      codeVerifier,
+      nonce,
+      returnTo,
+      redirectUri,
+    }));
+
+    const authorizationUrl = new URL(as.authorization_endpoint);
+    authorizationUrl.searchParams.set('client_id', provider.clientId);
+    authorizationUrl.searchParams.set('redirect_uri', redirectUri);
+    authorizationUrl.searchParams.set('response_type', 'code');
+    authorizationUrl.searchParams.set('scope', provider.scopes);
+    authorizationUrl.searchParams.set('state', state);
+    authorizationUrl.searchParams.set('code_challenge', codeChallenge);
+    authorizationUrl.searchParams.set('code_challenge_method', 'S256');
+
+    if (nonce) authorizationUrl.searchParams.set('nonce', nonce);
+
+    if (url.searchParams.get('prompt') === 'login') {
+      addProviderPrompt(authorizationUrl, provider);
+    }
+
+    // KV holds only the binding's hash; this cookie is what the callback proves the sign-in with.
+    const headers = new Headers({ 'cache-control': 'no-store' });
+    headers.append('set-cookie', setCookie(OAUTH_STATE_COOKIE_NAME, binding, lifetimeMs));
+
+    return redirect(authorizationUrl.toString(), { headers });
   });
-
-  const authorizationUrl = new URL(as.authorization_endpoint);
-  authorizationUrl.searchParams.set('client_id', provider.clientId);
-  authorizationUrl.searchParams.set('redirect_uri', redirectUri);
-  authorizationUrl.searchParams.set('response_type', 'code');
-  authorizationUrl.searchParams.set('scope', provider.scopes);
-  authorizationUrl.searchParams.set('state', state);
-  authorizationUrl.searchParams.set('code_challenge', codeChallenge);
-  authorizationUrl.searchParams.set('code_challenge_method', 'S256');
-
-  if (nonce) authorizationUrl.searchParams.set('nonce', nonce);
-
-  if (url.searchParams.get('prompt') === 'login') {
-    addProviderPrompt(authorizationUrl, provider);
-  }
-
-  // KV holds only the binding's hash; this cookie is what the callback proves the sign-in with.
-  const headers = new Headers({ 'cache-control': 'no-store' });
-  headers.append('set-cookie', setCookie(OAUTH_STATE_COOKIE_NAME, binding, lifetimeMs));
-
-  return redirect(authorizationUrl.toString(), { headers });
 }
 
 /** Burns the handoff cookie whatever the outcome; its state record is already spent. */
-async function finishOAuth<Id>(
+function finishOAuth<Id>(
   request: Request, env: AuthRoutesEnv<Id>, ctx: Pick<ExecutionContext, 'waitUntil'>, providerId: string,
-): Promise<Response> {
-  const response = await completeOAuth(request, env, ctx, providerId);
-  response.headers.append('set-cookie', setCookie(OAUTH_STATE_COOKIE_NAME, '', 0));
+): Effect.Effect<Response, KinuError> {
+  return Effect.gen(function* () {
+    const response = yield* completeOAuth(request, env, ctx, providerId);
+    response.headers.append('set-cookie', setCookie(OAUTH_STATE_COOKIE_NAME, '', 0));
 
-  return response;
+    return response;
+  });
 }
 
-async function completeOAuth<Id>(
+function completeOAuth<Id>(
   request: Request, env: AuthRoutesEnv<Id>, ctx: Pick<ExecutionContext, 'waitUntil'>, providerId: string,
-): Promise<Response> {
-  const provider = getOAuthProvider(env, providerId);
+): Effect.Effect<Response, KinuError> {
+  return Effect.gen(function* () {
+    const provider = getOAuthProvider(env, providerId);
 
-  if (!provider) return html('Sign in unavailable', '<p>This deployment has no sign-in set up for that provider. Go back and choose another one.</p>', { status: 404 });
+    if (!provider) return html('Sign in unavailable', '<p>This deployment has no sign-in set up for that provider. Go back and choose another one.</p>', { status: 404 });
 
-  if (!env.AUTH_KV) return html('Sign in unavailable', '<p>This deployment has no sign-in storage (<code>AUTH_KV</code>) set up, so no one can sign in yet.</p>', { status: 503 });
+    if (!env.AUTH_KV) return html('Sign in unavailable', '<p>This deployment has no sign-in storage (<code>AUTH_KV</code>) set up, so no one can sign in yet.</p>', { status: 503 });
 
-  const url = new URL(request.url);
-  const state = url.searchParams.get('state');
+    const url = new URL(request.url);
+    const state = url.searchParams.get('state');
 
-  if (!state) return html('Sign in failed', '<p>The sign-in response came back without its state. Return to <a href="/login">sign in</a> and try again.</p>', { status: 400 });
+    if (!state) return html('Sign in failed', '<p>The sign-in response came back without its state. Return to <a href="/login">sign in</a> and try again.</p>', { status: 400 });
 
-  let stage = 'state';
+    let stage = 'state';
 
-  try {
-    const savedState = await consumeOAuthState(
-      env.AUTH_KV, state, provider.id, readCookie(request, OAUTH_STATE_COOKIE_NAME),
-    );
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const savedState = yield* Effect.promise(async () => consumeOAuthState(
+        env.AUTH_KV, state, provider.id, readCookie(request, OAUTH_STATE_COOKIE_NAME),
+      ));
 
-    stage = 'metadata';
-    const as = await getAuthorizationServer(provider);
-    const client: oauth.Client = { client_id: provider.clientId };
-    stage = 'authorization_response';
-    const callbackParams = oauth.validateAuthResponse(as, client, url.searchParams, state);
-    stage = 'token_request';
+      stage = 'metadata';
+      const as = yield* Effect.promise(async () => getAuthorizationServer(provider));
+      const client: oauth.Client = { client_id: provider.clientId };
+      stage = 'authorization_response';
+      const callbackParams = oauth.validateAuthResponse(as, client, url.searchParams, state);
+      stage = 'token_request';
 
-    const tokenResponse = await oauth.authorizationCodeGrantRequest(
-      as,
-      client,
-      clientAuth(provider),
-      callbackParams,
-      savedState.redirectUri,
-      savedState.codeVerifier,
-    );
+      const tokenResponse = yield* Effect.promise(async () => oauth.authorizationCodeGrantRequest(
+        as,
+        client,
+        clientAuth(provider),
+        callbackParams,
+        savedState.redirectUri,
+        savedState.codeVerifier,
+      ));
 
-    stage = 'token_response';
-    const tokens = await processOAuthTokenResponse({ provider, as, client, response: tokenResponse, nonce: savedState.nonce ?? null });
-    stage = 'profile';
-    const profile = await fetchOAuthProfile(provider, as, client, tokens);
-    stage = 'session';
-    const session = await createSession(env, profile);
+      stage = 'token_response';
+      const tokens = yield* processOAuthTokenResponse({ provider, as, client, response: tokenResponse, nonce: savedState.nonce ?? null });
+      stage = 'profile';
+      const profile = yield* fetchOAuthProfile(provider, as, client, tokens);
+      stage = 'session';
+      const session = yield* Effect.promise(async () => createSession(env, profile));
 
-    if (provider.id === 'cloudflare') {
-      await attachCloudflareWorkersAI(env, ctx, session.identity.userId, tokens);
-    }
+      if (provider.id === 'cloudflare') {
+        yield* attachCloudflareWorkersAI(env, ctx, session.identity.userId, tokens);
+      }
 
-    const destination = new URL(savedState.returnTo, url.origin).toString();
-    const headers = new Headers({ 'cache-control': 'no-store' });
-    headers.append('set-cookie', setCookie(SESSION_COOKIE_NAME, session.token, session.expiresAt - session.issuedAt));
+      const destination = new URL(savedState.returnTo, url.origin).toString();
+      const headers = new Headers({ 'cache-control': 'no-store' });
+      headers.append('set-cookie', setCookie(SESSION_COOKIE_NAME, session.token, session.expiresAt - session.issuedAt));
 
-    return redirect(destination, {
-      headers,
-    });
-  } catch (e) {
-    const failure = summarizeOAuthFailure({ cause: e });
-    diagnostics.failure('auth.oauth_callback_failed', toKinuError({
-      doing: 'completing the OAuth callback',
-      cause: e,
-      otherwise: 'unavailable',
-    }), { provider: providerId, stage, reason: failure.reason, detail: failure.log });
+      return redirect(destination, {
+        headers,
+      });
+    }), (failed) => Effect.sync(() => {
+      const e = Cause.squash(failed);
+      const failure = summarizeOAuthFailure({ cause: e });
+      diagnostics.failure('auth.oauth_callback_failed', toKinuError({
+        doing: 'completing the OAuth callback',
+        cause: e,
+        otherwise: 'unavailable',
+      }), { provider: providerId, stage, reason: failure.reason, detail: failure.log });
 
-    return html('Sign in failed', `
+      return html('Sign in failed', `
       <p class="lede">Kinu could not finish signing you in. Return to sign in and try again.</p>
       <p class="muted">Failure stage: <code>${escapeHtml(stage)}</code></p>
       <p class="muted">Reason: <code>${escapeHtml(failure.reason)}</code></p>
       <div class="actions"><a class="provider" href="/login?prompt=login">Return to sign in</a></div>
     `, { status: 400 });
-  }
+    }));
+  });
 }
 
 /** Never throws: the operator is already signed in, and a billing lookup must not undo that. An unusable
  *  credential is reported by the "Connect Cloudflare Workers AI" notice. */
-async function attachCloudflareWorkersAI<Id>(
+function attachCloudflareWorkersAI<Id>(
   env: AuthRoutesEnv<Id>,
   ctx: Pick<ExecutionContext, 'waitUntil'>,
   userId: string,
   tokens: CloudflareTokenPayload,
-): Promise<void> {
-  try {
-    const credential = await cloudflareTokenToCredential(tokens);
-    const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
-    await userDO.setCredential(await ownerCaller(env), CLOUDFLARE_OAUTH_CRED_KEY, credential);
-    // No model seeding: the built-in default tier already names the native Workers AI model.
-    notifyWorkspacesModelSettingsChanged(env, userDO, ctx);
-  } catch (e) {
-    const failure = summarizeOAuthFailure({ cause: e });
-    diagnostics.failure('auth.workers_ai_credential_unavailable', toKinuError({
-      doing: 'attaching the Workers AI credential to a Cloudflare sign-in',
-      cause: e,
-      otherwise: 'unavailable',
-    }), { reason: failure.reason, detail: failure.log });
-  }
+): Effect.Effect<void, KinuError> {
+  return Effect.gen(function* () {
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const credential = yield* Effect.promise(async () => cloudflareTokenToCredential(tokens));
+      const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
+      yield* Effect.promise(async () => userDO.setCredential(await ownerCaller(env), CLOUDFLARE_OAUTH_CRED_KEY, credential));
+      // No model seeding: the built-in default tier already names the native Workers AI model.
+      notifyWorkspacesModelSettingsChanged(env, userDO, ctx);
+    }), (failed) => Effect.sync(() => {
+      const e = Cause.squash(failed);
+      const failure = summarizeOAuthFailure({ cause: e });
+      diagnostics.failure('auth.workers_ai_credential_unavailable', toKinuError({
+        doing: 'attaching the Workers AI credential to a Cloudflare sign-in',
+        cause: e,
+        otherwise: 'unavailable',
+      }), { reason: failure.reason, detail: failure.log });
+    }));
+  });
 }
 
 interface OAuthTokenExchange {
@@ -345,96 +359,94 @@ interface OAuthTokenExchange {
   nonce: string | null;
 }
 
-async function processOAuthTokenResponse(
+function processOAuthTokenResponse(
   exchange: OAuthTokenExchange,
-): Promise<oauth.TokenEndpointResponse> {
-  const { provider, as, client, response, nonce } = exchange;
+): Effect.Effect<oauth.TokenEndpointResponse, KinuError> {
+  return Effect.gen(function* () {
+    const { provider, as, client, response, nonce } = exchange;
 
-  if (provider.kind === 'oidc') {
-    return oauth.processAuthorizationCodeResponse(as, client, response, {
-      expectedNonce: nonce ?? oauth.expectNoNonce,
-      requireIdToken: true,
-    });
-  }
+    if (provider.kind === 'oidc') {
+      return yield* Effect.promise(() => oauth.processAuthorizationCodeResponse(as, client, response, {
+        expectedNonce: nonce ?? oauth.expectNoNonce,
+        requireIdToken: true,
+      }));
+    }
 
-  if (provider.id === 'cloudflare') return processCloudflareTokenResponse(response);
+    if (provider.id === 'cloudflare') return yield* processCloudflareTokenResponse(response);
 
-  return oauth.processGenericTokenEndpointResponse(as, client, response);
+    return yield* Effect.promise(() => oauth.processGenericTokenEndpointResponse(as, client, response));
+  });
 }
 
 /** The cookie is cleared only after revocation lands: a failed revocation keeps it (503) because it is
  *  the only handle that can still revoke this session. Other sessions are untouched. */
-async function logout<Id>(request: Request, env: AuthRoutesEnv<Id>): Promise<Response> {
+function logout<Id>(request: Request, env: AuthRoutesEnv<Id>): Effect.Effect<Response> {
   const url = new URL(request.url);
   const returnTo = sanitizeReturnTo(url.searchParams.get('return_to') ?? '/', url.origin);
   const token = readSessionToken(request);
-
-  if (token) {
-    try {
-      await revokeSession(env, token);
-    } catch (e) {
-      diagnostics.failure('auth.session_revoke_failed', toKinuError({
-        doing: 'revoking a browser session on sign-out',
-        cause: e,
-        otherwise: 'unavailable',
-      }));
-      const retry = new URL('/logout', url.origin);
-      retry.searchParams.set('return_to', returnTo);
-
-      return html('Sign-out not confirmed', `
-        <p class="lede">Kinu could not reach the store that holds your sign-in, so this session is NOT signed out yet.</p>
-        <p class="muted">You are still signed in on this browser. Retry to end the session.</p>
-        <div class="actions"><a class="provider" href="${escapeHtml(retry.pathname + retry.search)}">Retry sign-out</a></div>
-      `, { status: 503 });
-    }
-  }
-
   const headers = new Headers({ 'cache-control': 'no-store' });
   headers.append('set-cookie', setCookie(SESSION_COOKIE_NAME, '', 0));
+  const signedOut = redirect(new URL(returnTo, url.origin).toString(), { headers });
 
-  return redirect(new URL(returnTo, url.origin).toString(), {
-    headers,
-  });
+  if (!token) return Effect.succeed(signedOut);
+
+  return Effect.catchCause(Effect.as(Effect.promise(() => revokeSession(env, token)), signedOut), (failed) => Effect.sync(() => {
+    diagnostics.failure('auth.session_revoke_failed', toKinuError({
+      doing: 'revoking a browser session on sign-out',
+      cause: Cause.squash(failed),
+      otherwise: 'unavailable',
+    }));
+    const retry = new URL('/logout', url.origin);
+    retry.searchParams.set('return_to', returnTo);
+
+    return html('Sign-out not confirmed', `
+      <p class="lede">Kinu could not reach the store that holds your sign-in, so this session is NOT signed out yet.</p>
+      <p class="muted">You are still signed in on this browser. Retry to end the session.</p>
+      <div class="actions"><a class="provider" href="${escapeHtml(retry.pathname + retry.search)}">Retry sign-out</a></div>
+    `, { status: 503 });
+  }));
 }
 
-async function fetchOAuthProfile(
+function fetchOAuthProfile(
   provider: OAuthProviderConfig,
   as: oauth.AuthorizationServer,
   client: oauth.Client,
   tokens: oauth.TokenEndpointResponse,
-): Promise<OAuthProfile> {
-  if (provider.id === 'github') return fetchGitHubProfile(tokens.access_token);
+): Effect.Effect<OAuthProfile, KinuError> {
+  return Effect.gen(function* () {
+    if (provider.id === 'github') return yield* fetchGitHubProfile(tokens.access_token);
 
-  if (provider.id === 'cloudflare') return fetchCloudflareProfile(tokens.access_token);
+    if (provider.id === 'cloudflare') return yield* fetchCloudflareProfile(tokens.access_token);
 
-  const idClaims = oauth.getValidatedIdTokenClaims(tokens);
-  let userinfo: oauth.UserInfoResponse | null = null;
+    const idClaims = oauth.getValidatedIdTokenClaims(tokens);
+    let userinfo: oauth.UserInfoResponse | null = null;
 
-  if (as.userinfo_endpoint && tokens.access_token) {
-    const userinfoResponse = await oauth.userInfoRequest(as, client, tokens.access_token);
-    userinfo = await oauth.processUserInfoResponse(
-      as,
-      client,
-      idClaims?.sub ?? oauth.skipSubjectCheck,
-      userinfoResponse,
-    );
-  }
+    if (as.userinfo_endpoint && tokens.access_token) {
+      const userinfoResponse = yield* Effect.promise(async () => oauth.userInfoRequest(as, client, tokens.access_token));
+      userinfo = yield* Effect.promise(async () => oauth.processUserInfoResponse(
+        as,
+        client,
+        idClaims?.sub ?? oauth.skipSubjectCheck,
+        userinfoResponse,
+      ));
+    }
 
-  const sub = stringClaim(userinfo?.sub) ?? stringClaim(idClaims?.sub);
-  const email = stringClaim(userinfo?.email) ?? stringClaim(idClaims?.email);
-  const emailVerified = boolClaim(userinfo?.email_verified) ?? boolClaim(idClaims?.email_verified) ?? false;
+    const sub = stringClaim(userinfo?.sub) ?? stringClaim(idClaims?.sub);
+    const email = stringClaim(userinfo?.email) ?? stringClaim(idClaims?.email);
+    const emailVerified = boolClaim(userinfo?.email_verified) ?? boolClaim(idClaims?.email_verified) ?? false;
 
-  if (!sub) throw new Error(`${provider.label} did not return a stable subject.`);
+    if (!sub) return yield* Effect.die(new Error(`${provider.label} did not return a stable subject.`));
 
-  if (!email) throw new Error(`${provider.label} did not return an email address.`);
+    if (!email) return yield* Effect.die(new Error(`${provider.label} did not return an email address.`));
 
-  return {
-    provider: provider.id,
-    providerSub: sub,
-    email,
-    emailVerified,
-    displayName: stringClaim(userinfo?.name) ?? stringClaim(idClaims?.name) ?? null,
-  };
+    return {
+      provider: provider.id,
+      providerSub: sub,
+      email,
+      emailVerified,
+      displayName: stringClaim(userinfo?.name) ?? stringClaim(idClaims?.name) ?? null,
+    } satisfies OAuthProfile;
+  });
 }
 
 class OAuthProviderTokenError extends Data.TaggedError('OAuthProviderTokenError')<{ readonly message: string }> {
@@ -447,132 +459,143 @@ class OAuthProviderTokenError extends Data.TaggedError('OAuthProviderTokenError'
   }
 }
 
-async function processCloudflareTokenResponse(response: Response): Promise<oauth.TokenEndpointResponse> {
-  const body = await readJsonObject(response, 'Cloudflare token endpoint');
+function processCloudflareTokenResponse(response: Response): Effect.Effect<oauth.TokenEndpointResponse, KinuError> {
+  return Effect.gen(function* () {
+    const body = yield* Effect.promise(async () => readJsonObject(response, 'Cloudflare token endpoint'));
 
-  if (!response.ok) {
-    const providerError = stringClaim(body.error) ?? `http_${response.status}`;
-    throw new OAuthProviderTokenError(providerError, response.status, stringClaim(body.error_description) ?? undefined);
-  }
+    if (!response.ok) {
+      const providerError = stringClaim(body.error) ?? `http_${response.status}`;
 
-  if (stringClaim(body.error)) {
-    throw new OAuthProviderTokenError(
-      stringClaim(body.error) ?? 'token_error',
-      response.status,
-      stringClaim(body.error_description) ?? undefined,
-    );
-  }
+      return yield* Effect.die(new OAuthProviderTokenError(providerError, response.status, stringClaim(body.error_description) ?? undefined));
+    }
 
-  return cloudflareTokenJsonToResponse(body);
-}
+    if (stringClaim(body.error)) {
+      return yield* Effect.die(new OAuthProviderTokenError(
+        stringClaim(body.error) ?? 'token_error',
+        response.status,
+        stringClaim(body.error_description) ?? undefined,
+      ));
+    }
 
-function cloudflareTokenJsonToResponse(body: JsonObject): oauth.TokenEndpointResponse {
-  const accessToken = stringClaim(body.access_token);
-
-  if (!accessToken) throw new Error('Cloudflare token endpoint did not return an access token.');
-
-  const tokenType = stringClaim(body.token_type)?.toLowerCase() === 'dpop' ? 'dpop' : 'bearer';
-
-  const out: MutableTokenEndpointResponse = {
-    access_token: accessToken,
-    token_type: tokenType,
-  };
-
-  const expiresIn = numberClaim(body.expires_in);
-
-  if (expiresIn !== null) out.expires_in = expiresIn;
-
-  const refreshToken = stringClaim(body.refresh_token);
-
-  if (refreshToken) out.refresh_token = refreshToken;
-
-  const scope = scopeClaim(body.scope);
-
-  if (scope) out.scope = scope;
-
-  for (const [key, value] of Object.entries(body)) {
-    if (key in out) continue;
-
-    if (v.is(JsonValueSchema, value)) out[key] = value;
-  }
-
-  return out;
-}
-
-async function fetchCloudflareProfile(accessToken: string | undefined): Promise<OAuthProfile> {
-  if (!accessToken) throw new Error('Cloudflare token response did not include an access token.');
-
-  const res = await fetch('https://api.cloudflare.com/client/v4/user', {
-    headers: {
-      accept: 'application/json',
-      authorization: `Bearer ${accessToken}`,
-    },
+    return yield* cloudflareTokenJsonToResponse(body);
   });
-
-  if (!res.ok) throw new Error(`Cloudflare user lookup failed: ${res.status}`);
-  const body = v.parse(CloudflareUserEnvelopeSchema, await res.json());
-
-  if (body.success === false) throw new Error('Cloudflare user lookup failed.');
-
-  return cloudflareUserResultToProfile(body.result);
 }
 
-function cloudflareUserResultToProfile(result: JsonValue | undefined): OAuthProfile {
-  const user = v.parse(CloudflareUserSchema, result);
-  const id = String(user.id);
-  const email = user.email.trim();
+function cloudflareTokenJsonToResponse(body: JsonObject): Effect.Effect<oauth.TokenEndpointResponse, KinuError> {
+  return Effect.gen(function* () {
+    const accessToken = stringClaim(body.access_token);
 
-  if (!id) throw new Error('Cloudflare did not return a stable user id.');
+    if (!accessToken) return yield* Effect.die(new Error('Cloudflare token endpoint did not return an access token.'));
 
-  if (!email) throw new Error('Cloudflare did not return an email address.');
+    const tokenType = stringClaim(body.token_type)?.toLowerCase() === 'dpop' ? 'dpop' : 'bearer';
 
-  const firstName = stringClaim(user.first_name);
-  const lastName = stringClaim(user.last_name);
-  const fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
-  const username = stringClaim(user.username);
+    const out: MutableTokenEndpointResponse = {
+      access_token: accessToken,
+      token_type: tokenType,
+    };
 
-  return {
-    provider: 'cloudflare',
-    providerSub: id,
-    email,
-    emailVerified: true,
-    displayName: fullName === '' ? username : fullName,
-  };
+    const expiresIn = numberClaim(body.expires_in);
+
+    if (expiresIn !== null) out.expires_in = expiresIn;
+
+    const refreshToken = stringClaim(body.refresh_token);
+
+    if (refreshToken) out.refresh_token = refreshToken;
+
+    const scope = scopeClaim(body.scope);
+
+    if (scope) out.scope = scope;
+
+    for (const [key, value] of Object.entries(body)) {
+      if (key in out) continue;
+
+      if (v.is(JsonValueSchema, value)) out[key] = value;
+    }
+
+    return out;
+  });
 }
 
-async function fetchGitHubProfile(accessToken: string): Promise<OAuthProfile> {
-  const headers = {
-    accept: 'application/vnd.github+json',
-    authorization: `Bearer ${accessToken}`,
-    'user-agent': KINU_USER_AGENT,
-    'x-github-api-version': '2022-11-28',
-  };
+function fetchCloudflareProfile(accessToken: string | undefined): Effect.Effect<OAuthProfile, KinuError> {
+  return Effect.gen(function* () {
+    if (!accessToken) return yield* Effect.die(new Error('Cloudflare token response did not include an access token.'));
 
-  const userRes = await fetch('https://api.github.com/user', { headers });
+    const res = yield* Effect.promise(async () => fetch('https://api.cloudflare.com/client/v4/user', {
+      headers: {
+        accept: 'application/json',
+        authorization: `Bearer ${accessToken}`,
+      },
+    }));
 
-  if (!userRes.ok) throw new Error(`GitHub user lookup failed: ${userRes.status}`);
-  const user = v.parse(GitHubUserSchema, await userRes.json());
+    if (!res.ok) return yield* Effect.die(new Error(`Cloudflare user lookup failed: ${res.status}`));
+    const body = v.parse(CloudflareUserEnvelopeSchema, yield* Effect.promise(async () => res.json()));
 
-  const emailsRes = await fetch('https://api.github.com/user/emails', { headers });
+    if (body.success === false) return yield* Effect.die(new Error('Cloudflare user lookup failed.'));
 
-  if (!emailsRes.ok) throw new Error(`GitHub email lookup failed: ${emailsRes.status}`);
-  const emails = v.parse(v.array(GitHubEmailSchema), await emailsRes.json());
-  const verified = emails.filter((e) => e.email && e.verified);
-  const primary = verified.find((e) => e.primary) ?? verified[0];
-  const email = primary?.email ?? user.email ?? null;
-  const emailVerified = Boolean(primary?.email) || verified.some((e) => e.email === user.email);
+    return yield* cloudflareUserResultToProfile(body.result);
+  });
+}
 
-  if (!user.id) throw new Error('GitHub did not return a stable user id.');
+function cloudflareUserResultToProfile(result: JsonValue | undefined): Effect.Effect<OAuthProfile, KinuError> {
+  return Effect.gen(function* () {
+    const user = v.parse(CloudflareUserSchema, result);
+    const id = String(user.id);
+    const email = user.email.trim();
 
-  if (!email) throw new Error('GitHub did not return a verified email address.');
+    if (!id) return yield* Effect.die(new Error('Cloudflare did not return a stable user id.'));
 
-  return {
-    provider: 'github',
-    providerSub: String(user.id),
-    email,
-    emailVerified,
-    displayName: stringClaim(user.name) ?? stringClaim(user.login),
-  };
+    if (!email) return yield* Effect.die(new Error('Cloudflare did not return an email address.'));
+
+    const firstName = stringClaim(user.first_name);
+    const lastName = stringClaim(user.last_name);
+    const fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
+    const username = stringClaim(user.username);
+
+    return {
+      provider: 'cloudflare',
+      providerSub: id,
+      email,
+      emailVerified: true,
+      displayName: fullName === '' ? username : fullName,
+    } satisfies OAuthProfile;
+  });
+}
+
+function fetchGitHubProfile(accessToken: string): Effect.Effect<OAuthProfile, KinuError> {
+  return Effect.gen(function* () {
+    const headers = {
+      accept: 'application/vnd.github+json',
+      authorization: `Bearer ${accessToken}`,
+      'user-agent': KINU_USER_AGENT,
+      'x-github-api-version': '2022-11-28',
+    };
+
+    const userRes = yield* Effect.promise(async () => fetch('https://api.github.com/user', { headers }));
+
+    if (!userRes.ok) return yield* Effect.die(new Error(`GitHub user lookup failed: ${userRes.status}`));
+    const user = v.parse(GitHubUserSchema, yield* Effect.promise(async () => userRes.json()));
+
+    const emailsRes = yield* Effect.promise(async () => fetch('https://api.github.com/user/emails', { headers }));
+
+    if (!emailsRes.ok) return yield* Effect.die(new Error(`GitHub email lookup failed: ${emailsRes.status}`));
+    const emails = v.parse(v.array(GitHubEmailSchema), yield* Effect.promise(async () => emailsRes.json()));
+    const verified = emails.filter((e) => e.email && e.verified);
+    const primary = verified.find((e) => e.primary) ?? verified[0];
+    const email = primary?.email ?? user.email ?? null;
+    const emailVerified = Boolean(primary?.email) || verified.some((e) => e.email === user.email);
+
+    if (!user.id) return yield* Effect.die(new Error('GitHub did not return a stable user id.'));
+
+    if (!email) return yield* Effect.die(new Error('GitHub did not return a verified email address.'));
+
+    return {
+      provider: 'github',
+      providerSub: String(user.id),
+      email,
+      emailVerified,
+      displayName: stringClaim(user.name) ?? stringClaim(user.login),
+    } satisfies OAuthProfile;
+  });
 }
 
 interface PublicIdentity {

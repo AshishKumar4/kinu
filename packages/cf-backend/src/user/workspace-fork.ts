@@ -3,7 +3,8 @@ import type { ForkFrame, ForkFrameReply } from '@kinu.run/core';
 import type { SqlExecutor, ForkFileSource, ActorHandle } from '@kinu.run/core';
 import type { UserCaller } from '@kinu.run/core';
 import type { WorkspaceEntry } from './user-do';
-import { KinuError } from '@kinu.run/core/obs';
+import { Cause, Effect } from 'effect';
+import { KinuError, settle } from '@kinu.run/core/obs';
 
 export interface CloudForkRegistry {
   reserveWorkspace(caller: UserCaller, name: string, displayName?: string): Promise<{
@@ -50,7 +51,7 @@ export interface CloudForkSource {
  * Reserve the roster name, stream frames to the target, publish only after the target commits.
  * Renewing per acked frame lets a dead sender's reservation lapse instead of wedging the name.
  */
-export async function deliverCloudFork(input: {
+export function deliverCloudFork(input: {
   registry: CloudForkRegistry;
   caller: UserCaller;
   target: CloudForkTarget;
@@ -58,62 +59,63 @@ export async function deliverCloudFork(input: {
   source: CloudForkSource;
   ownerUserId: string;
 }): Promise<{ workspaceId: string; forkPointMs: number }> {
-  const registration = await input.registry.reserveWorkspace(input.caller, input.name, input.name);
+  return settle(Effect.gen(function* () {
+    const registration = yield* Effect.promise(() => input.registry.reserveWorkspace(input.caller, input.name, input.name));
 
-  if (!registration.reserved) throw new KinuError('bad_input', `agent name already exists: "${input.name}"`);
+    if (!registration.reserved) return yield* new KinuError('bad_input', `agent name already exists: "${input.name}"`);
 
-  const destroy = async (thrown: { cause: unknown }): Promise<never> => {
-    try { await input.registry.removeWorkspace(input.caller, input.name, input.ownerUserId); }
-    catch (rollback) {
-      throw new KinuError('io', `fork creation failed and cleanup also failed for "${input.name}"`, { cause: new AggregateError([thrown.cause, rollback]) });
-    }
-
-    throw thrown.cause;
-  };
-
-  let landed: Extract<ForkFrameAck, { status: 'published' }> | null = null;
-
-  const frames = forkTransferFrames({ ...input.source, transferId: nanoid(), frameBytes: FORK_FRAME_BYTES });
-
-  try {
-    // Each answer goes back into the stream: a page the target wants chunks for is followed by them and itself.
-    let reply: ForkFrameReply | undefined;
-
-    for (let next = await frames.next(); !next.done; next = await frames.next(reply)) {
-      const ack = await input.target.rawCopyFromFork(input.name, next.value, input.ownerUserId);
-
-      if (!ack.ok) {
-        const released = await input.registry.releaseWorkspaceReservation(
-          input.caller, input.name, registration.entry.createdAt,
-        );
-
-        if (!released) throw new KinuError('io', `fork target is owned by another user and reservation cleanup failed for "${input.name}"`);
-        throw new KinuError('bad_input', `agent name already exists: "${input.name}"`);
-      }
-
-      if (ack.status === 'published') { landed = ack; break; }
-
-      reply = ack.status === 'want' ? { want: ack.hashes } : undefined;
-
-      // false: the name was given to someone else; continuing would stream into a target not ours.
-      const held = await input.registry.renewWorkspaceReservation(
-        input.caller, input.name, registration.entry.createdAt,
-      );
-
-      if (!held) throw new KinuError('unavailable', `the reservation for "${input.name}" is no longer held by this transfer`);
-    }
-  } catch (cause) { return await destroy({ cause }); } finally {
-    // Releases the stream's pin on the source however the loop ended.
-    await frames.return(undefined);
-  }
-
-  if (!landed) return destroy({ cause: new Error(`fork transfer to "${input.name}" ended before the target published it`) });
-
-  try {
-    await input.registry.publishWorkspaceReservation(
-      input.caller, input.name, registration.entry.createdAt, landed.capabilityHash,
+    const destroy = <E>(failed: Cause.Cause<E>): Effect.Effect<never, E | KinuError> => Effect.andThen(
+      Effect.catchCause(
+        Effect.promise(() => input.registry.removeWorkspace(input.caller, input.name, input.ownerUserId)),
+        (rollback) => Effect.fail(new KinuError('io', `fork creation failed and cleanup also failed for "${input.name}"`, {
+          cause: new AggregateError([Cause.squash(failed), Cause.squash(rollback)]),
+        })),
+      ),
+      Effect.failCause(failed),
     );
 
-    return { workspaceId: landed.agentId, forkPointMs: landed.forkPointMs };
-  } catch (cause) { return destroy({ cause }); }
+    const frames = forkTransferFrames({ ...input.source, transferId: nanoid(), frameBytes: FORK_FRAME_BYTES });
+
+    const transferred = Effect.gen(function* () {
+      // Each answer goes back into the stream: a page the target wants chunks for is followed by them and itself.
+      let reply: ForkFrameReply | undefined;
+
+      for (let next = yield* Effect.promise(() => frames.next()); !next.done; next = yield* Effect.promise(() => frames.next(reply))) {
+        const frame = next.value;
+        const ack = yield* Effect.promise(() => input.target.rawCopyFromFork(input.name, frame, input.ownerUserId));
+
+        if (!ack.ok) {
+          const released = yield* Effect.promise(() => input.registry.releaseWorkspaceReservation(
+            input.caller, input.name, registration.entry.createdAt,
+          ));
+
+          if (!released) return yield* new KinuError('io', `fork target is owned by another user and reservation cleanup failed for "${input.name}"`);
+
+          return yield* new KinuError('bad_input', `agent name already exists: "${input.name}"`);
+        }
+
+        if (ack.status === 'published') return ack;
+
+        reply = ack.status === 'want' ? { want: ack.hashes } : undefined;
+
+        // false: the name was given to someone else; continuing would stream into a target not ours.
+        const held = yield* Effect.promise(() => input.registry.renewWorkspaceReservation(
+          input.caller, input.name, registration.entry.createdAt,
+        ));
+
+        if (!held) return yield* new KinuError('unavailable', `the reservation for "${input.name}" is no longer held by this transfer`);
+      }
+
+      return null;
+    });
+
+    // Releases the stream's pin on the source however the loop ended.
+    const landed = yield* Effect.catchCause(transferred, destroy).pipe(Effect.ensuring(Effect.promise(() => frames.return(undefined))));
+
+    if (!landed) return yield* destroy(Cause.die(new Error(`fork transfer to "${input.name}" ended before the target published it`)));
+
+    return yield* Effect.catchCause(Effect.as(Effect.promise(() => input.registry.publishWorkspaceReservation(
+      input.caller, input.name, registration.entry.createdAt, landed.capabilityHash,
+    )), { workspaceId: landed.agentId, forkPointMs: landed.forkPointMs }), destroy);
+  }));
 }

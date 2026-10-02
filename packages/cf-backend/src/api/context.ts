@@ -4,7 +4,7 @@ import { routePath } from 'hono/route';
 import {
   err, OwnerCapabilityUnavailableError, ownerCaller, PUBLIC_MESSAGE, publicError, type OwnerCapabilityEnv, type UserCaller,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, toKinuError, settleSync } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, toKinuError, settle, settleSync } from '@kinu.run/core/obs';
 import type { AuthIdentity } from '../auth/session';
 import type { AccessIdentity } from '../control-plane/access-gate';
 
@@ -32,8 +32,12 @@ export function apiPath(request: Request): string {
 }
 
 /** Hono sends HEAD to GET routes; a GET-only route passes it on. */
-export function noHead<E extends HonoEnv>(handler: MiddlewareHandler<E>): MiddlewareHandler<E> {
-  return async (c, next) => (c.req.method === 'HEAD' ? next() : handler(c, next));
+export function noHead<E extends HonoEnv>(handler: (c: Context<E>) => Effect.Effect<Response, KinuError>): MiddlewareHandler<E> {
+  return (c, next) => {
+    if (c.req.method === 'HEAD') return next();
+
+    return settle(handler(c));
+  };
 }
 
 /** A segment as spelled; routes decode it with `decodeURIComponent`, which throws on a bad escape, as before. */
