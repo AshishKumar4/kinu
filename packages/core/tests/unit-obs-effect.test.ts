@@ -165,6 +165,15 @@ describe('flight', () => {
     expect([await settle(kept('a')), await settle(kept('a')), await settle(kept('b'))]).toEqual(['a4', 'a4', 'b5']);
   });
 
+  test('`forget` drops a held run, so the next call runs afresh', async () => {
+    let runs = 0;
+    const home = flight((key: string) => Effect.sync(() => `${key}${String(++runs)}`), { key: (key) => key, keep: 'success' });
+
+    expect([await settle(home('a')), await settle(home('a'))]).toEqual(['a1', 'a1']);
+    home.forget('a');
+    expect(await settle(home('a'))).toBe('a2');
+  });
+
   test('`keep: \'exit\'` holds a failure too, so the run is never repeated', async () => {
     let runs = 0;
     const refusal = new KinuError('unavailable', 'no key');

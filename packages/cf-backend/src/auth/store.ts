@@ -8,7 +8,7 @@
 // The userId is derived from the verified email (`deriveUserId`), so the email is the account and an
 // unverified address is not an identity.
 
-import { Data, Effect } from 'effect';
+import { Cause, Data, Effect } from 'effect';
 import type { AuthIdentity } from './session';
 import type { OAuthProviderId } from '@kinu.run/core/identity';
 import { builtinSignInOn, type SignInDeclarationEnv } from '@kinu.run/core/identity';
@@ -166,41 +166,44 @@ function parseSessionTokenUserId(token: string): string | null {
   return match?.[1] ?? null;
 }
 
-export async function createSession<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile): Promise<BrowserSession> {
-  const now = Date.now();
-  const identity = await resolveIdentity(env, profile, now);
-  const token = `ps_${identity.userId}_${randomToken(48)}`;
-  const tokenHash = await sha256Hex(token);
-  const expiresAt = now + SESSION_TTL_MS;
-  const caller = await ownerCaller(env);
-  const authority = sessionAuthority(env, identity.userId);
+export function createSession<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile): Promise<BrowserSession> {
+  return settle(Effect.gen(function* () {
+    const now = Date.now();
+    const identity = yield* resolveIdentity(env, profile, now);
+    const token = `ps_${identity.userId}_${randomToken(48)}`;
+    const tokenHash = yield* Effect.promise(async () => sha256Hex(token));
+    const expiresAt = now + SESSION_TTL_MS;
+    const caller = yield* Effect.promise(async () => ownerCaller(env));
+    const authority = sessionAuthority(env, identity.userId);
 
-  // One value for both stores so they cannot disagree about what this cookie stands for.
-  const minted: BrowserSessionIdentity = {
-    email: identity.email,
-    displayName: identity.displayName ?? null,
-    provider: identity.provider ?? profile.provider,
-    sub: identity.sub,
-    authTime: now,
-  };
+    // One value for both stores so they cannot disagree about what this cookie stands for.
+    const minted: BrowserSessionIdentity = {
+      email: identity.email,
+      displayName: identity.displayName ?? null,
+      provider: identity.provider ?? profile.provider,
+      sub: identity.sub,
+      authTime: now,
+    };
 
-  // Authority first: a cookie is never outstanding against a session nothing can revoke.
-  await authority.registerBrowserSession(caller, tokenHash, expiresAt, { ...minted, credentialGeneration: profile.credentialGeneration ?? 0 });
+    // Authority first: a cookie is never outstanding against a session nothing can revoke.
+    yield* Effect.promise(async () => authority.registerBrowserSession(caller, tokenHash, expiresAt, { ...minted, credentialGeneration: profile.credentialGeneration ?? 0 }));
 
-  try {
-    await writeKvJson(env.AUTH_KV, sessionKey(tokenHash), {
-      userId: identity.userId,
-      ...minted,
-      expiresAt,
-    }, SESSION_TTL_MS);
-  } catch (writeFailed) {
-    // This token is never returned; withdraw the row rather than leave it holding a slot.
-    await settleLogged('auth.browser_session_row_stranded', { doing: 'withdrawing the session row a failed sign-in left behind', otherwise: 'unavailable' }, () => authority.revokeBrowserSession(caller, tokenHash));
+    yield* Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => writeKvJson(env.AUTH_KV, sessionKey(tokenHash), {
+        userId: identity.userId,
+        ...minted,
+        expiresAt,
+      }, SESSION_TTL_MS));
+    }), (failed) => Effect.gen(function* () {
+      const writeFailed = Cause.squash(failed);
+      // This token is never returned; withdraw the row rather than leave it holding a slot.
+      yield* Effect.promise(async () => settleLogged('auth.browser_session_row_stranded', { doing: 'withdrawing the session row a failed sign-in left behind', otherwise: 'unavailable' }, () => authority.revokeBrowserSession(caller, tokenHash)));
 
-    throw new SessionAuthorityUnavailableError({ cause: writeFailed });
-  }
+      return yield* Effect.die(new SessionAuthorityUnavailableError({ cause: writeFailed }));
+    }));
 
-  return { token, issuedAt: now, expiresAt, identity };
+    return { token, issuedAt: now, expiresAt, identity };
+  }));
 }
 
 /** A session that cannot be checked is not an invalid one: answering 401 during an outage would sign
@@ -325,33 +328,35 @@ function sessionAuthority<Id>(env: AuthStoreEnv<Id>, userId: string): SessionAut
   return env.UserDO.get(env.UserDO.idFromName(userId));
 }
 
-async function resolveIdentity<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile, now: number): Promise<AuthIdentity> {
-  const email = profile.email.trim().toLowerCase();
+function resolveIdentity<Id>(env: AuthStoreEnv<Id>, profile: OAuthProfile, now: number): Effect.Effect<AuthIdentity, KinuError> {
+  return Effect.gen(function* () {
+    const email = profile.email.trim().toLowerCase();
 
-  if (!email) throw new Error('OAuth provider did not return an email address.');
+    if (!email) return yield* Effect.die(new Error('OAuth provider did not return an email address.'));
 
-  if (!profile.providerSub) throw new Error('OAuth provider did not return a stable subject.');
+    if (!profile.providerSub) return yield* Effect.die(new Error('OAuth provider did not return a stable subject.'));
 
-  const builtin = BUILTIN_METHODS.has(profile.provider);
+    const builtin = BUILTIN_METHODS.has(profile.provider);
 
-  // Unverified: a built-in account keeps its own namespace.
-  if (!profile.emailVerified && !builtin) {
-    throw new Error('OAuth provider did not report this email address as verified.');
-  }
+    // Unverified: a built-in account keeps its own namespace.
+    if (!profile.emailVerified && !builtin) {
+      return yield* Effect.die(new Error('OAuth provider did not report this email address as verified.'));
+    }
 
-  const userId = builtin ? await deriveBuiltinUserId(email) : await deriveUserId(email);
+    const userId = builtin ? (yield* Effect.promise(async () => deriveBuiltinUserId(email))) : (yield* Effect.promise(async () => deriveUserId(email)));
 
-  const stored = await sessionAuthority(env, userId)
-    .ensureProfile(await ownerCaller(env), email, profile.displayName ?? undefined);
+    const stored = yield* Effect.promise(async () => sessionAuthority(env, userId)
+      .ensureProfile(await ownerCaller(env), email, profile.displayName ?? undefined));
 
-  return {
-    userId,
-    email,
-    sub: profile.providerSub,
-    provider: profile.provider,
-    displayName: profile.displayName ?? stored.displayName,
-    authTime: now,
-  };
+    return {
+      userId,
+      email,
+      sub: profile.providerSub,
+      provider: profile.provider,
+      displayName: profile.displayName ?? stored.displayName,
+      authTime: now,
+    };
+  });
 }
 
 /** A path on `origin`, never the auth flow. A parser strips tab or newline (`/\t/evil.example` is another host). */

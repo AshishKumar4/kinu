@@ -1,3 +1,4 @@
+import { Effect, Cause } from 'effect';
 import { useState, useCallback, useEffect, useRef, useMemo, type SetStateAction } from "react";
 import { useAgent } from "agents/react";
 import {
@@ -27,7 +28,7 @@ import {
   appendHeadDelta, retireHeadDelta, type HeadDelta, type HeadDeltas,
 } from "@kinu.run/core";
 import { looksLikeSecretField, parseMemoryNotes, type InlineSteer } from "@kinu.run/core";
-import { diagnostics, KinuError, renderThrownChain, toKinuError, tolerate, settleLogged } from "@kinu.run/core/obs";
+import { diagnostics, KinuError, renderThrownChain, toKinuError, tolerate, settleLogged, settle } from "@kinu.run/core/obs";
 import {
   reconcilePreviewPorts,
   type ExecutorPortRefresh,
@@ -1137,16 +1138,20 @@ export function useKinu(target?: string | KinuActorAddress) {
   const rpc = useMemo(() => {
     const call = bindRpc(agent);
 
-    return async <T,>(method: string, args: unknown[] = []): Promise<T> => {
-      try {
-        const value = await call<T>(method, args);
-        sessionRecovery.rpcSucceeded();
+    return <T,>(method: string, args: unknown[] = []): Promise<T> => {
+      return settle(Effect.gen(function* () {
+        return yield* Effect.catchCause(Effect.gen(function* () {
+          const value = yield* Effect.promise(async () => call<T>(method, args));
+          sessionRecovery.rpcSucceeded();
 
-        return value;
-      } catch (cause) {
-        sessionRecovery.rpcFailed({ cause }, agent.readyState === WebSocket.OPEN);
-        throw cause;
-      }
+          return value;
+        }), (failed) => Effect.gen(function* () {
+          const cause = Cause.squash(failed);
+          sessionRecovery.rpcFailed({ cause }, agent.readyState === WebSocket.OPEN);
+
+          return yield* Effect.failCause(failed);
+        }));
+      }));
     };
   }, [agent, sessionRecovery, loadGeneration]);
 

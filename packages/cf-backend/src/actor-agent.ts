@@ -215,7 +215,7 @@ import type { CodemodeProvider, DeferredApprovalChannel, SlateBindingRoute, Slat
 import { workspaceOwner } from "./workspace-owner-rpc";
 import { CRED_SESSION_USER } from "@nimbus-sh/core/runtime/os-contracts.js";
 import type { SlateCaller, SlateCallerHop } from "./slates/bindings";
-import { diagnostics, KinuError, refusalOf, toKinuError, tolerate, type ErrorCode, type Refusal } from "@kinu.run/core/obs";
+import { diagnostics, KinuError, refusalOf, refusing, toKinuError, tolerate, type ErrorCode, type Refusal } from "@kinu.run/core/obs";
 import type { UserDO } from "./user/user-do";
 import type { UserDoRpcMethod } from "./rpc-surface";
 import { isWorkspaceTerminal, WorkspaceTerminalInputSchema } from "@kinu.run/core";
@@ -930,7 +930,7 @@ export abstract class ActorAgent extends Agent<Env> {
    * Facet bootstrap authority, worker-side DO RPC only. The child's depth is decided here, never
    * from its own arguments, and seeding refuses at the cap even for a stale ToolSet.
    */
-  async getSubordinateBootstrapIdentity(input: { name: string; reference: ActorReference }): Promise<{
+  getSubordinateBootstrapIdentity(input: { name: string; reference: ActorReference }): Promise<{
     parentWorkspace: string;
     ownerUserId: string;
     model: string | null;
@@ -941,27 +941,27 @@ export abstract class ActorAgent extends Agent<Env> {
     storageKey: string;
     creationId: string;
   } | Refusal> {
-    try {
-      const child = await this.actorDirectory({ action: 'validate', name: input.name, reference: input.reference });
-      const ownerUserId = this.getOwnerUserId();
+    return settle(Effect.gen({ self: this }, function* () {
+      return yield* Effect.catchCause(Effect.gen({ self: this }, function* () {
+        const child = yield* Effect.promise(async () => this.actorDirectory({ action: 'validate', name: input.name, reference: input.reference }));
+        const ownerUserId = this.getOwnerUserId();
 
-      if (!ownerUserId) throw new KinuError('missing', 'The workspace has no owner.');
-      let depth: number | null = null;
+        if (!ownerUserId) return yield* new KinuError('missing', 'The workspace has no owner.');
+        let depth: number | null = null;
 
-      if (isSubordinateOrigin(child.origin)) {
-        const own = this.delegationBudget();
+        if (isSubordinateOrigin(child.origin)) {
+          const own = this.delegationBudget();
 
-        if (delegationExhausted(own)) throw new KinuError('denied', 'The parent cannot create a subordinate below its delegation depth.');
-        depth = deriveChildDelegationBudget(own).depth;
-      }
+          if (delegationExhausted(own)) return yield* new KinuError('denied', 'The parent cannot create a subordinate below its delegation depth.');
+          depth = deriveChildDelegationBudget(own).depth;
+        }
 
-      return {
-        parentWorkspace: this.workspaceName(), ownerUserId, model: this.config.getModel(),
-        depth, origin: child.origin, lifetime: child.lifetime, name: child.name, storageKey: child.storageKey, creationId: child.creationId,
-      };
-    } catch (cause) {
-      return refusalOf(toKinuError({ doing: 'reading a registered child bootstrap', cause, otherwise: 'io' }));
-    }
+        return {
+          parentWorkspace: this.workspaceName(), ownerUserId, model: this.config.getModel(),
+          depth, origin: child.origin, lifetime: child.lifetime, name: child.name, storageKey: child.storageKey, creationId: child.creationId,
+        };
+      }), refusing('reading a registered child bootstrap', 'io'));
+    }));
   }
 
   /** Worker-side DO RPC only (not `@callable`). Reports use the same EventLog → drain rail as
@@ -2967,40 +2967,42 @@ export abstract class ActorAgent extends Agent<Env> {
    * Descend one binding hop; the target answers with its own surface narrowed by its own current
    * role, so a binding never reaches more than the actor holding it.
    */
-  private async dispatchHostedSlateBinding(
+  private dispatchHostedSlateBinding(
     name: string, rest: readonly SlateCallerHop[], route: SlateBindingRoute, mode: WorkMode,
-  ): Promise<JsonValue> {
-    if (rest.length > 0) {
-      throw new KinuError('denied', 'A binding path names one hosted actor; a nested path names an actor no directory holds.');
-    }
-
-    const entry = this.actorDirectoryStore().apply(
-      actorReferenceOf(this.actorHandle()), [], { action: 'resolve', name },
-    );
-
-    return await this.actorHost().run(entry.reference, async (actor) => {
-      if (route.kind === 'ai') {
-        // A hosted actor runs the model call through its own profile, resolved now.
-        return await this.slateAiRun(route, actor.handle);
+  ): Effect.Effect<JsonValue, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      if (rest.length > 0) {
+        return yield* new KinuError('denied', 'A binding path names one hosted actor; a nested path names an actor no directory holds.');
       }
 
-      if (route.kind === 'agent') {
-        throw new KinuError('denied', 'a hosted actor has no inbox of its own; the agent binding answers on the workspace actor');
-      }
+      const entry = this.actorDirectoryStore().apply(
+        actorReferenceOf(this.actorHandle()), [], { action: 'resolve', name },
+      );
 
-      if (route.kind !== 'namespace' && route.kind !== 'tool' && route.kind !== 'codemode') {
-        // Hosted actors hold no MCP servers or slate read model; those belong to the main actor.
-        throw new KinuError('denied', `a hosted actor has no ${route.kind} surface; that route belongs to the workspace actor`);
-      }
+      return yield* Effect.promise(async () => this.actorHost().run(entry.reference, async (actor) => {
+        if (route.kind === 'ai') {
+          // A hosted actor runs the model call through its own profile, resolved now.
+          return await this.slateAiRun(route, actor.handle);
+        }
 
-      const surface = hostedActorSurface(actor, this.ownedModelServices.getWebSearchProvider(), this.agentStores(actor.handle.actorId).conversations());
-      const providers = providersInWorkMode(mode, surface.providers);
-      // Narrow by the child's own durable, per-actor role.
-      const reach = slateToolReach(await this.hostedSlateReach(actor, providers, Object.keys(surface.native)));
+        if (route.kind === 'agent') {
+          throw new KinuError('denied', 'a hosted actor has no inbox of its own; the agent binding answers on the workspace actor');
+        }
 
-      if (route.kind === 'tool') return this.callSlateTool({ rt: actor.runtime, native: surface.native, providers, reach, route, mode });
+        if (route.kind !== 'namespace' && route.kind !== 'tool' && route.kind !== 'codemode') {
+          // Hosted actors hold no MCP servers or slate read model; those belong to the main actor.
+          throw new KinuError('denied', `a hosted actor has no ${route.kind} surface; that route belongs to the workspace actor`);
+        }
 
-      return await callCodemodeMember(reach.narrowProviders(providers), route.namespace, route.member, route.args) ?? null;
+        const surface = hostedActorSurface(actor, this.ownedModelServices.getWebSearchProvider(), this.agentStores(actor.handle.actorId).conversations());
+        const providers = providersInWorkMode(mode, surface.providers);
+        // Narrow by the child's own durable, per-actor role.
+        const reach = slateToolReach(await this.hostedSlateReach(actor, providers, Object.keys(surface.native)));
+
+        if (route.kind === 'tool') return this.callSlateTool({ rt: actor.runtime, native: surface.native, providers, reach, route, mode });
+
+        return await callCodemodeMember(reach.narrowProviders(providers), route.namespace, route.member, route.args) ?? null;
+      }));
     });
   }
 
@@ -3015,7 +3017,7 @@ export abstract class ActorAgent extends Agent<Env> {
       const [next, ...rest] = path;
 
       if (next !== undefined) {
-        return yield* Effect.promise(async () => this.dispatchHostedSlateBinding(next.name, rest, route, mode));
+        return yield* this.dispatchHostedSlateBinding(next.name, rest, route, mode);
       }
 
       switch (route.kind) {
@@ -3410,25 +3412,29 @@ export abstract class ActorAgent extends Agent<Env> {
    * The root's pane names none and reads this actor's conversation.
    */
   @callable()
-  async getChatHistoryPage(request: PositionPageRequest & { actor?: string } = {}): Promise<ChatHistoryPage> {
-    // Strict: a dropped id cursor from an old client re-reads the newest page forever.
-    const { actor, ...page } = v.parse(v.strictObject({ ...PositionPageRequestSchema.entries, actor: v.optional(v.string()) }), request);
+  getChatHistoryPage(request: PositionPageRequest & { actor?: string } = {}): Promise<ChatHistoryPage> {
+    return settle(Effect.gen({ self: this }, function* () {
+      // Strict: a dropped id cursor from an old client re-reads the newest page forever.
+      const { actor, ...page } = v.parse(v.strictObject({ ...PositionPageRequestSchema.entries, actor: v.optional(v.string()) }), request);
 
-    if (actor === undefined) return getChatHistoryPage(this.chatTranscript, page);
-    this.requireSubordinateChat(actor);
+      if (actor === undefined) return yield* Effect.promise(async () => getChatHistoryPage(this.chatTranscript, page));
+      yield* this.requireSubordinateChat(actor);
 
-    return await this.agentStores(actor).historyPage(page);
+      return yield* Effect.promise(async () => this.agentStores(actor).historyPage(page));
+    }));
   }
 
-  private requireSubordinateChat(actorId: string): void {
-    const directory = this.actorDirectoryStore();
-    const record = directory.retained(actorId);
+  private requireSubordinateChat(actorId: string): Effect.Effect<void, KinuError> {
+    return Effect.gen({ self: this }, function* () {
+      const directory = this.actorDirectoryStore();
+      const record = directory.retained(actorId);
 
-    if (record === null) throw new KinuError('missing', 'The actor is not registered in this workspace.');
+      if (record === null) return yield* new KinuError('missing', 'The actor is not registered in this workspace.');
 
-    for (let step: typeof record | null = record; step?.actorId !== this.actorHandle().actorId; step = directory.retained(step.parentActorId ?? '')) {
-      if (step === null || !isSubordinateOrigin(step.origin)) throw new KinuError('denied', 'The actor id does not name a chat this workspace hosts.');
-    }
+      for (let step: typeof record | null = record; step?.actorId !== this.actorHandle().actorId; step = directory.retained(step.parentActorId ?? '')) {
+        if (step === null || !isSubordinateOrigin(step.origin)) return yield* new KinuError('denied', 'The actor id does not name a chat this workspace hosts.');
+      }
+    });
   }
 
 

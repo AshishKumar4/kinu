@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import type { VFS as CoreVFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * CF runtime adapter: bridges the Agents DO context to core's AgentRuntime. One Durable Object per
@@ -502,20 +502,24 @@ export function createCFRuntime(
   executionRouter.register(createDeviceTunnelExecutor(deviceTransport, {
     consentedRoot: async (deviceId) => cliCwdForDevice() ?? await deviceScope('consentedRoot', deviceId),
     deviceHome: async (deviceId) => cliCwdForDevice() ?? await deviceScope('deviceHome', deviceId),
-    scope: async (deviceId) => {
-      const hub = userDOStubFor(env, actor);
+    scope: (deviceId) => {
+      return settle(Effect.gen(function* () {
+        const hub = userDOStubFor(env, actor);
 
-      if (!hub) return 'root';
+        if (!hub) return 'root';
 
-      try {
-        return (await hub.getDeviceFileView(await userCallerFor(actor), actor.workspaceName, deviceId)).scope;
-      } catch (cause) {
-        throw toKinuError({
-          doing: "reading the device's file-view scope",
-          cause,
-          otherwise: 'unavailable',
-        });
-      }
+        return yield* Effect.catchCause(Effect.gen(function* () {
+          return (yield* Effect.promise(async () => hub.getDeviceFileView(await userCallerFor(actor), actor.workspaceName, deviceId))).scope;
+        }), (failed) => Effect.gen(function* () {
+          const cause = Cause.squash(failed);
+
+          return yield* Effect.die(toKinuError({
+            doing: "reading the device's file-view scope",
+            cause,
+            otherwise: 'unavailable',
+          }));
+        }));
+      }));
     },
   }, approvalPolicy));
 

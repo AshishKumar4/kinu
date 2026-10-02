@@ -1,6 +1,6 @@
 import { Cause, Effect, Exit, Fiber, Scheduler } from 'effect';
 import type { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import { classifyErrorCode, KinuError, renderThrownChain, toKinuError, type ErrorCode } from './error';
+import { classifyErrorCode, KinuError, refusalOf, renderThrownChain, toKinuError, type ErrorCode, type Refusal } from './error';
 import { classify, type ExpectedFailure } from './expected-failure';
 
 const WITHIN_ONE_EVENT = new Scheduler.MixedScheduler('sync');
@@ -62,6 +62,10 @@ export function settleSync<A>(effect: Effect.Effect<A, KinuError | VfsError>, op
   return fail(exit.cause, options);
 }
 
+export function refusing(doing: string, otherwise: ErrorCode): (failed: Cause.Cause<unknown>) => Effect.Effect<Refusal> {
+  return (failed) => Effect.sync(() => refusalOf(toKinuError({ doing, cause: Cause.squash(failed), otherwise })));
+}
+
 /** `effect` with the named failure passed as `undefined`. */
 export function tolerated<A, E>(effect: Effect.Effect<A, E>, expected: ExpectedFailure): Effect.Effect<A | undefined, E> {
   return Effect.catchCause(effect, (cause) => (classify({ cause: Cause.squash(cause) }) === expected ? Effect.undefined : Effect.failCause(cause)));
@@ -80,18 +84,22 @@ export function tolerateAsync<T>(operation: () => Promise<T>, expected: Expected
   return settle(tolerated(Effect.promise(operation), expected));
 }
 
+type FlightKey = string | number | null;
+
 interface FlightOptions<I> {
-  readonly key?: (input: I) => string | number | null;
+  readonly key?: (input: I) => FlightKey;
   readonly keep?: 'success' | 'exit';
 }
 
-/** One run per key, joined by each caller with its exit; settling frees the key unless `keep` holds it. */
-export function flight<A, E extends KinuError | VfsError>(run: () => Effect.Effect<A, E>, options?: FlightOptions<void>): () => Effect.Effect<A, E>;
-export function flight<I, A, E extends KinuError | VfsError>(run: (input: I) => Effect.Effect<A, E>, options?: FlightOptions<I>): (input: I) => Effect.Effect<A, E>;
-export function flight<I, A, E extends KinuError | VfsError>(run: (input: I) => Effect.Effect<A, E>, options?: FlightOptions<I>): (input: I) => Effect.Effect<A, E> {
-  const held = new Map<string | number | null, Promise<Exit.Exit<A, E>>>();
+export type Flight<I, A, E> = ((input: I) => Effect.Effect<A, E>) & { readonly forget: (key: FlightKey) => void };
 
-  return (input) => Effect.suspend(() => {
+/** One run per key, joined by every caller (OBSERVABILITY.md). */
+export function flight<A, E extends KinuError | VfsError>(run: () => Effect.Effect<A, E>, options?: FlightOptions<void>): Flight<void, A, E>;
+export function flight<I, A, E extends KinuError | VfsError>(run: (input: I) => Effect.Effect<A, E>, options?: FlightOptions<I>): Flight<I, A, E>;
+export function flight<I, A, E extends KinuError | VfsError>(run: (input: I) => Effect.Effect<A, E>, options?: FlightOptions<I>): Flight<I, A, E> {
+  const held = new Map<FlightKey, Promise<Exit.Exit<A, E>>>();
+
+  const joined = (input: I): Effect.Effect<A, E> => Effect.suspend(() => {
     const key = options?.key?.(input) ?? null;
     let exit = held.get(key);
 
@@ -118,4 +126,6 @@ export function flight<I, A, E extends KinuError | VfsError>(run: (input: I) => 
 
     return Effect.flatten(Effect.promise(() => settled));
   });
+
+  return Object.assign(joined, { forget: (key: FlightKey) => { held.delete(key); } });
 }

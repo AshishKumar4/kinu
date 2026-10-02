@@ -1,5 +1,5 @@
 /** Typed client for `/api/user/*`; the session rides the HttpOnly cookie (dev synthesizes DEV_USER_EMAIL server-side). */
-import { Data, Effect } from 'effect';
+import { Cause, Data, Effect } from 'effect';
 import {
   DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS, DEVICE_UPDATE_STATES,
   AccountUsageSchema, ProfileCatalogEnvelopeSchema, REASONING_EFFORTS,
@@ -195,16 +195,20 @@ export const registerWorkspace  = (name?: string, purpose?: string, displayName?
 
 /** Records a visit to `name`, and says whether the roster took it. A 404 is the roster no longer holding the
  *  workspace, an answer rather than a failed visit; any other failure throws. */
-export async function touchWorkspace(name: string): Promise<boolean> {
-  try {
-    await api(OkSchema, 'POST', `/workspaces/${encodeURIComponent(name)}/touch`);
+export function touchWorkspace(name: string): Promise<boolean> {
+  return settle(Effect.gen(function* () {
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => api(OkSchema, 'POST', `/workspaces/${encodeURIComponent(name)}/touch`));
 
-    return true;
-  } catch (error) {
-    if (error instanceof UserApiError && error.status === 404) return false;
+      return true;
+    }), (failed) => Effect.gen(function* () {
+      const error = Cause.squash(failed);
 
-    throw error;
-  }
+      if (error instanceof UserApiError && error.status === 404) return false;
+
+      return yield* Effect.failCause(failed);
+    }));
+  }));
 }
 
 export const removeWorkspace    = (name: string) =>

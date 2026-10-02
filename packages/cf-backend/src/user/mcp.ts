@@ -148,7 +148,7 @@ export function validateMcpServerInput(input: JsonValue): McpServerInput {
 
     const obj = parsedInput.output;
 
-    const preset = validateMcpPresetId(obj.presetId);
+    const preset = yield* validateMcpPresetId(obj.presetId);
 
     const name = preset ? preset.title : validateMcpServerName(obj.name);
 
@@ -241,18 +241,20 @@ export function validateMcpServerInput(input: JsonValue): McpServerInput {
 }
 
 /** Absent → custom server; a non-catalog id is an error. The preset's fields can't be overridden. */
-function validateMcpPresetId(presetId: JsonValue | undefined): McpPreset | undefined {
-  if (presetId === undefined || presetId === null) return undefined;
+function validateMcpPresetId(presetId: JsonValue | undefined): Effect.Effect<McpPreset | undefined, KinuError> {
+  return Effect.gen(function* () {
+    if (presetId === undefined || presetId === null) return undefined;
 
-  const parsedPresetId = v.safeParse(v.string(), presetId);
+    const parsedPresetId = v.safeParse(v.string(), presetId);
 
-  if (!parsedPresetId.success) throw new KinuError('bad_input', '`presetId` must be a string.');
+    if (!parsedPresetId.success) return yield* new KinuError('bad_input', '`presetId` must be a string.');
 
-  const preset = mcpPresetById(parsedPresetId.output);
+    const preset = mcpPresetById(parsedPresetId.output);
 
-  if (!preset) throw new KinuError('bad_input', `Unknown MCP preset '${parsedPresetId.output}'.`);
+    if (!preset) return yield* new KinuError('bad_input', `Unknown MCP preset '${parsedPresetId.output}'.`);
 
-  return preset;
+    return preset;
+  });
 }
 
 /** Shared by add and update: non-blank, at most 64 chars after trim (the stored, indexed value). */

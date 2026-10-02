@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import * as v from 'valibot';
 import { FACET_IMAGE_DIR, facetImageDigest, facetImagePath } from '@nimbus-sh/fabric/process-fabric.js';
 import { EsbuildService } from '@nimbus-sh/core/runtime/esbuild-service.js';
@@ -323,15 +323,18 @@ function slateShell(input: { readonly title: string; readonly assets: readonly {
   ].filter((line) => line !== '').join('\n');
 }
 
-async function compileSlate(bundler: EsbuildService, entry: string, options: Parameters<EsbuildService['build']>[1]) {
-  try { return await bundler.build([entry], options); }
-  catch (cause) {
-    if (cause instanceof Error && 'errors' in cause && Array.isArray(cause.errors)) {
-      throw new KinuError('bad_input', 'Slate compilation failed', { cause });
-    }
+function compileSlate(bundler: EsbuildService, entry: string, options: Parameters<EsbuildService['build']>[1]) {
+  return Effect.gen(function* () {
+    return yield* Effect.catchCause(Effect.gen(function* () { return yield* Effect.promise(async () => bundler.build([entry], options)); }), (failed) => Effect.gen(function* () {
+      const cause = Cause.squash(failed);
 
-    throw cause;
-  }
+      if (cause instanceof Error && 'errors' in cause && Array.isArray(cause.errors)) {
+        return yield* new KinuError('bad_input', 'Slate compilation failed', { cause });
+      }
+
+      return yield* Effect.failCause(failed);
+    }));
+  });
 }
 
 /** Module-map keys must end `.js`, so kept bare specifiers are rewritten onto these paths. */
@@ -439,12 +442,12 @@ export class ResidentSlateProcesses {
         provision('client.js', `import App from "${input.root}/${browser}";\nimport { mount } from "kinu:slate";\nmount(App);\nexport default App;\n`);
       }
 
-      const server = yield* Effect.promise(async () => compileSlate(bundler, serverEntry, {
+      const server = yield* compileSlate(bundler, serverEntry, {
         bundle: true, format: 'esm', platform: 'neutral', outfile: '/application.js',
         // Not `alias`: the nimbus-vfs resolver sees a specifier before esbuild applies it.
         external: ['cloudflare:*', 'node:*', 'capnweb', 'kinu:slate', 'react', 'react-dom/client', 'react/jsx-runtime'],
         tsconfigRaw: JSON.stringify({ compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'react' } }),
-      }));
+      });
 
       if (server.errors.length !== 0) return yield* new KinuError('bad_input', server.errors.map((error) => error.text).join('\n'));
       const application = server.outputFiles.find((file) => file.path === '/application.js');
@@ -454,11 +457,11 @@ export class ResidentSlateProcesses {
       let shell: string | undefined;
 
       if (clientEntry !== undefined) {
-        const client = yield* Effect.promise(async () => compileSlate(bundler, clientEntry, {
+        const client = yield* compileSlate(bundler, clientEntry, {
           bundle: true, format: 'esm', platform: 'browser', outfile: '/__kinu/client.js',
           external: ['react', 'react-dom/client', 'react/jsx-runtime', 'capnweb', 'kinu:slate'],
           tsconfigRaw: JSON.stringify({ compilerOptions: { jsx: 'react-jsx', jsxImportSource: 'react' } }),
-        }));
+        });
 
         if (client.errors.length !== 0) return yield* new KinuError('bad_input', client.errors.map((error) => error.text).join('\n'));
         assets = client.outputFiles;

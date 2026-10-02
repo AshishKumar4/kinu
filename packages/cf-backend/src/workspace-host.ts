@@ -374,46 +374,49 @@ export function createHostedWorkspace<Id>(deps: HostedWorkspaceDeps<Id>): Hosted
         return { removed: removed.removed, port: removed.port };
       },
     },
-    async routePreview(port, handle, request, pathname) {
-      const gates = await previewGates(port, handle);
+    routePreview(port, handle, request, pathname) {
+      return settle(Effect.gen(function* () {
+        const gates = yield* Effect.promise(async () => previewGates(port, handle));
 
-      // Every refusal names its branch: a bare 404 is otherwise indistinguishable from the runner's own.
-      if (gates.refused !== null) {
-        const { gate, owner, detail } = gates.refused;
-        diagnostics.event('preview.route.refused', { port, handle, reason: gate, owner: owner ?? '', detail });
-      }
+        // Every refusal names its branch: a bare 404 is otherwise indistinguishable from the runner's own.
+        if (gates.refused !== null) {
+          const { gate, owner, detail } = gates.refused;
+          diagnostics.event('preview.route.refused', { port, handle, reason: gate, owner: owner ?? '', detail });
+        }
 
-      if (!gates.routed) {
-        const { refusal } = gates.refused;
+        if (!gates.routed) {
+          const { refusal } = gates.refused;
 
-        return refusal === undefined || refusal.reason === 'missing' ? previewNotFound() : previewUnavailable(refusal);
-      }
+          return refusal === undefined || refusal.reason === 'missing' ? previewNotFound() : previewUnavailable(refusal);
+        }
 
-      const { capability } = gates;
+        const { capability } = gates;
 
-      const publicRequest = new Request(request);
-      // Drop the visitor's header first: naming the invocation stops retained preview bindings standing in
-      // for a deeper lineage.
-      publicRequest.headers.delete('x-slate-call');
-      const upgrade = request.headers.get('upgrade')?.toLowerCase() === 'websocket';
-      const invocation = deps.slateInvocation?.(port, upgrade) ?? null;
+        const publicRequest = new Request(request);
+        // Drop the visitor's header first: naming the invocation stops retained preview bindings standing in
+        // for a deeper lineage.
+        publicRequest.headers.delete('x-slate-call');
+        const upgrade = request.headers.get('upgrade')?.toLowerCase() === 'websocket';
+        const invocation = deps.slateInvocation?.(port, upgrade) ?? null;
 
-      if (invocation !== null) publicRequest.headers.set('x-slate-call', invocation.value);
-      const { facets } = await compose();
+        if (invocation !== null) publicRequest.headers.set('x-slate-call', invocation.value);
+        const { facets } = yield* Effect.promise(async () => compose());
 
-      try {
-        const response = await facets.apps.routeCapabilityPort(port, capability, publicRequest, pathname);
+        return yield* Effect.catchCause(Effect.gen(function* () {
+          const response = yield* Effect.promise(async () => facets.apps.routeCapabilityPort(port, capability, publicRequest, pathname));
 
-        // A 101 only opens the socket: the process's close listener releases the invocation.
-        if (response.status !== 101) invocation?.release();
+          // A 101 only opens the socket: the process's close listener releases the invocation.
+          if (response.status !== 101) invocation?.release();
 
-        if (gates.slate !== null && !gates.capture && isRender(request, response)) deps.pictures?.rendered(gates.slate, port);
+          if (gates.slate !== null && !gates.capture && isRender(request, response)) deps.pictures?.rendered(gates.slate, port);
 
-        return response;
-      } catch (cause) {
-        invocation?.release();
-        throw cause;
-      }
+          return response;
+        }), (failed) => Effect.gen(function* () {
+          invocation?.release();
+
+          return yield* Effect.failCause(failed);
+        }));
+      }));
     },
     destroy: () => bundle.destroy(),
   };

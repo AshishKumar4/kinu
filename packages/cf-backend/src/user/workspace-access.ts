@@ -1,5 +1,6 @@
 // Worker-side helpers for creating a user's workspace and notifying live workspaces of credential
 // changes. Shared by user/routes.ts and cli/routes.ts so status mapping cannot drift.
+import { Effect, Cause } from 'effect';
 import type { ActorAgent } from '../actor-agent';
 import type { UserDO } from './user-do';
 import type { ObjectNamespace } from '@kinu.run/core';
@@ -11,7 +12,7 @@ import {
 } from './workspace-create';
 import { err, json, safeJson } from '@kinu.run/core';
 import { ownerCaller } from '@kinu.run/core';
-import { authoredRefusal, diagnostics, toKinuError } from '@kinu.run/core/obs';
+import { authoredRefusal, diagnostics, toKinuError, settle } from '@kinu.run/core/obs';
 import type { AccountLedgerTarget } from './account-usage';
 
 export interface CreateWorkspaceEnv<Id> extends CreateCloudWorkspaceEnv<Id>, ModelSettingsFanoutEnv<Id> {
@@ -26,32 +27,35 @@ export interface CreateWorkspaceRequest<Id> {
 }
 
 /** POST /workspaces body → created WorkspaceEntry (201) | mapped error response. */
-export async function handleCreateWorkspaceRequest<Id>(call: CreateWorkspaceRequest<Id>): Promise<Response> {
-  const { request, env, userId, userDO } = call;
+export function handleCreateWorkspaceRequest<Id>(call: CreateWorkspaceRequest<Id>): Promise<Response> {
+  return settle(Effect.gen(function* () {
+    const { request, env, userId, userDO } = call;
 
-  const input = await safeJson(request, CreateCloudWorkspaceInputSchema);
+    const input = yield* Effect.promise(async () => safeJson(request, CreateCloudWorkspaceInputSchema));
 
-  if (!input) return err(400, 'Body must be JSON');
+    if (!input) return err(400, 'Body must be JSON');
 
-  if (!input.name?.trim() && !input.purpose?.trim()) return err(400, 'purpose required');
+    if (!input.name?.trim() && !input.purpose?.trim()) return err(400, 'purpose required');
 
-  try {
-    const entry = await createCloudWorkspaceForUser({
-      env, userId, userDO, caller: await ownerCaller(env), input,
-    });
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const entry = yield* Effect.promise(async () => createCloudWorkspaceForUser({
+        env, userId, userDO, caller: await ownerCaller(env), input,
+      }));
 
-    return json({ body: entry }, { status: 201 });
-  } catch (cause) {
-    const error = authoredRefusal({ doing: 'creating this workspace', cause });
+      return json({ body: entry }, { status: 201 });
+    }), (failed) => Effect.gen(function* () {
+      const cause = Cause.squash(failed);
+      const error = authoredRefusal({ doing: 'creating this workspace', cause });
 
-    // Two of workspace-create.ts's refusals are conflicts (409): an unserved provider, and a name held by an unfinished transfer.
-    const conflict = error.message.startsWith('Cloudflare Workers AI is not connected')
-      || error.message.startsWith('Workspace name conflict');
+      // Two of workspace-create.ts's refusals are conflicts (409): an unserved provider, and a name held by an unfinished transfer.
+      const conflict = error.message.startsWith('Cloudflare Workers AI is not connected')
+        || error.message.startsWith('Workspace name conflict');
 
-    if (conflict) return err(409, error.message);
+      if (conflict) return err(409, error.message);
 
-    throw error;
-  }
+      return yield* Effect.die(error);
+    }));
+  }));
 }
 
 export type ModelSettingsFanoutTarget = Pick<ActorAgent, 'onModelSettingsChanged'>;
