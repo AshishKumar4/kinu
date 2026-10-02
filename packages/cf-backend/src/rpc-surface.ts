@@ -158,6 +158,7 @@ const USER_DO_METHODS = [
   'putWorkspaceOverview',
   'registerBrowserSession',
   'registerDevice',
+  'recordDeviceUpdateRefusal',
   'registerWorkspace',
   'relayDevice',
   'relayModelCall',

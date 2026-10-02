@@ -1284,6 +1284,13 @@
     "retired_at INTEGER NOT NULL",
     "reuse_detected_at INTEGER"
   ],
+  "user_device_update_refusals@packages/core/src/state/user-schema.ts": [
+    "device_id TEXT PRIMARY KEY REFERENCES user_devices(id) ON DELETE CASCADE",
+    "version TEXT NOT NULL",
+    "runtime TEXT NOT NULL",
+    "reason TEXT NOT NULL",
+    "refused_at INTEGER NOT NULL"
+  ],
   "user_devices@packages/core/src/state/user-schema.ts": [
     "id TEXT PRIMARY KEY",
     "token_hash TEXT NOT NULL",

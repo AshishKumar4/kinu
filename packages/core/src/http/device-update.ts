@@ -33,14 +33,14 @@ export function cliArtifactPath(os: string | undefined, arch: string | undefined
 
 /**
  * `off` (owner's `updateCheck: false`) wins over `behind`. `unstamped`: no build
- * metadata, i.e. a source install; nothing is pushed over it.
+ * metadata, i.e. a source install; nothing is pushed over it, nor a `refused` build.
  */
-export type DeviceUpdateState = 'current' | 'behind' | 'off' | 'unreported' | 'unstamped';
+export type DeviceUpdateState = 'current' | 'behind' | 'off' | 'unreported' | 'unstamped' | 'refused';
 
-export const DEVICE_UPDATE_STATES = ['current', 'behind', 'off', 'unreported', 'unstamped'] as const;
+export const DEVICE_UPDATE_STATES = ['current', 'behind', 'off', 'unreported', 'unstamped', 'refused'] as const;
 
 export function deviceUpdateState(
-  reported: { version: string | null; updateCheck: boolean },
+  reported: { version: string | null; updateCheck: boolean; refusedVersion?: string | null },
   served: string | null,
 ): DeviceUpdateState {
   if (reported.version === null) return 'unreported';
@@ -50,6 +50,8 @@ export function deviceUpdateState(
   if (!reported.version.includes('+')) return 'unstamped';
 
   if (served === null || isSameBuild(reported.version, served)) return 'current';
+
+  if (reported.refusedVersion === served) return 'refused';
 
   return 'behind';
 }

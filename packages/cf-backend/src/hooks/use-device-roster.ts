@@ -8,6 +8,7 @@ export const DEVICE_UPDATE_COPY = {
   behind: "update available",
   off: "update off",
   unstamped: "dev build",
+  refused: "update refused",
 } satisfies Partial<Record<DeviceUpdateState, string>>;
 
 /** The connect panel waits on a daemon's `connected` flip, so the roster keeps one live cadence. */

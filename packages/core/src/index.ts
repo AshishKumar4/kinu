@@ -2509,6 +2509,7 @@ export {
   type PcIngressEnv,
   handlePcConnect,
   handlePcConnectTicket,
+  handlePcUpdateRefused,
 } from './http/pc-ingress';
 
 export {
