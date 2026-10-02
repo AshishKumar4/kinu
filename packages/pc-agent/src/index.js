@@ -1687,19 +1687,59 @@ function lifeHeld(fd) {
   }
 }
 
-function waitForDirectoryRemoval(dir) {
-  return waitForPath(dir, false);
+/**
+ * Resolves once the supervisor of `entry` has written its result. One that exits first never will, and that is
+ * the answer: what became of its command is unknown.
+ */
+async function resultWritten(entry, requestId) {
+  const resultFile = path.join(entry.dir, 'result');
+  const settled = new AbortController();
+  const written = waitForFile(resultFile, settled.signal);
+  const exited = supervisorExit(entry.dir, settled.signal);
+
+  try {
+    await Promise.race([written, exited]);
+  } finally {
+    settled.abort();
+    await Promise.allSettled([written, exited]);
+  }
+
+  // The supervisor writes its result before it can exit, so one gone without a result never wrote one.
+  if (!fs.existsSync(resultFile)) {
+    throw new Error(`the supervisor of ${requestId} (pid ${entry.pid}) exited without recording the command's result, `
+      + `so its outcome is unknown; the command may still be running in process group ${entry.group}`);
+  }
 }
 
-function writeAcknowledgement(dir) {
+/** The ACK to a live supervisor, settled once it has removed its directory or once it is gone, whichever is first. */
+async function handOver(dir) {
+  const settled = new AbortController();
+  // Watched before the ACK goes: the supervisor that reads it removes `life` with the directory.
+  const exited = supervisorExit(dir, settled.signal);
+  const removed = writeAcknowledgement(dir, settled.signal).then(() => waitForDirectoryRemoval(dir, settled.signal));
+
+  try {
+    await Promise.race([removed, exited]);
+  } finally {
+    settled.abort();
+    await Promise.allSettled([removed, exited]);
+  }
+}
+
+function waitForDirectoryRemoval(dir, signal) {
+  return waitForPath(dir, false, signal);
+}
+
+/** `signal` ends a writer still waiting for its reader, which a supervisor gone before it opened the FIFO never is. */
+function writeAcknowledgement(dir, signal) {
   const ack = path.join(dir, 'ack');
 
   return new Promise((resolve, reject) => {
-    const writer = spawn('/bin/sh', ['-c', 'printf 1 > "$1"', 'kinu-ack', ack], { stdio: 'ignore' });
+    const writer = spawn('/bin/sh', ['-c', 'printf 1 > "$1"', 'kinu-ack', ack], { stdio: 'ignore', signal });
     writer.once('error', reject);
-    writer.once('exit', (code, signal) => {
+    writer.once('exit', (code, killedBy) => {
       if (code === 0) resolve();
-      else reject(new Error(`supervisor acknowledgement writer exited with ${signal ?? code}`));
+      else reject(new Error(`supervisor acknowledgement writer exited with ${killedBy ?? code}`));
     });
   });
 }
@@ -1788,7 +1828,7 @@ function createInFlight(root = INFLIGHT_ROOT) {
     }
 
     process.kill(entry.pid, 'SIGUSR1');
-    await waitForFile(path.join(entry.dir, 'result'));
+    await resultWritten(entry, requestId);
     const terminal = readTerminalResult(entry.dir);
 
     if (terminal.kind !== 'cancelled') {
@@ -1809,23 +1849,7 @@ function createInFlight(root = INFLIGHT_ROOT) {
     const entry = await loadEntry(requestId);
 
     if (!entry) return undefined;
-    const resultFile = path.join(entry.dir, 'result');
-    const settled = new AbortController();
-    const written = waitForFile(resultFile, settled.signal);
-    const exited = supervisorExit(entry.dir, settled.signal);
-
-    try {
-      await Promise.race([written, exited]);
-    } finally {
-      settled.abort();
-      await Promise.allSettled([written, exited]);
-    }
-
-    // The supervisor writes its result before it can exit, so one gone without a result never wrote one.
-    if (!fs.existsSync(resultFile)) {
-      throw new Error(`the supervisor of ${requestId} (pid ${entry.pid}) exited without recording the command's result, `
-        + `so its outcome is unknown; the command may still be running in process group ${entry.group}`);
-    }
+    await resultWritten(entry, requestId);
 
     return { entry, ...readExecResult(entry.dir) };
   }
@@ -1845,13 +1869,12 @@ function createInFlight(root = INFLIGHT_ROOT) {
     // longer matches is gone (its daemon died and it left the result behind),
     // and this daemon owns the directory instead. The supervisor alone is
     // asked: a finished command's group leader has exited, so the group half
-    // of the identity never matches here.
-    if (terminal.kind === 'exited' && (await startedAs(entry.pid, entry.start))) {
-      await writeAcknowledgement(entry.dir);
-      await waitForDirectoryRemoval(entry.dir);
-    } else {
-      removeRequestDirectory(entry.dir);
-    }
+    // of the identity never matches here. One that dies after this check is
+    // heard of through its `life` FIFO.
+    if (terminal.kind === 'exited' && (await startedAs(entry.pid, entry.start))) await handOver(entry.dir);
+
+    // Gone already when a supervisor removed it on reading the ACK.
+    removeRequestDirectory(entry.dir);
 
     entries.delete(requestId);
 
@@ -3643,6 +3666,7 @@ module.exports = {
   INFLIGHT_ROOT,
   requestDirectory,
   supervisionSupported,
+  processStartIdentity,
   waitForFile,
   waitForSupervisorState,
   createCheckpoints,
