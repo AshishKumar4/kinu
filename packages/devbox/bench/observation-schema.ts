@@ -66,7 +66,7 @@ export interface StartupState {
     rev?: number;
   } | null;
   /** The rest snapshot the next wake starts from (D55). */
-  snapshot?: { id?: string; chainRev?: number; takenAt?: number } | null;
+  snapshot?: { id?: string; chainRev?: number; takenAt?: number; lineage?: string[] } | null;
   incidents?: { total?: number; undelivered?: number };
   /** The box's own container traffic since it activated (D29, D30). */
   wire?: { sent: number; received: number };
@@ -95,7 +95,9 @@ export const StateReplySchema = v.looseObject({
     chain: v.optional(v.nullable(v.looseObject({
       base: v.optional(LayerObservationSchema), deltas: v.optional(v.array(LayerObservationSchema)), rev: v.optional(v.number()),
     }))),
-    snapshot: v.optional(v.nullable(v.looseObject({ id: v.optional(v.string()), chainRev: v.optional(v.number()), takenAt: v.optional(v.number()) }))),
+    snapshot: v.optional(v.nullable(v.looseObject({
+      id: v.optional(v.string()), chainRev: v.optional(v.number()), takenAt: v.optional(v.number()), lineage: v.optional(v.array(v.string())),
+    }))),
     incidents: v.optional(v.looseObject({ total: v.optional(v.number()), undelivered: v.optional(v.number()) })),
     wire: v.optional(v.object({ sent: v.number(), received: v.number() })),
   })),

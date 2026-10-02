@@ -47,9 +47,8 @@ interface StoreCall {
   readonly root: string;
 }
 
-/** A path under the root: no leading `/`, no empty, `.` or `..` segment, once percent-decoded. The
- *  root is prefixed literally, so no path reaches outside it; one that reads as if it could is refused.
- *  A trailing `/` names a directory object. */
+/** Under the root once percent-decoded: no leading `/`, no empty, `.` or `..` segment. A trailing
+ *  `/` names a directory object. */
 function isPlainPath(path: string): boolean {
   if (path === '') return true;
 

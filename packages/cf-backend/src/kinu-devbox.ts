@@ -59,6 +59,8 @@ export class KinuDevbox extends Devbox<Env> {
 
   protected override get namespaceBinding(): string { return 'KinuDevbox'; }
 
+  protected override get registryToken(): string | undefined { return this.env.DEVBOX_REGISTRY_TOKEN; }
+
   protected override get previewName(): string {
     const workspaceName = this.ctx.storage.kv.get<string>(WORKSPACE_NAME_KEY);
 

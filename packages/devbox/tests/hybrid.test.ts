@@ -1,13 +1,36 @@
 // D55's hybrid at the box boundary: a rest's snapshot is the next wake, and a wake that cannot use it
 // recovers from the chain and says so. The chain is chain-box's model; disk-chain-image.test.ts runs the real one.
-import { afterEach, expect, jest, setSystemTime, test } from 'bun:test';
+import { afterEach, expect, jest, setSystemTime, spyOn, test } from 'bun:test';
 import * as v from 'valibot';
 import { DiskChainStateSchema } from '../src/disk-chain';
 import { ChainTestBox, asked, chainBox } from './support/chain-box';
+import type { SnapshotRegistry } from '../src/snapshot-registry';
+
+/** The registry as the box asks it to delete a snapshot: what it deleted, and an answer to give. */
+class Registry {
+  readonly deleted: string[] = [];
+  refuse: string | undefined;
+}
+
+const registry = new Registry();
 
 class HybridBox extends ChainTestBox {
   protected override get snapshotWakeCutoverMs(): number {
     return 50;
+  }
+
+  protected override get snapshotRegistry(): SnapshotRegistry {
+    return {
+      delete: async (id) => {
+        const refused = registry.refuse;
+        registry.refuse = undefined;
+
+        if (refused !== undefined) return { kind: 'refused', reason: refused };
+        registry.deleted.push(id);
+
+        return { kind: 'deleted' };
+      },
+    };
   }
 }
 
@@ -23,6 +46,7 @@ class ImageChangedBox extends HybridBox {
 /** A box that was started, used and rested once. */
 async function rested() {
   asked.length = 0;
+  registry.deleted.length = 0;
   const arm = chainBox(HybridBox);
   await arm.box.devboxStartup();
   const rest = await arm.box.quiesce();
@@ -96,6 +120,17 @@ test('a snapshot the chain has moved past, or one past its 29 days, is not woken
   });
 });
 
+test('a child is not woken once its lineage\'s root is past 29 days, however new the child', async () => {
+  const { box, container } = await rested();
+  setSystemTime(Date.now() + 20 * 24 * 60 * 60 * 1000);
+  await box.devboxStartup();
+  await box.quiesce();
+  setSystemTime(Date.now() + 10 * 24 * 60 * 60 * 1000);
+  await box.devboxStartup();
+
+  expect(container.startOptions.map(startedFrom)).toEqual(['image', 'snapshot-1', 'image']);
+});
+
 test('a snapshot of another image is not woken: the new image starts and recovers the chain', async () => {
   const { box, container } = await rested();
   ImageChangedBox.image = 'registry.example/devbox@sha256:next';
@@ -133,4 +168,63 @@ test('a discard empties the box\'s store whether it holds no object or more than
 
   expect({ discarded: discarded.map(outcome => outcome.status), left: many.objects.size, record: many.rows.has('devbox:disk-chain') })
     .toEqual({ discarded: ['fulfilled', 'fulfilled'], left: 0, record: false });
+});
+
+const lineage = (rows: Map<string, unknown>) => v.parse(v.object({ id: v.string(), lineage: v.array(v.string()) }), rows.get('devbox:snapshot'));
+
+test('a rest after a wake from a snapshot keeps that snapshot: it is the new one\'s parent', async () => {
+  const { box, rows } = await rested();
+  await box.devboxStartup();
+  await box.quiesce();
+
+  expect({ deleted: registry.deleted, current: lineage(rows) }).toEqual({ deleted: [], current: { id: 'snapshot-2', lineage: ['snapshot-1'] } });
+});
+
+test('a rest after the object is evicted mid-session still knows its snapshot is a child', async () => {
+  const { box, evict, rows } = await rested();
+  await box.devboxStartup();
+  await evict().quiesce();
+
+  expect({ deleted: registry.deleted, current: lineage(rows) }).toEqual({ deleted: [], current: { id: 'snapshot-2', lineage: ['snapshot-1'] } });
+});
+
+test('a box re-rooted through chain recovery deletes its whole old lineage, and its next snapshot is a root', async () => {
+  const { box, container, rows } = await rested();
+  await box.devboxStartup();
+  await box.quiesce();
+  container.snapshots.delete('snapshot-2');
+  await box.devboxStartup();
+  await box.quiesce();
+
+  expect({ deleted: [...registry.deleted].sort(), current: lineage(rows), pending: rows.get('devbox:dead-snapshots') ?? [] })
+    .toEqual({ deleted: ['snapshot-1', 'snapshot-2'], current: { id: 'snapshot-3', lineage: [] }, pending: [] });
+});
+
+test('a deletion the platform refuses is logged in its words, holds up neither the rest nor the wake, and is asked again', async () => {
+  const { box, container, rows } = await rested();
+  container.snapshots.delete('snapshot-1');
+  registry.refuse = 'deleting rootfs-snapshot-ab answered 403: forbidden';
+  const logged: string[] = [];
+  const spy = spyOn(console, 'error').mockImplementation((line: string) => { logged.push(line); });
+
+  try {
+    await box.devboxStartup();
+    const rest = await box.quiesce();
+    await box.devboxStartup();
+    const woke = container.startOptions.map(startedFrom).at(-1);
+    await box.quiesce();
+
+    expect({ rest: rest.kind, woke, said: logged.some(line => line.includes('snapshot-1') && line.includes('answered 403: forbidden')), deleted: registry.deleted, pending: rows.get('devbox:dead-snapshots') ?? [] })
+      .toEqual({ rest: 'committed', woke: 'snapshot-2', said: true, deleted: ['snapshot-1'], pending: [] });
+  } finally { spy.mockRestore(); }
+});
+
+test('discarding the workspace deletes its whole lineage', async () => {
+  const { box, rows } = await rested();
+  await box.devboxStartup();
+  await box.quiesce();
+  await box.discardState();
+
+  expect({ deleted: [...registry.deleted].sort(), snapshot: rows.has('devbox:snapshot'), pending: rows.get('devbox:dead-snapshots') ?? [] })
+    .toEqual({ deleted: ['snapshot-1', 'snapshot-2'], snapshot: false, pending: [] });
 });

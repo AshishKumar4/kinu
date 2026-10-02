@@ -90,6 +90,8 @@ interface BenchEnv {
   BENCH_INTERNET?: string;
   /** 'none' keeps every path, as a snapshot does (D55's head to head). */
   BENCH_EXCLUDES?: string;
+  /** A secret: boxes delete their dead snapshots (D65). */
+  DEVBOX_REGISTRY_TOKEN?: string;
   /** '1' runs the box's own checkpoints at the shipped period, as production does; absent,
    *  `checkpointNow` is the only tick source. */
   BENCH_PRODUCTION_SYNC?: string;
@@ -557,6 +559,10 @@ class BenchBox extends Devbox<BenchEnv> {
     flushEnv = args[1];
   }
 
+  protected override get registryToken(): string | undefined {
+    return this.env.DEVBOX_REGISTRY_TOKEN;
+  }
+
   protected override get archiveExcludes(): readonly string[] {
     return this.env.BENCH_EXCLUDES === 'none' ? [] : super.archiveExcludes;
   }
@@ -752,10 +758,10 @@ class BenchBox extends Devbox<BenchEnv> {
 
   /** A lost or expired snapshot, as the platform answers one (D64). */
   loseSnapshotForBench(): boolean {
-    const held = v.safeParse(v.looseObject({ id: v.string() }), this.ctx.storage.kv.get('devbox:snapshot'));
+    const held = v.safeParse(v.looseObject({ id: v.string(), lineage: v.optional(v.array(v.string()), []) }), this.ctx.storage.kv.get('devbox:snapshot'));
 
     if (!held.success) return false;
-    this.ctx.storage.kv.put('devbox:snapshot', { ...held.output, id: crypto.randomUUID() });
+    this.ctx.storage.kv.put('devbox:snapshot', { ...held.output, id: crypto.randomUUID(), lineage: [...held.output.lineage, held.output.id] });
 
     return true;
   }

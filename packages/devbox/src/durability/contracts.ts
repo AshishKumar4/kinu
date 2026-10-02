@@ -25,8 +25,7 @@ export const PublishWorkSchema = v.strictObject({
   casAttempts: CountSchema,
 });
 
-/** `containerStart` is the first command that answered: the RPC server comes up after admission.
- *  `storeMount`/`baseAttach` are stamped by the storage strategy; a box with no chain skips them. */
+/** `containerStart` is the first command that answered; a box with no chain skips `storeMount`/`baseAttach`. */
 export type RestorePhase = 'containerStart' | StoragePhase | 'attached' | 'bootId';
 
 export type StoragePhase = 'storeMount' | 'baseAttach';

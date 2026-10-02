@@ -393,6 +393,8 @@ export class FakeSandbox {
   readonly snapshots = new Map<string, 'ok' | 'hang'>();
   /** Every signal a native exec was given: the platform may act on one long after the exec settled. */
   readonly execSignals: AbortSignal[] = [];
+  /** Ids never repeat, as the platform's do not: a deleted snapshot's id is not handed out again. */
+  #snapshotsTaken = 0;
   /** What each snapshot holds: the container's disk as it was when it was taken. */
   readonly #snapshotDisks = new Map<string, { readonly files: Map<string, string>; readonly binaryFiles: Map<string, Uint8Array>; readonly directories: Set<string> }>();
   /** Thrown by the next `snapshotContainer`, as a refused snapshot is. */
@@ -822,7 +824,8 @@ export class FakeSandbox {
         this.snapshotFault = undefined;
 
         if (fault !== undefined) throw fault;
-        const id = `snapshot-${String(this.snapshots.size + 1)}`;
+        this.#snapshotsTaken += 1;
+        const id = `snapshot-${String(this.#snapshotsTaken)}`;
         this.snapshots.set(id, 'ok');
         this.#snapshotDisks.set(id, { files: new Map(this.files), binaryFiles: new Map(this.binaryFiles), directories: new Set(this.directories) });
 

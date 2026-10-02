@@ -67,6 +67,8 @@ declare global {
     ANALYTICS_SQL_API_TOKEN?: string;
     /** Workers Observability read token (secret) for the monitor's platform-kill signal. */
     KINU_OBS_TOKEN?: string;
+    /** Containers-scoped token (secret) a box deletes its dead snapshots with (D65). */
+    DEVBOX_REGISTRY_TOKEN?: string;
     AI_GATEWAY_URL: string;
     /** Zone for per-port preview hostnames; empty disables previews. */
     PREVIEW_HOST_SUFFIX: string;

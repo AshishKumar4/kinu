@@ -2644,7 +2644,10 @@ An earlier version of this entry framed it as one, with a bar for replacing
 the chain; that framing was wrong and is withdrawn (git history keeps it).
 
 The design:
-- Base image. `cloudflare/debian-trixie`, pinned by digest. Cloudflare
+- Base image. `cloudflare/debian-trixie`, by name: it cannot be pinned by
+  digest (run `p5510020813`: `inspect()` reports `cloudflare/debian-trixie`
+  with no digest, and the account's registry credentials get 401 on the
+  managed image's manifest). D65 records what a roll does to a snapshot. Cloudflare
   distributes and prepares it on eligible hosts before requests arrive
   (blog.cloudflare.com/faster-agent-sandboxes). Our own Ubuntu image
   (`block-lower/Dockerfile`) is downloaded by every new host, and every
@@ -3470,6 +3473,63 @@ What the runs found, each red first:
 Each snapshot's manifest names its box: `deployment_id` is the Durable
 Object id under the `durable_object` policy. That maps a tag to a box and so
 to an environment's bucket, which the sweep can use.
+
+D65. Snapshots are deleted by lineage: a snapshot nothing can wake again is
+deleted with its whole lineage, and a live lineage is kept whole
+(2026-10-02). A rest after a wake from snapshot S takes a child of S, so S
+stays: the record holds the new snapshot's ancestors (`lineage`, root
+first) and the time its root was taken. A lineage is dead when its box is
+discarded, when a wake could not use it and started from the image (the
+cutover, a moved chain, another image, an aged root), or when the bench
+loses it; the box then lists every snapshot of that lineage in
+`devbox:dead-snapshots` and deletes them after the rest's stop, after a
+cutover and after a discard. A deletion never holds a save or a wake: a
+refusal is logged in the platform's words and asked again at the next
+sweep. The 29-day rule counts from the lineage's root, not its newest
+snapshot, until probe (b) below says a child keeps its parent alive.
+
+The registry client (`src/snapshot-registry.ts`) mints push credentials
+with a Containers-scoped API token (`DEVBOX_REGISTRY_TOKEN`, Account >
+Containers > Edit, declared in `infra-manifest.ts`), finds the repository
+holding `rootfs-snapshot-<sha256(id)>` in the catalog, reads its set id and
+deletes `rootfs-snapshot-*` and `rootfs-set-<sha256(set id)>`. A box with no
+token keeps its dead snapshots until it has one; they lapse in 30 days.
+Live (run `sbs10021734nhsw`, image `e7444653…`, Medium, two boxes through
+D64's steps, all exact): the re-rooted box deleted its two-snapshot lineage
+during the run, the teardown's discards deleted the rest, and the
+repository held no tag of the run afterwards.
+
+What a snapshot is in the registry (read 2026-10-02 from that run's tags):
+both tags name one OCI manifest with one layer, a btrfs send stream. A
+root's layer is the whole rootfs increment over the image (75.8 MB) and its
+`subject` is the image's manifest. A child's layer is an incremental stream
+(64,470 B) whose `subject` is its parent's manifest, with
+`parent_snapshot_id` in its annotations. So restoring a child needs its
+parent's layer, and probe (a) asks whether the registry keeps it once the
+parent's tags are gone. `deployment_id` is the Durable Object's id under
+the `durable_object` policy, so every tag maps to its box.
+
+A roll of `cloudflare/debian-trixie` should leave existing snapshots
+restorable on the base they were taken from. A snapshot carries its own
+base: after a Worker moved from image A to image B, a restore of a snapshot
+taken on A ran A's shim (`a2973893…`) and `inspect()` named A, while a fresh
+start on B ran B's shim with an empty workspace (D51, run
+`snap09302048b2`); with A's tag deleted from the registry the restore still
+worked (`snap09302053b3`); and a root snapshot's manifest names its image's
+manifest as its `subject`. The box's image check compares the configured
+image string, which a roll does not change, so a box keeps waking its own
+snapshot across a roll. Not measured: a roll of a managed image itself,
+which only Cloudflare can do.
+
+The long probes, started 2026-10-02 (`bench-artifacts/snapshot-life/`): a
+throwaway Worker with an hourly Cron Trigger takes every reading and writes
+it to its R2 bucket, then deletes its snapshots' tags, its container
+application and itself after the last one; the bucket keeps the readings.
+Each question runs on our image and on trixie. (a) P -> C with P's tags
+deleted on day 0: C restored at 1 h and then daily to 14 days, and P's tags,
+manifest and layer read by digest each time. (b) P -> C untouched: C
+restored every 3 days and P never; from day 28 to 36, daily, whether C
+restores and whether P's tags, manifest and layer still exist.
 
 ## Measurement contract for a strategy comparison
 

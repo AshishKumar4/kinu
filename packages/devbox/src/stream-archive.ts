@@ -71,9 +71,8 @@ function read(number, size) {
   return bytes;
 }
 
-// mksquashfs writes its output in order and returns to it once, for the superblock at offset 0, so every part but
-// the first is final once the file has grown past it; the first uploads last. Each part's bytes are punched out of
-// the disk once the store holds them, so the archive never needs more disk than the window.
+// mksquashfs writes in order and returns once, to the superblock at 0: a part is final once the file grows
+// past it, so the first uploads last. Stored parts are punched out of the disk, which holds only the window.
 const child = spawn(archiver[0], archiver.slice(1), { stdio: ['ignore', 'ignore', 'pipe'] });
 let archiverWords = '';
 child.stderr.on('data', (chunk) => { archiverWords += chunk; });

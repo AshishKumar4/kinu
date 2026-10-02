@@ -32,10 +32,9 @@ export interface ProcessRecord {
   readonly exitCode: number | undefined;
 }
 
-// After sandbox-sdk rc.1's process-workspace example: file-backed identities survive a DO eviction,
-// and a process group carries signals. One symlink decides a launch whose exec answer was lost:
-// the wrapper makes `launch -> launched` before anything runs, a caller finding no pid and no exit
-// makes `launch -> unlaunched` (D48). A missing cwd is the launch's own recorded failure.
+// File-backed identities survive a DO eviction; a process group carries signals. A launch whose exec
+// answer was lost is decided by one symlink: `launched` before anything runs, or `unlaunched` set by
+// a caller finding no pid and no exit (D48). A missing cwd is the launch's own recorded failure.
 const RUN = `dir=$1; cwd=$2; shift 2
 ln -s launched "$dir/launch" 2>/dev/null || exit 0
 if ! cd -- "$cwd" 2>/dev/null; then
