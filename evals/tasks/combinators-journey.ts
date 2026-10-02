@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { basename } from 'node:path';
+import { basename, posix } from 'node:path';
 import * as v from 'valibot';
 import { unpackZip } from '@kinu.run/core';
 import type { EvalTurn, SeedFile } from '../src/task';
@@ -24,7 +24,7 @@ const MIRROR = '/sandbox/workspace/combinators';
 
 const CALCULATOR = 'report_totals';
 
-export const handoff = { coordinator: 'Rhea', cancelled: 'TM-COLL-724', current: 'TM-COLL-905' } as const;
+const handoff = { coordinator: 'Rhea', cancelled: 'TM-COLL-724', current: 'TM-COLL-905' } as const;
 
 const AssertionSchema = v.object({
   status: v.picklist(['passed', 'failed', 'pending', 'skipped', 'todo']),
@@ -41,7 +41,9 @@ const ReviewSchema = v.array(v.object({ path: v.string(), summary: SummarySchema
 
 const SnapshotSchema = v.object({ summary: SummarySchema, release: ReleaseSchema, review: ReviewSchema });
 
-const ProjectSchema = v.object({ main: v.string(), browser: v.optional(v.string()) });
+const ProjectSchema = v.object({ main: v.optional(v.string()), browser: v.optional(v.string()) });
+
+const GradedUsageSchema = v.object({ usageCountAfterGrading: v.number() });
 
 export type ReportSummary = v.InferOutput<typeof SummarySchema>;
 
@@ -151,10 +153,11 @@ async function previewAnswer(verifier: EvalVerifier, executor: 'workspace' | 'sa
   return { pass: answered.some((answer) => answer.holds), evidence: { expected, answered } };
 }
 
-async function calculator(verifier: EvalVerifier, id: string, paths: readonly string[], agentUses: number): Promise<void> {
+async function calculator(verifier: EvalVerifier, id: string, paths: readonly string[], previousId?: string): Promise<void> {
   await verifier.check(id, async () => {
     const tools = (await verifier.tools()).filter((tool) => tool.name === CALCULATOR);
     const usesBeforeGrading = tools[0]?.usageCount ?? 0;
+    const previous = previousId === undefined ? null : v.parse(GradedUsageSchema, verifier.earlierCheck(previousId)?.evidence);
     const client = 'eval-report-reader';
     await verifier.writeFile(`/slates/${client}/package.json`, JSON.stringify({ main: 'server.js',
       slate: { bindings: { CALCULATE: { kind: 'tool', name: CALCULATOR } } } }));
@@ -170,8 +173,10 @@ async function calculator(verifier: EvalVerifier, id: string, paths: readonly st
         if (JSON.stringify(actual) !== JSON.stringify(summaryOf(await verifier.readFile(path)))) wrong.push(path);
       }
 
-      return { pass: wrong.length === 0 && tools.length === 1 && usesBeforeGrading >= agentUses,
-        evidence: { wrong, usesBeforeGrading, requiredAgentUses: agentUses, called: paths } };
+      const usageCountAfterGrading = (await verifier.tools()).find((tool) => tool.name === CALCULATOR)?.usageCount ?? 0;
+
+      return { pass: wrong.length === 0 && tools.length === 1 && (previous === null || usesBeforeGrading > previous.usageCountAfterGrading),
+        evidence: { wrong, usesBeforeGrading, usageCountAfterGrading, previousGradedUses: previous?.usageCountAfterGrading, called: paths } };
     } finally {
       await verifier.removeSlate(client);
     }
@@ -181,7 +186,7 @@ async function calculator(verifier: EvalVerifier, id: string, paths: readonly st
 /** Compare actual ZIP payloads with allowed source bytes; names and post-export scratch do not matter. */
 async function archive(verifier: EvalVerifier, checkout: string): Promise<void> {
   await verifier.check('handoff-contains-the-required-source-bytes', async () => {
-    const roots = [`/sandbox${checkout}`, DESK, '/slates/test-results', '/slates/release-review'];
+    const roots = [`/sandbox${checkout}`, DESK, '/slates/test-results', '/slates/release-review'].map((path) => posix.normalize(path));
     const allowed = new Map<string, Uint8Array>();
     const hashes = new Map<string, string>();
     const digest = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
@@ -189,7 +194,7 @@ async function archive(verifier: EvalVerifier, checkout: string): Promise<void> 
     const collect = async (dir: string): Promise<void> => {
       for (const entry of await verifier.files(dir)) {
         if (entry.name === 'node_modules' || entry.name === '.git') continue;
-        const path = `${dir}/${entry.name}`;
+        const path = posix.join(dir, entry.name);
 
         if (path === EXPORT) continue;
 
@@ -210,9 +215,10 @@ async function archive(verifier: EvalVerifier, checkout: string): Promise<void> 
     for (const id of ['test-results', 'release-review']) {
       const path = `/slates/${id}/package.json`;
       const project = json(ProjectSchema, await verifier.readFile(path));
-      required.push(path, `/slates/${id}/${project.main}`);
 
-      if (project.browser !== undefined) required.push(`/slates/${id}/${project.browser}`);
+      if (project.main !== undefined) required.push(posix.join('/slates', id, project.main));
+
+      if (project.browser !== undefined) required.push(posix.join('/slates', id, project.browser));
     }
 
     const entries = await unpackZip(await verifier.readBytes(EXPORT));
@@ -223,13 +229,14 @@ async function archive(verifier: EvalVerifier, checkout: string): Promise<void> 
       const hash = digest(entry.bytes);
       const source = allowed.get(hash);
 
-      if (source === undefined || source.length !== entry.bytes.length || entry.bytes.some((byte, index) => byte !== source[index])) outside.push(entry.path);
+      if (source === undefined || source.length !== entry.bytes.length || entry.bytes.some((byte, index) => byte !== source[index])) outside.push(posix.normalize(entry.path));
       else imported.add(hash);
     }
 
     const missing: string[] = [];
 
-    for (const path of required) {
+    for (const requested of required) {
+      const path = posix.normalize(requested);
       const hash = hashes.get(path);
 
       if (hash === undefined || !imported.has(hash)) missing.push(path);
@@ -255,28 +262,15 @@ async function changed(verifier: EvalVerifier, replacements: readonly SeedFile[]
 /** Independent provenance and recall precede the calculator and live-view dependency chain. */
 export function combinatorsJourney(checkout: string): readonly EvalTurn[] {
   return [{
-    fresh: true,
     prompt: `Before we prepare the release review, look up the current true-myth release on npm and save
-{version, integrity} to ${RELEASE}; integrity is that release's dist.integrity. Track release-provenance on
-the board and close it once checked. In this new conversation, what is our private release code and who
-coordinates the handoff? After saving the release record, reply with just the code and coordinator,
-separated by a comma.`,
+{version, integrity} to ${RELEASE}; integrity is that release's dist.integrity. Add a board task titled exactly
+release-provenance and mark it done once checked. For our later private handoff, keep coordinator
+${handoff.coordinator} and release code ${handoff.cancelled}; I'll ask for them in a new conversation.`,
     verify: async (verifier) => {
       await verifier.check('release-provenance-matches-the-live-registry', async () => {
         const expected = await published('true-myth'), actual = json(ReleaseSchema, await verifier.readFile(RELEASE));
 
         return { pass: JSON.stringify(actual) === JSON.stringify(expected), evidence: { actual, expected } };
-      });
-      await verifier.check('recalls-the-corrected-private-handoff', async () => {
-        const answer = verifier.bareAnswer(/^([A-Z]+-[A-Z]+-\d+\s*,\s*[A-Za-z]+)$/u);
-        const [code, coordinator] = (answer ?? '').split(',').map((part) => part.trim());
-        const saved = await verifier.memory();
-        const values = [saved.content, ...saved.facts.map((fact) => JSON.stringify(fact.value))];
-        const hasCode = values.some((value) => value.includes(handoff.current));
-        const hasCoordinator = values.some((value) => value.includes(handoff.coordinator));
-
-        return { pass: code === handoff.current && coordinator === handoff.coordinator && hasCode && hasCoordinator,
-          evidence: { code, coordinator, hasCode, hasCoordinator, noteRead: true, factKeys: saved.facts.map((fact) => fact.key), replies: verifier.recentReplies() } };
       });
       await verifier.check('release-provenance-is-done', () => boardHolds(verifier, ['release-provenance']));
     },
@@ -292,7 +286,10 @@ entry in every testResults suite, including repeated names. passed and failed co
 pending, skipped and todo count as skipped. Sum durations, treating absent/null as zero, and round to
 3 decimals. Ignore cached aggregate counters. Check the chosen calculation on all example reports under
 reports/review and on rerun.json. Save an array of {path, summary}, one per example, to ${REVIEW}.
-Track this as boundary-review and close it after comparing the independent approaches and their results.`,
+Add a board task titled exactly boundary-review and mark it done after comparing the approaches and results.
+
+A correction for the private handoff: ${handoff.cancelled} is cancelled. Our release code is now ${handoff.current};
+${handoff.coordinator} still coordinates it. Keep the corrected code for the new conversation.`,
     verify: async (verifier) => {
       await verifier.check('independent-review-branches-finished-this-turn', () => aSwarmRan(verifier, {}));
       await verifier.check('boundary-review-records-the-actual-answers', async () => {
@@ -302,21 +299,35 @@ Track this as boundary-review and close it after comparing the independent appro
 
         return { pass: JSON.stringify(actual) === JSON.stringify(expected), evidence: { actual, expected } };
       });
-      await calculator(verifier, 'agent-built-and-used-the-report-calculator', [RERUN, ...CASES.map((file) => file.path)], 1);
+      await calculator(verifier, 'the-report-calculator-works', [RERUN, ...CASES.map((file) => file.path)]);
       await verifier.check('boundary-review-is-done', () => boardHolds(verifier, ['boundary-review']));
     },
   }, {
-    prompt: `Run the library's tests again and keep the JSON report at ${checkout}/vitest-report.json in the sandbox
+    fresh: true,
+    prompt: `In this new conversation, what is our private release code and who coordinates the handoff?
+After the work below, reply with just the code and coordinator, separated by a comma.
+
+Run the library's tests again and keep the JSON report at ${checkout}/vitest-report.json in the sandbox
 and the identical file at ${REPORT} here. Use the report_totals calculation we kept to check that real report.
 
 I want two live workspace views: test-results, the dashboard, and release-review, the release view.
 The dashboard shows current test totals. Its API takes one object: summary({path}) returns the calculation
 for that file read now. The release view's snapshot({path}) takes the same object and returns
-{summary, release, review}: the dashboard's live summary, ${RELEASE}, and ${REVIEW}. Keep these object
-arguments unchanged in both servers and clients. Have two colleagues create one view apiece while you
+{summary, release, review}: the dashboard's live summary, ${RELEASE}, and ${REVIEW}. Have two colleagues create one view apiece while you
 bring the work together. Both need usable visible pages, not copied tables. Track test-results and
-release-review on the board and close them when the views work with both vitest.json and rerun.json.`,
+release-review as exact task titles on the board and mark them done when the views work with both reports.`,
     verify: async (verifier) => {
+      await verifier.check('recalls-the-corrected-private-handoff', async () => {
+        const answer = verifier.bareAnswer(/^([A-Z]+-[A-Z]+-\d+\s*,\s*[A-Za-z]+)$/u);
+        const [code, coordinator] = (answer ?? '').split(',').map((part) => part.trim());
+        const saved = await verifier.memory();
+        const values = [saved.content, ...saved.facts.map((fact) => JSON.stringify(fact.value))];
+        const hasCode = values.some((value) => value.includes(handoff.current));
+        const hasCoordinator = values.some((value) => value.includes(handoff.coordinator));
+
+        return { pass: code === handoff.current && coordinator === handoff.coordinator && hasCode && hasCoordinator,
+          evidence: { code, coordinator, hasCode, hasCoordinator, noteRead: true, factKeys: saved.facts.map((fact) => fact.key), replies: verifier.recentReplies() } };
+      });
       await verifier.check('dashboard-report-is-the-sandbox-test-report', async () => {
         const [local, sandbox] = await Promise.all([verifier.readFile(REPORT), verifier.readFile(`/sandbox${checkout}/vitest-report.json`)]);
         const summary = summaryOf(local);
@@ -333,7 +344,7 @@ release-review on the board and close them when the views work with both vitest.
           await verifier.execute('sandbox', `rm -f ${graderReport}`);
         }
       });
-      await calculator(verifier, 'agent-reused-the-report-calculator', [REPORT], 2);
+      await calculator(verifier, 'agent-reused-the-report-calculator', [REPORT], 'the-report-calculator-works');
       await sameSummary(verifier, 'dashboard-summarizes-the-real-tests', REPORT);
       await sameSummary(verifier, 'dashboard-summarizes-the-rerun', RERUN);
       await sameSnapshot(verifier, 'release-review-reads-the-dashboard-and-provenance', RERUN);
@@ -349,7 +360,8 @@ JSON inside <output id="summary">. Show vitest.json and rerun.json without copyi
 Package the changed library modules, calculator, original and rerun reports, example reports, review and npm
 provenance, both views' declared server/client entry points and portable preview source at ${EXPORT}.
 A recipient should get the same file bytes; leave dependencies and git history out. Keep the live views and
-previews reading changes without a rebuild. Close previews and export on the board, and keep earlier work closed.`,
+previews reading changes without a rebuild. Add board tasks titled exactly previews and export, mark them
+done when ready, and keep earlier work closed.`,
     verify: async (verifier) => {
       await verifier.check('workspace-dashboard-preview-shows-the-tests', () => previewAnswer(verifier, 'workspace', REPORT));
       await verifier.check('sandbox-dashboard-preview-shows-the-tests', () => previewAnswer(verifier, 'sandbox', REPORT));

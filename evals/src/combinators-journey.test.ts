@@ -4,7 +4,7 @@ import * as v from 'valibot';
 import { JsonValueSchema, packZip, type ZipEntry } from '@kinu.run/core';
 import { combinatorsJourney, summaryOf, type ReportSummary } from '../tasks/combinators-journey';
 import { EvalVerifier, type VerifierSession } from './verifier';
-import type { EvalCheck, EvalTurn } from './task';
+import type { EvalCheck, EvalTurn, EvalTurnResult } from './task';
 
 const DESK = '/home/user/combinators';
 
@@ -40,7 +40,7 @@ type Defect = 'board' | 'invented-report' | 'skipped' | 'hardcoded-calculator' |
   | 'workspace-preview' | 'sandbox-preview' | 'invisible-preview' | 'swarm' | 'old-swarm' | 'audit' | 'npm-version' | 'npm-integrity'
   | 'export-missing' | 'export-changed' | 'export-duplicate' | 'export-extra' | 'memory-code' | 'memory-coordinator' | 'escaped-preview' | 'reopened-module'
   | 'board-case' | 'relative-review' | 'scratch-after-pack' | 'agent-unused' | 'agent-used-once' | 'empty-memory' | 'memory-note' | 'renamed-export'
-  | 'cached-workspace-preview' | 'cached-sandbox-preview';
+  | 'cached-workspace-preview' | 'cached-sandbox-preview' | 'dot-entrypoint' | 'no-main' | 'no-package-members';
 
 /** The fixture flattens assertions and counts statuses independently of the grader's loop. */
 function calculate(text: string, defect?: Defect) {
@@ -71,7 +71,10 @@ function desk(defect?: Defect) {
   for (const module of ['maybe', 'result', 'task', 'toolbelt']) put(`/sandbox${CHECKOUT}/src/${module}.ts`, `export const ${module} = '${module}';\n`);
 
   for (const id of ['test-results', 'release-review']) {
-    put(`/slates/${id}/package.json`, JSON.stringify({ name: id, main: 'index.js', browser: 'client.js' }));
+    let main: string | undefined = defect === 'dot-entrypoint' ? './index.js' : 'index.js';
+
+    if (defect === 'no-main') main = undefined;
+    put(`/slates/${id}/package.json`, JSON.stringify({ name: id, main, browser: 'client.js' }));
     put(`/slates/${id}/index.js`, `export const name = '${id}';\n`);
     put(`/slates/${id}/client.js`, `export const client = '${id}';\n`);
   }
@@ -80,7 +83,7 @@ function desk(defect?: Defect) {
   let uses = 2;
 
   if (defect === 'agent-unused') uses = 0;
-  else if (defect === 'agent-used-once') uses = 1;
+  else if (defect === 'agent-used-once') uses = 6;
 
   const current = (path: string, cache: boolean) => {
     const found = cache ? cached.get(path) : undefined;
@@ -203,7 +206,7 @@ function desk(defect?: Defect) {
     for (const [path, bytes] of files) {
       if (path.startsWith(`/sandbox${CHECKOUT}/src/`)) entries.push({ path: `true-myth${path.slice(`/sandbox${CHECKOUT}`.length)}`, bytes });
       else if (path.startsWith(`${DESK}/`) && path !== EXPORT) entries.push({ path: `desk${path.slice(DESK.length)}`, bytes });
-      else if (path.startsWith('/slates/')) entries.push({ path: path.slice(1), bytes });
+      else if (path.startsWith('/slates/') && !(defect === 'no-package-members' && basename(path) === 'package.json')) entries.push({ path: path.slice(1), bytes });
     }
 
     if (defect === 'export-missing') entries.splice(entries.findIndex((entry) => entry.path === 'desk/report-totals.js'), 1);
@@ -229,7 +232,9 @@ function desk(defect?: Defect) {
   const coordinator = defect === 'memory-coordinator' ? 'Theo' : 'Rhea';
   const replies = [`${code}, ${coordinator}`];
 
-  return { session, seed, exportArchive, replies, close: () => server.stop(true) };
+  const useByAgent = () => session.slateOp({ op: 'call', id: 'eval-report-reader', method: 'calculate', args: [{ path: REPORT }] });
+
+  return { session, seed, exportArchive, useByAgent, replies, close: () => server.stop(true) };
 }
 
 async function grade(index: number, defect?: Defect): Promise<EvalCheck[]> {
@@ -248,10 +253,21 @@ async function grade(index: number, defect?: Defect): Promise<EvalCheck[]> {
 
   try {
     await fixture.seed(turns[1] ?? turn);
+    const previous: EvalTurnResult[] = [];
+
+    if (index === 2) {
+      const prepare = turns[1]?.verify;
+
+      if (prepare === undefined) throw new Error('missing calculator turn');
+      const checks = await new EvalVerifier(fixture.session, fixture.replies, 100, []).collect(prepare);
+      previous.push({ outcome: { status: 'completed' }, checks, turnWallMs: 0, verificationWallMs: 0 });
+
+      if (defect !== 'agent-used-once') await fixture.useByAgent();
+    }
 
     if (index === 3) fixture.exportArchive();
 
-    return await new EvalVerifier(fixture.session, fixture.replies, 100).collect(turn.verify);
+    return await new EvalVerifier(fixture.session, fixture.replies, 100, previous).collect(turn.verify);
   } finally {
     registry.mockRestore();
     await fixture.close();
@@ -262,14 +278,13 @@ const defects: readonly { defect: Defect; turn: number; checks: readonly string[
   { defect: 'board', turn: 0, checks: ['release-provenance-is-done'] },
   { defect: 'npm-version', turn: 0, checks: ['release-provenance-matches-the-live-registry'] },
   { defect: 'npm-integrity', turn: 0, checks: ['release-provenance-matches-the-live-registry'] },
-  { defect: 'memory-code', turn: 0, checks: ['recalls-the-corrected-private-handoff'] },
-  { defect: 'memory-coordinator', turn: 0, checks: ['recalls-the-corrected-private-handoff'] },
-  { defect: 'empty-memory', turn: 0, checks: ['recalls-the-corrected-private-handoff'] },
+  { defect: 'memory-code', turn: 2, checks: ['recalls-the-corrected-private-handoff'] },
+  { defect: 'memory-coordinator', turn: 2, checks: ['recalls-the-corrected-private-handoff'] },
+  { defect: 'empty-memory', turn: 2, checks: ['recalls-the-corrected-private-handoff'] },
   { defect: 'swarm', turn: 1, checks: ['independent-review-branches-finished-this-turn'] },
   { defect: 'old-swarm', turn: 1, checks: ['independent-review-branches-finished-this-turn'] },
   { defect: 'audit', turn: 1, checks: ['boundary-review-records-the-actual-answers'] },
-  { defect: 'hardcoded-calculator', turn: 1, checks: ['agent-built-and-used-the-report-calculator'] },
-  { defect: 'agent-unused', turn: 1, checks: ['agent-built-and-used-the-report-calculator'] },
+  { defect: 'hardcoded-calculator', turn: 1, checks: ['the-report-calculator-works'] },
   { defect: 'board', turn: 1, checks: ['boundary-review-is-done'] },
   { defect: 'invented-report', turn: 2, checks: ['dashboard-report-is-the-sandbox-test-report'] },
   { defect: 'agent-used-once', turn: 2, checks: ['agent-reused-the-report-calculator'] },
@@ -309,7 +324,11 @@ for (const [name, defect, turn] of [
   ['scratch written after packing', 'scratch-after-pack', 3],
   ['renamed archive members', 'renamed-export', 3],
   ['duplicate copies of allowed bytes', 'export-duplicate', 3],
-  ['memory notes instead of keyed facts', 'memory-note', 0],
+  ['memory notes instead of keyed facts', 'memory-note', 2],
+  ['an unused but reusable calculator at creation', 'agent-unused', 1],
+  ['dot-relative declared entry points', 'dot-entrypoint', 3],
+  ['node projects without main', 'no-main', 3],
+  ['only requested entry points, without package metadata', 'no-package-members', 3],
 ] as const) {
   test(`accepts ${name}`, async () => {
     expect((await grade(turn, defect)).filter((check) => !check.pass)).toEqual([]);

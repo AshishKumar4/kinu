@@ -39,11 +39,7 @@ function refusing(error: string, reason = 'io'): VerifierSession {
 
 /** A turn of one check that makes one slate call over `connection`. */
 function oneCall(connection: VerifierSession) {
-<<<<<<< HEAD
-  return new EvalVerifier(connection, [], []).collect(async (verifier) => {
-=======
-  return new EvalVerifier(connection, [], 0).collect(async (verifier) => {
->>>>>>> 9ff46df67 (eval: scope and reorder the combined release journey)
+  return new EvalVerifier(connection, [], 0, []).collect(async (verifier) => {
     await verifier.check('builds', async () => ({ pass: (await verifier.call('app', 'total', [])) !== null }));
   });
 }
@@ -75,11 +71,7 @@ const script = async (client: SlateClient<Method>) => {
 
 describe('EvalVerifier', () => {
   test('a check that throws fails alone, with its error as evidence, and the others still run', async () => {
-<<<<<<< HEAD
-    const checks = await new EvalVerifier(session({}), [], []).collect(async (verifier) => {
-=======
-    const checks = await new EvalVerifier(session({}), [], 0).collect(async (verifier) => {
->>>>>>> 9ff46df67 (eval: scope and reorder the combined release journey)
+    const checks = await new EvalVerifier(session({}), [], 0, []).collect(async (verifier) => {
       await verifier.check('first', () => Promise.resolve({ pass: true }));
       await verifier.check('refused', async () => ({ pass: (await verifier.call('app', 'missing', [])) === null }));
       await verifier.check('last', () => Promise.resolve({ pass: true, evidence: { seen: [1, 2] } }));
@@ -92,11 +84,7 @@ describe('EvalVerifier', () => {
   test('a check\'s own evidence is stored scrubbed: what the agent built and said can carry a capability', async () => {
     const leaky = 'served at https://library-0000000000-fixture.kinu.run/ with x-kinu-dev-identity-secret: abc123';
 
-<<<<<<< HEAD
-    const [check] = await new EvalVerifier(session({}), [leaky], []).collect(async (verifier) => {
-=======
-    const [check] = await new EvalVerifier(session({}), [leaky], 0).collect(async (verifier) => {
->>>>>>> 9ff46df67 (eval: scope and reorder the combined release journey)
+    const [check] = await new EvalVerifier(session({}), [leaky], 0, []).collect(async (verifier) => {
       await verifier.check('answers', () => Promise.resolve({ pass: false, evidence: { replies: verifier.recentReplies() } }));
     });
 
@@ -108,17 +96,10 @@ describe('EvalVerifier', () => {
       'Let me count the overdue loans in the library first.',
       '**3**',
       'Those open tasks are all finished now.',
-<<<<<<< HEAD
-    ], []);
+    ], 0, []);
 
     expect(answered.bareAnswer(/^(\d+)$/)).toBe('3');
-    expect(new EvalVerifier(session({}), ['I could not reach the library.'], []).bareAnswer(/^(\d+)$/)).toBeNull();
-=======
-    ], 0);
-
-    expect(answered.bareAnswer(/^(\d+)$/)).toBe('3');
-    expect(new EvalVerifier(session({}), ['I could not reach the library.'], 0).bareAnswer(/^(\d+)$/)).toBeNull();
->>>>>>> 9ff46df67 (eval: scope and reorder the combined release journey)
+    expect(new EvalVerifier(session({}), ['I could not reach the library.'], 0, []).bareAnswer(/^(\d+)$/)).toBeNull();
   });
 
   test('a call the deployment could not carry fails the trial as infrastructure, not the check', async () => {
@@ -180,11 +161,7 @@ describe("a helper's runs", () => {
   // Staging f75f06932, 2026-10-01: both task helpers of a capture were dismissed once they answered, and their runs
   // read by name answered missing (kinu-logs/evals-fast/FINDINGS.md F3B), as every task helper's do.
   test('a released helper is read by its actor, a live one by its name', async () => {
-<<<<<<< HEAD
-    const work = await new EvalVerifier(inspecting(), [], []).helperWork();
-=======
-    const work = await new EvalVerifier(inspecting(), [], 0).helperWork();
->>>>>>> 9ff46df67 (eval: scope and reorder the combined release journey)
+    const work = await new EvalVerifier(inspecting(), [], 0, []).helperWork();
 
     expect(work).toEqual([
       { name: 'ask-task-live', status: 'working', runs: [{ startedAt: 10, status: 'running', userMessage: 'Write the ratings' }] },
@@ -223,7 +200,7 @@ describe("a helper's runs", () => {
         : inspecting().inspect(request),
     };
 
-    const verifier = new EvalVerifier(connection, [], 100);
+    const verifier = new EvalVerifier(connection, [], 100, []);
 
     expect((await verifier.helperWork()).flatMap((helper) => helper.runs)).toEqual([]);
   });
@@ -234,7 +211,7 @@ describe("a helper's runs", () => {
       swarmRuns: () => Promise.resolve([{ run: { id: 'old', startedAt: 90, status: 'completed', winnerScore: null }, params: null, head: null }]),
     };
 
-    expect(await new EvalVerifier(connection, [], 100).swarms()).toEqual([]);
+    expect(await new EvalVerifier(connection, [], 100, []).swarms()).toEqual([]);
   });
 });
 

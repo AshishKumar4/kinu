@@ -148,6 +148,7 @@ export class EvalVerifier {
   readonly #session: VerifierSession;
   readonly #previousTurns: readonly EvalTurnResult[];
   readonly #startedAt: number;
+  readonly #previousTurns: readonly EvalTurnResult[];
   readonly #checks: EvalCheck[] = [];
   readonly #pending: Promise<void>[] = [];
 
@@ -156,6 +157,18 @@ export class EvalVerifier {
     this.replies = replies;
     this.#previousTurns = previousTurns;
     this.#startedAt = startedAt;
+    this.#previousTurns = previousTurns;
+  }
+
+  /** Prior grades belong to this trial, including observations made after a grader called a tool. */
+  earlierCheck(id: string): EvalCheck | undefined {
+    for (let index = this.#previousTurns.length - 1; index >= 0; index -= 1) {
+      const found = this.#previousTurns[index]?.checks.find((check) => check.id === id);
+
+      if (found !== undefined) return found;
+    }
+
+    return undefined;
   }
 
   /** Read observations from completed grades belonging to this trial. */

@@ -3,7 +3,7 @@ import { infraBoundary } from '@kinu.run/test-utils';
 import { defineTaskEval } from '../src/eval';
 import { defineEvalTask } from '../src/task';
 import { finishedWork, type EvalCheckOutcome, type EvalVerifier } from '../src/verifier';
-import { combinatorsJourney, handoff } from './combinators-journey';
+import { combinatorsJourney } from './combinators-journey';
 import { boardHolds } from './work-board';
 
 // DeepSWE v1.1's true-myth-iterable-collection-combinators, worked the way a lead would: the library cloned and
@@ -146,10 +146,7 @@ const task = defineEvalTask({
 
 The job:
 
-${JOB}
-
-For our later private handoff, keep coordinator ${handoff.coordinator} and release code ${handoff.cancelled}.
-I'll ask for them in a new conversation.`,
+${JOB}`,
     verify: async (verifier) => {
       await verifier.check('three-helpers-each-finished-a-module', async () => {
         const worked = await verifier.helperWork();
@@ -178,10 +175,7 @@ I'll ask for them in a new conversation.`,
 
 ${TOOLBELT}
 
-Add it to your task board as src/toolbelt.ts, mark it done once it works, and commit it.
-
-A correction for the private handoff: ${handoff.cancelled} is cancelled. Our release code is now ${handoff.current};
-${handoff.coordinator} still coordinates it. Keep the corrected code for the new conversation.`,
+Add it to your task board as src/toolbelt.ts, mark it done once it works, and commit it.`,
     verify: async (verifier) => {
       await verifier.check('the-board-holds-the-toolbelt-done', () => boardHolds(verifier, [...MODULES, 'toolbelt'].map((module) => `src/${module}.ts`)));
 
