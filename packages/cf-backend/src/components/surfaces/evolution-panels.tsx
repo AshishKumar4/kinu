@@ -2,8 +2,8 @@ import { useState, useCallback } from "react";
 import { Loader } from "@cloudflare/kumo";
 import { DatabaseIcon, GaugeIcon } from "@phosphor-icons/react";
 import {
-  DEFAULT_QUALITY_THRESHOLD, describeCalibrationGap, scoreInterval,
-  type AlignmentConvergence, type CalibrationReport, type ScaffoldScore, type ScoreInterval,
+  DEFAULT_QUALITY_THRESHOLD, describeCalibrationGap, lossInterval, scoreInterval,
+  type AlignmentConvergence, type CalibrationReport, type ScoreInterval,
 } from "@kinu.run/core";
 import type { Rpc } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -104,11 +104,11 @@ export function GepaView({ rpc }: { rpc: Rpc }) {
 }
 
 
-/** A point that was scored; failed points list apart. */
-type ScoredPoint = ScaffoldScore & { interval: ScoreInterval };
-
-function isScored(point: ScaffoldScore): point is ScoredPoint {
-  return point.interval !== null;
+interface ReplayEvalRow {
+  id: string; ranAt: number; sampleSize: number;
+  acceptedCount: number; negativeCount: number;
+  meanScore: number; loss: number; scaffoldVersion: number | null;
+  interval: ScoreInterval;
 }
 
 function ScoreWithInterval({ value, interval, className }: { value: number; interval: ScoreInterval; className?: string }) {
@@ -122,7 +122,7 @@ function ScoreWithInterval({ value, interval, className }: { value: number; inte
 
 // Each signal publishes on its own branch so one failing does not blank the other; the SDK call deadline bounds a stalled read.
 export function QualityView({ rpc }: { rpc: Rpc }) {
-  const loadRows = useCallback(() => rpc<ScaffoldScore[]>("getReplayEvals", [50]), [rpc]);
+  const loadRows = useCallback(() => rpc<ReplayEvalRow[]>("getReplayEvals", [50]), [rpc]);
 
   const loadAlignment = useCallback(async () => {
     const [align, calibration] = await Promise.all([
@@ -162,69 +162,62 @@ export function QualityView({ rpc }: { rpc: Rpc }) {
       <section data-quality-branch="replay">
         {rows.resource.status === "loading" && (
           <div className="flex justify-center py-4" role="status">
-            <Loader size="sm" /><span className="sr-only">Loading the quality curve</span>
+            <Loader size="sm" /><span className="sr-only">Loading replay-eval history</span>
           </div>
         )}
         {rows.resource.status === "error" && (
-          <LoadFailure what="the quality curve" message={rows.resource.message} onRetry={rows.reload} />
+          <LoadFailure what="the replay-eval history" message={rows.resource.message} onRetry={rows.reload} />
         )}
-        {loadedRows !== null && loadedRows.length > 0 && <QualityCurvePanel points={loadedRows} />}
+        {loadedRows !== null && loadedRows.length > 0 && <ReplayEvalPanel rows={loadedRows} />}
       </section>
     </div>
   );
 }
 
-function meanDot(mean: number): string {
-  if (mean >= 0.7) return "p-dot-success";
-
-  return mean >= 0.4 ? "p-dot-warning" : "p-dot-danger";
-}
-
-function QualityCurvePanel({ points }: { points: ScaffoldScore[] }) {
-  const scored = points.filter(isScored);
-  const latest = scored.at(0);
+function ReplayEvalPanel({ rows }: { rows: ReplayEvalRow[] }) {
+  const chrono = [...rows].reverse();
+  const latest = rows[0];
+  const latestLoss = lossInterval(latest.interval);
 
   return (
     <div className="space-y-4">
-      {latest !== undefined && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-          <Metric label="Latest score" value={<ScoreWithInterval value={latest.interval.mean} interval={latest.interval} className={scoreColor(latest.interval.mean)} />} />
-          <Metric label="Scaffold" value={`v${latest.version}`} />
-          <Metric label="Sample" value={`${latest.interval.n} labeled turns`} />
-          <Metric label="Scored by" value={latest.source === "gepa" ? "GEPA (held-out)" : "replay"} />
-        </div>
-      )}
-
-      {scored.length > 0 && (
-        <section className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <div className="p-eyebrow">Score per promoted scaffold</div>
-            <div className="p-meta p-text-3">floor {DEFAULT_QUALITY_THRESHOLD.toFixed(2)}</div>
-          </div>
-          <QualitySparkline points={[...scored].reverse()} threshold={DEFAULT_QUALITY_THRESHOLD} />
-        </section>
-      )}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <Metric label="Latest score" value={<ScoreWithInterval value={latest.meanScore} interval={latest.interval} className={scoreColor(latest.meanScore)} />} />
+        <Metric label="Loss" value={<ScoreWithInterval value={latest.loss} interval={latestLoss} />} />
+        <Metric label="Sample" value={`${latest.sampleSize} (${latest.acceptedCount}✓ / ${latest.negativeCount}✗)`} />
+        <Metric label="Scaffold" value={latest.scaffoldVersion ?? "—"} />
+      </div>
 
       <section className="space-y-1.5">
-        <div className="p-eyebrow">Promotions</div>
+        <div className="flex items-center justify-between">
+          <div className="p-eyebrow">Mean score over time</div>
+          <div className="p-meta p-text-3">floor {DEFAULT_QUALITY_THRESHOLD.toFixed(2)}</div>
+        </div>
+        <QualitySparkline points={chrono} threshold={DEFAULT_QUALITY_THRESHOLD} />
+      </section>
+
+      <section className="space-y-1.5">
+        <div className="p-eyebrow">Recent runs</div>
         <div className="space-y-1">
-          {points.map((p) => (
-            <div key={p.version} className="flex items-center gap-2 p-meta">
-              <span className="p-text-3 shrink-0 w-16 truncate">{new Date(p.promotedAt).toLocaleDateString()}</span>
-              <span className="shrink-0 font-mono p-text-3">v{p.version}</span>
-              {isScored(p) ? (
-                <>
-                  <div className="flex-1 h-2 rounded-full p-fill overflow-hidden" title={`95% CI ${p.interval.lo.toFixed(2)}–${p.interval.hi.toFixed(2)} over ${p.interval.n} turns`}>
-                    <div className={`h-full ${meanDot(p.interval.mean)}`} style={{ width: `${Math.max(0, Math.min(1, p.interval.mean)) * 100}%` }} />
-                  </div>
-                  <span className="font-mono p-text-3 tabular-nums shrink-0 w-10 text-right">{p.interval.mean.toFixed(2)}</span>
-                  {p.direction === "declined" && <span className="p-danger shrink-0" title="its interval sits wholly below the previous point's">regression</span>}
-                </>
-              ) : (
-                <span className="flex-1 p-warning truncate" title={p.failure ?? undefined}>could not score: {p.failure}</span>
-              )}
-            </div>
-          ))}
+          {rows.map((r, i) => {
+            const prev = rows[i + 1];
+            const evolved = prev != null && prev.scaffoldVersion !== r.scaffoldVersion;
+            const belowSuccess = r.meanScore >= 0.4 ? "p-dot-warning" : "p-dot-danger";
+
+            return (
+              <div key={r.id} className="flex items-center gap-2 p-meta">
+                <span className="p-text-3 shrink-0 w-16 truncate">{new Date(r.ranAt).toLocaleDateString()}</span>
+                {r.scaffoldVersion != null && (
+                  <span className={`shrink-0 font-mono ${evolved ? "p-accent" : "p-text-3"}`} title={evolved ? "scaffold evolved" : undefined}>v{r.scaffoldVersion}{evolved ? "↑" : ""}</span>
+                )}
+                <div className="flex-1 h-2 rounded-full p-fill overflow-hidden" title={`95% CI ${r.interval.lo.toFixed(2)}–${r.interval.hi.toFixed(2)} over ${r.sampleSize} turns`}>
+                  <div className={`h-full ${r.meanScore >= 0.7 ? "p-dot-success" : belowSuccess}`} style={{ width: `${Math.max(0, Math.min(1, r.meanScore)) * 100}%` }} />
+                </div>
+                <span className="font-mono p-text-3 tabular-nums shrink-0 w-10 text-right">{r.meanScore.toFixed(2)}</span>
+                <span className="hidden sm:inline font-mono p-text-3 tabular-nums shrink-0 w-20 text-right opacity-70">[{r.interval.lo.toFixed(2)}–{r.interval.hi.toFixed(2)}]</span>
+              </div>
+            );
+          })}
         </div>
       </section>
     </div>
@@ -310,12 +303,12 @@ function CalibrationNote({ report }: { report: CalibrationReport }) {
 }
 
 // Non-scaling stroke keeps the path crisp under preserveAspectRatio="none".
-function QualitySparkline({ points, threshold }: { points: ScoredPoint[]; threshold: number }) {
+function QualitySparkline({ points, threshold }: { points: ReplayEvalRow[]; threshold: number }) {
   const W = 100, H = 32, pad = 2;
   const n = points.length;
   const x = (i: number) => n <= 1 ? W / 2 : pad + (i / (n - 1)) * (W - 2 * pad);
   const y = (score: number) => pad + (1 - Math.max(0, Math.min(1, score))) * (H - 2 * pad);
-  const line = points.map((p, i) => `${x(i).toFixed(2)},${y(p.interval.mean).toFixed(2)}`).join(" ");
+  const line = points.map((p, i) => `${x(i).toFixed(2)},${y(p.meanScore).toFixed(2)}`).join(" ");
 
   const band = [
     ...points.map((p, i) => `${x(i).toFixed(2)},${y(p.interval.hi).toFixed(2)}`),
@@ -339,8 +332,8 @@ function QualitySparkline({ points, threshold }: { points: ScoredPoint[]; thresh
         {n > 1 && <polygon points={band} fill="var(--c-accent)" opacity={0.14} />}
         {n > 1 && <polyline points={line} fill="none" stroke="var(--c-accent)" strokeWidth={1} vectorEffect="non-scaling-stroke" />}
         {points.map((p, i) => (
-          <circle key={p.version} cx={x(i)} cy={y(p.interval.mean)} r={1.4} fill={dotColor(p.interval.mean)} vectorEffect="non-scaling-stroke">
-            <title>{`scaffold v${p.version} · ${new Date(p.promotedAt).toLocaleString()} · score ${p.interval.mean.toFixed(3)} (95% CI ${p.interval.lo.toFixed(2)}–${p.interval.hi.toFixed(2)})${p.direction === "declined" ? " · regression" : ""}`}</title>
+          <circle key={p.id} cx={x(i)} cy={y(p.meanScore)} r={1.4} fill={dotColor(p.meanScore)} vectorEffect="non-scaling-stroke">
+            <title>{`${new Date(p.ranAt).toLocaleString()} · score ${p.meanScore.toFixed(3)} (95% CI ${p.interval.lo.toFixed(2)}–${p.interval.hi.toFixed(2)}) · loss ${p.loss.toFixed(3)}${p.scaffoldVersion != null ? ` · scaffold v${p.scaffoldVersion}` : ""}`}</title>
           </circle>
         ))}
       </svg>

@@ -368,7 +368,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': LAZY_ON_FIRST_USE('the EvolutionEngine'),
       cli: LAZY_ON_FIRST_USE('the EvolutionEngine'),
     },
-    scaffold_scores: EVERYWHERE,
+    replay_evals: EVERYWHERE,
     mission_budget: {
       'cf-orchestrator': LAZY_ON_FIRST_USE('MissionBudgetLedger'),
       'cf-subordinate': LAZY_ON_FIRST_USE('MissionBudgetLedger'),

@@ -103,7 +103,7 @@ import {
   type BlueprintBundle, type BlueprintFork, type SlateAnswer, type SlateShareRecord,
   type ScaffoldRunResult,
   applyScaffoldDecision, getShadowStatus, listScaffoldVersions, shadowTrialPlan, trimTrialContext,
-  previewScaffoldLive, runScaffoldGepaOptimization,
+  previewScaffoldLive, runScaffoldCaptureText, runScaffoldGepaOptimization,
   advancePromptSectionLane,
   decideRefinementRoute, evolutionAnswerWake, listRefinements, nextEvolutionAnswerAt, refinementPass, requestOwnerRefinement, showRefinementRoute,
   type EvolutionDebt, type RefinementDecisionInput, type RefinementDecisionResult,
@@ -122,7 +122,7 @@ import {
   type ReasoningEffort, type ShellApprovalMode, type ResolvedTurnProfile,
   type AlarmScheduler,
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront, type GepaRunSummary,
-  listScaffoldScores, type ScaffoldScore,
+  listReplayEvals, type ReplayEvalSummary,
   alignmentConvergence, type AlignmentConvergence,
   calibrationReport, sampleForLabeling, ingestOutcomeLabels, DEFAULT_LABEL_BUDGET,
   type CalibrationReport, type LabelingItem, type LabelIngestResult, type OutcomeLabel,
@@ -1888,6 +1888,8 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
         transaction: (body) => { this.ctx.storage.transactionSync(body); },
         // The turn review's model calls debit the reviewed turn's mission; unbudgeted turns never reach it.
         governor: this.budget,
+        // Replay-eval rollout runs the live scaffold with the real LLM and tool bridges.
+        replayTaskRunner: (task) => this.runScaffoldCaptureText(task),
         // Promotion-gate evidence runs on the cadence lane so rollouts don't block the chat queue.
         ...this.shadowTrialPorts,
       });
@@ -3900,10 +3902,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return listGepaRuns(this.boundSql, this.actorHandle(), limit);
   }
 
-  /** The quality curve: one point per promoted scaffold version, newest first. */
+  /** The persisted loss curve (replay_evals), newest first. */
   @callable()
-  async getReplayEvals(limit = 50): Promise<ScaffoldScore[]> {
-    return listScaffoldScores(this.boundSql, this.actorHandle(), limit);
+  async getReplayEvals(limit = 50): Promise<ReplayEvalSummary[]> {
+    return listReplayEvals(this.boundSql, this.actorHandle(), limit);
   }
 
   /** K_align: correction rate per 100 graded turns, per scaffold version, with 95% Wilson
@@ -4205,6 +4207,11 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return this.facts.recentTopK(limit).map((f) => ({
       key: f.key, value: f.value, confidence: f.confidence, source: f.source, lastObservedAt: f.lastObservedAt,
     }));
+  }
+
+  /** With candidateCode: the GEPA metric's rollout; without: runs the live scaffold. */
+  private runScaffoldCaptureText(task: string, candidateCode?: string): Promise<string> {
+    return runScaffoldCaptureText(this.scaffoldControl, task, candidateCode);
   }
 
   async getTurnRequests(turnId: string, actor?: string): Promise<TurnRequestIndex> {

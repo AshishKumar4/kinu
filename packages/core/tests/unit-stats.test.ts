@@ -1,7 +1,7 @@
 /** Wilson intervals; expected values are published figures, not recomputed. */
 import { describe, test, expect } from 'bun:test';
 import {
-  wilsonInterval, scoreInterval,
+  wilsonInterval, scoreInterval, lossInterval,
 } from '../src/utils/stats';
 
 describe('wilsonInterval — hand-checked against published values', () => {
@@ -55,8 +55,17 @@ describe('wilsonInterval — hand-checked against published values', () => {
   });
 });
 
-describe('scoreInterval', () => {
+describe('scoreInterval / lossInterval', () => {
   test('fractional judge scores sum into the same interval as whole successes', () => {
     expect(scoreInterval([1, 0.5, 0.5, 1])).toEqual(wilsonInterval(3, 4));
+  });
+
+  test('loss is the complement, bounds flipped', () => {
+    const score = wilsonInterval(3, 4);
+    const loss = lossInterval(score);
+    expect(loss.mean).toBeCloseTo(0.25, 10);
+    expect(loss.lo).toBeCloseTo(1 - score.hi, 10);
+    expect(loss.hi).toBeCloseTo(1 - score.lo, 10);
+    expect(loss.n).toBe(4);
   });
 });

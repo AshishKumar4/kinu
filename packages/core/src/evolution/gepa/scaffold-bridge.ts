@@ -9,7 +9,6 @@ import { modifyScaffold } from '../../scaffold/modify';
 import { scaffoldRefusal } from '../../scaffold/safety-patterns';
 import { formatScoreInterval, scoreInterval, type ScoreInterval } from '../../utils/stats';
 import { runGepa } from './engine';
-import { recordProposedScore } from '../scaffold-scores';
 import type {
   EvalInstance, GepaConfig, GepaMetric, GepaResult, ReflectionLM, GepaProgressHooks,
 } from './types';
@@ -89,13 +88,6 @@ export async function runScaffoldGepa<I = unknown, E = unknown>(
       skipReason: 'modify_gate_rejected',
       modifyError: { stage: modResult.stage ?? 0, error: modResult.error ?? 'unknown' },
     };
-  }
-
-  if (modResult.version !== undefined) {
-    recordProposedScore(opts.rt.storage.sql, opts.rt.actor, {
-      version: modResult.version,
-      results: [...winner.scores].map(([id, score]) => ({ id, score, feedback: winner.feedback.get(id) ?? '' })),
-    });
   }
 
   return {
