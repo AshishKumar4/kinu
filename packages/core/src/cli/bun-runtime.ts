@@ -1,4 +1,4 @@
-// One PATH-independent Bun resolution, inlined by both the installer and its launcher so they cannot disagree.
+// One PATH-independent Bun resolution, run by the launcher and the device daemon so they cannot disagree.
 // The CLI needs `bun:sqlite` and `Bun.stdin`, so an unresolvable or too-old Bun is a hard stop.
 
 /** `tests/unit-install-script.test.ts` asserts this equals the repo's `packageManager` pin. */
@@ -16,7 +16,7 @@ function bunVersionKey(version: string): number {
 /** Relative to `$KINU_HOME`. */
 const KINU_MANAGED_BUN_SUBPATH = 'runtime/bin/bun';
 
-/** Requires `$KINU_HOME`; leaves the resolved absolute path in `$KINU_BUN`. */
+/** Requires `$KINU_HOME`; `provide_bun` leaves the path in `$KINU_BUN`. */
 export function bunResolutionShell(): string {
   return `KINU_BUN_VERSION="${KINU_BUN_VERSION}"
 KINU_BUN_MIN_KEY=${bunVersionKey(KINU_BUN_VERSION)}
@@ -61,6 +61,21 @@ kinu_resolve_bun() {
     fi
   done
   return 1
+}
+
+# The one runtime. An existing compatible Bun is used as it is; otherwise the
+# approved Bun is installed once, under $KINU_HOME, where kinu_resolve_bun finds
+# it whatever PATH a later shell has. Runs under set -e and pipefail, so a
+# download that fails stops here with its own error; the caller defines die.
+provide_bun() {
+  if kinu_resolve_bun; then return 0; fi
+  if [ "\${KINU_INSTALL_BUN:-1}" = "0" ]; then
+    die "Bun $KINU_BUN_VERSION or newer is required. Install Bun, or rerun without KINU_INSTALL_BUN=0."
+  fi
+  echo "Installing Bun $KINU_BUN_VERSION..." >&2
+  mkdir -p "$KINU_HOME/runtime"
+  curl -fsSL https://bun.sh/install | BUN_INSTALL="$KINU_HOME/runtime" bash -s "bun-v$KINU_BUN_VERSION" >&2
+  kinu_resolve_bun || die "Bun $KINU_BUN_VERSION was installed to $KINU_MANAGED_BUN but did not run."
 }
 `;
 }

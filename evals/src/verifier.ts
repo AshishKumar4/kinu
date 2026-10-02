@@ -5,7 +5,7 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 import { INFRA_FAILURE_MARKER, TRANSIENT_PLATFORM_ERRORS } from '@kinu.run/test-utils';
 import { helperAddress, ROOT, type RosterHelper } from './helper-address';
 import { redact, redactJson } from './redact';
-import type { EvalCheck } from './task';
+import type { EvalCheck, EvalTurnResult } from './task';
 
 /** Thrown errors are cut here in the report; a stack trace is not evidence. */
 const EVIDENCE_LIMIT = 2_000;
@@ -144,12 +144,25 @@ export class EvalVerifier {
   /** What the agent said in the chat after this turn's prompt, oldest first. */
   readonly replies: readonly string[];
   readonly #session: VerifierSession;
+  readonly #previousTurns: readonly EvalTurnResult[];
   readonly #checks: EvalCheck[] = [];
   readonly #pending: Promise<void>[] = [];
 
-  constructor(session: VerifierSession, replies: readonly string[]) {
+  constructor(session: VerifierSession, replies: readonly string[], previousTurns: readonly EvalTurnResult[]) {
     this.#session = session;
     this.replies = replies;
+    this.#previousTurns = previousTurns;
+  }
+
+  /** Read observations from completed grades belonging to this trial. */
+  earlierCheck(id: string): EvalCheck | undefined {
+    for (let index = this.#previousTurns.length - 1; index >= 0; index -= 1) {
+      const found = this.#previousTurns[index]?.checks.find((check) => check.id === id);
+
+      if (found !== undefined) return found;
+    }
+
+    return undefined;
   }
 
   /**

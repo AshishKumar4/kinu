@@ -94,6 +94,10 @@
     "last_observed_at INTEGER NOT NULL",
     "PRIMARY KEY (actor_id, key)"
   ],
+  "agent_figures@packages/core/src/read-models/agent-figures.ts": [
+    "actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id)",
+    "figures TEXT NOT NULL"
+  ],
   "agent_log@packages/core/src/events/hub/schema.ts": [
     "actor_id TEXT NOT NULL",
     "id TEXT NOT NULL",
@@ -1316,6 +1320,13 @@
     "device_id TEXT NOT NULL REFERENCES user_devices(id) ON DELETE CASCADE",
     "retired_at INTEGER NOT NULL",
     "reuse_detected_at INTEGER"
+  ],
+  "user_device_update_refusals@packages/core/src/state/user-schema.ts": [
+    "device_id TEXT PRIMARY KEY REFERENCES user_devices(id) ON DELETE CASCADE",
+    "version TEXT NOT NULL",
+    "runtime TEXT NOT NULL",
+    "reason TEXT NOT NULL",
+    "refused_at INTEGER NOT NULL"
   ],
   "user_devices@packages/core/src/state/user-schema.ts": [
     "id TEXT PRIMARY KEY",

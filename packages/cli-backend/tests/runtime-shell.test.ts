@@ -9,7 +9,7 @@ import { constants } from 'node:os';
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import * as v from 'valibot';
-import { awaitExit, runToExit, scratchDir } from '@kinu.run/test-utils';
+import { spawnTest, awaitExit, runToExit, scratchDir } from '@kinu.run/test-utils'
 import { tolerate } from '@kinu.run/core/obs';
 import { createHostShell } from '../src/runtime';
 import { shellQuote } from '@kinu.run/core';
@@ -69,7 +69,7 @@ describe('createHostShell', () => {
       process.stdout.write(stdout);
     `;
 
-    const proc = Bun.spawn(['bun', '-e', script], { stdout: 'pipe', stderr: 'pipe' });
+    const proc = spawnTest(['bun', '-e', script], { stdout: 'pipe', stderr: 'pipe' });
     const exitCode = await proc.exited;
 
     await endBackgrounded(await new Response(proc.stdout).text());
@@ -146,7 +146,7 @@ describe('createHostShell', () => {
       process.stdout.write(JSON.stringify({ grew: peak() - before, exitCode: result.exitCode, stdout: result.stdout }));
     `;
 
-    const proc = Bun.spawn(['bun', '-e', script], { stdout: 'pipe', stderr: 'inherit' });
+    const proc = spawnTest(['bun', '-e', script], { stdout: 'pipe', stderr: 'inherit' });
     const report = v.parse(FloodReportSchema, JSON.parse(await new Response(proc.stdout).text()));
     await proc.exited;
     const saved = /the full stdout is at (\S+)\]/.exec(report.stdout)?.[1] ?? '';

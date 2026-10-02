@@ -23,7 +23,7 @@ describe('the shared scratch owner', () => {
       writeFileSync(join(root, 'agent.db-wal'), 'wal');
       const removed = releaseScratch();
       console.log(JSON.stringify({ root, nested, removed, exists: [existsSync(root), existsSync(nested)] }));
-    `], { cwd: repoRoot, stdout: 'pipe', stderr: 'pipe' });
+    `], { env: process.env, cwd: repoRoot, stdout: 'pipe', stderr: 'pipe' });
 
     expect(child.exitCode, child.stderr.toString()).toBe(0);
 
@@ -57,10 +57,8 @@ describe('the shared scratch owner', () => {
       test('the seeded fixture failure', () => { throw new Error('expected scratch fixture failure'); });
     `);
 
-    const child = Bun.spawnSync([process.execPath, 'test', fixture], {
-      cwd: repoRoot, stdout: 'pipe', stderr: 'pipe',
-      env: { ...process.env, TMPDIR: childTmp },
-    });
+    const child = Bun.spawnSync([process.execPath, 'test', fixture], { cwd: repoRoot, stdout: 'pipe', stderr: 'pipe',
+    env: { ...process.env, TMPDIR: childTmp }, });
 
     expect(child.exitCode).not.toBe(0);
     expect(child.stderr.toString()).toContain('expected scratch fixture failure');
@@ -79,7 +77,7 @@ describe('the shared scratch owner', () => {
       import { mock } from 'bun:test';
       import * as realFs from 'node:fs';
       import { join } from 'node:path';
-
+    
       // The namespace is mutated by mock.module, so the real removal is bound
       // BEFORE registration — realFs.rmSync read later would be the mock.
       const realRmSync = realFs.rmSync;
@@ -94,24 +92,24 @@ describe('the shared scratch owner', () => {
         return realRmSync(path, options);
       };
       mock.module('node:fs', () => ({ ...realFs, rmSync, default: { ...realFs, rmSync } }));
-
+    
       const scratchHome = await import(${JSON.stringify(preload)});
       const scratch = await import(${JSON.stringify(helper)});
-
+    
       const blocked = scratch.scratchDir(BLOCKED, ${JSON.stringify(outside)});
       const sibling = scratch.scratchDir('sibling');
       realFs.writeFileSync(join(process.env.TMPDIR, 'child-temp-file'), 'temporary');
       let first;
       try { scratchHome.release(); } catch (error) { first = error; }
-
+    
       // The post-release state is read BEFORE the disarm — the second pass
       // below is what finally removes the blocked root.
       const existsAfter = [realFs.existsSync(blocked), realFs.existsSync(sibling),
         realFs.existsSync(process.env.KINU_HOME), realFs.existsSync(process.env.TMPDIR)];
-
+    
       armed = false;
       const secondRemoved = scratch.releaseScratch();
-
+    
       console.log(JSON.stringify({
         isAggregate: first instanceof AggregateError,
         message: first?.message ?? null,
@@ -121,7 +119,7 @@ describe('the shared scratch owner', () => {
         secondRemoved,
         blockedAfter: realFs.existsSync(blocked),
       }));
-    `], { cwd: repoRoot, stdout: 'pipe', stderr: 'pipe' });
+    `], { env: process.env, cwd: repoRoot, stdout: 'pipe', stderr: 'pipe' });
 
     expect(child.exitCode, child.stderr.toString()).toBe(0);
 

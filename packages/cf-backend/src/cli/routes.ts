@@ -939,20 +939,6 @@ die() {
   exit 1
 }
 
-# The one runtime this CLI has. An existing compatible Bun is used as it is;
-# otherwise the approved Bun is installed once, under $KINU_HOME, where
-# kinu_resolve_bun finds it whatever PATH a later shell has.
-provide_bun() {
-  if kinu_resolve_bun; then return 0; fi
-  if [ "\${KINU_INSTALL_BUN:-1}" = "0" ]; then
-    die "Bun $KINU_BUN_VERSION or newer is required. Install Bun, or rerun without KINU_INSTALL_BUN=0."
-  fi
-  echo "Installing Bun $KINU_BUN_VERSION..." >&2
-  mkdir -p "$KINU_HOME/runtime"
-  curl -fsSL https://bun.sh/install | BUN_INSTALL="$KINU_HOME/runtime" bash -s "bun-v$KINU_BUN_VERSION" >&2
-  kinu_resolve_bun || die "Bun $KINU_BUN_VERSION was installed to $KINU_MANAGED_BUN but did not run."
-}
-
 # The one lock every writer of the CLI tree takes (this launcher, 'kinu
 # update' and its detached child), as a directory: mkdir creates it atomically
 # or refuses. The holder's pid is inside, so a lock a dead process left is

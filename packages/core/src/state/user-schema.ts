@@ -271,6 +271,17 @@ export function initUserTables(sql: SqlExec): void {
     )
   `);
 
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS user_device_update_refusals (
+      device_id  TEXT PRIMARY KEY REFERENCES user_devices(id) ON DELETE CASCADE,
+      -- The build the daemon refused, the runtime it ran on then, and why.
+      version    TEXT NOT NULL,
+      runtime    TEXT NOT NULL,
+      reason     TEXT NOT NULL,
+      refused_at INTEGER NOT NULL
+    )
+  `);
+
   // Superseded device secrets, kept for the token lifetime: one presented again revokes the device.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_device_retired_tokens (

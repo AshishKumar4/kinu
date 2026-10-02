@@ -1606,7 +1606,7 @@ export {
   type PanelAgent, type AgentCategory, type AgentActivity, type AgentOpening,
 } from './read-models/workspace-agents';
 
-export { readAgentFigures, NO_FIGURES, type AgentFigures } from './read-models/agent-figures';
+export { readAgentFigures, recordAgentFigures, reportedAgentFigures, NO_FIGURES, type AgentFigures } from './read-models/agent-figures';
 
 export type { WorkspaceWork, OwnedPlan, OwnedTask, WorkspaceWorkOwner } from './read-models/workspace-work';
 
@@ -2471,6 +2471,7 @@ export {
   type PcIngressEnv,
   handlePcConnect,
   handlePcConnectTicket,
+  handlePcUpdateRefused,
 } from './http/pc-ingress';
 
 export {

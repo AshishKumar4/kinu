@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-02",
-  "files": 2949,
-  "functions": 74057,
+  "files": 2955,
+  "functions": 74294,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -386,15 +386,7 @@
       "complexity": 28
     },
     {
-      "key": "scripts/ladder.ts#ciCommand",
-      "complexity": 28
-    },
-    {
       "key": "scripts/syntax.ts#importUses>visit",
-      "complexity": 28
-    },
-    {
-      "key": "scripts/workerd-requirements.ts#envBindings>importUses",
       "complexity": 28
     }
   ]

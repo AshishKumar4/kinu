@@ -33,6 +33,7 @@ import {
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
 import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, headDeltas, uiChunks, type AgentFacetPlacement } from "./agent-facets";
+import { agentCallsThrough, AgentIsolateSlots } from "./dynamic-worker-slots";
 import { providerBindingsOf } from "./providers/agent-registry";
 import { AgentTurns } from "./agent-turns";
 import type { AgentTurnActivity, AgentSnapshot, StoredRow } from '@kinu.run/core';
@@ -133,7 +134,7 @@ import {
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
   readWorkspaceWork, hasWorkspaceWork, type WorkspaceWork,
-  readWorkspaceAgents, readAgentFigures, type PanelAgent,
+  readWorkspaceAgents, readAgentFigures, recordAgentFigures, reportedAgentFigures, type PanelAgent,
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult, type ProgrammaticTurn, workModeForTurnMetadata,
   ROOT_DELEGATION_BUDGET, type DelegationBudget,
@@ -653,7 +654,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     };
   }
 
+  private readonly agentIsolateSlots = new AgentIsolateSlots(this.ctx);
+
   protected async agentCalls(actorId: string): Promise<AgentFacetCalls> {
+    const key = `kinu-agent:${this.agentOf(actorId).storageKey}`;
+
+    return agentCallsThrough((call) => this.agentIsolateSlots.held(key, () => this.agentIsolate(actorId), call));
+  }
+
+  protected async agentIsolate(actorId: string): Promise<AgentFacetCalls> {
     return await this.agentFacetOf(actorId);
   }
 
@@ -745,10 +754,15 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       answerMetadata: (turnId, narration) => this.takeTurnSlates(actorId, turnId, async () => narration),
       finishTurn: (turnId, end) => {
         this.agentActivity(actorId, end.activity);
+        recordAgentFigures(this.boundSql, actorId, end.figures);
 
         return this.agentTurns.finish(actorId, turnId, end);
       },
-      failTurn: (turnId, failure) => this.agentTurns.fail(actorId, turnId, failure),
+      failTurn: (turnId, failure, figures) => {
+        recordAgentFigures(this.boundSql, actorId, figures);
+
+        return this.agentTurns.fail(actorId, turnId, failure);
+      },
       getAuth: async (key, opts) => {
         const { stub, caller } = await credentials();
 
@@ -2870,14 +2884,10 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
     return readWorkspaceAgents({
       sql: this.boundSql, exec: this.ctx.storage.sql, root: this.actorHandle(), rootLabel: 'Main', queued: this.chatTurnOwed,
       actors: this.workspaceActors().list({ retired: true }),
-      figures: async (actorIds) => {
+      figures: (actorIds) => {
         const main = this.actorHandle().actorId;
-        const local = readAgentFigures(this.boundSql, [main]);
 
-        const remote = await Promise.all(actorIds.filter((actorId) => actorId !== main).map(async (actorId) =>
-          [actorId, await this.agentStores(actorId).figures()] as const));
-
-        return new Map([...local, ...remote]);
+        return new Map([...readAgentFigures(this.boundSql, [main]), ...reportedAgentFigures(this.boundSql, actorIds.filter((actorId) => actorId !== main))]);
       },
     });
   }

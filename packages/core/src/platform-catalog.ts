@@ -807,6 +807,37 @@ export const PLATFORM_CATALOG = {
       + 'through the Worker Loader.',
   },
 
+  'worker_loader.do_dynamic_worker_concurrency': {
+    subject: 'Calls one Durable Object may have awaiting an answer from distinct Dynamic Workers at once',
+    limit: { value: 10, unit: 'count' },
+    origin: 'platform',
+    bounds: 'concurrency',
+    evidence: 'proven-by-probe',
+    provenance:
+      '~/kinu-logs/nimbus-integration/dwlimit-probe-2026-10-02/results.json#fanout_entry_11, #two_requests_6_and_6 '
+      + 'and #background_callbacks (probe index.ts and run.sh beside it; deployed on the Kinu account 2026-10-02 ~22:05Z, '
+      + 'then deleted); the limit is published at https://developers.cloudflare.com/changelog/post/2026-08-28-durable-objects-dynamic-workers-limit/',
+    date: '2026-10-02',
+    trigger: 'a call to an eleventh distinct Dynamic Worker (agent isolate, Nimbus process facet) while ten have calls awaiting an answer',
+    onBreach: 'the call is refused before it runs; Kinu queues an agent-isolate call until one of its own ends (cf-backend dynamic-worker-slots.ts)',
+    observable: [{
+      context: 'thrown to the caller of the Dynamic Worker',
+      message: 'Dynamic worker concurrency limit exceeded: each request may have up to 10 concurrent dynamic worker invocations. '
+        + 'Wait for one to finish before starting another.',
+    }],
+    firstPartySignal: true,
+    measurements: [
+      { scenario: 'one request: calls in flight to distinct workers that succeed, entrypoints and facets alike', value: 10, unit: 'count' },
+      { scenario: 'two concurrent requests to one object, 6 held calls each: calls the second got before refusals', value: 4, unit: 'count' },
+      { scenario: 'isolates that answered and kept working (with or without callbacks): slots they hold', value: 0, unit: 'count' },
+    ],
+    notes:
+      'Per object, shared by all its requests, though the message says "each request"; a call to a worker already in '
+      + 'flight counts once; only calls awaiting an answer hold a slot. Staging eval 85a438698 hit it in site-preview '
+      + '(three swarms) and true-myth-combinators (the trial ledger read). Nimbus keeps the per-object ledger '
+      + '(@nimbus-sh/fabric budgets.ts) that Kinu holds its agent calls on.',
+  },
+
   'worker_loader.child_cached_by_name': {
     subject:
       'env.LOADER.get(name, cb) opens an unlimited number of FRESH request-time compilation '
