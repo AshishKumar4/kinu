@@ -7,6 +7,8 @@ it('runs an authored class: the prototype is the surface and the reserved storag
   await subject.start();
 
   try {
+    // In the object's own isolate esbuild-wasm holds 28-44 MiB it never releases (ASK-esbuild-host.md).
+    expect(await subject.esbuildInThisIsolate()).toBe(false);
     // `__storage` is the reserved handle, never in the guest's env map.
     expect(await subject.call('envKeys', [])).toEqual({ ok: true, value: '["PEER"]' });
     expect(await subject.call('greet', ['kinu'])).toEqual({ ok: true, value: 'hello kinu #1 [probe]' });

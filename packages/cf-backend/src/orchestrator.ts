@@ -8,6 +8,7 @@ import { storeRevision, type WorkspaceOverviewInputs } from '@kinu.run/core';
 import { Agent, callable, type AgentContext, type Connection, type ConnectionContext } from "agents";
 import { ORCHESTRATOR_RPC_SURFACE, ORCHESTRATOR_STARTED_RPC, sealRpcSurface } from "./rpc-surface";
 import { ActivationGate, reportSocketCallFailures, startBeforeRpc } from "./activation-gate";
+import { supervisorEsbuildService } from "@nimbus-sh/worker/facet-host";
 import { KINU_TIMER_JOB } from "./wake-jobs";
 import {
   runExperienceAction, type ExperienceActionDeps, type ExperienceActionInput,
@@ -4549,6 +4550,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       ctx: this.ctx, workspace: this.name,
       session: () => this.hostedWorkspace().bundle.session(),
       facetManager: () => this.hostedWorkspace().facetManager(),
+      bundler: (vfs) => supervisorEsbuildService(this.ctx, this.env, vfs),
       dispatch: (caller, route) => this.slateBindingDispatch(caller.path, route, caller.workMode),
       apps: {
         ensure: (input) => this.hostedWorkspace().apps.ensure(input),

@@ -6,6 +6,8 @@ import { CRED_KERNEL, CRED_SESSION_USER, type VfsCred } from '@nimbus-sh/core/ru
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { FACET_IMAGE_DIR } from '@nimbus-sh/fabric/process-fabric.js';
+import type { EsbuildService } from '@nimbus-sh/core/runtime/esbuild-service.js';
+import { supervisorEsbuildService } from '@nimbus-sh/worker/facet-host';
 import { probeDurableApps, probeFacetManager } from './facet-manager';
 import { newWebSocketRpcSession } from 'capnweb';
 import {
@@ -77,10 +79,25 @@ export class SlateProcessProbeDO extends DurableObject<Cloudflare.Env> {
     ctx: this.ctx, env: this.env, processes: this.processes, portRegistry: this.ports, vfs: this.vfs, filesystem: this.filesystem,
   });
 
+  private readonly bundlers: EsbuildService[] = [];
+
   private readonly resident = new ResidentSlateProcesses({
     session: async () => ({ vfs: this.vfs, processes: this.processes, filesystem: this.filesystem }),
     facetManager: async () => this.facets,
+    // What OrchestratorAgent hands its slates; kept to ask where esbuild ran.
+    bundler: (vfs) => {
+      const bundler = supervisorEsbuildService(this.ctx, this.env, vfs);
+
+      this.bundlers.push(bundler);
+
+      return bundler;
+    },
   });
+
+  /** Whether a slate bundler instantiated esbuild-wasm in this object's own isolate. */
+  async esbuildInThisIsolate(): Promise<boolean> {
+    return this.bundlers.some((bundler) => bundler.isInitialized || bundler.transformsInIsolate);
+  }
 
   private process: ResidentSlateProcess | undefined;
 
