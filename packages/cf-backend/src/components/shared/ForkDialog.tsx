@@ -1,9 +1,10 @@
 /** Admission never runs the source; the forker binds each requirement on the unmapped-bindings panel. */
+import { Effect } from 'effect';
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { GitBranchIcon } from "@phosphor-icons/react";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { settle, showing } from "@kinu.run/core/obs";
 import { workspaceDisplayTitle } from "@kinu.run/core";
 import { Modal } from "@/components/ui/Modal";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -47,24 +48,24 @@ export function ForkDialog({ blueprint, live, title, onClose, workspaces }: {
     return () => { mounted = false; };
   }, [workspaces]);
 
-  const submit = useCallback(async () => {
+  const submit = useCallback(() => settle(Effect.gen(function* () {
     if (busy) return;
     setBusy(true);
     setErr(null);
 
-    try {
-      const workspace = target === NEW_WORKSPACE ? (await createWorkspaceFromMission(mission)).name : target;
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const workspace = target === NEW_WORKSPACE ? (yield* Effect.promise(async () => createWorkspaceFromMission(mission))).name : target;
 
       const fork = blueprint !== undefined
-        ? await forkBlueprint({ blueprint, workspace })
-        : await forkLiveShare({ live: live?.share ?? '', ownerWorkspace: live?.workspace ?? '', workspace });
+        ? (yield* Effect.promise(async () => forkBlueprint({ blueprint, workspace })))
+        : (yield* Effect.promise(async () => forkLiveShare({ live: live?.share ?? '', ownerWorkspace: live?.workspace ?? '', workspace })));
 
-      await navigate(forkedSlatePath(fork.workspace, fork.slate));
-    } catch (cause) {
-      setErr(renderThrownChain({ cause }));
+      yield* Effect.promise(async () => navigate(forkedSlatePath(fork.workspace, fork.slate)));
+    }), showing((chain) => {
+      setErr(chain);
       setBusy(false);
-    }
-  }, [busy, target, mission, blueprint, live, navigate]);
+    }));
+  })), [busy, target, mission, blueprint, live, navigate]);
 
   return (
     <Modal

@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { useState } from "react";
 import { startTransition } from "react";
 import {
@@ -9,7 +10,7 @@ import {
 } from "@/lib/user-api";
 import { DEVICE_UPDATE_COPY } from "@/hooks/use-device-roster";
 import { describeGpuNodes, effectiveDeviceMode, type DeviceMode } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { renderThrownChain, settle, showing } from "@kinu.run/core/obs";
 import { composing } from "@/components/ui/form";
 
 /** The hub enforces the same `effectiveDeviceMode`, so this line matches what it does. */
@@ -76,16 +77,14 @@ export function DeviceRow({
           <button type="button" disabled={acknowledging}
             onClick={() => {
               setAcknowledging(true);
-              startTransition(async () => {
-                try {
-                  await onAcknowledge();
-                } catch (cause) {
-                  // A rejection escaping `onError` still leaves the row visibly unacknowledged.
-                  onError(`Could not acknowledge the device warning: ${renderThrownChain({ cause })}`);
-                } finally {
-                  setAcknowledging(false);
-                }
-              });
+              startTransition(() => settle(Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+                yield* Effect.promise(async () => onAcknowledge());
+              }), showing((chain) => {
+                // A rejection escaping `onError` still leaves the row visibly unacknowledged.
+                onError(`Could not acknowledge the device warning: ${chain}`);
+              })), Effect.sync(() => {
+                setAcknowledging(false);
+              }))));
             }}
             className="p-btn-quiet inline-flex h-6.5 shrink-0 items-center px-2 text-xs">
             {acknowledging ? "Acknowledging…" : "Acknowledge"}

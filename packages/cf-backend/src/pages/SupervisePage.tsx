@@ -1,3 +1,4 @@
+import { Effect, Cause } from 'effect';
 import { useState, useCallback, type ReactNode } from "react";
 import { useParams } from "react-router-dom";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
@@ -23,7 +24,7 @@ import type { Rpc } from "@kinu.run/core";
 import { fmtTokens } from "@kinu.run/core";
 import { pageSchema, UsageSchema, usageTotal, type SeekCursor } from "@kinu.run/core";
 import * as v from "valibot";
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { renderThrownChain, settle, showing } from '@kinu.run/core/obs';
 
 const RunSummarySchema = v.object({
   runId: v.string(), startedAt: v.number(), causedBy: v.nullable(v.string()),
@@ -216,16 +217,17 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
   const { resource: jobsResource, reload: reloadJobs } = useAsyncResource(loadJobs, changelogRevalidate);
   const jobs = lastValue(jobsResource);
 
-  const revoke = useCallback(async (triggerId: string) => {
+  const revoke = useCallback((triggerId: string) => settle(Effect.gen(function* () {
     if (!agentId) return;
 
     if (!confirm("Revoke this automation? It stops firing, and a webhook's URL stops working.")) return;
     setErr(null);
 
-    try { await cancelTrigger(agentId, triggerId); } catch (e) { setErr(renderThrownChain({ cause: e })); }
+    yield* Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => cancelTrigger(agentId, triggerId)); }), (failed) => Effect.sync(() => {
+      const e = Cause.squash(failed); setErr(renderThrownChain({ cause: e })); }));
 
     reload();
-  }, [agentId, reload]);
+  })), [agentId, reload]);
 
   const active = (triggers ?? []).filter((t) => t.state === "active").length;
 
@@ -427,7 +429,7 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const submit = useCallback(async () => {
+  const submit = useCallback(() => settle(Effect.gen(function* () {
     if (!label.trim()) {
       setErr("Give the webhook a label.");
 
@@ -436,19 +438,17 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
 
     setSubmitting(true); setErr(null);
 
-    try {
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
       // Blank means the server mints and stores the secret.
-      const r = await createDurableWebhook(agentName, {
+      const r = yield* Effect.promise(async () => createDurableWebhook(agentName, {
         label: label.trim(),
         auth_mode: authMode,
         secret: authMode === "mtls" ? undefined : (secret.trim() || undefined),
         accepted_content_type: contentType.trim() || "application/json",
-      });
+      }));
 
       onCreated(r);
-    } catch (e) {
-      const msg = renderThrownChain({ cause: e });
-
+    }), showing((msg) => {
       if (msg.includes("step-up")) {
         if (confirm("Creating a webhook needs a sign-in from the last five minutes. Sign in again now?")) {
           const login = new URL("/login", window.location.origin);
@@ -459,10 +459,10 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
       } else {
         setErr(msg);
       }
-    } finally {
+    })), Effect.sync(() => {
       setSubmitting(false);
-    }
-  }, [agentName, label, authMode, secret, contentType, onCreated]);
+    }));
+  })), [agentName, label, authMode, secret, contentType, onCreated]);
 
   return (
     <Modal

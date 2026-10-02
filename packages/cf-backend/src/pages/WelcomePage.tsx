@@ -1,4 +1,5 @@
 /** First-run setup wizard; an unfinished account lands here from any URL. */
+import { Effect } from 'effect';
 import { useState, useCallback, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
@@ -9,7 +10,7 @@ import {
 import {
   APP_ROUTES, ONBOARDING_STEPS,
 } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { renderThrownChain, settle, showing } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { KinuLogo } from "@/components/ui/KinuLogo";
 import { DisplayNameField } from "@/components/account/DisplayNameField";
@@ -102,23 +103,23 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
   const named = displayName.trim() || (profile?.email ?? '');
   const letter = (named === '' ? '?' : named)[0].toUpperCase();
 
-  const finish = useCallback(async () => {
+  const finish = useCallback(() => settle(Effect.gen(function* () {
     setBusy(true);
     setError(null);
 
-    try {
-      const { onboardedAt } = await completeOnboarding();
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const { onboardedAt } = yield* Effect.promise(async () => completeOnboarding());
       const current = lastValue(account.profile);
 
       // Publish the stamp before navigating so the gate doesn't bounce back to /welcome.
       if (current !== null) account.set({ ...current, onboardedAt });
       account.reload();
-      await navigate(APP_ROUTES.home, { replace: true });
-    } catch (cause) {
-      setError(renderThrownChain({ cause }));
+      yield* Effect.promise(async () => navigate(APP_ROUTES.home, { replace: true }));
+    }), showing((chain) => {
+      setError(chain);
       setBusy(false);
-    }
-  }, [account, navigate]);
+    }));
+  })), [account, navigate]);
 
   const next = useCallback(async () => {
     setError(null);

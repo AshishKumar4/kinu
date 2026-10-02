@@ -1,4 +1,5 @@
 /** MCP server panel. OAuth adds open `authUrl` in a tab; the callback returns here with `?mcp_auth=ok&server_id=...`. */
+import { Effect, Cause } from 'effect';
 import { startTransition, useEffect, useState, useCallback, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
@@ -14,7 +15,7 @@ import { McpPresetCards } from "@/components/plugins/McpPresetCards";
 import { Choice, inputCls } from "@/components/ui/form";
 import { SECRET_REGION } from "@/components/ui/SecretValue";
 import * as v from "valibot";
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { renderThrownChain, settle, showing } from '@kinu.run/core/obs';
 
 const POLL_MS = 5000;
 
@@ -47,20 +48,18 @@ export function McpServersPanel() {
   // Presets ride the same poll so a rotated app credential re-cards without a reload.
   const refresh = useCallback((): void => {
     setErr(null);
-    startTransition(async () => {
-      try {
-        const rows = await listMcpServers();
+    startTransition(() => settle(Effect.gen(function* () {
+      yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+        const rows = yield* Effect.promise(async () => listMcpServers());
         setServers(rows);
-      } catch (cause) {
-        setErr(renderThrownChain({ cause }));
-      } finally {
+      }), showing(setErr)), Effect.sync(() => {
         setLoading(false);
-      }
+      }));
 
       // A presets failure keeps the cards' last answer and never takes the server list down.
-      try { setPresets(await listMcpPresets()); }
-      catch (cause) { console.warn('mcp preset availability read failed:', renderThrownChain({ cause })); }
-    });
+      return yield* Effect.catchCause(Effect.gen(function* () { setPresets(yield* Effect.promise(async () => listMcpPresets())); }), (failed) => Effect.sync(() => {
+        const cause = Cause.squash(failed); console.warn('mcp preset availability read failed:', renderThrownChain({ cause })); }));
+    })));
   }, []);
 
   useEffect(() => {
@@ -86,11 +85,12 @@ export function McpServersPanel() {
     return () => clearTimeout(t);
   }, [authResult, refresh, searchParams, setSearchParams]);
 
-  const remove = useCallback(async (id: string, name: string) => {
+  const remove = useCallback((id: string, name: string) => settle(Effect.gen(function* () {
     if (!confirm(`Remove "${name}"? All workspaces will lose access to its tools.`)) return;
 
-    try { await removeMcpServer(id); refresh(); } catch (e) { alert(renderThrownChain({ cause: e })); }
-  }, [refresh]);
+    return yield* Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => removeMcpServer(id)); refresh(); }), (failed) => Effect.sync(() => {
+      const e = Cause.squash(failed); alert(renderThrownChain({ cause: e })); }));
+  })), [refresh]);
 
   return (
     <div className="space-y-4">
@@ -196,35 +196,39 @@ export function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onA
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const save = useCallback(async () => {
+  const save = useCallback(() => settle(Effect.gen(function* () {
     if (!name.trim() || !serverUrl.trim()) return;
     setErr(null); setSaving(true);
 
-    try {
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
       let headers: Record<string, string> | undefined;
 
       if (headersText.trim()) {
-        try {
+        yield* Effect.catchCause(Effect.sync(() => {
           headers = v.parse(v.record(v.string(), v.string()), JSON.parse(headersText));
-        } catch (e) { throw new Error(`Headers are not valid JSON: ${renderThrownChain({ cause: e })}`, { cause: e }); }
+        }), (failed) => {
+          const e = Cause.squash(failed);
+
+          return Effect.die(new Error(`Headers are not valid JSON: ${renderThrownChain({ cause: e })}`, { cause: e }));
+        });
       }
 
       const tools = allowedTools.trim()
         ? allowedTools.split(',').map((s) => s.trim()).filter(Boolean)
         : undefined;
 
-      const result = await addMcpServer({
+      const result = yield* Effect.promise(async () => addMcpServer({
         name: name.trim(), serverUrl: serverUrl.trim(), transport, headers, allowedTools: tools,
-      });
+      }));
 
       if (result.authUrl) {
         window.open(result.authUrl, '_blank', 'noopener,noreferrer');
       }
 
       onAdded();
-    } catch (e) { setErr(renderThrownChain({ cause: e })); }
-    finally { setSaving(false); }
-  }, [name, serverUrl, transport, headersText, allowedTools, onAdded]);
+    }), (failed) => Effect.sync(() => {
+      const e = Cause.squash(failed); setErr(renderThrownChain({ cause: e })); })), Effect.sync(() => { setSaving(false); }));
+  })), [name, serverUrl, transport, headersText, allowedTools, onAdded]);
 
   return (
     <section className="p-card p-5 space-y-3">

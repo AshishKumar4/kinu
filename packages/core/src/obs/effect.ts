@@ -66,6 +66,10 @@ export function refusing(doing: string, otherwise: ErrorCode): (failed: Cause.Ca
   return (failed) => Effect.sync(() => refusalOf(toKinuError({ doing, cause: Cause.squash(failed), otherwise })));
 }
 
+export function showing(show: (chain: string) => void): (failed: Cause.Cause<unknown>) => Effect.Effect<void> {
+  return (failed) => Effect.sync(() => { show(renderThrownChain({ cause: Cause.squash(failed) })); });
+}
+
 /** `effect` with the named failure passed as `undefined`. */
 export function tolerated<A, E>(effect: Effect.Effect<A, E>, expected: ExpectedFailure): Effect.Effect<A | undefined, E> {
   return Effect.catchCause(effect, (cause) => (classify({ cause: Cause.squash(cause) }) === expected ? Effect.undefined : Effect.failCause(cause)));

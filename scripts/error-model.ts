@@ -55,6 +55,8 @@ function byFile(entries: readonly (readonly [string, Declaration])[]): ReadonlyM
   return files;
 }
 
+const OUTSIDE_PROVIDER = 'a hook read outside its provider: a render-time programming error, thrown as React\'s own hooks throw so the nearest error boundary catches it';
+
 /** Files whose mechanisms are the target model's boundary, not a legacy site. */
 export const DECLARED = byFile([
   ...Object.values(FAILURE_SURFACES).map(surface => [surface.adapter, {
@@ -75,6 +77,21 @@ export const DECLARED = byFile([
     within: ['compose'],
     reason: 'the hosted runtime\'s start gate, observed as state: its forwarders stay promise chains (settle\'s hops would move '
       + 'readiness), and a failed composition is forgotten so the next operation composes again',
+  }],
+  ['packages/cf-backend/src/hooks/use-account.tsx', {
+    mechanisms: ['throw'],
+    within: ['useAccount'],
+    reason: OUTSIDE_PROVIDER,
+  }],
+  ['packages/cf-backend/src/hooks/use-workspace-roster.tsx', {
+    mechanisms: ['throw'],
+    within: ['useWorkspaceRoster'],
+    reason: OUTSIDE_PROVIDER,
+  }],
+  ['packages/cli/src/tui/tui-shell.tsx', {
+    mechanisms: ['throw'],
+    within: ['useTuiProduct'],
+    reason: OUTSIDE_PROVIDER,
   }],
   ['packages/test-utils/src/mossaic.ts', {
     mechanisms: ['throw'],

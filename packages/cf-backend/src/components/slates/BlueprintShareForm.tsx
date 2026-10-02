@@ -1,4 +1,5 @@
 /** The blueprint half of the share dialog; every binding ships unmapped. The live half is `LiveShareForm`. */
+import { Effect } from 'effect';
 import { useCallback, useEffect, useState } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import * as v from "valibot";
@@ -6,7 +7,7 @@ import {
   BlueprintInspectionSchema, SlateShareRecordSchema, blueprintPagePath,
   type BlueprintInspection, type Rpc, type SlateAnswer, type SlateShareRecord,
 } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { settle, settleSync, showing } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { inputCls } from "@/components/ui/form";
@@ -18,9 +19,11 @@ import { showRejection } from "@/hooks/use-async-resource";
 const HistorySchema = v.object({ versions: v.array(v.object({ id: v.string() })), next: v.nullable(v.string()) });
 
 export function answered<Schema extends v.GenericSchema>(result: SlateAnswer<unknown>, schema: Schema): v.InferOutput<Schema> {
-  if (!result.ok) throw new Error(`${result.reason}: ${result.error}`);
+  return settleSync(Effect.gen(function* () {
+    if (!result.ok) return yield* Effect.die(new Error(`${result.reason}: ${result.error}`));
 
-  return v.parse(schema, result.value);
+    return v.parse(schema, result.value);
+  }));
 }
 
 export interface BlueprintFixture {
@@ -110,35 +113,31 @@ export function BlueprintShareForm({ workspace, slate, rpc, onClose, onBusy, onL
     });
   };
 
-  const publish = useCallback(async () => {
+  const publish = useCallback(() => settle(Effect.gen(function* () {
     if (busy || version === null) return;
     setBusy(true);
     setErr(null);
 
-    try {
-      const made = await publishBlueprint({ workspace, slate, version, include: include === null ? undefined : [...include], emails: emailsOf(emails) });
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const made = yield* Effect.promise(async () => publishBlueprint({ workspace, slate, version, include: include === null ? undefined : [...include], emails: emailsOf(emails) }));
       setPublished(made);
 
       if (made.listing === 'pending') onListingPending?.();
-    } catch (cause) {
-      setErr(renderThrownChain({ cause }));
-    } finally {
+    }), showing(setErr)), Effect.sync(() => {
       setBusy(false);
-    }
-  }, [busy, version, emails, workspace, slate, include, setBusy, onListingPending]);
+    }));
+  })), [busy, version, emails, workspace, slate, include, setBusy, onListingPending]);
 
-  const unshare = useCallback(async (share: string) => {
+  const unshare = useCallback((share: string) => settle(Effect.gen(function* () {
     setErr(null);
 
-    try {
-      const revoked = await revokeShare({ workspace, share });
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const revoked = yield* Effect.promise(async () => revokeShare({ workspace, share }));
       setShares((previous) => previous.filter((row) => row.id !== share));
 
       if (revoked.listing === 'pending') onListingPending?.();
-    } catch (cause) {
-      setErr(renderThrownChain({ cause }));
-    }
-  }, [workspace, onListingPending]);
+    }), showing(setErr));
+  })), [workspace, onListingPending]);
 
   if (published !== null) {
     const link = `${location.origin}${blueprintPagePath(published.id)}`;

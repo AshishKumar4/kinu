@@ -1,3 +1,4 @@
+import { Effect, Cause } from 'effect';
 import { useState, useCallback, type ReactNode } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -6,7 +7,7 @@ import type { Rpc } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import { DiffLines } from "./shared";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { renderThrownChain, settle, showing } from "@kinu.run/core/obs";
 
 interface ScaffoldVersion { version: number; written_at: number; rationale: string; status: string }
 
@@ -104,21 +105,22 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   const { resource: lineage, reload } = useAsyncResource(loadVersions);
   const versions = lastValue(lineage) ?? [];
 
-  const loadDetail = useCallback(async (version: number) => {
+  const loadDetail = useCallback((version: number) => settle(Effect.gen(function* () {
     setDetail({ status: "loading" });
 
     // An absent verdict is an empty result, not a failure.
-    try {
-      const [diff, verdict] = await Promise.all([
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const [diff, verdict] = yield* Effect.promise(async () => Promise.all([
         rpc<ScaffoldDiff>("getScaffoldDiff", [version]),
         rpc<ShadowVerdict>("getShadowVerdict", [version]),
-      ]);
+      ]));
 
       setDetail(loadSucceeded({ diff, verdict }));
-    } catch (cause) {
+    }), (failed) => Effect.sync(() => {
+      const cause = Cause.squash(failed);
       setDetail((prev) => loadFailed(prev, { cause }));
-    }
-  }, [rpc]);
+    }));
+  })), [rpc]);
 
   const select = useCallback((version: number) => {
     setSelected(version); setPreviewOut(null); setDecideErr(null);
@@ -126,32 +128,31 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
     return loadDetail(version);
   }, [loadDetail]);
 
-  const decide = useCallback(async (mode: "promote" | "rollback") => {
+  const decide = useCallback((mode: "promote" | "rollback") => settle(Effect.gen(function* () {
     setBusy(mode);
     setDecideErr(null);
 
-    try {
-      await rpc("applyScaffoldDecision", [mode]);
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => rpc("applyScaffoldDecision", [mode]));
       reload();
 
-      if (selected != null) await loadDetail(selected);
-    }
-    catch (e) { setDecideErr(`${mode} failed: ${renderThrownChain({ cause: e })}`); }
-    finally { setBusy(null); }
-  }, [rpc, reload, loadDetail, selected]);
+      if (selected != null) yield* Effect.promise(async () => loadDetail(selected));
+    }), (failed) => Effect.sync(() => {
+      const e = Cause.squash(failed); setDecideErr(`${mode} failed: ${renderThrownChain({ cause: e })}`); })), Effect.sync(() => { setBusy(null); }));
+  })), [rpc, reload, loadDetail, selected]);
 
-  const runPreview = useCallback(async () => {
+  const runPreview = useCallback(() => settle(Effect.gen(function* () {
     if (selected == null || !previewTask.trim()) return;
     setBusy("preview"); setPreviewOut(null);
 
-    try {
-      const r = await rpc<{ ok?: boolean; error?: string; events?: Array<{ type: string; text?: string }> }>("previewScaffoldLive", [selected, previewTask.trim()]);
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const r = yield* Effect.promise(async () => rpc<{ ok?: boolean; error?: string; events?: Array<{ type: string; text?: string }> }>("previewScaffoldLive", [selected, previewTask.trim()]));
       const text = (r.events ?? []).filter((e) => e.type === "text_delta").map((e) => e.text ?? "").join("");
       setPreviewOut(r.error ? `Error: ${r.error}` : (text || "(no text output)"));
-    } catch (e) {
-      setPreviewOut(`Error: ${renderThrownChain({ cause: e })}`);
-    } finally { setBusy(null); }
-  }, [rpc, selected, previewTask]);
+    }), showing((chain) => {
+      setPreviewOut(`Error: ${chain}`);
+    })), Effect.sync(() => { setBusy(null); }));
+  })), [rpc, selected, previewTask]);
 
   const selectedV = versions.find((v) => v.version === selected);
   const isPending = selectedV?.status === "pending";

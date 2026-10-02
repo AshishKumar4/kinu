@@ -1,4 +1,5 @@
 /** A failed poll keeps the last roster on screen and says it failed, rather than blanking to `[]`. */
+import { Effect } from 'effect';
 import { useCallback, useState } from "react";
 import { DesktopTowerIcon, PlugIcon } from "@phosphor-icons/react";
 import {
@@ -11,7 +12,7 @@ import { lastValue, useAsyncResource, type Revalidate } from "@/hooks/use-async-
 import { DEVICE_ROSTER_POLL_MS, useDeviceRoster } from "@/hooks/use-device-roster";
 import { ConnectDevicePanel, DeviceConnectFlow } from "@/components/ConnectDevicePanel";
 import { DeviceRow } from "@/components/devices/DeviceRow";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { settle, showing } from "@kinu.run/core/obs";
 
 /** Grants share the roster's cadence: a revoke changes both, so one clock keeps them consistent. */
 const keepPollingGrants: Revalidate<DeviceConsent[]> = () => DEVICE_ROSTER_POLL_MS;
@@ -34,28 +35,28 @@ export function DevicesCard() {
     onConnected: reloadDevices,
   }));
 
-  const revoke = useCallback(async (id: string, label: string) => {
+  const revoke = useCallback((id: string, label: string) => settle(Effect.gen(function* () {
     if (!confirm(`Revoke "${label}"? Agents will lose access.`)) return;
     setErr(null);
 
-    try {
-      const result = await revokeDevice(id);
+    yield* Effect.catchCause(Effect.gen(function* () {
+      const result = yield* Effect.promise(async () => revokeDevice(id));
 
       if (result.unstoppedCommands > 0) {
         setUnstoppedCounts((current) => new Map(current).set(id, result.unstoppedCommands));
       }
-    } catch (e) {
-      setErr(`Could not revoke device: ${renderThrownChain({ cause: e })}`);
-    }
+    }), showing((chain) => {
+      setErr(`Could not revoke device: ${chain}`);
+    }));
 
     reloadDevices();
-  }, [reloadDevices]);
+  })), [reloadDevices]);
 
-  const acknowledgeIncident = useCallback(async (id: string) => {
+  const acknowledgeIncident = useCallback((id: string) => settle(Effect.gen(function* () {
     setErr(null);
 
-    try {
-      await acknowledgeUnstoppedDevice(id);
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => acknowledgeUnstoppedDevice(id));
       setUnstoppedCounts((current) => {
         const next = new Map(current);
         next.delete(id);
@@ -64,10 +65,10 @@ export function DevicesCard() {
       });
       setAcknowledged((current) => new Set(current).add(id));
       reloadDevices();
-    } catch (e) {
-      setErr(`Could not acknowledge the device warning: ${renderThrownChain({ cause: e })}`);
-    }
-  }, [reloadDevices]);
+    }), showing((chain) => {
+      setErr(`Could not acknowledge the device warning: ${chain}`);
+    }));
+  })), [reloadDevices]);
 
   return (
     <>

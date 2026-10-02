@@ -1,4 +1,5 @@
 /** Raw bytes ride the files HTTP route: the RPC transport is the chat WebSocket, whose 1 MiB frame ceiling is below ordinary file sizes. */
+import { Effect, Cause } from 'effect';
 import {
   useCallback, useEffect, useMemo, useRef, useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -14,7 +15,7 @@ import {
 import {
   formatBytes, joinDir, parentDir, MOUNT_EXECUTORS, type DirEntry, type MountInfo,
 } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { renderThrownChain, settle, showing } from "@kinu.run/core/obs";
 import type { Rpc } from "@kinu.run/core";
 import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -80,30 +81,30 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   const { resource: mountsResource, reload: reloadMounts } = useAsyncResource(loadMounts);
   const mounts = lastValue(mountsResource) ?? [];
 
-  const listDir = useCallback(async (dir: string): Promise<{ path: string; entries: DirEntry[] }> => {
-    const r = await rpc<DirectoryResponse>("getExecutorFiles", [PLANE, dir]);
+  const listDir = useCallback((dir: string): Promise<{ path: string; entries: DirEntry[] }> => settle(Effect.gen(function* () {
+    const r = yield* Effect.promise(async () => rpc<DirectoryResponse>("getExecutorFiles", [PLANE, dir]));
 
-    if (r.error) throw new Error(r.error);
+    if (r.error) return yield* Effect.die(new Error(r.error));
     const listed = r.entries ?? [];
     const at = r.path ?? dir;
     setTreeCache((prev) => nextTreeCache(prev, at, listed));
 
     return { path: at, entries: listed };
-  }, [rpc]);
+  })), [rpc]);
 
   // Keyed on `path` so an old directory's listing never renders under the new breadcrumb.
-  const loadListing = useCallback(async (): Promise<DirEntry[]> => {
-    try {
-      const listed = await listDir(path);
+  const loadListing = useCallback((): Promise<DirEntry[]> => settle(Effect.catchCause(Effect.gen(function* () {
+    const listed = yield* Effect.promise(async () => listDir(path));
 
-      // A bare mount point lists the consented directory; adopt the returned path so child paths resolve.
-      if (listed.path !== path) setPath(listed.path);
+    // A bare mount point lists the consented directory; adopt the returned path so child paths resolve.
+    if (listed.path !== path) setPath(listed.path);
 
-      return listed.entries;
-    } catch (e) {
-      throw new Error(renderThrownChain({ cause: e }), { cause: e });
-    }
-  }, [listDir, path]);
+    return listed.entries;
+  }), (failed) => Effect.gen(function* () {
+    const e = Cause.squash(failed);
+
+    return yield* Effect.die(new Error(renderThrownChain({ cause: e }), { cause: e }));
+  }))), [listDir, path]);
 
   const { resource: listing, reload: reloadListing } = useAsyncResource(loadListing, undefined, path);
   const entries = lastValue(listing) ?? [];
@@ -128,15 +129,13 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
     setPath(jump.path);
   }, [jump]);
 
-  const run = useCallback(async (op: () => Promise<void>) => {
+  const run = useCallback((op: () => Promise<void>) => settle(Effect.gen(function* () {
     setNotice(null);
 
-    try {
-      await op();
-    } catch (cause) {
-      setNotice(renderThrownChain({ cause }));
-    }
-  }, []);
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => op());
+    }), showing(setNotice));
+  })), []);
 
   const readPlaneFile = useCallback((full: string) => rpc<FileText>("readExecutorFile", [PLANE, full]), [rpc]);
 
@@ -146,24 +145,24 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   [agentName]);
 
   // Takes a materialized array: a live FileList empties when the input clears or the drop handler returns.
-  const uploadFiles = useCallback(async (list: readonly File[]) => {
+  const uploadFiles = useCallback((list: readonly File[]) => settle(Effect.gen(function* () {
     if (list.length === 0) return;
     setUploads(list.map((f) => ({ name: f.name, status: "uploading" as const })));
 
     for (const f of list) {
-      try {
+      yield* Effect.catchCause(Effect.gen(function* () {
         // Raw bytes over HTTP: no base64 inflation, no frame ceiling.
-        await putFileBytes(rawUrl(joinDir(path, f.name), false), f);
+        yield* Effect.promise(async () => putFileBytes(rawUrl(joinDir(path, f.name), false), f));
         setUploads((prev) => prev.filter((u) => u.name !== f.name));
-      } catch (e) {
+      }), showing((chain) => {
         setUploads((prev) => prev.map((u) => u.name === f.name
-          ? { ...u, status: "error" as const, error: renderThrownChain({ cause: e }) }
+          ? { ...u, status: "error" as const, error: chain }
           : u));
-      }
+      }));
     }
 
-    await reloadListing();
-  }, [path, rawUrl, reloadListing]);
+    yield* Effect.promise(async () => reloadListing());
+  })), [path, rawUrl, reloadListing]);
 
   const commitRename = useCallback((from: string, draft: string) => run(async () => {
     const name = draft.trim();

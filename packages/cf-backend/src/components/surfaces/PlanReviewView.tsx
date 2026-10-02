@@ -11,7 +11,7 @@ import {
   type ReviewAnnotation,
   type PlanReviewResult,
 } from "@kinu.run/core";
-import { Result } from "effect";
+import { Effect, Cause, Result } from "effect";
 import { Viewer } from "@/components/plan-review/Viewer";
 import { AnnotationPanel } from "@/components/plan-review/AnnotationPanel";
 import type { Annotation, Block, EditorMode } from "@plannotator/ui/types";
@@ -20,7 +20,7 @@ import {
 } from "@plannotator/ui/utils/parser";
 import type { Rpc } from "@kinu.run/core";
 import { createPlanAnnotationSaveQueue } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { renderThrownChain, settle } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { annotationType } from "./annotation-type";
 import { copyLabel, useCopy, type CopyStatus } from "@/hooks/use-copy";
@@ -297,23 +297,24 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
     onError: setError,
   });
 
-  const changeAnnotations = useCallback(async (next: Annotation[]) => {
+  const changeAnnotations = useCallback((next: Annotation[]) => settle(Effect.gen(function* () {
     if (decisionInFlight()) return;
     // Decided after the handler so a superseded revision does not read as a failed save.
     let thrown: { readonly cause: unknown } | undefined;
 
-    try {
-      await save(next);
-    } catch (cause) {
+    yield* Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => save(next));
+    }), (failed) => Effect.sync(() => {
+      const cause = Cause.squash(failed);
       thrown = { cause };
-    }
+    }));
 
     if (thrown !== undefined && activePlanKey.current === planKey) {
       setError(renderThrownChain({ cause: thrown.cause }));
 
       if (annotationSaves.pending() === 0) setSaving(false);
     }
-  }, [annotationSaves, decisionInFlight, planKey, save]);
+  })), [annotationSaves, decisionInFlight, planKey, save]);
 
   const addAnnotation = useCallback((annotation: Annotation) => {
     if (decisionInFlight()) return;

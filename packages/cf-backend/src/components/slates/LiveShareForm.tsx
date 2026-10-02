@@ -1,4 +1,5 @@
 /** The server grant is the read set plus the ticked set; the dialog renders, never decides. */
+import { Effect } from 'effect';
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import { CaretDownIcon, CaretRightIcon, GlobeIcon, UsersIcon } from "@phosphor-icons/react";
@@ -8,7 +9,7 @@ import {
   SHARE_SPEND_CAP_USD_PER_DAY, SHARE_VIEWER_REQUESTS_PER_MINUTE,
   type LiveShareCreated, type LiveShareRecord, type LiveShareVisibility, type Rpc, type SlateAnswer, type SlateCapability, type SlateCapabilityGraph, type SlateGraphBinding,
 } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { settle, showing } from "@kinu.run/core/obs";
 import { FilledButton } from "@/components/ui/FilledButton";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { revokeShare, shareLive } from "@/lib/shared-api";
@@ -240,39 +241,35 @@ export function LiveShareForm({ workspace, slate, rpc, onClose, onBusy, onListin
   const emailList = useMemo(() => emailsOf(emails), [emails]);
   const canShare = graph !== null && !busy && (visibility === "public" || emailList.length > 0);
 
-  const share = useCallback(async () => {
+  const share = useCallback(() => settle(Effect.gen(function* () {
     if (!canShare) return;
     setBusy(true);
     setErr(null);
 
-    try {
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
       const approvals = [...approved].map((key) => v.parse(v.tuple([v.string(), v.string(), v.string()]), JSON.parse(key)))
         .map(([slateId, binding, member]) => ({ slate: slateId, binding, member }));
 
-      const result = await shareLive({ workspace, slate, visibility, emails: visibility === "users" ? emailList : undefined, approved: approvals, fork });
+      const result = yield* Effect.promise(async () => shareLive({ workspace, slate, visibility, emails: visibility === "users" ? emailList : undefined, approved: approvals, fork }));
       setCreated(result);
       setShares((previous) => [result.share, ...previous]);
 
       if (result.listing === 'pending') onListingPending?.();
-    } catch (cause) {
-      setErr(renderThrownChain({ cause }));
-    } finally {
+    }), showing(setErr)), Effect.sync(() => {
       setBusy(false);
-    }
-  }, [canShare, approved, workspace, slate, visibility, emailList, fork, setBusy, onListingPending]);
+    }));
+  })), [canShare, approved, workspace, slate, visibility, emailList, fork, setBusy, onListingPending]);
 
-  const revoke = useCallback(async (shareId: string) => {
+  const revoke = useCallback((shareId: string) => settle(Effect.gen(function* () {
     setErr(null);
 
-    try {
-      const revoked = await revokeShare({ workspace, share: shareId });
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const revoked = yield* Effect.promise(async () => revokeShare({ workspace, share: shareId }));
       setShares((previous) => previous.filter((row) => row.id !== shareId));
 
       if (revoked.listing === 'pending') onListingPending?.();
-    } catch (cause) {
-      setErr(renderThrownChain({ cause }));
-    }
-  }, [workspace, onListingPending]);
+    }), showing(setErr));
+  })), [workspace, onListingPending]);
 
   if (created !== null) {
     return (

@@ -2,6 +2,7 @@
  * Providers panel: one list of every provider, each with its own sign-in (Cloudflare, device code, claude.ai, API key); also mounted as a modal.
  * Each read is its own resource and fails visibly: a swallowed rejection shows a connected account as disconnected.
  */
+import { Effect, Cause } from 'effect';
 import { useEffect, useState, useCallback, useRef, type ReactNode } from "react";
 import { Combobox, Loader } from "@cloudflare/kumo";
 import { CheckIcon, ArrowSquareOutIcon, PlugIcon } from "@phosphor-icons/react";
@@ -26,7 +27,7 @@ import { FilledButton } from "@/components/ui/FilledButton";
 import { BrandMark, providerBrand } from "@/components/ui/BrandMark";
 import { ChatGptConnect, ChatGptPlanUsage } from "@/components/account/ChatGptConnect";
 import { useAsyncResource } from "@/hooks/use-async-resource";
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { renderThrownChain, settle, showing } from '@kinu.run/core/obs';
 import {
   CLAUDE_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, CODEX_CRED_KEY, MAIN_ACCOUNT, accountCredentialKey, accountOf, baseCredentialKey, catalogProviderOfKey, isAccountName, storedAccounts,
 } from '@kinu.run/core';
@@ -60,9 +61,8 @@ function UnrevokedGrants({ grants, onChanged }: { grants: readonly UnrevokedGran
           </div>
           <button
             className="p-btn-quiet inline-flex h-6.5 shrink-0 items-center px-2 text-xs"
-            onClick={async () => {
-              try { await dismissUnrevokedGrant(grant.key); onChanged(); } catch (e) { setError(renderThrownChain({ cause: e })); }
-            }}
+            onClick={() => settle(Effect.catchCause(Effect.gen(function* () { yield* Effect.promise(async () => dismissUnrevokedGrant(grant.key)); onChanged(); }), (failed) => Effect.sync(() => {
+              const e = Cause.squash(failed); setError(renderThrownChain({ cause: e })); })))}
           >
             I revoked it
           </button>
@@ -350,11 +350,11 @@ function CodexConnect({ onChanged }: { onChanged: () => void }) {
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
 
-  const start = useCallback(async () => {
+  const start = useCallback(() => settle(Effect.gen(function* () {
     setError(null);
 
-    try {
-      const f = await startCodexFlow();
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const f = yield* Effect.promise(async () => startCodexFlow());
       setFlow(f);
 
       const stopPolling = () => {
@@ -382,10 +382,8 @@ function CodexConnect({ onChanged }: { onChanged: () => void }) {
           setError(renderThrownChain({ cause: e }));
         }
       }, Math.max(3, f.pollIntervalSec) * 1000);
-    } catch (e) {
-      setError(renderThrownChain({ cause: e }));
-    }
-  }, [onChanged]);
+    }), showing(setError));
+  })), [onChanged]);
 
   if (flow) {
     return (

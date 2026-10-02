@@ -1,5 +1,5 @@
 /** The Drive: My stuff (`/drive`, `/drive/<path>`) and Shared (`/shared`). Nothing empty is drawn. */
-import { Result } from 'effect';
+import { Effect, Result } from 'effect';
 import { startTransition, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Loader } from "@cloudflare/kumo";
@@ -14,7 +14,7 @@ import {
   type DriveEntry, type DriveListing, type FileText, type LiveShareVisibility, type OwnedSlate, type SharedLibrary, type SharedRow,
   type SkillFileRefusal,
 } from "@kinu.run/core";
-import { diagnostics, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
+import { diagnostics, settle, showing, toKinuError } from "@kinu.run/core/obs";
 import {
   downloadUrl, inlineUrl, listDrive, markAsSkill, readDriveText, uploadFile, uploadFolder, uploadZip,
 } from "@/lib/drive-api";
@@ -529,16 +529,14 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
     const drop = (): void => setTransfers((rows) => rows.filter((row) => row.id !== id));
 
     setTransfers((rows) => [...rows, { id, folder, name, size, status: "uploading", stop: () => abort.abort() }]);
-    startTransition(async () => {
-      try {
-        await work(abort.signal);
-        setTransfers((rows) => rows.map((row) => row.id === id ? { ...row, status: "landed" } : row));
-        listing.reload();
-      } catch (cause) {
-        if (abort.signal.aborted) drop();
-        else setTransfers((rows) => rows.map((row) => row.id === id ? { ...row, status: "failed", error: renderThrownChain({ cause }), stop: drop } : row));
-      }
-    });
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => work(abort.signal));
+      setTransfers((rows) => rows.map((row) => row.id === id ? { ...row, status: "landed" } : row));
+      listing.reload();
+    }), showing((chain) => {
+      if (abort.signal.aborted) drop();
+      else setTransfers((rows) => rows.map((row) => row.id === id ? { ...row, status: "failed", error: chain, stop: drop } : row));
+    }))));
   }, [listing]);
 
   const uploadFiles = (files: File[]): void => {
@@ -546,13 +544,7 @@ export default function DrivePage({ tab }: { tab: DriveTab }) {
   };
 
   const background = (work: () => Promise<void>): void => {
-    startTransition(async () => {
-      try {
-        await work();
-      } catch (cause) {
-        setNotice(renderThrownChain({ cause }));
-      }
-    });
+    startTransition(() => settle(Effect.catchCause(Effect.promise(work), showing(setNotice))));
   };
 
   const openLive = (row: SharedRow): void => {

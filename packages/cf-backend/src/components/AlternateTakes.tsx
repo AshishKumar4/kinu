@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -15,7 +16,7 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { TranscriptBody, useNodeTranscript } from "@/components/NodeTranscript";
 import { NO_HEAD_DELTAS, type HeadDeltas } from "@kinu.run/core";
 import { currentTakeIndex, cycleTakeIndex, takeChipLabel } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { settle, showing } from "@kinu.run/core/obs";
 
 export function TakesChip({ set, onPick }: {
   set: AlternateTakeSet;
@@ -69,25 +70,23 @@ function TakesComparison({ set, onPick, onClose }: {
     return () => document.removeEventListener("keydown", onKey);
   }, [step]);
 
-  const useTake = useCallback(async () => {
+  const useTake = useCallback(() => settle(Effect.gen(function* () {
     if (busy || isCurrent) return;
     setBusy(true);
     setErr(null);
 
-    try {
-      const result = await onPick(set.id, candidate.nodeId);
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      const result = yield* Effect.promise(async () => onPick(set.id, candidate.nodeId));
 
       if (result.continuationQueued) {
         setNotice("Saved. The agent continues with this take.");
       } else {
         onClose();
       }
-    } catch (e) {
-      setErr(renderThrownChain({ cause: e }));
-    } finally {
+    }), showing(setErr)), Effect.sync(() => {
       setBusy(false);
-    }
-  }, [busy, candidate.nodeId, isCurrent, onClose, onPick, set.id]);
+    }));
+  })), [busy, candidate.nodeId, isCurrent, onClose, onPick, set.id]);
 
   const pickWord = isCurrent ? "Current answer" : "Use this take";
 

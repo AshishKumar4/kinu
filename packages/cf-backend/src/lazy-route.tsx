@@ -3,6 +3,8 @@
  * Reload once only when the origin serves a different build than this page; `lazy()` memoises rejection, so a failed lazy is re-minted.
  */
 
+import { Effect, Cause } from 'effect';
+import { settle } from '@kinu.run/core/obs';
 import { lazy, type ComponentType, type LazyExoticComponent } from 'react';
 import { fetchDeployedBuildSha, isNewerDeployedBuild, pageDeployedBuildSha } from '@kinu.run/core';
 
@@ -58,26 +60,26 @@ export interface ChunkRecoveryDeps {
  * Load a route's chunk, reloading once for a confirmed stale one; every other failure rethrows unchanged.
  * On reload it never settles, so the Suspense fallback holds until the document is replaced.
  */
-export async function loadRouteChunk<Module>(
+export function loadRouteChunk<Module>(
   load: () => Promise<Module>,
   deps: ChunkRecoveryDeps,
 ): Promise<Module> {
-  try {
-    return await load();
-  } catch (cause) {
-    if (!(cause instanceof Error) || !isStaleChunkFailure(cause)) throw cause;
-    const live = await deps.live();
+  return settle(Effect.catchCause(Effect.promise(async () => load()), (failed) => Effect.gen(function* () {
+    const cause = Cause.squash(failed);
 
-    if (live === null) throw cause;
+    if (!(cause instanceof Error) || !isStaleChunkFailure(cause)) return yield* Effect.failCause(failed);
+    const live = yield* Effect.promise(async () => deps.live());
 
-    if (!isNewerDeployedBuild(await deps.baseline(), live)) throw cause;
+    if (live === null) return yield* Effect.failCause(failed);
 
-    if (!claimChunkReload(deps.session, live)) throw cause;
+    if (!isNewerDeployedBuild(yield* Effect.promise(async () => deps.baseline()), live)) return yield* Effect.failCause(failed);
+
+    if (!claimChunkReload(deps.session, live)) return yield* Effect.failCause(failed);
     deps.reload();
     const { promise } = Promise.withResolvers<Module>();
 
-    return await promise;
-  }
+    return yield* Effect.promise(async () => promise);
+  })));
 }
 
 /**

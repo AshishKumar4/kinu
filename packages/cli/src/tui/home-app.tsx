@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { createCliRenderer, type TextareaRenderable } from '@opentui/core';
 import { createRoot, flushSync, useKeyboard, useTerminalDimensions } from '@opentui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -47,7 +48,7 @@ import {
   type TuiAgentSource,
   type TuiAgentSummary,
 } from './tui-shell';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { renderThrownChain, settle, showing } from '@kinu.run/core/obs';
 
 type HomeTuiAction =
   | { type: 'open-agent'; name: string }
@@ -210,55 +211,46 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   }, [cloudReady, localReady, mode]);
 
 
-  const openModelPicker = useCallback(async () => {
+  const openModelPicker = useCallback(() => settle(Effect.gen(function* () {
     const request = ++modelPickerRequestRef.current;
     setFocusArea('model');
     setCatalogHint(null);
     setModelPicker({ menu: EMPTY_MODEL_MENU, loading: true, error: null });
 
-    try {
-      const menu = await loadHomeModelCatalog(mode, opts);
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const menu = yield* Effect.promise(async () => loadHomeModelCatalog(mode, opts));
 
       // Only an empty menu is a catalog error; partial failures explain themselves in the picker.
       if (menu.models.length === 0 && menu.failures.length === 0) {
-        throw new Error(`No ${mode} models are available.`);
+        return yield* Effect.die(new Error(`No ${mode} models are available.`));
       }
 
       if (modelPickerRequestRef.current !== request) return;
       setCatalog(menu);
       setModelPicker({ menu, loading: false, error: null });
-    } catch (err) {
+    }), showing((chain) => {
       if (modelPickerRequestRef.current !== request) return;
-      const detail = renderThrownChain({ cause: err });
       const current = defaultModel || 'provider default';
-      const message = `Catalog unavailable: ${detail} Current default: ${current}. ${keybindings.hint('modal.close')} keeps it.`;
+      const message = `Catalog unavailable: ${chain} Current default: ${current}. ${keybindings.hint('modal.close')} keeps it.`;
       setCatalogHint('Catalog unavailable. The current default stays active.');
       setModelPicker({ menu: EMPTY_MODEL_MENU, loading: false, error: message });
-    }
-  }, [defaultModel, keybindings, mode, opts]);
+    }));
+  })), [defaultModel, keybindings, mode, opts]);
 
-  const selectModel = useCallback(async (spec: string) => {
-    try {
-      await updateDefaultTier({ model: spec });
-      modelPickerRequestRef.current += 1;
-      setDefaultModelState(spec);
-      setCatalogHint(null);
-      setModelPicker(null);
-      setError(null);
-    } catch (cause) {
-      setError(renderThrownChain({ cause }));
-    }
-  }, []);
+  const selectModel = useCallback((spec: string) => settle(Effect.catchCause(Effect.gen(function* () {
+    yield* Effect.promise(async () => updateDefaultTier({ model: spec }));
+    modelPickerRequestRef.current += 1;
+    setDefaultModelState(spec);
+    setCatalogHint(null);
+    setModelPicker(null);
+    setError(null);
+  }), showing(setError))), []);
 
-  const selectReasoningEffort = useCallback(async (effort: ReasoningEffort) => {
-    try {
-      await updateDefaultTier({ reasoningEffort: effort });
-      setReasoningEffortState(effort);
-      setError(null);
-    } catch (cause) {
-      setError(renderThrownChain({ cause }));
-    }
-  }, []);
+  const selectReasoningEffort = useCallback((effort: ReasoningEffort) => settle(Effect.catchCause(Effect.gen(function* () {
+    yield* Effect.promise(async () => updateDefaultTier({ reasoningEffort: effort }));
+    setReasoningEffortState(effort);
+    setError(null);
+  }), showing(setError))), []);
 
   // The stored level stays listed if the catalog dropped it.
   const efforts = useMemo(
@@ -276,23 +268,23 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     return selectReasoningEffort(next);
   }, [efforts, reasoningEffort, selectReasoningEffort]);
 
-  const submit = useCallback(async () => {
+  const submit = useCallback(() => settle(Effect.gen(function* () {
     const mission = (textareaRef.current?.plainText ?? draft).trim();
 
     if (!mission || busy) return;
     setBusy(true);
     setError(null);
 
-    try {
-      if (setupRequired) throw new Error('Run kinu setup to connect your account or a local model provider.');
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      if (setupRequired) return yield* Effect.die(new Error('Run kinu setup to connect your account or a local model provider.'));
 
-      if (mode === 'cloud' && !cloudReady) throw new Error('Cloud workspaces need a signed-in account. Run kinu auth, then try again.');
+      if (mode === 'cloud' && !cloudReady) return yield* Effect.die(new Error('Cloud workspaces need a signed-in account. Run kinu auth, then try again.'));
 
-      if (mode === 'local' && !localReady) throw new Error('Local workspaces need a model provider. Run kinu provider connect <provider>, or switch to cloud.');
+      if (mode === 'local' && !localReady) return yield* Effect.die(new Error('Local workspaces need a model provider. Run kinu provider connect <provider>, or switch to cloud.'));
       // Cloud naming is server-side; only local agents need a generated identity.
-      const identity = mode === 'local' ? await suggestAgentIdentityFromMission(mission, opts) : undefined;
+      const identity = mode === 'local' ? (yield* Effect.promise(async () => suggestAgentIdentityFromMission(mission, opts))) : undefined;
 
-      const created = await createCliAgent({
+      const created = yield* Effect.promise(async () => createCliAgent({
         ...opts,
         name: identity?.name,
         displayName: identity?.displayName,
@@ -300,16 +292,16 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
         purpose: mission,
         mode,
         allowInteractiveAuth: false,
-      });
+      }));
 
       // New cloud agent with no connected PC: offer to connect this one before chat opens.
-      if (created.mode === 'cloud') await deviceConnect.offerIfUnconnected();
+      if (created.mode === 'cloud') yield* Effect.promise(async () => deviceConnect.offerIfUnconnected());
       finishHome?.({ type: 'open-agent', name: created.name });
-    } catch (err) {
-      setError(renderThrownChain({ cause: err }));
+    }), showing((chain) => {
+      setError(chain);
       setBusy(false);
-    }
-  }, [busy, cloudReady, defaultModel, deviceConnect.offerIfUnconnected, draft, localReady, mode, opts, reasoningEffort, setupRequired]);
+    }));
+  })), [busy, cloudReady, defaultModel, deviceConnect.offerIfUnconnected, draft, localReady, mode, opts, reasoningEffort, setupRequired]);
 
   useKeyboard((key) => {
     // The setup steps render first and claim what they answer: Esc on a question is not an exit.

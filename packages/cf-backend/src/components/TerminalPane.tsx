@@ -1,12 +1,13 @@
 // Native container PTY, device PTY, workspace shell and line-mode terminal lanes.
 
+import { Effect } from 'effect';
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { Terminal, type IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import * as v from 'valibot';
 import "@xterm/xterm/css/xterm.css";
 import { describeError } from "@/hooks/use-async-resource";
-import { renderThrownChain, tolerate } from "@kinu.run/core/obs";
+import { renderThrownChain, settle, showing, tolerate } from "@kinu.run/core/obs";
 import { useTheme, type Theme, type ThemeMode } from "@/hooks/use-theme";
 import {
   BUSY, LINE_MODE_LABEL, LineTerminalState, clearBusy, feedInput, terminalLane, writeOutputRow, writePrompt,
@@ -280,13 +281,9 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
           <span className="ml-auto shrink-0" title="⌃C interrupts the foreground program.">⇧⌃C copies</span>
         ) : (
           <>
-            <button type="button" onClick={async () => {
-              try {
-                await restart();
-              } catch (cause) {
-                setFailure(renderThrownChain({ cause }));
-              }
-            }}
+            <button type="button" onClick={() => settle(Effect.catchCause(Effect.gen(function* () {
+              yield* Effect.promise(async () => restart());
+            }), showing(setFailure)))}
               className="ml-auto shrink-0 underline decoration-dotted hover:p-text-2 cursor-pointer"
               title="Destroy this shell and open a new one. Use this after a shell exits.">
               restart shell

@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@cloudflare/kumo";
@@ -8,7 +9,7 @@ import { CaretDownIcon, CaretRightIcon, HouseIcon, PlusIcon, TrashIcon } from "@
 import type { SubordinateRosterEntry } from "@kinu.run/core/protocol";
 import { codenameFor, ownerFacingSubordinate } from "@kinu.run/core";
 import { Modal } from "./ui/Modal";
-import { renderThrownChain, settleLogged } from "@kinu.run/core/obs";
+import { settle, settleLogged, showing } from "@kinu.run/core/obs";
 import { useWheelScrollsSideways } from "@/hooks/use-wheel-scrolls-sideways";
 
 
@@ -114,27 +115,25 @@ export function SubordinateTabs({
                 <button
                   type="button"
                   disabled={deleting === subordinate.name}
-                  onClick={async () => {
+                  onClick={() => settle(Effect.gen(function* () {
                     if (subordinate.origin === "user") {
                       setDeleteError(null);
                       setDeleting(subordinate.name);
 
-                      try {
-                        await onDismiss(subordinate.name, false);
+                      yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+                        yield* Effect.promise(async () => onDismiss(subordinate.name, false));
 
-                        if (subordinate.name === activeName) await navigate(mainPath);
-                      } catch (cause) {
-                        setDeleteError(renderThrownChain({ cause }));
-                      } finally {
+                        if (subordinate.name === activeName) yield* Effect.promise(async () => navigate(mainPath));
+                      }), showing(setDeleteError)), Effect.sync(() => {
                         setDeleting(null);
-                      }
+                      }));
 
                       return;
                     }
 
                     setDismissError(null);
                     setDismissTarget(subordinate);
-                  }}
+                  }))}
                   data-tab-delete
                   className="absolute right-[7.5px] top-[calc(50%-1px)] -translate-y-1/2 rounded-sm p-0.5 opacity-0 p-text-3 transition-all hover:p-danger focus-visible:opacity-100 group-hover/tab:opacity-70 disabled:opacity-40"
                   title={subordinate.origin === "user" ? `Delete ${title}` : `Dismiss ${title}`}
@@ -206,21 +205,19 @@ export function SubordinateTabs({
           footer={<>
             <Button size="sm" variant="ghost" disabled={dismissing} onClick={() => setDismissTarget(null)}>Cancel</Button>
             <FilledButton danger disabled={dismissing}
-              onClick={async () => {
+              onClick={() => settle(Effect.gen(function* () {
                 setDismissing(true);
                 setDismissError(null);
 
-                try {
-                  await onDismiss(dismissTarget.name);
+                return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+                  yield* Effect.promise(async () => onDismiss(dismissTarget.name));
 
-                  if (dismissTarget.name === activeName) await navigate(mainPath);
+                  if (dismissTarget.name === activeName) yield* Effect.promise(async () => navigate(mainPath));
                   setDismissTarget(null);
-                } catch (cause) {
-                  setDismissError(renderThrownChain({ cause: cause }));
-                } finally {
+                }), showing(setDismissError)), Effect.sync(() => {
                   setDismissing(false);
-                }
-              }}
+                }));
+              }))}
             >
               {dismissing ? "Dismissing…" : "Dismiss"}
             </FilledButton>

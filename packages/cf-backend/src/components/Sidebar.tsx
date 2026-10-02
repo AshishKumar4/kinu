@@ -1,3 +1,4 @@
+import { Effect } from 'effect';
 import { useState, useCallback, useRef, type FormEvent, type ReactNode } from "react";
 import { Link, NavLink, useLocation, useMatch, useNavigate } from "react-router-dom";
 import { GearIcon, TrashIcon, SignOutIcon, PencilSimpleIcon, CheckIcon, XIcon, PlusIcon, ShieldCheckIcon, SidebarSimpleIcon,
@@ -15,7 +16,7 @@ import { ModeToggle } from "./theme-toggle";
 import { FeedbackButton } from "./FeedbackButton";
 import { isPlaceholderWorkspaceTitle, shortAge, workspaceDisplayTitle } from "@kinu.run/core";
 import { Modal } from "./ui/Modal";
-import { renderCauseChain, renderThrownChain } from "@kinu.run/core/obs";
+import { renderCauseChain, settle, showing } from "@kinu.run/core/obs";
 import { SidebarAgents } from "./SidebarAgents";
 import { navActive, navRowCls, PRIMARY_NAV } from "./nav";
 import { composing } from "@/components/ui/form";
@@ -150,24 +151,22 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
   const closeUserMenu = useCallback(() => setShowUserMenu(false), []);
   useCloseOnOutsideClick(showUserMenu, userMenuRef, closeUserMenu);
 
-  const confirmDelete = useCallback(async () => {
+  const confirmDelete = useCallback(() => settle(Effect.gen(function* () {
     if (!deleteTarget) return;
     const name = deleteTarget.name;
     setDeleteBusy(true);
     setDeleteError(null);
 
     // Navigate away first: a mounted useAgent socket reconnects and idFromName resurrects an empty agent.
-    try {
-      if (name === agentId) await navigate("/");
-      await removeWorkspace(name);
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      if (name === agentId) yield* Effect.promise(async () => navigate("/"));
+      yield* Effect.promise(async () => removeWorkspace(name));
       removeFromRoster(name);
       setDeleteTarget(null);
-    } catch (err) {
-      setDeleteError(renderThrownChain({ cause: err }));
-    } finally {
+    }), showing(setDeleteError)), Effect.sync(() => {
       setDeleteBusy(false);
-    }
-  }, [deleteTarget, agentId, navigate, removeFromRoster]);
+    }));
+  })), [deleteTarget, agentId, navigate, removeFromRoster]);
 
 
   return (

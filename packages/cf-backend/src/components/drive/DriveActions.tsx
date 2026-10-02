@@ -1,11 +1,12 @@
 /** What adds to or changes the Drive: New, and the dialogs its menus open. */
+import { Effect } from 'effect';
 import { startTransition, useCallback, useRef, useState, type ReactNode } from "react";
 import { Button } from "@cloudflare/kumo";
 import {
   BookOpenIcon, FileArchiveIcon, FolderPlusIcon, FolderSimpleIcon, PencilSimpleIcon, PlusIcon, UploadSimpleIcon,
 } from "@phosphor-icons/react";
 import { joinDir, type DriveEntry, type MarkedSkill, type OwnedSlate, type SharedRow } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { settle, showing } from "@kinu.run/core/obs";
 import {
   addSkillArchive, addSkillFolder, addSkillText, deleteEntry, makeFolder, renameEntry, type PickedFile,
 } from "@/lib/drive-api";
@@ -46,15 +47,13 @@ function NameDialog({ title, icon, initial, label, action, onCommit, onClose }: 
     if (!valid || busy) return;
     setBusy(true);
     setError(null);
-    startTransition(async () => {
-      try {
-        await onCommit(name);
-        onClose();
-      } catch (cause) {
-        setError(renderThrownChain({ cause }));
-        setBusy(false);
-      }
-    });
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => onCommit(name));
+      onClose();
+    }), showing((chain) => {
+      setError(chain);
+      setBusy(false);
+    }))));
   };
 
   return (
@@ -82,15 +81,13 @@ function ConfirmDialog({ title, body, action, onConfirm, onClose, marker }: {
   const confirm = (): void => {
     setBusy(true);
     setError(null);
-    startTransition(async () => {
-      try {
-        await onConfirm();
-        onClose();
-      } catch (cause) {
-        setError(renderThrownChain({ cause }));
-        setBusy(false);
-      }
-    });
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => onConfirm());
+      onClose();
+    }), showing((chain) => {
+      setError(chain);
+      setBusy(false);
+    }))));
   };
 
   return (
@@ -122,16 +119,14 @@ function AddSkillDialog({ onAdded, onClose }: { onAdded: () => void; onClose: ()
     if (busy) return;
     setBusy(true);
     setError(null);
-    startTransition(async () => {
-      try {
-        await work();
-        onAdded();
-        onClose();
-      } catch (cause) {
-        setError(renderThrownChain({ cause }));
-        setBusy(false);
-      }
-    });
+    startTransition(() => settle(Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => work());
+      onAdded();
+      onClose();
+    }), showing((chain) => {
+      setError(chain);
+      setBusy(false);
+    }))));
   };
 
   return (
@@ -312,12 +307,12 @@ export function DriveDialog({ dialog, folder, onClose, onListingChanged, onShare
       return (
         <ConfirmDialog title={`Stop sharing ${dialog.row.title}?`} action="Stop sharing" marker="data-drive-stop-confirm"
           body={`${whoLoses(dialog.row)} access right away, and the link stops working. You can share it again later.`}
-          onConfirm={async () => {
+          onConfirm={() => settle(Effect.gen(function* () {
             const workspace = dialog.row.workspace;
 
-            if (workspace === undefined) throw new Error("this share names no workspace");
-            onSharesChanged((await revokeShare({ workspace, share: dialog.row.share })).listing);
-          }}
+            if (workspace === undefined) return yield* Effect.die(new Error("this share names no workspace"));
+            onSharesChanged((yield* Effect.promise(async () => revokeShare({ workspace, share: dialog.row.share }))).listing);
+          }))}
           onClose={onClose} />
       );
     case "fork":

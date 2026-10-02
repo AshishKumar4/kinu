@@ -1,10 +1,11 @@
 /** Text rides the viewer RPC; images, PDFs and saves (PUT) ride the raw-bytes route. */
+import { Effect, Cause } from 'effect';
 import { useCallback, useEffect, useState } from "react";
 import { Loader } from "@cloudflare/kumo";
 import {
   CheckIcon, DownloadSimpleIcon, FileIcon, PencilSimpleIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { renderThrownChain, settle } from "@kinu.run/core/obs";
 import { useAsyncResource } from "@/hooks/use-async-resource";
 import { MarkdownContent, CodeBlock } from "./shared";
 import {
@@ -55,18 +56,20 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
     setAsSource(false);
   }, [path]);
 
-  const save = useCallback(async (text: string) => {
+  const save = useCallback((text: string) => settle(Effect.gen(function* () {
     if (file?.revision === undefined) return;
     setSaving(true);
     setSaveError(null);
     setConflict(false);
 
-    try {
-      await putFileBytes(rawHref, text, file.revision);
+    return yield* Effect.ensuring(Effect.catchCause(Effect.gen(function* () {
+      yield* Effect.promise(async () => putFileBytes(rawHref, text, file.revision));
       setDraft(null);
       reload();
       onSaved?.();
-    } catch (error) {
+    }), (failed) => Effect.sync(() => {
+      const error = Cause.squash(failed);
+
       if (error instanceof FileWriteConflict) {
         setConflict(true);
         // Keep `draft`: a peer won the CAS, not this editor's text.
@@ -74,10 +77,10 @@ export function FileViewer({ path, read, revision, rawHref, downloadHref, onSave
       } else {
         setSaveError(renderThrownChain({ cause: error }));
       }
-    } finally {
+    })), Effect.sync(() => {
       setSaving(false);
-    }
-  }, [file?.revision, onSaved, rawHref, reload]);
+    }));
+  })), [file?.revision, onSaved, rawHref, reload]);
 
   const content = file?.content ?? "";
   const editable = kind === "text" && fileTextEditable(file);
