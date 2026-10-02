@@ -106,6 +106,7 @@ export const FIRST_RUN_CASES = [
   'account-settings',
   'workspace-settings',
   'machine-consent',
+  'device-job-output',
   'workspace-panes',
   'delegation-tree',
   'exploration',
@@ -502,6 +503,18 @@ export const FIRST_RUN_DEFECTS = {
     redDirection: 'Planted on a loopback `vite dev` build of this tree: a device call that skips the '
       + 'owner\'s consent leaves `consent-requested` missed.',
   },
+  'device-job-output': {
+    id: 'device-job-output',
+    found: '2026-10-02: a command on the owner\'s machine that outlasted its call\'s foreground window became a job '
+      + 'whose output reached the workspace only as its settled result, so a build that ran for minutes showed nothing.',
+    missedBecause: 'machine-consent and two-machines run `hostname`, which answers inside the window, so no device '
+      + 'job ever formed; the device suites drive the daemon, the hub and the tunnel in-process against doubles.',
+    provedRedAt: null,
+    redDirection: 'Run on a loopback `vite dev` build of this tree with the daemon from 0be36f6fa^, before the device '
+      + 'leg streamed: the job reads completed with all 45 ticks in its result, but no job_output frame arrives, so '
+      + '`frames-in-order`, `every-tick-heard` and `heard-before-settle` are missed; the current daemon reaches all five '
+      + 'with 15 frames.',
+  },
   'workspace-panes': {
     id: 'workspace-panes',
     found: 'The Diffs and Supervise panes read a workspace\'s review baseline, run list and '
@@ -732,6 +745,7 @@ const SHORT_SUBJECT = {
   'account-settings': 'account',
   'workspace-settings': 'settings',
   'machine-consent': 'consent',
+  'device-job-output': 'devjob',
   'workspace-panes': 'panes',
   'delegation-tree': 'tree',
   'exploration': 'swarm',
