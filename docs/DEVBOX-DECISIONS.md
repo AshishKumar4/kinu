@@ -2666,6 +2666,55 @@ all of these hold:
    snapshot.
 If any of these fails, the chain stays (R3).
 
+How it runs (2026-10-01, agreed before any figure). The real Devbox has no
+way to start from a container snapshot, and no product-side snapshot start is
+built before the decision. Snapshots therefore run in a probe Worker
+(`bench-artifacts/storage-designs/worker.ts`) that has Devbox's start shape:
+an admission exec outside the gate, then the in-gate work inside
+`blockConcurrencyWhile`, which on a snapshot wake is the O(1) generation check
+the product would do. The chain runs through the real Devbox, on the bench
+fixture, with its product save (the streamed base, D57 and D58). The matrix is
+trimmed to what decides the bar, n>=5 per figure:
+- the realistic workspace and 10 GiB of random data, at 1 and at 5 boxes;
+- 17.5 GiB at 1 box, so condition 1 at 17.5 GiB is judged at 1 box;
+- 20 boxes at once, at 10 GiB only;
+- the snapshot failure modes, priced in wake time;
+- the chain's root delta, applied in the gate, eagerly and lazily.
+The two designs run interleaved, round by round, so each pair shares its
+conditions; the first design alternates between rounds.
+
+A session row (added 2026-10-02 at Main's direction, before any head-to-head
+figure; it reports, and is not one of the five conditions). A running dev
+server holds `/workspace`, a ~500 MB install lands, then 10 small edits, each
+saved the way that design saves during a session: the chain by its sync
+loop's tick, snapshots by a snapshot. Reported per save: bytes, time, and the
+pause the box sees (the longest gap of a 50 ms ticker in the container, and
+exec latency through the object), then exactness after a wake. D61 found
+why this row matters for the chain. A tick never reseats, because a reseat
+unmounts `/workspace`, so every save while processes run republishes
+everything written since the last reseat: in the image, after a 548 MB
+install, each 4 KiB edit re-uploaded 164 MB as the whole upper on a woken box
+and 231 MB as a whole new base on a box that had not yet rested
+(`bench-artifacts/reseat-holders/session-head.log`).
+
+The chain's required fix, if it stays: layered deltas. The record keeps one
+base and a short stack of delta layers, L1 to Lm with m at most 4. Each save
+publishes one layer holding only what changed since an earlier commit j: the
+upper's inventory (path, inode, size, mtime, ctime, type) is compared with the
+one stored at commit j, and paths that are gone become whiteouts. The new
+layer replaces Lj to Lm, LSM-style, so layer sizes shrink going up and m stays
+bounded. An install is uploaded once, and each later edit uploads about its
+own size and a manifest. A wake mounts at most m+1 lazy lowers, one
+block-lower instance per layer for chunked files, so it stays O(1). Because a
+layer is a diff against the stored inventory rather than against the mounted
+lower, a box that has not yet rested stops re-uploading a whole base on every
+tick. The rest still rebases when the layers outgrow the base. The work: the
+record format (`ChainState` across the container and the object), the commit,
+the attach, retention, the conformance model, and an image test that ten 4 KiB
+edits after a 500 MB install each publish under 1 MiB and every wake is exact;
+then a live re-run of the session row. Estimate: about three days, and one
+image rebuild.
+
 D56. The box decides its own rest from its own use; the workspace neither
 asks nor tells it (2026-10-01, corrected the same day). This replaces D35's
 third hold reason, the root's `sandboxInUse`, and keeps the other two. While a
