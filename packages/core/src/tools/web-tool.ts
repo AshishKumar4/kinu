@@ -81,7 +81,7 @@ export function createWebTool(deps: WebToolDeps): ToolSet[string] {
         yield* Effect.sync(() => { requireBuild('web.screenshot'); });
         const fullPage = args.full_page === true;
         const shot = yield* attemptInItsWords('unavailable', () => provider.screenshot(url, { fullPage, engine: args.engine }));
-        const path = yield* attemptInItsWords('unavailable', () => saveScreenshot(files.vfs, shot));
+        const path = yield* attemptInItsWords('unavailable', () => saveScreenshot(files, shot));
 
         if (fullPage) return `Saved the whole page of ${shot.url} to ${path}.`;
 

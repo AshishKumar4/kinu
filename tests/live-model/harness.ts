@@ -122,7 +122,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
 
   // As the CLI session builds `web.*`: no browser session in this process.
   const missing = 'Browser sessions run on the hosted backend; the CLI has rendered fetches and screenshots only';
-  const web = () => createWebCodemodeProvider({ provider: webSearch, vfs: rt.storage.vfs, sessions: { missing }, prelude: { missing } });
+  const web = () => createWebCodemodeProvider({ provider: webSearch, files: rt.storage, sessions: { missing }, prelude: { missing } });
 
   // This builds a TOOL SURFACE — the tools, the action enum and the system
   // prompt — for arms that assert their shape. It holds no session, and local

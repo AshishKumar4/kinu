@@ -17,7 +17,7 @@ import { BROWSER_PRELUDE } from './browser-prelude';
 
 export interface CodemodeFactoryOptions {
   launch: (online: boolean) => ProgramLaunch;
-  rt: { actor: ActorHandle; craftStore: Pick<CraftStore, 'list'>; executionRouter?: Pick<ExecutionRouter, 'getProviders'>; storage: { vfs: VFS } };
+  rt: { actor: ActorHandle; craftStore: Pick<CraftStore, 'list'>; executionRouter?: Pick<ExecutionRouter, 'getProviders'>; storage: { vfs: VFS; home: string } };
   sql: SqlExecutor;
   workspace: string;
   webSearch: WebSearchProvider;
@@ -63,7 +63,7 @@ export function createCodemodeToolFactory(options: CodemodeFactoryOptions): Code
   const agentsProvider = options.agents ? createAgentsCodemodeProvider(options.agents) : null;
 
   const webProvider = createWebCodemodeProvider({
-    provider: webSearch, vfs: rt.storage.vfs, sessions: { sessions: options.browserSessions }, prelude: { source: BROWSER_PRELUDE },
+    provider: webSearch, files: rt.storage, sessions: { sessions: options.browserSessions }, prelude: { source: BROWSER_PRELUDE },
   });
 
   const executorProviders = (rt.executionRouter?.getProviders() ?? []).map((p) => {

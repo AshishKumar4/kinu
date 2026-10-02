@@ -2207,7 +2207,7 @@ export class LocalAgentSession {
     const missing = 'Browser sessions run on the hosted backend; the CLI has rendered fetches and screenshots only';
 
     return createWebCodemodeProvider({
-      provider: this.getWebSearchProvider(), vfs: this.rt.storage.vfs, sessions: { missing }, prelude: { missing },
+      provider: this.getWebSearchProvider(), files: this.rt.storage, sessions: { missing }, prelude: { missing },
     });
   }
 
