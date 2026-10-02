@@ -4,6 +4,8 @@ Most tests run on Bun: core, cf-backend, cli-backend, cli. Durable Object tests 
 
 ## Commands
 
+`bun install` can bootstrap with the machine's Bun. It installs the exact `bun` npm package this repo pins; hooks and shell entry points put `node_modules/.bin` first and refuse a missing local binary. GitHub workflows use it after installation too. Use `node_modules/.bin/bun` for direct ladder commands. `bash scripts/setup-worktree.sh` prepares a fresh worktree with its own workspace links or its own locked install, without changing the machine's runtime.
+
 ```bash
 bash scripts/test.sh                     # core + cf-backend + cli-backend + cli
 bash scripts/test.sh --coverage          # + coverage report
@@ -345,6 +347,10 @@ The reconnect snapshot tests call the real RPCs and mount `useKinu` behind the g
 A screenshot is evidence only when it is judged, not when a test counts the files it wrote. The account, sharing and preset gates keep their interaction, access and viewport/theme checks but write no uninspected image matrix. They await the actual page or control, not a 500 ms network-idle interval. On 2026-10-01 the same seven account/share tests took 112.98 s before and 57.68 s after this cut on the workstation; the three affected files passed all eleven tests.
 
 One long-workerd wake case crosses the Cloudflare adapter's real 30 s auto-detach threshold and proves a completion queued behind the held reply reaches the model. The removed settle-window row had the same queue-ownership oracle and paid the same 40 s fixture sleep. On 2026-10-01 that file's cases took 86.37 s before and 41.03 s after the cut; the retained wake and all nineteen two-turn/genesis checks passed. The separate genesis start hold remains; no Cloudflare clock hook was added.
+
+The Workers pool builds auxiliary probes only after Vitest selects its suites. Requirements come from each suite's native `env` reads, including imported helpers, and the same binding targets Miniflare receives. Unknown bindings or Worker targets fail by name. One native project still shares one pool per row; filters, changed-file selection and custom reporters do not replace that contract. The compiler runs before pool boot, not inside its 90 s startup window.
+
+Measured 2026-10-02: a two-turn pool's serialized configuration fell from 485.44 MiB to 35.97 MiB, and built outputs from 492.47 MiB to 36.29 MiB. One pool started in 3.38 s against the same-tip eager control's 23.29 s; seven selected pools started in 5.05–6.68 s, and seven on one CPU in 14.65–20.49 s, with all parity assertions passing. The earlier full-config seven-pool measurement was 31.35–33.16 s (f6269405865b5f688db184a4c9aa6078961258f1). Raw events and machine samples are retained under `bench-artifacts/pool-startup/`; they are measurements, not a speed assertion. The same 50-file wall comparison took 360.92 s eager and 291.62 s lazy. Three known sleep-time regression cases were excluded only from that comparison; a fourth failed in its eager control and remains a regression, not a green result.
 
 Tests await the public completion of the work they actually invoked, or the product's existing settle/close API. They do not invent fixture-ready events, notification counters or completion latches. Missing product completion is an API problem to report, not a reason to build a second scheduler in tests. UI renderers may use their existing public frame/flush completion; domain expiry uses a controlled clock, not an elapsed machine-speed cutoff.
 

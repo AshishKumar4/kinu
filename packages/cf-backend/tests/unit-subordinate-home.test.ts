@@ -58,7 +58,7 @@ describe('a hosted subordinate runs as its own home', () => {
   });
 
   // A relative path names the actor's own working directory, its home, as its shell's cwd does.
-  test("a large result of its shell is saved in its own home, and its file tool reads it back from the marker's path", async () => {
+  test("a large result of its shell is saved in its own home, and the marker's path reads back from its file tool and any shell cwd", async () => {
     const parent = orchestratorHarness();
     const child = await hostedSubordinateHarness(parent, { ...hire, name: 'builder-2' });
     const tools = buildBuiltinTools({ rt: child.actor.runtime, workMode: 'build', conversations: conversationsFor(child.actor.runtime) });
@@ -66,12 +66,12 @@ describe('a hosted subordinate runs as its own home', () => {
     const file = toolExecute<{ action: 'read'; path: string; offset?: number; limit?: number }, string>(present(tools.file, 'file'));
 
     const clamped = await shell({ command: 'seq 1 20000' });
-    const saved = /full result at ([^\]]+)\]/u.exec(clamped)?.[1];
+    const saved = present(/full result at ([^\]]+)\]/u.exec(clamped)?.[1], 'the saved path');
 
     expect(clamped).not.toContain('the full result was not saved');
-    expect(await file({ action: 'read', path: present(saved, 'the saved path'), offset: 19_999, limit: 2 })).toContain('20000');
-    // Not main's: its home is mode 0700 to the helper anyway.
-    expect(await parent.agent.statWorkspaceFile(`/home/main/${saved}`)).toBeNull();
+    expect(saved).toStartWith(`${agentHome(subordinateAgentName(child.actor.handle.storageKey))}/.kinu/tool-output/`);
+    expect(await file({ action: 'read', path: saved, offset: 19_999, limit: 2 })).toContain('20000');
+    expect(await shell({ command: `cd /tmp && tail -n 1 ${saved}` })).toContain('20000');
   });
 
   test('an archive keeps the home', async () => {

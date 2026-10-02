@@ -176,7 +176,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   });
 
   tools.eval = withClampedToolResult(tools.eval, {
-    vfs: rt.storage.vfs, budget, producer: 'eval', images: true,
+    files: rt.storage, budget, producer: 'eval', images: true,
   });
 
   // No fallback chain: an unready runtime returns a structured error, never silently routes elsewhere.
@@ -190,7 +190,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
 
       // The file steer is composed into the clamped text so one cap covers it (shell-file-steer.ts).
       const steer = fileToolSteer(args.command);
-      const clampOpts: ClampToolResultOptions = { vfs: rt.storage.vfs, budget, producer: 'shell' };
+      const clampOpts: ClampToolResultOptions = { files: rt.storage, budget, producer: 'shell' };
 
       const clamp = async (result: CommandResult): Promise<string> => {
         if (!v.is(v.string(), result)) {
@@ -286,6 +286,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
 
   tools.file = createFileTool({
     vfs: rt.toolFiles,
+    home: rt.storage.home,
     ledger: deps.fileLedger ?? new TurnFileLedger(),
     budget,
     memory,
@@ -322,7 +323,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     execute: async (args) => runTasksAction(args),
   }));
 
-  if (deps.webSearch) tools.web = createWebTool({ provider: deps.webSearch, vfs: rt.storage.vfs, budget });
+  if (deps.webSearch) tools.web = createWebTool({ provider: deps.webSearch, files: rt.storage, budget });
 
   if (deps.report) {
     const report = deps.report;
@@ -391,7 +392,7 @@ export function installCodemode(
 ): void {
   const { rt } = deps;
   const built = build(codemodeSurface(rt, toolsInWorkMode(deps.workMode ?? 'build', surface)));
-  const clamp = { vfs: rt.storage.vfs, producer: 'eval' as const, images: true as const };
+  const clamp = { files: rt.storage, producer: 'eval' as const, images: true as const };
   surface.eval = withCheckedInput('eval', withClampedToolResult(
     built,
     deps.contextBudget ? { ...clamp, budget: deps.contextBudget } : clamp,

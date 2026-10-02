@@ -54,6 +54,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+source scripts/repo-runtime.sh
 
 BACKEND=local
 ALLOW_STALE=()

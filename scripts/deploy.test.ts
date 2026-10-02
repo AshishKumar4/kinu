@@ -168,15 +168,16 @@ function runDeploy({
   const infraEnvironmentLog = join(fixture, "infra-environment.log");
 
   mkdirSync(join(fixture, "scripts"));
-  mkdirSync(join(fixture, "node_modules"));
+  mkdirSync(join(fixture, "node_modules", ".bin"), { recursive: true });
   mkdirSync(join(fixture, "packages", "cf-backend"), { recursive: true });
 
   executable(
     join(fixture, "scripts", "deploy.sh"),
     readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8"),
   );
+  writeFileSync(join(fixture, "scripts", "repo-runtime.sh"), readFileSync(join(REPO_ROOT, "scripts", "repo-runtime.sh")));
 
-  executable(join(fixture, "bun"), commandStub("bun"));
+  executable(join(fixture, "node_modules", ".bin", "bun"), commandStub("bun"));
   executable(join(fixture, "bash"), commandStub("bash"));
   executable(join(fixture, "git"), `#!/usr/bin/bash
 if [ "$3" = "rev-parse" ]; then
@@ -186,7 +187,7 @@ elif [ "$3" = "status" ] && [ "$KINU_DEPLOY_DIRTY" = "1" ]; then
 fi
 exit 0
 `);
-  executable(join(fixture, "bunx"), `#!/usr/bin/bash
+  executable(join(fixture, "node_modules", ".bin", "bunx"), `#!/usr/bin/bash
 printf 'MUTATE bunx %s\\n' "$*" >> "$KINU_DEPLOY_GATE_LOG"
 printf '%s\n' "\${CLOUDFLARE_ENV:-root}" > "$KINU_DEPLOY_BUILD_ENV_LOG"
 exit 86

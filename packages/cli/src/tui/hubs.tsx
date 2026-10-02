@@ -8,7 +8,7 @@ import { tierIdsOf,
   type WorkspaceWork,
   type AgentTaskTree,
   type JobOutputTail,
-  evolutionHelper, jobName, ownerFacingSubordinate,
+  evolutionHelper, jobName, lastOutputLines, ownerFacingSubordinate,
 } from '@kinu.run/core';
 import type { AgentJobSummary } from '../agent-client';
 import type { ScrollBoxRenderable } from '@opentui/core';
@@ -47,6 +47,7 @@ export interface TuiWorkEntry extends TuiHubRow {
   readonly title: string;
   readonly status: TuiAgentHubEntry['status'];
   readonly printed?: string;
+  readonly output?: JobOutputTail;
 }
 
 type WorkEntryDraft = { -readonly [Key in keyof TuiWorkEntry]: TuiWorkEntry[Key] };
@@ -71,10 +72,14 @@ export function workFromWorkspace(work: WorkspaceWork): TuiWorkEntry[] {
   return [...entries.filter((entry) => entry.status !== 'settled'), ...entries.filter((entry) => entry.status === 'settled')];
 }
 
-export function lastPrinted(output: JobOutputTail | undefined): string | undefined {
-  const line = (output?.chunks ?? []).map(({ text }) => text).join('').trimEnd().split('\n').at(-1);
+export function newerTail(held: JobOutputTail | undefined, listed: JobOutputTail | undefined): JobOutputTail | undefined {
+  return held === undefined || (listed !== undefined && listed.seq > held.seq) ? listed : held;
+}
 
-  return line === '' ? undefined : line;
+export function lastPrinted(output: JobOutputTail | undefined): string | undefined {
+  const printed = lastOutputLines(output, 1).join(' ');
+
+  return printed === '' ? undefined : printed;
 }
 
 export function jobWork(jobs: readonly AgentJobSummary[]): TuiWorkEntry[] {
@@ -84,6 +89,8 @@ export function jobWork(jobs: readonly AgentJobSummary[]): TuiWorkEntry[] {
     const printed = lastPrinted(job.output);
 
     if (printed !== undefined) entry.printed = printed;
+
+    if (job.output !== undefined) entry.output = job.output;
 
     return entry;
   });

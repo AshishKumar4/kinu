@@ -27,6 +27,7 @@ BASE_URL="${KINU_BASE_URL:-http://localhost:5173}"
 SKIP_EXIT=2
 
 cd "$PROJECT_DIR"
+source scripts/repo-runtime.sh
 # Before the pre-flight, so a refused target is refused even when the thing it
 # names happens to be reachable.
 if ! AGENT_NAME="$(bun scripts/eval-target.ts "$BASE_URL" --name e2e-web)"; then

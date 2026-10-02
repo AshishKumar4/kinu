@@ -34,6 +34,8 @@ export interface CheckpointFiles {
 
 export interface Storage {
   vfs: VFS & CheckpointFiles;
+  /** Where a relative path on `vfs` starts: the actor's home. */
+  readonly home: string;
   sql: SqlExecutor;
   execRaw: RawSqlExec;
   /** Atomic synchronous writes on the same connection as sql; rolls back on throw. */
@@ -132,11 +134,13 @@ export type OutputStreamName = 'stdout' | 'stderr';
 export interface OutputChunk {
   readonly stream: OutputStreamName;
   readonly text: string;
+  /** Bytes lost just before `text`. */
+  readonly omitted?: number;
 }
 
 export interface OutputSink {
   write(stream: OutputStreamName, data: Uint8Array | string): void;
-  lost(count: number): void;
+  lost(bytes: number): void;
 }
 
 const WritableSchema = v.object({ write: v.function(), lost: v.function() });

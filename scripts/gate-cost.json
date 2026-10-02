@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-10-01",
+  "measuredAt": "2026-10-02",
   "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
   "method": "each row alone under `setsid /usr/bin/time -v bun scripts/ladder.ts --gate <run> --no-cache`; the row's whole process tree — its session plus every descendant by ppid, so a setsid'd dev server or browser counts — sampled every 0.05s for its first 3s and every 0.25s after — summed proportional set (Pss, /proc/<pid>/smaps_rollup) for memory, tasks in state R for parallel demand, Δ(utime+stime+cutime+cstime) over at least 0.25s for parallelism achieved; CPU seconds from getrusage(RUSAGE_CHILDREN); a post-publish row against the deployment `--deployment=<origin>` named, with KINU_ORIGIN and KINU_EVAL_ORIGIN set to it",
   "rows": {
@@ -773,17 +773,6 @@
       "loadAtStart": 4.05,
       "exit": 0
     },
-    "bun test --timeout=0 scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/syntax.test.ts": {
-      "wallSeconds": 0.36,
-      "cpuSeconds": 0.17,
-      "peakRssMb": 50.86,
-      "peakRunnable": 1,
-      "peakCpuThreads": 0,
-      "meanThreads": 0.48,
-      "samples": 5,
-      "loadAtStart": 9.07,
-      "exit": 0
-    },
     "bun scripts/census-plants.ts packages/": {
       "wallSeconds": 9.64,
       "cpuSeconds": 9.68,
@@ -1013,6 +1002,17 @@
       "meanThreads": 0.68,
       "samples": 183,
       "loadAtStart": 9.43,
+      "exit": 0
+    },
+    "bun test --timeout=0 scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/syntax.test.ts scripts/workerd-requirements.test.ts": {
+      "wallSeconds": 1.64,
+      "cpuSeconds": 1.08,
+      "peakRssMb": 178.5,
+      "peakRunnable": 3,
+      "peakCpuThreads": 1.23,
+      "meanThreads": 0.66,
+      "samples": 28,
+      "loadAtStart": 22.33,
       "exit": 0
     }
   }

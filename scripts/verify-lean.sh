@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/repo-runtime.sh"
 
 cd "$(dirname "$0")/../lean"
 lake build

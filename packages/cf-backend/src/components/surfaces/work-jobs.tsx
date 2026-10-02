@@ -7,7 +7,7 @@ import {
 } from "@phosphor-icons/react";
 import type { Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
-import { jobName, shortJobId, timeAgo } from "@kinu.run/core";
+import { jobName, lastOutputLines, shortJobId, timeAgo } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 
 function statusMeta(status: BackgroundJob["status"]) {
@@ -35,9 +35,7 @@ function interruptionNote(job: BackgroundJob, now: number): string | null {
 }
 
 function lastOutput(output: BackgroundJob["output"]): string | null {
-  const lines = (output?.chunks ?? []).map(({ text }) => text).join("").replace(/\n$/, "").split("\n");
-
-  return lines.slice(-OUTPUT_LINES).join("\n") || null;
+  return lastOutputLines(output, OUTPUT_LINES).join("\n") || null;
 }
 
 const OUTPUT_LINES = 4;

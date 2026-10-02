@@ -35,6 +35,7 @@ set -euo pipefail
 # the asset bundle, and both sides well under the limit.
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/scripts/repo-runtime.sh"
 # The deployed asset dir is packages/cf-backend/dist/client, from both configs
 # wrangler can pick: the user config (wrangler.jsonc, "dist/client") and the
 # vite plugin's redirect target (dist/kinu/wrangler.json, "../client").
@@ -54,8 +55,7 @@ NATIVE_SCOPE="@opentui"
 CPYTHON_ARTIFACT="kinu-runtime-cpython.tar.gz"
 CPYTHON_PATH="node_modules/@nimbus-sh/runtime-cpython"
 
-BUN="${BUN:-bun}"
-command -v "$BUN" >/dev/null 2>&1 || { echo "build-cli-dist: bun is required" >&2; exit 1; }
+BUN="$ROOT/node_modules/.bin/bun"
 
 # Shared with the Harbor compiled build: one authoritative external-asset set.
 runtime_packages="$("$BUN" -e 'console.log(JSON.parse(await Bun.file(process.argv[1]).text()).join("\n"))' "$ROOT/scripts/cli-runtime-packages.json")"

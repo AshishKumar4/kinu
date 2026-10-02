@@ -2,7 +2,7 @@
 // The CLI needs `bun:sqlite` and `Bun.stdin`, so an unresolvable or too-old Bun is a hard stop.
 
 /** `tests/unit-install-script.test.ts` asserts this equals the repo's `packageManager` pin. */
-const KINU_BUN_VERSION = '1.4.0';
+const KINU_BUN_VERSION = '1.4.2';
 
 /** Non-`major.minor.patch` input is not comparable; the shell half treats it as incompatible. */
 function bunVersionKey(version: string): number {

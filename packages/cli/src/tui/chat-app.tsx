@@ -92,7 +92,7 @@ import { agentDisplayLabel, clipText } from '@kinu.run/core/tui';
 import { createKeyDispatcher, openTuiKeyBindings } from './actions';
 import {
   buildAgentHubEntries, HubOverlay, SubagentChatOverlay, subordinatesFromRoster, workFromWorkspace, answeredHelpers, evolutionWork,
-  jobWork, lastPrinted,
+  jobWork, lastPrinted, newerTail,
   type TuiHubData, type TuiHubRow, type TuiWorkEntry, type TuiHubView, type TuiSubagentChat,
 } from './hubs';
 import { DEFAULT_TUI_THEME_SELECTION, useTuiTheme, type ThemeSelection } from './theme';
@@ -838,11 +838,16 @@ function ChatScene({
   }, [client, hub, roster]);
 
   const [jobTails, setJobTails] = useState<Readonly<Record<string, JobOutputTail>>>({});
+  const listedTails = useRef<Readonly<Record<string, JobOutputTail>>>({});
+
+  useEffect(() => {
+    listedTails.current = Object.fromEntries((hub?.data.work ?? []).flatMap((item) => (item.output === undefined ? [] : [[item.id.replace(/^job:/, ''), item.output]])));
+  }, [hub]);
 
   const hubLive = useMemo<TuiHubData | undefined>(() => !hub ? undefined : {
     ...hub.data,
     work: hub.data.work.map((item) => {
-      const printed = lastPrinted(jobTails[item.id.replace(/^job:/, '')]);
+      const printed = lastPrinted(newerTail(jobTails[item.id.replace(/^job:/, '')], item.output));
 
       return item.id.startsWith('job:') && printed !== undefined ? { ...item, printed } : item;
     }),
@@ -1365,7 +1370,7 @@ function ChatScene({
 
     if (printed.success) {
       const frame = printed.output;
-      setJobTails((tails) => ({ ...tails, [frame.jobId]: followJobOutput(tails[frame.jobId], frame) }));
+      setJobTails((tails) => ({ ...tails, [frame.jobId]: followJobOutput(newerTail(tails[frame.jobId], listedTails.current[frame.jobId]), frame) }));
 
       return;
     }

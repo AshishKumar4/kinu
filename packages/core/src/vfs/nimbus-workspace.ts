@@ -51,7 +51,6 @@ function shellExecOptions(input: { value: unknown }): ShellExecOptions | undefin
   return options.success ? options.output : undefined;
 }
 
-/** A relative path starts at `cwd`, the actor's home. */
 function workspaceFiles(vendor: WorkspaceBundle['vfs'], cwd: string): WorkspaceBundle['vfs'] {
   const at = <T>(path: string, syscall: string, call: (absolute: string) => T | Promise<T>): Promise<T> => {
     const absolute = workspacePath(path, cwd);

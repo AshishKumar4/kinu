@@ -84,7 +84,7 @@ describe('the reach declaration', () => {
           render: async (url: string) => ({ url, retrievedAt: new Date(0).toISOString(), markdown: '' }),
           screenshot: async (url: string) => ({ url, retrievedAt: new Date(0).toISOString(), bytes: new Uint8Array() }),
         },
-        vfs: rt.storage.vfs,
+        files: rt.storage,
         sessions: { missing: 'this suite opens no browser' },
       }),
       report: () => createReportCodemodeProvider(() => ({ report: async () => ({ delivered: true }) })),

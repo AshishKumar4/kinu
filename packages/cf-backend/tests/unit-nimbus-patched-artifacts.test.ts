@@ -129,6 +129,7 @@ describe('installed Nimbus dependency integrity', () => {
     const shell = await workspace.exec(`ls ${NIMBUS_WORKSPACE_ROOT}`);
 
     const file = createFileDispatcher({
+      home: WORKSPACE_ROOT,
       vfs: nimbusSessionFiles({
         files: workspaceBoxFiles(async () => workspace.vfs),
         ready: async () => undefined,

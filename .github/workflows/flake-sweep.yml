@@ -52,7 +52,10 @@ jobs:
             bun-${{ runner.os }}-
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: |
+          bun install --frozen-lockfile
+          source scripts/repo-runtime.sh
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
 
       - name: Sweep
         env:

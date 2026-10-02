@@ -7,7 +7,7 @@ import type {
   CraftStore, AgentStores, AgentsSwarmDeps, ModelCallSink,
 } from '@kinu.run/core';
 import { tool } from 'ai';
-import { codemodeInputSchema } from '@kinu.run/core';
+import { codemodeInputSchema, WORKSPACE_ROOT } from '@kinu.run/core';
 import { createTestSql, type TestSql } from './sql';
 import {
   WORKSPACE_IDENTITY_DDL, initWorkspaceActorTable, WorkspaceActorDirectory, initAgentConfigTable,
@@ -141,6 +141,7 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
     get toolFiles() { return rt.storage.vfs; },
     storage: {
       vfs: workspace.vfs,
+      home: WORKSPACE_ROOT,
       sql: testSql.sql,
       execRaw: testSql.execRaw,
       transactionSync: write => testSql.db.transaction(write)(),

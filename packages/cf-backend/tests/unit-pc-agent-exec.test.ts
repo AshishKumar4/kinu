@@ -5,7 +5,7 @@
 
 import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 import { closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync, writeSync } from 'node:fs';
@@ -68,6 +68,8 @@ const PcAgentModuleSchema = v.object({
   PTY_EXIT_FRAME: v.string(),
   requestDirectory: v.function(),
   supervisionSupported: v.function(),
+  processStartIdentity: v.pipe(v.function(), v.returnsAsync(v.string())),
+  watchOutput: v.function(),
   waitForFile: v.function(),
   waitForSupervisorState: v.function(),
 });
@@ -112,11 +114,45 @@ type DaemonReply = v.InferOutput<typeof DaemonReplySchema>;
 const OutputFrameSchema = v.object({
   type: v.literal(pcAgent.EXEC_OUTPUT_FRAME),
   request: v.string(),
-  chunks: v.array(v.object({ stream: v.picklist(['stdout', 'stderr']), data: v.string() })),
+  chunks: v.array(v.object({ stream: v.picklist(['stdout', 'stderr']), data: v.string(), omitted: v.optional(v.number()) })),
   dropped: v.number(),
 });
 
 type OutputFrame = v.InferOutput<typeof OutputFrameSchema>;
+
+const WatchSchema = v.object({ ended: v.promise(), bind: v.function() });
+
+/** A record on a supervisor's output pipe: its kind (1 stdout, 2 stderr), a 48-bit length, the bytes. */
+function outputRecord(kind: 1 | 2, text: string): Buffer {
+  const body = Buffer.from(text);
+  const header = Buffer.alloc(7);
+  header[0] = kind;
+  header.writeUIntBE(body.length, 1, 6);
+
+  return Buffer.concat([header, body]);
+}
+
+/** A supervisor's record of bytes it dropped: kind 0, the count as the length, nothing after it. */
+function dropRecord(bytes: number): Buffer {
+  const header = Buffer.alloc(7);
+  header.writeUIntBE(bytes, 1, 6);
+
+  return header;
+}
+
+/** The frames a watch over `records` sends once its supervisor's pipe closes. */
+async function framesOf(id: string, ...records: Buffer[]): Promise<OutputFrame[]> {
+  const pipe = new EventEmitter();
+  const ws = recorder();
+  const watch = v.parse(WatchSchema, pcAgent.watchOutput(id, pipe, ws.socket));
+  pipe.emit('data', Buffer.concat(records));
+  pipe.emit('close');
+  await watch.ended;
+
+  return ws.outputsOf(id);
+}
+
+const base64 = (text: string): string => Buffer.from(text).toString('base64');
 
 function outputText(frames: readonly OutputFrame[], stream: 'stdout' | 'stderr'): string {
   return frames.flatMap((frame) => frame.chunks).filter((chunk) => chunk.stream === stream)
@@ -213,6 +249,25 @@ describe('a running command\'s output, for a hub that asked', () => {
     expect(ws.arrivals.indexOf(reply)).toBeGreaterThan(Math.max(...ws.outputsOf(id).map((frame) => ws.arrivals.indexOf(frame))));
     acknowledge(rpcId(401), id, ws.socket);
     await ws.answerTo(rpcId(401));
+  });
+
+  test('a drop the supervisor reports between two chunks is placed between them, in bytes', async () => {
+    const id = rpcId(480);
+
+    expect(await framesOf(id, outputRecord(1, 'one\n'), dropRecord(5000), outputRecord(1, 'two\n'))).toEqual([{
+      type: pcAgent.EXEC_OUTPUT_FRAME, request: id,
+      chunks: [{ stream: 'stdout', data: base64('one\n') }, { stream: 'stdout', data: base64('two\n'), omitted: 5000 }], dropped: 5000,
+    }]);
+  });
+
+  test('a window a chunk overflows keeps its newest bytes, the shed ones placed before them', async () => {
+    const id = rpcId(490);
+
+    expect(await framesOf(id, outputRecord(2, 'early\n'), outputRecord(1, 'x'.repeat(20_000)), dropRecord(7))).toEqual([{
+      type: pcAgent.EXEC_OUTPUT_FRAME, request: id,
+      // `early` and the oldest 3,616 x's go: 3,622 bytes before what is kept. A loss after the last chunk ends the frame.
+      chunks: [{ stream: 'stdout', data: base64('x'.repeat(16_384)), omitted: 3622 }, { stream: 'stdout', data: '', omitted: 7 }], dropped: 3629,
+    }]);
   });
 
   test('a flood goes out as a bounded number of windows, every byte sent or counted', async () => {
@@ -609,6 +664,26 @@ function release(gate: string): void {
   }
 }
 
+/** A process holding `dir`'s `life` FIFO open for writing from its start, as a supervisor does; it is no supervisor. */
+function holdingLife(dir: string, file: string, ...args: string[]): ChildProcess {
+  const life = join(dir, 'life');
+  execFileSync('mkfifo', [life]);
+  // Read-write, so the open waits for no reader; once this copy closes, the child's is the only writer.
+  const fd = openSync(life, 'r+');
+
+  try {
+    return spawn(file, args, { stdio: ['ignore', 'ignore', 'inherit', fd] });
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** The record a supervisor publishes, naming `pid` and the command group `group`, as the daemon reads identities. */
+async function recordSupervisor(dir: string, pid: number, group: number): Promise<void> {
+  const [start, groupStart] = await Promise.all([pcAgent.processStartIdentity(pid), pcAgent.processStartIdentity(group)]);
+  writeFileSync(join(dir, 'state'), `pid=${String(pid)}\nstart=${start}\ngroup=${String(group)}\ngroupStart=${groupStart}\n`, { mode: 0o600 });
+}
+
 describe('pc-agent durable supervisor', () => {
   // 2026-10-02: a supervisor killed before its result left its exec waiting on a file nothing would write.
   test('a supervisor killed mid-command answers its exec with its death, not silence', async () => {
@@ -646,6 +721,44 @@ describe('pc-agent durable supervisor', () => {
     await expect(restarted.result(id)).rejects.toThrow(`the supervisor of ${id} (pid ${String(pid)}) exited without recording the command's result`);
     await ws.answerTo(id);
     release(gate);
+  });
+
+  // A supervisor gone between the daemon's identity check and the step it waits on: each wait hears of its death.
+  test('a supervisor that dies when told to stop answers the stop with its death, its command still running', async () => {
+    const root = scratchDir('pc-agent-stop-window');
+    const id = rpcId(460);
+    const dir = join(root, id);
+    mkdirSync(dir, { mode: 0o700 });
+    // The command, in a process group of its own as a supervisor starts it.
+    const command = spawn('sleep', ['60'], { detached: true, stdio: 'ignore' });
+    const commandEnded = new Promise((resolve) => command.once('exit', resolve));
+    // SIGUSR1 ends `sleep` (its default action) before it does anything a supervisor does on it.
+    const supervisor = holdingLife(dir, 'sleep', '60');
+    await recordSupervisor(dir, v.parse(PidSchema, supervisor.pid), v.parse(PidSchema, command.pid));
+    const registry = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(root));
+
+    await expect(registry.cancel(id)).rejects.toThrow(`the supervisor of ${id} (pid ${String(supervisor.pid)}) exited without recording the command's result`);
+    // Not a stop: the command did outlive its supervisor.
+    expect(alive(v.parse(PidSchema, command.pid))).toBe(true);
+    process.kill(-v.parse(PidSchema, command.pid), 'SIGKILL');
+    await commandEnded;
+  });
+
+  test('a supervisor that dies on reading its ACK leaves its directory to the daemon, and the ACK answers', async () => {
+    const root = scratchDir('pc-agent-ack-window');
+    const id = rpcId(470);
+    const dir = join(root, id);
+    mkdirSync(dir, { mode: 0o700 });
+    writeFileSync(join(dir, 'result'), 'kind=exited\nexitCode=0\n', { mode: 0o600 });
+    execFileSync('mkfifo', [join(dir, 'ack')]);
+    // Reads the ACK, then exits without removing its directory.
+    const supervisor = holdingLife(dir, 'cat', join(dir, 'ack'));
+    const pid = v.parse(PidSchema, supervisor.pid);
+    await recordSupervisor(dir, pid, pid);
+    const registry = v.parse(SupervisorRegistrySchema, pcAgent.createInFlight(root));
+
+    expect(await registry.acknowledge(id)).toEqual({ requestId: id, acknowledged: true });
+    expect(existsSync(dir)).toBe(false);
   });
 
   test('bounds captured output, keeps its head and tail, and saves the whole of it', async () => {

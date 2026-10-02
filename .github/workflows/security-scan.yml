@@ -50,7 +50,10 @@ jobs:
       # The self-test imports the repository's own modules (valibot, test-utils);
       # without an install it fails on the first import, not on a finding.
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: |
+          bun install --frozen-lockfile
+          source scripts/repo-runtime.sh
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
 
       # The scanner's own gate. Its patterns, its ignore-file semantics, and the
       # fact that the committed ignore file really does suppress the fixture it

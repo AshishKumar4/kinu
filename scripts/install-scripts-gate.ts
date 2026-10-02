@@ -46,6 +46,7 @@ export type InstallScriptAllowlist = Readonly<Record<string, string>>;
  * none is optional at the version we pin.
  */
 export const ALLOWED_INSTALL_SCRIPTS = {
+  bun: 'installs the exact platform runtime; repository hooks must not inherit another project\'s global Bun',
   esbuild: 'downloads its platform binary; vite and the bundler chain cannot build without it',
   workerd: 'downloads the Cloudflare runtime binary that `vitest-pool-workers` and `wrangler dev` execute',
   puppeteer: 'resolves a browser for the `browser` tool and the screenshot gates',

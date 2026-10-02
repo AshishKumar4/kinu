@@ -1213,7 +1213,7 @@ export class LocalAgentSession {
         durable: (callId, signal) => this.actorSession.durableCall(callId, signal),
       },
       clamp: {
-        vfs: this.rt.storage.vfs,
+        files: this.rt.storage,
         budget: this.actorSession.orchestrator.acc.context,
         producer: 'external_tool',
       },
@@ -1925,7 +1925,7 @@ export class LocalAgentSession {
 
           const observed = await observeCompletionState({
             exec: (command) => shell.exec(command),
-            vfs: this.rt.storage.vfs,
+            files: this.rt.storage,
           });
 
           // No evidence means no gate: a bare "are you sure?" is not worth a turn.
@@ -2206,7 +2206,7 @@ export class LocalAgentSession {
     const missing = 'Browser sessions run on the hosted backend; the CLI has rendered fetches and screenshots only';
 
     return createWebCodemodeProvider({
-      provider: this.getWebSearchProvider(), vfs: this.rt.storage.vfs, sessions: { missing }, prelude: { missing },
+      provider: this.getWebSearchProvider(), files: this.rt.storage, sessions: { missing }, prelude: { missing },
     });
   }
 
