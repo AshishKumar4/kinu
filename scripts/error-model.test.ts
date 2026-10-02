@@ -120,6 +120,18 @@ test.each([
   expect(measured(LEGACY, [[file, body]]).filter(({ key }) => key.startsWith(file))).toEqual([{ key: `${file}#${mechanism}`, value: 1 }]);
 });
 
+test('a file may hold two declarations, each covering only its own mechanisms and names', () => {
+  const file = 'packages/core/src/tools/db-codemode.ts';
+
+  const body = 'export class AppBatchError extends KinuError {}\nexport class Other extends KinuError {}\n'
+    + 'export const tool = { execute() { return { ok: true }; } };\nexport function local() { return { ok: false }; }\n';
+
+  expect(measured(LEGACY, [[file, body]]).filter(({ key }) => key.startsWith(file))).toEqual([
+    { key: `${file}#error-class`, value: 1 },
+    { key: `${file}#result-literal`, value: 1 },
+  ]);
+});
+
 test('`settleSync` as a transactionSync callback\'s whole return is a bridge; anywhere else in the callback it is a finding', () => {
   const source = `
 import { settle, settleSync } from '../obs/index';

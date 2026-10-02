@@ -46,8 +46,17 @@ interface Declaration {
   readonly within?: readonly string[];
 }
 
+/** The declarations by file; a file may hold several, each for its own mechanisms and names. */
+function byFile(entries: readonly (readonly [string, Declaration])[]): ReadonlyMap<string, readonly Declaration[]> {
+  const files = new Map<string, Declaration[]>();
+
+  for (const [file, declaration] of entries) files.set(file, [...files.get(file) ?? [], declaration]);
+
+  return files;
+}
+
 /** Files whose mechanisms are the target model's boundary, not a legacy site. */
-export const DECLARED = new Map<string, Declaration>([
+export const DECLARED = byFile([
   ...Object.values(FAILURE_SURFACES).map(surface => [surface.adapter, {
     mechanisms: MECHANISMS, reason: `${surface.type}'s one runner rethrows its typed failure or a defect`,
   }] as const),
@@ -112,6 +121,122 @@ export const DECLARED = new Map<string, Declaration>([
     within: ['ChangeNotesResult', 'saveChangeNotes', 'sendChangeNotes'],
     reason: '`ChangeNotesResult`, the change-set notes\' RPC answer: the Changes surface and the CLI read `ok` and `error` off it',
   }],
+  // Wire shapes: each `ok`/`success` here is read by a caller that does not share this process (RPC, HTTP, a
+  // model or the program it wrote, stdout) or mirrors one in a fixture; changing it changes that contract.
+  ...([
+    ['packages/cf-backend/src/actor-agent.ts', ['installWorkspaceCapability', 'recordSubordinateTitle', 'onModelSettingsChanged', 'cancelCurrentWork', 'installClientMessageGate', 'refuseRevokedSocketAuthority'],
+      'DO RPC answers (capability install, subordinate title, model-settings fan-out, cancel) and the Agents SDK\'s `{ success: false }` socket denial, read across the isolate'],
+    ['packages/cf-backend/src/cli/routes.ts', ['body'],
+      'the CLI routes\' HTTP JSON bodies, read by the CLI\'s fetch'],
+    ['packages/cf-backend/src/cli/rpc-gate.ts', ['rejectOutOfScopeRpc'],
+      'the Agents SDK\'s `{ success: false }` RPC denial sent over the socket'],
+    ['packages/cf-backend/src/components/landing/landing-fixtures.ts', ['rpc', 'planRpc', 'superviseRpc'],
+      'landing-page fixtures that mirror workspace RPC answers'],
+    ['packages/cf-backend/src/components/surfaces/ChangesSurface.tsx', ['Restored'],
+      '`Restored`, the restoreWorkspaceBaseline RPC answer the surface reads'],
+    ['packages/cf-backend/src/components/surfaces/FilesSurface.tsx', ['WriteResult'],
+      '`WriteResult`, the executor file write RPC answer'],
+    ['packages/cf-backend/src/components/surfaces/changelog-entries.tsx', ['StagedSkillResult'],
+      '`StagedSkillResult`, the showRefinement RPC answer'],
+    ['packages/cf-backend/src/drive/routes.ts', ['answered'],
+      'the Drive routes\' HTTP JSON body for a void answer'],
+    ['packages/cf-backend/src/gallery-diff-design.tsx', ['load', 'save', 'send'],
+      'gallery fixtures that mirror the change-notes RPC answers'],
+    ['packages/cf-backend/src/gallery-drive.tsx', ['serveDrive'],
+      'gallery fixtures that mirror the Drive HTTP bodies'],
+    ['packages/cf-backend/src/gallery-preview-tabs.tsx', ['rpc', 'workerRpc'],
+      'gallery fixtures that mirror workspace RPC answers'],
+    ['packages/cf-backend/src/gallery-slate-fallback.tsx', ['frameRpc'],
+      'a gallery fixture that mirrors SlateHost.preview\'s answer'],
+    ['packages/cf-backend/src/gallery.tsx', ['accountProfileFixture', 'deviceRowsFixture', 'galleryFetch', 'data', 'savePlanReviewAnnotations', 'previewSlate', 'galleryPlanRpc', 'galleryRosterRpc', 'PICKER_TEST_RESULTS', 'galleryModelTest', 'slateRpc', 'approvalsRpc', 'filesRpc'],
+      'gallery fixtures that mirror RPC, HTTP and model-test answers'],
+    ['packages/cf-backend/src/hooks/use-kinu.ts', ['dismissSubordinate'],
+      'the dismissSubordinate RPC answer as the hook passes it on'],
+    ['packages/cf-backend/src/mcp-server.ts', ['McpAgentClient'],
+      'the saveNoteFromMcp RPC answer the MCP save_note tool returns'],
+    ['packages/cf-backend/src/orchestrator.ts', ['resolveHostedActorRoute', 'announceDeviceUnavailable', 'announceDeviceAvailable', 'setTurnFeedback', 'restoreWorkspaceBaseline', 'recordHeadStep', 'destroyAgent', 'saveNoteFromMcp', 'liveShareBundle', 'renameSubordinateAgent', 'dismissSubordinate', 'prepareTerminal', 'setCurriculumTaskStatus', 'rawCopyFromFork'],
+      'workspace DO RPC answers (callable methods and DO-to-DO calls) read by the UI, the CLI and other objects'],
+    ['packages/cf-backend/src/slates/host.ts', ['blueprintAnswer', 'readLiveShareRecord', 'unshare', 'operation', 'preview', 'releaseInvocation', 'bindingCall', 'run', 'call', 'remove'],
+      '`SlateAnswer`, the slate host\'s refusal-as-value over DO RPC, and the share ledger\'s recorded `ok`'],
+    ['packages/cf-backend/src/terminal-route.ts', ['deviceTerminal', 'workspaceTerminal', 'sandboxCommand'],
+      'the terminal routes\' HTTP JSON bodies'],
+    ['packages/cf-backend/src/user/routes.ts', ['body'],
+      'the user routes\' HTTP JSON bodies, read by the browser'],
+    ['packages/cf-backend/src/user/user-do.ts', ['verifyCliToken', 'revokeCliTokenHash', 'verifyAccessToken', 'revokeAccessToken', 'issueCliAgentConnectTicket', 'verifyCliAgentConnectTicket', 'renameDevice', 'verifyDeviceToken', 'issueDeviceConnectTicket', 'verifyDeviceConnectTicket', 'setDeviceTier', 'revokeDeviceConsent', 'acknowledgeUnstoppedDevice', 'ProfileCatalogWriteResult', 'putProfileCatalog', 'DriveAnswer', 'driveOp', 'deleteAccount', 'userMcp_handleOAuthCallback'],
+      'UserDO RPC answers (token, ticket, device, catalog, Drive and MCP verdicts) read across the isolate'],
+    ['packages/cf-backend/src/user/workspace-fork.ts', ['ForkFrameAck'],
+      '`ForkFrameAck`, the rawCopyFromFork DO RPC answer'],
+    ['packages/cli/src/cloud-turn-stream.ts', ['outcome'],
+      'a tool outcome the CLI prints as `tool_result` JSON on stdout'],
+    ['packages/cli/src/commands/inspect.ts', ['stopCommand'],
+      '`--json` stdout, read by scripts'],
+    ['packages/cli/src/commands/run.ts', ['respondToRpcCommand', 'runRpc'],
+      'the `kinu run --rpc` stdout response protocol, read by the parent process'],
+    ['packages/core/src/cli/access-tokens.ts', ['AccessTokenMint', 'AccessTokenVerification', 'normalizeAccessTokenScopes', 'mintAccessToken', 'verifyAccessToken', 'AccessTokenRevocation', 'revokeAccessToken'],
+      'access-token verdicts that cross UserDO RPC and map to HTTP statuses'],
+    ['packages/core/src/craft/source.ts', ['CraftedSourceAdmission', 'refused', 'admitCraftedSource'],
+      'the crafted-source verdict, answered to the model\'s program as codemode\'s createTool result'],
+    ['packages/core/src/delegation/agents-codemode.ts', ['execute'],
+      '`agents.*` codemode answers, read by the program the model wrote'],
+    ['packages/core/src/delegation/agents-tool.ts', ['rename', 'recordTitle', 'assign', 'message', 'dismiss'],
+      'the agents tool\'s answers to the model and the TeamToolDeps RPC contract'],
+    ['packages/core/src/events/ingress/peer.ts', ['reply'],
+      'a peer reply, the msg tool\'s answer to the model'],
+    ['packages/core/src/events/ingress/triggers.ts', ['cancelTrigger'],
+      'cancelTrigger\'s answer over RPC, HTTP and the CLI schema'],
+    ['packages/core/src/evolution/changelog.ts', ['revertScaffoldVersion', 'revertPromptSection', 'executeChangelogRevert', 'revertChangelogEntryById'],
+      'the changelog revert answer over RPC to the UI and the CLI'],
+    ['packages/core/src/evolution/control.ts', ['applyScaffoldDecision', 'ScaffoldDecisionResult', 'gepaPass', 'output'],
+      'scaffold decision and GEPA run answers over RPC to the UI and the CLI'],
+    ['packages/core/src/evolution/refinement-skill.ts', ['showRefinementRoute', 'StagedSkillResult', 'decideRefinementRoute', 'patch', 'RefinementDecisionResult'],
+      'refinement show/decide answers over RPC to the UI and the CLI'],
+    ['packages/core/src/orchestrator/agent-self-host.ts', ['setCurriculumTaskStatus'],
+      'agent.acceptCurriculumTask\'s answer to the model'],
+    ['packages/core/src/plans/review.ts', ['written', 'submit', 'saveAnnotations', 'decide', 'dismiss', 'decideAndHandOff'],
+      '`PlanReviewResult`, the plan tool\'s answer to the model and the plan RPC answers to the UI and the CLI'],
+    ['packages/core/src/read-models/background-jobs.ts', ['onSuccess', 'onFailure', 'retryBackgroundJob', 'cancelCurrentWork', 'CancelWorkOutcome'],
+      'background-job command answers over RPC to the UI and the CLI'],
+    ['packages/core/src/read-models/config-plane.ts', ['setModel', 'setReasoningEffort', 'ReasoningEffortWrite', 'setShellApprovalMode', 'revokeShellApprovalGrants', 'setAlwaysActiveSkills'],
+      'config write answers over RPC to the UI'],
+    ['packages/core/src/read-models/evolution-views.ts', ['markChangelogSeen'],
+      'markChangelogSeen\'s RPC answer'],
+    ['packages/core/src/read-models/files.ts', ['ExecutorFileUpload', 'ExecutorWriteResult', 'writeExecutorFileOp', 'onSuccess', 'renameExecutorPathOp', 'deleteExecutorPathOp'],
+      '`ExecutorWriteResult`, the executor file write answer over RPC and HTTP'],
+    ['packages/core/src/read-models/instruction-desk.ts', ['approve'],
+      'approveInstruction\'s RPC answer to the CLI and the settings page'],
+    ['packages/core/src/read-models/workspace-diff.ts', ['result', 'WorkspaceReviewResult', 'restoreWorkspaceBaseline'],
+      'baseline reset and restore answers over RPC'],
+    ['packages/core/src/safety/instruction-trust.ts', ['AdmittedInstructionDecision', 'admitInstructionDecision'],
+      '`AdmittedInstructionDecision`, the instruction decision answered over DO RPC to the CLI'],
+    ['packages/core/src/scaffold/executor.ts', ['runScaffold', 'outcome'],
+      'a scaffold run\'s result and tool outcomes, reported over MCP'],
+    ['packages/core/src/scaffold/modify.ts', ['modifyScaffold'],
+      'modifyScaffold\'s verdict, the proposeScaffold tool\'s answer to the model'],
+    ['packages/core/src/skills/drive.ts', ['DriveUploadOutcome', 'received'],
+      '`DriveUploadOutcome`, the Drive upload answer over RPC and HTTP'],
+    ['packages/core/src/slates/rpc.ts', ['SlateAnswer'],
+      '`SlateAnswer`, the slate RPC refusal-as-value'],
+    ['packages/core/src/subordinates/support.ts', ['rename', 'recordTitle', 'assign', 'message', 'dismiss'],
+      'the TeamToolDeps implementations\' answers, over RPC and to the model'],
+    ['packages/core/src/tools/builtins.ts', ['execute'],
+      'submit_plan\'s answer to the model'],
+    ['packages/core/src/tools/db-codemode.ts', ['execute'],
+      '`db.dropTable`\'s codemode answer to the model\'s program'],
+    ['packages/core/src/tools/memory-tool.ts', ['runFactAction'],
+      'the memory tool\'s answer to the model and the `memory.*` codemode namespace'],
+    ['packages/core/src/tools/state-codemode.ts', ['createStateCodemodeProvider'],
+      'the `state.*` codemode answers declared in STATE_TYPES'],
+    ['packages/core/src/types/peers.ts', ['PeerReplyOutcome'],
+      '`PeerReplyOutcome`, the msg tool\'s answer to the model'],
+    ['packages/core/src/types/plans.ts', ['PlanReviewResult', 'PlanDecisionOutcome'],
+      '`PlanReviewResult` and `PlanDecisionOutcome`, plan answers over DO RPC'],
+    ['packages/devbox/src/sync.ts', ['SyncReply', 'serveSync'],
+      '`SyncReply`, the container sync\'s HTTP answer the in-container client parses'],
+  ] as const).map(([file, owners, reason]) => [file, {
+    mechanisms: ['result-literal', 'result-type'],
+    within: owners,
+    reason,
+  }] as const),
   ['packages/devbox/src/devbox.ts', {
     mechanisms: ['result-literal'],
     within: ['devboxSync'],
@@ -382,19 +507,19 @@ function mechanismOf(node: SyntaxNode): Mechanism | undefined {
 }
 
 function isDeclared(file: string, mechanism: Mechanism, node: SyntaxNode): boolean {
-  const declaration = DECLARED.get(file);
+  return (DECLARED.get(file) ?? []).some((declaration) => {
+    if (!declaration.mechanisms.includes(mechanism)) return false;
 
-  if (declaration?.mechanisms.includes(mechanism) !== true) return false;
+    if (declaration.within === undefined) return true;
 
-  if (declaration.within === undefined) return true;
+    for (let up: SyntaxNode | undefined = node; up !== undefined; up = up.parent) {
+      const name = declaredName(up);
 
-  for (let up: SyntaxNode | undefined = node; up !== undefined; up = up.parent) {
-    const name = declaredName(up);
+      if (name !== undefined && declaration.within.includes(name)) return true;
+    }
 
-    if (name !== undefined && declaration.within.includes(name)) return true;
-  }
-
-  return false;
+    return false;
+  });
 }
 
 /** Sites per `path#mechanism`, declared boundary mechanisms left out. */
@@ -492,7 +617,7 @@ export const BLIND_SPOTS: readonly string[] = [
   + 'real domain states, so a union discriminated by a word is left to review.',
   'A RETURNED `{ error }` WITH NO `ok` FIELD — NOT COUNTED. It is a failure value by convention only.',
   'TESTS, SCRIPTS AND TOOLS — OUT OF SCOPE. The corpus is product source (`readSources`).',
-  'A MECHANISM MOVED INTO A DECLARED FILE — NOT DETECTED. `DECLARED` is read by review, one reason per file.',
+  'A MECHANISM MOVED INTO A DECLARED FILE — NOT DETECTED. `DECLARED` is read by review, one reason per declaration.',
   'A BRIDGE SPELLED ANOTHER WAY — NOT COUNTED. A runner result stored and returned later, or a runner '
   + 'called outside a `return`, is not the bridge shape; review keeps bridges to the one spelling.',
   'A DELETED LOCK — REFUSED. With no lock on disk the gate is red; the first lock is written with '
@@ -598,7 +723,7 @@ if (import.meta.main) {
     console.log(`  stale: ${key} locked at ${String(was)}, now ${String(now)}; \`bun scripts/error-model.ts --lock\` lowers it`);
   }
 
-  for (const [file, { mechanisms, reason, within }] of DECLARED) {
+  for (const [file, { mechanisms, reason, within }] of [...DECLARED].flatMap(([path, all]) => all.map((one) => [path, one] as const))) {
     console.log(`  declared: ${file} (${mechanisms.join(', ')}${within === undefined ? '' : ` within ${within.join(', ')}`}): ${reason}`);
   }
 
