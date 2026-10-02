@@ -1,4 +1,6 @@
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { Effect } from 'effect';
+import { agentCallsThrough } from '../../src/dynamic-worker-slots';
 /**
  * Instantiate a real cf actor class under bun, the platform mocked at its seams
  * (agents SDK base, DO storage over bun:sqlite, env). Codemode runs through an in-process Worker Loader.
@@ -75,10 +77,98 @@ const HARNESS_PROVIDER_SNAPSHOT: ProviderCatalogSnapshot = {
   availableModels: [DEFAULT_WORKERS_AI_MODEL_SPEC],
 };
 
+/**
+ * The platform's Dynamic Worker count for one object, as measured on staging 2026-10-02 (platform-catalog
+ * `worker_loader.do_dynamic_worker_concurrency`): ten distinct workers may each have calls awaiting an answer, and
+ * a call to an eleventh is refused before it runs. Work an isolate does after answering holds nothing.
+ */
+export class HarnessDynamicWorkers {
+  readonly inFlight = new Map<string, number>();
+
+  /** Workers with calls in flight that no ledger of this object sees. */
+  hidden = 0;
+
+  readonly calls: string[] = [];
+
+  /** While set, an admitted call waits for it: its slot stays held. */
+  gate: Promise<void> | null = null;
+
+  peak = 0;
+
+  refused = 0;
+
+  readonly #awaited: Array<{ readonly reached: () => boolean; readonly resolve: () => void }> = [];
+
+  /** Settles once `reached` holds after an admission or a refusal. */
+  when(reached: () => boolean): Promise<void> {
+    const { promise, resolve } = Promise.withResolvers<void>();
+
+    this.#awaited.push({ reached, resolve });
+    this.#check();
+
+    return promise;
+  }
+
+  #check(): void {
+    for (const awaited of this.#awaited.filter(({ reached }) => reached())) {
+      this.#awaited.splice(this.#awaited.indexOf(awaited), 1);
+      awaited.resolve();
+    }
+  }
+
+  #admit(key: string): () => void {
+    if (!this.inFlight.has(key) && this.inFlight.size + this.hidden >= 10) {
+      this.refused += 1;
+      this.#check();
+      throw new Error('Dynamic worker concurrency limit exceeded: each request may have up to 10 concurrent dynamic worker invocations. Wait for one to finish before starting another.');
+    }
+
+    this.inFlight.set(key, (this.inFlight.get(key) ?? 0) + 1);
+    this.peak = Math.max(this.peak, this.inFlight.size + this.hidden);
+    this.#check();
+
+    return () => {
+      const left = (this.inFlight.get(key) ?? 1) - 1;
+
+      if (left > 0) this.inFlight.set(key, left);
+      else this.inFlight.delete(key);
+    };
+  }
+
+  /** `isolate`, every method counted against the limit while it awaits its answer. */
+  counted(key: string, isolate: AgentFacetCalls): AgentFacetCalls {
+    return agentCallsThrough((call) => Effect.promise(async () => {
+      const release = this.#admit(key);
+
+      this.calls.push(key);
+
+      try {
+        await this.gate;
+
+        return await call(isolate);
+      } finally {
+        release();
+      }
+    }));
+  }
+}
+
 export class HarnessOrchestratorAgent extends OrchestratorAgent {
   private readonly harnessAgentFacets = inProcessAgentFacets(makeCtx);
 
-  protected override async agentCalls(actorId: string): Promise<AgentFacetCalls> {
+  /** The platform's count of this object's Dynamic Workers, which the agents' isolates are. */
+  readonly harnessDynamicWorkers = new HarnessDynamicWorkers();
+
+  /** This object's Dynamic Worker ledger, as Nimbus keeps it. */
+  harnessDynamicWorkerLedger(): DurableObjectState {
+    return this.ctx;
+  }
+
+  protected override async agentIsolate(actorId: string): Promise<AgentFacetCalls> {
+    return this.harnessDynamicWorkers.counted(this.agentOf(actorId).storageKey, await this.harnessAgentIsolate(actorId));
+  }
+
+  private async harnessAgentIsolate(actorId: string): Promise<AgentFacetCalls> {
     const facet = await this.harnessAgentFacets.open(this.agentPlacement(actorId), await this.agentWorkspace(actorId));
 
     // The turn runs on after the call; `joinHarnessFibers` waits for its end.
