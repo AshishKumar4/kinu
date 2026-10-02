@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Cause, Effect } from 'effect';
 import { existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import { generateText } from 'ai';
@@ -19,7 +19,7 @@ import {
 import { ensureDefaultTier, loadActiveProfile } from './default-model';
 import { readDefaultTier } from './profiles';
 import { createWorkspace } from '@kinu.run/core/workspace-birth';
-import { diagnostics, renderThrownChain, settle } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain, settle, settleSync } from '@kinu.run/core/obs';
 import { makeSql, makeWorkspaceSchemaSql } from '@kinu.run/cli-backend';
 import {
   agentDbPath,
@@ -92,28 +92,34 @@ export interface SuggestAgentIdentityOptions {
 }
 
 /** The slug derives from the id only; the title is generated when possible, mission-derived otherwise. */
-export async function suggestAgentIdentityFromMission(
+export function suggestAgentIdentityFromMission(
   mission: string,
   opts: SuggestAgentIdentityOptions = {},
 ): Promise<SuggestedWorkspaceIdentity> {
-  const fallback = fallbackWorkspaceIdentity(mission, opts.id ?? crypto.randomUUID());
+  return settle(Effect.gen(function* () {
+    const fallback = fallbackWorkspaceIdentity(mission, opts.id ?? crypto.randomUUID());
 
-  try {
-    const raw = opts.generate
-      ? await opts.generate(mission, opts.signal)
-      : await generateTitleJson(mission, opts, agentAffinityKey(fallback.name));
+    return yield* Effect.catchCause(Effect.gen(function* () {
+      const generate = opts.generate;
 
-    const title = parseWorkspaceTitle(raw);
+      const raw = generate
+        ? (yield* Effect.promise(async () => generate(mission, opts.signal)))
+        : (yield* Effect.promise(async () => generateTitleJson(mission, opts, agentAffinityKey(fallback.name))));
 
-    if (opts.signal?.aborted) throw opts.signal.reason;
+      const title = parseWorkspaceTitle(raw);
 
-    return title ? { ...fallback, displayName: title } : fallback;
-  } catch (error) {
-    if (opts.signal?.aborted) throw opts.signal.reason;
-    diagnostics.event('agent.title_fallback', { error: renderThrownChain({ cause: error }) });
+      if (opts.signal?.aborted) return yield* Effect.die(opts.signal.reason);
 
-    return fallback;
-  }
+      return title ? { ...fallback, displayName: title } : fallback;
+    }), (failed) => Effect.gen(function* () {
+      const error = Cause.squash(failed);
+
+      if (opts.signal?.aborted) return yield* Effect.die(opts.signal.reason);
+      diagnostics.event('agent.title_fallback', { error: renderThrownChain({ cause: error }) });
+
+      return fallback;
+    }));
+  }));
 }
 
 export interface CreateCloudAgentFromMissionOptions {
@@ -159,138 +165,150 @@ export function isCloudAuthConfigured(): boolean {
 
 /** An unparseable config.json propagates rather than reading as a fresh install. */
 export function isLocalModelConfigured(): boolean {
-  try {
-    // An OpenAI-compatible endpoint counts before it names a model.
-    return resolveLLMConfig({ defaultModel: readDefaultTier()?.model }) !== null
-      || loadConfigFile().providers?.openaiCompat?.default !== undefined;
-  } catch (error) {
-    // Only the half-set-override diagnostic means "not usable yet".
-    if (error instanceof Error && error.message.startsWith('No LLM auth configured')) return false;
-    throw error;
-  }
+  return settleSync(Effect.gen(function* () {
+    return yield* Effect.catchCause(Effect.sync(() => {
+      // An OpenAI-compatible endpoint counts before it names a model.
+      return resolveLLMConfig({ defaultModel: readDefaultTier()?.model }) !== null
+        || loadConfigFile().providers?.openaiCompat?.default !== undefined;
+    }), (failed) => Effect.gen(function* () {
+      const error = Cause.squash(failed);
+      // Only the half-set-override diagnostic means "not usable yet".
+
+      if (error instanceof Error && error.message.startsWith('No LLM auth configured')) return false;
+
+      return yield* Effect.failCause(failed);
+    }));
+  }));
 }
 
 export function defaultCreateMode(): AgentMode {
   return isCloudAuthConfigured() ? 'cloud' : 'local';
 }
 
-export async function createCliAgent(input: CreateCliAgentInput): Promise<CreatedCliAgent> {
-  ensureAgentHome();
-  const purpose = input.purpose.trim();
+export function createCliAgent(input: CreateCliAgentInput): Promise<CreatedCliAgent> {
+  return settle(Effect.gen(function* () {
+    ensureAgentHome();
+    const purpose = input.purpose.trim();
 
-  if (!purpose) throw new Error('Mission required.');
+    if (!purpose) return yield* Effect.die(new Error('Mission required.'));
 
-  if (input.mode === 'cloud') {
-    const auth = await resolveCloudAuth(input.origin, input.allowInteractiveAuth === true);
+    if (input.mode === 'cloud') {
+      const auth = yield* resolveCloudAuth(input.origin, input.allowInteractiveAuth === true);
 
-    // Pins only what was named, as the web creates it.
-    const agent = await createCloudAgentFromMission({ ...input, purpose }, {
-      create: (cloudInput) => createCloudAgent(auth.origin, auth.token, cloudInput),
-    });
+      // Pins only what was named, as the web creates it.
+      const agent = yield* Effect.promise(async () => createCloudAgentFromMission({ ...input, purpose }, {
+        create: (cloudInput) => createCloudAgent(auth.origin, auth.token, cloudInput),
+      }));
 
-    await upsertAgentConfig({
-      name: agent.name,
-      mode: 'cloud',
-      displayName: agent.displayName,
-      cloudName: agent.name,
-      alias: input.alias === '' ? undefined : input.alias,
-    });
-    const aliasPath = input.alias ? await writeAliasShim(agent.name, input.alias) : undefined;
+      yield* Effect.promise(async () => upsertAgentConfig({
+        name: agent.name,
+        mode: 'cloud',
+        displayName: agent.displayName,
+        cloudName: agent.name,
+        alias: input.alias === '' ? undefined : input.alias,
+      }));
+      const alias = input.alias;
+      const aliasPath = alias ? (yield* Effect.promise(async () => writeAliasShim(agent.name, alias))) : undefined;
 
-    return { name: agent.name, displayName: agent.displayName, mode: 'cloud', purpose, cloudName: agent.name, aliasPath };
-  }
-
-  const name = input.name;
-
-  if (!name) throw new Error('Agent name required for a local workspace.');
-  const displayName = input.displayName ?? name;
-  const cwd = canonicalProjectRoot(input.cwd);
-  const workspaceId = input.workspaceId ?? defaultVirtualWorkspaceId(cwd);
-  validateWorkspaceId(workspaceId);
-  const claimed = resolveAgentRef(name);
-
-  if (claimed && claimed.mode !== 'local') {
-    throw new Error(`"${name}" is already a cloud workspace. Choose another name.`);
-  }
-
-  const dbPath = agentDbPath(name);
-
-  if (existsSync(dbPath)) throw new Error(nameTaken(name, dbPath, claimed));
-  // Read before the workspace exists, so it reports who this agent JOINS.
-  const peers = localWorkspaceMembers(workspaceId, cwd).map((peer) => peer.name);
-  const tier = input.model === undefined ? await ensureDefaultTier() : readDefaultTier();
-  const llmConfig = requireLLMConfig({ ...input, defaultModel: tier?.model });
-  mkdirSync(agentDir(name), { recursive: true });
-
-  // Built under a partial name and published by the rename (as `kinu import` does). `agent.db` existing is what
-  // makes a directory a workspace, so the rename is the only visible transition; the next create clears a stale partial.
-  const partial = `${dbPath}.partial`;
-  discardPartialWorkspace(partial);
-  const db = new Database(partial, { create: true });
-
-  try {
-    db.exec('PRAGMA journal_mode = WAL');
-    // The slug (`workspace_identity.name`) addresses the workspace; the title heads SOUL.md and MEMORY.md.
-    const rt = await createWorkspace(db, { name, title: displayName, purpose, llm: llmConfig });
-    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-    const agentConfig = rt.actor.config;
-
-    if (input.model) agentConfig.setModel(input.model);
-
-    if (input.reasoningEffort) agentConfig.setReasoningEffort(input.reasoningEffort);
-    // The origin decides whether the title policy may ever rename this agent.
-    agentConfig.setDisplayNameOrigin(displayName, input.nameOrigin ?? 'user');
-
-    if (input.role && input.role !== DEFAULT_ROLE_ID) {
-      changeRoleAsOwner({
-        config: agentConfig, envelope: await loadActiveProfile(), to: input.role, active: DEFAULT_ROLE_ID,
-      });
+      return { name: agent.name, displayName: agent.displayName, mode: 'cloud', purpose, cloudName: agent.name, aliasPath };
     }
 
-    // Checkpoint and leave WAL before publishing: the rename drops the sidecars, and a WAL db without `-shm`
-    // fails to open (SQLITE_IOERR_SHORT_READ / SQLITE_IOERR_VNODE). `openWorkspaceCLI` restores WAL.
-    db.query('PRAGMA wal_checkpoint(TRUNCATE)').get();
-    db.exec('PRAGMA journal_mode = DELETE');
-  } catch (error) {
+    const name = input.name;
+
+    if (!name) return yield* Effect.die(new Error('Agent name required for a local workspace.'));
+    const displayName = input.displayName ?? name;
+    const cwd = canonicalProjectRoot(input.cwd);
+    const workspaceId = input.workspaceId ?? defaultVirtualWorkspaceId(cwd);
+    validateWorkspaceId(workspaceId);
+    const claimed = resolveAgentRef(name);
+
+    if (claimed && claimed.mode !== 'local') {
+      return yield* Effect.die(new Error(`"${name}" is already a cloud workspace. Choose another name.`));
+    }
+
+    const dbPath = agentDbPath(name);
+
+    if (existsSync(dbPath)) return yield* Effect.die(new Error(nameTaken(name, dbPath, claimed)));
+    // Read before the workspace exists, so it reports who this agent JOINS.
+    const peers = localWorkspaceMembers(workspaceId, cwd).map((peer) => peer.name);
+    const tier = input.model === undefined ? (yield* Effect.promise(async () => ensureDefaultTier())) : readDefaultTier();
+    const llmConfig = requireLLMConfig({ ...input, defaultModel: tier?.model });
+    mkdirSync(agentDir(name), { recursive: true });
+
+    // Built under a partial name and published by the rename (as `kinu import` does). `agent.db` existing is what
+    // makes a directory a workspace, so the rename is the only visible transition; the next create clears a stale partial.
+    const partial = `${dbPath}.partial`;
+    discardPartialWorkspace(partial);
+    const db = new Database(partial, { create: true });
+
+    yield* Effect.catchCause(Effect.gen(function* () {
+      db.exec('PRAGMA journal_mode = WAL');
+      // The slug (`workspace_identity.name`) addresses the workspace; the title heads SOUL.md and MEMORY.md.
+      const rt = yield* Effect.promise(async () => createWorkspace(db, { name, title: displayName, purpose, llm: llmConfig }));
+      initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+      const agentConfig = rt.actor.config;
+
+      if (input.model) agentConfig.setModel(input.model);
+
+      if (input.reasoningEffort) agentConfig.setReasoningEffort(input.reasoningEffort);
+      // The origin decides whether the title policy may ever rename this agent.
+      agentConfig.setDisplayNameOrigin(displayName, input.nameOrigin ?? 'user');
+
+      if (input.role && input.role !== DEFAULT_ROLE_ID) {
+        changeRoleAsOwner({
+          config: agentConfig, envelope: yield* Effect.promise(async () => loadActiveProfile()), to: input.role, active: DEFAULT_ROLE_ID,
+        });
+      }
+
+      // Checkpoint and leave WAL before publishing: the rename drops the sidecars, and a WAL db without `-shm`
+      // fails to open (SQLITE_IOERR_SHORT_READ / SQLITE_IOERR_VNODE). `openWorkspaceCLI` restores WAL.
+      db.query('PRAGMA wal_checkpoint(TRUNCATE)').get();
+      db.exec('PRAGMA journal_mode = DELETE');
+    }), (failed) => Effect.gen(function* () {
+      const error = Cause.squash(failed);
+      db.close();
+
+      // Cleanup failures propagate: an unremovable partial blocks recreating this name.
+      yield* Effect.catchCause(Effect.sync(() => {
+        discardPartialWorkspace(partial);
+      }), (cleanupFailed) => Effect.gen(function* () {
+        const cleanupError = Cause.squash(cleanupFailed);
+
+        return yield* Effect.die(new AggregateError(
+          [error, cleanupError],
+          `creating workspace "${name}" failed and its partial database at ${partial} could not be removed`,
+          { cause: error },
+        ));
+      }));
+
+      return yield* Effect.failCause(failed);
+    }));
+
     db.close();
+    // Publication. Past here an unregistered agent.db is converged by adoption (`adoptUnplacedLocalAgent`).
+    renameSync(partial, dbPath);
+    // The checkpointed (empty) sidecars belong to a name that no longer exists.
+    discardPartialWorkspace(partial);
 
-    // Cleanup failures propagate: an unremovable partial blocks recreating this name.
-    try {
-      discardPartialWorkspace(partial);
-    } catch (cleanupError) {
-      throw new AggregateError(
-        [error, cleanupError],
-        `creating workspace "${name}" failed and its partial database at ${partial} could not be removed`,
-        { cause: error },
-      );
-    }
+    yield* Effect.promise(async () => upsertAgentConfig({
+      name,
+      mode: 'local',
+      localName: name,
+      alias: input.alias === '' ? undefined : input.alias,
+      cwd,
+      workspaceId,
+      // The db's durable id, so creation and adoption record the same identity.
+      identityId: readWorkspaceIdentityId(dbPath) ?? undefined,
+    }));
+    const alias = input.alias;
+    const aliasPath = alias ? (yield* Effect.promise(async () => writeAliasShim(name, alias))) : undefined;
+    ensureLocalDaemonRunning();
 
-    throw error;
-  }
-
-  db.close();
-  // Publication. Past here an unregistered agent.db is converged by adoption (`adoptUnplacedLocalAgent`).
-  renameSync(partial, dbPath);
-  // The checkpointed (empty) sidecars belong to a name that no longer exists.
-  discardPartialWorkspace(partial);
-
-  await upsertAgentConfig({
-    name,
-    mode: 'local',
-    localName: name,
-    alias: input.alias === '' ? undefined : input.alias,
-    cwd,
-    workspaceId,
-    // The db's durable id, so creation and adoption record the same identity.
-    identityId: readWorkspaceIdentityId(dbPath) ?? undefined,
-  });
-  const aliasPath = input.alias ? await writeAliasShim(name, input.alias) : undefined;
-  ensureLocalDaemonRunning();
-
-  return {
-    name, displayName, mode: 'local', purpose, model: input.model ?? tier?.model,
-    dbPath, aliasPath, cwd, workspaceId, peers,
-  };
+    return {
+      name, displayName, mode: 'local', purpose, model: input.model ?? tier?.model,
+      dbPath, aliasPath, cwd, workspaceId, peers,
+    };
+  }));
 }
 
 /** Join the virtual workspace here with no name, mission or role: inherits a peer's mission, gets a stable
@@ -357,21 +375,23 @@ export interface RenamedLocalAgent {
 
 /** Marks the title the owner's, which permanently stops `autoTitleLocalWorkspace` replacing it. */
 export function renameLocalAgent(name: string, displayName: string): RenamedLocalAgent {
-  const title = displayName.trim();
+  return settleSync(Effect.gen(function* () {
+    const title = displayName.trim();
 
-  if (!title) throw new Error('A name is required.');
-  const dbPath = agentDbPath(name);
+    if (!title) return yield* Effect.die(new Error('A name is required.'));
+    const dbPath = agentDbPath(name);
 
-  if (!existsSync(dbPath)) throw new Error(`Agent "${name}" not found.`);
-  const db = new Database(dbPath);
+    if (!existsSync(dbPath)) return yield* Effect.die(new Error(`Agent "${name}" not found.`));
+    const db = new Database(dbPath);
 
-  try {
-    openWorkspaceMainActor(makeSql(db)).config.setDisplayNameOrigin(title, 'user');
-  } finally {
-    db.close();
-  }
+    yield* Effect.ensuring(Effect.sync(() => {
+      openWorkspaceMainActor(makeSql(db)).config.setDisplayNameOrigin(title, 'user');
+    }), Effect.sync(() => {
+      db.close();
+    }));
 
-  return { name, displayName: title };
+    return { name, displayName: title };
+  }));
 }
 
 function discardPartialWorkspace(partial: string): void {
@@ -404,13 +424,15 @@ async function generateTitleJson(mission: string, opts: SuggestAgentIdentityOpti
   return result.text;
 }
 
-async function resolveCloudAuth(origin: string | undefined, allowInteractiveAuth: boolean): Promise<{ origin: string; token: string }> {
-  try {
-    return requireAuthConfig();
-  } catch (err) {
-    if (!allowInteractiveAuth || !process.stdin.isTTY || !process.stdout.isTTY) throw err;
-    await authCommand({ origin });
+function resolveCloudAuth(origin: string | undefined, allowInteractiveAuth: boolean): Effect.Effect<{ origin: string; token: string }> {
+  return Effect.gen(function* () {
+    return yield* Effect.catchCause(Effect.sync(() => {
+      return requireAuthConfig();
+    }), (failed) => Effect.gen(function* () {
+      if (!allowInteractiveAuth || !process.stdin.isTTY || !process.stdout.isTTY) return yield* Effect.failCause(failed);
+      yield* Effect.promise(async () => authCommand({ origin }));
 
-    return requireAuthConfig();
-  }
+      return requireAuthConfig();
+    }));
+  });
 }

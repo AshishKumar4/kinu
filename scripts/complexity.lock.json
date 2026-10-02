@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-02",
-  "files": 2951,
-  "functions": 76775,
+  "files": 2952,
+  "functions": 76969,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -46,15 +46,11 @@
       "complexity": 41
     },
     {
-      "key": "packages/core/src/delegation/agents-tool.ts#runSwarmAction",
-      "complexity": 40
+      "key": "packages/core/src/delegation/agents-tool.ts#runSwarmAction>gen",
+      "complexity": 39
     },
     {
       "key": "packages/cli/src/commands/run.ts#runCloudRpcCommand",
-      "complexity": 38
-    },
-    {
-      "key": "packages/core/src/delegation/agents-tool.ts#dispatchAgentsAction",
       "complexity": 38
     },
     {
@@ -139,6 +135,10 @@
     },
     {
       "key": "packages/cf-backend/src/pages/SwarmExplorer.tsx#ExplorerBody",
+      "complexity": 32
+    },
+    {
+      "key": "packages/core/src/delegation/agents-tool.ts#dispatchAgentsAction>gen>gen",
       "complexity": 32
     },
     {
