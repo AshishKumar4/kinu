@@ -11,7 +11,7 @@ import type { CraftLedger } from '../craft/in-episode';
 import { TurnContextBudget } from '../context-budget';
 import { TurnFileLedger } from '../vfs/file-ledger';
 import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS } from '../tools/registry';
-import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { isVfsError, syscallError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { DEFAULT_SHADOW_CONFIG } from '../scaffold/shadow';
 import { createNoopVectorStore, type VectorSearchHit, type VectorStore } from '../memory/vector-store';
 import type { BackendHost } from '../types/backend-host';
@@ -1473,7 +1473,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
               readFile: async (path: string) => {
                 const content = byPath.get(path);
 
-                if (content === undefined) throw new VfsError('ENOENT', 'no such file', path);
+                if (content === undefined) throw syscallError('ENOENT', 'open', path);
 
                 return new TextEncoder().encode(content);
               },

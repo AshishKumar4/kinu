@@ -107,22 +107,6 @@ export function refusalOf(error: KinuError): Refusal {
   return error.execution === undefined ? refusal : { ...refusal, execution: error.execution };
 }
 
-/** The message shown to people and models, including errors whose subclass RPC did not retain. */
-export function renderErrorMessage(error: Error): string {
-  // Nimbus 0.13.1 dist/vfs/vfs-error.js:17 inserts a comma before the path. ASK-mounts.md item 11
-  // (kinu-logs/nimbus-integration) asks for Node's syscall/path shape; remove this adjustment when fixed.
-  if (error.name === 'VfsError' && 'path' in error) {
-    const path = v.safeParse(v.string(), error.path);
-
-    if (!path.success) return error.message;
-    const suffix = `, '${path.output}'`;
-
-    if (error.message.endsWith(suffix)) return error.message.slice(0, -suffix.length) + suffix.slice(1);
-  }
-
-  return error.message;
-}
-
 /** The whole `cause` chain on one line, outermost first; cycles terminate. */
 export function renderCauseChain(error: Error): string {
   const parts: string[] = [];
@@ -141,7 +125,7 @@ export function renderCauseChain(error: Error): string {
 
   while (link !== null && !seen.has(link)) {
     seen.add(link);
-    push(renderErrorMessage(link));
+    push(link.message);
     // Annotated: without it `link` and `cause` are mutually recursive and resolve to `any` (TS7022).
     const cause: unknown = link.cause;
 

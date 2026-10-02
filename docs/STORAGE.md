@@ -273,7 +273,7 @@ state; the project directory is the workspace (see "Local and cloud construction
 
 Nimbus owns those bytes and their tables. `core/src/conformance/manifest.ts`
 declares the exact set; an addition means the dependency changed its storage
-contract. At `@nimbus-sh/core` 0.13.1 the set is `vfs_state`, `vfs_inodes`,
+contract. At `@nimbus-sh/core` 0.14.0 the set is `vfs_state`, `vfs_inodes`,
 `vfs_chunks`, `vfs_contents`, `vfs_content_chunks`, `vfs_inode_history`,
 `vfs_gc_queue`, `vfs_jobs`, `vfs_snapshots`, `vfs_tombstones`,
 `vfs_cold_trash`, the five `vfs_append_*_v2` tables, and
@@ -282,7 +282,11 @@ contract. At `@nimbus-sh/core` 0.13.1 the set is `vfs_state`, `vfs_inodes`,
 `nimbus_facet_storage`. `NimbusWorkspace.destroy()` drops the `vfs_*` tables
 and keeps the `nimbus_*` ones. Kinu adds its own `kinu_workspace_generation`.
 The manifest declares all of them present on every root (`cf-orchestrator`,
-`cf-subordinate`, `cli`).
+`cf-subordinate`, `cli`). On hosted, `@nimbus-sh/worker` 0.12.0 adds a
+transform store in the workspace object, `nimbus_transform_results`,
+`nimbus_transform_result_parts` and `nimbus_transform_store`, created by the
+first hosted node launch that transforms a module, charged to the storage
+ledger and bounded at 64 MiB.
 
 Three properties follow:
 

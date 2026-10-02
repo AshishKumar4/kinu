@@ -11,8 +11,8 @@ import { LEGACY_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT } from '@kinu.run/co
 import { toVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { tolerateAsync } from '@kinu.run/core/obs';
 
-function throwVfsError(input: { error: unknown; path: string }): never {
-  throw toVfsError(input.error, input.path);
+function throwVfsError(input: { error: unknown; syscall: string; path: string }): never {
+  throw toVfsError(input.error, input.syscall, input.path);
 }
 
 function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefined): VFS {
@@ -26,7 +26,7 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
     async readFile(path) {
       try {
         return new Uint8Array(await fs.readFile(path));
-      } catch (error) { throwVfsError({ error, path }) }
+      } catch (error) { throwVfsError({ error, syscall: 'open', path }); }
     },
     async writeFile(path, data) {
       await snapshot(path, 'file write');
@@ -34,7 +34,7 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
       try {
         await fs.mkdir(dirname(path), { recursive: true });
         await fs.writeFile(path, data);
-      } catch (error) { throwVfsError({ error, path }) }
+      } catch (error) { throwVfsError({ error, syscall: 'open', path }); }
     },
     async readdir(path) {
       try {
@@ -44,7 +44,7 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
           return { name: entry.name, type: entry.isDirectory() ? 'directory' as const : 'file' as const };
         });
       }
-      catch (error) { throwVfsError({ error, path }) }
+      catch (error) { throwVfsError({ error, syscall: 'scandir', path }); }
     },
     async stat(path, options) {
       try {
@@ -54,17 +54,17 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
         const type = stat.isSymbolicLink() ? 'symlink' as const : 'file' as const;
 
         return { size: stat.size, mtimeMs: stat.mtimeMs, type: stat.isDirectory() ? 'directory' : type };
-      } catch (error) { throwVfsError({ error, path }) }
+      } catch (error) { throwVfsError({ error, syscall: options?.follow === false ? 'lstat' : 'stat', path }); }
     },
     async unlink(path) {
       await snapshot(path, 'file delete');
 
       try { await fs.rm(path, { recursive: true, force: true }); }
-      catch (error) { throwVfsError({ error, path }) }
+      catch (error) { throwVfsError({ error, syscall: 'rm', path }); }
     },
     async mkdir(path, opts) {
       try { await fs.mkdir(path, { recursive: opts?.recursive ?? false }); }
-      catch (error) { throwVfsError({ error, path }) }
+      catch (error) { throwVfsError({ error, syscall: 'mkdir', path }); }
     },
   };
 }
