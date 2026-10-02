@@ -57,6 +57,7 @@ export {
   createRecordingLogger,
   diagnostics,
   setDiagnosticsSink,
+  logged,
   settleLogged,
   settleLoggedSync,
   RESERVED_LOG_FIELDS,

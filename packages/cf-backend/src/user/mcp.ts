@@ -12,7 +12,7 @@ import {
   type JsonObject, type JsonValue, type ListedMcpTools, type McpPreset, type McpPresetId, type McpToolRefusal,
   type SerializableToolDescriptor, type McpSurfaceBudget,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, renderCauseChain, tolerate, toKinuError, settleSync } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderCauseChain, settle, tolerate, toKinuError, settleSync } from '@kinu.run/core/obs';
 import { SdkHttpError, SseError, UnauthorizedError, type Client } from '@modelcontextprotocol/client';
 import { ResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import * as v from 'valibot';
@@ -294,22 +294,22 @@ export function parseMcpHeaders(raw: string | null | undefined): Record<string, 
  */
 export function mcpCredentialTransport(
   serverUrl: string,
-  openHeaders: () => Promise<Record<string, string> | null>,
+  openHeaders: () => Effect.Effect<Record<string, string> | null, KinuError>,
 ): McpCredentialTransport {
   const origin = new URL(serverUrl).origin;
 
   return {
-    fetch: async (url: string | URL, init?: RequestInit): Promise<Response> => {
-      if (new URL(url.toString()).origin !== origin) return fetch(url, init);
-      const credential = await openHeaders();
+    fetch: (url: string | URL, init?: RequestInit): Promise<Response> => settle(Effect.gen(function* () {
+      if (new URL(url.toString()).origin !== origin) return yield* Effect.promise(() => fetch(url, init));
+      const credential = yield* openHeaders();
 
-      if (credential === null || Object.keys(credential).length === 0) return fetch(url, init);
+      if (credential === null || Object.keys(credential).length === 0) return yield* Effect.promise(() => fetch(url, init));
       const headers = new Headers(init?.headers);
 
       for (const [name, value] of Object.entries(credential)) headers.set(name, value);
 
-      return fetch(url, { ...init, headers, redirect: 'manual' });
-    },
+      return yield* Effect.promise(() => fetch(url, { ...init, headers, redirect: 'manual' }));
+    })),
   };
 }
 

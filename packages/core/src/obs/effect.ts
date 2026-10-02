@@ -81,10 +81,10 @@ export function tolerateAsync<T>(operation: () => Promise<T>, expected: Expected
 
 interface FlightOptions<I> {
   readonly key?: (input: I) => string | number | null;
-  readonly keep?: 'success';
+  readonly keep?: 'success' | 'exit';
 }
 
-/** One run per key, joined by every caller with its own exit; settling frees the key unless `keep` holds a success. */
+/** One run per key, joined by each caller with its exit; settling frees the key unless `keep` holds it. */
 export function flight<A, E extends KinuError | VfsError>(run: () => Effect.Effect<A, E>, options?: FlightOptions<void>): () => Effect.Effect<A, E>;
 export function flight<I, A, E extends KinuError | VfsError>(run: (input: I) => Effect.Effect<A, E>, options?: FlightOptions<I>): (input: I) => Effect.Effect<A, E>;
 export function flight<I, A, E extends KinuError | VfsError>(run: (input: I) => Effect.Effect<A, E>, options?: FlightOptions<I>): (input: I) => Effect.Effect<A, E> {
@@ -102,7 +102,13 @@ export function flight<I, A, E extends KinuError | VfsError>(run: (input: I) => 
         else if (held.get(key) === exit) held.delete(key);
       });
 
-      exit = settle(Effect.exit(options?.keep === 'success' ? Effect.onError(run(input), () => free) : Effect.ensuring(run(input), free)));
+      const ran = run(input);
+      let kept = Effect.ensuring(ran, free);
+
+      if (options?.keep === 'exit') kept = ran;
+      else if (options?.keep === 'success') kept = Effect.onError(ran, () => free);
+
+      exit = settle(Effect.exit(kept));
 
       if (live) held.set(key, exit);
     }

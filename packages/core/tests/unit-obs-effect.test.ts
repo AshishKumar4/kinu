@@ -165,6 +165,21 @@ describe('flight', () => {
     expect([await settle(kept('a')), await settle(kept('a')), await settle(kept('b'))]).toEqual(['a4', 'a4', 'b5']);
   });
 
+  test('`keep: \'exit\'` holds a failure too, so the run is never repeated', async () => {
+    let runs = 0;
+    const refusal = new KinuError('unavailable', 'no key');
+
+    const once = flight(() => Effect.suspend(() => {
+      runs += 1;
+
+      return Effect.fail(refusal);
+    }), { keep: 'exit' });
+
+    expect(await settle(Effect.flip(once()))).toBe(refusal);
+    expect(await settle(Effect.flip(once()))).toBe(refusal);
+    expect(runs).toBe(1);
+  });
+
   test('a joined VfsError fails as itself, and a defect stays one', async () => {
     const missing = new VfsError('ENOENT', 'no such file', '/a');
     const read = flight(() => Effect.fail(missing));

@@ -3,7 +3,8 @@
  * Logging & Traceability). Failing cases are proven in `unit-obs-log-ban.test.ts`.
  */
 
-import { Effect, Exit } from 'effect';
+import { Cause, Effect, Exit } from 'effect';
+import type { VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { attempt, settle, settleSync } from './effect';
 import { renderCauseChain, toKinuError, type ErrorCode, type KinuError } from './error';
 
@@ -150,13 +151,26 @@ export const diagnostics: Logger = {
 };
 
 /** A rejection is logged under `event`, for work nobody awaits. */
+export function logged<Fields>(
+  event: LogEventName,
+  failure: { readonly doing: string; readonly otherwise: ErrorCode },
+  work: (() => PromiseLike<void> | void) | Effect.Effect<void, KinuError | VfsError>,
+  fields?: Fields & LoggableFields<Fields>,
+): Effect.Effect<void> {
+  const run = Effect.isEffect(work)
+    ? Effect.catchCause(work, (cause) => (Cause.hasInterruptsOnly(cause) ? Effect.interrupt : Effect.fail(toKinuError({ ...failure, cause: Cause.squash(cause) }))))
+    : attempt(failure, async () => { await work(); });
+
+  return run.pipe(Effect.catch((error) => Effect.sync(() => diagnostics.failure<Fields>(event, error, fields))));
+}
+
 export function settleLogged<Fields>(
   event: LogEventName,
   failure: { readonly doing: string; readonly otherwise: ErrorCode },
   work: () => PromiseLike<void> | void,
   fields?: Fields & LoggableFields<Fields>,
 ): Promise<void> {
-  return settle(attempt(failure, async () => { await work(); }).pipe(Effect.catch((error) => Effect.sync(() => diagnostics.failure<Fields>(event, error, fields)))));
+  return settle(logged<Fields>(event, failure, work, fields));
 }
 
 export function settleLoggedSync<Fields>(
