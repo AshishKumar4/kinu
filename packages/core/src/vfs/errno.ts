@@ -1,10 +1,6 @@
-/** File-plane error presentation over Nimbus's POSIX error type. */
 import { isVfsErrorCode, syscallError, toVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 
-/**
- * Node's error text from another plane or isolate (`EPERM: <words>, rename '<path>'`), on the requested path with
- * its own words and syscall. Unknown codes stay unclassified.
- */
+/** Node's error text from another plane or isolate as a VfsError on `path`; unknown codes stay unclassified. */
 export function vfsErrorFromText(input: { message: string; path: string | undefined; cause?: unknown }): VfsError | null {
   const { message, path, cause } = input;
 

@@ -110,7 +110,7 @@ test('an ai binding routes one model call, and a declared tier pins it', () => {
 
 test('a path-scoped workspace binding offers only file members inside its prefixes', () => {
   expect(route('FILES', 'readFile', ['/home/main/notes/a.md'])).toEqual({
-    kind: 'namespace', namespace: 'workspace', member: 'readFile', args: ['/home/main/notes/a.md'],
+    kind: 'namespace', namespace: 'workspace', member: 'readFile', args: ['/home/main/notes/a.md'], within: ['/home/main/notes', '/home/main/shared'],
   });
   expect(route('FILES', 'readdir', ['/home/main/notes'])).toMatchObject({ kind: 'namespace', member: 'readdir' });
   expect(route('FILES', 'exists', ['/home/main/shared/x'])).toMatchObject({ kind: 'namespace', member: 'exists' });

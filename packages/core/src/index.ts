@@ -316,7 +316,7 @@ export {
 } from './slates/capability-graph';
 
 export {
-  SlateBindingRequestSchema, routeSlateBindingCall, issuedSlateInvocation, routeViewerBindingCall,
+  SlateBindingRequestSchema, routeSlateBindingCall, issuedSlateInvocation, routeViewerBindingCall, assertLandsWithin,
   type SlateBindingRequest, type SlateBindingRoute, type SlateInvocation, type SlateViewer, type ViewerBindingCall,
 } from './slates/bindings';
 
