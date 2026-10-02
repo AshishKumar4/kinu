@@ -1,3 +1,4 @@
+import { Result } from 'effect';
 import { exists, readText, type Awaitable, type VFS, type VfsRevision, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 // The workspace mount table: /pc and /sandbox extend one view (#36/#142/#143); an absent mount
 // is stated as absent, and device consent is still enforced on mounted paths. The workspace shell
@@ -516,11 +517,11 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 
 		const removal = await removeTreeWithVfsOps(base, '/build');
 
-		if (removal.ok) throw new Error('expected a partial removal, got a completed one');
+		if (Result.isSuccess(removal)) throw new Error('expected a partial removal, got a completed one');
 
-		expect(removal.removed).toEqual(['/build/deep/two.js', '/build/deep']);
-		expect(removal.remaining).toEqual(['/build/out.js', '/build']);
-		expect(removal.failed.path).toBe('/build/out.js');
+		expect(removal.failure.removed).toEqual(['/build/deep/two.js', '/build/deep']);
+		expect(removal.failure.remaining).toEqual(['/build/out.js', '/build']);
+		expect(removal.failure.failed.path).toBe('/build/out.js');
 		expect(await exists(base, '/build/deep/two.js')).toBe(false);
 		expect(await exists(base, '/build/deep')).toBe(false);
 		expect(await exists(base, '/build/out.js')).toBe(true);

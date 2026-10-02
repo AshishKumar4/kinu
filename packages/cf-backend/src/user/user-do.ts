@@ -4709,11 +4709,12 @@ export class UserDO extends Agent<Env> {
 
       if (row.upload.done) this.driveUploads.delete(transferId);
 
-      if ('error' in step) return yield* new KinuError('bad_input', step.error);
+      if (Result.isFailure(step)) return yield* new KinuError('bad_input', step.failure);
+      const assembled = step.success;
 
-      if (!('assembled' in step)) return { ok: true };
+      if (assembled === null) return { ok: true };
 
-      return yield* Effect.promise(() => receiveDriveUpload(drive, target, step.assembled));
+      return yield* Effect.promise(() => receiveDriveUpload(drive, target, assembled));
     })));
   }
 

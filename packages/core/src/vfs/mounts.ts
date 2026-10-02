@@ -147,14 +147,11 @@ export function listWithVfsOps(files: VFS, dir: string): Promise<VfsListedEntry[
 }
 
 /** `removed` and `remaining` partition the enumeration exactly. */
-export type TreeRemoval =
-	| { readonly ok: true; readonly removed: readonly string[]; readonly remaining: readonly string[] }
-	| {
-		readonly ok: false;
-		readonly removed: readonly string[];
-		readonly remaining: readonly string[];
-		readonly failed: { readonly path: string; readonly cause: unknown };
-	};
+interface TreeRemoved { readonly removed: readonly string[]; readonly remaining: readonly string[] }
+
+export interface PartialRemoval extends TreeRemoved { readonly failed: { readonly path: string; readonly cause: unknown } }
+
+export type TreeRemoval = Result.Result<TreeRemoved, PartialRemoval>;
 
 /**
  * Depth-first removal in base VFS ops: enumerate first, then delete children before parents.
@@ -203,20 +200,17 @@ function treeRemoval(files: VFS, path: string): Effect.Effect<TreeRemoval, VfsEr
 				continue;
 			}
 
-			return {
-				ok: false,
-				removed,
-				remaining: order.slice(removed.length),
-				failed: { path: entry, cause: unlinked.failure.cause },
-			};
+			const partial: TreeRemoval = Result.fail({ removed, remaining: order.slice(removed.length), failed: { path: entry, cause: unlinked.failure.cause } });
+
+			return partial;
 		}
 
-		return { ok: true, removed, remaining: [] };
+		return Result.succeed({ removed, remaining: [] });
 	});
 }
 
 /** Shared by the composite plane's throw and the file manager's error value. */
-export function partialTreeRemovalMessage(path: string, removal: Extract<TreeRemoval, { ok: false }>): string {
+export function partialTreeRemovalMessage(path: string, removal: PartialRemoval): string {
 	const gone = removal.removed.length === 0 ? 'none' : removal.removed.join(', ');
 	const left = removal.remaining.join(', ');
 
@@ -514,10 +508,10 @@ export function withMountTable(base: VFS, mounts: readonly VfsMount[]): MountedV
 					if (remove) return awaited(() => remove.call(files, native));
 
 					// The partial-removal record rides the error; the failing entry keeps its code.
-					return Effect.flatMap(treeRemoval(files, native), (removal) => (removal.ok
+					return Effect.flatMap(treeRemoval(files, native), (removal) => (Result.isSuccess(removal)
 						? Effect.void
-						: Effect.fail(new VfsError(isVfsError(removal.failed.cause) ? removal.failed.cause.code : 'EIO',
-							partialTreeRemovalMessage(native, removal),
+						: Effect.fail(new VfsError(isVfsError(removal.failure.failed.cause) ? removal.failure.failed.cause.code : 'EIO',
+							partialTreeRemovalMessage(native, removal.failure),
 							native,))));
 				}));
 			},

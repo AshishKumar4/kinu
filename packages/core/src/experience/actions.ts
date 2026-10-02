@@ -1,4 +1,5 @@
 // Publish, search and import against the owner's experience library; called from owner RPCs, not a model tool.
+import { Result } from 'effect';
 import * as v from 'valibot';
 import {
   EXPERIENCE_KINDS,
@@ -129,7 +130,7 @@ export async function runExperienceAction(
         if (!entry) return { error: `no library entry with id "${request.output.id}"` };
         const staged = stageImport(deps.rt, entry);
 
-        if (!staged.ok) return { error: staged.reason };
+        if (Result.isFailure(staged)) return { error: staged.failure };
 
         return {
           imported: summarize(entry),

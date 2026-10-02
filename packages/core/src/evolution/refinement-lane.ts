@@ -675,17 +675,17 @@ async function routePromptSection(
     rationale: edit.rationale,
   });
 
-  if (!measured.ok) {
+  if (Result.isFailure(measured)) {
     return {
       kind: 'prompt_section', owner, target: edit.sectionId,
-      disposition: 'refused', reason: `${measured.code}: ${measured.error}`,
+      disposition: 'refused', reason: `${measured.failure.code}: ${measured.failure.error}`,
     };
   }
 
   return pendingReason(
-    measured.version,
-    `pending held-out trials: candidate ${measured.candidateScore.mean.toFixed(3)} against `
-      + `incumbent ${measured.incumbentScore.mean.toFixed(3)}`,
+    measured.success.version,
+    `pending held-out trials: candidate ${measured.success.candidateScore.mean.toFixed(3)} against `
+      + `incumbent ${measured.success.incumbentScore.mean.toFixed(3)}`,
   );
 }
 

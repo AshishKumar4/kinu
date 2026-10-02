@@ -1,3 +1,4 @@
+import { Result } from 'effect';
 import { exists, writeText } from '@nimbus-sh/core/vfs/vfs.js';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 /**
@@ -44,12 +45,12 @@ export async function modifyScaffold(
   // Misevolution veto; re-checked at promotion against the on-disk pending file.
   const misevolution = checkMisevolution(code);
 
-  if (!misevolution.ok) {
+  if (Result.isFailure(misevolution)) {
     recordMisevolutionVeto(rt.storage.sql, rt.actor, {
-      surface: 'scaffold', violation: misevolution, detail: rationale,
+      surface: 'scaffold', violation: misevolution.failure, detail: rationale,
     });
 
-    return { ok: false, stage: 1, error: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };
+    return { ok: false, stage: 1, error: `Misevolution veto (${misevolution.failure.criterionId}): ${misevolution.failure.reason}` };
   }
 
   const { error: parseError } = await rt.executor.execute(

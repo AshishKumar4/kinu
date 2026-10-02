@@ -4,6 +4,7 @@
  * reverts dispatch to the real paths (scaffold rollback, fact forget).
  */
 
+import { Result } from 'effect';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
@@ -623,7 +624,7 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number, events: 
   if (!prev) return { ok: false, error: `scaffold v${version} has no earlier version to roll back to` };
   const restored = await rollbackScaffold(rt, prev.version);
 
-  if (!restored.ok) return { ok: false, error: restored.error };
+  if (Result.isFailure(restored)) return { ok: false, error: restored.failure };
 
   return { ok: true, detail: `rolled back to v${prev.version}` };
 }

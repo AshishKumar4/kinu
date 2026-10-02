@@ -108,9 +108,9 @@ export async function runSectionGepa<I = unknown, E = unknown>(
 
           const misevolution = checkMisevolutionForSurface({ prose: source }, 'scaffold');
 
-          return misevolution.ok
+          return Result.isSuccess(misevolution)
             ? null
-            : `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}`;
+            : `Misevolution veto (${misevolution.failure.criterionId}): ${misevolution.failure.reason}`;
         },
       }))),
     },

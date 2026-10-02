@@ -1,4 +1,5 @@
 // Cross-workspace experience transfer, driven through the real dispatcher, library store and turn review.
+import { Result } from 'effect';
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
@@ -878,17 +879,17 @@ describe('a corrupt row is skipped, never staged or fatal', () => {
     const mismatched: ExperienceEntry = { ...entry, kind: 'lesson' };
 
     const first = stageImport(beta.rt, mismatched);
-    expect(first.ok).toBe(false);
+    expect(Result.isSuccess(first)).toBe(false);
 
-    if (first.ok) throw new Error('a kind-mismatched payload was staged');
-    expect(first.reason).toContain('does not parse');
+    if (Result.isSuccess(first)) throw new Error('a kind-mismatched payload was staged');
+    expect(first.failure).toContain('does not parse');
     expect(await importedRows(beta)).toEqual([]);
 
     const second = stageImport(beta.rt, mismatched);
-    expect(second.ok).toBe(false);
+    expect(Result.isSuccess(second)).toBe(false);
 
-    if (second.ok) throw new Error('a kind-mismatched payload was staged');
-    expect(second.reason).toContain('does not parse');
+    if (Result.isSuccess(second)) throw new Error('a kind-mismatched payload was staged');
+    expect(second.failure).toContain('does not parse');
     expect(beta.db.query<{ c: number }, []>(`SELECT count(*) AS c FROM imported_experience`).get()?.c).toBe(0);
   });
 

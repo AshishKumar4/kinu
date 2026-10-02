@@ -216,12 +216,12 @@ export function proposePromptSection(
   // Gate 3: misevolution.
   const misevolution = checkMisevolutionForSurface({ prose: source }, 'scaffold');
 
-  if (!misevolution.ok) {
+  if (Result.isFailure(misevolution)) {
     recordMisevolutionVeto(sql, actor, {
-      surface: 'scaffold', violation: misevolution, detail: `prompt section ${section.id}: ${rationale}`,
+      surface: 'scaffold', violation: misevolution.failure, detail: `prompt section ${section.id}: ${rationale}`,
     });
 
-    return refused('misevolution', `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}`);
+    return refused('misevolution', `Misevolution veto (${misevolution.failure.criterionId}): ${misevolution.failure.reason}`);
   }
 
   // Gate 4: size.
@@ -338,14 +338,14 @@ export function applyPromptSectionDecision(
   if (decision === 'promote') {
     const misevolution = checkMisevolutionForSurface({ prose: pending.source }, 'scaffold');
 
-    if (!misevolution.ok) {
+    if (Result.isFailure(misevolution)) {
       recordMisevolutionVeto(sql, actor, {
-        surface: 'scaffold', violation: misevolution,
+        surface: 'scaffold', violation: misevolution.failure,
         detail: `promotion of ${pending.sectionId} v${String(pending.version)} vetoed; rolled back instead`,
       });
       const rolled = applyPromptSectionDecision(sql, actor, pending, 'rollback');
 
-      return { ...rolled, vetoReason: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };
+      return { ...rolled, vetoReason: `Misevolution veto (${misevolution.failure.criterionId}): ${misevolution.failure.reason}` };
     }
 
     void sql`UPDATE prompt_section_versions SET status = 'historical'

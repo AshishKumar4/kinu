@@ -1,6 +1,7 @@
 // Imports are misevolution-gated, then staged provisional; the next graded turn promotes or discards them.
 // An imported scaffold only becomes a pending version via modifyScaffold, never the live loop.
 
+import { Result } from 'effect';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
@@ -120,9 +121,7 @@ export function listImportedExperience(
   return rows.map(toImportRow).filter((r): r is ImportedExperienceRow => r !== null);
 }
 
-export type ImportOutcome =
-  | { ok: true; row: ImportedExperienceRow }
-  | { ok: false; reason: string };
+export type ImportOutcome = Result.Result<ImportedExperienceRow, string>;
 
 /** Stage as provisional; durable stores are written only when a graded turn accepts it. */
 export function stageImport(
@@ -132,25 +131,19 @@ export function stageImport(
 ): ImportOutcome {
   // The library decoded the payload; only the pairing with `kind` is left to refuse.
   if (entry.payload.kind !== entry.kind) {
-    return {
-      ok: false,
-      reason: `payload for ${entry.kind} "${entry.key}" does not parse as ${entry.kind} experience: refusing a row lists would skip`,
-    };
+    return Result.fail(`payload for ${entry.kind} "${entry.key}" does not parse as ${entry.kind} experience: refusing a row lists would skip`);
   }
 
   const verdict = checkMisevolutionForSurface(misevolutionSourceOf(entry.payload), 'import');
 
-  if (!verdict.ok) {
+  if (Result.isFailure(verdict)) {
     recordMisevolutionVeto(rt.storage.sql, rt.actor, {
       surface: 'import',
-      violation: verdict,
+      violation: verdict.failure,
       detail: `${entry.kind} "${entry.key}" from workspace "${entry.sourceWorkspace}" rejected`,
     });
 
-    return {
-      ok: false,
-      reason: `Misevolution veto (${verdict.criterionId}): ${verdict.reason}`,
-    };
+    return Result.fail(`Misevolution veto (${verdict.failure.criterionId}): ${verdict.failure.reason}`);
   }
 
   rt.actor.assertCurrent();
@@ -160,12 +153,9 @@ export function stageImport(
     WHERE actor_id = ${rt.actor.actorId} AND library_id = ${entry.id} LIMIT 1`[0];
 
   if (existing) {
-    return {
-      ok: false,
-      reason: existing.status === 'corroborated'
-        ? `already imported and corroborated here: it is part of this workspace already`
-        : `already imported this turn and waiting on the outcome that would corroborate it`,
-    };
+    return Result.fail(existing.status === 'corroborated'
+      ? `already imported and corroborated here: it is part of this workspace already`
+      : `already imported this turn and waiting on the outcome that would corroborate it`);
   }
 
   const id = `imp-${nanoid()}`;
@@ -176,14 +166,11 @@ export function stageImport(
             ${JSON.stringify(entry.payload)}, ${entry.evidence}, ${entry.sourceWorkspace},
             'provisional', '[]', ${now}, NULL)`;
 
-  return {
-    ok: true,
-    row: {
-      id, libraryId: entry.id, kind: entry.kind, key: entry.key, title: entry.title,
-      payload: entry.payload, evidence: entry.evidence, sourceWorkspace: entry.sourceWorkspace,
-      status: 'provisional', turnIds: [], importedAt: now, corroboratedAt: null,
-    },
-  };
+  return Result.succeed({
+    id, libraryId: entry.id, kind: entry.kind, key: entry.key, title: entry.title,
+    payload: entry.payload, evidence: entry.evidence, sourceWorkspace: entry.sourceWorkspace,
+    status: 'provisional', turnIds: [], importedAt: now, corroboratedAt: null,
+  });
 }
 
 /** Call only for graded turns: binding to an ungraded turn would discard the evidence. */

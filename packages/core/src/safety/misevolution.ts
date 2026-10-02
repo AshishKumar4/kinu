@@ -3,6 +3,7 @@
  * its syntax tree, prose on its words; docs/EVOLUTION.md lists what each criterion sees and cannot.
  */
 
+import { Result } from 'effect';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type * as acorn from 'acorn';
@@ -11,12 +12,11 @@ import { childrenOf, constantString, isNameOnly, parseEvolvedCode, type PlacedNo
 export type MisevolutionSurface = 'scaffold' | 'craft' | 'craft_tool' | 'import';
 
 export interface MisevolutionViolation {
-  ok: false;
   criterionId: string;
   reason: string;
 }
 
-export type MisevolutionVerdict = { ok: true } | MisevolutionViolation;
+export type MisevolutionVerdict = Result.Result<void, MisevolutionViolation>;
 
 export interface EvolvedArtifact {
   readonly code?: string;
@@ -324,11 +324,11 @@ export function checkMisevolutionForSurface(artifact: EvolvedArtifact, surface: 
 
   for (const candidate of MISEVOLUTION_CRITERIA) {
     if (enforced.includes(candidate.id) && candidate.trips(facts)) {
-      return { ok: false, criterionId: candidate.id, reason: candidate.reason };
+      return Result.fail({ criterionId: candidate.id, reason: candidate.reason });
     }
   }
 
-  return { ok: true };
+  return Result.void;
 }
 
 export function checkMisevolution(code: string): MisevolutionVerdict {

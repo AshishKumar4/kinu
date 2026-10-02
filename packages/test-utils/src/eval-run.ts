@@ -3,6 +3,7 @@
  * until the harness asserts the outcome was measured, not merely configured. The observation union
  * follows pi's vitest-evals collector.
  */
+import { Result } from 'effect';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -275,7 +276,7 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
     return collection;
   };
 
-  let result: { ok: true; value: T } | { ok: false; error: Error };
+  let result: Result.Result<T, Error>;
   /** Settles with the spend when the budget runs out; a value, so the race has no unread rejection. */
   const spent = Promise.withResolvers<{ readonly spent: Error }>();
 
@@ -292,10 +293,10 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
     ]);
 
     if ('spent' in raced) throw raced.spent;
-    result = { ok: true, value: raced.value };
+    result = Result.succeed(raced.value);
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
-    result = { ok: false, error: failure };
+    result = Result.fail(failure);
     writeFileSync(join(dir, 'failure.json'), JSON.stringify({
       name: failure.name, message: failure.message, ...(budget.signal.aborted && { phase: 'budget' }),
     }), { mode: 0o600 });
@@ -308,15 +309,15 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
   try {
     evidence = await collect();
   } catch (error) {
-    if (!result.ok) throw new AggregateError([result.error, error], result.error.message, { cause: error });
+    if (Result.isFailure(result)) throw new AggregateError([result.failure, error], result.failure.message, { cause: error });
     throw error;
   }
 
-  if (result.ok) return result.value;
+  if (Result.isSuccess(result)) return result.success;
 
-  if (result.error !== budget.signal.reason) throw result.error;
+  if (result.failure !== budget.signal.reason) throw result.failure;
 
-  const spentOn = new Error(`${result.error.message}: ${ledgerTail(evidence.events)}`, { cause: result.error });
+  const spentOn = new Error(`${result.failure.message}: ${ledgerTail(evidence.events)}`, { cause: result.failure });
 
   writeFileSync(join(dir, 'failure.json'), JSON.stringify({ name: spentOn.name, message: spentOn.message, phase: 'budget' }), { mode: 0o600 });
 

@@ -396,14 +396,14 @@ async function authenticateMcpCaller<Id>(
   if (readBearer(request)) {
     const result = await authenticateCliToken(request, env);
 
-    if (!result.ok) return withCors(Response.json({ error: result.error }, { status: 401 }));
+    if (Result.isFailure(result)) return withCors(Response.json({ error: result.failure }, { status: 401 }));
 
-    if (result.identity.kind !== 'session') {
+    if (result.success.kind !== 'session') {
       // Scoped CI access tokens are CLI-API-only; MCP accepts interactive session tokens only.
       return withCors(Response.json({ error: 'MCP requires an interactive CLI session token. Sign in with: kinu auth' }, { status: 403 }));
     }
 
-    return { userId: result.identity.userId };
+    return { userId: result.success.userId };
   }
 
   try {

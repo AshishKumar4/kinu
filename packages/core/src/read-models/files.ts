@@ -13,7 +13,7 @@ import { isVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { inlineFileType } from './file-types';
 import { isSystemManaged } from '../vfs/workspace-path';
 
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, type Refusal } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { readBoundedStream } from '../http/http';
@@ -119,17 +119,19 @@ export class ExecutorFileUpload {
   async chunk(offset: number, chunk: Uint8Array, final: boolean): Promise<ExecutorWriteResult> {
     const step = this.chunks.chunk(offset, chunk, final);
 
-    if (!('assembled' in step)) return step;
+    if (Result.isFailure(step)) return { error: step.failure };
 
+    if (step.success === null) return { ok: true };
+    const assembled = step.success;
     const { writeSoul, expectedRevision } = this.write;
 
     if (writeSoul !== undefined && isWorkspaceSoul(this.executorId, this.path)) {
-      await writeSoul(step.assembled);
+      await writeSoul(assembled);
 
       return { ok: true };
     }
 
-    return writeExecutorFileOp(this.router, this.executorId, this.path, { bytes: step.assembled, expectedRevision });
+    return writeExecutorFileOp(this.router, this.executorId, this.path, { bytes: assembled, expectedRevision });
   }
 
   abort(): void {
@@ -152,29 +154,29 @@ export class ChunkedUpload {
     return this.settled;
   }
 
-  chunk(offset: number, chunk: Uint8Array, final: boolean): { ok: true } | { error: string } | { assembled: Uint8Array } {
-    if (this.settled) return { error: 'file transfer already settled' };
+  chunk(offset: number, chunk: Uint8Array, final: boolean): Result.Result<Uint8Array | null, string> {
+    if (this.settled) return Result.fail('file transfer already settled');
 
-    if (offset < 0) return { error: 'chunk offset must not be negative' };
+    if (offset < 0) return Result.fail('chunk offset must not be negative');
 
     if (offset !== this.received) {
-      return { error: `file transfer out of sync: expected offset ${String(this.received)}, got ${String(offset)}` };
+      return Result.fail(`file transfer out of sync: expected offset ${String(this.received)}, got ${String(offset)}`);
     }
 
     if (chunk.byteLength > FILE_CHUNK_BYTES) {
-      return { error: `chunk exceeds ${String(FILE_CHUNK_BYTES)} bytes` };
+      return Result.fail(`chunk exceeds ${String(FILE_CHUNK_BYTES)} bytes`);
     }
 
     if (this.received + chunk.byteLength > FILE_TRANSFER_MAX_BYTES) {
       this.settled = true;
 
-      return { error: `file exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit` };
+      return Result.fail(`file exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit`);
     }
 
     this.parts.push(chunk);
     this.received += chunk.byteLength;
 
-    if (!final) return { ok: true };
+    if (!final) return Result.succeed(null);
     const assembled = new Uint8Array(this.received);
     let at = 0;
 
@@ -185,7 +187,7 @@ export class ChunkedUpload {
 
     this.settled = true;
 
-    return { assembled };
+    return Result.succeed(assembled);
   }
 
   abort(): void {
@@ -626,14 +628,15 @@ export function deleteExecutorPathOp(
 
     const removal = await removeTreeWithVfsOps(vfs, path);
 
-    if (!removal.ok) {
+    if (Result.isFailure(removal)) {
+      const partial = removal.failure;
       // No cause attached: the message already inlines it.
-      const reason = classifyErrorCode({ cause: removal.failed.cause }) ?? 'io';
+      const reason = classifyErrorCode({ cause: partial.failed.cause }) ?? 'io';
 
       return {
-        ...refusalOf(new KinuError(reason, partialTreeRemovalMessage(path, removal))),
-        removed: removal.removed,
-        remaining: removal.remaining,
+        ...refusalOf(new KinuError(reason, partialTreeRemovalMessage(path, partial))),
+        removed: partial.removed,
+        remaining: partial.remaining,
       };
     }
 

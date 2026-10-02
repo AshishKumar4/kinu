@@ -1,5 +1,6 @@
 // Disk-bound scenarios run in a subprocess (config.ts binds KINU_HOME at import);
 // the cloud-api methods run in-process against a local Bun server.
+import { Result } from 'effect';
 import { runToExit } from '@kinu.run/test-utils';
 import { scratchDir } from '../../test-utils/src/scratch';
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -806,7 +807,7 @@ describe('cloud-api profile methods', () => {
     try {
       const input = { catalog: catalogB(), expectedVersion: 7 };
       const result = await updateCloudProfile(fake.origin, 'ptc_tok', input);
-      expect(result).toEqual({ ok: true, envelope: next });
+      expect(result).toEqual(Result.succeed(next));
       const seen = fake.seenRequests()[0];
       expect(seen).toMatchObject({ path: '/api/cli/profile', method: 'PUT', auth: 'Bearer ptc_tok' });
       expect(seen.body).toEqual(JSON.parse(JSON.stringify(input)));
@@ -826,7 +827,7 @@ describe('cloud-api profile methods', () => {
 
     try {
       const result = await updateCloudProfile(fake.origin, 'ptc_tok', { catalog: catalogB(), expectedVersion: 4 });
-      expect(result).toEqual({ conflict: true, currentVersion: 9, currentDigest: SERVED_ENVELOPE.digest });
+      expect(result).toEqual(Result.fail({ currentVersion: 9, currentDigest: SERVED_ENVELOPE.digest }));
     } finally {
       fake.stop();
     }

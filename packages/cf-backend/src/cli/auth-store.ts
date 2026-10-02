@@ -1,7 +1,7 @@
 // CLI device-authorization flow. Every record is short-lived and lives in KV under its own expiry
 // (no sweep); the durable CLI token is minted and stored in the user's own DO.
 
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import type { AuthIdentity } from '../auth/session';
 import type { UserDO } from '../user/user-do';
 import type { ObjectNamespace } from '@kinu.run/core';
@@ -114,9 +114,7 @@ export function tokenAllows(identity: Pick<CliTokenIdentity, 'scopes'>, scope: A
   return identity.scopes === 'all' || identity.scopes.includes(scope);
 }
 
-export type CliTokenAuth<Authority = DurableObjectStub<UserDO>> =
-  | { ok: true; identity: CliTokenIdentity<Authority> }
-  | { ok: false; error: string };
+export type CliTokenAuth<Authority = DurableObjectStub<UserDO>> = Result.Result<CliTokenIdentity<Authority>, string>;
 
 /** `readBearer` is the same read from a Request. */
 export function bearerOf(authorization: string | null): string | null {
@@ -157,10 +155,10 @@ export async function authenticateCliToken<Id, Authority extends CliAuthAuthorit
 ): Promise<CliTokenAuth<Authority>> {
   const token = readBearer(request);
 
-  if (!token) return { ok: false, error: 'Missing Authorization: Bearer <token>' };
+  if (!token) return Result.fail('Missing Authorization: Bearer <token>');
   const bearer = parseCliBearer(token);
 
-  if (!bearer) return { ok: false, error: 'Malformed CLI token' };
+  if (!bearer) return Result.fail('Malformed CLI token');
   const userDO = env.UserDO.get(env.UserDO.idFromName(bearer.userId));
 
   const verified = bearer.kind === 'session'
@@ -168,21 +166,18 @@ export async function authenticateCliToken<Id, Authority extends CliAuthAuthorit
     : await userDO.verifyAccessToken(await ownerCaller(env), token);
 
   if (!verified.ok || !verified.user || !verified.tokenHash) {
-    return { ok: false, error: verified.error ?? 'Invalid CLI token' };
+    return Result.fail(verified.error ?? 'Invalid CLI token');
   }
 
-  return {
-    ok: true,
-    identity: {
-      userId: verified.user.id,
-      email: verified.user.email,
-      displayName: verified.user.displayName,
-      tokenHash: verified.tokenHash,
-      kind: bearer.kind,
-      scopes: bearer.kind === 'session' ? 'all' : verified.scopes ?? [],
-      userDO,
-    },
-  };
+  return Result.succeed({
+    userId: verified.user.id,
+    email: verified.user.email,
+    displayName: verified.user.displayName,
+    tokenHash: verified.tokenHash,
+    kind: bearer.kind,
+    scopes: bearer.kind === 'session' ? 'all' : verified.scopes ?? [],
+    userDO,
+  });
 }
 
 export interface CliAuthRequest {
@@ -316,7 +311,7 @@ export function approveCliAuth<Id>(
   userCode: string,
   identity: AuthIdentity,
   clientKey?: string,
-): Promise<{ ok: true; status: 'approved'; user: { id: string; email: string } }> {
+): Promise<{ status: 'approved'; user: { id: string; email: string } }> {
   return settle(Effect.gen(function* () {
     const now = Date.now();
     yield* Effect.promise(async () => rateLimit(env.AUTH_KV, `approve:${identity.userId}:${cleanRateKey(clientKey)}`, 30, now));
@@ -335,8 +330,7 @@ export function approveCliAuth<Id>(
       }
 
       return {
-        ok: true,
-        status: 'approved',
+        status: 'approved' as const,
         user: { id: identity.userId, email: record.userEmail ?? identity.email },
       };
     }
@@ -355,7 +349,7 @@ export function approveCliAuth<Id>(
       approvedAt: now,
     }, record.expiresAt + RETENTION_MS - now));
 
-    return { ok: true, status: 'approved', user: { id: identity.userId, email: identity.email } };
+    return { status: 'approved' as const, user: { id: identity.userId, email: identity.email } };
   }));
 }
 

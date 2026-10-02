@@ -15,7 +15,7 @@ import { isVfsError, type VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { WORKSPACE_ROOT } from '../vfs/workspace-path';
 import { readExecSignal } from '../execution/signal';
 import { commandResult, existsTool } from '../execution/exec-result';
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import { diagnostics, KinuError, refusalOf, settle, settleSync, toKinuError } from '../obs/index';
 import { CRAFT_NEUTRAL_PRIOR, isReservedCraftToolName } from '../craft/in-episode';
 import { admitCraftedSource } from '../craft/source';
@@ -310,10 +310,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         // Misevolution gate on the `craft_tool` surface, without `network-egress` (see SURFACE_CRITERIA).
         const misevolution = checkMisevolutionForSurface({ code: codeStr }, 'craft_tool');
 
-        if (!misevolution.ok) {
+        if (Result.isFailure(misevolution)) {
           if (sql && actor) {
             recordMisevolutionVeto(sql, actor, {
-              surface: 'craft_tool', violation: misevolution,
+              surface: 'craft_tool', violation: misevolution.failure,
               detail: `workspace.createTool("${toolName}") rejected`,
             });
           }
@@ -322,14 +322,14 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
             diagnostics.failure('misevolution.veto_unrecorded', new KinuError(
               'unavailable',
               'a misevolution veto fired with no actor-scoped store to record it against',
-            ), { surface: 'craft_tool', criterion: misevolution.criterionId, tool: toolName });
+            ), { surface: 'craft_tool', criterion: misevolution.failure.criterionId, tool: toolName });
           }
 
           // `denied`: a gate refused and the work correctly never ran.
           return {
             ok: false,
             ...refusalOf(new KinuError('denied',
-              `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason} `
+              `Misevolution veto (${misevolution.failure.criterionId}): ${misevolution.failure.reason} `
               + `Rewrite the tool body without it and call createTool again.`)),
           };
         }

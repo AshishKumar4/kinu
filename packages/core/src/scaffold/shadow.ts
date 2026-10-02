@@ -22,7 +22,7 @@ import {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from '../identity/effect-tombstones';
 import { nowMs } from '../utils/date';
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import { diagnostics, settle, toKinuError, KinuError } from '../obs/index';
 import { parseJsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
@@ -526,14 +526,14 @@ export function applyPromotionDecision(
 
       const misevolution = checkMisevolution(pendingCode);
 
-      if (!misevolution.ok) {
+      if (Result.isFailure(misevolution)) {
         recordMisevolutionVeto(sql, rt.actor, {
-          surface: 'scaffold', violation: misevolution,
+          surface: 'scaffold', violation: misevolution.failure,
           detail: `promotion of v${pending.version} vetoed; rolled back instead`,
         });
         const result = yield* Effect.promise(() => applyPromotionDecision(rt, pending, 'rollback', events));
 
-        return { ...result, vetoReason: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };
+        return { ...result, vetoReason: `Misevolution veto (${misevolution.failure.criterionId}): ${misevolution.failure.reason}` };
       }
 
       // One actor-scoped statement retires the old current and promotes the pending, so no crash leaves zero or two current rows.

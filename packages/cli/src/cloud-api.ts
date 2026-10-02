@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import { resolveCloudOrigin } from './config';
 import {
   ARCHIVE_SNAPSHOT_ENDED,
@@ -333,9 +333,7 @@ export interface CloudProfileUpdateInput {
   expectedVersion: number;
 }
 
-export type CloudProfileUpdateResult =
-  | { ok: true; envelope: ProfileCatalogEnvelope }
-  | { conflict: true; currentVersion: number; currentDigest: string };
+export type CloudProfileUpdateResult = Result.Result<ProfileCatalogEnvelope, { currentVersion: number; currentDigest: string }>;
 
 /** Compare-and-swap; a stale `expectedVersion` returns a structured conflict, nothing merges. */
 export function updateCloudProfile(
@@ -357,12 +355,16 @@ export function updateCloudProfile(
         currentDigest: v.string(),
       }), body);
 
-      return { conflict: true, currentVersion: conflict.currentVersion, currentDigest: conflict.currentDigest };
+      const stale: CloudProfileUpdateResult = Result.fail({ currentVersion: conflict.currentVersion, currentDigest: conflict.currentDigest });
+
+      return stale;
     }
 
     yield* assertCloudOk(status, body);
 
-    return { ok: true, envelope: v.parse(ProfileCatalogEnvelopeSchema, body) };
+    const written: CloudProfileUpdateResult = Result.succeed(v.parse(ProfileCatalogEnvelopeSchema, body));
+
+    return written;
   }));
 }
 

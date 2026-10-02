@@ -3,7 +3,7 @@
  * is, mirrored by a per-account read-only cache file. Nothing merges or falls back between the stores.
  */
 
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -228,16 +228,17 @@ export function writeAccountProfile(
     const auth = requireStoredAuthConfig();
     const result = yield* Effect.promise(async () => updateCloudProfile(auth.origin, auth.token, { catalog, expectedVersion }));
 
-    if ('conflict' in result) {
+    if (Result.isFailure(result)) {
       return yield* Effect.die(new Error(
         `the account profile changed while this edit was open `
-        + `(current version ${result.currentVersion}, digest ${result.currentDigest}); run the same command again`,
+        + `(current version ${result.failure.currentVersion}, digest ${result.failure.currentDigest}); run the same command again`,
       ));
     }
 
-    yield* Effect.promise(async () => cacheAccountProfile(accountId, result.envelope));
+    const envelope = result.success;
+    yield* Effect.promise(async () => cacheAccountProfile(accountId, envelope));
 
-    return result.envelope;
+    return envelope;
   }));
 }
 

@@ -760,20 +760,16 @@ async function runPromptSectionTrials(
 }
 
 /** `code` names the bar so callers can branch without parsing prose. */
-export type MeasuredSectionProposal =
-  | {
-    readonly ok: true;
-    readonly sectionId: string;
-    readonly version: number;
-    readonly incumbentScore: ScoreInterval;
-    readonly candidateScore: ScoreInterval;
-  }
-  | {
-    readonly ok: false;
-    readonly sectionId: string;
-    readonly code: ProposeSectionRefusal | 'unknown_section' | 'degenerate_split';
-    readonly error: string;
-  };
+export type MeasuredSectionProposal = Result.Result<{
+  readonly sectionId: string;
+  readonly version: number;
+  readonly incumbentScore: ScoreInterval;
+  readonly candidateScore: ScoreInterval;
+}, {
+  readonly sectionId: string;
+  readonly code: ProposeSectionRefusal | 'unknown_section' | 'degenerate_split';
+  readonly error: string;
+}>;
 
 /**
  * Measure one externally authored section candidate against the incumbent on
@@ -787,10 +783,10 @@ export async function proposeMeasuredPromptSection(
   const section = findPromptSectionTarget(input.sectionId);
 
   if (!section) {
-    return {
-      ok: false, sectionId: input.sectionId, code: 'unknown_section',
+    return Result.fail({
+      sectionId: input.sectionId, code: 'unknown_section',
       error: `"${input.sectionId}" is not a registered prompt section`,
-    };
+    });
   }
 
   const split = await buildOutcomeEvalSplit(
@@ -798,10 +794,10 @@ export async function proposeMeasuredPromptSection(
   );
 
   if (split.degeneracy !== null) {
-    return {
-      ok: false, sectionId: section.id, code: 'degenerate_split',
+    return Result.fail({
+      sectionId: section.id, code: 'degenerate_split',
       error: describeSplitDegeneracy(split.degeneracy),
-    };
+    });
   }
 
   const incumbent = incumbentSectionSource(control.sql, control.rt.actor, section);
@@ -826,12 +822,10 @@ export async function proposeMeasuredPromptSection(
   });
 
   if (Result.isFailure(proposal)) {
-    return { ok: false, sectionId: section.id, code: proposal.failure.code, error: proposal.failure.error };
+    return Result.fail({ sectionId: section.id, code: proposal.failure.code, error: proposal.failure.error });
   }
 
-  return {
-    ok: true, sectionId: section.id, version: proposal.success, incumbentScore, candidateScore,
-  };
+  return Result.succeed({ sectionId: section.id, version: proposal.success, incumbentScore, candidateScore });
 }
 
 /**

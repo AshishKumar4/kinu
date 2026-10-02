@@ -189,7 +189,7 @@ describe('CLI auth approval replay', () => {
     await approveCliAuth(env, started.userCode, approver, '127.0.0.1');
 
     const replay = await approveCliAuth(env, started.userCode, approver, '127.0.0.1');
-    expect(replay).toMatchObject({ ok: true, status: 'approved', user: { id: approver.userId } });
+    expect(replay).toMatchObject({ status: 'approved', user: { id: approver.userId } });
   });
 
   test('an already-approved code is rejected for any other user (no identity disclosure)', async () => {

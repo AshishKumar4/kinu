@@ -1,3 +1,4 @@
+import { Result } from 'effect';
 import { markStoreChanged } from '@kinu.run/agent-utils';
 // CraftStore conflict detection and upsert; see docs/EVOLUTION.md "CraftStore Lifecycle".
 
@@ -53,12 +54,12 @@ export async function upsertCraftedTool(
 ): Promise<{ accepted: boolean; vetoReason?: string }> {
   const misevolution = checkMisevolutionForSurface({ code: candidate.code }, 'craft');
 
-  if (!misevolution.ok) {
+  if (Result.isFailure(misevolution)) {
     recordMisevolutionVeto(rt.storage.sql, rt.actor, {
-      surface: 'craft', violation: misevolution, detail: `extracted tool "${candidate.name}" rejected`,
+      surface: 'craft', violation: misevolution.failure, detail: `extracted tool "${candidate.name}" rejected`,
     });
 
-    return { accepted: false, vetoReason: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };
+    return { accepted: false, vetoReason: `Misevolution veto (${misevolution.failure.criterionId}): ${misevolution.failure.reason}` };
   }
 
   const compileError = await compilesToCallable(rt, candidate.code);

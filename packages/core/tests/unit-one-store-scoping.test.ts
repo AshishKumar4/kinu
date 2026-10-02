@@ -1,3 +1,4 @@
+import { Result } from 'effect';
 import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 /**
  * Every per-actor table not covered by `unit-actor-private-stores.test.ts`, with two
@@ -752,12 +753,12 @@ describe('two actors, one database: imported_experience', () => {
 
     const rtA = runtimeFor(w, w.a);
     const rtB = runtimeFor(w, w.b);
-    expect(stageImport(rtA, entry, 1).ok).toBe(true);
+    expect(Result.isSuccess(stageImport(rtA, entry, 1))).toBe(true);
     // Admitted for B too: "already imported" is per actor.
-    expect(stageImport(rtB, entry, 1).ok).toBe(true);
+    expect(Result.isSuccess(stageImport(rtB, entry, 1))).toBe(true);
     expect(w.count('imported_experience')).toBe(2);
     // The same actor is still refused.
-    expect(stageImport(rtA, entry, 1).ok).toBe(false);
+    expect(Result.isSuccess(stageImport(rtA, entry, 1))).toBe(false);
 
     bindPendingImports(w.sql, w.a, 'turn-1');
     expect(listImportedExperience(w.sql, w.a)[0]?.turnIds).toEqual(['turn-1']);

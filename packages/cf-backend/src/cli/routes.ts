@@ -119,7 +119,7 @@ async function authenticateCli(c: CliContext): Promise<CliIdentity | Response> {
   try {
     const result = await authenticateCliToken(c.req.raw, c.env);
 
-    return result.ok ? result.identity : err(401, result.error);
+    return Result.isSuccess(result) ? result.success : err(401, result.failure);
   } catch (e) {
     // No root secret: say so rather than surfacing an unexplained 500.
     if (e instanceof OwnerCapabilityUnavailableError) return err(503, e.message);

@@ -1,4 +1,4 @@
-import { Effect } from 'effect';
+import { Effect, Result } from 'effect';
 import * as readline from 'node:readline';
 import { callAgentRpc, createCloudWebhookTrigger, type CloudWebhookTriggerInput } from '../cloud-api';
 import { listConfiguredAgentRefs, requireAuthConfig } from '../config';
@@ -275,27 +275,29 @@ async function runRpc(
         if (!line.trim()) continue;
         const cmd = parseRpc(line);
 
-        if (!cmd.ok) { output({ value: { type: 'response', success: false, error: cmd.error } }); continue; }
+        if (Result.isFailure(cmd)) { output({ value: { type: 'response', success: false, error: cmd.failure } }); continue; }
 
-        if (cmd.value.type === 'exit' || cmd.value.type === 'shutdown') break;
+        const command = cmd.success;
 
-        if (cmd.value.type !== 'prompt') {
-          await respondToRpcCommand(cmd.value, client, output, () => runCloudRpcCommand(auth.origin, auth.token, target.cloudName, cmd.value));
+        if (command.type === 'exit' || command.type === 'shutdown') break;
+
+        if (command.type !== 'prompt') {
+          await respondToRpcCommand(command, client, output, () => runCloudRpcCommand(auth.origin, auth.token, target.cloudName, command));
           continue;
         }
 
-        const message = stringField(cmd.value, 'message') ?? '';
+        const message = stringField(command, 'message') ?? '';
 
         if (!message) {
-          output({ value: { id: cmd.value.id, type: 'response', command: 'prompt', success: false, error: 'message required' } });
+          output({ value: { id: command.id, type: 'response', command: 'prompt', success: false, error: 'message required' } });
           continue;
         }
 
-        output({ value: { type: 'turn_start', id: cmd.value.id } });
+        output({ value: { type: 'turn_start', id: command.id } });
         const result = await client.send(message, { cwd: process.cwd() });
         const turn = result.landed === 'turn' ? result : { text: '', steps: 0 };
         output({ value: { type: 'message_end', role: 'assistant', text: turn.text } });
-        output({ value: { id: cmd.value.id, type: 'response', command: 'prompt', success: true } });
+        output({ value: { id: command.id, type: 'response', command: 'prompt', success: true } });
         output({ value: { type: 'turn_end', steps: turn.steps } });
       }
     } finally {
@@ -326,25 +328,27 @@ async function runRpc(
       if (!line.trim()) continue;
       const cmd = parseRpc(line);
 
-      if (!cmd.ok) { output({ value: { type: 'response', success: false, error: cmd.error } }); continue; }
+      if (Result.isFailure(cmd)) { output({ value: { type: 'response', success: false, error: cmd.failure } }); continue; }
 
-      if (cmd.value.type === 'exit' || cmd.value.type === 'shutdown') break;
+      const command = cmd.success;
 
-      if (cmd.value.type !== 'prompt') {
-        await respondToRpcCommand(cmd.value, client, output, () => runLocalRpcCommand(target.localName, cmd.value, client));
+      if (command.type === 'exit' || command.type === 'shutdown') break;
+
+      if (command.type !== 'prompt') {
+        await respondToRpcCommand(command, client, output, () => runLocalRpcCommand(target.localName, command, client));
         continue;
       }
 
-      const message = stringField(cmd.value, 'message') ?? '';
+      const message = stringField(command, 'message') ?? '';
 
       if (!message) {
-        output({ value: { id: cmd.value.id, type: 'response', command: 'prompt', success: false, error: 'message required' } });
+        output({ value: { id: command.id, type: 'response', command: 'prompt', success: false, error: 'message required' } });
         continue;
       }
 
       await ensureConnected();
       await client.send(message, { cwd: process.cwd() });
-      output({ value: { id: cmd.value.id, type: 'response', command: 'prompt', success: true } });
+      output({ value: { id: command.id, type: 'response', command: 'prompt', success: true } });
     }
   } finally {
     try {
@@ -625,20 +629,16 @@ function jsonEvents(event: AgentClientEvent): JsonValue[] {
   }
 }
 
-type RpcParseResult = { ok: true; value: JsonObject } | { ok: false; error: string };
+type RpcParseResult = Result.Result<JsonObject, string>;
 
 const RpcCommandSchema = v.objectWithRest({ type: v.string() }, JsonValueSchema);
 
 function parseRpc(line: string): RpcParseResult {
-  try {
-    const parsed = v.safeParse(RpcCommandSchema, parseJsonObject(line));
+  return Result.flatMap(Result.try({ try: () => parseJsonObject(line), catch: (err) => renderThrownChain({ cause: err }) }), (object) => {
+    const parsed = v.safeParse(RpcCommandSchema, object);
 
-    return parsed.success
-      ? { ok: true, value: parsed.output }
-      : { ok: false, error: 'Command must be an object with type' };
-  } catch (err) {
-    return { ok: false, error: renderThrownChain({ cause: err }) };
-  }
+    return parsed.success ? Result.succeed(parsed.output) : Result.fail('Command must be an object with type');
+  });
 }
 
 /** Long enough for a real pipe to start delivering, short enough not to stall a harness that inherits an idle stdin. */
