@@ -87,6 +87,7 @@ const JOB_CONTROLS = [
 
 const JOB_STATUS_TONE: Record<BackgroundJobRow['status'], string> = {
   running: 'p-accent p-t-status',
+  serving: 'p-accent p-t-status',
   completed: 'p-success p-t-status',
   failed: 'p-danger p-t-status',
   cancelled: 'p-danger p-t-status',

@@ -1,6 +1,9 @@
 import type { WorkMode } from './turn';
 
-export type BackgroundJobStatus = 'running' | 'completed' | 'failed' | 'cancelled';
+/** `serving` is reported, never stored (`listBackgroundJobs`). */
+export type BackgroundJobStatus = 'running' | 'serving' | 'completed' | 'failed' | 'cancelled';
+
+export const JOB_STAMP_ENV = 'KINU_JOB_ID';
 
 export interface BackgroundJob {
   id: string;
@@ -25,6 +28,7 @@ export interface BackgroundJob {
    * writes nothing; cleared by the next {@link BackgroundJobStore.reclaim}.
    */
   resumeAfter: number | null;
+  serves: number | null;
 }
 
 export type InvocationSurface = 'interactive' | 'one-shot';

@@ -497,3 +497,26 @@ describe("a workspace's turns are not its box's use", () => {
   });
 });
 
+// A job's settle moves the record of which job serves an exposed port. Only real sandbox use keeps a box alive, and a
+// call activates its object: a workspace that never used its sandbox must not call it, nor read its sandbox as used.
+describe("a workspace's job settles are not its box's use", () => {
+  test('ten job settles in a workspace that never used its sandbox call no box and leave the sandbox idle', async () => {
+    const boxCalls: string[] = [];
+    const { agent, db } = orchestratorHarness(undefined, { container: true, boxCalls, previewHostSuffix: 'previews.example' });
+    const jobs = jobsOver(db);
+
+    // A `run` job is not re-driven: recovering one settles it as the eviction it was.
+    for (let n = 0; n < 10; n++) {
+      const jobId = `bgjob-run-${String(n)}`;
+      jobs.create({ id: jobId, kind: 'run', workMode: 'build', input: JSON.stringify({ code: 'return 1' }), now: Date.now(), label: 'run' });
+      await recover(agent, interrupted(`${BACKGROUND_FIBER_PREFIX}run`, { phase: 'running', jobId, kind: 'run' }));
+    }
+
+    await agent.harnessJoinDetachedFibers();
+
+    expect(jobs.listRunning(20).total).toBe(0);
+    expect(boxCalls).toEqual([]);
+    expect((await agent.getExecutors()).find((executor) => executor.name === 'sandbox')?.status).toBe('idle');
+  });
+});
+

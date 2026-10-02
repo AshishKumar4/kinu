@@ -32,10 +32,21 @@ const SqlBindingSchema = v.union([
   ),
 ]);
 
+const watchers = new WeakMap<Pick<AgentDatabase, 'query'>, (query: string) => void>();
+
+/** `watch` hears each statement these adapters ran over `db`. */
+export function watchStatements(db: Pick<AgentDatabase, 'query'>, watch: (query: string) => void): void {
+  watchers.set(db, watch);
+}
+
 /** Rows for every statement, as DO storage.sql answers a write's `RETURNING`. */
 function sqlExecOver(db: Pick<AgentDatabase, 'query'>) {
-  return <T>(query: string, ...bindings: unknown[]): T[] =>
-    db.query<T>(query).all(...bindings.map((binding) => v.parse(SqlBindingSchema, binding)));
+  return <T>(query: string, ...bindings: unknown[]): T[] => {
+    const rows = db.query<T>(query).all(...bindings.map((binding) => v.parse(SqlBindingSchema, binding)));
+    watchers.get(db)?.(query);
+
+    return rows;
+  };
 }
 
 /** DO storage.sql's cursor: a blob reads back as its own ArrayBuffer. */

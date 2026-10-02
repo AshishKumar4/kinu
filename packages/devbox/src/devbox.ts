@@ -117,6 +117,56 @@ exit 0
 
 const KILL_TREE_GONE = 3;
 
+/** `port-listeners STAMP [PORT...]`: `port pid stamp command` per socket holder; /proc, as the image has no `ss`. */
+const PORT_LISTENERS = `
+stamp=$1; shift
+socks=$(for f in /proc/net/tcp /proc/net/tcp6; do
+  [ -r "$f" ] || continue
+  while read -r _ local _ st _ _ _ _ _ inode _; do
+    [ "$st" = 0A ] || continue
+    port=$((0x\${local##*:}))
+    if [ $# -eq 0 ]; then echo "$inode $port"; else for want in "$@"; do [ "$port" = "$want" ] && echo "$inode $port"; done; fi
+  done < "$f"
+done)
+[ -n "$socks" ] || exit 0
+holders=$(ls -l /proc/[0-9]*/fd 2>/dev/null | awk '/^\\/proc\\/[0-9]+\\/fd:$/ { split($0, p, "/"); pid = p[3]; next } /-> socket:\\[/ { s = $NF; gsub(/socket:\\[|\\]/, "", s); print s, pid }')
+stampof() {
+  p=$1
+  while [ -n "$p" ] && [ "$p" -gt 1 ]; do
+    v=$(tr '\\000' '\\n' < "/proc/$p/environ" 2>/dev/null | grep -m1 "^$stamp=")
+    [ -n "$v" ] && { printf '%s' "\${v#*=}"; return; }
+    p=$(awk '/^PPid:/ { print $2 }' "/proc/$p/status" 2>/dev/null)
+  done
+}
+echo "$socks" | while read -r inode port; do
+  echo "$holders" | awk -v i="$inode" '$1 == i { print $2 }' | sort -un | while read -r pid; do
+    printf '%s\\t%s\\t%s\\t%s\\n' "$port" "$pid" "$(stampof "$pid")" "$(tr '\\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)"
+  done
+done
+`;
+
+export interface PortListener {
+  readonly port: number;
+  readonly pid: number;
+  readonly stamp: string | null;
+  readonly command: string;
+}
+
+const ListenerLineSchema = v.pipe(v.string(), v.transform((line) => line.split('\t')), v.tuple([
+  v.pipe(v.string(), v.toNumber(), v.integer()),
+  v.pipe(v.string(), v.toNumber(), v.integer()),
+  v.string(),
+  v.string(),
+]));
+
+function parsePortListeners(output: string): PortListener[] {
+  return output.split('\n').filter((line) => line !== '').map((line) => {
+    const [port, pid, stamp, command] = v.parse(ListenerLineSchema, line);
+
+    return { port, pid, stamp: stamp === '' ? null : stamp, command: command.trimEnd() };
+  });
+}
+
 const CONTAINER_STOP_INTERVAL_MS = 100;
 
 
@@ -1653,7 +1703,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /** No deadline; the SDK's process lane lost output (D37). */
-  execUntimed(command: string, options: { readonly cwd?: string; readonly execId: string }): Promise<ExecResult> {
+  execUntimed(command: string, options: { readonly cwd?: string; readonly execId: string; readonly env?: Readonly<Record<string, string>> }): Promise<ExecResult> {
     const pending: UntimedExecution = { cancelled: false };
     this.#untimed.set(options.execId, pending);
 
@@ -1661,7 +1711,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const { container } = yield* attempt('not-ready', () => this.#ensureReady(this.#teardowns));
 
       if (pending.cancelled) return yield* Effect.fail(new DevboxError('cancelled', 'sandbox exec cancelled before admission'));
-      const started = yield* attemptSync('process', () => container.exec(['bash', '-c', command], { cwd: options.cwd ?? DEVBOX_WORKDIR, env: CONTAINER_TRUST_ENV }));
+      const started = yield* attemptSync('process', () => container.exec(['bash', '-c', command], { cwd: options.cwd ?? DEVBOX_WORKDIR, env: { ...options.env, ...CONTAINER_TRUST_ENV } }));
       pending.started = started;
       const process = yield* attempt('process', () => started);
       const output = yield* attempt('process', () => process.output());
@@ -1669,6 +1719,19 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       return { stdout: text.decode(output.stdout), stderr: text.decode(output.stderr), exitCode: output.exitCode };
     })).pipe(Effect.ensuring(Effect.sync(() => { this.#untimed.delete(options.execId); }))));
+  }
+
+  portListeners(stamp: string, ports?: readonly number[]): Promise<readonly PortListener[] | null> {
+    return settle(attempt('io', async () => {
+      const container = this.ctx.container;
+
+      if (container?.running !== true) return null;
+
+      if (ports?.length === 0) return [];
+      const read = await (await container.exec(['sh', '-c', PORT_LISTENERS, 'port-listeners', stamp, ...(ports ?? []).map(String)])).output();
+
+      return parsePortListeners(new TextDecoder().decode(read.stdout));
+    }));
   }
 
   /** False when the command had already exited. */

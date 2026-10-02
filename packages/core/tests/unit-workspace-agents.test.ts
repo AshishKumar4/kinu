@@ -16,6 +16,13 @@ import { agentActive, readWorkspaceAgents, type PanelAgent } from '../src/read-m
 import { OWNER_STOPPED } from '../src/heads/types';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder';
 import { readAgentFigures } from '../src/read-models/agent-figures';
+import { EventLog, initEventsHubTables, type EmailPayload } from '../src/events/hub/index';
+import { admitSubordinateTask } from '../src/subordinates/support';
+
+const EMAIL: EmailPayload = {
+  from: 'owner@example.com', to: 'kinu@agents.example.com', subject: 'Status?', body_text: 'Is staging green?',
+  message_id: '<msg-1@example.com>', in_reply_to: null, references: null, attachments: [],
+};
 
 function workspace() {
   const db = new Database(':memory:');
@@ -27,6 +34,7 @@ function workspace() {
   initHeadsTables(execRaw);
   initSwarmNodeRecords(execRaw);
   initActorClaimTables(execRaw);
+  initEventsHubTables(exec);
   initRunEventTables(execRaw);
   const actors = createTestActors(sql, execRaw);
   new SubordinateRosterStore(exec, actors.main).ensureSchema();
@@ -43,9 +51,9 @@ function workspace() {
     return child;
   };
 
-  const read = (): Promise<PanelAgent[]> => readWorkspaceAgents({
+  const read = (queued = false): Promise<PanelAgent[]> => readWorkspaceAgents({
     sql, exec, root: actors.main, rootLabel: 'Kinu', actors: actors.directory.list({ retired: true }),
-    figures: (actorIds) => readAgentFigures(sql, actorIds),
+    figures: (actorIds) => readAgentFigures(sql, actorIds), queued,
   });
 
   const openTurn = (actor: ActorHandle): void => {
@@ -68,7 +76,7 @@ function workspace() {
     setSystemTime();
   };
 
-  return { db, main: actors.main, hire, read, openTurn, turn };
+  return { db, exec, main: actors.main, hire, read, openTurn, turn };
 }
 
 const byLabel = <T extends { label: string }>(rows: T[]): T[] => rows.sort((a, b) => a.label.localeCompare(b.label));
@@ -140,6 +148,28 @@ describe('the Agents panel lists every agent in the workspace', () => {
 
     db.query("UPDATE actor_turn_claims SET outcome = 'indeterminate' WHERE turn_id = 'turn-chatting'").run();
     expect((await read()).find((agent) => agent.label === 'chatting')?.activity).toBe('idle');
+  });
+
+  // Staging f75f06932, 2026-10-01: the eval's settle called five trials quiet on two idle reads a second apart, while
+  // each owed a turn it had not claimed (a helper's admitted task, its report to the lead, a job's wake). From the
+  // moment a turn is owed, the agent it is owed to reads working.
+  test('an agent owed a turn it has not claimed reads working', async () => {
+    const { exec, main, hire, read } = workspace();
+    const helper = hire(main, 'counter-1', { lifetime: 'task' });
+    const activity = async (queued = false) => Object.fromEntries((await read(queued)).map((agent) => [agent.label, agent.activity]));
+
+    expect(await activity()).toEqual({ Kinu: 'idle', 'counter-1': 'idle' });
+
+    // The lead's chat queued a turn (a job's wake) it has not claimed.
+    expect((await activity(true)).Kinu).toBe('working');
+
+    // The helper was handed a task its drain has not run.
+    admitSubordinateTask(new EventLog(exec, helper), { fromWorkspace: helper.workspaceId, kind: 'task', body: 'Count the files.', mode: 'build', now: Date.now() });
+    expect((await activity())['counter-1']).toBe('working');
+
+    // An email reached the lead, and the drain that takes it has not run.
+    new EventLog(exec, main).publish({ descriptor: { ingress: 'email_inbound', variant: 'email', sender_class: 'owner', payload: EMAIL }, now: Date.now() });
+    expect((await activity()).Kinu).toBe('working');
   });
 
   test('a worker still running in an old swarm stays listed past the newest twenty runs', async () => {

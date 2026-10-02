@@ -4,7 +4,8 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus, PortExposureResult, PreviewRouteCheck, SandboxSize, SandboxSizes } from './types';
-import { readExecSignal } from './signal';
+import { readExecJob, readExecSignal } from './signal';
+import { JOB_STAMP_ENV } from '../types/jobs';
 import { commandResult, exposedPortText, type CommandResult } from './exec-result';
 import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, tolerateAsync, toKinuError, type Refusal } from '../obs/index';
 import { isVfsError, VfsError, VFS_ERRNO, type VfsErrorCode } from '@nimbus-sh/core/vfs/vfs-error.js';
@@ -44,6 +45,14 @@ export interface SandboxExecOptions {
   cwd?: string;
   timeout?: number;
   signal?: AbortSignal;
+  env?: Record<string, string>;
+}
+
+export interface SandboxPortListener {
+  readonly port: number;
+  readonly pid: number;
+  readonly stamp: string | null;
+  readonly command: string;
 }
 
 export interface SandboxHandle {
@@ -77,6 +86,8 @@ export interface SandboxHandle {
   }>>;
   /** Asked before the first exposure: restarts re-expose with the stored token, so the first URL must use it too. */
   portToken(port: number, name?: string): Promise<{ urlToken: string }>;
+  /** `stamp` read up holders' ancestry; null while down (never starts it). */
+  portListeners(stamp: string, ports?: readonly number[]): Promise<readonly SandboxPortListener[] | null>;
   notePortRemoved(port: number): Promise<void>;
   /** Records the size; a container running at another size restarts at it, and one not running stays so. */
   resize(size: string): Promise<SandboxResize>;
@@ -204,7 +215,6 @@ export class SandboxPending extends KinuError {
   }
 }
 
-/** Retries only transient errors, with exponential backoff; non-transient errors throw immediately. */
 async function withSandboxRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
   let lastErr: unknown;
 
@@ -323,6 +333,7 @@ export function createSandboxExecutor(
         }
 
         const signal = readExecSignal({ context: args[1] });
+        const job = readExecJob({ context: args[1] });
 
         try {
           // No work deadline: see SandboxHandle.exec. The signal goes to the container; locally it only
@@ -333,6 +344,8 @@ export function createSandboxExecutor(
             const opts: SandboxExecOptions = { cwd: '/workspace' };
 
             if (signal !== undefined) opts.signal = signal;
+
+            if (job !== undefined) opts.env = { [JOB_STAMP_ENV]: job };
 
             return handle.exec(command, opts);
           }));
