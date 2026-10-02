@@ -348,6 +348,8 @@ export interface BridgeCensus {
   readonly routes: string[];
   /** Each detached root handed straight to a platform holder, which owns its lifetime. */
   readonly held: string[];
+  /** Each runner React calls: a JSX handler's or useCallback's body, or a `void settle(…)` statement in useEffect. */
+  readonly react: string[];
   /** A runner returned from a private helper or a local function: not a bridge, a mistake. */
   readonly findings: string[];
 }
@@ -357,6 +359,7 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
   const flights: string[] = [];
   const routes: string[] = [];
   const held: string[] = [];
+  const react: string[] = [];
   const findings: string[] = [];
 
   for (const [file, text] of sources) {
@@ -410,6 +413,20 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
         return;
       }
 
+      const reacted = file.endsWith('.tsx') ? reactEdge(node) : 'none';
+
+      if (reacted === 'edge') {
+        react.push(site);
+
+        return;
+      }
+
+      if (reacted === 'cleanup') {
+        findings.push(`${site}: a runner as a React effect's whole body is returned as its cleanup; run it as \`void settle(…)\` in a block`);
+
+        return;
+      }
+
       // `return settle(…)`, `return await settle(…)`, or an arrow whose whole body is the call: the edge, spelled short.
       const awaited = node.parent?.raw.type === 'AwaitExpression' ? node.parent : node;
       const holder = awaited.parent;
@@ -440,7 +457,7 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
     });
   }
 
-  return { bridges: bridges.sort(), flights: flights.sort(), routes: routes.sort(), held: held.sort(), findings: findings.sort() };
+  return { bridges: bridges.sort(), flights: flights.sort(), routes: routes.sort(), held: held.sort(), react: react.sort(), findings: findings.sort() };
 }
 
 /**
@@ -448,6 +465,58 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
  * fiber host take a callback. Nothing awaits such a run, so its own body must answer every failure.
  */
 const HOLDERS: readonly string[] = ['waitUntil', 'keepAliveWhile', 'fiber', 'runFiber'];
+
+const REACT_CALLBACKS: readonly string[] = ['useCallback', 'startTransition'];
+
+const REACT_EFFECTS: readonly string[] = ['useEffect', 'useLayoutEffect'];
+
+/** The React hook or transition a function is the first argument of, if any. */
+function reactHook(fn: SyntaxNode | undefined): string | null {
+  const call = fn?.parent;
+
+  if (fn === undefined || call?.raw.type !== 'CallExpression' || call.raw.arguments[0] !== fn.raw) return null;
+
+  return identifierCalleeName(call) ?? memberCalleeName(call) ?? null;
+}
+
+/**
+ * React owns these calls, as Hono owns a route handler's: a runner that a JSX attribute's, useCallback's or
+ * startTransition's function returns, or a `void settle(…)` statement directly in a useEffect body. An effect's
+ * returned runner would be its cleanup, so that form is reported apart.
+ */
+function reactEdge(runner: SyntaxNode): 'edge' | 'cleanup' | 'none' {
+  const fn = returningFunction(runner);
+
+  if (fn !== undefined) {
+    if (fn.parent?.raw.type === 'JSXExpressionContainer' && fn.parent.parent?.raw.type === 'JSXAttribute') return 'edge';
+    const hook = reactHook(fn) ?? '';
+
+    if (REACT_CALLBACKS.includes(hook)) return 'edge';
+
+    return REACT_EFFECTS.includes(hook) ? 'cleanup' : 'none';
+  }
+
+  const voided = runner.parent;
+  const statement = voided?.parent;
+  const block = statement?.parent;
+
+  if (voided?.raw.type !== 'UnaryExpression' || voided.raw.operator !== 'void' || statement?.raw.type !== 'ExpressionStatement'
+    || block?.raw.type !== 'BlockStatement') return 'none';
+
+  return REACT_EFFECTS.includes(reactHook(block.parent) ?? '') ? 'edge' : 'none';
+}
+
+/** The function that returns this call: as its expression body, or as a return statement directly in its body. */
+function returningFunction(call: SyntaxNode): SyntaxNode | undefined {
+  const holder = call.parent;
+
+  if (holder !== undefined && arrowBody(holder.raw) === call.raw) return holder;
+
+  if (holder?.raw.type !== 'ReturnStatement' || holder.parent?.raw.type !== 'BlockStatement') return undefined;
+  const fn = holder.parent.parent;
+
+  return fn !== undefined && isFunctionLike(fn) && 'body' in fn.raw && fn.raw.body === holder.parent.raw ? fn : undefined;
+}
 
 /** Whether a runner is a holder's whole argument, or the whole body of a callback that is one. */
 function heldBy(runner: SyntaxNode): boolean {
@@ -882,7 +951,7 @@ if (import.meta.main) {
     console.log(`  declared: ${file} (${mechanisms.join(', ')}${within === undefined ? '' : ` within ${within.join(', ')}`}): ${reason}`);
   }
 
-  const { bridges, flights, routes, held, findings } = bridgeSites(sources);
+  const { bridges, flights, routes, held, react, findings } = bridgeSites(sources);
 
   console.log(`  bridges: ${String(bridges.length)} (the migration ends at zero)`);
 
@@ -896,6 +965,9 @@ if (import.meta.main) {
   console.log(`  held: ${String(held.length)} (a detached root a platform holder keeps alive: ${HOLDERS.join(', ')})`);
 
   for (const site of held) console.log(`    ${site}`);
+  console.log(`  react: ${String(react.length)} (a runner React calls: a JSX handler, ${REACT_CALLBACKS.join(', ')}, or \`void settle(…)\` in ${REACT_EFFECTS.join(', ')})`);
+
+  for (const site of react) console.log(`    ${site}`);
 
   for (const wrong of findings) console.log(`  finding: ${wrong}`);
 

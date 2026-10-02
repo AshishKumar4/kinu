@@ -151,6 +151,7 @@ function ordinary(): number { const n = settleSync(writeEffect()); return n; }
     flights: [],
     routes: [],
     held: [],
+    react: [],
     findings: [
       `${FILE}:10: a runner returned outside an exported function or public member`,
       `${FILE}:11: a runner called mid-body; the effect is run once, at the edge, as its return`,
@@ -192,6 +193,7 @@ export function done(): number { return settle(1); }
     flights: [],
     routes: [],
     held: [],
+    react: [],
     findings: [
       `${FILE}:10: a runner returned outside an exported function or public member`,
       `${FILE}:12: a runner returned outside an exported function or public member`,
@@ -223,6 +225,7 @@ app.get((c) => settle(read(c)));
     flights: [],
     routes: [`${FILE}:10`, `${FILE}:5`, `${FILE}:6`, `${FILE}:7`, `${FILE}:8`, `${FILE}:8`],
     held: [],
+    react: [],
     findings: [
       `${FILE}:10: a runner called mid-body; the effect is run once, at the edge, as its return`,
       `${FILE}:11: a runner returned outside an exported function or public member`,
@@ -255,6 +258,7 @@ export async function mid() { const n = await settle(countEffect()); return n; }
     flights: [`${FILE}:3`, `${FILE}:5`, `${FILE}:8`],
     routes: [],
     held: [],
+    react: [],
     findings: [
       `${FILE}:10: a flight called where it is built runs once per call; build it once and hold it`,
       `${FILE}:11: a flight keyed by a fresh value never joins a run; key it by what its callers share`,
@@ -291,6 +295,53 @@ export class Host {
     flights: [],
     routes: [],
     held: [`${FILE}:5`, `${FILE}:6`, `${FILE}:7`, `${FILE}:7`],
+    react: [],
     findings: [`${FILE}:10`, `${FILE}:11`, `${FILE}:11`, `${FILE}:12`, `${FILE}:13`, `${FILE}:8`].map((site) => `${site}: ${midBody}`),
+  });
+});
+
+test('React owns a JSX handler, useCallback, startTransition and a `void settle` in useEffect; other forms stay findings', () => {
+  const TSX = 'packages/fixture/src/panel.tsx';
+
+  const source = `
+import { settle } from '../obs/index';
+function Panel() {
+  const save = useCallback(() => settle(write()), []);
+  const open = useCallback(async () => { return settle(write()); }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    void settle(load(controller.signal));
+    return () => { controller.abort(); };
+  }, []);
+  useEffect(() => settle(load()), []);
+  useEffect(() => { return settle(load()); }, []);
+  const pending = settle(load());
+  return <button onClick={() => settle(save())} onBlur={() => { void settle(save()); log(); }} onFocus={() => startTransition(() => settle(load()))} />;
+}
+`;
+
+  const plain = `
+import { settle } from '../obs/index';
+function helper() {
+  useCallback(() => settle(write()), []);
+}
+`;
+
+  const midBody = 'a runner called mid-body; the effect is run once, at the edge, as its return';
+  const cleanup = "a runner as a React effect's whole body is returned as its cleanup; run it as `void settle(…)` in a block";
+
+  expect(bridgeSites(new Map([[TSX, source], [FILE, plain]]))).toEqual({
+    bridges: [],
+    flights: [],
+    routes: [],
+    held: [],
+    react: [`${TSX}:14`, `${TSX}:14`, `${TSX}:4`, `${TSX}:5`, `${TSX}:8`],
+    findings: [
+      `${FILE}:4: a runner returned outside an exported function or public member`,
+      `${TSX}:11: ${cleanup}`,
+      `${TSX}:12: ${cleanup}`,
+      `${TSX}:13: ${midBody}`,
+      `${TSX}:14: ${midBody}`,
+    ],
   });
 });
