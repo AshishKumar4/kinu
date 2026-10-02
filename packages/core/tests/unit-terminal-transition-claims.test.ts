@@ -7,6 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import * as v from 'valibot';
 import { createTestActors } from '@kinu.run/test-utils';
+import { createRecordingLogger, setDiagnosticsSink } from '../src/obs/index';
 import { TerminalTransitions, TERMINAL_TRANSITION_CALL_ID } from '../src/orchestrator/terminal-transition';
 import {
   initTerminalEffectTable, terminalEffect, TerminalEffectInterrupt, TERMINAL_EFFECT_RETRY_CEILING_MS,
@@ -55,11 +56,19 @@ describe('the terminal transition claim', () => {
   test('re-entering an unfinished sequence says so, and a closed one reads as done', () => {
     const { transitions } = ledger();
     const transition = { turnId: 'u-again', messageId: 'a-1' };
+    const log = createRecordingLogger();
+    const restore = setDiagnosticsSink(log);
 
-    expect(transitions.begin(transition)).toBe('first');
-    expect(transitions.begin(transition)).toBe('resumed');
-    transitions.end(transition);
-    expect(transitions.begin(transition)).toBe('done');
+    try {
+      expect(transitions.begin(transition)).toBe('first');
+      expect(transitions.begin(transition)).toBe('resumed');
+      transitions.end(transition);
+      expect(transitions.begin(transition)).toBe('done');
+      transitions.end(transition);
+    } finally { restore(); }
+
+    expect(log.emitted.filter((line) => line.event === 'turn.terminal_effects_settled').map((line) => line.fields.sequence))
+      .toEqual(['u-again/a-1']);
   });
 
   /** Keyed per response: a turn-wide key would read a second answer as the first one's closed sequence. */

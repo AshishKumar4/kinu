@@ -20,31 +20,38 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { cpus } from 'node:os';
-import { join, relative, resolve } from 'node:path';
-import { childEnv, scratchDir } from '@kinu.run/test-utils';
+import { basename, join, relative, resolve } from 'node:path';
+import { childEnv, git, initRepo, scratchDir } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 import {
   CI_EXEMPT, LADDER, LIVE_TIER_SCRIPT, TIERS, bunIgnoredPatterns, bunWouldSkip, claims,
   DEPLOY_PHASES, browserModules, deployOrder, deployPlan, gatesFor, liveTierTargets, packageScripts, phaseWave,
   ciParts, localDeployGates, reportCIVerdicts, runnableArgv, sharedBrowserModules, sharedOf, tierRun, tierSchedule, tierWave, trackedTestFiles, waveCaps, type WaveRow,
-  HAMMER_REPEATS, ciUnits, splitCIGate, type Gate,
+  HAMMER_REPEATS, ciUnits, changedTestGate, splitCIGate, type Gate,
 } from './ladder';
 import {
   ANTI_SLOP_ROOT, isAntiSlopRuleSuite, isAntiSlopSuite, isBunDiscoverableSuite, isParseable, isPythonSuite,
   isVitestEvalSuite, readMatching,
 } from './sources';
-import { SKIP_RATCHET_TARGETS } from './skip-ratchet';
+import { parseJUnit, SKIP_RATCHET_TARGETS } from './skip-ratchet';
 import { declaredName, parse, walk } from './syntax';
 import { auditClosure } from './ladder-audit';
 import { gateEnvironment } from './ladder-cache';
 import { deriveClosure, repoAt } from './ladder-closure';
 import { checkCoverage, checkFileCoverage, pushRun, readFileTimings, requireCIGreen } from './ci-verdicts';
-import { COST_TABLE, readCosts } from './gate-cost';
+import { COST_TABLE, type CostTable } from './gate-cost';
 import { costTableFaults } from './cost-table';
 
 const root = resolve(import.meta.dir, '..');
 
 const tracked = trackedTestFiles();
+
+// Plan behavior uses deterministic figures; gate:cost-table checks the real recorded table.
+function planCosts(): CostTable {
+  const cost = { wallSeconds: 1, cpuSeconds: 1, peakRssMb: 1, peakRunnable: 1, peakCpuThreads: 1, meanThreads: 1, samples: 1, loadAtStart: 0, exit: 0 };
+
+  return { measuredAt: 'fixture', machine: 'fixture', method: 'fixture', rows: Object.fromEntries(deployOrder().map((gate) => [gate.run, cost])) };
+}
 
 /**
  * Suites that deliberately run under no `bun test` tier, and the runner that
@@ -128,12 +135,12 @@ const AFTER_CI_SUITES = {
  * purpose is that nobody is tempted by `--no-verify`.
  */
 const ROOT_TEST_OMISSIONS = {
-  'packages/devbox': 'bun test --timeout=0 packages/devbox/',
-  'packages/test-utils': 'bun test --timeout=0 packages/test-utils/',
+  'packages/devbox': 'bun test --timeout=0 --isolate packages/devbox/',
+  'packages/test-utils': 'bun test --timeout=0 --isolate packages/test-utils/',
   'packages/cf-backend': 'bun test --timeout=0 --parallel=4 packages/cf-backend/',
   'packages/cli-backend': 'bun test --timeout=0 --parallel=4 packages/cli-backend/',
   'packages/cli': 'bun run test:cli',
-  'packages/pc-agent': 'bun test --timeout=0 packages/pc-agent/',
+  'packages/pc-agent': 'bun test --timeout=0 --isolate packages/pc-agent/',
 } satisfies Record<string, string>;
 
 const omittedGate = (directory: string): string | undefined =>
@@ -147,21 +154,21 @@ describe('the ladder measures something', () => {
     // that the plan is the ladder: every gate but the evals tier, each once,
     // phases in order. deploy.sh runs each phase as `--deploy-phase`, which is
     // the plan's rows of that phase and no other.
-    const plan = deployPlan();
+    const plan = deployPlan(planCosts());
     expect(plan.length).toBeGreaterThan(10);
     expect(plan.map((row) => row.run).sort()).toEqual(LADDER.filter((gate) => gate.tier !== 'evals').map((gate) => gate.run).sort());
     const phaseIndex = plan.map((row) => DEPLOY_PHASES.indexOf(row.phase));
     expect([...phaseIndex].sort((a, b) => a - b)).toEqual(phaseIndex);
 
     for (const phase of DEPLOY_PHASES) {
-      expect(phaseWave([phase]).map(({ gate }) => gate.run)).toEqual(plan.filter((row) => row.phase === phase).map((row) => row.run));
+      expect(phaseWave([phase], planCosts()).map(({ gate }) => gate.run)).toEqual(plan.filter((row) => row.phase === phase).map((row) => row.run));
     }
   });
 
   test('a wave of deploy phases launches its longest measured rows first, whichever phase each is in', async () => {
     // Walls assigned against ladder order, so a wave that launched in ladder
     // order, or sorted the other way, starts the wrong row first.
-    const real = readCosts();
+    const real = planCosts();
     const ladderOrder = LADDER.map((gate) => gate.run);
 
     const costs = {
@@ -183,7 +190,7 @@ describe('the ladder measures something', () => {
     // The deploy's one wave: the rows that read the deployment beside every source row.
     const wave = await launched(['post-publish', 'source']);
 
-    expect(wave.length).toBe(deployPlan().filter((row) => row.phase === 'post-publish' || row.phase === 'source').length);
+    expect(wave.length).toBe(deployPlan(planCosts()).filter((row) => row.phase === 'post-publish' || row.phase === 'source').length);
     expect(wave).toEqual([...wave].sort((left, right) => right - left));
 
     for (const phase of DEPLOY_PHASES) {
@@ -194,7 +201,7 @@ describe('the ladder measures something', () => {
   });
 
   test('a row whose figure is of a failed run, or is missing, has no measured cost, and the plan refuses it', () => {
-    const real = readCosts();
+    const real = planCosts();
     // Every figure green but the one planted, so the refusal names the plant whatever the committed table holds.
     const green = { ...real, rows: Object.fromEntries(Object.entries(real.rows).map(([run, cost]) => [run, { ...cost, exit: 0 }])) };
     const [planted] = deployPlan(green).filter((row) => row.phase === 'source');
@@ -215,7 +222,7 @@ describe('the ladder measures something', () => {
   // written for, so the plan cannot refuse it unmeasured: the deploy that first ships it could never run. It takes
   // the whole box instead, so the wave starts it only once nothing else runs and admits nothing beside it.
   test('a row that reads the deployment with no measured cost runs alone, with nothing admitted beside it', async () => {
-    const real = readCosts();
+    const real = planCosts();
     const [live] = deployOrder().filter((gate) => gate.phase === 'post-publish');
 
     if (live === undefined) throw new Error('the deploy plan has no post-publish row');
@@ -245,7 +252,7 @@ describe('the ladder measures something', () => {
   // A row outside the source wave is no exemption, and a row that reads the deployment is, since only a deployment of
   // its own build can measure it (the plan gives it the whole box instead).
   test('the cost table gate names a stale figure, an unmeasured row and a failed figure', () => {
-    const costs = readCosts();
+    const costs = planCosts();
     const first = deployOrder().find((gate) => gate.phase === 'hammer');
     const second = deployOrder().find((gate) => (gate.phase ?? 'source') === 'source');
     const live = deployOrder().find((gate) => gate.phase === 'post-publish');
@@ -383,7 +390,7 @@ describe('the ladder measures something', () => {
   });
 
   test('every deploy row that claims a browser module holds the browser lane', () => {
-    const plan = deployPlan();
+    const plan = deployPlan(planCosts());
     const reaching = sharedBrowserModules();
     const undeclared: string[] = [];
 
@@ -666,7 +673,7 @@ describe('CI is not a silent subset of deploy', () => {
     const filesAtCi = new Set(ci.flatMap((gate) => claims(gate.run, tracked)));
     const undeclared: string[] = [];
 
-    for (const { run } of deployPlan()) {
+    for (const { run } of deployPlan(planCosts())) {
       if (atCi.has(run) || Object.hasOwn(CI_EXEMPT, run)) continue;
       const files = claims(run, tracked);
       const missing = files.filter((file) => !filesAtCi.has(file));
@@ -686,7 +693,7 @@ describe('CI is not a silent subset of deploy', () => {
     // A stale exemption is worse than a missing one: it reads as a considered
     // decision about a gate that no longer exists, and it silently excuses the
     // next gate that happens to be spelled the same way.
-    const runs = new Set(deployPlan().map((row) => row.run));
+    const runs = new Set(deployPlan(planCosts()).map((row) => row.run));
     const stale = Object.keys(CI_EXEMPT).filter((run) => !runs.has(run));
     expect(stale).toEqual([]);
   });
@@ -1189,7 +1196,7 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
   });
 
   test('a red live run provides resource admission but remains a red correctness verdict', () => {
-    const costs = readCosts();
+    const costs = planCosts();
     const run = 'bash scripts/product-flows-tier.sh';
     const measured = costs.rows[run];
 
@@ -1241,5 +1248,69 @@ describe('CI verdicts belong to the exact pushed revision and the complete row p
 
     checkFileCoverage(file, coverage);
     expect(() => checkFileCoverage({ ...file, rows: observed.map((row) => ({ ...row, timings: {} })) }, coverage)).toThrow('file coverage differs');
+  });
+
+});
+
+describe('Native suite isolation and product-dependent selection', () => {
+  test('one suite cannot lend its mocked module or globals to another', () => {
+    const directory = scratchDir('suite-isolation');
+    const first = join(directory, 'a.test.ts');
+    const second = join(directory, 'b.test.ts');
+
+    writeFileSync(join(directory, 'provider.ts'), 'export const read = () => "real provider";');
+    writeFileSync(first, `import { mock, test, expect } from 'bun:test';
+globalThis.__suiteLeak = true;
+mock.module('./provider.ts', () => ({ read: () => 'mock provider' }));
+const { read } = await import('./provider.ts');
+test('the first suite owns its state', () => expect(read()).toBe('mock provider'));`);
+    writeFileSync(second, `import { test, expect } from 'bun:test';
+import { read } from './provider.ts';
+test('the second suite keeps its real provider', () => {
+  expect(globalThis.__suiteLeak).toBeUndefined();
+  expect(read()).toBe('real provider');
+});`);
+    const gate = LADDER.find((row) => row.label === 'Devbox durability decisions');
+
+    if (gate === undefined) throw new Error('there is no broad devbox source row');
+    const argv = runnableArgv(gate.run, tracked).slice(0, -1);
+    const child = Bun.spawnSync([process.execPath, 'scripts/ladder.ts', '--run', ...argv, first, second], { cwd: root, env: childEnv(), stdout: 'pipe', stderr: 'pipe' });
+
+    expect(child.exitCode, child.stdout.toString() + child.stderr.toString()).toBe(0);
+  });
+
+  test('a product change catches its unchanged consumer without running unrelated tests', () => {
+    const directory = scratchDir('native-changed-tests');
+    const affected = join(directory, 'value.test.ts');
+    const unrelated = join(directory, 'unrelated.test.ts');
+    const product = join(directory, 'product.ts');
+
+    initRepo(directory);
+    writeFileSync(product, 'export const value = 42;');
+    writeFileSync(affected, `import { test, expect } from 'bun:test'; import { value } from './product'; test('consumer', () => expect(value).toBe(42));`);
+    writeFileSync(unrelated, `import { test, expect } from 'bun:test'; test('unrelated', () => expect(1).toBe(0));`);
+    git(directory, 'add', '-A');
+    git(directory, 'commit', '-qm', 'test(fixtures): seed unchanged consumers');
+    git(directory, 'branch', 'fixture/base');
+    const source = LADDER.find((gate) => gate.run.startsWith('bun test '));
+
+    if (source === undefined) throw new Error('there is no native Bun source row');
+    const files = [affected, unrelated];
+    const selected = changedTestGate({ ...source, run: 'bun test --timeout=0 --isolate ' + directory + '/*.test.ts' }, 'fixture/base', files);
+
+    if (selected === undefined) throw new Error('the native consumer selection is absent');
+    const report = join(directory, 'results.xml');
+
+    for (const [text, exit] of [['export const value = 43;', 1], ['export const value = 41 + 1;', 0]] as const) {
+      writeFileSync(product, text);
+      const child = Bun.spawnSync([...runnableArgv(selected.run, files), '--reporter=junit', '--reporter-outfile=' + report], { cwd: directory, env: childEnv(), stdout: 'pipe', stderr: 'pipe' });
+
+      expect(child.exitCode, child.stdout.toString() + child.stderr.toString()).toBe(exit);
+      const observed = parseJUnit(readFileSync(report, 'utf8'));
+
+      expect([...observed.files].map((file) => basename(file))).toEqual(['value.test.ts']);
+      expect(observed.total).toBe(1);
+      expect(observed.failed.length).toBe(exit);
+    }
   });
 });

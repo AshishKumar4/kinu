@@ -45,7 +45,7 @@ import type { GateCacheRequest, Plan } from './ladder-cache';
 import { auditClosure } from './ladder-audit';
 import { driftFinding, installDrift } from './install-parity';
 import { deriveClosure, repoAt } from './ladder-closure';
-import type { Inputs, Repo } from './ladder-closure';
+import type { Inputs } from './ladder-closure';
 import {
   isBunDiscoverableSuite, isParseable, isPythonSuite, isRunnableSuite, isVitestEvalSuite, readMatching,
   trackedFiles,
@@ -252,7 +252,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'reads the machine — inode tables, temp roots, stray project markers — none of which a hash over the tree stands for.' },
   },
   {
-    run: 'bun test --timeout=0 scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/syntax.test.ts scripts/workerd-requirements.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/pattern-inventory.test.ts scripts/jsonc.test.ts scripts/syntax.test.ts scripts/workerd-requirements.test.ts',
     label: 'Pattern census and parser self-tests',
     tier: 'push',
     seconds: 0.2, // Measured 2026-09-06 on the 24-thread workstation.
@@ -292,7 +292,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived', imports: ['tools/oxlint/anti-slop/rules/'] },
   },
   {
-    run: 'bun test --timeout=0 packages/agent-core/drift.test.ts scripts/mossaic-sdk.test.ts',
+    run: 'bun test --timeout=0 --isolate packages/agent-core/drift.test.ts scripts/mossaic-sdk.test.ts',
     label: 'Vendored upstream drift',
     tier: 'commit',
     // Measured 2026-09-20 on the 24-thread workstation, quiet: 0.18 s solo for
@@ -964,7 +964,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived', reads: ['docs/CLI.md'] },
   },
   {
-    run: 'bun test --timeout=0 scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/error-model.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/gates.test.ts scripts/worker-bundle-reach.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/scratch-ownership.test.ts scripts/commit-hygiene.test.ts scripts/pre-push-hook.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/test-clocks.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/egress-forwarder.test.ts scripts/release-manifest.test.ts scripts/complexity.test.ts scripts/ast-duplication.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts scripts/client-graph.test.ts scripts/model-text.test.ts scripts/install-scripts-gate.test.ts scripts/tracing-gate.test.ts scripts/comment-only.test.ts scripts/bloat-budget.test.ts scripts/error-model.test.ts',
     label: 'Gate self-tests',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
@@ -1044,7 +1044,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { ...AMBIENT_BY_NAME, imports: FORWARDER_CLASSES },
   },
   {
-    run: 'bun test --timeout=0 scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts',
     label: 'Skip ratchet and typecheck coverage self-tests',
     tier: 'push',
     seconds: 0.1,
@@ -1060,7 +1060,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts scripts/install-parity.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/ladder.test.ts scripts/ladder-closure.test.ts scripts/ladder-cache.test.ts scripts/deadline.test.ts scripts/gate-cost.test.ts scripts/install-parity.test.ts',
     label: 'Gate ladder wiring and cache soundness',
     tier: 'push',
     // Measured 2026-09-16 on the 24-thread workstation (load 8.1): 1.25/1.20 s
@@ -1098,7 +1098,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/reset.test.ts scripts/prod-logs.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/deploy.test.ts scripts/promote.test.ts scripts/deploy-report.test.ts scripts/eval-provider-keys.test.ts scripts/evals-dispatch.test.ts scripts/reset.test.ts scripts/prod-logs.test.ts scripts/staging-loop.test.ts scripts/deploy-live.test.ts',
     label: 'Production deploy contract',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 86.8/86.5s (33 tests). The 1s
@@ -1127,7 +1127,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts',
     label: 'Gate self-tests: secrets, corpus, preflight',
     tier: 'push',
     // 1.0 s declared 2026-08-24; the gallery-harness case adds 0.13 s, measured 2026-09-05.
@@ -1275,7 +1275,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun test --timeout=0 packages/devbox/',
+    run: 'bun test --timeout=0 --isolate packages/devbox/',
     label: 'Devbox durability decisions',
     tier: 'push',
     // Hosted 70464f439: 547 s, the largest multi-file row; split its 37 files across four CI jobs.
@@ -1299,7 +1299,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { ...AMBIENT_BY_NAME, corpus: true, imports: ['packages/devbox/src/devbox.ts'] },
   },
   {
-    run: 'bun test --timeout=0 packages/test-utils/',
+    run: 'bun test --timeout=0 --isolate packages/test-utils/',
     label: 'Test-utils suite',
     tier: 'push',
     // Measured 2026-09-05 on the 24-thread box: 6.9/6.8s (229 tests, mostly the
@@ -1427,7 +1427,7 @@ export const LADDER: readonly Gate[] = [
     inputs: AMBIENT_BY_NAME,
   },
   {
-    run: 'bun test --timeout=0 packages/pc-agent/',
+    run: 'bun test --timeout=0 --isolate packages/pc-agent/',
     label: 'Local-device daemon suite',
     tier: 'ci',
     seconds: 0.3,
@@ -1457,7 +1457,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun test --timeout=0 ./tests/live-model/ ./tests/first-run/',
+    run: 'bun test --timeout=0 --isolate ./tests/live-model/ ./tests/first-run/',
     label: 'Live and first-run suites, credential-free',
     tier: 'ci',
     seconds: 1.3,
@@ -1542,7 +1542,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'live', why: 'drives the DEPLOYED product as the eval identity and spends live model turns.' },
   },
   {
-    run: 'bun test --timeout=0 ./evals/ scripts/deploy-preflight.test.ts',
+    run: 'bun test --timeout=0 --isolate ./evals/ scripts/deploy-preflight.test.ts',
     label: 'Eval framework logic',
     tier: 'ci',
     seconds: 1,
@@ -1572,7 +1572,7 @@ export const LADDER: readonly Gate[] = [
     // substrate. Not one of their names starts with
     // `bench`, so all of them shipped tracked, passing by hand, and claimed by NO
     // tier: 89 tests that ran in no pipeline.
-    run: 'bun test --timeout=0 scripts/bench*.test.ts scripts/storage-matrix-cleanup.test.ts scripts/deploy-substrate.test.ts scripts/devbox-e2e.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/bench*.test.ts scripts/storage-matrix-cleanup.test.ts scripts/deploy-substrate.test.ts scripts/devbox-e2e.test.ts',
     label: 'Benchmark harness guarantees',
     tier: 'ci',
     // 7.00s: 221 tests over 15 files, median of 7.00 / 7.71 / 6.86 on the
@@ -1641,7 +1641,7 @@ export const LADDER: readonly Gate[] = [
     inputs: CLIENT_BUILD,
   },
   {
-    run: 'bun test --timeout=0 tests/browser/account-ux.test.ts tests/browser/drive-ux.test.ts tests/browser/slate-preview-ux.test.ts tests/browser/slate-sharing-ux.test.ts',
+    run: 'bun test --timeout=0 --isolate tests/browser/account-ux.test.ts tests/browser/drive-ux.test.ts tests/browser/slate-preview-ux.test.ts tests/browser/slate-sharing-ux.test.ts',
     label: 'UI gate self-tests: account, drive and slates',
     tier: 'ci',
     // Measured alone 2026-09-27: 144.69 s wall, 51.17 s CPU, 2525 MiB peak Pss, start load 1.98.
@@ -1653,7 +1653,7 @@ export const LADDER: readonly Gate[] = [
     inputs: CLIENT_BUILD,
   },
   {
-    run: 'bun test --timeout=0 --path-ignore-patterns=tests/browser/chat-and-files-ux.test.ts '
+    run: 'bun test --timeout=0 --isolate --path-ignore-patterns=tests/browser/chat-and-files-ux.test.ts '
       + '--path-ignore-patterns=tests/browser/account-ux.test.ts --path-ignore-patterns=tests/browser/drive-ux.test.ts '
       + '--path-ignore-patterns=tests/browser/slate-preview-ux.test.ts --path-ignore-patterns=tests/browser/slate-sharing-ux.test.ts '
       + 'tests/browser/*-ux.test.ts tests/browser/computed-style.test.ts',
@@ -1719,7 +1719,7 @@ export const LADDER: readonly Gate[] = [
     inputs: CLIENT_BUILD,
   },
   {
-    run: 'bun test --timeout=0 tests/browser/public-pages.test.ts scripts/plan-demo-film.test.ts',
+    run: 'bun test --timeout=0 --isolate tests/browser/public-pages.test.ts scripts/plan-demo-film.test.ts',
     label: 'Public pages render',
     tier: 'ci',
     // Measured 2026-08-24 after the bug-fix drive and six-width clipping sweep: 51.28s.
@@ -1807,7 +1807,7 @@ export const LADDER: readonly Gate[] = [
     inputs: CLIENT_BUILD,
   },
   {
-    run: 'bun test --timeout=0 tests/browser/chat-scroll.test.ts tests/browser/chat-sparse-pages.test.ts',
+    run: 'bun test --timeout=0 --isolate tests/browser/chat-scroll.test.ts tests/browser/chat-sparse-pages.test.ts',
     label: 'Chat infinite scroll',
     tier: 'ci',
     seconds: 34,
@@ -2112,7 +2112,7 @@ export const LADDER: readonly Gate[] = [
     inputs: { kind: 'derived' },
   },
   {
-    run: 'bun test --timeout=0 scripts/hammer.test.ts scripts/mutation-fences.test.ts',
+    run: 'bun test --timeout=0 --isolate scripts/hammer.test.ts scripts/mutation-fences.test.ts',
     label: 'Hammer and fence gate self-tests',
     tier: 'push',
     seconds: 0.4,
@@ -3035,36 +3035,18 @@ export function localDeployGates(gates: readonly Gate[]): Gate[] {
   return gates.filter((gate) => gate.phase === 'preflight' || !ci.has(gate.run));
 }
 
-/** Every file changed since `ref`, committed or not, and every addition not yet tracked. */
-function changedSince(ref: string, repo: Repo): Set<string> {
-  const run = Bun.spawnSync(['git', 'diff', '--name-only', '-z', ref], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
+/** Native selection follows product imports, not merely changed test filenames.
+ * Bun 1.4.0 and Vitest 4.1.11, measured 2026-10-01, selected an unchanged failing consumer
+ * after its imported product changed and left an unrelated failing suite out. */
+export function changedTestGate(gate: Gate, ref: string, tracked: readonly string[]): Gate | undefined {
+  const first = claims(gate.run, tracked)[0];
+  const argv = first === undefined ? undefined : narrowedTo(gate.run, first, tracked);
 
-  if (run.exitCode !== 0) throw new Error(`git diff ${ref} exited ${String(run.exitCode)}: ${run.stderr.toString()}`);
-  const additions = repo.files.filter((file) => !repo.tracked.has(file));
+  if (argv?.[0] === 'bun' && argv[1] === 'test') return { ...gate, run: gate.run + ' --changed=' + ref };
 
-  return new Set([...run.stdout.toString().split('\0').filter((file) => file !== ''), ...additions]);
-}
+  if (argv?.[0] === 'vitest') return { ...gate, run: gate.run + ' --changed=' + ref + ' --passWithNoTests' };
 
-/**
- * The source rows a change since `ref` can turn red, in deploy order: each whose
- * derived closure holds a changed file, and each whose closure cannot be
- * derived, which nothing proves unaffected. A live row has no closure to judge,
- * so it is named and left out.
- */
-function affectedSince(ref: string, repo: Repo): Gate[] {
-  const changed = changedSince(ref, repo);
-  const affected: Gate[] = [];
-
-  for (const gate of deployOrder().filter((row) => (row.phase ?? 'source') === 'source')) {
-    const closure = deriveClosure(gate.run, gate.inputs, repo);
-
-    if (closure.kind === 'live') console.log(`not judged, live: ${gate.run}`);
-    else if (closure.kind === 'uncomputable' || closure.files.some((file) => changed.has(file))) affected.push(gate);
-  }
-
-  console.log(`affected since ${ref}: ${String(affected.length)} source row(s), by ${String(changed.size)} changed file(s)`);
-
-  return affected;
+  return undefined;
 }
 
 /**
@@ -3362,7 +3344,7 @@ export function runnableArgv(run: string, tracked: readonly string[]): string[] 
   // `--path-ignore-patterns=<suite>` goes with them: its subtraction is
   // already in `claims()`'s answer, and passing it beside an explicit argv
   // would only ask bun to remove a file this list does not contain.
-  const flags = words.filter((word) => !word.includes('/') && !word.startsWith(`${PATH_IGNORE_FLAG}=`));
+  const flags = words.filter((word) => (word.startsWith('-') || !word.includes('/')) && !word.startsWith(`${PATH_IGNORE_FLAG}=`));
 
   return [...flags, ...files];
 }
@@ -3736,9 +3718,8 @@ if (import.meta.main) {
     process.exit(2);
   }
 
-  // `--affected=<ref>`: the source rows a change since `ref` can turn red, each
-  // run as `--gate` runs one, so a lane proves a change before it sends it.
-  const affectedFrom = process.argv.find((argument) => argument.startsWith('--affected='))?.slice('--affected='.length);
+  // A changed run proves the native selection only; CI still runs every complete row.
+  const changedFrom = process.argv.find((argument) => argument.startsWith('--changed='))?.slice('--changed='.length);
   // `--deploy-phase=<phase>[,<phase>…]`: phases of the deploy, their plan rows through ONE wave, the way deploy.sh
   // runs them. Every row runs to its end whatever goes red, so one run reports every red (L18).
   const phaseAsked = process.argv.find((argument) => argument.startsWith('--deploy-phase='))?.slice('--deploy-phase='.length);
@@ -3747,15 +3728,15 @@ if (import.meta.main) {
   const deployPhase = phaseAsked === undefined || deployPhases.length !== phasesAsked.length ? undefined : deployPhases;
   const flag = process.argv.find((argument) => argument.startsWith('--tier='));
 
-  const asked = selectedGate === undefined && affectedFrom === undefined && phaseAsked === undefined
-    ? flag?.slice('--tier='.length)
+  const asked = selectedGate === undefined && phaseAsked === undefined
+    ? flag?.slice('--tier='.length) ?? (changedFrom === undefined ? undefined : 'commit')
     : 'deploy';
 
   const tier = TIERS.find((candidate) => candidate === asked);
 
-  if (tier === undefined || affectedFrom === '' || (phaseAsked !== undefined && deployPhase === undefined)) {
+  if (tier === undefined || changedFrom === '' || (changedFrom !== undefined && tier !== 'commit' && tier !== 'push') || (phaseAsked !== undefined && deployPhase === undefined)) {
     console.error(
-      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] [--serial] | --gate <declared-command> | --deploy-phase=<${DEPLOY_PHASES.join('|')}>[,<phase>…] | --affected=<ref> | --audit-closure [--tier=<tier> | --gate <declared-command>] | --matrix | --costs | --install-hooks`,
+      `usage: bun scripts/ladder.ts --tier=${TIERS.join('|')} [--no-cache] [--serial] | --gate <declared-command> | --deploy-phase=<${DEPLOY_PHASES.join('|')}>[,<phase>…] | --changed=<ref> [--tier=commit|push] | --audit-closure [--tier=<tier> | --gate <declared-command>] | --matrix | --costs | --install-hooks`,
     );
     process.exit(2);
   }
@@ -3777,7 +3758,18 @@ if (import.meta.main) {
 
   if (ciPart !== undefined && (tier !== 'ci' || part === undefined)) throw new Error('unknown CI part or a non-CI tier');
   const chosen = part === undefined ? declared : ciUnits().map((unit) => unit.gate).filter((gate) => part.runs.includes(gate.run));
-  const gates = affectedFrom === undefined ? chosen : affectedSince(affectedFrom, repo);
+  const tracked = trackedTestFiles();
+  const changedByRun = new Map<string, Gate>();
+
+  if (changedFrom !== undefined) {
+    for (const gate of tierRun('ci').filter((row) => (row.phase ?? 'source') === 'source')) {
+      const selected = changedTestGate(gate, changedFrom, tracked);
+
+      if (selected !== undefined) changedByRun.set(gate.run, selected);
+    }
+  }
+
+  const gates = changedFrom === undefined ? chosen : [...chosen.filter((gate) => !changedByRun.has(gate.run)), ...changedByRun.values()];
 
   if (ciPart !== undefined && ciPart !== 'upload') {
     // This runner's prerequisite, not another source verdict or another row in the collected proof.
@@ -3786,7 +3778,11 @@ if (import.meta.main) {
     if (ready.exitCode !== 0) process.exit(ready.exitCode);
   }
 
-  const name = deployPhase === undefined ? `--tier=${tier}` : `--deploy-phase=${deployPhase.join(',')}`;
+  let name = `--tier=${tier}`;
+
+  if (deployPhase !== undefined) name = `--deploy-phase=${deployPhase.join(',')}`;
+
+  if (changedFrom !== undefined) name = `--changed=${changedFrom}`;
 
   const measured = assertMeasured(`ladder ${name}`, [
     ['gates in this tier', gates.length],
@@ -3844,7 +3840,6 @@ if (import.meta.main) {
   );
 
   const started = performance.now();
-  const tracked = trackedTestFiles();
 
   // THE CACHE. A green gate is skipped only on a proof that nothing it can
   // read has changed: a content hash over its derived input closure
@@ -3856,7 +3851,7 @@ if (import.meta.main) {
   // quiet one. A derived gate runs under exactly the environment its key
   // hashes, cache or `--no-cache`, so a recorded verdict and a fresh one are
   // taken in one environment.
-  const caching = ciPart === undefined && !process.argv.includes('--no-cache');
+  const caching = changedFrom === undefined && ciPart === undefined && !process.argv.includes('--no-cache');
   const tools = toolVersions(root);
   const store = storeAt(defaultStoreDirectory());
   const revision = fullRevision();
@@ -3961,10 +3956,14 @@ if (import.meta.main) {
 
     if (!concurrent) console.log([header, ...lines].join('\n'));
 
-
     const timingPath = resolve(root, 'bench-artifacts/ci/file-' + String(index) + '.json');
     const argv = rowArgv(gate, tracked, deployPhase !== undefined, ciPart === undefined ? undefined : timingPath);
 
+    const env = closure.kind === 'derived' ? gateEnvironment(closure) : undefined;
+
+    if (changedFrom !== undefined && closure.kind === 'derived' && env !== undefined && closure.env.includes('KINU_WORKER_SOURCE_INPUTS')) {
+      env.KINU_WORKER_SOURCE_INPUTS = JSON.stringify(closure.corpus ? ['**/*'] : closure.files);
+    }
 
     // Under the row's own silence bound: the one hang detector this tier has,
     // now that no test carries a clock. A row that hangs is killed and named
@@ -3972,7 +3971,7 @@ if (import.meta.main) {
     const outcome = await runUnderDeadline({
       argv, cwd: root,
       seconds: gate.deadline?.seconds ?? GATE_DEADLINE_SECONDS, label: gate.label,
-      env: closure.kind === 'derived' ? gateEnvironment(closure) : undefined,
+      env,
       stdio,
       status: live?.started(gate.label),
     });

@@ -4,7 +4,7 @@ Most tests run on Bun: core, cf-backend, cli-backend, cli. Durable Object tests 
 
 ## Commands
 
-`bun install` can bootstrap with the machine's Bun. It installs the exact `bun` npm package this repo pins; hooks and shell entry points put `node_modules/.bin` first and refuse a missing local binary. GitHub workflows use it after installation too. Use `node_modules/.bin/bun` for direct ladder commands. `bash scripts/setup-worktree.sh` prepares a fresh worktree with its own workspace links or its own locked install, without changing the machine's runtime.
+`bun install` can bootstrap with the machine's Bun. It installs the exact `bun` npm package this repo pins; hooks and shell entry points put `node_modules/.bin` first and refuse a missing local binary. GitHub workflows use it after installation too. For direct commands, source `scripts/repo-runtime.sh` first, or use `node_modules/.bin/bun run scripts/ladder.ts` so Bun also puts the local binary first for child commands. `bash scripts/setup-worktree.sh` prepares a fresh worktree with its own workspace links or its own locked install, without changing the machine's runtime.
 
 ```bash
 bash scripts/test.sh                     # core + cf-backend + cli-backend + cli
@@ -32,6 +32,12 @@ bun test packages/core/tests
 bun test packages/cf-backend/tests
 bun test packages/cli-backend/tests
 ```
+
+### Each Bun suite keeps its own globals
+
+Multi-file ladder rows, the spine, the live tier and `scripts/test.sh` use Bun's native `--isolate`. The core, backend and CLI use `--parallel`, which implies the same isolation. On Bun 1.4.0, measured 2026-10-01, one fixture installed a module mock and a global; the second expected the real module and no global. The old devbox command ran 1 pass, 1 fail. With `--isolate`, both passed; the local shell entry point also passed both. Isolation changes no suite population.
+
+Before merging, use `node_modules/.bin/bun run scripts/ladder.ts --changed=<base>`: Bun's `--changed` and Vitest's `--changed` select unchanged tests whose imported product changed. The commit hook uses `--changed=HEAD`. Worker pools also use their row's existing input closure as native `forceRerunTriggers`, because Vitest cannot follow `SELF` into the Worker. A changed run stores no complete-suite cache proof; CI remains unfiltered. Branch refs containing `/` survive glob expansion.
 
 ## The counts, measured 2026-08-19
 

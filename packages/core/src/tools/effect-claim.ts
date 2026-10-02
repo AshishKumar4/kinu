@@ -65,15 +65,16 @@ export function claimToolEffect(
   return { kind: 'claimed' };
 }
 
-/** Guarded on the result still being absent, so a duplicate settle cannot overwrite the first outcome. */
+/** Settles a pending claim once; returns whether its result was recorded. */
 export function settleToolEffect(
   sql: SqlExecutor, actor: ActorHandle, key: ToolEffectKey, result: string,
-): void {
+): boolean {
   actor.assertCurrent();
-  void sql`UPDATE tool_effect_claims SET result_json=${result}
+
+  return sql`UPDATE tool_effect_claims SET result_json=${result}
     WHERE actor_id=${actor.actorId} AND turn_id=${key.turnId}
       AND normalized_call_id=${key.callId} AND call_digest=${key.digest}
-      AND result_json IS NULL`;
+      AND result_json IS NULL RETURNING normalized_call_id`.length !== 0;
 }
 
 export interface EffectClaimDeps {

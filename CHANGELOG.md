@@ -24,6 +24,9 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **Staging counts terminal sequences still owed, not repeated observations.** Each settlement emits one completion event. The version report follows each sequence's last event, separates those that settled after owing, and reports only those still owed at the window's end.
+- **Pre-merge tests follow changed product code.** The commit hook and ladder use Bun and Vitest's native changed-test selection, including the Worker row's existing source inputs and every CLI runner group. These partial runs never stand for complete-suite cache proofs; CI still runs every suite.
+- **Every multi-file Bun source row keeps suites apart.** The spine, devbox, test utilities, PC agent and script rows now use native `--isolate`, as do the live tier and local shell command. A module mock or global from one file cannot change the next file's verdict; the already-parallel core, backend and CLI remain isolated.
 - **The hosted hammer reads Bun’s Actions report as well as its terminal report.** Grouped file headings and colour codes no longer hide executed files, and an exit-zero run with missing coverage keeps its complete output as red evidence.
 - **A reset that stops partway can be finished.** `bun run deploy --reset` checks the REST token and everything else it needs before it deletes anything, writes its record and the rollback barrier before its first deletion, and run again against its own placeholder finishes what that record says is left, instead of refusing it.
 - **Queued hired-agent receipts no longer make the regression model resend or leave a caller unfinished.** The hire-message case now observes the real workspace socket's roster and completed reply stream, not cross-actor test gates. Dismiss awaits its own caller and retirement, so eviction cannot resume a turn the case abandoned.
