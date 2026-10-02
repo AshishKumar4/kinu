@@ -1,8 +1,8 @@
 // BackgroundJobRunner: backend-agnostic lifecycle for auto-detached tool calls. Keeps the
 // work alive in a platform-supplied durable fiber and wakes the agent via Inbox.send.
 
-import { Data } from 'effect';
-import type { Schedule } from '../types/primitives';
+import { Cause, Data, Effect, Result } from 'effect';
+import type { FiberCtx, Schedule } from '../types/primitives';
 import type { AgentSignal, AgentInbox, SignalUndeliveredReason } from '../types/signals';
 import type { EventLog } from '../events/hub/log';
 import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold';
@@ -16,7 +16,9 @@ import { recoveryBackoffMs } from '../utils/recovery-backoff';
 import type { WorkMode } from '../types/turn';
 import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '../utils/json';
-import { classify, diagnostics, renderThrownChain, toKinuError, settleLoggedSync } from '../obs/index';
+import { diagnostics, renderThrownChain, toKinuError, settleLoggedSync } from '../obs/index';
+import { settle, settleSync, tolerate } from '../obs/effect';
+import { heldFiber, type HeldFiber } from '../execution/fiber';
 
 /** Stamped by Kinu: `do.evict.no_signal` means the platform delivers no eviction notice. */
 const EVICTION_INTERRUPT_ERROR = 'interrupted by Durable Object eviction before completion';
@@ -80,6 +82,11 @@ interface DetachRequest {
   readonly promise: Promise<unknown>;
   readonly ownership?: DeviceRequestOwnership;
 }
+
+type Recorded<T> =
+  | { readonly kind: 'settled'; readonly result: T }
+  | { readonly kind: 'failed'; readonly error: string }
+  | { readonly kind: 'bounded'; readonly why: string };
 
 export function newJobId(): string {
   return `bgjob-${nanoid()}`;
@@ -183,19 +190,20 @@ export class BackgroundJobRunner {
   /** In-memory: eviction loses them, and recover() fails the orphan. */
   private readonly controllers = new Map<string, AbortController>();
 
-  private readonly fiberDrivers = new Map<string, Promise<void>>();
+  private readonly fiber: HeldFiber;
 
   /**
    * Cancels in flight, fencing the settle path until external teardown is confirmed. In-memory by
    * design. A fenced outcome is replayed if the cancel is refused, dropped if it succeeds.
    */
   private readonly cancelling = new Set<string>();
-  private readonly fenced = new Map<string, () => Promise<void>>();
+  private readonly fenced = new Map<string, Effect.Effect<void>>();
 
   readonly output: JobOutputFeeds;
 
   constructor(private readonly deps: BackgroundJobRunnerDeps) {
     this.output = new JobOutputFeeds({ clock: deps.clock ?? REAL_CLOCK, send: (frame) => { deps.jobOutput?.(frame); } });
+    this.fiber = heldFiber(deps.fiber);
   }
 
   /** Pure: callers log their own lifecycle event. */
@@ -253,26 +261,27 @@ export class BackgroundJobRunner {
     return {
       thresholdMs: this.policy.detachAfterMs,
       clock: this.deps.clock ?? REAL_CLOCK,
-      onThreshold: async (kind, promise) =>
-        await this.onThreshold({ kind, input, mode, controller, promise, ownership }),
+      onThreshold: (kind, promise) => settle(this.onThreshold({ kind, input, mode, controller, promise, ownership })),
     };
   }
 
-  private async onThreshold(request: DetachRequest): Promise<DetachOutcome> {
-    const { kind, input, mode, controller, promise, ownership } = request;
-    const running = this.liveDetachedCount();
+  private onThreshold(request: DetachRequest): Effect.Effect<DetachOutcome> {
+    return Effect.gen({ self: this }, function* () {
+      const { kind, input, mode, controller, promise, ownership } = request;
+      const running = this.liveDetachedCount();
 
-    if (running >= MAX_CONCURRENT_DETACHED_JOBS) {
-      this.deps.logActivity?.('bg_job_refused', `${kind}: ${running} jobs already running`);
+      if (running >= MAX_CONCURRENT_DETACHED_JOBS) {
+        this.deps.logActivity?.('bg_job_refused', `${kind}: ${running} jobs already running`);
 
-      return { detached: false, reason: 'too many jobs already running' };
-    }
+        return { detached: false, reason: 'too many jobs already running' } satisfies DetachOutcome;
+      }
 
-    const jobId = this.createJob(ownership?.jobId ?? newJobId(), { kind, input, mode, controller });
-    this.deps.logActivity?.('bg_job_started', `${kind} -> ${jobId}`);
-    await this.beginDetachedWork(jobId, kind, promise, ownership);
+      const jobId = this.createJob(ownership?.jobId ?? newJobId(), { kind, input, mode, controller });
+      this.deps.logActivity?.('bg_job_started', `${kind} -> ${jobId}`);
+      yield* this.beginDetachedWork(jobId, kind, promise, ownership);
 
-    return { detached: true, jobId };
+      return { detached: true, jobId } satisfies DetachOutcome;
+    });
   }
 
   /**
@@ -292,25 +301,25 @@ export class BackgroundJobRunner {
   }
 
   /** A failed transfer may have moved a prefix, so the job keeps its claim rather than aborting. */
-  private async beginDetachedWork<T>(
+  private beginDetachedWork<T>(
     jobId: string,
     kind: string,
     promise: Promise<T>,
     ownership?: DeviceRequestOwnership,
-  ): Promise<void> {
-    // Drained before awaiting the transfer so no request id falls between the two.
-    const requestIds = ownership?.drain(jobId) ?? [];
+  ): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      // Drained before awaiting the transfer so no request id falls between the two.
+      const requestIds = ownership?.drain(jobId) ?? [];
 
-    try {
-      await this.deps.onDetached?.(jobId, requestIds);
-    } catch (err) {
-      this.deps.logActivity?.(
-        'bg_job_transfer_failed',
-        `${kind} -> ${jobId}; external-work transfer was not confirmed: ${renderThrownChain({ cause: err })}`,
-      );
-    }
+      yield* Effect.catchCause(Effect.promise(async () => this.deps.onDetached?.(jobId, requestIds)), (failed) => Effect.sync(() => {
+        this.deps.logActivity?.(
+          'bg_job_transfer_failed',
+          `${kind} -> ${jobId}; external-work transfer was not confirmed: ${renderThrownChain({ cause: Cause.squash(failed) })}`,
+        );
+      }));
 
-    this.detach(jobId, kind, promise);
+      this.detach(jobId, kind, promise);
+    });
   }
 
   /** Settle-vs-fail depends only on resolution; a non-serializable success is not a failure. */
@@ -318,89 +327,92 @@ export class BackgroundJobRunner {
     this.runToSettlement(jobId, kind, () => promise);
   }
 
-  /** Lease epoch read at fiber start fences executors a concurrent reclaim replaced (§5.3). */
+  /** The fiber host holds the run; nothing awaits it, so neither half may fail. */
   private runToSettlement<T>(jobId: string, kind: string, exec: () => Promise<T>): void {
-    let driver: Promise<void> | undefined;
-
-    const drive = async (): Promise<void> => {
-      try {
-        await this.deps.fiber(`${BACKGROUND_FIBER_PREFIX}${kind}`, async (ctx) => {
-          ctx.stash({ phase: 'running', jobId, kind });
-          let settled: boolean;
-
-          try {
-            await this.settleAndWake(jobId, exec);
-            // A fenced write is a no-op (§5.3), so the store decides whether the job settled.
-            settled = this.deps.store.get(jobId)?.status !== 'running';
-          } catch (err) {
-            // Must not reject: both fiber implementations delete their recovery row in `finally`.
-            diagnostics.failure(
-              'jobs.settlement_failed',
-              toKinuError({ doing: 'settle a background job and wake the agent', cause: err, otherwise: 'io' }),
-              { jobId },
-            );
-            settled = this.failUnsettled(jobId, { cause: err });
-          }
-
-          ctx.stash({ phase: settled ? 'settled' : 'running', jobId, kind });
-        });
-      } catch (cause) {
-        diagnostics.failure(
-          'jobs.fiber_start_failed',
-          toKinuError({ doing: 'run the durable fiber for a background job', cause, otherwise: 'io' }),
-          { jobId, kind },
-        );
-
-        try {
-          if (this.deps.store.get(jobId)?.status === 'running') {
-            await this.settleAndWake(jobId, async () => { throw cause; });
-          }
-        } catch (err) {
-          diagnostics.failure(
-            'jobs.settlement_failed',
-            toKinuError({ doing: 'settle a background job and wake the agent', cause: err, otherwise: 'io' }),
-            { jobId },
-          );
-          this.failUnsettled(jobId, { cause: err });
-        }
-      } finally {
-        if (driver && this.fiberDrivers.get(jobId) === driver) this.fiberDrivers.delete(jobId);
-      }
-    };
-
-    driver = drive();
-    this.fiberDrivers.set(jobId, driver);
+    this.fiber(
+      `${BACKGROUND_FIBER_PREFIX}${kind}`,
+      (ctx) => settle(this.settlement(ctx, jobId, kind, exec)),
+      (refused) => settle(this.unstarted(jobId, kind, refused)),
+    );
   }
 
-  /** Throws only when a store write or the durable retry breadcrumb fails. */
-  private async settleAndWake<T>(jobId: string, exec: () => Promise<T>): Promise<void> {
-    const job = this.deps.store.get(jobId);
+  /** Lease epoch read at fiber start fences executors a concurrent reclaim replaced (§5.3). */
+  private settlement<T>(ctx: FiberCtx, jobId: string, kind: string, exec: () => Promise<T>): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      ctx.stash({ phase: 'running', jobId, kind });
 
-    if (job === null) throw new Error('Cannot execute a background job with no durable authority record');
-    const epoch = job.epoch;
+      // A fenced write is a no-op (§5.3), so the store decides whether the job settled.
+      const settled = yield* this.settleAndWake(jobId, (mode) => Effect.promise(() => runWorkModeInvocation(mode, exec))).pipe(
+        Effect.map(() => this.deps.store.get(jobId)?.status !== 'running'),
+        Effect.catchCause((failed) => this.settlementFailed(jobId, { cause: Cause.squash(failed) })),
+      );
 
-    type Recorded =
-      | { readonly kind: 'settled'; readonly result: T }
-      | { readonly kind: 'failed'; readonly error: string }
-      | { readonly kind: 'bounded'; readonly why: string };
+      ctx.stash({ phase: settled ? 'settled' : 'running', jobId, kind });
+    });
+  }
 
-    let outcome: Recorded;
+  private unstarted(jobId: string, kind: string, refused: { readonly cause: unknown }): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      diagnostics.failure(
+        'jobs.fiber_start_failed',
+        toKinuError({ doing: 'run the durable fiber for a background job', cause: refused.cause, otherwise: 'io' }),
+        { jobId, kind },
+      );
 
-    try { outcome = { kind: 'settled', result: await runWorkModeInvocation(job.workMode, exec) }; }
-    catch (err) {
-      outcome = err instanceof JobNotResumable
-        ? { kind: 'bounded', why: 'this kind cannot be re-driven from a durable checkpoint' }
-        : { kind: 'failed', error: renderThrownChain({ cause: err }) };
-    }
+      if (this.deps.store.get(jobId)?.status === 'running') yield* this.settleAndWake(jobId, () => Effect.die(refused.cause));
+    }).pipe(Effect.catchCause((failed) => Effect.asVoid(this.settlementFailed(jobId, { cause: Cause.squash(failed) }))));
+  }
 
-    this.controllers.delete(jobId);
+  private settlementFailed(jobId: string, thrown: { readonly cause: unknown }): Effect.Effect<boolean> {
+    return Effect.andThen(Effect.sync(() => {
+      diagnostics.failure(
+        'jobs.settlement_failed',
+        toKinuError({ doing: 'settle a background job and wake the agent', cause: thrown.cause, otherwise: 'io' }),
+        { jobId },
+      );
+    }), this.failUnsettled(jobId, thrown));
+  }
 
-    // Already cancelled: do not relabel the abort as a failure.
-    if (this.deps.store.get(jobId)?.status === 'cancelled') return;
+  /** Fails only when a store write or the durable retry breadcrumb fails. */
+  private settleAndWake<T>(jobId: string, run: (mode: WorkMode) => Effect.Effect<T>): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      const job = this.deps.store.get(jobId);
 
-    const record = async (): Promise<void> => {
+      if (job === null) return yield* Effect.die(new Error('Cannot execute a background job with no durable authority record'));
+      const epoch = job.epoch;
+
+      const outcome = yield* Effect.catchCause(
+        Effect.map(run(job.workMode), (result): Recorded<T> => ({ kind: 'settled', result })),
+        (failed) => {
+          const err = Cause.squash(failed);
+
+          return Effect.succeed<Recorded<T>>(err instanceof JobNotResumable
+            ? { kind: 'bounded', why: 'this kind cannot be re-driven from a durable checkpoint' }
+            : { kind: 'failed', error: renderThrownChain({ cause: err }) });
+        },
+      );
+
+      this.controllers.delete(jobId);
+
+      // Already cancelled: do not relabel the abort as a failure.
+      if (this.deps.store.get(jobId)?.status === 'cancelled') return;
+      const record = this.record(jobId, epoch, outcome);
+
+      // A cancel in flight decides the terminal row; hold the outcome for it.
+      if (this.cancelling.has(jobId)) {
+        this.fenced.set(jobId, record);
+
+        return;
+      }
+
+      yield* record;
+    });
+  }
+
+  private record<T>(jobId: string, epoch: number, outcome: Recorded<T>): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
       if (outcome.kind === 'bounded') {
-        await this.settleBounded(jobId, epoch, outcome.why);
+        yield* this.settleBounded(jobId, epoch, outcome.why);
 
         return;
       }
@@ -410,75 +422,69 @@ export class BackgroundJobRunner {
       this.deps.logActivity?.('bg_job_settled',
         outcome.kind === 'settled' ? `${jobId} completed` : `${jobId} failed: ${outcome.error}`);
       this.notifySettled(jobId);
-      await this.wake(jobId);
-    };
-
-    // A cancel in flight decides the terminal row; hold the outcome for it.
-    if (this.cancelling.has(jobId)) {
-      this.fenced.set(jobId, record);
-
-      return;
-    }
-
-    await record();
+      yield* Effect.promise(() => this.wake(jobId));
+    });
   }
 
   /** `completed` when the harvest yields something, `failed` only when there is nothing. */
-  private async settleBounded(jobId: string, epoch: number, why: string): Promise<void> {
-    const job = this.deps.store.get(jobId);
-    const harvested = job ? await this.harvestOf(job) : { ok: true, value: null } as const;
-    const now = Date.now();
+  private settleBounded(jobId: string, epoch: number, why: string): Effect.Effect<void> {
+    return Effect.gen({ self: this }, function* () {
+      const job = this.deps.store.get(jobId);
+      const harvested = job ? yield* this.harvestOf(job) : Result.succeed(null);
+      const now = Date.now();
 
-    if (!harvested.ok) {
-      this.deps.store.fail(jobId, epoch, `${EVICTION_INTERRUPT_ERROR}: ${why}, and reading `
-        + `what it had produced failed: ${harvested.error}`, now);
-      this.deps.logActivity?.('bg_job_bounded', `${jobId} failed unreadable: ${why}`);
-    } else if (harvested.value === null) {
-      this.deps.store.fail(jobId, epoch, `${EVICTION_INTERRUPT_ERROR}: ${why}, and it had `
-        + 'produced no partial result to hand back', now);
-      this.deps.logActivity?.('bg_job_bounded', `${jobId} failed empty: ${why}`);
-    } else {
-      this.deps.store.settle(jobId, epoch, serializeJobResult({ value: {
-        partial: true,
-        why: `This result is PARTIAL: ${why}. It is what the work had completed, not a `
-          + 'finished answer: say so if you use it.',
-        generation: (job?.resumeAttempts ?? 0) + 1,
-        result: harvested.value,
-      } }), now);
-      this.deps.logActivity?.('bg_job_bounded', `${jobId} settled partial: ${why}`);
-    }
+      if (Result.isFailure(harvested)) {
+        this.deps.store.fail(jobId, epoch, `${EVICTION_INTERRUPT_ERROR}: ${why}, and reading `
+          + `what it had produced failed: ${harvested.failure}`, now);
+        this.deps.logActivity?.('bg_job_bounded', `${jobId} failed unreadable: ${why}`);
+      } else if (harvested.success === null) {
+        this.deps.store.fail(jobId, epoch, `${EVICTION_INTERRUPT_ERROR}: ${why}, and it had `
+          + 'produced no partial result to hand back', now);
+        this.deps.logActivity?.('bg_job_bounded', `${jobId} failed empty: ${why}`);
+      } else {
+        this.deps.store.settle(jobId, epoch, serializeJobResult({ value: {
+          partial: true,
+          why: `This result is PARTIAL: ${why}. It is what the work had completed, not a `
+            + 'finished answer: say so if you use it.',
+          generation: (job?.resumeAttempts ?? 0) + 1,
+          result: harvested.success,
+        } }), now);
+        this.deps.logActivity?.('bg_job_bounded', `${jobId} settled partial: ${why}`);
+      }
 
-    this.notifySettled(jobId);
-    await this.wake(jobId);
+      this.notifySettled(jobId);
+      yield* Effect.promise(() => this.wake(jobId));
+    });
   }
 
-  /** Never throws: a failed harvest must not stop the job settling, nor read as "nothing". */
-  private async harvestOf(job: BackgroundJob): Promise<
-    { ok: true; value: JsonValue | null } | { ok: false; error: string }
-  > {
+  /** Never fails: a failed harvest must not stop the job settling, nor read as "nothing". */
+  private harvestOf(job: BackgroundJob): Effect.Effect<Result.Result<JsonValue | null, string>> {
     const harvest = this.deps.harvest;
 
-    if (!harvest) return { ok: true, value: null };
+    if (!harvest) return Effect.succeed(Result.succeed(null));
     const input = this.storedInput(job.id);
 
-    try {
-      return { ok: true, value: await harvest(job.kind, input) };
-    } catch (err) {
-      diagnostics.failure(
-        'jobs.harvest_failed',
-        toKinuError({ doing: 'read what a bounded-out background job already produced', cause: err, otherwise: 'io' }),
-        { jobId: job.id, kind: job.kind },
-      );
+    return Effect.catchCause(
+      Effect.map(Effect.promise(async () => harvest(job.kind, input)), (value) => Result.succeed(value)),
+      (failed) => Effect.sync(() => {
+        const err = Cause.squash(failed);
 
-      return { ok: false, error: renderThrownChain({ cause: err }) };
-    }
+        diagnostics.failure(
+          'jobs.harvest_failed',
+          toKinuError({ doing: 'read what a bounded-out background job already produced', cause: err, otherwise: 'io' }),
+          { jobId: job.id, kind: job.kind },
+        );
+
+        return Result.fail(renderThrownChain({ cause: err }));
+      }),
+    );
   }
 
   /** Last-resort terminal write; keeps an already-recorded outcome and attempts no wake. */
-  private failUnsettled(jobId: string, thrown: { cause: unknown }): boolean {
-    if (this.cancelling.has(jobId)) return false;
+  private failUnsettled(jobId: string, thrown: { cause: unknown }): Effect.Effect<boolean> {
+    if (this.cancelling.has(jobId)) return Effect.succeed(false);
 
-    try {
+    return Effect.catchCause(Effect.sync(() => {
       const job = this.deps.store.get(jobId);
 
       if (!job || job.status !== 'running') return true;
@@ -486,15 +492,15 @@ export class BackgroundJobRunner {
       this.notifySettled(jobId);
 
       return true;
-    } catch (failErr) {
+    }), (failed) => Effect.sync(() => {
       diagnostics.failure(
         'jobs.force_fail_failed',
-        toKinuError({ doing: 'force-fail a job the settlement path left running', cause: failErr, otherwise: 'io' }),
+        toKinuError({ doing: 'force-fail a job the settlement path left running', cause: Cause.squash(failed), otherwise: 'io' }),
         { jobId },
       );
 
       return false;
-    }
+    }));
   }
 
   /** Safe to repeat: {@link backgroundJobWakeTrigger} dedupes re-deliveries to one message. */
@@ -511,32 +517,29 @@ export class BackgroundJobRunner {
       metadata: { kinuMode: job.workMode, jobId, kind: job.kind, status: job.status },
     } as const satisfies Omit<AgentSignal, 'compensate'>;
 
+    const { eventLog, scheduleDrain } = this.deps;
+
     // `compensate` is offered only with a durable retry plane behind it.
-    const retry = this.publishWakeRetryIfDurable(job, text);
-    await this.deps.inbox.send(retry ? { ...base, compensate: retry } : base);
+    await this.deps.inbox.send(eventLog && scheduleDrain ? {
+      ...base,
+      compensate: (reason: SignalUndeliveredReason) => settleSync(this.publishWakeRetry({ eventLog, scheduleDrain, job, text, reason })),
+    } : base);
   }
 
-  private publishWakeRetryIfDurable(
-    job: BackgroundJob, text: string,
-  ): ((reason: SignalUndeliveredReason) => void) | null {
-    const eventLog = this.deps.eventLog;
-    const scheduleDrain = this.deps.scheduleDrain;
+  private publishWakeRetry(input: {
+    readonly eventLog: EventLog;
+    readonly scheduleDrain: () => void;
+    readonly job: BackgroundJob;
+    readonly text: string;
+    readonly reason: SignalUndeliveredReason;
+  }): Effect.Effect<void> {
+    const { eventLog, scheduleDrain, job, text, reason } = input;
 
-    if (!eventLog || !scheduleDrain) return null;
+    if (reason === 'preempted') {
+      this.deps.logActivity?.('bg_job_wake_skipped', `${job.id} (${job.status}): wake preempted; result retained`);
+    }
 
-    return (reason) => {
-      if (reason === 'preempted') {
-        this.deps.logActivity?.('bg_job_wake_skipped', `${job.id} (${job.status}): wake preempted; result retained`);
-      }
-
-      this.publishWakeRetry(eventLog, scheduleDrain, job, text);
-    };
-  }
-
-  private publishWakeRetry(
-    eventLog: EventLog, scheduleDrain: () => void, job: BackgroundJob, text: string,
-  ): void {
-    try {
+    return Effect.onError(Effect.sync(() => {
       eventLog.publish({
         descriptor: {
           ingress: 'timer_alarm',
@@ -554,54 +557,52 @@ export class BackgroundJobRunner {
         },
         now: Date.now(),
       });
-    } catch (err) {
+    }), (failed) => Effect.sync(() => {
       diagnostics.failure(
         'jobs.retry_publish_failed',
-        toKinuError({ doing: 'publish the background-job wake retry', cause: err, otherwise: 'io' }),
+        toKinuError({ doing: 'publish the background-job wake retry', cause: Cause.squash(failed), otherwise: 'io' }),
         { jobId: job.id, kind: job.kind },
       );
-      throw err;
-    }
-
-    settleLoggedSync('jobs.retry_drain_schedule_failed', { doing: 'schedule the drain for a background-job wake retry', otherwise: 'io' },
-      () => scheduleDrain(), { jobId: job.id });
+    })).pipe(Effect.andThen(Effect.sync(() => {
+      settleLoggedSync('jobs.retry_drain_schedule_failed', { doing: 'schedule the drain for a background-job wake retry', otherwise: 'io' },
+        () => scheduleDrain(), { jobId: job.id });
+    })));
   }
 
   /** Abort, mark cancelled, and wake the agent, which was told to wait for this result. */
-  async cancel(jobId: string): Promise<boolean> {
-    if (this.deps.store.get(jobId)?.status !== 'running') return false;
+  cancel(jobId: string): Promise<boolean> {
+    return settle(Effect.gen({ self: this }, function* () {
+      if (this.deps.store.get(jobId)?.status !== 'running') return false;
 
-    if (this.cancelling.has(jobId)) return false;
-    this.cancelling.add(jobId);
-    let refusal: { readonly error: unknown } | undefined;
+      if (this.cancelling.has(jobId)) return false;
+      this.cancelling.add(jobId);
 
-    try {
       // External owner confirms first so a refused device cancel stays retryable.
-      await this.deps.onCancelled?.(jobId);
-    } catch (err) {
-      refusal = { error: err };
-    } finally {
+      const refusal = yield* Effect.catchCause(
+        Effect.as(Effect.promise(async () => this.deps.onCancelled?.(jobId)), null),
+        (failed) => Effect.succeed({ error: Cause.squash(failed) }),
+      );
+
       // Everything below is synchronous up to the wake, so settle cannot interleave.
       this.cancelling.delete(jobId);
-    }
+      const held = this.fenced.get(jobId);
+      this.fenced.delete(jobId);
 
-    const held = this.fenced.get(jobId);
-    this.fenced.delete(jobId);
+      if (refusal) {
+        diagnostics.failure('jobs.external_cancel_failed', toKinuError({
+          doing: 'cancel external work transferred to a background job', cause: refusal.error, otherwise: 'unavailable',
+        }), { jobId });
 
-    if (refusal) {
-      diagnostics.failure('jobs.external_cancel_failed', toKinuError({
-        doing: 'cancel external work transferred to a background job', cause: refusal.error, otherwise: 'unavailable',
-      }), { jobId });
+        if (held) yield* held;
 
-      if (held) await held();
+        return false;
+      }
 
-      return false;
-    }
+      if (!this.settleCancelled(jobId)) return false;
+      yield* Effect.promise(() => this.wake(jobId));
 
-    if (!this.settleCancelled(jobId)) return false;
-    await this.wake(jobId);
-
-    return true;
+      return true;
+    }));
   }
 
   /**
@@ -634,13 +635,15 @@ export class BackgroundJobRunner {
   }
 
   /** Returns the job only if this call re-drove it. */
-  async recover(snapshot: JsonValue): Promise<BackgroundJob | null> {
-    const parsed = v.safeParse(v.object({ jobId: v.string(), phase: v.literal('running') }), snapshot);
+  recover(snapshot: JsonValue): Promise<BackgroundJob | null> {
+    return settle(Effect.gen({ self: this }, function* () {
+      const parsed = v.safeParse(v.object({ jobId: v.string(), phase: v.literal('running') }), snapshot);
 
-    if (!parsed.success) return null;
-    const outcome = await this.recoverJob(parsed.output.jobId);
+      if (!parsed.success) return null;
+      const outcome = yield* this.recoverJob(parsed.output.jobId);
 
-    return outcome.state === 'redriven' ? outcome.job : null;
+      return outcome.state === 'redriven' ? outcome.job : null;
+    }));
   }
 
   /**
@@ -648,20 +651,26 @@ export class BackgroundJobRunner {
    * Returns jobs in flight, including already-driving and deferred ones, because
    * `jobRedriveResumeGate` retires the fork run of any job absent from the set.
    */
-  async recoverOrphans(): Promise<readonly BackgroundJob[]> {
-    const inFlight = new Set<string>();
+  recoverOrphans(): Promise<readonly BackgroundJob[]> {
+    return settle(this.orphansRecovered());
+  }
 
-    for (const jobId of this.deps.store.runningIds()) {
-      const outcome = await this.recoverJob(jobId);
+  private orphansRecovered(): Effect.Effect<readonly BackgroundJob[]> {
+    return Effect.gen({ self: this }, function* () {
+      const inFlight = new Set<string>();
 
-      if (outcome.state === 'deferred') inFlight.add(jobId);
-    }
+      for (const jobId of this.deps.store.runningIds()) {
+        const outcome = yield* this.recoverJob(jobId);
 
-    for (const jobId of this.controllers.keys()) inFlight.add(jobId);
+        if (outcome.state === 'deferred') inFlight.add(jobId);
+      }
 
-    return [...inFlight]
-      .map((jobId) => this.deps.store.get(jobId))
-      .filter((job): job is BackgroundJob => job !== null && job !== undefined);
+      for (const jobId of this.controllers.keys()) inFlight.add(jobId);
+
+      return [...inFlight]
+        .map((jobId) => this.deps.store.get(jobId))
+        .filter((job): job is BackgroundJob => job !== null && job !== undefined);
+    });
   }
 
   nextResumeAt(): number | null {
@@ -689,40 +698,44 @@ export class BackgroundJobRunner {
    * Settle, re-drive, or pace one orphan. Interruptions are not failures: attempts are unbounded,
    * paced by {@link recoveryBackoffMs}. No wall clock: eviction time is not work time.
    */
-  private async recoverJob(jobId: string): Promise<JobRecoveryOutcome> {
-    if (this.controllers.has(jobId)) return { state: 'none' };
-    const job = this.deps.store.get(jobId);
+  private recoverJob(jobId: string): Effect.Effect<JobRecoveryOutcome> {
+    return Effect.gen({ self: this }, function* () {
+      if (this.controllers.has(jobId)) return { state: 'none' } satisfies JobRecoveryOutcome;
+      const job = this.deps.store.get(jobId);
 
-    if (!job || job.status === 'cancelled') return { state: 'none' };
+      if (!job || job.status === 'cancelled') return { state: 'none' } satisfies JobRecoveryOutcome;
 
-    // Already settled: only re-deliver the lost wake.
-    if (job.status !== 'running') {
-      await this.wake(jobId);
+      // Already settled: only re-deliver the lost wake.
+      if (job.status !== 'running') {
+        yield* Effect.promise(() => this.wake(jobId));
 
-      return { state: 'none' };
-    }
-
-    if (this.deps.resume) {
-      const now = Date.now();
-
-      if (job.resumeAfter !== null && job.resumeAfter > now) {
-        return await this.deferRecovery(job, job.resumeAfter);
+        return { state: 'none' } satisfies JobRecoveryOutcome;
       }
 
-      const claim = this.deps.store.reclaim(jobId, now);
+      if (this.deps.resume) {
+        const now = Date.now();
 
-      if (!claim) return { state: 'none' }; // lost the race — another activation reclaimed it
-      // Armed before the drive: an eviction during it cannot write the wait afterwards.
-      this.deps.store.deferResume(jobId, now + recoveryBackoffMs(claim.attempts - 1));
-      this.deps.logActivity?.('bg_job_resume', `${job.kind} -> ${jobId} (attempt ${claim.attempts}, epoch ${claim.epoch})`);
-      this.driveResume(job, this.deps.resume);
+        if (job.resumeAfter !== null && job.resumeAfter > now) {
+          const at = job.resumeAfter;
 
-      return { state: 'redriven', job };
-    }
+          return yield* Effect.promise(() => this.deferRecovery(job, at));
+        }
 
-    await this.settleBounded(jobId, job.epoch, 'its executor was lost and this kind cannot be re-driven');
+        const claim = this.deps.store.reclaim(jobId, now);
 
-    return { state: 'none' };
+        if (!claim) return { state: 'none' } satisfies JobRecoveryOutcome; // lost the race — another activation reclaimed it
+        // Armed before the drive: an eviction during it cannot write the wait afterwards.
+        this.deps.store.deferResume(jobId, now + recoveryBackoffMs(claim.attempts - 1));
+        this.deps.logActivity?.('bg_job_resume', `${job.kind} -> ${jobId} (attempt ${claim.attempts}, epoch ${claim.epoch})`);
+        this.driveResume(job, this.deps.resume);
+
+        return { state: 'redriven', job } satisfies JobRecoveryOutcome;
+      }
+
+      yield* this.settleBounded(jobId, job.epoch, 'its executor was lost and this kind cannot be re-driven');
+
+      return { state: 'none' } satisfies JobRecoveryOutcome;
+    });
   }
 
   /** Re-arm the wake on every sweep (the schedule row can be lost) and announce the deferral. */
@@ -752,13 +765,9 @@ export class BackgroundJobRunner {
     const raw = this.deps.store.getInput(jobId);
 
     if (raw === null) return null;
+    const parsed = tolerate(() => parseJsonValue(raw), 'malformed-input');
 
-    try { return parseJsonValue(raw); }
-    catch (error) {
-      if (classify({ cause: error }) !== 'malformed-input') throw error;
-
-      return raw;
-    }
+    return parsed === undefined ? raw : parsed;
   }
 
   /** Sink errors must not reach the fiber or recovery path. */

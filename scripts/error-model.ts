@@ -65,6 +65,11 @@ export const DECLARED = byFile([
     reason: 'a span hands its caller\'s promise back unchanged, so a pipelined RPC stub keeps pipelining; '
       + '`then(close, close)` observes it settle without deriving an unhandled rejection',
   }] as const),
+  ['packages/core/src/execution/fiber.ts', {
+    mechanisms: ['promise-rejection'],
+    within: ['heldFiber'],
+    reason: 'a held fiber\'s start: nothing awaits a detached fiber, so the host\'s rejection is observed here and handed to `onStartFailed`',
+  }],
   ['packages/core/src/slates/content.ts', {
     mechanisms: ['throw'],
     reason: 'a vendored `ContentStore`: its failures are the vendored package\'s `AgentCoreError` codes, its contract',

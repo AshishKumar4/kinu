@@ -43,6 +43,19 @@ export function createSqlFiber(sql: SqlExecutor, actor: ActorHandle): Schedule['
   };
 }
 
+/** A fiber its host holds: a refused start reaches `onStartFailed`, never a rejection. Neither callback may reject. */
+export type HeldFiber = (
+  name: string,
+  fn: (ctx: FiberCtx) => Promise<void>,
+  onStartFailed: (failure: { readonly cause: unknown }) => Promise<void>,
+) => void;
+
+export function heldFiber(fiber: Schedule['fiber']): HeldFiber {
+  return (name, fn, onStartFailed) => {
+    new Promise<void>((resolve) => { resolve(fiber(name, fn)); }).then(undefined, async (...refused: [unknown]) => onStartFailed({ cause: refused[0] }));
+  };
+}
+
 /** Orphans from a previous crashed run, this actor's lanes only. */
 export function detectOrphanedFibers(sql: SqlExecutor, actor: ActorHandle): OrphanedFiber[] {
   actor.assertCurrent();
