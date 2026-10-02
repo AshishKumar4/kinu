@@ -14,6 +14,7 @@ import { JsonObjectSchema, JsonValueSchema } from '../utils/json';
 import { boundedInt, boundPageQuery } from '../utils/bounds';
 import { USAGE_FIELDS, UsageSchema, type Usage } from '../usage';
 import { ESCALATION_OUTCOMES } from '../execution/escalation';
+import { PROVIDER_WAIT_SOURCES } from '../providers/types';
 import { APP_MUTATIONS, APP_TABLE_SCOPES } from '../types/app-store';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import {
@@ -93,7 +94,7 @@ export const RunEventSchema = v.variant('type', [
     provider: v.string(), modelId: v.optional(v.string()),
     waitMs: v.number(), attempt: v.number(),
     status: v.optional(v.number()),
-    source: v.picklist(['header', 'backoff', 'cooldown']) }),
+    source: v.picklist(PROVIDER_WAIT_SOURCES) }),
   v.object({ ...BaseFields, type: v.literal('model_fallback'), from: v.string(), to: v.string(), reason: v.string() }),
   v.object({ ...BaseFields, type: v.literal('context_admitted'), tokens: v.nullable(v.number()), contextWindow: v.nullable(v.number()) }),
   v.object({ ...BaseFields, type: v.literal('head_split'), rootId: v.string(),

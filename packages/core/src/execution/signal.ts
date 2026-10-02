@@ -6,12 +6,18 @@
  */
 import * as v from 'valibot';
 
-const ExecContextSchema = v.object({ signal: v.optional(v.instance(AbortSignal)) });
+const ExecContextSchema = v.object({ signal: v.optional(v.instance(AbortSignal)), job: v.optional(v.string()) });
 
 export function readExecSignal(input: { context: unknown }): AbortSignal | undefined {
   const parsed = v.safeParse(ExecContextSchema, input.context);
 
   return parsed.success ? parsed.output.signal : undefined;
+}
+
+export function readExecJob(input: { context: unknown }): string | undefined {
+  const parsed = v.safeParse(ExecContextSchema, input.context);
+
+  return parsed.success ? parsed.output.job : undefined;
 }
 
 /**

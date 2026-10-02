@@ -11,7 +11,7 @@ import {
   prepareHostedTurn, settleHostedTask,
   type HostedActorSeams, type HostedTurnRequest, type PreparedHostedTurn,
 } from './hosted-actors';
-import type { AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn, StoredRow } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentTurnTask, AgentToolAnswer, AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn, StoredRow } from '@kinu.run/core';
 
 export interface AgentTurnsDeps {
   readonly sql: SqlExecutor;
@@ -21,6 +21,7 @@ export interface AgentTurnsDeps {
   holds(reference: ActorReference, turnId: string): Promise<boolean>;
   dynamic(actor: HostedActor, profile: ResolvedTurnProfile, tools: ToolSet): DynamicContext;
   pricing(spec: string): ModelPricing | null;
+  window(spec: string): Promise<PreparedAgentTurn['window']>;
   accounts(): Readonly<Record<string, string>>;
   live(actorId: string): boolean;
 }
@@ -265,6 +266,7 @@ export class AgentTurns {
       runId: run?.runId ?? crypto.randomUUID(),
       ...(run === undefined && { birthContext: prepared.birthContext }),
       model: prepared.model,
+      window: await this.deps.window(prepared.model),
       pricing: this.deps.pricing(prepared.model),
       accounts: this.deps.accounts(),
       scaffold,
@@ -306,10 +308,14 @@ export class AgentTurns {
   }
 
   async trace(actorId: string, turnId: string, event: AgentTrace): Promise<void> {
+    await this.turn(actorId, turnId).request.run?.inference.reportStep?.(event.sequence, event.step);
+  }
+
+  /** Drained with no reader too: the step record waits on it. */
+  async traceStream(actorId: string, turnId: string, deltas: ReadableStream<AgentHeadDelta>): Promise<void> {
     const inference = this.turn(actorId, turnId).request.run?.inference;
 
-    if (event.kind === 'step') await inference?.reportStep?.(event.sequence, event.step);
-    else inference?.reportDelta?.(event.kind, event.delta);
+    for await (const { kind, delta } of deltas) inference?.reportDelta?.(kind, delta);
   }
 
   async resume(actorId: string, turnId: string) {

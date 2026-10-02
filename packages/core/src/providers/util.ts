@@ -300,7 +300,7 @@ export function providerRefusalCode(failure: { readonly cause: unknown }): Error
 }
 
 /** HTTP status to `obs/error.ts` class; null when the status says nothing. */
-function codeForStatus(status: number): ErrorCode | null {
+export function codeForStatus(status: number): ErrorCode | null {
   if (status === 401 || status === 402 || status === 403) return 'denied';
 
   if (status === 404) return 'missing';

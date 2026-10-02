@@ -300,12 +300,12 @@ export type ParityCompleted = v.InferOutput<typeof ParityCompletedSchema>;
 /** Printed by the detached command; the woken turn's reply must carry it back. */
 export const WAKE_MARKER = 'KINU_SETTLED_AFTER_DETACH';
 
-/** Where the interactive turn is held while its detached job settles. */
-export const WakeHoldPlacementSchema = v.picklist(['start', 'reply', 'settle']);
+/** The genesis start and background-wake reply holds. */
+export const WakeHoldPlacementSchema = v.picklist(['start', 'reply']);
 
 export type WakeHoldPlacement = v.InferOutput<typeof WakeHoldPlacementSchema>;
 
-/** Includes the two instants that prove the settle window was held when the job settled. */
+/** Includes the instants that prove the reply was held when its detached job settled. */
 export const WakeRowsSchema = v.object({
   jobs: v.array(v.object({
     id: v.string(), kind: v.string(), status: v.string(), result: v.nullable(v.string()), settledAt: v.nullable(v.number()),
@@ -317,7 +317,6 @@ export const WakeRowsSchema = v.object({
 export type WakeRows = v.InferOutput<typeof WakeRowsSchema>;
 
 export const WakeDriveResultSchema = v.object({
-  where: WakeHoldPlacementSchema,
   rows: WakeRowsSchema,
   releasedAt: v.number(),
   settledAt: v.number(),

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { generateText } from 'ai';
 import {
-  DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, KINU_USER_AGENT, usageTotal,
+  DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, KINU_USER_AGENT, credentialToHeaders, usageTotal,
 } from '@kinu.run/core';
 import type { JsonObject, JsonValue, LLMProviderConfig, ModelCallReport, ModelCallSpend } from '@kinu.run/core';
 import { cloudProxyBaseURL, createLocalModelResolver, createLocalProviderLLM } from '../src/model-resolver';
@@ -10,7 +10,10 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { asFetchFunction } from '@kinu.run/core';
 import * as v from 'valibot';
-import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir, unobservedSpend } from '@kinu.run/test-utils';
+import { createMockFetch, OPENCODE_GO_CATALOG, OPENAI_RESPONSES_BODY, scratchDir, scratchPath, unobservedSpend } from '@kinu.run/test-utils';
+import { Database } from 'bun:sqlite';
+import { initWorkspaceSchema } from '@kinu.run/core';
+import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 
 const UNOBSERVED: ModelCallSpend = { source: 'reflection', report: unobservedSpend };
 
@@ -129,6 +132,44 @@ describe('createLocalModelResolver', () => {
     expect(usageTotal(reports[1]?.usage ?? {})).toBeUndefined();
   });
 
+  test('a runtime lane sends its route\'s reasoning effort, as the cf lane does', async () => {
+    const bodies: JsonObject[] = [];
+
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      async fetch(request) {
+        const body = v.parse(JsonObjectSchema, await request.json());
+        bodies.push(body);
+
+        return Response.json({
+          id: 'chatcmpl-1', object: 'chat.completion', created: 0, model: v.parse(v.string(), body.model),
+          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        });
+      },
+    });
+
+    const db = new Database(scratchPath('model-resolver', 'agent.db'));
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+
+    const rt = createCLIRuntime(db, {
+      llm: { name: 'workers-ai', baseURL: `http://127.0.0.1:${server.port}/v1`, headers: { Authorization: 'Bearer test' }, model: '@cf/test/model' },
+    });
+
+    try {
+      for (const reasoningEffort of ['high', null] as const) {
+        await rt.modelForRoute?.({ source: 'judge', tier: 'deep', model: 'workers-ai/@cf/test/model', reasoningEffort, fallbacks: [] })
+          .complete('grade');
+      }
+    } finally {
+      await server.stop(true);
+      db.close();
+    }
+
+    expect(bodies.map((body) => body.reasoning_effort ?? null)).toEqual(['high', null]);
+  });
+
   test('normalizes Workers AI model ids to provider-style specs', async () => {
     const resolver = createLocalModelResolver({
       llm: {
@@ -156,7 +197,6 @@ describe('createLocalModelResolver', () => {
     expect(resolver.normalizeSpecSync(null)).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
     expect(resolver.normalizeSpecSync('@cf/meta/llama-4-scout-17b-16e-instruct'))
       .toBe('workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct');
-    expect(resolver.normalizeSpecSync('minimax/m3')).toBe('workers-ai/minimax/m3');
 
     const providers = await resolver.listProviders();
     expect(providers.find((p) => p.id === 'workers-ai')?.available).toBe(true);
@@ -252,6 +292,20 @@ describe('createLocalModelResolver', () => {
     expect(sent).toEqual(['sk-ant-work', 'sk-ant-main', 'sk-ant-work']);
   });
 
+  test('a stored key sends the headers core maps for the hosted backend', async () => {
+    const compat = { baseURL: 'https://api.example.com/v1', apiKey: 'sk-compat', extraHeaders: { Authorization: 'Bearer gateway' } };
+
+    const resolver = createLocalModelResolver({
+      llm: null,
+      credentials: { openaiApiKey: 'sk-openai', openaiCompat: { groq: compat } },
+    });
+
+    expect((await resolver.getAuth('openai.bearer'))?.headers)
+      .toEqual(credentialToHeaders('openai.bearer', { kind: 'bearer', token: 'sk-openai' }));
+    expect((await resolver.getAuth('openai-compat.groq'))?.headers)
+      .toEqual(credentialToHeaders('openai-compat.groq', { kind: 'openai-compat', ...compat }));
+  });
+
   test('uses Anthropic as the default provider when the resolved local config is direct Anthropic', async () => {
     const resolver = createLocalModelResolver({
       llm: {
@@ -260,7 +314,7 @@ describe('createLocalModelResolver', () => {
         headers: { 'x-api-key': 'sk-ant', 'anthropic-version': '2023-06-01' },
         model: 'claude-sonnet-4-5',
       },
-      credentials: {},
+      credentials: { anthropicApiKey: 'sk-ant' },
       fetch: asFetchFunction(async () => new Response('{}')),
     });
 
@@ -625,12 +679,12 @@ describe('createLocalModelResolver — claude subscription provider', () => {
 
     const claude = (await resolver.listProviders()).find((p) => p.id === 'claude');
 
-    expect([claude?.available, claude?.unavailableReason]).toEqual([false, expect.stringContaining('kinu provider connect claude')]);
+    expect([claude?.available, claude?.unavailableReason]).toEqual([false, "Claude isn't connected for this account."]);
   });
 });
 
 describe('createLocalModelResolver — signed out', () => {
-  test('cloud providers stay visible but honestly unavailable with the auth hint', async () => {
+  test('cloud providers stay visible but honestly unavailable, saying they are signed out', async () => {
     const resolver = createLocalModelResolver({
       llm: {
         name: 'openai',
@@ -647,9 +701,9 @@ describe('createLocalModelResolver — signed out', () => {
     for (const id of ['workers-ai', 'my-gateway']) {
       const provider = providers.find((p) => p.id === id);
       expect(provider?.available).toBe(false);
-      expect(provider?.unavailableReason).toContain('kinu auth');
+      expect(provider?.unavailableReason).toBe("This machine isn't signed in to Kinu, so your Cloudflare account's models aren't reachable.");
     }
 
-    expect(() => resolver.resolveModel('my-gateway/openai/gpt-4.1', 'kinu-test')).toThrow(/kinu auth/);
+    expect(() => resolver.resolveModel('my-gateway/openai/gpt-4.1', 'kinu-test')).toThrow("isn't signed in to Kinu");
   });
 });

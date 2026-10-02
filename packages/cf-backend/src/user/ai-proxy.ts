@@ -4,7 +4,7 @@ import { createUserDOAuthResolver, type UserCredentialClient } from '../provider
 import type { OwnerCapabilityEnv, ProviderEnv } from '@kinu.run/core';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '@kinu.run/core';
 import { createCloudflareAIFetch, errorResponse, mapGatewayError } from '@kinu.run/core';
-import { MY_GATEWAY_PROVIDER_ID } from '@kinu.run/core';
+import { MY_GATEWAY_PROVIDER_ID, SESSION_AFFINITY_HEADER, sessionAffinityOf } from '@kinu.run/core';
 import { createDirectWorkersAIFetch } from '@kinu.run/core';
 import { listAvailableModels, type AvailableModelsEnv } from './available-models';
 import { json } from '@kinu.run/core';
@@ -104,7 +104,7 @@ async function proxyChatCompletion<Id>(
 
 /** Forwards the Workers AI prefix-cache pin so same-agent local turns hit the same replica. */
 function affinityHeader(request: Request): Record<string, string> | undefined {
-  const affinity = request.headers.get('x-session-affinity');
+  const affinity = sessionAffinityOf(request.headers);
 
-  return affinity ? { 'x-session-affinity': affinity } : undefined;
+  return affinity ? { [SESSION_AFFINITY_HEADER]: affinity } : undefined;
 }

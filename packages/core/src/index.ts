@@ -47,7 +47,7 @@ export { initAllTables, initWorkspaceSchema, initActorStateSchema, type Workspac
 
 export { resetGuardedExec, StoragePredatesResetError } from './state/store-reset';
 
-export { initUserTables, PROFILE_CATALOG_CONFIG_KEY } from './state/user-schema';
+export { initUserTables, PROFILE_CATALOG_CONFIG_KEY, WORKSPACE_KEYED_ROWS, type WorkspaceKeyedRows } from './state/user-schema';
 
 export {
   DEFAULT_SOUL_MD,
@@ -465,7 +465,7 @@ export {
 export type { Usage } from './usage';
 
 export {
-  contextWindowForModel, stepContextLimit, outputReserveTokens,
+  contextWindowForModel, resolveModelWindow, stepContextLimit, outputReserveTokens,
   type ContextWindowEstimate, type ModelWindow, type ResolvedModelWindow,
 } from './context-window';
 
@@ -638,7 +638,6 @@ export {
   type SubordinateLiveStatus,
   type SubordinateReportOrigin,
   type SubordinateRuntime,
-  type SubordinatesChangedEvent,
 } from './subordinates/support';
 
 export {
@@ -1400,11 +1399,13 @@ export {
 
 // Platform facts: prose cites an entry by its id and never restates the number.
 export {
+  BOUNDS_KINDS,
   PLATFORM_CATALOG,
   PLATFORM_FACT_IDS,
   injectableFaults,
   platformFact,
   platformFactEntries,
+  silenceBoundMs,
   type BoundsKind,
   type EvidenceLabel,
   type LimitUnit,
@@ -1414,6 +1415,7 @@ export {
   type PlatformMeasurement,
   type PlatformObservable,
   type PlatformQuantity,
+  type SilenceBoundId,
 } from './platform-catalog';
 
 // Safety
@@ -1611,7 +1613,7 @@ export {
   backgroundJobNotice,
   isBackgroundHandle, SPAWN_STARTED_OPTION, readSpawnStarted,
   DEVICE_REQUEST_OPTION, readDeviceRequestChannel, DeviceRequestOwnership,
-  BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, MAX_CONCURRENT_DETACHED_JOBS,
+  BackgroundJobRunner, JobNotResumable, BACKGROUND_POLICY, JOB_STAMP_ENV, MAX_CONCURRENT_DETACHED_JOBS, recordServingJobs, type PortHolders,
   invocationBackgroundPolicy,
   backgroundJobWakeTrigger, BACKGROUND_FIBER_PREFIX,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
@@ -1898,7 +1900,7 @@ export type {
 } from './read-models/workspace-diff';
 
 export {
-  LIVE_READS, LiveReadsNotice, PAGE_KEEPALIVE, READS_CHANGED_EVENT, readsMovedByFiles, readsWrittenBy,
+  LIVE_READS, LiveReadsNotice, PAGE_KEEPALIVE, READS_CHANGED_EVENT, ROSTER_READS, readsMovedByFiles, readsWrittenBy,
   type LiveRead, type ReadsChangedFrame,
 } from './read-models/live-reads';
 
@@ -2532,5 +2534,5 @@ export { MCP_PRESETS, mcpPresetById, type McpPreset, type McpPresetId } from './
 
 export type {
   AgentTurnActivity, AgentCaptureDelta, AgentTurnOpening, AgentRecovery, AgentReview, AgentSnapshot, AgentTurnTask, AgentToolAnswer,
-  AgentToolCall, AgentToolDescriptor, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn, StoredRow, TurnRequestAt,
+  AgentToolCall, AgentToolDescriptor, AgentHeadDelta, AgentTrace, AgentTurnEnd, AgentTurnProfile, PreparedAgentTurn, StoredRow, TurnRequestAt,
 } from './subordinates/agent-isolate';

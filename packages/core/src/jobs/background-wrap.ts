@@ -7,7 +7,8 @@
 import type { ToolExecutionOptions, ToolSet } from 'ai';
 import { DEVICE_REQUEST_OPTION, SPAWN_STARTED_OPTION, withBackgroundThreshold, withSpawnDetach } from './threshold';
 import { DeviceRequestOwnership } from './device-ownership';
-import type { BackgroundJobRunner } from './runner';
+import { CALL_JOB_OPTION, type CallJob } from '../tools/call-job';
+import { newJobId, type BackgroundJobRunner } from './runner';
 import type { WorkMode } from '../types/turn';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
 
@@ -46,7 +47,8 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
 
         if (!detachable(parsedInput)) return exec(input, options);
         const controller = new AbortController();
-        const ownership = new DeviceRequestOwnership();
+        const ownership = new DeviceRequestOwnership(newJobId());
+        const job: CallJob = { id: ownership.jobId, detached: ownership.detached };
         const mode = deps.mode();
         const turnSignal = options.abortSignal;
         const abortSignal = turnSignal ? AbortSignal.any([turnSignal, controller.signal]) : controller.signal;
@@ -64,10 +66,12 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
                 const execOptions: ToolExecutionOptions & {
                   [SPAWN_STARTED_OPTION]: () => void;
                   [DEVICE_REQUEST_OPTION]: DeviceRequestOwnership;
+                  [CALL_JOB_OPTION]: CallJob;
                 } = {
                   ...options, abortSignal,
                   [SPAWN_STARTED_OPTION]: spawnStarted,
                   [DEVICE_REQUEST_OPTION]: ownership,
+                  [CALL_JOB_OPTION]: job,
                 };
 
                 return exec(input, execOptions);
@@ -78,8 +82,9 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
         } else {
           const execOptions: ToolExecutionOptions & {
             [DEVICE_REQUEST_OPTION]: DeviceRequestOwnership;
+            [CALL_JOB_OPTION]: CallJob;
           } = {
-            ...options, abortSignal, [DEVICE_REQUEST_OPTION]: ownership,
+            ...options, abortSignal, [DEVICE_REQUEST_OPTION]: ownership, [CALL_JOB_OPTION]: job,
           };
 
           run = withBackgroundThreshold(

@@ -3,10 +3,12 @@ import { compareEvalResults, evalGateVerdict, fisherExact, renderEvalComparison,
 
 /**
  * `infra`: the deployment ended the turn in error. `refused`: it answered the turn's request with this failure.
- * `reset`: it answered that the workspace's isolate was reset for memory.
+ * `reset`: it answered that the workspace's isolate was reset for memory. `hung`: the watch's account of what held it.
+ * `cancelled`: the run's cancel ended the trial, and what held its workspace then.
  */
 type Trial = {
-  pass: boolean; infra?: boolean; refused?: string; reset?: string; productSha?: string; taskVersion?: string; failed?: string; trial?: number;
+  pass: boolean; infra?: boolean; refused?: string; reset?: string; hung?: string; cancelled?: string; heldBy?: string[]; productSha?: string;
+  taskVersion?: string; failed?: string; trial?: number;
   inputTokens?: number; cacheReadTokens?: number; costUsd?: number; model?: string; durationMs?: number; harnessInfra?: boolean;
 };
 
@@ -14,6 +16,10 @@ function outcomeOf(trial: Trial) {
   if (trial.infra === true) return { status: 'error' };
 
   if (trial.reset !== undefined) return { status: 'reset', message: trial.reset };
+
+  if (trial.hung !== undefined) return { status: 'hung', message: trial.hung, ...trial.heldBy !== undefined && { heldBy: trial.heldBy } };
+
+  if (trial.cancelled !== undefined) return { status: 'cancelled', message: trial.cancelled, heldBy: trial.heldBy ?? [] };
 
   return trial.refused === undefined ? { status: 'completed' } : { status: 'refused', message: trial.refused };
 }
@@ -42,7 +48,7 @@ function fileResult(taskId: string, trials: readonly Trial[], side: { productSha
             metrics: { modelTurns: 4, toolCalls: 6, toolErrors: 0, providerWaits: 2, providerWaitMs: 30_000 },
             turns: [{
               outcome: outcomeOf(trial),
-              checks: trial.refused === undefined && trial.reset === undefined
+              checks: trial.refused === undefined && trial.reset === undefined && trial.hung === undefined && trial.cancelled === undefined
                 ? [{ id: trial.failed ?? 'builds', pass: trial.pass, evidence: trial.pass ? { calls: 3 } : { answered: 1 } }]
                 : [],
             }],
@@ -113,6 +119,34 @@ describe('compareEvalResults', () => {
     expect(validateEvalResults(refused, 10)).toHaveLength(1);
     expect([comparison.verdict, comparison.rows[0]?.reason]).toEqual(['regressed', null]);
     expect(renderEvalComparison(comparison)).toContain('`t1 deployment.refused` | 0 | 1 |');
+  });
+
+  test('a turn that hung fails on the build: counted, compared and named, never infrastructure', () => {
+    const hung = 'the workspace stayed busy with its ledger silent for 361 s: held by working helper task-helper';
+    const hanging = report('t', [...trialsOf(1, 9), { pass: false, hung }], NEXT);
+    const comparison = compareEvalResults(report('t', trialsOf(9, 10), BASE), hanging);
+
+    expect(validateEvalResults(hanging, 10)).toHaveLength(1);
+    expect([comparison.verdict, comparison.rows[0]?.reason]).toEqual(['regressed', null]);
+    expect(renderEvalComparison(comparison)).toContain('`t1 deployment.hung` | 0 | 1 |');
+  });
+
+  // A run cancelled with trials open did not finish them: no result for or against the build, and no verdict.
+  test('a report with trials the run cancelled is incomplete, naming each and what held it', () => {
+    const cancelled = 'cancelled by SIGTERM, held by running shell job bgjob-server (workspace: node server.js) for 1450 s';
+    const text = report('t', [...trialsOf(8, 9), { pass: false, cancelled, heldBy: ['running shell job'], trial: 10 }], NEXT);
+
+    expect(() => validateEvalResults(text, 10)).toThrow(`t on workers-ai/@cf/zai-org/glm-5.3 (product) was cancelled with trials open: trial 10: ${cancelled}`);
+    expect(whyIncomplete(text, { trials: 10 })).toContain(`trial 10: ${cancelled}`);
+  });
+
+  test('a hang is counted by what held it, so a silent job is never read as a model hang', () => {
+    const job = { pass: false, hung: 'held by running shell job bgjob-server (workspace: node server.js)', heldBy: ['running shell job'] };
+    const run = { pass: false, hung: 'held by open run run-1', heldBy: ['open run'] };
+    const markdown = renderEvalComparison(compareEvalResults(report('t', trialsOf(10, 10), BASE), report('t', [...trialsOf(7, 8), job, run], NEXT)));
+
+    expect(markdown).toContain('`t1 deployment.hung (held by running shell job)` | 0 | 1 |');
+    expect(markdown).toContain('`t1 deployment.hung (held by open run)` | 0 | 1 |');
   });
 
   // A reset may be the build's own regression: never infrastructure, and a build that resets more is red even when

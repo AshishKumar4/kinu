@@ -10,11 +10,15 @@ export interface DeviceRequestChannel {
   report(requestId: string): void;
   /** Owning job, or null while foreground. Read per exec call, never captured: detach can happen between execs. */
   readonly owningJobId: string | null;
+  readonly detached: AbortSignal;
 }
 
 export class DeviceRequestOwnership implements DeviceRequestChannel {
+  constructor(readonly jobId: string) {}
+
   #issued: string[] = [];
   #owningJobId: string | null = null;
+  readonly #detached = new AbortController();
 
   /** Bound property: handed out bare and called with no receiver. */
   readonly report = (requestId: string): void => {
@@ -27,6 +31,10 @@ export class DeviceRequestOwnership implements DeviceRequestChannel {
     return this.#owningJobId;
   }
 
+  get detached(): AbortSignal {
+    return this.#detached.signal;
+  }
+
   /**
    * Hand this invocation to a job and take the ids to transfer. One synchronous step: flipping the owner
    * and taking the set in the same tick keeps a concurrent report from falling through both paths.
@@ -35,6 +43,7 @@ export class DeviceRequestOwnership implements DeviceRequestChannel {
     this.#owningJobId = jobId;
     const issued = this.#issued;
     this.#issued = [];
+    this.#detached.abort();
 
     return issued;
   }

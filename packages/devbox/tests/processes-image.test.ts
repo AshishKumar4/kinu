@@ -60,7 +60,7 @@ function running(command: string): number {
 test('a stop escalates past an ignored TERM and returns once the process group has exited', async () => {
   await processes.start(`trap '' TERM; touch /tmp/ignoring-term; while :; do sleep 1; done`, { cwd: '/', processId: 'ignores-term' });
   awaitHolds('ignores-term', '[ -f /tmp/ignoring-term ]');
-  const group = inContainer(name, ['cat', `${ROOT}/ignores-term/pid`]).stdout.trim();
+  const group = inContainer(name, ['cat', `${ROOT}/ignores-term/pid`]).stdout.trim().split(' ')[0];
 
   await processes.kill('ignores-term');
   awaitHolds('ignores-term', '[ -f "$d/exit" ]');
@@ -143,4 +143,39 @@ test('an exec whose answer was lost after the spawn runs once, however the retry
     first: { status: 'rejected', reason: expect.objectContaining({ message: expect.stringContaining('the answer to this exec was lost') }) },
     retried: 'lost-answer', launched: 1,
   });
+});
+
+test('a launched process records the boot it runs in, and reads as running in that boot', async () => {
+  await processes.start('sleep 7101', { cwd: '/', processId: 'this-boot' });
+  awaitHolds('this-boot', runs('sleep 7101'));
+  const boot = inContainer(name, ['cat', '/proc/sys/kernel/random/boot_id']).stdout.trim();
+
+  expect({
+    recorded: inContainer(name, ['cat', `${ROOT}/this-boot/pid`]).stdout.trim().split(' ')[1],
+    status: (await processes.get('this-boot'))?.status,
+  }).toEqual({ recorded: boot, status: 'running' });
+
+  await processes.kill('this-boot');
+});
+
+test('a record from another boot naming a live pid reads lost, and a stop never signals that pid', async () => {
+  // PID 1 lives in every boot: a pid file older than the boot, one naming another boot, and an old-form one from now.
+  const restored = inContainer(name, ['sh', '-c', `for id in restored foreign current; do mkdir -p ${ROOT}/$id; `
+    + `printf '{"id":"%s","command":"sleep 1","cwd":"/"}' $id > ${ROOT}/$id/process.json; ln -sf launched ${ROOT}/$id/launch; done; `
+    + `echo 1 > ${ROOT}/restored/pid; touch -d '2020-01-01' ${ROOT}/restored/pid; `
+    + `echo "1 00000000-0000-0000-0000-000000000000" > ${ROOT}/foreign/pid; echo 1 > ${ROOT}/current/pid`]);
+
+  if (restored.status !== 0) throw new Error(restored.stderr);
+  await processes.kill('restored');
+  await processes.kill('foreign');
+
+  const current = await processes.get('current');
+  inContainer(name, ['rm', '-rf', `${ROOT}/current`]);
+
+  expect({
+    restored: (await processes.get('restored'))?.status,
+    foreign: (await processes.get('foreign'))?.status,
+    current: current?.status,
+    init: inContainer(name, ['kill', '-0', '1']).status,
+  }).toEqual({ restored: 'failed', foreign: 'failed', current: 'running', init: 0 });
 });

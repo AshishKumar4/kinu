@@ -6,7 +6,7 @@ import { relayedAnswer, remoteContextTree } from '@kinu.run/core';
 import type { AgentOwnInspection, ArchiveSqlCursor, ContextEditor, ContextTree, StepSpendSource, ConversationRecall, PositionPageRequest, AgentSignal, AuthRequest, RelayedProvider, ProgrammaticTurn, ObservedCall, ProviderEnv, WorkMode, Memory, Executor, MissionBudgetPort } from '@kinu.run/core';
 import type { HostedSession } from '@nimbus-sh/worker/workspace-host';
 import type { AgentWorkspace } from './agent-facet/agent-turn';
-import type { AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, AgentTurnEnd, TurnRequestAt } from '@kinu.run/core';
+import type { AgentHeadDelta, AgentReview, AgentSnapshot, AgentToolCall, AgentTrace, AgentTurnEnd, TurnRequestAt } from '@kinu.run/core';
 import { attempt, KinuError, settle } from '@kinu.run/core/obs';
 import { Effect } from 'effect';
 import type { AgentFacet, AgentFacetCalls, AgentFacetEnv } from './agent-facet/agent-facet';
@@ -48,6 +48,7 @@ export class AgentWorkspaceHost extends RpcTarget implements AgentWorkspaceAnswe
   memory() { return this.answers.memory(); }
   program(turnId: string, ...args: Parameters<Executor['execute']>) { return this.answers.program(turnId, ...args); }
   traceTurn(turnId: string, event: AgentTrace) { return this.answers.traceTurn(turnId, event); }
+  traceStream(turnId: string, lines: ReadableStream<Uint8Array>) { return this.answers.traceStream(turnId, lines); }
   resume(turnId: string) { return this.answers.resume(turnId); }
   guard(turnId: string, ...args: Parameters<MissionBudgetPort['guard']>) { return this.answers.guard(turnId, ...args); }
   debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>) { return this.answers.debit(turnId, ...args); }
@@ -112,6 +113,7 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
   memory() { return relayedAnswer(this.host().memory()); }
   program(turnId: string, ...args: Parameters<Executor['execute']>) { return relayedAnswer(this.host().program(turnId, ...args)); }
   traceTurn(turnId: string, event: AgentTrace) { return relayedAnswer(this.host().traceTurn(turnId, event)); }
+  traceStream(turnId: string, lines: ReadableStream<Uint8Array>) { return relayedAnswer(this.host().traceStream(turnId, lines)); }
   resume(turnId: string) { return relayedAnswer(this.host().resume(turnId)); }
   guard(turnId: string, ...args: Parameters<MissionBudgetPort['guard']>) { return relayedAnswer(this.host().guard(turnId, ...args)); }
   debit(turnId: string, ...args: Parameters<MissionBudgetPort['debit']>) { return relayedAnswer(this.host().debit(turnId, ...args)); }
@@ -136,19 +138,29 @@ export class AgentWorkspaceRPC extends WorkerEntrypoint<Env, AgentWorkspaceProps
 
 const UIChunkSchema = v.custom<UIMessageChunk>((value) => v.is(v.looseObject({ type: v.string() }), value), 'a UI message chunk');
 
-export function uiChunks(lines: ReadableStream<Uint8Array>): ReadableStream<UIMessageChunk> {
+function jsonLines<T>(lines: ReadableStream<Uint8Array>, schema: v.GenericSchema<unknown, T>): ReadableStream<T> {
   const decoder = new TextDecoder();
   let partial = '';
 
-  return lines.pipeThrough(new TransformStream<Uint8Array, UIMessageChunk>({
+  return lines.pipeThrough(new TransformStream<Uint8Array, T>({
     transform: (bytes, controller) => {
       const complete = (partial + decoder.decode(bytes, { stream: true })).split('\n');
 
       partial = complete.pop() ?? '';
 
-      for (const line of complete) if (line !== '') controller.enqueue(v.parse(UIChunkSchema, JSON.parse(line)));
+      for (const line of complete) if (line !== '') controller.enqueue(v.parse(schema, JSON.parse(line)));
     },
   }));
+}
+
+export function uiChunks(lines: ReadableStream<Uint8Array>): ReadableStream<UIMessageChunk> {
+  return jsonLines(lines, UIChunkSchema);
+}
+
+const HeadDeltaSchema = v.object({ kind: v.picklist(['text', 'reasoning']), delta: v.string() });
+
+export function headDeltas(lines: ReadableStream<Uint8Array>): ReadableStream<AgentHeadDelta> {
+  return jsonLines(lines, HeadDeltaSchema);
 }
 
 export function agentStateShellId(storageKey: string): string {

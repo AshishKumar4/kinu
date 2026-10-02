@@ -110,6 +110,33 @@ async function deps(model: LanguageModel, over?: Partial<HeadInferenceDeps>): Pr
   };
 }
 
+describe('a head is admitted against its model\'s window as the catalog reports it', () => {
+  test('a prompt past the table\'s figure but inside the catalog\'s runs', async () => {
+    // The table measures llama-4 at 131k; this catalog reports 1M, as an actor's own turn would be admitted against.
+    const input = { ...headInput(), task: 'x'.repeat(600_000) };
+
+    const model = scriptedTurnModel({
+      provider: 'workers-ai.chat',
+      modelId: '@cf/meta/llama-4-scout',
+      doGenerate: async () => ({
+        content: [{ type: 'text' as const, text: 'read it all' }],
+        finishReason: { unified: 'stop' as const, raw: undefined },
+        usage: {
+          inputTokens: { total: 5, noCache: 5, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 3, text: 3, reasoning: undefined },
+        },
+        warnings: [],
+      }),
+    });
+
+    const report = await runHeadInference(input, await deps(model, {
+      window: { contextWindow: 1_048_576, modelOutputLimit: null, windowMeasured: true },
+    }));
+
+    expect([report.status, report.errorMessage]).toEqual(['completed', undefined]);
+  });
+});
+
 describe('a running head publishes what it is producing', () => {
   test('both halves of a step reach the channel, each tagged with its own kind', async () => {
     const frames: Frame[] = [];

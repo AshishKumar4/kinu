@@ -232,6 +232,14 @@ export function hasInfrastructureFailure(assertion: Assertion): boolean {
     || run.output.turns.some((turn) => turn.outcome.status === 'error');
 }
 
+/** The cancelled turn of a trial the run's cancel ended while it was open, which names what held its workspace. */
+function cancellation(assertion: Assertion): string | null {
+  const run = assertion.meta.harness.run;
+  const turn = run.output.turns.find(({ outcome }) => outcome.status === 'cancelled');
+
+  return turn === undefined ? null : `trial ${String(run.session.metadata.trial)}: ${turn.outcome.message ?? 'cancelled'}`;
+}
+
 function infrastructureMessage(assertion: Assertion): string {
   const run = assertion.meta.harness.run;
   const turn = run.output.turns.find(({ outcome }) => outcome.status === 'error');
@@ -244,10 +252,12 @@ function stats({ assertions }: Cohort): EvalStats {
   const metrics = runs.map((run) => run.output.metrics);
   const cost = totalCostUsd(runs);
 
-  // A turn the deployment refused or reset failed on the build, so it is listed with the checks, its answer as the evidence.
+  // A turn the deployment refused, reset or hung failed on the build, so it is listed with the checks, its answer as the
+  // evidence; a hang under what held it, so a job left running is not read as a model gone silent.
   const failedChecks = countBy(runs.flatMap((run) => run.output.turns.flatMap((turn, index) => [
-    ...turn.outcome.status === 'refused' || turn.outcome.status === 'reset'
-      ? [{ id: `deployment.${turn.outcome.status}`, evidence: turn.outcome.message }]
+    ...turn.outcome.status === 'refused' || turn.outcome.status === 'reset' || turn.outcome.status === 'hung'
+      ? [{ id: `deployment.${turn.outcome.status}${turn.outcome.heldBy === undefined ? '' : ` (held by ${turn.outcome.heldBy.join(', ')})`}`,
+        evidence: turn.outcome.message }]
       : [],
     ...turn.checks.filter((check) => !check.pass),
   ].map((check) => ({
@@ -307,6 +317,12 @@ export function validateEvalResults(text: string, expectedTrials: number): { tas
     if (numbers.length !== expectedTrials || numbers.some((number, index) => number !== index + 1)) {
       throw new Error(`${cohort.taskId} on ${cohort.model} (${cohort.arm}) holds trials [${numbers.join(', ')}], `
         + `expected 1 to ${String(expectedTrials)} once each`);
+    }
+
+    const cancelled = cohort.assertions.flatMap((assertion) => cancellation(assertion) ?? []);
+
+    if (cancelled.length > 0) {
+      throw new Error(`${cohort.taskId} on ${cohort.model} (${cohort.arm}) was cancelled with trials open: ${cancelled.join(' | ')}`);
     }
 
     const broken = cohort.assertions.filter(hasInfrastructureFailure);

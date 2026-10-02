@@ -1,30 +1,11 @@
-/**
- * The one-click MCP presets, in a real browser: the three rows on the Plugins
- * page and inside the account modal's MCP panel, the OAuth preset's add call,
- * and the token preset's single field — each at desktop and phone width in
- * dark and light.
- *
- * What only a browser can say here: that the rows sit in the shipped list at
- * both widths, that the add control POSTs the preset id to the real add route
- * (the fixture keeps the roster, so the follow-up list read is what flips the
- * row's state), that the authorize URL the server returns is what
- * `window.open` is handed, and that the row grammar holds — one trailing
- * control per row, the account's holdings in the Installed strip, and no
- * endpoint anywhere on a row. Screenshots land in ~/kinu-logs/mcp-presets/
- * (outside the worktree).
- */
+/** Real-browser MCP preset addition, authorization and account holdings at both widths and themes. */
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
 import * as v from 'valibot';
 import type { Page } from 'puppeteer';
 import type { JsonValue } from '@kinu.run/core';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
-const SHOTS = join(import.meta.dir, '..', '..', '..', 'kinu-logs', 'mcp-presets');
-
-mkdirSync(SHOTS, { recursive: true });
 
 const VIEWPORTS = { desktop: { width: 1280, height: 860 }, mobile: { width: 390, height: 844 } } as const;
 
@@ -32,17 +13,11 @@ async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light
   const page = await gallery.newPage();
   await page.setViewport(VIEWPORTS[viewport]);
   await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), theme);
-  await page.goto(`${gallery.origin}/gallery.html?frame=${query}`, { waitUntil: 'networkidle0' });
+  await page.goto(`${gallery.origin}/gallery.html?frame=${query}`, { waitUntil: 'load' });
 
   return page;
 }
 
-async function shoot(page: Page, name: string): Promise<string> {
-  const path = join(SHOTS, `${name}.png`);
-  await page.screenshot({ path, fullPage: true });
-
-  return path;
-}
 
 /** The state word one preset row is in. */
 const presetStatus = (page: Page, id: string): Promise<string> =>
@@ -246,7 +221,7 @@ describe('MCP presets', () => {
 
   test('the preset row renders in the account modal and on the plugins page at both widths in both themes', async () => {
     await withGallery(async (gallery) => {
-      const shots: string[] = [];
+      
 
       for (const theme of ['dark', 'light'] as const) {
         for (const viewport of ['desktop', 'mobile'] as const) {
@@ -268,7 +243,7 @@ describe('MCP presets', () => {
             // control that adds it.
             expect(await presetStatus(modal, 'google')).toBe('Not added');
             expect(await modal.$('[data-plugin-source="google"] [data-plugin-add]')).not.toBeNull();
-            shots.push(await shoot(modal, `setupmodal-mcp-${viewport}-${theme}`));
+            
           } finally {
             await modal.close();
           }
@@ -302,14 +277,14 @@ describe('MCP presets', () => {
             // What the account holds, as the strip draws it: both connected
             // presets and both servers of its own.
             expect(await installedStrip(plugins)).toEqual(['GitHub', 'Cloudflare', 'linear', 'notion']);
-            shots.push(await shoot(plugins, `plugins-mcp-${viewport}-${theme}`));
+            
           } finally {
             await plugins.close();
           }
         }
       }
 
-      expect(shots.length).toBe(8);
+      
     });
   });
 });

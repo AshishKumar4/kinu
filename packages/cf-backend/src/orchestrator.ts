@@ -25,12 +25,12 @@ import {
   type BoundActor, type DynamicContext, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult, type HostedActor,
   type LoopOrigin, type NimbusSandboxHandle, type NodeHomeHost,
-  type SqlExec, type SqlValue, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
+  type SqlExec, type TeamToolDeps, type WorkspaceActor, type WriteObserver,
   isSubordinateOrigin,
   whenActorTakesInput,
 } from "@kinu.run/core";
 import { createHostedWorkspace, type HostedWorkspace, type WorkspaceTerminal } from "./workspace-host";
-import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, uiChunks, type AgentFacetPlacement } from "./agent-facets";
+import { agentFacet, agentStateShellId, AgentMemory, AgentStoreBroker, AgentWorkspaceHost, headDeltas, uiChunks, type AgentFacetPlacement } from "./agent-facets";
 import { providerBindingsOf } from "./providers/agent-registry";
 import { AgentTurns } from "./agent-turns";
 import type { AgentTurnActivity, AgentSnapshot, StoredRow } from '@kinu.run/core';
@@ -178,7 +178,7 @@ import {
   getRunTimeline, type TimelineSpan,
   getRunEvents, getRunEventText, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
   turnRequestIndex, turnRequestPage, type TurnRequestIndex, type TurnRequestPage, type AgentStores,
-  LiveReadsNotice, readsMovedByFiles, readsWrittenBy, sameDeviceStatus, type LiveRead,
+  LiveReadsNotice, readsMovedByFiles, readsWrittenBy, ROSTER_READS, sameDeviceStatus, type LiveRead,
   CHANGES_MOVED_EVENT, ChangeSetCache, getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline, restoreWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceBaselines, type WorkspaceDiffResult, type WorkspaceReviewResult,
   initChangeNotesTable, readChangeNotes, saveChangeNotes, sendChangeNotes,
@@ -251,8 +251,8 @@ import {
 import { EmailOutbox } from "@kinu.run/core";
 import { dispatchRecoveredNotice, type RecoveredNotice } from "./fiber-recovery";
 import {
-  acceptSandboxLifecycleFailure, initSandboxLifecycleTable,
-  type SandboxLifecycleFailureResult,
+  acceptSandboxLifecycleIncident, initSandboxLifecycleTable,
+  type SandboxLifecycleIncidentResult,
 } from "./sandbox-lifecycle";
 
 import type { RestoreStatus } from "@kinu.run/devbox";
@@ -464,7 +464,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** Lazy: the base constructor writes through `sql` before any field of this class exists. */
   private get liveReads(): LiveReadsNotice {
-    this._liveReads ??= new LiveReadsNotice((frame) => { this.broadcastToActor(null, frame); }, (flush) => { this.deferLiveReads(flush); });
+    this._liveReads ??= new LiveReadsNotice((frame) => { this.broadcastToActor(null, JSON.stringify(frame)); }, (flush) => { this.deferLiveReads(flush); });
 
     return this._liveReads;
   }
@@ -694,6 +694,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       holds: async (reference, turnId) => await (await this.agentCalls(reference.actorId)).holds(turnId),
       dynamic: (actor, profile, tools) => this.hostedActorDynamicContext(actor, profile, tools),
       pricing: (spec) => this.modelCatalog.pricing(spec),
+      window: (spec) => this.modelCatalog.windowFor(spec),
       accounts: () => this.config.getProviderAccounts(),
       live: (actorId) => this.liveActor(actorId),
     });
@@ -724,6 +725,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       memory: () => new AgentMemory(async () => (await this.actorHost().acquire(actorReferenceOf(this.liveAgentOf(actorId)))).runtime.memory),
       program: (turnId, ...args) => this.agentTurns.program(actorId, turnId, ...args),
       traceTurn: (turnId, event) => this.agentTurns.trace(actorId, turnId, event),
+      traceStream: (turnId, lines) => this.agentTurns.traceStream(actorId, turnId, headDeltas(lines)),
       resume: (turnId) => this.agentTurns.resume(actorId, turnId),
       guard: (turnId, ...args) => this.agentTurns.guard(actorId, turnId, ...args),
       debit: (turnId, ...args) => this.agentTurns.debit(actorId, turnId, ...args),
@@ -855,9 +857,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Immutable catalogs are shared by value; per-actor state (event log, governor, broadcast)
    * is built per actor in `actor-hosting.ts` and is never this object's own.
    */
-  /** The single adapter from the DO's `SqlStorage` to core's positional `SqlExec`. */
+  /** The single adapter from the DO's `SqlStorage` to core's positional `SqlExec`; its writes name the reads they move. */
   protected boundExec(): SqlExec {
-    return { exec: (query: string, ...bindings: SqlValue[]) => this.ctx.storage.sql.exec(query, ...bindings) };
+    return this.watchedExec;
   }
 
   private workspaceHostSeams(): WorkspaceHostSeams {
@@ -930,6 +932,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       exec: this.boundExec(),
       directory: this.workspaceActors(),
       turnInFlight: (reference) => this.hostedTurnInFlight(reference),
+      windowOf: (spec) => (spec === null ? this.modelCatalog.resolved() : this.modelCatalog.windowFor(spec)),
       infer: (reference, input, inference) => this.agentTurns.run(reference, input, inference),
       transaction: (body) => this.ctx.storage.transactionSync(body),
       roster: (actor) => new SubordinateRosterStore(this.watchedExec, actor.handle),
@@ -942,7 +945,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       priceAs: (actor, spec) => this.priceHostedModel(actor.handle, spec),
       suggestTitle: (mission) => this.suggestTitle(mission),
       taskProfile: (turn) => this.hostedTaskProfile(turn),
-      announce: () => { this.broadcastSubordinatesChanged(); },
+      announce: () => { this.liveReadsMoved(ROSTER_READS); },
       // The root's turns run on this object's own chat loop, not its hosted slot.
       scheduleDrain: (actor) => {
         if (actor.record.parentActorId === null) {
@@ -1146,7 +1149,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
       // The workspace's purpose, shared by every actor in it.
       ownMission: () => this.ownMission(),
       createName: mintSubordinateName,
-      broadcast: (event) => this.broadcastSubordinatesChanged(event),
+      rosterMoved: () => { this.liveReadsMoved(ROSTER_READS); },
       broadcastTask: (event) => this.broadcastSubordinateEvent({
         kind: 'task',
         ...event,
@@ -1352,6 +1355,17 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
 
   /** A lease from before this activation lost its runner; effects dedupe on rerun. */
   private rependDeadActivationLeases(): void {
+    // Looked for first: every wake runs this, and a write tells each open page its agents moved.
+    const dead = this.boundExec().exec(
+      `SELECT 1 FROM agent_log
+       WHERE kind = 'event' AND variant = 'subordinate_task' AND turn_id LIKE 'evt-%'
+         AND consumed_at IS NOT NULL AND consumed_at < ?
+       LIMIT 1`,
+      this.activationStartedAt,
+    ).toArray();
+
+    if (dead.length === 0) return;
+
     const rows = this.boundExec().exec(
       `UPDATE agent_log SET turn_id = NULL, step_idx = NULL, consumed_at = NULL
        WHERE kind = 'event' AND variant = 'subordinate_task' AND turn_id LIKE 'evt-%'
@@ -2850,7 +2864,7 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
   @callable()
   async listWorkspaceAgents(): Promise<PanelAgent[]> {
     return readWorkspaceAgents({
-      sql: this.boundSql, exec: this.ctx.storage.sql, root: this.actorHandle(), rootLabel: 'Main',
+      sql: this.boundSql, exec: this.ctx.storage.sql, root: this.actorHandle(), rootLabel: 'Main', queued: this.chatTurnOwed,
       actors: this.workspaceActors().list({ retired: true }),
       figures: async (actorIds) => {
         const main = this.actorHandle().actorId;
@@ -5822,9 +5836,9 @@ export class OrchestratorAgent extends ActorAgent implements WorkspaceOwnerRpc {
    * Plain method (not `@callable`): only another DO calls it. `waitUntil` is a no-op in a DO, so work
    * happens in this invocation; the incident id makes caller retries safe.
    */
-  async acceptSandboxLifecycleFailure(body: JsonValue): Promise<SandboxLifecycleFailureResult> {
+  async acceptSandboxLifecycleIncident(body: JsonValue): Promise<SandboxLifecycleIncidentResult> {
 
-    return acceptSandboxLifecycleFailure({
+    return acceptSandboxLifecycleIncident({
       sql: this.boundSql,
       inbox: this.orch.inbox,
       // The workspace name is the only dimension the lifecycle module cannot know.

@@ -39,6 +39,9 @@ const STAGE_CONSEQUENCE = {
   quiesce: 'The container could not read its own process list, so it may rest without knowing '
     + 'whether a command you started is still running. If a command matters, check its result '
     + 'before you rely on it, and re-run it if it is missing.',
+  rest: 'Answer with sandbox.rest(\'now\') or sandbox.rest(\'keep\'). \'now\' saves the workspace and stops the '
+    + 'container: an unsupervised process listed ends and does not come back, and a supervised server restarts '
+    + 'cold on its next use, without its in-memory state. Until you answer, the container keeps running.',
 } satisfies Record<IncidentStage, string>;
 
 function isIncidentStage(name: string): name is IncidentStage {
@@ -54,7 +57,7 @@ export type SandboxLifecycleStage = IncidentStage;
 /** Required `attempts` cannot be derived here, so older envelopes are refused, never defaulted. */
 export const SANDBOX_LIFECYCLE_ENVELOPE_VERSION = 2;
 
-const SandboxLifecycleFailureSchema = v.strictObject({
+const SandboxLifecycleIncidentSchema = v.strictObject({
   version: v.literal(SANDBOX_LIFECYCLE_ENVELOPE_VERSION),
   incidentId: v.pipe(v.string(), v.minLength(1), v.maxLength(200)),
   /** The producer's delivery count (first is 1); never stored here. */
@@ -65,13 +68,13 @@ const SandboxLifecycleFailureSchema = v.strictObject({
   port: v.optional(v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65_535))),
 });
 
-export type SandboxLifecycleFailure = v.InferOutput<typeof SandboxLifecycleFailureSchema>;
+export type SandboxLifecycleIncident = v.InferOutput<typeof SandboxLifecycleIncidentSchema>;
 
 /**
  * The only delivery verdict: `status` uses devbox's `IncidentDisposition` verbatim, so the box and
  * this ledger cannot disagree about whether an announcement landed.
  */
-export type SandboxLifecycleFailureResult =
+export type SandboxLifecycleIncidentResult =
   | {
     /** `undelivered`: the row stays unannounced and the caller must offer it again. */
     readonly status: 'queued' | 'undelivered';
@@ -135,12 +138,12 @@ export interface SandboxLifecycleDeps {
 }
 
 /** `body` crossed a DO RPC boundary; this is its parse boundary. `rejected` is a caller bug, not transient. */
-export async function acceptSandboxLifecycleFailure(
+export async function acceptSandboxLifecycleIncident(
   deps: SandboxLifecycleDeps,
   body: JsonValue,
   now: number,
-): Promise<SandboxLifecycleFailureResult> {
-  const parsed = v.safeParse(SandboxLifecycleFailureSchema, body);
+): Promise<SandboxLifecycleIncidentResult> {
+  const parsed = v.safeParse(SandboxLifecycleIncidentSchema, body);
 
   if (!parsed.success) {
     // `refused`, not `failed`: `bad_input` is a refusal (core's CODE_IS_REFUSAL).
@@ -244,7 +247,7 @@ export async function acceptSandboxLifecycleFailure(
   };
 }
 
-function incidentWhere(incident: SandboxLifecycleFailure): string {
+function incidentWhere(incident: SandboxLifecycleIncident): string {
   if (incident.processId !== undefined) return ` (process ${incident.processId})`;
 
   if (incident.port !== undefined) return ` (port ${String(incident.port)})`;
@@ -252,7 +255,9 @@ function incidentWhere(incident: SandboxLifecycleFailure): string {
   return '';
 }
 
-function incidentText(incident: SandboxLifecycleFailure): string {
+function incidentText(incident: SandboxLifecycleIncident): string {
+  // Not a failure: the container would rest, and asks first (devbox D59).
+  if (incident.stage === 'rest') return `${incident.reason}\n${STAGE_CONSEQUENCE.rest}\n\nAsk id: ${incident.incidentId}`;
   const where = incidentWhere(incident);
 
   return `The workspace container failed at the ${incident.stage} stage${where}. `

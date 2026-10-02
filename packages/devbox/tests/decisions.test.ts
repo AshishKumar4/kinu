@@ -935,20 +935,19 @@ describe('the checkpoint lane — one checkpoint at a time', () => {
   test('concurrent callers of the SAME kind JOIN one operation', async () => {
     const lane = createCheckpointLane();
     let calls = 0;
-    const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
 
     const op = async (): Promise<CheckpointOutcome> => {
       calls += 1;
-      entered.resolve();
       await release.promise;
 
       return Promise.resolve(ok());
     };
 
     const first = lane.run('tick', op);
+    expect(lane.busy()).toBe(true);
+    expect(Bun.peek.status(first)).toBe('pending');
     const second = lane.run('tick', op);
-    await entered.promise;
     release.resolve();
     const [a, b] = await Promise.all([first, second]);
     expect(calls).toBe(1);
@@ -975,12 +974,10 @@ describe('the checkpoint lane — one checkpoint at a time', () => {
   test('a different kind QUEUES behind the running one; nothing interleaves', async () => {
     const lane = createCheckpointLane();
     const events: string[] = [];
-    const entered = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
 
     const slowTick = async (): Promise<CheckpointOutcome> => {
       events.push('tick:start');
-      entered.resolve();
       await release.promise;
       events.push('tick:end');
 
@@ -995,9 +992,9 @@ describe('the checkpoint lane — one checkpoint at a time', () => {
     };
 
     const first = lane.run('tick', slowTick);
+    expect(lane.busy()).toBe(true);
+    expect(Bun.peek.status(first)).toBe('pending');
     const second = lane.run('quiesce', quiesce);
-    await entered.promise;
-    expect(events).toEqual(['tick:start']);
     release.resolve();
     await Promise.all([first, second]);
     // A quiesce joining an in-flight tick could inherit `skipped` and stop over just-landed work;

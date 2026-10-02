@@ -69,7 +69,7 @@ const deps = async (
   const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('head-under-test', 'swarm');
 
   return {
-    actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
+    actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic, window: seat.window,
     model, tools: {}, capture: new HeadCapture(), clock: REAL_CLOCK, isAborted: () => false, ...over,
     workspaceLayout: over?.workspaceLayout ?? 'shared-workspace',
   };

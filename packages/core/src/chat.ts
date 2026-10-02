@@ -2,6 +2,7 @@
 
 import { withToolResultImages } from './providers/tool-result-images';
 import {
+  APICallError,
   NoOutputGeneratedError,
   streamText,
   type ModelMessage,
@@ -29,7 +30,7 @@ import { sanitizeAttachmentsForModel, type AttachmentPolicy, type MediaModality 
 import { assembleTurnMessages } from './orchestrator/turn-context';
 import { settleUnpairedToolCalls } from './prompting/interrupted-tool-calls';
 import type { LostToolCall } from './tools/effect-claim';
-import { contextWindowForModel, type ResolvedModelWindow } from './context-window';
+import { resolveModelWindow } from './context-window';
 import type { CountableRequest, InputTokenCount } from './providers/input-tokens';
 import { OUTPUT_LIMIT_REACHED } from './orchestrator/turn-lifecycle';
 import type { CompactionTrigger, ExtensionHost } from './extension';
@@ -383,8 +384,7 @@ class ProviderCall {
       }
 
       case 'error':
-        this.streamError = chunk.error;
-        this.streamedBeforeError = this.stepContent.length > 0 || this.dispatchedCalls.size > 0;
+        this.failed({ cause: chunk.error });
 
         return null;
 
@@ -410,6 +410,11 @@ class ProviderCall {
       default:
         return null;
     }
+  }
+
+  failed({ cause }: { readonly cause: unknown }): void {
+    this.streamError = cause;
+    this.streamedBeforeError = this.stepContent.length > 0 || this.dispatchedCalls.size > 0;
   }
 
   private toolDuration(toolCallId: string): { durationMs: number } | undefined {
@@ -468,19 +473,6 @@ function suppressDeferredRejections(
   for (const deferred of [result.steps, result.finishReason, result.rawFinishReason, result.totalUsage]) deferred.then(undefined, ignore);
 }
 
-/** The window this turn is admitted against, and its provenance; admission refuses only on a measured window
- *  (orchestrator/turn-context.ts). */
-function turnWindow(opts: ChatOptions): ResolvedModelWindow {
-  const table = contextWindowForModel(opts.modelContext?.id ?? '');
-
-  return {
-    contextWindow: opts.modelContext?.contextWindow ?? table.window,
-    windowMeasured: opts.modelContext?.windowMeasured ?? table.measured,
-    // An unreported allowance reserves nothing (prompting/step-prune.ts).
-    modelOutputLimit: opts.modelContext?.modelOutputLimit ?? null,
-  };
-}
-
 /** Provider prompt-cache plan; marker strategies re-roll tail breakpoints each step. Pass-through without opts.cache. */
 function turnCachePlan(opts: ChatOptions, turnMessages: readonly ModelMessage[]): CacheBreakpointPlan {
   return applyCacheBreakpoints({
@@ -533,7 +525,7 @@ async function admitRequest(opts: ChatOptions) {
   // Extension tools never shadow a caller tool of the same name.
   const tools = traceTools(opts.trace, extensions ? { ...extensions.tools(), ...opts.tools } : opts.tools);
   assertToolsSupportedByModel(opts.modelContext, Object.keys(tools));
-  const window = turnWindow(opts);
+  const window = resolveModelWindow(opts.modelContext?.id ?? '', opts.modelContext ?? null);
   const { contextWindow } = window;
 
   // Shared turn-context assembly (orchestrator/turn-context.ts); cf's beforeTurn runs the same function.
@@ -790,12 +782,12 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       }
     } catch (err) {
       // The signal is authoritative: a provider may throw its abort reason before `onAbort` runs.
-      if (!opts.signal?.aborted) {
+      if (opts.signal?.aborted) call.interrupted = true;
+      else if (APICallError.isInstance(err)) call.failed({ cause: err });
+      else {
         operation.failed({ cause: err });
         throw err;
       }
-
-      call.interrupted = true;
     } finally {
       // Drained to its end before the turn settles, so the persisted answer is not short of what the client saw.
       await observed;

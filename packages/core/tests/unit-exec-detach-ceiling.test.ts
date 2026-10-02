@@ -3,21 +3,29 @@
 import { describe, test, expect } from 'bun:test';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 import * as v from 'valibot';
-import { toolExecute, createTestActorsOver } from '@kinu.run/test-utils';
+import { toolExecute, createTestActorsOver, handClock, present } from '@kinu.run/test-utils';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';
 import type { ExecutorProvider } from '../src/execution/types';
 import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome } from '../src/jobs/index';
 import { isBackgroundHandle } from '../src/jobs/threshold';
 import { wrapToolsForBackground, type BackgroundableTool } from '../src/jobs/background-wrap';
 import { BACKGROUNDABLE_TOOLS } from '../src/orchestrator/background-tools';
-import { BackgroundJobRunner } from '../src/jobs/runner';
+import { BackgroundJobRunner, type BackgroundJobRunnerDeps } from '../src/jobs/runner';
+import { recordServingJobs, type PortHolders } from '../src/jobs/serving';
+import { listBackgroundJobs } from '../src/read-models/background-jobs';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/index';
 import { Inbox } from '../src/orchestrator/inbox';
 import { EventLog, initEventsHubTables } from '../src/events/hub/index';
 import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw, makeSqlExec } from './helpers';
+import { conversationsFor, createTestRuntime, makeSql, makeExecRaw, makeSqlExec } from './helpers';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
-import type { Schedule } from '../src/types/primitives';
+import type { Schedule, Shell, ShellExecResult } from '../src/types/primitives';
+import { withApprovalGatedShell } from '../src/execution/approval';
+import { DefaultExecutionRouter } from '../src/execution/router';
+import { JOB_STAMP_ENV } from '../src/types/jobs';
+import { createShellSession } from '../src/safety/approval-gate';
+import { buildBuiltinTools } from '../src/tools/builtins';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 
 interface ExecCall {
@@ -180,46 +188,53 @@ describe('every long-capable surface is declared backgroundable', () => {
   });
 });
 
+/** The real runner, Inbox and durable store, with a zero window unless `deps` says otherwise; only the fiber and
+ *  platform host are doubles. */
+function wholeChainRunner(deps: (store: BackgroundJobStore) => Partial<BackgroundJobRunnerDeps> = () => ({})) {
+  const db = new Database(':memory:');
+  initBackgroundJobsTable(makeExecRaw(db));
+  const hubSql = makeSqlExec(db);
+  initEventsHubTables(hubSql);
+  // One actor for job store and inbox: two handles would signal an inbox nothing drains.
+  const actor = createTestActorsOver(db).main;
+  const store = new BackgroundJobStore(makeSql(db), actor);
+
+  const bodies: Array<Promise<unknown>> = [];
+
+  const fiber: Schedule['fiber'] = async (_name, fn) => {
+    const body = fn({ stash: () => {}, snapshot: null });
+    bodies.push(body);
+
+    return body;
+  };
+
+  const enqueued: ProgrammaticTurn[] = [];
+
+  const host: BackendHost = {
+    broadcast: () => {},
+    enqueueTurn: async (turn) => {
+      enqueued.push(turn);
+
+      return { status: 'queued' };
+    },
+    turnInFlight: () => false,
+    setTimer: () => {},
+  };
+
+  const runner = new BackgroundJobRunner({
+    store, fiber, inbox: new Inbox(host), eventLog: new EventLog(hubSql, actor),
+    scheduleDrain: () => {}, logActivity: () => {},
+    // A zero window: the crossing is decided by the command not having finished, not by waiting.
+    policy: () => ({ ...BACKGROUND_POLICY.interactive, detachAfterMs: 0 }),
+    ...deps(store),
+  });
+
+  return { runner, store, bodies, enqueued };
+}
+
 describe('the settle wakes the agent — the whole chain, no doubles in the middle', () => {
   test("the training run detaches, settles, and enqueues the wake carrying its result", async () => {
-    // The real runner, Inbox and durable store over the real sandbox lane; only the fiber and platform host are doubles.
-    const db = new Database(':memory:');
-    initBackgroundJobsTable(makeExecRaw(db));
-    const hubSql = makeSqlExec(db);
-    initEventsHubTables(hubSql);
-    // One actor for job store and inbox: two handles would signal an inbox nothing drains.
-    const actor = createTestActorsOver(db).main;
-    const store = new BackgroundJobStore(makeSql(db), actor);
-
-    const bodies: Array<Promise<unknown>> = [];
-
-    const fiber: Schedule['fiber'] = async (_name, fn) => {
-      const body = fn({ stash: () => {}, snapshot: null });
-      bodies.push(body);
-
-      return body;
-    };
-
-    const enqueued: ProgrammaticTurn[] = [];
-
-    const host: BackendHost = {
-      broadcast: () => {},
-      enqueueTurn: async (turn) => {
-        enqueued.push(turn);
-
-        return { status: 'queued' };
-      },
-      turnInFlight: () => false,
-      setTimer: () => {},
-    };
-
-    const runner = new BackgroundJobRunner({
-      store, fiber, inbox: new Inbox(host), eventLog: new EventLog(hubSql, actor),
-      scheduleDrain: () => {}, logActivity: () => {},
-      // A zero window: the crossing is decided by the command not having finished, not by waiting.
-      policy: () => ({ ...BACKGROUND_POLICY.interactive, detachAfterMs: 0 }),
-    });
-
+    const { runner, store, bodies, enqueued } = wholeChainRunner();
     const container = fakeContainer();
     const provider = createSandboxExecutor(container.handle);
 
@@ -250,5 +265,157 @@ describe('the settle wakes the agent — the whole chain, no doubles in the midd
     expect(enqueued[0]?.metadata?.kinuEvent).toBe('background_job');
     expect(enqueued[0]?.metadata?.status).toBe('completed');
     expect(enqueued[0]?.text).toContain(jobId);
+  });
+});
+
+describe("a detached workspace command and the agent's next one", () => {
+  // eval-order-book-1-n99f4k, staging f75f06932, 2026-10-01: a `find /` outran the window and was detached, yet every
+  // later `ls`, `pwd` and `echo hello` waited behind it in the agent's shell session, outran the window in turn, and
+  // the eight such jobs filled the cap.
+  test('the next command runs at once, and the detached one keeps none of its cd', async () => {
+    const { runner, store, bodies } = wholeChainRunner();
+    const serving = Promise.withResolvers<ShellExecResult>();
+
+    // Nimbus's named shell: the first command serves until the suite stops it; any other answers at once.
+    const workspaceShell: Shell = {
+      exec: async (command) => (command.includes('serve') ? serving.promise : { stdout: `ran ${command}\n`, stderr: '', exitCode: 0 }),
+    };
+
+    const shellSession = createShellSession({ home: WORKSPACE_ROOT, userRoots: () => [], keepsCwd: true, stored: async () => WORKSPACE_ROOT });
+    const { rt } = createTestRuntime();
+    const shell = withApprovalGatedShell(workspaceShell, { filesOwner: 'agent', shellSession });
+
+    const wrapped = wrapToolsForBackground(
+      buildBuiltinTools({ rt: { ...rt, shell }, conversations: conversationsFor(rt) }),
+      { jobRunner: runner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS },
+    );
+
+    const run = toolExecute<{ command: string }, object | string>(present(wrapped.shell, 'the wrapped shell tool'));
+
+    const detached = await run({ command: 'cd /tmp/site && serve' });
+    expect(isBackgroundHandle(detached)).toBe(true);
+
+    // A handle here is the next command outrunning the window behind the first.
+    expect(await run({ command: 'echo next' })).toEqual(expect.stringContaining('ran echo next'));
+
+    serving.resolve({ stdout: 'stopped\n', stderr: '', exitCode: 0 });
+    await Promise.all(bodies);
+    expect(store.get(isBackgroundHandle(detached) ? detached.jobId : '')?.result).toContain('stopped');
+    expect((await shellSession.at()).cwd).toBe(WORKSPACE_ROOT);
+  });
+});
+
+/** The port the agent exposed. */
+const SERVED = 8001;
+
+describe('a sandbox command a job takes', () => {
+  // eval-site-preview-1-2ypddc, staging f75f06932, 2026-10-01: `node server.js` in the sandbox outran the window and
+  // its job read as running forever, though all it did was serve the port the agent then exposed. The command carries
+  // its job's id, so the sandbox's listener read can name the job that serves a port.
+  test("carries the id of the job it became in its environment", async () => {
+    const { runner, store, bodies } = wholeChainRunner();
+    const serving = Promise.withResolvers<{ stdout: string; exitCode: number }>();
+    const environments: Array<Record<string, string> | undefined> = [];
+
+    const handle: SandboxHandle = {
+      exec: (_command, opts) => {
+        environments.push(opts?.env);
+
+        return serving.promise;
+      },
+      readFile: async () => ({}),
+      writeFile: async () => {},
+      listFiles: async () => ({ files: [] }),
+      deleteFile: async () => {},
+      exposePort: async (port) => ({ url: `https://preview.example.com/${String(port)}`, port, route: { reached: true } }),
+      unexposePort: async () => {},
+      getExposedPorts: async () => [],
+      ...sandboxHandleLifecycle,
+    };
+
+    const router = new DefaultExecutionRouter();
+    router.register(createSandboxExecutor(handle, 'preview.example.com'));
+    const { rt } = createTestRuntime();
+
+    const wrapped = wrapToolsForBackground(
+      buildBuiltinTools({ rt: { ...rt, executionRouter: router }, conversations: conversationsFor(rt) }),
+      { jobRunner: runner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS },
+    );
+
+    const run = toolExecute<{ command: string; runtime: string; why: string }, object | string>(present(wrapped.shell, 'the wrapped shell tool'));
+    const detached = await run({ command: 'node server.js', runtime: 'sandbox', why: 'serve the site' });
+
+    if (!isBackgroundHandle(detached)) throw new Error(`the server call did not detach: ${JSON.stringify(detached)}`);
+    expect(environments).toEqual([{ [JOB_STAMP_ENV]: detached.jobId }]);
+    expect(store.get(detached.jobId)?.status).toBe('running');
+
+    serving.resolve({ stdout: 'stopped\n', exitCode: 0 });
+    await Promise.all(bodies);
+  });
+
+  // The listing reads a record the job's own moments write (029e6cc1b): its detach and its settle. The real 30 s
+  // window is crossed on a hand clock, not waited out.
+  test('is recorded serving the exposed port it holds when it detaches, and no longer once it settles', async () => {
+    const clock = handClock(Date.now());
+    const serving = Promise.withResolvers<{ stdout: string; exitCode: number }>();
+    let stamp: string | null = null;
+    let listening = true;
+
+    // The sandbox's exposed port, held by the command that carried `stamp` while it listens.
+    const sandbox: PortHolders = {
+      exposedPorts: async () => [SERVED],
+      holders: async (ports) => (listening && ports.includes(SERVED) ? [{ port: SERVED, stamp }] : []),
+    };
+
+    const settledRecords: Array<Promise<void>> = [];
+
+    const { runner, store, bodies } = wholeChainRunner((jobs) => ({
+      clock,
+      policy: () => BACKGROUND_POLICY.interactive,
+      // As the cf actor wires them: the detach waits on its record, the settle starts one.
+      onDetached: () => recordServingJobs(jobs, sandbox),
+      onSettled: () => { settledRecords.push(recordServingJobs(jobs, sandbox)); },
+    }));
+
+    const handle: SandboxHandle = {
+      // The server runs past its call's window: the window's time passes while it runs.
+      exec: (_command, opts) => {
+        stamp = opts?.env?.[JOB_STAMP_ENV] ?? null;
+        clock.advance(BACKGROUND_POLICY.interactive.detachAfterMs);
+
+        return serving.promise;
+      },
+      readFile: async () => ({}),
+      writeFile: async () => {},
+      listFiles: async () => ({ files: [] }),
+      deleteFile: async () => {},
+      exposePort: async (port) => ({ url: `https://preview.example.com/${String(port)}`, port, route: { reached: true } }),
+      unexposePort: async () => {},
+      getExposedPorts: async () => [],
+      ...sandboxHandleLifecycle,
+    };
+
+    const router = new DefaultExecutionRouter();
+    router.register(createSandboxExecutor(handle, 'preview.example.com'));
+    const { rt } = createTestRuntime();
+
+    const wrapped = wrapToolsForBackground(
+      buildBuiltinTools({ rt: { ...rt, executionRouter: router }, conversations: conversationsFor(rt) }),
+      { jobRunner: runner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS },
+    );
+
+    const run = toolExecute<{ command: string; runtime: string; why: string }, object | string>(present(wrapped.shell, 'the wrapped shell tool'));
+    const detached = await run({ command: 'node server.js', runtime: 'sandbox', why: 'serve the site' });
+
+    if (!isBackgroundHandle(detached)) throw new Error(`the server call did not detach: ${JSON.stringify(detached)}`);
+    expect(listBackgroundJobs(store).map(({ id, status }) => ({ id, status }))).toEqual([{ id: detached.jobId, status: 'serving' }]);
+
+    // The server stops: its job settles, and nothing holds the port.
+    listening = false;
+    serving.resolve({ stdout: 'stopped\n', exitCode: 0 });
+    await Promise.all(bodies);
+    await Promise.all(settledRecords);
+
+    expect(store.get(detached.jobId)).toMatchObject({ status: 'completed', serves: null });
   });
 });

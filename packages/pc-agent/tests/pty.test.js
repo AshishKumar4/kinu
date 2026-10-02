@@ -141,23 +141,22 @@ describe('a device terminal is a real one', () => {
     if (!flags.includes('m') || group !== foreground) throw new Error('Bun terminal spawn did not give bash job control and its controlling foreground group: ' + facts);
     process.stderr.write('PTY contract: bash owns the foreground; ' + facts + '\n');
 
+    // A pending SIGCONT must survive the interval between READY and the blocking wait.
     const program = [
-      'import signal, sys',
-      'def resumed(sig, frame):',
-      '    print(f"RESUMED:{313 * 17}", flush=True)',
-      '    sys.exit(0)',
-      'signal.signal(signal.SIGCONT, resumed)',
+      'import signal',
+      'signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGCONT})',
       'print(f"READY:{313 * 17}", flush=True)',
-      'signal.pause()',
+      'signal.sigwait({signal.SIGCONT})',
+      'print(f"RESUMED:{313 * 17}", flush=True)',
     ].join('\n');
 
-    // Parse fg in the original command: a Stopped line is not readline's input-admission completion.
-    h.sessions.write('pane-jobs', Buffer.from('python3 -c ' + shellQuote(program) + '; fg\r').toString('base64'));
+    h.sessions.write('pane-jobs', Buffer.from('python3 -c ' + shellQuote(program) + '\r').toString('base64'));
     await h.until(() => /(?:^|[\r\n])READY:5321(?=[\r\n]|$)/.test(Bun.stripANSI(h.output())));
     process.stderr.write('PTY contract: foreground program reported READY; sending Ctrl-Z\n');
     h.sessions.write('pane-jobs', Buffer.from('\u001a').toString('base64'));
     await h.until(() => /Stopped/.test(h.output()));
-    process.stderr.write('PTY contract: bash reported Stopped; awaiting the already-admitted fg response\n');
+    process.stderr.write('PTY contract: bash reported Stopped; sending fg and awaiting the program\'s SIGCONT response\n');
+    h.sessions.write('pane-jobs', Buffer.from('fg\r').toString('base64'));
     await h.until(() => /(?:^|[\r\n])RESUMED:5321(?=[\r\n]|$)/.test(Bun.stripANSI(h.output())));
   });
 

@@ -114,9 +114,10 @@ export function WorkTab({
 
   const openTasks = taskRows.filter(({ task }) => !isClosedTree(task));
   const closedTasks = taskRows.filter(({ task }) => isClosedTree(task));
-  const runningJobs = backgroundJobs.filter((job) => job.status === "running");
+  // A serving job still runs: it sits with the running ones, never in the settled journal.
+  const runningJobs = backgroundJobs.filter((job) => job.status === "running" || job.status === "serving");
   const helpers = useMemo(() => (agents?.list ?? []).filter((agent) => agent.category === "background"), [agents]);
-  const settledJobs = backgroundJobs.filter((job) => job.status !== "running");
+  const settledJobs = backgroundJobs.filter((job) => job.status !== "running" && job.status !== "serving");
 
   const journal = useMemo(
     () => buildJournal(settledJobs, closedTasks, changelog?.entries ?? []),

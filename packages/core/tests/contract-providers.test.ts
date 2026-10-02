@@ -335,7 +335,7 @@ describe('Codex provider contract', () => {
     expect(mock.requests[1].headers['authorization']).toBe('Bearer refreshed');
   });
 
-  test('a refresh the resolver refuses up front surfaces as the named remedy', async () => {
+  test('a refresh the resolver refuses up front surfaces as the dead login, by name', async () => {
     // The local store's refresh hit invalid_grant and throws from getAuth before any request; the answer is the
     // reconnect remedy.
     let wireCalls = 0;
@@ -369,7 +369,6 @@ describe('Codex provider contract', () => {
     }
 
     expect(failure).toContain('Your ChatGPT login is no longer valid');
-    expect(failure).toContain('kinu setup');
     // The opaque chain the resolver threw must not survive to the surface.
     expect(failure).not.toContain('Codex token refresh failed');
     expect(wireCalls).toBe(0);

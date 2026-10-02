@@ -79,8 +79,7 @@ let parityHold: { readonly gate: HeldGate; readonly parkAt: 'first' | 'partial' 
 /** The gate a parity call is parked on now, apart from the arm so release reaches it after consumption. */
 let parityParked: HeldGate | null = null;
 
-/** The wake proof's hold (`/wake/hold`): `start` parks before a turn's first step; `reply` parks the reply step
- *  carrying the detach handle; `settle` parks inside the just-closed turn's settle. */
+/** `start` holds genesis before its first step; `reply` holds the background-wake response carrying the detach handle. */
 let wakeHold: { readonly where: WakeHoldPlacement; readonly gate: HeldGate } | null = null;
 
 async function holdWakeWindow(where: WakeHoldPlacement): Promise<void> {

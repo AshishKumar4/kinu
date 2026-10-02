@@ -29,15 +29,16 @@ import { join } from 'node:path';
 import type { Server, ServerWebSocket } from 'bun';
 import * as v from 'valibot';
 
-import { isAgentRpcMethod, renderSoulMarkdown, type RunEvent, type JsonValue } from '../../packages/core/src/index';
+import { isAgentRpcMethod, READS_CHANGED_EVENT, renderSoulMarkdown, type RunEvent, type JsonValue } from '../../packages/core/src/index';
 import { DeploymentAnswer, EVAL_WEB_IDENTITY_ENV, INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
 import {
   decodeFrame, encodeChatRequest, encodeRpcRequest,
   recordPublicTurn, resolvePublicSessionPlan, resolveWebIdentity,
-  type PublicTurnRecorder,
-  KinuPublicSession, openPublicSession, WORKSPACE_LEASE_MS,
+  type PublicResponseFrame, type PublicTurnRecorder,
+  HeardStreams, KinuPublicSession, openPublicSession, WORKSPACE_LEASE_MS,
 } from './session';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
+import type { UIMessageChunk } from 'ai';
 import {
   BROADCAST_FRAME, FILE_TURN_CHUNKS, FIXTURE_REQUEST_ID,
   RECOVERY_TURN_CHUNKS, chatChunkFrame, chatErrorFrame, chatTerminalFrame, chatTurnFrames, rpcReplyFrame,
@@ -117,6 +118,41 @@ function socketOnly(request: Request, server: Server<undefined>): Response | und
 
   return new Response('not found', { status: 404 });
 }
+
+test("a helper's own jobs are the RPC's actor, and a helper dismissed since the roster was read has none", async () => {
+  const asked: unknown[][] = [];
+
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: socketOnly,
+    websocket: {
+      message(socket, message) {
+        const request = v.parse(RpcRequestFrameSchema, JSON.parse(message.toString()));
+
+        asked.push(request.args);
+
+        if (request.args[1] === 'gone-helper') {
+          socket.send(rpcReplyFrame({ requestId: request.id, error: '"gone-helper" is not an agent of this workspace.' }));
+
+          return;
+        }
+
+        socket.send(rpcReplyFrame({ requestId: request.id, result: [{ id: 'bgjob-tests', kind: 'shell', status: 'running', label: 'workspace: npm test', createdAt: 1 }] }));
+      },
+    },
+  });
+
+  const session = new KinuPublicSession({ origin: server.url.origin, identity: { kind: 'loopback' },
+    workspace: 'probe', purpose: 'helper jobs probe',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  try {
+    await session.connect();
+    expect((await session.backgroundJobs('task-helper')).map((job) => job.id)).toEqual(['bgjob-tests']);
+    expect(await session.backgroundJobs('gone-helper')).toEqual([]);
+    expect(await session.backgroundJobs()).toHaveLength(1);
+    expect(asked).toEqual([[50, 'task-helper'], [50, 'gone-helper'], [50]]);
+  } finally { await session.teardown(); await server.stop(true); }
+});
 
 test('executor RPC decoding preserves refusal provenance and successful refusal-shaped stdout', async () => {
   let response: JsonValue = { stdout: 'failed', stderr: 'remote error', exitCode: 1,
@@ -233,6 +269,58 @@ test('an rpc after the platform closed the idle socket redials and answers, neve
   } finally { await session.teardown(); await server.stop(true); }
 });
 
+// What the settle reads again on, and what keeps two reads from counting as quiet (`workspace-completion.ts`).
+test('a frame naming a live read moves that read before the answer to a later call, and a socket opened moves every read', async () => {
+  let firstServerSocket: ServerWebSocket | undefined;
+
+  const lead = {
+    key: 'main', label: 'Main', category: 'main', activity: 'working', parent: null, open: { kind: 'chat', path: null }, tab: true,
+    input: true, actorId: 'actor-main', figures: { tokens: null, usd: null, wallMs: null, cacheEma: null },
+  };
+
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: socketOnly,
+    websocket: {
+      open(socket) { firstServerSocket ??= socket; },
+      message(socket, message) {
+        const request = v.parse(RpcRequestFrameSchema, JSON.parse(message.toString()));
+
+        // Never answered: its rejection is the close landing.
+        if (request.method === 'listSubordinates') return;
+        // The tick that wrote ends with its frame, ahead of the answer to any call after the write.
+        socket.send(JSON.stringify({ type: READS_CHANGED_EVENT, reads: ['listBackgroundJobs', 'getMemoryContent'] }));
+        socket.send(rpcReplyFrame({ requestId: request.id, result: [lead] }));
+      },
+    },
+  });
+
+  const session = new KinuPublicSession({ origin: server.url.origin, identity: { kind: 'loopback' },
+    workspace: 'probe', purpose: 'reads moved probe',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  const moved = () => [session.readsMoved(['listBackgroundJobs']), session.readsMoved(['listWorkspaceAgents'])];
+
+  try {
+    await session.connect();
+    const moving = session.readsMoving;
+
+    // The agents read is one the room serves a workspace socket.
+    expect(isAgentRpcMethod('listWorkspaceAgents')).toBe(true);
+    expect(moved()).toEqual([1, 1]);
+    expect(await session.agents()).toEqual([{ label: 'Main', category: 'main', activity: 'working', open: { kind: 'chat', path: null } }]);
+    expect(moving.aborted).toBe(true);
+    expect(moved()).toEqual([2, 1]);
+
+    const held = session.subordinates();
+    firstServerSocket?.close(1012, 'instance no longer active');
+    await expect(held).rejects.toThrow('the workspace socket closed (code 1012, instance no longer active)');
+
+    // A frame sent while no socket was open is lost: the redial moves every read.
+    await session.agents();
+    expect(moved()).toEqual([4, 2]);
+  } finally { await session.teardown(); await server.stop(true); }
+});
+
 test('a turn survives a dropped socket: the redial resumes its stream and the answer lands', async () => {
   // Browser parity: the socket drops mid-turn (1006 at the edge), the turn is durable up there, and
   // the redial's stream-resume frames finish it. Unfixed, the close rejected the turn and cost the trial.
@@ -300,6 +388,237 @@ test('a turn survives a dropped socket: the redial resumes its stream and the an
     if (result.landed !== 'turn') throw new Error('expected the turn itself to land');
     expect(result.text).toBe('Wrote note.txt.');
     expect(upgrades).toBe(2);
+  } finally { await session.teardown(); await server.stop(true); }
+});
+
+test('a tool call is in flight from its input to its last output, and only while its turn is heard', async () => {
+  // The ledger writes a call only at its end: on 2026-10-01 a lead's `agents` hire ran 840 s with nothing written.
+  const opened = Promise.withResolvers<(frames: readonly string[]) => void>();
+  let requestId = '';
+
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1',
+    fetch(request, upgrading) {
+      if (request.method === 'DELETE') return Response.json({ ok: true });
+
+      if (upgrading.upgrade(request)) return;
+
+      return new Response('Not found', { status: 404 });
+    },
+    websocket: {
+      message(socket, message) {
+        requestId = v.parse(ChatRequestFrameSchema, JSON.parse(message.toString())).id;
+        opened.resolve((frames) => { for (const frame of frames) socket.send(frame); });
+      },
+    },
+  });
+
+  const session = new KinuPublicSession({
+    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'tool calls in flight',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  // A stage is over once its last frame reached the session.
+  const stage = async (send: (frames: readonly string[]) => void, chunks: readonly UIMessageChunk[], done = false) => {
+    const heard = Promise.withResolvers<void>();
+    const last = done ? 'done' : chunks.at(-1)?.type;
+
+    session.onChunk = (type) => { if (type === last) heard.resolve(); };
+
+    send([...chunks.map((chunk) => chatChunkFrame({ requestId, chunk })), ...done ? [chatTerminalFrame({ requestId })] : []]);
+    await heard.promise;
+  };
+
+  try {
+    await session.connect();
+    const turn = session.submit('Hire a helper.').settled;
+    const send = await opened.promise;
+
+    await stage(send, [{ type: 'start' }, { type: 'start-step' }, { type: 'tool-input-available', toolCallId: 'call-hire', toolName: 'agents', input: {} }]);
+    expect(session.toolCallsInFlight()).toEqual(['call-hire']);
+    await stage(send, [{ type: 'tool-output-available', toolCallId: 'call-hire', output: 'hired', preliminary: true }]);
+    expect(session.toolCallsInFlight()).toEqual(['call-hire']);
+    await stage(send, [
+      { type: 'tool-output-available', toolCallId: 'call-hire', output: 'the helper answered' },
+      { type: 'tool-input-available', toolCallId: 'call-shell', toolName: 'shell', input: {} },
+    ]);
+    expect(session.toolCallsInFlight()).toEqual(['call-shell']);
+    await stage(send, [
+      { type: 'tool-approval-request', approvalId: 'approval-1', toolCallId: 'call-shell' },
+      { type: 'tool-input-available', toolCallId: 'call-file', toolName: 'file', input: {} },
+    ]);
+    expect(session.toolCallsInFlight()).toEqual(['call-file']);
+    await stage(send, [{ type: 'finish-step' }, { type: 'finish' }], true);
+    await turn;
+    expect(session.toolCallsInFlight()).toEqual([]);
+  } finally { await session.teardown(); await server.stop(true); }
+});
+
+/** One frame of `stream` as the decoder hands it on: `chunk` its body, the rest as the deployment set them. */
+function heardFrame(stream: string, chunk: UIMessageChunk | null, extra: Omit<PublicResponseFrame, 'id' | 'body'> = {}): PublicResponseFrame {
+  return { id: stream, ...(chunk === null ? { body: '' } : { body: JSON.stringify(chunk) }), ...extra };
+}
+
+describe('a socket hears the streams of its room', () => {
+  test('a call runs from its input to its last output, per stream, and its stream\'s end ends it', () => {
+    const heard = new HeardStreams();
+
+    heard.hear('turn', heardFrame('turn', { type: 'tool-input-available', toolCallId: 'hire', toolName: 'agents', input: {} }));
+    heard.hear('wake', heardFrame('wake', { type: 'tool-input-available', toolCallId: 'build', toolName: 'shell', input: {} }));
+    heard.hear('turn', heardFrame('turn', { type: 'tool-output-available', toolCallId: 'hire', output: 'hired', preliminary: true }));
+    expect(heard.running()).toEqual(['hire', 'build']);
+
+    heard.hear('turn', heardFrame('turn', { type: 'tool-output-available', toolCallId: 'hire', output: 'the helper answered' }));
+    heard.hear('wake', heardFrame('wake', { type: 'tool-approval-request', approvalId: 'approval', toolCallId: 'build' }));
+    heard.hear('wake', heardFrame('wake', { type: 'tool-input-available', toolCallId: 'test', toolName: 'shell', input: {} }));
+    expect(heard.running()).toEqual(['test']);
+
+    heard.hear('wake', heardFrame('wake', null, { done: true }));
+    expect(heard.running()).toEqual([]);
+  });
+
+  test('a replay is not live output, and the calls it sends again run as the stream left them', () => {
+    const heard = new HeardStreams();
+    const call: UIMessageChunk = { type: 'tool-input-available', toolCallId: 'install', toolName: 'shell', input: {} };
+
+    expect(heard.hear('wake', heardFrame('wake', call, { replay: true }))).toEqual({ live: false, chunk: { type: call.type, toolCallId: 'install' } });
+    expect(heard.hear('wake', heardFrame('wake', { type: 'text-delta', id: 'text', delta: 'npm i' })).live).toBe(true);
+    expect(heard.running()).toEqual(['install']);
+  });
+});
+
+test("every live frame of the workspace's room is heard: the turn's own, a turn the product opened, a head's; no replay", async () => {
+  const other: string[] = [];
+
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: socketOnly,
+    websocket: {
+      message(socket, message) {
+        const requestId = v.parse(ChatRequestFrameSchema, JSON.parse(message.toString())).id;
+        const wake = (chunk: UIMessageChunk, again = false) => chatChunkFrame({ requestId: 'wake-1', chunk, replay: again });
+
+        // A background job's wake streaming beside the turn, a swarm node's words and its landed step, then the turn.
+        for (const frame of [
+          wake({ type: 'start' }, true), wake({ type: 'start' }), wake({ type: 'text-delta', id: 'text', delta: 'The job finished.' }),
+          chatTerminalFrame({ requestId: 'wake-1' }),
+          JSON.stringify({ type: 'head_stream', headId: 'node-1', kind: 'text', delta: 'Reading doc-001.' }),
+          JSON.stringify({ type: 'head_activity', headId: 'node-1' }),
+          BROADCAST_FRAME,
+          ...chatTurnFrames({ requestId, chunks: FILE_TURN_CHUNKS }),
+        ]) socket.send(frame);
+      },
+    },
+  });
+
+  const session = new KinuPublicSession({
+    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'rooms heard',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  session.onHeard = (room, type) => { other.push(`${room ?? 'workspace'} ${type}`); };
+
+  try {
+    await session.connect();
+    expect(session.heard()).toBe(0);
+    await session.submit('Write note.txt.').settled;
+
+    // The wake's three live frames, the head's two, and the turn's chunks with its terminal frame.
+    expect(session.heard()).toBe(3 + 2 + FILE_TURN_CHUNKS.length + 1);
+    expect(other).toEqual(['workspace start', 'workspace text-delta', 'workspace done', 'workspace head_stream', 'workspace head_activity']);
+  } finally { await session.teardown(); await server.stop(true); }
+});
+
+test('a socket that meets a turn the product opened acknowledges it, and hears the rest of it live', async () => {
+  const acked: string[] = [];
+  const call: UIMessageChunk = { type: 'tool-input-available', toolCallId: 'install', toolName: 'shell', input: {} };
+
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: socketOnly,
+    websocket: {
+      // A background job's wake streams when the socket opens: the deployment announces it and holds its live chunks back.
+      open(socket) { socket.send(streamResumingFrame('wake-1', 'wake-turn')); },
+      message(socket, message) {
+        const frame = v.parse(v.looseObject({ type: v.string(), id: v.string() }), JSON.parse(message.toString()));
+
+        if (frame.type === CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK) {
+          acked.push(frame.id);
+          socket.send(chatChunkFrame({ requestId: 'wake-1', chunk: call, replay: true }));
+          socket.send(chatChunkFrame({ requestId: 'wake-1', chunk: { type: 'text-delta', id: 'text', delta: 'Installing.' } }));
+
+          return;
+        }
+
+        socket.send(rpcReplyFrame({ requestId: v.parse(RpcRequestFrameSchema, JSON.parse(message.toString())).id, result: [] }));
+      },
+    },
+  });
+
+  const session = new KinuPublicSession({
+    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'a wake met mid-stream',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  try {
+    await session.connect();
+    // Each read is answered after every frame sent before it: the first after the announcement, so the second goes out
+    // after any acknowledgement, and the third is answered after what the acknowledgement brought.
+    await session.backgroundJobs();
+    await session.backgroundJobs();
+    expect(acked).toEqual(['wake-1']);
+    await session.backgroundJobs();
+
+    expect(session.heard()).toBe(1);
+    expect(session.toolCallsInFlight()).toEqual(['install']);
+  } finally { await session.teardown(); await server.stop(true); }
+});
+
+test("a working helper is heard in its own room, on a socket that closes when the watch stops listening", async () => {
+  const opened = Promise.withResolvers<string>();
+  const closed = Promise.withResolvers<void>();
+  const heardHelper = Promise.withResolvers<void>();
+
+  const server = Bun.serve<{ path: string; room: boolean }>({ port: 0, hostname: '127.0.0.1',
+    fetch(request, upgrading) {
+      if (request.method === 'DELETE') return Response.json({ ok: true });
+      const path = new URL(request.url).pathname;
+
+      if (upgrading.upgrade(request, { data: { path, room: path.includes('/actor/') } })) return;
+
+      return new Response('not found', { status: 404 });
+    },
+    websocket: {
+      open(socket) {
+        if (!socket.data.room) return;
+        opened.resolve(socket.data.path);
+
+        // The helper's turn, as its window hears it: a call it started, then its words.
+        for (const chunk of [{ type: 'start' }, { type: 'start-step' },
+          { type: 'tool-input-available', toolCallId: 'helper-call', toolName: 'shell', input: {} },
+          { type: 'text-delta', id: 'text', delta: 'Counting signups.' }] satisfies UIMessageChunk[]) {
+          socket.send(chatChunkFrame({ requestId: 'helper-turn', chunk }));
+        }
+      },
+      message() { /* the room is only listened to */ },
+      close(socket) { if (socket.data.room) closed.resolve(); },
+    },
+  });
+
+  const session = new KinuPublicSession({
+    origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'a helper heard',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  session.onHeard = (room, type) => { if (room === 'task-helper' && type === 'text-delta') heardHelper.resolve(); };
+
+  try {
+    await session.connect();
+    session.listen(['task-helper']);
+    expect(await opened.promise).toBe('/agents/orchestrator-agent/probe/actor/task-helper');
+    await heardHelper.promise;
+
+    expect(session.heard()).toBe(4);
+    expect(session.toolCallsInFlight()).toEqual(['helper-call']);
+
+    session.listen([]);
+    expect(session.toolCallsInFlight()).toEqual([]);
+    await closed.promise;
   } finally { await session.teardown(); await server.stop(true); }
 });
 

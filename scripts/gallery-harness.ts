@@ -210,6 +210,7 @@ interface OpenWait {
   readonly requests: ReadonlySet<string>;
   /** Everything that went wrong on the page since it opened: uncaught errors, console errors, failed and refused requests. */
   readonly faults: readonly string[];
+  readonly lastInput: () => string | null;
   reported: boolean;
   /** The page was asked what it shows and has not answered. */
   asking: boolean;
@@ -272,6 +273,7 @@ async function reportStuck(open: OpenWait): Promise<void> {
   const faults = open.faults.length === 0 ? 'none' : JSON.stringify(open.faults.slice(-12));
 
   process.stderr.write(`gallery-harness: faults since the page opened (${open.condition}): ${faults}\n`);
+  process.stderr.write(`gallery-harness: last native input (${open.condition}): ${open.lastInput() ?? 'none'}\n`);
   process.stderr.write('unread' in view
     ? `gallery-harness: the page could not be read (${open.condition}): ${view.unread}; screenshot: ${taken}\n`
     : `gallery-harness: the page shows (${open.condition}): readyState: ${view.readyState}, elements: ${String(view.elements)}, `
@@ -495,6 +497,33 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
       const page = await browser.newPage();
       const waitForSelector = page.waitForSelector.bind(page);
       const waitForFunction = page.waitForFunction.bind(page);
+      let lastInput: string | null = null;
+      page.on('console', (message) => {
+        const text = message.text();
+
+        if (text.startsWith('gallery-native-input:')) lastInput = text.slice('gallery-native-input:'.length);
+      });
+
+      await page.evaluateOnNewDocument(() => {
+        const describe = (element: Element | null) => element === null ? null : ({
+          tag: element.tagName,
+          attributes: Object.fromEntries(element.getAttributeNames().filter((name) => name === 'id' || name === 'role' || name === 'aria-label' || name.startsWith('data-')).map((name) => [name, element.getAttribute(name)])),
+        });
+
+        const record = (event: MouseEvent) => {
+          const target = event.target instanceof Element ? event.target : null;
+
+          console.debug('gallery-native-input:' + JSON.stringify({
+            kind: event.type, x: event.clientX, y: event.clientY, button: event.button,
+            target: describe(target), control: describe(target?.closest('button, a, input, textarea') ?? null),
+            atPoint: describe(document.elementFromPoint(event.clientX, event.clientY)),
+          }));
+        };
+
+        document.addEventListener('pointerdown', record, true);
+        document.addEventListener('click', record, true);
+      });
+
       const goto = page.goto.bind(page);
       const requests = new Set<string>();
 
@@ -580,22 +609,16 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>, opt
       page.waitForSelector = async (selector, waitOptions) => {
         const condition = `${selector} on ${page.url()}`;
 
-        return recorded(
-          { condition, page, requests, faults },
-          () => untilEnded(unlessBlank(condition, waitForSelector(selector, waitOptions))),
-        );
+        return recorded({ condition, page, requests, faults, lastInput: () => lastInput }, () => untilEnded(unlessBlank(condition, waitForSelector(selector, waitOptions))));
       };
 
       page.waitForFunction = async (predicate, waitOptions, ...args) => {
         const condition = `${String(predicate).replace(/\s+/gu, ' ')} on ${page.url()}`;
 
-        return recorded(
-          { condition, page, requests, faults },
-          () => untilEnded(unlessBlank(condition, waitForFunction(predicate, waitOptions, ...args))),
-        );
+        return recorded({ condition, page, requests, faults, lastInput: () => lastInput }, () => untilEnded(unlessBlank(condition, waitForFunction(predicate, waitOptions, ...args))));
       };
 
-      page.goto = async (url, gotoOptions) => recorded({ condition: `load of ${url}`, page, requests, faults }, () => untilEnded(goto(url, gotoOptions)));
+      page.goto = async (url, gotoOptions) => recorded({ condition: `load of ${url}`, page, requests, faults, lastInput: () => lastInput }, () => untilEnded(goto(url, gotoOptions)));
 
       return page;
     };

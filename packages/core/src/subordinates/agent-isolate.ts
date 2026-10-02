@@ -44,6 +44,7 @@ export interface PreparedAgentTurn {
   readonly runId: string;
   readonly birthContext?: readonly ModelMessage[];
   readonly model: string;
+  readonly window: HeadInferenceDeps['window'];
   readonly pricing: ModelPricing | null;
   readonly accounts: Readonly<Record<string, string>>;
   readonly scaffold: StoredRow;
@@ -98,9 +99,16 @@ export interface AgentToolAnswer {
   readonly dynamic: DynamicContext;
 }
 
-export type AgentTrace =
-  | { readonly kind: 'step'; readonly sequence: number; readonly step: HeadStep }
-  | { readonly kind: HeadStreamKind; readonly delta: string };
+export interface AgentTrace {
+  readonly kind: 'step';
+  readonly sequence: number;
+  readonly step: HeadStep;
+}
+
+export interface AgentHeadDelta {
+  readonly kind: HeadStreamKind;
+  readonly delta: string;
+}
 
 export interface AgentTurnEnd extends Omit<HeadReport, 'errorMessage'> {
   readonly activity: readonly AgentTurnActivity[];

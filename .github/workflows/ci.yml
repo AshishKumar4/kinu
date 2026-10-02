@@ -1,25 +1,9 @@
 name: CI
 
-# This workflow deliberately enumerates NO suites and NO gates.
-#
-# A hand-written step list here drifts from `scripts/deploy.sh` and a green
-# badge hides the drift. Measured 2026-08-17 at 5183d69d, one ran 339 of the
-# repository's 400 tracked test files while deploy.sh ran 395 — skipping
-# packages/compaction (95 tests), agent-utils (12), pc-agent (6), 41 of 42
-# `cli` files, the whole root `tests/` directory, and `bun run layergate`
-# entirely. The written reasons rot with it: PTY tests needing a terminal keep
-# the whole packages/cli suite out, and that suite runs headless at 295 pass /
-# 0 fail in 96s.
-#
-# Three lists that can disagree is the defect. So there is one:
-# `scripts/ladder.ts`, whose deploy tier is parsed out of deploy.sh and whose
-# CI-vs-deploy delta is a written exemption asserted by scripts/ladder.test.ts.
-# A gate added to deploy.sh now appears here on the next run, or the ladder test
-# fails naming it. Adding a `run: bun test …` step below is itself a test
-# failure — that assertion is what keeps this file from growing a second list.
-
-# Read the checkout, and nothing else. This workflow runs pull request code, so
-# the default token permissions are the ones that matter most here.
+# No suites or gates are enumerated here. The ladder partitions its own CI tier
+# by measured cost; its coverage check requires every row exactly once (L23).
+# In 2026-09-30 runs the single runner took 1975–2215 s of work, with setup
+# taking the job to 44m42s. Each part has its own runner, including the hammer.
 permissions:
   contents: read
 
@@ -30,113 +14,144 @@ on:
     branches: [main]
 
 jobs:
-  gate-ladder:
+  plan:
     runs-on: ubuntu-latest
-    # The green CI tier took 2214.8 s in run 36765759362 and 1974.9 s in
-    # 36768770762 (2026-09-30); the first job took 44m42s against a 45 min cap.
-    # Runner speed varies by about a fifth between runs, so the cap holds a
-    # green tier of about 44 min on a slow runner, one row's 480 s silence
-    # bound and the setup, and still ends a job that hangs outside any row.
-    timeout-minutes: 60
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
         with:
-          # `gate:commit-message` is a commit-tier gate, and the CI tier includes
-          # every commit-tier gate, so this job reads the range from the
-          # convention's boundary commit to HEAD. The default depth-1 checkout
-          # has no such range: the gate now refuses one rather than reporting a
-          # clean history it never read. Same setting and same reason as
-          # security-scan.yml.
-          fetch-depth: 0
           persist-credentials: false
-
-      # bubblewrap: the device sandbox suite. ffmpeg: the plan demo film's recorder
-      # tests (ffmpeg and ffprobe), absent from the runner image in CI 36754331407.
-      # No recommends: 200 packages and 133 MB instead of 291 and 209 MB. The key
-      # is the exact set of archives apt would fetch, so it moves when a version
-      # does.
-      - name: Resolve the system prerequisites
-        id: apt
-        run: |
-          sudo apt-get update
-          echo "key=$(sudo apt-get install --yes --no-install-recommends --print-uris bubblewrap ffmpeg | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
-
-      # Kept between runs. Run 36765759362 spent 6m32s of its 6m45s prerequisite
-      # step fetching these from the runner's mirror at 268 kB/s (36768770762
-      # fetched the same 105 MB in 11 s). With the archives restored, apt fetches
-      # nothing: "Need to get 0 B/133 MB", measured on ubuntu:24.04.
-      - name: Cache the system prerequisites' packages
-        uses: actions/cache@v4
-        with:
-          path: ~/apt-archives/*.deb
-          key: apt-${{ runner.os }}-${{ steps.apt.outputs.key }}
-          restore-keys: |
-            apt-${{ runner.os }}-
-
-      - name: Install system prerequisites
-        run: |
-          mkdir -p ~/apt-archives/partial
-          sudo apt-get install --yes --no-install-recommends -o Dir::Cache::Archives="$HOME/apt-archives" bubblewrap ffmpeg
-          # Ubuntu 24.04's AppArmor userns restriction refused bwrap after install
-          # in CI 36673378254 (2026-09-30); the sandboxed suite needs namespaces.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
-
-      - name: Cache bun install
-        uses: actions/cache@v4
+      - uses: actions/cache@v4
         with:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: |
             bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - id: plan
+        run: echo "matrix=$(bun scripts/ladder.ts --ci-matrix)" >> "$GITHUB_OUTPUT"
 
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      # Prints the where-it-runs matrix into the log before anything runs, so the
-      # answer to "what did this badge actually check?" is in the artefact rather
-      # than in someone's memory of the workflow file.
-      - name: Gate ladder matrix
-        run: bun scripts/ladder.ts --matrix
-
-      - name: Gate ladder — CI tier
-        run: bun scripts/ladder.ts --tier=ci
-
-      # Not in the ladder: this proves the Worker bundles, which is a build
-      # rather than a gate, and it has no test files to claim.
+  gate-ladder:
+    name: Ladder (${{ matrix.part }})
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    runs-on: ubuntu-latest
+    # The row's silence bound is unchanged. This job cap still covers setup and
+    # a hang outside a row; it is not the expected sharded wall.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Commit-message/history gates need the range back to their boundary.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      # Browser rows use the runner's Chrome. bubblewrap and ffmpeg/ffprobe are
+      # absent from its image; the upload part runs neither and needs no apt.
+      - name: Resolve system prerequisites
+        if: matrix.part != 'upload'
+        id: apt
+        run: |
+          sudo apt-get update
+          echo "key=$(sudo apt-get install --yes --no-install-recommends --print-uris bubblewrap ffmpeg | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        if: matrix.part != 'upload'
+        with:
+          path: ~/apt-archives/*.deb
+          key: apt-${{ runner.os }}-${{ steps.apt.outputs.key }}
+          restore-keys: |
+            apt-${{ runner.os }}-
+      - name: Install system prerequisites
+        if: matrix.part != 'upload'
+        run: |
+          mkdir -p ~/apt-archives/partial
+          sudo apt-get install --yes --no-install-recommends -o Dir::Cache::Archives="$HOME/apt-archives" bubblewrap ffmpeg
+          # Ubuntu 24.04 otherwise refuses the sandbox suite's namespaces.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Gate ladder — CI part
+        run: bun scripts/ladder.ts --tier=ci --ci-part=${{ matrix.part }} --verdicts=bench-artifacts/ci/verdicts.json
+      - name: Publish row verdicts, red or green
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ladder-verdicts-${{ github.sha }}-${{ github.run_attempt }}-${{ matrix.part }}
+          path: bench-artifacts/ci/verdicts.json
+          if-no-files-found: error
+      - name: Publish hammer evidence
+        if: always() && matrix.part == 'hammer'
+        uses: actions/upload-artifact@v4
+        with:
+          name: hammer-${{ github.sha }}-${{ github.run_attempt }}
+          path: bench-artifacts/hammer/
+          if-no-files-found: error
+      # The bundle is still proved once, not once per shard.
       - name: Production bundle
+        if: matrix.part == 'source-1'
         working-directory: packages/cf-backend
         run: ../../node_modules/.bin/vite build
+
+  verdicts:
+    needs: [plan, gate-ladder]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ladder-verdicts-${{ github.sha }}-${{ github.run_attempt }}-*
+          path: bench-artifacts/ci/parts
+      - name: Require the complete tier's row coverage
+        run: bun scripts/ladder.ts --ci-collect=bench-artifacts/ci/parts --verdicts=bench-artifacts/ci/verdicts.json
+      - name: Publish the exact revision's verdicts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ladder-verdicts-${{ github.sha }}-${{ github.run_attempt }}-all
+          path: bench-artifacts/ci/verdicts.json
+          if-no-files-found: error
 
   verify-lean:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # The one written CI-tier exemption (scripts/ladder.ts CI_EXEMPT): the elan
-    # toolchain and a 15-minute Lean build. Main-push gate; pull requests use the
-    # path-filtered lean-verify workflow.
+    # Lean remains the written CI-tier exemption, and a deploy-only row on an
+    # integration push; main and path-filtered PR workflows also verify it.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-
       - name: Set up Lean
         uses: ./.github/actions/setup-lean
-
-      # scripts/verify-lean.sh ends in `bun ../scripts/lean-citations.ts`, which
-      # reads the corpus through scripts/sources.ts and its dependencies; the
-      # step needs Bun and an install, or it fails on an import.
-      - name: Install Bun
-        uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
+      - run: bun install --frozen-lockfile
       - name: Verify Lean proofs, consistency, and traceability
         run: bash scripts/verify-lean.sh

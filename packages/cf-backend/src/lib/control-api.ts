@@ -114,7 +114,7 @@ export const BackgroundJobRowSchema = v.object({
   id: v.string(),
   kind: v.string(),
   label: v.nullable(v.string()),
-  status: v.picklist(['running', 'completed', 'failed', 'cancelled']),
+  status: v.picklist(['running', 'serving', 'completed', 'failed', 'cancelled']),
   error: v.nullable(v.string()),
   createdAt: v.number(),
   settledAt: v.nullable(v.number()),

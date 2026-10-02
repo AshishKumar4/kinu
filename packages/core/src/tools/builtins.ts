@@ -33,6 +33,8 @@ import { attributeCraftedFailure } from '../craft/attribution';
 import { DEFAULT_CONFIG } from '../config';
 import { commandResult, CommandResultSchema, type CommandResult } from '../execution/exec-result';
 import { TurnEscalationLedger } from '../execution/escalation';
+import type { ShellExecOptions } from '../types/primitives';
+import { readCallJob } from './call-job';
 import { createMemoryDispatcher, memoryToolInputSchema } from './memory-tool';
 import { createTasksDispatcher, TasksToolInputSchema, type RoleSwitch } from './tasks-tool';
 import type { WebSearchProvider } from '../web/index';
@@ -258,7 +260,14 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           throw refusal;
         }
 
-        return clamp(commandResult(await shell.exec(args.command, signal ? { signal } : undefined)));
+        const detach = readCallJob(options)?.detached;
+        const execOptions: ShellExecOptions = {};
+
+        if (signal) execOptions.signal = signal;
+
+        if (detach) execOptions.detach = detach;
+
+        return clamp(commandResult(await shell.exec(args.command, execOptions)));
       }
 
       // Past here is an escalation; every exit records it, including refusals.
@@ -287,7 +296,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         throw new KinuError(refusal.code, refusal.message + ': Runtime "' + runtimeKey + '" is provisioned but does not expose shell exec.', { cause: refusal });
       }
 
-      const context = { signal, device: nickname };
+      const context = { signal, device: nickname, job: readCallJob(options)?.id };
       let result: CommandResult;
 
       try {

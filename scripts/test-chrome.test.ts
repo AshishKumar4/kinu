@@ -66,6 +66,24 @@ test('a closed test browser leaves no process and no profile, and its profile wa
   expect(existsSync(dirname(profile))).toBe(false);
 });
 
+test('closing an unresponsive browser ends every owned process and removes its profile', async () => {
+  const chrome = await launchTestChrome();
+  const page = await chrome.browser.newPage();
+  page.setDefaultTimeout(0);
+  await page.goto('data:text/html,<h1>owned browser</h1>');
+  const child = chrome.browser.process();
+
+  if (!child?.pid) throw new Error('test browser has no native process');
+  const profile = profileOf(child.pid);
+  const processes = runningFrom(profile);
+
+  process.kill(child.pid, 'SIGSTOP');
+  await chrome.close();
+  await ended(processes);
+  expect(runningFrom(profile)).toEqual([]);
+  expect(existsSync(dirname(profile))).toBe(false);
+});
+
 test('a launcher killed outright takes its browser with it, and the profile it left is reaped as abandoned', async () => {
   const launcher = Bun.spawn(['bun', HELD], { stdout: 'pipe', stderr: 'inherit' });
   const named = v.parse(v.object({ browser: v.number() }), JSON.parse(await firstLine(launcher.stdout)));

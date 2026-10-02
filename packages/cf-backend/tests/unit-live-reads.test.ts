@@ -9,7 +9,7 @@ import {
   appendMemoryNote, LIVE_READS, READS_CHANGED_EVENT, readsWrittenBy, type LiveRead,
 } from '@kinu.run/core';
 import {
-  chatSessionTurns, hostedSubordinateHarness, orchestratorHarness, reactivateOrchestratorHarness,
+  chatSessionTurns, hostedSubordinateHarness, jobsOver, orchestratorHarness, reactivateOrchestratorHarness,
   type HarnessOrchestratorAgent,
 } from './helpers/actor-harness';
 
@@ -52,6 +52,7 @@ async function liveRead(agent: HarnessOrchestratorAgent, read: LiveRead): Promis
     getActivePlanReview: () => agent.getActivePlanReview(),
     listWorkspaceWork: () => agent.listWorkspaceWork(),
     listWorkspaceAgents: () => agent.listWorkspaceAgents(),
+    listSubordinates: () => agent.listSubordinates(),
   };
 
   await reads[read]();
@@ -190,7 +191,7 @@ test('a crafted tool and the changelog seen mark each name what they move', asyn
   await turns.settle({ messageId: 'a-tool', text: 'made' });
 });
 
-test('an agent dismissed names the Agents panel', async () => {
+test('an agent dismissed names the Agents panel and the roster', async () => {
   const { agent } = orchestratorHarness();
   await agent.setSoul('# Purpose\n\nShip the coupon fix.');
   const { name } = await agent.createSubordinateAgent();
@@ -201,5 +202,120 @@ test('an agent dismissed names the Agents panel', async () => {
   await agent.dismissSubordinate(name);
   endTick(agent);
 
+  expect([...named()]).toEqual(expect.arrayContaining(['listWorkspaceAgents', 'listSubordinates']));
+});
+
+// eval-site-preview-1-2ypddc, staging f75f06932, 2026-10-01: the eval's settle read the jobs every second because it
+// had no other way to learn one ended; the room's frame for the jobs read is that way.
+test('a job that ends names the jobs read', async () => {
+  const { agent, db } = orchestratorHarness();
+  jobsOver(db).create({ id: 'bgjob-build', kind: 'shell', workMode: 'build', now: Date.now(), label: 'build', input: '{"command":"build"}' });
+  const named = namedReads(agent);
+  endTick(agent);
+  named();
+
+  expect(await agent.cancelBackgroundJob('bgjob-build')).toEqual({ ok: true });
+  endTick(agent);
+
+  expect(named()).toContain('listBackgroundJobs');
+});
+
+/** Each agent's label and activity, read when called. */
+async function activities(agent: HarnessOrchestratorAgent): Promise<Record<string, string>> {
+  return Object.fromEntries((await agent.listWorkspaceAgents()).map((row) => [row.label, row.activity]));
+}
+
+const WAKE = { metadata: { kinuEvent: 'background_job' } };
+
+// Staging f75f06932, 2026-10-01: the eval's settle called trials quiet on idle reads while a turn was owed and not yet
+// claimed. A turn reads working from its enqueue, and the pump's start and end each name the Agents panel.
+test('a job\'s wake queued for Main reads working before its turn claims, and the pump\'s start and end name the Agents panel', async () => {
+  const { agent } = orchestratorHarness();
+  const turns = chatSessionTurns(agent);
+  const opened = turns.park();
+  const named = namedReads(agent);
+  await agent.getWorkspaceSnapshot();
+  endTick(agent);
+  named();
+
+  const woken = turns.enqueue('Background shell job bgjob-build completed.', WAKE);
+  const atEnqueue = activities(agent);
+  endTick(agent);
+
   expect(named()).toContain('listWorkspaceAgents');
+  expect(await atEnqueue).toEqual({ Main: 'working' });
+
+  await opened;
+  await turns.settle({ messageId: 'a-wake', text: 'Noted.' });
+  await woken;
+  endTick(agent);
+
+  expect(named()).toContain('listWorkspaceAgents');
+  expect(await activities(agent)).toEqual({ Main: 'idle' });
+});
+
+// A turn the driver refuses at dequeue settles to its producer and leaves the queue: it cannot read working past the pump.
+test('a wake the driver refuses reads idle once the pump has refused it, and the pump\'s end names the Agents panel', async () => {
+  const { agent } = orchestratorHarness();
+  const turns = chatSessionTurns(agent);
+  const named = namedReads(agent);
+  await agent.getWorkspaceSnapshot();
+  agent.harnessRefuseDriving({ reason: 'unavailable', error: 'another activation is driving' });
+  endTick(agent);
+  named();
+
+  const woken = turns.enqueue('Background shell job bgjob-build completed.', WAKE);
+  const atEnqueue = activities(agent);
+  endTick(agent);
+  named();
+  expect(await atEnqueue).toEqual({ Main: 'working' });
+
+  await woken;
+  await turns.drainEnqueued();
+  endTick(agent);
+
+  expect(named()).toContain('listWorkspaceAgents');
+  expect(await activities(agent)).toEqual({ Main: 'idle' });
+});
+
+// An email to Main is held for the drain its delivery armed: Main owes it a turn from the delivery on.
+test('an email delivered to Main reads working until its drain takes it, and the delivery names the Agents panel', async () => {
+  const { agent } = orchestratorHarness({ warmConnections: [], failWarm: null, titles: [], profile: { email: 'owner@example.com' } });
+  const named = namedReads(agent);
+  await agent.getWorkspaceSnapshot();
+  endTick(agent);
+  named();
+
+  const admission = await agent.acceptEmailDelivery({
+    from: 'owner@example.com', to: 'workspace@kinu.run', subject: 'status?', body_text: 'how is the deploy?',
+    message_id: '<m-1@example.com>', in_reply_to: null, references: null, attachments: [], now: Date.now(),
+  });
+
+  endTick(agent);
+
+  expect(admission).toMatchObject({ admitted: true, duplicate: false });
+  expect(named()).toContain('listWorkspaceAgents');
+  expect(await activities(agent)).toEqual({ Main: 'working' });
+});
+
+// Staging f75f06932: a helper handed a task read idle until its drain claimed it.
+test('an agent handed a message reads working from the handoff, before its drain runs, and the handoff names the Agents panel', async () => {
+  const { agent } = orchestratorHarness();
+  await agent.setSoul('# Purpose\n\nShip the coupon fix.');
+  const { name } = await agent.createSubordinateAgent();
+  await agent.renameSubordinateAgent(name, 'Scribe');
+  agent.harnessDrivingUserMessage('ask the scribe', {});
+  const turns = chatSessionTurns(agent);
+  const { tools } = await turns.prepare({ messages: [{ role: 'user', content: 'ask the scribe' }] });
+  const named = namedReads(agent);
+  endTick(agent);
+  named();
+  expect((await activities(agent)).Scribe).toBe('idle');
+
+  await tools.agents?.execute?.({ action: 'msg', agent: name, message: 'Count the files.' }, { toolCallId: 'm', messages: [] });
+  endTick(agent);
+
+  expect(named()).toContain('listWorkspaceAgents');
+  expect((await activities(agent)).Scribe).toBe('working');
+  await turns.settle({ messageId: 'a-msg', text: 'asked' });
 });

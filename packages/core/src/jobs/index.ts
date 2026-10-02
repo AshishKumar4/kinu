@@ -46,3 +46,7 @@ export {
   CONFINED_BACKGROUNDABLE_TOOLS,
   type BackgroundableTool,
 } from './background-wrap';
+
+export { JOB_STAMP_ENV } from '../types/jobs';
+
+export { recordServingJobs, type PortHolders } from './serving';

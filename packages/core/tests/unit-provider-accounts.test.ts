@@ -170,10 +170,10 @@ describe('which account a call spends', () => {
 
   test('several accounts, none main and none chosen, is refused by name rather than guessed', async () => {
     const { spend, registry, deps } = registryWith(['alpha.bearer@home', 'alpha.bearer@work']);
-    await expect(spend('alpha/m')).rejects.toThrow('alpha has the accounts home, work and no default');
+    await expect(spend('alpha/m')).rejects.toThrow('alpha has the accounts home, work and none is its default.');
     const listed = (await registry.listProviders(deps)).find((p) => p.id === 'alpha');
     expect(listed?.available).toBe(false);
-    expect(listed?.unavailableReason).toContain('no default');
+    expect(listed?.unavailableReason).toContain('none is its default');
   });
 
   test('a chosen account that is not connected names the account', async () => {

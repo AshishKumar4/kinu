@@ -13,6 +13,7 @@ import { actorReadHandle } from './workspace-work';
 import { explorationActorKey } from '../identity/actor-key';
 import { usageTotal } from '../usage';
 import { NO_FIGURES, type AgentFigures } from './agent-figures';
+import { EventLog } from '../events/hub/log';
 
 export type AgentCategory = 'main' | 'user' | 'hired' | 'swarm' | 'background';
 
@@ -48,13 +49,12 @@ function subordinateCategory(entry: SubordinateRosterEntry): AgentCategory {
   return entry.origin === 'evolution' ? 'background' : 'hired';
 }
 
-/** Working: an open turn claim. */
-function subordinateActivity(entry: SubordinateRosterEntry, inTurn: boolean): AgentActivity {
+function subordinateActivity(entry: SubordinateRosterEntry, claimedOrOwed: boolean): AgentActivity {
   if (entry.status === 'dismissed') return 'dismissed';
 
   if (entry.status === 'awaiting_input') return 'waiting';
 
-  return inTurn ? 'working' : 'idle';
+  return claimedOrOwed ? 'working' : 'idle';
 }
 
 function headActivity(status: string, errorMessage: string | null, runRunning: boolean): AgentActivity {
@@ -90,6 +90,13 @@ function turnOpen(sql: SqlExecutor, actorId: string): boolean {
     && sql<{ x: number }>`SELECT 1 AS x FROM actor_turn_claims WHERE actor_id = ${actorId} AND outcome IS NULL LIMIT 1`.length > 0;
 }
 
+function turnOwed({ sql, exec, now }: Pick<Walk, 'sql' | 'exec' | 'now'>, actor: ActorHandle): boolean {
+  if (!tableExists(sql, 'agent_log')) return false;
+  const log = new EventLog(exec, actor);
+
+  return log.pending({ variant: 'subordinate_task', limit: 1 }).length > 0 || log.nextPendingDrainAt(now) === now;
+}
+
 interface Walk {
   readonly sql: SqlExecutor;
   readonly exec: SqlExec;
@@ -98,6 +105,7 @@ interface Walk {
   readonly labels: Map<string, string>;
   readonly paths: Map<string, string>;
   readonly handleOf: (row: WorkspaceActor) => ActorHandle;
+  readonly now: number;
 }
 
 /** A running head's run is listed however old. */
@@ -111,7 +119,7 @@ function swarmRuns(sql: SqlExecutor, owner: ActorHandle): HeadRunView[] {
   return [...older.filter((run) => run !== null), ...recent];
 }
 
-function rosterAgents({ sql, exec, root, actors, labels, paths, handleOf }: Walk): PanelAgent[] {
+function rosterAgents({ sql, exec, root, actors, labels, paths, handleOf, now }: Walk): PanelAgent[] {
   const byId = new Map(actors.map((row) => [row.actorId, row]));
   const agents: PanelAgent[] = [];
 
@@ -131,7 +139,7 @@ function rosterAgents({ sql, exec, root, actors, labels, paths, handleOf }: Walk
     const category = subordinateCategory(entry);
 
     agents.push({
-      key: row.actorId, label, category, activity: subordinateActivity(entry, turnOpen(sql, row.actorId)), parent: labels.get(row.parentActorId ?? '') ?? null,
+      key: row.actorId, label, category, activity: subordinateActivity(entry, turnOpen(sql, row.actorId) || turnOwed({ sql, exec, now }, handleOf(row))), parent: labels.get(row.parentActorId ?? '') ?? null,
       open: { kind: 'chat', path }, tab: row.parentActorId === root.actorId && ownerFacingSubordinate(entry),
       input: category !== 'background', actorId: row.actorId, figures: NO_FIGURES,
     });
@@ -180,13 +188,15 @@ export async function readWorkspaceAgents(input: {
   readonly rootLabel: string;
   readonly actors: readonly WorkspaceActor[];
   readonly figures: (actorIds: readonly string[]) => ReadonlyMap<string, AgentFigures> | Promise<ReadonlyMap<string, AgentFigures>>;
+  /** The root's chat holds a turn. */
+  readonly queued: boolean;
 }): Promise<PanelAgent[]> {
   const { sql, root } = input;
   root.assertCurrent();
   const handles = new Map<string, ActorHandle>([[root.actorId, root]]);
 
   const walk: Walk = {
-    ...input, labels: new Map([[root.actorId, input.rootLabel]]), paths: new Map(),
+    ...input, labels: new Map([[root.actorId, input.rootLabel]]), paths: new Map(), now: Date.now(),
     handleOf: (row) => handles.get(row.actorId) ?? handles.set(row.actorId, actorReadHandle(sql, row)).get(row.actorId) ?? root,
   };
 
@@ -194,7 +204,8 @@ export async function readWorkspaceAgents(input: {
   const swarms = tableExists(sql, 'head_journal') ? swarmAgents(walk) : [];
 
   const main: PanelAgent = {
-    key: 'main', label: input.rootLabel, category: 'main', activity: turnOpen(sql, root.actorId) ? 'working' : 'idle', parent: null,
+    key: 'main', label: input.rootLabel, category: 'main', parent: null,
+    activity: turnOpen(sql, root.actorId) || input.queued || turnOwed(walk, root) ? 'working' : 'idle',
     open: { kind: 'chat', path: null }, tab: true, input: true, actorId: root.actorId, figures: NO_FIGURES,
   };
 

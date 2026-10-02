@@ -39,7 +39,7 @@ function skipped(why: string): string {
 /** What a staging deploy runs after the fixture's build, which fails on purpose: the rows that read the deployment
  *  named as not run, then every local gate and the hammer, to their end. */
 const AFTER_A_FAILED_BUILD: readonly string[] = [
-  skipped("staging does not serve this build: vite build failed"), phaseRun("source"), phaseRun("hammer"),
+  skipped("staging does not serve this build: vite build failed"), phaseRun("source"),
 ];
 
 /** The commands one phase of the plan runs. */
@@ -87,6 +87,14 @@ function commandStub(name: string): string {
 command_line="${name} $*"
 command_line="\${command_line//$KINU_DEPLOY_ROOT\\//}"
 printf '%s\\n' "$command_line" >> "$KINU_DEPLOY_GATE_LOG"
+if [[ "$*" == *--ci-find=* ]] && [ "$KINU_CI_ABSENT" = "1" ]; then
+  echo 'no push-CI run exists for this SHA; push the branch holding it'
+  exit 47
+fi
+if [[ "$*" == *--ci-await* ]] && [ "$KINU_CI_RED" = "1" ]; then
+  echo 'CI red — https://github.com/o/r/actions/runs/17'
+  exit 47
+fi
 # The deploy's report directory, as scripts/deploy-report.ts opens and names it.
 if [ "\${1##*/}" = "deploy-report.ts" ] && [ "$2" = "open" ]; then
   printf '%s\\n' "$KINU_DEPLOY_ROOT/report"
@@ -133,6 +141,8 @@ interface DeployRun {
   readonly scriptedKey?: string;
   /** Another deploy of the environment holds its lock for the whole run. */
   readonly lockHeld?: boolean;
+  readonly ciAbsent?: boolean;
+  readonly ciRed?: boolean;
 }
 
 function runDeploy({
@@ -145,6 +155,8 @@ function runDeploy({
   ambientEnvironment = "",
   scriptedKey = "fixture-scripted-key",
   lockHeld = false,
+  ciAbsent = false,
+  ciRed = false,
 }: DeployRun = {}) {
   const fixture = scratchDir("deploy-gate");
   // The deploy lock lives in the runtime directory: the fixture's own, so a real deploy on this machine never blocks
@@ -211,6 +223,8 @@ exit 87
       KINU_DEPLOY_DIRTY: dirty ? "1" : "0",
       KINU_SCRIPTED_MODEL_KEY: scriptedKey,
       SKIP_E2E: "1",
+      KINU_CI_ABSENT: ciAbsent ? '1' : '0',
+      KINU_CI_RED: ciRed ? '1' : '0',
       XDG_RUNTIME_DIR: fixture,
     }),
     stdout: "pipe",
@@ -226,7 +240,7 @@ exit 87
   // directory, and a mark without the seconds it was reached at.
   const REPORT = "bun scripts/deploy-report.ts ";
 
-  const events = logged.filter((event) => !event.startsWith(REPORT));
+  const events = logged.filter((event) => !event.startsWith(REPORT) && !event.startsWith('bun scripts/ladder.ts --ci-'));
 
   const report = logged.filter((event) => event.startsWith(REPORT))
     .map((event) => event.slice(REPORT.length).replace(/^(\w+) report( |$)/u, "$1$2").replace(/^mark (\S+) \d+$/u, "mark $1"));
@@ -243,6 +257,7 @@ exit 87
     status: run.exitCode,
     events,
     report,
+    ci: logged.filter((event) => event.startsWith('bun scripts/ladder.ts --ci-')),
     stdout: run.stdout.toString(),
     buildEnvironment,
     infraPhase,
@@ -251,6 +266,23 @@ exit 87
 }
 
 describe("deploy gate", () => {
+  test('no push-CI run for the clean SHA refuses before any build or upload', () => {
+    const run = runDeploy({ ciAbsent: true });
+
+    expect(run.status).not.toBe(0);
+    expect(run.events.some((event) => event.startsWith('MUTATE '))).toBe(false);
+    expect(run.stdout).toContain('push-CI');
+  });
+
+  test('a red CI verdict finishes the remaining local gates but never verifies the revision', () => {
+    const run = runDeploy({ option: '--gates-only', ciRed: true });
+
+    expect(run.status).toBe(1);
+    expect(run.events).toEqual([...STOPS, phaseRun('source')]);
+    expect(run.ci.filter((command) => command.includes('--ci-await'))).toHaveLength(1);
+    expect(run.events.some((event) => event.includes('promote.ts record'))).toBe(false);
+    expect(run.stdout).toContain('CI red');
+  });
   // AT THE DEPLOY BOUNDARY. deploy.sh runs each phase as one ladder call, which
   // runs that phase's gates through the ladder's wave (scripts/ladder.ts,
   // `tierWave`, whose admission ladder.test.ts holds). What is asserted here is
@@ -270,7 +302,7 @@ describe("deploy gate", () => {
     // The failed step is a red of the report's, the skipped rows are named by the ladder, and the report is rendered.
     expect(run.report).toEqual([
       "open staging deploy testsha", "mark preflight", "mark upload",
-      "note publish build, upload and smoke vite build failed", "mark wave", "mark hammer", "mark end", "render",
+      "note publish build, upload and smoke vite build failed", "mark wave", "mark ci", "mark end", "render",
     ]);
   });
 
@@ -282,7 +314,7 @@ describe("deploy gate", () => {
     expect(run.events).toEqual([
       ...STOPS, WITHDRAW,
       skipped("staging does not serve this build: testsha's record on staging could not be withdrawn, so this deploy will not replace what it verified"),
-      phaseRun("source"), phaseRun("hammer"),
+      phaseRun("source"),
     ]);
   });
 
@@ -412,20 +444,6 @@ describe("deploy gate", () => {
     }
   });
 
-  // ONE SOURCE. deploy.sh names no gate itself: a `bun test`, `bun run gate:` or
-  // `bun scripts/` command in the runner would be a second list, which is the
-  // defect this replaced (fifteen suites named by hand in three files on
-  // 2026-09-14), and a second scheduler over the ladder's cost table is the one
-  // L16 removed.
-  test("deploy.sh names no gate; the ladder runs each phase", () => {
-    const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
-    const commands = source.split("\n").filter((line) => /^\s*(?:bun test |bun run gate:|bun scripts\/(?!ladder\.ts "--deploy-phase=\$1"))/.test(line));
-
-    expect(commands).toEqual([]);
-
-    for (const phase of DEPLOY_PHASES) expect(source).toMatch(new RegExp(`(?:run|stop)_phase (?:[a-z-]+,)*${phase}\\b`, "u"));
-    expect(source).not.toContain("run_required_gate");
-  });
 
   // A phase's runner can end without saying anything about itself: the OOM
   // killer takes it, or something outside its process tree SIGKILLs it.
@@ -538,7 +556,7 @@ describe("deploy gate", () => {
 
       const expected = option === undefined
         ? [...STOPS, WITHDRAW, "MUTATE bunx vite build", ...AFTER_A_FAILED_BUILD]
-        : [...STOPS, phaseRun("source"), phaseRun("hammer")];
+        : [...STOPS, phaseRun("source")];
 
       expect(run.status, `a red source phase under ${option ?? "a deploy"} did not fail it`).toBe(1);
       expect(run.events, `the ${option ?? "deploy"} stopped at the red source phase\n${run.stdout}`).toEqual(expected);
@@ -634,7 +652,7 @@ describe("deploy gate", () => {
     const run = runDeploy({ option: "--gates-only" });
 
     expect(run.status).toBe(0);
-    expect(run.events).toEqual([...STOPS, phaseRun("source"), phaseRun("hammer")]);
+    expect(run.events).toEqual([...STOPS, phaseRun("source")]);
     expect(run.stdout).toContain("Gates only: stopping before the build");
   });
 

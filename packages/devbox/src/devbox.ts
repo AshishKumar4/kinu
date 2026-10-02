@@ -44,6 +44,12 @@ import {
   QUIET_SINCE_KEY,
   racedRestoreSteps, runRestoreStep, type RestoreSteps,
   type StartClock,
+  restAskText,
+  type RestAnswer,
+  type RestAnswered,
+  type RestDetail,
+  type RestProcess,
+  type RunningForRest,
 } from './lifecycle';
 import { DevboxError, attempt, attemptSync, settle, settleSync, startOverrun, startInterrupted, chainAdvanced, type DevboxErrorCode } from './errors';
 import { BOX_SIZE_ORDER, BoxSizeSchema, DEFAULT_BOX_SIZE, instanceOf, type BoxSize, type ResizeOutcome } from './sizes';
@@ -117,6 +123,56 @@ exit 0
 
 const KILL_TREE_GONE = 3;
 
+/** `port-listeners STAMP [PORT...]`: `port pid stamp command` per socket holder; /proc, as the image has no `ss`. */
+const PORT_LISTENERS = `
+stamp=$1; shift
+socks=$(for f in /proc/net/tcp /proc/net/tcp6; do
+  [ -r "$f" ] || continue
+  while read -r _ local _ st _ _ _ _ _ inode _; do
+    [ "$st" = 0A ] || continue
+    port=$((0x\${local##*:}))
+    if [ $# -eq 0 ]; then echo "$inode $port"; else for want in "$@"; do [ "$port" = "$want" ] && echo "$inode $port"; done; fi
+  done < "$f"
+done)
+[ -n "$socks" ] || exit 0
+holders=$(ls -l /proc/[0-9]*/fd 2>/dev/null | awk '/^\\/proc\\/[0-9]+\\/fd:$/ { split($0, p, "/"); pid = p[3]; next } /-> socket:\\[/ { s = $NF; gsub(/socket:\\[|\\]/, "", s); print s, pid }')
+stampof() {
+  p=$1
+  while [ -n "$p" ] && [ "$p" -gt 1 ]; do
+    v=$(tr '\\000' '\\n' < "/proc/$p/environ" 2>/dev/null | grep -m1 "^$stamp=")
+    [ -n "$v" ] && { printf '%s' "\${v#*=}"; return; }
+    p=$(awk '/^PPid:/ { print $2 }' "/proc/$p/status" 2>/dev/null)
+  done
+}
+echo "$socks" | while read -r inode port; do
+  echo "$holders" | awk -v i="$inode" '$1 == i { print $2 }' | sort -un | while read -r pid; do
+    printf '%s\\t%s\\t%s\\t%s\\n' "$port" "$pid" "$(stampof "$pid")" "$(tr '\\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null)"
+  done
+done
+`;
+
+export interface PortListener {
+  readonly port: number;
+  readonly pid: number;
+  readonly stamp: string | null;
+  readonly command: string;
+}
+
+const ListenerLineSchema = v.pipe(v.string(), v.transform((line) => line.split('\t')), v.tuple([
+  v.pipe(v.string(), v.toNumber(), v.integer()),
+  v.pipe(v.string(), v.toNumber(), v.integer()),
+  v.string(),
+  v.string(),
+]));
+
+function parsePortListeners(output: string): PortListener[] {
+  return output.split('\n').filter((line) => line !== '').map((line) => {
+    const [port, pid, stamp, command] = v.parse(ListenerLineSchema, line);
+
+    return { port, pid, stamp: stamp === '' ? null : stamp, command: command.trimEnd() };
+  });
+}
+
 const CONTAINER_STOP_INTERVAL_MS = 100;
 
 
@@ -135,7 +191,7 @@ const ATTACH_RECOVERY_KEY = 'devbox:attach-recovery';
 
 const LAST_TICK_KEY = 'devbox:last-tick';
 
-const UNREADABLE_PROCESS_BEATS_KEY = 'devbox:unreadable-process-beats';
+const REST_ASK_KEY = 'devbox:rest-ask';
 
 const BOOT_ID_KEY = 'devbox:boot-id';
 
@@ -239,6 +295,15 @@ const SCHEDULE_PREFIX = 'devbox:schedule:';
 
 const EXPOSED_PREFIX = 'devbox:exposed:';
 
+/** Constant-time: answer time says nothing of the token. */
+function sameToken(held: string | undefined, given: string): boolean {
+  if (held === undefined || held.length !== given.length) return false;
+  let diff = 0;
+
+  for (let at = 0; at < held.length; at += 1) diff |= held.charCodeAt(at) ^ given.charCodeAt(at);
+
+  return diff === 0;
+}
 
 export class Devbox<Env = unknown> extends DurableObject<Env> {
   readonly #gateways: GatewayBindings;
@@ -273,6 +338,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   /** Public work with no resource name: shell commands and supervised starts.
    *  Resource and checkpoint work reports directly through their own lanes. */
   #activeCallers = 0;
+  #openSockets = 0;
   #callersDrained: { promise: Promise<void>; resolve: () => void } | undefined;
   #quiescing: Promise<CheckpointOutcome> | undefined;
   /** Repair recreates storage mounts while a checkpoint may start a runner; one FIFO owns that
@@ -1653,7 +1719,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
   }
 
   /** No deadline; the SDK's process lane lost output (D37). */
-  execUntimed(command: string, options: { readonly cwd?: string; readonly execId: string }): Promise<ExecResult> {
+  execUntimed(command: string, options: { readonly cwd?: string; readonly execId: string; readonly env?: Readonly<Record<string, string>> }): Promise<ExecResult> {
     const pending: UntimedExecution = { cancelled: false };
     this.#untimed.set(options.execId, pending);
 
@@ -1661,7 +1727,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       const { container } = yield* attempt('not-ready', () => this.#ensureReady(this.#teardowns));
 
       if (pending.cancelled) return yield* Effect.fail(new DevboxError('cancelled', 'sandbox exec cancelled before admission'));
-      const started = yield* attemptSync('process', () => container.exec(['bash', '-c', command], { cwd: options.cwd ?? DEVBOX_WORKDIR, env: CONTAINER_TRUST_ENV }));
+      const started = yield* attemptSync('process', () => container.exec(['bash', '-c', command], { cwd: options.cwd ?? DEVBOX_WORKDIR, env: { ...options.env, ...CONTAINER_TRUST_ENV } }));
       pending.started = started;
       const process = yield* attempt('process', () => started);
       const output = yield* attempt('process', () => process.output());
@@ -1669,6 +1735,19 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       return { stdout: text.decode(output.stdout), stderr: text.decode(output.stderr), exitCode: output.exitCode };
     })).pipe(Effect.ensuring(Effect.sync(() => { this.#untimed.delete(options.execId); }))));
+  }
+
+  portListeners(stamp: string, ports?: readonly number[]): Promise<readonly PortListener[] | null> {
+    return settle(attempt('io', async () => {
+      const container = this.ctx.container;
+
+      if (container?.running !== true) return null;
+
+      if (ports?.length === 0) return [];
+      const read = await (await container.exec(['sh', '-c', PORT_LISTENERS, 'port-listeners', stamp, ...(ports ?? []).map(String)])).output();
+
+      return parsePortListeners(new TextDecoder().decode(read.stdout));
+    }));
   }
 
   /** False when the command had already exited. */
@@ -1829,14 +1908,14 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
       }
     } catch (cause) {
       const reason = describe({ cause });
-      const beats = await this.ctx.storage.get<number>(UNREADABLE_PROCESS_BEATS_KEY) ?? 0;
 
-      if (!ending && beats < this.#processListGraceBeats) {
+      // Never on a guess (D59).
+      if (!ending) {
         return { kind: 'failed', reason: 'the stop is held while the process list is unreadable: ' + reason, bytes: undefined, movedBytes: undefined };
       }
 
-      warning = 'D35: the process list stayed unreadable past the quiet-confirm window; an unobservable detached command may be stopped: ' + reason;
-      this.#trace('quiesce.processes.unreadable', { reason, beats });
+      warning = 'the process list was unreadable, so an unobservable command may be stopped: ' + reason;
+      this.#trace('quiesce.processes.unreadable', { reason });
       await this.#record('quiesce', warning);
       listed = [];
     }
@@ -2387,16 +2466,11 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
         // Each busy lane covers its own tail: claims include draining streams, checkpoints queued runs,
         // startup restore/repair; shell commands and supervised starts count only via `#activeCallers`.
-        let backgroundWork = this.#quiescing !== undefined || this.#activeCallers !== 0
+        const backgroundWork = this.#quiescing !== undefined || this.#activeCallers !== 0 || this.#openSockets !== 0
           || this.#resources.busy()
           || this.#lane.busy()
           || this.#startup !== undefined
-          || this.#gateRestore !== undefined
-          || await this.isKeptAlive();
-
-        let note: string | undefined;
-
-        if (!backgroundWork) ({ running: backgroundWork, note } = await this.#commandRunning());
+          || this.#gateRestore !== undefined;
 
         const decision = quiesceStep({
           now,
@@ -2416,16 +2490,24 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
           await this.ctx.storage.put(QUIET_SINCE_KEY, decision.quietSince);
         }
 
-        await this.#tick({
-          running: true,
-          ping: 'ok',
-          // A quiesce deliberately arms nothing: see `quiesce`.
-          armedNext: decision.action !== 'quiesce',
-          decision: decision.action,
-          ...(note !== undefined && { note }),
-        });
+        if (decision.action !== 'quiesce') {
+          await this.#tick({ running: true, ping: 'ok', armedNext: true, decision: decision.action });
 
-        if (decision.action !== 'quiesce') return beat;
+          return beat;
+        }
+
+        const running = await this.#runningForRest();
+
+        if (running.unreadable !== undefined || running.live.length > 0) {
+          const note = await this.#askToRest(running, now);
+          await this.#tick({ running: true, ping: 'ok', armedNext: true, decision: 'ask', ...(note !== undefined && { note }) });
+
+          return beat;
+        }
+
+        // A quiesce deliberately arms nothing: see `quiesce`.
+        await this.#tick({ running: true, ping: 'ok', armedNext: false, decision: 'quiesce' });
+        await this.ctx.storage.delete(REST_ASK_KEY);
 
         // The next beat retries a refused stop with fresh evidence.
         return (await this.quiesce()).kind === 'failed' ? beat : null;
@@ -2433,36 +2515,70 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     }));
   }
 
-  get #processListGraceBeats(): number {
-    return Math.ceil(this.policy.quietConfirmMs / (this.policy.heartbeatSeconds * 1000));
-  }
-
-  /** See D35. */
-  async #commandRunning(): Promise<{ readonly running: boolean; readonly note?: string }> {
-    let running: boolean;
-
+  async #runningForRest(): Promise<RunningForRest> {
     try {
       const supervised = new Set((await this.#procSpecs()).map((spec) => spec.processId));
-      running = (await this.#processes().list()).some((live) => isProcessLive(live.status) && !supervised.has(live.id));
+      const live = (await this.#processes().list()).filter((row) => isProcessLive(row.status));
+
+      return { live: live.map((row) => ({ ...row, supervised: supervised.has(row.id) })), unreadable: undefined };
     } catch (error) {
-      const beats = (await this.ctx.storage.get<number>(UNREADABLE_PROCESS_BEATS_KEY) ?? 0) + 1;
-      await this.ctx.storage.put(UNREADABLE_PROCESS_BEATS_KEY, beats);
-      const reason = describe({ cause: error });
-      const cap = this.#processListGraceBeats;
-
-      if (beats === 1) await this.#record('quiesce', `process list unreadable; holding up to ${String(cap)} beats: ${reason}`);
-
-      if (beats < cap) return { running: true };
-      const note = `process list unreadable for ${String(beats)} beats; the idle gate decides: ${reason}`;
-
-      if (beats === cap) await this.#record('quiesce', note);
-
-      return { running: false, note };
+      return { live: [], unreadable: describe({ cause: error }) };
     }
+  }
 
-    await this.ctx.storage.delete(UNREADABLE_PROCESS_BEATS_KEY);
+  async #askToRest(running: RunningForRest, now: number): Promise<string | undefined> {
+    const window = this.policy.idleMs + this.policy.quietConfirmMs;
+    const asked = await this.ctx.storage.get<number>(REST_ASK_KEY);
 
-    return { running };
+    if (asked !== undefined && now - asked < window) return running.unreadable;
+    await this.ctx.storage.put(REST_ASK_KEY, now);
+    await this.#record('rest', restAskText(running, await this.#restDetails(running.live), Math.round(window / 60_000)));
+
+    return running.unreadable;
+  }
+
+  async #restDetails(live: readonly RestProcess[]): Promise<ReadonlyMap<number, RestDetail>> {
+    const pids = live.flatMap((row) => (row.pid === undefined ? [] : [row.pid]));
+
+    if (pids.length === 0) return new Map();
+
+    try {
+      const listeners = await this.portListeners('') ?? [];
+      const read = await this.#execute(`ps -o pid=,pgid=,etimes= -p ${[...pids, ...listeners.map((row) => row.pid)].join(',')} || true`);
+      const groups = new Map(read.stdout.trim().split('\n').map((line) => line.trim().split(/\s+/).map(Number)).map(([pid = 0, pgid = 0, age = 0]) => [pid, { pgid, age }] as const));
+
+      return new Map(pids.map((pid) => [pid, {
+        ageSeconds: groups.get(pid)?.age,
+        ports: [...new Set(listeners.filter((row) => row.pid === pid || groups.get(row.pid)?.pgid === pid).map((row) => row.port))],
+      }]));
+    } catch (error) {
+      console.error(`[devbox] the rest ask lists processes without ages or ports: ${describe({ cause: error })}`);
+
+      return new Map();
+    }
+  }
+
+  /** D59: refused with no ask pending. */
+  answerRest(answer: RestAnswer): Promise<RestAnswered> {
+    return settle(attempt('io', async (): Promise<RestAnswered> => {
+      if (await this.ctx.storage.get<number>(REST_ASK_KEY) === undefined) {
+        return { kind: 'refused', reason: 'no rest ask is pending: the sandbox is in use or already resting' };
+      }
+
+      await this.ctx.storage.delete(REST_ASK_KEY);
+
+      if (answer === 'keep') {
+        const now = Date.now();
+        this.stampInteraction();
+        await this.ctx.storage.put(LAST_INTERACTION_KEY, now);
+
+        return { kind: 'kept', askAgainAfterMs: this.policy.idleMs + this.policy.quietConfirmMs };
+      }
+
+      const outcome = await this.#quiesce(true);
+
+      return outcome.kind === 'failed' ? { kind: 'failed', reason: outcome.reason ?? 'the final checkpoint failed' } : { kind: 'resting' };
+    }));
   }
 
   /** One durable row per heartbeat, so a stopped box shows when and why: it tells apart an
@@ -2489,8 +2605,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
     if (now - this.#lastInteractionPersisted < INTERACTION_PERSIST_INTERVAL_MS) return;
     this.#lastInteractionPersisted = now;
-    // Not awaited on this hot path: the in-memory stamp already renewed this incarnation,
-    // so a lost write costs at most one extra heartbeat cycle of lease, never a leak.
+    // Not awaited: a lost write costs at most one heartbeat cycle of lease.
     unawaited(this.ctx.storage.put(LAST_INTERACTION_KEY, now), 'lease stamp was not persisted');
   }
 
@@ -2546,8 +2661,7 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return snapshotChainStorage(this.#chainPorts(store));
   }
 
-  /** The Durable Object id is already hex and unique per box, so the prefix needs no escaping
-   *  and cannot collide with another box's prefix. */
+  /** The Durable Object id is hex and unique per box: no escaping, no collision. */
   #boxPrefix(): string {
     return `boxes/${this.ctx.id.toString()}`;
   }
@@ -2691,18 +2805,47 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
     return Effect.gen({ self: this }, function* () {
       const spec = yield* attempt('io', () => this.ctx.storage.get<PortExposureSpec>(`${PORT_SPEC_PREFIX}${port}`));
 
-      if (spec === undefined || spec.token !== token) return new Response('Preview not exposed', { status: 404 });
+      if (spec === undefined || !sameToken(spec.token, token)) return new Response('Preview not exposed', { status: 404 });
 
       return yield* this.#withActiveCaller(attempt('io', async () => {
         await this.ensureReady();
 
-        if (this.ctx.storage.kv.get(EXPOSED_PREFIX + port) !== token) return new Response('Preview not ready', { status: 503 });
+        if (!sameToken(this.ctx.storage.kv.get<string>(EXPOSED_PREFIX + port), token)) return new Response('Preview not ready', { status: 503 });
         const target = new URL(request.url);
         target.protocol = 'http:';
+        const answer = await this.#container().getTcpPort(port).fetch(new Request(target.toString(), request));
 
-        return this.#container().getTcpPort(port).fetch(new Request(target.toString(), request));
+        return answer.webSocket ? this.#bridge(answer.webSocket, answer.headers) : answer;
       }));
     });
+  }
+
+  /** The SDK's `bridge()`: an open preview socket is the box's use. */
+  #bridge(upstream: WebSocket, headers: Headers): Response {
+    const [visitor, held] = Object.values(new WebSocketPair());
+    let open = true;
+
+    const end = (code: number, reason: string): void => {
+      if (!open) return;
+      open = false;
+      this.#openSockets -= 1;
+      this.stampInteraction();
+
+      for (const socket of [held, upstream]) socket.close(code === 1005 || code === 1006 ? 1000 : code, reason);
+    };
+
+    held.accept();
+    upstream.accept();
+    this.#openSockets += 1;
+    held.addEventListener('message', (event) => { if (open) upstream.send(event.data); });
+    upstream.addEventListener('message', (event) => { if (open) held.send(event.data); });
+
+    for (const socket of [held, upstream]) {
+      socket.addEventListener('close', (event) => end(event.code, event.reason));
+      socket.addEventListener('error', () => end(1011, 'preview socket failed'));
+    }
+
+    return new Response(null, { status: 101, headers, webSocket: visitor });
   }
 
   #archiveClient: NativeArchives | undefined;
@@ -2791,18 +2934,6 @@ export class Devbox<Env = unknown> extends DurableObject<Env> {
 
       return resetTerminal(container);
     })));
-  }
-
-  setKeepAlive(enabled: boolean): Promise<void> {
-    return settle(attempt('io', async () => {
-      await this.ctx.storage.put('devbox:keep-alive', enabled);
-    }));
-  }
-
-  isKeptAlive(): Promise<boolean> {
-    return settle(attempt('io', async () => {
-      return await this.ctx.storage.get('devbox:keep-alive') === true;
-    }));
   }
 
 

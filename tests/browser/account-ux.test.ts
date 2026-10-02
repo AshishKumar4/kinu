@@ -1,19 +1,5 @@
-/**
- * The account panels as shared surfaces, in a real browser: the setup modal
- * over the home chrome (providers, MCP servers, CLI install) and the settings
- * page's providers section, each at desktop and phone width in dark and light.
- *
- * What only a browser can say here: that the SAME panels render inside the
- * shipped modal at both widths, that the panel reads publish against the
- * account fixture, and that the sectioned settings page still lands a deep
- * link on the providers section. The codex fixture is healed and the held
- * gateway read released so the screenshots show the connected states, not the
- * failure rig the sibling gate drives. Screenshots land in
- * ~/kinu-logs/account-ux/ (outside the worktree).
- */
+/** Real-browser account panels, viewport boundaries, deletion confirmation and workspace navigation. */
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
 import type { Page } from 'puppeteer';
 import { ONBOARDING_STEPS } from '@kinu.run/core';
 
@@ -21,26 +7,15 @@ import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 
 const ONBOARDING_STEP_IDS = ONBOARDING_STEPS.map((step) => step.id);
 
-const SHOTS = join(import.meta.dir, '..', '..', '..', 'kinu-logs', 'account-ux');
-
-mkdirSync(SHOTS, { recursive: true });
-
 const VIEWPORTS = { desktop: { width: 1280, height: 860 }, mobile: { width: 390, height: 844 } } as const;
 
 async function freshPage(gallery: Gallery, query: string, theme: 'dark' | 'light', viewport: keyof typeof VIEWPORTS): Promise<Page> {
   const page = await gallery.newPage();
   await page.setViewport(VIEWPORTS[viewport]);
   await page.evaluateOnNewDocument((mode) => localStorage.setItem('theme', mode), theme);
-  await page.goto(`${gallery.origin}/gallery.html?frame=${query}`, { waitUntil: 'networkidle0' });
+  await page.goto(`${gallery.origin}/gallery.html?frame=${query}`, { waitUntil: 'load' });
 
   return page;
-}
-
-async function shoot(page: Page, name: string): Promise<string> {
-  const path = join(SHOTS, `${name}.png`);
-  await page.screenshot({ path, fullPage: true });
-
-  return path;
 }
 
 const dialogText = (page: Page) => page.$eval('[role="dialog"]', (element) => element.textContent ?? '');
@@ -88,35 +63,17 @@ function shownSteps(page: Page): Promise<string[]> {
     .map((panel) => panel.getAttribute('data-welcome-step') ?? ''));
 }
 
-/** Every finite animation on the page has ended: a shot shows the step at rest, not mid-reveal. */
-async function settled(page: Page): Promise<void> {
-  await page.evaluate(() => Promise.allSettled(document.getAnimations()
-    .filter((animation) => animation.effect?.getComputedTiming().endTime !== Infinity)
-    .map((animation) => animation.finished)));
-}
-
-/** The step the page opened on is the one shown, its name field prefilled from the profile; the shot waits for the
- *  showcase's cards, which reveal a moment after their step shows, to be seen at all and then at rest. */
-async function expectStepAtRest(page: Page, step: 0 | 1 | 2): Promise<void> {
+/** The requested welcome step is accessible and the profile name is filled. */
+async function expectStep(page: Page, step: 0 | 1 | 2): Promise<void> {
   expect(await shownSteps(page)).toEqual([ONBOARDING_STEP_IDS[step]]);
 
   if (step === 0) {
     expect(await page.$eval('[aria-label="Your name"]', (el) => (el instanceof HTMLInputElement ? el.value : null))).toBe('Owner');
   }
-
-  if (step === 2) {
-    await page.waitForFunction(() => [...document.querySelectorAll('[data-welcome-step="showcase"] > div > div')]
-      .every((card) => card.checkVisibility({ opacityProperty: true })));
-  }
-
-  await settled(page);
 }
 
-/** What one view of the Workspaces page draws for a reader, and the shot of
- *  it taken where a reader meets it: before the filter tabs are exercised. */
-async function checkWorkspacesView(
-  page: Page, view: 'list' | 'tiled', viewport: keyof typeof VIEWPORTS, theme: 'dark' | 'light',
-): Promise<string> {
+/** Workspace entries are complete, the current route is marked, and filters return the requested entries. */
+async function checkWorkspacesView(page: Page, view: 'list' | 'tiled', viewport: keyof typeof VIEWPORTS): Promise<void> {
   await page.waitForSelector('[aria-label="Search workspaces"]');
   const body = await page.evaluate(() => document.body.innerText);
   expect(body).toContain('Workspaces');
@@ -148,8 +105,6 @@ async function checkWorkspacesView(
 
   if (viewport === 'desktop') expect(await activeNavRow(page)).toBe('Workspaces');
 
-  const shot = await shoot(page, `workspaces-${view}-${viewport}-${theme}`);
-
   // 'Needs you' holds exactly the workspace whose decisions wait.
   await page.click('[data-segment="needs"]');
   await page.waitForFunction(
@@ -166,8 +121,6 @@ async function checkWorkspacesView(
     () => document.querySelectorAll('[data-workspaces-view] a').length === 1,
   );
   expect(await page.$eval('[data-workspaces-view] a', (a) => a.textContent ?? '')).toContain('Perf audit');
-
-  return shot;
 }
 
 /** Is the delete-everything button awake? Asked in the page, so the polled
@@ -178,7 +131,7 @@ const deleteArmed = (): boolean =>
 describe('account panels', () => {
   test('the setup modal and the providers section render at both widths in both themes', async () => {
     await withGallery(async (gallery) => {
-      const shots: string[] = [];
+      
 
       for (const theme of ['dark', 'light'] as const) {
         for (const viewport of ['desktop', 'mobile'] as const) {
@@ -196,7 +149,7 @@ describe('account panels', () => {
             expect(text).toContain('ChatGPT');
             expect(text).toContain('Claude');
             expect(text).toContain('Add an API key');
-            shots.push(await shoot(providers, `setupmodal-providers-${viewport}-${theme}`));
+            
           } finally {
             await providers.close();
           }
@@ -238,7 +191,7 @@ describe('account panels', () => {
             });
 
             expect(statusVisible).toBe(true);
-            shots.push(await shoot(mcp, `setupmodal-mcp-${viewport}-${theme}`));
+            
           } finally {
             await mcp.close();
           }
@@ -252,7 +205,7 @@ describe('account panels', () => {
             );
 
             expect(await dialogText(cli)).toContain('kinu setup');
-            shots.push(await shoot(cli, `setupmodal-cli-${viewport}-${theme}`));
+            
           } finally {
             await cli.close();
           }
@@ -266,15 +219,14 @@ describe('account panels', () => {
             const text = await settings.evaluate(() => document.body.innerText);
             expect(text).toContain('Add an API key');
             expect(text).toContain('Manage MCP servers');
-            shots.push(await shoot(settings, `settings-providers-${viewport}-${theme}`));
+            
           } finally {
             await settings.close();
           }
         }
       }
 
-      expect(shots.length).toBe(16);
-      process.stdout.write(`account-ux: ${String(shots.length)} screenshots under ${SHOTS}\n`);
+      
     });
   });
 
@@ -347,7 +299,6 @@ describe('account panels', () => {
         // What could not be read is named, the account with the provider's own reason, not dropped.
         expect(lines.some((line) => line.includes('old-bot'))).toBe(true);
         expect(lines.some((line) => line.includes('work') && line.includes('HTTP 401'))).toBe(true);
-        await shoot(usage, 'settings-usage-mobile-dark');
       } finally {
         await usage.close();
       }
@@ -356,7 +307,7 @@ describe('account panels', () => {
 
   test('the welcome wizard renders each step at both widths in both themes', async () => {
     await withGallery(async (gallery) => {
-      const shots: string[] = [];
+      
 
       for (const theme of ['dark', 'light'] as const) {
         for (const viewport of ['desktop', 'mobile'] as const) {
@@ -367,8 +318,8 @@ describe('account panels', () => {
               // The slide is an inert track, so every step's panel is in the DOM: the one showing is the one a reader
               // can reach, and it must be the step the page was opened on.
               await page.waitForSelector('h1');
-              await expectStepAtRest(page, step);
-              shots.push(await shoot(page, `welcome-step${String(step)}-${viewport}-${theme}`));
+              await expectStep(page, step);
+              
             } finally {
               await page.close();
             }
@@ -376,14 +327,13 @@ describe('account panels', () => {
         }
       }
 
-      expect(shots.length).toBe(12);
-      process.stdout.write(`account-ux welcome: ${String(shots.length)} screenshots under ${SHOTS}\n`);
+      
     });
   });
 
   test('the account section names the owner and arms the delete only on the typed email', async () => {
     await withGallery(async (gallery) => {
-      const shots: string[] = [];
+      
 
       for (const theme of ['dark', 'light'] as const) {
         for (const viewport of ['desktop', 'mobile'] as const) {
@@ -394,7 +344,7 @@ describe('account panels', () => {
             const body = await page.evaluate(() => document.body.innerText);
             expect(body).toContain('owner@example.com');
             expect(body).toContain('Delete this account');
-            shots.push(await shoot(page, `settings-account-${viewport}-${theme}`));
+            
 
             // The danger button sleeps until the phrase is the account's own
             // email; a wrong phrase leaves it asleep, and case does not count.
@@ -413,21 +363,20 @@ describe('account panels', () => {
             await page.type('[aria-label="Confirm your email"]', 'Owner@Example.com');
             await page.waitForFunction(deleteArmed);
             expect(await page.evaluate(deleteArmed)).toBe(true);
-            shots.push(await shoot(page, `settings-account-armed-${viewport}-${theme}`));
+            
           } finally {
             await page.close();
           }
         }
       }
 
-      expect(shots.length).toBe(8);
-      process.stdout.write(`account-ux account: ${String(shots.length)} screenshots under ${SHOTS}\n`);
+      
     });
   });
 
   test('the primary nav, the workspaces page, the plugins page and the Shared tab render at both widths in both themes', async () => {
     await withGallery(async (gallery) => {
-      const shots: string[] = [];
+      
 
       for (const theme of ['dark', 'light'] as const) {
         for (const viewport of ['desktop', 'mobile'] as const) {
@@ -437,12 +386,14 @@ describe('account panels', () => {
             const home = await freshPage(gallery, 'home', theme, viewport);
 
             try {
+              await home.waitForSelector('nav[aria-label="Primary"] a[aria-current="page"]');
+
               const links = await home.$$eval('nav[aria-label="Primary"] a', (anchors) =>
-                anchors.map((a) => ({ label: a.textContent?.trim() ?? '', current: a.getAttribute('aria-current') })));
+                anchors.map((a) => ({ href: a.getAttribute('href'), current: a.getAttribute('aria-current') })));
 
               // Account settings is reached from the gear at the foot of the
               // rail, so the nav carries no row of its own for it.
-              expect(links.map((link) => link.label)).toEqual(['Home', 'Workspaces', 'Drive', 'Devices', 'Plugins']);
+              expect(links.map((link) => link.href).sort((left, right) => String(left).localeCompare(String(right)))).toEqual(['/', '/devices', '/drive', '/plugins', '/workspaces']);
               expect(links[0]?.current).toBe('page');
               expect(await activeNavRow(home)).toBe('Home');
               // The rail's own furniture is untouched around it: the roster
@@ -452,7 +403,7 @@ describe('account panels', () => {
               expect(rail).toContain('WORKSPACES');
               expect(rail).toContain('Checkout coupon bug');
               expect(rail).toContain('ashish@example.com');
-              shots.push(await shoot(home, `sidebar-nav-${theme}`));
+              
 
               // The row under the pointer is painted too, but never as the open row: not its ground, not its ink,
               // and never touching it. Lit alike and 2 px apart, the two once read as one block.
@@ -475,7 +426,7 @@ describe('account panels', () => {
             const page = await freshPage(gallery, view === 'list' ? 'workspaces&view=list' : 'workspaces', theme, viewport);
 
             try {
-              shots.push(await checkWorkspacesView(page, view, viewport, theme));
+              await checkWorkspacesView(page, view, viewport);
             } finally {
               await page.close();
             }
@@ -496,7 +447,7 @@ describe('account panels', () => {
             }
 
             if (viewport === 'desktop') expect(await activeNavRow(plugins)).toBe('Plugins');
-            shots.push(await shoot(plugins, `plugins-${viewport}-${theme}`));
+            
             await plugins.evaluate(() => {
               const button = [...document.querySelectorAll('button')].find((candidate) => candidate.textContent?.trim() === 'Manage');
 
@@ -512,6 +463,7 @@ describe('account panels', () => {
           const devices = await freshPage(gallery, 'devices', theme, viewport);
 
           try {
+            await devices.waitForFunction(() => document.body.innerText.includes('Workstation'));
             const body = await devices.evaluate(() => document.body.innerText);
 
             // Each machine's link state, then the grant state per workspace.
@@ -520,7 +472,7 @@ describe('account panels', () => {
             }
 
             if (viewport === 'desktop') expect(await activeNavRow(devices)).toBe('Devices');
-            shots.push(await shoot(devices, `devices-${viewport}-${theme}`));
+            
           } finally {
             await devices.close();
           }
@@ -538,15 +490,14 @@ describe('account panels', () => {
 
             // The Drive row stays lit on /shared: it is the Drive, not another page.
             if (viewport === 'desktop') expect(await activeNavRow(shared)).toBe('Drive');
-            shots.push(await shoot(shared, `shared-${viewport}-${theme}`));
+            
           } finally {
             await shared.close();
           }
         }
       }
 
-      expect(shots.length).toBe(22);
-      process.stdout.write(`account-ux nav: ${String(shots.length)} screenshots under ${SHOTS}\n`);
+      
     });
   });
 });

@@ -5,7 +5,7 @@
  */
 
 import { jsonResultOrVoid, SandboxPending, WORKSPACE_BACKUP_DIR, type SandboxHandle } from '@kinu.run/core';
-import { classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
+import { attempt, classifyErrorCode, diagnostics, KinuError, renderThrownChain, settle, toKinuError, type ErrorCode } from "@kinu.run/core/obs";
 import { devboxFailure, type DevboxErrorCode } from '@kinu.run/devbox';
 import { Effect } from 'effect';
 import type { KinuDevbox } from "./kinu-devbox";
@@ -15,7 +15,7 @@ import type { SandboxPreviewExposures } from "@kinu.run/core";
 type ContainerOperations = Pick<KinuDevbox,
   "execUntimed" | "killUntimed" | "resolveReadiness" | "readFile" | "writeFile" | "listFiles"
   | "deleteFile" | "exposePort" | "getExposedPorts" | "unexposePort" | "startSupervised"
-  | "stopSupervised" | "listSupervised" | "portToken" | "notePortRemoved" | "resize">;
+  | "stopSupervised" | "listSupervised" | "portToken" | "notePortRemoved" | "resize" | "portListeners" | "answerRest">;
 
 /** Without AUTH_KV the edge cannot verify a preview hostname, so a minted URL would be dead. */
 const PREVIEWS_UNPUBLISHABLE =
@@ -59,11 +59,10 @@ function callDevbox<A>(run: () => PromiseLike<A>): Effect.Effect<A, KinuError> {
 async function execWithoutDeadline(
   handle: Pick<KinuDevbox, "execUntimed" | "killUntimed">,
   command: string,
-  cwd?: string,
-  signal?: AbortSignal,
+  { cwd, signal, env }: { readonly cwd?: string | undefined; readonly signal?: AbortSignal | undefined; readonly env?: Readonly<Record<string, string>> | undefined },
 ) {
   const execId = crypto.randomUUID();
-  const ran = handle.execUntimed(command, { cwd: cwd ?? WORKSPACE_BACKUP_DIR, execId });
+  const ran = handle.execUntimed(command, { cwd: cwd ?? WORKSPACE_BACKUP_DIR, execId, ...(env !== undefined && { env }) });
   // Set only on abort: true means this call ended the process tree, false that the command had already exited.
   let verdict: Promise<boolean> | undefined;
   const { promise: killRefused, reject } = Promise.withResolvers<never>();
@@ -96,22 +95,28 @@ async function execWithoutDeadline(
  * container has no network, so it fails closed), then attach (pre-attach reads/writes hit a blank disk
  * that the overlay hides). Methods writing only this DO's rows skip it.
  */
+/** What a moved exposure owes is recorded before the call returns; its failure is reported, never the exposure's. */
+function recordPortsMoved(portsMoved: (() => Promise<void>) | undefined): Effect.Effect<void> {
+  return attempt({ doing: 'recording what an exposure moved', otherwise: 'unavailable' }, async () => { await portsMoved?.(); })
+    .pipe(Effect.catch((failure) => Effect.sync(() => { diagnostics.failure('jobs.serving_unread', failure); })));
+}
+
 export function adaptCloudflareSandbox(
   handle: ContainerOperations,
   configure: () => Promise<void>,
   previews: SandboxPreviewExposures | null,
-  portsMoved?: () => void,
+  portsMoved?: () => Promise<void>,
 ): SandboxHandle {
   // Memoized on the promise so concurrent first calls share it; failures are not cached.
   let inFlight: Promise<void> | null = null;
 
   const configured = async (): Promise<void> => {
     if (inFlight !== null) return await inFlight;
-    const attempt = configure();
-    inFlight = attempt;
+    const configuring = configure();
+    inFlight = configuring;
 
     try {
-      await attempt;
+      await configuring;
     } catch (error) {
       inFlight = null;
       throw error;
@@ -137,8 +142,10 @@ export function adaptCloudflareSandbox(
       const signals = [opts?.signal, opts?.timeout === undefined ? undefined : AbortSignal.timeout(opts.timeout)].filter((held) => held !== undefined);
       const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
 
-      return execWithoutDeadline(handle, command, opts?.cwd, signal);
+      return execWithoutDeadline(handle, command, { cwd: opts?.cwd, signal, env: opts?.env });
     })),
+    // Not `onContainer`: a read never starts a container.
+    portListeners: (stamp, ports) => settle(callDevbox(() => handle.portListeners(stamp, ports))),
     readFile: (path, opts) => settle(onContainer(() => handle.readFile(path, opts))),
     writeFile: (path, content, opts) =>
       settle(onContainer(() => jsonResultOrVoid(handle.writeFile(path, content, opts)))),
@@ -153,7 +160,7 @@ export function adaptCloudflareSandbox(
 
       if (label === null || label.port !== port) return yield* Effect.fail(new KinuError('io', `the container minted a preview URL this deployment cannot publish: ${exposed.url}`));
       yield* callDevbox(() => previews.publish(port, label.token));
-      portsMoved?.();
+      yield* recordPortsMoved(portsMoved);
 
       if (!(yield* callDevbox(() => previews.exposed(port, label.token)))) {
         return { ...exposed, route: { reached: false, gate: 'published' as const, detail: 'the edge holds no published record for this URL' } };
@@ -169,7 +176,7 @@ export function adaptCloudflareSandbox(
     unexposePort: (port) => settle(Effect.gen(function* () {
       if (previews !== null) yield* callDevbox(() => previews.withdraw(port));
       const removed = yield* onContainer(() => jsonResultOrVoid(handle.unexposePort(port)));
-      portsMoved?.();
+      yield* recordPortsMoved(portsMoved);
 
       return removed;
     })),
@@ -213,6 +220,8 @@ export function adaptCloudflareSandbox(
 
       return await handle.resize(size);
     })),
+    // Not `onContainer`: an answer never starts a resting container.
+    answerRest: (answer) => settle(callDevbox(() => handle.answerRest(answer))),
     // DO rows only: no egress, no attach wait, since the token must be mintable before its exposure.
     portToken: (port, name) => settle(callDevbox(() => handle.portToken(port, name))),
     notePortRemoved: (port) => settle(callDevbox(async () => {

@@ -11,7 +11,7 @@ import {
   type WSMessage,
 } from "agents";
 import {
-  TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice,
+  TierIdSchema, inspectSubordinateStorage, writeActivityLog, backgroundJobNotice, recordServingJobs,
   actorConnectionTag, actorFromConnectionTags, hostedActorRoute, HOSTED_ACTOR_ID_HEADER, actorReadHandle,
   resetGuardedExec, StoragePredatesResetError, ERROR_STATUS, LiveWorkers,
   type RunEventInput, type SubordinateInspectionAuthority, ConversationSearchStore, type ConversationRecall,
@@ -38,7 +38,7 @@ import {
   type CliSocketBearer,
   type RpcFrame,
 } from "./cli/rpc-gate";
-import { hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
+import { hostedWindowMay, PAGE_KEEPALIVE, readsWrittenBy, requiredRpcAccess, ROSTER_READS, rpcMovesOverview, type LiveRead, type SqlExec } from "@kinu.run/core";
 import { retryTransientDO } from "@kinu.run/core";
 import { createWorkersTracer } from "./obs/cf-tracer";
 import { createAgentTracing, renderThrownChain, type AgentTracing } from "@kinu.run/core/obs";
@@ -139,7 +139,7 @@ import {
   type SubordinateRuntime, type TemporaryAgentPort,
   SubordinateRosterStore, subordinateTitle,
   createTeamToolDeps, createTemporaryAgentPort, receiveSubordinateEvent,
-  type SubordinatesChangedEvent, type SubordinateReportStatus, type SubordinateReportOrigin,
+  type SubordinateReportStatus, type SubordinateReportOrigin,
   type SubordinateEventResult,
   // One minting rule for every subordinate, on either backend
   mintSubordinateName,
@@ -147,7 +147,7 @@ import {
   delegationExhausted, deriveChildDelegationBudget, type DelegationBudget,
   readSoul, bootstrapScaffold,
   applyWorkspaceTitle, suggestWorkspaceTitle, type NameOrigin,
-  accountDeps, parseModelSpec, catalogModelInfo, countRequestInputTokens,
+  accountDeps, parseModelSpec, specModelInfo, countRequestInputTokens,
   ModelCatalogSession, resolveEffectiveModelSpec, type ModelCatalogRead, type ModelInfo,
   // Shared turn-context assembly: the same ordering runChat runs on the CLI
   measureCompactionTrigger,
@@ -834,38 +834,6 @@ export abstract class ActorAgent extends Agent<Env> {
     ));
   }
 
-  private _subordinateRosterBroadcast: AsyncTaskOwner | null = null;
-  private _subordinateRosterBroadcastPending = false;
-
-  protected broadcastSubordinatesChanged(_event?: SubordinatesChangedEvent): void {
-    this._subordinateRosterBroadcastPending = true;
-
-    if (this._subordinateRosterBroadcast !== null) return;
-    const owner: AsyncTaskOwner = { promise: null };
-    this._subordinateRosterBroadcast = owner;
-    owner.promise = (async () => {
-      try {
-        while (this._subordinateRosterBroadcastPending) {
-          this._subordinateRosterBroadcastPending = false;
-          const subordinates = await this.subordinateViews();
-          this.broadcastToActor(null, JSON.stringify({ type: 'subordinates_changed', subordinates }));
-        }
-      } catch (cause) {
-        diagnostics.failure('subordinate.roster_broadcast_failed', toKinuError({
-          doing: 'building the subordinate roster read model',
-          cause,
-          otherwise: 'unavailable',
-        }));
-      } finally {
-        if (this._subordinateRosterBroadcast === owner) {
-          this._subordinateRosterBroadcast = null;
-
-          if (this._subordinateRosterBroadcastPending) this.broadcastSubordinatesChanged();
-        }
-      }
-    })();
-  }
-
   protected broadcastSubordinateEvent(
     event: Omit<SubordinateActivityEvent, 'type' | 'id'> & { id?: string },
   ): void {
@@ -931,7 +899,7 @@ export abstract class ActorAgent extends Agent<Env> {
       originContext: () => this.turnOriginContext(),
       ownMission: () => this.ownMission(),
       createName: mintSubordinateName,
-      broadcast: (event) => this.broadcastSubordinatesChanged(event),
+      rosterMoved: () => { this.liveReadsMoved(ROSTER_READS); },
       broadcastTask: (event) => this.broadcastSubordinateEvent({
         kind: 'task',
         ...event,
@@ -940,7 +908,7 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   /**
-   * Called by a child after it wrote its naming state; only fans `subordinates_changed`.
+   * Called by a child after it wrote its naming state; only names the roster's reads.
    * Must not call the child back (it is mid-turn). Not `@callable`: stub possession authorizes.
    */
   async recordSubordinateTitle(
@@ -1011,7 +979,7 @@ export abstract class ActorAgent extends Agent<Env> {
       vfs: this.rt.storage.vfs,
       transaction: (body) => this.ctx.storage.transactionSync(body),
       announce: (report) => {
-        this.broadcastSubordinatesChanged();
+        this.liveReadsMoved(ROSTER_READS);
         this.broadcastSubordinateEvent({ ...report, kind: 'report' });
       },
       onAdmitted: () => { this.orch.scheduleDrain(); },
@@ -1806,6 +1774,8 @@ export abstract class ActorAgent extends Agent<Env> {
   }
 
   private _chatLoop: ChatSession | null = null;
+  /** A read never builds the chat to ask. */
+  protected get chatTurnOwed(): boolean { return this._chatLoop?.turnOwed ?? false; }
   protected get chatLoop(): ChatSession {
     if (!this._chatLoop) {
       this._chatLoop = new ChatSession({
@@ -1839,7 +1809,9 @@ export abstract class ActorAgent extends Agent<Env> {
           // Arm the turn's own wake at its open, so a kill mid-turn leaves both the run row and the wake
           // that re-drives what it owed.
           armTurnWake: async (atMs) => { await this.scheduleTerminalRetry(atMs); },
+          owed: () => { this.liveReadsMoved(['listWorkspaceAgents']); },
           quiet: () => {
+            this.liveReadsMoved(['listWorkspaceAgents']);
             this.chatTransport.quiet();
             this.overviewChanged();
             this.detachOwned(() => this.restWhenIdle());
@@ -2539,7 +2511,7 @@ export abstract class ActorAgent extends Agent<Env> {
   // EventsHub primitives. Spec: docs/ARCHITECTURE.md — "Events and ingress"
   private _eventLog: EventLog | null = null;
   protected get eventLog(): EventLog {
-    this._eventLog ??= new EventLog(this.ctx.storage.sql, this.actorHandle());
+    this._eventLog ??= new EventLog(this.watchedExec, this.actorHandle());
 
     return this._eventLog;
   }
@@ -2625,7 +2597,11 @@ export abstract class ActorAgent extends Agent<Env> {
       logActivity: (event, detail) => this.logActivity(event, detail),
       // Transfer by request id, never by turn: only the detaching call's device work changes hands,
       // so parallel foreground commands stay reachable by Stop.
-      onDetached: (jobId, requestIds) => this.transferDeviceRequests(jobId, requestIds),
+      onDetached: (jobId, requestIds) => {
+        this.detachOwned(() => this.servingMoved());
+
+        return this.transferDeviceRequests(jobId, requestIds);
+      },
       // Throws when the device cannot confirm the cancel; runner calls this before any state change,
       // so a refused cancel leaves the job running and retryable.
       onCancelled: (jobId) => this.cancelBackgroundDeviceRequests(jobId),
@@ -2633,6 +2609,7 @@ export abstract class ActorAgent extends Agent<Env> {
       onSettled: (job) => {
         const notice = backgroundJobNotice(job);
         this.notifyOwner(notice.subject, notice.body);
+        this.detachOwned(() => this.servingMoved());
       },
       // Evict-resume (B6): re-drive from the durable checkpoint. Side-effecting kinds (eval / run)
       // decline and fall back to the eviction failure.
@@ -2686,6 +2663,16 @@ export abstract class ActorAgent extends Agent<Env> {
       + unconfirmed.map((o) => `${o.requestId} (${o.detail ?? 'no detail'})`).join('; '));
   }
 
+  /**
+   * Records which running job's command holds each exposed sandbox port when that can move (a port exposed or
+   * withdrawn, a job detached or settled), so a listing reads a row and never the box. Only a box this activation
+   * used is asked, and one that is down is not read: the next exposure reads again.
+   */
+  protected async servingMoved(): Promise<void> {
+    const holders = this._rt?.sandboxPortHolders() ?? null;
+
+    if (holders !== null) await recordServingJobs(this.jobs, holders);
+  }
   /** Controllers for foreground long tools; once detached, BackgroundJobRunner owns cancellation. */
   protected readonly _activeToolControllers = new Set<AbortController>();
 
@@ -2926,7 +2913,9 @@ export abstract class ActorAgent extends Agent<Env> {
         deferrals: () => this.deferralChannel(),
         slate: (operation) => this.slate(operation),
         reportModelCall: (report) => this.reportModelCall(report),
+        modelOperations: this.modelOperations,
         liveReadsMoved: (reads) => { this.liveReadsMoved(reads); },
+        servingMoved: () => this.servingMoved(),
         resolveProfile: () => this.routingProfile(),
         currentTurn: (reference) => this.currentTurnOf(reference),
         refusals: this.tierRefusals,
@@ -3943,10 +3932,9 @@ export abstract class ActorAgent extends Agent<Env> {
   });
 
   protected async catalogEntry(spec: string): Promise<ModelInfo | null> {
-    const { provider, modelId, account } = parseModelSpec(spec);
     const reg = this.providerRegistry();
 
-    return catalogModelInfo(reg.registry.get(provider), accountDeps(reg.deps, provider, account), modelId);
+    return specModelInfo(reg.registry, reg.deps, spec);
   }
 
   private readonly hostedModels = new Map<string, string>();

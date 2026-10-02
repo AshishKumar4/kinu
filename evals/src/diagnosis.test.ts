@@ -47,6 +47,20 @@ describe('the advisory diagnosis contract', () => {
     expect(() => parseDiagnosis(JSON.stringify({ ...reply, trials: [{ ...first, evidence: [] }] }), 'unchanged', reviews)).toThrow(v.ValiError);
   });
 
+  test('a trial whose turn hung is a product hang, and only such a trial is', () => {
+    const first = reply.trials[0];
+
+    if (first === undefined) throw new Error('reply has no trial');
+
+    const hung = makeAssertion([{ outcome: { status: 'hung', message: 'held by open run run' }, checks: [], turnWallMs: 1, verificationWallMs: 0 }]);
+    const hungReviews = [{ id: 'trial-1', insights: extractInsights(hung, evidence) }];
+    const causedBy = (kind: string) => JSON.stringify({ ...reply, trials: [{ ...first, cause: { kind } }] });
+
+    expect(parseDiagnosis(causedBy('product:hang'), 'unchanged', hungReviews).trials[0]?.cause).toEqual({ kind: 'product:hang' });
+    expect(() => parseDiagnosis(causedBy('agent:gave-up/incomplete'), 'unchanged', hungReviews)).toThrow(v.ValiError);
+    expect(() => parseDiagnosis(causedBy('product:hang'), 'unchanged', reviews)).toThrow(v.ValiError);
+  });
+
   test('an empty ledger has no line 1 to cite when a workspace failed before recording events', () => {
     const first = reply.trials[0];
 

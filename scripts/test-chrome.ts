@@ -74,6 +74,7 @@ export async function launchTestChrome(options: TestChromeOptions = {}): Promise
   // A launcher killed outright left its profile in RAM; its recorded owner says it is gone.
   reapAbandonedRoots(BROWSER_PROFILE_PARENT, root);
   let group: number | undefined;
+  let browser: Browser;
 
   const abandon = (): void => {
     options.onAbandon?.();
@@ -98,7 +99,6 @@ export async function launchTestChrome(options: TestChromeOptions = {}): Promise
   const executablePath = chromePath();
 
   if (executablePath !== undefined) launchOptions.executablePath = executablePath;
-  let browser: Browser;
 
   try {
     browser = await puppeteer.launch(launchOptions);
@@ -109,16 +109,16 @@ export async function launchTestChrome(options: TestChromeOptions = {}): Promise
   }
 
   group = browser.process()?.pid;
+  const launched = browser;
 
   return {
-    browser,
+    browser: launched,
     abandon,
     async close() {
       dropHold();
-      // The group, not the browser alone: puppeteer's close reaches the process it spawned, and the SIGKILL collects
-      // whatever of the group that close left, a wedged renderer or a zygote holding a pipe.
+      // A wedged browser cannot acknowledge CDP close; disconnect ends waits before the native group is reaped.
+      await launched.disconnect();
       signalGroup(group, 'SIGTERM');
-      await browser.close();
       endAndRemove(group, root);
     },
   };

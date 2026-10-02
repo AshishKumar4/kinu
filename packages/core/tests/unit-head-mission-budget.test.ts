@@ -16,7 +16,6 @@ import { makeSql, makeExecRaw } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 import { hostedSeatsOver } from './helpers-actor-host';
-import type { HostedNodeSeat } from '../src/strategy/node-agent';
 
 function steppingModel(perStep: { input: number; output: number; stopAfter?: number }): LanguageModel {
   let step = 0;
@@ -65,7 +64,7 @@ function headInput(missionLabels?: readonly string[]): HeadInput {
 }
 
 /** The mission ledger is a separate database so the counting seam sees only the governor's statements. */
-async function hostedHead(): Promise<HostedNodeSeat> {
+async function hostedHead() {
   const { rt, testSql } = createTestRuntime();
 
   return hostedSeatsOver({ rt, db: testSql.db }).seat('head-mission', 'swarm');

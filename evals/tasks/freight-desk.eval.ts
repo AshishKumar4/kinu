@@ -6,8 +6,8 @@ import type { EvalVerifier } from '../src/verifier';
 import { Seeded } from './seeded';
 
 // A freight co-op's month at its desk: the agent builds itself a tool for the manifests that come in and uses it; a
-// month later the forwarder's manifests arrive as a zip, which it unpacks and runs the same tool over; then a question
-// only the live web answers. Graded on what the Tools pane and the Files tab show, and on the answers: the totals
+// month later the forwarder's manifests arrive as a zip, one of them September's again under an October name, which it
+// unpacks without the copy and runs the same tool over; then a question only the live web answers. Graded on what the Tools pane and the Files tab show, and on the answers: the totals
 // computed here from the same manifests, the versions asked of the npm registry when the check runs.
 
 const MISSION = "Harbor Freight Co-op's workspace. We check every shipping manifest that comes in, with tools we keep for it.";
@@ -42,6 +42,9 @@ const OCTOBER = [
   { name: '2027-10-04.csv', lines: manifest(0x0c04, 71) },
   { name: '2027-10-18.csv', lines: manifest(0x0c18, 58) },
 ];
+
+/** September's manifest, byte for byte, as the forwarder re-sent it: only its content says it is a copy. */
+const RESENT = { name: '2027-10-11.csv', lines: SEPTEMBER };
 
 /** A zip of `files`, stored rather than deflated: every unzip reads it, and its bytes are fixed by its inputs. */
 function zip(files: readonly { name: string; content: string }[]): Uint8Array<ArrayBuffer> {
@@ -178,12 +181,14 @@ reply with one line: the total quantity, a space, and the total weight.`,
       await checkTotals(verifier, 'answers-with-the-totals', SEPTEMBER);
     },
   }, {
-    seed: [{ path: `${DIR}/2027-10.zip`, content: zip(OCTOBER.map((file) => ({ name: file.name, content: csv(file.lines) }))) }],
+    seed: [{ path: `${DIR}/2027-10.zip`, content: zip([...OCTOBER, RESENT].map((file) => ({ name: file.name, content: csv(file.lines) }))) }],
     prompt: `A month later our forwarder sent October's manifests as one archive, ${DIR}/2027-10.zip. Unpack it into
-${OCTOBER_DIR}/ and use your ${TOOL} tool on each manifest in it. Reply with one line: October's total
-quantity across them, a space, and its total weight.`,
+${OCTOBER_DIR}/. The forwarder sometimes re-sends a manifest we already have under a new name; keep no copy of
+one already in ${DIR}. Then use your ${TOOL} tool on each October manifest and reply with one line: October's
+total quantity across them, a space, and its total weight.`,
     verify: async (verifier) => {
-      await verifier.check('unpacks-every-manifest', async () => {
+      // Exactly October's two, so the re-sent copy is not kept, and each byte for byte as it was zipped.
+      await verifier.check('unpacks-octobers-manifests-and-no-copy', async () => {
         const listed = (await verifier.files(OCTOBER_DIR)).filter((entry) => entry.type === 'file').map((entry) => entry.name).sort();
         const changed: string[] = [];
 

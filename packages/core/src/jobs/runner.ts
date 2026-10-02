@@ -5,9 +5,9 @@ import type { Schedule } from '../types/primitives';
 import type { AgentSignal, AgentInbox, SignalUndeliveredReason } from '../types/signals';
 import type { EventLog } from '../events/hub/log';
 import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold';
-import { REAL_CLOCK } from '../types/clock';
+import { REAL_CLOCK, type Clock } from '../types/clock';
 import type { DeviceRequestOwnership } from './device-ownership';
-import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './store';
+import { BackgroundJobStore, serializeJobResult, type BackgroundJob, type JobResume } from './store';
 import { nanoid } from '../utils/nanoid';
 import { runWorkModeInvocation } from '../execution/work-mode';
 import { recoveryBackoffMs } from '../utils/recovery-backoff';
@@ -80,10 +80,15 @@ interface DetachRequest {
   readonly ownership?: DeviceRequestOwnership;
 }
 
+export function newJobId(): string {
+  return `bgjob-${nanoid()}`;
+}
+
 export interface BackgroundJobRunnerDeps {
   store: BackgroundJobStore;
   /** Resolved per read: one runner can serve watched and unwatched surfaces. Defaults to interactive. */
   policy?: () => BackgroundPolicy;
+  clock?: Clock;
   fiber: Schedule['fiber'];
   inbox: AgentInbox;
   /** Durable wake retry plane; both or neither. Absent for agents with no later activation (swarm nodes). */
@@ -105,7 +110,6 @@ export interface BackgroundJobRunnerDeps {
   scheduleResume?: (atMs: number) => Promise<void> | void;
 }
 
-/** Short label derived from tool input, truncated like other debug summaries. */
 const SearchJobInputSchema = v.object({ task: v.string() });
 
 const RunJobInputSchema = v.object({ command: v.string(), runtime: v.optional(v.string()) });
@@ -190,7 +194,10 @@ export class BackgroundJobRunner {
 
   /** Pure: callers log their own lifecycle event. */
   create(kind: string, input: JsonValue, mode: WorkMode, controller: AbortController): string {
-    const id = `bgjob-${nanoid()}`;
+    return this.createJob(newJobId(), { kind, input, mode, controller });
+  }
+
+  private createJob(id: string, { kind, input, mode, controller }: Pick<DetachRequest, 'kind' | 'input' | 'mode' | 'controller'>): string {
     this.deps.store.create({
       id, kind, workMode: mode, input: serializeJobResult({ value: input }), now: Date.now(),
       label: describeJobInput(kind, input),
@@ -202,7 +209,7 @@ export class BackgroundJobRunner {
 
   /** Null means another retry already owns the source row. */
   createRetry(request: BackgroundRetryRequest): string | null {
-    const id = `bgjob-${nanoid()}`;
+    const id = newJobId();
 
     const created = this.deps.store.createRetry({
       sourceId: request.sourceId,
@@ -239,7 +246,7 @@ export class BackgroundJobRunner {
   ): ThresholdDeps {
     return {
       thresholdMs: this.policy.detachAfterMs,
-      clock: REAL_CLOCK,
+      clock: this.deps.clock ?? REAL_CLOCK,
       onThreshold: async (kind, promise) =>
         await this.onThreshold({ kind, input, mode, controller, promise, ownership }),
     };
@@ -255,7 +262,7 @@ export class BackgroundJobRunner {
       return { detached: false, reason: 'too many jobs already running' };
     }
 
-    const jobId = this.create(kind, input, mode, controller);
+    const jobId = this.createJob(ownership?.jobId ?? newJobId(), { kind, input, mode, controller });
     this.deps.logActivity?.('bg_job_started', `${kind} -> ${jobId}`);
     await this.beginDetachedWork(jobId, kind, promise, ownership);
 
@@ -267,12 +274,15 @@ export class BackgroundJobRunner {
    * tree). Exact because one workspace has one driver.
    */
   private liveDetachedCount(): number {
-    const owed = this.deps.store.resumeOwedIdsInWorkspace(Date.now());
-    let idle = 0;
-
-    for (const jobId of owed) if (!this.controllers.has(jobId)) idle++;
+    const now = Date.now();
+    const idle = this.owedResumes().filter((resume) => resume.at > now).length;
 
     return this.deps.store.countRunningInWorkspace() - idle;
+  }
+
+  /** Not the jobs this runner drives: a re-drive arms its instant for the activation after a death. */
+  private owedResumes(): readonly JobResume[] {
+    return this.deps.store.resumesInWorkspace().filter((resume) => !this.controllers.has(resume.id));
   }
 
   /** A failed transfer may have moved a prefix, so the job keeps its claim rather than aborting. */
@@ -655,12 +665,14 @@ export class BackgroundJobRunner {
   }
 
   nextResumeAt(): number | null {
-    return this.deps.store.nextResumeAtInWorkspace();
+    const owed = this.owedResumes();
+
+    return owed.length === 0 ? null : Math.min(...owed.map((resume) => resume.at));
   }
 
-  /** Timer entry: one MIN read; re-arms a not-yet-due attempt, since its schedule row can be lost. */
+  /** Timer entry: re-arms a not-yet-due attempt, since its schedule row can be lost. */
   async recoverDueResumes(): Promise<void> {
-    const next = this.deps.store.nextResumeAtInWorkspace();
+    const next = this.nextResumeAt();
 
     if (next === null) return;
 

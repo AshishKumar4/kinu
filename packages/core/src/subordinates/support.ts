@@ -277,11 +277,6 @@ export interface SubordinateRuntime {
   dismiss(name: string, dismissal: { readonly keepHistory: boolean; readonly interrupt: boolean }, reference: ActorReference): Promise<void>;
 }
 
-export interface SubordinatesChangedEvent {
-  type: 'subordinates_changed';
-  subordinates: SubordinateRosterEntry[];
-}
-
 /** Same default as `AgentConfigStore.getRoleSelection`. */
 const DEFAULT_SUBORDINATE_ROLE_ID = 'task';
 
@@ -339,7 +334,7 @@ export function createTeamToolDeps(deps: {
   originContext?(): Promise<readonly ModelMessage[]>;
   /** Inherited by an owner-created agent given none; read at create time, not captured. */
   ownMission(): string;
-  broadcast(event: SubordinatesChangedEvent): void;
+  rosterMoved(): void;
   broadcastTask(event: { subordinate: string; content: string; timestamp: number }): void;
   /**
    * Built once per actor: the port holds the live `shell` waiters, and these deps are rebuilt per call.
@@ -347,11 +342,6 @@ export function createTeamToolDeps(deps: {
    */
   temporary?: TemporaryAgentPort;
 }): TeamToolDeps {
-  /** The only payload is the lifecycle roster; task content travels on its own event. */
-  const changed = () => {
-    deps.broadcast({ type: 'subordinates_changed', subordinates: deps.roster.list() });
-  };
-
   /** A task agent answers one brief and retires; more work for it belongs to a durable hire. */
   const requireDurable = (entry: SubordinateRosterEntry): SubordinateRosterEntry => {
     if (entry.lifetime !== 'durable') {
@@ -459,7 +449,7 @@ export function createTeamToolDeps(deps: {
 
     create: async (input) => {
       const { name, displayName, subordinate } = await provision(input, true, null);
-      changed();
+      deps.rosterMoved();
 
       return { name, displayName, subordinate };
     },
@@ -468,7 +458,7 @@ export function createTeamToolDeps(deps: {
     rename: async (input) => {
       const displayName = requiredText(input.displayName, 'displayName');
       await deps.runtime.rename(input.name, displayName, 'user');
-      changed();
+      deps.rosterMoved();
 
       return {
         ok: true, name: input.name, displayName,
@@ -478,7 +468,7 @@ export function createTeamToolDeps(deps: {
 
     recordTitle: async (input) => {
       const displayName = requiredText(input.displayName, 'displayName');
-      changed();
+      deps.rosterMoved();
 
       return { ok: true, name: input.name, displayName };
     },
@@ -486,7 +476,7 @@ export function createTeamToolDeps(deps: {
     spawn: async (input) => {
       const mission = requiredText(input.mission, 'mission');
       const { name, displayName, createdAt } = await provision(input, false, input.mode);
-      changed();
+      deps.rosterMoved();
       deps.broadcastTask({ subordinate: name, content: mission, timestamp: createdAt });
 
       return { name, displayName };
@@ -516,7 +506,7 @@ export function createTeamToolDeps(deps: {
         rollback({ cause: error }, () => deps.roster.restore(before), 'subordinate assignment');
       }
 
-      changed();
+      deps.rosterMoved();
       deps.broadcastTask({ subordinate: input.name, content: task, timestamp: deps.now() });
 
       return { ok: true, name: input.name, ...handoff };
@@ -542,7 +532,7 @@ export function createTeamToolDeps(deps: {
         rollback({ cause: error }, () => deps.roster.restore(before), 'subordinate message');
       }
 
-      changed();
+      deps.rosterMoved();
 
       return { ok: true, name: input.name, ...handoff };
     },
@@ -573,7 +563,7 @@ export function createTeamToolDeps(deps: {
         deps.roster.removeActor(input.name, reference);
       }
 
-      changed();
+      deps.rosterMoved();
 
       return { ok: true, name: input.name, historyKept: keepHistory };
     },

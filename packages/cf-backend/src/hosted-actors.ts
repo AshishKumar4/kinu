@@ -48,6 +48,7 @@ export interface HostedActorSeams {
   readonly directory: WorkspaceActorDirectory;
   turnInFlight(reference: ActorReference): boolean;
   infer(reference: ActorReference, input: HeadInput, inference: HeadInferenceDeps): Promise<HeadReport>;
+  windowOf: HostedNodeSeat['windowOf'];
   transaction<Result>(body: () => Result): Result;
   /** Scoped to the actor, so a subordinate manages only its own subtree. */
   roster(actor: BoundActor): SubordinateRosterStore;
@@ -179,8 +180,6 @@ export async function admitHostedTask(
       seams.announce(actor);
     }
 
-    // Arm the wake, not the reactor: an assignment is not a `wakesADrain` row, and its runner
-    // The delegation runners must not start in this request.
     if (result.admitted) seams.armWake();
 
     return {
@@ -632,6 +631,7 @@ async function runActorSeat(seams: HostedActorSeams, reference: ActorReference):
   return {
     actor,
     infer: (input, inference) => seams.infer(reference, input, inference),
+    windowOf: seams.windowOf,
     runId: crypto.randomUUID(),
     profile: (request) => seams.profile({ actor, ...request }),
     dynamic: (profile, tools) => explorationDynamicContext(actor, profile, tools),

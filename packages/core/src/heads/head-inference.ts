@@ -14,6 +14,7 @@ import type { WorkMode } from '../types/turn';
 import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles';
 import type { DynamicContext } from '../prompting/volatile-context';
 import type { PromptModelContext } from '../prompting/model-profile';
+import type { ResolvedModelWindow } from '../context-window';
 import {
   EVIDENCE_KINDS,
   type HeadInput, type HeadReport, type HeadId, type HeadStep, type SerializedMessage,
@@ -396,6 +397,8 @@ export interface HeadInferenceDeps {
   dynamic: (profile: ResolvedTurnProfile, tools: ToolSet) => DynamicContext;
   model: LanguageModel;
   modelSpec?: string;
+  /** What `model` is admitted against, as the catalog reports it (`ModelCatalogSession`), like an actor's own turn. */
+  window: ResolvedModelWindow;
   /** Accumulator tools plus the backend's scratch tools; the caller controls the surface. */
   tools: ToolSet;
   /** The prompt must name the same file plane the tools reach. */
@@ -638,7 +641,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   const system = deps.framing?.system
     ?? buildHeadSystemPrompt(input, Object.keys(deps.tools), deps.workspaceLayout);
 
-  const modelContext = promptModelContext(deps.model);
+  const modelContext = { ...promptModelContext(deps.model), ...deps.window };
 
   /** A stream that died before its first step settles nothing; half a conversation is worse than none. */
   let settled = false;

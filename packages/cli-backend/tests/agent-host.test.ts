@@ -26,6 +26,7 @@ import {
   SUBORDINATE_REPORT_STATUSES,
   HeadCapture, runHeadInference, codenameFor,
   bindActorHandle,
+  READS_CHANGED_EVENT,
   type ActorHandle,
   type HostedAgentRef,
   type LLMProviderConfig,
@@ -447,6 +448,7 @@ interface TestHostExtras {
   driverKind?: DriverKind;
   advisor?: boolean;
   modelResolver?: LocalModelResolver;
+  deferLiveReads?: (flush: () => void) => void;
 }
 
 function makeHost(
@@ -477,6 +479,8 @@ function makeHost(
   if (extras.wakeAt) options.wakeAt = extras.wakeAt;
 
   if (extras.driverKind) options.driverKind = extras.driverKind;
+
+  if (extras.deferLiveReads) options.deferLiveReads = extras.deferLiveReads;
 
   return { host: new LocalAgentHost(options), runtimes };
 }
@@ -1346,6 +1350,7 @@ describe('LocalAgentHost', () => {
     }, {
       actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
       model: streamingModel('The probe succeeded.', (options) => { reviews.push(isReview(options)); }),
+      window: await seat.windowOf(null),
       clock: REAL_CLOCK, tools: {}, capture: new HeadCapture(), isAborted: () => false, workspaceLayout: 'shared-workspace',
     });
 
@@ -1651,6 +1656,44 @@ describe('LocalAgentHost', () => {
     expect(order).toEqual(['answer routed', 'session ended']);
 
     expect(stage()).not.toBe('requested');
+  });
+
+  // 2026-10-01: the TUI's agents hub read its helpers once, when it opened, and went stale: the CLI host told its clients
+  // nothing when a write moved a read. Each write to the workspace's file names the reads it moves, as a workspace object does.
+  test("a hire, a write to the workspace's file and a dismissal each name the reads they move to the workspace's clients", async () => {
+    const { state, project } = makeRoots();
+    await seedAgent(state, 'root');
+    const owed: (() => void)[] = [];
+
+    const { host, runtimes } = makeHost(state, replyingModel('ok').model, [{ name: 'root', cwd: project, workspaceId: 'proj' }], {
+      deferLiveReads: (flush) => { owed.push(flush); },
+    });
+
+    const named: string[] = [];
+    host.subscribe((agent, event) => {
+      if (agent === 'root' && event.type === 'broadcast' && event.event.type === READS_CHANGED_EVENT) named.push(...event.event.reads ?? []);
+    });
+
+    /** Ends the tick as the next task does: every owed frame goes out. */
+    const heard = (): string[] => {
+      for (const flush of owed.splice(0)) flush();
+
+      return named.splice(0);
+    };
+
+    const team = await host.team('root');
+    heard();
+
+    await team.create({ name: 'researcher', role: 'researcher', mission: 'Investigate the incident.' });
+    expect(heard()).toEqual(expect.arrayContaining(['listSubordinates', 'listWorkspaceAgents']));
+
+    // A write no roster call announces: only the file's own watch can name it.
+    present(runtimes.get('root'), 'the root runtime').actor.config.setDisplayName('Checkout');
+    expect(heard()).toEqual(expect.arrayContaining(['listSubordinates', 'listWorkspaceAgents']));
+
+    await team.dismiss({ name: 'researcher', requestedBy: 'user' });
+    expect(heard()).toEqual(expect.arrayContaining(['listSubordinates', 'listWorkspaceAgents']));
+    await host.close();
   });
 
   test("a subordinate's terminal report moves its parent's roster row off working", async () => {
