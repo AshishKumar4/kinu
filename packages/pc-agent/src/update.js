@@ -507,6 +507,144 @@ function createUpdater(opts) {
   };
 }
 
+// The runtime. An older daemon's updater starts its successor on the Bun it had, so this build can wake on a Bun
+// older than the one it was tested on; it leaves that Bun the way the launcher does, before it claims anything.
+
+/**
+ * Core's `KINU_BUN_VERSION` and `bunResolutionShell` (packages/core/src/cli/bun-runtime.ts), carried as text: the
+ * daemon ships as files of its own, and an older daemon's updater lands only the files it knows.
+ * `unit-install-script.test.ts` holds this rendering equal to core's, whose version the repository's
+ * `packageManager` pin holds.
+ */
+const KINU_BUN_VERSION = '1.4.2';
+
+/** Non-`major.minor.patch` input is not comparable; the shell half treats it as incompatible. */
+function bunVersionKey(version) {
+  const parts = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
+
+  if (!parts) throw new Error(`Not a major.minor.patch version: ${version}`);
+
+  return Number(parts[1]) * 1_000_000 + Number(parts[2]) * 1_000 + Number(parts[3]);
+}
+
+/** Relative to `$KINU_HOME`. */
+const KINU_MANAGED_BUN_SUBPATH = 'runtime/bin/bun';
+
+/** Requires `$KINU_HOME`; `provide_bun` leaves the resolved absolute path in `$KINU_BUN`. */
+function bunResolutionShell() {
+  return `KINU_BUN_VERSION="${KINU_BUN_VERSION}"
+KINU_BUN_MIN_KEY=${bunVersionKey(KINU_BUN_VERSION)}
+KINU_MANAGED_BUN="$KINU_HOME/${KINU_MANAGED_BUN_SUBPATH}"
+KINU_BUN=""
+
+# A candidate's own version as one comparable integer. A version that is not
+# three dot-separated numbers is not comparable, so it does not qualify.
+kinu_bun_key() {
+  case "$1" in *.*.*) ;; *) return 1 ;; esac
+  kb_major="\${1%%.*}"
+  kb_rest="\${1#*.}"
+  kb_minor="\${kb_rest%%.*}"
+  kb_patch="\${kb_rest#*.}"
+  kb_patch="\${kb_patch%%[!0-9]*}"
+  case "$kb_major$kb_minor$kb_patch" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$(( kb_major * 1000000 + kb_minor * 1000 + kb_patch ))"
+}
+
+# An ABSOLUTE path or nothing: an executable test on a bare name resolves
+# against the working directory, so a file named bun sitting wherever the user
+# happened to run this would qualify as the runtime.
+kinu_bun_compatible() {
+  [ -n "\${1:-}" ] || return 1
+  case "$1" in /*) ;; *) return 1 ;; esac
+  [ -x "$1" ] || return 1
+  kc_version="$("$1" --version 2>/dev/null)" || return 1
+  kc_key="$(kinu_bun_key "$kc_version")" || return 1
+  [ "$kc_key" -ge "$KINU_BUN_MIN_KEY" ]
+}
+
+# Kinu's managed Bun first. It is an absolute path the installer controls, so
+# the launcher resolves the binary the installer verified whatever PATH the
+# user's next shell has: a PATH disagreement is what prints "Kinu CLI is ready."
+# and then "Bun is required."
+kinu_resolve_bun() {
+  KINU_BUN=""
+  for kr_candidate in "$KINU_MANAGED_BUN" "$(command -v bun 2>/dev/null || true)" "$HOME/.bun/bin/bun"; do
+    if kinu_bun_compatible "$kr_candidate"; then
+      KINU_BUN="$kr_candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# The one runtime. An existing compatible Bun is used as it is; otherwise the
+# approved Bun is installed once, under $KINU_HOME, where kinu_resolve_bun finds
+# it whatever PATH a later shell has. Runs under set -e and pipefail, so a
+# download that fails stops here with its own error; the caller defines die.
+provide_bun() {
+  if kinu_resolve_bun; then return 0; fi
+  if [ "\${KINU_INSTALL_BUN:-1}" = "0" ]; then
+    die "Bun $KINU_BUN_VERSION or newer is required. Install Bun, or rerun without KINU_INSTALL_BUN=0."
+  fi
+  echo "Installing Bun $KINU_BUN_VERSION..." >&2
+  mkdir -p "$KINU_HOME/runtime"
+  curl -fsSL https://bun.sh/install | BUN_INSTALL="$KINU_HOME/runtime" bash -s "bun-v$KINU_BUN_VERSION" >&2
+  kinu_resolve_bun || die "Bun $KINU_BUN_VERSION was installed to $KINU_MANAGED_BUN but did not run."
+}
+`;
+}
+
+/** Whether this process runs on the approved Bun or a newer one; any other runtime does not. */
+function onApprovedBun() {
+  const running = process.versions.bun;
+
+  return running !== undefined && /^\d+\.\d+\.\d+/.test(running) && bunVersionKey(running) >= bunVersionKey(KINU_BUN_VERSION);
+}
+
+/**
+ * The approved Bun's absolute path, provided by the launcher's own `provide_bun`: a compatible Bun this machine
+ * already has, or the approved one installed under `$KINU_HOME/runtime`. Rejects with what the provisioning said
+ * last; everything it said goes to the log.
+ */
+async function provideApprovedBun(deviceHome, log) {
+  const script = ['set -euo pipefail', 'die() { echo "$*" >&2; exit 1; }', bunResolutionShell(), 'provide_bun', 'printf \'%s\' "$KINU_BUN"'];
+
+  // Named, so a line the shell reports reads `provide_bun: line N: ...`.
+  const { error, stdout, stderr } = await runToExit('bash', ['-c', script.join('\n'), 'provide_bun'], {
+    env: { ...process.env, KINU_HOME: deviceHome },
+    encoding: 'utf8',
+  });
+
+  const said = String(stderr).trim();
+
+  if (said !== '') log('device.runtime_provisioning', said);
+
+  if (error === null) return String(stdout);
+
+  if (!Number.isInteger(error.code)) throw new Error(`Bun ${KINU_BUN_VERSION} could not be provided: ${error.message}`);
+
+  const lines = said.split('\n');
+
+  throw new Error(`Bun ${KINU_BUN_VERSION} could not be provided: ${said === '' ? `bash exited ${String(error.code)}` : lines[lines.length - 1]}`);
+}
+
+/** The longest reason the hub is sent; it keeps the reason for the device row. */
+const REFUSAL_REASON_MAX = 1000;
+
+/**
+ * Tells the hub this build refuses to run here and why, so the hub stops pushing it and the owner's device row
+ * says why the machine is behind. Resolves the hub's HTTP status.
+ */
+async function reportRefusal({ origin, cfg, version, reason, fetchFn = fetch }) {
+  const res = await fetchFn(`${origin}/pc/update-refused`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ user: cfg.user, token: cfg.token, version, reason: reason.slice(0, REFUSAL_REASON_MAX) }),
+  });
+
+  return res.status;
+}
+
 module.exports = {
   RELEASE_SIGNING_PUBLIC_KEY,
   RELEASE_SIGNING_PUBLIC_KEY_ENV,
@@ -520,4 +658,9 @@ module.exports = {
   clearPendingMarker,
   createUpdater,
   runToExit,
+  KINU_BUN_VERSION,
+  bunResolutionShell,
+  onApprovedBun,
+  provideApprovedBun,
+  reportRefusal,
 };

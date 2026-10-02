@@ -1,6 +1,6 @@
 import { readText } from '@nimbus-sh/core/vfs/vfs.js';
 /** Device daemon self-update, and the frames it shares with the hub, with the hub faked at its two seams (helpers/update-hub.ts). */
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { Subprocess } from 'bun';
 import { afterAll, afterEach, describe, expect, test } from 'bun:test';
@@ -8,8 +8,8 @@ import { present, killAndAwaitExit, recordedIn, scratchDir } from '@kinu.run/tes
 import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 import {
-  deviceFiles, DEVICE_CANCEL_PROTOCOL, DEVICE_EXEC_ACK_METHOD, DEVICE_TOKEN_ROTATION_ACK, JsonValueSchema, parseJsonObject,
-  type DeviceStatus, type DeviceTransport, type JsonObject,
+  bunResolutionShell, deviceFiles, DEVICE_CANCEL_PROTOCOL, DEVICE_EXEC_ACK_METHOD, DEVICE_TOKEN_ROTATION_ACK, JsonValueSchema,
+  parseJsonObject, type DeviceStatus, type DeviceTransport, type JsonObject,
 } from '@kinu.run/core';
 import {
   DAEMON_FILES, daemonArchive, PLATFORM_ARTIFACT, releaseSigningEnv, ROTATED_TOKEN, startUpdateHub,
@@ -131,6 +131,47 @@ function startPipedDaemon(home: string, extraEnv: Record<string, string> = {}) {
 }
 
 const pidfile = (home: string) => Number(readFileSync(join(home, 'pc-agent.pid'), 'utf-8').trim());
+
+/** The Bun the launcher installs, read from the resolution it ships. */
+const APPROVED_BUN = present(/KINU_BUN_VERSION="([^"]+)"/.exec(bunResolutionShell())?.[1], 'the approved Bun');
+
+/**
+ * A machine whose own Bun is 1.4.0, the launcher's Bun before the pin moved. Today's code stands in for the field's
+ * older daemon, which never looked at its runtime, so only the process that daemon's updater starts (it names its
+ * predecessor) reads 1.4.0; the Bun installed under $KINU_HOME/runtime reads as itself. bun.sh's installer is a
+ * stand-in on PATH that puts this suite's own Bun there, or fails as curl does without a network. No other Bun is on
+ * PATH or under $HOME, so the launcher's resolution finds none.
+ */
+function olderBunMachine(home: string, bunSh: 'installs' | 'unreachable') {
+  const standIns = join(home, 'stand-ins');
+  const userHome = join(home, 'user-home');
+  mkdirSync(standIns);
+  mkdirSync(userHome);
+
+  const olderBun = join(home, 'older-bun.js');
+  writeFileSync(olderBun, [
+    `if (process.env.KINU_DAEMON_PREDECESSOR !== undefined && process.execPath !== ${JSON.stringify(join(home, 'runtime/bin/bun'))}) {`,
+    "  process.versions.bun = '1.4.0';",
+    '}',
+    '',
+  ].join('\n'));
+
+  const curl = bunSh === 'installs'
+    ? [
+      '#!/bin/sh',
+      "cat <<'INSTALLER'",
+      `[ "$1" = "bun-v${APPROVED_BUN}" ] || { echo "asked for $1" >&2; exit 1; }`,
+      `mkdir -p "$BUN_INSTALL/bin" && cp ${JSON.stringify(process.execPath)} "$BUN_INSTALL/bin/bun"`,
+      'INSTALLER',
+    ]
+    : ['#!/bin/sh', 'echo "curl: (6) Could not resolve host: bun.sh" >&2', 'exit 6'];
+
+  writeFileSync(join(standIns, 'curl'), `${curl.join('\n')}\n`, { mode: 0o755 });
+
+  const path = (process.env.PATH ?? '').split(':').filter((dir) => dir !== '' && !existsSync(join(dir, 'bun')));
+
+  return { PATH: [standIns, ...path].join(':'), HOME: userHome, BUN_OPTIONS: `--preload ${olderBun}` };
+}
 
 const installed = (home: string, name: string) => readFileSync(join(home, name), 'utf-8');
 
@@ -416,6 +457,55 @@ describe('the daemon answers the hub in core\'s frames', () => {
     expect(ran.stdout).toContain(`the full stdout is at ${shown}]`);
     expect(await readText(files, shown)).toBe(`${'x'.repeat(600_000)}END`);
     await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL]);
+  });
+});
+
+describe('a release that needs a newer Bun than the machine runs', () => {
+  test('a 1.4.0 daemon given this release ends up serving on the approved Bun, not rolled back', async () => {
+    const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW) });
+    const home = installedMachine(served.origin, OLD);
+    const daemon = startPipedDaemon(home, { ...(await releaseSigningEnv()), ...olderBunMachine(home, 'installs') });
+    const oldPid = await waitForDaemonPid(home);
+
+    await served.sockets.until((hellos) => hellos[1] !== undefined);
+    const successor = present(served.sockets.items[1], 'the successor HELLO');
+    expect(successor.hello).toMatchObject({ version: NEW });
+    expect(await daemon.proc.exited).toBe(0);
+    expect(daemon.log()).toContain('device.update_handed_over');
+    expect(daemon.log()).not.toContain('device.update_rolled_back');
+
+    // The process the old updater started is the one serving, gone on as the Bun the launcher's install put in place.
+    const started = Number(present(/device\.update_successor_started pid=(\d+)/.exec(daemon.log())?.[1], 'the successor pid'));
+    expect(pidfile(home)).toBe(started);
+    expect(started).not.toBe(oldPid);
+    expect(realpathSync(`/proc/${String(started)}/exe`)).toBe(join(realpathSync(home), 'runtime/bin/bun'));
+    expect(installed(home, 'pc-agent.js')).toBe(NEW_DAEMON);
+    expect(installed(home, 'pc-agent.version').trim()).toBe(NEW);
+    await successor.settle();
+  });
+
+  test('a runtime install that fails reaches the hub with its reason, and the old daemon rolls back and serves', async () => {
+    const served = hub({ served: NEW, archive: await daemonArchive(NEW_FILES, NEW) });
+    const home = installedMachine(served.origin, OLD);
+    const daemon = startPipedDaemon(home, { ...(await releaseSigningEnv()), ...olderBunMachine(home, 'unreachable') });
+    const oldPid = await waitForDaemonPid(home);
+
+    // The attempt ends at the hub either way: the successor's refusal, or its own HELLO.
+    await Promise.race([served.refusals.until((posted) => posted.length > 0), served.sockets.until((hellos) => hellos.length > 1)]);
+    expect(served.refusals.items).toEqual([{
+      user: 'user_1',
+      token: ROTATED_TOKEN,
+      version: NEW,
+      reason: `this machine runs Bun 1.4.0, and Bun ${APPROVED_BUN} could not be provided: curl: (6) Could not resolve host: bun.sh`,
+    }]);
+
+    await daemon.waitForLog('device.update_rolled_back');
+    expect(pidfile(home)).toBe(oldPid);
+    expect(alive(oldPid)).toBe(true);
+    expect(installed(home, 'pc-agent.js')).toBe(DAEMON_FILES['pc-agent.js']);
+    expect(installed(home, 'pc-agent.version').trim()).toBe(OLD);
+    expect(served.sockets.items).toHaveLength(1);
+    expect(served.sockets.items[0]?.closed).toBeNull();
   });
 });
 
