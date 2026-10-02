@@ -702,14 +702,11 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     const root = yield* effectiveRoot();
 
     // A device that named no directory failed above rather than widening to `/`.
-    if (!(path === root || path.startsWith(`${root}/`))) {
-      return yield* Effect.fail(new VfsError(
-        'EACCES',
-        `'${path}' is outside the consented device directory '${root}': the agent sees the folder the owner `
-          + `consented${scope === 'sandboxed' ? ' and its own /tmp' : ''}, and nothing else. `
-          + `Ask the owner to consent that directory, ${op} '${path}'`,
-        path,
-      ));
+    if (!(root === '/' || path === root || path.startsWith(`${root}/`))) {
+      return yield* Effect.fail(syscallError('EACCES', op, path, {
+        detail: `outside the consented device directory '${root}': the agent sees the folder the owner `
+          + `consented${scope === 'sandboxed' ? ' and its own /tmp' : ''}, and nothing else. Ask the owner to consent that directory`,
+      }));
     }
 
     // The daemon's realpath check is authoritative; this lexical check is a cheap first line.
@@ -760,6 +757,15 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     return bytes;
   });
 
+  /** The step toward a confined root: Nimbus stats each directory on a path. */
+  const towardRoot = (path: string): Effect.Effect<string | null, VfsError> => Effect.gen(function* () {
+    if ((yield* Effect.promise(() => consent.scope(deviceId))) === 'unconfined') return null;
+    const root = yield* effectiveRoot();
+    const prefix = path === '/' ? '/' : `${path}/`;
+
+    return root !== path && root.startsWith(prefix) ? root.slice(prefix.length).split('/')[0] || null : null;
+  });
+
   const writeReported = (path: string, data: Uint8Array) => Effect.gen(function* () {
     const root = yield* guarded(path, 'open');
     const text = asLosslessText(data);
@@ -792,6 +798,9 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     writeFileWithReport: (path, data) => settle(writeReported(path, data)),
 
     readdir: (path) => settle(Effect.gen(function* () {
+      const step = yield* towardRoot(path);
+
+      if (step !== null) return [{ name: step, type: 'directory' as const }];
       const root = yield* guarded(path, 'scandir');
       const entries: JsonValue[] = [];
 
@@ -825,6 +834,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     })),
 
     stat: (path) => settle(Effect.gen(function* () {
+      if ((yield* towardRoot(path)) !== null) return { size: 0, mtimeMs: 0, type: 'directory' as const };
       const root = yield* guarded(path, 'stat');
 
       const stat = v.parse(DeviceStatSchema, yield* call('statPath', [path, { root }], path));

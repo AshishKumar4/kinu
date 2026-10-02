@@ -103,12 +103,15 @@ describe('createDeviceTunnelExecutor', () => {
 
     const read = await provider.tools.readFile.execute('/etc/passwd');
     const write = await provider.tools.writeFile.execute('/tmp/out', 'x');
-    const list = await provider.tools.readdir.execute('/');
     const exists = await provider.tools.exists.execute('/root/.ssh/id_ed25519');
 
-    for (const answer of [read, write, list, exists]) {
+    for (const answer of [read, write, exists]) {
       expect(answer).toMatchObject({ error: expect.stringContaining('outside the consented device directory') });
     }
+
+    // Above the consent, a listing holds only the next step toward it, answered without the machine.
+    expect(await provider.tools.readdir.execute('/')).toEqual(['home']);
+    expect(await provider.tools.readdir.execute('/home/dev')).toEqual(['project']);
 
     expect(t.calls).toEqual([]);
     expect(await provider.tools.readFile.execute('/home/dev/project/readme.md')).toBe('contents');
