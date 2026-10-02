@@ -1,4 +1,4 @@
-import { Result } from 'effect';
+import { Effect, Result } from 'effect';
 import * as v from 'valibot';
 import type { RawSqlExec } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
@@ -7,6 +7,7 @@ import { admitReviewAnnotations, DiffAnchorSchema } from '../plans/review';
 import type { JsonObject } from '../utils/json';
 import { comparePaths } from './change-view';
 import { KinuError } from '../obs/index';
+import { settle, settleSync } from '../obs/effect';
 
 const CHANGE_NOTES_EVENT = 'change_notes';
 
@@ -27,20 +28,22 @@ export type ChangeNotesResult =
   | { readonly ok: true; readonly notes: readonly ReviewAnnotation[] }
   | { readonly ok: false; readonly error: string };
 
-function keptNotes(rt: NotesRuntime, source: string): { readonly json: string; readonly notes: ReviewAnnotation[] } | null {
-  const row = rt.storage.sql<{ notes_json: string }>`SELECT notes_json FROM change_notes
+function keptNotes(rt: NotesRuntime, source: string): Effect.Effect<{ readonly json: string; readonly notes: ReviewAnnotation[] } | null> {
+  return Effect.gen(function* () {
+    const row = rt.storage.sql<{ notes_json: string }>`SELECT notes_json FROM change_notes
     WHERE actor_id = ${rt.actor.actorId} AND source = ${source} LIMIT 1`[0];
 
-  if (row === undefined) return null;
-  const admission = admitReviewAnnotations({ value: JSON.parse(row.notes_json) });
+    if (row === undefined) return null;
+    const admission = admitReviewAnnotations({ value: JSON.parse(row.notes_json) });
 
-  if (Result.isFailure(admission)) throw new Error(`the notes kept on ${source} no longer admit: ${admission.failure.error}`);
+    if (Result.isFailure(admission)) return yield* Effect.die(new Error(`the notes kept on ${source} no longer admit: ${admission.failure.error}`));
 
-  return { json: row.notes_json, notes: admission.success };
+    return { json: row.notes_json, notes: admission.success };
+  });
 }
 
 export function readChangeNotes(rt: NotesRuntime, source: string): ReviewAnnotation[] {
-  return keptNotes(rt, source)?.notes ?? [];
+  return settleSync(Effect.map(keptNotes(rt, source), (kept) => kept?.notes ?? []));
 }
 
 function refusal(notes: readonly ReviewAnnotation[]): string | null {
@@ -203,24 +206,26 @@ function changeNotesMessage(set: NotedChanges, notes: readonly ReviewAnnotation[
   };
 }
 
-export async function sendChangeNotes(
+export function sendChangeNotes(
   rt: NotesRuntime, set: { value: unknown }, admit: (message: ChangeNotesMessage, consume: () => void) => Promise<void>,
 ): Promise<ChangeNotesResult> {
-  rt.actor.assertCurrent();
-  const parsed = v.safeParse(NotedChangesSchema, set.value);
+  return settle(Effect.gen(function* () {
+    rt.actor.assertCurrent();
+    const parsed = v.safeParse(NotedChangesSchema, set.value);
 
-  if (!parsed.success) return { ok: false, error: `the change-set: ${parsed.issues[0].message}` };
-  const { source } = parsed.output;
-  const kept = keptNotes(rt, source);
+    if (!parsed.success) return { ok: false, error: `the change-set: ${parsed.issues[0].message}` } satisfies ChangeNotesResult;
+    const { source } = parsed.output;
+    const kept = yield* keptNotes(rt, source);
 
-  if (kept === null || kept.notes.length === 0) return { ok: false, error: 'there are no notes to send' };
+    if (kept === null || kept.notes.length === 0) return { ok: false, error: 'there are no notes to send' } satisfies ChangeNotesResult;
 
-  await admit(changeNotesMessage(parsed.output, kept.notes), () => {
-    const taken = rt.storage.sql<{ source: string }>`DELETE FROM change_notes
-      WHERE actor_id = ${rt.actor.actorId} AND source = ${source} AND notes_json = ${kept.json} RETURNING source`;
+    yield* Effect.promise(async () => admit(changeNotesMessage(parsed.output, kept.notes), () => settleSync(Effect.gen(function* () {
+      const taken = rt.storage.sql<{ source: string }>`DELETE FROM change_notes
+        WHERE actor_id = ${rt.actor.actorId} AND source = ${source} AND notes_json = ${kept.json} RETURNING source`;
 
-    if (taken.length === 0) throw new KinuError('unavailable', 'the notes changed while they were being sent; send them again');
-  });
+      if (taken.length === 0) return yield* new KinuError('unavailable', 'the notes changed while they were being sent; send them again');
+    }))));
 
-  return { ok: true, notes: [] };
+    return { ok: true, notes: [] } satisfies ChangeNotesResult;
+  }));
 }

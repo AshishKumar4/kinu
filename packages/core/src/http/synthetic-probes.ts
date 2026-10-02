@@ -46,13 +46,20 @@ const TIMEOUT_MS = 10_000;
 const VERSION_MANIFEST = '/downloads/kinu-version.json';
 
 export function runSyntheticProbes(deps: ProbeDeps): Promise<ProbeOutcome[]> {
-  return settle(Effect.gen(function* () {
-    return [
-      yield* Effect.promise(async () => probeHealth(deps)),
-      yield* Effect.promise(async () => probeDownloads(deps)),
-      yield* Effect.promise(async () => probeLogin(deps)),
-    ];
-  }));
+  return settle(Effect.all([probe('health', health(deps)), probe('downloads', downloads(deps)), probe('login', login(deps))]));
+}
+
+type Checks = Effect.Effect<string, string>;
+
+function probe(name: string, checks: Checks): Effect.Effect<ProbeOutcome> {
+  return Effect.match(checks, {
+    onSuccess: (detail) => ({ probe: name, ok: true, detail }),
+    onFailure: (detail) => ({ probe: name, ok: false, detail }),
+  });
+}
+
+function step<A>(run: () => Promise<A>, failed: (cause: string) => string): Effect.Effect<A, string> {
+  return Effect.tryPromise({ try: run, catch: (cause) => failed(renderThrownChain({ cause })) });
 }
 
 async function get(deps: ProbeDeps, path: string): Promise<Response> {
@@ -77,155 +84,123 @@ function buildStamp(input: { body: unknown }): string | null {
   return null;
 }
 
-async function probeHealth(deps: ProbeDeps): Promise<ProbeOutcome> {
-  const fail = (detail: string): ProbeOutcome => ({ probe: 'health', ok: false, detail });
-  let response: Response;
+function health(deps: ProbeDeps): Checks {
+  return Effect.gen(function* () {
+    const response = yield* step(() => get(deps, '/api/health'), (cause) => `GET /api/health did not answer: ${cause}`);
 
-  try {
-    response = await get(deps, '/api/health');
-  } catch (err) {
-    return fail(`GET /api/health did not answer: ${renderThrownChain({ cause: err })}`);
-  }
+    if (response.status !== 200) return yield* Effect.fail(`GET /api/health returned HTTP ${response.status}`);
 
-  if (response.status !== 200) return fail(`GET /api/health returned HTTP ${response.status}`);
+    const body = yield* step(
+      async () => v.parse(v.looseObject({}), await response.json()),
+      (cause) => `GET /api/health did not return JSON (${cause}): the SPA fallback is answering an API route`,
+    );
 
-  let body: object;
+    if (!v.is(HealthBodySchema, body)) {
+      return yield* Effect.fail('GET /api/health reports the worker as not ok');
+    }
 
-  try {
-    body = v.parse(v.looseObject({}), await response.json());
-  } catch (error) {
-    return fail(`GET /api/health did not return JSON (${renderThrownChain({ cause: error })}): the SPA fallback is answering an API route`);
-  }
+    const live = buildStamp({ body });
 
-  if (!v.is(HealthBodySchema, body)) {
-    return fail('GET /api/health reports the worker as not ok');
-  }
+    if (!live) {
+      return yield* Effect.fail('GET /api/health carries no build identifier: the live build cannot be identified');
+    }
 
-  const live = buildStamp({ body });
-
-  if (!live) {
-    return fail('GET /api/health carries no build identifier: the live build cannot be identified');
-  }
-
-  let shipped: string;
-
-  try {
-    shipped = await shippedBuild(deps);
-  } catch (err) {
-    return fail(
+    const shipped = yield* shippedBuild(deps).pipe(Effect.mapError((cause) =>
       `${VERSION_MANIFEST} cannot name the build the download assets came from,`
-      + ` so the live build is unverified: ${renderThrownChain({ cause: err })}`,
-    );
-  }
+      + ` so the live build is unverified: ${cause}`));
 
-  if (shipped !== live) {
-    return fail(
-      `the worker reports build ${live} but ${VERSION_MANIFEST} advertises ${shipped}`
-      + ': worker and assets are from different deploys',
-    );
-  }
+    if (shipped !== live) {
+      return yield* Effect.fail(
+        `the worker reports build ${live} but ${VERSION_MANIFEST} advertises ${shipped}`
+        + ': worker and assets are from different deploys',
+      );
+    }
 
-  return { probe: 'health', ok: true, detail: `build ${live}` };
+    return `build ${live}`;
+  });
 }
 
-/** Throws when the manifest is absent, is the SPA shell, or names no build. */
-async function shippedBuild(deps: ProbeDeps): Promise<string> {
-  const response = await get(deps, VERSION_MANIFEST);
+/** Fails when the manifest is absent, is the SPA shell, or names no build. */
+function shippedBuild(deps: ProbeDeps): Effect.Effect<string, string> {
+  return Effect.gen(function* () {
+    const response = yield* step(() => get(deps, VERSION_MANIFEST), (cause) => cause);
 
-  if (response.status !== 200) throw new Error(`it returned HTTP ${response.status}`);
-  const stamp = buildStamp({ body: await response.json() });
+    if (response.status !== 200) return yield* Effect.fail(`it returned HTTP ${response.status}`);
+    const stamp = buildStamp({ body: yield* step(async () => response.json(), (cause) => cause) });
 
-  if (!stamp) throw new Error('it carries no build identifier');
+    if (!stamp) return yield* Effect.fail('it carries no build identifier');
 
-  return stamp;
+    return stamp;
+  });
 }
 
 /** Checked sequentially: hashing holds the whole body in memory. */
-async function probeDownloads(deps: ProbeDeps): Promise<ProbeOutcome> {
-  const fail = (detail: string): ProbeOutcome => ({ probe: 'downloads', ok: false, detail });
+function downloads(deps: ProbeDeps): Checks {
+  return Effect.gen(function* () {
+    for (const path of CLI_DIST_PATHS) {
+      const checksumPath = `${path}.sha256`;
 
-  for (const path of CLI_DIST_PATHS) {
-    const checksumPath = `${path}.sha256`;
-    let archive: Response;
-    let checksum: Response;
-
-    try {
-      [archive, checksum] = await Promise.all([get(deps, path), get(deps, checksumPath)]);
-    } catch (err) {
-      return fail(`the CLI download ${path} did not answer: ${renderThrownChain({ cause: err })}`);
-    }
-
-    if (archive.status !== 200) return fail(`GET ${path} returned HTTP ${archive.status}`);
-
-    if (checksum.status !== 200) return fail(`GET ${checksumPath} returned HTTP ${checksum.status}`);
-
-    let declared: string;
-    let actual: string;
-
-    try {
-      declared = ((await checksum.text()).trim().split(/\s+/)[0] ?? '');
-      actual = await sha256Hex(new Uint8Array(await archive.arrayBuffer()));
-    } catch (err) {
-      return fail(`the CLI download ${path} could not be read: ${renderThrownChain({ cause: err })}`);
-    }
-
-    if (!/^[0-9a-f]{64}$/.test(declared)) {
-      return fail(
-        `${checksumPath} is not a sha256 line: the SPA shell is being served in place of the checksum`,
+      const [archive, checksum] = yield* step(
+        async () => Promise.all([get(deps, path), get(deps, checksumPath)]),
+        (cause) => `the CLI download ${path} did not answer: ${cause}`,
       );
+
+      if (archive.status !== 200) return yield* Effect.fail(`GET ${path} returned HTTP ${archive.status}`);
+
+      if (checksum.status !== 200) return yield* Effect.fail(`GET ${checksumPath} returned HTTP ${checksum.status}`);
+
+      const { declared, actual } = yield* step(async () => ({
+        declared: ((await checksum.text()).trim().split(/\s+/)[0] ?? ''),
+        actual: await sha256Hex(new Uint8Array(await archive.arrayBuffer())),
+      }), (cause) => `the CLI download ${path} could not be read: ${cause}`);
+
+      if (!/^[0-9a-f]{64}$/.test(declared)) {
+        return yield* Effect.fail(
+          `${checksumPath} is not a sha256 line: the SPA shell is being served in place of the checksum`,
+        );
+      }
+
+      if (actual !== declared) {
+        return yield* Effect.fail(
+          `${path} hashes to ${actual} but ${checksumPath} declares ${declared}`
+          + ': install and update are both refusing this download',
+        );
+      }
     }
 
-    if (actual !== declared) {
-      return fail(
-        `${path} hashes to ${actual} but ${checksumPath} declares ${declared}`
-        + ': install and update are both refusing this download',
-      );
-    }
-  }
-
-  return { probe: 'downloads', ok: true, detail: `${CLI_DIST_PATHS.length} artifacts match their checksums` };
+    return `${CLI_DIST_PATHS.length} artifacts match their checksums`;
+  });
 }
 
-async function probeLogin(deps: ProbeDeps): Promise<ProbeOutcome> {
-  const fail = (detail: string): ProbeOutcome => ({ probe: 'login', ok: false, detail });
-  let response: Response;
+function login(deps: ProbeDeps): Checks {
+  return Effect.gen(function* () {
+    const response = yield* step(() => get(deps, '/login'), (cause) => `GET /login did not answer: ${cause}`);
 
-  try {
-    response = await get(deps, '/login');
-  } catch (err) {
-    return fail(`GET /login did not answer: ${renderThrownChain({ cause: err })}`);
-  }
+    if (response.status !== 200) return yield* Effect.fail(`GET /login returned HTTP ${response.status}`);
+    const body = yield* step(async () => response.text(), (cause) => `GET /login could not be read: ${cause}`);
 
-  if (response.status !== 200) return fail(`GET /login returned HTTP ${response.status}`);
-  let body: string;
+    if (!body.includes('Sign in to Kinu')) {
+      return yield* Effect.fail('GET /login did not render the sign-in page');
+    }
 
-  try {
-    body = await response.text();
-  } catch (err) {
-    return fail(`GET /login could not be read: ${renderThrownChain({ cause: err })}`);
-  }
+    const { declared, configured } = deps.signIn;
 
-  if (!body.includes('Sign in to Kinu')) {
-    return fail('GET /login did not render the sign-in page');
-  }
+    if (declared.length === 0) return 'sign-in page renders; this deployment declares no provider';
+    const unconfigured = declared.filter((id) => !configured.includes(id));
 
-  const { declared, configured } = deps.signIn;
+    if (unconfigured.length > 0) {
+      return yield* Effect.fail(`${unconfigured.join(', ')} is declared in SIGN_IN_PROVIDERS but has no client id or secret: nobody can sign in with it`);
+    }
 
-  if (declared.length === 0) return { probe: 'login', ok: true, detail: 'sign-in page renders; this deployment declares no provider' };
-  const unconfigured = declared.filter((id) => !configured.includes(id));
+    if (!body.includes('href="/auth/')) {
+      return yield* Effect.fail('GET /login offers no sign-in provider: nobody can sign in');
+    }
 
-  if (unconfigured.length > 0) {
-    return fail(`${unconfigured.join(', ')} is declared in SIGN_IN_PROVIDERS but has no client id or secret: nobody can sign in with it`);
-  }
+    const missing = declared.filter((id) => !body.includes(`href="/auth/${id}/start`));
 
-  if (!body.includes('href="/auth/')) {
-    return fail('GET /login offers no sign-in provider: nobody can sign in');
-  }
+    if (missing.length > 0) return yield* Effect.fail(`GET /login does not offer ${missing.join(', ')}, which SIGN_IN_PROVIDERS declares`);
 
-  const missing = declared.filter((id) => !body.includes(`href="/auth/${id}/start`));
-
-  if (missing.length > 0) return fail(`GET /login does not offer ${missing.join(', ')}, which SIGN_IN_PROVIDERS declares`);
-
-  return { probe: 'login', ok: true, detail: 'sign-in page renders' };
+    return 'sign-in page renders';
+  });
 }
 

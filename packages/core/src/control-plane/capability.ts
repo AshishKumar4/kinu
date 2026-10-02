@@ -43,10 +43,10 @@ const ADMIN_LABEL = 'kinu.control-plane.admin.v1';
 
 const derived = new Map<string, Promise<string>>();
 
-function controlToken(env: ControlSecretEnv, label: string): Promise<string> {
+function controlToken(env: ControlSecretEnv, label: string): Effect.Effect<string> {
   const secret = (env.CREDENTIAL_ENCRYPTION_KEY ?? '').trim();
 
-  if (!secret) throw new ControlPlaneUnconfiguredError();
+  if (!secret) return Effect.die(new ControlPlaneUnconfiguredError());
   const key = `${label}\u0000${secret}`;
   let pending = derived.get(key);
 
@@ -55,7 +55,9 @@ function controlToken(env: ControlSecretEnv, label: string): Promise<string> {
     derived.set(key, pending);
   }
 
-  return pending;
+  const derivation = pending;
+
+  return Effect.promise(() => derivation);
 }
 
 export interface ControlSecretEnv {
@@ -71,13 +73,13 @@ export class ControlPlaneUnconfiguredError extends Data.TaggedError('ControlPlan
 }
 
 /** Cannot read across users or mutate. */
-export async function internalCaller(env: ControlSecretEnv): Promise<ControlCaller> {
-  return { controlToken: await controlToken(env, INGEST_LABEL) };
+export function internalCaller(env: ControlSecretEnv): Promise<ControlCaller> {
+  return settle(Effect.map(controlToken(env, INGEST_LABEL), (token) => ({ controlToken: token })));
 }
 
 /** Only `adminCaller` in `admin-caller.ts` should call this; it requires proof of an operator. */
-export async function adminControlToken(env: ControlSecretEnv): Promise<ControlCaller> {
-  return { controlToken: await controlToken(env, ADMIN_LABEL) };
+export function adminControlToken(env: ControlSecretEnv): Promise<ControlCaller> {
+  return settle(Effect.map(controlToken(env, ADMIN_LABEL), (token) => ({ controlToken: token })));
 }
 
 /** workerd erases the subclass across RPC and keeps `name`, so a caller reads the name, never `instanceof`. */
@@ -94,7 +96,7 @@ export function requireControl(
   capability: ControlCapability,
 ): Promise<ControlGrade> {
   return settle(Effect.gen(function* () {
-    const grade = yield* Effect.promise(() => resolveGrade(env, caller));
+    const grade = yield* resolveGrade(env, caller);
     const required = CONTROL_PLANE_CAPABILITIES[capability];
 
     if (grade === null || GRADE_RANK[grade] < GRADE_RANK[required]) {
@@ -115,23 +117,23 @@ const ControlCallerSchema: v.GenericSchema<ControlCaller> = v.object({
   controlToken: v.pipe(v.string(), v.nonEmpty()),
 });
 
-async function resolveGrade(
+function resolveGrade(
   env: ControlSecretEnv, caller: PresentedCaller,
-): Promise<ControlGrade | null> {
+): Effect.Effect<ControlGrade | null> {
   const parsed = v.safeParse(ControlCallerSchema, caller);
 
-  if (!parsed.success) return null;
+  if (!parsed.success) return Effect.succeed(null);
   const token = parsed.output.controlToken;
 
-  const [ingest, admin] = await Promise.all([
+  return Effect.all([
     controlToken(env, INGEST_LABEL),
     controlToken(env, ADMIN_LABEL),
-  ]);
+  ], { concurrency: 'unbounded' }).pipe(Effect.map(([ingest, admin]): ControlGrade | null => {
+    if (token === admin) return 'admin';
 
-  if (token === admin) return 'admin';
+    if (token === ingest) return 'ingest';
 
-  if (token === ingest) return 'ingest';
-
-  return null;
+    return null;
+  }));
 }
 

@@ -4,6 +4,8 @@
  * (spec, effort) pair to a client ({@link HeadMergeModelBinder}).
  */
 
+import { Effect } from 'effect';
+import { settle } from '../obs/effect';
 import type { LanguageModel } from 'ai';
 import type { ProviderOptions } from '../providers/effort';
 import { generateJson } from '../providers/structured';
@@ -36,34 +38,38 @@ export interface HeadMergePolicyDeps {
 }
 
 /** Throws rather than answering null: `judge` is a `fixed`-tier producer. Private so no backend can resolve the route and bind something else. */
-function resolveHeadMergeRoute(profile: ResolvedTurnProfile): ModelRouteResolution {
-  const route = resolveModelRoute(HEAD_MERGE_SOURCE, profile);
+function resolveHeadMergeRoute(profile: ResolvedTurnProfile): Effect.Effect<ModelRouteResolution> {
+  return Effect.gen(function* () {
+    const route = resolveModelRoute(HEAD_MERGE_SOURCE, profile);
 
-  if (!route) throw new Error('the head merge cannot use the fixed platform model route');
+    if (!route) return yield* Effect.die(new Error('the head merge cannot use the fixed platform model route'));
 
-  return route;
+    return route;
+  });
 }
 
 /** Routed model, the tier's own effort, `judge` spend; `generateJson` keeps the JSON-only instruction, report-before-parse and the operation frame together. */
 export function headMergeLLM(deps: HeadMergePolicyDeps): MergeLLMFn {
-  return async (prompt) => {
-    const { model, providerOptions } = deps.bindMergeModel(
-      resolveHeadMergeRoute(await deps.profile()),
-    );
+  return (prompt) => {
+    return settle(Effect.gen(function* () {
+      const { model, providerOptions } = deps.bindMergeModel(
+        yield* resolveHeadMergeRoute(yield* Effect.promise(async () => deps.profile())),
+      );
 
-    const options: Parameters<typeof generateJson<MergeOutput>>[0] = {
-      model,
-      schema: MergeOutputSchema,
-      prompt,
-      spend: {
-        source: HEAD_MERGE_SOURCE,
-        report: deps.reportModelCall,
-        operations: deps.operations,
-      },
-    };
+      const options: Parameters<typeof generateJson<MergeOutput>>[0] = {
+        model,
+        schema: MergeOutputSchema,
+        prompt,
+        spend: {
+          source: HEAD_MERGE_SOURCE,
+          report: deps.reportModelCall,
+          operations: deps.operations,
+        },
+      };
 
-    if (providerOptions) options.providerOptions = providerOptions;
+      if (providerOptions) options.providerOptions = providerOptions;
 
-    return generateJson(options);
+      return yield* Effect.promise(async () => generateJson(options));
+    }));
   };
 }

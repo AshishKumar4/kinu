@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-10-02",
   "files": 2952,
-  "functions": 76969,
+  "functions": 77179,
   "ceiling": 87,
   "line": 28,
   "inventory": [
@@ -323,10 +323,6 @@
     },
     {
       "key": "packages/cli/src/config.ts#resolveLLMConfig>gen",
-      "complexity": 28
-    },
-    {
-      "key": "packages/core/src/heads/head-inference.ts#runHeadInference",
       "complexity": 28
     },
     {

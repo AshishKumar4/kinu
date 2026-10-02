@@ -3,7 +3,7 @@
  * Heads settle independently (Promise.allSettled).
  */
 
-import { Effect, Result } from 'effect';
+import { Cause, Effect, Result } from 'effect';
 import { settle } from '../obs/effect';
 import * as v from 'valibot';
 import { nanoid } from '../utils/nanoid';
@@ -180,8 +180,8 @@ export class HeadController {
         if (splitRecorded !== undefined) yield* Effect.promise(() => splitRecorded);
       }
 
-      // A spawn that throws settles only its own head and never reaches Promise.all.
-      const spawnPromises = opts.request.heads.map(async (h, idx): Promise<SpawnedHead | HeadReport> => {
+      // A failed spawn settles only its own head; spawns start in order, synchronously.
+      const settled = yield* Effect.forEach(opts.request.heads, (h, idx) => Effect.gen({ self: this }, function* () {
         // Derived from the parent and slot, never minted: a re-drive re-opens the same row via
         // `HeadJournal.insertSpawn`. Keyed on the parent, which is unique, not the root.
         const id = `${opts.parentHeadId ?? rootId}-d${childBudget.maxDepth + 1}-${idx}`;
@@ -208,11 +208,9 @@ export class HeadController {
         // A local journal writes the row before this returns; nothing may push that write behind a microtask.
         const spawnRecorded = this.journal.insertSpawn(input);
 
-        if (spawnRecorded !== undefined) await spawnRecorded;
+        if (spawnRecorded !== undefined) yield* Effect.promise(() => spawnRecorded);
 
-        try {
-          return await this.runtime.spawnHead(input);
-        } catch (err) {
+        return yield* Effect.catchCause(Effect.promise((): Promise<SpawnedHead | HeadReport> => this.runtime.spawnHead(input)), (spawnFailed) => Effect.gen({ self: this }, function* () {
           // Nothing ran: usage is unknown (`{}`), and the reason travels in `errorMessage`.
           const failed: HeadReport = {
             id,
@@ -227,16 +225,15 @@ export class HeadController {
             stepCount: 0,
             usage: {},
             wallClockMs: 0,
-            errorMessage: renderThrownChain({ cause: err }),
+            errorMessage: renderThrownChain({ cause: Cause.squash(spawnFailed) }),
           };
 
-          await this.journal.recordReport(failed);
+          yield* Effect.promise(async () => this.journal.recordReport(failed));
 
           return failed;
-        }
-      });
+        }));
+      }), { concurrency: 'unbounded' });
 
-      const settled = yield* Effect.promise(() => Promise.all(spawnPromises));
       // Only heads that spawned hold a handle; the split event carries exactly these ids.
       const handles: SpawnedHead[] = [];
 
@@ -253,40 +250,38 @@ export class HeadController {
         rationale: opts.request.rationale,
       });
 
-      const reports = yield* Effect.promise(() => Promise.all(
-        settled.map(async (s): Promise<HeadReport> => {
-          // A failed-spawn head rejoins in its original slot so the merge still sees every head.
-          if (!('run' in s)) return s;
-          const h = s;
+      const reports = yield* Effect.forEach(settled, (s) => {
+        // A failed-spawn head rejoins in its original slot so the merge still sees every head.
+        if (!('run' in s)) return Effect.succeed(s);
+        const h = s;
 
-          try {
-            const report = await h.run();
-            await this.journal.recordReport(report);
+        return Effect.catchCause(Effect.gen({ self: this }, function* () {
+          const report = yield* Effect.promise(() => h.run());
+          yield* Effect.promise(async () => this.journal.recordReport(report));
 
-            return report;
-          } catch (err) {
-            const failed: HeadReport = {
-              id: h.id,
-              status: 'errored',
-              summary: 'Head failed before producing a report.',
-              evidence: [],
-              decisions: [],
-              artifactRefs: [],
-              fileChanges: [],
-              childHeadIds: [],
-              toolCalls: [], stepCount: 0,
-              // The head never reported, so its usage is unknown: `{}`, not zeros.
-              usage: {},
-              wallClockMs: this.clock.now() - startedAt,
-              errorMessage: renderThrownChain({ cause: err }),
-            };
+          return report;
+        }), (runFailed) => Effect.gen({ self: this }, function* () {
+          const failed: HeadReport = {
+            id: h.id,
+            status: 'errored',
+            summary: 'Head failed before producing a report.',
+            evidence: [],
+            decisions: [],
+            artifactRefs: [],
+            fileChanges: [],
+            childHeadIds: [],
+            toolCalls: [], stepCount: 0,
+            // The head never reported, so its usage is unknown: `{}`, not zeros.
+            usage: {},
+            wallClockMs: this.clock.now() - startedAt,
+            errorMessage: renderThrownChain({ cause: Cause.squash(runFailed) }),
+          };
 
-            await this.journal.recordReport(failed);
+          yield* Effect.promise(async () => this.journal.recordReport(failed));
 
-            return failed;
-          }
-        }),
-      ));
+          return failed;
+        }));
+      }, { concurrency: 'unbounded' });
 
       const headScores = yield* Effect.promise(() => this.scoreHeads(rootId, reports, opts.request.rationale, opts.mode));
 

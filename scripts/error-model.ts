@@ -250,7 +250,7 @@ export const DECLARED = byFile([
   // Records and displays, not failure channels: `ok` here is a fact the value carries (a probe passed, a tool
   // call succeeded, which glyph to show), stored or rendered as data rather than branched on as an error.
   ...([
-    ['packages/core/src/http/synthetic-probes.ts', ['probeHealth', 'probeDownloads', 'probeLogin', 'fail'],
+    ['packages/core/src/http/synthetic-probes.ts', ['probe'],
       'a synthetic probe\'s verdict, recorded per run by the monitor as whether the probe passed'],
     ['packages/core/src/control-plane/fleet-alerts.ts', ['settleFleet'],
       'a probe verdict the fleet monitor records per run'],
