@@ -49,6 +49,7 @@ export interface ModelRouteResolution {
   readonly model: string;
   readonly reasoningEffort: ReasoningEffort | null;
   readonly fallbacks: readonly TierFallback[];
+  readonly retries: number;
 }
 
 function tierResolution(profile: ResolvedTurnProfile, tier: TierId): TierRoute {
@@ -85,6 +86,7 @@ export function resolveModelRoute(
       model: profile.tier.model,
       reasoningEffort: profile.tier.reasoningEffort,
       fallbacks: profile.tier.fallbacks,
+      retries: profile.retries,
     });
   }
 
@@ -92,6 +94,7 @@ export function resolveModelRoute(
     source,
     tier: policy.tier,
     ...tierResolution(profile, policy.tier),
+    retries: profile.retries,
   });
 }
 

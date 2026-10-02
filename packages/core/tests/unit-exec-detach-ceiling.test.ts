@@ -12,6 +12,8 @@ import { wrapToolsForBackground, type BackgroundableTool } from '../src/jobs/bac
 import { BACKGROUNDABLE_TOOLS } from '../src/orchestrator/background-tools';
 import { BackgroundJobRunner, type BackgroundJobRunnerDeps } from '../src/jobs/runner';
 import { recordServingJobs, type PortHolders } from '../src/jobs/serving';
+import { followJobOutput, JOB_OUTPUT_EVENT, JobOutputFeeds, type JobOutputFrame, type JobOutputTail } from '../src/jobs/live-output';
+import { REAL_CLOCK } from '../src/types/clock';
 import { listBackgroundJobs } from '../src/read-models/background-jobs';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/index';
 import { Inbox } from '../src/orchestrator/inbox';
@@ -19,7 +21,7 @@ import { EventLog, initEventsHubTables } from '../src/events/hub/index';
 import { Database } from 'bun:sqlite';
 import { conversationsFor, createTestRuntime, makeSql, makeExecRaw, makeSqlExec } from './helpers';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
-import type { Schedule, Shell, ShellExecResult } from '../src/types/primitives';
+import type { OutputChunk, OutputSink, Schedule, Shell, ShellExecResult } from '../src/types/primitives';
 import { withApprovalGatedShell } from '../src/execution/approval';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { JOB_STAMP_ENV } from '../src/types/jobs';
@@ -27,6 +29,11 @@ import { createShellSession } from '../src/safety/approval-gate';
 import { buildBuiltinTools } from '../src/tools/builtins';
 import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
+
+/** A frame's window and a listing's tail, as the feed caps them. */
+const WINDOW_CHARS = 16_384;
+
+const TAIL_CHARS = 16_384;
 
 interface ExecCall {
   command: string;
@@ -93,7 +100,7 @@ function fakeJobRunner(
   policy: BackgroundPolicy,
   onThreshold: (kind: string, promise: Promise<unknown>) => DetachOutcome,
 ) {
-  return { policy, thresholdDeps: () => ({ thresholdMs: policy.detachAfterMs, onThreshold }) };
+  return { policy, thresholdDeps: () => ({ thresholdMs: policy.detachAfterMs, onThreshold }), output: new JobOutputFeeds({ clock: REAL_CLOCK, send: () => {} }) };
 }
 
 function wrapShellTool(provider: ExecutorProvider, runner: ReturnType<typeof fakeJobRunner>) {
@@ -229,7 +236,7 @@ function wholeChainRunner(deps: (store: BackgroundJobStore) => Partial<Backgroun
     ...deps(store),
   });
 
-  return { runner, store, bodies, enqueued };
+  return { runner, store, bodies, enqueued, db };
 }
 
 describe('the settle wakes the agent — the whole chain, no doubles in the middle', () => {
@@ -417,5 +424,149 @@ describe('a sandbox command a job takes', () => {
     await Promise.all(settledRecords);
 
     expect(store.get(detached.jobId)).toMatchObject({ status: 'completed', serves: null });
+  });
+});
+
+/** Every row any write on `db` changed since it opened. */
+function rowsChanged(db: Database): number {
+  return v.parse(v.object({ n: v.number() }), db.query('SELECT total_changes() AS n').get()).n;
+}
+
+const joined = (chunks: readonly OutputChunk[]): string => chunks.map(({ text }) => text).join('');
+
+describe("a running job's output", () => {
+  // Main's queue, 2026-10-02: a job's output reached no one until it settled, so a long build showed nothing in the UI
+  // or TUI until it finished. It goes to the job's rooms a window at a time, and is never a row.
+  test('reaches its rooms while it runs, a window at a time, and its settle comes after its last frame', async () => {
+    const clock = handClock(Date.now());
+    const frames: JobOutputFrame[] = [];
+    const framesAtSettle: number[] = [];
+    const finished = Promise.withResolvers<{ stdout: string; exitCode: number }>();
+    let given: OutputSink | undefined;
+
+    const { runner, store, bodies, db } = wholeChainRunner(() => ({
+      clock,
+      policy: () => BACKGROUND_POLICY.interactive,
+      jobOutput: (frame) => { frames.push(frame); },
+      onSettled: () => { framesAtSettle.push(frames.length); },
+    }));
+
+    const handle: SandboxHandle = {
+      // The build prints, then outruns its call's window.
+      exec: (_command, opts) => {
+        given = opts?.output;
+        given?.write('stdout', 'resolving dependencies\n');
+        clock.advance(BACKGROUND_POLICY.interactive.detachAfterMs);
+
+        return finished.promise;
+      },
+      readFile: async () => ({}),
+      writeFile: async () => {},
+      listFiles: async () => ({ files: [] }),
+      deleteFile: async () => {},
+      exposePort: async (port) => ({ url: `https://preview.example.com/${String(port)}`, port, route: { reached: true } }),
+      unexposePort: async () => {},
+      getExposedPorts: async () => [],
+      ...sandboxHandleLifecycle,
+    };
+
+    const router = new DefaultExecutionRouter();
+    router.register(createSandboxExecutor(handle, 'preview.example.com'));
+    const { rt } = createTestRuntime();
+
+    const wrapped = wrapToolsForBackground(
+      buildBuiltinTools({ rt: { ...rt, executionRouter: router }, conversations: conversationsFor(rt) }),
+      { jobRunner: runner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS },
+    );
+
+    const run = toolExecute<{ command: string; runtime: string; why: string }, object | string>(present(wrapped.shell, 'the wrapped shell tool'));
+    const detached = await run({ command: 'bun run build', runtime: 'sandbox', why: 'build the site' });
+
+    if (!isBackgroundHandle(detached)) throw new Error(`the build did not detach: ${JSON.stringify(detached)}`);
+    const { jobId } = detached;
+    const output = present(given, 'the sink the sandbox command was given');
+
+    // The job's first frame, at its detach, holds what the build printed before the job took it.
+    expect(frames).toEqual([{ type: JOB_OUTPUT_EVENT, jobId, seq: 1, chunks: [{ stream: 'stdout', text: 'resolving dependencies\n' }], dropped: 0 }]);
+    const rowsAtDetach = rowsChanged(db);
+
+    // A character split across two writes arrives whole.
+    output.write('stderr', Uint8Array.of(0x77, 0x61, 0x72, 0x6e, 0x3a, 0x20, 0x63, 0x61, 0x66, 0xc3));
+    output.write('stderr', Uint8Array.of(0xa9, 0x0a));
+    clock.advance(250);
+    expect(frames.at(-1)).toEqual({ type: JOB_OUTPUT_EVENT, jobId, seq: 2, chunks: [{ stream: 'stderr', text: 'warn: café\n' }], dropped: 0 });
+
+    // Ten thousand lines in one second, a hundred every ten milliseconds: a frame per quarter second.
+    for (let line = 0; line < 10_000; line += 1) {
+      output.write('stdout', `compiled module ${String(line)}\n`);
+
+      if (line % 100 === 99) clock.advance(10);
+    }
+
+    const flood = frames.slice(2);
+    expect(flood.map(({ seq }) => seq)).toEqual([3, 4, 5, 6]);
+
+    // Each holds its window's newest characters and says how many it left out.
+    for (const frame of flood) expect(joined(frame.chunks).length).toBeLessThanOrEqual(WINDOW_CHARS);
+    expect(flood.every(({ dropped }) => dropped > 0)).toBe(true);
+    expect(joined(present(flood.at(-1), 'the last flood frame').chunks).endsWith('compiled module 9999\n')).toBe(true);
+
+    // A page that opens now reads the tail those frames carried, through the last of them.
+    const [listed] = listBackgroundJobs(store, 20, (id) => runner.output.tail(id));
+    const tail = present(listed?.output, "the running job's listed output");
+    expect(tail.seq).toBe(6);
+    expect(joined(tail.chunks).endsWith('compiled module 9999\n')).toBe(true);
+    expect(joined(tail.chunks).length).toBeLessThanOrEqual(TAIL_CHARS);
+    // The same tail a client holds that followed every frame from the first.
+    expect(frames.reduce<JobOutputTail | undefined>((told, frame) => followJobOutput(told, frame), undefined)).toEqual(tail);
+
+    // None of it was a row.
+    expect(rowsChanged(db)).toBe(rowsAtDetach);
+
+    // The build ends: what it printed last goes out before its settle, and the job holds no output after it.
+    output.write('stdout', 'built in 41s\n');
+    finished.resolve({ stdout: 'built\n', exitCode: 0 });
+    await Promise.all(bodies);
+
+    expect(frames.at(-1)).toEqual({ type: JOB_OUTPUT_EVENT, jobId, seq: 7, chunks: [{ stream: 'stdout', text: 'built in 41s\n' }], dropped: 0 });
+    expect(framesAtSettle).toEqual([7]);
+    expect(store.get(jobId)?.status).toBe('completed');
+    expect(runner.output.tail(jobId)).toBeUndefined();
+  });
+
+  test('a call that ends inside its window sends nothing: only a job has rooms to show it', async () => {
+    const frames: JobOutputFrame[] = [];
+    const { runner, bodies } = wholeChainRunner(() => ({ policy: () => BACKGROUND_POLICY.interactive, jobOutput: (frame) => { frames.push(frame); } }));
+
+    const handle: SandboxHandle = {
+      exec: async (_command, opts) => {
+        opts?.output?.write('stdout', 'ok\n');
+
+        return { stdout: 'ok\n', exitCode: 0 };
+      },
+      readFile: async () => ({}),
+      writeFile: async () => {},
+      listFiles: async () => ({ files: [] }),
+      deleteFile: async () => {},
+      exposePort: async (port) => ({ url: `https://preview.example.com/${String(port)}`, port, route: { reached: true } }),
+      unexposePort: async () => {},
+      getExposedPorts: async () => [],
+      ...sandboxHandleLifecycle,
+    };
+
+    const router = new DefaultExecutionRouter();
+    router.register(createSandboxExecutor(handle, 'preview.example.com'));
+    const { rt } = createTestRuntime();
+
+    const wrapped = wrapToolsForBackground(
+      buildBuiltinTools({ rt: { ...rt, executionRouter: router }, conversations: conversationsFor(rt) }),
+      { jobRunner: runner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS },
+    );
+
+    const run = toolExecute<{ command: string; runtime: string; why: string }, object | string>(present(wrapped.shell, 'the wrapped shell tool'));
+    expect(await run({ command: 'echo ok', runtime: 'sandbox', why: 'check' })).toContain('ok');
+    await Promise.all(bodies);
+
+    expect(frames).toEqual([]);
   });
 });

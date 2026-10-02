@@ -376,7 +376,7 @@ function promoteStagedSkill(
           + 'something the owner did not approve');
       }
 
-      // A failed write leaves the staging, so the next settle retries.
+      // Staging is untouched, so the next settle retries.
       yield* Effect.tryPromise({
         try: async () => {
           await vfs.mkdir(vfsDirname(route.target), { recursive: true });

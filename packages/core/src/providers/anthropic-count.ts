@@ -42,7 +42,6 @@ interface CountBody {
   tools?: Array<{ name: string; description?: string; input_schema: unknown }>;
 }
 
-/** Why the count body cannot represent the request exactly. */
 interface Unrepresentable { readonly reason: string }
 
 type Converted<T> = Effect.Effect<T, Unrepresentable>;

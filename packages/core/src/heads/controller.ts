@@ -447,7 +447,7 @@ export class HeadController {
     }));
   }
 
-  /** Fails with the surfaced error reason when every sample fails; the caller renders the per-head fallback. */
+  /** Fails with the first sample error when every sample fails; the caller renders the per-head fallback. */
   private synthesize(
     prompt: string,
     rationale: string,

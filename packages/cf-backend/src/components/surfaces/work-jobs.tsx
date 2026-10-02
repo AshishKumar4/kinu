@@ -7,7 +7,7 @@ import {
 } from "@phosphor-icons/react";
 import type { Rpc } from "@kinu.run/core";
 import type { BackgroundJob } from "@kinu.run/core/protocol";
-import { timeAgo } from "@kinu.run/core";
+import { jobName, shortJobId, timeAgo } from "@kinu.run/core";
 import { renderThrownChain } from "@kinu.run/core/obs";
 
 function statusMeta(status: BackgroundJob["status"]) {
@@ -33,6 +33,14 @@ function interruptionNote(job: BackgroundJob, now: number): string | null {
 
   return `Interrupted and re-driven ${times}. The work was not lost.${waiting}`;
 }
+
+function lastOutput(output: BackgroundJob["output"]): string | null {
+  const lines = (output?.chunks ?? []).map(({ text }) => text).join("").replace(/\n$/, "").split("\n");
+
+  return lines.slice(-OUTPUT_LINES).join("\n") || null;
+}
+
+const OUTPUT_LINES = 4;
 
 /** Rounded up, so a wait that exists never reads as "in 0s". */
 function timeUntil(ms: number): string {
@@ -86,6 +94,8 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
   const Icon = m.icon;
   const live = job.status === "running" || job.status === "serving";
   const detail = job.status === "completed" ? job.result : job.error;
+  const printed = live ? lastOutput(job.output) : null;
+  const name = jobName(job);
   const interrupted = interruptionNote(job, Date.now());
 
   return (
@@ -95,8 +105,8 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
           weight={live ? "bold" : "fill"} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <span className="p-row-text font-medium p-text">{job.kind}</span>
-            <code className="p-annotation p-text-3">{job.id.replace(/^bgjob-/, "").slice(0, 8)}</code>
+            <span className="p-row-text font-medium p-text truncate" title={name.title}>{name.title}</span>
+            <code className="p-annotation p-text-3 shrink-0">{name.shortId}</code>
           </div>
           <div className="p-meta p-text-3">
             {m.label} · started {timeAgo(job.createdAt)}{job.settledAt ? ` · settled ${timeAgo(job.settledAt)}` : ""}
@@ -106,9 +116,10 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
           )}
           {job.retriedBy && (
             <div className="mt-1 p-annotation p-accent">
-              Retried as {job.retriedBy.replace(/^bgjob-/, "").slice(0, 8)}
+              Retried as {shortJobId(job.retriedBy)}
             </div>
           )}
+          {printed && <pre className="p-annotation p-text-2 mt-1 whitespace-pre-wrap break-words font-mono" aria-label="Latest output">{printed}</pre>}
           {detail && <div className="p-annotation p-text-2 mt-1 line-clamp-3 whitespace-pre-wrap break-words">{detail}</div>}
           {err && <div className="p-t-status p-danger mt-1">{err}</div>}
         </div>
@@ -134,6 +145,30 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+export interface BackgroundJobRowJob {
+  readonly id: string;
+  readonly kind: string;
+  readonly label: string | null;
+  readonly status: string;
+  readonly createdAt: number;
+  readonly settledAt: number | null;
+}
+
+export function BackgroundJobRow({ job, tone }: { job: BackgroundJobRowJob; tone: string }) {
+  const name = jobName(job);
+
+  return (
+    <div className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
+      <span className={`size-1.5 rounded-full shrink-0 ${tone}`} />
+      <span className="font-medium p-text-2 truncate" title={name.title}>{name.title}</span>
+      <span className="font-mono p-text-3 shrink-0">{name.shortId}</span>
+      <span className="flex-1" />
+      <span className="p-text-3 shrink-0">{job.status}</span>
+      <span className="p-text-3 shrink-0 tabular-nums">{new Date(job.settledAt ?? job.createdAt).toLocaleDateString()}</span>
     </div>
   );
 }

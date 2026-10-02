@@ -9,6 +9,7 @@ import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type Thre
 import { REAL_CLOCK, type Clock } from '../types/clock';
 import type { DeviceRequestOwnership } from './device-ownership';
 import { BackgroundJobStore, serializeJobResult, type BackgroundJob, type JobResume } from './store';
+import { JobOutputFeeds, type JobOutputFrame } from './live-output';
 import { nanoid } from '../utils/nanoid';
 import { runWorkModeInvocation } from '../execution/work-mode';
 import { recoveryBackoffMs } from '../utils/recovery-backoff';
@@ -97,6 +98,7 @@ export interface BackgroundJobRunnerDeps {
   logActivity?(event: string, detail?: string): void;
   /** Fires once per settle, before the wake turn. Never throws into the fiber. */
   onSettled?(job: BackgroundJob): void;
+  jobOutput?(frame: JobOutputFrame): void;
   /** Transfer requests issued before the threshold to the job's identity. A throw may follow a partial
    *  move. null: no separately owned remote requests. */
   onDetached?: ((jobId: string, requestIds: readonly string[]) => Promise<void> | void) | null;
@@ -190,7 +192,11 @@ export class BackgroundJobRunner {
   private readonly cancelling = new Set<string>();
   private readonly fenced = new Map<string, () => Promise<void>>();
 
-  constructor(private readonly deps: BackgroundJobRunnerDeps) {}
+  readonly output: JobOutputFeeds;
+
+  constructor(private readonly deps: BackgroundJobRunnerDeps) {
+    this.output = new JobOutputFeeds({ clock: deps.clock ?? REAL_CLOCK, send: (frame) => { deps.jobOutput?.(frame); } });
+  }
 
   /** Pure: callers log their own lifecycle event. */
   create(kind: string, input: JsonValue, mode: WorkMode, controller: AbortController): string {

@@ -31,6 +31,7 @@ function sandboxHandle(sandbox: NimbusSandbox): NimbusSandboxHandle {
   return {
     ready: () => sandbox.ready(),
     exec: (command, options) => sandbox.exec(command, options),
+    execStream: (command, options) => sandbox.execStream(command, options),
     startProcess: (command, options) => sandbox.startProcess(command, options),
     runCode: (code, options) => sandbox.runCode(code, options),
     files: sandbox.files,

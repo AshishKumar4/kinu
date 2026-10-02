@@ -10,17 +10,11 @@ import { asBytes, currentBytes } from '../safety/bound-write';
 import * as v from 'valibot';
 import { answeredRefusal, CommandResultSchema } from './exec-result';
 import type { ExecutorProvider, ExecutorTool, ExecutorToolResult } from './types';
-import type { CheckpointFiles, Shell, ShellExecOptions, ShellExecResult } from '../types/primitives';
+import { ShellExecOptionsSchema, type CheckpointFiles, type Shell, type ShellExecOptions, type ShellExecResult } from '../types/primitives';
 import { requireBuild } from './work-mode';
 import { refusalOf, type KinuError } from '../obs/error';
 import { Effect } from 'effect';
 import { settle } from '../obs/effect';
-
-const ShellExecOptionsSchema: v.GenericSchema<ShellExecOptions | undefined> = v.optional(v.object({
-  stdin: v.optional(v.string()),
-  signal: v.optional(v.instance(AbortSignal)),
-  detach: v.optional(v.instance(AbortSignal)),
-}));
 
 function parseShellExecOptions(input: { value: unknown }): string | ShellExecOptions | undefined {
   const text = v.safeParse(v.string(), input.value);

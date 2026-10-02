@@ -252,12 +252,15 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
             return yield* refusal;
           }
 
-          const detach = readCallJob(options)?.detached;
+          const job = readCallJob(options);
           const execOptions: ShellExecOptions = {};
 
           if (signal) execOptions.signal = signal;
 
-          if (detach) execOptions.detach = detach;
+          if (job) {
+            execOptions.detach = job.detached;
+            execOptions.output = job.output;
+          }
 
           return yield* clamp(commandResult(yield* Effect.promise(() => shell.exec(args.command, execOptions))));
         }
@@ -290,7 +293,8 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           return yield* new KinuError(refusal.code, refusal.message + ': Runtime "' + runtimeKey + '" is provisioned but does not expose shell exec.', { cause: refusal });
         }
 
-        const context = { signal, device: nickname, job: readCallJob(options)?.id };
+        const job = readCallJob(options);
+        const context = { signal, device: nickname, job: job?.id, output: job?.output };
 
         // Classify cancellations and OOM prose here, or the durable row only records `threw`.
         const result: CommandResult = yield* attempt({ doing: `run \`${args.command}\` on ${runtimeKey}`, otherwise: 'io' },

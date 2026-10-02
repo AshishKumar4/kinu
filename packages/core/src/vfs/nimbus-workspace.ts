@@ -25,7 +25,7 @@ import {
 } from './agent-home';
 import { registerNpm, workspaceCommandNotFound } from './workspace-runtimes';
 import * as v from 'valibot';
-import type { Shell, ShellExecOptions } from '../types/primitives';
+import { ShellExecOptionsSchema, type Shell, type ShellExecOptions } from '../types/primitives';
 import { WORKSPACE_ROOT, workspacePath } from './workspace-path';
 import { FORK_PIN_PREFIX } from '../identity/fork';
 import { ARCHIVE_PIN_PREFIX } from '../identity/archive';
@@ -42,11 +42,6 @@ export type { RuntimePackage, RuntimeSource } from '@nimbus-sh/core/runtime/runt
 export { WORKSPACE_ROOT, workspacePath } from './workspace-path';
 
 export { workspaceBoxFiles } from './workspace-box-files';
-
-const ShellExecOptionsSchema: v.GenericSchema<ShellExecOptions | undefined> = v.optional(v.object({
-  stdin: v.optional(v.string()),
-  signal: v.optional(v.instance(AbortSignal)),
-}));
 
 function shellExecOptions(input: { value: unknown }): ShellExecOptions | undefined {
   const stdin = v.safeParse(v.string(), input.value);
@@ -109,9 +104,15 @@ function workspaceShell(open: () => Promise<NimbusWorkspace>): Shell {
 
       const workspace = await open();
 
+      const output = options?.output;
+
       const result = await workspace.exec(command, {
         stdin: options?.stdin,
         signal: options?.signal,
+        ...(output !== undefined && {
+          onStdout: (data: Uint8Array) => { output.write('stdout', data); },
+          onStderr: (data: Uint8Array) => { output.write('stderr', data); },
+        }),
       });
 
       return workspaceCommandNotFound(

@@ -23,7 +23,7 @@ import {
   providerProxyCredentialsURL,
   providerProxyForwardURL,
   proxyAuthResolution,
-  reasoningEffortOptions,
+  routedCallOptions,
   type AuthRequest,
   type AuthResolution,
   type AuthResolver,
@@ -157,7 +157,7 @@ export interface LocalModelResolverConfig {
  * Only completed calls report spend: a thrown call yields no usage.
  */
 export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
-  route?: Pick<ModelRouteResolution, 'model' | 'reasoningEffort'>;
+  route?: Pick<ModelRouteResolution, 'model' | 'reasoningEffort' | 'retries'>;
   conversation: string;
   /** Sink and producer label together: only the consumer knows which producer
    *  a call belongs to. */
@@ -168,41 +168,32 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
   const spec = () => resolver.normalizeSpecSync(opts.route?.model ?? null);
   const model = (resolved: string) => resolver.resolveModel(resolved, opts.conversation);
   const spend = opts.spend;
-  const effortOptions = (resolved: string) => reasoningEffortOptions(opts.route?.reasoningEffort, parseModelSpec(resolved).provider);
+  const { route } = opts;
+  const callOptions = (resolved: string) => (route === undefined ? undefined : routedCallOptions(route, resolved));
 
   return {
     stream(input) {
       const resolved = spec();
 
-      const request: StreamRequest = {
+      const streamed: StreamRequest = {
         model: model(resolved),
         system: input.system,
         messages: input.messages.map(m => ({
           role: m.role,
           content: m.content,
         })),
+        ...callOptions(resolved),
       };
 
-      const providerOptions = effortOptions(resolved);
-
-      if (providerOptions) request.providerOptions = providerOptions;
-
       // Usage exists only once the stream drains; an abandoned stream files no row.
-      return streamTextReported(request, { spend, spec: resolved });
+      return streamTextReported(streamed, { spend, spec: resolved });
     },
     async complete(prompt) {
       const resolved = spec();
 
-      const request: GenerateRequest = {
-        model: model(resolved),
-        prompt,
-      };
+      const generated: GenerateRequest = { model: model(resolved), prompt, ...callOptions(resolved) };
 
-      const providerOptions = effortOptions(resolved);
-
-      if (providerOptions) request.providerOptions = providerOptions;
-
-      return (await generateReported(request, { spend, spec: resolved })).text.trim();
+      return (await generateReported(generated, { spend, spec: resolved })).text.trim();
     },
   };
 }

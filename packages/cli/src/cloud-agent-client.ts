@@ -40,7 +40,7 @@ import {
 } from './session';
 import { CloudTurnStream, jsonErrorMessage, TurnStreams } from './cloud-turn-stream';
 import { SessionRecorder } from './session-recorder';
-import { LIVE_READS, READS_CHANGED_EVENT, type AgentModelMenu, type AgentRpcMethod } from '@kinu.run/core';
+import { JobOutputFrameSchema, LIVE_READS, READS_CHANGED_EVENT, type AgentModelMenu, type AgentRpcMethod } from '@kinu.run/core';
 import { hostedWindowCalls, positionPageSchema, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, WorkspaceWorkSchema, type WorkspaceWork, type SubordinateInspectionRequest, type SubordinateInspectionResult } from '@kinu.run/core';
 import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, EvolutionConfigView, ReasoningEffort, TakePickOutcome } from '@kinu.run/core';
 import {
@@ -275,6 +275,7 @@ const BranchStatusEventSchema = v.variant('status', [
 const BroadcastFrameSchema = v.union([
   BranchStatusEventSchema,
   v.object({ type: v.literal(READS_CHANGED_EVENT), reads: v.array(v.picklist(LIVE_READS)) }),
+  JobOutputFrameSchema,
   v.object({ type: v.literal('model_fallback'), message: v.string() }),
   v.object({ type: v.literal('context_fill'), contextTokens: v.optional(v.number()), contextWindow: v.optional(v.number()) }),
 ]);
@@ -776,7 +777,7 @@ export class CloudAgentClient implements AgentClient {
     const args: JsonValue[] = this.subordinateName === null ? [limit] : [limit, this.subordinateName];
     const jobs = await this.callHttp('listBackgroundJobs', v.array(CloudBackgroundJobSchema), args);
 
-    return jobs.map((job) => ({ id: job.id, kind: job.kind, status: job.status }));
+    return jobs.map((job) => ({ id: job.id, kind: job.kind, status: job.status, label: job.label ?? null, ...(job.output !== undefined && { output: job.output }) }));
   }
 
   async getModelSpec(): Promise<string | null> {

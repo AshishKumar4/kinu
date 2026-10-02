@@ -29,7 +29,7 @@ import { join } from 'node:path';
 import type { Server, ServerWebSocket } from 'bun';
 import * as v from 'valibot';
 
-import { isAgentRpcMethod, READS_CHANGED_EVENT, renderSoulMarkdown, type RunEvent, type JsonValue } from '../../packages/core/src/index';
+import { isAgentRpcMethod, JOB_OUTPUT_EVENT, READS_CHANGED_EVENT, renderSoulMarkdown, type RunEvent, type JsonValue } from '../../packages/core/src/index';
 import { DeploymentAnswer, EVAL_WEB_IDENTITY_ENV, INFRA_FAILURE_MARKER } from '@kinu.run/test-utils';
 import {
   decodeFrame, encodeChatRequest, encodeRpcRequest,
@@ -266,6 +266,35 @@ test('an rpc after the platform closed the idle socket redials and answers, neve
 
     expect(await session.execute('device', 'after the close')).toEqual(response);
     expect(upgrades).toBe(2);
+  } finally { await session.teardown(); await server.stop(true); }
+});
+
+// RollingSilkworm's gap 4, 2026-10-01: a detached build printed for minutes and the hang watch heard nothing of it.
+test("a running job's output frame is heard as live output, as a head's words are", async () => {
+  const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: socketOnly,
+    websocket: {
+      message(socket, message) {
+        const request = v.parse(RpcRequestFrameSchema, JSON.parse(message.toString()));
+
+        socket.send(JSON.stringify({ type: JOB_OUTPUT_EVENT, jobId: 'bgjob-build', seq: 4, dropped: 0, chunks: [{ stream: 'stdout', text: 'compiled\n' }] }));
+        socket.send(rpcReplyFrame({ requestId: request.id, result: [] }));
+      },
+    },
+  });
+
+  const session = new KinuPublicSession({ origin: server.url.origin, identity: { kind: 'loopback' },
+    workspace: 'probe', purpose: 'job output probe',
+    llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
+  }, 'probe');
+
+  try {
+    await session.connect();
+    const before = session.heard();
+
+    // The frame arrives before the answer to the read that follows it on the same socket.
+    await session.agents();
+
+    expect(session.heard()).toBe(before + 1);
   } finally { await session.teardown(); await server.stop(true); }
 });
 

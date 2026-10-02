@@ -2,18 +2,23 @@
 import { shellPath } from './chunked-delta';
 import { DEVBOX_RUNTIME_DIR } from './storage';
 
-/** R2 refuses a multipart part under 5 MiB unless it is the last, so a smaller part size
- *  fails mid-upload rather than running slower. */
-const PUBLISH_PART_BYTES = 5 * 1024 * 1024;
-
-/** 224 MiB took 38 s one part at a time and 20 s with four in flight, on both policies; eight was no faster (D50). */
-const PUBLISH_PARTS_IN_FLIGHT = 4;
-
-/** The most of an archive the disk holds while it streams (D57); a soft bound. */
-export const STREAM_WINDOW_BYTES = 64 * 1024 * 1024;
+const MIB = 1024 * 1024;
 
 /** The platform's tmpfs, measured in a Medium container (D55). */
-export const PLATFORM_TMPFS_BYTES = 64 * 1024 * 1024;
+const PLATFORM_TMPFS_BYTES = 64 * MIB;
+
+/** Parts, parts in flight, and the most of an archive the disk holds while it streams (a soft bound). */
+export interface StreamProfile {
+  readonly partBytes: number;
+  readonly partsInFlight: number;
+  readonly windowBytes: number;
+}
+
+/** Four 5 MiB parts held a 10 GiB base to about 13 MiB/s a box (D57); D53's E′ shape (D58). */
+export const DISK_STREAM: StreamProfile = { partBytes: 16 * MIB, partsInFlight: 16, windowBytes: 512 * MIB };
+
+/** R2 refuses a part under 5 MiB unless it is the last, and the window must hold two parts. */
+export const TMPFS_STREAM: StreamProfile = { partBytes: 5 * MIB, partsInFlight: 2, windowBytes: PLATFORM_TMPFS_BYTES / 4 };
 
 /** Publishes the archive as it grows (D57), past the mount (D15). Exits: 1 the store, 2 usage, 3 the
  *  store's account of the object, 4 mksquashfs failed, 5 mksquashfs claimed success with no archive. */
@@ -302,7 +307,7 @@ function archiverParts(input: ArchiveInput) {
     prepare: `mkdir -p ${shellPath(parent)} && rm -f ${shellPath(input.archivePath)} `
       + `&& printf %s ${shellPath(encoded)} | base64 -d > ${shellPath(input.excludeFile)}`,
     archiver: `/usr/bin/nice -n 10 /usr/bin/mksquashfs ${shellPath(input.sourceDir)} ${shellPath(input.archivePath)} `
-      + `-noappend -comp zstd -no-progress -wildcards -ef ${shellPath(input.excludeFile)}`,
+      + `-noappend -comp zstd -Xcompression-level 1 -no-progress -wildcards -ef ${shellPath(input.excludeFile)}`,
   };
 }
 
@@ -315,12 +320,12 @@ export function archiveCommand(input: ArchiveInput): string {
 }
 
 /** One command: a spot container can be replaced between execs. Prints `<rc> <bytes> <etag>`. */
-export function streamCommand(input: ArchiveInput & { readonly objectUrl: string; readonly windowBytes: number }): string {
+export function streamCommand(input: ArchiveInput & { readonly objectUrl: string; readonly profile: StreamProfile }): string {
   const script = `${DEVBOX_RUNTIME_DIR}/devbox-stream.mjs`;
   const { prepare, archiver } = archiverParts(input);
 
   return `${prepare} && printf %s ${shellPath(STREAM_SCRIPT_B64)} | base64 -d > ${shellPath(script)}; `
-    + `out=$(bun ${shellPath(script)} ${shellPath(input.objectUrl)} ${String(PUBLISH_PART_BYTES)} ${String(PUBLISH_PARTS_IN_FLIGHT)} `
-    + `${String(input.windowBytes)} ${shellPath(input.archivePath)} -- ${archiver}); `
+    + `out=$(bun ${shellPath(script)} ${shellPath(input.objectUrl)} ${String(input.profile.partBytes)} ${String(input.profile.partsInFlight)} `
+    + `${String(input.profile.windowBytes)} ${shellPath(input.archivePath)} -- ${archiver}); `
     + `rc=$?; printf '%s %s' "$rc" "$out"`;
 }

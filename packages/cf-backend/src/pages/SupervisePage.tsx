@@ -15,6 +15,7 @@ import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { SECRET_REGION, SecretValue } from "@/components/ui/SecretValue";
 import { changelogRevalidate } from "@/components/surfaces/changelog-entries";
 import { EvolutionEntrySchema, EvolutionSection } from "@/components/surfaces/supervise-evolution";
+import { BackgroundJobRow } from "@/components/surfaces/work-jobs";
 import { Modal } from "@/components/ui/Modal";
 import { inputCls } from "@/components/ui/form";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
@@ -270,16 +271,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
         <div className="mt-3">
           <div className="p-eyebrow p-text-4 mb-1.5">Background jobs</div>
           <div className="rounded-md border p-border overflow-hidden text-xs">
-            {jobs.map((job) => (
-              <div key={job.id} className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
-                <span className={`size-1.5 rounded-full shrink-0 ${dotTone(JOB_DOT, job.status)}`} />
-                <span className="font-medium p-text-2 truncate" title={job.label ?? job.id}>{job.label ?? job.id}</span>
-                <span className="font-mono p-text-3 shrink-0">{job.kind}</span>
-                <span className="flex-1" />
-                <span className="p-text-3 shrink-0">{job.status}</span>
-                <span className="p-text-3 shrink-0 tabular-nums">{new Date(job.settledAt ?? job.createdAt).toLocaleDateString()}</span>
-              </div>
-            ))}
+            {jobs.map((job) => <BackgroundJobRow key={job.id} job={job} tone={dotTone(JOB_DOT, job.status)} />)}
           </div>
         </div>
       )}

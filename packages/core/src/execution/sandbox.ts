@@ -4,7 +4,8 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as v from 'valibot';
 import { Effect } from 'effect';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus, PortExposureResult, PreviewRouteCheck, SandboxSize, SandboxSizes } from './types';
-import { readExecJob, readExecSignal } from './signal';
+import { readExecJob, readExecOutput, readExecSignal } from './signal';
+import type { OutputSink } from '../types/primitives';
 import { JOB_STAMP_ENV } from '../types/jobs';
 import { commandResult, exposedPortText, type CommandResult } from './exec-result';
 import { classifyErrorCode, diagnostics, KinuError, refusalOf, renderThrownChain, settle, tolerated, toKinuError, type Refusal } from '../obs/index';
@@ -46,6 +47,7 @@ export interface SandboxExecOptions {
   timeout?: number;
   signal?: AbortSignal;
   env?: Record<string, string>;
+  output?: OutputSink;
 }
 
 export interface SandboxPortListener {
@@ -350,6 +352,7 @@ export function createSandboxExecutor(
 
         const signal = readExecSignal({ context: args[1] });
         const job = readExecJob({ context: args[1] });
+        const output = readExecOutput({ context: args[1] });
 
         // No work deadline: see SandboxHandle.exec. The signal goes to the container; locally it only
         // refuses to dispatch, before the first attempt and before each retry.
@@ -363,6 +366,8 @@ export function createSandboxExecutor(
           if (signal !== undefined) opts.signal = signal;
 
           if (job !== undefined) opts.env = { [JOB_STAMP_ENV]: job };
+
+          if (output !== undefined) opts.output = output;
 
           return tried(() => handle.exec(command, opts));
         });

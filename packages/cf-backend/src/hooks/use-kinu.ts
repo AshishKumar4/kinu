@@ -3,8 +3,8 @@ import { useState, useCallback, useEffect, useRef, useMemo, type SetStateAction 
 import { useAgent } from "agents/react";
 import {
   activateMctsProgressActor, applyMctsProgress, createMctsProgressState,
-  branchHeadId, CHANGES_MOVED_EVENT, LIVE_READS, ORCHESTRATOR_AGENT_SLUG, PAGE_KEEPALIVE, PROVIDER_WAIT_SOURCES, READS_CHANGED_EVENT,
-  SLATES_CHANGED_EVENT,
+  branchHeadId, CHANGES_MOVED_EVENT, followJobOutput, JOB_OUTPUT_EVENT, JobOutputFrameSchema, LIVE_READS, ORCHESTRATOR_AGENT_SLUG, PAGE_KEEPALIVE,
+  PROVIDER_WAIT_SOURCES, READS_CHANGED_EVENT, SLATES_CHANGED_EVENT, type JobOutputTail,
   hostedActorSocketPath, type LiveRead, type PendingAction, type PlanReview, type ReasoningEffort, type RoleId, type SlateProblem, type SlateSummary, type TierSource,
 } from "@kinu.run/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
@@ -337,6 +337,7 @@ const SocketMessageSchema = v.variant("type", [
   }),
   v.object({ type: v.literal("work_cancelled") }),
   v.object({ type: v.literal(READS_CHANGED_EVENT), reads: v.array(v.picklist(LIVE_READS)) }),
+  JobOutputFrameSchema,
   v.object({ type: v.literal(SLATES_CHANGED_EVENT), ids: v.array(v.string()) }),
   v.object({ type: v.literal(CHANGES_MOVED_EVENT) }),
   v.object({
@@ -732,6 +733,10 @@ export interface WorkspacePlanArrival {
 }
 
 
+function runningJob(job: BackgroundJob): boolean {
+  return job.status === "running" || job.status === "serving";
+}
+
 export function useKinu(target?: string | KinuActorAddress) {
   const targetString = v.safeParse(v.string(), target);
   const targetAddress = v.safeParse(KinuActorAddressSchema, target);
@@ -840,6 +845,18 @@ export function useKinu(target?: string | KinuActorAddress) {
   const ownActorIdRef = useRef<string | null>(null);
   const [paneActorId, setPaneActorId] = useState<string | null>(null);
   const [backgroundJobs, setBackgroundJobs] = useState<BackgroundJob[]>([]);
+  const [jobOutputs, setJobOutputs] = useState<Readonly<Record<string, JobOutputTail>>>({});
+  const listedJobs = useRef<BackgroundJob[]>([]);
+  listedJobs.current = backgroundJobs;
+
+  const liveJobs = useMemo(() => backgroundJobs.map((job) => {
+    const told = jobOutputs[job.id];
+
+    if (told === undefined || !runningJob(job) || (job.output?.seq ?? 0) >= told.seq) return job;
+
+    return { ...job, output: told };
+  }), [backgroundJobs, jobOutputs]);
+
   const [slates, setSlates] = useState<SlateSummary[]>([]);
   const sendLandings = useRef(new Map<string, SendLandingResolvers>());
   const knownSlates = useRef<Set<string> | null>(null);
@@ -1366,6 +1383,14 @@ export function useKinu(target?: string | KinuActorAddress) {
         } else if (msg.type === "work_cancelled") {
           forgetDeltas();
           await reread('background_jobs', refreshBackgroundJobs);
+        } else if (msg.type === JOB_OUTPUT_EVENT) {
+          const listed = listedJobs.current.find((job) => job.id === msg.jobId)?.output;
+          const running = new Set(listedJobs.current.filter(runningJob).map((job) => job.id));
+
+          setJobOutputs((told) => ({
+            ...Object.fromEntries(Object.entries(told).filter(([id]) => running.has(id))),
+            [msg.jobId]: followJobOutput(told[msg.jobId] ?? listed, msg),
+          }));
         } else if (msg.type === READS_CHANGED_EVENT) {
           setReadMoves((moves) => Object.fromEntries([
             ...Object.entries(moves), ...msg.reads.map((read) => [read, (moves[read] ?? 0) + 1]),
@@ -1989,7 +2014,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     previewError,
     previewStarting,
     refreshExposedPorts,
-    backgroundJobs,
+    backgroundJobs: liveJobs,
     refreshBackgroundJobs,
     pendingActions,
     /** Called by Work's decide so a decided row leaves the list at once, not on the next poll. */

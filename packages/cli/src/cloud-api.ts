@@ -7,6 +7,7 @@ import {
   DEVICE_SANDBOX_CAPABILITIES,
   DEVICE_SANDBOX_REASONS,
   DEVICE_TIERS,
+  JobOutputTailSchema,
   JsonValueSchema,
   normalizeModelMenu,
   ProfileCatalogEnvelopeSchema,
@@ -138,6 +139,7 @@ export const CloudTriggerListSchema = v.object({ triggers: v.array(CloudTriggerS
 export const CloudBackgroundJobSchema = v.object({
   id: v.string(), kind: v.string(), status: v.string(), createdAt: v.optional(v.number()),
   settledAt: v.optional(v.nullable(v.number())), error: v.optional(v.nullable(v.string())),
+  label: v.optional(v.nullable(v.string())), output: v.optional(JobOutputTailSchema),
 });
 
 const CloudCredentialSummarySchema = v.object({
