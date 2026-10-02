@@ -137,6 +137,11 @@ function routeNamespaceCall(binding: Extract<SlateBinding, { kind: 'namespace' }
     if (!absolute || !prefixes.some((prefix) => target === prefix || target.startsWith(prefix.endsWith('/') ? prefix : prefix + '/'))) {
       return Effect.fail(new KinuError('denied', `${name}.${member} names a path outside its prefixes: ${prefixes.join(', ')}`));
     }
+
+    const forwarded = args.slice();
+    forwarded[0] = target;
+
+    return Effect.succeed({ kind: 'namespace', namespace: binding.namespace, member, args: forwarded });
   }
 
   return Effect.succeed({ kind: 'namespace', namespace: binding.namespace, member, args });

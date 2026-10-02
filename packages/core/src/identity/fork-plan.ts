@@ -66,6 +66,7 @@ function assertArtifactSegments(relative: string, path: string, root: string): v
 function forkArtifactRelativePath(stored: string, artifactDirectory: string): string {
   const root = workspacePath(artifactDirectory);
   const prefix = `${root}/`;
+  // Refuse raw segments before normalization can erase traversal.
   assertArtifactSegments(stored.startsWith('/') ? stored.slice(1) : stored, stored, root);
   const path = workspacePath(stored);
 

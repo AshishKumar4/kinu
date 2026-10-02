@@ -114,6 +114,8 @@ test('a path-scoped workspace binding offers only file members inside its prefix
   });
   expect(route('FILES', 'readdir', ['/home/main/notes'])).toMatchObject({ kind: 'namespace', member: 'readdir' });
   expect(route('FILES', 'exists', ['/home/main/shared/x'])).toMatchObject({ kind: 'namespace', member: 'exists' });
+  expect(route('FILES', 'readFile', ['/home/user/notes/./a.md', 'utf8']))
+    .toMatchObject({ args: ['/home/main/notes/a.md', 'utf8'] });
 
   expect(() => route('FILES', 'exec', ['/home/main/notes/a.md'])).toThrow('a path-scoped workspace binding offers only file members');
 

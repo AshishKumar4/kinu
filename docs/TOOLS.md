@@ -340,7 +340,8 @@ Workspace namespace path prefixes must be absolute and contain neither
 traversal nor NUL; a malformed prefix refuses the project instead of
 shrinking its grant. `/folder/` and `/folder` both grant the directory itself
 and its descendants. A Nimbus home prefix follows the link to the canonical
-home. A denied file call names its permitted prefixes.
+home. A denied file call names its permitted prefixes; an allowed call uses
+the checked canonical path as its first argument, not the original spelling.
 
 `workspace.slates.<id>.<method>(...args)` calls a class method with JSON
 arguments, as the slate's own client does. `$commit()` freezes source,

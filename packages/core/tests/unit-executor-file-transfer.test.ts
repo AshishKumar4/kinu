@@ -1,9 +1,12 @@
-import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
+import { readText, type VFS } from '@nimbus-sh/core/vfs/vfs.js';
 // Chunked file transfer behind the files route: no chunk approaches the catalogued RPC payload ceiling,
 // and no caller-supplied offset or length is trusted.
 import { describe, expect, test } from "bun:test";
+import { Database } from 'bun:sqlite';
+import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import { present } from "@kinu.run/test-utils";
 import { ExecutorFileDownload, ExecutorFileUpload, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES, deleteExecutorPathOp, renameExecutorPathOp, statExecutorFile, writeExecutorFileOp } from "@kinu.run/core";
+import { createWorkspaceBundle } from './helpers';
 
 const MiB = 1024 * 1024;
 
@@ -174,6 +177,37 @@ describe("ExecutorFileUpload", () => {
 });
 
 describe("the owner's SOUL.md is set, not moved or deleted", () => {
+  for (const path of ['/../home/main/SOUL.md', '/home/x/../main/SOUL.md']) {
+    test(`a parent segment before the home cannot delete or upload over SOUL.md: ${path}`, async () => {
+      const db = new Database(':memory:');
+      const bundle = createWorkspaceBundle(db);
+
+      try {
+        const kernel = (await bundle.session()).vfs.as(CRED_KERNEL);
+        const soul = '# Keep the owner policy';
+        kernel.writeFile('/home/main/SOUL.md', soul);
+        kernel.chmod('/home/main/SOUL.md', 0o444);
+
+        const router = {
+          getProvider: (id: string) => id === 'workspace' ? { files: bundle.vfs, homeDir: async () => '/home/main' } : undefined,
+        };
+
+        expect(await deleteExecutorPathOp(router, 'workspace', path)).toMatchObject({ error: expect.stringContaining('EACCES') });
+        expect(await readText(bundle.vfs, '/home/main/SOUL.md')).toBe(soul);
+
+        const upload = new ExecutorFileUpload(router, 'workspace', path, {
+          writeSoul: async () => { throw new Error('a refused path must not invoke the SOUL writer'); },
+        });
+
+        expect(await upload.chunk(0, new TextEncoder().encode('changed policy'), true))
+          .toMatchObject({ error: expect.stringContaining('EACCES') });
+        expect(await readText(bundle.vfs, '/home/main/SOUL.md')).toBe(soul);
+      } finally {
+        db.close();
+      }
+    });
+  }
+
   test('invalid workspace paths answer errors for every mutation without changing a file', async () => {
     const plane = makePlane({ '/home/main/keep.md': new TextEncoder().encode('keep') });
 

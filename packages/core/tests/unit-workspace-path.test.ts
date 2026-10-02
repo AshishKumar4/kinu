@@ -27,6 +27,8 @@ for (const [input, expected] of paths) {
 for (const path of [
   '../item.txt', './dir/../../item.txt', '/home/main/../item.txt',
   '/home/user/../item.txt', '/slates/../item.txt', '/slates/project/../../item.txt',
+  '/../home/main/SOUL.md', '/home/x/../main/SOUL.md', '/home/x/../user/SOUL.md',
+  '/../home/main/../x', '/../slates/item.txt', '/home/x/../../slates/item.txt',
 ]) {
   test(`workspace path ${JSON.stringify(path)} cannot leave its named root`, () => {
     expect(() => workspacePath(path)).toThrow(expect.objectContaining({ code: 'EACCES' }));

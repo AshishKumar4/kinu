@@ -314,6 +314,13 @@ native namespace. `/workspace` is not a home alias. A mounted path remains
 its mount's: `/shared/..` and a path leaving `/pc` refuse with `EPERM`; a
 relative `shared/...` or `pc/...` is an ordinary workspace file.
 
+A parent segment before a bounded root is refused too: `/../home/main/SOUL.md`
+and `/home/x/../main/SOUL.md` cannot hide the owner policy from file-manager
+checks. The POSIX-resolved prefix is checked before it can leave a reached
+home or slate root; `/../home/main/../x` is also `EACCES`. Native and mounted
+operands that never reach those roots, such as `/shared/../x`, keep their
+namespace's own traversal rule.
+
 The bare `/home/user` name stays a symbolic link: `lstat`, `readlink`,
 `unlink`, rename and tree removal address that inode, not `/home/main`.
 Only descendants use the canonical home name. Directory grants and the

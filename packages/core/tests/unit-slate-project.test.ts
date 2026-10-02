@@ -118,7 +118,7 @@ test('a directory prefix with a trailing slash grants the directory itself and i
 test('a Nimbus home scope grants the followed home while retaining the same boundary', () => {
   const call = workspaceFileCall('/home/user/');
 
-  expect(call('readdir', '/home/user')).toMatchObject({ kind: 'namespace', member: 'readdir' });
+  expect(call('readdir', '/home/user')).toMatchObject({ kind: 'namespace', member: 'readdir', args: ['/home/main'] });
   expect(call('readFile', '/home/main/item.txt')).toMatchObject({ kind: 'namespace', member: 'readFile' });
   expect(() => call('readFile', '/home/other/item.txt')).toThrow(expect.objectContaining({ code: 'denied' }));
 });
