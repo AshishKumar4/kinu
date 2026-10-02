@@ -111,7 +111,10 @@ jobs:
           bun-version-file: package.json
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: |
+          bun install --frozen-lockfile
+          source scripts/repo-runtime.sh
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
 
       # A failed trial is data, so the step goes on to upload; compare.ts names a leg that is not a
       # complete report, and the verdict fails on it.
@@ -174,7 +177,10 @@ jobs:
           bun-version-file: package.json
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: |
+          bun install --frozen-lockfile
+          source scripts/repo-runtime.sh
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
 
       - name: Download the candidate's report
         uses: actions/download-artifact@v4
@@ -279,7 +285,10 @@ jobs:
           bun-version-file: package.json
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: |
+          bun install --frozen-lockfile
+          source scripts/repo-runtime.sh
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
 
       - name: Download the candidate's report
         uses: actions/download-artifact@v4

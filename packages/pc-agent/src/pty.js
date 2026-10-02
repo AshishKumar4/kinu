@@ -7,8 +7,8 @@
 //
 // WHY the runtime's own terminal, and not `posix_openpt` through `bun:ffi`.
 // The daemon runs on Kinu's approved Bun, and the launcher will not start it on
-// anything older (`KINU_BUN_VERSION` is 1.4.0 and `kinu_bun_compatible` refuses
-// a lower version — packages/cf-backend/src/cli/bun-runtime.ts). That Bun
+// anything older (`KINU_BUN_VERSION` is 1.4.2 and `kinu_bun_compatible` refuses
+// a lower version — packages/core/src/cli/bun-runtime.ts). That Bun
 // allocates the pty, gives the child its slave as stdin, stdout and stderr,
 // hands bytes back through a callback, puts a new window size on the kernel,
 // AND makes the pty the child's controlling terminal. Four raw libc calls would

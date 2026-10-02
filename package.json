@@ -1,7 +1,7 @@
 {
   "name": "kinu",
   "private": true,
-  "packageManager": "bun@1.4.0",
+  "packageManager": "bun@1.4.2",
   "description": "Kinu gives AI agents a durable computer of their own. It adapts and improves with use, runs locally or fully in the cloud, and solves hard tasks by exploring multiple approaches and letting executable checks choose the winner.",
   "license": "MIT",
   "keywords": [
@@ -165,6 +165,7 @@
     "@vitest/coverage-istanbul": "^4.1.11",
     "agents": "^0.24.0",
     "aws4fetch": "^1.0.20",
+    "bun": "1.4.2",
     "chess.js": "1.4.0",
     "effect": "4.0.0-rc.117",
     "esbuild": "^0.28.1",

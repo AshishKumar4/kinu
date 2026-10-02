@@ -47,6 +47,8 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- **The runtime and devbox image move to Bun 1.4.2.** Hooks, shell entry points and GitHub workflows use the exact repo-local npm binary, not the shared global, and preflight refuses a different runtime. The first install can bootstrap with global 1.4.0. The image carries the same runtime and freshly bundled backup sync; a real saved marker survives its stop and wake. On the pinned 1.4.0, an isolated startup suite hung; the unchanged suite passes on 1.4.2.
+
 - **A cloud export takes the workspace's files from one snapshot.** Before, each page of the export walked the live files again. Now the files come from one snapshot of the workspace's store, and travel once: the store's own tables no longer travel as rows beside them. If the workspace restarts while you export it, the snapshot ends, the next page is refused, and `kinu export` starts again from the beginning. An archive an older Kinu wrote is refused by its version.
 - **Less redundant state in the runtime.** Fork reception reuses its staged snapshot, overflow compaction keeps one consumable arm, and alternate takes derive their current winner from the chosen answer. Retired test-only store methods, duplicate credential writers and server facades leave the public behavior unchanged.
 - **An overlay checkpoint reads its upper once.** Its fingerprint already gates publication; the extra whole-workspace change scan is gone. Extraction still keeps its own change watermark. Native archives no longer carry SDK backup flags they do not read, and obsolete ergonomics and SDK-exec probes are archived by restore commit.

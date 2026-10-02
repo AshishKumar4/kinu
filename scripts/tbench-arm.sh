@@ -92,6 +92,7 @@ fi
 KINU_EVAL_TOKEN="$(cat "$EVAL_TOKEN_FILE")"
 export KINU_EVAL_TOKEN
 export PATH="$HOME/.local/bin:$PATH"
+source "$WORKTREE/scripts/repo-runtime.sh"
 export PYTHONPATH="$WORKTREE"
 
 # The sample, drawn by the same seeded function for both arms. Read from the

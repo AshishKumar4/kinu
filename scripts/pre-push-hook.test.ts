@@ -11,7 +11,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { git, gitEnv, initRepo, scratchDir } from '@kinu.run/test-utils';
 
@@ -33,8 +33,12 @@ function repoWithTwoCommits() {
   mkdirSync(join(repo, '.githooks'));
   copyFileSync(HOOK, join(repo, '.githooks', 'pre-push'));
   mkdirSync(join(repo, 'scripts'));
+  copyFileSync(resolve(import.meta.dir, 'repo-runtime.sh'), join(repo, 'scripts', 'repo-runtime.sh'));
+  mkdirSync(join(repo, 'node_modules', '.bin'), { recursive: true });
+  symlinkSync(process.execPath, join(repo, 'node_modules', '.bin', 'bun'));
+  writeFileSync(join(repo, '.gitignore'), 'node_modules/\n');
   writeFileSync(join(repo, 'scripts', 'ladder.ts'), `console.log(${JSON.stringify(TIER_RAN)});\n`);
-  git(repo, 'add', '.githooks', 'scripts');
+  git(repo, 'add', '.githooks', '.gitignore', 'scripts');
   git(repo, 'commit', '-q', '-m', 'hook');
 
   return { repo, head: git(repo, 'rev-parse', 'HEAD').trim(), parent: git(repo, 'rev-parse', 'HEAD~1').trim() };
