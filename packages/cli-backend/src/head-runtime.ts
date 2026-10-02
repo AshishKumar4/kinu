@@ -11,7 +11,7 @@ import {
   type MissionGovernor, type ModelCallSink, type ModelOperationSink,
   type HostedActor, type WriteObserver,
   runHeadSplit, HeadController, REAL_CLOCK, type HeadJournal,
-  createDbCodemodeProvider, createStateCodemodeProvider,
+  codemodeSurface, createDbCodemodeProvider, createStateCodemodeProvider,
   headMergeLLM, spawnSeatedHead,
   localMissionScope,
 } from '@kinu.run/core';
@@ -110,9 +110,5 @@ export function hostedCodemodeTool(actor: HostedActor, extras: readonly Codemode
     ],
   });
 
-  return (finished) => sandbox({
-    native: finished,
-    craftedTools: () => [],
-    providers: actor.runtime.executionRouter?.getProviders() ?? [],
-  });
+  return (finished) => sandbox(codemodeSurface(actor.runtime, finished));
 }

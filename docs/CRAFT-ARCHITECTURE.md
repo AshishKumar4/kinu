@@ -60,7 +60,7 @@ Both backends declare crafted tools the same way. The `eval` description declare
 
 `ActorAgent.getCodemodeToolFactory(mode, profileKey)` (`packages/cf-backend/src/actor-agent.ts`) is the entry every Cloudflare actor shares, memoized per work mode and tool profile. It calls `createCodemodeToolFactory` (`packages/cf-backend/src/codemode-tool.ts`), which owns the `createCodeTool` assembly and builds the one `tools` provider: native tools as host-dispatched functions, plus a prelude defining every injectable crafted tool. The actor hands `toolFor` to core as its `codemode` builder; it takes core's surface, whose `craftedTools()` is the one crafted reader.
 
-`packages/core/src/tools/crafted-executor.ts` declares `CraftedToolSource`, the one crafted shape on the surface. `toCraftedToolSource` drops null and comment-only bodies, so no backend special-cases them. Core's `installCodemode` (`packages/core/src/tools/builtins.ts`) builds `eval` over `codemodeSurface(rt, native)` for `buildActorTools`; a Cloudflare head or swarm node builds over the same surface of its own runtime.
+`packages/core/src/tools/crafted-executor.ts` declares `CraftedToolSource`, the one crafted shape on the surface. `toCraftedToolSource` drops null and comment-only bodies, so no backend special-cases them. Core's `installCodemode` (`packages/core/src/tools/builtins.ts`) builds `eval` over `codemodeSurface(rt, native)` for `buildActorTools`; a head or swarm node on either backend builds over the same surface of its runtime, whose store is the workspace's, so every actor sees the workspace's crafted tools and their scores.
 
 ## 7. Outbound network and open questions
 
