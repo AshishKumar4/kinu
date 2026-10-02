@@ -159,7 +159,7 @@ describe('createLocalModelResolver', () => {
 
     try {
       for (const reasoningEffort of ['high', null] as const) {
-        await rt.modelForRoute?.({ source: 'judge', tier: 'deep', model: 'workers-ai/@cf/test/model', reasoningEffort, fallbacks: [] })
+        await rt.modelForRoute?.({ source: 'judge', tier: 'deep', model: 'workers-ai/@cf/test/model', reasoningEffort, fallbacks: [], retries: 0 })
           .complete('grade');
       }
     } finally {
@@ -168,6 +168,38 @@ describe('createLocalModelResolver', () => {
     }
 
     expect(bodies.map((body) => body.reasoning_effort ?? null)).toEqual(['high', null]);
+  });
+
+  test('a runtime lane spends the retries its route allows on a 429, no more, as the cf lane does', async () => {
+    let requests = 0;
+
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch() {
+        requests++;
+
+        return new Response('limited', { status: 429, headers: { 'retry-after': '0' } });
+      },
+    });
+
+    const db = new Database(scratchPath('model-resolver', 'agent.db'));
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+
+    const rt = createCLIRuntime(db, {
+      llm: { name: 'workers-ai', baseURL: `http://127.0.0.1:${server.port}/v1`, headers: { Authorization: 'Bearer test' }, model: '@cf/test/model' },
+    });
+
+    try {
+      const route = { source: 'fast', tier: 'fast', model: 'workers-ai/@cf/test/model', reasoningEffort: null, fallbacks: [], retries: 1 } as const;
+
+      await expect(rt.modelForRoute?.(route).complete('compress') ?? Promise.resolve('no lane')).rejects.toThrow('is rate-limiting this account');
+    } finally {
+      await server.stop(true);
+      db.close();
+    }
+
+    expect(requests).toBe(2);
   });
 
   test('normalizes Workers AI model ids to provider-style specs', async () => {
