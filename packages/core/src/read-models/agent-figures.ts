@@ -1,4 +1,5 @@
-import type { SqlExecutor } from '../types/primitives';
+import * as v from 'valibot';
+import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { tableExists } from '../identity/schema';
 import { parseStoredRunEvent } from '../events/recorder';
 import { summarizeSteps } from '../events/step-stats';
@@ -50,4 +51,31 @@ function actorFigures(sql: SqlExecutor, actorId: string): AgentFigures {
     activeMs: Math.round(turns?.ms ?? 0),
     cacheEma: summarizeSteps(steps, { windowLimit: AGENT_STEP_WINDOW }).cacheHit.ema,
   };
+}
+
+export function initAgentFiguresTable(execRaw: RawSqlExec): void {
+  execRaw(`CREATE TABLE IF NOT EXISTS agent_figures (
+    actor_id TEXT PRIMARY KEY REFERENCES workspace_actors(actor_id),
+    figures  TEXT NOT NULL
+  )`);
+}
+
+const AgentFiguresSchema = v.object({
+  tokens: v.optional(v.number()),
+  usd: v.optional(v.number()),
+  activeMs: v.number(),
+  cacheEma: v.nullable(v.number()),
+});
+
+export function recordAgentFigures(sql: SqlExecutor, actorId: string, figures: AgentFigures): void {
+  void sql`INSERT INTO agent_figures (actor_id, figures) VALUES (${actorId}, ${JSON.stringify(figures)})
+    ON CONFLICT (actor_id) DO UPDATE SET figures = excluded.figures`;
+}
+
+export function reportedAgentFigures(sql: SqlExecutor, actorIds: readonly string[]): ReadonlyMap<string, AgentFigures> {
+  if (actorIds.length === 0) return new Map();
+
+  return new Map(sql<{ actor_id: string; figures: string }>`SELECT actor_id, figures FROM agent_figures`
+    .filter((row) => actorIds.includes(row.actor_id))
+    .map((row) => [row.actor_id, v.parse(AgentFiguresSchema, JSON.parse(row.figures))]));
 }
