@@ -628,7 +628,7 @@ function WorkspaceBackupCard({
       </p>
       <button
         type="button"
-        onClick={async () => { await download(); }}
+        onClick={() => detach(Effect.promise(async () => { await download(); }))}
         disabled={busy || !workspace}
         className="px-3 py-1.5 rounded-md text-xs font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-50"
       >{busy ? "Exporting…" : "Download archive"}</button>
@@ -786,7 +786,7 @@ function AlwaysActiveSkillsCard({
           : names.map(n => (
             <span key={n} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-sm p-card p-meta font-mono">
               {n}
-              <button type="button" onClick={async () => { await remove(n); }} aria-label={`Unpin ${n}`} className="p-text-3 hover:p-text">×</button>
+              <button type="button" onClick={() => detach(Effect.promise(async () => { await remove(n); }))} aria-label={`Unpin ${n}`} className="p-text-3 hover:p-text">×</button>
             </span>
           ))}
       </div>
@@ -796,12 +796,12 @@ function AlwaysActiveSkillsCard({
           value={input}
           placeholder="skill-name"
           onChange={(e) => setInput(e.target.value)}
-          onKeyDown={async (e) => { if (e.key === 'Enter' && !composing(e.nativeEvent)) await add(); }}
+          onKeyDown={(e) => detach(Effect.promise(async () => { if (e.key === 'Enter' && !composing(e.nativeEvent)) await add(); }))}
           className={inputCls + " text-xs"}
         />
         <button
           type="button"
-          onClick={async () => { await add(); }}
+          onClick={() => detach(Effect.promise(async () => { await add(); }))}
           disabled={busy || !input.trim()}
           className="px-3 py-1.5 rounded-md text-xs font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-50 shrink-0"
         >Pin</button>

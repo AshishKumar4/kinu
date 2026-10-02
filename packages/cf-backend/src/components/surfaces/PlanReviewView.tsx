@@ -502,14 +502,14 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
                 type="button"
                 size="sm"
                 variant="secondary"
-                onClick={() => decide("request_changes")}
+                onClick={() => detach(Effect.promise(async () => decide("request_changes")))}
                 disabled={decisionBusy !== null || saving || annotations.length === 0}
               >
                 {decisionBusy === "request" ? <Loader size="sm" /> : "Request changes"}
               </Button>
               <FilledButton
                 className="w-full sm:w-auto"
-                onClick={() => decide("approve")}
+                onClick={() => detach(Effect.promise(async () => decide("approve")))}
                 disabled={decisionBusy !== null || saving || annotations.length > 0}
               >
                 {decisionBusy === "approve" ? <Loader size="sm" /> : <><CheckCircleIcon size={14} />Approve &amp; implement</>}
@@ -518,7 +518,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
           )}
           {handoffPending && (
             <FilledButton
-              onClick={() => decide(plan.status === "approved" ? "approve" : "request_changes")}
+              onClick={() => detach(Effect.promise(async () => decide(plan.status === "approved" ? "approve" : "request_changes")))}
               disabled={decisionBusy !== null || saving}
             >
               {decisionBusy ? <Loader size="sm" /> : retryLabel}

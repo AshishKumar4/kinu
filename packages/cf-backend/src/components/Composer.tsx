@@ -2,6 +2,8 @@
  * One composer for every chat surface. While a turn runs it offers Stop, Branch and Steer; which ones
  * show comes from `turnLiveness`, the same fold the transcript's live tail reads.
  */
+import { detach } from "@kinu.run/core/obs";
+import { Effect } from "effect";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { InputArea, Loader } from "@cloudflare/kumo";
 import {
@@ -354,12 +356,12 @@ export function Composer({
             )}
             {stranded && onRecover && (
               <button type="button" disabled={recovering}
-                onClick={async () => {
+                onClick={() => detach(Effect.promise(async () => {
                   setRecovering(true);
                   // The outcome is the workspace notice's to report; the button only waits.
                   await onRecover();
                   setRecovering(false);
-                }}
+                }))}
                 className="p-btn-quiet inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 px-2 disabled:opacity-50"
                 aria-label="Recover this turn"
                 title="This turn's worker stopped without finishing. Settle it so the agent takes work again.">

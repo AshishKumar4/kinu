@@ -32,7 +32,7 @@ import { mountActorFiles } from './workspace-host';
 
 export { withHostedNodeExecution, type HostedNodeHome } from '@kinu.run/core';
 
-import { diagnostics, KinuError, toKinuError, settle, settleLogged, settleSync } from "@kinu.run/core/obs";
+import { diagnostics, KinuError, toKinuError, settle, settleLogged, settleSync, detach } from "@kinu.run/core/obs";
 import { kinuEgressParams } from "./egress/configure";
 import { BOX_SIZES, BOX_SIZE_ORDER, DEFAULT_BOX_SIZE, type BoxSize } from "@kinu.run/devbox/sizes";
 import { accountSandboxSize, SANDBOX_SIZE_CONFIG_KEY } from "./sandbox-size";
@@ -663,7 +663,7 @@ function createProfileLaneLLM(options: ProfileLaneOptions): LLM | undefined {
 
 function createRealSchedule(agent: AgentHost): Schedule {
   return {
-    after: async (ms, fn) => { setTimeout(fn, ms); },
+    after: async (ms, fn) => { setTimeout((...args: Parameters<typeof fn>) => detach(Effect.promise(async () => fn(...args))), ms); },
     cron: async () => {},
     fiber: async <T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> => {
       return agent.runFiber(name, async (sdkCtx) => {

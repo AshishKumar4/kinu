@@ -358,7 +358,7 @@ function CodexConnect({ onChanged }: { onChanged: () => void }) {
         setFlow(null);
       };
 
-      pollRef.current = setInterval(async () => {
+      pollRef.current = setInterval(() => detach(Effect.promise(async () => {
         try {
           const result = await pollCodexFlow();
 
@@ -376,7 +376,7 @@ function CodexConnect({ onChanged }: { onChanged: () => void }) {
           // The poll request itself failed: show it but keep polling.
           setError(renderThrownChain({ cause: e }));
         }
-      }, Math.max(3, f.pollIntervalSec) * 1000);
+      })), Math.max(3, f.pollIntervalSec) * 1000);
     }), showing(setError));
   })), [onChanged]);
 
@@ -440,11 +440,11 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
         Signing in with a Claude subscription runs Kinu on your own Claude plan. Anthropic&apos;s terms limit subscription use to its own apps, so you connect at your own risk.
       </p>
       {authorizeUrl === null ? (
-        <FilledButton onClick={start} disabled={busy}>Sign in with Claude</FilledButton>
+        <FilledButton onClick={(...args: Parameters<typeof start>) => detach(Effect.promise(async () => start(...args)))} disabled={busy}>Sign in with Claude</FilledButton>
       ) : (
         <Field label={<>Open <a href={authorizeUrl} target="_blank" rel="noopener noreferrer" className="p-accent underline underline-offset-2">claude.ai</a>, approve Kinu, and paste what Claude shows you</>}
           hint="The code Claude shows, or the address your browser ended on if the page did not load.">
-          <form className="flex flex-wrap gap-2" onSubmit={async (event) => { event.preventDefault(); await finish(); }}>
+          <form className="flex flex-wrap gap-2" onSubmit={(event) => detach(Effect.promise(async () => { event.preventDefault(); await finish(); }))}>
             <input
               value={code}
               onChange={(e) => setCode(e.target.value)}
@@ -455,7 +455,7 @@ function ClaudeConnect({ onChanged }: { onChanged: () => void }) {
             />
             <button type="submit" disabled={busy || code.trim() === ''}
               className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs">{busy ? '...' : 'Connect'}</button>
-            <button type="button" onClick={start} disabled={busy}
+            <button type="button" onClick={(...args: Parameters<typeof start>) => detach(Effect.promise(async () => start(...args)))} disabled={busy}
               className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs">Start again</button>
           </form>
         </Field>

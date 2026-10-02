@@ -175,7 +175,7 @@
       // pushed with `wrangler containers build -p`. One instance per user who
       // is using Codex right now; each sleeps after 5 idle minutes.
       "class_name": "CodexEgress",
-      "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-codex-egress@sha256:6e64016f2d96aafdbe7129181b5579d7222d5d6240c86b7a5da7f40e0e0a5110",
+      "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-codex-egress@sha256:de0f028f7f84e93a9164ea99540e06c8756038a3ca0ec7f7cf1d38a47822817e",
       "max_instances": 50,
       "instance_type": "lite"
     }
@@ -496,7 +496,7 @@
         },
         {
           "class_name": "CodexEgress",
-          "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-codex-egress@sha256:6e64016f2d96aafdbe7129181b5579d7222d5d6240c86b7a5da7f40e0e0a5110",
+          "image": "registry.cloudflare.com/f44999d1ddda7012e9a87729eba250f1/kinu-codex-egress@sha256:de0f028f7f84e93a9164ea99540e06c8756038a3ca0ec7f7cf1d38a47822817e",
           "max_instances": 10,
           "instance_type": "lite"
         }

@@ -1168,6 +1168,8 @@ function ChatScene({
     return action;
   }, [addMessage, client, onExit, performBranch, sendPrompt, setInputText]);
 
+  const queueInputEffects = useCallback((effects: InputEffect[]) => detach(Effect.promise(async () => runInputEffects(effects))), [runInputEffects]);
+
   const runLocalCommand = useCallback(async (typed: string) => {
     const shared = !typed.startsWith('!!');
     const command = typed.replace(/^!!?/u, '').trim();
@@ -1518,11 +1520,11 @@ function ChatScene({
     const bufferedCount = buffered?.events.length ?? 0;
     const abort = new AbortController();
 
-    const unsubscribe = client.subscribe((event) => {
+    const unsubscribe = client.subscribe((event) => detach(Effect.promise(async () => {
       if (clientGenerationRef.current === generation && !abort.signal.aborted) {
         return handleClientEvent(event);
       }
-    });
+    })));
 
     let replayTask: Promise<void> | null = null;
 
@@ -1793,14 +1795,14 @@ function ChatScene({
     focusInput: () => inputRef.current?.focus(),
     addError,
     dispatchInput,
-    runInputEffects,
+    runInputEffects: queueInputEffects,
     hasUserMessages: () => messages.some((message) => message.role === 'user'),
     openSurface: setActiveSurface,
   };
 
   const sceneKeys = { ...sceneKeyHandlers(surfaceKeys), ...composerKeyHandlers(composerKeys) };
   const modalKeys = modalKeyHandlers(surfaceKeys);
-  useKeyboard(async (key) => {
+  useKeyboard((key) => detach(Effect.promise(async () => {
     draftEditing.changed();
 
     if (shellApproval.pending) {
@@ -1851,7 +1853,7 @@ function ChatScene({
 
     // Each handler owns its preventDefault.
     return await (modalActive ? modalKeys : sceneKeys)[result.actionId]?.(key);
-  });
+  })));
 
   const onInputSubmit = useCallback(() => {
     if (overlayOpen) return;
@@ -1921,7 +1923,7 @@ function ChatScene({
         <SettingsOverlay
           settings={settings}
           terminal={{ width: sceneWidth, height }}
-          onSelect={(setting) => {
+          onSelect={(setting) => detach(Effect.promise(async () => {
             setActiveSurface(null);
 
             if (setting.command === '/model') return openModelPicker();
@@ -1933,7 +1935,7 @@ function ChatScene({
             }
 
             return handleSubmit(setting.command);
-          }}
+          }))}
         />
       );
     }
@@ -2123,7 +2125,7 @@ function ChatScene({
             syncComposerRows();
           }}
           onCursorChange={draftEditing.cursorMoved}
-          onSubmit={onInputSubmit}
+          onSubmit={(...args: Parameters<typeof onInputSubmit>) => detach(Effect.promise(async () => onInputSubmit(...args)))}
           style={{
             backgroundColor: colors.background.user,
             focusedBackgroundColor: colors.background.user,
@@ -2364,7 +2366,7 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
 
   globalExit = exit;
 
-  for (const signal of TUI_EXIT_SIGNALS) process.on(signal, exit);
+  for (const signal of TUI_EXIT_SIGNALS) process.on(signal, (...args: Parameters<typeof exit>) => detach(Effect.promise(async () => exit(...args))));
 
   root.render(<ChatApp {...renderOptions} onClientChange={(client) => { currentClient = client; }} />);
 

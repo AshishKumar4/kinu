@@ -1,3 +1,5 @@
+import { detach } from "@kinu.run/core/obs";
+import { Effect } from "effect";
 import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { GithubLogoIcon, ListIcon, PlusIcon } from "@phosphor-icons/react";
@@ -47,7 +49,7 @@ function Shell() {
           <a href="https://github.com/AshishKumar4/kinu" target="_blank" rel="noopener noreferrer" aria-label="GitHub repository" className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text">
             <GithubLogoIcon size={17} />
           </a>
-          <button type="button" onClick={() => navigate("/")} aria-label="New workspace" className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text">
+          <button type="button" onClick={() => detach(Effect.promise(async () => navigate("/")))} aria-label="New workspace" className="flex size-9 items-center justify-center rounded-md p-text-2 p-card-hover hover:p-text">
             <PlusIcon size={16} />
           </button>
         </div>

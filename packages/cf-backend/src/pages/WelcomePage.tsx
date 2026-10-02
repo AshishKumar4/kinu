@@ -211,7 +211,7 @@ export default function WelcomePage({ initialStep = 0 }: { initialStep?: number 
                   className="p-btn-ghost inline-flex h-6.5 items-center rounded-md px-2 text-xs">
                   Skip setup
                 </button>
-                <FilledButton disabled={busy} onClick={next}>
+                <FilledButton disabled={busy} onClick={(...args: Parameters<typeof next>) => detach(Effect.promise(async () => next(...args)))}>
                   {busy && <Loader size="sm" />} Next
                 </FilledButton>
               </div>

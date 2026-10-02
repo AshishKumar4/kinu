@@ -196,7 +196,7 @@ export default function Sidebar({ onCollapse }: { onCollapse?: () => void } = {}
             type="button"
             variant="secondary"
             size="base"
-            onClick={() => navigate("/")}
+            onClick={() => detach(Effect.promise(async () => navigate("/")))}
             className="!h-10 w-full justify-center"
             icon={<PlusIcon size={15} weight="bold" />}
           >

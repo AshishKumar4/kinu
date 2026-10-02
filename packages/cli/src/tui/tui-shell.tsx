@@ -5,7 +5,7 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import type { ScrollBoxRenderable } from '@opentui/core';
 import { useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react';
 
-import { diagnostics, renderThrownChain, settleLogged, toKinuError, settleSync, settle } from '@kinu.run/core/obs';
+import { diagnostics, renderThrownChain, settleLogged, toKinuError, settleSync, settle, detach } from '@kinu.run/core/obs';
 import { TUI_MARKS } from '@kinu.run/core/tui';
 
 import { AGENT_HOME, canonicalProjectRoot } from '../config';
@@ -146,7 +146,7 @@ export function useAgentRoster(source: TuiAgentSource): TuiAgentRoster {
     }));
   })), []);
 
-  const loadMore = useCallback(() => settle(Effect.gen(function* () {
+  const loadMore = useCallback(() => detach(Effect.gen(function* () {
     const cursor = page.nextCursor;
 
     if (cursor === null || loading) return;

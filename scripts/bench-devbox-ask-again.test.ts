@@ -28,9 +28,9 @@ function bootWindowBox(refusals: number, refusal = ASK_AGAIN) {
   return { fixture, asks, stop: () => server.stop(true) };
 }
 
-const stops: (() => void)[] = [];
+const stops: (() => Promise<void> | void)[] = [];
 
-afterAll(() => { for (const stop of stops) stop(); });
+afterAll(async () => { await Promise.all(stops.map(async (stop) => stop())); });
 
 describe('an operation asked in the boot window is asked again', () => {
   test('exec returns the answer the box gives once it has started, not its first refusal', async () => {

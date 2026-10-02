@@ -3,6 +3,7 @@
  * a second (or Ctrl+C while idle) exits. A line typed mid-turn steers the running turn.
  */
 
+import { Effect } from 'effect';
 import * as readline from 'node:readline';
 import { renderChangelogText } from '@kinu.run/core/tui';
 import { EMPTY_MODEL_MENU } from '@kinu.run/core';
@@ -25,7 +26,7 @@ import {
   printToolCall, printToolResult, printEvolutionEvent, createTurnStatus, formatFailure,
   ACCENT, DIM, MUTED, ERR, OK, WARN, type TurnStatus,
 } from './display';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { renderThrownChain, detach } from '@kinu.run/core/obs';
 import { type WorkMode } from '@kinu.run/core';
 import { clipText } from '@kinu.run/core/tui';
 
@@ -116,8 +117,8 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     }
   };
 
-  rl.on('SIGINT', onInterrupt);
-  process.on('SIGINT', onInterrupt);
+  rl.on('SIGINT', () => detach(Effect.promise(onInterrupt)));
+  process.on('SIGINT', () => detach(Effect.promise(onInterrupt)));
 
   // Lines answering a consent question are excluded.
   const onMidTurnLine = async (input: string) => {
@@ -171,7 +172,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     else console.log(DIM('  ⧗ the turn had just finished, so this ran as the next message.'));
   };
 
-  rl.on('line', async (line) => {
+  rl.on('line', (line) => detach(Effect.promise(async () => {
     if (!turnInFlight || consentAskPending || exiting) return;
     const input = line.trim();
 
@@ -182,7 +183,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     } catch (cause) {
       console.log(`\n${formatFailure({ cause })}\n`);
     }
-  });
+  })));
 
   await client.connect();
 
@@ -377,7 +378,7 @@ function ask(rl: readline.Interface, prompt: string, signal?: AbortSignal, prefi
   return new Promise((resolve) => {
     let settled = false;
 
-    const settle = (answer: string | null) => {
+    const finish = (answer: string | null) => {
       if (settled) return;
       settled = true;
       rl.off('close', onClose);
@@ -385,19 +386,19 @@ function ask(rl: readline.Interface, prompt: string, signal?: AbortSignal, prefi
       resolve(answer);
     };
 
-    const onClose = () => settle(null);
-    const onAbort = () => settle(null);
+    const onClose = () => finish(null);
+    const onAbort = () => finish(null);
     rl.once('close', onClose);
     signal?.addEventListener('abort', onAbort, { once: true });
 
     try {
-      rl.question(prompt, settle);
+      rl.question(prompt, finish);
 
       if (prefill) rl.write(prefill);
     } catch (error) {
       // Stdin hit EOF. Stderr, because stdout carries only the conversation.
       process.stderr.write(`note: readline closed before the prompt: ${renderThrownChain({ cause: error })}\n`);
-      settle(null);
+      finish(null);
     }
   });
 }

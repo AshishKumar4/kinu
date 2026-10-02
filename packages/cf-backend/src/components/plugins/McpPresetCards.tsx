@@ -164,7 +164,7 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
     );
   } else {
     trailing = (
-      <button type="button" data-plugin-add onClick={connect} disabled={busy}
+      <button type="button" data-plugin-add onClick={(...args: Parameters<typeof connect>) => detach(Effect.promise(async () => connect(...args)))} disabled={busy}
         aria-label={`Add ${preset.title}`} title={`Add ${preset.title}`}
         className={PLUGIN_ACTION}>
         <PlusIcon size={16} />
@@ -187,10 +187,10 @@ function PresetRow({ preset, server, appConfigured, onChanged }: {
                 aria-label={tokenLabel} placeholder={tokenLabel}
                 className={inputCls + ' min-w-0 flex-1'} />
               <button
-                onClick={async () => { await add({
+                onClick={() => detach(Effect.promise(async () => { await add({
                   presetId: preset.id,
                   headers: { Authorization: `Bearer ${token}` },
-                }); }}
+                }); }))}
                 disabled={busy || !token.trim()}
                 className="text-xs px-2 py-1.5 rounded-md p-accent-bg p-accent font-medium disabled:opacity-50">
                 {busy ? 'Connecting…' : 'Connect'}

@@ -25,6 +25,8 @@
  * every assertion here reads from the same two frames.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
+import { Effect } from 'effect';
+import { detach } from '@kinu.run/core/obs';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Page } from 'puppeteer';
@@ -375,7 +377,7 @@ async function run(): Promise<Observed> {
     // server here answers. Serve it, so what is asserted below is a frame that
     // really rendered rather than an element that merely exists.
     await tools.setRequestInterception(true);
-    tools.on('request', async (request) => {
+    tools.on('request', (request) => detach(Effect.promise(async () => {
       if (!new URL(request.url()).hostname.endsWith('.preview.example.test')) {
         await request.continue();
 
@@ -383,7 +385,7 @@ async function run(): Promise<Observed> {
       }
 
       await request.respond({ status: 200, contentType: 'text/html', body: '<!doctype html><p data-run-preview>the running app</p>' });
-    });
+    })));
     await tools.reload({ waitUntil: 'networkidle0' });
     await tools.waitForSelector('[data-tool-state]');
 

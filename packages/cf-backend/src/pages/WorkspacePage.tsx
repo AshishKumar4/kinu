@@ -361,8 +361,8 @@ function SwarmNodeColumn({ main, ownerPath, runId, nodeId, agent }: {
           headDeltas={main.headDeltas} onSelect={() => undefined} />
       </div>
       {/* The workspace holds every running worker, whoever started the swarm; its siblings run on. */}
-      <ViewOnlyBar running={working} onStop={() => settleLogged("agents.stop_failed", { doing: "stop a swarm worker", otherwise: "io" },
-        () => main.rpc("stopSwarmWorker", [nodeId]))} />
+      <ViewOnlyBar running={working} onStop={() => detach(Effect.promise(async () => settleLogged("agents.stop_failed", { doing: "stop a swarm worker", otherwise: "io" },
+        () => main.rpc("stopSwarmWorker", [nodeId]))))} />
     </div>
   );
 }
@@ -492,6 +492,7 @@ function SubordinateChatColumn({
 }) {
   const state = useKinu({ workspace, subordinate: subName });
   const live = state.liveness.kind === "live";
+  const pickEffort = useCallback((effort: Parameters<typeof state.setReasoningEffort>[0]) => detach(Effect.promise(async () => state.setReasoningEffort(effort))), [state]);
 
   // No model write from an agent pane: only the workspace pin is honoured, and the
   // snapshot carries the actor's effective model, rendered read-only.
@@ -615,8 +616,8 @@ function SubordinateChatColumn({
           onRecover={state.recoverTurn}
           onStop={stop}
           mode={{ value: ui.mode, onChange: ui.setMode }}
-          modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={state.setModel} size="xs"
-            effort={{ value: as?.reasoningEffort ?? null, onChange: state.setReasoningEffort }} />}
+          modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={(...args: Parameters<typeof state.setModel>) => detach(Effect.promise(async () => state.setModel(...args)))} size="xs"
+            effort={{ value: as?.reasoningEffort ?? null, onChange: pickEffort }} />}
           notices={[
             ...(loadNotices(state.error, state.retryLoad)),
             ...(state.newerDeployedBuild ? [{
@@ -698,6 +699,8 @@ export default function WorkspacePage() {
   }, [setModel]);
 
   const [sideErrors, setSideErrors] = useState<Partial<Record<SideSource, string>>>({});
+
+  const pickEffort = useCallback((effort: Parameters<typeof state.setReasoningEffort>[0]) => detach(Effect.promise(async () => state.setReasoningEffort(effort))), [state]);
 
   const reportSide = useCallback((source: SideSource, message: string | null) => {
     setSideErrors((prev) => {
@@ -1124,7 +1127,7 @@ export default function WorkspacePage() {
             {state.pendingConsents.length > 0 && (
               <div className="p-thread-column space-y-2 pb-1">
                 {state.pendingConsents.map((c) => (
-                  <DeviceConsentCard key={c.consentId} consent={c} onResolve={state.resolveConsent} />
+                  <DeviceConsentCard key={c.consentId} consent={c} onResolve={(...args: Parameters<typeof state.resolveConsent>) => detach(Effect.promise(async () => state.resolveConsent(...args)))} />
                 ))}
               </div>
             )}
@@ -1147,8 +1150,8 @@ export default function WorkspacePage() {
                   onAdd: attachments.add,
                   onRemove: attachments.remove,
                 }}
-                modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs"
-                  effort={{ value: as?.reasoningEffort ?? null, onChange: state.setReasoningEffort }} />}
+                modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={(...args: Parameters<typeof onPickModel>) => detach(Effect.promise(async () => onPickModel(...args)))} size="xs"
+                  effort={{ value: as?.reasoningEffort ?? null, onChange: pickEffort }} />}
                 notices={[
                   ...(loadNotices(state.error, state.retryLoad)),
                   ...(state.newerDeployedBuild ? [{
@@ -1195,7 +1198,7 @@ export default function WorkspacePage() {
             pinnedPorts={state.pinnedPorts}
             previewError={state.previewError}
             previewStarting={state.previewStarting}
-            onRefreshPorts={state.refreshExposedPorts}
+            onRefreshPorts={(...args: Parameters<typeof state.refreshExposedPorts>) => detach(Effect.promise(async () => state.refreshExposedPorts(...args)))}
             plan={visiblePlan}
             snapshot={state.snapshot}
             onRetryLoad={state.retryLoad}
@@ -1211,9 +1214,9 @@ export default function WorkspacePage() {
             lastActiveExecutor={state.lastActiveExecutor}
             onExecute={state.executeInExecutor}
             backgroundJobs={state.backgroundJobs}
-            onRefreshJobs={state.refreshBackgroundJobs}
+            onRefreshJobs={(...args: Parameters<typeof state.refreshBackgroundJobs>) => detach(Effect.promise(async () => state.refreshBackgroundJobs(...args)))}
             pendingActions={state.pendingActions}
-            onRefreshQueue={state.refreshPendingActions}
+            onRefreshQueue={(...args: Parameters<typeof state.refreshPendingActions>) => detach(Effect.promise(async () => state.refreshPendingActions(...args)))}
             onChangelogSeen={state.clearChangelogUnseen}
             slates={state.slates}
             slateReloads={state.slateReloads}

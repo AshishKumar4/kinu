@@ -151,7 +151,7 @@ import { TierIdSchema,
   ChatSession, CHAT_SESSION_ID, checkpointAvailability, fileCheckpointListing, fileRestorePlan, fileCheckpointRestore,
   type ChatTurnInput, type ComposedRequest, type ContextFill, type PreparedTurn, type OwedTerminalEffectsInput, type SessionEvent,
 } from '@kinu.run/core';
-import { diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal, settle, settleSync, settleLogged, settleLoggedSync } from '@kinu.run/core/obs';
+import { diagnostics, KinuError, renderThrownChain, tolerate, toKinuError, type Refusal, settle, settleSync, settleLogged, settleLoggedSync, detach } from '@kinu.run/core/obs';
 import { buildLocalActorRuntime, cleanupFacetCwdScratch, makeSqlExec, writeTransaction, type CLIRuntime } from './runtime';
 import { localActorDirectory, registerLocalActor, retireLocalActor, registerLocalNode, requireLocalActorWorkspace, type LocalActorBinding } from '@kinu.run/core';
 import { discoverAgentsMd } from './agents-md';
@@ -1103,11 +1103,11 @@ export class LocalAgentSession {
 
   /** Skips a window outliving the session so consumed events never bind to a dead pump's turn. */
   setTimer(fn: () => Promise<void>, ms: number): void {
-    setTimeout(async () => {
+    setTimeout(() => detach(Effect.promise(async () => {
       if (this.chat.closed) return;
 
       await settleLogged('drain.timer_callback_failed', { doing: 'running the drain-debounce timer callback', otherwise: 'io' }, () => fn());
-    }, ms);
+    })), ms);
   }
 
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
@@ -1488,7 +1488,7 @@ export class LocalAgentSession {
     this.clearLocalAlarm();
     this.scheduledAlarmAt = ts;
     const delay = Math.max(0, ts - Date.now());
-    this.alarmTimer = setTimeout(async () => {
+    this.alarmTimer = setTimeout(() => detach(Effect.promise(async () => {
       this.alarmTimer = null;
       this.scheduledAlarmAt = null;
 
@@ -1503,7 +1503,7 @@ export class LocalAgentSession {
 
         diagnostics.failure('schedule.due_triggers_failed', failure);
       }
-    }, Math.min(delay, 2_147_483_647));
+    })), Math.min(delay, 2_147_483_647));
   }
 
   private clearLocalAlarm(): void {
@@ -2021,7 +2021,7 @@ export class LocalAgentSession {
     this.clearTerminalRetry();
     this.terminalRetryAt = atMs;
 
-    const timer = setTimeout(async () => {
+    const timer = setTimeout(() => detach(Effect.promise(async () => {
       this.clearTerminalRetry();
 
       // Job sweep first, in its own try: this timer is also a deferred job's wake, and only
@@ -2037,7 +2037,7 @@ export class LocalAgentSession {
 
         diagnostics.failure('turn.terminal_retry_failed', failure);
       }
-    }, Math.max(0, atMs - Date.now()));
+    })), Math.max(0, atMs - Date.now()));
 
     timer.unref();
     this.terminalRetryTimer = timer;

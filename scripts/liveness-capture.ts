@@ -26,6 +26,8 @@
  * recovery instead of failing on the dropped sockets.
  */
 
+import { detach } from "@kinu.run/core/obs";
+import { Effect } from "effect";
 import * as v from "valibot";
 import type { Page } from "puppeteer";
 import { launchTestChrome, type TestChrome } from "./test-chrome";
@@ -168,14 +170,14 @@ class DriverSocket {
       for (const entry of this.pending.values()) entry.reject(new Error("driver socket closed"));
       this.pending.clear();
 
-      if (!this.closedForGood && EXPECT_RESTART) setTimeout(async () => {
+      if (!this.closedForGood && EXPECT_RESTART) setTimeout(() => detach(Effect.promise(async () => {
         try {
           await this.connect();
         } catch (cause) {
           const message = cause instanceof Error ? cause.message : String(cause);
           console.error(`driver socket reconnect failed: ${message}`);
         }
-      }, 2_000);
+      })), 2_000);
     });
     ws.addEventListener("message", (ev) => this.onMessage(String(ev.data)));
 
@@ -410,7 +412,7 @@ async function main(): Promise<void> {
     const state: PollState = { targetRoot: null, runSettled: false };
     let sseTapped = false;
 
-    const poller = setInterval(async () => {
+    const poller = setInterval(() => detach(Effect.promise(async () => {
       try {
         await pollReadModels(driver, state);
         const targetRoot = state.targetRoot;
@@ -429,7 +431,7 @@ async function main(): Promise<void> {
         const message = cause instanceof Error ? cause.message : String(cause);
         record("poll-cycle-failed", message.slice(0, 120));
       }
-    }, POLL_MS);
+    })), POLL_MS);
 
     await sendMission(page);
 

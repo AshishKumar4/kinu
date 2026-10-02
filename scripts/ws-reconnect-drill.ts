@@ -36,12 +36,13 @@
  *   bun scripts/ws-reconnect-drill.ts            (manages its own dev server)
  */
 
+import { Effect } from "effect";
 import type { Socket, Subprocess } from "bun";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as v from "valibot";
 import { parseJsonValue, type JsonValue } from "@kinu.run/core";
-import { renderCauseChain, tolerate } from "@kinu.run/core/obs";
+import { renderCauseChain, tolerate, detach } from "@kinu.run/core/obs";
 import type { HTTPRequest, Page } from "puppeteer";
 import { launchTestChrome } from "./test-chrome";
 
@@ -706,7 +707,7 @@ async function main(): Promise<void> {
     });
     await page.setViewport({ width: 1568, height: 900 });
     await page.setRequestInterception(true);
-    page.on("request", async (req: HTTPRequest) => {
+    page.on("request", (req: HTTPRequest) => detach(Effect.promise(async () => {
       if (new URL(req.url()).pathname === "/api/health") {
         await req.respond({
           status: 200,
@@ -725,7 +726,7 @@ async function main(): Promise<void> {
       }
 
       await req.continue();
-    });
+    })));
 
     // ── stage 1: connect through the proxy ────────────────────────────────
     await page.goto(`${ORIGIN}/workspace/${WORKSPACE}`, { waitUntil: "domcontentloaded", timeout: 120_000 });

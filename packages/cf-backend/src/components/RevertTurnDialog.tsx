@@ -106,7 +106,7 @@ export function RevertTurnDialog({ messageId, rpc, onClose, onReverted, onRestor
             Revert conversation and device files
           </Button>
         )}
-        <FilledButton onClick={revertConversation} disabled={busy} data-revert-action="conversation">
+        <FilledButton onClick={(...args: Parameters<typeof revertConversation>) => detach(Effect.promise(async () => revertConversation(...args)))} disabled={busy} data-revert-action="conversation">
           Revert conversation
         </FilledButton>
       </>}

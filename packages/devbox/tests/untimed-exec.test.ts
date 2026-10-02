@@ -32,7 +32,7 @@ const localExec: Container['exec'] = async (argv, options) => {
 
   return {
     isPty: false,
-    resize: async () => { throw new Error("the local pipe test cannot resize a PTY"); },
+    resize: () => { throw new Error("the local pipe test cannot resize a PTY"); },
     stdin: null,
     stdout: child.stdout,
     stderr: child.stderr,

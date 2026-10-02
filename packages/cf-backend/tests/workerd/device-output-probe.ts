@@ -6,7 +6,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import * as v from 'valibot';
 import { DeviceSocketHub, deviceIdFromSocket, type DeviceExecOutput, type JsonValue } from '@kinu.run/core';
-import { settleLogged } from '@kinu.run/core/obs';
+import { detach, logged } from '@kinu.run/core/obs';
 
 const DEVICE = 'dev-probe';
 
@@ -34,9 +34,9 @@ export class DeviceOutputHubProbeDO extends DurableObject<Cloudflare.Env> {
     if (tunnel === null) throw new Error('no device socket');
 
     return tunnel.rpc('exec', ['bun run build'], {
-      onOutput: (output) => settleLogged('device.output_unsent', {
+      onOutput: (output) => detach(logged('device.output_unsent', {
         doing: "handing a running command's output to its workspace", otherwise: 'unavailable',
-      }, async () => { await onOutput(output); }),
+      }, async () => { await onOutput(output); })),
     });
   }
 }

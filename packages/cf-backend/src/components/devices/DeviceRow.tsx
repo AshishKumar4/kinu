@@ -147,8 +147,8 @@ export function DeviceRow({
             autoFocus
             value={editing}
             onChange={(e) => setEditing(e.target.value)}
-            onBlur={save}
-            onKeyDown={async (e) => {
+            onBlur={(...args: Parameters<typeof save>) => detach(Effect.promise(async () => save(...args)))}
+            onKeyDown={(e) => detach(Effect.promise(async () => {
               if (composing(e.nativeEvent)) return;
 
               if (e.key === "Enter") {
@@ -158,7 +158,7 @@ export function DeviceRow({
               }
 
               if (e.key === "Escape") setEditing(null);
-            }}
+            }))}
             aria-label="Device name"
             className="px-1.5 py-0.5 rounded-sm border p-border p-fill p-text text-xs w-44"
           />

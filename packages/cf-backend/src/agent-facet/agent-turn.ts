@@ -269,7 +269,13 @@ async function runTurn(
   });
 
   // Every end closes the stream; an open one holds the relay.
-  const report = await runHeadInference(prepared.input, inference).finally(() => trace?.flush());
+  let report: Awaited<ReturnType<typeof runHeadInference>>;
+
+  try {
+    report = await runHeadInference(prepared.input, inference);
+  } finally {
+    await trace?.flush();
+  }
 
   closeTurnRun(actor.stores.eventRecorder, runId, {
     turnIndex: actor.session.orchestrator.sessionTurnIndex,

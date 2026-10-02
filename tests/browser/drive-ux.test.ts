@@ -21,6 +21,8 @@
  * Screenshots land in ~/kinu-logs/drive-ux/ (outside the worktree).
  */
 import { describe, expect, test } from 'bun:test';
+import { Effect } from 'effect';
+import { detach } from '@kinu.run/core/obs';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -198,13 +200,13 @@ describe('the Drive', () => {
 
     try {
       await page.setRequestInterception(true);
-      page.on('request', async (request) => {
+      page.on('request', (request) => detach(Effect.promise(async () => {
         const { pathname } = new URL(request.url());
 
         if (!pathname.startsWith('/api/user/pictures/')) await request.continue();
         else if (pathname.startsWith('/api/user/pictures/checkout-fixes/issue-triage/')) await request.respond({ status: 200, contentType: 'image/png', body: PIXEL });
         else await request.respond({ status: 404, body: 'No such picture.' });
-      });
+      })));
       await page.setViewport(VIEWPORTS.desktop);
       await page.goto(`${gallery.origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
       await page.waitForSelector(selector);

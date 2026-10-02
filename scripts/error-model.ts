@@ -338,7 +338,7 @@ export const HOST_BOUNDARIES = new Map<string, string>([
 
 const RUNNERS: readonly string[] = ['settle', 'settleSync', 'observe', 'detach'];
 
-const DETACH_ONLY_AT_REACT = 'detach runs only where a component hands out a function: a JSX attribute\'s, or useCallback\'s, startTransition\'s or an effect\'s';
+const DETACH_ONLY_AT_REACT = 'detach runs only where its caller never awaits: a timer, a listener, or a function a component hands out';
 
 /** A Hono app's registrations: each takes its handlers after the path. */
 const ROUTE_METHODS: readonly string[] = ['get', 'post', 'put', 'delete', 'patch', 'options', 'all', 'use', 'on'];
@@ -445,7 +445,7 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
         return;
       }
 
-      const caller = file.endsWith('.tsx') ? reactEdge(node) : null;
+      const caller = edgeCaller(node, file.endsWith('.tsx'));
 
       if (detachNames.has(raw.callee.name)) {
         if (caller !== null) react.push(site);
@@ -454,8 +454,15 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
         return;
       }
 
+      // devbox's observe hands its exit to observers and returns no promise, so nothing floats.
+      if (caller === 'react' && raw.callee.name === 'observe') {
+        react.push(site);
+
+        return;
+      }
+
       if (caller === 'react') {
-        findings.push(`${site}: a settle where React calls: React never awaits it, so a rejection would float; run the answered effect with detach`);
+        findings.push(`${site}: a settle whose caller never awaits it (React, a timer or a listener), so a rejection would float; run the answered effect with detach`);
 
         return;
       }
@@ -507,7 +514,54 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
 const HOLDERS: readonly string[] = ['waitUntil', 'keepAliveWhile', 'fiber', 'runFiber'];
 
 /** React calls these and never awaits them. */
-const REACT_CALLED: readonly string[] = ['startTransition', 'useEffect', 'useLayoutEffect'];
+const REACT_CALLED: readonly string[] = ['startTransition', 'useEffect', 'useLayoutEffect', 'useKeyboard'];
+
+/** Callers that call and never await: a timer's or a frame's callback, and a listener (addEventListener, on, once, subscribe). */
+const NEVER_AWAITED: ReadonlyMap<string, number> = new Map([
+  ['setTimeout', 0], ['setInterval', 0], ['queueMicrotask', 0], ['requestAnimationFrame', 0], ['addEventListener', 1], ['on', 1], ['once', 1], ['subscribe', 0],
+]);
+
+/** Where a listener is handed back to be removed: the removal's listener argument. */
+const REMOVALS: ReadonlyMap<string, number> = new Map([['removeEventListener', 1], ['off', 1], ['removeListener', 1]]);
+
+/** Whether `node` is the argument a never-awaiting caller (or, with `removals`, a removal) takes its function at. */
+function handedTo(node: SyntaxNode, removals: boolean): boolean {
+  const call = node.parent;
+
+  if (call?.raw.type !== 'CallExpression') return false;
+  const name = identifierCalleeName(call) ?? memberCalleeName(call) ?? '';
+  const at = NEVER_AWAITED.get(name) ?? (removals ? REMOVALS.get(name) : undefined);
+
+  return at !== undefined && call.raw.arguments[at] === node.raw;
+}
+
+/**
+ * Whether a function is handed to a caller that calls it and never awaits it, in any file: directly, or as a
+ * `const` listener whose every use is such a caller or the removal that hands it back.
+ */
+function neverAwaited(fn: SyntaxNode | undefined): boolean {
+  if (fn === undefined || !isFunctionLike(fn)) return false;
+
+  if (handedTo(fn, false)) return true;
+  const declarator = fn.parent?.raw;
+
+  if (declarator?.type !== 'VariableDeclarator' || declarator.id.type !== 'Identifier') return false;
+  const { id } = declarator;
+  const scope = fn.parent?.parent?.parent;
+  let added = false;
+  let elsewhere = false;
+
+  if (scope !== undefined) {
+    walk(scope, (node) => {
+      if (node.raw.type !== 'Identifier' || node.raw.name !== id.name || node.raw === id) return;
+
+      if (handedTo(node, false)) added = true;
+      else if (!handedTo(node, true)) elsewhere = true;
+    });
+  }
+
+  return added && !elsewhere;
+}
 
 /**
  * Who calls a function a component hands out: `react` for an intrinsic element's attribute or startTransition's or an
@@ -535,21 +589,30 @@ function reactCaller(fn: SyntaxNode | undefined): 'react' | 'component' | null {
   return hook === 'useCallback' ? 'component' : null;
 }
 
-/**
- * Who calls a runner that sits where a component hands out a function (`.tsx` only): as that function's expression
- * body, or a return or statement directly in its block.
- */
-function reactEdge(runner: SyntaxNode): 'react' | 'component' | null {
+/** The function a runner is the expression body of, or a return or statement directly in the block of. */
+function heldIn(runner: SyntaxNode): SyntaxNode | undefined {
   const holder = runner.parent;
 
-  if (holder !== undefined && arrowBody(holder.raw) === runner.raw) return reactCaller(holder);
+  if (holder !== undefined && arrowBody(holder.raw) === runner.raw) return holder;
   const statement = holder?.raw.type === 'ReturnStatement' || holder?.raw.type === 'ExpressionStatement' ? holder : undefined;
   const block = statement?.parent;
 
-  if (block?.raw.type !== 'BlockStatement') return null;
+  if (block?.raw.type !== 'BlockStatement') return undefined;
   const fn = block.parent;
 
-  return fn !== undefined && 'body' in fn.raw && fn.raw.body === block.raw ? reactCaller(fn) : null;
+  return fn !== undefined && 'body' in fn.raw && fn.raw.body === block.raw ? fn : undefined;
+}
+
+/**
+ * Who calls the function a runner sits in: `react` for a caller that never awaits (a timer, a listener, or React's
+ * positions in `.tsx`), `component` for a component's own surface (`.tsx`), or null.
+ */
+function edgeCaller(runner: SyntaxNode, tsx: boolean): 'react' | 'component' | null {
+  const fn = heldIn(runner);
+
+  if (neverAwaited(fn)) return 'react';
+
+  return tsx ? reactCaller(fn) : null;
 }
 
 /** Whether a runner is a holder's whole argument, or the whole body of a callback that is one. */

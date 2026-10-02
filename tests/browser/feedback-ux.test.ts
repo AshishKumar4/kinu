@@ -19,6 +19,8 @@
  * reuses the capture in memory — is the shipped code path.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
+import { Effect } from 'effect';
+import { detach } from '@kinu.run/core/obs';
 import type { HTTPRequest, Page } from 'puppeteer';
 import { diagnosticsSettled, recordDiagnostics, withGallery, type DiagnosticLine } from '../../scripts/gallery-harness';
 
@@ -232,7 +234,7 @@ async function serveFeedback(page: Page, options: { attempts?: readonly Attempt[
   await recordSubmissions(page);
   let attempt = 0;
   await page.setRequestInterception(true);
-  page.on('request', async (request: HTTPRequest) => {
+  page.on('request', (request: HTTPRequest) => detach(Effect.promise(async () => {
     if (!request.url().endsWith(FEEDBACK)) {
       await request.continue();
 
@@ -255,7 +257,7 @@ async function serveFeedback(page: Page, options: { attempts?: readonly Attempt[
       contentType: 'application/json',
       body: JSON.stringify({ id: 'fb-0001-abcdef' }),
     });
-  });
+  })));
 }
 
 /**

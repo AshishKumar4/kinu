@@ -1,5 +1,6 @@
+import { Effect } from 'effect';
 import * as v from 'valibot';
-import { settleLogged } from '@kinu.run/core/obs';
+import { settleLogged, detach } from '@kinu.run/core/obs';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import DOMPurify from 'dompurify';
@@ -317,9 +318,9 @@ const PlanAnnotationToolbar = ({
       <button
         type="button"
         className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
-        onClick={() => settleLogged('plan_review.copy_failed', { doing: 'copying the selected text', otherwise: 'io' }, async () => {
+        onClick={() => detach(Effect.promise(async () => settleLogged('plan_review.copy_failed', { doing: 'copying the selected text', otherwise: 'io' }, async () => {
           setCopied(await copyTextToClipboard(selectionText));
-        })}
+        })))}
       >
         {copied ? 'Copied' : 'Copy'}
       </button>

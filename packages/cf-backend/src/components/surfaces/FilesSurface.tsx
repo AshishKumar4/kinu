@@ -15,7 +15,7 @@ import {
 import {
   formatBytes, joinDir, parentDir, MOUNT_EXECUTORS, type DirEntry, type MountInfo,
 } from "@kinu.run/core";
-import { renderThrownChain, showing, settle } from "@kinu.run/core/obs";
+import { renderThrownChain, showing, settle, detach } from "@kinu.run/core/obs";
 import type { Rpc } from "@kinu.run/core";
 import { executorLabel, type ExecutorInfo } from "@kinu.run/core";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -193,7 +193,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   const uploadDropped = useCallback((files: FileList) => {
     const dropped = [...files];
 
-    return run(() => uploadFiles(dropped));
+    detach(Effect.promise(async () => run(() => uploadFiles(dropped))));
   }, [run, uploadFiles]);
 
   const { dragOver, handlers: listDrop } = useFileDrop(uploadDropped);
@@ -304,12 +304,12 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
             </span>
           ))}
           <input ref={uploadInputRef} type="file" multiple className="hidden"
-            onChange={(e) => {
+            onChange={(e) => detach(Effect.promise(async () => {
               const picked = [...(e.currentTarget.files ?? [])];
               e.currentTarget.value = "";
 
               return run(() => uploadFiles(picked));
-            }} />
+            }))} />
           <div className="ml-auto flex items-center gap-0.5 shrink-0">
             <button onClick={() => setPath(parentDir(path))} disabled={atRoot}
               className="p-text-3 hover:p-text p-1 disabled:opacity-30 disabled:hover:p-text-3"
@@ -321,11 +321,11 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
               className="flex items-center gap-1 p-text-3 hover:p-text p-1"
               title={`Upload files to ${path}`}><UploadSimpleIcon size={11} />Upload</button>
             {/* Drops every cached listing: a plane without mtime gives `nextTreeCache` nothing to compare. */}
-            <button onClick={() => run(async () => {
+            <button onClick={() => detach(Effect.promise(async () => run(async () => {
               setTreeCache(new Map());
               await reloadListing();
               reloadMounts();
-            })}
+            })))}
               className="p-text-3 hover:p-text p-1"
               title="Refresh" aria-label="Refresh"><ArrowsClockwiseIcon size={11} /></button>
           </div>
@@ -491,11 +491,11 @@ function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badge
         onClick={() => onNavigate(dir)}
       >
         <button
-          onClick={(e) => {
+          onClick={(e) => detach(Effect.promise(async () => {
             e.stopPropagation();
 
             return onToggle(dir);
-          }}
+          }))}
           className="p-text-3 hover:p-text shrink-0"
           aria-label={isOpen ? `Collapse ${label}` : `Expand ${label}`}
         >
@@ -585,7 +585,7 @@ function EntryTile({ entry, badge, selected, previewing, renaming, confirming, d
           value={renaming}
           onClick={(e) => e.stopPropagation()}
           onChange={(e) => onRenameDraft(e.currentTarget.value)}
-          onKeyDown={(e) => {
+          onKeyDown={(e) => detach(Effect.promise(async () => {
             e.stopPropagation();
 
             if (composing(e.nativeEvent)) return;
@@ -593,7 +593,7 @@ function EntryTile({ entry, badge, selected, previewing, renaming, confirming, d
             if (e.key === "Enter") return onRenameCommit(e.currentTarget.value);
 
             if (e.key === "Escape") onRenameCancel();
-          }}
+          }))}
           onBlur={onRenameCancel}
           className="w-full min-w-0 bg-transparent border p-border rounded-xs px-1 py-0 text-center p-annotation p-text outline-hidden focus:border-[var(--c-accent)]"
         />
@@ -608,7 +608,7 @@ function EntryTile({ entry, badge, selected, previewing, renaming, confirming, d
       {confirming ? (
         <span className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
           <span className="p-danger p-t-status">delete?</span>
-          <button data-files-delete-confirm onClick={onDelete} className="p-danger hover:opacity-80 p-0.5" aria-label={`Delete ${entry.name}`}>
+          <button data-files-delete-confirm onClick={(...args: Parameters<typeof onDelete>) => detach(Effect.promise(async () => onDelete(...args)))} className="p-danger hover:opacity-80 p-0.5" aria-label={`Delete ${entry.name}`}>
             <CheckIcon size={12} />
           </button>
           <button onClick={onCancelDelete} className="p-text-3 hover:p-text p-0.5" aria-label="Keep it">

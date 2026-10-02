@@ -94,6 +94,7 @@
  * cannot mean two things.
  */
 import * as v from 'valibot';
+import { Effect } from 'effect';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 
 import {
@@ -102,7 +103,7 @@ import {
   type EvalAccount, type JsonValue, type LLMProviderConfig, type PendingDeviceConsent, type RunEvent,
   type SubordinateInspectionRequest, type WorkspaceSpend,
 } from '../../packages/core/src/index';
-import { renderThrownChain, tolerate } from '../../packages/core/src/obs/index';
+import { renderThrownChain, tolerate, detach } from '../../packages/core/src/obs/index';
 import { CloudTurnStream, TurnStreams } from '../../packages/cli/src/cloud-turn-stream';
 import { createUserUiMessage, type AgentSendResult, type AgentTurnResult } from '../../packages/cli/src/agent-client';
 import { ActivitySpendSchema } from '../../packages/cli/src/cloud-api';
@@ -1059,7 +1060,7 @@ async function markLive(origin: string, identity: PublicWebIdentity, name: strin
 
 /** Runs `beat` every {@link WORKSPACE_BEAT_MS} until the returned stop is called. */
 function everyBeat(beat: () => Promise<boolean>): () => void {
-  const timer = setInterval(async () => { await beat(); }, WORKSPACE_BEAT_MS);
+  const timer = setInterval(() => detach(Effect.promise(async () => { await beat(); })), WORKSPACE_BEAT_MS);
 
   timer.unref();
 

@@ -229,7 +229,7 @@ app.get((c) => settle(read(c)));
     findings: [
       `${FILE}:10: a runner called mid-body; the effect is run once, at the edge, as its return`,
       `${FILE}:11: a runner returned outside an exported function or public member`,
-      `${FILE}:12: a runner returned outside an exported function or public member`,
+      `${FILE}:12: a settle whose caller never awaits it (React, a timer or a listener), so a rejection would float; run the answered effect with detach`,
       `${FILE}:13: a runner returned outside an exported function or public member`,
       `${FILE}:9: a runner called mid-body; the effect is run once, at the edge, as its return`,
     ],
@@ -329,22 +329,32 @@ import { detach, settle } from '../obs/index';
 function helper() {
   useCallback(() => settle(write()), []);
   useCallback(() => detach(write()), []);
+  setTimeout(() => settle(drain()), 10);
+  globalThis.setInterval(() => detach(poll()), 10);
+  queueMicrotask(() => { detach(drain()); });
+  socket.addEventListener('message', (event) => detach(read(event)));
+  process.on('SIGINT', () => settle(stop()));
+  rl.once('line', (line) => detach(answer(line)));
+  queue.push(() => detach(drain()));
 }
 `;
 
   const midBody = 'a runner called mid-body; the effect is run once, at the edge, as its return';
-  const floats = 'a settle where React calls: React never awaits it, so a rejection would float; run the answered effect with detach';
-  const only = "detach runs only where a component hands out a function: a JSX attribute's, or useCallback's, startTransition's or an effect's";
+  const floats = 'a settle whose caller never awaits it (React, a timer or a listener), so a rejection would float; run the answered effect with detach';
+  const only = 'detach runs only where its caller never awaits: a timer, a listener, or a function a component hands out';
 
   expect(bridgeSites(new Map([[TSX, source], [FILE, plain]]))).toEqual({
     bridges: [],
     flights: [],
     routes: [],
     held: [],
-    react: [`${TSX}:11`, `${TSX}:13`, `${TSX}:16`, `${TSX}:16`, `${TSX}:18`, `${TSX}:18`, `${TSX}:4`, `${TSX}:5`, `${TSX}:8`],
+    react: [`${FILE}:11`, `${FILE}:7`, `${FILE}:8`, `${FILE}:9`, `${TSX}:11`, `${TSX}:13`, `${TSX}:16`, `${TSX}:16`, `${TSX}:18`, `${TSX}:18`, `${TSX}:4`, `${TSX}:5`, `${TSX}:8`],
     findings: [
+      `${FILE}:10: ${floats}`,
+      `${FILE}:12: ${only}`,
       `${FILE}:4: a runner returned outside an exported function or public member`,
       `${FILE}:5: ${only}`,
+      `${FILE}:6: ${floats}`,
       `${TSX}:12: ${midBody}`,
       `${TSX}:14: ${only}`,
       `${TSX}:15: ${midBody}`,

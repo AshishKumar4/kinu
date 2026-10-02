@@ -19,8 +19,9 @@
  * makes the skew real rather than declared.
  */
 import { beforeAll, describe, expect, test } from 'bun:test';
+import { Effect } from 'effect';
 import type { HTTPRequest, Page } from 'puppeteer';
-import { renderThrownChain } from '@kinu.run/core/obs';
+import { renderThrownChain, detach } from '@kinu.run/core/obs';
 
 import { withGallery, type Gallery } from '../../scripts/gallery-harness';
 import { CHUNK_FIXED_KEY, CHUNK_RELOAD_KEY } from '../../packages/cf-backend/src/lazy-route';
@@ -71,7 +72,7 @@ interface Observed {
  */
 async function serve(page: Page, mode: 'stable' | 'moves', served: { count: number }): Promise<void> {
   await page.setRequestInterception(true);
-  page.on('request', (request: HTTPRequest): Promise<void> => {
+  page.on('request', (request: HTTPRequest) => detach(Effect.promise(async () => {
     if (new URL(request.url()).pathname !== '/api/health') {
       return request.continue();
     }
@@ -84,7 +85,7 @@ async function serve(page: Page, mode: 'stable' | 'moves', served: { count: numb
       contentType: 'application/json',
       body: JSON.stringify({ ok: true, build: { ...STAMP, sha } }),
     });
-  });
+  })));
 }
 
 /** Whether the boundary's fallback is on screen. */

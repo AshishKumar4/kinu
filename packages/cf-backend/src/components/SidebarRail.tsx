@@ -2,6 +2,8 @@
  * The desktop rail lane: the roster, or the icon rail it folds to. Only the `aside`'s width
  * animates; each state's column has its own width behind `overflow-hidden`, so nothing reflows.
  */
+import { detach } from "@kinu.run/core/obs";
+import { Effect } from "effect";
 import { useEffect, useState, type MouseEvent } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { PlusIcon, SidebarSimpleIcon } from "@phosphor-icons/react";
@@ -66,7 +68,7 @@ export function SidebarRail() {
             <SidebarSimpleIcon size={18} />
           </button>
           <Link to="/" aria-label="Kinu home" className={`${RAIL_BUTTON_CLS} mt-1`}><KinuMark size={20} /></Link>
-          <button type="button" onClick={() => navigate("/")} aria-label="New workspace" title="New workspace" className={RAIL_BUTTON_CLS}>
+          <button type="button" onClick={() => detach(Effect.promise(async () => navigate("/")))} aria-label="New workspace" title="New workspace" className={RAIL_BUTTON_CLS}>
             <PlusIcon size={17} weight="bold" />
           </button>
           <nav aria-label="Primary" className="flex flex-col items-center gap-1 pt-1">

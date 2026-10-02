@@ -2,7 +2,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Loader } from "@cloudflare/kumo";
 import { Effect } from "effect";
-import { attempt, renderThrownChain, settle, detach } from "@kinu.run/core/obs";
+import { attempt, renderThrownChain, detach } from "@kinu.run/core/obs";
 import { CHATGPT_USAGE_URL, chatgptPlan, startChatGptSignIn, type ChatGptPlan } from "@/lib/user-api";
 import { BrandMark } from "@/components/ui/BrandMark";
 import { FilledButton } from "@/components/ui/FilledButton";
@@ -33,7 +33,7 @@ export function ChatGptConnect({ plan, legacy, onChanged }: { plan: ChatGptPlan;
   useEffect(() => {
     if (!waiting) return undefined;
 
-    const timer = window.setInterval(() => settle(attempt({ doing: "reading the ChatGPT sign-in", otherwise: "io" }, chatgptPlan).pipe(
+    const timer = window.setInterval(() => detach(attempt({ doing: "reading the ChatGPT sign-in", otherwise: "io" }, chatgptPlan).pipe(
       Effect.map(({ status: now }) => {
         if (now?.signedIn === true) {
           setWaiting(false);

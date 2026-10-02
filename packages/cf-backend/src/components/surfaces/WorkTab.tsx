@@ -2,6 +2,7 @@
  * Needs you, Now, Journal. Queue rows deep-link to where each decision is made, so nothing is
  * decided twice; `listPendingActions` is host-owned and never a slate data source.
  */
+import { Effect } from "effect";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Badge, Button, Loader } from "@cloudflare/kumo";
 import {
@@ -22,7 +23,7 @@ import { HelperRow, isClosedTree, PlanProgress, TaskTree } from "./work-tasks";
 import { JobCard } from "./work-jobs";
 import { ChangelogEntryCard, ChangelogFailure, useChangelog, type ChangelogView } from "./changelog-entries";
 import type { SurfaceKind } from "@kinu.run/core";
-import { renderThrownChain } from "@kinu.run/core/obs";
+import { renderThrownChain, detach } from "@kinu.run/core/obs";
 import { WorkPlans } from "./WorkPlans";
 import { FileBody } from "./changes/ChangesPanel";
 
@@ -543,16 +544,16 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { ac
 
       <div className="flex items-center gap-1.5 flex-wrap">
         <FilledButton disabled={state.busy || chosen.size === 0}
-          onClick={() => flow.decide("approved", [...chosen])}>
+          onClick={() => detach(Effect.promise(async () => flow.decide("approved", [...chosen])))}>
           Approve {countLabel(chosen.size, actions.length)}
         </FilledButton>
         <Button size="sm" variant="secondary" disabled={state.busy || chosen.size === 0}
-          onClick={() => flow.decide("always", [...chosen])}
+          onClick={() => detach(Effect.promise(async () => flow.decide("always", [...chosen])))}
           title="Approve these checks for this environment. Revoke under Settings → Standing approvals.">
           Always allow {countLabel(chosen.size, actions.length)}
         </Button>
         <Button size="sm" variant="ghost" disabled={state.busy || chosen.size === 0}
-          onClick={() => flow.decide("denied", [...chosen])}>
+          onClick={() => detach(Effect.promise(async () => flow.decide("denied", [...chosen])))}>
           Deny {countLabel(chosen.size, actions.length)}
         </Button>
       </div>

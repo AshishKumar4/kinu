@@ -147,9 +147,9 @@ export function SubordinateTabs({
           <button
             type="button"
             // WorkspacePage shows the banner; this keeps the rejection handled.
-            onClick={() => settleLogged("subordinates.create_failed", {
+            onClick={() => detach(Effect.promise(async () => settleLogged("subordinates.create_failed", {
               doing: "create a subordinate agent", otherwise: "io",
-            }, onCreate)}
+            }, onCreate)))}
             disabled={creating}
             className="p-btn-ghost mb-0.5 ml-2 flex size-7 shrink-0 self-center items-center justify-center disabled:opacity-50"
             title={ADD_AGENT_LABEL}

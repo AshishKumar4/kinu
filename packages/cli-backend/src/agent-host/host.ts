@@ -82,7 +82,7 @@ import {
   isSubordinateOrigin, type SubordinateSeed,
 } from '@kinu.run/core';
 import { Effect, Result } from 'effect';
-import { KinuError, attempt, diagnostics, refusalOf, settle, toKinuError, settleSync, settleLogged, settleLoggedSync } from '@kinu.run/core/obs';
+import { KinuError, attempt, diagnostics, refusalOf, settle, toKinuError, settleSync, settleLogged, settleLoggedSync, detach } from '@kinu.run/core/obs';
 import { watchStatements } from '@kinu.run/core/identity';
 import {
   createCLIRuntime, makeSql, makeExecRaw, makeSqlExec, shareLocalWorkspacePlane,
@@ -1576,10 +1576,10 @@ export class LocalAgentHost {
   private wake(entry: HostEntry, source: string): void {
     // Wakes can outlive close(); driving after close() would use a closed handle.
     if (this.closed) return;
-    queueMicrotask(async () => {
+    queueMicrotask(() => detach(Effect.promise(async () => {
       if (this.closed) return;
       await this.drain(entry, source);
-    });
+    })));
   }
 
   private answerWake(entry: HostEntry): void {

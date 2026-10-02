@@ -97,10 +97,8 @@ function keptDevicesBearer(home: string, origin: string, email: string): string 
 }
 
 describe('the eval-session mint', () => {
-  const stops: Array<() => void> = [];
-  afterEach(() => { for (const stop of stops.splice(0)) stop();
-
-  });
+  const stops: Array<() => Promise<void> | void> = [];
+  afterEach(async () => { await Promise.all(stops.splice(0).map(async (stop) => stop())); });
 
   test('approves the device flow as the eval identity and persists the bearer, mode 0600', async () => {
     const d = deployment('s3cret');

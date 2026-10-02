@@ -41,7 +41,7 @@ import {
   workspaceGenerationStorage,
   workspaceToolchainCapabilities,
 } from '@kinu.run/core/workspace';
-import { tolerate, tolerateAsync, settleSync, settle } from '@kinu.run/core/obs';
+import { tolerate, tolerateAsync, settleSync, settle, detach } from '@kinu.run/core/obs';
 import { localNodeRuntime } from './node-runtime';
 import type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 import { localFacetHost } from '@nimbus-sh/core/runtime/local-facet-host.js';
@@ -369,7 +369,7 @@ export function createCLIRuntime(
           doing: 'running work this session deferred', otherwise: 'io',
         }, fn);
 
-        const timer = setTimeout(deferred, Math.max(0, ms));
+        const timer = setTimeout((...args: Parameters<typeof deferred>) => detach(Effect.promise(async () => deferred(...args))), Math.max(0, ms));
         timer.unref?.();
       },
       cron: async () => {},

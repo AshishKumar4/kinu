@@ -736,7 +736,7 @@ const SERVED_ENVELOPE = accountEnvelope('srv-account', catalogA(), 7);
 interface ProfileServerStub {
   origin: string;
   seenRequests: () => SeenRequest[];
-  stop: () => void;
+  stop: () => Promise<void>;
 }
 
 interface SeenRequest {
@@ -783,7 +783,7 @@ describe('cloud-api profile methods', () => {
       const seen = fake.seenRequests()[0];
       expect(seen).toMatchObject({ path: '/api/cli/profile', method: 'GET', auth: 'Bearer ptc_tok' });
     } finally {
-      fake.stop();
+      await fake.stop();
     }
   });
 
@@ -812,7 +812,7 @@ describe('cloud-api profile methods', () => {
       expect(seen).toMatchObject({ path: '/api/cli/profile', method: 'PUT', auth: 'Bearer ptc_tok' });
       expect(seen.body).toEqual(JSON.parse(JSON.stringify(input)));
     } finally {
-      fake.stop();
+      await fake.stop();
     }
   });
 
@@ -829,7 +829,7 @@ describe('cloud-api profile methods', () => {
       const result = await updateCloudProfile(fake.origin, 'ptc_tok', { catalog: catalogB(), expectedVersion: 4 });
       expect(result).toEqual(Result.fail({ currentVersion: 9, currentDigest: SERVED_ENVELOPE.digest }));
     } finally {
-      fake.stop();
+      await fake.stop();
     }
   });
 
@@ -841,7 +841,7 @@ describe('cloud-api profile methods', () => {
       await expect(getCloudProfile(invalidCatalog.origin, 't'))
         .rejects.toThrow('invalid profile catalog');
     } finally {
-      invalidCatalog.stop();
+      await invalidCatalog.stop();
     }
 
     const htmlError = serveProfile(() => new Response('<html>bad gateway</html>', { status: 502 }));
@@ -851,7 +851,7 @@ describe('cloud-api profile methods', () => {
       await expect(updateCloudProfile(htmlError.origin, 't', { catalog: catalogA(), expectedVersion: 1 }))
         .rejects.toThrow('bad gateway');
     } finally {
-      htmlError.stop();
+      await htmlError.stop();
     }
   });
 });
