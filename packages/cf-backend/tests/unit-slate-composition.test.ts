@@ -680,4 +680,11 @@ test('a path-scoped workspace binding reaches inside its prefixes and nowhere el
   expect(await call('readFile', ['/home/main/allowed/ok.md'])).toEqual({ ok: true, value: 'in' });
   expect(await call('readFile', ['/home/main/secret.md'])).toMatchObject({ ok: false, reason: 'denied', error: expect.stringContaining('/home/main/allowed') });
   expect(await call('exec', ['ls'])).toMatchObject({ ok: false, reason: 'denied', error: expect.stringContaining('only file members') });
+
+  // A link inside the grant reaches no further than the grant: the path is judged where it lands.
+  expect(await actor.agent.executeInExecutor('workspace', 'ln -s /home/main /home/main/allowed/escape && ln -s /home/main/planted.md /home/main/allowed/plant'))
+    .toMatchObject({ exitCode: 0 });
+  expect(await call('readFile', ['/home/main/allowed/escape/secret.md'])).toMatchObject({ ok: false, reason: 'denied' });
+  expect(await call('writeFile', ['/home/main/allowed/plant', 'x'])).toMatchObject({ ok: false, reason: 'denied' });
+  expect(await actor.agent.executeInExecutor('workspace', 'test -e /home/main/planted.md; echo $?')).toMatchObject({ stdout: '1\n' });
 });

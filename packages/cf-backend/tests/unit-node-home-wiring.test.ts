@@ -20,7 +20,7 @@ import {
   type NodeWorkspaceProvisioner,
 } from '@kinu.run/core';
 import type { NimbusSandboxHandle } from '@kinu.run/core';
-import { nimbusSessionFiles, readExecutorFile, writeExecutorFileOp, type ExecutorFileLookup } from '@kinu.run/core';
+import { nimbusSessionFiles, readExecutorFile, writeExecutorFileOp, type ExecutorFileLookup, WORKSPACE_ROOT } from '@kinu.run/core';
 import { createWorkspace, workspaceGenerationStorage } from '@kinu.run/core/workspace';
 import {
   credentialedSessionBox,
@@ -136,8 +136,10 @@ describe('a provisioned node gets a real home', () => {
 
   test('its /tmp is private at the shared path', async () => {
     const f = await openFixture();
-    const credA = credOf(await f.provision(node('aX9')));
-    const credB = credOf(await f.provision(node('bK2')));
+    const credAHome = await f.provision(node('aX9'));
+    const credA = credOf(credAHome);
+    const credBHome = await f.provision(node('bK2'));
+    const credB = credOf(credBHome);
 
     f.workspace.vfs.as(credA).writeFile('/tmp/scratch', 'a');
 
@@ -188,7 +190,8 @@ describe('the allocation is durable and injective', () => {
 describe('one node cannot write into another node\u2019s home', () => {
   test('the shell refuses it and nothing lands', async () => {
     const f = await openFixture();
-    const credA = credOf(await f.provision(node('aX9')));
+    const credAHome = await f.provision(node('aX9'));
+    const credA = credOf(credAHome);
     await f.provision(node('bK2'));
 
     const refused = await rpcExec(f.host, 'echo leak > /home/head-bK2/leak.txt', { cred: credA });
@@ -200,7 +203,8 @@ describe('one node cannot write into another node\u2019s home', () => {
 
   test('the refusal is EACCES on the filesystem itself', async () => {
     const f = await openFixture();
-    const credA = credOf(await f.provision(node('aX9')));
+    const credAHome = await f.provision(node('aX9'));
+    const credA = credOf(credAHome);
     await f.provision(node('bK2'));
 
     expect(() => f.workspace.vfs.as(credA).writeFile('/home/head-bK2/leak.txt', 'leak'))
@@ -232,7 +236,8 @@ describe('a node keeps the origin\u2019s read window', () => {
   test('it WALKS and greps the origin tree, rather than stat-ing one known path', async () => {
     const f = await openFixture();
     seedOriginRepo(f.workspace);
-    const cred = credOf(await f.provision(node('aX9')));
+    const credHome = await f.provision(node('aX9'));
+    const cred = credOf(credHome);
 
     // A walk needs +x down the chain and a grep needs +r on unnamed files; a single stat would pass an empty tree.
     const walked = await rpcExec(f.host, `find ${ORIGIN_REPO} -type f`, { cred });
@@ -252,7 +257,8 @@ describe('a node cannot write outside its own home, fail-closed', () => {
   test('the origin\u2019s tree refuses it, EACCES on the filesystem itself', async () => {
     const f = await openFixture();
     seedOriginRepo(f.workspace);
-    const cred = credOf(await f.provision(node('aX9')));
+    const credHome = await f.provision(node('aX9'));
+    const cred = credOf(credHome);
 
     expect(() => f.workspace.vfs.as(cred).writeFile(`${ORIGIN_REPO}/planted.ts`, 'planted'))
       .toThrow(expect.objectContaining({ code: 'EACCES' }));
@@ -265,7 +271,8 @@ describe('a node cannot write outside its own home, fail-closed', () => {
   test('an existing origin file cannot be overwritten either', async () => {
     const f = await openFixture();
     seedOriginRepo(f.workspace);
-    const cred = credOf(await f.provision(node('aX9')));
+    const credHome = await f.provision(node('aX9'));
+    const cred = credOf(credHome);
 
     // Distinct from create: the parent's write bit stops a create, the file's own bits stop an overwrite.
     expect(() => f.workspace.vfs.as(cred).writeFile(`${ORIGIN_REPO}/README.md`, 'rewritten'))
@@ -292,7 +299,8 @@ describe('a node cannot widen its own home nor chown it away', () => {
     const f = await openFixture();
     const target = await f.provision(node('aX9'));
     const credA = credOf(target);
-    const credB = credOf(await f.provision(node('bK2')));
+    const credBHome = await f.provision(node('bK2'));
+    const credB = credOf(credBHome);
 
     expect(() => f.workspace.vfs.as(credA).chmod(target.home, 0o777)).toThrow(
       expect.objectContaining({ code: 'EPERM' }),
@@ -404,7 +412,7 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     const written: string[] = [];
     box.files.write = async (path) => { written.push(path); };
 
-    await writeText(nimbusSessionFiles(box), '/home/main/notes.md', 'origin');
+    await writeText(nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), '/home/main/notes.md', 'origin');
 
     expect(written).toEqual(['/home/main/notes.md']);
     expect(nimbus.calls).toEqual([]);
@@ -417,7 +425,7 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     const cred: VfsCred = { uid: 2000, gid: 2000, groups: [2000], umask: 0o022 };
     box.files.as = () => ({ read: async () => null, write: async () => undefined, list: async () => [], exists: async () => false, delete: async () => undefined });
 
-    const plane = nimbusSessionFiles(box, cred);
+    const plane = nimbusSessionFiles(box, { home: '/home/node-A', cred });
     await plane.mkdir('/home/node-A/dir', { recursive: true });
     await plane.stat('/home/node-A/dir');
     await plane.readRange('/home/node-A/file', 0, 4);
@@ -430,15 +438,17 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     const box = nimbusBox(new RootExecNimbus());
     const cred: VfsCred = { uid: 2000, gid: 2000, groups: [2000], umask: 0o022 };
 
-    expect(() => nimbusSessionFiles(box, cred)).toThrow(expect.objectContaining({ code: 'unsupported' }));
+    expect(() => nimbusSessionFiles(box, { home: '/home/node-A', cred })).toThrow(expect.objectContaining({ code: 'unsupported' }));
   });
 
   test('against the real substrate: the node writes its own home, a sibling is refused', async () => {
     const f = await openFixture();
-    const a = credOf(await f.provision(node('aX9')));
-    const b = credOf(await f.provision(node('bK2')));
-    const asA = nimbusSessionFiles(sessionBox(f, a), a);
-    const asB = nimbusSessionFiles(sessionBox(f, b), b);
+    const aHome = await f.provision(node('aX9'));
+    const a = credOf(aHome);
+    const bHome = await f.provision(node('bK2'));
+    const b = credOf(bHome);
+    const asA = nimbusSessionFiles(sessionBox(f, a), { home: aHome.home, cred: a });
+    const asB = nimbusSessionFiles(sessionBox(f, b), { home: bHome.home, cred: b });
 
     const bytes = new Uint8Array([0, 1, 2, 0xff, 0xfe, 0x80, 0x0a, 0x27, 0x5c]);
     await asA.writeFile('/home/head-aX9/candidate.bin', bytes);
@@ -480,8 +490,9 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
 
   test('against the real substrate: hostile names list, read, rename and delete exactly', async () => {
     const f = await openFixture();
-    const a = credOf(await f.provision(node('aX9')));
-    const asA = nimbusSessionFiles(sessionBox(f, a), a);
+    const aHome = await f.provision(node('aX9'));
+    const a = credOf(aHome);
+    const asA = nimbusSessionFiles(sessionBox(f, a), { home: aHome.home, cred: a });
     const names = ["we\nird 'q'-name", '--dash-leading', 'two  spaces\ttab', 'back\\slash$dollar'];
 
     for (const [index, name] of names.entries()) {
@@ -504,8 +515,9 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
 
   test('against the real substrate: a large file lands byte-exact through the bound plane', async () => {
     const f = await openFixture();
-    const a = credOf(await f.provision(node('aX9')));
-    const asA = nimbusSessionFiles(sessionBox(f, a), a);
+    const aHome = await f.provision(node('aX9'));
+    const a = credOf(aHome);
+    const asA = nimbusSessionFiles(sessionBox(f, a), { home: aHome.home, cred: a });
     // Non-repeating and past any single chunk, so a lost or reordered piece cannot pass.
     const big = new Uint8Array(2 * 1024 * 1024 + 4096);
 
@@ -522,8 +534,9 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
 
   test('against the real substrate: a write onto a directory is refused and touches nothing', async () => {
     const f = await openFixture();
-    const a = credOf(await f.provision(node('aX9')));
-    const asA = nimbusSessionFiles(sessionBox(f, a), a);
+    const aHome = await f.provision(node('aX9'));
+    const a = credOf(aHome);
+    const asA = nimbusSessionFiles(sessionBox(f, a), { home: aHome.home, cred: a });
     await writeText(asA, '/home/head-aX9/keeper', 'the old bytes\n');
     await asA.mkdir('/home/head-aX9/occupied', { recursive: true });
     await writeText(asA, '/home/head-aX9/occupied/child', 'child');
@@ -619,15 +632,17 @@ describe('a plane with no compare-and-write says so, once, in one voice', () => 
 
   test('neither session plane declares a conditional write', async () => {
     const f = await openFixture();
-    const a = credOf(await f.provision(node('cw1')));
-    expect(nimbusSessionFiles(sessionBox(f, a), a)).not.toHaveProperty('writeFileIfRevision');
-    expect(nimbusSessionFiles(sessionBox(f, ORIGIN))).not.toHaveProperty('writeFileIfRevision');
+    const aHome = await f.provision(node('cw1'));
+    const a = credOf(aHome);
+    expect(nimbusSessionFiles(sessionBox(f, a), { home: aHome.home, cred: a })).not.toHaveProperty('writeFileIfRevision');
+    expect(nimbusSessionFiles(sessionBox(f, ORIGIN), { home: WORKSPACE_ROOT })).not.toHaveProperty('writeFileIfRevision');
   });
 
   test('an in-place save is refused as unsupported and writes nothing; an unconditional save lands', async () => {
     const f = await openFixture();
-    const a = credOf(await f.provision(node('cw2')));
-    const plane = nimbusSessionFiles(sessionBox(f, a), a);
+    const aHome = await f.provision(node('cw2'));
+    const a = credOf(aHome);
+    const plane = nimbusSessionFiles(sessionBox(f, a), { home: aHome.home, cred: a });
     const target = '/home/head-cw2/report.md';
     await writeText(plane, target, 'the previous file');
 
@@ -642,8 +657,9 @@ describe('a plane with no compare-and-write says so, once, in one voice', () => 
 
   test('the viewer is handed the reason rather than an edit token', async () => {
     const f = await openFixture();
-    const a = credOf(await f.provision(node('cw3')));
-    const plane = nimbusSessionFiles(sessionBox(f, a), a);
+    const aHome = await f.provision(node('cw3'));
+    const a = credOf(aHome);
+    const plane = nimbusSessionFiles(sessionBox(f, a), { home: aHome.home, cred: a });
     const target = '/home/head-cw3/notes.md';
     await writeText(plane, target, 'editable text');
 

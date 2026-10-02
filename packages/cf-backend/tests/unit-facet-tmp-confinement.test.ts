@@ -131,10 +131,11 @@ describe('a hosted node hardcoding /tmp stays private', () => {
 
     try {
       const provision = (identity: { nodeId: string }) => facetHomeProvisioner(f.homeHost)(headAgentName(identity.nodeId));
-      const a = credOf(await provision(node('aX9')));
-      const b = credOf(await provision(node('bK2')));
-      const asA = nimbusSessionFiles(sessionBoxFor(f, a), a);
-      const asB = nimbusSessionFiles(sessionBoxFor(f, b), b);
+      const homeA = await provision(node('aX9'));
+      const homeB = await provision(node('bK2'));
+      const [a, b] = [credOf(homeA), credOf(homeB)];
+      const asA = nimbusSessionFiles(sessionBoxFor(f, a), { home: homeA.home, cred: a });
+      const asB = nimbusSessionFiles(sessionBoxFor(f, b), { home: homeB.home, cred: b });
 
       // Includes the stage-and-rename commit, which resolves through the same rewrite.
       await writeText(asA, '/tmp/y', 'from a');
@@ -258,7 +259,7 @@ describe('one box answers both surfaces with the same bytes', () => {
     const f = await openOwner();
 
     try {
-      const files = nimbusSessionFiles(originFilesBox(f));
+      const files = nimbusSessionFiles(originFilesBox(f), { home: WORKSPACE_ROOT });
 
       // A relative shell path and its `/home/main` spelling name the same file; root paths are per-surface.
       expect(await rpcExec(f.host, 'echo live-bytes > tree-probe.md', {}))

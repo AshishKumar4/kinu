@@ -298,77 +298,41 @@ Three properties follow:
   one (`diffs:<actor>:<id>`).
 - POSIX semantics: one filesystem, addressed the same way by
   `vfs.readFile('/etc/passwd')` and by `run "cat /etc/passwd"`. Relative paths
-  resolve at `WORKSPACE_ROOT` (`/home/main`) through the one `workspacePath`
-  rule in core. Home and slate paths cannot climb out of their named root.
-  Ownership is uid/gid/mode on inodes, so agent homes and private tmp trees
-  remain enforced boundaries (`core/src/vfs/agent-home.ts`).
+  resolve at the acting agent's home, its shell's working directory (main's is
+  `/home/main`), and `..` resolves as POSIX resolves it, by Nimbus's namespace
+  rule (`workspacePath`). Ownership is
+  uid/gid/mode on inodes, so agent homes and private tmp trees remain enforced
+  boundaries (`core/src/vfs/agent-home.ts`).
 - Chunked blobs: `SqliteVFS` cuts file content into `vfs_chunks` rows of at
   most `CHUNK_SIZE` bytes, 65,536 as `@nimbus-sh/platform` declares it (one
   chunk up to that size, content-defined cuts above it). Merge-back
   sizes its write batches with the same constant, imported rather than
   restated (`core/src/strategy/merge-back.ts:60`).
 
-### Workspace path cutover
+### Workspace paths
 
-`workspacePath` owns normalization and aliasing on both backends. Relative
-names start at `/home/main`; `.` and repeated separators collapse, as do
-trailing slashes. `..` may remove a child segment but may not climb above the
-named home or `/slates` root (`EACCES`). Other absolute paths stay in their
-native namespace. `/workspace` is not a home alias. A mounted path remains
-its mount's: `/shared/..` and a path leaving `/pc` refuse with `EPERM`; a
-relative `shared/...` or `pc/...` is an ordinary workspace file.
+A path is resolved once, as the acting agent's process names it, by Nimbus's
+namespace rule (`normalizePath` in `@nimbus-sh/core/vfs/composite.js`):
+relative names start at that agent's home, where its shell starts (`/home/main`
+for main; a hired agent's or a node's own home otherwise, so its
+`.kinu/tool-output` is its own), `.` and repeated separators collapse,
+and `..` climbs as on Linux, so `../../tmp/x` is `/tmp/x`. What the path then
+reaches is decided by what already governs it: uid and mode on the cloud
+(the session user may write `/tmp`, as on any machine), and the approval gate
+for a CLI path outside the bound directory. `/home/user` is Nimbus's link to
+`/home/main`; the filesystem follows it. A slate's directory grant is judged
+where its path lands, every link followed (`realpathAsync`).
 
-A parent segment before a bounded root is refused too: `/../home/main/SOUL.md`
-and `/home/x/../main/SOUL.md` cannot hide the owner policy from file-manager
-checks. The POSIX-resolved prefix is checked before it can leave a reached
-home or slate root; `/../home/main/../x` is also `EACCES`. Native and mounted
-operands that never reach those roots, such as `/shared/../x`, keep their
-namespace's own traversal rule.
-
-The bare `/home/user` name stays a symbolic link: `lstat`, `readlink`,
-`unlink`, rename and tree removal address that inode, not `/home/main`.
-Only descendants use the canonical home name. Directory grants and the
-CLI's bound plane follow the link through `workspaceScopePath`, over the
-same normalization pass. The CLI checks the mapped host path is still in
-the bound directory, and refuses removal of that directory itself before
-walking or deleting any child. Its directory rename route refuses before
-I/O. File-manager path refusals return error values, including SOUL saves,
-rename and delete; archives use the same SOUL classification.
-
-The duplicate rules at `70464f439` gave the following answers, measured
-2026-10-01 through the two runtime file planes. `f` is a seeded workspace
-file; “absent” means `stat` returned null. The local plane was bound to a
-scratch directory, with no device or Drive connected.
-
-| Input class | Cloud before | Directory-bound CLI before | Shared rule now |
-|---|---|---|---|
-| Empty, `.`, `./` | Home directory | Bound directory | Home |
-| `f`, `./f`, `.//f`, `dir/../f` | Home file | Bound-directory file | Same home file |
-| `../f`, `dir/../../f` | Outside home, absent | `EACCES` | `EACCES` |
-| `/home/main[/]`, `/home/user[/]` | Home directory | Bound directory | Same directory view; the bare Nimbus link keeps its inode name |
-| `/home/main/f[/]`, `/home/user/f`, `/home/main/./f` | Home file | Bound-directory file | Canonical home file |
-| `/home/main/../f`, `/home/user/../f` | Outside home, absent | `EACCES` | `EACCES` |
-| `/home//main/f` | Home file | Native host path, absent | Canonical home file |
-| `/workspace[/f]` | Native path, absent | Home directory/file | Native path only |
-| `/workspace/../f` | Native path, absent | `EACCES` | Native path only |
-| `/`, `//` | Native Nimbus root (`stat` null in this handle) | Bound directory | Native plane root; layout differs |
-| `/slates[/]` | Slate directory | Project's `slates/` | Separate slate root |
-| `/slates/../f` | Outside slates, absent | Home file | `EACCES` |
-| `/slates/../../f` | Outside slates, absent | `EACCES` | `EACCES` |
-| `/pc/studio/f` | Disconnected mount, `ENXIO` | Native host path, absent | Mount/native ownership unchanged |
-| `/pc/studio/../../f` | `EPERM` | Native host path, absent | Mount/native ownership unchanged |
-| `/shared/f` | `ENXIO` | `ENXIO` | Mount ownership unchanged |
-| `/shared/../f` | `EPERM` | `EPERM` | Mount ownership unchanged |
-| Relative `pc/studio/f`, `shared/f` | Home file path, absent | Bound-directory file path, absent | Workspace-local, never a mount |
-
-The defect was namespace escape in core and raw-prefix alias matching in
-the host adapter. Separate rule owners and backend-only tests let it persist.
-The cutover removes `canonicalWorkspacePath` and the CLI alias table; the
-public-surface pin is `cf-backend/tests/backends/workspace-paths.test.ts`.
+From 2026-10-01 to 2026-10-02 (`3ce6a0d73`) a Kinu rule refused `..` above
+`/home/main`, `/home/user` or `/slates` with `EACCES`. It was reversed because
+filesystem semantics are Nimbus's: the refusal duplicated permissions and the
+approval gate with a lexical check of its own, which a link defeats. The pin
+is `cf-backend/tests/backends/workspace-paths.test.ts`: a path resolves as
+POSIX resolves it on both backends.
 
 `/home/user` remains only as `NIMBUS_WORKSPACE_ROOT`, a link to `/home/main`,
-because the installed Nimbus 0.13.1 still produces these values with
-`HOME=/home/main` (same measured boot):
+because Nimbus still produces these values with `HOME=/home/main` (measured
+on 0.13.1; 0.14.0's runners still default to `/home/user`):
 
 - `PATH=/usr/local/bin:/usr/bin:/bin:/home/user/.local/bin:/home/user/.gem/bin`
 - `XDG_CONFIG_HOME=/home/user/.config`

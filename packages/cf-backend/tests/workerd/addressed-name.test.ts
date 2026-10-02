@@ -18,6 +18,20 @@ it('a supervisor op by id, first after an eviction, leaves the named claim and s
   });
 });
 
+// Staging f62dfcb9, 2026-10-01: an alarm due when its workspace was destroyed came back seven times, each delivery
+// failing to build the object by id (its name went with its storage) or, by name, refusing an empty actor directory.
+it('an alarm a destroyed workspace still owes retires, by id or by name, and builds no workspace', async () => {
+  const probe = env.ADDRESSED_NAME_PROBE.get(env.ADDRESSED_NAME_PROBE.idFromName('addressed-name'));
+
+  expect(await probe.alarmAfterDestroy('addressed-name-destroyed')).toEqual({
+    destroyed: 'destroyed',
+    byId: 'retired',
+    byName: 'retired',
+    byIdOverTables: 'retired',
+    left: { starts: 0, identity: 0, actors: 0 },
+  });
+});
+
 it('an object first reached by id, never named before, refuses that entry and answers its first named claim', async () => {
   const probe = env.ADDRESSED_NAME_PROBE.get(env.ADDRESSED_NAME_PROBE.idFromName('addressed-name'));
 

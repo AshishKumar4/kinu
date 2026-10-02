@@ -316,7 +316,7 @@ export {
 } from './slates/capability-graph';
 
 export {
-  SlateBindingRequestSchema, routeSlateBindingCall, issuedSlateInvocation, routeViewerBindingCall,
+  SlateBindingRequestSchema, routeSlateBindingCall, issuedSlateInvocation, routeViewerBindingCall, assertLandsWithin,
   type SlateBindingRequest, type SlateBindingRoute, type SlateInvocation, type SlateViewer, type ViewerBindingCall,
 } from './slates/bindings';
 
@@ -1055,7 +1055,7 @@ export {
   DEVICE_CANCEL_MISPAIRED, parseDeviceCancelAnswer,
   DEVICE_PTY_OPEN_METHOD, DEVICE_PTY_INPUT, DEVICE_PTY_RESIZE, DEVICE_PTY_CLOSE,
   DEVICE_PTY_OUTPUT, DEVICE_PTY_EXIT, DEVICE_PTY_MAX_AXIS,
-  type DeviceCancelResult,
+  type DeviceCancelResult, type DeviceExecOutput,
   DeviceSocketHub, deviceIdFromSocket, WS_OPEN,
   DEVICE_CHATGPT, DEVICE_RELAY, DeviceChatGptStatusSchema, EGRESS_ROUTE_HEADER,
   type DeviceChatGptMethod, type DeviceChatGptStatus, type DeviceRelayRequest, type RelayedProvider,
@@ -1096,7 +1096,7 @@ export { currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, hasPl
 // Client-safe only: the Nimbus workspace host is exported from
 // `@kinu.run/core/workspace` so a browser bundle cannot pull in the server runtime.
 export {
-  workspacePath, workspaceScopePath, NIMBUS_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT,
+  workspacePath, NIMBUS_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT,
 } from './vfs/workspace-path';
 
 export {

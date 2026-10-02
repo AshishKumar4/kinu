@@ -10,13 +10,14 @@ import type { SpendProbeDO } from './spend-probe';
 import type { OperationCost } from './sql-meter';
 import type { HostileCalls, ProbeRecords } from './codex-egress-records';
 import type { TerminalEffectProbeDO } from './terminal-effect-probe';
+import type { DeviceOutputHubProbeDO, DeviceOutputWorkspaceProbeDO } from './device-output-probe';
 import type { DbCapabilityProbeDO } from './db-capability-probe';
 import type { FiberRecoveryProbeAgent } from './agent-fiber-recovery-probe';
 import type { SocketCallProbeAgent } from './socket-call-probe';
 import type { ForkSourceProbeDO, ForkTargetProbeDO } from './fork-probe';
 import type { DeviceLedgerProbeDO } from './device-inflight-probe';
 import type { ChatAnswers, SeedAnswer } from './store-reset-shapes';
-import type { AddressedAnswers } from './addressed-name-shapes';
+import type { AddressedAnswers, AlarmAfterDestroy } from './addressed-name-shapes';
 import type { CraftedFromNodeObservation, OnePlaneObservation, RelayedAnswer } from './agent-facet-shapes';
 import type { AttributedLine } from './attribution-shapes';
 import type {
@@ -191,6 +192,7 @@ interface AddressedNameProbeRpc extends Rpc.DurableObjectBranded {
   rpcFirst(workspace: string): Promise<{ before: number; spend: string; after: number }>;
   destroyAfterFailedStart(workspace: string): Promise<{ evicted: string; spend: string; destroyed: string }>;
   siblingStarts(): Promise<{ spend: string; starts: number }>;
+  alarmAfterDestroy(workspace: string): Promise<AlarmAfterDestroy>;
 }
 
 interface AttributionProbeRpc extends Rpc.DurableObjectBranded {
@@ -335,6 +337,8 @@ declare global {
       FORK_TARGET: DurableObjectNamespace<ForkTargetProbeDO>;
       STREAM_LIFECYCLE: DurableObjectNamespace<StreamLifecycleDO>;
       DEVICE_LEDGER_PROBE: DurableObjectNamespace<DeviceLedgerProbeDO>;
+      DEVICE_OUTPUT_HUB_PROBE: DurableObjectNamespace<DeviceOutputHubProbeDO>;
+      DEVICE_OUTPUT_WORKSPACE_PROBE: DurableObjectNamespace<DeviceOutputWorkspaceProbeDO>;
       FILES_EIO_PROBE: DurableObjectNamespace<FilesEioProbeDO>;
       PARKED_WRITES_PROBE: DurableObjectNamespace<ParkedWritesProbeDO>;
       COMPLEXITY_PROBE: DurableObjectNamespace<ComplexityProbeDO>;

@@ -7,7 +7,7 @@ import type { VFS } from '@nimbus-sh/core/vfs/vfs.js';
 import * as fs from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { FileCheckpoints, FileReach, MountedVfs } from '@kinu.run/core';
-import { SLATES_ROOT, WORKSPACE_ROOT, workspaceScopePath } from '@kinu.run/core';
+import { NIMBUS_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT, workspacePath } from '@kinu.run/core';
 import { syscallError, toVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 import { tolerateAsync } from '@kinu.run/core/obs';
 
@@ -69,7 +69,8 @@ function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefin
   };
 }
 
-/** The native directory wins over virtual home/slate paths. Other absolute paths name the host, not a sandbox. */
+/** The native directory wins. The workspace's home (either name) and `/slates` resolve as POSIX resolves them and map
+ *  into it; any other path names the host, outside the directory, where the approval gate decides. */
 function cwdPlaneLocator(cwd: string): (path: string) => { readonly hostPath: string; readonly outside: boolean } {
   const root = resolve(cwd);
 
@@ -77,25 +78,16 @@ function cwdPlaneLocator(cwd: string): (path: string) => { readonly hostPath: st
     const direct = isAbsolute(path) ? resolve(path) : resolve(root, path || '.');
 
     if (isAbsolute(path) && withinRoot(root, direct)) return { hostPath: direct, outside: false };
-    const canonical = workspaceScopePath(path);
-    let mapped: string;
+    const named = workspacePath(path, WORKSPACE_ROOT);
+    const home = [WORKSPACE_ROOT, NIMBUS_WORKSPACE_ROOT].find((at) => named === at || named.startsWith(`${at}/`));
 
-    if (canonical === '/' || canonical === WORKSPACE_ROOT) mapped = root;
-    else if (canonical.startsWith(`${WORKSPACE_ROOT}/`)) mapped = resolve(root, canonical.slice(WORKSPACE_ROOT.length + 1));
-    else if (canonical === SLATES_ROOT || canonical.startsWith(`${SLATES_ROOT}/`)) mapped = resolve(root, `.${canonical}`);
-    else return { hostPath: direct, outside: true };
+    if (named === '/') return { hostPath: root, outside: false };
 
-    if (!withinRoot(root, mapped)) {
-      throwVfsError({
-        error: syscallError('EACCES', 'access', path, {
-          detail: `the path escapes the workspace directory ${root}; name a file outside it by its absolute path`,
-        }),
-        syscall: 'access',
-        path,
-      });
-    }
+    if (home !== undefined) return { hostPath: resolve(root, `.${named.slice(home.length)}`), outside: false };
 
-    return { hostPath: mapped, outside: false };
+    if (named === SLATES_ROOT || named.startsWith(`${SLATES_ROOT}/`)) return { hostPath: resolve(root, `.${named}`), outside: false };
+
+    return { hostPath: direct, outside: true };
   };
 }
 

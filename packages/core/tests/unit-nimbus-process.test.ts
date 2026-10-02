@@ -3,7 +3,7 @@
  * names the observe/stop calls, and a handle that cannot start one says so.
  */
 import { describe, expect, test } from "bun:test";
-import { createNimbusWorkspaceExecutor, nimbusSessionFiles, nimbusSessionShell, type NimbusSandboxHandle, type NimbusStartResult } from "../src/index";
+import { createNimbusWorkspaceExecutor, nimbusSessionFiles, nimbusSessionShell, type NimbusSandboxHandle, type NimbusStartResult, WORKSPACE_ROOT } from "../src/index";
 import { createTestRuntime } from "./helpers";
 
 const baseFiles: NimbusSandboxHandle["files"] = {
@@ -32,7 +32,7 @@ function workspaceOver(box: NimbusSandboxHandle, runtimeCatalog?: boolean) {
 
   return createNimbusWorkspaceExecutor({
     box, runtimeCatalog,
-    inline: { vfs: nimbusSessionFiles(box), shell: nimbusSessionShell(box), memory: rt.memory, craftStore: rt.craftStore },
+    inline: { vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box), memory: rt.memory, craftStore: rt.craftStore },
   });
 }
 

@@ -9,6 +9,7 @@ import {
   nimbusSessionShell,
   type NimbusSandboxHandle,
 } from '../src/execution/nimbus';
+import { WORKSPACE_ROOT } from '../src/vfs/workspace-path';
 import { DefaultExecutionRouter } from '../src/execution/router';
 import { createWorkspace, workspaceGenerationStorage } from '../src/vfs/nimbus-workspace';
 import type { SQLQueryBindings } from 'bun:sqlite';
@@ -88,7 +89,7 @@ describe('hosted Nimbus workspace provider', () => {
   test('one workspace namespace owns both files and the live session', async () => {
     const { rt } = createTestRuntime();
     const box = fakeBox();
-    const vfs = nimbusSessionFiles(box);
+    const vfs = nimbusSessionFiles(box, { home: WORKSPACE_ROOT });
 
     const provider = createNimbusWorkspaceExecutor({
       box,
@@ -151,7 +152,7 @@ describe('hosted Nimbus workspace provider', () => {
       };
     };
 
-    const bytes = await nimbusSessionFiles(box).readRange('/home/main/large.png', 0, 512 * 1024);
+    const bytes = await nimbusSessionFiles(box, { home: WORKSPACE_ROOT }).readRange('/home/main/large.png', 0, 512 * 1024);
 
     expect(bytes).toEqual(expected);
     // Path/offset/length travel only in the reader's JSON env, never interpolated into shell text.
@@ -167,7 +168,7 @@ describe('hosted Nimbus workspace provider', () => {
     const box = fakeBox();
 
     const inline = {
-      vfs: nimbusSessionFiles(box),
+      vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }),
       shell: nimbusSessionShell(box),
       memory: rt.memory,
       craftStore: rt.craftStore,
@@ -203,7 +204,7 @@ describe('hosted Nimbus workspace provider', () => {
     const provider = createNimbusWorkspaceExecutor({
       box,
       inline: {
-        vfs: nimbusSessionFiles(box), shell: nimbusSessionShell(box),
+        vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box),
         memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
       },
     });
@@ -290,7 +291,7 @@ describe('hosted Nimbus workspace provider', () => {
     const provider = createNimbusWorkspaceExecutor({
       box,
       inline: {
-        vfs: nimbusSessionFiles(box), shell: nimbusSessionShell(box),
+        vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box),
         memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
       },
     });
@@ -316,7 +317,7 @@ describe('hosted Nimbus workspace provider', () => {
     const provider = createNimbusWorkspaceExecutor({
       box,
       inline: {
-        vfs: nimbusSessionFiles(box), shell: nimbusSessionShell(box),
+        vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box),
         memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
       },
     });
@@ -336,7 +337,7 @@ describe('a workspace whose host cannot compile node programs', () => {
     return createNimbusWorkspaceExecutor({
       box,
       inline: {
-        vfs: nimbusSessionFiles(box), shell: nimbusSessionShell(box),
+        vfs: nimbusSessionFiles(box, { home: WORKSPACE_ROOT }), shell: nimbusSessionShell(box),
         memory: rt.memory, craftStore: rt.craftStore, sql: rt.storage.sql,
       },
     });

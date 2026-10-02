@@ -11,6 +11,7 @@ import {
   foldForkStream, createWorkspaceForkSink, createWorkspaceForkSource, writeWorkspaceSoul, forkTransferFrames, initWorkspaceSchema, nimbusSessionFiles,
   readForkLineage, SessionHistory, summarizeSoul, WorkspaceActorDirectory, openWorkspaceMainActor,
   type ForkFrame, type ForkFrameReply, type ForkLineageRow, type ForkResult, type ForkStaging, type SqlExecutor, type SqlValue,
+  WORKSPACE_ROOT,
 } from '@kinu.run/core';
 import { workspaceBoxFiles } from '@kinu.run/core/workspace';
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
@@ -184,7 +185,7 @@ export class ForkSourceProbeDO extends ForkProbeDO {
       files: workspaceBoxFiles(() => this.store()),
       ready: async () => undefined,
       exec: async () => { throw new Error('the fork probe runs no processes'); },
-    });
+    }, { home: WORKSPACE_ROOT });
 
     const history = new SessionHistory({
       actor,

@@ -5,6 +5,9 @@ import { jsonSchema, tool, type ToolSet } from 'ai';
 import * as v from 'valibot';
 import { toolExecute, createTestActorsOver, handClock, present } from '@kinu.run/test-utils';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox';
+import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-executor';
+import { createHubDeviceTransport, type DeviceHubClient } from '../src/execution/hub-device-transport';
+import type { DeviceExecOutput } from '../src/execution/device-tunnel';
 import type { ExecutorProvider } from '../src/execution/types';
 import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome } from '../src/jobs/index';
 import { isBackgroundHandle } from '../src/jobs/threshold';
@@ -434,22 +437,29 @@ function rowsChanged(db: Database): number {
 
 const joined = (chunks: readonly OutputChunk[]): string => chunks.map(({ text }) => text).join('');
 
+/** The whole chain on `clock`, its jobs' frames recorded, and how many had gone out at each settle. */
+function recordingRunner(clock: ReturnType<typeof handClock>) {
+  const frames: JobOutputFrame[] = [];
+  const framesAtSettle: number[] = [];
+
+  const chain = wholeChainRunner(() => ({
+    clock,
+    policy: () => BACKGROUND_POLICY.interactive,
+    jobOutput: (frame) => { frames.push(frame); },
+    onSettled: () => { framesAtSettle.push(frames.length); },
+  }));
+
+  return { ...chain, frames, framesAtSettle };
+}
+
 describe("a running job's output", () => {
   // Main's queue, 2026-10-02: a job's output reached no one until it settled, so a long build showed nothing in the UI
   // or TUI until it finished. It goes to the job's rooms a window at a time, and is never a row.
   test('reaches its rooms while it runs, a window at a time, and its settle comes after its last frame', async () => {
     const clock = handClock(Date.now());
-    const frames: JobOutputFrame[] = [];
-    const framesAtSettle: number[] = [];
     const finished = Promise.withResolvers<{ stdout: string; exitCode: number }>();
     let given: OutputSink | undefined;
-
-    const { runner, store, bodies, db } = wholeChainRunner(() => ({
-      clock,
-      policy: () => BACKGROUND_POLICY.interactive,
-      jobOutput: (frame) => { frames.push(frame); },
-      onSettled: () => { framesAtSettle.push(frames.length); },
-    }));
+    const { runner, store, bodies, db, frames, framesAtSettle } = recordingRunner(clock);
 
     const handle: SandboxHandle = {
       // The build prints, then outruns its call's window.
@@ -532,6 +542,60 @@ describe("a running job's output", () => {
     expect(framesAtSettle).toEqual([7]);
     expect(store.get(jobId)?.status).toBe('completed');
     expect(runner.output.tail(jobId)).toBeUndefined();
+  });
+
+  test("a device command's output reaches its job's rooms while it runs, as the hub hands over the machine's frames", async () => {
+    const clock = handClock(Date.now());
+    const answered = Promise.withResolvers<string>();
+    const base64 = (text: string): string => Buffer.from(text).toString('base64');
+    let handedOver: ((output: DeviceExecOutput) => void) | undefined;
+    const { runner, store, bodies, frames, framesAtSettle } = recordingRunner(clock);
+
+    // As UserDO hands over the daemon's frames: the build prints, then outruns its call's window.
+    const hub: DeviceHubClient = {
+      deviceRuntimeStatus: async () => ({ connected: true, registered: true, toolchain: null }),
+      deviceRpc: async (_caller, _method, _params, opts) => {
+        handedOver = opts?.onOutput;
+        handedOver?.({ chunks: [{ stream: 'stdout', data: base64('resolving dependencies\n') }], dropped: 0 });
+        clock.advance(BACKGROUND_POLICY.interactive.detachAfterMs);
+
+        return answered.promise;
+      },
+      acknowledgeDeviceRequest: async () => {},
+    };
+
+    const transport = createHubDeviceTransport({ hub: () => hub, caller: async () => ({ workspaceToken: 'pwc_test' }), agentName: 'main', cliCwd: () => null });
+    await transport.refreshStatus();
+    const router = new DefaultExecutionRouter();
+    router.register(createDeviceTunnelExecutor(transport));
+    const { rt } = createTestRuntime();
+
+    const wrapped = wrapToolsForBackground(
+      buildBuiltinTools({ rt: { ...rt, executionRouter: router, deviceTransport: transport }, conversations: conversationsFor(rt) }),
+      { jobRunner: runner, mode: () => 'build', backgroundable: BACKGROUNDABLE_TOOLS },
+    );
+
+    const run = toolExecute<{ command: string; runtime: string; why: string }, object | string>(present(wrapped.shell, 'the wrapped shell tool'));
+    const detached = await run({ command: 'bun run build', runtime: 'device', why: 'build on their machine' });
+
+    if (!isBackgroundHandle(detached)) throw new Error(`the build did not detach: ${JSON.stringify(detached)}`);
+    const { jobId } = detached;
+    const machine = present(handedOver, "the callback the hub was handed for the machine's frames");
+
+    expect(frames).toEqual([{ type: JOB_OUTPUT_EVENT, jobId, seq: 1, chunks: [{ stream: 'stdout', text: 'resolving dependencies\n' }], dropped: 0 }]);
+
+    // A window the machine could not send whole: its bytes, and what it left out.
+    machine({ chunks: [{ stream: 'stderr', data: base64('warn: café\n') }], dropped: 2048 });
+    clock.advance(250);
+    expect(frames.at(-1)).toEqual({ type: JOB_OUTPUT_EVENT, jobId, seq: 2, chunks: [{ stream: 'stderr', text: 'warn: café\n' }], dropped: 2048 });
+
+    machine({ chunks: [{ stream: 'stdout', data: base64('built in 41s\n') }], dropped: 0 });
+    answered.resolve(JSON.stringify({ stdout: 'resolving dependencies\nbuilt in 41s\n', stderr: 'warn: café\n', exitCode: 0 }));
+    await Promise.all(bodies);
+
+    expect(frames.at(-1)).toEqual({ type: JOB_OUTPUT_EVENT, jobId, seq: 3, chunks: [{ stream: 'stdout', text: 'built in 41s\n' }], dropped: 0 });
+    expect(framesAtSettle).toEqual([3]);
+    expect(store.get(jobId)?.status).toBe('completed');
   });
 
   test('a call that ends inside its window sends nothing: only a job has rooms to show it', async () => {

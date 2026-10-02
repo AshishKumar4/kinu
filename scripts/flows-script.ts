@@ -2,7 +2,7 @@
  * What the product-flows rows ask, and the calls the scripted model answers them with. Pure, so the local server and
  * the deployed tiers' Worker (`scripted-model-worker.ts`) both serve it.
  */
-import { SLATES_ROOT, workspacePath } from '../packages/core/src/vfs/workspace-path';
+import { SLATES_ROOT, workspacePath, WORKSPACE_ROOT } from '../packages/core/src/vfs/workspace-path';
 import type { ScriptedAnswer, ScriptedRequest } from './scripted-protocol';
 
 /** A file name no scaffold file can carry. */
@@ -59,7 +59,7 @@ export function flowsScript(request: ScriptedRequest): ScriptedAnswer | null {
   if (asked(WRITE_FILE_ASK) && request.available.includes('file')) {
     return request.called.includes('file')
       ? { text: 'DONE' }
-      : { text: 'Writing the file.', toolCall: { name: 'file', arguments: { action: 'write', path: workspacePath(FLOW_PROBE), content: 'browser flow probe' } } };
+      : { text: 'Writing the file.', toolCall: { name: 'file', arguments: { action: 'write', path: workspacePath(FLOW_PROBE, WORKSPACE_ROOT), content: 'browser flow probe' } } };
   }
 
   if (asked(SLATE_ASK) && request.available.includes('file')) {

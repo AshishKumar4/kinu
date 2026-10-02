@@ -1183,7 +1183,7 @@ const SUPERVISOR_SCRIPT = `
 const fs = require('node:fs');
 const { execFile, spawn } = require('node:child_process');
 
-const [commandFile, stateFile, resultFile, stdoutFile, stderrFile, ackFile, maxText, planFile] = process.argv.slice(1);
+const [commandFile, stateFile, resultFile, stdoutFile, stderrFile, ackFile, maxText, planFile, lifeFile] = process.argv.slice(1);
 const maxOutput = Number(maxText);
 // Half kept from the start, half from the end, as core's BoundedOutput keeps them (COMMAND_OUTPUT_LIMITS).
 const HEAD = Math.floor(maxOutput / 2);
@@ -1248,7 +1248,12 @@ function abandonStartup() {
 }
 
 async function publishState() {
+  // First, before anything yields: on Linux the command's identity is read before the event loop can reap it.
   const [start, groupStart] = await startIdentities();
+  // Held until this process exits, however it exits: the kernel closes it, and the daemon reads that close as
+  // this supervisor gone. Opened before the state exists, so whoever reads the state finds it held.
+  await run('mkfifo', [lifeFile]);
+  fs.openSync(lifeFile, 'r+');
   const stateTemporary = stateFile + '.tmp.' + process.pid;
   fs.writeFileSync(
     stateTemporary,
@@ -1636,6 +1641,52 @@ function waitForFile(file, signal) {
   return waitForPath(file, true, signal);
 }
 
+/**
+ * Resolves once the supervisor of `dir` is gone, or `signal` aborts. It holds `life` open for writing from before
+ * its state was published, so a reader opened while that end is held is hung up when the supervisor exits, and one
+ * opened after finds no writer at all. A record from a supervisor older than `life` has nothing to watch.
+ */
+async function supervisorExit(dir, signal) {
+  let fd;
+
+  try {
+    fd = fs.openSync(path.join(dir, 'life'), fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }));
+    throw err;
+  }
+
+  try {
+    if (!lifeHeld(fd)) return;
+    // Bun alone sees a FIFO's hang-up here (its net.Socket over the fd never ends); it leaves the fd to us.
+    const reader = Bun.file(fd).stream().getReader();
+    let cancelled = Promise.resolve();
+    const cancel = () => { cancelled = reader.cancel(); };
+
+    signal.addEventListener('abort', cancel, { once: true });
+
+    try {
+      // Nothing is ever written: the read ends at the writer's close, or at the cancel.
+      while (!(await reader.read()).done);
+    } finally {
+      signal.removeEventListener('abort', cancel);
+      await cancelled;
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** Whether a writer holds the FIFO `fd` reads: with none left a non-blocking read ends (0); with one, it would wait. */
+function lifeHeld(fd) {
+  try {
+    return fs.readSync(fd, Buffer.alloc(1)) !== 0;
+  } catch (err) {
+    if (err && err.code === 'EAGAIN') return true;
+    throw err;
+  }
+}
+
 function waitForDirectoryRemoval(dir) {
   return waitForPath(dir, false);
 }
@@ -1758,7 +1809,23 @@ function createInFlight(root = INFLIGHT_ROOT) {
     const entry = await loadEntry(requestId);
 
     if (!entry) return undefined;
-    await waitForFile(path.join(entry.dir, 'result'));
+    const resultFile = path.join(entry.dir, 'result');
+    const settled = new AbortController();
+    const written = waitForFile(resultFile, settled.signal);
+    const exited = supervisorExit(entry.dir, settled.signal);
+
+    try {
+      await Promise.race([written, exited]);
+    } finally {
+      settled.abort();
+      await Promise.allSettled([written, exited]);
+    }
+
+    // The supervisor writes its result before it can exit, so one gone without a result never wrote one.
+    if (!fs.existsSync(resultFile)) {
+      throw new Error(`the supervisor of ${requestId} (pid ${entry.pid}) exited without recording the command's result, `
+        + `so its outcome is unknown; the command may still be running in process group ${entry.group}`);
+    }
 
     return { entry, ...readExecResult(entry.dir) };
   }
@@ -1895,7 +1962,7 @@ function startSupervisor(requestId, command, plan, { uncheckpointed, watched }) 
     '-e', SUPERVISOR_SCRIPT,
     commandFile, path.join(dir, 'state'), path.join(dir, 'result'),
     path.join(dir, 'stdout'), path.join(dir, 'stderr'), path.join(dir, 'ack'),
-    String(EXEC_STREAM_MAX_BYTES), planFile,
+    String(EXEC_STREAM_MAX_BYTES), planFile, path.join(dir, 'life'),
   ], { detached: true, env: COMMAND_ENV, stdio: watched ? ['ignore', 'ignore', 'ignore', 'pipe'] : 'ignore' });
 
   child.unref();

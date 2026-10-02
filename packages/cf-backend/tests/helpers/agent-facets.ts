@@ -1,5 +1,6 @@
 /** An agent's isolate for bun suites: the shipped AgentFacet in this process over its own database. */
 import { Database } from 'bun:sqlite';
+import { WORKSPACE_ROOT } from '@kinu.run/core';
 import type { AgentContext } from 'agents';
 import { AgentFacet, type AgentFacetEnv } from '../../src/agent-facet/agent-facet';
 import { AgentDatabase } from '../../src/agent-facet/agent-database';
@@ -41,7 +42,7 @@ export function agentDatabase(storageKey: string): Database {
   const db = new Database(':memory:');
 
   databases.set(storageKey, db);
-  new AgentDatabase(contextOver(db, storageKey).storage, { agent: unreachable, state: unreachable, enqueueTurn: unreachable, memory: unreachable, program: unreachable, sayToParent: unreachable });
+  new AgentDatabase(contextOver(db, storageKey).storage, { agent: unreachable, home: WORKSPACE_ROOT, state: unreachable, enqueueTurn: unreachable, memory: unreachable, program: unreachable, sayToParent: unreachable });
 
   return db;
 }

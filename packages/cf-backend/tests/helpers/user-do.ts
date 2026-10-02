@@ -140,8 +140,8 @@ export interface TestUserDOOptions {
   /** Build stamp and CLI checksums served via `ASSETS` under `/downloads/`; absent, the hub pushes no UPDATE. */
   servedBuild?: { version: string; checksums?: Record<string, string>; signature?: string };
   /** Answer device RPC frames like the daemon; a returned promise answers later, so one frame
-   *  can be held open across another. */
-  deviceResponder?: (frame: DeviceFrame) => JsonValue | Promise<JsonValue>;
+   *  can be held open across another. `say` sends a frame first, as the daemon sends live output. */
+  deviceResponder?: (frame: DeviceFrame, say: (frame: JsonValue) => Promise<void>) => JsonValue | Promise<JsonValue>;
   credentialEncryptionKey?: string;
   credentialEncryptionKeyPrevious?: string;
   /** Lets a stored Cloudflare login renew; absent, its refresh fails for want of a client. */
@@ -183,6 +183,8 @@ export interface DeviceFrame {
   sandbox?: JsonValue;
   /** The checkpoint hint the daemon snapshots under, on a mutating frame. */
   checkpoint?: JsonValue;
+  /** The hub asked for the command's output while it runs. */
+  output?: boolean;
 }
 
 const DeviceFrameSchema = v.object({
@@ -192,6 +194,7 @@ const DeviceFrameSchema = v.object({
   sandbox: v.optional(JsonValueSchema),
   checkpoint: v.optional(JsonValueSchema),
   deviceId: v.optional(v.string()),
+  output: v.optional(v.boolean()),
 });
 
 const DevicePushSchema = v.looseObject({ type: v.string() });
@@ -348,6 +351,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       if (frame.output.checkpoint !== undefined) call.checkpoint = frame.output.checkpoint;
 
       if (frame.output.deviceId !== undefined) call.deviceId = frame.output.deviceId;
+
+      if (frame.output.output !== undefined) call.output = frame.output.output;
       deviceFrames.push(call);
       const responder = options.deviceResponder;
       const owner = hub.current;
@@ -358,7 +363,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       // harness fiber before inspecting a delayed answer's effects.
       return owner.runFiber('test:device-responder', async () => {
         try {
-          const result = await responder(call);
+          const result = await responder(call, (said) => owner.webSocketMessage(socket, JSON.stringify(said)));
           await owner.webSocketMessage(socket, JSON.stringify({ id: call.id, result }));
         } catch (cause) {
           await owner.webSocketMessage(socket, JSON.stringify({
@@ -625,6 +630,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
           if (frame.output.checkpoint !== undefined) call.checkpoint = frame.output.checkpoint;
 
           if (frame.output.deviceId !== undefined) call.deviceId = frame.output.deviceId;
+
+          if (frame.output.output !== undefined) call.output = frame.output.output;
           frames.push(call);
           deviceFrames.push(call);
           const responder = options.deviceResponder;
@@ -634,7 +641,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
 
           return owner.runFiber('test:device-responder', async () => {
             try {
-              const result = await responder(call);
+              const result = await responder(call, (said) => owner.webSocketMessage(ws, JSON.stringify(said)));
               await owner.webSocketMessage(ws, JSON.stringify({ id: call.id, result }));
             } catch (cause) {
               await owner.webSocketMessage(ws, JSON.stringify({

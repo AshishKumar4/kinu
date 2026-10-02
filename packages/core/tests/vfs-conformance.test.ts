@@ -331,7 +331,7 @@ const cases: Case[] = [
   { name: 'sandbox file view',
     make: () => sandboxFiles(sandboxHandle(new MemFs())), path: (s) => `/conf/${s}` },
   { name: 'nimbus session file view',
-    make: () => nimbusSessionFiles(nimbusHandle(new MemFs())), path: (s) => `/conf/${s}` },
+    make: () => nimbusSessionFiles(nimbusHandle(new MemFs()), { home: '/' }), path: (s) => `/conf/${s}` },
   { name: 'device file view',
     make: () => deviceFiles(deviceTransport(new MemFs()), {
       consentedRoot: async () => '/', deviceHome: async () => '/', scope: async () => 'unconfined',
