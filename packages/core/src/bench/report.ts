@@ -433,60 +433,64 @@ function gainCostSummary(
   attempts: readonly AttemptOutcome[],
   perTask: readonly GainTaskScore[],
   config: BenchRunConfig,
-): GainCostSummary {
-  const expectedPerArm = perTask.length * config.repeats;
-  const taskIds = new Set(perTask.map((task) => task.taskId));
-  const seen = new Set<string>();
+): Effect.Effect<GainCostSummary> {
+  return Effect.gen(function* () {
+    const expectedPerArm = perTask.length * config.repeats;
+    const taskIds = new Set(perTask.map((task) => task.taskId));
+    const seen = new Set<string>();
 
-  for (const attempt of attempts) {
-    if (!taskIds.has(attempt.taskId)) {
-      throw new Error(`gain accounting contains unknown task ${attempt.taskId}`);
+    for (const attempt of attempts) {
+      if (!taskIds.has(attempt.taskId)) {
+        return yield* Effect.die(new Error(`gain accounting contains unknown task ${attempt.taskId}`));
+      }
+
+      const expectedVariant = attempt.slot === 'a' ? config.variantA : config.variantB;
+
+      if (attempt.variantId !== expectedVariant) {
+        return yield* Effect.die(new Error(`gain accounting slot ${attempt.slot} contains variant ${attempt.variantId}; expected ${expectedVariant}`));
+      }
+
+      if (attempt.repeat < 0 || attempt.repeat >= config.repeats) {
+        return yield* Effect.die(new Error(`gain accounting has out-of-range repeat ${attempt.repeat} for ${attempt.taskId}`));
+      }
+
+      const key = `${attempt.slot}:${attempt.taskId}:${attempt.repeat}`;
+
+      if (seen.has(key)) return yield* Effect.die(new Error(`gain accounting repeats attempt ${key}`));
+      seen.add(key);
     }
 
-    const expectedVariant = attempt.slot === 'a' ? config.variantA : config.variantB;
+    const stateless = attempts.filter((attempt) => attempt.slot === 'a');
+    const stateful = attempts.filter((attempt) => attempt.slot === 'b');
 
-    if (attempt.variantId !== expectedVariant) {
-      throw new Error(`gain accounting slot ${attempt.slot} contains variant ${attempt.variantId}; expected ${expectedVariant}`);
+    if (stateless.length !== expectedPerArm || stateful.length !== expectedPerArm) {
+      return yield* Effect.die(new Error(
+        `gain accounting expected ${expectedPerArm} attempt per arm; got ${stateless.length} stateless and ${stateful.length} stateful`,
+      ));
     }
 
-    if (attempt.repeat < 0 || attempt.repeat >= config.repeats) {
-      throw new Error(`gain accounting has out-of-range repeat ${attempt.repeat} for ${attempt.taskId}`);
-    }
-
-    const key = `${attempt.slot}:${attempt.taskId}:${attempt.repeat}`;
-
-    if (seen.has(key)) throw new Error(`gain accounting repeats attempt ${key}`);
-    seen.add(key);
-  }
-
-  const stateless = attempts.filter((attempt) => attempt.slot === 'a');
-  const stateful = attempts.filter((attempt) => attempt.slot === 'b');
-
-  if (stateless.length !== expectedPerArm || stateful.length !== expectedPerArm) {
-    throw new Error(
-      `gain accounting expected ${expectedPerArm} attempt per arm; got ${stateless.length} stateless and ${stateful.length} stateful`,
-    );
-  }
-
-  return { stateless: gainArmCost(stateless), stateful: gainArmCost(stateful) };
+    return { stateless: gainArmCost(stateless), stateful: gainArmCost(stateful) };
+  });
 }
 
 export function buildGainReport(input: BuildGainReportInput): GainReport {
-  const perTask = [...input.perTask].sort((a, b) => a.index - b.index);
-  const stats = computeGain(perTask, { seed: input.config.seed, ...input.bootstrap });
+  return settleSync(Effect.gen(function* () {
+    const perTask = [...input.perTask].sort((a, b) => a.index - b.index);
+    const stats = computeGain(perTask, { seed: input.config.seed, ...input.bootstrap });
 
-  return {
-    ranAt: input.ranAt ?? Date.now(),
-    runId: input.runId,
-    config: input.config,
-    configHash: benchConfigHash(input.config),
-    sequence: perTask.map((t) => t.taskId),
-    perTask,
-    cost: gainCostSummary(input.attempts, perTask, input.config),
-    stats,
-    calibration: GAIN_CALIBRATION,
-    headline: stats.verdict,
-  };
+    return {
+      ranAt: input.ranAt ?? Date.now(),
+      runId: input.runId,
+      config: input.config,
+      configHash: benchConfigHash(input.config),
+      sequence: perTask.map((t) => t.taskId),
+      perTask,
+      cost: yield* gainCostSummary(input.attempts, perTask, input.config),
+      stats,
+      calibration: GAIN_CALIBRATION,
+      headline: stats.verdict,
+    };
+  }));
 }
 
 export function renderGainSummary(report: GainReport): string {

@@ -211,9 +211,7 @@ export function defaultVirtualWorkspaceId(cwd = process.cwd()): string {
 }
 
 export function agentDir(name: string): string {
-  validateAgentName(name);
-
-  return join(AGENT_HOME, name);
+  return settleSync(Effect.as(validateAgentName(name), join(AGENT_HOME, name)));
 }
 
 export function agentDbPath(name: string): string {
@@ -503,26 +501,32 @@ export function resolveCloudOrigin(opts?: { origin?: string }): string {
 }
 
 export function requireAuthConfig(): LocalCloudSession {
-  return resolveCloudSession() ?? storedAuthConfig('Not authenticated. Run: kinu auth (or set KINU_TOKEN)');
+  const session = resolveCloudSession();
+
+  if (session) return session;
+
+  return settleSync(storedAuthConfig('Not authenticated. Run: kinu auth (or set KINU_TOKEN)'));
 }
 
 export function requireStoredAuthConfig(): LocalCloudSession {
-  return storedAuthConfig('No interactive CLI session found. Run: kinu auth');
+  return settleSync(storedAuthConfig('No interactive CLI session found. Run: kinu auth'));
 }
 
-function storedAuthConfig(missingTokenMessage: string): LocalCloudSession {
-  const config = loadConfigFile();
-  const token = config.accessToken;
+function storedAuthConfig(missingTokenMessage: string): Effect.Effect<LocalCloudSession> {
+  return Effect.gen(function* () {
+    const config = loadConfigFile();
+    const token = config.accessToken;
 
-  if (!token) {
-    throw new Error(missingTokenMessage);
-  }
+    if (!token) {
+      return yield* Effect.die(new Error(missingTokenMessage));
+    }
 
-  if (sessionExpired(config)) {
-    throw new Error('Your Kinu CLI session has expired. Run: kinu auth');
-  }
+    if (sessionExpired(config)) {
+      return yield* Effect.die(new Error('Your Kinu CLI session has expired. Run: kinu auth'));
+    }
 
-  return { origin: resolveCloudOrigin(), token };
+    return { origin: resolveCloudOrigin(), token };
+  });
 }
 
 export function sessionExpired(config: KinuConfig): boolean {
@@ -556,30 +560,36 @@ export function listConfiguredAgentRefs(): KinuAgentConfig[] {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-export async function upsertAgentConfig(agent: Omit<KinuAgentConfig, 'createdAt' | 'updatedAt'> & Partial<Pick<KinuAgentConfig, 'createdAt' | 'updatedAt'>>): Promise<KinuAgentConfig> {
-  validateAgentName(agent.name);
+export function upsertAgentConfig(agent: Omit<KinuAgentConfig, 'createdAt' | 'updatedAt'> & Partial<Pick<KinuAgentConfig, 'createdAt' | 'updatedAt'>>): Promise<KinuAgentConfig> {
+  return settle(Effect.gen(function* () {
+    yield* validateAgentName(agent.name);
 
-  if (agent.alias) validateAliasName(agent.alias);
+    if (agent.alias) yield* validateAliasName(agent.alias);
 
-  if (agent.localName) validateAgentName(agent.localName);
+    if (agent.localName) yield* validateAgentName(agent.localName);
 
-  if (agent.cloudName) validateAgentName(agent.cloudName);
+    if (agent.cloudName) yield* validateAgentName(agent.cloudName);
 
-  if (agent.workspaceId) validateWorkspaceId(agent.workspaceId);
-  const now = new Date().toISOString();
-  let saved!: KinuAgentConfig;
-  await updateConfigFile((config) => {
-    const existing = config.agents?.[agent.name];
-    saved = {
-      ...existing,
-      ...agent,
-      createdAt: agent.createdAt ?? existing?.createdAt ?? now,
-      updatedAt: now,
-    };
-    config.agents = { ...config.agents, [agent.name]: saved };
-  });
+    if (agent.workspaceId) yield* validateIdentifier(agent.workspaceId, 'Workspace id');
+    const now = new Date().toISOString();
+    const saved: KinuAgentConfig[] = [];
 
-  return saved;
+    yield* Effect.promise(() => updateConfigFile((config) => {
+      const existing = config.agents?.[agent.name];
+
+      const next: KinuAgentConfig = {
+        ...existing,
+        ...agent,
+        createdAt: agent.createdAt ?? existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+
+      saved.push(next);
+      config.agents = { ...config.agents, [agent.name]: next };
+    }));
+
+    return saved[saved.length - 1];
+  }));
 }
 
 export async function removeCloudAgentConfig(cloudName: string): Promise<boolean> {
@@ -607,19 +617,21 @@ export async function removeCloudAgentConfig(cloudName: string): Promise<boolean
   return removed;
 }
 
-async function setAliasConfig(agentName: string, alias: string): Promise<void> {
-  validateAgentName(agentName);
-  validateAliasName(alias);
-  await updateConfigFile((config) => {
-    config.aliases = { ...config.aliases, [alias]: agentName };
-    const existing = config.agents?.[agentName];
+function setAliasConfig(agentName: string, alias: string): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    yield* validateAgentName(agentName);
+    yield* validateAliasName(alias);
+    yield* Effect.promise(() => updateConfigFile((config) => {
+      config.aliases = { ...config.aliases, [alias]: agentName };
+      const existing = config.agents?.[agentName];
 
-    if (existing) {
-      config.agents = {
-        ...config.agents,
-        [agentName]: { ...existing, alias, updatedAt: new Date().toISOString() },
-      };
-    }
+      if (existing) {
+        config.agents = {
+          ...config.agents,
+          [agentName]: { ...existing, alias, updatedAt: new Date().toISOString() },
+        };
+      }
+    }));
   });
 }
 
@@ -635,18 +647,16 @@ async function removeAliasConfig(alias: string): Promise<void> {
   });
 }
 
-function aliasPath(alias: string): string {
-  validateAliasName(alias);
-
-  return join(BIN_DIR, alias);
+function aliasPath(alias: string): Effect.Effect<string> {
+  return Effect.as(validateAliasName(alias), join(BIN_DIR, alias));
 }
 
 export function writeAliasShim(agentName: string, alias: string): Promise<string> {
   return settle(Effect.gen(function* () {
-    validateAgentName(agentName);
-    validateAliasName(alias);
+    yield* validateAgentName(agentName);
+    yield* validateAliasName(alias);
     ensureBinDir();
-    const path = aliasPath(alias);
+    const path = yield* aliasPath(alias);
 
     const script = `#!/usr/bin/env sh
 set -eu
@@ -656,42 +666,49 @@ exec "$bin_dir/kinu" run ${shellQuote(agentName)} "$@"
 
     writeFileSync(path, script, { mode: 0o755 });
     chmodSync(path, 0o755);
-    yield* Effect.promise(async () => setAliasConfig(agentName, alias));
+    yield* setAliasConfig(agentName, alias);
 
     return path;
   }));
 }
 
-export async function deleteAliasShim(alias: string): Promise<void> {
-  validateAliasName(alias);
-  tolerate(() => unlinkSync(aliasPath(alias)), 'enoent');
-  await removeAliasConfig(alias);
+export function deleteAliasShim(alias: string): Promise<void> {
+  return settle(Effect.gen(function* () {
+    const path = yield* aliasPath(alias);
+
+    tolerate(() => unlinkSync(path), 'enoent');
+    yield* Effect.promise(() => removeAliasConfig(alias));
+  }));
 }
 
 export function pathHint(): string | null {
   return (process.env.PATH ?? '').split(':').includes(BIN_DIR) ? null : `Add ${BIN_DIR} to PATH for kinu aliases.`;
 }
 
-function validateIdentifier(value: string, noun: string): void {
-  if (!KINU_IDENTIFIER_RE.test(value)) {
-    throw new Error(`${noun} must be 1-64 characters: letters, numbers, dashes, or underscores; it must start with a letter or number.`);
-  }
+function validateIdentifier(value: string, noun: string): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    if (!KINU_IDENTIFIER_RE.test(value)) {
+      return yield* Effect.die(new Error(`${noun} must be 1-64 characters: letters, numbers, dashes, or underscores; it must start with a letter or number.`));
+    }
+  });
 }
 
-function validateAgentName(name: string): void {
-  validateIdentifier(name, 'Agent name');
+function validateAgentName(name: string): Effect.Effect<void> {
+  return validateIdentifier(name, 'Agent name');
 }
 
 export function validateWorkspaceId(workspaceId: string): void {
-  validateIdentifier(workspaceId, 'Workspace id');
+  return settleSync(validateIdentifier(workspaceId, 'Workspace id'));
 }
 
-function validateAliasName(alias: string): void {
-  validateIdentifier(alias, 'Alias');
+function validateAliasName(alias: string): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    yield* validateIdentifier(alias, 'Alias');
 
-  if (RESERVED_ALIASES.has(alias)) {
-    throw new Error(`Alias "${alias}" is reserved. Choose another alias.`);
-  }
+    if (RESERVED_ALIASES.has(alias)) {
+      return yield* Effect.die(new Error(`Alias "${alias}" is reserved. Choose another alias.`));
+    }
+  });
 }
 
 /** Default endpoint for bare model ids, null when nothing derives one; see {@link requireLLMConfig}. */

@@ -414,30 +414,32 @@ const CustomThemeSchema = v.strictObject({
 });
 
 export function createThemeRegistry(themes: readonly TuiThemeDefinition[]): ThemeRegistry {
-  const byId: Record<string, TuiThemeDefinition> = {};
+  return settleSync(Effect.gen(function* () {
+    const byId: Record<string, TuiThemeDefinition> = {};
+    const validated: TuiThemeDefinition[] = [];
 
-  const validated = themes.map((theme) => {
-    validateTheme(theme, theme.id);
+    for (const theme of themes) {
+      yield* validateTheme(theme, theme.id);
 
-    if (byId[theme.id] !== undefined) throw new Error(`Duplicate TUI theme id: ${theme.id}`);
-    const frozen = freezeTheme(theme);
-    byId[theme.id] = frozen;
+      if (byId[theme.id] !== undefined) return yield* Effect.die(new Error(`Duplicate TUI theme id: ${theme.id}`));
+      const frozen = freezeTheme(theme);
+      byId[theme.id] = frozen;
+      validated.push(frozen);
+    }
 
-    return frozen;
-  });
+    return Object.freeze({
+      themes: Object.freeze(validated),
+      get(themeId: string) {
+        return settleSync(Effect.gen(function* () {
+          const theme = byId[themeId];
 
-  return Object.freeze({
-    themes: Object.freeze(validated),
-    get(themeId: string) {
-      return settleSync(Effect.gen(function* () {
-        const theme = byId[themeId];
+          if (theme === undefined) return yield* Effect.die(new Error(`Unknown TUI theme: ${themeId}`));
 
-        if (theme === undefined) return yield* Effect.die(new Error(`Unknown TUI theme: ${themeId}`));
-
-        return theme;
-      }));
-    },
-  });
+          return theme;
+        }));
+      },
+    });
+  }));
 }
 
 const DEFAULT_THEME_REGISTRY = createThemeRegistry(BUILTIN_TUI_THEMES);
@@ -446,26 +448,28 @@ const DEFAULT_THEME_REGISTRY = createThemeRegistry(BUILTIN_TUI_THEMES);
 function resolveThemeSelection(
   registry: ThemeRegistry,
   selection: ThemeSelection,
-): TuiThemeDefinition {
-  const known = registry.themes.find((candidate) => candidate.id === selection.themeId);
+): Effect.Effect<TuiThemeDefinition> {
+  return Effect.gen(function* () {
+    const known = registry.themes.find((candidate) => candidate.id === selection.themeId);
 
-  if (known !== undefined) return known;
+    if (known !== undefined) return known;
 
-  const fallback = registry.themes.find((candidate) => candidate.id === DEFAULT_DARK_TUI_THEME_ID)
-    ?? registry.themes[0];
+    const fallback = registry.themes.find((candidate) => candidate.id === DEFAULT_DARK_TUI_THEME_ID)
+      ?? registry.themes[0];
 
-  if (fallback === undefined) throw new Error('the TUI theme registry is empty');
-  diagnostics.failure(
-    'tui.theme_absent',
-    toKinuError({
-      doing: `resolving the selected TUI theme ${selection.themeId}`,
-      cause: new Error(`no theme with id ${selection.themeId} is registered`),
-      otherwise: 'bad_input',
-    }),
-    { selected: selection.themeId, applied: fallback.id },
-  );
+    if (fallback === undefined) return yield* Effect.die(new Error('the TUI theme registry is empty'));
+    diagnostics.failure(
+      'tui.theme_absent',
+      toKinuError({
+        doing: `resolving the selected TUI theme ${selection.themeId}`,
+        cause: new Error(`no theme with id ${selection.themeId} is registered`),
+        otherwise: 'bad_input',
+      }),
+      { selected: selection.themeId, applied: fallback.id },
+    );
 
-  return fallback;
+    return fallback;
+  });
 }
 
 
@@ -494,7 +498,7 @@ export function parseCustomTheme(json: string, filename: string): TuiThemeDefini
       source: 'custom',
     };
 
-    validateTheme(theme, filename);
+    yield* validateTheme(theme, filename);
 
     return freezeTheme(theme);
   }));
@@ -648,8 +652,10 @@ export function TuiThemeProvider(props: {
   const selection = props.selection ?? DEFAULT_TUI_THEME_SELECTION;
   const capability = props.colorCapability ?? detectTerminalColorCapability();
 
+  const selected = useMemo(() => settleSync(resolveThemeSelection(registry, selection)), [registry, selection]);
+
   const active = useMemo(() => {
-    const definition = projectTheme(resolveThemeSelection(registry, selection), capability);
+    const definition = projectTheme(selected, capability);
 
     return Object.freeze({
       definition,
@@ -657,7 +663,7 @@ export function TuiThemeProvider(props: {
       markdownSyntax: markdownSyntaxForTheme(definition),
       registry,
     });
-  }, [capability, registry, selection]);
+  }, [capability, registry, selected]);
 
   return createElement(ThemeContext.Provider, { value: active }, props.children);
 }
@@ -666,14 +672,16 @@ export function useTuiTheme(): ActiveTuiTheme {
   return useContext(ThemeContext);
 }
 
-function validateTheme(theme: TuiThemeDefinition, source: string): void {
-  if (!/^[a-z0-9][a-z0-9-]{0,63}$/u.test(theme.id)) throw new Error(`${source}.id must be a lower-case theme id.`);
+function validateTheme(theme: TuiThemeDefinition, source: string): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/u.test(theme.id)) return yield* Effect.die(new Error(`${source}.id must be a lower-case theme id.`));
 
-  if (theme.label.trim() === '') throw new Error(`${source}.label cannot be empty.`);
-  v.parse(TuiThemeColorsSchema, theme.colors);
-  const failures = themeContrastFailures(theme);
+    if (theme.label.trim() === '') return yield* Effect.die(new Error(`${source}.label cannot be empty.`));
+    v.parse(TuiThemeColorsSchema, theme.colors);
+    const failures = themeContrastFailures(theme);
 
-  if (failures.length > 0) throw new Error(`${source}: ${failures.join(' ')}`);
+    if (failures.length > 0) return yield* Effect.die(new Error(`${source}: ${failures.join(' ')}`));
+  });
 }
 
 

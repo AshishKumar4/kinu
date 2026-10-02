@@ -1,7 +1,7 @@
 /** Subordinates: roster, identity, admission and the one orchestration policy, platform-neutral. */
 
 import { Effect, Cause } from 'effect';
-import { settle } from '../obs/effect';
+import { settle, settleSync } from '../obs/effect';
 import * as v from 'valibot';
 import type { EventLog, PublishResult } from '../events/hub/log';
 import type { SubordinateReportHandoff, SubordinateReportStatus } from '../events/hub/types';
@@ -106,12 +106,12 @@ export function subordinateDescriptorSource(config: AgentConfigStore): Subordina
 }
 
 
-function requiredText(value: string, field: string): string {
+function requiredText(value: string, field: string): Effect.Effect<string> {
   const text = value.trim();
 
-  if (!text) throw new Error(`${field} must be non-empty`);
+  if (!text) return Effect.die(new Error(`${field} must be non-empty`));
 
-  return text;
+  return Effect.succeed(text);
 }
 
 function optionalText(value: string | undefined): string | undefined {
@@ -143,34 +143,36 @@ export function admitSubordinateTask(log: EventLog, input: {
   mode: WorkMode;
   now: number;
 }): PublishResult {
-  const fromWorkspace = requiredText(input.fromWorkspace, 'fromWorkspace');
-  const body = requiredText(input.body, 'body');
-  const deliverable = optionalText(input.deliverable);
-  const inheritedContext = input.inheritedContext;
+  return settleSync(Effect.gen(function* () {
+    const fromWorkspace = yield* requiredText(input.fromWorkspace, 'fromWorkspace');
+    const body = yield* requiredText(input.body, 'body');
+    const deliverable = optionalText(input.deliverable);
+    const inheritedContext = input.inheritedContext;
 
-  const payload = {
-    from_workspace: fromWorkspace,
-    kind: input.kind,
-    body,
-    kinu_mode: input.mode,
-  };
+    const payload = {
+      from_workspace: fromWorkspace,
+      kind: input.kind,
+      body,
+      kinu_mode: input.mode,
+    };
 
-  if (deliverable) Object.assign(payload, { deliverable });
+    if (deliverable) Object.assign(payload, { deliverable });
 
-  if (inheritedContext) Object.assign(payload, { inherited_context: inheritedContext });
+    if (inheritedContext) Object.assign(payload, { inherited_context: inheritedContext });
 
-  if (input.creationId !== undefined) Object.assign(payload, { creation_id: requiredText(input.creationId, 'creationId') });
+    if (input.creationId !== undefined) Object.assign(payload, { creation_id: yield* requiredText(input.creationId, 'creationId') });
 
-  if (input.messageId !== undefined) Object.assign(payload, { message_id: requiredText(input.messageId, 'messageId') });
+    if (input.messageId !== undefined) Object.assign(payload, { message_id: yield* requiredText(input.messageId, 'messageId') });
 
-  return log.publish({
-    descriptor: {
-      ingress: 'subordinate',
-      variant: 'subordinate_task',
-      payload,
-    },
-    now: input.now,
-  });
+    return log.publish({
+      descriptor: {
+        ingress: 'subordinate',
+        variant: 'subordinate_task',
+        payload,
+      },
+      now: input.now,
+    });
+  }));
 }
 
 /** Delegated work carries a trusted Plan/Build mode, so it gets its own turn rather than splicing into live work. A duplicate schedules no drain. */
@@ -192,7 +194,7 @@ export function describeSubordinateHandoff(input: {
 
 /** Producers normalize with this before spilling, so a cited spill file matches the brief. */
 export function normalizeReportContent(content: string): string {
-  return requiredText(content, 'content');
+  return settleSync(requiredText(content, 'content'));
 }
 
 /** Either source is admitted only while the parent has an open assignment for this subordinate. */
@@ -231,34 +233,36 @@ export function admitSubordinateReport(log: EventLog, input: {
   mode: WorkMode;
   now: number;
 }): PublishResult {
-  const fromSubordinate = requiredText(input.fromSubordinate, 'fromSubordinate');
-  const content = normalizeReportContent(input.content);
-  const task = optionalText(input.task);
+  return settleSync(Effect.gen(function* () {
+    const fromSubordinate = yield* requiredText(input.fromSubordinate, 'fromSubordinate');
+    const content = yield* requiredText(input.content, 'content');
+    const task = optionalText(input.task);
 
-  const payload = {
-    from_subordinate: fromSubordinate,
-    status: input.status,
-    content,
-    sequence_id: requiredText(input.sequenceId, 'sequenceId'),
-    kinu_mode: input.mode,
-  };
+    const payload = {
+      from_subordinate: fromSubordinate,
+      status: input.status,
+      content,
+      sequence_id: yield* requiredText(input.sequenceId, 'sequenceId'),
+      kinu_mode: input.mode,
+    };
 
-  if (task) Object.assign(payload, { task });
+    if (task) Object.assign(payload, { task });
 
-  if (input.spilled?.path !== undefined) Object.assign(payload, { content_path: input.spilled.path });
+    if (input.spilled?.path !== undefined) Object.assign(payload, { content_path: input.spilled.path });
 
-  if (input.spilled?.unsaved !== undefined) Object.assign(payload, { content_unsaved: input.spilled.unsaved });
+    if (input.spilled?.unsaved !== undefined) Object.assign(payload, { content_unsaved: input.spilled.unsaved });
 
-  if (input.handoff) Object.assign(payload, input.handoff);
+    if (input.handoff) Object.assign(payload, input.handoff);
 
-  return log.publish({
-    descriptor: {
-      ingress: 'subordinate',
-      variant: 'subordinate_report',
-      payload,
-    },
-    now: input.now,
-  });
+    return log.publish({
+      descriptor: {
+        ingress: 'subordinate',
+        variant: 'subordinate_report',
+        payload,
+      },
+      now: input.now,
+    });
+  }));
 }
 
 export interface SubordinateRuntime {
@@ -302,17 +306,16 @@ function rollback(before: SubordinateRosterEntry, roster: SubordinateRosterStore
 
 
 
-async function statusView(
+function statusView(
   runtime: SubordinateRuntime,
   roster: SubordinateRosterEntry,
-): Promise<SubordinateStatusView> {
-  if (roster.status === 'dismissed') return { roster, live: null };
+): Effect.Effect<SubordinateStatusView> {
+  if (roster.status === 'dismissed') return Effect.succeed({ roster, live: null });
 
-  try {
-    return { roster, live: await runtime.status(roster.name) };
-  } catch (error) {
-    return { roster, live: null, liveError: renderThrownChain({ cause: error }) };
-  }
+  return Effect.catchCause(
+    Effect.map(Effect.promise(async () => runtime.status(roster.name)), (live): SubordinateStatusView => ({ roster, live })),
+    (failed) => Effect.succeed<SubordinateStatusView>({ roster, live: null, liveError: renderThrownChain({ cause: Cause.squash(failed) }) }),
+  );
 }
 
 interface SubordinateStatusView {
@@ -357,7 +360,7 @@ export function createTeamToolDeps(deps: {
     });
   };
 
-  const provision = async (input: {
+  const provision = (input: {
     name?: string;
     displayName?: string;
     /** Absent only for an owner who said nothing. */
@@ -365,12 +368,12 @@ export function createTeamToolDeps(deps: {
     tier?: TierId;
     mission?: string;
     inheritedContext?: SerializedMessage[];
-  }, ownerCreated: boolean, mode: WorkMode | null): Promise<{
+  }, ownerCreated: boolean, mode: WorkMode | null): Effect.Effect<{
     name: string;
     displayName: string;
     createdAt: number;
     subordinate: SubordinateRosterEntry;
-  }> => {
+  }, KinuError> => Effect.gen(function* () {
     let selection: RoleId;
 
     if (input.role !== undefined) {
@@ -379,20 +382,20 @@ export function createTeamToolDeps(deps: {
       // `spawn` already refused an empty mission, so this default is only ever the owner's.
       selection = DEFAULT_SUBORDINATE_ROLE_ID;
     } else {
-      throw new Error('role must be non-empty');
+      return yield* Effect.die(new Error('role must be non-empty'));
     }
 
     const roleLabel = selection;
 
     const mission = ownerCreated
-      ? requiredText(optionalText(input.mission) ?? deps.ownMission(), 'mission')
-      : requiredText(input.mission ?? '', 'mission');
+      ? yield* requiredText(optionalText(input.mission) ?? deps.ownMission(), 'mission')
+      : yield* requiredText(input.mission ?? '', 'mission');
 
     const typedName = input.name?.trim();
     const name = typedName === undefined || typedName === '' ? deps.createName(roleLabel) : typedName;
     requireSubordinateActorName(name);
 
-    if (deps.roster.get(name)) throw new Error(`subordinate "${name}" already exists`);
+    if (deps.roster.get(name)) return yield* Effect.die(new Error(`subordinate "${name}" already exists`));
 
     // A typed title is the owner's and final; a role yields `auto`; nothing gives the slug's codename,
     // which the title policy may claim once.
@@ -417,7 +420,7 @@ export function createTeamToolDeps(deps: {
     let assignment: SubordinateBirth['assignment'] = null;
 
     if (!ownerCreated) {
-      if (mode === null) throw new KinuError('bad_input', 'A subordinate task requires a work mode.');
+      if (mode === null) return yield* new KinuError('bad_input', 'A subordinate task requires a work mode.');
       assignment = { body: mission, mode };
 
       const inheritedContext = subordinateBirthContext(input.inheritedContext);
@@ -431,7 +434,7 @@ export function createTeamToolDeps(deps: {
       status: ownerCreated ? 'idle' : 'working', currentTask: ownerCreated ? null : mission,
       createdAt, dismissedAt: null, lifetime: 'durable', taskEventId: null,
     });
-    await finishSubordinateBirth(deps.roster, deps.runtime, name);
+    yield* Effect.promise(() => finishSubordinateBirth(deps.roster, deps.runtime, name));
 
     return {
       name,
@@ -439,7 +442,7 @@ export function createTeamToolDeps(deps: {
       createdAt,
       subordinate: deps.roster.requireActive(name),
     };
-  };
+  });
 
   const team: TeamToolDeps = {
     inheritedContext: async () => deps.originContext
@@ -449,44 +452,44 @@ export function createTeamToolDeps(deps: {
     snapshot: () => deps.roster.list(),
     list: async () => deps.roster.list(),
 
-    create: async (input) => {
-      const { name, displayName, subordinate } = await provision(input, true, null);
+    create: (input) => settle(Effect.gen(function* () {
+      const { name, displayName, subordinate } = yield* provision(input, true, null);
       deps.rosterMoved();
 
       return { name, displayName, subordinate };
-    },
+    })),
 
     // The child's own actor_config is the only naming authority.
-    rename: async (input) => {
-      const displayName = requiredText(input.displayName, 'displayName');
-      await deps.runtime.rename(input.name, displayName, 'user');
+    rename: (input) => settle(Effect.gen(function* () {
+      const displayName = yield* requiredText(input.displayName, 'displayName');
+      yield* Effect.promise(() => deps.runtime.rename(input.name, displayName, 'user'));
       deps.rosterMoved();
 
       return {
-        ok: true, name: input.name, displayName,
+        ok: true as const, name: input.name, displayName,
         subordinate: deps.roster.requireActive(input.name),
       };
-    },
+    })),
 
-    recordTitle: async (input) => {
-      const displayName = requiredText(input.displayName, 'displayName');
+    recordTitle: (input) => settle(Effect.gen(function* () {
+      const displayName = yield* requiredText(input.displayName, 'displayName');
       deps.rosterMoved();
 
-      return { ok: true, name: input.name, displayName };
-    },
+      return { ok: true as const, name: input.name, displayName };
+    })),
 
-    spawn: async (input) => {
-      const mission = requiredText(input.mission, 'mission');
-      const { name, displayName, createdAt } = await provision(input, false, input.mode);
+    spawn: (input) => settle(Effect.gen(function* () {
+      const mission = yield* requiredText(input.mission, 'mission');
+      const { name, displayName, createdAt } = yield* provision(input, false, input.mode);
       deps.rosterMoved();
       deps.broadcastTask({ subordinate: name, content: mission, timestamp: createdAt });
 
       return { name, displayName };
-    },
+    })),
 
     assign: (input) => {
       return settle(Effect.gen(function* () {
-        const task = requiredText(input.task, 'task');
+        const task = yield* requiredText(input.task, 'task');
         const before = yield* requireDurable(deps.roster.requireActive(input.name));
         deps.roster.assign(input.name, task);
 
@@ -517,15 +520,15 @@ export function createTeamToolDeps(deps: {
 
     knows: async (name) => deps.roster.get(name) !== null,
 
-    status: async (input) => {
-      if (input.name) return statusView(deps.runtime, deps.roster.requireExisting(input.name));
+    status: (input) => {
+      if (input.name) return settle(statusView(deps.runtime, deps.roster.requireExisting(input.name)));
 
-      return Promise.all(deps.roster.list().map((entry) => statusView(deps.runtime, entry)));
+      return settle(Effect.forEach(deps.roster.list(), (entry) => statusView(deps.runtime, entry), { concurrency: 'unbounded' }));
     },
 
     message: (input) => {
       return settle(Effect.gen(function* () {
-        const content = requiredText(input.content, 'content');
+        const content = yield* requiredText(input.content, 'content');
         const before = yield* requireDurable(deps.roster.requireActive(input.name));
         deps.roster.resumeAfterMessage(input.name);
 

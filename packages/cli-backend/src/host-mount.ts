@@ -8,64 +8,54 @@ import * as fs from 'node:fs/promises';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import type { FileCheckpoints, FileReach, MountedVfs } from '@kinu.run/core';
 import { NIMBUS_WORKSPACE_ROOT, SLATES_ROOT, WORKSPACE_ROOT, workspacePath } from '@kinu.run/core';
-import { syscallError, toVfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
-import { tolerateAsync } from '@kinu.run/core/obs';
+import { isVfsError, syscallError, toVfsError, type VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
+import { Effect } from 'effect';
+import { settle, tolerateAsync } from '@kinu.run/core/obs';
 
-function throwVfsError(input: { error: unknown; syscall: string; path: string }): never {
-  throw toVfsError(input.error, input.syscall, input.path);
+function onHost<A>(syscall: string, path: string, run: () => Promise<A>): Effect.Effect<A, VfsError> {
+  return Effect.tryPromise({ try: run, catch: (error) => toVfsError(error, syscall, path) }).pipe(
+    Effect.catch((failure) => (isVfsError(failure) ? Effect.fail(failure) : Effect.die(failure))),
+  );
 }
 
-function createHostMountVFS(root: string, checkpoints: FileCheckpoints | undefined): VFS {
-  const snapshot = async (path: string, reason: string): Promise<void> => {
-    if (!checkpoints) return;
+interface HostFiles {
+  readFile(path: string): Effect.Effect<Uint8Array, VfsError>;
+  writeFile(path: string, data: string | Uint8Array): Effect.Effect<void, VfsError>;
+  readdir(path: string): Effect.Effect<Awaited<ReturnType<VFS['readdir']>>, VfsError>;
+  stat(path: string, options?: { readonly follow?: boolean }): Effect.Effect<Awaited<ReturnType<VFS['stat']>>, VfsError>;
+  unlink(path: string): Effect.Effect<void, VfsError>;
+  mkdir(path: string, opts?: { readonly recursive?: boolean }): Effect.Effect<void, VfsError>;
+}
+
+function createHostFiles(root: string, checkpoints: FileCheckpoints | undefined): HostFiles {
+  const snapshot = (path: string, reason: string): Effect.Effect<void> => {
+    if (!checkpoints) return Effect.void;
     const workdir = checkpoints.workdirForPath(path);
-    await checkpoints.ensureCheckpoint(withinRoot(root, workdir) ? workdir : root, reason);
+
+    return Effect.promise(() => checkpoints.ensureCheckpoint(withinRoot(root, workdir) ? workdir : root, reason));
   };
 
   return {
-    async readFile(path) {
-      try {
-        return new Uint8Array(await fs.readFile(path));
-      } catch (error) { throwVfsError({ error, syscall: 'open', path }); }
-    },
-    async writeFile(path, data) {
-      await snapshot(path, 'file write');
+    readFile: (path) => onHost('open', path, async () => new Uint8Array(await fs.readFile(path))),
+    writeFile: (path, data) => Effect.andThen(snapshot(path, 'file write'), onHost('open', path, async () => {
+      await fs.mkdir(dirname(path), { recursive: true });
+      await fs.writeFile(path, data);
+    })),
+    readdir: (path) => onHost('scandir', path, async () => (await fs.readdir(path, { withFileTypes: true })).map((entry) => {
+      if (entry.isSymbolicLink()) return { name: entry.name, type: 'symlink' as const };
 
-      try {
-        await fs.mkdir(dirname(path), { recursive: true });
-        await fs.writeFile(path, data);
-      } catch (error) { throwVfsError({ error, syscall: 'open', path }); }
-    },
-    async readdir(path) {
-      try {
-        return (await fs.readdir(path, { withFileTypes: true })).map((entry) => {
-          if (entry.isSymbolicLink()) return { name: entry.name, type: 'symlink' as const };
+      return { name: entry.name, type: entry.isDirectory() ? 'directory' as const : 'file' as const };
+    })),
+    stat: (path, options) => onHost(options?.follow === false ? 'lstat' : 'stat', path, async () => {
+      const stat = await tolerateAsync(() => options?.follow === false ? fs.lstat(path) : fs.stat(path), 'enoent');
 
-          return { name: entry.name, type: entry.isDirectory() ? 'directory' as const : 'file' as const };
-        });
-      }
-      catch (error) { throwVfsError({ error, syscall: 'scandir', path }); }
-    },
-    async stat(path, options) {
-      try {
-        const stat = await tolerateAsync(() => options?.follow === false ? fs.lstat(path) : fs.stat(path), 'enoent');
+      if (stat === undefined) return null;
+      const type = stat.isSymbolicLink() ? 'symlink' as const : 'file' as const;
 
-        if (stat === undefined) return null;
-        const type = stat.isSymbolicLink() ? 'symlink' as const : 'file' as const;
-
-        return { size: stat.size, mtimeMs: stat.mtimeMs, type: stat.isDirectory() ? 'directory' : type };
-      } catch (error) { throwVfsError({ error, syscall: options?.follow === false ? 'lstat' : 'stat', path }); }
-    },
-    async unlink(path) {
-      await snapshot(path, 'file delete');
-
-      try { await fs.rm(path, { recursive: true, force: true }); }
-      catch (error) { throwVfsError({ error, syscall: 'rm', path }); }
-    },
-    async mkdir(path, opts) {
-      try { await fs.mkdir(path, { recursive: opts?.recursive ?? false }); }
-      catch (error) { throwVfsError({ error, syscall: 'mkdir', path }); }
-    },
+      return { size: stat.size, mtimeMs: stat.mtimeMs, type: stat.isDirectory() ? 'directory' : type };
+    }),
+    unlink: (path) => Effect.andThen(snapshot(path, 'file delete'), onHost('rm', path, () => fs.rm(path, { recursive: true, force: true }))),
+    mkdir: (path, opts) => onHost('mkdir', path, async () => { await fs.mkdir(path, { recursive: opts?.recursive ?? false }); }),
   };
 }
 
@@ -105,32 +95,28 @@ export function directoryFileReach(cwd: string | null, table: MountedVfs | null)
 /** The working directory as the file plane ({@link cwdPlaneLocator}). */
 export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | undefined): VFS {
   const root = resolve(cwd);
-  const host = createHostMountVFS(root, checkpoints);
+  const host = createHostFiles(root, checkpoints);
   const locate = cwdPlaneLocator(root);
   const hostPath = (path: string): string => locate(path).hostPath;
 
-  const remove = (path: string) => {
+  const remove = (path: string): Effect.Effect<void, VfsError> => {
     const target = hostPath(path);
 
     if (target === root) {
-      throwVfsError({
-        error: syscallError('EACCES', 'unlink', path, { detail: 'the workspace directory itself cannot be removed' }),
-        syscall: 'unlink',
-        path,
-      });
+      return Effect.fail(syscallError('EACCES', 'unlink', path, { detail: 'the workspace directory itself cannot be removed' }));
     }
 
     return host.unlink(target);
   };
 
   return {
-    readFile: (path) => host.readFile(hostPath(path)),
-    writeFile: (path, data) => host.writeFile(hostPath(path), data),
-    readdir: (path) => host.readdir(hostPath(path)),
-    stat: (path, options) => host.stat(hostPath(path), options),
-    unlink: remove,
-    removeRecursive: remove,
-    mkdir: (path, opts) => host.mkdir(hostPath(path), opts),
+    readFile: (path) => settle(host.readFile(hostPath(path))),
+    writeFile: (path, data) => settle(host.writeFile(hostPath(path), data)),
+    readdir: (path) => settle(host.readdir(hostPath(path))),
+    stat: (path, options) => settle(host.stat(hostPath(path), options)),
+    unlink: (path) => settle(remove(path)),
+    removeRecursive: (path) => settle(remove(path)),
+    mkdir: (path, opts) => settle(host.mkdir(hostPath(path), opts)),
   };
 }
 

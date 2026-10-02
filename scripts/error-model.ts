@@ -566,7 +566,7 @@ function neverAwaited(fn: SyntaxNode | undefined): boolean {
 /**
  * Who calls a function a component hands out: `react` for an intrinsic element's attribute or startTransition's or an
  * effect's argument, which React calls and never awaits; `component` for another component's attribute or
- * useCallback's argument, which the receiving code calls and may await; null for anything else.
+ * useCallback's or useMemo's argument, which the receiving code calls and may await or read; null for anything else.
  */
 function reactCaller(fn: SyntaxNode | undefined): 'react' | 'component' | null {
   if (fn === undefined || !isFunctionLike(fn)) return null;
@@ -586,7 +586,7 @@ function reactCaller(fn: SyntaxNode | undefined): 'react' | 'component' | null {
 
   if (REACT_CALLED.includes(hook)) return 'react';
 
-  return hook === 'useCallback' ? 'component' : null;
+  return hook === 'useCallback' || hook === 'useMemo' ? 'component' : null;
 }
 
 /** The function a runner is the expression body of, or a return or statement directly in the block of. */

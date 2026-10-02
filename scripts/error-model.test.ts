@@ -300,11 +300,11 @@ export class Host {
   });
 });
 
-test('React calls an intrinsic element\'s handler, startTransition\'s and an effect\'s: only detach runs there', () => {
+test('React calls an intrinsic element\'s handler, startTransition\'s and an effect\'s: only detach runs there; useMemo\'s is the component\'s own', () => {
   const TSX = 'packages/fixture/src/panel.tsx';
 
   const source = `
-import { detach, settle } from '../obs/index';
+import { detach, settle, settleSync } from '../obs/index';
 function Panel() {
   const save = useCallback(() => detach(write()), []);
   const open = useCallback(() => { return detach(write()); }, []);
@@ -316,6 +316,7 @@ function Panel() {
   useEffect(() => detach(load()), []);
   useEffect(() => { void settle(load()); }, []);
   const read = useCallback(() => settle(load()), []);
+  const theme = useMemo(() => settleSync(pick()), [registry]);
   const later = () => detach(load());
   const pending = settle(load());
   const dialog = <Dialog onConfirm={() => settle(save())} onClose={() => detach(close())} />;
@@ -325,7 +326,7 @@ function Panel() {
 `;
 
   const plain = `
-import { detach, settle } from '../obs/index';
+import { detach, settle, settleSync } from '../obs/index';
 function helper() {
   useCallback(() => settle(write()), []);
   useCallback(() => detach(write()), []);
@@ -348,7 +349,10 @@ function helper() {
     flights: [],
     routes: [],
     held: [],
-    react: [`${FILE}:11`, `${FILE}:7`, `${FILE}:8`, `${FILE}:9`, `${TSX}:11`, `${TSX}:13`, `${TSX}:16`, `${TSX}:16`, `${TSX}:18`, `${TSX}:18`, `${TSX}:4`, `${TSX}:5`, `${TSX}:8`],
+    react: [
+      `${FILE}:11`, `${FILE}:7`, `${FILE}:8`, `${FILE}:9`, `${TSX}:11`, `${TSX}:13`, `${TSX}:14`, `${TSX}:17`, `${TSX}:17`, `${TSX}:19`, `${TSX}:19`,
+      `${TSX}:4`, `${TSX}:5`, `${TSX}:8`,
+    ],
     findings: [
       `${FILE}:10: ${floats}`,
       `${FILE}:12: ${only}`,
@@ -356,10 +360,10 @@ function helper() {
       `${FILE}:5: ${only}`,
       `${FILE}:6: ${floats}`,
       `${TSX}:12: ${midBody}`,
-      `${TSX}:14: ${only}`,
-      `${TSX}:15: ${midBody}`,
-      `${TSX}:17: ${floats}`,
+      `${TSX}:15: ${only}`,
+      `${TSX}:16: ${midBody}`,
       `${TSX}:18: ${floats}`,
+      `${TSX}:19: ${floats}`,
     ],
   });
 });
