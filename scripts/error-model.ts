@@ -27,7 +27,8 @@ import { FAILURE_SURFACES, failureSurface } from '../tools/oxlint/anti-slop/rule
 import { assertMeasured, finding, refuseLock, shrinkOnly, type LockRefusal, type LockedNumber } from './gate-ratchet';
 import { readSources } from './sources';
 import {
-  declaredName, functionOwner, isFunctionLike, literalString, memberCalleeName, parse, superClassName, walk, type SyntaxNode,
+  declaredName, functionOwner, identifierCalleeName, isFunctionLike, literalString, memberCalleeName, parse, superClassName, walk,
+  type SyntaxNode,
 } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
@@ -130,6 +131,16 @@ export const HOST_BOUNDARIES = new Map<string, string>([
 
 const RUNNERS: readonly string[] = ['settle', 'settleSync', 'observe'];
 
+/**
+ * The one sanctioned mid-body runner: a surface adapter's `flight(run, { key, keep })` runs `run` once per
+ * key and replays its exit to every joiner. Built once and held, its runs are shared; called where it is
+ * built, or keyed by a fresh value, it is a runner in disguise.
+ */
+const FLIGHT = 'flight';
+
+/** Calls that mint a value no other call shares. */
+const FRESH_KEYS: readonly string[] = ['nanoid', 'randomUUID', 'random', 'now'];
+
 /** The selected library's runner, imported through its boundary or public barrel. */
 function isFailureModule(file: string, specifier: string): boolean {
   const surface = failureSurface(file);
@@ -148,12 +159,15 @@ function isFailureModule(file: string, specifier: string): boolean {
  */
 export interface BridgeCensus {
   readonly bridges: string[];
+  /** Each `flight` built and held: the sanctioned mid-body runner. */
+  readonly flights: string[];
   /** A runner returned from a private helper or a local function: not a bridge, a mistake. */
   readonly findings: string[];
 }
 
 export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus {
   const bridges: string[] = [];
+  const flights: string[] = [];
   const findings: string[] = [];
 
   for (const [file, text] of sources) {
@@ -161,6 +175,7 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
     const parsed = parse(file, text);
     const runners = new Set<string>();
     const syncRunners = new Set<string>();
+    const flightNames = new Set<string>();
 
     walk(parsed.root, (node) => {
       const { raw } = node;
@@ -168,6 +183,10 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
       if (raw.type !== 'ImportDeclaration' || !isFailureModule(file, raw.source.value)) return;
 
       for (const specifier of raw.specifiers) {
+        if (specifier.type === 'ImportSpecifier' && specifier.imported.type === 'Identifier' && specifier.imported.name === FLIGHT) {
+          flightNames.add(specifier.local.name);
+        }
+
         if (specifier.type === 'ImportSpecifier' && specifier.imported.type === 'Identifier' && RUNNERS.includes(specifier.imported.name)) {
           runners.add(specifier.local.name);
 
@@ -176,13 +195,24 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
       }
     });
 
-    if (runners.size === 0) continue;
+    if (runners.size === 0 && flightNames.size === 0) continue;
 
     walk(parsed.root, (node) => {
       const { raw } = node;
 
-      if (raw.type !== 'CallExpression' || raw.callee.type !== 'Identifier' || !runners.has(raw.callee.name)) return;
+      if (raw.type !== 'CallExpression' || raw.callee.type !== 'Identifier') return;
       const site = `${file}:${String(parsed.lineAt(node.start))}`;
+
+      if (flightNames.has(raw.callee.name)) {
+        const disguised = disguisedRunner(node, parsed.root);
+
+        if (disguised === undefined) flights.push(site);
+        else findings.push(`${site}: ${disguised}`);
+
+        return;
+      }
+
+      if (!runners.has(raw.callee.name)) return;
       // `return settle(…)`, `return await settle(…)`, or an arrow whose whole body is the call: the edge, spelled short.
       const awaited = node.parent?.raw.type === 'AwaitExpression' ? node.parent : node;
       const holder = awaited.parent;
@@ -207,7 +237,45 @@ export function bridgeSites(sources: ReadonlyMap<string, string>): BridgeCensus 
     });
   }
 
-  return { bridges: bridges.sort(), findings: findings.sort() };
+  return { bridges: bridges.sort(), flights: flights.sort(), findings: findings.sort() };
+}
+
+const enclosingFunction = (node: SyntaxNode): SyntaxNode | undefined => {
+  let up = node.parent;
+
+  while (up !== undefined && !isFunctionLike(up)) up = up.parent;
+
+  return up;
+};
+
+/** Why a `flight(…)` call shares no run, or undefined when it is built once and held. */
+function disguisedRunner(built: SyntaxNode, tree: SyntaxNode): string | undefined {
+  const calledWhereBuilt = 'a flight called where it is built runs once per call; build it once and hold it';
+  const holder = built.parent;
+
+  if (holder?.raw.type === 'CallExpression' && holder.raw.callee === built.raw) return calledWhereBuilt;
+  const options = built.children.find((child) => child.raw.type === 'ObjectExpression');
+  const key = options?.children.find((property) => property.raw.type === 'Property' && property.raw.key.type === 'Identifier' && property.raw.key.name === 'key');
+  let fresh = false;
+
+  if (key !== undefined) {
+    walk(key, (node) => {
+      if (node.raw.type === 'UpdateExpression' || FRESH_KEYS.includes(identifierCalleeName(node) ?? memberCalleeName(node) ?? '')) fresh = true;
+    });
+  }
+
+  if (fresh) return 'a flight keyed by a fresh value never joins a run; key it by what its callers share';
+  const scope = enclosingFunction(built);
+
+  if (holder?.raw.type !== 'VariableDeclarator' || holder.raw.id.type !== 'Identifier' || scope === undefined) return undefined;
+  const name = holder.raw.id.name;
+  let calledInScope = false;
+
+  walk(tree, (node) => {
+    if (identifierCalleeName(node) === name && enclosingFunction(node) === scope) calledInScope = true;
+  });
+
+  return calledInScope ? calledWhereBuilt : undefined;
 }
 
 /**
@@ -507,7 +575,7 @@ if (import.meta.main) {
       console.error(finding({
         at: site,
         invariant: 'an effect is run only at an exported function or public member, the bridge its callers see',
-        found: 'a runner returned from a private helper or a local function',
+        found: site.includes(': a flight') ? 'a flight that shares no run' : 'a runner returned from a private helper or a local function',
         silently: 'the helper reads as migrated while its callers still get a thrown failure, and the bridge count '
           + 'names a site no caller wave will remove',
         fix: 'return the Effect from the helper and run it once at the exported edge',
@@ -534,11 +602,14 @@ if (import.meta.main) {
     console.log(`  declared: ${file} (${mechanisms.join(', ')}${within === undefined ? '' : ` within ${within.join(', ')}`}): ${reason}`);
   }
 
-  const { bridges, findings } = bridgeSites(sources);
+  const { bridges, flights, findings } = bridgeSites(sources);
 
   console.log(`  bridges: ${String(bridges.length)} (the migration ends at zero)`);
 
   for (const site of bridges) console.log(`    ${site}`);
+  console.log(`  flights: ${String(flights.length)} (\`flight\`, the sanctioned mid-body runner)`);
+
+  for (const site of flights) console.log(`    ${site}`);
 
   for (const wrong of findings) console.log(`  finding: ${wrong}`);
 

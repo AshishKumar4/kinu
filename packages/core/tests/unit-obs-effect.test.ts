@@ -7,8 +7,8 @@
 
 import { describe, expect, test } from 'bun:test';
 import { inspect } from 'node:util';
-import { Effect } from 'effect';
-import { attempt, KinuError, settle, settleSync } from '../src/obs/index';
+import { Cause, Effect, Exit } from 'effect';
+import { attempt, flight, KinuError, settle, settleSync } from '../src/obs/index';
 import { isVfsError, VfsError } from '@nimbus-sh/core/vfs/vfs-error.js';
 
 describe('settle', () => {
@@ -120,6 +120,62 @@ describe('settleSync', () => {
     await observed;
     await Promise.resolve();
     expect(written).toBe(false);
+  });
+});
+
+describe('flight', () => {
+  const gate = () => {
+    let open = (): void => {};
+
+    const opened = new Promise<void>((resolve) => { open = resolve; });
+
+    return { open: () => { open(); }, opened };
+  };
+
+  test('callers join one run and each fails with its own KinuError; the failure frees the key', async () => {
+    const refusal = new KinuError('denied', 'the hub refused');
+    const held = gate();
+    let runs = 0;
+
+    const refresh = flight(() => Effect.andThen(Effect.promise(() => held.opened), Effect.suspend(() => {
+      runs += 1;
+
+      return Effect.fail(refusal);
+    })));
+
+    const caught = (effect: Effect.Effect<number, KinuError | VfsError>) => settle(Effect.catch(effect, (failure) => Effect.succeed(failure)));
+    const joiners = [caught(refresh()), caught(refresh())];
+
+    held.open();
+
+    expect(await Promise.all(joiners)).toEqual([refusal, refusal]);
+    expect((await Promise.all(joiners))[1]).toBe(refusal);
+    expect(runs).toBe(1);
+    expect(await caught(refresh())).toBe(refusal);
+    expect(runs).toBe(2);
+  });
+
+  test('a settled run frees its key, `keep` holds a success, and each key runs apart', async () => {
+    let runs = 0;
+    const count = (key: string) => Effect.sync(() => `${key}${String(++runs)}`);
+    const fresh = flight(count, { key: (key) => key });
+    const kept = flight(count, { key: (key) => key, keep: 'success' });
+
+    expect([await settle(fresh('a')), await settle(fresh('a')), await settle(fresh('b'))]).toEqual(['a1', 'a2', 'b3']);
+    expect([await settle(kept('a')), await settle(kept('a')), await settle(kept('b'))]).toEqual(['a4', 'a4', 'b5']);
+  });
+
+  test('a joined VfsError fails as itself, and a defect stays one', async () => {
+    const missing = new VfsError('ENOENT', 'no such file', '/a');
+    const read = flight(() => Effect.fail(missing));
+    const boom = new Error('boom');
+    const broken = flight(() => Effect.die(boom));
+
+    expect(await settle(Effect.catch(read(), (failure) => Effect.succeed(isVfsError(failure) ? failure : null)))).toBe(missing);
+    const exit = await settle(Effect.exit(broken()));
+
+    expect(Exit.isFailure(exit) && Cause.hasDies(exit.cause) && !Cause.hasFails(exit.cause)).toBe(true);
+    expect(settle(broken())).rejects.toBe(boom);
   });
 });
 

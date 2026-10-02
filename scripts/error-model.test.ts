@@ -136,6 +136,7 @@ function ordinary(): number { const n = settleSync(writeEffect()); return n; }
 
   expect(bridgeSites(new Map([[FILE, source]]))).toEqual({
     bridges: [`${FILE}:5`, `${FILE}:6`],
+    flights: [],
     findings: [
       `${FILE}:10: a runner returned outside an exported function or public member`,
       `${FILE}:11: a runner called mid-body; the effect is run once, at the edge, as its return`,
@@ -174,12 +175,44 @@ export function done(): number { return settle(1); }
 
   expect(bridgeSites(new Map([[FILE, bridged], ['packages/fixture/src/b.ts', local]]))).toEqual({
     bridges: [`${FILE}:11`, `${FILE}:13`, `${FILE}:13`, `${FILE}:14`, `${FILE}:3`, `${FILE}:4`, `${FILE}:5`, `${FILE}:7`],
+    flights: [],
     findings: [
       `${FILE}:10: a runner returned outside an exported function or public member`,
       `${FILE}:12: a runner returned outside an exported function or public member`,
       `${FILE}:15: a runner returned outside an exported function or public member`,
       `${FILE}:16: a runner called mid-body; the effect is run once, at the edge, as its return`,
       `${FILE}:8: a runner returned outside an exported function or public member`,
+    ],
+  });
+});
+
+test('a flight built once and held is the one mid-body runner; a flight that shares no run is a finding', () => {
+  const source = `
+import { flight, settle } from '../obs/index';
+const boot = flight(bootEffect, { keep: 'success' });
+export class Box {
+  #start = flight(() => startEffect(this));
+  read() { return settle(Effect.andThen(this.#start(), boot())); }
+}
+export function host() { const opened = flight(openEffect, { key: (r: Ref) => r.id }); return { open: (r: Ref) => settle(opened(r)) }; }
+export function once() { const run = flight(onceEffect); return settle(run()); }
+export function inline() { return settle(flight(inlineEffect)()); }
+export const minted = flight(mintEffect, { key: () => nanoid() });
+export const dated = flight(dateEffect, { key: () => Date.now() });
+export const counted = flight(countEffect, { key: () => next++ });
+export async function mid() { const n = await settle(countEffect()); return n; }
+`;
+
+  expect(bridgeSites(new Map([[FILE, source]]))).toEqual({
+    bridges: [`${FILE}:10`, `${FILE}:6`, `${FILE}:8`, `${FILE}:9`],
+    flights: [`${FILE}:3`, `${FILE}:5`, `${FILE}:8`],
+    findings: [
+      `${FILE}:10: a flight called where it is built runs once per call; build it once and hold it`,
+      `${FILE}:11: a flight keyed by a fresh value never joins a run; key it by what its callers share`,
+      `${FILE}:12: a flight keyed by a fresh value never joins a run; key it by what its callers share`,
+      `${FILE}:13: a flight keyed by a fresh value never joins a run; key it by what its callers share`,
+      `${FILE}:14: a runner called mid-body; the effect is run once, at the edge, as its return`,
+      `${FILE}:9: a flight called where it is built runs once per call; build it once and hold it`,
     ],
   });
 });

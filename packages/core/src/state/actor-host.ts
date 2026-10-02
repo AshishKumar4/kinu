@@ -26,7 +26,7 @@ import { verifyClaimedProgram } from '../orchestrator/actor-claims';
 import { recordRecoverySettled, sameBuildOf } from '../orchestrator/turn-recovery-events';
 import { readVersionedScaffoldSource } from '../scaffold/shadow';
 import { sha256Hex } from '../safety/argument-digest';
-import { attempt, dedupedBy, diagnostics, settle, settleSync, toKinuError, type AgentTracing } from '../obs/index';
+import { attempt, diagnostics, flight, settle, settleSync, toKinuError, type AgentTracing } from '../obs/index';
 
 /** The runtime must be built over this same handle, never a second binding. */
 export interface BoundActor {
@@ -259,18 +259,18 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     return { actor: { ...bound, runtime, session: built }, fence };
   });
 
-  const opened = dedupedBy((reference: ActorReference) => reference.actorId, (reference) => Effect.map(build(reference), ({ actor, fence }) => {
+  const opened = flight((reference: ActorReference) => Effect.map(build(reference), ({ actor, fence }) => {
     slots.set(reference.actorId, { actor, fence, queue: Promise.resolve() });
 
     return actor;
-  }));
+  }), { key: (reference) => reference.actorId });
 
   const acquired = (reference: ActorReference): Effect.Effect<HostedActor, KinuError> => Effect.gen(function* () {
     const live = yield* slotFor(reference);
 
     if (live && !live.fence.released) return live.actor;
 
-    return yield* Effect.promise(() => opened(reference));
+    return yield* opened(reference);
   });
 
   const drop = (slot: HostSlot): void => {

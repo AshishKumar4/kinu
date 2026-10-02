@@ -582,6 +582,7 @@ A defect is anything else thrown or died; the runner is `obs/effect.ts`.
 | `attempt({ doing, otherwise }, run)` | A Promise-returning call as an effect. A rejection becomes `toKinuError`, so it keeps its cause and its class. |
 | `settle(effect, { signal, interrupted })` | The only runner. It resolves the value, or rejects with the `KinuError`, the `VfsError` or the defect unchanged. An abort interrupts the run and rejects with `cancelled`. |
 | `Effect.result(effect)` | A first-party result for local recovery paths; not an RPC envelope. |
+| `flight(run, { key, keep })` | One run per key, built once and held: every caller joins it and gets its exit, failure included. The one runner called mid-body; `gate:error-model` lists each and refuses one called where it is built or keyed by a fresh value. |
 
 `settle` runs on a microtask scheduler. Effect's default scheduler yields to a
 macrotask every 2,048 steps and on every fork. Measured 2026-09-23 under workerd

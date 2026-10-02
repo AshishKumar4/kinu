@@ -9,7 +9,7 @@ import { type DeviceCheckpointHint } from '../checkpoints/types';
 import { sameDeviceStatus, type DeviceStatus } from './device-status';
 import { type DeviceTransport } from './device-tunnel-executor';
 import { Effect } from 'effect';
-import { KinuError, deduped, diagnostics, renderThrownChain, settle, toKinuError, type LogEventName } from "../obs/index";
+import { KinuError, diagnostics, flight, renderThrownChain, settle, toKinuError, type LogEventName } from "../obs/index";
 import * as v from 'valibot';
 import { type UserCaller } from '../safety/workspace-capability';
 
@@ -68,7 +68,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
   };
 
   /** Authoritative hub check, one at a time. A failure keeps the last snapshot. */
-  const refreshStatus = deduped(() => Effect.suspend(() => {
+  const refreshStatus = flight(() => Effect.suspend(() => {
     const hub = opts.hub();
 
     if (!hub) {
@@ -93,7 +93,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
   return {
     /** Never asks the hub: a read of the executors must not cost a cross-object call. */
     status: (): DeviceStatus => snapshot,
-    refreshStatus,
+    refreshStatus: () => settle(refreshStatus()),
     rpc: (method, params, rpcOpts) => settle(Effect.suspend(() => {
       const hub = opts.hub();
 

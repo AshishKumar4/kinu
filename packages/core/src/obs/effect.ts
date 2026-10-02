@@ -79,56 +79,36 @@ export function tolerateAsync<T>(operation: () => Promise<T>, expected: Expected
   return settle(tolerated(Effect.promise(operation), expected));
 }
 
-/** One run per key until it settles; a failure frees the key. */
-export function sharedBy<I, A>(keyOf: (input: I) => string | number | null, run: (input: I) => Effect.Effect<A, KinuError | VfsError>): (input: I) => Promise<A> {
-  const pending = new Map<string | number | null, Promise<A>>();
-
-  return (input) => {
-    const key = keyOf(input);
-    const held = pending.get(key);
-
-    if (held !== undefined) return held;
-    let started: Promise<A> | undefined;
-    let holding = true;
-
-    started = settle(Effect.onError(run(input), () => Effect.sync(() => {
-      if (started === undefined) holding = false;
-      else if (pending.get(key) === started) pending.delete(key);
-    })));
-
-    if (holding) pending.set(key, started);
-
-    return started;
-  };
+interface FlightOptions<I> {
+  readonly key?: (input: I) => string | number | null;
+  readonly keep?: 'success';
 }
 
-export function shared<A>(run: () => Effect.Effect<A, KinuError | VfsError>): () => Promise<A> {
-  return sharedBy<void, A>(() => null, run);
-}
+/** One run per key, joined by every caller with its own exit; settling frees the key unless `keep` holds a success. */
+export function flight<A, E extends KinuError | VfsError>(run: () => Effect.Effect<A, E>, options?: FlightOptions<void>): () => Effect.Effect<A, E>;
+export function flight<I, A, E extends KinuError | VfsError>(run: (input: I) => Effect.Effect<A, E>, options?: FlightOptions<I>): (input: I) => Effect.Effect<A, E>;
+export function flight<I, A, E extends KinuError | VfsError>(run: (input: I) => Effect.Effect<A, E>, options?: FlightOptions<I>): (input: I) => Effect.Effect<A, E> {
+  const held = new Map<string | number | null, Promise<Exit.Exit<A, E>>>();
 
-/** One run per key at a time; the key frees when the run settles. */
-export function dedupedBy<I, A>(keyOf: (input: I) => string | number | null, run: (input: I) => Effect.Effect<A, KinuError | VfsError>): (input: I) => Promise<A> {
-  const running = new Map<string | number | null, Promise<A>>();
+  return (input) => Effect.suspend(() => {
+    const key = options?.key?.(input) ?? null;
+    let exit = held.get(key);
 
-  return (input) => {
-    const key = keyOf(input);
-    const held = running.get(key);
+    if (exit === undefined) {
+      let live = true;
 
-    if (held !== undefined) return held;
-    let started: Promise<A> | undefined;
-    let live = true;
+      const free = Effect.sync(() => {
+        if (exit === undefined) live = false;
+        else if (held.get(key) === exit) held.delete(key);
+      });
 
-    started = settle(Effect.ensuring(run(input), Effect.sync(() => {
-      if (started === undefined) live = false;
-      else if (running.get(key) === started) running.delete(key);
-    })));
+      exit = settle(Effect.exit(options?.keep === 'success' ? Effect.onError(run(input), () => free) : Effect.ensuring(run(input), free)));
 
-    if (live) running.set(key, started);
+      if (live) held.set(key, exit);
+    }
 
-    return started;
-  };
-}
+    const settled = exit;
 
-export function deduped<A>(run: () => Effect.Effect<A, KinuError | VfsError>): () => Promise<A> {
-  return dedupedBy<void, A>(() => null, run);
+    return Effect.flatten(Effect.promise(() => settled));
+  });
 }

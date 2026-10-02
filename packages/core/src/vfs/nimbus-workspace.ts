@@ -30,7 +30,7 @@ import { WORKSPACE_ROOT, workspacePath } from './workspace-path';
 import { FORK_PIN_PREFIX } from '../identity/fork';
 import { ARCHIVE_PIN_PREFIX } from '../identity/archive';
 import { Cause, Effect } from 'effect';
-import { diagnostics, KinuError, shared, sharedBy, tolerate, toKinuError } from '../obs/index';
+import { diagnostics, flight, KinuError, settle, tolerate, toKinuError } from '../obs/index';
 import { atVfsPath } from './errno';
 import type { MountedVfs } from './mounts';
 import { shellMounts, type ShellMounts, type ShellMountTable } from './shell-mounts';
@@ -287,14 +287,43 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     diagnostics.failure('workspace.boot_failed', toKinuError({ doing: 'boot the Nimbus workspace', cause: Cause.squash(cause), otherwise: 'unavailable' }));
   })));
 
-  const open = shared(boot);
+  const open = flight(boot, { keep: 'success' });
 
   // One supervisor for this filesystem so no two shells share a pid; `open` sets its pid base.
   const processes = new SessionProcessSupervisor();
 
+  const agentPlanes = flight((agent: WorkspaceAgent) => Effect.gen(function* () {
+    const origin = yield* open();
+    const process = processes.spawn('agent', [agent.home], agent.home, { cred: agent.cred });
+
+    // Second shell over the same `SqliteVFS`, never a second filesystem (stale cache).
+    // `runAs` is the origin's so `sudo`/`su` keep working.
+    const asAgent = yield* Effect.promise(() => shellOver({
+      sql: opts.sql,
+      transactions: opts.transactions,
+      vfs: origin.vfs,
+      cwd: agent.home,
+      env: { HOME: agent.home, TMPDIR: agent.tmp },
+      identity: {
+        pid: process.pid,
+        cred: processes.cred(process.pid),
+        setUmask: (mask: number) => { processes.setUmask(process.pid, mask); },
+        runAs: origin.shell.getRunAsHost(),
+      },
+      fabric: opts.fabric,
+      // The origin's namespace, so this shell serves the same mount points.
+      filesystem: origin.filesystem,
+    }));
+
+    return {
+      vfs: agentVfs(origin.vfs.as(agent.cred)),
+      shell: workspaceShell(() => Promise.resolve(asAgent)),
+    };
+  }), { key: (agent) => agent.cred.uid, keep: 'success' });
+
   return {
-    vfs: workspaceVfs(open),
-    shell: workspaceShell(open),
+    vfs: workspaceVfs(() => settle(open())),
+    shell: workspaceShell(() => settle(open())),
     onFilesChanged(listener) {
       fileListeners.add(listener);
 
@@ -307,15 +336,11 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
 
       return () => { if (mountTables.get(uid) === plane) mountTables.delete(uid); };
     },
-    async privileged() {
-      const workspace = await open();
-
-      return { root: workspace.vfs.as(CRED_KERNEL), confiner: workspace.vfs };
+    privileged() {
+      return settle(Effect.map(open(), (workspace) => ({ root: workspace.vfs.as(CRED_KERNEL), confiner: workspace.vfs })));
     },
-    async session() {
-      const workspace = await open();
-
-      return {
+    session() {
+      return settle(Effect.map(open(), (workspace) => ({
         workspace,
         shell: workspace.shell,
         vfs: workspace.vfs,
@@ -325,37 +350,10 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
         sql: opts.sql,
         // Bound to the origin workspace, where the dispatch table was built.
         supervisorOp: (envelope: SupervisorOpEnvelope) => workspace.supervisorOp(envelope),
-      };
+      })));
     },
-    async destroy() { (await open()).destroy(); },
-    asAgent: sharedBy((agent) => agent.cred.uid, (agent) => Effect.gen(function* () {
-      const origin = yield* Effect.promise(() => open());
-      const process = processes.spawn('agent', [agent.home], agent.home, { cred: agent.cred });
-
-      // Second shell over the same `SqliteVFS`, never a second filesystem (stale cache).
-      // `runAs` is the origin's so `sudo`/`su` keep working.
-      const asAgent = yield* Effect.promise(() => shellOver({
-        sql: opts.sql,
-        transactions: opts.transactions,
-        vfs: origin.vfs,
-        cwd: agent.home,
-        env: { HOME: agent.home, TMPDIR: agent.tmp },
-        identity: {
-          pid: process.pid,
-          cred: processes.cred(process.pid),
-          setUmask: (mask: number) => { processes.setUmask(process.pid, mask); },
-          runAs: origin.shell.getRunAsHost(),
-        },
-        fabric: opts.fabric,
-        // The origin's namespace, so this shell serves the same mount points.
-        filesystem: origin.filesystem,
-      }));
-
-      return {
-        vfs: agentVfs(origin.vfs.as(agent.cred)),
-        shell: workspaceShell(() => Promise.resolve(asAgent)),
-      };
-    })),
+    destroy() { return settle(Effect.map(open(), (workspace) => { workspace.destroy(); })); },
+    asAgent: (agent) => settle(agentPlanes(agent)),
   };
 }
 
