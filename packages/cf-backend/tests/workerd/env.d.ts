@@ -35,7 +35,7 @@ import type { SlateBinding } from '../../src/slates/bindings';
 import type {
   AgentLogEvent, CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall,
   PendingSteer, PendingSteerFile, PreparedConversation, QueuedConversation, QueueProbeMode, ReactorWake,
-  ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult, WakeHoldPlacement,
+  ParityCompleted, ParityPrepared, RawChatProbeResult, WakeDriveResult,
 } from './two-turn-shapes';
 import type {
   DurabilityReservation, PreviewAnswer, RemovedSlate, RpcAnswer, ServedSlate,
@@ -102,7 +102,7 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   parityPrepare(): Promise<ParityPrepared>;
   parityComplete(prepared: ParityPrepared): Promise<ParityCompleted>;
   longTurnCost(priorDeltas: number): Promise<{ cost: OperationCost; historyReads: number }>;
-  backgroundWakeConversation(where: WakeHoldPlacement): Promise<WakeDriveResult>;
+  backgroundWakeConversation(): Promise<WakeDriveResult>;
   rawChat(): Promise<RawChatProbeResult>;
 }
 
