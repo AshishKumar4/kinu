@@ -40,7 +40,7 @@ type Defect = 'board' | 'invented-report' | 'skipped' | 'hardcoded-calculator' |
   | 'workspace-preview' | 'sandbox-preview' | 'invisible-preview' | 'swarm' | 'old-swarm' | 'audit' | 'npm-version' | 'npm-integrity'
   | 'export-missing' | 'export-changed' | 'export-duplicate' | 'export-extra' | 'memory-code' | 'memory-coordinator' | 'escaped-preview' | 'reopened-module'
   | 'board-case' | 'relative-review' | 'scratch-after-pack' | 'agent-unused' | 'agent-used-once' | 'empty-memory' | 'memory-note' | 'renamed-export'
-  | 'cached-workspace-preview' | 'cached-sandbox-preview' | 'dot-entrypoint' | 'no-main' | 'no-package-members';
+  | 'cached-workspace-preview' | 'cached-sandbox-preview' | 'dot-entrypoint' | 'no-main' | 'no-package-members' | 'review-with-rerun';
 
 /** The fixture flattens assertions and counts statuses independently of the grader's loop. */
 function calculate(text: string, defect?: Defect) {
@@ -195,7 +195,8 @@ function desk(defect?: Defect) {
     const cases = (turn.seed ?? []).filter((file) => file.path.includes('/review/'));
 
     if (cases.length > 0) {
-      put(REVIEW, JSON.stringify(cases.map((file) => ({ path: defect === 'relative-review' ? basename(file.path) : file.path,
+      const reviewed = defect === 'review-with-rerun' ? [...cases, ...(turn.seed ?? []).filter((file) => basename(file.path) === 'rerun.json')] : cases;
+      put(REVIEW, JSON.stringify(reviewed.map((file) => ({ path: defect === 'relative-review' ? basename(file.path) : file.path,
         summary: calculate(read(file.path), defect === 'audit' ? 'skipped' : undefined) }))));
     }
   };
@@ -329,6 +330,7 @@ for (const [name, defect, turn] of [
   ['dot-relative declared entry points', 'dot-entrypoint', 3],
   ['node projects without main', 'no-main', 3],
   ['only requested entry points, without package metadata', 'no-package-members', 3],
+  ['the correctly checked rerun alongside the three examples', 'review-with-rerun', 1],
 ] as const) {
   test(`accepts ${name}`, async () => {
     expect((await grade(turn, defect)).filter((check) => !check.pass)).toEqual([]);

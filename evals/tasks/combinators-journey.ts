@@ -276,10 +276,10 @@ ${handoff.coordinator} and release code ${handoff.cancelled}; I'll ask for them 
     },
   }, {
     seed: [...CASES, { path: RERUN, content: RERUN_CONTENT }],
-    prompt: `We need a reusable report_totals calculation for the CI reports in ${DESK}/reports/.
+    prompt: `We need a persistent report_totals the workspace can call for the CI reports in ${DESK}/reports/.
 I want several independent approaches explored in parallel, judged against the examples, with the best
 working approach kept for later reports—not one draft polished serially. Keep the chosen implementation
-at ${DESK}/report-totals.js and make report_totals available for reuse.
+at ${DESK}/report-totals.js and make report_totals available to workspace calls, not just as a module file.
 
 Given one object {path}, it returns {total, passed, failed, skipped, durationMs}. Count every assertionResults
 entry in every testResults suite, including repeated names. passed and failed count those statuses;
@@ -295,9 +295,11 @@ ${handoff.coordinator} still coordinates it. Keep the corrected code for the new
       await verifier.check('boundary-review-records-the-actual-answers', async () => {
         const normalize = (rows: v.InferOutput<typeof ReviewSchema>) => rows.map((row) => ({ ...row, path: basename(row.path) })).sort((a, b) => a.path.localeCompare(b.path));
         const actual = normalize(json(ReviewSchema, await verifier.readFile(REVIEW)));
-        const expected = normalize(CASES.map(({ path, content }) => ({ path, summary: summaryOf(content) })));
+        const expected = normalize([...CASES, { path: RERUN, content: RERUN_CONTENT }].map(({ path, content }) => ({ path, summary: summaryOf(content) })));
+        const missing = CASES.filter((file) => !actual.some((row) => row.path === basename(file.path))).map((file) => basename(file.path));
+        const wrong = actual.filter((row) => !expected.some((reference) => JSON.stringify(row) === JSON.stringify(reference)));
 
-        return { pass: JSON.stringify(actual) === JSON.stringify(expected), evidence: { actual, expected } };
+        return { pass: missing.length === 0 && wrong.length === 0, evidence: { missing, wrong, actual, expected } };
       });
       await calculator(verifier, 'the-report-calculator-works', [RERUN, ...CASES.map((file) => file.path)]);
       await verifier.check('boundary-review-is-done', () => boardHolds(verifier, ['boundary-review']));

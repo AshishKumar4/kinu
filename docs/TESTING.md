@@ -222,7 +222,7 @@ bun evals/scripts/compare.ts --candidate <results.json> [--baseline <results.jso
 bun evals/scripts/timing.ts bench-artifacts/evals-<task>-<time> [--steps]   # where each trial's time went
 ```
 
-2026-10-01 Muse pilot (`41bc1a011b2b`, staging `f75f06932`): 22m 7.7s, stopped at turn 3 on wrong object-argument interfaces; turns 4–7 and full duration were not measured.
+2026-10-02 Muse pilot (`387d77736fb9`, staging `f62694058`): 16m 41.2s, turns 1–3 passed; turn 4 ran its parallel search but stopped on an extra checked rerun row and failed callable registration; turns 5–7 were not measured.
 
 **Each trial its own account.** Every trial acts as an eval account of its own, `trial-<n>` (`evals/src/slot.ts`; core `parseEvalAccount`, the rule the deployment's dev identity follows too), so no trial reaches another: peers, messages, spawned workspaces, swarm publications and the experience library are all the account's. A trial's slot is its place in the run's whole matrix (every task file, sorted, by model, arm and trial), which every worker process works out alone; a matrix past 512 fails at collection. Before a trial opens, a workspace another run marks live on its account fails it as taken, one a stopped run left is deleted, and a row in any table but its provider keys and the account's own bookkeeping (`GET /api/user/held-rows`) fails it, naming each table; after it opens, of two runs that opened on one account at once the earlier workspace name keeps it. The deploy's `scripts/eval-provider-keys.ts` gives every slot of the full matrix the eval provider keys, and resets a slot holding such rows when no run is on it. A deployment that predates trial accounts runs its trials on eval-service, and the comparison says so for its leg.
 
