@@ -61,19 +61,31 @@ export function skillsMount(plane: () => VFS): VfsMount {
     return real === null ? null : plane().stat(real);
   };
 
+  const contents = async (path: string): Promise<{ readonly text: Uint8Array } | { readonly real: string }> => {
+    const located = await locate(path);
+
+    if (located?.kind === 'builtin' && located.rest === SKILL_FOLDER_FILE) return { text: encoder.encode(located.text) };
+    const real = located?.kind === 'file' ? source(located) : null;
+
+    if (real === null) throw absent(path, 'open');
+
+    return { real };
+  };
+
   const files: VFS = {
     async readFile(path) {
-      const located = await locate(path);
+      const at = await contents(path);
 
-      if (located?.kind === 'builtin' && located.rest === SKILL_FOLDER_FILE) {
-        return encoder.encode(located.text);
-      }
+      return 'text' in at ? at.text : plane().readFile(at.real);
+    },
+    // `cat` reads in ranges.
+    async readRange(path, offset, length) {
+      const at = await contents(path);
+      const whole = plane();
 
-      const real = located?.kind === 'file' ? source(located) : null;
+      if ('text' in at) return at.text.slice(offset, offset + length);
 
-      if (real === null) throw absent(path, 'open');
-
-      return plane().readFile(real);
+      return whole.readRange ? whole.readRange(at.real, offset, length) : (await whole.readFile(at.real)).slice(offset, offset + length);
     },
     async readdir(path) {
       const located = await locate(path);
